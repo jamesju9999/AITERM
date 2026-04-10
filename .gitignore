@@ -3,6 +3,12 @@ node_modules/
 dist/
 dist-ssr/
 *.local
+*.tsbuildinfo
+
+# Env files (may contain API keys)
+.env
+.env.*
+!.env.example
 
 # Vite
 .vite/
