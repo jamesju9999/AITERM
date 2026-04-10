@@ -1,73 +1,52 @@
-# React + TypeScript + Vite
+# AITerm
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Cross-platform AI terminal (Tauri 2 + React + Rust). **M0 — Skeleton.**
 
-Currently, two official plugins are available:
+This milestone gives you a working Tauri window hosting `xterm.js` attached to
+a live shell via `portable-pty`. No AI features yet.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Prerequisites
 
-## React Compiler
+- Rust 1.78+ (`rustup show`)
+- Node 20+ (`node -v`)
+- Windows 11 with WebView2 runtime (bundled) and MSVC build tools
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+On Windows, the shell priority is `pwsh.exe` → `powershell.exe` → `cmd.exe`.
 
-## Expanding the ESLint configuration
+## Develop
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run tauri:dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+First build takes a few minutes (Rust). Subsequent runs are faster.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Test
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+# Rust unit + integration tests
+cd src-tauri
+cargo test
+
+# Frontend type check
+cd ..
+npx tsc --noEmit
 ```
+
+## Project Layout
+
+```
+src-tauri/       Rust backend (Tauri + PTY)
+  src/pty/       PTY module (session, manager, commands, events)
+  tests/         Integration tests
+src/             React frontend
+  components/    TerminalView (xterm.js wrapper)
+  ipc/           Typed Tauri invoke + event wrappers
+docs/            Specs and implementation plans
+```
+
+## Next Milestone
+
+See `docs/superpowers/plans/` — M1 will add the first AI provider and the
+`/ai` inline trigger.
