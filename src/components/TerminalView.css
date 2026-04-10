@@ -1,0 +1,20 @@
+.aiterm-terminal-root {
+  width: 100%;
+  height: 100%;
+  background: #0c0c0c;
+  padding: 4px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.aiterm-terminal-root .xterm {
+  width: 100%;
+  height: 100%;
+}
+
+.aiterm-status {
+  color: #aaa;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  padding: 4px 8px;
+}
