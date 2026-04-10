@@ -32,7 +32,7 @@ export function TerminalView() {
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(hostRef.current);
-    fit.fit();
+    requestAnimationFrame(() => fit.fit());
 
     const decoder = new TextDecoder("utf-8");
 

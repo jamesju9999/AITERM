@@ -1,5 +1,4 @@
 use std::io::{Read, Write};
-use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 use parking_lot::Mutex;
