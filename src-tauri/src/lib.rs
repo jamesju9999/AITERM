@@ -1,4 +1,4 @@
-mod pty;
+pub mod pty;
 
 use pty::commands::{pty_close, pty_create, pty_resize, pty_write};
 use pty::PtyManager;
