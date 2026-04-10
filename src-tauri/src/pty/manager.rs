@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use parking_lot::Mutex;
 use portable_pty::PtySize;
+use tauri::{AppHandle, Emitter};
 
 use super::error::{PtyError, PtyResult};
+use super::events::{data_event_name, PtyDataPayload};
 use super::session::PtySession;
 use super::shell::{default_shell, ShellSpec};
 
@@ -16,6 +19,28 @@ pub struct PtyManager {
 impl PtyManager {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// High-level: spawn a session and wire its output to a Tauri event.
+    pub fn create_with_app(&self, app: AppHandle, size: PtySize) -> PtyResult<String> {
+        let shell: ShellSpec = default_shell().ok_or(PtyError::NoShellAvailable)?;
+
+        // Pre-generate id so the closure can reference it.
+        let id = uuid::Uuid::new_v4().to_string();
+        let event_name = data_event_name(&id);
+        let app_for_thread = app.clone();
+
+        let session = PtySession::spawn_with_id(shell, size, id.clone(), move |chunk| {
+            let payload = PtyDataPayload {
+                base64: BASE64.encode(&chunk),
+            };
+            if let Err(e) = app_for_thread.emit(&event_name, payload) {
+                eprintln!("emit {event_name} failed: {e}");
+            }
+        })?;
+
+        self.sessions.lock().insert(id.clone(), Arc::new(session));
+        Ok(id)
     }
 
     /// Low-level: spawn a session with a raw data callback. Used by tests.
