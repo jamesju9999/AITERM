@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -75,6 +76,14 @@ impl PtyManager {
         Ok(())
     }
 
+    pub fn get_cwd(&self, id: &str) -> Option<PathBuf> {
+        self.sessions.lock().get(id).map(|s| s.get_cwd())
+    }
+
+    pub fn get_shell_variant(&self, id: &str) -> Option<super::cd_parser::ShellVariant> {
+        self.sessions.lock().get(id).map(|s| s.shell_variant())
+    }
+
     fn get(&self, id: &str) -> PtyResult<Arc<PtySession>> {
         self.sessions
             .lock()
@@ -113,6 +122,12 @@ mod tests {
         // After close, a subsequent write must fail with SessionNotFound.
         let err = manager.write(&id, b"noop").unwrap_err();
         assert!(matches!(err, PtyError::SessionNotFound(_)));
+    }
+
+    #[test]
+    fn manager_get_cwd_returns_none_for_missing() {
+        let manager = PtyManager::new();
+        assert!(manager.get_cwd("no-such-id").is_none());
     }
 
     #[test]
