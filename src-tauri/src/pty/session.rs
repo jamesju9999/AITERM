@@ -180,7 +180,7 @@ impl Drop for PtySession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use std::sync::{mpsc, Arc};
     use std::time::Duration;
 
     fn test_shell() -> ShellSpec {
