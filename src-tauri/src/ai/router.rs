@@ -25,7 +25,6 @@ impl AiRouter {
         Self { provider: result }
     }
 
-    #[cfg(test)]
     pub fn with_provider(p: Arc<dyn AiProvider>) -> Self {
         Self { provider: Ok(p) }
     }
