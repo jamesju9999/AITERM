@@ -6,6 +6,10 @@
 //! - `router.rs`: `AiRouter`
 //! - `context.rs`: environment snapshot helper
 
+pub mod context;
+pub mod openai;
+pub mod router;
+
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
