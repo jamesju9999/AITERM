@@ -1,0 +1,52 @@
+.aiterm-command-preview {
+  position: absolute;
+  left: 50%;
+  top: 20%;
+  transform: translateX(-50%);
+  min-width: 480px;
+  max-width: 80vw;
+  max-height: 60vh;
+  overflow: auto;
+  background: rgba(20, 20, 20, 0.96);
+  color: #e6e6e6;
+  border: 1px solid #444;
+  border-radius: 6px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  padding: 16px 20px;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  z-index: 1000;
+}
+
+.aiterm-command-preview__label {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: #888;
+  margin-top: 8px;
+}
+
+.aiterm-command-preview__label:first-child {
+  margin-top: 0;
+}
+
+.aiterm-command-preview__command {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  background: #0c0c0c;
+  padding: 8px 10px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-top: 4px;
+}
+
+.aiterm-command-preview__explanation {
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.aiterm-command-preview__hint {
+  margin-top: 16px;
+  text-align: center;
+  color: #888;
+  font-size: 12px;
+}
