@@ -1,10 +1,12 @@
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::thread::{self, JoinHandle};
 
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use uuid::Uuid;
 
+use super::cd_parser::{self, ParsedCd, ShellVariant};
 use super::error::{PtyError, PtyResult};
 use super::shell::ShellSpec;
 
@@ -14,6 +16,10 @@ pub struct PtySession {
     writer: Mutex<Box<dyn Write + Send>>,
     child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
     reader_thread: Mutex<Option<JoinHandle<()>>>,
+    shell_variant: ShellVariant,
+    cwd: Mutex<PathBuf>,
+    previous_cwd: Mutex<Option<PathBuf>>,
+    line_buffer: Mutex<Vec<u8>>,
 }
 
 impl PtySession {
@@ -22,6 +28,7 @@ impl PtySession {
     where
         F: FnMut(Vec<u8>) + Send + 'static,
     {
+        let shell_variant = ShellVariant::from_program(&shell.program.to_string_lossy());
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(size)
@@ -70,12 +77,18 @@ impl PtySession {
             })
             .map_err(|e| PtyError::Internal(format!("spawn reader thread: {e}")))?;
 
+        let initial_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
         Ok(Self {
             id,
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
             child: Mutex::new(child),
             reader_thread: Mutex::new(Some(reader_thread)),
+            shell_variant,
+            cwd: Mutex::new(initial_cwd),
+            previous_cwd: Mutex::new(None),
+            line_buffer: Mutex::new(Vec::new()),
         })
     }
 
@@ -90,6 +103,7 @@ impl PtySession {
     where
         F: FnMut(Vec<u8>) + Send + 'static,
     {
+        let shell_variant = ShellVariant::from_program(&shell.program.to_string_lossy());
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(size)
@@ -135,20 +149,92 @@ impl PtySession {
             })
             .map_err(|e| PtyError::Internal(format!("spawn reader thread: {e}")))?;
 
+        let initial_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
         Ok(Self {
             id,
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
             child: Mutex::new(child),
             reader_thread: Mutex::new(Some(reader_thread)),
+            shell_variant,
+            cwd: Mutex::new(initial_cwd),
+            previous_cwd: Mutex::new(None),
+            line_buffer: Mutex::new(Vec::new()),
         })
     }
 
     pub fn write(&self, data: &[u8]) -> PtyResult<()> {
+        self.record_into_line_buffer(data);
         let mut writer = self.writer.lock();
         writer.write_all(data)?;
         writer.flush()?;
         Ok(())
+    }
+
+    /// Accumulate bytes into the line buffer. On each carriage return or
+    /// newline, flush the completed line and feed it to the cd parser.
+    fn record_into_line_buffer(&self, data: &[u8]) {
+        let mut buf = self.line_buffer.lock();
+        for &b in data {
+            if b == b'\r' || b == b'\n' {
+                if !buf.is_empty() {
+                    if let Ok(line) = std::str::from_utf8(&buf) {
+                        let line_owned = line.to_string();
+                        drop(buf);
+                        self.apply_cd_if_any(&line_owned);
+                        buf = self.line_buffer.lock();
+                    }
+                    buf.clear();
+                }
+            } else {
+                // Cap runaway input to ~8 KiB so a rogue paste cannot grow
+                // unbounded before the user hits Enter.
+                if buf.len() < 8 * 1024 {
+                    buf.push(b);
+                }
+            }
+        }
+    }
+
+    fn apply_cd_if_any(&self, line: &str) {
+        let current = self.cwd.lock().clone();
+        let parsed = cd_parser::parse_cd(line, self.shell_variant, &current);
+        match parsed {
+            ParsedCd::NotCd => {}
+            ParsedCd::ChangeTo(new_cwd) => {
+                let mut prev = self.previous_cwd.lock();
+                *prev = Some(current);
+                *self.cwd.lock() = new_cwd;
+            }
+            ParsedCd::SwapPrevious => {
+                let mut prev = self.previous_cwd.lock();
+                if let Some(p) = prev.take() {
+                    let new_prev = self.cwd.lock().clone();
+                    *self.cwd.lock() = p;
+                    *prev = Some(new_prev);
+                }
+            }
+            ParsedCd::ToHome => {
+                if let Some(home) = std::env::var_os("HOME")
+                    .or_else(|| std::env::var_os("USERPROFILE"))
+                {
+                    let mut prev = self.previous_cwd.lock();
+                    *prev = Some(current);
+                    *self.cwd.lock() = PathBuf::from(home);
+                }
+            }
+        }
+    }
+
+    /// Read the tracked cwd for this session.
+    pub fn get_cwd(&self) -> PathBuf {
+        self.cwd.lock().clone()
+    }
+
+    /// Read the shell variant detected at spawn time.
+    pub fn shell_variant(&self) -> ShellVariant {
+        self.shell_variant
     }
 
     pub fn resize(&self, size: PtySize) -> PtyResult<()> {
@@ -259,4 +345,108 @@ mod tests {
 
         drop(session);
     }
+
+    fn fake_session(shell_variant: ShellVariant, initial: &str) -> PtySessionStubForCwd {
+        PtySessionStubForCwd {
+            shell_variant,
+            cwd: Mutex::new(PathBuf::from(initial)),
+            previous_cwd: Mutex::new(None),
+            line_buffer: Mutex::new(Vec::new()),
+        }
+    }
+
+    struct PtySessionStubForCwd {
+        shell_variant: ShellVariant,
+        cwd: Mutex<PathBuf>,
+        previous_cwd: Mutex<Option<PathBuf>>,
+        line_buffer: Mutex<Vec<u8>>,
+    }
+
+    impl PtySessionStubForCwd {
+        fn write(&self, data: &[u8]) {
+            let mut buf = self.line_buffer.lock();
+            for &b in data {
+                if b == b'\r' || b == b'\n' {
+                    if !buf.is_empty() {
+                        if let Ok(line) = std::str::from_utf8(&buf) {
+                            let line_owned = line.to_string();
+                            drop(buf);
+                            self.apply(&line_owned);
+                            buf = self.line_buffer.lock();
+                        }
+                        buf.clear();
+                    }
+                } else if buf.len() < 8 * 1024 {
+                    buf.push(b);
+                }
+            }
+        }
+        fn apply(&self, line: &str) {
+            let current = self.cwd.lock().clone();
+            match cd_parser::parse_cd(line, self.shell_variant, &current) {
+                ParsedCd::NotCd => {}
+                ParsedCd::ChangeTo(new_cwd) => {
+                    *self.previous_cwd.lock() = Some(current);
+                    *self.cwd.lock() = new_cwd;
+                }
+                ParsedCd::SwapPrevious => {
+                    let mut prev = self.previous_cwd.lock();
+                    if let Some(p) = prev.take() {
+                        let new_prev = self.cwd.lock().clone();
+                        *self.cwd.lock() = p;
+                        *prev = Some(new_prev);
+                    }
+                }
+                ParsedCd::ToHome => {
+                    if let Some(home) = std::env::var_os("HOME")
+                        .or_else(|| std::env::var_os("USERPROFILE"))
+                    {
+                        *self.previous_cwd.lock() = Some(current);
+                        *self.cwd.lock() = PathBuf::from(home);
+                    }
+                }
+            }
+        }
+        fn get_cwd(&self) -> PathBuf { self.cwd.lock().clone() }
+    }
+
+    #[test]
+    fn cwd_updates_on_pwsh_cd_after_enter() {
+        let s = fake_session(ShellVariant::Pwsh, "C:\\Users\\a");
+        s.write(b"cd foo");   // no enter yet
+        assert_eq!(s.get_cwd(), PathBuf::from("C:\\Users\\a"));
+        s.write(b"\r");        // enter
+        assert_eq!(s.get_cwd(), PathBuf::from("C:\\Users\\a\\foo"));
+    }
+
+    #[test]
+    fn cwd_multiline_single_write() {
+        let s = fake_session(ShellVariant::Bash, "/home/a");
+        s.write(b"cd foo\ncd bar\n");
+        assert_eq!(s.get_cwd(), PathBuf::from("/home/a/foo/bar"));
+    }
+
+    #[test]
+    fn cwd_stays_on_unparseable() {
+        let s = fake_session(ShellVariant::Bash, "/home/a");
+        s.write(b"ls\n");
+        assert_eq!(s.get_cwd(), PathBuf::from("/home/a"));
+        s.write(b"cd foo && ls\n"); // compound → NotCd
+        assert_eq!(s.get_cwd(), PathBuf::from("/home/a"));
+    }
+
+    #[test]
+    fn cwd_dash_swaps_previous() {
+        let s = fake_session(ShellVariant::Bash, "/home/a");
+        s.write(b"cd /tmp\n");
+        assert_eq!(s.get_cwd(), PathBuf::from("/tmp"));
+        s.write(b"cd -\n");
+        assert_eq!(s.get_cwd(), PathBuf::from("/home/a"));
+        s.write(b"cd -\n");
+        assert_eq!(s.get_cwd(), PathBuf::from("/tmp"));
+    }
+
+    // Suppress unused import warning - Arc is used in some test setups
+    #[allow(dead_code)]
+    fn _use_arc<T>(_: Arc<T>) {}
 }
