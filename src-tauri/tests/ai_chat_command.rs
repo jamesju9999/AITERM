@@ -73,6 +73,14 @@ impl AiProvider for MockProvider {
 /// can only be invoked via the Tauri runtime. The copied logic is small and
 /// must stay in sync with ai.rs — that's why we also test the prompt builder
 /// separately in the lib test.)
+///
+/// NOT exercised by this helper (intentional):
+///   1. The input validation guards in `ai_chat` (empty history rejection and
+///      "last message must be from user" rejection). Those live outside the
+///      generate loop and require a Tauri runtime harness to hit.
+///   2. `app.emit("ai-stream", ...)` per-chunk event emission. The helper
+///      buffers chunks directly. A regression that stops emitting events —
+///      or stops emitting `done: true` — will NOT be caught here.
 async fn run_chat_loop(
     provider: Arc<dyn AiProvider>,
     messages: Vec<ChatMessage>,
