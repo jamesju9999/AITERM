@@ -39,6 +39,9 @@ pub enum AiError {
 
     #[error("AI returned invalid response: {reason}")]
     ModelError { reason: String, raw: String },
+
+    #[error("invalid input: {reason}")]
+    InvalidInput { reason: String },
 }
 
 /// Environment snapshot sent to the AI as context.
@@ -58,8 +61,7 @@ pub struct EnvSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryMode {
     SingleCommand,
-    /// Reserved for M4 (AI panel multi-turn). Not reachable in M1.
-    #[allow(dead_code)]
+    /// Multi-turn chat used by the M4 AI panel (`ai_chat` command).
     Chat,
 }
 
@@ -168,6 +170,14 @@ mod tests {
         assert_eq!(json["kind"], "model_error");
         assert_eq!(json["reason"], "missing field `command`");
         assert_eq!(json["raw"], "{\"explanation\":\"...\"}");
+    }
+
+    #[test]
+    fn ai_error_invalid_input_carries_reason() {
+        let err = AiError::InvalidInput { reason: "empty messages".into() };
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["kind"], "invalid_input");
+        assert_eq!(json["reason"], "empty messages");
     }
 
     #[test]
