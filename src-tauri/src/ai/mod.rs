@@ -3,12 +3,20 @@
 //! Module layout:
 //! - `mod.rs` (this file): trait + shared types + errors
 //! - `openai.rs`: `OpenAiClient`
+//! - `anthropic.rs`: `AnthropicClient`
+//! - `ollama.rs`: `OllamaClient`
+//! - `compatible.rs`: `OpenAiCompatibleClient`
+//! - `sse.rs`: shared SSE streaming utilities
 //! - `router.rs`: `AiRouter`
 //! - `context.rs`: environment snapshot helper
 
+pub mod anthropic;
+pub mod compatible;
 pub mod context;
+pub mod ollama;
 pub mod openai;
 pub mod router;
+pub(crate) mod sse;
 
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
@@ -34,11 +42,17 @@ pub enum AiError {
 }
 
 /// Environment snapshot sent to the AI as context.
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Default)]
 pub struct EnvSnapshot {
     pub os: String,      // e.g. "windows", "macos", "linux"
     pub shell: String,   // e.g. "pwsh", "powershell", "cmd", "bash", "zsh"
     pub cwd: PathBuf,
+    /// Recent terminal output (ANSI-stripped, last ~50 lines). None if unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recent_output: Option<String>,
+    /// Top-level directory listing of cwd. None if unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dir_listing: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,7 +99,7 @@ pub struct AiSingleCommand {
     pub risk_level: RiskLevel,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RiskLevel {
     Safe,
@@ -108,6 +122,10 @@ pub trait AiProvider: Send + Sync {
         req: GenerateRequest,
         tx: mpsc::Sender<GenerateChunk>,
     ) -> Result<(), AiError>;
+
+    /// Validate connectivity and credentials without generating a full response.
+    /// Used by the Settings UI "Test Connection" button.
+    async fn health_check(&self) -> Result<(), AiError>;
 }
 
 #[cfg(test)]
@@ -158,6 +176,7 @@ mod tests {
             os: "windows".into(),
             shell: "pwsh".into(),
             cwd: PathBuf::from("C:\\Users\\test"),
+            ..Default::default()
         };
         let json = serde_json::to_value(&snap).unwrap();
         assert_eq!(json["os"], "windows");

@@ -1,5 +1,7 @@
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use parking_lot::Mutex;
@@ -20,6 +22,8 @@ pub struct PtySession {
     cwd: Mutex<PathBuf>,
     previous_cwd: Mutex<Option<PathBuf>>,
     line_buffer: Mutex<Vec<u8>>,
+    /// Ring buffer capturing raw PTY output for AI context. Shared with the reader thread.
+    output_ring: Arc<Mutex<VecDeque<u8>>>,
 }
 
 impl PtySession {
@@ -60,6 +64,9 @@ impl PtySession {
 
         let id = Uuid::new_v4().to_string();
 
+        let output_ring: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let ring_for_thread = Arc::clone(&output_ring);
+
         let reader_thread = thread::Builder::new()
             .name(format!("pty-reader-{}", id))
             .spawn(move || {
@@ -67,7 +74,18 @@ impl PtySession {
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) => break, // EOF: shell exited
-                        Ok(n) => on_data(buf[..n].to_vec()),
+                        Ok(n) => {
+                            let chunk = buf[..n].to_vec();
+                            {
+                                let mut ring = ring_for_thread.lock();
+                                const RING_CAP: usize = 8 * 1024;
+                                for &b in &chunk {
+                                    if ring.len() >= RING_CAP { ring.pop_front(); }
+                                    ring.push_back(b);
+                                }
+                            }
+                            on_data(chunk);
+                        }
                         Err(e) => {
                             eprintln!("pty reader error: {e}");
                             break;
@@ -89,6 +107,7 @@ impl PtySession {
             cwd: Mutex::new(initial_cwd),
             previous_cwd: Mutex::new(None),
             line_buffer: Mutex::new(Vec::new()),
+            output_ring,
         })
     }
 
@@ -132,6 +151,9 @@ impl PtySession {
             .try_clone_reader()
             .map_err(|e| PtyError::Internal(format!("try_clone_reader: {e}")))?;
 
+        let output_ring: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let ring_for_thread = Arc::clone(&output_ring);
+
         let reader_thread = thread::Builder::new()
             .name(format!("pty-reader-{}", id))
             .spawn(move || {
@@ -139,7 +161,18 @@ impl PtySession {
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) => break,
-                        Ok(n) => on_data(buf[..n].to_vec()),
+                        Ok(n) => {
+                            let chunk = buf[..n].to_vec();
+                            {
+                                let mut ring = ring_for_thread.lock();
+                                const RING_CAP: usize = 8 * 1024;
+                                for &b in &chunk {
+                                    if ring.len() >= RING_CAP { ring.pop_front(); }
+                                    ring.push_back(b);
+                                }
+                            }
+                            on_data(chunk);
+                        }
                         Err(e) => {
                             eprintln!("pty reader error: {e}");
                             break;
@@ -161,6 +194,7 @@ impl PtySession {
             cwd: Mutex::new(initial_cwd),
             previous_cwd: Mutex::new(None),
             line_buffer: Mutex::new(Vec::new()),
+            output_ring,
         })
     }
 
@@ -235,6 +269,21 @@ impl PtySession {
     /// Read the shell variant detected at spawn time.
     pub fn shell_variant(&self) -> ShellVariant {
         self.shell_variant
+    }
+
+    /// Return the last `max_bytes` bytes of terminal output, ANSI-stripped.
+    /// Returns `None` if the ring buffer is empty.
+    pub fn get_recent_output(&self, max_bytes: usize) -> Option<String> {
+        let ring = self.output_ring.lock();
+        if ring.is_empty() {
+            return None;
+        }
+        let start = ring.len().saturating_sub(max_bytes);
+        let bytes: Vec<u8> = ring.iter().skip(start).copied().collect();
+        drop(ring);
+        let raw = String::from_utf8_lossy(&bytes).into_owned();
+        let stripped = crate::pty::ansi::strip_ansi(&raw);
+        if stripped.trim().is_empty() { None } else { Some(stripped) }
     }
 
     pub fn resize(&self, size: PtySize) -> PtyResult<()> {

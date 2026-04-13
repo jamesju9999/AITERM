@@ -1,0 +1,77 @@
+.general-page {
+  padding: 24px 32px;
+}
+
+.general-page h2 {
+  color: #e6e6e6;
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 24px;
+}
+
+.settings-section {
+  margin-bottom: 32px;
+}
+
+.settings-section h3 {
+  color: #ccc;
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.section-desc {
+  color: #777;
+  font-size: 12px;
+  margin: 0 0 14px;
+}
+
+.mode-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mode-option {
+  align-items: flex-start;
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.mode-option:has(input:checked) {
+  border-color: #2d5aab;
+}
+
+.mode-option input[type="radio"] {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.mode-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mode-label {
+  color: #e6e6e6;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.mode-desc {
+  color: #888;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.saving-indicator {
+  color: #888;
+  font-size: 12px;
+  margin-top: 8px;
+}

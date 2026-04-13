@@ -84,6 +84,11 @@ impl PtyManager {
         self.sessions.lock().get(id).map(|s| s.shell_variant())
     }
 
+    /// Return recent terminal output (ANSI-stripped) for the given session.
+    pub fn get_recent_output(&self, id: &str, max_bytes: usize) -> Option<String> {
+        self.sessions.lock().get(id).and_then(|s| s.get_recent_output(max_bytes))
+    }
+
     fn get(&self, id: &str) -> PtyResult<Arc<PtySession>> {
         self.sessions
             .lock()
