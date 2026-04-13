@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git init:*)",
+      "Bash(git config:*)",
+      "Bash(npm create:*)",
+      "Bash(yes)",
+      "Bash(npx create-vite@latest:*)",
+      "Bash(mv /d/Tool/AITerm/docs /d/Tool/AITerm_docs_tmp)",
+      "Bash(mv /d/Tool/AITerm/.claude /d/Tool/AITerm_claude_tmp)",
+      "Bash(mv /d/Tool/AITerm/.git /d/Tool/AITerm_git_tmp)"
+    ]
+  }
+}

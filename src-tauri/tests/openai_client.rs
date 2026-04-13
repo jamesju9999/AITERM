@@ -19,6 +19,7 @@ fn req(text: &str) -> GenerateRequest {
             os: "linux".into(),
             shell: "bash".into(),
             cwd: PathBuf::from("/"),
+            ..Default::default()
         },
         mode: QueryMode::SingleCommand,
         max_tokens: Some(256),
@@ -61,7 +62,7 @@ async fn happy_path_streams_and_parses() {
         .mount(&server)
         .await;
 
-    let client = OpenAiClient::with_base_url("test-key".into(), server.uri());
+    let client = OpenAiClient::with_base_url("test-key".into(), "gpt-4o-mini".into(), server.uri());
     let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
 
     client.generate(req("hello"), tx).await.expect("generate ok");
@@ -84,7 +85,7 @@ async fn returns_auth_failed_on_401() {
         .mount(&server)
         .await;
 
-    let client = OpenAiClient::with_base_url("bad".into(), server.uri());
+    let client = OpenAiClient::with_base_url("bad".into(), "gpt-4o-mini".into(), server.uri());
     let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
     let err = client.generate(req("x"), tx).await.unwrap_err();
     assert!(matches!(err, AiError::AuthFailed), "got {err:?}");
@@ -102,7 +103,7 @@ async fn returns_rate_limit_with_retry_after() {
         .mount(&server)
         .await;
 
-    let client = OpenAiClient::with_base_url("k".into(), server.uri());
+    let client = OpenAiClient::with_base_url("k".into(), "gpt-4o-mini".into(), server.uri());
     let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
     let err = client.generate(req("x"), tx).await.unwrap_err();
     match err {
@@ -121,7 +122,7 @@ async fn returns_network_on_500() {
         .mount(&server)
         .await;
 
-    let client = OpenAiClient::with_base_url("k".into(), server.uri());
+    let client = OpenAiClient::with_base_url("k".into(), "gpt-4o-mini".into(), server.uri());
     let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
     let err = client.generate(req("x"), tx).await.unwrap_err();
     match err {

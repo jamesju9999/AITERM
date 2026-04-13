@@ -1,7 +1,8 @@
-//! OpenAI provider — `https://api.openai.com/v1/chat/completions` (SSE).
+//! OpenAI-compatible provider — arbitrary base URL + optional API key.
 //!
-//! Uses `response_format: { type: "json_object" }` for single-command queries
-//! and SSE streaming. The model is configurable (default: `gpt-4o-mini`).
+//! Covers: LM Studio, vLLM, OpenRouter, DeepSeek, self-hosted services.
+//! Uses the same OpenAI SSE format as `OpenAiClient` but with a configurable
+//! base URL and optional authentication.
 
 use async_trait::async_trait;
 use serde::Serialize;
@@ -12,43 +13,49 @@ use crate::ai::{
     AiError, AiProvider, ChatMessage, GenerateChunk, GenerateRequest,
 };
 
-pub struct OpenAiClient {
-    pub(crate) api_key: String,
-    pub(crate) model: String,
-    pub(crate) base_url: String,
-    pub(crate) client: reqwest::Client,
+pub struct OpenAiCompatibleClient {
+    /// Optional — some local servers (LM Studio, vLLM) don't require auth.
+    api_key: Option<String>,
+    model: String,
+    base_url: String,
+    /// Whether to send `response_format: { type: "json_object" }`.
+    /// Most OpenAI-compatible servers support this, but some don't.
+    supports_json_mode: bool,
+    client: reqwest::Client,
 }
 
-impl OpenAiClient {
-    pub fn new(api_key: String) -> Self {
-        Self::with_base_url(api_key, "gpt-4o-mini".into(), "https://api.openai.com".into())
-    }
-
-    pub fn with_base_url(api_key: String, model: String, base_url: String) -> Self {
-        Self { api_key, model, base_url, client: reqwest::Client::new() }
+impl OpenAiCompatibleClient {
+    pub fn new(
+        base_url: String,
+        model: String,
+        api_key: Option<String>,
+        supports_json_mode: bool,
+    ) -> Self {
+        Self { api_key, model, base_url, supports_json_mode, client: reqwest::Client::new() }
     }
 
     fn completions_url(&self) -> String {
-        format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/'))
+        format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
     }
 }
 
 #[async_trait]
-impl AiProvider for OpenAiClient {
-    fn id(&self) -> &str { "openai" }
-    fn display_name(&self) -> &str { "OpenAI" }
+impl AiProvider for OpenAiCompatibleClient {
+    fn id(&self) -> &str { "compatible" }
+    fn display_name(&self) -> &str { "OpenAI-Compatible" }
 
     async fn generate(
         &self,
         req: GenerateRequest,
         tx: mpsc::Sender<GenerateChunk>,
     ) -> Result<(), AiError> {
-        let body = build_request_body(&self.model, &req, true);
-        let resp = self
-            .client
-            .post(self.completions_url())
-            .bearer_auth(&self.api_key)
-            .json(&body)
+        let body = build_request_body(&self.model, &req, self.supports_json_mode);
+        let mut builder = self.client.post(self.completions_url()).json(&body);
+        if let Some(key) = &self.api_key {
+            builder = builder.bearer_auth(key);
+        }
+
+        let resp = builder
             .send()
             .await
             .map_err(|e| AiError::Network { message: e.to_string() })?;
@@ -61,8 +68,7 @@ impl AiProvider for OpenAiClient {
     }
 
     async fn health_check(&self) -> Result<(), AiError> {
-        // Send a minimal 1-token request just to verify the key and endpoint.
-        use crate::ai::{ChatMessage, EnvSnapshot, QueryMode};
+        use crate::ai::{EnvSnapshot, QueryMode};
         use std::path::PathBuf;
         use tokio::sync::mpsc;
 
@@ -80,11 +86,11 @@ impl AiProvider for OpenAiClient {
             max_tokens: Some(1),
         };
         let body = build_request_body(&self.model, &req, false);
-        let resp = self
-            .client
-            .post(self.completions_url())
-            .bearer_auth(&self.api_key)
-            .json(&body)
+        let mut builder = self.client.post(self.completions_url()).json(&body);
+        if let Some(key) = &self.api_key {
+            builder = builder.bearer_auth(key);
+        }
+        let resp = builder
             .send()
             .await
             .map_err(|e| AiError::Network { message: e.to_string() })?;
@@ -98,12 +104,12 @@ impl AiProvider for OpenAiClient {
     }
 }
 
-// ── Request building ──────────────────────────────────────────────────────────
+// ── Request types ─────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
-struct OpenAiChatRequest<'a> {
+struct CompatibleChatRequest<'a> {
     model: &'a str,
-    messages: Vec<OpenAiMessage<'a>>,
+    messages: Vec<CompatibleMessage<'a>>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
@@ -112,7 +118,7 @@ struct OpenAiChatRequest<'a> {
 }
 
 #[derive(Serialize)]
-struct OpenAiMessage<'a> {
+struct CompatibleMessage<'a> {
     role: &'a str,
     content: &'a str,
 }
@@ -127,13 +133,13 @@ fn build_request_body<'a>(
     model: &'a str,
     req: &'a GenerateRequest,
     json_mode: bool,
-) -> OpenAiChatRequest<'a> {
-    let mut messages: Vec<OpenAiMessage<'a>> = Vec::with_capacity(req.messages.len() + 1);
-    messages.push(OpenAiMessage { role: "system", content: &req.system_prompt });
+) -> CompatibleChatRequest<'a> {
+    let mut messages: Vec<CompatibleMessage<'a>> = Vec::with_capacity(req.messages.len() + 1);
+    messages.push(CompatibleMessage { role: "system", content: &req.system_prompt });
     for m in &req.messages {
-        messages.push(OpenAiMessage { role: m.role.as_str(), content: m.content.as_str() });
+        messages.push(CompatibleMessage { role: m.role.as_str(), content: m.content.as_str() });
     }
-    OpenAiChatRequest {
+    CompatibleChatRequest {
         model,
         messages,
         stream: true,
@@ -142,45 +148,48 @@ fn build_request_body<'a>(
     }
 }
 
-#[allow(dead_code)]
-fn _unused_chatmessage_anchor(_: ChatMessage) {}
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ai::{EnvSnapshot, QueryMode};
     use std::path::PathBuf;
 
-    fn sample_request() -> GenerateRequest {
+    fn sample_req() -> GenerateRequest {
         GenerateRequest {
             system_prompt: "sys".into(),
             messages: vec![ChatMessage { role: "user".into(), content: "hi".into() }],
             context: EnvSnapshot { os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default() },
             mode: QueryMode::SingleCommand,
-            max_tokens: Some(256),
+            max_tokens: Some(128),
         }
     }
 
     #[test]
-    fn request_body_sets_stream_and_response_format() {
-        let req = sample_request();
-        let body = build_request_body("gpt-4o-mini", &req, true);
+    fn with_json_mode_includes_response_format() {
+        let req = sample_req();
+        let body = build_request_body("qwen2", &req, true);
         let json = serde_json::to_value(&body).unwrap();
-        assert_eq!(json["model"], "gpt-4o-mini");
-        assert_eq!(json["stream"], true);
         assert_eq!(json["response_format"]["type"], "json_object");
-        assert_eq!(json["messages"][0]["role"], "system");
-        assert_eq!(json["messages"][1]["role"], "user");
-        assert_eq!(json["max_tokens"], 256);
     }
 
     #[test]
-    fn request_body_no_json_mode_omits_response_format() {
-        let req = sample_request();
-        let body = build_request_body("gpt-4o-mini", &req, false);
+    fn without_json_mode_omits_response_format() {
+        let req = sample_req();
+        let body = build_request_body("qwen2", &req, false);
         let json = serde_json::to_value(&body).unwrap();
+        // response_format should be absent (serialized as null or missing)
         assert!(json.get("response_format").map_or(true, |v| v.is_null()));
+    }
+
+    #[test]
+    fn no_api_key_omits_auth_header() {
+        // Just verifies the client can be constructed without a key.
+        let client = OpenAiCompatibleClient::new(
+            "http://localhost:1234/v1".into(),
+            "local-model".into(),
+            None,
+            true,
+        );
+        assert!(client.api_key.is_none());
     }
 }

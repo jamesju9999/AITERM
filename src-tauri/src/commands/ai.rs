@@ -1,13 +1,17 @@
 //! `/ai` query command. Wires the frontend invoke to the ai_router and the
 //! PTY manager for context, and returns a fully-parsed `AiCommandReady`.
+//!
+//! Streaming: while the provider generates tokens, each chunk is emitted as a
+//! `ai-stream` Tauri event so the frontend can show a live indicator. The
+//! final structured result is still returned as the invoke response.
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
 
 use crate::ai::{
     context, router::AiRouter, AiError, AiSingleCommand, ChatMessage, GenerateChunk,
-    GenerateRequest, QueryMode,
+    GenerateRequest, QueryMode, RiskLevel,
 };
 use crate::pty::PtyManager;
 
@@ -15,10 +19,29 @@ use crate::pty::PtyManager;
 pub struct AiCommandReady {
     pub command: String,
     pub explanation: String,
+    pub risk_level: RiskLevel,
 }
 
-/// Build the M1 single-command system prompt. Pure function for testability.
+/// Payload emitted as a Tauri event for each streaming chunk.
+#[derive(Debug, Clone, Serialize)]
+pub struct AiStreamEvent {
+    pub session_id: String,
+    pub delta: String,
+    pub done: bool,
+}
+
+/// Build the system prompt. Includes OS/shell/cwd and, if available, recent
+/// terminal output and a directory listing for richer context.
 pub fn build_single_command_prompt(snapshot: &crate::ai::EnvSnapshot) -> String {
+    let recent_section = snapshot.recent_output.as_deref().map(|o| {
+        let trimmed = if o.len() > 2000 { &o[o.len() - 2000..] } else { o };
+        format!("\nRecent terminal output (last ~50 lines):\n```\n{trimmed}\n```")
+    }).unwrap_or_default();
+
+    let dir_section = snapshot.dir_listing.as_deref().map(|d| {
+        format!("\nDirectory listing ({}):\n```\n{d}\n```", snapshot.cwd.display())
+    }).unwrap_or_default();
+
     format!(
 r#"You are an AI command generator for a cross-platform terminal application.
 Your only job is to translate the user's natural-language request into ONE
@@ -28,7 +51,7 @@ Environment:
   OS: {os}
   Shell: {shell}
   Cwd: {cwd}            (may be slightly stale; prefer relative paths or
-                         shell variables over hardcoded absolute paths)
+                         shell variables over hardcoded absolute paths){recent_section}{dir_section}
 
 Rules:
 1. Output ONLY a JSON object, no prose, no markdown fences, no extra keys.
@@ -45,7 +68,7 @@ Rules:
    explicitly asks for one, set risk_level="dangerous"."#,
         os = snapshot.os,
         shell = snapshot.shell,
-        cwd = snapshot.cwd.display()
+        cwd = snapshot.cwd.display(),
     )
 }
 
@@ -53,11 +76,12 @@ Rules:
 pub async fn ai_query(
     query: String,
     session_id: String,
+    app: AppHandle,
     pty_manager: State<'_, PtyManager>,
     router: State<'_, AiRouter>,
 ) -> Result<AiCommandReady, AiError> {
     let snapshot = context::snapshot(&pty_manager, &session_id);
-    let provider = router.require_provider()?;
+    let provider = router.resolve()?;
 
     let prompt = build_single_command_prompt(&snapshot);
     let req = GenerateRequest {
@@ -74,6 +98,12 @@ pub async fn ai_query(
 
     let mut buf = String::new();
     while let Some(chunk) = rx.recv().await {
+        // Emit streaming event so the frontend can show live progress.
+        let _ = app.emit("ai-stream", AiStreamEvent {
+            session_id: session_id.clone(),
+            delta: chunk.delta.clone(),
+            done: chunk.done,
+        });
         buf.push_str(&chunk.delta);
         if chunk.done { break; }
     }
@@ -90,13 +120,10 @@ pub async fn ai_query(
         raw: buf.chars().take(200).collect(),
     })?;
 
-    // M1 ignores risk_level (spec §6.4). It was parsed to fail-fast on
-    // malformed responses, and the value is discarded here.
-    let _ = parsed.risk_level;
-
     Ok(AiCommandReady {
         command: parsed.command,
         explanation: parsed.explanation,
+        risk_level: parsed.risk_level,
     })
 }
 
@@ -106,18 +133,77 @@ mod tests {
     use crate::ai::EnvSnapshot;
     use std::path::PathBuf;
 
+    fn make_snap(os: &str, shell: &str, cwd: &str) -> EnvSnapshot {
+        EnvSnapshot {
+            os: os.into(),
+            shell: shell.into(),
+            cwd: PathBuf::from(cwd),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn prompt_contains_environment_fields() {
-        let snap = EnvSnapshot {
-            os: "windows".into(),
-            shell: "pwsh".into(),
-            cwd: PathBuf::from("C:\\Users\\a"),
-        };
+        let snap = make_snap("windows", "pwsh", "C:\\Users\\a");
         let prompt = build_single_command_prompt(&snap);
         assert!(prompt.contains("OS: windows"));
         assert!(prompt.contains("Shell: pwsh"));
         assert!(prompt.contains("C:\\Users\\a"));
         assert!(prompt.contains("JSON object"));
         assert!(prompt.contains("risk_level"));
+    }
+
+    #[test]
+    fn prompt_includes_recent_output_when_present() {
+        let snap = EnvSnapshot {
+            os: "linux".into(),
+            shell: "bash".into(),
+            cwd: PathBuf::from("/tmp"),
+            recent_output: Some("$ ls\nfoo  bar".into()),
+            dir_listing: None,
+        };
+        let prompt = build_single_command_prompt(&snap);
+        assert!(prompt.contains("Recent terminal output"));
+        assert!(prompt.contains("foo  bar"));
+    }
+
+    #[test]
+    fn prompt_includes_dir_listing_when_present() {
+        let snap = EnvSnapshot {
+            os: "linux".into(),
+            shell: "bash".into(),
+            cwd: PathBuf::from("/home/u"),
+            recent_output: None,
+            dir_listing: Some("docs/\nsrc/\nCargo.toml".into()),
+        };
+        let prompt = build_single_command_prompt(&snap);
+        assert!(prompt.contains("Directory listing"));
+        assert!(prompt.contains("Cargo.toml"));
+    }
+
+    #[test]
+    fn prompt_omits_context_sections_when_none() {
+        let snap = make_snap("macos", "zsh", "/home");
+        let prompt = build_single_command_prompt(&snap);
+        assert!(!prompt.contains("Recent terminal output"));
+        assert!(!prompt.contains("Directory listing"));
+    }
+
+    #[test]
+    fn prompt_truncates_long_recent_output() {
+        let long_output = "z".repeat(3000); // use 'z' — not present in the prompt template
+        let snap = EnvSnapshot {
+            os: "linux".into(),
+            shell: "bash".into(),
+            cwd: PathBuf::from("/"),
+            recent_output: Some(long_output.clone()),
+            dir_listing: None,
+        };
+        let prompt = build_single_command_prompt(&snap);
+        assert!(prompt.contains("Recent terminal output"));
+        // The full 3000-char string must NOT be present — truncation happened.
+        assert!(!prompt.contains(&long_output), "full 3000-char output should have been truncated");
+        // The tail (last 2000 chars) IS present — we kept the most recent output.
+        assert!(prompt.contains(&long_output[1000..]), "the tail 2000 chars must be in the prompt");
     }
 }

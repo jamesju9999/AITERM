@@ -17,4 +17,44 @@
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 12px;
   padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.aiterm-status-left {
+  flex: 1;
+}
+
+.aiterm-status-provider {
+  background: transparent;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  padding: 0 8px;
+  line-height: 1;
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aiterm-status-provider:hover {
+  color: #aaa;
+}
+
+.aiterm-settings-btn {
+  background: transparent;
+  border: none;
+  color: #555;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 6px;
+  line-height: 1;
+}
+
+.aiterm-settings-btn:hover {
+  color: #aaa;
 }

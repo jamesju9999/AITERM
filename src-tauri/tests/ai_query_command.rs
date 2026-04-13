@@ -2,7 +2,7 @@
 //! test is hermetic (no network, no real PTY).
 
 use aiterm_lib::ai::{
-    router::AiRouter, AiError, AiProvider, ChatMessage, GenerateChunk, GenerateRequest,
+    AiError, AiProvider, ChatMessage, GenerateChunk, GenerateRequest,
 };
 use aiterm_lib::commands::ai::build_single_command_prompt;
 use aiterm_lib::ai::context;
@@ -20,6 +20,7 @@ struct MockProvider {
 impl AiProvider for MockProvider {
     fn id(&self) -> &str { "mock" }
     fn display_name(&self) -> &str { "Mock" }
+
     async fn generate(
         &self,
         _req: GenerateRequest,
@@ -31,6 +32,10 @@ impl AiProvider for MockProvider {
                 .send(GenerateChunk { delta: c.to_string(), done, usage: None })
                 .await;
         }
+        Ok(())
+    }
+
+    async fn health_check(&self) -> Result<(), AiError> {
         Ok(())
     }
 }
@@ -53,10 +58,10 @@ fn prompt_assembly_is_deterministic() {
     assert!(a.contains("Shell: bash"));
 }
 
-// The full ai_query command requires a Tauri State<'_> to be constructed.
-// For M1 we only exercise the pure parts (snapshot + prompt + mock provider
-// protocol) from integration tests — wiring verification happens in the
-// manual acceptance test (Task 22).
+// The full ai_query command requires a Tauri AppHandle + State, which cannot
+// be constructed in unit tests. For M3 we exercise the pure parts (snapshot +
+// prompt + mock provider protocol) — wiring is verified by the manual
+// acceptance tests in Phase 6.
 
 #[tokio::test]
 async fn mock_provider_emits_chunks_through_channel() {
@@ -66,7 +71,6 @@ async fn mock_provider_emits_chunks_through_channel() {
             r#""risk_level":"safe"}"#,
         ],
     });
-    let router = AiRouter::with_provider(provider);
     let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
     let req = GenerateRequest {
         system_prompt: "sys".into(),
@@ -75,8 +79,7 @@ async fn mock_provider_emits_chunks_through_channel() {
         mode: aiterm_lib::ai::QueryMode::SingleCommand,
         max_tokens: Some(256),
     };
-    let provider: Arc<dyn AiProvider> = router.require_provider().expect("provider");
-    provider.generate(req, tx).await.expect("ok");
+    provider.generate(req, tx).await.expect("generate ok");
 
     let mut buf = String::new();
     while let Some(c) = rx.recv().await {
@@ -86,4 +89,19 @@ async fn mock_provider_emits_chunks_through_channel() {
     let parsed: aiterm_lib::ai::AiSingleCommand = serde_json::from_str(&buf).expect("parse");
     assert_eq!(parsed.command, "ls");
     assert_eq!(parsed.explanation, "列出");
+}
+
+#[test]
+fn prompt_includes_context_when_present() {
+    let snap = aiterm_lib::ai::EnvSnapshot {
+        os: "linux".into(),
+        shell: "bash".into(),
+        cwd: PathBuf::from("/home/user"),
+        recent_output: Some("$ ls\nfoo  bar".into()),
+        dir_listing: Some("bar\nfoo".into()),
+    };
+    let prompt = build_single_command_prompt(&snap);
+    assert!(prompt.contains("Recent terminal output"));
+    assert!(prompt.contains("Directory listing"));
+    assert!(prompt.contains("foo  bar"));
 }

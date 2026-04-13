@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
+export type RiskLevel = "safe" | "needs_confirm" | "dangerous";
+
 export type AiError =
   | { kind: "not_configured" }
   | { kind: "network"; message: string }
@@ -10,6 +12,13 @@ export type AiError =
 export interface AiCommandReady {
   command: string;
   explanation: string;
+  risk_level: RiskLevel;
+}
+
+export interface AiStreamEvent {
+  session_id: string;
+  delta: string;
+  done: boolean;
 }
 
 export function invokeAiQuery(
@@ -22,16 +31,23 @@ export function invokeAiQuery(
 export function formatAiError(e: AiError): string {
   switch (e.kind) {
     case "not_configured":
-      return "aiterm: OPENAI_API_KEY not set. Set the env var and restart AITerm.";
+      return "aiterm: 尚未設定 AI Provider。";
     case "network":
-      return `aiterm: network error — ${e.message}`;
+      if (
+        e.message?.toLowerCase().includes("ollama") ||
+        e.message?.toLowerCase().includes("connection refused") ||
+        e.message?.toLowerCase().includes("connect error")
+      ) {
+        return "aiterm: 無法連線到 Ollama。請確認 Ollama 已啟動。";
+      }
+      return `aiterm: 網路錯誤 — ${e.message}`;
     case "auth_failed":
-      return "aiterm: authentication failed. Check your OPENAI_API_KEY.";
+      return "aiterm: API Key 驗證失敗。";
     case "rate_limit":
       return e.retry_after
-        ? `aiterm: rate limit exceeded (retry after ${e.retry_after})`
-        : "aiterm: rate limit exceeded, try again later";
+        ? `aiterm: 請求過於頻繁（${e.retry_after} 秒後重試）`
+        : "aiterm: 請求過於頻繁，請稍後再試";
     case "model_error":
-      return `aiterm: AI returned invalid response (${e.reason})\n        raw: ${e.raw}`;
+      return `aiterm: AI 回傳格式錯誤（${e.reason}）`;
   }
 }
