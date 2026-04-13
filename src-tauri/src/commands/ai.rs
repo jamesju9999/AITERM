@@ -183,6 +183,71 @@ pub async fn ai_query(
     })
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct AiChatReply {
+    pub content: String,
+}
+
+#[tauri::command]
+pub async fn ai_chat(
+    messages: Vec<ChatMessage>,
+    session_id: String,
+    app: AppHandle,
+    pty_manager: State<'_, PtyManager>,
+    router: State<'_, AiRouter>,
+) -> Result<AiChatReply, AiError> {
+    // Reject empty history or histories whose last message isn't from the user.
+    // This is a cheap sanity check — the real contract is enforced at the UI.
+    if messages.is_empty() {
+        return Err(AiError::ModelError {
+            reason: "empty messages".into(),
+            raw: String::new(),
+        });
+    }
+    if messages.last().map(|m| m.role.as_str()) != Some("user") {
+        return Err(AiError::ModelError {
+            reason: "last message must be from user".into(),
+            raw: String::new(),
+        });
+    }
+
+    let snapshot = context::snapshot(&pty_manager, &session_id);
+    let provider = router.resolve()?;
+
+    let prompt = build_chat_prompt(&snapshot);
+    let req = GenerateRequest {
+        system_prompt: prompt,
+        messages,
+        context: snapshot,
+        mode: QueryMode::Chat,
+        max_tokens: Some(1024),
+    };
+
+    let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
+    let provider_for_spawn = provider.clone();
+    let join = tokio::spawn(async move { provider_for_spawn.generate(req, tx).await });
+
+    let mut buf = String::new();
+    while let Some(chunk) = rx.recv().await {
+        let _ = app.emit("ai-stream", AiStreamEvent {
+            session_id: session_id.clone(),
+            kind: AiStreamKind::Chat,
+            delta: chunk.delta.clone(),
+            done: chunk.done,
+        });
+        buf.push_str(&chunk.delta);
+        if chunk.done { break; }
+    }
+
+    match join.await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(join_err) => return Err(AiError::Network { message: join_err.to_string() }),
+    }
+
+    Ok(AiChatReply { content: buf })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

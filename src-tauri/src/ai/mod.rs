@@ -63,7 +63,7 @@ pub enum QueryMode {
     Chat,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,    // "user" | "assistant" | "system"
     pub content: String,
