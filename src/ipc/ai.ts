@@ -7,12 +7,29 @@ export type AiError =
   | { kind: "network"; message: string }
   | { kind: "auth_failed" }
   | { kind: "rate_limit"; retry_after: string | null }
-  | { kind: "model_error"; reason: string; raw: string };
+  | { kind: "model_error"; reason: string; raw: string }
+  | { kind: "invalid_input"; reason: string };
 
 export interface AiCommandReady {
   command: string;
   explanation: string;
   risk_level: RiskLevel;
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
+export interface AiChatReply {
+  content: string;
+}
+
+export function invokeAiChat(
+  messages: ChatMessage[],
+  sessionId: string,
+): Promise<AiChatReply> {
+  return invoke<AiChatReply>("ai_chat", { messages, sessionId });
 }
 
 export type AiStreamKind = "query" | "chat";
@@ -52,5 +69,7 @@ export function formatAiError(e: AiError): string {
         : "aiterm: 請求過於頻繁，請稍後再試";
     case "model_error":
       return `aiterm: AI 回傳格式錯誤（${e.reason}）`;
+    case "invalid_input":
+      return `aiterm: 前端傳送的訊息格式無效（${e.reason}）`;
   }
 }
