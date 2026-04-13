@@ -85,7 +85,15 @@ Rules:
 /// protocol and invites free-form Traditional Chinese prose.
 pub fn build_chat_prompt(snapshot: &crate::ai::EnvSnapshot) -> String {
     let recent_section = snapshot.recent_output.as_deref().map(|o| {
-        let trimmed = if o.len() > 2000 { &o[o.len() - 2000..] } else { o };
+        let trimmed = if o.len() > 2000 {
+            let start = o.len() - 2000;
+            let start = (start..=o.len())
+                .find(|&i| o.is_char_boundary(i))
+                .unwrap_or(o.len());
+            &o[start..]
+        } else {
+            o
+        };
         format!("\nRecent terminal output (last ~50 lines):\n```\n{trimmed}\n```")
     }).unwrap_or_default();
 
@@ -281,6 +289,24 @@ mod tests {
             !prompt.contains("risk_level"),
             "chat prompt must not mention risk_level (that's single-command only)"
         );
+    }
+
+    #[test]
+    fn chat_prompt_truncates_long_recent_output_without_utf8_panic() {
+        // Build a string > 2000 bytes where the slice boundary lands inside
+        // a multi-byte CJK codepoint. "中" is 3 bytes in UTF-8.
+        let long = "中".repeat(800); // ~2400 bytes
+        let snap = EnvSnapshot {
+            os: "linux".into(),
+            shell: "bash".into(),
+            cwd: PathBuf::from("/tmp"),
+            recent_output: Some(long),
+            dir_listing: None,
+        };
+        // Must not panic.
+        let prompt = build_chat_prompt(&snap);
+        assert!(prompt.contains("Recent terminal output"));
+        assert!(prompt.contains("中"));
     }
 
     #[test]
