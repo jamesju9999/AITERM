@@ -199,16 +199,10 @@ pub async fn ai_chat(
     // Reject empty history or histories whose last message isn't from the user.
     // This is a cheap sanity check — the real contract is enforced at the UI.
     if messages.is_empty() {
-        return Err(AiError::ModelError {
-            reason: "empty messages".into(),
-            raw: String::new(),
-        });
+        return Err(AiError::InvalidInput { reason: "empty messages".into() });
     }
     if messages.last().map(|m| m.role.as_str()) != Some("user") {
-        return Err(AiError::ModelError {
-            reason: "last message must be from user".into(),
-            raw: String::new(),
-        });
+        return Err(AiError::InvalidInput { reason: "last message must be from user".into() });
     }
 
     let snapshot = context::snapshot(&pty_manager, &session_id);
