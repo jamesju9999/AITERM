@@ -15,8 +15,11 @@ export interface AiCommandReady {
   risk_level: RiskLevel;
 }
 
+export type AiStreamKind = "query" | "chat";
+
 export interface AiStreamEvent {
   session_id: string;
+  kind: AiStreamKind;
   delta: string;
   done: boolean;
 }

@@ -161,6 +161,7 @@ export function TerminalView() {
 
         // Listen for AI streaming events from this session.
         unlistenStream = await listen<AiStreamEvent>("ai-stream", (event) => {
+          if (event.payload.kind !== "query") return;
           if (event.payload.session_id !== sessionId) return;
           if (!event.payload.done) {
             setStreamText((t) => t + event.payload.delta);

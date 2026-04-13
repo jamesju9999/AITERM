@@ -22,10 +22,18 @@ pub struct AiCommandReady {
     pub risk_level: RiskLevel,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiStreamKind {
+    Query, // /ai single-command flow
+    Chat,  // AI Panel multi-turn flow
+}
+
 /// Payload emitted as a Tauri event for each streaming chunk.
 #[derive(Debug, Clone, Serialize)]
 pub struct AiStreamEvent {
     pub session_id: String,
+    pub kind: AiStreamKind,
     pub delta: String,
     pub done: bool,
 }
@@ -101,6 +109,7 @@ pub async fn ai_query(
         // Emit streaming event so the frontend can show live progress.
         let _ = app.emit("ai-stream", AiStreamEvent {
             session_id: session_id.clone(),
+            kind: AiStreamKind::Query,
             delta: chunk.delta.clone(),
             done: chunk.done,
         });
