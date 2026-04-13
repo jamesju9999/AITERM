@@ -80,6 +80,45 @@ Rules:
     )
 }
 
+/// Build the system prompt for Chat mode. Unlike `build_single_command_prompt`,
+/// this does NOT instruct JSON output — instead it explains the `<cmd>` tag
+/// protocol and invites free-form Traditional Chinese prose.
+pub fn build_chat_prompt(snapshot: &crate::ai::EnvSnapshot) -> String {
+    let recent_section = snapshot.recent_output.as_deref().map(|o| {
+        let trimmed = if o.len() > 2000 { &o[o.len() - 2000..] } else { o };
+        format!("\nRecent terminal output (last ~50 lines):\n```\n{trimmed}\n```")
+    }).unwrap_or_default();
+
+    let dir_section = snapshot.dir_listing.as_deref().map(|d| {
+        format!("\nDirectory listing ({}):\n```\n{d}\n```", snapshot.cwd.display())
+    }).unwrap_or_default();
+
+    format!(
+r#"You are an AI terminal assistant. The user is in an interactive terminal
+session and you can see their OS, shell, cwd, and recent output.
+
+Environment:
+  OS: {os}
+  Shell: {shell}
+  Cwd: {cwd}{recent_section}{dir_section}
+
+Rules:
+1. Respond in Traditional Chinese (繁體中文).
+2. When you want to suggest a runnable shell command, wrap it in
+   <cmd>...</cmd> tags. The user can click the tag to execute it.
+3. You may include multiple <cmd> tags in one reply if needed.
+4. Each <cmd> must contain a command valid for {shell}. Prefer single-line
+   commands; multi-line commands will ask the user for confirmation before
+   executing.
+5. Free-form explanation outside <cmd> tags is encouraged.
+6. Never produce destructive operations against system roots unless the
+   user explicitly asks; if you do, mark it clearly in prose."#,
+        os = snapshot.os,
+        shell = snapshot.shell,
+        cwd = snapshot.cwd.display(),
+    )
+}
+
 #[tauri::command]
 pub async fn ai_query(
     query: String,
@@ -196,6 +235,52 @@ mod tests {
         let prompt = build_single_command_prompt(&snap);
         assert!(!prompt.contains("Recent terminal output"));
         assert!(!prompt.contains("Directory listing"));
+    }
+
+    #[test]
+    fn chat_prompt_contains_environment_fields() {
+        let snap = make_snap("windows", "pwsh", "C:\\Users\\a");
+        let prompt = build_chat_prompt(&snap);
+        assert!(prompt.contains("OS: windows"));
+        assert!(prompt.contains("Shell: pwsh"));
+        assert!(prompt.contains("C:\\Users\\a"));
+    }
+
+    #[test]
+    fn chat_prompt_includes_recent_output_when_present() {
+        let snap = EnvSnapshot {
+            os: "linux".into(),
+            shell: "bash".into(),
+            cwd: PathBuf::from("/tmp"),
+            recent_output: Some("$ ls\nfoo  bar".into()),
+            dir_listing: None,
+        };
+        let prompt = build_chat_prompt(&snap);
+        assert!(prompt.contains("Recent terminal output"));
+        assert!(prompt.contains("foo  bar"));
+    }
+
+    #[test]
+    fn chat_prompt_instructs_cmd_tag_format() {
+        let snap = make_snap("linux", "bash", "/");
+        let prompt = build_chat_prompt(&snap);
+        assert!(prompt.contains("<cmd>"), "prompt must mention <cmd> tag");
+        assert!(prompt.contains("</cmd>"), "prompt must mention closing tag");
+    }
+
+    #[test]
+    fn chat_prompt_omits_json_schema_rules() {
+        let snap = make_snap("linux", "bash", "/");
+        let prompt = build_chat_prompt(&snap);
+        // Chat mode must NOT contain the single-command JSON schema instruction.
+        assert!(
+            !prompt.contains("Output ONLY a JSON object"),
+            "chat prompt must not inherit the JSON schema rule"
+        );
+        assert!(
+            !prompt.contains("risk_level"),
+            "chat prompt must not mention risk_level (that's single-command only)"
+        );
     }
 
     #[test]
