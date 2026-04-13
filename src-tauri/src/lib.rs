@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use ai::router::AiRouter;
 use commands::{
-    ai::ai_query,
+    ai::{ai_chat, ai_query},
     config::{get_config, is_onboarding_done, set_execution_mode, set_onboarding_done},
     provider::{
         add_provider, get_ollama_models, list_providers, remove_provider, set_default_provider,
@@ -41,6 +41,7 @@ pub fn run() {
             pty_close,
             // AI query
             ai_query,
+            ai_chat,
             // Config
             get_config,
             set_execution_mode,
