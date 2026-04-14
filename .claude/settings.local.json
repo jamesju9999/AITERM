@@ -40,7 +40,14 @@
       "Bash(taskkill /F /IM \"cmd.exe\" /FI \"WINDOWTITLE eq pty*\")",
       "Bash(taskkill //F //IM \"app_lib-0b91b3919c01f0c3.exe\")",
       "Bash(cargo build:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(ls src/components/*.css)",
+      "Bash(ls src/**/*.test.*)",
+      "Bash(xargs grep:*)",
+      "Bash(npm test:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(grep -rn \"pub mod ai\" src-tauri/src/commands/mod.rs)",
+      "Bash(grep -rn \"pub mod commands\" src-tauri/src/lib.rs)"
     ]
   }
 }
