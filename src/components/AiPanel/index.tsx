@@ -34,6 +34,18 @@ export function AiPanel({
     if (isOpen) textareaRef.current?.focus();
   }, [isOpen]);
 
+  // Listen for prefill events to inject context from error blocks.
+  useEffect(() => {
+    const onPrefill = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { text: string };
+      if (detail && detail.text) {
+        setInput(detail.text);
+      }
+    };
+    window.addEventListener("aiterm:prefill-chat", onPrefill);
+    return () => window.removeEventListener("aiterm:prefill-chat", onPrefill);
+  }, []);
+
   // Global Escape handler — only active while the panel is open.
   useEffect(() => {
     if (!isOpen) return;
@@ -78,15 +90,25 @@ export function AiPanel({
         >
           {providerName || "(no provider)"}
         </button>
-        <button
-          type="button"
-          className="aiterm-ai-panel-clear-btn"
-          onClick={chat.clear}
-          disabled={chat.isStreaming}
-          title="清空當前對話"
-        >
-          🗑 New Chat
-        </button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            type="button"
+            className="aiterm-ai-panel-clear-btn"
+            onClick={chat.clear}
+            disabled={chat.isStreaming}
+            title="清空當前對話"
+          >
+            🗑 New Chat
+          </button>
+          <button
+            type="button"
+            className="aiterm-ai-panel-clear-btn"
+            onClick={onClose}
+            title="關閉面板 (Esc)"
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
       <MessageList

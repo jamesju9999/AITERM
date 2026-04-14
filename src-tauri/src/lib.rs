@@ -9,7 +9,7 @@ use std::sync::Arc;
 use ai::router::AiRouter;
 use commands::{
     ai::{ai_chat, ai_query},
-    config::{get_config, is_onboarding_done, set_execution_mode, set_onboarding_done},
+    config::{get_config, is_onboarding_done, set_execution_mode, set_onboarding_done, set_submit_shortcut},
     provider::{
         add_provider, get_ollama_models, list_providers, remove_provider, set_default_provider,
         test_provider, update_provider,
@@ -47,6 +47,7 @@ pub fn run() {
             set_execution_mode,
             is_onboarding_done,
             set_onboarding_done,
+            set_submit_shortcut,
             // Provider management
             list_providers,
             add_provider,

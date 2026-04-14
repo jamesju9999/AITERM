@@ -10,6 +10,8 @@ export type ProviderType =
 
 export type ExecutionMode = "always-confirm" | "graded" | "full-auto";
 
+export type SubmitShortcut = "enter" | "shift-enter" | "ctrl-enter";
+
 export interface ProviderConfig {
   id: string;
   display_name: string;
@@ -23,6 +25,7 @@ export interface AppConfig {
   default_provider: string | null;
   providers: ProviderConfig[];
   execution_mode: ExecutionMode;
+  submit_shortcut: SubmitShortcut;
   onboarding_done: boolean;
 }
 
@@ -38,3 +41,6 @@ export const isOnboardingDone = (): Promise<boolean> =>
 
 export const setOnboardingDone = (): Promise<void> =>
   invoke("set_onboarding_done");
+
+export const setSubmitShortcut = (shortcut: SubmitShortcut): Promise<void> =>
+  invoke("set_submit_shortcut", { shortcut });
