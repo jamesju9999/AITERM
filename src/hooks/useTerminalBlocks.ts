@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { writePty } from "../ipc/pty";
-import { parseAiPrefix } from "../components/parseAiPrefix";
 
 import type { IMarker } from "@xterm/xterm";
 
@@ -10,7 +9,6 @@ export interface TerminalBlock {
   command: string;      // The actual command text
   output: string;       // Captured ANSI output for this block
   status: "running" | "completed" | "failed";
-  exitCode?: number;
   exitCode?: number;
   startMarker?: IMarker;
   endMarker?: IMarker;
@@ -21,8 +19,7 @@ export interface TerminalBlock {
 
 export interface UseTerminalBlocksResult {
   blocks: TerminalBlock[];
-  submitCommand: (cmd: string) => void;
-  // Expose active buffer type so we can hide React Input if alternating
+  submitCommand: (cmd: string, onComplete?: (block: TerminalBlock) => void) => void;
   isAlternateBuffer: boolean;
   termInstance: Terminal | null;
 }
@@ -36,10 +33,13 @@ export function useTerminalBlocks(
 
   // We keep a mutable ref to blocks so the data listener can modify the last block's text.
   const blocksRef = useRef<TerminalBlock[]>([]);
-  const updateBlocks = (newBlocks: TerminalBlock[]) => {
+  // Map of block ID → onComplete callback (for agent loop)
+  const completionCallbacksRef = useRef<Map<string, (block: TerminalBlock) => void>>(new Map());
+
+  const updateBlocks = useCallback((newBlocks: TerminalBlock[]) => {
     blocksRef.current = newBlocks;
     setBlocks(newBlocks);
-  };
+  }, []);
 
   useEffect(() => {
     if (!term) return;
@@ -61,7 +61,9 @@ export function useTerminalBlocks(
             if (prev.length > 0) {
               const latest = prev[prev.length - 1];
               if (latest.status === "running") {
-                updateBlocks(prev.map((b) => (b.id === latest.id ? { ...b, startMarker: marker } : b)));
+                const updated = prev.map((b) => (b.id === latest.id ? { ...b, startMarker: marker } : b));
+                blocksRef.current = updated;
+                setBlocks(updated);
               }
             }
           }
@@ -78,21 +80,27 @@ export function useTerminalBlocks(
         const latest = prev[prev.length - 1];
         if (latest.status !== "running") return true;
 
-        const startMarkerToDecorate = latest.startMarker;
-        const targetBlockId = latest.id;
-
-        updateBlocks(prev.map((b) => (b.id === latest.id ? { 
-          ...b, 
-          status: exitCode === 0 ? "completed" : "failed", 
+        const completedBlock: TerminalBlock = {
+          ...latest,
+          status: exitCode === 0 ? "completed" : "failed",
           exitCode: isNaN(exitCode) ? 0 : exitCode,
           endMarker: endMarker || undefined,
-          startLine: startMarkerToDecorate?.line,
+          startLine: latest.startMarker?.line,
           endLine: endMarker?.line,
-          decorationCreated: true
-        } : b)));
+          decorationCreated: true,
+        };
 
-        // Instead of Xterm decorations, we just rely on the React overlay
-        // so we don't do anything here except updating the state!
+        const updated = prev.map((b) => (b.id === latest.id ? completedBlock : b));
+        blocksRef.current = updated;
+        setBlocks(updated);
+
+        // Fire the completion callback if registered for this block
+        const cb = completionCallbacksRef.current.get(latest.id);
+        if (cb) {
+          completionCallbacksRef.current.delete(latest.id);
+          setTimeout(() => cb(completedBlock), 50);
+        }
+
         return true;
       }
       return false;
@@ -105,30 +113,30 @@ export function useTerminalBlocks(
   }, [term]);
 
   /**
-   * Here we inject a special sequence after the user command. 
-   * Since we are building Method B, the command string from React 
-   * is guaranteed to be whole. We can wrap it to return exit code.
-   * Format: <cmd> \n echo -e "\x1b]133;D;$?\x07"
-   * Since Windows pwsh uses a different format, we might need a generic approach.
-   * For now, we will track the command natively.
+   * Submit a command to the PTY and track it as a block.
+   * Optionally provide an onComplete callback that fires when the block finishes.
    */
   const submitCommand = useCallback(
-    (cmd: string) => {
+    (cmd: string, onComplete?: (block: TerminalBlock) => void) => {
       if (!term || !sessionId) return;
 
       const newBlock: TerminalBlock = {
         id: Math.random().toString(36).substring(2, 15) + Date.now().toString(36),
         command: cmd,
-        output: "", // initially empty
+        output: "",
         status: "running",
       };
       
-      updateBlocks([...blocksRef.current, newBlock]);
+      // Register the completion callback before creating the block
+      if (onComplete) {
+        completionCallbacksRef.current.set(newBlock.id, onComplete);
+      }
 
-      // For MVP of M5, we just write the command to PTY.
-      // E.g. add a marker manually via simple bash echo for completed detection.
-      // To strictly avoid ZLE (zsh line editor) messing with our appended marker:
-      // We send \x15 (Ctrl+U to clear line) then the command + \r
+      const updated = [...blocksRef.current, newBlock];
+      blocksRef.current = updated;
+      setBlocks(updated);
+
+      // Send \\x15 (Ctrl+U to clear line) then the command + \\r
       writePty(sessionId, "\x15" + cmd + "\r").catch(console.error);
     },
     [sessionId, term],

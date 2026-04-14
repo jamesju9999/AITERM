@@ -101,12 +101,13 @@ pub struct AiSingleCommand {
     pub risk_level: RiskLevel,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RiskLevel {
     Safe,
     NeedsConfirm,
     Dangerous,
+    Blocked,
 }
 
 use async_trait::async_trait;
@@ -213,6 +214,7 @@ mod tests {
             ("safe", RiskLevel::Safe),
             ("needs_confirm", RiskLevel::NeedsConfirm),
             ("dangerous", RiskLevel::Dangerous),
+            ("blocked", RiskLevel::Blocked),
         ] {
             let json = format!(r#"{{"explanation":"x","command":"y","risk_level":"{raw}"}}"#);
             let parsed: AiSingleCommand = serde_json::from_str(&json).unwrap();

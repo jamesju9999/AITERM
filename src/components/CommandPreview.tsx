@@ -14,6 +14,7 @@ const RISK_LABELS: Record<RiskLevel, string> = {
   safe: "Safe",
   needs_confirm: "Caution",
   dangerous: "Dangerous",
+  blocked: "Blocked",
 };
 
 export function CommandPreview({
@@ -25,7 +26,7 @@ export function CommandPreview({
 }: CommandPreviewProps) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Enter") {
+      if (e.key === "Enter" && riskLevel !== "blocked") {
         e.preventDefault();
         e.stopPropagation();
         onConfirm();
@@ -52,15 +53,23 @@ export function CommandPreview({
       <div className="aiterm-command-preview__label">Explanation</div>
       <div className="aiterm-command-preview__explanation">{explanation}</div>
       <div className="aiterm-command-preview__actions">
-        <button
-          className={`aiterm-command-preview__confirm aiterm-command-preview__confirm--${riskLevel}`}
-          onClick={onConfirm}
-        >
-          {riskLevel === "dangerous" ? "Execute Anyway" : "Execute"}
-        </button>
-        <span className="aiterm-command-preview__hint">
-          [Enter] Execute &nbsp;&nbsp; [Esc] Cancel
-        </span>
+        {riskLevel !== "blocked" ? (
+          <>
+            <button
+              className={`aiterm-command-preview__confirm aiterm-command-preview__confirm--${riskLevel}`}
+              onClick={onConfirm}
+            >
+              {riskLevel === "dangerous" ? "Execute Anyway" : "Execute"}
+            </button>
+            <span className="aiterm-command-preview__hint">
+              [Enter] Execute &nbsp;&nbsp; [Esc] Cancel
+            </span>
+          </>
+        ) : (
+          <span className="aiterm-command-preview__hint aiterm-command-preview__hint--blocked" style={{ color: "#f87171", fontWeight: "bold" }}>
+            This operation is permanently blocked for safety. [Esc] Cancel
+          </span>
+        )}
       </div>
     </div>
   );

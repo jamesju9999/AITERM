@@ -69,6 +69,9 @@ elif [[ -f "$HOME/.zshrc" ]]; then
   source "$HOME/.zshrc"
 fi
 
+# Disable prompt_sp to prevent inverted % symbol from appearing when we output shell integration marks
+unsetopt prompt_sp
+
 # ── AITerm Shell Integration ──
 __aiterm_cmd_running=0
 

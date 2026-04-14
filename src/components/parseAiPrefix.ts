@@ -13,3 +13,15 @@ export function parseAiPrefix(line: string): string | null {
   const rest = line.slice(3).trim();
   return rest.length === 0 ? null : rest;
 }
+
+/**
+ * Parse a line of user input for the `/agent ` prefix.
+ */
+export function parseAgentPrefix(line: string): string | null {
+  if (!line.startsWith("/agent")) return null;
+  if (line.length === 6) return null;
+  const next = line.charAt(6);
+  if (next !== " " && next !== "\t") return null;
+  const rest = line.slice(6).trim();
+  return rest.length === 0 ? null : rest;
+}

@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-
-export type RiskLevel = "safe" | "needs_confirm" | "dangerous";
+export type RiskLevel = "safe" | "needs_confirm" | "dangerous" | "blocked";
 
 export type AiError =
   | { kind: "not_configured" }
