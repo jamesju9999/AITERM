@@ -1,0 +1,178 @@
+.aiterm-ai-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 420px;
+  background: #141414;
+  color: #e6e6e6;
+  border-left: 1px solid #2a2a2a;
+  display: flex;
+  flex-direction: column;
+  z-index: 50;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 13px;
+}
+
+/*
+ * Hidden state keeps the panel mounted so useAiChat's stream listener
+ * continues to receive chunks while the user toggles the panel off and on.
+ */
+.aiterm-ai-panel-hidden {
+  display: none;
+}
+
+.aiterm-ai-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid #2a2a2a;
+  background: #1b1b1b;
+}
+
+.aiterm-ai-panel-title {
+  font-weight: 600;
+  color: #bbb;
+}
+
+.aiterm-ai-panel-provider-badge {
+  background: #223;
+  color: #cde;
+  border: 1px solid #345;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.aiterm-ai-panel-provider-badge:hover {
+  background: #334;
+}
+
+.aiterm-ai-panel-clear-btn {
+  background: transparent;
+  border: 1px solid #444;
+  color: #bbb;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.aiterm-ai-panel-clear-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.aiterm-message-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aiterm-bubble {
+  max-width: 90%;
+  padding: 6px 10px;
+  border-radius: 8px;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.aiterm-bubble-user {
+  align-self: flex-end;
+  background: #1e3a5f;
+  color: #e6e6e6;
+}
+.aiterm-bubble-assistant {
+  align-self: flex-start;
+  background: #232323;
+  color: #e6e6e6;
+}
+.aiterm-bubble-assistant[aria-busy="true"] {
+  opacity: 0.75;
+  font-style: italic;
+}
+.aiterm-bubble-error {
+  align-self: stretch;
+  background: #3a1a1a;
+  border: 1px solid #5a2a2a;
+  color: #f4c2c2;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.aiterm-cmd-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 2px;
+  padding: 2px 8px;
+  background: #0a2a0a;
+  border: 1px solid #2a5a2a;
+  border-radius: 4px;
+  color: #b8f4b8;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+}
+.aiterm-cmd-tag:hover {
+  background: #0f3a0f;
+}
+.aiterm-cmd-tag code {
+  font-family: inherit;
+}
+.aiterm-cmd-tag-play {
+  color: #6cf06c;
+}
+
+.aiterm-retry-btn {
+  background: transparent;
+  border: 1px solid #8a4a4a;
+  color: #f4c2c2;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.aiterm-retry-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.aiterm-ai-panel-input-area {
+  border-top: 1px solid #2a2a2a;
+  padding: 8px 12px;
+  background: #1b1b1b;
+  display: flex;
+  gap: 8px;
+}
+.aiterm-ai-panel-input {
+  flex: 1;
+  background: #0c0c0c;
+  color: #e6e6e6;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 13px;
+  resize: none;
+}
+.aiterm-ai-panel-input:disabled {
+  opacity: 0.5;
+}
+.aiterm-ai-panel-send-btn {
+  background: #1e4a8f;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+.aiterm-ai-panel-send-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
