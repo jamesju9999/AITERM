@@ -24,6 +24,7 @@ import { listProviders } from "../ipc/provider";
 import { parseAiPrefix } from "./parseAiPrefix";
 import { CommandPreview } from "./CommandPreview";
 import { StreamingIndicator } from "./StreamingIndicator";
+import { AiPanel } from "./AiPanel";
 import { ProviderPalette } from "./ProviderPalette";
 import "./TerminalView.css";
 
@@ -59,6 +60,11 @@ export function TerminalView() {
   const previewRef = useRef<PreviewState>(INITIAL_PREVIEW);
   previewRef.current = preview;
 
+  const panelOpenRef = useRef(false);
+  useEffect(() => {
+    panelOpenRef.current = panelOpen;
+  }, [panelOpen]);
+
   // Streaming state
   const [streamText, setStreamText] = useState("");
   const streamingRef = useRef(false);
@@ -66,6 +72,8 @@ export function TerminalView() {
   // Provider status badge
   const [activeProvider, setActiveProvider] = useState<string>("");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [sessionId, setSessionId] = useState<string>("");
 
   // Execution mode is read once and cached; re-fetched when we return from settings.
   const executionModeRef = useRef<ExecutionMode>("always-confirm");
@@ -113,6 +121,9 @@ export function TerminalView() {
       } else if (e.ctrlKey && e.shiftKey && e.key === "P") {
         e.preventDefault();
         setPaletteOpen((o) => !o);
+      } else if (e.ctrlKey && (e.key === "i" || e.key === "I")) {
+        e.preventDefault();
+        setPanelOpen((o) => !o);
       }
     };
     window.addEventListener("keydown", handler);
@@ -151,24 +162,28 @@ export function TerminalView() {
     (async () => {
       try {
         const { rows, cols } = term;
-        const sessionId = await createPty({ rows, cols });
-        sessionRef.current = sessionId;
-        setStatus(`connected (${sessionId.slice(0, 8)}…)`);
+        const id = await createPty({ rows, cols });
+        sessionRef.current = id;
+        setSessionId(id);
+        setStatus(`connected (${id.slice(0, 8)}…)`);
 
-        unlistenData = await onPtyData(sessionId, (bytes) => {
+        unlistenData = await onPtyData(id, (bytes) => {
           term.write(decoder.decode(bytes, { stream: true }));
         });
 
         // Listen for AI streaming events from this session.
         unlistenStream = await listen<AiStreamEvent>("ai-stream", (event) => {
           if (event.payload.kind !== "query") return;
-          if (event.payload.session_id !== sessionId) return;
+          if (event.payload.session_id !== id) return;
           if (!event.payload.done) {
             setStreamText((t) => t + event.payload.delta);
           }
         });
 
         term.onData((data) => {
+          // Panel owns keyboard while open — drop input.
+          if (panelOpenRef.current) return;
+
           const session = sessionRef.current;
           if (!session) return;
 
@@ -293,6 +308,22 @@ export function TerminalView() {
         <ProviderPalette
           onClose={() => setPaletteOpen(false)}
           onSwitch={(name) => setActiveProvider(name)}
+        />
+      )}
+      {sessionId && (
+        <AiPanel
+          key={sessionId}
+          sessionId={sessionId}
+          isOpen={panelOpen}
+          providerName={activeProvider}
+          onClose={() => setPanelOpen(false)}
+          onExecuteCommand={(cmd) => {
+            writePty(sessionId, cmd + "\r").catch(console.error);
+          }}
+          onOpenProviderPalette={() => {
+            setPanelOpen(false);
+            setPaletteOpen(true);
+          }}
         />
       )}
     </div>
