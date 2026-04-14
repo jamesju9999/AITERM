@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { getConfig, setExecutionMode } from "../../ipc/config";
-import type { ExecutionMode } from "../../ipc/config";
+import { getConfig, setExecutionMode, setSubmitShortcut } from "../../ipc/config";
+import type { ExecutionMode, SubmitShortcut } from "../../ipc/config";
 import "./GeneralPage.css";
 
 const MODES: { value: ExecutionMode; label: string; desc: string }[] = [
@@ -21,12 +21,22 @@ const MODES: { value: ExecutionMode; label: string; desc: string }[] = [
   },
 ];
 
+const SHORTCUT_MODES: { value: SubmitShortcut; label: string; desc: string }[] = [
+  { value: "enter", label: "Enter", desc: "按下 Enter 鍵送出指令，Shift+Enter 換行。" },
+  { value: "shift-enter", label: "Shift + Enter", desc: "按下 Shift+Enter 送出指令，直接按 Enter 換行。" },
+  { value: "ctrl-enter", label: "Ctrl + Enter", desc: "按下 Ctrl+Enter 送出指令，直接按 Enter 換行。" },
+];
+
 export function GeneralPage() {
   const [mode, setMode] = useState<ExecutionMode>("always-confirm");
+  const [shortcut, setShortcut] = useState<SubmitShortcut>("enter");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    getConfig().then((cfg) => setMode(cfg.execution_mode));
+    getConfig().then((cfg) => {
+      setMode(cfg.execution_mode);
+      setShortcut(cfg.submit_shortcut);
+    });
   }, []);
 
   const handleChange = async (newMode: ExecutionMode) => {
@@ -34,6 +44,16 @@ export function GeneralPage() {
     setSaving(true);
     try {
       await setExecutionMode(newMode);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleShortcutChange = async (newShortcut: SubmitShortcut) => {
+    setShortcut(newShortcut);
+    setSaving(true);
+    try {
+      await setSubmitShortcut(newShortcut);
     } finally {
       setSaving(false);
     }
@@ -60,6 +80,29 @@ export function GeneralPage() {
               <div className="mode-text">
                 <span className="mode-label">{m.label}</span>
                 <span className="mode-desc">{m.desc}</span>
+              </div>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3>輸入組合鍵</h3>
+        <p className="section-desc">決定底部輸入框以哪個組合鍵送出指令。</p>
+        <div className="mode-list">
+          {SHORTCUT_MODES.map((s) => (
+            <label key={s.value} className="mode-option">
+              <input
+                type="radio"
+                name="submit_shortcut"
+                value={s.value}
+                checked={shortcut === s.value}
+                onChange={() => handleShortcutChange(s.value)}
+                disabled={saving}
+              />
+              <div className="mode-text">
+                <span className="mode-label">{s.label}</span>
+                <span className="mode-desc">{s.desc}</span>
               </div>
             </label>
           ))}

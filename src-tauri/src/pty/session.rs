@@ -42,6 +42,9 @@ impl PtySession {
         for arg in shell.args {
             cmd.arg(arg);
         }
+        for (k, v) in shell.envs {
+            cmd.env(k, v);
+        }
         if let Ok(cwd) = std::env::current_dir() {
             cmd.cwd(cwd);
         }
@@ -131,6 +134,9 @@ impl PtySession {
         let mut cmd = CommandBuilder::new(shell.program);
         for arg in shell.args {
             cmd.arg(arg);
+        }
+        for (k, v) in shell.envs {
+            cmd.env(k, v);
         }
         if let Ok(cwd) = std::env::current_dir() {
             cmd.cwd(cwd);

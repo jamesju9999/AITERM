@@ -19,13 +19,15 @@ import {
   type AiStreamEvent,
   type RiskLevel,
 } from "../ipc/ai";
-import { getConfig, type ExecutionMode } from "../ipc/config";
+import { getConfig, type ExecutionMode, type SubmitShortcut } from "../ipc/config";
 import { listProviders } from "../ipc/provider";
 import { parseAiPrefix } from "./parseAiPrefix";
 import { CommandPreview } from "./CommandPreview";
 import { StreamingIndicator } from "./StreamingIndicator";
 import { AiPanel } from "./AiPanel";
 import { ProviderPalette } from "./ProviderPalette";
+import { WarpInput } from "./WarpInput";
+import { useTerminalBlocks } from "../hooks/useTerminalBlocks";
 import "./TerminalView.css";
 
 interface PreviewState {
@@ -60,6 +62,9 @@ export function TerminalView() {
   const previewRef = useRef<PreviewState>(INITIAL_PREVIEW);
   previewRef.current = preview;
 
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [sessionId, setSessionId] = useState<string>("");
+
   const panelOpenRef = useRef(false);
   useEffect(() => {
     panelOpenRef.current = panelOpen;
@@ -72,16 +77,29 @@ export function TerminalView() {
   // Provider status badge
   const [activeProvider, setActiveProvider] = useState<string>("");
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [sessionId, setSessionId] = useState<string>("");
 
-  // Execution mode is read once and cached; re-fetched when we return from settings.
+  // Execution mode and shortcut are read once and cached; re-fetched when we return from settings.
   const executionModeRef = useRef<ExecutionMode>("always-confirm");
+  const [submitShortcut, setSubmitShortcutState] = useState<SubmitShortcut>("enter");
 
   // Refs bridged into the useEffect closure.
   const termRef = useRef<Terminal | null>(null);
+  const [termState, setTermState] = useState<Terminal | null>(null);
   const sessionRef = useRef<string | null>(null);
   const lineBufRef = useRef<string>("");
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const [renderTick, setRenderTick] = useState(0);
+
+  const { blocks, isAlternateBuffer, submitCommand } = useTerminalBlocks(
+    sessionId,
+    termState
+  );
+
+  useEffect(() => {
+    if (termState) {
+      termState.options.disableStdin = !isAlternateBuffer;
+    }
+  }, [isAlternateBuffer, termState]);
 
   /** Fetch active provider name and execution mode from config. */
   function refreshConfig() {
@@ -95,6 +113,7 @@ export function TerminalView() {
     getConfig()
       .then((cfg) => {
         executionModeRef.current = cfg.execution_mode;
+        setSubmitShortcutState(cfg.submit_shortcut);
       })
       .catch(() => {});
   }
@@ -130,6 +149,24 @@ export function TerminalView() {
     return () => window.removeEventListener("keydown", handler);
   }, [navigate]);
 
+  // Listen for "Ask AI" clicks from block action buttons
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { command: string; exitCode: number };
+      if (detail) {
+        setPanelOpen(true);
+        // Dispatch another event that AiPanel can pick up to pre-fill context
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent("aiterm:prefill-chat", {
+            detail: { text: `指令 \`${detail.command}\` 執行失敗 (exit code ${detail.exitCode})。請分析可能原因並提供修復建議。` }
+          }));
+        }, 100);
+      }
+    };
+    window.addEventListener("aiterm:ask-ai", handler);
+    return () => window.removeEventListener("aiterm:ask-ai", handler);
+  }, []);
+
   useEffect(() => {
     if (!hostRef.current) return;
 
@@ -144,6 +181,7 @@ export function TerminalView() {
       convertEol: false,
     });
     termRef.current = term;
+    setTermState(term);
 
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -171,76 +209,91 @@ export function TerminalView() {
           term.write(decoder.decode(bytes, { stream: true }));
         });
 
-        // Listen for AI streaming events from this session.
-        unlistenStream = await listen<AiStreamEvent>("ai-stream", (event) => {
-          if (event.payload.kind !== "query") return;
-          if (event.payload.session_id !== id) return;
-          if (!event.payload.done) {
-            setStreamText((t) => t + event.payload.delta);
-          }
-        });
-
-        term.onData((data) => {
-          // Panel owns keyboard while open — drop input.
-          if (panelOpenRef.current) return;
-
-          const session = sessionRef.current;
-          if (!session) return;
-
-          for (const ch of data) {
-            if (ch === "\r" || ch === "\n") {
-              const line = lineBufRef.current;
-              lineBufRef.current = "";
-              const query = parseAiPrefix(line);
-              if (query !== null) {
-                if (previewRef.current.loading) {
-                  writeRed("aiterm: already waiting for AI response");
-                  continue;
-                }
-                handleAiQuery(
-                  session,
-                  line,
-                  query,
-                  term,
-                  setPreview,
-                  setStreamText,
-                  streamingRef,
-                  executionModeRef,
-                  writeRed,
-                );
-                continue;
+        // Set up native pixel-perfect scroll sync
+        if (term.element) {
+          const viewportEl = term.element.querySelector('.xterm-viewport');
+          if (viewportEl && overlayRef.current) {
+            viewportEl.addEventListener('scroll', () => {
+              if (overlayRef.current) {
+                overlayRef.current.style.transform = `translateY(-${viewportEl.scrollTop}px)`;
               }
-              writePty(session, ch).catch(console.error);
-            } else if (ch === "\x7f" || ch === "\b") {
-              lineBufRef.current = lineBufRef.current.slice(0, -1);
-              writePty(session, ch).catch(console.error);
-            } else if (ch === "\x03") {
-              lineBufRef.current = "";
-              writePty(session, ch).catch(console.error);
-            } else {
-              lineBufRef.current += ch;
-              writePty(session, ch).catch(console.error);
-            }
+            });
           }
-        });
-
-        term.onResize(({ rows: r, cols: c }) => {
-          if (sessionRef.current) {
-            resizePty(sessionRef.current, { rows: r, cols: c }).catch(console.error);
-          }
-        });
-      } catch (e) {
-        setStatus(`error: ${String(e)}`);
+        }
+      } catch (err) {
+        console.error("Failed to create pty", err);
       }
     })();
 
-    const onWindowResize = () => fit.fit();
+    unlistenStream = listen<AiStreamEvent>("ai-stream", (event) => {
+      if (event.payload.kind !== "query") return;
+      if (event.payload.session_id !== sessionRef.current) return;
+      if (!event.payload.done) {
+        setStreamText((t) => t + event.payload.delta);
+      }
+    });
+
+    term.onData((data) => {
+      // Panel owns keyboard while open — drop input.
+      if (panelOpenRef.current) return;
+
+      const session = sessionRef.current;
+      if (!session) return;
+
+      for (const ch of data) {
+        if (ch === "\r" || ch === "\n") {
+          const line = lineBufRef.current;
+          lineBufRef.current = "";
+          const query = parseAiPrefix(line);
+          if (query !== null) {
+            if (previewRef.current.loading) {
+              writeRed("aiterm: already waiting for AI response");
+              continue;
+            }
+            handleAiQuery(
+              session,
+              line, // originalLine
+              query, // The parsed query string
+              term,
+              setPreview,
+              setStreamText,
+              streamingRef,
+              executionModeRef,
+              writeRed,
+              submitCommand
+            );
+            continue;
+          }
+          writePty(session, ch).catch(console.error);
+        } else if (ch === "\x7f" || ch === "\b") {
+          lineBufRef.current = lineBufRef.current.slice(0, -1);
+          writePty(session, ch).catch(console.error);
+        } else if (ch === "\x03") {
+          lineBufRef.current = "";
+          writePty(session, ch).catch(console.error);
+        } else {
+          lineBufRef.current += ch;
+          writePty(session, ch).catch(console.error);
+        }
+      }
+    });
+
+    term.onResize(({ rows: r, cols: c }) => {
+      if (sessionRef.current) {
+        resizePty(sessionRef.current, { rows: r, cols: c }).catch(console.error);
+      }
+    });
+
+    const onWindowResize = () => {
+       fit.fit();
+       setRenderTick(t => t + 1); // Force re-render of blocks to adapt to new cellHeight
+    };
     window.addEventListener("resize", onWindowResize);
 
     return () => {
       window.removeEventListener("resize", onWindowResize);
       if (unlistenData) unlistenData();
-      if (unlistenStream) unlistenStream();
+      if (unlistenStream) unlistenStream.then(f => f());
       const id = sessionRef.current;
       if (id) {
         closePty(id).catch(() => {});
@@ -251,9 +304,8 @@ export function TerminalView() {
   }, []);
 
   const handleConfirm = () => {
-    const session = sessionRef.current;
-    if (session && preview.command) {
-      writePty(session, preview.command + "\r").catch(console.error);
+    if (preview.command) {
+      submitCommand(preview.command);
     }
     setPreview(INITIAL_PREVIEW);
   };
@@ -287,11 +339,110 @@ export function TerminalView() {
           ⚙
         </button>
       </div>
-      <div
-        ref={hostRef}
-        className="aiterm-terminal-root"
-        style={{ flex: 1, minHeight: 0 }}
-      />
+
+      <div style={{ position: "relative", flex: 1, minHeight: 0, width: "100%" }}>
+        <div
+          ref={hostRef}
+          className="aiterm-terminal-root"
+        />
+        
+        {/* React DOM overlay for visual blocks */}
+        <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, pointerEvents: "none", overflow: "hidden", zIndex: 10 }}>
+           <div ref={overlayRef} style={{ position: "absolute", top: 0, left: 0, right: 0, willChange: 'transform' }}>
+             {blocks.map(b => {
+               // We only render completed or failed blocks that have start and end lines
+               if (b.status === "running" || b.startLine === undefined || b.endLine === undefined || !termState) return null;
+               
+               // Extract cell height from internal Xterm object, default to 14px 
+               const cellHeight = (termState as any)._core?._renderService?.dimensions?.css?.cell?.height || 14;
+               
+               // Calculate absolute block pixel positions relative to the entire buffer
+               const yLine = b.startLine;
+               const heightLines = Math.max(1, b.endLine - b.startLine);
+               
+               const top = yLine * cellHeight;
+               const heightPx = heightLines * cellHeight;
+               
+               return (
+                 <div
+                   key={b.id}
+                   className="aiterm-block-decoration"
+                   style={{
+                      position: "absolute",
+                      top: `${top}px`,
+                      left: 0,
+                      right: 0,
+                      height: `${heightPx}px`,
+                      pointerEvents: "none",
+                      borderLeft: `2px solid ${b.exitCode === 0 ? '#34d399' : '#f87171'}`,
+                      background: b.exitCode === 0 ? 'rgba(255, 255, 255, 0.02)' : 'rgba(255, 60, 60, 0.04)',
+                      boxSizing: 'border-box',
+                      zIndex: 20
+                   }}
+                 >
+                   <div className="aiterm-block-actions" style={{ pointerEvents: "auto", position: "absolute", right: "8px", top: "2px", display: "flex", gap: "6px" }}>
+                   {b.exitCode !== 0 && (
+                     <button
+                       className="aiterm-block-btn aiterm-block-btn-ai"
+                       onClick={(e) => {
+                         e.stopPropagation();
+                         window.dispatchEvent(new CustomEvent('aiterm:ask-ai', { 
+                            detail: { command: b.command, exitCode: b.exitCode } 
+                         }));
+                       }}
+                     >
+                       ✨ Ask AI
+                     </button>
+                   )}
+                   <button
+                       className="aiterm-block-btn"
+                       onClick={(e) => {
+                         e.stopPropagation();
+                         navigator.clipboard.writeText(b.command).catch(console.error);
+                         const btn = e.currentTarget;
+                         btn.innerHTML = '✅ Copied';
+                         setTimeout(() => btn.innerHTML = '📋 Copy', 2000);
+                       }}
+                     >
+                       📋 Copy
+                   </button>
+                 </div>
+               </div>
+               );
+             })}
+           </div>
+        </div>
+      </div>
+      {!isAlternateBuffer && (
+        <WarpInput
+          onSubmit={(cmd) => {
+            const query = parseAiPrefix(cmd);
+            if (query !== null) {
+              if (previewRef.current.loading) {
+                termRef.current?.write("\r\n\x1b[31maiterm: already waiting for AI response\x1b[0m\r\n");
+                return;
+              }
+              if (termRef.current) {
+                handleAiQuery(
+                  sessionId,
+                  cmd,
+                  query,
+                  termRef.current,
+                  setPreview,
+                  setStreamText,
+                  streamingRef,
+                  executionModeRef,
+                  (msg) => termRef.current?.write(`\r\n\x1b[31m${msg}\x1b[0m\r\n`),
+                  submitCommand
+                );
+              }
+              return;
+            }
+            submitCommand(cmd);
+          }}
+          shortcut={submitShortcut}
+        />
+      )}
       {preview.loading && (
         <StreamingIndicator visible text={streamText} />
       )}
@@ -317,9 +468,7 @@ export function TerminalView() {
           isOpen={panelOpen}
           providerName={activeProvider}
           onClose={() => setPanelOpen(false)}
-          onExecuteCommand={(cmd) => {
-            writePty(sessionId, cmd + "\r").catch(console.error);
-          }}
+          onExecuteCommand={submitCommand}
           onOpenProviderPalette={() => {
             setPanelOpen(false);
             setPaletteOpen(true);
@@ -345,6 +494,7 @@ function handleAiQuery(
   streamingRef: React.MutableRefObject<boolean>,
   executionModeRef: React.MutableRefObject<ExecutionMode>,
   writeRed: (msg: string) => void,
+  submitCommand: (cmd: string) => void
 ) {
   void originalLine;
   term.write("\r\x1b[2K");
@@ -362,10 +512,10 @@ function handleAiQuery(
       const risk = resp.risk_level;
 
       if (shouldAutoExecute(mode, risk)) {
-        // Auto-execute: write a subtle confirmation line then send to PTY.
+        // Auto-execute: write a subtle confirmation line then submit to block manager.
         const riskColor = risk === "safe" ? "\x1b[32m" : "\x1b[33m";
         term.write(`${riskColor}▶ ${resp.command}\x1b[0m\r\n`);
-        writePty(sessionId, resp.command + "\r").catch(console.error);
+        submitCommand(resp.command);
         setPreview(INITIAL_PREVIEW);
       } else {
         // Show preview with risk badge.

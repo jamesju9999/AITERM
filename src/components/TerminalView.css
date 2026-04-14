@@ -58,3 +58,81 @@
 .aiterm-settings-btn:hover {
   color: #aaa;
 }
+
+/* ── M6: Xterm Block Decorations ────────────────────────────────── */
+
+.aiterm-block-decoration {
+  pointer-events: none;
+  box-sizing: border-box;
+  position: relative;
+  opacity: 0;
+  animation: aiterm-block-fadein 0.3s ease-out forwards;
+}
+
+@keyframes aiterm-block-fadein {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.aiterm-block-decoration::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  border-left: 2px solid #555;
+  background: rgba(255, 255, 255, 0.02);
+  pointer-events: none;
+}
+
+.aiterm-block-success::before {
+  border-left-color: #34d399;
+}
+
+.aiterm-block-error::before {
+  border-left-color: #f87171;
+  background: rgba(255, 60, 60, 0.04);
+}
+
+/* ── Block Action Buttons ───────────────────────────────────────── */
+
+.aiterm-block-actions {
+  position: absolute;
+  right: 8px;
+  top: 2px;
+  display: flex;
+  gap: 6px;
+  opacity: 0.8;
+  transition: opacity 0.2s ease-out;
+  pointer-events: auto;
+  z-index: 10;
+}
+
+.aiterm-block-actions:hover {
+  opacity: 1;
+}
+
+.aiterm-block-btn {
+  background: #1e1e2e;
+  color: #ccc;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.aiterm-block-btn:hover {
+  background: #2a2a3e;
+  border-color: #555;
+}
+
+.aiterm-block-btn-ai {
+  border-color: #c084fc;
+  color: #c084fc;
+}
+
+.aiterm-block-btn-ai:hover {
+  background: rgba(192, 132, 252, 0.15);
+}

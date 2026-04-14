@@ -24,6 +24,10 @@ pub struct AppConfig {
     /// Set to true after the first-run onboarding wizard completes.
     #[serde(default)]
     pub onboarding_done: bool,
+
+    /// Which shortcut submits the command (Enter vs Shift+Enter, etc).
+    #[serde(default)]
+    pub submit_shortcut: SubmitShortcut,
 }
 
 impl AppConfig {
@@ -117,6 +121,16 @@ pub enum ExecutionMode {
     FullAuto,
 }
 
+/// Keyboard shortcut choice for submitting commands in the terminal block interface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SubmitShortcut {
+    #[default]
+    Enter,
+    ShiftEnter,
+    CtrlEnter,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,6 +142,7 @@ mod tests {
         assert!(cfg.default_provider.is_none());
         assert!(!cfg.onboarding_done);
         assert_eq!(cfg.execution_mode, ExecutionMode::AlwaysConfirm);
+        assert_eq!(cfg.submit_shortcut, SubmitShortcut::Enter);
     }
 
     #[test]
@@ -175,6 +190,7 @@ mod tests {
                 supports_json_mode: true,
             }],
             execution_mode: ExecutionMode::Graded,
+            submit_shortcut: SubmitShortcut::ShiftEnter,
             onboarding_done: true,
         };
         let toml_str = toml::to_string_pretty(&cfg).unwrap();
@@ -183,6 +199,7 @@ mod tests {
         assert_eq!(parsed.providers.len(), 1);
         assert_eq!(parsed.providers[0].id, "gpt");
         assert_eq!(parsed.execution_mode, ExecutionMode::Graded);
+        assert_eq!(parsed.submit_shortcut, SubmitShortcut::ShiftEnter);
         assert!(parsed.onboarding_done);
 
         // Test remove_provider clears default
