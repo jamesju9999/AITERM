@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod commands;
 pub mod config;
+pub mod guard;
 pub mod pty;
 pub mod secret;
 

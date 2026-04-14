@@ -13,6 +13,7 @@ use crate::ai::{
     context, router::AiRouter, AiError, AiSingleCommand, ChatMessage, GenerateChunk,
     GenerateRequest, QueryMode, RiskLevel,
 };
+use crate::guard::CommandGuard;
 use crate::pty::PtyManager;
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,7 +53,7 @@ pub fn build_single_command_prompt(snapshot: &crate::ai::EnvSnapshot) -> String 
 
     format!(
 r#"You are an AI command generator for a cross-platform terminal application.
-Your only job is to translate the user's natural-language request into ONE
+Your only job is to translate the user's natural-language request (or execution goal) into ONE
 executable shell command for their current environment.
 
 Environment:
@@ -65,14 +66,15 @@ Rules:
 1. Output ONLY a JSON object, no prose, no markdown fences, no extra keys.
 2. Schema:
    {{
-     "explanation": "一句話說明這個命令做什麼 (use Traditional Chinese)",
-     "command":     "a single shell command, no prompt prefix, no line breaks",
+     "explanation": "一句話說明這個命令做什麼，或是總結已完成的結果 (use Traditional Chinese)",
+     "command":     "a single shell command, no prompt prefix, no line breaks. SET TO 'DONE' IF GOAL IS FULLY MET.",
      "risk_level":  one of "safe", "needs_confirm", "dangerous"
    }}
 3. The command must be syntactically valid for {shell}. Do not mix shells.
 4. If the request cannot be satisfied with one command, pick the most useful
-   single command and explain the limitation in `explanation`.
-5. Never produce destructive operations against system roots. If the user
+   single command to progress further.
+5. If the user provides an execution history and it shows their ultimate goal is achieved, you MUST set "command" to "DONE".
+6. Never produce destructive operations against system roots. If the user
    explicitly asks for one, set risk_level="dangerous"."#,
         os = snapshot.os,
         shell = snapshot.shell,
@@ -176,10 +178,23 @@ pub async fn ai_query(
         raw: buf.chars().take(200).collect(),
     })?;
 
+    // M3: Verify AI's generated command with CommandGuard
+    let (guard_level, guard_reason) = CommandGuard::classify(&parsed.command);
+    
+    // Always take the HIGHER risk level (the more conservative one)
+    let final_risk_level = std::cmp::max(parsed.risk_level, guard_level);
+    
+    // Append the guard reason if it bumped the risk level
+    let final_explanation = if guard_level > parsed.risk_level && guard_reason.is_some() {
+        format!("{} (系統安全攔截: {})", parsed.explanation, guard_reason.unwrap())
+    } else {
+        parsed.explanation
+    };
+
     Ok(AiCommandReady {
         command: parsed.command,
-        explanation: parsed.explanation,
-        risk_level: parsed.risk_level,
+        explanation: final_explanation,
+        risk_level: final_risk_level,
     })
 }
 

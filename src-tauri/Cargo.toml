@@ -41,6 +41,7 @@ futures-util = "0.3"
 toml = "0.8"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 dirs = "6"
+shell-words = "1.1.1"
 
 [dev-dependencies]
 wiremock = "0.6"
