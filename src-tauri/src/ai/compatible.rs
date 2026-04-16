@@ -61,11 +61,36 @@ impl AiProvider for OpenAiCompatibleClient {
             .map_err(|e| AiError::Network { message: e.to_string() })?;
 
         let status = resp.status();
+
+        // ── Auto-retry without response_format on 400 ────────────────────────
+        // Some models (e.g. Gemma in LM Studio) reject `response_format: json_object`
+        // with HTTP 400. Retry transparently without it.
+        if status == reqwest::StatusCode::BAD_REQUEST && self.supports_json_mode {
+            let body_text = resp.text().await.unwrap_or_default();
+            if body_text.contains("response_format") {
+                log::warn!("Provider rejected response_format, retrying without it: {body_text}");
+                let body_no_json = build_request_body(&self.model, &req, false);
+                let mut retry = self.client.post(self.completions_url()).json(&body_no_json);
+                if let Some(key) = &self.api_key {
+                    retry = retry.bearer_auth(key);
+                }
+                let retry_resp = retry.send().await
+                    .map_err(|e| AiError::Network { message: e.to_string() })?;
+                let retry_status = retry_resp.status();
+                if !retry_status.is_success() {
+                    return Err(map_http_error(retry_status, retry_resp).await);
+                }
+                return consume_openai_sse(retry_resp, tx).await;
+            }
+            return Err(AiError::Network { message: format!("http {status}: {body_text}") });
+        }
+
         if !status.is_success() {
             return Err(map_http_error(status, resp).await);
         }
         consume_openai_sse(resp, tx).await
     }
+
 
     async fn health_check(&self) -> Result<(), AiError> {
         use crate::ai::{EnvSnapshot, QueryMode};

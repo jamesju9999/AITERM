@@ -29,6 +29,7 @@ import { StreamingIndicator } from "./StreamingIndicator";
 import { AiPanel } from "./AiPanel";
 import { ProviderPalette } from "./ProviderPalette";
 import { WarpInput } from "./WarpInput";
+import { FileExplorer } from "./FileExplorer/FileExplorer";
 import "./TerminalView.css";
 
 interface PreviewState {
@@ -68,6 +69,8 @@ export interface TerminalViewProps {
 }
 
 export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true }: TerminalViewProps) {
+  type ViewTab = "terminal" | "files";
+  const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
   const hostRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<string>("initializing…");
@@ -96,6 +99,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
   // Execution mode and shortcut are read once and cached; re-fetched when we return from settings.
   const [submitShortcut, setSubmitShortcutState] = useState<SubmitShortcut>("enter");
+  const maxAgentStepsRef = useRef<number>(5);
 
   // Refs bridged into the useEffect closure.
   const termRef = useRef<Terminal | null>(null);
@@ -136,6 +140,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       .then((cfg) => {
         executionModeRef.current = cfg.execution_mode;
         setSubmitShortcutState(cfg.submit_shortcut);
+        // 0 means unlimited — use a very large number internally
+        maxAgentStepsRef.current = cfg.max_agent_steps === 0 ? 9999 : (cfg.max_agent_steps ?? 5);
       })
       .catch(() => {});
   }
@@ -334,7 +340,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               writeRed,
               abortRef: agentAbortRef,
               stepCount: 0,
-              maxSteps: 5,
+              maxSteps: maxAgentStepsRef.current,
               history: [],
               onComplete: () => {
                 term.write(`\r\n\x1b[32m[Agent Mission Completed] 🎉\x1b[0m\r\n`);
@@ -455,7 +461,27 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         )}
       </div>
 
+      {/* Sub-tabs: 終端機 | 檔案 */}
+      <div className="aiterm-subtabs">
+        <button
+          className={`aiterm-subtab ${viewTab === "terminal" ? "aiterm-subtab--active" : ""}`}
+          onClick={() => setViewTab("terminal")}
+        >終端機</button>
+        <button
+          className={`aiterm-subtab ${viewTab === "files" ? "aiterm-subtab--active" : ""}`}
+          onClick={() => setViewTab("files")}
+        >檔案</button>
+      </div>
+
       <div style={{ position: "relative", flex: 1, minHeight: 0, width: "100%" }}>
+        {/* File Explorer */}
+        {viewTab === "files" && sessionId && (
+          <div style={{ height: "100%", overflow: "hidden" }}>
+            <FileExplorer sessionId={sessionId} />
+          </div>
+        )}
+        {/* Terminal */}
+        <div style={{ display: viewTab === "terminal" ? "block" : "none", height: "100%" }}>
         <div
           ref={hostRef}
           className="aiterm-terminal-root"
@@ -563,7 +589,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
              })()}
            </div>
         </div>
-      </div>
+        </div>{/* end terminal wrapper */}
+      </div>{/* end relative container */}
       {!isAlternateBuffer && (
         <WarpInput
           onSubmit={(cmd) => {
@@ -591,7 +618,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                   writeRed: (msg) => termRef.current?.write(`\r\n\x1b[31m${msg}\x1b[0m\r\n`),
                   abortRef: agentAbortRef,
                   stepCount: 0,
-                  maxSteps: 5,
+                  maxSteps: maxAgentStepsRef.current,
                   history: [],
                   onComplete: () => {
                     termRef.current?.write(`\r\n\x1b[32m[Agent Mission Completed] 🎉\x1b[0m\r\n`);

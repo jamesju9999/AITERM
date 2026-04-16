@@ -35,3 +35,12 @@ pub fn set_submit_shortcut(
 ) -> Result<(), String> {
     config.update(|cfg| { cfg.submit_shortcut = shortcut; }).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn set_max_agent_steps(
+    steps: u32,
+    config: State<Arc<ConfigStore>>,
+) -> Result<(), String> {
+    config.update(|cfg| { cfg.max_agent_steps = steps; }).map_err(|e| e.to_string())
+}
+

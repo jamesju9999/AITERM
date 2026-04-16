@@ -1,0 +1,171 @@
+.file-explorer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #0e0e0e;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 13px;
+  color: #ccc;
+  overflow: hidden;
+}
+
+/* ── Toolbar ── */
+.fe-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  background: #141414;
+  border-bottom: 1px solid #222;
+  flex-shrink: 0;
+}
+
+.fe-btn {
+  background: none;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #aaa;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 3px 7px;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.fe-btn:hover:not(:disabled) {
+  background: #252525;
+  color: #fff;
+}
+
+.fe-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.fe-btn--active {
+  background: #1e3a5f;
+  color: #63b3ed;
+  border-color: #1e3a5f;
+}
+
+.fe-btn--dot {
+  font-weight: bold;
+  font-family: monospace;
+}
+
+.fe-breadcrumb {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: #666;
+  padding: 0 4px;
+  min-width: 0;
+}
+
+.fe-breadcrumb-item {
+  cursor: pointer;
+  color: #4a9eff;
+  transition: color 0.1s;
+}
+
+.fe-breadcrumb-item:hover {
+  color: #79bfff;
+  text-decoration: underline;
+}
+
+.fe-breadcrumb-sep {
+  color: #444;
+  margin: 0 1px;
+}
+
+/* ── Body ── */
+.fe-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.fe-body::-webkit-scrollbar {
+  width: 5px;
+}
+
+.fe-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.fe-body::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 3px;
+}
+
+/* ── Row ── */
+.fe-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  padding-right: 12px;
+  cursor: default;
+  border-radius: 4px;
+  margin: 0 4px;
+  transition: background 0.1s;
+}
+
+.fe-row--dir {
+  cursor: pointer;
+}
+
+.fe-row:hover {
+  background: #1c1c1c;
+}
+
+.fe-arrow {
+  font-size: 9px;
+  color: #555;
+  width: 10px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.fe-icon {
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+  width: 18px;
+  text-align: center;
+}
+
+.fe-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #ddd;
+}
+
+.fe-row--dir .fe-name {
+  color: #79c0ff;
+  font-weight: 500;
+}
+
+.fe-size {
+  font-size: 11px;
+  color: #555;
+  flex-shrink: 0;
+}
+
+/* ── Status ── */
+.fe-status {
+  padding: 16px;
+  color: #555;
+  font-size: 12px;
+  text-align: center;
+}
+
+.fe-status--error {
+  color: #f87171;
+}

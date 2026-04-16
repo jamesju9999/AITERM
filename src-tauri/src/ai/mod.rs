@@ -94,12 +94,20 @@ pub struct TokenUsage {
 }
 
 /// The structured payload the AI is required to return for `/ai` queries.
+/// All fields have defaults so that models that omit optional fields don't
+/// cause a hard parse error — we apply a conservative fallback instead.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AiSingleCommand {
+    #[serde(default)]
     pub explanation: String,
+    #[serde(default)]
     pub command: String,
+    /// Defaults to NeedsConfirm when missing — conservative fallback.
+    #[serde(default = "default_risk_level")]
     pub risk_level: RiskLevel,
 }
+
+fn default_risk_level() -> RiskLevel { RiskLevel::NeedsConfirm }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
