@@ -21,6 +21,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub execution_mode: ExecutionMode,
 
+    /// Maximum number of iterations for the autonomous agent loop (0 = unlimited).
+    #[serde(default = "default_max_agent_steps")]
+    pub max_agent_steps: u32,
+
     /// Set to true after the first-run onboarding wizard completes.
     #[serde(default)]
     pub onboarding_done: bool,
@@ -29,6 +33,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub submit_shortcut: SubmitShortcut,
 }
+
+fn default_max_agent_steps() -> u32 { 5 }
 
 impl AppConfig {
     /// Find a provider by id.

@@ -39,6 +39,63 @@ pub struct AiStreamEvent {
     pub done: bool,
 }
 
+/// Extract the JSON object from raw AI output.
+///
+/// Some models (Qwen, DeepSeek, etc.) may:
+/// - Wrap output in markdown fences: ```json { ... } ```
+/// - Emit a thinking block first: <think>...</think>{ ... }
+/// - Prefix with prose before the JSON object
+///
+/// This function strips all of these and returns a string starting with `{`.
+fn extract_json_from_response(raw: &str) -> String {
+    // 1. Strip <think>...</think> blocks (DeepSeek, Qwen thinking mode)
+    let without_think = {
+        let mut s = raw.to_string();
+        while let (Some(start), Some(end)) = (s.find("<think>"), s.find("</think>")) {
+            if start < end {
+                s.drain(start..end + "</think>".len());
+            } else {
+                break;
+            }
+        }
+        s
+    };
+
+    // 2. Strip markdown code fences: ```json ... ``` or ``` ... ```
+    let without_fences = {
+        let trimmed = without_think.trim();
+        if trimmed.starts_with("```") {
+            // Find the first newline after the opening fence
+            if let Some(newline_pos) = trimmed.find('\n') {
+                let inner = &trimmed[newline_pos + 1..];
+                // Strip the closing fence
+                if let Some(close_pos) = inner.rfind("```") {
+                    inner[..close_pos].trim().to_string()
+                } else {
+                    inner.trim().to_string()
+                }
+            } else {
+                trimmed.to_string()
+            }
+        } else {
+            trimmed.to_string()
+        }
+    };
+
+    // 3. Find the first `{` — skip any preamble text before the JSON object
+    if let Some(json_start) = without_fences.find('{') {
+        // Find the matching last `}` to get the full JSON object
+        let json_candidate = &without_fences[json_start..];
+        if let Some(json_end) = json_candidate.rfind('}') {
+            return json_candidate[..=json_end].to_string();
+        }
+        return json_candidate.to_string();
+    }
+
+    // Fallback: return as-is (will fail JSON parsing with a meaningful error)
+    without_fences
+}
+
 /// Build the system prompt. Includes OS/shell/cwd and, if available, recent
 /// terminal output and a directory listing for richer context.
 pub fn build_single_command_prompt(snapshot: &crate::ai::EnvSnapshot) -> String {
@@ -173,9 +230,26 @@ pub async fn ai_query(
         Err(join_err) => return Err(AiError::Network { message: join_err.to_string() }),
     }
 
-    let parsed: AiSingleCommand = serde_json::from_str(&buf).map_err(|e| AiError::ModelError {
+    // ── Guard: empty response ───────────────────────────────────────────────────
+    // Some model servers return 200 OK with an empty body when they don't
+    // support the requested endpoint (e.g. POST /chat/completions on Ollama).
+    if buf.trim().is_empty() {
+        return Err(AiError::ModelError {
+            reason: "模型回傳空回應（HTTP 200 但 body 為空）。\
+                     請確認 Provider 的 base_url 和 model 設定正確，\
+                     以及目標模型是否支援 /chat/completions 端點。".into(),
+            raw: String::new(),
+        });
+    }
+
+    // ── Clean up AI output before parsing ──────────────────────────────────────
+    // Some models wrap JSON in markdown fences (```json ... ```) or
+    // include thinking output (<think>...</think>). Strip those first.
+    let cleaned = extract_json_from_response(&buf);
+
+    let parsed: AiSingleCommand = serde_json::from_str(&cleaned).map_err(|e| AiError::ModelError {
         reason: e.to_string(),
-        raw: buf.chars().take(200).collect(),
+        raw: buf.chars().take(300).collect(),
     })?;
 
     // M3: Verify AI's generated command with CommandGuard

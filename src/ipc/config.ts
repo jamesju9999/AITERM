@@ -27,6 +27,7 @@ export interface AppConfig {
   execution_mode: ExecutionMode;
   submit_shortcut: SubmitShortcut;
   onboarding_done: boolean;
+  max_agent_steps: number; // 0 = unlimited
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
@@ -44,3 +45,6 @@ export const setOnboardingDone = (): Promise<void> =>
 
 export const setSubmitShortcut = (shortcut: SubmitShortcut): Promise<void> =>
   invoke("set_submit_shortcut", { shortcut });
+
+export const setMaxAgentSteps = (steps: number): Promise<void> =>
+  invoke("set_max_agent_steps", { steps });

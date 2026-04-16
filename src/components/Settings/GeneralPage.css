@@ -75,3 +75,37 @@
   font-size: 12px;
   margin-top: 8px;
 }
+
+.step-select-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.step-select {
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  color: #e6e6e6;
+  font-size: 13px;
+  padding: 8px 12px;
+  cursor: pointer;
+  outline: none;
+  min-width: 160px;
+}
+
+.step-select:focus {
+  border-color: #2d5aab;
+}
+
+.step-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.step-warning {
+  color: #e6a817;
+  font-size: 12px;
+  line-height: 1.5;
+}

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use ai::router::AiRouter;
 use commands::{
     ai::{ai_chat, ai_query},
-    config::{get_config, is_onboarding_done, set_execution_mode, set_onboarding_done, set_submit_shortcut},
+    config::{get_config, is_onboarding_done, set_execution_mode, set_max_agent_steps, set_onboarding_done, set_submit_shortcut},
     provider::{
         add_provider, get_ollama_models, list_providers, remove_provider, set_default_provider,
         test_provider, update_provider,
@@ -18,7 +18,7 @@ use commands::{
     secret::{delete_api_key, has_api_key},
 };
 use config::ConfigStore;
-use pty::commands::{pty_close, pty_create, pty_resize, pty_write};
+use pty::commands::{pty_close, pty_create, pty_get_cwd, pty_list_dir, pty_resize, pty_write};
 use pty::PtyManager;
 use secret::SecretStore;
 
@@ -40,12 +40,15 @@ pub fn run() {
             pty_write,
             pty_resize,
             pty_close,
+            pty_get_cwd,
+            pty_list_dir,
             // AI query
             ai_query,
             ai_chat,
             // Config
             get_config,
             set_execution_mode,
+            set_max_agent_steps,
             is_onboarding_done,
             set_onboarding_done,
             set_submit_shortcut,

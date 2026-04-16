@@ -136,3 +136,35 @@
 .aiterm-block-btn-ai:hover {
   background: rgba(192, 132, 252, 0.15);
 }
+
+/* ── Sub-tab bar (Terminal | Files) ── */
+.aiterm-subtabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 12px 0;
+  background: #0e0e0e;
+  border-bottom: 1px solid #1e1e1e;
+  flex-shrink: 0;
+}
+
+.aiterm-subtab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #666;
+  cursor: pointer;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  padding: 4px 12px 6px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.aiterm-subtab:hover {
+  color: #aaa;
+}
+
+.aiterm-subtab--active {
+  color: #79c0ff;
+  border-bottom-color: #4a9eff;
+}

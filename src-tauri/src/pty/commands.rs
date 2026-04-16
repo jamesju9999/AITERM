@@ -56,3 +56,61 @@ pub fn pty_close(
 ) -> Result<(), PtyError> {
     manager.close(&id)
 }
+
+/// Get the current working directory of a PTY session.
+#[tauri::command]
+pub fn pty_get_cwd(
+    manager: State<'_, PtyManager>,
+    id: String,
+) -> Option<String> {
+    manager.get_cwd(&id).map(|p| p.to_string_lossy().to_string())
+}
+
+/// A single file/directory entry returned by pty_list_dir.
+#[derive(serde::Serialize, Clone)]
+pub struct DirEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: Option<u64>,
+}
+
+/// List the immediate children of `path` (or the session's CWD if path is empty).
+#[tauri::command]
+pub fn pty_list_dir(
+    manager: State<'_, PtyManager>,
+    id: String,
+    path: String,
+) -> Result<Vec<DirEntry>, String> {
+    let base = if path.is_empty() {
+        manager.get_cwd(&id)
+            .ok_or_else(|| "Session not found".to_string())?
+    } else {
+        std::path::PathBuf::from(&path)
+    };
+
+    let mut entries: Vec<DirEntry> = std::fs::read_dir(&base)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .map(|e| {
+            let meta = e.metadata().ok();
+            let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+            let size = if is_dir { None } else { meta.as_ref().map(|m| m.len()) };
+            DirEntry {
+                name: e.file_name().to_string_lossy().to_string(),
+                path: e.path().to_string_lossy().to_string(),
+                is_dir,
+                size,
+            }
+        })
+        .filter(|e| !e.name.starts_with('.')) // hide dotfiles by default
+        .collect();
+
+    // Sort: directories first, then alphabetical
+    entries.sort_by(|a, b| {
+        b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    Ok(entries)
+}
+
