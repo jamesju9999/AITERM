@@ -14,3 +14,12 @@ export const getSessionCwd = (id: string): Promise<string | null> =>
 /** List directory children. Pass an empty path to list the session's CWD. */
 export const listDirectory = (id: string, path: string = ""): Promise<DirEntry[]> =>
   invoke<DirEntry[]>("pty_list_dir", { id, path });
+
+export interface FileContent {
+  content: string;
+  truncated: boolean;
+}
+
+/** Read a text file's content. Throws if binary or unreadable. */
+export const readFile = (path: string): Promise<FileContent> =>
+  invoke<FileContent>("pty_read_file", { path });
