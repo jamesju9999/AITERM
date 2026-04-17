@@ -32,6 +32,10 @@ pub struct AppConfig {
     /// Which shortcut submits the command (Enter vs Shift+Enter, etc).
     #[serde(default)]
     pub submit_shortcut: SubmitShortcut,
+
+    /// Saved database connections (passwords stored separately in Keychain).
+    #[serde(default)]
+    pub db_connections: Vec<DbConnection>,
 }
 
 fn default_max_agent_steps() -> u32 { 5 }
@@ -137,6 +141,42 @@ pub enum SubmitShortcut {
     CtrlEnter,
 }
 
+/// Supported database backends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DbType {
+    Postgresql,
+    Mysql,
+    Sqlite,
+    Mssql,
+    Db2,
+}
+
+impl std::fmt::Display for DbType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DbType::Postgresql => write!(f, "PostgreSQL"),
+            DbType::Mysql => write!(f, "MySQL"),
+            DbType::Sqlite => write!(f, "SQLite"),
+            DbType::Mssql => write!(f, "MSSQL"),
+            DbType::Db2 => write!(f, "DB2"),
+        }
+    }
+}
+
+/// A saved database connection (no password — that lives in Keychain).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbConnection {
+    pub id: String,
+    pub name: String,
+    pub db_type: DbType,
+    /// Host or IP. For SQLite, this is the file path.
+    pub host: String,
+    pub port: u16,
+    pub database: String,
+    pub username: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +239,7 @@ mod tests {
             max_agent_steps: 5,
             submit_shortcut: SubmitShortcut::ShiftEnter,
             onboarding_done: true,
+            db_connections: vec![],
         };
         let toml_str = toml::to_string_pretty(&cfg).unwrap();
         let parsed: AppConfig = toml::from_str(&toml_str).unwrap();
@@ -213,6 +254,31 @@ mod tests {
         cfg.remove_provider("gpt");
         assert!(cfg.providers.is_empty());
         assert!(cfg.default_provider.is_none());
+    }
+
+    #[test]
+    fn db_type_roundtrips_toml() {
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct W { t: DbType }
+        for (ty, expected) in [
+            (DbType::Postgresql, "postgresql"),
+            (DbType::Mysql, "mysql"),
+            (DbType::Sqlite, "sqlite"),
+            (DbType::Mssql, "mssql"),
+            (DbType::Db2, "db2"),
+        ] {
+            let w = W { t: ty };
+            let s = toml::to_string(&w).unwrap();
+            assert!(s.contains(expected), "got: {s}");
+            let d: W = toml::from_str(&s).unwrap();
+            assert_eq!(d.t, w.t);
+        }
+    }
+
+    #[test]
+    fn app_config_has_db_connections_default() {
+        let cfg = AppConfig::default();
+        assert!(cfg.db_connections.is_empty());
     }
 
     #[test]
