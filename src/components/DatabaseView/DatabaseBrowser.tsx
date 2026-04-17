@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import { dbListTables, dbGetTableSchema, dbExecuteQuery, TableInfo, ColumnInfo, QueryResult } from "../../ipc/db";
 
 interface Props {
@@ -16,6 +17,7 @@ export function DatabaseBrowser({ connectionId, schema }: Props) {
   const [columns, setColumns] = useState<ColumnInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
+  const [error, setError] = useState<string | null>(null);
   const PAGE_SIZE = 100;
 
   useEffect(() => {
@@ -28,6 +30,9 @@ export function DatabaseBrowser({ connectionId, schema }: Props) {
   const selectTable = async (name: string) => {
     setSelectedTable(name);
     setPage(0);
+    setQueryResult(null);
+    setColumns([]);
+    setError(null);
     setLoading(true);
     try {
       if (viewMode === "data") {
@@ -37,6 +42,8 @@ export function DatabaseBrowser({ connectionId, schema }: Props) {
         const cols = await dbGetTableSchema(connectionId, schema, name);
         setColumns(cols);
       }
+    } catch (e: unknown) {
+      setError(String(e));
     } finally {
       setLoading(false);
     }
@@ -54,6 +61,8 @@ export function DatabaseBrowser({ connectionId, schema }: Props) {
         const cols = await dbGetTableSchema(connectionId, schema, selectedTable);
         setColumns(cols);
       }
+    } catch (e: unknown) {
+      setError(String(e));
     } finally {
       setLoading(false);
     }
@@ -66,6 +75,8 @@ export function DatabaseBrowser({ connectionId, schema }: Props) {
     try {
       const result = await dbExecuteQuery(connectionId, `SELECT * FROM "${schema}"."${selectedTable}" LIMIT ${PAGE_SIZE} OFFSET ${newPage * PAGE_SIZE}`);
       setQueryResult(result);
+    } catch (e: unknown) {
+      setError(String(e));
     } finally {
       setLoading(false);
     }
@@ -104,6 +115,10 @@ export function DatabaseBrowser({ connectionId, schema }: Props) {
         )}
 
         {loading && <div style={{ padding: 16, color: "#888", fontSize: 12 }}>載入中...</div>}
+
+        {!loading && error && (
+          <div style={{ padding: 16, color: "#f87171", fontSize: 12 }}>錯誤：{error}</div>
+        )}
 
         {!loading && !selectedTable && (
           <div style={{ padding: 24, color: "#555", fontSize: 13 }}>← 從左側選擇資料表</div>
@@ -186,6 +201,6 @@ function StructureView({ columns }: { columns: ColumnInfo[] }) {
   );
 }
 
-const modeBtn: React.CSSProperties = { background: "transparent", border: "none", color: "#888", fontSize: 12, padding: "4px 12px", cursor: "pointer" };
-const modeBtnActive: React.CSSProperties = { color: "#34d399", borderBottom: "2px solid #34d399" };
-const pageBtn: React.CSSProperties = { background: "#1a1a1a", border: "1px solid #2a2a2a", color: "#888", fontSize: 11, padding: "2px 10px", borderRadius: 3, cursor: "pointer" };
+const modeBtn: CSSProperties = { background: "transparent", border: "none", color: "#888", fontSize: 12, padding: "4px 12px", cursor: "pointer" };
+const modeBtnActive: CSSProperties = { color: "#34d399", borderBottom: "2px solid #34d399" };
+const pageBtn: CSSProperties = { background: "#1a1a1a", border: "1px solid #2a2a2a", color: "#888", fontSize: 11, padding: "2px 10px", borderRadius: 3, cursor: "pointer" };
