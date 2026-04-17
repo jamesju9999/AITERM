@@ -50,6 +50,21 @@ fn secret_key(id: &str) -> String {
     format!("db:{id}")
 }
 
+/// Percent-encode a string for use in a URL userinfo or path component.
+/// Encodes all bytes except unreserved characters: ALPHA / DIGIT / "-" / "." / "_" / "~"
+fn pct_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push('%');
+            out.push_str(&format!("{byte:02X}"));
+        }
+    }
+    out
+}
+
 async fn build_adapter(
     conn: &DbConnection,
     password: &str,
@@ -58,14 +73,22 @@ async fn build_adapter(
         DbType::Postgresql => {
             let url = format!(
                 "postgresql://{}:{}@{}:{}/{}",
-                conn.username, password, conn.host, conn.port, conn.database
+                pct_encode(&conn.username),
+                pct_encode(password),
+                conn.host,
+                conn.port,
+                pct_encode(&conn.database)
             );
             Ok(Box::new(PostgresAdapter::connect(&url).await?))
         }
         DbType::Mysql => {
             let url = format!(
                 "mysql://{}:{}@{}:{}/{}",
-                conn.username, password, conn.host, conn.port, conn.database
+                pct_encode(&conn.username),
+                pct_encode(password),
+                conn.host,
+                conn.port,
+                pct_encode(&conn.database)
             );
             Ok(Box::new(MySqlAdapter::connect(&url).await?))
         }
@@ -175,6 +198,8 @@ pub async fn db_remove_connection(
     config
         .remove_db_connection(&id)
         .map_err(|e| e.to_string())?;
+    // Best-effort: config is already removed; ignore Keychain errors so
+    // the command doesn't fail if the secret was never stored.
     let _ = secrets.delete(&secret_key(&id));
     Ok(())
 }
