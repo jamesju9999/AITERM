@@ -3,7 +3,6 @@ import { readFile } from "../../ipc/fs";
 import type { DirEntry } from "../../ipc/fs";
 
 interface FileViewerProps {
-  sessionId: string;
   file: DirEntry | null;
 }
 
