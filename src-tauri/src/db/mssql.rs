@@ -12,7 +12,6 @@ use super::adapter::{ColumnInfo, DbAdapter, QueryResult, TableInfo};
 
 pub struct MssqlAdapter {
     client: Arc<Mutex<Client<tokio_util::compat::Compat<TcpStream>>>>,
-    database: String,
 }
 
 impl MssqlAdapter {
@@ -35,28 +34,28 @@ impl MssqlAdapter {
 
         Ok(Self {
             client: Arc::new(Mutex::new(client)),
-            database: database.to_string(),
         })
     }
 }
 
 fn mssql_col_to_json(row: &Row, i: usize) -> serde_json::Value {
-    // tiberius 0.12: Row::get returns Option<T> directly (not Result<Option<T>>)
-    if let Some(v) = row.get::<i64, _>(i) {
+    // Use try_get (returns Result<Option<T>>) instead of get (returns Option<T>) to avoid
+    // panics on type mismatch. try_get returns Err on mismatch, which we skip with Ok(Some(v)).
+    if let Ok(Some(v)) = row.try_get::<i64, _>(i) {
         return serde_json::Value::Number(v.into());
     }
-    if let Some(v) = row.get::<i32, _>(i) {
+    if let Ok(Some(v)) = row.try_get::<i32, _>(i) {
         return serde_json::Value::Number((v as i64).into());
     }
-    if let Some(v) = row.get::<f64, _>(i) {
+    if let Ok(Some(v)) = row.try_get::<f64, _>(i) {
         return serde_json::Number::from_f64(v)
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null);
     }
-    if let Some(v) = row.get::<bool, _>(i) {
+    if let Ok(Some(v)) = row.try_get::<bool, _>(i) {
         return serde_json::Value::Bool(v);
     }
-    if let Some(v) = row.get::<&str, _>(i) {
+    if let Ok(Some(v)) = row.try_get::<&str, _>(i) {
         return serde_json::Value::String(v.to_string());
     }
     serde_json::Value::Null
@@ -104,7 +103,7 @@ impl DbAdapter for MssqlAdapter {
                 let tt = r.get::<&str, _>(1).unwrap_or("").to_string();
                 TableInfo {
                     name,
-                    table_type: if tt.contains("VIEW") { "view".into() } else { "table".into() },
+                    table_type: if tt == "VIEW" { "view".into() } else { "table".into() },
                 }
             })
             .collect())
@@ -148,7 +147,9 @@ impl DbAdapter for MssqlAdapter {
 
         match query_result {
             Ok(result_sets) => {
-                // Take the first non-empty result set
+                // Return the first non-empty result set. For multi-SELECT batches only the
+                // first SELECT is surfaced; this mirrors the single-result-set behaviour of
+                // the other adapters and keeps the QueryResult schema simple.
                 let rows = result_sets.into_iter().find(|rs| !rs.is_empty()).unwrap_or_default();
                 if rows.is_empty() {
                     return Ok(QueryResult {
@@ -181,4 +182,11 @@ impl DbAdapter for MssqlAdapter {
             }),
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    // Integration tests require a live SQL Server instance.
+    // Run with: cargo test db::mssql -- --ignored
+    // (No #[ignore] tests exist yet; this block is a placeholder for future additions.)
 }
