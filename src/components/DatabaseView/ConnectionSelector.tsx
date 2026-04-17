@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { dbListConnections, DbConnectionInfo, DB_TYPE_LABELS } from "../../ipc/db";
 
 interface Props {
   onSelect: (connId: string) => void;
-  onOpenSettings?: () => void;
 }
 
-export function ConnectionSelector({ onSelect, onOpenSettings }: Props) {
+export function ConnectionSelector({ onSelect }: Props) {
   const [connections, setConnections] = useState<DbConnectionInfo[]>([]);
+  const navigate = useNavigate();
 
   useEffect(() => {
     dbListConnections().then(setConnections).catch(console.error);
@@ -32,7 +33,7 @@ export function ConnectionSelector({ onSelect, onOpenSettings }: Props) {
           </button>
         ))}
         <button
-          onClick={onOpenSettings}
+          onClick={() => navigate("/settings")}
           style={{
             border: "1px dashed #333", background: "transparent", borderRadius: 6,
             padding: "10px 14px", color: "#555", fontSize: 12, cursor: "pointer",

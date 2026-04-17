@@ -1,7 +1,13 @@
+import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { vi } from "vitest";
 import { describe, it, expect } from "vitest";
 import { DatabaseView } from "./index";
+
+function renderWithRouter(ui: React.ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 vi.mock("../../ipc/db", () => ({
   dbListConnections: vi.fn().mockResolvedValue([
@@ -16,7 +22,7 @@ vi.mock("../../ipc/db", () => ({
 
 describe("DatabaseView", () => {
   it("shows connection selector when no connection is set", async () => {
-    render(
+    renderWithRouter(
       <DatabaseView tabId="t1" isActive={true} onConnectionSelected={() => {}} />
     );
     await waitFor(() => expect(screen.getByText("選擇資料庫連線")).toBeInTheDocument());
@@ -24,7 +30,7 @@ describe("DatabaseView", () => {
   });
 
   it("shows sub-tabs after connection is provided", async () => {
-    render(
+    renderWithRouter(
       <DatabaseView tabId="t1" isActive={true} dbConnectionId="c1" onConnectionSelected={() => {}} />
     );
     await waitFor(() => expect(screen.getByText("瀏覽")).toBeInTheDocument());

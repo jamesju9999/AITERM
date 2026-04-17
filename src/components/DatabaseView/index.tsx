@@ -44,9 +44,15 @@ export function DatabaseView({ tabId: _tabId, isActive: _isActive, dbConnectionI
         {isOdbc ? (
           <>
             <div style={{ marginBottom: 8 }}>⚠️ DB2 ODBC Driver 未安裝</div>
-            <div style={{ color: "#888", fontSize: 12 }}>
+            <div style={{ color: "#888", fontSize: 12, marginBottom: 12 }}>
               請安裝 IBM Data Server Driver Package，然後重新嘗試連線。
             </div>
+            <button
+              onClick={() => setConnectError(null)}
+              style={{ background: "#1a1a1a", border: "1px solid #3a3a3a", color: "#ccc", borderRadius: 4, padding: "6px 14px", cursor: "pointer" }}
+            >
+              重新嘗試
+            </button>
           </>
         ) : (
           <>
