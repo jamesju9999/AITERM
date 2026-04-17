@@ -196,6 +196,7 @@ mod tests {
                 supports_json_mode: true,
             }],
             execution_mode: ExecutionMode::Graded,
+            max_agent_steps: 5,
             submit_shortcut: SubmitShortcut::ShiftEnter,
             onboarding_done: true,
         };

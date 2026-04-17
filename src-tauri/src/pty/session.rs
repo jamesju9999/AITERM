@@ -337,6 +337,7 @@ mod tests {
             ShellSpec {
                 program: "/bin/sh".into(),
                 args: vec![],
+                envs: vec![],
             }
         }
     }
