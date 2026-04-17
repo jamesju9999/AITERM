@@ -1,12 +1,15 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { TerminalView } from "./TerminalView";
 import { TabBar, type Tab } from "./TabBar";
+import { NewTabPicker } from "./NewTabPicker";
+import { DatabaseView } from "./DatabaseView";
 
 export function TerminalApp() {
   const [tabs, setTabs] = useState<Tab[]>(() => [
     { id: crypto.randomUUID(), title: "Terminal", type: "terminal" },
   ]);
   const [activeId, setActiveId] = useState(tabs[0].id);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [isDragging, setIsDragging] = useState(false);
@@ -22,9 +25,15 @@ export function TerminalApp() {
   }, [tabs, activeId, isSidebarOpen]);
 
   const handleAddTab = useCallback(() => {
+    setPickerOpen(true);
+  }, []);
+
+  const handlePickerSelect = useCallback((type: "terminal" | "database") => {
     const newId = crypto.randomUUID();
-    setTabs((prev) => [...prev, { id: newId, title: "Terminal", type: "terminal" }]);
+    const title = type === "terminal" ? "Terminal" : "資料庫";
+    setTabs((prev) => [...prev, { id: newId, title, type }]);
     setActiveId(newId);
+    setPickerOpen(false);
   }, []);
 
   const handleCloseTab = useCallback((id: string) => {
@@ -128,17 +137,25 @@ export function TerminalApp() {
 
   return (
     <div style={{ display: "flex", flexDirection: "row", height: "100vh", backgroundColor: "#0c0c0c" }}>
-      <TabBar
-        tabs={tabs}
-        activeId={activeId}
-        onSelect={setActiveId}
-        onClose={handleCloseTab}
-        onAdd={handleAddTab}
-        onRename={handleRename}
-        isSidebarOpen={isSidebarOpen}
-        onToggle={toggleSidebar}
-        width={sidebarWidth}
-      />
+      <div style={{ position: "relative" }}>
+        <TabBar
+          tabs={tabs}
+          activeId={activeId}
+          onSelect={setActiveId}
+          onClose={handleCloseTab}
+          onAdd={handleAddTab}
+          onRename={handleRename}
+          isSidebarOpen={isSidebarOpen}
+          onToggle={toggleSidebar}
+          width={sidebarWidth}
+        />
+        {pickerOpen && (
+          <NewTabPicker
+            onSelect={handlePickerSelect}
+            onClose={() => setPickerOpen(false)}
+          />
+        )}
+      </div>
       {isSidebarOpen && (
         <div
           style={{
@@ -171,9 +188,20 @@ export function TerminalApp() {
                 pointerEvents: isActive ? "auto" : "none",
               }}
             >
-              <TerminalView
-                isActive={isActive}
-              />
+              {tab.type === "database" ? (
+                <DatabaseView
+                  tabId={tab.id}
+                  isActive={isActive}
+                  dbConnectionId={tab.dbConnectionId}
+                  onConnectionSelected={(connId) => {
+                    setTabs((prev) =>
+                      prev.map((t) => t.id === tab.id ? { ...t, dbConnectionId: connId } : t)
+                    );
+                  }}
+                />
+              ) : (
+                <TerminalView isActive={isActive} />
+              )}
             </div>
           );
         })}
