@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { listDirectory, getSessionCwd, type DirEntry } from "../../ipc/fs";
+import { FileViewer } from "./FileViewer";
 import "./FileExplorer.css";
 
 interface FileExplorerProps {
@@ -35,6 +36,7 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [subEntries, setSubEntries] = useState<Record<string, DirEntry[]>>({});
   const [showDotfiles, setShowDotfiles] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<DirEntry | null>(null);
 
   const loadDir = useCallback(async (path: string) => {
     setLoading(true);
@@ -87,9 +89,15 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
       {list.map((entry) => (
         <div key={entry.path}>
           <div
-            className={`fe-row ${entry.is_dir ? "fe-row--dir" : ""}`}
+            className={`fe-row ${entry.is_dir ? "fe-row--dir" : "fe-row--file"} ${selectedFile?.path === entry.path ? "fe-row--selected" : ""}`}
             style={{ paddingLeft: `${12 + depth * 16}px` }}
-            onClick={() => entry.is_dir ? handleToggleDir(entry) : undefined}
+            onClick={() => {
+              if (entry.is_dir) {
+                handleToggleDir(entry);
+              } else {
+                setSelectedFile(entry);
+              }
+            }}
           >
             <span className="fe-arrow">
               {entry.is_dir ? (expanded.has(entry.path) ? "▼" : "▶") : " "}
@@ -121,19 +129,15 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
           ↻
         </button>
         <div className="fe-breadcrumb">
-          <span
-            className="fe-breadcrumb-item"
-            onClick={() => loadDir("/")}
-          >/</span>
+          <span className="fe-breadcrumb-item" onClick={() => loadDir("/")}>
+            /
+          </span>
           {cwdParts.map((part, i) => {
             const path = "/" + cwdParts.slice(0, i + 1).join("/");
             return (
               <span key={path}>
                 <span className="fe-breadcrumb-sep">/</span>
-                <span
-                  className="fe-breadcrumb-item"
-                  onClick={() => loadDir(path)}
-                >
+                <span className="fe-breadcrumb-item" onClick={() => loadDir(path)}>
                   {part}
                 </span>
               </span>
@@ -149,14 +153,24 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
         </button>
       </div>
 
-      {/* Body */}
-      <div className="fe-body">
-        {loading && <div className="fe-status">載入中…</div>}
-        {error && <div className="fe-status fe-status--error">{error}</div>}
-        {!loading && !error && entries.length === 0 && (
-          <div className="fe-status">（空目錄）</div>
-        )}
-        {!loading && !error && renderEntries(entries)}
+      {/* Split body */}
+      <div className="fe-split">
+        {/* Left: file tree */}
+        <div className="fe-left">
+          <div className="fe-body">
+            {loading && <div className="fe-status">載入中…</div>}
+            {error && <div className="fe-status fe-status--error">{error}</div>}
+            {!loading && !error && entries.length === 0 && (
+              <div className="fe-status">（空目錄）</div>
+            )}
+            {!loading && !error && renderEntries(entries)}
+          </div>
+        </div>
+
+        {/* Right: file viewer */}
+        <div className="fe-right">
+          <FileViewer file={selectedFile} />
+        </div>
       </div>
     </div>
   );
