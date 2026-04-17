@@ -24,9 +24,11 @@ describe("MessageBubble", () => {
         onExecuteCommand={onExec}
       />,
     );
-    // Text fragments present
-    expect(screen.getByText("建議執行 ")).toBeInTheDocument();
-    expect(screen.getByText(" 試試")).toBeInTheDocument();
+    // Text fragments present — text may be split across sibling spans so use
+    // partial matching to avoid failures when Testing Library matches on the
+    // full text content of a containing element.
+    expect(screen.getByText(/建議執行/, { exact: false })).toBeInTheDocument();
+    expect(screen.getByText(/試試/, { exact: false })).toBeInTheDocument();
     // Cmd button present and clickable
     const btn = screen.getByRole("button", { name: /ls -la/ });
     expect(btn).toBeInTheDocument();
