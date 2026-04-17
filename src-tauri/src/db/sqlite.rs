@@ -67,8 +67,9 @@ impl DbAdapter for SqliteAdapter {
     }
 
     async fn get_table_schema(&self, _schema: &str, table: &str) -> Result<Vec<ColumnInfo>> {
+        let quoted = table.replace('"', "\"\"");
         let rows: Vec<(i64, String, String, bool, Option<String>)> =
-            sqlx::query_as(&format!("PRAGMA table_info('{table}')"))
+            sqlx::query_as(&format!("PRAGMA table_info(\"{quoted}\")"))
                 .fetch_all(&self.pool)
                 .await?;
         Ok(rows

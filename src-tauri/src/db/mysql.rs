@@ -8,13 +8,12 @@ use super::adapter::{ColumnInfo, DbAdapter, QueryResult, TableInfo};
 
 pub struct MySqlAdapter {
     pool: MySqlPool,
-    database: String,
 }
 
 impl MySqlAdapter {
-    pub async fn connect(url: &str, database: &str) -> Result<Self> {
+    pub async fn connect(url: &str) -> Result<Self> {
         let pool = MySqlPool::connect(url).await?;
-        Ok(Self { pool, database: database.to_string() })
+        Ok(Self { pool })
     }
 }
 
@@ -99,10 +98,16 @@ impl DbAdapter for MySqlAdapter {
         let start = std::time::Instant::now();
         match sqlx::query(sql).fetch_all(&self.pool).await {
             Ok(rows) => {
-                let columns: Vec<String> = rows
-                    .first()
-                    .map(|r| r.columns().iter().map(|c| c.name().to_string()).collect())
-                    .unwrap_or_default();
+                let columns: Vec<String> = if let Some(first) = rows.first() {
+                    first.columns().iter().map(|c| c.name().to_string()).collect()
+                } else {
+                    use sqlx::Executor;
+                    self.pool
+                        .describe(sql)
+                        .await
+                        .map(|d| d.columns().iter().map(|c| c.name().to_string()).collect())
+                        .unwrap_or_default()
+                };
                 let result_rows = rows
                     .iter()
                     .map(|row| (0..columns.len()).map(|i| mysql_col_to_json(row, i)).collect())

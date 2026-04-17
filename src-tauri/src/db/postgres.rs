@@ -103,10 +103,16 @@ impl DbAdapter for PostgresAdapter {
         let start = std::time::Instant::now();
         match sqlx::query(sql).fetch_all(&self.pool).await {
             Ok(rows) => {
-                let columns: Vec<String> = rows
-                    .first()
-                    .map(|r| r.columns().iter().map(|c| c.name().to_string()).collect())
-                    .unwrap_or_default();
+                let columns: Vec<String> = if let Some(first) = rows.first() {
+                    first.columns().iter().map(|c| c.name().to_string()).collect()
+                } else {
+                    use sqlx::Executor;
+                    self.pool
+                        .describe(sql)
+                        .await
+                        .map(|d| d.columns().iter().map(|c| c.name().to_string()).collect())
+                        .unwrap_or_default()
+                };
                 let result_rows = rows
                     .iter()
                     .map(|row| (0..columns.len()).map(|i| pg_col_to_json(row, i)).collect())
@@ -119,13 +125,6 @@ impl DbAdapter for PostgresAdapter {
                     error: None,
                 })
             }
-            Err(sqlx::Error::RowNotFound) => Ok(QueryResult {
-                columns: vec![],
-                rows: vec![],
-                affected_rows: None,
-                execution_time_ms: start.elapsed().as_millis() as u64,
-                error: None,
-            }),
             Err(_) => {
                 // Try as non-SELECT (INSERT/UPDATE/DELETE/DDL)
                 match sqlx::query(sql).execute(&self.pool).await {
