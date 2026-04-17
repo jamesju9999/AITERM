@@ -48,26 +48,47 @@ export function DatabaseAiChat({ connectionId, schema }: Props) {
     setMessages((prev) =>
       prev.map((m, i) => (i === msgIndex ? { ...m, executing: true } : m))
     );
-    const result = await dbExecuteQuery(connectionId, sql);
+    try {
+      const result = await dbExecuteQuery(connectionId, sql);
 
-    if (result.error && retryCount < 2) {
-      const retryPrompt = `SQL 執行錯誤：${result.error}\n原始 SQL：${sql}\n請修正 SQL。`;
-      setSending(true);
-      try {
-        const fixResp = await aiChat(retryPrompt, buildSystemPrompt(), []);
-        const fixedSql = extractSql(fixResp);
-        if (fixedSql) {
-          await executeMessageSql(msgIndex, fixedSql, retryCount + 1);
-          return;
+      if (result.error && retryCount < 2) {
+        const retryPrompt = `SQL 執行錯誤：${result.error}\n原始 SQL：${sql}\n請修正 SQL。`;
+        setSending(true);
+        try {
+          const fixResp = await aiChat(retryPrompt, buildSystemPrompt(), []);
+          const fixedSql = extractSql(fixResp);
+          if (fixedSql) {
+            await executeMessageSql(msgIndex, fixedSql, retryCount + 1);
+            return;
+          }
+        } finally {
+          setSending(false);
         }
-      } finally {
-        setSending(false);
       }
-    }
 
-    setMessages((prev) =>
-      prev.map((m, i) => i === msgIndex ? { ...m, sql, result, executing: false } : m)
-    );
+      setMessages((prev) =>
+        prev.map((m, i) => i === msgIndex ? { ...m, sql, result, executing: false } : m)
+      );
+    } catch (e: unknown) {
+      // IPC or network error — clear executing and surface as an error result
+      setMessages((prev) =>
+        prev.map((m, i) =>
+          i === msgIndex
+            ? {
+                ...m,
+                executing: false,
+                result: {
+                  columns: [],
+                  rows: [],
+                  affected_rows: null,
+                  execution_time_ms: 0,
+                  error: String(e),
+                },
+              }
+            : m
+        )
+      );
+    }
   };
 
   const send = async () => {
