@@ -30,7 +30,7 @@ impl Db2Adapter {
 
     /// Test that the IBM ODBC driver is installed by attempting a connection.
     /// Returns Err with message prefixed "odbc_driver_not_found:" if driver missing.
-    pub fn try_connect_sync(conn_string: &str, username: &str, password: &str) -> Result<()> {
+    fn try_connect_sync(conn_string: &str, username: &str, password: &str) -> Result<()> {
         let env = Environment::new().map_err(|e| anyhow::anyhow!("ODBC env: {e}"))?;
         env.connect(conn_string, username, password, ConnectionOptions::default())
             .map_err(|e| {
@@ -62,7 +62,10 @@ impl Db2Adapter {
                 Some(c) => c,
             };
 
-            let num_cols = cursor.num_result_cols().unwrap_or(0).max(0) as u16;
+            let num_cols = match cursor.num_result_cols() {
+                Ok(n) => n.max(0) as u16,
+                Err(e) => return Err(e.to_string()),
+            };
             let cols: Vec<String> = (1..=num_cols)
                 .filter_map(|i| cursor.col_name(i).ok())
                 .collect();
@@ -73,18 +76,24 @@ impl Db2Adapter {
             let mut row_set_cursor = cursor.bind_buffer(buf).map_err(|e| e.to_string())?;
 
             let mut all_rows: Vec<Vec<serde_json::Value>> = vec![];
-            while let Ok(Some(batch)) = row_set_cursor.fetch() {
-                for row_idx in 0..batch.num_rows() {
-                    let row: Vec<serde_json::Value> = (0..cols.len())
-                        .map(|col_idx| {
-                            batch
-                                .at(col_idx, row_idx)
-                                .and_then(|bytes| std::str::from_utf8(bytes).ok())
-                                .map(|s: &str| serde_json::Value::String(s.to_string()))
-                                .unwrap_or(serde_json::Value::Null)
-                        })
-                        .collect();
-                    all_rows.push(row);
+            loop {
+                match row_set_cursor.fetch() {
+                    Ok(Some(batch)) => {
+                        for row_idx in 0..batch.num_rows() {
+                            let row: Vec<serde_json::Value> = (0..cols.len())
+                                .map(|col_idx| {
+                                    batch
+                                        .at(col_idx, row_idx)
+                                        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+                                        .map(|s| serde_json::Value::String(s.to_string()))
+                                        .unwrap_or(serde_json::Value::Null)
+                                })
+                                .collect();
+                            all_rows.push(row);
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => return Err(e.to_string()),
                 }
             }
 
