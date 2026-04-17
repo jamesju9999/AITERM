@@ -1,0 +1,33 @@
+.new-tab-picker {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 200;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 4px;
+  min-width: 200px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+
+.new-tab-picker__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 10px 12px;
+  cursor: pointer;
+  color: #e6e6e6;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.new-tab-picker__item:hover { background: #2a2a2a; }
+
+.new-tab-picker__icon { font-size: 20px; flex-shrink: 0; }
+.new-tab-picker__label { font-size: 13px; font-weight: 500; color: #e6e6e6; }
+.new-tab-picker__desc { font-size: 11px; color: #888; margin-top: 2px; }
