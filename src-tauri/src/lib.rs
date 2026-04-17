@@ -18,7 +18,7 @@ use commands::{
     secret::{delete_api_key, has_api_key},
 };
 use config::ConfigStore;
-use pty::commands::{pty_close, pty_create, pty_get_cwd, pty_list_dir, pty_resize, pty_write};
+use pty::commands::{pty_close, pty_create, pty_get_cwd, pty_list_dir, pty_read_file, pty_resize, pty_write};
 use pty::PtyManager;
 use secret::SecretStore;
 
@@ -42,6 +42,7 @@ pub fn run() {
             pty_close,
             pty_get_cwd,
             pty_list_dir,
+            pty_read_file,
             // AI query
             ai_query,
             ai_chat,
