@@ -12,6 +12,11 @@ use ai::router::AiRouter;
 use commands::{
     ai::{ai_chat, ai_query},
     config::{get_config, is_onboarding_done, set_execution_mode, set_max_agent_steps, set_onboarding_done, set_submit_shortcut},
+    db::{
+        db_add_connection, db_connect, db_disconnect, db_execute_query,
+        db_get_table_schema, db_list_connections, db_list_schemas,
+        db_list_tables, db_remove_connection, db_test_connection, db_update_connection,
+    },
     provider::{
         add_provider, get_ollama_models, list_providers, remove_provider, set_default_provider,
         test_provider, update_provider,
@@ -19,6 +24,7 @@ use commands::{
     secret::{delete_api_key, has_api_key},
 };
 use config::ConfigStore;
+use db::manager::DbManager;
 use pty::commands::{pty_close, pty_create, pty_get_cwd, pty_list_dir, pty_read_file, pty_resize, pty_write};
 use pty::PtyManager;
 use secret::SecretStore;
@@ -35,6 +41,7 @@ pub fn run() {
         .manage(config)
         .manage(secrets)
         .manage(router)
+        .manage(DbManager::new())
         .invoke_handler(tauri::generate_handler![
             // PTY
             pty_create,
@@ -65,6 +72,18 @@ pub fn run() {
             // Secrets
             has_api_key,
             delete_api_key,
+            // Database
+            db_list_connections,
+            db_add_connection,
+            db_update_connection,
+            db_remove_connection,
+            db_test_connection,
+            db_connect,
+            db_disconnect,
+            db_list_schemas,
+            db_list_tables,
+            db_get_table_schema,
+            db_execute_query,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
