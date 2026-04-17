@@ -50,6 +50,29 @@ impl ConfigStore {
         self.save_to(&self.path, &guard)
     }
 
+    /// Add a new DB connection config.
+    pub fn add_db_connection(&self, conn: crate::config::types::DbConnection) -> anyhow::Result<()> {
+        self.update(|cfg| {
+            cfg.db_connections.push(conn);
+        })
+    }
+
+    /// Update an existing DB connection by id.
+    pub fn update_db_connection(&self, conn: crate::config::types::DbConnection) -> anyhow::Result<()> {
+        self.update(|cfg| {
+            if let Some(existing) = cfg.db_connections.iter_mut().find(|c| c.id == conn.id) {
+                *existing = conn;
+            }
+        })
+    }
+
+    /// Remove a DB connection by id.
+    pub fn remove_db_connection(&self, id: &str) -> anyhow::Result<()> {
+        self.update(|cfg| {
+            cfg.db_connections.retain(|c| c.id != id);
+        })
+    }
+
     /// Shortcut: get a single provider by id.
     pub fn get_provider(&self, id: &str) -> Option<ProviderConfig> {
         self.state.read().find_provider(id).cloned()
@@ -197,6 +220,33 @@ mod tests {
 
         assert!(store.get_provider("ollama-local").is_some());
         assert!(store.get_provider("missing").is_none());
+    }
+
+    #[test]
+    fn db_connection_crud() {
+        use crate::config::types::{DbConnection, DbType};
+        let (store, _) = temp_store();
+
+        let conn = DbConnection {
+            id: "conn-1".into(),
+            name: "Local PG".into(),
+            db_type: DbType::Postgresql,
+            host: "localhost".into(),
+            port: 5432,
+            database: "mydb".into(),
+            username: "postgres".into(),
+        };
+
+        store.add_db_connection(conn.clone()).unwrap();
+        assert_eq!(store.get().db_connections.len(), 1);
+
+        let mut updated = conn.clone();
+        updated.name = "Updated PG".into();
+        store.update_db_connection(updated).unwrap();
+        assert_eq!(store.get().db_connections[0].name, "Updated PG");
+
+        store.remove_db_connection("conn-1").unwrap();
+        assert!(store.get().db_connections.is_empty());
     }
 
     #[test]
