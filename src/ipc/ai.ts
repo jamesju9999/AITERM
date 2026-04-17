@@ -47,6 +47,20 @@ export function invokeAiQuery(
   return invoke<AiCommandReady>("ai_query", { query, sessionId });
 }
 
+export async function aiChat(
+  message: string,
+  systemPrompt: string,
+  history: { role: "user" | "assistant"; content: string }[],
+): Promise<string> {
+  const messages: ChatMessage[] = [
+    { role: "system", content: systemPrompt },
+    ...history,
+    { role: "user", content: message },
+  ];
+  const reply = await invokeAiChat(messages, "db-ai-chat");
+  return reply.content;
+}
+
 export function formatAiError(e: AiError): string {
   switch (e.kind) {
     case "not_configured":
