@@ -51,14 +51,14 @@ impl ConfigStore {
     }
 
     /// Add a new DB connection config.
-    pub fn add_db_connection(&self, conn: crate::config::types::DbConnection) -> anyhow::Result<()> {
+    pub fn add_db_connection(&self, conn: DbConnection) -> anyhow::Result<()> {
         self.update(|cfg| {
             cfg.db_connections.push(conn);
         })
     }
 
-    /// Update an existing DB connection by id.
-    pub fn update_db_connection(&self, conn: crate::config::types::DbConnection) -> anyhow::Result<()> {
+    /// Update an existing DB connection by id. Silently no-ops if the id is not found.
+    pub fn update_db_connection(&self, conn: DbConnection) -> anyhow::Result<()> {
         self.update(|cfg| {
             if let Some(existing) = cfg.db_connections.iter_mut().find(|c| c.id == conn.id) {
                 *existing = conn;
