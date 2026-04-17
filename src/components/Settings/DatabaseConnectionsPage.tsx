@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import {
   dbListConnections, dbAddConnection, dbUpdateConnection, dbRemoveConnection,
   dbTestConnection, DbConnectionInfo, DbConnectionInput, DbType,
@@ -210,12 +210,12 @@ export function DatabaseConnectionsPage() {
   );
 }
 
-const btnStyle: React.CSSProperties = {
+const btnStyle: CSSProperties = {
   background: "transparent", border: "1px solid #3a3a3a", color: "#ccc",
   borderRadius: 4, padding: "4px 12px", cursor: "pointer", fontSize: 12,
 };
-const labelStyle: React.CSSProperties = { color: "#888", fontSize: 12 };
-const inputStyle: React.CSSProperties = {
+const labelStyle: CSSProperties = { color: "#888", fontSize: 12 };
+const inputStyle: CSSProperties = {
   background: "#0f0f0f", border: "1px solid #2a2a2a", color: "#e6e6e6",
   borderRadius: 4, padding: "6px 8px", fontSize: 13, width: "100%", boxSizing: "border-box",
 };
