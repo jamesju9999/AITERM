@@ -38,7 +38,9 @@ describe("AiPanel", () => {
     expect(panel).not.toBeNull();
     expect(panel).toHaveClass("aiterm-ai-panel-hidden");
     // Textarea exists in DOM (not unmounted).
-    expect(screen.getByRole("textbox")).toBeInTheDocument();
+    // aria-hidden="true" on the panel root means Testing Library excludes it
+    // from the accessible tree — use { hidden: true } to find it anyway.
+    expect(screen.getByRole("textbox", { hidden: true })).toBeInTheDocument();
   });
 
   it("autofocuses the textarea when transitioning to open", () => {
