@@ -114,3 +114,31 @@ pub fn pty_list_dir(
     Ok(entries)
 }
 
+/// Returned by pty_read_file.
+#[derive(serde::Serialize)]
+pub struct FileContent {
+    pub content: String,
+    pub truncated: bool,
+}
+
+const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
+
+/// Read a text file's content. Caps at 10 MB; binary files return an error.
+#[tauri::command]
+pub fn pty_read_file(path: String) -> Result<FileContent, String> {
+    use std::io::Read;
+
+    let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    let file_size = metadata.len();
+    let truncated = file_size > MAX_FILE_BYTES;
+
+    let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+    let read_size = MAX_FILE_BYTES.min(file_size) as usize;
+    let mut buf = vec![0u8; read_size];
+    file.read_exact(&mut buf).map_err(|e| e.to_string())?;
+
+    let content = String::from_utf8(buf)
+        .map_err(|_| "binary".to_string())?;
+
+    Ok(FileContent { content, truncated })
+}
