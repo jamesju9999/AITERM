@@ -1,0 +1,39 @@
+.db-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #0c0c0c;
+}
+
+.db-view__subtabs {
+  display: flex;
+  align-items: center;
+  background: #111;
+  border-bottom: 1px solid #1e1e1e;
+  padding: 0 8px;
+  flex-shrink: 0;
+}
+
+.db-view__subtab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #888;
+  font-size: 12px;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: color 0.1s;
+}
+
+.db-view__subtab:hover { color: #ccc; }
+
+.db-view__subtab--active {
+  color: #34d399;
+  border-bottom-color: #34d399;
+}
+
+.db-view__content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+}
