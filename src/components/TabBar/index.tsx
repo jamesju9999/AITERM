@@ -5,6 +5,8 @@ import "./index.css";
 export interface Tab {
   id: string;
   title: string;
+  type: "terminal" | "database";
+  dbConnectionId?: string;
 }
 
 export interface TabBarProps {

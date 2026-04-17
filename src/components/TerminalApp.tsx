@@ -4,7 +4,7 @@ import { TabBar, type Tab } from "./TabBar";
 
 export function TerminalApp() {
   const [tabs, setTabs] = useState<Tab[]>(() => [
-    { id: crypto.randomUUID(), title: "Terminal" },
+    { id: crypto.randomUUID(), title: "Terminal", type: "terminal" },
   ]);
   const [activeId, setActiveId] = useState(tabs[0].id);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -23,7 +23,7 @@ export function TerminalApp() {
 
   const handleAddTab = useCallback(() => {
     const newId = crypto.randomUUID();
-    setTabs((prev) => [...prev, { id: newId, title: "Terminal" }]);
+    setTabs((prev) => [...prev, { id: newId, title: "Terminal", type: "terminal" }]);
     setActiveId(newId);
   }, []);
 
@@ -37,7 +37,7 @@ export function TerminalApp() {
       if (nextTabs.length === 0) {
         const newId = crypto.randomUUID();
         setActiveId(newId);
-        return [{ id: newId, title: "Terminal" }];
+        return [{ id: newId, title: "Terminal", type: "terminal" }];
       }
       
       // If closing active tab, switch to adjacent tab
