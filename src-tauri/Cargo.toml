@@ -43,6 +43,12 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 dirs = "6"
 shell-words = "1.1.1"
 
+# Database adapters
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "mysql", "sqlite", "uuid"] }
+tiberius = { version = "0.12", features = ["tds73", "native-tls"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+odbc-api = "8"
+
 [dev-dependencies]
 wiremock = "0.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
