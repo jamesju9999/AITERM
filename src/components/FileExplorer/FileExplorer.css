@@ -169,3 +169,147 @@
 .fe-status--error {
   color: #f87171;
 }
+
+/* ── Split pane ── */
+.fe-split {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.fe-left {
+  width: 260px;
+  min-width: 180px;
+  flex-shrink: 0;
+  border-right: 1px solid #222;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.fe-left .fe-body {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.fe-right {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── File row — clickable ── */
+.fe-row--file {
+  cursor: pointer;
+}
+
+.fe-row--selected {
+  background: #1e3a5f !important;
+}
+
+.fe-row--selected .fe-name {
+  color: #79c0ff;
+}
+
+/* ── FileViewer ── */
+.fv-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 13px;
+  background: #0c0c0c;
+}
+
+.fv-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #444;
+  font-size: 13px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+}
+
+.fv-header {
+  padding: 6px 12px;
+  background: #141414;
+  border-bottom: 1px solid #222;
+  color: #aaa;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+.fv-banner {
+  padding: 4px 12px;
+  background: #3a2e00;
+  color: #fcd34d;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.fv-status {
+  padding: 16px;
+  color: #555;
+  font-size: 12px;
+  text-align: center;
+}
+
+.fv-status--error {
+  color: #f87171;
+}
+
+.fv-status--muted {
+  color: #555;
+}
+
+.fv-content {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 0;
+}
+
+.fv-content::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.fv-content::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 3px;
+}
+
+.fv-pre {
+  margin: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  white-space: pre;
+}
+
+.fv-line {
+  display: flex;
+  min-height: 1.4em;
+}
+
+.fv-lineno {
+  user-select: none;
+  text-align: right;
+  min-width: 40px;
+  padding-right: 12px;
+  color: #444;
+  flex-shrink: 0;
+}
+
+.fv-linetext {
+  color: #ccc;
+  flex: 1;
+}
