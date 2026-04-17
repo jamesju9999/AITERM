@@ -2,9 +2,10 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ProvidersPage } from "./ProvidersPage";
 import { GeneralPage } from "./GeneralPage";
+import { DatabaseConnectionsPage } from "./DatabaseConnectionsPage";
 import "./SettingsView.css";
 
-type SettingsTab = "providers" | "general";
+type SettingsTab = "providers" | "general" | "databases";
 
 export function SettingsView() {
   const navigate = useNavigate();
@@ -28,6 +29,12 @@ export function SettingsView() {
         >
           一般
         </button>
+        <button
+          className={`sidebar-item ${tab === "databases" ? "sidebar-item--active" : ""}`}
+          onClick={() => setTab("databases")}
+        >
+          🗄️ 資料庫連線
+        </button>
 
         <div className="sidebar-spacer" />
 
@@ -40,6 +47,7 @@ export function SettingsView() {
       <main className="settings-content">
         {tab === "providers" && <ProvidersPage />}
         {tab === "general" && <GeneralPage />}
+        {tab === "databases" && <DatabaseConnectionsPage />}
       </main>
     </div>
   );
