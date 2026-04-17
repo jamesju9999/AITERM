@@ -123,22 +123,34 @@ pub struct FileContent {
 
 const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 
-/// Read a text file's content. Caps at 10 MB; binary files return an error.
+/// Read a text file's content. Path must be within the user's home directory.
+/// Caps at 10 MB; binary files return an error.
 #[tauri::command]
 pub fn pty_read_file(path: String) -> Result<FileContent, String> {
     use std::io::Read;
 
-    let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
-    let file_size = metadata.len();
+    // Resolve to a canonical absolute path (follows symlinks, eliminates ../)
+    let canonical = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
+
+    // Restrict reads to the user's home directory
+    let home = dirs::home_dir().ok_or_else(|| "cannot determine home directory".to_string())?;
+    if !canonical.starts_with(&home) {
+        return Err("path is outside the home directory".to_string());
+    }
+
+    // Open the file first, then get metadata from the handle (avoids TOCTOU race)
+    let mut file = std::fs::File::open(&canonical).map_err(|e| e.to_string())?;
+    let file_size = file.metadata().map_err(|e| e.to_string())?.len();
     let truncated = file_size > MAX_FILE_BYTES;
 
-    let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
     let read_size = MAX_FILE_BYTES.min(file_size) as usize;
     let mut buf = vec![0u8; read_size];
-    file.read_exact(&mut buf).map_err(|e| e.to_string())?;
+    if read_size > 0 {
+        file.read_exact(&mut buf).map_err(|e| e.to_string())?;
+    }
 
     let content = String::from_utf8(buf)
-        .map_err(|_| "binary".to_string())?;
+        .map_err(|_| "file contains non-UTF-8 bytes and cannot be read as text".to_string())?;
 
     Ok(FileContent { content, truncated })
 }
