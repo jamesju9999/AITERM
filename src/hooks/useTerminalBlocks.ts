@@ -36,11 +36,6 @@ export function useTerminalBlocks(
   // Map of block ID → onComplete callback (for agent loop)
   const completionCallbacksRef = useRef<Map<string, (block: TerminalBlock) => void>>(new Map());
 
-  const updateBlocks = useCallback((newBlocks: TerminalBlock[]) => {
-    blocksRef.current = newBlocks;
-    setBlocks(newBlocks);
-  }, []);
-
   useEffect(() => {
     if (!term) return;
 
