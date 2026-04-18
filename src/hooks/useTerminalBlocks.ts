@@ -131,8 +131,13 @@ export function useTerminalBlocks(
       blocksRef.current = updated;
       setBlocks(updated);
 
-      // Send \\x15 (Ctrl+U to clear line) then the command + \\r
-      writePty(sessionId, "\x15" + cmd + "\r").catch(console.error);
+      // Clear the current line before sending the command.
+      // On Windows conpty, \x15 (Ctrl+U) is echoed visibly as "^U" before PSReadLine
+      // can suppress it.  Use \x1b (Escape) instead, which triggers PSReadLine's
+      // RevertLine silently.  On macOS/Linux, \x15 works cleanly with bash/zsh.
+      const isWindows = navigator.platform.toLowerCase().startsWith("win");
+      const clearSeq = isWindows ? "\x1b" : "\x15";
+      writePty(sessionId, clearSeq + cmd + "\r").catch(console.error);
     },
     [sessionId, term],
   );
