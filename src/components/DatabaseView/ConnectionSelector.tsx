@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { dbListConnections, DbConnectionInfo, DB_TYPE_LABELS } from "../../ipc/db";
+import { dbListConnections, type DbConnectionInfo, DB_TYPE_LABELS } from "../../ipc/db";
 
 interface Props {
   onSelect: (connId: string) => void;

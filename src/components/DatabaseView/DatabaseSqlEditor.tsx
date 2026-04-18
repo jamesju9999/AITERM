@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { dbExecuteQuery, QueryResult } from "../../ipc/db";
+import { dbExecuteQuery, type QueryResult } from "../../ipc/db";
 
 interface Props {
   connectionId: string;
@@ -42,7 +42,7 @@ export function DatabaseSqlEditor({ connectionId }: Props) {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", flex: 1, minWidth: 0, overflow: "hidden" }}>
       <div style={{ flex: "0 0 40%", display: "flex", flexDirection: "column", borderBottom: "1px solid #1e1e1e" }}>
         <div style={{ background: "#111", padding: "6px 12px", display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid #1e1e1e" }}>
           <span style={{ color: "#888", fontSize: 11 }}>SQL Editor</span>

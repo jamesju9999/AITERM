@@ -27,8 +27,9 @@ export interface AiChatReply {
 export function invokeAiChat(
   messages: ChatMessage[],
   sessionId: string,
+  providerId?: string,
 ): Promise<AiChatReply> {
-  return invoke<AiChatReply>("ai_chat", { messages, sessionId });
+  return invoke<AiChatReply>("ai_chat", { messages, sessionId, providerId: providerId ?? null });
 }
 
 export type AiStreamKind = "query" | "chat";
@@ -51,13 +52,14 @@ export async function aiChat(
   message: string,
   systemPrompt: string,
   history: { role: "user" | "assistant"; content: string }[],
+  providerId?: string,
 ): Promise<string> {
   const messages: ChatMessage[] = [
     { role: "system", content: systemPrompt },
     ...history,
     { role: "user", content: message },
   ];
-  const reply = await invokeAiChat(messages, "db-ai-chat");
+  const reply = await invokeAiChat(messages, "db-ai-chat", providerId);
   return reply.content;
 }
 
