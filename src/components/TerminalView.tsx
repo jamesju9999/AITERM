@@ -285,6 +285,12 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       const session = sessionRef.current;
       if (!session) return;
 
+      // Drop focus-tracking events that xterm.js emits when it loses / gains focus.
+      // PSReadLine enables focus tracking (ESC[?1004h), so xterm.js sends ESC[O (focus-out)
+      // or ESC[I (focus-in) when the WarpInput textarea steals focus.  Forwarding them
+      // character-by-character causes PowerShell to print "[O" / "[I" as literal text.
+      if (data === "\x1b[O" || data === "\x1b[I") return;
+
       for (const ch of data) {
         if (ch === "\r" || ch === "\n") {
           const line = lineBufRef.current;
@@ -439,8 +445,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           )}
           <span>AITerm · {status}</span>
         </span>
-        {activeProvider && (
-          <span style={{ display: "flex", alignItems: "center" }}>
+        <span style={{ display: "flex", alignItems: "center" }}>
+          {activeProvider ? (
             <button
               className="aiterm-status-provider"
               title="切換 Provider (Ctrl+Shift+P)"
@@ -448,19 +454,27 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             >
               {activeProvider}
             </button>
+          ) : (
             <button
-              className="aiterm-block-btn aiterm-block-btn-ai"
-              title="開啟 AI 助手 (Ctrl+I)"
-              onClick={(e) => {
-                 e.stopPropagation();
-                 window.dispatchEvent(new CustomEvent('aiterm:ask-ai', { detail: {} }));
-              }}
-              style={{ marginLeft: "8px", padding: "2px 8px" }}
+              className="aiterm-status-provider aiterm-status-provider--empty"
+              title="前往設定新增 AI 供應商"
+              onClick={() => navigate("/settings")}
             >
-              ✨ Ask AI
+              {t.ai_providers} ＋
             </button>
-          </span>
-        )}
+          )}
+          <button
+            className="aiterm-block-btn aiterm-block-btn-ai"
+            title="開啟 AI 助手 (Ctrl+I)"
+            onClick={(e) => {
+               e.stopPropagation();
+               window.dispatchEvent(new CustomEvent('aiterm:ask-ai', { detail: {} }));
+            }}
+            style={{ marginLeft: "8px", padding: "2px 8px" }}
+          >
+            ✨ Ask AI
+          </button>
+        </span>
       </div>
 
       {/* Sub-tabs: Terminal | Files */}
