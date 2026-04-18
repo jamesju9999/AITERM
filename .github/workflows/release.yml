@@ -56,7 +56,7 @@ jobs:
           echo "OPENSSL_LIB_DIR=C:\Program Files\OpenSSL-Win64\lib" >> $env:GITHUB_ENV
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm install
 
       - name: Build (macOS Universal)
         if: matrix.os == 'macos-latest'
