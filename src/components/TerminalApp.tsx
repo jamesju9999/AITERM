@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { TerminalView } from "./TerminalView";
 import { TabBar, type Tab } from "./TabBar";
-import { NewTabPicker } from "./NewTabPicker";
 import { DatabaseView } from "./DatabaseView";
+import { useLocale } from "../contexts/LocaleContext";
 
 export function TerminalApp() {
+  const { t } = useLocale();
   const [tabs, setTabs] = useState<Tab[]>(() => [
     { id: crypto.randomUUID(), title: "Terminal", type: "terminal" },
   ]);
@@ -30,7 +31,7 @@ export function TerminalApp() {
 
   const handlePickerSelect = useCallback((type: "terminal" | "database") => {
     const newId = crypto.randomUUID();
-    const title = type === "terminal" ? "Terminal" : "資料庫";
+    const title = type === "terminal" ? "Terminal" : t.database_tab;
     setTabs((prev) => [...prev, { id: newId, title, type }]);
     setActiveId(newId);
     setPickerOpen(false);
@@ -137,7 +138,7 @@ export function TerminalApp() {
 
   return (
     <div style={{ display: "flex", flexDirection: "row", height: "100vh", backgroundColor: "#0c0c0c" }}>
-      <div style={{ position: "relative" }}>
+      <div>
         <TabBar
           tabs={tabs}
           activeId={activeId}
@@ -148,13 +149,10 @@ export function TerminalApp() {
           isSidebarOpen={isSidebarOpen}
           onToggle={toggleSidebar}
           width={sidebarWidth}
+          pickerOpen={pickerOpen}
+          onPickerSelect={handlePickerSelect}
+          onPickerClose={() => setPickerOpen(false)}
         />
-        {pickerOpen && (
-          <NewTabPicker
-            onSelect={handlePickerSelect}
-            onClose={() => setPickerOpen(false)}
-          />
-        )}
       </div>
       {isSidebarOpen && (
         <div

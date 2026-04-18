@@ -1,46 +1,30 @@
 import { useState, useEffect } from "react";
 import { getConfig, setExecutionMode, setSubmitShortcut, setMaxAgentSteps } from "../../ipc/config";
 import type { ExecutionMode, SubmitShortcut } from "../../ipc/config";
+import { useLocale } from "../../contexts/LocaleContext";
+import type { Locale } from "../../lib/i18n";
 import "./GeneralPage.css";
 
-const MODES: { value: ExecutionMode; label: string; desc: string }[] = [
-  {
-    value: "always-confirm",
-    label: "一律確認",
-    desc: "所有 AI 產出的命令都顯示預覽框，需明確確認才執行（預設）。",
-  },
-  {
-    value: "graded",
-    label: "分級自動",
-    desc: "Safe 命令自動執行；NeedsConfirm / Dangerous 仍顯示確認框。",
-  },
-  {
-    value: "full-auto",
-    label: "全自動 Agent",
-    desc: "Safe 與 NeedsConfirm 自動執行；Dangerous 仍強制確認。",
-  },
-];
-
-const SHORTCUT_MODES: { value: SubmitShortcut; label: string; desc: string }[] = [
-  { value: "enter", label: "Enter", desc: "按下 Enter 鍵送出指令，Shift+Enter 換行。" },
-  { value: "shift-enter", label: "Shift + Enter", desc: "按下 Shift+Enter 送出指令，直接按 Enter 換行。" },
-  { value: "ctrl-enter", label: "Ctrl + Enter", desc: "按下 Ctrl+Enter 送出指令，直接按 Enter 換行。" },
-];
-
-const STEP_OPTIONS: { value: number; label: string }[] = [
-  { value: 5, label: "5 次（預設）" },
-  { value: 10, label: "10 次" },
-  { value: 20, label: "20 次" },
-  { value: 50, label: "50 次" },
-  { value: 100, label: "100 次" },
-  { value: 0, label: "無限制 ⚠️" },
-];
+const STEP_VALUES = [5, 10, 20, 50, 100, 0];
 
 export function GeneralPage() {
+  const { t, locale, setLocale } = useLocale();
   const [mode, setMode] = useState<ExecutionMode>("always-confirm");
   const [shortcut, setShortcut] = useState<SubmitShortcut>("enter");
   const [maxSteps, setMaxSteps] = useState<number>(5);
   const [saving, setSaving] = useState(false);
+
+  const MODES: { value: ExecutionMode; label: string; desc: string }[] = [
+    { value: "always-confirm", label: t.mode_always_confirm_label, desc: t.mode_always_confirm_desc },
+    { value: "graded",         label: t.mode_graded_label,         desc: t.mode_graded_desc },
+    { value: "full-auto",      label: t.mode_full_auto_label,      desc: t.mode_full_auto_desc },
+  ];
+
+  const SHORTCUT_MODES: { value: SubmitShortcut; label: string; desc: string }[] = [
+    { value: "enter",       label: "Enter",           desc: t.shortcut_enter_desc },
+    { value: "shift-enter", label: "Shift + Enter",   desc: t.shortcut_shift_enter_desc },
+    { value: "ctrl-enter",  label: "Ctrl + Enter",    desc: t.shortcut_ctrl_enter_desc },
+  ];
 
   useEffect(() => {
     getConfig().then((cfg) => {
@@ -53,40 +37,49 @@ export function GeneralPage() {
   const handleChange = async (newMode: ExecutionMode) => {
     setMode(newMode);
     setSaving(true);
-    try {
-      await setExecutionMode(newMode);
-    } finally {
-      setSaving(false);
-    }
+    try { await setExecutionMode(newMode); } finally { setSaving(false); }
   };
 
   const handleShortcutChange = async (newShortcut: SubmitShortcut) => {
     setShortcut(newShortcut);
     setSaving(true);
-    try {
-      await setSubmitShortcut(newShortcut);
-    } finally {
-      setSaving(false);
-    }
+    try { await setSubmitShortcut(newShortcut); } finally { setSaving(false); }
   };
 
   const handleMaxStepsChange = async (newSteps: number) => {
     setMaxSteps(newSteps);
     setSaving(true);
-    try {
-      await setMaxAgentSteps(newSteps);
-    } finally {
-      setSaving(false);
-    }
+    try { await setMaxAgentSteps(newSteps); } finally { setSaving(false); }
   };
 
   return (
     <div className="general-page">
-      <h2>一般設定</h2>
+      <h2>{t.general_settings}</h2>
 
       <section className="settings-section">
-        <h3>執行模式</h3>
-        <p className="section-desc">決定 AI 產出的命令如何被執行。</p>
+        <h3>{t.language}</h3>
+        <p className="section-desc">{t.language_desc}</p>
+        <div className="mode-list">
+          {(["zh-TW", "en"] as Locale[]).map((l) => (
+            <label key={l} className="mode-option">
+              <input
+                type="radio"
+                name="locale"
+                value={l}
+                checked={locale === l}
+                onChange={() => setLocale(l)}
+              />
+              <div className="mode-text">
+                <span className="mode-label">{l === "zh-TW" ? "繁體中文" : "English"}</span>
+              </div>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3>{t.execution_mode}</h3>
+        <p className="section-desc">{t.execution_mode_desc}</p>
         <div className="mode-list">
           {MODES.map((m) => (
             <label key={m.value} className="mode-option">
@@ -108,10 +101,8 @@ export function GeneralPage() {
       </section>
 
       <section className="settings-section">
-        <h3>Agent 自動迭代上限</h3>
-        <p className="section-desc">
-          設定 AI Agent 在自動模式下最多執行幾輪指令。設為「無限制」時，Agent 會一直執行直到 AI 回傳完成或您手動中斷。
-        </p>
+        <h3>{t.agent_max_steps}</h3>
+        <p className="section-desc">{t.agent_max_steps_desc}</p>
         <div className="step-select-row">
           <select
             className="step-select"
@@ -119,21 +110,21 @@ export function GeneralPage() {
             onChange={(e) => handleMaxStepsChange(Number(e.target.value))}
             disabled={saving}
           >
-            {STEP_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
+            {STEP_VALUES.map((v) => (
+              <option key={v} value={v}>
+                {v === 0 ? t.steps_unlimited : t.steps_n(v)}
               </option>
             ))}
           </select>
           {maxSteps === 0 && (
-            <span className="step-warning">⚠️ 無限制模式可能消耗較多 API 額度，請謹慎使用。</span>
+            <span className="step-warning">{t.steps_unlimited_warning}</span>
           )}
         </div>
       </section>
 
       <section className="settings-section">
-        <h3>輸入組合鍵</h3>
-        <p className="section-desc">決定底部輸入框以哪個組合鍵送出指令。</p>
+        <h3>{t.submit_shortcut}</h3>
+        <p className="section-desc">{t.submit_shortcut_desc}</p>
         <div className="mode-list">
           {SHORTCUT_MODES.map((s) => (
             <label key={s.value} className="mode-option">
@@ -152,7 +143,7 @@ export function GeneralPage() {
             </label>
           ))}
         </div>
-        {saving && <p className="saving-indicator">儲存中…</p>}
+        {saving && <p className="saving-indicator">{t.saving_indicator}</p>}
       </section>
     </div>
   );

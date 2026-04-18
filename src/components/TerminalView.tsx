@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useLocale } from "../contexts/LocaleContext";
 import { listen } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -72,6 +73,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
+  const { t } = useLocale();
   const hostRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<string>("initializing…");
   const [preview, setPreview] = useState<PreviewState>(INITIAL_PREVIEW);
@@ -461,16 +463,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         )}
       </div>
 
-      {/* Sub-tabs: 終端機 | 檔案 */}
+      {/* Sub-tabs: Terminal | Files */}
       <div className="aiterm-subtabs">
         <button
           className={`aiterm-subtab ${viewTab === "terminal" ? "aiterm-subtab--active" : ""}`}
           onClick={() => setViewTab("terminal")}
-        >終端機</button>
+        >{t.terminal_tab}</button>
         <button
           className={`aiterm-subtab ${viewTab === "files" ? "aiterm-subtab--active" : ""}`}
           onClick={() => setViewTab("files")}
-        >檔案</button>
+        >{t.files_tab}</button>
       </div>
 
       <div style={{ position: "relative", flex: 1, minHeight: 0, width: "100%" }}>

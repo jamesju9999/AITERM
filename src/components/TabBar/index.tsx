@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { NewTabPicker } from "../NewTabPicker";
+import { useLocale } from "../../contexts/LocaleContext";
 import "./index.css";
 
 export interface Tab {
@@ -19,10 +21,14 @@ export interface TabBarProps {
   isSidebarOpen: boolean;
   onToggle: () => void;
   width: number;
+  pickerOpen?: boolean;
+  onPickerSelect?: (type: "terminal" | "database") => void;
+  onPickerClose?: () => void;
 }
 
-export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isSidebarOpen, onToggle, width }: TabBarProps) {
+export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isSidebarOpen, onToggle, width, pickerOpen, onPickerSelect, onPickerClose }: TabBarProps) {
   const navigate = useNavigate();
+  const { t } = useLocale();
   const [editingId, setEditingId] = useState<string | null>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
 
@@ -43,7 +49,7 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isS
         <button 
           className="aiterm-sidebar-toggle" 
           onClick={() => navigate("/settings")} 
-          title="設定 (Ctrl+,)" 
+          title={`${t.settings} (Ctrl+,)`}
           style={{ background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px' }}
         >
           ⚙
@@ -54,7 +60,7 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isS
 
   return (
     <div className="aiterm-tabbar" data-tauri-drag-region style={{ width: `${width}px` }}>
-      <div className="aiterm-tabbar-header" data-tauri-drag-region>
+      <div className="aiterm-tabbar-header" data-tauri-drag-region style={{ position: "relative" }}>
         <button className="aiterm-sidebar-toggle" onClick={onToggle} title="Close Sidebar (Ctrl+B)" style={{ background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px', padding: 0 }}>
           ◧
         </button>
@@ -62,6 +68,9 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isS
         <button className="aiterm-tab-add" onClick={onAdd} title="New Tab (Ctrl+T)">
           +
         </button>
+        {pickerOpen && onPickerSelect && onPickerClose && (
+          <NewTabPicker onSelect={onPickerSelect} onClose={onPickerClose} />
+        )}
       </div>
       <div className="aiterm-tabbar-tabs" data-tauri-drag-region>
         {tabs.map((tab, idx) => (
@@ -115,10 +124,10 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isS
             className="aiterm-tab"
             style={{ padding: "0 8px" }}
             onClick={() => navigate("/settings")}
-            title="設定 (Ctrl+,)"
+            title={`${t.settings} (Ctrl+,)`}
         >
             <span style={{ marginRight: "8px", fontSize: "16px" }}>⚙</span>
-            <span className="aiterm-tab-title">設定</span>
+            <span className="aiterm-tab-title">{t.settings}</span>
         </div>
       </div>
     </div>

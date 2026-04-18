@@ -10,11 +10,13 @@ import {
 import type { ProviderInfo, ProviderInput } from "../../ipc/provider";
 import { PROVIDER_TYPE_LABELS } from "../../ipc/provider";
 import { ProviderForm } from "./ProviderForm";
+import { useLocale } from "../../contexts/LocaleContext";
 import "./ProvidersPage.css";
 
 type FormMode = { kind: "add" } | { kind: "edit"; provider: ProviderInfo } | null;
 
 export function ProvidersPage() {
+  const { t } = useLocale();
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [formMode, setFormMode] = useState<FormMode>(null);
   const [testing, setTesting] = useState<string | null>(null);
@@ -22,7 +24,6 @@ export function ProvidersPage() {
   const reload = useCallback(async () => {
     const list = await listProviders();
     setProviders(list);
-    // is_default is already set on each ProviderInfo by the backend
   }, []);
 
   useEffect(() => { reload(); }, [reload]);
@@ -40,7 +41,7 @@ export function ProvidersPage() {
   };
 
   const handleRemove = async (id: string) => {
-    if (!confirm(`確定移除 provider「${id}」嗎？`)) return;
+    if (!confirm(t.confirm_remove_provider(id))) return;
     await removeProvider(id);
     await reload();
   };
@@ -55,7 +56,7 @@ export function ProvidersPage() {
     setTestResults((r) => ({ ...r, [id]: "" }));
     try {
       await testProvider(id);
-      setTestResults((r) => ({ ...r, [id]: "✓ 連線成功" }));
+      setTestResults((r) => ({ ...r, [id]: t.provider_test_ok }));
     } catch (e: unknown) {
       const msg = typeof e === "object" && e !== null && "message" in e
         ? String((e as { message: string }).message)
@@ -69,19 +70,17 @@ export function ProvidersPage() {
   return (
     <div className="providers-page">
       <div className="providers-header">
-        <h2>AI Providers</h2>
+        <h2>{t.ai_providers}</h2>
         <button
           className="btn-add"
           onClick={() => setFormMode({ kind: "add" })}
         >
-          + 新增 Provider
+          {t.add_provider}
         </button>
       </div>
 
       {providers.length === 0 && !formMode && (
-        <p className="providers-empty">
-          尚未設定任何 Provider。點擊「新增 Provider」開始設定。
-        </p>
+        <p className="providers-empty">{t.no_providers}</p>
       )}
 
       <div className="provider-list">
@@ -94,7 +93,7 @@ export function ProvidersPage() {
               <div className="provider-name">
                 {p.display_name}
                 {p.is_default && (
-                  <span className="badge-default">預設</span>
+                  <span className="badge-default">{t.provider_default_badge}</span>
                 )}
               </div>
               <div className="provider-meta">
@@ -116,27 +115,27 @@ export function ProvidersPage() {
               <button
                 onClick={() => handleTest(p.id)}
                 disabled={testing === p.id}
-                title="測試連線"
+                title={t.provider_test}
               >
-                {testing === p.id ? "測試中…" : "測試"}
+                {testing === p.id ? t.provider_testing : t.provider_test}
               </button>
               {!p.is_default && (
-                <button onClick={() => handleSetDefault(p.id)} title="設為預設">
-                  設為預設
+                <button onClick={() => handleSetDefault(p.id)} title={t.provider_set_default}>
+                  {t.provider_set_default}
                 </button>
               )}
               <button
                 onClick={() => setFormMode({ kind: "edit", provider: p })}
-                title="編輯"
+                title={t.edit}
               >
-                編輯
+                {t.edit}
               </button>
               <button
                 className="btn-danger"
                 onClick={() => handleRemove(p.id)}
-                title="移除"
+                title={t.provider_remove}
               >
-                移除
+                {t.provider_remove}
               </button>
             </div>
           </div>

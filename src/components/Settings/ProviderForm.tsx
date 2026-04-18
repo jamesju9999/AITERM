@@ -8,10 +8,10 @@ import {
   getOllamaModels,
 } from "../../ipc/provider";
 import type { ProviderType } from "../../ipc/config";
+import { useLocale } from "../../contexts/LocaleContext";
 import "./ProviderForm.css";
 
 interface Props {
-  /** Pre-filled when editing an existing provider. */
   existing?: ProviderInfo;
   onSave: (input: ProviderInput) => Promise<void>;
   onCancel: () => void;
@@ -25,6 +25,7 @@ const PROVIDER_TYPES: ProviderType[] = [
 ];
 
 export function ProviderForm({ existing, onSave, onCancel }: Props) {
+  const { t } = useLocale();
   const isEdit = !!existing;
 
   const [id, setId] = useState(existing?.id ?? "");
@@ -43,7 +44,6 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // When provider type changes, reset defaults.
   useEffect(() => {
     if (!isEdit) {
       setModel(DEFAULT_MODELS[providerType]);
@@ -52,7 +52,6 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
     }
   }, [providerType, isEdit]);
 
-  // Load Ollama models when type is ollama.
   useEffect(() => {
     if (providerType !== "ollama") return;
     setOllamaLoading(true);
@@ -64,11 +63,11 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
 
   const handleSave = async () => {
     setError(null);
-    if (!id.trim()) { setError("ID 不可為空"); return; }
-    if (!displayName.trim()) { setError("名稱不可為空"); return; }
-    if (!model.trim()) { setError("Model 不可為空"); return; }
+    if (!id.trim()) { setError(t.err_id_empty); return; }
+    if (!displayName.trim()) { setError(t.err_name_empty); return; }
+    if (!model.trim()) { setError(t.err_model_empty); return; }
     if (providerType === "openai-compatible" && !baseUrl.trim()) {
-      setError("OpenAI-Compatible 需要填入 Base URL");
+      setError(t.err_base_url_required);
       return;
     }
     setSaving(true);
@@ -83,7 +82,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         api_key: apiKey.trim() || null,
       });
     } catch (e: unknown) {
-      setError(typeof e === "string" ? e : "儲存失敗，請重試");
+      setError(typeof e === "string" ? e : t.err_save_failed);
     } finally {
       setSaving(false);
     }
@@ -91,27 +90,25 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
 
   return (
     <div className="provider-form">
-      <h3>{isEdit ? "編輯 Provider" : "新增 Provider"}</h3>
+      <h3>{isEdit ? t.edit_provider : t.new_provider}</h3>
 
       {error && <div className="form-error">{error}</div>}
 
-      {/* Provider type */}
       <div className="form-group">
-        <label>類型</label>
+        <label>{t.provider_type}</label>
         <select
           value={providerType}
           onChange={(e) => setProviderType(e.target.value as ProviderType)}
           disabled={isEdit}
         >
-          {PROVIDER_TYPES.map((t) => (
-            <option key={t} value={t}>
-              {PROVIDER_TYPE_LABELS[t]}
+          {PROVIDER_TYPES.map((pt) => (
+            <option key={pt} value={pt}>
+              {PROVIDER_TYPE_LABELS[pt]}
             </option>
           ))}
         </select>
       </div>
 
-      {/* ID (readonly when editing) */}
       <div className="form-group">
         <label>ID</label>
         <input
@@ -123,9 +120,8 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         />
       </div>
 
-      {/* Display name */}
       <div className="form-group">
-        <label>顯示名稱</label>
+        <label>{t.provider_display_name}</label>
         <input
           type="text"
           value={displayName}
@@ -134,26 +130,24 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         />
       </div>
 
-      {/* API Key — not shown for Ollama */}
       {providerType !== "ollama" && (
         <div className="form-group">
           <label>
-            API Key{providerType === "openai-compatible" ? " (選填)" : ""}
+            {providerType === "openai-compatible" ? t.provider_api_key_optional : t.provider_api_key}
           </label>
           <input
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={isEdit ? "留空則不更新" : "貼上你的 API Key"}
+            placeholder={isEdit ? t.provider_api_key_placeholder_edit : t.provider_api_key_placeholder_new}
             autoComplete="off"
           />
         </div>
       )}
 
-      {/* Base URL — for Ollama and Compatible */}
       {(providerType === "ollama" || providerType === "openai-compatible") && (
         <div className="form-group">
-          <label>Base URL</label>
+          <label>{t.provider_base_url}</label>
           {providerType === "openai-compatible" && (
             <div className="presets">
               {COMPATIBLE_PRESETS.map((p) => (
@@ -177,12 +171,11 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         </div>
       )}
 
-      {/* Model */}
       <div className="form-group">
-        <label>Model</label>
+        <label>{t.provider_model}</label>
         {providerType === "ollama" ? (
           ollamaLoading ? (
-            <input type="text" value="載入中..." disabled />
+            <input type="text" value={t.provider_ollama_loading} disabled />
           ) : ollamaModels.length > 0 ? (
             <select value={model} onChange={(e) => setModel(e.target.value)}>
               {ollamaModels.map((m) => (
@@ -196,7 +189,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
               type="text"
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder="llama3.1:8b（Ollama 未連線，手動輸入）"
+              placeholder={t.provider_ollama_fallback_placeholder}
             />
           )
         ) : (
@@ -209,7 +202,6 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         )}
       </div>
 
-      {/* JSON mode toggle — only for compatible */}
       {providerType === "openai-compatible" && (
         <div className="form-group form-group--checkbox">
           <label>
@@ -218,15 +210,14 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
               checked={supportsJsonMode}
               onChange={(e) => setSupportsJsonMode(e.target.checked)}
             />
-            支援 JSON Mode（response_format: json_object）
+            {t.provider_json_mode}
           </label>
         </div>
       )}
 
-      {/* Actions */}
       <div className="form-actions">
         <button type="button" onClick={onCancel} disabled={saving}>
-          取消
+          {t.cancel}
         </button>
         <button
           type="button"
@@ -234,7 +225,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
           onClick={handleSave}
           disabled={saving}
         >
-          {saving ? "儲存中…" : "儲存"}
+          {saving ? t.saving_btn : t.save}
         </button>
       </div>
     </div>

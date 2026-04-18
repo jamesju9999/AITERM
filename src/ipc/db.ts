@@ -103,3 +103,7 @@ export function dbGetTableSchema(connectionId: string, schema: string, table: st
 export function dbExecuteQuery(connectionId: string, sql: string): Promise<QueryResult> {
   return invoke("db_execute_query", { connectionId, sql });
 }
+
+export function dbPreviewTable(connectionId: string, schema: string, table: string, page: number, pageSize: number): Promise<QueryResult> {
+  return invoke("db_preview_table", { connectionId, schema, table, page, pageSize });
+}
