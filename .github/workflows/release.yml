@@ -15,8 +15,8 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            target: universal-apple-darwin
-            rust_targets: aarch64-apple-darwin x86_64-apple-darwin
+            target: aarch64-apple-darwin
+            rust_targets: aarch64-apple-darwin
             artifact_name: mac
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -63,7 +63,7 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Build (macOS Universal)
+      - name: Build (macOS arm64)
         if: matrix.os == 'macos-latest'
         uses: tauri-apps/tauri-action@v0
         env:
@@ -75,13 +75,13 @@ jobs:
             ## AITerm ${{ github.ref_name }}
 
             ### 下載
-            - **macOS**: 下載 `.dmg` 安裝檔
+            - **macOS** (Apple Silicon / Intel via Rosetta 2): 下載 `.dmg` 安裝檔
             - **Windows**: 下載 `-setup.exe` 安裝檔
 
             > macOS 首次開啟可能需要在「系統設定 > 隱私與安全性」中允許執行。
           releaseDraft: true
           prerelease: false
-          args: --target universal-apple-darwin
+          args: --target aarch64-apple-darwin
 
       - name: Build (Windows)
         if: matrix.os == 'windows-latest'
