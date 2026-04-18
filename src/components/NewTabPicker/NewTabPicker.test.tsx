@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { vi } from "vitest";
 import { NewTabPicker } from "./index";
-import { Tab } from "../TabBar";
+import type { Tab } from "../TabBar";
 
 describe("Tab type", () => {
   it("accepts terminal type", () => {
