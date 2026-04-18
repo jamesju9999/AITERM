@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import type { TerminalBlock } from "./useTerminalBlocks";
+
 
 export interface AgentMission {
   goal: string;

@@ -93,7 +93,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const streamingRef = useRef(false);
   const executionModeRef = useRef<ExecutionMode>("always-confirm");
   
-  const { agentMission, startMission, appendHistory, stopMission, clearMission } = useAgentMission();
+  const { agentMission, startMission, stopMission } = useAgentMission();
 
   // Provider status badge
   const [activeProvider, setActiveProvider] = useState<string>("");
@@ -109,7 +109,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const sessionRef = useRef<string | null>(null);
   const lineBufRef = useRef<string>("");
   const overlayRef = useRef<HTMLDivElement>(null);
-  const [renderTick, setRenderTick] = useState(0);
+  const [, setRenderTick] = useState(0);
 
   const { blocks, isAlternateBuffer, submitCommand } = useTerminalBlocks(
     sessionId,
@@ -227,7 +227,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     const decoder = new TextDecoder("utf-8");
 
     let unlistenData: (() => void) | null = null;
-    let unlistenStream: (() => void) | null = null;
+    let unlistenStream: Promise<() => void> | null = null;
 
     const writeRed = (msg: string) => {
       term.write(`\r\n\x1b[31m${msg}\x1b[0m\r\n`);
@@ -398,7 +398,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     return () => {
       if (ro && hostRef.current) ro.unobserve(hostRef.current);
       if (unlistenData) unlistenData();
-      if (unlistenStream) unlistenStream.then(f => f());
+      if (unlistenStream) unlistenStream.then((f: () => void) => f());
       const id = sessionRef.current;
       if (id) {
         closePty(id).catch(() => {});
