@@ -281,6 +281,7 @@ pub struct AiChatReply {
 pub async fn ai_chat(
     messages: Vec<ChatMessage>,
     session_id: String,
+    provider_id: Option<String>,
     app: AppHandle,
     pty_manager: State<'_, PtyManager>,
     router: State<'_, AiRouter>,
@@ -295,7 +296,10 @@ pub async fn ai_chat(
     }
 
     let snapshot = context::snapshot(&pty_manager, &session_id);
-    let provider = router.resolve()?;
+    let provider = match provider_id.as_deref() {
+        Some(id) => router.resolve_by_id(id)?,
+        None => router.resolve()?,
+    };
 
     let prompt = build_chat_prompt(&snapshot);
     let req = GenerateRequest {

@@ -93,14 +93,18 @@ export function DatabaseView({ tabId: _tabId, isActive: _isActive, dbConnectionI
         )}
       </div>
       <div className="db-view__content">
-        {subTab === "browse" && dbConnectionId && (
-          <DatabaseBrowser connectionId={dbConnectionId} schema={activeSchema} />
-        )}
-        {subTab === "ai" && dbConnectionId && (
-          <DatabaseAiChat connectionId={dbConnectionId} schema={activeSchema} />
-        )}
-        {subTab === "sql" && dbConnectionId && (
-          <DatabaseSqlEditor connectionId={dbConnectionId} />
+        {dbConnectionId && (
+          <>
+            <div style={{ display: subTab === "browse" ? "contents" : "none" }}>
+              <DatabaseBrowser connectionId={dbConnectionId} schema={activeSchema} />
+            </div>
+            <div style={{ display: subTab === "ai" ? "contents" : "none" }}>
+              <DatabaseAiChat connectionId={dbConnectionId} schema={activeSchema} />
+            </div>
+            <div style={{ display: subTab === "sql" ? "contents" : "none" }}>
+              <DatabaseSqlEditor connectionId={dbConnectionId} />
+            </div>
+          </>
         )}
       </div>
     </div>
