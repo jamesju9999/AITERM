@@ -3,50 +3,52 @@ import { useNavigate } from "react-router-dom";
 import { ProvidersPage } from "./ProvidersPage";
 import { GeneralPage } from "./GeneralPage";
 import { DatabaseConnectionsPage } from "./DatabaseConnectionsPage";
+import { useLocale } from "../../contexts/LocaleContext";
 import "./SettingsView.css";
 
-type SettingsTab = "providers" | "general" | "databases";
+type SettingsTab = "general" | "providers" | "databases";
 
 export function SettingsView() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<SettingsTab>("providers");
+  const [tab, setTab] = useState<SettingsTab>("general");
+  const { t } = useLocale();
 
   return (
     <div className="settings-view">
       {/* Sidebar */}
       <nav className="settings-sidebar">
-        <div className="settings-sidebar-title">設定</div>
+        <div className="settings-sidebar-title">{t.settings_title}</div>
 
-        <button
-          className={`sidebar-item ${tab === "providers" ? "sidebar-item--active" : ""}`}
-          onClick={() => setTab("providers")}
-        >
-          AI Providers
-        </button>
         <button
           className={`sidebar-item ${tab === "general" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("general")}
         >
-          一般
+          ⚙️ {t.general}
+        </button>
+        <button
+          className={`sidebar-item ${tab === "providers" ? "sidebar-item--active" : ""}`}
+          onClick={() => setTab("providers")}
+        >
+          🤖 {t.ai_providers}
         </button>
         <button
           className={`sidebar-item ${tab === "databases" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("databases")}
         >
-          🗄️ 資料庫連線
+          🗄️ {t.db_connections}
         </button>
 
         <div className="sidebar-spacer" />
 
         <button className="sidebar-back" onClick={() => navigate("/")}>
-          ← 回到終端機
+          {t.back_to_terminal}
         </button>
       </nav>
 
       {/* Content */}
       <main className="settings-content">
-        {tab === "providers" && <ProvidersPage />}
         {tab === "general" && <GeneralPage />}
+        {tab === "providers" && <ProvidersPage />}
         {tab === "databases" && <DatabaseConnectionsPage />}
       </main>
     </div>

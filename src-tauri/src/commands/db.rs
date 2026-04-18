@@ -318,3 +318,57 @@ pub async fn db_execute_query(
         .await
         .map_err(|e| e.to_string())
 }
+
+/// Preview table data with correct paging SQL for each database dialect.
+#[tauri::command]
+pub async fn db_preview_table(
+    connection_id: String,
+    schema: String,
+    table: String,
+    page: u32,
+    page_size: u32,
+    config: State<'_, Arc<ConfigStore>>,
+    manager: State<'_, DbManager>,
+) -> Result<QueryResult, String> {
+    let conn = config
+        .get()
+        .db_connections
+        .into_iter()
+        .find(|c| c.id == connection_id)
+        .ok_or_else(|| format!("connection not found: {connection_id}"))?;
+
+    let offset = page * page_size;
+
+    let sql = match conn.db_type {
+        DbType::Mssql => {
+            // MSSQL uses bracket quoting and OFFSET/FETCH (SQL Server 2012+)
+            format!(
+                "SELECT * FROM [{schema}].[{table}] ORDER BY (SELECT NULL) OFFSET {offset} ROWS FETCH NEXT {page_size} ROWS ONLY"
+            )
+        }
+        DbType::Db2 => {
+            // DB2 uses FETCH FIRST; offset requires ROW_NUMBER
+            if offset == 0 {
+                format!(
+                    "SELECT * FROM \"{schema}\".\"{table}\" FETCH FIRST {page_size} ROWS ONLY"
+                )
+            } else {
+                format!(
+                    "SELECT * FROM (SELECT t.*, ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn__ FROM \"{schema}\".\"{table}\" t) r WHERE rn__ > {offset} AND rn__ <= {}",
+                    offset + page_size
+                )
+            }
+        }
+        // PostgreSQL, MySQL, SQLite all support LIMIT/OFFSET
+        _ => {
+            format!(
+                "SELECT * FROM \"{schema}\".\"{table}\" LIMIT {page_size} OFFSET {offset}"
+            )
+        }
+    };
+
+    manager
+        .execute(&connection_id, &sql)
+        .await
+        .map_err(|e| e.to_string())
+}

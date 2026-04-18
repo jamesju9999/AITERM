@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-import { dbListTables, dbGetTableSchema, dbExecuteQuery, TableInfo, ColumnInfo, QueryResult } from "../../ipc/db";
+import { dbListTables, dbGetTableSchema, dbPreviewTable, type TableInfo, type ColumnInfo, type QueryResult } from "../../ipc/db";
 
 interface Props {
   connectionId: string;
@@ -36,7 +36,7 @@ export function DatabaseBrowser({ connectionId, schema }: Props) {
     setLoading(true);
     try {
       if (viewMode === "data") {
-        const result = await dbExecuteQuery(connectionId, `SELECT * FROM "${schema}"."${name}" LIMIT ${PAGE_SIZE} OFFSET 0`);
+        const result = await dbPreviewTable(connectionId, schema, name, 0, PAGE_SIZE);
         setQueryResult(result);
       } else {
         const cols = await dbGetTableSchema(connectionId, schema, name);
@@ -55,7 +55,7 @@ export function DatabaseBrowser({ connectionId, schema }: Props) {
     setLoading(true);
     try {
       if (mode === "data") {
-        const result = await dbExecuteQuery(connectionId, `SELECT * FROM "${schema}"."${selectedTable}" LIMIT ${PAGE_SIZE} OFFSET ${page * PAGE_SIZE}`);
+        const result = await dbPreviewTable(connectionId, schema, selectedTable, page, PAGE_SIZE);
         setQueryResult(result);
       } else {
         const cols = await dbGetTableSchema(connectionId, schema, selectedTable);
@@ -73,7 +73,7 @@ export function DatabaseBrowser({ connectionId, schema }: Props) {
     setPage(newPage);
     setLoading(true);
     try {
-      const result = await dbExecuteQuery(connectionId, `SELECT * FROM "${schema}"."${selectedTable}" LIMIT ${PAGE_SIZE} OFFSET ${newPage * PAGE_SIZE}`);
+      const result = await dbPreviewTable(connectionId, schema, selectedTable, newPage, PAGE_SIZE);
       setQueryResult(result);
     } catch (e: unknown) {
       setError(String(e));
@@ -83,7 +83,7 @@ export function DatabaseBrowser({ connectionId, schema }: Props) {
   };
 
   return (
-    <div style={{ display: "flex", height: "100%", overflow: "hidden" }}>
+    <div style={{ display: "flex", height: "100%", flex: 1, minWidth: 0, overflow: "hidden" }}>
       {/* Object tree */}
       <div style={{ width: 200, flexShrink: 0, background: "#111", borderRight: "1px solid #1e1e1e", overflowY: "auto", padding: "8px 0" }}>
         <div style={{ color: "#666", fontSize: 10, letterSpacing: 1, padding: "4px 12px", marginBottom: 4 }}>TABLES</div>

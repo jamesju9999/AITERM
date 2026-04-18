@@ -1,0 +1,216 @@
+export type Locale = "zh-TW" | "en";
+
+export const LOCALE_STORAGE_KEY = "aiterm_locale";
+
+export const translations = {
+  "zh-TW": {
+    // Settings sidebar
+    settings_title: "設定",
+    general: "一般",
+    ai_providers: "AI 供應商",
+    db_connections: "資料庫連線",
+    back_to_terminal: "← 回到終端機",
+
+    // Main app / TabBar
+    settings: "設定",
+    terminal_tab: "終端機",
+    files_tab: "檔案",
+    database_tab: "資料庫",
+    new_terminal_desc: "開啟新 Shell Session",
+    new_database_desc: "連接資料庫並瀏覽",
+    input_placeholder: (key: string) =>
+      `輸入指令... (${key} 送出，按 ↑ 檢視歷史)`,
+
+    // DatabaseConnectionsPage
+    add_connection: "+ 新增連線",
+    no_connections: "尚無資料庫連線。點擊「+ 新增連線」開始。",
+    connected: "● 已連線",
+    edit: "編輯",
+    delete: "刪除",
+    confirm_delete: "確定刪除此連線？",
+    edit_connection: "編輯連線",
+    new_connection: "新增連線",
+    name: "名稱",
+    type: "類型",
+    file_path: "檔案路徑",
+    host: "Host",
+    port: "Port",
+    database: "Database",
+    username: "Username",
+    password: "Password",
+    password_placeholder: "留空表示不變更",
+    test_connection: "測試連線",
+    testing: "測試中...",
+    cancel: "取消",
+    save: "儲存",
+    saving_btn: "儲存中...",
+    connection_success: "連線成功",
+    db2_warning_line1: "⚠️ DB2 需要 IBM DB2 ODBC Driver。Windows / macOS: 安裝 IBM Data Server Driver Package。",
+    db2_warning_line2: "Host 欄位請填寫 DSN 名稱或完整 ODBC 連線字串。",
+
+    // GeneralPage
+    general_settings: "一般設定",
+    execution_mode: "執行模式",
+    execution_mode_desc: "決定 AI 產出的命令如何被執行。",
+    mode_always_confirm_label: "一律確認",
+    mode_always_confirm_desc: "所有 AI 產出的命令都顯示預覽框，需明確確認才執行（預設）。",
+    mode_graded_label: "分級自動",
+    mode_graded_desc: "Safe 命令自動執行；NeedsConfirm / Dangerous 仍顯示確認框。",
+    mode_full_auto_label: "全自動 Agent",
+    mode_full_auto_desc: "Safe 與 NeedsConfirm 自動執行；Dangerous 仍強制確認。",
+    agent_max_steps: "Agent 自動迭代上限",
+    agent_max_steps_desc: "設定 AI Agent 在自動模式下最多執行幾輪指令。設為「無限制」時，Agent 會一直執行直到 AI 回傳完成或您手動中斷。",
+    steps_unlimited: "無限制 ⚠️",
+    steps_unlimited_warning: "⚠️ 無限制模式可能消耗較多 API 額度，請謹慎使用。",
+    steps_n: (n: number) => n === 5 ? `${n} 次（預設）` : `${n} 次`,
+    submit_shortcut: "輸入組合鍵",
+    submit_shortcut_desc: "決定底部輸入框以哪個組合鍵送出指令。",
+    shortcut_enter_desc: "按下 Enter 鍵送出指令，Shift+Enter 換行。",
+    shortcut_shift_enter_desc: "按下 Shift+Enter 送出指令，直接按 Enter 換行。",
+    shortcut_ctrl_enter_desc: "按下 Ctrl+Enter 送出指令，直接按 Enter 換行。",
+    saving_indicator: "儲存中…",
+    language: "語言",
+    language_desc: "選擇介面顯示語言。",
+
+    // ProvidersPage
+    add_provider: "+ 新增供應商",
+    no_providers: "尚未設定任何供應商。點擊「新增供應商」開始設定。",
+    provider_default_badge: "預設",
+    provider_test: "測試",
+    provider_testing: "測試中…",
+    provider_test_ok: "✓ 連線成功",
+    provider_set_default: "設為預設",
+    provider_remove: "移除",
+    confirm_remove_provider: (id: string) => `確定移除供應商「${id}」嗎？`,
+
+    // ProviderForm
+    edit_provider: "編輯供應商",
+    new_provider: "新增供應商",
+    provider_type: "類型",
+    provider_display_name: "顯示名稱",
+    provider_api_key: "API Key",
+    provider_api_key_optional: "API Key（選填）",
+    provider_api_key_placeholder_new: "貼上你的 API Key",
+    provider_api_key_placeholder_edit: "留空則不更新",
+    provider_base_url: "Base URL",
+    provider_model: "Model",
+    provider_json_mode: "支援 JSON Mode（response_format: json_object）",
+    provider_ollama_loading: "載入中...",
+    provider_ollama_fallback_placeholder: "llama3.1:8b（Ollama 未連線，手動輸入）",
+    err_id_empty: "ID 不可為空",
+    err_name_empty: "名稱不可為空",
+    err_model_empty: "Model 不可為空",
+    err_base_url_required: "OpenAI-Compatible 需要填入 Base URL",
+    err_save_failed: "儲存失敗，請重試",
+  },
+  "en": {
+    // Settings sidebar
+    settings_title: "Settings",
+    general: "General",
+    ai_providers: "AI Providers",
+    db_connections: "Database Connections",
+    back_to_terminal: "← Back to Terminal",
+
+    // Main app / TabBar
+    settings: "Settings",
+    terminal_tab: "Terminal",
+    files_tab: "Files",
+    database_tab: "Database",
+    new_terminal_desc: "Open a new shell session",
+    new_database_desc: "Connect to a database and browse",
+    input_placeholder: (key: string) =>
+      `Enter command... (${key} to submit, ↑ for history)`,
+
+    // DatabaseConnectionsPage
+    add_connection: "+ New Connection",
+    no_connections: "No database connections. Click \"+ New Connection\" to start.",
+    connected: "● Connected",
+    edit: "Edit",
+    delete: "Delete",
+    confirm_delete: "Delete this connection?",
+    edit_connection: "Edit Connection",
+    new_connection: "New Connection",
+    name: "Name",
+    type: "Type",
+    file_path: "File Path",
+    host: "Host",
+    port: "Port",
+    database: "Database",
+    username: "Username",
+    password: "Password",
+    password_placeholder: "Leave blank to keep unchanged",
+    test_connection: "Test Connection",
+    testing: "Testing...",
+    cancel: "Cancel",
+    save: "Save",
+    saving_btn: "Saving...",
+    connection_success: "Connection successful",
+    db2_warning_line1: "⚠️ DB2 requires IBM DB2 ODBC Driver. Windows / macOS: Install IBM Data Server Driver Package.",
+    db2_warning_line2: "Enter the DSN name or full ODBC connection string in the Host field.",
+
+    // GeneralPage
+    general_settings: "General Settings",
+    execution_mode: "Execution Mode",
+    execution_mode_desc: "Determines how AI-generated commands are executed.",
+    mode_always_confirm_label: "Always Confirm",
+    mode_always_confirm_desc: "All AI-generated commands show a preview box and require explicit confirmation before executing (default).",
+    mode_graded_label: "Graded Auto",
+    mode_graded_desc: "Safe commands run automatically; NeedsConfirm / Dangerous still show a confirmation box.",
+    mode_full_auto_label: "Full Auto Agent",
+    mode_full_auto_desc: "Safe and NeedsConfirm run automatically; Dangerous still requires confirmation.",
+    agent_max_steps: "Agent Max Iterations",
+    agent_max_steps_desc: "Sets the maximum number of command rounds the AI Agent runs in auto mode. When set to \"Unlimited\", the Agent runs until the AI signals completion or you stop it manually.",
+    steps_unlimited: "Unlimited ⚠️",
+    steps_unlimited_warning: "⚠️ Unlimited mode may consume more API quota — use with caution.",
+    steps_n: (n: number) => n === 5 ? `${n} (default)` : `${n}`,
+    submit_shortcut: "Submit Shortcut",
+    submit_shortcut_desc: "Determines which key combination submits commands in the input box.",
+    shortcut_enter_desc: "Press Enter to submit; Shift+Enter for a new line.",
+    shortcut_shift_enter_desc: "Press Shift+Enter to submit; Enter alone for a new line.",
+    shortcut_ctrl_enter_desc: "Press Ctrl+Enter to submit; Enter alone for a new line.",
+    saving_indicator: "Saving…",
+    language: "Language",
+    language_desc: "Select the display language for the interface.",
+
+    // ProvidersPage
+    add_provider: "+ Add Provider",
+    no_providers: "No providers configured. Click \"Add Provider\" to get started.",
+    provider_default_badge: "Default",
+    provider_test: "Test",
+    provider_testing: "Testing…",
+    provider_test_ok: "✓ Connected",
+    provider_set_default: "Set Default",
+    provider_remove: "Remove",
+    confirm_remove_provider: (id: string) => `Remove provider "${id}"?`,
+
+    // ProviderForm
+    edit_provider: "Edit Provider",
+    new_provider: "New Provider",
+    provider_type: "Type",
+    provider_display_name: "Display Name",
+    provider_api_key: "API Key",
+    provider_api_key_optional: "API Key (optional)",
+    provider_api_key_placeholder_new: "Paste your API key",
+    provider_api_key_placeholder_edit: "Leave blank to keep unchanged",
+    provider_base_url: "Base URL",
+    provider_model: "Model",
+    provider_json_mode: "Supports JSON Mode (response_format: json_object)",
+    provider_ollama_loading: "Loading...",
+    provider_ollama_fallback_placeholder: "llama3.1:8b (Ollama not connected, type manually)",
+    err_id_empty: "ID cannot be empty",
+    err_name_empty: "Name cannot be empty",
+    err_model_empty: "Model cannot be empty",
+    err_base_url_required: "Base URL is required for OpenAI-Compatible providers",
+    err_save_failed: "Save failed, please try again",
+  },
+} as const;
+
+export type TranslationKey = keyof typeof translations["zh-TW"];
+
+// Structural type: string literals become string, functions keep their shape.
+type Literalize<T> = T extends (...args: infer A) => string
+  ? (...args: A) => string
+  : string;
+export type Translations = {
+  [K in keyof typeof translations["zh-TW"]]: Literalize<typeof translations["zh-TW"][K]>;
+};

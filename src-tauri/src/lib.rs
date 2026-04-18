@@ -15,7 +15,7 @@ use commands::{
     db::{
         db_add_connection, db_connect, db_disconnect, db_execute_query,
         db_get_table_schema, db_list_connections, db_list_schemas,
-        db_list_tables, db_remove_connection, db_test_connection, db_update_connection,
+        db_list_tables, db_preview_table, db_remove_connection, db_test_connection, db_update_connection,
     },
     provider::{
         add_provider, get_ollama_models, list_providers, remove_provider, set_default_provider,
@@ -83,6 +83,7 @@ pub fn run() {
             db_list_schemas,
             db_list_tables,
             db_get_table_schema,
+            db_preview_table,
             db_execute_query,
         ])
         .run(tauri::generate_context!())

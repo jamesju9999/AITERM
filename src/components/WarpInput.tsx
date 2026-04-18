@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { SubmitShortcut } from "../ipc/config";
+import { useLocale } from "../contexts/LocaleContext";
 import "./WarpInput.css";
 
 export interface WarpInputProps {
@@ -15,6 +16,7 @@ const STORAGE_KEY = "aiterm-command-history";
  * Supports syntax highlighting (via future extension), multiline editing, etc.
  */
 export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputProps) {
+  const { t } = useLocale();
   const [value, setValue] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -177,7 +179,7 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
         value={value}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
-        placeholder={`輸入指令... (${shortcut === "enter" ? "Enter" : shortcut === "shift-enter" ? "Shift+Enter" : "Ctrl+Enter"} 送出，按 ↑ 檢視歷史)`}
+        placeholder={t.input_placeholder(shortcut === "enter" ? "Enter" : shortcut === "shift-enter" ? "Shift+Enter" : "Ctrl+Enter")}
         rows={1}
         disabled={disabled}
       />

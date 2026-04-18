@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useLocale } from "../../contexts/LocaleContext";
 import "./index.css";
 
 interface Props {
@@ -8,6 +9,7 @@ interface Props {
 
 export function NewTabPicker({ onSelect, onClose }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+  const { t } = useLocale();
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -32,8 +34,8 @@ export function NewTabPicker({ onSelect, onClose }: Props) {
       >
         <span className="new-tab-picker__icon">⬛</span>
         <div>
-          <div className="new-tab-picker__label">終端機</div>
-          <div className="new-tab-picker__desc">開啟新 Shell Session</div>
+          <div className="new-tab-picker__label">{t.terminal_tab}</div>
+          <div className="new-tab-picker__desc">{t.new_terminal_desc}</div>
         </div>
       </button>
       <button
@@ -42,8 +44,8 @@ export function NewTabPicker({ onSelect, onClose }: Props) {
       >
         <span className="new-tab-picker__icon">🗄️</span>
         <div>
-          <div className="new-tab-picker__label">資料庫</div>
-          <div className="new-tab-picker__desc">連接資料庫並瀏覽</div>
+          <div className="new-tab-picker__label">{t.database_tab}</div>
+          <div className="new-tab-picker__desc">{t.new_database_desc}</div>
         </div>
       </button>
     </div>

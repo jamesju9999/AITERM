@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use std::sync::Arc;
-use tiberius::{AuthMethod, Client, Config, Row};
+use tiberius::{AuthMethod, Client, Config, EncryptionLevel, Row};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
@@ -22,6 +22,7 @@ impl MssqlAdapter {
         config.database(database);
         config.authentication(AuthMethod::sql_server(username, password));
         config.trust_cert(); // Accept self-signed certs; adjust for production
+        config.encryption(EncryptionLevel::NotSupported); // Allow unencrypted connections (e.g. Docker)
 
         let tcp = TcpStream::connect(config.get_addr())
             .await
