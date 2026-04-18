@@ -45,6 +45,15 @@
   color: #aaa;
 }
 
+.aiterm-status-provider--empty {
+  color: #555;
+  font-style: italic;
+}
+
+.aiterm-status-provider--empty:hover {
+  color: #888;
+}
+
 .aiterm-settings-btn {
   background: transparent;
   border: none;
