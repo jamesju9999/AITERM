@@ -36,6 +36,10 @@ pub struct AppConfig {
     /// Saved database connections (passwords stored separately in Keychain).
     #[serde(default)]
     pub db_connections: Vec<DbConnection>,
+
+    /// Which tab type to open automatically when the app starts.
+    #[serde(default)]
+    pub default_tab: DefaultTab,
 }
 
 fn default_max_agent_steps() -> u32 { 5 }
@@ -129,6 +133,17 @@ pub enum ExecutionMode {
     Graded,
     /// Safe + NeedsConfirm execute automatically; Dangerous still requires confirmation.
     FullAuto,
+}
+
+/// Which tab the app opens on startup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DefaultTab {
+    /// Open a terminal session (default).
+    #[default]
+    Terminal,
+    /// Open the database browser.
+    Database,
 }
 
 /// Keyboard shortcut choice for submitting commands in the terminal block interface.

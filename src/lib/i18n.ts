@@ -71,6 +71,8 @@ export const translations = {
     saving_indicator: "儲存中…",
     language: "語言",
     language_desc: "選擇介面顯示語言。",
+    default_tab: "預設開啟頁面",
+    default_tab_desc: "應用程式啟動時自動開啟的頁面類型。",
 
     // ProvidersPage
     add_provider: "+ 新增供應商",
@@ -171,6 +173,8 @@ export const translations = {
     saving_indicator: "Saving…",
     language: "Language",
     language_desc: "Select the display language for the interface.",
+    default_tab: "Default startup tab",
+    default_tab_desc: "Tab type that opens automatically when the app starts.",
 
     // ProvidersPage
     add_provider: "+ Add Provider",

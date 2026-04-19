@@ -1,17 +1,19 @@
 import { useState, useEffect } from "react";
-import { getConfig, setExecutionMode, setSubmitShortcut, setMaxAgentSteps } from "../../ipc/config";
-import type { ExecutionMode, SubmitShortcut } from "../../ipc/config";
+import { getConfig, setExecutionMode, setSubmitShortcut, setMaxAgentSteps, setDefaultTab } from "../../ipc/config";
+import type { ExecutionMode, SubmitShortcut, DefaultTab } from "../../ipc/config";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { Locale } from "../../lib/i18n";
 import "./GeneralPage.css";
 
 const STEP_VALUES = [5, 10, 20, 50, 100, 0];
+const DEFAULT_TAB_STORAGE_KEY = "aiterm_default_tab";
 
 export function GeneralPage() {
   const { t, locale, setLocale } = useLocale();
   const [mode, setMode] = useState<ExecutionMode>("always-confirm");
   const [shortcut, setShortcut] = useState<SubmitShortcut>("enter");
   const [maxSteps, setMaxSteps] = useState<number>(5);
+  const [defaultTab, setDefaultTabState] = useState<DefaultTab>("terminal");
   const [saving, setSaving] = useState(false);
 
   const MODES: { value: ExecutionMode; label: string; desc: string }[] = [
@@ -31,6 +33,7 @@ export function GeneralPage() {
       setMode(cfg.execution_mode);
       setShortcut(cfg.submit_shortcut);
       setMaxSteps(cfg.max_agent_steps ?? 5);
+      setDefaultTabState(cfg.default_tab ?? "terminal");
     });
   }, []);
 
@@ -52,6 +55,14 @@ export function GeneralPage() {
     try { await setMaxAgentSteps(newSteps); } finally { setSaving(false); }
   };
 
+  const handleDefaultTabChange = async (tab: DefaultTab) => {
+    setDefaultTabState(tab);
+    // Cache synchronously in localStorage so TerminalApp reads it at next startup
+    localStorage.setItem(DEFAULT_TAB_STORAGE_KEY, tab);
+    setSaving(true);
+    try { await setDefaultTab(tab); } finally { setSaving(false); }
+  };
+
   return (
     <div className="general-page">
       <h2>{t.general_settings}</h2>
@@ -71,6 +82,31 @@ export function GeneralPage() {
               />
               <div className="mode-text">
                 <span className="mode-label">{l === "zh-TW" ? "繁體中文" : "English"}</span>
+              </div>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3>{t.default_tab}</h3>
+        <p className="section-desc">{t.default_tab_desc}</p>
+        <div className="mode-list">
+          {([
+            { value: "terminal" as DefaultTab, label: t.terminal_tab },
+            { value: "database" as DefaultTab, label: t.database_tab },
+          ]).map((opt) => (
+            <label key={opt.value} className="mode-option">
+              <input
+                type="radio"
+                name="default_tab"
+                value={opt.value}
+                checked={defaultTab === opt.value}
+                onChange={() => handleDefaultTabChange(opt.value)}
+                disabled={saving}
+              />
+              <div className="mode-text">
+                <span className="mode-label">{opt.label}</span>
               </div>
             </label>
           ))}
