@@ -43,34 +43,92 @@
   border: 1px solid #333;
   border-bottom: none;
   border-radius: 8px 8px 0 0;
-  max-height: 300px;
-  overflow-y: auto;
+  max-height: 340px;
   display: flex;
   flex-direction: column;
   z-index: 100;
   box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.5);
-  padding: 4px 0;
+}
+
+.warp-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 14px;
+  border-bottom: 1px solid #2a2a2a;
+  flex-shrink: 0;
+}
+
+.warp-history-title {
+  font-size: 11px;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.warp-history-clear-all {
+  background: transparent;
+  border: none;
+  color: #555;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.warp-history-clear-all:hover {
+  color: #f87171;
+  background: #2a1a1a;
+}
+
+.warp-history-items {
+  overflow-y: auto;
+  flex: 1;
 }
 
 .warp-history-item {
-  padding: 8px 16px;
+  padding: 7px 14px;
   color: #ccc;
   font-size: 13px;
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .warp-history-item .warp-history-prefix {
   color: #4CAF50;
   font-weight: bold;
+  flex-shrink: 0;
 }
 
 .warp-history-item .warp-history-text {
   flex: 1;
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.warp-history-delete {
+  background: transparent;
+  border: none;
+  color: transparent;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.warp-history-item:hover .warp-history-delete,
+.warp-history-item.selected .warp-history-delete {
+  color: #666;
+}
+
+.warp-history-delete:hover {
+  color: #f87171 !important;
+  background: #2a1a1a;
 }
 
 .warp-history-item:hover,

@@ -23,15 +23,37 @@ interface Message {
   // Agentic: intermediate SQL steps + final answer
   steps?: AgentStep[];
   agentRunning?: boolean;
-  agentStepLabel?: string; // e.g. "思考中... (步驟 2/5)"
+  agentStepLabel?: string;
+}
+
+interface SavedSession {
+  id: string;
+  title: string;
+  messages: Message[];
+  savedAt: number;
+}
+
+function chatStorageKey(connectionId: string) {
+  return `aiterm-db-chat-history-${connectionId}`;
+}
+
+function loadSessions(connectionId: string): SavedSession[] {
+  try {
+    const raw = localStorage.getItem(chatStorageKey(connectionId));
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSessions(connectionId: string, sessions: SavedSession[]) {
+  localStorage.setItem(chatStorageKey(connectionId), JSON.stringify(sessions.slice(-50)));
 }
 
 function extractSql(text: string): string | null {
-  // Primary: ```sql ... ```
   const sqlBlock = text.match(/```sql\s*([\s\S]*?)```/i);
   if (sqlBlock) return sqlBlock[1].trim();
 
-  // Fallback: ```json { "sql": "..." } ``` (some models use structured output)
   const jsonBlock = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/i);
   if (jsonBlock) {
     try {
@@ -40,7 +62,6 @@ function extractSql(text: string): string | null {
     } catch { /* not valid JSON */ }
   }
 
-  // Fallback: bare JSON object with a "sql" key
   const bareJson = text.match(/\{[\s\S]*?"sql"\s*:\s*"([\s\S]*?)"[\s\S]*?\}/);
   if (bareJson) {
     try {
@@ -62,6 +83,11 @@ function formatResultForAi(result: QueryResult): string {
   return `${header}\n${rows.join("\n")}${suffix}`;
 }
 
+function formatDate(ts: number): string {
+  const d = new Date(ts);
+  return d.toLocaleDateString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 export function DatabaseAiChat({ connectionId, schema }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -69,8 +95,11 @@ export function DatabaseAiChat({ connectionId, schema }: Props) {
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState<string>("");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [sessions, setSessions] = useState<SavedSession[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const stoppedRef = useRef(false);
+  const currentSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (schema) {
@@ -85,6 +114,10 @@ export function DatabaseAiChat({ connectionId, schema }: Props) {
       if (def) setSelectedProviderId(def.id);
     }).catch(console.error);
   }, []);
+
+  useEffect(() => {
+    setSessions(loadSessions(connectionId));
+  }, [connectionId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -110,6 +143,17 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
     });
   };
 
+  /** Auto-save/update the current session to localStorage */
+  const persistSession = (msgs: Message[], sessionId: string, title: string) => {
+    const updated: SavedSession = { id: sessionId, title, messages: msgs, savedAt: Date.now() };
+    setSessions((prev) => {
+      const others = prev.filter((s) => s.id !== sessionId);
+      const next = [...others, updated];
+      saveSessions(connectionId, next);
+      return next;
+    });
+  };
+
   const send = async () => {
     if (!input.trim() || sending) return;
     const userMsg = input.trim();
@@ -117,7 +161,13 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
     setSending(true);
     stoppedRef.current = false;
 
-    // Conversation history for AI (role+text only, excluding intermediate step messages)
+    // Start a new session if this is the first message
+    if (!currentSessionIdRef.current) {
+      currentSessionIdRef.current = crypto.randomUUID();
+    }
+    const sessionId = currentSessionIdRef.current;
+    const sessionTitle = userMsg.length > 40 ? userMsg.slice(0, 40) + "…" : userMsg;
+
     const historyForAi = messages
       .filter((m) => !m.agentRunning)
       .map((m) => ({ role: m.role, content: m.text }));
@@ -130,10 +180,10 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
       agentRunning: true,
       agentStepLabel: "思考中...",
     };
-    setMessages((prev) => [...prev, userMessage, assistantMessage]);
 
-    // Running AI loop conversation: prior history + new user message, then interleaved results
-    // Structure: [...historyForAi, { role: "user", userMsg }, { role: "assistant", reply }, { role: "user", result }, ...]
+    const nextMessages = [...messages, userMessage, assistantMessage];
+    setMessages(nextMessages);
+
     const loopHistory: { role: "user" | "assistant"; content: string }[] = [
       ...historyForAi,
       { role: "user", content: userMsg },
@@ -141,12 +191,22 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
 
     try {
       let stepCount = 0;
+      let finalMessages = nextMessages;
+
+      const updateAndPersist = (updater: (m: Message) => Message) => {
+        setMessages((prev) => {
+          const copy = [...prev];
+          copy[copy.length - 1] = updater(copy[copy.length - 1]);
+          finalMessages = copy;
+          persistSession(copy, sessionId, sessionTitle);
+          return copy;
+        });
+      };
 
       while (stepCount < MAX_STEPS && !stoppedRef.current) {
         const stepLabel = `思考中... (步驟 ${stepCount + 1}/${MAX_STEPS})`;
         updateLastMsg((m) => ({ ...m, agentStepLabel: stepLabel }));
 
-        // Last item in loopHistory is always a "user" message; pass it as the message argument
         const lastUserContent = loopHistory[loopHistory.length - 1].content;
         const reply = await aiChat(
           lastUserContent,
@@ -160,8 +220,7 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
         const sql = extractSql(reply);
 
         if (!sql) {
-          // Final answer — no SQL in response
-          updateLastMsg((m) => ({
+          updateAndPersist((m) => ({
             ...m,
             text: reply,
             agentRunning: false,
@@ -170,14 +229,12 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
           break;
         }
 
-        // Add this step
         const stepIndex = stepCount;
         updateLastMsg((m) => ({
           ...m,
           steps: [...(m.steps ?? []), { sql, executing: true, collapsed: false }],
         }));
 
-        // Execute SQL
         let result: QueryResult;
         try {
           result = await dbExecuteQuery(connectionId, sql);
@@ -194,7 +251,6 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
           ),
         }));
 
-        // Feed result back into conversation
         loopHistory.push({ role: "assistant", content: reply });
         loopHistory.push({
           role: "user",
@@ -204,7 +260,6 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
         stepCount++;
 
         if (stepCount >= MAX_STEPS) {
-          // Force a final summary
           updateLastMsg((m) => ({ ...m, agentStepLabel: "整理答案中..." }));
           const summary = await aiChat(
             "請根據以上查詢結果，用繁體中文給出最終完整答案，不要再提供 SQL。",
@@ -212,7 +267,7 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
             loopHistory,
             selectedProviderId || undefined,
           );
-          updateLastMsg((m) => ({
+          updateAndPersist((m) => ({
             ...m,
             text: summary,
             agentRunning: false,
@@ -222,13 +277,15 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
       }
 
       if (stoppedRef.current) {
-        updateLastMsg((m) => ({
+        updateAndPersist((m) => ({
           ...m,
           text: m.text || "（已停止）",
           agentRunning: false,
           agentStepLabel: undefined,
         }));
       }
+
+      void finalMessages; // suppress unused warning
     } catch (e: unknown) {
       updateLastMsg((m) => ({
         ...m,
@@ -241,91 +298,192 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
     }
   };
 
-  const stop = () => {
-    stoppedRef.current = true;
+  const stop = () => { stoppedRef.current = true; };
+
+  const loadSession = (session: SavedSession) => {
+    setMessages(session.messages);
+    currentSessionIdRef.current = session.id;
+    setHistoryOpen(false);
+  };
+
+  const deleteSession = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSessions((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      saveSessions(connectionId, next);
+      return next;
+    });
+    if (currentSessionIdRef.current === id) {
+      setMessages([]);
+      currentSessionIdRef.current = null;
+    }
+  };
+
+  const newChat = () => {
+    setMessages([]);
+    currentSessionIdRef.current = null;
+    setHistoryOpen(false);
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", flex: 1, minWidth: 0 }}>
-      <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-        {messages.length === 0 && (
-          <div style={{ color: "#555", fontSize: 13, padding: "20px 0" }}>
-            用自然語言描述你想查詢的資料，例如：「查詢最近 10 筆訂單」
+    <div style={{ display: "flex", height: "100%", flex: 1, minWidth: 0, position: "relative" }}>
+      {/* History side panel */}
+      {historyOpen && (
+        <div style={{
+          width: 240, borderRight: "1px solid #1e1e1e", background: "#0e0e0e",
+          display: "flex", flexDirection: "column", flexShrink: 0,
+        }}>
+          <div style={{ padding: "8px 12px", borderBottom: "1px solid #1e1e1e", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ fontSize: 11, color: "#555", textTransform: "uppercase", letterSpacing: "0.05em" }}>對話歷史</span>
+            <button
+              onClick={newChat}
+              style={{ background: "#1a2a1e", border: "1px solid #2d4a35", color: "#4ade80", fontSize: 10, borderRadius: 4, padding: "2px 8px", cursor: "pointer" }}
+            >
+              ＋ 新對話
+            </button>
           </div>
-        )}
-        {messages.map((msg, i) => (
-          <MessageBubble
-            key={i}
-            msg={msg}
-            onToggleStep={(stepIdx) => {
-              setMessages((prev) =>
-                prev.map((m, mi) =>
-                  mi !== i ? m : {
-                    ...m,
-                    steps: (m.steps ?? []).map((s, si) =>
-                      si === stepIdx ? { ...s, collapsed: !s.collapsed } : s
-                    ),
-                  }
-                )
-              );
+          <div style={{ flex: 1, overflowY: "auto" }}>
+            {sessions.length === 0 && (
+              <div style={{ color: "#444", fontSize: 12, padding: "16px 12px" }}>尚無歷史記錄</div>
+            )}
+            {[...sessions].reverse().map((s) => (
+              <div
+                key={s.id}
+                onClick={() => loadSession(s)}
+                style={{
+                  padding: "8px 12px", cursor: "pointer", borderBottom: "1px solid #161616",
+                  display: "flex", alignItems: "flex-start", gap: 6,
+                  background: currentSessionIdRef.current === s.id ? "#1a2030" : "transparent",
+                }}
+                onMouseEnter={(e) => { if (currentSessionIdRef.current !== s.id) (e.currentTarget as HTMLDivElement).style.background = "#161616"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = currentSessionIdRef.current === s.id ? "#1a2030" : "transparent"; }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: "#ccc", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title}</div>
+                  <div style={{ fontSize: 10, color: "#444", marginTop: 2 }}>{formatDate(s.savedAt)}</div>
+                </div>
+                <button
+                  onClick={(e) => deleteSession(s.id, e)}
+                  title="刪除此對話"
+                  style={{ background: "transparent", border: "none", color: "transparent", fontSize: 13, cursor: "pointer", padding: "0 2px", borderRadius: 3, flexShrink: 0 }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#f87171"; (e.currentTarget as HTMLButtonElement).style.background = "#2a1a1a"; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "transparent"; (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Main chat area */}
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+          {messages.length === 0 && (
+            <div style={{ color: "#555", fontSize: 13, padding: "20px 0" }}>
+              用自然語言描述你想查詢的資料，例如：「查詢最近 10 筆訂單」
+            </div>
+          )}
+          {messages.map((msg, i) => (
+            <MessageBubble
+              key={i}
+              msg={msg}
+              onToggleStep={(stepIdx) => {
+                setMessages((prev) =>
+                  prev.map((m, mi) =>
+                    mi !== i ? m : {
+                      ...m,
+                      steps: (m.steps ?? []).map((s, si) =>
+                        si === stepIdx ? { ...s, collapsed: !s.collapsed } : s
+                      ),
+                    }
+                  )
+                );
+              }}
+            />
+          ))}
+          <div ref={bottomRef} />
+        </div>
+
+        {/* Toolbar: provider selector + history toggle */}
+        <div style={{ borderTop: "1px solid #1e1e1e", padding: "6px 12px", display: "flex", alignItems: "center", gap: 8, background: "#111" }}>
+          <span style={{ fontSize: 11, color: "#555", flexShrink: 0 }}>模型</span>
+          <select
+            value={selectedProviderId}
+            onChange={(e) => setSelectedProviderId(e.target.value)}
+            style={{
+              background: "#0c0c0c", border: "1px solid #2a2a2a", color: "#aaa",
+              borderRadius: 4, padding: "2px 6px", fontSize: 11, cursor: "pointer", outline: "none",
+            }}
+          >
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.display_name} ({p.model}){p.is_default ? " ★" : ""}
+              </option>
+            ))}
+            {providers.length === 0 && <option value="">（未設定）</option>}
+          </select>
+          <div style={{ flex: 1 }} />
+          <button
+            onClick={() => setHistoryOpen((o) => !o)}
+            title="對話歷史"
+            style={{
+              background: historyOpen ? "#1a2030" : "transparent",
+              border: "1px solid " + (historyOpen ? "#3b5bdb" : "#2a2a2a"),
+              color: historyOpen ? "#74b9ff" : "#555",
+              borderRadius: 4, padding: "2px 8px", fontSize: 11, cursor: "pointer",
+            }}
+          >
+            🕐 歷史
+          </button>
+          {messages.length > 0 && (
+            <button
+              onClick={newChat}
+              title="開始新對話"
+              style={{
+                background: "transparent", border: "1px solid #2a2a2a", color: "#555",
+                borderRadius: 4, padding: "2px 8px", fontSize: 11, cursor: "pointer",
+              }}
+            >
+              ＋ 新對話
+            </button>
+          )}
+        </div>
+
+        {/* Input bar */}
+        <div style={{ borderTop: "1px solid #1e1e1e", padding: "10px 12px", display: "flex", gap: 8, alignItems: "flex-end", background: "#111" }}>
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+            }}
+            placeholder="用自然語言描述查詢... (Enter 送出)"
+            rows={2}
+            style={{
+              flex: 1, background: "#0c0c0c", border: "1px solid #2a2a2a", color: "#e6e6e6",
+              borderRadius: 6, padding: "8px 10px", fontSize: 13, resize: "none", outline: "none",
+              fontFamily: "inherit",
             }}
           />
-        ))}
-        <div ref={bottomRef} />
-      </div>
-
-      {/* Provider selector */}
-      <div style={{ borderTop: "1px solid #1e1e1e", padding: "6px 12px", display: "flex", alignItems: "center", gap: 8, background: "#111" }}>
-        <span style={{ fontSize: 11, color: "#555", flexShrink: 0 }}>模型</span>
-        <select
-          value={selectedProviderId}
-          onChange={(e) => setSelectedProviderId(e.target.value)}
-          style={{
-            background: "#0c0c0c", border: "1px solid #2a2a2a", color: "#aaa",
-            borderRadius: 4, padding: "2px 6px", fontSize: 11, cursor: "pointer", outline: "none",
-          }}
-        >
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.display_name} ({p.model}){p.is_default ? " ★" : ""}
-            </option>
-          ))}
-          {providers.length === 0 && <option value="">（未設定）</option>}
-        </select>
-      </div>
-
-      {/* Input bar */}
-      <div style={{ borderTop: "1px solid #1e1e1e", padding: "10px 12px", display: "flex", gap: 8, alignItems: "flex-end", background: "#111" }}>
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
-          }}
-          placeholder="用自然語言描述查詢... (Enter 送出)"
-          rows={2}
-          style={{
-            flex: 1, background: "#0c0c0c", border: "1px solid #2a2a2a", color: "#e6e6e6",
-            borderRadius: 6, padding: "8px 10px", fontSize: 13, resize: "none", outline: "none",
-            fontFamily: "inherit",
-          }}
-        />
-        {sending ? (
-          <button
-            onClick={stop}
-            style={{ background: "#3a1a1a", border: "1px solid #f87171", color: "#f87171", borderRadius: 6, padding: "8px 14px", cursor: "pointer", fontSize: 12 }}
-          >
-            ■ 停止
-          </button>
-        ) : (
-          <button
-            onClick={send}
-            disabled={!input.trim()}
-            style={{ background: "#1e3a2e", border: "1px solid #34d399", color: "#34d399", borderRadius: 6, padding: "8px 14px", cursor: "pointer", fontSize: 12 }}
-          >
-            ✨ 送出
-          </button>
-        )}
+          {sending ? (
+            <button
+              onClick={stop}
+              style={{ background: "#3a1a1a", border: "1px solid #f87171", color: "#f87171", borderRadius: 6, padding: "8px 14px", cursor: "pointer", fontSize: 12 }}
+            >
+              ■ 停止
+            </button>
+          ) : (
+            <button
+              onClick={send}
+              disabled={!input.trim()}
+              style={{ background: "#1e3a2e", border: "1px solid #34d399", color: "#34d399", borderRadius: 6, padding: "8px 14px", cursor: "pointer", fontSize: 12 }}
+            >
+              ✨ 送出
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -345,10 +503,8 @@ function MessageBubble({ msg, onToggleStep }: { msg: Message; onToggleStep: (i: 
     );
   }
 
-  // Assistant message
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start", maxWidth: "95%" }}>
-      {/* Intermediate agent steps */}
       {(msg.steps ?? []).map((step, i) => (
         <div key={i} style={{ width: "100%", background: "#141414", border: "1px solid #252525", borderRadius: 6, overflow: "hidden" }}>
           <button
@@ -379,14 +535,12 @@ function MessageBubble({ msg, onToggleStep }: { msg: Message; onToggleStep: (i: 
         </div>
       ))}
 
-      {/* Running indicator */}
       {msg.agentRunning && (
         <div style={{ color: "#888", fontSize: 11, padding: "4px 0" }}>
           <span style={{ marginRight: 6 }}>⟳</span>{msg.agentStepLabel}
         </div>
       )}
 
-      {/* Final answer */}
       {msg.text && (
         <div style={{
           background: "#1a1a1a", border: "1px solid #2a2a2a",

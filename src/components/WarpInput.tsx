@@ -22,7 +22,7 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const popoverRef = useRef<HTMLDivElement>(null);
+  const itemsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     try {
@@ -44,33 +44,58 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
 
   // Scroll active item into view
   useEffect(() => {
-    if (historyOpen && historyIndex >= 0 && popoverRef.current) {
-      const activeEl = popoverRef.current.children[historyIndex] as HTMLElement;
+    if (historyOpen && historyIndex >= 0 && itemsRef.current) {
+      const activeEl = itemsRef.current.children[historyIndex] as HTMLElement;
       if (activeEl) {
         activeEl.scrollIntoView({ block: "nearest" });
       }
     }
   }, [historyIndex, historyOpen, history.length]);
 
+  const saveHistory = (newHistory: string[]) => {
+    setHistory(newHistory);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(newHistory));
+  };
+
   const commitCommand = (cmd: string) => {
     if (!cmd.trim()) return;
-    
-    // add to history
+
+    // add to history (dedup, keep newest at end)
     let newHistory = history.filter((h) => h !== cmd);
     newHistory.push(cmd);
     if (newHistory.length > 100) newHistory = newHistory.slice(newHistory.length - 100);
-    setHistory(newHistory);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(newHistory));
+    saveHistory(newHistory);
 
     onSubmit(cmd);
     setValue("");
     setHistoryOpen(false);
     setHistoryIndex(-1);
-    
+
     // Reset height
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
+  };
+
+  const deleteHistoryItem = (idx: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const newHistory = history.filter((_, i) => i !== idx);
+    saveHistory(newHistory);
+    // Adjust selection index
+    if (newHistory.length === 0) {
+      setHistoryOpen(false);
+      setHistoryIndex(-1);
+    } else {
+      setHistoryIndex((prev) => Math.min(prev, newHistory.length - 1));
+    }
+  };
+
+  const clearAllHistory = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    saveHistory([]);
+    setHistoryOpen(false);
+    setHistoryIndex(-1);
+    setTimeout(() => textareaRef.current?.focus(), 0);
   };
 
   const selectHistoryItem = (idx: number) => {
@@ -114,9 +139,19 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
         setHistoryOpen(false);
         setHistoryIndex(-1);
       }
+    } else if (e.key === "Delete" && historyOpen && historyIndex >= 0) {
+      // Delete the currently highlighted history item
+      e.preventDefault();
+      const newHistory = history.filter((_, i) => i !== historyIndex);
+      saveHistory(newHistory);
+      if (newHistory.length === 0) {
+        setHistoryOpen(false);
+        setHistoryIndex(-1);
+      } else {
+        setHistoryIndex((prev) => Math.min(prev, newHistory.length - 1));
+      }
+      return;
     } else if (e.key === "ArrowUp") {
-      // Check if cursor is at the very line 0, or if history is open
-      // Simplified: if history has items, ArrowUp opens/navigates
       if (history.length > 0) {
         e.preventDefault();
         if (!historyOpen) {
@@ -156,20 +191,47 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
     }
   };
 
+  // Render history in reverse order (newest on top)
+  const reversedHistory = [...history].reverse();
+
   return (
     <div className="warp-input-container">
       {historyOpen && history.length > 0 && (
-        <div className="warp-history-popover" ref={popoverRef}>
-          {history.map((cmd, idx) => (
-            <div
-              key={idx}
-              className={`warp-history-item ${idx === historyIndex ? 'selected' : ''}`}
-              onClick={() => selectHistoryItem(idx)}
+        <div className="warp-history-popover">
+          <div className="warp-history-header">
+            <span className="warp-history-title">歷史記錄</span>
+            <button
+              className="warp-history-clear-all"
+              onClick={clearAllHistory}
+              title="清除全部歷史記錄"
             >
-              <span className="warp-history-prefix">&gt;_</span>
-              <span className="warp-history-text">{cmd}</span>
-            </div>
-          ))}
+              清除全部
+            </button>
+          </div>
+          <div ref={itemsRef} className="warp-history-items">
+            {reversedHistory.map((cmd, reversedIdx) => {
+              // Map back to original index (for delete/select)
+              const originalIdx = history.length - 1 - reversedIdx;
+              const isSelected = originalIdx === historyIndex;
+              return (
+                <div
+                  key={originalIdx}
+                  className={`warp-history-item ${isSelected ? "selected" : ""}`}
+                  onClick={() => selectHistoryItem(originalIdx)}
+                >
+                  <span className="warp-history-prefix">&gt;_</span>
+                  <span className="warp-history-text">{cmd}</span>
+                  <button
+                    className="warp-history-delete"
+                    onClick={(e) => deleteHistoryItem(originalIdx, e)}
+                    title="刪除此記錄"
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
       <div className="warp-input-prompt">▶</div>
