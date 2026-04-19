@@ -2,8 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { dbListTables, dbExecuteQuery, type TableInfo, type QueryResult } from "../../ipc/db";
 import { aiChat } from "../../ipc/ai";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
-
-const MAX_STEPS = 5;
+import { getConfig } from "../../ipc/config";
 
 interface Props {
   connectionId: string;
@@ -97,6 +96,7 @@ export function DatabaseAiChat({ connectionId, schema }: Props) {
   const [selectedProviderId, setSelectedProviderId] = useState<string>("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sessions, setSessions] = useState<SavedSession[]>([]);
+  const maxStepsRef = useRef<number>(5);
   const bottomRef = useRef<HTMLDivElement>(null);
   const stoppedRef = useRef(false);
   const currentSessionIdRef = useRef<string | null>(null);
@@ -106,6 +106,13 @@ export function DatabaseAiChat({ connectionId, schema }: Props) {
       dbListTables(connectionId, schema).then(setTables).catch(console.error);
     }
   }, [connectionId, schema]);
+
+  useEffect(() => {
+    getConfig().then((cfg) => {
+      // 0 = unlimited; use a large number internally
+      maxStepsRef.current = cfg.max_agent_steps === 0 ? 9999 : (cfg.max_agent_steps ?? 5);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     listProviders().then((list) => {
@@ -125,6 +132,7 @@ export function DatabaseAiChat({ connectionId, schema }: Props) {
 
   const buildSystemPrompt = () => {
     const tableList = tables.map((t) => t.name).join(", ");
+    const maxSteps = maxStepsRef.current;
     return `你是一個資料庫 Agent，可執行多次 SQL 查詢來回答使用者問題。
 Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}。
 
@@ -132,7 +140,7 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
 1. 需要查詢資料時，只輸出 \`\`\`sql\n你的SQL\n\`\`\`，不要有任何其他格式（不要 JSON、不要 thought 欄位）
 2. 每次只提供一條 SQL
 3. 已收集足夠資料時，直接用繁體中文給出最終答案，回應中不包含任何 SQL 或程式碼區塊
-4. 最多執行 ${MAX_STEPS} 次查詢`;
+4. 最多執行 ${maxSteps >= 9999 ? "不限次數" : maxSteps} 次查詢`;
   };
 
   const updateLastMsg = (updater: (m: Message) => Message) => {
@@ -191,6 +199,7 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
 
     try {
       let stepCount = 0;
+      const maxSteps = maxStepsRef.current;
       let finalMessages = nextMessages;
 
       const updateAndPersist = (updater: (m: Message) => Message) => {
@@ -203,8 +212,10 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
         });
       };
 
-      while (stepCount < MAX_STEPS && !stoppedRef.current) {
-        const stepLabel = `思考中... (步驟 ${stepCount + 1}/${MAX_STEPS})`;
+      while (stepCount < maxSteps && !stoppedRef.current) {
+        const stepLabel = maxSteps >= 9999
+          ? `思考中... (步驟 ${stepCount + 1})`
+          : `思考中... (步驟 ${stepCount + 1}/${maxSteps})`;
         updateLastMsg((m) => ({ ...m, agentStepLabel: stepLabel }));
 
         const lastUserContent = loopHistory[loopHistory.length - 1].content;
@@ -259,7 +270,7 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
 
         stepCount++;
 
-        if (stepCount >= MAX_STEPS) {
+        if (stepCount >= maxSteps) {
           updateLastMsg((m) => ({ ...m, agentStepLabel: "整理答案中..." }));
           const summary = await aiChat(
             "請根據以上查詢結果，用繁體中文給出最終完整答案，不要再提供 SQL。",
@@ -365,9 +376,9 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
                 <button
                   onClick={(e) => deleteSession(s.id, e)}
                   title="刪除此對話"
-                  style={{ background: "transparent", border: "none", color: "transparent", fontSize: 13, cursor: "pointer", padding: "0 2px", borderRadius: 3, flexShrink: 0 }}
+                  style={{ background: "transparent", border: "none", color: "#444", fontSize: 14, cursor: "pointer", padding: "2px 5px", borderRadius: 3, flexShrink: 0, lineHeight: 1 }}
                   onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#f87171"; (e.currentTarget as HTMLButtonElement).style.background = "#2a1a1a"; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "transparent"; (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#444"; (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
                 >
                   ×
                 </button>
