@@ -12,6 +12,8 @@ export type ExecutionMode = "always-confirm" | "graded" | "full-auto";
 
 export type SubmitShortcut = "enter" | "shift-enter" | "ctrl-enter";
 
+export type DefaultTab = "terminal" | "database";
+
 export interface ProviderConfig {
   id: string;
   display_name: string;
@@ -28,6 +30,7 @@ export interface AppConfig {
   submit_shortcut: SubmitShortcut;
   onboarding_done: boolean;
   max_agent_steps: number; // 0 = unlimited
+  default_tab: DefaultTab;
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
@@ -48,3 +51,6 @@ export const setSubmitShortcut = (shortcut: SubmitShortcut): Promise<void> =>
 
 export const setMaxAgentSteps = (steps: number): Promise<void> =>
   invoke("set_max_agent_steps", { steps });
+
+export const setDefaultTab = (tab: DefaultTab): Promise<void> =>
+  invoke("set_default_tab", { tab });

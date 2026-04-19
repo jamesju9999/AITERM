@@ -4,11 +4,17 @@ import { TabBar, type Tab } from "./TabBar";
 import { DatabaseView } from "./DatabaseView";
 import { useLocale } from "../contexts/LocaleContext";
 
+const DEFAULT_TAB_STORAGE_KEY = "aiterm_default_tab";
+
 export function TerminalApp() {
   const { t } = useLocale();
-  const [tabs, setTabs] = useState<Tab[]>(() => [
-    { id: crypto.randomUUID(), title: "Terminal", type: "terminal" },
-  ]);
+  const [tabs, setTabs] = useState<Tab[]>(() => {
+    // Read from localStorage (sync) so the correct tab type shows immediately
+    // without waiting for an async Rust config call.
+    const saved = localStorage.getItem(DEFAULT_TAB_STORAGE_KEY);
+    const tabType: "terminal" | "database" = saved === "database" ? "database" : "terminal";
+    return [{ id: crypto.randomUUID(), title: tabType === "database" ? "Database" : "Terminal", type: tabType }];
+  });
   const [activeId, setActiveId] = useState(tabs[0].id);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);

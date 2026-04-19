@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use tauri::State;
 
-use crate::config::{AppConfig, ConfigStore, ExecutionMode, SubmitShortcut};
+use crate::config::{AppConfig, ConfigStore, DefaultTab, ExecutionMode, SubmitShortcut};
 
 #[tauri::command]
 pub fn get_config(config: State<Arc<ConfigStore>>) -> AppConfig {
@@ -42,5 +42,13 @@ pub fn set_max_agent_steps(
     config: State<Arc<ConfigStore>>,
 ) -> Result<(), String> {
     config.update(|cfg| { cfg.max_agent_steps = steps; }).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_default_tab(
+    tab: DefaultTab,
+    config: State<Arc<ConfigStore>>,
+) -> Result<(), String> {
+    config.update(|cfg| { cfg.default_tab = tab; }).map_err(|e| e.to_string())
 }
 

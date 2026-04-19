@@ -11,7 +11,7 @@ use std::sync::Arc;
 use ai::router::AiRouter;
 use commands::{
     ai::{ai_chat, ai_query},
-    config::{get_config, is_onboarding_done, set_execution_mode, set_max_agent_steps, set_onboarding_done, set_submit_shortcut},
+    config::{get_config, is_onboarding_done, set_default_tab, set_execution_mode, set_max_agent_steps, set_onboarding_done, set_submit_shortcut},
     db::{
         db_add_connection, db_connect, db_disconnect, db_execute_query,
         db_get_table_schema, db_list_connections, db_list_schemas,
@@ -61,6 +61,7 @@ pub fn run() {
             is_onboarding_done,
             set_onboarding_done,
             set_submit_shortcut,
+            set_default_tab,
             // Provider management
             list_providers,
             add_provider,
