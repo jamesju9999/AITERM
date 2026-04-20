@@ -11,11 +11,14 @@ use std::sync::Arc;
 use ai::router::AiRouter;
 use commands::{
     ai::{ai_chat, ai_query},
-    config::{get_config, is_onboarding_done, set_default_tab, set_execution_mode, set_max_agent_steps, set_onboarding_done, set_submit_shortcut},
+    config::{
+        get_config, is_onboarding_done, set_default_tab, set_execution_mode, set_max_agent_steps,
+        set_onboarding_done, set_submit_shortcut,
+    },
     db::{
-        db_add_connection, db_connect, db_disconnect, db_execute_query,
-        db_get_table_schema, db_list_connections, db_list_schemas,
-        db_list_tables, db_preview_table, db_remove_connection, db_test_connection, db_update_connection,
+        db_add_connection, db_connect, db_disconnect, db_execute_query, db_get_table_schema,
+        db_list_connections, db_list_schemas, db_list_tables, db_preview_table,
+        db_remove_connection, db_test_connection, db_update_connection,
     },
     provider::{
         add_provider, get_ollama_models, list_providers, remove_provider, set_default_provider,
@@ -25,7 +28,9 @@ use commands::{
 };
 use config::ConfigStore;
 use db::{manager::DbManager, Db2SidecarState};
-use pty::commands::{pty_close, pty_create, pty_get_cwd, pty_list_dir, pty_read_file, pty_resize, pty_write};
+use pty::commands::{
+    pty_close, pty_create, pty_get_cwd, pty_list_dir, pty_read_file, pty_resize, pty_write,
+};
 use pty::PtyManager;
 use secret::SecretStore;
 
@@ -36,24 +41,64 @@ pub fn run() {
     let router = AiRouter::new(config.clone(), secrets.clone());
 
     let sidecar_path = {
-        let mut p = std::env::current_exe()
-            .expect("current_exe")
-            .parent()
-            .expect("parent dir")
-            .to_path_buf();
         #[cfg(target_os = "windows")]
-        p.push("db2-sidecar-x86_64-pc-windows-msvc.exe");
+        {
+            let exe_dir = std::env::current_exe()
+                .expect("current_exe")
+                .parent()
+                .expect("parent dir")
+                .to_path_buf();
+            let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+            let candidates = [
+                exe_dir.join("db2-sidecar-x86_64-pc-windows-msvc.exe"),
+                manifest_dir
+                    .join("binaries")
+                    .join("db2-sidecar-x86_64-pc-windows-msvc.exe"),
+                manifest_dir
+                    .parent()
+                    .expect("workspace root")
+                    .join("db2-sidecar")
+                    .join("bin")
+                    .join("publish-win-x64-nonsingle")
+                    .join("db2-sidecar.exe"),
+            ];
+
+            candidates
+                .into_iter()
+                .find(|p| p.exists())
+                .unwrap_or_else(|| {
+                    manifest_dir
+                        .join("binaries")
+                        .join("db2-sidecar-x86_64-pc-windows-msvc.exe")
+                })
+        }
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        p.push("db2-sidecar-aarch64-apple-darwin");
+        {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries")
+                .join("db2-sidecar-aarch64-apple-darwin")
+        }
         #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-        p.push("db2-sidecar-x86_64-apple-darwin");
+        {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries")
+                .join("db2-sidecar-x86_64-apple-darwin")
+        }
         #[cfg(target_os = "linux")]
-        p.push("db2-sidecar-x86_64-unknown-linux-gnu");
-        p
+        {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries")
+                .join("db2-sidecar-x86_64-unknown-linux-gnu")
+        }
     };
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())
+        .plugin(
+            tauri_plugin_log::Builder::default()
+                .level(log::LevelFilter::Info)
+                .build(),
+        )
         .manage(PtyManager::new())
         .manage(config)
         .manage(secrets)
