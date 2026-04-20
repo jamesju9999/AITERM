@@ -12,6 +12,7 @@ use crate::config::{
 use crate::db::{
     adapter::{ColumnInfo, QueryResult, TableInfo},
     db2::Db2Adapter,
+    db2_sidecar::Db2SidecarState,
     manager::DbManager,
     mssql::MssqlAdapter,
     mysql::MySqlAdapter,
@@ -68,6 +69,7 @@ fn pct_encode(s: &str) -> String {
 async fn build_adapter(
     conn: &DbConnection,
     password: &str,
+    sidecar: &Db2SidecarState,
 ) -> anyhow::Result<Box<dyn crate::db::adapter::DbAdapter>> {
     match conn.db_type {
         DbType::Postgresql => {
@@ -104,12 +106,15 @@ async fn build_adapter(
             .await?,
         )),
         DbType::Db2 => {
-            let cs = format!("DSN={};DATABASE={}", conn.host, conn.database);
-            Ok(Box::new(Db2Adapter::new(
-                cs,
-                conn.username.clone(),
-                password.to_string(),
-            )))
+            let cs = format!(
+                "DATABASE={};HOSTNAME={};PORT={};PROTOCOL=TCPIP;",
+                conn.database, conn.host, conn.port
+            );
+            let client = sidecar.get_client().await?;
+            Ok(Box::new(
+                Db2Adapter::connect(client, cs, conn.username.clone(), password.to_string())
+                    .await?,
+            ))
         }
     }
 }
@@ -208,6 +213,7 @@ pub async fn db_remove_connection(
 pub async fn db_test_connection(
     input: DbConnectionInput,
     secrets: State<'_, Arc<SecretStore>>,
+    sidecar: State<'_, Db2SidecarState>,
 ) -> Result<(), String> {
     let password = if !input.password.is_empty() {
         input.password.clone()
@@ -231,7 +237,7 @@ pub async fn db_test_connection(
         username: input.username.clone(),
     };
 
-    let adapter = build_adapter(&temp_conn, &password)
+    let adapter = build_adapter(&temp_conn, &password, &sidecar)
         .await
         .map_err(|e| e.to_string())?;
     adapter.test().await.map_err(|e| e.to_string())
@@ -243,6 +249,7 @@ pub async fn db_connect(
     config: State<'_, Arc<ConfigStore>>,
     secrets: State<'_, Arc<SecretStore>>,
     manager: State<'_, DbManager>,
+    sidecar: State<'_, Db2SidecarState>,
 ) -> Result<(), String> {
     if manager.is_connected(&id).await {
         return Ok(());
@@ -258,7 +265,7 @@ pub async fn db_connect(
         .ok()
         .flatten()
         .unwrap_or_default();
-    let adapter = build_adapter(&conn, &password)
+    let adapter = build_adapter(&conn, &password, &sidecar)
         .await
         .map_err(|e| e.to_string())?;
     manager.insert(id, adapter).await;

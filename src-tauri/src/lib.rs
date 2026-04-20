@@ -24,7 +24,7 @@ use commands::{
     secret::{delete_api_key, has_api_key},
 };
 use config::ConfigStore;
-use db::manager::DbManager;
+use db::{manager::DbManager, Db2SidecarState};
 use pty::commands::{pty_close, pty_create, pty_get_cwd, pty_list_dir, pty_read_file, pty_resize, pty_write};
 use pty::PtyManager;
 use secret::SecretStore;
@@ -35,6 +35,23 @@ pub fn run() {
     let secrets = Arc::new(SecretStore::new());
     let router = AiRouter::new(config.clone(), secrets.clone());
 
+    let sidecar_path = {
+        let mut p = std::env::current_exe()
+            .expect("current_exe")
+            .parent()
+            .expect("parent dir")
+            .to_path_buf();
+        #[cfg(target_os = "windows")]
+        p.push("db2-sidecar-x86_64-pc-windows-msvc.exe");
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        p.push("db2-sidecar-aarch64-apple-darwin");
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        p.push("db2-sidecar-x86_64-apple-darwin");
+        #[cfg(target_os = "linux")]
+        p.push("db2-sidecar-x86_64-unknown-linux-gnu");
+        p
+    };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())
         .manage(PtyManager::new())
@@ -42,6 +59,7 @@ pub fn run() {
         .manage(secrets)
         .manage(router)
         .manage(DbManager::new())
+        .manage(Db2SidecarState::new(sidecar_path))
         .invoke_handler(tauri::generate_handler![
             // PTY
             pty_create,
