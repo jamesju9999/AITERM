@@ -255,6 +255,7 @@ mod tests {
             submit_shortcut: SubmitShortcut::ShiftEnter,
             onboarding_done: true,
             db_connections: vec![],
+            default_tab: DefaultTab::default(),
         };
         let toml_str = toml::to_string_pretty(&cfg).unwrap();
         let parsed: AppConfig = toml::from_str(&toml_str).unwrap();
