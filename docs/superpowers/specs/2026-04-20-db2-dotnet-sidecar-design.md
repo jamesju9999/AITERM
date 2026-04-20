@@ -1,15 +1,20 @@
 # DB2 .NET Sidecar Design
 
 **Date:** 2026-04-20  
-**Status:** Approved
+**Status:** Approved (amended 2026-04-20 — dual-path platform strategy)
 
 ## Problem
 
-The current `Db2Adapter` uses the `odbc-api` Rust crate, which requires the IBM DB2 ODBC Driver installed on the host machine. This driver is difficult to obtain. In contrast, the `IBM.Data.Db2.Core` NuGet package provides first-class DB2 connectivity in .NET without requiring a separate driver installation.
+The current `Db2Adapter` uses the `odbc-api` Rust crate, which requires the IBM DB2 ODBC Driver installed on the host machine. This driver is difficult to obtain. The `IBM.Data.Db2.Core` NuGet package provides first-class DB2 connectivity in .NET, but its bundled clidriver is **Windows-only** — no macOS/Linux native libraries are included.
 
 ## Solution
 
-Replace the ODBC-based `Db2Adapter` with a new implementation that delegates all DB2 operations to a long-running .NET sidecar process. The sidecar communicates with Rust via stdin/stdout JSON lines.
+**Dual-path strategy by platform:**
+
+- **Windows**: delegate all DB2 operations to a long-running .NET sidecar process (`db2-sidecar`) using `IBM.Data.Db2.Core`. The NuGet package bundles the Windows clidriver automatically — no separate driver installation required.
+- **macOS / Linux**: keep the existing ODBC-based `Db2Adapter`. Users must install the IBM DB2 ODBC Driver, same as before.
+
+The `Db2Adapter` name is preserved; platform selection is done at **compile time** via `#[cfg(target_os = "windows")]` / `#[cfg(not(target_os = "windows"))]` in Rust.
 
 ---
 
@@ -19,16 +24,17 @@ Replace the ODBC-based `Db2Adapter` with a new implementation that delegates all
 Tauri App
 ├── Rust backend
 │   ├── DbManager (unchanged)
-│   ├── Db2Adapter (new — replaces ODBC version)
-│   │   └── delegates via Db2SidecarClient
-│   └── Db2SidecarClient (new)
+│   ├── Db2Adapter — platform-selected at compile time:
+│   │   ├── [Windows]     → delegates via Db2SidecarClient (new)
+│   │   └── [macOS/Linux] → existing ODBC adapter (unchanged)
+│   └── Db2SidecarClient (new, Windows-only)
 │       ├── holds stdin/stdout handles to child process
 │       └── serializes JSON requests / deserializes JSON responses
 │
-└── db2-sidecar (.NET 8 console app, self-contained binary)
+└── db2-sidecar (.NET 8 console app, Windows self-contained binary only)
     ├── reads stdin JSON lines, writes stdout JSON lines
     ├── maintains conn_id → DB2Connection map internally
-    └── uses IBM.Data.Db2.Core NuGet package
+    └── uses IBM.Data.Db2.Core NuGet package (bundles Windows clidriver)
 ```
 
 **Flow:**
@@ -95,13 +101,13 @@ while ((line = Console.ReadLine()) != null) {
 }
 ```
 
-### Build (self-contained per platform)
+### Build (Windows only — clidriver is Windows-exclusive in this NuGet package)
 
 ```bash
-dotnet publish -c Release -r osx-arm64  --self-contained -p:PublishSingleFile=true -o dist/osx-arm64/
-dotnet publish -c Release -r win-x64    --self-contained -p:PublishSingleFile=true -o dist/win-x64/
-dotnet publish -c Release -r linux-x64  --self-contained -p:PublishSingleFile=true -o dist/linux-x64/
+dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=false -o dist/win-x64/
 ```
+
+`PublishSingleFile=false` is required so the clidriver DLLs that IBM.Data.Db2.Core extracts into the output directory are included alongside the executable. The entire `dist/win-x64/` directory (including `clidriver/`) is bundled into the Tauri Windows build.
 
 ---
 
@@ -111,37 +117,32 @@ dotnet publish -c Release -r linux-x64  --self-contained -p:PublishSingleFile=tr
 
 | File | Purpose |
 |------|---------|
-| `src-tauri/src/db/db2_sidecar.rs` | `Db2SidecarClient` — manages child process + JSON I/O |
-| `src-tauri/src/db/db2.rs` | `Db2Adapter` — reimplemented using `Db2SidecarClient` |
+| `src-tauri/src/db/db2_sidecar.rs` | `Db2SidecarClient` + `Db2SidecarState` — Windows-only, `#[cfg(target_os="windows")]` |
+| `src-tauri/src/db/db2.rs` | `Db2Adapter` — sidecar on Windows, ODBC on macOS/Linux |
 
-### `Db2SidecarClient`
-
-```rust
-pub struct Db2SidecarClient {
-    stdin:  Mutex<ChildStdin>,
-    stdout: Mutex<BufReader<ChildStdout>>,
-}
-```
-
-- `send(&self, req: serde_json::Value) -> Result<serde_json::Value>` — writes one JSON line, reads one JSON line
-- `Mutex` ensures serial access (one request in-flight at a time)
-- Stored as `Arc<Db2SidecarClient>` in `tauri::State`, lazy-initialized on first DB2 use
-
-### `Db2Adapter`
+### Platform dispatch in `db2.rs`
 
 ```rust
-pub struct Db2Adapter {
-    conn_id: String,
-    client:  Arc<Db2SidecarClient>,
-}
+#[cfg(target_os = "windows")]
+mod platform { /* sidecar-based Db2Adapter */ }
+
+#[cfg(not(target_os = "windows"))]
+mod platform { /* ODBC-based Db2Adapter (existing code) */ }
+
+pub use platform::Db2Adapter;
 ```
 
-Implements `DbAdapter` trait by mapping each method to the corresponding sidecar command.
+### `Db2SidecarClient` (Windows only)
 
-### Removals
+- `send(&self, req: Value) -> Result<Value>` — one Mutex wraps stdin+stdout for serial access
+- Stored as `Arc<Db2SidecarClient>` in `tauri::State` behind `Db2SidecarState`
+- `Db2SidecarState` is only `.manage()`d on Windows via `#[cfg]`
 
-- `odbc-api` removed from `Cargo.toml`
-- Existing `db2.rs` fully replaced (no ODBC code retained)
+### Cargo.toml changes
+
+- **Keep** `odbc-api = "8"` (macOS/Linux DB2 path unchanged)
+- Add `process` and `io-util` features to `tokio`
+- `odbc-api` is conditionally used; no platform feature gate needed at crate level
 
 ---
 

@@ -2,34 +2,31 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the ODBC-based DB2 adapter with a .NET sidecar that communicates via stdin/stdout JSON lines, eliminating the need for IBM ODBC Driver installation.
+**Goal:** On Windows, replace IBM ODBC Driver requirement with a .NET sidecar (IBM.Data.Db2.Core). On macOS/Linux, keep the existing ODBC adapter unchanged. Platform selection is at compile time.
 
-**Architecture:** A .NET 8 console app (`db2-sidecar`) uses `IBM.Data.Db2.Core` to manage DB2 connections internally, keyed by `conn_id`. Rust's `Db2Adapter` implements `DbAdapter` by sending JSON commands to the sidecar over stdin/stdout. A single sidecar process is lazily spawned on first DB2 use and shared across all DB2 connections.
+**Architecture (amended — dual-path):** Windows uses a .NET sidecar process for DB2; macOS/Linux keeps the existing ODBC Db2Adapter. `Db2Adapter` is the same public name; platform selected via `#[cfg(target_os = "windows")]`. The sidecar is built for `win-x64` only (IBM.Data.Db2.Core bundles Windows-only clidriver DLLs).
 
-**Tech Stack:** .NET 8, IBM.Data.Db2.Core (NuGet), System.Text.Json, Rust tokio::process, serde_json, Tauri 2 externalBin
+**Tech Stack:** .NET 8, IBM.Data.Db2.Core 3.x (NuGet, Windows), System.Text.Json, Rust tokio::process, serde_json, Tauri 2 externalBin (Windows only)
 
 ---
 
 ## File Map
 
 **Create:**
-- `db2-sidecar/db2-sidecar.csproj`
-- `db2-sidecar/Models.cs`
-- `db2-sidecar/ConnectionManager.cs`
-- `db2-sidecar/CommandHandler.cs`
-- `db2-sidecar/Program.cs`
-- `src-tauri/src/db/db2_sidecar.rs`
-- `src-tauri/binaries/` (directory for built sidecar binaries)
+- `db2-sidecar/db2-sidecar.csproj` ✅
+- `db2-sidecar/Models.cs` ✅
+- `db2-sidecar/ConnectionManager.cs` ✅
+- `db2-sidecar/CommandHandler.cs` ✅
+- `db2-sidecar/Program.cs` ✅ (committed, smoke tests skipped — Windows-only binary)
+- `src-tauri/src/db/db2_sidecar.rs` — Windows-only (`#[cfg(target_os="windows")]`)
 
-**Replace entirely:**
-- `src-tauri/src/db/db2.rs`
-
-**Modify:**
-- `src-tauri/src/db/mod.rs` — add `pub mod db2_sidecar`
-- `src-tauri/src/commands/db.rs` — update `build_adapter` for DB2 + add `Db2SidecarState` param
-- `src-tauri/src/lib.rs` — add `Db2SidecarState` to managed state
-- `src-tauri/Cargo.toml` — remove `odbc-api`, add `tokio/process` feature
-- `src-tauri/tauri.conf.json` — add `externalBin`
+**Modify (amended):**
+- `src-tauri/src/db/db2.rs` — add `#[cfg]` platform dispatch; keep ODBC code for non-Windows
+- `src-tauri/src/db/mod.rs` — add `pub mod db2_sidecar` (Windows-only)
+- `src-tauri/src/commands/db.rs` — platform-conditional `build_adapter` for DB2
+- `src-tauri/src/lib.rs` — manage `Db2SidecarState` on Windows only
+- `src-tauri/Cargo.toml` — keep `odbc-api`, add `tokio/process` + `io-util` features
+- `src-tauri/tauri.conf.json` — add `externalBin` for Windows sidecar
 
 ---
 
