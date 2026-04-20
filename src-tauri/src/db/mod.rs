@@ -5,6 +5,8 @@ pub mod mysql;
 pub mod sqlite;
 pub mod mssql;
 pub mod db2;
+pub mod db2_sidecar;
 
 pub use adapter::{DbAdapter, TableInfo, ColumnInfo, QueryResult};
 pub use manager::DbManager;
+pub use db2_sidecar::Db2SidecarState;
