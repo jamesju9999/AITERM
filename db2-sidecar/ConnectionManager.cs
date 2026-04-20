@@ -19,6 +19,11 @@ public class ConnectionManager
             var fullConnStr = $"{connString};UID={username};PWD={password};";
             var conn = new DB2Connection(fullConnStr);
             await conn.OpenAsync();
+            if (_connections.TryGetValue(connId, out var existing))
+            {
+                existing.Close();
+                existing.Dispose();
+            }
             _connections[connId] = conn;
             return null;
         }
