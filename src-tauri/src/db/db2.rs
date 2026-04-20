@@ -1,187 +1,109 @@
-//! DB2 adapter via ODBC (requires IBM DB2 ODBC Driver installed on the host).
-//!
-//! Users must install IBM Data Server Driver Package before this adapter works.
-//! On connection failure with an ODBC error mentioning "driver" or "dsn",
-//! the error message will contain "odbc_driver_not_found" so the frontend
-//! can show the installation guide instead of a generic error.
+//! DB2 adapter — delegates all DB2 operations to the .NET db2-sidecar process.
 
 use anyhow::Result;
 use async_trait::async_trait;
-use odbc_api::{buffers::TextRowSet, ConnectionOptions, Cursor, Environment, ResultSetMetadata};
+use std::sync::Arc;
 
 use super::adapter::{ColumnInfo, DbAdapter, QueryResult, TableInfo};
+use super::db2_sidecar::Db2SidecarClient;
 
-/// DB2 adapter using ODBC.
-///
-/// The ODBC `Environment` and `Connection` types are `!Send`, so we store
-/// only the connection parameters and open a fresh connection per query via
-/// `tokio::task::spawn_blocking`.
 pub struct Db2Adapter {
-    /// ODBC connection string, e.g. "DSN=mydb" or a full DSN-less string.
-    conn_string: String,
-    username: String,
-    password: String,
+    conn_id: String,
+    client: Arc<Db2SidecarClient>,
 }
 
 impl Db2Adapter {
-    pub fn new(conn_string: String, username: String, password: String) -> Self {
-        Self { conn_string, username, password }
-    }
+    /// Establish a DB2 connection via the sidecar.
+    ///
+    /// `conn_string` should be an IBM.Data.Db2.Core connection string, e.g.:
+    /// `"DATABASE=mydb;HOSTNAME=myhost;PORT=50000;PROTOCOL=TCPIP;"`
+    pub async fn connect(
+        client: Arc<Db2SidecarClient>,
+        conn_string: String,
+        username: String,
+        password: String,
+    ) -> Result<Self> {
+        let conn_id = uuid::Uuid::new_v4().to_string();
+        let resp = client
+            .send(serde_json::json!({
+                "id": uuid::Uuid::new_v4().to_string(),
+                "cmd": "connect",
+                "conn_id": conn_id,
+                "conn_string": conn_string,
+                "username": username,
+                "password": password,
+            }))
+            .await?;
 
-    /// Test that the IBM ODBC driver is installed by attempting a connection.
-    /// Returns Err with message prefixed "odbc_driver_not_found:" if driver missing.
-    fn try_connect_sync(conn_string: &str, username: &str, password: &str) -> Result<()> {
-        let env = Environment::new().map_err(|e| anyhow::anyhow!("ODBC env: {e}"))?;
-        env.connect(conn_string, username, password, ConnectionOptions::default())
-            .map_err(|e| {
-                let msg = e.to_string();
-                if msg.to_lowercase().contains("driver") || msg.to_lowercase().contains("dsn") {
-                    anyhow::anyhow!("odbc_driver_not_found: {msg}")
-                } else {
-                    anyhow::anyhow!("{msg}")
-                }
-            })?;
-        Ok(())
-    }
-
-    /// Execute a query synchronously. Must be called from `spawn_blocking`.
-    fn execute_sync(conn_string: &str, username: &str, password: &str, sql: &str) -> QueryResult {
-        let start = std::time::Instant::now();
-
-        // Run the ODBC operations in a closure so borrow lifetimes are properly scoped.
-        // The closure returns Result<(cols, rows), String> — the cursor is fully consumed
-        // (and dropped) inside before we return owned data.
-        let result: Result<(Vec<String>, Vec<Vec<serde_json::Value>>), String> = (|| {
-            let env = Environment::new().map_err(|e| e.to_string())?;
-            let conn = env
-                .connect(conn_string, username, password, ConnectionOptions::default())
-                .map_err(|e| e.to_string())?;
-
-            let mut cursor = match conn.execute(sql, ()).map_err(|e| e.to_string())? {
-                None => return Ok((vec![], vec![])),
-                Some(c) => c,
-            };
-
-            let num_cols = match cursor.num_result_cols() {
-                Ok(n) => n.max(0) as u16,
-                Err(e) => return Err(e.to_string()),
-            };
-            let cols: Vec<String> = (1..=num_cols)
-                .filter_map(|i| cursor.col_name(i).ok())
-                .collect();
-
-            let buf = TextRowSet::for_cursor(100, &mut cursor, Some(4096))
-                .map_err(|e| e.to_string())?;
-
-            let mut row_set_cursor = cursor.bind_buffer(buf).map_err(|e| e.to_string())?;
-
-            let mut all_rows: Vec<Vec<serde_json::Value>> = vec![];
-            loop {
-                match row_set_cursor.fetch() {
-                    Ok(Some(batch)) => {
-                        for row_idx in 0..batch.num_rows() {
-                            let row: Vec<serde_json::Value> = (0..cols.len())
-                                .map(|col_idx| {
-                                    batch
-                                        .at(col_idx, row_idx)
-                                        .and_then(|bytes| std::str::from_utf8(bytes).ok())
-                                        .map(|s| serde_json::Value::String(s.to_string()))
-                                        .unwrap_or(serde_json::Value::Null)
-                                })
-                                .collect();
-                            all_rows.push(row);
-                        }
-                    }
-                    Ok(None) => break,
-                    Err(e) => return Err(e.to_string()),
-                }
-            }
-
-            Ok((cols, all_rows))
-        })();
-
-        let elapsed = start.elapsed().as_millis() as u64;
-        match result {
-            Ok((cols, rows)) => QueryResult {
-                columns: cols,
-                rows,
-                affected_rows: None,
-                execution_time_ms: elapsed,
-                error: None,
-            },
-            Err(msg) => QueryResult {
-                columns: vec![],
-                rows: vec![],
-                affected_rows: None,
-                execution_time_ms: elapsed,
-                error: Some(msg),
-            },
+        if !resp["ok"].as_bool().unwrap_or(false) {
+            let err = resp["error"].as_str().unwrap_or("unknown").to_string();
+            return Err(anyhow::anyhow!("{err}"));
         }
+
+        Ok(Self { conn_id, client })
+    }
+
+    async fn cmd(&self, mut req: serde_json::Value) -> Result<serde_json::Value> {
+        req["id"] = serde_json::Value::String(uuid::Uuid::new_v4().to_string());
+        req["conn_id"] = serde_json::Value::String(self.conn_id.clone());
+        self.client.send(req).await
+    }
+}
+
+/// Send a disconnect on drop (fire-and-forget).
+impl Drop for Db2Adapter {
+    fn drop(&mut self) {
+        let client = self.client.clone();
+        let conn_id = self.conn_id.clone();
+        tokio::spawn(async move {
+            let _ = client
+                .send(serde_json::json!({
+                    "id": uuid::Uuid::new_v4().to_string(),
+                    "cmd": "disconnect",
+                    "conn_id": conn_id,
+                }))
+                .await;
+        });
     }
 }
 
 #[async_trait]
 impl DbAdapter for Db2Adapter {
     async fn test(&self) -> Result<()> {
-        let cs = self.conn_string.clone();
-        let u = self.username.clone();
-        let p = self.password.clone();
-        tokio::task::spawn_blocking(move || Self::try_connect_sync(&cs, &u, &p))
-            .await
-            .map_err(|e| anyhow::anyhow!("spawn_blocking: {e}"))??;
-        Ok(())
+        let resp = self.cmd(serde_json::json!({"cmd": "ping"})).await?;
+        if resp["ok"].as_bool().unwrap_or(false) {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("{}", resp["error"].as_str().unwrap_or("ping failed")))
+        }
     }
 
     async fn list_schemas(&self) -> Result<Vec<String>> {
-        let sql = "SELECT DISTINCT SCHEMANAME FROM SYSCAT.SCHEMATA \
-                   WHERE DEFINERTYPE = 'U' ORDER BY SCHEMANAME"
-            .to_string();
-        let result = self.execute(&sql).await?;
-        Ok(result
-            .rows
-            .into_iter()
-            .filter_map(|r| r.into_iter().next())
-            .filter_map(|v| {
-                if let serde_json::Value::String(s) = v {
-                    Some(s)
-                } else {
-                    None
-                }
-            })
+        let resp = self.cmd(serde_json::json!({"cmd": "list_schemas"})).await?;
+        check_ok(&resp)?;
+        Ok(resp["rows"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .filter_map(|row| row.as_array()?.first()?.as_str().map(|s| s.to_string()))
             .collect())
     }
 
     async fn list_tables(&self, schema: &str) -> Result<Vec<TableInfo>> {
-        let sql = format!(
-            "SELECT TABNAME, TYPE FROM SYSCAT.TABLES \
-             WHERE TABSCHEMA = '{}' ORDER BY TABNAME",
-            schema.replace('\'', "''")
-        );
-        let result = self.execute(&sql).await?;
-        Ok(result
-            .rows
-            .into_iter()
-            .filter_map(|r| {
-                let name = r.get(0).and_then(|v| {
-                    if let serde_json::Value::String(s) = v {
-                        Some(s.clone())
-                    } else {
-                        None
-                    }
-                })?;
-                let tt = r
-                    .get(1)
-                    .and_then(|v| {
-                        if let serde_json::Value::String(s) = v {
-                            Some(s.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_default();
+        let resp = self
+            .cmd(serde_json::json!({"cmd": "list_tables", "schema": schema}))
+            .await?;
+        check_ok(&resp)?;
+        Ok(resp["rows"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .filter_map(|row| {
+                let arr = row.as_array()?;
+                let name = arr.first()?.as_str()?.to_string();
+                let tt = arr.get(1).and_then(|v| v.as_str()).unwrap_or("");
                 Some(TableInfo {
                     name,
-                    // DB2 SYSCAT.TABLES.TYPE: 'T' = table, 'V' = view
                     table_type: if tt == "V" { "view".into() } else { "table".into() },
                 })
             })
@@ -189,55 +111,83 @@ impl DbAdapter for Db2Adapter {
     }
 
     async fn get_table_schema(&self, schema: &str, table: &str) -> Result<Vec<ColumnInfo>> {
-        let sql = format!(
-            "SELECT COLNAME, TYPENAME, DEFAULT, NULLS \
-             FROM SYSCAT.COLUMNS \
-             WHERE TABSCHEMA = '{}' AND TABNAME = '{}' \
-             ORDER BY COLNO",
-            schema.replace('\'', "''"),
-            table.replace('\'', "''")
-        );
-        let result = self.execute(&sql).await?;
-        Ok(result
-            .rows
-            .into_iter()
-            .map(|r| {
-                let get_str = |i: usize| {
-                    r.get(i)
-                        .and_then(|v| {
-                            if let serde_json::Value::String(s) = v {
-                                Some(s.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_default()
-                };
-                let default_val = get_str(2);
-                ColumnInfo {
-                    name: get_str(0),
-                    data_type: get_str(1),
-                    nullable: get_str(3) == "Y",
+        let resp = self
+            .cmd(serde_json::json!({"cmd": "get_table_schema", "schema": schema, "table": table}))
+            .await?;
+        check_ok(&resp)?;
+        Ok(resp["rows"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .filter_map(|row| {
+                let arr = row.as_array()?;
+                let s = |i: usize| arr.get(i).and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_default();
+                let default_val = s(2);
+                Some(ColumnInfo {
+                    name: s(0),
+                    data_type: s(1),
+                    nullable: s(3) == "Y",
                     default: if default_val.is_empty() { None } else { Some(default_val) },
-                }
+                })
             })
             .collect())
     }
 
     async fn execute(&self, sql: &str) -> Result<QueryResult> {
-        let cs = self.conn_string.clone();
-        let u = self.username.clone();
-        let p = self.password.clone();
-        let sql_owned = sql.to_string();
-        tokio::task::spawn_blocking(move || Self::execute_sync(&cs, &u, &p, &sql_owned))
-            .await
-            .map_err(|e| anyhow::anyhow!("spawn_blocking: {e}"))
+        let resp = self
+            .cmd(serde_json::json!({"cmd": "execute", "sql": sql}))
+            .await?;
+
+        let elapsed = resp["execution_time_ms"].as_u64().unwrap_or(0);
+
+        if !resp["ok"].as_bool().unwrap_or(false) {
+            return Ok(QueryResult {
+                columns: vec![],
+                rows: vec![],
+                affected_rows: None,
+                execution_time_ms: elapsed,
+                error: Some(resp["error"].as_str().unwrap_or("unknown").to_string()),
+            });
+        }
+
+        let columns: Vec<String> = resp["columns"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+
+        let rows: Vec<Vec<serde_json::Value>> = resp["rows"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|row| {
+                row.as_array()
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .map(|v| match v {
+                        serde_json::Value::Null => serde_json::Value::Null,
+                        serde_json::Value::String(s) => serde_json::Value::String(s.clone()),
+                        other => serde_json::Value::String(other.to_string()),
+                    })
+                    .collect()
+            })
+            .collect();
+
+        Ok(QueryResult {
+            columns,
+            rows,
+            affected_rows: resp["affected_rows"].as_u64(),
+            execution_time_ms: elapsed,
+            error: None,
+        })
     }
 }
 
-#[cfg(test)]
-mod tests {
-    // Integration tests require an IBM DB2 instance with the IBM ODBC driver installed.
-    // Run with: cargo test db::db2 -- --ignored
-    // (No #[ignore] tests exist yet; this block is a placeholder.)
+fn check_ok(resp: &serde_json::Value) -> Result<()> {
+    if resp["ok"].as_bool().unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("{}", resp["error"].as_str().unwrap_or("db2 error")))
+    }
 }
