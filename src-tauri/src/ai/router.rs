@@ -7,7 +7,6 @@
 //! keep working without migration.
 
 use std::sync::Arc;
-use std::process::Command;
 
 use crate::{
     ai::{
@@ -158,7 +157,12 @@ impl AiRouter {
                 ))
             }
             ProviderType::GoogleGeminiOauth => {
-                let token = get_gcloud_access_token().ok_or(AiError::NotConfigured)?;
+                // Access token stored in keychain by google_gemini_oauth_auth command.
+                let token = self
+                    .secrets
+                    .get(&provider_cfg.id)
+                    .map_err(|_| AiError::NotConfigured)?
+                    .ok_or(AiError::NotConfigured)?;
                 Arc::new(OpenAiCompatibleClient::new(
                     provider_cfg
                         .base_url
@@ -173,17 +177,6 @@ impl AiRouter {
     }
 }
 
-fn get_gcloud_access_token() -> Option<String> {
-    let output = Command::new("gcloud")
-        .args(["auth", "application-default", "print-access-token"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if token.is_empty() { None } else { Some(token) }
-}
 
 #[cfg(test)]
 mod tests {
