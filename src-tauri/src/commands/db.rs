@@ -34,6 +34,7 @@ pub struct DbConnectionInput {
     pub database: String,
     pub username: String,
     pub password: String,
+    pub default_schema: Option<String>,
 }
 
 /// Connection info returned to the frontend (no password).
@@ -46,11 +47,23 @@ pub struct DbConnectionInfo {
     pub port: u16,
     pub database: String,
     pub username: String,
+    pub default_schema: Option<String>,
     pub is_connected: bool,
 }
 
 fn secret_key(id: &str) -> String {
     format!("db:{id}")
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|v| {
+        let trimmed = v.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 /// Percent-encode a string for use in a URL userinfo or path component.
@@ -66,6 +79,17 @@ fn pct_encode(s: &str) -> String {
         }
     }
     out
+}
+
+fn is_db2_sidecar_transport_error_message(msg: &str) -> bool {
+    msg.contains("os error 232")
+        || msg.contains("Broken pipe")
+        || msg.contains("db2_sidecar_died")
+        || msg.contains("EOF on stdout")
+}
+
+fn is_db2_sidecar_transport_error(err: &anyhow::Error) -> bool {
+    is_db2_sidecar_transport_error_message(&err.to_string())
 }
 
 async fn build_adapter(
@@ -112,13 +136,35 @@ async fn build_adapter(
                 "Server={}:{};Database={};",
                 conn.host, conn.port, conn.database
             );
+            let username = conn.username.clone();
+            let password = password.to_string();
             let client = sidecar.get_client().await?;
-            Ok(Box::new(
-                Db2Adapter::connect(client, cs, conn.username.clone(), password.to_string())
-                    .await?,
-            ))
+
+            match Db2Adapter::connect(client, cs.clone(), username.clone(), password.clone()).await {
+                Ok(adapter) => Ok(Box::new(adapter)),
+                Err(err) if is_db2_sidecar_transport_error(&err) => {
+                    // Recover from stale/crashed sidecar instance and retry once.
+                    sidecar.reset().await;
+                    let client = sidecar.get_client().await?;
+                    Ok(Box::new(
+                        Db2Adapter::connect(client, cs, username, password).await?,
+                    ))
+                }
+                Err(err) => Err(err),
+            }
         }
     }
+}
+
+async fn run_connection_test(
+    conn: &DbConnection,
+    password: &str,
+    sidecar: &Db2SidecarState,
+) -> Result<(), String> {
+    let adapter = build_adapter(conn, password, sidecar)
+        .await
+        .map_err(|e| e.to_string())?;
+    adapter.test().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -138,6 +184,7 @@ pub async fn db_list_connections(
             port: c.port,
             database: c.database,
             username: c.username,
+            default_schema: c.default_schema,
             is_connected,
         });
     }
@@ -159,6 +206,7 @@ pub async fn db_add_connection(
         port: input.port,
         database: input.database,
         username: input.username,
+        default_schema: normalize_optional_string(input.default_schema),
     };
     config.add_db_connection(conn).map_err(|e| e.to_string())?;
     secrets
@@ -182,6 +230,7 @@ pub async fn db_update_connection(
         port: input.port,
         database: input.database,
         username: input.username,
+        default_schema: normalize_optional_string(input.default_schema),
     };
     config
         .update_db_connection(conn)
@@ -237,16 +286,32 @@ pub async fn db_test_connection(
         port: input.port,
         database: input.database.clone(),
         username: input.username.clone(),
+        default_schema: normalize_optional_string(input.default_schema.clone()),
     };
 
-    timeout(Duration::from_secs(20), async {
-        let adapter = build_adapter(&temp_conn, &password, &sidecar)
-            .await
-            .map_err(|e| e.to_string())?;
-        adapter.test().await.map_err(|e| e.to_string())
-    })
+    let first_attempt = timeout(
+        Duration::from_secs(20),
+        run_connection_test(&temp_conn, &password, &sidecar),
+    )
     .await
-    .map_err(|_| "connection test timed out after 20s".to_string())?
+    .map_err(|_| "connection test timed out after 20s".to_string())?;
+
+    match first_attempt {
+        Ok(()) => Ok(()),
+        Err(err)
+            if temp_conn.db_type == DbType::Db2
+                && is_db2_sidecar_transport_error_message(&err) =>
+        {
+            sidecar.reset().await;
+            timeout(
+                Duration::from_secs(20),
+                run_connection_test(&temp_conn, &password, &sidecar),
+            )
+            .await
+            .map_err(|_| "connection test timed out after 20s".to_string())?
+        }
+        Err(err) => Err(err),
+    }
 }
 
 #[tauri::command]
@@ -271,9 +336,16 @@ pub async fn db_connect(
         .ok()
         .flatten()
         .unwrap_or_default();
-    let adapter = build_adapter(&conn, &password, &sidecar)
-        .await
-        .map_err(|e| e.to_string())?;
+    let adapter = match build_adapter(&conn, &password, &sidecar).await {
+        Ok(adapter) => adapter,
+        Err(err) if conn.db_type == DbType::Db2 && is_db2_sidecar_transport_error(&err) => {
+            sidecar.reset().await;
+            build_adapter(&conn, &password, &sidecar)
+                .await
+                .map_err(|e| e.to_string())?
+        }
+        Err(err) => return Err(err.to_string()),
+    };
     manager.insert(id, adapter).await;
     Ok(())
 }
@@ -324,8 +396,28 @@ pub async fn db_get_table_schema(
 pub async fn db_execute_query(
     connection_id: String,
     sql: String,
+    schema: Option<String>,
+    config: State<'_, Arc<ConfigStore>>,
     manager: State<'_, DbManager>,
 ) -> Result<QueryResult, String> {
+    if let Some(conn) = config
+        .get()
+        .db_connections
+        .into_iter()
+        .find(|c| c.id == connection_id)
+    {
+        if conn.db_type == DbType::Db2 {
+            if let Some(schema_name) = schema.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+                let escaped_schema = schema_name.replace('"', "\"\"");
+                let set_schema_sql = format!("SET CURRENT SCHEMA \"{escaped_schema}\"");
+                manager
+                    .execute(&connection_id, &set_schema_sql)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
     manager
         .execute(&connection_id, &sql)
         .await
@@ -360,15 +452,10 @@ pub async fn db_preview_table(
             )
         }
         DbType::Db2 => {
-            // DB2 uses FETCH FIRST; offset requires ROW_NUMBER
-            if offset == 0 {
-                format!("SELECT * FROM \"{schema}\".\"{table}\" FETCH FIRST {page_size} ROWS ONLY")
-            } else {
-                format!(
-                    "SELECT * FROM (SELECT t.*, ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn__ FROM \"{schema}\".\"{table}\" t) r WHERE rn__ > {offset} AND rn__ <= {}",
-                    offset + page_size
-                )
-            }
+            // DB2 supports OFFSET/FETCH for paging.
+            format!(
+                "SELECT * FROM \"{schema}\".\"{table}\" OFFSET {offset} ROWS FETCH NEXT {page_size} ROWS ONLY"
+            )
         }
         // PostgreSQL, MySQL, SQLite all support LIMIT/OFFSET
         _ => {

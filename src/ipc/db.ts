@@ -10,6 +10,7 @@ export interface DbConnectionInfo {
   port: number;
   database: string;
   username: string;
+  default_schema?: string | null;
   is_connected: boolean;
 }
 
@@ -22,6 +23,7 @@ export interface DbConnectionInput {
   database: string;
   username: string;
   password: string;
+  default_schema?: string | null;
 }
 
 export interface TableInfo {
@@ -100,8 +102,8 @@ export function dbGetTableSchema(connectionId: string, schema: string, table: st
   return invoke("db_get_table_schema", { connectionId, schema, table });
 }
 
-export function dbExecuteQuery(connectionId: string, sql: string): Promise<QueryResult> {
-  return invoke("db_execute_query", { connectionId, sql });
+export function dbExecuteQuery(connectionId: string, sql: string, schema?: string): Promise<QueryResult> {
+  return invoke("db_execute_query", { connectionId, sql, schema });
 }
 
 export function dbPreviewTable(connectionId: string, schema: string, table: string, page: number, pageSize: number): Promise<QueryResult> {

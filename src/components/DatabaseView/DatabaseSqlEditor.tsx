@@ -3,9 +3,10 @@ import { dbExecuteQuery, type QueryResult } from "../../ipc/db";
 
 interface Props {
   connectionId: string;
+  schema: string;
 }
 
-export function DatabaseSqlEditor({ connectionId }: Props) {
+export function DatabaseSqlEditor({ connectionId, schema }: Props) {
   const [sql, setSql] = useState("SELECT 1;");
   const [result, setResult] = useState<QueryResult | null>(null);
   const [running, setRunning] = useState(false);
@@ -14,7 +15,7 @@ export function DatabaseSqlEditor({ connectionId }: Props) {
     if (!sql.trim()) return;
     setRunning(true);
     try {
-      const r = await dbExecuteQuery(connectionId, sql);
+      const r = await dbExecuteQuery(connectionId, sql, schema || undefined);
       setResult(r);
     } catch (e: unknown) {
       setResult({ columns: [], rows: [], affected_rows: null, execution_time_ms: 0, error: String(e) });

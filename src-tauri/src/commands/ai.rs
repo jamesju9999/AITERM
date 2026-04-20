@@ -195,8 +195,7 @@ pub async fn ai_query(
     router: State<'_, AiRouter>,
 ) -> Result<AiCommandReady, AiError> {
     let snapshot = context::snapshot(&pty_manager, &session_id);
-    let provider = router.resolve()?;
-
+    let provider = router.resolve().await?;
     let prompt = build_single_command_prompt(&snapshot);
     let req = GenerateRequest {
         system_prompt: prompt,
@@ -297,8 +296,8 @@ pub async fn ai_chat(
 
     let snapshot = context::snapshot(&pty_manager, &session_id);
     let provider = match provider_id.as_deref() {
-        Some(id) => router.resolve_by_id(id)?,
-        None => router.resolve()?,
+        Some(id) => router.resolve_by_id(id).await?,
+        None => router.resolve().await?,
     };
 
     let prompt = build_chat_prompt(&snapshot);

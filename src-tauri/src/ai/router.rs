@@ -7,6 +7,7 @@
 //! keep working without migration.
 
 use std::sync::Arc;
+use std::process::Command;
 
 use crate::{
     ai::{
@@ -31,7 +32,7 @@ impl AiRouter {
     }
 
     /// Resolve the default provider (from config) into a live `AiProvider`.
-    pub fn resolve(&self) -> Result<Arc<dyn AiProvider>, AiError> {
+    pub async fn resolve(&self) -> Result<Arc<dyn AiProvider>, AiError> {
         let cfg = self.config.get();
 
         // M1 env-var fallback: honour OPENAI_API_KEY if no providers configured yet.
@@ -49,11 +50,11 @@ impl AiRouter {
         let id = cfg.default_provider.as_deref().unwrap_or_else(|| {
             cfg.providers.first().map(|p| p.id.as_str()).unwrap_or("")
         });
-        self.resolve_by_id(id)
+        self.resolve_by_id(id).await
     }
 
     /// Resolve a specific provider by id.
-    pub fn resolve_by_id(&self, id: &str) -> Result<Arc<dyn AiProvider>, AiError> {
+    pub async fn resolve_by_id(&self, id: &str) -> Result<Arc<dyn AiProvider>, AiError> {
         let cfg = self.config.get();
         let provider_cfg = cfg
             .find_provider(id)
@@ -110,9 +111,78 @@ impl AiRouter {
                     provider_cfg.supports_json_mode,
                 ))
             }
+            ProviderType::GithubCopilot => {
+                let github_token = self
+                    .secrets
+                    .get(&provider_cfg.id)
+                    .map_err(|_| AiError::NotConfigured)?
+                    .filter(|v| !v.trim().is_empty())
+                    .ok_or(AiError::NotConfigured)?;
+                // Exchange the GitHub OAuth token for a short-lived Copilot
+                // session token — the raw OAuth token is rejected by
+                // api.githubcopilot.com/chat/completions with 403.
+                let copilot_token =
+                    crate::ai::copilot::get_copilot_session_token(&github_token)
+                        .await
+                        .map_err(|msg| AiError::Network { message: msg })?;
+                // Copilot API requires IDE-style headers on every request.
+                let copilot_headers = vec![
+                    ("Editor-Version".into(), "vscode/1.99.0".into()),
+                    ("Editor-Plugin-Version".into(), "copilot/1.0.0".into()),
+                    ("Copilot-Integration-Id".into(), "vscode-chat".into()),
+                    ("Openai-Intent".into(), "conversation-panel".into()),
+                ];
+                Arc::new(OpenAiCompatibleClient::with_extra_headers(
+                    provider_cfg
+                        .base_url
+                        .unwrap_or_else(|| "https://api.githubcopilot.com".into()),
+                    provider_cfg.model.clone(),
+                    Some(copilot_token),
+                    provider_cfg.supports_json_mode,
+                    copilot_headers,
+                ))
+            }
+            ProviderType::GoogleAi => {
+                let key = self
+                    .secrets
+                    .get(&provider_cfg.id)
+                    .map_err(|_| AiError::NotConfigured)?
+                    .ok_or(AiError::NotConfigured)?;
+                Arc::new(OpenAiCompatibleClient::new(
+                    provider_cfg
+                        .base_url
+                        .unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta/openai".into()),
+                    provider_cfg.model.clone(),
+                    Some(key),
+                    provider_cfg.supports_json_mode,
+                ))
+            }
+            ProviderType::GoogleGeminiOauth => {
+                let token = get_gcloud_access_token().ok_or(AiError::NotConfigured)?;
+                Arc::new(OpenAiCompatibleClient::new(
+                    provider_cfg
+                        .base_url
+                        .unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta/openai".into()),
+                    provider_cfg.model.clone(),
+                    Some(token),
+                    provider_cfg.supports_json_mode,
+                ))
+            }
         };
         Ok(provider)
     }
+}
+
+fn get_gcloud_access_token() -> Option<String> {
+    let output = Command::new("gcloud")
+        .args(["auth", "application-default", "print-access-token"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if token.is_empty() { None } else { Some(token) }
 }
 
 #[cfg(test)]
@@ -132,33 +202,33 @@ mod tests {
         AiRouter::new(config, secrets)
     }
 
-    #[test]
-    fn empty_config_no_env_var_returns_not_configured() {
+    #[tokio::test]
+    async fn empty_config_no_env_var_returns_not_configured() {
         let _g = ENV_LOCK.lock().unwrap();
         std::env::remove_var("OPENAI_API_KEY");
         let router = make_router(AppConfig::default());
-        assert!(matches!(router.resolve(), Err(AiError::NotConfigured)));
+        assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
     }
 
-    #[test]
-    fn empty_config_with_env_var_returns_openai_provider() {
+    #[tokio::test]
+    async fn empty_config_with_env_var_returns_openai_provider() {
         let _g = ENV_LOCK.lock().unwrap();
         std::env::set_var("OPENAI_API_KEY", "sk-test");
         let router = make_router(AppConfig::default());
-        let result = router.resolve().is_ok();
+        let result = router.resolve().await.is_ok();
         std::env::remove_var("OPENAI_API_KEY");
         assert!(result);
     }
 
-    #[test]
-    fn unknown_provider_id_returns_not_configured() {
+    #[tokio::test]
+    async fn unknown_provider_id_returns_not_configured() {
         std::env::remove_var("OPENAI_API_KEY");
         let router = make_router(AppConfig::default());
-        assert!(matches!(router.resolve_by_id("nonexistent"), Err(AiError::NotConfigured)));
+        assert!(matches!(router.resolve_by_id("nonexistent").await, Err(AiError::NotConfigured)));
     }
 
-    #[test]
-    fn ollama_provider_resolves_without_api_key() {
+    #[tokio::test]
+    async fn ollama_provider_resolves_without_api_key() {
         std::env::remove_var("OPENAI_API_KEY");
         let mut cfg = AppConfig::default();
         cfg.providers.push(ProviderConfig {
@@ -166,12 +236,13 @@ mod tests {
             display_name: "Ollama".into(),
             provider_type: ProviderType::Ollama,
             base_url: Some("http://localhost:11434".into()),
+            oauth_client_id: None,
             model: "llama3".into(),
             supports_json_mode: false,
         });
         cfg.default_provider = Some("local-llama".into());
         let router = make_router(cfg);
         // Should succeed even with no secret in the keychain.
-        assert!(router.resolve().is_ok());
+        assert!(router.resolve().await.is_ok());
     }
 }

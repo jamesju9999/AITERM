@@ -21,6 +21,8 @@ pub struct OpenAiCompatibleClient {
     /// Whether to send `response_format: { type: "json_object" }`.
     /// Most OpenAI-compatible servers support this, but some don't.
     supports_json_mode: bool,
+    /// Extra headers added to every request (e.g. Copilot IDE headers).
+    extra_headers: Vec<(String, String)>,
     client: reqwest::Client,
 }
 
@@ -31,11 +33,32 @@ impl OpenAiCompatibleClient {
         api_key: Option<String>,
         supports_json_mode: bool,
     ) -> Self {
-        Self { api_key, model, base_url, supports_json_mode, client: reqwest::Client::new() }
+        Self { api_key, model, base_url, supports_json_mode, extra_headers: vec![], client: reqwest::Client::new() }
+    }
+
+    /// Create a client with additional static headers on every request.
+    pub fn with_extra_headers(
+        base_url: String,
+        model: String,
+        api_key: Option<String>,
+        supports_json_mode: bool,
+        extra_headers: Vec<(String, String)>,
+    ) -> Self {
+        Self { api_key, model, base_url, supports_json_mode, extra_headers, client: reqwest::Client::new() }
     }
 
     fn completions_url(&self) -> String {
         format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
+    }
+
+    fn apply_headers(&self, mut builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(key) = &self.api_key {
+            builder = builder.bearer_auth(key);
+        }
+        for (k, v) in &self.extra_headers {
+            builder = builder.header(k.as_str(), v.as_str());
+        }
+        builder
     }
 }
 
@@ -50,10 +73,7 @@ impl AiProvider for OpenAiCompatibleClient {
         tx: mpsc::Sender<GenerateChunk>,
     ) -> Result<(), AiError> {
         let body = build_request_body(&self.model, &req, self.supports_json_mode);
-        let mut builder = self.client.post(self.completions_url()).json(&body);
-        if let Some(key) = &self.api_key {
-            builder = builder.bearer_auth(key);
-        }
+        let builder = self.apply_headers(self.client.post(self.completions_url()).json(&body));
 
         let resp = builder
             .send()
@@ -70,10 +90,7 @@ impl AiProvider for OpenAiCompatibleClient {
             if body_text.contains("response_format") {
                 log::warn!("Provider rejected response_format, retrying without it: {body_text}");
                 let body_no_json = build_request_body(&self.model, &req, false);
-                let mut retry = self.client.post(self.completions_url()).json(&body_no_json);
-                if let Some(key) = &self.api_key {
-                    retry = retry.bearer_auth(key);
-                }
+                let retry = self.apply_headers(self.client.post(self.completions_url()).json(&body_no_json));
                 let retry_resp = retry.send().await
                     .map_err(|e| AiError::Network { message: e.to_string() })?;
                 let retry_status = retry_resp.status();
@@ -111,10 +128,7 @@ impl AiProvider for OpenAiCompatibleClient {
             max_tokens: Some(1),
         };
         let body = build_request_body(&self.model, &req, false);
-        let mut builder = self.client.post(self.completions_url()).json(&body);
-        if let Some(key) = &self.api_key {
-            builder = builder.bearer_auth(key);
-        }
+        let builder = self.apply_headers(self.client.post(self.completions_url()).json(&body));
         let resp = builder
             .send()
             .await

@@ -6,7 +6,10 @@ export type ProviderType =
   | "openai"
   | "anthropic"
   | "ollama"
-  | "openai-compatible";
+  | "openai-compatible"
+  | "github-copilot"
+  | "google-ai"
+  | "google-gemini-oauth";
 
 export type ExecutionMode = "always-confirm" | "graded" | "full-auto";
 
@@ -19,6 +22,7 @@ export interface ProviderConfig {
   display_name: string;
   provider_type: ProviderType;
   base_url: string | null;
+  oauth_client_id: string | null;
   model: string;
   supports_json_mode: boolean;
 }

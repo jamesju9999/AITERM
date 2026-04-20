@@ -1,6 +1,7 @@
 //! Tauri commands for provider management (list / add / update / remove / test).
 
 use std::sync::Arc;
+use std::process::Command;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -10,6 +11,8 @@ use crate::{
     secret::SecretStore,
 };
 
+const DEFAULT_GITHUB_DEVICE_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
+
 /// A view of a provider suitable for the frontend — never includes secrets.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderInfo {
@@ -17,6 +20,7 @@ pub struct ProviderInfo {
     pub display_name: String,
     pub provider_type: ProviderType,
     pub base_url: Option<String>,
+    pub oauth_client_id: Option<String>,
     pub model: String,
     pub supports_json_mode: bool,
     pub has_api_key: bool,
@@ -30,6 +34,7 @@ pub struct ProviderInput {
     pub display_name: String,
     pub provider_type: ProviderType,
     pub base_url: Option<String>,
+    pub oauth_client_id: Option<String>,
     pub model: String,
     pub supports_json_mode: bool,
     /// The API key to store in the keychain. `None` means "don't change".
@@ -49,9 +54,14 @@ pub fn list_providers(
             display_name: p.display_name.clone(),
             provider_type: p.provider_type,
             base_url: p.base_url.clone(),
+            oauth_client_id: p.oauth_client_id.clone(),
             model: p.model.clone(),
             supports_json_mode: p.supports_json_mode,
-            has_api_key: secrets.has(&p.id),
+            has_api_key: match p.provider_type {
+                ProviderType::GithubCopilot => secrets.has(&p.id),
+                ProviderType::GoogleGeminiOauth => get_gcloud_access_token().is_some(),
+                _ => secrets.has(&p.id),
+            },
             is_default: cfg.default_provider.as_deref() == Some(&p.id),
         })
         .collect()
@@ -76,6 +86,7 @@ pub fn add_provider(
         display_name: input.display_name,
         provider_type: input.provider_type,
         base_url: input.base_url,
+        oauth_client_id: input.oauth_client_id,
         model: input.model,
         supports_json_mode: input.supports_json_mode,
     };
@@ -107,6 +118,7 @@ pub fn update_provider(
         display_name: input.display_name,
         provider_type: input.provider_type,
         base_url: input.base_url,
+        oauth_client_id: input.oauth_client_id,
         model: input.model,
         supports_json_mode: input.supports_json_mode,
     };
@@ -157,8 +169,29 @@ pub async fn test_provider(
     config: State<'_, Arc<ConfigStore>>,
     secrets: State<'_, Arc<SecretStore>>,
 ) -> Result<String, AiError> {
+    let provider_cfg = config
+        .get()
+        .find_provider(&id)
+        .cloned()
+        .ok_or(AiError::NotConfigured)?;
+
+    // Copilot's chat/completions endpoint may reject probe-style requests
+    // with intermittent 403 policy responses. For connectivity testing,
+    // verify auth by listing models with the saved token instead.
+    if provider_cfg.provider_type == ProviderType::GithubCopilot {
+        let token = secrets
+            .get(&id)
+            .map_err(|e| AiError::Network { message: format!("keychain read failed: {e}") })?
+            .filter(|v| !v.trim().is_empty())
+            .ok_or(AiError::NotConfigured)?;
+        list_github_copilot_models(provider_cfg.base_url, token.trim())
+            .await
+            .map_err(|e| AiError::Network { message: e })?;
+        return Ok("ok".into());
+    }
+
     let router = AiRouter::new(config.inner().clone(), secrets.inner().clone());
-    let provider = router.resolve_by_id(&id)?;
+    let provider = router.resolve_by_id(&id).await?;
     provider.health_check().await?;
     Ok("ok".into())
 }
@@ -172,4 +205,297 @@ pub async fn get_ollama_models(
     let url = base_url.unwrap_or_else(|| "http://localhost:11434".into());
     let client = OllamaClient::with_base_url("".into(), url);
     client.list_models().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn github_copilot_device_start(
+    client_id: Option<String>,
+) -> Result<GithubDeviceStartResponse, String> {
+    let client_id = resolve_github_client_id(client_id);
+    let client = reqwest::Client::new();
+
+    let device = client
+        .post("https://github.com/login/device/code")
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id", client_id.as_str()),
+            ("scope", "read:user"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("request device code failed: {e}"))?;
+
+    if !device.status().is_success() {
+        let body = device.text().await.unwrap_or_default();
+        return Err(format!("request device code failed: {body}"));
+    }
+
+    let device: GithubDeviceCodeResponse = device
+        .json()
+        .await
+        .map_err(|e| format!("parse device code response failed: {e}"))?;
+
+    open_browser(&device.verification_uri);
+
+    Ok(GithubDeviceStartResponse {
+        device_code: device.device_code,
+        user_code: device.user_code,
+        verification_uri: device.verification_uri,
+        expires_in: device.expires_in,
+        interval: device.interval.max(1),
+    })
+}
+
+#[tauri::command]
+pub async fn github_copilot_device_poll(
+    client_id: Option<String>,
+    device_code: String,
+) -> Result<GithubDevicePollResponse, String> {
+    let client_id = resolve_github_client_id(client_id);
+    let device_code = device_code.trim().to_string();
+    if device_code.is_empty() {
+        return Err("device_code is required".into());
+    }
+
+    let client = reqwest::Client::new();
+    let token_resp = client
+        .post("https://github.com/login/oauth/access_token")
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id", client_id.as_str()),
+            ("device_code", device_code.as_str()),
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("poll access token failed: {e}"))?;
+
+    if !token_resp.status().is_success() {
+        let body = token_resp.text().await.unwrap_or_default();
+        return Err(format!("poll access token failed: {body}"));
+    }
+
+    let payload: GithubAccessTokenResponse = token_resp
+        .json()
+        .await
+        .map_err(|e| format!("parse access token response failed: {e}"))?;
+
+    if let Some(token) = payload.access_token {
+        if token.trim().is_empty() {
+            return Err("received empty access token from GitHub".into());
+        }
+        return Ok(GithubDevicePollResponse::Authorized { access_token: token });
+    }
+
+    Ok(match payload.error.as_deref() {
+        Some("authorization_pending") => GithubDevicePollResponse::AuthorizationPending,
+        Some("slow_down") => GithubDevicePollResponse::SlowDown,
+        Some("access_denied") => GithubDevicePollResponse::AccessDenied {
+            message: payload
+                .error_description
+                .unwrap_or_else(|| "authorization denied by user".into()),
+        },
+        Some("expired_token") | Some("token_expired") => GithubDevicePollResponse::ExpiredToken {
+            message: payload
+                .error_description
+                .unwrap_or_else(|| "device code expired".into()),
+        },
+        Some(other) => GithubDevicePollResponse::Error {
+            message: format!(
+                "{other}: {}",
+                payload.error_description.unwrap_or_default()
+            ),
+        },
+        None => GithubDevicePollResponse::Error {
+            message: "device flow returned no token and no error".into(),
+        },
+    })
+}
+
+#[tauri::command]
+pub async fn get_github_copilot_models(
+    base_url: Option<String>,
+    access_token: String,
+) -> Result<Vec<String>, String> {
+    let token = access_token.trim();
+    if token.is_empty() {
+        return Err("access token is required".into());
+    }
+
+    list_github_copilot_models(base_url, token).await
+}
+
+#[tauri::command]
+pub async fn get_github_copilot_models_by_provider(
+    id: String,
+    base_url: Option<String>,
+    config: State<'_, Arc<ConfigStore>>,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<Vec<String>, String> {
+    let provider = config
+        .get()
+        .find_provider(&id)
+        .cloned()
+        .ok_or_else(|| format!("provider '{id}' not found"))?;
+    if provider.provider_type != ProviderType::GithubCopilot {
+        return Err(format!("provider '{id}' is not github-copilot"));
+    }
+    let token = secrets
+        .get(&id)
+        .map_err(|e| format!("failed to read provider secret: {e}"))?
+        .filter(|v| !v.trim().is_empty())
+        .ok_or_else(|| format!("provider '{id}' has no saved access token"))?;
+
+    list_github_copilot_models(base_url, token.trim()).await
+}
+
+async fn list_github_copilot_models(
+    base_url: Option<String>,
+    access_token: &str,
+) -> Result<Vec<String>, String> {
+    let token = access_token.trim();
+    if token.is_empty() {
+        return Err("access token is required".into());
+    }
+
+    let base = base_url
+        .unwrap_or_else(|| "https://api.githubcopilot.com".into())
+        .trim_end_matches('/')
+        .to_string();
+    let url = format!("{base}/models");
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(url)
+        .bearer_auth(token)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("list github copilot models failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("list github copilot models failed ({status}): {body}"));
+    }
+
+    let payload: OpenAiModelsResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("parse github copilot models failed: {e}"))?;
+
+    Ok(payload.data.into_iter().map(|m| m.id).collect())
+}
+
+#[tauri::command]
+pub fn google_gemini_oauth_auth() -> Result<String, String> {
+    if let Some(token) = get_gcloud_access_token() {
+        return Ok(token);
+    }
+
+    let status = Command::new("gcloud")
+        .args(["auth", "application-default", "login"])
+        .status()
+        .map_err(|e| format!("failed to launch gcloud login: {e}"))?;
+
+    if !status.success() {
+        return Err("gcloud login failed".into());
+    }
+
+    get_gcloud_access_token().ok_or_else(|| {
+        "cannot get access token after login; run `gcloud auth application-default print-access-token`".into()
+    })
+}
+
+fn resolve_github_client_id(client_id: Option<String>) -> String {
+    if let Some(v) = client_id {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    if let Ok(v) = std::env::var("GITHUB_DEVICE_CLIENT_ID") {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    DEFAULT_GITHUB_DEVICE_CLIENT_ID.to_string()
+}
+
+fn open_browser(url: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("open").arg(url).spawn();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = Command::new("xdg-open").arg(url).spawn();
+    }
+}
+
+fn get_gcloud_access_token() -> Option<String> {
+    let output = Command::new("gcloud")
+        .args(["auth", "application-default", "print-access-token"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if token.is_empty() { None } else { Some(token) }
+}
+
+#[derive(Debug, Serialize)]
+pub struct GithubDeviceStartResponse {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in: u32,
+    pub interval: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum GithubDevicePollResponse {
+    Authorized { access_token: String },
+    AuthorizationPending,
+    SlowDown,
+    AccessDenied { message: String },
+    ExpiredToken { message: String },
+    Error { message: String },
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubDeviceCodeResponse {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    expires_in: u32,
+    interval: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubAccessTokenResponse {
+    access_token: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiModelsResponse {
+    data: Vec<OpenAiModelItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiModelItem {
+    id: String,
 }

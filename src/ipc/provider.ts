@@ -9,6 +9,7 @@ export interface ProviderInfo {
   display_name: string;
   provider_type: ProviderType;
   base_url: string | null;
+  oauth_client_id: string | null;
   model: string;
   supports_json_mode: boolean;
   has_api_key: boolean;
@@ -21,6 +22,7 @@ export interface ProviderInput {
   display_name: string;
   provider_type: ProviderType;
   base_url: string | null;
+  oauth_client_id: string | null;
   model: string;
   supports_json_mode: boolean;
   api_key: string | null;
@@ -37,6 +39,22 @@ export interface AiError {
   reason?: string;
   retry_after?: string | null;
 }
+
+export interface GithubDeviceStartResponse {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+}
+
+export type GithubDevicePollResponse =
+  | { status: "authorized"; access_token: string }
+  | { status: "authorization_pending" }
+  | { status: "slow_down" }
+  | { status: "access_denied"; message: string }
+  | { status: "expired_token"; message: string }
+  | { status: "error"; message: string };
 
 // ── Commands ──────────────────────────────────────────────────────────────────
 
@@ -63,6 +81,30 @@ export const testProvider = (id: string): Promise<string> =>
 export const getOllamaModels = (baseUrl?: string): Promise<string[]> =>
   invoke("get_ollama_models", { baseUrl: baseUrl ?? null });
 
+export const githubCopilotDeviceStart = (clientId?: string): Promise<GithubDeviceStartResponse> =>
+  invoke("github_copilot_device_start", { clientId: clientId ?? null });
+
+export const githubCopilotDevicePoll = (
+  deviceCode: string,
+  clientId?: string,
+): Promise<GithubDevicePollResponse> =>
+  invoke("github_copilot_device_poll", { clientId: clientId ?? null, deviceCode });
+
+export const getGithubCopilotModels = (
+  accessToken: string,
+  baseUrl?: string,
+): Promise<string[]> =>
+  invoke("get_github_copilot_models", { accessToken, baseUrl: baseUrl ?? null });
+
+export const getGithubCopilotModelsByProvider = (
+  id: string,
+  baseUrl?: string,
+): Promise<string[]> =>
+  invoke("get_github_copilot_models_by_provider", { id, baseUrl: baseUrl ?? null });
+
+export const googleGeminiOauthAuth = (): Promise<string> =>
+  invoke("google_gemini_oauth_auth");
+
 /** Check if a provider has an API key in the keychain. */
 export const hasApiKey = (providerId: string): Promise<boolean> =>
   invoke("has_api_key", { providerId });
@@ -74,6 +116,9 @@ export const PROVIDER_TYPE_LABELS: Record<ProviderType, string> = {
   anthropic: "Anthropic",
   ollama: "Ollama",
   "openai-compatible": "OpenAI-Compatible",
+  "github-copilot": "GitHub Copilot",
+  "google-ai": "Google AI (API Key)",
+  "google-gemini-oauth": "Google Gemini (OAuth)",
 };
 
 export const DEFAULT_MODELS: Record<ProviderType, string> = {
@@ -81,6 +126,9 @@ export const DEFAULT_MODELS: Record<ProviderType, string> = {
   anthropic: "claude-sonnet-4-5",
   ollama: "llama3.1:8b",
   "openai-compatible": "",
+  "github-copilot": "gpt-4o-mini",
+  "google-ai": "gemini-2.5-pro",
+  "google-gemini-oauth": "gemini-2.5-pro",
 };
 
 export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
@@ -88,6 +136,9 @@ export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   anthropic: "",
   ollama: "http://localhost:11434",
   "openai-compatible": "",
+  "github-copilot": "https://api.githubcopilot.com",
+  "google-ai": "https://generativelanguage.googleapis.com/v1beta/openai",
+  "google-gemini-oauth": "https://generativelanguage.googleapis.com/v1beta/openai",
 };
 
 /** OpenAI-compatible quick-pick presets shown in the form. */

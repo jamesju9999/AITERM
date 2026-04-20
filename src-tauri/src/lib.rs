@@ -21,7 +21,9 @@ use commands::{
         db_remove_connection, db_test_connection, db_update_connection,
     },
     provider::{
-        add_provider, get_ollama_models, list_providers, remove_provider, set_default_provider,
+        add_provider, get_github_copilot_models, get_github_copilot_models_by_provider,
+        get_ollama_models, github_copilot_device_poll, github_copilot_device_start,
+        google_gemini_oauth_auth, list_providers, remove_provider, set_default_provider,
         test_provider, update_provider,
     },
     secret::{delete_api_key, has_api_key},
@@ -53,15 +55,15 @@ pub fn run() {
             let candidates = [
                 exe_dir.join("db2-sidecar-x86_64-pc-windows-msvc.exe"),
                 manifest_dir
-                    .join("binaries")
-                    .join("db2-sidecar-x86_64-pc-windows-msvc.exe"),
-                manifest_dir
                     .parent()
                     .expect("workspace root")
                     .join("db2-sidecar")
                     .join("bin")
                     .join("publish-win-x64-nonsingle")
                     .join("db2-sidecar.exe"),
+                manifest_dir
+                    .join("binaries")
+                    .join("db2-sidecar-x86_64-pc-windows-msvc.exe"),
             ];
 
             candidates
@@ -133,6 +135,11 @@ pub fn run() {
             set_default_provider,
             test_provider,
             get_ollama_models,
+            github_copilot_device_start,
+            github_copilot_device_poll,
+            get_github_copilot_models,
+            get_github_copilot_models_by_provider,
+            google_gemini_oauth_auth,
             // Secrets
             has_api_key,
             delete_api_key,

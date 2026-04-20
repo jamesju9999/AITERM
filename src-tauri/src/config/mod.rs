@@ -169,6 +169,7 @@ mod tests {
                 display_name: "GPT".into(),
                 provider_type: ProviderType::Openai,
                 base_url: None,
+                oauth_client_id: None,
                 model: "gpt-4o-mini".into(),
                 supports_json_mode: true,
             });
@@ -213,6 +214,7 @@ mod tests {
                 display_name: "Ollama".into(),
                 provider_type: ProviderType::Ollama,
                 base_url: Some("http://localhost:11434".into()),
+                oauth_client_id: None,
                 model: "llama3".into(),
                 supports_json_mode: false,
             });
@@ -235,6 +237,7 @@ mod tests {
             port: 5432,
             database: "mydb".into(),
             username: "postgres".into(),
+            default_schema: Some("public".into()),
         };
 
         store.add_db_connection(conn.clone()).unwrap();
@@ -267,6 +270,7 @@ mod tests {
                         display_name: format!("Provider {i}"),
                         provider_type: ProviderType::Openai,
                         base_url: None,
+                        oauth_client_id: None,
                         model: "gpt-4o-mini".into(),
                         supports_json_mode: true,
                     });

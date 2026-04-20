@@ -13,6 +13,7 @@
 pub mod anthropic;
 pub mod compatible;
 pub mod context;
+pub mod copilot;
 pub mod ollama;
 pub mod openai;
 pub mod router;
