@@ -57,11 +57,7 @@ pub fn list_providers(
             oauth_client_id: p.oauth_client_id.clone(),
             model: p.model.clone(),
             supports_json_mode: p.supports_json_mode,
-            has_api_key: match p.provider_type {
-                ProviderType::GithubCopilot => secrets.has(&p.id),
-                ProviderType::GoogleGeminiOauth => get_gcloud_access_token().is_some(),
-                _ => secrets.has(&p.id),
-            },
+            has_api_key: secrets.has(&p.id),
             is_default: cfg.default_provider.as_deref() == Some(&p.id),
         })
         .collect()
@@ -387,24 +383,140 @@ async fn list_github_copilot_models(
     Ok(payload.data.into_iter().map(|m| m.id).collect())
 }
 
+/// Open the browser for the Google OAuth loopback flow, wait for the callback,
+/// exchange the code for an access token, and store it in the keychain.
 #[tauri::command]
-pub fn google_gemini_oauth_auth() -> Result<String, String> {
-    if let Some(token) = get_gcloud_access_token() {
-        return Ok(token);
+pub async fn google_gemini_oauth_auth(
+    provider_id: String,
+    client_id: String,
+    client_secret: String,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<String, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let client_id = client_id.trim().to_string();
+    let client_secret = client_secret.trim().to_string();
+
+    if client_id.is_empty() {
+        return Err("OAuth Client ID is required".into());
+    }
+    if client_secret.is_empty() {
+        return Err("OAuth Client Secret is required".into());
     }
 
-    let status = Command::new("gcloud")
-        .args(["auth", "application-default", "login"])
-        .status()
-        .map_err(|e| format!("failed to launch gcloud login: {e}"))?;
+    // Bind a local loopback server on a random available port.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| format!("failed to start local server: {e}"))?;
+    let port = listener.local_addr().unwrap().port();
+    let redirect_uri = format!("http://localhost:{port}");
 
-    if !status.success() {
-        return Err("gcloud login failed".into());
+    let scope = "https://www.googleapis.com/auth/generative-language";
+    let auth_url = format!(
+        "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=online&prompt=consent",
+        url_encode(&client_id),
+        url_encode(&redirect_uri),
+        url_encode(scope),
+    );
+
+    open_browser(&auth_url);
+
+    // Wait for the browser redirect (up to 2 minutes).
+    let code = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        async {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .map_err(|e| format!("accept error: {e}"))?;
+
+            let mut buf = vec![0u8; 8192];
+            let n = stream
+                .read(&mut buf)
+                .await
+                .map_err(|e| format!("read error: {e}"))?;
+            let request = String::from_utf8_lossy(&buf[..n]).to_string();
+
+            // Reply with a success page so the browser doesn't hang.
+            let body = "<html><body style='font-family:sans-serif;text-align:center;padding:40px'>\
+                <h2>&#10003; Google login successful!</h2>\
+                <p>You can close this tab and return to AITerm.</p>\
+                </body></html>";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+
+            // Parse the code from "GET /?code=xxx&... HTTP/1.1"
+            request
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .and_then(|path| path.split_once('?').map(|(_, q)| q.to_string()))
+                .and_then(|query| {
+                    query
+                        .split('&')
+                        .find(|p| p.starts_with("code="))
+                        .map(|p| p[5..].to_string())
+                })
+                .ok_or_else(|| "no authorization code in OAuth callback".to_string())
+        },
+    )
+    .await
+    .map_err(|_| "OAuth login timed out (2 minutes). Please try again.".to_string())?
+    .map_err(|e| format!("OAuth callback error: {e}"))?;
+
+    // Exchange the authorization code for an access token.
+    let http = reqwest::Client::new();
+    let resp = http
+        .post("https://oauth2.googleapis.com/token")
+        .form(&[
+            ("client_id", client_id.as_str()),
+            ("client_secret", client_secret.as_str()),
+            ("code", code.as_str()),
+            ("redirect_uri", redirect_uri.as_str()),
+            ("grant_type", "authorization_code"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("token exchange request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("token exchange failed (HTTP {status}): {body}"));
     }
 
-    get_gcloud_access_token().ok_or_else(|| {
-        "cannot get access token after login; run `gcloud auth application-default print-access-token`".into()
-    })
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("failed to parse token response: {e}"))?;
+
+    let access_token = json["access_token"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| format!("no access_token in response: {json}"))?;
+
+    // Persist the token so the AI router can use it.
+    secrets
+        .set(&provider_id, &access_token)
+        .map_err(|e| format!("failed to store token: {e}"))?;
+
+    Ok(access_token)
+}
+
+/// Percent-encode a string for use in a URL query parameter.
+fn url_encode(s: &str) -> String {
+    s.bytes()
+        .flat_map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                vec![b as char]
+            }
+            _ => format!("%{b:02X}").chars().collect::<Vec<_>>(),
+        })
+        .collect()
 }
 
 fn resolve_github_client_id(client_id: Option<String>) -> String {
@@ -442,17 +554,6 @@ fn open_browser(url: &str) {
     }
 }
 
-fn get_gcloud_access_token() -> Option<String> {
-    let output = Command::new("gcloud")
-        .args(["auth", "application-default", "print-access-token"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if token.is_empty() { None } else { Some(token) }
-}
 
 #[derive(Debug, Serialize)]
 pub struct GithubDeviceStartResponse {
