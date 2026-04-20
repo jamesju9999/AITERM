@@ -1,0 +1,24 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "db2-sidecar", "db2-sidecar\db2-sidecar.csproj", "{827B8626-EBFF-88EA-30E6-8FFFDDDB8739}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{827B8626-EBFF-88EA-30E6-8FFFDDDB8739}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{827B8626-EBFF-88EA-30E6-8FFFDDDB8739}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{827B8626-EBFF-88EA-30E6-8FFFDDDB8739}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{827B8626-EBFF-88EA-30E6-8FFFDDDB8739}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {158E1E38-91D5-4135-B1F0-E6F61CAD93AF}
+	EndGlobalSection
+EndGlobal
