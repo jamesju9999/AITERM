@@ -37,3 +37,5 @@ npm-debug.log*
 
 # Brainstorming sessions
 .superpowers/
+db2-sidecar/obj/
+src-tauri/binaries/
