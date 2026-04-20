@@ -21,6 +21,7 @@ export function ProvidersPage() {
   const [formMode, setFormMode] = useState<FormMode>(null);
   const [testing, setTesting] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, string>>({});
+  const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null);
   const reload = useCallback(async () => {
     const list = await listProviders();
     setProviders(list);
@@ -41,9 +42,9 @@ export function ProvidersPage() {
   };
 
   const handleRemove = async (id: string) => {
-    if (!confirm(t.confirm_remove_provider(id))) return;
     await removeProvider(id);
     await reload();
+    setConfirmingRemove(null);
   };
 
   const handleSetDefault = async (id: string) => {
@@ -130,13 +131,25 @@ export function ProvidersPage() {
               >
                 {t.edit}
               </button>
-              <button
-                className="btn-danger"
-                onClick={() => handleRemove(p.id)}
-                title={t.provider_remove}
-              >
-                {t.provider_remove}
-              </button>
+              {confirmingRemove === p.id ? (
+                <>
+                  <button onClick={() => setConfirmingRemove(null)}>{t.cancel}</button>
+                  <button
+                    className="btn-danger"
+                    onClick={() => handleRemove(p.id)}
+                  >
+                    {t.provider_remove}?
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="btn-danger"
+                  onClick={() => setConfirmingRemove(p.id)}
+                  title={t.provider_remove}
+                >
+                  {t.provider_remove}
+                </button>
+              )}
             </div>
           </div>
         ))}
