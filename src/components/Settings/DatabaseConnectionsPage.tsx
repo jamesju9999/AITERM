@@ -11,7 +11,7 @@ type FormState = Omit<DbConnectionInput, "id"> & { id?: string };
 
 const EMPTY_FORM: FormState = {
   name: "", db_type: "postgresql", host: "localhost",
-  port: 5432, database: "", username: "", password: "",
+  port: 5432, database: "", default_schema: "", username: "", password: "",
 };
 
 export function DatabaseConnectionsPage() {
@@ -65,6 +65,7 @@ export function DatabaseConnectionsPage() {
     setForm({
       id: conn.id, name: conn.name, db_type: conn.db_type,
       host: conn.host, port: conn.port, database: conn.database,
+      default_schema: conn.default_schema ?? "",
       username: conn.username, password: "",
     });
     setShowForm(true);
@@ -102,6 +103,7 @@ export function DatabaseConnectionsPage() {
                 <div style={{ color: "#e6e6e6", fontSize: 13, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{conn.name}</div>
                 <div style={{ color: "#888", fontSize: 11, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {DB_TYPE_LABELS[conn.db_type]} · {conn.host}:{conn.port} / {conn.database}
+                  {conn.default_schema ? ` · schema=${conn.default_schema}` : ""}
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0, marginLeft: 12 }}>
@@ -167,6 +169,13 @@ export function DatabaseConnectionsPage() {
                 <input
                   value={form.database}
                   onChange={(e) => setForm((f) => ({ ...f, database: e.target.value }))}
+                  style={inputStyle}
+                />
+                <label style={labelStyle}>{t.default_schema}</label>
+                <input
+                  placeholder={t.default_schema_placeholder}
+                  value={form.default_schema ?? ""}
+                  onChange={(e) => setForm((f) => ({ ...f, default_schema: e.target.value }))}
                   style={inputStyle}
                 />
                 <label style={labelStyle}>{t.username}</label>

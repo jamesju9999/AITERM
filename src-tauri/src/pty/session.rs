@@ -330,6 +330,7 @@ mod tests {
             ShellSpec {
                 program: "cmd.exe".into(),
                 args: vec!["/Q".into()], // no banner
+                envs: vec![],
             }
         }
         #[cfg(not(windows))]

@@ -90,6 +90,10 @@ pub struct ProviderConfig {
     #[serde(default)]
     pub base_url: Option<String>,
 
+    /// Optional OAuth client id for providers that need device/web OAuth.
+    #[serde(default)]
+    pub oauth_client_id: Option<String>,
+
     /// Model identifier, e.g. "gpt-4o-mini" or "llama3.1:8b".
     pub model: String,
 
@@ -109,6 +113,9 @@ pub enum ProviderType {
     Anthropic,
     Ollama,
     OpenaiCompatible,
+    GithubCopilot,
+    GoogleAi,
+    GoogleGeminiOauth,
 }
 
 impl std::fmt::Display for ProviderType {
@@ -118,6 +125,9 @@ impl std::fmt::Display for ProviderType {
             ProviderType::Anthropic => write!(f, "Anthropic"),
             ProviderType::Ollama => write!(f, "Ollama"),
             ProviderType::OpenaiCompatible => write!(f, "OpenAI-Compatible"),
+            ProviderType::GithubCopilot => write!(f, "GitHub Copilot"),
+            ProviderType::GoogleAi => write!(f, "Google AI"),
+            ProviderType::GoogleGeminiOauth => write!(f, "Google Gemini OAuth"),
         }
     }
 }
@@ -190,6 +200,8 @@ pub struct DbConnection {
     pub port: u16,
     pub database: String,
     pub username: String,
+    #[serde(default)]
+    pub default_schema: Option<String>,
 }
 
 #[cfg(test)]
@@ -216,6 +228,9 @@ mod tests {
             (ProviderType::Anthropic, "anthropic"),
             (ProviderType::Ollama, "ollama"),
             (ProviderType::OpenaiCompatible, "openai-compatible"),
+            (ProviderType::GithubCopilot, "github-copilot"),
+            (ProviderType::GoogleAi, "google-ai"),
+            (ProviderType::GoogleGeminiOauth, "google-gemini-oauth"),
         ] {
             let w = W { ty };
             let serialized = toml::to_string(&w).unwrap();
@@ -247,6 +262,7 @@ mod tests {
                 display_name: "GPT-4o".into(),
                 provider_type: ProviderType::Openai,
                 base_url: None,
+                oauth_client_id: None,
                 model: "gpt-4o-mini".into(),
                 supports_json_mode: true,
             }],
@@ -305,6 +321,7 @@ mod tests {
             display_name: "Old".into(),
             provider_type: ProviderType::Ollama,
             base_url: None,
+            oauth_client_id: None,
             model: "llama3".into(),
             supports_json_mode: false,
         };
@@ -316,6 +333,7 @@ mod tests {
             display_name: "New".into(),
             provider_type: ProviderType::Ollama,
             base_url: None,
+            oauth_client_id: None,
             model: "llama3.1".into(),
             supports_json_mode: false,
         };

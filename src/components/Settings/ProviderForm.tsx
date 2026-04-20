@@ -6,6 +6,11 @@ import {
   DEFAULT_BASE_URLS,
   COMPATIBLE_PRESETS,
   getOllamaModels,
+  githubCopilotDeviceStart,
+  githubCopilotDevicePoll,
+  getGithubCopilotModels,
+  getGithubCopilotModelsByProvider,
+  googleGeminiOauthAuth,
 } from "../../ipc/provider";
 import type { ProviderType } from "../../ipc/config";
 import { useLocale } from "../../contexts/LocaleContext";
@@ -22,6 +27,9 @@ const PROVIDER_TYPES: ProviderType[] = [
   "anthropic",
   "ollama",
   "openai-compatible",
+  "github-copilot",
+  "google-ai",
+  "google-gemini-oauth",
 ];
 
 export function ProviderForm({ existing, onSave, onCancel }: Props) {
@@ -36,13 +44,18 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
   const [baseUrl, setBaseUrl] = useState(existing?.base_url ?? "");
   const [model, setModel] = useState(existing?.model ?? "");
   const [apiKey, setApiKey] = useState("");
+  const [oauthClientId, setOauthClientId] = useState(existing?.oauth_client_id ?? "");
   const [supportsJsonMode, setSupportsJsonMode] = useState(
     existing?.supports_json_mode ?? true
   );
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [ollamaLoading, setOllamaLoading] = useState(false);
+  const [copilotModels, setCopilotModels] = useState<string[]>([]);
+  const [copilotLoading, setCopilotLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [authing, setAuthing] = useState(false);
+  const [authStatus, setAuthStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isEdit) {
@@ -61,11 +74,59 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
       .finally(() => setOllamaLoading(false));
   }, [providerType, baseUrl]);
 
+  const loadCopilotModels = async (token: string) => {
+    setCopilotLoading(true);
+    try {
+      const models = await getGithubCopilotModels(token, baseUrl || undefined);
+      setCopilotModels(models);
+      if (models.length > 0 && !models.includes(model)) {
+        setModel(models[0]);
+      }
+    } catch {
+      setCopilotModels([]);
+    } finally {
+      setCopilotLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (providerType !== "github-copilot") return;
+    if (apiKey.trim()) {
+      loadCopilotModels(apiKey.trim());
+      return;
+    }
+    if (isEdit && existing?.has_api_key && id.trim()) {
+      setCopilotLoading(true);
+      getGithubCopilotModelsByProvider(id.trim(), baseUrl || undefined)
+        .then((models) => {
+          setCopilotModels(models);
+          if (models.length > 0 && !models.includes(model)) {
+            setModel(models[0]);
+          }
+          setAuthStatus(t.provider_auth_ok);
+        })
+        .catch(() => {
+          setCopilotModels([]);
+        })
+        .finally(() => setCopilotLoading(false));
+      return;
+    }
+    setCopilotModels([]);
+  }, [providerType, apiKey, baseUrl, isEdit, existing?.has_api_key, id, model, t.provider_auth_ok]);
+
   const handleSave = async () => {
     setError(null);
     if (!id.trim()) { setError(t.err_id_empty); return; }
     if (!displayName.trim()) { setError(t.err_name_empty); return; }
     if (!model.trim()) { setError(t.err_model_empty); return; }
+    if (
+      providerType === "github-copilot" &&
+      !apiKey.trim() &&
+      !(isEdit && existing?.has_api_key)
+    ) {
+      setError(t.err_copilot_auth_required);
+      return;
+    }
     if (providerType === "openai-compatible" && !baseUrl.trim()) {
       setError(t.err_base_url_required);
       return;
@@ -77,6 +138,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         display_name: displayName.trim(),
         provider_type: providerType,
         base_url: baseUrl.trim() || null,
+        oauth_client_id: oauthClientId.trim() || null,
         model: model.trim(),
         supports_json_mode: supportsJsonMode,
         api_key: apiKey.trim() || null,
@@ -85,6 +147,80 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
       setError(typeof e === "string" ? e : t.err_save_failed);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const runCopilotDeviceAuth = async () => {
+    setAuthing(true);
+    setAuthStatus(null);
+    try {
+      const started = await githubCopilotDeviceStart(oauthClientId.trim() || undefined);
+      setAuthStatus(`${t.provider_auth_pending} ${started.user_code}`);
+
+      let interval = Math.max(1, started.interval);
+      const deadline = Date.now() + started.expires_in * 1000;
+
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, interval * 1000));
+        const poll = await githubCopilotDevicePoll(started.device_code, oauthClientId.trim() || undefined);
+
+        if (poll.status === "authorized") {
+          setApiKey(poll.access_token);
+          setAuthStatus(t.provider_auth_ok);
+          await loadCopilotModels(poll.access_token);
+
+          // In edit mode, persist token + OAuth client id immediately so
+          // the provider-level "Test" action works without requiring a
+          // separate manual save click.
+          if (isEdit) {
+            await onSave({
+              id: id.trim(),
+              display_name: displayName.trim(),
+              provider_type: providerType,
+              base_url: baseUrl.trim() || null,
+              oauth_client_id: oauthClientId.trim() || null,
+              model: model.trim(),
+              supports_json_mode: supportsJsonMode,
+              api_key: poll.access_token,
+            });
+          }
+          return;
+        }
+
+        if (poll.status === "authorization_pending") {
+          continue;
+        }
+
+        if (poll.status === "slow_down") {
+          interval += 5;
+          continue;
+        }
+
+        if (poll.status === "access_denied" || poll.status === "expired_token" || poll.status === "error") {
+          setAuthStatus(poll.message);
+          return;
+        }
+      }
+
+      setAuthStatus(t.provider_auth_timeout);
+    } catch (e: unknown) {
+      setAuthStatus(String(e));
+    } finally {
+      setAuthing(false);
+    }
+  };
+
+  const runGoogleOauth = async () => {
+    setAuthing(true);
+    setAuthStatus(null);
+    try {
+      const token = await googleGeminiOauthAuth();
+      setApiKey(token);
+      setAuthStatus(t.provider_auth_ok);
+    } catch (e: unknown) {
+      setAuthStatus(String(e));
+    } finally {
+      setAuthing(false);
     }
   };
 
@@ -130,7 +266,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         />
       </div>
 
-      {providerType !== "ollama" && (
+      {providerType !== "ollama" && providerType !== "github-copilot" && providerType !== "google-gemini-oauth" && (
         <div className="form-group">
           <label>
             {providerType === "openai-compatible" ? t.provider_api_key_optional : t.provider_api_key}
@@ -145,7 +281,11 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         </div>
       )}
 
-      {(providerType === "ollama" || providerType === "openai-compatible") && (
+      {(providerType === "ollama" ||
+        providerType === "openai-compatible" ||
+        providerType === "github-copilot" ||
+        providerType === "google-ai" ||
+        providerType === "google-gemini-oauth") && (
         <div className="form-group">
           <label>{t.provider_base_url}</label>
           {providerType === "openai-compatible" && (
@@ -171,6 +311,37 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         </div>
       )}
 
+      {providerType === "github-copilot" && (
+        <div className="form-group">
+          <label>{t.provider_oauth_client_id}</label>
+          <input
+            type="text"
+            value={oauthClientId}
+            onChange={(e) => setOauthClientId(e.target.value)}
+            placeholder={t.provider_oauth_client_id_placeholder}
+          />
+          <label>{t.provider_auth_action}</label>
+          <button type="button" onClick={runCopilotDeviceAuth} disabled={authing}>
+            {authing
+              ? t.provider_auth_running
+              : (apiKey.trim() || (isEdit && existing?.has_api_key))
+                ? t.provider_auth_ok
+                : t.provider_copilot_device_auth}
+          </button>
+          {authStatus && <div className="form-hint">{authStatus}</div>}
+        </div>
+      )}
+
+      {providerType === "google-gemini-oauth" && (
+        <div className="form-group">
+          <label>{t.provider_auth_action}</label>
+          <button type="button" onClick={runGoogleOauth} disabled={authing}>
+            {authing ? t.provider_auth_running : t.provider_google_oauth_auth}
+          </button>
+          {authStatus && <div className="form-hint">{authStatus}</div>}
+        </div>
+      )}
+
       <div className="form-group">
         <label>{t.provider_model}</label>
         {providerType === "ollama" ? (
@@ -192,6 +363,25 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
               placeholder={t.provider_ollama_fallback_placeholder}
             />
           )
+        ) : providerType === "github-copilot" ? (
+          copilotLoading ? (
+            <input type="text" value={t.provider_model_loading} disabled />
+          ) : copilotModels.length > 0 ? (
+            <select value={model} onChange={(e) => setModel(e.target.value)}>
+              {copilotModels.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="text"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder={DEFAULT_MODELS[providerType]}
+            />
+          )
         ) : (
           <input
             type="text"
@@ -202,7 +392,10 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         )}
       </div>
 
-      {providerType === "openai-compatible" && (
+      {(providerType === "openai-compatible" ||
+        providerType === "github-copilot" ||
+        providerType === "google-ai" ||
+        providerType === "google-gemini-oauth") && (
         <div className="form-group form-group--checkbox">
           <label>
             <input

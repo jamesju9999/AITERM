@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { dbListTables, dbExecuteQuery, type TableInfo, type QueryResult } from "../../ipc/db";
-import { aiChat } from "../../ipc/ai";
+import { aiChat, formatAiError, type AiError } from "../../ipc/ai";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getConfig } from "../../ipc/config";
 
@@ -85,6 +85,28 @@ function formatResultForAi(result: QueryResult): string {
 function formatDate(ts: number): string {
   const d = new Date(ts);
   return d.toLocaleDateString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function normalizeAiError(err: unknown): AiError {
+  if (err && typeof err === "object" && "kind" in err) {
+    return err as AiError;
+  }
+  if (err instanceof Error) {
+    try {
+      const parsed = JSON.parse(err.message);
+      if (parsed && typeof parsed === "object" && "kind" in parsed) {
+        return parsed as AiError;
+      }
+    } catch {
+      // fall through
+    }
+    return { kind: "network", message: err.message };
+  }
+  return { kind: "network", message: String(err) };
+}
+
+function errorText(err: unknown): string {
+  return formatAiError(normalizeAiError(err));
 }
 
 export function DatabaseAiChat({ connectionId, schema }: Props) {
@@ -191,6 +213,7 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
 
     const nextMessages = [...messages, userMessage, assistantMessage];
     setMessages(nextMessages);
+    persistSession(nextMessages, sessionId, sessionTitle);
 
     const loopHistory: { role: "user" | "assistant"; content: string }[] = [
       ...historyForAi,
@@ -248,9 +271,9 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
 
         let result: QueryResult;
         try {
-          result = await dbExecuteQuery(connectionId, sql);
+          result = await dbExecuteQuery(connectionId, sql, schema || undefined);
         } catch (e: unknown) {
-          result = { columns: [], rows: [], affected_rows: null, execution_time_ms: 0, error: String(e) };
+          result = { columns: [], rows: [], affected_rows: null, execution_time_ms: 0, error: errorText(e) };
         }
 
         if (stoppedRef.current) break;
@@ -298,12 +321,17 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
 
       void finalMessages; // suppress unused warning
     } catch (e: unknown) {
-      updateLastMsg((m) => ({
-        ...m,
-        text: `錯誤：${String(e)}`,
-        agentRunning: false,
-        agentStepLabel: undefined,
-      }));
+      setMessages((prev) => {
+        const copy = [...prev];
+        copy[copy.length - 1] = {
+          ...copy[copy.length - 1],
+          text: `錯誤：${errorText(e)}`,
+          agentRunning: false,
+          agentStepLabel: undefined,
+        };
+        persistSession(copy, sessionId, sessionTitle);
+        return copy;
+      });
     } finally {
       setSending(false);
     }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { dbConnect, dbListSchemas } from "../../ipc/db";
+import { dbConnect, dbListConnections, dbListSchemas } from "../../ipc/db";
 import { ConnectionSelector } from "./ConnectionSelector";
 import { DatabaseBrowser } from "./DatabaseBrowser";
 import { DatabaseSqlEditor } from "./DatabaseSqlEditor";
@@ -23,14 +23,31 @@ export function DatabaseView({ tabId: _tabId, isActive: _isActive, dbConnectionI
 
   useEffect(() => {
     if (!dbConnectionId) return;
+    let cancelled = false;
     dbConnect(dbConnectionId)
-      .then(() => dbListSchemas(dbConnectionId))
-      .then((s) => {
+      .then(() => Promise.all([dbListSchemas(dbConnectionId), dbListConnections()]))
+      .then(([s, connections]) => {
+        if (cancelled) return;
+        const preferredSchema = connections
+          .find((c) => c.id === dbConnectionId)
+          ?.default_schema
+          ?.trim();
+        const initialSchema =
+          preferredSchema && s.includes(preferredSchema)
+            ? preferredSchema
+            : (s[0] ?? "");
         setSchemas(s);
-        setActiveSchema(s[0] ?? "");
+        setActiveSchema(initialSchema);
         setConnectError(null);
       })
-      .catch((e: unknown) => setConnectError(String(e)));
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setConnectError(String(e));
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [dbConnectionId]);
 
   if (!dbConnectionId) {
@@ -102,7 +119,7 @@ export function DatabaseView({ tabId: _tabId, isActive: _isActive, dbConnectionI
               <DatabaseAiChat connectionId={dbConnectionId} schema={activeSchema} />
             </div>
             <div style={{ display: subTab === "sql" ? "contents" : "none" }}>
-              <DatabaseSqlEditor connectionId={dbConnectionId} />
+              <DatabaseSqlEditor connectionId={dbConnectionId} schema={activeSchema} />
             </div>
           </>
         )}
