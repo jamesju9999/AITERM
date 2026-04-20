@@ -83,7 +83,7 @@ impl DbAdapter for Db2Adapter {
         check_ok(&resp)?;
         Ok(resp["rows"]
             .as_array()
-            .unwrap_or(&vec![])
+            .map(Vec::as_slice).unwrap_or(&[])
             .iter()
             .filter_map(|row| row.as_array()?.first()?.as_str().map(|s| s.to_string()))
             .collect())
@@ -96,7 +96,7 @@ impl DbAdapter for Db2Adapter {
         check_ok(&resp)?;
         Ok(resp["rows"]
             .as_array()
-            .unwrap_or(&vec![])
+            .map(Vec::as_slice).unwrap_or(&[])
             .iter()
             .filter_map(|row| {
                 let arr = row.as_array()?;
@@ -117,7 +117,7 @@ impl DbAdapter for Db2Adapter {
         check_ok(&resp)?;
         Ok(resp["rows"]
             .as_array()
-            .unwrap_or(&vec![])
+            .map(Vec::as_slice).unwrap_or(&[])
             .iter()
             .filter_map(|row| {
                 let arr = row.as_array()?;
@@ -152,23 +152,23 @@ impl DbAdapter for Db2Adapter {
 
         let columns: Vec<String> = resp["columns"]
             .as_array()
-            .unwrap_or(&vec![])
+            .map(Vec::as_slice).unwrap_or(&[])
             .iter()
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
             .collect();
 
         let rows: Vec<Vec<serde_json::Value>> = resp["rows"]
             .as_array()
-            .unwrap_or(&vec![])
+            .map(Vec::as_slice).unwrap_or(&[])
             .iter()
             .map(|row| {
                 row.as_array()
-                    .unwrap_or(&vec![])
+                    .map(Vec::as_slice).unwrap_or(&[])
                     .iter()
                     .map(|v| match v {
                         serde_json::Value::Null => serde_json::Value::Null,
                         serde_json::Value::String(s) => serde_json::Value::String(s.clone()),
-                        other => serde_json::Value::String(other.to_string()),
+                        other => other.clone(),
                     })
                     .collect()
             })
