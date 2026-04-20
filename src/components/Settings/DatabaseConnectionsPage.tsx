@@ -22,6 +22,7 @@ export function DatabaseConnectionsPage() {
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "ok" | "error">("idle");
   const [testMsg, setTestMsg] = useState("");
   const [saving, setSaving] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
 
   const load = () => dbListConnections().then(setConnections).catch(console.error);
   useEffect(() => { load(); }, []);
@@ -73,8 +74,8 @@ export function DatabaseConnectionsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm(t.confirm_delete)) return;
     await dbRemoveConnection(id);
+    setConfirmingDelete(null);
     load();
   };
 
@@ -109,7 +110,14 @@ export function DatabaseConnectionsPage() {
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0, marginLeft: 12 }}>
                 {conn.is_connected && <span style={{ color: "#34d399", fontSize: 11 }}>{t.connected}</span>}
                 <button onClick={() => handleEdit(conn)} style={btnStyle}>{t.edit}</button>
-                <button onClick={() => handleDelete(conn.id)} style={{ ...btnStyle, color: "#f87171", borderColor: "#f87171" }}>{t.delete}</button>
+                {confirmingDelete === conn.id ? (
+                  <>
+                    <button onClick={() => setConfirmingDelete(null)} style={btnStyle}>{t.cancel}</button>
+                    <button onClick={() => handleDelete(conn.id)} style={{ ...btnStyle, color: "#f87171", borderColor: "#f87171" }}>{t.delete}?</button>
+                  </>
+                ) : (
+                  <button onClick={() => setConfirmingDelete(conn.id)} style={{ ...btnStyle, color: "#f87171", borderColor: "#f87171" }}>{t.delete}</button>
+                )}
               </div>
             </div>
           ))}
