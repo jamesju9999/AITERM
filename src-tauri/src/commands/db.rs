@@ -1,9 +1,11 @@
 //! Tauri commands for database connection management and query execution.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
+use tokio::time::timeout;
 
 use crate::config::{
     types::{DbConnection, DbType},
@@ -107,8 +109,8 @@ async fn build_adapter(
         )),
         DbType::Db2 => {
             let cs = format!(
-                "DATABASE={};HOSTNAME={};PORT={};PROTOCOL=TCPIP;",
-                conn.database, conn.host, conn.port
+                "Server={}:{};Database={};",
+                conn.host, conn.port, conn.database
             );
             let client = sidecar.get_client().await?;
             Ok(Box::new(
@@ -237,10 +239,14 @@ pub async fn db_test_connection(
         username: input.username.clone(),
     };
 
-    let adapter = build_adapter(&temp_conn, &password, &sidecar)
-        .await
-        .map_err(|e| e.to_string())?;
-    adapter.test().await.map_err(|e| e.to_string())
+    timeout(Duration::from_secs(20), async {
+        let adapter = build_adapter(&temp_conn, &password, &sidecar)
+            .await
+            .map_err(|e| e.to_string())?;
+        adapter.test().await.map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|_| "connection test timed out after 20s".to_string())?
 }
 
 #[tauri::command]
@@ -356,9 +362,7 @@ pub async fn db_preview_table(
         DbType::Db2 => {
             // DB2 uses FETCH FIRST; offset requires ROW_NUMBER
             if offset == 0 {
-                format!(
-                    "SELECT * FROM \"{schema}\".\"{table}\" FETCH FIRST {page_size} ROWS ONLY"
-                )
+                format!("SELECT * FROM \"{schema}\".\"{table}\" FETCH FIRST {page_size} ROWS ONLY")
             } else {
                 format!(
                     "SELECT * FROM (SELECT t.*, ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn__ FROM \"{schema}\".\"{table}\" t) r WHERE rn__ > {offset} AND rn__ <= {}",
@@ -368,9 +372,7 @@ pub async fn db_preview_table(
         }
         // PostgreSQL, MySQL, SQLite all support LIMIT/OFFSET
         _ => {
-            format!(
-                "SELECT * FROM \"{schema}\".\"{table}\" LIMIT {page_size} OFFSET {offset}"
-            )
+            format!("SELECT * FROM \"{schema}\".\"{table}\" LIMIT {page_size} OFFSET {offset}")
         }
     };
 

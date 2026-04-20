@@ -1,7 +1,11 @@
 // db2-sidecar/Program.cs
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text;
 using Db2Sidecar;
+
+Console.InputEncoding = Encoding.UTF8;
+Console.OutputEncoding = Encoding.UTF8;
 
 var jsonOptions = new JsonSerializerOptions
 {
