@@ -58,6 +58,10 @@ impl Db2SidecarClient {
         let mut resp_line = String::new();
         io.stdout.read_line(&mut resp_line).await?;
 
+        if resp_line.is_empty() {
+            return Err(anyhow::anyhow!("db2_sidecar_died: EOF on stdout"));
+        }
+
         Ok(serde_json::from_str(resp_line.trim())?)
     }
 }
@@ -70,6 +74,11 @@ pub struct Db2SidecarState {
 impl Db2SidecarState {
     pub fn new(sidecar_path: PathBuf) -> Self {
         Self { client: Mutex::new(None), sidecar_path }
+    }
+
+    /// Clears the cached client so the next `get_client` call re-spawns the sidecar.
+    pub async fn reset(&self) {
+        *self.client.lock().await = None;
     }
 
     /// Returns the shared sidecar client, spawning it on first call.
