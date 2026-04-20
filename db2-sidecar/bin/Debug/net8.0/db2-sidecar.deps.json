@@ -1,0 +1,41 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {
+      "db2-sidecar/1.0.0": {
+        "dependencies": {
+          "IBM.Data.DB2.Core": "3.1.0.600"
+        },
+        "runtime": {
+          "db2-sidecar.dll": {}
+        }
+      },
+      "IBM.Data.DB2.Core/3.1.0.600": {
+        "runtime": {
+          "lib/netstandard2.1/IBM.Data.DB2.Core.dll": {
+            "assemblyVersion": "3.1.0.600",
+            "fileVersion": "3.1.0.600"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "db2-sidecar/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "IBM.Data.DB2.Core/3.1.0.600": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-xD8Cur1S3np5RbiDax+SYypOMEZGnI+9FXI/c4uSEQU3grOt9PlecG6voemXfBaAGSxZNtbTzYmA/dDmUelZMA==",
+      "path": "ibm.data.db2.core/3.1.0.600",
+      "hashPath": "ibm.data.db2.core.3.1.0.600.nupkg.sha512"
+    }
+  }
+}
