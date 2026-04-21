@@ -78,10 +78,10 @@
   padding: 6px 10px;
   border-radius: 8px;
   word-wrap: break-word;
-  white-space: pre-wrap;
   line-height: 1.5;
 }
 .aiterm-bubble-user {
+  white-space: pre-wrap; /* preserve user's own line breaks */
   align-self: flex-end;
   background: #1e3a5f;
   color: #e6e6e6;
@@ -129,6 +129,44 @@
 .aiterm-cmd-tag-play {
   color: #6cf06c;
 }
+
+/* ── Markdown rendered inside assistant bubbles ── */
+.aiterm-bubble-assistant .md-p {
+  margin: 0 0 4px;
+  line-height: 1.6;
+}
+.aiterm-bubble-assistant .md-p:last-child { margin-bottom: 0; }
+
+.aiterm-bubble-assistant .md-h1,
+.aiterm-bubble-assistant .md-h2,
+.aiterm-bubble-assistant .md-h3 {
+  margin: 10px 0 4px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: #e0e8ff;
+}
+.aiterm-bubble-assistant .md-h1 { font-size: 14px; }
+.aiterm-bubble-assistant .md-h2 { font-size: 13px; }
+.aiterm-bubble-assistant .md-h3 { font-size: 13px; color: #b8d0ff; }
+
+.aiterm-bubble-assistant .md-list {
+  margin: 4px 0 6px 16px;
+  padding: 0;
+  list-style: disc;
+  line-height: 1.6;
+}
+.aiterm-bubble-assistant .md-list li { margin: 2px 0; }
+
+.aiterm-bubble-assistant .md-code {
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 12px;
+  color: #a8d8ff;
+}
+
+.aiterm-bubble-assistant .md-gap { height: 6px; }
 
 .aiterm-retry-btn {
   background: transparent;
