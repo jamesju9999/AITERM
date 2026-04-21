@@ -6,6 +6,7 @@ import { useAiChat } from "../../hooks/useAiChat";
 import { aiChat } from "../../ipc/ai";
 import { getSessionCwd, listDirectory } from "../../ipc/fs";
 import { getPtyRecentOutput } from "../../ipc/pty";
+import { getConfig } from "../../ipc/config";
 import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
 import { MessageList } from "./MessageList";
 import "./styles.css";
@@ -13,7 +14,6 @@ import "./styles.css";
 const MIN_WIDTH = 280;
 const MAX_WIDTH_RATIO = 0.75;
 const STORAGE_WIDTH_KEY = "aiterm-panel-width";
-const MAX_AGENT_STEPS = 10;
 
 function loadSavedWidth(): number {
   try {
@@ -85,6 +85,16 @@ export function AiPanel({
   const [agentRunning, setAgentRunning] = useState(false);
   const [agentStep, setAgentStep] = useState(0);
   const agentAbortRef = useRef(false);
+  const maxAgentStepsRef = useRef<number>(5);
+
+  useEffect(() => {
+    getConfig()
+      .then((cfg) => {
+        // 0 = unlimited; use a large number internally
+        maxAgentStepsRef.current = cfg.max_agent_steps === 0 ? 9999 : (cfg.max_agent_steps ?? 5);
+      })
+      .catch(() => {});
+  }, []);
 
   /** Build system prompt with live CWD + dir listing. */
   const buildAgentSystemPrompt = useCallback(async (): Promise<string> => {
@@ -123,9 +133,10 @@ ${dirList || "（無法取得）"}
     systemPrompt: string,
     step: number,
   ): Promise<void> => {
-    if (agentAbortRef.current || step >= MAX_AGENT_STEPS) {
+    const maxSteps = maxAgentStepsRef.current;
+    if (agentAbortRef.current || step >= maxSteps) {
       if (!agentAbortRef.current) {
-        chat.addMessage({ role: "assistant", content: `（Agent 已達最大步驟數 ${MAX_AGENT_STEPS}，停止迭代）` });
+        chat.addMessage({ role: "assistant", content: `（Agent 已達最大步驟數 ${maxSteps}，停止迭代）` });
       }
       setAgentRunning(false);
       return;
@@ -305,7 +316,7 @@ ${dirList || "（無法取得）"}
       {agentRunning && (
         <div className="aiterm-agent-status">
           <span className="aiterm-agent-status__spinner">⟳</span>
-          <span>Agent 執行中… 步驟 {agentStep}/{MAX_AGENT_STEPS}</span>
+          <span>Agent 執行中… 步驟 {agentStep}/{maxAgentStepsRef.current >= 9999 ? "∞" : maxAgentStepsRef.current}</span>
           <button
             type="button"
             className="aiterm-agent-status__stop"
