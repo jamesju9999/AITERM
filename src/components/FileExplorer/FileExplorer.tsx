@@ -174,8 +174,10 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
           </span>
           {cwdParts.map((part, i) => {
             const seg = cwdParts.slice(0, i + 1).join("/");
-            // Windows drive root (e.g. "C:") needs trailing slash to be a valid path
-            const path = seg.endsWith(":") ? seg + "/" : "/" + seg;
+            // Windows drive root "C:" → "C:/"; Windows sub-path "C:/Users" → "C:/Users"; Unix → "/Users"
+            const path = seg.endsWith(":")
+              ? seg + "/"
+              : /^[A-Za-z]:/.test(seg) ? seg : "/" + seg;
             return (
               <span key={path}>
                 <span className="fe-breadcrumb-sep">/</span>
