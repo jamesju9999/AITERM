@@ -52,6 +52,17 @@ jobs:
 
       # Windows: reqwest uses rustls-tls, tiberius uses native-tls (Schannel) — no OpenSSL needed
 
+      # Windows: download pre-built DB2 sidecar binaries from dedicated release
+      - name: Download DB2 sidecar binaries (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download v0.0.0-db2-binaries --pattern "db2-sidecar-win-x64.zip" --repo ${{ github.repository }}
+          Expand-Archive -Path db2-sidecar-win-x64.zip -DestinationPath src-tauri/binaries/
+          Copy-Item src-tauri/binaries/db2-sidecar-win-x64/db2-sidecar.exe src-tauri/binaries/db2-sidecar-x86_64-pc-windows-msvc.exe
+
       - name: Install frontend dependencies
         run: npm install
 
