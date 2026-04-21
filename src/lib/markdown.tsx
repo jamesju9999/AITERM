@@ -26,14 +26,14 @@ export function extractResponseText(raw: string): string {
   try {
     const parsed = JSON.parse(trimmed);
     if (parsed && typeof parsed === "object") {
-      for (const key of ["response", "text", "content", "answer", "output"]) {
+      for (const key of ["response", "text", "content", "answer", "output", "thought"]) {
         if (typeof parsed[key] === "string") return parsed[key];
       }
     }
   } catch {
     // Partial JSON (mid-stream) — regex fallback
     const m = trimmed.match(
-      /"(?:response|text|content|answer|output)"\s*:\s*"([\s\S]*?)(?:(?<!\\)"\s*[,}]|$)/
+      /"(?:response|text|content|answer|output|thought)"\s*:\s*"([\s\S]*?)(?:(?<!\\)"\s*[,}]|$)/
     );
     if (m) {
       try {
