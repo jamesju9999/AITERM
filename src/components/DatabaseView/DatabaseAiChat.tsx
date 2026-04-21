@@ -3,6 +3,7 @@ import { dbListTables, dbExecuteQuery, type TableInfo, type QueryResult } from "
 import { aiChat, formatAiError, type AiError } from "../../ipc/ai";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getConfig } from "../../ipc/config";
+import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/markdown";
 
 interface Props {
   connectionId: string;
@@ -598,9 +599,8 @@ function MessageBubble({ msg, onToggleStep }: { msg: Message; onToggleStep: (i: 
         <div style={{
           background: "#1a1a1a", border: "1px solid #2a2a2a",
           borderRadius: 8, padding: "8px 12px", fontSize: 13, color: "#e6e6e6",
-          whiteSpace: "pre-wrap",
-        }}>
-          {msg.text}
+        }} className="db-ai-answer">
+          <MarkdownText text={unescapeNewlines(extractResponseText(msg.text))} />
         </div>
       )}
     </div>
