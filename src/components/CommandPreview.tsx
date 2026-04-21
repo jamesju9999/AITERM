@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { RiskLevel } from "../ipc/ai";
+import { unescapeNewlines } from "../lib/markdown";
 import "./CommandPreview.css";
 
 export interface CommandPreviewProps {
@@ -51,7 +52,7 @@ export function CommandPreview({
       </div>
       <div className="aiterm-command-preview__command">{command}</div>
       <div className="aiterm-command-preview__label">Explanation</div>
-      <div className="aiterm-command-preview__explanation">{explanation}</div>
+      <div className="aiterm-command-preview__explanation">{unescapeNewlines(explanation)}</div>
       <div className="aiterm-command-preview__actions">
         {riskLevel !== "blocked" ? (
           <>
