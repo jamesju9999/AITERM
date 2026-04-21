@@ -490,7 +490,7 @@ pub async fn google_gemini_oauth_auth(
 
     let refresh_token = json["refresh_token"]
         .as_str()
-        .ok_or_else(|| "no refresh_token in response — ensure access_type=offline".to_string())?
+        .ok_or_else(|| "Google did not return a refresh token; please re-authorize".to_string())?
         .to_string();
 
     let expires_in = json["expires_in"].as_i64().unwrap_or(3600);
@@ -500,16 +500,18 @@ pub async fn google_gemini_oauth_auth(
         .as_secs() as i64;
 
     let token = GoogleOAuthToken {
-        access_token: access_token.clone(),
+        access_token,
         refresh_token,
         expires_at: now + expires_in,
     };
+    let token_json =
+        serde_json::to_string(&token).map_err(|e| format!("failed to serialize token: {e}"))?;
 
     secrets
-        .set(&provider_id, &serde_json::to_string(&token).unwrap())
+        .set(&provider_id, &token_json)
         .map_err(|e| format!("failed to store token: {e}"))?;
 
-    Ok(access_token)
+    Ok(token.access_token)
 }
 
 /// Percent-encode a string for use in a URL query parameter.
