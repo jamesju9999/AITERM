@@ -67,6 +67,13 @@ The shell of the app is `TerminalApp.tsx` (multi-tab state, keyboard shortcuts: 
 - Frontend tests (`src/**/*.test.ts(x)`): Vitest + React Testing Library + jsdom
 - Rust tests (`src-tauri/tests/`): wiremock for HTTP mocking, tempfile for fixtures
 
+### Platform Support
+
+- **DB2 is Windows-only** — no macOS DB2 implementation; do not assume DB2 features work cross-platform
+- **Platform-specific Tauri config**: use `src-tauri/tauri.{macos|windows}.conf.json` to override `tauri.conf.json` per platform (e.g. macOS overrides `externalBin: []` to exclude the DB2 sidecar)
+- `src-tauri/binaries/` is gitignored — platform binaries are never committed; handle via CI steps or platform config overrides
+- **TLS**: `reqwest` uses `rustls-tls`; `tiberius` uses `native-tls` (Schannel on Windows, SecureTransport on macOS) — OpenSSL is not required on any CI platform
+
 ## Development Workflow (Superpowers Skills)
 
 This project uses a structured milestone-driven workflow. Always apply skills in this order:
