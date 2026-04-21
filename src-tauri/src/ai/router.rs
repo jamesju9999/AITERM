@@ -157,12 +157,9 @@ impl AiRouter {
                 ))
             }
             ProviderType::GoogleGeminiOauth => {
-                // Access token stored in keychain by google_gemini_oauth_auth command.
-                let token = self
-                    .secrets
-                    .get(&provider_cfg.id)
-                    .map_err(|_| AiError::NotConfigured)?
-                    .ok_or(AiError::NotConfigured)?;
+                let token =
+                    crate::ai::google_oauth::get_fresh_google_token(&self.secrets, &provider_cfg.id)
+                        .await?;
                 Arc::new(OpenAiCompatibleClient::new(
                     provider_cfg
                         .base_url
