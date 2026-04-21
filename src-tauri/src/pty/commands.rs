@@ -57,13 +57,18 @@ pub fn pty_close(
     manager.close(&id)
 }
 
+/// Normalize a path to use forward slashes on all platforms.
+fn norm(p: impl AsRef<std::path::Path>) -> String {
+    p.as_ref().to_string_lossy().replace('\\', "/")
+}
+
 /// Get the current working directory of a PTY session.
 #[tauri::command]
 pub fn pty_get_cwd(
     manager: State<'_, PtyManager>,
     id: String,
 ) -> Option<String> {
-    manager.get_cwd(&id).map(|p| p.to_string_lossy().to_string())
+    manager.get_cwd(&id).map(|p| norm(&p))
 }
 
 /// A single file/directory entry returned by pty_list_dir.
@@ -98,7 +103,7 @@ pub fn pty_list_dir(
             let size = if is_dir { None } else { meta.as_ref().map(|m| m.len()) };
             DirEntry {
                 name: e.file_name().to_string_lossy().to_string(),
-                path: e.path().to_string_lossy().to_string(),
+                path: norm(e.path()),
                 is_dir,
                 size,
             }
@@ -123,20 +128,13 @@ pub struct FileContent {
 
 const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 
-/// Read a text file's content. Path must be within the user's home directory.
-/// Caps at 10 MB; binary files return an error.
+/// Read a text file's content. Caps at 10 MB; binary files return an error.
 #[tauri::command]
 pub fn pty_read_file(path: String) -> Result<FileContent, String> {
     use std::io::Read;
 
     // Resolve to a canonical absolute path (follows symlinks, eliminates ../)
     let canonical = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
-
-    // Restrict reads to the user's home directory
-    let home = dirs::home_dir().ok_or_else(|| "cannot determine home directory".to_string())?;
-    if !canonical.starts_with(&home) {
-        return Err("path is outside the home directory".to_string());
-    }
 
     // Open the file first, then get metadata from the handle (avoids TOCTOU race)
     let mut file = std::fs::File::open(&canonical).map_err(|e| e.to_string())?;

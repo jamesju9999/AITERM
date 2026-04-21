@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { listDirectory, getSessionCwd, type DirEntry } from "../../ipc/fs";
 import { FileViewer } from "./FileViewer";
 import "./FileExplorer.css";
@@ -37,6 +37,7 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
   const [subEntries, setSubEntries] = useState<Record<string, DirEntry[]>>({});
   const [showDotfiles, setShowDotfiles] = useState(false);
   const [selectedFile, setSelectedFile] = useState<DirEntry | null>(null);
+  const cwdRef = useRef<string>("");
 
   const loadDir = useCallback(async (path: string) => {
     setLoading(true);
@@ -45,7 +46,9 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
       const result = await listDirectory(sessionId, path);
       const filtered = showDotfiles ? result : result.filter(e => !e.name.startsWith("."));
       setEntries(filtered);
-      setCwd(path || (await getSessionCwd(sessionId)) || "");
+      const resolvedCwd = path || (await getSessionCwd(sessionId)) || "";
+      setCwd(resolvedCwd);
+      cwdRef.current = resolvedCwd;
     } catch (e) {
       setError(String(e));
     } finally {
@@ -56,6 +59,21 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
   useEffect(() => {
     loadDir("");
   }, [loadDir]);
+
+  // Poll terminal CWD and reload the file list when it changes.
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const newCwd = await getSessionCwd(sessionId);
+        if (newCwd && newCwd !== cwdRef.current) {
+          loadDir(newCwd);
+          setExpanded(new Set());
+          setSubEntries({});
+        }
+      } catch { /* ignore */ }
+    }, 1500);
+    return () => clearInterval(interval);
+  }, [sessionId, loadDir]);
 
   const handleToggleDir = async (entry: DirEntry) => {
     if (!entry.is_dir) return;
@@ -78,7 +96,16 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
   };
 
   const goUp = () => {
-    const parent = cwd.split("/").slice(0, -1).join("/") || "/";
+    // Normalize to forward slashes (already done by Rust, but defensive)
+    const normalized = cwd.replace(/\\/g, "/").replace(/\/$/, "");
+    const parts = normalized.split("/");
+    parts.pop();
+    // Windows drive root: ["C:"] → "C:/" ; Unix root: [] → "/"
+    const parent = parts.length === 0
+      ? "/"
+      : parts.length === 1 && parts[0].endsWith(":")
+        ? parts[0] + "/"
+        : parts.join("/") || "/";
     loadDir(parent);
     setExpanded(new Set());
     setSubEntries({});
@@ -116,7 +143,7 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
     </>
   );
 
-  const cwdParts = cwd.split("/").filter(Boolean);
+  const cwdParts = cwd.replace(/\\/g, "/").split("/").filter(Boolean);
 
   return (
     <div className="file-explorer">
@@ -133,7 +160,9 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
             /
           </span>
           {cwdParts.map((part, i) => {
-            const path = "/" + cwdParts.slice(0, i + 1).join("/");
+            const seg = cwdParts.slice(0, i + 1).join("/");
+            // Windows drive root (e.g. "C:") needs trailing slash to be a valid path
+            const path = seg.endsWith(":") ? seg + "/" : "/" + seg;
             return (
               <span key={path}>
                 <span className="fe-breadcrumb-sep">/</span>
