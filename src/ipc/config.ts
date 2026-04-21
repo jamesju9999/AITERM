@@ -8,8 +8,7 @@ export type ProviderType =
   | "ollama"
   | "openai-compatible"
   | "github-copilot"
-  | "google-ai"
-  | "google-gemini-oauth";
+  | "google-ai";
 
 export type ExecutionMode = "always-confirm" | "graded" | "full-auto";
 

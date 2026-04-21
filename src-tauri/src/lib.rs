@@ -23,7 +23,7 @@ use commands::{
     provider::{
         add_provider, get_github_copilot_models, get_github_copilot_models_by_provider,
         get_ollama_models, github_copilot_device_poll, github_copilot_device_start,
-        google_gemini_oauth_auth, list_providers, remove_provider, set_default_provider,
+        list_providers, remove_provider, set_default_provider,
         test_provider, update_provider,
     },
     secret::{delete_api_key, has_api_key},
@@ -141,7 +141,6 @@ pub fn run() {
             github_copilot_device_poll,
             get_github_copilot_models,
             get_github_copilot_models_by_provider,
-            google_gemini_oauth_auth,
             // Secrets
             has_api_key,
             delete_api_key,

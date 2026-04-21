@@ -10,7 +10,6 @@ import {
   githubCopilotDevicePoll,
   getGithubCopilotModels,
   getGithubCopilotModelsByProvider,
-  googleGeminiOauthAuth,
 } from "../../ipc/provider";
 import type { ProviderType } from "../../ipc/config";
 import { useLocale } from "../../contexts/LocaleContext";
@@ -29,7 +28,6 @@ const PROVIDER_TYPES: ProviderType[] = [
   "openai-compatible",
   "github-copilot",
   "google-ai",
-  "google-gemini-oauth",
 ];
 
 export function ProviderForm({ existing, onSave, onCancel }: Props) {
@@ -210,24 +208,6 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
     }
   };
 
-  const runGoogleOauth = async () => {
-    if (!id.trim()) {
-      setAuthStatus(t.err_id_empty);
-      return;
-    }
-    setAuthing(true);
-    setAuthStatus(null);
-    try {
-      const token = await googleGeminiOauthAuth(id);
-      setApiKey(token);
-      setAuthStatus(t.provider_auth_ok);
-    } catch (e: unknown) {
-      setAuthStatus(String(e));
-    } finally {
-      setAuthing(false);
-    }
-  };
-
   return (
     <div className="provider-form">
       <h3>{isEdit ? t.edit_provider : t.new_provider}</h3>
@@ -270,7 +250,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         />
       </div>
 
-      {providerType !== "ollama" && providerType !== "github-copilot" && providerType !== "google-gemini-oauth" && (
+      {providerType !== "ollama" && providerType !== "github-copilot" && (
         <div className="form-group">
           <label>
             {providerType === "openai-compatible" ? t.provider_api_key_optional : t.provider_api_key}
@@ -288,8 +268,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
       {(providerType === "ollama" ||
         providerType === "openai-compatible" ||
         providerType === "github-copilot" ||
-        providerType === "google-ai" ||
-        providerType === "google-gemini-oauth") && (
+        providerType === "google-ai") && (
         <div className="form-group">
           <label>{t.provider_base_url}</label>
           {providerType === "openai-compatible" && (
@@ -333,20 +312,6 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
                 : t.provider_copilot_device_auth}
           </button>
           {authStatus && <div className="form-hint">{authStatus}</div>}
-        </div>
-      )}
-
-      {providerType === "google-gemini-oauth" && (
-        <div className="form-group">
-          <label>{t.provider_auth_action}</label>
-          <button type="button" onClick={runGoogleOauth} disabled={authing}>
-            {authing ? t.provider_auth_running : t.provider_google_oauth_auth}
-          </button>
-          {authStatus && (
-            <div className={`form-hint ${authStatus.startsWith("✓") ? "" : "form-hint--error"}`}>
-              {authStatus}
-            </div>
-          )}
         </div>
       )}
 
@@ -402,8 +367,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
 
       {(providerType === "openai-compatible" ||
         providerType === "github-copilot" ||
-        providerType === "google-ai" ||
-        providerType === "google-gemini-oauth") && (
+        providerType === "google-ai") && (
         <div className="form-group form-group--checkbox">
           <label>
             <input

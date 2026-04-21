@@ -156,19 +156,6 @@ impl AiRouter {
                     provider_cfg.supports_json_mode,
                 ))
             }
-            ProviderType::GoogleGeminiOauth => {
-                let token =
-                    crate::ai::google_oauth::get_fresh_google_token(&self.secrets, &provider_cfg.id)
-                        .await?;
-                Arc::new(OpenAiCompatibleClient::new(
-                    provider_cfg
-                        .base_url
-                        .unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta/openai".into()),
-                    provider_cfg.model.clone(),
-                    Some(token),
-                    provider_cfg.supports_json_mode,
-                ))
-            }
         };
         Ok(provider)
     }

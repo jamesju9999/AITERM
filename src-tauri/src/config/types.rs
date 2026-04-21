@@ -115,7 +115,6 @@ pub enum ProviderType {
     OpenaiCompatible,
     GithubCopilot,
     GoogleAi,
-    GoogleGeminiOauth,
 }
 
 impl std::fmt::Display for ProviderType {
@@ -127,7 +126,6 @@ impl std::fmt::Display for ProviderType {
             ProviderType::OpenaiCompatible => write!(f, "OpenAI-Compatible"),
             ProviderType::GithubCopilot => write!(f, "GitHub Copilot"),
             ProviderType::GoogleAi => write!(f, "Google AI"),
-            ProviderType::GoogleGeminiOauth => write!(f, "Google Gemini OAuth"),
         }
     }
 }
@@ -230,7 +228,6 @@ mod tests {
             (ProviderType::OpenaiCompatible, "openai-compatible"),
             (ProviderType::GithubCopilot, "github-copilot"),
             (ProviderType::GoogleAi, "google-ai"),
-            (ProviderType::GoogleGeminiOauth, "google-gemini-oauth"),
         ] {
             let w = W { ty };
             let serialized = toml::to_string(&w).unwrap();
