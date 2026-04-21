@@ -102,11 +102,6 @@ export const getGithubCopilotModelsByProvider = (
 ): Promise<string[]> =>
   invoke("get_github_copilot_models_by_provider", { id, baseUrl: baseUrl ?? null });
 
-export const googleGeminiOauthAuth = (
-  providerId: string,
-): Promise<string> =>
-  invoke("google_gemini_oauth_auth", { providerId });
-
 /** Check if a provider has an API key in the keychain. */
 export const hasApiKey = (providerId: string): Promise<boolean> =>
   invoke("has_api_key", { providerId });
@@ -120,7 +115,6 @@ export const PROVIDER_TYPE_LABELS: Record<ProviderType, string> = {
   "openai-compatible": "OpenAI-Compatible",
   "github-copilot": "GitHub Copilot",
   "google-ai": "Google AI (API Key)",
-  "google-gemini-oauth": "Google Gemini (OAuth)",
 };
 
 export const DEFAULT_MODELS: Record<ProviderType, string> = {
@@ -130,7 +124,6 @@ export const DEFAULT_MODELS: Record<ProviderType, string> = {
   "openai-compatible": "",
   "github-copilot": "gpt-4o-mini",
   "google-ai": "gemini-2.5-pro",
-  "google-gemini-oauth": "gemini-2.5-pro",
 };
 
 export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
@@ -140,7 +133,6 @@ export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   "openai-compatible": "",
   "github-copilot": "https://api.githubcopilot.com",
   "google-ai": "https://generativelanguage.googleapis.com/v1beta/openai",
-  "google-gemini-oauth": "https://generativelanguage.googleapis.com/v1beta/openai",
 };
 
 /** OpenAI-compatible quick-pick presets shown in the form. */
