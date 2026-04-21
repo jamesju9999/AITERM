@@ -227,6 +227,15 @@ impl PtySession {
                     }
                     buf.clear();
                 }
+            } else if b == 0x15 || b == 0x03 {
+                // Ctrl+U (kill line) or Ctrl+C (interrupt) — clear the tracked buffer,
+                // matching what the shell does with the input line.
+                buf.clear();
+            } else if b == 0x7f || b == 0x08 {
+                // Backspace / DEL — remove the last tracked byte.
+                buf.pop();
+            } else if b < 0x20 {
+                // Other control characters — ignore so they don't corrupt the buffer.
             } else {
                 // Cap runaway input to ~8 KiB so a rogue paste cannot grow
                 // unbounded before the user hits Enter.
