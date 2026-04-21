@@ -37,7 +37,11 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
   const [subEntries, setSubEntries] = useState<Record<string, DirEntry[]>>({});
   const [showDotfiles, setShowDotfiles] = useState(false);
   const [selectedFile, setSelectedFile] = useState<DirEntry | null>(null);
-  const cwdRef = useRef<string>("");
+  // Tracks the last PTY CWD we observed — used only by the polling loop to
+  // detect terminal-driven directory changes. Must NOT be updated on user-
+  // initiated file-explorer navigation, otherwise the poll would revert the
+  // user's manual browsing back to the terminal's CWD.
+  const ptyCwdRef = useRef<string>("");
 
   const loadDir = useCallback(async (path: string) => {
     setLoading(true);
@@ -48,7 +52,6 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
       setEntries(filtered);
       const resolvedCwd = path || (await getSessionCwd(sessionId)) || "";
       setCwd(resolvedCwd);
-      cwdRef.current = resolvedCwd;
     } catch (e) {
       setError(String(e));
     } finally {
@@ -56,16 +59,26 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
     }
   }, [sessionId, showDotfiles]);
 
+  // Seed ptyCwdRef with the terminal's initial CWD on mount.
+  useEffect(() => {
+    getSessionCwd(sessionId)
+      .then((c) => { if (c) ptyCwdRef.current = c; })
+      .catch(() => {});
+  }, [sessionId]);
+
   useEffect(() => {
     loadDir("");
   }, [loadDir]);
 
-  // Poll terminal CWD and reload the file list when it changes.
+  // Poll terminal CWD and reload only when the PTY itself changed directories.
+  // We compare against ptyCwdRef (last PTY-driven CWD) so that the user can
+  // freely browse the file explorer without the poll reverting their navigation.
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
         const newCwd = await getSessionCwd(sessionId);
-        if (newCwd && newCwd !== cwdRef.current) {
+        if (newCwd && newCwd !== ptyCwdRef.current) {
+          ptyCwdRef.current = newCwd;
           loadDir(newCwd);
           setExpanded(new Set());
           setSubEntries({});
