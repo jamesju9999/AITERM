@@ -383,26 +383,18 @@ async fn list_github_copilot_models(
     Ok(payload.data.into_iter().map(|m| m.id).collect())
 }
 
-/// Open the browser for the Google OAuth loopback flow, wait for the callback,
-/// exchange the code for an access token, and store it in the keychain.
+/// Open the browser for the Google OAuth loopback flow (using bundled Gemini CLI
+/// credentials), wait for the callback, exchange the code for tokens, and store
+/// the JSON token blob in the keychain.
 #[tauri::command]
 pub async fn google_gemini_oauth_auth(
     provider_id: String,
-    client_id: String,
-    client_secret: String,
     secrets: State<'_, Arc<SecretStore>>,
 ) -> Result<String, String> {
+    use crate::ai::google_oauth::{
+        GEMINI_CLI_CLIENT_ID, GEMINI_CLI_CLIENT_SECRET, GEMINI_OAUTH_SCOPES, GoogleOAuthToken,
+    };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    let client_id = client_id.trim().to_string();
-    let client_secret = client_secret.trim().to_string();
-
-    if client_id.is_empty() {
-        return Err("OAuth Client ID is required".into());
-    }
-    if client_secret.is_empty() {
-        return Err("OAuth Client Secret is required".into());
-    }
 
     // Bind a local loopback server on a random available port.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -411,12 +403,11 @@ pub async fn google_gemini_oauth_auth(
     let port = listener.local_addr().unwrap().port();
     let redirect_uri = format!("http://localhost:{port}");
 
-    let scope = "https://www.googleapis.com/auth/generative-language";
     let auth_url = format!(
-        "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=online&prompt=consent",
-        url_encode(&client_id),
+        "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent",
+        url_encode(GEMINI_CLI_CLIENT_ID),
         url_encode(&redirect_uri),
-        url_encode(scope),
+        url_encode(GEMINI_OAUTH_SCOPES),
     );
 
     open_browser(&auth_url);
@@ -437,7 +428,6 @@ pub async fn google_gemini_oauth_auth(
                 .map_err(|e| format!("read error: {e}"))?;
             let request = String::from_utf8_lossy(&buf[..n]).to_string();
 
-            // Reply with a success page so the browser doesn't hang.
             let body = "<html><body style='font-family:sans-serif;text-align:center;padding:40px'>\
                 <h2>&#10003; Google login successful!</h2>\
                 <p>You can close this tab and return to AITerm.</p>\
@@ -449,7 +439,6 @@ pub async fn google_gemini_oauth_auth(
             );
             let _ = stream.write_all(response.as_bytes()).await;
 
-            // Parse the code from "GET /?code=xxx&... HTTP/1.1"
             request
                 .lines()
                 .next()
@@ -468,13 +457,13 @@ pub async fn google_gemini_oauth_auth(
     .map_err(|_| "OAuth login timed out (2 minutes). Please try again.".to_string())?
     .map_err(|e| format!("OAuth callback error: {e}"))?;
 
-    // Exchange the authorization code for an access token.
+    // Exchange the authorization code for access + refresh tokens.
     let http = reqwest::Client::new();
     let resp = http
         .post("https://oauth2.googleapis.com/token")
         .form(&[
-            ("client_id", client_id.as_str()),
-            ("client_secret", client_secret.as_str()),
+            ("client_id", GEMINI_CLI_CLIENT_ID),
+            ("client_secret", GEMINI_CLI_CLIENT_SECRET),
             ("code", code.as_str()),
             ("redirect_uri", redirect_uri.as_str()),
             ("grant_type", "authorization_code"),
@@ -496,12 +485,28 @@ pub async fn google_gemini_oauth_auth(
 
     let access_token = json["access_token"]
         .as_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| format!("no access_token in response: {json}"))?;
+        .ok_or_else(|| format!("no access_token in response: {json}"))?
+        .to_string();
 
-    // Persist the token so the AI router can use it.
+    let refresh_token = json["refresh_token"]
+        .as_str()
+        .ok_or_else(|| "no refresh_token in response — ensure access_type=offline".to_string())?
+        .to_string();
+
+    let expires_in = json["expires_in"].as_i64().unwrap_or(3600);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    let token = GoogleOAuthToken {
+        access_token: access_token.clone(),
+        refresh_token,
+        expires_at: now + expires_in,
+    };
+
     secrets
-        .set(&provider_id, &access_token)
+        .set(&provider_id, &serde_json::to_string(&token).unwrap())
         .map_err(|e| format!("failed to store token: {e}"))?;
 
     Ok(access_token)
