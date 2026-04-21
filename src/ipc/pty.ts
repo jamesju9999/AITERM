@@ -26,6 +26,11 @@ export function closePty(id: string): Promise<void> {
   return invoke<void>("pty_close", { id });
 }
 
+/** Return the last ~4 KiB of ANSI-stripped output for the session, or null. */
+export function getPtyRecentOutput(id: string): Promise<string | null> {
+  return invoke<string | null>("pty_get_recent_output", { id });
+}
+
 /**
  * Subscribe to PTY output for a given session. Returns an unlisten function.
  * The callback receives already-decoded bytes as a Uint8Array.
