@@ -2,10 +2,24 @@ import type { ReactNode } from "react";
 
 /**
  * If `raw` looks like a JSON object with a common response field, extract it.
- * Handles both complete and partial (streaming) JSON gracefully.
+ * Handles:
+ *   - Direct JSON: { "response": "..." }
+ *   - Fenced JSON: ```json\n{ "response": "..." }\n```
+ * Also handles partial/streaming JSON gracefully.
  */
 export function extractResponseText(raw: string): string {
-  const trimmed = raw.trim();
+  let trimmed = raw.trim();
+
+  // Strip markdown code fences: ```json\n...\n``` or ```\n...\n```
+  if (trimmed.startsWith("```")) {
+    const newlinePos = trimmed.indexOf("\n");
+    if (newlinePos !== -1) {
+      const inner = trimmed.slice(newlinePos + 1);
+      const closePos = inner.lastIndexOf("```");
+      trimmed = closePos !== -1 ? inner.slice(0, closePos).trim() : inner.trim();
+    }
+  }
+
   if (!trimmed.startsWith("{")) return raw;
 
   // Full parse first
