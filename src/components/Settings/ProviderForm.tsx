@@ -56,7 +56,6 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [authing, setAuthing] = useState(false);
   const [authStatus, setAuthStatus] = useState<string | null>(null);
-  const [oauthClientSecret, setOauthClientSecret] = useState("");
 
   useEffect(() => {
     if (!isEdit) {
@@ -212,14 +211,6 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
   };
 
   const runGoogleOauth = async () => {
-    if (!oauthClientId.trim()) {
-      setAuthStatus(t.err_google_client_id_required);
-      return;
-    }
-    if (!oauthClientSecret.trim()) {
-      setAuthStatus(t.err_google_client_secret_required);
-      return;
-    }
     if (!id.trim()) {
       setAuthStatus(t.err_id_empty);
       return;
@@ -227,7 +218,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
     setAuthing(true);
     setAuthStatus(null);
     try {
-      const token = await googleGeminiOauthAuth(id, oauthClientId, oauthClientSecret);
+      const token = await googleGeminiOauthAuth(id);
       setApiKey(token);
       setAuthStatus(t.provider_auth_ok);
     } catch (e: unknown) {
@@ -347,22 +338,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
 
       {providerType === "google-gemini-oauth" && (
         <div className="form-group">
-          <label>{t.provider_google_client_id}</label>
-          <input
-            type="text"
-            value={oauthClientId}
-            onChange={(e) => setOauthClientId(e.target.value)}
-            placeholder={t.provider_google_client_id_placeholder}
-          />
-          <label style={{ marginTop: 8 }}>{t.provider_google_client_secret}</label>
-          <input
-            type="password"
-            value={oauthClientSecret}
-            onChange={(e) => setOauthClientSecret(e.target.value)}
-            placeholder={t.provider_google_client_secret_placeholder}
-          />
-          <div className="form-hint" style={{ marginTop: 4 }}>{t.provider_google_oauth_hint}</div>
-          <label style={{ marginTop: 8 }}>{t.provider_auth_action}</label>
+          <label>{t.provider_auth_action}</label>
           <button type="button" onClick={runGoogleOauth} disabled={authing}>
             {authing ? t.provider_auth_running : t.provider_google_oauth_auth}
           </button>
