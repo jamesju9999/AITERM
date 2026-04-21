@@ -383,6 +383,85 @@ async fn list_github_copilot_models(
     Ok(payload.data.into_iter().map(|m| m.id).collect())
 }
 
+/// Fetch available Google AI (Gemini) models using an API key supplied directly
+/// (used while the user is typing the key before saving the provider).
+#[tauri::command]
+pub async fn get_google_ai_models(api_key: String) -> Result<Vec<String>, String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("api_key is required".into());
+    }
+    list_google_ai_models(key).await
+}
+
+/// Fetch available Google AI models for a saved provider (reads key from keychain).
+#[tauri::command]
+pub async fn get_google_ai_models_by_provider(
+    id: String,
+    config: State<'_, Arc<ConfigStore>>,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<Vec<String>, String> {
+    let provider = config
+        .get()
+        .find_provider(&id)
+        .cloned()
+        .ok_or_else(|| format!("provider '{id}' not found"))?;
+    if provider.provider_type != ProviderType::GoogleAi {
+        return Err(format!("provider '{id}' is not google-ai"));
+    }
+    let key = secrets
+        .get(&id)
+        .map_err(|e| format!("failed to read provider secret: {e}"))?
+        .filter(|v| !v.trim().is_empty())
+        .ok_or_else(|| format!("provider '{id}' has no saved API key"))?;
+    list_google_ai_models(key.trim()).await
+}
+
+async fn list_google_ai_models(api_key: &str) -> Result<Vec<String>, String> {
+    #[derive(Deserialize)]
+    struct GoogleModelsResponse {
+        models: Vec<GoogleModelItem>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct GoogleModelItem {
+        name: String,
+        #[serde(default)]
+        supported_generation_methods: Vec<String>,
+    }
+
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+    );
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("list google ai models failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("list google ai models failed ({status}): {body}"));
+    }
+
+    let payload: GoogleModelsResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("parse google ai models response failed: {e}"))?;
+
+    let mut models: Vec<String> = payload
+        .models
+        .into_iter()
+        .filter(|m| m.supported_generation_methods.iter().any(|method| method == "generateContent"))
+        .map(|m| m.name.trim_start_matches("models/").to_string())
+        .collect();
+    models.sort();
+    Ok(models)
+}
+
 fn resolve_github_client_id(client_id: Option<String>) -> String {
     if let Some(v) = client_id {
         let trimmed = v.trim();

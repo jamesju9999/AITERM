@@ -10,6 +10,8 @@ import {
   githubCopilotDevicePoll,
   getGithubCopilotModels,
   getGithubCopilotModelsByProvider,
+  getGoogleAiModels,
+  getGoogleAiModelsByProvider,
 } from "../../ipc/provider";
 import type { ProviderType } from "../../ipc/config";
 import { useLocale } from "../../contexts/LocaleContext";
@@ -50,6 +52,8 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
   const [ollamaLoading, setOllamaLoading] = useState(false);
   const [copilotModels, setCopilotModels] = useState<string[]>([]);
   const [copilotLoading, setCopilotLoading] = useState(false);
+  const [googleAiModels, setGoogleAiModels] = useState<string[]>([]);
+  const [googleAiLoading, setGoogleAiLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [authing, setAuthing] = useState(false);
@@ -111,6 +115,33 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
     }
     setCopilotModels([]);
   }, [providerType, apiKey, baseUrl, isEdit, existing?.has_api_key, id, model, t.provider_auth_ok]);
+
+  useEffect(() => {
+    if (providerType !== "google-ai") return;
+    if (apiKey.trim()) {
+      setGoogleAiLoading(true);
+      getGoogleAiModels(apiKey.trim())
+        .then((models) => {
+          setGoogleAiModels(models);
+          if (models.length > 0 && !models.includes(model)) setModel(models[0]);
+        })
+        .catch(() => setGoogleAiModels([]))
+        .finally(() => setGoogleAiLoading(false));
+      return;
+    }
+    if (isEdit && existing?.has_api_key && id.trim()) {
+      setGoogleAiLoading(true);
+      getGoogleAiModelsByProvider(id.trim())
+        .then((models) => {
+          setGoogleAiModels(models);
+          if (models.length > 0 && !models.includes(model)) setModel(models[0]);
+        })
+        .catch(() => setGoogleAiModels([]))
+        .finally(() => setGoogleAiLoading(false));
+      return;
+    }
+    setGoogleAiModels([]);
+  }, [providerType, apiKey, isEdit, existing?.has_api_key, id]);
 
   const handleSave = async () => {
     setError(null);
@@ -342,6 +373,25 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
           ) : copilotModels.length > 0 ? (
             <select value={model} onChange={(e) => setModel(e.target.value)}>
               {copilotModels.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="text"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder={DEFAULT_MODELS[providerType]}
+            />
+          )
+        ) : providerType === "google-ai" ? (
+          googleAiLoading ? (
+            <input type="text" value={t.provider_model_loading} disabled />
+          ) : googleAiModels.length > 0 ? (
+            <select value={model} onChange={(e) => setModel(e.target.value)}>
+              {googleAiModels.map((m) => (
                 <option key={m} value={m}>
                   {m}
                 </option>
