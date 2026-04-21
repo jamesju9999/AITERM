@@ -104,10 +104,8 @@ export const getGithubCopilotModelsByProvider = (
 
 export const googleGeminiOauthAuth = (
   providerId: string,
-  clientId: string,
-  clientSecret: string,
 ): Promise<string> =>
-  invoke("google_gemini_oauth_auth", { providerId, clientId, clientSecret });
+  invoke("google_gemini_oauth_auth", { providerId });
 
 /** Check if a provider has an API key in the keychain. */
 export const hasApiKey = (providerId: string): Promise<boolean> =>
