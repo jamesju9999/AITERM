@@ -22,6 +22,7 @@ use commands::{
     },
     provider::{
         add_provider, get_github_copilot_models, get_github_copilot_models_by_provider,
+        get_google_ai_models, get_google_ai_models_by_provider,
         get_ollama_models, github_copilot_device_poll, github_copilot_device_start,
         list_providers, remove_provider, set_default_provider,
         test_provider, update_provider,
@@ -141,6 +142,8 @@ pub fn run() {
             github_copilot_device_poll,
             get_github_copilot_models,
             get_github_copilot_models_by_provider,
+            get_google_ai_models,
+            get_google_ai_models_by_provider,
             // Secrets
             has_api_key,
             delete_api_key,

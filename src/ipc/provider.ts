@@ -102,6 +102,12 @@ export const getGithubCopilotModelsByProvider = (
 ): Promise<string[]> =>
   invoke("get_github_copilot_models_by_provider", { id, baseUrl: baseUrl ?? null });
 
+export const getGoogleAiModels = (apiKey: string): Promise<string[]> =>
+  invoke("get_google_ai_models", { apiKey });
+
+export const getGoogleAiModelsByProvider = (id: string): Promise<string[]> =>
+  invoke("get_google_ai_models_by_provider", { id });
+
 /** Check if a provider has an API key in the keychain. */
 export const hasApiKey = (providerId: string): Promise<boolean> =>
   invoke("has_api_key", { providerId });
