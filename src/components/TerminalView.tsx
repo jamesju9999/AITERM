@@ -700,7 +700,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           isOpen={panelOpen}
           providerName={activeProvider}
           onClose={() => setPanelOpen(false)}
-          onExecuteCommand={submitCommand}
+          onExecuteCommand={(cmd, onComplete) => submitCommand(cmd, onComplete)}
           onOpenProviderPalette={() => {
             setPanelOpen(false);
             setPaletteOpen(true);

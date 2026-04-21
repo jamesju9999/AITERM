@@ -71,6 +71,15 @@ pub fn pty_get_cwd(
     manager.get_cwd(&id).map(|p| norm(&p))
 }
 
+/// Return the last ~4 KiB of ANSI-stripped PTY output for the session.
+#[tauri::command]
+pub fn pty_get_recent_output(
+    manager: State<'_, PtyManager>,
+    id: String,
+) -> Option<String> {
+    manager.get_recent_output(&id, 4096)
+}
+
 /// A single file/directory entry returned by pty_list_dir.
 #[derive(serde::Serialize, Clone)]
 pub struct DirEntry {

@@ -3,6 +3,7 @@
   top: 0;
   right: 0;
   bottom: 0;
+  /* width is set via inline style; keep a sensible fallback */
   width: 420px;
   background: #141414;
   color: #e6e6e6;
@@ -12,6 +13,22 @@
   z-index: 50;
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 13px;
+}
+
+/* ── Resize handle ── */
+.aiterm-panel-resize-handle {
+  position: absolute;
+  top: 0;
+  left: -4px;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  z-index: 60;
+  background: transparent;
+}
+.aiterm-panel-resize-handle:hover,
+.aiterm-panel-resize-handle:active {
+  background: rgba(99, 155, 255, 0.25);
 }
 
 /*
@@ -180,6 +197,61 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ── Agent status bar ── */
+.aiterm-agent-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  background: #0e1a0e;
+  border-top: 1px solid #1e3a1e;
+  font-size: 11px;
+  color: #4ade80;
+}
+.aiterm-agent-status__spinner {
+  animation: aiterm-spin 1s linear infinite;
+  display: inline-block;
+}
+@keyframes aiterm-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.aiterm-agent-status__stop {
+  margin-left: auto;
+  background: #3a1a1a;
+  border: 1px solid #f87171;
+  color: #f87171;
+  border-radius: 3px;
+  padding: 1px 8px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+/* ── Agent mode toggle button ── */
+.aiterm-agent-toggle {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #555;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-end;
+  margin-bottom: 2px;
+}
+.aiterm-agent-toggle:hover { border-color: #555; color: #aaa; }
+.aiterm-agent-toggle--on {
+  background: #0e2a0e;
+  border-color: #4ade80;
+  color: #4ade80;
+}
+.aiterm-agent-toggle:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .aiterm-ai-panel-input-area {
   border-top: 1px solid #2a2a2a;

@@ -20,6 +20,8 @@ export interface UseAiChatResult {
   send: (userText: string) => Promise<void>;
   resend: () => Promise<void>;
   clear: () => void;
+  /** Inject a message directly into the chat history without calling the AI. */
+  addMessage: (msg: ChatMessage) => void;
 }
 
 /**
@@ -112,7 +114,11 @@ export function useAiChat(sessionId: string): UseAiChatResult {
     setStreamBuf("");
   }, [isStreaming]);
 
-  return { messages, streamBuf, isStreaming, error, send, resend, clear };
+  const addMessage = useCallback((msg: ChatMessage) => {
+    setMessages((prev) => [...prev, msg]);
+  }, []);
+
+  return { messages, streamBuf, isStreaming, error, send, resend, clear, addMessage };
 }
 
 /** Coerce an unknown Tauri error into an AiError. Mirrors TerminalView logic. */
