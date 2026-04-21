@@ -18,6 +18,7 @@ pub mod ollama;
 pub mod openai;
 pub mod router;
 pub(crate) mod sse;
+pub mod google_oauth;
 
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
