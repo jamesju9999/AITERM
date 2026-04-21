@@ -1,4 +1,5 @@
 import { parseCmdTags } from "../../lib/cmdParser";
+import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/markdown";
 import { CmdTag } from "./CmdTag";
 
 interface MessageBubbleProps {
@@ -22,8 +23,12 @@ export function MessageBubble({
     );
   }
 
-  // Assistant: split by <cmd> tags.
-  const parts = parseCmdTags(content);
+  // Extract response field from JSON wrappers (e.g. {"thought":..., "response":...})
+  // and convert literal \n escape sequences to real newlines.
+  const cleaned = unescapeNewlines(extractResponseText(content));
+
+  // Split by <cmd> tags; render text parts with markdown, cmd parts as CmdTag.
+  const parts = parseCmdTags(cleaned);
   return (
     <div
       className="aiterm-bubble aiterm-bubble-assistant"
@@ -31,7 +36,7 @@ export function MessageBubble({
     >
       {parts.map((p, i) =>
         p.type === "text" ? (
-          <span key={i}>{p.content}</span>
+          <MarkdownText key={i} text={p.content} />
         ) : (
           <CmdTag
             key={i}
