@@ -71,11 +71,14 @@ pub async fn get_fresh_google_token(
         .map_err(|e| AiError::Network { message: e.to_string() })?;
 
     let status = resp.status();
-    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Err(AiError::AuthFailed);
-    }
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::UNAUTHORIZED
+            || status == reqwest::StatusCode::FORBIDDEN
+            || (status == reqwest::StatusCode::BAD_REQUEST && body.contains("invalid_grant"))
+        {
+            return Err(AiError::AuthFailed);
+        }
         return Err(AiError::Network {
             message: format!("token refresh failed (HTTP {status}): {body}"),
         });
@@ -94,7 +97,7 @@ pub async fn get_fresh_google_token(
         .to_string();
 
     let expires_in = json["expires_in"].as_i64().unwrap_or(3600);
-    let new_expires_at = now + expires_in - 60;
+    let new_expires_at = now + expires_in;
 
     // Persist updated token (refresh_token unchanged).
     let updated = GoogleOAuthToken {
@@ -102,7 +105,9 @@ pub async fn get_fresh_google_token(
         refresh_token: token.refresh_token,
         expires_at: new_expires_at,
     };
-    let _ = secrets.set(provider_id, &serde_json::to_string(&updated).unwrap());
+    if let Err(e) = secrets.set(provider_id, &serde_json::to_string(&updated).unwrap_or_default()) {
+        log::warn!("failed to persist refreshed Google token for {provider_id}: {e}");
+    }
 
     Ok(new_access_token)
 }
