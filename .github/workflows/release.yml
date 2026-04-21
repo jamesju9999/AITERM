@@ -50,15 +50,7 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: brew install unixodbc
 
-      # Windows: DB2 adapter requires ODBC; native-tls requires OpenSSL
-      - name: Install dependencies (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: powershell
-        run: |
-          choco install openssl -y
-          echo "OPENSSL_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
-          echo "OPENSSL_INCLUDE_DIR=C:\Program Files\OpenSSL-Win64\include" >> $env:GITHUB_ENV
-          echo "OPENSSL_LIB_DIR=C:\Program Files\OpenSSL-Win64\lib" >> $env:GITHUB_ENV
+      # Windows: reqwest uses rustls-tls, tiberius uses native-tls (Schannel) — no OpenSSL needed
 
       - name: Install frontend dependencies
         run: npm install
