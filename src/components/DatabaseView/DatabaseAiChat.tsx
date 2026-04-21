@@ -69,6 +69,20 @@ function extractSql(text: string): string | null {
     } catch { /* not valid JSON */ }
   }
 
+  // Fallback: <cmd> tag — model may wrap a shell DB2/sql CLI call
+  const cmdTag = text.match(/<cmd>([\s\S]*?)<\/cmd>/i);
+  if (cmdTag) {
+    const inner = cmdTag[1].trim();
+    // DB2 CLI: sql 'SELECT ...' or db2 "SELECT ..."
+    const cliMatch = inner.match(/(?:^|\s)(?:sql|db2)\s+['"](.+?)['"](?:\s*[;|]|$)/is);
+    if (cliMatch) return cliMatch[1].replace(/''/g, "'").trim();
+    // PowerShell wrapper: -Command "sql '...'"
+    const pwshMatch = inner.match(/-Command\s+["'](?:sql|db2)\s+['"](.+?)['"](?:['"]\s*\|.*)?$/is);
+    if (pwshMatch) return pwshMatch[1].replace(/''/g, "'").trim();
+    // The <cmd> content itself looks like SQL
+    if (/^\s*(SELECT|INSERT|UPDATE|DELETE|WITH|CREATE|DROP|ALTER)\s/i.test(inner)) return inner;
+  }
+
   return null;
 }
 
@@ -159,8 +173,8 @@ export function DatabaseAiChat({ connectionId, schema }: Props) {
 Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}。
 
 重要規則（必須嚴格遵守）：
-1. 需要查詢資料時，只輸出 \`\`\`sql\n你的SQL\n\`\`\`，不要有任何其他格式（不要 JSON、不要 thought 欄位）
-2. 每次只提供一條 SQL
+1. 需要查詢資料時，只輸出 \`\`\`sql\n你的SQL\n\`\`\`，不要有任何其他格式（不要 JSON、不要 thought 欄位、不要 <cmd> 標籤、不要 shell 指令）
+2. 每次只提供一條純 SQL 語法，直接可在資料庫執行，不需要包在任何 shell 指令中
 3. 已收集足夠資料時，直接用繁體中文給出最終答案，回應中不包含任何 SQL 或程式碼區塊
 4. 最多執行 ${maxSteps >= 9999 ? "不限次數" : maxSteps} 次查詢`;
   };
