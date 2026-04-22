@@ -1,0 +1,75 @@
+.about-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  height: 100%;
+  gap: 12px;
+  color: #e6e6e6;
+  font-family: "Consolas", "Cascadia Code", "Menlo", monospace;
+}
+
+.about-icon {
+  width: 96px;
+  height: 96px;
+  border-radius: 20px;
+  margin-bottom: 8px;
+}
+
+.about-name {
+  font-size: 24px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.about-version {
+  font-size: 14px;
+  color: #888;
+  margin: 0;
+}
+
+.about-buttons {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.about-btn {
+  background: #1e2a42;
+  border: none;
+  border-radius: 6px;
+  color: #7aadff;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px 18px;
+}
+
+.about-btn:hover {
+  background: #263450;
+}
+
+.about-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.about-status {
+  font-size: 13px;
+  color: #aaa;
+  min-height: 20px;
+  text-align: center;
+}
+
+.about-status a {
+  color: #7aadff;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.about-copyright {
+  font-size: 12px;
+  color: #555;
+  margin-top: 16px;
+}
