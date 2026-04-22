@@ -62,6 +62,26 @@ jobs:
           gh release download v0.0.0-db2-binaries --pattern "db2-sidecar-win-x64.zip" --repo ${{ github.repository }}
           Expand-Archive -Path db2-sidecar-win-x64.zip -DestinationPath src-tauri/binaries/
 
+      - name: Sync version from tag
+        shell: node {0}
+        run: |
+          const fs = require('fs');
+          const version = process.env.GITHUB_REF_NAME.replace(/^v/, '');
+
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          pkg.version = version;
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+
+          const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+          conf.version = version;
+          fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
+
+          let cargo = fs.readFileSync('src-tauri/Cargo.toml', 'utf8');
+          cargo = cargo.replace(/^version = ".*"/m, `version = "${version}"`);
+          fs.writeFileSync('src-tauri/Cargo.toml', cargo);
+
+          console.log(`Version synced to ${version}`);
+
       - name: Install frontend dependencies
         run: npm install
 
