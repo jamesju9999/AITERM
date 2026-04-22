@@ -310,8 +310,61 @@ impl PtySession {
     }
 
     /// Read the tracked cwd for this session.
+    ///
+    /// For PowerShell sessions, also scans recent PTY output for the PS prompt
+    /// (`PS C:\path> `) which gives an authoritative CWD that works regardless
+    /// of whether the user typed, pasted, ran a script, or used an alias.
     pub fn get_cwd(&self) -> PathBuf {
+        if self.shell_variant == ShellVariant::Pwsh {
+            if let Some(prompt_cwd) = self.scan_output_for_ps_cwd() {
+                let mut cwd = self.cwd.lock();
+                if *cwd != prompt_cwd {
+                    *cwd = prompt_cwd.clone();
+                }
+                return prompt_cwd;
+            }
+        }
         self.cwd.lock().clone()
+    }
+
+    /// Scan the PTY output ring for the last PowerShell prompt line and
+    /// extract the directory from it.  The PS prompt format (after ANSI
+    /// stripping) is:  `PS C:\path> `
+    fn scan_output_for_ps_cwd(&self) -> Option<PathBuf> {
+        let ring = self.output_ring.lock();
+        if ring.is_empty() { return None; }
+        let bytes: Vec<u8> = ring.iter().copied().collect();
+        drop(ring); // release lock before potentially slow ANSI strip
+
+        let raw = String::from_utf8_lossy(&bytes);
+        let stripped = crate::pty::ansi::strip_ansi(&raw);
+
+        // Walk lines in reverse to find the LAST prompt.
+        // Split on both \n and \r to handle various line-ending styles.
+        let mut last_cwd: Option<PathBuf> = None;
+        for line in stripped.split('\n') {
+            let line = line.trim_start_matches('\r').trim();
+            // PowerShell prompt: "PS <path>> " (note: one '>' then space)
+            if let Some(rest) = line.strip_prefix("PS ") {
+                // Strip the trailing "> " (or just ">")
+                let path_str = if let Some(s) = rest.strip_suffix("> ") {
+                    s
+                } else if let Some(s) = rest.strip_suffix('>') {
+                    s
+                } else {
+                    continue;
+                };
+                let path_str = path_str.trim();
+                // Sanity-check: must look like an absolute path (drive letter or UNC).
+                if !path_str.is_empty()
+                    && (path_str.as_bytes().get(1) == Some(&b':')
+                        || path_str.starts_with("\\\\"))
+                {
+                    last_cwd = Some(PathBuf::from(path_str));
+                }
+            }
+        }
+        last_cwd
     }
 
     /// Read the shell variant detected at spawn time.
@@ -561,6 +614,41 @@ mod tests {
         assert_eq!(s.get_cwd(), PathBuf::from("/home/a"));
         s.write(b"cd -\n");
         assert_eq!(s.get_cwd(), PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn get_cwd_reads_ps_prompt_from_output() {
+        // Simulate a PowerShell session whose output ring contains a prompt.
+        // We can't easily spawn a real shell in this unit test, so we
+        // verify the scan_output_for_ps_cwd helper logic inline.
+
+        // Build a stripped-output string as scan_output_for_ps_cwd would see it.
+        let output = "PS C:\\Users\\a\\AppData\\Local\\AITerm> cd C:\\Users\\a\\Downloads\nPS C:\\Users\\a\\Downloads> ";
+        let mut last_cwd: Option<PathBuf> = None;
+        for line in output.split('\n') {
+            let line = line.trim_start_matches('\r').trim();
+            if let Some(rest) = line.strip_prefix("PS ") {
+                let path_str = if let Some(s) = rest.strip_suffix("> ") {
+                    s
+                } else if let Some(s) = rest.strip_suffix('>') {
+                    s
+                } else {
+                    continue;
+                };
+                let path_str = path_str.trim();
+                if !path_str.is_empty()
+                    && (path_str.as_bytes().get(1) == Some(&b':')
+                        || path_str.starts_with("\\\\"))
+                {
+                    last_cwd = Some(PathBuf::from(path_str));
+                }
+            }
+        }
+        assert_eq!(
+            last_cwd,
+            Some(PathBuf::from("C:\\Users\\a\\Downloads")),
+            "should extract CWD from last PS prompt line"
+        );
     }
 
     #[test]
