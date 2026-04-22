@@ -62,12 +62,6 @@
   text-align: center;
 }
 
-.about-status a {
-  color: #7aadff;
-  cursor: pointer;
-  text-decoration: underline;
-}
-
 .about-copyright {
   font-size: 12px;
   color: #555;
