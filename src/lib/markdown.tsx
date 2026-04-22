@@ -26,12 +26,32 @@ export function extractResponseText(raw: string): string {
   try {
     const parsed = JSON.parse(trimmed);
     if (parsed && typeof parsed === "object") {
+      // Generic single-string response fields
       for (const key of ["response", "text", "content", "answer", "output", "thought"]) {
         if (typeof parsed[key] === "string") return parsed[key];
       }
+
+      // AI-command / chat JSON with "explanation" + optional "suggestions" or "command".
+      // Some models (e.g. Gemma, Llama) output this format even for chat requests.
+      if (typeof parsed["explanation"] === "string") {
+        const parts: string[] = [parsed["explanation"]];
+        // "suggestions": array of command strings
+        if (Array.isArray(parsed["suggestions"])) {
+          for (const s of parsed["suggestions"]) {
+            if (typeof s === "string" && s.trim()) {
+              parts.push(`<cmd>${s.trim()}</cmd>`);
+            }
+          }
+        }
+        // "command": single command string (the /ai query schema)
+        if (typeof parsed["command"] === "string" && parsed["command"].trim() && parsed["command"].trim() !== "DONE") {
+          parts.push(`<cmd>${parsed["command"].trim()}</cmd>`);
+        }
+        return parts.join("\n\n");
+      }
     }
   } catch {
-    // Partial JSON (mid-stream) — regex fallback
+    // Partial JSON (mid-stream) — regex fallback for known single-string fields
     const m = trimmed.match(
       /"(?:response|text|content|answer|output|thought)"\s*:\s*"([\s\S]*?)(?:(?<!\\)"\s*[,}]|$)/
     );
