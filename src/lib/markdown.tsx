@@ -31,6 +31,19 @@ export function extractResponseText(raw: string): string {
         if (typeof parsed[key] === "string") return parsed[key];
       }
 
+      // { "message": "...", "commands": [...] } — Gemma / some local models
+      if (typeof parsed["message"] === "string") {
+        const parts: string[] = [parsed["message"]];
+        if (Array.isArray(parsed["commands"])) {
+          for (const s of parsed["commands"]) {
+            if (typeof s === "string" && s.trim()) {
+              parts.push(`<cmd>${s.trim()}</cmd>`);
+            }
+          }
+        }
+        return parts.join("\n\n");
+      }
+
       // AI-command / chat JSON with "explanation" + optional "suggestions" or "command".
       // Some models (e.g. Gemma, Llama) output this format even for chat requests.
       if (typeof parsed["explanation"] === "string") {
