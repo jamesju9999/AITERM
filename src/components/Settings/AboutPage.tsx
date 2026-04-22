@@ -6,8 +6,9 @@ import iconUrl from "../../../src-tauri/icons/128x128.png";
 import "./AboutPage.css";
 
 const GITHUB_URL = "https://github.com/jamesju9999/AITERM";
-const RELEASES_API = "https://api.github.com/repos/jamesju9999/AITERM/releases/latest";
-const RELEASES_URL = "https://github.com/jamesju9999/AITERM/releases/latest";
+// Use tags API instead of /releases/latest so draft releases are included in version tracking.
+const TAGS_API = "https://api.github.com/repos/jamesju9999/AITERM/tags";
+const RELEASES_URL = "https://github.com/jamesju9999/AITERM/releases";
 
 type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "error";
 
@@ -28,14 +29,18 @@ export function AboutPage() {
   const handleCheckUpdates = async () => {
     setUpdateStatus("checking");
     try {
-      const res = await fetch(RELEASES_API);
+      const res = await fetch(TAGS_API);
       if (!res.ok) throw new Error("network");
-      const data = await res.json();
-      const latest = (data.tag_name as string).replace(/^v/, "");
+      const tags = await res.json() as { name: string }[];
+      if (tags.length === 0) {
+        setUpdateStatus("up-to-date");
+        return;
+      }
+      const latest = tags[0].name.replace(/^v/, "");
       const current = version.replace(/^v/, "");
       setLatestVersion(latest);
-      // String equality (not semver): GitHub's /releases/latest excludes pre-releases,
-      // so any mismatch reliably means a newer stable release is available.
+      // String equality (not semver): tags are sorted newest-first by GitHub,
+      // so any mismatch reliably means a newer version is available.
       setUpdateStatus(latest === current ? "up-to-date" : "available");
     } catch {
       setUpdateStatus("error");
