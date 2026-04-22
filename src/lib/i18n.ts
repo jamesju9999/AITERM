@@ -117,6 +117,17 @@ export const translations = {
     err_copilot_client_id_required: "請先填入 GitHub OAuth Client ID",
     err_copilot_auth_required: "請先完成 GitHub Device Flow 驗證",
     err_save_failed: "儲存失敗，請重試",
+
+    // AboutPage
+    about: "關於",
+    about_check_updates: "檢查更新",
+    about_checking: "🔄 檢查中…",
+    about_up_to_date: "✅ 已是最新版",
+    about_update_available: "🆕 有新版本",
+    about_update_link: "點此前往下載",
+    about_update_error: "檢查失敗，請稍後再試",
+    about_github: "GitHub",
+    about_copyright: "© 2025 AITerm",
   },
   "en": {
     // Settings sidebar
@@ -232,6 +243,17 @@ export const translations = {
     err_copilot_client_id_required: "GitHub OAuth Client ID is required",
     err_copilot_auth_required: "Please complete GitHub Device Flow authentication first",
     err_save_failed: "Save failed, please try again",
+
+    // AboutPage
+    about: "About",
+    about_check_updates: "Check for Updates",
+    about_checking: "🔄 Checking…",
+    about_up_to_date: "✅ Up to date",
+    about_update_available: "🆕 New version available",
+    about_update_link: "Click to download",
+    about_update_error: "Check failed, please try again",
+    about_github: "GitHub",
+    about_copyright: "© 2025 AITerm",
   },
 } as const;
 
