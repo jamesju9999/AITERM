@@ -28,6 +28,7 @@ use commands::{
         test_provider, update_provider,
     },
     secret::{delete_api_key, has_api_key},
+    shell::open_url,
 };
 use config::ConfigStore;
 use db::{manager::DbManager, Db2SidecarState};
@@ -149,6 +150,8 @@ pub fn run() {
             // Secrets
             has_api_key,
             delete_api_key,
+            // Shell
+            open_url,
             // Database
             db_list_connections,
             db_add_connection,
