@@ -73,3 +73,14 @@
   color: #555;
   margin-top: 16px;
 }
+
+.about-link-btn {
+  background: none;
+  border: none;
+  color: #7aadff;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 0;
+  text-decoration: underline;
+}
