@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { AiError, ChatMessage } from "../../ipc/ai";
 import { formatAiError } from "../../ipc/ai";
 import { MessageBubble } from "./MessageBubble";
@@ -19,6 +20,12 @@ export function MessageList({
   onExecuteCommand,
   onRetry,
 }: MessageListProps) {
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, streamBuf, error]);
+
   return (
     <div className="aiterm-message-list">
       {messages.map((m, i) => (
@@ -50,6 +57,7 @@ export function MessageList({
           </button>
         </div>
       )}
+      <div ref={bottomRef} />
     </div>
   );
 }
