@@ -22,6 +22,8 @@ pub struct PtySession {
     cwd: Mutex<PathBuf>,
     previous_cwd: Mutex<Option<PathBuf>>,
     line_buffer: Mutex<Vec<u8>>,
+    /// ANSI escape-sequence state for the line buffer: 0=normal, 1=saw ESC, 2=in CSI (ESC [).
+    line_esc_state: Mutex<u8>,
     /// Ring buffer capturing raw PTY output for AI context. Shared with the reader thread.
     output_ring: Arc<Mutex<VecDeque<u8>>>,
 }
@@ -110,6 +112,7 @@ impl PtySession {
             cwd: Mutex::new(initial_cwd),
             previous_cwd: Mutex::new(None),
             line_buffer: Mutex::new(Vec::new()),
+            line_esc_state: Mutex::new(0),
             output_ring,
         })
     }
@@ -200,6 +203,7 @@ impl PtySession {
             cwd: Mutex::new(initial_cwd),
             previous_cwd: Mutex::new(None),
             line_buffer: Mutex::new(Vec::new()),
+            line_esc_state: Mutex::new(0),
             output_ring,
         })
     }
@@ -214,16 +218,40 @@ impl PtySession {
 
     /// Accumulate bytes into the line buffer. On each carriage return or
     /// newline, flush the completed line and feed it to the cd parser.
+    ///
+    /// ANSI escape sequences (e.g. bracketed-paste markers `ESC[200~` /
+    /// `ESC[201~`) are stripped so they never corrupt the tracked path.
+    /// State is persisted across calls via `line_esc_state` because a
+    /// sequence may span two successive `write()` chunks.
     fn record_into_line_buffer(&self, data: &[u8]) {
         let mut buf = self.line_buffer.lock();
+        // Load persisted escape-sequence state: 0=normal, 1=saw ESC, 2=in CSI.
+        let mut esc: u8 = *self.line_esc_state.lock();
+
         for &b in data {
+            // --- escape-sequence skip logic ---
+            if esc == 1 {
+                // Byte after ESC: '[' starts a CSI sequence; anything else ends it.
+                esc = if b == b'[' { 2 } else { 0 };
+                continue;
+            }
+            if esc == 2 {
+                // Inside CSI: skip until final byte (0x40–0x7E).
+                if (0x40..=0x7E).contains(&b) { esc = 0; }
+                continue;
+            }
+
+            // --- normal processing ---
             if b == b'\r' || b == b'\n' {
                 if !buf.is_empty() {
                     if let Ok(line) = std::str::from_utf8(&buf) {
                         let line_owned = line.to_string();
+                        // Persist esc state before dropping locks.
+                        *self.line_esc_state.lock() = esc;
                         drop(buf);
                         self.apply_cd_if_any(&line_owned);
                         buf = self.line_buffer.lock();
+                        esc = *self.line_esc_state.lock();
                     }
                     buf.clear();
                 }
@@ -234,6 +262,9 @@ impl PtySession {
             } else if b == 0x7f || b == 0x08 {
                 // Backspace / DEL — remove the last tracked byte.
                 buf.pop();
+            } else if b == 0x1B {
+                // ESC — start of an escape sequence; do NOT push to buffer.
+                esc = 1;
             } else if b < 0x20 {
                 // Other control characters — ignore so they don't corrupt the buffer.
             } else {
@@ -244,6 +275,8 @@ impl PtySession {
                 }
             }
         }
+
+        *self.line_esc_state.lock() = esc;
     }
 
     fn apply_cd_if_any(&self, line: &str) {
@@ -418,6 +451,7 @@ mod tests {
             cwd: Mutex::new(PathBuf::from(initial)),
             previous_cwd: Mutex::new(None),
             line_buffer: Mutex::new(Vec::new()),
+            line_esc_state: Mutex::new(0),
         }
     }
 
@@ -426,26 +460,43 @@ mod tests {
         cwd: Mutex<PathBuf>,
         previous_cwd: Mutex<Option<PathBuf>>,
         line_buffer: Mutex<Vec<u8>>,
+        line_esc_state: Mutex<u8>,
     }
 
     impl PtySessionStubForCwd {
         fn write(&self, data: &[u8]) {
             let mut buf = self.line_buffer.lock();
+            let mut esc: u8 = *self.line_esc_state.lock();
             for &b in data {
+                if esc == 1 {
+                    esc = if b == b'[' { 2 } else { 0 };
+                    continue;
+                }
+                if esc == 2 {
+                    if (0x40..=0x7E).contains(&b) { esc = 0; }
+                    continue;
+                }
                 if b == b'\r' || b == b'\n' {
                     if !buf.is_empty() {
                         if let Ok(line) = std::str::from_utf8(&buf) {
                             let line_owned = line.to_string();
+                            *self.line_esc_state.lock() = esc;
                             drop(buf);
                             self.apply(&line_owned);
                             buf = self.line_buffer.lock();
+                            esc = *self.line_esc_state.lock();
                         }
                         buf.clear();
                     }
+                } else if b == 0x1B {
+                    esc = 1;
+                } else if b < 0x20 {
+                    // ignore control chars
                 } else if buf.len() < 8 * 1024 {
                     buf.push(b);
                 }
             }
+            *self.line_esc_state.lock() = esc;
         }
         fn apply(&self, line: &str) {
             let current = self.cwd.lock().clone();
@@ -510,6 +561,17 @@ mod tests {
         assert_eq!(s.get_cwd(), PathBuf::from("/home/a"));
         s.write(b"cd -\n");
         assert_eq!(s.get_cwd(), PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn cwd_strips_bracketed_paste_sequences() {
+        // Simulates xterm.js sending ESC[200~ before and ESC[201~ after pasted text.
+        let s = fake_session(ShellVariant::Bash, "/home/a");
+        // "cd " + ESC[200~ + "/Users/jamesju/Downloads" + ESC[201~ + "\n"
+        let input = b"cd \x1b[200~/Users/jamesju/Downloads\x1b[201~\n";
+        s.write(input);
+        assert_eq!(s.get_cwd(), PathBuf::from("/Users/jamesju/Downloads"),
+            "bracketed paste markers must be stripped before cd parsing");
     }
 
     // Suppress unused import warning - Arc is used in some test setups

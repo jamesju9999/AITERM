@@ -54,6 +54,13 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
       setCwd(resolvedCwd);
     } catch (e) {
       setError(String(e));
+      // On error, still try to reflect the current CWD so the breadcrumb isn't blank.
+      if (!path) {
+        try {
+          const fallbackCwd = await getSessionCwd(sessionId);
+          if (fallbackCwd) setCwd(fallbackCwd);
+        } catch { /* ignore */ }
+      }
     } finally {
       setLoading(false);
     }
@@ -111,9 +118,9 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
   const goUp = () => {
     // Normalize to forward slashes (already done by Rust, but defensive)
     const normalized = cwd.replace(/\\/g, "/").replace(/\/$/, "");
-    const parts = normalized.split("/");
+    const parts = normalized.split("/").filter(Boolean);
     parts.pop();
-    // Windows drive root: ["C:"] → "C:/" ; Unix root: [] → "/"
+    // Windows drive root: ["C:"] after pop → [] but we already guard the button
     const parent = parts.length === 0
       ? "/"
       : parts.length === 1 && parts[0].endsWith(":")
@@ -123,6 +130,9 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
     setExpanded(new Set());
     setSubEntries({});
   };
+
+  // True when we're already at a filesystem root (Unix "/" or Windows "C:/")
+  const atRoot = !cwd || cwd === "/" || /^[A-Za-z]:\/?\s*$/.test(cwd.replace(/\\/g, "/"));
 
   const renderEntries = (list: DirEntry[], depth = 0) => (
     <>
@@ -162,14 +172,20 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
     <div className="file-explorer">
       {/* Toolbar */}
       <div className="fe-toolbar">
-        <button className="fe-btn" onClick={goUp} title="上一層" disabled={!cwd || cwd === "/"}>
+        <button className="fe-btn" onClick={goUp} title="上一層" disabled={atRoot}>
           ↑
         </button>
         <button className="fe-btn" onClick={() => loadDir(cwd)} title="重新整理">
           ↻
         </button>
         <div className="fe-breadcrumb">
-          <span className="fe-breadcrumb-item" onClick={() => loadDir("/")}>
+          <span className="fe-breadcrumb-item" onClick={() => {
+            if (!cwd) { loadDir(""); return; }
+            // On Windows cwd starts with a drive letter (e.g. "C:/Users/…") —
+            // navigate to the drive root instead of the invalid "/" path.
+            const firstPart = cwd.replace(/\\/g, "/").split("/")[0];
+            loadDir(firstPart.endsWith(":") ? firstPart + "/" : "/");
+          }}>
             /
           </span>
           {cwdParts.map((part, i) => {
