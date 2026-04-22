@@ -13,7 +13,7 @@ type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "error";
 
 export function AboutPage() {
   const { t } = useLocale();
-  const [version, setVersion] = useState<string>("");
+  const [version, setVersion] = useState<string>("…");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
   const [latestVersion, setLatestVersion] = useState<string>("");
 
@@ -34,6 +34,8 @@ export function AboutPage() {
       const latest = (data.tag_name as string).replace(/^v/, "");
       const current = version.replace(/^v/, "");
       setLatestVersion(latest);
+      // String equality (not semver): GitHub's /releases/latest excludes pre-releases,
+      // so any mismatch reliably means a newer stable release is available.
       setUpdateStatus(latest === current ? "up-to-date" : "available");
     } catch {
       setUpdateStatus("error");
@@ -48,9 +50,12 @@ export function AboutPage() {
         return (
           <span>
             {t.about_update_available} v{latestVersion} —{" "}
-            <a onClick={() => openUrl(RELEASES_URL).catch(console.error)}>
+            <button
+              className="about-link-btn"
+              onClick={() => openUrl(RELEASES_URL).catch(console.error)}
+            >
               {t.about_update_link}
-            </a>
+            </button>
           </span>
         );
       case "error": return <span>{t.about_update_error}</span>;
@@ -71,7 +76,7 @@ export function AboutPage() {
         <button
           className="about-btn"
           onClick={handleCheckUpdates}
-          disabled={updateStatus === "checking" || version === ""}
+          disabled={updateStatus === "checking" || version === "…"}
         >
           {t.about_check_updates}
         </button>
