@@ -45,8 +45,3 @@ src/             React frontend
   ipc/           Typed Tauri invoke + event wrappers
 docs/            Specs and implementation plans
 ```
-
-## Next Milestone
-
-See `docs/superpowers/plans/` — M1 will add the first AI provider and the
-`/ai` inline trigger.

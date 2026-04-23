@@ -1,4 +1,10 @@
 import type { ReactNode } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+// Import katex css for math equations
+import "katex/dist/katex.min.css";
 
 /**
  * If `raw` looks like a JSON object with a common response field, extract it.
@@ -66,7 +72,7 @@ export function extractResponseText(raw: string): string {
   } catch {
     // Partial JSON (mid-stream) — regex fallback for known single-string fields
     const m = trimmed.match(
-      /"(?:response|text|content|answer|output|thought)"\s*:\s*"([\s\S]*?)(?:(?<!\\)"\s*[,}]|$)/
+      /"(?:response|text|content|answer|output|thought)"\s*:\s*"([\s\S]*?)(?:(?<!\\)"\s*[,}]|$)/ 
     );
     if (m) {
       try {
@@ -88,80 +94,52 @@ export function unescapeNewlines(text: string): string {
   return text.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
 }
 
-// ── Inline markdown ────────────────────────────────────────────────────────
-
-type InlineNode =
-  | string
-  | { type: "bold" | "italic" | "code"; text: string };
-
-function parseInline(text: string): InlineNode[] {
-  const nodes: InlineNode[] = [];
-  // **bold** first (before *italic*), then `code`, then *italic*
-  const re = /(\*\*([^*\n]+)\*\*|`([^`\n]+)`|\*([^*\n]+)\*)/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) nodes.push(text.slice(last, m.index));
-    if (m[2] !== undefined) nodes.push({ type: "bold",   text: m[2] });
-    else if (m[3] !== undefined) nodes.push({ type: "code",   text: m[3] });
-    else if (m[4] !== undefined) nodes.push({ type: "italic", text: m[4] });
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) nodes.push(text.slice(last));
-  return nodes;
-}
-
-function renderInline(text: string, baseKey: string): ReactNode[] {
-  return parseInline(text).map((n, i) => {
-    if (typeof n === "string") return n;
-    const k = `${baseKey}-${i}`;
-    if (n.type === "bold")   return <strong key={k}>{n.text}</strong>;
-    if (n.type === "code")   return <code   key={k} className="md-code">{n.text}</code>;
-    if (n.type === "italic") return <em     key={k}>{n.text}</em>;
-  });
-}
+import { MermaidBlock } from "../components/MermaidBlock";
 
 // ── Block markdown renderer ────────────────────────────────────────────────
 
 export function MarkdownText({ text }: { text: string }): ReactNode {
-  const lines = text.split("\n");
-  const elements: ReactNode[] = [];
-  let listItems: string[] = [];
-  let k = 0;
+  return (
+    <div className="markdown-body">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
+        components={{
+          code({ node, className, children, ...props }) {
+            const match = /language-(\w+)/.exec(className || "");
+            
+            if (match && match[1] === "mermaid") {
+              return <MermaidBlock chart={String(children)} />;
+            }
 
-  const flushList = () => {
-    if (!listItems.length) return;
-    const items = listItems.splice(0);
-    elements.push(
-      <ul key={k++} className="md-list">
-        {items.map((item, i) => (
-          <li key={i}>{renderInline(item, `li-${k}-${i}`)}</li>
-        ))}
-      </ul>
-    );
-  };
-
-  for (const line of lines) {
-    const h3 = line.match(/^###\s+(.*)/);
-    const h2 = line.match(/^##\s+(.*)/);
-    const h1 = line.match(/^#\s+(.*)/);
-
-    if (h3) { flushList(); elements.push(<h3 key={k++} className="md-h3">{renderInline(h3[1], `h3-${k}`)}</h3>); continue; }
-    if (h2) { flushList(); elements.push(<h2 key={k++} className="md-h2">{renderInline(h2[1], `h2-${k}`)}</h2>); continue; }
-    if (h1) { flushList(); elements.push(<h1 key={k++} className="md-h1">{renderInline(h1[1], `h1-${k}`)}</h1>); continue; }
-
-    const li = line.match(/^[-*]\s+(.*)/);
-    if (li) { listItems.push(li[1]); continue; }
-
-    flushList();
-
-    if (line.trim() === "") {
-      elements.push(<div key={k++} className="md-gap" />);
-    } else {
-      elements.push(<p key={k++} className="md-p">{renderInline(line, `p-${k}`)}</p>);
-    }
-  }
-
-  flushList();
-  return <>{elements}</>;
+            const isInline = !match && !String(children).includes("\n");
+            return isInline ? (
+              <code className="md-code" {...props}>
+                {children}
+              </code>
+            ) : (
+              <pre className="md-pre">
+                <code className={className} {...props}>
+                  {children}
+                </code>
+              </pre>
+            );
+          },
+          p({ children }) {
+            return <p className="md-p">{children}</p>;
+          },
+          h1({ children }) { return <h1 className="md-h1">{children}</h1>; },
+          h2({ children }) { return <h2 className="md-h2">{children}</h2>; },
+          h3({ children }) { return <h3 className="md-h3">{children}</h3>; },
+          ul({ children }) { return <ul className="md-list">{children}</ul>; },
+          ol({ children }) { return <ol className="md-list">{children}</ol>; },
+          a({ children, href }) { 
+            return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>; 
+          }
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
 }
