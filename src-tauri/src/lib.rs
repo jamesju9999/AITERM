@@ -20,6 +20,7 @@ use commands::{
         db_list_connections, db_list_schemas, db_list_tables, db_preview_table,
         db_remove_connection, db_test_connection, db_update_connection,
     },
+    design::{design_list_sessions, design_load_session, design_start_session},
     provider::{
         add_provider, get_github_copilot_models, get_github_copilot_models_by_provider,
         get_google_ai_models, get_google_ai_models_by_provider,
@@ -31,7 +32,7 @@ use commands::{
     shell::open_url,
 };
 use config::ConfigStore;
-use db::{manager::DbManager, Db2SidecarState};
+use db::{design::DesignDb, manager::DbManager, Db2SidecarState};
 use pty::commands::{
     pty_close, pty_create, pty_get_cwd, pty_get_recent_output, pty_list_dir, pty_read_file,
     pty_resize, pty_write,
@@ -44,6 +45,8 @@ pub fn run() {
     let config = Arc::new(ConfigStore::new());
     let secrets = Arc::new(SecretStore::new());
     let router = AiRouter::new(config.clone(), secrets.clone());
+
+    let design_db = tauri::async_runtime::block_on(async { DesignDb::new().await });
 
     let sidecar_path = {
         #[cfg(target_os = "windows")]
@@ -111,6 +114,7 @@ pub fn run() {
         .manage(secrets)
         .manage(router)
         .manage(DbManager::new())
+        .manage(design_db)
         .manage(Db2SidecarState::new(sidecar_path))
         .invoke_handler(tauri::generate_handler![
             // PTY
@@ -165,6 +169,10 @@ pub fn run() {
             db_get_table_schema,
             db_preview_table,
             db_execute_query,
+            // Design Tab
+            design_start_session,
+            design_load_session,
+            design_list_sessions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
