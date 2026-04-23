@@ -20,13 +20,22 @@ export function MermaidBlock({ chart }: MermaidBlockProps) {
     let isCancelled = false;
 
     async function renderMermaid() {
+      const trimmed = chart.trim();
+      if (!trimmed) return;
+
       try {
-        // Use a unique ID for each render to avoid conflicts in mermaid's internal DOM usage
+        // Validate first — prevents mermaid from leaking its bomb error UI into document.body
+        await mermaid.parse(trimmed);
+      } catch (err: any) {
+        if (!isCancelled) {
+          setError(err.message || "Mermaid parse error");
+        }
+        return;
+      }
+
+      try {
         const id = `mermaid-${Math.random().toString(36).substring(2, 9)}`;
-        
-        // mermaid.render returns an object { svg, bindFunctions } in v10+
-        const { svg } = await mermaid.render(id, chart);
-        
+        const { svg } = await mermaid.render(id, trimmed);
         if (!isCancelled) {
           setSvgStr(svg);
           setError(null);
