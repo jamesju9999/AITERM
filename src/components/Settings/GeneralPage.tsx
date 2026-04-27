@@ -14,6 +14,8 @@ export function GeneralPage() {
   const [shortcut, setShortcut] = useState<SubmitShortcut>("enter");
   const [maxSteps, setMaxSteps] = useState<number>(5);
   const [defaultTab, setDefaultTabState] = useState<DefaultTab>("terminal");
+  const [telegramToken, setTelegramToken] = useState("");
+  const [telegramChatId, setTelegramChatId] = useState("");
   const [saving, setSaving] = useState(false);
 
   const MODES: { value: ExecutionMode; label: string; desc: string }[] = [
@@ -34,6 +36,12 @@ export function GeneralPage() {
       setShortcut(cfg.submit_shortcut);
       setMaxSteps(cfg.max_agent_steps ?? 5);
       setDefaultTabState(cfg.default_tab ?? "terminal");
+    });
+    import("../../ipc/telegram").then(({ getTelegramConfig }) => {
+      getTelegramConfig().then(cfg => {
+        if (cfg.bot_token) setTelegramToken(cfg.bot_token);
+        if (cfg.chat_id) setTelegramChatId(cfg.chat_id);
+      });
     });
   }, []);
 
@@ -178,6 +186,64 @@ export function GeneralPage() {
               </div>
             </label>
           ))}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3>{t.telegram_integration_title}</h3>
+        <p className="section-desc">{t.telegram_integration_desc}</p>
+
+        <div style={{ marginTop: "12px", background: "#111", border: "1px solid #333", borderRadius: "6px", padding: "12px", fontSize: "13px", color: "#ccc" }}>
+          <h4 style={{ margin: "0 0 8px 0", color: "#eee" }}>{t.telegram_steps_title}</h4>
+          <ol style={{ margin: 0, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "6px" }}>
+            <li>{t.telegram_step_1}</li>
+            <li>{t.telegram_step_2}</li>
+            <li>{t.telegram_step_3}</li>
+            <li>{t.telegram_step_4}</li>
+          </ol>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "16px" }}>
+          <div>
+            <label style={{ display: "block", marginBottom: "4px", fontSize: "13px", color: "#aaa" }}>{t.telegram_bot_token}</label>
+            <input 
+              type="password" 
+              className="settings-input"
+              style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #333", background: "#1e1e1e", color: "#eee" }}
+              placeholder={t.telegram_bot_token_placeholder}
+              value={telegramToken}
+              onChange={async (e) => {
+                const val = e.target.value;
+                setTelegramToken(val);
+                setSaving(true);
+                try {
+                  const { getTelegramConfig, setTelegramConfig } = await import("../../ipc/telegram");
+                  const cfg = await getTelegramConfig();
+                  await setTelegramConfig({ ...cfg, bot_token: val || null });
+                } finally { setSaving(false); }
+              }}
+            />
+          </div>
+          <div>
+            <label style={{ display: "block", marginBottom: "4px", fontSize: "13px", color: "#aaa" }}>{t.telegram_chat_id}</label>
+            <input 
+              type="text" 
+              className="settings-input"
+              style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #333", background: "#1e1e1e", color: "#eee" }}
+              placeholder={t.telegram_chat_id_placeholder}
+              value={telegramChatId}
+              onChange={async (e) => {
+                const val = e.target.value;
+                setTelegramChatId(val);
+                setSaving(true);
+                try {
+                  const { getTelegramConfig, setTelegramConfig } = await import("../../ipc/telegram");
+                  const cfg = await getTelegramConfig();
+                  await setTelegramConfig({ ...cfg, chat_id: val || null });
+                } finally { setSaving(false); }
+              }}
+            />
+          </div>
         </div>
         {saving && <p className="saving-indicator">{t.saving_indicator}</p>}
       </section>

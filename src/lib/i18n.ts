@@ -76,6 +76,19 @@ export const translations = {
     default_tab: "預設開啟頁面",
     default_tab_desc: "應用程式啟動時自動開啟的頁面類型。",
 
+    // Telegram Integration
+    telegram_integration_title: "Telegram 整合 (遠端控制)",
+    telegram_integration_desc: "設定 Telegram 以接收訊息並遠端控制 AITERM 頁籤。",
+    telegram_bot_token: "Bot Token",
+    telegram_bot_token_placeholder: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+    telegram_chat_id: "Chat ID",
+    telegram_chat_id_placeholder: "例如：123456789",
+    telegram_steps_title: "整合步驟說明：",
+    telegram_step_1: "1. 前往 Telegram 搜尋 @BotFather，發送 /newbot 建立機器人，並取得 Bot Token。",
+    telegram_step_2: "2. 在 Telegram 搜尋 @userinfobot (或類似機器人)，取得您個人的 Chat ID (一串數字)。",
+    telegram_step_3: "3. 將 Bot Token 與 Chat ID 填入下方欄位，並前往 Telegram 對您的機器人隨便發送一則訊息以開啟對話。",
+    telegram_step_4: "4. 在 AITERM 的各個工具面板中點擊「📱 Remote」按鈕，即可開始接收推播訊息並遠端控制！",
+
     // ProvidersPage
     add_provider: "+ 新增供應商",
     no_providers: "尚未設定任何供應商。點擊「新增供應商」開始設定。",
@@ -201,6 +214,19 @@ export const translations = {
     language_desc: "Select the display language for the interface.",
     default_tab: "Default startup tab",
     default_tab_desc: "Tab type that opens automatically when the app starts.",
+
+    // Telegram Integration
+    telegram_integration_title: "Telegram Integration (Remote Control)",
+    telegram_integration_desc: "Set up Telegram to receive messages and remotely control AITERM tabs.",
+    telegram_bot_token: "Bot Token",
+    telegram_bot_token_placeholder: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+    telegram_chat_id: "Chat ID",
+    telegram_chat_id_placeholder: "e.g. 123456789",
+    telegram_steps_title: "Setup Instructions:",
+    telegram_step_1: "1. Go to Telegram and search for @BotFather. Send /newbot to create a bot and get your Bot Token.",
+    telegram_step_2: "2. Search for @userinfobot (or similar) on Telegram to get your personal Chat ID (a string of numbers).",
+    telegram_step_3: "3. Enter the Bot Token and Chat ID below, then send a random message to your bot on Telegram to start the conversation.",
+    telegram_step_4: "4. Click the '📱 Remote' button in AITERM's tabs to start receiving messages and remote controlling!",
 
     // ProvidersPage
     add_provider: "+ Add Provider",

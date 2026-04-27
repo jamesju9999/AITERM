@@ -30,6 +30,7 @@ export interface AiPanelProps {
   onClose: () => void;
   onExecuteCommand: (cmd: string, onComplete?: (block: TerminalBlock) => void) => void;
   onOpenProviderPalette: () => void;
+  sendRemoteResponse?: (text: string) => void;
 }
 
 /**
@@ -44,6 +45,7 @@ export function AiPanel({
   onClose,
   onExecuteCommand,
   onOpenProviderPalette,
+  sendRemoteResponse,
 }: AiPanelProps) {
   const chat = useAiChat(sessionId);
   const [input, setInput] = useState("");
@@ -158,6 +160,7 @@ ${dirList || "（無法取得）"}
 
     // Show assistant reply in chat
     chat.addMessage({ role: "assistant", content: reply });
+    if (sendRemoteResponse) sendRemoteResponse(reply);
 
     // Parse <cmd>
     const cmdMatch = reply.match(/<cmd>([\s\S]*?)<\/cmd>/i);
@@ -227,6 +230,18 @@ ${dirList || "（無法取得）"}
     window.addEventListener("aiterm:prefill-chat", onPrefill);
     return () => window.removeEventListener("aiterm:prefill-chat", onPrefill);
   }, []);
+
+  // Forward new assistant messages to Telegram
+  const prevMessagesLength = useRef(chat.messages.length);
+  useEffect(() => {
+    if (chat.messages.length > prevMessagesLength.current) {
+      const lastMsg = chat.messages[chat.messages.length - 1];
+      if (lastMsg.role === "assistant" && sendRemoteResponse && !chat.isStreaming) {
+        sendRemoteResponse(lastMsg.content);
+      }
+    }
+    prevMessagesLength.current = chat.messages.length;
+  }, [chat.messages, chat.isStreaming, sendRemoteResponse]);
 
   useEffect(() => {
     if (!isOpen) return;

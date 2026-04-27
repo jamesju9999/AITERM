@@ -8,6 +8,7 @@ import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/m
 interface Props {
   connectionId: string;
   schema: string;
+  sendRemoteResponse?: (text: string) => void;
 }
 
 interface AgentStep {
@@ -124,7 +125,7 @@ function errorText(err: unknown): string {
   return formatAiError(normalizeAiError(err));
 }
 
-export function DatabaseAiChat({ connectionId, schema }: Props) {
+export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -143,6 +144,24 @@ export function DatabaseAiChat({ connectionId, schema }: Props) {
       dbListTables(connectionId, schema).then(setTables).catch(console.error);
     }
   }, [connectionId, schema]);
+
+  useEffect(() => {
+    const onRemoteMsg = (e: Event) => {
+      const text = (e as CustomEvent).detail.text;
+      if (text) {
+        setInput(text);
+        // We defer send() because React state needs to update input first,
+        // but since send() depends on input state, we can just trigger send() directly by passing text if we refactored it.
+        // Instead of refactoring send, we can just set input and press send in next tick via a ref flag.
+        setTimeout(() => {
+          const btn = document.getElementById("db-ai-send-btn");
+          if (btn) btn.click();
+        }, 50);
+      }
+    };
+    window.addEventListener("aiterm:db-remote-msg", onRemoteMsg);
+    return () => window.removeEventListener("aiterm:db-remote-msg", onRemoteMsg);
+  }, []);
 
   useEffect(() => {
     getConfig().then((cfg) => {
@@ -275,6 +294,7 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
             agentRunning: false,
             agentStepLabel: undefined,
           }));
+          if (sendRemoteResponse) sendRemoteResponse(reply);
           break;
         }
 
@@ -322,6 +342,7 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
             agentRunning: false,
             agentStepLabel: undefined,
           }));
+          if (sendRemoteResponse) sendRemoteResponse(summary);
         }
       }
 
@@ -332,6 +353,9 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
           agentRunning: false,
           agentStepLabel: undefined,
         }));
+        if (sendRemoteResponse && !finalMessages[finalMessages.length - 1].text) {
+          sendRemoteResponse("（已停止）");
+        }
       }
 
       void finalMessages; // suppress unused warning
@@ -530,6 +554,7 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
             </button>
           ) : (
             <button
+              id="db-ai-send-btn"
               onClick={send}
               disabled={!input.trim()}
               style={{ background: "#1e3a2e", border: "1px solid #34d399", color: "#34d399", borderRadius: 6, padding: "8px 14px", cursor: "pointer", fontSize: 12 }}

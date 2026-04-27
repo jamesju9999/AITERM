@@ -11,6 +11,7 @@ import {
 import type { DesignSession } from '../../ipc/design';
 import type { ChatMessage } from '../../ipc/ai';
 import { listen } from '@tauri-apps/api/event';
+import { useTelegramRemoteControl } from '../../hooks/useTelegramRemoteControl';
 import { MessageBubble } from '../AiPanel/MessageBubble';
 import { ProviderPalette } from '../ProviderPalette';
 import { extractResponseText } from '../../lib/markdown';
@@ -34,6 +35,14 @@ export function DesignView({ isActive }: { isActive: boolean }) {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const { isRemoteEnabled, setIsRemoteEnabled, sendRemoteResponse } = useTelegramRemoteControl(
+    session?.id || '',
+    isActive,
+    (text) => {
+      handleSendMessage(text);
+    }
+  );
 
   // Handle Resize Logic
   useEffect(() => {
@@ -106,6 +115,13 @@ export function DesignView({ isActive }: { isActive: boolean }) {
         if (event.payload.done) {
           setIsStreaming(false);
           setTimeout(refreshSession, 500);
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last && last.role === 'assistant') {
+              sendRemoteResponse(cleanMessageForDisplay(last.content));
+            }
+            return prev;
+          });
         }
       }
     );
@@ -133,9 +149,10 @@ export function DesignView({ isActive }: { isActive: boolean }) {
     }
   }, [isActive, session, loading, loadHistory]);
 
-  const handleSendMessage = useCallback(async () => {
-    if (!inputValue.trim() || !session || session.id === 'fallback-id' || isStreaming) return;
-    const userMsg: ChatMessage = { role: 'user', content: inputValue };
+  const handleSendMessage = useCallback(async (remoteText?: string) => {
+    const text = typeof remoteText === "string" ? remoteText : inputValue;
+    if (!text.trim() || !session || session.id === 'fallback-id' || isStreaming) return;
+    const userMsg: ChatMessage = { role: 'user', content: text };
 
     // Combine consecutive messages of the same role to satisfy strict APIs (like Anthropic)
     const combinedMessages = [...messages, userMsg].reduce((acc, curr) => {
@@ -149,7 +166,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
     }, [] as ChatMessage[]);
 
     setMessages([...messages, userMsg]); // Keep UI showing individual bubbles
-    setInputValue('');
+    if (typeof remoteText !== "string") setInputValue('');
     setIsStreaming(true);
 
     try {
@@ -248,6 +265,14 @@ export function DesignView({ isActive }: { isActive: boolean }) {
           <div className="design-session-info">
             {session?.title}
           </div>
+          <button
+            className={`aiterm-block-btn ${isRemoteEnabled ? 'aiterm-agent-toggle--on' : ''}`}
+            title="啟用/停用 Telegram 遠端控制"
+            onClick={() => setIsRemoteEnabled(!isRemoteEnabled)}
+            style={{ marginLeft: "auto", padding: "2px 8px", fontSize: 11, background: isRemoteEnabled ? "rgba(52, 211, 153, 0.15)" : "transparent", color: isRemoteEnabled ? "#34d399" : "#666", border: isRemoteEnabled ? "1px solid rgba(52, 211, 153, 0.3)" : "1px solid #333", borderRadius: 4, cursor: "pointer" }}
+          >
+            📱 Remote
+          </button>
         </div>
 
         <div className="design-interaction-area">
@@ -285,7 +310,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }}
                 disabled={isStreaming}
               />
-              <button className="design-send-btn" onClick={handleSendMessage} disabled={!inputValue.trim() || isStreaming}>
+              <button className="design-send-btn" onClick={() => handleSendMessage()} disabled={!inputValue.trim() || isStreaming}>
                 {isStreaming ? '...' : '送出'}
               </button>
             </div>

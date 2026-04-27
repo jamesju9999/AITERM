@@ -202,7 +202,7 @@ pub async fn ai_query(
         messages: vec![ChatMessage { role: "user".into(), content: query }],
         context: snapshot,
         mode: QueryMode::SingleCommand,
-        max_tokens: Some(512),
+        max_tokens: None,
     };
 
     let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
@@ -306,7 +306,7 @@ pub async fn ai_chat(
         messages,
         context: snapshot,
         mode: QueryMode::Chat,
-        max_tokens: Some(1024),
+        max_tokens: None,
     };
 
     let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
