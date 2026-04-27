@@ -39,3 +39,6 @@ npm-debug.log*
 .superpowers/
 db2-sidecar/obj/
 src-tauri/binaries/
+
+# Docs
+docs/superpowers/
