@@ -73,6 +73,10 @@ export function AboutPage() {
       <img src={iconUrl} alt="AITerm" className="about-icon" />
       <p className="about-name">AITerm</p>
       <p className="about-version">v{version}</p>
+      <p className="about-author">by James Chu</p>
+      <p className="about-email">
+        <a href="mailto:jamesjulive@gmail.com" className="about-link-btn">jamesjulive@gmail.com</a>
+      </p>
 
       <div className="about-buttons">
         <button className="about-btn" onClick={handleGitHub}>
