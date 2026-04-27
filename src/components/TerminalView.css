@@ -146,6 +146,12 @@
   background: rgba(192, 132, 252, 0.15);
 }
 
+.aiterm-block-btn.aiterm-agent-toggle--on {
+  background: #0e2a0e;
+  border-color: #4ade80;
+  color: #4ade80;
+}
+
 /* ── Sub-tab bar (Terminal | Files) ── */
 .aiterm-subtabs {
   display: flex;

@@ -4,6 +4,7 @@ import { ConnectionSelector } from "./ConnectionSelector";
 import { DatabaseBrowser } from "./DatabaseBrowser";
 import { DatabaseSqlEditor } from "./DatabaseSqlEditor";
 import { DatabaseAiChat } from "./DatabaseAiChat";
+import { useTelegramRemoteControl } from "../../hooks/useTelegramRemoteControl";
 import "./index.css";
 
 export interface DatabaseViewProps {
@@ -20,6 +21,17 @@ export function DatabaseView({ tabId: _tabId, isActive: _isActive, dbConnectionI
   const [schemas, setSchemas] = useState<string[]>([]);
   const [activeSchema, setActiveSchema] = useState<string>("");
   const [connectError, setConnectError] = useState<string | null>(null);
+
+  const { isRemoteEnabled, setIsRemoteEnabled, sendRemoteResponse } = useTelegramRemoteControl(
+    dbConnectionId || "",
+    _isActive,
+    (text) => {
+      setSubTab("ai");
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent("aiterm:db-remote-msg", { detail: { text } }));
+      }, 50);
+    }
+  );
 
   useEffect(() => {
     if (!dbConnectionId) return;
@@ -99,6 +111,16 @@ export function DatabaseView({ tabId: _tabId, isActive: _isActive, dbConnectionI
             {label}
           </button>
         ))}
+        {dbConnectionId && (
+          <button
+            className={`db-view__subtab ${isRemoteEnabled ? "aiterm-agent-toggle--on" : ""}`}
+            style={{ marginLeft: 8 }}
+            onClick={() => setIsRemoteEnabled(!isRemoteEnabled)}
+            title="啟用/停用 Telegram 遠端控制"
+          >
+            📱 Remote
+          </button>
+        )}
         {schemas.length > 1 && (
           <select
             value={activeSchema}
@@ -116,7 +138,7 @@ export function DatabaseView({ tabId: _tabId, isActive: _isActive, dbConnectionI
               <DatabaseBrowser connectionId={dbConnectionId} schema={activeSchema} />
             </div>
             <div style={{ display: subTab === "ai" ? "contents" : "none" }}>
-              <DatabaseAiChat connectionId={dbConnectionId} schema={activeSchema} />
+              <DatabaseAiChat connectionId={dbConnectionId} schema={activeSchema} sendRemoteResponse={sendRemoteResponse} />
             </div>
             <div style={{ display: subTab === "sql" ? "contents" : "none" }}>
               <DatabaseSqlEditor connectionId={dbConnectionId} schema={activeSchema} />

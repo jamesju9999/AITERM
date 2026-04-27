@@ -18,6 +18,8 @@ pub async fn consume_openai_sse(
     let mut stream = resp.bytes_stream();
     let mut buf = Vec::<u8>::new();
     let mut saw_done = false;
+    let mut saw_data_prefix = false;
+    let mut raw_response = String::new(); // Accumulate raw response for fallback
 
     'outer: while let Some(item) = stream.next().await {
         let bytes = item.map_err(|e| AiError::Network { message: e.to_string() })?;
@@ -32,10 +34,19 @@ pub async fn consume_openai_sse(
                 Ok(s) => s.trim(),
                 Err(_) => continue,
             };
+            
+            if !saw_data_prefix {
+                raw_response.push_str(line);
+                raw_response.push('\n');
+            }
+
             if line.is_empty() { continue; }
 
             let payload = match line.strip_prefix("data:") {
-                Some(p) => p.trim(),
+                Some(p) => {
+                    saw_data_prefix = true;
+                    p.trim()
+                },
                 None => continue,
             };
             if payload == "[DONE]" {
@@ -54,6 +65,29 @@ pub async fn consume_openai_sse(
                 }
                 Err(_) => continue,
             }
+        }
+    }
+
+    if !saw_data_prefix {
+        let raw = raw_response.trim();
+        if !raw.is_empty() {
+            if raw.starts_with('{') {
+                if let Ok(p) = serde_json::from_str::<OpenAiSsePayload>(raw) {
+                    let delta = p.delta_text();
+                    let usage = p.usage_into();
+                    if !delta.is_empty() {
+                        let _ = tx.send(GenerateChunk { delta, done: false, usage: usage.clone() }).await;
+                    }
+                    let _ = tx.send(GenerateChunk { delta: String::new(), done: true, usage }).await;
+                    return Ok(());
+                }
+            }
+            
+            // If we received an NDJSON error or something else we don't understand.
+            return Err(AiError::ModelError {
+                reason: "模型回傳了無法識別的格式 (非 SSE 串流也非標準 JSON)。請確認 URL 與模型是否正確。".into(),
+                raw: raw.chars().take(300).collect(),
+            });
         }
     }
 
@@ -78,6 +112,8 @@ struct OpenAiSseChoice {
     #[serde(default)]
     delta: OpenAiSseDelta,
     #[serde(default)]
+    message: Option<OpenAiSseDelta>,
+    #[serde(default)]
     finish_reason: Option<String>,
 }
 
@@ -97,7 +133,14 @@ pub(crate) struct OpenAiSseUsage {
 
 impl OpenAiSsePayload {
     pub fn delta_text(&self) -> String {
-        self.choices.first().and_then(|c| c.delta.content.clone()).unwrap_or_default()
+        self.choices.first().and_then(|c| {
+            if let Some(ref m) = c.message {
+                if let Some(ref content) = m.content {
+                    return Some(content.clone());
+                }
+            }
+            c.delta.content.clone()
+        }).unwrap_or_default()
     }
     pub fn finish_reason_present(&self) -> bool {
         self.choices.first().and_then(|c| c.finish_reason.as_ref()).is_some()

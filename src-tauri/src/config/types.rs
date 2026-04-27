@@ -40,6 +40,10 @@ pub struct AppConfig {
     /// Which tab type to open automatically when the app starts.
     #[serde(default)]
     pub default_tab: DefaultTab,
+
+    /// Telegram chat ID for remote control.
+    #[serde(default)]
+    pub telegram_chat_id: Option<String>,
 }
 
 fn default_max_agent_steps() -> u32 { 5 }
@@ -269,6 +273,7 @@ mod tests {
             onboarding_done: true,
             db_connections: vec![],
             default_tab: DefaultTab::default(),
+            telegram_chat_id: None,
         };
         let toml_str = toml::to_string_pretty(&cfg).unwrap();
         let parsed: AppConfig = toml::from_str(&toml_str).unwrap();

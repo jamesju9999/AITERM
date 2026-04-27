@@ -5,8 +5,10 @@ pub mod db;
 pub mod guard;
 pub mod pty;
 pub mod secret;
+pub mod telegram;
 
 use std::sync::Arc;
+
 
 use ai::router::AiRouter;
 use commands::{
@@ -116,6 +118,11 @@ pub fn run() {
         .manage(DbManager::new())
         .manage(design_db)
         .manage(Db2SidecarState::new(sidecar_path))
+        .manage(tokio::sync::Mutex::new(telegram::TelegramState { active_task: None }))
+        .setup(|app| {
+            telegram::init(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // PTY
             pty_create,
@@ -178,6 +185,10 @@ pub fn run() {
             design_list_messages,
             design_advance_stage,
             design_save_file,
+            // Telegram
+            telegram::telegram_get_config,
+            telegram::telegram_set_config,
+            telegram::telegram_send_message,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

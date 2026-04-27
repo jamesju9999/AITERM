@@ -23,6 +23,7 @@ import {
 import { getConfig, type ExecutionMode, type SubmitShortcut } from "../ipc/config";
 import { useTerminalBlocks } from "../hooks/useTerminalBlocks";
 import { useAgentMission } from "../hooks/useAgentMission";
+import { useTelegramRemoteControl } from "../hooks/useTelegramRemoteControl";
 import { listProviders } from "../ipc/provider";
 import { parseAiPrefix, parseAgentPrefix } from "./parseAiPrefix";
 import { CommandPreview } from "./CommandPreview";
@@ -128,6 +129,80 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // Bridge blocks into a ref so the stale closure can check if a command is running
   const blocksRef = useRef(blocks);
   useEffect(() => { blocksRef.current = blocks; }, [blocks]);
+
+  // Telegram Remote Control
+  const { isRemoteEnabled, setIsRemoteEnabled, sendRemoteResponse } = useTelegramRemoteControl(
+    sessionId,
+    isActive,
+    (text) => {
+      const agentQuery = parseAgentPrefix(text);
+      const aiQuery = parseAiPrefix(text);
+      if (agentQuery !== null || aiQuery !== null) {
+        const finalQuery = agentQuery || aiQuery!;
+        if (previewRef.current.loading) return;
+        agentAbortRef.current = false;
+        startMission(finalQuery, 5);
+        if (sessionRef.current && termRef.current) {
+          runAgentLoop({
+            goal: finalQuery,
+            sessionId: sessionRef.current,
+            term: termRef.current,
+            getSubmitCommand: () => submitCommandRef.current,
+            setPreview,
+            setStreamText,
+            streamingRef,
+            executionModeRef,
+            writeRed: (msg) => termRef.current?.write(`\r\n\x1b[31m${msg}\x1b[0m\r\n`),
+            abortRef: agentAbortRef,
+            stepCount: 0,
+            maxSteps: maxAgentStepsRef.current,
+            history: [],
+            onComplete: (explanation?: string) => {
+              if (explanation) {
+                termRef.current?.write(`\r\n\x1b[36m${explanation.replace(/\n/g, "\r\n")}\x1b[0m\r\n`);
+              }
+              termRef.current?.write(`\r\n\x1b[32m[Agent Mission Completed] 🎉\x1b[0m\r\n`);
+              stopMission();
+              if (sessionRef.current) writePty(sessionRef.current, "\r").catch(console.error);
+              sendRemoteResponse(explanation ? `Agent: ${explanation}` : "[Agent Mission Completed] 🎉");
+            },
+            onFail: (msg) => {
+              termRef.current?.write(`\r\n\x1b[33m⚠ Agent stopped: ${msg}\x1b[0m\r\n`);
+              stopMission();
+              if (sessionRef.current) writePty(sessionRef.current, "\r").catch(console.error);
+              sendRemoteResponse(`⚠ Agent stopped: ${msg}`);
+            },
+          });
+        }
+      } else {
+        submitCommand(text, (block) => {
+          if (!termRef.current) return;
+          const term = termRef.current;
+          // startLine points to the prompt + command echo.
+          // endLine points to the new prompt line (or beyond).
+          const startLine = block.startLine ?? 0;
+          const endLine = block.endLine ?? term.buffer.active.baseY + term.buffer.active.cursorY;
+          
+          let output = "";
+          // Extract lines strictly between the command line and the new prompt.
+          for (let i = startLine + 1; i < endLine; i++) {
+            const lineStr = term.buffer.active.getLine(i)?.translateToString(true) || "";
+            output += lineStr + "\n";
+          }
+          
+          output = output.trim();
+          if (output.length > 0) {
+            if (output.length > 4000) {
+              output = output.substring(0, 4000) + "\n... (output truncated)";
+            }
+            sendRemoteResponse(output);
+          } else {
+            sendRemoteResponse(`(Command finished: ${block.command})`);
+          }
+        });
+      }
+    }
+  );
 
   /** Fetch active provider name and execution mode from config. */
   function refreshConfig() {
@@ -374,11 +449,13 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                 term.write(`\r\n\x1b[32m[Agent Mission Completed] 🎉\x1b[0m\r\n`);
                 stopMission();
                 writePty(session, "\r").catch(console.error);
+                sendRemoteResponse("[Agent Mission Completed] 🎉");
               },
               onFail: (msg) => {
                 term.write(`\r\n\x1b[33m⚠ Agent stopped: ${msg}\x1b[0m\r\n`);
                 stopMission();
                 writePty(session, "\r").catch(console.error);
+                sendRemoteResponse(`⚠ Agent stopped: ${msg}`);
               },
             });
             continue;
@@ -483,6 +560,17 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               {t.ai_providers} ＋
             </button>
           )}
+          <button
+            className={`aiterm-block-btn ${isRemoteEnabled ? 'aiterm-agent-toggle--on' : ''}`}
+            title="啟用/停用 Telegram 遠端控制"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsRemoteEnabled((prev) => !prev);
+            }}
+            style={{ marginLeft: "8px", padding: "2px 8px" }}
+          >
+            📱 Remote
+          </button>
           <button
             className="aiterm-block-btn aiterm-block-btn-ai"
             title="開啟 AI 助手 (Ctrl+I)"
@@ -705,6 +793,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             setPanelOpen(false);
             setPaletteOpen(true);
           }}
+          sendRemoteResponse={sendRemoteResponse}
         />
       )}
     </div>
@@ -728,9 +817,10 @@ function handleAiQuery(
   executionModeRef: React.MutableRefObject<ExecutionMode>,
   writeRed: (msg: string) => void,
   submitCommand: (cmd: string, onComplete?: (block: import("../hooks/useTerminalBlocks").TerminalBlock) => void) => void,
-  onDone?: () => void,
+  onDone?: (explanation?: string) => void,
   agentActive = false,
-  onCommandComplete?: (block: import("../hooks/useTerminalBlocks").TerminalBlock) => void
+  onCommandComplete?: (block: import("../hooks/useTerminalBlocks").TerminalBlock) => void,
+  onAiError?: (err: AiError) => void
 ) {
   void originalLine;
   term.write("\r\x1b[2K");
@@ -746,7 +836,7 @@ function handleAiQuery(
       
       if (resp.command === "DONE") {
         setPreview(INITIAL_PREVIEW);
-        if (onDone) onDone();
+        if (onDone) onDone(resp.explanation);
         return;
       }
 
@@ -777,6 +867,7 @@ function handleAiQuery(
     .catch((rawErr: unknown) => {
       streamingRef.current = false;
       setStreamText("");
+      term.write("\x1b[1A\x1b[2K");
       const err = normalizeAiError(rawErr);
       writeRed(formatAiError(err));
 
@@ -796,6 +887,7 @@ function handleAiQuery(
       }
 
       setPreview(INITIAL_PREVIEW);
+      if (onAiError) onAiError(err);
     });
 }
 
@@ -818,7 +910,7 @@ interface AgentLoopParams {
   stepCount: number;
   maxSteps: number;
   history: { command: string; exitCode: number; output: string }[];
-  onComplete: () => void;
+  onComplete: (explanation?: string) => void;
   onFail: (msg: string) => void;
 }
 
@@ -881,9 +973,9 @@ function runAgentLoop(params: AgentLoopParams) {
   };
 
   // Wrap onComplete so we mark the step as resolved (prevents timeout from firing)
-  const wrappedOnComplete = () => {
+  const wrappedOnComplete = (explanation?: string) => {
     stepResolved = true;
-    onComplete();
+    onComplete(explanation);
   };
 
   // Timeout: if the command hasn't completed in 60s, it likely needs user input
@@ -909,6 +1001,14 @@ function runAgentLoop(params: AgentLoopParams) {
     wrappedOnComplete,   // onDone: AI returned "DONE" → mark resolved & complete
     true,                // agentActive: force auto-execute for safe commands
     onBlockDone,         // onCommandComplete: fires when OSC 133;D marks the block done
+    (err) => {           // onAiError: AI call failed, abort the mission immediately
+      stepResolved = true;
+      let errMsg = "未知錯誤";
+      if ("message" in err) errMsg = err.message;
+      else if ("reason" in err) errMsg = err.reason;
+      else if (err.kind === "not_configured") errMsg = "未設定 API Key";
+      onFail(`AI 請求失敗: ${errMsg}`);
+    }
   );
 }
 

@@ -28,6 +28,13 @@
 
 .db-view__subtab:hover { color: #ccc; }
 
+.db-view__subtab.aiterm-agent-toggle--on {
+  color: #4ade80;
+  background: #0e2a0e;
+  border-bottom-color: #4ade80;
+  border-radius: 4px;
+}
+
 .db-view__subtab--active {
   color: #34d399;
   border-bottom-color: #34d399;
