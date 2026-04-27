@@ -1,0 +1,174 @@
+# 小型線上待辦清單系統 - 實作計畫 (Implementation Plan)
+
+## 1. 專案初始化
+
+### 1.1 開發環境準備
+
+**必要工具安裝：**
+- Node.js 18.x LTS
+- PostgreSQL 15.x
+- Docker & Docker Compose
+- Git
+- VS Code (建議安裝擴充套件：ESLint, Prettier, PostgreSQL)
+
+**專案結構建立：**
+```
+todo-system/
+├── frontend/           # React 前端專案
+├── backend/            # Express.js 後端專案
+├── database/           # 資料庫初始化腳本
+├── docker/             # Docker 配置檔
+├── docs/               # 文件目錄
+└── docker-compose.yml  # 容器編排配置
+```
+
+---
+
+## 2. 開發里程碑
+
+### 里程碑 1：基礎架構建置（預計 3-5 天）
+**目標：** 完成專案骨架與基礎設施
+
+**交付物：**
+- ✅ 資料庫 Schema 建立完成
+- ✅ 後端 API 框架就緒（含中介軟體）
+- ✅ 前端專案初始化（含路由與基礎元件）
+- ✅ Docker 開發環境配置完成
+
+---
+
+### 里程碑 2：身份認證模組（預計 2-3 天）
+**目標：** 實現使用者登入登出與 Session 管理
+
+**交付物：**
+- ✅ 登入/登出 API 端點
+- ✅ Session 中介軟體
+- ✅ 登入頁面 UI
+- ✅ 身份驗證錯誤處理
+
+---
+
+### 里程碑 3：任務管理核心功能（預計 5-7 天）
+**目標：** 實現任務 CRUD 與指派功能
+
+**交付物：**
+- ✅ 任務 CRUD API 端點
+- ✅ 任務清單頁面（含篩選排序）
+- ✅ 任務建立表單
+- ✅ 任務編輯功能（權限控制）
+- ✅ 任務完成狀態切換
+
+---
+
+### 里程碑 4：通知系統（預計 2-3 天）
+**目標：** 實現通知訊息功能
+
+**交付物：**
+- ✅ 通知訊息產生邏輯
+- ✅ 通知 API 端點
+- ✅ 通知收件夾 UI
+- ✅ 未讀通知標記與計數
+
+---
+
+### 里程碑 5：管理員功能（預計 2 天）
+**目標：** 實現使用者管理功能
+
+**交付物：**
+- ✅ 使用者管理 API 端點
+- ✅ 使用者管理介面（僅管理員可見）
+- ✅ 帳號建立/停用/重設密碼功能
+
+---
+
+### 里程碑 6：測試與優化（預計 3-4 天）
+**目標：** 確保系統穩定性與使用體驗
+
+**交付物：**
+- ✅ 單元測試覆蓋率 > 70%
+- ✅ 整合測試完成
+- ✅ 效能優化（查詢最佳化、前端快取）
+- ✅ 錯誤處理完善
+
+---
+
+### 里程碑 7：部署與文件（預計 2 天）
+**目標：** 準備正式上線
+
+**交付物：**
+- ✅ Docker 生產環境配置
+- ✅ 部署文件
+- ✅ 使用者操作手冊
+- ✅ 系統維護文件
+
+---
+
+## 3. 詳細任務清單
+
+### 階段 1：基礎架構建置
+
+#### Task 1.1：資料庫初始化
+**負責模組：** Database
+**預計時間：** 0.5 天
+
+**步驟：**
+1. 建立 `database/init.sql` 檔案
+2. 撰寫建表 SQL 語句（users, tasks, notifications, sessions）
+3. 新增索引與外鍵約束
+4. 建立預設管理員帳號的種子資料
+
+**驗收標準：**
+- 執行 SQL 腳本後所有資料表建立成功
+- 外鍵關聯正確
+- 索引建立完成
+
+---
+
+#### Task 1.2：後端專案初始化
+**負責模組：** Backend
+**預計時間：** 1 天
+
+**步驟：**
+1. 初始化 Node.js 專案：`npm init -y`
+2. 安裝核心依賴：
+   ```bash
+   npm install express pg express-session connect-pg-simple bcrypt express-validator winston cors dotenv
+   ```
+3. 建立專案結構：
+   ```
+   backend/
+   ├── src/
+   │   ├── config/         # 配置檔
+   │   ├── middleware/     # 中介軟體
+   │   ├── routes/         # 路由
+   │   ├── controllers/    # 控制器
+   │   ├── models/         # 資料模型
+   │   ├── services/       # 業務邏輯
+   │   └── utils/          # 工具函數
+   ├── .env.example        # 環境變數範例
+   └── server.js           # 入口檔案
+   ```
+4. 配置 Express 基礎中介軟體（CORS, JSON parser, logger）
+5. 建立資料庫連線池配置
+
+**驗收標準：**
+- `npm start` 可啟動伺服器
+- 成功連線到 PostgreSQL
+- 健康檢查端點 `GET /health` 回應正常
+
+---
+
+#### Task 1.3：前端專案初始化
+**負責模組：** Frontend
+**預計時間：** 1 天
+
+**步驟：**
+1. 使用 Vite 建立 React 專案：
+   ```bash
+   npm create vite@latest frontend -- --template react
+   ```
+2. 安裝依賴：
+   ```bash
+   npm install antd axios react-router-dom
+   ```
+3. 建立專案結構：
