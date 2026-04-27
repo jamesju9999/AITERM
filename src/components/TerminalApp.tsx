@@ -3,6 +3,7 @@ import { TerminalView } from "./TerminalView";
 import { TabBar, type Tab } from "./TabBar";
 import { DatabaseView } from "./DatabaseView";
 import { DesignView } from "./DesignView/DesignView";
+import { CrossDbView } from "./CrossDbView";
 import { useLocale } from "../contexts/LocaleContext";
 
 const DEFAULT_TAB_STORAGE_KEY = "aiterm_default_tab";
@@ -36,15 +37,16 @@ export function TerminalApp() {
     setPickerOpen(true);
   }, []);
 
-  const handlePickerSelect = useCallback((type: "terminal" | "database" | "design") => {
+  const handlePickerSelect = useCallback((type: "terminal" | "database" | "design" | "cross-db") => {
     const newId = crypto.randomUUID();
     let title = "Terminal";
     if (type === "database") title = t.database_tab;
     if (type === "design") title = "Design";
+    if (type === "cross-db") title = t.cross_db_tab;
     setTabs((prev) => [...prev, { id: newId, title, type }]);
     setActiveId(newId);
     setPickerOpen(false);
-  }, [t.database_tab]);
+  }, [t.database_tab, t.cross_db_tab]);
 
   const handleCloseTab = useCallback((id: string) => {
     setTabs((prev) => {
@@ -208,6 +210,8 @@ export function TerminalApp() {
                 />
               ) : tab.type === "design" ? (
                 <DesignView isActive={isActive} />
+              ) : tab.type === "cross-db" ? (
+                <CrossDbView isActive={isActive} />
               ) : (
                 <TerminalView isActive={isActive} />
               )}

@@ -29,6 +29,17 @@
   margin: 0;
 }
 
+.about-author {
+  font-size: 13px;
+  color: #aaa;
+  margin: 4px 0 0;
+}
+
+.about-email {
+  font-size: 12px;
+  margin: 2px 0 0;
+}
+
 .about-buttons {
   display: flex;
   gap: 12px;

@@ -1,0 +1,406 @@
+/* ── CrossDbView Root ── */
+.crossdb-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background: #0c0c0c;
+}
+
+/* ── Connection Selector ── */
+.crossdb-selector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding: 48px 24px;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.crossdb-selector__header {
+  text-align: center;
+  margin-bottom: 24px;
+}
+.crossdb-selector__header h3 {
+  color: #e0e0e0;
+  font-size: 18px;
+  margin: 0 0 8px;
+}
+.crossdb-selector__header p {
+  color: #888;
+  font-size: 13px;
+  margin: 0;
+}
+
+.crossdb-selector__empty {
+  color: #666;
+  font-size: 13px;
+  padding: 32px 0;
+}
+
+.crossdb-selector__list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 24px;
+}
+
+.crossdb-selector__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #111;
+  border: 1px solid #222;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.crossdb-selector__item:hover {
+  border-color: #444;
+}
+.crossdb-selector__item input[type="checkbox"] {
+  accent-color: #34d399;
+}
+
+.crossdb-selector__db-type {
+  background: #1a2a3a;
+  color: #60a5fa;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.5px;
+}
+
+.crossdb-selector__name {
+  color: #ccc;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.crossdb-selector__detail {
+  color: #555;
+  font-size: 11px;
+  margin-left: auto;
+}
+
+.crossdb-selector__start {
+  background: #1e3a2e;
+  border: 1px solid #34d399;
+  color: #34d399;
+  border-radius: 6px;
+  padding: 10px 28px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.crossdb-selector__start:hover:not(:disabled) {
+  background: #254a38;
+}
+.crossdb-selector__start:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Sub-tabs ── */
+.crossdb-subtabs {
+  display: flex;
+  align-items: center;
+  background: #111;
+  border-bottom: 1px solid #1e1e1e;
+  padding: 0 8px;
+  flex-shrink: 0;
+}
+
+.crossdb-subtab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #888;
+  font-size: 12px;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: color 0.1s;
+}
+.crossdb-subtab:hover { color: #ccc; }
+.crossdb-subtab--active {
+  color: #34d399;
+  border-bottom-color: #34d399;
+}
+
+.crossdb-db-tags {
+  display: flex;
+  gap: 6px;
+  margin-left: 12px;
+  overflow-x: auto;
+}
+
+.crossdb-db-tag {
+  background: #1a2a3a;
+  color: #60a5fa;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.crossdb-content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+}
+
+/* ── Chat Area ── */
+.crossdb-chat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+}
+
+.crossdb-chat__messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.crossdb-chat__welcome {
+  text-align: center;
+  padding: 48px 24px;
+}
+.crossdb-chat__welcome h3 {
+  color: #e0e0e0;
+  font-size: 16px;
+  margin: 0 0 8px;
+}
+.crossdb-chat__welcome p {
+  color: #888;
+  font-size: 13px;
+  margin: 0 0 20px;
+}
+
+.crossdb-chat__db-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 400px;
+  margin: 0 auto;
+}
+
+.crossdb-chat__db-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #111;
+  border: 1px solid #222;
+  border-radius: 6px;
+  color: #ccc;
+  font-size: 12px;
+}
+
+.crossdb-chat__db-badge {
+  background: #1a2a3a;
+  color: #60a5fa;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.crossdb-chat__db-detail {
+  color: #555;
+  font-size: 11px;
+  margin-left: auto;
+}
+
+/* Message bubbles */
+.crossdb-chat__bubble {
+  margin-bottom: 12px;
+}
+.crossdb-chat__bubble--user {
+  display: flex;
+  justify-content: flex-end;
+}
+.crossdb-chat__user-text {
+  background: #1a2a4a;
+  color: #ccc;
+  padding: 8px 14px;
+  border-radius: 12px 12px 2px 12px;
+  font-size: 13px;
+  max-width: 80%;
+  white-space: pre-wrap;
+}
+.crossdb-chat__assistant {
+  max-width: 95%;
+}
+
+/* Agent steps */
+.crossdb-chat__step {
+  margin-bottom: 8px;
+  border: 1px solid #1e1e1e;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.crossdb-chat__step-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #151515;
+  cursor: pointer;
+  font-size: 12px;
+}
+.crossdb-chat__step-header:hover {
+  background: #1a1a1a;
+}
+.crossdb-chat__step-db {
+  background: #2a1a3a;
+  color: #c084fc;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.crossdb-chat__step-sql {
+  color: #888;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crossdb-chat__step-status {
+  margin-left: auto;
+  font-size: 11px;
+  color: #888;
+  flex-shrink: 0;
+}
+.crossdb-chat__step-ok { color: #34d399; }
+.crossdb-chat__step-err { color: #f87171; }
+
+.crossdb-chat__step-result {
+  border-top: 1px solid #1e1e1e;
+  overflow-x: auto;
+}
+.crossdb-chat__step-error {
+  padding: 8px 12px;
+  color: #f87171;
+  font-size: 12px;
+  font-family: monospace;
+}
+.crossdb-chat__step-meta {
+  padding: 8px 12px;
+  color: #888;
+  font-size: 12px;
+}
+
+.crossdb-chat__table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 11px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+}
+.crossdb-chat__table th {
+  padding: 4px 8px;
+  text-align: left;
+  color: #888;
+  background: #111;
+  border-bottom: 1px solid #222;
+  font-weight: normal;
+  white-space: nowrap;
+}
+.crossdb-chat__table td {
+  padding: 3px 8px;
+  color: #ccc;
+  white-space: nowrap;
+}
+.crossdb-chat__table td.null-cell {
+  color: #444;
+}
+.crossdb-chat__table tr:nth-child(even) {
+  background: #0f0f0f;
+}
+
+.crossdb-chat__thinking {
+  color: #c084fc;
+  font-size: 12px;
+  padding: 6px 0;
+  animation: crossdb-pulse 1.5s ease-in-out infinite;
+}
+@keyframes crossdb-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.crossdb-chat__answer {
+  padding: 8px 0;
+  font-size: 13px;
+  color: #ccc;
+  line-height: 1.6;
+}
+
+/* Input area */
+.crossdb-chat__input-area {
+  border-top: 1px solid #1e1e1e;
+  padding: 10px 16px;
+  background: #111;
+}
+.crossdb-chat__input-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.crossdb-chat__provider-select {
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  color: #888;
+  font-size: 11px;
+  border-radius: 4px;
+  padding: 4px 8px;
+  align-self: center;
+}
+.crossdb-chat__textarea {
+  flex: 1;
+  background: #0c0c0c;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  color: #e0e0e0;
+  font-size: 13px;
+  padding: 8px 12px;
+  resize: none;
+  outline: none;
+  font-family: inherit;
+}
+.crossdb-chat__textarea:focus {
+  border-color: #444;
+}
+.crossdb-chat__send-btn {
+  background: #1e3a2e;
+  border: 1px solid #34d399;
+  color: #34d399;
+  border-radius: 6px;
+  padding: 8px 18px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.crossdb-chat__send-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.crossdb-chat__stop-btn {
+  background: #3a1e1e;
+  border: 1px solid #f87171;
+  color: #f87171;
+  border-radius: 6px;
+  padding: 8px 18px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}

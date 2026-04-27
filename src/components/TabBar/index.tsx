@@ -7,7 +7,7 @@ import "./index.css";
 export interface Tab {
   id: string;
   title: string;
-  type: "terminal" | "database" | "design";
+  type: "terminal" | "database" | "design" | "cross-db";
   dbConnectionId?: string;
 }
 
@@ -22,7 +22,7 @@ export interface TabBarProps {
   onToggle: () => void;
   width: number;
   pickerOpen?: boolean;
-  onPickerSelect?: (type: "terminal" | "database" | "design") => void;
+  onPickerSelect?: (type: "terminal" | "database" | "design" | "cross-db") => void;
   onPickerClose?: () => void;
 }
 

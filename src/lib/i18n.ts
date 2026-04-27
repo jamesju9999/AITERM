@@ -16,8 +16,10 @@ export const translations = {
     terminal_tab: "終端機",
     files_tab: "檔案",
     database_tab: "資料庫",
+    cross_db_tab: "跨庫查詢",
     new_terminal_desc: "開啟新 Shell Session",
     new_database_desc: "連接資料庫並瀏覽",
+    new_cross_db_desc: "AI 跨資料庫查詢與分析",
     input_placeholder: (key: string) =>
       `輸入指令... (${key} 送出，按 ↑ 檢視歷史)`,
 
@@ -155,8 +157,10 @@ export const translations = {
     terminal_tab: "Terminal",
     files_tab: "Files",
     database_tab: "Database",
+    cross_db_tab: "Cross-DB",
     new_terminal_desc: "Open a new shell session",
     new_database_desc: "Connect to a database and browse",
+    new_cross_db_desc: "AI cross-database query and analysis",
     input_placeholder: (key: string) =>
       `Enter command... (${key} to submit, ↑ for history)`,
 
