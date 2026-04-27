@@ -5,7 +5,7 @@ import "./ProviderPalette.css";
 
 interface ProviderPaletteProps {
   onClose: () => void;
-  onSwitch: (displayName: string) => void;
+  onSwitch: (provider: ProviderInfo) => void;
 }
 
 export function ProviderPalette({ onClose, onSwitch }: ProviderPaletteProps) {
@@ -51,7 +51,7 @@ export function ProviderPalette({ onClose, onSwitch }: ProviderPaletteProps) {
     if (!p) return;
     setDefaultProvider(p.id)
       .then(() => {
-        onSwitch(p.display_name);
+        onSwitch(p);
         onClose();
       })
       .catch(() => onClose());

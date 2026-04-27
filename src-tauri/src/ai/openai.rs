@@ -43,7 +43,8 @@ impl AiProvider for OpenAiClient {
         req: GenerateRequest,
         tx: mpsc::Sender<GenerateChunk>,
     ) -> Result<(), AiError> {
-        let body = build_request_body(&self.model, &req, true);
+        let json_mode = req.mode == crate::ai::QueryMode::SingleCommand;
+        let body = build_request_body(&self.model, &req, json_mode);
         let resp = self
             .client
             .post(self.completions_url())

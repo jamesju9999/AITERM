@@ -690,7 +690,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       {paletteOpen && (
         <ProviderPalette
           onClose={() => setPaletteOpen(false)}
-          onSwitch={(name) => setActiveProvider(name)}
+          onSwitch={(p) => setActiveProvider(p.display_name)}
         />
       )}
       {sessionId && (

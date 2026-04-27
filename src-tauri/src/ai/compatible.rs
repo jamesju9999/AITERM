@@ -72,7 +72,8 @@ impl AiProvider for OpenAiCompatibleClient {
         req: GenerateRequest,
         tx: mpsc::Sender<GenerateChunk>,
     ) -> Result<(), AiError> {
-        let body = build_request_body(&self.model, &req, self.supports_json_mode);
+        let json_mode = self.supports_json_mode && req.mode == crate::ai::QueryMode::SingleCommand;
+        let body = build_request_body(&self.model, &req, json_mode);
         let builder = self.apply_headers(self.client.post(self.completions_url()).json(&body));
 
         let resp = builder
@@ -85,7 +86,7 @@ impl AiProvider for OpenAiCompatibleClient {
         // ── Auto-retry without response_format on 400 ────────────────────────
         // Some models (e.g. Gemma in LM Studio) reject `response_format: json_object`
         // with HTTP 400. Retry transparently without it.
-        if status == reqwest::StatusCode::BAD_REQUEST && self.supports_json_mode {
+        if status == reqwest::StatusCode::BAD_REQUEST && json_mode {
             let body_text = resp.text().await.unwrap_or_default();
             if body_text.contains("response_format") {
                 log::warn!("Provider rejected response_format, retrying without it: {body_text}");

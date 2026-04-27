@@ -108,7 +108,7 @@ export function MarkdownText({ text }: { text: string }): ReactNode {
           code({ node, className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || "");
             
-            if (match && match[1] === "mermaid") {
+            if (match && match[1].toLowerCase() === "mermaid") {
               return <MermaidBlock chart={String(children)} />;
             }
 
