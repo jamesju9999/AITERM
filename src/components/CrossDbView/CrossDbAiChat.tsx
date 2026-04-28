@@ -36,6 +36,14 @@ function extractCrossDbSql(text: string): { alias: string; sql: string } | null 
   const fallback = text.match(/```sql\s*\n\[(.+?)\]\s*\n([\s\S]*?)```/i);
   if (fallback) return { alias: fallback[1].trim(), sql: fallback[2].trim() };
 
+  // Fallback: <cmd> sql [DB-Name] SELECT ... </cmd>  (model ignores format rules)
+  const cmdTag = text.match(/<cmd>([\s\S]*?)<\/cmd>/i);
+  if (cmdTag) {
+    const inner = cmdTag[1].trim();
+    const crossDbMatch = inner.match(/^\s*(?:sql|db2)\s+\[(.+?)\]\s+([\s\S]+)$/i);
+    if (crossDbMatch) return { alias: crossDbMatch[1].trim(), sql: crossDbMatch[2].trim() };
+  }
+
   return null;
 }
 
@@ -116,12 +124,12 @@ export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
 可用資料庫：
 ${dbDescriptions}
 
-重要規則（必須嚴格遵守）：
-1. 需要查詢時，使用以下格式指定目標資料庫（第一行必須用方括號標注資料庫名稱）：
+【輸出格式規則——違反將導致查詢無法執行】：
+1. 需要查詢時，僅輸出以下格式，不得有任何前綴或後綴文字：
 \`\`\`sql [資料庫名稱]
 SELECT * FROM ...
 \`\`\`
-2. 每次只查詢一個資料庫的一條 SQL，但你可以根據前次查詢結果，決定下一步查詢哪個庫
+2. 每次只查詢一個資料庫的一條 SQL，不得使用 <cmd>、shell 指令或任何其他格式
 3. 不同資料庫的 SQL 方言可能不同（PostgreSQL vs MySQL vs MSSQL 等），請注意語法差異
 4. 已收集足夠資料時，直接用繁體中文給出最終彙整答案，回應中不包含任何 SQL 或程式碼區塊
 5. 最多執行 ${maxSteps >= 9999 ? "不限次數" : maxSteps} 次查詢`;
@@ -368,7 +376,7 @@ SELECT * FROM ...
                 )}
                 {m.text && (
                   <div className="crossdb-chat__answer">
-                    <MarkdownText text={extractResponseText(unescapeNewlines(m.text))} />
+                    <MarkdownText text={extractResponseText(unescapeNewlines(m.text)).replace(/<cmd>([\/\s\S]*?)<\/cmd>/gi, (_m, c) => `\`\`\`\n${c.trim()}\n\`\`\``)} />
                   </div>
                 )}
               </div>
