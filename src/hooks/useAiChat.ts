@@ -11,6 +11,34 @@ import {
 import { truncateHistory } from "../lib/chatHistory";
 
 const HISTORY_LIMIT = 20;
+const SESSIONS_STORAGE_KEY = "aiterm-ai-chat-sessions";
+
+export interface AiChatSession {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  savedAt: number;
+}
+
+function loadAllSessions(): AiChatSession[] {
+  try {
+    const raw = localStorage.getItem(SESSIONS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveAllSessions(sessions: AiChatSession[]): void {
+  try {
+    localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(sessions));
+  } catch { /* ignore storage errors */ }
+}
+
+function formatSessionTitle(messages: ChatMessage[]): string {
+  const first = messages.find((m) => m.role === "user");
+  return first ? first.content.slice(0, 30) : "（空對話）";
+}
 
 export interface UseAiChatResult {
   messages: ChatMessage[];
@@ -22,6 +50,12 @@ export interface UseAiChatResult {
   clear: () => void;
   /** Inject a message directly into the chat history without calling the AI. */
   addMessage: (msg: ChatMessage) => void;
+  /** Load a saved session's messages into the current chat. */
+  loadMessages: (msgs: ChatMessage[]) => void;
+  /** All persisted sessions for the history panel. */
+  sessions: AiChatSession[];
+  /** Delete a session by id. */
+  deleteSession: (id: string) => void;
 }
 
 /**
@@ -33,6 +67,10 @@ export function useAiChat(sessionId: string): UseAiChatResult {
   const [streamBuf, setStreamBuf] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<AiError | null>(null);
+  const [sessions, setSessions] = useState<AiChatSession[]>(loadAllSessions);
+
+  // Track current session id for auto-save
+  const currentSessionIdRef = useRef<string | null>(null);
 
   // Guard against setState after unmount (Tauri listen + async invoke race).
   const mountedRef = useRef(true);
@@ -55,14 +93,23 @@ export function useAiChat(sessionId: string): UseAiChatResult {
       setStreamBuf((prev) => prev + event.payload.delta);
     }).then((fn) => {
       if (!active) {
-        fn();
+        // Cleanup ran before listen() resolved — unlisten and swallow
+        // any rejection (Tauri internals throw if the event was never
+        // fully wired up).
+        Promise.resolve(fn()).catch(() => { /* ignore */ });
       } else {
         unlisten = fn;
       }
+    }).catch((err) => {
+      console.error("[ai-stream] listener registration failed:", err);
     });
     return () => {
       active = false;
-      if (unlisten) unlisten();
+      if (unlisten) {
+        try {
+          Promise.resolve(unlisten()).catch(() => { /* ignore */ });
+        } catch { /* ignore */ }
+      }
     };
   }, [sessionId]);
 
@@ -118,7 +165,44 @@ export function useAiChat(sessionId: string): UseAiChatResult {
     setMessages((prev) => [...prev, msg]);
   }, []);
 
-  return { messages, streamBuf, isStreaming, error, send, resend, clear, addMessage };
+  // Auto-save messages to localStorage whenever they change (non-empty only)
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const title = formatSessionTitle(messages);
+    const all = loadAllSessions();
+    if (!currentSessionIdRef.current) {
+      currentSessionIdRef.current = `${sessionId}-${Date.now()}`;
+    }
+    const id = currentSessionIdRef.current;
+    const updated: AiChatSession = { id, title, messages, savedAt: Date.now() };
+    const idx = all.findIndex((s) => s.id === id);
+    const next = idx >= 0
+      ? all.map((s) => (s.id === id ? updated : s))
+      : [...all, updated];
+    saveAllSessions(next);
+    setSessions(next);
+  }, [messages, sessionId]);
+
+  const loadMessages = useCallback((msgs: ChatMessage[]) => {
+    setMessages(msgs);
+    setError(null);
+    setStreamBuf("");
+    // Will be re-assigned on next auto-save; reset so a new session ID is minted
+    currentSessionIdRef.current = null;
+  }, []);
+
+  const deleteSession = useCallback((id: string) => {
+    setSessions((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      saveAllSessions(next);
+      return next;
+    });
+    if (currentSessionIdRef.current === id) {
+      currentSessionIdRef.current = null;
+    }
+  }, []);
+
+  return { messages, streamBuf, isStreaming, error, send, resend, clear, addMessage, loadMessages, sessions, deleteSession };
 }
 
 /** Coerce an unknown Tauri error into an AiError. Mirrors TerminalView logic. */

@@ -575,6 +575,14 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
 }
 
 function MessageBubble({ msg, onToggleStep }: { msg: Message; onToggleStep: (i: number) => void }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    const text = unescapeNewlines(extractResponseText(msg.text ?? ""));
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
   if (msg.role === "user") {
     return (
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -626,7 +634,22 @@ function MessageBubble({ msg, onToggleStep }: { msg: Message; onToggleStep: (i: 
         </div>
       )}
 
-      {msg.text && (
+      {msg.text && !msg.agentRunning && (
+        <div style={{
+          background: "#1a1a1a", border: "1px solid #2a2a2a",
+          borderRadius: 8, padding: "8px 12px", fontSize: 13, color: "#e6e6e6",
+          position: "relative",
+        }} className="db-ai-answer db-ai-answer--copyable">
+          <MarkdownText text={unescapeNewlines(extractResponseText(msg.text)).replace(/<cmd>([\s\S]*?)<\/cmd>/gi, (_m, c) => `\`\`\`\n${c.trim()}\n\`\`\``)} />
+          <button
+            type="button"
+            className={`db-ai-copy-btn${copied ? " db-ai-copy-btn--copied" : ""}`}
+            onClick={handleCopy}
+            title="複製為 Markdown"
+          >{copied ? "✓" : "⎘"}</button>
+        </div>
+      )}
+      {msg.text && msg.agentRunning && (
         <div style={{
           background: "#1a1a1a", border: "1px solid #2a2a2a",
           borderRadius: 8, padding: "8px 12px", fontSize: 13, color: "#e6e6e6",

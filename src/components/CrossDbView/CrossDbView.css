@@ -157,9 +157,17 @@
 /* ── Chat Area ── */
 .crossdb-chat {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100%;
   width: 100%;
+}
+
+.crossdb-chat__main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
 }
 
 .crossdb-chat__messages {
@@ -343,13 +351,158 @@
   font-size: 13px;
   color: #ccc;
   line-height: 1.6;
+  position: relative;
+}
+.crossdb-chat__answer--copyable {
+  position: relative;
+}
+.crossdb-chat__copy-btn {
+  display: none;
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: #2a2a2a;
+  border: 1px solid #444;
+  color: #aaa;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.crossdb-chat__answer--copyable:hover .crossdb-chat__copy-btn {
+  display: block;
+}
+.crossdb-chat__copy-btn--copied {
+  color: #4ade80;
+  border-color: #4ade80;
+}
+
+/* History panel */
+.crossdb-history-panel {
+  width: 210px;
+  min-width: 210px;
+  background: #0e0e0e;
+  border-right: 1px solid #1e1e1e;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.crossdb-history-panel__header {
+  padding: 8px 10px;
+  border-bottom: 1px solid #1e1e1e;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+.crossdb-history-panel__title {
+  font-size: 10px;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.crossdb-history-panel__new-btn {
+  background: transparent;
+  border: 1px solid #333;
+  color: #888;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.crossdb-history-panel__new-btn:hover {
+  border-color: #34d399;
+  color: #34d399;
+}
+.crossdb-history-panel__list {
+  flex: 1;
+  overflow-y: auto;
+}
+.crossdb-history-panel__empty {
+  color: #444;
+  font-size: 12px;
+  padding: 12px;
+}
+.crossdb-history-panel__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 7px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid #111;
+}
+.crossdb-history-panel__item:hover {
+  background: #141414;
+}
+.crossdb-history-panel__item--active {
+  background: #0e1e0e;
+}
+.crossdb-history-panel__item-content {
+  flex: 1;
+  min-width: 0;
+}
+.crossdb-history-panel__item-title {
+  font-size: 11px;
+  color: #bbb;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crossdb-history-panel__item-date {
+  font-size: 10px;
+  color: #444;
+  margin-top: 2px;
+}
+.crossdb-history-panel__item-del {
+  background: transparent;
+  border: none;
+  color: #333;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 3px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.crossdb-history-panel__item-del:hover {
+  color: #f87171;
+}
+
+/* History toggle button in input toolbar */
+.crossdb-chat__history-btn {
+  background: transparent;
+  border: 1px solid #2a2a2a;
+  color: #555;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.crossdb-chat__history-btn:hover {
+  border-color: #444;
+  color: #aaa;
+}
+.crossdb-chat__history-btn--active {
+  background: #1a2030;
+  border-color: #3b5bdb;
+  color: #7eb3ff;
 }
 
 /* Input area */
 .crossdb-chat__input-area {
   border-top: 1px solid #1e1e1e;
-  padding: 10px 16px;
+  padding: 8px 16px 10px;
   background: #111;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.crossdb-chat__input-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .crossdb-chat__input-row {
   display: flex;

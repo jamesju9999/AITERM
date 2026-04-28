@@ -50,6 +50,7 @@ export function AiPanel({
   const chat = useAiChat(sessionId);
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   // ── Resize ────────────────────────────────────────────────────────────────
   const [panelWidth, setPanelWidth] = useState(loadSavedWidth);
@@ -301,8 +302,16 @@ ${dirList || "（無法取得）"}
         <div style={{ display: "flex", gap: "8px" }}>
           <button
             type="button"
+            className={`aiterm-ai-panel-clear-btn${historyOpen ? " aiterm-ai-panel-clear-btn--active" : ""}`}
+            onClick={() => setHistoryOpen((o) => !o)}
+            title="對話歷史"
+          >
+            📋
+          </button>
+          <button
+            type="button"
             className="aiterm-ai-panel-clear-btn"
-            onClick={chat.clear}
+            onClick={() => { chat.clear(); setHistoryOpen(false); }}
             disabled={isDisabled}
             title="清空當前對話"
           >
@@ -318,6 +327,42 @@ ${dirList || "（無法取得）"}
           </button>
         </div>
       </div>
+
+      {/* History side panel */}
+      {historyOpen && (
+        <div className="aiterm-history-panel">
+          <div className="aiterm-history-panel__header">
+            <span className="aiterm-history-panel__title">對話歷史</span>
+          </div>
+          <div className="aiterm-history-panel__list">
+            {chat.sessions.length === 0 && (
+              <div className="aiterm-history-panel__empty">尚無歷史記錄</div>
+            )}
+            {[...chat.sessions].reverse().map((s) => (
+              <div
+                key={s.id}
+                className="aiterm-history-panel__item"
+                onClick={() => { chat.loadMessages(s.messages); setHistoryOpen(false); }}
+              >
+                <div className="aiterm-history-panel__item-content">
+                  <div className="aiterm-history-panel__item-title">{s.title}</div>
+                  <div className="aiterm-history-panel__item-date">
+                    {new Date(s.savedAt).toLocaleDateString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="aiterm-history-panel__item-del"
+                  title="刪除此對話"
+                  onClick={(e) => { e.stopPropagation(); chat.deleteSession(s.id); }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <MessageList
         messages={chat.messages}

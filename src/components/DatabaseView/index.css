@@ -83,3 +83,28 @@
 }
 
 .db-ai-answer .md-gap { height: 6px; }
+
+.db-ai-answer--copyable {
+  position: relative;
+}
+.db-ai-copy-btn {
+  display: none;
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: #2a2a2a;
+  border: 1px solid #444;
+  color: #aaa;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.db-ai-answer--copyable:hover .db-ai-copy-btn {
+  display: block;
+}
+.db-ai-copy-btn--copied {
+  color: #4ade80;
+  border-color: #4ade80;
+}
