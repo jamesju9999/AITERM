@@ -172,6 +172,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               if (sessionRef.current) writePty(sessionRef.current, "\r").catch(console.error);
               sendRemoteResponse(`⚠ Agent stopped: ${msg}`);
             },
+            onStepComplete: (info) => sendRemoteResponse(formatAgentStepForRemote(info)),
           });
         }
       } else {
@@ -457,6 +458,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                 writePty(session, "\r").catch(console.error);
                 sendRemoteResponse(`⚠ Agent stopped: ${msg}`);
               },
+              onStepComplete: (info) => sendRemoteResponse(formatAgentStepForRemote(info)),
             });
             continue;
           }
@@ -754,6 +756,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                     stopMission();
                     if (sessionId) writePty(sessionId, "\r").catch(console.error);
                   },
+                  onStepComplete: (info) => sendRemoteResponse(formatAgentStepForRemote(info)),
                 });
               }
               return;
@@ -896,6 +899,35 @@ function handleAiQuery(
  * Each step: ask AI → auto-execute command → wait for block completion → extract output → repeat.
  * This does NOT rely on React useEffect — the loop is driven by OSC 133;D completion callbacks.
  */
+interface AgentStepInfo {
+  /** 1-based step index for display (matches the "[Agent: 思考下一步... (N/M)]" prompt). */
+  stepIndex: number;
+  maxSteps: number;
+  command: string;
+  exitCode: number;
+  /** Already trimmed and length-capped (~2000 chars) by the agent loop. */
+  output: string;
+}
+
+/** Format one agent step's command + output as a single Telegram message. */
+function formatAgentStepForRemote(info: AgentStepInfo): string {
+  // xterm's translateToString already returns plain text, but defend
+  // against stray escape codes from copy-pasted prompts etc.
+  const cleaned = info.output.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "").trim();
+  const exitTag = info.exitCode === 0 ? "" : ` ⚠️ exit ${info.exitCode}`;
+  const header = `[${info.stepIndex}/${info.maxSteps}] $ ${info.command}${exitTag}`;
+  if (!cleaned) return header;
+
+  // Telegram caps text messages at 4096 chars; reserve room for header + marker.
+  const MAX = 3500;
+  let body = cleaned;
+  if (body.length > MAX) {
+    const half = Math.floor(MAX / 2);
+    body = `${body.slice(0, half)}\n... (truncated, ${body.length - MAX} chars omitted) ...\n${body.slice(-half)}`;
+  }
+  return `${header}\n${body}`;
+}
+
 interface AgentLoopParams {
   goal: string;
   sessionId: string;
@@ -912,6 +944,8 @@ interface AgentLoopParams {
   history: { command: string; exitCode: number; output: string }[];
   onComplete: (explanation?: string) => void;
   onFail: (msg: string) => void;
+  /** Fires after each shell command finishes; used to mirror progress to Telegram. */
+  onStepComplete?: (info: AgentStepInfo) => void;
 }
 
 function runAgentLoop(params: AgentLoopParams) {
@@ -958,9 +992,20 @@ function runAgentLoop(params: AgentLoopParams) {
     rawOutput = rawOutput.trim();
     if (rawOutput.length > 2000) rawOutput = rawOutput.slice(rawOutput.length - 2000);
 
+    const exitCode = completedBlock.exitCode ?? 0;
+
+    // Mirror this step (command + output) to Telegram if the caller wired it up.
+    params.onStepComplete?.({
+      stepIndex: stepCount + 1,
+      maxSteps,
+      command: completedBlock.command,
+      exitCode,
+      output: rawOutput,
+    });
+
     const newHistory = [...history, {
       command: completedBlock.command,
-      exitCode: completedBlock.exitCode ?? 0,
+      exitCode,
       output: rawOutput,
     }];
 

@@ -251,12 +251,23 @@ pub async fn ai_query(
         raw: buf.chars().take(300).collect(),
     })?;
 
+    // "DONE" is the agent-loop sentinel meaning "task complete" — it's not
+    // a shell command, so skip CommandGuard to avoid polluting the final
+    // explanation with an irrelevant "(系統安全攔截: 無法辨識該指令…)" tag.
+    if parsed.command.trim().eq_ignore_ascii_case("DONE") {
+        return Ok(AiCommandReady {
+            command: parsed.command,
+            explanation: parsed.explanation,
+            risk_level: parsed.risk_level,
+        });
+    }
+
     // M3: Verify AI's generated command with CommandGuard
     let (guard_level, guard_reason) = CommandGuard::classify(&parsed.command);
-    
+
     // Always take the HIGHER risk level (the more conservative one)
     let final_risk_level = std::cmp::max(parsed.risk_level, guard_level);
-    
+
     // Append the guard reason if it bumped the risk level
     let final_explanation = if guard_level > parsed.risk_level && guard_reason.is_some() {
         format!("{} (系統安全攔截: {})", parsed.explanation, guard_reason.unwrap())
