@@ -83,6 +83,9 @@ function extractSql(text: string): string | null {
     if (pwshMatch) return pwshMatch[1].replace(/''/g, "'").trim();
     // The <cmd> content itself looks like SQL
     if (/^\s*(SELECT|INSERT|UPDATE|DELETE|WITH|CREATE|DROP|ALTER)\s/i.test(inner)) return inner;
+    // AITerm cross-db syntax: sql [connectionName] SELECT ...
+    const crossDbMatch = inner.match(/^\s*(?:sql|db2)\s+\[.+?\]\s+([\s\S]+)$/i);
+    if (crossDbMatch) return crossDbMatch[1].trim();
   }
 
   return null;
@@ -192,9 +195,12 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
     return `你是一個資料庫 Agent，可執行多次 SQL 查詢來回答使用者問題。
 Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}。
 
-重要規則（必須嚴格遵守）：
-1. 需要查詢資料時，只輸出 \`\`\`sql\n你的SQL\n\`\`\`，不要有任何其他格式（不要 JSON、不要 thought 欄位、不要 <cmd> 標籤、不要 shell 指令）
-2. 每次只提供一條純 SQL 語法，直接可在資料庫執行，不需要包在任何 shell 指令中
+【輸出格式規則——違反將導致查詢無法執行】：
+1. 需要查詢資料時，僅輸出以下格式，不得有任何前綴說明或後綴說明：
+\`\`\`sql
+你的SQL
+\`\`\`
+2. 每次只提供一條純 SQL 語法，不得包在 <cmd>、shell 指令、JSON 或任何其他格式中
 3. 已收集足夠資料時，直接用繁體中文給出最終答案，回應中不包含任何 SQL 或程式碼區塊
 4. 最多執行 ${maxSteps >= 9999 ? "不限次數" : maxSteps} 次查詢`;
   };
@@ -625,7 +631,7 @@ function MessageBubble({ msg, onToggleStep }: { msg: Message; onToggleStep: (i: 
           background: "#1a1a1a", border: "1px solid #2a2a2a",
           borderRadius: 8, padding: "8px 12px", fontSize: 13, color: "#e6e6e6",
         }} className="db-ai-answer">
-          <MarkdownText text={unescapeNewlines(extractResponseText(msg.text))} />
+          <MarkdownText text={unescapeNewlines(extractResponseText(msg.text)).replace(/<cmd>([\s\S]*?)<\/cmd>/gi, (_m, c) => `\`\`\`\n${c.trim()}\n\`\`\``)} />
         </div>
       )}
     </div>
