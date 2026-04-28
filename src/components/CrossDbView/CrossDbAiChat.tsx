@@ -11,6 +11,35 @@ interface Props {
   sendRemoteResponse?: (text: string) => void;
 }
 
+interface SavedSession {
+  id: string;
+  title: string;
+  messages: Message[];
+  savedAt: number;
+}
+
+const CROSSDB_SESSIONS_KEY = "aiterm-crossdb-chat-sessions";
+
+function loadSessions(): SavedSession[] {
+  try {
+    const raw = localStorage.getItem(CROSSDB_SESSIONS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSessions(sessions: SavedSession[]): void {
+  try {
+    localStorage.setItem(CROSSDB_SESSIONS_KEY, JSON.stringify(sessions));
+  } catch { /* ignore */ }
+}
+
+function formatDate(ts: number): string {
+  const d = new Date(ts);
+  return d.toLocaleDateString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 interface AgentStep {
   targetDb: string;
   sql: string;
@@ -27,21 +56,60 @@ interface Message {
   agentStepLabel?: string;
 }
 
-function extractCrossDbSql(text: string): { alias: string; sql: string } | null {
-  // Match: ```sql [DB-Name]\nSQL\n```
+function extractCrossDbSql(text: string): { alias: string | null; sql: string } | null {
+  // 1. ```sql [DB-Name]\nSQL\n```  (with square brackets — spec format)
   const match = text.match(/```sql\s+\[(.+?)\]\s*\n([\s\S]*?)```/i);
   if (match) return { alias: match[1].trim(), sql: match[2].trim() };
 
-  // Fallback: ```sql\n[DB-Name]\nSQL\n```
+  // 2. ```sql DB-Name\nSQL\n```  (without square brackets — gemma omits them)
+  const nobrack = text.match(/```sql\s+([^\[\n]+?)\s*\n([\s\S]*?)```/i);
+  if (nobrack) {
+    const sql = nobrack[2].trim();
+    if (/^(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|WITH)\b/i.test(sql)) {
+      return { alias: nobrack[1].trim(), sql };
+    }
+  }
+
+  // 3. ```sql\n[DB-Name]\nSQL\n```
   const fallback = text.match(/```sql\s*\n\[(.+?)\]\s*\n([\s\S]*?)```/i);
   if (fallback) return { alias: fallback[1].trim(), sql: fallback[2].trim() };
 
-  // Fallback: <cmd> sql [DB-Name] SELECT ... </cmd>  (model ignores format rules)
+  // 4. <cmd> sql [DB-Name] SELECT ... </cmd>
   const cmdTag = text.match(/<cmd>([\s\S]*?)<\/cmd>/i);
   if (cmdTag) {
     const inner = cmdTag[1].trim();
     const crossDbMatch = inner.match(/^\s*(?:sql|db2)\s+\[(.+?)\]\s+([\s\S]+)$/i);
     if (crossDbMatch) return { alias: crossDbMatch[1].trim(), sql: crossDbMatch[2].trim() };
+  }
+
+  // 5. Plain ```sql\nSELECT...``` without DB name
+  const plainSql = text.match(/```(?:sql)?\s*\n([\s\S]*?)```/i);
+  if (plainSql) {
+    const sql = plainSql[1].trim();
+    if (/^(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|WITH)\b/i.test(sql)) {
+      return { alias: null, sql };
+    }
+  }
+
+  // 6. Bare SQL with no code fences — scan lines, stop before any closing fence
+  const lines = text.split('\n');
+  let preambleCount = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    if (/^(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|WITH)\b/i.test(line)) {
+      if (preambleCount <= 3) {
+        // Collect SQL lines until a ``` fence or end of text
+        const sqlLines: string[] = [];
+        for (let j = i; j < lines.length; j++) {
+          if (lines[j].trim().startsWith('```')) break;
+          sqlLines.push(lines[j]);
+        }
+        return { alias: null, sql: sqlLines.join('\n').trim() };
+      }
+      break;
+    }
+    preambleCount++;
   }
 
   return null;
@@ -75,9 +143,12 @@ export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
   const [sending, setSending] = useState(false);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState<string>("");
+  const [sessions, setSessions] = useState<SavedSession[]>(loadSessions);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const maxStepsRef = useRef<number>(5);
   const bottomRef = useRef<HTMLDivElement>(null);
   const stoppedRef = useRef(false);
+  const currentSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const onRemoteMsg = (e: Event) => {
@@ -110,6 +181,23 @@ export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  // Auto-save sessions when messages settle (skip while agent is still running)
+  useEffect(() => {
+    if (messages.length === 0) return;
+    if (messages.some((m) => m.agentRunning)) return;
+    const title = messages.find((m) => m.role === "user")?.text.slice(0, 30) ?? "（空對話）";
+    if (!currentSessionIdRef.current) {
+      currentSessionIdRef.current = `crossdb-${Date.now()}`;
+    }
+    const id = currentSessionIdRef.current;
+    const updated: SavedSession = { id, title, messages, savedAt: Date.now() };
+    const all = loadSessions();
+    const idx = all.findIndex((s) => s.id === id);
+    const next = idx >= 0 ? all.map((s) => (s.id === id ? updated : s)) : [...all, updated];
+    saveSessions(next);
+    setSessions(next);
   }, [messages]);
 
   const buildSystemPrompt = () => {
@@ -183,6 +271,7 @@ SELECT * FROM ...
     try {
       let stepCount = 0;
       const maxSteps = maxStepsRef.current;
+      let lastExecutedSql = ""; // tracks last SQL we actually ran
 
       while (stepCount < maxSteps && !stoppedRef.current) {
         const stepLabel = maxSteps >= 9999
@@ -198,9 +287,17 @@ SELECT * FROM ...
           selectedProviderId || undefined,
         );
 
-        if (stoppedRef.current) break;
+        // Debug: log raw model reply to browser console
+        if (import.meta.env.DEV) {
+          console.log("[CrossDB] AI reply:", JSON.stringify(reply));
+        }
 
         const parsed = extractCrossDbSql(reply);
+        if (import.meta.env.DEV) {
+          console.log("[CrossDB] parsed:", parsed);
+        }
+
+        if (stoppedRef.current) break;
 
         if (!parsed) {
           // No SQL → final answer
@@ -214,7 +311,42 @@ SELECT * FROM ...
           break;
         }
 
-        const targetDb = findDb(parsed.alias);
+        // Repetition guard: if model outputs the same SQL it just ran, it's stuck.
+        // Force a summarize instead of executing again.
+        if (parsed.sql === lastExecutedSql) {
+          updateLastMsg((m) => ({ ...m, agentStepLabel: "整理答案中..." }));
+          const summary = await aiChat(
+            "請根據以上查詢結果，用繁體中文給出最終完整答案。不要再提供任何 SQL 查詢。",
+            buildSystemPrompt(),
+            loopHistory,
+            selectedProviderId || undefined,
+          );
+          updateLastMsg((m) => ({
+            ...m,
+            text: summary,
+            agentRunning: false,
+            agentStepLabel: undefined,
+          }));
+          if (sendRemoteResponse) sendRemoteResponse(summary);
+          break;
+        }
+
+        // Resolve target DB — handle models that omit [DB-Name]
+        let targetDb: ConnectedDb | undefined;
+        if (parsed.alias === null) {
+          if (databases.length === 1) {
+            targetDb = databases[0];
+          } else {
+            const errMsg = `請在 SQL 區塊中指定資料庫名稱，格式：\n\`\`\`sql [資料庫名稱]\nSQL\n\`\`\`\n可用：${databases.map((d) => d.name).join(", ")}`;
+            loopHistory.push({ role: "assistant", content: reply });
+            loopHistory.push({ role: "user", content: errMsg });
+            stepCount++;
+            continue;
+          }
+        } else {
+          targetDb = findDb(parsed.alias);
+        }
+
         if (!targetDb) {
           const errMsg = `找不到名為「${parsed.alias}」的資料庫。可用：${databases.map((d) => d.name).join(", ")}`;
           loopHistory.push({ role: "assistant", content: reply });
@@ -245,11 +377,16 @@ SELECT * FROM ...
           ),
         }));
 
+        // Record the SQL we just executed — used by repetition guard above
+        lastExecutedSql = parsed.sql;
+
         loopHistory.push({ role: "assistant", content: reply });
-        loopHistory.push({
-          role: "user",
-          content: `[${targetDb.name}] SQL 執行結果：\n\`\`\`\n${formatResultForAi(result)}\n\`\`\`\n\n請繼續分析或給出最終答案。`,
-        });
+
+        const feedbackContent = result.error
+          ? `[${targetDb.name}] SQL 執行失敗，資料庫回傳錯誤：${result.error}\n\n請修正 SQL 語法後重試（注意：是 SQL 語法問題，不是格式問題）。`
+          : `[${targetDb.name}] 查詢成功，結果如下：\n\n${formatResultForAi(result)}`;
+
+        loopHistory.push({ role: "user", content: feedbackContent });
 
         stepCount++;
 
@@ -298,8 +435,65 @@ SELECT * FROM ...
 
   const stop = () => { stoppedRef.current = true; };
 
+  const loadSession = (session: SavedSession) => {
+    setMessages(session.messages);
+    currentSessionIdRef.current = session.id;
+    setHistoryOpen(false);
+  };
+
+  const deleteSession = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSessions((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      saveSessions(next);
+      return next;
+    });
+    if (currentSessionIdRef.current === id) {
+      setMessages([]);
+      currentSessionIdRef.current = null;
+    }
+  };
+
+  const newChat = () => {
+    setMessages([]);
+    currentSessionIdRef.current = null;
+    setHistoryOpen(false);
+  };
+
   return (
     <div className="crossdb-chat">
+      {/* History side panel */}
+      {historyOpen && (
+        <div className="crossdb-history-panel">
+          <div className="crossdb-history-panel__header">
+            <span className="crossdb-history-panel__title">對話歷史</span>
+            <button className="crossdb-history-panel__new-btn" onClick={newChat}>＋ 新對話</button>
+          </div>
+          <div className="crossdb-history-panel__list">
+            {sessions.length === 0 && (
+              <div className="crossdb-history-panel__empty">尚無歷史記錄</div>
+            )}
+            {[...sessions].reverse().map((s) => (
+              <div
+                key={s.id}
+                className={`crossdb-history-panel__item${currentSessionIdRef.current === s.id ? " crossdb-history-panel__item--active" : ""}`}
+                onClick={() => loadSession(s)}
+              >
+                <div className="crossdb-history-panel__item-content">
+                  <div className="crossdb-history-panel__item-title">{s.title}</div>
+                  <div className="crossdb-history-panel__item-date">{formatDate(s.savedAt)}</div>
+                </div>
+                <button
+                  className="crossdb-history-panel__item-del"
+                  onClick={(e) => deleteSession(s.id, e)}
+                  title="刪除此對話"
+                >×</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="crossdb-chat__main">
       <div className="crossdb-chat__messages">
         {messages.length === 0 && (
           <div className="crossdb-chat__welcome">
@@ -374,7 +568,10 @@ SELECT * FROM ...
                 {m.agentRunning && m.agentStepLabel && (
                   <div className="crossdb-chat__thinking">{m.agentStepLabel}</div>
                 )}
-                {m.text && (
+                {m.text && !m.agentRunning && (
+                  <CrossDbAssistantAnswer text={m.text} />
+                )}
+                {m.text && m.agentRunning && (
                   <div className="crossdb-chat__answer">
                     <MarkdownText text={extractResponseText(unescapeNewlines(m.text)).replace(/<cmd>([\/\s\S]*?)<\/cmd>/gi, (_m, c) => `\`\`\`\n${c.trim()}\n\`\`\``)} />
                   </div>
@@ -387,8 +584,14 @@ SELECT * FROM ...
       </div>
 
       <div className="crossdb-chat__input-area">
-        <div className="crossdb-chat__input-row">
-          {providers.length > 1 && (
+        <div className="crossdb-chat__input-toolbar">
+          <button
+            type="button"
+            className={`crossdb-chat__history-btn${historyOpen ? " crossdb-chat__history-btn--active" : ""}`}
+            onClick={() => setHistoryOpen((o) => !o)}
+            title="對話歷史"
+          >📋 歷史</button>
+          {providers.length > 0 && (
             <select
               value={selectedProviderId}
               onChange={(e) => setSelectedProviderId(e.target.value)}
@@ -399,6 +602,8 @@ SELECT * FROM ...
               ))}
             </select>
           )}
+        </div>
+        <div className="crossdb-chat__input-row">
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -426,6 +631,29 @@ SELECT * FROM ...
           )}
         </div>
       </div>
+      </div>
+    </div>
+  );
+}
+
+function CrossDbAssistantAnswer({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const cleaned = extractResponseText(unescapeNewlines(text)).replace(/<cmd>([\/\s\S]*?)<\/cmd>/gi, (_m, c) => `\`\`\`\n${c.trim()}\n\`\`\``);
+  const handleCopy = () => {
+    void navigator.clipboard.writeText(cleaned).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <div className="crossdb-chat__answer crossdb-chat__answer--copyable">
+      <MarkdownText text={cleaned} />
+      <button
+        type="button"
+        className={`crossdb-chat__copy-btn${copied ? " crossdb-chat__copy-btn--copied" : ""}`}
+        onClick={handleCopy}
+        title="複製為 Markdown"
+      >{copied ? "✓" : "⎘"}</button>
     </div>
   );
 }

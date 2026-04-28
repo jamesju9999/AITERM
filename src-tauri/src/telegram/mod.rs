@@ -92,26 +92,51 @@ async fn poll_updates(app: AppHandle, token: String, allowed_chat_id: i64) {
         let url = format!("{}/getUpdates?offset={}&timeout=30", base_url, offset);
         match client.get(&url).send().await {
             Ok(resp) => {
-                if let Ok(data) = resp.json::<TelegramUpdateResponse>().await {
-                    if data.ok {
+                let status = resp.status();
+
+                // 409 means another process is long-polling the same bot token.
+                // Telegram only allows one getUpdates connection per bot at a time.
+                if status == reqwest::StatusCode::CONFLICT {
+                    error!(
+                        "Another instance is already polling this bot (HTTP 409). \
+                         Close other AITerm windows / processes that share this bot token, \
+                         or remove any webhook via deleteWebhook."
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                    continue;
+                }
+
+                match resp.json::<TelegramUpdateResponse>().await {
+                    Ok(data) => {
+                        if !data.ok {
+                            warn!("Telegram API returned ok=false (status {})", status);
+                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                            continue;
+                        }
                         for update in data.result {
                             offset = offset.max(update.update_id + 1);
                             if let Some(msg) = update.message {
                                 if msg.chat.id == allowed_chat_id {
                                     if let Some(text) = msg.text {
                                         let payload = TelegramMessagePayload { text };
-                                        let _ = app.emit("telegram-message-received", payload);
+                                        if let Err(e) = app.emit("telegram-message-received", payload) {
+                                            error!("Failed to emit telegram-message-received: {}", e);
+                                        }
                                     }
                                 } else {
-                                    warn!("Received message from unauthorized chat ID: {}", msg.chat.id);
+                                    warn!("Received message from unauthorized chat ID: {} (allowed: {})", msg.chat.id, allowed_chat_id);
                                 }
                             }
                         }
                     }
+                    Err(e) => {
+                        error!("Failed to parse Telegram response (status {}): {}", status, e);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    }
                 }
             }
             Err(e) => {
-                error!("Telegram polling error: {}", e);
+                error!("Telegram polling HTTP error: {}", e);
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             }
         }
