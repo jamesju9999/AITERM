@@ -5,11 +5,12 @@ import type { ChatMessage } from './ai';
 export interface DesignSession {
   id: string;
   title: string;
+  current_proposal_draft: string | null;
   current_spec_draft: string | null;
   current_sdd_draft: string | null;
   current_plan_draft: string | null;
   context_summary: string | null;
-  status: 'draft' | 'spec_approved' | 'sdd_approved' | 'approved';
+  status: 'draft' | 'proposal_approved' | 'spec_approved' | 'sdd_approved' | 'approved';
 }
 
 export interface DesignChatReply {
@@ -55,6 +56,13 @@ export async function designListMessages(sessionId: string): Promise<ChatMessage
 }
 
 /**
+ * Delete a design session and its messages.
+ */
+export async function designDeleteSession(sessionId: string): Promise<boolean> {
+  return invoke('design_delete_session', { sessionId });
+}
+
+/**
  * Send a message to AI within a design session.
  * Supports streaming via 'ai-stream' event.
  */
@@ -72,7 +80,7 @@ export async function designChat(
  */
 export async function designUpdateDraft(
   sessionId: string, 
-  field: 'spec' | 'sdd' | 'plan', 
+  field: 'proposal' | 'spec' | 'sdd' | 'plan',
   content: string
 ): Promise<boolean> {
   return invoke('design_update_draft', { sessionId, field, content });

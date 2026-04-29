@@ -22,7 +22,7 @@ use commands::{
         db_list_connections, db_list_schemas, db_list_tables, db_preview_table,
         db_remove_connection, db_test_connection, db_update_connection,
     },
-    design::{design_chat, design_list_sessions, design_load_session, design_start_session, design_update_draft, design_list_messages, design_advance_stage, design_save_file},
+    design::{design_chat, design_list_sessions, design_load_session, design_start_session, design_update_draft, design_list_messages, design_advance_stage, design_save_file, design_delete_session},
     provider::{
         add_provider, get_github_copilot_models, get_github_copilot_models_by_provider,
         get_google_ai_models, get_google_ai_models_by_provider,
@@ -185,6 +185,7 @@ pub fn run() {
             design_list_messages,
             design_advance_stage,
             design_save_file,
+            design_delete_session,
             // Telegram
             telegram::telegram_get_config,
             telegram::telegram_set_config,
