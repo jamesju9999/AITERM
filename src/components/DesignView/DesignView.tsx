@@ -1,12 +1,14 @@
 // src/components/DesignView/DesignView.tsx
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { SpecPreview } from './SpecPreview';
-import { 
-  designStartSession, 
-  designChat, 
-  designUpdateDraft, 
-  designLoadSession, 
-  designListMessages
+import {
+  designStartSession,
+  designChat,
+  designUpdateDraft,
+  designLoadSession,
+  designListMessages,
+  designListSessions,
+  designDeleteSession,
 } from '../../ipc/design';
 import type { DesignSession } from '../../ipc/design';
 import type { ChatMessage } from '../../ipc/ai';
@@ -27,6 +29,8 @@ export function DesignView({ isActive }: { isActive: boolean }) {
   const [providerId, setProviderId] = useState<string | undefined>(undefined);
   const [providerName, setProviderName] = useState<string | undefined>(undefined);
   const [showProviderPalette, setShowProviderPalette] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [sessionList, setSessionList] = useState<DesignSession[]>([]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -43,6 +47,24 @@ export function DesignView({ isActive }: { isActive: boolean }) {
       handleSendMessage(text);
     }
   );
+
+  // Forward last assistant message to Telegram when streaming finishes
+  const prevIsStreamingRef = useRef(false);
+  useEffect(() => {
+    if (prevIsStreamingRef.current && !isStreaming) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg && lastMsg.role === 'assistant' && sendRemoteResponse) {
+        // Strip [UPDATE_*] tags and their content for Telegram display
+        let text = lastMsg.content;
+        for (const tag of ['[UPDATE_PROPOSAL]', '[UPDATE_SPEC]', '[UPDATE_SDD]', '[UPDATE_PLAN]']) {
+          const idx = text.indexOf(tag);
+          if (idx !== -1) text = text.slice(0, idx).trim();
+        }
+        sendRemoteResponse(text || lastMsg.content);
+      }
+    }
+    prevIsStreamingRef.current = isStreaming;
+  }, [isStreaming, messages, sendRemoteResponse]);
 
   // Handle Resize Logic
   useEffect(() => {
@@ -115,32 +137,34 @@ export function DesignView({ isActive }: { isActive: boolean }) {
         if (event.payload.done) {
           setIsStreaming(false);
           setTimeout(refreshSession, 500);
-          setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            if (last && last.role === 'assistant') {
-              sendRemoteResponse(cleanMessageForDisplay(last.content));
-            }
-            return prev;
-          });
         }
       }
     );
     return () => { unlisten.then((fn) => fn()); };
   }, [isActive, session, refreshSession]);
 
-  // Initialize Session
+  // Initialize Session: load most recent unfinished session, or create new
   useEffect(() => {
     if (isActive && !session && !loading) {
       setLoading(true);
-      designStartSession('新需求討論')
-        .then(async (id) => {
-          const data = await designLoadSession(id);
-          setSession(data);
-          await loadHistory(id);
+      designListSessions()
+        .then(async (all) => {
+          setSessionList(all);
+          const unfinished = all.find((s) => s.status !== 'approved');
+          if (unfinished) {
+            const data = await designLoadSession(unfinished.id);
+            setSession(data);
+            await loadHistory(unfinished.id);
+          } else {
+            const id = await designStartSession('新需求討論');
+            const data = await designLoadSession(id);
+            setSession(data);
+          }
         })
         .catch(() => {
           setSession({
             id: 'fallback-id', title: '後端未就緒', status: 'draft',
+            current_proposal_draft: null,
             current_spec_draft: '## 提示\n請重啟 `npm run tauri:dev` 以載入後端指令。',
             current_sdd_draft: null, current_plan_draft: null, context_summary: null
           });
@@ -148,6 +172,47 @@ export function DesignView({ isActive }: { isActive: boolean }) {
         .finally(() => setLoading(false));
     }
   }, [isActive, session, loading, loadHistory]);
+
+  // Refresh session list after session changes
+  const refreshSessionList = useCallback(async () => {
+    try {
+      const all = await designListSessions();
+      setSessionList(all);
+    } catch { /* ignore */ }
+  }, []);
+
+  const handleNewSession = useCallback(async () => {
+    if (isStreaming) return;
+    try {
+      const id = await designStartSession('新需求討論');
+      const data = await designLoadSession(id);
+      setSession(data);
+      setMessages([]);
+      await refreshSessionList();
+    } catch { /* ignore */ }
+  }, [isStreaming, refreshSessionList]);
+
+  const handleLoadSession = useCallback(async (s: DesignSession) => {
+    if (isStreaming) return;
+    try {
+      const data = await designLoadSession(s.id);
+      setSession(data);
+      setMessages([]);
+      await loadHistory(s.id);
+      setHistoryOpen(false);
+    } catch { /* ignore */ }
+  }, [isStreaming, loadHistory]);
+
+  const handleDeleteSession = useCallback(async (id: string) => {
+    try {
+      await designDeleteSession(id);
+      if (session?.id === id) {
+        setSession(null);
+        setMessages([]);
+      }
+      await refreshSessionList();
+    } catch { /* ignore */ }
+  }, [session?.id, refreshSessionList]);
 
   const handleSendMessage = useCallback(async (remoteText?: string) => {
     const text = typeof remoteText === "string" ? remoteText : inputValue;
@@ -179,7 +244,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
         if (startIdx === -1) return null;
 
         let endIdx = text.length;
-        const otherTags = ['[UPDATE_SPEC]', '[UPDATE_SDD]', '[UPDATE_PLAN]'].filter(t => t !== startTag);
+        const otherTags = ['[UPDATE_PROPOSAL]', '[UPDATE_SPEC]', '[UPDATE_SDD]', '[UPDATE_PLAN]'].filter(t => t !== startTag);
         for (const otherTag of otherTags) {
           const idx = text.indexOf(otherTag, startIdx + startTag.length);
           if (idx !== -1 && idx < endIdx) {
@@ -205,17 +270,25 @@ export function DesignView({ isActive }: { isActive: boolean }) {
           }
         }
 
-        return content || null;
+        // Guard: only treat as valid update if content has markdown fence or structural headings
+        if (!content) return null;
+        const hasCodeFence = content.includes('```');
+        const hasHeading = /^##\s/m.test(content);
+        if (!hasCodeFence && !hasHeading && content.length < 100) return null;
+
+        return content;
       };
 
+      const proposalContent = extractContent('UPDATE_PROPOSAL', cleanResponseText);
       const specContent = extractContent('UPDATE_SPEC', cleanResponseText);
       const sddContent = extractContent('UPDATE_SDD', cleanResponseText);
       const planContent = extractContent('UPDATE_PLAN', cleanResponseText);
 
+      if (proposalContent) await designUpdateDraft(session.id, 'proposal', proposalContent);
       if (specContent) await designUpdateDraft(session.id, 'spec', specContent);
       if (sddContent) await designUpdateDraft(session.id, 'sdd', sddContent);
       if (planContent) await designUpdateDraft(session.id, 'plan', planContent);
-      if (specContent || sddContent || planContent) refreshSession();
+      if (proposalContent || specContent || sddContent || planContent) refreshSession();
 
     } catch (err) {
       let errMsg = String(err);
@@ -223,18 +296,25 @@ export function DesignView({ isActive }: { isActive: boolean }) {
         errMsg = (err as any).reason || (err as any).message || JSON.stringify(err);
       }
       setMessages(prev => [...prev, { role: 'assistant', content: `❌ 錯誤: ${errMsg}` }]);
+    } finally {
       setIsStreaming(false);
     }
   }, [inputValue, session, messages, isStreaming, refreshSession, providerId]);
 
-  const cleanMessageForDisplay = (text: string) => {
+  const cleanMessageForDisplay = (text: string, streaming = false) => {
     if (!text) return text;
     let cleaned = text;
 
-    const tags = [
-      { tag: '[UPDATE_SPEC]', msg: '> ✨ **已更新右側「規格 (Spec)」草稿**' },
-      { tag: '[UPDATE_SDD]', msg: '> ✨ **已更新右側「系統設計 (SDD)」草稿**' },
-      { tag: '[UPDATE_PLAN]', msg: '> ✨ **已更新右側「實作計畫 (Plan)」草稿**' },
+    const tags = streaming ? [
+      { tag: '[UPDATE_PROPOSAL]', msg: '> ⏳ **正在產生「提案 (Proposal)」...**' },
+      { tag: '[UPDATE_SPEC]', msg: '> ⏳ **正在產生「規格 (Spec)」...**' },
+      { tag: '[UPDATE_SDD]', msg: '> ⏳ **正在產生「設計 (Design)」...**' },
+      { tag: '[UPDATE_PLAN]', msg: '> ⏳ **正在產生「任務 (Tasks)」...**' },
+    ] : [
+      { tag: '[UPDATE_PROPOSAL]', msg: '> ✨ **已更新右側「提案 (Proposal)」**' },
+      { tag: '[UPDATE_SPEC]', msg: '> ✨ **已更新右側「規格 (Spec)」**' },
+      { tag: '[UPDATE_SDD]', msg: '> ✨ **已更新右側「設計 (Design)」**' },
+      { tag: '[UPDATE_PLAN]', msg: '> ✨ **已更新右側「任務 (Tasks)」**' },
     ];
 
     for (const { tag, msg } of tags) {
@@ -258,46 +338,130 @@ export function DesignView({ isActive }: { isActive: boolean }) {
     return cleaned.trim();
   };
 
+  const handleGenerate = useCallback((stage: 'proposal' | 'spec' | 'sdd' | 'plan') => {
+    if (isStreaming || !session || session.id === 'fallback-id') return;
+    const stageLabels: Record<string, string> = {
+      proposal: '提案 (Proposal)',
+      spec: '規格 (Spec)',
+      sdd: '設計 (Design)',
+      plan: '任務 (Tasks)',
+    };
+    const text = `請根據目前的討論內容產生${stageLabels[stage]}。[GENERATE:${stage}]`;
+    handleSendMessage(text);
+  }, [isStreaming, session, handleSendMessage]);
+
+  const statusLabels: Record<string, string> = {
+    draft: '提案探索中',
+    proposal_approved: '規格定義中',
+    spec_approved: '技術設計中',
+    sdd_approved: '任務規劃中',
+    approved: '已完成',
+  };
+
   return (
     <div className="design-view-root" ref={containerRef}>
       <div className="design-left-panel" style={{ width: `${leftWidth}px`, flexBasis: `${leftWidth}px`, flexShrink: 0, flexGrow: 0 }}>
         <div className="design-header-tools">
           <div className="design-session-info">
             {session?.title}
+            {session && session.id !== 'fallback-id' && (
+              <span style={{ fontSize: 10, color: '#666', marginLeft: 8 }}>
+                ({statusLabels[session.status] || session.status})
+              </span>
+            )}
           </div>
-          <button
-            className={`aiterm-block-btn ${isRemoteEnabled ? 'aiterm-agent-toggle--on' : ''}`}
-            title="啟用/停用 Telegram 遠端控制"
-            onClick={() => setIsRemoteEnabled(!isRemoteEnabled)}
-            style={{ marginLeft: "auto", padding: "2px 8px", fontSize: 11, background: isRemoteEnabled ? "rgba(52, 211, 153, 0.15)" : "transparent", color: isRemoteEnabled ? "#34d399" : "#666", border: isRemoteEnabled ? "1px solid rgba(52, 211, 153, 0.3)" : "1px solid #333", borderRadius: 4, cursor: "pointer" }}
-          >
-            📱 Remote
-          </button>
+          <div style={{ display: 'flex', gap: '6px', marginLeft: 'auto' }}>
+            <button
+              className={`aiterm-block-btn${historyOpen ? ' aiterm-agent-toggle--on' : ''}`}
+              title="對話歷史"
+              onClick={() => { setHistoryOpen((o) => !o); if (!historyOpen) refreshSessionList(); }}
+              style={{ padding: "2px 8px", fontSize: 11, background: historyOpen ? "rgba(96, 165, 250, 0.15)" : "transparent", color: historyOpen ? "#60a5fa" : "#666", border: historyOpen ? "1px solid rgba(96, 165, 250, 0.3)" : "1px solid #333", borderRadius: 4, cursor: "pointer" }}
+            >
+              📋 歷史
+            </button>
+            <button
+              className="aiterm-block-btn"
+              title="建立新 Session"
+              onClick={handleNewSession}
+              disabled={isStreaming}
+              style={{ padding: "2px 8px", fontSize: 11, background: "transparent", color: "#666", border: "1px solid #333", borderRadius: 4, cursor: "pointer" }}
+            >
+              🗑 New
+            </button>
+            <button
+              className={`aiterm-block-btn ${isRemoteEnabled ? 'aiterm-agent-toggle--on' : ''}`}
+              title="啟用/停用 Telegram 遠端控制"
+              onClick={() => setIsRemoteEnabled(!isRemoteEnabled)}
+              style={{ padding: "2px 8px", fontSize: 11, background: isRemoteEnabled ? "rgba(52, 211, 153, 0.15)" : "transparent", color: isRemoteEnabled ? "#34d399" : "#666", border: isRemoteEnabled ? "1px solid rgba(52, 211, 153, 0.3)" : "1px solid #333", borderRadius: 4, cursor: "pointer" }}
+            >
+              📱 Remote
+            </button>
+          </div>
         </div>
+
+        {/* History side panel */}
+        {historyOpen && (
+          <div style={{ background: '#111', borderBottom: '1px solid #333', maxHeight: '200px', overflowY: 'auto', padding: '8px' }}>
+            {sessionList.length === 0 && (
+              <div style={{ color: '#666', fontSize: 12, textAlign: 'center', padding: '12px' }}>尚無歷史記錄</div>
+            )}
+            {sessionList.map((s) => (
+              <div
+                key={s.id}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '6px 8px', borderRadius: 4, cursor: 'pointer',
+                  background: s.id === session?.id ? 'rgba(96, 165, 250, 0.1)' : 'transparent',
+                  borderLeft: s.id === session?.id ? '2px solid #60a5fa' : '2px solid transparent',
+                }}
+                onClick={() => handleLoadSession(s)}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: '#ccc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {s.title}
+                  </div>
+                  <div style={{ fontSize: 10, color: '#666' }}>
+                    {statusLabels[s.status] || s.status}
+                  </div>
+                </div>
+                <button
+                  style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 14, padding: '0 4px', flexShrink: 0 }}
+                  title="刪除此 session"
+                  onClick={(e) => { e.stopPropagation(); handleDeleteSession(s.id); }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
 
         <div className="design-interaction-area">
           <div className="design-messages-list">
             {messages.length === 0 && (
               <div className="design-welcome-hero">
-                <h3>👋 SDD 設計中心</h3>
-                <p>請描述您想開發的需求...</p>
+                <h3>👋 OpenSpec 設計中心</h3>
+                <p>請描述您想開發的需求，或點擊右側面板的「▶ 產生」按鈕來開始...</p>
               </div>
             )}
-            {messages.map((m, i) => (
-              <MessageBubble 
-                key={i} 
-                role={m.role as 'user' | 'assistant'} 
-                content={cleanMessageForDisplay(m.content)} 
-                onExecuteCommand={() => {}}
-              />
-            ))}
+            {messages.map((m, i) => {
+              const isLastAssistant = m.role === 'assistant' && i === messages.length - 1;
+              return (
+                <MessageBubble
+                  key={i}
+                  role={m.role as 'user' | 'assistant'}
+                  content={cleanMessageForDisplay(m.content, isLastAssistant && isStreaming)}
+                  onExecuteCommand={() => {}}
+                />
+              );
+            })}
             <div ref={messagesEndRef} />
           </div>
 
           <div className="design-input-section">
             <div className="design-tool-row" style={{ padding: '8px 16px 0 16px' }}>
-              <button 
-                className="design-provider-btn" 
+              <button
+                className="design-provider-btn"
                 onClick={() => setShowProviderPalette(true)}
               >
                 🤖 {providerName ? `模型: ${providerName}` : '預設模型'}
@@ -321,17 +485,25 @@ export function DesignView({ isActive }: { isActive: boolean }) {
       <div className="design-resizer" onMouseDown={(e) => { e.preventDefault(); setIsResizing(true); }} />
 
       <div className="design-right-panel" style={{ flex: 1 }}>
-        <SpecPreview title={session?.title} spec={session?.current_spec_draft || null} sdd={session?.current_sdd_draft || null} plan={session?.current_plan_draft || null} />
+        <SpecPreview
+          title={session?.title}
+          proposal={session?.current_proposal_draft || null}
+          spec={session?.current_spec_draft || null}
+          sdd={session?.current_sdd_draft || null}
+          plan={session?.current_plan_draft || null}
+          onGenerate={handleGenerate}
+          isStreaming={isStreaming}
+        />
       </div>
 
       {showProviderPalette && (
-        <ProviderPalette 
-          onClose={() => setShowProviderPalette(false)} 
-          onSwitch={(p) => { 
-            setProviderId(p.id); 
-            setProviderName(p.display_name); 
-            setShowProviderPalette(false); 
-          }} 
+        <ProviderPalette
+          onClose={() => setShowProviderPalette(false)}
+          onSwitch={(p) => {
+            setProviderId(p.id);
+            setProviderName(p.display_name);
+            setShowProviderPalette(false);
+          }}
         />
       )}
     </div>

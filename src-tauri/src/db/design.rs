@@ -9,6 +9,7 @@ use std::fs;
 pub struct DesignSession {
     pub id: String,
     pub title: String,
+    pub current_proposal_draft: Option<String>,
     pub current_spec_draft: Option<String>,
     pub current_sdd_draft: Option<String>,
     pub current_plan_draft: Option<String>,
@@ -64,6 +65,10 @@ impl DesignDb {
             )"
         ).execute(&self.pool).await?;
 
+        // Migration: add proposal column for existing databases
+        let _ = sqlx::query("ALTER TABLE design_sessions ADD COLUMN current_proposal_draft TEXT")
+            .execute(&self.pool).await;
+
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS design_messages (
                 id TEXT PRIMARY KEY NOT NULL,
@@ -91,7 +96,7 @@ pub async fn create_design_session(pool: &SqlitePool, title: &str) -> Result<Str
 
 pub async fn get_design_session(pool: &SqlitePool, id: &str) -> Result<DesignSession, sqlx::Error> {
     let row = sqlx::query_as::<_, DesignSession>(
-        "SELECT id, title, current_spec_draft, current_sdd_draft, current_plan_draft, context_summary, status FROM design_sessions WHERE id = ?"
+        "SELECT id, title, current_proposal_draft, current_spec_draft, current_sdd_draft, current_plan_draft, context_summary, status FROM design_sessions WHERE id = ?"
     )
     .bind(id)
     .fetch_one(pool)
@@ -106,6 +111,7 @@ pub async fn update_design_draft(
     content: &str,
 ) -> Result<(), sqlx::Error> {
     let sql = match field {
+        "proposal" => "UPDATE design_sessions SET current_proposal_draft = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         "spec" => "UPDATE design_sessions SET current_spec_draft = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         "sdd" => "UPDATE design_sessions SET current_sdd_draft = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         "plan" => "UPDATE design_sessions SET current_plan_draft = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -118,6 +124,18 @@ pub async fn update_design_draft(
         .execute(pool)
         .await?;
     
+    Ok(())
+}
+
+pub async fn delete_design_session(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM design_messages WHERE session_id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    sqlx::query("DELETE FROM design_sessions WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

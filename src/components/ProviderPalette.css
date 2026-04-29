@@ -42,8 +42,9 @@
 
 .aiterm-palette__item {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  gap: 2px 8px;
   padding: 7px 14px;
   cursor: pointer;
   color: #ccc;
@@ -81,6 +82,8 @@
   color: #555;
   font-size: 11px;
   white-space: nowrap;
+  width: 100%;
+  padding-left: 22px;
 }
 
 .aiterm-palette__empty {
