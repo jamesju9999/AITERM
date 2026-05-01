@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLocale } from "../contexts/LocaleContext";
 import { listen } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 
 import {
@@ -25,6 +26,7 @@ import { useTerminalBlocks } from "../hooks/useTerminalBlocks";
 import { useAgentMission } from "../hooks/useAgentMission";
 import { useTelegramRemoteControl } from "../hooks/useTelegramRemoteControl";
 import { listProviders } from "../ipc/provider";
+import { webSearch, webFetch } from "../ipc/web";
 import { parseAiPrefix, parseAgentPrefix } from "./parseAiPrefix";
 import { CommandPreview } from "./CommandPreview";
 import { StreamingIndicator } from "./StreamingIndicator";
@@ -72,6 +74,20 @@ export interface TerminalViewProps {
   onSessionCreated?: (sessionId: string) => void;
 }
 
+const SEARCH_OPTS = {
+  regex: false,
+  caseSensitive: false,
+  wholeWord: false,
+  decorations: {
+    matchBackground: '#ffff0040',
+    matchBorder: '#ffff00',
+    matchOverviewRuler: '#ffff00',
+    activeMatchBackground: '#ff990040',
+    activeMatchBorder: '#ff9900',
+    activeMatchColorOverviewRuler: '#ff9900',
+  },
+};
+
 export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
@@ -113,6 +129,13 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const lineBufRef = useRef<string>("");
   const overlayRef = useRef<HTMLDivElement>(null);
   const [, setRenderTick] = useState(0);
+
+  // Find in Buffer state
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchMatchInfo, setSearchMatchInfo] = useState<string>("");
+  const searchAddonRef = useRef<SearchAddon | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const { blocks, isAlternateBuffer, submitCommand } = useTerminalBlocks(
     sessionId,
@@ -252,6 +275,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       } else if (e.ctrlKey && (e.key === "i" || e.key === "I")) {
         e.preventDefault();
         setPanelOpen((o) => !o);
+      } else if (e.ctrlKey && e.key === "f") {
+        e.preventDefault();
+        setSearchOpen(true);
       }
     };
     window.addEventListener("keydown", handler);
@@ -299,6 +325,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
     const fit = new FitAddon();
     term.loadAddon(fit);
+    const searchAddon = new SearchAddon();
+    term.loadAddon(searchAddon);
+    searchAddonRef.current = searchAddon;
     term.open(hostRef.current);
     requestAnimationFrame(() => fit.fit());
 
@@ -516,6 +545,39 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     };
   }, []);
 
+  const doSearch = useCallback((query: string, direction: 'next' | 'prev') => {
+    const addon = searchAddonRef.current;
+    if (!addon || !query) { setSearchMatchInfo(""); return; }
+    const found = direction === 'next'
+      ? addon.findNext(query, SEARCH_OPTS)
+      : addon.findPrevious(query, SEARCH_OPTS);
+    setSearchMatchInfo(found ? "found" : "not found");
+  }, []);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+    setSearchMatchInfo("");
+    searchAddonRef.current?.clearDecorations?.();
+  }, []);
+
+  // Focus input when search opens
+  useEffect(() => {
+    if (searchOpen) {
+      setTimeout(() => searchInputRef.current?.focus(), 50);
+    }
+  }, [searchOpen]);
+
+  // Re-run search as user types
+  useEffect(() => {
+    if (searchQuery) {
+      doSearch(searchQuery, 'next');
+    } else {
+      searchAddonRef.current?.clearDecorations?.();
+      setSearchMatchInfo("");
+    }
+  }, [searchQuery, doSearch]);
+
   const handleConfirm = () => {
     if (preview.command) {
       submitCommand(preview.command);
@@ -610,7 +672,31 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           </div>
         )}
         {/* Terminal */}
-        <div style={{ display: viewTab === "terminal" ? "block" : "none", height: "100%" }}>
+        <div style={{ display: viewTab === "terminal" ? "block" : "none", height: "100%", position: "relative" }}>
+        {/* Find in Buffer search bar */}
+        {searchOpen && (
+          <div className="terminal-search-bar">
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') { e.preventDefault(); closeSearch(); }
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSearch(searchQuery, 'next'); }
+                if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); doSearch(searchQuery, 'prev'); }
+                if (e.key === 'F3' && !e.shiftKey) { e.preventDefault(); doSearch(searchQuery, 'next'); }
+                if (e.key === 'F3' && e.shiftKey) { e.preventDefault(); doSearch(searchQuery, 'prev'); }
+              }}
+              placeholder="搜尋..."
+              className="terminal-search-input"
+            />
+            {searchMatchInfo && <span className="terminal-search-match-info">{searchMatchInfo}</span>}
+            <button onClick={() => doSearch(searchQuery, 'prev')} title="上一個" className="terminal-search-btn">↑</button>
+            <button onClick={() => doSearch(searchQuery, 'next')} title="下一個" className="terminal-search-btn">↓</button>
+            <button onClick={closeSearch} title="關閉" className="terminal-search-btn terminal-search-close">✕</button>
+          </div>
+        )}
         <div
           ref={hostRef}
           className="aiterm-terminal-root"
@@ -826,7 +912,8 @@ function handleAiQuery(
   onDone?: (explanation?: string) => void,
   agentActive = false,
   onCommandComplete?: (block: import("../hooks/useTerminalBlocks").TerminalBlock) => void,
-  onAiError?: (err: AiError) => void
+  onAiError?: (err: AiError) => void,
+  onWebAction?: (type: "search" | "fetch", value: string) => void
 ) {
   void originalLine;
   term.write("\r\x1b[2K");
@@ -843,6 +930,20 @@ function handleAiQuery(
       if (resp.command === "DONE") {
         setPreview(INITIAL_PREVIEW);
         if (onDone) onDone(resp.explanation);
+        return;
+      }
+
+      // Intercept web search/fetch commands before PTY execution
+      if (resp.command.startsWith("AITERM_WEB_SEARCH: ") && onWebAction) {
+        const value = resp.command.slice("AITERM_WEB_SEARCH: ".length);
+        setPreview(INITIAL_PREVIEW);
+        onWebAction("search", value);
+        return;
+      }
+      if (resp.command.startsWith("AITERM_WEB_FETCH: ") && onWebAction) {
+        const value = resp.command.slice("AITERM_WEB_FETCH: ".length);
+        setPreview(INITIAL_PREVIEW);
+        onWebAction("fetch", value);
         return;
       }
 
@@ -966,13 +1067,14 @@ function runAgentLoop(params: AgentLoopParams) {
   }
 
   // Build the query for the AI
+  const webSearchNote = `\n\nNote: If you need to search the web for information, respond with command set to "AITERM_WEB_SEARCH: <your query>". If you need to fetch a specific URL, respond with command set to "AITERM_WEB_FETCH: <url>".`;
   let query: string;
   if (history.length === 0) {
-    query = goal;
+    query = goal + `\n\nYou have access to web search. If you need internet information, respond with command set to "AITERM_WEB_SEARCH: <your query>" instead of a shell command.`;
   } else {
     query = `Goal: ${goal}\n\nExecution History:\n${history.map((h, i) =>
       `Step ${i + 1}:\nCommand: ${h.command}\nExit code: ${h.exitCode}\nOutput:\n${h.output}`
-    ).join('\n\n')}\n\nAnalyze the result above and decide the next step to achieve the goal. If the goal is fully achieved, respond with command set to 'DONE'.`;
+    ).join('\n\n')}\n\nAnalyze the result above and decide the next step to achieve the goal. If the goal is fully achieved, respond with command set to 'DONE'.${webSearchNote}`;
   }
 
   if (stepCount > 0) {
@@ -1034,6 +1136,41 @@ function runAgentLoop(params: AgentLoopParams) {
     }
   }, 60000);
 
+  // Handle web search/fetch actions from the AI (intercept before PTY execution)
+  const onWebAction = (type: "search" | "fetch", value: string) => {
+    stepResolved = true; // prevent timeout from firing while waiting for web result
+    const label = type === "search" ? `\x1b[36m🔍 搜尋: ${value}\x1b[0m` : `\x1b[36m📄 取得: ${value}\x1b[0m`;
+    term.write(`\r\n${label}\r\n`);
+    const webPromise = type === "search" ? webSearch(value) : webFetch(value);
+    webPromise
+      .then((result) => {
+        if (abortRef.current) return;
+        stepResolved = false; // reset so next step timeout works
+        const syntheticCommand = type === "search" ? `web_search("${value}")` : `web_fetch("${value}")`;
+        const newHistory = [...history, {
+          command: syntheticCommand,
+          exitCode: 0,
+          output: result,
+        }];
+        params.onStepComplete?.({
+          stepIndex: stepCount + 1,
+          maxSteps,
+          command: syntheticCommand,
+          exitCode: 0,
+          output: result.length > 2000 ? result.slice(result.length - 2000) : result,
+        });
+        runAgentLoop({
+          ...params,
+          history: newHistory,
+          stepCount: stepCount + 1,
+        });
+      })
+      .catch((err) => {
+        if (abortRef.current) return;
+        onFail(`Web ${type} failed: ${String(err)}`);
+      });
+  };
+
   // Call AI, auto-execute the returned command, wire up the completion callback
   handleAiQuery(
     sessionId,
@@ -1056,7 +1193,8 @@ function runAgentLoop(params: AgentLoopParams) {
       else if ("reason" in err) errMsg = err.reason;
       else if (err.kind === "not_configured") errMsg = "未設定 API Key";
       onFail(`AI 請求失敗: ${errMsg}`);
-    }
+    },
+    onWebAction,          // onWebAction: intercept web search/fetch commands
   );
 }
 
