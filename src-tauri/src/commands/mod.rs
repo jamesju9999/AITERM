@@ -6,3 +6,4 @@ pub mod provider;
 pub mod secret;
 pub mod shell;
 pub mod vcs;
+pub mod web;
