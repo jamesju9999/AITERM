@@ -8,12 +8,34 @@ import { VcsView } from "./VcsView/VcsView";
 import { useLocale } from "../contexts/LocaleContext";
 
 const DEFAULT_TAB_STORAGE_KEY = "aiterm_default_tab";
+const SESSION_TABS_KEY = "aiterm-session-tabs";
+
+type SavedTab = Pick<Tab, "title" | "type" | "dbConnectionId">;
+
+function restoreSessionTabs(): Tab[] | null {
+  try {
+    const raw = localStorage.getItem(SESSION_TABS_KEY);
+    if (!raw) return null;
+    const saved: SavedTab[] = JSON.parse(raw);
+    if (!Array.isArray(saved) || saved.length === 0) return null;
+    return saved.map((s) => ({ ...s, id: crypto.randomUUID() }));
+  } catch {
+    return null;
+  }
+}
+
+function saveSessionTabs(tabs: Tab[]) {
+  const toSave: SavedTab[] = tabs.map(({ title, type, dbConnectionId }) => ({ title, type, dbConnectionId }));
+  localStorage.setItem(SESSION_TABS_KEY, JSON.stringify(toSave));
+}
 
 export function TerminalApp() {
   const { t } = useLocale();
   const [tabs, setTabs] = useState<Tab[]>(() => {
-    // Read from localStorage (sync) so the correct tab type shows immediately
-    // without waiting for an async Rust config call.
+    // Try to restore previous session tabs first
+    const restored = restoreSessionTabs();
+    if (restored) return restored;
+    // Fall back to default tab type from settings
     const saved = localStorage.getItem(DEFAULT_TAB_STORAGE_KEY);
     const tabType: "terminal" | "database" = saved === "database" ? "database" : "terminal";
     return [{ id: crypto.randomUUID(), title: tabType === "database" ? "Database" : "Terminal", type: tabType }];
@@ -39,6 +61,8 @@ export function TerminalApp() {
     if (activeTab?.type === "terminal" && activeTab.ptySessionId) {
       setLastTerminalPtyId(activeTab.ptySessionId);
     }
+    // Persist tab layout for session restoration
+    saveSessionTabs(tabs);
   }, [tabs, activeId, isSidebarOpen]);
 
   const handleAddTab = useCallback(() => {
