@@ -133,6 +133,26 @@ export const translations = {
     err_copilot_auth_required: "請先完成 GitHub Device Flow 驗證",
     err_save_failed: "儲存失敗，請重試",
 
+    // VCS
+    vcs_tab: "版本控制",
+    vcs_connections: "VCS 連線",
+    new_vcs_desc: "自然語言操控版本控制",
+    vcs_no_repo: "目前目錄不在版控 repo 中",
+    vcs_svn_not_installed: "需要安裝 SVN CLI 才能使用 SVN 功能",
+    vcs_no_token: "此功能需要 GitHub token，請至設定頁面新增",
+    vcs_go_to_settings: "前往設定",
+    vcs_confirm_write: "確認執行",
+    vcs_cancel: "取消",
+    vcs_view_diff: "查看 Diff",
+    vcs_revert: "還原",
+    vcs_merge_pr: "Merge PR",
+    vcs_read_only_tooltip: "此連線為唯讀模式",
+    vcs_local_mode: "本地模式",
+    vcs_step_limit_reached: (n: number) => `已達步驟上限（${n} 步）`,
+    vcs_goal_achieved: "✅ 目標達成",
+    vcs_loop_stopped: "已停止",
+    vcs_step_running: (n: number) => `Step ${n} 執行中…`,
+
     // AboutPage
     about: "關於",
     about_check_updates: "檢查更新",
@@ -273,6 +293,26 @@ export const translations = {
     err_copilot_client_id_required: "GitHub OAuth Client ID is required",
     err_copilot_auth_required: "Please complete GitHub Device Flow authentication first",
     err_save_failed: "Save failed, please try again",
+
+    // VCS
+    vcs_tab: "VCS",
+    vcs_connections: "VCS Connections",
+    new_vcs_desc: "Natural language version control",
+    vcs_no_repo: "Current directory is not in a VCS repo",
+    vcs_svn_not_installed: "SVN CLI must be installed to use SVN features",
+    vcs_no_token: "This feature requires a GitHub token. Add one in Settings.",
+    vcs_go_to_settings: "Go to Settings",
+    vcs_confirm_write: "Confirm",
+    vcs_cancel: "Cancel",
+    vcs_view_diff: "View Diff",
+    vcs_revert: "Revert",
+    vcs_merge_pr: "Merge PR",
+    vcs_read_only_tooltip: "This connection is read-only",
+    vcs_local_mode: "Local mode",
+    vcs_step_limit_reached: (n: number) => `Step limit reached (${n} steps)`,
+    vcs_goal_achieved: "✅ Goal achieved",
+    vcs_loop_stopped: "Stopped",
+    vcs_step_running: (n: number) => `Step ${n} running…`,
 
     // AboutPage
     about: "About",

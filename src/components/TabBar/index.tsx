@@ -7,8 +7,10 @@ import "./index.css";
 export interface Tab {
   id: string;
   title: string;
-  type: "terminal" | "database" | "design" | "cross-db";
+  type: "terminal" | "database" | "design" | "cross-db" | "vcs";
   dbConnectionId?: string;
+  /** PTY session ID assigned by the backend when this terminal tab's PTY is created. */
+  ptySessionId?: string;
 }
 
 export interface TabBarProps {
@@ -22,7 +24,7 @@ export interface TabBarProps {
   onToggle: () => void;
   width: number;
   pickerOpen?: boolean;
-  onPickerSelect?: (type: "terminal" | "database" | "design" | "cross-db") => void;
+  onPickerSelect?: (type: "terminal" | "database" | "design" | "cross-db" | "vcs") => void;
   onPickerClose?: () => void;
 }
 

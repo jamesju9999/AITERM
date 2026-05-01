@@ -6,6 +6,7 @@ pub mod guard;
 pub mod pty;
 pub mod secret;
 pub mod telegram;
+pub mod vcs;
 
 use std::sync::Arc;
 
@@ -32,6 +33,10 @@ use commands::{
     },
     secret::{delete_api_key, has_api_key},
     shell::open_url,
+    vcs::{
+        pick_folder, vcs_add_connection, vcs_agent_step, vcs_detect_repo, vcs_list_connections,
+        vcs_query, vcs_remove_connection, vcs_test_connection, vcs_update_connection,
+    },
 };
 use config::ConfigStore;
 use db::{design::DesignDb, manager::DbManager, Db2SidecarState};
@@ -190,6 +195,16 @@ pub fn run() {
             telegram::telegram_get_config,
             telegram::telegram_set_config,
             telegram::telegram_send_message,
+            // VCS
+            vcs_list_connections,
+            vcs_add_connection,
+            vcs_update_connection,
+            vcs_remove_connection,
+            vcs_test_connection,
+            vcs_detect_repo,
+            vcs_query,
+            vcs_agent_step,
+            pick_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

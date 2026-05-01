@@ -44,6 +44,10 @@ pub struct AppConfig {
     /// Telegram chat ID for remote control.
     #[serde(default)]
     pub telegram_chat_id: Option<String>,
+
+    /// Saved VCS connections (tokens/passwords stored separately in Keychain).
+    #[serde(default)]
+    pub vcs_connections: Vec<VcsConnection>,
 }
 
 fn default_max_agent_steps() -> u32 { 5 }
@@ -206,6 +210,53 @@ pub struct DbConnection {
     pub default_schema: Option<String>,
 }
 
+/// VCS backend type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VcsType {
+    Git,
+    Svn,
+}
+
+impl std::fmt::Display for VcsType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VcsType::Git => write!(f, "Git"),
+            VcsType::Svn => write!(f, "SVN"),
+        }
+    }
+}
+
+/// Controls how write operations are gated in the VCS panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VcsWriteMode {
+    /// All write operations are disabled.
+    ReadOnly,
+    /// Write operations require preview + user confirmation (default).
+    #[default]
+    Guarded,
+    /// Write operations execute immediately without confirmation.
+    FullAuto,
+}
+
+/// A saved VCS connection (token/password lives in Keychain under "aiterm:vcs:{id}").
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VcsConnection {
+    pub id: String,
+    pub name: String,
+    pub vcs_type: VcsType,
+    /// Remote URL — GitHub repo URL for Git, SVN repo URL for SVN. Optional for local-only Git.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Username for SVN authentication.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Write operation gating mode.
+    #[serde(default)]
+    pub write_mode: VcsWriteMode,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,6 +325,7 @@ mod tests {
             db_connections: vec![],
             default_tab: DefaultTab::default(),
             telegram_chat_id: None,
+            vcs_connections: vec![],
         };
         let toml_str = toml::to_string_pretty(&cfg).unwrap();
         let parsed: AppConfig = toml::from_str(&toml_str).unwrap();
@@ -342,5 +394,63 @@ mod tests {
         cfg.upsert_provider(updated);
         assert_eq!(cfg.providers.len(), 1);
         assert_eq!(cfg.providers[0].display_name, "New");
+    }
+
+    #[test]
+    fn vcs_type_roundtrips_toml() {
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct W { t: VcsType }
+        for (ty, expected) in [(VcsType::Git, "git"), (VcsType::Svn, "svn")] {
+            let w = W { t: ty };
+            let s = toml::to_string(&w).unwrap();
+            assert!(s.contains(expected), "got: {s}");
+            let d: W = toml::from_str(&s).unwrap();
+            assert_eq!(d.t, w.t);
+        }
+    }
+
+    #[test]
+    fn vcs_write_mode_roundtrips_toml() {
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct W { m: VcsWriteMode }
+        for (mode, expected) in [
+            (VcsWriteMode::ReadOnly, "read_only"),
+            (VcsWriteMode::Guarded, "guarded"),
+            (VcsWriteMode::FullAuto, "full_auto"),
+        ] {
+            let w = W { m: mode };
+            let s = toml::to_string(&w).unwrap();
+            assert!(s.contains(expected), "got: {s}");
+            let d: W = toml::from_str(&s).unwrap();
+            assert_eq!(d.m, w.m);
+        }
+    }
+
+    #[test]
+    fn vcs_connection_roundtrips_toml() {
+        #[derive(Serialize, Deserialize, Debug)]
+        struct W { c: VcsConnection }
+        let w = W {
+            c: VcsConnection {
+                id: "my-repo".into(),
+                name: "My Repo".into(),
+                vcs_type: VcsType::Git,
+                url: Some("https://github.com/org/repo".into()),
+                username: None,
+                write_mode: VcsWriteMode::Guarded,
+            },
+        };
+        let s = toml::to_string(&w).unwrap();
+        let d: W = toml::from_str(&s).unwrap();
+        assert_eq!(d.c.id, "my-repo");
+        assert_eq!(d.c.vcs_type, VcsType::Git);
+        assert_eq!(d.c.write_mode, VcsWriteMode::Guarded);
+        assert_eq!(d.c.url.as_deref(), Some("https://github.com/org/repo"));
+    }
+
+    #[test]
+    fn app_config_has_vcs_connections_default() {
+        let cfg = AppConfig::default();
+        assert!(cfg.vcs_connections.is_empty());
     }
 }
