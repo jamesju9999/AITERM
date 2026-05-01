@@ -104,7 +104,26 @@
       "Bash(pkill -f \"tauri dev\")",
       "Bash(pkill -f \"target/debug/app\")",
       "Bash(pkill -f \"vite\")",
-      "Bash(cargo update:*)"
+      "Bash(cargo update:*)",
+      "Bash(ps -ax -o pid,command)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(openspec new:*)",
+      "Bash(openspec status:*)",
+      "Bash(openspec instructions:*)",
+      "Bash(openspec validate:*)",
+      "Bash(grep -n \"ptyCwdRef\\\\|useEffect\\\\|detect\\\\|poll\\\\|cwd\" /Users/jamesju/Documents/GitHub/AITERM/src/components/FileExplorer/*.tsx)",
+      "Bash(openspec list:*)",
+      "WebFetch(domain:docs.warp.dev)",
+      "Bash(grep -r \"function\\\\|export const\" /Users/jamesju/Documents/GitHub/AITERM/src/ipc/*.ts)",
+      "Bash(grep -r \"^export\" /Users/jamesju/Documents/GitHub/AITERM/src/components/Settings/*.tsx)",
+      "Bash(grep -E \"^[[:space:]]*#\\\\[tauri::command\\\\]|^async fn|^fn \" /Users/jamesju/Documents/GitHub/AITERM/src-tauri/src/commands/*.rs)",
+      "Bash(grep -A 2 \"#\\\\[tauri::command\\\\]\" /Users/jamesju/Documents/GitHub/AITERM/src-tauri/src/commands/*.rs)",
+      "Bash(grep -B 1 \"#\\\\[tauri::command\\\\]\" /Users/jamesju/Documents/GitHub/AITERM/src-tauri/src/commands/*.rs)",
+      "Bash(grep \"invoke\\(\" /Users/jamesju/Documents/GitHub/AITERM/src/ipc/*.ts)",
+      "Bash(grep -h \"invoke\\(\" /Users/jamesju/Documents/GitHub/AITERM/src/ipc/*.ts)",
+      "Bash(grep -l \"export.*function\\\\|export.*interface\\\\|export.*type\" /Users/jamesju/Documents/GitHub/AITERM/src/hooks/*.ts)",
+      "Bash(md5:*)"
     ]
   }
 }

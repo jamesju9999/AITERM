@@ -78,6 +78,13 @@ export const translations = {
     default_tab: "預設開啟頁面",
     default_tab_desc: "應用程式啟動時自動開啟的頁面類型。",
 
+    // Appearance
+    appearance: "外觀",
+    font_size: "字型大小",
+    font_size_desc: "設定終端機字型大小（pt）。",
+    font_family: "字型",
+    font_family_desc: "設定終端機字型。",
+
     // Telegram Integration
     telegram_integration_title: "Telegram 整合 (遠端控制)",
     telegram_integration_desc: "設定 Telegram 以接收訊息並遠端控制 AITERM 頁籤。",
@@ -238,6 +245,13 @@ export const translations = {
     language_desc: "Select the display language for the interface.",
     default_tab: "Default startup tab",
     default_tab_desc: "Tab type that opens automatically when the app starts.",
+
+    // Appearance
+    appearance: "Appearance",
+    font_size: "Font Size",
+    font_size_desc: "Set terminal font size (pt).",
+    font_family: "Font Family",
+    font_family_desc: "Set terminal font family.",
 
     // Telegram Integration
     telegram_integration_title: "Telegram Integration (Remote Control)",
