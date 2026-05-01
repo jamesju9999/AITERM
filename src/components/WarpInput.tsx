@@ -67,8 +67,8 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
     }
   }, [displayIndex, historyOpen]);
 
-  // newest on top
-  const reversedHistory = [...history].reverse();
+  // oldest at top, newest at bottom — so ↑ moves lightbar UP (toward older) and ↓ moves DOWN
+  const displayHistory = history;
 
   const fillInput = (text: string) => {
     setValue(text);
@@ -106,16 +106,15 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
 
   const deleteHistoryItem = (displayIdx: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    // displayIdx → originalIdx in history array
-    const originalIdx = history.length - 1 - displayIdx;
-    const newHistory = history.filter((_, i) => i !== originalIdx);
+    // displayIdx maps directly to history array index
+    const newHistory = history.filter((_, i) => i !== displayIdx);
     saveHistory(newHistory);
     if (newHistory.length === 0) {
       closeHistory(true);
     } else {
       const nextDisplay = Math.min(displayIdx, newHistory.length - 1);
       setDisplayIndex(nextDisplay);
-      fillInput([...newHistory].reverse()[nextDisplay]);
+      fillInput(newHistory[nextDisplay]);
     }
   };
 
@@ -127,13 +126,13 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
   };
 
   const selectHistoryItem = (displayIdx: number) => {
-    fillInput(reversedHistory[displayIdx]);
+    fillInput(displayHistory[displayIdx]);
     setHistoryOpen(false);
     setDisplayIndex(-1);
     setTimeout(() => {
       textareaRef.current?.focus();
       if (textareaRef.current) {
-        const len = reversedHistory[displayIdx].length;
+        const len = displayHistory[displayIdx].length;
         textareaRef.current.selectionStart = len;
         textareaRef.current.selectionEnd = len;
       }
@@ -170,29 +169,29 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
       if (history.length === 0) return;
       e.preventDefault();
       if (!historyOpen) {
-        // Save draft before starting navigation
+        // Save draft, open popover at bottom (newest item)
         draftValueRef.current = value;
+        const startIdx = displayHistory.length - 1;
         setHistoryOpen(true);
-        setDisplayIndex(0);
-        fillInput(reversedHistory[0]);
-      } else {
-        // Move DOWN in list (toward older items at bottom)
-        const next = Math.min(displayIndex + 1, reversedHistory.length - 1);
-        if (next !== displayIndex) {
-          setDisplayIndex(next);
-          fillInput(reversedHistory[next]);
-        }
+        setDisplayIndex(startIdx);
+        fillInput(displayHistory[startIdx]);
+      } else if (displayIndex > 0) {
+        // Move UP toward older items
+        const prev = displayIndex - 1;
+        setDisplayIndex(prev);
+        fillInput(displayHistory[prev]);
       }
+      // Already at top (oldest) — stay, don't wrap
     } else if (e.key === "ArrowDown") {
       if (!historyOpen) return;
       e.preventDefault();
-      if (displayIndex > 0) {
-        // Move UP in list (toward newer items at top)
-        const prev = displayIndex - 1;
-        setDisplayIndex(prev);
-        fillInput(reversedHistory[prev]);
+      if (displayIndex < displayHistory.length - 1) {
+        // Move DOWN toward newer items
+        const next = displayIndex + 1;
+        setDisplayIndex(next);
+        fillInput(displayHistory[next]);
       } else {
-        // Already at top (newest) — close and restore draft
+        // Already at bottom (newest) — close and restore draft
         closeHistory(true);
       }
     }
@@ -231,7 +230,7 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
             </button>
           </div>
           <div ref={itemsRef} className="warp-history-items">
-            {reversedHistory.map((cmd, displayIdx) => (
+            {displayHistory.map((cmd, displayIdx) => (
               <div
                 key={displayIdx}
                 className={`warp-history-item ${displayIdx === displayIndex ? "selected" : ""}`}
