@@ -68,9 +68,11 @@ export interface TerminalViewProps {
   isActive?: boolean;
   onToggleSidebar?: () => void;
   isSidebarOpen?: boolean;
+  /** Called once with the backend-assigned PTY session ID when the PTY is created. */
+  onSessionCreated?: (sessionId: string) => void;
 }
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -315,6 +317,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         const id = await createPty({ rows, cols });
         sessionRef.current = id;
         setSessionId(id);
+        onSessionCreated?.(id);
         setStatus(`connected (${id.slice(0, 8)}…)`);
 
         // On Windows, PowerShell doesn't emit OSC 133 shell-integration markers.

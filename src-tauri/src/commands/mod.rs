@@ -5,3 +5,4 @@ pub mod design;
 pub mod provider;
 pub mod secret;
 pub mod shell;
+pub mod vcs;

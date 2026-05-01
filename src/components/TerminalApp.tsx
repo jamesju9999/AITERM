@@ -4,6 +4,7 @@ import { TabBar, type Tab } from "./TabBar";
 import { DatabaseView } from "./DatabaseView";
 import { DesignView } from "./DesignView/DesignView";
 import { CrossDbView } from "./CrossDbView";
+import { VcsView } from "./VcsView/VcsView";
 import { useLocale } from "../contexts/LocaleContext";
 
 const DEFAULT_TAB_STORAGE_KEY = "aiterm_default_tab";
@@ -27,26 +28,34 @@ export function TerminalApp() {
   const tabsRef = useRef(tabs);
   const activeIdRef = useRef(activeId);
   const isSidebarOpenRef = useRef(isSidebarOpen);
+  // PTY session ID of the most recently active terminal tab — used by VcsView for CWD polling.
+  const [lastTerminalPtyId, setLastTerminalPtyId] = useState<string>("");
   useEffect(() => {
     tabsRef.current = tabs;
     activeIdRef.current = activeId;
     isSidebarOpenRef.current = isSidebarOpen;
+    // When switching to a terminal tab that already has a PTY, update the tracked ID.
+    const activeTab = tabs.find((t) => t.id === activeId);
+    if (activeTab?.type === "terminal" && activeTab.ptySessionId) {
+      setLastTerminalPtyId(activeTab.ptySessionId);
+    }
   }, [tabs, activeId, isSidebarOpen]);
 
   const handleAddTab = useCallback(() => {
     setPickerOpen(true);
   }, []);
 
-  const handlePickerSelect = useCallback((type: "terminal" | "database" | "design" | "cross-db") => {
+  const handlePickerSelect = useCallback((type: "terminal" | "database" | "design" | "cross-db" | "vcs") => {
     const newId = crypto.randomUUID();
     let title = "Terminal";
     if (type === "database") title = t.database_tab;
     if (type === "design") title = "Design";
     if (type === "cross-db") title = t.cross_db_tab;
+    if (type === "vcs") title = t.vcs_tab;
     setTabs((prev) => [...prev, { id: newId, title, type }]);
     setActiveId(newId);
     setPickerOpen(false);
-  }, [t.database_tab, t.cross_db_tab]);
+  }, [t.database_tab, t.cross_db_tab, t.vcs_tab]);
 
   const handleCloseTab = useCallback((id: string) => {
     setTabs((prev) => {
@@ -212,8 +221,18 @@ export function TerminalApp() {
                 <DesignView isActive={isActive} />
               ) : tab.type === "cross-db" ? (
                 <CrossDbView isActive={isActive} />
+              ) : tab.type === "vcs" ? (
+                <VcsView sessionId={lastTerminalPtyId} isActive={isActive} />
               ) : (
-                <TerminalView isActive={isActive} />
+                <TerminalView
+                  isActive={isActive}
+                  onSessionCreated={(ptyId) => {
+                    setTabs((prev) =>
+                      prev.map((t) => t.id === tab.id ? { ...t, ptySessionId: ptyId } : t)
+                    );
+                    setLastTerminalPtyId(ptyId);
+                  }}
+                />
               )}
             </div>
           );
