@@ -34,6 +34,8 @@ import { AiPanel } from "./AiPanel";
 import { ProviderPalette } from "./ProviderPalette";
 import { WarpInput } from "./WarpInput";
 import { FileExplorer } from "./FileExplorer/FileExplorer";
+import { CommandBookmarksPicker, addBookmark } from "./CommandBookmarks";
+import { getActiveTheme, type AppTheme } from "../lib/themes";
 import "./TerminalView.css";
 
 interface PreviewState {
@@ -100,6 +102,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   previewRef.current = preview;
 
   const [panelOpen, setPanelOpen] = useState(false);
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [sessionId, setSessionId] = useState<string>("");
 
   const panelOpenRef = useRef(false);
@@ -136,6 +139,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const [searchMatchInfo, setSearchMatchInfo] = useState<string>("");
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
 
   const { blocks, isAlternateBuffer, submitCommand } = useTerminalBlocks(
     sessionId,
@@ -154,6 +158,33 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // Bridge blocks into a ref so the stale closure can check if a command is running
   const blocksRef = useRef(blocks);
   useEffect(() => { blocksRef.current = blocks; }, [blocks]);
+
+  // Apply font changes from Settings
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { fontSize, fontFamily } = (e as CustomEvent).detail as { fontSize: number; fontFamily: string };
+      const term = termRef.current;
+      if (!term) return;
+      term.options.fontSize = fontSize;
+      term.options.fontFamily = fontFamily;
+      const fit = fitAddonRef.current;
+      if (fit) requestAnimationFrame(() => fit.fit());
+    };
+    window.addEventListener("aiterm:font-changed", handler);
+    return () => window.removeEventListener("aiterm:font-changed", handler);
+  }, []);
+
+  // Apply theme changes from Settings
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { theme } = (e as CustomEvent).detail as { theme: AppTheme };
+      const term = termRef.current;
+      if (!term) return;
+      term.options.theme = theme.xterm;
+    };
+    window.addEventListener("aiterm:theme-changed", handler);
+    return () => window.removeEventListener("aiterm:theme-changed", handler);
+  }, []);
 
   // Telegram Remote Control
   const { isRemoteEnabled, setIsRemoteEnabled, sendRemoteResponse } = useTelegramRemoteControl(
@@ -269,6 +300,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       if (e.ctrlKey && e.key === ",") {
         e.preventDefault();
         navigate("/settings");
+      } else if (e.ctrlKey && e.shiftKey && e.key === "R") {
+        e.preventDefault();
+        setBookmarksOpen(true);
       } else if (e.ctrlKey && e.shiftKey && e.key === "P") {
         e.preventDefault();
         setPaletteOpen((o) => !o);
@@ -309,15 +343,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   useEffect(() => {
     if (!hostRef.current) return;
 
+    const initFontSize = parseInt(localStorage.getItem("aiterm-font-size") ?? "14", 10) || 14;
+    const initFontFamily = localStorage.getItem("aiterm-font-family") ?? '"Cascadia Mono", Consolas, monospace';
+    const initTheme = getActiveTheme();
+
     const term = new Terminal({
-      fontFamily: '"Cascadia Mono", Consolas, monospace',
-      fontSize: 14,
+      fontFamily: initFontFamily,
+      fontSize: initFontSize,
       lineHeight: 1.4,
       cursorBlink: true,
-      theme: {
-        background: "#0c0c0c",
-        foreground: "#e6e6e6",
-      },
+      theme: initTheme.xterm,
       convertEol: false,
     });
     termRef.current = term;
@@ -325,6 +360,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
     const fit = new FitAddon();
     term.loadAddon(fit);
+    fitAddonRef.current = fit;
     const searchAddon = new SearchAddon();
     term.loadAddon(searchAddon);
     searchAddonRef.current = searchAddon;
@@ -788,6 +824,20 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                          className="aiterm-block-btn"
                          onClick={(e) => {
                            e.stopPropagation();
+                           addBookmark(b.command);
+                           const btn = e.currentTarget;
+                           const orig = btn.innerHTML;
+                           btn.innerHTML = '⭐ Saved';
+                           setTimeout(() => btn.innerHTML = orig, 1200);
+                         }}
+                         title="儲存至書籤 (Ctrl+Shift+R 開啟)"
+                     >
+                       ⭐ Bookmark
+                     </button>
+                     <button
+                         className="aiterm-block-btn"
+                         onClick={(e) => {
+                           e.stopPropagation();
                            navigator.clipboard.writeText(b.command).catch(console.error);
                            const btn = e.currentTarget;
                            const orig = btn.innerHTML;
@@ -865,6 +915,15 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           riskLevel={preview.riskLevel}
           onConfirm={handleConfirm}
           onCancel={handleCancel}
+        />
+      )}
+      {bookmarksOpen && (
+        <CommandBookmarksPicker
+          onSelect={(cmd) => {
+            setBookmarksOpen(false);
+            window.dispatchEvent(new CustomEvent("aiterm:fill-input", { detail: { cmd } }));
+          }}
+          onClose={() => setBookmarksOpen(false)}
         />
       )}
       {paletteOpen && (

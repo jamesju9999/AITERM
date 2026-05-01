@@ -35,6 +35,25 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
     }
   }, []);
 
+  // Fill input from bookmark picker
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { cmd } = (e as CustomEvent).detail as { cmd: string };
+      setValue(cmd);
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.style.height = "auto";
+          textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+          textareaRef.current.focus();
+          textareaRef.current.selectionStart = cmd.length;
+          textareaRef.current.selectionEnd = cmd.length;
+        }
+      }, 0);
+    };
+    window.addEventListener("aiterm:fill-input", handler);
+    return () => window.removeEventListener("aiterm:fill-input", handler);
+  }, []);
+
   useEffect(() => {
     // Keep focus unless the user is explicitly interacting with something else
     if (!disabled && !historyOpen) {
