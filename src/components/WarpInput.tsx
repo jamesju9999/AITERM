@@ -20,16 +20,17 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
   const [value, setValue] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [historyIndex, setHistoryIndex] = useState(-1);
+  // displayIndex: position in reversedHistory (0 = top = newest, length-1 = bottom = oldest)
+  const [displayIndex, setDisplayIndex] = useState(-1);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const itemsRef = useRef<HTMLDivElement>(null);
+  // Saves the input draft before the user starts navigating history
+  const draftValueRef = useRef("");
 
   useEffect(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        setHistory(JSON.parse(stored));
-      }
+      if (stored) setHistory(JSON.parse(stored));
     } catch {
       // ignore
     }
@@ -39,12 +40,10 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
   useEffect(() => {
     const handler = (e: Event) => {
       const { cmd } = (e as CustomEvent).detail as { cmd: string };
-      setValue(cmd);
+      fillInput(cmd);
       setTimeout(() => {
+        textareaRef.current?.focus();
         if (textareaRef.current) {
-          textareaRef.current.style.height = "auto";
-          textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
-          textareaRef.current.focus();
           textareaRef.current.selectionStart = cmd.length;
           textareaRef.current.selectionEnd = cmd.length;
         }
@@ -55,21 +54,37 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
   }, []);
 
   useEffect(() => {
-    // Keep focus unless the user is explicitly interacting with something else
     if (!disabled && !historyOpen) {
       textareaRef.current?.focus();
     }
   }, [disabled, historyOpen]);
 
-  // Scroll active item into view
+  // Scroll active item into view — displayIndex maps directly to children order
   useEffect(() => {
-    if (historyOpen && historyIndex >= 0 && itemsRef.current) {
-      const activeEl = itemsRef.current.children[historyIndex] as HTMLElement;
-      if (activeEl) {
-        activeEl.scrollIntoView({ block: "nearest" });
-      }
+    if (historyOpen && displayIndex >= 0 && itemsRef.current) {
+      const el = itemsRef.current.children[displayIndex] as HTMLElement;
+      el?.scrollIntoView({ block: "nearest" });
     }
-  }, [historyIndex, historyOpen, history.length]);
+  }, [displayIndex, historyOpen]);
+
+  // newest on top
+  const reversedHistory = [...history].reverse();
+
+  const fillInput = (text: string) => {
+    setValue(text);
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "auto";
+        textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+      }
+    });
+  };
+
+  const closeHistory = (restoreDraft = false) => {
+    setHistoryOpen(false);
+    setDisplayIndex(-1);
+    if (restoreDraft) fillInput(draftValueRef.current);
+  };
 
   const saveHistory = (newHistory: string[]) => {
     setHistory(newHistory);
@@ -78,73 +93,63 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
 
   const commitCommand = (cmd: string) => {
     if (!cmd.trim()) return;
-
-    // add to history (dedup, keep newest at end)
     let newHistory = history.filter((h) => h !== cmd);
     newHistory.push(cmd);
     if (newHistory.length > 100) newHistory = newHistory.slice(newHistory.length - 100);
     saveHistory(newHistory);
-
     onSubmit(cmd);
     setValue("");
     setHistoryOpen(false);
-    setHistoryIndex(-1);
-
-    // Reset height
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-    }
+    setDisplayIndex(-1);
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
   };
 
-  const deleteHistoryItem = (idx: number, e: React.MouseEvent) => {
+  const deleteHistoryItem = (displayIdx: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    const newHistory = history.filter((_, i) => i !== idx);
+    // displayIdx → originalIdx in history array
+    const originalIdx = history.length - 1 - displayIdx;
+    const newHistory = history.filter((_, i) => i !== originalIdx);
     saveHistory(newHistory);
-    // Adjust selection index
     if (newHistory.length === 0) {
-      setHistoryOpen(false);
-      setHistoryIndex(-1);
+      closeHistory(true);
     } else {
-      setHistoryIndex((prev) => Math.min(prev, newHistory.length - 1));
+      const nextDisplay = Math.min(displayIdx, newHistory.length - 1);
+      setDisplayIndex(nextDisplay);
+      fillInput([...newHistory].reverse()[nextDisplay]);
     }
   };
 
   const clearAllHistory = (e: React.MouseEvent) => {
     e.stopPropagation();
     saveHistory([]);
-    setHistoryOpen(false);
-    setHistoryIndex(-1);
+    closeHistory(true);
     setTimeout(() => textareaRef.current?.focus(), 0);
   };
 
-  const selectHistoryItem = (idx: number) => {
-    if (idx >= 0 && idx < history.length) {
-      setValue(history[idx]);
-      setHistoryOpen(false);
-      setHistoryIndex(-1);
-      setTimeout(() => {
-        if (textareaRef.current) {
-          textareaRef.current.style.height = "auto";
-          textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
-          textareaRef.current.focus();
-          // Move cursor to end
-          textareaRef.current.selectionStart = textareaRef.current.value.length;
-          textareaRef.current.selectionEnd = textareaRef.current.value.length;
-        }
-      }, 0);
-    }
+  const selectHistoryItem = (displayIdx: number) => {
+    fillInput(reversedHistory[displayIdx]);
+    setHistoryOpen(false);
+    setDisplayIndex(-1);
+    setTimeout(() => {
+      textareaRef.current?.focus();
+      if (textareaRef.current) {
+        const len = reversedHistory[displayIdx].length;
+        textareaRef.current.selectionStart = len;
+        textareaRef.current.selectionEnd = len;
+      }
+    }, 0);
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     let shouldSubmit = false;
 
     if (e.key === "Enter") {
-      if (historyOpen && historyIndex >= 0) {
+      if (historyOpen) {
+        // Input already has the selected text; just close popover
         e.preventDefault();
-        selectHistoryItem(historyIndex);
+        closeHistory(false);
         return;
       }
-
       if (shortcut === "enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
         shouldSubmit = true;
       } else if (shortcut === "shift-enter" && e.shiftKey && !e.ctrlKey && !e.metaKey) {
@@ -155,40 +160,40 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
     } else if (e.key === "Escape") {
       if (historyOpen) {
         e.preventDefault();
-        setHistoryOpen(false);
-        setHistoryIndex(-1);
+        closeHistory(true); // restore draft on Escape
       }
-    } else if (e.key === "Delete" && historyOpen && historyIndex >= 0) {
-      // Delete the currently highlighted history item
+    } else if (e.key === "Delete" && historyOpen && displayIndex >= 0) {
       e.preventDefault();
-      const newHistory = history.filter((_, i) => i !== historyIndex);
-      saveHistory(newHistory);
-      if (newHistory.length === 0) {
-        setHistoryOpen(false);
-        setHistoryIndex(-1);
-      } else {
-        setHistoryIndex((prev) => Math.min(prev, newHistory.length - 1));
-      }
+      deleteHistoryItem(displayIndex, { stopPropagation: () => {} } as React.MouseEvent);
       return;
     } else if (e.key === "ArrowUp") {
-      if (history.length > 0) {
-        e.preventDefault();
-        if (!historyOpen) {
-          setHistoryOpen(true);
-          setHistoryIndex(history.length - 1);
-        } else {
-          setHistoryIndex((prev) => Math.max(0, prev - 1));
+      if (history.length === 0) return;
+      e.preventDefault();
+      if (!historyOpen) {
+        // Save draft before starting navigation
+        draftValueRef.current = value;
+        setHistoryOpen(true);
+        setDisplayIndex(0);
+        fillInput(reversedHistory[0]);
+      } else {
+        // Move DOWN in list (toward older items at bottom)
+        const next = Math.min(displayIndex + 1, reversedHistory.length - 1);
+        if (next !== displayIndex) {
+          setDisplayIndex(next);
+          fillInput(reversedHistory[next]);
         }
       }
     } else if (e.key === "ArrowDown") {
-      if (historyOpen) {
-        e.preventDefault();
-        if (historyIndex < history.length - 1) {
-          setHistoryIndex((prev) => prev + 1);
-        } else {
-          setHistoryOpen(false);
-          setHistoryIndex(-1);
-        }
+      if (!historyOpen) return;
+      e.preventDefault();
+      if (displayIndex > 0) {
+        // Move UP in list (toward newer items at top)
+        const prev = displayIndex - 1;
+        setDisplayIndex(prev);
+        fillInput(reversedHistory[prev]);
+      } else {
+        // Already at top (newest) — close and restore draft
+        closeHistory(true);
       }
     }
 
@@ -201,17 +206,15 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setValue(e.target.value);
     if (historyOpen) {
+      // User started typing — exit history navigation, discard selection
       setHistoryOpen(false);
+      setDisplayIndex(-1);
     }
-    // Auto-resize vertically
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
       textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
     }
   };
-
-  // Render history in reverse order (newest on top)
-  const reversedHistory = [...history].reverse();
 
   return (
     <div className="warp-input-container">
@@ -228,28 +231,23 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
             </button>
           </div>
           <div ref={itemsRef} className="warp-history-items">
-            {reversedHistory.map((cmd, reversedIdx) => {
-              // Map back to original index (for delete/select)
-              const originalIdx = history.length - 1 - reversedIdx;
-              const isSelected = originalIdx === historyIndex;
-              return (
-                <div
-                  key={originalIdx}
-                  className={`warp-history-item ${isSelected ? "selected" : ""}`}
-                  onClick={() => selectHistoryItem(originalIdx)}
+            {reversedHistory.map((cmd, displayIdx) => (
+              <div
+                key={displayIdx}
+                className={`warp-history-item ${displayIdx === displayIndex ? "selected" : ""}`}
+                onClick={() => selectHistoryItem(displayIdx)}
+              >
+                <span className="warp-history-prefix">&gt;_</span>
+                <span className="warp-history-text">{cmd}</span>
+                <button
+                  className="warp-history-delete"
+                  onClick={(e) => deleteHistoryItem(displayIdx, e)}
+                  title="刪除此記錄"
                 >
-                  <span className="warp-history-prefix">&gt;_</span>
-                  <span className="warp-history-text">{cmd}</span>
-                  <button
-                    className="warp-history-delete"
-                    onClick={(e) => deleteHistoryItem(originalIdx, e)}
-                    title="刪除此記錄"
-                  >
-                    ×
-                  </button>
-                </div>
-              );
-            })}
+                  ×
+                </button>
+              </div>
+            ))}
           </div>
         </div>
       )}
