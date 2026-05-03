@@ -121,3 +121,4 @@ src/             # React 19 前端
   ipc/           # 型別安全的 Tauri IPC 封裝
 docs/            # 規格文件與實作計畫
 ```
+# QuantTrading
