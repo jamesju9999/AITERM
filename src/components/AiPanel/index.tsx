@@ -152,7 +152,9 @@ ${dirList || "（無法取得）"}
     try {
       const lastMsg = history[history.length - 1].content;
       reply = await aiChat(lastMsg, systemPrompt, history.slice(0, -1));
-    } catch {
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      chat.addMessage({ role: "assistant", content: `⚠ Agent 錯誤：${msg}` });
       setAgentRunning(false);
       return;
     }
@@ -173,9 +175,26 @@ ${dirList || "（無法取得）"}
 
     const cmd = cmdMatch[1].trim();
 
-    // Execute and wait for completion
+    // Execute and wait for completion.
+    // No fixed timeout — the user can press "■ 停止" for long-running commands.
+    // We poll agentAbortRef so the stop button works even while waiting for OSC 133.
+    let completed = false;
     await new Promise<void>((resolve) => {
+      const abortPoll = setInterval(() => {
+        if (agentAbortRef.current) {
+          clearInterval(abortPoll);
+          if (!completed) {
+            completed = true;
+            setAgentRunning(false);
+            resolve();
+          }
+        }
+      }, 500);
+
       onExecuteCommand(cmd, async (block) => {
+        clearInterval(abortPoll);
+        if (completed) return; // abort already fired
+        completed = true;
         if (agentAbortRef.current) { setAgentRunning(false); resolve(); return; }
 
         const rawOutput = await getPtyRecentOutput(sessionId).catch(() => null)
@@ -208,7 +227,9 @@ ${dirList || "（無法取得）"}
     let systemPrompt: string;
     try {
       systemPrompt = await buildAgentSystemPrompt();
-    } catch {
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      chat.addMessage({ role: "assistant", content: `⚠ 無法取得工作目錄資訊：${msg}` });
       setAgentRunning(false);
       return;
     }
