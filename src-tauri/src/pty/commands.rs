@@ -57,6 +57,20 @@ pub fn pty_close(
     manager.close(&id)
 }
 
+/// Return the shell type for a PTY session ("pwsh", "cmd", "bash", or "unknown").
+#[tauri::command]
+pub fn pty_get_shell_type(
+    manager: State<'_, PtyManager>,
+    id: String,
+) -> Option<String> {
+    manager.get_shell_variant(&id).map(|v| match v {
+        super::cd_parser::ShellVariant::Pwsh => "pwsh".into(),
+        super::cd_parser::ShellVariant::Cmd => "cmd".into(),
+        super::cd_parser::ShellVariant::Bash => "bash".into(),
+        super::cd_parser::ShellVariant::Unknown => "unknown".into(),
+    })
+}
+
 /// Normalize a path to use forward slashes on all platforms.
 fn norm(p: impl AsRef<std::path::Path>) -> String {
     p.as_ref().to_string_lossy().replace('\\', "/")

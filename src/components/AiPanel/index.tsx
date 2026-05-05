@@ -5,7 +5,7 @@ import {
 import { useAiChat } from "../../hooks/useAiChat";
 import { aiChat } from "../../ipc/ai";
 import { getSessionCwd, listDirectory } from "../../ipc/fs";
-import { getPtyRecentOutput } from "../../ipc/pty";
+import { getPtyRecentOutput, getPtyShellType } from "../../ipc/pty";
 import { getConfig } from "../../ipc/config";
 import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
 import { MessageList } from "./MessageList";
@@ -99,9 +99,10 @@ export function AiPanel({
       .catch(() => {});
   }, []);
 
-  /** Build system prompt with live CWD + dir listing. */
+  /** Build system prompt with live CWD + dir listing + shell type. */
   const buildAgentSystemPrompt = useCallback(async (): Promise<string> => {
     const cwd = await getSessionCwd(sessionId).catch(() => null) ?? "(unknown)";
+    const shellType = await getPtyShellType(sessionId).catch(() => null) ?? "unknown";
     let dirList = "";
     try {
       const entries = await listDirectory(sessionId, "");
@@ -111,8 +112,15 @@ export function AiPanel({
         .join("\n");
     } catch { /* ignore */ }
 
+    const shellHint =
+      shellType === "cmd" ? "目前使用 cmd.exe，請使用 cmd 語法（不要使用 PowerShell 語法如 &、Get-ChildItem 等）。" :
+      shellType === "pwsh" ? "目前使用 PowerShell，請使用 PowerShell 語法。" :
+      shellType === "bash" ? "目前使用 Bash/Zsh，請使用 POSIX shell 語法。" :
+      "";
+
     return `你是一個終端機 Agent，可透過 <cmd>...</cmd> 標籤執行 shell 指令，並根據結果迭代完成使用者的目標。
 
+目前 Shell：${shellType}
 目前工作目錄：${cwd}
 目錄內容（前 60 個項目）：
 ${dirList || "（無法取得）"}
@@ -122,7 +130,8 @@ ${dirList || "（無法取得）"}
 2. 系統會自動執行並將結果回傳，請繼續分析直到目標完成。
 3. 目標完成後，用繁體中文給出最終說明，不要再給 <cmd> 標籤。
 4. 不要執行破壞性或不可逆的操作（如 rm -rf /）。
-5. 所有說明使用繁體中文。`;
+5. 所有說明使用繁體中文。
+6. ${shellHint}`;
   }, [sessionId]);
 
   /**
