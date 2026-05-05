@@ -99,6 +99,10 @@ pub fn run() {
                 .expect("parent dir")
                 .to_path_buf();
 
+            let contents_dir = exe_dir.parent()
+                .expect("Contents dir")
+                .to_path_buf();
+
             let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
             #[cfg(target_arch = "aarch64")]
@@ -108,10 +112,7 @@ pub fn run() {
 
             let candidates = [
                 // Production: Tauri resources land in Contents/Resources/
-                exe_dir.parent()
-                    .expect("Contents dir")
-                    .join("Resources")
-                    .join("db2-sidecar"),
+                contents_dir.join("Resources").join("db2-sidecar"),
                 // Dev: local build output
                 manifest_dir
                     .join("binaries")
@@ -122,9 +123,7 @@ pub fn run() {
             candidates
                 .into_iter()
                 .find(|p| p.exists())
-                .unwrap_or_else(|| exe_dir.parent().expect("Contents dir")
-                    .join("Resources")
-                    .join("db2-sidecar"))
+                .unwrap_or_else(|| contents_dir.join("Resources").join("db2-sidecar"))
         }
         #[cfg(target_os = "linux")]
         {
