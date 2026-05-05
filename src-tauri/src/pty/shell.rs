@@ -21,16 +21,84 @@ pub fn default_shell() -> Option<ShellSpec> {
 
 #[cfg(windows)]
 fn windows_default_shell() -> Option<ShellSpec> {
-    for candidate in ["pwsh.exe", "powershell.exe", "cmd.exe"] {
+    for candidate in ["pwsh.exe", "powershell.exe"] {
         if which_on_path(candidate).is_some() {
-            return Some(ShellSpec {
-                program: PathBuf::from(candidate),
-                args: vec![],
-                envs: vec![],
-            });
+            return Some(inject_powershell_integration(PathBuf::from(candidate)));
         }
     }
+    if which_on_path("cmd.exe").is_some() {
+        return Some(inject_cmd_integration());
+    }
     None
+}
+
+/// Inject OSC 133 shell integration into PowerShell (pwsh.exe / powershell.exe).
+///
+/// Overrides the `prompt` function to emit D (command finished) and A (prompt start)
+/// markers. The prompt runs after every command — including those sent programmatically
+/// via PTY — so no preexec hook is needed. The exit code is captured from `$?` and
+/// `$LASTEXITCODE`. The user's original prompt function is preserved and called inside
+/// our wrapper.
+#[cfg(windows)]
+fn inject_powershell_integration(program: PathBuf) -> ShellSpec {
+    let temp_dir = std::env::temp_dir().join("aiterm_ps");
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let script_path = temp_dir.join("shell_integration.ps1");
+
+    let script = r#"
+# ── AITerm Shell Integration (PowerShell) ──
+$global:__aiterm_orig_prompt = if (Test-Path Function:\prompt) { ${function:prompt} } else { $null }
+
+function global:prompt {
+    # Capture success/exit code FIRST — later statements would overwrite $?
+    $wasSuccess = $?
+    $origExit = $global:LASTEXITCODE
+    $ec = if ($wasSuccess) { 0 } else { if ($origExit) { $origExit } else { 1 } }
+
+    [Console]::Write("$([char]27)]133;D;$ec$([char]7)")
+    [Console]::Write("$([char]27)]133;A$([char]7)")
+
+    if ($global:__aiterm_orig_prompt) {
+        & $global:__aiterm_orig_prompt
+    } else {
+        "PS $($executionContext.SessionState.Path.CurrentLocation)$('>' * ($nestedPromptLevel + 1)) "
+    }
+
+    # Restore so user scripts are not affected by our prompt logic
+    $global:LASTEXITCODE = $origExit
+}
+"#;
+    let _ = std::fs::write(&script_path, script);
+
+    ShellSpec {
+        program,
+        // -NoExit keeps the session interactive; -Command runs AFTER the user's profile
+        // loads, so our prompt wrapper overrides whatever the profile set.
+        args: vec![
+            "-NoExit".into(),
+            "-Command".into(),
+            format!(". '{}'", script_path.display()),
+        ],
+        envs: vec![],
+    }
+}
+
+/// Inject OSC 133 markers into cmd.exe via the PROMPT environment variable.
+///
+/// cmd.exe has no preexec/precmd hooks, so D is emitted unconditionally on every
+/// prompt. The frontend ignores D when no block is running, so this is safe.
+/// Exit codes cannot be embedded in cmd.exe's PROMPT, so D carries no exit code
+/// (the frontend defaults to 0).
+/// `$E` = ESC; `$E\` = ESC + backslash = ST (String Terminator for OSC).
+#[cfg(windows)]
+fn inject_cmd_integration() -> ShellSpec {
+    ShellSpec {
+        program: PathBuf::from("cmd.exe"),
+        args: vec![],
+        envs: vec![
+            ("PROMPT".into(), "$E]133;D$E\\$E]133;A$E\\$P$G".into()),
+        ],
+    }
 }
 
 #[cfg(not(windows))]
