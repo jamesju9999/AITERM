@@ -91,17 +91,40 @@ pub fn run() {
                 .find(|p| p.exists())
                 .unwrap_or_else(|| exe_dir.join("db2-sidecar.exe"))
         }
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        #[cfg(target_os = "macos")]
         {
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("binaries")
-                .join("db2-sidecar-aarch64-apple-darwin")
-        }
-        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-        {
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("binaries")
-                .join("db2-sidecar-x86_64-apple-darwin")
+            let exe_dir = std::env::current_exe()
+                .expect("current_exe")
+                .parent()
+                .expect("parent dir")
+                .to_path_buf();
+
+            let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+            #[cfg(target_arch = "aarch64")]
+            let dev_subdir = "db2-sidecar-mac-arm64";
+            #[cfg(target_arch = "x86_64")]
+            let dev_subdir = "db2-sidecar-mac-x64";
+
+            let candidates = [
+                // Production: Tauri resources land in Contents/Resources/
+                exe_dir.parent()
+                    .expect("Contents dir")
+                    .join("Resources")
+                    .join("db2-sidecar"),
+                // Dev: local build output
+                manifest_dir
+                    .join("binaries")
+                    .join(dev_subdir)
+                    .join("db2-sidecar"),
+            ];
+
+            candidates
+                .into_iter()
+                .find(|p| p.exists())
+                .unwrap_or_else(|| exe_dir.parent().expect("Contents dir")
+                    .join("Resources")
+                    .join("db2-sidecar"))
         }
         #[cfg(target_os = "linux")]
         {
