@@ -31,6 +31,11 @@ export function getPtyRecentOutput(id: string): Promise<string | null> {
   return invoke<string | null>("pty_get_recent_output", { id });
 }
 
+/** Return the shell type for a session ("pwsh", "cmd", "bash", or "unknown"). */
+export function getPtyShellType(id: string): Promise<string | null> {
+  return invoke<string | null>("pty_get_shell_type", { id });
+}
+
 /**
  * Subscribe to PTY output for a given session. Returns an unlisten function.
  * The callback receives already-decoded bytes as a Uint8Array.

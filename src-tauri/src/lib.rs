@@ -42,8 +42,8 @@ use commands::{
 use config::ConfigStore;
 use db::{design::DesignDb, manager::DbManager, Db2SidecarState};
 use pty::commands::{
-    pty_close, pty_create, pty_get_cwd, pty_get_recent_output, pty_list_dir, pty_read_file,
-    pty_resize, pty_write,
+    pty_close, pty_create, pty_get_cwd, pty_get_recent_output, pty_get_shell_type,
+    pty_list_dir, pty_read_file, pty_resize, pty_write,
 };
 use pty::PtyManager;
 use secret::SecretStore;
@@ -137,6 +137,7 @@ pub fn run() {
             pty_close,
             pty_get_cwd,
             pty_get_recent_output,
+            pty_get_shell_type,
             pty_list_dir,
             pty_read_file,
             // AI query
