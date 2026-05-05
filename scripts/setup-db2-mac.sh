@@ -23,8 +23,10 @@ curl -L "$CLIDRIVER_URL" -o "$TMP/macos64_odbc_cli.tar.gz"
 
 echo "==> Extracting clidriver..."
 tar -xzf "$TMP/macos64_odbc_cli.tar.gz" -C "$TMP"
-# IBM extracts as "clidriver/" at the top level
-cp -R "$TMP/clidriver" "$DEST/clidriver"
+# IBM's tar extracts as clidriver/ (outer, contains Windows DLLs) with
+# a nested clidriver/clidriver/ (inner, contains the actual macOS dylibs).
+# We want the inner one at $DEST/clidriver/.
+cp -R "$TMP/clidriver/clidriver" "$DEST/clidriver"
 rm -rf "$TMP"
 
 echo "==> Making sidecar binary executable..."
