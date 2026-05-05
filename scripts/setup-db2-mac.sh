@@ -15,6 +15,7 @@ echo "==> Building db2-sidecar for osx-arm64..."
   -o "../$DEST" \
   -p:PublishSingleFile=true \
   --nologo -v quiet)
+test -f "$DEST/db2-sidecar" || { echo "ERROR: dotnet publish produced no binary at $DEST/db2-sidecar"; exit 1; }
 
 echo "==> Downloading IBM macOS clidriver (~100MB)..."
 TMP=$(mktemp -d)
