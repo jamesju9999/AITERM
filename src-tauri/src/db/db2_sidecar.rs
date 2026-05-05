@@ -54,6 +54,23 @@ impl Db2SidecarClient {
             }
         }
 
+        #[cfg(target_os = "macos")]
+        {
+            let clidriver = sidecar_dir.join("clidriver");
+            if clidriver.exists() {
+                cmd.env("DB2_CLI_DRIVER_INSTALL_PATH", &clidriver);
+                let clidriver_lib = clidriver.join("lib");
+                if clidriver_lib.exists() {
+                    let old = std::env::var_os("DYLD_LIBRARY_PATH").unwrap_or_default();
+                    let mut new_path = std::ffi::OsString::new();
+                    new_path.push(&clidriver_lib);
+                    new_path.push(":");
+                    new_path.push(old);
+                    cmd.env("DYLD_LIBRARY_PATH", new_path);
+                }
+            }
+        }
+
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 anyhow::anyhow!("db2_sidecar_not_found: {}", path.display())
