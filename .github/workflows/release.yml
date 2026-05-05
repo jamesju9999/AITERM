@@ -45,10 +45,16 @@ jobs:
         with:
           workspaces: src-tauri
 
-      # macOS: DB2 adapter requires unixODBC
-      - name: Install unixODBC (macOS)
+      # macOS: download pre-built DB2 sidecar binaries (binary + clidriver) from dedicated release
+      - name: Download DB2 sidecar binaries (macOS)
         if: matrix.os == 'macos-latest'
-        run: brew install unixodbc
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download v0.0.0-db2-binaries --pattern "db2-sidecar-mac-arm64.zip" --repo ${{ github.repository }}
+          mkdir -p src-tauri/binaries
+          unzip -q db2-sidecar-mac-arm64.zip -d src-tauri/binaries/
+          chmod +x src-tauri/binaries/db2-sidecar-mac-arm64/db2-sidecar
 
       # Windows: reqwest uses rustls-tls, tiberius uses native-tls (Schannel) — no OpenSSL needed
 
