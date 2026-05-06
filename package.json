@@ -10,8 +10,8 @@
     "preview": "vite preview",
     "db2-sidecar:publish": "dotnet publish db2-sidecar\\db2-sidecar.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=false -o db2-sidecar\\bin\\publish-win-x64-nonsingle",
     "tauri": "tauri",
-    "tauri:dev": "npm run db2-sidecar:publish && scripts\\msvc-wrap.bat tauri dev",
-    "tauri:build": "npm run db2-sidecar:publish && scripts\\msvc-wrap.bat tauri build",
+    "tauri:dev": "node scripts/tauri-dev.js",
+    "tauri:build": "node scripts/tauri-build.js",
     "test": "vitest run"
   },
   "dependencies": {
