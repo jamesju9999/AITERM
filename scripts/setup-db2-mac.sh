@@ -29,7 +29,8 @@ tar -xzf "$TMP/macos64_odbc_cli.tar.gz" -C "$TMP"
 cp -R "$TMP/clidriver/clidriver" "$DEST/clidriver"
 rm -rf "$TMP"
 
-echo "==> Making sidecar binary executable..."
+echo "==> Fixing permissions (IBM clidriver ships r-xr-xr-x; Tauri build needs u+rw to overwrite)..."
+chmod -R u+rw "$DEST/clidriver"
 chmod +x "$DEST/db2-sidecar"
 
 echo ""
