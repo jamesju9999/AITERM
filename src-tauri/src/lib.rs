@@ -67,29 +67,18 @@ pub fn run() {
             let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
             let candidates = [
-                // Production: resources bundle flattens db2-sidecar-win-x64/ into app dir
-                exe_dir.join("db2-sidecar.exe"),
-                // Legacy: externalBin with target triple suffix (kept for compatibility)
-                exe_dir.join("db2-sidecar-x86_64-pc-windows-msvc.exe"),
-                // Dev: local publish output
-                manifest_dir
-                    .parent()
-                    .expect("workspace root")
-                    .join("db2-sidecar")
-                    .join("bin")
-                    .join("publish-win-x64-nonsingle")
-                    .join("db2-sidecar.exe"),
+                // Production: resources bundle into exe_dir/db2-sidecar/
+                exe_dir.join("db2-sidecar"),
                 // Dev: binaries dir
                 manifest_dir
                     .join("binaries")
-                    .join("db2-sidecar-win-x64")
-                    .join("db2-sidecar.exe"),
+                    .join("db2-sidecar-win-x64"),
             ];
 
             candidates
                 .into_iter()
-                .find(|p| p.exists())
-                .unwrap_or_else(|| exe_dir.join("db2-sidecar.exe"))
+                .find(|p| p.join("db2sidecar.jar").exists())
+                .unwrap_or_else(|| exe_dir.join("db2-sidecar"))
         }
         #[cfg(target_os = "macos")]
         {
@@ -111,18 +100,17 @@ pub fn run() {
             let dev_subdir = "db2-sidecar-mac-x64";
 
             let candidates = [
-                // Production: Tauri resources land in Contents/Resources/
+                // Production: Tauri resources land in Contents/Resources/db2-sidecar/
                 contents_dir.join("Resources").join("db2-sidecar"),
                 // Dev: local build output
                 manifest_dir
                     .join("binaries")
-                    .join(dev_subdir)
-                    .join("db2-sidecar"),
+                    .join(dev_subdir),
             ];
 
             candidates
                 .into_iter()
-                .find(|p| p.exists())
+                .find(|p| p.join("db2sidecar.jar").exists())
                 .unwrap_or_else(|| contents_dir.join("Resources").join("db2-sidecar"))
         }
         #[cfg(target_os = "linux")]
