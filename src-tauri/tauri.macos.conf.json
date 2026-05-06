@@ -2,7 +2,7 @@
   "bundle": {
     "externalBin": [],
     "resources": {
-      "binaries/db2-sidecar-mac-arm64": "."
+      "binaries/db2-sidecar-mac-arm64": "db2-sidecar"
     }
   }
 }

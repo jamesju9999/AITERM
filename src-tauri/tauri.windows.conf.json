@@ -2,7 +2,7 @@
   "bundle": {
     "externalBin": [],
     "resources": {
-      "binaries/db2-sidecar-win-x64": "."
+      "binaries/db2-sidecar-win-x64": "db2-sidecar"
     }
   }
 }
