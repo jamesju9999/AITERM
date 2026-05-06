@@ -69,6 +69,11 @@ impl Db2SidecarClient {
                     cmd.env("DYLD_LIBRARY_PATH", new_path);
                 }
             }
+            // macOS may report locale LCID 0x1000 (custom locale) which .NET rejects.
+            // Pinning LANG to a well-known locale avoids the CultureNotFoundException.
+            if std::env::var_os("LANG").is_none() {
+                cmd.env("LANG", "en_US.UTF-8");
+            }
         }
 
         let mut child = cmd.spawn().map_err(|e| {
