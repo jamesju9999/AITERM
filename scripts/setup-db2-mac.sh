@@ -10,8 +10,8 @@ CLIDRIVER_URL="https://public.dhe.ibm.com/ibmdl/export/pub/software/data/db2/dri
 echo "==> Creating output directory: $DEST"
 mkdir -p "$DEST"
 
-echo "==> Building db2-sidecar for osx-arm64..."
-(cd db2-sidecar && dotnet publish -r osx-arm64 --self-contained \
+echo "==> Building db2-sidecar for osx-x64 (IBM clidriver is x86_64; runs via Rosetta 2 on Apple Silicon)..."
+(cd db2-sidecar && dotnet publish -r osx-x64 --self-contained \
   -o "../$DEST" \
   -p:PublishSingleFile=true \
   --nologo -v quiet)
