@@ -10,7 +10,7 @@ const GITHUB_URL = "https://github.com/jamesju9999/AITERM";
 const TAGS_API = "https://api.github.com/repos/jamesju9999/AITERM/tags";
 const RELEASES_URL = "https://github.com/jamesju9999/AITERM/releases";
 
-type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "error";
+type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "unavailable" | "error";
 
 export function AboutPage() {
   const { t } = useLocale();
@@ -30,6 +30,7 @@ export function AboutPage() {
     setUpdateStatus("checking");
     try {
       const res = await fetch(TAGS_API);
+      if (res.status === 404) { setUpdateStatus("unavailable"); return; }
       if (!res.ok) throw new Error("network");
       const tags = await res.json() as { name: string }[];
       if (tags.length === 0) {
@@ -63,6 +64,7 @@ export function AboutPage() {
             </button>
           </span>
         );
+      case "unavailable": return <span>{t.about_update_unavailable}</span>;
       case "error": return <span>{t.about_update_error}</span>;
       default: return null;
     }
