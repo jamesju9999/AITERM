@@ -102,6 +102,13 @@ public class CommandHandler {
             r.error = "conn_not_found";
             return r;
         }
+        if (req.schema == null) {
+            Response r = new Response();
+            r.id = req.id;
+            r.ok = false;
+            r.error = "missing_field:schema";
+            return r;
+        }
         String schema = req.schema.replace("'", "''");
         String sql = "SELECT TABNAME, TYPE FROM SYSCAT.TABLES " +
                      "WHERE TABSCHEMA = '" + schema + "' ORDER BY TABNAME";
@@ -115,6 +122,13 @@ public class CommandHandler {
             r.id = req.id;
             r.ok = false;
             r.error = "conn_not_found";
+            return r;
+        }
+        if (req.schema == null || req.table == null) {
+            Response r = new Response();
+            r.id = req.id;
+            r.ok = false;
+            r.error = "missing_field:" + (req.schema == null ? "schema" : "table");
             return r;
         }
         String schema = req.schema.replace("'", "''");
@@ -156,7 +170,8 @@ public class CommandHandler {
                     r.rows = rows;
                 }
             } else {
-                r.affectedRows = (long) stmt.getUpdateCount();
+                int count = stmt.getUpdateCount();
+                if (count >= 0) r.affectedRows = (long) count;
             }
             return r;
         } catch (SQLException e) {
