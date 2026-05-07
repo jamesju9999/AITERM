@@ -32,6 +32,10 @@ tar -xzf "$TMP/jre.tar.gz" -C "$TMP"
 # On Linux, Temurin extracts as jdk-21.*-jre/ (no Contents/Home wrapper)
 JRE_DIR=$(find "$TMP" -maxdepth 1 -name "jdk-*-jre" -type d | head -1)
 if [[ -z "$JRE_DIR" ]]; then
+  # Some builds extract as a .jre directory
+  JRE_DIR=$(find "$TMP" -maxdepth 1 -name "*.jre" -type d | head -1)
+fi
+if [[ -z "$JRE_DIR" ]]; then
   echo "ERROR: Could not locate extracted JRE directory in $TMP"
   ls "$TMP"
   exit 1
