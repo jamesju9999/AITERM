@@ -1,6 +1,6 @@
 # AITerm
 
-[English](#english) | [繁體中文](#繁體中文)
+**[🌐 Official Website](https://jamesju9999.github.io/aiterm-site/)** | [English](#english) | [繁體中文](#繁體中文)
 
 ---
 
