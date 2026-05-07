@@ -66,6 +66,7 @@ sudo dpkg -i aiterm_*.deb
 - _DB2 support_: Run the platform setup script once to build the sidecar and download the bundled JRE:
   - macOS: `bash scripts/setup-db2-mac.sh`
   - Windows: `pwsh scripts/setup-db2-win.ps1`
+  - Linux: `bash scripts/setup-db2-linux.sh`
 
 ### Development
 ```bash
@@ -170,6 +171,7 @@ sudo dpkg -i aiterm_*.deb
 - _DB2 支援_：執行一次平台設定腳本，以建置 Sidecar 並下載內附 JRE：
   - macOS：`bash scripts/setup-db2-mac.sh`
   - Windows：`pwsh scripts/setup-db2-win.ps1`
+  - Linux：`bash scripts/setup-db2-linux.sh`
 
 ### 開發測試
 ```bash
