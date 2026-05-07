@@ -88,11 +88,16 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
+      # Ad-hoc sign the macOS bundle so Gatekeeper shows "unidentified developer"
+      # (right-click → Open to bypass) instead of the harder-to-dismiss "damaged" error.
+      # Full notarization requires an Apple Developer account; use APPLE_CERTIFICATE
+      # and APPLE_ID secrets when available.
       - name: Build (macOS arm64)
         if: matrix.os == 'macos-latest'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: "-"
         with:
           tagName: ${{ github.ref_name }}
           releaseName: AITerm ${{ github.ref_name }}
@@ -103,7 +108,11 @@ jobs:
             - **macOS** (Apple Silicon / Intel via Rosetta 2): 下載 `.dmg` 安裝檔
             - **Windows**: 下載 `-setup.exe` 安裝檔
 
-            > macOS 首次開啟可能需要在「系統設定 > 隱私與安全性」中允許執行。
+            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請開啟「終端機」執行：
+            > ```
+            > xattr -cr /Applications/AITerm.app
+            > ```
+            > 或在 Finder 中對 AITerm 按右鍵 → 「打開」→ 再次按「打開」。
           releaseDraft: true
           prerelease: false
           args: --target aarch64-apple-darwin

@@ -31,7 +31,15 @@ AITerm uses a modern Desktop architecture communicating via Tauri IPC (invoke + 
 
 ## 🚀 Getting Started
 
-### Prerequisites
+### Installing on macOS
+
+> **"AITerm is damaged and can't be opened"** — This message appears because the app is not yet notarized with Apple. Run the following command in Terminal after dragging AITerm to Applications, then try opening it again:
+> ```bash
+> xattr -cr /Applications/AITerm.app
+> ```
+> Alternatively, right-click AITerm in Finder → **Open** → **Open** to bypass Gatekeeper once.
+
+### Prerequisites (Development)
 - Rust 1.78+ (`rustup show`)
 - Node.js 20+ (`node -v`)
 - _Windows only_: Windows 11 with WebView2 runtime and MSVC build tools.
@@ -107,7 +115,15 @@ AITerm 採用現代化桌面應用架構，透過 Tauri IPC（invoke + events）
 
 ## 🚀 快速開始
 
-### 環境要求
+### macOS 安裝說明
+
+> **「AITerm 已損毀，無法打開」** — 這是因為 App 尚未通過 Apple 公證（notarization）。將 AITerm 拖入「應用程式」後，在「終端機」執行以下指令，再重新開啟即可：
+> ```bash
+> xattr -cr /Applications/AITerm.app
+> ```
+> 或在 Finder 中對 AITerm 按右鍵 → **打開** → **打開**，即可略過 Gatekeeper 一次。
+
+### 環境要求（開發）
 - Rust 1.78+ (`rustup show`)
 - Node.js 20+ (`node -v`)
 - _僅限 Windows_：Windows 11（包含 WebView2 執行階段與 MSVC 建置工具）。
