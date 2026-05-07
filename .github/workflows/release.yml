@@ -22,6 +22,10 @@ jobs:
             target: x86_64-pc-windows-msvc
             rust_targets: x86_64-pc-windows-msvc
             artifact_name: windows
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            rust_targets: x86_64-unknown-linux-gnu
+            artifact_name: linux
 
     runs-on: ${{ matrix.os }}
 
@@ -44,6 +48,18 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      # Linux: install WebKitGTK and other Tauri system dependencies
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
 
       # Setup Java 21 (Temurin) + Maven — needed to build db2sidecar.jar from source
       - name: Setup Java 21
@@ -105,14 +121,18 @@ jobs:
             ## AITerm ${{ github.ref_name }}
 
             ### 下載
-            - **macOS** (Apple Silicon / Intel via Rosetta 2): 下載 `.dmg` 安裝檔
+            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
             - **Windows**: 下載 `-setup.exe` 安裝檔
+            - **Linux** (x86_64): 下載 `.AppImage`（免安裝）或 `.deb` 套件
 
-            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請開啟「終端機」執行：
+            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
             > ```
             > xattr -cr /Applications/AITerm.app
             > ```
-            > 或在 Finder 中對 AITerm 按右鍵 → 「打開」→ 再次按「打開」。
+            > **Linux AppImage：** 執行前需加執行權限：
+            > ```
+            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
+            > ```
           releaseDraft: false
           prerelease: false
           args: --target aarch64-apple-darwin
@@ -127,6 +147,48 @@ jobs:
           releaseName: AITerm ${{ github.ref_name }}
           releaseBody: |
             ## AITerm ${{ github.ref_name }}
+
+            ### 下載
+            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
+            - **Windows**: 下載 `-setup.exe` 安裝檔
+            - **Linux** (x86_64): 下載 `.AppImage`（免安裝）或 `.deb` 套件
+
+            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
+            > ```
+            > xattr -cr /Applications/AITerm.app
+            > ```
+            > **Linux AppImage：** 執行前需加執行權限：
+            > ```
+            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
+            > ```
           releaseDraft: false
           prerelease: false
           args: --target x86_64-pc-windows-msvc
+
+      - name: Build (Linux x64)
+        if: matrix.os == 'ubuntu-22.04'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: AITerm ${{ github.ref_name }}
+          releaseBody: |
+            ## AITerm ${{ github.ref_name }}
+
+            ### 下載
+            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
+            - **Windows**: 下載 `-setup.exe` 安裝檔
+            - **Linux** (x86_64): 下載 `.AppImage`（免安裝）或 `.deb` 套件
+
+            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
+            > ```
+            > xattr -cr /Applications/AITerm.app
+            > ```
+            > **Linux AppImage：** 執行前需加執行權限：
+            > ```
+            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
+            > ```
+          releaseDraft: false
+          prerelease: false
+          args: --target x86_64-unknown-linux-gnu
