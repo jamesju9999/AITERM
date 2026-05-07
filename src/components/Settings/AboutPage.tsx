@@ -6,9 +6,10 @@ import iconUrl from "../../../src-tauri/icons/128x128.png";
 import "./AboutPage.css";
 
 const GITHUB_URL = "https://github.com/jamesju9999/AITERM";
-// Use tags API instead of /releases/latest so draft releases are included in version tracking.
 const TAGS_API = "https://api.github.com/repos/jamesju9999/AITERM/tags";
 const RELEASES_URL = "https://github.com/jamesju9999/AITERM/releases";
+const releaseTagUrl = (tag: string) =>
+  `https://github.com/jamesju9999/AITERM/releases/tag/${tag.startsWith("v") ? tag : `v${tag}`}`;
 
 type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "unavailable" | "error";
 
@@ -58,7 +59,7 @@ export function AboutPage() {
             {t.about_update_available} v{latestVersion} —{" "}
             <button
               className="about-link-btn"
-              onClick={() => openUrl(RELEASES_URL).catch(console.error)}
+              onClick={() => openUrl(releaseTagUrl(latestVersion)).catch(console.error)}
             >
               {t.about_update_link}
             </button>
