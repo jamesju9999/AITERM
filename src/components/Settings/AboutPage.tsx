@@ -7,7 +7,6 @@ import "./AboutPage.css";
 
 const GITHUB_URL = "https://github.com/jamesju9999/AITERM";
 const TAGS_API = "https://api.github.com/repos/jamesju9999/AITERM/tags";
-const RELEASES_URL = "https://github.com/jamesju9999/AITERM/releases";
 const releaseTagUrl = (tag: string) =>
   `https://github.com/jamesju9999/AITERM/releases/tag/${tag.startsWith("v") ? tag : `v${tag}`}`;
 
