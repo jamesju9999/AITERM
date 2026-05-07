@@ -40,10 +40,29 @@ AITerm uses a modern Desktop architecture communicating via Tauri IPC (invoke + 
 > ```
 > Alternatively, right-click AITerm in Finder → **Open** → **Open** to bypass Gatekeeper once.
 
+### Installing on Linux
+
+Download the `.AppImage` or `.deb` from [GitHub Releases](https://github.com/jamesju9999/AITERM/releases/latest).
+
+**AppImage (no install required):**
+```bash
+chmod +x AITerm_*.AppImage
+./AITerm_*.AppImage
+```
+
+**Debian/Ubuntu `.deb`:**
+```bash
+sudo dpkg -i aiterm_*.deb
+```
+
 ### Prerequisites (Development)
 - Rust 1.78+ (`rustup show`)
 - Node.js 20+ (`node -v`)
 - _Windows only_: Windows 11 with WebView2 runtime and MSVC build tools.
+- _Linux only_: Ubuntu 22.04+. Install system libraries before building:
+  ```bash
+  sudo apt-get install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+  ```
 - _DB2 support_: Run the platform setup script once to build the sidecar and download the bundled JRE:
   - macOS: `bash scripts/setup-db2-mac.sh`
   - Windows: `pwsh scripts/setup-db2-win.ps1`
@@ -125,10 +144,29 @@ AITerm 採用現代化桌面應用架構，透過 Tauri IPC（invoke + events）
 > ```
 > 或在 Finder 中對 AITerm 按右鍵 → **打開** → **打開**，即可略過 Gatekeeper 一次。
 
+### Linux 安裝說明
+
+前往 [GitHub Releases](https://github.com/jamesju9999/AITERM/releases/latest) 下載最新 `.AppImage` 或 `.deb`。
+
+**AppImage（免安裝）：**
+```bash
+chmod +x AITerm_*.AppImage
+./AITerm_*.AppImage
+```
+
+**Debian/Ubuntu `.deb`：**
+```bash
+sudo dpkg -i aiterm_*.deb
+```
+
 ### 環境要求（開發）
 - Rust 1.78+ (`rustup show`)
 - Node.js 20+ (`node -v`)
 - _僅限 Windows_：Windows 11（包含 WebView2 執行階段與 MSVC 建置工具）。
+- _僅限 Linux_：Ubuntu 22.04+。建置前需安裝系統函式庫：
+  ```bash
+  sudo apt-get install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+  ```
 - _DB2 支援_：執行一次平台設定腳本，以建置 Sidecar 並下載內附 JRE：
   - macOS：`bash scripts/setup-db2-mac.sh`
   - Windows：`pwsh scripts/setup-db2-win.ps1`
