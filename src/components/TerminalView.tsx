@@ -22,6 +22,7 @@ import {
   type RiskLevel,
 } from "../ipc/ai";
 import { getConfig, type ExecutionMode, type SubmitShortcut } from "../ipc/config";
+import { getSessionCwd } from "../ipc/fs";
 import { useTerminalBlocks } from "../hooks/useTerminalBlocks";
 import { useAgentMission } from "../hooks/useAgentMission";
 import { useTelegramRemoteControl } from "../hooks/useTelegramRemoteControl";
@@ -104,6 +105,23 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const [panelOpen, setPanelOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [sessionId, setSessionId] = useState<string>("");
+
+  // Persist the active terminal's CWD to localStorage so it can be
+  // restored on the next session. Runs independently of FileExplorer.
+  useEffect(() => {
+    if (!sessionId) return;
+    let lastSaved = "";
+    const id = setInterval(async () => {
+      try {
+        const cwd = await getSessionCwd(sessionId);
+        if (cwd && cwd !== lastSaved) {
+          lastSaved = cwd;
+          localStorage.setItem("aiterm_last_cwd", cwd);
+        }
+      } catch { /* session may not be ready yet */ }
+    }, 2000);
+    return () => clearInterval(id);
+  }, [sessionId]);
 
   const panelOpenRef = useRef(false);
   useEffect(() => {
@@ -350,7 +368,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     const term = new Terminal({
       fontFamily: initFontFamily,
       fontSize: initFontSize,
-      lineHeight: 1.4,
+      lineHeight: 1.1,
       cursorBlink: true,
       theme: initTheme.xterm,
       convertEol: false,
@@ -564,7 +582,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     let ro: ResizeObserver | null = null;
     if (hostRef.current) {
       ro = new ResizeObserver(() => {
-        fit.fit();
+        requestAnimationFrame(() => fit.fit());
       });
       ro.observe(hostRef.current);
     }
