@@ -45,28 +45,25 @@ jobs:
         with:
           workspaces: src-tauri
 
-      # macOS: download pre-built DB2 sidecar binaries (binary + clidriver) from dedicated release
-      - name: Download DB2 sidecar binaries (macOS)
+      # Setup Java 21 (Temurin) + Maven — needed to build db2sidecar.jar from source
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # macOS: build Java sidecar from source and download bundled JRE
+      - name: Build DB2 sidecar (macOS)
         if: matrix.os == 'macos-latest'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release download v0.0.0-db2-binaries --pattern "db2-sidecar-mac-arm64.zip" --repo ${{ github.repository }}
-          mkdir -p src-tauri/binaries
-          unzip -q db2-sidecar-mac-arm64.zip -d src-tauri/binaries/
-          chmod +x src-tauri/binaries/db2-sidecar-mac-arm64/db2-sidecar
+        run: bash scripts/setup-db2-mac.sh
 
       # Windows: reqwest uses rustls-tls, tiberius uses native-tls (Schannel) — no OpenSSL needed
 
-      # Windows: download pre-built DB2 sidecar binaries from dedicated release
-      - name: Download DB2 sidecar binaries (Windows)
+      # Windows: build Java sidecar from source and download bundled JRE
+      - name: Build DB2 sidecar (Windows)
         if: matrix.os == 'windows-latest'
-        shell: powershell
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release download v0.0.0-db2-binaries --pattern "db2-sidecar-win-x64.zip" --repo ${{ github.repository }}
-          Expand-Archive -Path db2-sidecar-win-x64.zip -DestinationPath src-tauri/binaries/
+        shell: pwsh
+        run: pwsh -ExecutionPolicy Bypass -File scripts\setup-db2-win.ps1
 
       - name: Sync version from tag
         shell: node {0}
