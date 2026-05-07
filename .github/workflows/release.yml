@@ -113,7 +113,7 @@ jobs:
             > xattr -cr /Applications/AITerm.app
             > ```
             > 或在 Finder 中對 AITerm 按右鍵 → 「打開」→ 再次按「打開」。
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: --target aarch64-apple-darwin
 
@@ -127,6 +127,6 @@ jobs:
           releaseName: AITerm ${{ github.ref_name }}
           releaseBody: |
             ## AITerm ${{ github.ref_name }}
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: --target x86_64-pc-windows-msvc
