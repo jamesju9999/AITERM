@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLocale } from "../contexts/LocaleContext";
 import { listen } from "@tauri-apps/api/event";
+import { homeDir } from "@tauri-apps/api/path";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -105,18 +106,26 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const [panelOpen, setPanelOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [sessionId, setSessionId] = useState<string>("");
+  const [displayCwd, setDisplayCwd] = useState<string>("");
 
   // Persist the active terminal's CWD to localStorage so it can be
-  // restored on the next session. Runs independently of FileExplorer.
+  // restored on the next session. Also updates the status bar CWD display.
   useEffect(() => {
     if (!sessionId) return;
     let lastSaved = "";
+    let homePath = "";
+    homeDir().then((h) => { homePath = h.replace(/\\/g, "/").replace(/\/$/, ""); }).catch(() => {});
     const id = setInterval(async () => {
       try {
         const cwd = await getSessionCwd(sessionId);
         if (cwd && cwd !== lastSaved) {
           lastSaved = cwd;
           localStorage.setItem("aiterm_last_cwd", cwd);
+          const normalized = cwd.replace(/\\/g, "/");
+          const pretty = homePath && normalized.startsWith(homePath)
+            ? "~" + normalized.slice(homePath.length)
+            : normalized;
+          setDisplayCwd(pretty);
         }
       } catch { /* session may not be ready yet */ }
     }, 2000);
@@ -707,7 +716,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         </span>
       </div>
 
-      {/* Sub-tabs: Terminal | Files */}
+      {/* Sub-tabs: Terminal | Files | CWD path */}
       <div className="aiterm-subtabs">
         <button
           className={`aiterm-subtab ${viewTab === "terminal" ? "aiterm-subtab--active" : ""}`}
@@ -717,6 +726,12 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           className={`aiterm-subtab ${viewTab === "files" ? "aiterm-subtab--active" : ""}`}
           onClick={() => setViewTab("files")}
         >{t.files_tab}</button>
+        {displayCwd && (
+          <span className="aiterm-status-cwd" title={displayCwd}>
+            <span className="aiterm-status-cwd-icon">📁</span>
+            {displayCwd}
+          </span>
+        )}
       </div>
 
       <div style={{ position: "relative", flex: 1, minHeight: 0, width: "100%" }}>

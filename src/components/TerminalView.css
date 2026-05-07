@@ -26,6 +26,29 @@
   flex: 1;
 }
 
+.aiterm-status-cwd {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 2px 12px 4px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  color: #79c0ff;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+  opacity: 0.85;
+}
+
+.aiterm-status-cwd-icon {
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
 .aiterm-status-provider {
   background: transparent;
   border: none;

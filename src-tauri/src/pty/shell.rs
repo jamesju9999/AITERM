@@ -121,34 +121,67 @@ fn inject_shell_integration(program: PathBuf) -> ShellSpec {
     let mut envs = vec![];
     let mut args = vec![];
     
-    // For Zsh, override ZDOTDIR to inject our own .zshrc
+    // For Zsh, override ZDOTDIR to inject our own startup files.
     if program.ends_with("zsh") {
         let temp_dir = std::env::temp_dir().join("aiterm_zsh");
         let _ = std::fs::create_dir_all(&temp_dir);
-        let zshrc_path = temp_dir.join(".zshrc");
-        
+
+        // Preserve original ZDOTDIR so proxy files can source the real ones.
+        if let Ok(orig) = std::env::var("ZDOTDIR") {
+            envs.push(("AITERM_ORIG_ZDOTDIR".into(), orig));
+        }
+
+        // .zshenv — sources user's real .zshenv so PATH / env vars are correct.
+        // zsh reads this for every invocation (interactive + non-interactive).
+        let zshenv_content = r#"
+# ── AITerm: proxy user's .zshenv ──
+if [[ -n "$AITERM_ORIG_ZDOTDIR" && -f "$AITERM_ORIG_ZDOTDIR/.zshenv" ]]; then
+  source "$AITERM_ORIG_ZDOTDIR/.zshenv"
+elif [[ -f "$HOME/.zshenv" ]]; then
+  source "$HOME/.zshenv"
+fi
+"#;
+        let _ = std::fs::write(temp_dir.join(".zshenv"), zshenv_content);
+
+        // .zprofile — sources user's real .zprofile (login shell init).
+        let zprofile_content = r#"
+# ── AITerm: proxy user's .zprofile ──
+if [[ -n "$AITERM_ORIG_ZDOTDIR" && -f "$AITERM_ORIG_ZDOTDIR/.zprofile" ]]; then
+  source "$AITERM_ORIG_ZDOTDIR/.zprofile"
+elif [[ -f "$HOME/.zprofile" ]]; then
+  source "$HOME/.zprofile"
+fi
+"#;
+        let _ = std::fs::write(temp_dir.join(".zprofile"), zprofile_content);
+
+        // .zshrc — sources user's real .zshrc first, then appends AITerm hooks
+        // via add-zsh-hook so that oh-my-zsh / starship prompt hooks are preserved.
         // The guard variable __aiterm_cmd_running prevents the initial precmd
         // (which fires before any command is typed) from sending a false D marker.
         let zshrc_content = r#"
-# Source the user's real .zshrc if it exists
+# ── AITerm: proxy user's .zshrc ──
 if [[ -n "$AITERM_ORIG_ZDOTDIR" && -f "$AITERM_ORIG_ZDOTDIR/.zshrc" ]]; then
   source "$AITERM_ORIG_ZDOTDIR/.zshrc"
 elif [[ -f "$HOME/.zshrc" ]]; then
   source "$HOME/.zshrc"
 fi
 
-# Disable prompt_sp to prevent inverted % symbol from appearing when we output shell integration marks
-unsetopt prompt_sp
+# Disable prompt_sp to prevent an inverted % when we output OSC markers.
+unsetopt prompt_sp 2>/dev/null || true
 
-# ── AITerm Shell Integration ──
+# ── AITerm Shell Integration (OSC 133) ──
+# Use add-zsh-hook instead of overriding preexec/precmd directly so that
+# oh-my-zsh, starship, and other prompt frameworks keep their own hooks.
+autoload -Uz add-zsh-hook
+
 __aiterm_cmd_running=0
 
-preexec() {
+__aiterm_preexec() {
   __aiterm_cmd_running=1
   printf '\x1b]133;C\x07'
 }
 
-precmd() {
+__aiterm_precmd() {
   local ec=$?
   if [[ $__aiterm_cmd_running -eq 1 ]]; then
     __aiterm_cmd_running=0
@@ -156,14 +189,12 @@ precmd() {
   fi
   printf '\x1b]133;A\x07'
 }
+
+add-zsh-hook preexec __aiterm_preexec
+add-zsh-hook precmd __aiterm_precmd
 "#;
-        let _ = std::fs::write(&zshrc_path, zshrc_content);
-        
-        // Preserve original ZDOTDIR so the user's .zshrc in a custom location
-        // can still be found.
-        if let Ok(orig) = std::env::var("ZDOTDIR") {
-            envs.push(("AITERM_ORIG_ZDOTDIR".into(), orig));
-        }
+        let _ = std::fs::write(temp_dir.join(".zshrc"), zshrc_content);
+
         envs.push(("ZDOTDIR".into(), temp_dir.to_string_lossy().into_owned()));
     }
     // For Bash, inject via --rcfile

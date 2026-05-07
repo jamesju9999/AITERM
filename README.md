@@ -20,6 +20,7 @@ A powerful, cross-platform AI-enhanced terminal built with **Tauri 2**, **React 
 - **File Explorer**: Built-in sidebar file browser that automatically tracks and syncs with the current working directory of the active terminal session.
 - **Multi-Database Connectivity**: Native support for PostgreSQL, MySQL, SQLite, and ODBC data sources via SQLx. DB2 connectivity is available on both **macOS and Windows** via a bundled Java JDBC sidecar (IBM `db2jcc4.jar`, no native drivers required).
 - **i18n Support**: Full interface localization for English and Traditional Chinese (繁體中文), switchable at runtime.
+- **Telegram Remote Control**: Enable the 📱 Remote toggle in the terminal status bar to control the active terminal session via a Telegram Bot — send commands from your phone and receive output back as Telegram messages.
 - **Auto Update Check**: Built-in version checker in the About page that queries GitHub Releases and links directly to the specific release tag when an update is available.
 
 ## 🏗️ Architecture
@@ -103,6 +104,7 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 - **強大的終端機引擎**：基於 `xterm.js` 與 `portable-pty`，在 Windows、macOS 與 Linux 上提供快速、原生的 Shell 體驗，並支援 OSC 133 Shell 整合標記。
 - **檔案總管**：內建側邊欄檔案瀏覽器，可自動追蹤並同步目前活躍終端機的工作目錄。
 - **多資料庫連線**：透過 SQLx 原生支援 PostgreSQL、MySQL、SQLite 與 ODBC。DB2 連線在 **macOS 與 Windows** 均可使用，透過內建 Java JDBC Sidecar（IBM `db2jcc4.jar`）實現，無需安裝任何原生驅動程式。
+- **Telegram 遠端控制**：在終端機狀態列啟用 📱 Remote 開關，即可透過 Telegram Bot 從手機傳送指令至目前的終端機工作階段，並將輸出結果回傳至 Telegram 訊息。
 - **多語言介面**：完整支援英文與繁體中文介面，可於執行時即時切換。
 - **自動更新檢查**：「關於」頁面內建版本檢查器，查詢 GitHub Releases 並在有新版本時直接連結至對應的 Release Tag 頁面。
 
