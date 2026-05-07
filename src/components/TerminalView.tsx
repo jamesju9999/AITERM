@@ -379,7 +379,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     (async () => {
       try {
         const { rows, cols } = term;
-        const id = await createPty({ rows, cols });
+        const lastCwd = localStorage.getItem("aiterm_last_cwd") ?? undefined;
+        const id = await createPty({ rows, cols }, lastCwd);
         sessionRef.current = id;
         setSessionId(id);
         onSessionCreated?.(id);

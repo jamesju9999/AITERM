@@ -23,7 +23,7 @@ impl PtyManager {
     }
 
     /// High-level: spawn a session and wire its output to a Tauri event.
-    pub fn create_with_app(&self, app: AppHandle, size: PtySize) -> PtyResult<String> {
+    pub fn create_with_app(&self, app: AppHandle, size: PtySize, cwd: Option<PathBuf>) -> PtyResult<String> {
         let shell: ShellSpec = default_shell().ok_or(PtyError::NoShellAvailable)?;
 
         // Pre-generate id so the closure can reference it.
@@ -31,7 +31,7 @@ impl PtyManager {
         let event_name = data_event_name(&id);
         let app_for_thread = app.clone();
 
-        let session = PtySession::spawn_with_id(shell, size, id.clone(), move |chunk| {
+        let session = PtySession::spawn_with_id(shell, size, id.clone(), cwd, move |chunk| {
             let payload = PtyDataPayload {
                 base64: BASE64.encode(&chunk),
             };
@@ -50,7 +50,7 @@ impl PtyManager {
         F: FnMut(Vec<u8>) + Send + 'static,
     {
         let shell: ShellSpec = default_shell().ok_or(PtyError::NoShellAvailable)?;
-        let session = PtySession::spawn(shell, size, on_data)?;
+        let session = PtySession::spawn(shell, size, None, on_data)?;
         let id = session.id.clone();
         self.sessions.lock().insert(id.clone(), Arc::new(session));
         Ok(id)

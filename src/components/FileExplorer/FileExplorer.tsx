@@ -86,6 +86,7 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
         const newCwd = await getSessionCwd(sessionId);
         if (newCwd && newCwd !== ptyCwdRef.current) {
           ptyCwdRef.current = newCwd;
+          localStorage.setItem("aiterm_last_cwd", newCwd);
           loadDir(newCwd);
           setExpanded(new Set());
           setSubEntries({});

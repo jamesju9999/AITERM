@@ -27,8 +27,10 @@ pub fn pty_create(
     app: AppHandle,
     manager: State<'_, PtyManager>,
     size: PtySizeArg,
+    cwd: Option<String>,
 ) -> Result<String, PtyError> {
-    manager.create_with_app(app, size.into())
+    let cwd = cwd.map(std::path::PathBuf::from);
+    manager.create_with_app(app, size.into(), cwd)
 }
 
 #[tauri::command]

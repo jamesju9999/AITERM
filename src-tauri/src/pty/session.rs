@@ -30,7 +30,7 @@ pub struct PtySession {
 
 impl PtySession {
     /// Spawn a new shell. `on_data` receives every chunk read from the PTY on a background thread.
-    pub fn spawn<F>(shell: ShellSpec, size: PtySize, mut on_data: F) -> PtyResult<Self>
+    pub fn spawn<F>(shell: ShellSpec, size: PtySize, cwd: Option<PathBuf>, mut on_data: F) -> PtyResult<Self>
     where
         F: FnMut(Vec<u8>) + Send + 'static,
     {
@@ -47,9 +47,11 @@ impl PtySession {
         for (k, v) in shell.envs {
             cmd.env(k, v);
         }
-        if let Ok(cwd) = std::env::current_dir() {
-            cmd.cwd(cwd);
-        }
+        let initial_cwd = cwd
+            .filter(|p| p.is_dir())
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        cmd.cwd(&initial_cwd);
 
         let child = pair
             .slave
@@ -100,8 +102,6 @@ impl PtySession {
             })
             .map_err(|e| PtyError::Internal(format!("spawn reader thread: {e}")))?;
 
-        let initial_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
         Ok(Self {
             id,
             master: Mutex::new(pair.master),
@@ -123,6 +123,7 @@ impl PtySession {
         shell: ShellSpec,
         size: PtySize,
         id: String,
+        cwd: Option<PathBuf>,
         mut on_data: F,
     ) -> PtyResult<Self>
     where
@@ -141,9 +142,11 @@ impl PtySession {
         for (k, v) in shell.envs {
             cmd.env(k, v);
         }
-        if let Ok(cwd) = std::env::current_dir() {
-            cmd.cwd(cwd);
-        }
+        let initial_cwd = cwd
+            .filter(|p| p.is_dir())
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        cmd.cwd(&initial_cwd);
 
         let child = pair
             .slave
@@ -190,8 +193,6 @@ impl PtySession {
                 }
             })
             .map_err(|e| PtyError::Internal(format!("spawn reader thread: {e}")))?;
-
-        let initial_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
         Ok(Self {
             id,
