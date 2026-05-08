@@ -132,25 +132,33 @@ async fn build_adapter(
             .await?,
         )),
         DbType::Db2 => {
-            let cs = format!(
-                "jdbc:db2://{}:{}/{}",
-                conn.host, conn.port, conn.database
-            );
-            let username = conn.username.clone();
-            let password = password.to_string();
-            let client = sidecar.get_client().await?;
+            #[cfg(target_os = "linux")]
+            return Err(anyhow::anyhow!(
+                "DB2 is not supported on Linux. DB2 connectivity requires the Java sidecar, which is only bundled on macOS and Windows."
+            ));
 
-            match Db2Adapter::connect(client, cs.clone(), username.clone(), password.clone()).await {
-                Ok(adapter) => Ok(Box::new(adapter)),
-                Err(err) if is_db2_sidecar_transport_error(&err) => {
-                    // Recover from stale/crashed sidecar instance and retry once.
-                    sidecar.reset().await;
-                    let client = sidecar.get_client().await?;
-                    Ok(Box::new(
-                        Db2Adapter::connect(client, cs, username, password).await?,
-                    ))
+            #[cfg(not(target_os = "linux"))]
+            {
+                let cs = format!(
+                    "jdbc:db2://{}:{}/{}",
+                    conn.host, conn.port, conn.database
+                );
+                let username = conn.username.clone();
+                let password = password.to_string();
+                let client = sidecar.get_client().await?;
+
+                match Db2Adapter::connect(client, cs.clone(), username.clone(), password.clone()).await {
+                    Ok(adapter) => Ok(Box::new(adapter)),
+                    Err(err) if is_db2_sidecar_transport_error(&err) => {
+                        // Recover from stale/crashed sidecar instance and retry once.
+                        sidecar.reset().await;
+                        let client = sidecar.get_client().await?;
+                        Ok(Box::new(
+                            Db2Adapter::connect(client, cs, username, password).await?,
+                        ))
+                    }
+                    Err(err) => Err(err),
                 }
-                Err(err) => Err(err),
             }
         }
     }
