@@ -80,6 +80,10 @@ jobs:
             librsvg2-dev \
             patchelf \
             libssl-dev
+          # linuxdeploy is itself an AppImage; GitHub Actions runners don't have FUSE.
+          # APPIMAGE_EXTRACT_AND_RUN=1 makes AppImages extract+run without FUSE.
+          # Written to GITHUB_ENV so all subsequent steps (including tauri-action subprocesses) inherit it.
+          echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV"
 
       # Setup Java 21 (Temurin) + Maven — needed to build db2sidecar.jar from source (all platforms)
       - name: Setup Java 21
@@ -218,7 +222,6 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPIMAGE_EXTRACT_AND_RUN: "1"
         with:
           tagName: ${{ github.ref_name }}
           releaseName: AITerm ${{ github.ref_name }}
@@ -283,7 +286,6 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPIMAGE_EXTRACT_AND_RUN: "1"
         with:
           tagName: ${{ github.ref_name }}
           releaseName: AITerm ${{ github.ref_name }}
