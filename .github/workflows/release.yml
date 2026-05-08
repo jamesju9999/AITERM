@@ -115,7 +115,7 @@ jobs:
             'bundle': {
               'externalBin': [],
               'resources': {
-                'src-tauri/${{ matrix.db2_sidecar_dir }}': 'db2-sidecar'
+                '${{ matrix.db2_sidecar_dir }}': 'db2-sidecar'
               }
             }
           }
