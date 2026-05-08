@@ -42,6 +42,8 @@ AITerm uses a modern Desktop architecture communicating via Tauri IPC (invoke + 
 
 ### Installing on Linux
 
+> **Minimum requirement: Ubuntu 22.04 LTS** (or any distro with `libwebkit2gtk-4.1`). Ubuntu 20.04 and earlier are **not supported** — Tauri 2 requires WebKitGTK 4.1 which is unavailable on those releases.
+
 Download the `.AppImage` or `.deb` from [GitHub Releases](https://github.com/jamesju9999/AITERM/releases/latest).
 
 **AppImage (no install required):**
@@ -52,7 +54,7 @@ chmod +x AITerm_*.AppImage
 
 **Debian/Ubuntu `.deb`:**
 ```bash
-sudo dpkg -i aiterm_*.deb
+sudo apt install ./aiterm_*.deb
 ```
 
 ### Prerequisites (Development)
@@ -147,6 +149,8 @@ AITerm 採用現代化桌面應用架構，透過 Tauri IPC（invoke + events）
 
 ### Linux 安裝說明
 
+> **最低版本需求：Ubuntu 22.04 LTS**（或任何提供 `libwebkit2gtk-4.1` 的發行版）。Ubuntu 20.04 及更早版本**不支援**——Tauri 2 需要 WebKitGTK 4.1，而這些舊版本中不提供此函式庫。
+
 前往 [GitHub Releases](https://github.com/jamesju9999/AITERM/releases/latest) 下載最新 `.AppImage` 或 `.deb`。
 
 **AppImage（免安裝）：**
@@ -157,7 +161,7 @@ chmod +x AITerm_*.AppImage
 
 **Debian/Ubuntu `.deb`：**
 ```bash
-sudo dpkg -i aiterm_*.deb
+sudo apt install ./aiterm_*.deb
 ```
 
 ### 環境要求（開發）
