@@ -80,10 +80,12 @@ jobs:
             librsvg2-dev \
             patchelf \
             libssl-dev
-          # linuxdeploy is itself an AppImage; GitHub Actions runners don't have FUSE.
-          # APPIMAGE_EXTRACT_AND_RUN=1 makes AppImages extract+run without FUSE.
-          # Written to GITHUB_ENV so all subsequent steps (including tauri-action subprocesses) inherit it.
-          echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV"
+
+      # AppImage builds require libfuse2 (FUSE 2.x) to run linuxdeploy, which is itself an AppImage.
+      # Ubuntu 22.04 runners have the FUSE kernel module but not libfuse2 by default.
+      - name: Install libfuse2 for AppImage builds
+        if: matrix.os == 'ubuntu-22.04' || matrix.os == 'ubuntu-22.04-arm'
+        run: sudo apt-get install -y libfuse2
 
       # Setup Java 21 (Temurin) + Maven — needed to build db2sidecar.jar from source (all platforms)
       - name: Setup Java 21
