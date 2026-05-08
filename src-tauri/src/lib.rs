@@ -2,6 +2,7 @@ pub mod ai;
 pub mod commands;
 pub mod config;
 pub mod db;
+pub mod enterprise;
 pub mod guard;
 pub mod pty;
 pub mod secret;
@@ -9,7 +10,7 @@ pub mod telegram;
 pub mod vcs;
 
 use std::sync::Arc;
-
+use tokio::sync::Mutex;
 
 use ai::router::AiRouter;
 use commands::{
@@ -17,6 +18,11 @@ use commands::{
     config::{
         get_config, is_onboarding_done, set_default_tab, set_execution_mode, set_max_agent_steps,
         set_onboarding_done, set_submit_shortcut,
+    },
+    enterprise::{
+        enterprise_accept_task, enterprise_complete_task, enterprise_install_service,
+        enterprise_on_complete, enterprise_register_device, enterprise_reject_task,
+        enterprise_update_task_progress,
     },
     db::{
         db_add_connection, db_connect, db_disconnect, db_execute_query, db_get_table_schema,
@@ -41,12 +47,23 @@ use commands::{
 };
 use config::ConfigStore;
 use db::{design::DesignDb, manager::DbManager, Db2SidecarState};
+use enterprise::agent::EnterpriseTaskState;
+use enterprise::task_runner::VcsCredentialManager;
 use pty::commands::{
     pty_close, pty_create, pty_get_cwd, pty_get_recent_output, pty_get_shell_type,
     pty_list_dir, pty_read_file, pty_resize, pty_write,
 };
 use pty::PtyManager;
 use secret::SecretStore;
+
+/// Headless worker entry point — no Tauri GUI, just the enterprise agent loop.
+pub fn run_headless() {
+    let config = Arc::new(ConfigStore::new());
+    let secrets = Arc::new(SecretStore::new());
+
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    rt.block_on(enterprise::headless::run_headless(config, secrets));
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -128,18 +145,22 @@ pub fn run() {
             #[cfg(target_arch = "x86_64")]
             let dev_subdir = "db2-sidecar-linux-x64";
 
-            let candidates = [
-                // Production: AppImage ← {APPDIR}/usr/bin/aiterm → {APPDIR}/usr/lib/aiterm/db2-sidecar
-                //             .deb    ← /usr/bin/aiterm           → /usr/lib/aiterm/db2-sidecar
-                exe_dir.join("../../lib/aiterm/db2-sidecar"),
-                // Dev: local binaries directory
-                manifest_dir.join("binaries").join(dev_subdir),
-            ];
+            // Production: AppImage ← {APPDIR}/usr/bin/aiterm → {APPDIR}/usr/lib/aiterm/db2-sidecar
+            //             .deb    ← /usr/bin/aiterm           → /usr/lib/aiterm/db2-sidecar
+            let prod_path = exe_dir.join("../../lib/aiterm/db2-sidecar");
 
-            candidates
-                .into_iter()
-                .find(|p| p.join("db2sidecar.jar").exists())
-                .unwrap_or_else(|| manifest_dir.join("binaries").join(dev_subdir))
+            let found = [
+                prod_path.clone(),
+                // Dev: local binaries directory (CARGO_MANIFEST_DIR is a compile-time path
+                // valid only on the build machine — used only when prod_path doesn't exist)
+                manifest_dir.join("binaries").join(dev_subdir),
+            ]
+            .into_iter()
+            .find(|p| p.join("db2sidecar.jar").exists());
+
+            // Default to prod_path so error messages reference the expected on-device location,
+            // not the CI build machine's CARGO_MANIFEST_DIR.
+            found.unwrap_or(prod_path)
         }
     };
 
@@ -156,9 +177,12 @@ pub fn run() {
         .manage(DbManager::new())
         .manage(design_db)
         .manage(Db2SidecarState::new(sidecar_path))
+        .manage(Arc::new(Mutex::new(VcsCredentialManager::new())))
+        .manage(Arc::new(Mutex::new(EnterpriseTaskState::new())))
         .manage(tokio::sync::Mutex::new(telegram::TelegramState { active_task: None }))
         .setup(|app| {
             telegram::init(app.handle());
+            enterprise::agent::init(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -228,6 +252,14 @@ pub fn run() {
             design_advance_stage,
             design_save_file,
             design_delete_session,
+            // Enterprise
+            enterprise_accept_task,
+            enterprise_reject_task,
+            enterprise_register_device,
+            enterprise_update_task_progress,
+            enterprise_complete_task,
+            enterprise_on_complete,
+            enterprise_install_service,
             // Telegram
             telegram::telegram_get_config,
             telegram::telegram_set_config,
