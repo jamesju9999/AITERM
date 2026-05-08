@@ -81,11 +81,6 @@ jobs:
             patchelf \
             libssl-dev
 
-      # AppImage builds require libfuse2 (FUSE 2.x) to run linuxdeploy, which is itself an AppImage.
-      # Ubuntu 22.04 runners have the FUSE kernel module but not libfuse2 by default.
-      - name: Install libfuse2 for AppImage builds
-        if: matrix.os == 'ubuntu-22.04' || matrix.os == 'ubuntu-22.04-arm'
-        run: sudo apt-get install -y libfuse2
 
       # Setup Java 21 (Temurin) + Maven — needed to build db2sidecar.jar from source (all platforms)
       - name: Setup Java 21
@@ -107,16 +102,19 @@ jobs:
         shell: pwsh
         run: pwsh -ExecutionPolicy Bypass -File scripts\setup-db2-win.ps1
 
-      # Linux: build Java sidecar and patch tauri.linux.conf.json with arch-specific resources path
-      - name: Build DB2 sidecar (Linux)
-        if: startsWith(matrix.os, 'ubuntu')
+      # Linux .deb only: build Java sidecar and bundle it.
+      # AppImage builds intentionally skip DB2 — linuxdeploy fails when the JRE's .so
+      # files are in the AppDir (it tries to resolve libjvm.so's internal deps and errors out).
+      # Users who need DB2 on Linux should install the .deb package.
+      - name: Build DB2 sidecar (Linux .deb)
+        if: matrix.os == 'ubuntu-24.04' || matrix.os == 'ubuntu-24.04-arm'
         run: ARCH=${{ matrix.db2_arch }} bash scripts/setup-db2-linux.sh
 
-      - name: Patch tauri.linux.conf.json with DB2 resources (Linux)
-        if: startsWith(matrix.os, 'ubuntu')
+      - name: Patch tauri.linux.conf.json with DB2 resources (Linux .deb)
+        if: matrix.os == 'ubuntu-24.04' || matrix.os == 'ubuntu-24.04-arm'
         run: |
           python3 -c "
-          import json, sys
+          import json
           conf = {
             'bundle': {
               'externalBin': [],
