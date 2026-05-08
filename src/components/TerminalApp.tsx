@@ -12,8 +12,6 @@ import {
   onEnterpriseSkillInstalled,
   enterpriseAcceptTask,
   enterpriseRejectTask,
-  enterpriseCompleteTask,
-  enterpriseOnComplete,
   type TaskPacket,
   type TaskReadyPayload,
   type SkillInstalledPayload,
