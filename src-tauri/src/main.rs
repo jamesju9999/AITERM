@@ -2,5 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-  aiterm_lib::run();
+    if std::env::args().any(|a| a == "--headless") {
+        aiterm_lib::run_headless();
+    } else {
+        aiterm_lib::run();
+    }
 }

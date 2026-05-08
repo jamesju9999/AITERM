@@ -48,6 +48,18 @@ pub struct AppConfig {
     /// Saved VCS connections (tokens/passwords stored separately in Keychain).
     #[serde(default)]
     pub vcs_connections: Vec<VcsConnection>,
+
+    /// Enterprise Management Server URL. When set, enterprise mode is active.
+    #[serde(default)]
+    pub enterprise_server_url: Option<String>,
+
+    /// Unique device identifier assigned by the Management Server on registration.
+    #[serde(default)]
+    pub enterprise_device_id: Option<String>,
+
+    /// Policy pushed by the Management Server. Overrides local settings when present.
+    #[serde(default)]
+    pub enterprise_policy: Option<EnterprisePolicy>,
 }
 
 fn default_max_agent_steps() -> u32 { 5 }
@@ -255,6 +267,21 @@ pub struct VcsConnection {
     /// Write operation gating mode.
     #[serde(default)]
     pub write_mode: VcsWriteMode,
+}
+
+/// Policy pushed from the Management Server. Fields present here override local AppConfig.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EnterprisePolicy {
+    /// Version number — AITERM applies when this increases.
+    pub version: i64,
+    /// Override default AI provider id.
+    pub ai_provider_id: Option<String>,
+    /// Override execution mode.
+    pub execution_mode: Option<ExecutionMode>,
+    /// Max agent steps override.
+    pub max_agent_steps: Option<u32>,
+    /// VCS push branch pattern (informational, enforced by server).
+    pub vcs_push_pattern: Option<String>,
 }
 
 #[cfg(test)]

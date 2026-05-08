@@ -51,6 +51,10 @@ tokio-util = { version = "0.7", features = ["compat"] }
 
 rfd = "0.15"
 
+# Enterprise module
+chrono = { version = "0.4", features = ["serde"] }
+url = "2"
+
 [dev-dependencies]
 wiremock = "0.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

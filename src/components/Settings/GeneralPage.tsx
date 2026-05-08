@@ -35,6 +35,7 @@ export function GeneralPage() {
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
   const [saving, setSaving] = useState(false);
+  const [policyControlled, setPolicyControlled] = useState<{ execution_mode?: boolean; max_agent_steps?: boolean }>({});
 
   const MODES: { value: ExecutionMode; label: string; desc: string }[] = [
     { value: "always-confirm", label: t.mode_always_confirm_label, desc: t.mode_always_confirm_desc },
@@ -54,6 +55,12 @@ export function GeneralPage() {
       setShortcut(cfg.submit_shortcut);
       setMaxSteps(cfg.max_agent_steps ?? 5);
       setDefaultTabState(cfg.default_tab ?? "terminal");
+      if (cfg.enterprise_policy) {
+        setPolicyControlled({
+          execution_mode: !!cfg.enterprise_policy.execution_mode,
+          max_agent_steps: !!cfg.enterprise_policy.max_agent_steps,
+        });
+      }
     });
     import("../../ipc/telegram").then(({ getTelegramConfig }) => {
       getTelegramConfig().then(cfg => {
@@ -158,9 +165,14 @@ export function GeneralPage() {
       </section>
 
       <section className="settings-section">
-        <h3>{t.execution_mode}</h3>
+        <h3 style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {t.execution_mode}
+          {policyControlled.execution_mode && (
+            <span style={{ fontSize: 11, color: "#888", fontWeight: 400 }}>由管理者設定</span>
+          )}
+        </h3>
         <p className="section-desc">{t.execution_mode_desc}</p>
-        <div className="mode-list">
+        <div className="mode-list" style={{ opacity: policyControlled.execution_mode ? 0.5 : 1 }}>
           {MODES.map((m) => (
             <label key={m.value} className="mode-option">
               <input
@@ -169,7 +181,7 @@ export function GeneralPage() {
                 value={m.value}
                 checked={mode === m.value}
                 onChange={() => handleChange(m.value)}
-                disabled={saving}
+                disabled={saving || !!policyControlled.execution_mode}
               />
               <div className="mode-text">
                 <span className="mode-label">{m.label}</span>
@@ -181,14 +193,19 @@ export function GeneralPage() {
       </section>
 
       <section className="settings-section">
-        <h3>{t.agent_max_steps}</h3>
+        <h3 style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {t.agent_max_steps}
+          {policyControlled.max_agent_steps && (
+            <span style={{ fontSize: 11, color: "#888", fontWeight: 400 }}>由管理者設定</span>
+          )}
+        </h3>
         <p className="section-desc">{t.agent_max_steps_desc}</p>
-        <div className="step-select-row">
+        <div className="step-select-row" style={{ opacity: policyControlled.max_agent_steps ? 0.5 : 1 }}>
           <select
             className="step-select"
             value={maxSteps}
             onChange={(e) => handleMaxStepsChange(Number(e.target.value))}
-            disabled={saving}
+            disabled={saving || !!policyControlled.max_agent_steps}
           >
             {STEP_VALUES.map((v) => (
               <option key={v} value={v}>

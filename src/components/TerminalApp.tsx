@@ -6,6 +6,18 @@ import { DesignView } from "./DesignView/DesignView";
 import { CrossDbView } from "./CrossDbView";
 import { VcsView } from "./VcsView/VcsView";
 import { useLocale } from "../contexts/LocaleContext";
+import {
+  onEnterpriseTaskReceived,
+  onEnterpriseTaskReady,
+  onEnterpriseSkillInstalled,
+  enterpriseAcceptTask,
+  enterpriseRejectTask,
+  enterpriseCompleteTask,
+  enterpriseOnComplete,
+  type TaskPacket,
+  type TaskReadyPayload,
+  type SkillInstalledPayload,
+} from "../ipc/enterprise";
 
 const DEFAULT_TAB_STORAGE_KEY = "aiterm_default_tab";
 const SESSION_TABS_KEY = "aiterm-session-tabs";
@@ -64,6 +76,59 @@ export function TerminalApp() {
     // Persist tab layout for session restoration
     saveSessionTabs(tabs);
   }, [tabs, activeId, isSidebarOpen]);
+
+  // Enterprise: pending task notification + skill toast
+  const [pendingTask, setPendingTask] = useState<TaskPacket | null>(null);
+  const [skillToast, setSkillToast] = useState<SkillInstalledPayload | null>(null);
+
+  // Listen for enterprise events
+  useEffect(() => {
+    let unlistenTaskReceived: (() => void) | null = null;
+    let unlistenTaskReady: (() => void) | null = null;
+    let unlistenSkill: (() => void) | null = null;
+
+    onEnterpriseTaskReceived((packet) => {
+      setPendingTask(packet);
+    }).then((fn) => { unlistenTaskReceived = fn; });
+
+    onEnterpriseTaskReady((payload: TaskReadyPayload) => {
+      // Create a new terminal tab that auto-starts the agent loop in the cloned repo.
+      const newId = crypto.randomUUID();
+      const goal = [
+        payload.title,
+        payload.description,
+        payload.spec_content ? `\n\nSpec:\n${payload.spec_content}` : "",
+      ].filter(Boolean).join("\n\n");
+
+      setTabs((prev) => [
+        ...prev,
+        {
+          id: newId,
+          title: `⚙ ${payload.title.slice(0, 30)}`,
+          type: "terminal" as const,
+          initialCwd: payload.repo_dir,
+          initialMission: { goal, maxSteps: payload.max_steps },
+          enterpriseTask: {
+            taskId: payload.task_id,
+            workBranch: payload.work_branch,
+            onComplete: payload.on_complete,
+          },
+        },
+      ]);
+      setActiveId(newId);
+    }).then((fn) => { unlistenTaskReady = fn; });
+
+    onEnterpriseSkillInstalled((payload) => {
+      setSkillToast(payload);
+      setTimeout(() => setSkillToast(null), 8000);
+    }).then((fn) => { unlistenSkill = fn; });
+
+    return () => {
+      unlistenTaskReceived?.();
+      unlistenTaskReady?.();
+      unlistenSkill?.();
+    };
+  }, []);
 
   const handleAddTab = useCallback(() => {
     setPickerOpen(true);
@@ -250,11 +315,19 @@ export function TerminalApp() {
               ) : (
                 <TerminalView
                   isActive={isActive}
+                  initialCwd={tab.initialCwd}
+                  initialMission={tab.initialMission}
+                  enterpriseTask={tab.enterpriseTask}
                   onSessionCreated={(ptyId) => {
                     setTabs((prev) =>
                       prev.map((t) => t.id === tab.id ? { ...t, ptySessionId: ptyId } : t)
                     );
                     setLastTerminalPtyId(ptyId);
+                  }}
+                  onAgentProgress={(done, total) => {
+                    setTabs((prev) =>
+                      prev.map((t) => t.id === tab.id ? { ...t, agentProgress: { done, total } } : t)
+                    );
                   }}
                 />
               )}
@@ -262,6 +335,109 @@ export function TerminalApp() {
           );
         })}
       </div>
+
+      {/* Enterprise: Background Task Progress Panel (10.2) */}
+      {(() => {
+        const bgTasks = tabs.filter(
+          (t) => t.type === "terminal" && t.enterpriseTask && t.agentProgress && t.id !== activeId
+        );
+        if (bgTasks.length === 0) return null;
+        return (
+          <div style={{
+            position: "fixed", top: 16, right: 16, zIndex: 9998,
+            display: "flex", flexDirection: "column", gap: 8,
+          }}>
+            {bgTasks.map((t) => {
+              const prog = t.agentProgress!;
+              const pct = Math.round((prog.done / Math.max(prog.total, 1)) * 100);
+              return (
+                <div
+                  key={t.id}
+                  onClick={() => setActiveId(t.id)}
+                  style={{
+                    background: "#1e1e2e", border: "1px solid #3a3a6a", borderRadius: 6,
+                    padding: "8px 14px", minWidth: 220, cursor: "pointer",
+                    boxShadow: "0 2px 12px rgba(0,0,0,0.5)",
+                  }}
+                >
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>
+                    ⚙ {t.title}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ flex: 1, height: 4, background: "#333", borderRadius: 2 }}>
+                      <div style={{ width: `${pct}%`, height: "100%", background: "#4a9eff", borderRadius: 2, transition: "width 0.3s" }} />
+                    </div>
+                    <span style={{ fontSize: 11, color: "#aaa", flexShrink: 0 }}>
+                      {prog.done}/{prog.total}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
+      {/* Enterprise: Task Notification Panel */}
+      {pendingTask && (
+        <div style={{
+          position: "fixed", bottom: 24, right: 24, zIndex: 9999,
+          background: "#1e1e2e", border: "1px solid #4a4a6a", borderRadius: 8,
+          padding: "16px 20px", maxWidth: 360, color: "#e0e0f0",
+          boxShadow: "0 4px 24px rgba(0,0,0,0.6)",
+        }}>
+          <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>Enterprise Task</div>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>{pendingTask.title}</div>
+          <div style={{ fontSize: 13, color: "#aaa", marginBottom: 12, whiteSpace: "pre-wrap" }}>
+            {pendingTask.description}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => {
+                enterpriseAcceptTask(pendingTask).catch(console.error);
+                setPendingTask(null);
+              }}
+              style={{
+                flex: 1, padding: "6px 0", background: "#2a7a4a", color: "#fff",
+                border: "none", borderRadius: 4, cursor: "pointer", fontWeight: 600,
+              }}
+            >
+              Execute
+            </button>
+            <button
+              onClick={() => {
+                enterpriseRejectTask(pendingTask.task_id).catch(console.error);
+                setPendingTask(null);
+              }}
+              style={{
+                flex: 1, padding: "6px 0", background: "transparent", color: "#aaa",
+                border: "1px solid #555", borderRadius: 4, cursor: "pointer",
+              }}
+            >
+              Reject
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Enterprise: Skill Installed Toast */}
+      {skillToast && (
+        <div style={{
+          position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)",
+          zIndex: 9999, background: "#1e2e1e", border: "1px solid #4a6a4a", borderRadius: 8,
+          padding: "12px 20px", color: "#e0f0e0",
+          boxShadow: "0 4px 24px rgba(0,0,0,0.6)",
+        }}>
+          <span style={{ marginRight: 8 }}>✓</span>
+          Skill installed: <strong>{skillToast.skill_id}</strong> v{skillToast.version}
+          <button
+            onClick={() => setSkillToast(null)}
+            style={{ marginLeft: 12, background: "none", border: "none", color: "#888", cursor: "pointer" }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
     </div>
   );
 }

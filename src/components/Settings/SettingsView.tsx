@@ -5,10 +5,11 @@ import { GeneralPage } from "./GeneralPage";
 import { DatabaseConnectionsPage } from "./DatabaseConnectionsPage";
 import { VcsConnectionsPage } from "./VcsConnectionsPage";
 import { AboutPage } from "./AboutPage";
+import { EnterprisePage } from "./EnterprisePage";
 import { useLocale } from "../../contexts/LocaleContext";
 import "./SettingsView.css";
 
-type SettingsTab = "general" | "providers" | "databases" | "vcs" | "about";
+type SettingsTab = "general" | "providers" | "databases" | "vcs" | "enterprise" | "about";
 
 export function SettingsView() {
   const navigate = useNavigate();
@@ -46,6 +47,12 @@ export function SettingsView() {
           🔀 {t.vcs_connections}
         </button>
         <button
+          className={`sidebar-item ${tab === "enterprise" ? "sidebar-item--active" : ""}`}
+          onClick={() => setTab("enterprise")}
+        >
+          🏢 Enterprise
+        </button>
+        <button
           className={`sidebar-item ${tab === "about" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("about")}
         >
@@ -65,6 +72,7 @@ export function SettingsView() {
         {tab === "providers" && <ProvidersPage />}
         {tab === "databases" && <DatabaseConnectionsPage />}
         {tab === "vcs" && <VcsConnectionsPage />}
+        {tab === "enterprise" && <EnterprisePage />}
         {tab === "about" && <AboutPage />}
       </main>
     </div>

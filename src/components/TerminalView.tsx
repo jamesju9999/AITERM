@@ -24,6 +24,7 @@ import {
 } from "../ipc/ai";
 import { getConfig, type ExecutionMode, type SubmitShortcut } from "../ipc/config";
 import { getSessionCwd } from "../ipc/fs";
+import { enterpriseCompleteTask, enterpriseOnComplete } from "../ipc/enterprise";
 import { useTerminalBlocks } from "../hooks/useTerminalBlocks";
 import { useAgentMission } from "../hooks/useAgentMission";
 import { useTelegramRemoteControl } from "../hooks/useTelegramRemoteControl";
@@ -76,6 +77,14 @@ export interface TerminalViewProps {
   isSidebarOpen?: boolean;
   /** Called once with the backend-assigned PTY session ID when the PTY is created. */
   onSessionCreated?: (sessionId: string) => void;
+  /** If set, the PTY starts in this directory (overrides last-cwd from localStorage). */
+  initialCwd?: string;
+  /** If set, the agent loop starts automatically after the PTY is ready. */
+  initialMission?: { goal: string; maxSteps: number };
+  /** Enterprise task metadata — triggers on_complete actions when the mission finishes. */
+  enterpriseTask?: { taskId: string; workBranch: string; onComplete: unknown };
+  /** Called on each agent step when running an enterprise task, for the progress panel. */
+  onAgentProgress?: (done: number, total: number) => void;
 }
 
 const SEARCH_OPTS = {
@@ -92,7 +101,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -367,6 +376,68 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
   // (Agent loop is now callback-driven via runAgentLoop — no useEffect needed)
 
+  // Auto-start agent loop when an enterprise task has been dispatched to this terminal.
+  const initialMissionFiredRef = useRef(false);
+  useEffect(() => {
+    if (!initialMission || initialMissionFiredRef.current) return;
+    if (!sessionId || !termRef.current) return;
+    initialMissionFiredRef.current = true;
+    const term = termRef.current;
+    const session = sessionId;
+    agentAbortRef.current = false;
+    startMission(initialMission.goal, initialMission.maxSteps);
+    // Brief delay to let the shell finish initializing before the first AI query.
+    setTimeout(() => {
+      runAgentLoop({
+        goal: initialMission.goal,
+        sessionId: session,
+        term,
+        getSubmitCommand: () => submitCommandRef.current,
+        setPreview,
+        setStreamText,
+        streamingRef,
+        executionModeRef,
+        writeRed: (msg) => term.write(`\r\n\x1b[31m${msg}\x1b[0m\r\n`),
+        abortRef: agentAbortRef,
+        stepCount: 0,
+        maxSteps: initialMission.maxSteps,
+        history: [],
+        onStepComplete: ({ stepIndex, maxSteps: total }) => {
+          onAgentProgress?.(stepIndex, total);
+        },
+        onComplete: () => {
+          term.write(`\r\n\x1b[32m[Enterprise Task Completed] ✓\x1b[0m\r\n`);
+          stopMission();
+          writePty(session, "\r").catch(console.error);
+          // Trigger on_complete (push + optional PR) and mark task done.
+          if (enterpriseTask && initialCwd) {
+            term.write(`\r\n\x1b[36m[Enterprise: running on_complete...]\x1b[0m\r\n`);
+            enterpriseOnComplete({
+              taskId: enterpriseTask.taskId,
+              repoDir: initialCwd,
+              workBranch: enterpriseTask.workBranch,
+              onComplete: enterpriseTask.onComplete,
+            }).then((msg) => {
+              term.write(`\r\n\x1b[32m${msg}\x1b[0m\r\n`);
+              enterpriseCompleteTask(enterpriseTask.taskId).catch(console.error);
+            }).catch((err) => {
+              term.write(`\r\n\x1b[31m[on_complete error: ${err}]\x1b[0m\r\n`);
+              enterpriseCompleteTask(enterpriseTask.taskId).catch(console.error);
+            });
+          }
+        },
+        onFail: (msg) => {
+          term.write(`\r\n\x1b[33m⚠ Enterprise Task stopped: ${msg}\x1b[0m\r\n`);
+          stopMission();
+          writePty(session, "\r").catch(console.error);
+          if (enterpriseTask) {
+            enterpriseCompleteTask(enterpriseTask.taskId).catch(console.error);
+          }
+        },
+      });
+    }, 1500);
+  }, [sessionId, initialMission, startMission, stopMission, enterpriseTask, initialCwd]);
+
   useEffect(() => {
     if (!hostRef.current) return;
 
@@ -406,7 +477,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     (async () => {
       try {
         const { rows, cols } = term;
-        const lastCwd = localStorage.getItem("aiterm_last_cwd") ?? undefined;
+        const lastCwd = initialCwd ?? localStorage.getItem("aiterm_last_cwd") ?? undefined;
         const id = await createPty({ rows, cols }, lastCwd);
         sessionRef.current = id;
         setSessionId(id);

@@ -11,6 +11,18 @@ export interface Tab {
   dbConnectionId?: string;
   /** PTY session ID assigned by the backend when this terminal tab's PTY is created. */
   ptySessionId?: string;
+  /** For enterprise tasks: start the PTY in this directory. */
+  initialCwd?: string;
+  /** For enterprise tasks: auto-trigger agent loop when PTY is ready. */
+  initialMission?: { goal: string; maxSteps: number };
+  /** Enterprise task metadata for on_complete actions. */
+  enterpriseTask?: {
+    taskId: string;
+    workBranch: string;
+    onComplete: unknown;
+  };
+  /** Live agent progress (steps done / total) for background enterprise tasks. */
+  agentProgress?: { done: number; total: number };
 }
 
 export interface TabBarProps {
