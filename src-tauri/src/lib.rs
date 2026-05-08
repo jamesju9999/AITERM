@@ -147,7 +147,7 @@ pub fn run() {
 
             // Production: AppImage ← {APPDIR}/usr/bin/aiterm → {APPDIR}/usr/lib/aiterm/db2-sidecar
             //             .deb    ← /usr/bin/aiterm           → /usr/lib/aiterm/db2-sidecar
-            let prod_path = exe_dir.join("../../lib/aiterm/db2-sidecar");
+            let prod_path = exe_dir.join("../../lib/AITerm/db2-sidecar");
 
             let found = [
                 prod_path.clone(),
