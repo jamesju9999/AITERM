@@ -26,18 +26,26 @@ jobs:
             target: x86_64-unknown-linux-gnu
             rust_targets: x86_64-unknown-linux-gnu
             artifact_name: linux-x64-appimage
+            db2_arch: x64
+            db2_sidecar_dir: binaries/db2-sidecar-linux-x64
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             rust_targets: x86_64-unknown-linux-gnu
             artifact_name: linux-x64-deb
+            db2_arch: x64
+            db2_sidecar_dir: binaries/db2-sidecar-linux-x64
           - os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             rust_targets: aarch64-unknown-linux-gnu
             artifact_name: linux-arm64-appimage
+            db2_arch: arm64
+            db2_sidecar_dir: binaries/db2-sidecar-linux-arm64
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             rust_targets: aarch64-unknown-linux-gnu
             artifact_name: linux-arm64-deb
+            db2_arch: arm64
+            db2_sidecar_dir: binaries/db2-sidecar-linux-arm64
 
     runs-on: ${{ matrix.os }}
 
@@ -73,9 +81,8 @@ jobs:
             patchelf \
             libssl-dev
 
-      # Setup Java 21 (Temurin) + Maven — needed to build db2sidecar.jar from source (macOS + Windows only)
+      # Setup Java 21 (Temurin) + Maven — needed to build db2sidecar.jar from source (all platforms)
       - name: Setup Java 21
-        if: "!startsWith(matrix.os, 'ubuntu')"
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -93,6 +100,27 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: pwsh -ExecutionPolicy Bypass -File scripts\setup-db2-win.ps1
+
+      # Linux: build Java sidecar and patch tauri.linux.conf.json with arch-specific resources path
+      - name: Build DB2 sidecar (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: ARCH=${{ matrix.db2_arch }} bash scripts/setup-db2-linux.sh
+
+      - name: Patch tauri.linux.conf.json with DB2 resources (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          python3 -c "
+          import json, sys
+          conf = {
+            'bundle': {
+              'externalBin': [],
+              'resources': {
+                'src-tauri/${{ matrix.db2_sidecar_dir }}': 'db2-sidecar'
+              }
+            }
+          }
+          print(json.dumps(conf, indent=2))
+          " > src-tauri/tauri.linux.conf.json
 
       - name: Sync version from tag
         shell: node {0}

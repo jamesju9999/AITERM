@@ -115,9 +115,31 @@ pub fn run() {
         }
         #[cfg(target_os = "linux")]
         {
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("binaries")
-                .join("db2-sidecar-x86_64-unknown-linux-gnu")
+            let exe_dir = std::env::current_exe()
+                .expect("current_exe")
+                .parent()
+                .expect("parent dir")
+                .to_path_buf();
+
+            let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+            #[cfg(target_arch = "aarch64")]
+            let dev_subdir = "db2-sidecar-linux-arm64";
+            #[cfg(target_arch = "x86_64")]
+            let dev_subdir = "db2-sidecar-linux-x64";
+
+            let candidates = [
+                // Production: AppImage ← {APPDIR}/usr/bin/aiterm → {APPDIR}/usr/lib/aiterm/db2-sidecar
+                //             .deb    ← /usr/bin/aiterm           → /usr/lib/aiterm/db2-sidecar
+                exe_dir.join("../../lib/aiterm/db2-sidecar"),
+                // Dev: local binaries directory
+                manifest_dir.join("binaries").join(dev_subdir),
+            ];
+
+            candidates
+                .into_iter()
+                .find(|p| p.join("db2sidecar.jar").exists())
+                .unwrap_or_else(|| manifest_dir.join("binaries").join(dev_subdir))
         }
     };
 
