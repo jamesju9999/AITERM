@@ -25,7 +25,11 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             rust_targets: x86_64-unknown-linux-gnu
-            artifact_name: linux
+            artifact_name: linux-appimage
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            rust_targets: x86_64-unknown-linux-gnu
+            artifact_name: linux-deb
 
     runs-on: ${{ matrix.os }}
 
@@ -51,7 +55,7 @@ jobs:
 
       # Linux: install WebKitGTK and other Tauri system dependencies
       - name: Install Linux system dependencies
-        if: matrix.os == 'ubuntu-22.04'
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -63,7 +67,7 @@ jobs:
 
       # Setup Java 21 (Temurin) + Maven — needed to build db2sidecar.jar from source (macOS + Windows only)
       - name: Setup Java 21
-        if: matrix.os != 'ubuntu-22.04'
+        if: "!startsWith(matrix.os, 'ubuntu')"
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -124,7 +128,8 @@ jobs:
             ### 下載
             - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
             - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux** (x86_64): 下載 `.AppImage`（免安裝）或 `.deb` 套件
+            - **Linux AppImage** (Ubuntu 22.04+): 下載 `.AppImage`（免安裝，所有發行版通用）
+            - **Linux .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`（原生套件）
 
             > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
             > ```
@@ -152,7 +157,8 @@ jobs:
             ### 下載
             - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
             - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux** (x86_64): 下載 `.AppImage`（免安裝）或 `.deb` 套件
+            - **Linux AppImage** (Ubuntu 22.04+): 下載 `.AppImage`（免安裝，所有發行版通用）
+            - **Linux .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`（原生套件）
 
             > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
             > ```
@@ -166,7 +172,8 @@ jobs:
           prerelease: false
           args: --target x86_64-pc-windows-msvc
 
-      - name: Build (Linux x64)
+      # Ubuntu 22.04: AppImage only (distro-agnostic, works on Ubuntu 22.04+)
+      - name: Build (Linux AppImage — Ubuntu 22.04)
         if: matrix.os == 'ubuntu-22.04'
         uses: tauri-apps/tauri-action@v0
         env:
@@ -180,7 +187,8 @@ jobs:
             ### 下載
             - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
             - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux** (x86_64): 下載 `.AppImage`（免安裝）或 `.deb` 套件
+            - **Linux AppImage** (Ubuntu 22.04+): 下載 `.AppImage`（免安裝，所有發行版通用）
+            - **Linux .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`（原生套件）
 
             > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
             > ```
@@ -192,4 +200,34 @@ jobs:
             > ```
           releaseDraft: false
           prerelease: false
-          args: --target x86_64-unknown-linux-gnu
+          args: --target x86_64-unknown-linux-gnu --bundles appimage
+
+      # Ubuntu 24.04: .deb only (uses t64 runtime deps, works on Ubuntu 24.04+)
+      - name: Build (Linux .deb — Ubuntu 24.04)
+        if: matrix.os == 'ubuntu-24.04'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: AITerm ${{ github.ref_name }}
+          releaseBody: |
+            ## AITerm ${{ github.ref_name }}
+
+            ### 下載
+            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
+            - **Windows**: 下載 `-setup.exe` 安裝檔
+            - **Linux AppImage** (Ubuntu 22.04+): 下載 `.AppImage`（免安裝，所有發行版通用）
+            - **Linux .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`（原生套件）
+
+            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
+            > ```
+            > xattr -cr /Applications/AITerm.app
+            > ```
+            > **Linux AppImage：** 執行前需加執行權限：
+            > ```
+            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
+            > ```
+          releaseDraft: false
+          prerelease: false
+          args: --target x86_64-unknown-linux-gnu --bundles deb
