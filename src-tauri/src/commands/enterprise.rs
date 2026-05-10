@@ -269,11 +269,13 @@ pub async fn enterprise_register_device(
     config: State<'_, Arc<ConfigStore>>,
     secrets: State<'_, Arc<SecretStore>>,
 ) -> Result<String, String> {
+    let platform = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "name": device_name,
         "device_type": device_type,
         "role": role,
+        "platform": platform,
     });
     let resp = client
         .post(format!("{}/api/devices/register", server_url))
