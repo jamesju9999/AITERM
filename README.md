@@ -22,6 +22,7 @@ A powerful, cross-platform AI-enhanced terminal built with **Tauri 2**, **React 
 - **i18n Support**: Full interface localization for English and Traditional Chinese (繁體中文), switchable at runtime.
 - **Telegram Remote Control**: Enable the 📱 Remote toggle in the terminal status bar to control the active terminal session via a Telegram Bot — send commands from your phone and receive output back as Telegram messages.
 - **Auto Update Check**: Built-in version checker in the About page that queries GitHub Releases and links directly to the specific release tag when an update is available.
+- **Enterprise Fleet Management**: Centrally manage a fleet of AITerm instances — register devices, dispatch AI missions, sync skills, manage VCS credentials, and audit activity logs via a Management Server and Admin Web Dashboard. Supports headless worker mode for CI-runner-style autonomous execution.
 
 ## 🏗️ Architecture
 
@@ -129,6 +130,7 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 - **Telegram 遠端控制**：在終端機狀態列啟用 📱 Remote 開關，即可透過 Telegram Bot 從手機傳送指令至目前的終端機工作階段，並將輸出結果回傳至 Telegram 訊息。
 - **多語言介面**：完整支援英文與繁體中文介面，可於執行時即時切換。
 - **自動更新檢查**：「關於」頁面內建版本檢查器，查詢 GitHub Releases 並在有新版本時直接連結至對應的 Release Tag 頁面。
+- **Enterprise Fleet Management（企業機隊管理）**：集中管理多台 AITerm 實例——透過 Management Server 與 Admin Web Dashboard 進行裝置登錄、AI 任務派送、Skill 同步、VCS 憑證管理與操作稽核。支援 Headless Worker 模式，作為類 CI Runner 的自主任務執行器運行。
 
 ## 🏗️ 系統架構
 
