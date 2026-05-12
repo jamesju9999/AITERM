@@ -154,12 +154,23 @@ fi
 "#;
         let _ = std::fs::write(temp_dir.join(".zprofile"), zprofile_content);
 
-        // .zshrc — sources user's real .zshrc first, then appends AITerm hooks
-        // via add-zsh-hook so that oh-my-zsh / starship prompt hooks are preserved.
+        // .zshrc — sources user's real .zprofile first (since this is a non-login
+        // interactive shell, zsh won't read .zprofile automatically; sourcing it
+        // here ensures PATH entries like Homebrew are available), then .zshrc.
+        // Uses add-zsh-hook so that oh-my-zsh / starship prompt hooks are preserved.
         // The guard variable __aiterm_cmd_running prevents the initial precmd
         // (which fires before any command is typed) from sending a false D marker.
         let zshrc_content = r#"
 # ── AITerm: proxy user's .zshrc ──
+# Source .zprofile first: this shell is interactive non-login, so zsh skips
+# .zprofile normally. We source it explicitly so that Homebrew PATH (and
+# other login-shell env setup) is available exactly as in a login shell.
+if [[ -n "$AITERM_ORIG_ZDOTDIR" && -f "$AITERM_ORIG_ZDOTDIR/.zprofile" ]]; then
+  source "$AITERM_ORIG_ZDOTDIR/.zprofile"
+elif [[ -f "$HOME/.zprofile" ]]; then
+  source "$HOME/.zprofile"
+fi
+
 if [[ -n "$AITERM_ORIG_ZDOTDIR" && -f "$AITERM_ORIG_ZDOTDIR/.zshrc" ]]; then
   source "$AITERM_ORIG_ZDOTDIR/.zshrc"
 elif [[ -f "$HOME/.zshrc" ]]; then
