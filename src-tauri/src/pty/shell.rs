@@ -79,7 +79,10 @@ function global:prompt {
             "-Command".into(),
             format!(". '{}'", script_path.display()),
         ],
-        envs: vec![],
+        envs: vec![
+            ("TERM".into(), "xterm-256color".into()),
+            ("COLORTERM".into(), "truecolor".into()),
+        ],
     }
 }
 
@@ -97,6 +100,8 @@ fn inject_cmd_integration() -> ShellSpec {
         args: vec![],
         envs: vec![
             ("PROMPT".into(), "$E]133;D$E\\$E]133;A$E\\$P$G".into()),
+            ("TERM".into(), "xterm-256color".into()),
+            ("COLORTERM".into(), "truecolor".into()),
         ],
     }
 }
@@ -246,6 +251,12 @@ PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
         args.push("--rcfile".into());
         args.push(rcfile.to_string_lossy().into_owned());
     }
+
+    // Ensure color output works regardless of how AITerm was launched.
+    // When launched as a .app from Dock/Finder, launchd does not set TERM,
+    // so programs default to no-color output.
+    envs.push(("TERM".into(), "xterm-256color".into()));
+    envs.push(("COLORTERM".into(), "truecolor".into()));
 
     ShellSpec {
         program,
