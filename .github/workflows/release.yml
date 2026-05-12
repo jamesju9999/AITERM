@@ -185,6 +185,11 @@ jobs:
           prerelease: false
           args: --target aarch64-apple-darwin
 
+      - name: Install NSIS (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: choco install nsis --version 3.11 -y
+
       - name: Build (Windows)
         if: matrix.os == 'windows-latest'
         uses: tauri-apps/tauri-action@v0
