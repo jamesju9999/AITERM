@@ -1,7 +1,7 @@
 //! Activity Reporter: filters sensitive data and batches reports to Management Server.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// Patterns that indicate a value should be redacted.
 /// Applied to command strings before reporting.

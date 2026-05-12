@@ -117,6 +117,7 @@ pub fn unix_default_shell() -> Option<ShellSpec> {
 }
 
 /// Setup OS-specific shell integration hooks for block reporting (OSC 133).
+#[cfg(not(windows))]
 fn inject_shell_integration(program: PathBuf) -> ShellSpec {
     let mut envs = vec![];
     let mut args = vec![];

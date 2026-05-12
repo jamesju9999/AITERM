@@ -2,12 +2,11 @@
 //! Flow: receive TaskPacket → store VCS token → clone repo → read spec → emit to frontend.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 
-use crate::enterprise::types::{OnCompleteAction, TaskPacket};
+use crate::enterprise::types::TaskPacket;
 
 /// Stored short-lived VCS token for a task.
 #[derive(Debug, Clone)]
