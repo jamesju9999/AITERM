@@ -390,3 +390,17 @@
   color: #4ade80;
   border-color: #4ade80;
 }
+
+/* ── Multi-part user messages (text + image thumbnails) ── */
+.aiterm-bubble-multipart {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.aiterm-bubble-image-thumb {
+  max-width: 200px;
+  max-height: 150px;
+  border-radius: 4px;
+  object-fit: contain;
+}
