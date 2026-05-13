@@ -323,7 +323,10 @@ pub async fn design_chat(
     // Auto-update title from first user message if still default
     if session.title == "新需求討論" {
         if let Some(first_user) = messages.iter().find(|m| m.role == "user") {
-            let content = first_user.content.as_str().unwrap_or("").trim();
+            let content_owned = first_user.content.as_str()
+                .map(|s| s.to_owned())
+                .unwrap_or_else(|| first_user.content.to_string());
+            let content = content_owned.trim();
             // Skip auto-generated [GENERATE:xxx] messages
             if !content.starts_with("請根據目前的討論內容產生") {
                 let new_title: String = content.chars().take(30).collect();
@@ -394,7 +397,10 @@ pub async fn design_chat(
 
     // Persist history: save the user's last message and the assistant's reply
     if let Some(last_user_msg) = messages.last() {
-        let _ = crate::db::design::create_design_message(&design_db.pool, &session_id, &last_user_msg.role, last_user_msg.content.as_str().unwrap_or("")).await;
+        let last_user_content = last_user_msg.content.as_str()
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| last_user_msg.content.to_string());
+        let _ = crate::db::design::create_design_message(&design_db.pool, &session_id, &last_user_msg.role, &last_user_content).await;
     }
     let _ = crate::db::design::create_design_message(&design_db.pool, &session_id, "assistant", &buf).await;
 

@@ -266,5 +266,7 @@ mod tests {
         let json = serde_json::to_value(&msg).unwrap();
         assert!(json["content"].is_array());
         assert_eq!(json["content"][0]["type"], "text");
+        let roundtrip: ChatMessage = serde_json::from_value(json.clone()).unwrap();
+        assert!(roundtrip.content.is_array());
     }
 }
