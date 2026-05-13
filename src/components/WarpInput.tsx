@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { SubmitShortcut } from "../ipc/config";
 import { useLocale } from "../contexts/LocaleContext";
 import "./WarpInput.css";
@@ -10,6 +10,14 @@ export interface WarpInputProps {
 }
 
 const STORAGE_KEY = "aiterm-command-history";
+
+/** Insert text at the current cursor position in a textarea. */
+function insertAtCursor(el: HTMLTextAreaElement, text: string) {
+  const start = el.selectionStart ?? el.value.length;
+  const end = el.selectionEnd ?? el.value.length;
+  el.value = el.value.slice(0, start) + text + el.value.slice(end);
+  el.selectionStart = el.selectionEnd = start + text.length;
+}
 
 /**
  * A block-based IDE-like input detached from the PTY.
@@ -215,6 +223,40 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
     }
   };
 
+  const handleFilePaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = e.clipboardData?.files;
+    if (!files || files.length === 0) return; // let default text paste proceed
+    e.preventDefault();
+    const paths = Array.from(files)
+      .map((f) => (f as File & { path?: string }).path ?? f.name)
+      .join(" ");
+    const el = textareaRef.current;
+    if (!el) return;
+    insertAtCursor(el, paths);
+    setValue(el.value);
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLTextAreaElement>) => {
+    e.preventDefault();
+  }, []);
+
+  const handleFileDrop = useCallback(async (e: React.DragEvent<HTMLTextAreaElement>) => {
+    e.preventDefault();
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+    const paths = Array.from(files)
+      .map((f) => (f as File & { path?: string }).path ?? f.name)
+      .join(" ");
+    const el = textareaRef.current;
+    if (!el) return;
+    insertAtCursor(el, paths);
+    setValue(el.value);
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
+
   return (
     <div className="warp-input-container">
       {historyOpen && history.length > 0 && (
@@ -257,6 +299,9 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
         value={value}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
+        onPaste={handleFilePaste}
+        onDragOver={handleDragOver}
+        onDrop={handleFileDrop}
         placeholder={t.input_placeholder(shortcut === "enter" ? "Enter" : shortcut === "shift-enter" ? "Shift+Enter" : "Ctrl+Enter")}
         rows={1}
         disabled={disabled}

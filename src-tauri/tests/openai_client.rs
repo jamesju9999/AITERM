@@ -14,7 +14,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 fn req(text: &str) -> GenerateRequest {
     GenerateRequest {
         system_prompt: "sys".into(),
-        messages: vec![ChatMessage { role: "user".into(), content: text.into() }],
+        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!(text) }],
         context: EnvSnapshot {
             os: "linux".into(),
             shell: "bash".into(),
@@ -129,4 +129,50 @@ async fn returns_network_on_500() {
         AiError::Network { message } => assert!(message.contains("500")),
         other => panic!("expected Network, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn multipart_content_reaches_endpoint_as_array() {
+    let server = MockServer::start().await;
+
+    let mock = Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(bearer_token("test-key"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse_response_happy_path()),
+        )
+        .mount_as_scoped(&server)
+        .await;
+
+    let client = OpenAiClient::with_base_url(
+        "test-key".into(),
+        "gpt-4o".into(),
+        server.uri(),
+    );
+    let (tx, _rx) = mpsc::channel(32);
+    let multipart_req = GenerateRequest {
+        system_prompt: "sys".into(),
+        messages: vec![ChatMessage {
+            role: "user".into(),
+            content: serde_json::json!([
+                {"type": "text", "text": "describe this"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
+            ]),
+        }],
+        context: EnvSnapshot {
+            os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default()
+        },
+        mode: QueryMode::Chat,
+        max_tokens: Some(256),
+    };
+    client.generate(multipart_req, tx).await.unwrap();
+
+    let received = &mock.received_requests().await[0];
+    let body: serde_json::Value = serde_json::from_slice(&received.body).unwrap();
+    let user_content = &body["messages"][1]["content"];
+    assert!(user_content.is_array(), "content should be an array, got: {user_content}");
+    assert_eq!(user_content[0]["type"], "text");
+    assert_eq!(user_content[1]["type"], "image_url");
 }

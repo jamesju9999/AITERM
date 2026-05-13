@@ -445,7 +445,7 @@ Output ONLY the JSON object. No prose, no markdown fences."#,
         system_prompt,
         messages: vec![ChatMessage {
             role: "user".into(),
-            content: format!("Plan the next step to achieve: {goal}"),
+            content: serde_json::json!(format!("Plan the next step to achieve: {goal}")),
         }],
         context: crate::ai::EnvSnapshot::default(),
         mode: QueryMode::SingleCommand,
@@ -521,7 +521,7 @@ Example output: {"kind":"log_query","path":null,"author":null,"since":null,"max_
         system_prompt: system_prompt.to_string(),
         messages: vec![ChatMessage {
             role: "user".into(),
-            content: query.to_string(),
+            content: serde_json::json!(query),
         }],
         context: crate::ai::EnvSnapshot::default(),
         mode: QueryMode::SingleCommand,

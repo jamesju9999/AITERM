@@ -1,4 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export type RiskLevel = "safe" | "needs_confirm" | "dangerous" | "blocked";
 
 export type AiError =
@@ -17,7 +22,7 @@ export interface AiCommandReady {
 
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
-  content: string;
+  content: string | ContentPart[];
 }
 
 export interface AiChatReply {

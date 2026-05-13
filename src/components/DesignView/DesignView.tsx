@@ -55,12 +55,12 @@ export function DesignView({ isActive }: { isActive: boolean }) {
       const lastMsg = messages[messages.length - 1];
       if (lastMsg && lastMsg.role === 'assistant' && sendRemoteResponse) {
         // Strip [UPDATE_*] tags and their content for Telegram display
-        let text = lastMsg.content;
+        let text: string = typeof lastMsg.content === 'string' ? lastMsg.content : '';
         for (const tag of ['[UPDATE_PROPOSAL]', '[UPDATE_SPEC]', '[UPDATE_SDD]', '[UPDATE_PLAN]']) {
           const idx = text.indexOf(tag);
           if (idx !== -1) text = text.slice(0, idx).trim();
         }
-        sendRemoteResponse(text || lastMsg.content);
+        sendRemoteResponse(text || (typeof lastMsg.content === 'string' ? lastMsg.content : ''));
       }
     }
     prevIsStreamingRef.current = isStreaming;
@@ -450,7 +450,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
                 <MessageBubble
                   key={i}
                   role={m.role as 'user' | 'assistant'}
-                  content={cleanMessageForDisplay(m.content, isLastAssistant && isStreaming)}
+                  content={cleanMessageForDisplay(typeof m.content === 'string' ? m.content : '', isLastAssistant && isStreaming)}
                   onExecuteCommand={() => {}}
                 />
               );

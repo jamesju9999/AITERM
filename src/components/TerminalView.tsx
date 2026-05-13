@@ -222,6 +222,50 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     return () => window.removeEventListener("aiterm:theme-changed", handler);
   }, []);
 
+  // File paste/drop → write absolute path to PTY
+  useEffect(() => {
+    const el = hostRef.current;
+    if (!el) return;
+
+    const handlePaste = async (e: ClipboardEvent) => {
+      const files = e.clipboardData?.files;
+      if (!files || files.length === 0) return; // let xterm handle text paste
+      e.preventDefault();
+      e.stopPropagation();
+      const sid = sessionRef.current;
+      if (!sid) return;
+      const paths = Array.from(files)
+        .map((f) => (f as File & { path?: string }).path ?? f.name)
+        .join(" ");
+      await writePty(sid, paths).catch(() => {});
+    };
+
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+    };
+
+    const handleDrop = async (e: DragEvent) => {
+      e.preventDefault();
+      const files = e.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+      const sid = sessionRef.current;
+      if (!sid) return;
+      const paths = Array.from(files)
+        .map((f) => (f as File & { path?: string }).path ?? f.name)
+        .join(" ");
+      await writePty(sid, paths + " ").catch(() => {});
+    };
+
+    el.addEventListener("paste", handlePaste);
+    el.addEventListener("dragover", handleDragOver);
+    el.addEventListener("drop", handleDrop);
+    return () => {
+      el.removeEventListener("paste", handlePaste);
+      el.removeEventListener("dragover", handleDragOver);
+      el.removeEventListener("drop", handleDrop);
+    };
+  }, []); // hostRef and sessionRef are stable refs — no deps needed
+
   // Telegram Remote Control
   const { isRemoteEnabled, setIsRemoteEnabled, sendRemoteResponse } = useTelegramRemoteControl(
     sessionId,
