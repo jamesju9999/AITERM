@@ -307,7 +307,7 @@ ${dirList || "（無法取得）"}
     if (chat.messages.length > prevMessagesLength.current) {
       const lastMsg = chat.messages[chat.messages.length - 1];
       if (lastMsg.role === "assistant" && sendRemoteResponse && !chat.isStreaming) {
-        sendRemoteResponse(lastMsg.content);
+        sendRemoteResponse(typeof lastMsg.content === "string" ? lastMsg.content : "");
       }
     }
     prevMessagesLength.current = chat.messages.length;
