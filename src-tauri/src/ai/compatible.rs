@@ -147,9 +147,9 @@ impl AiProvider for OpenAiCompatibleClient {
 // ── Request types ─────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
-struct CompatibleChatRequest<'a> {
-    model: &'a str,
-    messages: Vec<CompatibleMessage<'a>>,
+struct CompatibleChatRequest {
+    model: String,
+    messages: Vec<CompatibleMessage>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
@@ -158,9 +158,9 @@ struct CompatibleChatRequest<'a> {
 }
 
 #[derive(Serialize)]
-struct CompatibleMessage<'a> {
-    role: &'a str,
-    content: &'a str,
+struct CompatibleMessage {
+    role: String,
+    content: serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -169,18 +169,24 @@ struct ResponseFormat {
     ty: &'static str,
 }
 
-fn build_request_body<'a>(
-    model: &'a str,
-    req: &'a GenerateRequest,
+fn build_request_body(
+    model: &str,
+    req: &GenerateRequest,
     json_mode: bool,
-) -> CompatibleChatRequest<'a> {
-    let mut messages: Vec<CompatibleMessage<'a>> = Vec::with_capacity(req.messages.len() + 1);
-    messages.push(CompatibleMessage { role: "system", content: &req.system_prompt });
+) -> CompatibleChatRequest {
+    let mut messages: Vec<CompatibleMessage> = Vec::with_capacity(req.messages.len() + 1);
+    messages.push(CompatibleMessage {
+        role: "system".to_owned(),
+        content: serde_json::Value::String(req.system_prompt.clone()),
+    });
     for m in &req.messages {
-        messages.push(CompatibleMessage { role: m.role.as_str(), content: m.content.as_str().unwrap_or("") });
+        messages.push(CompatibleMessage {
+            role: m.role.clone(),
+            content: m.content.clone(),
+        });
     }
     CompatibleChatRequest {
-        model,
+        model: model.to_owned(),
         messages,
         stream: true,
         response_format: if json_mode { Some(ResponseFormat { ty: "json_object" }) } else { None },

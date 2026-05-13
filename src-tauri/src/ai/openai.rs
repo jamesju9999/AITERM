@@ -102,9 +102,9 @@ impl AiProvider for OpenAiClient {
 // ── Request building ──────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
-struct OpenAiChatRequest<'a> {
-    model: &'a str,
-    messages: Vec<OpenAiMessage<'a>>,
+struct OpenAiChatRequest {
+    model: String,
+    messages: Vec<OpenAiMessage>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
@@ -113,9 +113,9 @@ struct OpenAiChatRequest<'a> {
 }
 
 #[derive(Serialize)]
-struct OpenAiMessage<'a> {
-    role: &'a str,
-    content: &'a str,
+struct OpenAiMessage {
+    role: String,
+    content: serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -124,18 +124,24 @@ struct ResponseFormat {
     ty: &'static str,
 }
 
-fn build_request_body<'a>(
-    model: &'a str,
-    req: &'a GenerateRequest,
+fn build_request_body(
+    model: &str,
+    req: &GenerateRequest,
     json_mode: bool,
-) -> OpenAiChatRequest<'a> {
-    let mut messages: Vec<OpenAiMessage<'a>> = Vec::with_capacity(req.messages.len() + 1);
-    messages.push(OpenAiMessage { role: "system", content: &req.system_prompt });
+) -> OpenAiChatRequest {
+    let mut messages: Vec<OpenAiMessage> = Vec::with_capacity(req.messages.len() + 1);
+    messages.push(OpenAiMessage {
+        role: "system".to_owned(),
+        content: serde_json::Value::String(req.system_prompt.clone()),
+    });
     for m in &req.messages {
-        messages.push(OpenAiMessage { role: m.role.as_str(), content: m.content.as_str().unwrap_or("") });
+        messages.push(OpenAiMessage {
+            role: m.role.clone(),
+            content: m.content.clone(),
+        });
     }
     OpenAiChatRequest {
-        model,
+        model: model.to_owned(),
         messages,
         stream: true,
         response_format: if json_mode { Some(ResponseFormat { ty: "json_object" }) } else { None },
