@@ -598,6 +598,17 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       // character-by-character causes PowerShell to print "[O" / "[I" as literal text.
       if (data === "\x1b[O" || data === "\x1b[I") return;
 
+      // Escape sequences (arrow keys, function keys, Home/End, etc.) must be sent as a
+      // single atomic PTY write.  Iterating char-by-char produces separate Tauri IPC calls
+      // with non-zero latency between the ESC byte and the rest of the sequence.  On Windows,
+      // PSReadLine has a short escape-sequence timeout: if "[" doesn't arrive fast enough
+      // after ESC, it treats ESC as a standalone keypress and "[A" / "[B" / "[C" / "[D"
+      // then appear as literal text in the terminal.
+      if (data.startsWith("\x1b")) {
+        writePty(session, data).catch(console.error);
+        return;
+      }
+
       for (const ch of data) {
         if (ch === "\r" || ch === "\n") {
           const line = lineBufRef.current;
