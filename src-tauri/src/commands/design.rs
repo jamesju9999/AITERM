@@ -270,7 +270,7 @@ pub async fn design_list_messages(
     
     Ok(messages.into_iter().map(|m| ChatMessage {
         role: m.role,
-        content: m.content,
+        content: serde_json::json!(m.content),
     }).collect())
 }
 
@@ -323,7 +323,7 @@ pub async fn design_chat(
     // Auto-update title from first user message if still default
     if session.title == "新需求討論" {
         if let Some(first_user) = messages.iter().find(|m| m.role == "user") {
-            let content = first_user.content.trim();
+            let content = first_user.content.as_str().unwrap_or("").trim();
             // Skip auto-generated [GENERATE:xxx] messages
             if !content.starts_with("請根據目前的討論內容產生") {
                 let new_title: String = content.chars().take(30).collect();
@@ -347,7 +347,7 @@ pub async fn design_chat(
 
     // 4. Build specialized design prompt, with optional stage instruction injection
     let base_prompt = build_design_prompt(&session, &snapshot);
-    let last_content = messages.last().map(|m| m.content.as_str()).unwrap_or("");
+    let last_content = messages.last().and_then(|m| m.content.as_str()).unwrap_or("");
     let stage_inject = if let Some(start) = last_content.find("[GENERATE:") {
         let rest = &last_content[start + 10..];
         if let Some(end) = rest.find(']') {
@@ -394,7 +394,7 @@ pub async fn design_chat(
 
     // Persist history: save the user's last message and the assistant's reply
     if let Some(last_user_msg) = messages.last() {
-        let _ = crate::db::design::create_design_message(&design_db.pool, &session_id, &last_user_msg.role, &last_user_msg.content).await;
+        let _ = crate::db::design::create_design_message(&design_db.pool, &session_id, &last_user_msg.role, last_user_msg.content.as_str().unwrap_or("")).await;
     }
     let _ = crate::db::design::create_design_message(&design_db.pool, &session_id, "assistant", &buf).await;
 

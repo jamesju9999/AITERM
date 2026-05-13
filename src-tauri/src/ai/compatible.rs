@@ -118,7 +118,7 @@ impl AiProvider for OpenAiCompatibleClient {
         let (_tx, _rx) = mpsc::channel::<GenerateChunk>(1);
         let req = GenerateRequest {
             system_prompt: "ping".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: "hi".into() }],
+            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("hi") }],
             context: EnvSnapshot {
                 os: std::env::consts::OS.into(),
                 shell: "sh".into(),
@@ -177,7 +177,7 @@ fn build_request_body<'a>(
     let mut messages: Vec<CompatibleMessage<'a>> = Vec::with_capacity(req.messages.len() + 1);
     messages.push(CompatibleMessage { role: "system", content: &req.system_prompt });
     for m in &req.messages {
-        messages.push(CompatibleMessage { role: m.role.as_str(), content: m.content.as_str() });
+        messages.push(CompatibleMessage { role: m.role.as_str(), content: m.content.as_str().unwrap_or("") });
     }
     CompatibleChatRequest {
         model,
@@ -197,7 +197,7 @@ mod tests {
     fn sample_req() -> GenerateRequest {
         GenerateRequest {
             system_prompt: "sys".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: "hi".into() }],
+            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("hi") }],
             context: EnvSnapshot { os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default() },
             mode: QueryMode::SingleCommand,
             max_tokens: Some(128),

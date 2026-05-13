@@ -149,7 +149,7 @@ fn build_request_body<'a>(model: &'a str, req: &'a GenerateRequest, stream: bool
     let mut messages: Vec<OllamaMessage<'a>> = Vec::with_capacity(req.messages.len() + 1);
     messages.push(OllamaMessage { role: "system", content: &req.system_prompt });
     for m in &req.messages {
-        messages.push(OllamaMessage { role: m.role.as_str(), content: m.content.as_str() });
+        messages.push(OllamaMessage { role: m.role.as_str(), content: m.content.as_str().unwrap_or("") });
     }
     OllamaChatRequest { model, messages, stream }
 }
@@ -225,7 +225,7 @@ mod tests {
     fn sample_req() -> GenerateRequest {
         GenerateRequest {
             system_prompt: "sys".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: "ls".into() }],
+            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("ls") }],
             context: EnvSnapshot { os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default() },
             mode: QueryMode::SingleCommand,
             max_tokens: None,

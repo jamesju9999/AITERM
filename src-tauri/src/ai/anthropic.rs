@@ -123,7 +123,7 @@ fn build_request_body<'a>(
     let messages = req
         .messages
         .iter()
-        .map(|m| AnthropicMessage { role: m.role.as_str(), content: m.content.as_str() })
+        .map(|m| AnthropicMessage { role: m.role.as_str(), content: m.content.as_str().unwrap_or("") })
         .collect();
     AnthropicRequest {
         model,
@@ -139,7 +139,7 @@ fn health_check_request() -> GenerateRequest {
     use std::path::PathBuf;
     GenerateRequest {
         system_prompt: "ping".into(),
-        messages: vec![ChatMessage { role: "user".into(), content: "hi".into() }],
+        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("hi") }],
         context: EnvSnapshot {
             os: std::env::consts::OS.into(),
             shell: "sh".into(),
@@ -261,7 +261,7 @@ mod tests {
     fn sample_req() -> GenerateRequest {
         GenerateRequest {
             system_prompt: "You are a terminal assistant.".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: "list files".into() }],
+            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("list files") }],
             context: EnvSnapshot { os: "windows".into(), shell: "pwsh".into(), cwd: PathBuf::from("C:\\"), ..Default::default() },
             mode: QueryMode::SingleCommand,
             max_tokens: Some(256),

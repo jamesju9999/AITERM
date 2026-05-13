@@ -69,7 +69,8 @@ pub enum QueryMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,    // "user" | "assistant" | "system"
-    pub content: String,
+    /// Either a plain string (legacy) or an OpenAI-format content array.
+    pub content: serde_json::Value,
 }
 
 #[derive(Debug)]
@@ -251,5 +252,19 @@ mod tests {
         // NOT silently strip them — spec §6.3 says violations become ModelError.
         let json = "```json\n{\"explanation\":\"x\",\"command\":\"y\",\"risk_level\":\"safe\"}\n```";
         assert!(serde_json::from_str::<AiSingleCommand>(json).is_err());
+    }
+
+    #[test]
+    fn chat_message_content_accepts_array() {
+        let msg = ChatMessage {
+            role: "user".into(),
+            content: serde_json::json!([
+                {"type": "text", "text": "hello"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
+            ]),
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        assert!(json["content"].is_array());
+        assert_eq!(json["content"][0]["type"], "text");
     }
 }
