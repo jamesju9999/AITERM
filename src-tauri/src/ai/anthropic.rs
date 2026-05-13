@@ -20,6 +20,49 @@ use crate::ai::{
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
+/// Parse a data URI "data:<media_type>;base64,<data>" into (media_type, data).
+fn parse_data_uri(url: &str) -> Option<(String, String)> {
+    let rest = url.strip_prefix("data:")?;
+    let comma = rest.find(',')?;
+    let meta = &rest[..comma];
+    let data = &rest[comma + 1..];
+    let media_type = meta.split(';').next()?;
+    Some((media_type.to_owned(), data.to_owned()))
+}
+
+/// Convert an OpenAI-format content value to Anthropic format.
+/// - String → [{"type": "text", "text": "..."}]
+/// - Array → map image_url parts to Anthropic image blocks; text parts pass through
+fn to_anthropic_content(content: &serde_json::Value) -> serde_json::Value {
+    if let Some(s) = content.as_str() {
+        return serde_json::json!([{"type": "text", "text": s}]);
+    }
+    if let Some(parts) = content.as_array() {
+        let converted: Vec<serde_json::Value> = parts.iter().map(|part| {
+            if part.get("type").and_then(|t| t.as_str()) == Some("image_url") {
+                if let Some(url) = part.get("image_url")
+                    .and_then(|i| i.get("url"))
+                    .and_then(|u| u.as_str())
+                {
+                    if let Some((media_type, data)) = parse_data_uri(url) {
+                        return serde_json::json!({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": data
+                            }
+                        });
+                    }
+                }
+            }
+            part.clone()
+        }).collect();
+        return serde_json::Value::Array(converted);
+    }
+    content.clone()
+}
+
 pub struct AnthropicClient {
     api_key: String,
     model: String,
@@ -101,33 +144,32 @@ impl AiProvider for AnthropicClient {
 // ── Request types ─────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
-struct AnthropicRequest<'a> {
-    model: &'a str,
-    system: &'a str,
-    messages: Vec<AnthropicMessage<'a>>,
+struct AnthropicRequest {
+    model: String,
+    system: String,
+    messages: Vec<AnthropicMessage>,
     max_tokens: u32,
     stream: bool,
 }
 
 #[derive(Serialize)]
-struct AnthropicMessage<'a> {
-    role: &'a str,
-    content: &'a str,
+struct AnthropicMessage {
+    role: String,
+    content: serde_json::Value,
 }
 
-fn build_request_body<'a>(
-    model: &'a str,
-    req: &'a GenerateRequest,
-    stream: bool,
-) -> AnthropicRequest<'a> {
+fn build_request_body(model: &str, req: &GenerateRequest, stream: bool) -> AnthropicRequest {
     let messages = req
         .messages
         .iter()
-        .map(|m| AnthropicMessage { role: m.role.as_str(), content: m.content.as_str().unwrap_or("") })
+        .map(|m| AnthropicMessage {
+            role: m.role.clone(),
+            content: to_anthropic_content(&m.content),
+        })
         .collect();
     AnthropicRequest {
-        model,
-        system: &req.system_prompt,
+        model: model.to_owned(),
+        system: req.system_prompt.clone(),
         messages,
         max_tokens: req.max_tokens.unwrap_or(1024),
         stream,
