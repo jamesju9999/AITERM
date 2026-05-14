@@ -311,9 +311,20 @@ pub async fn ai_chat(
         None => router.resolve().await?,
     };
 
-    let prompt = build_chat_prompt(&snapshot);
+    // If the caller already embedded a system message, use it directly and strip it
+    // from the messages array (providers expect system prompt in the dedicated field).
+    // Otherwise fall back to the terminal-context chat prompt.
+    let (system_prompt, messages) = if let Some(pos) = messages.iter().position(|m| m.role == "system") {
+        let mut msgs = messages;
+        let sys = msgs.remove(pos);
+        let prompt_text = sys.content.as_str().unwrap_or("").to_string();
+        (prompt_text, msgs)
+    } else {
+        (build_chat_prompt(&snapshot), messages)
+    };
+
     let req = GenerateRequest {
-        system_prompt: prompt,
+        system_prompt,
         messages,
         context: snapshot,
         mode: QueryMode::Chat,
