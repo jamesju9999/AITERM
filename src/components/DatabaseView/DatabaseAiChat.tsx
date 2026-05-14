@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { dbListTables, dbExecuteQuery, type TableInfo, type QueryResult } from "../../ipc/db";
 import { aiChat, formatAiError, type AiError } from "../../ipc/ai";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getConfig } from "../../ipc/config";
 import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/markdown";
+import { parseSchemaDoc, buildSchemaSection } from "../../lib/schemaDoc";
 
 interface Props {
   connectionId: string;
@@ -153,6 +154,10 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
   const [schemaDoc, setSchemaDoc] = useState<string>("");
   const schemaDocRef = useRef(schemaDoc);
   useEffect(() => { schemaDocRef.current = schemaDoc; }, [schemaDoc]);
+  const schemaDocMap = useMemo(
+    () => parseSchemaDoc(schemaDoc),
+    [schemaDoc],
+  );
   const bottomRef = useRef<HTMLDivElement>(null);
   const stoppedRef = useRef(false);
   const currentSessionIdRef = useRef<string | null>(null);
@@ -209,12 +214,15 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const buildSystemPrompt = () => {
+  const buildSystemPrompt = (userQuestion = "") => {
     const tableList = tables.map((t) => t.name).join(", ");
     const maxSteps = maxStepsRef.current;
+    const tableNames = tables.map((t) => t.name);
+    const schemaSection = buildSchemaSection(schemaDocMap, tableNames, userQuestion, 6000);
+
     return `你是一個資料庫 Agent，可執行多次 SQL 查詢來回答使用者問題。
 Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}。
-
+${schemaSection ? "\n" + schemaSection + "\n" : ""}
 【輸出格式規則——違反將導致查詢無法執行】：
 1. 需要查詢資料時，僅輸出以下格式，不得有任何前綴說明或後綴說明：
 \`\`\`sql
@@ -304,7 +312,7 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
         const lastUserContent = loopHistory[loopHistory.length - 1].content;
         const reply = await aiChat(
           lastUserContent,
-          buildSystemPrompt(),
+          buildSystemPrompt(userMsg),
           loopHistory.slice(0, -1),
           selectedProviderId || undefined,
         );
@@ -358,7 +366,7 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
           updateLastMsg((m) => ({ ...m, agentStepLabel: "整理答案中..." }));
           const summary = await aiChat(
             "請根據以上查詢結果，用繁體中文給出最終完整答案，不要再提供 SQL。",
-            buildSystemPrompt(),
+            buildSystemPrompt(userMsg),
             loopHistory,
             selectedProviderId || undefined,
           );
