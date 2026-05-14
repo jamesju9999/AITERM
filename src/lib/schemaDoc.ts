@@ -65,13 +65,13 @@ export function buildSchemaSection(
   if (docMap.size === 0) return '';
 
   const questionLower = userQuestion.toLowerCase();
-  const dbNamesLower = dbTableNames.map(n => n.toLowerCase());
+  const dbNamesSet = new Set(dbTableNames.map(n => n.toLowerCase()));
 
   // Score each table
   const scores = new Map<string, number>();
   for (const tableLower of docMap.keys()) {
     let score = 0;
-    if (dbNamesLower.includes(tableLower)) score += 3;
+    if (dbNamesSet.has(tableLower)) score += 3;
     if (questionLower.includes(tableLower)) score += 2;
     for (const [pattern, keyword] of SYNONYMS) {
       if (pattern.test(questionLower) && tableLower.includes(keyword)) score += 1;
@@ -89,7 +89,8 @@ export function buildSchemaSection(
   const budget80 = tokenBudget * 0.8;
 
   for (const tableLower of sorted) {
-    const section = docMap.get(tableLower)!;
+    const section = docMap.get(tableLower) ?? '';
+    if (!section) continue;
     const tokens = estimateTokens(section);
     if (usedTokens + tokens <= budget80) {
       fullSections.push(section);
