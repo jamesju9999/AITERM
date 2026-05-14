@@ -152,8 +152,6 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
   const [sessions, setSessions] = useState<SavedSession[]>([]);
   const maxStepsRef = useRef<number>(5);
   const [schemaDoc, setSchemaDoc] = useState<string>("");
-  const schemaDocRef = useRef(schemaDoc);
-  useEffect(() => { schemaDocRef.current = schemaDoc; }, [schemaDoc]);
   const schemaDocMap = useMemo(
     () => parseSchemaDoc(schemaDoc),
     [schemaDoc],
