@@ -51,6 +51,18 @@ function saveSessions(connectionId: string, sessions: SavedSession[]) {
   localStorage.setItem(chatStorageKey(connectionId), JSON.stringify(sessions.slice(-50)));
 }
 
+function schemaDocKey(connectionId: string) {
+  return `aiterm-db-schema-doc-${connectionId}`;
+}
+
+function loadSchemaDoc(connectionId: string): string {
+  return localStorage.getItem(schemaDocKey(connectionId)) ?? "";
+}
+
+function saveSchemaDoc(connectionId: string, content: string) {
+  localStorage.setItem(schemaDocKey(connectionId), content);
+}
+
 function extractSql(text: string): string | null {
   const sqlBlock = text.match(/```sql\s*([\s\S]*?)```/i);
   if (sqlBlock) return sqlBlock[1].trim();
@@ -138,6 +150,9 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sessions, setSessions] = useState<SavedSession[]>([]);
   const maxStepsRef = useRef<number>(5);
+  const [schemaDoc, setSchemaDoc] = useState<string>(() => loadSchemaDoc(connectionId));
+  const schemaDocRef = useRef(schemaDoc);
+  useEffect(() => { schemaDocRef.current = schemaDoc; }, [schemaDoc]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const stoppedRef = useRef(false);
   const currentSessionIdRef = useRef<string | null>(null);
@@ -183,6 +198,10 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
 
   useEffect(() => {
     setSessions(loadSessions(connectionId));
+  }, [connectionId]);
+
+  useEffect(() => {
+    setSchemaDoc(loadSchemaDoc(connectionId));
   }, [connectionId]);
 
   useEffect(() => {
@@ -409,6 +428,23 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
     setHistoryOpen(false);
   };
 
+  const schemaFileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleSchemaUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    file.text().then((content) => {
+      saveSchemaDoc(connectionId, content);
+      setSchemaDoc(content);
+    }).catch(console.error);
+    e.target.value = "";
+  };
+
+  const removeSchemaDoc = () => {
+    localStorage.removeItem(schemaDocKey(connectionId));
+    setSchemaDoc("");
+  };
+
   return (
     <div style={{ display: "flex", height: "100%", flex: 1, minWidth: 0, position: "relative" }}>
       {/* History side panel */}
@@ -508,6 +544,37 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
             ))}
             {providers.length === 0 && <option value="">（未設定）</option>}
           </select>
+          <input
+            ref={schemaFileInputRef}
+            type="file"
+            accept=".md"
+            style={{ display: "none" }}
+            onChange={handleSchemaUpload}
+          />
+          <button
+            onClick={() => schemaFileInputRef.current?.click()}
+            title={schemaDoc ? "更換 Schema 文件" : "上傳 Schema 文件 (.md)"}
+            style={{
+              background: schemaDoc ? "#1a2a1e" : "transparent",
+              border: "1px solid " + (schemaDoc ? "#34d399" : "#2a2a2a"),
+              color: schemaDoc ? "#34d399" : "#555",
+              borderRadius: 4, padding: "2px 8px", fontSize: 11, cursor: "pointer",
+            }}
+          >
+            📄 Schema{schemaDoc ? " ✓" : ""}
+          </button>
+          {schemaDoc && (
+            <button
+              onClick={removeSchemaDoc}
+              title="移除 Schema 文件"
+              style={{
+                background: "transparent", border: "none", color: "#555",
+                fontSize: 12, cursor: "pointer", padding: "2px 4px",
+              }}
+            >
+              ×
+            </button>
+          )}
           <div style={{ flex: 1 }} />
           <button
             onClick={() => setHistoryOpen((o) => !o)}
