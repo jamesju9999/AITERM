@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import mammoth from "mammoth";
 import * as pdfjsLib from "pdfjs-dist";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
+import { aiChat, formatAiError } from "../../ipc/ai";
 import "./DocConverterView.css";
 
 // PDF.js worker
@@ -62,13 +63,36 @@ async function extractPdf(buffer: ArrayBuffer): Promise<string> {
   }
 }
 
+const CHUNK_SIZE = 3500; // chars per AI call
+
+const NORMALIZATION_SYSTEM_PROMPT = `你是資料字典格式化工具。將輸入的原始文字整理成結構化的 Markdown 格式。
+
+每個資料表輸出：
+## TABLE_NAME
+一行說明（如果有）
+
+| 欄位名 | 型別 | 說明 |
+|--------|------|------|
+| 欄位1 | 型別 | 說明文字 |
+
+規則：
+1. 每張表必須以 ## 開頭的標題行（## 表名）
+2. 欄位資訊放在 3 欄 Markdown 表格（欄位名 | 型別 | 說明）
+3. 如果原文件未提供型別，填入 -
+4. 只輸出 Markdown，不要加解釋文字或開場白
+5. 保留原始的資料表名稱和欄位名稱（不要翻譯）`;
+
 export function DocConverterView({ isActive: _isActive }: { isActive: boolean }) {
   const [extractState, setExtractState] = useState<ExtractState | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState("");
+  const [mdOutput, setMdOutput] = useState<string>("");
+  const [normalizing, setNormalizing] = useState(false);
+  const [normalizeProgress, setNormalizeProgress] = useState<{ step: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const stoppedRef = useRef(false);
 
   useEffect(() => {
     listProviders().then((list) => {
@@ -79,8 +103,10 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
   }, []);
 
   const processFile = useCallback(async (file: File) => {
+    stoppedRef.current = false;
     setError(null);
     setExtractState(null);
+    setMdOutput("");
     const format = detectFormat(file.name);
     if (!format) {
       setError("不支援的格式。請使用 Excel (.xlsx), Word (.docx) 或 PDF (.pdf)");
@@ -113,6 +139,52 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
     const file = e.dataTransfer.files[0];
     if (file) processFile(file);
   };
+
+  const normalizeWithAi = useCallback(async () => {
+    if (!extractState) return;
+    setMdOutput("");
+    setNormalizing(true);
+    stoppedRef.current = false;
+
+    const text = extractState.rawText;
+    const totalChunks = Math.ceil(text.length / CHUNK_SIZE);
+    setNormalizeProgress({ step: 0, total: totalChunks });
+
+    const parts: string[] = [];
+    for (let i = 0; i < totalChunks; i++) {
+      if (stoppedRef.current) break;
+      setNormalizeProgress({ step: i + 1, total: totalChunks });
+      const chunk = text.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+      try {
+        const result = await aiChat(
+          chunk,
+          NORMALIZATION_SYSTEM_PROMPT,
+          [],
+          selectedProviderId || undefined,
+        );
+        parts.push(result.trim());
+      } catch (e) {
+        setError(`AI 正規化失敗（步驟 ${i + 1}）：${formatAiError({ kind: "network", message: String(e) })}`);
+        break;
+      }
+    }
+
+    setMdOutput(parts.join("\n\n"));
+    setNormalizing(false);
+    setNormalizeProgress(null);
+  }, [extractState, selectedProviderId]);
+
+  const downloadMd = useCallback(() => {
+    if (!mdOutput) return;
+    const baseName = extractState?.fileName.replace(/\.[^.]+$/, "") ?? "schema";
+    const blob = new Blob([mdOutput], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${baseName}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [mdOutput, extractState]);
 
   return (
     <div className="doc-converter">
@@ -171,6 +243,64 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
             偵測到：{extractState.fileName}（{extractState.format.toUpperCase()}）
             · 提取 {extractState.rawText.length.toLocaleString()} 字元
           </div>
+        </div>
+      )}
+
+      {/* AI normalization actions */}
+      {extractState && !normalizing && (
+        <div className="doc-converter__actions">
+          <button
+            className="doc-converter__btn doc-converter__btn--primary"
+            onClick={normalizeWithAi}
+            disabled={!selectedProviderId}
+          >
+            ✨ AI 正規化
+          </button>
+          {mdOutput && (
+            <button
+              className="doc-converter__btn doc-converter__btn--secondary"
+              onClick={downloadMd}
+            >
+              ⬇ 下載 .md
+            </button>
+          )}
+        </div>
+      )}
+
+      {normalizing && (
+        <div className="doc-converter__actions">
+          <div className="doc-converter__progress">
+            <span>⟳</span>
+            <span>
+              AI 正規化中...
+              {normalizeProgress && ` (步驟 ${normalizeProgress.step}/${normalizeProgress.total})`}
+            </span>
+          </div>
+          <button
+            className="doc-converter__btn doc-converter__btn--secondary"
+            onClick={() => { stoppedRef.current = true; }}
+          >
+            ■ 停止
+          </button>
+        </div>
+      )}
+
+      {/* MD preview */}
+      {mdOutput && (
+        <div className="doc-converter__preview">
+          <div className="doc-converter__preview-header">
+            <span className="doc-converter__preview-label">
+              預覽（{mdOutput.length.toLocaleString()} 字元）
+            </span>
+            <button
+              className="doc-converter__btn doc-converter__btn--secondary"
+              style={{ fontSize: 11, padding: "2px 8px" }}
+              onClick={downloadMd}
+            >
+              ⬇ 下載 .md
+            </button>
+          </div>
+          <pre className="doc-converter__preview-box">{mdOutput}</pre>
         </div>
       )}
     </div>
