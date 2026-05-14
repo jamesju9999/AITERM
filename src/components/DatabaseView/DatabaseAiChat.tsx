@@ -150,12 +150,13 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sessions, setSessions] = useState<SavedSession[]>([]);
   const maxStepsRef = useRef<number>(5);
-  const [schemaDoc, setSchemaDoc] = useState<string>(() => loadSchemaDoc(connectionId));
+  const [schemaDoc, setSchemaDoc] = useState<string>("");
   const schemaDocRef = useRef(schemaDoc);
   useEffect(() => { schemaDocRef.current = schemaDoc; }, [schemaDoc]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const stoppedRef = useRef(false);
   const currentSessionIdRef = useRef<string | null>(null);
+  const schemaFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (schema) {
@@ -427,8 +428,6 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
     currentSessionIdRef.current = null;
     setHistoryOpen(false);
   };
-
-  const schemaFileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSchemaUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
