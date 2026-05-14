@@ -3,7 +3,7 @@ import { useLocale } from "../../contexts/LocaleContext";
 import "./index.css";
 
 interface Props {
-  onSelect: (type: "terminal" | "database" | "design" | "cross-db" | "vcs") => void;
+  onSelect: (type: "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter") => void;
   onClose: () => void;
 }
 
@@ -76,6 +76,16 @@ export function NewTabPicker({ onSelect, onClose }: Props) {
         <div>
           <div className="new-tab-picker__label">{t.vcs_tab}</div>
           <div className="new-tab-picker__desc">{t.new_vcs_desc}</div>
+        </div>
+      </button>
+      <button
+        className="new-tab-picker__item"
+        onClick={() => { onSelect("doc-converter"); onClose(); }}
+      >
+        <span className="new-tab-picker__icon">📄</span>
+        <div>
+          <div className="new-tab-picker__label">{t.doc_converter_tab}</div>
+          <div className="new-tab-picker__desc">{t.new_doc_converter_desc}</div>
         </div>
       </button>
     </div>

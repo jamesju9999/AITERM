@@ -5,6 +5,7 @@ import { DatabaseView } from "./DatabaseView";
 import { DesignView } from "./DesignView/DesignView";
 import { CrossDbView } from "./CrossDbView";
 import { VcsView } from "./VcsView/VcsView";
+import { DocConverterView } from "./DocConverter/DocConverterView";
 import { useLocale } from "../contexts/LocaleContext";
 import {
   onEnterpriseTaskReceived,
@@ -132,17 +133,18 @@ export function TerminalApp() {
     setPickerOpen(true);
   }, []);
 
-  const handlePickerSelect = useCallback((type: "terminal" | "database" | "design" | "cross-db" | "vcs") => {
+  const handlePickerSelect = useCallback((type: "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter") => {
     const newId = crypto.randomUUID();
     let title = "Terminal";
     if (type === "database") title = t.database_tab;
     if (type === "design") title = "Design";
     if (type === "cross-db") title = t.cross_db_tab;
     if (type === "vcs") title = t.vcs_tab;
+    if (type === "doc-converter") title = t.doc_converter_tab;
     setTabs((prev) => [...prev, { id: newId, title, type }]);
     setActiveId(newId);
     setPickerOpen(false);
-  }, [t.database_tab, t.cross_db_tab, t.vcs_tab]);
+  }, [t.database_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab]);
 
   const handleCloseTab = useCallback((id: string) => {
     setTabs((prev) => {
@@ -310,6 +312,8 @@ export function TerminalApp() {
                 <CrossDbView isActive={isActive} />
               ) : tab.type === "vcs" ? (
                 <VcsView sessionId={lastTerminalPtyId} isActive={isActive} />
+              ) : tab.type === "doc-converter" ? (
+                <DocConverterView isActive={isActive} />
               ) : (
                 <TerminalView
                   isActive={isActive}
