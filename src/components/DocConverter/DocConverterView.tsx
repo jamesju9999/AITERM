@@ -103,7 +103,9 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
   }, []);
 
   const processFile = useCallback(async (file: File) => {
-    stoppedRef.current = false;
+    stoppedRef.current = true;  // cancel any in-flight normalization
+    setNormalizing(false);
+    setNormalizeProgress(null);
     setError(null);
     setExtractState(null);
     setMdOutput("");
@@ -142,9 +144,10 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
 
   const normalizeWithAi = useCallback(async () => {
     if (!extractState) return;
+    stoppedRef.current = false;
+    setError(null);
     setMdOutput("");
     setNormalizing(true);
-    stoppedRef.current = false;
 
     const text = extractState.rawText;
     const totalChunks = Math.ceil(text.length / CHUNK_SIZE);
@@ -164,7 +167,10 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
         );
         parts.push(result.trim());
       } catch (e) {
-        setError(`AI 正規化失敗（步驟 ${i + 1}）：${formatAiError({ kind: "network", message: String(e) })}`);
+        const aiErr = typeof e === "object" && e !== null && "kind" in e
+          ? formatAiError(e as import("../../ipc/ai").AiError)
+          : String(e);
+        setError(`AI 正規化失敗（步驟 ${i + 1}）：${aiErr}`);
         break;
       }
     }
