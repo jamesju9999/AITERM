@@ -1,3 +1,5 @@
+<img width="1536" height="1024" alt="ChatGPT Image 2026年5月14日 下午08_28_16" src="https://github.com/user-attachments/assets/aa7f6739-ecfa-4cd4-9683-aafa2e4607e9" />
+
 # AITerm
 
 [English](#english) | [繁體中文](#繁體中文)
