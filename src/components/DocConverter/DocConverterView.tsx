@@ -20,6 +20,48 @@ interface ExtractState {
   rawText: string;
 }
 
+function detectFormat(name: string): Format | null {
+  const lower = name.toLowerCase();
+  if (lower.endsWith(".xlsx") || lower.endsWith(".xls") || lower.endsWith(".csv")) return "excel";
+  if (lower.endsWith(".docx")) return "word";
+  if (lower.endsWith(".pdf")) return "pdf";
+  return null;
+}
+
+async function extractExcel(buffer: ArrayBuffer): Promise<string> {
+  const wb = XLSX.read(buffer, { type: "array" });
+  const parts: string[] = [];
+  for (const sheetName of wb.SheetNames) {
+    const csv = XLSX.utils.sheet_to_csv(wb.Sheets[sheetName]);
+    parts.push(`[Sheet: ${sheetName}]\n${csv}`);
+  }
+  return parts.join("\n\n");
+}
+
+async function extractWord(buffer: ArrayBuffer): Promise<string> {
+  const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+  return result.value;
+}
+
+async function extractPdf(buffer: ArrayBuffer): Promise<string> {
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  try {
+    const pages: string[] = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      const pageText = content.items
+        // @ts-ignore
+        .map((item) => (item.str ?? ""))
+        .join(" ");
+      pages.push(pageText);
+    }
+    return pages.join("\n");
+  } finally {
+    pdf.destroy();
+  }
+}
+
 export function DocConverterView({ isActive: _isActive }: { isActive: boolean }) {
   const [extractState, setExtractState] = useState<ExtractState | null>(null);
   const [extracting, setExtracting] = useState(false);
@@ -35,44 +77,6 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
       if (def) setSelectedProviderId(def.id);
     }).catch(console.error);
   }, []);
-
-  const detectFormat = (name: string): Format | null => {
-    const lower = name.toLowerCase();
-    if (lower.endsWith(".xlsx") || lower.endsWith(".xls") || lower.endsWith(".csv")) return "excel";
-    if (lower.endsWith(".docx")) return "word";
-    if (lower.endsWith(".pdf")) return "pdf";
-    return null;
-  };
-
-  const extractExcel = async (buffer: ArrayBuffer): Promise<string> => {
-    const wb = XLSX.read(buffer, { type: "array" });
-    const parts: string[] = [];
-    for (const sheetName of wb.SheetNames) {
-      const csv = XLSX.utils.sheet_to_csv(wb.Sheets[sheetName]);
-      parts.push(`[Sheet: ${sheetName}]\n${csv}`);
-    }
-    return parts.join("\n\n");
-  };
-
-  const extractWord = async (buffer: ArrayBuffer): Promise<string> => {
-    const result = await mammoth.extractRawText({ arrayBuffer: buffer });
-    return result.value;
-  };
-
-  const extractPdf = async (buffer: ArrayBuffer): Promise<string> => {
-    const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
-    const pages: string[] = [];
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      const pageText = content.items
-        // @ts-ignore
-        .map((item) => (item.str ?? ""))
-        .join(" ");
-      pages.push(pageText);
-    }
-    return pages.join("\n");
-  };
 
   const processFile = useCallback(async (file: File) => {
     setError(null);
