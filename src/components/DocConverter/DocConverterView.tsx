@@ -3,8 +3,11 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import * as XLSX from "xlsx";
 import mammoth from "mammoth";
 import * as pdfjsLib from "pdfjs-dist";
+import { listen } from "@tauri-apps/api/event";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { aiChat, formatAiError } from "../../ipc/ai";
+import { readFileAsArrayBuffer } from "../../ipc/fs";
+import { useLocale } from "../../contexts/LocaleContext";
 import "./DocConverterView.css";
 
 // PDF.js worker
@@ -83,9 +86,11 @@ const NORMALIZATION_SYSTEM_PROMPT = `你是資料字典格式化工具。將輸�
 5. 保留原始的資料表名稱和欄位名稱（不要翻譯）`;
 
 export function DocConverterView({ isActive: _isActive }: { isActive: boolean }) {
+  const { t } = useLocale();
   const [extractState, setExtractState] = useState<ExtractState | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [downloadSuccess, setDownloadSuccess] = useState<string | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [mdOutput, setMdOutput] = useState<string>("");
@@ -93,6 +98,39 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
   const [normalizeProgress, setNormalizeProgress] = useState<{ step: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const stoppedRef = useRef(false);
+
+  const processFileData = useCallback(async (fileName: string, buffer: ArrayBuffer) => {
+    stoppedRef.current = true;  // cancel any in-flight normalization
+    setNormalizing(false);
+    setNormalizeProgress(null);
+    setError(null);
+    setDownloadSuccess(null);
+    setExtractState(null);
+    setMdOutput("");
+    const format = detectFormat(fileName);
+    if (!format) {
+      setError("不支援的格式。請使用 Excel (.xlsx), Word (.docx) 或 PDF (.pdf)");
+      return;
+    }
+    setExtracting(true);
+    try {
+      let rawText = "";
+      if (format === "excel") rawText = await extractExcel(buffer);
+      else if (format === "word") rawText = await extractWord(buffer);
+      else rawText = await extractPdf(buffer);
+
+      setExtractState({ format, fileName, rawText });
+    } catch (e) {
+      setError(`提取失敗：${String(e)}`);
+    } finally {
+      setExtracting(false);
+    }
+  }, []);
+
+  const processFile = useCallback(async (file: File) => {
+    const buffer = await file.arrayBuffer();
+    processFileData(file.name, buffer);
+  }, [processFileData]);
 
   useEffect(() => {
     listProviders().then((list) => {
@@ -102,33 +140,23 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
     }).catch(console.error);
   }, []);
 
-  const processFile = useCallback(async (file: File) => {
-    stoppedRef.current = true;  // cancel any in-flight normalization
-    setNormalizing(false);
-    setNormalizeProgress(null);
-    setError(null);
-    setExtractState(null);
-    setMdOutput("");
-    const format = detectFormat(file.name);
-    if (!format) {
-      setError("不支援的格式。請使用 Excel (.xlsx), Word (.docx) 或 PDF (.pdf)");
-      return;
-    }
-    setExtracting(true);
-    try {
-      const buffer = await file.arrayBuffer();
-      let rawText = "";
-      if (format === "excel") rawText = await extractExcel(buffer);
-      else if (format === "word") rawText = await extractWord(buffer);
-      else rawText = await extractPdf(buffer);
-
-      setExtractState({ format, fileName: file.name, rawText });
-    } catch (e) {
-      setError(`提取失敗：${String(e)}`);
-    } finally {
-      setExtracting(false);
-    }
-  }, []);
+  // Listen for OS-level file drops (Tauri intercepts these before the web DOM sees them)
+  useEffect(() => {
+    type DragDropPayload = { paths: string[]; position?: unknown };
+    const unlisten = listen<DragDropPayload>("tauri://drag-drop", async (event) => {
+      const paths = event.payload?.paths;
+      if (!paths?.length) return;
+      const path = paths[0];
+      const fileName = path.split(/[\\/]/).pop() ?? path;
+      try {
+        const buffer = await readFileAsArrayBuffer(path);
+        processFileData(fileName, buffer);
+      } catch (e) {
+        setError(`讀取失敗：${String(e)}`);
+      }
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [processFileData]);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -146,6 +174,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
     if (!extractState) return;
     stoppedRef.current = false;
     setError(null);
+    setDownloadSuccess(null);
     setMdOutput("");
     setNormalizing(true);
 
@@ -183,20 +212,23 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
   const downloadMd = useCallback(() => {
     if (!mdOutput) return;
     const baseName = extractState?.fileName.replace(/\.[^.]+$/, "") ?? "schema";
+    const fileName = `${baseName}.md`;
     const blob = new Blob([mdOutput], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${baseName}.md`;
+    a.download = fileName;
     a.click();
     URL.revokeObjectURL(url);
-  }, [mdOutput, extractState]);
+    setDownloadSuccess(t.dc_download_success(fileName));
+    setTimeout(() => setDownloadSuccess(null), 4000);
+  }, [mdOutput, extractState, t]);
 
   return (
     <div className="doc-converter">
       <div className="doc-converter__header">
-        <h2>📄 文件轉換器</h2>
-        <p>將 Word / PDF / Excel 資料字典轉換成結構化 Markdown Schema 文件</p>
+        <h2>📄 {t.dc_title}</h2>
+        <p>{t.dc_subtitle}</p>
       </div>
 
       <div
@@ -206,12 +238,12 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
         onClick={() => fileInputRef.current?.click()}
       >
         {extracting ? (
-          <span>⟳ 提取中...</span>
+          <span>{t.dc_extracting}</span>
         ) : (
           <>
             <span className="doc-converter__dropzone-icon">📂</span>
-            <span>拖放或點擊選擇檔案</span>
-            <span className="doc-converter__dropzone-hint">支援 .xlsx .xls .csv .docx .pdf</span>
+            <span>{t.dc_dropzone_hint}</span>
+            <span className="doc-converter__dropzone-hint">{t.dc_dropzone_formats}</span>
           </>
         )}
         <input
@@ -227,8 +259,12 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
         <div className="doc-converter__error">{error}</div>
       )}
 
+      {downloadSuccess && (
+        <div className="doc-converter__success">{downloadSuccess}</div>
+      )}
+
       <div className="doc-converter__toolbar">
-        <span className="doc-converter__toolbar-label">AI 模型</span>
+        <span className="doc-converter__toolbar-label">{t.dc_model_label}</span>
         <select
           value={selectedProviderId}
           onChange={(e) => setSelectedProviderId(e.target.value)}
@@ -239,15 +275,14 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
               {p.display_name} ({p.model}){p.is_default ? " ★" : ""}
             </option>
           ))}
-          {providers.length === 0 && <option value="">（未設定）</option>}
+          {providers.length === 0 && <option value="">{t.dc_model_none}</option>}
         </select>
       </div>
 
       {extractState && (
         <div className="doc-converter__raw-preview">
           <div className="doc-converter__raw-header">
-            偵測到：{extractState.fileName}（{extractState.format.toUpperCase()}）
-            · 提取 {extractState.rawText.length.toLocaleString()} 字元
+            {t.dc_detected(extractState.fileName, extractState.format.toUpperCase(), extractState.rawText.length)}
           </div>
         </div>
       )}
@@ -260,14 +295,14 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
             onClick={normalizeWithAi}
             disabled={!selectedProviderId}
           >
-            ✨ AI 正規化
+            {t.dc_normalize_btn}
           </button>
           {mdOutput && (
             <button
               className="doc-converter__btn doc-converter__btn--secondary"
               onClick={downloadMd}
             >
-              ⬇ 下載 .md
+              {t.dc_download_btn}
             </button>
           )}
         </div>
@@ -278,15 +313,15 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
           <div className="doc-converter__progress">
             <span>⟳</span>
             <span>
-              AI 正規化中...
-              {normalizeProgress && ` (步驟 ${normalizeProgress.step}/${normalizeProgress.total})`}
+              {t.dc_normalizing}
+              {normalizeProgress && t.dc_normalizing_step(normalizeProgress.step, normalizeProgress.total)}
             </span>
           </div>
           <button
             className="doc-converter__btn doc-converter__btn--secondary"
             onClick={() => { stoppedRef.current = true; }}
           >
-            ■ 停止
+            {t.dc_stop_btn}
           </button>
         </div>
       )}
@@ -296,14 +331,14 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
         <div className="doc-converter__preview">
           <div className="doc-converter__preview-header">
             <span className="doc-converter__preview-label">
-              預覽（{mdOutput.length.toLocaleString()} 字元）
+              {t.dc_preview_label(mdOutput.length)}
             </span>
             <button
               className="doc-converter__btn doc-converter__btn--secondary"
               style={{ fontSize: 11, padding: "2px 8px" }}
               onClick={downloadMd}
             >
-              ⬇ 下載 .md
+              {t.dc_download_btn}
             </button>
           </div>
           <pre className="doc-converter__preview-box">{mdOutput}</pre>

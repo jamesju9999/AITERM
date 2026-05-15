@@ -51,7 +51,7 @@ use enterprise::agent::EnterpriseTaskState;
 use enterprise::task_runner::VcsCredentialManager;
 use pty::commands::{
     pty_close, pty_create, pty_get_cwd, pty_get_recent_output, pty_get_shell_type,
-    pty_list_dir, pty_read_file, pty_resize, pty_write,
+    pty_list_dir, pty_read_file, pty_resize, pty_write, read_file_as_bytes,
 };
 use pty::PtyManager;
 use secret::SecretStore;
@@ -196,6 +196,7 @@ pub fn run() {
             pty_get_shell_type,
             pty_list_dir,
             pty_read_file,
+            read_file_as_bytes,
             // AI query
             ai_query,
             ai_chat,

@@ -153,6 +153,16 @@ pub struct FileContent {
 
 const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 
+/// Read a binary file and return its content as a base64-encoded string.
+/// Used by the Doc Converter to read files dropped via OS drag-and-drop (tauri://drag-drop).
+#[tauri::command]
+pub fn read_file_as_bytes(path: String) -> Result<String, String> {
+    use base64::{Engine as _, engine::general_purpose};
+    let canonical = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
+    let bytes = std::fs::read(&canonical).map_err(|e| e.to_string())?;
+    Ok(general_purpose::STANDARD.encode(bytes))
+}
+
 /// Read a text file's content. Caps at 10 MB; binary files return an error.
 #[tauri::command]
 pub fn pty_read_file(path: String) -> Result<FileContent, String> {

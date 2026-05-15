@@ -1,5 +1,6 @@
 // src/components/DesignView/DesignView.tsx
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useLocale } from '../../contexts/LocaleContext';
 import { SpecPreview } from './SpecPreview';
 import {
   designStartSession,
@@ -19,6 +20,7 @@ import { ProviderPalette } from '../ProviderPalette';
 import { extractResponseText } from '../../lib/markdown';
 import './DesignView.css';
 export function DesignView({ isActive }: { isActive: boolean }) {
+  const { t } = useLocale();
   const [session, setSession] = useState<DesignSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -156,14 +158,14 @@ export function DesignView({ isActive }: { isActive: boolean }) {
             setSession(data);
             await loadHistory(unfinished.id);
           } else {
-            const id = await designStartSession('新需求討論');
+            const id = await designStartSession(t.design_new_session_title);
             const data = await designLoadSession(id);
             setSession(data);
           }
         })
         .catch(() => {
           setSession({
-            id: 'fallback-id', title: '後端未就緒', status: 'draft',
+            id: 'fallback-id', title: t.design_backend_not_ready, status: 'draft',
             current_proposal_draft: null,
             current_spec_draft: '## 提示\n請重啟 `npm run tauri:dev` 以載入後端指令。',
             current_sdd_draft: null, current_plan_draft: null, context_summary: null
@@ -184,7 +186,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
   const handleNewSession = useCallback(async () => {
     if (isStreaming) return;
     try {
-      const id = await designStartSession('新需求討論');
+      const id = await designStartSession(t.design_new_session_title);
       const data = await designLoadSession(id);
       setSession(data);
       setMessages([]);
@@ -295,7 +297,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
       if (err && typeof err === 'object') {
         errMsg = (err as any).reason || (err as any).message || JSON.stringify(err);
       }
-      setMessages(prev => [...prev, { role: 'assistant', content: `❌ 錯誤: ${errMsg}` }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: t.design_error(errMsg) }]);
     } finally {
       setIsStreaming(false);
     }
@@ -306,15 +308,15 @@ export function DesignView({ isActive }: { isActive: boolean }) {
     let cleaned = text;
 
     const tags = streaming ? [
-      { tag: '[UPDATE_PROPOSAL]', msg: '> ⏳ **正在產生「提案 (Proposal)」...**' },
-      { tag: '[UPDATE_SPEC]', msg: '> ⏳ **正在產生「規格 (Spec)」...**' },
-      { tag: '[UPDATE_SDD]', msg: '> ⏳ **正在產生「設計 (Design)」...**' },
-      { tag: '[UPDATE_PLAN]', msg: '> ⏳ **正在產生「任務 (Tasks)」...**' },
+      { tag: '[UPDATE_PROPOSAL]', msg: t.design_generating_proposal },
+      { tag: '[UPDATE_SPEC]', msg: t.design_generating_spec },
+      { tag: '[UPDATE_SDD]', msg: t.design_generating_sdd },
+      { tag: '[UPDATE_PLAN]', msg: t.design_generating_plan },
     ] : [
-      { tag: '[UPDATE_PROPOSAL]', msg: '> ✨ **已更新右側「提案 (Proposal)」**' },
-      { tag: '[UPDATE_SPEC]', msg: '> ✨ **已更新右側「規格 (Spec)」**' },
-      { tag: '[UPDATE_SDD]', msg: '> ✨ **已更新右側「設計 (Design)」**' },
-      { tag: '[UPDATE_PLAN]', msg: '> ✨ **已更新右側「任務 (Tasks)」**' },
+      { tag: '[UPDATE_PROPOSAL]', msg: t.design_updated_proposal },
+      { tag: '[UPDATE_SPEC]', msg: t.design_updated_spec },
+      { tag: '[UPDATE_SDD]', msg: t.design_updated_sdd },
+      { tag: '[UPDATE_PLAN]', msg: t.design_updated_plan },
     ];
 
     for (const { tag, msg } of tags) {
@@ -351,11 +353,11 @@ export function DesignView({ isActive }: { isActive: boolean }) {
   }, [isStreaming, session, handleSendMessage]);
 
   const statusLabels: Record<string, string> = {
-    draft: '提案探索中',
-    proposal_approved: '規格定義中',
-    spec_approved: '技術設計中',
-    sdd_approved: '任務規劃中',
-    approved: '已完成',
+    draft: t.design_status_draft,
+    proposal_approved: t.design_status_proposal_approved,
+    spec_approved: t.design_status_spec_approved,
+    sdd_approved: t.design_status_sdd_approved,
+    approved: t.design_status_approved,
   };
 
   return (
@@ -373,28 +375,28 @@ export function DesignView({ isActive }: { isActive: boolean }) {
           <div style={{ display: 'flex', gap: '6px', marginLeft: 'auto' }}>
             <button
               className={`aiterm-block-btn${historyOpen ? ' aiterm-agent-toggle--on' : ''}`}
-              title="對話歷史"
+              title={t.design_history}
               onClick={() => { setHistoryOpen((o) => !o); if (!historyOpen) refreshSessionList(); }}
               style={{ padding: "2px 8px", fontSize: 11, background: historyOpen ? "rgba(96, 165, 250, 0.15)" : "transparent", color: historyOpen ? "#60a5fa" : "#666", border: historyOpen ? "1px solid rgba(96, 165, 250, 0.3)" : "1px solid #333", borderRadius: 4, cursor: "pointer" }}
             >
-              📋 歷史
+              {t.design_history}
             </button>
             <button
               className="aiterm-block-btn"
-              title="建立新 Session"
+              title={t.design_new_session}
               onClick={handleNewSession}
               disabled={isStreaming}
               style={{ padding: "2px 8px", fontSize: 11, background: "transparent", color: "#666", border: "1px solid #333", borderRadius: 4, cursor: "pointer" }}
             >
-              🗑 New
+              {t.design_new_session}
             </button>
             <button
               className={`aiterm-block-btn ${isRemoteEnabled ? 'aiterm-agent-toggle--on' : ''}`}
-              title="啟用/停用 Telegram 遠端控制"
+              title={t.design_remote}
               onClick={() => setIsRemoteEnabled(!isRemoteEnabled)}
               style={{ padding: "2px 8px", fontSize: 11, background: isRemoteEnabled ? "rgba(52, 211, 153, 0.15)" : "transparent", color: isRemoteEnabled ? "#34d399" : "#666", border: isRemoteEnabled ? "1px solid rgba(52, 211, 153, 0.3)" : "1px solid #333", borderRadius: 4, cursor: "pointer" }}
             >
-              📱 Remote
+              {t.design_remote}
             </button>
           </div>
         </div>
@@ -403,7 +405,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
         {historyOpen && (
           <div style={{ background: '#111', borderBottom: '1px solid #333', maxHeight: '200px', overflowY: 'auto', padding: '8px' }}>
             {sessionList.length === 0 && (
-              <div style={{ color: '#666', fontSize: 12, textAlign: 'center', padding: '12px' }}>尚無歷史記錄</div>
+              <div style={{ color: '#666', fontSize: 12, textAlign: 'center', padding: '12px' }}>{t.design_no_history}</div>
             )}
             {sessionList.map((s) => (
               <div
@@ -440,8 +442,8 @@ export function DesignView({ isActive }: { isActive: boolean }) {
           <div className="design-messages-list">
             {messages.length === 0 && (
               <div className="design-welcome-hero">
-                <h3>👋 OpenSpec 設計中心</h3>
-                <p>請描述您想開發的需求，或點擊右側面板的「▶ 產生」按鈕來開始...</p>
+                <h3>{t.design_welcome_title}</h3>
+                <p>{t.design_welcome_hint}</p>
               </div>
             )}
             {messages.map((m, i) => {
@@ -464,18 +466,18 @@ export function DesignView({ isActive }: { isActive: boolean }) {
                 className="design-provider-btn"
                 onClick={() => setShowProviderPalette(true)}
               >
-                🤖 {providerName ? `模型: ${providerName}` : '預設模型'}
+                🤖 {providerName ? t.design_model(providerName) : t.design_default_model}
               </button>
             </div>
             <div className="design-input-container">
               <textarea
-                className="design-chat-input" placeholder="輸入需求..."
+                className="design-chat-input" placeholder={t.design_input_placeholder}
                 value={inputValue} onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }}
                 disabled={isStreaming}
               />
               <button className="design-send-btn" onClick={() => handleSendMessage()} disabled={!inputValue.trim() || isStreaming}>
-                {isStreaming ? '...' : '送出'}
+                {isStreaming ? '...' : t.design_send}
               </button>
             </div>
           </div>

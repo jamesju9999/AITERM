@@ -54,8 +54,8 @@ export function NewTabPicker({ onSelect, onClose }: Props) {
       >
         <span className="new-tab-picker__icon">📝</span>
         <div>
-          <div className="new-tab-picker__label">設計與規格 (Design)</div>
-          <div className="new-tab-picker__desc">進行需求討論與 SDD 規劃</div>
+          <div className="new-tab-picker__label">{t.design_tab}</div>
+          <div className="new-tab-picker__desc">{t.new_design_desc}</div>
         </div>
       </button>
       <button

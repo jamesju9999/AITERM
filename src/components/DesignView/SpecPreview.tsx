@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { MarkdownText } from '../../lib/markdown';
 import { designSaveFile } from '../../ipc/design';
+import { useLocale } from '../../contexts/LocaleContext';
 
 interface SpecPreviewProps {
   title?: string;
@@ -15,15 +16,16 @@ interface SpecPreviewProps {
 
 type TabId = 'proposal' | 'spec' | 'sdd' | 'plan';
 
-const TAB_META: { id: TabId; label: string; generateLabel: string; regenerateLabel: string }[] = [
-  { id: 'proposal', label: '提案 (Proposal)', generateLabel: '▶ 產生提案', regenerateLabel: '🔄 重新產生' },
-  { id: 'spec', label: '規格 (Spec)', generateLabel: '▶ 產生規格', regenerateLabel: '🔄 重新產生' },
-  { id: 'sdd', label: '設計 (Design)', generateLabel: '▶ 產生設計', regenerateLabel: '🔄 重新產生' },
-  { id: 'plan', label: '任務 (Tasks)', generateLabel: '▶ 產生任務', regenerateLabel: '🔄 重新產生' },
-];
-
 export function SpecPreview({ title, proposal, spec, sdd, plan, onGenerate, isStreaming }: SpecPreviewProps) {
+  const { t } = useLocale();
   const [activeTab, setActiveTab] = useState<TabId>('proposal');
+
+  const TAB_META: { id: TabId; label: string; generateLabel: string; regenerateLabel: string }[] = [
+    { id: 'proposal', label: t.design_tab_proposal, generateLabel: t.design_generate_proposal, regenerateLabel: t.design_regenerate },
+    { id: 'spec', label: t.design_tab_spec, generateLabel: t.design_generate_spec, regenerateLabel: t.design_regenerate },
+    { id: 'sdd', label: t.design_tab_sdd, generateLabel: t.design_generate_sdd, regenerateLabel: t.design_regenerate },
+    { id: 'plan', label: t.design_tab_plan, generateLabel: t.design_generate_plan, regenerateLabel: t.design_regenerate },
+  ];
   const [saving, setSaving] = useState(false);
 
   // Custom dialog state
@@ -128,10 +130,10 @@ export function SpecPreview({ title, proposal, spec, sdd, plan, onGenerate, isSt
         savedPaths.push(full);
       }
 
-      setAlertMsg({ type: 'success', text: `✅ 儲存成功！\n已寫入檔案：\n${savedPaths.join('\n')}` });
+      setAlertMsg({ type: 'success', text: t.design_save_success(savedPaths.join('\n')) });
       setTimeout(() => setAlertMsg(null), 8000);
     } catch (err) {
-      setAlertMsg({ type: 'error', text: '❌ 儲存失敗：\n' + String(err) });
+      setAlertMsg({ type: 'error', text: t.design_save_error(String(err)) });
     } finally {
       setSaving(false);
     }
@@ -172,7 +174,7 @@ export function SpecPreview({ title, proposal, spec, sdd, plan, onGenerate, isSt
               onClick={handleSaveClick}
               disabled={saving}
             >
-              {saving ? '儲存中...' : '💾 儲存至專案'}
+              {saving ? t.design_saving : t.design_save_to_project}
             </button>
           )}
         </div>
@@ -197,7 +199,7 @@ export function SpecPreview({ title, proposal, spec, sdd, plan, onGenerate, isSt
           <MarkdownText text={activeContent} />
         ) : (
           <div className="design-empty-state" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
-            <p>尚未產生內容，請在左側開始討論。</p>
+            <p>{t.design_empty_state}</p>
             {onGenerate && (
               <button
                 className="design-provider-btn"
@@ -225,40 +227,40 @@ export function SpecPreview({ title, proposal, spec, sdd, plan, onGenerate, isSt
             borderRadius: '8px', padding: '24px', width: '90%', maxWidth: '600px',
             boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
           }}>
-            <h3 style={{ margin: '0 0 16px 0', fontSize: '1.1rem', color: '#eee' }}>確認儲存路徑</h3>
+            <h3 style={{ margin: '0 0 16px 0', fontSize: '1.1rem', color: '#eee' }}>{t.design_confirm_save_title}</h3>
             <p style={{ color: '#888', fontSize: '0.85rem', marginBottom: '20px' }}>
-              儲存格式遵循 OpenSpec 規範。Spec 若含 <code>## Capability:</code> 標題會自動拆為多檔。
+              {t.design_confirm_save_hint}
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '24px' }}>
               <div>
-                <label style={{ display: 'block', color: '#aaa', fontSize: '0.75rem', marginBottom: '4px' }}>📁 儲存目錄</label>
+                <label style={{ display: 'block', color: '#aaa', fontSize: '0.75rem', marginBottom: '4px' }}>{t.design_save_dir}</label>
                 <input type="text" value={paths.dir} onChange={e => setPaths({...paths, dir: e.target.value})} style={inputStyle} />
               </div>
               <div style={{ borderTop: '1px solid #333', paddingTop: '12px' }}>
-                <label style={{ display: 'block', color: '#666', fontSize: '0.7rem', marginBottom: '8px' }}>檔案名稱（Spec 會自動拆分至 specs/ 子目錄）</label>
+                <label style={{ display: 'block', color: '#666', fontSize: '0.7rem', marginBottom: '8px' }}>{t.design_save_filenames_hint}</label>
               </div>
               {proposal !== null && (
                 <div>
-                  <label style={{ display: 'block', color: '#aaa', fontSize: '0.75rem', marginBottom: '4px' }}>📋 提案 (Proposal)</label>
+                  <label style={{ display: 'block', color: '#aaa', fontSize: '0.75rem', marginBottom: '4px' }}>{t.design_save_proposal_label}</label>
                   <input type="text" value={paths.proposal} onChange={e => setPaths({...paths, proposal: e.target.value})} style={inputStyle} />
                 </div>
               )}
               {spec !== null && (
                 <div>
-                  <label style={{ display: 'block', color: '#aaa', fontSize: '0.75rem', marginBottom: '4px' }}>📄 規格 (Spec) — 自動拆分至 specs/</label>
+                  <label style={{ display: 'block', color: '#aaa', fontSize: '0.75rem', marginBottom: '4px' }}>{t.design_save_spec_label}</label>
                   <input type="text" value={paths.spec} onChange={e => setPaths({...paths, spec: e.target.value})} style={inputStyle} disabled />
                 </div>
               )}
               {sdd !== null && (
                 <div>
-                  <label style={{ display: 'block', color: '#aaa', fontSize: '0.75rem', marginBottom: '4px' }}>🏗️ 設計 (Design)</label>
+                  <label style={{ display: 'block', color: '#aaa', fontSize: '0.75rem', marginBottom: '4px' }}>{t.design_save_sdd_label}</label>
                   <input type="text" value={paths.sdd} onChange={e => setPaths({...paths, sdd: e.target.value})} style={inputStyle} />
                 </div>
               )}
               {plan !== null && (
                 <div>
-                  <label style={{ display: 'block', color: '#aaa', fontSize: '0.75rem', marginBottom: '4px' }}>📅 任務 (Tasks)</label>
+                  <label style={{ display: 'block', color: '#aaa', fontSize: '0.75rem', marginBottom: '4px' }}>{t.design_save_plan_label}</label>
                   <input type="text" value={paths.plan} onChange={e => setPaths({...paths, plan: e.target.value})} style={inputStyle} />
                 </div>
               )}
@@ -268,11 +270,11 @@ export function SpecPreview({ title, proposal, spec, sdd, plan, onGenerate, isSt
               <button
                 onClick={() => setPromptOpen(false)}
                 style={{ background: 'transparent', border: '1px solid #555', color: '#aaa', padding: '6px 16px', borderRadius: '4px', cursor: 'pointer' }}
-              >取消</button>
+              >{t.vcs_cancel}</button>
               <button
                 onClick={executeSave}
                 style={{ background: '#4caf50', border: 'none', color: '#fff', padding: '6px 16px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
-              >確認儲存</button>
+              >{t.design_confirm_save}</button>
             </div>
           </div>
         </div>
