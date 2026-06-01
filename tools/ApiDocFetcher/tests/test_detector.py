@@ -82,5 +82,9 @@ def test_detect_passes_cookies():
     html = "<html><body>plain</body></html>"
     with patch("detector.requests.get", return_value=make_response(200, html)) as mock_get:
         detect("https://example.com/docs", {"session": "abc"})
-    _, kwargs = mock_get.call_args
-    assert kwargs.get("cookies") == {"session": "abc"}
+    # All calls (5 probes + 1 HTML fetch) must receive cookies
+    assert mock_get.call_count >= 2, "Expected at least probe + HTML fetch calls"
+    for c in mock_get.call_args_list:
+        assert c.kwargs.get("cookies") == {"session": "abc"}, (
+            f"Call missing cookies: {c}"
+        )
