@@ -109,3 +109,116 @@ pub async fn api_docs_extract(
     run_fetcher(&app, &script, "extract", &args).await?;
     Ok(())
 }
+
+use tauri::{WebviewWindowBuilder, WebviewUrl};
+
+/// Open an embedded WebView window for the user to log in.
+/// Monitors navigation; when the URL returns to the docs domain, extracts
+/// document.cookie via JS eval and stores it in the OS keyring.
+/// Returns the cookie string on success.
+#[tauri::command]
+pub async fn api_docs_login(
+    app: AppHandle,
+    url: String,
+    secrets: tauri::State<'_, Arc<SecretStore>>,
+) -> Result<String, String> {
+    let domain = extract_domain(&url);
+    let domain_clone = domain.clone();
+
+    // Build a unique window label so multiple calls don't conflict
+    let label = format!("api-docs-login-{}", uuid::Uuid::new_v4().simple());
+
+    let webview_url = WebviewUrl::External(
+        url.parse::<tauri::Url>().map_err(|e| e.to_string())?
+    );
+
+    let window = WebviewWindowBuilder::new(&app, &label, webview_url)
+        .title(format!("Login — {domain}"))
+        .inner_size(900.0, 700.0)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // Poll navigation until we're back on the docs domain (login success)
+    // We check every 500ms for up to 5 minutes
+    let (tx, mut rx) = tokio::sync::oneshot::channel::<String>();
+    let tx = std::sync::Arc::new(tokio::sync::Mutex::new(Some(tx)));
+    let domain_for_closure = domain_clone.clone();
+
+    let window_clone = window.clone();
+    let tx_clone = tx.clone();
+    window.on_navigation(move |nav_url| {
+        let nav_host = nav_url.host_str().unwrap_or("");
+        if nav_host.contains(&domain_for_closure) || nav_host.ends_with(&domain_for_closure) {
+            // We're back on the docs domain — extract cookies via JS
+            let win = window_clone.clone();
+            let tx2 = tx_clone.clone();
+            tauri::async_runtime::spawn(async move {
+                // Small delay so the page can set cookies
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                let cookies = win.eval("document.cookie")
+                    .unwrap_or_else(|_| "\"\"".into());
+                // eval returns a JS value; strip surrounding quotes if present
+                let cookies = cookies.trim_matches('"').to_string();
+                if let Some(sender) = tx2.lock().await.take() {
+                    let _ = sender.send(cookies);
+                }
+            });
+        }
+        true  // allow navigation
+    });
+
+    // Wait for cookie signal (timeout after 5 min)
+    let cookies = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        async { rx.await.unwrap_or_default() }
+    )
+    .await
+    .unwrap_or_default();
+
+    // Close the login window
+    let _ = window.close();
+
+    if cookies.is_empty() {
+        return Err("Login window closed without detecting a successful login".to_string());
+    }
+
+    // Persist to keyring
+    secrets.set(&cookie_key(&domain), &cookies)
+        .map_err(|e| e.to_string())?;
+
+    Ok(cookies)
+}
+
+/// Clear stored cookies for a domain.
+#[tauri::command]
+pub async fn api_docs_logout(
+    domain: String,
+    secrets: tauri::State<'_, Arc<SecretStore>>,
+) -> Result<(), String> {
+    secrets.delete(&cookie_key(&domain))
+        .map_err(|e| e.to_string())
+}
+
+/// Check whether cookies are stored for a domain.
+#[tauri::command]
+pub async fn api_docs_auth_status(
+    domain: String,
+    secrets: tauri::State<'_, Arc<SecretStore>>,
+) -> Result<AuthStatus, String> {
+    let key = cookie_key(&domain);
+    match secrets.get(&key) {
+        Ok(Some(cookies)) if !cookies.is_empty() => {
+            // Try to extract an email-like token from the cookies as a display name
+            let account = cookies
+                .split(';')
+                .filter_map(|pair| {
+                    let kv: Vec<&str> = pair.splitn(2, '=').collect();
+                    if kv.len() == 2 { Some(kv[1].trim().to_string()) } else { None }
+                })
+                .find(|v| v.contains('@'))
+                .unwrap_or_default();
+            Ok(AuthStatus { logged_in: true, account })
+        }
+        _ => Ok(AuthStatus { logged_in: false, account: String::new() }),
+    }
+}
