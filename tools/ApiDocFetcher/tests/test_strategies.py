@@ -62,3 +62,40 @@ def test_openapi_direct_json_spec():
         strategy = OpenApiDirectStrategy(detection)
         content = strategy.fetch_page("https://example.com/docs", {})
     assert content.openapi_spec["info"]["title"] == "JSON API"
+
+
+from strategies.mintlify_next import MintlifyNextStrategy
+
+MINTLIFY_TREE_HTML = """
+<html><body>
+<script>self.__next_f.push([1,"c:[\\\"$\\\",\\\"$L15\\\",null,{\\\"items\\\":[{\\\"title\\\":\\\"Getting Started\\\",\\\"href\\\":\\\"/docs/start\\\",\\\"items\\\":[{\\\"title\\\":\\\"Intro\\\",\\\"href\\\":\\\"/docs/start/intro\\\",\\\"items\\\":[]}]}]}]"])</script>
+</body></html>
+"""
+
+MINTLIFY_SPEC_HTML = """
+<html><body>
+<script>self.__next_f.push([1,"openapi: 3.0.0\\ninfo:\\n  title: SWIFT API\\n  version: 1.0.0\\npaths: {}"])</script>
+</body></html>
+"""
+
+
+def test_mintlify_fetch_tree_parses_nav():
+    detection = Detection(platform="mintlify-next", confidence="high")
+    with patch("strategies.mintlify_next.requests.get",
+               return_value=make_response(200, MINTLIFY_TREE_HTML)):
+        strategy = MintlifyNextStrategy(detection)
+        tree = strategy.fetch_tree("https://docs.example.com/docs", {})
+    assert len(tree) >= 1
+    assert tree[0].title == "Getting Started"
+    assert tree[0].href == "/docs/start"
+
+
+def test_mintlify_fetch_page_extracts_openapi():
+    detection = Detection(platform="mintlify-next", confidence="high")
+    with patch("strategies.mintlify_next.requests.get",
+               return_value=make_response(200, MINTLIFY_SPEC_HTML)):
+        strategy = MintlifyNextStrategy(detection)
+        content = strategy.fetch_page("https://docs.example.com/docs/api", {})
+    assert content.openapi_spec is not None
+    assert content.openapi_spec["info"]["title"] == "SWIFT API"
+    assert not content.needs_ai
