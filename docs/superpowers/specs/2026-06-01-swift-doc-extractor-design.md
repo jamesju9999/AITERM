@@ -234,6 +234,45 @@ AI prompt：
 
 ---
 
+## 認證機制
+
+### 流程
+
+1. 使用者輸入 URL → 系統嘗試抓取，若收到 HTTP 401 / 302 到登入頁 → 標記為「需要登入」
+2. 右側設定面板顯示認證狀態（🔴 未登入 / 🟢 已登入 + 帳號名稱）
+3. 使用者點「登入」→ Tauri 開啟獨立 WebView 視窗（`WebviewWindowBuilder`）
+4. 使用者在 WebView 完成登入流程（支援 OAuth / SSO / 帳密等，由網站本身處理）
+5. Rust 監聽 WebView navigation 事件，偵測 URL 回到 docs 域名 → 判定登入成功
+6. 從 WebView cookie store 擷取 session cookies → 存入 OS keyring（macOS Keychain / Windows Credential Store）
+7. WebView 視窗關閉，curl_cffi 帶 cookies 重新發請求
+
+### 狀態管理
+
+- Cookies 以 domain 為 key 存入 OS keyring（沿用現有 `config/` keyring 模組）
+- 每次萃取前檢查 keyring 是否有該 domain 的 cookies
+- Cookies 過期（請求回 401）→ UI 提示「Session 已過期，請重新登入」
+
+### 新增 Tauri Commands
+
+| Command | 說明 |
+|---------|------|
+| `api_docs_login(url)` | 開啟 WebView 登入視窗，完成後回傳 cookies |
+| `api_docs_logout(domain)` | 清除 keyring 中該 domain 的 cookies |
+| `api_docs_auth_status(domain)` | 查詢目前認證狀態（未登入 / 已登入 + 帳號） |
+
+### Python fetcher 認證支援
+
+```bash
+# Rust 從 keyring 取出 cookies，以 CLI 參數傳入
+python3 fetcher.py fetch-tree \
+  --url https://docs.developer.swift.com/docs \
+  --cookies "session=abc123; token=xyz789"
+```
+
+curl_cffi 的 `requests.get()` 直接接受 `cookies=` 字典參數。
+
+---
+
 ## 整合現有 AITerm 架構
 
 - **AI Provider**：沿用 `src/ipc/provider.ts` 的 `listProviders()`
@@ -247,7 +286,9 @@ AI prompt：
 
 | 錯誤場景 | 處理方式 |
 |---------|---------|
-| curl_cffi 未安裝 | 萃取前檢查，顯示 `pip install curl_cffi` 指引 |
+| curl_cffi 未安裝 | 萃取前檢查，顯示 `pip install curl_cffi pyyaml beautifulsoup4` 指引 |
+| Session 過期（401） | UI 提示「Session 已過期，請重新登入」，保留已選設定 |
+| WebView 登入失敗 | log 錯誤，視窗可手動關閉，不影響未登入內容的萃取 |
 | 無法偵測平台 | 顯示警告，自動降為 ai-generic 策略 |
 | 頁面 timeout | log `✗ Failed`，繼續其餘頁面 |
 | OpenAPI 解析失敗 | log 警告，跳過該頁 |
@@ -259,7 +300,7 @@ AI prompt：
 
 ## 不在範圍內
 
-- 需要登入才能看的文件
+- 需要企業 SSO / VPN 才能存取的文件（需使用者自行確保網路連線）
 - 非 HTTP/HTTPS 來源
 - Markdown 以外的輸出格式（PDF、HTML）
 - 自動排程 / 定期更新
