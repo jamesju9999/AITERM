@@ -83,3 +83,37 @@ def test_empty_paths_produces_valid_header():
     spec = {"openapi": "3.0.0", "info": {"title": "Empty", "version": "0.1"}, "paths": {}}
     md = openapi_to_markdown(spec, KeepOptions())
     assert "# Empty — 0.1" in md
+
+
+def test_keep_request_schema_false_omits_request_body():
+    keep = KeepOptions(request_schema=False)
+    md = openapi_to_markdown(SIMPLE_SPEC, keep)
+    assert "### Request Body" not in md
+
+
+def test_keep_description_false_omits_description():
+    keep = KeepOptions(description=False)
+    md = openapi_to_markdown(SIMPLE_SPEC, keep)
+    assert "> A test API." not in md
+
+
+def test_keep_code_samples_false_omits_samples():
+    spec_with_samples = {
+        "openapi": "3.0.0",
+        "info": {"title": "Sample API", "version": "1.0"},
+        "paths": {
+            "/test": {
+                "get": {
+                    "summary": "Test",
+                    "responses": {"200": {"description": "OK"}},
+                    "x-codeSamples": [{"lang": "Python", "source": "import requests"}],
+                }
+            }
+        },
+    }
+    keep_with = KeepOptions(code_samples=True)
+    keep_without = KeepOptions(code_samples=False)
+    md_with = openapi_to_markdown(spec_with_samples, keep_with)
+    md_without = openapi_to_markdown(spec_with_samples, keep_without)
+    assert "### Example (Python)" in md_with
+    assert "### Example (Python)" not in md_without

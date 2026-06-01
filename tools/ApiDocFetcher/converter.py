@@ -56,7 +56,7 @@ def openapi_to_markdown(spec: dict, keep: KeepOptions) -> str:
                         name = p.get("name", "")
                         loc = p.get("in", "")
                         required = "✓" if p.get("required") else ""
-                        desc = p.get("description", "").replace("\n", " ")
+                        desc = p.get("description", "").replace("\n", " ").replace("|", "\\|")
                         ptype = p.get("schema", {}).get("type", "")
                         lines.append(f"| `{name}` | {loc} | {ptype} | {required} | {desc} |")
                     lines.append("")
@@ -78,7 +78,7 @@ def openapi_to_markdown(spec: dict, keep: KeepOptions) -> str:
                             "```",
                             "",
                         ]
-                    break  # only first media type
+                        break  # only first media type
 
             # Responses
             if keep.response_schema:
@@ -91,13 +91,13 @@ def openapi_to_markdown(spec: dict, keep: KeepOptions) -> str:
                         "|------|-------------|",
                     ]
                     for code, resp in responses.items():
-                        desc = resp.get("description", "") if isinstance(resp, dict) else ""
+                        desc = (resp.get("description", "") if isinstance(resp, dict) else "").replace("|", "\\|")
                         lines.append(f"| {code} | {desc} |")
                     lines.append("")
 
             # Code samples (x-codeSamples extension)
             if keep.code_samples:
-                for sample in op.get("x-codeSamples", []):
+                for sample in (op.get("x-codeSamples") or []):
                     lang = sample.get("lang", "bash")
                     src = sample.get("source", "")
                     lines += [f"### Example ({lang})", "", f"```{lang.lower()}", src, "```", ""]
