@@ -1,4 +1,5 @@
-# tools/ApiDocFetcher/strategies/__init__.py
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Optional, Protocol
 
@@ -53,12 +54,12 @@ class Strategy(Protocol):
 
 def get_strategy(detection: Detection) -> Strategy:
     """Return the matching strategy instance for a Detection."""
-    from strategies.openapi_direct import OpenApiDirectStrategy
-    from strategies.mintlify_next import MintlifyNextStrategy
-    from strategies.swagger_ui import SwaggerUiStrategy
-    from strategies.redoc import RedocStrategy
-    from strategies.docusaurus import DocusaurusStrategy
-    from strategies.ai_generic import AiGenericStrategy
+    from .openapi_direct import OpenApiDirectStrategy
+    from .mintlify_next import MintlifyNextStrategy
+    from .swagger_ui import SwaggerUiStrategy
+    from .redoc import RedocStrategy
+    from .docusaurus import DocusaurusStrategy
+    from .ai_generic import AiGenericStrategy
 
     mapping = {
         "openapi-direct": OpenApiDirectStrategy,
