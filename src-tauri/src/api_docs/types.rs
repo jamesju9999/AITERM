@@ -61,3 +61,52 @@ pub struct AuthStatus {
     /// Account name / email if known, otherwise empty
     pub account: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn doc_node_roundtrip() {
+        let node = DocNode {
+            title: "Getting Started".into(),
+            href: "/docs/getting-started".into(),
+            items: vec![DocNode {
+                title: "Quickstart".into(),
+                href: "/docs/quickstart".into(),
+                items: vec![],
+            }],
+        };
+        let json = serde_json::to_string(&node).unwrap();
+        let decoded: DocNode = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.title, "Getting Started");
+        assert_eq!(decoded.items[0].href, "/docs/quickstart");
+    }
+
+    #[test]
+    fn keep_options_defaults() {
+        let opts: KeepOptions = serde_json::from_str("{}").unwrap();
+        assert!(opts.description);
+        assert!(opts.parameters);
+        assert!(opts.request_body);
+        assert!(opts.responses);
+        assert!(opts.code_samples);
+    }
+
+    #[test]
+    fn extraction_options_roundtrip() {
+        let opts = ExtractionOptions {
+            url: "https://docs.example.com".into(),
+            pages: vec!["/api/v1".into()],
+            output_dir: "/tmp/out".into(),
+            merge: true,
+            keep: KeepOptions::default(),
+            cookies: "session=abc".into(),
+        };
+        let json = serde_json::to_string(&opts).unwrap();
+        let decoded: ExtractionOptions = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.url, "https://docs.example.com");
+        assert!(decoded.merge);
+        assert_eq!(decoded.cookies, "session=abc");
+    }
+}
