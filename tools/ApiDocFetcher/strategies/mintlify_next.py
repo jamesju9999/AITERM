@@ -20,8 +20,8 @@ def _unescape_chunk(data: str) -> str:
     data = data.strip()
     if data.startswith('"') and data.endswith('"'):
         try:
-            return bytes(data[1:-1], "utf-8").decode("unicode_escape")
-        except Exception:
+            return json.loads(data)
+        except (json.JSONDecodeError, ValueError):
             return data[1:-1]
     return data
 
