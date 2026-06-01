@@ -3,6 +3,7 @@ pub mod types;
 pub mod runner;
 
 use std::path::PathBuf;
+use tauri::Manager;
 
 /// Locate the Python interpreter on the host machine.
 /// Tries `python3` then `python` — returns the first that resolves.

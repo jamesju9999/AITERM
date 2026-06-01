@@ -113,9 +113,9 @@ pub async fn api_docs_extract(
 use tauri::{WebviewWindowBuilder, WebviewUrl};
 
 /// Open an embedded WebView window for the user to log in.
-/// Monitors navigation; when the URL returns to the docs domain, extracts
-/// document.cookie via JS eval and stores it in the OS keyring.
-/// Returns the cookie string on success.
+/// Monitors navigation; when the URL returns to the docs domain, reads cookies
+/// via the Tauri WebviewWindow cookie API and stores them in the OS keyring.
+/// Returns the cookie string (key=value; key=value) on success.
 #[tauri::command]
 pub async fn api_docs_login(
     app: AppHandle,
@@ -132,48 +132,43 @@ pub async fn api_docs_login(
         url.parse::<tauri::Url>().map_err(|e| e.to_string())?
     );
 
+    // Set up channel before building so we can pass the closure to on_navigation (builder method)
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let tx = std::sync::Arc::new(tokio::sync::Mutex::new(Some(tx)));
+    let domain_for_closure = domain_clone.clone();
+    let tx_clone = tx.clone();
+
     let window = WebviewWindowBuilder::new(&app, &label, webview_url)
         .title(format!("Login — {domain}"))
         .inner_size(900.0, 700.0)
+        .on_navigation(move |nav_url: &tauri::Url| {
+            let nav_host = nav_url.host_str().unwrap_or("");
+            if nav_host.contains(&domain_for_closure) || nav_host.ends_with(&domain_for_closure) {
+                let tx2 = tx_clone.clone();
+                tauri::async_runtime::spawn(async move {
+                    // Small delay so the page can set cookies
+                    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                    if let Some(sender) = tx2.lock().await.take() {
+                        let _ = sender.send(());
+                    }
+                });
+            }
+            true  // allow navigation
+        })
         .build()
         .map_err(|e| e.to_string())?;
 
-    // Poll navigation until we're back on the docs domain (login success)
-    // We check every 500ms for up to 5 minutes
-    let (tx, mut rx) = tokio::sync::oneshot::channel::<String>();
-    let tx = std::sync::Arc::new(tokio::sync::Mutex::new(Some(tx)));
-    let domain_for_closure = domain_clone.clone();
-
-    let window_clone = window.clone();
-    let tx_clone = tx.clone();
-    window.on_navigation(move |nav_url| {
-        let nav_host = nav_url.host_str().unwrap_or("");
-        if nav_host.contains(&domain_for_closure) || nav_host.ends_with(&domain_for_closure) {
-            // We're back on the docs domain — extract cookies via JS
-            let win = window_clone.clone();
-            let tx2 = tx_clone.clone();
-            tauri::async_runtime::spawn(async move {
-                // Small delay so the page can set cookies
-                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-                let cookies = win.eval("document.cookie")
-                    .unwrap_or_else(|_| "\"\"".into());
-                // eval returns a JS value; strip surrounding quotes if present
-                let cookies = cookies.trim_matches('"').to_string();
-                if let Some(sender) = tx2.lock().await.take() {
-                    let _ = sender.send(cookies);
-                }
-            });
-        }
-        true  // allow navigation
-    });
-
-    // Wait for cookie signal (timeout after 5 min)
-    let cookies = tokio::time::timeout(
+    // Wait for login signal (timeout after 5 min)
+    let _ = tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        async { rx.await.unwrap_or_default() }
+        async { rx.await.ok() }
     )
-    .await
-    .unwrap_or_default();
+    .await;
+
+    // Read cookies from the WebView's cookie store
+    let parsed_url = url.parse::<tauri::Url>().map_err(|e| e.to_string())?;
+    let cookies = window.cookies_for_url(parsed_url)
+        .map_err(|e| e.to_string())?;
 
     // Close the login window
     let _ = window.close();
@@ -182,11 +177,18 @@ pub async fn api_docs_login(
         return Err("Login window closed without detecting a successful login".to_string());
     }
 
+    // Serialise to "key=value; key=value" string
+    let cookie_str = cookies
+        .iter()
+        .map(|c| format!("{}={}", c.name(), c.value()))
+        .collect::<Vec<_>>()
+        .join("; ");
+
     // Persist to keyring
-    secrets.set(&cookie_key(&domain), &cookies)
+    secrets.set(&cookie_key(&domain), &cookie_str)
         .map_err(|e| e.to_string())?;
 
-    Ok(cookies)
+    Ok(cookie_str)
 }
 
 /// Clear stored cookies for a domain.

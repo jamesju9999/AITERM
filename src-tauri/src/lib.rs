@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod api_docs;
 pub mod commands;
 pub mod config;
 pub mod db;
@@ -14,6 +15,10 @@ use tokio::sync::Mutex;
 
 use ai::router::AiRouter;
 use commands::{
+    api_docs::{
+        api_docs_auth_status, api_docs_detect, api_docs_extract,
+        api_docs_fetch_tree, api_docs_login, api_docs_logout,
+    },
     ai::{ai_chat, ai_query},
     config::{
         get_config, is_onboarding_done, set_default_tab, set_execution_mode, set_max_agent_steps,
@@ -275,6 +280,13 @@ pub fn run() {
             vcs_query,
             vcs_agent_step,
             pick_folder,
+            // API Docs
+            api_docs_detect,
+            api_docs_fetch_tree,
+            api_docs_extract,
+            api_docs_login,
+            api_docs_logout,
+            api_docs_auth_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
