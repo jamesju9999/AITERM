@@ -1,0 +1,4 @@
+curl_cffi>=0.7.0
+pyyaml>=6.0
+beautifulsoup4>=4.12
+pytest>=8.0
