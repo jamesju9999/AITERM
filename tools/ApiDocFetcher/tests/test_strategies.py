@@ -152,3 +152,49 @@ def test_redoc_fetch_page_uses_spec_url():
         strategy = RedocStrategy(detection)
         content = strategy.fetch_page("https://example.com/docs", {})
     assert content.openapi_spec["info"]["title"] == "Redoc API"
+
+
+from strategies.docusaurus import DocusaurusStrategy
+from strategies.ai_generic import AiGenericStrategy
+
+
+DOCUSAURUS_SIDEBAR = json.dumps({
+    "docs": [
+        {"type": "category", "label": "Getting Started",
+         "items": [{"type": "doc", "id": "intro", "label": "Introduction"}]},
+    ]
+})
+
+
+def test_docusaurus_fetch_tree_from_sidebar_json():
+    detection = Detection(platform="docusaurus", confidence="medium")
+    url_map = {
+        "https://docs.example.com/docs/sidebar.json": make_response(200, DOCUSAURUS_SIDEBAR),
+    }
+    with patch("strategies.docusaurus.requests.get",
+               side_effect=lambda url, **kw: url_map.get(url, make_response(404, ""))):
+        strategy = DocusaurusStrategy(detection)
+        tree = strategy.fetch_tree("https://docs.example.com/docs", {})
+    assert tree[0].title == "Getting Started"
+    assert tree[0].items[0].title == "Introduction"
+
+
+def test_ai_generic_returns_raw_text_needs_ai():
+    html = "<html><body><h1>API Docs</h1><p>POST /users creates a user.</p></body></html>"
+    detection = Detection(platform="ai-generic", confidence="low")
+    with patch("strategies.ai_generic.requests.get",
+               return_value=make_response(200, html)):
+        strategy = AiGenericStrategy(detection)
+        content = strategy.fetch_page("https://example.com/docs/api", {})
+    assert content.needs_ai is True
+    assert "POST /users" in (content.raw_text or "")
+    assert content.openapi_spec is None
+
+
+def test_ai_generic_fetch_tree_returns_empty():
+    detection = Detection(platform="ai-generic", confidence="low")
+    with patch("strategies.ai_generic.requests.get",
+               return_value=make_response(200, "<html><body>docs</body></html>")):
+        strategy = AiGenericStrategy(detection)
+        tree = strategy.fetch_tree("https://example.com/docs", {})
+    assert tree == []
