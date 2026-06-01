@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "AFfj8dPWRxU=",
+  "success": true,
+  "projectFilePath": "/Users/jamesju/Documents/GitHub/AITERM/tools/UrlFetcher/UrlFetcher.csproj",
+  "expectedPackageFiles": [
+    "/Users/jamesju/.nuget/packages/system.text.json/9.0.0/system.text.json.9.0.0.nupkg.sha512"
+  ],
+  "logs": []
+}

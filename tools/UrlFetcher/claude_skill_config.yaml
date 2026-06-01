@@ -1,0 +1,49 @@
+# WebFetcher Skill Configuration for Claude AI
+# 讓 AI 能透過 Skill 調用網頁抓取工具的配置文件
+
+name: urlfetch
+description: Fetch website content from command line. Allows AI to dynamically grab website content.
+model: claude-opus-4-6
+runs:
+  - dotnet
+  - run
+  - --project
+  - UrlFetcher/Program.cs
+icon: https://raw.githubusercontent.com/octocat/octocat/main/octocat.png
+open: []
+image: https://raw.githubusercontent.com/octocat/octocat/main/octocat.png
+
+# 參數定義（Parameter specifications）
+spec:
+  - name: url
+    description: The URL to fetch content from
+    prompt: the URL
+    required: true
+
+  - name: silent
+    description: Silent mode, do not display status information
+    prompt: silent mode flag
+    required: false
+
+  - name: output
+    description: Save the result to a file
+    prompt: output file path
+    required: false
+
+# 使用範例（Example usage patterns）
+examples:
+  - description: Fetch website HTML content
+    command: "dotnet run --project UrlFetcher -u https://www.example.com"
+
+  - description: Silent mode
+    command: "dotnet run --project UrlFetcher -u https://www.google.com --silent"
+
+  - description: Save to file
+    command: "dotnet run --project UrlFetcher -u https://www.github.com -o /tmp/github_page.html"
+
+# 文檔連結（Documentation links）
+docs:
+  - file: SKILL_USAGE.md
+    description: Complete skill usage documentation
+  - file: README.md
+    description: Project documentation

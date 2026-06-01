@@ -1,0 +1,23 @@
+name: webfetch
+description: Fetch website content from command line
+model: claude-opus-4-6
+runs: ["dotnet", "run", "--project", "UrlFetcher/Program.cs"]
+icon: https://raw.githubusercontent.com/octocat/octocat/main/octocat.png
+open: []
+image: https://raw.githubusercontent.com/octocat/octocat/main/octocat.png
+
+spec:
+  - name: url
+    description: The URL to fetch content from
+    prompt: the URL
+    required: true
+
+  - name: silent
+    description: Silent mode, do not display status information
+    prompt: silent mode flag
+    required: false
+
+  - name: output
+    description: Save the result to a file
+    prompt: output file path
+    required: false

@@ -1,0 +1,15 @@
+/Users/jamesju/Documents/GitHub/AITERM/tools/UrlFetcher/bin/Debug/net9.0/UrlFetcher
+/Users/jamesju/Documents/GitHub/AITERM/tools/UrlFetcher/bin/Debug/net9.0/UrlFetcher.deps.json
+/Users/jamesju/Documents/GitHub/AITERM/tools/UrlFetcher/bin/Debug/net9.0/UrlFetcher.runtimeconfig.json
+/Users/jamesju/Documents/GitHub/AITERM/tools/UrlFetcher/bin/Debug/net9.0/UrlFetcher.dll
+/Users/jamesju/Documents/GitHub/AITERM/tools/UrlFetcher/bin/Debug/net9.0/UrlFetcher.pdb
+/Users/jamesju/Documents/GitHub/AITERM/tools/UrlFetcher/obj/Debug/net9.0/UrlFetcher.GeneratedMSBuildEditorConfig.editorconfig
+/Users/jamesju/Documents/GitHub/AITERM/tools/UrlFetcher/obj/Debug/net9.0/UrlFetcher.AssemblyInfoInputs.cache
+/Users/jamesju/Documents/GitHub/AITERM/tools/UrlFetcher/obj/Debug/net9.0/UrlFetcher.AssemblyInfo.cs
+/Users/jamesju/Documents/GitHub/AITERM/tools/UrlFetcher/obj/Debug/net9.0/UrlFetcher.csproj.CoreCompileInputs.cache
+/Users/jamesju/Documents/GitHub/AITERM/tools/UrlFetcher/obj/Debug/net9.0/UrlFetcher.sourcelink.json
+/Users/jamesju/Documents/GitHub/AITERM/tools/UrlFetcher/obj/Debug/net9.0/UrlFetcher.dll
+/Users/jamesju/Documents/GitHub/AITERM/tools/UrlFetcher/obj/Debug/net9.0/refint/UrlFetcher.dll
+/Users/jamesju/Documents/GitHub/AITERM/tools/UrlFetcher/obj/Debug/net9.0/UrlFetcher.pdb
+/Users/jamesju/Documents/GitHub/AITERM/tools/UrlFetcher/obj/Debug/net9.0/UrlFetcher.genruntimeconfig.cache
+/Users/jamesju/Documents/GitHub/AITERM/tools/UrlFetcher/obj/Debug/net9.0/ref/UrlFetcher.dll

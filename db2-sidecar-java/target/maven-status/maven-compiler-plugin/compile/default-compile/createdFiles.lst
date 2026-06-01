@@ -1,0 +1,5 @@
+com/aiterm/db2sidecar/CommandHandler.class
+com/aiterm/db2sidecar/Response.class
+com/aiterm/db2sidecar/Main.class
+com/aiterm/db2sidecar/Request.class
+com/aiterm/db2sidecar/ConnectionManager.class

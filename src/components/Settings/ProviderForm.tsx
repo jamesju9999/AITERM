@@ -71,7 +71,12 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
     if (providerType !== "ollama") return;
     setOllamaLoading(true);
     getOllamaModels(baseUrl || undefined)
-      .then((models) => setOllamaModels(models))
+      .then((models) => {
+        setOllamaModels(models);
+        if (models.length > 0 && !models.includes(model)) {
+          setModel(models[0]);
+        }
+      })
       .catch(() => setOllamaModels([]))
       .finally(() => setOllamaLoading(false));
   }, [providerType, baseUrl]);

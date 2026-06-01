@@ -1,0 +1,12 @@
+{
+  "name": "swift-doc-fetcher",
+  "version": "0.1.0",
+  "description": "SWIFT developer docs → Markdown extractor",
+  "main": "probe.js",
+  "scripts": {
+    "probe": "node probe.js"
+  },
+  "dependencies": {
+    "playwright": "^1.60.0"
+  }
+}

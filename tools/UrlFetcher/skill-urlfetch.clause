@@ -1,0 +1,87 @@
+# Claude Skill 配置文件：urlfetch
+
+## Skill 名稱
+`urlfetch` - 網頁內容抓取工具
+
+## 描述
+這是一個 C# .NET 命令列工具，可透過動態指定網址來抓取網頁內容。適合 AI 系統透過 Skill 調用來獲取網頁資訊。
+
+## 使用方式
+
+### 基本用法
+```
+/skill urlfetch -u <目标网址>
+```
+
+### 範例
+
+**抓取個人網站首頁:**
+```
+/skill urlfetch -u https://www.example.com
+```
+
+**靜默模式（僅顯示 HTML 內容）:**
+```
+/skill urlfetch -u https://www.example.com --silent
+```
+
+**保存到文件:**
+```
+/skill urlfetch -u https://www.example.com -o /tmp/page.html
+```
+
+## 參數說明
+
+| 參數 | 說明 | 必要性 |
+|------|------|--------|
+| `-u, --url <URL>` | 指定要抓取的網址 | 必要 |
+| `-s, --silent` | 靜默模式，不顯示狀態信息，僅輸出 HTML 內容 | 可選 |
+| `-o, --output <FILE>` | 將結果保存到指定的文件 | 可選 |
+| `-h, --help` | 顯示幫助信息 | 可選 |
+
+## 完整說明文件位置
+`/Users/jamesju/Documents/CodeSample/JAVA/SwiftRefAPI-LLM/UrlFetcher/README.md`
+
+## 專案原始碼位置
+`/Users/jamesju/Documents/CodeSample/JAVA/SwiftRefAPI-LLM/UrlFetcher/Program.cs`
+
+## 技能範例集合
+
+### 1. 獲取網站 HTML 內容
+```
+/skill urlfetch -u https://www.example.com
+```
+
+### 2. 靜默模式獲取 API 回應
+```
+/skill urlfetch -u https://api.github.com/users/octocat --silent
+```
+
+### 3. 抓取網頁並保存
+```
+/skill urlfetch -u https://www.github.com --output /tmp/github.html
+```
+
+### 4. 獲取技術文檔內容
+```
+/skill urlfetch -u https://docs.microsoft.com -s
+```
+
+### 5. 新式 URL 自動添加 https://
+```
+/skill urlfetch -u www.example.com  # 自動添加 https://
+```
+
+## 技術規格
+
+- **語言**: C# .NET 9.0
+- **執行環境**: 任何支援 .NET 9.0 的平台
+- **輸出格式**: HTML 純文字
+- **壓縮處理**: 自動解壓 GZip/Deflate
+
+## 注意事項
+
+1. 如果 URL 未指定協議，工具會自動添加 `https://`
+2. 支援 HTTP 重定向
+3. 自動處理壓縮內容解壓
+4. 設置 30 秒超時保護
