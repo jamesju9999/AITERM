@@ -1,0 +1,266 @@
+/* src/components/ApiDocsView/ApiDocsView.css */
+
+.api-docs-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary, #1a1a2e);
+  color: var(--text-primary, #e0e0e0);
+  font-size: 13px;
+}
+
+.api-docs-view__url-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border, #2a2a3e);
+  flex-shrink: 0;
+}
+
+.api-docs-view__url-input {
+  flex: 1;
+  background: var(--bg-input, #0d0d1a);
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  padding: 6px 10px;
+  color: inherit;
+  font-size: 13px;
+}
+
+.api-docs-view__load-btn {
+  padding: 6px 14px;
+  background: var(--accent, #4a90d9);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.api-docs-view__load-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.api-docs-view__platform-badge {
+  font-size: 11px;
+  color: var(--text-secondary, #888);
+  white-space: nowrap;
+}
+
+.api-docs-view__body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.api-docs-view__tree-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border, #2a2a3e);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.api-docs-view__tree-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border, #2a2a3e);
+  flex-shrink: 0;
+}
+
+.api-docs-view__filter-input {
+  flex: 1;
+  background: var(--bg-input, #0d0d1a);
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: inherit;
+  font-size: 12px;
+}
+
+.api-docs-view__toolbar-btn {
+  padding: 3px 8px;
+  background: var(--bg-secondary, #242436);
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.api-docs-view__selected-count {
+  font-size: 11px;
+  color: var(--text-secondary, #888);
+  white-space: nowrap;
+}
+
+.api-docs-view__tree-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.api-docs-view__empty {
+  padding: 24px;
+  color: var(--text-secondary, #555);
+  font-size: 12px;
+}
+
+.api-docs-view__settings-panel {
+  width: 260px;
+  flex-shrink: 0;
+  overflow-y: auto;
+}
+
+/* DocTree */
+.doc-tree__leaf,
+.doc-tree__group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.doc-tree__leaf:hover,
+.doc-tree__group-header:hover {
+  background: var(--bg-hover, #242436);
+}
+
+/* ExtractionSettings */
+.extraction-settings {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.extraction-settings__section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.extraction-settings__label {
+  font-size: 11px;
+  color: var(--text-secondary, #888);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.extraction-settings__input {
+  background: var(--bg-input, #0d0d1a);
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  padding: 5px 8px;
+  color: inherit;
+  font-size: 12px;
+}
+.extraction-settings__checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.extraction-settings__auth-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.extraction-settings__auth-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.extraction-settings__auth-dot--on { background: #22c55e; }
+.extraction-settings__auth-dot--off { background: #ef4444; }
+.extraction-settings__auth-account {
+  color: var(--text-secondary, #aaa);
+  font-size: 11px;
+  word-break: break-all;
+}
+.extraction-settings__btn {
+  padding: 5px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border, #333);
+  background: var(--bg-secondary, #242436);
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.extraction-settings__btn--primary {
+  background: var(--accent, #4a90d9);
+  border-color: transparent;
+  color: white;
+}
+.extraction-settings__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.extraction-settings__hint {
+  font-size: 11px;
+  color: var(--text-secondary, #666);
+}
+.extraction-settings__actions {
+  gap: 8px;
+}
+
+/* ExtractionLog */
+.extraction-log {
+  padding: 10px;
+  border-top: 1px solid var(--border, #2a2a3e);
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.extraction-log__progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.extraction-log__bar-track {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-secondary, #242436);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.extraction-log__bar-fill {
+  height: 100%;
+  background: var(--accent, #4a90d9);
+  border-radius: 3px;
+  transition: width 0.2s;
+}
+.extraction-log__bar-label {
+  font-size: 11px;
+  color: var(--text-secondary, #888);
+  white-space: nowrap;
+}
+.extraction-log__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  font-family: monospace;
+}
+.extraction-log__entry--info { color: var(--text-secondary, #aaa); }
+.extraction-log__entry--warn { color: #f59e0b; }
+.extraction-log__entry--error { color: #ef4444; }
+.extraction-log__output-title {
+  font-size: 11px;
+  color: var(--text-secondary, #888);
+  margin-top: 4px;
+}
+.extraction-log__output-file {
+  font-size: 11px;
+  font-family: monospace;
+  color: #22c55e;
+  word-break: break-all;
+}
