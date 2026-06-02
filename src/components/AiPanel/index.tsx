@@ -6,7 +6,7 @@ import { readFileAsAttachment } from "../../types/attachment";
 import type { Attachment } from "../../types/attachment";
 import { useAiChat } from "../../hooks/useAiChat";
 import { aiChat } from "../../ipc/ai";
-import { getSessionCwd, listDirectory } from "../../ipc/fs";
+import { getSessionCwd, listDirectory, writeTextFile, readFile } from "../../ipc/fs";
 import { getPtyRecentOutput, getPtyShellType } from "../../ipc/pty";
 import { getConfig } from "../../ipc/config";
 import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
@@ -209,12 +209,20 @@ ${dirList || "（無法取得）"}
 
     if (agentAbortRef.current) { setAgentRunning(false); return; }
 
-    // Show assistant reply in chat
-    chat.addMessage({ role: "assistant", content: reply });
-    if (sendRemoteResponse) sendRemoteResponse(reply);
+    // For command matching and history, prefer <cmd> tags OUTSIDE <think> blocks.
+    // If none found outside, fall back to matching inside <think> (Qwen3/DeepSeek
+    // sometimes only writes the command in their reasoning trace).
+    const replyWithoutThink = reply.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    const agentReply = replyWithoutThink || reply;
 
-    // Parse <cmd>
-    const cmdMatch = reply.match(/<cmd>([\s\S]*?)<\/cmd>/i);
+    // Show stripped reply in chat (no raw thinking blocks)
+    chat.addMessage({ role: "assistant", content: agentReply });
+    if (sendRemoteResponse) sendRemoteResponse(agentReply);
+
+    // Parse <cmd>: prefer outside-think match; fall back to full reply if not found
+    const cmdMatch =
+      agentReply.match(/<cmd>([\s\S]*?)<\/cmd>/i) ??
+      reply.match(/<cmd>([\s\S]*?)<\/cmd>/i);
     if (!cmdMatch) {
       // No command → agent finished
       setAgentRunning(false);
@@ -223,7 +231,147 @@ ${dirList || "（無法取得）"}
 
     const cmd = cmdMatch[1].trim();
 
-    // Execute and wait for completion.
+    // ── Heredoc fast-path ────────────────────────────────────────────────────
+    // Instead of sending the heredoc through the PTY (which has buffer limits,
+    // blocks on Chinese multi-byte chars, and relies on OSC 133 firing after a
+    // very long write), we parse the file path + content and write the file
+    // directly via the Tauri writeTextFile API. This is reliable regardless of
+    // script length or character set.
+    //
+    // We use a line-by-line parser instead of a single regex so that edge-cases
+    // like different whitespace, unusual delimiters, or trailing commands (e.g.
+    // `chmod +x`) are all handled robustly.
+    const heredocParsed = (() => {
+      // Header: (cat >|tee) PATH << ['"]?DELIMITER['"]? [optional inline content]
+      // We allow content to start on the same line as the delimiter
+      // (e.g. `<< 'SCRIPT_END' #!/bin/bash`) because some models generate this.
+      const firstNl = cmd.indexOf('\n');
+      if (firstNl < 0) return null;
+      const header = cmd.slice(0, firstNl);
+      const rest   = cmd.slice(firstNl + 1);
+
+      const headerMatch = header.match(
+        /^(?:cat\s*>|tee)\s*(\S+)\s*<<\s*['"]?(\w+)['"]?\s*(.*?)\s*$/,
+      );
+      if (!headerMatch) return null;
+
+      const [, filePath, delimiter, inlineContent] = headerMatch;
+
+      // Find the closing delimiter on its own line (may have trailing whitespace)
+      const delimRegex = new RegExp(`(?:^|\\n)${delimiter}[ \\t]*(?:\\n|$)`);
+      const delimMatch = delimRegex.exec(rest);
+      if (!delimMatch) return null;
+
+      // Content = optional inline part + body up to delimiter
+      const matchStart = delimMatch.index === 0 ? 0 : delimMatch.index + 1;
+      const bodyContent = rest.slice(0, matchStart).replace(/\n$/, '');
+      const fileContent = inlineContent
+        ? `${inlineContent}\n${bodyContent}`
+        : bodyContent;
+
+      // Trailing commands are everything after the delimiter line
+      const afterDelim = rest.slice(delimMatch.index + delimMatch[0].length).trim();
+
+      return { filePath, fileContent, trailingCmds: afterDelim };
+    })();
+
+    if (heredocParsed) {
+      if (agentAbortRef.current) { setAgentRunning(false); return; }
+      const { filePath, fileContent, trailingCmds } = heredocParsed;
+      const shortLabel = `cat > ${filePath}`;
+      try {
+        await writeTextFile(filePath, fileContent + "\n");
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        chat.addMessage({ role: "assistant", content: `⚠ 寫入檔案失敗：${msg}` });
+        setAgentRunning(false);
+        return;
+      }
+      if (agentAbortRef.current) { setAgentRunning(false); return; }
+
+      // If there are trailing commands (e.g. `chmod +x`), run them via PTY
+      // and wait for completion before continuing the loop.
+      if (trailingCmds) {
+        await new Promise<void>((resolve) => {
+          // Safety timeout: trailing commands like `chmod` are instant; if
+          // OSC 133 somehow doesn't fire within 5 s, continue anyway.
+          const safetyTimer = setTimeout(resolve, 5000);
+          onExecuteCommand(trailingCmds, () => {
+            clearTimeout(safetyTimer);
+            resolve();
+          });
+        });
+        if (agentAbortRef.current) { setAgentRunning(false); return; }
+      }
+
+      const resultContent = `檔案 \`${filePath}\` 已成功寫入${trailingCmds ? `（並執行了 \`${trailingCmds}\`）` : ""}。請繼續執行下一步驟（通常是執行該腳本）。`;
+      const assistantForHistory = agentReply.replace(
+        /<cmd>([\s\S]*?)<\/cmd>/i,
+        `<cmd>${shortLabel}\n...(heredoc 內容已省略)\nEOF${trailingCmds ? `\n${trailingCmds}` : ""}</cmd>`,
+      );
+      const newHistory = [
+        ...history,
+        { role: "assistant" as const, content: assistantForHistory },
+        { role: "user" as const, content: resultContent },
+      ];
+      void runAgentLoop(newHistory, systemPrompt, step + 1);
+      return;
+    }
+
+    // ── Native cat read ──────────────────────────────────────────────────────
+    // `cat /path/to/file` — intercept single-file reads so the content comes
+    // back instantly and cleanly, without ANSI noise or terminal width wrapping.
+    // Only intercept plain `cat FILE` (no flags, no redirection, single path).
+    const catReadMatch = cmd.match(/^cat\s+([^\s>|&;]+)\s*$/);
+    if (catReadMatch) {
+      if (agentAbortRef.current) { setAgentRunning(false); return; }
+      const filePath = catReadMatch[1];
+      let fileOutput: string;
+      try {
+        const { content, truncated } = await readFile(filePath);
+        fileOutput = truncated ? content + "\n...(檔案已截斷)" : content;
+      } catch (e) {
+        fileOutput = `錯誤：無法讀取 ${filePath} — ${e instanceof Error ? e.message : String(e)}`;
+      }
+      if (agentAbortRef.current) { setAgentRunning(false); return; }
+      const resultContent =
+        `指令 \`cat ${filePath}\` 執行完成。輸出：\n\`\`\`\n${fileOutput.slice(-3000)}\n\`\`\`\n\n請繼續分析。若目標已達成，請給出最終說明（不要再給 <cmd> 標籤）。`;
+      const newHistory = [
+        ...history,
+        { role: "assistant" as const, content: agentReply },
+        { role: "user" as const, content: resultContent },
+      ];
+      void runAgentLoop(newHistory, systemPrompt, step + 1);
+      return;
+    }
+
+    // ── Native echo/printf write ─────────────────────────────────────────────
+    // `echo "..." > /path` or `printf "..." > /path` — intercept simple
+    // single-line writes. Redirection with >> (append) is left to PTY.
+    const echoWriteMatch = cmd.match(/^(?:echo|printf)\s+(["'])([\s\S]*?)\1\s*>\s*([^\s>|&;]+)\s*$/);
+    if (echoWriteMatch) {
+      if (agentAbortRef.current) { setAgentRunning(false); return; }
+      const content = echoWriteMatch[2].replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+      const filePath = echoWriteMatch[3];
+      try {
+        await writeTextFile(filePath, content + "\n");
+      } catch (e) {
+        chat.addMessage({ role: "assistant", content: `⚠ 寫入檔案失敗：${e instanceof Error ? e.message : String(e)}` });
+        setAgentRunning(false);
+        return;
+      }
+      if (agentAbortRef.current) { setAgentRunning(false); return; }
+      const resultContent = `檔案 \`${filePath}\` 已成功寫入。請繼續執行下一步驟。`;
+      const newHistory = [
+        ...history,
+        { role: "assistant" as const, content: agentReply },
+        { role: "user" as const, content: resultContent },
+      ];
+      void runAgentLoop(newHistory, systemPrompt, step + 1);
+      return;
+    }
+
+    // ── Normal PTY execution ─────────────────────────────────────────────────
     // No fixed timeout — the user can press "■ 停止" for long-running commands.
     // We poll agentAbortRef so the stop button works even while waiting for OSC 133.
     let completed = false;
@@ -255,7 +403,7 @@ ${dirList || "（無法取得）"}
 
         const newHistory = [
           ...history,
-          { role: "assistant" as const, content: reply },
+          { role: "assistant" as const, content: agentReply },
           { role: "user" as const, content: resultContent },
         ];
 
