@@ -1,10 +1,12 @@
 // src/components/ApiDocsView/ExtractionSettings.tsx
 import { useLocale } from "../../contexts/LocaleContext";
 import type { KeepOptions, AuthStatus } from "../../ipc/apiDocs";
+import type { ProviderInfo } from "../../ipc/provider";
 
 interface Props {
   outputDir: string;
   onOutputDirChange: (v: string) => void;
+  onPickFolder: () => void;
   merge: boolean;
   onMergeChange: (v: boolean) => void;
   keep: KeepOptions;
@@ -15,21 +17,28 @@ interface Props {
   onLogout: () => void;
   extracting: boolean;
   selectedCount: number;
-  hasProvider: boolean;
+  providers: ProviderInfo[];
+  selectedProviderId: string;
+  onProviderChange: (id: string) => void;
+  translateToZh: boolean;
+  onTranslateToZhChange: (v: boolean) => void;
   onExtractRaw: () => void;
   onExtractAi: () => void;
 }
 
 export function ExtractionSettings({
-  outputDir, onOutputDirChange,
+  outputDir, onOutputDirChange, onPickFolder,
   merge, onMergeChange,
   keep, onKeepChange,
   auth, domain, onLogin, onLogout,
-  extracting, selectedCount, hasProvider,
+  extracting, selectedCount,
+  providers, selectedProviderId, onProviderChange,
+  translateToZh, onTranslateToZhChange,
   onExtractRaw, onExtractAi,
 }: Props) {
   const { t } = useLocale();
   const canExtract = selectedCount > 0 && !extracting;
+  const hasProvider = selectedProviderId !== "";
 
   const toggleKeep = (key: keyof KeepOptions) => {
     onKeepChange({ ...keep, [key]: !keep[key] });
@@ -40,13 +49,23 @@ export function ExtractionSettings({
       {/* Output directory */}
       <div className="extraction-settings__section">
         <label className="extraction-settings__label">{t.api_docs_output_dir}</label>
-        <input
-          className="extraction-settings__input"
-          type="text"
-          value={outputDir}
-          onChange={(e) => onOutputDirChange(e.target.value)}
-          placeholder={t.api_docs_output_dir_placeholder}
-        />
+        <div className="extraction-settings__dir-row">
+          <input
+            className="extraction-settings__input extraction-settings__input--flex"
+            type="text"
+            value={outputDir}
+            onChange={(e) => onOutputDirChange(e.target.value)}
+            placeholder={t.api_docs_output_dir_placeholder}
+          />
+          <button
+            className="extraction-settings__btn extraction-settings__btn--icon"
+            onClick={onPickFolder}
+            title={t.api_docs_pick_folder}
+            type="button"
+          >
+            📁
+          </button>
+        </div>
       </div>
 
       {/* Merge toggle */}
@@ -107,6 +126,31 @@ export function ExtractionSettings({
           )}
         </div>
       )}
+
+      {/* AI provider selector + translate option */}
+      <div className="extraction-settings__section">
+        <label className="extraction-settings__label">{t.api_docs_ai_provider}</label>
+        <select
+          className="extraction-settings__select"
+          value={selectedProviderId}
+          onChange={(e) => onProviderChange(e.target.value)}
+        >
+          <option value="">{t.api_docs_no_provider}</option>
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.display_name} ({p.model})
+            </option>
+          ))}
+        </select>
+        <label className="extraction-settings__checkbox-row" style={{ marginTop: "6px" }}>
+          <input
+            type="checkbox"
+            checked={translateToZh}
+            onChange={(e) => onTranslateToZhChange(e.target.checked)}
+          />
+          <span>{t.api_docs_translate_zh}</span>
+        </label>
+      </div>
 
       {/* Extract buttons */}
       <div className="extraction-settings__section extraction-settings__actions">

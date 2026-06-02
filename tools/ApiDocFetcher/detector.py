@@ -34,8 +34,10 @@ def detect(url: str, cookies: dict) -> Detection:
     except Exception:
         return Detection(platform="ai-generic", confidence="low")
 
-    if "__next_f" in html and "openapi:" in html:
-        return Detection(platform="mintlify-next", confidence="high")
+    if "__next_f" in html:
+        # Next.js App Router / Mintlify / FumaDocs site
+        confidence = "high" if "openapi:" in html else "medium"
+        return Detection(platform="mintlify-next", confidence=confidence)
 
     if "swagger-ui" in html.lower() or "SwaggerUIBundle" in html:
         spec_url = _extract_swagger_spec_url(html, base)

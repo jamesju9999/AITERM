@@ -61,8 +61,9 @@ def cmd_tree(args) -> None:
 
 
 def cmd_extract(args) -> None:
+    from urllib.parse import urlparse
     cookies = _parse_cookies(args.cookies)
-    pages: list[dict] = json.loads(args.pages)
+    pages: list = json.loads(args.pages)
     keep = KeepOptions.from_dict(json.loads(args.keep)) if args.keep else KeepOptions()
 
     detection = detect(args.url, cookies)
@@ -71,15 +72,22 @@ def cmd_extract(args) -> None:
     strategy = get_strategy(detection)
 
     total = len(pages)
-    markdowns: list[tuple[dict, str]] = []
+    markdowns: list[tuple[str, str]] = []
+
+    _parsed = urlparse(args.url)
+    base = f"{_parsed.scheme}://{_parsed.netloc}"
 
     for i, page in enumerate(pages):
-        base = args.url.rstrip("/").split("/docs")[0]
-        href = page.get("href", "")
+        if isinstance(page, dict):
+            href = page.get("href", "")
+            page_title = page.get("title", href)
+        else:
+            href = str(page)
+            page_title = href.rstrip("/").split("/")[-1] or href
         page_url = href if href.startswith("http") else base + href
 
         _emit({"type": "progress", "current": i + 1, "total": total,
-               "page": page.get("title", href)})
+               "page": page_title})
         try:
             content = strategy.fetch_page(page_url, cookies)
             if content.needs_ai:
@@ -94,23 +102,29 @@ def cmd_extract(args) -> None:
 
             size_kb = len(md.encode()) // 1024
             _emit({"type": "log", "level": "info",
-                   "message": f"✓ {page.get('title', href)} ({size_kb}KB)"})
-            markdowns.append((page, md))
+                   "message": f"✓ {page_title} ({size_kb}KB)"})
+            markdowns.append((href, md))
         except Exception as exc:
             _emit({"type": "log", "level": "error",
-                   "message": f"✗ Failed: {page.get('title', href)}: {exc}"})
+                   "message": f"✗ Failed: {page_title}: {exc}"})
 
     os.makedirs(args.output, exist_ok=True)
     files: list[str] = []
 
     if args.merge:
         out_path = os.path.join(args.output, "api-docs.md")
+        # Strip trailing --- from each section to avoid double separators when joining
+        def _strip_trailing_sep(md: str) -> str:
+            s = md.rstrip()
+            if s.endswith("---"):
+                s = s[:-3].rstrip()
+            return s
         with open(out_path, "w", encoding="utf-8") as f:
-            f.write("\n\n---\n\n".join(md for _, md in markdowns))
+            f.write("\n\n---\n\n".join(_strip_trailing_sep(md) for _, md in markdowns))
         files.append(out_path)
     else:
-        for page, md in markdowns:
-            slug = page.get("href", "page").strip("/").split("/")[-1] or "page"
+        for href, md in markdowns:
+            slug = href.strip("/").split("/")[-1] or "page"
             out_path = os.path.join(args.output, f"{slug}.md")
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write(md)

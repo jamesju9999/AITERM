@@ -38,8 +38,8 @@ class Detection:
 class KeepOptions:
     description: bool = True
     parameters: bool = True
-    request_schema: bool = True
-    response_schema: bool = True
+    request_body: bool = True   # matches Rust/TS field name
+    responses: bool = True      # matches Rust/TS field name
     code_samples: bool = True
 
     @classmethod

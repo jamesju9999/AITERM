@@ -150,13 +150,40 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.extraction-settings__input {
+.extraction-settings__dir-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.extraction-settings__input--flex {
+  flex: 1;
+  min-width: 0;
+}
+.extraction-settings__btn--icon {
+  flex-shrink: 0;
+  padding: 4px 7px;
+  font-size: 14px;
+  background: var(--bg-secondary, #1a1a2e);
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  cursor: pointer;
+  color: inherit;
+}
+.extraction-settings__btn--icon:hover {
+  background: var(--bg-hover, #252540);
+}
+.extraction-settings__input,
+.extraction-settings__select {
   background: var(--bg-input, #0d0d1a);
   border: 1px solid var(--border, #333);
   border-radius: 4px;
   padding: 5px 8px;
   color: inherit;
   font-size: 12px;
+}
+.extraction-settings__select {
+  width: 100%;
+  cursor: pointer;
 }
 .extraction-settings__checkbox-row {
   display: flex;

@@ -1,4 +1,5 @@
 // src/components/ApiDocsView/ExtractionLog.tsx
+import { useEffect, useRef } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { ApiDocsLogEvent } from "../../ipc/apiDocs";
 
@@ -12,6 +13,11 @@ interface Props {
 export function ExtractionLog({ current, total, logs, outputFiles }: Props) {
   const { t } = useLocale();
   const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [logs]);
 
   return (
     <div className="extraction-log">
@@ -44,6 +50,7 @@ export function ExtractionLog({ current, total, logs, outputFiles }: Props) {
             {entry.message}
           </div>
         ))}
+        <div ref={bottomRef} />
       </div>
 
       {outputFiles.length > 0 && (

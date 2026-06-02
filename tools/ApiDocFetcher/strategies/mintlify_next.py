@@ -83,12 +83,77 @@ class MintlifyNextStrategy:
             title = spec.get("info", {}).get("title", url.split("/")[-1])
             return PageContent(title=title, openapi_spec=spec, platform="mintlify-next")
 
-        # No OpenAPI found — return raw text for AI fallback
+        # No OpenAPI found — extract prose from main content only
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(html, "html.parser")
-        for tag in soup(["script", "style", "noscript"]):
+
+        # Remove boilerplate and noise elements
+        for tag in soup(["script", "style", "noscript", "nav", "header",
+                          "footer", "aside", "svg", "img", "button"]):
             tag.decompose()
-        text = soup.get_text(separator="\n", strip=True)
+
+        # Try to find main content area
+        main = (
+            soup.find("main") or
+            soup.find(attrs={"role": "main"}) or
+            soup.find("article") or
+            soup.find(class_=lambda c: c and any(
+                kw in c for kw in ("content", "article", "prose", "main", "docs")
+            )) or
+            soup.body or
+            soup
+        )
+
+        raw_lines = main.get_text(separator="\n", strip=True).splitlines()
+
+        # Step 1: collapse runs of single-char lines into words
+        # (happens when each character is in its own <span> for CSS animation)
+        collapsed: list[str] = []
+        i = 0
+        while i < len(raw_lines):
+            line = raw_lines[i].strip()
+            if len(line) == 1 and line.isascii():
+                chars = [line]
+                j = i + 1
+                while j < len(raw_lines) and len(raw_lines[j].strip()) <= 1:
+                    c = raw_lines[j].strip()
+                    if c:
+                        chars.append(c)
+                    j += 1
+                if len(chars) >= 3:
+                    # Join chars; insert space before uppercase after lowercase (CamelCase boundary)
+                    word = chars[0]
+                    for c in chars[1:]:
+                        if c.isupper() and word and word[-1].islower():
+                            word += " " + c
+                        elif c == "(" and word and word[-1] != " ":
+                            word += " " + c
+                        else:
+                            word += c
+                    collapsed.append(word)
+                    i = j
+                    continue
+            collapsed.append(raw_lines[i])
+            i += 1
+
+        # Step 2: deduplicate and remove blank-line runs
+        seen: set[str] = set()
+        deduped: list[str] = []
+        blank_run = 0
+        for line in collapsed:
+            stripped = line.strip()
+            if not stripped:
+                blank_run += 1
+                if blank_run <= 1:
+                    deduped.append("")
+            else:
+                blank_run = 0
+                if len(stripped) < 60 and stripped in seen:
+                    continue
+                seen.add(stripped)
+                deduped.append(stripped)
+
+        text = "\n".join(deduped).strip()
         title = soup.title.string if soup.title else url.split("/")[-1]
         return PageContent(title=title, raw_text=text, needs_ai=True, platform="mintlify-next")
 

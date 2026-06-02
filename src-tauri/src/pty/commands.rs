@@ -187,3 +187,25 @@ pub fn pty_read_file(path: String) -> Result<FileContent, String> {
 
     Ok(FileContent { content, truncated })
 }
+
+/// Overwrite (or create) a text file with the given UTF-8 content.
+#[tauri::command]
+pub fn write_text_file(path: String, content: String) -> Result<(), String> {
+    // Expand ~ to home directory
+    let expanded = if path.starts_with("~/") {
+        if let Some(home) = dirs::home_dir() {
+            home.join(&path[2..])
+        } else {
+            std::path::PathBuf::from(&path)
+        }
+    } else {
+        std::path::PathBuf::from(&path)
+    };
+
+    // Create parent directories if needed
+    if let Some(parent) = expanded.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    std::fs::write(&expanded, content.as_bytes()).map_err(|e| e.to_string())
+}

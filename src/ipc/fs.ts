@@ -24,6 +24,10 @@ export interface FileContent {
 export const readFile = (path: string): Promise<FileContent> =>
   invoke<FileContent>("pty_read_file", { path });
 
+/** Overwrite (or create) a text file with the given UTF-8 content. */
+export const writeTextFile = (path: string, content: string): Promise<void> =>
+  invoke<void>("write_text_file", { path, content });
+
 /**
  * Read any file and return its content as an ArrayBuffer.
  * Used by Doc Converter for files dropped via OS drag-and-drop.
