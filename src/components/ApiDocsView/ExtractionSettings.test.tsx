@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ExtractionSettings } from "./ExtractionSettings";
 import type { KeepOptions, AuthStatus } from "../../ipc/apiDocs";
+import type { ProviderInfo } from "../../ipc/provider";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 
 beforeEach(() => {
@@ -29,6 +30,21 @@ const defaultKeep: KeepOptions = {
 
 const notLoggedIn: AuthStatus = { logged_in: false, account: "" };
 
+const noProviders: ProviderInfo[] = [];
+const oneProvider: ProviderInfo[] = [
+  {
+    id: "p1",
+    display_name: "Test Provider",
+    provider_type: "openai",
+    base_url: null,
+    oauth_client_id: null,
+    model: "gpt-4o",
+    supports_json_mode: true,
+    has_api_key: true,
+    is_default: true,
+  },
+];
+
 const wrap = (ui: React.ReactNode) =>
   render(<LocaleProvider>{ui}</LocaleProvider>);
 
@@ -38,6 +54,7 @@ describe("ExtractionSettings", () => {
       <ExtractionSettings
         outputDir=""
         onOutputDirChange={() => {}}
+        onPickFolder={() => {}}
         merge={false}
         onMergeChange={() => {}}
         keep={defaultKeep}
@@ -48,7 +65,11 @@ describe("ExtractionSettings", () => {
         onLogout={() => {}}
         extracting={false}
         selectedCount={0}
-        hasProvider={true}
+        providers={oneProvider}
+        selectedProviderId="p1"
+        onProviderChange={() => {}}
+        translateToZh={false}
+        onTranslateToZhChange={() => {}}
         onExtractRaw={() => {}}
         onExtractAi={() => {}}
       />
@@ -61,6 +82,7 @@ describe("ExtractionSettings", () => {
       <ExtractionSettings
         outputDir="/tmp"
         onOutputDirChange={() => {}}
+        onPickFolder={() => {}}
         merge={false}
         onMergeChange={() => {}}
         keep={defaultKeep}
@@ -71,7 +93,11 @@ describe("ExtractionSettings", () => {
         onLogout={() => {}}
         extracting={false}
         selectedCount={1}
-        hasProvider={false}
+        providers={noProviders}
+        selectedProviderId=""
+        onProviderChange={() => {}}
+        translateToZh={false}
+        onTranslateToZhChange={() => {}}
         onExtractRaw={() => {}}
         onExtractAi={() => {}}
       />
@@ -86,6 +112,7 @@ describe("ExtractionSettings", () => {
       <ExtractionSettings
         outputDir=""
         onOutputDirChange={() => {}}
+        onPickFolder={() => {}}
         merge={false}
         onMergeChange={() => {}}
         keep={defaultKeep}
@@ -96,7 +123,11 @@ describe("ExtractionSettings", () => {
         onLogout={() => {}}
         extracting={false}
         selectedCount={0}
-        hasProvider={true}
+        providers={oneProvider}
+        selectedProviderId="p1"
+        onProviderChange={() => {}}
+        translateToZh={false}
+        onTranslateToZhChange={() => {}}
         onExtractRaw={() => {}}
         onExtractAi={() => {}}
       />
