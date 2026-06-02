@@ -226,6 +226,38 @@ Reformat the following raw API documentation page into clean Markdown.
 - Remove duplicate navigation links and copyright text
 - Be concise, do not add information not present in the original`;
 
+  // Retry aiChat on connection errors (local model server crash/restart).
+  // Uses exponential backoff: 3s → 6s → 12s between attempts.
+  async function aiChatWithRetry(
+    text: string,
+    prompt: string,
+    providerId: string,
+    maxRetries = 3,
+  ): Promise<string> {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await aiChat(text, prompt, [], providerId);
+      } catch (err) {
+        const isConnectionErr =
+          typeof err === "object" && err !== null &&
+          (err as AiError).kind === "network" &&
+          ((err as { kind: string; message?: string }).message ?? "").includes("error sending request");
+
+        if (isConnectionErr && attempt < maxRetries) {
+          const delay = 3000 * Math.pow(2, attempt); // 3s, 6s, 12s
+          setLogs((prev) => [...prev, {
+            level: "info",
+            message: `⏳ 本地模型無回應，${delay / 1000}s 後重試 (${attempt + 1}/${maxRetries})…`,
+          }]);
+          await new Promise<void>((r) => setTimeout(r, delay));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error("max retries exceeded");
+  }
+
   // Split a large Markdown section into chunks of ≤ maxChars.
   // Splits at ## and ### heading boundaries so each chunk stays self-contained.
   function splitIntoChunks(text: string, maxChars: number): string[] {
@@ -280,7 +312,8 @@ Reformat the following raw API documentation page into clean Markdown.
         let changed = false;
         const newSections: string[] = [];
 
-        for (const section of sections) {
+        for (let sectionIdx = 0; sectionIdx < sections.length; sectionIdx++) {
+          const section = sections[sectionIdx];
           const hasMarker = section.includes(AI_MARKER);
 
           // Skip if no translation requested and no marker
@@ -316,13 +349,16 @@ Reformat the following raw API documentation page into clean Markdown.
             message: `🤖 ${actionLabel}：${titleLine.replace(/^#+ /, "")}${totalChunks > 1 ? ` (分 ${totalChunks} 塊)` : ""}`,
           }]);
 
+          // Pause between sections so local models (OMLX) can unload before next request
+          if (sectionIdx > 0) await new Promise<void>((r) => setTimeout(r, 1000));
+
           try {
             const translatedChunks: string[] = [];
             for (let ci = 0; ci < chunks.length; ci++) {
               if (!mountedRef.current) break;
               // Brief pause between chunks to let local model server recover
               if (ci > 0) await new Promise<void>((r) => setTimeout(r, 300));
-              const result = await aiChat(chunks[ci], AI_SYSTEM_PROMPT, [], selectedProviderId);
+              const result = await aiChatWithRetry(chunks[ci], AI_SYSTEM_PROMPT, selectedProviderId);
               translatedChunks.push(result.trim());
             }
 
