@@ -12,7 +12,11 @@ const releaseTagUrl = (tag: string) =>
 
 type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "unavailable" | "error";
 
-export function AboutPage() {
+interface AboutPageProps {
+  initialLatestVersion?: string;
+}
+
+export function AboutPage({ initialLatestVersion }: AboutPageProps) {
   const { t } = useLocale();
   const [version, setVersion] = useState<string>("…");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
@@ -21,6 +25,13 @@ export function AboutPage() {
   useEffect(() => {
     getVersion().then(setVersion).catch(() => setVersion("—"));
   }, []);
+
+  // Seed update state from parent if auto-check already ran
+  useEffect(() => {
+    if (!initialLatestVersion) return;
+    setLatestVersion(initialLatestVersion);
+    setUpdateStatus("available");
+  }, [initialLatestVersion]);
 
   const handleGitHub = () => {
     openUrl(GITHUB_URL).catch(console.error);

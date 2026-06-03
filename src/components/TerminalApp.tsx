@@ -41,7 +41,11 @@ function saveSessionTabs(tabs: Tab[]) {
   localStorage.setItem(SESSION_TABS_KEY, JSON.stringify(toSave));
 }
 
-export function TerminalApp() {
+interface TerminalAppProps {
+  hasUpdate?: boolean;
+}
+
+export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
   const { t } = useLocale();
   const [tabs, setTabs] = useState<Tab[]>(() => {
     // Try to restore previous session tabs first
@@ -263,6 +267,7 @@ export function TerminalApp() {
           pickerOpen={pickerOpen}
           onPickerSelect={handlePickerSelect}
           onPickerClose={() => setPickerOpen(false)}
+          hasUpdate={hasUpdate}
         />
       </div>
       {isSidebarOpen && (

@@ -11,7 +11,12 @@ import "./SettingsView.css";
 
 type SettingsTab = "general" | "providers" | "databases" | "vcs" | "enterprise" | "about";
 
-export function SettingsView() {
+interface UpdateInfo {
+  hasUpdate: boolean;
+  latestVersion: string;
+}
+
+export function SettingsView({ updateInfo }: { updateInfo?: UpdateInfo }) {
   const navigate = useNavigate();
   const [tab, setTab] = useState<SettingsTab>("general");
   const { t } = useLocale();
@@ -73,7 +78,9 @@ export function SettingsView() {
         {tab === "databases" && <DatabaseConnectionsPage />}
         {tab === "vcs" && <VcsConnectionsPage />}
         {tab === "enterprise" && <EnterprisePage />}
-        {tab === "about" && <AboutPage />}
+        {tab === "about" && (
+          <AboutPage initialLatestVersion={updateInfo?.latestVersion} />
+        )}
       </main>
     </div>
   );

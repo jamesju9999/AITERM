@@ -1,15 +1,24 @@
 import { useEffect, useState } from "react";
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from "react-router-dom";
+import { getVersion } from "@tauri-apps/api/app";
 import { TerminalApp } from "./components/TerminalApp";
 import { SettingsView } from "./components/Settings/SettingsView";
 import { OnboardingWizard } from "./components/Onboarding/OnboardingWizard";
 import { isOnboardingDone } from "./ipc/config";
 import "./App.css";
 
+interface UpdateInfo {
+  hasUpdate: boolean;
+  latestVersion: string;
+}
+
+const TAGS_API = "https://api.github.com/repos/jamesju9999/AITERM/tags";
+
 function AppRoutes() {
   const navigate = useNavigate();
   const location = useLocation();
   const [ready, setReady] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
 
   useEffect(() => {
     // On mount: check if this is the first launch.
@@ -20,6 +29,27 @@ function AppRoutes() {
       .catch(() => {})
       .finally(() => setReady(true));
   }, [navigate]);
+
+  // Auto-check for updates once on mount
+  useEffect(() => {
+    getVersion()
+      .then(async (current) => {
+        try {
+          const res = await fetch(TAGS_API);
+          if (!res.ok) return;
+          const tags = await res.json() as { name: string }[];
+          if (tags.length === 0) return;
+          const latest = tags[0].name.replace(/^v/, "");
+          const cur = current.replace(/^v/, "");
+          if (latest !== cur) {
+            setUpdateInfo({ hasUpdate: true, latestVersion: latest });
+          }
+        } catch {
+          // silently ignore — update check is best-effort
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Keyboard shortcut: Ctrl+, → settings
   useEffect(() => {
@@ -51,14 +81,14 @@ function AppRoutes() {
           pointerEvents: isTerminal ? "auto" : "none"
         }}
       >
-        <TerminalApp />
+        <TerminalApp hasUpdate={updateInfo?.hasUpdate ?? false} />
       </div>
 
       {/* Settings / Onboarding Overlays */}
       {!isTerminal && (
         <div style={{ position: "absolute", inset: 0, zIndex: 10, backgroundColor: "#0c0c0c", pointerEvents: "auto" }}>
           <Routes>
-            <Route path="/settings/*" element={<SettingsView />} />
+            <Route path="/settings/*" element={<SettingsView updateInfo={updateInfo ?? undefined} />} />
             <Route path="/onboarding" element={<OnboardingWizard />} />
           </Routes>
         </div>
