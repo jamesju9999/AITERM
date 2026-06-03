@@ -230,7 +230,7 @@ jobs:
             > ```
           releaseDraft: false
           prerelease: false
-          args: --target x86_64-pc-windows-msvc
+          args: --target x86_64-pc-windows-msvc --bundles nsis
 
       # Ubuntu 22.04: AppImage only (distro-agnostic, works on Ubuntu 22.04+)
       - name: Build (Linux AppImage — Ubuntu 22.04)
