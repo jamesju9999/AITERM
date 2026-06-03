@@ -299,8 +299,11 @@ Reformat the following raw API documentation page into clean Markdown.
     // When false, only sections with the needs-AI marker are processed.
     const AI_MARKER = "> ⚠ AI processing required";
     const SECTION_SEP = "\n\n---\n\n";
+    const CHUNK_MAX = 3_000; // safe limit for local models (~750 tokens)
 
-    // Pre-read all files and count translatable sections to set accurate progress.
+    // Pre-read all files and count translatable *chunks* (not sections) so the
+    // progress bar advances once per AI call, even when a section is split into
+    // many chunks.
     type FileEntry = { filePath: string; content: string; sections: string[] };
     const fileEntries: FileEntry[] = [];
     let aiTotal = 0;
@@ -313,7 +316,15 @@ Reformat the following raw API documentation page into clean Markdown.
         const sections = content.split(SECTION_SEP);
         fileEntries.push({ filePath, content, sections });
         for (const section of sections) {
-          if (translateToZh || section.includes(AI_MARKER)) aiTotal++;
+          if (!translateToZh && !section.includes(AI_MARKER)) continue;
+          const hasMarker = section.includes(AI_MARKER);
+          let text = section;
+          if (hasMarker) {
+            const idx = section.indexOf(AI_MARKER);
+            text = section.slice(idx + AI_MARKER.length).trim();
+            if (!text) { aiTotal++; continue; } // empty marker = 1 no-op unit
+          }
+          aiTotal += text.length > CHUNK_MAX ? splitIntoChunks(text, CHUNK_MAX).length : 1;
         }
       } catch {
         // skip unreadable files
@@ -356,7 +367,6 @@ Reformat the following raw API documentation page into clean Markdown.
             textToProcess = section;
           }
 
-          const CHUNK_MAX = 3_000; // safe limit for local models (~750 tokens)
           const chunks = textToProcess.length > CHUNK_MAX
             ? splitIntoChunks(textToProcess, CHUNK_MAX)
             : [textToProcess];
@@ -371,6 +381,7 @@ Reformat the following raw API documentation page into clean Markdown.
           // Pause between sections so local models (OMLX) can unload before next request
           if (sectionIdx > 0) await new Promise<void>((r) => setTimeout(r, 1000));
 
+          let chunksDone = 0;
           try {
             const translatedChunks: string[] = [];
             for (let ci = 0; ci < chunks.length; ci++) {
@@ -379,6 +390,9 @@ Reformat the following raw API documentation page into clean Markdown.
               if (ci > 0) await new Promise<void>((r) => setTimeout(r, 300));
               const result = await aiChatWithRetry(chunks[ci], AI_SYSTEM_PROMPT, selectedProviderId);
               translatedChunks.push(result.trim());
+              chunksDone++;
+              aiCurrent++;
+              setProgress({ current: aiCurrent, total: aiTotal });
             }
 
             const enhanced = translatedChunks.join("\n\n");
@@ -388,9 +402,6 @@ Reformat the following raw API documentation page into clean Markdown.
             );
             changed = true;
 
-            aiCurrent++;
-            setProgress({ current: aiCurrent, total: aiTotal });
-
             const doneLabel = translateToZh ? "翻譯完成" : "AI 增強完成";
             setLogs((prev) => [...prev, {
               level: "info",
@@ -398,7 +409,8 @@ Reformat the following raw API documentation page into clean Markdown.
             }]);
           } catch (sectionErr) {
             if (!mountedRef.current) break;
-            aiCurrent++;
+            // Advance past any remaining chunks for this section that weren't processed.
+            aiCurrent += chunks.length - chunksDone;
             setProgress({ current: aiCurrent, total: aiTotal });
             const msg = sectionErr instanceof Error
               ? sectionErr.message
