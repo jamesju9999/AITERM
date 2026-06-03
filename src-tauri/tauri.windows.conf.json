@@ -3,8 +3,8 @@
     "externalBin": [],
     "resources": {
       "binaries/db2-sidecar-win-x64": "db2-sidecar",
-      "../tools/ApiDocFetcher/**/*.py": "ApiDocFetcher/",
-      "../tools/ApiDocFetcher/requirements.txt": "ApiDocFetcher/requirements.txt"
+      "resources/ApiDocFetcher/**/*.py": "ApiDocFetcher/",
+      "resources/ApiDocFetcher/requirements.txt": "ApiDocFetcher/requirements.txt"
     }
   }
 }

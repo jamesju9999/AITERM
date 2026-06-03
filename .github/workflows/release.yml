@@ -185,6 +185,17 @@ jobs:
           prerelease: false
           args: --target aarch64-apple-darwin
 
+      - name: Copy ApiDocFetcher scripts (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/resources/ApiDocFetcher/strategies | Out-Null
+          New-Item -ItemType Directory -Force -Path src-tauri/resources/ApiDocFetcher/tests | Out-Null
+          Copy-Item tools/ApiDocFetcher/*.py src-tauri/resources/ApiDocFetcher/
+          Copy-Item tools/ApiDocFetcher/requirements.txt src-tauri/resources/ApiDocFetcher/
+          Copy-Item tools/ApiDocFetcher/strategies/*.py src-tauri/resources/ApiDocFetcher/strategies/
+          Copy-Item tools/ApiDocFetcher/tests/*.py src-tauri/resources/ApiDocFetcher/tests/
+
       - name: Install NSIS (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
