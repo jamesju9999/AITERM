@@ -77,6 +77,10 @@ pub async fn run_fetcher(
             .arg(&req_file)
             .args(["--quiet", "--disable-pip-version-check"])
             .current_dir(script_dir);
+        // On Linux (Ubuntu 22.04+) pip refuses to install into the system environment;
+        // --user installs to ~/.local and --break-system-packages bypasses the guard.
+        #[cfg(target_os = "linux")]
+        pip_cmd.args(["--user", "--break-system-packages"]);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
