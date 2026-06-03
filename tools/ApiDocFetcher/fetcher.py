@@ -18,6 +18,34 @@ import sys
 # Ensure strategies package is importable when run from any working dir
 sys.path.insert(0, os.path.dirname(__file__))
 
+# ── Dependency check ──────────────────────────────────────────────────────────
+# Verify required third-party packages before importing anything else so we can
+# emit a structured JSON error (instead of a raw traceback) when pip install
+# failed (e.g. Ubuntu "externally managed environment" silently rejecting it).
+_REQUIRED = {
+    "curl_cffi": "curl_cffi>=0.7.0",
+    "yaml":      "pyyaml>=6.0",
+    "bs4":       "beautifulsoup4>=4.12",
+}
+
+def _check_deps() -> None:
+    missing = []
+    for module, pkg in _REQUIRED.items():
+        try:
+            __import__(module)
+        except ImportError:
+            missing.append(pkg)
+    if missing:
+        msg = (
+            "Missing Python packages: " + ", ".join(missing) + ". "
+            "Run: pip install " + " ".join(missing)
+        )
+        print(json.dumps({"type": "error", "message": msg}), flush=True)
+        sys.exit(1)
+
+_check_deps()
+# ─────────────────────────────────────────────────────────────────────────────
+
 from detector import detect
 from strategies import get_strategy, KeepOptions
 from converter import openapi_to_markdown
