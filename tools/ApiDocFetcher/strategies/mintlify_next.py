@@ -78,10 +78,32 @@ class MintlifyNextStrategy:
                 continue
 
         if specs:
-            # Return the largest spec (most complete)
-            spec = max(specs, key=lambda s: len(str(s)))
-            title = spec.get("info", {}).get("title", url.split("/")[-1])
-            return PageContent(title=title, openapi_spec=spec, platform="mintlify-next")
+            # Merge all specs: start from the largest, then fold in any paths/schemas
+            # from other chunks that aren't already present (server may split spec across chunks).
+            base = max(specs, key=lambda s: len(str(s)))
+            merged_paths: dict = dict(base.get("paths", {}))
+            merged_schemas: dict = dict(
+                base.get("components", {}).get("schemas", {})
+            )
+            for other in specs:
+                if other is base:
+                    continue
+                for path, item in (other.get("paths") or {}).items():
+                    if path not in merged_paths:
+                        merged_paths[path] = item
+                for name, schema in (
+                    other.get("components", {}).get("schemas") or {}
+                ).items():
+                    if name not in merged_schemas:
+                        merged_schemas[name] = schema
+            if merged_paths != base.get("paths"):
+                import copy
+                base = copy.deepcopy(base)
+                base["paths"] = merged_paths
+                if merged_schemas:
+                    base.setdefault("components", {})["schemas"] = merged_schemas
+            title = base.get("info", {}).get("title", url.split("/")[-1])
+            return PageContent(title=title, openapi_spec=base, platform="mintlify-next")
 
         # No OpenAPI found — extract prose from main content only
         from bs4 import BeautifulSoup

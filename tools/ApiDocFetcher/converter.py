@@ -199,8 +199,20 @@ def openapi_to_markdown(spec: dict, keep: KeepOptions) -> str:
         first_line = description.strip().split("\n")[0]
         lines += [f"> {first_line}", ""]
 
-    if servers:
+    if len(servers) == 1:
         lines += [f"**Base URL**: `{servers[0].get('url', '')}`", ""]
+    elif servers:
+        lines += [
+            "### Base URLs",
+            "",
+            "| Environment | URL |",
+            "|-------------|-----|",
+        ]
+        for s in servers:
+            desc = s.get("description", "").replace("|", "\\|") or "Default"
+            url_val = s.get("url", "")
+            lines.append(f"| {desc} | `{url_val}` |")
+        lines.append("")
 
     # Security schemes (OAuth2 token URLs, API keys, etc.)
     security_lines = _render_security_schemes(spec)

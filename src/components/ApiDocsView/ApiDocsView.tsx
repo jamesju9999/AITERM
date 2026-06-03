@@ -300,15 +300,32 @@ Reformat the following raw API documentation page into clean Markdown.
     const AI_MARKER = "> ⚠ AI processing required";
     const SECTION_SEP = "\n\n---\n\n";
 
+    // Pre-read all files and count translatable sections to set accurate progress.
+    type FileEntry = { filePath: string; content: string; sections: string[] };
+    const fileEntries: FileEntry[] = [];
+    let aiTotal = 0;
     for (const filePath of files) {
       if (!mountedRef.current) break;
       try {
         const { content } = await readFile(filePath);
         const hasAnyMarker = content.includes(AI_MARKER);
         if (!translateToZh && !hasAnyMarker) continue;
-
-        // Split into sections (merged file has multiple; single file has one)
         const sections = content.split(SECTION_SEP);
+        fileEntries.push({ filePath, content, sections });
+        for (const section of sections) {
+          if (translateToZh || section.includes(AI_MARKER)) aiTotal++;
+        }
+      } catch {
+        // skip unreadable files
+      }
+    }
+
+    let aiCurrent = 0;
+    if (aiTotal > 0) setProgress({ current: 0, total: aiTotal });
+
+    for (const { filePath, sections } of fileEntries) {
+      if (!mountedRef.current) break;
+      try {
         let changed = false;
         const newSections: string[] = [];
 
@@ -330,6 +347,8 @@ Reformat the following raw API documentation page into clean Markdown.
             const markerIdx = section.indexOf(AI_MARKER);
             textToProcess = section.slice(markerIdx + AI_MARKER.length).trim();
             if (!textToProcess) {
+              aiCurrent++;
+              setProgress({ current: aiCurrent, total: aiTotal });
               newSections.push(section);
               continue;
             }
@@ -369,6 +388,9 @@ Reformat the following raw API documentation page into clean Markdown.
             );
             changed = true;
 
+            aiCurrent++;
+            setProgress({ current: aiCurrent, total: aiTotal });
+
             const doneLabel = translateToZh ? "翻譯完成" : "AI 增強完成";
             setLogs((prev) => [...prev, {
               level: "info",
@@ -376,6 +398,8 @@ Reformat the following raw API documentation page into clean Markdown.
             }]);
           } catch (sectionErr) {
             if (!mountedRef.current) break;
+            aiCurrent++;
+            setProgress({ current: aiCurrent, total: aiTotal });
             const msg = sectionErr instanceof Error
               ? sectionErr.message
               : formatAiError(sectionErr as AiError);

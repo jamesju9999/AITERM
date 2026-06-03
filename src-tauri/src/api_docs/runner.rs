@@ -68,7 +68,19 @@ pub async fn run_fetcher(
         .map_err(|e| format!("Failed to spawn Python: {e}"))?;
 
     let stdout = child.stdout.take().expect("stdout piped");
+    let stderr = child.stderr.take().expect("stderr piped");
     let mut lines = BufReader::new(stdout).lines();
+
+    // Collect stderr concurrently to avoid pipe-buffer deadlocks and capture error messages.
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = String::new();
+        let mut reader = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            buf.push_str(&line);
+            buf.push('\n');
+        }
+        buf
+    });
 
     let mut tree: Option<Vec<DocNode>> = None;
 
@@ -106,9 +118,15 @@ pub async fn run_fetcher(
     }
 
     // Wait for the child and check exit code
+    let stderr_output = stderr_task.await.unwrap_or_default();
     let status = child.wait().await.map_err(|e| e.to_string())?;
     if !status.success() {
-        return Err(format!("fetcher.py exited with code {:?}", status.code()));
+        let detail = if stderr_output.trim().is_empty() {
+            String::new()
+        } else {
+            format!(": {}", stderr_output.trim())
+        };
+        return Err(format!("fetcher.py exited with code {:?}{}", status.code(), detail));
     }
 
     Ok(tree)

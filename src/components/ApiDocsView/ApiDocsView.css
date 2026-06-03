@@ -242,7 +242,7 @@
   padding: 10px;
   border-top: 1px solid var(--border, #2a2a3e);
   max-height: 200px;
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -271,6 +271,8 @@
   white-space: nowrap;
 }
 .extraction-log__list {
+  flex: 1;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 2px;
