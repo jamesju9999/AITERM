@@ -3,7 +3,8 @@
     "externalBin": [],
     "resources": {
       "binaries/db2-sidecar-mac-arm64": "db2-sidecar",
-      "../tools/ApiDocFetcher/**/*": "ApiDocFetcher/"
+      "../tools/ApiDocFetcher/**/*.py": "ApiDocFetcher/",
+      "../tools/ApiDocFetcher/requirements.txt": "ApiDocFetcher/requirements.txt"
     }
   }
 }
