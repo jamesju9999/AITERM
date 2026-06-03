@@ -119,7 +119,10 @@ jobs:
             'bundle': {
               'externalBin': [],
               'resources': {
-                '${{ matrix.db2_sidecar_dir }}': 'db2-sidecar'
+                '${{ matrix.db2_sidecar_dir }}': 'db2-sidecar',
+                '../tools/ApiDocFetcher/*.py': 'ApiDocFetcher/',
+                '../tools/ApiDocFetcher/strategies/*.py': 'ApiDocFetcher/strategies/',
+                '../tools/ApiDocFetcher/requirements.txt': 'ApiDocFetcher/requirements.txt'
               }
             }
           }
