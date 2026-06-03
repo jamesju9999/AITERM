@@ -2,7 +2,8 @@
   "bundle": {
     "externalBin": [],
     "resources": {
-      "../tools/ApiDocFetcher/**/*.py": "ApiDocFetcher/",
+      "../tools/ApiDocFetcher/*.py": "ApiDocFetcher/",
+      "../tools/ApiDocFetcher/strategies/*.py": "ApiDocFetcher/strategies/",
       "../tools/ApiDocFetcher/requirements.txt": "ApiDocFetcher/requirements.txt"
     }
   }
