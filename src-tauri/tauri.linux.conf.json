@@ -1,5 +1,8 @@
 {
   "bundle": {
-    "externalBin": []
+    "externalBin": [],
+    "resources": {
+      "../tools/ApiDocFetcher/**/*": "ApiDocFetcher/"
+    }
   }
 }

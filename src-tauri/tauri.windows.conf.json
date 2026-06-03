@@ -2,7 +2,8 @@
   "bundle": {
     "externalBin": [],
     "resources": {
-      "binaries/db2-sidecar-win-x64": "db2-sidecar"
+      "binaries/db2-sidecar-win-x64": "db2-sidecar",
+      "../tools/ApiDocFetcher/**/*": "ApiDocFetcher/"
     }
   }
 }
