@@ -70,13 +70,19 @@ pub async fn run_fetcher(
             level: "info".into(),
             message: "Checking Python dependencies…".into(),
         });
-        match Command::new(python)
+        #[allow(unused_mut)]
+        let mut pip_cmd = Command::new(python);
+        pip_cmd
             .args(["-m", "pip", "install", "-r"])
             .arg(&req_file)
             .args(["--quiet", "--disable-pip-version-check"])
-            .current_dir(script_dir)
-            .output()
-            .await
+            .current_dir(script_dir);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            pip_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        match pip_cmd.output().await
         {
             Ok(out) if !out.status.success() => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
@@ -95,13 +101,22 @@ pub async fn run_fetcher(
         }
     }
 
-    let mut child = Command::new(python)
+    let mut fetch_cmd = Command::new(python);
+    fetch_cmd
         .arg(script)
         .arg(subcommand)
         .args(extra_args)
         .current_dir(script_dir)
+        // Force UTF-8 stdout so Windows cp950/cp936 systems can encode ✓ ✗ etc.
+        .env("PYTHONIOENCODING", "utf-8")
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        fetch_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let mut child = fetch_cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn Python: {e}"))?;
 
