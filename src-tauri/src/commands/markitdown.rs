@@ -58,7 +58,16 @@ pub async fn markitdown_convert(app: AppHandle, file_path: String) -> Result<Str
         }
         match pip_cmd.output().await {
             Err(e) => return Err(format!("Failed to run pip (is Python installed?): {e}")),
-            Ok(_) => {} // non-zero exit is fine — markitdown may already be installed
+            Ok(out) if !out.status.success() => {
+                // Non-zero exit but continue — markitdown may already be installed.
+                // Store stderr so we can include it in the conversion error if the
+                // Python script subsequently fails (gives user actionable info).
+                let pip_warn = String::from_utf8_lossy(&out.stderr);
+                if !pip_warn.trim().is_empty() {
+                    eprintln!("[markitdown] pip warning: {}", pip_warn.trim());
+                }
+            }
+            _ => {}
         }
     }
 
