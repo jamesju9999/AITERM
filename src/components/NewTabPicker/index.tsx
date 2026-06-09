@@ -3,7 +3,7 @@ import { useLocale } from "../../contexts/LocaleContext";
 import "./index.css";
 
 interface Props {
-  onSelect: (type: "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs") => void;
+  onSelect: (type: "terminal" | "database" | "design" | "cross-db") => void;
   onClose: () => void;
 }
 
@@ -54,8 +54,8 @@ export function NewTabPicker({ onSelect, onClose }: Props) {
       >
         <span className="new-tab-picker__icon">📝</span>
         <div>
-          <div className="new-tab-picker__label">{t.design_tab}</div>
-          <div className="new-tab-picker__desc">{t.new_design_desc}</div>
+          <div className="new-tab-picker__label">設計與規格 (Design)</div>
+          <div className="new-tab-picker__desc">進行需求討論與 SDD 規劃</div>
         </div>
       </button>
       <button
@@ -66,36 +66,6 @@ export function NewTabPicker({ onSelect, onClose }: Props) {
         <div>
           <div className="new-tab-picker__label">{t.cross_db_tab}</div>
           <div className="new-tab-picker__desc">{t.new_cross_db_desc}</div>
-        </div>
-      </button>
-      <button
-        className="new-tab-picker__item"
-        onClick={() => { onSelect("vcs"); onClose(); }}
-      >
-        <span className="new-tab-picker__icon">🔀</span>
-        <div>
-          <div className="new-tab-picker__label">{t.vcs_tab}</div>
-          <div className="new-tab-picker__desc">{t.new_vcs_desc}</div>
-        </div>
-      </button>
-      <button
-        className="new-tab-picker__item"
-        onClick={() => { onSelect("doc-converter"); onClose(); }}
-      >
-        <span className="new-tab-picker__icon">📄</span>
-        <div>
-          <div className="new-tab-picker__label">{t.doc_converter_tab}</div>
-          <div className="new-tab-picker__desc">{t.new_doc_converter_desc}</div>
-        </div>
-      </button>
-      <button
-        className="new-tab-picker__item"
-        onClick={() => { onSelect("api-docs"); onClose(); }}
-      >
-        <span className="new-tab-picker__icon">📚</span>
-        <div>
-          <div className="new-tab-picker__label">{t.api_docs_tab}</div>
-          <div className="new-tab-picker__desc">{t.new_api_docs_desc}</div>
         </div>
       </button>
     </div>

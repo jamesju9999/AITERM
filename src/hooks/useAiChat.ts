@@ -9,8 +9,6 @@ import {
   type ChatMessage,
 } from "../ipc/ai";
 import { truncateHistory } from "../lib/chatHistory";
-import { buildContentParts, contentToDisplayString } from "../types/attachment";
-import type { Attachment } from "../types/attachment";
 
 const HISTORY_LIMIT = 20;
 const SESSIONS_STORAGE_KEY = "aiterm-ai-chat-sessions";
@@ -39,9 +37,7 @@ function saveAllSessions(sessions: AiChatSession[]): void {
 
 function formatSessionTitle(messages: ChatMessage[]): string {
   const first = messages.find((m) => m.role === "user");
-  if (!first) return "（空對話）";
-  const text = contentToDisplayString(first.content);
-  return text.slice(0, 30) || "（附件）";
+  return first ? first.content.slice(0, 30) : "（空對話）";
 }
 
 export interface UseAiChatResult {
@@ -49,7 +45,7 @@ export interface UseAiChatResult {
   streamBuf: string;
   isStreaming: boolean;
   error: AiError | null;
-  send: (userText: string, attachments?: Attachment[]) => Promise<void>;
+  send: (userText: string) => Promise<void>;
   resend: () => Promise<void>;
   clear: () => void;
   /** Inject a message directly into the chat history without calling the AI. */
@@ -141,13 +137,9 @@ export function useAiChat(sessionId: string): UseAiChatResult {
   );
 
   const send = useCallback(
-    async (userText: string, attachments?: Attachment[]) => {
-      if (isStreaming) return;
-      const content =
-        attachments && attachments.length > 0
-          ? buildContentParts(userText, attachments)
-          : userText;
-      const userMsg: ChatMessage = { role: "user", content };
+    async (userText: string) => {
+      if (isStreaming) return; // UI should disable input anyway
+      const userMsg: ChatMessage = { role: "user", content: userText };
       const next = truncateHistory([...messages, userMsg], HISTORY_LIMIT);
       setMessages(next);
       await invokeChat(next);

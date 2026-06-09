@@ -73,29 +73,6 @@ impl ConfigStore {
         })
     }
 
-    /// Add a new VCS connection config.
-    pub fn add_vcs_connection(&self, conn: VcsConnection) -> anyhow::Result<()> {
-        self.update(|cfg| {
-            cfg.vcs_connections.push(conn);
-        })
-    }
-
-    /// Update an existing VCS connection by id. Silently no-ops if not found.
-    pub fn update_vcs_connection(&self, conn: VcsConnection) -> anyhow::Result<()> {
-        self.update(|cfg| {
-            if let Some(existing) = cfg.vcs_connections.iter_mut().find(|c| c.id == conn.id) {
-                *existing = conn;
-            }
-        })
-    }
-
-    /// Remove a VCS connection by id.
-    pub fn remove_vcs_connection(&self, id: &str) -> anyhow::Result<()> {
-        self.update(|cfg| {
-            cfg.vcs_connections.retain(|c| c.id != id);
-        })
-    }
-
     /// Shortcut: get a single provider by id.
     pub fn get_provider(&self, id: &str) -> Option<ProviderConfig> {
         self.state.read().find_provider(id).cloned()

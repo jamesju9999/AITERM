@@ -14,7 +14,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 fn req(text: &str) -> GenerateRequest {
     GenerateRequest {
         system_prompt: "sys".into(),
-        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!(text) }],
+        messages: vec![ChatMessage { role: "user".into(), content: text.into() }],
         context: EnvSnapshot {
             os: "linux".into(),
             shell: "bash".into(),
@@ -128,45 +128,4 @@ async fn health_check_fails_when_tags_returns_error() {
     let client = OllamaClient::with_base_url("llama3".into(), server.uri());
     let err = client.health_check().await.unwrap_err();
     assert!(matches!(err, AiError::Network { .. }), "expected Network, got {err:?}");
-}
-
-#[tokio::test]
-async fn multipart_content_puts_images_in_images_field() {
-    let server = MockServer::start().await;
-    let mock = Mock::given(method("POST"))
-        .and(path("/api/chat"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "application/x-ndjson")
-                .set_body_string("{\"message\":{\"content\":\"ok\"},\"done\":true}\n"),
-        )
-        .mount_as_scoped(&server)
-        .await;
-
-    let client = OllamaClient::with_base_url("llava".into(), server.uri());
-    let (tx, _rx) = mpsc::channel(32);
-    let req = GenerateRequest {
-        system_prompt: "sys".into(),
-        messages: vec![ChatMessage {
-            role: "user".into(),
-            content: serde_json::json!([
-                {"type": "text", "text": "describe"},
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc123"}}
-            ]),
-        }],
-        context: EnvSnapshot {
-            os: "linux".into(), shell: "bash".into(),
-            cwd: std::path::PathBuf::from("/"), ..Default::default()
-        },
-        mode: QueryMode::Chat,
-        max_tokens: None,
-    };
-    client.generate(req, tx).await.unwrap();
-
-    let received = &mock.received_requests().await[0];
-    let body: serde_json::Value = serde_json::from_slice(&received.body).unwrap();
-    // User message is at index 1 (after system at index 0)
-    let user_msg = &body["messages"][1];
-    assert_eq!(user_msg["content"], "describe");
-    assert_eq!(user_msg["images"][0], "abc123");
 }

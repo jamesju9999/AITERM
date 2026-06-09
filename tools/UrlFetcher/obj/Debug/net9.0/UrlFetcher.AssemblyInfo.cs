@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("UrlFetcher")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+f93c03211cfcc8de03f9862e2cc513cf14c3fc37")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+7fce3131b923e820e64f2a96dd61bccfa292dbe6")]
 [assembly: System.Reflection.AssemblyProductAttribute("UrlFetcher")]
 [assembly: System.Reflection.AssemblyTitleAttribute("UrlFetcher")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

@@ -26,14 +26,6 @@ export interface ProviderConfig {
   supports_json_mode: boolean;
 }
 
-export interface EnterprisePolicy {
-  version: number;
-  ai_provider_id: string | null;
-  execution_mode: ExecutionMode | null;
-  max_agent_steps: number | null;
-  vcs_push_pattern: string | null;
-}
-
 export interface AppConfig {
   default_provider: string | null;
   providers: ProviderConfig[];
@@ -42,9 +34,6 @@ export interface AppConfig {
   onboarding_done: boolean;
   max_agent_steps: number; // 0 = unlimited
   default_tab: DefaultTab;
-  enterprise_server_url: string | null;
-  enterprise_device_id: string | null;
-  enterprise_policy: EnterprisePolicy | null;
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────

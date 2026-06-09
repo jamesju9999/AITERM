@@ -22,30 +22,6 @@ jobs:
             target: x86_64-pc-windows-msvc
             rust_targets: x86_64-pc-windows-msvc
             artifact_name: windows
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            rust_targets: x86_64-unknown-linux-gnu
-            artifact_name: linux-x64-appimage
-            db2_arch: x64
-            db2_sidecar_dir: binaries/db2-sidecar-linux-x64
-          - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            rust_targets: x86_64-unknown-linux-gnu
-            artifact_name: linux-x64-deb
-            db2_arch: x64
-            db2_sidecar_dir: binaries/db2-sidecar-linux-x64
-          - os: ubuntu-22.04-arm
-            target: aarch64-unknown-linux-gnu
-            rust_targets: aarch64-unknown-linux-gnu
-            artifact_name: linux-arm64-appimage
-            db2_arch: arm64
-            db2_sidecar_dir: binaries/db2-sidecar-linux-arm64
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            rust_targets: aarch64-unknown-linux-gnu
-            artifact_name: linux-arm64-deb
-            db2_arch: arm64
-            db2_sidecar_dir: binaries/db2-sidecar-linux-arm64
 
     runs-on: ${{ matrix.os }}
 
@@ -69,65 +45,22 @@ jobs:
         with:
           workspaces: src-tauri
 
-      # Linux: install WebKitGTK and other Tauri system dependencies
-      - name: Install Linux system dependencies
-        if: startsWith(matrix.os, 'ubuntu')
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libssl-dev
-
-
-      # Setup Java 21 (Temurin) + Maven — needed to build db2sidecar.jar from source (all platforms)
-      - name: Setup Java 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      # macOS: build Java sidecar from source and download bundled JRE
-      - name: Build DB2 sidecar (macOS)
+      # macOS: DB2 adapter requires unixODBC
+      - name: Install unixODBC (macOS)
         if: matrix.os == 'macos-latest'
-        run: bash scripts/setup-db2-mac.sh
+        run: brew install unixodbc
 
       # Windows: reqwest uses rustls-tls, tiberius uses native-tls (Schannel) — no OpenSSL needed
 
-      # Windows: build Java sidecar from source and download bundled JRE
-      - name: Build DB2 sidecar (Windows)
+      # Windows: download pre-built DB2 sidecar binaries from dedicated release
+      - name: Download DB2 sidecar binaries (Windows)
         if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: pwsh -ExecutionPolicy Bypass -File scripts\setup-db2-win.ps1
-
-      # Linux .deb only: build Java sidecar and bundle it.
-      # AppImage builds intentionally skip DB2 — linuxdeploy fails when the JRE's .so
-      # files are in the AppDir (it tries to resolve libjvm.so's internal deps and errors out).
-      # Users who need DB2 on Linux should install the .deb package.
-      - name: Build DB2 sidecar (Linux .deb)
-        if: matrix.os == 'ubuntu-24.04' || matrix.os == 'ubuntu-24.04-arm'
-        run: ARCH=${{ matrix.db2_arch }} bash scripts/setup-db2-linux.sh
-
-      - name: Patch tauri.linux.conf.json with DB2 resources (Linux .deb)
-        if: matrix.os == 'ubuntu-24.04' || matrix.os == 'ubuntu-24.04-arm'
+        shell: powershell
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python3 -c "
-          import json
-          conf = {
-            'bundle': {
-              'externalBin': [],
-              'resources': {
-                '${{ matrix.db2_sidecar_dir }}': 'db2-sidecar',
-                '../tools/ApiDocFetcher/*.py': 'ApiDocFetcher/',
-                '../tools/ApiDocFetcher/strategies/*.py': 'ApiDocFetcher/strategies/',
-                '../tools/ApiDocFetcher/requirements.txt': 'ApiDocFetcher/requirements.txt'
-              }
-            }
-          }
-          print(json.dumps(conf, indent=2))
-          " > src-tauri/tauri.linux.conf.json
+          gh release download v0.0.0-db2-binaries --pattern "db2-sidecar-win-x64.zip" --repo ${{ github.repository }}
+          Expand-Archive -Path db2-sidecar-win-x64.zip -DestinationPath src-tauri/binaries/
 
       - name: Sync version from tag
         shell: node {0}
@@ -152,16 +85,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      # Ad-hoc sign the macOS bundle so Gatekeeper shows "unidentified developer"
-      # (right-click → Open to bypass) instead of the harder-to-dismiss "damaged" error.
-      # Full notarization requires an Apple Developer account; use APPLE_CERTIFICATE
-      # and APPLE_ID secrets when available.
       - name: Build (macOS arm64)
         if: matrix.os == 'macos-latest'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_SIGNING_IDENTITY: "-"
         with:
           tagName: ${{ github.ref_name }}
           releaseName: AITerm ${{ github.ref_name }}
@@ -169,40 +97,13 @@ jobs:
             ## AITerm ${{ github.ref_name }}
 
             ### 下載
-            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
+            - **macOS** (Apple Silicon / Intel via Rosetta 2): 下載 `.dmg` 安裝檔
             - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_x86_64.AppImage`
-            - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
-            - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
-            - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
 
-            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
-            > ```
-            > xattr -cr /Applications/AITerm.app
-            > ```
-            > **Linux AppImage：** 執行前需加執行權限：
-            > ```
-            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
-            > ```
-          releaseDraft: false
+            > macOS 首次開啟可能需要在「系統設定 > 隱私與安全性」中允許執行。
+          releaseDraft: true
           prerelease: false
           args: --target aarch64-apple-darwin
-
-      - name: Copy ApiDocFetcher scripts (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path src-tauri/resources/ApiDocFetcher/strategies | Out-Null
-          New-Item -ItemType Directory -Force -Path src-tauri/resources/ApiDocFetcher/tests | Out-Null
-          Copy-Item tools/ApiDocFetcher/*.py src-tauri/resources/ApiDocFetcher/
-          Copy-Item tools/ApiDocFetcher/requirements.txt src-tauri/resources/ApiDocFetcher/
-          Copy-Item tools/ApiDocFetcher/strategies/*.py src-tauri/resources/ApiDocFetcher/strategies/
-          Copy-Item tools/ApiDocFetcher/tests/*.py src-tauri/resources/ApiDocFetcher/tests/
-
-      - name: Install NSIS (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: choco install nsis --version 3.11 -y
 
       - name: Build (Windows)
         if: matrix.os == 'windows-latest'
@@ -214,151 +115,6 @@ jobs:
           releaseName: AITerm ${{ github.ref_name }}
           releaseBody: |
             ## AITerm ${{ github.ref_name }}
-
-            ### 下載
-            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
-            - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_x86_64.AppImage`
-            - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
-            - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
-            - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
-
-            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
-            > ```
-            > xattr -cr /Applications/AITerm.app
-            > ```
-            > **Linux AppImage：** 執行前需加執行權限：
-            > ```
-            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
-            > ```
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
-          args: --target x86_64-pc-windows-msvc --bundles nsis
-
-      # Ubuntu 22.04: AppImage only (distro-agnostic, works on Ubuntu 22.04+)
-      - name: Build (Linux AppImage — Ubuntu 22.04)
-        if: matrix.os == 'ubuntu-22.04'
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: AITerm ${{ github.ref_name }}
-          releaseBody: |
-            ## AITerm ${{ github.ref_name }}
-
-            ### 下載
-            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
-            - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_x86_64.AppImage`
-            - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
-            - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
-            - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
-
-            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
-            > ```
-            > xattr -cr /Applications/AITerm.app
-            > ```
-            > **Linux AppImage：** 執行前需加執行權限：
-            > ```
-            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
-            > ```
-          releaseDraft: false
-          prerelease: false
-          args: --target x86_64-unknown-linux-gnu --bundles appimage
-
-      # Ubuntu 24.04 x64: .deb only (uses t64 runtime deps, works on Ubuntu 24.04+)
-      - name: Build (Linux x64 .deb — Ubuntu 24.04)
-        if: matrix.os == 'ubuntu-24.04'
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: AITerm ${{ github.ref_name }}
-          releaseBody: |
-            ## AITerm ${{ github.ref_name }}
-
-            ### 下載
-            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
-            - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_x86_64.AppImage`
-            - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
-            - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
-            - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
-
-            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
-            > ```
-            > xattr -cr /Applications/AITerm.app
-            > ```
-            > **Linux AppImage：** 執行前需加執行權限：
-            > ```
-            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
-            > ```
-          releaseDraft: false
-          prerelease: false
-          args: --target x86_64-unknown-linux-gnu --bundles deb
-
-      # Ubuntu 22.04 ARM64: AppImage only (works on ARM Ubuntu 22.04+)
-      - name: Build (Linux ARM64 AppImage — Ubuntu 22.04)
-        if: matrix.os == 'ubuntu-22.04-arm'
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: AITerm ${{ github.ref_name }}
-          releaseBody: |
-            ## AITerm ${{ github.ref_name }}
-
-            ### 下載
-            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
-            - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_x86_64.AppImage`
-            - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
-            - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
-            - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
-
-            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
-            > ```
-            > xattr -cr /Applications/AITerm.app
-            > ```
-            > **Linux AppImage：** 執行前需加執行權限：
-            > ```
-            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
-            > ```
-          releaseDraft: false
-          prerelease: false
-          args: --target aarch64-unknown-linux-gnu --bundles appimage
-
-      # Ubuntu 24.04 ARM64: .deb only (uses t64 runtime deps, works on ARM Ubuntu 24.04+)
-      - name: Build (Linux ARM64 .deb — Ubuntu 24.04)
-        if: matrix.os == 'ubuntu-24.04-arm'
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: AITerm ${{ github.ref_name }}
-          releaseBody: |
-            ## AITerm ${{ github.ref_name }}
-
-            ### 下載
-            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
-            - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_x86_64.AppImage`
-            - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
-            - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
-            - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
-
-            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
-            > ```
-            > xattr -cr /Applications/AITerm.app
-            > ```
-            > **Linux AppImage：** 執行前需加執行權限：
-            > ```
-            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
-            > ```
-          releaseDraft: false
-          prerelease: false
-          args: --target aarch64-unknown-linux-gnu --bundles deb
+          args: --target x86_64-pc-windows-msvc

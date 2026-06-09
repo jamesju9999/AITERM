@@ -199,7 +199,7 @@ pub async fn ai_query(
     let prompt = build_single_command_prompt(&snapshot);
     let req = GenerateRequest {
         system_prompt: prompt,
-        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!(query) }],
+        messages: vec![ChatMessage { role: "user".into(), content: query }],
         context: snapshot,
         mode: QueryMode::SingleCommand,
         max_tokens: None,
@@ -311,20 +311,9 @@ pub async fn ai_chat(
         None => router.resolve().await?,
     };
 
-    // If the caller already embedded a system message, use it directly and strip it
-    // from the messages array (providers expect system prompt in the dedicated field).
-    // Otherwise fall back to the terminal-context chat prompt.
-    let (system_prompt, messages) = if let Some(pos) = messages.iter().position(|m| m.role == "system") {
-        let mut msgs = messages;
-        let sys = msgs.remove(pos);
-        let prompt_text = sys.content.as_str().unwrap_or("").to_string();
-        (prompt_text, msgs)
-    } else {
-        (build_chat_prompt(&snapshot), messages)
-    };
-
+    let prompt = build_chat_prompt(&snapshot);
     let req = GenerateRequest {
-        system_prompt,
+        system_prompt: prompt,
         messages,
         context: snapshot,
         mode: QueryMode::Chat,

@@ -7,22 +7,8 @@ import "./index.css";
 export interface Tab {
   id: string;
   title: string;
-  type: "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs";
+  type: "terminal" | "database" | "design" | "cross-db";
   dbConnectionId?: string;
-  /** PTY session ID assigned by the backend when this terminal tab's PTY is created. */
-  ptySessionId?: string;
-  /** For enterprise tasks: start the PTY in this directory. */
-  initialCwd?: string;
-  /** For enterprise tasks: auto-trigger agent loop when PTY is ready. */
-  initialMission?: { goal: string; maxSteps: number };
-  /** Enterprise task metadata for on_complete actions. */
-  enterpriseTask?: {
-    taskId: string;
-    workBranch: string;
-    onComplete: unknown;
-  };
-  /** Live agent progress (steps done / total) for background enterprise tasks. */
-  agentProgress?: { done: number; total: number };
 }
 
 export interface TabBarProps {
@@ -36,12 +22,11 @@ export interface TabBarProps {
   onToggle: () => void;
   width: number;
   pickerOpen?: boolean;
-  onPickerSelect?: (type: "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs") => void;
+  onPickerSelect?: (type: "terminal" | "database" | "design" | "cross-db") => void;
   onPickerClose?: () => void;
-  hasUpdate?: boolean;
 }
 
-export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isSidebarOpen, onToggle, width, pickerOpen, onPickerSelect, onPickerClose, hasUpdate = false }: TabBarProps) {
+export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isSidebarOpen, onToggle, width, pickerOpen, onPickerSelect, onPickerClose }: TabBarProps) {
   const navigate = useNavigate();
   const { t } = useLocale();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -61,14 +46,13 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isS
           ◨
         </button>
 
-        <button
-          className="aiterm-sidebar-toggle"
-          onClick={() => navigate("/settings")}
+        <button 
+          className="aiterm-sidebar-toggle" 
+          onClick={() => navigate("/settings")} 
           title={`${t.settings} (Ctrl+,)`}
-          style={{ background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px', position: 'relative' }}
+          style={{ background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px' }}
         >
           ⚙
-          {hasUpdate && <span className="update-badge" aria-label="Update available" />}
         </button>
       </div>
     );
@@ -142,10 +126,7 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isS
             onClick={() => navigate("/settings")}
             title={`${t.settings} (Ctrl+,)`}
         >
-            <span style={{ marginRight: "8px", fontSize: "16px", position: "relative", display: "inline-block" }}>
-              ⚙
-              {hasUpdate && <span className="update-badge" aria-label="Update available" />}
-            </span>
+            <span style={{ marginRight: "8px", fontSize: "16px" }}>⚙</span>
             <span className="aiterm-tab-title">{t.settings}</span>
         </div>
       </div>

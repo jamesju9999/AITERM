@@ -17,7 +17,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 fn req(text: &str) -> GenerateRequest {
     GenerateRequest {
         system_prompt: "sys".into(),
-        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!(text) }],
+        messages: vec![ChatMessage { role: "user".into(), content: text.into() }],
         context: EnvSnapshot {
             os: "linux".into(),
             shell: "bash".into(),

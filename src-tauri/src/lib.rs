@@ -90,18 +90,29 @@ pub fn run() {
             let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
             let candidates = [
-                // Production: resources bundle into exe_dir/db2-sidecar/
-                exe_dir.join("db2-sidecar"),
+                // Production: resources bundle flattens db2-sidecar-win-x64/ into app dir
+                exe_dir.join("db2-sidecar.exe"),
+                // Legacy: externalBin with target triple suffix (kept for compatibility)
+                exe_dir.join("db2-sidecar-x86_64-pc-windows-msvc.exe"),
+                // Dev: local publish output
+                manifest_dir
+                    .parent()
+                    .expect("workspace root")
+                    .join("db2-sidecar")
+                    .join("bin")
+                    .join("publish-win-x64-nonsingle")
+                    .join("db2-sidecar.exe"),
                 // Dev: binaries dir
                 manifest_dir
                     .join("binaries")
-                    .join("db2-sidecar-win-x64"),
+                    .join("db2-sidecar-win-x64")
+                    .join("db2-sidecar.exe"),
             ];
 
             candidates
                 .into_iter()
-                .find(|p| p.join("db2sidecar.jar").exists())
-                .unwrap_or_else(|| exe_dir.join("db2-sidecar"))
+                .find(|p| p.exists())
+                .unwrap_or_else(|| exe_dir.join("db2-sidecar.exe"))
         }
         #[cfg(target_os = "macos")]
         {

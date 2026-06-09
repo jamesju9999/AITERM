@@ -127,16 +127,3 @@
   outline: none;
   min-width: 0;
 }
-
-/* Update available badge — orange dot on the ⚙ icon */
-.update-badge {
-  position: absolute;
-  top: -3px;
-  right: -4px;
-  width: 8px;
-  height: 8px;
-  background: #f97316;
-  border-radius: 50%;
-  border: 1.5px solid #151515;
-  pointer-events: none;
-}

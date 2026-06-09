@@ -21,45 +21,42 @@ pub struct Db2SidecarClient {
 }
 
 impl Db2SidecarClient {
-    /// Spawn the sidecar. `sidecar_dir` must contain `db2sidecar.jar` and `jre/bin/java[.exe]`.
-    /// Returns Err with "db2_sidecar_not_found:" prefix if the jar is missing.
-    pub fn spawn(sidecar_dir: PathBuf) -> Result<Self> {
-        #[cfg(target_os = "windows")]
-        let java_bin = sidecar_dir.join("jre").join("bin").join("java.exe");
-        #[cfg(not(target_os = "windows"))]
-        let java_bin = sidecar_dir.join("jre").join("bin").join("java");
-
-        let jar = sidecar_dir.join("db2sidecar.jar");
-
-        if !jar.exists() {
-            return Err(anyhow::anyhow!(
-                "db2_sidecar_not_found: {}",
-                jar.display()
-            ));
-        }
-
-        let mut cmd = tokio::process::Command::new(&java_bin);
-        cmd.arg("-jar")
-            .arg(&jar)
-            .stdin(Stdio::piped())
+    /// Spawn the sidecar process. Returns Err with "db2_sidecar_not_found:" prefix
+    /// if the binary does not exist, so the frontend can show install guidance.
+    pub fn spawn(path: PathBuf) -> Result<Self> {
+        let sidecar_dir = path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("db2_sidecar_invalid_path"))?;
+        let mut cmd = tokio::process::Command::new(&path);
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .current_dir(&sidecar_dir);
+            .current_dir(sidecar_dir);
 
         #[cfg(target_os = "windows")]
         {
-            #[allow(unused_imports)]
             use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             cmd.creation_flags(CREATE_NO_WINDOW);
+
+            let clidriver = sidecar_dir.join("clidriver");
+            if clidriver.exists() {
+                cmd.env("DB2_CLI_DRIVER_INSTALL_PATH", &clidriver);
+                let clidriver_bin = clidriver.join("bin");
+                if clidriver_bin.exists() {
+                    let old_path = std::env::var_os("PATH").unwrap_or_default();
+                    let mut new_path = std::ffi::OsString::new();
+                    new_path.push(clidriver_bin);
+                    new_path.push(";");
+                    new_path.push(old_path);
+                    cmd.env("PATH", new_path);
+                }
+            }
         }
 
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                anyhow::anyhow!(
-                    "db2_sidecar_not_found: java not found at {}",
-                    java_bin.display()
-                )
+                anyhow::anyhow!("db2_sidecar_not_found: {}", path.display())
             } else {
                 anyhow::anyhow!("failed to spawn db2-sidecar: {e}")
             }
@@ -118,14 +115,14 @@ impl Db2SidecarClient {
 
 pub struct Db2SidecarState {
     client: Mutex<Option<Arc<Db2SidecarClient>>>,
-    sidecar_dir: PathBuf,
+    sidecar_path: PathBuf,
 }
 
 impl Db2SidecarState {
-    pub fn new(sidecar_dir: PathBuf) -> Self {
+    pub fn new(sidecar_path: PathBuf) -> Self {
         Self {
             client: Mutex::new(None),
-            sidecar_dir,
+            sidecar_path,
         }
     }
 
@@ -140,7 +137,7 @@ impl Db2SidecarState {
         if let Some(ref c) = *guard {
             return Ok(c.clone());
         }
-        let c = Arc::new(Db2SidecarClient::spawn(self.sidecar_dir.clone())?);
+        let c = Arc::new(Db2SidecarClient::spawn(self.sidecar_path.clone())?);
         *guard = Some(c.clone());
         Ok(c)
     }

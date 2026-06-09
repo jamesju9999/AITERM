@@ -131,69 +131,27 @@ fn connection_error(e: &reqwest::Error) -> AiError {
 
 // ── Request types ─────────────────────────────────────────────────────────────
 
-/// Flatten a content Value to (text_string, base64_images_vec).
-/// - Plain string → (string, [])
-/// - Array → concatenate text parts, collect base64 data from image_url parts
-fn flatten_ollama_content(content: &serde_json::Value) -> (String, Vec<String>) {
-    if let Some(s) = content.as_str() {
-        return (s.to_owned(), vec![]);
-    }
-    if let Some(parts) = content.as_array() {
-        let mut texts: Vec<&str> = Vec::new();
-        let mut images: Vec<String> = Vec::new();
-        for part in parts {
-            match part.get("type").and_then(|t| t.as_str()) {
-                Some("text") => {
-                    if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
-                        texts.push(t);
-                    }
-                }
-                Some("image_url") => {
-                    if let Some(url) = part.get("image_url")
-                        .and_then(|i| i.get("url"))
-                        .and_then(|u| u.as_str())
-                    {
-                        // Extract base64 data from data URI (after the comma)
-                        if let Some(comma) = url.find(',') {
-                            images.push(url[comma + 1..].to_owned());
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        return (texts.join(" "), images);
-    }
-    (String::new(), vec![])
-}
-
 #[derive(Serialize)]
-struct OllamaChatRequest {
-    model: String,
-    messages: Vec<OllamaMessage>,
+struct OllamaChatRequest<'a> {
+    model: &'a str,
+    messages: Vec<OllamaMessage<'a>>,
     stream: bool,
 }
 
 #[derive(Serialize)]
-struct OllamaMessage {
-    role: String,
-    content: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    images: Vec<String>,
+struct OllamaMessage<'a> {
+    role: &'a str,
+    content: &'a str,
 }
 
-fn build_request_body(model: &str, req: &GenerateRequest, stream: bool) -> OllamaChatRequest {
-    let mut messages: Vec<OllamaMessage> = Vec::with_capacity(req.messages.len() + 1);
-    messages.push(OllamaMessage {
-        role: "system".to_owned(),
-        content: req.system_prompt.clone(),
-        images: vec![],
-    });
+fn build_request_body<'a>(model: &'a str, req: &'a GenerateRequest, stream: bool) -> OllamaChatRequest<'a> {
+    // Prepend system prompt as a "system" role message.
+    let mut messages: Vec<OllamaMessage<'a>> = Vec::with_capacity(req.messages.len() + 1);
+    messages.push(OllamaMessage { role: "system", content: &req.system_prompt });
     for m in &req.messages {
-        let (content, images) = flatten_ollama_content(&m.content);
-        messages.push(OllamaMessage { role: m.role.clone(), content, images });
+        messages.push(OllamaMessage { role: m.role.as_str(), content: m.content.as_str() });
     }
-    OllamaChatRequest { model: model.to_owned(), messages, stream }
+    OllamaChatRequest { model, messages, stream }
 }
 
 // ── NDJSON consumer ───────────────────────────────────────────────────────────
@@ -267,7 +225,7 @@ mod tests {
     fn sample_req() -> GenerateRequest {
         GenerateRequest {
             system_prompt: "sys".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("ls") }],
+            messages: vec![ChatMessage { role: "user".into(), content: "ls".into() }],
             context: EnvSnapshot { os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default() },
             mode: QueryMode::SingleCommand,
             max_tokens: None,

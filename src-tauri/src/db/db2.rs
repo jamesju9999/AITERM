@@ -1,4 +1,4 @@
-//! DB2 adapter — delegates all DB2 operations to the Java db2-sidecar process.
+//! DB2 adapter — delegates all DB2 operations to the .NET db2-sidecar process.
 
 use anyhow::Result;
 use async_trait::async_trait;

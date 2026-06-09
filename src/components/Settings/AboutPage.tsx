@@ -6,17 +6,13 @@ import iconUrl from "../../../src-tauri/icons/128x128.png";
 import "./AboutPage.css";
 
 const GITHUB_URL = "https://github.com/jamesju9999/AITERM";
+// Use tags API instead of /releases/latest so draft releases are included in version tracking.
 const TAGS_API = "https://api.github.com/repos/jamesju9999/AITERM/tags";
-const releaseTagUrl = (tag: string) =>
-  `https://github.com/jamesju9999/AITERM/releases/tag/${tag.startsWith("v") ? tag : `v${tag}`}`;
+const RELEASES_URL = "https://github.com/jamesju9999/AITERM/releases";
 
-type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "unavailable" | "error";
+type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "error";
 
-interface AboutPageProps {
-  initialLatestVersion?: string;
-}
-
-export function AboutPage({ initialLatestVersion }: AboutPageProps) {
+export function AboutPage() {
   const { t } = useLocale();
   const [version, setVersion] = useState<string>("…");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
@@ -26,13 +22,6 @@ export function AboutPage({ initialLatestVersion }: AboutPageProps) {
     getVersion().then(setVersion).catch(() => setVersion("—"));
   }, []);
 
-  // Seed update state from parent if auto-check already ran
-  useEffect(() => {
-    if (!initialLatestVersion) return;
-    setLatestVersion(initialLatestVersion);
-    setUpdateStatus("available");
-  }, [initialLatestVersion]);
-
   const handleGitHub = () => {
     openUrl(GITHUB_URL).catch(console.error);
   };
@@ -41,7 +30,6 @@ export function AboutPage({ initialLatestVersion }: AboutPageProps) {
     setUpdateStatus("checking");
     try {
       const res = await fetch(TAGS_API);
-      if (res.status === 404) { setUpdateStatus("unavailable"); return; }
       if (!res.ok) throw new Error("network");
       const tags = await res.json() as { name: string }[];
       if (tags.length === 0) {
@@ -69,13 +57,12 @@ export function AboutPage({ initialLatestVersion }: AboutPageProps) {
             {t.about_update_available} v{latestVersion} —{" "}
             <button
               className="about-link-btn"
-              onClick={() => openUrl(releaseTagUrl(latestVersion)).catch(console.error)}
+              onClick={() => openUrl(RELEASES_URL).catch(console.error)}
             >
               {t.about_update_link}
             </button>
           </span>
         );
-      case "unavailable": return <span>{t.about_update_unavailable}</span>;
       case "error": return <span>{t.about_update_error}</span>;
       default: return null;
     }

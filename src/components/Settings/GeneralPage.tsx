@@ -3,21 +3,10 @@ import { getConfig, setExecutionMode, setSubmitShortcut, setMaxAgentSteps, setDe
 import type { ExecutionMode, SubmitShortcut, DefaultTab } from "../../ipc/config";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { Locale } from "../../lib/i18n";
-import { THEMES, getActiveTheme, applyTheme, type ThemeId } from "../../lib/themes";
 import "./GeneralPage.css";
 
 const STEP_VALUES = [5, 10, 20, 50, 100, 0];
 const DEFAULT_TAB_STORAGE_KEY = "aiterm_default_tab";
-const FONT_SIZE_KEY = "aiterm-font-size";
-const FONT_FAMILY_KEY = "aiterm-font-family";
-const FONT_SIZE_OPTIONS = [8, 10, 11, 12, 13, 14, 16, 18, 20, 24];
-const FONT_FAMILY_OPTIONS = [
-  { label: "Cascadia Mono (default)", value: '"Cascadia Mono", Consolas, monospace' },
-  { label: "JetBrains Mono", value: '"JetBrains Mono", monospace' },
-  { label: "Fira Code", value: '"Fira Code", monospace' },
-  { label: "Consolas", value: "Consolas, monospace" },
-  { label: "monospace (system)", value: "monospace" },
-];
 
 export function GeneralPage() {
   const { t, locale, setLocale } = useLocale();
@@ -25,17 +14,9 @@ export function GeneralPage() {
   const [shortcut, setShortcut] = useState<SubmitShortcut>("enter");
   const [maxSteps, setMaxSteps] = useState<number>(5);
   const [defaultTab, setDefaultTabState] = useState<DefaultTab>("terminal");
-  const [fontSize, setFontSizeState] = useState<number>(() =>
-    parseInt(localStorage.getItem(FONT_SIZE_KEY) ?? "14", 10) || 14
-  );
-  const [fontFamily, setFontFamilyState] = useState<string>(
-    () => localStorage.getItem(FONT_FAMILY_KEY) ?? FONT_FAMILY_OPTIONS[0].value
-  );
-  const [activeTheme, setActiveTheme] = useState<ThemeId>(() => getActiveTheme().id);
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
   const [saving, setSaving] = useState(false);
-  const [policyControlled, setPolicyControlled] = useState<{ execution_mode?: boolean; max_agent_steps?: boolean }>({});
 
   const MODES: { value: ExecutionMode; label: string; desc: string }[] = [
     { value: "always-confirm", label: t.mode_always_confirm_label, desc: t.mode_always_confirm_desc },
@@ -55,12 +36,6 @@ export function GeneralPage() {
       setShortcut(cfg.submit_shortcut);
       setMaxSteps(cfg.max_agent_steps ?? 5);
       setDefaultTabState(cfg.default_tab ?? "terminal");
-      if (cfg.enterprise_policy) {
-        setPolicyControlled({
-          execution_mode: !!cfg.enterprise_policy.execution_mode,
-          max_agent_steps: !!cfg.enterprise_policy.max_agent_steps,
-        });
-      }
     });
     import("../../ipc/telegram").then(({ getTelegramConfig }) => {
       getTelegramConfig().then(cfg => {
@@ -86,24 +61,6 @@ export function GeneralPage() {
     setMaxSteps(newSteps);
     setSaving(true);
     try { await setMaxAgentSteps(newSteps); } finally { setSaving(false); }
-  };
-
-  const handleThemeChange = (id: ThemeId) => {
-    setActiveTheme(id);
-    const theme = THEMES.find((t) => t.id === id)!;
-    applyTheme(theme);
-  };
-
-  const handleFontSizeChange = (size: number) => {
-    setFontSizeState(size);
-    localStorage.setItem(FONT_SIZE_KEY, String(size));
-    window.dispatchEvent(new CustomEvent("aiterm:font-changed", { detail: { fontSize: size, fontFamily } }));
-  };
-
-  const handleFontFamilyChange = (family: string) => {
-    setFontFamilyState(family);
-    localStorage.setItem(FONT_FAMILY_KEY, family);
-    window.dispatchEvent(new CustomEvent("aiterm:font-changed", { detail: { fontSize, fontFamily: family } }));
   };
 
   const handleDefaultTabChange = async (tab: DefaultTab) => {
@@ -165,14 +122,9 @@ export function GeneralPage() {
       </section>
 
       <section className="settings-section">
-        <h3 style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {t.execution_mode}
-          {policyControlled.execution_mode && (
-            <span style={{ fontSize: 11, color: "#888", fontWeight: 400 }}>由管理者設定</span>
-          )}
-        </h3>
+        <h3>{t.execution_mode}</h3>
         <p className="section-desc">{t.execution_mode_desc}</p>
-        <div className="mode-list" style={{ opacity: policyControlled.execution_mode ? 0.5 : 1 }}>
+        <div className="mode-list">
           {MODES.map((m) => (
             <label key={m.value} className="mode-option">
               <input
@@ -181,7 +133,7 @@ export function GeneralPage() {
                 value={m.value}
                 checked={mode === m.value}
                 onChange={() => handleChange(m.value)}
-                disabled={saving || !!policyControlled.execution_mode}
+                disabled={saving}
               />
               <div className="mode-text">
                 <span className="mode-label">{m.label}</span>
@@ -193,19 +145,14 @@ export function GeneralPage() {
       </section>
 
       <section className="settings-section">
-        <h3 style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {t.agent_max_steps}
-          {policyControlled.max_agent_steps && (
-            <span style={{ fontSize: 11, color: "#888", fontWeight: 400 }}>由管理者設定</span>
-          )}
-        </h3>
+        <h3>{t.agent_max_steps}</h3>
         <p className="section-desc">{t.agent_max_steps_desc}</p>
-        <div className="step-select-row" style={{ opacity: policyControlled.max_agent_steps ? 0.5 : 1 }}>
+        <div className="step-select-row">
           <select
             className="step-select"
             value={maxSteps}
             onChange={(e) => handleMaxStepsChange(Number(e.target.value))}
-            disabled={saving || !!policyControlled.max_agent_steps}
+            disabled={saving}
           >
             {STEP_VALUES.map((v) => (
               <option key={v} value={v}>
@@ -239,71 +186,6 @@ export function GeneralPage() {
               </div>
             </label>
           ))}
-        </div>
-      </section>
-
-      <section className="settings-section">
-        <h3>{t.appearance}</h3>
-        <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-          <div>
-            <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", color: "#aaa" }}>
-              主題
-            </label>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-              {THEMES.map((theme) => (
-                <button
-                  key={theme.id}
-                  onClick={() => handleThemeChange(theme.id)}
-                  style={{
-                    padding: "6px 14px", borderRadius: 5, cursor: "pointer", fontSize: 12,
-                    border: activeTheme === theme.id ? "1px solid #34d399" : "1px solid #333",
-                    background: theme.css["--bg-tertiary"] ?? "#1a1a1a",
-                    color: theme.css["--text-primary"] ?? "#e6e6e6",
-                    fontWeight: activeTheme === theme.id ? 600 : 400,
-                  }}
-                >
-                  {theme.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", color: "#aaa" }}>
-              {t.font_size}
-            </label>
-            <p className="section-desc" style={{ margin: "0 0 8px 0" }}>{t.font_size_desc}</p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-              {FONT_SIZE_OPTIONS.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => handleFontSizeChange(s)}
-                  style={{
-                    padding: "4px 10px", borderRadius: 4, cursor: "pointer", fontSize: 13,
-                    border: fontSize === s ? "1px solid #34d399" : "1px solid #333",
-                    background: fontSize === s ? "#0f2e23" : "#1a1a1a",
-                    color: fontSize === s ? "#34d399" : "#ccc",
-                  }}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", color: "#aaa" }}>
-              {t.font_family}
-            </label>
-            <p className="section-desc" style={{ margin: "0 0 8px 0" }}>{t.font_family_desc}</p>
-            <select
-              className="step-select"
-              value={fontFamily}
-              onChange={(e) => handleFontFamilyChange(e.target.value)}
-            >
-              {FONT_FAMILY_OPTIONS.map((f) => (
-                <option key={f.value} value={f.value}>{f.label}</option>
-              ))}
-            </select>
-          </div>
         </div>
       </section>
 

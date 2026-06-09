@@ -2,12 +2,10 @@ import {
   useEffect, useRef, useState, useCallback,
   type KeyboardEvent, type PointerEvent,
 } from "react";
-import { readFileAsAttachment } from "../../types/attachment";
-import type { Attachment } from "../../types/attachment";
 import { useAiChat } from "../../hooks/useAiChat";
 import { aiChat } from "../../ipc/ai";
-import { getSessionCwd, listDirectory, writeTextFile, readFile } from "../../ipc/fs";
-import { getPtyRecentOutput, getPtyShellType } from "../../ipc/pty";
+import { getSessionCwd, listDirectory } from "../../ipc/fs";
+import { getPtyRecentOutput } from "../../ipc/pty";
 import { getConfig } from "../../ipc/config";
 import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
 import { MessageList } from "./MessageList";
@@ -51,45 +49,8 @@ export function AiPanel({
 }: AiPanelProps) {
   const chat = useAiChat(sessionId);
   const [input, setInput] = useState("");
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-
-  const processFiles = useCallback(async (files: FileList | File[]) => {
-    const arr = Array.from(files);
-    const results = await Promise.allSettled(arr.map(async (file) => {
-      if (file.type.startsWith("image/") && file.size > MAX_IMAGE_BYTES) {
-        throw new Error(`${file.name} 超過 5MB 限制`);
-      }
-      return readFileAsAttachment(file);
-    }));
-    const valid = results
-      .filter((r): r is PromiseFulfilledResult<Attachment> => r.status === "fulfilled")
-      .map((r) => r.value);
-    setAttachments((prev) => [...prev, ...valid]);
-  }, []);
-
-  const handlePaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = e.clipboardData?.files;
-    if (files && files.length > 0) {
-      e.preventDefault();
-      await processFiles(files);
-    }
-    // No files → let default text paste proceed
-  }, [processFiles]);
-
-  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-  }, []);
-
-  const handleDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const files = e.dataTransfer?.files;
-    if (files && files.length > 0) {
-      await processFiles(files);
-    }
-  }, [processFiles]);
 
   // ── Resize ────────────────────────────────────────────────────────────────
   const [panelWidth, setPanelWidth] = useState(loadSavedWidth);
@@ -138,10 +99,9 @@ export function AiPanel({
       .catch(() => {});
   }, []);
 
-  /** Build system prompt with live CWD + dir listing + shell type. */
+  /** Build system prompt with live CWD + dir listing. */
   const buildAgentSystemPrompt = useCallback(async (): Promise<string> => {
     const cwd = await getSessionCwd(sessionId).catch(() => null) ?? "(unknown)";
-    const shellType = await getPtyShellType(sessionId).catch(() => null) ?? "unknown";
     let dirList = "";
     try {
       const entries = await listDirectory(sessionId, "");
@@ -151,15 +111,8 @@ export function AiPanel({
         .join("\n");
     } catch { /* ignore */ }
 
-    const shellHint =
-      shellType === "cmd" ? "目前使用 cmd.exe，請使用 cmd 語法（不要使用 PowerShell 語法如 &、Get-ChildItem 等）。" :
-      shellType === "pwsh" ? "目前使用 PowerShell，請使用 PowerShell 語法。" :
-      shellType === "bash" ? "目前使用 Bash/Zsh，請使用 POSIX shell 語法。" :
-      "";
-
     return `你是一個終端機 Agent，可透過 <cmd>...</cmd> 標籤執行 shell 指令，並根據結果迭代完成使用者的目標。
 
-目前 Shell：${shellType}
 目前工作目錄：${cwd}
 目錄內容（前 60 個項目）：
 ${dirList || "（無法取得）"}
@@ -169,8 +122,7 @@ ${dirList || "（無法取得）"}
 2. 系統會自動執行並將結果回傳，請繼續分析直到目標完成。
 3. 目標完成後，用繁體中文給出最終說明，不要再給 <cmd> 標籤。
 4. 不要執行破壞性或不可逆的操作（如 rm -rf /）。
-5. 所有說明使用繁體中文。
-6. ${shellHint}`;
+5. 所有說明使用繁體中文。`;
   }, [sessionId]);
 
   /**
@@ -200,29 +152,19 @@ ${dirList || "（無法取得）"}
     try {
       const lastMsg = history[history.length - 1].content;
       reply = await aiChat(lastMsg, systemPrompt, history.slice(0, -1));
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      chat.addMessage({ role: "assistant", content: `⚠ Agent 錯誤：${msg}` });
+    } catch {
       setAgentRunning(false);
       return;
     }
 
     if (agentAbortRef.current) { setAgentRunning(false); return; }
 
-    // For command matching and history, prefer <cmd> tags OUTSIDE <think> blocks.
-    // If none found outside, fall back to matching inside <think> (Qwen3/DeepSeek
-    // sometimes only writes the command in their reasoning trace).
-    const replyWithoutThink = reply.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-    const agentReply = replyWithoutThink || reply;
+    // Show assistant reply in chat
+    chat.addMessage({ role: "assistant", content: reply });
+    if (sendRemoteResponse) sendRemoteResponse(reply);
 
-    // Show stripped reply in chat (no raw thinking blocks)
-    chat.addMessage({ role: "assistant", content: agentReply });
-    if (sendRemoteResponse) sendRemoteResponse(agentReply);
-
-    // Parse <cmd>: prefer outside-think match; fall back to full reply if not found
-    const cmdMatch =
-      agentReply.match(/<cmd>([\s\S]*?)<\/cmd>/i) ??
-      reply.match(/<cmd>([\s\S]*?)<\/cmd>/i);
+    // Parse <cmd>
+    const cmdMatch = reply.match(/<cmd>([\s\S]*?)<\/cmd>/i);
     if (!cmdMatch) {
       // No command → agent finished
       setAgentRunning(false);
@@ -231,166 +173,9 @@ ${dirList || "（無法取得）"}
 
     const cmd = cmdMatch[1].trim();
 
-    // ── Heredoc fast-path ────────────────────────────────────────────────────
-    // Instead of sending the heredoc through the PTY (which has buffer limits,
-    // blocks on Chinese multi-byte chars, and relies on OSC 133 firing after a
-    // very long write), we parse the file path + content and write the file
-    // directly via the Tauri writeTextFile API. This is reliable regardless of
-    // script length or character set.
-    //
-    // We use a line-by-line parser instead of a single regex so that edge-cases
-    // like different whitespace, unusual delimiters, or trailing commands (e.g.
-    // `chmod +x`) are all handled robustly.
-    const heredocParsed = (() => {
-      // Header: (cat >|tee) PATH << ['"]?DELIMITER['"]? [optional inline content]
-      // We allow content to start on the same line as the delimiter
-      // (e.g. `<< 'SCRIPT_END' #!/bin/bash`) because some models generate this.
-      const firstNl = cmd.indexOf('\n');
-      if (firstNl < 0) return null;
-      const header = cmd.slice(0, firstNl);
-      const rest   = cmd.slice(firstNl + 1);
-
-      const headerMatch = header.match(
-        /^(?:cat\s*>|tee)\s*(\S+)\s*<<\s*['"]?(\w+)['"]?\s*(.*?)\s*$/,
-      );
-      if (!headerMatch) return null;
-
-      const [, filePath, delimiter, inlineContent] = headerMatch;
-
-      // Find the closing delimiter on its own line (may have trailing whitespace)
-      const delimRegex = new RegExp(`(?:^|\\n)${delimiter}[ \\t]*(?:\\n|$)`);
-      const delimMatch = delimRegex.exec(rest);
-      if (!delimMatch) return null;
-
-      // Content = optional inline part + body up to delimiter
-      const matchStart = delimMatch.index === 0 ? 0 : delimMatch.index + 1;
-      const bodyContent = rest.slice(0, matchStart).replace(/\n$/, '');
-      const fileContent = inlineContent
-        ? `${inlineContent}\n${bodyContent}`
-        : bodyContent;
-
-      // Trailing commands are everything after the delimiter line
-      const afterDelim = rest.slice(delimMatch.index + delimMatch[0].length).trim();
-
-      return { filePath, fileContent, trailingCmds: afterDelim };
-    })();
-
-    if (heredocParsed) {
-      if (agentAbortRef.current) { setAgentRunning(false); return; }
-      const { filePath, fileContent, trailingCmds } = heredocParsed;
-      const shortLabel = `cat > ${filePath}`;
-      try {
-        await writeTextFile(filePath, fileContent + "\n");
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        chat.addMessage({ role: "assistant", content: `⚠ 寫入檔案失敗：${msg}` });
-        setAgentRunning(false);
-        return;
-      }
-      if (agentAbortRef.current) { setAgentRunning(false); return; }
-
-      // If there are trailing commands (e.g. `chmod +x`), run them via PTY
-      // and wait for completion before continuing the loop.
-      if (trailingCmds) {
-        await new Promise<void>((resolve) => {
-          // Safety timeout: trailing commands like `chmod` are instant; if
-          // OSC 133 somehow doesn't fire within 5 s, continue anyway.
-          const safetyTimer = setTimeout(resolve, 5000);
-          onExecuteCommand(trailingCmds, () => {
-            clearTimeout(safetyTimer);
-            resolve();
-          });
-        });
-        if (agentAbortRef.current) { setAgentRunning(false); return; }
-      }
-
-      const resultContent = `檔案 \`${filePath}\` 已成功寫入${trailingCmds ? `（並執行了 \`${trailingCmds}\`）` : ""}。請繼續執行下一步驟（通常是執行該腳本）。`;
-      const assistantForHistory = agentReply.replace(
-        /<cmd>([\s\S]*?)<\/cmd>/i,
-        `<cmd>${shortLabel}\n...(heredoc 內容已省略)\nEOF${trailingCmds ? `\n${trailingCmds}` : ""}</cmd>`,
-      );
-      const newHistory = [
-        ...history,
-        { role: "assistant" as const, content: assistantForHistory },
-        { role: "user" as const, content: resultContent },
-      ];
-      void runAgentLoop(newHistory, systemPrompt, step + 1);
-      return;
-    }
-
-    // ── Native cat read ──────────────────────────────────────────────────────
-    // `cat /path/to/file` — intercept single-file reads so the content comes
-    // back instantly and cleanly, without ANSI noise or terminal width wrapping.
-    // Only intercept plain `cat FILE` (no flags, no redirection, single path).
-    const catReadMatch = cmd.match(/^cat\s+([^\s>|&;]+)\s*$/);
-    if (catReadMatch) {
-      if (agentAbortRef.current) { setAgentRunning(false); return; }
-      const filePath = catReadMatch[1];
-      let fileOutput: string;
-      try {
-        const { content, truncated } = await readFile(filePath);
-        fileOutput = truncated ? content + "\n...(檔案已截斷)" : content;
-      } catch (e) {
-        fileOutput = `錯誤：無法讀取 ${filePath} — ${e instanceof Error ? e.message : String(e)}`;
-      }
-      if (agentAbortRef.current) { setAgentRunning(false); return; }
-      const resultContent =
-        `指令 \`cat ${filePath}\` 執行完成。輸出：\n\`\`\`\n${fileOutput.slice(-3000)}\n\`\`\`\n\n請繼續分析。若目標已達成，請給出最終說明（不要再給 <cmd> 標籤）。`;
-      const newHistory = [
-        ...history,
-        { role: "assistant" as const, content: agentReply },
-        { role: "user" as const, content: resultContent },
-      ];
-      void runAgentLoop(newHistory, systemPrompt, step + 1);
-      return;
-    }
-
-    // ── Native echo/printf write ─────────────────────────────────────────────
-    // `echo "..." > /path` or `printf "..." > /path` — intercept simple
-    // single-line writes. Redirection with >> (append) is left to PTY.
-    const echoWriteMatch = cmd.match(/^(?:echo|printf)\s+(["'])([\s\S]*?)\1\s*>\s*([^\s>|&;]+)\s*$/);
-    if (echoWriteMatch) {
-      if (agentAbortRef.current) { setAgentRunning(false); return; }
-      const content = echoWriteMatch[2].replace(/\\n/g, "\n").replace(/\\t/g, "\t");
-      const filePath = echoWriteMatch[3];
-      try {
-        await writeTextFile(filePath, content + "\n");
-      } catch (e) {
-        chat.addMessage({ role: "assistant", content: `⚠ 寫入檔案失敗：${e instanceof Error ? e.message : String(e)}` });
-        setAgentRunning(false);
-        return;
-      }
-      if (agentAbortRef.current) { setAgentRunning(false); return; }
-      const resultContent = `檔案 \`${filePath}\` 已成功寫入。請繼續執行下一步驟。`;
-      const newHistory = [
-        ...history,
-        { role: "assistant" as const, content: agentReply },
-        { role: "user" as const, content: resultContent },
-      ];
-      void runAgentLoop(newHistory, systemPrompt, step + 1);
-      return;
-    }
-
-    // ── Normal PTY execution ─────────────────────────────────────────────────
-    // No fixed timeout — the user can press "■ 停止" for long-running commands.
-    // We poll agentAbortRef so the stop button works even while waiting for OSC 133.
-    let completed = false;
+    // Execute and wait for completion
     await new Promise<void>((resolve) => {
-      const abortPoll = setInterval(() => {
-        if (agentAbortRef.current) {
-          clearInterval(abortPoll);
-          if (!completed) {
-            completed = true;
-            setAgentRunning(false);
-            resolve();
-          }
-        }
-      }, 500);
-
       onExecuteCommand(cmd, async (block) => {
-        clearInterval(abortPoll);
-        if (completed) return; // abort already fired
-        completed = true;
         if (agentAbortRef.current) { setAgentRunning(false); resolve(); return; }
 
         const rawOutput = await getPtyRecentOutput(sessionId).catch(() => null)
@@ -403,7 +188,7 @@ ${dirList || "（無法取得）"}
 
         const newHistory = [
           ...history,
-          { role: "assistant" as const, content: agentReply },
+          { role: "assistant" as const, content: reply },
           { role: "user" as const, content: resultContent },
         ];
 
@@ -423,9 +208,7 @@ ${dirList || "（無法取得）"}
     let systemPrompt: string;
     try {
       systemPrompt = await buildAgentSystemPrompt();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      chat.addMessage({ role: "assistant", content: `⚠ 無法取得工作目錄資訊：${msg}` });
+    } catch {
       setAgentRunning(false);
       return;
     }
@@ -455,7 +238,7 @@ ${dirList || "（無法取得）"}
     if (chat.messages.length > prevMessagesLength.current) {
       const lastMsg = chat.messages[chat.messages.length - 1];
       if (lastMsg.role === "assistant" && sendRemoteResponse && !chat.isStreaming) {
-        sendRemoteResponse(typeof lastMsg.content === "string" ? lastMsg.content : "");
+        sendRemoteResponse(lastMsg.content);
       }
     }
     prevMessagesLength.current = chat.messages.length;
@@ -479,14 +262,12 @@ ${dirList || "（無法取得）"}
 
   const handleSubmit = () => {
     const text = input.trim();
-    if ((!text && attachments.length === 0) || chat.isStreaming || agentRunning) return;
+    if (!text || chat.isStreaming || agentRunning) return;
     setInput("");
-    const currentAttachments = attachments;
-    setAttachments([]);
     if (agentMode) {
       void submitAgent(text);
     } else {
-      void chat.send(text, currentAttachments.length > 0 ? currentAttachments : undefined);
+      void chat.send(text);
     }
   };
 
@@ -498,8 +279,6 @@ ${dirList || "（無法取得）"}
       className={panelClass}
       aria-hidden={!isOpen}
       style={{ width: `${panelWidth}px` }}
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
     >
       {/* Resize handle on the left edge */}
       <div
@@ -608,30 +387,6 @@ ${dirList || "（無法取得）"}
         </div>
       )}
 
-      {attachments.length > 0 && (
-        <div className="aiterm-attachment-pills">
-          {attachments.map((att) => (
-            <div key={att.id} className="aiterm-attachment-pill">
-              {att.kind === "image" && att.previewUrl ? (
-                <img src={att.previewUrl} alt={att.name} className="aiterm-pill-thumb" />
-              ) : att.kind === "text" ? (
-                <span>📄</span>
-              ) : (
-                <span>📎</span>
-              )}
-              <span className="aiterm-pill-name">{att.name}</span>
-              <button
-                type="button"
-                className="aiterm-pill-remove"
-                onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
-                title="移除"
-              >
-                ×
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
       <div className="aiterm-ai-panel-input-area">
         <button
           type="button"
@@ -648,7 +403,6 @@ ${dirList || "（無法取得）"}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
           placeholder={
             agentRunning ? "Agent 執行中…" :
             agentMode ? "輸入目標，Agent 將自動執行指令… (Enter)" :

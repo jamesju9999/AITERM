@@ -1,13 +1,15 @@
+<img width="1536" height="1024" alt="ChatGPT Image 2026年5月14日 下午08_28_16" src="https://github.com/user-attachments/assets/aa7f6739-ecfa-4cd4-9683-aafa2e4607e9" />
+
 # AITerm
 
-**[🌐 Official Website](https://jamesju9999.github.io/aiterm-site/)** | [English](#english) | [繁體中文](#繁體中文)
+[English](#english) | [繁體中文](#繁體中文)
 
 ---
 
 <a id="english"></a>
 # AITerm (English)
 
-A powerful, cross-platform AI-enhanced terminal built with **Tauri 2**, **React 19**, and **Rust**. AITerm seamlessly integrates the traditional command-line experience with advanced AI capabilities, autonomous agents, database connectivity, and project requirement management.
+A powerful, cross-platform AI-enhanced terminal built with **Tauri 2**, **React 19**, and **Rust**. AITerm seamlessly integrates the traditional command-line experience with advanced AI capabilities, autonomous agents, and project requirement management.
 
 ## ✨ Key Features
 
@@ -16,60 +18,20 @@ A powerful, cross-platform AI-enhanced terminal built with **Tauri 2**, **React 
 - **Autonomous Agent Loop (`/agent`)**: Multi-step, goal-driven agentic execution for complex tasks, with built-in guardrails and fallback to manual confirmation for dangerous operations.
 - **Multi-turn Chat Sidebar**: Persistent, context-aware AI chat directly beside your terminal for troubleshooting, code generation, and brainstorming.
 - **Requirement Management System**: AI-assisted discussion for feature planning, automatically generating and saving specifications (SDD) into structured, project-managed directories.
-- **Robust Terminal Engine**: Powered by `xterm.js` and `portable-pty` for a fast, native-feeling shell experience across Windows, macOS, and Linux, with OSC 133 shell integration markers support.
-- **File Explorer**: Built-in sidebar file browser that automatically tracks and syncs with the current working directory of the active terminal session.
-- **Multi-Database Connectivity**: Native support for PostgreSQL, MySQL, SQLite, and ODBC data sources via SQLx. DB2 connectivity is available on both **macOS and Windows** via a bundled Java JDBC sidecar (IBM `db2jcc4.jar`, no native drivers required).
-- **i18n Support**: Full interface localization for English and Traditional Chinese (繁體中文), switchable at runtime.
-- **Telegram Remote Control**: Enable the 📱 Remote toggle in the terminal status bar to control the active terminal session via a Telegram Bot — send commands from your phone and receive output back as Telegram messages.
-- **Auto Update Check**: Built-in version checker in the About page that queries GitHub Releases and links directly to the specific release tag when an update is available.
-- **Enterprise Fleet Management**: Centrally manage a fleet of AITerm instances — register devices, dispatch AI missions, sync skills, manage VCS credentials, and audit activity logs via a Management Server and Admin Web Dashboard. Supports headless worker mode for CI-runner-style autonomous execution.
+- **Robust Terminal Engine**: Powered by `xterm.js` and `portable-pty` for a fast, native-feeling shell experience across Windows, macOS, and Linux.
 
 ## 🏗️ Architecture
 
 AITerm uses a modern Desktop architecture communicating via Tauri IPC (invoke + events):
 - **Frontend (`src/`)**: React 19 shell, `xterm.js` terminal views, component-local state management, and an intelligent frontend router for handling AI commands and streams.
 - **Backend (`src-tauri/src/`)**: Rust-powered high-performance core handling PTY lifecycles, AI provider routing, SQLx-backed database connections, and secure local configuration (OS keyring).
-- **DB2 Sidecar (`db2-sidecar-java/`)**: A self-contained Java process (Maven fat jar) that bridges Rust ↔ IBM JDBC via newline-delimited JSON on stdin/stdout. Bundled with Eclipse Temurin 21 JRE — no separate JDK or IBM client library installation required.
 
 ## 🚀 Getting Started
 
-### Installing on macOS
-
-> **"AITerm is damaged and can't be opened"** — This message appears because the app is not yet notarized with Apple. Run the following command in Terminal after dragging AITerm to Applications, then try opening it again:
-> ```bash
-> xattr -cr /Applications/AITerm.app
-> ```
-> Alternatively, right-click AITerm in Finder → **Open** → **Open** to bypass Gatekeeper once.
-
-### Installing on Linux
-
-> **Minimum requirement: Ubuntu 22.04 LTS** (or any distro with `libwebkit2gtk-4.1`). Ubuntu 20.04 and earlier are **not supported** — Tauri 2 requires WebKitGTK 4.1 which is unavailable on those releases.
-
-Download the `.AppImage` or `.deb` from [GitHub Releases](https://github.com/jamesju9999/AITERM/releases/latest).
-
-**AppImage (no install required):**
-```bash
-chmod +x AITerm_*.AppImage
-./AITerm_*.AppImage
-```
-
-**Debian/Ubuntu `.deb`:**
-```bash
-sudo apt install ./aiterm_*.deb
-```
-
-### Prerequisites (Development)
+### Prerequisites
 - Rust 1.78+ (`rustup show`)
 - Node.js 20+ (`node -v`)
 - _Windows only_: Windows 11 with WebView2 runtime and MSVC build tools.
-- _Linux only_: Ubuntu 22.04+. Install system libraries before building:
-  ```bash
-  sudo apt-get install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
-  ```
-- _DB2 support_: Run the platform setup script once to build the sidecar and download the bundled JRE:
-  - macOS: `bash scripts/setup-db2-mac.sh`
-  - Windows: `pwsh scripts/setup-db2-win.ps1`
-  - Linux: `bash scripts/setup-db2-linux.sh`
 
 ### Development
 ```bash
@@ -92,30 +54,22 @@ npx tsc --noEmit
 
 ## 📂 Project Layout
 ```
-src-tauri/          # Rust backend (Tauri + PTY + AI Router + DB)
-  src/pty/          # PTY lifecycle and streaming
-  src/ai/           # Multi-provider AI router
-  src/db/           # Database adapters (PG, MySQL, SQLite, ODBC, DB2)
-  tests/            # Rust integration tests
-src/                # React 19 frontend
-  components/       # TerminalView, ChatSidebar, FileExplorer, Settings, etc.
-  ipc/              # Typed Tauri invoke + event wrappers
-  lib/i18n.ts       # Localization strings (en / zh-TW)
-db2-sidecar-java/   # Java JDBC bridge sidecar (Maven project)
-scripts/            # Platform setup and cross-platform build launchers
-docs/               # Specs and implementation plans
+src-tauri/       # Rust backend (Tauri + PTY + AI Router + DB)
+  src/pty/       # PTY lifecycle and streaming
+  src/ai/        # Multi-provider AI router
+  tests/         # Rust integration tests
+src/             # React 19 frontend
+  components/    # TerminalView, ChatSidebar, etc.
+  ipc/           # Typed Tauri invoke + event wrappers
+docs/            # Specs and implementation plans
 ```
-
-## 📄 License
-
-This project is licensed under the [Apache License 2.0](LICENSE).
 
 ---
 
 <a id="繁體中文"></a>
 # AITerm (繁體中文)
 
-一個強大且跨平台的 AI 智慧終端機，基於 **Tauri 2**、**React 19** 和 **Rust** 打造。AITerm 將傳統的命令列體驗與先進的 AI 能力、自主代理（Agent）、資料庫連線能力以及專案需求管理完美結合。
+一個強大且跨平台的 AI 智慧終端機，基於 **Tauri 2**、**React 19** 和 **Rust** 打造。AITerm 將傳統的命令列體驗與先進的 AI 能力、自主代理（Agent）以及專案需求管理完美結合。
 
 ## ✨ 核心功能
 
@@ -124,60 +78,20 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 - **自主代理循環 (`/agent`)**：針對複雜任務提供多步驟、目標導向的代理執行能力，內建安全防護機制，並在遇到危險操作時自動退回手動確認模式。
 - **多輪對話側邊欄**：終端機旁內建具備上下文記憶的 AI 對話視窗，方便進行問題排解、程式碼生成與靈感發想。
 - **需求管理系統**：提供 AI 輔助的系統功能討論，可自動生成規格文件 (SDD) 並將其儲存到專案管理的結構化目錄中。
-- **強大的終端機引擎**：基於 `xterm.js` 與 `portable-pty`，在 Windows、macOS 與 Linux 上提供快速、原生的 Shell 體驗，並支援 OSC 133 Shell 整合標記。
-- **檔案總管**：內建側邊欄檔案瀏覽器，可自動追蹤並同步目前活躍終端機的工作目錄。
-- **多資料庫連線**：透過 SQLx 原生支援 PostgreSQL、MySQL、SQLite 與 ODBC。DB2 連線在 **macOS 與 Windows** 均可使用，透過內建 Java JDBC Sidecar（IBM `db2jcc4.jar`）實現，無需安裝任何原生驅動程式。
-- **Telegram 遠端控制**：在終端機狀態列啟用 📱 Remote 開關，即可透過 Telegram Bot 從手機傳送指令至目前的終端機工作階段，並將輸出結果回傳至 Telegram 訊息。
-- **多語言介面**：完整支援英文與繁體中文介面，可於執行時即時切換。
-- **自動更新檢查**：「關於」頁面內建版本檢查器，查詢 GitHub Releases 並在有新版本時直接連結至對應的 Release Tag 頁面。
-- **Enterprise Fleet Management（企業機隊管理）**：集中管理多台 AITerm 實例——透過 Management Server 與 Admin Web Dashboard 進行裝置登錄、AI 任務派送、Skill 同步、VCS 憑證管理與操作稽核。支援 Headless Worker 模式，作為類 CI Runner 的自主任務執行器運行。
+- **強大的終端機引擎**：基於 `xterm.js` 與 `portable-pty`，在 Windows、macOS 與 Linux 上提供快速、原生的 Shell 體驗。
 
 ## 🏗️ 系統架構
 
 AITerm 採用現代化桌面應用架構，透過 Tauri IPC（invoke + events）進行通訊：
 - **前端 (`src/`)**：使用 React 19，包含 `xterm.js` 終端機視圖、元件狀態管理，以及處理 AI 指令與資料流的智慧前端邏輯。
 - **後端 (`src-tauri/src/`)**：由 Rust 驅動的高效能核心，負責處理 PTY 生命週期、AI 路由、基於 SQLx 的資料庫連線，以及安全的本地配置（OS Keyring）。
-- **DB2 Sidecar (`db2-sidecar-java/`)**：獨立的 Java 行程（Maven fat jar），透過 stdin/stdout 的換行分隔 JSON 協議橋接 Rust ↔ IBM JDBC。內附 Eclipse Temurin 21 JRE，**無需另行安裝 JDK 或 IBM 用戶端函式庫**。
 
 ## 🚀 快速開始
 
-### macOS 安裝說明
-
-> **「AITerm 已損毀，無法打開」** — 這是因為 App 尚未通過 Apple 公證（notarization）。將 AITerm 拖入「應用程式」後，在「終端機」執行以下指令，再重新開啟即可：
-> ```bash
-> xattr -cr /Applications/AITerm.app
-> ```
-> 或在 Finder 中對 AITerm 按右鍵 → **打開** → **打開**，即可略過 Gatekeeper 一次。
-
-### Linux 安裝說明
-
-> **最低版本需求：Ubuntu 22.04 LTS**（或任何提供 `libwebkit2gtk-4.1` 的發行版）。Ubuntu 20.04 及更早版本**不支援**——Tauri 2 需要 WebKitGTK 4.1，而這些舊版本中不提供此函式庫。
-
-前往 [GitHub Releases](https://github.com/jamesju9999/AITERM/releases/latest) 下載最新 `.AppImage` 或 `.deb`。
-
-**AppImage（免安裝）：**
-```bash
-chmod +x AITerm_*.AppImage
-./AITerm_*.AppImage
-```
-
-**Debian/Ubuntu `.deb`：**
-```bash
-sudo apt install ./aiterm_*.deb
-```
-
-### 環境要求（開發）
+### 環境要求
 - Rust 1.78+ (`rustup show`)
 - Node.js 20+ (`node -v`)
 - _僅限 Windows_：Windows 11（包含 WebView2 執行階段與 MSVC 建置工具）。
-- _僅限 Linux_：Ubuntu 22.04+。建置前需安裝系統函式庫：
-  ```bash
-  sudo apt-get install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
-  ```
-- _DB2 支援_：執行一次平台設定腳本，以建置 Sidecar 並下載內附 JRE：
-  - macOS：`bash scripts/setup-db2-mac.sh`
-  - Windows：`pwsh scripts/setup-db2-win.ps1`
-  - Linux：`bash scripts/setup-db2-linux.sh`
 
 ### 開發測試
 ```bash
@@ -200,20 +114,12 @@ npx tsc --noEmit
 
 ## 📂 專案結構
 ```
-src-tauri/          # Rust 後端 (Tauri + PTY + AI Router + DB)
-  src/pty/          # PTY 生命週期與資料流處理
-  src/ai/           # 多重 AI 供應商路由
-  src/db/           # 資料庫介面卡 (PG、MySQL、SQLite、ODBC、DB2)
-  tests/            # Rust 整合測試
-src/                # React 19 前端
-  components/       # TerminalView、對話側邊欄、檔案總管、設定等元件
-  ipc/              # 型別安全的 Tauri IPC 封裝
-  lib/i18n.ts       # 多語言字串 (en / zh-TW)
-db2-sidecar-java/   # Java JDBC 橋接 Sidecar（Maven 專案）
-scripts/            # 平台設定與跨平台建置腳本
-docs/               # 規格文件與實作計畫
+src-tauri/       # Rust 後端 (Tauri + PTY + AI Router + DB)
+  src/pty/       # PTY 生命週期與資料流處理
+  src/ai/        # 多重 AI 供應商路由
+  tests/         # Rust 整合測試
+src/             # React 19 前端
+  components/    # TerminalView、對話側邊欄等元件
+  ipc/           # 型別安全的 Tauri IPC 封裝
+docs/            # 規格文件與實作計畫
 ```
-
-## 📄 授權
-
-本專案採用 [Apache License 2.0](LICENSE) 授權。
