@@ -1,8 +1,11 @@
 // src-tauri/src/commands/markitdown.rs
 use std::path::PathBuf;
+use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 use tokio::io::AsyncBufReadExt;
 use serde::Deserialize;
+use crate::config::{ConfigStore, ProviderType};
+use crate::secret::SecretStore;
 
 /// Find the best Python interpreter for markitdown (requires Python >= 3.10).
 /// Returns Err with an actionable message if no suitable interpreter is found.
@@ -73,14 +76,61 @@ enum PythonLine {
     Error { message: String },
 }
 
+/// Resolve LLM credentials for image vision from the configured provider.
+/// Returns (provider_type_str, api_key, base_url, model) or None if unavailable.
+fn resolve_vision_credentials(
+    config: &ConfigStore,
+    secrets: &SecretStore,
+    provider_id: &str,
+) -> Option<(String, String, String, String)> {
+    let cfg = config.get_provider(provider_id)?;
+    let api_key = secrets.get(provider_id).ok().flatten().unwrap_or_default();
+
+    let (provider_type_str, base_url) = match cfg.provider_type {
+        ProviderType::Openai => (
+            "openai".to_string(),
+            cfg.base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+        ),
+        ProviderType::Anthropic => (
+            "anthropic".to_string(),
+            cfg.base_url.unwrap_or_else(|| "https://api.anthropic.com".to_string()),
+        ),
+        ProviderType::Ollama => (
+            "ollama".to_string(),
+            cfg.base_url.unwrap_or_else(|| "http://localhost:11434/v1".to_string()),
+        ),
+        ProviderType::OpenaiCompatible => (
+            "openai-compatible".to_string(),
+            cfg.base_url.unwrap_or_default(),
+        ),
+        // GitHub Copilot and Google AI have complex OAuth/auth flows — skip for now
+        _ => return None,
+    };
+
+    Some((provider_type_str, api_key, base_url, cfg.model))
+}
+
 /// Convert a local file to Markdown using MarkItDown.
 /// Auto-installs Python deps on first use (fast no-op if already installed).
+/// `provider_id` is used for image vision (passes AI credentials to converter.py).
 #[tauri::command]
-pub async fn markitdown_convert(app: AppHandle, file_path: String) -> Result<String, String> {
+pub async fn markitdown_convert(
+    app: AppHandle,
+    file_path: String,
+    provider_id: Option<String>,
+    config: tauri::State<'_, Arc<ConfigStore>>,
+    secrets: tauri::State<'_, Arc<SecretStore>>,
+) -> Result<String, String> {
     let script = converter_script_path(&app);
     let python = find_python_for_markitdown()?;
     let script_dir = script.parent().unwrap_or(script.as_path());
     let req_file = script_dir.join("requirements.txt");
+
+    // Resolve vision credentials (if a provider is selected)
+    let vision_creds = provider_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .and_then(|id| resolve_vision_credentials(&config, &secrets, id));
 
     // Auto-install deps (same pattern as api_docs/runner.rs)
     if req_file.exists() {
@@ -101,9 +151,6 @@ pub async fn markitdown_convert(app: AppHandle, file_path: String) -> Result<Str
         match pip_cmd.output().await {
             Err(e) => return Err(format!("Failed to run pip (is Python installed?): {e}")),
             Ok(out) if !out.status.success() => {
-                // Non-zero exit but continue — markitdown may already be installed.
-                // Store stderr so we can include it in the conversion error if the
-                // Python script subsequently fails (gives user actionable info).
                 let pip_warn = String::from_utf8_lossy(&out.stderr);
                 if !pip_warn.trim().is_empty() {
                     eprintln!("[markitdown] pip warning: {}", pip_warn.trim());
@@ -120,6 +167,14 @@ pub async fn markitdown_convert(app: AppHandle, file_path: String) -> Result<Str
         .env("PYTHONIOENCODING", "utf-8")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+
+    // Pass vision credentials as environment variables
+    if let Some((provider_type_str, api_key, base_url, model)) = vision_creds {
+        cmd.env("MARKITDOWN_LLM_PROVIDER_TYPE", provider_type_str)
+           .env("MARKITDOWN_LLM_API_KEY", api_key)
+           .env("MARKITDOWN_LLM_BASE_URL", base_url)
+           .env("MARKITDOWN_LLM_MODEL", model);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

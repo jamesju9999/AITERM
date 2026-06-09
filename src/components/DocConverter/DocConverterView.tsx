@@ -76,7 +76,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
     setMdOutput("");
     setExtracting(true);
     try {
-      const markdown = await markitdownConvert(filePath);
+      const markdown = await markitdownConvert(filePath, selectedProviderId || undefined);
       const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
       setExtractState({ fileName, rawText: markdown });
     } catch (e) {
@@ -84,7 +84,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
     } finally {
       setExtracting(false);
     }
-  }, []);
+  }, [selectedProviderId]);
 
   useEffect(() => {
     listProviders().then((list) => {

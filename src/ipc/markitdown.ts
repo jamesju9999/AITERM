@@ -4,8 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
  * Convert a local file to Markdown using MarkItDown (Python backend).
  * Resolves with the Markdown string, rejects with an error message on failure.
  */
-export function markitdownConvert(filePath: string): Promise<string> {
-  return invoke<string>("markitdown_convert", { filePath });
+export function markitdownConvert(filePath: string, providerId?: string): Promise<string> {
+  return invoke<string>("markitdown_convert", { filePath, providerId: providerId ?? null });
 }
 
 /**
