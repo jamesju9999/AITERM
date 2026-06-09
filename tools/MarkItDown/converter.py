@@ -39,7 +39,23 @@ def _read_image_as_base64(file_path: str) -> tuple[str, str]:
         return base64.standard_b64encode(f.read()).decode("utf-8"), mime_type
 
 
+def _ensure_package(package: str, pip_name: str | None = None) -> None:
+    """Install a package if not already available."""
+    import importlib
+    try:
+        importlib.import_module(package)
+    except ImportError:
+        import subprocess
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", pip_name or package,
+             "--quiet", "--disable-pip-version-check",
+             "--user", "--break-system-packages"],
+            check=True,
+        )
+
+
 def describe_image_openai(file_path: str, api_key: str, base_url: str, model: str, prompt: str) -> str:
+    _ensure_package("openai")
     from openai import OpenAI
     client = OpenAI(api_key=api_key or "ollama", base_url=base_url)
     b64, mime_type = _read_image_as_base64(file_path)
@@ -59,6 +75,7 @@ def describe_image_openai(file_path: str, api_key: str, base_url: str, model: st
 
 
 def describe_image_anthropic(file_path: str, api_key: str, base_url: str, model: str, prompt: str) -> str:
+    _ensure_package("anthropic")
     import anthropic
     kwargs: dict = {"api_key": api_key}
     if base_url:
