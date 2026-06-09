@@ -69,6 +69,7 @@ The shell of the app is `TerminalApp.tsx` (multi-tab state, keyboard shortcuts: 
 
 ### Platform Support
 
+- **Cross-platform requirement**: All features and bug fixes must work on **macOS, Windows, and Linux** unless the feature is explicitly platform-specific (e.g. DB2). Before finalizing any implementation, consider whether it uses platform-specific APIs, paths, shell behavior, or dependencies.
 - **DB2 is Windows-only** — no macOS DB2 implementation; do not assume DB2 features work cross-platform
 - **Platform-specific Tauri config**: use `src-tauri/tauri.{macos|windows}.conf.json` to override `tauri.conf.json` per platform (e.g. macOS overrides `externalBin: []` to exclude the DB2 sidecar)
 - `src-tauri/binaries/` is gitignored — platform binaries are never committed; handle via CI steps or platform config overrides
