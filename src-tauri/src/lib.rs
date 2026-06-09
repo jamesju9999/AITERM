@@ -35,6 +35,7 @@ use commands::{
         db_remove_connection, db_test_connection, db_update_connection,
     },
     design::{design_chat, design_list_sessions, design_load_session, design_start_session, design_update_draft, design_list_messages, design_advance_stage, design_save_file, design_delete_session},
+    markitdown::{markitdown_convert, markitdown_pick_file},
     provider::{
         add_provider, get_github_copilot_models, get_github_copilot_models_by_provider,
         get_google_ai_models, get_google_ai_models_by_provider,
@@ -44,7 +45,6 @@ use commands::{
     },
     secret::{delete_api_key, has_api_key},
     shell::open_url,
-    markitdown::{markitdown_convert, markitdown_pick_file},
     web::{web_fetch, web_search},
     vcs::{
         pick_folder, vcs_add_connection, vcs_agent_step, vcs_detect_repo, vcs_list_connections,
