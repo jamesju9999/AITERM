@@ -1,1 +1,1 @@
-markitdown[all]
+markitdown[all]>=0.1.0
