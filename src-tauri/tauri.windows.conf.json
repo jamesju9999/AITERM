@@ -3,9 +3,9 @@
     "externalBin": [],
     "resources": {
       "binaries/db2-sidecar-win-x64": ".",
-      "resources/ApiDocFetcher/*.py": "ApiDocFetcher/",
-      "resources/ApiDocFetcher/strategies/*.py": "ApiDocFetcher/strategies/",
-      "resources/ApiDocFetcher/requirements.txt": "ApiDocFetcher/requirements.txt",
+      "../tools/ApiDocFetcher/*.py": "ApiDocFetcher/",
+      "../tools/ApiDocFetcher/strategies/*.py": "ApiDocFetcher/strategies/",
+      "../tools/ApiDocFetcher/requirements.txt": "ApiDocFetcher/requirements.txt",
       "../tools/MarkItDown/converter.py": "MarkItDown/converter.py",
       "../tools/MarkItDown/requirements.txt": "MarkItDown/requirements.txt"
     }
