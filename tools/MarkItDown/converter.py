@@ -49,7 +49,7 @@ def _http_post(url: str, payload: dict, headers: dict) -> dict:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json", **headers}
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    with urllib.request.urlopen(req, timeout=300) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -74,7 +74,6 @@ def describe_image_openai_compatible(
                 {"type": "image_url", "image_url": {"url": data_uri}},
             ],
         }],
-        "max_tokens": 8192,
     }
     result = _http_post(url, payload, headers)
     return result["choices"][0]["message"]["content"] or ""
@@ -95,7 +94,7 @@ def describe_image_anthropic(
     }
     payload = {
         "model": model,
-        "max_tokens": 8192,
+        "max_tokens": 4096,  # Anthropic requires max_tokens; use a high value
         "messages": [{
             "role": "user",
             "content": [
