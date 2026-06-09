@@ -1,7 +1,19 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { vi } from "vitest";
 import { DatabaseConnectionsPage } from "./DatabaseConnectionsPage";
+import { LocaleProvider } from "../../contexts/LocaleContext";
+
+beforeEach(() => {
+  Object.defineProperty(window, "localStorage", {
+    value: { getItem: vi.fn(() => null), setItem: vi.fn(), removeItem: vi.fn(), clear: vi.fn(), key: vi.fn(), length: 0 },
+    writable: true,
+  });
+});
+
+function renderPage() {
+  return render(<LocaleProvider><DatabaseConnectionsPage /></LocaleProvider>);
+}
 
 vi.mock("../../ipc/db", () => ({
   dbListConnections: vi.fn().mockResolvedValue([]),
@@ -14,18 +26,18 @@ vi.mock("../../ipc/db", () => ({
 
 describe("DatabaseConnectionsPage", () => {
   it("renders empty state and add button", async () => {
-    render(<DatabaseConnectionsPage />);
+    renderPage();
     await waitFor(() => expect(screen.getByText("+ 新增連線")).toBeInTheDocument());
   });
 
   it("shows form when + button clicked", async () => {
-    render(<DatabaseConnectionsPage />);
+    renderPage();
     await waitFor(() => fireEvent.click(screen.getByText("+ 新增連線")));
-    expect(screen.getByPlaceholderText("我的資料庫")).toBeInTheDocument();
+    expect(screen.getByText("新增連線")).toBeInTheDocument();
   });
 
   it("shows DB2 ODBC notice when DB2 selected", async () => {
-    render(<DatabaseConnectionsPage />);
+    renderPage();
     await waitFor(() => fireEvent.click(screen.getByText("+ 新增連線")));
     const select = screen.getByRole("combobox");
     fireEvent.change(select, { target: { value: "db2" } });

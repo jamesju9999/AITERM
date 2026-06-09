@@ -3,7 +3,7 @@ import {
   type KeyboardEvent, type PointerEvent,
 } from "react";
 import { useAiChat } from "../../hooks/useAiChat";
-import { aiChat } from "../../ipc/ai";
+import { aiChat, type ContentPart } from "../../ipc/ai";
 import { getSessionCwd, listDirectory } from "../../ipc/fs";
 import { getPtyRecentOutput } from "../../ipc/pty";
 import { getConfig } from "../../ipc/config";
@@ -238,7 +238,12 @@ ${dirList || "（無法取得）"}
     if (chat.messages.length > prevMessagesLength.current) {
       const lastMsg = chat.messages[chat.messages.length - 1];
       if (lastMsg.role === "assistant" && sendRemoteResponse && !chat.isStreaming) {
-        sendRemoteResponse(lastMsg.content);
+        const text = typeof lastMsg.content === "string"
+          ? lastMsg.content
+          : (lastMsg.content as ContentPart[])
+              .filter((p): p is Extract<ContentPart, { type: "text" }> => p.type === "text")
+              .map((p) => p.text).join(" ");
+        sendRemoteResponse(text);
       }
     }
     prevMessagesLength.current = chat.messages.length;

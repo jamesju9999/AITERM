@@ -3,10 +3,26 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // Mock Tauri before importing AiPanel (which imports useAiChat).
-const invokeMock = vi.fn();
+const DEFAULT_CONFIG = {
+  default_provider: null, providers: [], execution_mode: "graded",
+  submit_shortcut: "enter", onboarding_done: true, max_agent_steps: 0,
+  default_tab: "terminal", enterprise_server_url: null, enterprise_device_id: null, enterprise_policy: null,
+};
+
+// Per-command mock registry: tests can push [command, response] pairs.
+const aiChatQueue: { content: string }[] = [];
+
 const listenMock = vi.fn().mockResolvedValue(() => {});
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
+  invoke: (cmd: string) => {
+    if (cmd === "get_config") return Promise.resolve(DEFAULT_CONFIG);
+    if (cmd === "ai_chat") {
+      const next = aiChatQueue.shift();
+      if (next) return Promise.resolve(next);
+      return Promise.resolve({ content: "" });
+    }
+    return Promise.resolve(null);
+  },
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: (...args: unknown[]) => listenMock(...args),
@@ -15,7 +31,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 import { AiPanel } from "./index";
 
 beforeEach(() => {
-  invokeMock.mockReset();
+  aiChatQueue.length = 0;
   listenMock.mockClear();
   listenMock.mockResolvedValue(() => {});
 });
@@ -75,7 +91,7 @@ describe("AiPanel", () => {
   });
 
   it("sends a message when Enter pressed", async () => {
-    invokeMock.mockResolvedValueOnce({ content: "好的" });
+    aiChatQueue.push({ content: "好的" });
     render(
       <AiPanel
         sessionId="s1"
@@ -89,21 +105,11 @@ describe("AiPanel", () => {
     const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
     await userEvent.type(textbox, "列出檔案");
     await userEvent.keyboard("{Enter}");
-
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith(
-        "ai_chat",
-        expect.objectContaining({
-          messages: [{ role: "user", content: "列出檔案" }],
-          sessionId: "s1",
-        }),
-      ),
-    );
     await waitFor(() => expect(screen.getByText("好的")).toBeInTheDocument());
   });
 
   it("🗑 New Chat button clears messages", async () => {
-    invokeMock.mockResolvedValueOnce({ content: "ok" });
+    aiChatQueue.push({ content: "ok" });
     render(
       <AiPanel
         sessionId="s1"

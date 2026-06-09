@@ -1,9 +1,10 @@
 import { useEffect, useRef } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
+import type { TabType } from "../TabBar";
 import "./index.css";
 
 interface Props {
-  onSelect: (type: "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs") => void;
+  onSelect: (type: TabType) => void;
   onClose: () => void;
 }
 

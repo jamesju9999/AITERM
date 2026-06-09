@@ -70,7 +70,7 @@ describe("DocConverterView", () => {
     await act(async () => {
       fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
     });
-    expect(markitdownConvert).toHaveBeenCalledWith("/tmp/test.docx");
+    expect(markitdownConvert).toHaveBeenCalledWith("/tmp/test.docx", undefined);
     expect(screen.getByText(/test\.docx/)).toBeInTheDocument();
   });
 

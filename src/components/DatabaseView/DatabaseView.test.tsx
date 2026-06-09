@@ -5,6 +5,13 @@ import { vi } from "vitest";
 import { describe, it, expect } from "vitest";
 import { DatabaseView } from "./index";
 
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn().mockResolvedValue([]),
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
+
 function renderWithRouter(ui: React.ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>);
 }
@@ -35,6 +42,6 @@ describe("DatabaseView", () => {
     );
     await waitFor(() => expect(screen.getByText("瀏覽")).toBeInTheDocument());
     expect(screen.getByText("AI Chat")).toBeInTheDocument();
-    expect(screen.getByText("SQL Editor")).toBeInTheDocument();
+    expect(screen.getAllByText("SQL Editor").length).toBeGreaterThan(0);
   });
 });

@@ -4,11 +4,19 @@ import { NewTabPicker } from "../NewTabPicker";
 import { useLocale } from "../../contexts/LocaleContext";
 import "./index.css";
 
+export type TabType = "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs";
+
 export interface Tab {
   id: string;
   title: string;
-  type: "terminal" | "database" | "design" | "cross-db";
+  type: TabType;
   dbConnectionId?: string;
+  // Terminal-specific optional fields
+  ptySessionId?: string;
+  initialCwd?: string;
+  initialMission?: { goal: string; maxSteps: number };
+  enterpriseTask?: { taskId: string; workBranch: string; onComplete: unknown };
+  agentProgress?: { done: number; total: number };
 }
 
 export interface TabBarProps {
@@ -22,8 +30,9 @@ export interface TabBarProps {
   onToggle: () => void;
   width: number;
   pickerOpen?: boolean;
-  onPickerSelect?: (type: "terminal" | "database" | "design" | "cross-db") => void;
+  onPickerSelect?: (type: TabType) => void;
   onPickerClose?: () => void;
+  hasUpdate?: boolean;
 }
 
 export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isSidebarOpen, onToggle, width, pickerOpen, onPickerSelect, onPickerClose }: TabBarProps) {

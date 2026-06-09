@@ -23,3 +23,7 @@ export interface FileContent {
 /** Read a text file's content. Throws if binary or unreadable. */
 export const readFile = (path: string): Promise<FileContent> =>
   invoke<FileContent>("pty_read_file", { path });
+
+/** Write a text file. Creates or overwrites. */
+export const writeTextFile = (path: string, content: string): Promise<void> =>
+  invoke<void>("write_text_file", { path, content });

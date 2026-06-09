@@ -11,7 +11,15 @@ import {
   designDeleteSession,
 } from '../../ipc/design';
 import type { DesignSession } from '../../ipc/design';
-import type { ChatMessage } from '../../ipc/ai';
+import type { ChatMessage, ContentPart } from '../../ipc/ai';
+
+function contentToString(content: string | ContentPart[]): string {
+  if (typeof content === 'string') return content;
+  return content
+    .filter((p): p is Extract<ContentPart, { type: 'text' }> => p.type === 'text')
+    .map((p) => p.text)
+    .join(' ');
+}
 import { listen } from '@tauri-apps/api/event';
 import { useTelegramRemoteControl } from '../../hooks/useTelegramRemoteControl';
 import { MessageBubble } from '../AiPanel/MessageBubble';
@@ -55,12 +63,12 @@ export function DesignView({ isActive }: { isActive: boolean }) {
       const lastMsg = messages[messages.length - 1];
       if (lastMsg && lastMsg.role === 'assistant' && sendRemoteResponse) {
         // Strip [UPDATE_*] tags and their content for Telegram display
-        let text = lastMsg.content;
+        let text = contentToString(lastMsg.content);
         for (const tag of ['[UPDATE_PROPOSAL]', '[UPDATE_SPEC]', '[UPDATE_SDD]', '[UPDATE_PLAN]']) {
           const idx = text.indexOf(tag);
           if (idx !== -1) text = text.slice(0, idx).trim();
         }
-        sendRemoteResponse(text || lastMsg.content);
+        sendRemoteResponse(text || contentToString(lastMsg.content));
       }
     }
     prevIsStreamingRef.current = isStreaming;
@@ -450,7 +458,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
                 <MessageBubble
                   key={i}
                   role={m.role as 'user' | 'assistant'}
-                  content={cleanMessageForDisplay(m.content, isLastAssistant && isStreaming)}
+                  content={cleanMessageForDisplay(contentToString(m.content), isLastAssistant && isStreaming)}
                   onExecuteCommand={() => {}}
                 />
               );

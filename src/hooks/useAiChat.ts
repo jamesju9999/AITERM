@@ -35,9 +35,17 @@ function saveAllSessions(sessions: AiChatSession[]): void {
   } catch { /* ignore storage errors */ }
 }
 
+function contentToString(content: ChatMessage["content"]): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((p): p is Extract<typeof p, { type: "text" }> => p.type === "text")
+    .map((p) => p.text)
+    .join(" ");
+}
+
 function formatSessionTitle(messages: ChatMessage[]): string {
   const first = messages.find((m) => m.role === "user");
-  return first ? first.content.slice(0, 30) : "（空對話）";
+  return first ? contentToString(first.content).slice(0, 30) : "（空對話）";
 }
 
 export interface UseAiChatResult {

@@ -88,7 +88,7 @@ function AppRoutes() {
       {!isTerminal && (
         <div style={{ position: "absolute", inset: 0, zIndex: 10, backgroundColor: "#0c0c0c", pointerEvents: "auto" }}>
           <Routes>
-            <Route path="/settings/*" element={<SettingsView updateInfo={updateInfo ?? undefined} />} />
+            <Route path="/settings/*" element={<SettingsView />} />
             <Route path="/onboarding" element={<OnboardingWizard />} />
           </Routes>
         </div>

@@ -1,6 +1,13 @@
 import { useEffect, useRef } from "react";
-import type { AiError, ChatMessage } from "../../ipc/ai";
+import type { AiError, ChatMessage, ContentPart } from "../../ipc/ai";
 import { formatAiError } from "../../ipc/ai";
+
+function contentToString(content: string | ContentPart[]): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((p): p is Extract<ContentPart, { type: "text" }> => p.type === "text")
+    .map((p) => p.text).join(" ");
+}
 import { MessageBubble } from "./MessageBubble";
 
 interface MessageListProps {
@@ -32,7 +39,7 @@ export function MessageList({
         <MessageBubble
           key={i}
           role={m.role === "assistant" ? "assistant" : "user"}
-          content={m.content}
+          content={contentToString(m.content)}
           onExecuteCommand={onExecuteCommand}
         />
       ))}
