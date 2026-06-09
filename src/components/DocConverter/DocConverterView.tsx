@@ -1,72 +1,18 @@
 // src/components/DocConverter/DocConverterView.tsx
 import { useState, useRef, useCallback, useEffect } from "react";
-import * as XLSX from "xlsx";
-import mammoth from "mammoth";
-import * as pdfjsLib from "pdfjs-dist";
 import { listen } from "@tauri-apps/api/event";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { aiChat, formatAiError } from "../../ipc/ai";
-import { readFileAsArrayBuffer } from "../../ipc/fs";
+import { markitdownConvert, markitdownPickFile } from "../../ipc/markitdown";
 import { useLocale } from "../../contexts/LocaleContext";
 import "./DocConverterView.css";
 
-// PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  "pdfjs-dist/build/pdf.worker.min.mjs",
-  import.meta.url,
-).toString();
-
-type Format = "excel" | "word" | "pdf";
-
 interface ExtractState {
-  format: Format;
   fileName: string;
   rawText: string;
 }
 
-function detectFormat(name: string): Format | null {
-  const lower = name.toLowerCase();
-  if (lower.endsWith(".xlsx") || lower.endsWith(".xls") || lower.endsWith(".csv")) return "excel";
-  if (lower.endsWith(".docx")) return "word";
-  if (lower.endsWith(".pdf")) return "pdf";
-  return null;
-}
-
-async function extractExcel(buffer: ArrayBuffer): Promise<string> {
-  const wb = XLSX.read(buffer, { type: "array" });
-  const parts: string[] = [];
-  for (const sheetName of wb.SheetNames) {
-    const csv = XLSX.utils.sheet_to_csv(wb.Sheets[sheetName]);
-    parts.push(`[Sheet: ${sheetName}]\n${csv}`);
-  }
-  return parts.join("\n\n");
-}
-
-async function extractWord(buffer: ArrayBuffer): Promise<string> {
-  const result = await mammoth.extractRawText({ arrayBuffer: buffer });
-  return result.value;
-}
-
-async function extractPdf(buffer: ArrayBuffer): Promise<string> {
-  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
-  try {
-    const pages: string[] = [];
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      const pageText = content.items
-        // @ts-ignore
-        .map((item) => (item.str ?? ""))
-        .join(" ");
-      pages.push(pageText);
-    }
-    return pages.join("\n");
-  } finally {
-    pdf.destroy();
-  }
-}
-
-const CHUNK_SIZE = 3500; // chars per AI call
+const CHUNK_SIZE = 3500;
 
 const NORMALIZATION_SYSTEM_PROMPT = `你是資料字典格式化工具。將輸入的原始文字整理成結構化的 Markdown 格式。
 
@@ -96,41 +42,27 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
   const [mdOutput, setMdOutput] = useState<string>("");
   const [normalizing, setNormalizing] = useState(false);
   const [normalizeProgress, setNormalizeProgress] = useState<{ step: number; total: number } | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const stoppedRef = useRef(false);
 
-  const processFileData = useCallback(async (fileName: string, buffer: ArrayBuffer) => {
-    stoppedRef.current = true;  // cancel any in-flight normalization
+  const processFilePath = useCallback(async (filePath: string) => {
+    stoppedRef.current = true;
     setNormalizing(false);
     setNormalizeProgress(null);
     setError(null);
     setDownloadSuccess(null);
     setExtractState(null);
     setMdOutput("");
-    const format = detectFormat(fileName);
-    if (!format) {
-      setError("不支援的格式。請使用 Excel (.xlsx), Word (.docx) 或 PDF (.pdf)");
-      return;
-    }
     setExtracting(true);
     try {
-      let rawText = "";
-      if (format === "excel") rawText = await extractExcel(buffer);
-      else if (format === "word") rawText = await extractWord(buffer);
-      else rawText = await extractPdf(buffer);
-
-      setExtractState({ format, fileName, rawText });
+      const markdown = await markitdownConvert(filePath);
+      const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
+      setExtractState({ fileName, rawText: markdown });
     } catch (e) {
       setError(`提取失敗：${String(e)}`);
     } finally {
       setExtracting(false);
     }
   }, []);
-
-  const processFile = useCallback(async (file: File) => {
-    const buffer = await file.arrayBuffer();
-    processFileData(file.name, buffer);
-  }, [processFileData]);
 
   useEffect(() => {
     listProviders().then((list) => {
@@ -140,35 +72,37 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
     }).catch(console.error);
   }, []);
 
-  // Listen for OS-level file drops (Tauri intercepts these before the web DOM sees them)
+  // OS-level drag-drop (Tauri intercepts before the web DOM)
   useEffect(() => {
     type DragDropPayload = { paths: string[]; position?: unknown };
     const unlisten = listen<DragDropPayload>("tauri://drag-drop", async (event) => {
       const paths = event.payload?.paths;
       if (!paths?.length) return;
-      const path = paths[0];
-      const fileName = path.split(/[\\/]/).pop() ?? path;
-      try {
-        const buffer = await readFileAsArrayBuffer(path);
-        processFileData(fileName, buffer);
-      } catch (e) {
-        setError(`讀取失敗：${String(e)}`);
-      }
+      processFilePath(paths[0]);
     });
     return () => { unlisten.then((fn) => fn()); };
-  }, [processFileData]);
+  }, [processFilePath]);
 
-  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) processFile(file);
-    e.target.value = "";
-  };
+  const handleDropzoneClick = useCallback(async () => {
+    const path = await markitdownPickFile();
+    if (path) processFilePath(path);
+  }, [processFilePath]);
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (file) processFile(file);
-  };
+    // Web-level drag-drop: extract path from DataTransfer (works for some browsers/OS combos)
+    // The OS-level event listener above handles the common case on Tauri.
+    const item = e.dataTransfer.items[0];
+    if (item?.kind === "file") {
+      const file = item.getAsFile();
+      if (file) {
+        // Tauri exposes the real path on File objects in a web context
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const path: string | undefined = (file as any).path;
+        if (path) processFilePath(path);
+      }
+    }
+  }, [processFilePath]);
 
   const normalizeWithAi = useCallback(async () => {
     if (!extractState) return;
@@ -235,7 +169,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
         className="doc-converter__dropzone"
         onDragOver={(e) => e.preventDefault()}
         onDrop={handleDrop}
-        onClick={() => fileInputRef.current?.click()}
+        onClick={handleDropzoneClick}
       >
         {extracting ? (
           <span>{t.dc_extracting}</span>
@@ -246,13 +180,6 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
             <span className="doc-converter__dropzone-hint">{t.dc_dropzone_formats}</span>
           </>
         )}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".xlsx,.xls,.csv,.docx,.pdf"
-          style={{ display: "none" }}
-          onChange={handleFileInput}
-        />
       </div>
 
       {error && (
@@ -282,12 +209,11 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
       {extractState && (
         <div className="doc-converter__raw-preview">
           <div className="doc-converter__raw-header">
-            {t.dc_detected(extractState.fileName, extractState.format.toUpperCase(), extractState.rawText.length)}
+            {t.dc_detected(extractState.fileName, "Markdown", extractState.rawText.length)}
           </div>
         </div>
       )}
 
-      {/* AI normalization actions */}
       {extractState && !normalizing && (
         <div className="doc-converter__actions">
           <button
@@ -326,7 +252,6 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
         </div>
       )}
 
-      {/* MD preview */}
       {mdOutput && (
         <div className="doc-converter__preview">
           <div className="doc-converter__preview-header">
