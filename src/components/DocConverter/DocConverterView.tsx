@@ -1,5 +1,5 @@
 // src/components/DocConverter/DocConverterView.tsx
-import { useState, useRef, useCallback, useEffect } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { aiChat, formatAiError } from "../../ipc/ai";
@@ -13,6 +13,28 @@ interface ExtractState {
 }
 
 const CHUNK_SIZE = 3500;
+
+const URL_RE = /https?:\/\/[^\s）)]+/g;
+
+function renderErrorWithLinks(msg: string): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  URL_RE.lastIndex = 0;
+  while ((m = URL_RE.exec(msg)) !== null) {
+    if (m.index > last) parts.push(msg.slice(last, m.index));
+    const url = m[0];
+    parts.push(
+      <a key={m.index} href={url} target="_blank" rel="noopener noreferrer"
+        style={{ color: "inherit", textDecoration: "underline" }}>
+        {url}
+      </a>
+    );
+    last = m.index + url.length;
+  }
+  if (last < msg.length) parts.push(msg.slice(last));
+  return parts;
+}
 
 const NORMALIZATION_SYSTEM_PROMPT = `你是資料字典格式化工具。將輸入的原始文字整理成結構化的 Markdown 格式。
 
@@ -183,7 +205,9 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
       </div>
 
       {error && (
-        <div className="doc-converter__error">{error}</div>
+        <div className="doc-converter__error" style={error.includes("\n") ? { whiteSpace: "pre-line" } : undefined}>
+          {renderErrorWithLinks(error)}
+        </div>
       )}
 
       {downloadSuccess && (

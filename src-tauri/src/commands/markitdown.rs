@@ -5,31 +5,45 @@ use tokio::io::AsyncBufReadExt;
 use serde::Deserialize;
 
 /// Find the best Python interpreter for markitdown (requires Python >= 3.10).
-/// Tries newer Python versions / Homebrew paths first before falling back to default.
-fn find_python_for_markitdown() -> String {
-    #[cfg(not(target_os = "windows"))]
-    {
-        let candidates = [
-            "/opt/homebrew/bin/python3",  // Homebrew (Apple Silicon macOS)
-            "/usr/local/bin/python3",     // Homebrew (Intel macOS) or system
-            "python3.13",
-            "python3.12",
-            "python3.11",
-            "python3.10",
-        ];
-        for candidate in &candidates {
-            if let Ok(status) = std::process::Command::new(candidate)
-                .arg("-c")
-                .arg("import sys; exit(0 if sys.version_info >= (3,10) else 1)")
-                .status()
-            {
-                if status.success() {
-                    return candidate.to_string();
-                }
+/// Returns Err with an actionable message if no suitable interpreter is found.
+fn find_python_for_markitdown() -> Result<String, String> {
+    let candidates: &[&str] = &[
+        #[cfg(not(target_os = "windows"))]
+        "/opt/homebrew/bin/python3",  // Homebrew (Apple Silicon macOS)
+        #[cfg(not(target_os = "windows"))]
+        "/usr/local/bin/python3",     // Homebrew (Intel macOS) or system
+        "python3.13",
+        "python3.12",
+        "python3.11",
+        "python3.10",
+        // Generic fallback — might be too old, but worth checking
+        #[cfg(not(target_os = "windows"))]
+        "python3",
+        #[cfg(target_os = "windows")]
+        "python",
+    ];
+
+    for candidate in candidates {
+        if let Ok(status) = std::process::Command::new(candidate)
+            .arg("-c")
+            .arg("import sys; exit(0 if sys.version_info >= (3,10) else 1)")
+            .status()
+        {
+            if status.success() {
+                return Ok(candidate.to_string());
             }
         }
     }
-    crate::api_docs::find_python().to_string()
+
+    Err(
+        "找不到 Python 3.10 或更新版本。\n\
+         MarkItDown 需要 Python 3.10+，請先安裝：\n\
+         • macOS：brew install python3  或前往 https://www.python.org/downloads/\n\
+         • Windows：前往 https://www.python.org/downloads/\n\
+         • Linux：sudo apt install python3.10（或更新版本）\n\
+         安裝後重新嘗試即可。"
+        .to_string(),
+    )
 }
 
 fn converter_script_path(app: &AppHandle) -> PathBuf {
@@ -64,7 +78,7 @@ enum PythonLine {
 #[tauri::command]
 pub async fn markitdown_convert(app: AppHandle, file_path: String) -> Result<String, String> {
     let script = converter_script_path(&app);
-    let python = find_python_for_markitdown();
+    let python = find_python_for_markitdown()?;
     let script_dir = script.parent().unwrap_or(script.as_path());
     let req_file = script_dir.join("requirements.txt");
 
