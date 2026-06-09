@@ -100,16 +100,26 @@ def describe_image_with_ai(file_path: str) -> str | None:
     if not provider_type or not model:
         return None
 
-    if provider_type == "anthropic":
-        return describe_image_anthropic(file_path, api_key, base_url, model, prompt)
-    else:
-        # openai / ollama / openai-compatible all use OpenAI client format
-        if not base_url:
-            if provider_type == "ollama":
-                base_url = "http://localhost:11434/v1"
-            else:
-                base_url = "https://api.openai.com/v1"
-        return describe_image_openai(file_path, api_key, base_url, model, prompt)
+    try:
+        if provider_type == "anthropic":
+            return describe_image_anthropic(file_path, api_key, base_url, model, prompt)
+        else:
+            # openai / ollama / openai-compatible all use OpenAI client format
+            if not base_url:
+                if provider_type == "ollama":
+                    base_url = "http://localhost:11434/v1"
+                else:
+                    base_url = "https://api.openai.com/v1"
+            return describe_image_openai(file_path, api_key, base_url, model, prompt)
+    except ImportError as e:
+        # Python package not yet installed — pip install may still be in progress
+        # or failed silently. Raise a clear message instead of a raw ImportError.
+        pkg = str(e).replace("No module named ", "").strip("'\"")
+        raise RuntimeError(
+            f"缺少 Python 套件：{pkg}\n"
+            f"請重新嘗試一次（app 會自動安裝），或手動執行：\n"
+            f"  python3 -m pip install {pkg}"
+        ) from e
 
 
 def image_metadata_fallback(file_path: str) -> str:

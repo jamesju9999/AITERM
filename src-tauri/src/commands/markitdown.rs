@@ -141,7 +141,10 @@ pub async fn markitdown_convert(
             .arg(&req_file)
             .args(["--quiet", "--disable-pip-version-check"])
             .current_dir(script_dir);
-        #[cfg(target_os = "linux")]
+        // Both Linux (Ubuntu 22.04+) and macOS Homebrew Python mark themselves as
+        // "externally-managed"; --break-system-packages bypasses the guard, --user
+        // installs into the user's home directory (~/.local or ~/Library/Python).
+        #[cfg(not(target_os = "windows"))]
         pip_cmd.args(["--user", "--break-system-packages"]);
         #[cfg(windows)]
         {
