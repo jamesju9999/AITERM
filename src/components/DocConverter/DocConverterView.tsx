@@ -180,6 +180,21 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
     setTimeout(() => setDownloadSuccess(null), 4000);
   }, [mdOutput, extractState, t]);
 
+  const downloadRawMd = useCallback(() => {
+    if (!extractState) return;
+    const baseName = extractState.fileName.replace(/\.[^.]+$/, "");
+    const fileName = `${baseName}.md`;
+    const blob = new Blob([extractState.rawText], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(url);
+    setDownloadSuccess(t.dc_download_success(fileName));
+    setTimeout(() => setDownloadSuccess(null), 4000);
+  }, [extractState, t]);
+
   return (
     <div className="doc-converter">
       <div className="doc-converter__header">
@@ -246,6 +261,12 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
             disabled={!selectedProviderId}
           >
             {t.dc_normalize_btn}
+          </button>
+          <button
+            className="doc-converter__btn doc-converter__btn--secondary"
+            onClick={downloadRawMd}
+          >
+            {t.dc_download_raw_btn}
           </button>
           {mdOutput && (
             <button
