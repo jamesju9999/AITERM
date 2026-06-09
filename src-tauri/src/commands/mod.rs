@@ -4,6 +4,7 @@ pub mod config;
 pub mod db;
 pub mod design;
 pub mod enterprise;
+pub mod markitdown;
 pub mod provider;
 pub mod secret;
 pub mod shell;
