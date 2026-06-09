@@ -4,10 +4,6 @@ use tauri::{AppHandle, Manager};
 use tokio::io::AsyncBufReadExt;
 use serde::Deserialize;
 
-fn find_python() -> &'static str {
-    if cfg!(target_os = "windows") { "python" } else { "python3" }
-}
-
 fn converter_script_path(app: &AppHandle) -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let dev_path = manifest_dir
@@ -40,7 +36,7 @@ enum PythonLine {
 #[tauri::command]
 pub async fn markitdown_convert(app: AppHandle, file_path: String) -> Result<String, String> {
     let script = converter_script_path(&app);
-    let python = find_python();
+    let python = crate::api_docs::find_python();
     let script_dir = script.parent().unwrap_or(script.as_path());
     let req_file = script_dir.join("requirements.txt");
 
@@ -60,12 +56,16 @@ pub async fn markitdown_convert(app: AppHandle, file_path: String) -> Result<Str
             use std::os::windows::process::CommandExt;
             pip_cmd.creation_flags(0x08000000);
         }
-        let _ = pip_cmd.output().await;
+        match pip_cmd.output().await {
+            Err(e) => return Err(format!("Failed to run pip (is Python installed?): {e}")),
+            Ok(_) => {} // non-zero exit is fine — markitdown may already be installed
+        }
     }
 
     let mut cmd = tokio::process::Command::new(python);
     cmd.arg(&script)
         .arg(&file_path)
+        .current_dir(script_dir)
         .env("PYTHONIOENCODING", "utf-8")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
