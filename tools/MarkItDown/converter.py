@@ -19,6 +19,7 @@ import json
 import os
 import base64
 import mimetypes
+import urllib.request
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
 
@@ -39,75 +40,75 @@ def _read_image_as_base64(file_path: str) -> tuple[str, str]:
         return base64.standard_b64encode(f.read()).decode("utf-8"), mime_type
 
 
-def _ensure_package(package: str, pip_name: str | None = None) -> None:
-    """Install a package if not already available."""
-    import importlib
-    try:
-        importlib.import_module(package)
-    except ImportError:
-        import subprocess
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", pip_name or package,
-             "--quiet", "--disable-pip-version-check",
-             "--user", "--break-system-packages"],
-            check=True,
-        )
+def _http_post(url: str, payload: dict, headers: dict) -> dict:
+    """Simple HTTP POST using only Python stdlib — no external packages needed."""
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json", **headers}
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
-def describe_image_openai(file_path: str, api_key: str, base_url: str, model: str, prompt: str) -> str:
-    _ensure_package("openai")
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key or "ollama", base_url=base_url)
+def describe_image_openai_compatible(
+    file_path: str, api_key: str, base_url: str, model: str, prompt: str
+) -> str:
+    """Call OpenAI / Ollama / OpenAI-compatible vision API using stdlib HTTP."""
     b64, mime_type = _read_image_as_base64(file_path)
     data_uri = f"data:{mime_type};base64,{b64}"
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{
+
+    url = base_url.rstrip("/") + "/chat/completions"
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    payload = {
+        "model": model,
+        "messages": [{
             "role": "user",
             "content": [
                 {"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {"url": data_uri}},
             ],
         }],
-        max_tokens=4096,
-    )
-    return response.choices[0].message.content or ""
+        "max_tokens": 4096,
+    }
+    result = _http_post(url, payload, headers)
+    return result["choices"][0]["message"]["content"] or ""
 
 
-def describe_image_anthropic(file_path: str, api_key: str, base_url: str, model: str, prompt: str) -> str:
-    _ensure_package("anthropic")
-    import anthropic
-    kwargs: dict = {"api_key": api_key}
-    if base_url:
-        kwargs["base_url"] = base_url
-    client = anthropic.Anthropic(**kwargs)
+def describe_image_anthropic(
+    file_path: str, api_key: str, base_url: str, model: str, prompt: str
+) -> str:
+    """Call Anthropic Messages API using stdlib HTTP."""
     b64, mime_type = _read_image_as_base64(file_path)
-    # Anthropic only accepts specific image media types
     if mime_type not in {"image/jpeg", "image/png", "image/gif", "image/webp"}:
         mime_type = "image/jpeg"
-    response = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        messages=[{
+
+    url = (base_url.rstrip("/") if base_url else "https://api.anthropic.com") + "/v1/messages"
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+    }
+    payload = {
+        "model": model,
+        "max_tokens": 4096,
+        "messages": [{
             "role": "user",
             "content": [
                 {
                     "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": mime_type,
-                        "data": b64,
-                    },
+                    "source": {"type": "base64", "media_type": mime_type, "data": b64},
                 },
                 {"type": "text", "text": prompt},
             ],
         }],
-    )
-    return response.content[0].text if response.content else ""
+    }
+    result = _http_post(url, payload, headers)
+    return result["content"][0]["text"] if result.get("content") else ""
 
 
 def describe_image_with_ai(file_path: str) -> str | None:
-    """Try to describe image using configured AI provider. Returns None if not configured."""
+    """Call the configured AI provider to describe the image. Returns None if not configured."""
     provider_type = os.environ.get("MARKITDOWN_LLM_PROVIDER_TYPE", "").lower()
     api_key = os.environ.get("MARKITDOWN_LLM_API_KEY", "")
     base_url = os.environ.get("MARKITDOWN_LLM_BASE_URL", "")
@@ -117,26 +118,17 @@ def describe_image_with_ai(file_path: str) -> str | None:
     if not provider_type or not model:
         return None
 
-    try:
-        if provider_type == "anthropic":
-            return describe_image_anthropic(file_path, api_key, base_url, model, prompt)
-        else:
-            # openai / ollama / openai-compatible all use OpenAI client format
-            if not base_url:
-                if provider_type == "ollama":
-                    base_url = "http://localhost:11434/v1"
-                else:
-                    base_url = "https://api.openai.com/v1"
-            return describe_image_openai(file_path, api_key, base_url, model, prompt)
-    except ImportError as e:
-        # Python package not yet installed — pip install may still be in progress
-        # or failed silently. Raise a clear message instead of a raw ImportError.
-        pkg = str(e).replace("No module named ", "").strip("'\"")
-        raise RuntimeError(
-            f"缺少 Python 套件：{pkg}\n"
-            f"請重新嘗試一次（app 會自動安裝），或手動執行：\n"
-            f"  python3 -m pip install {pkg}"
-        ) from e
+    if provider_type == "anthropic":
+        return describe_image_anthropic(file_path, api_key, base_url, model, prompt)
+    else:
+        # openai / ollama / openai-compatible all share the same REST format
+        if not base_url:
+            base_url = (
+                "http://localhost:11434/v1"
+                if provider_type == "ollama"
+                else "https://api.openai.com/v1"
+            )
+        return describe_image_openai_compatible(file_path, api_key, base_url, model, prompt)
 
 
 def image_metadata_fallback(file_path: str) -> str:
