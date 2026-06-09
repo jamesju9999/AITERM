@@ -44,6 +44,7 @@ use commands::{
     },
     secret::{delete_api_key, has_api_key},
     shell::open_url,
+    markitdown::{markitdown_convert, markitdown_pick_file},
     web::{web_fetch, web_search},
     vcs::{
         pick_folder, vcs_add_connection, vcs_agent_step, vcs_detect_repo, vcs_list_connections,
@@ -281,6 +282,9 @@ pub fn run() {
             vcs_query,
             vcs_agent_step,
             pick_folder,
+            // MarkItDown
+            markitdown_convert,
+            markitdown_pick_file,
             // API Docs
             api_docs_detect,
             api_docs_fetch_tree,
