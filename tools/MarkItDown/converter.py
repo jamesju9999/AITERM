@@ -24,10 +24,14 @@ import urllib.request
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
 
 DEFAULT_IMAGE_PROMPT = (
-    "請完整描述這張圖片的內容。"
-    "如果圖片中有文字（包括截圖、掃描文件、投影片、表格等），請原文抄寫所有文字內容，並保持原始格式（換行、縮排、表格結構等）。"
-    "如果是純圖片或照片，請詳細描述畫面中的人物、物件、場景與任何可見文字。"
-    "輸出使用 Markdown 格式。"
+    "請完整抄寫這張圖片中的所有文字與數字，不得遺漏任何儲存格內容。\n\n"
+    "規則：\n"
+    "1. 表格：每一列、每一欄的數值都必須完整填入，禁止留空。若格子為空白，填入空字串即可。\n"
+    "2. 數字：原樣抄寫，包含小數點、負號、千分位符號、貨幣符號等。\n"
+    "3. 文字：原樣抄寫，保留換行與縮排。\n"
+    "4. 格式：使用 Markdown 表格（若原始為表格），其他內容用適當的 Markdown 標記。\n"
+    "5. 若圖片為照片（非文件），則詳細描述畫面內容。\n\n"
+    "直接輸出內容，不要加任何說明或前言。"
 )
 
 
@@ -70,7 +74,7 @@ def describe_image_openai_compatible(
                 {"type": "image_url", "image_url": {"url": data_uri}},
             ],
         }],
-        "max_tokens": 4096,
+        "max_tokens": 8192,
     }
     result = _http_post(url, payload, headers)
     return result["choices"][0]["message"]["content"] or ""
@@ -91,7 +95,7 @@ def describe_image_anthropic(
     }
     payload = {
         "model": model,
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "messages": [{
             "role": "user",
             "content": [
