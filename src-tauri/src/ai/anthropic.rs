@@ -101,33 +101,33 @@ impl AiProvider for AnthropicClient {
 // ── Request types ─────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
-struct AnthropicRequest<'a> {
-    model: &'a str,
-    system: &'a str,
-    messages: Vec<AnthropicMessage<'a>>,
+struct AnthropicRequest {
+    model: String,
+    system: String,
+    messages: Vec<AnthropicMessage>,
     max_tokens: u32,
     stream: bool,
 }
 
 #[derive(Serialize)]
-struct AnthropicMessage<'a> {
-    role: &'a str,
-    content: &'a str,
+struct AnthropicMessage {
+    role: String,
+    content: serde_json::Value,
 }
 
-fn build_request_body<'a>(
-    model: &'a str,
-    req: &'a GenerateRequest,
+fn build_request_body(
+    model: &str,
+    req: &GenerateRequest,
     stream: bool,
-) -> AnthropicRequest<'a> {
+) -> AnthropicRequest {
     let messages = req
         .messages
         .iter()
-        .map(|m| AnthropicMessage { role: m.role.as_str(), content: m.content.as_str() })
+        .map(|m| AnthropicMessage { role: m.role.clone(), content: m.content.clone() })
         .collect();
     AnthropicRequest {
-        model,
-        system: &req.system_prompt,
+        model: model.to_owned(),
+        system: req.system_prompt.clone(),
         messages,
         max_tokens: req.max_tokens.unwrap_or(1024),
         stream,
@@ -139,7 +139,7 @@ fn health_check_request() -> GenerateRequest {
     use std::path::PathBuf;
     GenerateRequest {
         system_prompt: "ping".into(),
-        messages: vec![ChatMessage { role: "user".into(), content: "hi".into() }],
+        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("hi") }],
         context: EnvSnapshot {
             os: std::env::consts::OS.into(),
             shell: "sh".into(),
@@ -261,7 +261,7 @@ mod tests {
     fn sample_req() -> GenerateRequest {
         GenerateRequest {
             system_prompt: "You are a terminal assistant.".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: "list files".into() }],
+            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("list files") }],
             context: EnvSnapshot { os: "windows".into(), shell: "pwsh".into(), cwd: PathBuf::from("C:\\"), ..Default::default() },
             mode: QueryMode::SingleCommand,
             max_tokens: Some(256),

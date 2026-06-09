@@ -270,7 +270,7 @@ pub async fn design_list_messages(
     
     Ok(messages.into_iter().map(|m| ChatMessage {
         role: m.role,
-        content: m.content,
+        content: serde_json::Value::String(m.content),
     }).collect())
 }
 
@@ -323,10 +323,10 @@ pub async fn design_chat(
     // Auto-update title from first user message if still default
     if session.title == "新需求討論" {
         if let Some(first_user) = messages.iter().find(|m| m.role == "user") {
-            let content = first_user.content.trim();
+            let content_str = first_user.content.as_str().unwrap_or("").trim();
             // Skip auto-generated [GENERATE:xxx] messages
-            if !content.starts_with("請根據目前的討論內容產生") {
-                let new_title: String = content.chars().take(30).collect();
+            if !content_str.starts_with("請根據目前的討論內容產生") {
+                let new_title: String = content_str.chars().take(30).collect();
                 let _ = sqlx::query("UPDATE design_sessions SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
                     .bind(&new_title)
                     .bind(&session_id)
@@ -347,7 +347,11 @@ pub async fn design_chat(
 
     // 4. Build specialized design prompt, with optional stage instruction injection
     let base_prompt = build_design_prompt(&session, &snapshot);
-    let last_content = messages.last().map(|m| m.content.as_str()).unwrap_or("");
+    let last_content_owned: String = messages.last()
+        .and_then(|m| m.content.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let last_content = last_content_owned.as_str();
     let stage_inject = if let Some(start) = last_content.find("[GENERATE:") {
         let rest = &last_content[start + 10..];
         if let Some(end) = rest.find(']') {
@@ -394,7 +398,8 @@ pub async fn design_chat(
 
     // Persist history: save the user's last message and the assistant's reply
     if let Some(last_user_msg) = messages.last() {
-        let _ = crate::db::design::create_design_message(&design_db.pool, &session_id, &last_user_msg.role, &last_user_msg.content).await;
+        let content_str = last_user_msg.content.as_str().unwrap_or("");
+        let _ = crate::db::design::create_design_message(&design_db.pool, &session_id, &last_user_msg.role, content_str).await;
     }
     let _ = crate::db::design::create_design_message(&design_db.pool, &session_id, "assistant", &buf).await;
 

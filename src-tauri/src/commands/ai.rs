@@ -199,7 +199,7 @@ pub async fn ai_query(
     let prompt = build_single_command_prompt(&snapshot);
     let req = GenerateRequest {
         system_prompt: prompt,
-        messages: vec![ChatMessage { role: "user".into(), content: query }],
+        messages: vec![ChatMessage { role: "user".into(), content: serde_json::Value::String(query) }],
         context: snapshot,
         mode: QueryMode::SingleCommand,
         max_tokens: None,

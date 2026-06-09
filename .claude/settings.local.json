@@ -3,7 +3,13 @@
     "allow": [
       "Bash(git merge:*)",
       "Bash(git checkout:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git restore:*)",
+      "Bash(git commit:*)",
+      "Bash(cargo check:*)",
+      "Bash(npx tsc:*)",
+      "Bash(sed -i '' 's/content: text\\\\.into\\(\\)/content: serde_json::json!\\(text\\)/g' /Users/jamesju/Documents/GitHub/AITERM/src-tauri/tests/ollama_client.rs /Users/jamesju/Documents/GitHub/AITERM/src-tauri/tests/anthropic_client.rs /Users/jamesju/Documents/GitHub/AITERM/src-tauri/tests/compatible_client.rs)",
+      "Bash(sed -i '' 's/content: text\\\\.into\\(\\)/content: serde_json::json!\\(text\\)/g' /Users/jamesju/Documents/GitHub/AITERM/src-tauri/tests/ai_chat_command.rs)"
     ]
   }
 }

@@ -132,26 +132,26 @@ fn connection_error(e: &reqwest::Error) -> AiError {
 // ── Request types ─────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
-struct OllamaChatRequest<'a> {
-    model: &'a str,
-    messages: Vec<OllamaMessage<'a>>,
+struct OllamaChatRequest {
+    model: String,
+    messages: Vec<OllamaMessage>,
     stream: bool,
 }
 
 #[derive(Serialize)]
-struct OllamaMessage<'a> {
-    role: &'a str,
-    content: &'a str,
+struct OllamaMessage {
+    role: String,
+    content: serde_json::Value,
 }
 
-fn build_request_body<'a>(model: &'a str, req: &'a GenerateRequest, stream: bool) -> OllamaChatRequest<'a> {
+fn build_request_body(model: &str, req: &GenerateRequest, stream: bool) -> OllamaChatRequest {
     // Prepend system prompt as a "system" role message.
-    let mut messages: Vec<OllamaMessage<'a>> = Vec::with_capacity(req.messages.len() + 1);
-    messages.push(OllamaMessage { role: "system", content: &req.system_prompt });
+    let mut messages: Vec<OllamaMessage> = Vec::with_capacity(req.messages.len() + 1);
+    messages.push(OllamaMessage { role: "system".to_owned(), content: serde_json::Value::String(req.system_prompt.clone()) });
     for m in &req.messages {
-        messages.push(OllamaMessage { role: m.role.as_str(), content: m.content.as_str() });
+        messages.push(OllamaMessage { role: m.role.clone(), content: m.content.clone() });
     }
-    OllamaChatRequest { model, messages, stream }
+    OllamaChatRequest { model: model.to_owned(), messages, stream }
 }
 
 // ── NDJSON consumer ───────────────────────────────────────────────────────────
@@ -225,7 +225,7 @@ mod tests {
     fn sample_req() -> GenerateRequest {
         GenerateRequest {
             system_prompt: "sys".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: "ls".into() }],
+            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("ls") }],
             context: EnvSnapshot { os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default() },
             mode: QueryMode::SingleCommand,
             max_tokens: None,
