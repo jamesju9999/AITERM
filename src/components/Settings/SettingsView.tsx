@@ -3,11 +3,13 @@ import { useNavigate } from "react-router-dom";
 import { ProvidersPage } from "./ProvidersPage";
 import { GeneralPage } from "./GeneralPage";
 import { DatabaseConnectionsPage } from "./DatabaseConnectionsPage";
+import { VcsConnectionsPage } from "./VcsConnectionsPage";
+import { EnterprisePage } from "./EnterprisePage";
 import { AboutPage } from "./AboutPage";
 import { useLocale } from "../../contexts/LocaleContext";
 import "./SettingsView.css";
 
-type SettingsTab = "general" | "providers" | "databases" | "about";
+type SettingsTab = "general" | "providers" | "databases" | "vcs" | "enterprise" | "about";
 
 export function SettingsView() {
   const navigate = useNavigate();
@@ -39,6 +41,18 @@ export function SettingsView() {
           🗄️ {t.db_connections}
         </button>
         <button
+          className={`sidebar-item ${tab === "vcs" ? "sidebar-item--active" : ""}`}
+          onClick={() => setTab("vcs")}
+        >
+          🔀 {t.vcs_connections}
+        </button>
+        <button
+          className={`sidebar-item ${tab === "enterprise" ? "sidebar-item--active" : ""}`}
+          onClick={() => setTab("enterprise")}
+        >
+          🏢 Enterprise
+        </button>
+        <button
           className={`sidebar-item ${tab === "about" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("about")}
         >
@@ -57,6 +71,8 @@ export function SettingsView() {
         {tab === "general" && <GeneralPage />}
         {tab === "providers" && <ProvidersPage />}
         {tab === "databases" && <DatabaseConnectionsPage />}
+        {tab === "vcs" && <VcsConnectionsPage />}
+        {tab === "enterprise" && <EnterprisePage />}
         {tab === "about" && <AboutPage />}
       </main>
     </div>
