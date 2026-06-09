@@ -138,7 +138,7 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sessions, setSessions] = useState<SavedSession[]>([]);
   const maxStepsRef = useRef<number>(5);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const stoppedRef = useRef(false);
   const currentSessionIdRef = useRef<string | null>(null);
 
@@ -186,7 +186,8 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
   }, [connectionId]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = messagesContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
   const buildSystemPrompt = () => {
@@ -463,7 +464,7 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
 
       {/* Main chat area */}
       <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
-        <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+        <div ref={messagesContainerRef} style={{ flex: 1, overflowY: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
           {messages.length === 0 && (
             <div style={{ color: "#555", fontSize: 13, padding: "20px 0" }}>
               用自然語言描述你想查詢的資料，例如：「查詢最近 10 筆訂單」
@@ -487,7 +488,6 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
               }}
             />
           ))}
-          <div ref={bottomRef} />
         </div>
 
         {/* Toolbar: provider selector + history toggle */}

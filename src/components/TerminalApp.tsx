@@ -140,9 +140,9 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
 
   const handlePickerSelect = useCallback((type: "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs") => {
     const newId = crypto.randomUUID();
-    let title = "Terminal";
+    let title = t.terminal_tab;
     if (type === "database") title = t.database_tab;
-    if (type === "design") title = "Design";
+    if (type === "design") title = t.design_tab;
     if (type === "cross-db") title = t.cross_db_tab;
     if (type === "vcs") title = t.vcs_tab;
     if (type === "doc-converter") title = t.doc_converter_tab;
@@ -150,7 +150,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
     setTabs((prev) => [...prev, { id: newId, title, type }]);
     setActiveId(newId);
     setPickerOpen(false);
-  }, [t.database_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab]);
+  }, [t.terminal_tab, t.database_tab, t.design_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab]);
 
   const handleCloseTab = useCallback((id: string) => {
     setTabs((prev) => {

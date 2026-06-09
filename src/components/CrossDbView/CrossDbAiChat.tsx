@@ -146,7 +146,7 @@ export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
   const [sessions, setSessions] = useState<SavedSession[]>(loadSessions);
   const [historyOpen, setHistoryOpen] = useState(false);
   const maxStepsRef = useRef<number>(5);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const stoppedRef = useRef(false);
   const currentSessionIdRef = useRef<string | null>(null);
 
@@ -180,7 +180,8 @@ export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
   }, []);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = messagesContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
   // Auto-save sessions when messages settle (skip while agent is still running)
@@ -494,7 +495,7 @@ SELECT * FROM ...
         </div>
       )}
       <div className="crossdb-chat__main">
-      <div className="crossdb-chat__messages">
+      <div ref={messagesContainerRef} className="crossdb-chat__messages">
         {messages.length === 0 && (
           <div className="crossdb-chat__welcome">
             <h3>🔗 跨資料庫 AI 查詢</h3>
@@ -580,7 +581,6 @@ SELECT * FROM ...
             )}
           </div>
         ))}
-        <div ref={bottomRef} />
       </div>
 
       <div className="crossdb-chat__input-area">

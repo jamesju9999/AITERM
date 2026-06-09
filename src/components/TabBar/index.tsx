@@ -35,7 +35,7 @@ export interface TabBarProps {
   hasUpdate?: boolean;
 }
 
-export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isSidebarOpen, onToggle, width, pickerOpen, onPickerSelect, onPickerClose }: TabBarProps) {
+export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isSidebarOpen, onToggle, width, pickerOpen, onPickerSelect, onPickerClose, hasUpdate = false }: TabBarProps) {
   const navigate = useNavigate();
   const { t } = useLocale();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -55,13 +55,14 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isS
           ◨
         </button>
 
-        <button 
-          className="aiterm-sidebar-toggle" 
-          onClick={() => navigate("/settings")} 
+        <button
+          className="aiterm-sidebar-toggle"
+          onClick={() => navigate("/settings")}
           title={`${t.settings} (Ctrl+,)`}
-          style={{ background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px' }}
+          style={{ background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px', position: 'relative' }}
         >
           ⚙
+          {hasUpdate && <span className="update-badge" aria-label="Update available" />}
         </button>
       </div>
     );
@@ -135,7 +136,10 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isS
             onClick={() => navigate("/settings")}
             title={`${t.settings} (Ctrl+,)`}
         >
-            <span style={{ marginRight: "8px", fontSize: "16px" }}>⚙</span>
+            <span style={{ marginRight: "8px", fontSize: "16px", position: "relative", display: "inline-block" }}>
+              ⚙
+              {hasUpdate && <span className="update-badge" aria-label="Update available" />}
+            </span>
             <span className="aiterm-tab-title">{t.settings}</span>
         </div>
       </div>

@@ -27,14 +27,15 @@ export function MessageList({
   onExecuteCommand,
   onRetry,
 }: MessageListProps) {
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [messages, streamBuf, error]);
 
   return (
-    <div className="aiterm-message-list">
+    <div ref={listRef} className="aiterm-message-list">
       {messages.map((m, i) => (
         <MessageBubble
           key={i}
@@ -64,7 +65,6 @@ export function MessageList({
           </button>
         </div>
       )}
-      <div ref={bottomRef} />
     </div>
   );
 }

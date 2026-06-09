@@ -41,11 +41,12 @@ export function DesignView({ isActive }: { isActive: boolean }) {
   const [sessionList, setSessionList] = useState<DesignSession[]>([]);
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesListRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = messagesListRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
   const { isRemoteEnabled, setIsRemoteEnabled, sendRemoteResponse } = useTelegramRemoteControl(
@@ -445,7 +446,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
         )}
 
         <div className="design-interaction-area">
-          <div className="design-messages-list">
+          <div ref={messagesListRef} className="design-messages-list">
             {messages.length === 0 && (
               <div className="design-welcome-hero">
                 <h3>👋 OpenSpec 設計中心</h3>
@@ -463,7 +464,6 @@ export function DesignView({ isActive }: { isActive: boolean }) {
                 />
               );
             })}
-            <div ref={messagesEndRef} />
           </div>
 
           <div className="design-input-section">
