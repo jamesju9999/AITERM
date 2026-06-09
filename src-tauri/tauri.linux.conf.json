@@ -4,7 +4,9 @@
     "resources": {
       "../tools/ApiDocFetcher/*.py": "ApiDocFetcher/",
       "../tools/ApiDocFetcher/strategies/*.py": "ApiDocFetcher/strategies/",
-      "../tools/ApiDocFetcher/requirements.txt": "ApiDocFetcher/requirements.txt"
+      "../tools/ApiDocFetcher/requirements.txt": "ApiDocFetcher/requirements.txt",
+      "../tools/MarkItDown/converter.py": "MarkItDown/converter.py",
+      "../tools/MarkItDown/requirements.txt": "MarkItDown/requirements.txt"
     }
   }
 }
