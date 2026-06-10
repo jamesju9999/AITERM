@@ -129,7 +129,7 @@ export function useAiChat(sessionId: string): UseAiChatResult {
       try {
         const reply: AiChatReply = await invokeAiChat(msgs, sessionId);
         if (!mountedRef.current) return;
-        setMessages([...msgs, { role: "assistant", content: reply.content }]);
+        setMessages([...msgs, { role: "assistant", content: reply.content ?? "" }]);
       } catch (e) {
         if (!mountedRef.current) return;
         setError(normalizeAiError(e));
