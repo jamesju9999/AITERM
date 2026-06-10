@@ -272,7 +272,90 @@ export async function setMcpEnabled(enabled: boolean): Promise<void>
 
 ---
 
-## 8. 錯誤處理
+## 8. 跨平台注意事項
+
+### 8.1 Claude Desktop Config 路徑
+
+`import_claude_desktop_mcp` command 在 Rust 端根據編譯目標解析路徑：
+
+```rust
+#[cfg(target_os = "macos")]
+fn claude_desktop_config_path() -> PathBuf {
+    dirs::home_dir().unwrap()
+        .join("Library/Application Support/Claude/claude_desktop_config.json")
+}
+
+#[cfg(target_os = "windows")]
+fn claude_desktop_config_path() -> PathBuf {
+    dirs::data_dir().unwrap()   // %APPDATA%
+        .join("Claude/claude_desktop_config.json")
+}
+
+#[cfg(target_os = "linux")]
+fn claude_desktop_config_path() -> PathBuf {
+    dirs::config_dir().unwrap() // ~/.config
+        .join("Claude/claude_desktop_config.json")
+}
+```
+
+Linux 上 Claude Desktop 通常不存在，Import 按鈕在找不到檔案時顯示「找不到 Claude Desktop 設定」，不報錯。
+
+### 8.2 stdio Transport — Windows 命令處理
+
+MCP servers 通常以 `npx`、`python3`、`uvx` 等命令啟動。在 Windows 上這些命令的實際執行方式不同：
+
+**問題：** Windows 上 `npx` 實際是 `npx.cmd`（批次檔），`tokio::process::Command` 直接執行 `.cmd` 檔需要透過 `cmd.exe`。
+
+**解法：** stdio transport 在 spawn 時根據平台自動包裝：
+
+```rust
+#[cfg(target_os = "windows")]
+fn build_command(config: &McpServerConfig) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new("cmd");
+    cmd.arg("/C").arg(config.command.as_deref().unwrap_or(""));
+    cmd.args(&config.args);
+    cmd
+}
+
+#[cfg(not(target_os = "windows"))]
+fn build_command(config: &McpServerConfig) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(config.command.as_deref().unwrap_or(""));
+    cmd.args(&config.args);
+    cmd
+}
+```
+
+### 8.3 stdio Transport — 環境變數繼承
+
+spawn subprocess 時繼承 AITerm 的環境變數，再疊加 `McpServerConfig.env` 中指定的額外變數。這樣 `PATH`、`HOME`、`NODE_PATH` 等系統路徑會自動正確，使用者只需設定 server 專用的變數（如 API keys）。
+
+Windows 上環境變數名稱大小寫不敏感，Rust 的 `std::env` 已處理此差異。
+
+### 8.4 stdio Transport — Process 終止
+
+結束 MCP server subprocess 時：
+
+```rust
+#[cfg(unix)]
+async fn kill_process(child: &mut Child) {
+    let _ = child.kill().await;  // SIGKILL
+}
+
+#[cfg(windows)]
+async fn kill_process(child: &mut Child) {
+    let _ = child.kill().await;  // TerminateProcess
+}
+```
+
+Tokio 的 `Child::kill()` 在兩個平台行為一致，無需額外處理。
+
+### 8.5 路徑分隔符
+
+MCP server args 中使用者可能填入檔案路徑（如 filesystem server 的根目錄）。AITerm 不轉換這些路徑——使用者自行填入符合平台的路徑。設定 UI 在 args 輸入欄位旁顯示提示：「Windows 請使用反斜線（`C:\Users\...`）」。
+
+---
+
+## 9. 錯誤處理
 
 | 情境 | 處理方式 |
 |------|---------|
@@ -284,7 +367,7 @@ export async function setMcpEnabled(enabled: boolean): Promise<void>
 
 ---
 
-## 9. 檔案異動清單
+## 10. 檔案異動清單
 
 **新增：**
 - `src-tauri/src/mcp/mod.rs`
