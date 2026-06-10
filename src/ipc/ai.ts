@@ -25,17 +25,40 @@ export interface ChatMessage {
   content: string | ContentPart[];
 }
 
+export interface AiToolCall {
+  id: string;             // provider tool call ID (needed for tool result messages)
+  server_id: string;      // sanitized server id (decoded from encoded name)
+  tool_name: string;      // encoded: "server_id__tool_name"
+  args: unknown;
+}
+
 export interface AiChatReply {
-  content: string;
+  content: string | null;               // null when tool_calls is non-empty
+  tool_calls: AiToolCall[];             // AI-requested tool calls
+  tool_calling_unsupported: boolean;    // true if provider doesn't support tools
 }
 
 export function invokeAiChat(
   messages: ChatMessage[],
   sessionId: string,
   providerId?: string,
+  useMcp = false,
 ): Promise<AiChatReply> {
-  return invoke<AiChatReply>("ai_chat", { messages, sessionId, providerId: providerId ?? null });
+  return invoke<AiChatReply>("ai_chat", { messages, sessionId, providerId: providerId ?? null, useMcp });
 }
+
+export const aiChat = (
+  messages: ChatMessage[],
+  sessionId: string,
+  providerId?: string,
+  useMcp = false,
+): Promise<AiChatReply> =>
+  invoke("ai_chat", {
+    messages,
+    sessionId,
+    providerId: providerId ?? null,
+    useMcp,
+  });
 
 export type AiStreamKind = "query" | "chat";
 
@@ -53,20 +76,6 @@ export function invokeAiQuery(
   return invoke<AiCommandReady>("ai_query", { query, sessionId });
 }
 
-export async function aiChat(
-  message: string,
-  systemPrompt: string,
-  history: { role: "user" | "assistant"; content: string }[],
-  providerId?: string,
-): Promise<string> {
-  const messages: ChatMessage[] = [
-    { role: "system", content: systemPrompt },
-    ...history,
-    { role: "user", content: message },
-  ];
-  const reply = await invokeAiChat(messages, "db-ai-chat", providerId);
-  return reply.content;
-}
 
 export function formatAiError(e: AiError): string {
   switch (e.kind) {
