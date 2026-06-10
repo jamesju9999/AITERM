@@ -143,6 +143,11 @@ export function McpServersPage() {
               <span className="mcp-server-meta">
                 {s.transport === "stdio" ? s.command : s.url}
               </span>
+              {s.status === "error" && s.error_message && (
+                <span style={{ color: "#f87171", fontSize: 11, marginTop: 2 }}>
+                  {s.error_message}
+                </span>
+              )}
             </div>
             <span className={`mcp-status-badge ${s.status}`}>{statusLabel(s)}</span>
             <div className="mcp-row-actions">

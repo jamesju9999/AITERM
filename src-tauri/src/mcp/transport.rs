@@ -137,7 +137,23 @@ impl HttpTransport {
             .map_err(|e| TransportError::Http(e.to_string()))?;
 
         if !resp.status().is_success() {
-            return Err(TransportError::Http(format!("HTTP {}", resp.status())));
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            // Try to extract a human-readable message from JSON error bodies
+            let detail = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| {
+                    v["error_description"].as_str()
+                        .or(v["error"].as_str())
+                        .or(v["message"].as_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| body.chars().take(200).collect());
+            return Err(TransportError::Http(if detail.is_empty() {
+                format!("HTTP {status}")
+            } else {
+                format!("HTTP {status}: {detail}")
+            }));
         }
 
         let body: JsonRpcResponse = resp.json()
