@@ -316,6 +316,7 @@ export const translations = {
     mcp_marketplace_timeout: "安裝逾時，請手動執行指令",
     mcp_marketplace_done_msg: "✓ 安裝完成，已新增到已安裝清單",
     mcp_marketplace_terminal_title: "安裝記錄",
+    mcp_marketplace_no_results: "找不到相關 server，請嘗試其他關鍵字",
   },
   "en": {
     // Settings sidebar
@@ -630,6 +631,7 @@ export const translations = {
     mcp_marketplace_timeout: "Install timed out, run command manually",
     mcp_marketplace_done_msg: "✓ Install complete, added to installed list",
     mcp_marketplace_terminal_title: "Install Log",
+    mcp_marketplace_no_results: "No servers found, try a different keyword",
   },
 } as const;
 

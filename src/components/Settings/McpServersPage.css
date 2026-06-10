@@ -2,6 +2,7 @@
   display: flex;
   flex-direction: column;
   gap: 24px;
+  padding: 24px 32px;
 }
 
 .mcp-global-toggle {
@@ -141,4 +142,29 @@
 .mcp-tab-btn.active {
   color: #34d399;
   border-bottom-color: #34d399;
+}
+
+/* Marketplace tab */
+.mcp-marketplace-search {
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 4px;
+  box-sizing: border-box;
+  color: #ccc;
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+  padding: 7px 10px;
+  width: 100%;
+}
+
+.mcp-marketplace-search:focus {
+  border-color: #34d399;
+}
+
+.mcp-marketplace-empty {
+  color: #555;
+  font-size: 12px;
+  padding: 12px 0;
+  text-align: center;
 }

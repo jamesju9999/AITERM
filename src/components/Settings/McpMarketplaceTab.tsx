@@ -218,16 +218,7 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder={t.mcp_marketplace_search_placeholder}
-        style={{
-          background: "#1a1a1a",
-          border: "1px solid #333",
-          borderRadius: 4,
-          color: "#ccc",
-          fontSize: 13,
-          padding: "6px 10px",
-          width: "100%",
-          boxSizing: "border-box",
-        }}
+        className="mcp-marketplace-search"
       />
 
       {networkError && (
@@ -241,6 +232,10 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
 
       {isSearching && (
         <div style={{ color: "#555", fontSize: 12 }}>...</div>
+      )}
+
+      {!isSearching && query.trim() && results.length === 0 && !networkError && (
+        <div className="mcp-marketplace-empty">{t.mcp_marketplace_no_results}</div>
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
