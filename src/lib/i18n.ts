@@ -320,6 +320,9 @@ export const translations = {
     mcp_marketplace_no_results: "找不到相關 server，請嘗試其他關鍵字",
     mcp_marketplace_needs_config: "此 server 需要 API Key，請手動新增並填入 URL",
     mcp_marketplace_needs_config_btn: "需要設定",
+    mcp_marketplace_config_title: "請填入必要的設定參數",
+    mcp_marketplace_config_confirm: "確認新增",
+    mcp_marketplace_config_no_schema: "無法取得參數定義，請手動在已安裝清單中編輯",
   },
   "en": {
     // Settings sidebar
@@ -638,6 +641,9 @@ export const translations = {
     mcp_marketplace_no_results: "No servers found, try a different keyword",
     mcp_marketplace_needs_config: "This server requires an API Key — add manually with the key in the URL",
     mcp_marketplace_needs_config_btn: "Needs Setup",
+    mcp_marketplace_config_title: "Fill in required configuration",
+    mcp_marketplace_config_confirm: "Add Server",
+    mcp_marketplace_config_no_schema: "No parameter schema available — edit manually after adding",
   },
 } as const;
 
