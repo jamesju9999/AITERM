@@ -15,7 +15,8 @@ use tokio::sync::mpsc;
 
 use crate::ai::{
     sse::{find_line_end, map_http_error, separator_len},
-    AiError, AiProvider, ChatMessage, GenerateChunk, GenerateRequest, TokenUsage,
+    AiError, AiProvider, AiToolCall, ChatMessage, GenerateChunk, GenerateRequest,
+    GenerateWithToolsResult, McpToolDefinition, TokenUsage,
 };
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -71,6 +72,80 @@ impl AiProvider for AnthropicClient {
             return Err(map_http_error(status, resp).await);
         }
         consume_anthropic_sse(resp, tx).await
+    }
+
+    async fn generate_with_tools(
+        &self,
+        req: GenerateRequest,
+        tools: Vec<McpToolDefinition>,
+        tx: mpsc::Sender<GenerateChunk>,
+    ) -> Result<GenerateWithToolsResult, AiError> {
+        let tool_defs: serde_json::Value = serde_json::Value::Array(
+            tools.iter().map(|t| serde_json::json!({
+                "name": t.name,
+                "description": t.description,
+                "input_schema": t.input_schema
+            })).collect()
+        );
+
+        let messages: Vec<serde_json::Value> = req.messages.iter().map(|m| {
+            serde_json::json!({ "role": m.role, "content": m.content })
+        }).collect();
+
+        let body = serde_json::json!({
+            "model": self.model,
+            "max_tokens": 4096,
+            "system": req.system_prompt,
+            "messages": messages,
+            "tools": tool_defs
+        });
+
+        let resp = self.client.post(self.messages_url())
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AiError::Network { message: e.to_string() })?;
+
+        let status = resp.status();
+        if status == 401 { return Err(AiError::AuthFailed); }
+        if status == 429 { return Err(AiError::RateLimit { retry_after: None }); }
+        if status.as_u16() == 529 {
+            return Err(AiError::Network { message: "Anthropic API is overloaded".into() });
+        }
+        if !status.is_success() {
+            return Err(AiError::Network { message: format!("HTTP {status}") });
+        }
+
+        let json: serde_json::Value = resp.json().await
+            .map_err(|e| AiError::Network { message: e.to_string() })?;
+
+        let stop_reason = json["stop_reason"].as_str().unwrap_or("");
+
+        if stop_reason == "tool_use" {
+            let content_blocks = json["content"].as_array()
+                .ok_or_else(|| AiError::ModelError {
+                    reason: "missing content".into(),
+                    raw: json.to_string(),
+                })?;
+
+            let calls: Vec<AiToolCall> = content_blocks.iter()
+                .filter(|b| b["type"].as_str() == Some("tool_use"))
+                .map(|b| AiToolCall {
+                    id: b["id"].as_str().unwrap_or("").to_string(),
+                    tool_name: b["name"].as_str().unwrap_or("").to_string(),
+                    args: b["input"].clone(),
+                })
+                .collect();
+
+            return Ok(GenerateWithToolsResult::ToolCalls(calls));
+        }
+
+        let content = json["content"][0]["text"].as_str().unwrap_or("").to_string();
+        let _ = tx.send(GenerateChunk { delta: content.clone(), done: true, usage: None }).await;
+        Ok(GenerateWithToolsResult::Text(content))
     }
 
     async fn health_check(&self) -> Result<(), AiError> {

@@ -43,6 +43,9 @@ pub enum AiError {
 
     #[error("invalid input: {reason}")]
     InvalidInput { reason: String },
+
+    #[error("Provider does not support tool calling")]
+    ToolCallingUnsupported,
 }
 
 /// Environment snapshot sent to the AI as context.
@@ -73,7 +76,7 @@ pub struct ChatMessage {
     pub content: serde_json::Value,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GenerateRequest {
     pub system_prompt: String,
     pub messages: Vec<ChatMessage>,
@@ -111,6 +114,35 @@ pub struct AiSingleCommand {
 
 fn default_risk_level() -> RiskLevel { RiskLevel::NeedsConfirm }
 
+/// Definition of an MCP tool sent to the AI provider.
+#[derive(Debug, Clone)]
+pub struct McpToolDefinition {
+    /// Encoded tool name: "server_id_sanitized__tool_name"
+    pub name: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+}
+
+/// A tool call requested by the AI.
+#[derive(Debug, Clone, Serialize)]
+pub struct AiToolCall {
+    /// Provider's opaque tool call ID (needed when sending tool results back).
+    pub id: String,
+    /// Encoded tool name (contains server_id + tool_name).
+    pub tool_name: String,
+    pub args: serde_json::Value,
+}
+
+/// Result of `generate_with_tools`.
+pub enum GenerateWithToolsResult {
+    /// AI returned tool calls (no text in this response).
+    ToolCalls(Vec<AiToolCall>),
+    /// AI returned text (full response text).
+    Text(String),
+    /// This provider does not support tool calling.
+    Unsupported,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RiskLevel {
@@ -139,6 +171,18 @@ pub trait AiProvider: Send + Sync {
     /// Validate connectivity and credentials without generating a full response.
     /// Used by the Settings UI "Test Connection" button.
     async fn health_check(&self) -> Result<(), AiError>;
+
+    /// Generate with tool definitions. Providers that support tool calling
+    /// override this. Default impl returns `Unsupported`.
+    async fn generate_with_tools(
+        &self,
+        req: GenerateRequest,
+        tools: Vec<McpToolDefinition>,
+        tx: mpsc::Sender<GenerateChunk>,
+    ) -> Result<GenerateWithToolsResult, AiError> {
+        let _ = (req, tools, tx);
+        Ok(GenerateWithToolsResult::Unsupported)
+    }
 }
 
 #[cfg(test)]
