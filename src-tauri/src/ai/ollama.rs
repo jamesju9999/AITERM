@@ -118,6 +118,88 @@ impl AiProvider for OllamaClient {
             })
         }
     }
+
+    async fn generate_with_tools(
+        &self,
+        req: GenerateRequest,
+        tools: Vec<crate::ai::McpToolDefinition>,
+        _tx: mpsc::Sender<GenerateChunk>,
+    ) -> Result<crate::ai::GenerateWithToolsResult, AiError> {
+        use crate::ai::GenerateWithToolsResult;
+
+        let ollama_tools: Vec<OllamaTool> = tools
+            .iter()
+            .map(|t| OllamaTool {
+                kind: "function".into(),
+                function: OllamaToolFunction {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    parameters: t.input_schema.clone(),
+                },
+            })
+            .collect();
+
+        let mut messages: Vec<OllamaMessage> = Vec::new();
+        messages.push(OllamaMessage {
+            role: "system".into(),
+            content: serde_json::Value::String(req.system_prompt.clone()),
+        });
+        for m in &req.messages {
+            messages.push(OllamaMessage {
+                role: m.role.clone(),
+                content: m.content.clone(),
+            });
+        }
+
+        let body = OllamaToolRequest {
+            model: self.model.clone(),
+            messages,
+            stream: false,
+            tools: ollama_tools,
+        };
+
+        let resp = self
+            .client
+            .post(self.chat_url())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| connection_error(&e))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(AiError::Network {
+                message: format!(
+                    "Ollama http {}: {}",
+                    status.as_u16(),
+                    &body_text[..body_text.len().min(200)]
+                ),
+            });
+        }
+
+        let data: OllamaToolResponse = resp
+            .json()
+            .await
+            .map_err(|e| AiError::Network { message: e.to_string() })?;
+
+        if !data.message.tool_calls.is_empty() {
+            let calls = data
+                .message
+                .tool_calls
+                .into_iter()
+                .enumerate()
+                .map(|(i, tc)| crate::ai::AiToolCall {
+                    id: format!("call_{}", i),
+                    tool_name: tc.function.name,
+                    args: tc.function.arguments,
+                })
+                .collect();
+            Ok(GenerateWithToolsResult::ToolCalls(calls))
+        } else {
+            Ok(GenerateWithToolsResult::Text(data.message.content))
+        }
+    }
 }
 
 /// Convert a connection-refused / DNS error into a user-friendly message.
@@ -127,6 +209,54 @@ fn connection_error(e: &reqwest::Error) -> AiError {
     } else {
         AiError::Network { message: e.to_string() }
     }
+}
+
+// ── Tool calling types ─────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct OllamaToolRequest {
+    model: String,
+    messages: Vec<OllamaMessage>,
+    stream: bool,
+    tools: Vec<OllamaTool>,
+}
+
+#[derive(Serialize)]
+struct OllamaTool {
+    #[serde(rename = "type")]
+    kind: String,
+    function: OllamaToolFunction,
+}
+
+#[derive(Serialize)]
+struct OllamaToolFunction {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct OllamaToolResponse {
+    message: OllamaToolResponseMessage,
+}
+
+#[derive(Deserialize)]
+struct OllamaToolResponseMessage {
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    tool_calls: Vec<OllamaResponseToolCall>,
+}
+
+#[derive(Deserialize)]
+struct OllamaResponseToolCall {
+    function: OllamaResponseFunction,
+}
+
+#[derive(Deserialize)]
+struct OllamaResponseFunction {
+    name: String,
+    arguments: serde_json::Value,
 }
 
 // ── Request types ─────────────────────────────────────────────────────────────

@@ -129,3 +129,71 @@ async fn health_check_fails_when_tags_returns_error() {
     let err = client.health_check().await.unwrap_err();
     assert!(matches!(err, AiError::Network { .. }), "expected Network, got {err:?}");
 }
+
+#[tokio::test]
+async fn generate_with_tools_returns_tool_calls() {
+    let server = MockServer::start().await;
+
+    let body = r#"{"model":"qwen2.5","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"brave__search","arguments":{"query":"WWDC 2026"}}}]},"done":true}"#;
+
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_string(body),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = OllamaClient::with_base_url("qwen2.5".into(), server.uri());
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(4);
+    let tools = vec![aiterm_lib::ai::McpToolDefinition {
+        name: "brave__search".into(),
+        description: "Search the web".into(),
+        input_schema: serde_json::json!({ "type": "object", "properties": { "query": { "type": "string" } } }),
+    }];
+
+    let result = client.generate_with_tools(req("search WWDC"), tools, tx).await.unwrap();
+    match result {
+        aiterm_lib::ai::GenerateWithToolsResult::ToolCalls(calls) => {
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].tool_name, "brave__search");
+            assert_eq!(calls[0].args["query"], "WWDC 2026");
+        }
+        _ => panic!("expected ToolCalls, got something else"),
+    }
+}
+
+#[tokio::test]
+async fn generate_with_tools_returns_text_when_no_tool_calls() {
+    let server = MockServer::start().await;
+
+    let body = r#"{"model":"qwen2.5","message":{"role":"assistant","content":"Hello there"},"done":true}"#;
+
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_string(body),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = OllamaClient::with_base_url("qwen2.5".into(), server.uri());
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(4);
+    let tools = vec![aiterm_lib::ai::McpToolDefinition {
+        name: "dummy".into(),
+        description: "dummy".into(),
+        input_schema: serde_json::json!({}),
+    }];
+
+    let result = client.generate_with_tools(req("hello"), tools, tx).await.unwrap();
+    match result {
+        aiterm_lib::ai::GenerateWithToolsResult::Text(t) => assert_eq!(t, "Hello there"),
+        _ => panic!("expected Text, got something else"),
+    }
+}
