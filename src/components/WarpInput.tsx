@@ -244,6 +244,9 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
         placeholder={t.input_placeholder(shortcut === "enter" ? "Enter" : shortcut === "shift-enter" ? "Shift+Enter" : "Ctrl+Enter")}
         rows={1}
         disabled={disabled}
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
       />
     </div>
   );
