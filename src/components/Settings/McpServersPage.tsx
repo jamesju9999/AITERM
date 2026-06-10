@@ -79,16 +79,20 @@ export function McpServersPage() {
       <h2>{t.mcp_servers}</h2>
       <p className="section-desc">{t.mcp_servers_desc}</p>
 
-      <div className="mcp-tab-row">
+      <div className="mcp-tab-row" role="tablist">
         <button
           className={`mcp-tab-btn${activeTab === "installed" ? " active" : ""}`}
           onClick={() => setActiveTab("installed")}
+          role="tab"
+          aria-selected={activeTab === "installed"}
         >
           {t.mcp_marketplace_installed}
         </button>
         <button
           className={`mcp-tab-btn${activeTab === "marketplace" ? " active" : ""}`}
           onClick={() => setActiveTab("marketplace")}
+          role="tab"
+          aria-selected={activeTab === "marketplace"}
         >
           🌐 {t.mcp_marketplace}
         </button>
