@@ -1,4 +1,4 @@
-//! DB2 adapter — delegates all DB2 operations to the .NET db2-sidecar process.
+//! DB2 adapter — delegates all DB2 operations to the Java db2-sidecar process.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -15,8 +15,8 @@ pub struct Db2Adapter {
 impl Db2Adapter {
     /// Establish a DB2 connection via the sidecar.
     ///
-    /// `conn_string` should be an IBM.Data.Db2.Core connection string, e.g.:
-    /// `"DATABASE=mydb;HOSTNAME=myhost;PORT=50000;PROTOCOL=TCPIP;"`
+    /// `conn_string` must be a JDBC URL, e.g.:
+    /// `"jdbc:db2://myhost:50000/mydb"`
     pub async fn connect(
         client: Arc<Db2SidecarClient>,
         conn_string: String,

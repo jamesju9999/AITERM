@@ -133,7 +133,7 @@ async fn build_adapter(
         )),
         DbType::Db2 => {
             let cs = format!(
-                "Server={}:{};Database={};",
+                "jdbc:db2://{}:{}/{}",
                 conn.host, conn.port, conn.database
             );
             let username = conn.username.clone();
