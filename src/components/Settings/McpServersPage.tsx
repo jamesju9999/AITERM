@@ -199,7 +199,7 @@ export function McpServersPage() {
       </>)}
       {activeTab === "marketplace" && (
         <McpMarketplaceTab
-          onInstalled={() => setActiveTab("installed")}
+          onInstalled={() => { void reload(); setActiveTab("installed"); }}
         />
       )}
     </div>

@@ -155,7 +155,14 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
       } else {
         unlisten();
         if (payload.success) {
-          setServerState(qualifiedName, { status: "success" });
+          setInstallStates((prev) => ({
+            ...prev,
+            [qualifiedName]: {
+              ...(prev[qualifiedName] ?? { status: "running", logs: [] }),
+              status: "success",
+              logs: [...(prev[qualifiedName]?.logs ?? []), { text: t.mcp_marketplace_done_msg, isError: false }],
+            },
+          }));
           addMcpServer({
             name: detail.displayName || qualifiedName,
             enabled: true,
