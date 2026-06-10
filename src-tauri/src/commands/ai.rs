@@ -284,7 +284,9 @@ pub async fn ai_query(
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AiChatReply {
-    pub content: String,
+    pub content: Option<String>,
+    pub tool_calls: Vec<crate::ai::AiToolCall>,
+    pub tool_calling_unsupported: bool,
 }
 
 #[tauri::command]
@@ -292,9 +294,12 @@ pub async fn ai_chat(
     messages: Vec<ChatMessage>,
     session_id: String,
     provider_id: Option<String>,
+    use_mcp: bool,
     app: AppHandle,
     pty_manager: State<'_, PtyManager>,
     router: State<'_, AiRouter>,
+    mcp_manager: State<'_, std::sync::Arc<tokio::sync::Mutex<crate::mcp::McpManager>>>,
+    config: State<'_, std::sync::Arc<crate::config::ConfigStore>>,
 ) -> Result<AiChatReply, AiError> {
     // Reject empty history or histories whose last message isn't from the user.
     // This is a cheap sanity check — the real contract is enforced at the UI.
@@ -320,6 +325,52 @@ pub async fn ai_chat(
         max_tokens: None,
     };
 
+    // ── MCP tool calling path ─────────────────────────────────────────────────
+    let cfg = config.get();
+    if use_mcp && cfg.mcp_enabled {
+        let tools: Vec<crate::ai::McpToolDefinition> = {
+            let manager = mcp_manager.lock().await;
+            manager.list_tool_infos().into_iter().map(|t| crate::ai::McpToolDefinition {
+                name: t.name,
+                description: t.description,
+                input_schema: t.input_schema,
+            }).collect()
+        };
+
+        if !tools.is_empty() {
+            let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
+            let provider_clone = provider.clone();
+            let req_clone = req.clone();
+            let join = tokio::spawn(async move {
+                provider_clone.generate_with_tools(req_clone, tools, tx).await
+            });
+
+            while let Some(chunk) = rx.recv().await {
+                let _ = app.emit("ai-stream", AiStreamEvent {
+                    session_id: session_id.clone(),
+                    kind: AiStreamKind::Chat,
+                    delta: chunk.delta.clone(),
+                    done: chunk.done,
+                });
+                if chunk.done { break; }
+            }
+
+            return match join.await {
+                Ok(Ok(crate::ai::GenerateWithToolsResult::ToolCalls(calls))) =>
+                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false }),
+                Ok(Ok(crate::ai::GenerateWithToolsResult::Text(content))) =>
+                    Ok(AiChatReply { content: Some(content), tool_calls: vec![], tool_calling_unsupported: false }),
+                Ok(Ok(crate::ai::GenerateWithToolsResult::Unsupported)) =>
+                    Ok(AiChatReply { content: None, tool_calls: vec![], tool_calling_unsupported: true }),
+                Ok(Err(AiError::ToolCallingUnsupported)) =>
+                    Ok(AiChatReply { content: None, tool_calls: vec![], tool_calling_unsupported: true }),
+                Ok(Err(e)) => Err(e),
+                Err(e) => Err(AiError::Network { message: e.to_string() }),
+            };
+        }
+    }
+    // ── End MCP path — fall through to normal streaming path ─────────────────
+
     let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
     let provider_for_spawn = provider.clone();
     let join = tokio::spawn(async move { provider_for_spawn.generate(req, tx).await });
@@ -342,14 +393,42 @@ pub async fn ai_chat(
         Err(join_err) => return Err(AiError::Network { message: join_err.to_string() }),
     }
 
-    Ok(AiChatReply { content: buf })
+    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::EnvSnapshot;
+    use crate::ai::{AiToolCall, EnvSnapshot};
     use std::path::PathBuf;
+
+    #[test]
+    fn ai_chat_reply_serializes_tool_calls() {
+        let reply = AiChatReply {
+            content: None,
+            tool_calls: vec![AiToolCall {
+                id: "call_abc".into(),
+                tool_name: "fs__read_file".into(),
+                args: serde_json::json!({"path": "/tmp/test.txt"}),
+            }],
+            tool_calling_unsupported: false,
+        };
+        let j = serde_json::to_value(&reply).unwrap();
+        assert!(j["content"].is_null());
+        assert_eq!(j["tool_calls"][0]["tool_name"], "fs__read_file");
+    }
+
+    #[test]
+    fn ai_chat_reply_serializes_text_content() {
+        let reply = AiChatReply {
+            content: Some("hello world".into()),
+            tool_calls: vec![],
+            tool_calling_unsupported: false,
+        };
+        let j = serde_json::to_value(&reply).unwrap();
+        assert_eq!(j["content"], "hello world");
+        assert!(j["tool_calls"].as_array().unwrap().is_empty());
+    }
 
     fn make_snap(os: &str, shell: &str, cwd: &str) -> EnvSnapshot {
         EnvSnapshot {

@@ -1,0 +1,116 @@
+.mcp-servers-page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.mcp-global-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: #1a1a1a;
+  border-radius: 8px;
+  border: 1px solid #2a2a2a;
+}
+
+.mcp-global-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.mcp-server-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-server-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+}
+
+.mcp-server-name {
+  flex: 1;
+  font-weight: 500;
+  color: #e0e0e0;
+  font-size: 13px;
+}
+
+.mcp-server-meta {
+  font-size: 11px;
+  color: #888;
+}
+
+.mcp-status-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.mcp-status-badge.connected { background: #0f2e23; color: #34d399; }
+.mcp-status-badge.connecting { background: #1a1a2e; color: #6b8dd6; }
+.mcp-status-badge.error { background: #2e0f0f; color: #f87171; }
+.mcp-status-badge.disabled { background: #222; color: #666; }
+
+.mcp-row-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.mcp-btn-sm {
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid #333;
+  background: transparent;
+  color: #ccc;
+  cursor: pointer;
+}
+.mcp-btn-sm:hover { background: rgba(255,255,255,0.06); color: #fff; }
+.mcp-btn-sm.danger:hover { background: #2e0f0f; color: #f87171; border-color: #7f1d1d; }
+
+.mcp-import-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.mcp-import-box {
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 24px;
+  width: 480px;
+  max-width: 90vw;
+  max-height: 70vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.mcp-import-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 4px;
+}
+.mcp-import-item:hover { background: rgba(255,255,255,0.04); }
+
+.mcp-toolbar {
+  display: flex;
+  gap: 8px;
+}

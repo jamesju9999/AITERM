@@ -1,0 +1,193 @@
+// src/hooks/useMcpChat.ts
+import { useState, useCallback, useRef, useEffect } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { aiChat, type AiToolCall } from "../ipc/ai";
+import { executeMcpTool } from "../ipc/mcp";
+import type { ChatMessage } from "../ipc/ai";
+
+const MAX_TOOL_ITERATIONS = 10;
+
+export interface McpChatMessage {
+  role: "user" | "assistant" | "tool_call" | "tool_result";
+  content: string;
+  tool_name?: string;
+  tool_call_id?: string;
+  is_error?: boolean;
+  is_loading?: boolean;
+}
+
+export function useMcpChat(sessionId: string) {
+  const [messages, setMessages] = useState<McpChatMessage[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [streamBuf, setStreamBuf] = useState("");
+  const [toolCallingUnsupported, setToolCallingUnsupported] = useState(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  // Listen for streaming deltas from ai-stream events
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<{ session_id: string; kind: string; delta: string; done: boolean }>(
+      "ai-stream",
+      (event) => {
+        if (event.payload.session_id !== sessionId) return;
+        if (!mountedRef.current) return;
+        if (event.payload.done) {
+          setStreamBuf("");
+        } else {
+          setStreamBuf(prev => prev + event.payload.delta);
+        }
+      }
+    ).then(u => { unlisten = u; });
+    return () => { unlisten?.(); };
+  }, [sessionId]);
+
+  const sendMessage = useCallback(async (
+    text: string,
+    useMcp: boolean,
+  ) => {
+    if (!text.trim()) return;
+
+    // Add user message to display
+    setMessages(prev => [...prev, { role: "user", content: text }]);
+    setIsLoading(true);
+    setToolCallingUnsupported(false);
+
+    // Build the message history for the AI (only user/assistant roles)
+    const history: ChatMessage[] = [
+      ...messages
+        .filter(m => m.role === "user" || m.role === "assistant")
+        .map(m => ({ role: m.role as "user" | "assistant", content: m.content })),
+      { role: "user", content: text },
+    ];
+
+    try {
+      let iterHistory = [...history];
+      let iterations = 0;
+
+      while (iterations < MAX_TOOL_ITERATIONS) {
+        iterations++;
+        const reply = await aiChat(iterHistory, sessionId, undefined, useMcp);
+
+        if (!mountedRef.current) break;
+
+        // Handle unsupported tool calling
+        if (reply.tool_calling_unsupported) {
+          setToolCallingUnsupported(true);
+          // Fall back: call again without mcp
+          const fallback = await aiChat(iterHistory, sessionId, undefined, false);
+          if (mountedRef.current) {
+            setMessages(prev => [...prev, {
+              role: "assistant",
+              content: fallback.content ?? "",
+            }]);
+          }
+          break;
+        }
+
+        // Handle tool calls
+        if (reply.tool_calls.length > 0) {
+          // Show tool calls in UI
+          for (const tc of reply.tool_calls) {
+            if (!mountedRef.current) break;
+            setMessages(prev => [...prev, {
+              role: "tool_call",
+              content: JSON.stringify(tc.args, null, 2),
+              tool_name: tc.tool_name,
+              tool_call_id: tc.id,
+              is_loading: true,
+            }]);
+          }
+
+          // Execute each tool call
+          const toolResults: ChatMessage[] = [];
+          for (const tc of reply.tool_calls) {
+            let resultContent: string;
+            let isError = false;
+            try {
+              const result = await executeMcpTool(tc.tool_name, tc.args);
+              resultContent = result.content;
+              isError = result.is_error;
+            } catch (e) {
+              resultContent = `Error: ${e}`;
+              isError = true;
+            }
+
+            if (!mountedRef.current) break;
+
+            // Update UI to show result
+            setMessages(prev => prev.map(m =>
+              m.tool_call_id === tc.id
+                ? { ...m, is_loading: false, is_error: isError }
+                : m
+            ));
+            setMessages(prev => [...prev, {
+              role: "tool_result",
+              content: resultContent,
+              tool_name: tc.tool_name,
+              tool_call_id: tc.id,
+              is_error: isError,
+            }]);
+
+            // Add tool result to AI message history
+            toolResults.push({
+              role: "tool",
+              content: resultContent,
+            } as unknown as ChatMessage);
+          }
+
+          // Add assistant's tool_calls message and tool results to history
+          iterHistory = [
+            ...iterHistory,
+            {
+              role: "assistant",
+              content: encodeToolCalls(reply.tool_calls),
+            } as unknown as ChatMessage,
+            ...toolResults,
+          ];
+          continue; // Loop to get next AI response
+        }
+
+        // Normal text response — done
+        setMessages(prev => [...prev, {
+          role: "assistant",
+          content: reply.content ?? streamBuf,
+        }]);
+        break;
+      }
+
+      if (iterations >= MAX_TOOL_ITERATIONS && mountedRef.current) {
+        setMessages(prev => [...prev, {
+          role: "assistant",
+          content: "⚠️ 已達工具呼叫上限（10 次），請重新提問。",
+        }]);
+      }
+    } finally {
+      if (mountedRef.current) {
+        setIsLoading(false);
+        setStreamBuf("");
+      }
+    }
+  }, [messages, sessionId, streamBuf]);
+
+  const clearMessages = useCallback(() => {
+    setMessages([]);
+    setToolCallingUnsupported(false);
+  }, []);
+
+  return { messages, isLoading, streamBuf, sendMessage, clearMessages, toolCallingUnsupported };
+}
+
+// Encode tool_calls for the AI message history (OpenAI format).
+// A future enhancement can add proper per-provider formatting.
+function encodeToolCalls(tool_calls: AiToolCall[]): string {
+  return JSON.stringify(tool_calls.map(tc => ({
+    id: tc.id,
+    type: "function",
+    function: { name: tc.tool_name, arguments: JSON.stringify(tc.args) },
+  })));
+}

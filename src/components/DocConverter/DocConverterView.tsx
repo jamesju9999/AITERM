@@ -144,13 +144,12 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
       setNormalizeProgress({ step: i + 1, total: totalChunks });
       const chunk = text.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
       try {
-        const result = await aiChat(
-          chunk,
-          NORMALIZATION_SYSTEM_PROMPT,
-          [],
+        const aiResult = await aiChat(
+          [{ role: "system" as const, content: NORMALIZATION_SYSTEM_PROMPT }, { role: "user" as const, content: chunk }],
+          "docconverter",
           selectedProviderId || undefined,
         );
-        parts.push(result.trim());
+        parts.push((aiResult.content ?? "").trim());
       } catch (e) {
         const aiErr = typeof e === "object" && e !== null && "kind" in e
           ? formatAiError(e as import("../../ipc/ai").AiError)

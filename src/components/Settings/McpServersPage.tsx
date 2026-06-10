@@ -1,0 +1,179 @@
+// src/components/Settings/McpServersPage.tsx
+import { useState, useEffect } from "react";
+import { useLocale } from "../../contexts/LocaleContext";
+import {
+  listMcpServers, removeMcpServer, importClaudeDesktopMcp,
+  addMcpServer, setMcpEnabled,
+  type McpServerInfo, type McpServerInput,
+} from "../../ipc/mcp";
+import { getConfig } from "../../ipc/config";
+import { McpServerForm } from "./McpServerForm";
+import "./McpServersPage.css";
+
+export function McpServersPage() {
+  const { t } = useLocale();
+  const [servers, setServers] = useState<McpServerInfo[]>([]);
+  const [mcpEnabled, setMcpEnabledState] = useState(true);
+  const [editingServer, setEditingServer] = useState<McpServerInfo | null | "new">(null);
+  const [importList, setImportList] = useState<McpServerInput[] | null>(null);
+  const [importSelected, setImportSelected] = useState<Set<string>>(new Set());
+  const [importError, setImportError] = useState<string | null>(null);
+
+  const reload = async () => {
+    const [svrs, cfg] = await Promise.all([listMcpServers(), getConfig()]);
+    setServers(svrs);
+    setMcpEnabledState(cfg.mcp_enabled ?? true);
+  };
+
+  useEffect(() => { reload(); }, []);
+
+  const handleDelete = async (id: string) => {
+    if (!confirm(t.mcp_confirm_delete)) return;
+    await removeMcpServer(id);
+    await reload();
+  };
+
+  const handleToggleGlobal = async (enabled: boolean) => {
+    setMcpEnabledState(enabled);
+    await setMcpEnabled(enabled);
+  };
+
+  const handleImportClick = async () => {
+    setImportError(null);
+    try {
+      const list = await importClaudeDesktopMcp();
+      if (list.length === 0) {
+        setImportError(t.mcp_import_none_found);
+        return;
+      }
+      setImportList(list);
+      setImportSelected(new Set(list.map(s => s.id ?? s.name)));
+    } catch {
+      setImportError(t.mcp_import_none_found);
+    }
+  };
+
+  const handleImportConfirm = async () => {
+    if (!importList) return;
+    const toImport = importList.filter(s => importSelected.has(s.id ?? s.name));
+    for (const server of toImport) {
+      try { await addMcpServer(server); } catch { /* skip duplicates */ }
+    }
+    setImportList(null);
+    await reload();
+  };
+
+  const statusLabel = (s: McpServerInfo) => {
+    switch (s.status) {
+      case "connected": return t.mcp_status_connected(s.tool_count);
+      case "connecting": return t.mcp_status_connecting;
+      case "error": return t.mcp_status_error;
+      case "disabled": return t.mcp_status_disabled;
+    }
+  };
+
+  return (
+    <div className="mcp-servers-page">
+      <h2>{t.mcp_servers}</h2>
+      <p className="section-desc">{t.mcp_servers_desc}</p>
+
+      {/* Global toggle */}
+      <div className="mcp-global-toggle">
+        <input
+          type="checkbox"
+          id="mcp-enabled"
+          checked={mcpEnabled}
+          onChange={e => handleToggleGlobal(e.target.checked)}
+        />
+        <div>
+          <label htmlFor="mcp-enabled" style={{ fontWeight: 500, cursor: "pointer" }}>
+            {t.mcp_enabled_label}
+          </label>
+          <p className="section-desc" style={{ margin: "2px 0 0" }}>{t.mcp_enabled_desc}</p>
+        </div>
+      </div>
+
+      {/* Toolbar */}
+      <div className="mcp-toolbar">
+        <button className="add-btn" onClick={() => setEditingServer("new")}>
+          {t.mcp_add_server}
+        </button>
+        <button className="mcp-btn-sm" onClick={handleImportClick}>
+          {t.mcp_import_claude}
+        </button>
+      </div>
+      {importError && <p style={{ color: "#f87171", fontSize: 13 }}>{importError}</p>}
+
+      {/* Server list */}
+      <div className="mcp-server-list">
+        {servers.length === 0 && (
+          <p className="section-desc">{t.mcp_no_servers}</p>
+        )}
+        {servers.map(s => (
+          <div key={s.id} className="mcp-server-row">
+            <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 2 }}>
+              <span className="mcp-server-name">{s.name}</span>
+              <span className="mcp-server-meta">
+                {s.transport === "stdio" ? s.command : s.url}
+              </span>
+            </div>
+            <span className={`mcp-status-badge ${s.status}`}>{statusLabel(s)}</span>
+            <div className="mcp-row-actions">
+              <button className="mcp-btn-sm" onClick={() => setEditingServer(s)}>
+                {t.edit}
+              </button>
+              <button className="mcp-btn-sm danger" onClick={() => handleDelete(s.id)}>
+                {t.delete}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Add/Edit form */}
+      {editingServer !== null && (
+        <McpServerForm
+          existing={editingServer === "new" ? null : editingServer}
+          onSave={async () => { setEditingServer(null); await reload(); }}
+          onCancel={() => setEditingServer(null)}
+        />
+      )}
+
+      {/* Import modal */}
+      {importList !== null && (
+        <div className="mcp-import-modal" onClick={() => setImportList(null)}>
+          <div className="mcp-import-box" onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: 0 }}>{t.mcp_import_title}</h3>
+            <p className="section-desc">{t.mcp_import_desc}</p>
+            {importList.map(s => {
+              const key = s.id ?? s.name;
+              return (
+                <div key={key} className="mcp-import-item">
+                  <input
+                    type="checkbox"
+                    checked={importSelected.has(key)}
+                    onChange={e => {
+                      const next = new Set(importSelected);
+                      if (e.target.checked) next.add(key); else next.delete(key);
+                      setImportSelected(next);
+                    }}
+                  />
+                  <div>
+                    <div style={{ fontWeight: 500, fontSize: 13 }}>{s.name}</div>
+                    <div style={{ fontSize: 11, color: "#888" }}>{s.command} {s.args.join(" ")}</div>
+                  </div>
+                </div>
+              );
+            })}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button className="mcp-btn-sm" onClick={() => setImportList(null)}>{t.cancel}</button>
+              <button className="add-btn" onClick={handleImportConfirm}>
+                {t.mcp_import_confirm}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

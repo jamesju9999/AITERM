@@ -53,7 +53,8 @@ export interface UseAiChatResult {
   streamBuf: string;
   isStreaming: boolean;
   error: AiError | null;
-  send: (userText: string) => Promise<void>;
+  toolCallingUnsupported: boolean;
+  send: (userText: string, useMcp?: boolean) => Promise<void>;
   resend: () => Promise<void>;
   clear: () => void;
   /** Inject a message directly into the chat history without calling the AI. */
@@ -75,6 +76,7 @@ export function useAiChat(sessionId: string): UseAiChatResult {
   const [streamBuf, setStreamBuf] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<AiError | null>(null);
+  const [toolCallingUnsupported, setToolCallingUnsupported] = useState(false);
   const [sessions, setSessions] = useState<AiChatSession[]>(loadAllSessions);
 
   // Track current session id for auto-save
@@ -122,14 +124,16 @@ export function useAiChat(sessionId: string): UseAiChatResult {
   }, [sessionId]);
 
   const invokeChat = useCallback(
-    async (msgs: ChatMessage[]) => {
+    async (msgs: ChatMessage[], useMcp = false) => {
       setStreamBuf("");
       setIsStreaming(true);
       setError(null);
+      setToolCallingUnsupported(false);
       try {
-        const reply: AiChatReply = await invokeAiChat(msgs, sessionId);
+        const reply: AiChatReply = await invokeAiChat(msgs, sessionId, undefined, useMcp);
         if (!mountedRef.current) return;
-        setMessages([...msgs, { role: "assistant", content: reply.content }]);
+        setMessages([...msgs, { role: "assistant", content: reply.content ?? "" }]);
+        setToolCallingUnsupported(reply.tool_calling_unsupported ?? false);
       } catch (e) {
         if (!mountedRef.current) return;
         setError(normalizeAiError(e));
@@ -145,12 +149,12 @@ export function useAiChat(sessionId: string): UseAiChatResult {
   );
 
   const send = useCallback(
-    async (userText: string) => {
+    async (userText: string, useMcp = false) => {
       if (isStreaming) return; // UI should disable input anyway
       const userMsg: ChatMessage = { role: "user", content: userText };
       const next = truncateHistory([...messages, userMsg], HISTORY_LIMIT);
       setMessages(next);
-      await invokeChat(next);
+      await invokeChat(next, useMcp);
     },
     [messages, isStreaming, invokeChat],
   );
@@ -210,7 +214,7 @@ export function useAiChat(sessionId: string): UseAiChatResult {
     }
   }, []);
 
-  return { messages, streamBuf, isStreaming, error, send, resend, clear, addMessage, loadMessages, sessions, deleteSession };
+  return { messages, streamBuf, isStreaming, error, toolCallingUnsupported, send, resend, clear, addMessage, loadMessages, sessions, deleteSession };
 }
 
 /** Coerce an unknown Tauri error into an AiError. Mirrors TerminalView logic. */

@@ -16,6 +16,7 @@ const listenMock = vi.fn().mockResolvedValue(() => {});
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (cmd: string) => {
     if (cmd === "get_config") return Promise.resolve(DEFAULT_CONFIG);
+    if (cmd === "get_mcp_tools") return Promise.resolve([]);
     if (cmd === "ai_chat") {
       const next = aiChatQueue.shift();
       if (next) return Promise.resolve(next);
@@ -26,6 +27,17 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: (...args: unknown[]) => listenMock(...args),
+}));
+vi.mock("../../contexts/LocaleContext", () => ({
+  useLocale: () => ({
+    locale: "zh-TW",
+    t: {
+      mcp_toggle_on: (n: number) => `⚙ MCP (${n})`,
+      mcp_toggle_off: "⚙ MCP",
+      mcp_toggle_no_servers: "請先在設定中新增 MCP Server",
+    },
+    setLocale: () => {},
+  }),
 }));
 
 import { AiPanel } from "./index";

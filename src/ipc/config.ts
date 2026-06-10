@@ -45,6 +45,7 @@ export interface AppConfig {
   enterprise_server_url: string | null;
   enterprise_device_id: string | null;
   enterprise_policy: EnterprisePolicy | null;
+  mcp_enabled?: boolean;
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ pub mod config;
 pub mod db;
 pub mod enterprise;
 pub mod guard;
+pub mod mcp;
 pub mod pty;
 pub mod secret;
 pub mod telegram;
@@ -36,6 +37,11 @@ use commands::{
     },
     design::{design_chat, design_list_sessions, design_load_session, design_start_session, design_update_draft, design_list_messages, design_advance_stage, design_save_file, design_delete_session},
     markitdown::{markitdown_convert, markitdown_pick_file},
+    mcp::{
+        list_mcp_servers, add_mcp_server, update_mcp_server, remove_mcp_server,
+        get_mcp_tools, execute_mcp_tool, import_claude_desktop_mcp, set_mcp_enabled,
+        McpManagerState,
+    },
     provider::{
         add_provider, get_github_copilot_models, get_github_copilot_models_by_provider,
         get_google_ai_models, get_google_ai_models_by_provider,
@@ -78,6 +84,18 @@ pub fn run() {
     let router = AiRouter::new(config.clone(), secrets.clone());
 
     let design_db = tauri::async_runtime::block_on(async { DesignDb::new().await });
+
+    // Initialize McpManager and connect to enabled servers
+    let mcp_manager: McpManagerState = {
+        let mut manager = mcp::McpManager::new();
+        let cfg = config.get();
+        if cfg.mcp_enabled {
+            tauri::async_runtime::block_on(async {
+                manager.connect_all(&cfg.mcp_servers).await;
+            });
+        }
+        Arc::new(tokio::sync::Mutex::new(manager))
+    };
 
     let sidecar_path = {
         #[cfg(target_os = "windows")]
@@ -197,6 +215,7 @@ pub fn run() {
         .manage(Arc::new(Mutex::new(VcsCredentialManager::new())))
         .manage(Arc::new(Mutex::new(EnterpriseTaskState::new())))
         .manage(tokio::sync::Mutex::new(telegram::TelegramState { active_task: None }))
+        .manage(mcp_manager)
         .setup(|app| {
             telegram::init(app.handle());
             enterprise::agent::init(app.handle());
@@ -296,6 +315,15 @@ pub fn run() {
             // MarkItDown
             markitdown_convert,
             markitdown_pick_file,
+            // MCP
+            list_mcp_servers,
+            add_mcp_server,
+            update_mcp_server,
+            remove_mcp_server,
+            get_mcp_tools,
+            execute_mcp_tool,
+            import_claude_desktop_mcp,
+            set_mcp_enabled,
             // API Docs
             api_docs_detect,
             api_docs_fetch_tree,
