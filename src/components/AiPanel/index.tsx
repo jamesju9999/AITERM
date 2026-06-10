@@ -385,14 +385,7 @@ ${dirList || "（無法取得）"}
         </div>
       )}
 
-      {chat.toolCallingUnsupported && (
-        <div style={{
-          padding: "4px 12px", fontSize: 12, color: "#f97316",
-          background: "#2e1a0a", borderBottom: "1px solid #7c3a0a",
-        }}>
-          ⚠️ 目前的 AI 供應商不支援 Tool Calling，MCP 工具本次對話不生效。
-        </div>
-      )}
+
 
       <MessageList
         messages={chat.messages}

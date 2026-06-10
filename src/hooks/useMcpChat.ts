@@ -48,7 +48,6 @@ export function useMcpChat(sessionId: string) {
   const [messages, setMessages] = useState<McpChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamBuf, setStreamBuf] = useState("");
-  const [toolCallingUnsupported, setToolCallingUnsupported] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<McpChatSession[]>(loadAllSessions);
   const mountedRef = useRef(true);
@@ -79,33 +78,37 @@ export function useMcpChat(sessionId: string) {
 
   const saveSession = useCallback((msgs: McpChatMessage[]) => {
     if (msgs.length === 0) return;
-    const session: McpChatSession = {
-      id: `${Date.now()}`,
-      title: formatSessionTitle(msgs),
-      messages: msgs,
-      savedAt: Date.now(),
-    };
     setSessions(prev => {
-      const updated = [session, ...prev].slice(0, 50);
+      const existing = prev.findIndex(s => s.id === sessionId);
+      const entry: McpChatSession = {
+        id: sessionId,
+        title: formatSessionTitle(msgs),
+        messages: msgs,
+        savedAt: Date.now(),
+      };
+      const updated = existing >= 0
+        ? [entry, ...prev.filter(s => s.id !== sessionId)].slice(0, 50)
+        : [entry, ...prev].slice(0, 50);
       saveAllSessions(updated);
       return updated;
     });
-  }, []);
+  }, [sessionId]);
 
   const sendMessage = useCallback(async (
     text: string,
     useMcp: boolean,
+    existingMessages?: McpChatMessage[],
   ) => {
     if (!text.trim()) return;
     lastSendRef.current = { text, useMcp };
 
     setMessages(prev => [...prev, { role: "user", content: text }]);
     setIsLoading(true);
-    setToolCallingUnsupported(false);
     setError(null);
 
     // Build the message history for the AI (user/assistant only)
-    const historySnapshot = messages
+    const baseMessages = existingMessages ?? messages;
+    const historySnapshot = baseMessages
       .filter(m => m.role === "user" || m.role === "assistant")
       .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
 
@@ -123,20 +126,6 @@ export function useMcpChat(sessionId: string) {
         const reply = await aiChat(iterHistory, sessionId, undefined, useMcp);
 
         if (!mountedRef.current) break;
-
-        // System prompt fallback already handled in backend — no need for Unsupported special case
-        if (reply.tool_calling_unsupported) {
-          setToolCallingUnsupported(true);
-          const fallback = await aiChat(iterHistory, sessionId, undefined, false);
-          if (mountedRef.current) {
-            setMessages(prev => {
-              const updated = [...prev, { role: "assistant" as const, content: fallback.content ?? "" }];
-              saveSession(updated);
-              return updated;
-            });
-          }
-          break;
-        }
 
         // Handle tool calls
         if (reply.tool_calls.length > 0) {
@@ -216,7 +205,7 @@ export function useMcpChat(sessionId: string) {
         setStreamBuf("");
       }
     }
-  }, [messages, sessionId, streamBuf, saveSession]);
+  }, [messages, sessionId, saveSession]);
 
   const addMessage = useCallback((msg: McpChatMessage) => {
     setMessages(prev => [...prev, msg]);
@@ -224,7 +213,6 @@ export function useMcpChat(sessionId: string) {
 
   const clearMessages = useCallback(() => {
     setMessages([]);
-    setToolCallingUnsupported(false);
     setError(null);
   }, []);
 
@@ -242,16 +230,15 @@ export function useMcpChat(sessionId: string) {
   }, []);
 
   const resend = useCallback(async () => {
-    if (!lastSendRef.current) return;
-    // Remove messages from the last user message onwards and re-send
-    setMessages(prev => {
-      const lastUserIdx = [...prev].reverse().findIndex(m => m.role === "user");
-      if (lastUserIdx < 0) return prev;
-      return prev.slice(0, prev.length - lastUserIdx - 1);
-    });
+    if (!lastSendRef.current || isLoading) return;
     const { text, useMcp } = lastSendRef.current;
-    await sendMessage(text, useMcp);
-  }, [sendMessage]);
+    const lastUserIdx = [...messages].reverse().findIndex(m => m.role === "user");
+    const trimmedMessages = lastUserIdx >= 0
+      ? messages.slice(0, messages.length - lastUserIdx - 1)
+      : messages;
+    setMessages(trimmedMessages);
+    await sendMessage(text, useMcp, trimmedMessages);
+  }, [messages, isLoading, sendMessage]);
 
   return {
     messages,
@@ -259,7 +246,6 @@ export function useMcpChat(sessionId: string) {
     isStreaming: isLoading,   // alias for AiPanel compatibility
     streamBuf,
     error,
-    toolCallingUnsupported,
     sendMessage,
     send: sendMessage,        // alias for AiPanel compatibility
     addMessage,

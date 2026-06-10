@@ -37,18 +37,5 @@ describe("useMcpChat", () => {
     // in tests the hook receives it from aiChat return value
   });
 
-  it("sets tool_calling_unsupported flag when provider doesn't support tools", async () => {
-    vi.mocked(aiChat).mockResolvedValue({
-      content: "Hello",
-      tool_calls: [],
-      tool_calling_unsupported: true,
-    });
 
-    const { result } = renderHook(() => useMcpChat("session-1"));
-    await act(async () => {
-      await result.current.sendMessage("Hi", true);
-    });
-
-    expect(result.current.toolCallingUnsupported).toBe(true);
-  });
 });
