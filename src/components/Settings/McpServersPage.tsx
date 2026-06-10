@@ -3,8 +3,8 @@ import { useState, useEffect } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
 import {
   listMcpServers, removeMcpServer, importClaudeDesktopMcp,
-  addMcpServer, setMcpEnabled,
-  type McpServerInfo, type McpServerInput,
+  addMcpServer, setMcpEnabled, getMcpTools,
+  type McpServerInfo, type McpServerInput, type McpToolInfo,
 } from "../../ipc/mcp";
 import { getConfig } from "../../ipc/config";
 import { McpServerForm } from "./McpServerForm";
@@ -21,6 +21,8 @@ export function McpServersPage() {
   const [importList, setImportList] = useState<McpServerInput[] | null>(null);
   const [importSelected, setImportSelected] = useState<Set<string>>(new Set());
   const [importError, setImportError] = useState<string | null>(null);
+  const [expandedServerId, setExpandedServerId] = useState<string | null>(null);
+  const [allTools, setAllTools] = useState<McpToolInfo[]>([]);
 
   const reload = async () => {
     const [svrs, cfg] = await Promise.all([listMcpServers(), getConfig()]);
@@ -29,6 +31,13 @@ export function McpServersPage() {
   };
 
   useEffect(() => { reload(); }, []);
+
+  // Refresh tool list whenever a server becomes connected
+  useEffect(() => {
+    if (servers.some(s => s.status === "connected")) {
+      getMcpTools().then(setAllTools).catch(() => {});
+    }
+  }, [servers]);
 
   const handleDelete = async (id: string) => {
     if (deletingId !== id) {
@@ -137,38 +146,86 @@ export function McpServersPage() {
           <p className="section-desc">{t.mcp_no_servers}</p>
         )}
         {servers.map(s => (
-          <div key={s.id} className="mcp-server-row">
-            <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 2 }}>
-              <span className="mcp-server-name">{s.name}</span>
-              <span className="mcp-server-meta">
-                {s.transport === "stdio" ? s.command : s.url}
-              </span>
-              {s.status === "error" && s.error_message && (
-                <span style={{ color: "#f87171", fontSize: 11, marginTop: 2 }}>
-                  {s.error_message}
+          <div key={s.id} className="mcp-server-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 2 }}>
+                <span className="mcp-server-name">{s.name}</span>
+                <span className="mcp-server-meta">
+                  {s.transport === "stdio" ? s.command : s.url}
                 </span>
-              )}
-            </div>
-            <span className={`mcp-status-badge ${s.status}`}>{statusLabel(s)}</span>
-            <div className="mcp-row-actions">
-              <button className="mcp-btn-sm" onClick={() => setEditingServer(s)}>
-                {t.edit}
-              </button>
-              {deletingId === s.id ? (
-                <>
-                  <button className="mcp-btn-sm danger" onClick={() => handleDelete(s.id)}>
-                    {t.mcp_confirm_delete_yes}
-                  </button>
-                  <button className="mcp-btn-sm" onClick={() => setDeletingId(null)}>
-                    {t.cancel}
-                  </button>
-                </>
-              ) : (
-                <button className="mcp-btn-sm danger" onClick={() => handleDelete(s.id)}>
-                  {t.delete}
+                {s.status === "error" && s.error_message && (
+                  <span style={{ color: "#f87171", fontSize: 11, marginTop: 2 }}>
+                    {s.error_message}
+                  </span>
+                )}
+              </div>
+              {s.status === "connected" ? (
+                <button
+                  className={`mcp-status-badge connected`}
+                  style={{ cursor: "pointer", background: "none", border: "none", padding: 0 }}
+                  onClick={() => setExpandedServerId(prev => prev === s.id ? null : s.id)}
+                  title="點擊展開工具列表"
+                >
+                  {statusLabel(s)} {expandedServerId === s.id ? "▲" : "▼"}
                 </button>
+              ) : (
+                <span className={`mcp-status-badge ${s.status}`}>{statusLabel(s)}</span>
               )}
+              <div className="mcp-row-actions">
+                <button className="mcp-btn-sm" onClick={() => setEditingServer(s)}>
+                  {t.edit}
+                </button>
+                {deletingId === s.id ? (
+                  <>
+                    <button className="mcp-btn-sm danger" onClick={() => handleDelete(s.id)}>
+                      {t.mcp_confirm_delete_yes}
+                    </button>
+                    <button className="mcp-btn-sm" onClick={() => setDeletingId(null)}>
+                      {t.cancel}
+                    </button>
+                  </>
+                ) : (
+                  <button className="mcp-btn-sm danger" onClick={() => handleDelete(s.id)}>
+                    {t.delete}
+                  </button>
+                )}
+              </div>
             </div>
+            {/* Tool list expansion */}
+            {expandedServerId === s.id && (
+              <div style={{
+                padding: "8px 12px 10px",
+                borderTop: "1px solid #1e1e1e",
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "4px 8px",
+              }}>
+                {allTools
+                  .filter(t => t.server_id === s.id)
+                  .map(tool => {
+                    const displayName = tool.name.includes("__")
+                      ? tool.name.split("__").slice(1).join("__")
+                      : tool.name;
+                    return (
+                      <span
+                        key={tool.name}
+                        title={tool.description}
+                        style={{
+                          fontSize: 11,
+                          background: "#0a1a0a",
+                          border: "1px solid #1e3a1e",
+                          borderRadius: 3,
+                          padding: "1px 7px",
+                          color: "#6ee7b7",
+                          fontFamily: "monospace",
+                        }}
+                      >
+                        {displayName}
+                      </span>
+                    );
+                  })}
+              </div>
+            )}
           </div>
         ))}
       </div>
