@@ -6,6 +6,7 @@ import { executeMcpTool } from "../ipc/mcp";
 import type { ChatMessage } from "../ipc/ai";
 
 const MAX_TOOL_ITERATIONS = 10;
+const SESSIONS_STORAGE_KEY = "aiterm-mcp-chat-sessions";
 
 export interface McpChatMessage {
   role: "user" | "assistant" | "tool_call" | "tool_result";
@@ -16,12 +17,42 @@ export interface McpChatMessage {
   is_loading?: boolean;
 }
 
+export interface McpChatSession {
+  id: string;
+  title: string;
+  messages: McpChatMessage[];
+  savedAt: number;
+}
+
+function loadAllSessions(): McpChatSession[] {
+  try {
+    const raw = localStorage.getItem(SESSIONS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveAllSessions(sessions: McpChatSession[]): void {
+  try {
+    localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(sessions));
+  } catch { /* ignore */ }
+}
+
+function formatSessionTitle(messages: McpChatMessage[]): string {
+  const first = messages.find((m) => m.role === "user");
+  return first ? first.content.slice(0, 30) : "（空對話）";
+}
+
 export function useMcpChat(sessionId: string) {
   const [messages, setMessages] = useState<McpChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamBuf, setStreamBuf] = useState("");
   const [toolCallingUnsupported, setToolCallingUnsupported] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<McpChatSession[]>(loadAllSessions);
   const mountedRef = useRef(true);
+  const lastSendRef = useRef<{ text: string; useMcp: boolean } | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -46,22 +77,40 @@ export function useMcpChat(sessionId: string) {
     return () => { unlisten?.(); };
   }, [sessionId]);
 
+  const saveSession = useCallback((msgs: McpChatMessage[]) => {
+    if (msgs.length === 0) return;
+    const session: McpChatSession = {
+      id: `${Date.now()}`,
+      title: formatSessionTitle(msgs),
+      messages: msgs,
+      savedAt: Date.now(),
+    };
+    setSessions(prev => {
+      const updated = [session, ...prev].slice(0, 50);
+      saveAllSessions(updated);
+      return updated;
+    });
+  }, []);
+
   const sendMessage = useCallback(async (
     text: string,
     useMcp: boolean,
   ) => {
     if (!text.trim()) return;
+    lastSendRef.current = { text, useMcp };
 
-    // Add user message to display
     setMessages(prev => [...prev, { role: "user", content: text }]);
     setIsLoading(true);
     setToolCallingUnsupported(false);
+    setError(null);
 
-    // Build the message history for the AI (only user/assistant roles)
+    // Build the message history for the AI (user/assistant only)
+    const historySnapshot = messages
+      .filter(m => m.role === "user" || m.role === "assistant")
+      .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
+
     const history: ChatMessage[] = [
-      ...messages
-        .filter(m => m.role === "user" || m.role === "assistant")
-        .map(m => ({ role: m.role as "user" | "assistant", content: m.content })),
+      ...historySnapshot,
       { role: "user", content: text },
     ];
 
@@ -75,27 +124,26 @@ export function useMcpChat(sessionId: string) {
 
         if (!mountedRef.current) break;
 
-        // Handle unsupported tool calling
+        // System prompt fallback already handled in backend — no need for Unsupported special case
         if (reply.tool_calling_unsupported) {
           setToolCallingUnsupported(true);
-          // Fall back: call again without mcp
           const fallback = await aiChat(iterHistory, sessionId, undefined, false);
           if (mountedRef.current) {
-            setMessages(prev => [...prev, {
-              role: "assistant",
-              content: fallback.content ?? "",
-            }]);
+            setMessages(prev => {
+              const updated = [...prev, { role: "assistant" as const, content: fallback.content ?? "" }];
+              saveSession(updated);
+              return updated;
+            });
           }
           break;
         }
 
         // Handle tool calls
         if (reply.tool_calls.length > 0) {
-          // Show tool calls in UI
           for (const tc of reply.tool_calls) {
             if (!mountedRef.current) break;
             setMessages(prev => [...prev, {
-              role: "tool_call",
+              role: "tool_call" as const,
               content: JSON.stringify(tc.args, null, 2),
               tool_name: tc.tool_name,
               tool_call_id: tc.id,
@@ -103,7 +151,6 @@ export function useMcpChat(sessionId: string) {
             }]);
           }
 
-          // Execute each tool call
           const toolResults: ChatMessage[] = [];
           for (const tc of reply.tool_calls) {
             let resultContent: string;
@@ -119,52 +166,49 @@ export function useMcpChat(sessionId: string) {
 
             if (!mountedRef.current) break;
 
-            // Update UI to show result
             setMessages(prev => prev.map(m =>
-              m.tool_call_id === tc.id
-                ? { ...m, is_loading: false, is_error: isError }
-                : m
+              m.tool_call_id === tc.id ? { ...m, is_loading: false, is_error: isError } : m
             ));
             setMessages(prev => [...prev, {
-              role: "tool_result",
+              role: "tool_result" as const,
               content: resultContent,
               tool_name: tc.tool_name,
               tool_call_id: tc.id,
               is_error: isError,
             }]);
 
-            // Add tool result to AI message history
             toolResults.push({
               role: "tool",
               content: resultContent,
             } as unknown as ChatMessage);
           }
 
-          // Add assistant's tool_calls message and tool results to history
           iterHistory = [
             ...iterHistory,
-            {
-              role: "assistant",
-              content: encodeToolCalls(reply.tool_calls),
-            } as unknown as ChatMessage,
+            { role: "assistant", content: encodeToolCalls(reply.tool_calls) } as unknown as ChatMessage,
             ...toolResults,
           ];
-          continue; // Loop to get next AI response
+          continue;
         }
 
         // Normal text response — done
-        setMessages(prev => [...prev, {
-          role: "assistant",
-          content: reply.content ?? streamBuf,
-        }]);
+        setMessages(prev => {
+          const updated = [...prev, { role: "assistant" as const, content: reply.content ?? streamBuf }];
+          saveSession(updated);
+          return updated;
+        });
         break;
       }
 
       if (iterations >= MAX_TOOL_ITERATIONS && mountedRef.current) {
         setMessages(prev => [...prev, {
-          role: "assistant",
+          role: "assistant" as const,
           content: "⚠️ 已達工具呼叫上限（10 次），請重新提問。",
         }]);
+      }
+    } catch (e) {
+      if (mountedRef.current) {
+        setError(String(e));
       }
     } finally {
       if (mountedRef.current) {
@@ -172,18 +216,62 @@ export function useMcpChat(sessionId: string) {
         setStreamBuf("");
       }
     }
-  }, [messages, sessionId, streamBuf]);
+  }, [messages, sessionId, streamBuf, saveSession]);
+
+  const addMessage = useCallback((msg: McpChatMessage) => {
+    setMessages(prev => [...prev, msg]);
+  }, []);
 
   const clearMessages = useCallback(() => {
     setMessages([]);
     setToolCallingUnsupported(false);
+    setError(null);
   }, []);
 
-  return { messages, isLoading, streamBuf, sendMessage, clearMessages, toolCallingUnsupported };
+  const loadMessages = useCallback((msgs: McpChatMessage[]) => {
+    setMessages(msgs);
+    setError(null);
+  }, []);
+
+  const deleteSession = useCallback((id: string) => {
+    setSessions(prev => {
+      const updated = prev.filter(s => s.id !== id);
+      saveAllSessions(updated);
+      return updated;
+    });
+  }, []);
+
+  const resend = useCallback(async () => {
+    if (!lastSendRef.current) return;
+    // Remove messages from the last user message onwards and re-send
+    setMessages(prev => {
+      const lastUserIdx = [...prev].reverse().findIndex(m => m.role === "user");
+      if (lastUserIdx < 0) return prev;
+      return prev.slice(0, prev.length - lastUserIdx - 1);
+    });
+    const { text, useMcp } = lastSendRef.current;
+    await sendMessage(text, useMcp);
+  }, [sendMessage]);
+
+  return {
+    messages,
+    isLoading,
+    isStreaming: isLoading,   // alias for AiPanel compatibility
+    streamBuf,
+    error,
+    toolCallingUnsupported,
+    sendMessage,
+    send: sendMessage,        // alias for AiPanel compatibility
+    addMessage,
+    clearMessages,
+    clear: clearMessages,     // alias
+    loadMessages,
+    deleteSession,
+    resend,
+    sessions,
+  };
 }
 
-// Encode tool_calls for the AI message history (OpenAI format).
-// A future enhancement can add proper per-provider formatting.
 function encodeToolCalls(tool_calls: AiToolCall[]): string {
   return JSON.stringify(tool_calls.map(tc => ({
     id: tc.id,
