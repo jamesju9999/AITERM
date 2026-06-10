@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { addMcpServer } from "../../ipc/mcp";
 import { useLocale } from "../../contexts/LocaleContext";
 import {
