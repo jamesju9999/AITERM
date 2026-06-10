@@ -390,3 +390,97 @@
   color: #4ade80;
   border-color: #4ade80;
 }
+
+/* ── Tool call cards ── */
+.aiterm-tool-card {
+  margin: 4px 12px;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.aiterm-tool-card--error {
+  border-color: #7c3a0a;
+}
+
+.aiterm-tool-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 10px;
+  background: #1a1a1a;
+  border: none;
+  cursor: pointer;
+  color: #999;
+  text-align: left;
+}
+
+.aiterm-tool-card-header:hover {
+  background: #202020;
+}
+
+.aiterm-tool-card-name {
+  flex: 1;
+  color: #ccc;
+  font-family: monospace;
+}
+
+.aiterm-tool-card-status {
+  color: #34d399;
+  min-width: 14px;
+  text-align: center;
+}
+
+.aiterm-tool-card--error .aiterm-tool-card-status {
+  color: #f87171;
+}
+
+.aiterm-tool-spinner {
+  display: inline-block;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.aiterm-tool-card-chevron {
+  font-size: 10px;
+  color: #555;
+}
+
+.aiterm-tool-card-body {
+  border-top: 1px solid #2a2a2a;
+  background: #111;
+}
+
+.aiterm-tool-card-section {
+  padding: 6px 10px;
+  border-bottom: 1px solid #1e1e1e;
+}
+
+.aiterm-tool-card-section:last-child {
+  border-bottom: none;
+}
+
+.aiterm-tool-card-label {
+  font-size: 10px;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 3px;
+}
+
+.aiterm-tool-card-content {
+  margin: 0;
+  font-family: monospace;
+  font-size: 11px;
+  color: #aaa;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+}

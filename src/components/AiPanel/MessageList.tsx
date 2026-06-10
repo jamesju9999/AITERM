@@ -1,22 +1,73 @@
-import { useEffect, useRef } from "react";
-import type { AiError, ChatMessage, ContentPart } from "../../ipc/ai";
+// src/components/AiPanel/MessageList.tsx
+import { useEffect, useRef, useState } from "react";
+import type { AiError } from "../../ipc/ai";
 import { formatAiError } from "../../ipc/ai";
-
-function contentToString(content: string | ContentPart[]): string {
-  if (typeof content === "string") return content;
-  return content
-    .filter((p): p is Extract<ContentPart, { type: "text" }> => p.type === "text")
-    .map((p) => p.text).join(" ");
-}
+import type { McpChatMessage } from "../../hooks/useMcpChat";
 import { MessageBubble } from "./MessageBubble";
 
 interface MessageListProps {
-  messages: ChatMessage[];
+  messages: McpChatMessage[];
   streamBuf: string;
   isStreaming: boolean;
-  error: AiError | null;
+  error: AiError | string | null;
   onExecuteCommand: (cmd: string) => void;
   onRetry: () => void;
+}
+
+function formatError(error: AiError | string | null): string {
+  if (!error) return "";
+  if (typeof error === "string") return error;
+  return formatAiError(error);
+}
+
+function ToolCallCard({
+  callMsg,
+  resultMsg,
+}: {
+  callMsg: McpChatMessage;
+  resultMsg: McpChatMessage | undefined;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const toolDisplayName = callMsg.tool_name?.includes("__")
+    ? callMsg.tool_name.split("__").slice(1).join("__")
+    : (callMsg.tool_name ?? "tool");
+
+  const isLoading = callMsg.is_loading;
+  const isError = resultMsg?.is_error ?? callMsg.is_error;
+  const hasResult = !!resultMsg && !isLoading;
+
+  return (
+    <div className={`aiterm-tool-card${isError ? " aiterm-tool-card--error" : ""}`}>
+      <button
+        type="button"
+        className="aiterm-tool-card-header"
+        onClick={() => setExpanded(e => !e)}
+      >
+        <span className="aiterm-tool-card-icon">⚙</span>
+        <span className="aiterm-tool-card-name">{toolDisplayName}</span>
+        <span className="aiterm-tool-card-status">
+          {isLoading && <span className="aiterm-tool-spinner">⟳</span>}
+          {!isLoading && hasResult && !isError && "✓"}
+          {!isLoading && isError && "✗"}
+        </span>
+        <span className="aiterm-tool-card-chevron">{expanded ? "▲" : "▼"}</span>
+      </button>
+      {expanded && (
+        <div className="aiterm-tool-card-body">
+          <div className="aiterm-tool-card-section">
+            <div className="aiterm-tool-card-label">輸入</div>
+            <pre className="aiterm-tool-card-content">{callMsg.content}</pre>
+          </div>
+          {hasResult && (
+            <div className="aiterm-tool-card-section">
+              <div className="aiterm-tool-card-label">輸出</div>
+              <pre className="aiterm-tool-card-content">{resultMsg!.content}</pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function MessageList({
@@ -34,16 +85,36 @@ export function MessageList({
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, streamBuf, error]);
 
+  // Build a map of tool_call_id → tool_result message for card merging
+  const resultMap = new Map<string, McpChatMessage>();
+  for (const m of messages) {
+    if (m.role === "tool_result" && m.tool_call_id) {
+      resultMap.set(m.tool_call_id, m);
+    }
+  }
+
   return (
     <div ref={listRef} className="aiterm-message-list">
-      {messages.map((m, i) => (
-        <MessageBubble
-          key={i}
-          role={m.role === "assistant" ? "assistant" : "user"}
-          content={contentToString(m.content)}
-          onExecuteCommand={onExecuteCommand}
-        />
-      ))}
+      {messages.map((m, i) => {
+        if (m.role === "tool_result") {
+          // Rendered as part of the tool_call card above — skip
+          return null;
+        }
+        if (m.role === "tool_call") {
+          const result = m.tool_call_id ? resultMap.get(m.tool_call_id) : undefined;
+          return (
+            <ToolCallCard key={i} callMsg={m} resultMsg={result} />
+          );
+        }
+        return (
+          <MessageBubble
+            key={i}
+            role={m.role === "assistant" ? "assistant" : "user"}
+            content={m.content}
+            onExecuteCommand={onExecuteCommand}
+          />
+        );
+      })}
       {isStreaming && streamBuf && (
         <MessageBubble
           role="assistant"
@@ -54,7 +125,7 @@ export function MessageList({
       )}
       {error && (
         <div className="aiterm-bubble aiterm-bubble-error" role="alert">
-          <span>⚠ {formatAiError(error)}</span>
+          <span>⚠ {formatError(error)}</span>
           <button
             type="button"
             className="aiterm-retry-btn"
