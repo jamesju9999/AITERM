@@ -1,1 +1,1 @@
-markitdown>=0.1.0
+markitdown[pdf,docx,pptx,xlsx,image,audio-transcription]>=0.1.0
