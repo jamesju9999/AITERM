@@ -445,6 +445,7 @@ mod tests {
         let session = PtySession::spawn(
             test_shell(),
             PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
             move |chunk| {
                 let _ = tx.send(chunk);
             },
@@ -486,6 +487,7 @@ mod tests {
         let session = PtySession::spawn(
             test_shell(),
             PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
             move |chunk| {
                 let _ = tx.send(chunk);
             },

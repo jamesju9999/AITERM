@@ -353,6 +353,7 @@ mod tests {
             default_tab: DefaultTab::default(),
             telegram_chat_id: None,
             vcs_connections: vec![],
+            ..AppConfig::default()
         };
         let toml_str = toml::to_string_pretty(&cfg).unwrap();
         let parsed: AppConfig = toml::from_str(&toml_str).unwrap();
