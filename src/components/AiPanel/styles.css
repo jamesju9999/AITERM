@@ -32,7 +32,7 @@
 }
 
 /*
- * Hidden state keeps the panel mounted so useAiChat's stream listener
+ * Hidden state keeps the panel mounted so useMcpChat's stream listener
  * continues to receive chunks while the user toggles the panel off and on.
  */
 .aiterm-ai-panel-hidden {
