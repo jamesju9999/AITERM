@@ -17,6 +17,7 @@ export function McpServersPage() {
   const [mcpEnabled, setMcpEnabledState] = useState(true);
   const [activeTab, setActiveTab] = useState<"installed" | "marketplace">("installed");
   const [editingServer, setEditingServer] = useState<McpServerInfo | null | "new">(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [importList, setImportList] = useState<McpServerInput[] | null>(null);
   const [importSelected, setImportSelected] = useState<Set<string>>(new Set());
   const [importError, setImportError] = useState<string | null>(null);
@@ -30,7 +31,11 @@ export function McpServersPage() {
   useEffect(() => { reload(); }, []);
 
   const handleDelete = async (id: string) => {
-    if (!confirm(t.mcp_confirm_delete)) return;
+    if (deletingId !== id) {
+      setDeletingId(id);
+      return;
+    }
+    setDeletingId(null);
     await removeMcpServer(id);
     await reload();
   };
@@ -144,9 +149,20 @@ export function McpServersPage() {
               <button className="mcp-btn-sm" onClick={() => setEditingServer(s)}>
                 {t.edit}
               </button>
-              <button className="mcp-btn-sm danger" onClick={() => handleDelete(s.id)}>
-                {t.delete}
-              </button>
+              {deletingId === s.id ? (
+                <>
+                  <button className="mcp-btn-sm danger" onClick={() => handleDelete(s.id)}>
+                    {t.mcp_confirm_delete_yes}
+                  </button>
+                  <button className="mcp-btn-sm" onClick={() => setDeletingId(null)}>
+                    {t.cancel}
+                  </button>
+                </>
+              ) : (
+                <button className="mcp-btn-sm danger" onClick={() => handleDelete(s.id)}>
+                  {t.delete}
+                </button>
+              )}
             </div>
           </div>
         ))}
