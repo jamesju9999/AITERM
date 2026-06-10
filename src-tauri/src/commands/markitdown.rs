@@ -154,10 +154,24 @@ pub async fn markitdown_convert(
         match pip_cmd.output().await {
             Err(e) => return Err(format!("Failed to run pip (is Python installed?): {e}")),
             Ok(out) if !out.status.success() => {
-                let pip_warn = String::from_utf8_lossy(&out.stderr);
-                if !pip_warn.trim().is_empty() {
-                    eprintln!("[markitdown] pip warning: {}", pip_warn.trim());
-                }
+                let pip_err = String::from_utf8_lossy(&out.stderr);
+                let pip_out = String::from_utf8_lossy(&out.stdout);
+                let detail = if !pip_err.trim().is_empty() {
+                    pip_err.trim().to_string()
+                } else if !pip_out.trim().is_empty() {
+                    pip_out.trim().to_string()
+                } else {
+                    String::new()
+                };
+                let detail_str = if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n\n詳情：{}", detail)
+                };
+                return Err(format!(
+                    "安裝 MarkItDown 相依套件失敗，請手動執行：\npip install markitdown{}",
+                    detail_str
+                ));
             }
             _ => {}
         }
