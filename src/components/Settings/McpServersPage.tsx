@@ -8,12 +8,14 @@ import {
 } from "../../ipc/mcp";
 import { getConfig } from "../../ipc/config";
 import { McpServerForm } from "./McpServerForm";
+import { McpMarketplaceTab } from "./McpMarketplaceTab";
 import "./McpServersPage.css";
 
 export function McpServersPage() {
   const { t } = useLocale();
   const [servers, setServers] = useState<McpServerInfo[]>([]);
   const [mcpEnabled, setMcpEnabledState] = useState(true);
+  const [activeTab, setActiveTab] = useState<"installed" | "marketplace">("installed");
   const [editingServer, setEditingServer] = useState<McpServerInfo | null | "new">(null);
   const [importList, setImportList] = useState<McpServerInput[] | null>(null);
   const [importSelected, setImportSelected] = useState<Set<string>>(new Set());
@@ -77,6 +79,26 @@ export function McpServersPage() {
       <h2>{t.mcp_servers}</h2>
       <p className="section-desc">{t.mcp_servers_desc}</p>
 
+      <div className="mcp-tab-row" role="tablist">
+        <button
+          className={`mcp-tab-btn${activeTab === "installed" ? " active" : ""}`}
+          onClick={() => setActiveTab("installed")}
+          role="tab"
+          aria-selected={activeTab === "installed"}
+        >
+          {t.mcp_marketplace_installed}
+        </button>
+        <button
+          className={`mcp-tab-btn${activeTab === "marketplace" ? " active" : ""}`}
+          onClick={() => setActiveTab("marketplace")}
+          role="tab"
+          aria-selected={activeTab === "marketplace"}
+        >
+          🌐 {t.mcp_marketplace}
+        </button>
+      </div>
+
+      {activeTab === "installed" && (<>
       {/* Global toggle */}
       <div className="mcp-global-toggle">
         <input
@@ -173,6 +195,12 @@ export function McpServersPage() {
             </div>
           </div>
         </div>
+      )}
+      </>)}
+      {activeTab === "marketplace" && (
+        <McpMarketplaceTab
+          onInstalled={() => { void reload(); setActiveTab("installed"); }}
+        />
       )}
     </div>
   );

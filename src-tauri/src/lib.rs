@@ -40,7 +40,7 @@ use commands::{
     mcp::{
         list_mcp_servers, add_mcp_server, update_mcp_server, remove_mcp_server,
         get_mcp_tools, execute_mcp_tool, import_claude_desktop_mcp, set_mcp_enabled,
-        McpManagerState,
+        install_mcp_package, McpManagerState,
     },
     provider::{
         add_provider, get_github_copilot_models, get_github_copilot_models_by_provider,
@@ -324,6 +324,7 @@ pub fn run() {
             execute_mcp_tool,
             import_claude_desktop_mcp,
             set_mcp_enabled,
+            install_mcp_package,
             // API Docs
             api_docs_detect,
             api_docs_fetch_tree,

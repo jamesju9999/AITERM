@@ -114,3 +114,31 @@
   display: flex;
   gap: 8px;
 }
+
+.mcp-tab-row {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid #2a2a2a;
+  padding: 0 4px;
+}
+
+.mcp-tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #555;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 6px 14px;
+  margin-bottom: -1px;
+  transition: color 0.15s;
+}
+
+.mcp-tab-btn:hover {
+  color: #888;
+}
+
+.mcp-tab-btn.active {
+  color: #34d399;
+  border-bottom-color: #34d399;
+}

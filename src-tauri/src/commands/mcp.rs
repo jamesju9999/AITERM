@@ -2,8 +2,10 @@
 
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{Emitter, State};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
+use tokio::time::{timeout, Duration};
 
 use crate::config::{types::{McpServerConfig, McpTransport}, ConfigStore};
 use crate::mcp::{McpManager, McpToolInfo, McpToolResult};
@@ -255,4 +257,175 @@ fn claude_desktop_config_path() -> std::path::PathBuf {
     dirs::config_dir()
         .unwrap_or_default()
         .join("Claude/claude_desktop_config.json")
+}
+
+// ── MCP package installation ──────────────────────────────────────────────────
+
+#[derive(Clone, serde::Serialize)]
+pub struct McpInstallLogEvent {
+    pub session_id: String,
+    pub line: String,
+    pub is_error: bool,
+    pub done: bool,
+    pub success: bool,
+}
+
+#[tauri::command]
+pub async fn install_mcp_package(
+    app: tauri::AppHandle,
+    command: String,
+    args: Vec<String>,
+    session_id: String,
+) -> Result<(), String> {
+    // Fix 4: On Windows, wrap command in `cmd /C` so .cmd scripts (npx, pip) resolve correctly.
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = tokio::process::Command::new("cmd");
+        c.arg("/C").arg(&command).args(&args);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut c = tokio::process::Command::new(&command);
+        c.args(&args);
+        c
+    };
+
+    cmd.stdout(std::process::Stdio::piped())
+       .stderr(std::process::Stdio::piped())
+       .kill_on_drop(true); // Fix 1: kill child if this future is dropped
+
+    // Fix 3: On Windows, suppress the console window.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let mut child = cmd.spawn()
+        .map_err(|e| {
+            let msg = if e.kind() == std::io::ErrorKind::NotFound {
+                format!("command not found: {command}")
+            } else {
+                e.to_string()
+            };
+            let _ = app.emit(
+                "mcp-install-log",
+                McpInstallLogEvent {
+                    session_id: session_id.clone(),
+                    line: msg.clone(),
+                    is_error: true,
+                    done: true,
+                    success: false,
+                },
+            );
+            msg
+        })?;
+
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+
+    let session_id_out = session_id.clone();
+    let app_out = app.clone();
+    let out_task = tokio::spawn(async move {
+        let mut lines = BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = app_out.emit(
+                "mcp-install-log",
+                McpInstallLogEvent {
+                    session_id: session_id_out.clone(),
+                    line,
+                    is_error: false,
+                    done: false,
+                    success: false,
+                },
+            );
+        }
+    });
+
+    let session_id_err = session_id.clone();
+    let app_err = app.clone();
+    let err_task = tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = app_err.emit(
+                "mcp-install-log",
+                McpInstallLogEvent {
+                    session_id: session_id_err.clone(),
+                    line,
+                    is_error: true,
+                    done: false,
+                    success: false,
+                },
+            );
+        }
+    });
+
+    let result = timeout(Duration::from_secs(60), child.wait()).await;
+
+    match result {
+        Ok(Ok(status)) => {
+            let _ = out_task.await;
+            let _ = err_task.await;
+            if status.success() {
+                let _ = app.emit(
+                    "mcp-install-log",
+                    McpInstallLogEvent {
+                        session_id: session_id.clone(),
+                        line: String::new(),
+                        is_error: false,
+                        done: true,
+                        success: true,
+                    },
+                );
+                Ok(())
+            } else {
+                let msg = format!("process exited with code {}", status.code().unwrap_or(-1));
+                let _ = app.emit(
+                    "mcp-install-log",
+                    McpInstallLogEvent {
+                        session_id: session_id.clone(),
+                        line: msg.clone(),
+                        is_error: true,
+                        done: true,
+                        success: false,
+                    },
+                );
+                Err(msg)
+            }
+        }
+        Ok(Err(e)) => {
+            let _ = out_task.await;
+            let _ = err_task.await;
+            let _ = app.emit(
+                "mcp-install-log",
+                McpInstallLogEvent {
+                    session_id: session_id.clone(),
+                    line: e.to_string(),
+                    is_error: true,
+                    done: true,
+                    success: false,
+                },
+            );
+            Err(e.to_string())
+        }
+        Err(_) => {
+            // Fix 1+2: Kill the process and abort I/O tasks on timeout.
+            let _ = child.kill().await;
+            out_task.abort();
+            err_task.abort();
+            let msg = "install timed out after 60 seconds".to_string();
+            let _ = app.emit(
+                "mcp-install-log",
+                McpInstallLogEvent {
+                    session_id: session_id.clone(),
+                    line: msg.clone(),
+                    is_error: true,
+                    done: true,
+                    success: false,
+                },
+            );
+            Err(msg)
+        }
+    }
 }
