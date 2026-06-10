@@ -5,6 +5,7 @@ pub mod config;
 pub mod db;
 pub mod enterprise;
 pub mod guard;
+pub mod mcp;
 pub mod pty;
 pub mod secret;
 pub mod telegram;
