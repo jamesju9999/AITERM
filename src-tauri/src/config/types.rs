@@ -4,10 +4,11 @@
 //! API keys are NEVER stored here — they live in the OS keychain under
 //! "aiterm:{provider_id}".
 
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 /// Top-level application configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     /// The id of the currently active provider.
     #[serde(default)]
@@ -60,6 +61,14 @@ pub struct AppConfig {
     /// Policy pushed by the Management Server. Overrides local settings when present.
     #[serde(default)]
     pub enterprise_policy: Option<EnterprisePolicy>,
+
+    /// Whether MCP tool calling is globally enabled.
+    #[serde(default = "default_true")]
+    pub mcp_enabled: bool,
+
+    /// Configured MCP server connections.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
 }
 
 fn default_max_agent_steps() -> u32 { 5 }
@@ -90,6 +99,28 @@ impl AppConfig {
             self.default_provider = self.providers.first().map(|p| p.id.clone());
         }
         self.providers.len() < before
+    }
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            default_provider: None,
+            providers: vec![],
+            execution_mode: ExecutionMode::default(),
+            max_agent_steps: default_max_agent_steps(),
+            onboarding_done: false,
+            submit_shortcut: SubmitShortcut::default(),
+            db_connections: vec![],
+            default_tab: DefaultTab::default(),
+            telegram_chat_id: None,
+            vcs_connections: vec![],
+            enterprise_server_url: None,
+            enterprise_device_id: None,
+            enterprise_policy: None,
+            mcp_enabled: true,
+            mcp_servers: vec![],
+        }
     }
 }
 
@@ -282,6 +313,46 @@ pub struct EnterprisePolicy {
     pub max_agent_steps: Option<u32>,
     /// VCS push branch pattern (informational, enforced by server).
     pub vcs_push_pattern: Option<String>,
+}
+
+/// Transport protocol for an MCP server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum McpTransport {
+    /// Launch a subprocess and communicate over stdin/stdout (most common).
+    #[default]
+    Stdio,
+    /// HTTP request/response transport.
+    Http,
+    /// Server-Sent Events transport.
+    Sse,
+}
+
+/// Configuration for a single MCP server connection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    /// Unique identifier, e.g. "filesystem" or "brave-search".
+    pub id: String,
+    /// Human-readable display name.
+    pub name: String,
+    /// Whether this server is active (connected on startup).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Transport protocol.
+    #[serde(default)]
+    pub transport: McpTransport,
+    /// Executable to launch (e.g. "npx", "python3", "uvx"). stdio only.
+    #[serde(default)]
+    pub command: Option<String>,
+    /// Arguments for the subprocess. stdio only.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Extra environment variables injected into the subprocess. stdio only.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// Base URL for http/sse transport. http/sse only.
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 #[cfg(test)]
@@ -480,5 +551,59 @@ mod tests {
     fn app_config_has_vcs_connections_default() {
         let cfg = AppConfig::default();
         assert!(cfg.vcs_connections.is_empty());
+    }
+
+    #[test]
+    fn mcp_server_config_roundtrips_toml() {
+        #[derive(Serialize, Deserialize, Debug)]
+        struct W { s: McpServerConfig }
+
+        let w = W {
+            s: McpServerConfig {
+                id: "fs".into(),
+                name: "Filesystem".into(),
+                enabled: true,
+                transport: McpTransport::Stdio,
+                command: Some("npx".into()),
+                args: vec!["-y".into(), "@modelcontextprotocol/server-filesystem".into()],
+                env: {
+                    let mut m = HashMap::new();
+                    m.insert("FOO".into(), "bar".into());
+                    m
+                },
+                url: None,
+            },
+        };
+        let s = toml::to_string(&w).unwrap();
+        let d: W = toml::from_str(&s).unwrap();
+        assert_eq!(d.s.id, "fs");
+        assert_eq!(d.s.transport, McpTransport::Stdio);
+        assert_eq!(d.s.command.as_deref(), Some("npx"));
+        assert_eq!(d.s.args.len(), 2);
+        assert_eq!(d.s.env["FOO"], "bar");
+    }
+
+    #[test]
+    fn mcp_transport_all_variants_roundtrip() {
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct W { t: McpTransport }
+        for (t, expected) in [
+            (McpTransport::Stdio, "stdio"),
+            (McpTransport::Http, "http"),
+            (McpTransport::Sse, "sse"),
+        ] {
+            let w = W { t };
+            let s = toml::to_string(&w).unwrap();
+            assert!(s.contains(expected), "got: {s}");
+            let d: W = toml::from_str(&s).unwrap();
+            assert_eq!(d.t, w.t);
+        }
+    }
+
+    #[test]
+    fn app_config_mcp_defaults_to_enabled_empty() {
+        let cfg = AppConfig::default();
+        assert!(cfg.mcp_enabled);
+        assert!(cfg.mcp_servers.is_empty());
     }
 }
