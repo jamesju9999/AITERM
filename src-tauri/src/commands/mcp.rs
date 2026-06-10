@@ -277,11 +277,32 @@ pub async fn install_mcp_package(
     args: Vec<String>,
     session_id: String,
 ) -> Result<(), String> {
-    let mut child = tokio::process::Command::new(&command)
-        .args(&args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
+    // Fix 4: On Windows, wrap command in `cmd /C` so .cmd scripts (npx, pip) resolve correctly.
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = tokio::process::Command::new("cmd");
+        c.arg("/C").arg(&command).args(&args);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut c = tokio::process::Command::new(&command);
+        c.args(&args);
+        c
+    };
+
+    cmd.stdout(std::process::Stdio::piped())
+       .stderr(std::process::Stdio::piped())
+       .kill_on_drop(true); // Fix 1: kill child if this future is dropped
+
+    // Fix 3: On Windows, suppress the console window.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let mut child = cmd.spawn()
         .map_err(|e| {
             let msg = if e.kind() == std::io::ErrorKind::NotFound {
                 format!("command not found: {command}")
@@ -342,11 +363,10 @@ pub async fn install_mcp_package(
 
     let result = timeout(Duration::from_secs(60), child.wait()).await;
 
-    let _ = out_task.await;
-    let _ = err_task.await;
-
     match result {
         Ok(Ok(status)) => {
+            let _ = out_task.await;
+            let _ = err_task.await;
             if status.success() {
                 let _ = app.emit(
                     "mcp-install-log",
@@ -375,6 +395,8 @@ pub async fn install_mcp_package(
             }
         }
         Ok(Err(e)) => {
+            let _ = out_task.await;
+            let _ = err_task.await;
             let _ = app.emit(
                 "mcp-install-log",
                 McpInstallLogEvent {
@@ -388,6 +410,10 @@ pub async fn install_mcp_package(
             Err(e.to_string())
         }
         Err(_) => {
+            // Fix 1+2: Kill the process and abort I/O tasks on timeout.
+            let _ = child.kill().await;
+            out_task.abort();
+            err_task.abort();
             let msg = "install timed out after 60 seconds".to_string();
             let _ = app.emit(
                 "mcp-install-log",
