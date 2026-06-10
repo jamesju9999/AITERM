@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
+import "./McpInstallTerminal.css";
 
 export interface InstallLogLine {
   text: string;
@@ -37,7 +38,6 @@ export function McpInstallTerminal({ command, args, lines, onClose }: Props) {
         zIndex: 100,
       }}
     >
-      <style>{`@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }`}</style>
       <div
         style={{
           display: "flex",
@@ -48,7 +48,7 @@ export function McpInstallTerminal({ command, args, lines, onClose }: Props) {
           flexShrink: 0,
         }}
       >
-        <span style={{ fontSize: 11, color: "#555" }}>{t("mcp_marketplace_terminal_title")}</span>
+        <span style={{ fontSize: 11, color: "#555" }}>{t.mcp_marketplace_terminal_title}</span>
         <button
           onClick={onClose}
           style={{
