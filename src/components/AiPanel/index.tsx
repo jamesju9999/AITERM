@@ -2,8 +2,8 @@ import {
   useEffect, useRef, useState, useCallback,
   type KeyboardEvent, type PointerEvent,
 } from "react";
-import { useAiChat } from "../../hooks/useAiChat";
-import { invokeAiChat, type ContentPart, type ChatMessage as AiChatMessage } from "../../ipc/ai";
+import { useMcpChat, type McpChatMessage } from "../../hooks/useMcpChat";
+import { invokeAiChat, type ChatMessage as AiChatMessage } from "../../ipc/ai";
 import { getSessionCwd, listDirectory } from "../../ipc/fs";
 import { getPtyRecentOutput } from "../../ipc/pty";
 import { getConfig } from "../../ipc/config";
@@ -50,7 +50,7 @@ export function AiPanel({
   sendRemoteResponse,
 }: AiPanelProps) {
   const { t } = useLocale();
-  const chat = useAiChat(sessionId);
+  const chat = useMcpChat(sessionId);
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -253,13 +253,8 @@ ${dirList || "（無法取得）"}
   useEffect(() => {
     if (chat.messages.length > prevMessagesLength.current) {
       const lastMsg = chat.messages[chat.messages.length - 1];
-      if (lastMsg.role === "assistant" && sendRemoteResponse && !chat.isStreaming) {
-        const text = typeof lastMsg.content === "string"
-          ? lastMsg.content
-          : (lastMsg.content as ContentPart[])
-              .filter((p): p is Extract<ContentPart, { type: "text" }> => p.type === "text")
-              .map((p) => p.text).join(" ");
-        sendRemoteResponse(text);
+      if (lastMsg?.role === "assistant" && sendRemoteResponse && !chat.isStreaming) {
+        sendRemoteResponse(lastMsg.content);
       }
     }
     prevMessagesLength.current = chat.messages.length;

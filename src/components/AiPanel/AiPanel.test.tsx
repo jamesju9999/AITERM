@@ -9,8 +9,8 @@ const DEFAULT_CONFIG = {
   default_tab: "terminal", enterprise_server_url: null, enterprise_device_id: null, enterprise_policy: null,
 };
 
-// Per-command mock registry: tests can push [command, response] pairs.
-const aiChatQueue: { content: string }[] = [];
+// Per-command mock registry: tests can push response objects.
+const aiChatQueue: { content: string; tool_calls?: unknown[]; tool_calling_unsupported?: boolean }[] = [];
 
 const listenMock = vi.fn().mockResolvedValue(() => {});
 vi.mock("@tauri-apps/api/core", () => ({
@@ -19,8 +19,8 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "get_mcp_tools") return Promise.resolve([]);
     if (cmd === "ai_chat") {
       const next = aiChatQueue.shift();
-      if (next) return Promise.resolve(next);
-      return Promise.resolve({ content: "" });
+      if (next) return Promise.resolve({ tool_calls: [], tool_calling_unsupported: false, ...next });
+      return Promise.resolve({ content: "", tool_calls: [], tool_calling_unsupported: false });
     }
     return Promise.resolve(null);
   },
