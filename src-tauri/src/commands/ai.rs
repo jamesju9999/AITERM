@@ -469,7 +469,8 @@ pub(crate) fn parse_tool_calls_from_text(text: &str) -> Option<Vec<crate::ai::Ai
                 }
                 pos = content_start + end_offset + close.len();
             } else {
-                break;
+                // Skip past this malformed block and continue searching
+                pos = content_start + end_offset + close.len();
             }
         } else {
             break;
@@ -506,6 +507,14 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].tool_name, "tool_a");
         assert_eq!(calls[1].tool_name, "tool_b");
+    }
+
+    #[test]
+    fn parse_tool_calls_skips_invalid_json_blocks() {
+        let text = r#"<tool_call>NOT_JSON</tool_call> <tool_call>{"name":"valid_tool","arguments":{}}</tool_call>"#;
+        let calls = parse_tool_calls_from_text(text).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "valid_tool");
     }
 
     #[test]
