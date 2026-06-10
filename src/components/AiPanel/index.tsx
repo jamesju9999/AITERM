@@ -2,7 +2,7 @@ import {
   useEffect, useRef, useState, useCallback,
   type KeyboardEvent, type PointerEvent,
 } from "react";
-import { useMcpChat, type McpChatMessage } from "../../hooks/useMcpChat";
+import { useMcpChat } from "../../hooks/useMcpChat";
 import { invokeAiChat, type ChatMessage as AiChatMessage } from "../../ipc/ai";
 import { getSessionCwd, listDirectory } from "../../ipc/fs";
 import { getPtyRecentOutput } from "../../ipc/pty";
@@ -36,7 +36,7 @@ export interface AiPanelProps {
 }
 
 /**
- * The panel stays mounted across open/close so `useAiChat`'s event listener
+ * The panel stays mounted across open/close so `useMcpChat`'s event listener
  * keeps receiving streaming chunks while the user toggles Ctrl+I. We hide
  * the panel with a CSS class when `isOpen=false` rather than returning null.
  */

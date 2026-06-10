@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-// Mock Tauri before importing AiPanel (which imports useAiChat).
+// Mock Tauri before importing AiPanel (which imports useMcpChat).
 const DEFAULT_CONFIG = {
   default_provider: null, providers: [], execution_mode: "graded",
   submit_shortcut: "enter", onboarding_done: true, max_agent_steps: 0,
