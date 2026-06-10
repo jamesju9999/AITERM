@@ -29,7 +29,7 @@ export async function searchSmithery(query: string): Promise<SmitheryServer[]> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Smithery API error: ${res.status}`);
   const data = await res.json();
-  return data.servers as SmitheryServer[];
+  return (data.servers ?? []) as SmitheryServer[];
 }
 
 export async function getSmitheryServer(

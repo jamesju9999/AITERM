@@ -65,4 +65,9 @@ describe("getSmitheryServer", () => {
     expect(detail.connections[0].type).toBe("stdio");
     expect(detail.connections[0].stdioFunction?.command).toBe("npx");
   });
+
+  it("throws on API error", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+    await expect(getSmitheryServer("@mcp/missing")).rejects.toThrow("Smithery API error: 404");
+  });
 });
