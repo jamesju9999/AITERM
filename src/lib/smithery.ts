@@ -14,6 +14,10 @@ export interface SmitheryConnection {
   };
   url?: string;
   deploymentUrl?: string;
+  configSchema?: {
+    required?: string[];
+    properties?: Record<string, { type: string; title?: string; description?: string }>;
+  };
 }
 
 export interface SmitheryServerDetail {

@@ -18,7 +18,8 @@ type InstallStatus =
   | "success"
   | "error"
   | "no-connections"
-  | "http-added";
+  | "http-added"
+  | "needs-config";
 
 interface ServerInstallState {
   status: InstallStatus;
@@ -126,6 +127,12 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
         (c) => (c.type === "http" || c.type === "sse") && (c.url ?? c.deploymentUrl)
       );
       if (httpConn) {
+        // If the connection requires config (e.g. API keys), don't silently add a broken server.
+        const requiredFields = httpConn.configSchema?.required ?? [];
+        if (requiredFields.length > 0) {
+          setServerState(qualifiedName, { status: "needs-config", detail });
+          return;
+        }
         const url = httpConn.url ?? httpConn.deploymentUrl ?? "";
         try {
           await addMcpServer({
@@ -224,6 +231,8 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
         return t.mcp_marketplace_failed;
       case "no-connections":
         return t.mcp_marketplace_copy_cmd;
+      case "needs-config":
+        return t.mcp_marketplace_needs_config_btn;
       default:
         return t.mcp_marketplace_install;
     }
@@ -270,7 +279,8 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
             state.status === "fetching" ||
             state.status === "running" ||
             state.status === "success" ||
-            state.status === "http-added";
+            state.status === "http-added" ||
+            state.status === "needs-config";
 
           return (
             <div
@@ -307,6 +317,22 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
                     {t.mcp_marketplace_no_connections}
                   </div>
                 )}
+                {state.status === "needs-config" && (() => {
+                  const httpConn = state.detail?.connections.find(
+                    (c) => c.type === "http" || c.type === "sse"
+                  );
+                  const required = httpConn?.configSchema?.required ?? [];
+                  return (
+                    <div style={{ color: "#f59e0b", fontSize: 11, marginTop: 4 }}>
+                      {t.mcp_marketplace_needs_config}
+                      {required.length > 0 && (
+                        <span style={{ color: "#888", marginLeft: 4 }}>
+                          ({required.join(", ")})
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
               <button
                 onClick={() => handleInstall(server)}

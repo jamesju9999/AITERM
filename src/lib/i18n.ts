@@ -317,6 +317,8 @@ export const translations = {
     mcp_marketplace_done_msg: "✓ 安裝完成，已新增到已安裝清單",
     mcp_marketplace_terminal_title: "安裝記錄",
     mcp_marketplace_no_results: "找不到相關 server，請嘗試其他關鍵字",
+    mcp_marketplace_needs_config: "此 server 需要 API Key，請手動新增並填入 URL",
+    mcp_marketplace_needs_config_btn: "需要設定",
   },
   "en": {
     // Settings sidebar
@@ -632,6 +634,8 @@ export const translations = {
     mcp_marketplace_done_msg: "✓ Install complete, added to installed list",
     mcp_marketplace_terminal_title: "Install Log",
     mcp_marketplace_no_results: "No servers found, try a different keyword",
+    mcp_marketplace_needs_config: "This server requires an API Key — add manually with the key in the URL",
+    mcp_marketplace_needs_config_btn: "Needs Setup",
   },
 } as const;
 
