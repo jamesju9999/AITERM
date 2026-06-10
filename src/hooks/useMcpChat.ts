@@ -1,7 +1,7 @@
 // src/hooks/useMcpChat.ts
 import { useState, useCallback, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { aiChat, type AiToolCall } from "../ipc/ai";
+import { aiChat, formatAiError, type AiToolCall, type AiError } from "../ipc/ai";
 import { executeMcpTool } from "../ipc/mcp";
 import type { ChatMessage } from "../ipc/ai";
 
@@ -145,7 +145,8 @@ export function useMcpChat(sessionId: string) {
             }]);
           }
 
-          const toolResults: ChatMessage[] = [];
+          // Execute all tools and collect results
+          const executedResults: { tc: AiToolCall; result: string; isError: boolean }[] = [];
           for (const tc of reply.tool_calls) {
             let resultContent: string;
             let isError = false;
@@ -171,17 +172,26 @@ export function useMcpChat(sessionId: string) {
               is_error: isError,
             }]);
 
-            toolResults.push({
-              role: "tool",
-              content: resultContent,
-            } as unknown as ChatMessage);
+            executedResults.push({ tc, result: resultContent, isError });
           }
 
-          iterHistory = [
-            ...iterHistory,
-            { role: "assistant", content: encodeToolCalls(reply.tool_calls) } as unknown as ChatMessage,
-            ...toolResults,
-          ];
+          // Build the next-turn history in a format all models understand:
+          // assistant message uses <tool_call> tags (matches system prompt injection format),
+          // tool results come back as a user message so the model can continue naturally.
+          const assistantToolMsg: ChatMessage = {
+            role: "assistant",
+            content: reply.tool_calls
+              .map(tc => `<tool_call>${JSON.stringify({ name: tc.tool_name, arguments: tc.args })}</tool_call>`)
+              .join("\n"),
+          };
+          const toolResultMsg: ChatMessage = {
+            role: "user",
+            content: executedResults
+              .map(({ tc, result }) => `Tool result for ${tc.tool_name}:\n${result}`)
+              .join("\n\n"),
+          };
+
+          iterHistory = [...iterHistory, assistantToolMsg, toolResultMsg];
           continue;
         }
 
@@ -206,7 +216,10 @@ export function useMcpChat(sessionId: string) {
       }
     } catch (e) {
       if (mountedRef.current) {
-        setError(String(e));
+        // e may be an AiError object from Tauri IPC — use formatAiError to
+        // produce a readable message instead of "[object Object]"
+        const isAiError = e != null && typeof e === "object" && "kind" in (e as object);
+        setError(isAiError ? formatAiError(e as AiError) : String(e));
       }
     } finally {
       if (mountedRef.current) {
@@ -267,10 +280,3 @@ export function useMcpChat(sessionId: string) {
   };
 }
 
-function encodeToolCalls(tool_calls: AiToolCall[]): string {
-  return JSON.stringify(tool_calls.map(tc => ({
-    id: tc.id,
-    type: "function",
-    function: { name: tc.tool_name, arguments: JSON.stringify(tc.args) },
-  })));
-}

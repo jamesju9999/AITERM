@@ -5,7 +5,7 @@ import {
 import { useMcpChat } from "../../hooks/useMcpChat";
 import { invokeAiChat, type ChatMessage as AiChatMessage } from "../../ipc/ai";
 import { getSessionCwd, listDirectory } from "../../ipc/fs";
-import { getPtyRecentOutput } from "../../ipc/pty";
+import { getPtyRecentOutput, writePty } from "../../ipc/pty";
 import { getConfig } from "../../ipc/config";
 import { getMcpTools } from "../../ipc/mcp";
 import { useLocale } from "../../contexts/LocaleContext";
@@ -396,7 +396,13 @@ ${dirList || "（無法取得）"}
           <button
             type="button"
             className="aiterm-agent-status__stop"
-            onClick={() => { agentAbortRef.current = true; }}
+            onClick={() => {
+              agentAbortRef.current = true;
+              // Send Ctrl+C to PTY so a stuck command (e.g. pipe dquote>) gets
+              // interrupted, the prompt reappears, and the onComplete callback
+              // can fire to actually unblock the agent loop.
+              writePty(sessionId, "\x03").catch(() => {});
+            }}
           >
             ■ 停止
           </button>
