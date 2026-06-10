@@ -283,12 +283,12 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
         updateLastMsg((m) => ({ ...m, agentStepLabel: stepLabel }));
 
         const lastUserContent = loopHistory[loopHistory.length - 1].content;
-        const reply = await aiChat(
-          lastUserContent,
-          buildSystemPrompt(),
-          loopHistory.slice(0, -1),
+        const aiResult = await aiChat(
+          [{ role: "system" as const, content: buildSystemPrompt() }, ...loopHistory.slice(0, -1), { role: "user" as const, content: lastUserContent }],
+          `db-${connectionId}`,
           selectedProviderId || undefined,
         );
+        const reply = aiResult.content ?? "";
 
         if (stoppedRef.current) break;
 
@@ -337,12 +337,12 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
 
         if (stepCount >= maxSteps) {
           updateLastMsg((m) => ({ ...m, agentStepLabel: "整理答案中..." }));
-          const summary = await aiChat(
-            "請根據以上查詢結果，用繁體中文給出最終完整答案，不要再提供 SQL。",
-            buildSystemPrompt(),
-            loopHistory,
+          const summaryResult = await aiChat(
+            [{ role: "system" as const, content: buildSystemPrompt() }, ...loopHistory, { role: "user" as const, content: "請根據以上查詢結果，用繁體中文給出最終完整答案，不要再提供 SQL。" }],
+            `db-${connectionId}`,
             selectedProviderId || undefined,
           );
+          const summary = summaryResult.content ?? "";
           updateAndPersist((m) => ({
             ...m,
             text: summary,

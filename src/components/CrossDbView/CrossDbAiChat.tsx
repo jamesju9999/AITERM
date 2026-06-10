@@ -281,12 +281,12 @@ SELECT * FROM ...
         updateLastMsg((m) => ({ ...m, agentStepLabel: stepLabel }));
 
         const lastUserContent = loopHistory[loopHistory.length - 1].content;
-        const reply = await aiChat(
-          lastUserContent,
-          buildSystemPrompt(),
-          loopHistory.slice(0, -1),
+        const aiResult = await aiChat(
+          [{ role: "system" as const, content: buildSystemPrompt() }, ...loopHistory.slice(0, -1), { role: "user" as const, content: lastUserContent }],
+          "crossdb",
           selectedProviderId || undefined,
         );
+        const reply = aiResult.content ?? "";
 
         // Debug: log raw model reply to browser console
         if (import.meta.env.DEV) {
@@ -316,12 +316,12 @@ SELECT * FROM ...
         // Force a summarize instead of executing again.
         if (parsed.sql === lastExecutedSql) {
           updateLastMsg((m) => ({ ...m, agentStepLabel: "整理答案中..." }));
-          const summary = await aiChat(
-            "請根據以上查詢結果，用繁體中文給出最終完整答案。不要再提供任何 SQL 查詢。",
-            buildSystemPrompt(),
-            loopHistory,
+          const summaryResult1 = await aiChat(
+            [{ role: "system" as const, content: buildSystemPrompt() }, ...loopHistory, { role: "user" as const, content: "請根據以上查詢結果，用繁體中文給出最終完整答案。不要再提供任何 SQL 查詢。" }],
+            "crossdb",
             selectedProviderId || undefined,
           );
+          const summary = summaryResult1.content ?? "";
           updateLastMsg((m) => ({
             ...m,
             text: summary,
@@ -393,12 +393,12 @@ SELECT * FROM ...
 
         if (stepCount >= maxSteps) {
           updateLastMsg((m) => ({ ...m, agentStepLabel: "整理答案中..." }));
-          const summary = await aiChat(
-            "請根據以上查詢結果，用繁體中文給出最終完整答案，不要再提供 SQL。",
-            buildSystemPrompt(),
-            loopHistory,
+          const summaryResult2 = await aiChat(
+            [{ role: "system" as const, content: buildSystemPrompt() }, ...loopHistory, { role: "user" as const, content: "請根據以上查詢結果，用繁體中文給出最終完整答案，不要再提供 SQL。" }],
+            "crossdb",
             selectedProviderId || undefined,
           );
+          const summary = summaryResult2.content ?? "";
           updateLastMsg((m) => ({
             ...m,
             text: summary,

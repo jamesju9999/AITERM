@@ -3,10 +3,12 @@ import {
   type KeyboardEvent, type PointerEvent,
 } from "react";
 import { useAiChat } from "../../hooks/useAiChat";
-import { aiChat, type ContentPart } from "../../ipc/ai";
+import { invokeAiChat, type ContentPart, type ChatMessage as AiChatMessage } from "../../ipc/ai";
 import { getSessionCwd, listDirectory } from "../../ipc/fs";
 import { getPtyRecentOutput } from "../../ipc/pty";
 import { getConfig } from "../../ipc/config";
+import { getMcpTools } from "../../ipc/mcp";
+import { useLocale } from "../../contexts/LocaleContext";
 import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
 import { MessageList } from "./MessageList";
 import "./styles.css";
@@ -47,10 +49,14 @@ export function AiPanel({
   onOpenProviderPalette,
   sendRemoteResponse,
 }: AiPanelProps) {
+  const { t } = useLocale();
   const chat = useAiChat(sessionId);
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [mcpEnabled, setMcpEnabled] = useState(true);
+  const [mcpToolCount, setMcpToolCount] = useState(0);
+  const [useMcp, setUseMcp] = useState(true);
 
   // ── Resize ────────────────────────────────────────────────────────────────
   const [panelWidth, setPanelWidth] = useState(loadSavedWidth);
@@ -91,12 +97,18 @@ export function AiPanel({
   const maxAgentStepsRef = useRef<number>(5);
 
   useEffect(() => {
-    getConfig()
-      .then((cfg) => {
-        // 0 = unlimited; use a large number internally
-        maxAgentStepsRef.current = cfg.max_agent_steps === 0 ? 9999 : (cfg.max_agent_steps ?? 5);
-      })
-      .catch(() => {});
+    let cancelled = false;
+    const load = async () => {
+      const [cfg, tools] = await Promise.all([getConfig(), getMcpTools()]);
+      if (cancelled) return;
+      // 0 = unlimited; use a large number internally
+      maxAgentStepsRef.current = cfg.max_agent_steps === 0 ? 9999 : (cfg.max_agent_steps ?? 5);
+      const globalEnabled = cfg.mcp_enabled ?? true;
+      setMcpEnabled(globalEnabled);
+      setMcpToolCount(tools.length);
+    };
+    load().catch(() => {});
+    return () => { cancelled = true; };
   }, []);
 
   /** Build system prompt with live CWD + dir listing. */
@@ -150,8 +162,12 @@ ${dirList || "（無法取得）"}
     // Ask AI
     let reply: string;
     try {
-      const lastMsg = history[history.length - 1].content;
-      reply = await aiChat(lastMsg, systemPrompt, history.slice(0, -1));
+      const agentMessages: AiChatMessage[] = [
+        { role: "system", content: systemPrompt },
+        ...history,
+      ];
+      const replyObj = await invokeAiChat(agentMessages, sessionId);
+      reply = replyObj.content ?? "";
     } catch {
       setAgentRunning(false);
       return;
@@ -272,7 +288,7 @@ ${dirList || "（無法取得）"}
     if (agentMode) {
       void submitAgent(text);
     } else {
-      void chat.send(text);
+      void chat.send(text, useMcp && mcpEnabled && mcpToolCount > 0);
     }
   };
 
@@ -369,6 +385,15 @@ ${dirList || "（無法取得）"}
         </div>
       )}
 
+      {chat.toolCallingUnsupported && (
+        <div style={{
+          padding: "4px 12px", fontSize: 12, color: "#f97316",
+          background: "#2e1a0a", borderBottom: "1px solid #7c3a0a",
+        }}>
+          ⚠️ 目前的 AI 供應商不支援 Tool Calling，MCP 工具本次對話不生效。
+        </div>
+      )}
+
       <MessageList
         messages={chat.messages}
         streamBuf={chat.streamBuf}
@@ -402,6 +427,24 @@ ${dirList || "（無法取得）"}
         >
           ⚡
         </button>
+        {mcpEnabled && (
+          <button
+            type="button"
+            title={mcpToolCount === 0 ? t.mcp_toggle_no_servers : (useMcp ? "MCP 開啟" : "MCP 關閉")}
+            disabled={mcpToolCount === 0 || isDisabled}
+            onClick={() => setUseMcp((v) => !v)}
+            style={{
+              fontSize: 11, padding: "2px 8px", borderRadius: 4,
+              border: `1px solid ${useMcp && mcpToolCount > 0 ? "#34d399" : "#333"}`,
+              background: useMcp && mcpToolCount > 0 ? "#0f2e23" : "transparent",
+              color: useMcp && mcpToolCount > 0 ? "#34d399" : "#666",
+              cursor: mcpToolCount === 0 ? "default" : "pointer",
+              opacity: mcpToolCount === 0 ? 0.5 : 1,
+            }}
+          >
+            {mcpToolCount > 0 ? t.mcp_toggle_on(mcpToolCount) : t.mcp_toggle_off}
+          </button>
+        )}
         <textarea
           ref={textareaRef}
           className="aiterm-ai-panel-input"

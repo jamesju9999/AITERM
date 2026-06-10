@@ -236,7 +236,12 @@ Reformat the following raw API documentation page into clean Markdown.
   ): Promise<string> {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        return await aiChat(text, prompt, [], providerId);
+        const result = await aiChat(
+          [{ role: "system" as const, content: prompt }, { role: "user" as const, content: text }],
+          "apidocs",
+          providerId,
+        );
+        return result.content ?? "";
       } catch (err) {
         const isConnectionErr =
           typeof err === "object" && err !== null &&

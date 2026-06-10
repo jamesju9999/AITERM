@@ -297,6 +297,9 @@ export const translations = {
     mcp_import_desc: "以下 Server 可從 Claude Desktop 設定匯入，請選擇要加入的項目：",
     mcp_import_confirm: "匯入選取的 Server",
     mcp_import_none_found: "找不到 Claude Desktop 設定，請確認已安裝 Claude Desktop。",
+    mcp_toggle_on: (n: number) => `⚙ MCP (${n})`,
+    mcp_toggle_off: "⚙ MCP",
+    mcp_toggle_no_servers: "請先在設定中新增 MCP Server",
   },
   "en": {
     // Settings sidebar
@@ -592,6 +595,9 @@ export const translations = {
     mcp_import_desc: "The following servers were found in Claude Desktop. Select which to import:",
     mcp_import_confirm: "Import Selected",
     mcp_import_none_found: "Claude Desktop config not found. Make sure Claude Desktop is installed.",
+    mcp_toggle_on: (n: number) => `⚙ MCP (${n})`,
+    mcp_toggle_off: "⚙ MCP",
+    mcp_toggle_no_servers: "Add an MCP Server in Settings first",
   },
 } as const;
 
