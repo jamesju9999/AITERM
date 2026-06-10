@@ -13,7 +13,8 @@ use tokio::sync::mpsc;
 
 use crate::ai::{
     sse::{find_line_end, separator_len},
-    AiError, AiProvider, GenerateChunk, GenerateRequest,
+    AiError, AiProvider, AiToolCall, GenerateChunk, GenerateRequest, GenerateWithToolsResult,
+    McpToolDefinition,
 };
 
 pub struct OllamaClient {
@@ -122,11 +123,9 @@ impl AiProvider for OllamaClient {
     async fn generate_with_tools(
         &self,
         req: GenerateRequest,
-        tools: Vec<crate::ai::McpToolDefinition>,
+        tools: Vec<McpToolDefinition>,
         _tx: mpsc::Sender<GenerateChunk>,
-    ) -> Result<crate::ai::GenerateWithToolsResult, AiError> {
-        use crate::ai::GenerateWithToolsResult;
-
+    ) -> Result<GenerateWithToolsResult, AiError> {
         let ollama_tools: Vec<OllamaTool> = tools
             .iter()
             .map(|t| OllamaTool {
@@ -139,21 +138,9 @@ impl AiProvider for OllamaClient {
             })
             .collect();
 
-        let mut messages: Vec<OllamaMessage> = Vec::new();
-        messages.push(OllamaMessage {
-            role: "system".into(),
-            content: serde_json::Value::String(req.system_prompt.clone()),
-        });
-        for m in &req.messages {
-            messages.push(OllamaMessage {
-                role: m.role.clone(),
-                content: m.content.clone(),
-            });
-        }
-
         let body = OllamaToolRequest {
             model: self.model.clone(),
-            messages,
+            messages: build_messages(&req),
             stream: false,
             tools: ollama_tools,
         };
@@ -189,7 +176,7 @@ impl AiProvider for OllamaClient {
                 .tool_calls
                 .into_iter()
                 .enumerate()
-                .map(|(i, tc)| crate::ai::AiToolCall {
+                .map(|(i, tc)| AiToolCall {
                     id: format!("call_{}", i),
                     tool_name: tc.function.name,
                     args: tc.function.arguments,
@@ -209,6 +196,40 @@ fn connection_error(e: &reqwest::Error) -> AiError {
     } else {
         AiError::Network { message: e.to_string() }
     }
+}
+
+// ── Request types ─────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct OllamaChatRequest {
+    model: String,
+    messages: Vec<OllamaMessage>,
+    stream: bool,
+}
+
+#[derive(Serialize)]
+struct OllamaMessage {
+    role: String,
+    content: serde_json::Value,
+}
+
+fn build_messages(req: &GenerateRequest) -> Vec<OllamaMessage> {
+    let mut messages: Vec<OllamaMessage> = Vec::with_capacity(req.messages.len() + 1);
+    messages.push(OllamaMessage {
+        role: "system".to_owned(),
+        content: serde_json::Value::String(req.system_prompt.clone()),
+    });
+    for m in &req.messages {
+        messages.push(OllamaMessage {
+            role: m.role.clone(),
+            content: m.content.clone(),
+        });
+    }
+    messages
+}
+
+fn build_request_body(model: &str, req: &GenerateRequest, stream: bool) -> OllamaChatRequest {
+    OllamaChatRequest { model: model.to_owned(), messages: build_messages(req), stream }
 }
 
 // ── Tool calling types ─────────────────────────────────────────────────────────
@@ -257,31 +278,6 @@ struct OllamaResponseToolCall {
 struct OllamaResponseFunction {
     name: String,
     arguments: serde_json::Value,
-}
-
-// ── Request types ─────────────────────────────────────────────────────────────
-
-#[derive(Serialize)]
-struct OllamaChatRequest {
-    model: String,
-    messages: Vec<OllamaMessage>,
-    stream: bool,
-}
-
-#[derive(Serialize)]
-struct OllamaMessage {
-    role: String,
-    content: serde_json::Value,
-}
-
-fn build_request_body(model: &str, req: &GenerateRequest, stream: bool) -> OllamaChatRequest {
-    // Prepend system prompt as a "system" role message.
-    let mut messages: Vec<OllamaMessage> = Vec::with_capacity(req.messages.len() + 1);
-    messages.push(OllamaMessage { role: "system".to_owned(), content: serde_json::Value::String(req.system_prompt.clone()) });
-    for m in &req.messages {
-        messages.push(OllamaMessage { role: m.role.clone(), content: m.content.clone() });
-    }
-    OllamaChatRequest { model: model.to_owned(), messages, stream }
 }
 
 // ── NDJSON consumer ───────────────────────────────────────────────────────────
