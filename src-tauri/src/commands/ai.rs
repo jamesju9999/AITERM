@@ -301,12 +301,16 @@ pub async fn ai_chat(
     mcp_manager: State<'_, std::sync::Arc<tokio::sync::Mutex<crate::mcp::McpManager>>>,
     config: State<'_, std::sync::Arc<crate::config::ConfigStore>>,
 ) -> Result<AiChatReply, AiError> {
-    // Reject empty history or histories whose last message isn't from the user.
-    // This is a cheap sanity check — the real contract is enforced at the UI.
+    // Reject empty history or histories whose last message is in an unexpected role.
+    // When use_mcp=true the agent loop may send a history ending with a "tool"
+    // result message (multi-turn tool calling), so we allow that too.
     if messages.is_empty() {
         return Err(AiError::InvalidInput { reason: "empty messages".into() });
     }
-    if messages.last().map(|m| m.role.as_str()) != Some("user") {
+    let last_role = messages.last().map(|m| m.role.as_str());
+    let last_role_ok = last_role == Some("user")
+        || (use_mcp && last_role == Some("tool"));
+    if !last_role_ok {
         return Err(AiError::InvalidInput { reason: "last message must be from user".into() });
     }
 
@@ -455,26 +459,36 @@ pub(crate) fn parse_tool_calls_from_text(text: &str) -> Option<Vec<crate::ai::Ai
     let close = "</tool_call>";
     while let Some(start_offset) = text[pos..].find(open) {
         let content_start = pos + start_offset + open.len();
-        if let Some(end_offset) = text[content_start..].find(close) {
-            let json_str = &text[content_start..content_start + end_offset];
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
-                let name = val["name"].as_str().unwrap_or("").to_string();
-                let args = val["arguments"].clone();
-                if !name.is_empty() {
-                    calls.push(crate::ai::AiToolCall {
-                        id: format!("call_sp_{}", calls.len()),
-                        tool_name: name,
-                        args,
-                    });
-                }
-                pos = content_start + end_offset + close.len();
-            } else {
-                // Skip past this malformed block and continue searching
-                pos = content_start + end_offset + close.len();
-            }
+        // Determine end of this block:
+        //   1. Prefer explicit </tool_call> closing tag
+        //   2. Fall back to the next <tool_call> opening tag (multiple calls, no closing tags)
+        //   3. Fall back to end of string
+        let (json_str, next_pos) = if let Some(end_offset) = text[content_start..].find(close) {
+            (&text[content_start..content_start + end_offset], content_start + end_offset + close.len())
+        } else if let Some(next_open) = text[content_start..].find(open) {
+            (&text[content_start..content_start + next_open], content_start + next_open)
         } else {
-            break;
+            (&text[content_start..], text.len())
+        };
+        let json_str = json_str.trim();
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+            let name = val["name"].as_str().unwrap_or("").to_string();
+            // arguments is optional — default to empty object if missing
+            let args = if val["arguments"].is_null() || !val["arguments"].is_object() {
+                serde_json::Value::Object(Default::default())
+            } else {
+                val["arguments"].clone()
+            };
+            if !name.is_empty() {
+                calls.push(crate::ai::AiToolCall {
+                    id: format!("call_sp_{}", calls.len()),
+                    tool_name: name,
+                    args,
+                });
+            }
         }
+        pos = next_pos;
+        if pos >= text.len() { break; }
     }
     if calls.is_empty() { None } else { Some(calls) }
 }
@@ -515,6 +529,45 @@ mod tests {
         let calls = parse_tool_calls_from_text(text).unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].tool_name, "valid_tool");
+    }
+
+    #[test]
+    fn parse_tool_calls_handles_no_closing_tag() {
+        // Qwen sometimes omits the closing </tool_call> tag
+        let text = "<tool_call>\n{\"name\":\"brave__search\",\"arguments\":{\"query\":\"WWDC 2026\"}}";
+        let calls = parse_tool_calls_from_text(text).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "brave__search");
+    }
+
+    #[test]
+    fn parse_tool_calls_trims_whitespace_around_json() {
+        // Model outputs newline after <tool_call> before the JSON
+        let text = "<tool_call>\n  {\"name\":\"my_tool\",\"arguments\":{}}\n</tool_call>";
+        let calls = parse_tool_calls_from_text(text).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "my_tool");
+    }
+
+    #[test]
+    fn parse_tool_calls_handles_multiple_no_closing_tags() {
+        // Model outputs multiple <tool_call> lines without closing tags
+        let text = "<tool_call>{\"name\":\"tool_a\"}\n<tool_call>{\"name\":\"tool_b\"}\n<tool_call>{\"name\":\"tool_c\"}";
+        let calls = parse_tool_calls_from_text(text).unwrap();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0].tool_name, "tool_a");
+        assert_eq!(calls[1].tool_name, "tool_b");
+        assert_eq!(calls[2].tool_name, "tool_c");
+    }
+
+    #[test]
+    fn parse_tool_calls_handles_missing_arguments() {
+        // Model omits the arguments field entirely
+        let text = "<tool_call>{\"name\":\"list_files\"}</tool_call>";
+        let calls = parse_tool_calls_from_text(text).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "list_files");
+        assert!(calls[0].args.is_object());
     }
 
     #[test]
