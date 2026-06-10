@@ -18,15 +18,7 @@ export function AboutPage() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
   const [latestVersion, setLatestVersion] = useState<string>("");
 
-  useEffect(() => {
-    getVersion().then(setVersion).catch(() => setVersion("—"));
-  }, []);
-
-  const handleGitHub = () => {
-    openUrl(GITHUB_URL).catch(console.error);
-  };
-
-  const handleCheckUpdates = async () => {
+  const checkUpdates = async (currentVersion: string) => {
     setUpdateStatus("checking");
     try {
       const res = await fetch(TAGS_API);
@@ -37,7 +29,7 @@ export function AboutPage() {
         return;
       }
       const latest = tags[0].name.replace(/^v/, "");
-      const current = version.replace(/^v/, "");
+      const current = currentVersion.replace(/^v/, "");
       setLatestVersion(latest);
       // String equality (not semver): tags are sorted newest-first by GitHub,
       // so any mismatch reliably means a newer version is available.
@@ -46,6 +38,19 @@ export function AboutPage() {
       setUpdateStatus("error");
     }
   };
+
+  useEffect(() => {
+    getVersion()
+      .then((v) => { setVersion(v); checkUpdates(v); })
+      .catch(() => setVersion("—"));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleGitHub = () => {
+    openUrl(GITHUB_URL).catch(console.error);
+  };
+
+  const handleCheckUpdates = () => checkUpdates(version);
 
   const statusText = () => {
     switch (updateStatus) {
