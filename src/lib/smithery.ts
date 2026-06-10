@@ -13,6 +13,7 @@ export interface SmitheryConnection {
     env: Record<string, string>;
   };
   url?: string;
+  deploymentUrl?: string;
 }
 
 export interface SmitheryServerDetail {

@@ -17,7 +17,8 @@ type InstallStatus =
   | "running"
   | "success"
   | "error"
-  | "no-connections";
+  | "no-connections"
+  | "http-added";
 
 interface ServerInstallState {
   status: InstallStatus;
@@ -119,12 +120,35 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
       (c) => c.type === "stdio" && c.stdioFunction
     );
 
-    if (!stdioConn || !stdioConn.stdioFunction) {
+    // HTTP/SSE remote server — add directly with URL, no local install needed
+    if (!stdioConn) {
+      const httpConn = detail.connections.find(
+        (c) => (c.type === "http" || c.type === "sse") && (c.url ?? c.deploymentUrl)
+      );
+      if (httpConn) {
+        const url = httpConn.url ?? httpConn.deploymentUrl ?? "";
+        try {
+          await addMcpServer({
+            name: detail.displayName || qualifiedName,
+            enabled: true,
+            transport: "http" as const,
+            command: "",
+            args: [],
+            env: {},
+            url,
+          });
+          setServerState(qualifiedName, { status: "http-added", detail });
+          setTimeout(() => { onInstalled(); }, 2000);
+        } catch {
+          setServerState(qualifiedName, { status: "error" });
+        }
+        return;
+      }
       setServerState(qualifiedName, { status: "no-connections", detail });
       return;
     }
 
-    const { command, args, env } = stdioConn.stdioFunction;
+    const { command, args, env } = stdioConn.stdioFunction!;
     const sessionId = `mcp-install-${qualifiedName}`;
 
     setServerState(qualifiedName, { status: "running", detail, logs: [] });
@@ -194,6 +218,7 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
       case "running":
         return t.mcp_marketplace_installing;
       case "success":
+      case "http-added":
         return t.mcp_marketplace_installed_done;
       case "error":
         return t.mcp_marketplace_failed;
@@ -244,7 +269,8 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
           const isDisabled =
             state.status === "fetching" ||
             state.status === "running" ||
-            state.status === "success";
+            state.status === "success" ||
+            state.status === "http-added";
 
           return (
             <div
@@ -286,7 +312,7 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
                 onClick={() => handleInstall(server)}
                 disabled={isDisabled}
                 style={{
-                  background: state.status === "success" ? "#166534" : "#2a2a2a",
+                  background: (state.status === "success" || state.status === "http-added") ? "#166534" : "#2a2a2a",
                   border: "1px solid #3a3a3a",
                   borderRadius: 4,
                   color: state.status === "error" ? "#f87171" : "#ccc",
