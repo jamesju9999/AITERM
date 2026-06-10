@@ -338,6 +338,7 @@ pub async fn ai_chat(
         };
 
         if !tools.is_empty() {
+            let tools_for_fallback = tools.clone();
             let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
             let provider_clone = provider.clone();
             let req_clone = req.clone();
@@ -360,10 +361,39 @@ pub async fn ai_chat(
                     Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false }),
                 Ok(Ok(crate::ai::GenerateWithToolsResult::Text(content))) =>
                     Ok(AiChatReply { content: Some(content), tool_calls: vec![], tool_calling_unsupported: false }),
-                Ok(Ok(crate::ai::GenerateWithToolsResult::Unsupported)) =>
-                    Ok(AiChatReply { content: None, tool_calls: vec![], tool_calling_unsupported: true }),
-                Ok(Err(AiError::ToolCallingUnsupported)) =>
-                    Ok(AiChatReply { content: None, tool_calls: vec![], tool_calling_unsupported: true }),
+                Ok(Ok(crate::ai::GenerateWithToolsResult::Unsupported)) |
+                Ok(Err(AiError::ToolCallingUnsupported)) => {
+                    // System prompt fallback: inject tool descriptions and re-call generate()
+                    let tool_injection = build_tool_prompt_injection(&tools_for_fallback);
+                    let mut fallback_req = req.clone();
+                    fallback_req.system_prompt =
+                        format!("{}\n\n{}", fallback_req.system_prompt, tool_injection);
+
+                    let (tx2, mut rx2) = mpsc::channel::<GenerateChunk>(16);
+                    let provider2 = provider.clone();
+                    let join2 = tokio::spawn(async move {
+                        provider2.generate(fallback_req, tx2).await
+                    });
+
+                    let mut buf2 = String::new();
+                    while let Some(chunk) = rx2.recv().await {
+                        let _ = app.emit("ai-stream", AiStreamEvent {
+                            session_id: session_id.clone(),
+                            kind: AiStreamKind::Chat,
+                            delta: chunk.delta.clone(),
+                            done: chunk.done,
+                        });
+                        buf2.push_str(&chunk.delta);
+                        if chunk.done { break; }
+                    }
+                    let _ = join2.await;
+
+                    if let Some(calls) = parse_tool_calls_from_text(&buf2) {
+                        Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false })
+                    } else {
+                        Ok(AiChatReply { content: Some(buf2), tool_calls: vec![], tool_calling_unsupported: false })
+                    }
+                }
                 Ok(Err(e)) => Err(e),
                 Err(e) => Err(AiError::Network { message: e.to_string() }),
             };
@@ -396,11 +426,87 @@ pub async fn ai_chat(
     Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false })
 }
 
+/// Build the tool injection suffix for providers that don't support native tool calling.
+pub(crate) fn build_tool_prompt_injection(tools: &[crate::ai::McpToolDefinition]) -> String {
+    let tools_json: Vec<serde_json::Value> = tools
+        .iter()
+        .map(|t| serde_json::json!({
+            "name": t.name,
+            "description": t.description,
+            "parameters": t.input_schema,
+        }))
+        .collect();
+    format!(
+        "You have access to the following tools. To call a tool, output ONLY a single JSON block \
+using this exact format and nothing else before or after it:\n\
+<tool_call>{{\"name\":\"<tool_name>\",\"arguments\":{{...}}}}</tool_call>\n\n\
+Available tools:\n{}\n\n\
+After receiving tool results, continue the conversation naturally in the user's language.",
+        serde_json::to_string_pretty(&tools_json).unwrap_or_default()
+    )
+}
+
+/// Parse `<tool_call>...</tool_call>` blocks from model text output.
+/// Returns `None` if no valid tool calls found.
+pub(crate) fn parse_tool_calls_from_text(text: &str) -> Option<Vec<crate::ai::AiToolCall>> {
+    let mut calls = Vec::new();
+    let mut pos = 0;
+    let open = "<tool_call>";
+    let close = "</tool_call>";
+    while let Some(start_offset) = text[pos..].find(open) {
+        let content_start = pos + start_offset + open.len();
+        if let Some(end_offset) = text[content_start..].find(close) {
+            let json_str = &text[content_start..content_start + end_offset];
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                let name = val["name"].as_str().unwrap_or("").to_string();
+                let args = val["arguments"].clone();
+                if !name.is_empty() {
+                    calls.push(crate::ai::AiToolCall {
+                        id: format!("call_sp_{}", calls.len()),
+                        tool_name: name,
+                        args,
+                    });
+                }
+                pos = content_start + end_offset + close.len();
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    if calls.is_empty() { None } else { Some(calls) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ai::{AiToolCall, EnvSnapshot};
     use std::path::PathBuf;
+
+    #[test]
+    fn parse_tool_calls_finds_single_call() {
+        let text = r#"Some text before <tool_call>{"name":"brave__search","arguments":{"query":"WWDC 2026"}}</tool_call> after"#;
+        let calls = parse_tool_calls_from_text(text).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "brave__search");
+        assert_eq!(calls[0].args["query"], "WWDC 2026");
+    }
+
+    #[test]
+    fn parse_tool_calls_returns_none_when_absent() {
+        let text = "Just a plain answer, no tool calls here.";
+        assert!(parse_tool_calls_from_text(text).is_none());
+    }
+
+    #[test]
+    fn parse_tool_calls_finds_multiple_calls() {
+        let text = r#"<tool_call>{"name":"tool_a","arguments":{"x":1}}</tool_call> and <tool_call>{"name":"tool_b","arguments":{}}</tool_call>"#;
+        let calls = parse_tool_calls_from_text(text).unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].tool_name, "tool_a");
+        assert_eq!(calls[1].tool_name, "tool_b");
+    }
 
     #[test]
     fn ai_chat_reply_serializes_tool_calls() {
