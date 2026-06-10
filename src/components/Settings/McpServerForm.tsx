@@ -176,17 +176,23 @@ export function McpServerForm({ existing, onSave, onCancel }: Props) {
 
         {/* http/sse fields */}
         {(form.transport === "http" || form.transport === "sse") && (
-          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <span style={{ fontSize: 13, color: "#aaa" }}>URL</span>
             <input
               className="settings-input"
               value={form.url ?? ""}
               onChange={e => setForm(f => ({ ...f, url: e.target.value }))}
-              placeholder="例如：http://localhost:3000"
+              placeholder="例如：https://server.run.tools"
               autoCorrect="off"
               spellCheck={false}
             />
-          </label>
+            <span style={{ fontSize: 11, color: "#555", lineHeight: 1.5 }}>
+              如需 API Key，附加於 URL 後面，例如：
+              <code style={{ color: "#888", fontSize: 11 }}>
+                https://server.run.tools?apiKey=your_key
+              </code>
+            </span>
+          </div>
         )}
 
         {/* Enabled */}
