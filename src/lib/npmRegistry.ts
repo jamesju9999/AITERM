@@ -22,8 +22,6 @@ export const PAGE_SIZE = 20;
 
 export async function searchNpmMcp(query: string, from = 0): Promise<NpmSearchPage> {
   const raw = await invoke("search_npm_mcp", { query, from });
-  console.log("[npmRegistry] raw invoke result:", JSON.stringify(raw));
-
   const page = raw as { results: RustNpmResult[]; total: number };
   if (!page || !Array.isArray(page.results)) {
     console.error("[npmRegistry] unexpected response shape:", page);

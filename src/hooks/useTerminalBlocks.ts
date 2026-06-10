@@ -46,8 +46,6 @@ export function useTerminalBlocks(
 
     // Register OSC 133 handler
     const disposeOsc = term.parser.registerOscHandler(133, (data) => {
-      console.log("[AITerm] Received OSC 133:", data);
-
       if (data === "C") {
         try {
           const marker = term.registerMarker(0);
