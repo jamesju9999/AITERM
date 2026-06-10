@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { addMcpServer } from "../../ipc/mcp";
 import { useLocale } from "../../contexts/LocaleContext";
 import {
   searchSmithery,
@@ -38,6 +38,9 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
     Record<string, ServerInstallState>
   >({});
   const [activeTerminal, setActiveTerminal] = useState<string | null>(null);
+
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -121,18 +124,19 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
     }
 
     const { command, args, env } = stdioConn.stdioFunction;
-    const sessionId = `mcp-install-${Date.now()}`;
+    const sessionId = `mcp-install-${qualifiedName}`;
 
     setServerState(qualifiedName, { status: "running", detail, logs: [] });
     setActiveTerminal(qualifiedName);
 
     const unlisten = await listen<{
       session_id: string;
-      text: string;
+      line: string;
       is_error: boolean;
       done: boolean;
       success?: boolean;
     }>("mcp-install-log", (event) => {
+      if (!mountedRef.current) return;
       const payload = event.payload;
       if (payload.session_id !== sessionId) return;
 
@@ -143,7 +147,7 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
             ...prev,
             [qualifiedName]: {
               ...existing,
-              logs: [...existing.logs, { text: payload.text, isError: payload.is_error }],
+              logs: [...existing.logs, { text: payload.line, isError: payload.is_error }],
             },
           };
         });
@@ -151,15 +155,13 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
         unlisten();
         if (payload.success) {
           setServerState(qualifiedName, { status: "success" });
-          invoke("add_mcp_server", {
-            input: {
-              name: detail.displayName || qualifiedName,
-              enabled: true,
-              transport: "stdio" as const,
-              command,
-              args,
-              env,
-            },
+          addMcpServer({
+            name: detail.displayName || qualifiedName,
+            enabled: true,
+            transport: "stdio" as const,
+            command,
+            args,
+            env,
           }).catch(() => {});
           setTimeout(() => {
             onInstalled();
