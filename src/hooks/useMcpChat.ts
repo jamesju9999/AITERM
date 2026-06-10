@@ -48,6 +48,7 @@ export function useMcpChat(sessionId: string) {
   const [messages, setMessages] = useState<McpChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamBuf, setStreamBuf] = useState("");
+  const streamBufRef = useRef("");
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<McpChatSession[]>(loadAllSessions);
   const mountedRef = useRef(true);
@@ -68,8 +69,12 @@ export function useMcpChat(sessionId: string) {
         if (!mountedRef.current) return;
         if (event.payload.done) {
           setStreamBuf("");
+          streamBufRef.current = "";
         } else {
-          setStreamBuf(prev => prev + event.payload.delta);
+          setStreamBuf(prev => {
+            streamBufRef.current = prev + event.payload.delta;
+            return streamBufRef.current;
+          });
         }
       }
     ).then(u => { unlisten = u; });
@@ -182,7 +187,7 @@ export function useMcpChat(sessionId: string) {
 
         // Normal text response — done
         setMessages(prev => {
-          const updated = [...prev, { role: "assistant" as const, content: reply.content ?? streamBuf }];
+          const updated = [...prev, { role: "assistant" as const, content: reply.content ?? streamBufRef.current }];
           saveSession(updated);
           return updated;
         });
@@ -190,10 +195,14 @@ export function useMcpChat(sessionId: string) {
       }
 
       if (iterations >= MAX_TOOL_ITERATIONS && mountedRef.current) {
-        setMessages(prev => [...prev, {
-          role: "assistant" as const,
-          content: "⚠️ 已達工具呼叫上限（10 次），請重新提問。",
-        }]);
+        setMessages(prev => {
+          const updated = [...prev, {
+            role: "assistant" as const,
+            content: "⚠️ 已達工具呼叫上限（10 次），請重新提問。",
+          }];
+          saveSession(updated);
+          return updated;
+        });
       }
     } catch (e) {
       if (mountedRef.current) {

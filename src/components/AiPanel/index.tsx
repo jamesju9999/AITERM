@@ -385,8 +385,6 @@ ${dirList || "（無法取得）"}
         </div>
       )}
 
-
-
       <MessageList
         messages={chat.messages}
         streamBuf={chat.streamBuf}
