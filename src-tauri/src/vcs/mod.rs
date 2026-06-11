@@ -19,20 +19,28 @@ impl VcsManager {
     /// Returns `VcsRepoInfo` with `connection_id = None` (caller fills it in).
     pub async fn detect_repo(path: &str) -> Result<VcsRepoInfo, String> {
         // Try git first
-        let git_root = Command::new("git")
-            .args(["rev-parse", "--show-toplevel"])
-            .current_dir(path)
-            .output();
+        let mut git_cmd = Command::new("git");
+        git_cmd.args(["rev-parse", "--show-toplevel"]).current_dir(path);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            git_cmd.creation_flags(0x08000000);
+        }
+        let git_root = git_cmd.output();
 
         if let Ok(out) = git_root {
             if out.status.success() {
                 let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
                 // Get remote URL (best-effort)
-                let remote_url = Command::new("git")
-                    .args(["remote", "get-url", "origin"])
-                    .current_dir(&root)
-                    .output()
+                let mut remote_cmd = Command::new("git");
+                remote_cmd.args(["remote", "get-url", "origin"]).current_dir(&root);
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    remote_cmd.creation_flags(0x08000000);
+                }
+                let remote_url = remote_cmd.output()
                     .ok()
                     .filter(|o| o.status.success())
                     .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -48,10 +56,14 @@ impl VcsManager {
         }
 
         // Try SVN
-        let svn_out = Command::new("svn")
-            .args(["info", "--xml", "--non-interactive"])
-            .current_dir(path)
-            .output();
+        let mut svn_cmd = Command::new("svn");
+        svn_cmd.args(["info", "--xml", "--non-interactive"]).current_dir(path);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            svn_cmd.creation_flags(0x08000000);
+        }
+        let svn_out = svn_cmd.output();
 
         if let Ok(out) = svn_out {
             if out.status.success() {

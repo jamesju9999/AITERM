@@ -191,9 +191,14 @@ pub async fn vcs_test_connection(input: VcsConnectionInput) -> Result<String, St
                 }
             }
 
-            let out = std::process::Command::new("svn")
-                .args(&args)
-                .output()
+            let mut cmd = std::process::Command::new("svn");
+            cmd.args(&args);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000);
+            }
+            let out = cmd.output()
                 .map_err(|_| "svn command not found — please install SVN".to_string())?;
 
             if out.status.success() {

@@ -80,10 +80,15 @@ pub async fn enterprise_on_complete(
     vcs_mgr: State<'_, Arc<Mutex<VcsCredentialManager>>>,
 ) -> Result<String, String> {
     // Push the work branch first.
-    let push_status = tokio::process::Command::new("git")
-        .args(["push", "--set-upstream", "origin", &work_branch])
-        .current_dir(&repo_dir)
-        .status()
+    let mut push_cmd = tokio::process::Command::new("git");
+    push_cmd.args(["push", "--set-upstream", "origin", &work_branch])
+        .current_dir(&repo_dir);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        push_cmd.creation_flags(0x08000000);
+    }
+    let push_status = push_cmd.status()
         .await
         .map_err(|e| e.to_string())?;
 
@@ -98,10 +103,15 @@ pub async fn enterprise_on_complete(
         let base_branch = on_complete.get("base_branch").and_then(|v| v.as_str()).unwrap_or("main");
 
         // Get the authenticated remote URL to extract owner/repo.
-        let remote_url_out = tokio::process::Command::new("git")
-            .args(["remote", "get-url", "origin"])
-            .current_dir(&repo_dir)
-            .output()
+        let mut remote_cmd = tokio::process::Command::new("git");
+        remote_cmd.args(["remote", "get-url", "origin"])
+            .current_dir(&repo_dir);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            remote_cmd.creation_flags(0x08000000);
+        }
+        let remote_url_out = remote_cmd.output()
             .await
             .map_err(|e| e.to_string())?;
         let remote_url = String::from_utf8_lossy(&remote_url_out.stdout).trim().to_string();
@@ -245,9 +255,13 @@ Start-Service -Name "AITermHeadless"
             // On Windows, we just write the PowerShell script — admin elevation needed
             let script_path = std::env::temp_dir().join("aiterm-install-service.ps1");
             std::fs::write(&script_path, &script).map_err(|e| format!("write failed: {e}"))?;
-            tokio::process::Command::new("powershell")
-                .args(["-ExecutionPolicy", "Bypass", "-File", script_path.to_str().unwrap_or("")])
-                .status()
+            let mut ps_cmd = tokio::process::Command::new("powershell");
+            ps_cmd.args(["-ExecutionPolicy", "Bypass", "-File", script_path.to_str().unwrap_or("")]);
+            {
+                use std::os::windows::process::CommandExt;
+                ps_cmd.creation_flags(0x08000000);
+            }
+            ps_cmd.status()
                 .await
                 .map_err(|e| e.to_string())?;
         }

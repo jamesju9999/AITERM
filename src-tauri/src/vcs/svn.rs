@@ -161,18 +161,25 @@ impl SvnClient {
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     fn is_available(&self) -> bool {
-        Command::new("svn")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        let mut cmd = Command::new("svn");
+        cmd.arg("--version");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        cmd.output().map(|o| o.status.success()).unwrap_or(false)
     }
 
     fn svn(&self, args: &[String]) -> Result<String, String> {
-        let out = Command::new("svn")
-            .args(args)
-            .current_dir(&self.working_copy_root)
-            .output()
+        let mut cmd = Command::new("svn");
+        cmd.args(args).current_dir(&self.working_copy_root);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        let out = cmd.output()
             .map_err(|e| format!("svn exec error: {e}"))?;
 
         if out.status.success() {

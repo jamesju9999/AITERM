@@ -88,9 +88,11 @@ impl StdioTransport {
 
 #[cfg(target_os = "windows")]
 fn build_command(command: &str, args: &[String], env: &HashMap<String, String>) -> tokio::process::Command {
+    use std::os::windows::process::CommandExt;
     let mut cmd = tokio::process::Command::new("cmd");
     cmd.arg("/C").arg(command);
     cmd.args(args);
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     for (k, v) in env {
         cmd.env(k, v);
     }

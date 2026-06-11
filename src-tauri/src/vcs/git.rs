@@ -350,10 +350,14 @@ impl GitClient {
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     fn git(&self, args: &[String]) -> Result<String, String> {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(&self.repo_root)
-            .output()
+        let mut cmd = Command::new("git");
+        cmd.args(args).current_dir(&self.repo_root);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        let out = cmd.output()
             .map_err(|e| format!("git exec error: {e}"))?;
 
         if out.status.success() {

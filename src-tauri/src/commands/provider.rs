@@ -483,8 +483,10 @@ fn resolve_github_client_id(client_id: Option<String>) -> String {
 fn open_browser(url: &str) {
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         let _ = Command::new("cmd")
             .args(["/C", "start", "", url])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn();
     }
     #[cfg(target_os = "macos")]

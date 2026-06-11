@@ -27,11 +27,15 @@ fn find_python_for_markitdown() -> Result<String, String> {
     ];
 
     for candidate in candidates {
-        if let Ok(status) = std::process::Command::new(candidate)
-            .arg("-c")
-            .arg("import sys; exit(0 if sys.version_info >= (3,10) else 1)")
-            .status()
+        let mut cmd = std::process::Command::new(candidate);
+        cmd.arg("-c")
+            .arg("import sys; exit(0 if sys.version_info >= (3,10) else 1)");
+        #[cfg(windows)]
         {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        if let Ok(status) = cmd.status() {
             if status.success() {
                 return Ok(candidate.to_string());
             }

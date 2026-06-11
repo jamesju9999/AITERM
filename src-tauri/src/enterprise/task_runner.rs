@@ -115,27 +115,35 @@ async fn clone_repo(packet: &TaskPacket) -> anyhow::Result<std::path::PathBuf> {
     let auth_url = inject_token_into_url(&packet.vcs.repo_url, &packet.vcs_token)?;
 
     // git clone --branch <base> --depth 1 <url> <dir>
-    let status = tokio::process::Command::new("git")
-        .args([
-            "clone",
-            "--branch", &packet.vcs.base_branch,
-            "--depth", "1",
-            &auth_url,
-            work_dir.to_str().unwrap_or("."),
-        ])
-        .status()
-        .await?;
+    let mut clone_cmd = tokio::process::Command::new("git");
+    clone_cmd.args([
+        "clone",
+        "--branch", &packet.vcs.base_branch,
+        "--depth", "1",
+        &auth_url,
+        work_dir.to_str().unwrap_or("."),
+    ]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        clone_cmd.creation_flags(0x08000000);
+    }
+    let status = clone_cmd.status().await?;
 
     if !status.success() {
         anyhow::bail!("git clone exited with {}", status);
     }
 
     // Create and checkout work branch.
-    tokio::process::Command::new("git")
-        .args(["checkout", "-b", &packet.vcs.work_branch])
-        .current_dir(&work_dir)
-        .status()
-        .await?;
+    let mut checkout_cmd = tokio::process::Command::new("git");
+    checkout_cmd.args(["checkout", "-b", &packet.vcs.work_branch])
+        .current_dir(&work_dir);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        checkout_cmd.creation_flags(0x08000000);
+    }
+    checkout_cmd.status().await?;
 
     Ok(work_dir)
 }
