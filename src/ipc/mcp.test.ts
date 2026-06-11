@@ -15,6 +15,7 @@ describe("McpServerInfo shape", () => {
       status: "connected",
       tool_count: 5,
       error_message: null,
+      env_keys: ["API_KEY"],
     };
     expect(info.status).toBe("connected");
     expect(info.tool_count).toBe(5);
@@ -32,6 +33,7 @@ describe("McpServerInfo shape", () => {
       status: "disabled",
       tool_count: 0,
       error_message: null,
+      env_keys: [],
     };
     expect(info.status).toBe("disabled");
   });
