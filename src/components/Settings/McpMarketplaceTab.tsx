@@ -166,7 +166,7 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
               padding: "3px 8px",
             }}
           >
-            ↓ {t.mcp_marketplace_sort_downloads ?? "依下載量排序"}
+            ↓ {t.mcp_marketplace_sort_downloads}
           </button>
         </div>
       )}
