@@ -289,14 +289,25 @@ pub async fn install_mcp_package(
     args: Vec<String>,
     session_id: String,
 ) -> Result<(), String> {
-    // Fix 4: On Windows, wrap command in `cmd /C` so .cmd scripts (npx, pip) resolve correctly.
+    // On Windows: wrap in `cmd /C` so .cmd scripts (npx, pip) resolve correctly.
+    // On macOS: wrap in `/bin/zsh -l -c` so login PATH (Homebrew, nvm) is inherited.
+    // On Linux: spawn directly.
     #[cfg(windows)]
     let mut cmd = {
         let mut c = tokio::process::Command::new("cmd");
         c.arg("/C").arg(&command).args(&args);
         c
     };
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut parts = vec![command.clone()];
+        parts.extend_from_slice(&args);
+        let shell_cmd = shell_words::join(&parts);
+        let mut c = tokio::process::Command::new("/bin/zsh");
+        c.args(["-l", "-c", &shell_cmd]);
+        c
+    };
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     let mut cmd = {
         let mut c = tokio::process::Command::new(&command);
         c.args(&args);
