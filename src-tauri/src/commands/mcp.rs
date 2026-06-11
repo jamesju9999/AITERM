@@ -132,6 +132,15 @@ pub async fn update_mcp_server(
         return Err(format!("MCP server '{id}' not found"));
     }
 
+    // If env is empty, preserve the existing env vars (env is not sent back to
+    // the frontend for security, so an empty map means "unchanged").
+    let existing_env = config.get()
+        .mcp_servers.iter()
+        .find(|s| s.id == id)
+        .map(|s| s.env.clone())
+        .unwrap_or_default();
+    let env = if input.env.is_empty() { existing_env } else { input.env };
+
     let server_cfg = McpServerConfig {
         id: id.clone(),
         name: input.name,
@@ -139,7 +148,7 @@ pub async fn update_mcp_server(
         transport: input.transport,
         command: input.command,
         args: input.args,
-        env: input.env,
+        env,
         url: input.url,
     };
 

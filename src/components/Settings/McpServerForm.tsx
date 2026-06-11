@@ -159,6 +159,7 @@ export function McpServerForm({ existing, onSave, onCancel }: Props) {
             <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <span style={{ fontSize: 13, color: "#aaa" }}>
                 Env Vars（每行 KEY=VALUE，不需要引號）
+                {existing && <span style={{ color: "#666", fontSize: 11, marginLeft: 6 }}>— 留空保留原有設定</span>}
               </span>
               <textarea
                 className="settings-input"
