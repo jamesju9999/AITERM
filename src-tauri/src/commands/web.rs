@@ -154,6 +154,7 @@ pub struct NpmMcpPage {
 pub async fn search_npm_mcp(query: String, from: u64) -> Result<NpmMcpPage, String> {
     let client = reqwest::Client::builder()
         .user_agent("AITerm/1.0")
+        .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())?;
 
