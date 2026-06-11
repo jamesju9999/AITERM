@@ -97,7 +97,23 @@ fn build_command(command: &str, args: &[String], env: &HashMap<String, String>) 
     cmd
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn build_command(command: &str, args: &[String], env: &HashMap<String, String>) -> tokio::process::Command {
+    // macOS GUI apps don't inherit the user's shell PATH (e.g. Homebrew, nvm).
+    // Wrap in a zsh login shell so /etc/paths and ~/.zprofile are sourced.
+    let mut parts = vec![command.to_string()];
+    parts.extend_from_slice(args);
+    let shell_cmd = shell_words::join(&parts);
+
+    let mut cmd = tokio::process::Command::new("/bin/zsh");
+    cmd.args(["-l", "-c", &shell_cmd]);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    cmd
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn build_command(command: &str, args: &[String], env: &HashMap<String, String>) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(command);
     cmd.args(args);
