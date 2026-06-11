@@ -132,6 +132,19 @@ jobs:
           print(json.dumps(conf, indent=2))
           " > src-tauri/tauri.linux.conf.json
 
+      # macOS: inject db2-sidecar directory path into tauri.macos.conf.json so
+      # Tauri bundles it as a directory (preserves jre/ structure) rather than
+      # a glob (which flattens the tree and breaks the JVM).
+      - name: Patch tauri.macos.conf.json with DB2 resources (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          python3 -c "
+          import json
+          conf = json.load(open('src-tauri/tauri.macos.conf.json'))
+          conf['bundle']['resources']['binaries/db2-sidecar-mac-arm64'] = 'db2-sidecar'
+          print(json.dumps(conf, indent=2))
+          " > src-tauri/tauri.macos.conf.json.tmp && mv src-tauri/tauri.macos.conf.json.tmp src-tauri/tauri.macos.conf.json
+
       - name: Sync version from tag
         shell: node {0}
         run: |
