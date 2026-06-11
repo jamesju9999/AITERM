@@ -5,6 +5,7 @@ import { addMcpServer } from "../../ipc/mcp";
 import { useLocale } from "../../contexts/LocaleContext";
 import { searchNpmMcp, type NpmMcpServer, PAGE_SIZE } from "../../lib/npmRegistry";
 import { McpInstallTerminal, type InstallLogLine } from "./McpInstallTerminal";
+import { openUrl } from "../../ipc/shell";
 
 type InstallStatus = "idle" | "running" | "success" | "error";
 
@@ -210,23 +211,39 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
                   ↓ {formatDownloads(server.weeklyDownloads)}/週
                 </div>
               </div>
-              <button
-                onClick={() => handleInstall(server)}
-                disabled={isDisabled}
-                style={{
-                  background: state.status === "success" ? "#166534" : "#2a2a2a",
-                  border: "1px solid #3a3a3a",
-                  borderRadius: 4,
-                  color: state.status === "error" ? "#f87171" : "#ccc",
-                  cursor: isDisabled ? "default" : "pointer",
-                  fontSize: 12,
-                  padding: "4px 10px",
-                  whiteSpace: "nowrap",
-                  flexShrink: 0,
-                }}
-              >
-                {getButtonLabel(state.status)}
-              </button>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+                <button
+                  onClick={() => handleInstall(server)}
+                  disabled={isDisabled}
+                  style={{
+                    background: state.status === "success" ? "#166534" : "#2a2a2a",
+                    border: "1px solid #3a3a3a",
+                    borderRadius: 4,
+                    color: state.status === "error" ? "#f87171" : "#ccc",
+                    cursor: isDisabled ? "default" : "pointer",
+                    fontSize: 12,
+                    padding: "4px 10px",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {getButtonLabel(state.status)}
+                </button>
+                <button
+                  onClick={() => openUrl(server.homepage ?? `https://www.npmjs.com/package/${server.qualifiedName}`).catch(console.error)}
+                  style={{
+                    background: "none",
+                    border: "1px solid #2a2a2a",
+                    borderRadius: 4,
+                    color: "#666",
+                    cursor: "pointer",
+                    fontSize: 11,
+                    padding: "3px 10px",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  介紹
+                </button>
+              </div>
             </div>
           );
         })}
