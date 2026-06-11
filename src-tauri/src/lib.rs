@@ -51,7 +51,7 @@ use commands::{
     },
     secret::{delete_api_key, has_api_key},
     shell::open_url,
-    web::{web_fetch, web_search, search_npm_mcp},
+    web::{web_fetch, web_search, npm_mcp_search},
     vcs::{
         pick_folder, vcs_add_connection, vcs_agent_step, vcs_detect_repo, vcs_list_connections,
         vcs_query, vcs_remove_connection, vcs_test_connection, vcs_update_connection,
@@ -256,7 +256,7 @@ pub fn run() {
             // Web
             web_search,
             web_fetch,
-            search_npm_mcp,
+            npm_mcp_search,
             // Database
             db_list_connections,
             db_add_connection,

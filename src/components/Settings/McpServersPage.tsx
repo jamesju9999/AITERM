@@ -275,11 +275,11 @@ export function McpServersPage() {
         </div>
       )}
       </>)}
-      {activeTab === "marketplace" && (
+      <div style={{ display: activeTab === "marketplace" ? "block" : "none" }}>
         <McpMarketplaceTab
           onInstalled={() => { void reload(); setActiveTab("installed"); }}
         />
-      )}
+      </div>
     </div>
   );
 }

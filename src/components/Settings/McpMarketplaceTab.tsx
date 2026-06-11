@@ -1,17 +1,14 @@
 import { useState, useEffect, useRef } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { addMcpServer } from "../../ipc/mcp";
 import { useLocale } from "../../contexts/LocaleContext";
-import { searchNpmMcp, type NpmMcpServer, PAGE_SIZE } from "../../lib/npmRegistry";
-import { McpInstallTerminal, type InstallLogLine } from "./McpInstallTerminal";
+import { type NpmMcpServer, PAGE_SIZE } from "../../lib/npmRegistry";
 import { openUrl } from "../../ipc/shell";
 
 type InstallStatus = "idle" | "running" | "success" | "error";
 
 interface ServerInstallState {
   status: InstallStatus;
-  logs: InstallLogLine[];
 }
 
 interface Props {
@@ -33,23 +30,36 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
   const [isSearching, setIsSearching] = useState(false);
   const [networkError, setNetworkError] = useState(false);
   const [installStates, setInstallStates] = useState<Record<string, ServerInstallState>>({});
-  const [activeTerminal, setActiveTerminal] = useState<string | null>(null);
+  const [sortByDownloads, setSortByDownloads] = useState(false);
 
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const doSearch = async (q: string, offset: number) => {
     setIsSearching(true);
     setNetworkError(false);
+    setFrom(offset);
     try {
-      const res = await searchNpmMcp(q, offset);
+      const jsonStr = await invoke("npm_mcp_search", { query: q, offset }) as string;
       if (!mountedRef.current) return;
-      setResults(res.results);
-      setTotal(res.total);
-      setFrom(offset);
-    } catch {
+      const raw = JSON.parse(jsonStr);
+      const mapped: NpmMcpServer[] = (raw.results || []).map((r: any) => ({
+        qualifiedName: r.qualified_name ?? "",
+        displayName: r.display_name ?? "",
+        description: r.description ?? "",
+        homepage: r.homepage ?? undefined,
+        npxCommand: r.npx_command ?? undefined,
+        weeklyDownloads: r.weekly_downloads ?? 0,
+      }));
+      setResults(mapped);
+      setTotal(raw.total ?? 0);
+    } catch (err) {
+      console.error("[McpMarketplaceTab] search error:", err);
       if (!mountedRef.current) return;
       setNetworkError(true);
       setResults([]);
@@ -67,19 +77,21 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
       setNetworkError(false);
       return;
     }
-    debounceRef.current = setTimeout(() => doSearch(query, 0), 500);
+    debounceRef.current = setTimeout(() => {
+      doSearch(query, 0);
+    }, 500);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
 
   function getInstallState(pkg: string): ServerInstallState {
-    return installStates[pkg] ?? { status: "idle", logs: [] };
+    return installStates[pkg] ?? { status: "idle" };
   }
 
-  function setServerState(pkg: string, update: Partial<ServerInstallState>) {
+  function setServerState(pkg: string, status: InstallStatus) {
     setInstallStates(prev => ({
       ...prev,
-      [pkg]: { ...(prev[pkg] ?? { status: "idle", logs: [] }), ...update },
+      [pkg]: { status },
     }));
   }
 
@@ -88,60 +100,23 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
     const state = getInstallState(pkg);
     if (state.status === "success" || state.status === "running") return;
 
-    const sessionId = `mcp-install-${pkg}`;
-    setServerState(pkg, { status: "running", logs: [] });
-    setActiveTerminal(pkg);
-
-    const unlisten = await listen<{
-      session_id: string;
-      line: string;
-      is_error: boolean;
-      done: boolean;
-      success?: boolean;
-    }>("mcp-install-log", (event) => {
-      if (!mountedRef.current) return;
-      const payload = event.payload;
-      if (payload.session_id !== sessionId) return;
-
-      if (!payload.done) {
-        setInstallStates(prev => {
-          const existing = prev[pkg] ?? { status: "running", logs: [] };
-          return {
-            ...prev,
-            [pkg]: { ...existing, logs: [...existing.logs, { text: payload.line, isError: payload.is_error }] },
-          };
-        });
-      } else {
-        unlisten();
-        if (payload.success) {
-          setInstallStates(prev => ({
-            ...prev,
-            [pkg]: {
-              ...(prev[pkg] ?? { status: "running", logs: [] }),
-              status: "success",
-              logs: [...(prev[pkg]?.logs ?? []), { text: t.mcp_marketplace_done_msg, isError: false }],
-            },
-          }));
-          addMcpServer({
-            name: server.displayName || pkg,
-            enabled: true,
-            transport: "stdio" as const,
-            command: "npx",
-            args: ["-y", pkg],
-            env: {},
-          }).catch(() => {});
-          setTimeout(() => { onInstalled(); }, 3000);
-        } else {
-          setServerState(pkg, { status: "error" });
-        }
-      }
-    });
+    setServerState(pkg, "running");
 
     try {
-      await invoke("install_mcp_package", { command: "npx", args: ["-y", pkg], sessionId });
+      await addMcpServer({
+        name: server.displayName || pkg,
+        enabled: true,
+        transport: "stdio" as const,
+        command: "npx",
+        args: ["-y", pkg],
+        env: {},
+      });
+      if (!mountedRef.current) return;
+      setServerState(pkg, "success");
+      setTimeout(() => { onInstalled(); }, 1500);
     } catch {
-      unlisten();
-      setServerState(pkg, { status: "error" });
+      if (!mountedRef.current) return;
+      setServerState(pkg, "error");
     }
   }
 
@@ -153,8 +128,6 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
       default: return t.mcp_marketplace_install;
     }
   }
-
-  const activeState = activeTerminal ? getInstallState(activeTerminal) : null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "12px 0" }}>
@@ -179,8 +152,27 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
         <div className="mcp-marketplace-empty">{t.mcp_marketplace_no_results}</div>
       )}
 
+      {results.length > 0 && (
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button
+            onClick={() => setSortByDownloads(prev => !prev)}
+            style={{
+              background: sortByDownloads ? "#1e3a5f" : "none",
+              border: `1px solid ${sortByDownloads ? "#3b82f6" : "#2a2a2a"}`,
+              borderRadius: 4,
+              color: sortByDownloads ? "#93c5fd" : "#666",
+              cursor: "pointer",
+              fontSize: 11,
+              padding: "3px 8px",
+            }}
+          >
+            ↓ {t.mcp_marketplace_sort_downloads ?? "依下載量排序"}
+          </button>
+        </div>
+      )}
+
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {results.map((server) => {
+        {(sortByDownloads ? [...results].sort((a, b) => b.weeklyDownloads - a.weeklyDownloads) : results).map((server) => {
           const state = getInstallState(server.qualifiedName);
           const isDisabled = state.status === "running" || state.status === "success";
 
@@ -272,14 +264,6 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
         </div>
       )}
 
-      {activeTerminal && (
-        <McpInstallTerminal
-          command="npx"
-          args={["-y", activeTerminal]}
-          lines={activeState?.logs ?? []}
-          onClose={() => setActiveTerminal(null)}
-        />
-      )}
     </div>
   );
 }
