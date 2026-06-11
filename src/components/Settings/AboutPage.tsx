@@ -8,7 +8,6 @@ import "./AboutPage.css";
 const GITHUB_URL = "https://github.com/jamesju9999/AITERM";
 // Use tags API instead of /releases/latest so draft releases are included in version tracking.
 const TAGS_API = "https://api.github.com/repos/jamesju9999/AITERM/tags";
-const RELEASES_URL = "https://github.com/jamesju9999/AITERM/releases";
 
 type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "error";
 
@@ -62,7 +61,7 @@ export function AboutPage() {
             {t.about_update_available} v{latestVersion} —{" "}
             <button
               className="about-link-btn"
-              onClick={() => openUrl(RELEASES_URL).catch(console.error)}
+              onClick={() => openUrl(`https://github.com/jamesju9999/AITERM/releases/tag/v${latestVersion}`).catch(console.error)}
             >
               {t.about_update_link}
             </button>
