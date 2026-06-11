@@ -68,6 +68,9 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # Isolate cache per build target so AppImage/deb/macOS/Windows never
+          # share partial artifacts, which causes E0463 "can't find crate" errors.
+          shared-key: ${{ matrix.artifact_name }}
 
       # Linux: install WebKitGTK and other Tauri system dependencies
       - name: Install Linux system dependencies
