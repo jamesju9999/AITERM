@@ -25,6 +25,8 @@ pub struct McpServerInfo {
     pub status: String,
     pub tool_count: usize,
     pub error_message: Option<String>,
+    /// Only the env var keys are exposed (not values) for security.
+    pub env_keys: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +75,7 @@ pub async fn list_mcp_servers(
             status: status_str,
             tool_count,
             error_message,
+            env_keys: s.env.keys().cloned().collect(),
         }
     }).collect();
 

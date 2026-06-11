@@ -40,9 +40,15 @@ export function McpServerForm({ existing, onSave, onCancel }: Props) {
       : EMPTY_FORM
   );
   const [argsText, setArgsText] = useState(() => form.args.join("\n"));
-  const [envText, setEnvText] = useState(() =>
-    Object.entries(form.env).map(([k, v]) => `${k}=${v}`).join("\n")
-  );
+  const [envText, setEnvText] = useState(() => {
+    // For new servers: empty. For existing servers: show KEY=**** so the user
+    // can see which keys are set without exposing the values.
+    // Leaving the text unchanged (i.e. all ****) means "keep existing values".
+    if (existing && existing.env_keys.length > 0) {
+      return existing.env_keys.map(k => `${k}=****`).join("\n");
+    }
+    return Object.entries(form.env).map(([k, v]) => `${k}=${v}`).join("\n");
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,7 +60,10 @@ export function McpServerForm({ existing, onSave, onCancel }: Props) {
     for (const line of text.split("\n")) {
       const eq = line.indexOf("=");
       if (eq > 0) {
-        result[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+        const value = line.slice(eq + 1).trim();
+        // Skip masked lines (KEY=****) — backend will preserve the existing value.
+        if (value === "****") continue;
+        result[line.slice(0, eq).trim()] = value;
       }
     }
     return result;

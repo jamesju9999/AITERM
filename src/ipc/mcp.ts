@@ -25,6 +25,7 @@ export interface McpServerInfo {
   status: "connecting" | "connected" | "error" | "disabled";
   tool_count: number;
   error_message: string | null;
+  env_keys: string[];
 }
 
 export interface McpToolInfo {
