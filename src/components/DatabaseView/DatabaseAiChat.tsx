@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { dbListTables, dbExecuteQuery, type TableInfo, type QueryResult } from "../../ipc/db";
 import { aiChat, formatAiError, type AiError } from "../../ipc/ai";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getConfig } from "../../ipc/config";
 import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/markdown";
+import { parseSchemaDoc, buildSchemaSection } from "../../lib/schemaDoc";
 
 interface Props {
   connectionId: string;
@@ -49,6 +50,18 @@ function loadSessions(connectionId: string): SavedSession[] {
 
 function saveSessions(connectionId: string, sessions: SavedSession[]) {
   localStorage.setItem(chatStorageKey(connectionId), JSON.stringify(sessions.slice(-50)));
+}
+
+function schemaDocKey(connectionId: string) {
+  return `aiterm-db-schema-doc-${connectionId}`;
+}
+
+function loadSchemaDoc(connectionId: string): string {
+  return localStorage.getItem(schemaDocKey(connectionId)) ?? "";
+}
+
+function saveSchemaDoc(connectionId: string, content: string) {
+  localStorage.setItem(schemaDocKey(connectionId), content);
 }
 
 function extractSql(text: string): string | null {
@@ -138,6 +151,11 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sessions, setSessions] = useState<SavedSession[]>([]);
   const maxStepsRef = useRef<number>(5);
+  const [schemaDoc, setSchemaDoc] = useState<string>(() => loadSchemaDoc(connectionId));
+  const schemaDocRef = useRef(schemaDoc);
+  useEffect(() => { schemaDocRef.current = schemaDoc; }, [schemaDoc]);
+  const schemaDocMap = useMemo(() => parseSchemaDoc(schemaDoc), [schemaDoc]);
+  const schemaFileInputRef = useRef<HTMLInputElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const stoppedRef = useRef(false);
   const currentSessionIdRef = useRef<string | null>(null);
@@ -186,16 +204,23 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
   }, [connectionId]);
 
   useEffect(() => {
+    setSchemaDoc(loadSchemaDoc(connectionId));
+  }, [connectionId]);
+
+  useEffect(() => {
     const el = messagesContainerRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
-  const buildSystemPrompt = () => {
+  const buildSystemPrompt = (userQuestion = "") => {
     const tableList = tables.map((t) => t.name).join(", ");
     const maxSteps = maxStepsRef.current;
+    const tableNames = tables.map((t) => t.name);
+    const schemaSection = buildSchemaSection(schemaDocMap, tableNames, userQuestion, 6000);
+
     return `你是一個資料庫 Agent，可執行多次 SQL 查詢來回答使用者問題。
 Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}。
-
+${schemaSection ? "\n" + schemaSection + "\n" : ""}
 【輸出格式規則——違反將導致查詢無法執行】：
 1. 需要查詢資料時，僅輸出以下格式，不得有任何前綴說明或後綴說明：
 \`\`\`sql
@@ -284,7 +309,7 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
 
         const lastUserContent = loopHistory[loopHistory.length - 1].content;
         const aiResult = await aiChat(
-          [{ role: "system" as const, content: buildSystemPrompt() }, ...loopHistory.slice(0, -1), { role: "user" as const, content: lastUserContent }],
+          [{ role: "system" as const, content: buildSystemPrompt(userMsg) }, ...loopHistory.slice(0, -1), { role: "user" as const, content: lastUserContent }],
           `db-${connectionId}`,
           selectedProviderId || undefined,
         );
@@ -338,7 +363,7 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
         if (stepCount >= maxSteps) {
           updateLastMsg((m) => ({ ...m, agentStepLabel: "整理答案中..." }));
           const summaryResult = await aiChat(
-            [{ role: "system" as const, content: buildSystemPrompt() }, ...loopHistory, { role: "user" as const, content: "請根據以上查詢結果，用繁體中文給出最終完整答案，不要再提供 SQL。" }],
+            [{ role: "system" as const, content: buildSystemPrompt(userMsg) }, ...loopHistory, { role: "user" as const, content: "請根據以上查詢結果，用繁體中文給出最終完整答案，不要再提供 SQL。" }],
             `db-${connectionId}`,
             selectedProviderId || undefined,
           );
@@ -408,6 +433,21 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
     setMessages([]);
     currentSessionIdRef.current = null;
     setHistoryOpen(false);
+  };
+
+  const handleSchemaUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    file.text().then((content) => {
+      saveSchemaDoc(connectionId, content);
+      setSchemaDoc(content);
+    }).catch(console.error);
+    e.target.value = "";
+  };
+
+  const removeSchemaDoc = () => {
+    localStorage.removeItem(schemaDocKey(connectionId));
+    setSchemaDoc("");
   };
 
   return (
@@ -508,6 +548,37 @@ Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}�
             ))}
             {providers.length === 0 && <option value="">（未設定）</option>}
           </select>
+          <input
+            ref={schemaFileInputRef}
+            type="file"
+            accept=".md"
+            style={{ display: "none" }}
+            onChange={handleSchemaUpload}
+          />
+          <button
+            onClick={() => schemaFileInputRef.current?.click()}
+            title={schemaDoc ? "更換 Schema 文件" : "上傳 Schema 文件 (.md)"}
+            style={{
+              background: schemaDoc ? "#1a2a1e" : "transparent",
+              border: "1px solid " + (schemaDoc ? "#34d399" : "#2a2a2a"),
+              color: schemaDoc ? "#34d399" : "#555",
+              borderRadius: 4, padding: "2px 8px", fontSize: 11, cursor: "pointer",
+            }}
+          >
+            📄 Schema{schemaDoc ? " ✓" : ""}
+          </button>
+          {schemaDoc && (
+            <button
+              onClick={removeSchemaDoc}
+              title="移除 Schema 文件"
+              style={{
+                background: "transparent", border: "none", color: "#555",
+                fontSize: 12, cursor: "pointer", padding: "2px 4px",
+              }}
+            >
+              ×
+            </button>
+          )}
           <div style={{ flex: 1 }} />
           <button
             onClick={() => setHistoryOpen((o) => !o)}
