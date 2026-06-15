@@ -53,6 +53,7 @@ export function useMcpChat(sessionId: string) {
   const [sessions, setSessions] = useState<McpChatSession[]>(loadAllSessions);
   const mountedRef = useRef(true);
   const lastSendRef = useRef<{ text: string; useMcp: boolean } | null>(null);
+  const currentSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -81,23 +82,28 @@ export function useMcpChat(sessionId: string) {
     return () => { unlisten?.(); };
   }, [sessionId]);
 
-  const saveSession = useCallback((msgs: McpChatMessage[]) => {
-    if (msgs.length === 0) return;
-    setSessions(prev => {
-      const existing = prev.findIndex(s => s.id === sessionId);
-      const entry: McpChatSession = {
-        id: sessionId,
-        title: formatSessionTitle(msgs),
-        messages: msgs,
-        savedAt: Date.now(),
-      };
-      const updated = existing >= 0
-        ? [entry, ...prev.filter(s => s.id !== sessionId)].slice(0, 50)
-        : [entry, ...prev].slice(0, 50);
-      saveAllSessions(updated);
-      return updated;
-    });
-  }, [sessionId]);
+  // Auto-save messages to localStorage whenever they change (non-empty only)
+  useEffect(() => {
+    if (messages.length === 0) return;
+    if (!currentSessionIdRef.current) {
+      currentSessionIdRef.current = `${sessionId}-${Date.now()}`;
+    }
+    const id = currentSessionIdRef.current;
+    const entry: McpChatSession = {
+      id,
+      title: formatSessionTitle(messages),
+      messages,
+      savedAt: Date.now(),
+    };
+    const all = loadAllSessions();
+    const idx = all.findIndex(s => s.id === id);
+    const next = (idx >= 0
+      ? [entry, ...all.filter(s => s.id !== id)]
+      : [entry, ...all]
+    ).slice(0, 50);
+    saveAllSessions(next);
+    setSessions(next);
+  }, [messages, sessionId]);
 
   const sendMessage = useCallback(async (
     text: string,
@@ -196,23 +202,15 @@ export function useMcpChat(sessionId: string) {
         }
 
         // Normal text response — done
-        setMessages(prev => {
-          const updated = [...prev, { role: "assistant" as const, content: reply.content ?? streamBufRef.current }];
-          saveSession(updated);
-          return updated;
-        });
+        setMessages(prev => [...prev, { role: "assistant" as const, content: reply.content ?? streamBufRef.current }]);
         break;
       }
 
       if (iterations >= MAX_TOOL_ITERATIONS && mountedRef.current) {
-        setMessages(prev => {
-          const updated = [...prev, {
-            role: "assistant" as const,
-            content: "⚠️ 已達工具呼叫上限（10 次），請重新提問。",
-          }];
-          saveSession(updated);
-          return updated;
-        });
+        setMessages(prev => [...prev, {
+          role: "assistant" as const,
+          content: "⚠️ 已達工具呼叫上限（10 次），請重新提問。",
+        }]);
       }
     } catch (e) {
       if (mountedRef.current) {
@@ -227,7 +225,7 @@ export function useMcpChat(sessionId: string) {
         setStreamBuf("");
       }
     }
-  }, [messages, sessionId, saveSession]);
+  }, [messages, sessionId]);
 
   const addMessage = useCallback((msg: McpChatMessage) => {
     setMessages(prev => [...prev, msg]);
@@ -236,9 +234,11 @@ export function useMcpChat(sessionId: string) {
   const clearMessages = useCallback(() => {
     setMessages([]);
     setError(null);
+    currentSessionIdRef.current = null;
   }, []);
 
-  const loadMessages = useCallback((msgs: McpChatMessage[]) => {
+  const loadMessages = useCallback((msgs: McpChatMessage[], loadedSessionId?: string) => {
+    currentSessionIdRef.current = loadedSessionId ?? null;
     setMessages(msgs);
     setError(null);
   }, []);

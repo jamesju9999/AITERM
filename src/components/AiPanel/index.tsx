@@ -358,7 +358,7 @@ ${dirList || "（無法取得）"}
               <div
                 key={s.id}
                 className="aiterm-history-panel__item"
-                onClick={() => { chat.loadMessages(s.messages); setHistoryOpen(false); }}
+                onClick={() => { chat.loadMessages(s.messages, s.id); setHistoryOpen(false); }}
               >
                 <div className="aiterm-history-panel__item-content">
                   <div className="aiterm-history-panel__item-title">{s.title}</div>
