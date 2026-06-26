@@ -99,6 +99,16 @@ export function NewTabPicker({ onSelect, onClose }: Props) {
           <div className="new-tab-picker__desc">{t.new_api_docs_desc}</div>
         </div>
       </button>
+      <button
+        className="new-tab-picker__item"
+        onClick={() => { onSelect("loop-studio"); onClose(); }}
+      >
+        <span className="new-tab-picker__icon">🔄</span>
+        <div>
+          <div className="new-tab-picker__label">{t.loop_studio_tab}</div>
+          <div className="new-tab-picker__desc">{t.new_loop_studio_desc}</div>
+        </div>
+      </button>
     </div>
   );
 }

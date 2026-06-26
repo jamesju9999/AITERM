@@ -14,6 +14,7 @@ export interface ProviderInfo {
   supports_json_mode: boolean;
   has_api_key: boolean;
   is_default: boolean;
+  auth_method: string | null;
 }
 
 /** Payload for add / update operations. api_key=null means "don't change". */
@@ -26,6 +27,7 @@ export interface ProviderInput {
   model: string;
   supports_json_mode: boolean;
   api_key: string | null;
+  auth_method: string | null;
 }
 
 export interface AiError {
@@ -112,6 +114,44 @@ export const getGoogleAiModelsByProvider = (id: string): Promise<string[]> =>
 export const hasApiKey = (providerId: string): Promise<boolean> =>
   invoke("has_api_key", { providerId });
 
+/** Open the browser to start the Anthropic OAuth flow. */
+export const anthropicOAuthStart = (): Promise<void> =>
+  invoke("anthropic_oauth_start");
+
+/** Complete Anthropic OAuth by exchanging the code#state string for tokens. */
+export const anthropicOAuthComplete = (
+  providerId: string,
+  codeAndState: string,
+): Promise<void> =>
+  invoke("anthropic_oauth_complete", { providerId, codeAndState });
+
+/** Log out from Anthropic OAuth (clears stored tokens). */
+export const anthropicOAuthLogout = (providerId: string): Promise<void> =>
+  invoke("anthropic_oauth_logout", { providerId });
+
+/** Fetch available Claude models using the stored OAuth token. */
+export const getAnthropicOAuthModels = (providerId: string): Promise<string[]> =>
+  invoke("get_anthropic_oauth_models", { providerId });
+
+/** Start Google OAuth: opens browser, waits for callback, exchanges tokens. Blocks until done. */
+export const googleOAuthLogin = (providerId: string): Promise<void> =>
+  invoke("google_oauth_login", { providerId });
+
+/** Log out from Google OAuth (clears stored tokens). */
+export const googleOAuthLogout = (providerId: string): Promise<void> =>
+  invoke("google_oauth_logout", { providerId });
+
+/** Fetch available Gemini models using the stored Google OAuth token.
+ *  Pass baseUrlOverride to use a URL before it's been saved to config. */
+export const getGoogleOAuthModels = (
+  providerId: string,
+  baseUrlOverride?: string,
+): Promise<string[]> =>
+  invoke("get_google_oauth_models", {
+    providerId,
+    baseUrlOverride: baseUrlOverride ?? null,
+  });
+
 // ── Display helpers ───────────────────────────────────────────────────────────
 
 export const PROVIDER_TYPE_LABELS: Record<ProviderType, string> = {
@@ -120,7 +160,7 @@ export const PROVIDER_TYPE_LABELS: Record<ProviderType, string> = {
   ollama: "Ollama",
   "openai-compatible": "OpenAI-Compatible",
   "github-copilot": "GitHub Copilot",
-  "google-ai": "Google AI (API Key)",
+  "google-ai": "Google AI",
 };
 
 export const DEFAULT_MODELS: Record<ProviderType, string> = {

@@ -5,13 +5,13 @@
 //! `ai-stream` Tauri event so the frontend can show a live indicator. The
 //! final structured result is still returned as the invoke response.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
 
 use crate::ai::{
     context, router::AiRouter, AiError, AiSingleCommand, ChatMessage, GenerateChunk,
-    GenerateRequest, QueryMode, RiskLevel,
+    GenerateRequest, McpToolDefinition, QueryMode, RiskLevel,
 };
 use crate::guard::CommandGuard;
 use crate::pty::PtyManager;
@@ -199,7 +199,7 @@ pub async fn ai_query(
     let prompt = build_single_command_prompt(&snapshot);
     let req = GenerateRequest {
         system_prompt: prompt,
-        messages: vec![ChatMessage { role: "user".into(), content: serde_json::Value::String(query) }],
+        messages: vec![ChatMessage { role: "user".into(), content: serde_json::Value::String(query), tool_call_id: None, tool_calls: None }],
         context: snapshot,
         mode: QueryMode::SingleCommand,
         max_tokens: None,
@@ -287,6 +287,10 @@ pub struct AiChatReply {
     pub content: Option<String>,
     pub tool_calls: Vec<crate::ai::AiToolCall>,
     pub tool_calling_unsupported: bool,
+    /// Raw tool_calls JSON from the provider response, verbatim.
+    /// Gemini thinking-mode models require this to be echoed back in conversation history.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_tool_calls: Option<serde_json::Value>,
 }
 
 #[tauri::command]
@@ -361,10 +365,10 @@ pub async fn ai_chat(
             }
 
             return match join.await {
-                Ok(Ok(crate::ai::GenerateWithToolsResult::ToolCalls(calls))) =>
-                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false }),
+                Ok(Ok(crate::ai::GenerateWithToolsResult::ToolCalls { calls, raw })) =>
+                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, raw_tool_calls: raw }),
                 Ok(Ok(crate::ai::GenerateWithToolsResult::Text(content))) =>
-                    Ok(AiChatReply { content: Some(content), tool_calls: vec![], tool_calling_unsupported: false }),
+                    Ok(AiChatReply { content: Some(content), tool_calls: vec![], tool_calling_unsupported: false, raw_tool_calls: None }),
                 Ok(Ok(crate::ai::GenerateWithToolsResult::Unsupported)) |
                 Ok(Err(AiError::ToolCallingUnsupported)) => {
                     // System prompt fallback: inject tool descriptions and re-call generate()
@@ -393,9 +397,9 @@ pub async fn ai_chat(
                     let _ = join2.await;
 
                     if let Some(calls) = parse_tool_calls_from_text(&buf2) {
-                        Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false })
+                        Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, raw_tool_calls: None })
                     } else {
-                        Ok(AiChatReply { content: Some(buf2), tool_calls: vec![], tool_calling_unsupported: false })
+                        Ok(AiChatReply { content: Some(buf2), tool_calls: vec![], tool_calling_unsupported: false, raw_tool_calls: None })
                     }
                 }
                 Ok(Err(e)) => Err(e),
@@ -427,7 +431,7 @@ pub async fn ai_chat(
         Err(join_err) => return Err(AiError::Network { message: join_err.to_string() }),
     }
 
-    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false })
+    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, raw_tool_calls: None })
 }
 
 /// Build the tool injection suffix for providers that don't support native tool calling.
@@ -484,6 +488,7 @@ pub(crate) fn parse_tool_calls_from_text(text: &str) -> Option<Vec<crate::ai::Ai
                     id: format!("call_sp_{}", calls.len()),
                     tool_name: name,
                     args,
+                    thought_signature: None,
                 });
             }
         }
@@ -491,6 +496,141 @@ pub(crate) fn parse_tool_calls_from_text(text: &str) -> Option<Vec<crate::ai::Ai
         if pos >= text.len() { break; }
     }
     if calls.is_empty() { None } else { Some(calls) }
+}
+
+/// Tool definition passed from the frontend for agent_chat calls.
+/// Mirrors McpToolDefinition but is Deserializable since it comes over IPC.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+}
+
+/// Like ai_chat but with an explicit required provider_id and frontend-supplied
+/// tool definitions instead of MCP tools. Used by the Loop Studio.
+#[tauri::command]
+pub async fn agent_chat(
+    provider_id: String,
+    messages: Vec<ChatMessage>,
+    tools: Vec<AgentToolDefinition>,
+    session_id: String,
+    app: AppHandle,
+    pty_manager: State<'_, PtyManager>,
+    router: State<'_, AiRouter>,
+) -> Result<AiChatReply, AiError> {
+    if messages.is_empty() {
+        return Err(AiError::InvalidInput { reason: "empty messages".into() });
+    }
+
+    let snapshot = context::snapshot(&pty_manager, &session_id);
+    let provider = router.resolve_by_id(&provider_id).await?;
+
+    let req = GenerateRequest {
+        system_prompt: String::new(), // caller injects via system message
+        messages,
+        context: snapshot,
+        mode: QueryMode::Chat,
+        max_tokens: None,
+    };
+
+    if !tools.is_empty() {
+        let mcp_tools: Vec<McpToolDefinition> = tools.into_iter().map(|t| McpToolDefinition {
+            name: t.name,
+            description: t.description,
+            input_schema: t.input_schema,
+        }).collect();
+        let tools_for_fallback = mcp_tools.clone();
+
+        let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
+        let provider_clone = provider.clone();
+        let req_clone = req.clone();
+        let join = tokio::spawn(async move {
+            provider_clone.generate_with_tools(req_clone, mcp_tools, tx).await
+        });
+
+        while let Some(chunk) = rx.recv().await {
+            let _ = app.emit("ai-stream", AiStreamEvent {
+                session_id: session_id.clone(),
+                kind: AiStreamKind::Chat,
+                delta: chunk.delta.clone(),
+                done: chunk.done,
+            });
+            if chunk.done { break; }
+        }
+
+        return match join.await {
+            Ok(Ok(crate::ai::GenerateWithToolsResult::ToolCalls { calls, raw })) =>
+                Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, raw_tool_calls: raw }),
+            Ok(Ok(crate::ai::GenerateWithToolsResult::Text(content))) => {
+                // Model sometimes outputs tool calls in <tool_call> text format even when
+                // native function calling is available (Gemini occasionally does this).
+                if let Some(calls) = parse_tool_calls_from_text(&content) {
+                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, raw_tool_calls: None })
+                } else {
+                    Ok(AiChatReply { content: Some(content), tool_calls: vec![], tool_calling_unsupported: false, raw_tool_calls: None })
+                }
+            },
+            Ok(Ok(crate::ai::GenerateWithToolsResult::Unsupported)) |
+            Ok(Err(AiError::ToolCallingUnsupported)) => {
+                // Fallback: inject tool descriptions into system prompt
+                let tool_injection = build_tool_prompt_injection(&tools_for_fallback);
+                let mut fallback_req = req.clone();
+                fallback_req.system_prompt =
+                    format!("{}\n\n{}", fallback_req.system_prompt, tool_injection);
+
+                let (tx2, mut rx2) = mpsc::channel::<GenerateChunk>(16);
+                let provider2 = provider.clone();
+                let join2 = tokio::spawn(async move { provider2.generate(fallback_req, tx2).await });
+
+                let mut buf2 = String::new();
+                while let Some(chunk) = rx2.recv().await {
+                    let _ = app.emit("ai-stream", AiStreamEvent {
+                        session_id: session_id.clone(),
+                        kind: AiStreamKind::Chat,
+                        delta: chunk.delta.clone(),
+                        done: chunk.done,
+                    });
+                    buf2.push_str(&chunk.delta);
+                    if chunk.done { break; }
+                }
+                let _ = join2.await;
+
+                if let Some(calls) = parse_tool_calls_from_text(&buf2) {
+                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, raw_tool_calls: None })
+                } else {
+                    Ok(AiChatReply { content: Some(buf2), tool_calls: vec![], tool_calling_unsupported: false, raw_tool_calls: None })
+                }
+            }
+            Ok(Err(e)) => Err(e),
+            Err(e) => Err(AiError::Network { message: e.to_string() }),
+        };
+    }
+
+    // No tools — plain generation
+    let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
+    let provider_for_spawn = provider.clone();
+    let join = tokio::spawn(async move { provider_for_spawn.generate(req, tx).await });
+
+    let mut buf = String::new();
+    while let Some(chunk) = rx.recv().await {
+        let _ = app.emit("ai-stream", AiStreamEvent {
+            session_id: session_id.clone(),
+            kind: AiStreamKind::Chat,
+            delta: chunk.delta.clone(),
+            done: chunk.done,
+        });
+        buf.push_str(&chunk.delta);
+        if chunk.done { break; }
+    }
+
+    match join.await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(join_err) => return Err(AiError::Network { message: join_err.to_string() }),
+    }
+
+    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, raw_tool_calls: None })
 }
 
 #[cfg(test)]
@@ -578,8 +718,10 @@ mod tests {
                 id: "call_abc".into(),
                 tool_name: "fs__read_file".into(),
                 args: serde_json::json!({"path": "/tmp/test.txt"}),
+                thought_signature: None,
             }],
             tool_calling_unsupported: false,
+            raw_tool_calls: None,
         };
         let j = serde_json::to_value(&reply).unwrap();
         assert!(j["content"].is_null());
@@ -592,6 +734,7 @@ mod tests {
             content: Some("hello world".into()),
             tool_calls: vec![],
             tool_calling_unsupported: false,
+            raw_tool_calls: None,
         };
         let j = serde_json::to_value(&reply).unwrap();
         assert_eq!(j["content"], "hello world");

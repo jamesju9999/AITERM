@@ -36,7 +36,7 @@ pub enum AiError {
     AuthFailed,
 
     #[error("rate limit exceeded")]
-    RateLimit { retry_after: Option<String> },
+    RateLimit { retry_after: Option<String>, body: Option<String> },
 
     #[error("AI returned invalid response: {reason}")]
     ModelError { reason: String, raw: String },
@@ -71,9 +71,15 @@ pub enum QueryMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
-    pub role: String,    // "user" | "assistant" | "system"
-    /// Either a plain string (legacy) or an OpenAI-format content array.
+    pub role: String,    // "user" | "assistant" | "system" | "tool"
+    /// Plain string, content array, or null (when tool_calls is present).
     pub content: serde_json::Value,
+    /// Required when role == "tool" — matches the tool_calls[].id from the assistant turn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// Present on assistant messages that invoke tools (role == "assistant").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -131,12 +137,16 @@ pub struct AiToolCall {
     /// Encoded tool name (contains server_id + tool_name).
     pub tool_name: String,
     pub args: serde_json::Value,
+    /// Gemini thinking-mode opaque blob — must be echoed verbatim in conversation history.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
 }
 
 /// Result of `generate_with_tools`.
 pub enum GenerateWithToolsResult {
-    /// AI returned tool calls (no text in this response).
-    ToolCalls(Vec<AiToolCall>),
+    /// AI returned tool calls. `raw` is the verbatim tool_calls JSON from the provider
+    /// (needed to echo thought_signature back to Gemini thinking-mode models).
+    ToolCalls { calls: Vec<AiToolCall>, raw: Option<serde_json::Value> },
     /// AI returned text (full response text).
     Text(String),
     /// This provider does not support tool calling.
@@ -206,8 +216,8 @@ mod tests {
 
     #[test]
     fn ai_error_rate_limit_optional_retry_after() {
-        let none = AiError::RateLimit { retry_after: None };
-        let some = AiError::RateLimit { retry_after: Some("20".into()) };
+        let none = AiError::RateLimit { retry_after: None, body: None };
+        let some = AiError::RateLimit { retry_after: Some("20".into()), body: Some("too many".into()) };
         let j_none = serde_json::to_value(&none).unwrap();
         let j_some = serde_json::to_value(&some).unwrap();
         assert_eq!(j_none["kind"], "rate_limit");

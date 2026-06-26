@@ -102,7 +102,7 @@ impl AiProvider for OpenAiClient {
 
         let status = resp.status();
         if status == 401 { return Err(AiError::AuthFailed); }
-        if status == 429 { return Err(AiError::RateLimit { retry_after: None }); }
+        if status == 429 { return Err(AiError::RateLimit { retry_after: None, body: None }); }
         if !status.is_success() {
             return Err(AiError::Network { message: format!("HTTP {status}") });
         }
@@ -126,9 +126,10 @@ impl AiProvider for OpenAiClient {
                 args: serde_json::from_str(
                     c["function"]["arguments"].as_str().unwrap_or("{}")
                 ).unwrap_or(serde_json::json!({})),
+                thought_signature: None,
             }).collect();
 
-            return Ok(GenerateWithToolsResult::ToolCalls(calls));
+            return Ok(GenerateWithToolsResult::ToolCalls { calls, raw: None });
         }
 
         let content = choice["message"]["content"].as_str().unwrap_or("").to_string();
@@ -145,7 +146,7 @@ impl AiProvider for OpenAiClient {
         let (_tx, _rx) = mpsc::channel::<GenerateChunk>(1);
         let req = GenerateRequest {
             system_prompt: "ping".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("hi") }],
+            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("hi"), tool_call_id: None, tool_calls: None }],
             context: EnvSnapshot {
                 os: std::env::consts::OS.into(),
                 shell: "sh".into(),
@@ -238,7 +239,7 @@ mod tests {
     fn sample_request() -> GenerateRequest {
         GenerateRequest {
             system_prompt: "sys".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("hi") }],
+            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("hi"), tool_call_id: None, tool_calls: None }],
             context: EnvSnapshot { os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default() },
             mode: QueryMode::SingleCommand,
             max_tokens: Some(256),

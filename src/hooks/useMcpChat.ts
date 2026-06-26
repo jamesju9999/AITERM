@@ -4,13 +4,15 @@ import { listen } from "@tauri-apps/api/event";
 import { aiChat, formatAiError, type AiToolCall, type AiError } from "../ipc/ai";
 import { executeMcpTool } from "../ipc/mcp";
 import type { ChatMessage } from "../ipc/ai";
+import { buildContentParts, contentToDisplayString } from "../types/attachment";
+import type { Attachment } from "../types/attachment";
 
 const MAX_TOOL_ITERATIONS = 10;
 const SESSIONS_STORAGE_KEY = "aiterm-mcp-chat-sessions";
 
 export interface McpChatMessage {
   role: "user" | "assistant" | "tool_call" | "tool_result";
-  content: string;
+  content: string | import("../ipc/ai").ContentPart[];
   tool_name?: string;
   tool_call_id?: string;
   is_error?: boolean;
@@ -41,7 +43,7 @@ function saveAllSessions(sessions: McpChatSession[]): void {
 
 function formatSessionTitle(messages: McpChatMessage[]): string {
   const first = messages.find((m) => m.role === "user");
-  return first ? first.content.slice(0, 30) : "（空對話）";
+  return first ? contentToDisplayString(first.content).slice(0, 30) : "（空對話）";
 }
 
 export function useMcpChat(sessionId: string) {
@@ -52,7 +54,7 @@ export function useMcpChat(sessionId: string) {
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<McpChatSession[]>(loadAllSessions);
   const mountedRef = useRef(true);
-  const lastSendRef = useRef<{ text: string; useMcp: boolean } | null>(null);
+  const lastSendRef = useRef<{ text: string; useMcp: boolean; attachments?: Attachment[] } | null>(null);
   const currentSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -109,11 +111,14 @@ export function useMcpChat(sessionId: string) {
     text: string,
     useMcp: boolean,
     existingMessages?: McpChatMessage[],
+    attachments?: Attachment[],
   ) => {
-    if (!text.trim()) return;
-    lastSendRef.current = { text, useMcp };
+    if (!text.trim() && (!attachments || attachments.length === 0)) return;
+    lastSendRef.current = { text, useMcp, attachments };
 
-    setMessages(prev => [...prev, { role: "user", content: text }]);
+    const hasAttachments = attachments && attachments.length > 0;
+    const userContent = hasAttachments ? buildContentParts(text, attachments) : text;
+    setMessages(prev => [...prev, { role: "user", content: userContent }]);
     setIsLoading(true);
     setError(null);
 
@@ -125,7 +130,7 @@ export function useMcpChat(sessionId: string) {
 
     const history: ChatMessage[] = [
       ...historySnapshot,
-      { role: "user", content: text },
+      { role: "user", content: userContent },
     ];
 
     try {
@@ -253,13 +258,13 @@ export function useMcpChat(sessionId: string) {
 
   const resend = useCallback(async () => {
     if (!lastSendRef.current || isLoading) return;
-    const { text, useMcp } = lastSendRef.current;
+    const { text, useMcp, attachments } = lastSendRef.current;
     const lastUserIdx = [...messages].reverse().findIndex(m => m.role === "user");
     const trimmedMessages = lastUserIdx >= 0
       ? messages.slice(0, messages.length - lastUserIdx - 1)
       : messages;
     setMessages(trimmedMessages);
-    await sendMessage(text, useMcp, trimmedMessages);
+    await sendMessage(text, useMcp, trimmedMessages, attachments);
   }, [messages, isLoading, sendMessage]);
 
   return {

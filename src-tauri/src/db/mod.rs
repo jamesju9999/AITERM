@@ -1,6 +1,7 @@
 pub mod adapter;
 pub mod manager;
 pub mod design;
+pub mod loop_sessions;
 pub mod postgres;
 pub mod mysql;
 pub mod sqlite;

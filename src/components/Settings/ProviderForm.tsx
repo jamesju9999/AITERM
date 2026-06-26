@@ -1,4 +1,14 @@
 import { useState, useEffect } from "react";
+
+const ANTHROPIC_CLAUDE_MODELS = [
+  "claude-opus-4-8",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5-20251001",
+  "claude-3-7-sonnet-20250219",
+  "claude-3-5-sonnet-20241022",
+  "claude-3-5-haiku-20241022",
+  "claude-3-opus-20240229",
+];
 import type { ProviderInput, ProviderInfo } from "../../ipc/provider";
 import {
   PROVIDER_TYPE_LABELS,
@@ -12,6 +22,11 @@ import {
   getGithubCopilotModelsByProvider,
   getGoogleAiModels,
   getGoogleAiModelsByProvider,
+  anthropicOAuthStart,
+  anthropicOAuthComplete,
+  anthropicOAuthLogout,
+  getAnthropicOAuthModels,
+
 } from "../../ipc/provider";
 import type { ProviderType } from "../../ipc/config";
 import { useLocale } from "../../contexts/LocaleContext";
@@ -48,6 +63,15 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
   const [supportsJsonMode, setSupportsJsonMode] = useState(
     existing?.supports_json_mode ?? true
   );
+  const [anthropicAuthMethod, setAnthropicAuthMethod] = useState<"api_key" | "oauth">(
+    existing?.auth_method === "oauth" ? "oauth" : "api_key"
+  );
+  const [anthropicOAuthLoggedIn, setAnthropicOAuthLoggedIn] = useState(
+    existing?.auth_method === "oauth" && (existing?.has_api_key ?? false)
+  );
+  const [anthropicOAuthCode, setAnthropicOAuthCode] = useState("");
+  const [anthropicModels, setAnthropicModels] = useState<string[]>(ANTHROPIC_CLAUDE_MODELS);
+  const [anthropicModelsLoading, setAnthropicModelsLoading] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [ollamaLoading, setOllamaLoading] = useState(false);
   const [copilotModels, setCopilotModels] = useState<string[]>([]);
@@ -58,6 +82,23 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [authing, setAuthing] = useState(false);
   const [authStatus, setAuthStatus] = useState<string | null>(null);
+
+  const fetchAnthropicModels = (providerId: string) => {
+    setAnthropicModelsLoading(true);
+    getAnthropicOAuthModels(providerId)
+      .then((models) => { if (models.length > 0) setAnthropicModels(models); })
+      .catch(() => {})
+      .finally(() => setAnthropicModelsLoading(false));
+  };
+
+  useEffect(() => {
+    if (isEdit && existing?.auth_method === "oauth" && existing?.has_api_key && existing?.id) {
+      if (existing.provider_type === "anthropic") {
+        fetchAnthropicModels(existing.id);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!isEdit) {
@@ -118,18 +159,9 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
 
   useEffect(() => {
     if (providerType !== "google-ai") return;
-    if (apiKey.trim()) {
-      setGoogleAiLoading(true);
-      getGoogleAiModels(apiKey.trim())
-        .then((models) => {
-          setGoogleAiModels(models);
-          if (models.length > 0 && !models.includes(model)) setModel(models[0]);
-        })
-        .catch(() => setGoogleAiModels([]))
-        .finally(() => setGoogleAiLoading(false));
-      return;
-    }
-    if (isEdit && existing?.has_api_key && id.trim()) {
+
+    // Edit mode with existing saved key — fetch immediately (no debounce needed).
+    if (!apiKey.trim() && isEdit && existing?.has_api_key && id.trim()) {
       setGoogleAiLoading(true);
       getGoogleAiModelsByProvider(id.trim())
         .then((models) => {
@@ -140,7 +172,23 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         .finally(() => setGoogleAiLoading(false));
       return;
     }
-    setGoogleAiModels([]);
+
+    if (!apiKey.trim()) { setGoogleAiModels([]); return; }
+
+    // Debounce: wait 500 ms after user stops typing before calling the API.
+    const timer = setTimeout(() => {
+      setGoogleAiLoading(true);
+      getGoogleAiModels(apiKey.trim())
+        .then((models) => {
+          setGoogleAiModels(models);
+          if (models.length > 0 && !models.includes(model)) setModel(models[0]);
+        })
+        .catch(() => setGoogleAiModels([]))
+        .finally(() => setGoogleAiLoading(false));
+    }, 500);
+
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerType, apiKey, isEdit, existing?.has_api_key, id]);
 
   const handleSave = async () => {
@@ -171,6 +219,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         model: model.trim(),
         supports_json_mode: supportsJsonMode,
         api_key: apiKey.trim() || null,
+        auth_method: providerType === "anthropic" ? anthropicAuthMethod : null,
       });
     } catch (e: unknown) {
       setError(typeof e === "string" ? e : t.err_save_failed);
@@ -211,6 +260,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
               model: model.trim(),
               supports_json_mode: supportsJsonMode,
               api_key: poll.access_token,
+              auth_method: null,
             });
           }
           return;
@@ -281,7 +331,152 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         />
       </div>
 
-      {providerType !== "ollama" && providerType !== "github-copilot" && (
+      {providerType === "anthropic" && (
+        <div className="form-group">
+          <label>身份驗證方式</label>
+          <div className="anthropic-auth-tabs">
+            <button
+              type="button"
+              className={`auth-tab ${anthropicAuthMethod === "api_key" ? "active" : ""}`}
+              onClick={() => { setAnthropicAuthMethod("api_key"); setAnthropicOAuthCode(""); setAuthStatus(null); }}
+            >
+              API 金鑰
+            </button>
+            <button
+              type="button"
+              className={`auth-tab ${anthropicAuthMethod === "oauth" ? "active" : ""}`}
+              onClick={() => { setAnthropicAuthMethod("oauth"); setApiKey(""); setAuthStatus(null); }}
+            >
+              網頁 OAuth <span className="auth-tab-sub">Claude Pro/Max</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {providerType === "anthropic" && anthropicAuthMethod === "api_key" && (
+        <div className="form-group">
+          <label>{t.provider_api_key}</label>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={isEdit ? t.provider_api_key_placeholder_edit : t.provider_api_key_placeholder_new}
+            autoComplete="off"
+          />
+        </div>
+      )}
+
+      {providerType === "anthropic" && anthropicAuthMethod === "oauth" && (
+        <div className="form-group">
+          <label>OAuth 身份驗證</label>
+          {anthropicOAuthLoggedIn ? (
+            <div className="anthropic-oauth-done">
+              <span className="anthropic-oauth-ok">✓ 已透過 OAuth 登入</span>
+              <button
+                type="button"
+                className="anthropic-oauth-logout"
+                disabled={saving}
+                onClick={async () => {
+                  if (!isEdit) return;
+                  try {
+                    await anthropicOAuthLogout(id.trim());
+                    setAnthropicOAuthLoggedIn(false);
+                    setAnthropicAuthMethod("api_key");
+                  } catch (e: unknown) {
+                    setAuthStatus(String(e));
+                  }
+                }}
+              >
+                登出
+              </button>
+            </div>
+          ) : (
+            <div className="anthropic-oauth-flow">
+              {authing ? (
+                <div className="anthropic-oauth-paste-ui">
+                  <p className="anthropic-oauth-paste-hint">
+                    在瀏覽器中點「授權」後，頁面會顯示 Authentication Code，點「Copy Code」複製後貼入下方：
+                  </p>
+                  <textarea
+                    className="anthropic-oauth-url-input"
+                    value={anthropicOAuthCode}
+                    onChange={(e) => setAnthropicOAuthCode(e.target.value)}
+                    placeholder="貼上 Authentication Code（格式：code#state）"
+                    rows={2}
+                    autoFocus
+                  />
+                  <div className="anthropic-oauth-btns">
+                    <button
+                      type="button"
+                      className="anthropic-oauth-open"
+                      disabled={!anthropicOAuthCode.trim()}
+                      onClick={async () => {
+                        const pid = id.trim();
+                        if (!pid) {
+                          setAuthStatus("錯誤：請先儲存 Provider 後再進行 OAuth 驗證");
+                          setAuthing(false);
+                          return;
+                        }
+                        try {
+                          await anthropicOAuthComplete(pid, anthropicOAuthCode.trim());
+                          setAnthropicOAuthLoggedIn(true);
+                          setAuthStatus("✓ OAuth 登入成功");
+                          setAnthropicOAuthCode("");
+                          fetchAnthropicModels(pid);
+                        } catch (e: unknown) {
+                          setAuthStatus(`錯誤：${String(e)}`);
+                        } finally {
+                          setAuthing(false);
+                        }
+                      }}
+                    >
+                      完成授權
+                    </button>
+                    <button
+                      type="button"
+                      className="anthropic-oauth-cancel-btn"
+                      onClick={() => { setAuthing(false); setAnthropicOAuthCode(""); }}
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="anthropic-oauth-open"
+                    disabled={!id.trim()}
+                    onClick={async () => {
+                      setAuthing(true);
+                      setAuthStatus(null);
+                      try {
+                        await anthropicOAuthStart();
+                      } catch (e: unknown) {
+                        setAuthStatus(`錯誤：${String(e)}`);
+                        setAuthing(false);
+                      }
+                    }}
+                  >
+                    開啟授權頁面
+                  </button>
+                  {!id.trim() && (
+                    <div className="form-hint">請先輸入 Provider ID 後再進行 OAuth 驗證</div>
+                  )}
+                </>
+              )}
+              {authStatus && (
+                <div className={`form-hint ${authStatus.startsWith("錯誤") ? "form-hint--error" : ""}`}>
+                  {authStatus}
+                </div>
+              )}
+            </div>
+          )}
+          {anthropicOAuthLoggedIn && authStatus && <div className="form-hint">{authStatus}</div>}
+        </div>
+      )}
+
+      {providerType !== "ollama" && providerType !== "github-copilot" && providerType !== "anthropic" && (
         <div className="form-group">
           <label>
             {providerType === "openai-compatible" ? t.provider_api_key_optional : t.provider_api_key}
@@ -389,21 +584,36 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         ) : providerType === "google-ai" ? (
           googleAiLoading ? (
             <input type="text" value={t.provider_model_loading} disabled />
-          ) : googleAiModels.length > 0 ? (
+          ) : (
+            <>
+              <input
+                type="text"
+                list="google-ai-models-list"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={googleAiModels.length > 0 ? "選擇或輸入模型名稱" : DEFAULT_MODELS[providerType]}
+              />
+              {googleAiModels.length > 0 && (
+                <datalist id="google-ai-models-list">
+                  {googleAiModels.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              )}
+            </>
+          )
+        ) : providerType === "anthropic" && anthropicAuthMethod === "oauth" && anthropicOAuthLoggedIn ? (
+          anthropicModelsLoading ? (
+            <input type="text" value="載入模型清單中…" disabled />
+          ) : (
             <select value={model} onChange={(e) => setModel(e.target.value)}>
-              {googleAiModels.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
+              {!anthropicModels.includes(model) && model && (
+                <option value={model}>{model}</option>
+              )}
+              {anthropicModels.map((m) => (
+                <option key={m} value={m}>{m}</option>
               ))}
             </select>
-          ) : (
-            <input
-              type="text"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder={DEFAULT_MODELS[providerType]}
-            />
           )
         ) : (
           <input

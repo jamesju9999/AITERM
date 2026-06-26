@@ -22,10 +22,11 @@ use crate::ai::{
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 pub struct AnthropicClient {
-    api_key: String,
+    token: String,
     model: String,
     base_url: String,
     client: reqwest::Client,
+    is_oauth: bool,
 }
 
 impl AnthropicClient {
@@ -34,11 +35,25 @@ impl AnthropicClient {
     }
 
     pub fn with_base_url(api_key: String, model: String, base_url: String) -> Self {
-        Self { api_key, model, base_url, client: reqwest::Client::new() }
+        Self { token: api_key, model, base_url, client: reqwest::Client::new(), is_oauth: false }
+    }
+
+    pub fn with_oauth(access_token: String, model: String, base_url: String) -> Self {
+        Self { token: access_token, model, base_url, client: reqwest::Client::new(), is_oauth: true }
     }
 
     fn messages_url(&self) -> String {
         format!("{}/v1/messages", self.base_url.trim_end_matches('/'))
+    }
+
+    fn auth_request(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if self.is_oauth {
+            builder
+                .header("Authorization", format!("Bearer {}", self.token))
+                .header("anthropic-beta", "oauth-2025-04-20")
+        } else {
+            builder.header("x-api-key", &self.token)
+        }
     }
 }
 
@@ -54,9 +69,7 @@ impl AiProvider for AnthropicClient {
     ) -> Result<(), AiError> {
         let body = build_request_body(&self.model, &req, true);
         let resp = self
-            .client
-            .post(self.messages_url())
-            .header("x-api-key", &self.api_key)
+            .auth_request(self.client.post(self.messages_url()))
             .header("anthropic-version", ANTHROPIC_VERSION)
             .json(&body)
             .send()
@@ -100,8 +113,8 @@ impl AiProvider for AnthropicClient {
             "tools": tool_defs
         });
 
-        let resp = self.client.post(self.messages_url())
-            .header("x-api-key", &self.api_key)
+        let resp = self
+            .auth_request(self.client.post(self.messages_url()))
             .header("anthropic-version", ANTHROPIC_VERSION)
             .header("content-type", "application/json")
             .json(&body)
@@ -111,12 +124,11 @@ impl AiProvider for AnthropicClient {
 
         let status = resp.status();
         if status == 401 { return Err(AiError::AuthFailed); }
-        if status == 429 { return Err(AiError::RateLimit { retry_after: None }); }
         if status.as_u16() == 529 {
             return Err(AiError::Network { message: "Anthropic API is overloaded".into() });
         }
         if !status.is_success() {
-            return Err(AiError::Network { message: format!("HTTP {status}") });
+            return Err(map_http_error(status, resp).await);
         }
 
         let json: serde_json::Value = resp.json().await
@@ -137,10 +149,11 @@ impl AiProvider for AnthropicClient {
                     id: b["id"].as_str().unwrap_or("").to_string(),
                     tool_name: b["name"].as_str().unwrap_or("").to_string(),
                     args: b["input"].clone(),
+                    thought_signature: None,
                 })
                 .collect();
 
-            return Ok(GenerateWithToolsResult::ToolCalls(calls));
+            return Ok(GenerateWithToolsResult::ToolCalls { calls, raw: None });
         }
 
         let content = json["content"][0]["text"].as_str().unwrap_or("").to_string();
@@ -153,9 +166,7 @@ impl AiProvider for AnthropicClient {
         let hc_req = health_check_request();
         let body = build_request_body(&self.model, &hc_req, false);
         let resp = self
-            .client
-            .post(self.messages_url())
-            .header("x-api-key", &self.api_key)
+            .auth_request(self.client.post(self.messages_url()))
             .header("anthropic-version", ANTHROPIC_VERSION)
             .json(&body)
             .send()
@@ -214,7 +225,7 @@ fn health_check_request() -> GenerateRequest {
     use std::path::PathBuf;
     GenerateRequest {
         system_prompt: "ping".into(),
-        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("hi") }],
+        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("hi"), tool_call_id: None, tool_calls: None }],
         context: EnvSnapshot {
             os: std::env::consts::OS.into(),
             shell: "sh".into(),
@@ -336,7 +347,7 @@ mod tests {
     fn sample_req() -> GenerateRequest {
         GenerateRequest {
             system_prompt: "You are a terminal assistant.".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("list files") }],
+            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("list files"), tool_call_id: None, tool_calls: None }],
             context: EnvSnapshot { os: "windows".into(), shell: "pwsh".into(), cwd: PathBuf::from("C:\\"), ..Default::default() },
             mode: QueryMode::SingleCommand,
             max_tokens: Some(256),

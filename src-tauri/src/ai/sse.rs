@@ -185,7 +185,9 @@ pub async fn map_http_error(status: reqwest::StatusCode, resp: reqwest::Response
             .get("retry-after")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        return AiError::RateLimit { retry_after };
+        let body = resp.text().await.unwrap_or_default();
+        log::warn!("Rate limit (429): retry_after={retry_after:?} body={}", truncate(&body, 300));
+        return AiError::RateLimit { retry_after, body: Some(body) };
     }
     let body = resp.text().await.unwrap_or_default();
     AiError::Network { message: format!("http {}: {}", status.as_u16(), truncate(&body, 200)) }

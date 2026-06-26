@@ -152,6 +152,10 @@ pub struct ProviderConfig {
     /// Defaults to true for OpenAI/Anthropic/Compatible, false for Ollama.
     #[serde(default = "default_true")]
     pub supports_json_mode: bool,
+
+    /// Auth method for Anthropic providers: None/"api_key" = API key, "oauth" = OAuth Bearer.
+    #[serde(default)]
+    pub auth_method: Option<String>,
 }
 
 fn default_true() -> bool { true }
@@ -415,6 +419,7 @@ mod tests {
                 oauth_client_id: None,
                 model: "gpt-4o-mini".into(),
                 supports_json_mode: true,
+                auth_method: None,
             }],
             execution_mode: ExecutionMode::Graded,
             max_agent_steps: 5,
@@ -477,6 +482,7 @@ mod tests {
             oauth_client_id: None,
             model: "llama3".into(),
             supports_json_mode: false,
+            auth_method: None,
         };
         cfg.upsert_provider(p);
         assert_eq!(cfg.providers.len(), 1);
@@ -489,6 +495,7 @@ mod tests {
             oauth_client_id: None,
             model: "llama3.1".into(),
             supports_json_mode: false,
+            auth_method: None,
         };
         cfg.upsert_provider(updated);
         assert_eq!(cfg.providers.len(), 1);

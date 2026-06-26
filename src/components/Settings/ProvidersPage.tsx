@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { formatAiError } from "../../ipc/ai";
 import {
   listProviders,
   addProvider,
@@ -59,9 +60,11 @@ export function ProvidersPage() {
       await testProvider(id);
       setTestResults((r) => ({ ...r, [id]: t.provider_test_ok }));
     } catch (e: unknown) {
-      const msg = typeof e === "object" && e !== null && "message" in e
-        ? String((e as { message: string }).message)
-        : String(e);
+      const msg = typeof e === "object" && e !== null && "kind" in e
+        ? formatAiError(e as Parameters<typeof formatAiError>[0])
+        : typeof e === "object" && e !== null && "message" in e
+          ? String((e as { message: string }).message)
+          : String(e);
       setTestResults((r) => ({ ...r, [id]: `✗ ${msg}` }));
     } finally {
       setTesting(null);

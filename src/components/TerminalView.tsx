@@ -1411,6 +1411,7 @@ function runAgentLoop(params: AgentLoopParams) {
       if ("message" in err) errMsg = err.message;
       else if ("reason" in err) errMsg = err.reason;
       else if (err.kind === "not_configured") errMsg = "未設定 API Key";
+      else if (err.kind === "rate_limit") errMsg = err.body ? `請求過於頻繁，請稍後再試\n${err.body}` : "請求過於頻繁，請稍後再試";
       onFail(`AI 請求失敗: ${errMsg}`);
     },
     onWebAction,          // onWebAction: intercept web search/fetch commands

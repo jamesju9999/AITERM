@@ -2,10 +2,11 @@ import { useState } from "react";
 import { parseCmdTags } from "../../lib/cmdParser";
 import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/markdown";
 import { CmdTag } from "./CmdTag";
+import type { ContentPart } from "../../ipc/ai";
 
 interface MessageBubbleProps {
   role: "user" | "assistant";
-  content: string;
+  content: string | ContentPart[];
   onExecuteCommand: (cmd: string) => void;
   streaming?: boolean;
 }
@@ -19,6 +20,19 @@ export function MessageBubble({
   const [copied, setCopied] = useState(false);
 
   if (role === "user") {
+    if (typeof content !== "string") {
+      return (
+        <div className="aiterm-bubble aiterm-bubble-user aiterm-bubble-multipart">
+          {content.map((part, i) =>
+            part.type === "text" ? (
+              <span key={i}>{part.text}</span>
+            ) : part.type === "image_url" ? (
+              <img key={i} src={part.image_url.url} alt="attachment" className="aiterm-bubble-image-thumb" />
+            ) : null
+          )}
+        </div>
+      );
+    }
     return (
       <div className="aiterm-bubble aiterm-bubble-user">
         <span>{content}</span>
@@ -26,9 +40,11 @@ export function MessageBubble({
     );
   }
 
+  const contentStr = typeof content === "string" ? content : "";
+
   // Extract response field from JSON wrappers (e.g. {"thought":..., "response":...})
   // and convert literal \n escape sequences to real newlines.
-  const cleaned = unescapeNewlines(extractResponseText(content));
+  const cleaned = unescapeNewlines(extractResponseText(contentStr));
 
   const handleCopy = () => {
     void navigator.clipboard.writeText(cleaned).then(() => {

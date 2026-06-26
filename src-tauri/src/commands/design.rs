@@ -271,6 +271,8 @@ pub async fn design_list_messages(
     Ok(messages.into_iter().map(|m| ChatMessage {
         role: m.role,
         content: serde_json::Value::String(m.content),
+        tool_call_id: None,
+        tool_calls: None,
     }).collect())
 }
 
@@ -403,5 +405,5 @@ pub async fn design_chat(
     }
     let _ = crate::db::design::create_design_message(&design_db.pool, &session_id, "assistant", &buf).await;
 
-    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false })
+    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, raw_tool_calls: None })
 }

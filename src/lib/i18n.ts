@@ -144,6 +144,8 @@ export const translations = {
     vcs_tab: "版本控制",
     vcs_connections: "VCS 連線",
     new_vcs_desc: "自然語言操控版本控制",
+    loop_studio_tab: "Loop Studio",
+    new_loop_studio_desc: "多 Agent 協作迴圈，直到目標達成",
     doc_converter_tab: "文件轉換器",
     new_doc_converter_desc: "將 Word/PDF/Excel 轉換成結構化 Markdown",
     // API Docs tab
@@ -466,6 +468,8 @@ export const translations = {
     vcs_tab: "VCS",
     vcs_connections: "VCS Connections",
     new_vcs_desc: "Natural language version control",
+    loop_studio_tab: "Loop Studio",
+    new_loop_studio_desc: "Multi-agent collaboration loop until goal is achieved",
     doc_converter_tab: "Doc Converter",
     new_doc_converter_desc: "Convert Word/PDF/Excel to structured Markdown",
     // API Docs tab

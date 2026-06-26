@@ -180,9 +180,10 @@ impl AiProvider for OllamaClient {
                     id: format!("call_{}", i),
                     tool_name: tc.function.name,
                     args: tc.function.arguments,
+                    thought_signature: None,
                 })
                 .collect();
-            Ok(GenerateWithToolsResult::ToolCalls(calls))
+            Ok(GenerateWithToolsResult::ToolCalls { calls, raw: None })
         } else {
             Ok(GenerateWithToolsResult::Text(data.message.content))
         }
@@ -351,7 +352,7 @@ mod tests {
     fn sample_req() -> GenerateRequest {
         GenerateRequest {
             system_prompt: "sys".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("ls") }],
+            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("ls"), tool_call_id: None, tool_calls: None }],
             context: EnvSnapshot { os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default() },
             mode: QueryMode::SingleCommand,
             max_tokens: None,

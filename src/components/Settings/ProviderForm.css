@@ -129,3 +129,201 @@
   cursor: not-allowed;
   opacity: 0.5;
 }
+
+/* Anthropic OAuth — segmented auth method selector */
+.anthropic-auth-tabs {
+  display: flex;
+  gap: 0;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  overflow: hidden;
+  width: fit-content;
+}
+
+.auth-tab {
+  padding: 5px 14px;
+  font-size: 12px;
+  background: transparent;
+  border: none;
+  border-right: 1px solid #3a3a3a;
+  color: #888;
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1.4;
+  transition: background 0.15s, color 0.15s;
+}
+
+.auth-tab:last-child {
+  border-right: none;
+}
+
+.auth-tab:hover:not(.active) {
+  background: #2a2a2a;
+  color: #ccc;
+}
+
+.auth-tab.active {
+  background: #2d5aab;
+  color: #fff;
+}
+
+.auth-tab-sub {
+  font-size: 10px;
+  opacity: 0.75;
+  margin-left: 4px;
+}
+
+/* OAuth flow */
+.anthropic-oauth-done {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: #0f2a0f;
+  border: 1px solid #1e5c1e;
+  border-radius: 5px;
+}
+
+.anthropic-oauth-ok {
+  font-size: 12px;
+  color: #5cb85c;
+  flex: 1;
+}
+
+.anthropic-oauth-logout {
+  font-size: 11px;
+  padding: 3px 10px;
+  background: transparent;
+  border: 1px solid #444;
+  color: #999;
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.anthropic-oauth-logout:hover:not(:disabled) {
+  border-color: #777;
+  color: #ddd;
+}
+
+/* Step-by-step flow */
+.anthropic-oauth-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.anthropic-oauth-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.oauth-step-num {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #2a3a55;
+  border: 1px solid #3d6ac0;
+  color: #7aadff;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.anthropic-oauth-open {
+  font-size: 12px;
+  padding: 5px 14px;
+  background: #1e3a6e;
+  border: 1px solid #3d6ac0;
+  color: #7aadff;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.anthropic-oauth-open:hover:not(:disabled) {
+  background: #2a4a8a;
+  color: #fff;
+}
+
+.anthropic-oauth-open:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.anthropic-oauth-code-input {
+  flex: 1;
+  font-size: 12px;
+  padding: 5px 9px;
+  background: #1a1a1a;
+  border: 1px solid #444;
+  color: #e0e0e0;
+  border-radius: 5px;
+  font-family: monospace;
+  min-width: 0;
+}
+
+.anthropic-oauth-code-input:focus {
+  outline: none;
+  border-color: #3d6ac0;
+}
+
+.anthropic-oauth-btns {
+  display: flex;
+  gap: 8px;
+  padding-left: 28px;
+}
+
+.form-hint--error {
+  color: #f47a7a;
+}
+
+.anthropic-oauth-paste-ui {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.anthropic-oauth-paste-hint {
+  font-size: 12px;
+  color: #aaa;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.anthropic-oauth-url-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #1a1a1a;
+  border: 1px solid #3d6ac0;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 11px;
+  font-family: monospace;
+  padding: 7px 9px;
+  resize: vertical;
+  outline: none;
+}
+
+.anthropic-oauth-url-input:focus {
+  border-color: #5a8dee;
+}
+
+.anthropic-oauth-cancel-btn {
+  font-size: 12px;
+  padding: 5px 12px;
+  background: transparent;
+  border: 1px solid #444;
+  color: #888;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.anthropic-oauth-cancel-btn:hover {
+  border-color: #666;
+  color: #bbb;
+}

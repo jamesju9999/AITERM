@@ -10,7 +10,7 @@ export type AiError =
   | { kind: "not_configured" }
   | { kind: "network"; message: string }
   | { kind: "auth_failed" }
-  | { kind: "rate_limit"; retry_after: string | null }
+  | { kind: "rate_limit"; retry_after: string | null; body?: string | null }
   | { kind: "model_error"; reason: string; raw: string }
   | { kind: "invalid_input"; reason: string };
 
@@ -21,8 +21,14 @@ export interface AiCommandReady {
 }
 
 export interface ChatMessage {
-  role: "user" | "assistant" | "system";
-  content: string | ContentPart[];
+  role: "user" | "assistant" | "system" | "tool";
+  content: string | ContentPart[] | null;
+  tool_call_id?: string;   // required when role === "tool"
+  tool_calls?: Array<{     // present when role === "assistant" with function calls
+    id: string;
+    type: "function";
+    function: { name: string; arguments: string; thought_signature?: string };
+  }>;
 }
 
 export interface AiToolCall {
@@ -30,12 +36,41 @@ export interface AiToolCall {
   server_id: string;      // sanitized server id (decoded from encoded name)
   tool_name: string;      // encoded: "server_id__tool_name"
   args: unknown;
+  thought_signature?: string; // Gemini thinking-mode blob — must be echoed verbatim
 }
 
 export interface AiChatReply {
   content: string | null;               // null when tool_calls is non-empty
   tool_calls: AiToolCall[];             // AI-requested tool calls
   tool_calling_unsupported: boolean;    // true if provider doesn't support tools
+}
+
+export interface AgentToolDefinition {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+}
+
+export interface AgentChatReply {
+  content: string | null;
+  tool_calls: AiToolCall[];
+  tool_calling_unsupported: boolean;
+  /** Raw tool_calls JSON from the provider — echo verbatim in conversation history for Gemini thinking models. */
+  raw_tool_calls?: ChatMessage["tool_calls"];
+}
+
+export function agentChat(
+  providerId: string,
+  messages: ChatMessage[],
+  tools: AgentToolDefinition[],
+  sessionId: string,
+): Promise<AgentChatReply> {
+  return invoke<AgentChatReply>("agent_chat", {
+    providerId,
+    messages,
+    tools,
+    sessionId,
+  });
 }
 
 export function invokeAiChat(
@@ -92,10 +127,12 @@ export function formatAiError(e: AiError): string {
       return `aiterm: 網路錯誤 — ${e.message}`;
     case "auth_failed":
       return "aiterm: API Key 驗證失敗。";
-    case "rate_limit":
-      return e.retry_after
+    case "rate_limit": {
+      const base = e.retry_after
         ? `aiterm: 請求過於頻繁（${e.retry_after} 秒後重試）`
         : "aiterm: 請求過於頻繁，請稍後再試";
+      return e.body ? `${base}\n${e.body}` : base;
+    }
     case "model_error":
       return `aiterm: AI 回傳格式錯誤（${e.reason}）`;
     case "invalid_input":

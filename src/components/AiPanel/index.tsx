@@ -2,6 +2,8 @@ import {
   useEffect, useRef, useState, useCallback,
   type KeyboardEvent, type PointerEvent,
 } from "react";
+import { readFileAsAttachment } from "../../types/attachment";
+import type { Attachment } from "../../types/attachment";
 import { useMcpChat } from "../../hooks/useMcpChat";
 import { invokeAiChat, type ChatMessage as AiChatMessage } from "../../ipc/ai";
 import { getSessionCwd, listDirectory } from "../../ipc/fs";
@@ -52,11 +54,48 @@ export function AiPanel({
   const { t } = useLocale();
   const chat = useMcpChat(sessionId);
   const [input, setInput] = useState("");
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [mcpEnabled, setMcpEnabled] = useState(true);
   const [mcpToolCount, setMcpToolCount] = useState(0);
   const [useMcp, setUseMcp] = useState(true);
+
+  const processFiles = useCallback(async (files: FileList | File[]) => {
+    const arr = Array.from(files);
+    const results = await Promise.allSettled(arr.map(async (file) => {
+      if (file.type.startsWith("image/") && file.size > MAX_IMAGE_BYTES) {
+        throw new Error(`${file.name} 超過 5MB 限制`);
+      }
+      return readFileAsAttachment(file);
+    }));
+    const valid = results
+      .filter((r): r is PromiseFulfilledResult<Attachment> => r.status === "fulfilled")
+      .map((r) => r.value);
+    setAttachments((prev) => [...prev, ...valid]);
+  }, [MAX_IMAGE_BYTES]);
+
+  const handlePaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = e.clipboardData?.files;
+    if (files && files.length > 0) {
+      e.preventDefault();
+      await processFiles(files);
+    }
+    // No files → let default text paste proceed
+  }, [processFiles]);
+
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) {
+      await processFiles(files);
+    }
+  }, [processFiles]);
 
   // ── Resize ────────────────────────────────────────────────────────────────
   const [panelWidth, setPanelWidth] = useState(loadSavedWidth);
@@ -278,12 +317,14 @@ ${dirList || "（無法取得）"}
 
   const handleSubmit = () => {
     const text = input.trim();
-    if (!text || chat.isStreaming || agentRunning) return;
+    if ((!text && attachments.length === 0) || chat.isStreaming || agentRunning) return;
     setInput("");
+    const currentAttachments = attachments;
+    setAttachments([]);
     if (agentMode) {
       void submitAgent(text);
     } else {
-      void chat.send(text, useMcp && mcpEnabled && mcpToolCount > 0);
+      void chat.send(text, useMcp && mcpEnabled && mcpToolCount > 0, undefined, currentAttachments.length > 0 ? currentAttachments : undefined);
     }
   };
 
@@ -295,6 +336,8 @@ ${dirList || "（無法取得）"}
       className={panelClass}
       aria-hidden={!isOpen}
       style={{ width: `${panelWidth}px` }}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
     >
       {/* Resize handle on the left edge */}
       <div
@@ -409,6 +452,23 @@ ${dirList || "（無法取得）"}
         </div>
       )}
 
+      {attachments.length > 0 && (
+        <div className="aiterm-attachment-pills">
+          {attachments.map((att) => (
+            <div key={att.id} className="aiterm-attachment-pill">
+              {att.previewUrl && (
+                <img src={att.previewUrl} alt={att.name} className="aiterm-pill-thumb" />
+              )}
+              <span className="aiterm-pill-name" title={att.name}>{att.name}</span>
+              <button
+                type="button"
+                className="aiterm-pill-remove"
+                onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
+              >×</button>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="aiterm-ai-panel-input-area">
         <button
           type="button"
@@ -443,6 +503,7 @@ ${dirList || "（無法取得）"}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           placeholder={
             agentRunning ? "Agent 執行中…" :
             agentMode ? "輸入目標，Agent 將自動執行指令… (Enter)" :

@@ -195,6 +195,7 @@ mod tests {
                 oauth_client_id: None,
                 model: "gpt-4o-mini".into(),
                 supports_json_mode: true,
+                auth_method: None,
             });
             cfg.default_provider = Some("gpt".into());
         }).unwrap();
@@ -240,6 +241,7 @@ mod tests {
                 oauth_client_id: None,
                 model: "llama3".into(),
                 supports_json_mode: false,
+                auth_method: None,
             });
         }).unwrap();
 
@@ -296,6 +298,7 @@ mod tests {
                         oauth_client_id: None,
                         model: "gpt-4o-mini".into(),
                         supports_json_mode: true,
+                        auth_method: None,
                     });
                 }).unwrap();
             })

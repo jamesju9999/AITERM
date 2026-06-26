@@ -7,6 +7,7 @@ import { CrossDbView } from "./CrossDbView";
 import { VcsView } from "./VcsView/VcsView";
 import { DocConverterView } from "./DocConverter/DocConverterView";
 import { ApiDocsView } from "./ApiDocsView";
+import { LoopStudioView } from "./LoopStudio";
 import { useLocale } from "../contexts/LocaleContext";
 import {
   onEnterpriseTaskReceived,
@@ -66,6 +67,14 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
   const tabsRef = useRef(tabs);
   const activeIdRef = useRef(activeId);
   const isSidebarOpenRef = useRef(isSidebarOpen);
+  // Tab close guards: components register an async fn that returns true = ok to close, false = cancel
+  const closeGuardsRef = useRef<Map<string, () => Promise<boolean>>>(new Map());
+  const registerCloseGuard = useCallback((tabId: string, guard: () => Promise<boolean>) => {
+    closeGuardsRef.current.set(tabId, guard);
+  }, []);
+  const unregisterCloseGuard = useCallback((tabId: string) => {
+    closeGuardsRef.current.delete(tabId);
+  }, []);
   // PTY session ID of the most recently active terminal tab — used by VcsView for CWD polling.
   const [lastTerminalPtyId, setLastTerminalPtyId] = useState<string>("");
   useEffect(() => {
@@ -138,7 +147,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
     setPickerOpen(true);
   }, []);
 
-  const handlePickerSelect = useCallback((type: "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs") => {
+  const handlePickerSelect = useCallback((type: "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio") => {
     const newId = crypto.randomUUID();
     let title = t.terminal_tab;
     if (type === "database") title = t.database_tab;
@@ -147,12 +156,18 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
     if (type === "vcs") title = t.vcs_tab;
     if (type === "doc-converter") title = t.doc_converter_tab;
     if (type === "api-docs") title = t.api_docs_tab;
+    if (type === "loop-studio") title = t.loop_studio_tab;
     setTabs((prev) => [...prev, { id: newId, title, type }]);
     setActiveId(newId);
     setPickerOpen(false);
-  }, [t.terminal_tab, t.database_tab, t.design_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab]);
+  }, [t.terminal_tab, t.database_tab, t.design_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab, t.loop_studio_tab]);
 
-  const handleCloseTab = useCallback((id: string) => {
+  const handleCloseTab = useCallback(async (id: string) => {
+    const guard = closeGuardsRef.current.get(id);
+    if (guard) {
+      const canClose = await guard();
+      if (!canClose) return;
+    }
     setTabs((prev) => {
       const idx = prev.findIndex((t) => t.id === id);
       if (idx === -1) return prev;
@@ -323,6 +338,13 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
                 <DocConverterView isActive={isActive} />
               ) : tab.type === "api-docs" ? (
                 <ApiDocsView isActive={isActive} />
+              ) : tab.type === "loop-studio" ? (
+                <LoopStudioView
+                  sessionId={lastTerminalPtyId ?? undefined}
+                  tabId={tab.id}
+                  registerCloseGuard={registerCloseGuard}
+                  unregisterCloseGuard={unregisterCloseGuard}
+                />
               ) : (
                 <TerminalView
                   isActive={isActive}

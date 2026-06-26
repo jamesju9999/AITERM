@@ -20,7 +20,7 @@ use commands::{
         api_docs_auth_status, api_docs_detect, api_docs_extract,
         api_docs_fetch_tree, api_docs_login, api_docs_logout,
     },
-    ai::{ai_chat, ai_query},
+    ai::{agent_chat, ai_chat, ai_query},
     config::{
         get_config, is_onboarding_done, set_default_tab, set_execution_mode, set_max_agent_steps,
         set_onboarding_done, set_submit_shortcut,
@@ -36,6 +36,7 @@ use commands::{
         db_remove_connection, db_test_connection, db_update_connection,
     },
     design::{design_chat, design_list_sessions, design_load_session, design_start_session, design_update_draft, design_list_messages, design_advance_stage, design_save_file, design_delete_session},
+    loop_session::{loop_session_save, loop_session_list, loop_session_load, loop_session_delete, loop_session_clear_all, loop_project_pick_open, loop_project_pick_save},
     markitdown::{markitdown_convert, markitdown_pick_file},
     mcp::{
         list_mcp_servers, add_mcp_server, update_mcp_server, remove_mcp_server,
@@ -48,6 +49,10 @@ use commands::{
         get_ollama_models, github_copilot_device_poll, github_copilot_device_start,
         list_providers, remove_provider, set_default_provider,
         test_provider, update_provider,
+        anthropic_oauth_start, anthropic_oauth_complete, anthropic_oauth_logout,
+        get_anthropic_oauth_models,
+        google_oauth_login, google_oauth_logout, get_google_oauth_models,
+        AnthropicOAuthState,
     },
     secret::{delete_api_key, has_api_key},
     shell::open_url,
@@ -58,7 +63,7 @@ use commands::{
     },
 };
 use config::ConfigStore;
-use db::{design::DesignDb, manager::DbManager, Db2SidecarState};
+use db::{design::DesignDb, loop_sessions::LoopSessionDb, manager::DbManager, Db2SidecarState};
 use enterprise::agent::EnterpriseTaskState;
 use enterprise::task_runner::VcsCredentialManager;
 use pty::commands::{
@@ -84,6 +89,7 @@ pub fn run() {
     let router = AiRouter::new(config.clone(), secrets.clone());
 
     let design_db = tauri::async_runtime::block_on(async { DesignDb::new().await });
+    let loop_session_db = tauri::async_runtime::block_on(async { LoopSessionDb::new().await });
 
     // Initialize McpManager and connect to enabled servers
     let mcp_manager: McpManagerState = {
@@ -200,11 +206,13 @@ pub fn run() {
         .manage(router)
         .manage(DbManager::new())
         .manage(design_db)
+        .manage(loop_session_db)
         .manage(Db2SidecarState::new(sidecar_path))
         .manage(Arc::new(Mutex::new(VcsCredentialManager::new())))
         .manage(Arc::new(Mutex::new(EnterpriseTaskState::new())))
         .manage(tokio::sync::Mutex::new(telegram::TelegramState { active_task: None }))
         .manage(mcp_manager)
+        .manage(AnthropicOAuthState::new())
         .setup(|app| {
             telegram::init(app.handle());
             enterprise::agent::init(app.handle());
@@ -226,6 +234,7 @@ pub fn run() {
             // AI query
             ai_query,
             ai_chat,
+            agent_chat,
             // Config
             get_config,
             set_execution_mode,
@@ -248,6 +257,13 @@ pub fn run() {
             get_github_copilot_models_by_provider,
             get_google_ai_models,
             get_google_ai_models_by_provider,
+            anthropic_oauth_start,
+            anthropic_oauth_complete,
+            anthropic_oauth_logout,
+            get_anthropic_oauth_models,
+            google_oauth_login,
+            google_oauth_logout,
+            get_google_oauth_models,
             // Secrets
             has_api_key,
             delete_api_key,
@@ -280,6 +296,14 @@ pub fn run() {
             design_advance_stage,
             design_save_file,
             design_delete_session,
+            // Loop Sessions
+            loop_session_save,
+            loop_session_list,
+            loop_session_load,
+            loop_session_delete,
+            loop_session_clear_all,
+            loop_project_pick_open,
+            loop_project_pick_save,
             // Enterprise
             enterprise_accept_task,
             enterprise_reject_task,

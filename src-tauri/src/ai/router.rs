@@ -8,6 +8,8 @@
 
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
     ai::{
         anthropic::AnthropicClient,
@@ -19,6 +21,168 @@ use crate::{
     config::{ConfigStore, ProviderType},
     secret::SecretStore,
 };
+
+const ANTHROPIC_OAUTH_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
+const ANTHROPIC_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+
+const GOOGLE_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+const GOOGLE_OAUTH_CLIENT_ID: &str = "";
+const GOOGLE_OAUTH_CLIENT_SECRET: &str = "";
+
+/// Returns a valid OAuth access token, refreshing it first if it's expired or
+/// within 5 minutes of expiry. Falls back to the stored token on refresh failure.
+async fn get_valid_oauth_token(provider_id: &str, secrets: &SecretStore) -> Result<String, AiError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let needs_refresh = secrets
+        .get(&format!("{provider_id}:oauth_expires_at"))
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(|exp| exp < now + 300) // refresh 5 min before expiry
+        .unwrap_or(false);
+
+    if needs_refresh {
+        if let Some(refresh_token) = secrets.get(&format!("{provider_id}:oauth_refresh")).ok().flatten() {
+            match do_oauth_refresh(provider_id, &refresh_token, secrets).await {
+                Ok(access_token) => return Ok(access_token),
+                Err(e) => log::warn!("OAuth token refresh failed, using existing token: {e}"),
+            }
+        }
+    }
+
+    secrets
+        .get(provider_id)
+        .map_err(|_| AiError::NotConfigured)?
+        .ok_or(AiError::NotConfigured)
+}
+
+async fn do_oauth_refresh(provider_id: &str, refresh_token: &str, secrets: &SecretStore) -> Result<String, String> {
+    #[derive(Serialize)]
+    struct RefreshReq<'a> {
+        grant_type: &'a str,
+        refresh_token: &'a str,
+        client_id: &'a str,
+    }
+    #[derive(Deserialize)]
+    struct RefreshResp {
+        access_token: String,
+        #[serde(default)]
+        refresh_token: Option<String>,
+        #[serde(default)]
+        expires_in: Option<u64>,
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(ANTHROPIC_OAUTH_TOKEN_URL)
+        .header("Content-Type", "application/json")
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .json(&RefreshReq {
+            grant_type: "refresh_token",
+            refresh_token,
+            client_id: ANTHROPIC_OAUTH_CLIENT_ID,
+        })
+        .send()
+        .await
+        .map_err(|e| format!("Refresh request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {status}: {body}"));
+    }
+
+    let data: RefreshResp = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
+
+    let _ = secrets.set(provider_id, &data.access_token);
+    if let Some(new_refresh) = data.refresh_token {
+        let _ = secrets.set(&format!("{provider_id}:oauth_refresh"), &new_refresh);
+    }
+    if let Some(expires_in) = data.expires_in {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let _ = secrets.set(&format!("{provider_id}:oauth_expires_at"), &(now + expires_in).to_string());
+    }
+
+    Ok(data.access_token)
+}
+
+async fn get_valid_google_oauth_token(provider_id: &str, secrets: &SecretStore) -> Result<String, AiError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let needs_refresh = secrets
+        .get(&format!("{provider_id}:oauth_expires_at"))
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(|exp| exp < now + 300)
+        .unwrap_or(false);
+
+    if needs_refresh {
+        if let Some(refresh_token) = secrets.get(&format!("{provider_id}:oauth_refresh")).ok().flatten() {
+            match do_google_oauth_refresh(provider_id, &refresh_token, secrets).await {
+                Ok(access_token) => return Ok(access_token),
+                Err(e) => log::warn!("Google OAuth token refresh failed, using existing token: {e}"),
+            }
+        }
+    }
+
+    secrets
+        .get(provider_id)
+        .map_err(|_| AiError::NotConfigured)?
+        .ok_or(AiError::NotConfigured)
+}
+
+async fn do_google_oauth_refresh(provider_id: &str, refresh_token: &str, secrets: &SecretStore) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct RefreshResp {
+        access_token: String,
+        #[serde(default)]
+        expires_in: Option<u64>,
+    }
+
+    let http = reqwest::Client::new();
+    let params = [
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token),
+        ("client_id", GOOGLE_OAUTH_CLIENT_ID),
+        ("client_secret", GOOGLE_OAUTH_CLIENT_SECRET),
+    ];
+    let resp = http
+        .post(GOOGLE_OAUTH_TOKEN_URL)
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| format!("Refresh request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {status}: {body}"));
+    }
+
+    let data: RefreshResp = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
+
+    let _ = secrets.set(provider_id, &data.access_token);
+    if let Some(expires_in) = data.expires_in {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let _ = secrets.set(&format!("{provider_id}:oauth_expires_at"), &(now + expires_in).to_string());
+    }
+
+    Ok(data.access_token)
+}
 
 pub struct AiRouter {
     config: Arc<ConfigStore>,
@@ -74,16 +238,21 @@ impl AiRouter {
                 ))
             }
             ProviderType::Anthropic => {
-                let key = self
-                    .secrets
-                    .get(&provider_cfg.id)
-                    .map_err(|_| AiError::NotConfigured)?
-                    .ok_or(AiError::NotConfigured)?;
-                Arc::new(AnthropicClient::with_base_url(
-                    key,
-                    provider_cfg.model.clone(),
-                    provider_cfg.base_url.unwrap_or_else(|| "https://api.anthropic.com".into()),
-                ))
+                let is_oauth = provider_cfg.auth_method.as_deref() == Some("oauth");
+                let token = if is_oauth {
+                    get_valid_oauth_token(&provider_cfg.id, &self.secrets).await?
+                } else {
+                    self.secrets
+                        .get(&provider_cfg.id)
+                        .map_err(|_| AiError::NotConfigured)?
+                        .ok_or(AiError::NotConfigured)?
+                };
+                let base_url = provider_cfg.base_url.unwrap_or_else(|| "https://api.anthropic.com".into());
+                if is_oauth {
+                    Arc::new(AnthropicClient::with_oauth(token, provider_cfg.model.clone(), base_url))
+                } else {
+                    Arc::new(AnthropicClient::with_base_url(token, provider_cfg.model.clone(), base_url))
+                }
             }
             ProviderType::Ollama => {
                 // Ollama has no API key.
@@ -142,11 +311,15 @@ impl AiRouter {
                 ))
             }
             ProviderType::GoogleAi => {
-                let key = self
-                    .secrets
-                    .get(&provider_cfg.id)
-                    .map_err(|_| AiError::NotConfigured)?
-                    .ok_or(AiError::NotConfigured)?;
+                let is_oauth = provider_cfg.auth_method.as_deref() == Some("oauth");
+                let key = if is_oauth {
+                    get_valid_google_oauth_token(&provider_cfg.id, &self.secrets).await?
+                } else {
+                    self.secrets
+                        .get(&provider_cfg.id)
+                        .map_err(|_| AiError::NotConfigured)?
+                        .ok_or(AiError::NotConfigured)?
+                };
                 Arc::new(OpenAiCompatibleClient::new(
                     provider_cfg
                         .base_url
@@ -216,6 +389,7 @@ mod tests {
             oauth_client_id: None,
             model: "llama3".into(),
             supports_json_mode: false,
+            auth_method: None,
         });
         cfg.default_provider = Some("local-llama".into());
         let router = make_router(cfg);

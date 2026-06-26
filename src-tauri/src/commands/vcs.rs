@@ -451,6 +451,8 @@ Output ONLY the JSON object. No prose, no markdown fences."#,
         messages: vec![ChatMessage {
             role: "user".into(),
             content: serde_json::json!(format!("Plan the next step to achieve: {goal}")),
+            tool_call_id: None,
+            tool_calls: None,
         }],
         context: crate::ai::EnvSnapshot::default(),
         mode: QueryMode::SingleCommand,
@@ -527,6 +529,8 @@ Example output: {"kind":"log_query","path":null,"author":null,"since":null,"max_
         messages: vec![ChatMessage {
             role: "user".into(),
             content: serde_json::json!(query),
+            tool_call_id: None,
+            tool_calls: None,
         }],
         context: crate::ai::EnvSnapshot::default(),
         mode: QueryMode::SingleCommand,

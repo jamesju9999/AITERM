@@ -4,7 +4,7 @@ import { NewTabPicker } from "../NewTabPicker";
 import { useLocale } from "../../contexts/LocaleContext";
 import "./index.css";
 
-export type TabType = "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs";
+export type TabType = "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio";
 
 export interface Tab {
   id: string;

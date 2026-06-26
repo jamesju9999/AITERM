@@ -10,7 +10,8 @@ use tokio::sync::mpsc;
 
 use crate::ai::{
     sse::{consume_openai_sse, map_http_error},
-    AiError, AiProvider, ChatMessage, GenerateChunk, GenerateRequest,
+    AiError, AiProvider, AiToolCall, ChatMessage, GenerateChunk, GenerateRequest,
+    GenerateWithToolsResult, McpToolDefinition,
 };
 
 pub struct OpenAiCompatibleClient {
@@ -110,6 +111,100 @@ impl AiProvider for OpenAiCompatibleClient {
     }
 
 
+    async fn generate_with_tools(
+        &self,
+        req: GenerateRequest,
+        tools: Vec<McpToolDefinition>,
+        tx: mpsc::Sender<GenerateChunk>,
+    ) -> Result<GenerateWithToolsResult, AiError> {
+        let tool_defs: serde_json::Value = serde_json::Value::Array(
+            tools.iter().map(|t| serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.input_schema
+                }
+            })).collect()
+        );
+
+        let mut messages: Vec<serde_json::Value> = Vec::with_capacity(req.messages.len() + 1);
+        // Only prepend system_prompt when non-empty; agent_chat callers inject system msg via messages[0]
+        if !req.system_prompt.is_empty() {
+            messages.push(serde_json::json!({"role": "system", "content": req.system_prompt}));
+        }
+        for m in &req.messages {
+            let mut msg = serde_json::json!({"role": m.role, "content": m.content});
+            if let Some(id) = &m.tool_call_id {
+                msg["tool_call_id"] = serde_json::Value::String(id.clone());
+            }
+            if let Some(tool_calls) = &m.tool_calls {
+                msg["tool_calls"] = tool_calls.clone();
+                msg["content"] = serde_json::Value::Null;
+            }
+            messages.push(msg);
+        }
+
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": messages,
+            "tools": tool_defs,
+            "tool_choice": "auto",
+            "stream": false
+        });
+
+        let builder = self.apply_headers(self.client.post(self.completions_url()).json(&body));
+        let resp = builder.send().await
+            .map_err(|e| AiError::Network { message: e.to_string() })?;
+
+        let status = resp.status();
+        if status == 401 { return Err(AiError::AuthFailed); }
+        if status == 429 { return Err(AiError::RateLimit { retry_after: None, body: None }); }
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(AiError::Network { message: format!("HTTP {status}: {body_text}") });
+        }
+
+        let json: serde_json::Value = resp.json().await
+            .map_err(|e| AiError::Network { message: e.to_string() })?;
+
+        let choice = &json["choices"][0];
+        let finish_reason = choice["finish_reason"].as_str().unwrap_or("");
+
+        // Some providers (Claude extended-thinking via OpenAI-compat) split the response
+        // into multiple choices: one with content, one with tool_calls. Find whichever
+        // choice actually contains tool_calls instead of blindly using choices[0].
+        let any_tool_calls_finish = json["choices"].as_array()
+            .map(|cs| cs.iter().any(|c| c["finish_reason"].as_str() == Some("tool_calls")))
+            .unwrap_or(false);
+
+        if any_tool_calls_finish {
+            let tool_call_choice = json["choices"].as_array()
+                .and_then(|cs| cs.iter().find(|c| !c["message"]["tool_calls"].is_null()))
+                .unwrap_or(choice);
+
+            if let Some(raw_calls) = tool_call_choice["message"]["tool_calls"].as_array() {
+                let calls: Vec<AiToolCall> = raw_calls.iter().map(|c| AiToolCall {
+                    id: c["id"].as_str().unwrap_or("").to_string(),
+                    tool_name: c["function"]["name"].as_str().unwrap_or("").to_string(),
+                    args: serde_json::from_str(
+                        c["function"]["arguments"].as_str().unwrap_or("{}")
+                    ).unwrap_or(serde_json::json!({})),
+                    thought_signature: None,
+                }).collect();
+
+                // Preserve the raw tool_calls JSON verbatim so callers can echo it back
+                // to Gemini thinking-mode models which require thought_signature.
+                let raw = Some(tool_call_choice["message"]["tool_calls"].clone());
+                return Ok(GenerateWithToolsResult::ToolCalls { calls, raw });
+            }
+        }
+
+        let content = choice["message"]["content"].as_str().unwrap_or("").to_string();
+        let _ = tx.send(GenerateChunk { delta: content.clone(), done: true, usage: None }).await;
+        Ok(GenerateWithToolsResult::Text(content))
+    }
+
     async fn health_check(&self) -> Result<(), AiError> {
         use crate::ai::{EnvSnapshot, QueryMode};
         use std::path::PathBuf;
@@ -118,7 +213,7 @@ impl AiProvider for OpenAiCompatibleClient {
         let (_tx, _rx) = mpsc::channel::<GenerateChunk>(1);
         let req = GenerateRequest {
             system_prompt: "ping".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("hi") }],
+            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("hi"), tool_call_id: None, tool_calls: None }],
             context: EnvSnapshot {
                 os: std::env::consts::OS.into(),
                 shell: "sh".into(),
@@ -197,7 +292,7 @@ mod tests {
     fn sample_req() -> GenerateRequest {
         GenerateRequest {
             system_prompt: "sys".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("hi") }],
+            messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("hi"), tool_call_id: None, tool_calls: None }],
             context: EnvSnapshot { os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default() },
             mode: QueryMode::SingleCommand,
             max_tokens: Some(128),
