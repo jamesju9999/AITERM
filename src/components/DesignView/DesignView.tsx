@@ -13,7 +13,8 @@ import {
 import type { DesignSession } from '../../ipc/design';
 import type { ChatMessage, ContentPart } from '../../ipc/ai';
 
-function contentToString(content: string | ContentPart[]): string {
+function contentToString(content: string | ContentPart[] | null): string {
+  if (!content) return "";
   if (typeof content === 'string') return content;
   return content
     .filter((p): p is Extract<ContentPart, { type: 'text' }> => p.type === 'text')

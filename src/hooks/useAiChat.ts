@@ -36,6 +36,7 @@ function saveAllSessions(sessions: AiChatSession[]): void {
 }
 
 function contentToString(content: ChatMessage["content"]): string {
+  if (!content) return "";
   if (typeof content === "string") return content;
   return content
     .filter((p): p is Extract<typeof p, { type: "text" }> => p.type === "text")

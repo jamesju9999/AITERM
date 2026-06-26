@@ -56,12 +56,12 @@ function ToolCallCard({
         <div className="aiterm-tool-card-body">
           <div className="aiterm-tool-card-section">
             <div className="aiterm-tool-card-label">輸入</div>
-            <pre className="aiterm-tool-card-content">{callMsg.content}</pre>
+            <pre className="aiterm-tool-card-content">{typeof callMsg.content === "string" ? callMsg.content : ""}</pre>
           </div>
           {hasResult && (
             <div className="aiterm-tool-card-section">
               <div className="aiterm-tool-card-label">輸出</div>
-              <pre className="aiterm-tool-card-content">{resultMsg!.content}</pre>
+              <pre className="aiterm-tool-card-content">{typeof resultMsg!.content === "string" ? resultMsg!.content : ""}</pre>
             </div>
           )}
         </div>

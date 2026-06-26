@@ -293,7 +293,8 @@ ${dirList || "（無法取得）"}
     if (chat.messages.length > prevMessagesLength.current) {
       const lastMsg = chat.messages[chat.messages.length - 1];
       if (lastMsg?.role === "assistant" && sendRemoteResponse && !chat.isStreaming) {
-        sendRemoteResponse(lastMsg.content);
+        const text = typeof lastMsg.content === "string" ? lastMsg.content : Array.isArray(lastMsg.content) ? lastMsg.content.filter((p) => p.type === "text").map((p) => (p as { type: "text"; text: string }).text).join(" ") : "";
+        sendRemoteResponse(text);
       }
     }
     prevMessagesLength.current = chat.messages.length;

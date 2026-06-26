@@ -42,6 +42,7 @@ const oneProvider: ProviderInfo[] = [
     supports_json_mode: true,
     has_api_key: true,
     is_default: true,
+    auth_method: null,
   },
 ];
 
