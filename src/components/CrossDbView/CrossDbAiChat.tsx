@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { dbExecuteQuery, type QueryResult } from "../../ipc/db";
 import { aiChat, formatAiError, type AiError } from "../../ipc/ai";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
-import { getConfig } from "../../ipc/config";
+import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/markdown";
 import type { ConnectedDb } from "./index";
 
@@ -145,6 +145,7 @@ export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
   const [selectedProviderId, setSelectedProviderId] = useState<string>("");
   const [sessions, setSessions] = useState<SavedSession[]>(loadSessions);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [submitShortcut, setSubmitShortcut] = useState<SubmitShortcut>("enter");
   const maxStepsRef = useRef<number>(5);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const stoppedRef = useRef(false);
@@ -168,6 +169,7 @@ export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
   useEffect(() => {
     getConfig().then((cfg) => {
       maxStepsRef.current = cfg.max_agent_steps === 0 ? 9999 : (cfg.max_agent_steps ?? 5);
+      setSubmitShortcut(cfg.submit_shortcut ?? "enter");
     }).catch(() => {});
   }, []);
 
@@ -608,9 +610,11 @@ SELECT * FROM ...
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send();
+              if (e.key === "Enter") {
+                const ok = (submitShortcut === "enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
+                           (submitShortcut === "shift-enter" && e.shiftKey && !e.ctrlKey) ||
+                           (submitShortcut === "ctrl-enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey);
+                if (ok) { e.preventDefault(); send(); }
               }
             }}
             placeholder="描述跨資料庫查詢需求..."

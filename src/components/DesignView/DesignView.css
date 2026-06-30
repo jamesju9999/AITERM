@@ -217,3 +217,31 @@
   border-color: #4caf50;
 }
 
+.design-thinking-bubble {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 10px 14px;
+  background: #1a1a2e;
+  border-radius: 12px;
+  width: fit-content;
+  margin: 4px 0 4px 8px;
+}
+
+.design-thinking-bubble span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #a78bfa;
+  display: inline-block;
+  animation: design-thinking-bounce 1.3s ease-in-out infinite;
+}
+
+.design-thinking-bubble span:nth-child(2) { animation-delay: 0.2s; }
+.design-thinking-bubble span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes design-thinking-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-5px); opacity: 1; }
+}
+

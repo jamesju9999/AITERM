@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { dbListTables, dbExecuteQuery, type TableInfo, type QueryResult } from "../../ipc/db";
 import { aiChat, formatAiError, type AiError } from "../../ipc/ai";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
-import { getConfig } from "../../ipc/config";
+import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/markdown";
 import { parseSchemaDoc, buildSchemaSection } from "../../lib/schemaDoc";
 
@@ -149,6 +149,7 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState<string>("");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [submitShortcut, setSubmitShortcut] = useState<SubmitShortcut>("enter");
   const [sessions, setSessions] = useState<SavedSession[]>([]);
   const maxStepsRef = useRef<number>(5);
   const [schemaDoc, setSchemaDoc] = useState<string>(() => loadSchemaDoc(connectionId));
@@ -188,6 +189,7 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
     getConfig().then((cfg) => {
       // 0 = unlimited; use a large number internally
       maxStepsRef.current = cfg.max_agent_steps === 0 ? 9999 : (cfg.max_agent_steps ?? 5);
+      setSubmitShortcut(cfg.submit_shortcut ?? "enter");
     }).catch(() => {});
   }, []);
 
@@ -612,9 +614,14 @@ ${schemaSection ? "\n" + schemaSection + "\n" : ""}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+              if (e.key === "Enter") {
+                const ok = (submitShortcut === "enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
+                           (submitShortcut === "shift-enter" && e.shiftKey && !e.ctrlKey) ||
+                           (submitShortcut === "ctrl-enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey);
+                if (ok) { e.preventDefault(); send(); }
+              }
             }}
-            placeholder="用自然語言描述查詢... (Enter 送出)"
+            placeholder="用自然語言描述查詢..."
             rows={2}
             style={{
               flex: 1, background: "#0c0c0c", border: "1px solid #2a2a2a", color: "#e6e6e6",

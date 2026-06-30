@@ -26,6 +26,7 @@ import { useTelegramRemoteControl } from '../../hooks/useTelegramRemoteControl';
 import { MessageBubble } from '../AiPanel/MessageBubble';
 import { ProviderPalette } from '../ProviderPalette';
 import { extractResponseText } from '../../lib/markdown';
+import { getConfig, type SubmitShortcut } from '../../ipc/config';
 import './DesignView.css';
 export function DesignView({ isActive }: { isActive: boolean }) {
   const [session, setSession] = useState<DesignSession | null>(null);
@@ -38,6 +39,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
   const [providerId, setProviderId] = useState<string | undefined>(undefined);
   const [providerName, setProviderName] = useState<string | undefined>(undefined);
   const [showProviderPalette, setShowProviderPalette] = useState(false);
+  const [submitShortcut, setSubmitShortcut] = useState<SubmitShortcut>('enter');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sessionList, setSessionList] = useState<DesignSession[]>([]);
 
@@ -45,6 +47,10 @@ export function DesignView({ isActive }: { isActive: boolean }) {
   const messagesListRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom
+  useEffect(() => {
+    getConfig().then(cfg => setSubmitShortcut(cfg.submit_shortcut)).catch(() => {});
+  }, []);
+
   useEffect(() => {
     const el = messagesListRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -280,11 +286,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
           }
         }
 
-        // Guard: only treat as valid update if content has markdown fence or structural headings
-        if (!content) return null;
-        const hasCodeFence = content.includes('```');
-        const hasHeading = /^##\s/m.test(content);
-        if (!hasCodeFence && !hasHeading && content.length < 100) return null;
+        if (!content || content.length < 20) return null;
 
         return content;
       };
@@ -465,6 +467,11 @@ export function DesignView({ isActive }: { isActive: boolean }) {
                 />
               );
             })}
+            {isStreaming && (messages.length === 0 || messages[messages.length - 1].role !== 'assistant') && (
+              <div className="design-thinking-bubble">
+                <span /><span /><span />
+              </div>
+            )}
           </div>
 
           <div className="design-input-section">
@@ -480,7 +487,15 @@ export function DesignView({ isActive }: { isActive: boolean }) {
               <textarea
                 className="design-chat-input" placeholder="輸入需求..."
                 value={inputValue} onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    const shouldSubmit =
+                      (submitShortcut === 'enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
+                      (submitShortcut === 'shift-enter' && e.shiftKey && !e.ctrlKey) ||
+                      (submitShortcut === 'ctrl-enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey);
+                    if (shouldSubmit) { e.preventDefault(); handleSendMessage(); }
+                  }
+                }}
                 disabled={isStreaming}
               />
               <button className="design-send-btn" onClick={() => handleSendMessage()} disabled={!inputValue.trim() || isStreaming}>

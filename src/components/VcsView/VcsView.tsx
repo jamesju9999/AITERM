@@ -4,6 +4,7 @@ import { useVcsCwd } from "../../hooks/useVcsCwd";
 import { useVcsAgentLoop } from "../../hooks/useVcsAgentLoop";
 import { VcsLoopMessageBubble } from "./VcsMessageBubble";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
+import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { pickFolder } from "../../ipc/vcs";
 import "./VcsView.css";
 
@@ -29,6 +30,7 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
   const [input, setInput] = useState("");
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState<string>("");
+  const [submitShortcut, setSubmitShortcut] = useState<SubmitShortcut>("enter");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -38,6 +40,7 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
       const def = list.find((p) => p.is_default);
       if (def) setSelectedProviderId(def.id);
     }).catch(console.error);
+    getConfig().then((cfg) => setSubmitShortcut(cfg.submit_shortcut ?? "enter")).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -77,9 +80,11 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit();
+    if (e.key === "Enter") {
+      const ok = (submitShortcut === "enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
+                 (submitShortcut === "shift-enter" && e.shiftKey && !e.ctrlKey) ||
+                 (submitShortcut === "ctrl-enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey);
+      if (ok) { e.preventDefault(); handleSubmit(); }
     }
   };
 

@@ -8,7 +8,7 @@ import { useMcpChat } from "../../hooks/useMcpChat";
 import { invokeAiChat, type ChatMessage as AiChatMessage } from "../../ipc/ai";
 import { getSessionCwd, listDirectory } from "../../ipc/fs";
 import { getPtyRecentOutput, writePty } from "../../ipc/pty";
-import { getConfig } from "../../ipc/config";
+import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { getMcpTools } from "../../ipc/mcp";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
@@ -61,6 +61,7 @@ export function AiPanel({
   const [mcpEnabled, setMcpEnabled] = useState(true);
   const [mcpToolCount, setMcpToolCount] = useState(0);
   const [useMcp, setUseMcp] = useState(true);
+  const [submitShortcut, setSubmitShortcut] = useState<SubmitShortcut>("enter");
 
   const processFiles = useCallback(async (files: FileList | File[]) => {
     const arr = Array.from(files);
@@ -145,6 +146,7 @@ export function AiPanel({
       const globalEnabled = cfg.mcp_enabled ?? true;
       setMcpEnabled(globalEnabled);
       setMcpToolCount(tools.length);
+      setSubmitShortcut(cfg.submit_shortcut ?? "enter");
     };
     load().catch(() => {});
     return () => { cancelled = true; };
@@ -310,9 +312,12 @@ ${dirList || "（無法取得）"}
   }, [isOpen, onClose]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey) {
-      e.preventDefault();
-      handleSubmit();
+    if (e.key === "Enter") {
+      const shouldSubmit =
+        (submitShortcut === "enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
+        (submitShortcut === "shift-enter" && e.shiftKey && !e.ctrlKey) ||
+        (submitShortcut === "ctrl-enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey);
+      if (shouldSubmit) { e.preventDefault(); handleSubmit(); }
     }
   };
 
