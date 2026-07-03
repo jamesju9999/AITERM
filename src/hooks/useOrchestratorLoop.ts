@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import { agentChat, type AgentToolDefinition, type ChatMessage } from "../ipc/ai";
-import { runSubAgent, serializeError, type AgentDefinition, type SubAgentAction } from "./useSubAgentLoop";
+import { runSubAgent, runToolLoop, serializeError, type AgentDefinition, type SubAgentAction } from "./useSubAgentLoop";
 import { loopSessionSave, loopSessionLoad, parseLoopSessionData } from "../ipc/loopSession";
 
 export interface OrchestratorAgent extends AgentDefinition {
@@ -22,6 +22,8 @@ export interface LoopConfig {
   sessionId: string;
   /** Absolute path all sub-agents should treat as the working directory */
   projectDir?: string;
+  /** true = 跳過危險指令確認，全自動執行 */
+  fullAuto?: boolean;
   loopSessionId?: string;
   resumeSnapshot?: {
     orchestratorHistory: ChatMessage[];
@@ -63,6 +65,12 @@ export interface TraceEntry {
   timestamp: number;
 }
 
+export interface PendingConfirmation {
+  agentName: string;
+  command: string;
+  resolve: (approved: boolean) => void;
+}
+
 export interface UseOrchestratorLoopResult {
   trace: TraceEntry[];
   isRunning: boolean;
@@ -70,6 +78,7 @@ export interface UseOrchestratorLoopResult {
   start: (config: LoopConfig) => Promise<void>;
   stop: () => void;
   resume: (sessionId: string) => Promise<void>;
+  pendingConfirmation: PendingConfirmation | null;
 }
 
 function buildCallAgentTool(subAgents: OrchestratorAgent[]): AgentToolDefinition {
@@ -134,6 +143,10 @@ ${stoppingCondition}
 ## Available Sub-Agents (ONLY use these names in your suggestion)
 ${agentList}
 
+## Verification Tools
+You have read-only tools (read_file, list_directory). Before concluding, you may
+use them to inspect the actual files and verify the Orchestrator's claims.
+
 ## Instructions
 Analyze the Orchestrator's report and respond ONLY with a JSON object in this exact format:
 {
@@ -195,6 +208,20 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
   const [isRunning, setIsRunning] = useState(false);
   const [iteration, setIteration] = useState(0);
   const abortRef = useRef(false);
+  const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
+  const pendingResolveRef = useRef<((approved: boolean) => void) | null>(null);
+
+  const requestConfirmation = useCallback((agentName: string, command: string): Promise<boolean> => {
+    return new Promise<boolean>((resolve) => {
+      const wrapped = (approved: boolean) => {
+        setPendingConfirmation(null);
+        pendingResolveRef.current = null;
+        resolve(approved);
+      };
+      pendingResolveRef.current = wrapped;
+      setPendingConfirmation({ agentName, command, resolve: wrapped });
+    });
+  }, []);
 
   const addTrace = useCallback((entry: Omit<TraceEntry, "id" | "timestamp">) => {
     setTrace(prev => [...prev, { ...entry, id: traceId(), timestamp: Date.now() }]);
@@ -202,6 +229,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
 
   const stop = useCallback(() => {
     abortRef.current = true;
+    pendingResolveRef.current?.(false);
   }, []);
 
   const start = useCallback(async (config: LoopConfig) => {
@@ -437,14 +465,20 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
               subResult = `錯誤：Agent "${args.agent_name}" 不存在於 Roster 中。目前可用的 Agent 只有：${available}。請改用其中一個。`;
               addTraceBuffered({ kind: "sub_agent_done", agentName: args.agent_name, text: subResult, isError: true, iteration: iter });
             } else {
+              const confirmFn = config.fullAuto
+                ? async () => true
+                : (command: string) => requestConfirmation(args.agent_name, command);
               const result = await runSubAgent(
                 config.sessionId,
                 targetAgent,
                 args.task,
-                (action) => addTraceBuffered({ kind: "sub_agent_action", agentName: args.agent_name, text: action.tool, actions: [action], iteration: iter }),
-                config.maxInnerIterations,
-                sharedContext,
-                config.projectDir,
+                {
+                  onAction: (action) => addTraceBuffered({ kind: "sub_agent_action", agentName: args.agent_name, text: action.tool, actions: [action], iteration: iter }),
+                  onConfirmNeeded: confirmFn,
+                  maxInnerIterations: config.maxInnerIterations,
+                  sharedContext,
+                  projectDir: config.projectDir,
+                },
               );
               subResult = result.answer;
               iterSubAgentSummaries.push(`${args.agent_name} → ${subResult.slice(0, 100)}${subResult.length > 100 ? "..." : ""}`);
@@ -499,14 +533,16 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
           },
         ];
 
-        const verifierReply = await agentChat(
+        const verifierRun = await runToolLoop(
           config.verifier.providerId,
           verifierMessages,
-          [],
-          config.sessionId,
+          ["read_file", "list_directory"],
+          { sessionId: config.sessionId, effectiveRoot: config.projectDir ?? null },
+          8,
+          (action) => addTraceBuffered({ kind: "sub_agent_action", agentName: config.verifier.name, text: action.tool, actions: [action], iteration: iter }),
         );
 
-        const verifierResult = parseVerifierResult(verifierReply.content ?? "");
+        const verifierResult = parseVerifierResult(verifierRun.answer);
 
         if (!verifierResult) {
           addTraceBuffered({
@@ -570,7 +606,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
     } finally {
       setIsRunning(false);
     }
-  }, [addTrace]);
+  }, [addTrace, requestConfirmation]);
 
   const resume = useCallback(async (sessionId: string) => {
     const data = await loopSessionLoad(sessionId);
@@ -587,5 +623,5 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
     });
   }, [start]);
 
-  return { trace, isRunning, iteration, start, stop, resume };
+  return { trace, isRunning, iteration, start, stop, resume, pendingConfirmation };
 }
