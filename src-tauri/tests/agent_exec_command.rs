@@ -37,6 +37,15 @@ async fn kills_on_timeout() {
     assert!(start.elapsed().as_secs() < 5, "kill must not wait for the child");
 }
 
+#[cfg(not(windows))]
+#[tokio::test]
+async fn timeout_returns_promptly_despite_orphaned_pipe_holder() {
+    let start = std::time::Instant::now();
+    let r = run_command("( sleep 5 & ) ; sleep 6", None, 500).await.unwrap();
+    assert!(r.timed_out);
+    assert!(start.elapsed().as_secs() < 4, "must not wait for orphaned descendant");
+}
+
 #[tokio::test]
 async fn respects_cwd() {
     let dir = tempfile::tempdir().unwrap();
