@@ -7,7 +7,7 @@ const DANGEROUS_PATTERNS: RegExp[] = [
   /\bgit\s+push\b.*(\s--force\b|\s-f\b)/i,
   /\bdd\s+if=/i,
   /\bmkfs(\.\w+)?\b/i,
-  /\bchmod\b.*\b777\b/,
+  /\bchmod\b.*\b777\b/i,
   /\b(shutdown|reboot|poweroff)\b/i,
   /\bdel\s+\/[sq]/i,                              // Windows del /s /q
   /\bformat\s+[a-z]:/i,                           // Windows format d:
