@@ -811,6 +811,22 @@
   color: var(--text-muted, #888);
 }
 
+.ls-trace-live-action {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 8px 4px 24px;
+}
+
+.ls-trace-live-action.error .ls-action-tool {
+  color: #dc5050;
+}
+
+.ls-trace-live-action .ls-trace-action {
+  flex: 1;
+  min-width: 0;
+}
+
 .ls-trace-agent-done {
   border: 1px solid var(--border, #333);
   border-radius: 4px;
