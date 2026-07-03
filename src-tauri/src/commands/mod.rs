@@ -4,6 +4,7 @@ pub mod config;
 pub mod db;
 pub mod design;
 pub mod enterprise;
+pub mod exec;
 pub mod loop_session;
 pub mod markitdown;
 pub mod mcp;
