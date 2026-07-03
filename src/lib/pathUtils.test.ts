@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isPathInside } from "./pathUtils";
+import { isPathInside, normalizePath } from "./pathUtils";
 
 describe("isPathInside", () => {
   it("accepts direct child", () => {
@@ -26,5 +26,17 @@ describe("isPathInside", () => {
   });
   it("trailing slash on root", () => {
     expect(isPathInside("/home/user/proj/a.ts", "/home/user/proj/")).toBe(true);
+  });
+});
+
+describe("normalizePath", () => {
+  it("drive-letter root cannot be popped by ..", () => {
+    expect(normalizePath("C:/../secrets.txt")).toBe("C:/secrets.txt");
+  });
+  it("leading / cannot be escaped by ..", () => {
+    expect(normalizePath("/../etc/passwd")).toBe("/etc/passwd");
+  });
+  it("resolves .. within path", () => {
+    expect(normalizePath("/home/user/proj/src/../a.ts")).toBe("/home/user/proj/a.ts");
   });
 });

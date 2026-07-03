@@ -6,7 +6,15 @@ export function normalizePath(p: string): string {
   for (const part of unified.split("/")) {
     if (part === "" || part === ".") continue;
     if (part === "..") {
-      if (out.length > 0 && out[out.length - 1] !== "..") out.pop();
+      // A drive-letter first segment ("C:") is a root token — ".." can never pop it,
+      // same as the leading "/" of absolute POSIX paths.
+      if (
+        out.length > 0 &&
+        out[out.length - 1] !== ".." &&
+        !(out.length === 1 && /^[a-zA-Z]:$/.test(out[0]))
+      ) {
+        out.pop();
+      }
       continue;
     }
     out.push(part);
