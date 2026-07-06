@@ -101,12 +101,26 @@ impl AiProvider for AnthropicClient {
             })).collect()
         );
 
+        let mut system_text = req.system_prompt.clone();
+        for m in &req.messages {
+            if m.role == "system" {
+                if let Some(s) = m.content.as_str() {
+                    if !s.is_empty() {
+                        system_text = if system_text.is_empty() {
+                            s.to_string()
+                        } else {
+                            format!("{}\n\n{}", system_text, s)
+                        };
+                    }
+                }
+            }
+        }
         let messages: Vec<serde_json::Value> = build_anthropic_messages(&req.messages);
 
         let body = serde_json::json!({
             "model": self.model,
             "max_tokens": 4096,
-            "system": req.system_prompt,
+            "system": system_text,
             "messages": messages,
             "tools": tool_defs
         });
@@ -213,6 +227,9 @@ fn build_anthropic_messages(messages: &[ChatMessage]) -> Vec<serde_json::Value> 
     let mut pending_tool_results: Vec<serde_json::Value> = Vec::new();
 
     for m in messages {
+        if m.role == "system" {
+            continue;
+        }
         if m.role == "tool" {
             let tool_use_id = m.tool_call_id.clone().unwrap_or_else(|| {
                 log::warn!("tool-role ChatMessage missing tool_call_id; sending empty tool_use_id to Anthropic");
