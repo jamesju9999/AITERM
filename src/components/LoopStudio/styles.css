@@ -1177,3 +1177,59 @@
 }
 
 .ls-close-discard-btn:hover { background: #dc2626; }
+
+.ls-fullauto-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ls-confirm-panel {
+  border: 1px solid #b58900;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 8px;
+  background: color-mix(in srgb, #b58900 12%, transparent);
+}
+
+.ls-confirm-title {
+  font-weight: 600;
+  color: #b58900;
+  margin-bottom: 8px;
+}
+
+.ls-confirm-command {
+  background: var(--bg-secondary, #1a1a1a);
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0 0 10px 0;
+}
+
+.ls-confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.ls-confirm-deny,
+.ls-confirm-allow {
+  padding: 5px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  border: 1px solid var(--border, #333);
+  background: transparent;
+  color: var(--text, #ddd);
+}
+
+.ls-confirm-allow {
+  background: #b58900;
+  border-color: #b58900;
+  color: #1a1a1a;
+  font-weight: 600;
+}
