@@ -163,7 +163,7 @@ async fn generate_with_tools_returns_tool_calls() {
             assert_eq!(calls[0].args["query"], "WWDC 2026");
 
             let raw = raw.expect("raw should be populated for Ollama");
-            assert_eq!(raw[0]["id"], "call_0");
+            assert!(raw[0]["id"].as_str().unwrap().starts_with("call_"));
             assert_eq!(raw[0]["function"]["name"], "brave__search");
             let args_str = raw[0]["function"]["arguments"].as_str().expect("arguments should be a JSON string");
             let parsed: serde_json::Value = serde_json::from_str(args_str).unwrap();
@@ -171,6 +171,47 @@ async fn generate_with_tools_returns_tool_calls() {
         }
         _ => panic!("expected ToolCalls, got something else"),
     }
+}
+
+#[tokio::test]
+async fn synthesized_tool_call_ids_are_unique_across_turns() {
+    let server = MockServer::start().await;
+
+    let body = r#"{"model":"qwen2.5","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"brave__search","arguments":{"query":"a"}}}]},"done":true}"#;
+
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_string(body),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let client = OllamaClient::with_base_url("qwen2.5".into(), server.uri());
+    let tools = vec![aiterm_lib::ai::McpToolDefinition {
+        name: "brave__search".into(),
+        description: "Search the web".into(),
+        input_schema: serde_json::json!({}),
+    }];
+
+    let (tx1, _rx1) = mpsc::channel::<GenerateChunk>(4);
+    let first = client.generate_with_tools(req("turn 1"), tools.clone(), tx1).await.unwrap();
+    let (tx2, _rx2) = mpsc::channel::<GenerateChunk>(4);
+    let second = client.generate_with_tools(req("turn 2"), tools, tx2).await.unwrap();
+
+    let id_of = |r: aiterm_lib::ai::GenerateWithToolsResult| match r {
+        aiterm_lib::ai::GenerateWithToolsResult::ToolCalls { raw, .. } => {
+            raw.unwrap()[0]["id"].as_str().unwrap().to_string()
+        }
+        _ => panic!("expected ToolCalls"),
+    };
+
+    let id1 = id_of(first);
+    let id2 = id_of(second);
+    assert_ne!(id1, id2, "synthesized ids must not collide across separate turns (both were previously \"call_0\")");
 }
 
 #[tokio::test]

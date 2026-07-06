@@ -171,9 +171,16 @@ impl AiProvider for OllamaClient {
             .map_err(|e| AiError::Network { message: e.to_string() })?;
 
         if !data.message.tool_calls.is_empty() {
-            let raw_tool_calls: Vec<serde_json::Value> = data.message.tool_calls.iter().enumerate()
-                .map(|(i, tc)| serde_json::json!({
-                    "id": format!("call_{}", i),
+            // Ollama's response has no per-call id, and this synthetic one must stay
+            // unique across turns within the same conversation (a per-response index
+            // like "call_0" would collide if a later turn also has one tool call).
+            let ids: Vec<String> = (0..data.message.tool_calls.len())
+                .map(|_| format!("call_{}", uuid::Uuid::new_v4()))
+                .collect();
+
+            let raw_tool_calls: Vec<serde_json::Value> = data.message.tool_calls.iter().zip(ids.iter())
+                .map(|(tc, id)| serde_json::json!({
+                    "id": id,
                     "type": "function",
                     "function": {
                         "name": tc.function.name,
@@ -187,9 +194,9 @@ impl AiProvider for OllamaClient {
                 .message
                 .tool_calls
                 .into_iter()
-                .enumerate()
-                .map(|(i, tc)| AiToolCall {
-                    id: format!("call_{}", i),
+                .zip(ids)
+                .map(|(tc, id)| AiToolCall {
+                    id,
                     tool_name: tc.function.name,
                     args: tc.function.arguments,
                     thought_signature: None,
@@ -265,10 +272,13 @@ fn to_ollama_tool_calls(tool_calls: &serde_json::Value) -> Vec<OllamaResponseToo
             arr.iter()
                 .map(|c| {
                     let name = c["function"]["name"].as_str().unwrap_or("").to_string();
-                    let arguments = c["function"]["arguments"]
-                        .as_str()
-                        .and_then(|s| serde_json::from_str(s).ok())
-                        .unwrap_or(serde_json::json!({}));
+                    let arguments = match c["function"]["arguments"].as_str() {
+                        Some(s) => serde_json::from_str(s).unwrap_or_else(|e| {
+                            log::warn!("failed to parse tool_call arguments as JSON for Ollama: {e}; raw: {s}");
+                            serde_json::json!({})
+                        }),
+                        None => serde_json::json!({}),
+                    };
                     OllamaResponseToolCall {
                         function: OllamaResponseFunction { name, arguments },
                     }
