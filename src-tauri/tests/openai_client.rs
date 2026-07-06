@@ -14,7 +14,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 fn req(text: &str) -> GenerateRequest {
     GenerateRequest {
         system_prompt: "sys".into(),
-        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!(text) }],
+        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!(text), tool_call_id: None, tool_calls: None }],
         context: EnvSnapshot {
             os: "linux".into(),
             shell: "bash".into(),
@@ -107,7 +107,7 @@ async fn returns_rate_limit_with_retry_after() {
     let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
     let err = client.generate(req("x"), tx).await.unwrap_err();
     match err {
-        AiError::RateLimit { retry_after } => {
+        AiError::RateLimit { retry_after, .. } => {
             assert_eq!(retry_after.as_deref(), Some("30"));
         }
         other => panic!("expected RateLimit, got {other:?}"),
@@ -160,6 +160,8 @@ async fn multipart_content_reaches_endpoint_as_array() {
                 {"type": "text", "text": "describe this"},
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
             ]),
+            tool_call_id: None,
+            tool_calls: None,
         }],
         context: EnvSnapshot {
             os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default()

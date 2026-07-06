@@ -14,7 +14,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 fn req(text: &str) -> GenerateRequest {
     GenerateRequest {
         system_prompt: "sys".into(),
-        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!(text) }],
+        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!(text), tool_call_id: None, tool_calls: None }],
         context: EnvSnapshot {
             os: "linux".into(),
             shell: "bash".into(),
@@ -157,7 +157,7 @@ async fn generate_with_tools_returns_tool_calls() {
 
     let result = client.generate_with_tools(req("search WWDC"), tools, tx).await.unwrap();
     match result {
-        aiterm_lib::ai::GenerateWithToolsResult::ToolCalls(calls) => {
+        aiterm_lib::ai::GenerateWithToolsResult::ToolCalls { calls, .. } => {
             assert_eq!(calls.len(), 1);
             assert_eq!(calls[0].tool_name, "brave__search");
             assert_eq!(calls[0].args["query"], "WWDC 2026");

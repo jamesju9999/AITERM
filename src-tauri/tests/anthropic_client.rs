@@ -14,7 +14,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 fn req(text: &str) -> GenerateRequest {
     GenerateRequest {
         system_prompt: "sys".into(),
-        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!(text) }],
+        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!(text), tool_call_id: None, tool_calls: None }],
         context: EnvSnapshot {
             os: "linux".into(),
             shell: "bash".into(),
@@ -120,7 +120,7 @@ async fn returns_rate_limit_on_429() {
     let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
     let err = client.generate(req("x"), tx).await.unwrap_err();
     match err {
-        AiError::RateLimit { retry_after } => {
+        AiError::RateLimit { retry_after, .. } => {
             assert_eq!(retry_after.as_deref(), Some("60"));
         }
         other => panic!("expected RateLimit, got {other:?}"),
