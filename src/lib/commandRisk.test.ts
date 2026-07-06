@@ -68,4 +68,25 @@ describe("commandWritesOutsideRoot", () => {
   ])("normal: %s", (cmd) => {
     expect(commandWritesOutsideRoot(cmd, root)).toBe(false);
   });
+
+  it.each([
+    ['echo hi > "/tmp/my notes.txt"', root],
+    ['cp report.txt "/tmp/My Folder/report.txt"', root],
+    ["OUT=/tmp/x.txt; echo hi > \"$OUT\"", root],
+    ["echo hi > $(mktemp -p /tmp)", root],
+    ["cat file1|tee /tmp/out.txt", root],
+    ['copy secrets.txt C:\\Users\\Public\\leak.txt', root],
+    ['xcopy report.txt \\\\host\\share\\report.txt', root],
+  ])("dangerous (round 2): %s", (cmd) => {
+    expect(commandWritesOutsideRoot(cmd, root)).toBe(true);
+  });
+
+  it.each([
+    ["some_command > /dev/null 2>&1", root],
+    ["npm test > /dev/null", root],
+    ['echo hi > "./local file.txt"', root],
+    ["cp a.txt b.txt 2>/dev/null", root],
+  ])("normal (round 2): %s", (cmd) => {
+    expect(commandWritesOutsideRoot(cmd, root)).toBe(false);
+  });
 });
