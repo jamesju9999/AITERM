@@ -203,6 +203,15 @@ struct AnthropicMessage {
     content: serde_json::Value,
 }
 
+/// True if `m` is a `role:"system"` ChatMessage. Anthropic has no place for the
+/// system role inside `messages` — it must be excluded from every message list
+/// built for Anthropic and folded into the top-level `system` field instead
+/// (see `extract_system_text`). Centralized here so `build_anthropic_messages`
+/// and `build_request_body` can't drift on what counts as a system message.
+fn is_system_message(m: &ChatMessage) -> bool {
+    m.role == "system"
+}
+
 /// Extract and concatenate any `role:"system"` ChatMessage content onto `base_system_prompt`.
 /// Anthropic requires the system prompt as a separate top-level field, not a message —
 /// used by both the plain streaming path (`build_request_body`) and tool-calling path
@@ -210,7 +219,7 @@ struct AnthropicMessage {
 fn extract_system_text(messages: &[ChatMessage], base_system_prompt: &str) -> String {
     let mut system_text = base_system_prompt.to_string();
     for m in messages {
-        if m.role != "system" {
+        if !is_system_message(m) {
             continue;
         }
         match m.content.as_str() {
@@ -243,7 +252,7 @@ fn build_anthropic_messages(messages: &[ChatMessage]) -> Vec<serde_json::Value> 
     let mut pending_tool_results: Vec<serde_json::Value> = Vec::new();
 
     for m in messages {
-        if m.role == "system" {
+        if is_system_message(m) {
             continue;
         }
         if m.role == "tool" {
@@ -331,7 +340,7 @@ fn build_request_body(
     let messages = req
         .messages
         .iter()
-        .filter(|m| m.role != "system")
+        .filter(|m| !is_system_message(m))
         .map(|m| AnthropicMessage { role: m.role.clone(), content: m.content.clone() })
         .collect();
     AnthropicRequest {
