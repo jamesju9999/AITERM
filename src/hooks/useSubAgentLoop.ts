@@ -95,7 +95,13 @@ async function executeTool(
         return { result: truncated ? `${content}\n[...truncated]` : content, isError: false };
       }
       case "write_file": {
-        if (ctx.effectiveRoot && !isPathInside(args.path, ctx.effectiveRoot)) {
+        if (!ctx.effectiveRoot) {
+          return {
+            result: "錯誤：無法確認專案目錄，為安全起見拒絕寫入。請在 Loop Studio 設定專案目錄。",
+            isError: true,
+          };
+        }
+        if (!isPathInside(args.path, ctx.effectiveRoot)) {
           return {
             result: `錯誤：不允許寫入專案目錄（${ctx.effectiveRoot}）以外的路徑：${args.path}。請改用專案目錄內的路徑。`,
             isError: true,
@@ -112,6 +118,12 @@ async function executeTool(
         };
       }
       case "execute_command": {
+        if (!ctx.effectiveRoot) {
+          return {
+            result: "錯誤：無法確認專案目錄，為安全起見拒絕執行指令。請在 Loop Studio 設定專案目錄。",
+            isError: true,
+          };
+        }
         if (classifyCommand(args.command) === "dangerous") {
           if (!ctx.onConfirmNeeded) {
             return { result: "錯誤：此指令被判定為危險指令，此執行環境不允許危險指令。", isError: true };
