@@ -101,14 +101,13 @@ impl AiProvider for AnthropicClient {
             })).collect()
         );
 
-        let messages: Vec<serde_json::Value> = req.messages.iter().map(|m| {
-            serde_json::json!({ "role": m.role, "content": m.content })
-        }).collect();
+        let system_text = extract_system_text(&req.messages, &req.system_prompt);
+        let messages: Vec<serde_json::Value> = build_anthropic_messages(&req.messages);
 
         let body = serde_json::json!({
             "model": self.model,
             "max_tokens": 4096,
-            "system": req.system_prompt,
+            "system": system_text,
             "messages": messages,
             "tools": tool_defs
         });
@@ -153,7 +152,10 @@ impl AiProvider for AnthropicClient {
                 })
                 .collect();
 
-            return Ok(GenerateWithToolsResult::ToolCalls { calls, raw: None });
+            return Ok(GenerateWithToolsResult::ToolCalls {
+                calls,
+                raw: Some(serde_json::Value::Array(content_blocks.clone())),
+            });
         }
 
         let content = json["content"][0]["text"].as_str().unwrap_or("").to_string();
@@ -201,6 +203,126 @@ struct AnthropicMessage {
     content: serde_json::Value,
 }
 
+/// Extract and concatenate any `role:"system"` ChatMessage content onto `base_system_prompt`.
+/// Anthropic requires the system prompt as a separate top-level field, not a message —
+/// used by both the plain streaming path (`build_request_body`) and tool-calling path
+/// (`generate_with_tools`).
+fn extract_system_text(messages: &[ChatMessage], base_system_prompt: &str) -> String {
+    let mut system_text = base_system_prompt.to_string();
+    for m in messages {
+        if m.role != "system" {
+            continue;
+        }
+        match m.content.as_str() {
+            Some(s) if !s.is_empty() => {
+                system_text = if system_text.is_empty() {
+                    s.to_string()
+                } else {
+                    format!("{}\n\n{}", system_text, s)
+                };
+            }
+            Some(_) => {}
+            None => {
+                if !m.content.is_null() {
+                    log::warn!("system-role ChatMessage has non-string content; content dropped when building Anthropic system prompt");
+                }
+            }
+        }
+    }
+    system_text
+}
+
+/// Convert internal ChatMessage history into Anthropic's Messages API format.
+/// Anthropic has no "tool" role: tool calls live inside an assistant message's
+/// `content` array as `tool_use` blocks, and tool results are wrapped in a
+/// `user` message's `content` array as `tool_result` blocks. Consecutive
+/// `role: "tool"` ChatMessages (parallel tool calls) are coalesced into one
+/// user turn, since Anthropic requires strictly alternating roles.
+fn build_anthropic_messages(messages: &[ChatMessage]) -> Vec<serde_json::Value> {
+    let mut result: Vec<serde_json::Value> = Vec::with_capacity(messages.len());
+    let mut pending_tool_results: Vec<serde_json::Value> = Vec::new();
+
+    for m in messages {
+        if m.role == "system" {
+            continue;
+        }
+        if m.role == "tool" {
+            let tool_use_id = m.tool_call_id.clone().unwrap_or_else(|| {
+                log::warn!("tool-role ChatMessage missing tool_call_id; sending empty tool_use_id to Anthropic");
+                String::new()
+            });
+            pending_tool_results.push(serde_json::json!({
+                "type": "tool_result",
+                "tool_use_id": tool_use_id,
+                "content": m.content.clone(),
+            }));
+            continue;
+        }
+
+        flush_tool_results(&mut result, &mut pending_tool_results);
+
+        if m.role == "assistant" {
+            if let Some(tool_calls) = &m.tool_calls {
+                result.push(serde_json::json!({
+                    "role": "assistant",
+                    "content": to_anthropic_content_blocks(tool_calls),
+                }));
+                continue;
+            }
+        }
+
+        result.push(serde_json::json!({ "role": m.role, "content": m.content }));
+    }
+
+    flush_tool_results(&mut result, &mut pending_tool_results);
+    result
+}
+
+fn flush_tool_results(result: &mut Vec<serde_json::Value>, pending: &mut Vec<serde_json::Value>) {
+    if !pending.is_empty() {
+        result.push(serde_json::json!({
+            "role": "user",
+            "content": std::mem::take(pending),
+        }));
+    }
+}
+
+/// Convert a ChatMessage's `tool_calls` value into Anthropic content blocks.
+/// Handles two possible shapes: Anthropic-native (already `tool_use` blocks,
+/// e.g. echoed back verbatim from a prior `raw`) and OpenAI-shaped (the
+/// frontend's fallback reconstruction, `function.arguments` as a JSON string).
+/// Detection: OpenAI-shaped elements always have a `"function"` key; Anthropic
+/// content blocks (whether `text` or `tool_use`) never do — so checking only
+/// the first element would misdetect a `[text, tool_use]` raw echo.
+fn to_anthropic_content_blocks(tool_calls: &serde_json::Value) -> Vec<serde_json::Value> {
+    let Some(arr) = tool_calls.as_array() else {
+        return vec![];
+    };
+
+    let is_openai_shaped = arr.iter().any(|el| el.get("function").is_some());
+    if !is_openai_shaped {
+        return arr.clone();
+    }
+
+    arr.iter()
+        // Assumes a homogeneous array (all-native or all-OpenAI-shaped, never mixed) —
+        // a genuinely mixed array would silently drop the native blocks here.
+        .filter(|el| el.get("function").is_some())
+        .map(|el| {
+            let arguments = el["function"]["arguments"]
+                .as_str()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or(serde_json::json!({}));
+            serde_json::json!({
+                "type": "tool_use",
+                "id": el["id"],
+                "name": el["function"]["name"],
+                "input": arguments,
+            })
+        })
+        .collect()
+}
+
 fn build_request_body(
     model: &str,
     req: &GenerateRequest,
@@ -209,11 +331,12 @@ fn build_request_body(
     let messages = req
         .messages
         .iter()
+        .filter(|m| m.role != "system")
         .map(|m| AnthropicMessage { role: m.role.clone(), content: m.content.clone() })
         .collect();
     AnthropicRequest {
         model: model.to_owned(),
-        system: req.system_prompt.clone(),
+        system: extract_system_text(&req.messages, &req.system_prompt),
         messages,
         max_tokens: req.max_tokens.unwrap_or(1024),
         stream,
@@ -367,6 +490,26 @@ mod tests {
         }
         assert_eq!(json["stream"], true);
         assert_eq!(json["model"], "claude-sonnet-4-5");
+    }
+
+    #[test]
+    fn request_body_extracts_system_role_message_and_excludes_it_from_messages() {
+        let mut req = sample_req();
+        req.messages.insert(0, ChatMessage {
+            role: "system".into(),
+            content: serde_json::json!("You are the orchestrator."),
+            tool_call_id: None,
+            tool_calls: None,
+        });
+        let body = build_request_body("claude-sonnet-4-5", &req, true);
+        let json = serde_json::to_value(&body).unwrap();
+        // sample_req() carries a non-empty system_prompt ("You are a terminal assistant.");
+        // extract_system_text concatenates it with the system-role message rather than
+        // overwriting it, matching the already-approved behavior in generate_with_tools.
+        assert_eq!(json["system"], "You are a terminal assistant.\n\nYou are the orchestrator.");
+        for msg in json["messages"].as_array().unwrap() {
+            assert_ne!(msg["role"], "system", "system message must not appear in the messages array");
+        }
     }
 
     #[test]
