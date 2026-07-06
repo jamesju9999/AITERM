@@ -1,7 +1,7 @@
 import { agentChat, type AgentToolDefinition, type ChatMessage } from "../ipc/ai";
 import { readFile, writeTextFile, listDirectory, getSessionCwd } from "../ipc/fs";
 import { agentExec } from "../ipc/exec";
-import { classifyCommand } from "../lib/commandRisk";
+import { classifyCommand, commandWritesOutsideRoot } from "../lib/commandRisk";
 import { isPathInside } from "../lib/pathUtils";
 
 export function serializeError(e: unknown): string {
@@ -124,7 +124,9 @@ async function executeTool(
             isError: true,
           };
         }
-        if (classifyCommand(args.command) === "dangerous") {
+        const root = ctx.effectiveRoot;
+        const isDangerous = classifyCommand(args.command) === "dangerous" || commandWritesOutsideRoot(args.command, root);
+        if (isDangerous) {
           if (!ctx.onConfirmNeeded) {
             return { result: "錯誤：此指令被判定為危險指令，此執行環境不允許危險指令。", isError: true };
           }
@@ -133,7 +135,7 @@ async function executeTool(
             return { result: "使用者拒絕執行此指令，請改用其他方式完成任務。", isError: true };
           }
         }
-        const r = await agentExec(args.command, ctx.effectiveRoot ?? undefined);
+        const r = await agentExec(args.command, root);
         const combined = [r.stdout, r.stderr ? `[stderr]\n${r.stderr}` : ""].filter(Boolean).join("\n");
         if (r.timed_out) {
           return { result: `[timeout after 60s — process killed]\n${combined}`, isError: true };

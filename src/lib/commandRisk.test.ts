@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyCommand } from "./commandRisk";
+import { classifyCommand, commandWritesOutsideRoot } from "./commandRisk";
 
 describe("classifyCommand", () => {
   it.each([
@@ -33,5 +33,39 @@ describe("classifyCommand", () => {
     "curl https://api.example.com/data",
   ])("normal: %s", (cmd) => {
     expect(classifyCommand(cmd)).toBe("normal");
+  });
+});
+
+describe("commandWritesOutsideRoot", () => {
+  const root = "/home/user/proj";
+
+  it.each([
+    ['echo "hello world" > /tmp/hello.txt', root],
+    ["printf foo >> /tmp/out.log", root],
+    ["cat data.txt | tee /tmp/copy.txt", root],
+    ["cp file.txt /tmp/file.txt", root],
+    ["mv secret.txt /tmp/secret.txt", root],
+    ["sed -i 's/a/b/' /tmp/config.txt", root],
+    ["dd if=/dev/zero of=/tmp/out.img bs=1M count=1", root],
+    ["echo hi > ../../../etc/passwd", root],
+    ["echo hi > /home/user/other/file.txt", root],
+  ])("dangerous: %s", (cmd) => {
+    expect(commandWritesOutsideRoot(cmd, root)).toBe(true);
+  });
+
+  it.each([
+    ["echo hello world", root],
+    ["echo hello > output.txt", root],
+    ["cat file.txt", root],
+    ["ls -la", root],
+    ["cp a.txt b.txt", root],
+    ["command 2>&1", root],
+    ["echo test >&2", root],
+    ["grep foo bar.txt > results.txt", root],
+    ["curl https://api.example.com/data", root],
+    ["npm run build > build.log 2>&1", root],
+    ["echo hi > ./sub/dir/file.txt", root],
+  ])("normal: %s", (cmd) => {
+    expect(commandWritesOutsideRoot(cmd, root)).toBe(false);
   });
 });
