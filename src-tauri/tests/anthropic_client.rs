@@ -566,3 +566,58 @@ async fn leading_system_message_is_extracted_not_sent_as_a_message() {
         assert_ne!(m["role"], "system", "system must never appear inside the messages array");
     }
 }
+
+#[tokio::test]
+async fn generate_extracts_system_role_message_via_plain_streaming_path() {
+    let server = MockServer::start().await;
+
+    let sse_body = "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+
+    let mock = Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse_body),
+        )
+        .mount_as_scoped(&server)
+        .await;
+
+    let client = AnthropicClient::with_base_url("test-key".into(), "claude-sonnet-4-5".into(), server.uri());
+    let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
+
+    let req = GenerateRequest {
+        system_prompt: String::new(),
+        messages: vec![
+            ChatMessage {
+                role: "system".into(),
+                content: serde_json::json!("You are the orchestrator."),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: serde_json::json!("go"),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+        ],
+        context: EnvSnapshot { os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default() },
+        mode: QueryMode::Chat,
+        max_tokens: Some(256),
+    };
+
+    client.generate(req, tx).await.expect("generate ok");
+    while let Some(chunk) = rx.recv().await {
+        if chunk.done { break; }
+    }
+
+    let received = &mock.received_requests().await[0];
+    let body: serde_json::Value = serde_json::from_slice(&received.body).unwrap();
+    assert_eq!(body["system"], "You are the orchestrator.");
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 1);
+    for m in messages {
+        assert_ne!(m["role"], "system");
+    }
+}

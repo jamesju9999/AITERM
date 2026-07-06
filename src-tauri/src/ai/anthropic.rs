@@ -101,20 +101,7 @@ impl AiProvider for AnthropicClient {
             })).collect()
         );
 
-        let mut system_text = req.system_prompt.clone();
-        for m in &req.messages {
-            if m.role == "system" {
-                if let Some(s) = m.content.as_str() {
-                    if !s.is_empty() {
-                        system_text = if system_text.is_empty() {
-                            s.to_string()
-                        } else {
-                            format!("{}\n\n{}", system_text, s)
-                        };
-                    }
-                }
-            }
-        }
+        let system_text = extract_system_text(&req.messages, &req.system_prompt);
         let messages: Vec<serde_json::Value> = build_anthropic_messages(&req.messages);
 
         let body = serde_json::json!({
@@ -216,6 +203,35 @@ struct AnthropicMessage {
     content: serde_json::Value,
 }
 
+/// Extract and concatenate any `role:"system"` ChatMessage content onto `base_system_prompt`.
+/// Anthropic requires the system prompt as a separate top-level field, not a message —
+/// used by both the plain streaming path (`build_request_body`) and tool-calling path
+/// (`generate_with_tools`).
+fn extract_system_text(messages: &[ChatMessage], base_system_prompt: &str) -> String {
+    let mut system_text = base_system_prompt.to_string();
+    for m in messages {
+        if m.role != "system" {
+            continue;
+        }
+        match m.content.as_str() {
+            Some(s) if !s.is_empty() => {
+                system_text = if system_text.is_empty() {
+                    s.to_string()
+                } else {
+                    format!("{}\n\n{}", system_text, s)
+                };
+            }
+            Some(_) => {}
+            None => {
+                if !m.content.is_null() {
+                    log::warn!("system-role ChatMessage has non-string content; content dropped when building Anthropic system prompt");
+                }
+            }
+        }
+    }
+    system_text
+}
+
 /// Convert internal ChatMessage history into Anthropic's Messages API format.
 /// Anthropic has no "tool" role: tool calls live inside an assistant message's
 /// `content` array as `tool_use` blocks, and tool results are wrapped in a
@@ -315,11 +331,12 @@ fn build_request_body(
     let messages = req
         .messages
         .iter()
+        .filter(|m| m.role != "system")
         .map(|m| AnthropicMessage { role: m.role.clone(), content: m.content.clone() })
         .collect();
     AnthropicRequest {
         model: model.to_owned(),
-        system: req.system_prompt.clone(),
+        system: extract_system_text(&req.messages, &req.system_prompt),
         messages,
         max_tokens: req.max_tokens.unwrap_or(1024),
         stream,
@@ -473,6 +490,26 @@ mod tests {
         }
         assert_eq!(json["stream"], true);
         assert_eq!(json["model"], "claude-sonnet-4-5");
+    }
+
+    #[test]
+    fn request_body_extracts_system_role_message_and_excludes_it_from_messages() {
+        let mut req = sample_req();
+        req.messages.insert(0, ChatMessage {
+            role: "system".into(),
+            content: serde_json::json!("You are the orchestrator."),
+            tool_call_id: None,
+            tool_calls: None,
+        });
+        let body = build_request_body("claude-sonnet-4-5", &req, true);
+        let json = serde_json::to_value(&body).unwrap();
+        // sample_req() carries a non-empty system_prompt ("You are a terminal assistant.");
+        // extract_system_text concatenates it with the system-role message rather than
+        // overwriting it, matching the already-approved behavior in generate_with_tools.
+        assert_eq!(json["system"], "You are a terminal assistant.\n\nYou are the orchestrator.");
+        for msg in json["messages"].as_array().unwrap() {
+            assert_ne!(msg["role"], "system", "system message must not appear in the messages array");
+        }
     }
 
     #[test]
