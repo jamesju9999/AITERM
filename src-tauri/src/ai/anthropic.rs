@@ -214,9 +214,13 @@ fn build_anthropic_messages(messages: &[ChatMessage]) -> Vec<serde_json::Value> 
 
     for m in messages {
         if m.role == "tool" {
+            let tool_use_id = m.tool_call_id.clone().unwrap_or_else(|| {
+                log::warn!("tool-role ChatMessage missing tool_call_id; sending empty tool_use_id to Anthropic");
+                String::new()
+            });
             pending_tool_results.push(serde_json::json!({
                 "type": "tool_result",
-                "tool_use_id": m.tool_call_id.clone().unwrap_or_default(),
+                "tool_use_id": tool_use_id,
                 "content": m.content.clone(),
             }));
             continue;
@@ -268,6 +272,8 @@ fn to_anthropic_content_blocks(tool_calls: &serde_json::Value) -> Vec<serde_json
     }
 
     arr.iter()
+        // Assumes a homogeneous array (all-native or all-OpenAI-shaped, never mixed) —
+        // a genuinely mixed array would silently drop the native blocks here.
         .filter(|el| el.get("function").is_some())
         .map(|el| {
             let arguments = el["function"]["arguments"]

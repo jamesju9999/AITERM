@@ -435,3 +435,81 @@ async fn mixed_raw_content_round_trips_without_misdetection() {
     assert_eq!(blocks[1]["type"], "tool_use");
     assert_eq!(blocks[1]["id"], "toolu_1");
 }
+
+#[tokio::test]
+async fn tool_message_without_tool_call_id_sends_empty_string() {
+    let server = MockServer::start().await;
+
+    let response_body = r#"{"stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}"#;
+
+    let mock = Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_string(response_body),
+        )
+        .mount_as_scoped(&server)
+        .await;
+
+    let client = AnthropicClient::with_base_url("test-key".into(), "claude-sonnet-4-5".into(), server.uri());
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
+
+    let req = GenerateRequest {
+        system_prompt: "sys".into(),
+        messages: vec![
+            ChatMessage {
+                role: "tool".into(),
+                content: serde_json::json!("some result"),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+        ],
+        context: EnvSnapshot { os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default() },
+        mode: QueryMode::Chat,
+        max_tokens: Some(256),
+    };
+
+    client.generate_with_tools(req, vec![], tx).await.expect("ok");
+
+    let received = &mock.received_requests().await[0];
+    let body: serde_json::Value = serde_json::from_slice(&received.body).unwrap();
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"][0]["tool_use_id"], "");
+}
+
+#[tokio::test]
+async fn empty_message_history_produces_empty_messages_array() {
+    let server = MockServer::start().await;
+
+    let response_body = r#"{"stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}"#;
+
+    let mock = Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_string(response_body),
+        )
+        .mount_as_scoped(&server)
+        .await;
+
+    let client = AnthropicClient::with_base_url("test-key".into(), "claude-sonnet-4-5".into(), server.uri());
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
+
+    let req = GenerateRequest {
+        system_prompt: "sys".into(),
+        messages: vec![],
+        context: EnvSnapshot { os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default() },
+        mode: QueryMode::Chat,
+        max_tokens: Some(256),
+    };
+
+    client.generate_with_tools(req, vec![], tx).await.expect("ok");
+
+    let received = &mock.received_requests().await[0];
+    let body: serde_json::Value = serde_json::from_slice(&received.body).unwrap();
+    assert_eq!(body["messages"].as_array().unwrap().len(), 0);
+}
