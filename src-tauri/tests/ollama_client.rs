@@ -157,10 +157,17 @@ async fn generate_with_tools_returns_tool_calls() {
 
     let result = client.generate_with_tools(req("search WWDC"), tools, tx).await.unwrap();
     match result {
-        aiterm_lib::ai::GenerateWithToolsResult::ToolCalls { calls, .. } => {
+        aiterm_lib::ai::GenerateWithToolsResult::ToolCalls { calls, raw } => {
             assert_eq!(calls.len(), 1);
             assert_eq!(calls[0].tool_name, "brave__search");
             assert_eq!(calls[0].args["query"], "WWDC 2026");
+
+            let raw = raw.expect("raw should be populated for Ollama");
+            assert_eq!(raw[0]["id"], "call_0");
+            assert_eq!(raw[0]["function"]["name"], "brave__search");
+            let args_str = raw[0]["function"]["arguments"].as_str().expect("arguments should be a JSON string");
+            let parsed: serde_json::Value = serde_json::from_str(args_str).unwrap();
+            assert_eq!(parsed["query"], "WWDC 2026");
         }
         _ => panic!("expected ToolCalls, got something else"),
     }
@@ -196,4 +203,63 @@ async fn generate_with_tools_returns_text_when_no_tool_calls() {
         aiterm_lib::ai::GenerateWithToolsResult::Text(t) => assert_eq!(t, "Hello there"),
         _ => panic!("expected Text, got something else"),
     }
+}
+
+#[tokio::test]
+async fn tool_calls_round_trip_converts_arguments_to_object_shape() {
+    let server = MockServer::start().await;
+
+    let response_body = r#"{"model":"qwen2.5","message":{"role":"assistant","content":"done"},"done":true}"#;
+
+    let mock = Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_string(response_body),
+        )
+        .mount_as_scoped(&server)
+        .await;
+
+    let client = OllamaClient::with_base_url("qwen2.5".into(), server.uri());
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(4);
+
+    let req = GenerateRequest {
+        system_prompt: "sys".into(),
+        messages: vec![
+            ChatMessage {
+                role: "assistant".into(),
+                content: serde_json::Value::Null,
+                tool_call_id: None,
+                tool_calls: Some(serde_json::json!([
+                    { "id": "call_0", "type": "function", "function": { "name": "read_file", "arguments": "{\"path\":\"a.txt\"}" } }
+                ])),
+            },
+            ChatMessage {
+                role: "tool".into(),
+                content: serde_json::json!("file contents"),
+                tool_call_id: Some("call_0".into()),
+                tool_calls: None,
+            },
+        ],
+        context: EnvSnapshot { os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default() },
+        mode: QueryMode::Chat,
+        max_tokens: None,
+    };
+
+    client.generate_with_tools(req, vec![], tx).await.expect("ok");
+
+    let received = &mock.received_requests().await[0];
+    let body: serde_json::Value = serde_json::from_slice(&received.body).unwrap();
+    let messages = body["messages"].as_array().unwrap();
+    // messages[0] = system, messages[1] = assistant tool call, messages[2] = tool result
+    let assistant_msg = &messages[1];
+    assert_eq!(assistant_msg["content"], "");
+    let sent_args = &assistant_msg["tool_calls"][0]["function"]["arguments"];
+    assert!(sent_args.is_object(), "Ollama expects arguments as an object, got: {sent_args}");
+    assert_eq!(sent_args["path"], "a.txt");
+
+    let tool_msg = &messages[2];
+    assert_eq!(tool_msg["role"], "tool");
+    assert_eq!(tool_msg["content"], "file contents");
 }
