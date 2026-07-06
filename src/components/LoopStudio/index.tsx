@@ -351,7 +351,9 @@ export function LoopStudioView({
       {showCloseConfirm && (
         <div className="ls-close-overlay">
           <div className="ls-close-dialog">
-            <h3 className="ls-close-dialog-title">有未儲存的變更</h3>
+            <h3 className="ls-close-dialog-title">
+              {loop.isRunning ? "Loop 正在執行中" : "有未儲存的變更"}
+            </h3>
             <p className="ls-close-dialog-body">
               {loop.isRunning ? (
                 <>Loop 目前正在執行中，關閉分頁將停止 Loop 並遺失執行進度。</>
