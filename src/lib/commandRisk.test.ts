@@ -77,6 +77,10 @@ describe("commandWritesOutsideRoot", () => {
     ["cat file1|tee /tmp/out.txt", root],
     ['copy secrets.txt C:\\Users\\Public\\leak.txt', root],
     ['xcopy report.txt \\\\host\\share\\report.txt', root],
+    ['cp "a\\"b" "/tmp/out.txt"', root],
+    ["COPY secrets.txt C:\\Users\\Public\\leak.txt", root],
+    ["Copy secrets.txt C:\\Users\\Public\\leak.txt", root],
+    ["ROBOCOPY src C:\\Users\\Public\\", root],
   ])("dangerous (round 2): %s", (cmd) => {
     expect(commandWritesOutsideRoot(cmd, root)).toBe(true);
   });

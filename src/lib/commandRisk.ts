@@ -62,7 +62,15 @@ function readToken(s: string, i: number): [string, number] | null {
     if (c === '"' || c === "'") {
       const quote = c;
       i++;
-      while (i < s.length && s[i] !== quote) { token += s[i]; i++; }
+      while (i < s.length && s[i] !== quote) {
+        if (s[i] === "\\" && i + 1 < s.length && s[i + 1] === quote) {
+          token += quote;
+          i += 2;
+        } else {
+          token += s[i];
+          i++;
+        }
+      }
       i++; // skip closing quote (or end of string if unterminated)
     } else {
       token += c;
@@ -102,7 +110,8 @@ function extractWriteTargets(command: string): string[] {
     if (words.length === 0) continue;
     const cmdName = words[0];
     const isUnixFlag = (w: string) => w.startsWith("-");
-    const isWindowsCopyCmd = cmdName === "copy" || cmdName === "move" || cmdName === "xcopy" || cmdName === "robocopy";
+    const cmdNameLower = cmdName.toLowerCase();
+    const isWindowsCopyCmd = cmdNameLower === "copy" || cmdNameLower === "move" || cmdNameLower === "xcopy" || cmdNameLower === "robocopy";
     // Windows copy-family flags commonly use "/" (e.g. /s, /q); "-" prefixed flags never denote a path either way.
     const isFlag = (w: string) => w.startsWith("-") || (isWindowsCopyCmd && w.startsWith("/"));
 
