@@ -99,8 +99,7 @@ function extractWriteTargets(command: string): string[] {
   // Redirection: `>` or `>>`, optionally preceded by a fd number (e.g. `2>`).
   // Excludes fd-duplication forms like `2>&1` or `>&2` (no path involved).
   const redirectRe = /\d*>{1,2}(?!&)/g;
-  let m: RegExpExecArray | null;
-  while ((m = redirectRe.exec(command)) !== null) {
+  while (redirectRe.exec(command) !== null) {
     const r = readToken(command, redirectRe.lastIndex);
     if (r) targets.push(r[0]);
   }
