@@ -171,6 +171,18 @@ impl AiProvider for OllamaClient {
             .map_err(|e| AiError::Network { message: e.to_string() })?;
 
         if !data.message.tool_calls.is_empty() {
+            let raw_tool_calls: Vec<serde_json::Value> = data.message.tool_calls.iter().enumerate()
+                .map(|(i, tc)| serde_json::json!({
+                    "id": format!("call_{}", i),
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": serde_json::to_string(&tc.function.arguments).unwrap_or_default(),
+                    }
+                }))
+                .collect();
+            let raw = Some(serde_json::Value::Array(raw_tool_calls));
+
             let calls = data
                 .message
                 .tool_calls
@@ -183,7 +195,7 @@ impl AiProvider for OllamaClient {
                     thought_signature: None,
                 })
                 .collect();
-            Ok(GenerateWithToolsResult::ToolCalls { calls, raw: None })
+            Ok(GenerateWithToolsResult::ToolCalls { calls, raw })
         } else {
             Ok(GenerateWithToolsResult::Text(data.message.content))
         }
@@ -212,6 +224,8 @@ struct OllamaChatRequest {
 struct OllamaMessage {
     role: String,
     content: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<OllamaResponseToolCall>>,
 }
 
 fn build_messages(req: &GenerateRequest) -> Vec<OllamaMessage> {
@@ -219,14 +233,49 @@ fn build_messages(req: &GenerateRequest) -> Vec<OllamaMessage> {
     messages.push(OllamaMessage {
         role: "system".to_owned(),
         content: serde_json::Value::String(req.system_prompt.clone()),
+        tool_calls: None,
     });
     for m in &req.messages {
-        messages.push(OllamaMessage {
-            role: m.role.clone(),
-            content: m.content.clone(),
-        });
+        match &m.tool_calls {
+            Some(tool_calls) => {
+                messages.push(OllamaMessage {
+                    role: m.role.clone(),
+                    content: serde_json::Value::String(String::new()),
+                    tool_calls: Some(to_ollama_tool_calls(tool_calls)),
+                });
+            }
+            None => {
+                messages.push(OllamaMessage {
+                    role: m.role.clone(),
+                    content: m.content.clone(),
+                    tool_calls: None,
+                });
+            }
+        }
     }
     messages
+}
+
+/// Convert the system's OpenAI-shaped tool_calls (arguments as a JSON string)
+/// into Ollama's native shape (arguments as a parsed JSON object).
+fn to_ollama_tool_calls(tool_calls: &serde_json::Value) -> Vec<OllamaResponseToolCall> {
+    tool_calls
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|c| {
+                    let name = c["function"]["name"].as_str().unwrap_or("").to_string();
+                    let arguments = c["function"]["arguments"]
+                        .as_str()
+                        .and_then(|s| serde_json::from_str(s).ok())
+                        .unwrap_or(serde_json::json!({}));
+                    OllamaResponseToolCall {
+                        function: OllamaResponseFunction { name, arguments },
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn build_request_body(model: &str, req: &GenerateRequest, stream: bool) -> OllamaChatRequest {
@@ -270,12 +319,12 @@ struct OllamaToolResponseMessage {
     tool_calls: Vec<OllamaResponseToolCall>,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct OllamaResponseToolCall {
     function: OllamaResponseFunction,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct OllamaResponseFunction {
     name: String,
     arguments: serde_json::Value,

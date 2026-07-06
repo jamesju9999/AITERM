@@ -117,11 +117,11 @@ async fn run_chat_loop(
 }
 
 fn user(text: &str) -> ChatMessage {
-    ChatMessage { role: "user".into(), content: serde_json::json!(text) }
+    ChatMessage { role: "user".into(), content: serde_json::json!(text), tool_call_id: None, tool_calls: None }
 }
 
 fn assistant(text: &str) -> ChatMessage {
-    ChatMessage { role: "assistant".into(), content: serde_json::json!(text) }
+    ChatMessage { role: "assistant".into(), content: serde_json::json!(text), tool_call_id: None, tool_calls: None }
 }
 
 #[tokio::test]

@@ -26,6 +26,7 @@ interface RosterState {
   maxOrchestratorSteps: number;
   maxInnerIterations: number;
   projectDir: string;
+  fullAuto: boolean;
 }
 
 function loadRoster(): RosterState {
@@ -45,6 +46,7 @@ function loadRoster(): RosterState {
     maxOrchestratorSteps: 40,
     maxInnerIterations: 30,
     projectDir: "",
+    fullAuto: false,
   };
 }
 
@@ -141,6 +143,15 @@ export function LoopStudioView({
   useEffect(() => {
     if (!tabId || !registerCloseGuard) return;
     registerCloseGuard(tabId, () => {
+      if (loop.isRunning) {
+        return new Promise<boolean>(resolve => {
+          closeResolveRef.current = (canClose: boolean) => {
+            if (canClose) loop.stop();
+            resolve(canClose);
+          };
+          setShowCloseConfirm(true);
+        });
+      }
       const hasContent = isDirtyRef.current &&
         (roster.goal.trim() !== "" || roster.subAgents.length > 0);
       if (!hasContent) return Promise.resolve(true);
@@ -150,7 +161,7 @@ export function LoopStudioView({
       });
     });
     return () => { unregisterCloseGuard?.(tabId); };
-  }, [tabId, registerCloseGuard, unregisterCloseGuard, roster.goal, roster.subAgents.length]);
+  }, [tabId, registerCloseGuard, unregisterCloseGuard, roster.goal, roster.subAgents.length, loop.isRunning, loop.stop]);
 
   const updateRoster = useCallback((patch: Partial<RosterState>) => {
     setRoster(prev => {
@@ -193,6 +204,7 @@ export function LoopStudioView({
       maxInnerIterations: roster.maxInnerIterations,
       sessionId: ptySessionId,
       projectDir: roster.projectDir || undefined,
+      fullAuto: roster.fullAuto ?? false,
     };
 
     void loop.start(config);
@@ -257,6 +269,7 @@ export function LoopStudioView({
       maxOrchestratorSteps: 40,
       maxInnerIterations: 30,
       projectDir: "",
+      fullAuto: false,
     };
     setRoster(defaults);
     saveRoster(defaults);
@@ -338,12 +351,20 @@ export function LoopStudioView({
       {showCloseConfirm && (
         <div className="ls-close-overlay">
           <div className="ls-close-dialog">
-            <h3 className="ls-close-dialog-title">有未儲存的變更</h3>
+            <h3 className="ls-close-dialog-title">
+              {loop.isRunning ? "Loop 正在執行中" : "有未儲存的變更"}
+            </h3>
             <p className="ls-close-dialog-body">
-              Loop Studio 目前有未儲存的變更。<br />
-              {currentProjectPath
-                ? `關閉後將遺失自上次儲存以來的所有修改。`
-                : "關閉後將遺失目前所有設定（目標、Agents 等）。"}
+              {loop.isRunning ? (
+                <>Loop 目前正在執行中，關閉分頁將停止 Loop 並遺失執行進度。</>
+              ) : (
+                <>
+                  Loop Studio 目前有未儲存的變更。<br />
+                  {currentProjectPath
+                    ? `關閉後將遺失自上次儲存以來的所有修改。`
+                    : "關閉後將遺失目前所有設定（目標、Agents 等）。"}
+                </>
+              )}
             </p>
             <div className="ls-close-dialog-actions">
               <button
@@ -614,6 +635,18 @@ export function LoopStudioView({
               />
             </label>
           </div>
+          <label className="ls-field ls-fullauto-row">
+            <input
+              type="checkbox"
+              checked={roster.fullAuto ?? false}
+              onChange={e => updateRoster({ fullAuto: e.target.checked })}
+              disabled={loop.isRunning}
+            />
+            <span className="ls-field-label">
+              Full-auto 模式
+              <span className="ls-hint-inline">（跳過危險指令確認，僅在信任目標時開啟）</span>
+            </span>
+          </label>
         </div>
 
         {/* Validation issues */}
@@ -678,6 +711,30 @@ export function LoopStudioView({
           <span className="ls-section-label">執行記錄</span>
           {loop.isRunning && <span className="ls-running-badge">Loop #{loop.iteration}</span>}
         </div>
+        {loop.pendingConfirmation && (
+          <div className="ls-confirm-panel">
+            <div className="ls-confirm-title">
+              ⚠ {loop.pendingConfirmation.agentName} 請求執行危險指令
+            </div>
+            <pre className="ls-confirm-command">{loop.pendingConfirmation.command}</pre>
+            <div className="ls-confirm-actions">
+              <button
+                type="button"
+                className="ls-confirm-deny"
+                onClick={() => loop.pendingConfirmation?.resolve(false)}
+              >
+                拒絕
+              </button>
+              <button
+                type="button"
+                className="ls-confirm-allow"
+                onClick={() => loop.pendingConfirmation?.resolve(true)}
+              >
+                允許執行
+              </button>
+            </div>
+          </div>
+        )}
         <ExecutionTrace trace={loop.trace} isRunning={loop.isRunning} iteration={loop.iteration} />
       </div>
     </div>

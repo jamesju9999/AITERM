@@ -74,7 +74,7 @@ async fn mock_provider_emits_chunks_through_channel() {
     let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
     let req = GenerateRequest {
         system_prompt: "sys".into(),
-        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("list files") }],
+        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("list files"), tool_call_id: None, tool_calls: None }],
         context: context::snapshot_from_parts("linux", "bash", PathBuf::from("/")),
         mode: aiterm_lib::ai::QueryMode::SingleCommand,
         max_tokens: Some(256),

@@ -1,6 +1,8 @@
 import { agentChat, type AgentToolDefinition, type ChatMessage } from "../ipc/ai";
 import { readFile, writeTextFile, listDirectory, getSessionCwd } from "../ipc/fs";
-import { writePty, getPtyRecentOutput } from "../ipc/pty";
+import { agentExec } from "../ipc/exec";
+import { classifyCommand, commandWritesOutsideRoot } from "../lib/commandRisk";
+import { isPathInside } from "../lib/pathUtils";
 
 export function serializeError(e: unknown): string {
   if (typeof e === "string") return e;
@@ -28,6 +30,15 @@ export interface SubAgentResult {
   answer: string;
   actions: SubAgentAction[];
   isError: boolean;
+}
+
+/** Context shared by all tool executions in one loop run. */
+export interface ToolExecutionContext {
+  sessionId: string;
+  /** projectDir ?? session CWD — write_file confinement root and execute_command cwd. Null disables both. */
+  effectiveRoot: string | null;
+  /** Called before running a dangerous command. Resolve false to deny. Absent = deny dangerous commands. */
+  onConfirmNeeded?: (command: string) => Promise<boolean>;
 }
 
 const TOOL_DEFS: Record<AgentToolName, AgentToolDefinition> = {
@@ -63,7 +74,7 @@ const TOOL_DEFS: Record<AgentToolName, AgentToolDefinition> = {
   },
   execute_command: {
     name: "execute_command",
-    description: "Execute a shell command in the terminal and return its output.",
+    description: "Execute a shell command and return its output.",
     input_schema: {
       type: "object",
       properties: { command: { type: "string", description: "Shell command to execute" } },
@@ -72,27 +83,170 @@ const TOOL_DEFS: Record<AgentToolName, AgentToolDefinition> = {
   },
 };
 
+async function executeTool(
+  name: AgentToolName,
+  args: Record<string, string>,
+  ctx: ToolExecutionContext,
+): Promise<{ result: string; isError: boolean }> {
+  try {
+    switch (name) {
+      case "read_file": {
+        const { content, truncated } = await readFile(args.path);
+        return { result: truncated ? `${content}\n[...truncated]` : content, isError: false };
+      }
+      case "write_file": {
+        if (!ctx.effectiveRoot) {
+          return {
+            result: "錯誤：無法確認專案目錄，為安全起見拒絕寫入。請在 Loop Studio 設定專案目錄。",
+            isError: true,
+          };
+        }
+        if (!isPathInside(args.path, ctx.effectiveRoot)) {
+          return {
+            result: `錯誤：不允許寫入專案目錄（${ctx.effectiveRoot}）以外的路徑：${args.path}。請改用專案目錄內的路徑。`,
+            isError: true,
+          };
+        }
+        await writeTextFile(args.path, args.content);
+        return { result: `Successfully wrote ${args.path}`, isError: false };
+      }
+      case "list_directory": {
+        const entries = await listDirectory(ctx.sessionId, args.path ?? "");
+        return {
+          result: entries.map(e => (e.is_dir ? `${e.name}/` : e.name)).join("\n") || "(empty)",
+          isError: false,
+        };
+      }
+      case "execute_command": {
+        if (!ctx.effectiveRoot) {
+          return {
+            result: "錯誤：無法確認專案目錄，為安全起見拒絕執行指令。請在 Loop Studio 設定專案目錄。",
+            isError: true,
+          };
+        }
+        const root = ctx.effectiveRoot;
+        const isDangerous = classifyCommand(args.command) === "dangerous" || commandWritesOutsideRoot(args.command, root);
+        if (isDangerous) {
+          if (!ctx.onConfirmNeeded) {
+            return { result: "錯誤：此指令被判定為危險指令，此執行環境不允許危險指令。", isError: true };
+          }
+          const approved = await ctx.onConfirmNeeded(args.command);
+          if (!approved) {
+            return { result: "使用者拒絕執行此指令，請改用其他方式完成任務。", isError: true };
+          }
+        }
+        const r = await agentExec(args.command, root);
+        const combined = [r.stdout, r.stderr ? `[stderr]\n${r.stderr}` : ""].filter(Boolean).join("\n");
+        if (r.timed_out) {
+          return { result: `[timeout after 60s — process killed]\n${combined}`, isError: true };
+        }
+        if (r.exit_code !== 0) {
+          return { result: `[exit code ${r.exit_code}]\n${combined}`, isError: true };
+        }
+        return { result: combined || "(no output)", isError: false };
+      }
+    }
+  } catch (e) {
+    return { result: `Error: ${serializeError(e)}`, isError: true };
+  }
+}
+
+/**
+ * Core tool-calling loop shared by sub-agents and the Verifier.
+ * Mutates `history` in place using proper OpenAI tool-calling format:
+ * one assistant message carrying tool_calls, then one `tool` message per call.
+ */
+export async function runToolLoop(
+  providerId: string,
+  history: ChatMessage[],
+  enabledTools: AgentToolName[],
+  ctx: ToolExecutionContext,
+  maxIterations: number,
+  onAction?: (action: SubAgentAction) => void,
+): Promise<SubAgentResult> {
+  const actions: SubAgentAction[] = [];
+  const toolDefs = enabledTools.map(t => TOOL_DEFS[t]);
+  const limit = maxIterations === 0 ? Infinity : maxIterations;
+
+  for (let i = 0; i < limit; i++) {
+    const reply = await agentChat(providerId, history, toolDefs, ctx.sessionId);
+
+    if (reply.tool_calls.length === 0) {
+      return { answer: reply.content ?? "", actions, isError: false };
+    }
+
+    // One assistant message with ALL tool_calls. Prefer raw_tool_calls
+    // (preserves Gemini thought_signature); reconstruct otherwise.
+    const assistantToolCalls =
+      reply.raw_tool_calls ??
+      reply.tool_calls.map((tc, idx) => ({
+        id: tc.id || `call_${Date.now()}_${idx}`,
+        type: "function" as const,
+        function: { name: tc.tool_name, arguments: JSON.stringify(tc.args) },
+      }));
+    history.push({ role: "assistant", content: null, tool_calls: assistantToolCalls });
+
+    for (let idx = 0; idx < reply.tool_calls.length; idx++) {
+      const tc = reply.tool_calls[idx];
+      const callId = assistantToolCalls[idx]?.id ?? tc.id ?? `call_${idx}`;
+
+      let result: string;
+      let isError: boolean;
+      if (!enabledTools.includes(tc.tool_name as AgentToolName)) {
+        result = `Tool '${tc.tool_name}' is not enabled for this agent`;
+        isError = true;
+      } else {
+        ({ result, isError } = await executeTool(
+          tc.tool_name as AgentToolName,
+          tc.args as Record<string, string>,
+          ctx,
+        ));
+      }
+
+      const action: SubAgentAction = {
+        tool: tc.tool_name,
+        input: JSON.stringify(tc.args),
+        output: result,
+        isError,
+      };
+      actions.push(action);
+      onAction?.(action);
+
+      history.push({ role: "tool", content: result, tool_call_id: callId });
+    }
+  }
+
+  const limitMsg = `Sub-agent reached max tool iterations (${maxIterations}) without completing the task.`;
+  return { answer: limitMsg, actions, isError: true };
+}
+
+export interface RunSubAgentOptions {
+  onAction?: (action: SubAgentAction) => void;
+  onConfirmNeeded?: (command: string) => Promise<boolean>;
+  maxInnerIterations?: number;
+  sharedContext?: string;
+  projectDir?: string;
+}
+
 export async function runSubAgent(
   sessionId: string,
   agent: AgentDefinition,
   task: string,
-  onAction?: (action: SubAgentAction) => void,
-  maxInnerIterations = 30,
-  sharedContext = "",
-  projectDir?: string,
+  options: RunSubAgentOptions = {},
 ): Promise<SubAgentResult> {
-    const actions: SubAgentAction[] = [];
-    const cwd = projectDir
-      || await getSessionCwd(sessionId).catch(() => "(unknown)")
-      || "(unknown)";
+  const { onAction, onConfirmNeeded, maxInnerIterations = 30, sharedContext = "", projectDir } = options;
 
-    const contextSection = sharedContext
-      ? `\n## 先前迭代的累積 Context\n以下是整個任務到目前為止已完成與尚未完成的紀錄，請避免重複已完成的工作：\n${sharedContext}\n`
-      : "";
+  const cwd = projectDir
+    || await getSessionCwd(sessionId).catch(() => null)
+    || null;
 
-    const systemPrompt = `${agent.roleDescription}
+  const contextSection = sharedContext
+    ? `\n## 先前迭代的累積 Context\n以下是整個任務到目前為止已完成與尚未完成的紀錄，請避免重複已完成的工作：\n${sharedContext}\n`
+    : "";
 
-Current working directory: ${cwd}
+  const systemPrompt = `${agent.roleDescription}
+
+Current working directory: ${cwd ?? "(unknown)"}
 All file operations and shell commands MUST be performed under this directory. Use absolute paths when writing files.
 ${contextSection}
 ## 指示
@@ -103,104 +257,17 @@ ${contextSection}
 
 不要重複 Context 中已標記為完成的工作。`;
 
-    const enabledToolDefs = agent.tools.map(t => TOOL_DEFS[t]);
+  const history: ChatMessage[] = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: task },
+  ];
 
-    const history: ChatMessage[] = [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: task },
-    ];
-
-    const limit = maxInnerIterations === 0 ? Infinity : maxInnerIterations;
-    for (let i = 0; i < limit; i++) {
-      const reply = await agentChat(agent.providerId, history, enabledToolDefs, sessionId);
-
-      if (reply.tool_calls.length === 0) {
-        // Final answer — no more tool calls
-        return { answer: reply.content ?? "", actions, isError: false };
-      }
-
-      // Execute each tool call
-      for (const tc of reply.tool_calls) {
-        if (!agent.tools.includes(tc.tool_name as AgentToolName)) {
-          const errMsg = `Tool '${tc.tool_name}' is not enabled for agent '${agent.name}'`;
-          const action: SubAgentAction = { tool: tc.tool_name, input: JSON.stringify(tc.args), output: errMsg, isError: true };
-          actions.push(action);
-          onAction?.(action);
-          history.push({ role: "assistant", content: JSON.stringify(tc.args) });
-          history.push({ role: "user", content: `Tool result for ${tc.tool_name}:\n${errMsg}` });
-          continue;
-        }
-
-        let result: string;
-        let isError = false;
-        const args = tc.args as Record<string, string>;
-
-        try {
-          switch (tc.tool_name) {
-            case "read_file": {
-              const { content, truncated } = await readFile(args.path);
-              result = truncated ? `${content}\n[...truncated]` : content;
-              break;
-            }
-            case "write_file": {
-              await writeTextFile(args.path, args.content);
-              result = `Successfully wrote ${args.path}`;
-              break;
-            }
-            case "list_directory": {
-              const entries = await listDirectory(sessionId, args.path ?? "");
-              result = entries.map(e => (e.is_dir ? `${e.name}/` : e.name)).join("\n") || "(empty)";
-              break;
-            }
-            case "execute_command": {
-              result = await executeCommandInPty(sessionId, args.command);
-              break;
-            }
-            default:
-              result = `Unknown tool: ${tc.tool_name}`;
-              isError = true;
-          }
-        } catch (e) {
-          result = `Error: ${serializeError(e)}`;
-          isError = true;
-        }
-
-        const action: SubAgentAction = { tool: tc.tool_name, input: JSON.stringify(args), output: result, isError };
-        actions.push(action);
-        onAction?.(action);
-
-        history.push({ role: "assistant", content: `<tool_call>${JSON.stringify({ name: tc.tool_name, arguments: args })}</tool_call>` });
-        history.push({ role: "user", content: `Tool result for ${tc.tool_name}:\n${result}` });
-      }
-    }
-
-  const limitMsg = maxInnerIterations === 0
-    ? "Sub-agent exited loop unexpectedly."
-    : `Sub-agent reached max tool iterations (${maxInnerIterations}) without completing the task.`;
-  return { answer: limitMsg, actions, isError: true };
-}
-
-/** Write a command to PTY and poll until a sentinel marker appears in output. */
-async function executeCommandInPty(sessionId: string, command: string): Promise<string> {
-  const sentinel = `__AGENT_DONE_${Date.now()}__`;
-  await writePty(sessionId, `${command}; echo "${sentinel}"\n`);
-
-  const MAX_POLLS = 60;
-  const POLL_INTERVAL = 1000;
-
-  for (let i = 0; i < MAX_POLLS; i++) {
-    await new Promise(r => setTimeout(r, POLL_INTERVAL));
-    const output = await getPtyRecentOutput(sessionId).catch(() => null) ?? "";
-    if (output.includes(sentinel)) {
-      const beforeSentinel = output.split(sentinel)[0] ?? "";
-      const lines = beforeSentinel.split("\n");
-      // Drop the command line itself (first line) and trim
-      const result = lines.slice(1).join("\n").trim();
-      return result.slice(-4000); // cap at 4000 chars
-    }
-  }
-
-  // Timeout — return whatever output we have
-  const output = await getPtyRecentOutput(sessionId).catch(() => null) ?? "";
-  return `[timeout after 60s]\n${output.slice(-2000)}`;
+  return runToolLoop(
+    agent.providerId,
+    history,
+    agent.tools,
+    { sessionId, effectiveRoot: cwd, onConfirmNeeded },
+    maxInnerIterations,
+    onAction,
+  );
 }

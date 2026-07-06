@@ -316,6 +316,8 @@ mod tests {
                 {"type": "text", "text": "hello"},
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
             ]),
+            tool_call_id: None,
+            tool_calls: None,
         };
         let json = serde_json::to_value(&msg).unwrap();
         assert!(json["content"].is_array());

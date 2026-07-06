@@ -811,6 +811,22 @@
   color: var(--text-muted, #888);
 }
 
+.ls-trace-live-action {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 8px 4px 24px;
+}
+
+.ls-trace-live-action.error .ls-action-tool {
+  color: #dc5050;
+}
+
+.ls-trace-live-action .ls-trace-action {
+  flex: 1;
+  min-width: 0;
+}
+
 .ls-trace-agent-done {
   border: 1px solid var(--border, #333);
   border-radius: 4px;
@@ -1161,3 +1177,67 @@
 }
 
 .ls-close-discard-btn:hover { background: #dc2626; }
+
+.ls-fullauto-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ls-fullauto-row input[type="checkbox"] {
+  all: revert;
+  accent-color: var(--accent, #4a9eff);
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.ls-confirm-panel {
+  border: 1px solid var(--warning, #f0a030);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 8px;
+  background: color-mix(in srgb, var(--warning, #f0a030) 12%, transparent);
+}
+
+.ls-confirm-title {
+  font-weight: 600;
+  color: var(--warning, #f0a030);
+  margin-bottom: 8px;
+}
+
+.ls-confirm-command {
+  background: var(--bg-secondary, #1a1a1a);
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0 0 10px 0;
+}
+
+.ls-confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.ls-confirm-deny,
+.ls-confirm-allow {
+  padding: 5px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  border: 1px solid var(--border, #333);
+  background: transparent;
+  color: var(--text, #ddd);
+}
+
+.ls-confirm-allow {
+  background: var(--warning, #f0a030);
+  border-color: var(--warning, #f0a030);
+  color: #1a1a1a;
+  font-weight: 600;
+}

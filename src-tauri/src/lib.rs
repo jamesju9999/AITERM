@@ -36,6 +36,7 @@ use commands::{
         db_remove_connection, db_test_connection, db_update_connection,
     },
     design::{design_chat, design_list_sessions, design_load_session, design_start_session, design_update_draft, design_list_messages, design_advance_stage, design_save_file, design_delete_session},
+    exec::agent_exec,
     loop_session::{loop_session_save, loop_session_list, loop_session_load, loop_session_delete, loop_session_clear_all, loop_project_pick_open, loop_project_pick_save},
     markitdown::{markitdown_convert, markitdown_pick_file},
     mcp::{
@@ -235,6 +236,7 @@ pub fn run() {
             ai_query,
             ai_chat,
             agent_chat,
+            agent_exec,
             // Config
             get_config,
             set_execution_mode,
