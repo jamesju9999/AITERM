@@ -515,5 +515,15 @@ Expected: 無輸出（本次改動的檔案沒有新增 clippy warning）
   `flush_tool_results(result: &mut Vec<serde_json::Value>, pending: &mut Vec<serde_json::Value>)`
   三者的簽名在 Task 1 Step 3 的呼叫點與定義處完全一致。
 - **已知範圍外事項**（spec 中已列明，此處重申）：不建立通用角色合併邏輯；
-  不修改 `generate()`/`build_request_body`/`AnthropicMessage`；不處理 Ollama 的
-  既有 fast-follow 項目；不處理 `thought_signature`。
+  不處理 Ollama 的既有 fast-follow 項目；不處理 `thought_signature`。
+
+## 事後修正說明（2026-07-09，最終整體 review 後）
+
+原本規劃「不修改 `generate()`/`build_request_body`/`AnthropicMessage`」，但最終整體
+review 發現：`build_anthropic_messages`/`generate_with_tools` 沒處理 `role:"system"`
+的 `ChatMessage`（會原樣送進 Anthropic 的 `messages` 陣列，導致 400），而
+`build_request_body`（`generate()` 的純文字串流路徑）也有**完全相同**的既有 bug，
+且觸及面更廣（`ai_chat` 無 MCP、`agent_chat` 空工具清單、AiPanel `/agent` 任務迴圈等）。
+兩者都在同一次最終 review 後修復（commit `2b4a4b6`、`1d6b254`），新增共用函式
+`extract_system_text`，兩條路徑統一呼叫。因此 `build_request_body`/`generate()`
+最終**有**被修改，`AnthropicMessage` 型別本身沒變。
