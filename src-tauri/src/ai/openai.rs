@@ -82,7 +82,15 @@ impl AiProvider for OpenAiClient {
         let mut messages: Vec<serde_json::Value> = Vec::with_capacity(req.messages.len() + 1);
         messages.push(serde_json::json!({"role": "system", "content": req.system_prompt}));
         for m in &req.messages {
-            messages.push(serde_json::json!({"role": m.role, "content": m.content}));
+            let mut msg = serde_json::json!({"role": m.role, "content": m.content});
+            if let Some(id) = &m.tool_call_id {
+                msg["tool_call_id"] = serde_json::Value::String(id.clone());
+            }
+            if let Some(tool_calls) = &m.tool_calls {
+                msg["tool_calls"] = tool_calls.clone();
+                msg["content"] = serde_json::Value::Null;
+            }
+            messages.push(msg);
         }
 
         let body = serde_json::json!({
@@ -129,7 +137,7 @@ impl AiProvider for OpenAiClient {
                 thought_signature: None,
             }).collect();
 
-            return Ok(GenerateWithToolsResult::ToolCalls { calls, raw: None });
+            return Ok(GenerateWithToolsResult::ToolCalls { calls, raw: Some(choice["message"]["tool_calls"].clone()) });
         }
 
         let content = choice["message"]["content"].as_str().unwrap_or("").to_string();
