@@ -63,7 +63,7 @@ function readToken(s: string, i: number): [string, number] | null {
       const quote = c;
       i++;
       while (i < s.length && s[i] !== quote) {
-        if (s[i] === "\\" && i + 1 < s.length && s[i + 1] === quote) {
+        if (s[i] === "\\" && quote === '"' && i + 1 < s.length && s[i + 1] === quote) {
           token += quote;
           i += 2;
         } else {
