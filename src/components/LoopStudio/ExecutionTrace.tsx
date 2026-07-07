@@ -64,8 +64,6 @@ export function ExecutionTrace({ trace, isRunning, iteration }: ExecutionTracePr
       </div>
       <div className="ls-trace" ref={scrollRef} onScroll={handleScroll}>
       {trace.map(entry => {
-        const isCollapsed = collapsed.has(entry.id);
-
         if (entry.kind === "iteration_start") {
           return (
             <div key={entry.id} className="ls-trace-iteration">
