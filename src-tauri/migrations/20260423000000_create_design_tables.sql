@@ -2,6 +2,7 @@
 CREATE TABLE IF NOT EXISTS design_sessions (
     id TEXT PRIMARY KEY NOT NULL,
     title TEXT NOT NULL,
+    current_proposal_draft TEXT,
     current_spec_draft TEXT,
     current_sdd_draft TEXT,
     current_plan_draft TEXT,

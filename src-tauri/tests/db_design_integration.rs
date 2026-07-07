@@ -9,11 +9,12 @@ async fn test_create_and_get_design_session() {
         .await
         .expect("Failed to create in-memory DB");
 
-    // 手動執行 Migration 以建立表
+    // 手動執行 Migration 以建立表（欄位需與 db/design.rs 的 init() 實際 schema 同步）
     sqlx::query(
         "CREATE TABLE design_sessions (
             id TEXT PRIMARY KEY NOT NULL,
             title TEXT NOT NULL,
+            current_proposal_draft TEXT,
             current_spec_draft TEXT,
             current_sdd_draft TEXT,
             current_plan_draft TEXT,
