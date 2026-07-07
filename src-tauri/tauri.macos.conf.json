@@ -1,4 +1,7 @@
 {
+  "build": {
+    "runner": "../scripts/cargo-dev-runner.sh"
+  },
   "bundle": {
     "externalBin": [],
     "resources": {
