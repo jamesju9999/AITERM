@@ -339,10 +339,14 @@ impl AiRouter {
 mod tests {
     use super::*;
     use crate::config::{AppConfig, ProviderConfig};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
-    /// Global mutex for tests that mutate OPENAI_API_KEY to prevent races.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    /// Global lock for tests that mutate the OPENAI_API_KEY env var to prevent
+    /// races between them. Every test in this file that reads or writes that
+    /// var must take this lock — env vars are process-global, so an unguarded
+    /// test can interleave with a guarded one regardless of lock duration.
+    /// Uses a tokio (async-aware) mutex so it's safe to hold across `.await`.
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     fn make_router(cfg: AppConfig) -> AiRouter {
         // Use an in-memory ConfigStore (temp path) and a SecretStore that
@@ -354,7 +358,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_config_no_env_var_returns_not_configured() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().await;
         std::env::remove_var("OPENAI_API_KEY");
         let router = make_router(AppConfig::default());
         assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
@@ -362,7 +366,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_config_with_env_var_returns_openai_provider() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().await;
         std::env::set_var("OPENAI_API_KEY", "sk-test");
         let router = make_router(AppConfig::default());
         let result = router.resolve().await.is_ok();
@@ -372,6 +376,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_provider_id_returns_not_configured() {
+        let _g = ENV_LOCK.lock().await;
         std::env::remove_var("OPENAI_API_KEY");
         let router = make_router(AppConfig::default());
         assert!(matches!(router.resolve_by_id("nonexistent").await, Err(AiError::NotConfigured)));
@@ -379,6 +384,7 @@ mod tests {
 
     #[tokio::test]
     async fn ollama_provider_resolves_without_api_key() {
+        let _g = ENV_LOCK.lock().await;
         std::env::remove_var("OPENAI_API_KEY");
         let mut cfg = AppConfig::default();
         cfg.providers.push(ProviderConfig {
