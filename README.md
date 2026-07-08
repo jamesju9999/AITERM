@@ -2,7 +2,7 @@
 
 # AITerm
 
-[English](#english) | [繁體中文](#繁體中文)
+**[🌐 Official Website](https://jamesju9999.github.io/aiterm-site/)** | [English](#english) | [繁體中文](#繁體中文)
 
 ---
 
@@ -13,10 +13,15 @@ A powerful, cross-platform AI-enhanced terminal built with **Tauri 2**, **React 
 
 ## ✨ Key Features
 
-- **Integrated AI Providers**: Out-of-the-box support for multiple LLM providers including OpenAI, Anthropic, and Ollama (for local inference).
+- **Integrated AI Providers**: Out-of-the-box support for multiple LLM providers including OpenAI, Anthropic, Ollama (local inference), and OpenAI-compatible endpoints.
 - **AI Command Flow (`/ai`)**: Type `/ai <query>` directly in the terminal to generate and preview commands with risk-level assessment before execution.
 - **Autonomous Agent Loop (`/agent`)**: Multi-step, goal-driven agentic execution for complex tasks, with built-in guardrails and fallback to manual confirmation for dangerous operations.
+- **LoopStudio (Loop Engineering)**: A visual multi-agent orchestration workbench — an orchestrator breaks a goal down and dispatches sub-agents to work in parallel, with safety gates and a live execution trace, running autonomously until the goal is verified done instead of requiring back-and-forth confirmation.
 - **Multi-turn Chat Sidebar**: Persistent, context-aware AI chat directly beside your terminal for troubleshooting, code generation, and brainstorming.
+- **Multi-Database Connections**: Native support for PostgreSQL, MySQL, SQLite, and ODBC. DB2 works on both macOS and Windows via a built-in Java JDBC sidecar — no driver installation required.
+- **File Explorer**: A built-in sidebar file browser that automatically tracks and syncs with the terminal's current working directory.
+- **Multilingual UI**: Full support for English and Traditional Chinese, switchable at runtime with no restart required.
+- **Telegram Remote Control**: Send commands to your terminal from your phone via a Telegram bot, with results streamed back to the same chat.
 - **Requirement Management System**: AI-assisted discussion for feature planning, automatically generating and saving specifications (SDD) into structured, project-managed directories.
 - **Robust Terminal Engine**: Powered by `xterm.js` and `portable-pty` for a fast, native-feeling shell experience across Windows, macOS, and Linux.
 
@@ -24,7 +29,7 @@ A powerful, cross-platform AI-enhanced terminal built with **Tauri 2**, **React 
 
 AITerm uses a modern Desktop architecture communicating via Tauri IPC (invoke + events):
 - **Frontend (`src/`)**: React 19 shell, `xterm.js` terminal views, component-local state management, and an intelligent frontend router for handling AI commands and streams.
-- **Backend (`src-tauri/src/`)**: Rust-powered high-performance core handling PTY lifecycles, AI provider routing, SQLx-backed database connections, and secure local configuration (OS keyring).
+- **Backend (`src-tauri/src/`)**: Rust-powered high-performance core handling PTY lifecycles, AI provider routing, SQLx-backed database connections (including a Java JDBC sidecar for DB2), Telegram bot integration, and secure local configuration (OS keyring).
 
 ## 🚀 Getting Started
 
@@ -73,10 +78,15 @@ docs/            # Specs and implementation plans
 
 ## ✨ 核心功能
 
-- **多重 AI 供應商整合**：開箱即支援 OpenAI、Anthropic 以及 Ollama（本地端推論）等多種語言模型。
+- **多重 AI 供應商整合**：開箱即支援 OpenAI、Anthropic、Ollama（本地端推論）以及 OpenAI 相容端點等多種語言模型。
 - **AI 指令工作流 (`/ai`)**：直接在終端機輸入 `/ai <查詢>` 即可生成指令，並在執行前提供風險等級評估與預覽。
 - **自主代理循環 (`/agent`)**：針對複雜任務提供多步驟、目標導向的代理執行能力，內建安全防護機制，並在遇到危險操作時自動退回手動確認模式。
+- **LoopStudio（循環工程）**：可視化的多代理協同工作台——主控代理拆解任務並分派子代理平行執行，搭配安全閘門與即時執行追蹤，自主循環直到目標驗證完成，不需要一問一答反覆確認。
 - **多輪對話側邊欄**：終端機旁內建具備上下文記憶的 AI 對話視窗，方便進行問題排解、程式碼生成與靈感發想。
+- **多資料庫連線**：原生支援 PostgreSQL、MySQL、SQLite、ODBC。DB2 透過內建 Java JDBC Sidecar 在 macOS 與 Windows 均可使用，無需安裝驅動程式。
+- **檔案總管**：內建側邊欄檔案瀏覽器，自動追蹤並同步目前終端機的工作目錄。
+- **多語言介面**：完整支援英文與繁體中文，可於執行時即時切換，不需重啟。
+- **Telegram 遠端控制**：透過 Telegram Bot 從手機傳送指令至終端機，執行結果即時回傳至同一對話。
 - **需求管理系統**：提供 AI 輔助的系統功能討論，可自動生成規格文件 (SDD) 並將其儲存到專案管理的結構化目錄中。
 - **強大的終端機引擎**：基於 `xterm.js` 與 `portable-pty`，在 Windows、macOS 與 Linux 上提供快速、原生的 Shell 體驗。
 
@@ -84,7 +94,7 @@ docs/            # Specs and implementation plans
 
 AITerm 採用現代化桌面應用架構，透過 Tauri IPC（invoke + events）進行通訊：
 - **前端 (`src/`)**：使用 React 19，包含 `xterm.js` 終端機視圖、元件狀態管理，以及處理 AI 指令與資料流的智慧前端邏輯。
-- **後端 (`src-tauri/src/`)**：由 Rust 驅動的高效能核心，負責處理 PTY 生命週期、AI 路由、基於 SQLx 的資料庫連線，以及安全的本地配置（OS Keyring）。
+- **後端 (`src-tauri/src/`)**：由 Rust 驅動的高效能核心，負責處理 PTY 生命週期、AI 路由、基於 SQLx 的資料庫連線（含 DB2 專用的 Java JDBC Sidecar）、Telegram Bot 整合，以及安全的本地配置（OS Keyring）。
 
 ## 🚀 快速開始
 
