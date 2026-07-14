@@ -82,6 +82,7 @@ function global:prompt {
         envs: vec![
             ("TERM".into(), "xterm-256color".into()),
             ("COLORTERM".into(), "truecolor".into()),
+            ("PYTHONIOENCODING".into(), "utf-8".into()),
         ],
     }
 }
@@ -102,6 +103,7 @@ fn inject_cmd_integration() -> ShellSpec {
             ("PROMPT".into(), "$E]133;D$E\\$E]133;A$E\\$P$G".into()),
             ("TERM".into(), "xterm-256color".into()),
             ("COLORTERM".into(), "truecolor".into()),
+            ("PYTHONIOENCODING".into(), "utf-8".into()),
         ],
     }
 }
@@ -257,6 +259,14 @@ PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
     // so programs default to no-color output.
     envs.push(("TERM".into(), "xterm-256color".into()));
     envs.push(("COLORTERM".into(), "truecolor".into()));
+
+    // Ensure UTF-8 locale so multi-byte characters (CJK, etc.) are not mangled.
+    // Dock/Finder launches do not inherit the login-shell LANG; without it the
+    // C locale is used, which replaces non-ASCII bytes with '?'.
+    if std::env::var("LANG").unwrap_or_default().is_empty() {
+        envs.push(("LANG".into(), "en_US.UTF-8".into()));
+        envs.push(("LC_ALL".into(), "en_US.UTF-8".into()));
+    }
 
     ShellSpec {
         program,
