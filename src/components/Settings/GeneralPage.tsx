@@ -110,9 +110,9 @@ export function GeneralPage() {
     window.dispatchEvent(new CustomEvent("aiterm:font-changed", { detail: { fontSize, fontFamily: family } }));
   };
 
-  const handleTimingModeChange = (mode: "full" | "compact") => {
-    setTimingMode(mode);
-    localStorage.setItem(LOOP_TIMING_KEY, mode);
+  const handleTimingModeChange = (newMode: "full" | "compact") => {
+    setTimingMode(newMode);
+    localStorage.setItem(LOOP_TIMING_KEY, newMode);
   };
 
   const handleDefaultTabChange = async (tab: DefaultTab) => {
