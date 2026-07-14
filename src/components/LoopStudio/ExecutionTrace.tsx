@@ -25,7 +25,6 @@ export function ExecutionTrace({ trace, isRunning, iteration, timingMode }: Exec
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const isUserScrolling = useRef(false);
 
   const toggle = (id: string) => {
     setCollapsed(prev => {
@@ -44,11 +43,11 @@ export function ExecutionTrace({ trace, isRunning, iteration, timingMode }: Exec
 
   // Detect manual scroll — if user scrolls up, don't force them back down
   const handleScroll = useCallback(() => {
-    if (!scrollRef.current || isUserScrolling.current) return;
+    if (!scrollRef.current) return;
     const el = scrollRef.current;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     if (!atBottom && autoScroll) {
-      // User scrolled up manually — keep autoScroll state as-is (they toggled it themselves)
+      setAutoScroll(false);
     }
   }, [autoScroll]);
 
