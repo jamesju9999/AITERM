@@ -63,6 +63,7 @@ export interface TraceEntry {
   verifierResult?: VerifierResult;
   isError?: boolean;
   timestamp: number;
+  startTimestamp?: number;  // 對應區塊的開始時間（毫秒）
 }
 
 export interface PendingConfirmation {
@@ -468,6 +469,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
               const confirmFn = config.fullAuto
                 ? async () => true
                 : (command: string) => requestConfirmation(args.agent_name, command);
+              const agentStartTs = Date.now();
               const result = await runSubAgent(
                 config.sessionId,
                 targetAgent,
@@ -489,6 +491,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
                 actions: result.actions,
                 isError: result.isError,
                 iteration: iter,
+                startTimestamp: agentStartTs,
               });
             }
 
@@ -533,6 +536,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
           },
         ];
 
+        const verifierStartTs = Date.now();
         const verifierRun = await runToolLoop(
           config.verifier.providerId,
           verifierMessages,
@@ -570,6 +574,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
           verifierDone: verifierResult.done,
           verifierResult,
           iteration: iter,
+          startTimestamp: verifierStartTs,
         });
         saveSnapshot("running", iter);
 
