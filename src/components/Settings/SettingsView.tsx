@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { ProvidersPage } from "./ProvidersPage";
 import { GeneralPage } from "./GeneralPage";
 import { DatabaseConnectionsPage } from "./DatabaseConnectionsPage";
@@ -14,7 +14,9 @@ type SettingsTab = "general" | "providers" | "databases" | "vcs" | "enterprise" 
 
 export function SettingsView() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<SettingsTab>("general");
+  const location = useLocation();
+  const initialTab = (location.state as { tab?: SettingsTab } | null)?.tab ?? "general";
+  const [tab, setTab] = useState<SettingsTab>(initialTab);
   const { t } = useLocale();
 
   return (

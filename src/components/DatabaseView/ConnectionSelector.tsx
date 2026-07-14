@@ -33,7 +33,7 @@ export function ConnectionSelector({ onSelect }: Props) {
           </button>
         ))}
         <button
-          onClick={() => navigate("/settings")}
+          onClick={() => navigate("/settings", { state: { tab: "databases" } })}
           style={{
             border: "1px dashed #333", background: "transparent", borderRadius: 6,
             padding: "10px 14px", color: "#555", fontSize: 12, cursor: "pointer",
