@@ -18,6 +18,7 @@ const FONT_FAMILY_OPTIONS = [
   { label: "Consolas", value: "Consolas, monospace" },
   { label: "monospace (system)", value: "monospace" },
 ];
+const LOOP_TIMING_KEY = "loopTimingMode";
 
 export function GeneralPage() {
   const { t, locale, setLocale } = useLocale();
@@ -36,6 +37,9 @@ export function GeneralPage() {
   const [telegramChatId, setTelegramChatId] = useState("");
   const [saving, setSaving] = useState(false);
   const [policyControlled, setPolicyControlled] = useState<{ execution_mode?: boolean; max_agent_steps?: boolean }>({});
+  const [timingMode, setTimingMode] = useState<"full" | "compact">(
+    () => (localStorage.getItem(LOOP_TIMING_KEY) as "full" | "compact" | null) ?? "compact"
+  );
 
   const MODES: { value: ExecutionMode; label: string; desc: string }[] = [
     { value: "always-confirm", label: t.mode_always_confirm_label, desc: t.mode_always_confirm_desc },
@@ -104,6 +108,11 @@ export function GeneralPage() {
     setFontFamilyState(family);
     localStorage.setItem(FONT_FAMILY_KEY, family);
     window.dispatchEvent(new CustomEvent("aiterm:font-changed", { detail: { fontSize, fontFamily: family } }));
+  };
+
+  const handleTimingModeChange = (mode: "full" | "compact") => {
+    setTimingMode(mode);
+    localStorage.setItem(LOOP_TIMING_KEY, mode);
   };
 
   const handleDefaultTabChange = async (tab: DefaultTab) => {
@@ -364,6 +373,31 @@ export function GeneralPage() {
           </div>
         </div>
         {saving && <p className="saving-indicator">{t.saving_indicator}</p>}
+      </section>
+
+      <section className="settings-section">
+        <h3>Loop Studio 執行時間顯示</h3>
+        <p className="section-desc">控制執行記錄中時間 badge 的顯示密度</p>
+        <div className="mode-list">
+          {([
+            { value: "compact" as const, label: "精簡版（預設）", desc: "僅主要區塊顯示時間（Iteration、Agent 開始/完成、Verifier）" },
+            { value: "full"    as const, label: "完整版",         desc: "每一行都顯示開始時間戳，包含工具呼叫" },
+          ]).map((opt) => (
+            <label key={opt.value} className="mode-option">
+              <input
+                type="radio"
+                name="loopTimingMode"
+                value={opt.value}
+                checked={timingMode === opt.value}
+                onChange={() => handleTimingModeChange(opt.value)}
+              />
+              <div className="mode-text">
+                <span className="mode-label">{opt.label}</span>
+                <span className="mode-desc">{opt.desc}</span>
+              </div>
+            </label>
+          ))}
+        </div>
       </section>
     </div>
   );
