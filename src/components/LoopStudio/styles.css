@@ -1241,3 +1241,48 @@
   color: #1a1a1a;
   font-weight: 600;
 }
+
+/* ── Timing Badges ── */
+.ls-entry-timed {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ls-entry-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.ls-time-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.ls-tb {
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 10px;
+  white-space: nowrap;
+  font-family: 'SF Mono', 'Menlo', monospace;
+  line-height: 1.6;
+}
+
+/* 開始時間（灰色） */
+.ls-tb-clock { background: #161616; border: 1px solid #2a2a2a; color: #555; }
+
+/* 耗時 — sub-agent（綠色）*/
+.ls-tb-dur   { background: #0f2a0f; border: 1px solid #1a5a1a; color: #4c4; }
+
+/* 耗時 — verifier（紫色）*/
+.ls-tb-dur-v { background: #2a0f2a; border: 1px solid #5a1a5a; color: #c8a; }
+
+/* 完成時間（藍紫色）*/
+.ls-tb-done  { background: #0f0f2a; border: 1px solid #2a2a5a; color: #88a; }
+
+/* 總耗時（綠色粗體）*/
+.ls-tb-total { background: #0a1a0a; border: 1px solid #2a5a2a; color: #4c4; font-weight: bold; }
