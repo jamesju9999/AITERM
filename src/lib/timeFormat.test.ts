@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDuration } from "./timeFormat";
+import { formatTime, formatDuration } from "./timeFormat";
 
 describe("formatDuration", () => {
   it("shows seconds when under 60s", () => {
@@ -20,5 +20,11 @@ describe("formatDuration", () => {
   });
   it("handles non-zero startMs", () => {
     expect(formatDuration(1000, 8000)).toBe("7s");
+  });
+});
+
+describe("formatTime", () => {
+  it("produces HH:MM:SS format", () => {
+    expect(formatTime(1704109200000)).toMatch(/^\d{2}:\d{2}:\d{2}$/);
   });
 });
