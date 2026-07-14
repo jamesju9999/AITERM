@@ -25,6 +25,7 @@ export function ExecutionTrace({ trace, isRunning, iteration, timingMode }: Exec
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const isProgrammaticScroll = useRef(false);
 
   const toggle = (id: string) => {
     setCollapsed(prev => {
@@ -38,7 +39,9 @@ export function ExecutionTrace({ trace, isRunning, iteration, timingMode }: Exec
   // Auto-scroll to bottom when trace updates
   useEffect(() => {
     if (!autoScroll || !scrollRef.current) return;
+    isProgrammaticScroll.current = true;
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    requestAnimationFrame(() => { isProgrammaticScroll.current = false; });
   }, [trace, autoScroll]);
 
   // Detect manual scroll — if user scrolls up, don't force them back down
@@ -46,7 +49,7 @@ export function ExecutionTrace({ trace, isRunning, iteration, timingMode }: Exec
     if (!scrollRef.current) return;
     const el = scrollRef.current;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    if (!atBottom && autoScroll) {
+    if (!atBottom && autoScroll && !isProgrammaticScroll.current) {
       setAutoScroll(false);
     }
   }, [autoScroll]);
