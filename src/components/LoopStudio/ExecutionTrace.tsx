@@ -1,13 +1,27 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { formatTime, formatDuration } from "../../lib/timeFormat";
 import type { TraceEntry } from "../../hooks/useOrchestratorLoop";
+
+function ClockBadge({ ts }: { ts: number }) {
+  return <span className="ls-tb ls-tb-clock">{formatTime(ts)}</span>;
+}
+
+function DurBadge({ start, end, v }: { start: number; end: number; v?: boolean }) {
+  return <span className={`ls-tb ${v ? "ls-tb-dur-v" : "ls-tb-dur"}`}>⏱ {formatDuration(start, end)}</span>;
+}
+
+function DoneBadge({ ts }: { ts: number }) {
+  return <span className="ls-tb ls-tb-done">✓ {formatTime(ts)}</span>;
+}
 
 interface ExecutionTraceProps {
   trace: TraceEntry[];
   isRunning: boolean;
   iteration: number;
+  timingMode: "full" | "compact";
 }
 
-export function ExecutionTrace({ trace, isRunning, iteration }: ExecutionTraceProps) {
+export function ExecutionTrace({ trace, isRunning, iteration, timingMode }: ExecutionTraceProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -63,12 +77,19 @@ export function ExecutionTrace({ trace, isRunning, iteration }: ExecutionTracePr
         </label>
       </div>
       <div className="ls-trace" ref={scrollRef} onScroll={handleScroll}>
-      {trace.map(entry => {
+      {(() => {
+        const loopStartTs = trace.find(e => e.kind === "iteration_start")?.timestamp;
+        return trace.map(entry => {
         if (entry.kind === "iteration_start") {
           return (
-            <div key={entry.id} className="ls-trace-iteration">
-              <span className="ls-trace-iter-badge">#{entry.iteration}</span>
-              <span>Loop Iteration {entry.iteration}</span>
+            <div key={entry.id} className="ls-trace-iteration ls-entry-timed">
+              <div className="ls-entry-body">
+                <span className="ls-trace-iter-badge">#{entry.iteration}</span>
+                <span>Loop Iteration {entry.iteration}</span>
+              </div>
+              <div className="ls-time-meta">
+                <ClockBadge ts={entry.timestamp} />
+              </div>
             </div>
           );
         }
@@ -78,70 +99,92 @@ export function ExecutionTrace({ trace, isRunning, iteration }: ExecutionTracePr
           const isCollapsedV = collapsed.has(entry.id);
           const hasDetails = vr && (vr.accomplished.length > 0 || vr.remaining.length > 0 || vr.suggestion);
           return (
-            <div key={entry.id} className={`ls-trace-verifier ${entry.verifierDone ? "done" : "not-done"}`}>
-              <div
-                className="ls-verifier-header"
-                onClick={() => hasDetails && toggle(entry.id)}
-                style={{ cursor: hasDetails ? "pointer" : "default" }}
-              >
-                <span className="ls-verifier-badge">{entry.verifierDone ? "✓ 達成" : "✗ 未達成"}</span>
-                <span className="ls-verifier-name">{entry.agentName}</span>
-                <span className="ls-verifier-reason">{entry.text}</span>
-                {hasDetails && (
-                  <span className="ls-collapse-toggle">{isCollapsedV ? "▶" : "▼"}</span>
-                )}
-              </div>
-              {hasDetails && !isCollapsedV && vr && (
-                <div className="ls-verifier-details">
-                  {vr.accomplished.length > 0 && (
-                    <div className="ls-verifier-section">
-                      <span className="ls-verifier-section-label accomplished">✓ 已完成</span>
-                      <ul className="ls-verifier-list">
-                        {vr.accomplished.map((a, i) => <li key={i}>{a}</li>)}
-                      </ul>
-                    </div>
-                  )}
-                  {vr.remaining.length > 0 && (
-                    <div className="ls-verifier-section">
-                      <span className="ls-verifier-section-label remaining">✗ 尚未完成</span>
-                      <ul className="ls-verifier-list">
-                        {vr.remaining.map((r, i) => <li key={i}>{r}</li>)}
-                      </ul>
-                    </div>
-                  )}
-                  {vr.suggestion && (
-                    <div className="ls-verifier-section">
-                      <span className="ls-verifier-section-label suggestion">→ 下一步建議</span>
-                      <p className="ls-verifier-suggestion">{vr.suggestion}</p>
-                    </div>
+            <div key={entry.id} className={`ls-trace-verifier ${entry.verifierDone ? "done" : "not-done"} ls-entry-timed`}>
+              <div className="ls-entry-body">
+                <div
+                  className="ls-verifier-header"
+                  onClick={() => hasDetails && toggle(entry.id)}
+                  style={{ cursor: hasDetails ? "pointer" : "default" }}
+                >
+                  <span className="ls-verifier-badge">{entry.verifierDone ? "✓ 達成" : "✗ 未達成"}</span>
+                  <span className="ls-verifier-name">{entry.agentName}</span>
+                  <span className="ls-verifier-reason">{entry.text}</span>
+                  {hasDetails && (
+                    <span className="ls-collapse-toggle">{isCollapsedV ? "▶" : "▼"}</span>
                   )}
                 </div>
-              )}
+                {hasDetails && !isCollapsedV && vr && (
+                  <div className="ls-verifier-details">
+                    {vr.accomplished.length > 0 && (
+                      <div className="ls-verifier-section">
+                        <span className="ls-verifier-section-label accomplished">✓ 已完成</span>
+                        <ul className="ls-verifier-list">
+                          {vr.accomplished.map((a, i) => <li key={i}>{a}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                    {vr.remaining.length > 0 && (
+                      <div className="ls-verifier-section">
+                        <span className="ls-verifier-section-label remaining">✗ 尚未完成</span>
+                        <ul className="ls-verifier-list">
+                          {vr.remaining.map((r, i) => <li key={i}>{r}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                    {vr.suggestion && (
+                      <div className="ls-verifier-section">
+                        <span className="ls-verifier-section-label suggestion">→ 下一步建議</span>
+                        <p className="ls-verifier-suggestion">{vr.suggestion}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="ls-time-meta">
+                {entry.startTimestamp != null && (
+                  <DurBadge start={entry.startTimestamp} end={entry.timestamp} v />
+                )}
+                <DoneBadge ts={entry.timestamp} />
+              </div>
             </div>
           );
         }
 
         if (entry.kind === "loop_done") {
           return (
-            <div key={entry.id} className="ls-trace-done">
-              {entry.text}
+            <div key={entry.id} className="ls-trace-done ls-entry-timed">
+              <div className="ls-entry-body">{entry.text}</div>
+              <div className="ls-time-meta">
+                {loopStartTs != null && (
+                  <span className="ls-tb ls-tb-total">總耗時 {formatDuration(loopStartTs, entry.timestamp)}</span>
+                )}
+                <DoneBadge ts={entry.timestamp} />
+              </div>
             </div>
           );
         }
 
         if (entry.kind === "loop_stopped" || entry.kind === "loop_error") {
           return (
-            <div key={entry.id} className={`ls-trace-stopped ${entry.isError ? "error" : ""}`}>
-              {entry.text}
+            <div key={entry.id} className={`ls-trace-stopped ${entry.isError ? "error" : ""} ls-entry-timed`}>
+              <div className="ls-entry-body">{entry.text}</div>
+              <div className="ls-time-meta">
+                <ClockBadge ts={entry.timestamp} />
+              </div>
             </div>
           );
         }
 
         if (entry.kind === "sub_agent_start") {
           return (
-            <div key={entry.id} className="ls-trace-agent-start">
-              <span className="ls-agent-badge">{entry.agentName}</span>
-              <span className="ls-trace-task">已接收任務，執行中...</span>
+            <div key={entry.id} className="ls-trace-agent-start ls-entry-timed">
+              <div className="ls-entry-body">
+                <span className="ls-agent-badge">{entry.agentName}</span>
+                <span className="ls-trace-task">已接收任務，執行中...</span>
+              </div>
+              <div className="ls-time-meta">
+                <ClockBadge ts={entry.timestamp} />
+              </div>
             </div>
           );
         }
@@ -150,13 +193,20 @@ export function ExecutionTrace({ trace, isRunning, iteration }: ExecutionTracePr
           const action = entry.actions?.[0];
           if (!action) return null;
           return (
-            <div key={entry.id} className={`ls-trace-live-action ${action.isError ? "error" : ""}`}>
-              <span className="ls-agent-badge">{entry.agentName}</span>
-              <div className="ls-trace-action">
-                <span className="ls-action-tool">{action.tool}</span>
-                <pre className="ls-action-input">{action.input}</pre>
-                <pre className="ls-action-output">{action.output.slice(0, 500)}{action.output.length > 500 ? "\n..." : ""}</pre>
+            <div key={entry.id} className={`ls-trace-live-action ${action.isError ? "error" : ""} ls-entry-timed`}>
+              <div className="ls-entry-body">
+                <span className="ls-agent-badge">{entry.agentName}</span>
+                <div className="ls-trace-action">
+                  <span className="ls-action-tool">{action.tool}</span>
+                  <pre className="ls-action-input">{action.input}</pre>
+                  <pre className="ls-action-output">{action.output.slice(0, 500)}{action.output.length > 500 ? "\n..." : ""}</pre>
+                </div>
               </div>
+              {timingMode === "full" && (
+                <div className="ls-time-meta">
+                  <ClockBadge ts={entry.timestamp} />
+                </div>
+              )}
             </div>
           );
         }
@@ -165,11 +215,19 @@ export function ExecutionTrace({ trace, isRunning, iteration }: ExecutionTracePr
           // Actions were already shown live via sub_agent_action entries above,
           // so this only needs to report the agent's final answer.
           return (
-            <div key={entry.id} className={`ls-trace-agent-done ${entry.isError ? "error" : ""}`}>
-              <div className="ls-trace-collapsible-header" style={{ cursor: "default" }}>
-                <span className="ls-agent-done-badge">{entry.isError ? "✗" : "✓"}</span>
-                <span className="ls-agent-badge">{entry.agentName}</span>
-                <span className="ls-trace-answer">{entry.text.slice(0, 120)}{entry.text.length > 120 ? "..." : ""}</span>
+            <div key={entry.id} className={`ls-trace-agent-done ${entry.isError ? "error" : ""} ls-entry-timed`}>
+              <div className="ls-entry-body">
+                <div className="ls-trace-collapsible-header" style={{ cursor: "default" }}>
+                  <span className="ls-agent-done-badge">{entry.isError ? "✗" : "✓"}</span>
+                  <span className="ls-agent-badge">{entry.agentName}</span>
+                  <span className="ls-trace-answer">{entry.text.slice(0, 120)}{entry.text.length > 120 ? "..." : ""}</span>
+                </div>
+              </div>
+              <div className="ls-time-meta">
+                {entry.startTimestamp != null && (
+                  <DurBadge start={entry.startTimestamp} end={entry.timestamp} />
+                )}
+                <DoneBadge ts={entry.timestamp} />
               </div>
             </div>
           );
@@ -177,15 +235,23 @@ export function ExecutionTrace({ trace, isRunning, iteration }: ExecutionTracePr
 
         if (entry.kind === "orchestrator_action") {
           return (
-            <div key={entry.id} className="ls-trace-orchestrator">
-              <span className="ls-orch-badge">Orchestrator</span>
-              <p className="ls-orch-text">{entry.text.slice(0, 300)}{entry.text.length > 300 ? "..." : ""}</p>
+            <div key={entry.id} className="ls-trace-orchestrator ls-entry-timed">
+              <div className="ls-entry-body">
+                <span className="ls-orch-badge">Orchestrator</span>
+                <p className="ls-orch-text">{entry.text.slice(0, 300)}{entry.text.length > 300 ? "..." : ""}</p>
+              </div>
+              {timingMode === "full" && (
+                <div className="ls-time-meta">
+                  <ClockBadge ts={entry.timestamp} />
+                </div>
+              )}
             </div>
           );
         }
 
         return null;
-      })}
+      });
+      })()}
 
       {isRunning && (
         <div className="ls-trace-running">

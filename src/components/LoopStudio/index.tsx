@@ -82,6 +82,7 @@ export function LoopStudioView({
   const closeResolveRef = useRef<((canClose: boolean) => void) | null>(null);
 
   const loop = useOrchestratorLoop();
+  const timingMode = (localStorage.getItem("loopTimingMode") ?? "compact") as "full" | "compact";
 
   useEffect(() => {
     listProviders().then(setProviders).catch(() => setProviders([]));
@@ -735,7 +736,7 @@ export function LoopStudioView({
             </div>
           </div>
         )}
-        <ExecutionTrace trace={loop.trace} isRunning={loop.isRunning} iteration={loop.iteration} />
+        <ExecutionTrace trace={loop.trace} isRunning={loop.isRunning} iteration={loop.iteration} timingMode={timingMode} />
       </div>
     </div>
   );
