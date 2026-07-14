@@ -555,6 +555,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
             text: "⚠ Verifier 回應無法解析，視為未完成",
             verifierDone: false,
             iteration: iter,
+            startTimestamp: verifierStartTs,
           });
           orchestratorHistory.push({
             role: "user",
