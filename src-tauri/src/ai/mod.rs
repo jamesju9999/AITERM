@@ -69,6 +69,25 @@ pub enum QueryMode {
     Chat,
 }
 
+/// UI locale, mirrors the frontend's `Locale` type (`"en" | "zh-TW"`).
+/// Threaded explicitly through AI commands so prompt builders know what
+/// language to instruct the model to respond in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum Locale {
+    #[serde(rename = "en")]
+    En,
+    #[serde(rename = "zh-TW")]
+    ZhTw,
+}
+
+/// Human-readable language name for the "respond in X" prompt rule.
+pub fn language_name(locale: Locale) -> &'static str {
+    match locale {
+        Locale::En => "English",
+        Locale::ZhTw => "Traditional Chinese (繁體中文)",
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,    // "user" | "assistant" | "system" | "tool"
@@ -324,5 +343,19 @@ mod tests {
         assert_eq!(json["content"][0]["type"], "text");
         let roundtrip: ChatMessage = serde_json::from_value(json.clone()).unwrap();
         assert!(roundtrip.content.is_array());
+    }
+
+    #[test]
+    fn locale_deserializes_from_frontend_strings() {
+        let en: Locale = serde_json::from_str("\"en\"").unwrap();
+        let zh: Locale = serde_json::from_str("\"zh-TW\"").unwrap();
+        assert_eq!(en, Locale::En);
+        assert_eq!(zh, Locale::ZhTw);
+    }
+
+    #[test]
+    fn language_name_maps_locale_to_readable_name() {
+        assert_eq!(language_name(Locale::En), "English");
+        assert_eq!(language_name(Locale::ZhTw), "Traditional Chinese (繁體中文)");
     }
 }
