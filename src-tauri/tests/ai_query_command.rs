@@ -2,7 +2,7 @@
 //! test is hermetic (no network, no real PTY).
 
 use aiterm_lib::ai::{
-    AiError, AiProvider, ChatMessage, GenerateChunk, GenerateRequest,
+    AiError, AiProvider, ChatMessage, GenerateChunk, GenerateRequest, Locale,
 };
 use aiterm_lib::commands::ai::build_single_command_prompt;
 use aiterm_lib::ai::context;
@@ -52,8 +52,8 @@ async fn snapshot_builds_fallback_when_session_unknown() {
 #[test]
 fn prompt_assembly_is_deterministic() {
     let snap = context::snapshot_from_parts("linux", "bash", PathBuf::from("/"));
-    let a = build_single_command_prompt(&snap);
-    let b = build_single_command_prompt(&snap);
+    let a = build_single_command_prompt(&snap, Locale::ZhTw);
+    let b = build_single_command_prompt(&snap, Locale::ZhTw);
     assert_eq!(a, b);
     assert!(a.contains("Shell: bash"));
 }
@@ -100,8 +100,17 @@ fn prompt_includes_context_when_present() {
         recent_output: Some("$ ls\nfoo  bar".into()),
         dir_listing: Some("bar\nfoo".into()),
     };
-    let prompt = build_single_command_prompt(&snap);
+    let prompt = build_single_command_prompt(&snap, Locale::ZhTw);
     assert!(prompt.contains("Recent terminal output"));
     assert!(prompt.contains("Directory listing"));
     assert!(prompt.contains("foo  bar"));
+}
+
+#[test]
+fn single_command_prompt_language_hint_follows_locale() {
+    let snap = context::snapshot_from_parts("linux", "bash", PathBuf::from("/"));
+    let en_prompt = build_single_command_prompt(&snap, Locale::En);
+    let zh_prompt = build_single_command_prompt(&snap, Locale::ZhTw);
+    assert!(en_prompt.contains("use English"), "en prompt: {en_prompt}");
+    assert!(zh_prompt.contains("use Traditional Chinese"), "zh prompt: {zh_prompt}");
 }

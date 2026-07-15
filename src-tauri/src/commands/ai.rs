@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 
 use crate::ai::{
     context, router::AiRouter, AiError, AiSingleCommand, ChatMessage, GenerateChunk,
-    GenerateRequest, McpToolDefinition, QueryMode, RiskLevel,
+    GenerateRequest, Locale, McpToolDefinition, QueryMode, RiskLevel,
 };
 use crate::guard::CommandGuard;
 use crate::pty::PtyManager;
@@ -98,7 +98,7 @@ fn extract_json_from_response(raw: &str) -> String {
 
 /// Build the system prompt. Includes OS/shell/cwd and, if available, recent
 /// terminal output and a directory listing for richer context.
-pub fn build_single_command_prompt(snapshot: &crate::ai::EnvSnapshot) -> String {
+pub fn build_single_command_prompt(snapshot: &crate::ai::EnvSnapshot, locale: Locale) -> String {
     let recent_section = snapshot.recent_output.as_deref().map(|o| {
         let trimmed = if o.len() > 2000 { &o[o.len() - 2000..] } else { o };
         format!("\nRecent terminal output (last ~50 lines):\n```\n{trimmed}\n```")
@@ -123,7 +123,7 @@ Rules:
 1. Output ONLY a JSON object, no prose, no markdown fences, no extra keys.
 2. Schema:
    {{
-     "explanation": "一句話說明這個命令做什麼，或是總結已完成的結果 (use Traditional Chinese)",
+     "explanation": "one-sentence description of what this command does, or a summary of the completed result (use {language})",
      "command":     "a single shell command, no prompt prefix, no line breaks. SET TO 'DONE' IF GOAL IS FULLY MET.",
      "risk_level":  one of "safe", "needs_confirm", "dangerous"
    }}
@@ -136,6 +136,7 @@ Rules:
         os = snapshot.os,
         shell = snapshot.shell,
         cwd = snapshot.cwd.display(),
+        language = crate::ai::language_name(locale),
     )
 }
 
@@ -190,13 +191,14 @@ Rules:
 pub async fn ai_query(
     query: String,
     session_id: String,
+    locale: Locale,
     app: AppHandle,
     pty_manager: State<'_, PtyManager>,
     router: State<'_, AiRouter>,
 ) -> Result<AiCommandReady, AiError> {
     let snapshot = context::snapshot(&pty_manager, &session_id);
     let provider = router.resolve().await?;
-    let prompt = build_single_command_prompt(&snapshot);
+    let prompt = build_single_command_prompt(&snapshot, locale);
     let req = GenerateRequest {
         system_prompt: prompt,
         messages: vec![ChatMessage { role: "user".into(), content: serde_json::Value::String(query), tool_call_id: None, tool_calls: None }],
@@ -753,7 +755,7 @@ mod tests {
     #[test]
     fn prompt_contains_environment_fields() {
         let snap = make_snap("windows", "pwsh", "C:\\Users\\a");
-        let prompt = build_single_command_prompt(&snap);
+        let prompt = build_single_command_prompt(&snap, Locale::ZhTw);
         assert!(prompt.contains("OS: windows"));
         assert!(prompt.contains("Shell: pwsh"));
         assert!(prompt.contains("C:\\Users\\a"));
@@ -770,7 +772,7 @@ mod tests {
             recent_output: Some("$ ls\nfoo  bar".into()),
             dir_listing: None,
         };
-        let prompt = build_single_command_prompt(&snap);
+        let prompt = build_single_command_prompt(&snap, Locale::ZhTw);
         assert!(prompt.contains("Recent terminal output"));
         assert!(prompt.contains("foo  bar"));
     }
@@ -784,7 +786,7 @@ mod tests {
             recent_output: None,
             dir_listing: Some("docs/\nsrc/\nCargo.toml".into()),
         };
-        let prompt = build_single_command_prompt(&snap);
+        let prompt = build_single_command_prompt(&snap, Locale::ZhTw);
         assert!(prompt.contains("Directory listing"));
         assert!(prompt.contains("Cargo.toml"));
     }
@@ -792,7 +794,7 @@ mod tests {
     #[test]
     fn prompt_omits_context_sections_when_none() {
         let snap = make_snap("macos", "zsh", "/home");
-        let prompt = build_single_command_prompt(&snap);
+        let prompt = build_single_command_prompt(&snap, Locale::ZhTw);
         assert!(!prompt.contains("Recent terminal output"));
         assert!(!prompt.contains("Directory listing"));
     }
@@ -871,7 +873,7 @@ mod tests {
             recent_output: Some(long_output.clone()),
             dir_listing: None,
         };
-        let prompt = build_single_command_prompt(&snap);
+        let prompt = build_single_command_prompt(&snap, Locale::ZhTw);
         assert!(prompt.contains("Recent terminal output"));
         // The full 3000-char string must NOT be present — truncation happened.
         assert!(!prompt.contains(&long_output), "full 3000-char output should have been truncated");
