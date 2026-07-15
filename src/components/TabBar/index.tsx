@@ -39,9 +39,6 @@ export interface TabBarProps {
   isSidebarOpen: boolean;
   onToggle: () => void;
   width: number;
-  pickerOpen?: boolean;
-  onPickerSelect?: (type: TabType) => void;
-  onPickerClose?: () => void;
   hasUpdate?: boolean;
 }
 
@@ -69,9 +66,6 @@ export function TabBar({
   isSidebarOpen,
   onToggle,
   width,
-  pickerOpen,
-  onPickerSelect,
-  onPickerClose,
   hasUpdate = false
 }: TabBarProps) {
   const navigate = useNavigate();

@@ -241,12 +241,6 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
     return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [handleAddTab, handleCloseTab]);
 
-  // Sidebar drag to resize
-  const startResizing = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  }, []);
-
   useEffect(() => {
     if (!isDragging) return;
     const onMouseMove = (e: MouseEvent) => {
