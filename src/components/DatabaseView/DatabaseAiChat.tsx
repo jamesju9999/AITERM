@@ -107,12 +107,12 @@ function extractSql(text: string): string | null {
 }
 
 function formatResultForAi(result: QueryResult): string {
-  if (result.error) return `錯誤：${result.error}`;
-  if (result.affected_rows !== null) return `執行成功，${result.affected_rows} 列受影響`;
-  if (result.columns.length === 0) return "無結果";
+  if (result.error) return `Error: ${result.error}`;
+  if (result.affected_rows !== null) return `Success, ${result.affected_rows} row(s) affected`;
+  if (result.columns.length === 0) return "No results";
   const header = result.columns.join(" | ");
   const rows = result.rows.slice(0, 50).map((r) => r.map((c) => (c === null ? "NULL" : String(c))).join(" | "));
-  const suffix = result.rows.length > 50 ? `\n...（共 ${result.rows.length} 列，只顯示前 50 列）` : "";
+  const suffix = result.rows.length > 50 ? `\n...(${result.rows.length} rows total, showing first 50)` : "";
   return `${header}\n${rows.join("\n")}${suffix}`;
 }
 
@@ -362,7 +362,7 @@ your SQL
         loopHistory.push({ role: "assistant", content: reply });
         loopHistory.push({
           role: "user",
-          content: `SQL 執行結果：\n\`\`\`\n${formatResultForAi(result)}\n\`\`\`\n\n請繼續分析或給出最終答案。`,
+          content: `SQL execution result:\n\`\`\`\n${formatResultForAi(result)}\n\`\`\`\n\nContinue analyzing or give the final answer.`,
         });
 
         stepCount++;

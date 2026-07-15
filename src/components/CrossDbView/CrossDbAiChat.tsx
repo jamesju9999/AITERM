@@ -118,12 +118,12 @@ function extractCrossDbSql(text: string): { alias: string | null; sql: string } 
 }
 
 function formatResultForAi(result: QueryResult): string {
-  if (result.error) return `錯誤：${result.error}`;
-  if (result.affected_rows !== null) return `執行成功，${result.affected_rows} 列受影響`;
-  if (result.columns.length === 0) return "無結果";
+  if (result.error) return `Error: ${result.error}`;
+  if (result.affected_rows !== null) return `Success, ${result.affected_rows} row(s) affected`;
+  if (result.columns.length === 0) return "No results";
   const header = result.columns.join(" | ");
   const rows = result.rows.slice(0, 50).map((r) => r.map((c) => (c === null ? "NULL" : String(c))).join(" | "));
-  const suffix = result.rows.length > 50 ? `\n...（共 ${result.rows.length} 列，只顯示前 50 列）` : "";
+  const suffix = result.rows.length > 50 ? `\n...(${result.rows.length} rows total, showing first 50)` : "";
   return `${header}\n${rows.join("\n")}${suffix}`;
 }
 
@@ -347,7 +347,7 @@ SELECT * FROM ...
           if (databases.length === 1) {
             targetDb = databases[0];
           } else {
-            const errMsg = `請在 SQL 區塊中指定資料庫名稱，格式：\n\`\`\`sql [資料庫名稱]\nSQL\n\`\`\`\n可用：${databases.map((d) => d.name).join(", ")}`;
+            const errMsg = `Please specify the database name in the SQL block, format:\n\`\`\`sql [Database Name]\nSQL\n\`\`\`\nAvailable: ${databases.map((d) => d.name).join(", ")}`;
             loopHistory.push({ role: "assistant", content: reply });
             loopHistory.push({ role: "user", content: errMsg });
             stepCount++;
@@ -358,7 +358,7 @@ SELECT * FROM ...
         }
 
         if (!targetDb) {
-          const errMsg = `找不到名為「${parsed.alias}」的資料庫。可用：${databases.map((d) => d.name).join(", ")}`;
+          const errMsg = `No database named "${parsed.alias}" was found. Available: ${databases.map((d) => d.name).join(", ")}`;
           loopHistory.push({ role: "assistant", content: reply });
           loopHistory.push({ role: "user", content: errMsg });
           stepCount++;
@@ -393,8 +393,8 @@ SELECT * FROM ...
         loopHistory.push({ role: "assistant", content: reply });
 
         const feedbackContent = result.error
-          ? `[${targetDb.name}] SQL 執行失敗，資料庫回傳錯誤：${result.error}\n\n請修正 SQL 語法後重試（注意：是 SQL 語法問題，不是格式問題）。`
-          : `[${targetDb.name}] 查詢成功，結果如下：\n\n${formatResultForAi(result)}`;
+          ? `[${targetDb.name}] SQL execution failed, database returned error: ${result.error}\n\nPlease fix the SQL syntax and retry (note: this is a SQL syntax issue, not a format issue).`
+          : `[${targetDb.name}] Query succeeded, results below:\n\n${formatResultForAi(result)}`;
 
         loopHistory.push({ role: "user", content: feedbackContent });
 
