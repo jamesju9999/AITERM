@@ -62,6 +62,9 @@ function AppRoutes() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
+    // updateInfo must stay in deps — the handler is registered once via
+    // addEventListener, and without it the closure would keep seeing the
+    // initial null value even after the async version-check resolves.
   }, [navigate, updateInfo]);
 
   if (!ready) return null;
