@@ -51,7 +51,7 @@ export function AiPanel({
   onOpenProviderPalette,
   sendRemoteResponse,
 }: AiPanelProps) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const chat = useMcpChat(sessionId);
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -207,7 +207,7 @@ ${dirList || "（無法取得）"}
         { role: "system", content: systemPrompt },
         ...history,
       ];
-      const replyObj = await invokeAiChat(agentMessages, sessionId);
+      const replyObj = await invokeAiChat(agentMessages, sessionId, undefined, false, locale);
       reply = replyObj.content ?? "";
     } catch {
       setAgentRunning(false);
@@ -253,7 +253,7 @@ ${dirList || "（無法取得）"}
         void runAgentLoop(newHistory, systemPrompt, step + 1);
       });
     });
-  }, [chat, onExecuteCommand, sessionId]);
+  }, [chat, onExecuteCommand, sessionId, locale]);
 
   const submitAgent = useCallback(async (text: string) => {
     setAgentRunning(true);

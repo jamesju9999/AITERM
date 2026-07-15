@@ -27,8 +27,10 @@ import { MessageBubble } from '../AiPanel/MessageBubble';
 import { ProviderPalette } from '../ProviderPalette';
 import { extractResponseText } from '../../lib/markdown';
 import { getConfig, type SubmitShortcut } from '../../ipc/config';
+import { useLocale } from '../../contexts/LocaleContext';
 import './DesignView.css';
 export function DesignView({ isActive }: { isActive: boolean }) {
+  const { locale } = useLocale();
   const [session, setSession] = useState<DesignSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -251,7 +253,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
     setIsStreaming(true);
 
     try {
-      const response = await designChat(session.id, combinedMessages, providerId);
+      const response = await designChat(session.id, combinedMessages, providerId, locale);
       const cleanResponseText = extractResponseText(response.content);
 
       const extractContent = (tag: string, text: string) => {
@@ -311,7 +313,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
     } finally {
       setIsStreaming(false);
     }
-  }, [inputValue, session, messages, isStreaming, refreshSession, providerId]);
+  }, [inputValue, session, messages, isStreaming, refreshSession, providerId, locale]);
 
   const cleanMessageForDisplay = (text: string, streaming = false) => {
     if (!text) return text;

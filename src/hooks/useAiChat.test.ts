@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LocaleProvider } from "../contexts/LocaleContext";
 
 // Mock the Tauri modules BEFORE importing the hook.
 const invokeMock = vi.fn();
@@ -56,7 +57,7 @@ function fireStream(payload: Partial<StreamPayload>) {
 
 describe("useAiChat", () => {
   it("starts with empty state", () => {
-    const { result } = renderHook(() => useAiChat("s1"));
+    const { result } = renderHook(() => useAiChat("s1"), { wrapper: LocaleProvider });
     expect(result.current.messages).toEqual([]);
     expect(result.current.streamBuf).toBe("");
     expect(result.current.isStreaming).toBe(false);
@@ -65,7 +66,7 @@ describe("useAiChat", () => {
 
   it("send appends user then assistant on success", async () => {
     invokeMock.mockResolvedValueOnce({ content: "來試試 <cmd>ls</cmd>" });
-    const { result } = renderHook(() => useAiChat("s1"));
+    const { result } = renderHook(() => useAiChat("s1"), { wrapper: LocaleProvider });
 
     await act(async () => {
       await result.current.send("列出檔案");
@@ -83,7 +84,7 @@ describe("useAiChat", () => {
 
   it("send keeps user message and sets error on failure", async () => {
     invokeMock.mockRejectedValueOnce({ kind: "network", message: "boom" });
-    const { result } = renderHook(() => useAiChat("s1"));
+    const { result } = renderHook(() => useAiChat("s1"), { wrapper: LocaleProvider });
 
     await act(async () => {
       await result.current.send("試試看");
@@ -105,7 +106,7 @@ describe("useAiChat", () => {
           resolveInvoke = r;
         }),
     );
-    const { result } = renderHook(() => useAiChat("s1"));
+    const { result } = renderHook(() => useAiChat("s1"), { wrapper: LocaleProvider });
 
     let sendPromise: Promise<void> = Promise.resolve();
     act(() => {
@@ -139,7 +140,7 @@ describe("useAiChat", () => {
     // Second call succeeds.
     invokeMock.mockResolvedValueOnce({ content: "好的" });
 
-    const { result } = renderHook(() => useAiChat("s1"));
+    const { result } = renderHook(() => useAiChat("s1"), { wrapper: LocaleProvider });
 
     await act(async () => {
       await result.current.send("試");
@@ -158,7 +159,7 @@ describe("useAiChat", () => {
 
   it("resend is a no-op when messages empty or last is not user", async () => {
     invokeMock.mockResolvedValue({ content: "x" });
-    const { result } = renderHook(() => useAiChat("s1"));
+    const { result } = renderHook(() => useAiChat("s1"), { wrapper: LocaleProvider });
 
     await act(async () => {
       await result.current.resend();
@@ -168,7 +169,7 @@ describe("useAiChat", () => {
 
   it("clear resets messages, error, and streamBuf", async () => {
     invokeMock.mockResolvedValueOnce({ content: "answer" });
-    const { result } = renderHook(() => useAiChat("s1"));
+    const { result } = renderHook(() => useAiChat("s1"), { wrapper: LocaleProvider });
 
     await act(async () => {
       await result.current.send("q");
@@ -185,7 +186,7 @@ describe("useAiChat", () => {
 
   it("truncates history to 20 messages when sending", async () => {
     invokeMock.mockResolvedValue({ content: "ok" });
-    const { result } = renderHook(() => useAiChat("s1"));
+    const { result } = renderHook(() => useAiChat("s1"), { wrapper: LocaleProvider });
 
     // Send 11 rounds (22 messages → should truncate to 20 before invoke).
     for (let i = 0; i < 11; i++) {
@@ -203,7 +204,7 @@ describe("useAiChat", () => {
 
   it("passes the default locale to invokeAiChat when none is threaded", async () => {
     invokeMock.mockResolvedValueOnce({ content: "ok" });
-    const { result } = renderHook(() => useAiChat("s1"));
+    const { result } = renderHook(() => useAiChat("s1"), { wrapper: LocaleProvider });
 
     await act(async () => {
       await result.current.send("hi");

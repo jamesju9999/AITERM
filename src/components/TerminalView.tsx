@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLocale } from "../contexts/LocaleContext";
+import type { Locale } from "../lib/i18n";
 import { listen } from "@tauri-apps/api/event";
 import { homeDir } from "@tauri-apps/api/path";
 import { Terminal } from "@xterm/xterm";
@@ -105,7 +106,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const hostRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<string>("initializing…");
   const [preview, setPreview] = useState<PreviewState>(INITIAL_PREVIEW);
@@ -281,6 +282,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         if (sessionRef.current && termRef.current) {
           runAgentLoop({
             goal: finalQuery,
+            locale,
             sessionId: sessionRef.current,
             term: termRef.current,
             getSubmitCommand: () => submitCommandRef.current,
@@ -434,6 +436,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     setTimeout(() => {
       runAgentLoop({
         goal: initialMission.goal,
+        locale,
         sessionId: session,
         term,
         getSubmitCommand: () => submitCommandRef.current,
@@ -656,6 +659,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             startMission(finalQuery, 5);
             runAgentLoop({
               goal: finalQuery,
+              locale,
               sessionId: session,
               term,
               getSubmitCommand: () => submitCommandRef.current,
@@ -1033,6 +1037,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                 startMission(finalQuery, 5);
                 runAgentLoop({
                   goal: finalQuery,
+                  locale,
                   sessionId,
                   term: termRef.current,
                   getSubmitCommand: () => submitCommandRef.current,
@@ -1118,6 +1123,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
  * which fires AFTER the executed command finishes in the PTY.
  */
 function handleAiQuery(
+  locale: Locale,
   sessionId: string,
   originalLine: string,
   query: string,
@@ -1141,7 +1147,7 @@ function handleAiQuery(
   streamingRef.current = true;
   setPreview({ loading: true, visible: false, command: "", explanation: "", riskLevel: "safe" });
 
-  invokeAiQuery(query, sessionId)
+  invokeAiQuery(query, sessionId, locale)
     .then((resp) => {
       streamingRef.current = false;
       term.write("\x1b[1A\x1b[2K");
@@ -1253,6 +1259,7 @@ function formatAgentStepForRemote(info: AgentStepInfo): string {
 
 interface AgentLoopParams {
   goal: string;
+  locale: Locale;
   sessionId: string;
   term: Terminal;
   getSubmitCommand: () => (cmd: string, onComplete?: (block: import("../hooks/useTerminalBlocks").TerminalBlock) => void) => void;
@@ -1273,7 +1280,7 @@ interface AgentLoopParams {
 
 function runAgentLoop(params: AgentLoopParams) {
   const {
-    goal, sessionId, term, getSubmitCommand,
+    goal, locale, sessionId, term, getSubmitCommand,
     setPreview, setStreamText, streamingRef, executionModeRef,
     writeRed, abortRef, stepCount, maxSteps, history,
     onComplete, onFail,
@@ -1392,6 +1399,7 @@ function runAgentLoop(params: AgentLoopParams) {
 
   // Call AI, auto-execute the returned command, wire up the completion callback
   handleAiQuery(
+    locale,
     sessionId,
     "",
     query,

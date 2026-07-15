@@ -9,6 +9,7 @@ import {
   type ChatMessage,
 } from "../ipc/ai";
 import { truncateHistory } from "../lib/chatHistory";
+import { useLocale } from "../contexts/LocaleContext";
 
 const HISTORY_LIMIT = 20;
 const SESSIONS_STORAGE_KEY = "aiterm-ai-chat-sessions";
@@ -73,6 +74,7 @@ export interface UseAiChatResult {
  * remount (via `key={sessionId}`) resets all state.
  */
 export function useAiChat(sessionId: string): UseAiChatResult {
+  const { locale } = useLocale();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamBuf, setStreamBuf] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -131,7 +133,7 @@ export function useAiChat(sessionId: string): UseAiChatResult {
       setError(null);
       setToolCallingUnsupported(false);
       try {
-        const reply: AiChatReply = await invokeAiChat(msgs, sessionId, undefined, useMcp);
+        const reply: AiChatReply = await invokeAiChat(msgs, sessionId, undefined, useMcp, locale);
         if (!mountedRef.current) return;
         setMessages([...msgs, { role: "assistant", content: reply.content ?? "" }]);
         setToolCallingUnsupported(reply.tool_calling_unsupported ?? false);
@@ -146,7 +148,7 @@ export function useAiChat(sessionId: string): UseAiChatResult {
         }
       }
     },
-    [sessionId],
+    [sessionId, locale],
   );
 
   const send = useCallback(
