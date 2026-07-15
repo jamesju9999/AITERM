@@ -2,7 +2,7 @@
 //! hermetic (no network, no real PTY).
 
 use aiterm_lib::ai::{
-    AiError, AiProvider, ChatMessage, GenerateChunk, GenerateRequest, QueryMode,
+    AiError, AiProvider, ChatMessage, GenerateChunk, GenerateRequest, Locale, QueryMode,
 };
 use aiterm_lib::commands::ai::build_chat_prompt;
 use aiterm_lib::ai::context;
@@ -84,13 +84,14 @@ impl AiProvider for MockProvider {
 async fn run_chat_loop(
     provider: Arc<dyn AiProvider>,
     messages: Vec<ChatMessage>,
+    locale: Locale,
 ) -> Result<String, AiError> {
     let snapshot = context::snapshot_from_parts(
         "linux",
         "bash",
         std::path::PathBuf::from("/"),
     );
-    let prompt = build_chat_prompt(&snapshot);
+    let prompt = build_chat_prompt(&snapshot, locale);
     let req = GenerateRequest {
         system_prompt: prompt,
         messages,
@@ -133,7 +134,7 @@ async fn chat_returns_raw_content_without_json_parsing() {
     ]);
     let provider: Arc<dyn AiProvider> = Arc::new(mock.clone());
 
-    let content = run_chat_loop(provider, vec![user("列出所有檔案")])
+    let content = run_chat_loop(provider, vec![user("列出所有檔案")], Locale::ZhTw)
         .await
         .expect("chat should succeed");
 
@@ -155,7 +156,7 @@ async fn chat_passes_full_message_history_to_provider() {
         assistant("第二輪回答"),
         user("第三輪問題"),
     ];
-    run_chat_loop(provider, history.clone()).await.expect("ok");
+    run_chat_loop(provider, history.clone(), Locale::ZhTw).await.expect("ok");
 
     let got = captured.lock().unwrap().clone().expect("captured request");
     assert_eq!(got.messages.len(), 5, "all 5 messages must be forwarded");
@@ -171,7 +172,7 @@ async fn chat_prompt_is_chat_not_single_command() {
     let captured = mock.last_request.clone();
     let provider: Arc<dyn AiProvider> = Arc::new(mock);
 
-    run_chat_loop(provider, vec![user("hi")]).await.expect("ok");
+    run_chat_loop(provider, vec![user("hi")], Locale::ZhTw).await.expect("ok");
 
     let got = captured.lock().unwrap().clone().unwrap();
     assert!(got.system_prompt.contains("<cmd>"), "chat prompt must mention <cmd>");
@@ -199,9 +200,21 @@ async fn chat_propagates_provider_network_error() {
     }
 
     let provider: Arc<dyn AiProvider> = Arc::new(FailingProvider);
-    let err = run_chat_loop(provider, vec![user("hi")]).await.unwrap_err();
+    let err = run_chat_loop(provider, vec![user("hi")], Locale::ZhTw).await.unwrap_err();
     match err {
         AiError::Network { message } => assert_eq!(message, "boom"),
         other => panic!("expected Network, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn chat_prompt_language_rule_follows_locale() {
+    let mock = MockProvider::new(vec!["x"]);
+    let captured = mock.last_request.clone();
+    let provider: Arc<dyn AiProvider> = Arc::new(mock);
+
+    run_chat_loop(provider, vec![user("hi")], Locale::En).await.expect("ok");
+
+    let got = captured.lock().unwrap().clone().unwrap();
+    assert!(got.system_prompt.contains("Respond in English."), "prompt: {}", got.system_prompt);
 }

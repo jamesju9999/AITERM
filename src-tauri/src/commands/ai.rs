@@ -143,7 +143,7 @@ Rules:
 /// Build the system prompt for Chat mode. Unlike `build_single_command_prompt`,
 /// this does NOT instruct JSON output — instead it explains the `<cmd>` tag
 /// protocol and invites free-form Traditional Chinese prose.
-pub fn build_chat_prompt(snapshot: &crate::ai::EnvSnapshot) -> String {
+pub fn build_chat_prompt(snapshot: &crate::ai::EnvSnapshot, locale: Locale) -> String {
     let recent_section = snapshot.recent_output.as_deref().map(|o| {
         let trimmed = if o.len() > 2000 {
             let start = o.len() - 2000;
@@ -171,7 +171,7 @@ Environment:
   Cwd: {cwd}{recent_section}{dir_section}
 
 Rules:
-1. Respond in Traditional Chinese (繁體中文).
+1. Respond in {language}.
 2. When you want to suggest a runnable shell command, wrap it in
    <cmd>...</cmd> tags. The user can click the tag to execute it.
 3. You may include multiple <cmd> tags in one reply if needed.
@@ -184,6 +184,7 @@ Rules:
         os = snapshot.os,
         shell = snapshot.shell,
         cwd = snapshot.cwd.display(),
+        language = crate::ai::language_name(locale),
     )
 }
 
@@ -301,6 +302,7 @@ pub async fn ai_chat(
     session_id: String,
     provider_id: Option<String>,
     use_mcp: bool,
+    locale: Locale,
     app: AppHandle,
     pty_manager: State<'_, PtyManager>,
     router: State<'_, AiRouter>,
@@ -326,7 +328,7 @@ pub async fn ai_chat(
         None => router.resolve().await?,
     };
 
-    let prompt = build_chat_prompt(&snapshot);
+    let prompt = build_chat_prompt(&snapshot, locale);
     let req = GenerateRequest {
         system_prompt: prompt,
         messages,
@@ -802,7 +804,7 @@ mod tests {
     #[test]
     fn chat_prompt_contains_environment_fields() {
         let snap = make_snap("windows", "pwsh", "C:\\Users\\a");
-        let prompt = build_chat_prompt(&snap);
+        let prompt = build_chat_prompt(&snap, Locale::ZhTw);
         assert!(prompt.contains("OS: windows"));
         assert!(prompt.contains("Shell: pwsh"));
         assert!(prompt.contains("C:\\Users\\a"));
@@ -817,7 +819,7 @@ mod tests {
             recent_output: Some("$ ls\nfoo  bar".into()),
             dir_listing: None,
         };
-        let prompt = build_chat_prompt(&snap);
+        let prompt = build_chat_prompt(&snap, Locale::ZhTw);
         assert!(prompt.contains("Recent terminal output"));
         assert!(prompt.contains("foo  bar"));
     }
@@ -825,7 +827,7 @@ mod tests {
     #[test]
     fn chat_prompt_instructs_cmd_tag_format() {
         let snap = make_snap("linux", "bash", "/");
-        let prompt = build_chat_prompt(&snap);
+        let prompt = build_chat_prompt(&snap, Locale::ZhTw);
         assert!(prompt.contains("<cmd>"), "prompt must mention <cmd> tag");
         assert!(prompt.contains("</cmd>"), "prompt must mention closing tag");
     }
@@ -833,7 +835,7 @@ mod tests {
     #[test]
     fn chat_prompt_omits_json_schema_rules() {
         let snap = make_snap("linux", "bash", "/");
-        let prompt = build_chat_prompt(&snap);
+        let prompt = build_chat_prompt(&snap, Locale::ZhTw);
         // Chat mode must NOT contain the single-command JSON schema instruction.
         assert!(
             !prompt.contains("Output ONLY a JSON object"),
@@ -858,7 +860,7 @@ mod tests {
             dir_listing: None,
         };
         // Must not panic.
-        let prompt = build_chat_prompt(&snap);
+        let prompt = build_chat_prompt(&snap, Locale::ZhTw);
         assert!(prompt.contains("Recent terminal output"));
         assert!(prompt.contains("中"));
     }
