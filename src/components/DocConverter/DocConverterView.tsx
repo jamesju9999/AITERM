@@ -80,7 +80,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
       const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
       setExtractState({ fileName, rawText: markdown });
     } catch (e) {
-      setError(`提取失敗：${String(e)}`);
+      setError(t.dc_extract_error(String(e)));
     } finally {
       setExtracting(false);
     }
@@ -154,7 +154,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
         const aiErr = typeof e === "object" && e !== null && "kind" in e
           ? formatAiError(e as import("../../ipc/ai").AiError)
           : String(e);
-        setError(`AI 正規化失敗（步驟 ${i + 1}）：${aiErr}`);
+        setError(t.dc_normalize_error(i + 1, aiErr));
         break;
       }
     }
