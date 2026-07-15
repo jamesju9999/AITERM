@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { formatTime, formatDuration } from "../../lib/timeFormat";
 import type { TraceEntry } from "../../hooks/useOrchestratorLoop";
+import { useLocale } from '../../contexts/LocaleContext';
 
 function ClockBadge({ ts }: { ts: number }) {
   return <span className="ls-tb ls-tb-clock">{formatTime(ts)}</span>;
@@ -22,6 +23,7 @@ interface ExecutionTraceProps {
 }
 
 export function ExecutionTrace({ trace, isRunning, iteration, timingMode }: ExecutionTraceProps) {
+  const { t } = useLocale();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -60,11 +62,11 @@ export function ExecutionTrace({ trace, isRunning, iteration, timingMode }: Exec
         <div className="ls-trace-toolbar">
           <label className="ls-autoscroll-toggle">
             <input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} />
-            <span>自動捲動</span>
+            <span>{t.ls_auto_scroll}</span>
           </label>
         </div>
         <div className="ls-trace-empty">
-          {isRunning ? "Loop 執行中..." : "執行記錄將在此顯示"}
+          {isRunning ? t.ls_trace_running : t.ls_trace_idle}
         </div>
       </div>
     );
@@ -75,7 +77,7 @@ export function ExecutionTrace({ trace, isRunning, iteration, timingMode }: Exec
       <div className="ls-trace-toolbar">
         <label className="ls-autoscroll-toggle">
           <input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} />
-          <span>自動捲動</span>
+          <span>{t.ls_auto_scroll}</span>
         </label>
       </div>
       <div className="ls-trace" ref={scrollRef} onScroll={handleScroll}>
@@ -108,7 +110,7 @@ export function ExecutionTrace({ trace, isRunning, iteration, timingMode }: Exec
                   onClick={() => hasDetails && toggle(entry.id)}
                   style={{ cursor: hasDetails ? "pointer" : "default" }}
                 >
-                  <span className="ls-verifier-badge">{entry.verifierDone ? "✓ 達成" : "✗ 未達成"}</span>
+                  <span className="ls-verifier-badge">{entry.verifierDone ? t.ls_verifier_done_badge : t.ls_verifier_not_done_badge}</span>
                   <span className="ls-verifier-name">{entry.agentName}</span>
                   <span className="ls-verifier-reason">{entry.text}</span>
                   {hasDetails && (
@@ -119,7 +121,7 @@ export function ExecutionTrace({ trace, isRunning, iteration, timingMode }: Exec
                   <div className="ls-verifier-details">
                     {vr.accomplished.length > 0 && (
                       <div className="ls-verifier-section">
-                        <span className="ls-verifier-section-label accomplished">✓ 已完成</span>
+                        <span className="ls-verifier-section-label accomplished">{t.ls_verifier_accomplished}</span>
                         <ul className="ls-verifier-list">
                           {vr.accomplished.map((a, i) => <li key={i}>{a}</li>)}
                         </ul>
@@ -127,7 +129,7 @@ export function ExecutionTrace({ trace, isRunning, iteration, timingMode }: Exec
                     )}
                     {vr.remaining.length > 0 && (
                       <div className="ls-verifier-section">
-                        <span className="ls-verifier-section-label remaining">✗ 尚未完成</span>
+                        <span className="ls-verifier-section-label remaining">{t.ls_verifier_remaining}</span>
                         <ul className="ls-verifier-list">
                           {vr.remaining.map((r, i) => <li key={i}>{r}</li>)}
                         </ul>
@@ -135,7 +137,7 @@ export function ExecutionTrace({ trace, isRunning, iteration, timingMode }: Exec
                     )}
                     {vr.suggestion && (
                       <div className="ls-verifier-section">
-                        <span className="ls-verifier-section-label suggestion">→ 下一步建議</span>
+                        <span className="ls-verifier-section-label suggestion">{t.ls_verifier_suggestion}</span>
                         <p className="ls-verifier-suggestion">{vr.suggestion}</p>
                       </div>
                     )}
@@ -158,7 +160,7 @@ export function ExecutionTrace({ trace, isRunning, iteration, timingMode }: Exec
               <div className="ls-entry-body">{entry.text}</div>
               <div className="ls-time-meta">
                 {loopStartTs != null && (
-                  <span className="ls-tb ls-tb-total">總耗時 {formatDuration(loopStartTs, entry.timestamp)}</span>
+                  <span className="ls-tb ls-tb-total">{t.ls_total_duration(formatDuration(loopStartTs, entry.timestamp))}</span>
                 )}
                 <DoneBadge ts={entry.timestamp} />
               </div>
@@ -182,7 +184,7 @@ export function ExecutionTrace({ trace, isRunning, iteration, timingMode }: Exec
             <div key={entry.id} className="ls-trace-agent-start ls-entry-timed">
               <div className="ls-entry-body">
                 <span className="ls-agent-badge">{entry.agentName}</span>
-                <span className="ls-trace-task">已接收任務，執行中...</span>
+                <span className="ls-trace-task">{t.ls_agent_received}</span>
               </div>
               <div className="ls-time-meta">
                 <ClockBadge ts={entry.timestamp} />
@@ -257,7 +259,7 @@ export function ExecutionTrace({ trace, isRunning, iteration, timingMode }: Exec
 
       {isRunning && (
         <div className="ls-trace-running">
-          <span className="ls-spinner" /> 執行中（Loop #{iteration}）...
+          <span className="ls-spinner" /> {t.ls_loop_running_status(iteration)}
         </div>
       )}
     </div>

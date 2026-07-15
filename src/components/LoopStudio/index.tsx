@@ -10,6 +10,7 @@ import { SessionPicker } from "./SessionPicker";
 import { loopSessionLoad, parseLoopSessionData, loopProjectPickOpen, loopProjectPickSave } from "../../ipc/loopSession";
 import { readFile, writeTextFile } from "../../ipc/fs";
 import { invokeAiChat } from "../../ipc/ai";
+import { useLocale } from '../../contexts/LocaleContext';
 import "./styles.css";
 
 const STORAGE_KEY = "aiterm-loop-studio-roster";
@@ -81,6 +82,7 @@ export function LoopStudioView({
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const closeResolveRef = useRef<((canClose: boolean) => void) | null>(null);
 
+  const { t } = useLocale();
   const loop = useOrchestratorLoop();
   const timingMode = (localStorage.getItem("loopTimingMode") ?? "compact") as "full" | "compact";
 
@@ -353,17 +355,17 @@ export function LoopStudioView({
         <div className="ls-close-overlay">
           <div className="ls-close-dialog">
             <h3 className="ls-close-dialog-title">
-              {loop.isRunning ? "Loop 正在執行中" : "有未儲存的變更"}
+              {loop.isRunning ? t.ls_close_title_running : t.ls_close_title_dirty}
             </h3>
             <p className="ls-close-dialog-body">
               {loop.isRunning ? (
-                <>Loop 目前正在執行中，關閉分頁將停止 Loop 並遺失執行進度。</>
+                <>{t.ls_close_body_running}</>
               ) : (
                 <>
-                  Loop Studio 目前有未儲存的變更。<br />
+                  {t.ls_close_body_dirty}<br />
                   {currentProjectPath
-                    ? `關閉後將遺失自上次儲存以來的所有修改。`
-                    : "關閉後將遺失目前所有設定（目標、Agents 等）。"}
+                    ? t.ls_close_body_modified
+                    : t.ls_close_body_unsaved}
                 </>
               )}
             </p>
@@ -373,14 +375,14 @@ export function LoopStudioView({
                 className="ls-close-cancel-btn"
                 onClick={() => handleCloseConfirm(false)}
               >
-                取消（繼續編輯）
+                {t.ls_cancel_continue}
               </button>
               <button
                 type="button"
                 className="ls-close-discard-btn"
                 onClick={() => handleCloseConfirm(true)}
               >
-                關閉不儲存
+                {t.ls_close_discard}
               </button>
             </div>
           </div>
@@ -392,9 +394,9 @@ export function LoopStudioView({
             <div>
               <div className="ls-title-row">
                 <h2 className="ls-title">Loop Studio</h2>
-                {isDirty && <span className="ls-unsaved-dot" title="有未儲存的變更">●</span>}
+                {isDirty && <span className="ls-unsaved-dot" title={t.ls_unsaved_tooltip}>●</span>}
               </div>
-              <span className="ls-subtitle">多 Agent 協作迴圈，直到目標達成</span>
+              <span className="ls-subtitle">{t.ls_subtitle}</span>
             </div>
             <div className="ls-project-toolbar">
               <button
@@ -402,7 +404,7 @@ export function LoopStudioView({
                 className="ls-project-btn"
                 onClick={handleNewProject}
                 disabled={loop.isRunning}
-                title="清除所有設定，開始新的專案"
+                title={t.ls_clear_project_tooltip}
               >
                 🗒 新建
               </button>
@@ -411,7 +413,7 @@ export function LoopStudioView({
                 className="ls-project-btn"
                 onClick={handleSaveProject}
                 disabled={loop.isRunning}
-                title={currentProjectPath ? `儲存至 ${currentProjectPath}` : "儲存專案檔"}
+                title={currentProjectPath ? t.ls_save_tooltip(currentProjectPath) : t.ls_save_default_tooltip}
               >
                 💾 儲存
               </button>
@@ -420,7 +422,7 @@ export function LoopStudioView({
                 className="ls-project-btn"
                 onClick={handleSaveAsProject}
                 disabled={loop.isRunning}
-                title="另存新檔"
+                title={t.ls_save_as_tooltip}
               >
                 📋 另存
               </button>
@@ -429,7 +431,7 @@ export function LoopStudioView({
                 className="ls-project-btn"
                 onClick={handleLoadProject}
                 disabled={loop.isRunning}
-                title="載入專案檔"
+                title={t.ls_load_tooltip}
               >
                 📂 載入
               </button>
@@ -446,13 +448,13 @@ export function LoopStudioView({
 
         <div className="ls-section">
           <div className="ls-field">
-            <span className="ls-field-label">專案目錄</span>
+            <span className="ls-field-label">{t.ls_field_project_dir}</span>
             <div className="ls-dir-row">
               <input
                 className="ls-dir-input"
                 value={roster.projectDir}
                 onChange={e => updateRoster({ projectDir: e.target.value })}
-                placeholder="留空使用終端機當前目錄"
+                placeholder={t.ls_dir_placeholder}
                 disabled={loop.isRunning}
                 spellCheck={false}
               />
@@ -461,7 +463,7 @@ export function LoopStudioView({
                 className="ls-dir-pick-btn"
                 onClick={handlePickFolder}
                 disabled={loop.isRunning}
-                title="選擇資料夾"
+                title={t.ls_browse_folder_tooltip}
               >
                 📁
               </button>
@@ -471,26 +473,26 @@ export function LoopStudioView({
                   className="ls-dir-clear-btn"
                   onClick={() => updateRoster({ projectDir: "" })}
                   disabled={loop.isRunning}
-                  title="清除"
+                  title={t.ls_clear_dir_tooltip}
                 >
                   ×
                 </button>
               )}
             </div>
             {roster.projectDir && (
-              <span className="ls-dir-active">✓ Agent 將在此目錄執行所有工具</span>
+              <span className="ls-dir-active">{t.ls_dir_active}</span>
             )}
           </div>
         </div>
 
         <div className="ls-section">
           <div className="ls-field">
-            <span className="ls-field-label">目標 (Goal)</span>
+            <span className="ls-field-label">{t.ls_field_goal}</span>
             <textarea
               className="ls-goal-input"
               value={roster.goal}
               onChange={e => { updateRoster({ goal: e.target.value }); setPrevText(p => ({ ...p, goal: undefined })); }}
-              placeholder="描述你想達成的目標，例如：分析 src/ 目錄下所有 TypeScript 檔案並生成技術文件"
+              placeholder={t.ls_goal_placeholder}
               rows={3}
               disabled={loop.isRunning || enhancingField === "goal"}
             />
@@ -501,7 +503,7 @@ export function LoopStudioView({
                 onClick={() => handleEnhance("goal")}
                 disabled={!roster.goal.trim() || loop.isRunning || enhancingField !== null}
               >
-                {enhancingField === "goal" ? "⏳ AI 潤飾中…" : "✨ AI 潤飾"}
+                {enhancingField === "goal" ? t.ls_enhancing_btn : t.ls_enhance_btn}
               </button>
               {prevText.goal && (
                 <button
@@ -509,18 +511,18 @@ export function LoopStudioView({
                   className="ls-undo-btn"
                   onClick={() => handleUndo("goal")}
                 >
-                  ↩ 復原
+                  {t.ls_enhance_undo}
                 </button>
               )}
             </div>
           </div>
           <div className="ls-field">
-            <span className="ls-field-label">停止條件 (Stopping Condition)</span>
+            <span className="ls-field-label">{t.ls_field_stopping}</span>
             <textarea
               className="ls-goal-input"
               value={roster.stoppingCondition}
               onChange={e => { updateRoster({ stoppingCondition: e.target.value }); setPrevText(p => ({ ...p, stopping: undefined })); }}
-              placeholder="Verifier 用來判斷「任務完成」的標準，例如：所有 .ts 檔案都有對應的 JSDoc 說明"
+              placeholder={t.ls_stopping_placeholder}
               rows={2}
               disabled={loop.isRunning || enhancingField === "stopping"}
             />
@@ -531,7 +533,7 @@ export function LoopStudioView({
                 onClick={() => handleEnhance("stopping")}
                 disabled={!roster.stoppingCondition.trim() || loop.isRunning || enhancingField !== null}
               >
-                {enhancingField === "stopping" ? "⏳ AI 潤飾中…" : "✨ AI 潤飾"}
+                {enhancingField === "stopping" ? t.ls_enhancing_btn : t.ls_enhance_btn}
               </button>
               {prevText.stopping && (
                 <button
@@ -539,7 +541,7 @@ export function LoopStudioView({
                   className="ls-undo-btn"
                   onClick={() => handleUndo("stopping")}
                 >
-                  ↩ 復原
+                  {t.ls_enhance_undo}
                 </button>
               )}
             </div>
@@ -551,7 +553,7 @@ export function LoopStudioView({
           <div className="ls-ov-row">
             <div className="ls-ov-field">
               <label className="ls-field">
-                <span>Orchestrator 名稱</span>
+                <span>{t.ls_field_orch_name}</span>
                 <input
                   value={roster.orchestratorName}
                   onChange={e => updateRoster({ orchestratorName: e.target.value })}
@@ -571,7 +573,7 @@ export function LoopStudioView({
             </div>
             <div className="ls-ov-field">
               <label className="ls-field">
-                <span>Verifier 名稱</span>
+                <span>{t.ls_field_verifier_name}</span>
                 <input
                   value={roster.verifierName}
                   onChange={e => updateRoster({ verifierName: e.target.value })}
@@ -599,10 +601,10 @@ export function LoopStudioView({
         />
 
         <div className="ls-section">
-          <span className="ls-section-label">限制設定</span>
+          <span className="ls-section-label">{t.ls_section_limits}</span>
           <div className="ls-limits-grid">
             <label className="ls-field">
-              <span className="ls-field-label">最大迴圈數 <span className="ls-hint-inline">（Verifier 評估次數）</span></span>
+              <span className="ls-field-label">{t.ls_field_max_loops} <span className="ls-hint-inline">{t.ls_hint_verifier_evals}</span></span>
               <input
                 type="number"
                 min={1}
@@ -614,7 +616,7 @@ export function LoopStudioView({
               />
             </label>
             <label className="ls-field">
-              <span className="ls-field-label">Orchestrator 步驟上限 <span className="ls-hint-inline">（0 = 無限制）</span></span>
+              <span className="ls-field-label">{t.ls_field_orch_steps} <span className="ls-hint-inline">{t.ls_hint_zero_unlimited}</span></span>
               <input
                 type="number"
                 min={0}
@@ -625,7 +627,7 @@ export function LoopStudioView({
               />
             </label>
             <label className="ls-field">
-              <span className="ls-field-label">Sub-agent 工具呼叫上限 <span className="ls-hint-inline">（0 = 無限制）</span></span>
+              <span className="ls-field-label">{t.ls_field_agent_tools} <span className="ls-hint-inline">{t.ls_hint_zero_unlimited}</span></span>
               <input
                 type="number"
                 min={0}
@@ -644,8 +646,8 @@ export function LoopStudioView({
               disabled={loop.isRunning}
             />
             <span className="ls-field-label">
-              Full-auto 模式
-              <span className="ls-hint-inline">（跳過危險指令確認，僅在信任目標時開啟）</span>
+              {t.ls_full_auto_mode}
+              <span className="ls-hint-inline">{t.ls_hint_skip_dangerous}</span>
             </span>
           </label>
         </div>
@@ -677,7 +679,7 @@ export function LoopStudioView({
                     className="ls-dismiss-warnings"
                     onClick={() => setWarningsDismissed(true)}
                   >
-                    我了解，仍要繼續
+                    {t.ls_acknowledge_btn}
                   </button>
                 )}
               </div>
@@ -693,7 +695,7 @@ export function LoopStudioView({
               onClick={handleStart}
               disabled={!roster.goal.trim() || !ptySessionId || hasErrors || (hasWarnings && !warningsDismissed)}
             >
-              ▶ 開始 Loop
+              {t.ls_start_loop}
             </button>
           ) : (
             <button
@@ -701,7 +703,7 @@ export function LoopStudioView({
               className="ls-stop-btn"
               onClick={loop.stop}
             >
-              ■ 停止
+              {t.ls_stop_loop}
             </button>
           )}
         </div>
@@ -709,13 +711,13 @@ export function LoopStudioView({
 
       <div className="ls-right">
         <div className="ls-trace-header">
-          <span className="ls-section-label">執行記錄</span>
+          <span className="ls-section-label">{t.ls_section_trace}</span>
           {loop.isRunning && <span className="ls-running-badge">Loop #{loop.iteration}</span>}
         </div>
         {loop.pendingConfirmation && (
           <div className="ls-confirm-panel">
             <div className="ls-confirm-title">
-              ⚠ {loop.pendingConfirmation.agentName} 請求執行危險指令
+              {t.ls_confirm_dangerous(loop.pendingConfirmation.agentName)}
             </div>
             <pre className="ls-confirm-command">{loop.pendingConfirmation.command}</pre>
             <div className="ls-confirm-actions">
@@ -724,14 +726,14 @@ export function LoopStudioView({
                 className="ls-confirm-deny"
                 onClick={() => loop.pendingConfirmation?.resolve(false)}
               >
-                拒絕
+                {t.ls_confirm_deny}
               </button>
               <button
                 type="button"
                 className="ls-confirm-allow"
                 onClick={() => loop.pendingConfirmation?.resolve(true)}
               >
-                允許執行
+                {t.ls_confirm_allow}
               </button>
             </div>
           </div>

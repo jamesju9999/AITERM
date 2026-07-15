@@ -1,17 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { loopSessionList, loopSessionDelete, loopSessionClearAll, type LoopSessionSummary } from "../../ipc/loopSession";
+import { useLocale } from '../../contexts/LocaleContext';
 
 interface SessionPickerProps {
   onResume: (sessionId: string) => void;
   isRunning: boolean;
 }
-
-const STATUS_LABEL: Record<string, string> = {
-  running: "執行中",
-  paused: "已暫停",
-  completed: "已完成",
-  failed: "失敗",
-};
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -19,6 +13,18 @@ function formatDate(iso: string): string {
 }
 
 export function SessionPicker({ onResume, isRunning }: SessionPickerProps) {
+  const { t } = useLocale();
+
+  const statusLabel = (status: string): string => {
+    const map: Record<string, string> = {
+      running: t.ls_status_running,
+      paused: t.ls_status_paused,
+      completed: t.ls_status_completed,
+      failed: t.ls_status_failed,
+    };
+    return map[status] ?? status;
+  };
+
   const [sessions, setSessions] = useState<LoopSessionSummary[]>([]);
   const [open, setOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -64,7 +70,7 @@ export function SessionPicker({ onResume, isRunning }: SessionPickerProps) {
       </button>
 
       {open && sessions.length === 0 && (
-        <div className="ls-session-empty">尚無過去的 Sessions</div>
+        <div className="ls-session-empty">{t.ls_session_empty}</div>
       )}
 
       {open && sessions.length > 0 && (
@@ -72,9 +78,9 @@ export function SessionPicker({ onResume, isRunning }: SessionPickerProps) {
           {sessions.map(s => (
             <div key={s.id} className={`ls-session-item status-${s.status}`}>
               <div className="ls-session-info">
-                <span className="ls-session-status">{STATUS_LABEL[s.status] ?? s.status}</span>
+                <span className="ls-session-status">{statusLabel(s.status)}</span>
                 <span className="ls-session-goal">{s.goal.slice(0, 60)}{s.goal.length > 60 ? "..." : ""}</span>
-                <span className="ls-session-meta">第 {s.iteration} 輪・{formatDate(s.updated_at)}</span>
+                <span className="ls-session-meta">{t.ls_session_iteration(s.iteration)}・{formatDate(s.updated_at)}</span>
               </div>
               <div className="ls-session-actions">
                 {(s.status === "paused" || s.status === "running") && (
@@ -84,14 +90,14 @@ export function SessionPicker({ onResume, isRunning }: SessionPickerProps) {
                     onClick={() => { setOpen(false); onResume(s.id); }}
                     disabled={isRunning}
                   >
-                    ▶ 繼續
+                    {t.ls_session_resume}
                   </button>
                 )}
                 <button
                   type="button"
                   className="ls-session-delete-btn"
                   onClick={e => handleDelete(e, s.id)}
-                  title="刪除"
+                  title={t.ls_session_delete}
                 >
                   ×
                 </button>
@@ -102,9 +108,9 @@ export function SessionPicker({ onResume, isRunning }: SessionPickerProps) {
           <div className="ls-session-footer">
             {confirmClear ? (
               <div className="ls-clear-confirm">
-                <span>確定要清除全部 {sessions.length} 筆記錄？</span>
-                <button type="button" className="ls-clear-confirm-yes" onClick={handleClearAll}>確定</button>
-                <button type="button" className="ls-clear-confirm-no" onClick={() => setConfirmClear(false)}>取消</button>
+                <span>{t.ls_session_clear_confirm(sessions.length)}</span>
+                <button type="button" className="ls-clear-confirm-yes" onClick={handleClearAll}>{t.ls_session_confirm}</button>
+                <button type="button" className="ls-clear-confirm-no" onClick={() => setConfirmClear(false)}>{t.cancel}</button>
               </div>
             ) : (
               <button
@@ -113,7 +119,7 @@ export function SessionPicker({ onResume, isRunning }: SessionPickerProps) {
                 onClick={() => setConfirmClear(true)}
                 disabled={isRunning}
               >
-                🗑 清除全部
+                {t.ls_session_clear_all}
               </button>
             )}
           </div>

@@ -3,14 +3,9 @@ import type { ProviderInfo } from "../../ipc/provider";
 import type { OrchestratorAgent } from "../../hooks/useOrchestratorLoop";
 import type { AgentToolName } from "../../hooks/useSubAgentLoop";
 import { invokeAiChat } from "../../ipc/ai";
+import { useLocale } from "../../contexts/LocaleContext";
 
 const ALL_TOOLS: AgentToolName[] = ["read_file", "write_file", "list_directory", "execute_command"];
-const TOOL_LABELS: Record<AgentToolName, string> = {
-  read_file: "讀檔",
-  write_file: "寫檔",
-  list_directory: "列目錄",
-  execute_command: "執行指令",
-};
 
 interface AgentPreset {
   label: string;
@@ -93,6 +88,24 @@ interface AgentRosterProps {
 }
 
 export function AgentRoster({ agents, providers, onChange }: AgentRosterProps) {
+  const { t } = useLocale();
+  const TOOL_LABELS: Record<AgentToolName, string> = {
+    read_file: t.ls_tool_read_file,
+    write_file: t.ls_tool_write_file,
+    list_directory: t.ls_tool_list_dir,
+    execute_command: t.ls_tool_execute_cmd,
+  };
+  const PRESET_LABELS: Record<string, string> = {
+    Coder: t.ls_preset_coder,
+    Tester: t.ls_preset_tester,
+    Reviewer: t.ls_preset_reviewer,
+    Researcher: t.ls_preset_researcher,
+    DevOps: t.ls_preset_devops,
+    DocWriter: t.ls_preset_docs,
+    Refactorer: t.ls_preset_refactorer,
+    SecurityAuditor: t.ls_preset_security,
+    Architect: t.ls_preset_architect,
+  };
   const [expanded, setExpanded] = useState<number | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [generatingIdx, setGeneratingIdx] = useState<number | null>(null);
@@ -184,7 +197,7 @@ export function AgentRoster({ agents, providers, onChange }: AgentRosterProps) {
                   onClick={() => addAgent(preset)}
                 >
                   <span className="ls-preset-emoji">{preset.emoji}</span>
-                  <span className="ls-preset-label">{preset.label}</span>
+                  <span className="ls-preset-label">{PRESET_LABELS[preset.name] ?? preset.label}</span>
                 </button>
               ))}
               <div className="ls-preset-divider" />
@@ -194,7 +207,7 @@ export function AgentRoster({ agents, providers, onChange }: AgentRosterProps) {
                 onClick={() => addAgent()}
               >
                 <span className="ls-preset-emoji">✏️</span>
-                <span className="ls-preset-label">自訂（空白）</span>
+                <span className="ls-preset-label">{t.ls_preset_custom}</span>
               </button>
             </div>
           )}
@@ -202,7 +215,7 @@ export function AgentRoster({ agents, providers, onChange }: AgentRosterProps) {
       </div>
 
       {agents.length === 0 && (
-        <div className="ls-roster-empty">尚無 Agent，點擊「+ Agent」從預設角色或自訂新增</div>
+        <div className="ls-roster-empty">{t.ls_roster_empty}</div>
       )}
 
       {agents.map((agent, idx) => (
@@ -211,7 +224,7 @@ export function AgentRoster({ agents, providers, onChange }: AgentRosterProps) {
             className="ls-agent-card-header"
             onClick={() => setExpanded(expanded === idx ? null : idx)}
           >
-            <span className="ls-agent-name">{agent.name || "(未命名)"}</span>
+            <span className="ls-agent-name">{agent.name || t.ls_agent_unnamed}</span>
             <span className="ls-agent-provider">
               {providers.find(p => p.id === agent.providerId)?.display_name ?? "—"}
             </span>
@@ -227,11 +240,11 @@ export function AgentRoster({ agents, providers, onChange }: AgentRosterProps) {
           {expanded === idx && (
             <div className="ls-agent-body">
               <label className="ls-field">
-                <span>名稱</span>
+                <span>{t.ls_field_agent_name}</span>
                 <input
                   value={agent.name}
                   onChange={e => update(idx, { name: e.target.value })}
-                  placeholder="例：Coder"
+                  placeholder={t.ls_agent_name_placeholder}
                 />
               </label>
               <label className="ls-field">
@@ -244,27 +257,27 @@ export function AgentRoster({ agents, providers, onChange }: AgentRosterProps) {
               </label>
               <div className="ls-field">
                 <div className="ls-field-label-row">
-                  <span>角色描述</span>
+                  <span>{t.ls_field_role_desc}</span>
                   <button
                     type="button"
                     className="ls-enhance-btn"
                     onClick={() => handleGenerateDescription(idx)}
                     disabled={!agent.name.trim() || generatingIdx !== null}
-                    title={agent.name.trim() ? "依角色名稱 AI 產生描述" : "請先輸入角色名稱"}
+                    title={agent.name.trim() ? t.ls_generate_desc_title_ready : t.ls_generate_desc_title_empty}
                   >
-                    {generatingIdx === idx ? "⏳ 產生中…" : "✨ AI 產生"}
+                    {generatingIdx === idx ? t.ls_generating_desc_btn : t.ls_generate_desc_btn}
                   </button>
                 </div>
                 <textarea
                   value={agent.roleDescription}
                   onChange={e => update(idx, { roleDescription: e.target.value })}
-                  placeholder="例：你是一個專業的程式碼重構工程師，負責改善程式碼品質"
+                  placeholder={t.ls_role_desc_placeholder}
                   rows={3}
                   disabled={generatingIdx === idx}
                 />
               </div>
               <div className="ls-field">
-                <span>工具</span>
+                <span>{t.ls_field_tools}</span>
                 <div className="ls-tool-checks">
                   {ALL_TOOLS.map(tool => (
                     <label key={tool} className="ls-tool-check">
