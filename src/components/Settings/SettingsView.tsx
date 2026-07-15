@@ -59,7 +59,7 @@ export function SettingsView() {
           className={`sidebar-item ${tab === "enterprise" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("enterprise")}
         >
-          🏢 Enterprise
+          🏢 {t.settings_tab_enterprise}
         </button>
         <button
           className={`sidebar-item ${tab === "about" ? "sidebar-item--active" : ""}`}
