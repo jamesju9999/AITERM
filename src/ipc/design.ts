@@ -1,6 +1,7 @@
 // src/ipc/design.ts
 import { invoke } from '@tauri-apps/api/core';
 import type { ChatMessage } from './ai';
+import type { Locale } from '../lib/i18n';
 
 export interface DesignSession {
   id: string;
@@ -67,11 +68,12 @@ export async function designDeleteSession(sessionId: string): Promise<boolean> {
  * Supports streaming via 'ai-stream' event.
  */
 export async function designChat(
-  sessionId: string, 
-  messages: ChatMessage[], 
-  providerId?: string
+  sessionId: string,
+  messages: ChatMessage[],
+  providerId?: string,
+  locale: Locale = 'zh-TW',
 ): Promise<DesignChatReply> {
-  return invoke('design_chat', { sessionId, messages, providerId: providerId ?? null });
+  return invoke('design_chat', { sessionId, messages, providerId: providerId ?? null, locale });
 }
 
 /**

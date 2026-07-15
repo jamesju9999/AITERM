@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { Locale } from "../lib/i18n";
 
 export type ContentPart =
   | { type: "text"; text: string }
@@ -78,8 +79,9 @@ export function invokeAiChat(
   sessionId: string,
   providerId?: string,
   useMcp = false,
+  locale: Locale = "zh-TW",
 ): Promise<AiChatReply> {
-  return invoke<AiChatReply>("ai_chat", { messages, sessionId, providerId: providerId ?? null, useMcp });
+  return invoke<AiChatReply>("ai_chat", { messages, sessionId, providerId: providerId ?? null, useMcp, locale });
 }
 
 export const aiChat = (
@@ -87,12 +89,14 @@ export const aiChat = (
   sessionId: string,
   providerId?: string,
   useMcp = false,
+  locale: Locale = "zh-TW",
 ): Promise<AiChatReply> =>
   invoke("ai_chat", {
     messages,
     sessionId,
     providerId: providerId ?? null,
     useMcp,
+    locale,
   });
 
 export type AiStreamKind = "query" | "chat";
@@ -107,8 +111,9 @@ export interface AiStreamEvent {
 export function invokeAiQuery(
   query: string,
   sessionId: string,
+  locale: Locale = "zh-TW",
 ): Promise<AiCommandReady> {
-  return invoke<AiCommandReady>("ai_query", { query, sessionId });
+  return invoke<AiCommandReady>("ai_query", { query, sessionId, locale });
 }
 
 

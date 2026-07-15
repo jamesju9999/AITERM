@@ -200,4 +200,17 @@ describe("useAiChat", () => {
     const args = lastCall[1] as { messages: unknown[] };
     expect(args.messages.length).toBeLessThanOrEqual(20);
   });
+
+  it("passes the default locale to invokeAiChat when none is threaded", async () => {
+    invokeMock.mockResolvedValueOnce({ content: "ok" });
+    const { result } = renderHook(() => useAiChat("s1"));
+
+    await act(async () => {
+      await result.current.send("hi");
+    });
+
+    const lastCall = invokeMock.mock.calls[invokeMock.mock.calls.length - 1];
+    const args = lastCall[1] as { locale: string };
+    expect(args.locale).toBe("zh-TW");
+  });
 });
