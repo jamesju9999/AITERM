@@ -245,16 +245,18 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
             className="vcs-view__send-btn"
             onClick={stop}
             style={{ background: "#2a0f0f", borderColor: "#f87171", color: "#f87171" }}
+            title={t.vcs_btn_stop}
           >
-            {t.vcs_btn_stop}
+            ■
           </button>
         ) : (
           <button
             className="vcs-view__send-btn"
             onClick={handleSubmit}
             disabled={!repoInfo || input.trim() === ""}
+            title={t.vcs_btn_send}
           >
-            {t.vcs_btn_send}
+            ▲
           </button>
         )}
       </div>
