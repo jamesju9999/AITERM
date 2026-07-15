@@ -253,6 +253,7 @@ export const translations = {
     design_generate_sdd: "▶ 產生設計",
     design_generate_plan: "▶ 產生任務",
     design_regenerate: "🔄 重新產生",
+    design_regenerate_title: (label: string) => `重新產生${label}`,
     design_save_to_project: "💾 儲存至專案",
     design_saving: "儲存中...",
     design_empty_state: "尚未產生內容，請在左側開始討論。",
@@ -265,6 +266,7 @@ export const translations = {
     design_save_sdd_label: "🏗️ 設計 (Design)",
     design_save_plan_label: "📅 任務 (Tasks)",
     design_confirm_save: "確認儲存",
+    design_browse_folder: "選擇資料夾",
     design_save_success: (paths: string) => `✅ 儲存成功！\n已寫入檔案：\n${paths}`,
     design_save_error: (err: string) => `❌ 儲存失敗：\n${err}`,
 
@@ -577,6 +579,7 @@ export const translations = {
     design_generate_sdd: "▶ Generate Design",
     design_generate_plan: "▶ Generate Tasks",
     design_regenerate: "🔄 Regenerate",
+    design_regenerate_title: (label: string) => `Regenerate ${label}`,
     design_save_to_project: "💾 Save to Project",
     design_saving: "Saving...",
     design_empty_state: "No content yet. Start a conversation on the left.",
@@ -589,6 +592,7 @@ export const translations = {
     design_save_sdd_label: "🏗️ Design",
     design_save_plan_label: "📅 Tasks",
     design_confirm_save: "Save",
+    design_browse_folder: "Browse folder",
     design_save_success: (paths: string) => `✅ Saved successfully!\nFiles written:\n${paths}`,
     design_save_error: (err: string) => `❌ Save failed:\n${err}`,
 
