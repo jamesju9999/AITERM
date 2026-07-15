@@ -1,5 +1,6 @@
 // src/components/DesignView/SpecPreview.tsx
 import { useState } from 'react';
+import { open } from '@tauri-apps/plugin-dialog';
 import { MarkdownText } from '../../lib/markdown';
 import { designSaveFile } from '../../ipc/design';
 
@@ -233,7 +234,16 @@ export function SpecPreview({ title, proposal, spec, sdd, plan, onGenerate, isSt
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '24px' }}>
               <div>
                 <label style={{ display: 'block', color: '#aaa', fontSize: '0.75rem', marginBottom: '4px' }}>📁 儲存目錄</label>
-                <input type="text" value={paths.dir} onChange={e => setPaths({...paths, dir: e.target.value})} style={inputStyle} />
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input type="text" value={paths.dir} onChange={e => setPaths({...paths, dir: e.target.value})} style={{ ...inputStyle, flex: 1 }} />
+                  <button
+                    onClick={async () => {
+                      const selected = await open({ directory: true, multiple: false });
+                      if (typeof selected === 'string') setPaths({...paths, dir: selected});
+                    }}
+                    style={{ background: '#2a2a2a', border: '1px solid #444', color: '#ccc', padding: '0 12px', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: '0.8rem' }}
+                  >瀏覽…</button>
+                </div>
               </div>
               <div style={{ borderTop: '1px solid #333', paddingTop: '12px' }}>
                 <label style={{ display: 'block', color: '#666', fontSize: '0.7rem', marginBottom: '8px' }}>檔案名稱（Spec 會自動拆分至 specs/ 子目錄）</label>
