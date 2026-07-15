@@ -239,6 +239,8 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
   const start = useCallback(async (config: LoopConfig) => {
     abortRef.current = false;
     const locale: Locale = config.locale ?? "zh-TW";
+    /** Locale-aware UI trace text — this content is display-only and never sent to the AI. */
+    const tr = (zh: string, en: string) => (locale === "zh-TW" ? zh : en);
     const loopSessionId = config.loopSessionId ?? crypto.randomUUID();
 
     const traceBuffer: TraceEntry[] = config.resumeSnapshot?.trace ? [...config.resumeSnapshot.trace] : [];
@@ -278,7 +280,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
       addTraceBuffered({
         kind: "orchestrator_action",
         agentName: config.orchestrator.name,
-        text: "🔍 正在測試 Orchestrator 工具呼叫能力...",
+        text: tr("🔍 正在測試 Orchestrator 工具呼叫能力...", "🔍 Testing Orchestrator tool-calling capability..."),
         iteration: 0,
       });
 
@@ -300,11 +302,17 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
         );
 
         if (preflightReply.tool_calling_unsupported) {
-          preflightError = `模型不支援 Tool Calling。請改用支援 Function Calling 的模型（如 GPT-4o、Claude 3.5+、Gemini 1.5 Pro+）。`;
+          preflightError = tr(
+            "模型不支援 Tool Calling。請改用支援 Function Calling 的模型（如 GPT-4o、Claude 3.5+、Gemini 1.5 Pro+）。",
+            "This model does not support tool calling. Please switch to a model that supports function calling (e.g. GPT-4o, Claude 3.5+, Gemini 1.5 Pro+).",
+          );
         } else if (preflightReply.tool_calls.some(tc => tc.tool_name === "call_agent")) {
           preflightPassed = true;
         } else {
-          preflightError = `Orchestrator 回傳了文字而非工具呼叫。此模型可能無法可靠地驅動 Multi-Agent Loop。`;
+          preflightError = tr(
+            "Orchestrator 回傳了文字而非工具呼叫。此模型可能無法可靠地驅動 Multi-Agent Loop。",
+            "The Orchestrator returned text instead of a tool call. This model may not be able to reliably drive a Multi-Agent Loop.",
+          );
         }
       } catch (err) {
         preflightError = err instanceof Error ? err.message : JSON.stringify(err);
@@ -313,7 +321,10 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
       if (!preflightPassed) {
         addTraceBuffered({
           kind: "loop_stopped",
-          text: `✗ 前置測試失敗：${preflightError}\n提示：可在設定中切換 Orchestrator 模型後重試。`,
+          text: tr(
+            `✗ 前置測試失敗：${preflightError}\n提示：可在設定中切換 Orchestrator 模型後重試。`,
+            `✗ Preflight test failed: ${preflightError}\nHint: try switching the Orchestrator model in Settings and retry.`,
+          ),
           isError: true,
         });
         setIsRunning(false);
@@ -323,7 +334,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
       addTraceBuffered({
         kind: "orchestrator_action",
         agentName: config.orchestrator.name,
-        text: "✓ 工具呼叫前置測試通過，開始執行 Loop",
+        text: tr("✓ 工具呼叫前置測試通過，開始執行 Loop", "✓ Tool-calling preflight test passed, starting the loop"),
         iteration: 0,
       });
 
@@ -336,7 +347,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
 
       for (let iter = startIter; iter <= maxLoops; iter++) {
         if (abortRef.current) {
-          addTraceBuffered({ kind: "loop_stopped", text: "⊘ 已被使用者停止", iteration: iter });
+          addTraceBuffered({ kind: "loop_stopped", text: tr("⊘ 已被使用者停止", "⊘ Stopped by user"), iteration: iter });
           saveSnapshot("paused", iter);
           break;
         }
@@ -371,7 +382,10 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
           if (reply.tool_calling_unsupported) {
             addTraceBuffered({
               kind: "loop_error",
-              text: `⚠ Orchestrator 使用的 Provider 不支援 Tool Calling，無法呼叫 Agent。請在設定中改用支援 Function Calling 的模型（如 GPT-4o、Claude、Gemini 1.5 Pro）。`,
+              text: tr(
+                `⚠ Orchestrator 使用的 Provider 不支援 Tool Calling，無法呼叫 Agent。請在設定中改用支援 Function Calling 的模型（如 GPT-4o、Claude、Gemini 1.5 Pro）。`,
+                `⚠ The Orchestrator's provider does not support tool calling, so it cannot call agents. Please switch to a model that supports function calling in Settings (e.g. GPT-4o, Claude, Gemini 1.5 Pro).`,
+              ),
               isError: true,
             });
             abortRef.current = true;
@@ -399,7 +413,10 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
               addTraceBuffered({
                 kind: "orchestrator_action",
                 agentName: config.orchestrator.name,
-                text: `[重試 ${noToolCallRetries}/2] Orchestrator 輸出了文字但未呼叫工具，已注入糾正提示`,
+                text: tr(
+                  `[重試 ${noToolCallRetries}/2] Orchestrator 輸出了文字但未呼叫工具，已注入糾正提示`,
+                  `[Retry ${noToolCallRetries}/2] Orchestrator output text without calling a tool — a correction prompt was injected`,
+                ),
                 iteration: iter,
               });
               continue;
@@ -442,7 +459,10 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
             if (recentCalls.length === REPEAT_LIMIT && recentCalls.every(k => k === callKey)) {
               addTraceBuffered({
                 kind: "loop_stopped",
-                text: `⚠ 偵測到重複迴圈：${args.agent_name} 連續 ${REPEAT_LIMIT} 次接收到完全相同的任務，但沒有實際進展。這通常代表 Sub-agent 模型無法正確呼叫工具（只輸出文字而非執行），請改用支援 Function Calling 的模型（如 GPT-4o、Claude 3.5+、Gemini 1.5 Pro、Qwen2.5-7B-Instruct 等）。`,
+                text: tr(
+                  `⚠ 偵測到重複迴圈：${args.agent_name} 連續 ${REPEAT_LIMIT} 次接收到完全相同的任務，但沒有實際進展。這通常代表 Sub-agent 模型無法正確呼叫工具（只輸出文字而非執行），請改用支援 Function Calling 的模型（如 GPT-4o、Claude 3.5+、Gemini 1.5 Pro、Qwen2.5-7B-Instruct 等）。`,
+                  `⚠ Repetition loop detected: ${args.agent_name} received the exact same task ${REPEAT_LIMIT} times in a row with no actual progress. This usually means the sub-agent's model cannot reliably call tools (it only outputs text instead of executing) — please switch to a model that supports function calling (e.g. GPT-4o, Claude 3.5+, Gemini 1.5 Pro, Qwen2.5-7B-Instruct, etc.).`,
+                ),
                 isError: true,
                 iteration: iter,
               });
@@ -454,7 +474,10 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
             addTraceBuffered({
               kind: "orchestrator_action",
               agentName: config.orchestrator.name,
-              text: `→ 委派給 ${args.agent_name}：${args.task.slice(0, 200)}${args.task.length > 200 ? "..." : ""}`,
+              text: tr(
+                `→ 委派給 ${args.agent_name}：${args.task.slice(0, 200)}${args.task.length > 200 ? "..." : ""}`,
+                `→ Delegated to ${args.agent_name}: ${args.task.slice(0, 200)}${args.task.length > 200 ? "..." : ""}`,
+              ),
               iteration: iter,
             });
             addTraceBuffered({
@@ -523,7 +546,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
         }
 
         if (abortRef.current) {
-          addTraceBuffered({ kind: "loop_stopped", text: "⊘ 已被使用者停止", iteration: iter });
+          addTraceBuffered({ kind: "loop_stopped", text: tr("⊘ 已被使用者停止", "⊘ Stopped by user"), iteration: iter });
           saveSnapshot("paused", iter);
           break;
         }
@@ -557,7 +580,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
           addTraceBuffered({
             kind: "verifier_result",
             agentName: config.verifier.name,
-            text: "⚠ Verifier 回應無法解析，視為未完成",
+            text: tr("⚠ Verifier 回應無法解析，視為未完成", "⚠ Verifier response could not be parsed, treating as not done"),
             verifierDone: false,
             iteration: iter,
             startTimestamp: verifierStartTs,
@@ -585,7 +608,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
         saveSnapshot("running", iter);
 
         if (verifierResult.done) {
-          addTraceBuffered({ kind: "loop_done", text: `✓ 目標達成：${verifierResult.summary}` });
+          addTraceBuffered({ kind: "loop_done", text: tr(`✓ 目標達成：${verifierResult.summary}`, `✓ Goal achieved: ${verifierResult.summary}`) });
           saveSnapshot("completed", iter);
           break;
         }
@@ -608,11 +631,11 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
         orchestratorHistory.push({ role: "user", content: feedbackMsg });
 
         if (iter === maxLoops) {
-          addTraceBuffered({ kind: "loop_stopped", text: `⚠ 已達最大輪數 ${maxLoops}，停止`, iteration: iter });
+          addTraceBuffered({ kind: "loop_stopped", text: tr(`⚠ 已達最大輪數 ${maxLoops}，停止`, `⚠ Reached the max round count of ${maxLoops}, stopping`), iteration: iter });
         }
       }
     } catch (e) {
-      addTraceBuffered({ kind: "loop_error", text: `錯誤：${serializeError(e)}`, isError: true });
+      addTraceBuffered({ kind: "loop_error", text: tr(`錯誤：${serializeError(e)}`, `Error: ${serializeError(e)}`), isError: true });
       saveSnapshot("failed", 0);
     } finally {
       setIsRunning(false);

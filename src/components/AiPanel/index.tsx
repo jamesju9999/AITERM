@@ -10,6 +10,7 @@ import { getSessionCwd, listDirectory } from "../../ipc/fs";
 import { getPtyRecentOutput, writePty } from "../../ipc/pty";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { getMcpTools } from "../../ipc/mcp";
+import { languageDirective } from "../../lib/i18n";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
 import { MessageList } from "./MessageList";
@@ -165,19 +166,19 @@ export function AiPanel({
         .join("\n");
     } catch { /* ignore */ }
 
-    return `你是一個終端機 Agent，可透過 <cmd>...</cmd> 標籤執行 shell 指令，並根據結果迭代完成使用者的目標。
+    return `You are a terminal Agent. You can execute shell commands via <cmd>...</cmd> tags, and iterate based on the results to accomplish the user's goal.
 
-目前工作目錄：${cwd}
-目錄內容（前 60 個項目）：
-${dirList || "（無法取得）"}
+Current working directory: ${cwd}
+Directory contents (first 60 entries):
+${dirList || "(unavailable)"}
 
-規則：
-1. 需要執行指令時，使用 <cmd>shell 指令</cmd>（每次只給一個）。
-2. 系統會自動執行並將結果回傳，請繼續分析直到目標完成。
-3. 目標完成後，用繁體中文給出最終說明，不要再給 <cmd> 標籤。
-4. 不要執行破壞性或不可逆的操作（如 rm -rf /）。
-5. 所有說明使用繁體中文。`;
-  }, [sessionId]);
+Rules:
+1. When you need to run a command, use <cmd>shell command</cmd> (only one at a time).
+2. The system will execute it automatically and return the result — keep analyzing until the goal is achieved.
+3. Once the goal is achieved, give your final explanation in ${languageDirective(locale)}, and do not include any more <cmd> tags.
+4. Never perform destructive or irreversible operations (e.g. rm -rf /).
+5. Write all explanations in ${languageDirective(locale)}.`;
+  }, [sessionId, locale]);
 
   /**
    * Recursive agent loop. Each call:
@@ -193,7 +194,12 @@ ${dirList || "（無法取得）"}
     const maxSteps = maxAgentStepsRef.current;
     if (agentAbortRef.current || step >= maxSteps) {
       if (!agentAbortRef.current) {
-        chat.addMessage({ role: "assistant", content: `（Agent 已達最大步驟數 ${maxSteps}，停止迭代）` });
+        chat.addMessage({
+          role: "assistant",
+          content: locale === "zh-TW"
+            ? `（Agent 已達最大步驟數 ${maxSteps}，停止迭代）`
+            : `(Agent reached the max step count of ${maxSteps} and stopped)`,
+        });
       }
       setAgentRunning(false);
       return;
@@ -242,7 +248,7 @@ ${dirList || "（無法取得）"}
         const output = rawOutput.slice(-2000);
 
         const resultContent =
-          `指令 \`${cmd}\` 執行完成（退出碼 ${block.exitCode ?? 0}）。\n輸出：\n\`\`\`\n${output}\n\`\`\`\n\n請繼續分析。若目標已達成，請給出最終說明（不要再給 <cmd> 標籤）。`;
+          `Command \`${cmd}\` finished (exit code ${block.exitCode ?? 0}).\nOutput:\n\`\`\`\n${output}\n\`\`\`\n\nContinue analyzing. If the goal has been achieved, give your final explanation (do not include any more <cmd> tags).`;
 
         const newHistory = [
           ...history,
@@ -455,8 +461,9 @@ ${dirList || "（無法取得）"}
               // can fire to actually unblock the agent loop.
               writePty(sessionId, "\x03").catch(() => {});
             }}
+            title="停止"
           >
-            ■ 停止
+            ■
           </button>
         </div>
       )}
