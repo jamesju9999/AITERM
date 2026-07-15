@@ -95,7 +95,7 @@ export function TabBar({
 
         <button
           className="aiterm-sidebar-toggle"
-          onClick={() => navigate("/settings")}
+          onClick={() => navigate("/settings", hasUpdate ? { state: { tab: "about" } } : undefined)}
           title={`${t.settings} (Ctrl+,)`}
           style={{ background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px', position: 'relative' }}
         >
@@ -189,7 +189,7 @@ export function TabBar({
       <div className="aiterm-tabbar-footer">
         <div
           className="aiterm-tab"
-          onClick={() => navigate("/settings")}
+          onClick={() => navigate("/settings", hasUpdate ? { state: { tab: "about" } } : undefined)}
           title={`${t.settings} (Ctrl+,)`}
         >
           <span className="aiterm-tab-icon">⚙️</span>
