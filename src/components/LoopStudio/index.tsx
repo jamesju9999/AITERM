@@ -82,7 +82,7 @@ export function LoopStudioView({
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const closeResolveRef = useRef<((canClose: boolean) => void) | null>(null);
 
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const loop = useOrchestratorLoop();
   const timingMode = (localStorage.getItem("loopTimingMode") ?? "compact") as "full" | "compact";
 
@@ -209,10 +209,11 @@ export function LoopStudioView({
       sessionId: ptySessionId,
       projectDir: roster.projectDir || undefined,
       fullAuto: roster.fullAuto ?? false,
+      locale,
     };
 
     void loop.start(config);
-  }, [loop, ptySessionId, roster]);
+  }, [loop, ptySessionId, roster, locale]);
 
   const handlePickFolder = useCallback(async () => {
     const folder = await pickFolder().catch(() => null);
