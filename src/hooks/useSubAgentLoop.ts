@@ -3,6 +3,7 @@ import { readFile, writeTextFile, listDirectory, getSessionCwd } from "../ipc/fs
 import { agentExec } from "../ipc/exec";
 import { classifyCommand, commandWritesOutsideRoot } from "../lib/commandRisk";
 import { isPathInside } from "../lib/pathUtils";
+import { languageDirective, type Locale } from "../lib/i18n";
 
 export function serializeError(e: unknown): string {
   if (typeof e === "string") return e;
@@ -97,13 +98,13 @@ async function executeTool(
       case "write_file": {
         if (!ctx.effectiveRoot) {
           return {
-            result: "錯誤：無法確認專案目錄，為安全起見拒絕寫入。請在 Loop Studio 設定專案目錄。",
+            result: "Error: could not determine the project directory; refusing to write for safety. Please set a project directory in Loop Studio.",
             isError: true,
           };
         }
         if (!isPathInside(args.path, ctx.effectiveRoot)) {
           return {
-            result: `錯誤：不允許寫入專案目錄（${ctx.effectiveRoot}）以外的路徑：${args.path}。請改用專案目錄內的路徑。`,
+            result: `Error: writing outside the project directory (${ctx.effectiveRoot}) is not allowed: ${args.path}. Please use a path inside the project directory instead.`,
             isError: true,
           };
         }
@@ -120,7 +121,7 @@ async function executeTool(
       case "execute_command": {
         if (!ctx.effectiveRoot) {
           return {
-            result: "錯誤：無法確認專案目錄，為安全起見拒絕執行指令。請在 Loop Studio 設定專案目錄。",
+            result: "Error: could not determine the project directory; refusing to execute commands for safety. Please set a project directory in Loop Studio.",
             isError: true,
           };
         }
@@ -128,11 +129,11 @@ async function executeTool(
         const isDangerous = classifyCommand(args.command) === "dangerous" || commandWritesOutsideRoot(args.command, root);
         if (isDangerous) {
           if (!ctx.onConfirmNeeded) {
-            return { result: "錯誤：此指令被判定為危險指令，此執行環境不允許危險指令。", isError: true };
+            return { result: "Error: this command was classified as dangerous, and dangerous commands are not allowed in this execution environment.", isError: true };
           }
           const approved = await ctx.onConfirmNeeded(args.command);
           if (!approved) {
-            return { result: "使用者拒絕執行此指令，請改用其他方式完成任務。", isError: true };
+            return { result: "The user declined to run this command. Please find another way to complete the task.", isError: true };
           }
         }
         const r = await agentExec(args.command, root);
@@ -226,6 +227,7 @@ export interface RunSubAgentOptions {
   maxInnerIterations?: number;
   sharedContext?: string;
   projectDir?: string;
+  locale?: Locale;
 }
 
 export async function runSubAgent(
@@ -234,14 +236,14 @@ export async function runSubAgent(
   task: string,
   options: RunSubAgentOptions = {},
 ): Promise<SubAgentResult> {
-  const { onAction, onConfirmNeeded, maxInnerIterations = 30, sharedContext = "", projectDir } = options;
+  const { onAction, onConfirmNeeded, maxInnerIterations = 30, sharedContext = "", projectDir, locale = "zh-TW" } = options;
 
   const cwd = projectDir
     || await getSessionCwd(sessionId).catch(() => null)
     || null;
 
   const contextSection = sharedContext
-    ? `\n## 先前迭代的累積 Context\n以下是整個任務到目前為止已完成與尚未完成的紀錄，請避免重複已完成的工作：\n${sharedContext}\n`
+    ? `\n## Accumulated Context From Previous Iterations\nBelow is the record of what has and hasn't been completed for this task so far — avoid repeating completed work:\n${sharedContext}\n`
     : "";
 
   const systemPrompt = `${agent.roleDescription}
@@ -249,13 +251,13 @@ export async function runSubAgent(
 Current working directory: ${cwd ?? "(unknown)"}
 All file operations and shell commands MUST be performed under this directory. Use absolute paths when writing files.
 ${contextSection}
-## 指示
-使用可用的工具完成指派的任務。完成後，用繁體中文回報：
-1. 你做了什麼（具體行動）
-2. 結果是什麼（具體產出或發現）
-3. 是否有任何問題或未完成的部分
+## Instructions
+Use the available tools to complete the assigned task. When done, report in ${languageDirective(locale)}:
+1. What you did (concrete actions)
+2. What the result was (concrete output or findings)
+3. Whether there were any issues or incomplete parts
 
-不要重複 Context 中已標記為完成的工作。`;
+Do not repeat work already marked as completed in the Context.`;
 
   const history: ChatMessage[] = [
     { role: "system", content: systemPrompt },
