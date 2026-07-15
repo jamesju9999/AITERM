@@ -2,6 +2,7 @@ import { useState, useCallback, useRef } from "react";
 import { agentChat, type AgentToolDefinition, type ChatMessage } from "../ipc/ai";
 import { runSubAgent, runToolLoop, serializeError, type AgentDefinition, type SubAgentAction } from "./useSubAgentLoop";
 import { loopSessionSave, loopSessionLoad, parseLoopSessionData } from "../ipc/loopSession";
+import { languageDirective, type Locale } from "../lib/i18n";
 
 export interface OrchestratorAgent extends AgentDefinition {
   isOrchestrator?: boolean;
@@ -24,6 +25,8 @@ export interface LoopConfig {
   projectDir?: string;
   /** true = 跳過危險指令確認，全自動執行 */
   fullAuto?: boolean;
+  /** UI locale at the time the loop was started — controls AI-bound prompt language */
+  locale?: Locale;
   loopSessionId?: string;
   resumeSnapshot?: {
     orchestratorHistory: ChatMessage[];
@@ -102,14 +105,14 @@ function buildCallAgentTool(subAgents: OrchestratorAgent[]): AgentToolDefinition
   };
 }
 
-function buildOrchestratorSystemPrompt(config: LoopConfig, sharedContext: string): string {
+function buildOrchestratorSystemPrompt(config: LoopConfig, sharedContext: string, locale: Locale): string {
   const agentDescriptions = config.subAgents.map(a => {
     const toolList = a.tools.length > 0 ? a.tools.join(", ") : "none";
     return `- ${a.name}: ${a.roleDescription} (tools: ${toolList})`;
   }).join("\n");
 
   const contextSection = sharedContext
-    ? `\n## 先前迭代的累積 Context\n${sharedContext}\n`
+    ? `\n## Accumulated Context From Previous Iterations\n${sharedContext}\n`
     : "";
 
   const dirSection = config.projectDir
@@ -127,14 +130,14 @@ ${agentDescriptions}
 ## Instructions
 1. Review the accumulated context above to understand what has already been done and what remains.
 2. Delegate tasks to sub-agents using the call_agent tool. Avoid repeating work already completed.
-3. When all sub-tasks are done, respond with a final summary in Traditional Chinese WITHOUT calling any tools.
-4. Always write your final response in Traditional Chinese (繁體中文).`;
+3. When all sub-tasks are done, respond with a final summary WITHOUT calling any tools.
+4. Always write your final response in ${languageDirective(locale)}.`;
 }
 
-function buildVerifierSystemPrompt(stoppingCondition: string, subAgentNames: string[]): string {
+function buildVerifierSystemPrompt(stoppingCondition: string, subAgentNames: string[], locale: Locale): string {
   const agentList = subAgentNames.length > 0
-    ? subAgentNames.map(n => `"${n}"`).join("、")
-    : "（無可用 agent）";
+    ? subAgentNames.map(n => `"${n}"`).join(", ")
+    : "(no agents available)";
 
   return `You are a Verifier AI. Your job is to objectively evaluate progress toward a goal.
 
@@ -152,32 +155,32 @@ use them to inspect the actual files and verify the Orchestrator's claims.
 Analyze the Orchestrator's report and respond ONLY with a JSON object in this exact format:
 {
   "done": true or false,
-  "summary": "一句話總結目前整體進度",
-  "accomplished": ["具體已完成的事項1", "具體已完成的事項2"],
-  "remaining": ["具體尚未完成的事項1", "具體尚未完成的事項2"],
-  "suggestion": "給 Orchestrator 的具體下一步行動建議，只能使用上方列出的 agent 名稱"
+  "summary": "one-sentence summary of overall progress so far",
+  "accomplished": ["specific completed item 1", "specific completed item 2"],
+  "remaining": ["specific incomplete item 1", "specific incomplete item 2"],
+  "suggestion": "concrete next-step suggestion for the Orchestrator, using only the agent names listed above"
 }
 
 Rules:
 - "accomplished" and "remaining" must be specific and verifiable, not vague
 - "suggestion" MUST only reference agents from the available list above — never invent new agent names
 - If done is true, "remaining" should be empty and "suggestion" can be empty
-- Write all values in Traditional Chinese (繁體中文)
+- Write all values in ${languageDirective(locale)}
 - Do NOT include any text outside the JSON object`;
 }
 
 function buildSharedContextUpdate(iter: number, result: VerifierResult, subAgentSummaries: string[]): string {
-  const lines = [`### 迭代 #${iter} 結果`];
+  const lines = [`### Iteration #${iter} Result`];
   if (subAgentSummaries.length > 0) {
-    lines.push("**Agent 執行摘要：**");
+    lines.push("**Agent Execution Summary:**");
     subAgentSummaries.forEach(s => lines.push(`  - ${s}`));
   }
   if (result.accomplished.length > 0) {
-    lines.push("**已完成：**");
+    lines.push("**Accomplished:**");
     result.accomplished.forEach(a => lines.push(`  ✓ ${a}`));
   }
   if (result.remaining.length > 0) {
-    lines.push("**尚未完成：**");
+    lines.push("**Remaining:**");
     result.remaining.forEach(r => lines.push(`  ✗ ${r}`));
   }
   return lines.join("\n");
@@ -235,6 +238,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
 
   const start = useCallback(async (config: LoopConfig) => {
     abortRef.current = false;
+    const locale: Locale = config.locale ?? "zh-TW";
     const loopSessionId = config.loopSessionId ?? crypto.randomUUID();
 
     const traceBuffer: TraceEntry[] = config.resumeSnapshot?.trace ? [...config.resumeSnapshot.trace] : [];
@@ -255,8 +259,8 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
     let sharedContext = config.resumeSnapshot?.sharedContext ?? "";
 
     const orchestratorHistory: ChatMessage[] = config.resumeSnapshot?.orchestratorHistory ?? [
-      { role: "system", content: buildOrchestratorSystemPrompt(config, sharedContext) },
-      { role: "user", content: `請開始執行目標：${config.goal}` },
+      { role: "system", content: buildOrchestratorSystemPrompt(config, sharedContext, locale) },
+      { role: "user", content: `Begin working toward the goal: ${config.goal}` },
     ];
 
     const saveSnapshot = (status: "running" | "paused" | "completed" | "failed", currentIter: number) => {
@@ -280,8 +284,8 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
 
       const agentNames = config.subAgents.map(a => a.name);
       const preflightMessages: ChatMessage[] = [
-        { role: "system", content: `你是一個 Orchestrator AI。你必須使用 call_agent 工具委派任務。可用的 Agent：${agentNames.join("、")}。` },
-        { role: "user", content: `[前置測試] 請立即呼叫 call_agent 工具，指派任意一個簡單任務給任意一個可用的 Agent。直接呼叫工具，不要輸出任何文字說明。` },
+        { role: "system", content: `You are an Orchestrator AI. You must use the call_agent tool to delegate tasks. Available agents: ${agentNames.join(", ")}.` },
+        { role: "user", content: `[Preflight test] Immediately call the call_agent tool, assigning any simple task to any available agent. Call the tool directly — do not output any explanatory text.` },
       ];
 
       let preflightPassed = false;
@@ -341,7 +345,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
         if (iter > 1 && sharedContext) {
           orchestratorHistory[0] = {
             role: "system",
-            content: buildOrchestratorSystemPrompt(config, sharedContext),
+            content: buildOrchestratorSystemPrompt(config, sharedContext, locale),
           };
         }
 
@@ -382,7 +386,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
             // Inject a correction and retry (up to 2 times per iteration).
             const agentNames = config.subAgents.map(a => a.name);
             const looksLikePlan = agentNames.some(n => responseText.includes(n)) ||
-              /應該|需要|建議|請|call_agent|delegate|assign/i.test(responseText) ||
+              /應該|需要|建議|請|should|need to|will now|let me|plan to|call_agent|delegate|assign/i.test(responseText) ||
               responseText.includes("<tool_call>");
 
             if (looksLikePlan && noToolCallRetries < 2) {
@@ -390,7 +394,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
               orchestratorHistory.push({ role: "assistant", content: responseText });
               orchestratorHistory.push({
                 role: "user",
-                content: `你剛才描述了計畫但沒有呼叫 call_agent 工具。請「立即」使用 call_agent 工具委派任務給 Sub-agent，不要再輸出文字說明。可用的 Agent：${agentNames.join("、")}。`,
+                content: `You just described a plan but did not call the call_agent tool. You MUST immediately use the call_agent tool to delegate a task to a sub-agent — do not output any more explanatory text. Available agents: ${agentNames.join(", ")}.`,
               });
               addTraceBuffered({
                 kind: "orchestrator_action",
@@ -462,8 +466,8 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
 
             let subResult: string;
             if (!targetAgent) {
-              const available = config.subAgents.map(a => `"${a.name}"`).join("、");
-              subResult = `錯誤：Agent "${args.agent_name}" 不存在於 Roster 中。目前可用的 Agent 只有：${available}。請改用其中一個。`;
+              const available = config.subAgents.map(a => `"${a.name}"`).join(", ");
+              subResult = `Error: agent "${args.agent_name}" does not exist in the roster. Available agents: ${available}. Please use one of these instead.`;
               addTraceBuffered({ kind: "sub_agent_done", agentName: args.agent_name, text: subResult, isError: true, iteration: iter });
             } else {
               const confirmFn = config.fullAuto
@@ -480,6 +484,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
                   maxInnerIterations: config.maxInnerIterations,
                   sharedContext,
                   projectDir: config.projectDir,
+                  locale,
                 },
               );
               subResult = result.answer;
@@ -525,13 +530,13 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
 
         // Run Verifier with full context
         const verifierMessages: ChatMessage[] = [
-          { role: "system", content: buildVerifierSystemPrompt(config.stoppingCondition, config.subAgents.map(a => a.name)) },
+          { role: "system", content: buildVerifierSystemPrompt(config.stoppingCondition, config.subAgents.map(a => a.name), locale) },
           {
             role: "user",
             content: [
-              `## 目標\n${config.goal}`,
-              sharedContext ? `## 先前迭代的累積 Context\n${sharedContext}` : "",
-              `## 本輪 Orchestrator 報告（迭代 #${iter}）\n${orchestratorFinalAnswer}`,
+              `## Goal\n${config.goal}`,
+              sharedContext ? `## Accumulated Context From Previous Iterations\n${sharedContext}` : "",
+              `## Orchestrator Report This Round (Iteration #${iter})\n${orchestratorFinalAnswer}`,
             ].filter(Boolean).join("\n\n"),
           },
         ];
@@ -559,7 +564,7 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
           });
           orchestratorHistory.push({
             role: "user",
-            content: "Verifier 無法解析回應，請繼續嘗試達成目標。",
+            content: "The Verifier's response could not be parsed. Please continue trying to achieve the goal.",
           });
           continue;
         }
@@ -587,16 +592,16 @@ export function useOrchestratorLoop(): UseOrchestratorLoopResult {
 
         // Feed structured feedback to orchestrator for next iteration
         const feedbackMsg = [
-          `## Verifier 反饋（迭代 #${iter}）`,
-          `**總結：** ${verifierResult.summary}`,
+          `## Verifier Feedback (Iteration #${iter})`,
+          `**Summary:** ${verifierResult.summary}`,
           verifierResult.accomplished.length > 0
-            ? `**已完成：**\n${verifierResult.accomplished.map(a => `- ${a}`).join("\n")}`
+            ? `**Accomplished:**\n${verifierResult.accomplished.map(a => `- ${a}`).join("\n")}`
             : "",
           verifierResult.remaining.length > 0
-            ? `**尚未完成：**\n${verifierResult.remaining.map(r => `- ${r}`).join("\n")}`
+            ? `**Remaining:**\n${verifierResult.remaining.map(r => `- ${r}`).join("\n")}`
             : "",
           verifierResult.suggestion
-            ? `**下一步建議：** ${verifierResult.suggestion}`
+            ? `**Next-step suggestion:** ${verifierResult.suggestion}`
             : "",
         ].filter(Boolean).join("\n\n");
 
