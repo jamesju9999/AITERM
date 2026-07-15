@@ -200,7 +200,7 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
                   {server.description}
                 </div>
                 <div style={{ color: "#555", fontSize: 11, marginTop: 3 }}>
-                  ↓ {formatDownloads(server.weeklyDownloads)}/週
+                  ↓ {formatDownloads(server.weeklyDownloads)}{t.mcp_marketplace_per_week}
                 </div>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
@@ -249,7 +249,7 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
             disabled={from === 0 || isSearching}
             onClick={() => doSearch(query, Math.max(0, from - PAGE_SIZE))}
           >
-            ← 上一頁
+            {t.mcp_marketplace_prev_page}
           </button>
           <span style={{ fontSize: 12, color: "#666", alignSelf: "center" }}>
             {from + 1}–{Math.min(from + PAGE_SIZE, total)} / {total}
@@ -259,7 +259,7 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
             disabled={from + PAGE_SIZE >= total || isSearching}
             onClick={() => doSearch(query, from + PAGE_SIZE)}
           >
-            下一頁 →
+            {t.mcp_marketplace_next_page}
           </button>
         </div>
       )}
