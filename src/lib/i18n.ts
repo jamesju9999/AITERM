@@ -2,6 +2,10 @@ export type Locale = "zh-TW" | "en";
 
 export const LOCALE_STORAGE_KEY = "aiterm_locale";
 
+export function languageDirective(locale: Locale): string {
+  return locale === "zh-TW" ? "Traditional Chinese (繁體中文)" : "English";
+}
+
 export const translations = {
   "zh-TW": {
     // Settings sidebar
