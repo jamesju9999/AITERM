@@ -16,6 +16,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 import { renderHook, act } from "@testing-library/react";
 import { aiChat } from "../ipc/ai";
 import { useMcpChat } from "./useMcpChat";
+import { LocaleProvider } from "../contexts/LocaleContext";
 
 describe("useMcpChat", () => {
   it("returns content when no tool calls", async () => {
@@ -25,7 +26,7 @@ describe("useMcpChat", () => {
       tool_calling_unsupported: false,
     });
 
-    const { result } = renderHook(() => useMcpChat("session-1"));
+    const { result } = renderHook(() => useMcpChat("session-1"), { wrapper: LocaleProvider });
 
     await act(async () => {
       await result.current.sendMessage("Hi", true);

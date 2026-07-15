@@ -6,6 +6,7 @@ import { executeMcpTool } from "../ipc/mcp";
 import type { ChatMessage } from "../ipc/ai";
 import { buildContentParts, contentToDisplayString } from "../types/attachment";
 import type { Attachment } from "../types/attachment";
+import { useLocale } from "../contexts/LocaleContext";
 
 const MAX_TOOL_ITERATIONS = 10;
 const SESSIONS_STORAGE_KEY = "aiterm-mcp-chat-sessions";
@@ -47,6 +48,7 @@ function formatSessionTitle(messages: McpChatMessage[]): string {
 }
 
 export function useMcpChat(sessionId: string) {
+  const { locale } = useLocale();
   const [messages, setMessages] = useState<McpChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamBuf, setStreamBuf] = useState("");
@@ -139,7 +141,7 @@ export function useMcpChat(sessionId: string) {
 
       while (iterations < MAX_TOOL_ITERATIONS) {
         iterations++;
-        const reply = await aiChat(iterHistory, sessionId, undefined, useMcp);
+        const reply = await aiChat(iterHistory, sessionId, undefined, useMcp, locale);
 
         if (!mountedRef.current) break;
 
@@ -230,7 +232,7 @@ export function useMcpChat(sessionId: string) {
         setStreamBuf("");
       }
     }
-  }, [messages, sessionId]);
+  }, [messages, sessionId, locale]);
 
   const addMessage = useCallback((msg: McpChatMessage) => {
     setMessages(prev => [...prev, msg]);
