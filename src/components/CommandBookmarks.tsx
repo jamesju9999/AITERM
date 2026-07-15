@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useLocale } from "../contexts/LocaleContext";
 import "./CommandBookmarks.css";
 
 export interface CommandBookmark {
@@ -45,6 +46,7 @@ interface CommandBookmarksProps {
 }
 
 export function CommandBookmarksPicker({ onSelect, onClose }: CommandBookmarksProps) {
+  const { t } = useLocale();
   const [bookmarks, setBookmarks] = useState<CommandBookmark[]>([]);
   const [query, setQuery] = useState("");
   const [activeIdx, setActiveIdx] = useState(0);
@@ -98,14 +100,14 @@ export function CommandBookmarksPicker({ onSelect, onClose }: CommandBookmarksPr
     <div className="bookmarks-overlay" onClick={onClose}>
       <div className="bookmarks-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="bookmarks-header">
-          <span className="bookmarks-title">⭐ 指令書籤</span>
+          <span className="bookmarks-title">{t.bookmarks_title}</span>
           <button className="bookmarks-close" onClick={onClose}>✕</button>
         </div>
         <input
           ref={inputRef}
           className="bookmarks-search"
           type="text"
-          placeholder="搜尋書籤..."
+          placeholder={t.bookmarks_search_placeholder}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -114,8 +116,8 @@ export function CommandBookmarksPicker({ onSelect, onClose }: CommandBookmarksPr
           {filtered.length === 0 ? (
             <div className="bookmarks-empty">
               {bookmarks.length === 0
-                ? "尚無書籤。在指令列旁點擊 ⭐ 可加入書籤。"
-                : "找不到符合的書籤。"}
+                ? t.bookmarks_empty
+                : t.bookmarks_no_match}
             </div>
           ) : (
             filtered.map((b, i) => (
@@ -130,7 +132,7 @@ export function CommandBookmarksPicker({ onSelect, onClose }: CommandBookmarksPr
                 <button
                   className="bookmarks-item-delete"
                   onClick={(e) => deleteItem(b.id, e)}
-                  title="刪除書籤"
+                  title={t.bookmarks_delete_tip}
                 >
                   ×
                 </button>
@@ -139,7 +141,7 @@ export function CommandBookmarksPicker({ onSelect, onClose }: CommandBookmarksPr
           )}
         </div>
         <div className="bookmarks-footer">
-          <span>Enter 選擇 · ↑↓ 移動 · Esc 關閉</span>
+          <span>{t.bookmarks_hint}</span>
         </div>
       </div>
     </div>

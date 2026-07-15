@@ -3,6 +3,7 @@ import { TerminalView } from "./TerminalView";
 import { TabBar, type Tab } from "./TabBar";
 import { DatabaseView } from "./DatabaseView";
 import { DesignView } from "./DesignView/DesignView";
+import { NewTabPicker } from "./NewTabPicker";
 import { CrossDbView } from "./CrossDbView";
 import { VcsView } from "./VcsView/VcsView";
 import { DocConverterView } from "./DocConverter/DocConverterView";
@@ -60,7 +61,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
   const [activeId, setActiveId] = useState(tabs[0].id);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [sidebarWidth, setSidebarWidth] = useState(260);
+  const [sidebarWidth, setSidebarWidth] = useState(76);
   const [isDragging, setIsDragging] = useState(false);
 
   // We use refs to avoid binding stale values in keyboard listeners
@@ -267,7 +268,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
   const toggleSidebar = useCallback(() => setIsSidebarOpen(o => !o), []);
 
   return (
-    <div style={{ display: "flex", flexDirection: "row", height: "100vh", backgroundColor: "#0c0c0c" }}>
+    <div style={{ display: "flex", flexDirection: "row", height: "100vh", backgroundColor: "#0c0c0c", position: "relative" }}>
       <div>
         <TabBar
           tabs={tabs}
@@ -279,25 +280,16 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
           isSidebarOpen={isSidebarOpen}
           onToggle={toggleSidebar}
           width={sidebarWidth}
-          pickerOpen={pickerOpen}
-          onPickerSelect={handlePickerSelect}
-          onPickerClose={() => setPickerOpen(false)}
           hasUpdate={hasUpdate}
         />
       </div>
-      {isSidebarOpen && (
-        <div
-          style={{
-            width: "6px",
-            height: "100%",
-            cursor: "col-resize",
-            backgroundColor: isDragging ? "#4caf50" : "transparent",
-            zIndex: 50,
-            transition: "background-color 0.2s"
-          }}
-          onMouseDown={startResizing}
-        />
+      
+      {pickerOpen && (
+        <div className="aiterm-new-tab-picker-popup" style={{ position: 'absolute', left: '80px', bottom: '60px', zIndex: 1000 }}>
+          <NewTabPicker onSelect={handlePickerSelect} onClose={() => setPickerOpen(false)} />
+        </div>
       )}
+      {/* Resizer divider disabled for layout [2] fixed 76px slim sidebar */}
       <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
         {tabs.map((tab) => {
           const isActive = tab.id === activeId;

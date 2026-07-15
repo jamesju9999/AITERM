@@ -177,7 +177,7 @@ export function GeneralPage() {
         <h3 style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {t.execution_mode}
           {policyControlled.execution_mode && (
-            <span style={{ fontSize: 11, color: "#888", fontWeight: 400 }}>由管理者設定</span>
+            <span style={{ fontSize: 11, color: "#888", fontWeight: 400 }}>{t.managed_by_admin}</span>
           )}
         </h3>
         <p className="section-desc">{t.execution_mode_desc}</p>
@@ -205,7 +205,7 @@ export function GeneralPage() {
         <h3 style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {t.agent_max_steps}
           {policyControlled.max_agent_steps && (
-            <span style={{ fontSize: 11, color: "#888", fontWeight: 400 }}>由管理者設定</span>
+            <span style={{ fontSize: 11, color: "#888", fontWeight: 400 }}>{t.managed_by_admin}</span>
           )}
         </h3>
         <p className="section-desc">{t.agent_max_steps_desc}</p>
@@ -256,7 +256,7 @@ export function GeneralPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
           <div>
             <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", color: "#aaa" }}>
-              主題
+              {t.settings_theme}
             </label>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
               {THEMES.map((theme) => (
@@ -376,12 +376,12 @@ export function GeneralPage() {
       </section>
 
       <section className="settings-section">
-        <h3>Loop Studio 執行時間顯示</h3>
-        <p className="section-desc">控制執行記錄中時間 badge 的顯示密度</p>
+        <h3>{t.loop_timing_label}</h3>
+        <p className="section-desc">{t.loop_timing_desc}</p>
         <div className="mode-list">
           {([
-            { value: "compact" as const, label: "精簡版（預設）", desc: "僅主要區塊顯示時間（Iteration、Agent 開始/完成、Verifier）" },
-            { value: "full"    as const, label: "完整版",         desc: "每一行都顯示開始時間戳，包含工具呼叫" },
+            { value: "compact" as const, label: t.loop_timing_compact_label, desc: t.loop_timing_compact_desc },
+            { value: "full"    as const, label: t.loop_timing_full_label, desc: t.loop_timing_full_desc },
           ]).map((opt) => (
             <label key={opt.value} className="mode-option">
               <input

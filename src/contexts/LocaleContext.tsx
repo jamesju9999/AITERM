@@ -29,6 +29,14 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
 
 export function useLocale(): LocaleContextValue {
   const ctx = useContext(LocaleContext);
-  if (!ctx) throw new Error("useLocale must be used within LocaleProvider");
+  if (!ctx) {
+    const stored = localStorage.getItem(LOCALE_STORAGE_KEY);
+    const locale: Locale = stored === "en" ? "en" : "zh-TW";
+    return {
+      locale,
+      t: translations[locale],
+      setLocale: () => {},
+    };
+  }
   return ctx;
 }

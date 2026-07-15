@@ -3,6 +3,7 @@ import { dbConnect, dbListConnections, dbListSchemas, dbListTables, type DbConne
 import { CrossDbAiChat } from "./CrossDbAiChat";
 import { CrossDbSqlEditor } from "./CrossDbSqlEditor";
 import { useTelegramRemoteControl } from "../../hooks/useTelegramRemoteControl";
+import { useLocale } from "../../contexts/LocaleContext";
 import "./CrossDbView.css";
 
 export interface CrossDbViewProps {
@@ -21,6 +22,7 @@ export interface ConnectedDb {
 type SubTab = "ai" | "sql";
 
 export function CrossDbView({ isActive }: CrossDbViewProps) {
+  const { t } = useLocale();
   const [allConnections, setAllConnections] = useState<DbConnectionInfo[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [connectedDbs, setConnectedDbs] = useState<ConnectedDb[]>([]);
@@ -86,12 +88,12 @@ export function CrossDbView({ isActive }: CrossDbViewProps) {
       <div className="crossdb-view">
         <div className="crossdb-selector">
           <div className="crossdb-selector__header">
-            <h3>🔗 跨資料庫查詢</h3>
-            <p>選擇要參與查詢的資料庫連線，AI 將能跨庫分析與比對資料。</p>
+            <h3>{t.cdb_welcome_title}</h3>
+            <p>{t.cdb_welcome_desc}</p>
           </div>
           {allConnections.length === 0 ? (
             <div className="crossdb-selector__empty">
-              尚無資料庫連線。請先至設定頁面新增連線。
+              {t.cdb_welcome_empty}
             </div>
           ) : (
             <div className="crossdb-selector__list">
@@ -114,7 +116,7 @@ export function CrossDbView({ isActive }: CrossDbViewProps) {
             disabled={selectedIds.size < 1 || loading}
             onClick={startSession}
           >
-            {loading ? "連線中..." : `開始對話 (${selectedIds.size} 個資料庫)`}
+            {loading ? t.cdb_btn_connect : t.cdb_btn_start(selectedIds.size)}
           </button>
         </div>
       </div>
@@ -128,19 +130,19 @@ export function CrossDbView({ isActive }: CrossDbViewProps) {
           className={`crossdb-subtab ${subTab === "ai" ? "crossdb-subtab--active" : ""}`}
           onClick={() => setSubTab("ai")}
         >
-          AI Chat
+          {t.db_subtab_ai}
         </button>
         <button
           className={`crossdb-subtab ${subTab === "sql" ? "crossdb-subtab--active" : ""}`}
           onClick={() => setSubTab("sql")}
         >
-          SQL Editor
+          {t.db_subtab_sql}
         </button>
         <button
           className={`crossdb-subtab ${isRemoteEnabled ? "crossdb-subtab--active" : ""}`}
           style={{ marginLeft: 8 }}
           onClick={() => setIsRemoteEnabled(!isRemoteEnabled)}
-          title="啟用/停用 Telegram 遠端控制"
+          title={t.db_remote_tooltip}
         >
           📱 Remote
         </button>
@@ -156,7 +158,7 @@ export function CrossDbView({ isActive }: CrossDbViewProps) {
           style={{ marginLeft: "auto" }}
           onClick={() => { setStarted(false); setConnectedDbs([]); }}
         >
-          ← 重新選擇
+          {t.cdb_btn_reselect}
         </button>
       </div>
       <div className="crossdb-content">
@@ -170,3 +172,4 @@ export function CrossDbView({ isActive }: CrossDbViewProps) {
     </div>
   );
 }
+

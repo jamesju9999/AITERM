@@ -1,23 +1,32 @@
 .aiterm-tabbar {
   display: flex;
   flex-direction: column;
-  width: 260px;
+  width: 76px !important;
   height: 100vh;
-  background: #151515;
-  border-right: 1px solid #2a2a2a;
+  background: var(--bg-secondary, #111);
+  border-right: 1px solid var(--border-color, #222);
   user-select: none;
-  padding: 12px 8px;
-  gap: 8px;
+  padding: 16px 8px;
+  gap: 16px;
   box-sizing: border-box;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  transition: var(--transition-smooth);
 }
 
 .aiterm-tabbar-tabs {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  gap: 6px;
+  gap: 10px;
   flex: 1;
   overflow-y: auto;
+  padding-right: 2px;
+  margin-top: 8px;
+}
+
+/* Hide scrollbar in the slim sidebar */
+.aiterm-tabbar-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 /* Let the empty area be draggable for Tauri */
@@ -28,115 +37,170 @@
 
 .aiterm-tab {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  height: 34px;
+  justify-content: center;
+  height: 56px;
   width: 100%;
-  padding: 0 10px;
+  padding: 6px 4px;
   background: transparent;
-  border-radius: 6px;
-  color: #888;
-  font-size: 13px;
+  border-radius: 10px;
+  color: var(--text-secondary, #aaa);
   cursor: default;
-  transition: all 0.2s ease;
+  transition: var(--transition-smooth);
   -webkit-app-region: no-drag;
   position: relative;
   box-sizing: border-box;
+  border: 1px solid transparent;
+  gap: 4px;
 }
 
 .aiterm-tab:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: #ccc;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary, #fff);
 }
 
 .aiterm-tab.active {
-  background: #2a2b30;
+  background: var(--accent-dim, rgba(168, 85, 247, 0.12));
+  border-color: rgba(168, 85, 247, 0.25);
   color: #fff;
-  font-weight: 500;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 12px rgba(168, 85, 247, 0.15), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+/* glowing cyan border outline for the active tab */
+.aiterm-tab.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  background: var(--accent-gradient, var(--accent, #a855f7));
+  border-radius: 4px;
+  box-shadow: 0 0 8px var(--accent-glow, rgba(168, 85, 247, 0.4));
+}
+
+.aiterm-tab-icon {
+  font-size: 18px;
+  line-height: 1;
+  transition: var(--transition-smooth);
+}
+
+.aiterm-tab:hover .aiterm-tab-icon {
+  transform: scale(1.05);
 }
 
 .aiterm-tab-title {
-  flex: 1;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted, #666);
+  text-align: center;
+  width: 100%;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.aiterm-tab.active .aiterm-tab-title {
+  color: #fff;
+  font-weight: 600;
 }
 
 .aiterm-tab-close {
-  background: transparent;
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: none;
+  background: rgba(0, 0, 0, 0.4);
   border: none;
-  color: #888;
-  font-size: 14px;
-  width: 20px;
-  height: 20px;
-  display: flex;
+  color: var(--text-muted, #666);
+  font-size: 10px;
+  width: 14px;
+  height: 14px;
   align-items: center;
   justify-content: center;
   border-radius: 4px;
   cursor: pointer;
-  margin-left: 4px;
   padding: 0;
+  transition: var(--transition-smooth);
+}
+
+.aiterm-tab:hover .aiterm-tab-close {
+  display: flex;
 }
 
 .aiterm-tab-close:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  background: rgba(255, 60, 60, 0.2);
+  color: var(--error, #ef4444);
 }
 
-.aiterm-tabbar-header {
+/* Custom Add Tab block matching mockup layout */
+.aiterm-tab-add-block {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 4px;
-  margin-bottom: 4px;
-  color: #888;
-  font-size: 11px;
-  text-transform: uppercase;
-  font-weight: bold;
-  letter-spacing: 0.5px;
-}
-
-.aiterm-tab-add {
-  background: transparent;
-  border: none;
-  color: #888;
-  font-size: 16px;
-  width: 24px;
-  height: 24px;
-  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  border-radius: 4px;
+  height: 56px;
+  width: 100%;
+  background: transparent;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  color: var(--text-muted, #666);
   cursor: pointer;
+  transition: var(--transition-smooth);
+  gap: 2px;
   -webkit-app-region: no-drag;
 }
 
-.aiterm-tab-add:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+.aiterm-tab-add-block:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim, rgba(168, 85, 247, 0.05));
+  transform: translateY(-1px);
 }
 
 .aiterm-tab-rename-input {
-  flex: 1;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid #4caf50;
+  width: 90%;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--accent, #a855f7);
   border-radius: 4px;
   color: #fff;
-  font-size: 13px;
-  padding: 2px 6px;
+  font-size: 9px;
+  padding: 1px 2px;
   outline: none;
-  min-width: 0;
+  text-align: center;
 }
 
-/* Update available badge — orange dot on the ⚙ icon */
+.aiterm-tabbar-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--border-color, #222);
+  padding-top: 14px;
+  margin-top: auto;
+}
+
+/* Update available badge — orange dot on settings */
 .update-badge {
   position: absolute;
-  top: -3px;
-  right: -4px;
+  top: -2px;
+  right: -2px;
   width: 8px;
   height: 8px;
   background: #f97316;
   border-radius: 50%;
-  border: 1.5px solid #151515;
+  border: 1.5px solid var(--bg-secondary, #151515);
   pointer-events: none;
+  box-shadow: 0 0 6px rgba(249, 115, 22, 0.5);
+}
+
+/* Prevent popup menu from clipping off-screen bottom */
+.aiterm-new-tab-picker-popup .new-tab-picker {
+  position: relative !important;
+  top: auto !important;
+  left: auto !important;
+  box-shadow: var(--shadow-premium) !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  background: var(--bg-secondary, #1a1a1a) !important;
 }

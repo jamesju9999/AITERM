@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { dbListTables, dbGetTableSchema, dbPreviewTable, type TableInfo, type ColumnInfo, type QueryResult } from "../../ipc/db";
+import { useLocale } from "../../contexts/LocaleContext";
 
 interface Props {
   connectionId: string;
@@ -10,6 +11,7 @@ interface Props {
 type ViewMode = "data" | "structure";
 
 export function DatabaseBrowser({ connectionId, schema }: Props) {
+  const { t } = useLocale();
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("data");
@@ -108,20 +110,20 @@ export function DatabaseBrowser({ connectionId, schema }: Props) {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         {selectedTable && (
           <div style={{ background: "#111", borderBottom: "1px solid #1e1e1e", padding: "6px 12px", display: "flex", gap: 0, alignItems: "center" }}>
-            <button onClick={() => switchMode("data")} style={{ ...modeBtn, ...(viewMode === "data" ? modeBtnActive : {}) }}>資料</button>
-            <button onClick={() => switchMode("structure")} style={{ ...modeBtn, ...(viewMode === "structure" ? modeBtnActive : {}) }}>結構</button>
+            <button onClick={() => switchMode("data")} style={{ ...modeBtn, ...(viewMode === "data" ? modeBtnActive : {}) }}>{t.db_browser_mode_data}</button>
+            <button onClick={() => switchMode("structure")} style={{ ...modeBtn, ...(viewMode === "structure" ? modeBtnActive : {}) }}>{t.db_browser_mode_structure}</button>
             <span style={{ color: "#555", fontSize: 11, marginLeft: "auto" }}>{selectedTable}</span>
           </div>
         )}
 
-        {loading && <div style={{ padding: 16, color: "#888", fontSize: 12 }}>載入中...</div>}
+        {loading && <div style={{ padding: 16, color: "#888", fontSize: 12 }}>{t.db_loading}</div>}
 
         {!loading && error && (
-          <div style={{ padding: 16, color: "#f87171", fontSize: 12 }}>錯誤：{error}</div>
+          <div style={{ padding: 16, color: "#f87171", fontSize: 12 }}>{t.db_error_prefix}{error}</div>
         )}
 
         {!loading && !selectedTable && (
-          <div style={{ padding: 24, color: "#555", fontSize: 13 }}>← 從左側選擇資料表</div>
+          <div style={{ padding: 24, color: "#555", fontSize: 13 }}>{t.db_select_table_hint}</div>
         )}
 
         {!loading && selectedTable && viewMode === "data" && queryResult && (
@@ -137,8 +139,9 @@ export function DatabaseBrowser({ connectionId, schema }: Props) {
 }
 
 function DataGrid({ result, page, pageSize, onPageChange }: { result: QueryResult; page: number; pageSize: number; onPageChange: (p: number) => void }) {
+  const { t } = useLocale();
   if (result.error) {
-    return <div style={{ padding: 16, color: "#f87171", fontSize: 12 }}>錯誤：{result.error}</div>;
+    return <div style={{ padding: 16, color: "#f87171", fontSize: 12 }}>{t.db_error_prefix}{result.error}</div>;
   }
   return (
     <div style={{ flex: 1, overflow: "auto" }}>
@@ -165,23 +168,24 @@ function DataGrid({ result, page, pageSize, onPageChange }: { result: QueryResul
         </tbody>
       </table>
       <div style={{ padding: "8px 12px", display: "flex", gap: 8, alignItems: "center", borderTop: "1px solid #1e1e1e", fontSize: 11, color: "#888" }}>
-        <span>{result.rows.length} 列 · {result.execution_time_ms}ms</span>
+        <span>{result.rows.length} {t.db_rows} · {result.execution_time_ms}ms</span>
         <div style={{ flex: 1 }} />
-        {page > 0 && <button onClick={() => onPageChange(page - 1)} style={pageBtn}>← 上一頁</button>}
-        <span>第 {page + 1} 頁</span>
-        {result.rows.length === pageSize && <button onClick={() => onPageChange(page + 1)} style={pageBtn}>下一頁 →</button>}
+        {page > 0 && <button onClick={() => onPageChange(page - 1)} style={pageBtn}>{t.db_prev_page}</button>}
+        <span>{t.db_page_n(page + 1)}</span>
+        {result.rows.length === pageSize && <button onClick={() => onPageChange(page + 1)} style={pageBtn}>{t.db_next_page}</button>}
       </div>
     </div>
   );
 }
 
 function StructureView({ columns }: { columns: ColumnInfo[] }) {
+  const { t } = useLocale();
   return (
     <div style={{ flex: 1, overflow: "auto" }}>
       <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12 }}>
         <thead>
           <tr style={{ background: "#151515" }}>
-            {["欄位名稱", "類型", "可為 NULL", "預設值"].map((h) => (
+            {[t.db_structure_col_name, t.db_structure_col_type, t.db_structure_col_nullable, t.db_structure_col_default].map((h) => (
               <th key={h} style={{ padding: "6px 10px", textAlign: "left", color: "#888", borderBottom: "1px solid #222", fontWeight: "normal" }}>{h}</th>
             ))}
           </tr>
@@ -204,3 +208,4 @@ function StructureView({ columns }: { columns: ColumnInfo[] }) {
 const modeBtn: CSSProperties = { background: "transparent", border: "none", color: "#888", fontSize: 12, padding: "4px 12px", cursor: "pointer" };
 const modeBtnActive: CSSProperties = { color: "#34d399", borderBottom: "2px solid #34d399" };
 const pageBtn: CSSProperties = { background: "#1a1a1a", border: "1px solid #2a2a2a", color: "#888", fontSize: 11, padding: "2px 10px", borderRadius: 3, cursor: "pointer" };
+

@@ -15,72 +15,6 @@ interface AgentPreset {
   tools: AgentToolName[];
 }
 
-const AGENT_PRESETS: AgentPreset[] = [
-  {
-    label: "程式碼工程師",
-    emoji: "💻",
-    name: "Coder",
-    roleDescription: "你是一位資深全端工程師，負責根據需求撰寫、修改程式碼。優先考慮程式碼品質、可讀性與維護性。完成後回報修改的檔案與摘要。",
-    tools: ["read_file", "write_file", "list_directory", "execute_command"],
-  },
-  {
-    label: "測試工程師",
-    emoji: "🧪",
-    name: "Tester",
-    roleDescription: "你是一位測試工程師，負責撰寫單元測試與整合測試，並執行測試套件以確保程式碼品質。回報測試結果與覆蓋率摘要。",
-    tools: ["read_file", "write_file", "execute_command"],
-  },
-  {
-    label: "程式碼審查員",
-    emoji: "🔍",
-    name: "Reviewer",
-    roleDescription: "你是一位資深工程師，負責審查程式碼品質，找出潛在 bug、安全漏洞與效能問題，並給出具體且可執行的改善建議。",
-    tools: ["read_file", "list_directory"],
-  },
-  {
-    label: "研究分析師",
-    emoji: "📊",
-    name: "Researcher",
-    roleDescription: "你是一位研究分析師，負責閱讀並分析程式碼庫、文件與設定檔，整理出有條理的報告與發現，供其他 agent 參考使用。",
-    tools: ["read_file", "list_directory"],
-  },
-  {
-    label: "DevOps 工程師",
-    emoji: "⚙️",
-    name: "DevOps",
-    roleDescription: "你是一位 DevOps 工程師，負責執行建置、測試、部署相關的 shell 指令，解讀輸出結果，並回報執行狀態與任何錯誤。",
-    tools: ["execute_command", "read_file", "write_file"],
-  },
-  {
-    label: "文件撰寫員",
-    emoji: "📝",
-    name: "DocWriter",
-    roleDescription: "你是一位技術文件撰寫員，負責根據程式碼產生清晰的 API 文件、README、使用說明與架構說明，使用繁體中文撰寫。",
-    tools: ["read_file", "write_file", "list_directory"],
-  },
-  {
-    label: "重構專家",
-    emoji: "🔧",
-    name: "Refactorer",
-    roleDescription: "你是一位重構專家，負責改善現有程式碼的結構、消除重複邏輯、提升可讀性，同時確保功能不變。每次修改後執行測試驗證。",
-    tools: ["read_file", "write_file", "list_directory", "execute_command"],
-  },
-  {
-    label: "安全審計員",
-    emoji: "🛡️",
-    name: "SecurityAuditor",
-    roleDescription: "你是一位資安工程師，負責審查程式碼中的 OWASP Top 10 漏洞、硬編碼金鑰、注入風險與不安全的依賴套件，並給出修復建議。",
-    tools: ["read_file", "list_directory"],
-  },
-  {
-    label: "架構師",
-    emoji: "🏛️",
-    name: "Architect",
-    roleDescription: "你是一位資深軟體架構師，負責分析現有程式碼庫的架構，評估模組邊界、依賴關係與設計模式，提出可落地的架構改善方案、介面定義與重構路線圖，並考量可擴展性、可維護性與跨平台相容性。回報時需包含具體的架構圖描述（文字形式）與優先順序建議。",
-    tools: ["read_file", "list_directory"],
-  },
-];
-
 interface AgentRosterProps {
   agents: OrchestratorAgent[];
   providers: ProviderInfo[];
@@ -89,6 +23,73 @@ interface AgentRosterProps {
 
 export function AgentRoster({ agents, providers, onChange }: AgentRosterProps) {
   const { t } = useLocale();
+
+  const AGENT_PRESETS: AgentPreset[] = [
+    {
+      label: t.ls_preset_coder,
+      emoji: "💻",
+      name: "Coder",
+      roleDescription: t.ls_preset_coder_desc,
+      tools: ["read_file", "write_file", "list_directory", "execute_command"],
+    },
+    {
+      label: t.ls_preset_tester,
+      emoji: "🧪",
+      name: "Tester",
+      roleDescription: t.ls_preset_tester_desc,
+      tools: ["read_file", "write_file", "execute_command"],
+    },
+    {
+      label: t.ls_preset_reviewer,
+      emoji: "🔍",
+      name: "Reviewer",
+      roleDescription: t.ls_preset_reviewer_desc,
+      tools: ["read_file", "list_directory"],
+    },
+    {
+      label: t.ls_preset_researcher,
+      emoji: "📊",
+      name: "Researcher",
+      roleDescription: t.ls_preset_researcher_desc,
+      tools: ["read_file", "list_directory"],
+    },
+    {
+      label: t.ls_preset_devops,
+      emoji: "⚙️",
+      name: "DevOps",
+      roleDescription: t.ls_preset_devops_desc,
+      tools: ["execute_command", "read_file", "write_file"],
+    },
+    {
+      label: t.ls_preset_docs,
+      emoji: "📝",
+      name: "DocWriter",
+      roleDescription: t.ls_preset_docs_desc,
+      tools: ["read_file", "write_file", "list_directory"],
+    },
+    {
+      label: t.ls_preset_refactorer,
+      emoji: "🔧",
+      name: "Refactorer",
+      roleDescription: t.ls_preset_refactorer_desc,
+      tools: ["read_file", "write_file", "list_directory", "execute_command"],
+    },
+    {
+      label: t.ls_preset_security,
+      emoji: "🛡️",
+      name: "SecurityAuditor",
+      roleDescription: t.ls_preset_security_desc,
+      tools: ["read_file", "list_directory"],
+    },
+    {
+      label: t.ls_preset_architect,
+      emoji: "🏛️",
+      name: "Architect",
+      roleDescription: t.ls_preset_architect_desc,
+      tools: ["read_file", "list_directory"],
+    },
+  ];
+
   const TOOL_LABELS: Record<AgentToolName, string> = {
     read_file: t.ls_tool_read_file,
     write_file: t.ls_tool_write_file,
@@ -120,11 +121,11 @@ export function AgentRoster({ agents, providers, onChange }: AgentRosterProps) {
         [
           {
             role: "system",
-            content: "你是一位 AI 系統設計師，專門為 AI Agent 撰寫角色描述。根據角色名稱，產生清晰、具體、可執行的角色描述，說明核心職責、工作方式與產出格式。約 2-3 句話，使用繁體中文。只輸出角色描述，不加任何前言或說明。",
+            content: t.ls_role_generator_system,
           },
           {
             role: "user",
-            content: `角色名稱：${agent.name}\n請為這個角色產生描述。`,
+            content: t.ls_role_generator_user(agent.name),
           },
         ],
         "roster-agent-gen",
@@ -139,7 +140,7 @@ export function AgentRoster({ agents, providers, onChange }: AgentRosterProps) {
     } finally {
       setGeneratingIdx(null);
     }
-  }, [agents, providers, onChange]);
+  }, [agents, providers, onChange, t]);
 
   useEffect(() => {
     if (!pickerOpen) return;

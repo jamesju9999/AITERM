@@ -65,7 +65,7 @@ export function SessionPicker({ onResume, isRunning }: SessionPickerProps) {
         onClick={() => { setOpen(o => !o); setConfirmClear(false); }}
         disabled={isRunning || sessions.length === 0}
       >
-        📋 過去的 Sessions {sessions.length > 0 ? `(${sessions.length})` : ""}
+        {t.ls_sessions_title(sessions.length)}
         <span className="ls-session-chevron">{open ? "▲" : "▼"}</span>
       </button>
 

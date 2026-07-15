@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listDirectory, getSessionCwd, type DirEntry } from "../../ipc/fs";
 import { FileViewer } from "./FileViewer";
+import { useLocale } from "../../contexts/LocaleContext";
 import "./FileExplorer.css";
 
 interface FileExplorerProps {
@@ -29,6 +30,7 @@ function getFileIcon(entry: DirEntry): string {
 }
 
 export function FileExplorer({ sessionId }: FileExplorerProps) {
+  const { t } = useLocale();
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [cwd, setCwd] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -172,10 +174,10 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
     <div className="file-explorer">
       {/* Toolbar */}
       <div className="fe-toolbar">
-        <button className="fe-btn" onClick={goUp} title="上一層" disabled={atRoot}>
+        <button className="fe-btn" onClick={goUp} title={t.file_go_up} disabled={atRoot}>
           ↑
         </button>
-        <button className="fe-btn" onClick={() => loadDir(cwd)} title="重新整理">
+        <button className="fe-btn" onClick={() => loadDir(cwd)} title={t.file_refresh}>
           ↻
         </button>
         <div className="fe-breadcrumb">
@@ -207,7 +209,7 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
         <button
           className={`fe-btn fe-btn--dot ${showDotfiles ? "fe-btn--active" : ""}`}
           onClick={() => setShowDotfiles(p => !p)}
-          title="顯示/隱藏隱藏檔案"
+          title={t.file_toggle_dotfiles}
         >
           .
         </button>
@@ -218,10 +220,10 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
         {/* Left: file tree */}
         <div className="fe-left">
           <div className="fe-body">
-            {loading && <div className="fe-status">載入中…</div>}
+            {loading && <div className="fe-status">{t.file_loading}</div>}
             {error && <div className="fe-status fe-status--error">{error}</div>}
             {!loading && !error && entries.length === 0 && (
-              <div className="fe-status">（空目錄）</div>
+              <div className="fe-status">{t.file_empty_dir}</div>
             )}
             {!loading && !error && renderEntries(entries)}
           </div>

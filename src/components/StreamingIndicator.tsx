@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useLocale } from '../contexts/LocaleContext';
 import "./StreamingIndicator.css";
 
 interface StreamingIndicatorProps {
@@ -26,6 +27,7 @@ function extractPartialExplanation(raw: string): string | null {
 }
 
 export function StreamingIndicator({ text, visible }: StreamingIndicatorProps) {
+  const { t } = useLocale();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -40,9 +42,9 @@ export function StreamingIndicator({ text, visible }: StreamingIndicatorProps) {
 
   return (
     <div className="aiterm-streaming">
-      <div className="aiterm-streaming__label">AI 生成指令中…</div>
+      <div className="aiterm-streaming__label">{t.streaming_generating}</div>
       <div ref={scrollRef} className="aiterm-streaming__text">
-        {explanation ?? "思考中…"}
+        {explanation ?? t.streaming_thinking}
         <span className="aiterm-streaming__cursor" />
       </div>
     </div>

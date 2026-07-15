@@ -1,7 +1,17 @@
 import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { NewTabPicker } from "../NewTabPicker";
 import { useLocale } from "../../contexts/LocaleContext";
+import appIcon from "../../assets/icon.png";
+import {
+  TerminalIcon,
+  DatabaseIcon,
+  PaintbrushIcon,
+  LinkIcon,
+  LeafIcon,
+  FileTextIcon,
+  BookOpenIcon,
+  RefreshIcon
+} from "../Icons";
 import "./index.css";
 
 export type TabType = "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio";
@@ -35,7 +45,35 @@ export interface TabBarProps {
   hasUpdate?: boolean;
 }
 
-export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isSidebarOpen, onToggle, width, pickerOpen, onPickerSelect, onPickerClose, hasUpdate = false }: TabBarProps) {
+function getTabIcon(type: TabType): React.ReactNode {
+  switch (type) {
+    case "terminal": return <TerminalIcon size={18} />;
+    case "database": return <DatabaseIcon size={18} />;
+    case "design": return <PaintbrushIcon size={18} />;
+    case "cross-db": return <LinkIcon size={18} />;
+    case "vcs": return <LeafIcon size={18} />;
+    case "doc-converter": return <FileTextIcon size={18} />;
+    case "api-docs": return <BookOpenIcon size={18} />;
+    case "loop-studio": return <RefreshIcon size={18} />;
+    default: return <FileTextIcon size={18} />;
+  }
+}
+
+export function TabBar({
+  tabs,
+  activeId,
+  onSelect,
+  onClose,
+  onAdd,
+  onRename,
+  isSidebarOpen,
+  onToggle,
+  width,
+  pickerOpen,
+  onPickerSelect,
+  onPickerClose,
+  hasUpdate = false
+}: TabBarProps) {
   const navigate = useNavigate();
   const { t } = useLocale();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -50,8 +88,8 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isS
 
   if (!isSidebarOpen) {
     return (
-      <div className="aiterm-tabbar aiterm-tabbar--collapsed" data-tauri-drag-region style={{ width: '48px', padding: '12px 0', alignItems: 'center', justifyContent: "space-between" }}>
-        <button className="aiterm-sidebar-toggle" onClick={onToggle} title="Open Sidebar (Ctrl+B)" style={{ background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px' }}>
+      <div className="aiterm-tabbar aiterm-tabbar--collapsed" data-tauri-drag-region style={{ width: '48px', padding: '16px 0', alignItems: 'center', justifyContent: "space-between" }}>
+        <button className="aiterm-sidebar-toggle" onClick={onToggle} title={t.tabbar_sidebar_expand} style={{ background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px' }}>
           ◨
         </button>
 
@@ -70,18 +108,27 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isS
 
   return (
     <div className="aiterm-tabbar" data-tauri-drag-region style={{ width: `${width}px` }}>
-      <div className="aiterm-tabbar-header" data-tauri-drag-region style={{ position: "relative" }}>
-        <button className="aiterm-sidebar-toggle" onClick={onToggle} title="Close Sidebar (Ctrl+B)" style={{ background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px', padding: 0 }}>
-          ◧
+      {/* Top spacing and Logo */}
+      <div className="aiterm-sidebar-header-wrapper" style={{ marginTop: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+        <div className="aiterm-sidebar-logo">
+          <img
+            src={appIcon}
+            alt="AITerm"
+            style={{
+              width: '38px',
+              height: '38px',
+              borderRadius: '12px',
+              boxShadow: '0 0 12px var(--accent-glow)',
+              display: 'block',
+            }}
+          />
+        </div>
+        <button className="aiterm-sidebar-toggle" onClick={onToggle} title="Close Sidebar (Ctrl+B)" style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px', padding: 0 }}>
+          ◧ Collapse
         </button>
-        <span style={{ fontSize: "11px", fontWeight: "bold", color: "#888", letterSpacing: "1px", marginLeft: "4px" }}>AITerm Tabs</span>
-        <button className="aiterm-tab-add" onClick={onAdd} title="New Tab (Ctrl+T)">
-          +
-        </button>
-        {pickerOpen && onPickerSelect && onPickerClose && (
-          <NewTabPicker onSelect={onPickerSelect} onClose={onPickerClose} />
-        )}
       </div>
+
+      {/* Tabs list */}
       <div className="aiterm-tabbar-tabs" data-tauri-drag-region>
         {tabs.map((tab, idx) => (
           <div
@@ -89,8 +136,10 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isS
             className={`aiterm-tab ${tab.id === activeId ? "active" : ""}`}
             onClick={() => onSelect(tab.id)}
             onDoubleClick={() => setEditingId(tab.id)}
-            title={`Switch to Tab (Ctrl+${idx + 1}) — 雙擊重新命名`}
+            title={`Switch to Tab (Ctrl+${idx + 1}) — Double click to rename`}
           >
+            <span className="aiterm-tab-icon">{getTabIcon(tab.type)}</span>
+            
             {editingId === tab.id ? (
               <input
                 ref={editInputRef}
@@ -115,6 +164,7 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isS
             ) : (
               <span className="aiterm-tab-title">{tab.title}</span>
             )}
+            
             <button
               className="aiterm-tab-close"
               onClick={(e) => {
@@ -127,20 +177,23 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onRename, isS
             </button>
           </div>
         ))}
+        
+        {/* Add Tab Button */}
+        <button className="aiterm-tab-add-block" onClick={onAdd} title="New Tab (Ctrl+T)">
+          <span style={{ fontSize: '18px' }}>+</span>
+          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 600 }}>Add Tab</span>
+        </button>
       </div>
 
-      <div className="aiterm-tabbar-footer" style={{ borderTop: "1px solid #2a2a2a", paddingTop: "8px", marginTop: "auto" }}>
+      {/* Footer Area with Settings */}
+      <div className="aiterm-tabbar-footer">
         <div
-            className="aiterm-tab"
-            style={{ padding: "0 8px" }}
-            onClick={() => navigate("/settings")}
-            title={`${t.settings} (Ctrl+,)`}
+          className="aiterm-tab"
+          onClick={() => navigate("/settings")}
+          title={`${t.settings} (Ctrl+,)`}
         >
-            <span style={{ marginRight: "8px", fontSize: "16px", position: "relative", display: "inline-block" }}>
-              ⚙
-              {hasUpdate && <span className="update-badge" aria-label="Update available" />}
-            </span>
-            <span className="aiterm-tab-title">{t.settings}</span>
+          <span className="aiterm-tab-icon">⚙️</span>
+          <span className="aiterm-tab-title">{t.settings}</span>
         </div>
       </div>
     </div>

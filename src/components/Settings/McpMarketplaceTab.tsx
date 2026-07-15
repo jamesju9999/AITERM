@@ -233,7 +233,7 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
                     whiteSpace: "nowrap",
                   }}
                 >
-                  介紹
+                  {t.mcp_marketplace_intro}
                 </button>
               </div>
             </div>

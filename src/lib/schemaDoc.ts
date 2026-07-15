@@ -1,4 +1,5 @@
 // src/lib/schemaDoc.ts
+import { LOCALE_STORAGE_KEY, translations } from "./i18n";
 
 /**
  * Parse a structured Markdown schema doc into a map of
@@ -106,10 +107,16 @@ export function buildSchemaSection(
     }
   }
 
-  const parts: string[] = ['## 資料表欄位說明\n'];
+  const t = getT();
+  const parts: string[] = [t.schema_doc_title];
   if (fullSections.length > 0) parts.push(fullSections.join('\n\n'));
   if (tocEntries.length > 0) {
-    parts.push('\n其他可用資料表：\n' + tocEntries.join('\n'));
+    parts.push(t.schema_doc_other_tables + tocEntries.join('\n'));
   }
   return parts.join('\n');
+}
+
+function getT() {
+  const loc = (localStorage.getItem(LOCALE_STORAGE_KEY) || "zh-TW") as "zh-TW" | "en";
+  return translations[loc] || translations["zh-TW"];
 }

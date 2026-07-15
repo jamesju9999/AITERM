@@ -164,7 +164,7 @@ export function McpServersPage() {
                   className={`mcp-status-badge connected`}
                   style={{ cursor: "pointer", background: "none", border: "none", padding: 0 }}
                   onClick={() => setExpandedServerId(prev => prev === s.id ? null : s.id)}
-                  title="點擊展開工具列表"
+                  title={t.mcp_expand_tool_list}
                 >
                   {statusLabel(s)} {expandedServerId === s.id ? "▲" : "▼"}
                 </button>

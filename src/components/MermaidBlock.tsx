@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import mermaid from "mermaid";
+import { useLocale } from '../contexts/LocaleContext';
 
 mermaid.initialize({
   startOnLoad: false,
@@ -12,6 +13,7 @@ interface MermaidBlockProps {
 }
 
 export function MermaidBlock({ chart }: MermaidBlockProps) {
+  const { t } = useLocale();
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgStr, setSvgStr] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
@@ -59,10 +61,10 @@ export function MermaidBlock({ chart }: MermaidBlockProps) {
   if (error) {
     return (
       <div className="mermaid-error" style={{ color: "#f87171", padding: "10px", border: "1px solid #f87171", borderRadius: "4px", margin: "10px 0", fontSize: "12px" }}>
-        <strong>Mermaid Error:</strong>
+        <strong>{t.mermaid_error}</strong>
         <pre style={{ whiteSpace: "pre-wrap", marginTop: "5px", fontSize: "11px" }}>{error}</pre>
         <details style={{ marginTop: "5px", cursor: "pointer" }}>
-          <summary>Source</summary>
+          <summary>{t.mermaid_source}</summary>
           <pre style={{ fontSize: "11px", marginTop: "5px" }}>{chart}</pre>
         </details>
       </div>
@@ -70,7 +72,7 @@ export function MermaidBlock({ chart }: MermaidBlockProps) {
   }
 
   if (!svgStr) {
-    return <div style={{ color: "#aaa", padding: "10px", textAlign: "center", fontSize: "12px" }}>Rendering diagram...</div>;
+    return <div style={{ color: "#aaa", padding: "10px", textAlign: "center", fontSize: "12px" }}>{t.mermaid_rendering}</div>;
   }
 
   return (

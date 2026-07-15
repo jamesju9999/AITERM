@@ -70,12 +70,12 @@ export function McpServerForm({ existing, onSave, onCancel }: Props) {
   };
 
   const handleSave = async () => {
-    if (!form.name.trim()) { setError("名稱不可為空"); return; }
+    if (!form.name.trim()) { setError(t.mcp_err_name_empty); return; }
     if (form.transport === "stdio" && !form.command?.trim()) {
-      setError("stdio transport 需要填寫 Command"); return;
+      setError(t.mcp_err_stdio_cmd_required); return;
     }
     if ((form.transport === "http" || form.transport === "sse") && !form.url?.trim()) {
-      setError("HTTP/SSE transport 需要填寫 URL"); return;
+      setError(t.mcp_err_http_url_required); return;
     }
 
     setSaving(true);
@@ -109,16 +109,16 @@ export function McpServerForm({ existing, onSave, onCancel }: Props) {
         padding: 24, width: 480, maxWidth: "90vw", maxHeight: "80vh",
         overflowY: "auto", display: "flex", flexDirection: "column", gap: 16,
       }}>
-        <h3 style={{ margin: 0 }}>{existing ? "編輯 MCP Server" : "新增 MCP Server"}</h3>
+        <h3 style={{ margin: 0 }}>{existing ? t.mcp_form_title_edit : t.mcp_form_title_add}</h3>
 
         {/* Name */}
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ fontSize: 13, color: "#aaa" }}>名稱</span>
+          <span style={{ fontSize: 13, color: "#aaa" }}>{t.mcp_name_label}</span>
           <input
             className="settings-input"
             value={form.name}
             onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-            placeholder="例如：Filesystem"
+            placeholder={t.mcp_name_placeholder}
             autoCorrect="off"
             spellCheck={false}
           />
@@ -147,13 +147,13 @@ export function McpServerForm({ existing, onSave, onCancel }: Props) {
                 className="settings-input"
                 value={form.command ?? ""}
                 onChange={e => setForm(f => ({ ...f, command: e.target.value }))}
-                placeholder="例如：npx / python3 / uvx"
+                placeholder={t.mcp_cmd_placeholder}
                 autoCorrect="off"
                 spellCheck={false}
               />
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <span style={{ fontSize: 13, color: "#aaa" }}>Args（每行一個）</span>
+              <span style={{ fontSize: 13, color: "#aaa" }}>{t.mcp_args_label}</span>
               <textarea
                 className="settings-input"
                 rows={3}
@@ -167,8 +167,8 @@ export function McpServerForm({ existing, onSave, onCancel }: Props) {
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <span style={{ fontSize: 13, color: "#aaa" }}>
-                Env Vars（每行 KEY=VALUE，不需要引號）
-                {existing && <span style={{ color: "#666", fontSize: 11, marginLeft: 6 }}>— 留空保留原有設定</span>}
+                {t.mcp_env_label}
+                {existing && <span style={{ color: "#666", fontSize: 11, marginLeft: 6 }}>{t.mcp_env_hint_edit}</span>}
               </span>
               <textarea
                 className="settings-input"
@@ -192,12 +192,12 @@ export function McpServerForm({ existing, onSave, onCancel }: Props) {
               className="settings-input"
               value={form.url ?? ""}
               onChange={e => setForm(f => ({ ...f, url: e.target.value }))}
-              placeholder="例如：https://server.run.tools"
+              placeholder={t.mcp_url_placeholder}
               autoCorrect="off"
               spellCheck={false}
             />
             <span style={{ fontSize: 11, color: "#555", lineHeight: 1.5 }}>
-              如需 API Key，附加於 URL 後面，例如：
+              {t.mcp_url_hint}
               <code style={{ color: "#888", fontSize: 11 }}>
                 https://server.run.tools?apiKey=your_key
               </code>
@@ -212,7 +212,7 @@ export function McpServerForm({ existing, onSave, onCancel }: Props) {
             checked={form.enabled}
             onChange={e => setForm(f => ({ ...f, enabled: e.target.checked }))}
           />
-          <span style={{ fontSize: 13, color: "#ccc" }}>啟用此 Server</span>
+          <span style={{ fontSize: 13, color: "#ccc" }}>{t.mcp_enable_label}</span>
         </label>
 
         {error && <p style={{ color: "#f87171", fontSize: 13, margin: 0 }}>{error}</p>}

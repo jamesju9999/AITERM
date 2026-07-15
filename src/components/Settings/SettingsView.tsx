@@ -8,6 +8,15 @@ import { EnterprisePage } from "./EnterprisePage";
 import { AboutPage } from "./AboutPage";
 import { McpServersPage } from "./McpServersPage";
 import { useLocale } from "../../contexts/LocaleContext";
+import {
+  SettingsIcon,
+  RobotIcon,
+  DatabaseIcon,
+  BranchIcon,
+  WrenchIcon,
+  BuildingIcon,
+  InfoIcon
+} from "../Icons";
 import "./SettingsView.css";
 
 type SettingsTab = "general" | "providers" | "databases" | "vcs" | "enterprise" | "about" | "mcp";
@@ -29,43 +38,43 @@ export function SettingsView() {
           className={`sidebar-item ${tab === "general" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("general")}
         >
-          ⚙️ {t.general}
+          <SettingsIcon size={16} /> {t.general}
         </button>
         <button
           className={`sidebar-item ${tab === "providers" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("providers")}
         >
-          🤖 {t.ai_providers}
+          <RobotIcon size={16} /> {t.ai_providers}
         </button>
         <button
           className={`sidebar-item ${tab === "databases" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("databases")}
         >
-          🗄️ {t.db_connections}
+          <DatabaseIcon size={16} /> {t.db_connections}
         </button>
         <button
           className={`sidebar-item ${tab === "vcs" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("vcs")}
         >
-          🔀 {t.vcs_connections}
+          <BranchIcon size={16} /> {t.vcs_connections}
         </button>
         <button
           className={`sidebar-item ${tab === "mcp" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("mcp")}
         >
-          🔧 {t.mcp_servers}
+          <WrenchIcon size={16} /> {t.mcp_servers}
         </button>
         <button
           className={`sidebar-item ${tab === "enterprise" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("enterprise")}
         >
-          🏢 {t.settings_tab_enterprise}
+          <BuildingIcon size={16} /> {t.settings_tab_enterprise}
         </button>
         <button
           className={`sidebar-item ${tab === "about" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("about")}
         >
-          ℹ️ {t.about}
+          <InfoIcon size={16} /> {t.about}
         </button>
 
         <div className="sidebar-spacer" />

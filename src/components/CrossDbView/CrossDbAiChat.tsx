@@ -4,7 +4,6 @@ import { aiChat, formatAiError, type AiError } from "../../ipc/ai";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/markdown";
-import { languageDirective } from "../../lib/i18n";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { ConnectedDb } from "./index";
 
@@ -35,11 +34,6 @@ function saveSessions(sessions: SavedSession[]): void {
   try {
     localStorage.setItem(CROSSDB_SESSIONS_KEY, JSON.stringify(sessions));
   } catch { /* ignore */ }
-}
-
-function formatDate(ts: number): string {
-  const d = new Date(ts);
-  return d.toLocaleDateString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 interface AgentStep {
@@ -117,16 +111,6 @@ function extractCrossDbSql(text: string): { alias: string | null; sql: string } 
   return null;
 }
 
-function formatResultForAi(result: QueryResult): string {
-  if (result.error) return `Error: ${result.error}`;
-  if (result.affected_rows !== null) return `Success, ${result.affected_rows} row(s) affected`;
-  if (result.columns.length === 0) return "No results";
-  const header = result.columns.join(" | ");
-  const rows = result.rows.slice(0, 50).map((r) => r.map((c) => (c === null ? "NULL" : String(c))).join(" | "));
-  const suffix = result.rows.length > 50 ? `\n...(${result.rows.length} rows total, showing first 50)` : "";
-  return `${header}\n${rows.join("\n")}${suffix}`;
-}
-
 function normalizeAiError(err: unknown): AiError {
   if (err && typeof err === "object" && "kind" in err) return err as AiError;
   if (err instanceof Error) {
@@ -140,7 +124,7 @@ function normalizeAiError(err: unknown): AiError {
 }
 
 export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
-  const { locale } = useLocale();
+  const { t, locale } = useLocale();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -206,27 +190,25 @@ export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
     setSessions(next);
   }, [messages]);
 
+  const formatResultForAi = (result: QueryResult): string => {
+    if (result.error) return `${t.cdb_ai_result_err}${result.error}`;
+    if (result.affected_rows !== null) return t.cdb_ai_result_affected(result.affected_rows);
+    if (result.columns.length === 0) return t.cdb_ai_result_empty;
+    const header = result.columns.join(" | ");
+    const rows = result.rows.slice(0, 50).map((r) => r.map((c) => (c === null ? "NULL" : String(c))).join(" | "));
+    const suffix = result.rows.length > 50 ? t.cdb_ai_result_truncated(result.rows.length) : "";
+    return `${header}\n${rows.join("\n")}${suffix}`;
+  };
+
   const buildSystemPrompt = () => {
     const dbDescriptions = databases.map((db) => {
       const tableList = db.tables.map((t) => t.name).join(", ");
-      return `[${db.name}] Type: ${db.db_type.toUpperCase()}, Database: ${db.database}, Schema: ${db.schema}\n  Tables: ${tableList || "(none)"}`;
+      return `[${db.name}] Type: ${db.db_type.toUpperCase()}, Database: ${db.database}, Schema: ${db.schema}\n  Tables: ${tableList || "None"}`;
     }).join("\n");
 
     const maxSteps = maxStepsRef.current;
-    return `You are a cross-database agent that can query multiple databases at once to answer the user's question.
-
-Available databases:
-${dbDescriptions}
-
-[Output Format Rules — violating these will cause the query to fail]:
-1. When you need to query, output only the following format, with no prefix or suffix text:
-\`\`\`sql [database name]
-SELECT * FROM ...
-\`\`\`
-2. Query only one database with one SQL statement at a time; do not use <cmd>, shell commands, or any other format
-3. SQL dialects may differ between databases (PostgreSQL vs MySQL vs MSSQL, etc.) — pay attention to syntax differences
-4. Once you have collected enough data, give the final aggregated answer directly in ${languageDirective(locale)}, and do not include any SQL or code blocks in your response
-5. Execute at most ${maxSteps >= 9999 ? "unlimited" : maxSteps} queries`;
+    const maxStepsStr = maxSteps >= 9999 ? (locale === "zh-TW" ? "不限次數" : "unlimited") : String(maxSteps);
+    return t.cdb_ai_system_prompt(dbDescriptions, maxStepsStr);
   };
 
   const findDb = (alias: string): ConnectedDb | undefined => {
@@ -263,7 +245,7 @@ SELECT * FROM ...
       text: "",
       steps: [],
       agentRunning: true,
-      agentStepLabel: "思考中...",
+      agentStepLabel: t.cdb_ai_thinking_n(1, maxStepsRef.current >= 9999 ? "" : "/" + maxStepsRef.current),
     };
 
     const nextMessages = [...messages, userMessage, assistantMessage];
@@ -277,12 +259,10 @@ SELECT * FROM ...
     try {
       let stepCount = 0;
       const maxSteps = maxStepsRef.current;
-      let lastExecutedSql = ""; // tracks last SQL we actually ran
+      let lastExecutedSql = "";
 
       while (stepCount < maxSteps && !stoppedRef.current) {
-        const stepLabel = maxSteps >= 9999
-          ? `思考中... (步驟 ${stepCount + 1})`
-          : `思考中... (步驟 ${stepCount + 1}/${maxSteps})`;
+        const stepLabel = t.cdb_ai_thinking_n(stepCount + 1, maxSteps >= 9999 ? "" : "/" + maxSteps);
         updateLastMsg((m) => ({ ...m, agentStepLabel: stepLabel }));
 
         const lastUserContent = loopHistory[loopHistory.length - 1].content;
@@ -295,7 +275,6 @@ SELECT * FROM ...
         );
         const reply = aiResult.content ?? "";
 
-        // Debug: log raw model reply to browser console
         if (import.meta.env.DEV) {
           console.log("[CrossDB] AI reply:", JSON.stringify(reply));
         }
@@ -308,7 +287,6 @@ SELECT * FROM ...
         if (stoppedRef.current) break;
 
         if (!parsed) {
-          // No SQL → final answer
           updateLastMsg((m) => ({
             ...m,
             text: reply,
@@ -319,12 +297,10 @@ SELECT * FROM ...
           break;
         }
 
-        // Repetition guard: if model outputs the same SQL it just ran, it's stuck.
-        // Force a summarize instead of executing again.
         if (parsed.sql === lastExecutedSql) {
-          updateLastMsg((m) => ({ ...m, agentStepLabel: "整理答案中..." }));
+          updateLastMsg((m) => ({ ...m, agentStepLabel: t.db_ai_summarizing_label }));
           const summaryResult1 = await aiChat(
-            [{ role: "system" as const, content: buildSystemPrompt() }, ...loopHistory, { role: "user" as const, content: `Based on the query results above, provide your final complete answer in ${languageDirective(locale)}. Do not provide any more SQL queries.` }],
+            [{ role: "system" as const, content: buildSystemPrompt() }, ...loopHistory, { role: "user" as const, content: t.cdb_ai_summarizing_prompt }],
             "crossdb",
             selectedProviderId || undefined,
             false,
@@ -341,13 +317,13 @@ SELECT * FROM ...
           break;
         }
 
-        // Resolve target DB — handle models that omit [DB-Name]
         let targetDb: ConnectedDb | undefined;
         if (parsed.alias === null) {
           if (databases.length === 1) {
             targetDb = databases[0];
           } else {
-            const errMsg = `Please specify the database name in the SQL block, format:\n\`\`\`sql [Database Name]\nSQL\n\`\`\`\nAvailable: ${databases.map((d) => d.name).join(", ")}`;
+            const dbsList = databases.map((d) => d.name).join(", ");
+            const errMsg = t.cdb_ai_db_missing_err(parsed.alias || "", dbsList);
             loopHistory.push({ role: "assistant", content: reply });
             loopHistory.push({ role: "user", content: errMsg });
             stepCount++;
@@ -358,7 +334,8 @@ SELECT * FROM ...
         }
 
         if (!targetDb) {
-          const errMsg = `No database named "${parsed.alias}" was found. Available: ${databases.map((d) => d.name).join(", ")}`;
+          const dbsList = databases.map((d) => d.name).join(", ");
+          const errMsg = t.cdb_ai_db_not_found_err(parsed.alias || "", dbsList);
           loopHistory.push({ role: "assistant", content: reply });
           loopHistory.push({ role: "user", content: errMsg });
           stepCount++;
@@ -387,30 +364,29 @@ SELECT * FROM ...
           ),
         }));
 
-        // Record the SQL we just executed — used by repetition guard above
         lastExecutedSql = parsed.sql;
 
         loopHistory.push({ role: "assistant", content: reply });
 
         const feedbackContent = result.error
-          ? `[${targetDb.name}] SQL execution failed, database returned error: ${result.error}\n\nPlease fix the SQL syntax and retry (note: this is a SQL syntax issue, not a format issue).`
-          : `[${targetDb.name}] Query succeeded, results below:\n\n${formatResultForAi(result)}`;
+          ? t.cdb_ai_execution_err(targetDb.name, result.error)
+          : t.cdb_ai_execution_ok(targetDb.name, formatResultForAi(result));
 
         loopHistory.push({ role: "user", content: feedbackContent });
 
         stepCount++;
 
         if (stepCount >= maxSteps) {
-          updateLastMsg((m) => ({ ...m, agentStepLabel: "整理答案中..." }));
+          updateLastMsg((m) => ({ ...m, agentStepLabel: t.db_ai_summarizing_label }));
           const summaryResult2 = await aiChat(
-            [{ role: "system" as const, content: buildSystemPrompt() }, ...loopHistory, { role: "user" as const, content: `Based on the query results above, provide your final complete answer in ${languageDirective(locale)}, and do not provide any more SQL.` }],
+            [{ role: "system" as const, content: buildSystemPrompt() }, ...loopHistory, { role: "user" as const, content: t.cdb_ai_summarizing_prompt }],
             "crossdb",
             selectedProviderId || undefined,
             false,
             locale,
           );
           const summary = summaryResult2.content ?? "";
-          updateLastMsg((m) => ({
+          updateAndPersistCross((m) => ({
             ...m,
             text: summary,
             agentRunning: false,
@@ -423,7 +399,7 @@ SELECT * FROM ...
       if (stoppedRef.current) {
         updateLastMsg((m) => ({
           ...m,
-          text: m.text || "（已停止）",
+          text: m.text || t.cdb_ai_stopped,
           agentRunning: false,
           agentStepLabel: undefined,
         }));
@@ -434,7 +410,7 @@ SELECT * FROM ...
         const copy = [...prev];
         copy[copy.length - 1] = {
           ...copy[copy.length - 1],
-          text: `錯誤：${errText}`,
+          text: t.cdb_ai_error(errText),
           agentRunning: false,
           agentStepLabel: undefined,
         };
@@ -443,6 +419,14 @@ SELECT * FROM ...
     } finally {
       setSending(false);
     }
+  };
+
+  const updateAndPersistCross = (updater: (m: Message) => Message) => {
+    setMessages((prev) => {
+      const copy = [...prev];
+      copy[copy.length - 1] = updater(copy[copy.length - 1]);
+      return copy;
+    });
   };
 
   const stop = () => { stoppedRef.current = true; };
@@ -472,18 +456,23 @@ SELECT * FROM ...
     setHistoryOpen(false);
   };
 
+  const formatDate = (ts: number): string => {
+    const d = new Date(ts);
+    return d.toLocaleDateString(locale === "zh-TW" ? "zh-TW" : "en-US", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  };
+
   return (
     <div className="crossdb-chat">
       {/* History side panel */}
       {historyOpen && (
         <div className="crossdb-history-panel">
           <div className="crossdb-history-panel__header">
-            <span className="crossdb-history-panel__title">對話歷史</span>
-            <button className="crossdb-history-panel__new-btn" onClick={newChat}>＋ 新對話</button>
+            <span className="crossdb-history-panel__title">{t.cdb_ai_history_title}</span>
+            <button className="crossdb-history-panel__new-btn" onClick={newChat}>{t.cdb_ai_history_new_btn}</button>
           </div>
           <div className="crossdb-history-panel__list">
             {sessions.length === 0 && (
-              <div className="crossdb-history-panel__empty">尚無歷史記錄</div>
+              <div className="crossdb-history-panel__empty">{t.cdb_ai_history_empty}</div>
             )}
             {[...sessions].reverse().map((s) => (
               <div
@@ -498,7 +487,7 @@ SELECT * FROM ...
                 <button
                   className="crossdb-history-panel__item-del"
                   onClick={(e) => deleteSession(s.id, e)}
-                  title="刪除此對話"
+                  title={t.cdb_ai_delete_tooltip}
                 >×</button>
               </div>
             ))}
@@ -509,14 +498,14 @@ SELECT * FROM ...
       <div ref={messagesContainerRef} className="crossdb-chat__messages">
         {messages.length === 0 && (
           <div className="crossdb-chat__welcome">
-            <h3>🔗 跨資料庫 AI 查詢</h3>
-            <p>已連接 {databases.length} 個資料庫。請描述您想查詢的問題，AI 將自動路由到正確的資料庫...</p>
+            <h3>{t.cdb_welcome_title}</h3>
+            <p>{t.cdb_ai_welcome_desc(databases.length)}</p>
             <div className="crossdb-chat__db-list">
               {databases.map((db) => (
                 <div key={db.id} className="crossdb-chat__db-item">
                   <span className="crossdb-chat__db-badge">{db.db_type.toUpperCase()}</span>
                   <span>{db.name}</span>
-                  <span className="crossdb-chat__db-detail">{db.tables.length} 個資料表</span>
+                  <span className="crossdb-chat__db-detail">{t.cdb_ai_db_detail(db.tables.length)}</span>
                 </div>
               ))}
             </div>
@@ -544,7 +533,7 @@ SELECT * FROM ...
                       <span className="crossdb-chat__step-db">[{step.targetDb}]</span>
                       <code className="crossdb-chat__step-sql">{step.sql.length > 80 ? step.sql.slice(0, 80) + "..." : step.sql}</code>
                       {step.executing && <span className="crossdb-chat__step-status">⏳</span>}
-                      {step.result && !step.result.error && <span className="crossdb-chat__step-status crossdb-chat__step-ok">✓ {step.result.rows.length} 列</span>}
+                      {step.result && !step.result.error && <span className="crossdb-chat__step-status crossdb-chat__step-ok">{t.cdb_ai_step_result_ok(step.result.rows.length)}</span>}
                       {step.result?.error && <span className="crossdb-chat__step-status crossdb-chat__step-err">✗</span>}
                     </div>
                     {!step.collapsed && step.result && (
@@ -570,7 +559,7 @@ SELECT * FROM ...
                           </table>
                         ) : (
                           <div className="crossdb-chat__step-meta">
-                            {step.result.affected_rows !== null ? `${step.result.affected_rows} 列受影響` : "無結果"}
+                            {step.result.affected_rows !== null ? t.cdb_ai_result_affected(step.result.affected_rows) : t.cdb_ai_result_empty}
                           </div>
                         )}
                       </div>
@@ -600,8 +589,8 @@ SELECT * FROM ...
             type="button"
             className={`crossdb-chat__history-btn${historyOpen ? " crossdb-chat__history-btn--active" : ""}`}
             onClick={() => setHistoryOpen((o) => !o)}
-            title="對話歷史"
-          >📋 歷史</button>
+            title={t.cdb_ai_history_title}
+          >{t.db_ai_btn_history}</button>
           {providers.length > 0 && (
             <select
               value={selectedProviderId}
@@ -626,12 +615,12 @@ SELECT * FROM ...
                 if (ok) { e.preventDefault(); send(); }
               }
             }}
-            placeholder="描述跨資料庫查詢需求..."
+            placeholder={t.cdb_ai_input_placeholder}
             className="crossdb-chat__textarea"
             rows={2}
           />
           {sending ? (
-            <button className="crossdb-chat__stop-btn" onClick={stop}>■ 停止</button>
+            <button className="crossdb-chat__stop-btn" onClick={stop}>{t.cdb_ai_btn_stop}</button>
           ) : (
             <button
               id="crossdb-ai-send-btn"
@@ -639,7 +628,7 @@ SELECT * FROM ...
               onClick={send}
               disabled={!input.trim()}
             >
-              送出
+              {t.cdb_ai_btn_send}
             </button>
           )}
         </div>
@@ -650,6 +639,7 @@ SELECT * FROM ...
 }
 
 function CrossDbAssistantAnswer({ text }: { text: string }) {
+  const { t } = useLocale();
   const [copied, setCopied] = useState(false);
   const cleaned = extractResponseText(unescapeNewlines(text)).replace(/<cmd>([\/\s\S]*?)<\/cmd>/gi, (_m, c) => `\`\`\`\n${c.trim()}\n\`\`\``);
   const handleCopy = () => {
@@ -665,7 +655,7 @@ function CrossDbAssistantAnswer({ text }: { text: string }) {
         type="button"
         className={`crossdb-chat__copy-btn${copied ? " crossdb-chat__copy-btn--copied" : ""}`}
         onClick={handleCopy}
-        title="複製為 Markdown"
+        title={t.cdb_ai_copy_tooltip}
       >{copied ? "✓" : "⎘"}</button>
     </div>
   );

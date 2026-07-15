@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { dbExecuteQuery, type QueryResult } from "../../ipc/db";
+import { useLocale } from "../../contexts/LocaleContext";
 
 interface Props {
   connectionId: string;
@@ -7,6 +8,7 @@ interface Props {
 }
 
 export function DatabaseSqlEditor({ connectionId, schema }: Props) {
+  const { t } = useLocale();
   const [sql, setSql] = useState("SELECT 1;");
   const [result, setResult] = useState<QueryResult | null>(null);
   const [running, setRunning] = useState(false);
@@ -53,7 +55,7 @@ export function DatabaseSqlEditor({ connectionId, schema }: Props) {
             disabled={running}
             style={{ background: "#1e3a2e", border: "1px solid #34d399", color: "#34d399", borderRadius: 4, padding: "4px 14px", cursor: "pointer", fontSize: 12 }}
           >
-            {running ? "執行中..." : "▶ 執行 (Ctrl+Enter)"}
+            {running ? t.db_sql_running : t.db_sql_btn_run}
           </button>
         </div>
         <textarea
@@ -71,9 +73,9 @@ export function DatabaseSqlEditor({ connectionId, schema }: Props) {
 
       <div style={{ flex: 1, overflow: "auto" }}>
         {!result && !running && (
-          <div style={{ padding: 20, color: "#555", fontSize: 12 }}>執行 SQL 後結果將顯示於此</div>
+          <div style={{ padding: 20, color: "#555", fontSize: 12 }}>{t.db_sql_empty_state}</div>
         )}
-        {running && <div style={{ padding: 20, color: "#888", fontSize: 12 }}>執行中...</div>}
+        {running && <div style={{ padding: 20, color: "#888", fontSize: 12 }}>{t.db_sql_running}</div>}
         {result && !running && (
           <>
             {result.error && (
@@ -83,13 +85,13 @@ export function DatabaseSqlEditor({ connectionId, schema }: Props) {
             )}
             {!result.error && result.affected_rows !== null && (
               <div style={{ padding: "12px 16px", color: "#34d399", fontSize: 12 }}>
-                ✓ {result.affected_rows} 列受影響 ({result.execution_time_ms}ms)
+                ✓ {result.affected_rows} {t.db_sql_affected_rows} ({result.execution_time_ms}ms)
               </div>
             )}
             {!result.error && result.columns.length > 0 && (
               <>
                 <div style={{ padding: "6px 12px", color: "#888", fontSize: 11, borderBottom: "1px solid #1e1e1e", background: "#111" }}>
-                  {result.rows.length} 列 · {result.execution_time_ms}ms
+                  {t.db_sql_rows_summary(result.rows.length, result.execution_time_ms)}
                 </div>
                 <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12, fontFamily: "monospace" }}>
                   <thead>
@@ -121,3 +123,4 @@ export function DatabaseSqlEditor({ connectionId, schema }: Props) {
     </div>
   );
 }
+

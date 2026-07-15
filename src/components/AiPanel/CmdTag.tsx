@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocale } from "../../contexts/LocaleContext";
 
 interface CmdTagProps {
   command: string;
@@ -7,6 +8,7 @@ interface CmdTagProps {
 }
 
 export function CmdTag({ command, multiline, onExec }: CmdTagProps) {
+  const { t } = useLocale();
   const [confirming, setConfirming] = useState(false);
 
   const handleClick = () => {
@@ -24,10 +26,10 @@ export function CmdTag({ command, multiline, onExec }: CmdTagProps) {
         type="button"
         className="aiterm-cmd-tag"
         onClick={handleClick}
-        title={multiline ? "多行命令 — 執行前會再確認一次" : "點擊即執行"}
+        title={multiline ? t.cmd_multiline_tip : t.cmd_click_execute}
       >
         <code>{command}</code>
-        <span className="aiterm-cmd-tag-play">{confirming ? "確認執行？" : "▶"}</span>
+        <span className="aiterm-cmd-tag-play">{confirming ? t.cmd_confirm_execute : "▶"}</span>
       </button>
       {confirming && (
         <button
@@ -35,7 +37,7 @@ export function CmdTag({ command, multiline, onExec }: CmdTagProps) {
           style={{ fontSize: 11, padding: "2px 6px", cursor: "pointer" }}
           onClick={() => setConfirming(false)}
         >
-          取消
+          {t.cancel}
         </button>
       )}
     </span>

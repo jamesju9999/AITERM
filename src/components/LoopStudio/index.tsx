@@ -83,6 +83,36 @@ export function LoopStudioView({
   const closeResolveRef = useRef<((canClose: boolean) => void) | null>(null);
 
   const { t, locale } = useLocale();
+
+  // Resizable left panel
+  const [leftWidth, setLeftWidth] = useState(380);
+  const isDraggingRef = useRef(false);
+  const dragStartXRef = useRef(0);
+  const dragStartWidthRef = useRef(380);
+
+  const handleResizerMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isDraggingRef.current = true;
+    dragStartXRef.current = e.clientX;
+    dragStartWidthRef.current = leftWidth;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    const onMove = (ev: MouseEvent) => {
+      if (!isDraggingRef.current) return;
+      const delta = ev.clientX - dragStartXRef.current;
+      const newWidth = Math.max(260, Math.min(600, dragStartWidthRef.current + delta));
+      setLeftWidth(newWidth);
+    };
+    const onUp = () => {
+      isDraggingRef.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [leftWidth]);
   const loop = useOrchestratorLoop();
   const timingMode = (localStorage.getItem("loopTimingMode") ?? "compact") as "full" | "compact";
 
@@ -225,16 +255,16 @@ export function LoopStudioView({
     if (!text.trim()) return;
     setEnhancingField(field);
     try {
-      const fieldLabel = field === "goal" ? "任務目標" : "停止條件";
+      const fieldLabel = t.ls_prompt_engineer_title(field);
       const reply = await invokeAiChat(
         [
           {
             role: "system",
-            content: "你是一位專業的 AI 提示詞工程師。使用者提供一段粗略描述，你的任務是強化並潤飾文字，使其更具體、明確、可衡量，且適合作為 AI Agent 的執行指引。保留原意，不要過度延伸範圍。只輸出潤飾後的文字，不加任何前言或說明。使用繁體中文。",
+            content: t.ls_prompt_engineer_system,
           },
           {
             role: "user",
-            content: `請潤飾這個${fieldLabel}：\n\n${text}`,
+            content: t.ls_prompt_engineer_user(fieldLabel, text),
           },
         ],
         ptySessionId ?? "loop-enhance",
@@ -251,7 +281,7 @@ export function LoopStudioView({
     } finally {
       setEnhancingField(null);
     }
-  }, [roster.goal, roster.stoppingCondition, roster.orchestratorProvider, ptySessionId, updateRoster]);
+  }, [roster.goal, roster.stoppingCondition, roster.orchestratorProvider, ptySessionId, updateRoster, t]);
 
   const handleUndo = useCallback((field: "goal" | "stopping") => {
     const prev = prevText[field];
@@ -390,7 +420,7 @@ export function LoopStudioView({
           </div>
         </div>
       )}
-      <div className="ls-left">
+      <div className="ls-left" style={{ width: leftWidth, minWidth: leftWidth, maxWidth: leftWidth }}>
         <div className="ls-header">
           <div className="ls-header-top">
             <div>
@@ -710,6 +740,8 @@ export function LoopStudioView({
           )}
         </div>
       </div>
+
+      <div className="ls-resizer" onMouseDown={handleResizerMouseDown} />
 
       <div className="ls-right">
         <div className="ls-trace-header">

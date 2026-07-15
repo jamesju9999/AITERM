@@ -42,13 +42,13 @@ function saveAllSessions(sessions: McpChatSession[]): void {
   } catch { /* ignore */ }
 }
 
-function formatSessionTitle(messages: McpChatMessage[]): string {
+function formatSessionTitle(messages: McpChatMessage[], t: any): string {
   const first = messages.find((m) => m.role === "user");
-  return first ? contentToDisplayString(first.content).slice(0, 30) : "（空對話）";
+  return first ? contentToDisplayString(first.content).slice(0, 30) : t.chat_empty;
 }
 
 export function useMcpChat(sessionId: string) {
-  const { locale } = useLocale();
+  const { t, locale } = useLocale();
   const [messages, setMessages] = useState<McpChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamBuf, setStreamBuf] = useState("");
@@ -95,7 +95,7 @@ export function useMcpChat(sessionId: string) {
     const id = currentSessionIdRef.current;
     const entry: McpChatSession = {
       id,
-      title: formatSessionTitle(messages),
+      title: formatSessionTitle(messages, t),
       messages,
       savedAt: Date.now(),
     };
@@ -216,7 +216,7 @@ export function useMcpChat(sessionId: string) {
       if (iterations >= MAX_TOOL_ITERATIONS && mountedRef.current) {
         setMessages(prev => [...prev, {
           role: "assistant" as const,
-          content: "⚠️ 已達工具呼叫上限（10 次），請重新提問。",
+          content: t.mcp_tool_limit,
         }]);
       }
     } catch (e) {

@@ -5,7 +5,6 @@ import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/markdown";
 import { parseSchemaDoc, buildSchemaSection } from "../../lib/schemaDoc";
-import { languageDirective } from "../../lib/i18n";
 import { useLocale } from "../../contexts/LocaleContext";
 
 interface Props {
@@ -106,21 +105,6 @@ function extractSql(text: string): string | null {
   return null;
 }
 
-function formatResultForAi(result: QueryResult): string {
-  if (result.error) return `Error: ${result.error}`;
-  if (result.affected_rows !== null) return `Success, ${result.affected_rows} row(s) affected`;
-  if (result.columns.length === 0) return "No results";
-  const header = result.columns.join(" | ");
-  const rows = result.rows.slice(0, 50).map((r) => r.map((c) => (c === null ? "NULL" : String(c))).join(" | "));
-  const suffix = result.rows.length > 50 ? `\n...(${result.rows.length} rows total, showing first 50)` : "";
-  return `${header}\n${rows.join("\n")}${suffix}`;
-}
-
-function formatDate(ts: number): string {
-  const d = new Date(ts);
-  return d.toLocaleDateString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
 function normalizeAiError(err: unknown): AiError {
   if (err && typeof err === "object" && "kind" in err) {
     return err as AiError;
@@ -144,7 +128,7 @@ function errorText(err: unknown): string {
 }
 
 export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Props) {
-  const { locale } = useLocale();
+  const { t, locale } = useLocale();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -175,9 +159,6 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
       const text = (e as CustomEvent).detail.text;
       if (text) {
         setInput(text);
-        // We defer send() because React state needs to update input first,
-        // but since send() depends on input state, we can just trigger send() directly by passing text if we refactored it.
-        // Instead of refactoring send, we can just set input and press send in next tick via a ref flag.
         setTimeout(() => {
           const btn = document.getElementById("db-ai-send-btn");
           if (btn) btn.click();
@@ -190,7 +171,6 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
 
   useEffect(() => {
     getConfig().then((cfg) => {
-      // 0 = unlimited; use a large number internally
       maxStepsRef.current = cfg.max_agent_steps === 0 ? 9999 : (cfg.max_agent_steps ?? 5);
       setSubmitShortcut(cfg.submit_shortcut ?? "enter");
     }).catch(() => {});
@@ -217,23 +197,25 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
+  const formatResultForAi = (result: QueryResult): string => {
+    if (result.error) return `${t.db_ai_result_err}${result.error}`;
+    if (result.affected_rows !== null) return t.db_ai_result_affected(result.affected_rows);
+    if (result.columns.length === 0) return t.db_ai_result_empty;
+    const header = result.columns.join(" | ");
+    const rows = result.rows.slice(0, 50).map((r) => r.map((c) => (c === null ? "NULL" : String(c))).join(" | "));
+    const suffix = result.rows.length > 50 ? t.db_ai_result_truncated(result.rows.length) : "";
+    return `${header}\n${rows.join("\n")}${suffix}`;
+  };
+
   const buildSystemPrompt = (userQuestion = "") => {
     const tableList = tables.map((t) => t.name).join(", ");
     const maxSteps = maxStepsRef.current;
     const tableNames = tables.map((t) => t.name);
     const schemaSection = buildSchemaSection(schemaDocMap, tableNames, userQuestion, 6000);
+    const maxStepsStr = maxSteps >= 9999 ? (locale === "zh-TW" ? "不限次數" : "unlimited") : String(maxSteps);
 
-    return `You are a database agent that can run multiple SQL queries to answer the user's question.
-Schema: "${schema}", available tables: ${tableList || "(loading)"}.
-${schemaSection ? "\n" + schemaSection + "\n" : ""}
-[Output Format Rules — violating these will cause the query to fail]:
-1. When you need to query data, output only the following format, with no prefix or suffix explanation:
-\`\`\`sql
-your SQL
-\`\`\`
-2. Provide only one pure SQL statement at a time; do not wrap it in <cmd>, shell commands, JSON, or any other format
-3. Once you have collected enough data, give the final answer directly in ${languageDirective(locale)}, and do not include any SQL or code blocks in your response
-4. Execute at most ${maxSteps >= 9999 ? "unlimited" : maxSteps} queries`;
+    return t.db_ai_system_prompt(schema, tableList, maxStepsStr) +
+      (schemaSection ? "\n" + schemaSection + "\n" : "");
   };
 
   const updateLastMsg = (updater: (m: Message) => Message) => {
@@ -244,7 +226,6 @@ your SQL
     });
   };
 
-  /** Auto-save/update the current session to localStorage */
   const persistSession = (msgs: Message[], sessionId: string, title: string) => {
     const updated: SavedSession = { id: sessionId, title, messages: msgs, savedAt: Date.now() };
     setSessions((prev) => {
@@ -262,7 +243,6 @@ your SQL
     setSending(true);
     stoppedRef.current = false;
 
-    // Start a new session if this is the first message
     if (!currentSessionIdRef.current) {
       currentSessionIdRef.current = crypto.randomUUID();
     }
@@ -279,7 +259,7 @@ your SQL
       text: "",
       steps: [],
       agentRunning: true,
-      agentStepLabel: "思考中...",
+      agentStepLabel: t.db_ai_thinking_n(1, maxStepsRef.current >= 9999 ? "" : "/" + maxStepsRef.current),
     };
 
     const nextMessages = [...messages, userMessage, assistantMessage];
@@ -307,9 +287,7 @@ your SQL
       };
 
       while (stepCount < maxSteps && !stoppedRef.current) {
-        const stepLabel = maxSteps >= 9999
-          ? `思考中... (步驟 ${stepCount + 1})`
-          : `思考中... (步驟 ${stepCount + 1}/${maxSteps})`;
+        const stepLabel = t.db_ai_thinking_n(stepCount + 1, maxSteps >= 9999 ? "" : "/" + maxSteps);
         updateLastMsg((m) => ({ ...m, agentStepLabel: stepLabel }));
 
         const lastUserContent = loopHistory[loopHistory.length - 1].content;
@@ -362,15 +340,15 @@ your SQL
         loopHistory.push({ role: "assistant", content: reply });
         loopHistory.push({
           role: "user",
-          content: `SQL execution result:\n\`\`\`\n${formatResultForAi(result)}\n\`\`\`\n\nContinue analyzing or give the final answer.`,
+          content: t.db_ai_loop_result(formatResultForAi(result)),
         });
 
         stepCount++;
 
         if (stepCount >= maxSteps) {
-          updateLastMsg((m) => ({ ...m, agentStepLabel: "整理答案中..." }));
+          updateLastMsg((m) => ({ ...m, agentStepLabel: t.db_ai_summarizing_label }));
           const summaryResult = await aiChat(
-            [{ role: "system" as const, content: buildSystemPrompt(userMsg) }, ...loopHistory, { role: "user" as const, content: `Based on the query results above, provide your final complete answer in ${languageDirective(locale)}, and do not provide any more SQL.` }],
+            [{ role: "system" as const, content: buildSystemPrompt(userMsg) }, ...loopHistory, { role: "user" as const, content: t.db_ai_summarizing_prompt }],
             `db-${connectionId}`,
             selectedProviderId || undefined,
             false,
@@ -390,22 +368,22 @@ your SQL
       if (stoppedRef.current) {
         updateAndPersist((m) => ({
           ...m,
-          text: m.text || "（已停止）",
+          text: m.text || t.db_ai_stopped,
           agentRunning: false,
           agentStepLabel: undefined,
         }));
         if (sendRemoteResponse && !finalMessages[finalMessages.length - 1].text) {
-          sendRemoteResponse("（已停止）");
+          sendRemoteResponse(t.db_ai_stopped);
         }
       }
 
-      void finalMessages; // suppress unused warning
+      void finalMessages;
     } catch (e: unknown) {
       setMessages((prev) => {
         const copy = [...prev];
         copy[copy.length - 1] = {
           ...copy[copy.length - 1],
-          text: `錯誤：${errorText(e)}`,
+          text: t.db_ai_error(errorText(e)),
           agentRunning: false,
           agentStepLabel: undefined,
         };
@@ -459,6 +437,11 @@ your SQL
     setSchemaDoc("");
   };
 
+  const formatDate = (ts: number): string => {
+    const d = new Date(ts);
+    return d.toLocaleDateString(locale === "zh-TW" ? "zh-TW" : "en-US", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  };
+
   return (
     <div style={{ display: "flex", height: "100%", flex: 1, minWidth: 0, position: "relative" }}>
       {/* History side panel */}
@@ -468,17 +451,17 @@ your SQL
           display: "flex", flexDirection: "column", flexShrink: 0,
         }}>
           <div style={{ padding: "8px 12px", borderBottom: "1px solid #1e1e1e", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ fontSize: 11, color: "#555", textTransform: "uppercase", letterSpacing: "0.05em" }}>對話歷史</span>
+            <span style={{ fontSize: 11, color: "#555", textTransform: "uppercase", letterSpacing: "0.05em" }}>{t.cdb_ai_history_title}</span>
             <button
               onClick={newChat}
               style={{ background: "#1a2a1e", border: "1px solid #2d4a35", color: "#4ade80", fontSize: 10, borderRadius: 4, padding: "2px 8px", cursor: "pointer" }}
             >
-              ＋ 新對話
+              {t.cdb_ai_history_new_btn}
             </button>
           </div>
           <div style={{ flex: 1, overflowY: "auto" }}>
             {sessions.length === 0 && (
-              <div style={{ color: "#444", fontSize: 12, padding: "16px 12px" }}>尚無歷史記錄</div>
+              <div style={{ color: "#444", fontSize: 12, padding: "16px 12px" }}>{t.cdb_ai_history_empty}</div>
             )}
             {[...sessions].reverse().map((s) => (
               <div
@@ -498,7 +481,7 @@ your SQL
                 </div>
                 <button
                   onClick={(e) => deleteSession(s.id, e)}
-                  title="刪除此對話"
+                  title={t.cdb_ai_delete_tooltip}
                   style={{ background: "transparent", border: "none", color: "#444", fontSize: 14, cursor: "pointer", padding: "2px 5px", borderRadius: 3, flexShrink: 0, lineHeight: 1 }}
                   onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#f87171"; (e.currentTarget as HTMLButtonElement).style.background = "#2a1a1a"; }}
                   onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#444"; (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
@@ -516,7 +499,7 @@ your SQL
         <div ref={messagesContainerRef} style={{ flex: 1, overflowY: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
           {messages.length === 0 && (
             <div style={{ color: "#555", fontSize: 13, padding: "20px 0" }}>
-              用自然語言描述你想查詢的資料，例如：「查詢最近 10 筆訂單」
+              {t.db_ai_welcome_hint}
             </div>
           )}
           {messages.map((msg, i) => (
@@ -541,7 +524,7 @@ your SQL
 
         {/* Toolbar: provider selector + history toggle */}
         <div style={{ borderTop: "1px solid #1e1e1e", padding: "6px 12px", display: "flex", alignItems: "center", gap: 8, background: "#111" }}>
-          <span style={{ fontSize: 11, color: "#555", flexShrink: 0 }}>模型</span>
+          <span style={{ fontSize: 11, color: "#555", flexShrink: 0 }}>{t.db_ai_model_label}</span>
           <select
             value={selectedProviderId}
             onChange={(e) => setSelectedProviderId(e.target.value)}
@@ -566,7 +549,7 @@ your SQL
           />
           <button
             onClick={() => schemaFileInputRef.current?.click()}
-            title={schemaDoc ? "更換 Schema 文件" : "上傳 Schema 文件 (.md)"}
+            title={schemaDoc ? t.db_ai_schema_tooltip_change : t.db_ai_schema_tooltip_upload}
             style={{
               background: schemaDoc ? "#1a2a1e" : "transparent",
               border: "1px solid " + (schemaDoc ? "#34d399" : "#2a2a2a"),
@@ -579,7 +562,7 @@ your SQL
           {schemaDoc && (
             <button
               onClick={removeSchemaDoc}
-              title="移除 Schema 文件"
+              title={t.db_ai_schema_tooltip_remove}
               style={{
                 background: "transparent", border: "none", color: "#555",
                 fontSize: 12, cursor: "pointer", padding: "2px 4px",
@@ -591,7 +574,7 @@ your SQL
           <div style={{ flex: 1 }} />
           <button
             onClick={() => setHistoryOpen((o) => !o)}
-            title="對話歷史"
+            title={t.cdb_ai_history_title}
             style={{
               background: historyOpen ? "#1a2030" : "transparent",
               border: "1px solid " + (historyOpen ? "#3b5bdb" : "#2a2a2a"),
@@ -599,60 +582,76 @@ your SQL
               borderRadius: 4, padding: "2px 8px", fontSize: 11, cursor: "pointer",
             }}
           >
-            🕐 歷史
+            {t.db_ai_btn_history}
           </button>
           {messages.length > 0 && (
             <button
               onClick={newChat}
-              title="開始新對話"
+              title={t.cdb_ai_history_new_btn}
               style={{
                 background: "transparent", border: "1px solid #2a2a2a", color: "#555",
                 borderRadius: 4, padding: "2px 8px", fontSize: 11, cursor: "pointer",
               }}
             >
-              ＋ 新對話
+              {t.cdb_ai_history_new_btn}
             </button>
           )}
         </div>
 
         {/* Input bar */}
-        <div style={{ borderTop: "1px solid #1e1e1e", padding: "10px 12px", display: "flex", gap: 8, alignItems: "flex-end", background: "#111" }}>
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                const ok = (submitShortcut === "enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
-                           (submitShortcut === "shift-enter" && e.shiftKey && !e.ctrlKey) ||
-                           (submitShortcut === "ctrl-enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey);
-                if (ok) { e.preventDefault(); send(); }
-              }
-            }}
-            placeholder="用自然語言描述查詢..."
-            rows={2}
-            style={{
-              flex: 1, background: "#0c0c0c", border: "1px solid #2a2a2a", color: "#e6e6e6",
-              borderRadius: 6, padding: "8px 10px", fontSize: 13, resize: "none", outline: "none",
-              fontFamily: "inherit",
-            }}
-          />
-          {sending ? (
-            <button
-              onClick={stop}
-              style={{ background: "#3a1a1a", border: "1px solid #f87171", color: "#f87171", borderRadius: 6, padding: "8px 14px", cursor: "pointer", fontSize: 12 }}
-            >
-              ■ 停止
-            </button>
-          ) : (
-            <button
-              id="db-ai-send-btn"
-              onClick={send}
-              disabled={!input.trim()}
-              style={{ background: "#1e3a2e", border: "1px solid #34d399", color: "#34d399", borderRadius: 6, padding: "8px 14px", cursor: "pointer", fontSize: 12 }}
-            >
-              ✨ 送出
-            </button>
-          )}
+        <div style={{ borderTop: "1px solid var(--border-color)", padding: "10px 16px 12px", display: "flex", gap: 10, alignItems: "center", background: "rgba(10, 11, 20, 0.4)" }}>
+          <div className="aiterm-input-pill-container" style={{ display: "flex", alignItems: "center", background: "rgba(255, 255, 255, 0.03)", border: "1px solid rgba(255, 255, 255, 0.08)", borderRadius: 20, padding: "4px 8px", flex: 1, gap: 6 }}>
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const ok = (submitShortcut === "enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
+                             (submitShortcut === "shift-enter" && e.shiftKey && !e.ctrlKey) ||
+                             (submitShortcut === "ctrl-enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey);
+                  if (ok) { e.preventDefault(); send(); }
+                }
+              }}
+              placeholder={t.db_ai_input_placeholder}
+              rows={1}
+              style={{
+                flex: 1, background: "transparent", border: "none", color: "var(--text-primary)",
+                padding: "4px 6px", fontSize: 13, resize: "none", outline: "none",
+                fontFamily: "inherit", height: 24, lineHeight: "24px", overflowY: "hidden"
+              }}
+            />
+            {sending ? (
+              <button
+                onClick={stop}
+                style={{
+                  width: 26, height: 26, borderRadius: "50%", background: "#ef4444", color: "#fff",
+                  border: "none", display: "flex", alignItems: "center", justifyContent: "center",
+                  cursor: "pointer", fontSize: 11, padding: 0, flexShrink: 0, boxShadow: "0 2px 6px rgba(0,0,0,0.15)"
+                }}
+                title={t.db_ai_btn_stop}
+              >
+                ■
+              </button>
+            ) : (
+              <button
+                id="db-ai-send-btn"
+                onClick={send}
+                disabled={!input.trim()}
+                style={{
+                  width: 26, height: 26, borderRadius: "50%",
+                  background: input.trim() ? "var(--accent-gradient)" : "rgba(255,255,255,0.05)",
+                  color: input.trim() ? "#fff" : "var(--text-muted)",
+                  border: "none", display: "flex", alignItems: "center", justifyContent: "center",
+                  cursor: input.trim() ? "pointer" : "not-allowed", fontSize: 11, padding: 0, flexShrink: 0,
+                  boxShadow: input.trim() ? "0 2px 6px rgba(0,0,0,0.15)" : "none",
+                  transition: "all 0.2s"
+                }}
+                title={t.db_ai_btn_send}
+              >
+                ▲
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -660,6 +659,7 @@ your SQL
 }
 
 function MessageBubble({ msg, onToggleStep }: { msg: Message; onToggleStep: (i: number) => void }) {
+  const { t } = useLocale();
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
     const text = unescapeNewlines(extractResponseText(msg.text ?? ""));
@@ -697,7 +697,7 @@ function MessageBubble({ msg, onToggleStep }: { msg: Message; onToggleStep: (i: 
               {step.executing ? "⟳" : step.result?.error ? "✗" : "✓"}
             </span>
             <span style={{ fontFamily: "monospace", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              步驟 {i + 1}：{step.sql}
+              {t.db_ai_step_n(i + 1)}{step.sql}
             </span>
             <span>{step.collapsed ? "▶" : "▼"}</span>
           </button>
@@ -706,7 +706,7 @@ function MessageBubble({ msg, onToggleStep }: { msg: Message; onToggleStep: (i: 
               <div style={{ fontFamily: "monospace", fontSize: 11, color: "#34d399", marginBottom: 6, whiteSpace: "pre-wrap" }}>
                 {step.sql}
               </div>
-              {step.executing && <div style={{ color: "#888", fontSize: 11 }}>執行中...</div>}
+              {step.executing && <div style={{ color: "#888", fontSize: 11 }}>{t.db_sql_running}</div>}
               {step.result && !step.executing && <ResultInline result={step.result} />}
             </div>
           )}
@@ -730,7 +730,7 @@ function MessageBubble({ msg, onToggleStep }: { msg: Message; onToggleStep: (i: 
             type="button"
             className={`db-ai-copy-btn${copied ? " db-ai-copy-btn--copied" : ""}`}
             onClick={handleCopy}
-            title="複製為 Markdown"
+            title={t.db_ai_copy_tooltip}
           >{copied ? "✓" : "⎘"}</button>
         </div>
       )}
@@ -747,16 +747,17 @@ function MessageBubble({ msg, onToggleStep }: { msg: Message; onToggleStep: (i: 
 }
 
 function ResultInline({ result }: { result: QueryResult }) {
+  const { t } = useLocale();
   if (result.error) {
     return <div style={{ color: "#f87171", fontSize: 11 }}>✗ {result.error}</div>;
   }
   if (result.affected_rows !== null) {
-    return <div style={{ color: "#34d399", fontSize: 11 }}>✓ {result.affected_rows} 列受影響 ({result.execution_time_ms}ms)</div>;
+    return <div style={{ color: "#34d399", fontSize: 11 }}>✓ {t.db_ai_result_affected(result.affected_rows)} ({result.execution_time_ms}ms)</div>;
   }
   if (result.columns.length === 0) return null;
   return (
     <div style={{ overflowX: "auto" }}>
-      <div style={{ color: "#555", fontSize: 10, marginBottom: 4 }}>{result.rows.length} 列 · {result.execution_time_ms}ms</div>
+      <div style={{ color: "#555", fontSize: 10, marginBottom: 4 }}>{result.rows.length} {t.db_rows} · {result.execution_time_ms}ms</div>
       <table style={{ borderCollapse: "collapse", fontSize: 11, fontFamily: "monospace" }}>
         <thead>
           <tr>{result.columns.map((c) => (
@@ -774,7 +775,7 @@ function ResultInline({ result }: { result: QueryResult }) {
             </tr>
           ))}
           {result.rows.length > 20 && (
-            <tr><td colSpan={result.columns.length} style={{ padding: "3px 8px", color: "#444", fontSize: 10 }}>... 還有 {result.rows.length - 20} 列</td></tr>
+            <tr><td colSpan={result.columns.length} style={{ padding: "3px 8px", color: "#444", fontSize: 10 }}>{t.db_ai_more_rows(result.rows.length - 20)}</td></tr>
           )}
         </tbody>
       </table>

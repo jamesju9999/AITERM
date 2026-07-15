@@ -6,6 +6,7 @@ import { VcsLoopMessageBubble } from "./VcsMessageBubble";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { pickFolder } from "../../ipc/vcs";
+import { useLocale } from "../../contexts/LocaleContext";
 import "./VcsView.css";
 
 const MANUAL_PATH_KEY = "aiterm-vcs-manual-path";
@@ -16,6 +17,7 @@ interface VcsViewProps {
 }
 
 export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
+  const { t } = useLocale();
   const navigate = useNavigate();
 
   // Manual path state — persisted in localStorage
@@ -141,17 +143,17 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
             />
             <button
               onClick={handleBrowse}
-              title="選擇資料夾"
+              title={t.vcs_btn_browse}
               style={iconBtnStyle}
             >📂</button>
             <button
               onClick={() => confirmPath(pathInput)}
-              title="確認"
+              title={t.vcs_btn_confirm}
               style={{ ...iconBtnStyle, color: "#34d399" }}
             >✓</button>
             <button
               onClick={() => setIsEditingPath(false)}
-              title="取消"
+              title={t.vcs_btn_cancel}
               style={{ ...iconBtnStyle, color: "#888" }}
             >✗</button>
           </>
@@ -159,18 +161,18 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
           <>
             <span
               className="vcs-view__repo-root"
-              title={manualPath ? `手動設定：${manualPath}（點擊編輯）` : "點擊設定路徑"}
+              title={manualPath ? t.vcs_path_tooltip_manual(manualPath) : t.vcs_path_tooltip_empty}
               onClick={startEditing}
               style={{ cursor: "pointer", flex: 1 }}
             >
-              {repoInfo?.root ?? (manualPath || "點擊設定路徑")}
+              {repoInfo?.root ?? (manualPath || t.vcs_path_tooltip_empty)}
               {manualPath && <span style={{ marginLeft: 4, color: "#555", fontSize: 10 }}>📌</span>}
             </span>
-            <button onClick={handleBrowse} title="選擇資料夾" style={iconBtnStyle}>📂</button>
+            <button onClick={handleBrowse} title={t.vcs_btn_browse} style={iconBtnStyle}>📂</button>
             {manualPath && (
               <button
                 onClick={clearManualPath}
-                title="清除手動路徑，回到自動偵測"
+                title={t.vcs_clear_path_tooltip}
                 style={{ ...iconBtnStyle, color: "#888" }}
               >✕</button>
             )}
@@ -186,13 +188,13 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
               onChange={(e) => setSelectedProviderId(e.target.value)}
               style={{ marginLeft: "auto", background: "#1a1a1a", border: "1px solid #333", color: "#ccc", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}
             >
-              <option value="">預設</option>
+              <option value="">{t.provider_default_badge}</option>
               {providers.map((p) => (
                 <option key={p.id} value={p.id}>{p.display_name}</option>
               ))}
             </select>
           ) : (
-            <span style={{ marginLeft: "auto", fontSize: 11, color: "#555" }}>未設定 AI</span>
+            <span style={{ marginLeft: "auto", fontSize: 11, color: "#555" }}>{t.vcs_no_ai}</span>
           )
         )}
       </div>
@@ -202,11 +204,11 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
         {!repoInfo ? (
           <div className="vcs-view__empty">
             {manualPath
-              ? `找不到 VCS repo：${manualPath}`
-              : "目前目錄不在版控 repo 中"}
+              ? t.vcs_repo_not_found(manualPath)
+              : t.vcs_no_repo}
           </div>
         ) : messages.length === 0 ? (
-          <div className="vcs-view__empty">輸入問題來查詢版控資訊，例如：「最近 10 次 commit」</div>
+          <div className="vcs-view__empty">{t.vcs_welcome_hint}</div>
         ) : (
           messages.map((msg) => (
             <VcsLoopMessageBubble
@@ -231,9 +233,9 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={
-            !repoInfo ? "未偵測到 VCS repo..." :
-            isRunning ? "輸入以調整方向（Enter 送出）..." :
-            "輸入問題，Enter 送出..."
+            !repoInfo ? t.vcs_placeholder_no_repo :
+            isRunning ? t.vcs_placeholder_running :
+            t.vcs_placeholder_idle
           }
           rows={2}
           disabled={!repoInfo}
@@ -244,7 +246,7 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
             onClick={stop}
             style={{ background: "#2a0f0f", borderColor: "#f87171", color: "#f87171" }}
           >
-            停止
+            {t.vcs_btn_stop}
           </button>
         ) : (
           <button
@@ -252,7 +254,7 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
             onClick={handleSubmit}
             disabled={!repoInfo || input.trim() === ""}
           >
-            送出
+            {t.vcs_btn_send}
           </button>
         )}
       </div>
@@ -260,12 +262,12 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
       {/* Link to settings if no connection */}
       {repoInfo && !repoInfo.connection_id && (
         <div style={{ padding: "6px 16px", borderTop: "1px solid #2a2a2a", background: "#111", fontSize: 11, color: "#666", display: "flex", gap: 6, alignItems: "center" }}>
-          <span>本地模式</span>
+          <span>{t.vcs_local_mode_label}</span>
           <button
             onClick={() => navigate("/settings")}
             style={{ background: "transparent", border: "none", color: "#34d399", cursor: "pointer", fontSize: 11, padding: 0, textDecoration: "underline" }}
           >
-            前往設定新增連線
+            {t.vcs_add_conn_hint}
           </button>
         </div>
       )}
@@ -277,3 +279,4 @@ const iconBtnStyle: React.CSSProperties = {
   background: "transparent", border: "none", cursor: "pointer",
   fontSize: 14, padding: "0 4px", color: "#ccc", lineHeight: 1,
 };
+

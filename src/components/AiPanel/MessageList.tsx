@@ -4,6 +4,7 @@ import type { AiError } from "../../ipc/ai";
 import { formatAiError } from "../../ipc/ai";
 import type { McpChatMessage } from "../../hooks/useMcpChat";
 import { MessageBubble } from "./MessageBubble";
+import { useLocale } from "../../contexts/LocaleContext";
 
 interface MessageListProps {
   messages: McpChatMessage[];
@@ -27,6 +28,7 @@ function ToolCallCard({
   callMsg: McpChatMessage;
   resultMsg: McpChatMessage | undefined;
 }) {
+  const { t } = useLocale();
   const [expanded, setExpanded] = useState(false);
   const toolDisplayName = callMsg.tool_name?.includes("__")
     ? callMsg.tool_name.split("__").slice(1).join("__")
@@ -55,12 +57,12 @@ function ToolCallCard({
       {expanded && (
         <div className="aiterm-tool-card-body">
           <div className="aiterm-tool-card-section">
-            <div className="aiterm-tool-card-label">輸入</div>
+            <div className="aiterm-tool-card-label">{t.tool_call_input}</div>
             <pre className="aiterm-tool-card-content">{typeof callMsg.content === "string" ? callMsg.content : ""}</pre>
           </div>
           {hasResult && (
             <div className="aiterm-tool-card-section">
-              <div className="aiterm-tool-card-label">輸出</div>
+              <div className="aiterm-tool-card-label">{t.tool_call_output}</div>
               <pre className="aiterm-tool-card-content">{typeof resultMsg!.content === "string" ? resultMsg!.content : ""}</pre>
             </div>
           )}
@@ -78,6 +80,7 @@ export function MessageList({
   onExecuteCommand,
   onRetry,
 }: MessageListProps) {
+  const { t } = useLocale();
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -132,7 +135,7 @@ export function MessageList({
             onClick={onRetry}
             disabled={isStreaming}
           >
-            🔄 重試
+            {t.ai_retry}
           </button>
         </div>
       )}

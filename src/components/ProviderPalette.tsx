@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listProviders, setDefaultProvider, type ProviderInfo } from "../ipc/provider";
 import { PROVIDER_TYPE_LABELS } from "../ipc/provider";
+import { useLocale } from '../contexts/LocaleContext';
 import "./ProviderPalette.css";
 
 interface ProviderPaletteProps {
@@ -9,6 +10,7 @@ interface ProviderPaletteProps {
 }
 
 export function ProviderPalette({ onClose, onSwitch }: ProviderPaletteProps) {
+  const { t } = useLocale();
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [cursor, setCursor] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
@@ -65,9 +67,9 @@ export function ProviderPalette({ onClose, onSwitch }: ProviderPaletteProps) {
         aria-label="Switch AI Provider"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="aiterm-palette__title">Switch Provider</div>
+        <div className="aiterm-palette__title">{t.provider_palette_title}</div>
         {providers.length === 0 ? (
-          <div className="aiterm-palette__empty">No providers configured.</div>
+          <div className="aiterm-palette__empty">{t.provider_palette_empty}</div>
         ) : (
           <ul ref={listRef} className="aiterm-palette__list">
             {providers.map((p, idx) => (
@@ -90,7 +92,7 @@ export function ProviderPalette({ onClose, onSwitch }: ProviderPaletteProps) {
             ))}
           </ul>
         )}
-        <div className="aiterm-palette__hint">↑↓ 選擇 · Enter 確認 · Esc 關閉</div>
+        <div className="aiterm-palette__hint">{t.provider_palette_hint}</div>
       </div>
     </div>
   );

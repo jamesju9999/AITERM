@@ -5,34 +5,36 @@ import { addProvider } from "../../ipc/provider";
 import { setExecutionMode, setOnboardingDone } from "../../ipc/config";
 import type { ExecutionMode } from "../../ipc/config";
 import type { ProviderInput } from "../../ipc/provider";
+import { useLocale } from "../../contexts/LocaleContext";
 import "./OnboardingWizard.css";
 
 type Step = 1 | 2 | 3;
 
-const MODES: { value: ExecutionMode; label: string; desc: string }[] = [
-  {
-    value: "always-confirm",
-    label: "一律確認（推薦）",
-    desc: "所有 AI 命令都需要確認後才執行，最安全的選擇。",
-  },
-  {
-    value: "graded",
-    label: "分級自動",
-    desc: "無風險命令（如 ls）自動執行，其他命令仍需確認。",
-  },
-  {
-    value: "full-auto",
-    label: "全自動 Agent",
-    desc: "大多數命令自動執行，只有危險命令才詢問確認。",
-  },
-];
-
 export function OnboardingWizard() {
   const navigate = useNavigate();
+  const { t } = useLocale();
   const [step, setStep] = useState<Step>(1);
   const [mode, setMode] = useState<ExecutionMode>("always-confirm");
   const [finishing, setFinishing] = useState(false);
   const [providerAdded, setProviderAdded] = useState(false);
+
+  const MODES: { value: ExecutionMode; label: string; desc: string }[] = [
+    {
+      value: "always-confirm",
+      label: t.ob_mode_always_confirm,
+      desc: t.ob_mode_always_confirm_desc,
+    },
+    {
+      value: "graded",
+      label: t.ob_mode_graded,
+      desc: t.ob_mode_graded_desc,
+    },
+    {
+      value: "full-auto",
+      label: t.ob_mode_full_auto,
+      desc: t.ob_mode_full_auto_desc,
+    },
+  ];
 
   const handleAddProvider = async (input: ProviderInput) => {
     await addProvider(input);
@@ -69,29 +71,29 @@ export function OnboardingWizard() {
         {step === 1 && (
           <div className="onboarding-step">
             <div className="onboarding-icon">⚡</div>
-            <h1>歡迎使用 AITerm</h1>
+            <h1>{t.ob_welcome_title}</h1>
             <p className="onboarding-subtitle">
-              由 AI 驅動的跨平台終端機，讓命令列操作更直覺
+              {t.ob_welcome_subtitle}
             </p>
             <ul className="feature-list">
               <li>
                 <span className="feature-icon">💬</span>
-                用自然語言描述你想做的事，AI 自動產生命令
+                {t.ob_feature_1}
               </li>
               <li>
                 <span className="feature-icon">🔌</span>
-                支援 OpenAI、Anthropic、Ollama 等多個 AI 後端
+                {t.ob_feature_2}
               </li>
               <li>
                 <span className="feature-icon">🛡️</span>
-                內建命令安全分級，危險命令不會被意外執行
+                {t.ob_feature_3}
               </li>
             </ul>
             <button
               className="btn-primary btn-large"
               onClick={() => setStep(2)}
             >
-              開始設定
+              {t.ob_btn_start}
             </button>
           </div>
         )}
@@ -99,9 +101,9 @@ export function OnboardingWizard() {
         {/* Step 2: Add first provider */}
         {step === 2 && (
           <div className="onboarding-step">
-            <h2>新增你的第一個 AI Provider</h2>
+            <h2>{t.ob_add_provider_title}</h2>
             <p className="onboarding-subtitle">
-              選擇你要使用的 AI 服務並填入相關設定
+              {t.ob_add_provider_subtitle}
             </p>
             <div className="form-wrapper">
               <ProviderForm
@@ -110,7 +112,7 @@ export function OnboardingWizard() {
               />
             </div>
             <button className="btn-skip" onClick={() => setStep(3)}>
-              稍後再設定
+              {t.ob_btn_skip}
             </button>
           </div>
         )}
@@ -118,9 +120,9 @@ export function OnboardingWizard() {
         {/* Step 3: Choose execution mode */}
         {step === 3 && (
           <div className="onboarding-step">
-            <h2>選擇執行模式</h2>
+            <h2>{t.ob_choose_mode_title}</h2>
             <p className="onboarding-subtitle">
-              決定 AI 產出的命令要如何被執行，之後可在設定頁更改。
+              {t.ob_choose_mode_subtitle}
             </p>
             <div className="mode-list">
               {MODES.map((m) => (
@@ -141,7 +143,7 @@ export function OnboardingWizard() {
             </div>
             {!providerAdded && (
               <p className="notice">
-                你尚未設定 Provider，可以在設定頁中隨時新增。
+                {t.ob_no_provider_notice}
               </p>
             )}
             <button
@@ -149,7 +151,7 @@ export function OnboardingWizard() {
               onClick={handleFinish}
               disabled={finishing}
             >
-              {finishing ? "完成中…" : "完成設定，開始使用！"}
+              {finishing ? t.ob_btn_finishing : t.ob_btn_finish}
             </button>
           </div>
         )}
@@ -157,3 +159,4 @@ export function OnboardingWizard() {
     </div>
   );
 }
+

@@ -45,9 +45,9 @@ function contentToString(content: ChatMessage["content"]): string {
     .join(" ");
 }
 
-function formatSessionTitle(messages: ChatMessage[]): string {
+function formatSessionTitle(messages: ChatMessage[], t: any): string {
   const first = messages.find((m) => m.role === "user");
-  return first ? contentToString(first.content).slice(0, 30) : "（空對話）";
+  return first ? contentToString(first.content).slice(0, 30) : t.chat_empty;
 }
 
 export interface UseAiChatResult {
@@ -74,7 +74,7 @@ export interface UseAiChatResult {
  * remount (via `key={sessionId}`) resets all state.
  */
 export function useAiChat(sessionId: string): UseAiChatResult {
-  const { locale } = useLocale();
+  const { t, locale } = useLocale();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamBuf, setStreamBuf] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -183,7 +183,7 @@ export function useAiChat(sessionId: string): UseAiChatResult {
   // Auto-save messages to localStorage whenever they change (non-empty only)
   useEffect(() => {
     if (messages.length === 0) return;
-    const title = formatSessionTitle(messages);
+    const title = formatSessionTitle(messages, t);
     const all = loadAllSessions();
     if (!currentSessionIdRef.current) {
       currentSessionIdRef.current = `${sessionId}-${Date.now()}`;

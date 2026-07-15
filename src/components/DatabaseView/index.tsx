@@ -5,6 +5,7 @@ import { DatabaseBrowser } from "./DatabaseBrowser";
 import { DatabaseSqlEditor } from "./DatabaseSqlEditor";
 import { DatabaseAiChat } from "./DatabaseAiChat";
 import { useTelegramRemoteControl } from "../../hooks/useTelegramRemoteControl";
+import { useLocale } from "../../contexts/LocaleContext";
 import "./index.css";
 
 export interface DatabaseViewProps {
@@ -17,6 +18,7 @@ export interface DatabaseViewProps {
 type SubTab = "browse" | "ai" | "sql";
 
 export function DatabaseView({ tabId: _tabId, isActive: _isActive, dbConnectionId, onConnectionSelected }: DatabaseViewProps) {
+  const { t } = useLocale();
   const [subTab, setSubTab] = useState<SubTab>("browse");
   const [schemas, setSchemas] = useState<string[]>([]);
   const [activeSchema, setActiveSchema] = useState<string>("");
@@ -72,26 +74,26 @@ export function DatabaseView({ tabId: _tabId, isActive: _isActive, dbConnectionI
       <div style={{ padding: 24, color: "#f87171", fontSize: 13 }}>
         {isOdbc ? (
           <>
-            <div style={{ marginBottom: 8 }}>⚠️ DB2 ODBC Driver 未安裝</div>
+            <div style={{ marginBottom: 8 }}>{t.db_odbc_missing_title}</div>
             <div style={{ color: "#888", fontSize: 12, marginBottom: 12 }}>
-              請安裝 IBM Data Server Driver Package，然後重新嘗試連線。
+              {t.db_odbc_missing_desc}
             </div>
             <button
               onClick={() => setConnectError(null)}
               style={{ background: "#1a1a1a", border: "1px solid #3a3a3a", color: "#ccc", borderRadius: 4, padding: "6px 14px", cursor: "pointer" }}
             >
-              重新嘗試
+              {t.db_btn_retry}
             </button>
           </>
         ) : (
           <>
-            <div style={{ marginBottom: 8 }}>連線失敗</div>
+            <div style={{ marginBottom: 8 }}>{t.db_connect_failed}</div>
             <div style={{ color: "#888", fontSize: 12 }}>{connectError}</div>
             <button
               onClick={() => { setConnectError(null); }}
               style={{ marginTop: 12, background: "#1a1a1a", border: "1px solid #3a3a3a", color: "#ccc", borderRadius: 4, padding: "6px 14px", cursor: "pointer" }}
             >
-              重新連線
+              {t.db_btn_reconnect}
             </button>
           </>
         )}
@@ -102,7 +104,7 @@ export function DatabaseView({ tabId: _tabId, isActive: _isActive, dbConnectionI
   return (
     <div className="db-view">
       <div className="db-view__subtabs">
-        {([["browse", "瀏覽"], ["ai", "AI Chat"], ["sql", "SQL Editor"]] as [SubTab, string][]).map(([key, label]) => (
+        {([["browse", t.db_subtab_browse], ["ai", t.db_subtab_ai], ["sql", t.db_subtab_sql]] as [SubTab, string][]).map(([key, label]) => (
           <button
             key={key}
             className={`db-view__subtab ${subTab === key ? "db-view__subtab--active" : ""}`}
@@ -116,7 +118,7 @@ export function DatabaseView({ tabId: _tabId, isActive: _isActive, dbConnectionI
             className={`db-view__subtab ${isRemoteEnabled ? "aiterm-agent-toggle--on" : ""}`}
             style={{ marginLeft: 8 }}
             onClick={() => setIsRemoteEnabled(!isRemoteEnabled)}
-            title="啟用/停用 Telegram 遠端控制"
+            title={t.db_remote_tooltip}
           >
             📱 Remote
           </button>
@@ -149,3 +151,4 @@ export function DatabaseView({ tabId: _tabId, isActive: _isActive, dbConnectionI
     </div>
   );
 }
+

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { readFile } from "../../ipc/fs";
 import type { DirEntry } from "../../ipc/fs";
-
+import { useLocale } from "../../contexts/LocaleContext";
 interface FileViewerProps {
   file: DirEntry | null;
 }
@@ -14,6 +14,7 @@ type ViewState =
   | { kind: "error"; message: string };
 
 export function FileViewer({ file }: FileViewerProps) {
+  const { t } = useLocale();
   const [state, setState] = useState<ViewState>({ kind: "empty" });
 
   useEffect(() => {
@@ -41,7 +42,7 @@ export function FileViewer({ file }: FileViewerProps) {
   if (state.kind === "empty") {
     return (
       <div className="fv-empty">
-        選擇左側檔案以預覽內容
+        {t.file_viewer_empty}
       </div>
     );
   }
@@ -55,12 +56,12 @@ export function FileViewer({ file }: FileViewerProps) {
       )}
 
       {state.kind === "loading" && (
-        <div className="fv-status">載入中…</div>
+        <div className="fv-status">{t.file_loading}</div>
       )}
 
       {state.kind === "binary" && (
         <div className="fv-status fv-status--muted">
-          此檔案為二進位格式，無法預覽
+          {t.file_viewer_binary}
         </div>
       )}
 
@@ -71,7 +72,7 @@ export function FileViewer({ file }: FileViewerProps) {
       {state.kind === "ok" && (
         <>
           {state.truncated && (
-            <div className="fv-banner">⚠ 檔案過大，僅顯示前 10 MB</div>
+            <div className="fv-banner">{t.file_viewer_too_large}</div>
           )}
           <div className="fv-content">
             <pre className="fv-pre">

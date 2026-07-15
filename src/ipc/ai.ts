@@ -1,5 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Locale } from "../lib/i18n";
+import { LOCALE_STORAGE_KEY, translations, type Locale } from "../lib/i18n";
+
+function getT() {
+  const loc = (localStorage.getItem(LOCALE_STORAGE_KEY) || "zh-TW") as "zh-TW" | "en";
+  return translations[loc] || translations["zh-TW"];
+}
 
 export type ContentPart =
   | { type: "text"; text: string }
@@ -118,29 +123,30 @@ export function invokeAiQuery(
 
 
 export function formatAiError(e: AiError): string {
+  const t = getT();
   switch (e.kind) {
     case "not_configured":
-      return "aiterm: 尚未設定 AI Provider。";
+      return t.ai_err_not_configured;
     case "network":
       if (
         e.message?.toLowerCase().includes("ollama") ||
         e.message?.toLowerCase().includes("connection refused") ||
         e.message?.toLowerCase().includes("connect error")
       ) {
-        return "aiterm: 無法連線到 Ollama。請確認 Ollama 已啟動。";
+        return t.ai_err_ollama_failed;
       }
-      return `aiterm: 網路錯誤 — ${e.message}`;
+      return t.ai_err_network(e.message ?? "");
     case "auth_failed":
-      return "aiterm: API Key 驗證失敗。";
+      return t.ai_err_auth_failed;
     case "rate_limit": {
       const base = e.retry_after
-        ? `aiterm: 請求過於頻繁（${e.retry_after} 秒後重試）`
-        : "aiterm: 請求過於頻繁，請稍後再試";
+        ? t.ai_err_rate_limit_secs(Number(e.retry_after))
+        : t.ai_err_rate_limit;
       return e.body ? `${base}\n${e.body}` : base;
     }
     case "model_error":
-      return `aiterm: AI 回傳格式錯誤（${e.reason}）`;
+      return t.ai_err_format(e.reason ?? "");
     case "invalid_input":
-      return `aiterm: 前端傳送的訊息格式無效（${e.reason}）`;
+      return t.ai_err_invalid_input(e.reason ?? "");
   }
 }

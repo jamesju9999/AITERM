@@ -57,6 +57,7 @@ export function AiPanel({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [mcpEnabled, setMcpEnabled] = useState(true);
   const [mcpToolCount, setMcpToolCount] = useState(0);
@@ -355,7 +356,9 @@ ${dirList || "（無法取得）"}
       />
 
       <div className="aiterm-ai-panel-header">
-        <span className="aiterm-ai-panel-title">AI Chat</span>
+        <span className="aiterm-ai-panel-title" style={{ background: 'var(--accent-gradient)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '14px' }}>
+          ✨ AITerm AI Studio
+        </span>
         <button
           type="button"
           className="aiterm-ai-panel-provider-badge"
@@ -475,57 +478,80 @@ ${dirList || "（無法取得）"}
           ))}
         </div>
       )}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        style={{ display: "none" }}
+        onChange={(e) => { if (e.target.files) void processFiles(e.target.files); }}
+      />
       <div className="aiterm-ai-panel-input-area">
-        <button
-          type="button"
-          className={`aiterm-agent-toggle${agentMode ? " aiterm-agent-toggle--on" : ""}`}
-          onClick={() => setAgentMode((m) => !m)}
-          title={agentMode ? "停用 Agent 模式" : "啟用 Agent 模式（AI 自動執行指令迭代）"}
-          disabled={isDisabled}
-        >
-          ⚡
-        </button>
-        {mcpEnabled && (
+        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
           <button
             type="button"
-            title={mcpToolCount === 0 ? t.mcp_toggle_no_servers : (useMcp ? "MCP 開啟" : "MCP 關閉")}
-            disabled={mcpToolCount === 0 || isDisabled}
-            onClick={() => setUseMcp((v) => !v)}
-            style={{
-              fontSize: 11, padding: "2px 8px", borderRadius: 4,
-              border: `1px solid ${useMcp && mcpToolCount > 0 ? "#34d399" : "#333"}`,
-              background: useMcp && mcpToolCount > 0 ? "#0f2e23" : "transparent",
-              color: useMcp && mcpToolCount > 0 ? "#34d399" : "#666",
-              cursor: mcpToolCount === 0 ? "default" : "pointer",
-              opacity: mcpToolCount === 0 ? 0.5 : 1,
-            }}
+            className={`aiterm-agent-toggle${agentMode ? " aiterm-agent-toggle--on" : ""}`}
+            onClick={() => setAgentMode((m) => !m)}
+            title={agentMode ? "停用 Agent 模式" : "啟用 Agent 模式（AI 自動執行指令迭代）"}
+            disabled={isDisabled}
           >
-            {mcpToolCount > 0 ? t.mcp_toggle_on(mcpToolCount) : t.mcp_toggle_off}
+            ⚡
           </button>
-        )}
-        <textarea
-          ref={textareaRef}
-          className="aiterm-ai-panel-input"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          placeholder={
-            agentRunning ? "Agent 執行中…" :
-            agentMode ? "輸入目標，Agent 將自動執行指令… (Enter)" :
-            chat.isStreaming ? "等待 AI 回覆中..." : "輸入訊息，Enter 送出..."
-          }
-          rows={2}
-          disabled={isDisabled}
-        />
-        <button
-          type="button"
-          className="aiterm-ai-panel-send-btn"
-          onClick={handleSubmit}
-          disabled={isDisabled || input.trim() === ""}
-        >
-          送出
-        </button>
+          {mcpEnabled && (
+            <button
+              type="button"
+              title={mcpToolCount === 0 ? t.mcp_toggle_no_servers : (useMcp ? "MCP 開啟" : "MCP 關閉")}
+              disabled={mcpToolCount === 0 || isDisabled}
+              onClick={() => setUseMcp((v) => !v)}
+              style={{
+                fontSize: 10, padding: "4px 8px", borderRadius: 6,
+                border: `1px solid ${useMcp && mcpToolCount > 0 ? "#34d399" : "#333"}`,
+                background: useMcp && mcpToolCount > 0 ? "#0f2e23" : "transparent",
+                color: useMcp && mcpToolCount > 0 ? "#34d399" : "#666",
+                cursor: mcpToolCount === 0 ? "default" : "pointer",
+                opacity: mcpToolCount === 0 ? 0.5 : 1,
+                fontWeight: 600,
+                lineHeight: 1,
+              }}
+            >
+              {mcpToolCount > 0 ? `MCP (${mcpToolCount})` : "MCP OFF"}
+            </button>
+          )}
+        </div>
+        <div className="aiterm-input-pill-container">
+          <button
+            type="button"
+            className="aiterm-pill-paperclip-btn"
+            onClick={() => fileInputRef.current?.click()}
+            title="附加檔案"
+            disabled={isDisabled}
+          >
+            📎
+          </button>
+          <textarea
+            ref={textareaRef}
+            className="aiterm-ai-panel-input"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            placeholder={
+              agentRunning ? "Agent 執行中…" :
+              agentMode ? "目標... (Enter)" :
+              chat.isStreaming ? "等待 AI 回覆..." : "Ask AI anything..."
+            }
+            rows={1}
+            disabled={isDisabled}
+          />
+          <button
+            type="button"
+            className="aiterm-ai-panel-send-btn"
+            onClick={handleSubmit}
+            disabled={isDisabled || input.trim() === ""}
+            title="送出"
+          >
+            ▲
+          </button>
+        </div>
       </div>
     </div>
   );

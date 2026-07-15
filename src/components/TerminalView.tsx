@@ -281,6 +281,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         startMission(finalQuery, 5);
         if (sessionRef.current && termRef.current) {
           runAgentLoop({
+            t,
             goal: finalQuery,
             locale,
             sessionId: sessionRef.current,
@@ -435,6 +436,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     // Brief delay to let the shell finish initializing before the first AI query.
     setTimeout(() => {
       runAgentLoop({
+        t,
         goal: initialMission.goal,
         locale,
         sessionId: session,
@@ -559,7 +561,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           if (agentMissionRef.current?.active) {
             const lower = text.toLowerCase();
             if (lower.includes("password") || lower.includes("密碼") || lower.includes("passphrase")) {
-              term.write(`\r\n\x1b[33;1m🔒 [Agent: 等待密碼輸入，請在終端機中輸入密碼後按 Enter]\x1b[0m\r\n`);
+              term.write(`\r\n\x1b[33;1m${t.term_agent_wait_password}\x1b[0m\r\n`);
             }
           }
         });
@@ -658,6 +660,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             agentAbortRef.current = false;
             startMission(finalQuery, 5);
             runAgentLoop({
+              t,
               goal: finalQuery,
               locale,
               sessionId: session,
@@ -807,7 +810,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           {activeProvider ? (
             <button
               className="aiterm-status-provider"
-              title="切換 Provider (Ctrl+Shift+P)"
+              title={t.term_provider_tooltip_switch}
               onClick={() => setPaletteOpen((o) => !o)}
             >
               {activeProvider}
@@ -815,7 +818,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           ) : (
             <button
               className="aiterm-status-provider aiterm-status-provider--empty"
-              title="前往設定新增 AI 供應商"
+              title={t.term_provider_tooltip_add}
               onClick={() => navigate("/settings")}
             >
               {t.ai_providers} ＋
@@ -823,7 +826,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           )}
           <button
             className={`aiterm-block-btn ${isRemoteEnabled ? 'aiterm-agent-toggle--on' : ''}`}
-            title="啟用/停用 Telegram 遠端控制"
+            title={t.term_remote_tooltip}
             onClick={(e) => {
               e.stopPropagation();
               setIsRemoteEnabled((prev) => !prev);
@@ -834,7 +837,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           </button>
           <button
             className="aiterm-block-btn aiterm-block-btn-ai"
-            title="開啟 AI 助手 (Ctrl+I)"
+            title={t.term_ai_helper_tooltip}
             onClick={(e) => {
                e.stopPropagation();
                window.dispatchEvent(new CustomEvent('aiterm:ask-ai', { detail: {} }));
@@ -888,13 +891,13 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                 if (e.key === 'F3' && !e.shiftKey) { e.preventDefault(); doSearch(searchQuery, 'next'); }
                 if (e.key === 'F3' && e.shiftKey) { e.preventDefault(); doSearch(searchQuery, 'prev'); }
               }}
-              placeholder="搜尋..."
+              placeholder={t.term_search_placeholder}
               className="terminal-search-input"
             />
             {searchMatchInfo && <span className="terminal-search-match-info">{searchMatchInfo}</span>}
-            <button onClick={() => doSearch(searchQuery, 'prev')} title="上一個" className="terminal-search-btn">↑</button>
-            <button onClick={() => doSearch(searchQuery, 'next')} title="下一個" className="terminal-search-btn">↓</button>
-            <button onClick={closeSearch} title="關閉" className="terminal-search-btn terminal-search-close">✕</button>
+            <button onClick={() => doSearch(searchQuery, 'prev')} title={t.term_search_prev} className="terminal-search-btn">↑</button>
+            <button onClick={() => doSearch(searchQuery, 'next')} title={t.term_search_next} className="terminal-search-btn">↓</button>
+            <button onClick={closeSearch} title={t.term_search_close} className="terminal-search-btn terminal-search-close">✕</button>
           </div>
         )}
         <div
@@ -985,32 +988,32 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                        </button>
                      )}
                      <button
-                         className="aiterm-block-btn"
-                         onClick={(e) => {
-                           e.stopPropagation();
-                           addBookmark(b.command);
-                           const btn = e.currentTarget;
-                           const orig = btn.innerHTML;
-                           btn.innerHTML = '⭐ Saved';
-                           setTimeout(() => btn.innerHTML = orig, 1200);
-                         }}
-                         title="儲存至書籤 (Ctrl+Shift+R 開啟)"
-                     >
-                       ⭐ Bookmark
-                     </button>
-                     <button
-                         className="aiterm-block-btn"
-                         onClick={(e) => {
-                           e.stopPropagation();
-                           navigator.clipboard.writeText(b.command).catch(console.error);
-                           const btn = e.currentTarget;
-                           const orig = btn.innerHTML;
-                           btn.innerHTML = '📋 Copied';
-                           setTimeout(() => btn.innerHTML = orig, 1000);
-                         }}
-                     >
-                       📋 Copy
-                     </button>
+                          className="aiterm-block-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            addBookmark(b.command);
+                            const btn = e.currentTarget;
+                            const orig = btn.innerHTML;
+                            btn.innerHTML = t.terminal_bookmark_saved;
+                            setTimeout(() => btn.innerHTML = orig, 1200);
+                          }}
+                          title={t.term_bookmark_tooltip}
+                      >
+                        {t.terminal_bookmark_btn}
+                      </button>
+                      <button
+                          className="aiterm-block-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigator.clipboard.writeText(b.command).catch(console.error);
+                            const btn = e.currentTarget;
+                            const orig = btn.innerHTML;
+                            btn.innerHTML = t.terminal_copy_done;
+                            setTimeout(() => btn.innerHTML = orig, 1000);
+                          }}
+                      >
+                        {t.terminal_copy_btn}
+                      </button>
                      </div>
                    </div>
                  );
@@ -1036,6 +1039,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                 agentAbortRef.current = false;
                 startMission(finalQuery, 5);
                 runAgentLoop({
+                  t,
                   goal: finalQuery,
                   locale,
                   sessionId,
@@ -1123,6 +1127,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
  * which fires AFTER the executed command finishes in the PTY.
  */
 function handleAiQuery(
+  t: any,
   locale: Locale,
   sessionId: string,
   originalLine: string,
@@ -1185,7 +1190,7 @@ function handleAiQuery(
       } else {
         // Show preview with risk badge.
         if (risk === "dangerous") {
-          term.write("\x1b[31m⚠ 危險操作 — 請仔細確認後再執行\x1b[0m\r\n");
+          term.write(`\x1b[31m${t.term_danger_warning}\x1b[0m\r\n`);
         }
         setPreview({
           loading: false,
@@ -1205,17 +1210,17 @@ function handleAiQuery(
 
       // Actionable follow-up hints
       if (err.kind === "not_configured") {
-        term.write("\x1b[33m提示：按 Ctrl+, 開啟設定並新增一個 AI Provider。\x1b[0m\r\n");
+        term.write(`\x1b[33m${t.term_setup_hint_provider}\x1b[0m\r\n`);
       } else if (
         err.kind === "network" &&
         (err.message?.toLowerCase().includes("ollama") ||
           err.message?.toLowerCase().includes("connection refused"))
       ) {
         term.write(
-          "\x1b[33m提示：請啟動 Ollama，或按 Ctrl+, 切換到雲端 Provider。\x1b[0m\r\n"
+          `\x1b[33m${t.term_setup_hint_ollama}\x1b[0m\r\n`
         );
       } else if (err.kind === "auth_failed") {
-        term.write("\x1b[33m提示：請按 Ctrl+, 至設定頁更新 API Key。\x1b[0m\r\n");
+        term.write(`\x1b[33m${t.term_setup_hint_api_key}\x1b[0m\r\n`);
       }
 
       setPreview(INITIAL_PREVIEW);
@@ -1258,6 +1263,7 @@ function formatAgentStepForRemote(info: AgentStepInfo): string {
 }
 
 interface AgentLoopParams {
+  t: any;
   goal: string;
   locale: Locale;
   sessionId: string;
@@ -1280,7 +1286,7 @@ interface AgentLoopParams {
 
 function runAgentLoop(params: AgentLoopParams) {
   const {
-    goal, locale, sessionId, term, getSubmitCommand,
+    t, goal, locale, sessionId, term, getSubmitCommand,
     setPreview, setStreamText, streamingRef, executionModeRef,
     writeRed, abortRef, stepCount, maxSteps, history,
     onComplete, onFail,
@@ -1288,7 +1294,7 @@ function runAgentLoop(params: AgentLoopParams) {
 
   if (abortRef.current) return;
   if (stepCount >= maxSteps) {
-    onFail(`已達最大迭代次數 (${maxSteps})`);
+    onFail(t.term_agent_max_steps(maxSteps));
     return;
   }
 
@@ -1304,7 +1310,7 @@ function runAgentLoop(params: AgentLoopParams) {
   }
 
   if (stepCount > 0) {
-    term.write(`\r\n\x1b[35m[Agent: 思考下一步... (${stepCount}/${maxSteps})]\x1b[0m\r\n`);
+    term.write(`\r\n\x1b[35m${t.term_agent_thinking(stepCount + 1, maxSteps)}\x1b[0m\r\n`);
   }
 
   // This callback fires when the command FINISHES executing in the PTY (via OSC 133;D)
@@ -1357,8 +1363,8 @@ function runAgentLoop(params: AgentLoopParams) {
   // Timeout: if the command hasn't completed in 60s, it likely needs user input
   setTimeout(() => {
     if (!stepResolved && !abortRef.current) {
-      term.write(`\r\n\x1b[33m⚠ Agent 逾時：指令超過 60 秒未完成，可能需要手動輸入（如密碼）。Agent 已暫停。\x1b[0m\r\n`);
-      onFail("指令逾時，可能需要互動式輸入");
+      term.write(`\r\n\x1b[33m${t.term_agent_timeout}\x1b[0m\r\n`);
+      onFail(t.term_agent_timeout_fail);
     }
   }, 60000);
 
@@ -1399,6 +1405,7 @@ function runAgentLoop(params: AgentLoopParams) {
 
   // Call AI, auto-execute the returned command, wire up the completion callback
   handleAiQuery(
+    t,
     locale,
     sessionId,
     "",

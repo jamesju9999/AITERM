@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { dbListConnections, type DbConnectionInfo, DB_TYPE_LABELS } from "../../ipc/db";
+import { useLocale } from "../../contexts/LocaleContext";
 
 interface Props {
   onSelect: (connId: string) => void;
 }
 
 export function ConnectionSelector({ onSelect }: Props) {
+  const { t } = useLocale();
   const [connections, setConnections] = useState<DbConnectionInfo[]>([]);
   const navigate = useNavigate();
 
@@ -16,7 +18,7 @@ export function ConnectionSelector({ onSelect }: Props) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 16 }}>
-      <div style={{ color: "#888", fontSize: 14 }}>選擇資料庫連線</div>
+      <div style={{ color: "#888", fontSize: 14 }}>{t.db_select_conn}</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, width: 280 }}>
         {connections.map((conn) => (
           <button
@@ -39,9 +41,10 @@ export function ConnectionSelector({ onSelect }: Props) {
             padding: "10px 14px", color: "#555", fontSize: 12, cursor: "pointer",
           }}
         >
-          ⚙ 新增 / 管理連線...
+          {t.db_manage_conn}
         </button>
       </div>
     </div>
   );
 }
+

@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
 import { getConfig, type EnterprisePolicy } from "../../ipc/config";
 import { enterpriseRegisterDevice, enterpriseInstallService } from "../../ipc/enterprise";
+import { useLocale } from "../../contexts/LocaleContext";
 
 type RegisterStatus = "idle" | "registering" | "success" | "error";
 
 export function EnterprisePage() {
+  const { t } = useLocale();
   const [serverUrl, setServerUrl] = useState("");
   const [deviceName, setDeviceName] = useState("");
   const [deviceType, setDeviceType] = useState<"interactive" | "headless_worker">("interactive");
@@ -56,9 +58,9 @@ export function EnterprisePage() {
 
   return (
     <div style={{ padding: "24px 32px", color: "#e0e0e0", maxWidth: 560 }}>
-      <h2 style={{ margin: "0 0 8px", fontSize: 18 }}>Enterprise</h2>
+      <h2 style={{ margin: "0 0 8px", fontSize: 18 }}>{t.enterprise_title}</h2>
       <p style={{ color: "#888", marginBottom: 24, fontSize: 13 }}>
-        Connect this device to an Enterprise Management Server to receive tasks and policy updates.
+        {t.enterprise_desc}
       </p>
 
       {isAlreadyRegistered && (
@@ -66,19 +68,19 @@ export function EnterprisePage() {
           background: "#1a2a1a", border: "1px solid #3a6a3a", borderRadius: 6,
           padding: "12px 16px", marginBottom: 24, fontSize: 13,
         }}>
-          <div style={{ color: "#6abf6a", fontWeight: 600, marginBottom: 6 }}>✓ Registered</div>
-          <div><span style={{ color: "#888" }}>Server: </span>{existingServerUrl}</div>
-          <div><span style={{ color: "#888" }}>Device ID: </span>
+          <div style={{ color: "#6abf6a", fontWeight: 600, marginBottom: 6 }}>{t.enterprise_registered}</div>
+          <div><span style={{ color: "#888" }}>{t.enterprise_server_label}</span>{existingServerUrl}</div>
+          <div><span style={{ color: "#888" }}>{t.enterprise_device_id_label}</span>
             <code style={{ fontSize: 12, color: "#aaa" }}>{existingDeviceId}</code>
           </div>
           {enterprisePolicy && (
             <div style={{ marginTop: 8 }}>
-              <span style={{ color: "#888" }}>Policy version: </span>
+              <span style={{ color: "#888" }}>{t.enterprise_policy_version_label}</span>
               {String(enterprisePolicy.version ?? 0)}
               {enterprisePolicy.execution_mode && (
                 <span style={{ marginLeft: 12, color: "#888" }}>
-                  Execution: <span style={{ color: "#e0c060" }}>{String(enterprisePolicy.execution_mode)}</span>
-                  <span style={{ color: "#666", fontSize: 11, marginLeft: 4 }}>(由管理者設定)</span>
+                  {t.enterprise_execution_label}<span style={{ color: "#e0c060" }}>{String(enterprisePolicy.execution_mode)}</span>
+                  <span style={{ color: "#666", fontSize: 11, marginLeft: 4 }}>{t.settings_managed_by_admin || t.enterprise_managed}</span>
                 </span>
               )}
             </div>
@@ -88,7 +90,7 @@ export function EnterprisePage() {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <label style={{ fontSize: 13 }}>
-          <div style={{ marginBottom: 4, color: "#aaa" }}>Management Server URL</div>
+          <div style={{ marginBottom: 4, color: "#aaa" }}>{t.enterprise_server_url_label}</div>
           <input
             type="text"
             value={serverUrl}
@@ -103,7 +105,7 @@ export function EnterprisePage() {
         </label>
 
         <label style={{ fontSize: 13 }}>
-          <div style={{ marginBottom: 4, color: "#aaa" }}>Device Name</div>
+          <div style={{ marginBottom: 4, color: "#aaa" }}>{t.enterprise_device_name_label}</div>
           <input
             type="text"
             value={deviceName}
@@ -119,7 +121,7 @@ export function EnterprisePage() {
 
         <div style={{ display: "flex", gap: 12 }}>
           <label style={{ flex: 1, fontSize: 13 }}>
-            <div style={{ marginBottom: 4, color: "#aaa" }}>Device Type</div>
+            <div style={{ marginBottom: 4, color: "#aaa" }}>{t.enterprise_device_type_label}</div>
             <select
               value={deviceType}
               onChange={(e) => setDeviceType(e.target.value as typeof deviceType)}
@@ -128,13 +130,13 @@ export function EnterprisePage() {
                 borderRadius: 4, padding: "6px 10px", color: "#e0e0e0", fontSize: 13,
               }}
             >
-              <option value="interactive">Interactive</option>
-              <option value="headless_worker">Headless Worker</option>
+              <option value="interactive">{t.enterprise_device_interactive}</option>
+              <option value="headless_worker">{t.enterprise_device_headless}</option>
             </select>
           </label>
 
           <label style={{ flex: 1, fontSize: 13 }}>
-            <div style={{ marginBottom: 4, color: "#aaa" }}>Role</div>
+            <div style={{ marginBottom: 4, color: "#aaa" }}>{t.enterprise_role_label}</div>
             <select
               value={role}
               onChange={(e) => setRole(e.target.value as typeof role)}
@@ -143,10 +145,10 @@ export function EnterprisePage() {
                 borderRadius: 4, padding: "6px 10px", color: "#e0e0e0", fontSize: 13,
               }}
             >
-              <option value="dev">Developer</option>
-              <option value="dba">DBA</option>
-              <option value="ops">Ops</option>
-              <option value="qa">QA</option>
+              <option value="dev">{t.enterprise_role_dev}</option>
+              <option value="dba">{t.enterprise_role_dba}</option>
+              <option value="ops">{t.enterprise_role_ops}</option>
+              <option value="qa">{t.enterprise_role_qa}</option>
             </select>
           </label>
         </div>
@@ -160,12 +162,12 @@ export function EnterprisePage() {
             fontSize: 13, opacity: (status === "registering" || !serverUrl.trim() || !deviceName.trim()) ? 0.5 : 1,
           }}
         >
-          {status === "registering" ? "Registering…" : isAlreadyRegistered ? "Re-register" : "Register Device"}
+          {status === "registering" ? t.enterprise_registering : isAlreadyRegistered ? t.enterprise_reregister : t.enterprise_register}
         </button>
 
         {status === "success" && (
           <div style={{ color: "#6abf6a", fontSize: 13 }}>
-            ✓ Device registered successfully. Device ID: <code>{existingDeviceId}</code>
+            {t.enterprise_register_success(existingDeviceId || "")}
           </div>
         )}
         {status === "error" && (
@@ -173,7 +175,7 @@ export function EnterprisePage() {
         )}
       </div>
 
-      {/* System Service Installer (11.2) */}
+      {/* System Service Installer */}
       {isAlreadyRegistered && deviceType === "headless_worker" && (
         <ServiceInstallerSection />
       )}
@@ -182,6 +184,7 @@ export function EnterprisePage() {
 }
 
 function ServiceInstallerSection() {
+  const { t } = useLocale();
   const [serviceContent, setServiceContent] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [installError, setInstallError] = useState("");
@@ -211,26 +214,26 @@ function ServiceInstallerSection() {
 
   return (
     <div style={{ marginTop: 32, borderTop: "1px solid #333", paddingTop: 24 }}>
-      <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 14 }}>System Service</div>
+      <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 14 }}>{t.enterprise_service_title}</div>
       <p style={{ color: "#888", fontSize: 13, marginBottom: 12 }}>
-        Install AITerm as a background system service so it auto-starts on boot.
+        {t.enterprise_service_desc}
       </p>
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <button
           onClick={preview}
           style={{ padding: "6px 14px", background: "#222", border: "1px solid #444", color: "#e0e0e0", borderRadius: 4, cursor: "pointer", fontSize: 13 }}
         >
-          Preview Config
+          {t.enterprise_preview_config}
         </button>
         <button
           onClick={install}
           disabled={installing}
           style={{ padding: "6px 14px", background: "#2a5a9a", border: "none", color: "#fff", borderRadius: 4, cursor: "pointer", fontSize: 13, opacity: installing ? 0.5 : 1 }}
         >
-          {installing ? "Installing…" : "Install Service"}
+          {installing ? t.enterprise_installing : t.enterprise_install_service}
         </button>
       </div>
-      {installed && <div style={{ color: "#6abf6a", fontSize: 13, marginBottom: 8 }}>✓ Service installed successfully</div>}
+      {installed && <div style={{ color: "#6abf6a", fontSize: 13, marginBottom: 8 }}>{t.enterprise_install_success}</div>}
       {installError && <div style={{ color: "#e06060", fontSize: 13, marginBottom: 8 }}>{installError}</div>}
       {serviceContent && (
         <pre style={{ background: "#111", border: "1px solid #333", borderRadius: 4, padding: "10px 14px", fontSize: 11, color: "#ccc", whiteSpace: "pre-wrap", maxHeight: 240, overflow: "auto" }}>
@@ -240,3 +243,4 @@ function ServiceInstallerSection() {
     </div>
   );
 }
+

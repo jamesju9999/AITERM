@@ -333,21 +333,21 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
 
       {providerType === "anthropic" && (
         <div className="form-group">
-          <label>身份驗證方式</label>
+          <label>{t.settings_provider_auth_type}</label>
           <div className="anthropic-auth-tabs">
             <button
               type="button"
               className={`auth-tab ${anthropicAuthMethod === "api_key" ? "active" : ""}`}
               onClick={() => { setAnthropicAuthMethod("api_key"); setAnthropicOAuthCode(""); setAuthStatus(null); }}
             >
-              API 金鑰
+              {t.settings_provider_auth_api_key}
             </button>
             <button
               type="button"
               className={`auth-tab ${anthropicAuthMethod === "oauth" ? "active" : ""}`}
               onClick={() => { setAnthropicAuthMethod("oauth"); setApiKey(""); setAuthStatus(null); }}
             >
-              網頁 OAuth <span className="auth-tab-sub">Claude Pro/Max</span>
+              {t.settings_provider_auth_oauth("Claude Pro/Max")}
             </button>
           </div>
         </div>
@@ -368,10 +368,10 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
 
       {providerType === "anthropic" && anthropicAuthMethod === "oauth" && (
         <div className="form-group">
-          <label>OAuth 身份驗證</label>
+          <label>{t.settings_provider_auth_oauth("")}</label>
           {anthropicOAuthLoggedIn ? (
             <div className="anthropic-oauth-done">
-              <span className="anthropic-oauth-ok">✓ 已透過 OAuth 登入</span>
+              <span className="anthropic-oauth-ok">{t.settings_provider_oauth_ok}</span>
               <button
                 type="button"
                 className="anthropic-oauth-logout"
@@ -387,7 +387,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
                   }
                 }}
               >
-                登出
+                {t.settings_provider_oauth_logout}
               </button>
             </div>
           ) : (
@@ -395,13 +395,13 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
               {authing ? (
                 <div className="anthropic-oauth-paste-ui">
                   <p className="anthropic-oauth-paste-hint">
-                    在瀏覽器中點「授權」後，頁面會顯示 Authentication Code，點「Copy Code」複製後貼入下方：
+                    {t.settings_provider_oauth_instructions}
                   </p>
                   <textarea
                     className="anthropic-oauth-url-input"
                     value={anthropicOAuthCode}
                     onChange={(e) => setAnthropicOAuthCode(e.target.value)}
-                    placeholder="貼上 Authentication Code（格式：code#state）"
+                    placeholder={t.settings_provider_oauth_placeholder}
                     rows={2}
                     autoFocus
                   />
@@ -413,31 +413,31 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
                       onClick={async () => {
                         const pid = id.trim();
                         if (!pid) {
-                          setAuthStatus("錯誤：請先儲存 Provider 後再進行 OAuth 驗證");
+                          setAuthStatus(t.settings_provider_oauth_err_save_first);
                           setAuthing(false);
                           return;
                         }
                         try {
                           await anthropicOAuthComplete(pid, anthropicOAuthCode.trim());
                           setAnthropicOAuthLoggedIn(true);
-                          setAuthStatus("✓ OAuth 登入成功");
+                          setAuthStatus(t.settings_provider_oauth_success);
                           setAnthropicOAuthCode("");
                           fetchAnthropicModels(pid);
                         } catch (e: unknown) {
-                          setAuthStatus(`錯誤：${String(e)}`);
+                          setAuthStatus(t.settings_provider_oauth_err(String(e)));
                         } finally {
                           setAuthing(false);
                         }
                       }}
                     >
-                      完成授權
+                      {t.settings_provider_btn_confirm_auth}
                     </button>
                     <button
                       type="button"
                       className="anthropic-oauth-cancel-btn"
                       onClick={() => { setAuthing(false); setAnthropicOAuthCode(""); }}
                     >
-                      取消
+                      {t.settings_provider_btn_cancel}
                     </button>
                   </div>
                 </div>
@@ -453,20 +453,20 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
                       try {
                         await anthropicOAuthStart();
                       } catch (e: unknown) {
-                        setAuthStatus(`錯誤：${String(e)}`);
+                        setAuthStatus(t.settings_provider_oauth_err(String(e)));
                         setAuthing(false);
                       }
                     }}
                   >
-                    開啟授權頁面
+                    {t.settings_provider_btn_open_auth}
                   </button>
                   {!id.trim() && (
-                    <div className="form-hint">請先輸入 Provider ID 後再進行 OAuth 驗證</div>
+                    <div className="form-hint">{t.settings_provider_oauth_id_required}</div>
                   )}
                 </>
               )}
               {authStatus && (
-                <div className={`form-hint ${authStatus.startsWith("錯誤") ? "form-hint--error" : ""}`}>
+                <div className={`form-hint ${authStatus.startsWith("錯誤") || authStatus.startsWith("Error") ? "form-hint--error" : ""}`}>
                   {authStatus}
                 </div>
               )}
@@ -591,7 +591,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
                 list="google-ai-models-list"
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                placeholder={googleAiModels.length > 0 ? "選擇或輸入模型名稱" : DEFAULT_MODELS[providerType]}
+                placeholder={googleAiModels.length > 0 ? t.settings_provider_model_placeholder : DEFAULT_MODELS[providerType]}
               />
               {googleAiModels.length > 0 && (
                 <datalist id="google-ai-models-list">
@@ -604,7 +604,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
           )
         ) : providerType === "anthropic" && anthropicAuthMethod === "oauth" && anthropicOAuthLoggedIn ? (
           anthropicModelsLoading ? (
-            <input type="text" value="載入模型清單中…" disabled />
+            <input type="text" value={t.settings_provider_model_loading_placeholder} disabled />
           ) : (
             <select value={model} onChange={(e) => setModel(e.target.value)}>
               {!anthropicModels.includes(model) && model && (

@@ -1,6 +1,27 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
 :root {
-  background: #0c0c0c;
-  color-scheme: dark; /* Force native UI (like text selection) to use dark mode logic */
+  --bg-primary: #0c0c0c;
+  --bg-secondary: #111;
+  --bg-tertiary: #1a1a1a;
+  --bg-surface: #222;
+  --border-color: #2a2a2a;
+  --border-subtle: #333;
+  --text-primary: #e6e6e6;
+  --text-secondary: #aaa;
+  --text-muted: #666;
+  --accent: #a855f7;
+  --accent-glow: rgba(168, 85, 247, 0.25);
+  --accent-gradient: linear-gradient(135deg, var(--accent), #6366f1);
+  --bg-glass: rgba(15, 17, 28, 0.7);
+  --border-glass: rgba(255, 255, 255, 0.08);
+  --shadow-premium: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 20px rgba(168, 85, 247, 0.15);
+  --transition-smooth: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  --sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --mono: 'JetBrains Mono', 'Fira Code', monospace;
+  
+  background: var(--bg-primary);
+  color-scheme: dark;
 }
 
 html,
@@ -10,9 +31,21 @@ body,
   padding: 0;
   height: 100%;
   width: 100%;
-  background: #0c0c0c;
-  color: #e6e6e6;
-  font-family: "Cascadia Mono", Consolas, monospace;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Form element global enhancements */
+input, textarea, select {
+  transition: var(--transition-smooth);
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 8px var(--accent-glow) !important;
+  outline: none !important;
 }
 
 .aiterm-app {

@@ -1,21 +1,28 @@
 .onboarding-overlay {
   align-items: center;
-  background: #0c0c0c;
+  background: var(--bg-primary, #0c0c0c);
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(124, 58, 237, 0.08) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(99, 102, 241, 0.08) 0px, transparent 50%);
   display: flex;
   height: 100vh;
   justify-content: center;
   width: 100vw;
-  font-family: "Consolas", "Cascadia Code", "Menlo", monospace;
+  font-family: var(--sans, sans-serif);
 }
 
 .onboarding-card {
-  background: #141414;
-  border: 1px solid #2e2e2e;
-  border-radius: 12px;
+  background: var(--bg-glass, rgba(20, 22, 35, 0.65));
+  border: 1px solid var(--border-glass, rgba(255, 255, 255, 0.08));
+  border-radius: 16px;
   max-height: 90vh;
   overflow-y: auto;
-  padding: 36px 40px;
+  padding: 40px 48px;
   width: 520px;
+  box-shadow: var(--shadow-premium);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-sizing: border-box;
 }
 
 /* Step indicator */
@@ -28,22 +35,24 @@
 }
 
 .step-dot {
-  background: #2e2e2e;
+  background: rgba(255, 255, 255, 0.1);
   border-radius: 50%;
   height: 8px;
   width: 8px;
+  transition: var(--transition-smooth);
 }
 
 .step-dot--active {
-  background: #5a8dee;
+  background: var(--accent, #a855f7);
+  box-shadow: 0 0 8px var(--accent-glow);
 }
 
 .step-dot--done {
-  background: #4ade80;
+  background: var(--success, #4ade80);
 }
 
 .step-label {
-  color: #666;
+  color: var(--text-muted, #666);
   font-size: 11px;
   margin-left: 6px;
 }
@@ -58,12 +67,15 @@
 
 .onboarding-step h1,
 .onboarding-step h2 {
-  color: #e6e6e6;
+  color: var(--text-primary, #e6e6e6);
   margin: 0 0 10px;
+  font-family: var(--sans);
+  font-weight: 600;
 }
 
 .onboarding-step h1 {
-  font-size: 22px;
+  font-size: 24px;
+  letter-spacing: -0.02em;
 }
 
 .onboarding-step h2 {
@@ -71,15 +83,16 @@
 }
 
 .onboarding-icon {
-  font-size: 40px;
-  margin-bottom: 14px;
+  font-size: 44px;
+  margin-bottom: 16px;
+  filter: drop-shadow(0 0 10px var(--accent-glow));
 }
 
 .onboarding-subtitle {
-  color: #888;
+  color: var(--text-secondary, #888);
   font-size: 13px;
   line-height: 1.6;
-  margin: 0 0 24px;
+  margin: 0 0 28px;
   max-width: 360px;
 }
 
@@ -93,13 +106,13 @@
 
 .feature-list li {
   align-items: flex-start;
-  color: #ccc;
+  color: var(--text-primary, #ccc);
   display: flex;
   font-size: 13px;
-  gap: 10px;
+  gap: 12px;
   line-height: 1.5;
-  padding: 8px 0;
-  border-bottom: 1px solid #1e1e1e;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-color, #1e1e1e);
 }
 
 .feature-list li:last-child {
@@ -109,6 +122,7 @@
 .feature-icon {
   flex-shrink: 0;
   font-size: 16px;
+  color: var(--accent);
 }
 
 /* Form wrapper — left-align the form within the centered card */
@@ -122,7 +136,7 @@
 .mode-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   margin-bottom: 24px;
   text-align: left;
   width: 100%;
@@ -130,22 +144,30 @@
 
 .mode-option {
   align-items: flex-start;
-  background: #1a1a1a;
-  border: 1px solid #2e2e2e;
-  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color, #2e2e2e);
+  border-radius: 8px;
   cursor: pointer;
   display: flex;
   gap: 12px;
-  padding: 12px 14px;
+  padding: 14px;
+  transition: var(--transition-smooth);
+}
+
+.mode-option:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .mode-option:has(input:checked) {
-  border-color: #2d5aab;
+  border-color: var(--accent);
+  background: var(--accent-dim, rgba(168, 85, 247, 0.05));
 }
 
 .mode-option input[type="radio"] {
-  margin-top: 2px;
+  margin-top: 3px;
   flex-shrink: 0;
+  accent-color: var(--accent);
 }
 
 .mode-text {
@@ -155,67 +177,73 @@
 }
 
 .mode-label {
-  color: #e6e6e6;
+  color: var(--text-primary, #e6e6e6);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .mode-desc {
-  color: #888;
+  color: var(--text-secondary, #888);
   font-size: 12px;
   line-height: 1.5;
 }
 
 /* Buttons */
 .btn-primary {
-  background: #2d5aab;
-  border: 1px solid #3d6ac0;
-  border-radius: 6px;
+  background: var(--accent-gradient, linear-gradient(135deg, var(--accent, #a855f7), #6366f1));
+  border: none;
+  border-radius: 8px;
   color: #fff;
   cursor: pointer;
   font-family: inherit;
   font-size: 13px;
-  padding: 8px 20px;
+  font-weight: 600;
+  padding: 10px 24px;
+  transition: var(--transition-smooth);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: #3265be;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px var(--accent-glow);
 }
 
 .btn-primary:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+  box-shadow: none;
 }
 
 .btn-large {
   font-size: 14px;
-  padding: 12px 28px;
+  padding: 14px 28px;
   width: 100%;
 }
 
 .btn-skip {
   background: transparent;
   border: none;
-  color: #666;
+  color: var(--text-muted, #666);
   cursor: pointer;
   font-family: inherit;
   font-size: 12px;
-  margin-top: 6px;
-  padding: 4px;
+  margin-top: 8px;
+  padding: 6px;
+  transition: var(--transition-smooth);
 }
 
 .btn-skip:hover {
-  color: #aaa;
+  color: var(--text-primary, #aaa);
 }
 
 .notice {
-  background: rgba(90, 90, 30, 0.2);
-  border: 1px solid #3a3a20;
-  border-radius: 4px;
-  color: #aaa;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 6px;
+  color: #fcd34d;
   font-size: 12px;
   margin-bottom: 16px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   text-align: left;
   width: 100%;
   box-sizing: border-box;
