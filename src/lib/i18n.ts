@@ -10,6 +10,7 @@ export const translations = {
     ai_providers: "AI 供應商",
     db_connections: "資料庫連線",
     back_to_terminal: "← 回到終端機",
+    settings_tab_enterprise: "Enterprise",
 
     // Main app / TabBar
     settings: "設定",
@@ -199,6 +200,8 @@ export const translations = {
     dc_stop_btn: "■ 停止",
     dc_preview_label: (chars: number) => `預覽（${chars.toLocaleString()} 字元）`,
     dc_download_success: (name: string) => `✅ 已下載 ${name}`,
+    dc_extract_error: (err: string) => `提取失敗：${err}`,
+    dc_normalize_error: (step: number, err: string) => `AI 正規化失敗（步驟 ${step}）：${err}`,
     vcs_no_repo: "目前目錄不在版控 repo 中",
     vcs_svn_not_installed: "需要安裝 SVN CLI 才能使用 SVN 功能",
     vcs_no_token: "此功能需要 GitHub token，請至設定頁面新增",
@@ -328,6 +331,13 @@ export const translations = {
     mcp_marketplace_config_title: "請填入必要的設定參數",
     mcp_marketplace_config_confirm: "確認新增",
     mcp_marketplace_config_no_schema: "無法取得參數定義，請手動在已安裝清單中編輯",
+    mcp_marketplace_prev_page: "← 上一頁",
+    mcp_marketplace_next_page: "下一頁 →",
+    mcp_marketplace_per_week: "/週",
+    warp_history_title: "歷史記錄",
+    warp_clear_all: "清除全部",
+    warp_clear_all_title: "清除全部歷史記錄",
+    warp_delete_item_title: "刪除此記錄",
   },
   "en": {
     // Settings sidebar
@@ -336,6 +346,7 @@ export const translations = {
     ai_providers: "AI Providers",
     db_connections: "Database Connections",
     back_to_terminal: "← Back to Terminal",
+    settings_tab_enterprise: "Enterprise",
 
     // Main app / TabBar
     settings: "Settings",
@@ -525,6 +536,8 @@ export const translations = {
     dc_stop_btn: "■ Stop",
     dc_preview_label: (chars: number) => `Preview (${chars.toLocaleString()} characters)`,
     dc_download_success: (name: string) => `✅ Downloaded ${name}`,
+    dc_extract_error: (err: string) => `Extraction failed: ${err}`,
+    dc_normalize_error: (step: number, err: string) => `AI normalize failed (step ${step}): ${err}`,
     vcs_no_repo: "Current directory is not in a VCS repo",
     vcs_svn_not_installed: "SVN CLI must be installed to use SVN features",
     vcs_no_token: "This feature requires a GitHub token. Add one in Settings.",
@@ -654,6 +667,13 @@ export const translations = {
     mcp_marketplace_config_title: "Fill in required configuration",
     mcp_marketplace_config_confirm: "Add Server",
     mcp_marketplace_config_no_schema: "No parameter schema available — edit manually after adding",
+    mcp_marketplace_prev_page: "← Previous",
+    mcp_marketplace_next_page: "Next →",
+    mcp_marketplace_per_week: "/week",
+    warp_history_title: "History",
+    warp_clear_all: "Clear All",
+    warp_clear_all_title: "Clear all history",
+    warp_delete_item_title: "Delete this entry",
   },
 } as const;
 
