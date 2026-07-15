@@ -121,8 +121,9 @@ export function LoopStudioView({
       roster.orchestratorProvider,
       roster.verifierProvider,
       roster.goal,
+      t,
     );
-  }, [roster.subAgents, roster.orchestratorProvider, roster.verifierProvider, roster.goal]);
+  }, [roster.subAgents, roster.orchestratorProvider, roster.verifierProvider, roster.goal, t]);
 
   const hasErrors = validationIssues.some(i => i.level === "error");
   const hasWarnings = validationIssues.some(i => i.level === "warning");
@@ -406,7 +407,7 @@ export function LoopStudioView({
                 disabled={loop.isRunning}
                 title={t.ls_clear_project_tooltip}
               >
-                🗒 新建
+                {t.ls_btn_new}
               </button>
               <button
                 type="button"
@@ -415,7 +416,7 @@ export function LoopStudioView({
                 disabled={loop.isRunning}
                 title={currentProjectPath ? t.ls_save_tooltip(currentProjectPath) : t.ls_save_default_tooltip}
               >
-                💾 儲存
+                {t.ls_btn_save}
               </button>
               <button
                 type="button"
@@ -424,7 +425,7 @@ export function LoopStudioView({
                 disabled={loop.isRunning}
                 title={t.ls_save_as_tooltip}
               >
-                📋 另存
+                {t.ls_btn_save_as}
               </button>
               <button
                 type="button"
@@ -433,7 +434,7 @@ export function LoopStudioView({
                 disabled={loop.isRunning}
                 title={t.ls_load_tooltip}
               >
-                📂 載入
+                {t.ls_btn_load}
               </button>
             </div>
           </div>

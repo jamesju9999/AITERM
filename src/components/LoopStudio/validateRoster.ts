@@ -1,4 +1,5 @@
 import type { OrchestratorAgent } from "../../hooks/useOrchestratorLoop";
+import type { Translations } from "../../lib/i18n";
 
 export interface ValidationIssue {
   level: "error" | "warning";
@@ -14,33 +15,34 @@ export function validateRoster(
   orchestratorProvider: string,
   verifierProvider: string,
   goal: string,
+  t: Translations,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
   // ── Errors (block start) ──────────────────────────────────────────────────
 
   if (agents.length === 0) {
-    issues.push({ level: "error", message: "請至少新增一個 Sub-agent" });
-    return issues; // no point checking further
+    issues.push({ level: "error", message: t.ls_validate_no_agents });
+    return issues;
   }
 
   if (!orchestratorProvider) {
-    issues.push({ level: "error", message: "請選擇 Orchestrator 的 AI Provider" });
+    issues.push({ level: "error", message: t.ls_validate_no_orch_provider });
   }
 
   if (!verifierProvider) {
-    issues.push({ level: "error", message: "請選擇 Verifier 的 AI Provider" });
+    issues.push({ level: "error", message: t.ls_validate_no_verifier_provider });
   }
 
   agents.forEach((a, i) => {
     if (!a.name.trim()) {
-      issues.push({ level: "error", message: `第 ${i + 1} 個 Agent 尚未命名` });
+      issues.push({ level: "error", message: t.ls_validate_agent_no_name(i + 1) });
     }
     if (!a.roleDescription.trim()) {
-      issues.push({ level: "error", message: `Agent「${a.name || `#${i + 1}`}」缺少角色描述，Orchestrator 不知道何時呼叫它` });
+      issues.push({ level: "error", message: t.ls_validate_agent_no_desc(a.name || `#${i + 1}`) });
     }
     if (a.tools.length === 0) {
-      issues.push({ level: "error", message: `Agent「${a.name || `#${i + 1}`}」沒有啟用任何工具，無法執行任何動作` });
+      issues.push({ level: "error", message: t.ls_validate_agent_no_tools(a.name || `#${i + 1}`) });
     }
   });
 
@@ -49,31 +51,19 @@ export function validateRoster(
   const allTools = new Set(agents.flatMap(a => a.tools));
 
   if (WRITE_KEYWORDS.test(goal) && !allTools.has("write_file")) {
-    issues.push({
-      level: "warning",
-      message: "目標包含寫入/建立/修改關鍵字，但沒有任何 Agent 啟用「寫檔」工具",
-    });
+    issues.push({ level: "warning", message: t.ls_validate_no_write_tool });
   }
 
   if (EXEC_KEYWORDS.test(goal) && !allTools.has("execute_command")) {
-    issues.push({
-      level: "warning",
-      message: "目標包含執行/測試/建置關鍵字，但沒有任何 Agent 啟用「執行指令」工具",
-    });
+    issues.push({ level: "warning", message: t.ls_validate_no_exec_tool });
   }
 
   if (READ_KEYWORDS.test(goal) && !allTools.has("read_file")) {
-    issues.push({
-      level: "warning",
-      message: "目標包含讀取/分析關鍵字，但沒有任何 Agent 啟用「讀檔」工具",
-    });
+    issues.push({ level: "warning", message: t.ls_validate_no_read_tool });
   }
 
   if (agents.length === 1) {
-    issues.push({
-      level: "warning",
-      message: "只有一個 Agent，Orchestrator 無法分工。建議依任務類型加入 2–3 個角色不同的 Agent",
-    });
+    issues.push({ level: "warning", message: t.ls_validate_single_agent });
   }
 
   const hasDuplicateRoles = agents.some((a, i) =>
@@ -83,17 +73,11 @@ export function validateRoster(
     )
   );
   if (hasDuplicateRoles) {
-    issues.push({
-      level: "warning",
-      message: "有兩個 Agent 的角色描述與工具完全相同，建議調整其中一個的定位",
-    });
+    issues.push({ level: "warning", message: t.ls_validate_duplicate_roles });
   }
 
   if (orchestratorProvider && orchestratorProvider === verifierProvider) {
-    issues.push({
-      level: "warning",
-      message: "Orchestrator 和 Verifier 使用相同 Provider，可能影響評估客觀性",
-    });
+    issues.push({ level: "warning", message: t.ls_validate_same_provider });
   }
 
   return issues;
