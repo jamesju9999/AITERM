@@ -142,7 +142,7 @@ Rules:
 
 /// Build the system prompt for Chat mode. Unlike `build_single_command_prompt`,
 /// this does NOT instruct JSON output — instead it explains the `<cmd>` tag
-/// protocol and invites free-form Traditional Chinese prose.
+/// protocol and invites free-form prose in the caller's locale.
 pub fn build_chat_prompt(snapshot: &crate::ai::EnvSnapshot, locale: Locale) -> String {
     let recent_section = snapshot.recent_output.as_deref().map(|o| {
         let trimmed = if o.len() > 2000 {
