@@ -241,8 +241,9 @@ export function SpecPreview({ title, proposal, spec, sdd, plan, onGenerate, isSt
                       const selected = await open({ directory: true, multiple: false });
                       if (typeof selected === 'string') setPaths({...paths, dir: selected});
                     }}
-                    style={{ background: '#2a2a2a', border: '1px solid #444', color: '#ccc', padding: '0 12px', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: '0.8rem' }}
-                  >瀏覽…</button>
+                    title="選擇資料夾"
+                    style={{ background: '#2a2a2a', border: '1px solid #444', color: '#ccc', padding: '0 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '1rem', lineHeight: 1 }}
+                  >📂</button>
                 </div>
               </div>
               <div style={{ borderTop: '1px solid #333', paddingTop: '12px' }}>
