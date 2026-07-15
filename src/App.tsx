@@ -56,12 +56,13 @@ function AppRoutes() {
     const handler = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.key === ",") {
         e.preventDefault();
-        navigate("/settings");
+        const hasUpdate = updateInfo?.hasUpdate ?? false;
+        navigate("/settings", hasUpdate ? { state: { tab: "about" } } : undefined);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [navigate]);
+  }, [navigate, updateInfo]);
 
   if (!ready) return null;
 
