@@ -4,6 +4,8 @@ import { aiChat, formatAiError, type AiError } from "../../ipc/ai";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/markdown";
+import { languageDirective } from "../../lib/i18n";
+import { useLocale } from "../../contexts/LocaleContext";
 import type { ConnectedDb } from "./index";
 
 interface Props {
@@ -138,6 +140,7 @@ function normalizeAiError(err: unknown): AiError {
 }
 
 export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
+  const { locale } = useLocale();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -206,24 +209,24 @@ export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
   const buildSystemPrompt = () => {
     const dbDescriptions = databases.map((db) => {
       const tableList = db.tables.map((t) => t.name).join(", ");
-      return `[${db.name}] 類型: ${db.db_type.toUpperCase()}, Database: ${db.database}, Schema: ${db.schema}\n  資料表: ${tableList || "（無）"}`;
+      return `[${db.name}] Type: ${db.db_type.toUpperCase()}, Database: ${db.database}, Schema: ${db.schema}\n  Tables: ${tableList || "(none)"}`;
     }).join("\n");
 
     const maxSteps = maxStepsRef.current;
-    return `你是一個跨資料庫 Agent，可以同時查詢多個資料庫來回答使用者問題。
+    return `You are a cross-database agent that can query multiple databases at once to answer the user's question.
 
-可用資料庫：
+Available databases:
 ${dbDescriptions}
 
-【輸出格式規則——違反將導致查詢無法執行】：
-1. 需要查詢時，僅輸出以下格式，不得有任何前綴或後綴文字：
-\`\`\`sql [資料庫名稱]
+[Output Format Rules — violating these will cause the query to fail]:
+1. When you need to query, output only the following format, with no prefix or suffix text:
+\`\`\`sql [database name]
 SELECT * FROM ...
 \`\`\`
-2. 每次只查詢一個資料庫的一條 SQL，不得使用 <cmd>、shell 指令或任何其他格式
-3. 不同資料庫的 SQL 方言可能不同（PostgreSQL vs MySQL vs MSSQL 等），請注意語法差異
-4. 已收集足夠資料時，直接用繁體中文給出最終彙整答案，回應中不包含任何 SQL 或程式碼區塊
-5. 最多執行 ${maxSteps >= 9999 ? "不限次數" : maxSteps} 次查詢`;
+2. Query only one database with one SQL statement at a time; do not use <cmd>, shell commands, or any other format
+3. SQL dialects may differ between databases (PostgreSQL vs MySQL vs MSSQL, etc.) — pay attention to syntax differences
+4. Once you have collected enough data, give the final aggregated answer directly in ${languageDirective(locale)}, and do not include any SQL or code blocks in your response
+5. Execute at most ${maxSteps >= 9999 ? "unlimited" : maxSteps} queries`;
   };
 
   const findDb = (alias: string): ConnectedDb | undefined => {
@@ -287,6 +290,8 @@ SELECT * FROM ...
           [{ role: "system" as const, content: buildSystemPrompt() }, ...loopHistory.slice(0, -1), { role: "user" as const, content: lastUserContent }],
           "crossdb",
           selectedProviderId || undefined,
+          false,
+          locale,
         );
         const reply = aiResult.content ?? "";
 
@@ -319,9 +324,11 @@ SELECT * FROM ...
         if (parsed.sql === lastExecutedSql) {
           updateLastMsg((m) => ({ ...m, agentStepLabel: "整理答案中..." }));
           const summaryResult1 = await aiChat(
-            [{ role: "system" as const, content: buildSystemPrompt() }, ...loopHistory, { role: "user" as const, content: "請根據以上查詢結果，用繁體中文給出最終完整答案。不要再提供任何 SQL 查詢。" }],
+            [{ role: "system" as const, content: buildSystemPrompt() }, ...loopHistory, { role: "user" as const, content: `Based on the query results above, provide your final complete answer in ${languageDirective(locale)}. Do not provide any more SQL queries.` }],
             "crossdb",
             selectedProviderId || undefined,
+            false,
+            locale,
           );
           const summary = summaryResult1.content ?? "";
           updateLastMsg((m) => ({
@@ -396,9 +403,11 @@ SELECT * FROM ...
         if (stepCount >= maxSteps) {
           updateLastMsg((m) => ({ ...m, agentStepLabel: "整理答案中..." }));
           const summaryResult2 = await aiChat(
-            [{ role: "system" as const, content: buildSystemPrompt() }, ...loopHistory, { role: "user" as const, content: "請根據以上查詢結果，用繁體中文給出最終完整答案，不要再提供 SQL。" }],
+            [{ role: "system" as const, content: buildSystemPrompt() }, ...loopHistory, { role: "user" as const, content: `Based on the query results above, provide your final complete answer in ${languageDirective(locale)}, and do not provide any more SQL.` }],
             "crossdb",
             selectedProviderId || undefined,
+            false,
+            locale,
           );
           const summary = summaryResult2.content ?? "";
           updateLastMsg((m) => ({

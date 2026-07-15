@@ -5,6 +5,8 @@ import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/markdown";
 import { parseSchemaDoc, buildSchemaSection } from "../../lib/schemaDoc";
+import { languageDirective } from "../../lib/i18n";
+import { useLocale } from "../../contexts/LocaleContext";
 
 interface Props {
   connectionId: string;
@@ -142,6 +144,7 @@ function errorText(err: unknown): string {
 }
 
 export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Props) {
+  const { locale } = useLocale();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -220,17 +223,17 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
     const tableNames = tables.map((t) => t.name);
     const schemaSection = buildSchemaSection(schemaDocMap, tableNames, userQuestion, 6000);
 
-    return `你是一個資料庫 Agent，可執行多次 SQL 查詢來回答使用者問題。
-Schema：「${schema}」，可用資料表：${tableList || "（載入中）"}。
+    return `You are a database agent that can run multiple SQL queries to answer the user's question.
+Schema: "${schema}", available tables: ${tableList || "(loading)"}.
 ${schemaSection ? "\n" + schemaSection + "\n" : ""}
-【輸出格式規則——違反將導致查詢無法執行】：
-1. 需要查詢資料時，僅輸出以下格式，不得有任何前綴說明或後綴說明：
+[Output Format Rules — violating these will cause the query to fail]:
+1. When you need to query data, output only the following format, with no prefix or suffix explanation:
 \`\`\`sql
-你的SQL
+your SQL
 \`\`\`
-2. 每次只提供一條純 SQL 語法，不得包在 <cmd>、shell 指令、JSON 或任何其他格式中
-3. 已收集足夠資料時，直接用繁體中文給出最終答案，回應中不包含任何 SQL 或程式碼區塊
-4. 最多執行 ${maxSteps >= 9999 ? "不限次數" : maxSteps} 次查詢`;
+2. Provide only one pure SQL statement at a time; do not wrap it in <cmd>, shell commands, JSON, or any other format
+3. Once you have collected enough data, give the final answer directly in ${languageDirective(locale)}, and do not include any SQL or code blocks in your response
+4. Execute at most ${maxSteps >= 9999 ? "unlimited" : maxSteps} queries`;
   };
 
   const updateLastMsg = (updater: (m: Message) => Message) => {
@@ -314,6 +317,8 @@ ${schemaSection ? "\n" + schemaSection + "\n" : ""}
           [{ role: "system" as const, content: buildSystemPrompt(userMsg) }, ...loopHistory.slice(0, -1), { role: "user" as const, content: lastUserContent }],
           `db-${connectionId}`,
           selectedProviderId || undefined,
+          false,
+          locale,
         );
         const reply = aiResult.content ?? "";
 
@@ -365,9 +370,11 @@ ${schemaSection ? "\n" + schemaSection + "\n" : ""}
         if (stepCount >= maxSteps) {
           updateLastMsg((m) => ({ ...m, agentStepLabel: "整理答案中..." }));
           const summaryResult = await aiChat(
-            [{ role: "system" as const, content: buildSystemPrompt(userMsg) }, ...loopHistory, { role: "user" as const, content: "請根據以上查詢結果，用繁體中文給出最終完整答案，不要再提供 SQL。" }],
+            [{ role: "system" as const, content: buildSystemPrompt(userMsg) }, ...loopHistory, { role: "user" as const, content: `Based on the query results above, provide your final complete answer in ${languageDirective(locale)}, and do not provide any more SQL.` }],
             `db-${connectionId}`,
             selectedProviderId || undefined,
+            false,
+            locale,
           );
           const summary = summaryResult.content ?? "";
           updateAndPersist((m) => ({

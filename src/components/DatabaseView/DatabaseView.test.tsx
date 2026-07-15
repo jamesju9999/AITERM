@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { vi } from "vitest";
 import { describe, it, expect } from "vitest";
 import { DatabaseView } from "./index";
+import { LocaleProvider } from "../../contexts/LocaleContext";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue([]),
@@ -13,7 +14,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 function renderWithRouter(ui: React.ReactElement) {
-  return render(<MemoryRouter>{ui}</MemoryRouter>);
+  return render(<MemoryRouter><LocaleProvider>{ui}</LocaleProvider></MemoryRouter>);
 }
 
 vi.mock("../../ipc/db", () => ({
