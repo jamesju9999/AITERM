@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 use crate::db::design::{DesignDb, create_design_session, get_design_session, delete_design_session, DesignSession};
 use crate::ai::{
     context, router::AiRouter, AiError, ChatMessage, GenerateChunk,
-    GenerateRequest, QueryMode,
+    GenerateRequest, Locale, QueryMode,
 };
 use crate::commands::ai::{AiChatReply, AiStreamEvent, AiStreamKind};
 use crate::pty::PtyManager;
@@ -41,62 +41,62 @@ pub async fn design_list_sessions(
     .map_err(|e| e.to_string())
 }
 
-/// Returns a focused instruction block when the user clicks "▶ 產生" for a specific stage.
+/// Returns a focused instruction block when the user clicks "Generate" for a specific stage.
 /// This is injected into the AI prompt to ensure strict adherence to OpenSpec templates.
 pub fn build_stage_instruction(stage: &str) -> &'static str {
     match stage {
-        "proposal" => r#"【階段指令：產生提案 (Proposal)】
-請嚴格依照以下 OpenSpec 結構產出提案，並用 [UPDATE_PROPOSAL] 標籤包覆完整內容：
+        "proposal" => r#"[Stage Instruction: Generate Proposal]
+Produce the proposal strictly following this OpenSpec structure, wrapped in an [UPDATE_PROPOSAL] tag:
 
 [UPDATE_PROPOSAL]
 ## Why
-（問題陳述：為什麼需要這個變更？要解決什麼問題？）
+(Problem statement: why is this change needed? What problem does it solve?)
 
 ## What Changes
-（具體變更描述：要新增、修改、移除什麼？）
+(Concrete description of the change: what is being added, modified, or removed?)
 
 ## Capabilities
 ### New
-- capability-name — 簡述此新功能
+- capability-name — brief description of this new capability
 ### Modified
-- existing-capability — 變更說明
+- existing-capability — description of the change
 
 ## Impact
-（對程式碼、API、資料庫、依賴套件的影響範圍）
+(Scope of impact on code, APIs, database, dependencies)
 [/UPDATE_PROPOSAL]
 
-請根據目前的對話內容產出完整提案。"#,
-        "spec" => r#"【階段指令：產生規格 (Spec)】
-請嚴格依照以下 OpenSpec 結構產出規格，並用 [UPDATE_SPEC] 標籤包覆完整內容。
-為提案中的每個 Capability 各建一個章節：
+Produce the full proposal based on the current conversation."#,
+        "spec" => r#"[Stage Instruction: Generate Spec]
+Produce the spec strictly following this OpenSpec structure, wrapped in an [UPDATE_SPEC] tag.
+Create one section per Capability from the proposal:
 
 [UPDATE_SPEC]
 ## Capability: capability-name
 
-### Requirement: 需求名稱
-需求描述文字
+### Requirement: requirement name
+Requirement description text
 
-#### Scenario: 場景名稱
-WHEN（觸發條件）
-THEN（預期結果）
+#### Scenario: scenario name
+WHEN (trigger condition)
+THEN (expected result)
 
-#### Scenario: 另一個場景
+#### Scenario: another scenario
 WHEN ...
 THEN ...
 
-（重複上述結構，每個 Capability 一個 ## 區塊）
+(repeat this structure, one ## block per Capability)
 [/UPDATE_SPEC]
 
-重要：
-- 使用 delta 標記（ADDED / MODIFIED / REMOVED）標註需求狀態
-- Scenario 必須使用四級標題 ####，使用 WHEN/THEN 格式
-- 請根據提案的 Capabilities 區塊逐一產出"#,
-        "sdd" => r#"【階段指令：產生設計 (Design)】
-請嚴格依照以下 OpenSpec 結構產出技術設計，並用 [UPDATE_SDD] 標籤包覆完整內容：
+Important:
+- Use delta markers (ADDED / MODIFIED / REMOVED) to tag requirement status
+- Scenarios must use a level-4 heading (####) with the WHEN/THEN format
+- Produce these based on the proposal's Capabilities section, one at a time"#,
+        "sdd" => r#"[Stage Instruction: Generate Design]
+Produce the technical design strictly following this OpenSpec structure, wrapped in an [UPDATE_SDD] tag:
 
 [UPDATE_SDD]
 ## Context
-（背景與現狀：目前系統的相關架構與限制）
+(Background and current state: relevant existing architecture and constraints)
 
 ## Goals / Non-Goals
 ### Goals
@@ -105,121 +105,121 @@ THEN ...
 - ...
 
 ## Decisions
-（關鍵技術決策及其理由）
+(Key technical decisions and their rationale)
 
 ## Risks / Trade-offs
-（已知風險與設計取捨）
+(Known risks and design trade-offs)
 [/UPDATE_SDD]
 
-重要：
-- 所有決策必須可追溯回已核准的規格
-- 包含 Mermaid 架構圖時，節點名稱含括號或特殊字元須用雙引號包覆
-- `end` 只配對 `subgraph`，`graph TD` 不需要 `end`"#,
-        "plan" => r#"【階段指令：產生任務 (Tasks)】
-請嚴格依照以下 OpenSpec 結構產出任務清單，並用 [UPDATE_PLAN] 標籤包覆完整內容：
+Important:
+- Every decision must be traceable back to the approved spec
+- When including Mermaid diagrams, node names containing parentheses or special characters must be wrapped in double quotes
+- `end` only pairs with `subgraph`; `graph TD` itself does not need an `end`"#,
+        "plan" => r#"[Stage Instruction: Generate Tasks]
+Produce the task list strictly following this OpenSpec structure, wrapped in an [UPDATE_PLAN] tag:
 
 [UPDATE_PLAN]
-## 1. 第一組任務名稱
-- [ ] 1.1 任務描述
-- [ ] 1.2 任務描述
+## 1. First task group name
+- [ ] 1.1 Task description
+- [ ] 1.2 Task description
 
-## 2. 第二組任務名稱
-- [ ] 2.1 任務描述
-- [ ] 2.2 任務描述
+## 2. Second task group name
+- [ ] 2.1 Task description
+- [ ] 2.2 Task description
 [/UPDATE_PLAN]
 
-重要：
-- 每個任務必須是 checkbox 格式：`- [ ] X.Y 描述`
-- 按依賴順序分組編號
-- 每個任務必須對齊設計文件中的某個組件或介面
-- 任務的驗收標準必須與原規格的場景一致"#,
+Important:
+- Every task must use the checkbox format: `- [ ] X.Y description`
+- Number groups in dependency order
+- Every task must map to a component or interface in the design document
+- A task's acceptance criteria must match a scenario in the original spec"#,
         _ => "",
     }
 }
 
-pub fn build_design_prompt(session: &DesignSession, snapshot: &crate::ai::EnvSnapshot) -> String {
-    let proposal = session.current_proposal_draft.as_deref().unwrap_or("尚未建立提案。");
-    let spec = session.current_spec_draft.as_deref().unwrap_or("尚未建立規格。");
-    let sdd = session.current_sdd_draft.as_deref().unwrap_or("尚未建立設計。");
-    let plan = session.current_plan_draft.as_deref().unwrap_or("尚未建立任務。");
-    let summary = session.context_summary.as_deref().unwrap_or("尚無對話摘要。");
+pub fn build_design_prompt(session: &DesignSession, snapshot: &crate::ai::EnvSnapshot, locale: Locale) -> String {
+    let proposal = session.current_proposal_draft.as_deref().unwrap_or("No proposal yet.");
+    let spec = session.current_spec_draft.as_deref().unwrap_or("No spec yet.");
+    let sdd = session.current_sdd_draft.as_deref().unwrap_or("No design yet.");
+    let plan = session.current_plan_draft.as_deref().unwrap_or("No tasks yet.");
+    let summary = session.context_summary.as_deref().unwrap_or("No conversation summary yet.");
 
     let role_instruction = match session.status.as_str() {
-        "draft" => r#"你現在的角色是「產品經理 (Product Manager)」。
-你的任務：透過提問來釐清使用者意圖，並協助建立提案 (Proposal)。
-目標：完善右側的「提案 (Proposal)」文件——釐清 Why、What Changes、Capabilities、Impact。
-限制：在提案被核准前，請勿跳到規格或技術設計。"#,
-        "proposal_approved" => r#"你現在的角色是「產品經理 (Product Manager)」。
-你的任務：基於「已核准的提案」，為每個 Capability 定義詳細需求與驗收場景。
-目標：完善右側的「規格 (Spec)」文件。
-核心守則：
-1. 每個 Capability 必須有明確的需求描述與 WHEN/THEN 場景。
-2. 使用 delta 標記（ADDED / MODIFIED / REMOVED）標註需求狀態。
-3. 嚴禁加入提案未提及的功能。"#,
-        "spec_approved" => r#"你現在的角色是「軟體架構師 (Software Architect)」。
-你的任務：基於「已核准的規格」，進行技術選型、模組劃分、API 設計與資料庫 Schema 設計。
-目標：完善右側的「設計 (Design)」文件。
-核心守則：
-1. 所有架構決策必須 100% 追溯回已核准的規格。
-2. 撰寫時儘可能註明「(對應規格 Capability: X)」。
-3. 嚴禁在設計中加入規格未提及的功能或擴充性。"#,
-        "sdd_approved" => r#"你現在的角色是「技術主管 (Tech Lead)」。
-你的任務：將「已核准的設計」拆解為具體的 checkbox 任務清單。
-目標：完善右側的「任務 (Tasks)」文件。
-核心守則：
-1. 每個 Task 必須與設計文件中的某個組件或介面對齊。
-2. Task 的驗收標準必須與原規格的場景一致。
-3. 每個任務必須是 `- [ ] X.Y 描述` 格式。"#,
-        _ => "你是一位專業的軟體工程專家。",
+        "draft" => r#"Your current role is Product Manager.
+Your task: clarify user intent through questions, and help build the Proposal.
+Goal: flesh out the "Proposal" document on the right — clarify Why, What Changes, Capabilities, Impact.
+Constraint: do not jump ahead to spec or technical design before the proposal is approved."#,
+        "proposal_approved" => r#"Your current role is Product Manager.
+Your task: based on the "Approved Proposal", define detailed requirements and acceptance scenarios for each Capability.
+Goal: flesh out the "Spec" document on the right.
+Core rules:
+1. Every Capability must have a clear requirement description and WHEN/THEN scenarios.
+2. Use delta markers (ADDED / MODIFIED / REMOVED) to tag requirement status.
+3. Never add functionality not mentioned in the proposal."#,
+        "spec_approved" => r#"Your current role is Software Architect.
+Your task: based on the "Approved Spec", perform technology selection, module breakdown, API design, and database schema design.
+Goal: flesh out the "Design" document on the right.
+Core rules:
+1. Every architectural decision must be 100% traceable back to the approved spec.
+2. Where possible, note "(maps to Spec Capability: X)" when writing.
+3. Never add functionality or extensibility not mentioned in the spec."#,
+        "sdd_approved" => r#"Your current role is Tech Lead.
+Your task: break the "Approved Design" down into concrete checkbox task items.
+Goal: flesh out the "Tasks" document on the right.
+Core rules:
+1. Every task must map to a component or interface in the design document.
+2. A task's acceptance criteria must match a scenario in the original spec.
+3. Every task must use the `- [ ] X.Y description` format."#,
+        _ => "You are a professional software engineering expert.",
     };
 
     format!(
-r#"你是一位專業的軟體需求分析師與架構師，正在協助使用者進行「規格驅動開發 (Spec-Driven Development)」，遵循 OpenSpec 框架。
+r#"You are a professional software requirements analyst and architect helping the user with Spec-Driven Development, following the OpenSpec framework.
 
-目前進度階段：{status_label}
+Current stage: {status_label}
 {role_instruction}
 
-目前的專案摘要：
+Current project summary:
 {summary}
 
-目前右側面板的內容：
+Current content of the right-hand panel:
 ---
-[提案 (Proposal)]
+[Proposal]
 {proposal}
 
-[規格 (Spec)]
+[Spec]
 {spec}
 
-[設計 (Design)]
+[Design]
 {sdd}
 
-[任務 (Tasks)]
+[Tasks]
 {plan}
 ---
 
-目前的終端機環境：
+Current terminal environment:
   OS: {os}
   Shell: {shell}
   Cwd: {cwd}
 
-規則：
-1. 請以「繁體中文 (zh-TW)」進行對話。
-2. 你的目標是透過提問來釐清需求，並逐步完善右側的文件。
-3. 當你決定更新或建立文件時，請務必將內容完整地放在對應的標籤塊中：
-   - 提案請用：[UPDATE_PROPOSAL] ```markdown ...內容... ```
-   - 規格請用：[UPDATE_SPEC] ```markdown ...內容... ```
-   - 設計請用：[UPDATE_SDD] ```markdown ...內容... ```
-   - 任務請用：[UPDATE_PLAN] ```markdown ...內容... ```
-4. 【極度重要】你欲寫入文件的「所有內容」（特別是 Mermaid 架構圖！）都必須嚴格放在上述的標籤塊內部。寫在標籤塊外部的內容不會被保存進文件，右側面板將無法顯示圖表！
-5. 【Mermaid 語法注意】在繪製 Mermaid 架構圖時，節點名稱如果包含括號或特殊字元，必須使用雙引號包覆，例如：`UI["前端介面 (React/Vue)"]`，嚴禁使用 `UI[前端介面 (React/Vue)]`，否則會導致語法解析錯誤！
-6. 【Mermaid end 配對】`end` 關鍵字只能用來關閉 `subgraph` 區塊，且必須一對一配對。`graph TD` 本身不需要 `end`。連線語句（如 `A --> B`）放在所有 subgraph 之後、不要再加多餘的 `end`。
-7. 即使你使用了標籤更新草稿，仍然要在對話中向使用者說明你做了哪些變動。"#,
+Rules:
+1. Respond in {language}.
+2. Your goal is to clarify requirements through questions, and progressively flesh out the documents on the right.
+3. When you decide to update or create a document, you MUST place the full content inside the matching tag block:
+   - Proposal: [UPDATE_PROPOSAL] ```markdown ...content... ```
+   - Spec: [UPDATE_SPEC] ```markdown ...content... ```
+   - Design: [UPDATE_SDD] ```markdown ...content... ```
+   - Tasks: [UPDATE_PLAN] ```markdown ...content... ```
+4. [CRITICAL] ALL content you intend to write to a document (especially Mermaid diagrams!) MUST be strictly inside the tag blocks above. Content written outside the tag blocks will NOT be saved, and the right panel will not be able to render the diagram!
+5. [Mermaid syntax] When drawing Mermaid diagrams, if a node name contains parentheses or special characters, it MUST be wrapped in double quotes, e.g. `UI["Frontend (React/Vue)"]` — never `UI[Frontend (React/Vue)]`, or it will cause a syntax error!
+6. [Mermaid `end` pairing] The `end` keyword only closes a `subgraph` block, and must be paired one-to-one. `graph TD` itself does not need an `end`. Connection statements (like `A --> B`) go after all subgraphs — do not add an extra `end`.
+7. Even when you use a tag to update a draft, still explain in the conversation what changes you made."#,
         status_label = match session.status.as_str() {
-            "draft" => "1. 提案探索中 (Proposal)",
-            "proposal_approved" => "2. 規格定義中 (Spec)",
-            "spec_approved" => "3. 技術設計中 (Design)",
-            "sdd_approved" => "4. 任務規劃中 (Tasks)",
-            _ => "已完成"
+            "draft" => "1. Exploring Proposal",
+            "proposal_approved" => "2. Defining Spec",
+            "spec_approved" => "3. Designing (Design)",
+            "sdd_approved" => "4. Planning Tasks",
+            _ => "Completed"
         },
         role_instruction = role_instruction,
         summary = summary,
@@ -230,6 +230,7 @@ r#"你是一位專業的軟體需求分析師與架構師，正在協助使用�
         os = snapshot.os,
         shell = snapshot.shell,
         cwd = snapshot.cwd.display(),
+        language = crate::ai::language_name(locale),
     )
 }
 
@@ -308,6 +309,7 @@ pub async fn design_chat(
     session_id: String,
     messages: Vec<ChatMessage>,
     provider_id: Option<String>,
+    locale: Locale,
     app: AppHandle,
     design_db: State<'_, DesignDb>,
     pty_manager: State<'_, PtyManager>,
@@ -348,7 +350,7 @@ pub async fn design_chat(
     };
 
     // 4. Build specialized design prompt, with optional stage instruction injection
-    let base_prompt = build_design_prompt(&session, &snapshot);
+    let base_prompt = build_design_prompt(&session, &snapshot, locale);
     let last_content_owned: String = messages.last()
         .and_then(|m| m.content.as_str())
         .unwrap_or("")
@@ -406,4 +408,59 @@ pub async fn design_chat(
     let _ = crate::db::design::create_design_message(&design_db.pool, &session_id, "assistant", &buf).await;
 
     Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, raw_tool_calls: None })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::{EnvSnapshot, Locale};
+
+    fn fixture_session(status: &str) -> DesignSession {
+        DesignSession {
+            id: "s1".into(),
+            title: "t".into(),
+            current_proposal_draft: None,
+            current_spec_draft: None,
+            current_sdd_draft: None,
+            current_plan_draft: None,
+            context_summary: None,
+            status: status.into(),
+        }
+    }
+
+    fn fixture_snapshot() -> EnvSnapshot {
+        EnvSnapshot {
+            os: "linux".into(),
+            shell: "bash".into(),
+            cwd: std::path::PathBuf::from("/"),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn design_prompt_language_rule_follows_locale() {
+        let session = fixture_session("draft");
+        let snapshot = fixture_snapshot();
+        let en_prompt = build_design_prompt(&session, &snapshot, Locale::En);
+        let zh_prompt = build_design_prompt(&session, &snapshot, Locale::ZhTw);
+        assert!(en_prompt.contains("Respond in English."), "en prompt: {en_prompt}");
+        assert!(zh_prompt.contains("Respond in Traditional Chinese (繁體中文)."), "zh prompt: {zh_prompt}");
+    }
+
+    #[test]
+    fn design_prompt_role_instruction_matches_status() {
+        let snapshot = fixture_snapshot();
+        let pm_prompt = build_design_prompt(&fixture_session("draft"), &snapshot, Locale::En);
+        assert!(pm_prompt.contains("Product Manager"));
+        let architect_prompt = build_design_prompt(&fixture_session("spec_approved"), &snapshot, Locale::En);
+        assert!(architect_prompt.contains("Software Architect"));
+    }
+
+    #[test]
+    fn build_stage_instruction_is_language_neutral() {
+        let proposal = build_stage_instruction("proposal");
+        assert!(proposal.contains("UPDATE_PROPOSAL"));
+        assert!(!proposal.is_empty());
+        assert_eq!(build_stage_instruction("unknown"), "");
+    }
 }
