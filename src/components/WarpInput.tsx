@@ -214,13 +214,13 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
       {historyOpen && history.length > 0 && (
         <div className="warp-history-popover">
           <div className="warp-history-header">
-            <span className="warp-history-title">歷史記錄</span>
+            <span className="warp-history-title">{t.warp_history_title}</span>
             <button
               className="warp-history-clear-all"
               onClick={clearAllHistory}
-              title="清除全部歷史記錄"
+              title={t.warp_clear_all_title}
             >
-              清除全部
+              {t.warp_clear_all}
             </button>
           </div>
           <div ref={itemsRef} className="warp-history-items">
@@ -235,7 +235,7 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
                 <button
                   className="warp-history-delete"
                   onClick={(e) => deleteHistoryItem(displayIdx, e)}
-                  title="刪除此記錄"
+                  title={t.warp_delete_item_title}
                 >
                   ×
                 </button>
