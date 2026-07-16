@@ -98,7 +98,7 @@ export function VcsConnectionsPage() {
         {!showForm && (
           <button
             onClick={() => { setForm(EMPTY_FORM); setShowForm(true); setTestStatus("idle"); }}
-            style={{ background: "#1e3a2e", border: "1px solid #34d399", color: "#34d399", borderRadius: 5, padding: "6px 14px", cursor: "pointer", fontSize: 13 }}
+            className="aiterm-btn aiterm-btn--primary"
           >
             {t.vcs_add_conn}
           </button>
@@ -121,14 +121,14 @@ export function VcsConnectionsPage() {
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0, marginLeft: 12 }}>
-                <button onClick={() => handleEdit(conn)} style={btnStyle}>{t.vcs_edit_btn}</button>
+                <button onClick={() => handleEdit(conn)} className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm">{t.vcs_edit_btn}</button>
                 {confirmingDelete === conn.id ? (
                   <>
-                    <button onClick={() => setConfirmingDelete(null)} style={btnStyle}>{t.cancel}</button>
-                    <button onClick={() => handleDelete(conn.id)} style={{ ...btnStyle, color: "#f87171", borderColor: "#f87171" }}>{t.vcs_delete_confirm_btn}</button>
+                    <button onClick={() => setConfirmingDelete(null)} className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm">{t.cancel}</button>
+                    <button onClick={() => handleDelete(conn.id)} className="aiterm-btn aiterm-btn--danger-solid aiterm-btn--sm">{t.vcs_delete_confirm_btn}</button>
                   </>
                 ) : (
-                  <button onClick={() => setConfirmingDelete(conn.id)} style={{ ...btnStyle, color: "#f87171", borderColor: "#f87171" }}>{t.vcs_delete_btn}</button>
+                  <button onClick={() => setConfirmingDelete(conn.id)} className="aiterm-btn aiterm-btn--danger aiterm-btn--sm">{t.vcs_delete_btn}</button>
                 )}
               </div>
             </div>
@@ -201,14 +201,14 @@ export function VcsConnectionsPage() {
           </div>
 
           <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center" }}>
-            <button onClick={handleTest} disabled={testStatus === "testing"} style={btnStyle}>
+            <button onClick={handleTest} disabled={testStatus === "testing"} className="aiterm-btn aiterm-btn--secondary">
               {testStatus === "testing" ? t.vcs_form_testing : t.vcs_form_test}
             </button>
             {testStatus === "ok" && <span style={{ color: "#34d399", fontSize: 12 }}>✓ {testMsg}</span>}
             {testStatus === "error" && <span style={{ color: "#f87171", fontSize: 12 }}>✗ {testMsg}</span>}
             <div style={{ flex: 1 }} />
-            <button onClick={() => setShowForm(false)} style={btnStyle}>{t.cancel}</button>
-            <button onClick={handleSave} disabled={saving} style={{ ...btnStyle, background: "#1e3a2e", borderColor: "#34d399", color: "#34d399" }}>
+            <button onClick={() => setShowForm(false)} className="aiterm-btn aiterm-btn--secondary">{t.cancel}</button>
+            <button onClick={handleSave} disabled={saving} className="aiterm-btn aiterm-btn--primary">
               {saving ? t.vcs_form_saving : t.vcs_form_save}
             </button>
           </div>
@@ -218,10 +218,6 @@ export function VcsConnectionsPage() {
   );
 }
 
-const btnStyle: CSSProperties = {
-  background: "transparent", border: "1px solid #3a3a3a", color: "#ccc",
-  borderRadius: 4, padding: "4px 12px", cursor: "pointer", fontSize: 12,
-};
 const labelStyle: CSSProperties = { color: "#888", fontSize: 12 };
 const inputStyle: CSSProperties = {
   background: "#0f0f0f", border: "1px solid #2a2a2a", color: "#e6e6e6",
