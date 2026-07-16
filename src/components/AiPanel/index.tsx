@@ -2,7 +2,7 @@ import {
   useEffect, useRef, useState, useCallback,
   type KeyboardEvent, type PointerEvent,
 } from "react";
-import { readFileAsAttachment } from "../../types/attachment";
+import { readFileAsAttachment, contentToDisplayString } from "../../types/attachment";
 import type { Attachment } from "../../types/attachment";
 import { useMcpChat } from "../../hooks/useMcpChat";
 import { invokeAiChat, type ChatMessage as AiChatMessage } from "../../ipc/ai";
@@ -267,6 +267,13 @@ Rules:
     setAgentStep(0);
     agentAbortRef.current = false;
 
+    // Carry forward the prior conversation (e.g. a plan the AI already
+    // proposed and is waiting on the user to confirm) — read chat.messages
+    // BEFORE appending this turn's message so it reflects only prior turns.
+    const priorHistory = chat.messages
+      .filter((m): m is typeof m & { role: "user" | "assistant" } => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ role: m.role, content: contentToDisplayString(m.content) }));
+
     chat.addMessage({ role: "user", content: text });
 
     let systemPrompt: string;
@@ -277,7 +284,7 @@ Rules:
       return;
     }
 
-    const history = [{ role: "user" as const, content: text }];
+    const history = [...priorHistory, { role: "user" as const, content: text }];
     await runAgentLoop(history, systemPrompt, 0);
   }, [chat, buildAgentSystemPrompt, runAgentLoop]);
 
