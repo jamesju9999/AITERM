@@ -277,7 +277,7 @@
   flex-shrink: 0;
 }
 
-.ls-dir-clear-btn:hover:not(:disabled) {
+.ls-dir-clear-btn.aiterm-btn:hover:not(:disabled) {
   color: var(--danger, #e05050);
 }
 
@@ -1005,7 +1005,7 @@
 .ls-session-actions { display: flex; gap: 4px; flex-shrink: 0; }
 /* .ls-session-resume-btn removed — replaced by aiterm-btn aiterm-btn--primary aiterm-btn--sm */
 
-.ls-session-delete-btn:hover:not(:disabled) {
+.ls-session-delete-btn.aiterm-btn:hover:not(:disabled) {
   border-color: #ef4444;
   color: #ef4444;
 }
