@@ -195,6 +195,13 @@
   box-shadow: 0 0 6px rgba(249, 115, 22, 0.5);
 }
 
+/* Same badge, anchored to the top-right corner of the expanded settings tile
+   (icon + label are stacked and centered, so the corner sits on the tile itself) */
+.update-badge--tile {
+  top: 6px;
+  right: 8px;
+}
+
 /* Prevent popup menu from clipping off-screen bottom */
 .aiterm-new-tab-picker-popup .new-tab-picker {
   position: relative !important;

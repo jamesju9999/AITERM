@@ -188,6 +188,7 @@ export function TabBar({
         >
           <span className="aiterm-tab-icon">⚙️</span>
           <span className="aiterm-tab-title">{t.settings}</span>
+          {hasUpdate && <span className="update-badge update-badge--tile" aria-label="Update available" />}
         </div>
       </div>
     </div>
