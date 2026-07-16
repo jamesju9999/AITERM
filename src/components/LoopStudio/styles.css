@@ -271,7 +271,7 @@
   border-color: var(--accent, #a855f7);
 }
 
-.ls-dir-clear-btn {
+.ls-dir-clear-btn.aiterm-btn--ghost {
   font-size: 16px;
   padding: 0 4px;
   flex-shrink: 0;

@@ -218,7 +218,7 @@ export function McpServerForm({ existing, onSave, onCancel }: Props) {
         {error && <p style={{ color: "#f87171", fontSize: 13, margin: 0 }}>{error}</p>}
 
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button className="mcp-btn-sm" onClick={onCancel}>{t.cancel}</button>
+          <button className="mcp-btn-sm aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={onCancel}>{t.cancel}</button>
           <button className="add-btn" onClick={handleSave} disabled={saving}>
             {saving ? t.saving_btn : t.save}
           </button>

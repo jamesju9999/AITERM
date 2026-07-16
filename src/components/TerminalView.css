@@ -149,13 +149,9 @@
   white-space: nowrap;
 }
 
-.aiterm-block-btn-ai {
+.aiterm-block-btn-ai.aiterm-btn--secondary {
   border-color: #c084fc;
   color: #c084fc;
-}
-
-.aiterm-block-btn-ai:hover {
-  background: rgba(192, 132, 252, 0.15);
 }
 
 .aiterm-block-btn.aiterm-agent-toggle--on {
