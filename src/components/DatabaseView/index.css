@@ -102,6 +102,6 @@
 }
 
 .db-ai-session-delete-btn.aiterm-btn:hover:not(:disabled) {
-  color: #f87171;
-  background: rgba(239, 68, 68, 0.1);
+  color: #f87171 !important;
+  background: rgba(239, 68, 68, 0.1) !important;
 }
