@@ -1,0 +1,104 @@
+/* src/styles/buttons.css */
+/* 共用按鈕視覺系統 — 詳見 docs/superpowers/specs/2026-07-16-unified-button-system-design.md */
+
+.aiterm-btn {
+  cursor: pointer;
+  font-family: inherit;
+  border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: var(--transition-smooth, all 0.25s cubic-bezier(0.4, 0, 0.2, 1));
+}
+.aiterm-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 主要動作 */
+.aiterm-btn--primary {
+  background: var(--accent-gradient, linear-gradient(135deg, var(--accent, #a855f7), #6366f1));
+  border-color: transparent;
+  border-radius: 8px;
+  color: #fff;
+  font-weight: 600;
+  padding: 8px 16px;
+}
+.aiterm-btn--primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px var(--accent-glow, rgba(168, 85, 247, 0.35));
+}
+.aiterm-btn--primary:disabled {
+  transform: none;
+  box-shadow: none;
+}
+
+/* 次要／外框 */
+.aiterm-btn--secondary {
+  background: var(--bg-secondary, #1a1a2e);
+  border-color: var(--border, #333);
+  border-radius: 6px;
+  color: inherit;
+  padding: 6px 12px;
+}
+.aiterm-btn--secondary:hover:not(:disabled) {
+  background: var(--bg-hover, #252540);
+}
+
+/* 危險／刪除 — 靜止時淡底，hover 轉實心紅底 */
+.aiterm-btn--danger {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: #ef4444;
+  border-radius: 8px;
+  color: #ef4444;
+  font-weight: 600;
+  padding: 8px 16px;
+}
+.aiterm-btn--danger:hover:not(:disabled) {
+  background: #ef4444;
+  color: #fff;
+}
+
+/* 危險／確認鈕 — 已在二次確認情境中，靜止就是實心紅底（不需 hover 才升級） */
+.aiterm-btn--danger-solid {
+  background: #ef4444;
+  border-color: transparent;
+  border-radius: 6px;
+  color: #fff;
+  font-weight: 600;
+  padding: 6px 14px;
+}
+.aiterm-btn--danger-solid:hover:not(:disabled) {
+  background: #dc2626;
+}
+
+/* 純圖示／文字，無底無框 */
+.aiterm-btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  border-radius: 6px;
+  color: var(--text-secondary, #888);
+  padding: 4px 8px;
+}
+.aiterm-btn--ghost:hover:not(:disabled) {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+  color: var(--text-primary, #fff);
+}
+
+/* 圓形／方形圖示按鈕，固定尺寸，疊加 --primary/--danger/--ghost 決定顏色 */
+.aiterm-btn--icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+/* 尺寸修飾：密集列表用（Settings 卡片操作列等） */
+.aiterm-btn--sm {
+  padding: 3px 8px;
+  font-size: 11px;
+  border-radius: 4px;
+}
