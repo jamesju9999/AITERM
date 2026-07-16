@@ -83,11 +83,11 @@ export function AboutPage() {
       </p>
 
       <div className="about-buttons">
-        <button className="about-btn" onClick={handleGitHub}>
+        <button className="aiterm-btn aiterm-btn--primary" onClick={handleGitHub}>
           {t.about_github}
         </button>
         <button
-          className="about-btn"
+          className="aiterm-btn aiterm-btn--primary"
           onClick={handleCheckUpdates}
           disabled={updateStatus === "checking" || version === "…"}
         >

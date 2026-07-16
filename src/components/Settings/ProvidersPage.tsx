@@ -76,7 +76,7 @@ export function ProvidersPage() {
       <div className="providers-header">
         <h2>{t.ai_providers}</h2>
         <button
-          className="btn-add"
+          className="aiterm-btn aiterm-btn--primary"
           onClick={() => setFormMode({ kind: "add" })}
         >
           {t.add_provider}
@@ -117,6 +117,7 @@ export function ProvidersPage() {
 
             <div className="provider-card-actions">
               <button
+                className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
                 onClick={() => handleTest(p.id)}
                 disabled={testing === p.id}
                 title={t.provider_test}
@@ -124,11 +125,16 @@ export function ProvidersPage() {
                 {testing === p.id ? t.provider_testing : t.provider_test}
               </button>
               {!p.is_default && (
-                <button onClick={() => handleSetDefault(p.id)} title={t.provider_set_default}>
+                <button
+                  className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                  onClick={() => handleSetDefault(p.id)}
+                  title={t.provider_set_default}
+                >
                   {t.provider_set_default}
                 </button>
               )}
               <button
+                className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
                 onClick={() => setFormMode({ kind: "edit", provider: p })}
                 title={t.edit}
               >
@@ -136,9 +142,14 @@ export function ProvidersPage() {
               </button>
               {confirmingRemove === p.id ? (
                 <>
-                  <button onClick={() => setConfirmingRemove(null)}>{t.cancel}</button>
                   <button
-                    className="btn-danger"
+                    className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                    onClick={() => setConfirmingRemove(null)}
+                  >
+                    {t.cancel}
+                  </button>
+                  <button
+                    className="btn-danger aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
                     onClick={() => handleRemove(p.id)}
                   >
                     {t.provider_remove}?
@@ -146,7 +157,7 @@ export function ProvidersPage() {
                 </>
               ) : (
                 <button
-                  className="btn-danger"
+                  className="btn-danger aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
                   onClick={() => setConfirmingRemove(p.id)}
                   title={t.provider_remove}
                 >

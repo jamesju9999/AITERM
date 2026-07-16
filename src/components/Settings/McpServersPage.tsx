@@ -134,7 +134,7 @@ export function McpServersPage() {
         <button className="add-btn" onClick={() => setEditingServer("new")}>
           {t.mcp_add_server}
         </button>
-        <button className="mcp-btn-sm" onClick={handleImportClick}>
+        <button className="mcp-btn-sm aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={handleImportClick}>
           {t.mcp_import_claude}
         </button>
       </div>
@@ -172,20 +172,20 @@ export function McpServersPage() {
                 <span className={`mcp-status-badge ${s.status}`}>{statusLabel(s)}</span>
               )}
               <div className="mcp-row-actions">
-                <button className="mcp-btn-sm" onClick={() => setEditingServer(s)}>
+                <button className="mcp-btn-sm aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => setEditingServer(s)}>
                   {t.edit}
                 </button>
                 {deletingId === s.id ? (
                   <>
-                    <button className="mcp-btn-sm danger" onClick={() => handleDelete(s.id)}>
+                    <button className="mcp-btn-sm danger aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => handleDelete(s.id)}>
                       {t.mcp_confirm_delete_yes}
                     </button>
-                    <button className="mcp-btn-sm" onClick={() => setDeletingId(null)}>
+                    <button className="mcp-btn-sm aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => setDeletingId(null)}>
                       {t.cancel}
                     </button>
                   </>
                 ) : (
-                  <button className="mcp-btn-sm danger" onClick={() => handleDelete(s.id)}>
+                  <button className="mcp-btn-sm danger aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => handleDelete(s.id)}>
                     {t.delete}
                   </button>
                 )}
@@ -266,7 +266,7 @@ export function McpServersPage() {
               );
             })}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button className="mcp-btn-sm" onClick={() => setImportList(null)}>{t.cancel}</button>
+              <button className="mcp-btn-sm aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => setImportList(null)}>{t.cancel}</button>
               <button className="add-btn" onClick={handleImportConfirm}>
                 {t.mcp_import_confirm}
               </button>

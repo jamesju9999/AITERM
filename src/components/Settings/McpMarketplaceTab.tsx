@@ -156,15 +156,8 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <button
             onClick={() => setSortByDownloads(prev => !prev)}
-            style={{
-              background: sortByDownloads ? "#1e3a5f" : "none",
-              border: `1px solid ${sortByDownloads ? "#3b82f6" : "#2a2a2a"}`,
-              borderRadius: 4,
-              color: sortByDownloads ? "#93c5fd" : "#666",
-              cursor: "pointer",
-              fontSize: 11,
-              padding: "3px 8px",
-            }}
+            className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+            style={sortByDownloads ? { background: "var(--accent-dim, rgba(168,85,247,0.15))", borderColor: "var(--accent, #a855f7)", color: "var(--accent, #a855f7)" } : undefined}
           >
             ↓ {t.mcp_marketplace_sort_downloads}
           </button>
@@ -207,14 +200,10 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
                 <button
                   onClick={() => handleInstall(server)}
                   disabled={isDisabled}
+                  className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
                   style={{
-                    background: state.status === "success" ? "#166534" : "#2a2a2a",
-                    border: "1px solid #3a3a3a",
-                    borderRadius: 4,
-                    color: state.status === "error" ? "#f87171" : "#ccc",
-                    cursor: isDisabled ? "default" : "pointer",
-                    fontSize: 12,
-                    padding: "4px 10px",
+                    background: state.status === "success" ? "#166534" : undefined,
+                    color: state.status === "error" ? "#f87171" : undefined,
                     whiteSpace: "nowrap",
                   }}
                 >
@@ -222,16 +211,8 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
                 </button>
                 <button
                   onClick={() => openUrl(server.homepage ?? `https://www.npmjs.com/package/${server.qualifiedName}`).catch(console.error)}
-                  style={{
-                    background: "none",
-                    border: "1px solid #2a2a2a",
-                    borderRadius: 4,
-                    color: "#666",
-                    cursor: "pointer",
-                    fontSize: 11,
-                    padding: "3px 10px",
-                    whiteSpace: "nowrap",
-                  }}
+                  className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+                  style={{ whiteSpace: "nowrap" }}
                 >
                   {t.mcp_marketplace_intro}
                 </button>
@@ -245,7 +226,7 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
       {total > PAGE_SIZE && (
         <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 4 }}>
           <button
-            className="mcp-btn-sm"
+            className="mcp-btn-sm aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
             disabled={from === 0 || isSearching}
             onClick={() => doSearch(query, Math.max(0, from - PAGE_SIZE))}
           >
@@ -255,7 +236,7 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
             {from + 1}–{Math.min(from + PAGE_SIZE, total)} / {total}
           </span>
           <button
-            className="mcp-btn-sm"
+            className="mcp-btn-sm aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
             disabled={from + PAGE_SIZE >= total || isSearching}
             onClick={() => doSearch(query, from + PAGE_SIZE)}
           >

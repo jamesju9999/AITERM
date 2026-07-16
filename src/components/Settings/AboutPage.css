@@ -46,25 +46,7 @@
   margin-top: 8px;
 }
 
-.about-btn {
-  background: #1e2a42;
-  border: none;
-  border-radius: 6px;
-  color: #7aadff;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 13px;
-  padding: 8px 18px;
-}
-
-.about-btn:hover {
-  background: #263450;
-}
-
-.about-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+/* .about-btn removed — replaced by aiterm-btn aiterm-btn--primary */
 
 .about-status {
   font-size: 13px;

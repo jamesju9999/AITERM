@@ -16,19 +16,7 @@
   color: #e6e6e6;
 }
 
-.btn-add {
-  background: #2d5aab;
-  border: 1px solid #3d6ac0;
-  border-radius: 5px;
-  color: #fff;
-  cursor: pointer;
-  font-size: 13px;
-  padding: 7px 14px;
-}
-
-.btn-add:hover {
-  background: #3265be;
-}
+/* .btn-add removed — replaced by aiterm-btn aiterm-btn--primary */
 
 .providers-empty {
   color: #888;
@@ -113,28 +101,9 @@
   flex-shrink: 0;
 }
 
-.provider-card-actions button {
-  background: #252525;
-  border: 1px solid #3a3a3a;
-  border-radius: 4px;
-  color: #ccc;
-  cursor: pointer;
-  font-size: 12px;
-  padding: 5px 10px;
-  white-space: nowrap;
-}
-
-.provider-card-actions button:hover:not(:disabled) {
-  background: #2e2e2e;
-}
-
-.provider-card-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
 .provider-card-actions .btn-danger {
   color: #f87171;
+  border-color: rgba(248, 113, 113, 0.4);
 }
 
 .provider-card-actions .btn-danger:hover:not(:disabled) {
