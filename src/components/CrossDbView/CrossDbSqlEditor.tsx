@@ -75,7 +75,7 @@ export function CrossDbSqlEditor({ databases }: Props) {
           <button
             onClick={run}
             disabled={running}
-            style={{ background: "#1e3a2e", border: "1px solid #34d399", color: "#34d399", borderRadius: 4, padding: "4px 14px", cursor: "pointer", fontSize: 12 }}
+            className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
           >
             {running ? t.db_sql_running : t.db_sql_btn_run}
           </button>

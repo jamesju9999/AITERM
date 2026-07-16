@@ -270,28 +270,79 @@
   flex-shrink: 0;
   width: 32px;
   height: 32px;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border-color, #333);
-  border-radius: 6px;
+  border-radius: 50%;
   color: var(--text-muted, #666);
-  font-size: 14px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: var(--transition-smooth);
 }
-.aiterm-agent-toggle:hover {
+.aiterm-agent-toggle:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
+  background: rgba(168, 85, 247, 0.06);
+  transform: translateY(-1px);
+}
+.aiterm-agent-toggle:active:not(:disabled) {
+  transform: translateY(0);
 }
 .aiterm-agent-toggle--on {
   background: var(--accent-dim, rgba(168, 85, 247, 0.15));
   border-color: var(--accent, #a855f7);
   color: var(--accent, #a855f7);
-  box-shadow: 0 0 10px var(--accent-glow);
+  box-shadow: 0 0 12px var(--accent-glow);
 }
-.aiterm-agent-toggle:disabled { opacity: 0.4; cursor: not-allowed; }
+.aiterm-agent-toggle--on:hover:not(:disabled) {
+  background: var(--accent-dim, rgba(168, 85, 247, 0.25));
+}
+.aiterm-agent-toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── MCP toggle button ── */
+.aiterm-mcp-toggle {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 0 12px;
+  height: 32px;
+  border-radius: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color, #333);
+  color: var(--text-muted, #666);
+}
+.aiterm-mcp-toggle:hover:not(:disabled) {
+  border-color: var(--success, #34d399);
+  color: var(--success, #34d399);
+  background: rgba(52, 211, 153, 0.06);
+  transform: translateY(-1px);
+}
+.aiterm-mcp-toggle:active:not(:disabled) {
+  transform: translateY(0);
+}
+.aiterm-mcp-toggle--on {
+  background: rgba(15, 46, 35, 0.6);
+  border-color: var(--success, #34d399);
+  color: var(--success, #34d399);
+  box-shadow: 0 0 12px rgba(52, 211, 153, 0.2);
+}
+.aiterm-mcp-toggle--on:hover:not(:disabled) {
+  background: rgba(15, 46, 35, 0.8);
+}
+.aiterm-mcp-toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 
 .aiterm-ai-panel-input-area {
   border-top: 1px solid var(--border-color, #2a2a2a);

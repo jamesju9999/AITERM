@@ -159,8 +159,7 @@ export function SpecPreview({ title, proposal, spec, sdd, plan, onGenerate, isSt
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           {activeContent && onGenerate && (
             <button
-              className="design-provider-btn"
-              style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+              className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
               onClick={() => onGenerate(activeTab)}
               disabled={isStreaming}
               title={t.design_regenerate_title(activeTabMeta.label)}
@@ -170,8 +169,7 @@ export function SpecPreview({ title, proposal, spec, sdd, plan, onGenerate, isSt
           )}
           {hasAnyContent && (
             <button
-              className="design-provider-btn"
-              style={{ padding: '4px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+              className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
               onClick={handleSaveClick}
               disabled={saving}
             >
@@ -199,18 +197,31 @@ export function SpecPreview({ title, proposal, spec, sdd, plan, onGenerate, isSt
         {activeContent ? (
           <MarkdownText text={activeContent} />
         ) : (
-          <div className="design-empty-state" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
-            <p>{t.design_empty_state}</p>
-            {onGenerate && (
-              <button
-                className="design-provider-btn"
-                style={{ padding: '8px 20px', fontSize: '0.9rem' }}
-                onClick={() => onGenerate(activeTab)}
-                disabled={isStreaming}
-              >
-                {activeTabMeta.generateLabel}
-              </button>
-            )}
+          <div className="design-empty-state-container">
+            <div className="design-empty-state-card">
+              <div className="design-empty-state-icon-wrapper">
+                <div className="design-empty-state-glow" />
+                <svg className="design-empty-state-doc" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <path d="M8 13h8M8 17h6" />
+                </svg>
+                <svg className="design-empty-state-sparkles" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="12 2 15 9 22 12 15 15 12 22 9 15 2 12 9 9" />
+                </svg>
+              </div>
+              <h4 className="design-empty-state-title">{activeTabMeta.label}</h4>
+              <p className="design-empty-state-desc">{t.design_empty_state}</p>
+              {onGenerate && (
+                <button
+                  className="aiterm-btn aiterm-btn--primary design-empty-state-btn"
+                  onClick={() => onGenerate(activeTab)}
+                  disabled={isStreaming}
+                >
+                  {activeTabMeta.generateLabel}
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -280,11 +291,11 @@ export function SpecPreview({ title, proposal, spec, sdd, plan, onGenerate, isSt
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
               <button
                 onClick={() => setPromptOpen(false)}
-                style={{ background: 'transparent', border: '1px solid #555', color: '#aaa', padding: '6px 16px', borderRadius: '4px', cursor: 'pointer' }}
+                className="aiterm-btn aiterm-btn--secondary"
               >{t.cancel}</button>
               <button
                 onClick={executeSave}
-                style={{ background: '#4caf50', border: 'none', color: '#fff', padding: '6px 16px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+                className="aiterm-btn aiterm-btn--primary"
               >{t.design_confirm_save}</button>
             </div>
           </div>

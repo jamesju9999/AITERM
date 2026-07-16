@@ -25,6 +25,7 @@ import { listen } from '@tauri-apps/api/event';
 import { useTelegramRemoteControl } from '../../hooks/useTelegramRemoteControl';
 import { MessageBubble } from '../AiPanel/MessageBubble';
 import { ProviderPalette } from '../ProviderPalette';
+import { listProviders } from '../../ipc/provider';
 import { extractResponseText } from '../../lib/markdown';
 import { getConfig, type SubmitShortcut } from '../../ipc/config';
 import { useLocale } from '../../contexts/LocaleContext';
@@ -48,6 +49,21 @@ export function DesignView({ isActive }: { isActive: boolean }) {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const messagesListRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listProviders()
+      .then((list) => {
+        if (cancelled) return;
+        const active = list.find((p) => p.is_default) ?? list[0];
+        if (active && !providerId) {
+          setProviderId(active.id);
+          setProviderName(active.display_name);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [providerId]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -479,9 +495,41 @@ export function DesignView({ isActive }: { isActive: boolean }) {
         <div className="design-interaction-area">
           <div ref={messagesListRef} className="design-messages-list">
             {messages.length === 0 && (
-              <div className="design-welcome-hero">
+              <div className="design-welcome-card">
+                <div className="design-welcome-icon-wrapper">
+                  <div className="design-welcome-glow" />
+                  <svg className="design-welcome-logo" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                    <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+                    <line x1="12" y1="22.08" x2="12" y2="12" />
+                  </svg>
+                </div>
                 <h3>{t.design_welcome_title}</h3>
-                <p>{t.design_welcome_hint}</p>
+                <p className="design-welcome-desc">{t.design_welcome_hint}</p>
+                
+                <div className="design-welcome-features">
+                  <div className="design-feature-item">
+                    <div className="design-feature-icon">💬</div>
+                    <div className="design-feature-text">
+                      <h5>{t.design_feature_1_title}</h5>
+                      <p>{t.design_feature_1_desc}</p>
+                    </div>
+                  </div>
+                  <div className="design-feature-item">
+                    <div className="design-feature-icon">🪄</div>
+                    <div className="design-feature-text">
+                      <h5>{t.design_feature_2_title}</h5>
+                      <p>{t.design_feature_2_desc}</p>
+                    </div>
+                  </div>
+                  <div className="design-feature-item">
+                    <div className="design-feature-icon">💾</div>
+                    <div className="design-feature-text">
+                      <h5>{t.design_feature_3_title}</h5>
+                      <p>{t.design_feature_3_desc}</p>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
             {messages.map((m, i) => {
@@ -505,7 +553,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
           <div className="design-input-section">
             <div className="design-tool-row" style={{ padding: '8px 16px 0 16px' }}>
               <button
-                className="design-provider-btn"
+                className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
                 onClick={() => setShowProviderPalette(true)}
               >
                 🤖 {providerName ? t.design_model(providerName) : t.design_default_model}

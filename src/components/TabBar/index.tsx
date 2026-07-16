@@ -10,7 +10,9 @@ import {
   LeafIcon,
   FileTextIcon,
   BookOpenIcon,
-  RefreshIcon
+  RefreshIcon,
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon
 } from "../Icons";
 import "./index.css";
 
@@ -80,46 +82,62 @@ export function TabBar({
     }
   }, [editingId]);
 
-  if (!isSidebarOpen) {
-    return (
-      <div className="aiterm-tabbar aiterm-tabbar--collapsed" data-tauri-drag-region style={{ width: '48px', padding: '16px 0', alignItems: 'center', justifyContent: "space-between" }}>
-        <button className="aiterm-sidebar-toggle" onClick={onToggle} title={t.tabbar_sidebar_expand} style={{ background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px' }}>
-          ◨
-        </button>
-
-        <button
-          className="aiterm-sidebar-toggle"
-          onClick={() => navigate("/settings", hasUpdate ? { state: { tab: "about" } } : undefined)}
-          title={`${t.settings} (Ctrl+,)`}
-          style={{ background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px', position: 'relative' }}
-        >
-          ⚙
-          {hasUpdate && <span className="update-badge" aria-label="Update available" />}
-        </button>
-      </div>
-    );
-  }
-
   return (
-    <div className="aiterm-tabbar" data-tauri-drag-region style={{ width: `${width}px` }}>
+    <div
+      className={`aiterm-tabbar ${!isSidebarOpen ? "aiterm-tabbar--collapsed" : ""}`}
+      data-tauri-drag-region
+      style={{ width: isSidebarOpen ? `${width}px` : "48px" }}
+    >
       {/* Top spacing and Logo */}
-      <div className="aiterm-sidebar-header-wrapper" style={{ marginTop: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-        <div className="aiterm-sidebar-logo">
-          <img
-            src={appIcon}
-            alt="AITerm"
-            style={{
-              width: '38px',
-              height: '38px',
-              borderRadius: '12px',
-              boxShadow: '0 0 12px var(--accent-glow)',
-              display: 'block',
-            }}
-          />
-        </div>
-        <button className="aiterm-sidebar-toggle" onClick={onToggle} title="Close Sidebar (Ctrl+B)" style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px', padding: 0 }}>
-          ◧ Collapse
-        </button>
+      <div className="aiterm-sidebar-header-wrapper" style={{ marginTop: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', width: '100%' }}>
+        {isSidebarOpen ? (
+          <>
+            <div className="aiterm-sidebar-logo" style={{ marginBottom: '4px' }}>
+              <img
+                src={appIcon}
+                alt="AITerm"
+                style={{
+                  width: '38px',
+                  height: '38px',
+                  borderRadius: '12px',
+                  boxShadow: '0 0 12px var(--accent-glow)',
+                  display: 'block',
+                }}
+              />
+            </div>
+            <button
+              className="aiterm-sidebar-toggle-block"
+              onClick={onToggle}
+              title="Close Sidebar (Ctrl+B)"
+            >
+              <span className="aiterm-tab-icon"><PanelLeftCloseIcon size={18} /></span>
+              <span className="aiterm-tab-title">Collapse</span>
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="aiterm-sidebar-logo" style={{ marginBottom: '4px' }}>
+              <img
+                src={appIcon}
+                alt="AITerm"
+                style={{
+                  width: '26px',
+                  height: '26px',
+                  borderRadius: '8px',
+                  boxShadow: '0 0 8px var(--accent-glow)',
+                  display: 'block',
+                }}
+              />
+            </div>
+            <button
+              className="aiterm-sidebar-toggle-block"
+              onClick={onToggle}
+              title={t.tabbar_sidebar_expand}
+            >
+              <span className="aiterm-tab-icon"><PanelLeftOpenIcon size={18} /></span>
+            </button>
+          </>
+        )}
       </div>
 
       {/* Tabs list */}
@@ -129,53 +147,57 @@ export function TabBar({
             key={tab.id}
             className={`aiterm-tab ${tab.id === activeId ? "active" : ""}`}
             onClick={() => onSelect(tab.id)}
-            onDoubleClick={() => setEditingId(tab.id)}
-            title={`Switch to Tab (Ctrl+${idx + 1}) — Double click to rename`}
+            onDoubleClick={isSidebarOpen ? () => setEditingId(tab.id) : undefined}
+            title={isSidebarOpen ? `Switch to Tab (Ctrl+${idx + 1}) — Double click to rename` : `${tab.title} (Ctrl+${idx + 1})`}
           >
             <span className="aiterm-tab-icon">{getTabIcon(tab.type)}</span>
             
-            {editingId === tab.id ? (
-              <input
-                ref={editInputRef}
-                className="aiterm-tab-rename-input"
-                defaultValue={tab.title}
-                onBlur={(e) => {
-                  const val = e.currentTarget.value.trim();
-                  if (val && onRename) onRename(tab.id, val);
-                  setEditingId(null);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
+            {isSidebarOpen && (
+              editingId === tab.id ? (
+                <input
+                  ref={editInputRef}
+                  className="aiterm-tab-rename-input"
+                  defaultValue={tab.title}
+                  onBlur={(e) => {
                     const val = e.currentTarget.value.trim();
                     if (val && onRename) onRename(tab.id, val);
                     setEditingId(null);
-                  } else if (e.key === "Escape") {
-                    setEditingId(null);
-                  }
-                }}
-                onClick={(e) => e.stopPropagation()}
-              />
-            ) : (
-              <span className="aiterm-tab-title">{tab.title}</span>
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      const val = e.currentTarget.value.trim();
+                      if (val && onRename) onRename(tab.id, val);
+                      setEditingId(null);
+                    } else if (e.key === "Escape") {
+                      setEditingId(null);
+                    }
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                />
+              ) : (
+                <span className="aiterm-tab-title">{tab.title}</span>
+              )
             )}
             
-            <button
-              className="aiterm-tab-close"
-              onClick={(e) => {
-                e.stopPropagation();
-                onClose(tab.id);
-              }}
-              title="Close Tab (Ctrl+W)"
-            >
-              ✕
-            </button>
+            {isSidebarOpen && (
+              <button
+                className="aiterm-tab-close"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClose(tab.id);
+                }}
+                title="Close Tab (Ctrl+W)"
+              >
+                ✕
+              </button>
+            )}
           </div>
         ))}
         
         {/* Add Tab Button */}
         <button className="aiterm-tab-add-block" onClick={onAdd} title="New Tab (Ctrl+T)">
           <span style={{ fontSize: '18px' }}>+</span>
-          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 600 }}>Add Tab</span>
+          {isSidebarOpen && <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 600 }}>Add Tab</span>}
         </button>
       </div>
 
@@ -187,8 +209,8 @@ export function TabBar({
           title={`${t.settings} (Ctrl+,)`}
         >
           <span className="aiterm-tab-icon">⚙️</span>
-          <span className="aiterm-tab-title">{t.settings}</span>
-          {hasUpdate && <span className="update-badge update-badge--tile" aria-label="Update available" />}
+          {isSidebarOpen && <span className="aiterm-tab-title">{t.settings}</span>}
+          {hasUpdate && <span className={`update-badge ${isSidebarOpen ? "update-badge--tile" : ""}`} aria-label="Update available" />}
         </div>
       </div>
     </div>

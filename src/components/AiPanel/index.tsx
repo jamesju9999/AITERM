@@ -14,11 +14,14 @@ import { languageDirective } from "../../lib/i18n";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
 import { MessageList } from "./MessageList";
+import { ZapIcon, WrenchIcon } from "../Icons";
 import "./styles.css";
 
 const MIN_WIDTH = 280;
 const MAX_WIDTH_RATIO = 0.75;
 const STORAGE_WIDTH_KEY = "aiterm-panel-width";
+const STORAGE_AGENT_MODE_KEY = "aiterm-agent-mode";
+const STORAGE_USE_MCP_KEY = "aiterm-use-mcp";
 
 function loadSavedWidth(): number {
   try {
@@ -26,6 +29,22 @@ function loadSavedWidth(): number {
     if (v) return Math.max(MIN_WIDTH, parseInt(v, 10));
   } catch { /* ignore */ }
   return 420;
+}
+
+function loadSavedAgentMode(): boolean {
+  try {
+    const v = localStorage.getItem(STORAGE_AGENT_MODE_KEY);
+    if (v !== null) return v === "true";
+  } catch { /* ignore */ }
+  return false;
+}
+
+function loadSavedUseMcp(): boolean {
+  try {
+    const v = localStorage.getItem(STORAGE_USE_MCP_KEY);
+    if (v !== null) return v === "true";
+  } catch { /* ignore */ }
+  return true;
 }
 
 export interface AiPanelProps {
@@ -62,7 +81,7 @@ export function AiPanel({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [mcpEnabled, setMcpEnabled] = useState(true);
   const [mcpToolCount, setMcpToolCount] = useState(0);
-  const [useMcp, setUseMcp] = useState(true);
+  const [useMcp, setUseMcp] = useState(loadSavedUseMcp);
   const [submitShortcut, setSubmitShortcut] = useState<SubmitShortcut>("enter");
 
   const processFiles = useCallback(async (files: FileList | File[]) => {
@@ -132,7 +151,7 @@ export function AiPanel({
   };
 
   // ── Agent mode ────────────────────────────────────────────────────────────
-  const [agentMode, setAgentMode] = useState(false);
+  const [agentMode, setAgentMode] = useState(loadSavedAgentMode);
   const [agentRunning, setAgentRunning] = useState(false);
   const [agentStep, setAgentStep] = useState(0);
   const agentAbortRef = useRef(false);
@@ -153,6 +172,18 @@ export function AiPanel({
     load().catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_AGENT_MODE_KEY, String(agentMode));
+    } catch { /* ignore */ }
+  }, [agentMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_USE_MCP_KEY, String(useMcp));
+    } catch { /* ignore */ }
+  }, [useMcp]);
 
   /** Build system prompt with live CWD + dir listing. */
   const buildAgentSystemPrompt = useCallback(async (): Promise<string> => {
@@ -519,26 +550,18 @@ Rules:
             title={agentMode ? "停用 Agent 模式" : "啟用 Agent 模式（AI 自動執行指令迭代）"}
             disabled={isDisabled}
           >
-            ⚡
+            <ZapIcon size={14} fill={agentMode} />
           </button>
           {mcpEnabled && (
             <button
               type="button"
+              className={`aiterm-mcp-toggle${useMcp && mcpToolCount > 0 ? " aiterm-mcp-toggle--on" : ""}`}
               title={mcpToolCount === 0 ? t.mcp_toggle_no_servers : (useMcp ? "MCP 開啟" : "MCP 關閉")}
               disabled={mcpToolCount === 0 || isDisabled}
               onClick={() => setUseMcp((v) => !v)}
-              style={{
-                fontSize: 10, padding: "4px 8px", borderRadius: 6,
-                border: `1px solid ${useMcp && mcpToolCount > 0 ? "#34d399" : "#333"}`,
-                background: useMcp && mcpToolCount > 0 ? "#0f2e23" : "transparent",
-                color: useMcp && mcpToolCount > 0 ? "#34d399" : "#666",
-                cursor: mcpToolCount === 0 ? "default" : "pointer",
-                opacity: mcpToolCount === 0 ? 0.5 : 1,
-                fontWeight: 600,
-                lineHeight: 1,
-              }}
             >
-              {mcpToolCount > 0 ? `MCP (${mcpToolCount})` : "MCP OFF"}
+              <WrenchIcon size={12} />
+              <span>{mcpToolCount > 0 ? `MCP (${mcpToolCount})` : "MCP OFF"}</span>
             </button>
           )}
         </div>

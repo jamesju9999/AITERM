@@ -211,3 +211,83 @@
   border-color: rgba(255, 255, 255, 0.08) !important;
   background: var(--bg-secondary, #1a1a1a) !important;
 }
+
+/* ── Collapsed Sidebar Redesign ── */
+.aiterm-tabbar.aiterm-tabbar--collapsed {
+  width: 48px !important;
+  padding: 16px 4px !important;
+  gap: 12px;
+}
+
+.aiterm-tabbar.aiterm-tabbar--collapsed .aiterm-tab {
+  height: 38px;
+  padding: 0;
+  border-radius: 8px;
+  gap: 0;
+}
+
+.aiterm-tabbar.aiterm-tabbar--collapsed .aiterm-tab-add-block {
+  height: 38px;
+  gap: 0;
+}
+
+.aiterm-tabbar.aiterm-tabbar--collapsed .aiterm-tabbar-footer {
+  padding-top: 10px;
+}
+
+.aiterm-sidebar-toggle-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 56px;
+  width: 100%;
+  padding: 6px 4px;
+  background: transparent;
+  border-radius: 10px;
+  color: var(--text-secondary, #aaa);
+  cursor: pointer;
+  border: 1px solid transparent;
+  gap: 4px;
+  outline: none;
+  transition: var(--transition-smooth);
+}
+
+.aiterm-sidebar-toggle-block:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary, #fff);
+}
+
+.aiterm-sidebar-toggle-block .aiterm-tab-icon {
+  font-size: 18px;
+  line-height: 1;
+  transition: var(--transition-smooth);
+}
+
+.aiterm-sidebar-toggle-block:hover .aiterm-tab-icon {
+  transform: scale(1.05);
+}
+
+.aiterm-sidebar-toggle-block .aiterm-tab-title {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted, #666);
+  text-align: center;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
+}
+
+.aiterm-sidebar-toggle-block:hover .aiterm-tab-title {
+  color: var(--text-primary, #fff);
+}
+
+/* Collapsed layout overrides for the toggle block */
+.aiterm-tabbar.aiterm-tabbar--collapsed .aiterm-sidebar-toggle-block {
+  height: 38px;
+  padding: 0;
+  border-radius: 8px;
+  gap: 0;
+}

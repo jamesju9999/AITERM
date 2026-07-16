@@ -112,7 +112,7 @@ export function CrossDbView({ isActive }: CrossDbViewProps) {
             </div>
           )}
           <button
-            className="crossdb-selector__start"
+            className="crossdb-selector__start aiterm-btn aiterm-btn--primary"
             disabled={selectedIds.size < 1 || loading}
             onClick={startSession}
           >

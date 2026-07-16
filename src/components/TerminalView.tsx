@@ -39,7 +39,7 @@ import { ProviderPalette } from "./ProviderPalette";
 import { WarpInput } from "./WarpInput";
 import { FileExplorer } from "./FileExplorer/FileExplorer";
 import { CommandBookmarksPicker, addBookmark } from "./CommandBookmarks";
-import { getActiveTheme, type AppTheme } from "../lib/themes";
+import { RobotIcon, SparklesIcon, SmartphoneIcon } from "./Icons";
 import "./TerminalView.css";
 
 interface PreviewState {
@@ -806,45 +806,51 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           )}
           <span>AITerm · {status}</span>
         </span>
-        <span style={{ display: "flex", alignItems: "center" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           {activeProvider ? (
             <button
-              className="aiterm-status-provider"
+              className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm aiterm-status-provider"
               title={t.term_provider_tooltip_switch}
               onClick={() => setPaletteOpen((o) => !o)}
+              style={{ display: "flex", alignItems: "center", gap: "6px" }}
             >
-              {activeProvider}
+              <RobotIcon size={14} style={{ color: "var(--accent)" }} />
+              <span>{activeProvider}</span>
             </button>
           ) : (
             <button
-              className="aiterm-status-provider aiterm-status-provider--empty"
+              className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm aiterm-status-provider aiterm-status-provider--empty"
               title={t.term_provider_tooltip_add}
               onClick={() => navigate("/settings")}
+              style={{ display: "flex", alignItems: "center", gap: "6px" }}
             >
-              {t.ai_providers} ＋
+              <RobotIcon size={14} />
+              <span>{t.ai_providers} ＋</span>
             </button>
           )}
           <button
-            className={`aiterm-block-btn aiterm-btn aiterm-btn--secondary ${isRemoteEnabled ? 'aiterm-agent-toggle--on' : ''}`}
+            className={`aiterm-btn aiterm-btn--secondary aiterm-btn--sm ${isRemoteEnabled ? 'aiterm-agent-toggle--on' : ''}`}
             title={t.term_remote_tooltip}
             onClick={(e) => {
               e.stopPropagation();
               setIsRemoteEnabled((prev) => !prev);
             }}
-            style={{ marginLeft: "8px", padding: "2px 8px" }}
+            style={{ display: "flex", alignItems: "center", gap: "6px" }}
           >
-            📱 Remote
+            <SmartphoneIcon size={14} />
+            <span>Remote</span>
           </button>
           <button
-            className="aiterm-block-btn aiterm-block-btn-ai aiterm-btn aiterm-btn--secondary"
+            className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
             title={t.term_ai_helper_tooltip}
             onClick={(e) => {
                e.stopPropagation();
                window.dispatchEvent(new CustomEvent('aiterm:ask-ai', { detail: {} }));
             }}
-            style={{ marginLeft: "8px", padding: "2px 8px" }}
+            style={{ display: "flex", alignItems: "center", gap: "6px" }}
           >
-            ✨ Ask AI
+            <SparklesIcon size={14} />
+            <span>Ask AI</span>
           </button>
         </span>
       </div>
