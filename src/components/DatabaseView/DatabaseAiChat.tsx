@@ -454,7 +454,7 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
             <span style={{ fontSize: 11, color: "#555", textTransform: "uppercase", letterSpacing: "0.05em" }}>{t.cdb_ai_history_title}</span>
             <button
               onClick={newChat}
-              style={{ background: "#1a2a1e", border: "1px solid #2d4a35", color: "#4ade80", fontSize: 10, borderRadius: 4, padding: "2px 8px", cursor: "pointer" }}
+              className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
             >
               {t.cdb_ai_history_new_btn}
             </button>
@@ -482,9 +482,8 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
                 <button
                   onClick={(e) => deleteSession(s.id, e)}
                   title={t.cdb_ai_delete_tooltip}
-                  style={{ background: "transparent", border: "none", color: "#444", fontSize: 14, cursor: "pointer", padding: "2px 5px", borderRadius: 3, flexShrink: 0, lineHeight: 1 }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#f87171"; (e.currentTarget as HTMLButtonElement).style.background = "#2a1a1a"; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#444"; (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+                  className="db-ai-session-delete-btn aiterm-btn aiterm-btn--ghost"
+                  style={{ color: "#444", fontSize: 14, padding: "2px 5px" }}
                 >
                   ×
                 </button>
@@ -563,10 +562,8 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
             <button
               onClick={removeSchemaDoc}
               title={t.db_ai_schema_tooltip_remove}
-              style={{
-                background: "transparent", border: "none", color: "#555",
-                fontSize: 12, cursor: "pointer", padding: "2px 4px",
-              }}
+              className="aiterm-btn aiterm-btn--ghost"
+              style={{ color: "#555", fontSize: 12, padding: "2px 4px" }}
             >
               ×
             </button>
@@ -588,10 +585,7 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
             <button
               onClick={newChat}
               title={t.cdb_ai_history_new_btn}
-              style={{
-                background: "transparent", border: "1px solid #2a2a2a", color: "#555",
-                borderRadius: 4, padding: "2px 8px", fontSize: 11, cursor: "pointer",
-              }}
+              className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
             >
               {t.cdb_ai_history_new_btn}
             </button>
@@ -623,11 +617,7 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
             {sending ? (
               <button
                 onClick={stop}
-                style={{
-                  width: 26, height: 26, borderRadius: "50%", background: "#ef4444", color: "#fff",
-                  border: "none", display: "flex", alignItems: "center", justifyContent: "center",
-                  cursor: "pointer", fontSize: 11, padding: 0, flexShrink: 0, boxShadow: "0 2px 6px rgba(0,0,0,0.15)"
-                }}
+                className="aiterm-btn aiterm-btn--danger-solid aiterm-btn--icon"
                 title={t.db_ai_btn_stop}
               >
                 ■
@@ -637,15 +627,7 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
                 id="db-ai-send-btn"
                 onClick={send}
                 disabled={!input.trim()}
-                style={{
-                  width: 26, height: 26, borderRadius: "50%",
-                  background: input.trim() ? "var(--accent-gradient)" : "rgba(255,255,255,0.05)",
-                  color: input.trim() ? "#fff" : "var(--text-muted)",
-                  border: "none", display: "flex", alignItems: "center", justifyContent: "center",
-                  cursor: input.trim() ? "pointer" : "not-allowed", fontSize: 11, padding: 0, flexShrink: 0,
-                  boxShadow: input.trim() ? "0 2px 6px rgba(0,0,0,0.15)" : "none",
-                  transition: "all 0.2s"
-                }}
+                className="aiterm-btn aiterm-btn--primary aiterm-btn--icon"
                 title={t.db_ai_btn_send}
               >
                 ▲
@@ -728,7 +710,7 @@ function MessageBubble({ msg, onToggleStep }: { msg: Message; onToggleStep: (i: 
           <MarkdownText text={unescapeNewlines(extractResponseText(msg.text)).replace(/<cmd>([\s\S]*?)<\/cmd>/gi, (_m, c) => `\`\`\`\n${c.trim()}\n\`\`\``)} />
           <button
             type="button"
-            className={`db-ai-copy-btn${copied ? " db-ai-copy-btn--copied" : ""}`}
+            className={`db-ai-copy-btn aiterm-btn aiterm-btn--secondary aiterm-btn--sm${copied ? " db-ai-copy-btn--copied" : ""}`}
             onClick={handleCopy}
             title={t.db_ai_copy_tooltip}
           >{copied ? "✓" : "⎘"}</button>

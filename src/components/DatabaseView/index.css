@@ -36,8 +36,8 @@
 }
 
 .db-view__subtab--active {
-  color: #34d399;
-  border-bottom-color: #34d399;
+  color: var(--accent, #a855f7);
+  border-bottom-color: var(--accent, #a855f7);
 }
 
 .db-view__content {
@@ -92,19 +92,16 @@
   position: absolute;
   top: 4px;
   right: 4px;
-  background: #2a2a2a;
-  border: 1px solid #444;
-  color: #aaa;
-  border-radius: 4px;
-  padding: 1px 6px;
-  font-size: 12px;
-  cursor: pointer;
-  line-height: 1.4;
 }
 .db-ai-answer--copyable:hover .db-ai-copy-btn {
   display: block;
 }
 .db-ai-copy-btn--copied {
-  color: #4ade80;
-  border-color: #4ade80;
+  color: #4ade80 !important;
+  border-color: #4ade80 !important;
+}
+
+.db-ai-session-delete-btn.aiterm-btn:hover:not(:disabled) {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.1);
 }

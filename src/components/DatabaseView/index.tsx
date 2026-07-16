@@ -80,7 +80,7 @@ export function DatabaseView({ tabId: _tabId, isActive: _isActive, dbConnectionI
             </div>
             <button
               onClick={() => setConnectError(null)}
-              style={{ background: "#1a1a1a", border: "1px solid #3a3a3a", color: "#ccc", borderRadius: 4, padding: "6px 14px", cursor: "pointer" }}
+              className="aiterm-btn aiterm-btn--secondary"
             >
               {t.db_btn_retry}
             </button>
@@ -91,7 +91,8 @@ export function DatabaseView({ tabId: _tabId, isActive: _isActive, dbConnectionI
             <div style={{ color: "#888", fontSize: 12 }}>{connectError}</div>
             <button
               onClick={() => { setConnectError(null); }}
-              style={{ marginTop: 12, background: "#1a1a1a", border: "1px solid #3a3a3a", color: "#ccc", borderRadius: 4, padding: "6px 14px", cursor: "pointer" }}
+              style={{ marginTop: 12 }}
+              className="aiterm-btn aiterm-btn--secondary"
             >
               {t.db_btn_reconnect}
             </button>

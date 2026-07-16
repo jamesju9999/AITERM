@@ -110,8 +110,8 @@ export function DatabaseBrowser({ connectionId, schema }: Props) {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         {selectedTable && (
           <div style={{ background: "#111", borderBottom: "1px solid #1e1e1e", padding: "6px 12px", display: "flex", gap: 0, alignItems: "center" }}>
-            <button onClick={() => switchMode("data")} style={{ ...modeBtn, ...(viewMode === "data" ? modeBtnActive : {}) }}>{t.db_browser_mode_data}</button>
-            <button onClick={() => switchMode("structure")} style={{ ...modeBtn, ...(viewMode === "structure" ? modeBtnActive : {}) }}>{t.db_browser_mode_structure}</button>
+            <button onClick={() => switchMode("data")} className="aiterm-btn aiterm-btn--ghost" style={viewMode === "data" ? modeBtnActive : undefined}>{t.db_browser_mode_data}</button>
+            <button onClick={() => switchMode("structure")} className="aiterm-btn aiterm-btn--ghost" style={viewMode === "structure" ? modeBtnActive : undefined}>{t.db_browser_mode_structure}</button>
             <span style={{ color: "#555", fontSize: 11, marginLeft: "auto" }}>{selectedTable}</span>
           </div>
         )}
@@ -170,9 +170,9 @@ function DataGrid({ result, page, pageSize, onPageChange }: { result: QueryResul
       <div style={{ padding: "8px 12px", display: "flex", gap: 8, alignItems: "center", borderTop: "1px solid #1e1e1e", fontSize: 11, color: "#888" }}>
         <span>{result.rows.length} {t.db_rows} · {result.execution_time_ms}ms</span>
         <div style={{ flex: 1 }} />
-        {page > 0 && <button onClick={() => onPageChange(page - 1)} style={pageBtn}>{t.db_prev_page}</button>}
+        {page > 0 && <button onClick={() => onPageChange(page - 1)} className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm">{t.db_prev_page}</button>}
         <span>{t.db_page_n(page + 1)}</span>
-        {result.rows.length === pageSize && <button onClick={() => onPageChange(page + 1)} style={pageBtn}>{t.db_next_page}</button>}
+        {result.rows.length === pageSize && <button onClick={() => onPageChange(page + 1)} className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm">{t.db_next_page}</button>}
       </div>
     </div>
   );
@@ -205,7 +205,5 @@ function StructureView({ columns }: { columns: ColumnInfo[] }) {
   );
 }
 
-const modeBtn: CSSProperties = { background: "transparent", border: "none", color: "#888", fontSize: 12, padding: "4px 12px", cursor: "pointer" };
-const modeBtnActive: CSSProperties = { color: "#34d399", borderBottom: "2px solid #34d399" };
-const pageBtn: CSSProperties = { background: "#1a1a1a", border: "1px solid #2a2a2a", color: "#888", fontSize: 11, padding: "2px 10px", borderRadius: 3, cursor: "pointer" };
+const modeBtnActive: CSSProperties = { color: "var(--accent, #a855f7)", borderBottom: "2px solid var(--accent, #a855f7)" };
 
