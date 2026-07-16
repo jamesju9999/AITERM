@@ -34,7 +34,7 @@
   color: #e6e6e6;
 }
 
-.bookmarks-close {
+.bookmarks-close.aiterm-btn--ghost {
   font-size: 14px;
   padding: 2px 4px;
 }
@@ -101,7 +101,7 @@
   padding-right: 24px;
 }
 
-.bookmarks-item-delete {
+.bookmarks-item-delete.aiterm-btn--ghost {
   position: absolute;
   right: 8px;
   top: 50%;

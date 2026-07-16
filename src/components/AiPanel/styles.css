@@ -355,7 +355,7 @@
   min-width: 0 !important;
 }
 
-.aiterm-input-pill-container .aiterm-ai-panel-send-btn:hover:not(:disabled) {
+.aiterm-input-pill-container .aiterm-ai-panel-send-btn.aiterm-btn--primary:hover:not(:disabled) {
   transform: scale(1.1);
   box-shadow: 0 0 8px var(--accent-glow);
 }

@@ -90,7 +90,7 @@
   outline: none !important;
 }
 
-.design-send-btn:hover:not(:disabled) {
+.design-send-btn.aiterm-btn--primary:hover:not(:disabled) {
   transform: scale(1.1);
   box-shadow: 0 0 8px var(--accent-glow);
 }

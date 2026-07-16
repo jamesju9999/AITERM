@@ -543,7 +543,10 @@
   color: var(--text-primary) !important;
   outline: none !important;
 }
-.crossdb-chat__send-btn:hover:not(:disabled),
+.crossdb-chat__send-btn.aiterm-btn--primary:hover:not(:disabled) {
+  transform: scale(1.1);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
 .crossdb-chat__stop-btn:hover:not(:disabled) {
   transform: scale(1.1);
   box-shadow: 0 0 8px var(--accent-glow);
