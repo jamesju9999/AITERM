@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
 
 // Mock Tauri before importing AiPanel (which imports useMcpChat).
 const DEFAULT_CONFIG = {
@@ -184,6 +185,43 @@ describe("AiPanel", () => {
     expect(secondCallContents).toContain("請規劃整理資料夾的計畫");
     expect(secondCallContents).toContain("這是計畫內容，要執行嗎？");
     expect(secondCallContents).toContain("請執行計畫");
+  });
+
+  it("Agent Mode recurses to a second AI call after executing a <cmd>", async () => {
+    aiChatQueue.push({ content: "<cmd>ls</cmd>" });
+    aiChatQueue.push({ content: "完成了" });
+
+    const onExecuteCommand = vi.fn(
+      (_cmd: string, onComplete?: (block: TerminalBlock) => void) => {
+        onComplete?.({ id: "b1", command: "ls", output: "file.txt", status: "completed", exitCode: 0 });
+      },
+    );
+
+    render(
+      <AiPanel
+        sessionId="s1"
+        isOpen={true}
+        providerName="Ollama"
+        onClose={vi.fn()}
+        onExecuteCommand={onExecuteCommand}
+        onOpenProviderPalette={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
+
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(textbox, "列出檔案");
+    await userEvent.keyboard("{Enter}");
+
+    // The recursive call only fires after onExecuteCommand's onComplete runs
+    // (synchronously here) and the loop re-invokes itself via the ref.
+    await waitFor(() => expect(screen.getByText("完成了")).toBeInTheDocument());
+
+    expect(onExecuteCommand).toHaveBeenCalledWith("ls", expect.any(Function));
+    expect(aiChatCalls.length).toBe(2);
+    const secondCallContents = aiChatCalls[1].map((m) => m.content);
+    expect(secondCallContents.some((c) => typeof c === "string" && c.includes("ls"))).toBe(true);
   });
 
   it("provider badge calls onOpenProviderPalette when clicked", async () => {

@@ -136,7 +136,7 @@ export function AiPanel({
   const [agentRunning, setAgentRunning] = useState(false);
   const [agentStep, setAgentStep] = useState(0);
   const agentAbortRef = useRef(false);
-  const maxAgentStepsRef = useRef<number>(5);
+  const [maxAgentSteps, setMaxAgentSteps] = useState<number>(5);
 
   useEffect(() => {
     let cancelled = false;
@@ -144,7 +144,7 @@ export function AiPanel({
       const [cfg, tools] = await Promise.all([getConfig(), getMcpTools()]);
       if (cancelled) return;
       // 0 = unlimited; use a large number internally
-      maxAgentStepsRef.current = cfg.max_agent_steps === 0 ? 9999 : (cfg.max_agent_steps ?? 5);
+      setMaxAgentSteps(cfg.max_agent_steps === 0 ? 9999 : (cfg.max_agent_steps ?? 5));
       const globalEnabled = cfg.mcp_enabled ?? true;
       setMcpEnabled(globalEnabled);
       setMcpToolCount(tools.length);
@@ -186,12 +186,19 @@ Rules:
    * 2. If AI returns a <cmd>, execute it and recurse with the output
    * 3. If no <cmd>, loop ends
    */
+  // Holds the latest runAgentLoop so the recursive call below reads through
+  // a ref instead of closing over the `const` being defined (which
+  // react-hooks/immutability flags as accessed-before-declared).
+  const runAgentLoopRef = useRef<
+    (history: { role: "user" | "assistant"; content: string }[], systemPrompt: string, step: number) => Promise<void>
+  >(async () => {});
+
   const runAgentLoop = useCallback(async (
     history: { role: "user" | "assistant"; content: string }[],
     systemPrompt: string,
     step: number,
   ): Promise<void> => {
-    const maxSteps = maxAgentStepsRef.current;
+    const maxSteps = maxAgentSteps;
     if (agentAbortRef.current || step >= maxSteps) {
       if (!agentAbortRef.current) {
         chat.addMessage({
@@ -257,10 +264,14 @@ Rules:
         ];
 
         resolve();
-        void runAgentLoop(newHistory, systemPrompt, step + 1);
+        void runAgentLoopRef.current(newHistory, systemPrompt, step + 1);
       });
     });
-  }, [chat, onExecuteCommand, sessionId, locale]);
+  }, [chat, onExecuteCommand, sessionId, locale, sendRemoteResponse, maxAgentSteps]);
+
+  useEffect(() => {
+    runAgentLoopRef.current = runAgentLoop;
+  }, [runAgentLoop]);
 
   const submitAgent = useCallback(async (text: string) => {
     setAgentRunning(true);
@@ -457,7 +468,7 @@ Rules:
       {agentRunning && (
         <div className="aiterm-agent-status">
           <span className="aiterm-agent-status__spinner">⟳</span>
-          <span>Agent 執行中… 步驟 {agentStep}/{maxAgentStepsRef.current >= 9999 ? "∞" : maxAgentStepsRef.current}</span>
+          <span>Agent 執行中… 步驟 {agentStep}/{maxAgentSteps >= 9999 ? "∞" : maxAgentSteps}</span>
           <button
             type="button"
             className="aiterm-agent-status__stop"
