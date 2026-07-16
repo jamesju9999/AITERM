@@ -404,14 +404,14 @@ export function LoopStudioView({
             <div className="ls-close-dialog-actions">
               <button
                 type="button"
-                className="ls-close-cancel-btn"
+                className="aiterm-btn aiterm-btn--secondary"
                 onClick={() => handleCloseConfirm(false)}
               >
                 {t.ls_cancel_continue}
               </button>
               <button
                 type="button"
-                className="ls-close-discard-btn"
+                className="aiterm-btn aiterm-btn--danger-solid"
                 onClick={() => handleCloseConfirm(true)}
               >
                 {t.ls_close_discard}
@@ -433,7 +433,7 @@ export function LoopStudioView({
             <div className="ls-project-toolbar">
               <button
                 type="button"
-                className="ls-project-btn"
+                className="ls-project-btn aiterm-btn aiterm-btn--secondary"
                 onClick={handleNewProject}
                 disabled={loop.isRunning}
                 title={t.ls_clear_project_tooltip}
@@ -442,7 +442,7 @@ export function LoopStudioView({
               </button>
               <button
                 type="button"
-                className="ls-project-btn"
+                className="ls-project-btn aiterm-btn aiterm-btn--secondary"
                 onClick={handleSaveProject}
                 disabled={loop.isRunning}
                 title={currentProjectPath ? t.ls_save_tooltip(currentProjectPath) : t.ls_save_default_tooltip}
@@ -451,7 +451,7 @@ export function LoopStudioView({
               </button>
               <button
                 type="button"
-                className="ls-project-btn"
+                className="ls-project-btn aiterm-btn aiterm-btn--secondary"
                 onClick={handleSaveAsProject}
                 disabled={loop.isRunning}
                 title={t.ls_save_as_tooltip}
@@ -460,7 +460,7 @@ export function LoopStudioView({
               </button>
               <button
                 type="button"
-                className="ls-project-btn"
+                className="ls-project-btn aiterm-btn aiterm-btn--secondary"
                 onClick={handleLoadProject}
                 disabled={loop.isRunning}
                 title={t.ls_load_tooltip}
@@ -492,7 +492,7 @@ export function LoopStudioView({
               />
               <button
                 type="button"
-                className="ls-dir-pick-btn"
+                className="ls-dir-pick-btn aiterm-btn aiterm-btn--secondary"
                 onClick={handlePickFolder}
                 disabled={loop.isRunning}
                 title={t.ls_browse_folder_tooltip}
@@ -502,7 +502,7 @@ export function LoopStudioView({
               {roster.projectDir && (
                 <button
                   type="button"
-                  className="ls-dir-clear-btn"
+                  className="ls-dir-clear-btn aiterm-btn aiterm-btn--ghost"
                   onClick={() => updateRoster({ projectDir: "" })}
                   disabled={loop.isRunning}
                   title={t.ls_clear_dir_tooltip}
@@ -531,7 +531,7 @@ export function LoopStudioView({
             <div className="ls-enhance-row">
               <button
                 type="button"
-                className="ls-enhance-btn"
+                className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
                 onClick={() => handleEnhance("goal")}
                 disabled={!roster.goal.trim() || loop.isRunning || enhancingField !== null}
               >
@@ -540,7 +540,7 @@ export function LoopStudioView({
               {prevText.goal && (
                 <button
                   type="button"
-                  className="ls-undo-btn"
+                  className="ls-undo-btn aiterm-btn"
                   onClick={() => handleUndo("goal")}
                 >
                   {t.ls_enhance_undo}
@@ -561,7 +561,7 @@ export function LoopStudioView({
             <div className="ls-enhance-row">
               <button
                 type="button"
-                className="ls-enhance-btn"
+                className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
                 onClick={() => handleEnhance("stopping")}
                 disabled={!roster.stoppingCondition.trim() || loop.isRunning || enhancingField !== null}
               >
@@ -570,7 +570,7 @@ export function LoopStudioView({
               {prevText.stopping && (
                 <button
                   type="button"
-                  className="ls-undo-btn"
+                  className="ls-undo-btn aiterm-btn"
                   onClick={() => handleUndo("stopping")}
                 >
                   {t.ls_enhance_undo}
@@ -723,7 +723,7 @@ export function LoopStudioView({
           {!loop.isRunning ? (
             <button
               type="button"
-              className="ls-start-btn"
+              className="ls-start-btn aiterm-btn aiterm-btn--primary"
               onClick={handleStart}
               disabled={!roster.goal.trim() || !ptySessionId || hasErrors || (hasWarnings && !warningsDismissed)}
             >
@@ -732,7 +732,7 @@ export function LoopStudioView({
           ) : (
             <button
               type="button"
-              className="ls-stop-btn"
+              className="ls-stop-btn aiterm-btn aiterm-btn--danger"
               onClick={loop.stop}
             >
               {t.ls_stop_loop}

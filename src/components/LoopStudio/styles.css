@@ -94,27 +94,11 @@
 }
 
 .ls-project-btn {
-  padding: 4px 10px;
-  font-size: 11px;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid var(--border-color, #2a2a2a);
-  border-radius: 6px;
-  color: var(--text-secondary, #bbb);
-  cursor: pointer;
   white-space: nowrap;
-  transition: var(--transition-smooth);
-  font-family: inherit;
 }
 
 .ls-project-btn:hover:not(:disabled) {
-  background: rgba(255,255,255,0.08);
   border-color: var(--accent, #a855f7);
-  color: var(--text-primary, #fff);
-}
-
-.ls-project-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
 }
 
 .ls-current-file {
@@ -216,26 +200,7 @@
   margin-top: 4px;
 }
 
-.ls-enhance-btn {
-  padding: 3px 8px;
-  font-size: 11px;
-  background: transparent;
-  border: 1px solid var(--ls-border, #444);
-  border-radius: 4px;
-  color: var(--ls-text-muted, #aaa);
-  cursor: pointer;
-}
-
-.ls-enhance-btn:hover:not(:disabled) {
-  background: var(--ls-bg-hover, #2a2a2a);
-  border-color: #888;
-  color: #fff;
-}
-
-.ls-enhance-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
+/* .ls-enhance-btn removed — replaced by aiterm-btn aiterm-btn--secondary aiterm-btn--sm */
 
 .ls-undo-btn {
   padding: 3px 8px;
@@ -298,32 +263,21 @@
 }
 
 .ls-dir-pick-btn {
-  background: var(--input-bg, #2a2a2a);
-  border: 1px solid var(--border, #333);
-  border-radius: 4px;
-  padding: 5px 8px;
-  cursor: pointer;
   font-size: 14px;
-  line-height: 1;
   flex-shrink: 0;
 }
 
 .ls-dir-pick-btn:hover:not(:disabled) {
-  border-color: var(--accent, #4a9eff);
+  border-color: var(--accent, #a855f7);
 }
 
 .ls-dir-clear-btn {
-  background: none;
-  border: none;
-  color: var(--text-muted, #888);
-  cursor: pointer;
   font-size: 16px;
   padding: 0 4px;
-  line-height: 1;
   flex-shrink: 0;
 }
 
-.ls-dir-clear-btn:hover {
+.ls-dir-clear-btn:hover:not(:disabled) {
   color: var(--danger, #e05050);
 }
 
@@ -420,49 +374,11 @@
 }
 
 .ls-start-btn {
-  background: var(--accent-gradient, linear-gradient(135deg, #a855f7, #6366f1));
-  color: #fff;
-  border: none;
-  border-radius: 8px;
-  padding: 10px 20px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: var(--transition-smooth);
-  box-shadow: 0 2px 8px var(--accent-glow, rgba(168,85,247,0.3));
-  font-family: inherit;
   width: 100%;
-}
-
-.ls-start-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 16px var(--accent-glow, rgba(168,85,247,0.5));
-}
-
-.ls-start-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-  transform: none;
-  box-shadow: none;
 }
 
 .ls-stop-btn {
-  background: rgba(239,68,68,0.15);
-  color: #f87171;
-  border: 1px solid rgba(239,68,68,0.3);
-  border-radius: 8px;
-  padding: 10px 20px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: var(--transition-smooth);
-  font-family: inherit;
   width: 100%;
-}
-
-.ls-stop-btn:hover {
-  background: rgba(239,68,68,0.25);
-  border-color: rgba(239,68,68,0.5);
 }
 
 .ls-hint {
@@ -486,20 +402,7 @@
   position: relative;
 }
 
-.ls-add-btn {
-  background: transparent;
-  border: 1px solid var(--border, #333);
-  border-radius: 4px;
-  color: var(--text-muted, #888);
-  font-size: 11px;
-  padding: 3px 8px;
-  cursor: pointer;
-}
-
-.ls-add-btn:hover {
-  border-color: var(--accent, #4a9eff);
-  color: var(--accent, #4a9eff);
-}
+/* .ls-add-btn removed — replaced by aiterm-btn aiterm-btn--secondary aiterm-btn--sm */
 
 .ls-preset-picker {
   position: absolute;
@@ -1100,29 +1003,12 @@
 .ls-session-meta { font-size: 10px; color: var(--ls-text-muted, #888); }
 
 .ls-session-actions { display: flex; gap: 4px; flex-shrink: 0; }
-.ls-session-resume-btn {
-  padding: 3px 8px;
-  background: var(--ls-accent, #7c3aed);
-  color: #fff;
-  border: none;
-  border-radius: 4px;
-  font-size: 11px;
-  cursor: pointer;
-}
-.ls-session-resume-btn:hover:not(:disabled) { opacity: 0.85; }
-.ls-session-resume-btn:disabled { opacity: 0.5; cursor: default; }
+/* .ls-session-resume-btn removed — replaced by aiterm-btn aiterm-btn--primary aiterm-btn--sm */
 
-.ls-session-delete-btn {
-  padding: 3px 7px;
-  background: transparent;
-  border: 1px solid var(--ls-border, #333);
-  border-radius: 4px;
-  color: var(--ls-text-muted, #888);
-  font-size: 13px;
-  cursor: pointer;
-  line-height: 1;
+.ls-session-delete-btn:hover:not(:disabled) {
+  border-color: #ef4444;
+  color: #ef4444;
 }
-.ls-session-delete-btn:hover { border-color: #ef4444; color: #ef4444; }
 
 .ls-session-footer {
   padding: 6px 8px 4px;
@@ -1131,22 +1017,12 @@
 }
 
 .ls-clear-all-btn {
-  font-size: 11px;
-  padding: 3px 8px;
-  background: transparent;
-  border: 1px solid #555;
-  border-radius: 4px;
-  color: #888;
-  cursor: pointer;
   width: 100%;
 }
-
 .ls-clear-all-btn:hover:not(:disabled) {
   border-color: #ef4444;
   color: #ef4444;
 }
-
-.ls-clear-all-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .ls-clear-confirm {
   display: flex;
@@ -1158,17 +1034,7 @@
 
 .ls-clear-confirm span { flex: 1; }
 
-.ls-clear-confirm-yes {
-  padding: 2px 8px;
-  font-size: 11px;
-  background: #ef4444;
-  border: none;
-  border-radius: 4px;
-  color: #fff;
-  cursor: pointer;
-}
-
-.ls-clear-confirm-yes:hover { background: #dc2626; }
+/* .ls-clear-confirm-yes removed — replaced by aiterm-btn aiterm-btn--danger-solid aiterm-btn--sm */
 
 .ls-clear-confirm-no {
   padding: 2px 8px;
@@ -1223,30 +1089,9 @@
   justify-content: flex-end;
 }
 
-.ls-close-cancel-btn {
-  padding: 6px 14px;
-  font-size: 12px;
-  background: transparent;
-  border: 1px solid #555;
-  border-radius: 5px;
-  color: #ccc;
-  cursor: pointer;
-}
+/* .ls-close-cancel-btn removed — replaced by aiterm-btn aiterm-btn--secondary */
 
-.ls-close-cancel-btn:hover { border-color: #888; color: #fff; }
-
-.ls-close-discard-btn {
-  padding: 6px 14px;
-  font-size: 12px;
-  background: #ef4444;
-  border: none;
-  border-radius: 5px;
-  color: #fff;
-  cursor: pointer;
-  font-weight: 500;
-}
-
-.ls-close-discard-btn:hover { background: #dc2626; }
+/* .ls-close-discard-btn removed — replaced by aiterm-btn aiterm-btn--danger-solid */
 
 .ls-fullauto-row {
   flex-direction: row;

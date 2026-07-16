@@ -86,7 +86,7 @@ export function SessionPicker({ onResume, isRunning }: SessionPickerProps) {
                 {(s.status === "paused" || s.status === "running") && (
                   <button
                     type="button"
-                    className="ls-session-resume-btn"
+                    className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
                     onClick={() => { setOpen(false); onResume(s.id); }}
                     disabled={isRunning}
                   >
@@ -95,7 +95,7 @@ export function SessionPicker({ onResume, isRunning }: SessionPickerProps) {
                 )}
                 <button
                   type="button"
-                  className="ls-session-delete-btn"
+                  className="ls-session-delete-btn aiterm-btn aiterm-btn--ghost"
                   onClick={e => handleDelete(e, s.id)}
                   title={t.ls_session_delete}
                 >
@@ -109,13 +109,13 @@ export function SessionPicker({ onResume, isRunning }: SessionPickerProps) {
             {confirmClear ? (
               <div className="ls-clear-confirm">
                 <span>{t.ls_session_clear_confirm(sessions.length)}</span>
-                <button type="button" className="ls-clear-confirm-yes" onClick={handleClearAll}>{t.ls_session_confirm}</button>
+                <button type="button" className="aiterm-btn aiterm-btn--danger-solid aiterm-btn--sm" onClick={handleClearAll}>{t.ls_session_confirm}</button>
                 <button type="button" className="ls-clear-confirm-no" onClick={() => setConfirmClear(false)}>{t.cancel}</button>
               </div>
             ) : (
               <button
                 type="button"
-                className="ls-clear-all-btn"
+                className="ls-clear-all-btn aiterm-btn aiterm-btn--secondary"
                 onClick={() => setConfirmClear(true)}
                 disabled={isRunning}
               >

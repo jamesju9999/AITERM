@@ -183,7 +183,7 @@ export function AgentRoster({ agents, providers, onChange }: AgentRosterProps) {
         <div className="ls-add-btn-wrap" ref={pickerRef}>
           <button
             type="button"
-            className="ls-add-btn"
+            className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
             onClick={() => setPickerOpen(p => !p)}
           >
             + Agent ▾
@@ -261,7 +261,7 @@ export function AgentRoster({ agents, providers, onChange }: AgentRosterProps) {
                   <span>{t.ls_field_role_desc}</span>
                   <button
                     type="button"
-                    className="ls-enhance-btn"
+                    className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
                     onClick={() => handleGenerateDescription(idx)}
                     disabled={!agent.name.trim() || generatingIdx !== null}
                     title={agent.name.trim() ? t.ls_generate_desc_title_ready : t.ls_generate_desc_title_empty}
