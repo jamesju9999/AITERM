@@ -21,32 +21,16 @@
 }
 
 .fe-btn {
-  background: none;
-  border: 1px solid #333;
-  border-radius: 4px;
-  color: #aaa;
-  cursor: pointer;
   font-size: 13px;
   line-height: 1;
   padding: 3px 7px;
   flex-shrink: 0;
-  transition: background 0.15s, color 0.15s;
-}
-
-.fe-btn:hover:not(:disabled) {
-  background: #252525;
-  color: #fff;
-}
-
-.fe-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
 }
 
 .fe-btn--active {
-  background: #1e3a5f;
-  color: #63b3ed;
-  border-color: #1e3a5f;
+  background: var(--accent-dim, rgba(168, 85, 247, 0.15)) !important;
+  color: var(--accent, #a855f7) !important;
+  border-color: var(--accent, #a855f7) !important;
 }
 
 .fe-btn--dot {

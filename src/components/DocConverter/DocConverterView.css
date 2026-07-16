@@ -133,30 +133,7 @@
   align-items: center;
 }
 
-.doc-converter__btn {
-  border-radius: 6px;
-  padding: 7px 16px;
-  font-size: 12px;
-  cursor: pointer;
-  border: 1px solid;
-}
-
-.doc-converter__btn--primary {
-  background: #1e3a2e;
-  border-color: #34d399;
-  color: #34d399;
-}
-
-.doc-converter__btn--secondary {
-  background: transparent;
-  border-color: #2a2a2a;
-  color: #888;
-}
-
-.doc-converter__btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
+/* .doc-converter__btn / --primary / --secondary removed — replaced by aiterm-btn variants */
 
 .doc-converter__progress {
   font-size: 11px;

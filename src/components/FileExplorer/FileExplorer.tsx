@@ -174,10 +174,10 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
     <div className="file-explorer">
       {/* Toolbar */}
       <div className="fe-toolbar">
-        <button className="fe-btn" onClick={goUp} title={t.file_go_up} disabled={atRoot}>
+        <button className="fe-btn aiterm-btn aiterm-btn--secondary" onClick={goUp} title={t.file_go_up} disabled={atRoot}>
           ↑
         </button>
-        <button className="fe-btn" onClick={() => loadDir(cwd)} title={t.file_refresh}>
+        <button className="fe-btn aiterm-btn aiterm-btn--secondary" onClick={() => loadDir(cwd)} title={t.file_refresh}>
           ↻
         </button>
         <div className="fe-breadcrumb">
@@ -207,7 +207,7 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
           })}
         </div>
         <button
-          className={`fe-btn fe-btn--dot ${showDotfiles ? "fe-btn--active" : ""}`}
+          className={`fe-btn fe-btn--dot aiterm-btn aiterm-btn--secondary ${showDotfiles ? "fe-btn--active" : ""}`}
           onClick={() => setShowDotfiles(p => !p)}
           title={t.file_toggle_dotfiles}
         >

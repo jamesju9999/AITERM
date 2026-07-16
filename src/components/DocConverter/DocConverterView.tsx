@@ -255,21 +255,21 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
       {extractState && !normalizing && (
         <div className="doc-converter__actions">
           <button
-            className="doc-converter__btn doc-converter__btn--primary"
+            className="aiterm-btn aiterm-btn--primary"
             onClick={normalizeWithAi}
             disabled={!selectedProviderId}
           >
             {t.dc_normalize_btn}
           </button>
           <button
-            className="doc-converter__btn doc-converter__btn--secondary"
+            className="aiterm-btn aiterm-btn--secondary"
             onClick={downloadRawMd}
           >
             {t.dc_download_raw_btn}
           </button>
           {mdOutput && (
             <button
-              className="doc-converter__btn doc-converter__btn--secondary"
+              className="aiterm-btn aiterm-btn--secondary"
               onClick={downloadMd}
             >
               {t.dc_download_btn}
@@ -288,7 +288,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
             </span>
           </div>
           <button
-            className="doc-converter__btn doc-converter__btn--secondary"
+            className="aiterm-btn aiterm-btn--secondary"
             onClick={() => { stoppedRef.current = true; }}
           >
             {t.dc_stop_btn}
@@ -303,8 +303,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
               {t.dc_preview_label(mdOutput.length)}
             </span>
             <button
-              className="doc-converter__btn doc-converter__btn--secondary"
-              style={{ fontSize: 11, padding: "2px 8px" }}
+              className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
               onClick={downloadMd}
             >
               {t.dc_download_btn}
