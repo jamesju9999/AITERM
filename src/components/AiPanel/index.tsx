@@ -550,7 +550,7 @@ Rules:
             title={agentMode ? "停用 Agent 模式" : "啟用 Agent 模式（AI 自動執行指令迭代）"}
             disabled={isDisabled}
           >
-            <ZapIcon size={14} fill={agentMode} />
+            <ZapIcon size={14} isFilled={agentMode} />
           </button>
           {mcpEnabled && (
             <button

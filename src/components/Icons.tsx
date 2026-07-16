@@ -326,13 +326,13 @@ export function ArrowLeftIcon({ size = 16, ...props }: IconProps) {
 }
 
 // 16. Zap / Agent mode Icon
-export function ZapIcon({ size = 16, fill = false, ...props }: IconProps & { fill?: boolean }) {
+export function ZapIcon({ size = 16, isFilled = false, ...props }: IconProps & { isFilled?: boolean }) {
   return (
     <svg
       width={size}
       height={size}
       viewBox="0 0 24 24"
-      fill={fill ? "currentColor" : "none"}
+      fill={isFilled ? "currentColor" : "none"}
       stroke="currentColor"
       strokeWidth="2.2"
       strokeLinecap="round"

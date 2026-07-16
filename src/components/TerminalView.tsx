@@ -39,6 +39,7 @@ import { ProviderPalette } from "./ProviderPalette";
 import { WarpInput } from "./WarpInput";
 import { FileExplorer } from "./FileExplorer/FileExplorer";
 import { CommandBookmarksPicker, addBookmark } from "./CommandBookmarks";
+import { getActiveTheme, type AppTheme } from "../lib/themes";
 import { RobotIcon, SparklesIcon, SmartphoneIcon } from "./Icons";
 import "./TerminalView.css";
 
