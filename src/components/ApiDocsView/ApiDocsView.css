@@ -30,12 +30,17 @@
 
 .api-docs-view__load-btn {
   padding: 6px 14px;
-  background: var(--accent, #4a90d9);
+  background: var(--accent-gradient, linear-gradient(135deg, var(--accent, #4a90d9), #6366f1));
   color: white;
   border: none;
-  border-radius: 4px;
+  border-radius: 8px;
   cursor: pointer;
   white-space: nowrap;
+  transition: var(--transition-smooth, all 0.25s cubic-bezier(0.4, 0, 0.2, 1));
+}
+.api-docs-view__load-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px var(--accent-glow, rgba(74, 144, 217, 0.35));
 }
 .api-docs-view__load-btn:disabled {
   opacity: 0.5;
@@ -165,9 +170,10 @@
   font-size: 14px;
   background: var(--bg-secondary, #1a1a2e);
   border: 1px solid var(--border, #333);
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
   color: inherit;
+  transition: var(--transition-smooth, all 0.25s cubic-bezier(0.4, 0, 0.2, 1));
 }
 .extraction-settings__btn--icon:hover {
   background: var(--bg-hover, #252540);
@@ -176,7 +182,7 @@
 .extraction-settings__select {
   background: var(--bg-input, #0d0d1a);
   border: 1px solid var(--border, #333);
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 5px 8px;
   color: inherit;
   font-size: 12px;
@@ -191,6 +197,9 @@
   gap: 6px;
   font-size: 12px;
   cursor: pointer;
+}
+.extraction-settings__checkbox-row input[type="checkbox"] {
+  accent-color: var(--accent, #4a90d9);
 }
 .extraction-settings__auth-row {
   display: flex;
@@ -213,21 +222,36 @@
 }
 .extraction-settings__btn {
   padding: 5px 12px;
-  border-radius: 4px;
+  border-radius: 6px;
   border: 1px solid var(--border, #333);
   background: var(--bg-secondary, #242436);
   color: inherit;
   font-size: 12px;
   cursor: pointer;
+  transition: var(--transition-smooth, all 0.25s cubic-bezier(0.4, 0, 0.2, 1));
+}
+.extraction-settings__btn:hover:not(:disabled) {
+  background: var(--bg-hover, #252540);
 }
 .extraction-settings__btn--primary {
-  background: var(--accent, #4a90d9);
+  background: var(--accent-gradient, linear-gradient(135deg, var(--accent, #4a90d9), #6366f1));
   border-color: transparent;
+  border-radius: 8px;
   color: white;
+  font-weight: 600;
+}
+.extraction-settings__btn--primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px var(--accent-glow, rgba(74, 144, 217, 0.35));
+  background: var(--accent-gradient, linear-gradient(135deg, var(--accent, #4a90d9), #6366f1));
 }
 .extraction-settings__btn:disabled {
   opacity: 0.4;
   cursor: default;
+}
+.extraction-settings__btn--primary:disabled {
+  transform: none;
+  box-shadow: none;
 }
 .extraction-settings__hint {
   font-size: 11px;
