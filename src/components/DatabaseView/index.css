@@ -105,3 +105,11 @@
   color: #f87171 !important;
   background: rgba(239, 68, 68, 0.1) !important;
 }
+
+.db-ai-schema-remove-btn:hover:not(:disabled) {
+  color: var(--text-primary, #fff) !important;
+}
+
+.db-browser-mode-btn:hover:not(:disabled) {
+  color: var(--text-primary, #fff) !important;
+}

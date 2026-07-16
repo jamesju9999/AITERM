@@ -110,8 +110,8 @@ export function DatabaseBrowser({ connectionId, schema }: Props) {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         {selectedTable && (
           <div style={{ background: "#111", borderBottom: "1px solid #1e1e1e", padding: "6px 12px", display: "flex", gap: 0, alignItems: "center" }}>
-            <button onClick={() => switchMode("data")} className="aiterm-btn aiterm-btn--ghost" style={viewMode === "data" ? modeBtnActive : undefined}>{t.db_browser_mode_data}</button>
-            <button onClick={() => switchMode("structure")} className="aiterm-btn aiterm-btn--ghost" style={viewMode === "structure" ? modeBtnActive : undefined}>{t.db_browser_mode_structure}</button>
+            <button onClick={() => switchMode("data")} className="db-browser-mode-btn aiterm-btn aiterm-btn--ghost" style={viewMode === "data" ? modeBtnActive : undefined}>{t.db_browser_mode_data}</button>
+            <button onClick={() => switchMode("structure")} className="db-browser-mode-btn aiterm-btn aiterm-btn--ghost" style={viewMode === "structure" ? modeBtnActive : undefined}>{t.db_browser_mode_structure}</button>
             <span style={{ color: "#555", fontSize: 11, marginLeft: "auto" }}>{selectedTable}</span>
           </div>
         )}

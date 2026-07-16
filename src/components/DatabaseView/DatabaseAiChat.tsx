@@ -562,7 +562,7 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
             <button
               onClick={removeSchemaDoc}
               title={t.db_ai_schema_tooltip_remove}
-              className="aiterm-btn aiterm-btn--ghost"
+              className="db-ai-schema-remove-btn aiterm-btn aiterm-btn--ghost"
               style={{ color: "#555", fontSize: 12, padding: "2px 4px" }}
             >
               ×
