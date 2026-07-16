@@ -825,7 +825,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             </button>
           )}
           <button
-            className={`aiterm-block-btn ${isRemoteEnabled ? 'aiterm-agent-toggle--on' : ''}`}
+            className={`aiterm-block-btn aiterm-btn aiterm-btn--secondary ${isRemoteEnabled ? 'aiterm-agent-toggle--on' : ''}`}
             title={t.term_remote_tooltip}
             onClick={(e) => {
               e.stopPropagation();
@@ -836,7 +836,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             📱 Remote
           </button>
           <button
-            className="aiterm-block-btn aiterm-block-btn-ai"
+            className="aiterm-block-btn aiterm-block-btn-ai aiterm-btn aiterm-btn--secondary"
             title={t.term_ai_helper_tooltip}
             onClick={(e) => {
                e.stopPropagation();
@@ -895,9 +895,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               className="terminal-search-input"
             />
             {searchMatchInfo && <span className="terminal-search-match-info">{searchMatchInfo}</span>}
-            <button onClick={() => doSearch(searchQuery, 'prev')} title={t.term_search_prev} className="terminal-search-btn">↑</button>
-            <button onClick={() => doSearch(searchQuery, 'next')} title={t.term_search_next} className="terminal-search-btn">↓</button>
-            <button onClick={closeSearch} title={t.term_search_close} className="terminal-search-btn terminal-search-close">✕</button>
+            <button onClick={() => doSearch(searchQuery, 'prev')} title={t.term_search_prev} className="terminal-search-btn aiterm-btn aiterm-btn--secondary aiterm-btn--sm">↑</button>
+            <button onClick={() => doSearch(searchQuery, 'next')} title={t.term_search_next} className="terminal-search-btn aiterm-btn aiterm-btn--secondary aiterm-btn--sm">↓</button>
+            <button onClick={closeSearch} title={t.term_search_close} className="terminal-search-btn terminal-search-close aiterm-btn aiterm-btn--secondary aiterm-btn--sm">✕</button>
           </div>
         )}
         <div
@@ -976,7 +976,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                      <div className="aiterm-block-actions" style={{ pointerEvents: "auto", position: "absolute", right: "8px", top: "2px", display: "flex", gap: "6px" }}>
                      {b.exitCode !== 0 && (
                        <button
-                         className="aiterm-block-btn aiterm-block-btn-ai"
+                         className="aiterm-block-btn aiterm-block-btn-ai aiterm-btn aiterm-btn--secondary"
                          onClick={(e) => {
                            e.stopPropagation();
                            window.dispatchEvent(new CustomEvent('aiterm:ask-ai', { 
@@ -988,7 +988,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                        </button>
                      )}
                      <button
-                          className="aiterm-block-btn"
+                          className="aiterm-block-btn aiterm-btn aiterm-btn--secondary"
                           onClick={(e) => {
                             e.stopPropagation();
                             addBookmark(b.command);
@@ -1002,7 +1002,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                         {t.terminal_bookmark_btn}
                       </button>
                       <button
-                          className="aiterm-block-btn"
+                          className="aiterm-block-btn aiterm-btn aiterm-btn--secondary"
                           onClick={(e) => {
                             e.stopPropagation();
                             navigator.clipboard.writeText(b.command).catch(console.error);

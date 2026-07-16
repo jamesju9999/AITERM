@@ -142,22 +142,11 @@
   opacity: 1;
 }
 
-.aiterm-block-btn {
-  background: #1e1e2e;
-  color: #ccc;
-  border: 1px solid #333;
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-size: 11px;
+.aiterm-block-btn.aiterm-btn--secondary {
   font-family: "Cascadia Mono", Consolas, monospace;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  font-size: 11px;
+  padding: 2px 8px;
   white-space: nowrap;
-}
-
-.aiterm-block-btn:hover {
-  background: #2a2a3e;
-  border-color: #555;
 }
 
 .aiterm-block-btn-ai {
@@ -203,8 +192,8 @@
 }
 
 .aiterm-subtab--active {
-  color: #79c0ff;
-  border-bottom-color: #4a9eff;
+  color: var(--accent, #a855f7);
+  border-bottom-color: var(--accent, #a855f7);
 }
 
 /* ── Find in Buffer ─────────────────────────────────────────────── */
@@ -246,20 +235,10 @@
   min-width: 60px;
 }
 
-.terminal-search-btn {
-  background: transparent;
-  border: 1px solid #444;
-  color: #ccc;
-  border-radius: 3px;
-  cursor: pointer;
-  padding: 2px 6px;
+.terminal-search-btn.aiterm-btn--secondary {
   font-size: 12px;
   line-height: 1.4;
-}
-
-.terminal-search-btn:hover {
-  background: #333;
-  border-color: #666;
+  padding: 2px 6px;
 }
 
 .terminal-search-close {
