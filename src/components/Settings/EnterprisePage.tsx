@@ -156,11 +156,8 @@ export function EnterprisePage() {
         <button
           onClick={handleRegister}
           disabled={status === "registering" || !serverUrl.trim() || !deviceName.trim()}
-          style={{
-            marginTop: 4, padding: "8px 20px", background: "#2a5a9a", color: "#fff",
-            border: "none", borderRadius: 4, cursor: "pointer", fontWeight: 600,
-            fontSize: 13, opacity: (status === "registering" || !serverUrl.trim() || !deviceName.trim()) ? 0.5 : 1,
-          }}
+          className="aiterm-btn aiterm-btn--primary"
+          style={{ marginTop: 4 }}
         >
           {status === "registering" ? t.enterprise_registering : isAlreadyRegistered ? t.enterprise_reregister : t.enterprise_register}
         </button>
@@ -221,14 +218,14 @@ function ServiceInstallerSection() {
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <button
           onClick={preview}
-          style={{ padding: "6px 14px", background: "#222", border: "1px solid #444", color: "#e0e0e0", borderRadius: 4, cursor: "pointer", fontSize: 13 }}
+          className="aiterm-btn aiterm-btn--secondary"
         >
           {t.enterprise_preview_config}
         </button>
         <button
           onClick={install}
           disabled={installing}
-          style={{ padding: "6px 14px", background: "#2a5a9a", border: "none", color: "#fff", borderRadius: 4, cursor: "pointer", fontSize: 13, opacity: installing ? 0.5 : 1 }}
+          className="aiterm-btn aiterm-btn--primary"
         >
           {installing ? t.enterprise_installing : t.enterprise_install_service}
         </button>

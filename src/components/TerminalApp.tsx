@@ -416,10 +416,8 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
                 enterpriseAcceptTask(pendingTask).catch(console.error);
                 setPendingTask(null);
               }}
-              style={{
-                flex: 1, padding: "6px 0", background: "#2a7a4a", color: "#fff",
-                border: "none", borderRadius: 4, cursor: "pointer", fontWeight: 600,
-              }}
+              className="aiterm-btn aiterm-btn--primary"
+              style={{ flex: 1 }}
             >
               Execute
             </button>
@@ -428,10 +426,8 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
                 enterpriseRejectTask(pendingTask.task_id).catch(console.error);
                 setPendingTask(null);
               }}
-              style={{
-                flex: 1, padding: "6px 0", background: "transparent", color: "#aaa",
-                border: "1px solid #555", borderRadius: 4, cursor: "pointer",
-              }}
+              className="aiterm-btn aiterm-btn--danger"
+              style={{ flex: 1 }}
             >
               Reject
             </button>
@@ -451,7 +447,8 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
           Skill installed: <strong>{skillToast.skill_id}</strong> v{skillToast.version}
           <button
             onClick={() => setSkillToast(null)}
-            style={{ marginLeft: 12, background: "none", border: "none", color: "#888", cursor: "pointer" }}
+            className="aiterm-btn aiterm-btn--ghost"
+            style={{ marginLeft: 12 }}
           >
             ✕
           </button>
