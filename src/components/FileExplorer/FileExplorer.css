@@ -20,7 +20,7 @@
   flex-shrink: 0;
 }
 
-.fe-btn {
+.fe-btn.aiterm-btn--secondary {
   font-size: 13px;
   line-height: 1;
   padding: 3px 7px;
