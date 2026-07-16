@@ -242,16 +242,15 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
         />
         {isRunning ? (
           <button
-            className="vcs-view__send-btn"
+            className="vcs-view__send-btn aiterm-btn aiterm-btn--danger-solid aiterm-btn--icon"
             onClick={stop}
-            style={{ background: "#2a0f0f", borderColor: "#f87171", color: "#f87171" }}
             title={t.vcs_btn_stop}
           >
             ■
           </button>
         ) : (
           <button
-            className="vcs-view__send-btn"
+            className="vcs-view__send-btn aiterm-btn aiterm-btn--primary aiterm-btn--icon"
             onClick={handleSubmit}
             disabled={!repoInfo || input.trim() === ""}
             title={t.vcs_btn_send}

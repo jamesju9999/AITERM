@@ -355,34 +355,9 @@
   min-width: 0 !important;
 }
 
-.aiterm-input-pill-container .aiterm-ai-panel-send-btn {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: var(--accent-gradient, linear-gradient(135deg, var(--accent, #a855f7), #6366f1));
-  color: #fff;
-  border: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  font-size: 11px;
-  padding: 0;
-  transition: var(--transition-smooth);
-  flex-shrink: 0;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
-}
-
 .aiterm-input-pill-container .aiterm-ai-panel-send-btn:hover:not(:disabled) {
   transform: scale(1.1);
   box-shadow: 0 0 8px var(--accent-glow);
-}
-
-.aiterm-input-pill-container .aiterm-ai-panel-send-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-  transform: none;
-  box-shadow: none;
 }
 
 /* ── History panel ── */

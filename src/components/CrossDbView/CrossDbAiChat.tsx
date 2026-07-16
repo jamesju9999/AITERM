@@ -620,11 +620,11 @@ export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
             rows={2}
           />
           {sending ? (
-            <button className="crossdb-chat__stop-btn" onClick={stop} title={t.cdb_ai_btn_stop}>■</button>
+            <button className="crossdb-chat__stop-btn aiterm-btn aiterm-btn--danger-solid aiterm-btn--icon" onClick={stop} title={t.cdb_ai_btn_stop}>■</button>
           ) : (
             <button
               id="crossdb-ai-send-btn"
-              className="crossdb-chat__send-btn"
+              className="crossdb-chat__send-btn aiterm-btn aiterm-btn--primary aiterm-btn--icon"
               onClick={send}
               disabled={!input.trim()}
               title={t.cdb_ai_btn_send}

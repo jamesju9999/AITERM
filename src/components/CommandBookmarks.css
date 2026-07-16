@@ -35,16 +35,11 @@
 }
 
 .bookmarks-close {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  color: #666;
   font-size: 14px;
   padding: 2px 4px;
-  line-height: 1;
 }
 
-.bookmarks-close:hover { color: #f87171; }
+.bookmarks-close.aiterm-btn--ghost:hover:not(:disabled) { color: #f87171; }
 
 .bookmarks-search {
   margin: 10px 12px 6px;
@@ -111,12 +106,7 @@
   right: 8px;
   top: 50%;
   transform: translateY(-50%);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  color: #555;
   font-size: 16px;
-  line-height: 1;
   padding: 2px 4px;
   opacity: 0;
   transition: opacity 0.1s;
@@ -127,7 +117,7 @@
   opacity: 1;
 }
 
-.bookmarks-item-delete:hover { color: #f87171; }
+.bookmarks-item-delete.aiterm-btn--ghost:hover:not(:disabled) { color: #f87171; }
 
 .bookmarks-footer {
   padding: 8px 14px;

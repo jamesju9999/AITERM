@@ -569,7 +569,7 @@ Rules:
           />
           <button
             type="button"
-            className="aiterm-ai-panel-send-btn"
+            className="aiterm-ai-panel-send-btn aiterm-btn aiterm-btn--primary aiterm-btn--icon"
             onClick={handleSubmit}
             disabled={isDisabled || input.trim() === ""}
             title="送出"

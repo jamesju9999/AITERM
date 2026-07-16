@@ -526,7 +526,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
                 }}
                 disabled={isStreaming}
               />
-              <button className="design-send-btn" onClick={() => handleSendMessage()} disabled={!inputValue.trim() || isStreaming} title={t.design_send}>
+              <button className="design-send-btn aiterm-btn aiterm-btn--primary aiterm-btn--icon" onClick={() => handleSendMessage()} disabled={!inputValue.trim() || isStreaming} title={t.design_send}>
                 ▲
               </button>
             </div>

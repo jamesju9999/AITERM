@@ -101,7 +101,7 @@ export function CommandBookmarksPicker({ onSelect, onClose }: CommandBookmarksPr
       <div className="bookmarks-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="bookmarks-header">
           <span className="bookmarks-title">{t.bookmarks_title}</span>
-          <button className="bookmarks-close" onClick={onClose}>✕</button>
+          <button className="bookmarks-close aiterm-btn aiterm-btn--ghost" onClick={onClose}>✕</button>
         </div>
         <input
           ref={inputRef}
@@ -130,7 +130,7 @@ export function CommandBookmarksPicker({ onSelect, onClose }: CommandBookmarksPr
                 <div className="bookmarks-item-name">{b.name}</div>
                 <div className="bookmarks-item-cmd">{b.command}</div>
                 <button
-                  className="bookmarks-item-delete"
+                  className="bookmarks-item-delete aiterm-btn aiterm-btn--ghost"
                   onClick={(e) => deleteItem(b.id, e)}
                   title={t.bookmarks_delete_tip}
                 >

@@ -543,39 +543,8 @@
   color: var(--text-primary) !important;
   outline: none !important;
 }
-.crossdb-chat__send-btn,
-.crossdb-chat__stop-btn {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  color: #fff !important;
-  border: none !important;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  font-size: 11px;
-  padding: 0 !important;
-  transition: var(--transition-smooth);
-  flex-shrink: 0;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
-}
-.crossdb-chat__send-btn {
-  background: var(--accent-gradient, linear-gradient(135deg, var(--accent), #6366f1));
-}
-.crossdb-chat__stop-btn {
-  background: var(--error, #ef4444);
-}
 .crossdb-chat__send-btn:hover:not(:disabled),
 .crossdb-chat__stop-btn:hover:not(:disabled) {
   transform: scale(1.1);
   box-shadow: 0 0 8px var(--accent-glow);
-}
-.crossdb-chat__send-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-  background: rgba(255, 255, 255, 0.05) !important;
-  color: var(--text-muted) !important;
-  box-shadow: none !important;
-  transform: none !important;
 }
