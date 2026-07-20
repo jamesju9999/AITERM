@@ -6,6 +6,7 @@ import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/markdown";
 import { parseSchemaDoc, buildSchemaSection } from "../../lib/schemaDoc";
 import { useLocale } from "../../contexts/LocaleContext";
+import { ModelPickerButton } from "../ModelPickerButton";
 
 interface Props {
   connectionId: string;
@@ -523,22 +524,11 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
 
         {/* Toolbar: provider selector + history toggle */}
         <div style={{ borderTop: "1px solid #1e1e1e", padding: "6px 12px", display: "flex", alignItems: "center", gap: 8, background: "#111" }}>
-          <span style={{ fontSize: 11, color: "#555", flexShrink: 0 }}>{t.db_ai_model_label}</span>
-          <select
-            value={selectedProviderId}
-            onChange={(e) => setSelectedProviderId(e.target.value)}
-            style={{
-              background: "#0c0c0c", border: "1px solid #2a2a2a", color: "#aaa",
-              borderRadius: 4, padding: "2px 6px", fontSize: 11, cursor: "pointer", outline: "none",
-            }}
-          >
-            {providers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.display_name} ({p.model}){p.is_default ? " ★" : ""}
-              </option>
-            ))}
-            {providers.length === 0 && <option value="">（未設定）</option>}
-          </select>
+          <ModelPickerButton
+            providers={providers}
+            selectedId={selectedProviderId}
+            onChange={setSelectedProviderId}
+          />
           <input
             ref={schemaFileInputRef}
             type="file"

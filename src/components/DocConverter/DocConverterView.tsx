@@ -5,6 +5,7 @@ import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { aiChat, formatAiError } from "../../ipc/ai";
 import { markitdownConvert, markitdownPickFile } from "../../ipc/markitdown";
 import { useLocale } from "../../contexts/LocaleContext";
+import { ModelPickerButton } from "../ModelPickerButton";
 import "./DocConverterView.css";
 
 interface ExtractState {
@@ -230,18 +231,11 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
 
       <div className="doc-converter__toolbar">
         <span className="doc-converter__toolbar-label">{t.dc_model_label}</span>
-        <select
-          value={selectedProviderId}
-          onChange={(e) => setSelectedProviderId(e.target.value)}
-          className="doc-converter__select"
-        >
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.display_name} ({p.model}){p.is_default ? " ★" : ""}
-            </option>
-          ))}
-          {providers.length === 0 && <option value="">{t.dc_model_none}</option>}
-        </select>
+        <ModelPickerButton
+          providers={providers}
+          selectedId={selectedProviderId}
+          onChange={setSelectedProviderId}
+        />
       </div>
 
       {extractState && (

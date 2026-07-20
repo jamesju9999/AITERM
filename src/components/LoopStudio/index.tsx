@@ -11,6 +11,7 @@ import { loopSessionLoad, parseLoopSessionData, loopProjectPickOpen, loopProject
 import { readFile, writeTextFile } from "../../ipc/fs";
 import { invokeAiChat } from "../../ipc/ai";
 import { useLocale } from '../../contexts/LocaleContext';
+import { ModelPickerButton } from "../ModelPickerButton";
 import "./styles.css";
 
 const STORAGE_KEY = "aiterm-loop-studio-roster";
@@ -594,13 +595,12 @@ export function LoopStudioView({
               </label>
               <label className="ls-field">
                 <span>Orchestrator Provider</span>
-                <select
-                  value={roster.orchestratorProvider}
-                  onChange={e => updateRoster({ orchestratorProvider: e.target.value })}
+                <ModelPickerButton
+                  providers={providers}
+                  selectedId={roster.orchestratorProvider}
+                  onChange={(id) => updateRoster({ orchestratorProvider: id })}
                   disabled={loop.isRunning}
-                >
-                  {providers.map(p => <option key={p.id} value={p.id}>{p.display_name}</option>)}
-                </select>
+                />
               </label>
             </div>
             <div className="ls-ov-field">
@@ -614,13 +614,12 @@ export function LoopStudioView({
               </label>
               <label className="ls-field">
                 <span>Verifier Provider</span>
-                <select
-                  value={roster.verifierProvider}
-                  onChange={e => updateRoster({ verifierProvider: e.target.value })}
+                <ModelPickerButton
+                  providers={providers}
+                  selectedId={roster.verifierProvider}
+                  onChange={(id) => updateRoster({ verifierProvider: id })}
                   disabled={loop.isRunning}
-                >
-                  {providers.map(p => <option key={p.id} value={p.id}>{p.display_name}</option>)}
-                </select>
+                />
               </label>
             </div>
           </div>

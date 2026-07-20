@@ -168,6 +168,7 @@ const zhTW = {
     ca_clear: "清除",
     ca_input_placeholder: (shortcut: string) => `問關於這個專案的任何問題... (${shortcut} 送出)`,
     ca_tool_truncated: "⚠ 內容已截斷",
+    model_picker_no_provider: "未設定",
     doc_converter_tab: "文件轉換器",
     new_doc_converter_desc: "將 Word/PDF/Excel 轉換成結構化 Markdown",
     // API Docs tab
@@ -1102,6 +1103,7 @@ const enRaw = {
     ca_clear: "Clear",
     ca_input_placeholder: (shortcut: string) => `Ask anything about this project... (${shortcut} to send)`,
     ca_tool_truncated: "⚠ Content truncated",
+    model_picker_no_provider: "Not configured",
     doc_converter_tab: "Doc Converter",
     new_doc_converter_desc: "Convert Word/PDF/Excel to structured Markdown",
     // API Docs tab

@@ -8,6 +8,7 @@ import { useCodeAssistant } from "../../hooks/useCodeAssistant";
 import { useLocale } from "../../contexts/LocaleContext";
 import { ToolCallCard } from "./ToolCallCard";
 import { MarkdownText } from "../../lib/markdown";
+import { ModelPickerButton } from "../ModelPickerButton";
 import "./styles.css";
 
 const STORAGE_KEY = "aiterm-code-assistant-root";
@@ -197,19 +198,11 @@ export function CodeAssistantView({ isActive }: Props) {
           {projectRoot}
         </button>
         <div style={{ width: 1, background: "#2a2a2a", alignSelf: "stretch", margin: "0 4px" }} />
-        <span className="ca-toolbar__label">{t.ca_label_model}</span>
-        <select
-          className="ca-provider-select"
-          value={selectedProviderId}
-          onChange={(e) => setSelectedProviderId(e.target.value)}
-        >
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.display_name} ({p.model}){p.is_default ? " ★" : ""}
-            </option>
-          ))}
-          {providers.length === 0 && <option value="">{t.ca_no_provider}</option>}
-        </select>
+        <ModelPickerButton
+          providers={providers}
+          selectedId={selectedProviderId}
+          onChange={setSelectedProviderId}
+        />
         {messages.length > 0 && (
           <>
             <button

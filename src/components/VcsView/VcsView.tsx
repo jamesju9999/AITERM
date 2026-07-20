@@ -7,6 +7,7 @@ import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { pickFolder } from "../../ipc/vcs";
 import { useLocale } from "../../contexts/LocaleContext";
+import { ModelPickerButton } from "../ModelPickerButton";
 import "./VcsView.css";
 
 const MANUAL_PATH_KEY = "aiterm-vcs-manual-path";
@@ -183,16 +184,13 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
         {/* Provider selector */}
         {!isEditingPath && (
           providers.length > 0 ? (
-            <select
-              value={selectedProviderId}
-              onChange={(e) => setSelectedProviderId(e.target.value)}
-              style={{ marginLeft: "auto", background: "#1a1a1a", border: "1px solid #333", color: "#ccc", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}
-            >
-              <option value="">{t.provider_default_badge}</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>{p.display_name}</option>
-              ))}
-            </select>
+            <div style={{ marginLeft: "auto" }}>
+              <ModelPickerButton
+                providers={providers}
+                selectedId={selectedProviderId}
+                onChange={setSelectedProviderId}
+              />
+            </div>
           ) : (
             <span style={{ marginLeft: "auto", fontSize: 11, color: "#555" }}>{t.vcs_no_ai}</span>
           )

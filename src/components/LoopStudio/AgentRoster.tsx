@@ -4,6 +4,7 @@ import type { OrchestratorAgent } from "../../hooks/useOrchestratorLoop";
 import type { AgentToolName } from "../../hooks/useSubAgentLoop";
 import { invokeAiChat } from "../../ipc/ai";
 import { useLocale } from "../../contexts/LocaleContext";
+import { ModelPickerButton } from "../ModelPickerButton";
 
 const ALL_TOOLS: AgentToolName[] = ["read_file", "write_file", "list_directory", "execute_command"];
 
@@ -250,11 +251,11 @@ export function AgentRoster({ agents, providers, onChange }: AgentRosterProps) {
               </label>
               <label className="ls-field">
                 <span>Provider</span>
-                <select value={agent.providerId} onChange={e => update(idx, { providerId: e.target.value })}>
-                  {providers.map(p => (
-                    <option key={p.id} value={p.id}>{p.display_name}</option>
-                  ))}
-                </select>
+                <ModelPickerButton
+                  providers={providers}
+                  selectedId={agent.providerId}
+                  onChange={(id) => update(idx, { providerId: id })}
+                />
               </label>
               <div className="ls-field">
                 <div className="ls-field-label-row">

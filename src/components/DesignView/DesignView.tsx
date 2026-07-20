@@ -1,5 +1,6 @@
 // src/components/DesignView/DesignView.tsx
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { RobotIcon } from '../Icons';
 import { SpecPreview } from './SpecPreview';
 import {
   designStartSession,
@@ -554,9 +555,13 @@ export function DesignView({ isActive }: { isActive: boolean }) {
             <div className="design-tool-row" style={{ padding: '8px 16px 0 16px' }}>
               <button
                 className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                style={{ display: "flex", alignItems: "center", gap: 6 }}
                 onClick={() => setShowProviderPalette(true)}
               >
-                🤖 {providerName ? t.design_model(providerName) : t.design_default_model}
+                <RobotIcon size={13} style={{ color: "var(--accent, #a855f7)", flexShrink: 0 }} />
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 200 }}>
+                  {providerName ? t.design_model(providerName) : t.design_default_model}
+                </span>
               </button>
             </div>
             <div className="design-input-container">
