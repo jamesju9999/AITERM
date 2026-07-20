@@ -92,7 +92,8 @@
   flex-shrink: 0;
 }
 .ca-toolbar__path {
-  max-width: 280px;
+  flex: 1;
+  min-width: 0;
   font-size: 11px;
   color: #aaa;
   overflow: hidden;

@@ -210,7 +210,6 @@ export function CodeAssistantView({ isActive }: Props) {
           ))}
           {providers.length === 0 && <option value="">（未設定）</option>}
         </select>
-        <div style={{ flex: 1 }} />
         {messages.length > 0 && (
           <>
             <button

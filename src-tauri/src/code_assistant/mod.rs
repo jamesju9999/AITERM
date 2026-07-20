@@ -102,7 +102,8 @@ Instructions:
 2. Only read files that are directly relevant to the user's question.
 3. Be concise and direct in your answers.
 4. Always reference specific file paths when discussing code.
-5. Respond in {language}."#
+5. Respond in {language}.
+6. When drawing Mermaid diagrams, use only ASCII characters in node IDs, edge labels, and subgraph IDs. Put translated labels in a legend or description outside the diagram block to avoid parse errors."#
     )
 }
 
