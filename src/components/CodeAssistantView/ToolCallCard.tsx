@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocale } from "../../contexts/LocaleContext";
 import type { ToolCallState } from "../../hooks/useCodeAssistant";
 
 interface ToolCallCardProps {
@@ -13,6 +14,7 @@ function formatArgs(args: Record<string, unknown>): string {
 }
 
 export function ToolCallCard({ toolCall }: ToolCallCardProps) {
+  const { t } = useLocale();
   const [expanded, setExpanded] = useState(false);
   const isDone = toolCall.result !== undefined;
   const isError = isDone && toolCall.result!.content.startsWith("Error:");
@@ -38,7 +40,7 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
       {expanded && isDone && (
         <div className="ca-tool-card__content">
           {toolCall.result!.truncated && (
-            <div className="ca-tool-card__truncated">⚠ 內容已截斷</div>
+            <div className="ca-tool-card__truncated">{t.ca_tool_truncated}</div>
           )}
           <pre className="ca-tool-card__pre">{toolCall.result!.content}</pre>
         </div>

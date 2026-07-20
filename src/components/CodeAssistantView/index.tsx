@@ -5,6 +5,7 @@ import { writeTextFile } from "../../ipc/fs";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { useCodeAssistant } from "../../hooks/useCodeAssistant";
+import { useLocale } from "../../contexts/LocaleContext";
 import { ToolCallCard } from "./ToolCallCard";
 import { MarkdownText } from "../../lib/markdown";
 import "./styles.css";
@@ -23,6 +24,7 @@ interface Props {
 }
 
 export function CodeAssistantView({ isActive }: Props) {
+  const { t } = useLocale();
   const [projectRoot, setProjectRoot] = useState(loadSavedRoot);
   const [pendingRoot, setPendingRoot] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -131,10 +133,10 @@ export function CodeAssistantView({ isActive }: Props) {
       <div className="ca-view">
         <div className="ca-empty">
           <div className="ca-empty__icon">📂</div>
-          <div className="ca-empty__title">選擇專案目錄</div>
-          <div className="ca-empty__desc">選定目錄後即可對程式庫提問</div>
+          <div className="ca-empty__title">{t.ca_empty_title}</div>
+          <div className="ca-empty__desc">{t.ca_empty_desc}</div>
           <button className="aiterm-btn aiterm-btn--primary" onClick={handlePickFolder}>
-            選擇目錄
+            {t.ca_pick_folder}
           </button>
         </div>
       </div>
@@ -146,7 +148,7 @@ export function CodeAssistantView({ isActive }: Props) {
       {/* Messages area */}
       <div className="ca-messages">
         {messages.length === 0 && (
-          <div className="ca-hint">用自然語言詢問關於 <code>{projectRoot}</code> 的任何問題</div>
+          <div className="ca-hint">{t.ca_hint(projectRoot)}</div>
         )}
         {messages.map((msg, i) => (
           <div key={i} className={`ca-msg ca-msg--${msg.role}`}>
@@ -171,24 +173,22 @@ export function CodeAssistantView({ isActive }: Props) {
 
       {/* Fallback mode banner */}
       {isFallbackMode && (
-        <div className="ca-fallback-banner">
-          ⚠ 此 provider 不支援工具調用，已切換為兩段式模式
-        </div>
+        <div className="ca-fallback-banner">{t.ca_fallback_banner}</div>
       )}
 
       {/* Directory change confirmation bar */}
       {pendingRoot && (
         <div className="ca-dir-confirm">
-          <span className="ca-dir-confirm__path">切換到 {pendingRoot}</span>
-          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => handleConfirmDir(false)}>繼續對話</button>
-          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => handleConfirmDir(true)}>開新對話</button>
-          <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => setPendingRoot(null)}>取消</button>
+          <span className="ca-dir-confirm__path">{t.ca_dir_switch(pendingRoot)}</span>
+          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => handleConfirmDir(false)}>{t.ca_dir_continue}</button>
+          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => handleConfirmDir(true)}>{t.ca_dir_new_chat}</button>
+          <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => setPendingRoot(null)}>{t.ca_cancel}</button>
         </div>
       )}
 
       {/* Toolbar: path + model selector + actions */}
       <div className="ca-toolbar">
-        <span className="ca-toolbar__label">目錄</span>
+        <span className="ca-toolbar__label">{t.ca_label_dir}</span>
         <button
           className="ca-toolbar__path"
           title={projectRoot}
@@ -197,7 +197,7 @@ export function CodeAssistantView({ isActive }: Props) {
           {projectRoot}
         </button>
         <div style={{ width: 1, background: "#2a2a2a", alignSelf: "stretch", margin: "0 4px" }} />
-        <span className="ca-toolbar__label">模型</span>
+        <span className="ca-toolbar__label">{t.ca_label_model}</span>
         <select
           className="ca-provider-select"
           value={selectedProviderId}
@@ -208,7 +208,7 @@ export function CodeAssistantView({ isActive }: Props) {
               {p.display_name} ({p.model}){p.is_default ? " ★" : ""}
             </option>
           ))}
-          {providers.length === 0 && <option value="">（未設定）</option>}
+          {providers.length === 0 && <option value="">{t.ca_no_provider}</option>}
         </select>
         {messages.length > 0 && (
           <>
@@ -216,13 +216,13 @@ export function CodeAssistantView({ isActive }: Props) {
               className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
               onClick={handleExport}
             >
-              匯出
+              {t.ca_export}
             </button>
             <button
               className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
               onClick={clear}
             >
-              清除
+              {t.ca_clear}
             </button>
           </>
         )}
@@ -241,7 +241,7 @@ export function CodeAssistantView({ isActive }: Props) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={`問關於這個專案的任何問題... (${shortcutLabel} 送出)`}
+            placeholder={t.ca_input_placeholder(shortcutLabel)}
             rows={1}
             disabled={isStreaming}
             style={{
