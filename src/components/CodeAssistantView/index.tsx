@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from "react";
 import { pickFolder } from "../../ipc/vcs";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
+import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { useCodeAssistant } from "../../hooks/useCodeAssistant";
 import { ToolCallCard } from "./ToolCallCard";
 import { MarkdownText } from "../../lib/markdown";
@@ -25,6 +26,7 @@ export function CodeAssistantView({ isActive }: Props) {
   const [input, setInput] = useState("");
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState("");
+  const [submitShortcut, setSubmitShortcut] = useState<SubmitShortcut>("enter");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -38,6 +40,7 @@ export function CodeAssistantView({ isActive }: Props) {
         setSelectedProviderId(def.id);
       }
     }).catch(() => {});
+    getConfig().then((cfg) => setSubmitShortcut(cfg.submit_shortcut ?? "enter")).catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -73,12 +76,15 @@ export function CodeAssistantView({ isActive }: Props) {
     void send(text, projectRoot, selectedProviderId || undefined);
   }, [input, isStreaming, projectRoot, selectedProviderId, send]);
 
+  const shortcutLabel = submitShortcut === "shift-enter" ? "Shift+Enter" : submitShortcut === "ctrl-enter" ? "Ctrl+Enter" : "Enter";
+
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  }, [handleSend]);
+    if (e.key !== "Enter") return;
+    const ok = (submitShortcut === "enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
+               (submitShortcut === "shift-enter" && e.shiftKey && !e.ctrlKey) ||
+               (submitShortcut === "ctrl-enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey);
+    if (ok) { e.preventDefault(); handleSend(); }
+  }, [submitShortcut, handleSend]);
 
   if (!projectRoot) {
     return (
@@ -188,7 +194,7 @@ export function CodeAssistantView({ isActive }: Props) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="問關於這個專案的任何問題..."
+            placeholder={`問關於這個專案的任何問題... (${shortcutLabel} 送出)`}
             rows={1}
             disabled={isStreaming}
             style={{

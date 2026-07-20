@@ -220,6 +220,48 @@
   max-width: 100%;
 }
 
+/* ── Markdown rendering inside assistant bubbles ─────────────────── */
+.ca-msg--assistant .ca-msg__bubble .md-code {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12px;
+  font-family: monospace;
+  color: #a8d8ff;
+}
+.ca-msg--assistant .ca-msg__bubble .md-pre {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 6px 0;
+}
+.ca-msg--assistant .ca-msg__bubble .md-pre code {
+  font-family: monospace;
+  font-size: 12px;
+  color: #cdd6f4;
+  background: none;
+  border: none;
+  padding: 0;
+}
+.ca-msg--assistant .ca-msg__bubble .md-p { margin: 4px 0; }
+.ca-msg--assistant .ca-msg__bubble .md-list {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+.ca-msg--assistant .ca-msg__bubble .md-list li { margin: 3px 0; }
+.ca-msg--assistant .ca-msg__bubble .md-h1,
+.ca-msg--assistant .ca-msg__bubble .md-h2,
+.ca-msg--assistant .ca-msg__bubble .md-h3 {
+  margin: 8px 0 4px;
+  font-weight: 600;
+  color: var(--text-primary, #e0e0e0);
+}
+.ca-msg--assistant .ca-msg__bubble .markdown-body > :first-child { margin-top: 0; }
+.ca-msg--assistant .ca-msg__bubble .markdown-body > :last-child { margin-bottom: 0; }
+
 /* Streaming cursor */
 .ca-streaming-cursor {
   display: inline-block;
