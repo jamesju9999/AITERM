@@ -15,6 +15,7 @@ export function ModelPickerButton({ providers, selectedId, onChange, disabled }:
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   const selected = providers.find((p) => p.id === selectedId) ?? null;
 
@@ -25,6 +26,16 @@ export function ModelPickerButton({ providers, selectedId, onChange, disabled }:
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  // Auto-flip: if dropdown overflows the right edge of the viewport, switch to right-aligned
+  useEffect(() => {
+    if (!open || !dropdownRef.current) return;
+    const rect = dropdownRef.current.getBoundingClientRect();
+    if (rect.right > window.innerWidth - 8) {
+      dropdownRef.current.style.left = "auto";
+      dropdownRef.current.style.right = "0";
+    }
   }, [open]);
 
   return (
@@ -40,7 +51,7 @@ export function ModelPickerButton({ providers, selectedId, onChange, disabled }:
         </span>
       </button>
       {open && (
-        <div className="model-picker-dropdown">
+        <div ref={dropdownRef} className="model-picker-dropdown">
           {providers.map((p) => (
             <button
               key={p.id}
