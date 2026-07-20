@@ -5,6 +5,7 @@ import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/markdown";
 import { useLocale } from "../../contexts/LocaleContext";
+import { ModelPickerButton } from "../ModelPickerButton";
 import type { ConnectedDb } from "./index";
 
 interface Props {
@@ -591,17 +592,11 @@ export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
             onClick={() => setHistoryOpen((o) => !o)}
             title={t.cdb_ai_history_title}
           >{t.db_ai_btn_history}</button>
-          {providers.length > 0 && (
-            <select
-              value={selectedProviderId}
-              onChange={(e) => setSelectedProviderId(e.target.value)}
-              className="crossdb-chat__provider-select"
-            >
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>{p.display_name}</option>
-              ))}
-            </select>
-          )}
+          <ModelPickerButton
+            providers={providers}
+            selectedId={selectedProviderId}
+            onChange={setSelectedProviderId}
+          />
         </div>
         <div className="crossdb-chat__input-row">
           <textarea

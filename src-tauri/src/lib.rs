@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod code_assistant;
 pub mod api_docs;
 pub mod commands;
 pub mod config;
@@ -21,6 +22,7 @@ use commands::{
         api_docs_fetch_tree, api_docs_login, api_docs_logout,
     },
     ai::{agent_chat, ai_chat, ai_query},
+    code_assistant::code_assistant_chat,
     config::{
         get_config, is_onboarding_done, set_default_tab, set_execution_mode, set_max_agent_steps,
         set_onboarding_done, set_submit_shortcut,
@@ -237,6 +239,7 @@ pub fn run() {
             ai_query,
             ai_chat,
             agent_chat,
+            code_assistant_chat,
             agent_exec,
             // Config
             get_config,

@@ -2,6 +2,7 @@
 import { useLocale } from "../../contexts/LocaleContext";
 import type { KeepOptions, AuthStatus } from "../../ipc/apiDocs";
 import type { ProviderInfo } from "../../ipc/provider";
+import { ModelPickerButton } from "../ModelPickerButton";
 
 interface Props {
   outputDir: string;
@@ -130,18 +131,11 @@ export function ExtractionSettings({
       {/* AI provider selector + translate option */}
       <div className="extraction-settings__section">
         <label className="extraction-settings__label">{t.api_docs_ai_provider}</label>
-        <select
-          className="extraction-settings__select"
-          value={selectedProviderId}
-          onChange={(e) => onProviderChange(e.target.value)}
-        >
-          <option value="">{t.api_docs_no_provider}</option>
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.display_name} ({p.model})
-            </option>
-          ))}
-        </select>
+        <ModelPickerButton
+          providers={providers}
+          selectedId={selectedProviderId}
+          onChange={onProviderChange}
+        />
         <label className="extraction-settings__checkbox-row" style={{ marginTop: "6px" }}>
           <input
             type="checkbox"

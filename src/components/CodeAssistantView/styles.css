@@ -1,0 +1,295 @@
+/* ── CodeAssistantView ─────────────────────────────────────────── */
+.ca-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary, #0a0b14);
+  color: var(--text-primary, #e0e0e0);
+  font-family: inherit;
+}
+
+/* Empty state */
+.ca-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--text-secondary, #888);
+}
+.ca-empty__icon { font-size: 48px; opacity: 0.35; }
+.ca-empty__title { font-size: 16px; font-weight: 500; color: var(--text-primary, #e0e0e0); }
+.ca-empty__desc { font-size: 13px; color: var(--text-secondary, #888); }
+
+/* Messages area */
+.ca-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ca-hint {
+  font-size: 13px;
+  color: #555;
+  text-align: center;
+  padding: 24px 0 0;
+}
+.ca-hint code {
+  color: #888;
+  background: rgba(255,255,255,0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+/* Fallback banner */
+.ca-fallback-banner {
+  padding: 6px 12px;
+  background: #3a2e00;
+  color: #f5c518;
+  font-size: 11px;
+  border-top: 1px solid #5a4800;
+  flex-shrink: 0;
+}
+
+/* Directory change confirmation bar */
+.ca-dir-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: #111;
+  border-top: 1px solid #1e1e1e;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.ca-dir-confirm__path {
+  flex: 1;
+  color: #888;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+/* Toolbar: path + model selector */
+.ca-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-top: 1px solid #1e1e1e;
+  background: #111;
+  flex-shrink: 0;
+}
+.ca-toolbar__label {
+  font-size: 11px;
+  color: #555;
+  flex-shrink: 0;
+}
+.ca-toolbar__path {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: #aaa;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 3px;
+  text-align: left;
+}
+.ca-toolbar__path:hover {
+  background: rgba(255,255,255,0.06);
+  color: var(--text-primary, #e0e0e0);
+}
+.ca-provider-select {
+  background: #0c0c0c;
+  border: 1px solid #2a2a2a;
+  color: #aaa;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  cursor: pointer;
+  outline: none;
+}
+.ca-provider-select:focus { border-color: var(--accent, #a855f7); }
+
+/* Input row */
+.ca-input-row {
+  padding: 10px 16px 12px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  background: rgba(10, 11, 20, 0.4);
+  border-top: 1px solid var(--border-color, #1e1e1e);
+  flex-shrink: 0;
+}
+
+/* ── ToolCallCard ───────────────────────────────────────────────── */
+.ca-tool-card {
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 12px;
+  margin: 2px 0;
+  width: 100%;
+}
+.ca-tool-card--loading { border-color: #333; }
+.ca-tool-card--done    { border-color: #1e3a1e; }
+.ca-tool-card--error   { border-color: #3a1e1e; }
+
+.ca-tool-card__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: none;
+  width: 100%;
+  text-align: left;
+  color: #888;
+  cursor: default;
+}
+.ca-tool-card--done .ca-tool-card__header { cursor: pointer; }
+.ca-tool-card__header:hover { background: rgba(255, 255, 255, 0.05); }
+
+.ca-tool-card__status { width: 14px; text-align: center; flex-shrink: 0; }
+.ca-tool-card__name   { font-weight: 500; color: #7ec8e3; font-family: monospace; }
+.ca-tool-card__args   { flex: 1; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; }
+.ca-tool-card__toggle { margin-left: auto; flex-shrink: 0; font-size: 10px; }
+
+.ca-tool-card__spinner {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border: 2px solid #333;
+  border-top-color: #888;
+  border-radius: 50%;
+  animation: ca-spin 0.6s linear infinite;
+}
+@keyframes ca-spin { to { transform: rotate(360deg); } }
+
+.ca-tool-card__content {
+  border-top: 1px solid #1e1e1e;
+  max-height: 280px;
+  overflow: auto;
+}
+.ca-tool-card__truncated {
+  padding: 4px 8px;
+  background: #3a2e00;
+  color: #f5c518;
+  font-size: 11px;
+}
+.ca-tool-card__pre {
+  margin: 0;
+  padding: 8px;
+  font-size: 11px;
+  font-family: monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #999;
+}
+
+/* ── Message bubbles ────────────────────────────────────────────── */
+.ca-msg { display: flex; flex-direction: column; gap: 4px; }
+.ca-msg--user { align-items: flex-end; }
+.ca-msg--assistant { align-items: flex-start; width: 100%; }
+
+.ca-msg__bubble {
+  max-width: 82%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.ca-msg--user .ca-msg__bubble {
+  background: var(--accent-gradient, linear-gradient(135deg, var(--accent, #a855f7), #6366f1));
+  color: #fff;
+  border-bottom-right-radius: 3px;
+}
+.ca-msg--assistant .ca-msg__bubble {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid #252525;
+  border-bottom-left-radius: 3px;
+  max-width: 100%;
+}
+
+/* ── Markdown rendering inside assistant bubbles ─────────────────── */
+.ca-msg--assistant .ca-msg__bubble .md-code {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12px;
+  font-family: monospace;
+  color: #a8d8ff;
+}
+.ca-msg--assistant .ca-msg__bubble .md-pre {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 6px 0;
+}
+.ca-msg--assistant .ca-msg__bubble .md-pre code {
+  font-family: monospace;
+  font-size: 12px;
+  color: #cdd6f4;
+  background: none;
+  border: none;
+  padding: 0;
+}
+.ca-msg--assistant .ca-msg__bubble .md-p { margin: 4px 0; }
+.ca-msg--assistant .ca-msg__bubble .md-list {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+.ca-msg--assistant .ca-msg__bubble .md-list li { margin: 3px 0; }
+.ca-msg--assistant .ca-msg__bubble .md-h1,
+.ca-msg--assistant .ca-msg__bubble .md-h2,
+.ca-msg--assistant .ca-msg__bubble .md-h3 {
+  margin: 8px 0 4px;
+  font-weight: 600;
+  color: var(--text-primary, #e0e0e0);
+}
+.ca-msg--assistant .ca-msg__bubble .markdown-body > :first-child { margin-top: 0; }
+.ca-msg--assistant .ca-msg__bubble .markdown-body > :last-child { margin-bottom: 0; }
+
+/* Streaming cursor */
+.ca-streaming-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: currentColor;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: ca-blink 1s step-end infinite;
+}
+@keyframes ca-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* Mermaid diagrams — make SVG fill the bubble width */
+.ca-msg--assistant .ca-msg__bubble .mermaid-container {
+  width: 100%;
+  box-sizing: border-box;
+}
+.ca-msg--assistant .ca-msg__bubble .mermaid-container svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.ca-error {
+  color: #f87171;
+  font-size: 12px;
+  padding: 6px 10px;
+  background: rgba(239, 68, 68, 0.08);
+  border-radius: 6px;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
