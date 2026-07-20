@@ -13,3 +13,4 @@ pub mod secret;
 pub mod shell;
 pub mod vcs;
 pub mod web;
+pub mod code_assistant;
