@@ -26,6 +26,7 @@ export function CodeAssistantView({ isActive }: Props) {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const { messages, isStreaming, error, isFallbackMode, send, clear } = useCodeAssistant();
 
@@ -96,52 +97,11 @@ export function CodeAssistantView({ isActive }: Props) {
 
   return (
     <div className="ca-view">
-      {/* Header: path + actions */}
-      <div className="ca-header">
-        <span className="ca-header__path" title={projectRoot}>📁 {projectRoot}</span>
-        <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={handlePickFolder}>更換目錄</button>
-        <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={clear}>清除</button>
-      </div>
-
-      {/* Toolbar: model selector */}
-      <div className="ca-toolbar">
-        <span className="ca-toolbar__label">模型</span>
-        {providers.length > 0 ? (
-          <select
-            className="ca-provider-select"
-            value={selectedProviderId}
-            onChange={(e) => setSelectedProviderId(e.target.value)}
-          >
-            {providers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.display_name}{p.is_default ? " ★" : ""}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <span className="ca-toolbar__no-provider">未設定 Provider — 請至設定頁面新增</span>
-        )}
-      </div>
-
-      {/* Directory change confirmation bar */}
-      {pendingRoot && (
-        <div className="ca-dir-confirm">
-          <span className="ca-dir-confirm__path">已選擇 {pendingRoot}</span>
-          <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => handleConfirmDir(false)}>繼續對話</button>
-          <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => handleConfirmDir(true)}>開新對話</button>
-          <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => setPendingRoot(null)}>取消</button>
-        </div>
-      )}
-
-      {/* Fallback mode banner */}
-      {isFallbackMode && (
-        <div className="ca-fallback-banner">
-          ⚠ 此 provider 不支援工具調用，已切換為兩段式模式
-        </div>
-      )}
-
-      {/* Messages */}
+      {/* Messages area */}
       <div className="ca-messages">
+        {messages.length === 0 && (
+          <div className="ca-hint">用自然語言詢問關於 <code>{projectRoot}</code> 的任何問題</div>
+        )}
         {messages.map((msg, i) => (
           <div key={i} className={`ca-msg ca-msg--${msg.role}`}>
             {msg.role === "assistant" && (msg.toolCalls ?? []).map((tc) => (
@@ -163,24 +123,90 @@ export function CodeAssistantView({ isActive }: Props) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input bar */}
-      <div className="ca-input-bar">
-        <textarea
-          className="ca-input-bar__textarea"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="問關於這個專案的任何問題... (Enter 送出，Shift+Enter 換行)"
-          rows={1}
-          disabled={isStreaming}
-        />
+      {/* Fallback mode banner */}
+      {isFallbackMode && (
+        <div className="ca-fallback-banner">
+          ⚠ 此 provider 不支援工具調用，已切換為兩段式模式
+        </div>
+      )}
+
+      {/* Directory change confirmation bar */}
+      {pendingRoot && (
+        <div className="ca-dir-confirm">
+          <span className="ca-dir-confirm__path">切換到 {pendingRoot}</span>
+          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => handleConfirmDir(false)}>繼續對話</button>
+          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => handleConfirmDir(true)}>開新對話</button>
+          <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => setPendingRoot(null)}>取消</button>
+        </div>
+      )}
+
+      {/* Toolbar: path + model selector + actions */}
+      <div className="ca-toolbar">
+        <span className="ca-toolbar__label">目錄</span>
         <button
-          className="aiterm-btn aiterm-btn--primary aiterm-btn--sm ca-input-bar__send"
-          onClick={handleSend}
-          disabled={isStreaming || !input.trim()}
+          className="ca-toolbar__path"
+          title={projectRoot}
+          onClick={handlePickFolder}
         >
-          {isStreaming ? "..." : "送出"}
+          {projectRoot}
         </button>
+        <div style={{ width: 1, background: "#2a2a2a", alignSelf: "stretch", margin: "0 4px" }} />
+        <span className="ca-toolbar__label">模型</span>
+        <select
+          className="ca-provider-select"
+          value={selectedProviderId}
+          onChange={(e) => setSelectedProviderId(e.target.value)}
+        >
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.display_name} ({p.model}){p.is_default ? " ★" : ""}
+            </option>
+          ))}
+          {providers.length === 0 && <option value="">（未設定）</option>}
+        </select>
+        <div style={{ flex: 1 }} />
+        {messages.length > 0 && (
+          <button
+            className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+            onClick={clear}
+          >
+            清除
+          </button>
+        )}
+      </div>
+
+      {/* Input pill */}
+      <div className="ca-input-row">
+        <div className="aiterm-input-pill-container" style={{
+          display: "flex", alignItems: "center",
+          background: "rgba(255, 255, 255, 0.03)",
+          border: "1px solid rgba(255, 255, 255, 0.08)",
+          borderRadius: 20, padding: "4px 8px", flex: 1, gap: 6,
+        }}>
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="問關於這個專案的任何問題..."
+            rows={1}
+            disabled={isStreaming}
+            style={{
+              flex: 1, background: "transparent", border: "none",
+              color: "var(--text-primary)", padding: "4px 6px", fontSize: 13,
+              resize: "none", outline: "none", fontFamily: "inherit",
+              height: 24, lineHeight: "24px", overflowY: "hidden",
+            }}
+          />
+          <button
+            onClick={handleSend}
+            disabled={isStreaming || !input.trim()}
+            className="aiterm-btn aiterm-btn--primary aiterm-btn--icon"
+            title="送出 (Enter)"
+          >
+            ▲
+          </button>
+        </div>
       </div>
     </div>
   );
