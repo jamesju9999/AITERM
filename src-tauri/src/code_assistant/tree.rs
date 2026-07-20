@@ -28,7 +28,7 @@ pub fn is_excluded(path: &Path, project_root: &Path) -> bool {
         let name = component.as_os_str().to_string_lossy();
         // Hidden directories (starts with '.'), except root-level config files
         if name.starts_with('.') && !relative.as_os_str().is_empty() {
-            if path.is_dir() || path.join(&*name).is_dir() {
+            if path.is_dir() {
                 return true;
             }
         }
