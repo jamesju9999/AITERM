@@ -23,17 +23,30 @@ pub fn is_excluded(path: &Path, project_root: &Path) -> bool {
         Err(_) => path,
     };
 
-    // Exclude any path component that is a known build/dep directory
+    // Check every component of the relative path
     for component in relative.components() {
         let name = component.as_os_str().to_string_lossy();
-        // Hidden directories (starts with '.'), except root-level config files
-        if name.starts_with('.') && !relative.as_os_str().is_empty() {
-            if path.is_dir() {
-                return true;
-            }
-        }
         if EXCLUDED_DIRS.contains(&name.as_ref()) {
             return true;
+        }
+    }
+
+    // Exclude files/dirs inside hidden directories, or hidden directories themselves.
+    // Walk the parent chain: if any ancestor directory name starts with '.', exclude.
+    // This also catches hidden dirs themselves when they appear as intermediates.
+    let parent = relative.parent().unwrap_or(Path::new(""));
+    for component in parent.components() {
+        let name = component.as_os_str().to_string_lossy();
+        if name.starts_with('.') {
+            return true;
+        }
+    }
+    // Exclude hidden directories themselves (the final component, when it IS a directory)
+    if path.is_dir() {
+        if let Some(last) = relative.file_name() {
+            if last.to_string_lossy().starts_with('.') {
+                return true;
+            }
         }
     }
 
@@ -86,5 +99,12 @@ mod tests {
         let root = PathBuf::from("/project");
         let path = PathBuf::from("/project/src/App.tsx");
         assert!(!is_excluded(&path, &root));
+    }
+
+    #[test]
+    fn excludes_file_inside_hidden_dir() {
+        let root = PathBuf::from("/project");
+        let path = PathBuf::from("/project/.myapp/config.json");
+        assert!(is_excluded(&path, &root));
     }
 }
