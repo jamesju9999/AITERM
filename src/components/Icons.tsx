@@ -424,3 +424,12 @@ export function SmartphoneIcon({ size = 16, ...props }: IconProps) {
     </svg>
   );
 }
+
+export function CodeIcon({ size = 16, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <polyline points="5 4 1 8 5 12" />
+      <polyline points="11 4 15 8 11 12" />
+    </svg>
+  );
+}

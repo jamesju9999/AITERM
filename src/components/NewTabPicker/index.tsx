@@ -10,6 +10,7 @@ import {
   FileTextIcon,
   BookOpenIcon,
   RefreshIcon,
+  CodeIcon,
 } from "../Icons";
 import "./index.css";
 
@@ -46,6 +47,7 @@ export function NewTabPicker({ onSelect, onClose }: Props) {
     { type: "doc-converter", icon: <FileTextIcon size={18} />,    label: t.doc_converter_tab,  desc: t.new_doc_converter_desc },
     { type: "api-docs",      icon: <BookOpenIcon size={18} />,    label: t.api_docs_tab,       desc: t.new_api_docs_desc },
     { type: "loop-studio",   icon: <RefreshIcon size={18} />,     label: t.loop_studio_tab,    desc: t.new_loop_studio_desc },
+    { type: "code-assistant", icon: <CodeIcon size={18} />,       label: t.code_assistant_tab, desc: t.new_code_assistant_desc },
   ];
 
   return (
