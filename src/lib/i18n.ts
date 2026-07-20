@@ -1796,6 +1796,8 @@ export type TranslationKey = keyof typeof translations["zh-TW"];
 // Structural type: string literals become string, functions keep their shape.
 type Literalize<T> = T extends (...args: infer A) => string
   ? (...args: A) => string
+  : T extends string[]
+  ? string[]
   : string;
 export type Translations = {
   [K in keyof typeof translations["zh-TW"]]: Literalize<typeof translations["zh-TW"][K]>;
