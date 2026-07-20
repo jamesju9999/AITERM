@@ -27,11 +27,14 @@ export function CodeAssistantView({ isActive }: Props) {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [submitShortcut, setSubmitShortcut] = useState<SubmitShortcut>("enter");
+  const submitShortcutRef = useRef<SubmitShortcut>("enter");
+  submitShortcutRef.current = submitShortcut;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const { messages, isStreaming, error, isFallbackMode, send, clear } = useCodeAssistant();
 
+  // Load providers once on mount
   useEffect(() => {
     listProviders().then((list) => {
       setProviders(list);
@@ -40,9 +43,16 @@ export function CodeAssistantView({ isActive }: Props) {
         setSelectedProviderId(def.id);
       }
     }).catch(() => {});
-    getConfig().then((cfg) => setSubmitShortcut(cfg.submit_shortcut ?? "enter")).catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Re-read submit shortcut every time this tab becomes active, so changes in
+  // Settings are picked up without needing to close and reopen the tab.
+  useEffect(() => {
+    if (isActive) {
+      getConfig().then((cfg) => setSubmitShortcut(cfg.submit_shortcut ?? "enter")).catch(() => {});
+    }
+  }, [isActive]);
 
   useEffect(() => {
     if (isActive) {
@@ -80,11 +90,12 @@ export function CodeAssistantView({ isActive }: Props) {
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== "Enter") return;
-    const ok = (submitShortcut === "enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
-               (submitShortcut === "shift-enter" && e.shiftKey && !e.ctrlKey) ||
-               (submitShortcut === "ctrl-enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey);
+    const sc = submitShortcutRef.current;
+    const ok = (sc === "enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
+               (sc === "shift-enter" && e.shiftKey && !e.ctrlKey) ||
+               (sc === "ctrl-enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey);
     if (ok) { e.preventDefault(); handleSend(); }
-  }, [submitShortcut, handleSend]);
+  }, [handleSend]);
 
   if (!projectRoot) {
     return (
