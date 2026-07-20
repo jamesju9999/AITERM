@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from "react";
 import { pickFolder } from "../../ipc/vcs";
+import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { useCodeAssistant } from "../../hooks/useCodeAssistant";
 import { ToolCallCard } from "./ToolCallCard";
 import { MarkdownText } from "../../lib/markdown";
@@ -16,16 +17,28 @@ function saveRoot(path: string) {
 
 interface Props {
   isActive: boolean;
-  providerId?: string;
 }
 
-export function CodeAssistantView({ isActive, providerId }: Props) {
+export function CodeAssistantView({ isActive }: Props) {
   const [projectRoot, setProjectRoot] = useState(loadSavedRoot);
   const [pendingRoot, setPendingRoot] = useState<string | null>(null);
   const [input, setInput] = useState("");
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [selectedProviderId, setSelectedProviderId] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const { messages, isStreaming, error, isFallbackMode, send, clear } = useCodeAssistant();
+
+  useEffect(() => {
+    listProviders().then((list) => {
+      setProviders(list);
+      if (list.length > 0 && !selectedProviderId) {
+        const def = list.find((p) => p.is_default) ?? list[0];
+        setSelectedProviderId(def.id);
+      }
+    }).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (isActive) {
@@ -56,8 +69,8 @@ export function CodeAssistantView({ isActive, providerId }: Props) {
     if (!input.trim() || isStreaming || !projectRoot) return;
     const text = input;
     setInput("");
-    void send(text, projectRoot, providerId);
-  }, [input, isStreaming, projectRoot, providerId, send]);
+    void send(text, projectRoot, selectedProviderId || undefined);
+  }, [input, isStreaming, projectRoot, selectedProviderId, send]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -73,7 +86,7 @@ export function CodeAssistantView({ isActive, providerId }: Props) {
           <div className="ca-empty__icon">📂</div>
           <div className="ca-empty__title">選擇專案目錄</div>
           <div className="ca-empty__desc">選定目錄後即可對程式庫提問</div>
-          <button className="ca-empty__btn" onClick={handlePickFolder}>
+          <button className="aiterm-btn aiterm-btn--primary" onClick={handlePickFolder}>
             選擇目錄
           </button>
         </div>
@@ -83,27 +96,51 @@ export function CodeAssistantView({ isActive, providerId }: Props) {
 
   return (
     <div className="ca-view">
+      {/* Header: path + actions */}
       <div className="ca-header">
         <span className="ca-header__path" title={projectRoot}>📁 {projectRoot}</span>
-        <button className="ca-header__btn" onClick={handlePickFolder}>更換目錄</button>
-        <button className="ca-header__btn" onClick={clear}>清除</button>
+        <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={handlePickFolder}>更換目錄</button>
+        <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={clear}>清除</button>
       </div>
 
+      {/* Toolbar: model selector */}
+      <div className="ca-toolbar">
+        <span className="ca-toolbar__label">模型</span>
+        {providers.length > 0 ? (
+          <select
+            className="ca-provider-select"
+            value={selectedProviderId}
+            onChange={(e) => setSelectedProviderId(e.target.value)}
+          >
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.display_name}{p.is_default ? " ★" : ""}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className="ca-toolbar__no-provider">未設定 Provider — 請至設定頁面新增</span>
+        )}
+      </div>
+
+      {/* Directory change confirmation bar */}
       {pendingRoot && (
         <div className="ca-dir-confirm">
           <span className="ca-dir-confirm__path">已選擇 {pendingRoot}</span>
-          <button className="ca-header__btn" onClick={() => handleConfirmDir(false)}>繼續對話</button>
-          <button className="ca-header__btn" onClick={() => handleConfirmDir(true)}>開新對話</button>
-          <button className="ca-header__btn" onClick={() => setPendingRoot(null)}>取消</button>
+          <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => handleConfirmDir(false)}>繼續對話</button>
+          <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => handleConfirmDir(true)}>開新對話</button>
+          <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => setPendingRoot(null)}>取消</button>
         </div>
       )}
 
+      {/* Fallback mode banner */}
       {isFallbackMode && (
         <div className="ca-fallback-banner">
           ⚠ 此 provider 不支援工具調用，已切換為兩段式模式
         </div>
       )}
 
+      {/* Messages */}
       <div className="ca-messages">
         {messages.map((msg, i) => (
           <div key={i} className={`ca-msg ca-msg--${msg.role}`}>
@@ -126,6 +163,7 @@ export function CodeAssistantView({ isActive, providerId }: Props) {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Input bar */}
       <div className="ca-input-bar">
         <textarea
           className="ca-input-bar__textarea"
@@ -137,13 +175,12 @@ export function CodeAssistantView({ isActive, providerId }: Props) {
           disabled={isStreaming}
         />
         <button
-          className="ca-input-bar__send"
+          className="aiterm-btn aiterm-btn--primary aiterm-btn--sm ca-input-bar__send"
           onClick={handleSend}
           disabled={isStreaming || !input.trim()}
         >
           {isStreaming ? "..." : "送出"}
         </button>
-        <button className="ca-input-bar__clear" onClick={clear}>清除</button>
       </div>
     </div>
   );
