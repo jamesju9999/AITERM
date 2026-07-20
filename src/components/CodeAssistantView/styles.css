@@ -1,0 +1,253 @@
+/* ── CodeAssistantView ─────────────────────────────────────────── */
+.ca-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary, #1a1a1a);
+  color: var(--text-primary, #e0e0e0);
+  font-family: inherit;
+}
+
+.ca-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border, #333);
+  background: var(--bg-secondary, #242424);
+  flex-shrink: 0;
+}
+.ca-header__path {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-secondary, #aaa);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ca-header__btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid var(--border, #444);
+  border-radius: 4px;
+  color: var(--text-secondary, #aaa);
+  cursor: pointer;
+}
+.ca-header__btn:hover { background: var(--bg-hover, #333); }
+
+.ca-fallback-banner {
+  padding: 6px 12px;
+  background: #3a2e00;
+  color: #f5c518;
+  font-size: 11px;
+  border-bottom: 1px solid #5a4800;
+  flex-shrink: 0;
+}
+
+.ca-dir-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-secondary, #242424);
+  border-bottom: 1px solid var(--border, #333);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.ca-dir-confirm__path {
+  flex: 1;
+  color: var(--text-secondary, #aaa);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ca-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--text-secondary, #aaa);
+}
+.ca-empty__icon { font-size: 48px; opacity: 0.4; }
+.ca-empty__title { font-size: 16px; font-weight: 500; }
+.ca-empty__desc { font-size: 13px; opacity: 0.7; }
+.ca-empty__btn {
+  padding: 8px 20px;
+  background: var(--accent, #4d8eff);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ca-empty__btn:hover { opacity: 0.85; }
+
+.ca-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ca-input-bar {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border, #333);
+  background: var(--bg-secondary, #242424);
+  flex-shrink: 0;
+}
+.ca-input-bar__textarea {
+  flex: 1;
+  background: var(--bg-primary, #1a1a1a);
+  border: 1px solid var(--border, #444);
+  border-radius: 6px;
+  color: var(--text-primary, #e0e0e0);
+  font-size: 13px;
+  padding: 6px 8px;
+  resize: none;
+  min-height: 36px;
+  max-height: 120px;
+  font-family: inherit;
+}
+.ca-input-bar__textarea:focus { outline: none; border-color: var(--accent, #4d8eff); }
+.ca-input-bar__send {
+  padding: 6px 14px;
+  background: var(--accent, #4d8eff);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  align-self: flex-end;
+}
+.ca-input-bar__send:disabled { opacity: 0.4; cursor: default; }
+.ca-input-bar__clear {
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid var(--border, #444);
+  border-radius: 6px;
+  color: var(--text-secondary, #aaa);
+  font-size: 13px;
+  cursor: pointer;
+  align-self: flex-end;
+}
+
+/* ── ToolCallCard ───────────────────────────────────────────────── */
+.ca-tool-card {
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 12px;
+  margin: 4px 0;
+}
+.ca-tool-card--loading { border-color: #555; }
+.ca-tool-card--done    { border-color: #2a4a2a; }
+.ca-tool-card--error   { border-color: #4a2a2a; }
+
+.ca-tool-card__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--bg-secondary, #242424);
+  border: none;
+  width: 100%;
+  text-align: left;
+  color: var(--text-secondary, #aaa);
+  cursor: default;
+}
+.ca-tool-card--done .ca-tool-card__header { cursor: pointer; }
+.ca-tool-card__header:hover { background: var(--bg-hover, #2e2e2e); }
+
+.ca-tool-card__status { width: 14px; text-align: center; flex-shrink: 0; }
+.ca-tool-card__name   { font-weight: 500; color: #7ec8e3; }
+.ca-tool-card__args   { flex: 1; color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ca-tool-card__toggle { margin-left: auto; flex-shrink: 0; }
+
+.ca-tool-card__spinner {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border: 2px solid #555;
+  border-top-color: #aaa;
+  border-radius: 50%;
+  animation: ca-spin 0.6s linear infinite;
+}
+@keyframes ca-spin { to { transform: rotate(360deg); } }
+
+.ca-tool-card__content {
+  border-top: 1px solid var(--border, #333);
+  max-height: 300px;
+  overflow: auto;
+}
+.ca-tool-card__truncated {
+  padding: 4px 8px;
+  background: #3a2e00;
+  color: #f5c518;
+  font-size: 11px;
+}
+.ca-tool-card__pre {
+  margin: 0;
+  padding: 8px;
+  font-size: 11px;
+  font-family: monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary, #ccc);
+}
+
+/* ── Message bubbles ────────────────────────────────────────────── */
+.ca-msg { display: flex; flex-direction: column; gap: 4px; }
+.ca-msg--user { align-items: flex-end; }
+.ca-msg--assistant { align-items: flex-start; }
+
+.ca-msg__bubble {
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ca-msg--user .ca-msg__bubble {
+  background: var(--accent, #4d8eff);
+  color: #fff;
+  border-bottom-right-radius: 2px;
+}
+.ca-msg--assistant .ca-msg__bubble {
+  background: var(--bg-secondary, #242424);
+  border: 1px solid var(--border, #333);
+  border-bottom-left-radius: 2px;
+}
+
+/* Streaming cursor */
+.ca-streaming-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: currentColor;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: ca-blink 1s step-end infinite;
+}
+@keyframes ca-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+.ca-error {
+  color: #f87171;
+  font-size: 12px;
+  padding: 6px 8px;
+  background: #2a1a1a;
+  border-radius: 4px;
+  border: 1px solid #4a2a2a;
+}
+
+@media (prefers-color-scheme: light) {
+  .ca-view { --bg-primary: #f5f5f5; --bg-secondary: #efefef; --border: #ddd; --text-primary: #1a1a1a; --text-secondary: #555; --bg-hover: #e5e5e5; }
+  .ca-tool-card--done { border-color: #c3e6c3; }
+  .ca-tool-card__name { color: #0066aa; }
+}
