@@ -149,7 +149,23 @@ export function CodeAssistantView({ isActive }: Props) {
       {/* Messages area */}
       <div className="ca-messages">
         {messages.length === 0 && (
-          <div className="ca-hint">{t.ca_hint(projectRoot)}</div>
+          <div className="ca-hint-center">
+            <div className="ca-hint-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="16 18 22 12 16 6" />
+                <polyline points="8 6 2 12 8 18" />
+              </svg>
+            </div>
+            <div className="ca-hint-title">{t.ca_hint_title}</div>
+            <div className="ca-hint-desc">{t.ca_hint_desc(projectRoot)}</div>
+            <div className="ca-hint-examples">
+              {t.ca_hint_examples.map((ex) => (
+                <button key={ex} className="ca-hint-chip" onClick={() => setInput(ex)}>
+                  {ex}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
         {messages.map((msg, i) => (
           <div key={i} className={`ca-msg ca-msg--${msg.role}`}>
