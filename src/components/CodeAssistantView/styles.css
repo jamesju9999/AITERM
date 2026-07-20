@@ -274,6 +274,16 @@
 }
 @keyframes ca-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
+/* Mermaid diagrams — make SVG fill the bubble width */
+.ca-msg--assistant .ca-msg__bubble .mermaid-container {
+  width: 100%;
+  box-sizing: border-box;
+}
+.ca-msg--assistant .ca-msg__bubble .mermaid-container svg {
+  max-width: 100%;
+  height: auto;
+}
+
 .ca-error {
   color: #f87171;
   font-size: 12px;

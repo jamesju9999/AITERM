@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from "react";
+import { save } from "@tauri-apps/plugin-dialog";
 import { pickFolder } from "../../ipc/vcs";
+import { writeTextFile } from "../../ipc/fs";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { useCodeAssistant } from "../../hooks/useCodeAssistant";
@@ -97,6 +99,33 @@ export function CodeAssistantView({ isActive }: Props) {
     if (ok) { e.preventDefault(); handleSend(); }
   }, [handleSend]);
 
+  const handleExport = useCallback(async () => {
+    if (messages.length === 0) return;
+    const path = await save({
+      defaultPath: "conversation.md",
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    });
+    if (!path) return;
+    const lines: string[] = [`# 程式庫問答紀錄\n`, `**專案目錄：** \`${projectRoot}\`\n`];
+    for (const msg of messages) {
+      if (msg.role === "user") {
+        lines.push(`\n---\n\n**問：** ${msg.content}\n`);
+      } else {
+        if ((msg.toolCalls ?? []).length > 0) {
+          lines.push("\n**工具調用：**\n");
+          for (const tc of msg.toolCalls!) {
+            lines.push(`- \`${tc.tool}\`（${JSON.stringify(tc.args)}）`);
+          }
+          lines.push("");
+        }
+        if (msg.content) {
+          lines.push(`\n**答：**\n\n${msg.content}\n`);
+        }
+      }
+    }
+    await writeTextFile(path, lines.join("\n"));
+  }, [messages, projectRoot]);
+
   if (!projectRoot) {
     return (
       <div className="ca-view">
@@ -183,12 +212,20 @@ export function CodeAssistantView({ isActive }: Props) {
         </select>
         <div style={{ flex: 1 }} />
         {messages.length > 0 && (
-          <button
-            className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
-            onClick={clear}
-          >
-            清除
-          </button>
+          <>
+            <button
+              className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+              onClick={handleExport}
+            >
+              匯出
+            </button>
+            <button
+              className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+              onClick={clear}
+            >
+              清除
+            </button>
+          </>
         )}
       </div>
 
