@@ -16,17 +16,13 @@
 }
 
 .model-picker-dropdown {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
-  min-width: 260px;
+  /* position/z-index/top/bottom/left/right set via inline style (portal, fixed) */
   max-width: 420px;
   width: max-content;
   background: #1a1a2e;
   border: 1px solid #333;
   border-radius: 8px;
   overflow: hidden;
-  z-index: 200;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
 }
 
