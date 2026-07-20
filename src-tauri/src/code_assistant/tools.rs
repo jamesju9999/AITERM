@@ -47,7 +47,6 @@ pub fn list_directory(project_root: &Path, rel_path: &str) -> Result<ToolResult,
     let mut names: Vec<String> = entries
         .filter_map(|e| e.ok())
         .filter(|e| !tree::is_excluded(&e.path(), project_root))
-        .take(MAX_LIST_ENTRIES + 1)
         .map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             let suffix = match e.file_type() {
@@ -59,11 +58,11 @@ pub fn list_directory(project_root: &Path, rel_path: &str) -> Result<ToolResult,
         })
         .collect();
 
+    names.sort();
     let truncated = names.len() > MAX_LIST_ENTRIES;
     if truncated {
         names.truncate(MAX_LIST_ENTRIES);
     }
-    names.sort();
 
     Ok(ToolResult {
         content: names.join("\n"),
@@ -86,10 +85,13 @@ pub fn read_file(project_root: &Path, rel_path: &str) -> Result<ToolResult, Stri
         .map_err(|e| format!("Cannot stat file: {e}"))?;
 
     if metadata.len() > MAX_FILE_BYTES {
-        let raw = fs::read(&target)
+        use std::io::Read;
+        let mut f = fs::File::open(&target)
+            .map_err(|e| format!("Cannot open file: {e}"))?;
+        let mut raw = Vec::with_capacity(MAX_FILE_BYTES as usize);
+        f.take(MAX_FILE_BYTES).read_to_end(&mut raw)
             .map_err(|e| format!("Cannot read file: {e}"))?;
-        let truncated_bytes = &raw[..MAX_FILE_BYTES as usize];
-        let content = String::from_utf8_lossy(truncated_bytes).into_owned();
+        let content = String::from_utf8_lossy(&raw).into_owned();
         return Ok(ToolResult {
             content: format!("{content}\n\n[TRUNCATED: file exceeds 100 KB limit]"),
             truncated: true,
@@ -230,7 +232,7 @@ mod tests {
     fn search_finds_match() {
         let project = make_project();
         let result = search_in_files(project.path(), "hello", None).unwrap();
-        assert!(result.content.contains("main.rs") || result.content.contains("README.md"));
+        assert!(result.content.contains("main.rs") && result.content.contains("README.md"));
     }
 
     #[test]
