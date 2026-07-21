@@ -39,6 +39,9 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
           <span className="ca-tool-card__toggle">{expanded ? "▲" : "▼"}</span>
         )}
       </button>
+      {!isDone && toolCall.progress && (
+        <div className="ca-tool-card__progress">{toolCall.progress}</div>
+      )}
       {expanded && isDone && (
         <div className="ca-tool-card__content">
           {toolCall.result!.truncated && (

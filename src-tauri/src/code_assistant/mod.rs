@@ -25,6 +25,11 @@ pub enum CodeAssistantEvent {
         tool: String,
         args: serde_json::Value,
     },
+    ToolProgress {
+        session_id: String,
+        call_id: String,
+        message: String,
+    },
     ToolResult {
         session_id: String,
         call_id: String,
@@ -143,44 +148,92 @@ fn estimate_tokens(s: &str) -> usize {
     s.len() / 4
 }
 
-fn dispatch_tool(root: &PathBuf, name: &str, args: &serde_json::Value) -> (String, bool) {
+async fn dispatch_tool(
+    root: &PathBuf,
+    name: &str,
+    args: &serde_json::Value,
+    app: &AppHandle,
+    session_id: &str,
+    call_id: &str,
+) -> (String, bool) {
     match name {
         "get_file_tree" => {
-            let path = args["path"].as_str().unwrap_or("/");
+            let path = args["path"].as_str().unwrap_or("/").to_owned();
             let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
-            match tools::get_file_tree(root, path, depth) {
-                Ok(r) => (r.content, r.truncated),
+            let root_clone = root.clone();
+            match tokio::task::spawn_blocking(move || tools::get_file_tree(&root_clone, &path, depth)).await {
+                Ok(Ok(r)) => (r.content, r.truncated),
+                Ok(Err(e)) => (format!("Error: {e}"), false),
                 Err(e) => (format!("Error: {e}"), false),
             }
         }
         "find_files" => {
-            let pattern = args["name_pattern"].as_str().unwrap_or("");
-            let ext = args.get("file_extension").and_then(|v| v.as_str());
-            match tools::find_files(root, pattern, ext) {
-                Ok(r) => (r.content, r.truncated),
+            let pattern = args["name_pattern"].as_str().unwrap_or("").to_owned();
+            let ext = args.get("file_extension").and_then(|v| v.as_str()).map(|s| s.to_owned());
+            let root_clone = root.clone();
+            match tokio::task::spawn_blocking(move || tools::find_files(&root_clone, &pattern, ext.as_deref())).await {
+                Ok(Ok(r)) => (r.content, r.truncated),
+                Ok(Err(e)) => (format!("Error: {e}"), false),
                 Err(e) => (format!("Error: {e}"), false),
             }
         }
         "list_directory" => {
-            let path = args["path"].as_str().unwrap_or("/");
-            match tools::list_directory(root, path) {
-                Ok(r) => (r.content, r.truncated),
+            let path = args["path"].as_str().unwrap_or("/").to_owned();
+            let root_clone = root.clone();
+            match tokio::task::spawn_blocking(move || tools::list_directory(&root_clone, &path)).await {
+                Ok(Ok(r)) => (r.content, r.truncated),
+                Ok(Err(e)) => (format!("Error: {e}"), false),
                 Err(e) => (format!("Error: {e}"), false),
             }
         }
         "read_file" => {
-            let path = args["path"].as_str().unwrap_or("");
-            match tools::read_file(root, path) {
-                Ok(r) => (r.content, r.truncated),
+            let path = args["path"].as_str().unwrap_or("").to_owned();
+            let root_clone = root.clone();
+            match tokio::task::spawn_blocking(move || tools::read_file(&root_clone, &path)).await {
+                Ok(Ok(r)) => (r.content, r.truncated),
+                Ok(Err(e)) => (format!("Error: {e}"), false),
                 Err(e) => (format!("Error: {e}"), false),
             }
         }
         "search_in_files" => {
-            let query = args["query"].as_str().unwrap_or("");
-            let pattern = args.get("file_pattern").and_then(|v| v.as_str());
-            match tools::search_in_files(root, query, pattern) {
-                Ok(r) => (r.content, r.truncated),
-                Err(e) => (format!("Error: {e}"), false),
+            let query = args["query"].as_str().unwrap_or("").to_owned();
+            let pattern = args.get("file_pattern").and_then(|v| v.as_str()).map(|s| s.to_owned());
+            let root_clone = root.clone();
+            let app_clone = app.clone();
+            let session_id_owned = session_id.to_owned();
+            let call_id_owned = call_id.to_owned();
+
+            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<String>(128);
+
+            let join = tokio::task::spawn_blocking(move || {
+                tools::search_in_files_with_progress(
+                    &root_clone,
+                    &query,
+                    pattern.as_deref(),
+                    &|dir: &str| { let _ = progress_tx.try_send(dir.to_owned()); },
+                )
+            });
+            tokio::pin!(join);
+
+            loop {
+                tokio::select! {
+                    result = &mut join => {
+                        return match result {
+                            Ok(Ok(r)) => (r.content, r.truncated),
+                            Ok(Err(e)) => (format!("Error: {e}"), false),
+                            Err(e) => (format!("Error: {e}"), false),
+                        };
+                    }
+                    msg = progress_rx.recv() => {
+                        if let Some(msg) = msg {
+                            let _ = app_clone.emit("code-assistant-event", CodeAssistantEvent::ToolProgress {
+                                session_id: session_id_owned.clone(),
+                                call_id: call_id_owned.clone(),
+                                message: msg,
+                            });
+                        }
+                    }
+                }
             }
         }
         _ => (format!("Unknown tool: {name}"), false),
@@ -298,7 +351,7 @@ pub async fn run_chat(
                     });
 
                     let (result_content, truncated) =
-                        dispatch_tool(&root_path, &call.tool_name, &args);
+                        dispatch_tool(&root_path, &call.tool_name, &args, &app, &session_id, &call.id).await;
 
                     token_estimate += estimate_tokens(&result_content);
 

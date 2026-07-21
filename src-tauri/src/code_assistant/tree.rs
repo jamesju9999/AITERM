@@ -11,9 +11,10 @@ const EXCLUDED_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "ico", "webp", "bmp", "svg",
     "mp4", "mp3", "wav", "mov", "avi",
     "zip", "tar", "gz", "rar", "7z",
+    "jar", "war", "ear", "aar",
     "pdf", "doc", "docx", "xls", "xlsx",
     "woff", "woff2", "ttf", "eot",
-    "pyc", "class", "o",
+    "pyc", "class", "o", "db", "dat",
 ];
 
 /// Returns true if `path` should be hidden from the AI (not listed, not readable).

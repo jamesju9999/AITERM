@@ -225,6 +225,15 @@
 }
 @keyframes ca-spin { to { transform: rotate(360deg); } }
 
+.ca-tool-card__progress {
+  padding: 2px 8px 4px 28px;
+  font-size: 10px;
+  font-family: monospace;
+  color: #555;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .ca-tool-card__content {
   border-top: 1px solid #1e1e1e;
   max-height: 280px;

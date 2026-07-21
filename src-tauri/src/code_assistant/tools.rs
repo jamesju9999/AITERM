@@ -113,8 +113,17 @@ pub fn search_in_files(
     query: &str,
     file_pattern: Option<&str>,
 ) -> Result<ToolResult, String> {
+    search_in_files_with_progress(project_root, query, file_pattern, &|_| {})
+}
+
+pub fn search_in_files_with_progress(
+    project_root: &Path,
+    query: &str,
+    file_pattern: Option<&str>,
+    on_progress: &dyn Fn(&str),
+) -> Result<ToolResult, String> {
     let mut matches: Vec<String> = Vec::new();
-    search_recursive(project_root, project_root, query, file_pattern, &mut matches);
+    search_recursive(project_root, project_root, query, file_pattern, &mut matches, on_progress);
 
     let count_truncated = matches.len() > MAX_SEARCH_MATCHES;
     if count_truncated {
@@ -147,10 +156,18 @@ fn search_recursive(
     query: &str,
     pattern: Option<&str>,
     matches: &mut Vec<String>,
+    on_progress: &dyn Fn(&str),
 ) {
     if matches.len() >= MAX_SEARCH_MATCHES {
         return;
     }
+
+    // Emit current directory as progress (relative path)
+    let rel_dir = dir.strip_prefix(root).unwrap_or(dir).to_string_lossy();
+    if !rel_dir.is_empty() {
+        on_progress(&rel_dir);
+    }
+
     let Ok(entries) = fs::read_dir(dir) else { return };
 
     for entry in entries.filter_map(|e| e.ok()) {
@@ -162,7 +179,7 @@ fn search_recursive(
             continue;
         }
         if path.is_dir() {
-            search_recursive(root, &path, query, pattern, matches);
+            search_recursive(root, &path, query, pattern, matches, on_progress);
         } else {
             if let Some(pat) = pattern {
                 let ext = format!(

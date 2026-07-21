@@ -12,6 +12,7 @@ export interface ToolCallState {
   callId: string;
   tool: string;
   args: Record<string, unknown>;
+  progress?: string;
   result?: { content: string; truncated: boolean };
 }
 
@@ -79,6 +80,16 @@ export function useCodeAssistant(): UseCodeAssistantResult {
             ...(last.toolCalls ?? []),
             { callId: p.call_id, tool: p.tool, args: p.args },
           ];
+          next[next.length - 1] = last;
+          return next;
+        });
+      } else if (p.kind === "tool_progress") {
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = { ...next[next.length - 1] };
+          last.toolCalls = (last.toolCalls ?? []).map((tc) =>
+            tc.callId === p.call_id ? { ...tc, progress: p.message } : tc,
+          );
           next[next.length - 1] = last;
           return next;
         });
