@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::fs;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -100,8 +101,8 @@ pub struct SyncSummary {
 pub async fn sync_notebook(
     pool: &SqlitePool,
     notebook: &NotebookRow,
-    converter: &dyn DocumentConverter,
-    embedder: &dyn Embedder,
+    converter: Arc<dyn DocumentConverter>,
+    embedder: Arc<dyn Embedder>,
     mut on_progress: impl FnMut(SyncProgress),
 ) -> Result<SyncSummary, String> {
     let root = Path::new(&notebook.folder_path);
@@ -146,8 +147,18 @@ pub async fn sync_notebook(
     let total = to_process.len();
     let mut processed = 0usize;
 
+    let notebook_id = notebook.id.clone();
     let mut stream = stream::iter(to_process.into_iter().map(|(file, hash)| {
-        process_one_file(pool, &notebook.id, &file.rel_path, &file.abs_path, file.mtime, hash, converter, embedder)
+        spawn_process_one_file(
+            pool.clone(),
+            notebook_id.clone(),
+            file.rel_path.clone(),
+            file.abs_path.clone(),
+            file.mtime,
+            hash,
+            converter.clone(),
+            embedder.clone(),
+        )
     })).buffer_unordered(MAX_CONCURRENT);
 
     while let Some(outcome) = stream.next().await {
@@ -165,6 +176,47 @@ pub async fn sync_notebook(
     }
 
     Ok(summary)
+}
+
+/// Runs `process_one_file` on its own spawned task so a panic inside
+/// `converter.convert()` or `embedder.embed()` — arbitrary trait-object
+/// implementations; a real MarkItDown converter shells out to Python and
+/// can panic on malformed subprocess output — is isolated to this one
+/// file (surfaces as a `JoinError`) instead of unwinding through the
+/// whole sync and losing every other file's progress.
+async fn spawn_process_one_file(
+    pool: SqlitePool,
+    notebook_id: String,
+    rel_path: String,
+    abs_path: PathBuf,
+    mtime: i64,
+    hash: String,
+    converter: Arc<dyn DocumentConverter>,
+    embedder: Arc<dyn Embedder>,
+) -> Result<String, (String, String)> {
+    let rel_path_for_panic = rel_path.clone();
+    let pool_for_panic = pool.clone();
+    let notebook_id_for_panic = notebook_id.clone();
+    let hash_for_panic = hash.clone();
+    let handle = tokio::spawn(async move {
+        process_one_file(&pool, &notebook_id, &rel_path, &abs_path, mtime, hash, converter.as_ref(), embedder.as_ref()).await
+    });
+
+    match handle.await {
+        Ok(result) => result,
+        Err(join_err) => {
+            // The spawned task panicked (or was cancelled) before it could record its own
+            // result, so `process_one_file`'s usual error-path upsert never ran. Write the
+            // error document row here so the file still shows up as a tracked failure
+            // instead of silently vanishing from the documents table.
+            let err_msg = format!("processing task panicked or was cancelled: {join_err}");
+            let _ = knowledge_base::upsert_document(
+                &pool_for_panic, &notebook_id_for_panic, &rel_path_for_panic, mtime,
+                &hash_for_panic, None, "error", Some(&err_msg),
+            ).await;
+            Err((rel_path_for_panic, err_msg))
+        }
+    }
 }
 
 /// 轉換單一檔案並寫入結果（成功或失敗都會 upsert 對應的 document row）。
@@ -191,6 +243,9 @@ async fn process_one_file(
     }
 }
 
+const CONVERT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+const EMBED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 async fn process_one_file_inner(
     pool: &SqlitePool,
     notebook_id: &str,
@@ -201,7 +256,9 @@ async fn process_one_file_inner(
     converter: &dyn DocumentConverter,
     embedder: &dyn Embedder,
 ) -> Result<(), String> {
-    let markdown = converter.convert(abs_path).await?;
+    let markdown = tokio::time::timeout(CONVERT_TIMEOUT, converter.convert(abs_path))
+        .await
+        .map_err(|_| format!("Document conversion timed out after {}s", CONVERT_TIMEOUT.as_secs()))??;
     let chunks = chunk_markdown(&markdown);
 
     let doc_id = knowledge_base::upsert_document(
@@ -214,7 +271,9 @@ async fn process_one_file_inner(
     }
 
     let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
-    let embeddings = embedder.embed(&texts).await?;
+    let embeddings = tokio::time::timeout(EMBED_TIMEOUT, embedder.embed(&texts))
+        .await
+        .map_err(|_| format!("Embedding request timed out after {}s", EMBED_TIMEOUT.as_secs()))??;
     if embeddings.len() != chunks.len() {
         return Err(format!(
             "Embedding count mismatch: {} chunks vs {} embeddings",
