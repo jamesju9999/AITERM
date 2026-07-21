@@ -8,7 +8,8 @@ export type CodeAssistantEvent =
   | { kind: "text_delta";    session_id: string; delta: string }
   | { kind: "done";          session_id: string }
   | { kind: "error";         session_id: string; message: string }
-  | { kind: "fallback_mode"; session_id: string };
+  | { kind: "fallback_mode"; session_id: string }
+  | { kind: "token_count";  session_id: string; count: number; limit: number };
 
 export const CODE_ASSISTANT_EVENT = "code-assistant-event";
 

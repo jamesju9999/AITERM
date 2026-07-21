@@ -54,6 +54,11 @@ pub enum CodeAssistantEvent {
     FallbackMode {
         session_id: String,
     },
+    TokenCount {
+        session_id: String,
+        count: usize,
+        limit: usize,
+    },
 }
 
 fn tool_definitions() -> Vec<McpToolDefinition> {
@@ -308,6 +313,12 @@ pub async fn run_chat(
     let mut checkpoints = 0usize;
 
     loop {
+        let _ = app.emit("code-assistant-event", CodeAssistantEvent::TokenCount {
+            session_id: session_id.clone(),
+            count: token_estimate,
+            limit: TOKEN_ESTIMATE_LIMIT,
+        });
+
         // ── Checkpoint compression ────────────────────────────────────────────
         // When tool results fill most of the context budget, summarise what has
         // been found so far, discard the raw tool history, and continue with a

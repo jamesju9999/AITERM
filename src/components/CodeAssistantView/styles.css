@@ -171,6 +171,14 @@
 }
 .ca-provider-select:focus { border-color: var(--accent, #a855f7); }
 
+.ca-token-count {
+  font-size: 10px;
+  font-family: monospace;
+  color: #555;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 /* Input row */
 .ca-input-row {
   padding: 10px 16px 12px;

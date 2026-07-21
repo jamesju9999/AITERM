@@ -37,7 +37,7 @@ export function CodeAssistantView({ isActive }: Props) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const { messages, isStreaming, error, isFallbackMode, send, clear } = useCodeAssistant();
+  const { messages, isStreaming, error, isFallbackMode, tokenCount, tokenLimit, send, clear } = useCodeAssistant();
 
   // Load providers once on mount
   useEffect(() => {
@@ -219,6 +219,11 @@ export function CodeAssistantView({ isActive }: Props) {
           selectedId={selectedProviderId}
           onChange={setSelectedProviderId}
         />
+        {isStreaming && tokenCount > 0 && (
+          <span className="ca-token-count" title={`估算 token 用量（上限 ${tokenLimit.toLocaleString()}）`}>
+            {tokenCount.toLocaleString()} / {tokenLimit.toLocaleString()}
+          </span>
+        )}
         {messages.length > 0 && (
           <>
             <button

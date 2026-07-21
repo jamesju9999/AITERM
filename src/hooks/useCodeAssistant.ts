@@ -28,6 +28,8 @@ export interface UseCodeAssistantResult {
   isStreaming: boolean;
   error: string | null;
   isFallbackMode: boolean;
+  tokenCount: number;
+  tokenLimit: number;
   send: (userText: string, projectRoot: string, providerId?: string) => Promise<void>;
   clear: () => void;
 }
@@ -37,6 +39,8 @@ export function useCodeAssistant(): UseCodeAssistantResult {
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isFallbackMode, setIsFallbackMode] = useState(false);
+  const [tokenCount, setTokenCount] = useState(0);
+  const [tokenLimit, setTokenLimit] = useState(50000);
   const mountedRef = useRef(true);
   const { locale } = useLocale();
 
@@ -115,6 +119,9 @@ export function useCodeAssistant(): UseCodeAssistantResult {
         });
       } else if (p.kind === "fallback_mode") {
         setIsFallbackMode(true);
+      } else if (p.kind === "token_count") {
+        setTokenCount(p.count);
+        setTokenLimit(p.limit);
       } else if (p.kind === "done") {
         setMessages((prev) => {
           const next = [...prev];
@@ -156,7 +163,8 @@ export function useCodeAssistant(): UseCodeAssistantResult {
     setMessages([]);
     setError(null);
     setIsFallbackMode(false);
+    setTokenCount(0);
   }, []);
 
-  return { messages, isStreaming, error, isFallbackMode, send, clear };
+  return { messages, isStreaming, error, isFallbackMode, tokenCount, tokenLimit, send, clear };
 }
