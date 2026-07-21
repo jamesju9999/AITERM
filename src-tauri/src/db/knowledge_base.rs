@@ -299,7 +299,7 @@ pub async fn search_similar_chunks(
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT c.document_id, d.rel_path, c.text, c.location_hint, c.embedding
          FROM chunks c JOIN documents d ON c.document_id = d.id
-         WHERE d.notebook_id = ?"
+         WHERE d.notebook_id = ? AND d.status = 'ok'"
     ).bind(notebook_id).fetch_all(pool).await?;
 
     let mut hits: Vec<SearchHit> = rows.into_iter().map(|r| {

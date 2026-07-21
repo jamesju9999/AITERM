@@ -191,3 +191,21 @@ async fn document_and_chunk_lifecycle() {
         .await.expect("search after delete");
     assert!(hits_final.is_empty(), "deleting a document must cascade-delete its chunks");
 }
+
+#[tokio::test]
+async fn search_excludes_chunks_from_error_status_documents() {
+    let pool = setup_pool().await;
+    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None).await.unwrap();
+
+    let doc_id = upsert_document(
+        &pool, &notebook.id, "stale.txt", 0, "old-hash",
+        Some("# Stale\n\nold content"), "error", Some("re-sync failed"),
+    ).await.unwrap();
+
+    replace_chunks(&pool, &doc_id, &[
+        ("stale chunk content".into(), Some("Stale".into()), vec![1.0, 0.0, 0.0]),
+    ]).await.unwrap();
+
+    let hits = search_similar_chunks(&pool, &notebook.id, &[1.0, 0.0, 0.0], 10).await.unwrap();
+    assert!(hits.is_empty(), "chunks belonging to an error-status document must never be returned by search, even if they still exist in the table");
+}
