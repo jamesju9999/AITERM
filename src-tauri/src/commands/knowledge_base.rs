@@ -203,3 +203,29 @@ pub async fn kb_chat(
         db.pool.clone(), notebook, messages, chat_provider, embedder, session_id, locale, app,
     ).await
 }
+
+/// 開啟筆記本資料夾內的某份文件（OS 預設應用程式）。
+/// rel_path 來自工具呼叫結果（AI 影響的內容），開啟前一定要做邊界檢查，
+/// 避免解析到筆記本資料夾以外的路徑。
+#[tauri::command]
+pub async fn kb_open_document(
+    notebook_id: String,
+    rel_path: String,
+    db: tauri::State<'_, kb_db::KnowledgeBaseDb>,
+) -> Result<(), String> {
+    let notebook = kb_db::get_notebook(&db.pool, &notebook_id)
+        .await.map_err(|e| e.to_string())?;
+
+    let root = std::path::Path::new(&notebook.folder_path);
+    let canonical_root = root.canonicalize()
+        .map_err(|e| format!("Cannot resolve notebook folder: {e}"))?;
+    let target = root.join(rel_path.trim_start_matches('/'));
+    let canonical_target = target.canonicalize()
+        .map_err(|e| format!("File not found: {e}"))?;
+
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err("Path is outside the notebook folder".into());
+    }
+
+    open::that(canonical_target).map_err(|e| e.to_string())
+}

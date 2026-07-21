@@ -1,0 +1,301 @@
+import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from "react";
+import { getConfig, type SubmitShortcut } from "../../ipc/config";
+import { listProviders, type ProviderInfo } from "../../ipc/provider";
+import { kbOpenDocument } from "../../ipc/knowledgeBase";
+import { useNotebooks } from "../../hooks/useNotebooks";
+import { useKnowledgeBaseChat } from "../../hooks/useKnowledgeBaseChat";
+import { useLocale } from "../../contexts/LocaleContext";
+import { ToolCallCard } from "../CodeAssistantView/ToolCallCard";
+import { MarkdownText } from "../../lib/markdown";
+import { ModelPickerButton } from "../ModelPickerButton";
+import { NotebookSidebar } from "./NotebookSidebar";
+import { NotebookCreateDialog } from "./NotebookCreateDialog";
+// 重用 Code Assistant 的聊天氣泡/工具卡片樣式（ca-msg、ca-hint-*、ca-toolbar 等）。
+// 這裡明確 import，不依賴「CodeAssistantView 剛好也被載入過」這種隱性順序。
+import "../CodeAssistantView/styles.css";
+import "./styles.css";
+
+const STORAGE_KEY = "aiterm-knowledge-base-active-notebook";
+
+function loadSavedNotebookId(): string | null {
+  try { return localStorage.getItem(STORAGE_KEY); } catch { return null; }
+}
+function saveNotebookId(id: string | null) {
+  try {
+    if (id) localStorage.setItem(STORAGE_KEY, id);
+    else localStorage.removeItem(STORAGE_KEY);
+  } catch { /* ignore */ }
+}
+
+// search_documents 的結果格式："[1] report.pdf — 第一章 (score 0.85)\n<內容>"
+// 注意：第一個 capture group（rel_path）刻意用「貪婪」比對（.+ 而非 .+?），
+// 且整體錨定到行尾（\)$）。中文檔名很常見 em dash（例如「會議記錄 — 2026.pdf」），
+// 若 rel_path 本身包含 " — "，非貪婪比對只會切到「第一個」— 導致路徑被截斷、
+// location 吃到路徑的其餘部分。貪婪比對會反向從最長開始回溯，
+// 正確地切到「最後一個」— 也就是路徑與 location 之間真正的分隔點，
+// 只有在 location 本身也包含 em dash 時才會誤判（較少見：標題文字含 em dash）。
+const SOURCE_LINE_RE = /^\[\d+\]\s+(.+)\s+—\s+(.+?)\s+\(score\s+[\d.]+\)$/;
+
+interface SourceRef {
+  path: string;
+  location: string;
+}
+
+function extractSources(content: string): SourceRef[] {
+  const out: SourceRef[] = [];
+  for (const line of content.split("\n")) {
+    const m = SOURCE_LINE_RE.exec(line);
+    if (m) out.push({ path: m[1], location: m[2] });
+  }
+  return out;
+}
+
+function dedupeSources(sources: SourceRef[]): SourceRef[] {
+  const seen = new Set<string>();
+  const out: SourceRef[] = [];
+  for (const s of sources) {
+    if (seen.has(s.path)) continue;
+    seen.add(s.path);
+    out.push(s);
+  }
+  return out;
+}
+
+interface Props {
+  isActive: boolean;
+}
+
+export function KnowledgeBaseView({ isActive }: Props) {
+  const { t } = useLocale();
+  const { notebooks, loading, syncingId, syncProgress, create, remove, sync } = useNotebooks();
+  const [activeNotebookId, setActiveNotebookId] = useState<string | null>(loadSavedNotebookId);
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [input, setInput] = useState("");
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [selectedProviderId, setSelectedProviderId] = useState("");
+  const [submitShortcut, setSubmitShortcut] = useState<SubmitShortcut>("enter");
+  const submitShortcutRef = useRef<SubmitShortcut>("enter");
+  submitShortcutRef.current = submitShortcut;
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const activeNotebook = notebooks.find((nb) => nb.id === activeNotebookId) ?? null;
+  const { messages, isStreaming, error, isFallbackMode, tokenCount, tokenLimit, send, clear } =
+    useKnowledgeBaseChat(activeNotebookId);
+
+  // 首次載入完成後，若儲存的筆記本 id 已不存在（例如被刪除），改選第一個。
+  useEffect(() => {
+    if (loading) return;
+    if (activeNotebookId && notebooks.some((nb) => nb.id === activeNotebookId)) return;
+    setActiveNotebookId(notebooks[0]?.id ?? null);
+  }, [loading, notebooks, activeNotebookId]);
+
+  useEffect(() => { saveNotebookId(activeNotebookId); }, [activeNotebookId]);
+
+  useEffect(() => {
+    listProviders().then((list) => {
+      setProviders(list);
+      if (list.length > 0 && !selectedProviderId) {
+        const def = list.find((p) => p.is_default) ?? list[0];
+        setSelectedProviderId(def.id);
+      }
+    }).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (isActive) {
+      getConfig().then((cfg) => setSubmitShortcut(cfg.submit_shortcut ?? "enter")).catch(() => {});
+    }
+  }, [isActive]);
+
+  useEffect(() => {
+    if (isActive) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, isActive]);
+
+  const handleSend = useCallback(() => {
+    if (!input.trim() || isStreaming || !activeNotebookId) return;
+    const text = input;
+    setInput("");
+    void send(text, selectedProviderId || undefined);
+  }, [input, isStreaming, activeNotebookId, selectedProviderId, send]);
+
+  const shortcutLabel = submitShortcut === "shift-enter" ? "Shift+Enter" : submitShortcut === "ctrl-enter" ? "Ctrl+Enter" : "Enter";
+
+  const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== "Enter") return;
+    const sc = submitShortcutRef.current;
+    const ok = (sc === "enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
+               (sc === "shift-enter" && e.shiftKey && !e.ctrlKey) ||
+               (sc === "ctrl-enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey);
+    if (ok) { e.preventDefault(); handleSend(); }
+  }, [handleSend]);
+
+  const handleCreateNotebook = useCallback(async (
+    name: string, folderPath: string, embedProviderId?: string, embedModel?: string,
+  ) => {
+    const nb = await create(name, folderPath, embedProviderId, embedModel);
+    setActiveNotebookId(nb.id);
+  }, [create]);
+
+  const handleDeleteNotebook = useCallback(async (id: string) => {
+    await remove(id);
+    if (activeNotebookId === id) setActiveNotebookId(null);
+  }, [remove, activeNotebookId]);
+
+  const handleOpenSource = useCallback((path: string) => {
+    if (!activeNotebookId) return;
+    void kbOpenDocument(activeNotebookId, path);
+  }, [activeNotebookId]);
+
+  return (
+    <div className="kb-view">
+      <NotebookSidebar
+        notebooks={notebooks}
+        activeId={activeNotebookId}
+        syncingId={syncingId}
+        syncProgress={syncProgress}
+        onSelect={setActiveNotebookId}
+        onSync={sync}
+        onDelete={handleDeleteNotebook}
+        onAddClick={() => setShowCreateDialog(true)}
+      />
+
+      <div className="kb-main">
+        {!activeNotebook ? (
+          <div className="ca-empty">
+            <div className="ca-empty__icon">📚</div>
+            <div className="ca-empty__title">{t.kb_empty_title}</div>
+            <div className="ca-empty__desc">{t.kb_empty_desc}</div>
+            <button className="aiterm-btn aiterm-btn--primary" onClick={() => setShowCreateDialog(true)}>
+              {t.kb_create_notebook}
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="ca-messages">
+              {messages.length === 0 && (
+                <div className="ca-hint-center">
+                  <div className="ca-hint-title">{t.kb_hint_title}</div>
+                  <div className="ca-hint-desc">{t.kb_hint_desc(activeNotebook.name)}</div>
+                  <div className="ca-hint-examples">
+                    {t.kb_hint_examples.map((ex) => (
+                      <button key={ex} className="ca-hint-chip" onClick={() => setInput(ex)}>
+                        {ex}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {messages.map((msg, i) => {
+                const isDone = msg.role === "assistant" && !msg.streaming;
+                const sources = isDone
+                  ? dedupeSources([
+                      ...(msg.toolCalls ?? [])
+                        .filter((tc) => tc.tool === "search_documents" && tc.result && !tc.result.content.startsWith("Error:"))
+                        .flatMap((tc) => extractSources(tc.result!.content)),
+                      ...(msg.toolCalls ?? [])
+                        .filter((tc) => tc.tool === "read_document" && tc.result && !tc.result.content.startsWith("Error:"))
+                        .map((tc) => ({ path: String(tc.args.path ?? ""), location: "" })),
+                    ])
+                  : [];
+
+                return (
+                  <div key={i} className={`ca-msg ca-msg--${msg.role}`}>
+                    {msg.role === "assistant" && (msg.toolCalls ?? []).map((tc) => (
+                      <ToolCallCard key={tc.callId} toolCall={tc} />
+                    ))}
+                    {(msg.content || msg.streaming) && (
+                      <div className="ca-msg__bubble">
+                        {msg.role === "assistant" ? <MarkdownText text={msg.content} /> : msg.content}
+                        {msg.streaming && <span className="ca-streaming-cursor" />}
+                      </div>
+                    )}
+                    {sources.length > 0 && (
+                      <div className="kb-sources">
+                        {sources.map((s) => (
+                          <button
+                            key={s.path}
+                            className="kb-sources__chip"
+                            title={s.location ? `${s.path} — ${s.location}` : s.path}
+                            onClick={() => handleOpenSource(s.path)}
+                          >
+                            {s.path.split("/").pop()}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {error && <div className="ca-error">{error}</div>}
+              <div ref={messagesEndRef} />
+            </div>
+
+            {isFallbackMode && <div className="ca-fallback-banner">{t.ca_fallback_banner}</div>}
+
+            <div className="ca-toolbar">
+              <ModelPickerButton
+                providers={providers}
+                selectedId={selectedProviderId}
+                onChange={setSelectedProviderId}
+              />
+              {isStreaming && tokenCount > 0 && (
+                <span className="ca-token-count" title={`估算 token 用量（上限 ${tokenLimit.toLocaleString()}）`}>
+                  {tokenCount.toLocaleString()} / {tokenLimit.toLocaleString()}
+                </span>
+              )}
+              {messages.length > 0 && (
+                <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={clear}>
+                  {t.ca_clear}
+                </button>
+              )}
+            </div>
+
+            <div className="ca-input-row">
+              <div className="aiterm-input-pill-container" style={{
+                display: "flex", alignItems: "center",
+                background: "rgba(255, 255, 255, 0.03)",
+                border: "1px solid rgba(255, 255, 255, 0.08)",
+                borderRadius: 20, padding: "4px 8px", flex: 1, gap: 6,
+              }}>
+                <textarea
+                  ref={textareaRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={t.kb_input_placeholder(shortcutLabel)}
+                  rows={1}
+                  disabled={isStreaming}
+                  style={{
+                    flex: 1, background: "transparent", border: "none",
+                    color: "var(--text-primary)", padding: "4px 6px", fontSize: 13,
+                    resize: "none", outline: "none", fontFamily: "inherit",
+                    height: 24, lineHeight: "24px", overflowY: "hidden",
+                  }}
+                />
+                <button
+                  onClick={handleSend}
+                  disabled={isStreaming || !input.trim()}
+                  className="aiterm-btn aiterm-btn--primary aiterm-btn--icon"
+                  title="送出 (Enter)"
+                >
+                  ▲
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {showCreateDialog && (
+        <NotebookCreateDialog
+          onCreate={handleCreateNotebook}
+          onClose={() => setShowCreateDialog(false)}
+        />
+      )}
+    </div>
+  );
+}

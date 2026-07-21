@@ -75,3 +75,7 @@ export function invokeKbChat(
     locale,
   });
 }
+
+export function kbOpenDocument(notebookId: string, relPath: string): Promise<void> {
+  return invoke<void>("kb_open_document", { notebookId, relPath });
+}
