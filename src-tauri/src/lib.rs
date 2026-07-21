@@ -24,7 +24,7 @@ use commands::{
     },
     ai::{agent_chat, ai_chat, ai_query},
     code_assistant::code_assistant_chat,
-    knowledge_base::{kb_create_notebook, kb_list_notebooks, kb_delete_notebook, kb_sync_notebook},
+    knowledge_base::{kb_create_notebook, kb_list_notebooks, kb_delete_notebook, kb_sync_notebook, kb_chat},
     config::{
         get_config, is_onboarding_done, set_default_tab, set_execution_mode, set_max_agent_steps,
         set_onboarding_done, set_submit_shortcut,
@@ -250,6 +250,7 @@ pub fn run() {
             kb_list_notebooks,
             kb_delete_notebook,
             kb_sync_notebook,
+            kb_chat,
             // Config
             get_config,
             set_execution_mode,

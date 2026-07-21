@@ -37,7 +37,7 @@ use serde::Serialize;
 use crate::config::{ConfigStore, ProviderType};
 use crate::secret::SecretStore;
 use crate::db::knowledge_base as kb_db;
-use crate::knowledge_base::embedding::{EmbedderConfig, HttpEmbedder};
+use crate::knowledge_base::embedding::{Embedder, EmbedderConfig, HttpEmbedder};
 use crate::knowledge_base::ingest::{sync_notebook, DocumentConverter, SyncProgress, SyncSummary};
 
 struct MarkItDownConverter {
@@ -158,4 +158,48 @@ pub async fn kb_sync_notebook(
     });
 
     Ok(summary)
+}
+
+use crate::ai::{router::AiRouter, ChatMessage, Locale};
+
+#[tauri::command]
+pub async fn kb_chat(
+    notebook_id: String,
+    messages: Vec<ChatMessage>,
+    session_id: String,
+    provider_id: Option<String>,
+    locale: Locale,
+    app: AppHandle,
+    db: tauri::State<'_, kb_db::KnowledgeBaseDb>,
+    config: tauri::State<'_, Arc<ConfigStore>>,
+    secrets: tauri::State<'_, Arc<SecretStore>>,
+    router: tauri::State<'_, AiRouter>,
+) -> Result<(), crate::ai::AiError> {
+    use crate::ai::AiError;
+
+    if messages.is_empty() {
+        return Err(AiError::InvalidInput { reason: "empty messages".into() });
+    }
+
+    let notebook = kb_db::get_notebook(&db.pool, &notebook_id)
+        .await.map_err(|e| AiError::Network { message: e.to_string() })?;
+
+    let embed_provider_id = notebook.embed_provider_id.clone()
+        .ok_or_else(|| AiError::InvalidInput { reason: "此筆記本尚未設定 embedding provider".into() })?;
+    let embed_model = notebook.embed_model.clone()
+        .ok_or_else(|| AiError::InvalidInput { reason: "此筆記本尚未設定 embedding model".into() })?;
+
+    let mut embedder_cfg = resolve_embedder_config(&config, &secrets, &embed_provider_id)
+        .map_err(|reason| AiError::InvalidInput { reason })?;
+    embedder_cfg.model = embed_model;
+    let embedder: Arc<dyn Embedder> = Arc::new(HttpEmbedder::new(embedder_cfg));
+
+    let chat_provider = match provider_id.as_deref() {
+        Some(id) => router.resolve_by_id(id).await?,
+        None => router.resolve().await?,
+    };
+
+    crate::knowledge_base::chat::run_chat(
+        db.pool.clone(), notebook, messages, chat_provider, embedder, session_id, locale, app,
+    ).await
 }
