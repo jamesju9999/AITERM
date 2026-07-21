@@ -8,11 +8,8 @@ mermaid.initialize({
   securityLevel: "loose", // needed for some interactive diagram features or styling
 });
 
-// Sanitize Mermaid code to fix common model-generated syntax issues:
-// 1. Fullwidth/Halfwidth Forms (U+FF01–U+FF60) → ASCII equivalents
-// 2. <br/> / <br> tags in node labels → space  (<br/>'s ">" confuses the lexer
-//    into reading it as a LINK_ID token, causing "got 'LINK_ID'" parse errors)
-// 3. Edge labels containing parentheses → quoted so "(" isn't read as a node shape
+// Pass 1 — conservative sanitization.
+// Converts known problematic tokens while preserving as much text as possible.
 function sanitizeMermaid(code: string): string {
   let result = code
     // Full-width punctuation → ASCII
@@ -23,19 +20,33 @@ function sanitizeMermaid(code: string): string {
     .replace(/｜/g, "|")
     .replace(/，/g, ",").replace(/。/g, ".").replace(/、/g, ",")
     .replace(/：/g, ":").replace(/；/g, ";")
-    .replace(/「|」|『|』|"|"/g, '"')
-    .replace(/『|』/g, "'");
+    // Chinese corner/curly quotes → ASCII SINGLE quotes.
+    // Do NOT use " here: inside [node labels], Mermaid lexes "text" as a STR
+    // token which triggers "got 'STR'" parse errors.
+    .replace(/[「」『』""]/g, "'");
 
-  // Replace <br/>, <br />, <br> with a space.
-  // The ">" in <br/> is tokenised as a LINK_ID (arrow) by Mermaid's lexer
-  // when it appears inside a node label like [Text<br/>More].
+  // <br/> → space: the ">" is lexed as LINK_ID inside node labels.
   result = result.replace(/<br\s*\/?>/gi, " ");
 
-  // Quote edge labels that contain parentheses.
-  // Matches |label| where label has no existing quotes and contains ( or ).
+  // Quote edge labels that contain parentheses so "(" isn't read as node shape.
   result = result.replace(/\|([^|"]*[()][^|"]*)\|/g, '|"$1"|');
 
   return result;
+}
+
+// Pass 2 — aggressive fallback when Pass 1 still fails to parse.
+// Removes double-quote characters inside [...] and (...) node labels,
+// which are the most common source of STR token errors.
+function aggressiveSanitize(code: string): string {
+  return code
+    // Strip " inside square-bracket node labels
+    .replace(/\[([^\]]*)\]/g, (_m, inner: string) => "[" + inner.replace(/"/g, "'") + "]")
+    // Strip " inside round-bracket node labels
+    .replace(/\(([^)]*)\)/g, (_m, inner: string) => "(" + inner.replace(/"/g, "'") + ")")
+    // Strip " inside subgraph labels (subgraph ID ["label"])
+    .replace(/(subgraph\s+\w*\s*)\[([^\]]*)\]/g, (_m, pre: string, label: string) =>
+      pre + "[" + label.replace(/"/g, "'") + "]"
+    );
 }
 
 interface MermaidBlockProps {
@@ -52,31 +63,38 @@ export function MermaidBlock({ chart }: MermaidBlockProps) {
   useEffect(() => {
     let isCancelled = false;
 
-    async function renderMermaid() {
-      const trimmed = sanitizeMermaid(chart.trim());
-      if (!trimmed) return;
-
+    async function tryRender(source: string): Promise<boolean> {
       try {
-        // Validate first — prevents mermaid from leaking its bomb error UI into document.body
-        await mermaid.parse(trimmed);
-      } catch (err: any) {
-        if (!isCancelled) {
-          setError(err.message || "Mermaid parse error");
-        }
-        return;
+        await mermaid.parse(source);
+      } catch {
+        return false;
       }
-
       try {
         const id = `mermaid-${Math.random().toString(36).substring(2, 9)}`;
-        const { svg } = await mermaid.render(id, trimmed);
-        if (!isCancelled) {
-          setSvgStr(svg);
-          setError(null);
-        }
-      } catch (err: any) {
-        if (!isCancelled) {
-          setError(err.message || "Failed to render Mermaid diagram");
-        }
+        const { svg } = await mermaid.render(id, source);
+        if (!isCancelled) { setSvgStr(svg); setError(null); }
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    async function renderMermaid() {
+      const raw = chart.trim();
+      if (!raw) return;
+
+      // Pass 1: conservative sanitization
+      const pass1 = sanitizeMermaid(raw);
+      if (await tryRender(pass1)) return;
+
+      // Pass 2: aggressive — strip double quotes from node/subgraph labels
+      const pass2 = aggressiveSanitize(pass1);
+      if (await tryRender(pass2)) return;
+
+      // Both passes failed — show error with the Pass 1 source for readability
+      if (!isCancelled) {
+        try { await mermaid.parse(pass1); }
+        catch (err: any) { setError(err.message || "Mermaid parse error"); }
       }
     }
 
