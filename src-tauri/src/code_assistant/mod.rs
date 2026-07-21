@@ -148,7 +148,7 @@ Project root: {project_root}
 - NEVER mention a file path unless you confirmed it exists via a tool call in this session.
 - If you cannot find something after targeted searching, say so honestly.
 - Respond in {language}.
-- When drawing Mermaid diagrams, use only ASCII characters in node IDs and edge labels."#
+- **Mermaid diagrams**: ONLY ASCII characters allowed everywhere (node IDs, node labels, edge labels, subgraph IDs). NO Chinese/CJK, NO `<br/>`, NO `()` inside `|edge labels|`, NO `/` in labels. Write all explanatory text in {language} OUTSIDE the diagram block as a legend or bullet list. If a diagram cannot be drawn with pure ASCII, describe it in text instead."#
     )
 }
 
