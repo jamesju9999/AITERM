@@ -70,7 +70,6 @@ fn tail_chars(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::*;
 
     #[test]
     fn short_markdown_becomes_single_chunk() {
