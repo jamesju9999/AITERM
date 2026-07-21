@@ -351,6 +351,36 @@
   height: auto;
 }
 
+/* Files actually read — shown below assistant message to help detect hallucinated paths */
+.ca-files-read {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 0 2px;
+}
+.ca-files-read__label {
+  font-size: 10px;
+  color: #444;
+  flex-shrink: 0;
+}
+.ca-files-read__path {
+  font-size: 10px;
+  font-family: monospace;
+  color: #3d5a3e;
+  background: rgba(74, 222, 128, 0.05);
+  border: 1px solid rgba(74, 222, 128, 0.12);
+  border-radius: 3px;
+  padding: 1px 5px;
+  cursor: default;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ca-files-read__path:hover { color: #4ade80; border-color: rgba(74, 222, 128, 0.3); }
+
 .ca-error {
   color: #f87171;
   font-size: 12px;

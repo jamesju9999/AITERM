@@ -167,23 +167,48 @@ export function CodeAssistantView({ isActive }: Props) {
             </div>
           </div>
         )}
-        {messages.map((msg, i) => (
-          <div key={i} className={`ca-msg ca-msg--${msg.role}`}>
-            {msg.role === "assistant" && (msg.toolCalls ?? []).map((tc) => (
-              <ToolCallCard key={tc.callId} toolCall={tc} />
-            ))}
-            {(msg.content || msg.streaming) && (
-              <div className="ca-msg__bubble">
-                {msg.role === "assistant" ? (
-                  <MarkdownText text={msg.content} />
-                ) : (
-                  msg.content
-                )}
-                {msg.streaming && <span className="ca-streaming-cursor" />}
-              </div>
-            )}
-          </div>
-        ))}
+        {messages.map((msg, i) => {
+          const readPaths = msg.role === "assistant" && !msg.streaming
+            ? [...new Set(
+                (msg.toolCalls ?? [])
+                  .filter((tc) =>
+                    (tc.tool === "read_file" || tc.tool === "read_file_lines") &&
+                    tc.result !== undefined &&
+                    !tc.result.content.startsWith("Error:")
+                  )
+                  .map((tc) => String(tc.args.path ?? ""))
+                  .filter(Boolean)
+              )]
+            : [];
+
+          return (
+            <div key={i} className={`ca-msg ca-msg--${msg.role}`}>
+              {msg.role === "assistant" && (msg.toolCalls ?? []).map((tc) => (
+                <ToolCallCard key={tc.callId} toolCall={tc} />
+              ))}
+              {(msg.content || msg.streaming) && (
+                <div className="ca-msg__bubble">
+                  {msg.role === "assistant" ? (
+                    <MarkdownText text={msg.content} />
+                  ) : (
+                    msg.content
+                  )}
+                  {msg.streaming && <span className="ca-streaming-cursor" />}
+                </div>
+              )}
+              {readPaths.length > 0 && (
+                <div className="ca-files-read">
+                  <span className="ca-files-read__label">{t.ca_files_read_label}</span>
+                  {readPaths.map((p) => (
+                    <span key={p} className="ca-files-read__path" title={p}>
+                      {p.split("/").pop()}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
         {error && <div className="ca-error">{error}</div>}
         <div ref={messagesEndRef} />
       </div>
