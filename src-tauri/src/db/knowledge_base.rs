@@ -241,8 +241,10 @@ pub async fn delete_document_by_path(
     ).bind(notebook_id).bind(rel_path).fetch_optional(pool).await?;
 
     if let Some((doc_id,)) = existing {
-        sqlx::query("DELETE FROM chunks WHERE document_id = ?").bind(&doc_id).execute(pool).await?;
-        sqlx::query("DELETE FROM documents WHERE id = ?").bind(&doc_id).execute(pool).await?;
+        let mut tx = pool.begin().await?;
+        sqlx::query("DELETE FROM chunks WHERE document_id = ?").bind(&doc_id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM documents WHERE id = ?").bind(&doc_id).execute(&mut *tx).await?;
+        tx.commit().await?;
     }
     Ok(())
 }
