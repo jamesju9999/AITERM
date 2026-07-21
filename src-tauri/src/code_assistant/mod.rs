@@ -310,6 +310,80 @@ async fn dispatch_tool(
     }
 }
 
+/// Build a deduplication key for a tool call.
+fn tool_call_key(tool_name: &str, args: &serde_json::Value) -> String {
+    format!("{}:{}", tool_name, args)
+}
+
+/// Parse tool calls from XML text that local models emit instead of proper JSON tool-calls.
+///
+/// Handles two formats:
+///   1. JSON inside tag:  <tool_call>{"name":"fn","arguments":{...}}</tool_call>
+///   2. Attribute style:  <function=fn> <parameter=key> val </parameter> </function>
+fn parse_xml_tool_calls(text: &str) -> Vec<(String, serde_json::Value)> {
+    let mut results = Vec::new();
+
+    // Format 1: <tool_call>JSON</tool_call>
+    let mut search = text;
+    while let Some(start) = search.find("<tool_call>") {
+        let after = &search[start + "<tool_call>".len()..];
+        let inner = if let Some(end) = after.find("</tool_call>") {
+            after[..end].trim()
+        } else {
+            after.trim()
+        };
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(inner) {
+            if let Some(name) = v["name"].as_str() {
+                let args = v.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+                results.push((name.to_owned(), args));
+            }
+        }
+        // Advance past this tag
+        let skip = start + "<tool_call>".len();
+        search = &search[skip..];
+    }
+
+    // Format 2: <function=NAME> <parameter=KEY> VALUE </parameter> … </function>
+    // Only attempt if Format 1 found nothing.
+    if results.is_empty() {
+        let mut s = text;
+        while let Some(fn_pos) = s.find("<function=") {
+            let after_fn = &s[fn_pos + "<function=".len()..];
+            let name_end = after_fn.find('>').unwrap_or(after_fn.len());
+            let fn_name = after_fn[..name_end].trim().to_owned();
+            let rest = &after_fn[name_end..];
+
+            let mut args = serde_json::Map::new();
+            let mut param_search = rest;
+            while let Some(p) = param_search.find("<parameter=") {
+                let after_p = &param_search[p + "<parameter=".len()..];
+                let key_end = after_p.find('>').unwrap_or(after_p.len());
+                let key = after_p[..key_end].trim().to_owned();
+                let after_key = &after_p[key_end + 1..];
+                let val = if let Some(c) = after_key.find("</parameter>") {
+                    after_key[..c].trim()
+                } else {
+                    after_key.trim()
+                };
+                let json_val = if let Ok(n) = val.parse::<i64>() {
+                    serde_json::Value::Number(n.into())
+                } else {
+                    serde_json::Value::String(val.to_owned())
+                };
+                args.insert(key, json_val);
+                param_search = &after_key[after_key.find("</parameter>").map(|x| x + "</parameter>".len()).unwrap_or(after_key.len())..];
+            }
+
+            if !fn_name.is_empty() {
+                results.push((fn_name, serde_json::Value::Object(args)));
+            }
+            s = &after_fn[name_end..];
+        }
+    }
+
+    results
+}
+
 pub async fn run_chat(
     project_root: String,
     messages: Vec<ChatMessage>,
@@ -326,6 +400,8 @@ pub async fn run_chat(
     let mut token_estimate = estimate_tokens(&system_prompt);
     let mut rounds = 0usize;
     let mut checkpoints = 0usize;
+    // Deduplication: skip tool calls whose (name, args) key was already executed.
+    let mut seen_calls: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     loop {
         let _ = app.emit("code-assistant-event", CodeAssistantEvent::TokenCount {
@@ -429,12 +505,48 @@ pub async fn run_chat(
                 });
                 return Err(e);
             }
-            Ok(Ok(GenerateWithToolsResult::Text(_))) => {
-                // Text was already streamed via TextDelta events above
-                let _ = app.emit("code-assistant-event", CodeAssistantEvent::Done {
-                    session_id: session_id.clone(),
-                });
-                return Ok(());
+            Ok(Ok(GenerateWithToolsResult::Text(text))) => {
+                // Local models sometimes emit XML-style tool calls as text instead of JSON
+                // (common after checkpoint compression resets context). Try to parse and
+                // execute them so the loop can continue rather than stopping prematurely.
+                let xml_calls = parse_xml_tool_calls(&text);
+                if !xml_calls.is_empty() {
+                    for (tool_name, args) in xml_calls {
+                        let key = tool_call_key(&tool_name, &args);
+                        if seen_calls.contains(&key) { continue; }
+                        seen_calls.insert(key);
+
+                        let call_id = format!("xml_{}", uuid::Uuid::new_v4());
+                        let _ = app.emit("code-assistant-event", CodeAssistantEvent::ToolCall {
+                            session_id: session_id.clone(),
+                            call_id: call_id.clone(),
+                            tool: tool_name.clone(),
+                            args: args.clone(),
+                        });
+                        let (result_content, truncated) =
+                            dispatch_tool(&root_path, &tool_name, &args, &app, &session_id, &call_id).await;
+                        token_estimate += estimate_tokens(&result_content);
+                        let _ = app.emit("code-assistant-event", CodeAssistantEvent::ToolResult {
+                            session_id: session_id.clone(),
+                            call_id: call_id.clone(),
+                            content: result_content.clone(),
+                            truncated,
+                        });
+                        conversation.push(ChatMessage {
+                            role: "tool".into(),
+                            content: serde_json::Value::String(result_content),
+                            tool_call_id: Some(call_id),
+                            tool_calls: None,
+                        });
+                    }
+                    rounds += 1;
+                } else {
+                    // Genuine text answer — already streamed via TextDelta events above
+                    let _ = app.emit("code-assistant-event", CodeAssistantEvent::Done {
+                        session_id: session_id.clone(),
+                    });
+                    return Ok(());
+                }
             }
             Ok(Ok(GenerateWithToolsResult::ToolCalls { calls, raw })) => {
                 // Append assistant tool-call message to conversation
@@ -448,6 +560,32 @@ pub async fn run_chat(
                 for call in &calls {
                     let args: serde_json::Value =
                         serde_json::from_str(&call.args.to_string()).unwrap_or_default();
+
+                    // Skip calls already executed in this session (deduplication)
+                    let key = tool_call_key(&call.tool_name, &args);
+                    if seen_calls.contains(&key) {
+                        let _ = app.emit("code-assistant-event", CodeAssistantEvent::ToolCall {
+                            session_id: session_id.clone(),
+                            call_id: call.id.clone(),
+                            tool: call.tool_name.clone(),
+                            args: args.clone(),
+                        });
+                        let skip_msg = format!("(skipped: same call already executed earlier in this session)");
+                        let _ = app.emit("code-assistant-event", CodeAssistantEvent::ToolResult {
+                            session_id: session_id.clone(),
+                            call_id: call.id.clone(),
+                            content: skip_msg.clone(),
+                            truncated: false,
+                        });
+                        conversation.push(ChatMessage {
+                            role: "tool".into(),
+                            content: serde_json::Value::String(skip_msg),
+                            tool_call_id: Some(call.id.clone()),
+                            tool_calls: None,
+                        });
+                        continue;
+                    }
+                    seen_calls.insert(key);
 
                     let _ = app.emit("code-assistant-event", CodeAssistantEvent::ToolCall {
                         session_id: session_id.clone(),
@@ -635,4 +773,42 @@ fn compress_conversation(
         tool_calls: None,
     });
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_xml_json_format() {
+        let text = r#"<tool_call>{"name":"get_file_tree","arguments":{"path":"src","depth":3}}</tool_call>"#;
+        let calls = parse_xml_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "get_file_tree");
+        assert_eq!(calls[0].1["path"], "src");
+        assert_eq!(calls[0].1["depth"], 3);
+    }
+
+    #[test]
+    fn parse_xml_attribute_format() {
+        let text = "<function=read_file> <parameter=path> src/Foo.java </parameter> </function>";
+        let calls = parse_xml_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "read_file");
+        assert_eq!(calls[0].1["path"], "src/Foo.java");
+    }
+
+    #[test]
+    fn parse_xml_no_match_returns_empty() {
+        let calls = parse_xml_tool_calls("Here is my answer: the answer is 42.");
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn dedup_key_is_stable() {
+        let args = serde_json::json!({"path": "src", "depth": 3});
+        let k1 = tool_call_key("get_file_tree", &args);
+        let k2 = tool_call_key("get_file_tree", &args);
+        assert_eq!(k1, k2);
+    }
 }
