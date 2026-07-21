@@ -197,7 +197,7 @@ Show a code block ONLY when ALL of the following are true:
 - search_in_files snippets are LEADS ONLY. A truncated 300-char line proves the text exists somewhere — it does NOT prove file structure, class layout, or surrounding logic.
 
 - Respond in {language}.
-- **Mermaid diagrams**: ONLY ASCII characters allowed everywhere (node IDs, node labels, edge labels, subgraph IDs). NO Chinese/CJK, NO `<br/>`, NO `()` inside `|edge labels|`, NO `/` in labels. Write all explanatory text in {language} OUTSIDE the diagram block as a legend or bullet list. If a diagram cannot be drawn with pure ASCII, describe it in text instead."#
+- **Mermaid diagrams**: node IDs must be plain ASCII identifiers (e.g. `A`, `LoadConf`). Wrap every node label and edge label in double quotes, e.g. `A["使用者點擊「連線」按鈕"]` and `-->|"host, port, user"|`. Do not use `<br/>` inside labels — use a space instead."#
     )
 }
 

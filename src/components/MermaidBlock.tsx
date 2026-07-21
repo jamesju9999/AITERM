@@ -9,7 +9,12 @@ mermaid.initialize({
 });
 
 // Pass 1 — conservative sanitization.
-// Converts known problematic tokens while preserving as much text as possible.
+// Converts known problematic tokens, then unconditionally quotes node/edge
+// labels in flowchart diagrams. Quoting a label is always syntactically
+// safe in Mermaid, so wrapping every label removes the entire class of
+// "unquoted special character confuses the lexer" errors (parens, angle
+// brackets, colons, hashes, pipes, ...) instead of reacting to each one
+// individually as it's discovered.
 function sanitizeMermaid(code: string): string {
   let result = code
     // Full-width punctuation → ASCII
@@ -28,21 +33,25 @@ function sanitizeMermaid(code: string): string {
   // <br/> → space: the ">" is lexed as LINK_ID inside node labels.
   result = result.replace(/<br\s*\/?>/gi, " ");
 
-  // Quote edge labels that contain parentheses so "(" isn't read as node shape.
-  // [^\n|"] prevents matching across lines (which would corrupt unrelated labels).
-  result = result.replace(/\|([^\n|"]*[()][^\n|"]*)\|/g, '|"$1"|');
-
-  // Quote rectangle node labels [text] that contain risky lexer characters
-  // ( ) < > # |, e.g. B[foo.connect()] → B["foo.connect()"].  Unquoted, "("
-  // is lexed as a shape-start token (PS) instead of literal text.
-  result = quoteRiskyBracketLabels(result);
+  // Blanket label quoting only applies to flowchart/graph syntax — other
+  // diagram types (classDiagram, stateDiagram, sequenceDiagram, ...) use
+  // [] {} for unrelated constructs and would be corrupted by this pass.
+  if (/^\s*(flowchart|graph)\b/im.test(result)) {
+    result = quoteBracketLabels(result);
+    result = quoteDiamondLabels(result);
+    result = quoteEdgeLabels(result);
+  }
 
   return result;
 }
 
+function wrapQuoted(inner: string): string {
+  return `"${inner.replace(/"/g, "'")}"`;
+}
+
 // Shape syntaxes that reuse [...] but aren't plain rectangles — must not be
-// rewrapped in quotes or their shape (cylinder/subroutine/parallelogram/
-// trapezoid) would be lost.
+// rewrapped in quotes or their shape (cylinder/parallelogram/trapezoid)
+// would be lost.
 function isNonRectangleBracketShape(inner: string): boolean {
   return (
     /^\(.*\)$/.test(inner) ||   // [(cylinder)]
@@ -53,15 +62,33 @@ function isNonRectangleBracketShape(inner: string): boolean {
   );
 }
 
-function quoteRiskyBracketLabels(code: string): string {
+// Rectangle node labels: A[text] → A["text"].
+function quoteBracketLabels(code: string): string {
   // Negative lookbehind/lookahead skip the inner brackets of [[subroutine]].
   return code.replace(/(?<!\[)\[([^[\]\n]*)\](?!\])/g, (match, inner: string) => {
+    if (!inner) return match;
     if (inner.startsWith('"') && inner.endsWith('"')) return match;
     if (isNonRectangleBracketShape(inner)) return match;
-    if (/[()<>#|]/.test(inner)) {
-      return `["${inner.replace(/"/g, "'")}"]`;
-    }
-    return match;
+    return `[${wrapQuoted(inner)}]`;
+  });
+}
+
+// Diamond decision node labels: C{text} → C{"text"}.
+function quoteDiamondLabels(code: string): string {
+  // Negative lookbehind/lookahead skip the inner braces of {{hexagon}}.
+  return code.replace(/(?<!\{)\{([^{}\n]*)\}(?!\})/g, (match, inner: string) => {
+    if (!inner) return match;
+    if (inner.startsWith('"') && inner.endsWith('"')) return match;
+    return `{${wrapQuoted(inner)}}`;
+  });
+}
+
+// Edge labels: -->|text|--> → -->|"text"|-->.
+function quoteEdgeLabels(code: string): string {
+  return code.replace(/\|([^\n|]*)\|/g, (match, inner: string) => {
+    if (!inner) return match;
+    if (inner.startsWith('"') && inner.endsWith('"')) return match;
+    return `|${wrapQuoted(inner)}|`;
   });
 }
 
