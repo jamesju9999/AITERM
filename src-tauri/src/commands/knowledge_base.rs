@@ -37,7 +37,7 @@ use serde::Serialize;
 use crate::config::{ConfigStore, ProviderType};
 use crate::secret::SecretStore;
 use crate::db::knowledge_base as kb_db;
-use crate::knowledge_base::embedding::{Embedder, EmbedderConfig, HttpEmbedder};
+use crate::knowledge_base::embedding::{EmbedderConfig, HttpEmbedder};
 use crate::knowledge_base::ingest::{sync_notebook, DocumentConverter, SyncProgress, SyncSummary};
 
 struct MarkItDownConverter {
@@ -111,7 +111,7 @@ pub async fn kb_sync_notebook(
     secrets: tauri::State<'_, Arc<SecretStore>>,
 ) -> Result<SyncSummary, String> {
     let notebook = kb_db::get_notebook(&db.pool, &notebook_id)
-        .await.map_err(|e| e.to_string())?;
+        .await.map_err(|_| format!("找不到筆記本: {notebook_id}"))?;
 
     let provider_id = notebook.embed_provider_id.clone()
         .ok_or_else(|| "此筆記本尚未設定 embedding provider".to_string())?;
@@ -146,7 +146,9 @@ pub async fn kb_sync_notebook(
     ).await?;
 
     let now = chrono::Utc::now().timestamp();
-    kb_db::mark_synced(&db.pool, &notebook_id, now).await.map_err(|e| e.to_string())?;
+    if let Err(e) = kb_db::mark_synced(&db.pool, &notebook_id, now).await {
+        eprintln!("Warning: failed to update last_synced_at for notebook {notebook_id}: {e}");
+    }
 
     let _ = app.emit("kb-sync-event", KbSyncEvent::Done {
         notebook_id: notebook_id.clone(),
