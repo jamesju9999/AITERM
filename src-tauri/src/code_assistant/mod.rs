@@ -15,6 +15,10 @@ const MAX_TOOL_ROUNDS: usize = 20;
 /// Conservative limit: ~4 chars/token for Latin/code, 1-2 chars/token for CJK.
 /// We aim for ≤50 000 tokens of tool results to leave room for model output.
 const TOKEN_ESTIMATE_LIMIT: usize = 50_000;
+/// Trigger context compression when accumulated tool results exceed this threshold.
+const CHECKPOINT_THRESHOLD: usize = 30_000;
+/// Maximum number of mid-session compressions allowed before forcing a final answer.
+const MAX_CHECKPOINTS: usize = 2;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -301,13 +305,43 @@ pub async fn run_chat(
     let mut conversation = messages;
     let mut token_estimate = estimate_tokens(&system_prompt);
     let mut rounds = 0usize;
+    let mut checkpoints = 0usize;
 
     loop {
-        let force_answer = rounds >= MAX_TOOL_ROUNDS || token_estimate > TOKEN_ESTIMATE_LIMIT;
+        // ── Checkpoint compression ────────────────────────────────────────────
+        // When tool results fill most of the context budget, summarise what has
+        // been found so far, discard the raw tool history, and continue with a
+        // compact checkpoint message. This keeps the context window available
+        // for further investigation. Allowed at most MAX_CHECKPOINTS times.
+        if token_estimate >= CHECKPOINT_THRESHOLD && checkpoints < MAX_CHECKPOINTS {
+            checkpoints += 1;
+            let _ = app.emit("code-assistant-event", CodeAssistantEvent::TextDelta {
+                session_id: session_id.clone(),
+                delta: format!(
+                    "\n\n> [Checkpoint #{checkpoints}：正在壓縮已蒐集的資料，繼續探索...]\n\n"
+                ),
+            });
+            let summary = generate_checkpoint_summary(
+                &conversation, provider.clone(), locale
+            ).await;
+            conversation = compress_conversation(conversation, &summary, checkpoints);
+            token_estimate = estimate_tokens(&summary);
+            continue;
+        }
 
+        let force_answer = rounds >= MAX_TOOL_ROUNDS
+            || (token_estimate >= TOKEN_ESTIMATE_LIMIT && checkpoints >= MAX_CHECKPOINTS);
+
+        let language = crate::ai::language_name(locale);
         let effective_prompt = if force_answer {
             format!(
-                "{system_prompt}\n\nNote: You have reached the tool call limit. Answer now based on what you have already read."
+                "{system_prompt}\n\n\
+                 STOP ALL TOOL CALLS NOW. Research limit reached after {rounds} rounds.\n\
+                 Write your FINAL ANSWER in {language}. Rules:\n\
+                 1. Natural language ONLY — absolutely NO JSON, NO arrays, NO file path lists.\n\
+                 2. Only state facts you directly read in files during this session.\n\
+                 3. If you did not find something, explicitly say so.\n\
+                 4. Summarise your findings in clear prose."
             )
         } else {
             system_prompt.clone()
@@ -512,4 +546,67 @@ Project structure:
         session_id: session_id.clone(),
     });
     Ok(())
+}
+
+/// Ask the model to distil all confirmed findings from the current conversation
+/// into a compact summary. Called when tool results approach the context limit.
+async fn generate_checkpoint_summary(
+    conversation: &[ChatMessage],
+    provider: std::sync::Arc<dyn AiProvider>,
+    locale: Locale,
+) -> String {
+    let language = crate::ai::language_name(locale);
+    let system = format!(
+        "You are creating a research checkpoint. The conversation below shows a code \
+         investigation with tool calls and results. Write a concise structured summary \
+         IN {language} of ONLY what has been CONFIRMED — facts you directly observed:\n\
+         - Directories and files found (exact paths)\n\
+         - Class names, method names, annotations (quote exactly as seen)\n\
+         - Configuration values, queue names, URLs (quote exactly)\n\
+         - What was searched but NOT found\n\
+         - What still needs to be investigated\n\n\
+         Max 500 words. Facts only. Do NOT speculate. Do NOT make tool calls."
+    );
+
+    let req = GenerateRequest {
+        system_prompt: system,
+        messages: conversation.to_vec(),
+        context: Default::default(),
+        mode: QueryMode::Chat,
+        max_tokens: Some(700),
+    };
+
+    let (tx, mut rx) = mpsc::channel::<GenerateChunk>(32);
+    let p = provider.clone();
+    let join = tokio::spawn(async move { p.generate(req, tx).await });
+    let mut buf = String::new();
+    while let Some(chunk) = rx.recv().await {
+        buf.push_str(&chunk.delta);
+        if chunk.done { break; }
+    }
+    let _ = join.await;
+    buf
+}
+
+/// Replace the full tool-call history with the checkpoint summary.
+/// Keeps the original user question so the model retains the goal.
+fn compress_conversation(
+    conversation: Vec<ChatMessage>,
+    summary: &str,
+    checkpoint_n: usize,
+) -> Vec<ChatMessage> {
+    let mut result: Vec<ChatMessage> = conversation
+        .into_iter()
+        .filter(|m| m.role == "user")
+        .collect();
+
+    result.push(ChatMessage {
+        role: "assistant".into(),
+        content: serde_json::Value::String(format!(
+            "[Checkpoint #{checkpoint_n} — confirmed findings so far]\n{summary}"
+        )),
+        tool_call_id: None,
+        tool_calls: None,
+    });
+    result
 }
