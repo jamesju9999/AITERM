@@ -182,7 +182,7 @@ pub async fn kb_chat(
     }
 
     let notebook = kb_db::get_notebook(&db.pool, &notebook_id)
-        .await.map_err(|e| AiError::Network { message: e.to_string() })?;
+        .await.map_err(|_| AiError::InvalidInput { reason: format!("找不到筆記本: {notebook_id}") })?;
 
     let embed_provider_id = notebook.embed_provider_id.clone()
         .ok_or_else(|| AiError::InvalidInput { reason: "此筆記本尚未設定 embedding provider".into() })?;
