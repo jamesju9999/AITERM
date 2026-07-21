@@ -8,6 +8,21 @@ mermaid.initialize({
   securityLevel: "loose", // needed for some interactive diagram features or styling
 });
 
+// Mermaid's lexer treats Fullwidth/Halfwidth Forms (U+FF01–U+FF60) as unknown tokens.
+// Replace them with ASCII equivalents so Chinese-text labels still render correctly.
+function sanitizeMermaid(code: string): string {
+  return code
+    .replace(/（/g, "(").replace(/）/g, ")")
+    .replace(/【/g, "[").replace(/】/g, "]")
+    .replace(/｛/g, "{").replace(/｝/g, "}")
+    .replace(/＜/g, "<").replace(/＞/g, ">")
+    .replace(/｜/g, "|")
+    .replace(/，/g, ",").replace(/。/g, ".").replace(/、/g, ",")
+    .replace(/：/g, ":").replace(/；/g, ";")
+    .replace(/「|」|『|』|"|"/g, '"')
+    .replace(/『|』/g, "'");
+}
+
 interface MermaidBlockProps {
   chart: string;
 }
@@ -22,7 +37,7 @@ export function MermaidBlock({ chart }: MermaidBlockProps) {
     let isCancelled = false;
 
     async function renderMermaid() {
-      const trimmed = chart.trim();
+      const trimmed = sanitizeMermaid(chart.trim());
       if (!trimmed) return;
 
       try {
