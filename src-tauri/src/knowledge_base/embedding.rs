@@ -2,12 +2,23 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use crate::config::types::ProviderType;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EmbedderConfig {
     pub provider_type: ProviderType,
     pub base_url: String,
     pub api_key: Option<String>,
     pub model: String,
+}
+
+impl std::fmt::Debug for EmbedderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbedderConfig")
+            .field("provider_type", &self.provider_type)
+            .field("base_url", &self.base_url)
+            .field("api_key", &self.api_key.as_ref().map(|_| "***"))
+            .field("model", &self.model)
+            .finish()
+    }
 }
 
 #[async_trait]
@@ -22,7 +33,11 @@ pub struct HttpEmbedder {
 
 impl HttpEmbedder {
     pub fn new(config: EmbedderConfig) -> Self {
-        Self { config, client: reqwest::Client::new() }
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .unwrap_or_default();
+        Self { config, client }
     }
 }
 
