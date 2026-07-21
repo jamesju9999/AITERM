@@ -7,10 +7,12 @@ interface ToolCallCardProps {
 }
 
 function formatArgs(args: Record<string, unknown>): string {
-  const entries = Object.entries(args);
+  const entries = Object.entries(args ?? {});
   if (entries.length === 0) return "";
-  if (entries.length === 1) return String(entries[0][1]);
-  return entries.map(([k, v]) => `${k}=${String(v)}`).join(", ");
+  const str = (v: unknown): string =>
+    v !== null && typeof v === "object" ? JSON.stringify(v) : String(v ?? "");
+  if (entries.length === 1) return str(entries[0][1]);
+  return entries.map(([k, v]) => `${k}=${str(v)}`).join(", ");
 }
 
 export function ToolCallCard({ toolCall }: ToolCallCardProps) {

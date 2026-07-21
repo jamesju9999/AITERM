@@ -124,7 +124,7 @@ impl AiProvider for OllamaClient {
         &self,
         req: GenerateRequest,
         tools: Vec<McpToolDefinition>,
-        _tx: mpsc::Sender<GenerateChunk>,
+        tx: mpsc::Sender<GenerateChunk>,
     ) -> Result<GenerateWithToolsResult, AiError> {
         let ollama_tools: Vec<OllamaTool> = tools
             .iter()
@@ -204,7 +204,9 @@ impl AiProvider for OllamaClient {
                 .collect();
             Ok(GenerateWithToolsResult::ToolCalls { calls, raw })
         } else {
-            Ok(GenerateWithToolsResult::Text(data.message.content))
+            let content = data.message.content.clone();
+            let _ = tx.send(GenerateChunk { delta: content.clone(), done: true, usage: None }).await;
+            Ok(GenerateWithToolsResult::Text(content))
         }
     }
 }
@@ -233,6 +235,8 @@ struct OllamaMessage {
     content: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<OllamaResponseToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
 }
 
 fn build_messages(req: &GenerateRequest) -> Vec<OllamaMessage> {
@@ -241,6 +245,7 @@ fn build_messages(req: &GenerateRequest) -> Vec<OllamaMessage> {
         role: "system".to_owned(),
         content: serde_json::Value::String(req.system_prompt.clone()),
         tool_calls: None,
+        tool_call_id: None,
     });
     for m in &req.messages {
         match &m.tool_calls {
@@ -249,6 +254,7 @@ fn build_messages(req: &GenerateRequest) -> Vec<OllamaMessage> {
                     role: m.role.clone(),
                     content: serde_json::Value::String(String::new()),
                     tool_calls: Some(to_ollama_tool_calls(tool_calls)),
+                    tool_call_id: None,
                 });
             }
             None => {
@@ -256,6 +262,7 @@ fn build_messages(req: &GenerateRequest) -> Vec<OllamaMessage> {
                     role: m.role.clone(),
                     content: m.content.clone(),
                     tool_calls: None,
+                    tool_call_id: m.tool_call_id.clone(),
                 });
             }
         }
