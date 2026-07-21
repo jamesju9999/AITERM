@@ -503,6 +503,7 @@ const zhTW = {
     mermaid_error: "Mermaid 錯誤：",
     mermaid_source: "原始碼",
     mermaid_rendering: "圖表渲染中...",
+    mermaid_click_to_expand: "點擊放大",
     // ProviderPalette
     provider_palette_title: "切換 Provider",
     provider_palette_empty: "尚無 Provider 設定。",
@@ -1442,6 +1443,7 @@ const enRaw = {
     mermaid_error: "Mermaid Error:",
     mermaid_source: "Source",
     mermaid_rendering: "Rendering diagram...",
+    mermaid_click_to_expand: "Click to enlarge",
     // ProviderPalette
     provider_palette_title: "Switch Provider",
     provider_palette_empty: "No providers configured.",

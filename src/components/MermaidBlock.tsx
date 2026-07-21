@@ -47,6 +47,7 @@ export function MermaidBlock({ chart }: MermaidBlockProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgStr, setSvgStr] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     let isCancelled = false;
@@ -88,6 +89,14 @@ export function MermaidBlock({ chart }: MermaidBlockProps) {
     };
   }, [chart]);
 
+  // Close overlay on Escape key
+  useEffect(() => {
+    if (!expanded) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") setExpanded(false); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [expanded]);
+
   if (error) {
     return (
       <div className="mermaid-error" style={{ color: "#f87171", padding: "10px", border: "1px solid #f87171", borderRadius: "4px", margin: "10px 0", fontSize: "12px" }}>
@@ -106,11 +115,34 @@ export function MermaidBlock({ chart }: MermaidBlockProps) {
   }
 
   return (
-    <div 
-      ref={containerRef}
-      className="mermaid-container"
-      style={{ margin: "16px 0", display: "flex", justifyContent: "center", background: "rgba(255, 255, 255, 0.02)", padding: "12px", borderRadius: "8px" }}
-      dangerouslySetInnerHTML={{ __html: svgStr }} 
-    />
+    <>
+      {/* Thumbnail — click to expand */}
+      <div
+        ref={containerRef}
+        className="mermaid-container"
+        title={t.mermaid_click_to_expand}
+        onClick={() => setExpanded(true)}
+        dangerouslySetInnerHTML={{ __html: svgStr }}
+      />
+
+      {/* Full-screen overlay */}
+      {expanded && (
+        <div className="mermaid-overlay" onClick={() => setExpanded(false)}>
+          <div className="mermaid-overlay__content" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="mermaid-overlay__close"
+              onClick={() => setExpanded(false)}
+              title="關閉 (Esc)"
+            >
+              ✕
+            </button>
+            <div
+              className="mermaid-overlay__diagram"
+              dangerouslySetInnerHTML={{ __html: svgStr }}
+            />
+          </div>
+        </div>
+      )}
+    </>
   );
 }

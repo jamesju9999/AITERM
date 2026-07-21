@@ -341,13 +341,68 @@
 }
 @keyframes ca-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
-/* Mermaid diagrams — make SVG fill the bubble width */
+/* Mermaid diagrams — thumbnail (click to expand) */
 .ca-msg--assistant .ca-msg__bubble .mermaid-container {
   width: 100%;
   box-sizing: border-box;
+  cursor: zoom-in;
+  transition: opacity 0.15s;
+}
+.ca-msg--assistant .ca-msg__bubble .mermaid-container:hover {
+  opacity: 0.85;
 }
 .ca-msg--assistant .ca-msg__bubble .mermaid-container svg {
   max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Mermaid full-screen overlay */
+.mermaid-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.88);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  cursor: zoom-out;
+}
+.mermaid-overlay__content {
+  position: relative;
+  max-width: 92vw;
+  max-height: 92vh;
+  overflow: auto;
+  background: #0d0e1a;
+  border: 1px solid #2a2a3a;
+  border-radius: 10px;
+  padding: 20px;
+  cursor: default;
+}
+.mermaid-overlay__close {
+  position: sticky;
+  top: 0;
+  float: right;
+  margin-left: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid #333;
+  color: #aaa;
+  font-size: 14px;
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  z-index: 1;
+}
+.mermaid-overlay__close:hover { background: rgba(255,255,255,0.16); color: #fff; }
+.mermaid-overlay__diagram svg {
+  display: block;
+  max-width: none;
   height: auto;
 }
 
