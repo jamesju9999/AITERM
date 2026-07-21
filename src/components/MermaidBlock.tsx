@@ -8,11 +8,11 @@ mermaid.initialize({
   securityLevel: "loose", // needed for some interactive diagram features or styling
 });
 
-// Mermaid's lexer treats Fullwidth/Halfwidth Forms (U+FF01–U+FF60) as unknown tokens.
 // Sanitize Mermaid code to fix common model-generated syntax issues:
 // 1. Fullwidth/Halfwidth Forms (U+FF01–U+FF60) → ASCII equivalents
-// 2. Edge labels containing ASCII parentheses → wrapped in quotes so the
-//    parser doesn't mistake "(" for a node-shape token.
+// 2. <br/> / <br> tags in node labels → space  (<br/>'s ">" confuses the lexer
+//    into reading it as a LINK_ID token, causing "got 'LINK_ID'" parse errors)
+// 3. Edge labels containing parentheses → quoted so "(" isn't read as a node shape
 function sanitizeMermaid(code: string): string {
   let result = code
     // Full-width punctuation → ASCII
@@ -25,6 +25,11 @@ function sanitizeMermaid(code: string): string {
     .replace(/：/g, ":").replace(/；/g, ";")
     .replace(/「|」|『|』|"|"/g, '"')
     .replace(/『|』/g, "'");
+
+  // Replace <br/>, <br />, <br> with a space.
+  // The ">" in <br/> is tokenised as a LINK_ID (arrow) by Mermaid's lexer
+  // when it appears inside a node label like [Text<br/>More].
+  result = result.replace(/<br\s*\/?>/gi, " ");
 
   // Quote edge labels that contain parentheses.
   // Matches |label| where label has no existing quotes and contains ( or ).
