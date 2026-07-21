@@ -74,6 +74,7 @@ export function KnowledgeBaseView({ isActive }: Props) {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [submitShortcut, setSubmitShortcut] = useState<SubmitShortcut>("enter");
+  const [sourceOpenError, setSourceOpenError] = useState<string | null>(null);
   const submitShortcutRef = useRef<SubmitShortcut>("enter");
   submitShortcutRef.current = submitShortcut;
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -147,7 +148,10 @@ export function KnowledgeBaseView({ isActive }: Props) {
 
   const handleOpenSource = useCallback((path: string) => {
     if (!activeNotebookId) return;
-    void kbOpenDocument(activeNotebookId, path);
+    setSourceOpenError(null);
+    kbOpenDocument(activeNotebookId, path).catch((e) => {
+      setSourceOpenError(String(e));
+    });
   }, [activeNotebookId]);
 
   return (
@@ -231,6 +235,7 @@ export function KnowledgeBaseView({ isActive }: Props) {
                 );
               })}
               {error && <div className="ca-error">{error}</div>}
+              {sourceOpenError && <div className="ca-error">{sourceOpenError}</div>}
               <div ref={messagesEndRef} />
             </div>
 
