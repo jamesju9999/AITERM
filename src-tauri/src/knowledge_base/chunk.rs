@@ -15,11 +15,17 @@ pub fn chunk_markdown(markdown: &str) -> Vec<Chunk> {
     let mut current_heading: Option<String> = None;
     let mut buffer = String::new();
     let mut buffer_heading: Option<String> = None;
+    let mut in_code_fence = false;
 
     for line in markdown.lines() {
-        if let Some(heading) = parse_heading(line) {
-            current_heading = Some(heading);
-            buffer_heading = current_heading.clone();
+        if is_fence_line(line) {
+            in_code_fence = !in_code_fence;
+        }
+        if !in_code_fence {
+            if let Some(heading) = parse_heading(line) {
+                current_heading = Some(heading);
+                buffer_heading = current_heading.clone();
+            }
         }
         if buffer.is_empty() {
             buffer_heading = current_heading.clone();
@@ -56,6 +62,11 @@ fn parse_heading(line: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// True if `line` is a fenced-code-block delimiter (``` optionally followed by a language tag).
+fn is_fence_line(line: &str) -> bool {
+    line.trim_start().starts_with("```")
 }
 
 fn tail_chars(s: &str, n: usize) -> String {
@@ -120,5 +131,13 @@ mod tests {
         let chunks = chunk_markdown(md);
         // 內容量小，只會產生一個 chunk，但驗證切片函式至少能正確解析最後一個標題
         assert_eq!(chunks.last().unwrap().location_hint.as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn hash_inside_code_fence_is_not_treated_as_heading() {
+        let md = "# Real Heading\n\nsome content\n\n```python\n#include fake\nprint('hi')\n```\n\nmore content";
+        let chunks = chunk_markdown(md);
+        assert_eq!(chunks.last().unwrap().location_hint.as_deref(), Some("Real Heading"));
+        assert!(chunks[0].text.contains("#include fake"), "code fence content should still be included in chunk text");
     }
 }
