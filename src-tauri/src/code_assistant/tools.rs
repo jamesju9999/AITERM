@@ -112,6 +112,68 @@ pub fn read_file(project_root: &Path, rel_path: &str) -> Result<ToolResult, Stri
     Ok(ToolResult { content, truncated: false })
 }
 
+const MAX_READ_LINES: usize = 200;
+
+/// Read a specific line range from a file (1-indexed, inclusive).
+/// Returns lines prefixed with line numbers so the model can reference them.
+pub fn read_file_lines(
+    project_root: &Path,
+    rel_path: &str,
+    start_line: usize,
+    end_line: usize,
+) -> Result<ToolResult, String> {
+    let canon_root = project_root.canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
+    let target = resolve_safe(project_root, rel_path)?;
+
+    if tree::is_excluded(&target, &canon_root) {
+        return Err("This file type is not readable".into());
+    }
+    if target.is_dir() {
+        return Err(format!("{rel_path} is a directory, not a file"));
+    }
+
+    let start = start_line.max(1);
+    let end = end_line.max(start);
+
+    let content = fs::read_to_string(&target)
+        .map_err(|e| format!("Cannot read file (may be binary): {e}"))?;
+
+    let total_lines = content.lines().count();
+
+    // Cap window to MAX_READ_LINES
+    let end_capped = end.min(start + MAX_READ_LINES - 1).min(total_lines);
+
+    let lines: Vec<String> = content
+        .lines()
+        .enumerate()
+        .filter(|(i, _)| {
+            let line_no = i + 1;
+            line_no >= start && line_no <= end_capped
+        })
+        .map(|(i, line)| format!("{:>5}: {}", i + 1, line))
+        .collect();
+
+    if lines.is_empty() {
+        return Err(format!(
+            "No lines in range {start}–{end_capped} (file has {total_lines} lines)"
+        ));
+    }
+
+    let truncated = end_capped < end.min(total_lines);
+    let mut result = lines.join("\n");
+    if truncated {
+        result.push_str(&format!(
+            "\n[TRUNCATED: showing lines {start}–{end_capped} of {total_lines}; call again with start_line={} to continue]",
+            end_capped + 1
+        ));
+    } else {
+        result.push_str(&format!("\n[Lines {start}–{end_capped} of {total_lines}]"));
+    }
+
+    Ok(ToolResult { content: result, truncated })
+}
+
 pub fn search_in_files(
     project_root: &Path,
     query: &str,
@@ -432,6 +494,23 @@ mod tests {
         let result = search_in_files(project.path(), "hello", Some(".md"), None).unwrap();
         assert!(result.content.contains("README.md"));
         assert!(!result.content.contains("main.rs"));
+    }
+
+    #[test]
+    fn read_file_lines_returns_range() {
+        let project = make_project();
+        // src/main.rs has 1 line: fn main() { println!("hello"); }
+        let result = read_file_lines(project.path(), "src/main.rs", 1, 1).unwrap();
+        assert!(result.content.contains("fn main"));
+        assert!(result.content.contains("    1:"));
+    }
+
+    #[test]
+    fn read_file_lines_clamps_to_file_length() {
+        let project = make_project();
+        let result = read_file_lines(project.path(), "README.md", 1, 9999).unwrap();
+        assert!(result.content.contains("hello world"));
+        assert!(!result.truncated); // file is short, should not be truncated
     }
 
     #[test]

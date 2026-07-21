@@ -90,8 +90,21 @@ fn tool_definitions() -> Vec<McpToolDefinition> {
             }),
         },
         McpToolDefinition {
+            name: "read_file_lines".into(),
+            description: "Read a specific line range from a file (1-indexed, inclusive). PREFER this over read_file after search_in_files finds a match — read only the relevant section, not the whole file. Lines are returned with line numbers prefixed.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path":       { "type": "string",  "description": "File path relative to project root" },
+                    "start_line": { "type": "integer", "description": "First line to read (1-indexed). Use the line number from search_in_files minus ~10 for context." },
+                    "end_line":   { "type": "integer", "description": "Last line to read (1-indexed, inclusive). Max 200 lines per call." }
+                },
+                "required": ["path", "start_line", "end_line"]
+            }),
+        },
+        McpToolDefinition {
             name: "read_file".into(),
-            description: "Read the full contents of a file. Path is relative to project root. Files over 100 KB are truncated.".into(),
+            description: "Read the full contents of a file. Use only when you need the entire file (e.g. to see all imports or the full class structure). Prefer read_file_lines when you already know the relevant line range from search results.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -128,17 +141,19 @@ Project root: {project_root}
 - get_file_tree(path, depth?): multi-level directory tree. depth 1–5, default 3.
 - find_files(name_pattern, file_extension?): find files by name substring (case-insensitive). Fast — use before search_in_files.
 - list_directory(path): list one directory level.
-- read_file(path): read file contents (capped at 100 KB).
-- search_in_files(query, path?, file_pattern?): grep within a directory subtree. `path` narrows the scope — always set it when you know where relevant code lives.
+- read_file_lines(path, start_line, end_line): read a specific line range (1-indexed, max 200 lines). **Use this instead of read_file whenever search_in_files gives you line numbers.**
+- read_file(path): read the full file (capped at 100 KB). Use only when you need the whole file.
+- search_in_files(query, path?, file_pattern?): grep within a directory subtree. Returns file:line matches. `path` narrows the scope — always set it.
 
 ## Search Strategy (follow in this order)
 
 1. Call get_file_tree("/", 3) once to understand the top-level structure.
 2. Identify the most specific subdirectory where relevant code likely lives (e.g. src/main/java/ for Java, src/ for JS/TS).
 3. Use find_files to locate files by name — faster than grep.
-4. Use search_in_files with `path` scoped to that subdirectory, not the whole project.
-5. Read only files that are directly relevant. Stop reading once you have enough context.
-6. Answer immediately — do not keep searching when you already have the answer.
+4. Use search_in_files (scoped to a subdirectory) to find the relevant line numbers.
+5. Use read_file_lines to read only the section around those line numbers (e.g. match at line 42 → read lines 30–100). This keeps context small.
+6. Use read_file only when you genuinely need the entire file.
+7. Answer immediately once you have enough verified content.
 
 ## Hard Limits
 
@@ -199,6 +214,17 @@ async fn dispatch_tool(
             let path = args["path"].as_str().unwrap_or("/").to_owned();
             let root_clone = root.clone();
             match tokio::task::spawn_blocking(move || tools::list_directory(&root_clone, &path)).await {
+                Ok(Ok(r)) => (r.content, r.truncated),
+                Ok(Err(e)) => (format!("Error: {e}"), false),
+                Err(e) => (format!("Error: {e}"), false),
+            }
+        }
+        "read_file_lines" => {
+            let path = args["path"].as_str().unwrap_or("").to_owned();
+            let start = args["start_line"].as_u64().unwrap_or(1) as usize;
+            let end = args["end_line"].as_u64().unwrap_or(start as u64 + 49) as usize;
+            let root_clone = root.clone();
+            match tokio::task::spawn_blocking(move || tools::read_file_lines(&root_clone, &path, start, end)).await {
                 Ok(Ok(r)) => (r.content, r.truncated),
                 Ok(Err(e)) => (format!("Error: {e}"), false),
                 Err(e) => (format!("Error: {e}"), false),
