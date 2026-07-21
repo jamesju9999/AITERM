@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import type { ChatMessage } from "../ipc/ai";
+import { formatAiError, type AiError, type ChatMessage } from "../ipc/ai";
 import {
   CODE_ASSISTANT_EVENT,
   invokeCodeAssistantChat,
@@ -128,7 +128,8 @@ export function useCodeAssistant(): UseCodeAssistantResult {
       await invokeCodeAssistantChat(projectRoot, chatMessages, sessionId, providerId, locale);
     } catch (e) {
       if (mountedRef.current) {
-        setError(String(e));
+        const isAiError = e != null && typeof e === "object" && "kind" in (e as object);
+        setError(isAiError ? formatAiError(e as AiError) : String(e));
         setIsStreaming(false);
         setMessages((prev) => {
           const next = [...prev];

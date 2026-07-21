@@ -204,7 +204,7 @@ impl AiProvider for OllamaClient {
                 .collect();
             Ok(GenerateWithToolsResult::ToolCalls { calls, raw })
         } else {
-            let content = data.message.content.clone();
+            let content = data.message.content.unwrap_or_default();
             let _ = tx.send(GenerateChunk { delta: content.clone(), done: true, usage: None }).await;
             Ok(GenerateWithToolsResult::Text(content))
         }
@@ -331,7 +331,7 @@ struct OllamaToolResponse {
 #[derive(Deserialize)]
 struct OllamaToolResponseMessage {
     #[serde(default)]
-    content: String,
+    content: Option<String>,
     #[serde(default)]
     tool_calls: Vec<OllamaResponseToolCall>,
 }
@@ -374,7 +374,7 @@ async fn consume_ndjson(
 
             match serde_json::from_str::<OllamaChunk>(line) {
                 Ok(chunk) => {
-                    let text = chunk.message.map(|m| m.content).unwrap_or_default();
+                    let text = chunk.message.and_then(|m| m.content).unwrap_or_default();
                     if !text.is_empty() {
                         let _ = tx.send(GenerateChunk { delta: text, done: false, usage: None }).await;
                     }
@@ -406,7 +406,7 @@ struct OllamaChunk {
 #[derive(Deserialize)]
 struct OllamaChunkMessage {
     #[serde(default)]
-    content: String,
+    content: Option<String>,
 }
 
 #[cfg(test)]
