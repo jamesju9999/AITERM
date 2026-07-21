@@ -243,10 +243,11 @@ pub fn run() {
             ai_chat,
             agent_chat,
             code_assistant_chat,
+            agent_exec,
+            // Knowledge Base
             kb_create_notebook,
             kb_list_notebooks,
             kb_delete_notebook,
-            agent_exec,
             // Config
             get_config,
             set_execution_mode,
