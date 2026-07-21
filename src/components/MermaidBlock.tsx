@@ -29,7 +29,8 @@ function sanitizeMermaid(code: string): string {
   result = result.replace(/<br\s*\/?>/gi, " ");
 
   // Quote edge labels that contain parentheses so "(" isn't read as node shape.
-  result = result.replace(/\|([^|"]*[()][^|"]*)\|/g, '|"$1"|');
+  // [^\n|"] prevents matching across lines (which would corrupt unrelated labels).
+  result = result.replace(/\|([^\n|"]*[()][^\n|"]*)\|/g, '|"$1"|');
 
   return result;
 }
