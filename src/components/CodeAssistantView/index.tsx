@@ -168,7 +168,8 @@ export function CodeAssistantView({ isActive }: Props) {
           </div>
         )}
         {messages.map((msg, i) => {
-          const readPaths = msg.role === "assistant" && !msg.streaming
+          const isDone = msg.role === "assistant" && !msg.streaming;
+          const readPaths = isDone
             ? [...new Set(
                 (msg.toolCalls ?? [])
                   .filter((tc) =>
@@ -177,6 +178,22 @@ export function CodeAssistantView({ isActive }: Props) {
                     !tc.result.content.startsWith("Error:")
                   )
                   .map((tc) => String(tc.args.path ?? ""))
+                  .filter(Boolean)
+              )]
+            : [];
+          const searchedPaths = isDone
+            ? [...new Set(
+                (msg.toolCalls ?? [])
+                  .filter((tc) =>
+                    tc.tool === "search_in_files" &&
+                    tc.result !== undefined &&
+                    !tc.result.content.startsWith("Error:")
+                  )
+                  .map((tc) => {
+                    const q = String(tc.args.query ?? "");
+                    const p = String(tc.args.path ?? "");
+                    return p ? `${q} (${p})` : q;
+                  })
                   .filter(Boolean)
               )]
             : [];
@@ -196,14 +213,28 @@ export function CodeAssistantView({ isActive }: Props) {
                   {msg.streaming && <span className="ca-streaming-cursor" />}
                 </div>
               )}
-              {readPaths.length > 0 && (
-                <div className="ca-files-read">
-                  <span className="ca-files-read__label">{t.ca_files_read_label}</span>
-                  {readPaths.map((p) => (
-                    <span key={p} className="ca-files-read__path" title={p}>
-                      {p.split("/").pop()}
-                    </span>
-                  ))}
+              {(readPaths.length > 0 || searchedPaths.length > 0) && (
+                <div className="ca-files-accessed">
+                  {readPaths.length > 0 && (
+                    <div className="ca-files-read">
+                      <span className="ca-files-read__label">{t.ca_files_read_label}</span>
+                      {readPaths.map((p) => (
+                        <span key={p} className="ca-files-read__path" title={p}>
+                          {p.split("/").pop()}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {searchedPaths.length > 0 && (
+                    <div className="ca-files-searched">
+                      <span className="ca-files-searched__label">{t.ca_files_searched_label}</span>
+                      {searchedPaths.map((s) => (
+                        <span key={s} className="ca-files-searched__query" title={s}>
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

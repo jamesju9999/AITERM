@@ -351,14 +351,21 @@
   height: auto;
 }
 
-/* Files actually read — shown below assistant message to help detect hallucinated paths */
+/* Files accessed — shown below assistant message to help detect hallucinated paths */
+.ca-files-accessed {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 5px;
+  padding: 0 2px;
+}
+
+/* Green chips: files actually opened with read_file / read_file_lines */
 .ca-files-read {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
-  margin-top: 4px;
-  padding: 0 2px;
 }
 .ca-files-read__label {
   font-size: 10px;
@@ -380,6 +387,34 @@
   white-space: nowrap;
 }
 .ca-files-read__path:hover { color: #4ade80; border-color: rgba(74, 222, 128, 0.3); }
+
+/* Gray chips: files only found via search_in_files — NOT verified by reading */
+.ca-files-searched {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.ca-files-searched__label {
+  font-size: 10px;
+  color: #3a3a3a;
+  flex-shrink: 0;
+}
+.ca-files-searched__query {
+  font-size: 10px;
+  font-family: monospace;
+  color: #555;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid #2a2a2a;
+  border-radius: 3px;
+  padding: 1px 5px;
+  cursor: default;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ca-files-searched__query:hover { color: #888; border-color: #444; }
 
 .ca-error {
   color: #f87171;
