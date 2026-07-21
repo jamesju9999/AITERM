@@ -129,12 +129,12 @@ pub async fn list_notebooks(pool: &SqlitePool) -> Result<Vec<NotebookRow>, sqlx:
 }
 
 pub async fn delete_notebook(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "DELETE FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE notebook_id = ?)"
-    ).bind(id).execute(pool).await?;
-    sqlx::query("DELETE FROM documents WHERE notebook_id = ?").bind(id).execute(pool).await?;
-    sqlx::query("DELETE FROM notebooks WHERE id = ?").bind(id).execute(pool).await?;
-    Ok(())
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE notebook_id = ?)")
+        .bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM documents WHERE notebook_id = ?").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM notebooks WHERE id = ?").bind(id).execute(&mut *tx).await?;
+    tx.commit().await
 }
 
 pub async fn update_embed_settings(

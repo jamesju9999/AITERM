@@ -110,3 +110,32 @@ async fn real_init_creates_working_schema() {
     let fetched = get_notebook(&db.pool, &created.id).await.expect("get notebook");
     assert_eq!(fetched.name, "Real Init Notebook");
 }
+
+#[tokio::test]
+async fn delete_notebook_cascades_to_documents_and_chunks() {
+    let pool = setup_pool().await;
+    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None).await.unwrap();
+
+    sqlx::query(
+        "INSERT INTO documents (id, notebook_id, rel_path, mtime, content_hash, status)
+         VALUES ('doc-1', ?, 'a.txt', 0, 'hash1', 'ok')"
+    ).bind(&notebook.id).execute(&pool).await.unwrap();
+
+    sqlx::query(
+        "INSERT INTO chunks (id, document_id, chunk_index, text, embedding)
+         VALUES ('chunk-1', 'doc-1', 0, 'some text', x'00')"
+    ).execute(&pool).await.unwrap();
+
+    let doc_count_before: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM documents WHERE notebook_id = ?")
+        .bind(&notebook.id).fetch_one(&pool).await.unwrap();
+    assert_eq!(doc_count_before.0, 1);
+
+    delete_notebook(&pool, &notebook.id).await.expect("delete notebook");
+
+    let doc_count_after: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM documents WHERE notebook_id = ?")
+        .bind(&notebook.id).fetch_one(&pool).await.unwrap();
+    let chunk_count_after: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM chunks WHERE document_id = 'doc-1'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(doc_count_after.0, 0, "documents should be deleted when notebook is deleted");
+    assert_eq!(chunk_count_after.0, 0, "chunks should be deleted when notebook is deleted");
+}
