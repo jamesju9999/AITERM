@@ -101,9 +101,10 @@ Instructions:
 1. Start by exploring the project structure if you need it.
 2. Only read files that are directly relevant to the user's question.
 3. Be concise and direct in your answers.
-4. Always reference specific file paths when discussing code.
-5. Respond in {language}.
-6. When drawing Mermaid diagrams, use only ASCII characters in node IDs, edge labels, and subgraph IDs. Put translated labels in a legend or description outside the diagram block to avoid parse errors."#
+4. NEVER mention or reference a file path unless you have confirmed it exists by calling list_directory, read_file, or search_in_files in this conversation. If you are unsure where something is, use search_in_files to find it first. Do not guess or invent file names.
+5. If you cannot find relevant code after searching, honestly say so — do not speculate about what might exist.
+6. Respond in {language}.
+7. When drawing Mermaid diagrams, use only ASCII characters in node IDs, edge labels, and subgraph IDs. Put translated labels in a legend or description outside the diagram block to avoid parse errors."#
     )
 }
 
