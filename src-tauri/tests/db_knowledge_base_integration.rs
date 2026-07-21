@@ -1,5 +1,9 @@
 // src-tauri/tests/db_knowledge_base_integration.rs
 use sqlx::sqlite::SqlitePoolOptions;
+use aiterm_lib::db::knowledge_base::{
+    create_notebook, get_notebook, list_notebooks, delete_notebook, mark_synced,
+    KnowledgeBaseDb,
+};
 
 async fn setup_pool() -> sqlx::SqlitePool {
     let pool = SqlitePoolOptions::new()
@@ -63,4 +67,46 @@ async fn schema_allows_notebook_insert_and_select() {
     assert_eq!(row.0, "nb-1");
     assert_eq!(row.1, "My Notebook");
     assert_eq!(row.2, "/tmp/docs");
+}
+
+#[tokio::test]
+async fn notebook_crud_roundtrip() {
+    let pool = setup_pool().await;
+
+    let created = create_notebook(&pool, "My Docs", "/tmp/docs", Some("ollama-local"), Some("nomic-embed-text"))
+        .await.expect("create notebook");
+    assert_eq!(created.name, "My Docs");
+    assert_eq!(created.folder_path, "/tmp/docs");
+    assert_eq!(created.embed_provider_id.as_deref(), Some("ollama-local"));
+    assert!(created.last_synced_at.is_none());
+
+    let fetched = get_notebook(&pool, &created.id).await.expect("get notebook");
+    assert_eq!(fetched.id, created.id);
+
+    let list = list_notebooks(&pool).await.expect("list notebooks");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, created.id);
+
+    mark_synced(&pool, &created.id, 1_700_000_000).await.expect("mark synced");
+    let after_sync = get_notebook(&pool, &created.id).await.expect("get after sync");
+    assert_eq!(after_sync.last_synced_at, Some(1_700_000_000));
+
+    delete_notebook(&pool, &created.id).await.expect("delete notebook");
+    let list_after_delete = list_notebooks(&pool).await.expect("list after delete");
+    assert!(list_after_delete.is_empty());
+}
+
+#[tokio::test]
+async fn real_init_creates_working_schema() {
+    let pool = SqlitePoolOptions::new()
+        .connect("sqlite::memory:")
+        .await
+        .expect("in-memory pool");
+    let db = KnowledgeBaseDb { pool };
+    db.init().await.expect("init should succeed against a fresh in-memory db");
+
+    let created = create_notebook(&db.pool, "Real Init Notebook", "/tmp/x", None, None)
+        .await.expect("create notebook against real init() schema");
+    let fetched = get_notebook(&db.pool, &created.id).await.expect("get notebook");
+    assert_eq!(fetched.name, "Real Init Notebook");
 }

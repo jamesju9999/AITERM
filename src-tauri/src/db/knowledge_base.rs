@@ -48,7 +48,7 @@ impl KnowledgeBaseDb {
         db
     }
 
-    async fn init(&self) -> Result<(), sqlx::Error> {
+    pub async fn init(&self) -> Result<(), sqlx::Error> {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS notebooks (
                 id TEXT PRIMARY KEY NOT NULL,
@@ -94,4 +94,64 @@ impl KnowledgeBaseDb {
 
         Ok(())
     }
+}
+
+pub async fn create_notebook(
+    pool: &SqlitePool,
+    name: &str,
+    folder_path: &str,
+    embed_provider_id: Option<&str>,
+    embed_model: Option<&str>,
+) -> Result<NotebookRow, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO notebooks (id, name, folder_path, embed_provider_id, embed_model)
+         VALUES (?, ?, ?, ?, ?)"
+    )
+    .bind(&id).bind(name).bind(folder_path).bind(embed_provider_id).bind(embed_model)
+    .execute(pool).await?;
+
+    get_notebook(pool, &id).await
+}
+
+pub async fn get_notebook(pool: &SqlitePool, id: &str) -> Result<NotebookRow, sqlx::Error> {
+    sqlx::query_as::<_, NotebookRow>(
+        "SELECT id, name, folder_path, embed_provider_id, embed_model, embed_dim, last_synced_at, created_at
+         FROM notebooks WHERE id = ?"
+    ).bind(id).fetch_one(pool).await
+}
+
+pub async fn list_notebooks(pool: &SqlitePool) -> Result<Vec<NotebookRow>, sqlx::Error> {
+    sqlx::query_as::<_, NotebookRow>(
+        "SELECT id, name, folder_path, embed_provider_id, embed_model, embed_dim, last_synced_at, created_at
+         FROM notebooks ORDER BY created_at DESC"
+    ).fetch_all(pool).await
+}
+
+pub async fn delete_notebook(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE notebook_id = ?)"
+    ).bind(id).execute(pool).await?;
+    sqlx::query("DELETE FROM documents WHERE notebook_id = ?").bind(id).execute(pool).await?;
+    sqlx::query("DELETE FROM notebooks WHERE id = ?").bind(id).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn update_embed_settings(
+    pool: &SqlitePool,
+    id: &str,
+    embed_provider_id: &str,
+    embed_model: &str,
+    embed_dim: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE notebooks SET embed_provider_id = ?, embed_model = ?, embed_dim = ? WHERE id = ?"
+    ).bind(embed_provider_id).bind(embed_model).bind(embed_dim).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn mark_synced(pool: &SqlitePool, id: &str, ts: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE notebooks SET last_synced_at = ? WHERE id = ?")
+        .bind(ts).bind(id).execute(pool).await?;
+    Ok(())
 }
