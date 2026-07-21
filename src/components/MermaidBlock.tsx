@@ -9,9 +9,13 @@ mermaid.initialize({
 });
 
 // Mermaid's lexer treats Fullwidth/Halfwidth Forms (U+FF01–U+FF60) as unknown tokens.
-// Replace them with ASCII equivalents so Chinese-text labels still render correctly.
+// Sanitize Mermaid code to fix common model-generated syntax issues:
+// 1. Fullwidth/Halfwidth Forms (U+FF01–U+FF60) → ASCII equivalents
+// 2. Edge labels containing ASCII parentheses → wrapped in quotes so the
+//    parser doesn't mistake "(" for a node-shape token.
 function sanitizeMermaid(code: string): string {
-  return code
+  let result = code
+    // Full-width punctuation → ASCII
     .replace(/（/g, "(").replace(/）/g, ")")
     .replace(/【/g, "[").replace(/】/g, "]")
     .replace(/｛/g, "{").replace(/｝/g, "}")
@@ -21,6 +25,12 @@ function sanitizeMermaid(code: string): string {
     .replace(/：/g, ":").replace(/；/g, ";")
     .replace(/「|」|『|』|"|"/g, '"')
     .replace(/『|』/g, "'");
+
+  // Quote edge labels that contain parentheses.
+  // Matches |label| where label has no existing quotes and contains ( or ).
+  result = result.replace(/\|([^|"]*[()][^|"]*)\|/g, '|"$1"|');
+
+  return result;
 }
 
 interface MermaidBlockProps {
