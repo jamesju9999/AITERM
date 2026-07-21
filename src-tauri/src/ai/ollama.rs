@@ -441,7 +441,7 @@ mod tests {
         let raw = r#"{"model":"llama3","created_at":"2024","message":{"role":"assistant","content":"hello"},"done":false}"#;
         let chunk: OllamaChunk = serde_json::from_str(raw).unwrap();
         assert!(!chunk.done);
-        assert_eq!(chunk.message.unwrap().content, "hello");
+        assert_eq!(chunk.message.unwrap().content, Some("hello".to_owned()));
     }
 
     #[test]

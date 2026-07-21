@@ -39,6 +39,8 @@ fn resolve_safe(project_root: &Path, rel_path: &str) -> Result<PathBuf, String> 
 }
 
 pub fn list_directory(project_root: &Path, rel_path: &str) -> Result<ToolResult, String> {
+    let canon_root = project_root.canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
     let target = resolve_safe(project_root, rel_path)?;
 
     if !target.is_dir() {
@@ -50,7 +52,7 @@ pub fn list_directory(project_root: &Path, rel_path: &str) -> Result<ToolResult,
 
     let mut names: Vec<String> = entries
         .filter_map(|e| e.ok())
-        .filter(|e| !tree::is_excluded(&e.path(), project_root))
+        .filter(|e| !tree::is_excluded(&e.path(), &canon_root))
         .map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             let suffix = match e.file_type() {
@@ -75,9 +77,11 @@ pub fn list_directory(project_root: &Path, rel_path: &str) -> Result<ToolResult,
 }
 
 pub fn read_file(project_root: &Path, rel_path: &str) -> Result<ToolResult, String> {
+    let canon_root = project_root.canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
     let target = resolve_safe(project_root, rel_path)?;
 
-    if tree::is_excluded(&target, project_root) {
+    if tree::is_excluded(&target, &canon_root) {
         return Err("This file type is not readable".into());
     }
 
@@ -112,18 +116,34 @@ pub fn search_in_files(
     project_root: &Path,
     query: &str,
     file_pattern: Option<&str>,
+    search_path: Option<&str>,
 ) -> Result<ToolResult, String> {
-    search_in_files_with_progress(project_root, query, file_pattern, &|_| {})
+    search_in_files_with_progress(project_root, query, file_pattern, search_path, &|_| {})
 }
 
 pub fn search_in_files_with_progress(
     project_root: &Path,
     query: &str,
     file_pattern: Option<&str>,
+    search_path: Option<&str>,
     on_progress: &dyn Fn(&str),
 ) -> Result<ToolResult, String> {
+    let canon_root = project_root.canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
+
+    let start_dir = match search_path {
+        Some(p) if !p.trim_start_matches('/').is_empty() && p != "/" => {
+            match resolve_safe(project_root, p) {
+                Ok(d) if d.is_dir() => d,
+                Ok(_) => return Err(format!("Not a directory: {p}")),
+                Err(e) => return Err(e),
+            }
+        }
+        _ => canon_root.clone(),
+    };
+
     let mut matches: Vec<String> = Vec::new();
-    search_recursive(project_root, project_root, query, file_pattern, &mut matches, on_progress);
+    search_recursive(&canon_root, &start_dir, query, file_pattern, &mut matches, on_progress);
 
     let count_truncated = matches.len() > MAX_SEARCH_MATCHES;
     if count_truncated {
@@ -225,9 +245,11 @@ pub fn find_files(
     name_pattern: &str,
     file_extension: Option<&str>,
 ) -> Result<ToolResult, String> {
+    let canon_root = project_root.canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
     let mut results: Vec<String> = Vec::new();
     let pattern_lower = name_pattern.to_lowercase();
-    find_recursive(project_root, project_root, &pattern_lower, file_extension, &mut results);
+    find_recursive(&canon_root, &canon_root, &pattern_lower, file_extension, &mut results);
 
     let truncated = results.len() > MAX_FIND_RESULTS;
     if truncated {
@@ -285,6 +307,8 @@ pub fn get_file_tree(
     rel_path: &str,
     depth: usize,
 ) -> Result<ToolResult, String> {
+    let canon_root = project_root.canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
     let target = resolve_safe(project_root, rel_path)?;
     if !target.is_dir() {
         return Err(format!("{rel_path} is not a directory"));
@@ -298,7 +322,7 @@ pub fn get_file_tree(
     };
 
     let mut lines: Vec<String> = vec![format!("{root_name}/")];
-    build_tree(&target, project_root, 1, max_depth, "", &mut lines);
+    build_tree(&target, &canon_root, 1, max_depth, "", &mut lines);
 
     let truncated = lines.len() > MAX_TREE_LINES;
     if truncated {
@@ -398,15 +422,23 @@ mod tests {
     #[test]
     fn search_finds_match() {
         let project = make_project();
-        let result = search_in_files(project.path(), "hello", None).unwrap();
+        let result = search_in_files(project.path(), "hello", None, None).unwrap();
         assert!(result.content.contains("main.rs") && result.content.contains("README.md"));
     }
 
     #[test]
     fn search_with_pattern_filters() {
         let project = make_project();
-        let result = search_in_files(project.path(), "hello", Some(".md")).unwrap();
+        let result = search_in_files(project.path(), "hello", Some(".md"), None).unwrap();
         assert!(result.content.contains("README.md"));
         assert!(!result.content.contains("main.rs"));
+    }
+
+    #[test]
+    fn search_scoped_to_subdirectory() {
+        let project = make_project();
+        let result = search_in_files(project.path(), "hello", None, Some("src")).unwrap();
+        assert!(result.content.contains("main.rs"));
+        assert!(!result.content.contains("README.md"));
     }
 }

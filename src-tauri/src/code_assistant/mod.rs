@@ -102,12 +102,13 @@ fn tool_definitions() -> Vec<McpToolDefinition> {
         },
         McpToolDefinition {
             name: "search_in_files".into(),
-            description: "Search for a text pattern across all project files (case-insensitive). Returns file:line matches. Use find_files when searching by file name instead.".into(),
+            description: "Search for a text pattern in project files (case-insensitive). ALWAYS set `path` to the most specific relevant subdirectory — never search the whole project when you already know where to look.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "query":        { "type": "string", "description": "Text to search for" },
-                    "file_pattern": { "type": "string", "description": "Optional file extension filter, e.g. '.rs', '.ts', '.java'" }
+                    "query":        { "type": "string", "description": "Text to search for (single precise term gives better results than broad terms)" },
+                    "path":         { "type": "string", "description": "Subdirectory to search within (relative to project root, e.g. 'src/main/java/'). Omit only if you have no idea where the code lives." },
+                    "file_pattern": { "type": "string", "description": "Optional file extension filter, e.g. '.java', '.xml', '.properties'" }
                 },
                 "required": ["query"]
             }),
@@ -122,25 +123,32 @@ r#"You are a code assistant helping the user understand and work with a software
 
 Project root: {project_root}
 
-You have five tools:
-- get_file_tree(path, depth?): multi-level directory tree (use "/" for root, depth 1–5, default 3). USE THIS FIRST to orient yourself.
-- find_files(name_pattern, file_extension?): find files by name substring (case-insensitive). Use when you know part of a file name.
-- list_directory(path): list a single directory level.
-- read_file(path): read a file's contents (capped at 100 KB).
-- search_in_files(query, file_pattern?): grep across the project (case-insensitive).
+## Tools
 
-Strategy:
-- Start with get_file_tree("/", 3) to understand project structure.
-- Use find_files when looking for a file by name rather than searching its contents.
-- Use search_in_files only for finding code patterns or content — it can be slow on large projects, so be specific.
-- Read only files directly relevant to the question.
-- When you have enough context, answer directly without reading more files.
+- get_file_tree(path, depth?): multi-level directory tree. depth 1–5, default 3.
+- find_files(name_pattern, file_extension?): find files by name substring (case-insensitive). Fast — use before search_in_files.
+- list_directory(path): list one directory level.
+- read_file(path): read file contents (capped at 100 KB).
+- search_in_files(query, path?, file_pattern?): grep within a directory subtree. `path` narrows the scope — always set it when you know where relevant code lives.
 
-Rules:
-1. NEVER mention or reference a file path unless you confirmed it exists via a tool call in this conversation. Do not guess file names.
-2. If you cannot find something after targeted searching, say so honestly.
-3. Respond in {language}.
-4. When drawing Mermaid diagrams, use only ASCII characters in node IDs and edge labels. Put translated labels in a legend outside the diagram block."#
+## Search Strategy (follow in this order)
+
+1. Call get_file_tree("/", 3) once to understand the top-level structure.
+2. Identify the most specific subdirectory where relevant code likely lives (e.g. src/main/java/ for Java, src/ for JS/TS).
+3. Use find_files to locate files by name — faster than grep.
+4. Use search_in_files with `path` scoped to that subdirectory, not the whole project.
+5. Read only files that are directly relevant. Stop reading once you have enough context.
+6. Answer immediately — do not keep searching when you already have the answer.
+
+## Hard Limits
+
+- At most 3 search_in_files calls per question. If you haven't found what you need in 3 searches, state what you found and what is missing.
+- Always set `path` in search_in_files unless you have genuinely no idea where to look.
+- Pick one precise search term per call — a focused term gives better results than a broad one.
+- NEVER mention a file path unless you confirmed it exists via a tool call in this session.
+- If you cannot find something after targeted searching, say so honestly.
+- Respond in {language}.
+- When drawing Mermaid diagrams, use only ASCII characters in node IDs and edge labels."#
     )
 }
 
@@ -198,6 +206,7 @@ async fn dispatch_tool(
         "search_in_files" => {
             let query = args["query"].as_str().unwrap_or("").to_owned();
             let pattern = args.get("file_pattern").and_then(|v| v.as_str()).map(|s| s.to_owned());
+            let search_path = args.get("path").and_then(|v| v.as_str()).map(|s| s.to_owned());
             let root_clone = root.clone();
             let app_clone = app.clone();
             let session_id_owned = session_id.to_owned();
@@ -210,6 +219,7 @@ async fn dispatch_tool(
                     &root_clone,
                     &query,
                     pattern.as_deref(),
+                    search_path.as_deref(),
                     &|dir: &str| { let _ = progress_tx.try_send(dir.to_owned()); },
                 )
             });
