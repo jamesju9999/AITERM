@@ -15,10 +15,12 @@ pub enum ShellVariant {
 impl ShellVariant {
     pub fn from_program(program: &str) -> Self {
         let lower = program.to_ascii_lowercase();
-        let leaf = std::path::Path::new(&lower)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or(&lower);
+        // Split on '/' or '\' manually rather than via std::path::Path: Path's
+        // separator is determined by the HOST compile target, not by which
+        // shell produced this string. On a Unix-compiled binary, `\` is not
+        // recognized as a separator, so a Windows-style program path would
+        // never split into a leaf name.
+        let leaf = lower.rsplit(['/', '\\']).next().unwrap_or(&lower);
         let stem = leaf.strip_suffix(".exe").unwrap_or(leaf);
         match stem {
             "pwsh" | "powershell" => ShellVariant::Pwsh,
@@ -122,7 +124,7 @@ fn parse_pwsh(tokens: &[String], cwd: &Path) -> ParsedCd {
     }
     match tokens.get(1) {
         None => ParsedCd::NotCd, // `cd` alone in pwsh is a no-op (prints cwd)
-        Some(arg) => resolve_target(arg, cwd),
+        Some(arg) => resolve_target(arg, cwd, ShellVariant::Pwsh),
     }
 }
 
@@ -138,7 +140,7 @@ fn parse_cmd(tokens: &[String], cwd: &Path) -> ParsedCd {
     }
     match tokens.get(idx) {
         None => ParsedCd::NotCd, // `cd` alone in cmd prints current dir, no change
-        Some(arg) => resolve_target(arg, cwd),
+        Some(arg) => resolve_target(arg, cwd, ShellVariant::Cmd),
     }
 }
 
@@ -159,18 +161,83 @@ fn parse_bash(tokens: &[String], cwd: &Path) -> ParsedCd {
                 ParsedCd::NotCd
             }
         }
-        Some(arg) => resolve_target(arg, cwd),
+        Some(arg) => resolve_target(arg, cwd, ShellVariant::Bash),
     }
 }
 
-fn resolve_target(arg: &str, cwd: &Path) -> ParsedCd {
+/// Resolve `arg` against `cwd` using the path syntax of `shell`, not the host
+/// compile target's native syntax. Windows-flavored shells (pwsh/cmd) need
+/// `\`-separated joining and drive-letter absolute detection regardless of
+/// whether this binary is compiled for macOS/Linux/Windows — the shell being
+/// parsed may be running on a different machine entirely (e.g. over SSH).
+fn resolve_target(arg: &str, cwd: &Path, shell: ShellVariant) -> ParsedCd {
+    if matches!(shell, ShellVariant::Pwsh | ShellVariant::Cmd) {
+        let cwd_str = cwd.to_string_lossy();
+        let joined = if is_windows_absolute(arg) {
+            arg.to_string()
+        } else {
+            windows_join(&cwd_str, arg)
+        };
+        return ParsedCd::ChangeTo(PathBuf::from(windows_normalize(&joined)));
+    }
     let p = Path::new(arg);
     let joined = if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) };
     ParsedCd::ChangeTo(normalize(&joined))
 }
 
+/// Windows-style absolute path: drive letter (`C:\`, `C:/`) or UNC (`\\server\share`).
+fn is_windows_absolute(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    let has_drive_letter = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/');
+    has_drive_letter || path.starts_with("\\\\") || path.starts_with("//")
+}
+
+/// Join a Windows-style relative segment onto a Windows-style base path,
+/// as plain string concatenation (no host Path semantics involved).
+fn windows_join(base: &str, rest: &str) -> String {
+    if base.ends_with('\\') || base.ends_with('/') {
+        format!("{base}{rest}")
+    } else {
+        format!("{base}\\{rest}")
+    }
+}
+
+/// Collapse `.`/`..` components in a Windows-style path string, keeping the
+/// drive-letter prefix (if any) rooted so `..` can never pop past it.
+fn windows_normalize(path: &str) -> String {
+    let (prefix, rest) = match path.as_bytes() {
+        [_, b':', ..] => (&path[..2], &path[2..]),
+        _ => ("", path),
+    };
+    let mut stack: Vec<&str> = Vec::new();
+    for part in rest.split(['\\', '/']) {
+        match part {
+            "" | "." => {}
+            ".." => { stack.pop(); }
+            p => stack.push(p),
+        }
+    }
+    format!("{prefix}\\{}", stack.join("\\"))
+}
+
+/// Parent of a Windows-style path (one level up). A drive root (`C:\`) has
+/// no parent and is returned unchanged, matching Windows shell behavior.
+fn windows_parent(path: &str) -> String {
+    let trimmed = path.trim_end_matches(['\\', '/']);
+    match trimmed.rfind(['\\', '/']) {
+        Some(idx) => {
+            let head = &trimmed[..idx];
+            if head.ends_with(':') { format!("{head}\\") } else { head.to_string() }
+        }
+        None => path.to_string(),
+    }
+}
+
 fn parent_or_root(p: &Path) -> PathBuf {
-    p.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| p.to_path_buf())
+    PathBuf::from(windows_parent(&p.to_string_lossy()))
 }
 
 /// Normalize a path by collapsing `.` and `..` components without touching the
