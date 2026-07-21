@@ -101,7 +101,26 @@
       "Bash(find /Users/jamesju/Documents/GitHub/AITERM -maxdepth 1 -type d)",
       "Bash(find /Users/jamesju/Documents/GitHub/AITERM/docs -iname \"*ai-output-locale*\")",
       "Bash(CARGO_TARGET_DIR=/Users/jamesju/Documents/GitHub/AITERM/src-tauri/target cargo check --lib --tests)",
-      "Bash(CARGO_TARGET_DIR=/Users/jamesju/Documents/GitHub/AITERM/src-tauri/target cargo check)"
+      "Bash(CARGO_TARGET_DIR=/Users/jamesju/Documents/GitHub/AITERM/src-tauri/target cargo check)",
+      "Bash(rustc --edition 2021 src/code_assistant/tree.rs --crate-type lib)",
+      "Bash(rustc *)",
+      "Bash(sed -i '' 's/\"version\": \"0.1.109\"/\"version\": \"0.1.110\"/g' /Users/jamesju/Documents/GitHub/AITERM/package.json /Users/jamesju/Documents/GitHub/AITERM/src-tauri/tauri.conf.json)",
+      "Bash(sed -i '' 's/^version = \"0.1.109\"/version = \"0.1.110\"/' /Users/jamesju/Documents/GitHub/AITERM/src-tauri/Cargo.toml)",
+      "Bash(grep -v \"^$\")",
+      "Bash(sed -i '' 's/\"version\": \"0.1.110\"/\"version\": \"0.1.111\"/g' package.json src-tauri/tauri.conf.json)",
+      "Bash(sed -i '' 's/^version = \"0.1.110\"/version = \"0.1.111\"/' src-tauri/Cargo.toml)",
+      "Bash(npm version *)",
+      "Bash(awk '{print $1, $2, $3, $4, $11}')",
+      "Bash(awk '{print $2, $3, $4, $11}')",
+      "Bash(ps *)",
+      "Bash(curl -s http://localhost:11434/api/ps)",
+      "Bash(sed -i '' 's/\"version\": \"0\\\\.1\\\\.116\"/\"version\": \"0.1.117\"/' package.json src-tauri/tauri.conf.json)",
+      "Bash(sed -i '' 's/^version = \"0\\\\.1\\\\.116\"/version = \"0.1.117\"/' src-tauri/Cargo.toml)",
+      "Bash(awk '{print $2, $3, $4, $8}')",
+      "Bash(rm -f /Users/jamesju/Documents/GitHub/AITERM/.git/index.lock)",
+      "Bash(sed -i '' 's/\"version\": \"0\\\\.1\\\\.108\"/\"version\": \"0.1.119\"/' package.json)",
+      "Bash(sed -i '' 's/\"version\": \"0\\\\.1\\\\.109\"/\"version\": \"0.1.119\"/' package.json)",
+      "Bash(echo \"exit:$?\")"
     ]
   }
 }
