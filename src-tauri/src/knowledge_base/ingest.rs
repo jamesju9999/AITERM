@@ -124,7 +124,7 @@ pub async fn sync_notebook(
 
     // 先算 hash 判斷哪些檔案真的需要處理（新增或內容變更）。
     // 讀不到內容的檔案直接記成 error，不進入併發處理階段。
-    let mut to_process: Vec<(&ScannedFile, String)> = Vec::new();
+    let mut to_process: Vec<(ScannedFile, String)> = Vec::new();
     for file in &scanned {
         let hash = match hash_file(&file.abs_path) {
             Ok(h) => h,
@@ -140,7 +140,7 @@ pub async fn sync_notebook(
             .map(|d| d.content_hash == hash && d.status == "ok")
             .unwrap_or(false);
         if !unchanged {
-            to_process.push((file, hash));
+            to_process.push((file.clone(), hash));
         }
     }
 
