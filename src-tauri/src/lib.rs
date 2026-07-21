@@ -6,6 +6,7 @@ pub mod config;
 pub mod db;
 pub mod enterprise;
 pub mod guard;
+pub mod knowledge_base;
 pub mod mcp;
 pub mod pty;
 pub mod secret;
