@@ -5,6 +5,8 @@ use crate::code_assistant::tree;
 pub const MAX_LIST_ENTRIES: usize = 200;
 pub const MAX_FILE_BYTES: u64 = 100 * 1024; // 100 KB
 pub const MAX_SEARCH_MATCHES: usize = 50;
+const MAX_SEARCH_LINE_CHARS: usize = 300;
+const MAX_SEARCH_TOTAL_BYTES: usize = 30_000; // ~7 500 tokens
 
 pub struct ToolResult {
     pub content: String,
@@ -112,8 +114,8 @@ pub fn search_in_files(
     let mut matches: Vec<String> = Vec::new();
     search_recursive(project_root, project_root, query, file_pattern, &mut matches);
 
-    let truncated = matches.len() > MAX_SEARCH_MATCHES;
-    if truncated {
+    let count_truncated = matches.len() > MAX_SEARCH_MATCHES;
+    if count_truncated {
         matches.truncate(MAX_SEARCH_MATCHES);
     }
 
@@ -121,9 +123,19 @@ pub fn search_in_files(
         return Ok(ToolResult { content: "No matches found.".into(), truncated: false });
     }
 
+    // Enforce a total byte cap so very long lines don't blow the context window.
+    let content = matches.join("\n");
+    let (content, size_truncated) = if content.len() > MAX_SEARCH_TOTAL_BYTES {
+        let cut = &content[..MAX_SEARCH_TOTAL_BYTES];
+        let safe = cut.rfind('\n').map_or(MAX_SEARCH_TOTAL_BYTES, |p| p);
+        (format!("{}\n[TRUNCATED: result too large]", &content[..safe]), true)
+    } else {
+        (content, false)
+    };
+
     Ok(ToolResult {
-        content: matches.join("\n"),
-        truncated,
+        content,
+        truncated: count_truncated || size_truncated,
     })
 }
 
@@ -176,7 +188,12 @@ fn search_recursive(
                     break;
                 }
                 if line.to_lowercase().contains(&query_lower) {
-                    matches.push(format!("{rel}:{}: {line}", line_num + 1));
+                    let truncated_line = if line.len() > MAX_SEARCH_LINE_CHARS {
+                        format!("{}…", &line[..MAX_SEARCH_LINE_CHARS])
+                    } else {
+                        line.to_string()
+                    };
+                    matches.push(format!("{rel}:{}: {truncated_line}", line_num + 1));
                 }
             }
         }

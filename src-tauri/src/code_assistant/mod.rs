@@ -12,8 +12,9 @@ use crate::ai::{
 };
 
 const MAX_TOOL_ROUNDS: usize = 20;
-/// ~4 chars per token; leave buffer below 262k local model limit
-const TOKEN_ESTIMATE_LIMIT: usize = 200_000;
+/// Conservative limit: ~4 chars/token for Latin/code, 1-2 chars/token for CJK.
+/// We aim for ≤50 000 tokens of tool results to leave room for model output.
+const TOKEN_ESTIMATE_LIMIT: usize = 50_000;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
