@@ -32,7 +32,37 @@ function sanitizeMermaid(code: string): string {
   // [^\n|"] prevents matching across lines (which would corrupt unrelated labels).
   result = result.replace(/\|([^\n|"]*[()][^\n|"]*)\|/g, '|"$1"|');
 
+  // Quote rectangle node labels [text] that contain risky lexer characters
+  // ( ) < > # |, e.g. B[foo.connect()] → B["foo.connect()"].  Unquoted, "("
+  // is lexed as a shape-start token (PS) instead of literal text.
+  result = quoteRiskyBracketLabels(result);
+
   return result;
+}
+
+// Shape syntaxes that reuse [...] but aren't plain rectangles — must not be
+// rewrapped in quotes or their shape (cylinder/subroutine/parallelogram/
+// trapezoid) would be lost.
+function isNonRectangleBracketShape(inner: string): boolean {
+  return (
+    /^\(.*\)$/.test(inner) ||   // [(cylinder)]
+    /^\/.*\/$/.test(inner) ||   // [/parallelogram/]
+    /^\\.*\\$/.test(inner) ||   // [\parallelogram\]
+    /^\/.*\\$/.test(inner) ||   // [/trapezoid\]
+    /^\\.*\/$/.test(inner)      // [\trapezoid/]
+  );
+}
+
+function quoteRiskyBracketLabels(code: string): string {
+  // Negative lookbehind/lookahead skip the inner brackets of [[subroutine]].
+  return code.replace(/(?<!\[)\[([^[\]\n]*)\](?!\])/g, (match, inner: string) => {
+    if (inner.startsWith('"') && inner.endsWith('"')) return match;
+    if (isNonRectangleBracketShape(inner)) return match;
+    if (/[()<>#|]/.test(inner)) {
+      return `["${inner.replace(/"/g, "'")}"]`;
+    }
+    return match;
+  });
 }
 
 // Pass 2 — aggressive fallback when Pass 1 still fails to parse.
