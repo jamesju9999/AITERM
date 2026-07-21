@@ -204,8 +204,12 @@ impl AiProvider for OllamaClient {
                 .collect();
             Ok(GenerateWithToolsResult::ToolCalls { calls, raw })
         } else {
-            let content = data.message.content.unwrap_or_default();
-            let _ = tx.send(GenerateChunk { delta: content.clone(), done: true, usage: None }).await;
+            let raw = data.message.content.unwrap_or_default();
+            let mut in_think = false;
+            let content = strip_think_blocks(&raw, &mut in_think);
+            if !content.is_empty() {
+                let _ = tx.send(GenerateChunk { delta: content.clone(), done: true, usage: None }).await;
+            }
             Ok(GenerateWithToolsResult::Text(content))
         }
     }
@@ -349,6 +353,40 @@ struct OllamaResponseFunction {
 
 // ── NDJSON consumer ───────────────────────────────────────────────────────────
 
+/// Strip `<think>...</think>` blocks from a content chunk.
+/// `in_think` persists across calls so tags that span chunk boundaries are handled.
+/// Partial open/close tags at the end of a chunk are NOT buffered — they emit as-is,
+/// which is the simplest correct behaviour given Ollama's chunk granularity (≥1 char).
+fn strip_think_blocks(text: &str, in_think: &mut bool) -> String {
+    let mut output = String::new();
+    let mut s = text;
+    loop {
+        if *in_think {
+            match s.find("</think>") {
+                Some(pos) => {
+                    *in_think = false;
+                    s = &s[pos + "</think>".len()..];
+                    if s.starts_with('\n') { s = &s[1..]; }
+                }
+                None => break, // whole chunk is inside think block
+            }
+        } else {
+            match s.find("<think>") {
+                Some(pos) => {
+                    output.push_str(&s[..pos]);
+                    *in_think = true;
+                    s = &s[pos + "<think>".len()..];
+                }
+                None => {
+                    output.push_str(s);
+                    break;
+                }
+            }
+        }
+    }
+    output
+}
+
 async fn consume_ndjson(
     resp: reqwest::Response,
     tx: mpsc::Sender<GenerateChunk>,
@@ -356,6 +394,7 @@ async fn consume_ndjson(
     let mut stream = resp.bytes_stream();
     let mut buf = Vec::<u8>::new();
     let mut saw_done = false;
+    let mut in_think = false;
 
     'outer: while let Some(item) = stream.next().await {
         let bytes = item.map_err(|e| AiError::Network { message: e.to_string() })?;
@@ -374,7 +413,8 @@ async fn consume_ndjson(
 
             match serde_json::from_str::<OllamaChunk>(line) {
                 Ok(chunk) => {
-                    let text = chunk.message.and_then(|m| m.content).unwrap_or_default();
+                    let raw = chunk.message.and_then(|m| m.content).unwrap_or_default();
+                    let text = strip_think_blocks(&raw, &mut in_think);
                     if !text.is_empty() {
                         let _ = tx.send(GenerateChunk { delta: text, done: false, usage: None }).await;
                     }
@@ -457,5 +497,41 @@ mod tests {
         // server, so we test the helper indirectly via the string content.
         let fake_err_msg = "Ollama is not running. Please start Ollama and try again.";
         assert!(fake_err_msg.contains("Ollama is not running"));
+    }
+
+    #[test]
+    fn strip_think_blocks_removes_complete_block() {
+        let mut in_think = false;
+        let out = strip_think_blocks("<think>hidden</think>visible", &mut in_think);
+        assert_eq!(out, "visible");
+        assert!(!in_think);
+    }
+
+    #[test]
+    fn strip_think_blocks_suppresses_open_block() {
+        let mut in_think = false;
+        let out = strip_think_blocks("before<think>hidden", &mut in_think);
+        assert_eq!(out, "before");
+        assert!(in_think);
+    }
+
+    #[test]
+    fn strip_think_blocks_resumes_across_chunks() {
+        let mut in_think = false;
+        // chunk 1: enter think
+        let out1 = strip_think_blocks("A<think>thinking...", &mut in_think);
+        assert_eq!(out1, "A");
+        assert!(in_think);
+        // chunk 2: close think and continue
+        let out2 = strip_think_blocks("more thinking</think>B", &mut in_think);
+        assert_eq!(out2, "B");
+        assert!(!in_think);
+    }
+
+    #[test]
+    fn strip_think_blocks_skips_leading_newline_after_close() {
+        let mut in_think = false;
+        let out = strip_think_blocks("<think>x</think>\nresult", &mut in_think);
+        assert_eq!(out, "result");
     }
 }
