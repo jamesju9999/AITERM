@@ -7,6 +7,8 @@ pub const MAX_FILE_BYTES: u64 = 100 * 1024; // 100 KB
 pub const MAX_SEARCH_MATCHES: usize = 50;
 const MAX_SEARCH_LINE_CHARS: usize = 300;
 const MAX_SEARCH_TOTAL_BYTES: usize = 30_000; // ~7 500 tokens
+pub const MAX_FIND_RESULTS: usize = 100;
+const MAX_TREE_LINES: usize = 300;
 
 pub struct ToolResult {
     pub content: String,
@@ -196,6 +198,137 @@ fn search_recursive(
                     matches.push(format!("{rel}:{}: {truncated_line}", line_num + 1));
                 }
             }
+        }
+    }
+}
+
+/// Find files by name pattern (case-insensitive substring match).
+pub fn find_files(
+    project_root: &Path,
+    name_pattern: &str,
+    file_extension: Option<&str>,
+) -> Result<ToolResult, String> {
+    let mut results: Vec<String> = Vec::new();
+    let pattern_lower = name_pattern.to_lowercase();
+    find_recursive(project_root, project_root, &pattern_lower, file_extension, &mut results);
+
+    let truncated = results.len() > MAX_FIND_RESULTS;
+    if truncated {
+        results.truncate(MAX_FIND_RESULTS);
+    }
+
+    if results.is_empty() {
+        return Ok(ToolResult { content: "No files found.".into(), truncated: false });
+    }
+
+    Ok(ToolResult { content: results.join("\n"), truncated })
+}
+
+fn find_recursive(
+    root: &Path,
+    dir: &Path,
+    pattern_lower: &str,
+    ext_filter: Option<&str>,
+    results: &mut Vec<String>,
+) {
+    if results.len() >= MAX_FIND_RESULTS { return; }
+    let Ok(entries) = fs::read_dir(dir) else { return };
+
+    let mut items: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+    items.sort_by_key(|e| e.file_name());
+
+    for entry in items {
+        if results.len() >= MAX_FIND_RESULTS { break; }
+        let path = entry.path();
+        if tree::is_excluded(&path, root) { continue; }
+
+        if path.is_dir() {
+            find_recursive(root, &path, pattern_lower, ext_filter, results);
+        } else {
+            if let Some(ext) = ext_filter {
+                let ext_norm = ext.trim_start_matches('.').to_lowercase();
+                let file_ext = path.extension()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_lowercase();
+                if file_ext != ext_norm { continue; }
+            }
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            if name.contains(pattern_lower) {
+                let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().to_string();
+                results.push(rel);
+            }
+        }
+    }
+}
+
+/// Get a multi-level directory tree (max depth 5, max 300 lines).
+pub fn get_file_tree(
+    project_root: &Path,
+    rel_path: &str,
+    depth: usize,
+) -> Result<ToolResult, String> {
+    let target = resolve_safe(project_root, rel_path)?;
+    if !target.is_dir() {
+        return Err(format!("{rel_path} is not a directory"));
+    }
+
+    let max_depth = depth.clamp(1, 5);
+    let root_name = if rel_path.trim_matches('/').is_empty() {
+        ".".to_string()
+    } else {
+        rel_path.trim_end_matches('/').to_string()
+    };
+
+    let mut lines: Vec<String> = vec![format!("{root_name}/")];
+    build_tree(&target, project_root, 1, max_depth, "", &mut lines);
+
+    let truncated = lines.len() > MAX_TREE_LINES;
+    if truncated {
+        lines.truncate(MAX_TREE_LINES);
+        lines.push("[TRUNCATED]".into());
+    }
+
+    Ok(ToolResult { content: lines.join("\n"), truncated })
+}
+
+fn build_tree(
+    dir: &Path,
+    project_root: &Path,
+    depth: usize,
+    max_depth: usize,
+    prefix: &str,
+    lines: &mut Vec<String>,
+) {
+    if lines.len() >= MAX_TREE_LINES { return; }
+    let Ok(entries) = fs::read_dir(dir) else { return };
+
+    let mut items: Vec<_> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| !tree::is_excluded(&e.path(), project_root))
+        .collect();
+    // dirs first, then files, each group sorted alphabetically
+    items.sort_by_key(|e| {
+        let is_file = e.file_type().map(|t| !t.is_dir()).unwrap_or(true);
+        (is_file, e.file_name())
+    });
+
+    let count = items.len();
+    for (i, entry) in items.iter().enumerate() {
+        if lines.len() >= MAX_TREE_LINES { break; }
+        let is_last = i == count - 1;
+        let connector = if is_last { "└── " } else { "├── " };
+        let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
+        let name = entry.file_name().to_string_lossy().to_string();
+        let path = entry.path();
+
+        if path.is_dir() {
+            lines.push(format!("{prefix}{connector}{name}/"));
+            if depth < max_depth {
+                build_tree(&path, project_root, depth + 1, max_depth, &child_prefix, lines);
+            }
+        } else {
+            lines.push(format!("{prefix}{connector}{name}"));
         }
     }
 }

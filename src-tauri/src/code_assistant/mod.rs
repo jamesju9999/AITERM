@@ -50,8 +50,32 @@ pub enum CodeAssistantEvent {
 fn tool_definitions() -> Vec<McpToolDefinition> {
     vec![
         McpToolDefinition {
+            name: "get_file_tree".into(),
+            description: "Get a multi-level directory tree rooted at the given path. Much more efficient than multiple list_directory calls for understanding project structure. Use this first to orient yourself.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path":  { "type": "string",  "description": "Path relative to project root, e.g. '/' or 'src/'" },
+                    "depth": { "type": "integer", "description": "Depth to traverse (1–5). Default 3.", "default": 3 }
+                },
+                "required": ["path"]
+            }),
+        },
+        McpToolDefinition {
+            name: "find_files".into(),
+            description: "Find files by name pattern (case-insensitive substring). Returns paths relative to project root. Use when you know part of a file name but not its location.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name_pattern":   { "type": "string", "description": "Substring to match against file names, e.g. 'JMS', 'Config', 'Service'" },
+                    "file_extension": { "type": "string", "description": "Optional extension filter, e.g. '.java', '.xml', '.properties'" }
+                },
+                "required": ["name_pattern"]
+            }),
+        },
+        McpToolDefinition {
             name: "list_directory".into(),
-            description: "List files and subdirectories at the given path relative to the project root. Directories are shown with trailing '/'. Use '/' for the project root.".into(),
+            description: "List files and subdirectories at the given path (one level). Use get_file_tree for multi-level views.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -62,7 +86,7 @@ fn tool_definitions() -> Vec<McpToolDefinition> {
         },
         McpToolDefinition {
             name: "read_file".into(),
-            description: "Read the contents of a file. Path is relative to project root. Files over 100 KB are truncated.".into(),
+            description: "Read the full contents of a file. Path is relative to project root. Files over 100 KB are truncated.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -73,12 +97,12 @@ fn tool_definitions() -> Vec<McpToolDefinition> {
         },
         McpToolDefinition {
             name: "search_in_files".into(),
-            description: "Search for a text pattern across all project files (case-insensitive). Returns file:line matches, max 50 results.".into(),
+            description: "Search for a text pattern across all project files (case-insensitive). Returns file:line matches. Use find_files when searching by file name instead.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "query":        { "type": "string", "description": "Text to search for" },
-                    "file_pattern": { "type": "string", "description": "Optional file extension, e.g. '.rs', '.ts'" }
+                    "file_pattern": { "type": "string", "description": "Optional file extension filter, e.g. '.rs', '.ts', '.java'" }
                 },
                 "required": ["query"]
             }),
@@ -93,19 +117,25 @@ r#"You are a code assistant helping the user understand and work with a software
 
 Project root: {project_root}
 
-You have three tools:
-- list_directory(path): list files/subdirectories (use "/" for root)
-- read_file(path): read a file's content
-- search_in_files(query, file_pattern?): grep across the project
+You have five tools:
+- get_file_tree(path, depth?): multi-level directory tree (use "/" for root, depth 1–5, default 3). USE THIS FIRST to orient yourself.
+- find_files(name_pattern, file_extension?): find files by name substring (case-insensitive). Use when you know part of a file name.
+- list_directory(path): list a single directory level.
+- read_file(path): read a file's contents (capped at 100 KB).
+- search_in_files(query, file_pattern?): grep across the project (case-insensitive).
 
-Instructions:
-1. Start by exploring the project structure if you need it.
-2. Only read files that are directly relevant to the user's question.
-3. Be concise and direct in your answers.
-4. NEVER mention or reference a file path unless you have confirmed it exists by calling list_directory, read_file, or search_in_files in this conversation. If you are unsure where something is, use search_in_files to find it first. Do not guess or invent file names.
-5. If you cannot find relevant code after searching, honestly say so — do not speculate about what might exist.
-6. Respond in {language}.
-7. When drawing Mermaid diagrams, use only ASCII characters in node IDs, edge labels, and subgraph IDs. Put translated labels in a legend or description outside the diagram block to avoid parse errors."#
+Strategy:
+- Start with get_file_tree("/", 3) to understand project structure.
+- Use find_files when looking for a file by name rather than searching its contents.
+- Use search_in_files only for finding code patterns or content — it can be slow on large projects, so be specific.
+- Read only files directly relevant to the question.
+- When you have enough context, answer directly without reading more files.
+
+Rules:
+1. NEVER mention or reference a file path unless you confirmed it exists via a tool call in this conversation. Do not guess file names.
+2. If you cannot find something after targeted searching, say so honestly.
+3. Respond in {language}.
+4. When drawing Mermaid diagrams, use only ASCII characters in node IDs and edge labels. Put translated labels in a legend outside the diagram block."#
     )
 }
 
@@ -115,6 +145,22 @@ fn estimate_tokens(s: &str) -> usize {
 
 fn dispatch_tool(root: &PathBuf, name: &str, args: &serde_json::Value) -> (String, bool) {
     match name {
+        "get_file_tree" => {
+            let path = args["path"].as_str().unwrap_or("/");
+            let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
+            match tools::get_file_tree(root, path, depth) {
+                Ok(r) => (r.content, r.truncated),
+                Err(e) => (format!("Error: {e}"), false),
+            }
+        }
+        "find_files" => {
+            let pattern = args["name_pattern"].as_str().unwrap_or("");
+            let ext = args.get("file_extension").and_then(|v| v.as_str());
+            match tools::find_files(root, pattern, ext) {
+                Ok(r) => (r.content, r.truncated),
+                Err(e) => (format!("Error: {e}"), false),
+            }
+        }
         "list_directory" => {
             let path = args["path"].as_str().unwrap_or("/");
             match tools::list_directory(root, path) {
