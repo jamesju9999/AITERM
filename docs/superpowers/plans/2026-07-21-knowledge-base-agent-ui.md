@@ -2019,7 +2019,13 @@ function saveNotebookId(id: string | null) {
 }
 
 // search_documents 的結果格式："[1] report.pdf — 第一章 (score 0.85)\n<內容>"
-const SOURCE_LINE_RE = /^\[\d+\]\s+(.+?)\s+—\s+(.+?)\s+\(score/;
+// 注意：第一個 capture group（rel_path）刻意用「貪婪」比對（.+ 而非 .+?），
+// 且整體錨定到行尾（\)$）。中文檔名很常見 em dash（例如「會議記錄 — 2026.pdf」），
+// 若 rel_path 本身包含 " — "，非貪婪比對只會切到「第一個」— 導致路徑被截斷、
+// location 吃到路徑的其餘部分。貪婪比對會反向從最長開始回溯，
+// 正確地切到「最後一個」— 也就是路徑與 location 之間真正的分隔點，
+// 只有在 location 本身也包含 em dash 時才會誤判（較少見：標題文字含 em dash）。
+const SOURCE_LINE_RE = /^\[\d+\]\s+(.+)\s+—\s+(.+?)\s+\(score\s+[\d.]+\)$/;
 
 interface SourceRef {
   path: string;
