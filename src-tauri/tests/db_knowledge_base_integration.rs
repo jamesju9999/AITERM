@@ -2,6 +2,8 @@
 use sqlx::sqlite::SqlitePoolOptions;
 use aiterm_lib::db::knowledge_base::{
     create_notebook, get_notebook, list_notebooks, delete_notebook, mark_synced,
+    upsert_document, list_documents, delete_document_by_path, replace_chunks,
+    search_similar_chunks, cosine_similarity,
     KnowledgeBaseDb,
 };
 
@@ -138,4 +140,54 @@ async fn delete_notebook_cascades_to_documents_and_chunks() {
         .fetch_one(&pool).await.unwrap();
     assert_eq!(doc_count_after.0, 0, "documents should be deleted when notebook is deleted");
     assert_eq!(chunk_count_after.0, 0, "chunks should be deleted when notebook is deleted");
+}
+
+#[test]
+fn cosine_similarity_known_values() {
+    assert!((cosine_similarity(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 1e-6);
+    assert!((cosine_similarity(&[1.0, 0.0], &[0.0, 1.0])).abs() < 1e-6);
+    assert_eq!(cosine_similarity(&[], &[]), 0.0);
+}
+
+#[tokio::test]
+async fn document_and_chunk_lifecycle() {
+    let pool = setup_pool().await;
+    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None).await.expect("create notebook");
+
+    let doc_id = upsert_document(
+        &pool, &notebook.id, "report.pdf", 1000, "hash1",
+        Some("# Report\n\ncontent"), "ok", None,
+    ).await.expect("upsert document");
+
+    let docs = list_documents(&pool, &notebook.id).await.expect("list documents");
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0].rel_path, "report.pdf");
+
+    // 相同路徑再次 upsert 應該更新而不是新增一筆
+    let doc_id_again = upsert_document(
+        &pool, &notebook.id, "report.pdf", 2000, "hash2",
+        Some("# Report v2"), "ok", None,
+    ).await.expect("re-upsert document");
+    assert_eq!(doc_id, doc_id_again);
+    let docs_after = list_documents(&pool, &notebook.id).await.expect("list after re-upsert");
+    assert_eq!(docs_after.len(), 1);
+    assert_eq!(docs_after[0].content_hash, "hash2");
+
+    replace_chunks(&pool, &doc_id, &[
+        ("chunk one about apples".into(), Some("Report".into()), vec![1.0, 0.0, 0.0]),
+        ("chunk two about oranges".into(), Some("Report".into()), vec![0.0, 1.0, 0.0]),
+    ]).await.expect("replace chunks");
+
+    let hits = search_similar_chunks(&pool, &notebook.id, &[1.0, 0.0, 0.0], 10)
+        .await.expect("search chunks");
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hits[0].text, "chunk one about apples");
+    assert!(hits[0].score > hits[1].score);
+
+    delete_document_by_path(&pool, &notebook.id, "report.pdf").await.expect("delete document");
+    let docs_final = list_documents(&pool, &notebook.id).await.expect("list after delete");
+    assert!(docs_final.is_empty());
+    let hits_final = search_similar_chunks(&pool, &notebook.id, &[1.0, 0.0, 0.0], 10)
+        .await.expect("search after delete");
+    assert!(hits_final.is_empty(), "deleting a document must cascade-delete its chunks");
 }

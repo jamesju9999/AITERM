@@ -155,3 +155,164 @@ pub async fn mark_synced(pool: &SqlitePool, id: &str, ts: i64) -> Result<(), sql
         .bind(ts).bind(id).execute(pool).await?;
     Ok(())
 }
+
+fn encode_embedding(v: &[f32]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(v.len() * 4);
+    for f in v {
+        buf.extend_from_slice(&f.to_le_bytes());
+    }
+    buf
+}
+
+fn decode_embedding(bytes: &[u8]) -> Vec<f32> {
+    bytes.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 {
+        0.0
+    } else {
+        dot / (norm_a * norm_b)
+    }
+}
+
+pub async fn upsert_document(
+    pool: &SqlitePool,
+    notebook_id: &str,
+    rel_path: &str,
+    mtime: i64,
+    content_hash: &str,
+    markdown_cache: Option<&str>,
+    status: &str,
+    error_message: Option<&str>,
+) -> Result<String, sqlx::Error> {
+    let existing: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM documents WHERE notebook_id = ? AND rel_path = ?"
+    ).bind(notebook_id).bind(rel_path).fetch_optional(pool).await?;
+
+    let id = match existing {
+        Some((id,)) => {
+            sqlx::query(
+                "UPDATE documents SET mtime = ?, content_hash = ?, markdown_cache = ?, status = ?, error_message = ?
+                 WHERE id = ?"
+            )
+            .bind(mtime).bind(content_hash).bind(markdown_cache).bind(status).bind(error_message)
+            .bind(&id)
+            .execute(pool).await?;
+            id
+        }
+        None => {
+            let id = uuid::Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO documents (id, notebook_id, rel_path, mtime, content_hash, markdown_cache, status, error_message)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(&id).bind(notebook_id).bind(rel_path).bind(mtime).bind(content_hash)
+            .bind(markdown_cache).bind(status).bind(error_message)
+            .execute(pool).await?;
+            id
+        }
+    };
+    Ok(id)
+}
+
+pub async fn list_documents(pool: &SqlitePool, notebook_id: &str) -> Result<Vec<DocumentRow>, sqlx::Error> {
+    sqlx::query_as::<_, DocumentRow>(
+        "SELECT id, notebook_id, rel_path, mtime, content_hash, markdown_cache, status, error_message
+         FROM documents WHERE notebook_id = ?"
+    ).bind(notebook_id).fetch_all(pool).await
+}
+
+pub async fn delete_document_by_path(
+    pool: &SqlitePool,
+    notebook_id: &str,
+    rel_path: &str,
+) -> Result<(), sqlx::Error> {
+    let existing: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM documents WHERE notebook_id = ? AND rel_path = ?"
+    ).bind(notebook_id).bind(rel_path).fetch_optional(pool).await?;
+
+    if let Some((doc_id,)) = existing {
+        sqlx::query("DELETE FROM chunks WHERE document_id = ?").bind(&doc_id).execute(pool).await?;
+        sqlx::query("DELETE FROM documents WHERE id = ?").bind(&doc_id).execute(pool).await?;
+    }
+    Ok(())
+}
+
+pub async fn replace_chunks(
+    pool: &SqlitePool,
+    document_id: &str,
+    chunks: &[(String, Option<String>, Vec<f32>)],
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM chunks WHERE document_id = ?").bind(document_id).execute(&mut *tx).await?;
+
+    for (idx, (text, location_hint, embedding)) in chunks.iter().enumerate() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let blob = encode_embedding(embedding);
+        sqlx::query(
+            "INSERT INTO chunks (id, document_id, chunk_index, text, location_hint, embedding)
+             VALUES (?, ?, ?, ?, ?, ?)"
+        )
+        .bind(&id).bind(document_id).bind(idx as i64).bind(text).bind(location_hint).bind(&blob)
+        .execute(&mut *tx).await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchHit {
+    pub document_id: String,
+    pub rel_path: String,
+    pub text: String,
+    pub location_hint: Option<String>,
+    pub score: f32,
+}
+
+pub async fn search_similar_chunks(
+    pool: &SqlitePool,
+    notebook_id: &str,
+    query_embedding: &[f32],
+    top_k: usize,
+) -> Result<Vec<SearchHit>, sqlx::Error> {
+    #[derive(FromRow)]
+    struct Row {
+        document_id: String,
+        rel_path: String,
+        text: String,
+        location_hint: Option<String>,
+        embedding: Vec<u8>,
+    }
+
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT c.document_id, d.rel_path, c.text, c.location_hint, c.embedding
+         FROM chunks c JOIN documents d ON c.document_id = d.id
+         WHERE d.notebook_id = ?"
+    ).bind(notebook_id).fetch_all(pool).await?;
+
+    let mut hits: Vec<SearchHit> = rows.into_iter().map(|r| {
+        let embedding = decode_embedding(&r.embedding);
+        let score = cosine_similarity(query_embedding, &embedding);
+        SearchHit {
+            document_id: r.document_id,
+            rel_path: r.rel_path,
+            text: r.text,
+            location_hint: r.location_hint,
+            score,
+        }
+    }).collect();
+
+    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    hits.truncate(top_k);
+    Ok(hits)
+}
