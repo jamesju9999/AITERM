@@ -10,6 +10,7 @@ import { DocConverterView } from "./DocConverter/DocConverterView";
 import { ApiDocsView } from "./ApiDocsView";
 import { LoopStudioView } from "./LoopStudio";
 import { CodeAssistantView } from "./CodeAssistantView";
+import { KnowledgeBaseView } from "./KnowledgeBaseView";
 import { useLocale } from "../contexts/LocaleContext";
 import {
   onEnterpriseTaskReceived,
@@ -149,7 +150,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
     setPickerOpen(true);
   }, []);
 
-  const handlePickerSelect = useCallback((type: "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant") => {
+  const handlePickerSelect = useCallback((type: "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant" | "knowledge-base") => {
     const newId = crypto.randomUUID();
     let title = t.terminal_tab;
     if (type === "database") title = t.database_tab;
@@ -160,10 +161,11 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
     if (type === "api-docs") title = t.api_docs_tab;
     if (type === "loop-studio") title = t.loop_studio_tab;
     if (type === "code-assistant") title = t.code_assistant_tab;
+    if (type === "knowledge-base") title = t.knowledge_base_tab;
     setTabs((prev) => [...prev, { id: newId, title, type }]);
     setActiveId(newId);
     setPickerOpen(false);
-  }, [t.terminal_tab, t.database_tab, t.design_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab, t.loop_studio_tab, t.code_assistant_tab]);
+  }, [t.terminal_tab, t.database_tab, t.design_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab, t.loop_studio_tab, t.code_assistant_tab, t.knowledge_base_tab]);
 
   const handleCloseTab = useCallback(async (id: string) => {
     const guard = closeGuardsRef.current.get(id);
@@ -335,6 +337,8 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
                 />
               ) : tab.type === "code-assistant" ? (
                 <CodeAssistantView isActive={isActive} />
+              ) : tab.type === "knowledge-base" ? (
+                <KnowledgeBaseView isActive={isActive} />
               ) : (
                 <TerminalView
                   isActive={isActive}

@@ -11,6 +11,7 @@ import {
   BookOpenIcon,
   RefreshIcon,
   CodeIcon,
+  LibraryIcon,
 } from "../Icons";
 import "./index.css";
 
@@ -48,6 +49,7 @@ export function NewTabPicker({ onSelect, onClose }: Props) {
     { type: "api-docs",      icon: <BookOpenIcon size={18} />,    label: t.api_docs_tab,       desc: t.new_api_docs_desc },
     { type: "loop-studio",   icon: <RefreshIcon size={18} />,     label: t.loop_studio_tab,    desc: t.new_loop_studio_desc },
     { type: "code-assistant", icon: <CodeIcon size={18} />,       label: t.code_assistant_tab, desc: t.new_code_assistant_desc },
+    { type: "knowledge-base", icon: <LibraryIcon size={18} />,     label: t.knowledge_base_tab, desc: t.new_knowledge_base_desc },
   ];
 
   return (
