@@ -318,3 +318,14 @@ pub async fn search_similar_chunks(
     hits.truncate(top_k);
     Ok(hits)
 }
+
+pub async fn get_document_by_path(
+    pool: &SqlitePool,
+    notebook_id: &str,
+    rel_path: &str,
+) -> Result<Option<DocumentRow>, sqlx::Error> {
+    sqlx::query_as::<_, DocumentRow>(
+        "SELECT id, notebook_id, rel_path, mtime, content_hash, markdown_cache, status, error_message
+         FROM documents WHERE notebook_id = ? AND rel_path = ?"
+    ).bind(notebook_id).bind(rel_path).fetch_optional(pool).await
+}
