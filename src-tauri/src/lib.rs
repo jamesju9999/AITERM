@@ -66,8 +66,9 @@ use commands::{
     shell::open_url,
     web::{web_fetch, web_search, npm_mcp_search},
     vcs::{
-        pick_folder, vcs_add_connection, vcs_agent_step, vcs_detect_repo, vcs_list_connections,
-        vcs_query, vcs_remove_connection, vcs_test_connection, vcs_update_connection,
+        pick_folder, vcs_add_connection, vcs_agent_step, vcs_detect_repo, vcs_get_block_info,
+        vcs_list_connections, vcs_query, vcs_remove_connection, vcs_test_connection,
+        vcs_update_connection,
     },
 };
 use config::ConfigStore;
@@ -348,6 +349,7 @@ pub fn run() {
             vcs_test_connection,
             vcs_detect_repo,
             vcs_query,
+            vcs_get_block_info,
             vcs_agent_step,
             pick_folder,
             // MarkItDown

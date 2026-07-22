@@ -234,6 +234,12 @@ pub async fn vcs_detect_repo(
 }
 
 #[tauri::command]
+pub async fn vcs_get_block_info(cwd: String) -> Option<crate::vcs::types::GitBlockInfo> {
+    let client = crate::vcs::git::GitClient::new(cwd, None);
+    client.quick_block_info().await
+}
+
+#[tauri::command]
 pub async fn vcs_query(
     query: String,
     repo_info: VcsRepoInfo,
