@@ -1,4 +1,5 @@
 use sqlx::{SqlitePool, FromRow};
+use sqlx::sqlite::SqliteConnectOptions;
 use serde::{Serialize, Deserialize};
 use std::path::PathBuf;
 use std::fs;
@@ -38,8 +39,14 @@ impl LoopSessionDb {
             .join("AITERM");
         fs::create_dir_all(&app_data_dir).ok();
         let db_path = app_data_dir.join("loop_sessions.db");
-        let url = format!("sqlite:{}", db_path.to_string_lossy());
-        let pool = SqlitePool::connect(&url).await.unwrap_or_else(|_| {
+        // SqlitePool::connect does not create a missing file by default (sqlx
+        // defaults create_if_missing to false) — it fails to open, and the
+        // fallback below then silently swaps in an in-memory DB with no error
+        // surfaced anywhere. Explicitly opt in to file creation so data persists.
+        let options = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(options).await.unwrap_or_else(|_| {
             SqlitePool::connect_lazy("sqlite::memory:").unwrap()
         });
         let db = Self { pool };
