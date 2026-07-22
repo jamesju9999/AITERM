@@ -33,7 +33,16 @@ fn mysql_col_to_json(row: &sqlx::mysql::MySqlRow, i: usize) -> serde_json::Value
     if let Ok(v) = row.try_get::<Option<String>, _>(i) {
         return v.map(|s| s.into()).unwrap_or(serde_json::Value::Null);
     }
-    serde_json::Value::Null
+    // BLOB/VARBINARY columns aren't valid UTF-8 text, so the String attempt
+    // above fails with Err rather than Ok(None) — without this branch that
+    // Err was silently swallowed and every BLOB rendered as NULL,
+    // indistinguishable from a genuinely empty column.
+    if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(i) {
+        return v
+            .map(|bytes| serde_json::Value::String(format!("<BLOB: {} bytes>", bytes.len())))
+            .unwrap_or(serde_json::Value::Null);
+    }
+    serde_json::Value::String("<unsupported>".into())
 }
 
 #[async_trait]

@@ -59,7 +59,14 @@ fn mssql_col_to_json(row: &Row, i: usize) -> serde_json::Value {
     if let Ok(Some(v)) = row.try_get::<&str, _>(i) {
         return serde_json::Value::String(v.to_string());
     }
-    serde_json::Value::Null
+    // VARBINARY/IMAGE columns aren't valid text, so the &str attempt above
+    // returns Err rather than Ok(None) — without this branch that Err was
+    // silently swallowed and every such column rendered as NULL,
+    // indistinguishable from a genuinely empty column.
+    if let Ok(Some(v)) = row.try_get::<&[u8], _>(i) {
+        return serde_json::Value::String(format!("<BLOB: {} bytes>", v.len()));
+    }
+    serde_json::Value::String("<unsupported>".into())
 }
 
 #[async_trait]
