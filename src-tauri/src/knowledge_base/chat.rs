@@ -59,6 +59,35 @@ pub enum KbChatEvent {
     },
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct PersistedToolCall {
+    tool: String,
+    args: serde_json::Value,
+    result: String,
+}
+
+async fn save_chat_turn(
+    pool: &SqlitePool,
+    chat_session_id: &str,
+    user_text: &str,
+    assistant_text: &str,
+    tool_calls: &[PersistedToolCall],
+) {
+    let _ = crate::db::kb_chat_sessions::create_chat_message(
+        pool, chat_session_id, "user", user_text, None,
+    ).await;
+
+    let tool_calls_json = if tool_calls.is_empty() {
+        None
+    } else {
+        serde_json::to_string(tool_calls).ok()
+    };
+
+    let _ = crate::db::kb_chat_sessions::create_chat_message(
+        pool, chat_session_id, "assistant", assistant_text, tool_calls_json.as_deref(),
+    ).await;
+}
+
 fn build_system_prompt(notebook_name: &str, locale: Locale) -> String {
     let language = crate::ai::language_name(locale);
     format!(
@@ -168,6 +197,7 @@ pub async fn run_chat(
     chat_provider: Arc<dyn AiProvider>,
     embedder: Arc<dyn Embedder>,
     session_id: String,
+    chat_session_id: String,
     locale: Locale,
     app: AppHandle,
 ) -> Result<(), AiError> {
@@ -175,12 +205,19 @@ pub async fn run_chat(
     let system_prompt = build_system_prompt(&notebook.name, locale);
 
     let mut conversation = messages;
+    let last_user_text = conversation.iter().rev()
+        .find(|m| m.role == "user")
+        .and_then(|m| m.content.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mut persisted_tool_calls: Vec<PersistedToolCall> = Vec::new();
     let mut token_estimate = estimate_tokens(&system_prompt);
     let mut rounds = 0usize;
     let mut checkpoints = 0usize;
     let mut seen_calls: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     loop {
+        let mut current_round_text = String::new();
         let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::TokenCount {
             session_id: session_id.clone(),
             count: token_estimate,
@@ -241,6 +278,7 @@ pub async fn run_chat(
 
         while let Some(chunk) = rx.recv().await {
             if !chunk.delta.is_empty() {
+                current_round_text.push_str(&chunk.delta);
                 let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::TextDelta {
                     session_id: session_id.clone(),
                     delta: chunk.delta.clone(),
@@ -263,7 +301,7 @@ pub async fn run_chat(
                 let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::FallbackMode {
                     session_id: session_id.clone(),
                 });
-                return run_fallback(pool, notebook, conversation, chat_provider, embedder, session_id, locale, app).await;
+                return run_fallback(pool, notebook, conversation, chat_provider, embedder, session_id, chat_session_id.clone(), locale, app).await;
             }
             Ok(Err(e)) => {
                 let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::Error {
@@ -296,6 +334,11 @@ pub async fn run_chat(
                             content: result_content.clone(),
                             truncated,
                         });
+                        persisted_tool_calls.push(PersistedToolCall {
+                            tool: tool_name.clone(),
+                            args: args.clone(),
+                            result: result_content.clone(),
+                        });
                         conversation.push(ChatMessage {
                             role: "tool".into(),
                             content: serde_json::Value::String(result_content),
@@ -305,6 +348,7 @@ pub async fn run_chat(
                     }
                     rounds += 1;
                 } else {
+                    save_chat_turn(&pool, &chat_session_id, &last_user_text, &current_round_text, &persisted_tool_calls).await;
                     let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::Done {
                         session_id: session_id.clone(),
                     });
@@ -366,6 +410,11 @@ pub async fn run_chat(
                         content: result_content.clone(),
                         truncated,
                     });
+                    persisted_tool_calls.push(PersistedToolCall {
+                        tool: call.tool_name.clone(),
+                        args: args.clone(),
+                        result: result_content.clone(),
+                    });
 
                     conversation.push(ChatMessage {
                         role: "tool".into(),
@@ -391,6 +440,7 @@ async fn run_fallback(
     chat_provider: Arc<dyn AiProvider>,
     embedder: Arc<dyn Embedder>,
     session_id: String,
+    chat_session_id: String,
     locale: Locale,
     app: AppHandle,
 ) -> Result<(), AiError> {
@@ -424,8 +474,10 @@ async fn run_fallback(
     let (tx, mut rx) = mpsc::channel::<GenerateChunk>(32);
     let p = chat_provider.clone();
     let join = tokio::spawn(async move { p.generate(req, tx).await });
+    let mut answer_buf = String::new();
     while let Some(chunk) = rx.recv().await {
         if !chunk.delta.is_empty() {
+            answer_buf.push_str(&chunk.delta);
             let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::TextDelta {
                 session_id: session_id.clone(),
                 delta: chunk.delta.clone(),
@@ -434,6 +486,8 @@ async fn run_fallback(
         if chunk.done { break; }
     }
     let _ = join.await;
+
+    save_chat_turn(&pool, &chat_session_id, &last_user_text, &answer_buf, &[]).await;
 
     let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::Done {
         session_id: session_id.clone(),
