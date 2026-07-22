@@ -13,6 +13,12 @@ export interface VcsConnectionInfo {
   has_secret: boolean;
 }
 
+export interface GitBlockInfo {
+  branch: string;
+  insertions: number;
+  deletions: number;
+}
+
 export interface VcsConnectionInput {
   id?: string;
   name: string;
@@ -152,4 +158,8 @@ export function vcsAgentStep(
 
 export function pickFolder(): Promise<string | null> {
   return invoke<string | null>("pick_folder");
+}
+
+export function getGitBlockInfo(cwd: string): Promise<GitBlockInfo | null> {
+  return invoke("vcs_get_block_info", { cwd });
 }
