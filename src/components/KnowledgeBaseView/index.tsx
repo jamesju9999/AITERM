@@ -10,6 +10,7 @@ import { MarkdownText } from "../../lib/markdown";
 import { ModelPickerButton } from "../ModelPickerButton";
 import { NotebookSidebar } from "./NotebookSidebar";
 import { NotebookCreateDialog } from "./NotebookCreateDialog";
+import { ChatHistorySidebar } from "./ChatHistorySidebar";
 // 重用 Code Assistant 的聊天氣泡/工具卡片樣式（ca-msg、ca-hint-*、ca-toolbar 等）。
 // 這裡明確 import，不依賴「CodeAssistantView 剛好也被載入過」這種隱性順序。
 import "../CodeAssistantView/styles.css";
@@ -25,6 +26,19 @@ function saveNotebookId(id: string | null) {
     if (id) localStorage.setItem(STORAGE_KEY, id);
     else localStorage.removeItem(STORAGE_KEY);
   } catch { /* ignore */ }
+}
+
+const HISTORY_WIDTH_KEY = "aiterm-knowledge-base-history-width";
+
+function loadSavedHistoryWidth(): number {
+  try {
+    const raw = localStorage.getItem(HISTORY_WIDTH_KEY);
+    const n = raw ? parseInt(raw, 10) : NaN;
+    return Number.isFinite(n) ? n : 280;
+  } catch { return 280; }
+}
+function saveHistoryWidth(width: number) {
+  try { localStorage.setItem(HISTORY_WIDTH_KEY, String(width)); } catch { /* ignore */ }
 }
 
 // search_documents 的結果格式："[1] report.pdf — 第一章 (score 0.85)\n<內容>"
@@ -81,8 +95,38 @@ export function KnowledgeBaseView({ isActive }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const activeNotebook = notebooks.find((nb) => nb.id === activeNotebookId) ?? null;
-  const { messages, isStreaming, error, isFallbackMode, tokenCount, tokenLimit, send, clear } =
-    useKnowledgeBaseChat(activeNotebookId);
+  const {
+    messages, isStreaming, error, isFallbackMode, tokenCount, tokenLimit,
+    sessions, activeChatSessionId, send, clear, loadSession, deleteSession,
+  } = useKnowledgeBaseChat(activeNotebookId);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [historyWidth, setHistoryWidth] = useState(loadSavedHistoryWidth);
+  const [isResizingHistory, setIsResizingHistory] = useState(false);
+
+  useEffect(() => {
+    if (!isResizingHistory) {
+      document.body.style.userSelect = "";
+      return;
+    }
+    document.body.style.userSelect = "none";
+    const onMouseMove = (e: MouseEvent) => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const newWidth = rect.right - e.clientX;
+      setHistoryWidth(Math.max(220, Math.min(newWidth, 480)));
+    };
+    const onMouseUp = () => setIsResizingHistory(false);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      document.body.style.userSelect = "";
+    };
+  }, [isResizingHistory]);
+
+  useEffect(() => { saveHistoryWidth(historyWidth); }, [historyWidth]);
 
   // 首次載入完成後，若儲存的筆記本 id 已不存在（例如被刪除），改選第一個。
   useEffect(() => {
@@ -155,7 +199,7 @@ export function KnowledgeBaseView({ isActive }: Props) {
   }, [activeNotebookId]);
 
   return (
-    <div className="kb-view">
+    <div className="kb-view" ref={containerRef}>
       <NotebookSidebar
         notebooks={notebooks}
         activeId={activeNotebookId}
@@ -310,6 +354,24 @@ export function KnowledgeBaseView({ isActive }: Props) {
           </>
         )}
       </div>
+
+      {activeNotebook && (
+        <>
+          <div
+            className="kb-chat-history-resizer"
+            onMouseDown={(e) => { e.preventDefault(); setIsResizingHistory(true); }}
+          />
+          <ChatHistorySidebar
+            width={historyWidth}
+            notebookName={activeNotebook.name}
+            sessions={sessions}
+            activeSessionId={activeChatSessionId}
+            onNew={clear}
+            onSelect={loadSession}
+            onDelete={deleteSession}
+          />
+        </>
+      )}
 
       {showCreateDialog && (
         <NotebookCreateDialog
