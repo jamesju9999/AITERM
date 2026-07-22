@@ -10,9 +10,11 @@ interface Props {
   sessions: ChatSessionSummary[];
   activeSessionId: string | null;
   isStreaming: boolean;
+  collapsed: boolean;
   onNew: () => void;
   onSelect: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
+  onToggleCollapse: () => void;
 }
 
 function formatSqliteTimestamp(ts: string): string {
@@ -43,7 +45,8 @@ function buildExportMarkdown(notebookName: string, title: string, messages: KbMe
 }
 
 export function ChatHistorySidebar({
-  width, notebookName, sessions, activeSessionId, isStreaming, onNew, onSelect, onDelete,
+  width, notebookName, sessions, activeSessionId, isStreaming, collapsed,
+  onNew, onSelect, onDelete, onToggleCollapse,
 }: Props) {
   const { t } = useLocale();
 
@@ -58,10 +61,33 @@ export function ChatHistorySidebar({
     await writeTextFile(path, buildExportMarkdown(notebookName, session.title, messages));
   };
 
+  if (collapsed) {
+    return (
+      <div className="kb-chat-history kb-chat-history--collapsed" style={{ width }}>
+        <button
+          className="kb-chat-history__toggle"
+          onClick={onToggleCollapse}
+          title={t.kb_chat_history_title}
+        >
+          ‹
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="kb-chat-history" style={{ width }}>
       <div className="kb-chat-history__header">
-        <span className="kb-chat-history__title">{t.kb_chat_history_title}</span>
+        <span className="kb-chat-history__header-left">
+          <button
+            className="kb-chat-history__toggle"
+            onClick={onToggleCollapse}
+            title={t.kb_chat_history_title}
+          >
+            ›
+          </button>
+          <span className="kb-chat-history__title">{t.kb_chat_history_title}</span>
+        </span>
         <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={onNew}>
           {t.kb_new_conversation}
         </button>

@@ -111,10 +111,46 @@
   padding: 10px;
   border-bottom: 1px solid #1e1e1e;
 }
+.kb-chat-history__header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
 .kb-chat-history__title {
   font-size: 12px;
   font-weight: 600;
   color: #999;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-chat-history__toggle {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  color: #999;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+}
+.kb-chat-history__toggle:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #e0e0e0;
+}
+.kb-chat-history--collapsed {
+  align-items: center;
+  padding-top: 10px;
+}
+.kb-chat-history--collapsed .kb-chat-history__toggle {
+  border-color: transparent;
 }
 .kb-chat-history__list {
   flex: 1;

@@ -41,6 +41,16 @@ function saveHistoryWidth(width: number) {
   try { localStorage.setItem(HISTORY_WIDTH_KEY, String(width)); } catch { /* ignore */ }
 }
 
+const HISTORY_COLLAPSED_KEY = "aiterm-knowledge-base-history-collapsed";
+const HISTORY_COLLAPSED_WIDTH = 32;
+
+function loadSavedHistoryCollapsed(): boolean {
+  try { return localStorage.getItem(HISTORY_COLLAPSED_KEY) === "1"; } catch { return false; }
+}
+function saveHistoryCollapsed(collapsed: boolean) {
+  try { localStorage.setItem(HISTORY_COLLAPSED_KEY, collapsed ? "1" : "0"); } catch { /* ignore */ }
+}
+
 // search_documents 的結果格式："[1] report.pdf — 第一章 (score 0.85)\n<內容>"
 // 注意：第一個 capture group（rel_path）刻意用「貪婪」比對（.+ 而非 .+?），
 // 且整體錨定到行尾（\)$）。中文檔名很常見 em dash（例如「會議記錄 — 2026.pdf」），
@@ -103,6 +113,9 @@ export function KnowledgeBaseView({ isActive }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [historyWidth, setHistoryWidth] = useState(loadSavedHistoryWidth);
   const [isResizingHistory, setIsResizingHistory] = useState(false);
+  const [historyCollapsed, setHistoryCollapsed] = useState(loadSavedHistoryCollapsed);
+
+  useEffect(() => { saveHistoryCollapsed(historyCollapsed); }, [historyCollapsed]);
 
   useEffect(() => {
     if (!isResizingHistory) {
@@ -277,8 +290,14 @@ export function KnowledgeBaseView({ isActive }: Props) {
                     ))}
                     {(msg.content || msg.streaming) && (
                       <div className="ca-msg__bubble">
-                        {msg.role === "assistant" ? <MarkdownText text={msg.content} /> : msg.content}
-                        {msg.streaming && <span className="ca-streaming-cursor" />}
+                        {msg.role === "assistant" && msg.streaming && !msg.content ? (
+                          <span className="ca-thinking-indicator"><span /><span /><span /></span>
+                        ) : (
+                          <>
+                            {msg.role === "assistant" ? <MarkdownText text={msg.content} /> : msg.content}
+                            {msg.streaming && <span className="ca-streaming-cursor" />}
+                          </>
+                        )}
                       </div>
                     )}
                     {sources.length > 0 && (
@@ -364,19 +383,23 @@ export function KnowledgeBaseView({ isActive }: Props) {
 
       {activeNotebook && (
         <>
-          <div
-            className="kb-chat-history-resizer"
-            onMouseDown={(e) => { e.preventDefault(); setIsResizingHistory(true); }}
-          />
+          {!historyCollapsed && (
+            <div
+              className="kb-chat-history-resizer"
+              onMouseDown={(e) => { e.preventDefault(); setIsResizingHistory(true); }}
+            />
+          )}
           <ChatHistorySidebar
-            width={historyWidth}
+            width={historyCollapsed ? HISTORY_COLLAPSED_WIDTH : historyWidth}
             notebookName={activeNotebook.name}
             sessions={sessions}
             activeSessionId={activeChatSessionId}
             isStreaming={isStreaming}
+            collapsed={historyCollapsed}
             onNew={() => { if (!isStreaming) clear(); }}
             onSelect={loadSession}
             onDelete={deleteSession}
+            onToggleCollapse={() => setHistoryCollapsed((c) => !c)}
           />
         </>
       )}

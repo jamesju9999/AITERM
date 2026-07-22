@@ -341,6 +341,31 @@
 }
 @keyframes ca-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
+/* Thinking indicator — shown while streaming has started but no text has
+   arrived yet (e.g. model is still "thinking" after tool calls finished,
+   before the first token). Replaces the bare blinking-cursor-with-no-text
+   look with a more legible pulsing-dots affordance. */
+.ca-thinking-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+}
+.ca-thinking-indicator span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.35;
+  animation: ca-thinking-bounce 1.2s ease-in-out infinite;
+}
+.ca-thinking-indicator span:nth-child(2) { animation-delay: 0.2s; }
+.ca-thinking-indicator span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes ca-thinking-bounce {
+  0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}
+
 /* Mermaid diagrams — thumbnail (click to expand) */
 .ca-msg--assistant .ca-msg__bubble .mermaid-container {
   width: 100%;
@@ -371,7 +396,13 @@
 }
 .mermaid-overlay__content {
   position: relative;
-  max-width: 92vw;
+  /* Needs a real `width`, not just `max-width`: this is a flex child with
+     align-items: center (not stretch), so with only max-width it shrinks to
+     fit its content — and its content (the svg) is told to be width: 100%,
+     which then resolves against this shrunk size. That circular "small fits
+     small" pairing is why the diagram stayed tiny even after removing
+     Mermaid's inline max-width cap on the svg itself. */
+  width: min(92vw, 1400px);
   max-height: 92vh;
   overflow: auto;
   background: #0d0e1a;
@@ -402,8 +433,14 @@
 .mermaid-overlay__close:hover { background: rgba(255,255,255,0.16); color: #fff; }
 .mermaid-overlay__diagram svg {
   display: block;
-  max-width: none;
-  height: auto;
+  /* Mermaid bakes an inline style="max-width: NNNpx" onto the rendered <svg>
+     root (from its useMaxWidth config), sized to the small thumbnail's
+     container. Inline styles beat stylesheet rules regardless of specificity,
+     so overriding it here requires !important — otherwise the "expanded"
+     diagram stays capped at its original tiny width. */
+  width: 100% !important;
+  max-width: none !important;
+  height: auto !important;
 }
 
 /* Files accessed — shown below assistant message to help detect hallucinated paths */

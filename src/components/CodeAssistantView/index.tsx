@@ -205,12 +205,18 @@ export function CodeAssistantView({ isActive }: Props) {
               ))}
               {(msg.content || msg.streaming) && (
                 <div className="ca-msg__bubble">
-                  {msg.role === "assistant" ? (
-                    <MarkdownText text={msg.content} />
+                  {msg.role === "assistant" && msg.streaming && !msg.content ? (
+                    <span className="ca-thinking-indicator"><span /><span /><span /></span>
                   ) : (
-                    msg.content
+                    <>
+                      {msg.role === "assistant" ? (
+                        <MarkdownText text={msg.content} />
+                      ) : (
+                        msg.content
+                      )}
+                      {msg.streaming && <span className="ca-streaming-cursor" />}
+                    </>
                   )}
-                  {msg.streaming && <span className="ca-streaming-cursor" />}
                 </div>
               )}
               {(readPaths.length > 0 || searchedPaths.length > 0) && (
