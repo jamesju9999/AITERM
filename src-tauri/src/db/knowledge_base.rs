@@ -101,6 +101,32 @@ impl KnowledgeBaseDb {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_chunks_document ON chunks(document_id)")
             .execute(&self.pool).await?;
 
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS kb_chat_sessions (
+                id TEXT PRIMARY KEY NOT NULL,
+                notebook_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )"
+        ).execute(&self.pool).await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS kb_chat_messages (
+                id TEXT PRIMARY KEY NOT NULL,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                tool_calls_json TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )"
+        ).execute(&self.pool).await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_kb_chat_sessions_notebook ON kb_chat_sessions(notebook_id)")
+            .execute(&self.pool).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_kb_chat_messages_session ON kb_chat_messages(session_id)")
+            .execute(&self.pool).await?;
+
         Ok(())
     }
 }
@@ -142,6 +168,9 @@ pub async fn delete_notebook(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Er
     sqlx::query("DELETE FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE notebook_id = ?)")
         .bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM documents WHERE notebook_id = ?").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM kb_chat_messages WHERE session_id IN (SELECT id FROM kb_chat_sessions WHERE notebook_id = ?)")
+        .bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM kb_chat_sessions WHERE notebook_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM notebooks WHERE id = ?").bind(id).execute(&mut *tx).await?;
     tx.commit().await
 }
