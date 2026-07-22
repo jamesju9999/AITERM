@@ -193,7 +193,7 @@ describe("AiPanel", () => {
 
     const onExecuteCommand = vi.fn(
       (_cmd: string, onComplete?: (block: TerminalBlock) => void) => {
-        onComplete?.({ id: "b1", command: "ls", output: "file.txt", status: "completed", exitCode: 0 });
+        onComplete?.({ id: "b1", command: "ls", rawOutput: "file.txt", status: "completed", exitCode: 0, startTime: Date.now() });
       },
     );
 

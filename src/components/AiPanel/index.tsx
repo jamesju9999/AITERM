@@ -281,7 +281,7 @@ Rules:
         if (agentAbortRef.current) { setAgentRunning(false); resolve(); return; }
 
         const rawOutput = await getPtyRecentOutput(sessionId).catch(() => null)
-          ?? block.output
+          ?? block.rawOutput
           ?? "";
         const output = rawOutput.slice(-2000);
 
