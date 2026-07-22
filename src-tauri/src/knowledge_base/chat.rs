@@ -42,6 +42,9 @@ pub enum KbChatEvent {
         session_id: String,
         number: usize,
     },
+    ClearContent {
+        session_id: String,
+    },
     Done {
         session_id: String,
     },
@@ -387,6 +390,9 @@ pub async fn run_chat(
                     // instead of searching fresh. Force one corrective round.
                     zero_tool_reprompted = true;
                     full_answer_text.clear();
+                    let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::ClearContent {
+                        session_id: session_id.clone(),
+                    });
                     conversation.push(ChatMessage {
                         role: "user".into(),
                         content: serde_json::Value::String(

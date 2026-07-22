@@ -186,6 +186,14 @@ export function useKnowledgeBaseChat(notebookId: string | null): UseKnowledgeBas
           next[next.length - 1] = last;
           return next;
         });
+      } else if (p.kind === "clear_content") {
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = { ...next[next.length - 1] };
+          last.content = "";
+          next[next.length - 1] = last;
+          return next;
+        });
       } else if (p.kind === "fallback_mode") {
         setIsFallbackMode(true);
       } else if (p.kind === "token_count") {
