@@ -325,6 +325,20 @@ pub async fn run_chat(
             Ok(Ok(GenerateWithToolsResult::Text(text))) => {
                 let xml_calls = parse_xml_tool_calls(&text);
                 if !xml_calls.is_empty() {
+                    // Some models emit a malformed/unclosed <tool_call> block and then,
+                    // instead of stopping to wait for the real result, keep generating
+                    // straight into their own draft answer in the same completion (seen
+                    // in practice: "<tool_call>...<parameter=top_k>10</parameter>什麼時候
+                    // 要用...根據 Swift 的文件規範..."). That whole blob — junk syntax
+                    // plus a hallucinated draft answer — already streamed live to the
+                    // frontend before we got here to classify it as a tool-call round.
+                    // Since this round produced a tool call, not a final answer, wipe
+                    // that leaked text both server-side and in the UI so only a
+                    // genuine no-more-tool-calls round's text ends up visible/persisted.
+                    full_answer_text.clear();
+                    let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::ClearContent {
+                        session_id: session_id.clone(),
+                    });
                     for (tool_name, args) in xml_calls {
                         let key = tool_call_key(&tool_name, &args);
                         let call_id = format!("xml_{}", uuid::Uuid::new_v4());
@@ -413,6 +427,14 @@ pub async fn run_chat(
                 }
             }
             Ok(Ok(GenerateWithToolsResult::ToolCalls { calls, raw })) => {
+                // Defensive mirror of the XML-branch fix above: native tool-calling
+                // normally has no accompanying free text, but if a provider quirk ever
+                // streams stray text alongside real tool_calls, don't let it linger as
+                // if it were a final answer.
+                full_answer_text.clear();
+                let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::ClearContent {
+                    session_id: session_id.clone(),
+                });
                 conversation.push(ChatMessage {
                     role: "assistant".into(),
                     content: serde_json::Value::Null,
