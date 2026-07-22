@@ -64,31 +64,25 @@ pub async fn create_chat_message(
     tool_calls_json: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let id = uuid::Uuid::new_v4().to_string();
+    let mut tx = pool.begin().await?;
     sqlx::query(
         "INSERT INTO kb_chat_messages (id, session_id, role, content, tool_calls_json) \
          VALUES (?, ?, ?, ?, ?)"
     )
     .bind(&id).bind(session_id).bind(role).bind(content).bind(tool_calls_json)
-    .execute(pool).await?;
+    .execute(&mut *tx).await?;
     sqlx::query("UPDATE kb_chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-        .bind(session_id).execute(pool).await?;
-    Ok(())
+        .bind(session_id).execute(&mut *tx).await?;
+    tx.commit().await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::SqliteConnectOptions;
+    use sqlx::sqlite::SqlitePoolOptions;
 
     async fn setup() -> SqlitePool {
-        // `.filename(":memory:")` alone gives each pooled connection its own private
-        // in-memory database (sqlx applies no special handling to this string via the
-        // builder API — only the "sqlite::memory:" URL form does that, by rewriting the
-        // filename to a shared-cache URI). Capping the pool at a single connection makes
-        // every acquire() reuse the same physical in-memory database instead.
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(SqliteConnectOptions::new().filename(":memory:"))
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:")
             .await.unwrap();
         sqlx::query(
             "CREATE TABLE kb_chat_sessions (
