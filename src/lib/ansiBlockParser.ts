@@ -63,7 +63,7 @@ function readCell(cell: import("@xterm/xterm").IBufferCell): CellInfo | null {
     italic: !!cell.isItalic(),
     underline: !!cell.isUnderline(),
   };
-  const hasStyle = style.fg !== undefined || style.bg !== undefined || style.bold || style.italic || style.underline;
+  const hasStyle = style.fg !== undefined || style.bg !== undefined || !!style.bold || !!style.italic || !!style.underline;
   return { chars, style, hasStyle };
 }
 
