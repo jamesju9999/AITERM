@@ -9,6 +9,7 @@ interface Props {
   notebookName: string;
   sessions: ChatSessionSummary[];
   activeSessionId: string | null;
+  isStreaming: boolean;
   onNew: () => void;
   onSelect: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
@@ -42,7 +43,7 @@ function buildExportMarkdown(notebookName: string, title: string, messages: KbMe
 }
 
 export function ChatHistorySidebar({
-  width, notebookName, sessions, activeSessionId, onNew, onSelect, onDelete,
+  width, notebookName, sessions, activeSessionId, isStreaming, onNew, onSelect, onDelete,
 }: Props) {
   const { t } = useLocale();
 
@@ -88,6 +89,7 @@ export function ChatHistorySidebar({
               </button>
               <button
                 className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+                disabled={isStreaming && s.id === activeSessionId}
                 onClick={(e) => {
                   e.stopPropagation();
                   if (window.confirm(t.kb_delete_conversation_confirm(s.title))) onDelete(s.id);

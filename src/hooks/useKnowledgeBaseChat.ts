@@ -248,13 +248,14 @@ export function useKnowledgeBaseChat(notebookId: string | null): UseKnowledgeBas
   }, [isStreaming]);
 
   const deleteSession = useCallback(async (sessionId: string) => {
+    if (isStreaming && sessionId === activeChatSessionId) return;
     await kbDeleteChatSession(sessionId);
     if (activeChatSessionId === sessionId) {
       setMessages([]);
       setActiveChatSessionId(null);
     }
     if (notebookId) void refreshSessions(notebookId);
-  }, [activeChatSessionId, notebookId, refreshSessions]);
+  }, [activeChatSessionId, notebookId, refreshSessions, isStreaming]);
 
   return {
     messages, isStreaming, error, isFallbackMode, tokenCount, tokenLimit,

@@ -373,6 +373,7 @@ export function KnowledgeBaseView({ isActive }: Props) {
             notebookName={activeNotebook.name}
             sessions={sessions}
             activeSessionId={activeChatSessionId}
+            isStreaming={isStreaming}
             onNew={() => { if (!isStreaming) clear(); }}
             onSelect={loadSession}
             onDelete={deleteSession}
