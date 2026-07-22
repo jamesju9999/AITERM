@@ -42,6 +42,7 @@ import { CommandBookmarksPicker, addBookmark } from "./CommandBookmarks";
 import { getActiveTheme, type AppTheme } from "../lib/themes";
 import { RobotIcon, SparklesIcon, SmartphoneIcon } from "./Icons";
 import { TerminalBlockCard } from "./TerminalBlockCard";
+import { findNextBlockMatch, findPreviousBlockMatch, type BlockSearchCursor } from "../lib/blockSearch";
 import { getGitBlockInfo } from "../ipc/vcs";
 import "./TerminalView.css";
 
@@ -178,6 +179,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchMatchInfo, setSearchMatchInfo] = useState<string>("");
+  const [blockSearchCursor, setBlockSearchCursor] = useState<BlockSearchCursor | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -743,18 +745,42 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   }, []);
 
   const doSearch = useCallback((query: string, direction: 'next' | 'prev') => {
+    if (!query) { setSearchMatchInfo(""); return; }
     const addon = searchAddonRef.current;
-    if (!addon || !query) { setSearchMatchInfo(""); return; }
-    const found = direction === 'next'
-      ? addon.findNext(query, SEARCH_OPTS)
-      : addon.findPrevious(query, SEARCH_OPTS);
-    setSearchMatchInfo(found ? "found" : "not found");
-  }, []);
+
+    // Only ever "found" via the live xterm buffer when the addon is actually
+    // available — if it's momentarily unavailable, fall through to the block
+    // list search below rather than reporting a false "not found".
+    const foundLive = addon
+      ? (direction === 'next' ? addon.findNext(query, SEARCH_OPTS) : addon.findPrevious(query, SEARCH_OPTS))
+      : false;
+
+    if (foundLive) {
+      setBlockSearchCursor(null);
+      setSearchMatchInfo("found");
+      return;
+    }
+
+    const match = direction === 'next'
+      ? findNextBlockMatch(blocksRef.current, query, blockSearchCursor)
+      : findPreviousBlockMatch(blocksRef.current, query, blockSearchCursor);
+
+    if (match) {
+      setBlockSearchCursor(match);
+      setSearchMatchInfo("found");
+      requestAnimationFrame(() => {
+        document.getElementById(`aiterm-block-${match.blockId}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+      });
+    } else {
+      setSearchMatchInfo("not found");
+    }
+  }, [blockSearchCursor]);
 
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
     setSearchQuery("");
     setSearchMatchInfo("");
+    setBlockSearchCursor(null);
     searchAddonRef.current?.clearDecorations?.();
   }, []);
 
@@ -772,6 +798,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     } else {
       searchAddonRef.current?.clearDecorations?.();
       setSearchMatchInfo("");
+      setBlockSearchCursor(null);
     }
   }, [searchQuery, doSearch]);
 
@@ -914,16 +941,17 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             {blocks
               .filter((b) => b.status !== "running" && b.renderedLines)
               .map((b) => (
-                <TerminalBlockCard
-                  key={b.id}
-                  block={b}
-                  highlightQuery={searchOpen ? searchQuery : undefined}
-                  onAskAi={(command, exitCode) => {
-                    window.dispatchEvent(new CustomEvent("aiterm:ask-ai", { detail: { command, exitCode } }));
-                  }}
-                  onBookmark={(command) => addBookmark(command)}
-                  onCopy={(command) => navigator.clipboard.writeText(command).catch(console.error)}
-                />
+                <div id={`aiterm-block-${b.id}`} key={b.id}>
+                  <TerminalBlockCard
+                    block={b}
+                    highlightQuery={searchOpen && blockSearchCursor?.blockId === b.id ? searchQuery : undefined}
+                    onAskAi={(command, exitCode) => {
+                      window.dispatchEvent(new CustomEvent("aiterm:ask-ai", { detail: { command, exitCode } }));
+                    }}
+                    onBookmark={(command) => addBookmark(command)}
+                    onCopy={(command) => navigator.clipboard.writeText(command).catch(console.error)}
+                  />
+                </div>
               ))}
           </div>
         )}
