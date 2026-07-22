@@ -79,12 +79,17 @@ export function useKnowledgeBaseChat(notebookId: string | null): UseKnowledgeBas
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [activeChatSessionId, setActiveChatSessionId] = useState<string | null>(null);
   const mountedRef = useRef(true);
+  const notebookIdRef = useRef(notebookId);
   const { locale } = useLocale();
 
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
+
+  useEffect(() => {
+    notebookIdRef.current = notebookId;
+  }, [notebookId]);
 
   const refreshSessions = useCallback(async (nbId: string) => {
     try {
@@ -108,6 +113,7 @@ export function useKnowledgeBaseChat(notebookId: string | null): UseKnowledgeBas
   const send = useCallback(async (userText: string, providerId?: string) => {
     if (!userText.trim() || isStreaming || !notebookId) return;
     setError(null);
+    setIsStreaming(true);
 
     let chatSessionId = activeChatSessionId;
     if (!chatSessionId) {
@@ -115,6 +121,13 @@ export function useKnowledgeBaseChat(notebookId: string | null): UseKnowledgeBas
         chatSessionId = await kbCreateChatSession(notebookId, truncateTitle(userText));
       } catch (e) {
         setError(String(e));
+        setIsStreaming(false);
+        return;
+      }
+      if (notebookIdRef.current !== notebookId) {
+        // notebook changed while this session was being created — abandon this send,
+        // the session row was created but nothing in current UI state should reference it
+        setIsStreaming(false);
         return;
       }
       setActiveChatSessionId(chatSessionId);
@@ -131,7 +144,6 @@ export function useKnowledgeBaseChat(notebookId: string | null): UseKnowledgeBas
       { role: "user", content: userText },
       { role: "assistant", content: "", toolCalls: [], streaming: true },
     ]);
-    setIsStreaming(true);
 
     const sessionId = crypto.randomUUID();
 
