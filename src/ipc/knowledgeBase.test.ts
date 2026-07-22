@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import {
   kbCreateNotebook, kbListNotebooks, kbDeleteNotebook, kbSyncNotebook, invokeKbChat,
+  kbCreateChatSession, kbListChatSessions, kbLoadChatSession, kbDeleteChatSession,
 } from "./knowledgeBase";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -38,13 +39,41 @@ describe("knowledgeBase ipc", () => {
 
   it("invokeKbChat invokes kb_chat with full arg set", async () => {
     vi.mocked(invoke).mockResolvedValue(undefined);
-    await invokeKbChat("nb-1", [{ role: "user", content: "hi" }], "sess-1", "openai-1", "en");
+    await invokeKbChat("nb-1", [{ role: "user", content: "hi" }], "sess-1", "chat-sess-1", "openai-1", "en");
     expect(invoke).toHaveBeenCalledWith("kb_chat", {
       notebookId: "nb-1",
       messages: [{ role: "user", content: "hi" }],
       sessionId: "sess-1",
+      chatSessionId: "chat-sess-1",
       providerId: "openai-1",
       locale: "en",
     });
+  });
+
+  it("kbCreateChatSession invokes kb_create_chat_session with camelCase args", async () => {
+    vi.mocked(invoke).mockResolvedValue("chat-sess-1");
+    await kbCreateChatSession("nb-1", "第一個問題");
+    expect(invoke).toHaveBeenCalledWith("kb_create_chat_session", {
+      notebookId: "nb-1",
+      title: "第一個問題",
+    });
+  });
+
+  it("kbListChatSessions invokes kb_list_chat_sessions with notebookId", async () => {
+    vi.mocked(invoke).mockResolvedValue([]);
+    await kbListChatSessions("nb-1");
+    expect(invoke).toHaveBeenCalledWith("kb_list_chat_sessions", { notebookId: "nb-1" });
+  });
+
+  it("kbLoadChatSession invokes kb_load_chat_session with sessionId", async () => {
+    vi.mocked(invoke).mockResolvedValue([]);
+    await kbLoadChatSession("chat-sess-1");
+    expect(invoke).toHaveBeenCalledWith("kb_load_chat_session", { sessionId: "chat-sess-1" });
+  });
+
+  it("kbDeleteChatSession invokes kb_delete_chat_session with sessionId", async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    await kbDeleteChatSession("chat-sess-1");
+    expect(invoke).toHaveBeenCalledWith("kb_delete_chat_session", { sessionId: "chat-sess-1" });
   });
 });

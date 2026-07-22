@@ -18,6 +18,19 @@ export interface SyncSummary {
   deleted: number;
 }
 
+export interface ChatSessionSummary {
+  id: string;
+  title: string;
+  updated_at: string;
+}
+
+export interface ChatMessageRow {
+  role: string;
+  content: string;
+  tool_calls_json: string | null;
+  created_at: string;
+}
+
 export type KbSyncEvent =
   | { kind: "progress"; notebook_id: string; processed: number; total: number; current_file: string }
   | { kind: "done"; notebook_id: string; indexed: number; failed: number; deleted: number };
@@ -65,6 +78,7 @@ export function invokeKbChat(
   notebookId: string,
   messages: ChatMessage[],
   sessionId: string,
+  chatSessionId: string,
   providerId?: string | null,
   locale: string = "zh-TW",
 ): Promise<void> {
@@ -72,6 +86,7 @@ export function invokeKbChat(
     notebookId,
     messages,
     sessionId,
+    chatSessionId,
     providerId: providerId ?? null,
     locale,
   });
@@ -79,4 +94,20 @@ export function invokeKbChat(
 
 export function kbOpenDocument(notebookId: string, relPath: string): Promise<void> {
   return invoke<void>("kb_open_document", { notebookId, relPath });
+}
+
+export function kbCreateChatSession(notebookId: string, title: string): Promise<string> {
+  return invoke<string>("kb_create_chat_session", { notebookId, title });
+}
+
+export function kbListChatSessions(notebookId: string): Promise<ChatSessionSummary[]> {
+  return invoke<ChatSessionSummary[]>("kb_list_chat_sessions", { notebookId });
+}
+
+export function kbLoadChatSession(sessionId: string): Promise<ChatMessageRow[]> {
+  return invoke<ChatMessageRow[]>("kb_load_chat_session", { sessionId });
+}
+
+export function kbDeleteChatSession(sessionId: string): Promise<void> {
+  return invoke<void>("kb_delete_chat_session", { sessionId });
 }
