@@ -211,6 +211,13 @@ pub enum VcsResult {
     SvnNotInstalled,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GitBlockInfo {
+    pub branch: String,
+    pub insertions: u32,
+    pub deletions: u32,
+}
+
 #[cfg(test)]
 mod agent_tests {
     use super::*;

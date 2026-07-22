@@ -6,7 +6,8 @@ use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, USER_AGENT}
 use serde::Deserialize;
 
 use super::types::{
-    BlameEntry, BranchEntry, CommitEntry, IssueEntry, PrEntry, VcsResult, WorkflowRun,
+    BlameEntry, BranchEntry, CommitEntry, GitBlockInfo, IssueEntry, PrEntry, VcsResult,
+    WorkflowRun,
 };
 
 pub struct GitClient {
@@ -349,6 +350,41 @@ impl GitClient {
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
+    pub async fn quick_block_info(&self) -> Option<GitBlockInfo> {
+        let branch_out = self
+            .git(&["rev-parse".to_string(), "--abbrev-ref".to_string(), "HEAD".to_string()])
+            .ok()?;
+        let branch = branch_out.trim().to_string();
+        if branch.is_empty() {
+            return None;
+        }
+
+        let shortstat = self
+            .git(&["diff".to_string(), "--shortstat".to_string()])
+            .unwrap_or_default();
+        let (insertions, deletions) = Self::parse_shortstat(&shortstat);
+
+        Some(GitBlockInfo { branch, insertions, deletions })
+    }
+
+    fn parse_shortstat(s: &str) -> (u32, u32) {
+        let mut insertions = 0u32;
+        let mut deletions = 0u32;
+        for part in s.trim().split(',') {
+            let part = part.trim();
+            if let Some(num_str) = part.split_whitespace().next() {
+                if let Ok(n) = num_str.parse::<u32>() {
+                    if part.contains("insertion") {
+                        insertions = n;
+                    } else if part.contains("deletion") {
+                        deletions = n;
+                    }
+                }
+            }
+        }
+        (insertions, deletions)
+    }
+
     fn git(&self, args: &[String]) -> Result<String, String> {
         let mut cmd = Command::new("git");
         cmd.args(args).current_dir(&self.repo_root);
@@ -648,5 +684,45 @@ abcdef1234567890abcdef1234567890abcdef12 1 1 1\nauthor Alice\nauthor-time 170000
         assert_eq!(entries[0].author, "Alice");
         assert_eq!(entries[0].content, "hello world");
         assert_eq!(entries[0].line_number, 1);
+    }
+}
+
+#[cfg(test)]
+mod block_info_tests {
+    use super::*;
+    use std::fs;
+    use std::process::Command as StdCommand;
+
+    fn init_repo(dir: &std::path::Path) {
+        StdCommand::new("git").args(["init", "-q"]).current_dir(dir).status().unwrap();
+        StdCommand::new("git").args(["config", "user.email", "test@test.com"]).current_dir(dir).status().unwrap();
+        StdCommand::new("git").args(["config", "user.name", "Test"]).current_dir(dir).status().unwrap();
+    }
+
+    #[tokio::test]
+    async fn returns_branch_and_diff_stats_for_git_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let file_path = dir.path().join("a.txt");
+        fs::write(&file_path, "line1\nline2\nline3\n").unwrap();
+        StdCommand::new("git").args(["add", "."]).current_dir(dir.path()).status().unwrap();
+        StdCommand::new("git").args(["commit", "-q", "-m", "init"]).current_dir(dir.path()).status().unwrap();
+
+        // Uncommitted change: +2 insertions, -1 deletion
+        fs::write(&file_path, "line1\nline2b\nline3\nline4\nline5\n").unwrap();
+
+        let client = GitClient::new(dir.path().to_string_lossy().to_string(), None);
+        let info = client.quick_block_info().await.expect("expected Some for git repo");
+
+        assert!(info.branch == "master" || info.branch == "main");
+        assert_eq!(info.insertions, 3);
+        assert_eq!(info.deletions, 1);
+    }
+
+    #[tokio::test]
+    async fn returns_none_for_non_git_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = GitClient::new(dir.path().to_string_lossy().to_string(), None);
+        assert!(client.quick_block_info().await.is_none());
     }
 }
