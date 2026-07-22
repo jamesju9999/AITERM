@@ -1,0 +1,59 @@
+.aiterm-block-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  margin: 6px 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.aiterm-block-card--failed {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.06);
+}
+
+.aiterm-block-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: #888;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+}
+
+.aiterm-block-git-add { color: #4ade80; }
+.aiterm-block-git-del { color: #f87171; }
+.aiterm-block-exit-ok { color: #4ade80; }
+.aiterm-block-exit-fail { color: #f87171; font-weight: 600; }
+
+.aiterm-block-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.aiterm-block-command {
+  padding: 6px 10px 2px;
+  color: #9cdcfe;
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 13px;
+}
+
+.aiterm-block-body {
+  padding: 2px 10px 8px;
+}
+
+.aiterm-block-body pre {
+  margin: 0;
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.aiterm-block-line { min-height: 1.3em; }
+
+.aiterm-block-expand {
+  margin-top: 6px;
+}
