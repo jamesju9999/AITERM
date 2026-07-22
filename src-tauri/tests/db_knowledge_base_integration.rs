@@ -51,6 +51,20 @@ async fn setup_pool() -> sqlx::SqlitePool {
         )"
     ).execute(&pool).await.expect("create chunks table");
 
+    sqlx::query(
+        "CREATE TABLE kb_chat_sessions (
+            id TEXT PRIMARY KEY NOT NULL, notebook_id TEXT NOT NULL, title TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )"
+    ).execute(&pool).await.expect("create kb_chat_sessions table");
+
+    sqlx::query(
+        "CREATE TABLE kb_chat_messages (
+            id TEXT PRIMARY KEY NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL,
+            content TEXT NOT NULL, tool_calls_json TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )"
+    ).execute(&pool).await.expect("create kb_chat_messages table");
+
     pool
 }
 
@@ -140,6 +154,35 @@ async fn delete_notebook_cascades_to_documents_and_chunks() {
         .fetch_one(&pool).await.unwrap();
     assert_eq!(doc_count_after.0, 0, "documents should be deleted when notebook is deleted");
     assert_eq!(chunk_count_after.0, 0, "chunks should be deleted when notebook is deleted");
+}
+
+#[tokio::test]
+async fn delete_notebook_cascades_to_chat_sessions() {
+    let pool = setup_pool().await;
+    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None).await.unwrap();
+
+    sqlx::query(
+        "INSERT INTO kb_chat_sessions (id, notebook_id, title)
+         VALUES ('session-1', ?, 'first question')"
+    ).bind(&notebook.id).execute(&pool).await.unwrap();
+
+    sqlx::query(
+        "INSERT INTO kb_chat_messages (id, session_id, role, content)
+         VALUES ('msg-1', 'session-1', 'user', 'hello')"
+    ).execute(&pool).await.unwrap();
+
+    let session_count_before: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM kb_chat_sessions WHERE notebook_id = ?")
+        .bind(&notebook.id).fetch_one(&pool).await.unwrap();
+    assert_eq!(session_count_before.0, 1);
+
+    delete_notebook(&pool, &notebook.id).await.expect("delete notebook");
+
+    let session_count_after: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM kb_chat_sessions WHERE notebook_id = ?")
+        .bind(&notebook.id).fetch_one(&pool).await.unwrap();
+    let message_count_after: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM kb_chat_messages WHERE session_id = 'session-1'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(session_count_after.0, 0, "chat sessions should be deleted when notebook is deleted");
+    assert_eq!(message_count_after.0, 0, "chat messages should be deleted when notebook is deleted");
 }
 
 #[test]
