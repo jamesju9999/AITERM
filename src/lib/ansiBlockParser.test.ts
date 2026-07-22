@@ -29,4 +29,10 @@ describe("parseAnsiToRenderedLines", () => {
     const totalText = lines[0].spans.map((s) => s.text).join("");
     expect(totalText).toBe("hi");
   });
+
+  it("does not insert phantom spaces after wide (CJK) characters", async () => {
+    const lines = await parseAnsiToRenderedLines("你好world\r\n", 80);
+    const totalText = lines[0].spans.map((s) => s.text).join("");
+    expect(totalText).toBe("你好world");
+  });
 });

@@ -22,8 +22,11 @@ const ANSI_PALETTE = [
 
 function paletteColor(value: number): string {
   if (value < 16) return ANSI_PALETTE[value];
-  // 256-color extended palette: fall back to a grayscale-ish approximation
-  // rather than pulling in a full xterm-256 table for a rarely-used range.
+  // TODO: 256-color extended palette (indices 16-255) falls back to a
+  // grayscale-ish approximation rather than the real xterm-256 cube/ramp
+  // table. This range is hit more often than the color count suggests
+  // (many CLI tools default to 256-color output); a real table would be
+  // a follow-up if inaccurate colors here become noticeable.
   const gray = Math.min(255, value * 3).toString(16).padStart(2, "0");
   return `#${gray}${gray}${gray}`;
 }
@@ -37,6 +40,31 @@ function cellColor(isRGB: boolean, isPalette: boolean, isDefault: boolean, value
 
 function spansEqual(a: RenderedSpan, b: Omit<RenderedSpan, "text">): boolean {
   return a.fg === b.fg && a.bg === b.bg && a.bold === b.bold && a.italic === b.italic && a.underline === b.underline;
+}
+
+interface CellInfo {
+  chars: string;
+  style: Omit<RenderedSpan, "text">;
+  hasStyle: boolean;
+}
+
+/**
+ * Reads a cell's char + style info, or null if the cell is a zero-width
+ * continuation cell (the second half of a wide/CJK character) that carries
+ * no content of its own and must be skipped, not rendered as a space.
+ */
+function readCell(cell: import("@xterm/xterm").IBufferCell): CellInfo | null {
+  if (cell.getWidth() === 0) return null;
+  const chars = cell.getChars() || " ";
+  const style: Omit<RenderedSpan, "text"> = {
+    fg: cellColor(cell.isFgRGB(), cell.isFgPalette(), cell.isFgDefault(), cell.getFgColor()),
+    bg: cellColor(cell.isBgRGB(), cell.isBgPalette(), cell.isBgDefault(), cell.getBgColor()),
+    bold: !!cell.isBold(),
+    italic: !!cell.isItalic(),
+    underline: !!cell.isUnderline(),
+  };
+  const hasStyle = style.fg !== undefined || style.bg !== undefined || style.bold || style.italic || style.underline;
+  return { chars, style, hasStyle };
 }
 
 /**
@@ -67,9 +95,9 @@ export async function parseAnsiToRenderedLines(raw: string, cols: number, rows =
     for (let x = cols - 1; x >= 0; x--) {
       const cell = line.getCell(x);
       if (!cell) continue;
-      const chars = cell.getChars() || " ";
-      const hasStyle = !cell.isFgDefault() || !cell.isBgDefault() || cell.isBold() || cell.isItalic() || cell.isUnderline();
-      if (chars.trim() !== "" || hasStyle) {
+      const info = readCell(cell);
+      if (!info) continue; // zero-width continuation cell of a wide char
+      if (info.chars.trim() !== "" || info.hasStyle) {
         lastContentX = x;
         break;
       }
@@ -81,20 +109,13 @@ export async function parseAnsiToRenderedLines(raw: string, cols: number, rows =
     for (let x = 0; x <= lastContentX; x++) {
       const cell = line.getCell(x);
       if (!cell) continue;
+      const info = readCell(cell);
+      if (!info) continue; // zero-width continuation cell of a wide char
 
-      const chars = cell.getChars() || " ";
-      const style: Omit<RenderedSpan, "text"> = {
-        fg: cellColor(cell.isFgRGB(), cell.isFgPalette(), cell.isFgDefault(), cell.getFgColor()),
-        bg: cellColor(cell.isBgRGB(), cell.isBgPalette(), cell.isBgDefault(), cell.getBgColor()),
-        bold: !!cell.isBold(),
-        italic: !!cell.isItalic(),
-        underline: !!cell.isUnderline(),
-      };
-
-      if (current && spansEqual(current, style)) {
-        current.text += chars;
+      if (current && spansEqual(current, info.style)) {
+        current.text += info.chars;
       } else {
-        current = { text: chars, ...style };
+        current = { text: info.chars, ...info.style };
         spans.push(current);
       }
     }
