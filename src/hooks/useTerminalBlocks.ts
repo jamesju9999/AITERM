@@ -1,25 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { writePty } from "../ipc/pty";
-
-import type { IMarker } from "@xterm/xterm";
+import { parseAnsiToRenderedLines, type RenderedLine } from "../lib/ansiBlockParser";
+import type { GitBlockInfo } from "../ipc/vcs";
 
 export interface TerminalBlock {
   id: string;
-  command: string;      // The actual command text
-  output: string;       // Captured ANSI output for this block
+  command: string;
   status: "running" | "completed" | "failed";
   exitCode?: number;
-  startMarker?: IMarker;
-  endMarker?: IMarker;
-  startLine?: number;
-  endLine?: number;
-  decorationCreated?: boolean;
+  startTime: number;
+  endTime?: number;
+  cwd?: string;
+  rawOutput: string;
+  renderedLines?: RenderedLine[];
+  gitInfo?: GitBlockInfo | null;
 }
 
 export interface UseTerminalBlocksResult {
   blocks: TerminalBlock[];
   submitCommand: (cmd: string, onComplete?: (block: TerminalBlock) => void) => void;
+  appendOutput: (chunk: string) => void;
+  setBlockGitInfo: (id: string, info: GitBlockInfo | null) => void;
   isAlternateBuffer: boolean;
   termInstance: Terminal | null;
 }
@@ -27,14 +29,33 @@ export interface UseTerminalBlocksResult {
 export function useTerminalBlocks(
   sessionId: string,
   term: Terminal | null,
+  cwdRef?: React.RefObject<string>,
 ): UseTerminalBlocksResult {
   const [blocks, setBlocks] = useState<TerminalBlock[]>([]);
   const [isAlternateBuffer, setIsAlternateBuffer] = useState(false);
 
-  // We keep a mutable ref to blocks so the data listener can modify the last block's text.
   const blocksRef = useRef<TerminalBlock[]>([]);
-  // Map of block ID → onComplete callback (for agent loop)
   const completionCallbacksRef = useRef<Map<string, (block: TerminalBlock) => void>>(new Map());
+
+  const updateLatestBlock = useCallback((updater: (b: TerminalBlock) => TerminalBlock) => {
+    const prev = blocksRef.current;
+    if (prev.length === 0) return;
+    const latest = prev[prev.length - 1];
+    const updated = prev.map((b) => (b.id === latest.id ? updater(b) : b));
+    blocksRef.current = updated;
+    setBlocks(updated);
+  }, []);
+
+  const appendOutput = useCallback((chunk: string) => {
+    updateLatestBlock((b) => (b.status === "running" ? { ...b, rawOutput: b.rawOutput + chunk } : b));
+  }, [updateLatestBlock]);
+
+  const setBlockGitInfo = useCallback((id: string, info: GitBlockInfo | null) => {
+    const prev = blocksRef.current;
+    const updated = prev.map((b) => (b.id === id ? { ...b, gitInfo: info } : b));
+    blocksRef.current = updated;
+    setBlocks(updated);
+  }, []);
 
   useEffect(() => {
     if (!term) return;
@@ -44,55 +65,51 @@ export function useTerminalBlocks(
     };
     const disposeBuffer = term.buffer.onBufferChange(onBufferChange);
 
-    // Register OSC 133 handler
     const disposeOsc = term.parser.registerOscHandler(133, (data) => {
       if (data === "C") {
-        try {
-          const marker = term.registerMarker(0);
-          if (marker) {
-            const prev = blocksRef.current;
-            if (prev.length > 0) {
-              const latest = prev[prev.length - 1];
-              if (latest.status === "running") {
-                const updated = prev.map((b) => (b.id === latest.id ? { ...b, startMarker: marker } : b));
-                blocksRef.current = updated;
-                setBlocks(updated);
-              }
-            }
-          }
-        } catch(e) { console.error("Error creating start marker", e); }
+        // Command start — no marker bookkeeping needed anymore; the block
+        // was already created by submitCommand.
         return true;
       } else if (data.startsWith("D")) {
-        // Command finished
         const parts = data.split(";");
         const exitCode = parts.length > 1 ? parseInt(parts[1], 10) : 0;
-        const endMarker = term.registerMarker(0);
+        const endTime = Date.now();
 
         const prev = blocksRef.current;
         if (prev.length === 0) return true;
         const latest = prev[prev.length - 1];
         if (latest.status !== "running") return true;
 
+        const finalExitCode = isNaN(exitCode) ? 0 : exitCode;
+        const frozenOutput = latest.rawOutput;
+        const cols = term.cols;
+
         const completedBlock: TerminalBlock = {
           ...latest,
-          status: exitCode === 0 ? "completed" : "failed",
-          exitCode: isNaN(exitCode) ? 0 : exitCode,
-          endMarker: endMarker || undefined,
-          startLine: latest.startMarker?.line,
-          endLine: endMarker?.line,
-          decorationCreated: true,
+          status: finalExitCode === 0 ? "completed" : "failed",
+          exitCode: finalExitCode,
+          endTime,
         };
-
         const updated = prev.map((b) => (b.id === latest.id ? completedBlock : b));
         blocksRef.current = updated;
         setBlocks(updated);
 
-        // Fire the completion callback if registered for this block
-        const cb = completionCallbacksRef.current.get(latest.id);
-        if (cb) {
-          completionCallbacksRef.current.delete(latest.id);
-          setTimeout(() => cb(completedBlock), 50);
-        }
+        term.clear();
+
+        parseAnsiToRenderedLines(frozenOutput, cols).then((renderedLines) => {
+          const withLines = blocksRef.current.map((b) =>
+            b.id === latest.id ? { ...b, renderedLines } : b,
+          );
+          blocksRef.current = withLines;
+          setBlocks(withLines);
+
+          const cb = completionCallbacksRef.current.get(latest.id);
+          if (cb) {
+            completionCallbacksRef.current.delete(latest.id);
+            const finalBlock = withLines.find((b) => b.id === latest.id)!;
+            setTimeout(() => cb(finalBlock), 50);
+          }
+        });
 
         return true;
       }
@@ -105,10 +122,6 @@ export function useTerminalBlocks(
     };
   }, [term]);
 
-  /**
-   * Submit a command to the PTY and track it as a block.
-   * Optionally provide an onComplete callback that fires when the block finishes.
-   */
   const submitCommand = useCallback(
     (cmd: string, onComplete?: (block: TerminalBlock) => void) => {
       if (!term || !sessionId) return;
@@ -116,11 +129,12 @@ export function useTerminalBlocks(
       const newBlock: TerminalBlock = {
         id: Math.random().toString(36).substring(2, 15) + Date.now().toString(36),
         command: cmd,
-        output: "",
         status: "running",
+        startTime: Date.now(),
+        cwd: cwdRef?.current,
+        rawOutput: "",
       };
-      
-      // Register the completion callback before creating the block
+
       if (onComplete) {
         completionCallbacksRef.current.set(newBlock.id, onComplete);
       }
@@ -139,12 +153,14 @@ export function useTerminalBlocks(
       const clearSeq = isWindows ? "" : "\x15";
       writePty(sessionId, clearSeq + cmd + "\r").catch(console.error);
     },
-    [sessionId, term],
+    [sessionId, term, cwdRef],
   );
 
   return {
     blocks,
     submitCommand,
+    appendOutput,
+    setBlockGitInfo,
     isAlternateBuffer,
     termInstance: term,
   };
