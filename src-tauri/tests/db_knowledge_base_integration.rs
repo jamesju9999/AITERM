@@ -221,7 +221,7 @@ async fn document_and_chunk_lifecycle() {
         ("chunk two about oranges".into(), Some("Report".into()), vec![0.0, 1.0, 0.0]),
     ]).await.expect("replace chunks");
 
-    let hits = search_similar_chunks(&pool, &notebook.id, &[1.0, 0.0, 0.0], 10)
+    let hits = search_similar_chunks(&pool, &notebook.id, "", &[1.0, 0.0, 0.0], 10)
         .await.expect("search chunks");
     assert_eq!(hits.len(), 2);
     assert_eq!(hits[0].text, "chunk one about apples");
@@ -230,7 +230,7 @@ async fn document_and_chunk_lifecycle() {
     delete_document_by_path(&pool, &notebook.id, "report.pdf").await.expect("delete document");
     let docs_final = list_documents(&pool, &notebook.id).await.expect("list after delete");
     assert!(docs_final.is_empty());
-    let hits_final = search_similar_chunks(&pool, &notebook.id, &[1.0, 0.0, 0.0], 10)
+    let hits_final = search_similar_chunks(&pool, &notebook.id, "", &[1.0, 0.0, 0.0], 10)
         .await.expect("search after delete");
     assert!(hits_final.is_empty(), "deleting a document must cascade-delete its chunks");
 }
@@ -249,6 +249,42 @@ async fn search_excludes_chunks_from_error_status_documents() {
         ("stale chunk content".into(), Some("Stale".into()), vec![1.0, 0.0, 0.0]),
     ]).await.unwrap();
 
-    let hits = search_similar_chunks(&pool, &notebook.id, &[1.0, 0.0, 0.0], 10).await.unwrap();
+    let hits = search_similar_chunks(&pool, &notebook.id, "", &[1.0, 0.0, 0.0], 10).await.unwrap();
     assert!(hits.is_empty(), "chunks belonging to an error-status document must never be returned by search, even if they still exist in the table");
+}
+
+// Regression test for a real reported bug: a question phrased quite differently
+// from the source document's wording (e.g. a Chinese question about an
+// English-only technical section) failed to surface the right chunk purely on
+// cosine similarity, even though the chunk literally contains the query's key
+// terms. Keyword-overlap boosting should let a lexically-matching chunk
+// outrank a purely-more-similar-but-unrelated one.
+#[tokio::test]
+async fn keyword_match_can_outrank_higher_cosine_similarity() {
+    let pool = setup_pool().await;
+    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None).await.unwrap();
+
+    let doc_id = upsert_document(
+        &pool, &notebook.id, "swift_sdk.pdf", 0, "hash1",
+        Some("# Swift SDK"), "ok", None,
+    ).await.unwrap();
+
+    replace_chunks(&pool, &doc_id, &[
+        // Higher raw cosine similarity to the query embedding, but no lexical
+        // overlap with the query terms at all.
+        ("unrelated filler content lorem ipsum".into(), Some("Intro".into()), vec![0.9, 0.1, 0.0]),
+        // Lower raw cosine similarity, but literally contains the query's
+        // technical terms — this is the chunk that should win after boosting.
+        ("Retry of Tracker API calls documentation".into(), Some("7.3".into()), vec![0.8, 0.2, 0.0]),
+    ]).await.unwrap();
+
+    let hits = search_similar_chunks(
+        &pool, &notebook.id, "Tracker API retry logic", &[1.0, 0.0, 0.0], 10,
+    ).await.unwrap();
+
+    assert_eq!(hits.len(), 2);
+    assert_eq!(
+        hits[0].text, "Retry of Tracker API calls documentation",
+        "the lexically-matching chunk should be boosted above the purely-more-cosine-similar one"
+    );
 }

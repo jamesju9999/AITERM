@@ -77,7 +77,7 @@ async fn sync_indexes_new_files_and_reports_progress() {
     let docs = list_documents(&pool, &notebook.id).await.unwrap();
     assert_eq!(docs.len(), 2);
 
-    let hits = search_similar_chunks(&pool, &notebook.id, &[0.1, 0.2, 0.3], 10).await.unwrap();
+    let hits = search_similar_chunks(&pool, &notebook.id, "", &[0.1, 0.2, 0.3], 10).await.unwrap();
     assert_eq!(hits.len(), 2);
 }
 

@@ -62,7 +62,7 @@ pub async fn dispatch_tool(
                 return ("Error: query is empty".into(), false);
             }
 
-            let mut vectors = match embedder.embed(&[query]).await {
+            let mut vectors = match embedder.embed(&[query.clone()]).await {
                 Ok(v) => v,
                 Err(e) => return (format!("Error: {e}"), false),
             };
@@ -71,7 +71,7 @@ pub async fn dispatch_tool(
                 None => return ("Error: embedding provider returned no vector".into(), false),
             };
 
-            match knowledge_base::search_similar_chunks(pool, notebook_id, &query_embedding, top_k).await {
+            match knowledge_base::search_similar_chunks(pool, notebook_id, &query, &query_embedding, top_k).await {
                 Ok(hits) if hits.is_empty() => ("No matching content found.".into(), false),
                 Ok(hits) => {
                     let formatted = hits.iter().enumerate().map(|(i, h)| {

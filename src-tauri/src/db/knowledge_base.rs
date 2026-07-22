@@ -319,9 +319,38 @@ pub struct SearchHit {
     pub score: f32,
 }
 
+/// Weight applied to the keyword-overlap fraction before adding it to cosine
+/// similarity. Cosine similarity is typically in the ~0.3-0.8 range for
+/// plausible matches, so a modest weight nudges literal keyword hits up the
+/// ranking without letting a single shared word override genuine semantic
+/// mismatches.
+const KEYWORD_BOOST_WEIGHT: f32 = 0.15;
+
+/// Cheap lexical signal to supplement pure vector similarity: dense embeddings
+/// can under-rank a chunk that literally contains the query's technical terms
+/// (e.g. a Chinese question about an English-only section heading), especially
+/// across languages. Splits the query into tokens on whitespace/punctuation,
+/// drops single-character tokens (filters out most CJK function words like
+/// 的/是/了 without needing a stopword list), and scores the fraction of
+/// remaining tokens found as a case-insensitive substring of the chunk text.
+fn keyword_boost(query: &str, text: &str) -> f32 {
+    let text_lower = text.to_lowercase();
+    let tokens: Vec<String> = query
+        .split(|c: char| c.is_whitespace() || ",.;:!?、，。；：！？()（）[]「」".contains(c))
+        .map(|s| s.to_lowercase())
+        .filter(|s| s.chars().count() >= 2)
+        .collect();
+    if tokens.is_empty() {
+        return 0.0;
+    }
+    let matched = tokens.iter().filter(|t| text_lower.contains(t.as_str())).count();
+    (matched as f32 / tokens.len() as f32) * KEYWORD_BOOST_WEIGHT
+}
+
 pub async fn search_similar_chunks(
     pool: &SqlitePool,
     notebook_id: &str,
+    query_text: &str,
     query_embedding: &[f32],
     top_k: usize,
 ) -> Result<Vec<SearchHit>, sqlx::Error> {
@@ -342,7 +371,7 @@ pub async fn search_similar_chunks(
 
     let mut hits: Vec<SearchHit> = rows.into_iter().map(|r| {
         let embedding = decode_embedding(&r.embedding);
-        let score = cosine_similarity(query_embedding, &embedding);
+        let score = cosine_similarity(query_embedding, &embedding) + keyword_boost(query_text, &r.text);
         SearchHit {
             document_id: r.document_id,
             rel_path: r.rel_path,
@@ -366,4 +395,48 @@ pub async fn get_document_by_path(
         "SELECT id, notebook_id, rel_path, mtime, content_hash, markdown_cache, status, error_message
          FROM documents WHERE notebook_id = ? AND rel_path = ?"
     ).bind(notebook_id).bind(rel_path).fetch_optional(pool).await
+}
+
+#[cfg(test)]
+mod keyword_boost_tests {
+    use super::{keyword_boost, KEYWORD_BOOST_WEIGHT};
+
+    #[test]
+    fn full_match_gives_max_boost() {
+        let score = keyword_boost("Tracker API retry", "Retry of Tracker API calls");
+        assert!((score - KEYWORD_BOOST_WEIGHT).abs() < 1e-6);
+    }
+
+    #[test]
+    fn partial_match_is_proportional() {
+        // 3 of 4 tokens ("tracker", "api", "retry") appear; "logic" does not.
+        let score = keyword_boost("Tracker API retry logic", "Retry of Tracker API calls documentation");
+        assert!((score - KEYWORD_BOOST_WEIGHT * 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn no_match_gives_zero_boost() {
+        let score = keyword_boost("Tracker API retry", "unrelated filler content");
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn empty_query_gives_zero_boost() {
+        assert_eq!(keyword_boost("", "some chunk text"), 0.0);
+    }
+
+    #[test]
+    fn is_case_insensitive() {
+        let score = keyword_boost("TRACKER api", "a chunk mentioning tracker API here");
+        assert!((score - KEYWORD_BOOST_WEIGHT).abs() < 1e-6);
+    }
+
+    #[test]
+    fn single_char_tokens_are_ignored() {
+        // "a" and "在" (single CJK char) should be filtered; only "retry" counts,
+        // and it's present, so this should still score as a full match, not be
+        // diluted by unmatched noise tokens that were never real keywords.
+        let score = keyword_boost("a 在 retry", "the retry mechanism");
+        assert!((score - KEYWORD_BOOST_WEIGHT).abs() < 1e-6);
+    }
 }
