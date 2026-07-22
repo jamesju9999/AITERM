@@ -41,6 +41,8 @@ import { FileExplorer } from "./FileExplorer/FileExplorer";
 import { CommandBookmarksPicker, addBookmark } from "./CommandBookmarks";
 import { getActiveTheme, type AppTheme } from "../lib/themes";
 import { RobotIcon, SparklesIcon, SmartphoneIcon } from "./Icons";
+import { TerminalBlockCard } from "./TerminalBlockCard";
+import { getGitBlockInfo } from "../ipc/vcs";
 import "./TerminalView.css";
 
 interface PreviewState {
@@ -109,6 +111,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const navigate = useNavigate();
   const { t, locale } = useLocale();
   const hostRef = useRef<HTMLDivElement>(null);
+  const blockListRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<string>("initializing…");
   const [preview, setPreview] = useState<PreviewState>(INITIAL_PREVIEW);
   const previewRef = useRef<PreviewState>(INITIAL_PREVIEW);
@@ -118,6 +121,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [sessionId, setSessionId] = useState<string>("");
   const [displayCwd, setDisplayCwd] = useState<string>("");
+  const lastCwdRef = useRef<string>("");
 
   // Persist the active terminal's CWD to localStorage so it can be
   // restored on the next session. Also updates the status bar CWD display.
@@ -136,6 +140,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           const pretty = homePath && normalized.startsWith(homePath)
             ? "~" + normalized.slice(homePath.length)
             : normalized;
+          lastCwdRef.current = cwd;
           setDisplayCwd(pretty);
         }
       } catch { /* session may not be ready yet */ }
@@ -168,8 +173,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const [termState, setTermState] = useState<Terminal | null>(null);
   const sessionRef = useRef<string | null>(null);
   const lineBufRef = useRef<string>("");
-  const overlayRef = useRef<HTMLDivElement>(null);
-  const [, setRenderTick] = useState(0);
 
   // Find in Buffer state
   const [searchOpen, setSearchOpen] = useState(false);
@@ -179,9 +182,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const searchInputRef = useRef<HTMLInputElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
 
-  const { blocks, isAlternateBuffer, submitCommand } = useTerminalBlocks(
+  const { blocks, isAlternateBuffer, submitCommand, appendOutput, setBlockGitInfo } = useTerminalBlocks(
     sessionId,
-    termState
+    termState,
+    lastCwdRef,
   );
 
   // Bridge submitCommand into a ref so the stale term.onData closure can access the latest version
@@ -196,6 +200,32 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // Bridge blocks into a ref so the stale closure can check if a command is running
   const blocksRef = useRef(blocks);
   useEffect(() => { blocksRef.current = blocks; }, [blocks]);
+
+  // Auto-scroll the completed-block list to the bottom whenever a new block is added.
+  useEffect(() => {
+    blockListRef.current?.scrollTo({ top: blockListRef.current.scrollHeight });
+  }, [blocks.length]);
+
+  // Fetch git info (branch, insertions/deletions) for completed blocks, debounced 500ms.
+  const gitFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const pending = blocks.find((b) => b.status !== "running" && b.gitInfo === undefined && b.cwd);
+    if (!pending) return;
+    if (gitFetchTimerRef.current) return;
+
+    gitFetchTimerRef.current = setTimeout(async () => {
+      gitFetchTimerRef.current = null;
+      const stillPending = blocksRef.current.filter((b) => b.status !== "running" && b.gitInfo === undefined && b.cwd);
+      for (const b of stillPending) {
+        try {
+          const info = await getGitBlockInfo(b.cwd!);
+          setBlockGitInfo(b.id, info);
+        } catch {
+          setBlockGitInfo(b.id, null);
+        }
+      }
+    }, 500);
+  }, [blocks]);
 
   // Apply font changes from Settings
   useEffect(() => {
@@ -317,21 +347,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         }
       } else {
         submitCommand(text, (block) => {
-          if (!termRef.current) return;
-          const term = termRef.current;
-          // startLine points to the prompt + command echo.
-          // endLine points to the new prompt line (or beyond).
-          const startLine = block.startLine ?? 0;
-          const endLine = block.endLine ?? term.buffer.active.baseY + term.buffer.active.cursorY;
-          
-          let output = "";
-          // Extract lines strictly between the command line and the new prompt.
-          for (let i = startLine + 1; i < endLine; i++) {
-            const lineStr = term.buffer.active.getLine(i)?.translateToString(true) || "";
-            output += lineStr + "\n";
-          }
-          
-          output = output.trim();
+          let output = block.rawOutput.trim();
           if (output.length > 0) {
             if (output.length > 4000) {
               output = output.substring(0, 4000) + "\n... (output truncated)";
@@ -543,6 +559,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         unlistenData = await onPtyData(id, (bytes) => {
           const text = decoder.decode(bytes, { stream: true });
           term.write(text);
+          appendOutput(text);
 
           // Windows: detect PS prompt → inject synthetic OSC 133 D
           if (isWindows) {
@@ -566,18 +583,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             }
           }
         });
-
-        // Set up native pixel-perfect scroll sync
-        if (term.element) {
-          const viewportEl = term.element.querySelector('.xterm-viewport');
-          if (viewportEl && overlayRef.current) {
-            viewportEl.addEventListener('scroll', () => {
-              if (overlayRef.current) {
-                overlayRef.current.style.transform = `translateY(-${viewportEl.scrollTop}px)`;
-              }
-            });
-          }
-        }
       } catch (err) {
         console.error("Failed to create pty", err);
       }
@@ -713,13 +718,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       if (sessionRef.current) {
         resizePty(sessionRef.current, { rows: r, cols: c }).catch(console.error);
       }
-      setTimeout(() => {
-        setRenderTick(t => t + 1);
-        const viewportEl = hostRef.current?.querySelector('.xterm-viewport');
-        if (viewportEl && overlayRef.current) {
-          overlayRef.current.style.transform = `translateY(-${viewportEl.scrollTop}px)`;
-        }
-      }, 50);
     });
 
     let ro: ResizeObserver | null = null;
@@ -874,7 +872,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         )}
       </div>
 
-      <div style={{ position: "relative", flex: 1, minHeight: 0, width: "100%" }}>
+      <div style={{ position: "relative", flex: 1, minHeight: 0, width: "100%", display: "flex", flexDirection: "column" }}>
         {/* File Explorer */}
         {viewTab === "files" && sessionId && (
           <div style={{ height: "100%", overflow: "hidden" }}>
@@ -882,7 +880,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           </div>
         )}
         {/* Terminal */}
-        <div style={{ display: viewTab === "terminal" ? "block" : "none", height: "100%", position: "relative" }}>
+        <div style={{ display: viewTab === "terminal" ? "flex" : "none", flexDirection: "column", height: "100%", position: "relative" }}>
         {/* Find in Buffer search bar */}
         {searchOpen && (
           <div className="terminal-search-bar">
@@ -907,127 +905,27 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             <button onClick={closeSearch} title={t.term_search_close} className="terminal-search-btn terminal-search-close aiterm-btn aiterm-btn--secondary aiterm-btn--sm">✕</button>
           </div>
         )}
+        <div className="aiterm-block-list" ref={blockListRef}>
+          {blocks
+            .filter((b) => b.status !== "running" && b.renderedLines)
+            .map((b) => (
+              <TerminalBlockCard
+                key={b.id}
+                block={b}
+                highlightQuery={searchOpen ? searchQuery : undefined}
+                onAskAi={(command, exitCode) => {
+                  window.dispatchEvent(new CustomEvent("aiterm:ask-ai", { detail: { command, exitCode } }));
+                }}
+                onBookmark={(command) => addBookmark(command)}
+                onCopy={(command) => navigator.clipboard.writeText(command).catch(console.error)}
+              />
+            ))}
+        </div>
         <div
           ref={hostRef}
           className="aiterm-terminal-root"
-          style={{ height: "100%", width: "calc(100% - 20px)", marginLeft: "20px", boxSizing: "border-box" }}
+          style={{ height: "220px", width: "calc(100% - 20px)", marginLeft: "20px", boxSizing: "border-box", flexShrink: 0 }}
         />
-        
-        {/* React DOM overlay for visual blocks */}
-        <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, pointerEvents: "none", overflow: "hidden", zIndex: 10 }}>
-           <div ref={overlayRef} style={{ position: "absolute", top: 0, left: 0, right: 0, willChange: 'transform' }}>
-             {(() => {
-               const mappedBlocks = blocks.map((b) => {
-                 let parsedPromptY = (b.startMarker?.line ?? b.startLine ?? 1) - 1;
-                 if (termState && b.command) {
-                   const maxLen = termState.buffer.active.length;
-                   for (let d = 0; d < 100; d++) {
-                     const up = parsedPromptY - d;
-                     if (up >= 0 && up < maxLen) {
-                       const upStr = termState.buffer.active.getLine(up)?.translateToString(true) || "";
-                       if (upStr.includes(b.command)) { parsedPromptY = up; break; }
-                     }
-                     const down = parsedPromptY + d;
-                     if (down >= 0 && down < maxLen) {
-                       const downStr = termState.buffer.active.getLine(down)?.translateToString(true) || "";
-                       if (downStr.includes(b.command)) { parsedPromptY = down; break; }
-                     }
-                   }
-                 }
-                 return { ...b, parsedPromptY, parsedStartY: parsedPromptY + 1 };
-               });
-
-               mappedBlocks.forEach((b, i) => {
-                 if (i < mappedBlocks.length - 1) {
-                   b.endLine = mappedBlocks[i+1].parsedPromptY;
-                 } else {
-                   if (termState) {
-                     b.endLine = termState.buffer.active.cursorY + termState.buffer.active.baseY;
-                   } else {
-                     b.endLine = b.endMarker?.line ?? b.endLine ?? (b.parsedStartY + 1);
-                   }
-                 }
-               });
-
-               return mappedBlocks.map((b) => {
-                 if (b.status === "running" || !termState) return null;
-                 const termEl = (termState as any).element;
-                 const fallbackHeight = termEl ? termEl.clientHeight / termState.rows : 14 * 1.4;
-                 const cellHeight = (termState as any)._core?._renderService?.dimensions?.css?.cell?.height || fallbackHeight;
-                 
-                 const top = b.parsedStartY * cellHeight;
-                 const heightLines = Math.max(1, b.endLine! - b.parsedStartY);
-                 const heightPx = heightLines * cellHeight;
-
-                 // Only render if it has visual height
-                 if (heightPx <= 0) return null;
-
-                 return (
-                   <div
-                     key={b.id}
-                     className="aiterm-block-decoration"
-                     style={{
-                        position: "absolute",
-                        top: `${top}px`,
-                        left: "8px",
-                        right: "12px",
-                        height: `${heightPx}px`,
-                        pointerEvents: "none",
-                        borderLeft: `3px solid ${b.exitCode === 0 ? '#34d399' : '#f87171'}`,
-                        background: b.exitCode === 0 ? 'rgba(255, 255, 255, 0.04)' : 'rgba(255, 60, 60, 0.08)',
-                        borderRadius: "6px",
-                        boxSizing: 'border-box',
-                        zIndex: 20
-                     }}
-                   >
-                     <div className="aiterm-block-actions" style={{ pointerEvents: "auto", position: "absolute", right: "8px", top: "2px", display: "flex", gap: "6px" }}>
-                     {b.exitCode !== 0 && (
-                       <button
-                         className="aiterm-block-btn aiterm-block-btn-ai aiterm-btn aiterm-btn--secondary"
-                         onClick={(e) => {
-                           e.stopPropagation();
-                           window.dispatchEvent(new CustomEvent('aiterm:ask-ai', { 
-                              detail: { command: b.command, exitCode: b.exitCode } 
-                           }));
-                         }}
-                       >
-                         ✨ Ask AI
-                       </button>
-                     )}
-                     <button
-                          className="aiterm-block-btn aiterm-btn aiterm-btn--secondary"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            addBookmark(b.command);
-                            const btn = e.currentTarget;
-                            const orig = btn.innerHTML;
-                            btn.innerHTML = t.terminal_bookmark_saved;
-                            setTimeout(() => btn.innerHTML = orig, 1200);
-                          }}
-                          title={t.term_bookmark_tooltip}
-                      >
-                        {t.terminal_bookmark_btn}
-                      </button>
-                      <button
-                          className="aiterm-block-btn aiterm-btn aiterm-btn--secondary"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            navigator.clipboard.writeText(b.command).catch(console.error);
-                            const btn = e.currentTarget;
-                            const orig = btn.innerHTML;
-                            btn.innerHTML = t.terminal_copy_done;
-                            setTimeout(() => btn.innerHTML = orig, 1000);
-                          }}
-                      >
-                        {t.terminal_copy_btn}
-                      </button>
-                     </div>
-                   </div>
-                 );
-               });
-             })()}
-           </div>
-        </div>
         </div>{/* end terminal wrapper */}
       </div>{/* end relative container */}
       {!isAlternateBuffer && (
@@ -1327,13 +1225,7 @@ function runAgentLoop(params: AgentLoopParams) {
     if (abortRef.current) return;
 
     // Extract terminal output for this block
-    const startY = completedBlock.startLine ?? 0;
-    const endY = completedBlock.endLine ?? term.buffer.active.cursorY + term.buffer.active.baseY;
-    let rawOutput = "";
-    for (let i = startY; i < endY; i++) {
-      rawOutput += term.buffer.active.getLine(i)?.translateToString(true) + "\n";
-    }
-    rawOutput = rawOutput.trim();
+    let rawOutput = completedBlock.rawOutput.trim();
     if (rawOutput.length > 2000) rawOutput = rawOutput.slice(rawOutput.length - 2000);
 
     const exitCode = completedBlock.exitCode ?? 0;
