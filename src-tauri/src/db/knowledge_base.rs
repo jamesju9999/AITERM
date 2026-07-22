@@ -321,10 +321,14 @@ pub struct SearchHit {
 
 /// Weight applied to the keyword-overlap fraction before adding it to cosine
 /// similarity. Cosine similarity is typically in the ~0.3-0.8 range for
-/// plausible matches, so a modest weight nudges literal keyword hits up the
-/// ranking without letting a single shared word override genuine semantic
-/// mismatches.
-const KEYWORD_BOOST_WEIGHT: f32 = 0.15;
+/// plausible matches. Started at 0.15, but real-world testing showed that was
+/// too weak: a query with several distinctive technical terms (e.g. "Tracker
+/// API 指數退避 exponential backoff") only matched ~40% of its tokens against
+/// the actually-relevant chunk (the rest of the query's terms legitimately
+/// don't appear in that chunk), yielding a ~0.06 boost — nowhere near enough
+/// to overcome unrelated documents scoring 0.7+ on pure semantic similarity,
+/// so the correct chunk didn't even make the top 10.
+const KEYWORD_BOOST_WEIGHT: f32 = 0.4;
 
 /// Cheap lexical signal to supplement pure vector similarity: dense embeddings
 /// can under-rank a chunk that literally contains the query's technical terms

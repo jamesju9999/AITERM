@@ -319,10 +319,33 @@ pub async fn run_chat(
                 if !xml_calls.is_empty() {
                     for (tool_name, args) in xml_calls {
                         let key = tool_call_key(&tool_name, &args);
-                        if seen_calls.contains(&key) { continue; }
+                        let call_id = format!("xml_{}", uuid::Uuid::new_v4());
+                        if seen_calls.contains(&key) {
+                            let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::ToolCall {
+                                session_id: session_id.clone(),
+                                call_id: call_id.clone(),
+                                tool: tool_name.clone(),
+                                args: args.clone(),
+                            });
+                            let skip_msg = "(skipped: you already made this exact call this turn — repeating it will not return new information. \
+                                Do NOT call it again. Instead: try a different search phrasing, call read_document on a specific promising file, \
+                                or answer now using what you've already gathered.)".to_string();
+                            let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::ToolResult {
+                                session_id: session_id.clone(),
+                                call_id: call_id.clone(),
+                                content: skip_msg.clone(),
+                                truncated: false,
+                            });
+                            conversation.push(ChatMessage {
+                                role: "tool".into(),
+                                content: serde_json::Value::String(skip_msg),
+                                tool_call_id: Some(call_id),
+                                tool_calls: None,
+                            });
+                            continue;
+                        }
                         seen_calls.insert(key);
 
-                        let call_id = format!("xml_{}", uuid::Uuid::new_v4());
                         let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::ToolCall {
                             session_id: session_id.clone(),
                             call_id: call_id.clone(),
@@ -379,7 +402,9 @@ pub async fn run_chat(
                             tool: call.tool_name.clone(),
                             args: args.clone(),
                         });
-                        let skip_msg = "(skipped: same call already executed earlier in this session)".to_string();
+                        let skip_msg = "(skipped: you already made this exact call this turn — repeating it will not return new information. \
+                            Do NOT call it again. Instead: try a different search phrasing, call read_document on a specific promising file, \
+                            or answer now using what you've already gathered.)".to_string();
                         let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::ToolResult {
                             session_id: session_id.clone(),
                             call_id: call.id.clone(),
