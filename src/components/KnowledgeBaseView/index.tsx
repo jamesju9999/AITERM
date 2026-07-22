@@ -116,7 +116,13 @@ export function KnowledgeBaseView({ isActive }: Props) {
       const newWidth = rect.right - e.clientX;
       setHistoryWidth(Math.max(220, Math.min(newWidth, 480)));
     };
-    const onMouseUp = () => setIsResizingHistory(false);
+    const onMouseUp = () => {
+      setIsResizingHistory(false);
+      setHistoryWidth((w) => {
+        saveHistoryWidth(w);
+        return w;
+      });
+    };
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
     return () => {
@@ -125,8 +131,6 @@ export function KnowledgeBaseView({ isActive }: Props) {
       document.body.style.userSelect = "";
     };
   }, [isResizingHistory]);
-
-  useEffect(() => { saveHistoryWidth(historyWidth); }, [historyWidth]);
 
   // 首次載入完成後，若儲存的筆記本 id 已不存在（例如被刪除），改選第一個。
   useEffect(() => {
@@ -313,7 +317,10 @@ export function KnowledgeBaseView({ isActive }: Props) {
                 </span>
               )}
               {messages.length > 0 && (
-                <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={clear}>
+                <button
+                  className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+                  onClick={() => { if (!isStreaming) clear(); }}
+                >
                   {t.ca_clear}
                 </button>
               )}
@@ -366,7 +373,7 @@ export function KnowledgeBaseView({ isActive }: Props) {
             notebookName={activeNotebook.name}
             sessions={sessions}
             activeSessionId={activeChatSessionId}
-            onNew={clear}
+            onNew={() => { if (!isStreaming) clear(); }}
             onSelect={loadSession}
             onDelete={deleteSession}
           />
