@@ -9,6 +9,7 @@ pub mod mssql;
 pub mod db2;
 pub mod db2_sidecar;
 pub mod knowledge_base;
+pub mod kb_chat_sessions;
 
 pub use adapter::{DbAdapter, TableInfo, ColumnInfo, QueryResult};
 pub use manager::DbManager;
