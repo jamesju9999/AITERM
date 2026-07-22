@@ -106,4 +106,85 @@ describe("useTerminalBlocks", () => {
     expect(result.current.blocks[0].rawOutput).toBe("first\r\n");
     expect(result.current.blocks[1].rawOutput).toBe("second\r\n");
   });
+
+  it("fires onComplete exactly once with the final renderedLines-populated block on normal completion", async () => {
+    const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+    const onComplete = vi.fn();
+
+    act(() => {
+      result.current.submitCommand("echo hi", onComplete);
+    });
+    act(() => {
+      result.current.appendOutput("hi\r\n");
+    });
+
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;D;0\x07");
+    });
+
+    await waitFor(() => {
+      expect(onComplete).toHaveBeenCalledTimes(1);
+    });
+
+    const finalBlock = onComplete.mock.calls[0][0];
+    expect(finalBlock.status).toBe("completed");
+    expect(finalBlock.exitCode).toBe(0);
+    expect(finalBlock.renderedLines).toBeDefined();
+    expect(finalBlock.renderedLines[0].spans.map((s: { text: string }) => s.text).join("")).toBe("hi");
+
+    // Give any stray async work a chance to run, then confirm no duplicate fire.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("finalizes an orphaned running block as interrupted and fires its onComplete when submitCommand is called again before OSC 133 D", async () => {
+    const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+    const onComplete1 = vi.fn();
+    const onComplete2 = vi.fn();
+
+    act(() => {
+      result.current.submitCommand("cmd1", onComplete1);
+    });
+    act(() => {
+      result.current.appendOutput("first\r\n");
+    });
+
+    // cmd2 is submitted before cmd1's OSC 133 D ever fires (caller race /
+    // shell that doesn't reliably emit D). cmd1 must not be silently orphaned.
+    act(() => {
+      result.current.submitCommand("cmd2", onComplete2);
+    });
+
+    await waitFor(() => {
+      expect(onComplete1).toHaveBeenCalledTimes(1);
+    });
+    const orphanedBlock = onComplete1.mock.calls[0][0];
+    expect(orphanedBlock.command).toBe("cmd1");
+    expect(orphanedBlock.status).toBe("failed");
+    expect(orphanedBlock.exitCode).toBe(-1);
+    expect(orphanedBlock.rawOutput).toBe("first\r\n");
+    expect(orphanedBlock.renderedLines).toBeDefined();
+
+    expect(onComplete2).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.appendOutput("second\r\n");
+    });
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;D;0\x07");
+    });
+
+    await waitFor(() => {
+      expect(onComplete2).toHaveBeenCalledTimes(1);
+    });
+    const secondBlock = onComplete2.mock.calls[0][0];
+    expect(secondBlock.command).toBe("cmd2");
+    expect(secondBlock.status).toBe("completed");
+    expect(secondBlock.rawOutput).toBe("second\r\n");
+
+    // onComplete1 must never fire again — proves its completionCallbacksRef
+    // entry was deleted (not left stale or double-fired) when cmd1 was
+    // finalized.
+    expect(onComplete1).toHaveBeenCalledTimes(1);
+  });
 });

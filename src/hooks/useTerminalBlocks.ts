@@ -57,6 +57,52 @@ export function useTerminalBlocks(
     setBlocks(updated);
   }, []);
 
+  /**
+   * Marks a still-running block as completed/failed, freezes its rawOutput,
+   * kicks off headless ANSI parsing, and fires+clears its onComplete callback
+   * once parsing resolves. Shared by the normal OSC 133 D path and the
+   * defensive "orphaned block" path in submitCommand below, so a block can
+   * never be finalized more than once and its callback can never be left
+   * dangling regardless of which path finalizes it.
+   */
+  const finalizeBlock = useCallback(
+    (blockId: string, exitCode: number) => {
+      const prev = blocksRef.current;
+      const target = prev.find((b) => b.id === blockId);
+      if (!target || target.status !== "running") return;
+
+      const endTime = Date.now();
+      const frozenOutput = target.rawOutput;
+      const cols = term?.cols ?? 80;
+
+      const finalized: TerminalBlock = {
+        ...target,
+        status: exitCode === 0 ? "completed" : "failed",
+        exitCode,
+        endTime,
+      };
+      const updated = prev.map((b) => (b.id === blockId ? finalized : b));
+      blocksRef.current = updated;
+      setBlocks(updated);
+
+      parseAnsiToRenderedLines(frozenOutput, cols).then((renderedLines) => {
+        const withLines = blocksRef.current.map((b) =>
+          b.id === blockId ? { ...b, renderedLines } : b,
+        );
+        blocksRef.current = withLines;
+        setBlocks(withLines);
+
+        const cb = completionCallbacksRef.current.get(blockId);
+        if (cb) {
+          completionCallbacksRef.current.delete(blockId);
+          const finalBlock = withLines.find((b) => b.id === blockId)!;
+          setTimeout(() => cb(finalBlock), 50);
+        }
+      });
+    },
+    [term],
+  );
+
   useEffect(() => {
     if (!term) return;
 
@@ -73,43 +119,14 @@ export function useTerminalBlocks(
       } else if (data.startsWith("D")) {
         const parts = data.split(";");
         const exitCode = parts.length > 1 ? parseInt(parts[1], 10) : 0;
-        const endTime = Date.now();
 
         const prev = blocksRef.current;
         if (prev.length === 0) return true;
         const latest = prev[prev.length - 1];
         if (latest.status !== "running") return true;
 
-        const finalExitCode = isNaN(exitCode) ? 0 : exitCode;
-        const frozenOutput = latest.rawOutput;
-        const cols = term.cols;
-
-        const completedBlock: TerminalBlock = {
-          ...latest,
-          status: finalExitCode === 0 ? "completed" : "failed",
-          exitCode: finalExitCode,
-          endTime,
-        };
-        const updated = prev.map((b) => (b.id === latest.id ? completedBlock : b));
-        blocksRef.current = updated;
-        setBlocks(updated);
-
+        finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode);
         term.clear();
-
-        parseAnsiToRenderedLines(frozenOutput, cols).then((renderedLines) => {
-          const withLines = blocksRef.current.map((b) =>
-            b.id === latest.id ? { ...b, renderedLines } : b,
-          );
-          blocksRef.current = withLines;
-          setBlocks(withLines);
-
-          const cb = completionCallbacksRef.current.get(latest.id);
-          if (cb) {
-            completionCallbacksRef.current.delete(latest.id);
-            const finalBlock = withLines.find((b) => b.id === latest.id)!;
-            setTimeout(() => cb(finalBlock), 50);
-          }
-        });
 
         return true;
       }
@@ -120,11 +137,26 @@ export function useTerminalBlocks(
       disposeBuffer.dispose();
       disposeOsc.dispose();
     };
-  }, [term]);
+  }, [term, finalizeBlock]);
 
   const submitCommand = useCallback(
     (cmd: string, onComplete?: (block: TerminalBlock) => void) => {
       if (!term || !sessionId) return;
+
+      // If the previous block is still "running", its OSC 133 D never fired
+      // (caller raced ahead, or the shell doesn't reliably emit exactly one D
+      // per command). Defensively finalize it as failed/interrupted (exitCode
+      // -1 is a sentinel, not a real process exit code) so it never lingers
+      // forever and its onComplete callback — which the agent loop awaits —
+      // is never silently dropped, leaking the completionCallbacksRef entry
+      // and hanging the caller.
+      const prevBlocks = blocksRef.current;
+      if (prevBlocks.length > 0) {
+        const prevLatest = prevBlocks[prevBlocks.length - 1];
+        if (prevLatest.status === "running") {
+          finalizeBlock(prevLatest.id, -1);
+        }
+      }
 
       const newBlock: TerminalBlock = {
         id: Math.random().toString(36).substring(2, 15) + Date.now().toString(36),
@@ -153,7 +185,7 @@ export function useTerminalBlocks(
       const clearSeq = isWindows ? "" : "\x15";
       writePty(sessionId, clearSeq + cmd + "\r").catch(console.error);
     },
-    [sessionId, term, cwdRef],
+    [sessionId, term, cwdRef, finalizeBlock],
   );
 
   return {
