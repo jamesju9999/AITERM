@@ -27,7 +27,7 @@
 .aiterm-block-exit-ok { color: #4ade80; }
 .aiterm-block-exit-fail { color: #f87171; font-weight: 600; }
 
-.aiterm-block-actions {
+.aiterm-block-card__actions {
   margin-left: auto;
   display: flex;
   gap: 6px;

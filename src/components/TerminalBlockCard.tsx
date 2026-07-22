@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import type { TerminalBlock } from "../hooks/useTerminalBlocks";
 import "./TerminalBlockCard.css";
 
@@ -40,7 +40,7 @@ function highlightText(text: string, query?: string): React.ReactNode {
   );
 }
 
-export function TerminalBlockCard({ block, highlightQuery, onAskAi, onBookmark, onCopy }: TerminalBlockCardProps) {
+function TerminalBlockCardImpl({ block, highlightQuery, onAskAi, onBookmark, onCopy }: TerminalBlockCardProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
@@ -75,7 +75,7 @@ export function TerminalBlockCard({ block, highlightQuery, onAskAi, onBookmark, 
         )}
         {duration && <span className="aiterm-block-duration">({duration})</span>}
         <span className={exitClass}>{isFailed && block.exitCode !== undefined ? `exit ${block.exitCode}` : ""}</span>
-        <div className="aiterm-block-actions" onClick={(e) => e.stopPropagation()}>
+        <div className="aiterm-block-card__actions" onClick={(e) => e.stopPropagation()}>
           {isFailed && onAskAi && (
             <button className="aiterm-block-btn aiterm-btn aiterm-btn--secondary" onClick={() => onAskAi(block.command, block.exitCode)}>
               ✨ Ask AI
@@ -126,3 +126,11 @@ export function TerminalBlockCard({ block, highlightQuery, onAskAi, onBookmark, 
     </div>
   );
 }
+
+/**
+ * Memoized so a completed block's card doesn't re-render on every PTY output
+ * chunk from an unrelated, currently-running sibling block in the parent's
+ * `blocks.map(...)` list (only the running block's own object reference
+ * changes on each chunk).
+ */
+export const TerminalBlockCard = memo(TerminalBlockCardImpl);
