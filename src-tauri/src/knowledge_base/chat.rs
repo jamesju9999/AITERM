@@ -216,6 +216,11 @@ pub async fn run_chat(
         .to_string();
     let mut persisted_tool_calls: Vec<PersistedToolCall> = Vec::new();
     let mut full_answer_text = String::new();
+    // Prompt instructions alone ("call a tool every turn") aren't reliably followed by
+    // smaller/local models — observed in practice reusing an earlier turn's document
+    // content and answering with zero tool calls this turn. This flag lets us force a
+    // single corrective round if that happens, without risking an infinite loop.
+    let mut zero_tool_reprompted = false;
     let mut token_estimate = estimate_tokens(&system_prompt);
     let mut rounds = 0usize;
     let mut checkpoints = 0usize;
@@ -374,6 +379,25 @@ pub async fn run_chat(
                         });
                     }
                     rounds += 1;
+                } else if persisted_tool_calls.is_empty() && !zero_tool_reprompted && !force_answer {
+                    // Model tried to answer this turn without ever calling a tool. The
+                    // system prompt already says every turn needs its own tool call, but
+                    // that instruction alone isn't reliably followed by smaller/local
+                    // models — observed reusing an earlier turn's document content
+                    // instead of searching fresh. Force one corrective round.
+                    zero_tool_reprompted = true;
+                    full_answer_text.clear();
+                    conversation.push(ChatMessage {
+                        role: "user".into(),
+                        content: serde_json::Value::String(
+                            "You answered without calling search_documents or read_document this turn. \
+                             Call search_documents now for this specific question before answering — \
+                             do not reuse content from earlier turns.".into()
+                        ),
+                        tool_call_id: None,
+                        tool_calls: None,
+                    });
+                    continue;
                 } else {
                     save_chat_turn(&pool, &chat_session_id, &last_user_text, &full_answer_text, &persisted_tool_calls).await;
                     let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::Done {
