@@ -37,6 +37,7 @@ use serde::Serialize;
 use crate::config::{ConfigStore, ProviderType};
 use crate::secret::SecretStore;
 use crate::db::knowledge_base as kb_db;
+use crate::db::kb_chat_sessions::{self, ChatSessionSummary, ChatMessageRow};
 use crate::knowledge_base::embedding::{Embedder, EmbedderConfig, HttpEmbedder};
 use crate::knowledge_base::ingest::{sync_notebook, DocumentConverter, SyncProgress, SyncSummary};
 
@@ -167,6 +168,7 @@ pub async fn kb_chat(
     notebook_id: String,
     messages: Vec<ChatMessage>,
     session_id: String,
+    chat_session_id: String,
     provider_id: Option<String>,
     locale: Locale,
     app: AppHandle,
@@ -200,8 +202,45 @@ pub async fn kb_chat(
     };
 
     crate::knowledge_base::chat::run_chat(
-        db.pool.clone(), notebook, messages, chat_provider, embedder, session_id, locale, app,
+        db.pool.clone(), notebook, messages, chat_provider, embedder, session_id, chat_session_id, locale, app,
     ).await
+}
+
+#[tauri::command]
+pub async fn kb_create_chat_session(
+    notebook_id: String,
+    title: String,
+    db: tauri::State<'_, kb_db::KnowledgeBaseDb>,
+) -> Result<String, String> {
+    kb_chat_sessions::create_chat_session(&db.pool, &notebook_id, &title)
+        .await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn kb_list_chat_sessions(
+    notebook_id: String,
+    db: tauri::State<'_, kb_db::KnowledgeBaseDb>,
+) -> Result<Vec<ChatSessionSummary>, String> {
+    kb_chat_sessions::list_chat_sessions(&db.pool, &notebook_id)
+        .await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn kb_load_chat_session(
+    session_id: String,
+    db: tauri::State<'_, kb_db::KnowledgeBaseDb>,
+) -> Result<Vec<ChatMessageRow>, String> {
+    kb_chat_sessions::load_chat_session_messages(&db.pool, &session_id)
+        .await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn kb_delete_chat_session(
+    session_id: String,
+    db: tauri::State<'_, kb_db::KnowledgeBaseDb>,
+) -> Result<(), String> {
+    kb_chat_sessions::delete_chat_session(&db.pool, &session_id)
+        .await.map_err(|e| e.to_string())
 }
 
 /// 開啟筆記本資料夾內的某份文件（OS 預設應用程式）。

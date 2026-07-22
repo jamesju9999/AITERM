@@ -24,7 +24,10 @@ use commands::{
     },
     ai::{agent_chat, ai_chat, ai_query},
     code_assistant::code_assistant_chat,
-    knowledge_base::{kb_create_notebook, kb_list_notebooks, kb_delete_notebook, kb_sync_notebook, kb_chat, kb_open_document},
+    knowledge_base::{
+        kb_create_notebook, kb_list_notebooks, kb_delete_notebook, kb_sync_notebook, kb_chat, kb_open_document,
+        kb_create_chat_session, kb_list_chat_sessions, kb_load_chat_session, kb_delete_chat_session,
+    },
     config::{
         get_config, is_onboarding_done, set_default_tab, set_execution_mode, set_max_agent_steps,
         set_onboarding_done, set_submit_shortcut,
@@ -252,6 +255,10 @@ pub fn run() {
             kb_sync_notebook,
             kb_chat,
             kb_open_document,
+            kb_create_chat_session,
+            kb_list_chat_sessions,
+            kb_load_chat_session,
+            kb_delete_chat_session,
             // Config
             get_config,
             set_execution_mode,
