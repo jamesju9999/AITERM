@@ -1173,6 +1173,10 @@ import { TerminalBlockCard } from "./TerminalBlockCard";
 }
 ```
 
+- [ ] **Step 4.5: 刪除舊 overlay 的死 CSS（Task 6 code review 發現，原計畫遺漏）**
+
+`src/components/TerminalView.css` 第 74-150 行（`/* ── M6: Xterm Block Decorations ── */` 到 `/* ── Block Action Buttons ── */` 整段，含 `.aiterm-block-decoration`、`.aiterm-block-success`、`.aiterm-block-error`、`.aiterm-block-actions`、`.aiterm-block-btn*`）是舊 overlay 專用的樣式，Step 4 把對應的 JSX 刪掉後這整段變成死程式碼。**必須刪除**，不是可做可不做：`TerminalBlockCard.css` 裡的按鈕沿用了同樣的 class 名稱（`aiterm-block-btn`、`aiterm-btn--secondary` 組合），這段舊規則的 `.aiterm-block-btn.aiterm-btn--secondary { font-family: "Cascadia Mono", ...; font-size: 11px; padding: 2px 8px; }` 選擇器不看規則來自哪個檔案，仍會套用到新元件的按鈕上，讓新卡片的按鈕意外套用舊字型/padding。整段刪除（含 74 行上方的區塊標題註解、`@keyframes aiterm-block-fadein`）。
+
 - [ ] **Step 5: 區塊完成時非同步抓取 git 資訊**
 
 在元件內新增一個 `useEffect`，監看剛完成但還沒有 `gitInfo` 欄位的區塊，做 500ms 防抖後查詢：
@@ -1238,6 +1242,8 @@ git commit -m "refactor(terminal): render completed blocks as a DOM list instead
 - Create: `src/lib/blockSearch.ts`
 - Test: `src/lib/blockSearch.test.ts`
 - Modify: `src/components/TerminalView.tsx`
+
+> **已知限制（Task 6 code review 發現，刻意接受不修）：** `TerminalBlockCard` 的 `highlightQuery` prop 只是一個字串，只會高亮該區塊內容裡「第一個」符合的地方，無法表達「這是第 N 個符合項」。如果同一個區塊內有兩個以上符合搜尋字串的地方，搜尋游標在同一區塊內移動到第二個以後的符合項時，畫面上高亮的位置不會跟著移動（還是停在第一個）——但區塊本身還是會正確捲動、定位到，只是視覺反白的精確度在多重符合的情況下打折扣。這是刻意的取捨（避免把 offset-aware 的高亮機制做進去，增加不必要的複雜度），不是這個 Task 要修的東西，除非之後使用起來發現這個限制實際上很惱人，才考慮做進階版。
 
 - [ ] **Step 1: 寫失敗的測試**
 
