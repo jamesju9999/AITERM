@@ -1,5 +1,6 @@
 // src-tauri/src/db/knowledge_base.rs
 use sqlx::{SqlitePool, FromRow};
+use sqlx::sqlite::SqliteConnectOptions;
 use serde::{Serialize, Deserialize};
 use std::path::PathBuf;
 use std::fs;
@@ -39,8 +40,16 @@ impl KnowledgeBaseDb {
             .join("AITERM");
         fs::create_dir_all(&app_data_dir).ok();
         let db_path = app_data_dir.join("knowledge_base.db");
-        let url = format!("sqlite:{}", db_path.to_string_lossy());
-        let pool = SqlitePool::connect(&url).await.unwrap_or_else(|_| {
+        // `SqlitePool::connect` does NOT create a missing database file by default
+        // (sqlx's SqliteConnectOptions defaults create_if_missing to false) — it
+        // simply fails to open, and the fallback below would then silently swap in
+        // an in-memory database with no error surfaced anywhere. That means every
+        // notebook/document/chunk would vanish on app restart. Explicitly opt in to
+        // file creation so a first run actually persists to disk.
+        let options = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(options).await.unwrap_or_else(|_| {
             SqlitePool::connect_lazy("sqlite::memory:").unwrap()
         });
         let db = Self { pool };
