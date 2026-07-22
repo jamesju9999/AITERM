@@ -6,6 +6,7 @@ pub mod config;
 pub mod db;
 pub mod enterprise;
 pub mod guard;
+pub mod knowledge_base;
 pub mod mcp;
 pub mod pty;
 pub mod secret;
@@ -23,6 +24,10 @@ use commands::{
     },
     ai::{agent_chat, ai_chat, ai_query},
     code_assistant::code_assistant_chat,
+    knowledge_base::{
+        kb_create_notebook, kb_list_notebooks, kb_delete_notebook, kb_sync_notebook, kb_chat, kb_open_document,
+        kb_create_chat_session, kb_list_chat_sessions, kb_load_chat_session, kb_delete_chat_session,
+    },
     config::{
         get_config, is_onboarding_done, set_default_tab, set_execution_mode, set_max_agent_steps,
         set_onboarding_done, set_submit_shortcut,
@@ -93,6 +98,7 @@ pub fn run() {
 
     let design_db = tauri::async_runtime::block_on(async { DesignDb::new().await });
     let loop_session_db = tauri::async_runtime::block_on(async { LoopSessionDb::new().await });
+    let kb_db = tauri::async_runtime::block_on(async { db::knowledge_base::KnowledgeBaseDb::new().await });
 
     // Initialize McpManager and connect to enabled servers
     let mcp_manager: McpManagerState = {
@@ -211,6 +217,7 @@ pub fn run() {
         .manage(DbManager::new())
         .manage(design_db)
         .manage(loop_session_db)
+        .manage(kb_db)
         .manage(Db2SidecarState::new(sidecar_path))
         .manage(Arc::new(Mutex::new(VcsCredentialManager::new())))
         .manage(Arc::new(Mutex::new(EnterpriseTaskState::new())))
@@ -241,6 +248,17 @@ pub fn run() {
             agent_chat,
             code_assistant_chat,
             agent_exec,
+            // Knowledge Base
+            kb_create_notebook,
+            kb_list_notebooks,
+            kb_delete_notebook,
+            kb_sync_notebook,
+            kb_chat,
+            kb_open_document,
+            kb_create_chat_session,
+            kb_list_chat_sessions,
+            kb_load_chat_session,
+            kb_delete_chat_session,
             // Config
             get_config,
             set_execution_mode,

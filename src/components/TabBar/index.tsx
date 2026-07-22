@@ -13,11 +13,12 @@ import {
   RefreshIcon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
-  CodeIcon
+  CodeIcon,
+  LibraryIcon
 } from "../Icons";
 import "./index.css";
 
-export type TabType = "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant";
+export type TabType = "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant" | "knowledge-base";
 
 export interface Tab {
   id: string;
@@ -56,6 +57,7 @@ function getTabIcon(type: TabType): React.ReactNode {
     case "api-docs": return <BookOpenIcon size={18} />;
     case "loop-studio": return <RefreshIcon size={18} />;
     case "code-assistant": return <CodeIcon size={18} />;
+    case "knowledge-base": return <LibraryIcon size={18} />;
     default: return <FileTextIcon size={18} />;
   }
 }

@@ -1,5 +1,6 @@
 // src-tauri/src/db/design.rs
 use sqlx::{SqlitePool, FromRow};
+use sqlx::sqlite::SqliteConnectOptions;
 use serde::{Serialize, Deserialize};
 use uuid::Uuid;
 use std::path::PathBuf;
@@ -38,9 +39,15 @@ impl DesignDb {
         
         fs::create_dir_all(&app_data_dir).ok();
         let db_path = app_data_dir.join("design.db");
-        let url = format!("sqlite:{}", db_path.to_string_lossy());
-        
-        let pool = SqlitePool::connect(&url).await.unwrap_or_else(|_| {
+        // SqlitePool::connect does not create a missing file by default (sqlx
+        // defaults create_if_missing to false) — it fails to open, and the
+        // fallback below then silently swaps in an in-memory DB with no error
+        // surfaced anywhere. Explicitly opt in to file creation so data persists.
+        let options = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(true);
+
+        let pool = SqlitePool::connect_with(options).await.unwrap_or_else(|_| {
             // Fallback to in-memory if file fails
             SqlitePool::connect_lazy("sqlite::memory:").unwrap()
         });
