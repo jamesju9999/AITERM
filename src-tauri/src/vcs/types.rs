@@ -211,7 +211,8 @@ pub enum VcsResult {
     SvnNotInstalled,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// Branch + working-tree diff stats for a terminal block header.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitBlockInfo {
     pub branch: String,
     pub insertions: u32,
