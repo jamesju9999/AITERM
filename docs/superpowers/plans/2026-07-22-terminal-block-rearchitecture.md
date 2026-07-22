@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-22-terminal-block-rearchitecture-design.md`
 
+> **執行中修正（Task 5 code review 發現）：** 這個專案的 `tsconfig.json` 是 solution-style（`"files": []` + `references`），導致 `npx tsc --noEmit` 對 `src/` 完全不做型別檢查、永遠 exit 0——本計畫先前所有 Task 的「型別檢查」步驟因此都是假通過。**從現在起，本計畫所有型別檢查步驟一律改用 `npx tsc -b`**（等同 `npm run build` 實際執行的檢查）。這個問題也讓 Task 5 移除 `TerminalBlock` 舊欄位（`output`/`startLine`/`endLine`/`startMarker`/`endMarker`）時，遺漏了兩個計畫原本沒列到、但同樣讀取這些欄位的隱藏消費者：`src/components/AiPanel/index.tsx`（已直接修正，`block.output` → `block.rawOutput`）與 `TerminalView.tsx` 裡另外兩處（見 Task 7 新增的 Step 0）。
+
 ---
 
 ## Task 1: Rust — `GitBlockInfo` 型別與 `quick_block_info` 方法
@@ -1022,6 +1024,57 @@ git commit -m "feat(terminal): add TerminalBlockCard with Warp-style header"
 **Files:**
 - Modify: `src/components/TerminalView.tsx`
 
+> **新增範圍（Task 5 code review 發現，原計畫遺漏）：** 執行 `npx tsc -b`（而非之前誤用、對 `src/` 完全不做檢查的 `npx tsc --noEmit`）才會發現，除了 Step 4 要移除的 overlay 區塊，`TerminalView.tsx` 裡還有兩處各自獨立讀取已被 Task 5 移除的 `block.startLine`/`block.endLine`，用來從**即時 xterm 緩衝區重新掃描**指令輸出文字。這兩處都應該改成直接讀 `block.rawOutput`（Task 5 已經把完整原始輸出存在區塊上了，不需要再回頭掃描緩衝區——這也比舊做法更可靠，因為現在完成後會呼叫 `term.clear()`，緩衝區內容已經被清掉了）。新增以下 Step 0 一併處理，順序上必須在 Step 4（該處的 `blocks`/overlay 邏輯）之前完成，避免建置中斷。
+
+- [ ] **Step 0a: 修正「遙控回應」功能改讀 `rawOutput`**
+
+先讀取 `src/components/TerminalView.tsx:319-343` 確認內容與下方一致（`submitCommand(text, (block) => {...})`，透過 `startLine`/`endLine` 掃描 `term.buffer.active` 取得輸出文字，供 `sendRemoteResponse` 使用）。整段改為：
+
+```ts
+        submitCommand(text, (block) => {
+          let output = block.rawOutput.trim();
+          if (output.length > 0) {
+            if (output.length > 4000) {
+              output = output.substring(0, 4000) + "\n... (output truncated)";
+            }
+            sendRemoteResponse(output);
+          } else {
+            sendRemoteResponse(`(Command finished: ${block.command})`);
+          }
+        });
+```
+
+（移除對 `termRef.current`/`term.buffer.active` 的存取，因為不再需要重新掃描緩衝區；`startLine`/`endLine` 相關的兩行局部變數與註解一併刪除。）
+
+- [ ] **Step 0b: 修正 Agent Mission 的 `onBlockDone` 改讀 `rawOutput`**
+
+先讀取 `src/components/TerminalView.tsx:1323-1337` 確認內容與下方一致（`onBlockDone` callback，同樣用 `startLine`/`endLine` 掃描緩衝區取得 `rawOutput` 給 Agent Loop 下一步使用）。把：
+
+```ts
+    // Extract terminal output for this block
+    const startY = completedBlock.startLine ?? 0;
+    const endY = completedBlock.endLine ?? term.buffer.active.cursorY + term.buffer.active.baseY;
+    let rawOutput = "";
+    for (let i = startY; i < endY; i++) {
+      rawOutput += term.buffer.active.getLine(i)?.translateToString(true) + "\n";
+    }
+    rawOutput = rawOutput.trim();
+    if (rawOutput.length > 2000) rawOutput = rawOutput.slice(rawOutput.length - 2000);
+```
+
+改為：
+
+```ts
+    // Extract terminal output for this block
+    let rawOutput = completedBlock.rawOutput.trim();
+    if (rawOutput.length > 2000) rawOutput = rawOutput.slice(rawOutput.length - 2000);
+```
+
+- [ ] **Step 0c: 確認建置乾淨**
+
+Run: `npx tsc -b 2>&1 | grep -v "startMarker\|b.endLine\|b.startLine\|b.endMarker"`（Step 4 完成前，overlay 區塊本身的錯誤還會存在，先確認 Step 0a/0b 涉及的那兩處錯誤已消失，overlay 相關錯誤留到 Step 4 之後再一併確認清空）
+Expected: 只剩下 Step 4 尚未處理的 overlay 相關錯誤（`b.startMarker`/`b.endLine`/`b.endMarker` 這幾個，都在約 921-959 行）
+
 - [ ] **Step 1: 新增 `lastCwdRef` 並在既有 cwd 輪詢中同步更新**
 
 先讀取 `src/components/TerminalView.tsx:115-144` 確認目前內容與本計畫描述一致（`displayCwd` state + `setInterval` 輪詢 `getSessionCwd`）。在 `const [displayCwd, setDisplayCwd] = useState<string>("");` 之後（約 120 行）新增：
@@ -1156,7 +1209,7 @@ import { getGitBlockInfo } from "../ipc/vcs";
 
 - [ ] **Step 6: 型別檢查與現有測試**
 
-Run: `npx tsc --noEmit`
+Run: `npx tsc -b`（注意：不是 `--noEmit`，這個專案的 solution-style tsconfig 會讓 `--noEmit` 對 `src/` 完全不做檢查）
 Expected: 無錯誤
 
 Run: `npm run test`
@@ -1391,7 +1444,7 @@ Modify `src/components/TerminalView.tsx`（Task 7 Step 4 新增的 `<TerminalBlo
 
 - [ ] **Step 7: 型別檢查與完整測試**
 
-Run: `npx tsc --noEmit && npm run test`
+Run: `npx tsc -b && npm run test`（注意：不是 `--noEmit`）
 Expected: 全部通過
 
 - [ ] **Step 8: 手動驗證**
