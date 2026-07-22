@@ -66,7 +66,7 @@ export function useTerminalBlocks(
    * dangling regardless of which path finalizes it.
    */
   const finalizeBlock = useCallback(
-    (blockId: string, exitCode: number) => {
+    (blockId: string, exitCode: number, opts?: { clearTerminalOnParsed?: boolean }) => {
       const prev = blocksRef.current;
       const target = prev.find((b) => b.id === blockId);
       if (!target || target.status !== "running") return;
@@ -91,6 +91,12 @@ export function useTerminalBlocks(
         );
         blocksRef.current = withLines;
         setBlocks(withLines);
+
+        // Only clear the live terminal once the card is actually ready to take over
+        // (renderedLines set above) — clearing any earlier risks a blank-screen flash
+        // between "raw output disappears" and "card appears", especially for large
+        // outputs where headless ANSI parsing takes measurably longer.
+        if (opts?.clearTerminalOnParsed) term?.clear();
 
         const cb = completionCallbacksRef.current.get(blockId);
         if (cb) {
@@ -125,8 +131,7 @@ export function useTerminalBlocks(
         const latest = prev[prev.length - 1];
         if (latest.status !== "running") return true;
 
-        finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode);
-        term.clear();
+        finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode, { clearTerminalOnParsed: true });
 
         return true;
       }

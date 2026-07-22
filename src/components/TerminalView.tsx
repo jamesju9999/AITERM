@@ -201,10 +201,11 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const blocksRef = useRef(blocks);
   useEffect(() => { blocksRef.current = blocks; }, [blocks]);
 
-  // Auto-scroll the completed-block list to the bottom whenever a new block is added.
+  // Auto-scroll the completed-block list to the bottom whenever a new card becomes visible.
+  const visibleBlockCount = blocks.filter((b) => b.status !== "running" && b.renderedLines).length;
   useEffect(() => {
     blockListRef.current?.scrollTo({ top: blockListRef.current.scrollHeight });
-  }, [blocks.length]);
+  }, [visibleBlockCount]);
 
   // Fetch git info (branch, insertions/deletions) for completed blocks, debounced 500ms.
   const gitFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -905,26 +906,37 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             <button onClick={closeSearch} title={t.term_search_close} className="terminal-search-btn terminal-search-close aiterm-btn aiterm-btn--secondary aiterm-btn--sm">✕</button>
           </div>
         )}
-        <div className="aiterm-block-list" ref={blockListRef}>
-          {blocks
-            .filter((b) => b.status !== "running" && b.renderedLines)
-            .map((b) => (
-              <TerminalBlockCard
-                key={b.id}
-                block={b}
-                highlightQuery={searchOpen ? searchQuery : undefined}
-                onAskAi={(command, exitCode) => {
-                  window.dispatchEvent(new CustomEvent("aiterm:ask-ai", { detail: { command, exitCode } }));
-                }}
-                onBookmark={(command) => addBookmark(command)}
-                onCopy={(command) => navigator.clipboard.writeText(command).catch(console.error)}
-              />
-            ))}
-        </div>
+        {/* Block list is hidden while a full-screen program (vim, htop, less, ...) owns the
+            alternate buffer — those programs must render exactly as they did before this
+            refactor: full panel, no stale completed-command cards competing for space. */}
+        {!isAlternateBuffer && (
+          <div className="aiterm-block-list" ref={blockListRef}>
+            {blocks
+              .filter((b) => b.status !== "running" && b.renderedLines)
+              .map((b) => (
+                <TerminalBlockCard
+                  key={b.id}
+                  block={b}
+                  highlightQuery={searchOpen ? searchQuery : undefined}
+                  onAskAi={(command, exitCode) => {
+                    window.dispatchEvent(new CustomEvent("aiterm:ask-ai", { detail: { command, exitCode } }));
+                  }}
+                  onBookmark={(command) => addBookmark(command)}
+                  onCopy={(command) => navigator.clipboard.writeText(command).catch(console.error)}
+                />
+              ))}
+          </div>
+        )}
         <div
           ref={hostRef}
           className="aiterm-terminal-root"
-          style={{ height: "220px", width: "calc(100% - 20px)", marginLeft: "20px", boxSizing: "border-box", flexShrink: 0 }}
+          style={{
+            height: isAlternateBuffer ? "100%" : "220px",
+            width: "calc(100% - 20px)",
+            marginLeft: "20px",
+            boxSizing: "border-box",
+            flexShrink: 0,
+          }}
         />
         </div>{/* end terminal wrapper */}
       </div>{/* end relative container */}
