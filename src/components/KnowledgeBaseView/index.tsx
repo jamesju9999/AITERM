@@ -179,6 +179,17 @@ export function KnowledgeBaseView({ isActive }: Props) {
           </div>
         ) : (
           <>
+            {activeNotebook.last_synced_at === null && syncingId !== activeNotebook.id && (
+              <div className="kb-unsynced-banner">
+                <span>{t.kb_unsynced_prompt(activeNotebook.name)}</span>
+                <button
+                  className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
+                  onClick={() => void sync(activeNotebook.id)}
+                >
+                  {t.kb_sync_button}
+                </button>
+              </div>
+            )}
             <div className="ca-messages">
               {messages.length === 0 && (
                 <div className="ca-hint-center">
