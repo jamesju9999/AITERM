@@ -211,13 +211,13 @@ pub async fn run_chat(
         .unwrap_or("")
         .to_string();
     let mut persisted_tool_calls: Vec<PersistedToolCall> = Vec::new();
+    let mut full_answer_text = String::new();
     let mut token_estimate = estimate_tokens(&system_prompt);
     let mut rounds = 0usize;
     let mut checkpoints = 0usize;
     let mut seen_calls: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     loop {
-        let mut current_round_text = String::new();
         let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::TokenCount {
             session_id: session_id.clone(),
             count: token_estimate,
@@ -278,7 +278,7 @@ pub async fn run_chat(
 
         while let Some(chunk) = rx.recv().await {
             if !chunk.delta.is_empty() {
-                current_round_text.push_str(&chunk.delta);
+                full_answer_text.push_str(&chunk.delta);
                 let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::TextDelta {
                     session_id: session_id.clone(),
                     delta: chunk.delta.clone(),
@@ -348,7 +348,7 @@ pub async fn run_chat(
                     }
                     rounds += 1;
                 } else {
-                    save_chat_turn(&pool, &chat_session_id, &last_user_text, &current_round_text, &persisted_tool_calls).await;
+                    save_chat_turn(&pool, &chat_session_id, &last_user_text, &full_answer_text, &persisted_tool_calls).await;
                     let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::Done {
                         session_id: session_id.clone(),
                     });
