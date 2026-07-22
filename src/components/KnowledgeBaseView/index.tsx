@@ -222,6 +222,11 @@ export function KnowledgeBaseView({ isActive }: Props) {
                     {msg.role === "assistant" && (msg.toolCalls ?? []).map((tc) => (
                       <ToolCallCard key={tc.callId} toolCall={tc} />
                     ))}
+                    {msg.role === "assistant" && (msg.checkpoints ?? []).map((n) => (
+                      <div key={`checkpoint-${n}`} className="kb-checkpoint-badge">
+                        {t.kb_checkpoint_notice(n)}
+                      </div>
+                    ))}
                     {(msg.content || msg.streaming) && (
                       <div className="ca-msg__bubble">
                         {msg.role === "assistant" ? <MarkdownText text={msg.content} /> : msg.content}

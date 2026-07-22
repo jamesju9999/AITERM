@@ -9,6 +9,7 @@ export interface KbMessage {
   role: "user" | "assistant";
   content: string;
   toolCalls?: ToolCallState[];
+  checkpoints?: number[];
   streaming?: boolean;
 }
 
@@ -92,6 +93,14 @@ export function useKnowledgeBaseChat(notebookId: string | null): UseKnowledgeBas
           const next = [...prev];
           const last = { ...next[next.length - 1] };
           last.content = (last.content ?? "") + p.delta;
+          next[next.length - 1] = last;
+          return next;
+        });
+      } else if (p.kind === "checkpoint") {
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = { ...next[next.length - 1] };
+          last.checkpoints = [...(last.checkpoints ?? []), p.number];
           next[next.length - 1] = last;
           return next;
         });

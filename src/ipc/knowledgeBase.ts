@@ -26,6 +26,7 @@ export type KbChatEvent =
   | { kind: "tool_call"; session_id: string; call_id: string; tool: string; args: Record<string, unknown> }
   | { kind: "tool_result"; session_id: string; call_id: string; content: string; truncated: boolean }
   | { kind: "text_delta"; session_id: string; delta: string }
+  | { kind: "checkpoint"; session_id: string; number: number }
   | { kind: "done"; session_id: string }
   | { kind: "error"; session_id: string; message: string }
   | { kind: "fallback_mode"; session_id: string }

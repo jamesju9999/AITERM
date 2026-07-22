@@ -38,6 +38,10 @@ pub enum KbChatEvent {
         session_id: String,
         delta: String,
     },
+    Checkpoint {
+        session_id: String,
+        number: usize,
+    },
     Done {
         session_id: String,
     },
@@ -185,11 +189,9 @@ pub async fn run_chat(
 
         if token_estimate >= CHECKPOINT_THRESHOLD && checkpoints < MAX_CHECKPOINTS {
             checkpoints += 1;
-            let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::TextDelta {
+            let _ = app.emit(KB_CHAT_EVENT, KbChatEvent::Checkpoint {
                 session_id: session_id.clone(),
-                delta: format!(
-                    "\n\n> [Checkpoint #{checkpoints}：正在壓縮已蒐集的資料，繼續探索...]\n\n"
-                ),
+                number: checkpoints,
             });
             let summary = generate_checkpoint_summary(&conversation, chat_provider.clone(), locale).await;
             conversation = compress_conversation(conversation, &summary, checkpoints);
