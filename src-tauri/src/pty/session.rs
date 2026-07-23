@@ -19,13 +19,112 @@ pub struct PtySession {
     child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
     reader_thread: Mutex<Option<JoinHandle<()>>>,
     shell_variant: ShellVariant,
-    cwd: Mutex<PathBuf>,
-    previous_cwd: Mutex<Option<PathBuf>>,
+    /// Shared with the reader thread, which commits a pending cd (see
+    /// `pending_cds`) once it observes a confirming OSC 133 D exit code.
+    cwd: Arc<Mutex<PathBuf>>,
+    previous_cwd: Arc<Mutex<Option<PathBuf>>>,
     line_buffer: Mutex<Vec<u8>>,
     /// ANSI escape-sequence state for the line buffer: 0=normal, 1=saw ESC, 2=in CSI (ESC [).
     line_esc_state: Mutex<u8>,
     /// Ring buffer capturing raw PTY output for AI context. Shared with the reader thread.
     output_ring: Arc<Mutex<VecDeque<u8>>>,
+    /// cd attempts staged by `apply_cd_if_any` (write path) for Bash/Pwsh
+    /// sessions, each removed by the reader thread once it sees the matching
+    /// OSC 133 D marker — committed to cwd/previous_cwd only if that marker
+    /// reports exit code 0. See `cd_parser::find_exit_codes`.
+    pending_cds: Arc<Mutex<VecDeque<ParsedCd>>>,
+}
+
+/// Commits a resolved cd to `cwd`/`previous_cwd`. Free function (not a method)
+/// so both `PtySession`'s own methods and the reader thread closure — which
+/// only has `Arc` clones of these fields, not `&self` — can call it.
+fn commit_parsed_cd(cwd: &Mutex<PathBuf>, previous_cwd: &Mutex<Option<PathBuf>>, parsed: ParsedCd) {
+    match parsed {
+        ParsedCd::NotCd => {}
+        ParsedCd::ChangeTo(new_cwd) => {
+            let current = cwd.lock().clone();
+            *previous_cwd.lock() = Some(current);
+            *cwd.lock() = new_cwd;
+        }
+        ParsedCd::SwapPrevious => {
+            let mut prev = previous_cwd.lock();
+            if let Some(p) = prev.take() {
+                let new_prev = cwd.lock().clone();
+                *cwd.lock() = p;
+                *prev = Some(new_prev);
+            }
+        }
+        ParsedCd::ToHome => {
+            if let Some(home) =
+                std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+            {
+                let current = cwd.lock().clone();
+                *previous_cwd.lock() = Some(current);
+                *cwd.lock() = PathBuf::from(home);
+            }
+        }
+    }
+}
+
+/// Projects what cwd *would* be if every currently-staged (not yet confirmed)
+/// cd in `pending` went on to succeed, in order — folded on top of the real,
+/// last-confirmed `cwd`. Used only to resolve relative paths when parsing a
+/// *new* line while earlier cds are still awaiting confirmation (e.g. a
+/// multi-line paste of several `cd` commands back-to-back): a real shell
+/// processes each one before the next starts, so the next line's relative
+/// path must resolve against where the previous one *would* land, not
+/// against the stale confirmed cwd. This never touches actual state — it's
+/// purely a preview for the parser; the real commit still only happens one
+/// at a time via `confirm_pending_cds_from_output`.
+fn effective_cwd_with_pending(cwd: &PathBuf, pending: &VecDeque<ParsedCd>) -> PathBuf {
+    let mut current = cwd.clone();
+    let mut previous: Option<PathBuf> = None;
+    for parsed in pending {
+        match parsed {
+            ParsedCd::NotCd => {}
+            ParsedCd::ChangeTo(new_cwd) => {
+                previous = Some(current.clone());
+                current = new_cwd.clone();
+            }
+            ParsedCd::SwapPrevious => {
+                if let Some(p) = previous.take() {
+                    previous = Some(current.clone());
+                    current = p;
+                }
+            }
+            ParsedCd::ToHome => {
+                if let Some(home) =
+                    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+                {
+                    previous = Some(current.clone());
+                    current = PathBuf::from(home);
+                }
+            }
+        }
+    }
+    current
+}
+
+/// For Bash/Pwsh sessions, scans an incoming chunk for OSC 133 D markers and
+/// confirms or discards the oldest pending cd for each one found, in order.
+/// A no-op chunk with no markers is the overwhelmingly common case, so this
+/// is cheap to call unconditionally on every read.
+fn confirm_pending_cds_from_output(
+    chunk: &[u8],
+    pending_cds: &Mutex<VecDeque<ParsedCd>>,
+    cwd: &Mutex<PathBuf>,
+    previous_cwd: &Mutex<Option<PathBuf>>,
+) {
+    for exit_code in cd_parser::find_exit_codes(chunk) {
+        let popped = pending_cds.lock().pop_front();
+        if let Some(parsed) = popped {
+            if exit_code == 0 {
+                commit_parsed_cd(cwd, previous_cwd, parsed);
+            }
+            // Non-zero exit: the shell itself is telling us this cd failed —
+            // discard it and leave cwd exactly as it was.
+        }
+    }
 }
 
 impl PtySession {
@@ -73,6 +172,12 @@ impl PtySession {
 
         let output_ring: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::new()));
         let ring_for_thread = Arc::clone(&output_ring);
+        let cwd: Arc<Mutex<PathBuf>> = Arc::new(Mutex::new(initial_cwd));
+        let cwd_for_thread = Arc::clone(&cwd);
+        let previous_cwd: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
+        let previous_cwd_for_thread = Arc::clone(&previous_cwd);
+        let pending_cds: Arc<Mutex<VecDeque<ParsedCd>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let pending_cds_for_thread = Arc::clone(&pending_cds);
 
         let reader_thread = thread::Builder::new()
             .name(format!("pty-reader-{}", id))
@@ -90,6 +195,14 @@ impl PtySession {
                                     if ring.len() >= RING_CAP { ring.pop_front(); }
                                     ring.push_back(b);
                                 }
+                            }
+                            if matches!(shell_variant, ShellVariant::Bash | ShellVariant::Pwsh) {
+                                confirm_pending_cds_from_output(
+                                    &chunk,
+                                    &pending_cds_for_thread,
+                                    &cwd_for_thread,
+                                    &previous_cwd_for_thread,
+                                );
                             }
                             on_data(chunk);
                         }
@@ -109,11 +222,12 @@ impl PtySession {
             child: Mutex::new(child),
             reader_thread: Mutex::new(Some(reader_thread)),
             shell_variant,
-            cwd: Mutex::new(initial_cwd),
-            previous_cwd: Mutex::new(None),
+            cwd,
+            previous_cwd,
             line_buffer: Mutex::new(Vec::new()),
             line_esc_state: Mutex::new(0),
             output_ring,
+            pending_cds,
         })
     }
 
@@ -165,6 +279,12 @@ impl PtySession {
 
         let output_ring: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::new()));
         let ring_for_thread = Arc::clone(&output_ring);
+        let cwd: Arc<Mutex<PathBuf>> = Arc::new(Mutex::new(initial_cwd));
+        let cwd_for_thread = Arc::clone(&cwd);
+        let previous_cwd: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
+        let previous_cwd_for_thread = Arc::clone(&previous_cwd);
+        let pending_cds: Arc<Mutex<VecDeque<ParsedCd>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let pending_cds_for_thread = Arc::clone(&pending_cds);
 
         let reader_thread = thread::Builder::new()
             .name(format!("pty-reader-{}", id))
@@ -182,6 +302,14 @@ impl PtySession {
                                     if ring.len() >= RING_CAP { ring.pop_front(); }
                                     ring.push_back(b);
                                 }
+                            }
+                            if matches!(shell_variant, ShellVariant::Bash | ShellVariant::Pwsh) {
+                                confirm_pending_cds_from_output(
+                                    &chunk,
+                                    &pending_cds_for_thread,
+                                    &cwd_for_thread,
+                                    &previous_cwd_for_thread,
+                                );
                             }
                             on_data(chunk);
                         }
@@ -201,11 +329,12 @@ impl PtySession {
             child: Mutex::new(child),
             reader_thread: Mutex::new(Some(reader_thread)),
             shell_variant,
-            cwd: Mutex::new(initial_cwd),
-            previous_cwd: Mutex::new(None),
+            cwd,
+            previous_cwd,
             line_buffer: Mutex::new(Vec::new()),
             line_esc_state: Mutex::new(0),
             output_ring,
+            pending_cds,
         })
     }
 
@@ -280,33 +409,30 @@ impl PtySession {
         *self.line_esc_state.lock() = esc;
     }
 
+    /// Parses a completed outgoing line for a cd attempt. For Bash/Pwsh, the
+    /// result is only staged (see `pending_cds`) — it's committed to
+    /// cwd/previous_cwd later by the reader thread, once the shell's own OSC
+    /// 133 D marker confirms the command actually succeeded. cmd.exe's D
+    /// marker never carries an exit code (see `pty::shell`), so there's
+    /// nothing to wait for there — keep the old immediate-commit-on-parse
+    /// behavior for it (and for Unknown shells, matching prior behavior).
     fn apply_cd_if_any(&self, line: &str) {
-        let current = self.cwd.lock().clone();
-        let parsed = cd_parser::parse_cd(line, self.shell_variant, &current);
-        match parsed {
-            ParsedCd::NotCd => {}
-            ParsedCd::ChangeTo(new_cwd) => {
-                let mut prev = self.previous_cwd.lock();
-                *prev = Some(current);
-                *self.cwd.lock() = new_cwd;
-            }
-            ParsedCd::SwapPrevious => {
-                let mut prev = self.previous_cwd.lock();
-                if let Some(p) = prev.take() {
-                    let new_prev = self.cwd.lock().clone();
-                    *self.cwd.lock() = p;
-                    *prev = Some(new_prev);
-                }
-            }
-            ParsedCd::ToHome => {
-                if let Some(home) = std::env::var_os("HOME")
-                    .or_else(|| std::env::var_os("USERPROFILE"))
-                {
-                    let mut prev = self.previous_cwd.lock();
-                    *prev = Some(current);
-                    *self.cwd.lock() = PathBuf::from(home);
-                }
-            }
+        let pending = self.pending_cds.lock();
+        let effective_current = if pending.is_empty() {
+            self.cwd.lock().clone()
+        } else {
+            effective_cwd_with_pending(&self.cwd.lock(), &pending)
+        };
+        drop(pending);
+
+        let parsed = cd_parser::parse_cd(line, self.shell_variant, &effective_current);
+        if matches!(parsed, ParsedCd::NotCd) {
+            return;
+        }
+        if matches!(self.shell_variant, ShellVariant::Cmd | ShellVariant::Unknown) {
+            commit_parsed_cd(&self.cwd, &self.previous_cwd, parsed);
+        } else {
+            self.pending_cds.lock().push_back(parsed);
         }
     }
 
@@ -508,15 +634,22 @@ mod tests {
             previous_cwd: Mutex::new(None),
             line_buffer: Mutex::new(Vec::new()),
             line_esc_state: Mutex::new(0),
+            pending_cds: Mutex::new(VecDeque::new()),
         }
     }
 
+    /// Mirrors `PtySession`'s write-path line buffering / cd staging and
+    /// read-path exit-code confirmation, but without spawning a real shell —
+    /// reuses the actual `commit_parsed_cd`/`confirm_pending_cds_from_output`
+    /// free functions so these tests exercise the same commit logic
+    /// production code does, not a second hand-copied implementation of it.
     struct PtySessionStubForCwd {
         shell_variant: ShellVariant,
         cwd: Mutex<PathBuf>,
         previous_cwd: Mutex<Option<PathBuf>>,
         line_buffer: Mutex<Vec<u8>>,
         line_esc_state: Mutex<u8>,
+        pending_cds: Mutex<VecDeque<ParsedCd>>,
     }
 
     impl PtySessionStubForCwd {
@@ -555,47 +688,95 @@ mod tests {
             *self.line_esc_state.lock() = esc;
         }
         fn apply(&self, line: &str) {
-            let current = self.cwd.lock().clone();
-            match cd_parser::parse_cd(line, self.shell_variant, &current) {
-                ParsedCd::NotCd => {}
-                ParsedCd::ChangeTo(new_cwd) => {
-                    *self.previous_cwd.lock() = Some(current);
-                    *self.cwd.lock() = new_cwd;
-                }
-                ParsedCd::SwapPrevious => {
-                    let mut prev = self.previous_cwd.lock();
-                    if let Some(p) = prev.take() {
-                        let new_prev = self.cwd.lock().clone();
-                        *self.cwd.lock() = p;
-                        *prev = Some(new_prev);
-                    }
-                }
-                ParsedCd::ToHome => {
-                    if let Some(home) = std::env::var_os("HOME")
-                        .or_else(|| std::env::var_os("USERPROFILE"))
-                    {
-                        *self.previous_cwd.lock() = Some(current);
-                        *self.cwd.lock() = PathBuf::from(home);
-                    }
-                }
+            let pending = self.pending_cds.lock();
+            let effective_current = if pending.is_empty() {
+                self.cwd.lock().clone()
+            } else {
+                effective_cwd_with_pending(&self.cwd.lock(), &pending)
+            };
+            drop(pending);
+
+            let parsed = cd_parser::parse_cd(line, self.shell_variant, &effective_current);
+            if matches!(parsed, ParsedCd::NotCd) {
+                return;
             }
+            if matches!(self.shell_variant, ShellVariant::Cmd | ShellVariant::Unknown) {
+                commit_parsed_cd(&self.cwd, &self.previous_cwd, parsed);
+            } else {
+                self.pending_cds.lock().push_back(parsed);
+            }
+        }
+        /// Simulates the reader thread observing PTY output containing an
+        /// OSC 133 D marker.
+        fn receive_output(&self, data: &[u8]) {
+            confirm_pending_cds_from_output(data, &self.pending_cds, &self.cwd, &self.previous_cwd);
         }
         fn get_cwd(&self) -> PathBuf { self.cwd.lock().clone() }
     }
 
+    const D_OK: &[u8] = b"\x1b]133;D;0\x07";
+    const D_FAIL: &[u8] = b"\x1b]133;D;1\x07";
+
     #[test]
-    fn cwd_updates_on_pwsh_cd_after_enter() {
+    fn cwd_stages_on_enter_and_commits_on_confirmed_success() {
         let s = fake_session(ShellVariant::Pwsh, "C:\\Users\\a");
-        s.write(b"cd foo");   // no enter yet
+        s.write(b"cd foo"); // no enter yet
         assert_eq!(s.get_cwd(), PathBuf::from("C:\\Users\\a"));
-        s.write(b"\r");        // enter
+        s.write(b"\r"); // enter — staged, NOT yet committed
+        assert_eq!(s.get_cwd(), PathBuf::from("C:\\Users\\a"));
+        s.receive_output(D_OK); // shell confirms the cd actually succeeded
         assert_eq!(s.get_cwd(), PathBuf::from("C:\\Users\\a\\foo"));
+    }
+
+    #[test]
+    fn cwd_does_not_change_when_shell_reports_cd_failed() {
+        // Direct regression test for the reported bug: a cd that fails in the
+        // real shell must not desync the tracked cwd.
+        let s = fake_session(ShellVariant::Bash, "/home/a");
+        s.write(b"cd nonexistent\n");
+        assert_eq!(s.get_cwd(), PathBuf::from("/home/a"));
+        s.receive_output(D_FAIL);
+        assert_eq!(s.get_cwd(), PathBuf::from("/home/a")); // unchanged
+    }
+
+    #[test]
+    fn quoted_tilde_parses_like_unquoted_but_real_shell_failure_is_still_honored() {
+        // cd_parser can't distinguish cd ~ from cd "~" (quotes are stripped by
+        // its tokenizer before matching) — both parse to ToHome. A real shell
+        // does NOT expand a quoted tilde and cd "~" fails. This is the exact
+        // scenario from the bug report: the exit-code confirmation step must
+        // catch this even though the parser itself got it "wrong".
+        let s = fake_session(ShellVariant::Bash, "/project/src-tauri");
+        s.write(b"cd \"~\"\n");
+        s.receive_output(D_FAIL); // real shell: `no such file or directory: ~`
+        assert_eq!(s.get_cwd(), PathBuf::from("/project/src-tauri")); // unchanged
+    }
+
+    #[test]
+    fn failed_cd_does_not_desync_subsequent_relative_cds() {
+        // The cascading half of the bug report: once a failed cd is correctly
+        // ignored, a subsequent *real* relative cd must resolve against the
+        // still-correct (unchanged) cwd, not a wrongly-advanced one.
+        let s = fake_session(ShellVariant::Bash, "/project/src-tauri");
+        s.write(b"cd \"~\"\n");
+        s.receive_output(D_FAIL);
+        assert_eq!(s.get_cwd(), PathBuf::from("/project/src-tauri"));
+
+        // No "Downloads" under src-tauri in reality either — but the point is
+        // this now resolves relative to the correct (unchanged) base.
+        s.write(b"cd Downloads\n");
+        s.receive_output(D_OK);
+        assert_eq!(s.get_cwd(), PathBuf::from("/project/src-tauri/Downloads"));
     }
 
     #[test]
     fn cwd_multiline_single_write() {
         let s = fake_session(ShellVariant::Bash, "/home/a");
         s.write(b"cd foo\ncd bar\n");
+        assert_eq!(s.get_cwd(), PathBuf::from("/home/a")); // both still staged
+        s.receive_output(D_OK); // confirms "cd foo"
+        assert_eq!(s.get_cwd(), PathBuf::from("/home/a/foo"));
+        s.receive_output(D_OK); // confirms "cd bar"
         assert_eq!(s.get_cwd(), PathBuf::from("/home/a/foo/bar"));
     }
 
@@ -603,8 +784,10 @@ mod tests {
     fn cwd_stays_on_unparseable() {
         let s = fake_session(ShellVariant::Bash, "/home/a");
         s.write(b"ls\n");
+        s.receive_output(D_OK);
         assert_eq!(s.get_cwd(), PathBuf::from("/home/a"));
-        s.write(b"cd foo && ls\n"); // compound → NotCd
+        s.write(b"cd foo && ls\n"); // compound → NotCd, never staged
+        s.receive_output(D_OK);
         assert_eq!(s.get_cwd(), PathBuf::from("/home/a"));
     }
 
@@ -612,11 +795,24 @@ mod tests {
     fn cwd_dash_swaps_previous() {
         let s = fake_session(ShellVariant::Bash, "/home/a");
         s.write(b"cd /tmp\n");
+        s.receive_output(D_OK);
         assert_eq!(s.get_cwd(), PathBuf::from("/tmp"));
         s.write(b"cd -\n");
+        s.receive_output(D_OK);
         assert_eq!(s.get_cwd(), PathBuf::from("/home/a"));
         s.write(b"cd -\n");
+        s.receive_output(D_OK);
         assert_eq!(s.get_cwd(), PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn cmd_exe_still_commits_immediately_no_exit_code_available() {
+        // cmd.exe's injected D marker never carries an exit code, so there's
+        // nothing to confirm against — it must keep the old immediate-commit
+        // behavior rather than staging forever.
+        let s = fake_session(ShellVariant::Cmd, "C:\\Users\\a");
+        s.write(b"cd foo\r\n");
+        assert_eq!(s.get_cwd(), PathBuf::from("C:\\Users\\a\\foo"));
     }
 
     #[test]
@@ -661,6 +857,7 @@ mod tests {
         // "cd " + ESC[200~ + "/Users/jamesju/Downloads" + ESC[201~ + "\n"
         let input = b"cd \x1b[200~/Users/jamesju/Downloads\x1b[201~\n";
         s.write(input);
+        s.receive_output(D_OK);
         assert_eq!(s.get_cwd(), PathBuf::from("/Users/jamesju/Downloads"),
             "bracketed paste markers must be stripped before cd parsing");
     }

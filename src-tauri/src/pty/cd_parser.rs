@@ -269,6 +269,64 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Scans raw incoming PTY output for OSC 133 `D` (command-finished) markers —
+/// `ESC ] 1 3 3 ; D [ ; <exit-code> ] BEL` — and returns the exit code of each
+/// one found, in order. Used to confirm whether a `cd` the write-path parser
+/// staged actually succeeded in the real shell, instead of assuming every
+/// typed `cd` line took effect (see `PtySession::pending_cds`).
+///
+/// Only bash/zsh and PowerShell's injected shell integration (see
+/// `pty::shell::inject_shell_integration` / `inject_powershell_integration`)
+/// emit a `D` marker with an exit code and terminate it with BEL (`\x07`).
+/// cmd.exe's `PROMPT`-based marker has no exit code and uses a different
+/// terminator (`ESC \`) — callers should not use this for `ShellVariant::Cmd`.
+pub fn find_exit_codes(data: &[u8]) -> Vec<i32> {
+    const MARKER: &[u8] = b"\x1b]133;D";
+    let mut codes = Vec::new();
+    let mut pos = 0;
+    while let Some(start) = find_subslice(&data[pos..], MARKER) {
+        let after_marker = pos + start + MARKER.len();
+        // Scan forward for BEL, collecting an optional ";<digits>" in between.
+        // Anything else before BEL (e.g. a second, unrelated OSC starting up)
+        // means this wasn't a well-formed marker — skip past it and keep looking.
+        let mut i = after_marker;
+        let mut exit_code: i32 = 0;
+        let mut has_digits = false;
+        let mut malformed = false;
+        if data.get(i) == Some(&b';') {
+            i += 1;
+            let digits_start = i;
+            while data.get(i).map(u8::is_ascii_digit).unwrap_or(false) {
+                i += 1;
+            }
+            if i == digits_start {
+                malformed = true; // ';' with no digits after it
+            } else {
+                has_digits = true;
+                exit_code = std::str::from_utf8(&data[digits_start..i])
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+            }
+        }
+        if !malformed && data.get(i) == Some(&0x07) {
+            codes.push(exit_code);
+            pos = i + 1;
+        } else {
+            let _ = has_digits;
+            pos = after_marker; // keep scanning past this malformed occurrence
+        }
+    }
+    codes
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -489,5 +547,64 @@ mod tests {
         // No cwd context → parent-of-root is left as-is (parser's caller should
         // never send an unrooted path into normalize anyway).
         assert_eq!(normalize(Path::new("../a")), PathBuf::from("../a"));
+    }
+
+    // --- find_exit_codes ---
+
+    #[test]
+    fn find_exit_codes_success() {
+        let data = b"\x1b]133;D;0\x07";
+        assert_eq!(find_exit_codes(data), vec![0]);
+    }
+
+    #[test]
+    fn find_exit_codes_failure() {
+        let data = b"\x1b]133;D;1\x07";
+        assert_eq!(find_exit_codes(data), vec![1]);
+    }
+
+    #[test]
+    fn find_exit_codes_multi_digit() {
+        let data = b"\x1b]133;D;127\x07";
+        assert_eq!(find_exit_codes(data), vec![127]);
+    }
+
+    #[test]
+    fn find_exit_codes_no_exit_code_defaults_to_zero() {
+        // Matches the shell-integration script's own fallback when $? is
+        // somehow empty — treat a bare "D" (no ";N") as success.
+        let data = b"\x1b]133;D\x07";
+        assert_eq!(find_exit_codes(data), vec![0]);
+    }
+
+    #[test]
+    fn find_exit_codes_embedded_in_real_output() {
+        let data = b"total 24\r\ndrwxr-xr-x  1 a  staff\r\n\x1b]133;D;0\x07\x1b]133;A\x07jamesju@mac ~ % ";
+        assert_eq!(find_exit_codes(data), vec![0]);
+    }
+
+    #[test]
+    fn find_exit_codes_multiple_in_one_chunk() {
+        let data = b"\x1b]133;D;0\x07...\x1b]133;D;1\x07";
+        assert_eq!(find_exit_codes(data), vec![0, 1]);
+    }
+
+    #[test]
+    fn find_exit_codes_no_marker_returns_empty() {
+        let data = b"just some regular output, no markers here\r\n";
+        assert_eq!(find_exit_codes(data), Vec::<i32>::new());
+    }
+
+    #[test]
+    fn find_exit_codes_ignores_malformed_marker() {
+        // ';' with no digits after it before BEL — not a well-formed marker.
+        let data = b"\x1b]133;D;\x07";
+        assert_eq!(find_exit_codes(data), Vec::<i32>::new());
+    }
+
+    #[test]
+    fn find_exit_codes_ignores_marker_missing_bel() {
+        let data = b"\x1b]133;D;0 no bel here";
+        assert_eq!(find_exit_codes(data), Vec::<i32>::new());
     }
 }
