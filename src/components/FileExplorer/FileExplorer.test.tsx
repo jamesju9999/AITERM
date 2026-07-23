@@ -100,4 +100,37 @@ describe("FileExplorer — switch terminal here", () => {
 
     expect(onSwitch).toHaveBeenCalledWith("/Users/jamesju/Downloads");
   });
+
+  it("follows the last-clicked tree folder without navigating away from the root listing", async () => {
+    invokeMock
+      .mockResolvedValueOnce(null) // getSessionCwd (ptyCwdRef seed)
+      .mockResolvedValueOnce([     // listDirectory (root)
+        { name: "08_軟體安裝檔", path: "/Users/jamesju/Downloads/08_軟體安裝檔", is_dir: true, size: null },
+      ])
+      .mockResolvedValueOnce("/Users/jamesju/Downloads") // getSessionCwd (inside loadDir)
+      .mockResolvedValueOnce([     // listDirectory for the expanded child
+        { name: "desktop.ini", path: "/Users/jamesju/Downloads/08_軟體安裝檔/desktop.ini", is_dir: false, size: 282 },
+      ])
+      .mockResolvedValue(null);   // polling
+
+    const onSwitch = vi.fn();
+    render(<FileExplorer sessionId="s1" onSwitchTerminalHere={onSwitch} />);
+
+    await waitFor(() => screen.getByText("08_軟體安裝檔"));
+    // Root listing is still what's shown — expanding is inline, not a navigation.
+    expect(screen.getByText("Downloads")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByText("08_軟體安裝檔"));
+    await waitFor(() => screen.getByText("desktop.ini")); // tree expanded inline
+
+    // Breadcrumb now shows the expanded folder too — it and the tree row
+    // both render the same text, so there should be exactly two matches.
+    expect(screen.getAllByText("08_軟體安裝檔")).toHaveLength(2);
+    // Root-level sibling context is still visible — this was an in-place
+    // expand, not a full navigation away from the Downloads listing.
+    expect(screen.getByText("desktop.ini")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTitle("切換終端機到此目錄"));
+    expect(onSwitch).toHaveBeenCalledWith("/Users/jamesju/Downloads/08_軟體安裝檔");
+  });
 });

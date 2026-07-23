@@ -37,6 +37,14 @@ export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerPr
   const { t } = useLocale();
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [cwd, setCwd] = useState<string>("");
+  // The breadcrumb bar and "switch terminal here" both track this instead of
+  // `cwd` directly: `cwd` is the root of the currently-listed `entries` (only
+  // changes on a real navigation — breadcrumb click, "up", or a terminal-
+  // driven change), but expanding a folder in the tree does NOT navigate
+  // (entries stay rooted at `cwd`, the folder's children render inline) — so
+  // without this, clicking deeper into the tree would leave the breadcrumb
+  // and "cd" target stuck on the original root instead of following along.
+  const [focusedPath, setFocusedPath] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -58,13 +66,17 @@ export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerPr
       setEntries(filtered);
       const resolvedCwd = path || (await getSessionCwd(sessionId)) || "";
       setCwd(resolvedCwd);
+      setFocusedPath(resolvedCwd);
     } catch (e) {
       setError(String(e));
       // On error, still try to reflect the current CWD so the breadcrumb isn't blank.
       if (!path) {
         try {
           const fallbackCwd = await getSessionCwd(sessionId);
-          if (fallbackCwd) setCwd(fallbackCwd);
+          if (fallbackCwd) {
+            setCwd(fallbackCwd);
+            setFocusedPath(fallbackCwd);
+          }
         } catch { /* ignore */ }
       }
     } finally {
@@ -103,6 +115,7 @@ export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerPr
 
   const handleToggleDir = async (entry: DirEntry) => {
     if (!entry.is_dir) return;
+    setFocusedPath(entry.path);
     const key = entry.path;
     if (expanded.has(key)) {
       const next = new Set(expanded);
@@ -172,7 +185,7 @@ export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerPr
     </>
   );
 
-  const cwdParts = cwd.replace(/\\/g, "/").split("/").filter(Boolean);
+  const focusedParts = focusedPath.replace(/\\/g, "/").split("/").filter(Boolean);
 
   return (
     <div className="file-explorer">
@@ -186,16 +199,16 @@ export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerPr
         </button>
         <div className="fe-breadcrumb">
           <span className="fe-breadcrumb-item" onClick={() => {
-            if (!cwd) { loadDir(""); return; }
-            // On Windows cwd starts with a drive letter (e.g. "C:/Users/…") —
+            if (!focusedPath) { loadDir(""); return; }
+            // On Windows the path starts with a drive letter (e.g. "C:/Users/…") —
             // navigate to the drive root instead of the invalid "/" path.
-            const firstPart = cwd.replace(/\\/g, "/").split("/")[0];
+            const firstPart = focusedPath.replace(/\\/g, "/").split("/")[0];
             loadDir(firstPart.endsWith(":") ? firstPart + "/" : "/");
           }}>
             /
           </span>
-          {cwdParts.map((part, i) => {
-            const seg = cwdParts.slice(0, i + 1).join("/");
+          {focusedParts.map((part, i) => {
+            const seg = focusedParts.slice(0, i + 1).join("/");
             // Windows drive root "C:" → "C:/"; Windows sub-path "C:/Users" → "C:/Users"; Unix → "/Users"
             const path = seg.endsWith(":")
               ? seg + "/"
@@ -220,9 +233,9 @@ export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerPr
         {onSwitchTerminalHere && (
           <button
             className="fe-btn aiterm-btn aiterm-btn--secondary"
-            onClick={() => onSwitchTerminalHere(cwd)}
+            onClick={() => onSwitchTerminalHere(focusedPath)}
             title={t.file_switch_terminal_here}
-            disabled={!cwd}
+            disabled={!focusedPath}
           >
             {t.file_switch_terminal_here_short}
           </button>
