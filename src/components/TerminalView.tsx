@@ -869,6 +869,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     });
 
     term.onResize(({ rows: r, cols: c }) => {
+      // TEMP DIAGNOSTIC — remove once root-caused. Fires for ANY resize,
+      // regardless of what triggered it (fit(), a real window resize, font
+      // change, etc.) — the stack trace pinpoints the caller.
+      console.log(
+        "[AITERM-DIAG2] term.onResize", performance.now().toFixed(1),
+        "rows:", r, "cols:", c,
+        "stack:", new Error().stack,
+      );
       if (sessionRef.current) {
         resizePty(sessionRef.current, { rows: r, cols: c }).catch(console.error);
       }
@@ -876,7 +884,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
     let ro: ResizeObserver | null = null;
     if (hostRef.current) {
-      ro = new ResizeObserver(() => {
+      ro = new ResizeObserver((entries) => {
+        // TEMP DIAGNOSTIC — remove once root-caused.
+        for (const entry of entries) {
+          console.log(
+            "[AITERM-DIAG2] ResizeObserver fired", performance.now().toFixed(1),
+            "contentRect:", JSON.stringify(entry.contentRect),
+          );
+        }
         requestAnimationFrame(() => fit.fit());
       });
       ro.observe(hostRef.current);
