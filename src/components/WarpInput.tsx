@@ -147,6 +147,11 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter", sessionId }:
     commitCommand(`cd "${entry.name}"`);
   };
 
+  const selectParentDir = () => {
+    setDirPickerOpen(false);
+    commitCommand("cd ..");
+  };
+
   const selectHistoryItem = (displayIdx: number) => {
     fillInput(displayHistory[displayIdx]);
     closeHistory(false);
@@ -282,6 +287,10 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter", sessionId }:
             <span className="warp-history-title">{t.warp_dir_picker_title}</span>
           </div>
           <div className="warp-history-items">
+            <div className="warp-history-item" onClick={selectParentDir}>
+              <span className="warp-history-prefix">⬆️</span>
+              <span className="warp-history-text">.. ({t.file_go_up})</span>
+            </div>
             {dirEntries === null && (
               <div className="warp-dir-status">{t.warp_dir_picker_loading}</div>
             )}

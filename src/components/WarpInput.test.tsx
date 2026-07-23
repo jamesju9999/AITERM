@@ -59,6 +59,34 @@ describe("WarpInput — directory picker", () => {
     expect(screen.queryByText("src")).not.toBeInTheDocument();
   });
 
+  it("submits `cd ..` and closes the picker when the parent-dir entry is clicked", async () => {
+    invokeMock.mockResolvedValueOnce([
+      { name: "src", path: "/proj/src", is_dir: true, size: null },
+    ]);
+    const onSubmit = renderInput();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("切換目錄"));
+    await waitFor(() => screen.getByText("src")); // wait for the fetch to settle
+    await user.click(screen.getByText(/\.\. \(/));
+
+    expect(onSubmit).toHaveBeenCalledWith("cd ..");
+    expect(screen.queryByText("src")).not.toBeInTheDocument();
+  });
+
+  it("shows the parent-dir entry immediately, before the subfolder fetch resolves", async () => {
+    invokeMock.mockResolvedValueOnce([
+      { name: "src", path: "/proj/src", is_dir: true, size: null },
+    ]);
+    renderInput();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("切換目錄"));
+    // No `await waitFor` here — the parent-dir entry must be present even
+    // while the subfolder listing is still loading.
+    expect(screen.getByText(/\.\. \(/)).toBeInTheDocument();
+  });
+
   it("shows an empty state when the current directory has no subfolders", async () => {
     invokeMock.mockResolvedValueOnce([
       { name: "file.txt", path: "/proj/file.txt", is_dir: false, size: 10 },
