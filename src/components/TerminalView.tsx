@@ -986,11 +986,11 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             flexShrink: 0,
           }}
         />
-        {/* Input follows the block-list flow (Warp-style) instead of being pinned to the
-            panel bottom, so it sits directly under the last block and moves down as
-            content grows — the whole area (blocks + live terminal + input) scrolls as
-            one unit via the overflowY:auto wrapper above. */}
-        {!isAlternateBuffer && (
+        </div>{/* end terminal wrapper */}
+      </div>{/* end relative container */}
+      {/* WarpInput (the actual typing box) stays pinned to the panel bottom regardless of
+          block-list length — only the live xterm view above scrolls with block content. */}
+      {!isAlternateBuffer && (
         <WarpInput
           onSubmit={(cmd) => {
             const agentQuery = parseAgentPrefix(cmd);
@@ -1040,9 +1040,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           }}
           shortcut={submitShortcut}
         />
-        )}
-        </div>{/* end terminal wrapper */}
-      </div>{/* end relative container */}
+      )}
       {preview.loading && (
         <StreamingIndicator visible text={streamText} />
       )}
