@@ -44,6 +44,10 @@ pub enum CodeAssistantEvent {
         session_id: String,
         delta: String,
     },
+    Checkpoint {
+        session_id: String,
+        number: usize,
+    },
     Done {
         session_id: String,
     },
@@ -417,11 +421,9 @@ pub async fn run_chat(
         // for further investigation. Allowed at most MAX_CHECKPOINTS times.
         if token_estimate >= CHECKPOINT_THRESHOLD && checkpoints < MAX_CHECKPOINTS {
             checkpoints += 1;
-            let _ = app.emit("code-assistant-event", CodeAssistantEvent::TextDelta {
+            let _ = app.emit("code-assistant-event", CodeAssistantEvent::Checkpoint {
                 session_id: session_id.clone(),
-                delta: format!(
-                    "\n\n> [Checkpoint #{checkpoints}：正在壓縮已蒐集的資料，繼續探索...]\n\n"
-                ),
+                number: checkpoints,
             });
             let summary = generate_checkpoint_summary(
                 &conversation, provider.clone(), locale

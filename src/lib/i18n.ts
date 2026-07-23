@@ -172,6 +172,7 @@ const zhTW = {
     ca_tool_truncated: "⚠ 內容已截斷",
     ca_files_read_label: "已讀取：",
     ca_files_searched_label: "僅搜尋（未讀取）：",
+    ca_checkpoint_notice: (n: number) => `已達檢查點 #${n}，正在壓縮已蒐集的資料，繼續探索...`,
     // Knowledge Base tab
     knowledge_base_tab: "知識庫",
     new_knowledge_base_desc: "以自然語言對一整個資料夾的文件提問",
@@ -1153,6 +1154,7 @@ const enRaw = {
     ca_tool_truncated: "⚠ Content truncated",
     ca_files_read_label: "Read: ",
     ca_files_searched_label: "Searched only (not read): ",
+    ca_checkpoint_notice: (n: number) => `Checkpoint #${n} reached — compressing gathered data, continuing exploration...`,
     // Knowledge Base tab
     knowledge_base_tab: "Knowledge Base",
     new_knowledge_base_desc: "Ask questions about a whole folder of documents in natural language",

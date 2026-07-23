@@ -268,6 +268,21 @@
 .ca-msg--user { align-items: flex-end; }
 .ca-msg--assistant { align-items: flex-start; width: 100%; }
 
+/* ── Checkpoint compression notice ───────────────────────────────── */
+.ca-checkpoint-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  font-size: 10px;
+  font-style: italic;
+  color: #8a8a8a;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 3px 10px;
+  margin: 4px 0;
+}
+
 .ca-msg__bubble {
   max-width: 82%;
   padding: 8px 12px;
