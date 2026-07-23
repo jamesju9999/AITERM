@@ -610,14 +610,23 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           const text = decoder.decode(bytes, { stream: true });
           term.write(text);
           appendOutput(text);
-          // Snap the live pane straight to full height the moment there's any
-          // real output, rather than trying to precisely track how many rows
-          // are "needed" via cursor position — that broke for TUI-style
-          // content (interactive menus, prompts) that reposition the cursor
-          // non-sequentially to redraw specific lines, leaving liveRows stuck
-          // too small to show everything and making it look permanently
-          // stuck (mouse-wheel scroll has no connection to liveRows at all).
-          setLiveRows(MAX_LIVE_ROWS);
+          // Snap the live pane straight to full height the moment a tracked
+          // command is actually running and producing output, rather than
+          // trying to precisely track how many rows are "needed" via cursor
+          // position — that broke for TUI-style content (interactive menus,
+          // prompts) that reposition the cursor non-sequentially to redraw
+          // specific lines, leaving liveRows stuck too small with no way to
+          // scroll into view (mouse-wheel scroll has no connection to
+          // liveRows at all). Gated on a block actually being "running" —
+          // not just "any PTY data arrived" — so the shell's own idle-prompt
+          // output (on connect, or after a command finishes) doesn't also
+          // trigger this: that data isn't part of any tracked block, so
+          // there'd be no `visibleBlockCount` change afterward to shrink it
+          // back down again, leaving the pane stuck at full height forever.
+          const latestBlock = blocksRef.current[blocksRef.current.length - 1];
+          if (latestBlock?.status === "running") {
+            setLiveRows(MAX_LIVE_ROWS);
+          }
 
           // Windows: detect PS prompt → inject synthetic OSC 133 D
           if (isWindows) {
