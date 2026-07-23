@@ -150,18 +150,24 @@ export function useTerminalBlocks(
         const latest = prev[prev.length - 1];
         if (latest.status !== "running") return true;
 
-        // Clear synchronously, right here, instead of waiting for the async
-        // headless-parse in finalizeBlock to resolve. xterm's OSC dispatch is
-        // synchronous mid-parse: whatever the shell writes right after this D
-        // marker (its next prompt) hasn't been rendered yet, so clearing now
-        // guarantees it lands on an empty pane. Clearing after the async parse
-        // used to race that: on shells/platforms that flush the D marker and
-        // the following prompt together in one chunk (observed with Windows'
-        // PowerShell/ConPTY, not with zsh/bash's separate precmd writes), the
-        // prompt could already be painted by the time the delayed clear() ran
-        // — wiping it out and leaving the live pane with no visible prompt
-        // until the user typed something.
-        term?.clear();
+        // Clear on the next tick rather than waiting for the async headless-parse
+        // in finalizeBlock (the old approach) — but also rather than clearing
+        // fully synchronously from inside this handler. This callback runs
+        // mid-parse, reentrantly, while xterm is still actively processing the
+        // write() that contains this very D marker; for large outputs (long
+        // enough to have scrolled the screen, e.g. `dir` with 20+ entries) that
+        // reentrant clear()/scrollToBottom() could race the renderer's own
+        // in-flight repaint of that write, leaving stale rows on screen even
+        // though the underlying buffer is correctly cleared underneath them.
+        // A zero-delay setTimeout runs after xterm finishes the current parse
+        // (and its renderer catches up), so there's nothing left to race — and
+        // it's still far faster than the async ANSI-parse this used to wait on,
+        // so it still wins the race against the shell's next prompt output.
+        setTimeout(() => {
+          term?.clear();
+          term?.scrollToBottom();
+          term?.refresh(0, (term?.rows ?? 1) - 1);
+        }, 0);
         finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode);
 
         return true;

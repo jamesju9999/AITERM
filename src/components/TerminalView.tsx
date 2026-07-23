@@ -616,7 +616,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
         unlistenData = await onPtyData(id, (bytes) => {
           const text = decoder.decode(bytes, { stream: true });
-          term.write(text);
+          // Force a repaint once xterm has actually finished processing this
+          // chunk (the write() completion callback, not just the write() call
+          // returning — writes are queued/async internally). Without this,
+          // characters typed directly into the live terminal (echoed back by
+          // the shell through the PTY, not rendered locally like WarpInput)
+          // can silently fail to paint on some Windows/WebView2 setups even
+          // though they were received and buffered correctly — the dropped
+          // keystrokes still reach the shell (confirmed by Enter submitting
+          // the right command), only the on-screen echo goes missing.
+          term.write(text, () => term.refresh(0, term.rows - 1));
           appendOutput(text);
           // Snap the live pane straight to full height the moment a tracked
           // command is actually running and producing output, rather than
