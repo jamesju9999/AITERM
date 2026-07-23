@@ -764,6 +764,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       : false;
 
     if (foundLive) {
+      blockSearchCursorRef.current = null;
       setBlockSearchCursor(null);
       setSearchMatchInfo("found");
       return;
@@ -774,6 +775,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       : findPreviousBlockMatch(blocksRef.current, query, blockSearchCursorRef.current);
 
     if (match) {
+      blockSearchCursorRef.current = match;
       setBlockSearchCursor(match);
       setSearchMatchInfo("found");
       requestAnimationFrame(() => {
