@@ -71,3 +71,33 @@ describe("FileExplorer — file selection", () => {
     expect(screen.getByText(/選擇左側檔案以預覽內容/)).toBeInTheDocument();
   });
 });
+
+describe("FileExplorer — switch terminal here", () => {
+  it("does not render the button when onSwitchTerminalHere is not provided", async () => {
+    invokeMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce("/p")
+      .mockResolvedValue(null);
+    render(<FileExplorer sessionId="s1" />);
+    await waitFor(() => expect(invokeMock).toHaveBeenCalled());
+    expect(screen.queryByTitle("切換終端機到此目錄")).not.toBeInTheDocument();
+  });
+
+  it("calls onSwitchTerminalHere with the currently-browsed directory when clicked", async () => {
+    invokeMock
+      .mockResolvedValueOnce(null) // getSessionCwd (ptyCwdRef seed)
+      .mockResolvedValueOnce([])   // listDirectory
+      .mockResolvedValueOnce("/Users/jamesju/Downloads") // getSessionCwd (inside loadDir)
+      .mockResolvedValue(null);    // polling
+
+    const onSwitch = vi.fn();
+    render(<FileExplorer sessionId="s1" onSwitchTerminalHere={onSwitch} />);
+
+    const button = await screen.findByTitle("切換終端機到此目錄");
+    expect(button).not.toBeDisabled();
+    await userEvent.click(button);
+
+    expect(onSwitch).toHaveBeenCalledWith("/Users/jamesju/Downloads");
+  });
+});

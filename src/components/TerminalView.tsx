@@ -982,7 +982,13 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         {/* File Explorer */}
         {viewTab === "files" && sessionId && (
           <div style={{ height: "100%", overflow: "hidden" }}>
-            <FileExplorer sessionId={sessionId} />
+            <FileExplorer
+              sessionId={sessionId}
+              onSwitchTerminalHere={(path) => {
+                submitCommand(`cd "${path}"`);
+                setViewTab("terminal");
+              }}
+            />
           </div>
         )}
         {/* Terminal */}

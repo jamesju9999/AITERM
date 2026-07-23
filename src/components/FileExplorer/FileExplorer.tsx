@@ -6,6 +6,10 @@ import "./FileExplorer.css";
 
 interface FileExplorerProps {
   sessionId: string;
+  /** Called with the currently-browsed directory when the user wants the
+   * terminal session to `cd` there too. Omit to hide the "switch terminal
+   * here" button (e.g. if the caller doesn't have a terminal to sync). */
+  onSwitchTerminalHere?: (path: string) => void;
 }
 
 function formatSize(bytes: number): string {
@@ -29,7 +33,7 @@ function getFileIcon(entry: DirEntry): string {
   return icons[ext] ?? "📄";
 }
 
-export function FileExplorer({ sessionId }: FileExplorerProps) {
+export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerProps) {
   const { t } = useLocale();
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [cwd, setCwd] = useState<string>("");
@@ -213,6 +217,16 @@ export function FileExplorer({ sessionId }: FileExplorerProps) {
         >
           .
         </button>
+        {onSwitchTerminalHere && (
+          <button
+            className="fe-btn aiterm-btn aiterm-btn--secondary"
+            onClick={() => onSwitchTerminalHere(cwd)}
+            title={t.file_switch_terminal_here}
+            disabled={!cwd}
+          >
+            {t.file_switch_terminal_here_short}
+          </button>
+        )}
       </div>
 
       {/* Split body */}
