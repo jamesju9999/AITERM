@@ -39,6 +39,7 @@ export function useTerminalBlocks(
   sessionId: string,
   term: Terminal | null,
   cwdRef?: React.RefObject<string>,
+  onLiveClear?: () => void,
 ): UseTerminalBlocksResult {
   const [blocks, setBlocks] = useState<TerminalBlock[]>([]);
   const [isAlternateBuffer, setIsAlternateBuffer] = useState(false);
@@ -166,7 +167,12 @@ export function useTerminalBlocks(
         setTimeout(() => {
           term?.clear();
           term?.scrollToBottom();
-          term?.refresh(0, (term?.rows ?? 1) - 1);
+          // term.refresh() alone doesn't reliably repaint on some Windows/
+          // WebView2 setups (confirmed: neither mouse-wheel scroll nor
+          // resizing the window fixes a stuck stale pane, only new input
+          // does) — onLiveClear additionally re-measures via the fit addon,
+          // which is the extra step that reliably forces a real repaint.
+          onLiveClear?.();
         }, 0);
         finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode);
 
@@ -179,7 +185,7 @@ export function useTerminalBlocks(
       disposeBuffer.dispose();
       disposeOsc.dispose();
     };
-  }, [term, finalizeBlock]);
+  }, [term, finalizeBlock, onLiveClear]);
 
   const submitCommand = useCallback(
     (cmd: string, onComplete?: (block: TerminalBlock) => void) => {

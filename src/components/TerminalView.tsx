@@ -192,10 +192,23 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const searchInputRef = useRef<HTMLInputElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
 
+  // Same recipe as the Files-tab -> Terminal-tab repaint fix below: on some
+  // Windows/WebView2 setups, xterm's own refresh() alone isn't enough to make
+  // a cleared live pane actually repaint on screen (confirmed: neither mouse
+  // wheel nor resizing the window fixes it, only new input does) — fit()'s
+  // dimension re-measurement is the extra step that reliably forces it.
+  const forceLiveRepaint = useCallback(() => {
+    const term = termRef.current;
+    if (!term) return;
+    fitAddonRef.current?.fit();
+    term.refresh(0, term.rows - 1);
+  }, []);
+
   const { blocks, isAlternateBuffer, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo } = useTerminalBlocks(
     sessionId,
     termState,
     lastCwdRef,
+    forceLiveRepaint,
   );
 
   // Bridge submitCommand into a ref so the stale term.onData closure can access the latest version
