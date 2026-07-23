@@ -886,6 +886,17 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             </button>
           )}
           <button
+            className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+            title={t.term_bookmark_tooltip}
+            onClick={(e) => {
+              e.stopPropagation();
+              setBookmarksOpen(true);
+            }}
+            style={{ display: "flex", alignItems: "center", gap: "6px" }}
+          >
+            <span>{t.bookmarks_title}</span>
+          </button>
+          <button
             className={`aiterm-btn aiterm-btn--secondary aiterm-btn--sm ${isRemoteEnabled ? 'aiterm-agent-toggle--on' : ''}`}
             title={t.term_remote_tooltip}
             onClick={(e) => {
