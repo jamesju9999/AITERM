@@ -230,14 +230,19 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     blockListRef.current?.scrollTo({ top: blockListRef.current.scrollHeight });
   }, [visibleBlockCount]);
 
-  // The live terminal pane visually shrinks to just the current content instead of
-  // always reserving a big fixed box (see MIN_LIVE_ROWS/MAX_LIVE_ROWS near the JSX
-  // below). liveRows tracks how many rows are actually in use; it resets to the
-  // minimum whenever the visible block count changes, since that only happens right
-  // after useTerminalBlocks clears the live terminal (a real command finished) or
-  // wipes it (the `clear` command) — either way the live pane is freshly empty.
-  // term.onCursorMove does NOT fire from term.clear() itself, so this can't rely on
-  // cursor tracking alone to notice the reset (verified directly against xterm.js).
+  // The live terminal pane visually shrinks to just MIN_LIVE_ROWS while idle
+  // (just a prompt, nothing running) instead of always reserving a big fixed
+  // box, and snaps straight to MAX_LIVE_ROWS the instant any real PTY output
+  // arrives (see the onPtyData handler below) — deliberately binary rather
+  // than trying to track "how many rows are actually needed": that was tried
+  // via cursor-position tracking and broke for TUI-style content (interactive
+  // menus/prompts that reposition the cursor non-sequentially to redraw
+  // specific lines), leaving the pane stuck too small with no way to scroll
+  // into view since mouse-wheel scroll has no connection to this state.
+  // Resets back to MIN_LIVE_ROWS whenever the visible block count changes,
+  // since that only happens right after useTerminalBlocks clears the live
+  // terminal (a real command finished) or wipes it (the `clear` command) —
+  // either way the live pane is freshly empty at that point.
   const [liveRows, setLiveRows] = useState(MIN_LIVE_ROWS);
   useEffect(() => {
     setLiveRows(MIN_LIVE_ROWS);
@@ -605,6 +610,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           const text = decoder.decode(bytes, { stream: true });
           term.write(text);
           appendOutput(text);
+          // Snap the live pane straight to full height the moment there's any
+          // real output, rather than trying to precisely track how many rows
+          // are "needed" via cursor position — that broke for TUI-style
+          // content (interactive menus, prompts) that reposition the cursor
+          // non-sequentially to redraw specific lines, leaving liveRows stuck
+          // too small to show everything and making it look permanently
+          // stuck (mouse-wheel scroll has no connection to liveRows at all).
+          setLiveRows(MAX_LIVE_ROWS);
 
           // Windows: detect PS prompt → inject synthetic OSC 133 D
           if (isWindows) {
@@ -771,14 +784,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       if (sessionRef.current) {
         resizePty(sessionRef.current, { rows: r, cols: c }).catch(console.error);
       }
-    });
-
-    // Grows the visually-clipped live pane (see MIN/MAX_LIVE_ROWS) as content
-    // streams in. Does not fire from term.clear() itself — the visibleBlockCount
-    // effect above handles resetting back to MIN_LIVE_ROWS for that case.
-    term.onCursorMove(() => {
-      const rows = Math.min(MAX_LIVE_ROWS, Math.max(MIN_LIVE_ROWS, term.buffer.active.cursorY + 1));
-      setLiveRows(rows);
     });
 
     let ro: ResizeObserver | null = null;
