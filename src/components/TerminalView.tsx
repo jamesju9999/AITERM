@@ -203,6 +203,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const blocksRef = useRef(blocks);
   useEffect(() => { blocksRef.current = blocks; }, [blocks]);
 
+  // Bridge blockSearchCursor into a ref so doSearch can read the latest cursor without
+  // depending on the state value itself — depending on it directly would give doSearch a
+  // new identity every time a match is found (setBlockSearchCursor -> re-render -> new
+  // doSearch), which re-triggers the "search as you type" effect below (it depends on
+  // doSearch) and cascades through every match instead of stopping at the first.
+  const blockSearchCursorRef = useRef(blockSearchCursor);
+  useEffect(() => { blockSearchCursorRef.current = blockSearchCursor; }, [blockSearchCursor]);
+
   // Auto-scroll the completed-block list to the bottom whenever a new card becomes visible.
   const visibleBlockCount = blocks.filter((b) => b.status !== "running" && b.renderedLines).length;
   useEffect(() => {
@@ -762,8 +770,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     }
 
     const match = direction === 'next'
-      ? findNextBlockMatch(blocksRef.current, query, blockSearchCursor)
-      : findPreviousBlockMatch(blocksRef.current, query, blockSearchCursor);
+      ? findNextBlockMatch(blocksRef.current, query, blockSearchCursorRef.current)
+      : findPreviousBlockMatch(blocksRef.current, query, blockSearchCursorRef.current);
 
     if (match) {
       setBlockSearchCursor(match);
@@ -774,7 +782,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     } else {
       setSearchMatchInfo("not found");
     }
-  }, [blockSearchCursor]);
+  }, []);
 
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
@@ -791,14 +799,21 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     }
   }, [searchOpen]);
 
-  // Re-run search as user types
+  // Re-run search as user types. Every query change (not just clearing it) resets the
+  // block search cursor — otherwise editing a query (e.g. "e" -> "el") would resume the
+  // block search from the previous query's match position, which can skip a match for the
+  // new query that appears earlier in the block list. The ref is reset synchronously
+  // (not just via setState) so the doSearch call below — in the same effect run — reads
+  // the reset value immediately, rather than a stale one from before the ref-sync effect
+  // has had a chance to run.
   useEffect(() => {
+    blockSearchCursorRef.current = null;
+    setBlockSearchCursor(null);
     if (searchQuery) {
       doSearch(searchQuery, 'next');
     } else {
       searchAddonRef.current?.clearDecorations?.();
       setSearchMatchInfo("");
-      setBlockSearchCursor(null);
     }
   }, [searchQuery, doSearch]);
 
