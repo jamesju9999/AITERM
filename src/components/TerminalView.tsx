@@ -181,7 +181,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const termRef = useRef<Terminal | null>(null);
   const [termState, setTermState] = useState<Terminal | null>(null);
   const sessionRef = useRef<string | null>(null);
-  const lineBufRef = useRef<string>("");
+  // Snapshot of the rendered line (prompt + anything already typed) taken the
+  // moment a fresh input line starts — see the onData handler below for why.
+  // null means "no line in progress, capture a fresh snapshot on next input".
+  const lineStartSnapshotRef = useRef<string | null>(null);
 
   // Find in Buffer state
   const [searchOpen, setSearchOpen] = useState(false);
@@ -627,18 +630,28 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         onSessionCreated?.(id);
         setStatus(`connected (${id.slice(0, 8)}…)`);
 
+        const isWindows = navigator.platform.toLowerCase().startsWith("win");
+
         unlistenData = await onPtyData(id, (bytes) => {
           const text = decoder.decode(bytes, { stream: true });
-          // Force a repaint once xterm has actually finished processing this
-          // chunk (the write() completion callback, not just the write() call
-          // returning — writes are queued/async internally). Without this,
-          // characters typed directly into the live terminal (echoed back by
-          // the shell through the PTY, not rendered locally like WarpInput)
-          // can silently fail to paint on some Windows/WebView2 setups even
-          // though they were received and buffered correctly — the dropped
-          // keystrokes still reach the shell (confirmed by Enter submitting
-          // the right command), only the on-screen echo goes missing.
-          term.write(text, () => term.refresh(0, term.rows - 1));
+          if (isWindows) {
+            // Force a repaint once xterm has actually finished processing this
+            // chunk (the write() completion callback, not just the write() call
+            // returning — writes are queued/async internally). Without this,
+            // characters typed directly into the live terminal (echoed back by
+            // the shell through the PTY, not rendered locally like WarpInput)
+            // can silently fail to paint on some Windows/WebView2 setups even
+            // though they were received and buffered correctly — the dropped
+            // keystrokes still reach the shell (confirmed by Enter submitting
+            // the right command), only the on-screen echo goes missing.
+            // Windows-only: forcing this on every chunk on macOS turned out to
+            // corrupt in-progress IME composition (e.g. Zhuyin/Bopomofo input)
+            // in the live pane, which never needed this — macOS renders every
+            // write reliably on its own.
+            term.write(text, () => term.refresh(0, term.rows - 1));
+          } else {
+            term.write(text);
+          }
           appendOutput(text);
           // Snap the live pane straight to full height the moment a tracked
           // command is actually running and producing output, rather than
@@ -692,22 +705,80 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       // character-by-character causes PowerShell to print "[O" / "[I" as literal text.
       if (data === "\x1b[O" || data === "\x1b[I") return;
 
-      // Escape sequences (arrow keys, function keys, Home/End, etc.) must be sent as a
-      // single atomic PTY write.  Iterating char-by-char produces separate Tauri IPC calls
-      // with non-zero latency between the ESC byte and the rest of the sequence.  On Windows,
-      // PSReadLine has a short escape-sequence timeout: if "[" doesn't arrive fast enough
-      // after ESC, it treats ESC as a standalone keypress and "[A" / "[B" / "[C" / "[D"
-      // then appear as literal text in the terminal.
+      // Snapshot the currently-rendered line (prompt + anything already
+      // typed) the moment we're about to forward the first bytes of a fresh
+      // input line. At Enter time we diff the ACTUAL rendered line against
+      // this snapshot to recover exactly what the user typed, instead of
+      // re-simulating the shell's own line editing (backspace, Ctrl+U,
+      // bracketed paste, IME composition) ourselves — that kept drifting out
+      // of sync with reality (corrupted IME composition, garbled/blanked
+      // pastes, bracketed paste never registering a command at all).
+      // Whatever's actually on screen at Enter time, minus this prefix, IS
+      // the command — ground truth from the terminal itself, and identical
+      // logic regardless of platform or input method.
+      if (lineStartSnapshotRef.current === null) {
+        const baseY = term.buffer.active.baseY;
+        lineStartSnapshotRef.current =
+          term.buffer.active.getLine(term.buffer.active.cursorY + baseY)?.translateToString(true) ?? "";
+      }
+
+      // Escape sequences (arrow keys, function keys, Home/End, bracketed
+      // paste, etc.) must be sent as a single atomic PTY write. Iterating
+      // char-by-char produces separate Tauri IPC calls with non-zero latency
+      // between the ESC byte and the rest of the sequence. On Windows,
+      // PSReadLine has a short escape-sequence timeout: if "[" doesn't arrive
+      // fast enough after ESC, it treats ESC as a standalone keypress and
+      // "[A" / "[B" / "[C" / "[D" then appear as literal text. Bracketed
+      // paste (ESC[200~...ESC[201~) takes this same path with no special
+      // handling needed — whatever it inserts on screen gets picked up
+      // naturally by the snapshot-diff above when Enter is later pressed.
       if (data.startsWith("\x1b")) {
         writePty(session, data).catch(console.error);
+        // A macOS paste can leave xterm's own text-selection overlay
+        // (.xterm-selection) active and rendered on top of the pasted row,
+        // visually blanking/covering it until something else forces a
+        // repaint — confirmed via DevTools inspection. Explicitly clearing
+        // any selection after a paste-shaped chunk (bracketed paste starts
+        // with this exact marker) removes the stray highlight regardless of
+        // what triggered it.
+        if (data.startsWith("\x1b[200~")) term.clearSelection();
         return;
       }
 
+      // Accumulate what actually gets sent to the PTY and flush it as ONE
+      // atomic write at the end, instead of one unawaited writePty() call per
+      // character. Per-character writes are each a separate Tauri IPC
+      // round-trip with no ordering guarantee between them; invisible at
+      // typing speed, but a paste delivers the whole chunk in a single
+      // onData call, firing dozens of unawaited calls back-to-back with a
+      // real chance of arriving at the PTY out of order.
+      let toSend = "";
+      // Characters from THIS chunk not yet echoed back by the PTY — the
+      // rendered buffer only reflects earlier onData calls, which had time to
+      // round-trip; anything typed/pasted within the current synchronous
+      // chunk (e.g. a paste's own trailing Enter) hasn't painted yet.
+      let pendingThisChunk = "";
+      let sawNewlineThisChunk = false;
       for (const ch of data) {
         if (ch === "\r" || ch === "\n") {
-          const line = lineBufRef.current;
-          lineBufRef.current = "";
-          
+          let line: string;
+          if (!sawNewlineThisChunk) {
+            const baseY = term.buffer.active.baseY;
+            const renderedNow = term.buffer.active.getLine(term.buffer.active.cursorY + baseY)?.translateToString(true) ?? "";
+            const fullLine = renderedNow + pendingThisChunk;
+            const snapshot = lineStartSnapshotRef.current ?? "";
+            line = (fullLine.startsWith(snapshot) ? fullLine.slice(snapshot.length) : fullLine).trim();
+          } else {
+            // A later embedded line within the same chunk (multiple commands
+            // pasted at once) has no real rendered prompt to diff against —
+            // the shell hasn't had a chance to draw one yet — so whatever was
+            // typed since the previous newline in this chunk IS the line.
+            line = pendingThisChunk.trim();
+          }
+          sawNewlineThisChunk = true;
+          pendingThisChunk = "";
+          lineStartSnapshotRef.current = null;
+
           // If agent is running and user presses Enter:
           // - If a command is still running (e.g. awaiting password), pass Enter to PTY
           // - If no command is running (user typing a new command), interrupt the agent
@@ -715,7 +786,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
              const lastBlock = blocksRef.current[blocksRef.current.length - 1];
              if (lastBlock?.status === "running") {
                // A command is running — user is probably entering a password, let it through
-               writePty(session, ch).catch(console.error);
+               toSend += ch;
                continue;
              }
              // No running command — user is trying to type a new command, interrupt agent
@@ -724,21 +795,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
              stopMission();
           }
 
-          // Read the visual line from the terminal buffer as fallback
-          // (protects against IME / ANSI escape corruption of lineBufRef)
-          let fallbackAiQuery: string | null = null;
-          let fallbackAgentQuery: string | null = null;
-          const baseY = term.buffer.active.baseY;
-          const visualLine = term.buffer.active.getLine(term.buffer.active.cursorY + baseY)?.translateToString(true).trim() || "";
-          const visualMatch = visualLine.match(/(?:%|\$|#|❯)\s*\/(ai|agent)\s+(.+)$/);
-          if (visualMatch) {
-             if (visualMatch[1] === "ai") fallbackAiQuery = visualMatch[2];
-             if (visualMatch[1] === "agent") fallbackAgentQuery = visualMatch[2];
-          }
+          const agentQuery = parseAgentPrefix(line);
+          const aiQuery = parseAiPrefix(line);
 
-          const agentQuery = parseAgentPrefix(line) || fallbackAgentQuery;
-          const aiQuery = parseAiPrefix(line) || fallbackAiQuery;
-          
           if (agentQuery !== null || aiQuery !== null) {
             const finalQuery = agentQuery || aiQuery!;
             if (previewRef.current.loading) {
@@ -782,27 +841,24 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           }
           // Track this as a block too, same as a WarpInput-submitted command —
           // typing directly into the live terminal is a normal way to use it,
-          // not a fallback path. Skip whitespace-only lines (e.g. bare Enter,
-          // or a line arrow-key history recall didn't populate into lineBufRef
-          // reliably) rather than create a block with an empty/unknown command.
-          if (line.trim()) {
+          // not a fallback path. Skip whitespace-only lines (e.g. bare Enter)
+          // rather than create a block with an empty/unknown command.
+          if (line) {
             beginTrackedBlockRef.current(line);
           }
-          writePty(session, ch).catch(console.error);
+          toSend += ch;
         } else if (ch === "\x7f" || ch === "\b") {
-          lineBufRef.current = lineBufRef.current.slice(0, -1);
-          writePty(session, ch).catch(console.error);
+          pendingThisChunk = pendingThisChunk.slice(0, -1);
+          toSend += ch;
         } else if (ch === "\x03" || ch === "\x15") {
-          lineBufRef.current = "";
-          writePty(session, ch).catch(console.error);
+          pendingThisChunk = "";
+          toSend += ch;
         } else {
-          // Ignore ANSI escape sequence starts (like arrow keys) which corrupt the simple buffer
-          if (ch !== "\x1b") {
-            lineBufRef.current += ch;
-          }
-          writePty(session, ch).catch(console.error);
+          toSend += ch;
+          pendingThisChunk += ch;
         }
       }
+      if (toSend) writePty(session, toSend).catch(console.error);
     });
 
     term.onResize(({ rows: r, cols: c }) => {

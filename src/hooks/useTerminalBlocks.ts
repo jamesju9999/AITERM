@@ -85,12 +85,14 @@ export function useTerminalBlocks(
    * can never be finalized more than once and its callback can never be left
    * dangling regardless of which path finalizes it.
    *
-   * Does NOT touch the live terminal — callers on the OSC 133 D path clear it
-   * themselves, synchronously, before calling this (see the registerOscHandler
-   * callback below for why that timing matters).
+   * `opts.clearOnParsed` clears the live terminal once the card is ready to
+   * take over (the original, Mac/Linux behavior — avoids a blank-screen flash
+   * between "raw output disappears" and "card appears"). The OSC 133 D path
+   * skips this on Windows, where it instead clears synchronously-deferred and
+   * force-repaints — see the registerOscHandler callback below for why.
    */
   const finalizeBlock = useCallback(
-    (blockId: string, exitCode: number) => {
+    (blockId: string, exitCode: number, opts?: { clearOnParsed?: boolean }) => {
       const prev = blocksRef.current;
       const target = prev.find((b) => b.id === blockId);
       if (!target || target.status !== "running") return;
@@ -115,6 +117,8 @@ export function useTerminalBlocks(
         );
         blocksRef.current = withLines;
         setBlocks(withLines);
+
+        if (opts?.clearOnParsed) term?.clear();
 
         const cb = completionCallbacksRef.current.get(blockId);
         if (cb) {
@@ -151,30 +155,31 @@ export function useTerminalBlocks(
         const latest = prev[prev.length - 1];
         if (latest.status !== "running") return true;
 
-        // Clear on the next tick rather than waiting for the async headless-parse
-        // in finalizeBlock (the old approach) — but also rather than clearing
-        // fully synchronously from inside this handler. This callback runs
-        // mid-parse, reentrantly, while xterm is still actively processing the
-        // write() that contains this very D marker; for large outputs (long
-        // enough to have scrolled the screen, e.g. `dir` with 20+ entries) that
-        // reentrant clear()/scrollToBottom() could race the renderer's own
-        // in-flight repaint of that write, leaving stale rows on screen even
-        // though the underlying buffer is correctly cleared underneath them.
-        // A zero-delay setTimeout runs after xterm finishes the current parse
-        // (and its renderer catches up), so there's nothing left to race — and
-        // it's still far faster than the async ANSI-parse this used to wait on,
-        // so it still wins the race against the shell's next prompt output.
-        setTimeout(() => {
-          term?.clear();
-          term?.scrollToBottom();
-          // term.refresh() alone doesn't reliably repaint on some Windows/
-          // WebView2 setups (confirmed: neither mouse-wheel scroll nor
-          // resizing the window fixes a stuck stale pane, only new input
-          // does) — onLiveClear additionally re-measures via the fit addon,
-          // which is the extra step that reliably forces a real repaint.
-          onLiveClear?.();
-        }, 0);
-        finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode);
+        // Windows-only: clear on the next tick instead of waiting for the async
+        // headless-parse in finalizeBlock (avoids a race where a long/scrolled
+        // command's completion and the shell's next prompt can arrive batched
+        // together — Windows/ConPTY specific, not seen on zsh/bash's separate
+        // precmd writes) — see git history on this block for the fuller
+        // investigation. Three attempts at forcing this to repaint reliably on
+        // Windows (sync clear, deferred clear+refresh, deferred clear+fit+
+        // refresh) have each reduced but not eliminated the bug, and the most
+        // recent one turned out to cause a real regression on macOS (IME
+        // composition corruption) since it ran unconditionally on all
+        // platforms. Scoping the whole clear-on-D-marker + repaint dance to
+        // Windows keeps macOS/Linux on the original, always-reliable path:
+        // clear once the card is actually ready (finalizeBlock's
+        // clearOnParsed), no forced repaint at all.
+        const isWindows = navigator.platform.toLowerCase().startsWith("win");
+        if (isWindows) {
+          setTimeout(() => {
+            term?.clear();
+            term?.scrollToBottom();
+            onLiveClear?.();
+          }, 0);
+          finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode);
+        } else {
+          finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode, { clearOnParsed: true });
+        }
 
         return true;
       }
