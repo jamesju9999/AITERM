@@ -171,10 +171,13 @@ export function useTerminalBlocks(
         // clearOnParsed), no forced repaint at all.
         const isWindows = navigator.platform.toLowerCase().startsWith("win");
         if (isWindows) {
+          console.log("[AITERM-DIAG] D marker OSC fired", performance.now().toFixed(1), "exitCode:", exitCode);
           setTimeout(() => {
+            console.log("[AITERM-DIAG] deferred clear start", performance.now().toFixed(1));
             term?.clear();
             term?.scrollToBottom();
             onLiveClear?.();
+            console.log("[AITERM-DIAG] deferred clear done", performance.now().toFixed(1));
           }, 0);
           finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode);
         } else {
