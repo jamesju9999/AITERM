@@ -159,25 +159,18 @@ export function useTerminalBlocks(
         // headless-parse in finalizeBlock (avoids a race where a long/scrolled
         // command's completion and the shell's next prompt can arrive batched
         // together — Windows/ConPTY specific, not seen on zsh/bash's separate
-        // precmd writes) — see git history on this block for the fuller
-        // investigation. Three attempts at forcing this to repaint reliably on
-        // Windows (sync clear, deferred clear+refresh, deferred clear+fit+
-        // refresh) have each reduced but not eliminated the bug, and the most
-        // recent one turned out to cause a real regression on macOS (IME
-        // composition corruption) since it ran unconditionally on all
-        // platforms. Scoping the whole clear-on-D-marker + repaint dance to
-        // Windows keeps macOS/Linux on the original, always-reliable path:
-        // clear once the card is actually ready (finalizeBlock's
-        // clearOnParsed), no forced repaint at all.
+        // precmd writes). Root-caused via DevTools diagnostic logging: the
+        // live pane going stale after long output was ConPTY re-transmitting
+        // its currently-visible screen content in response to a PTY resize
+        // that forceLiveRepaint's fit() call was spuriously triggering (see
+        // that function for the full mechanism) — fixed there, not here, but
+        // this deferred-clear timing is still needed on its own merits.
         const isWindows = navigator.platform.toLowerCase().startsWith("win");
         if (isWindows) {
-          console.log("[AITERM-DIAG] D marker OSC fired", performance.now().toFixed(1), "exitCode:", exitCode);
           setTimeout(() => {
-            console.log("[AITERM-DIAG] deferred clear start", performance.now().toFixed(1));
             term?.clear();
             term?.scrollToBottom();
             onLiveClear?.();
-            console.log("[AITERM-DIAG] deferred clear done", performance.now().toFixed(1));
           }, 0);
           finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode);
         } else {

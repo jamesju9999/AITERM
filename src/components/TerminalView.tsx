@@ -195,18 +195,23 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const searchInputRef = useRef<HTMLInputElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
 
-  // Same recipe as the Files-tab -> Terminal-tab repaint fix below: on some
-  // Windows/WebView2 setups, xterm's own refresh() alone isn't enough to make
-  // a cleared live pane actually repaint on screen (confirmed: neither mouse
-  // wheel nor resizing the window fixes it, only new input does) — fit()'s
-  // dimension re-measurement is the extra step that reliably forces it.
+  // Deliberately does NOT call fitAddon.fit() here (unlike the Files-tab ->
+  // Terminal-tab repaint fix below, where fit() is genuinely needed to
+  // recover from a stale zero-size measurement). Root-caused via DevTools
+  // diagnostic logging: fit() re-measures hostRef's parent and computes cols
+  // based partly on FitAddon's own scrollbar-width estimate, which shifts
+  // once a long command has pushed enough content into scrollback for xterm
+  // to consider a scrollbar needed — even though our CSS clips it out of
+  // view. That's enough to make fit() see a different column count and call
+  // term.resize(), which fires a real PTY resize. On Windows, ConPTY
+  // responds to a resize by re-transmitting its currently-visible screen
+  // content (its own screen-buffer model, unlike a Unix pty) — arriving
+  // ~60ms later and overwriting the freshly-cleared prompt with stale
+  // output. term.refresh() alone triggers no resize and no such replay.
   const forceLiveRepaint = useCallback(() => {
     const term = termRef.current;
     if (!term) return;
-    console.log("[AITERM-DIAG] forceLiveRepaint start", performance.now().toFixed(1));
-    fitAddonRef.current?.fit();
     term.refresh(0, term.rows - 1);
-    console.log("[AITERM-DIAG] forceLiveRepaint done", performance.now().toFixed(1));
   }, []);
 
   const { blocks, isAlternateBuffer, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo } = useTerminalBlocks(
@@ -637,19 +642,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         unlistenData = await onPtyData(id, (bytes) => {
           const text = decoder.decode(bytes, { stream: true });
           if (isWindows) {
-            // TEMP DIAGNOSTIC — remove once the Windows live-pane repaint bug
-            // is root-caused. Logs the raw chunk (so escape sequences are
-            // visible), whether it contains a D marker, and the live-pane
-            // state at the moment this chunk arrives.
-            const hasD = text.includes("\x1b]133;D");
-            const latestForLog = blocksRef.current[blocksRef.current.length - 1];
-            console.log(
-              "[AITERM-DIAG] chunk", performance.now().toFixed(1),
-              "len:", text.length,
-              "hasD:", hasD,
-              "lastBlockStatus:", latestForLog?.status,
-              "raw:", JSON.stringify(text),
-            );
             // Force a repaint once xterm has actually finished processing this
             // chunk (the write() completion callback, not just the write() call
             // returning — writes are queued/async internally). Without this,
