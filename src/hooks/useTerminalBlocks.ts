@@ -27,6 +27,14 @@ export interface UseTerminalBlocksResult {
   termInstance: Terminal | null;
 }
 
+// `clear` is the Unix/PowerShell screen-clear command; `cls` is cmd.exe's (and
+// also a built-in PowerShell alias for Clear-Host, alongside `clear`). Matched
+// case-insensitively since Windows commands aren't case-sensitive.
+function isClearCommand(cmd: string): boolean {
+  const trimmed = cmd.trim().toLowerCase();
+  return trimmed === "clear" || trimmed === "cls";
+}
+
 export function useTerminalBlocks(
   sessionId: string,
   term: Terminal | null,
@@ -70,14 +78,18 @@ export function useTerminalBlocks(
 
   /**
    * Marks a still-running block as completed/failed, freezes its rawOutput,
-   * kicks off headless ANSI parsing, and fires+clears its onComplete callback
-   * once parsing resolves. Shared by the normal OSC 133 D path and the
-   * defensive "orphaned block" path in submitCommand below, so a block can
-   * never be finalized more than once and its callback can never be left
+   * and kicks off headless ANSI parsing that fires+clears its onComplete
+   * callback once parsing resolves. Shared by the normal OSC 133 D path and
+   * the defensive "orphaned block" path in submitCommand below, so a block
+   * can never be finalized more than once and its callback can never be left
    * dangling regardless of which path finalizes it.
+   *
+   * Does NOT touch the live terminal — callers on the OSC 133 D path clear it
+   * themselves, synchronously, before calling this (see the registerOscHandler
+   * callback below for why that timing matters).
    */
   const finalizeBlock = useCallback(
-    (blockId: string, exitCode: number, opts?: { clearTerminalOnParsed?: boolean }) => {
+    (blockId: string, exitCode: number) => {
       const prev = blocksRef.current;
       const target = prev.find((b) => b.id === blockId);
       if (!target || target.status !== "running") return;
@@ -102,12 +114,6 @@ export function useTerminalBlocks(
         );
         blocksRef.current = withLines;
         setBlocks(withLines);
-
-        // Only clear the live terminal once the card is actually ready to take over
-        // (renderedLines set above) — clearing any earlier risks a blank-screen flash
-        // between "raw output disappears" and "card appears", especially for large
-        // outputs where headless ANSI parsing takes measurably longer.
-        if (opts?.clearTerminalOnParsed) term?.clear();
 
         const cb = completionCallbacksRef.current.get(blockId);
         if (cb) {
@@ -144,7 +150,19 @@ export function useTerminalBlocks(
         const latest = prev[prev.length - 1];
         if (latest.status !== "running") return true;
 
-        finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode, { clearTerminalOnParsed: true });
+        // Clear synchronously, right here, instead of waiting for the async
+        // headless-parse in finalizeBlock to resolve. xterm's OSC dispatch is
+        // synchronous mid-parse: whatever the shell writes right after this D
+        // marker (its next prompt) hasn't been rendered yet, so clearing now
+        // guarantees it lands on an empty pane. Clearing after the async parse
+        // used to race that: on shells/platforms that flush the D marker and
+        // the following prompt together in one chunk (observed with Windows'
+        // PowerShell/ConPTY, not with zsh/bash's separate precmd writes), the
+        // prompt could already be painted by the time the delayed clear() ran
+        // — wiping it out and leaving the live pane with no visible prompt
+        // until the user typed something.
+        term?.clear();
+        finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode);
 
         return true;
       }
@@ -169,8 +187,8 @@ export function useTerminalBlocks(
       const isWindows = navigator.platform.toLowerCase().startsWith("win");
       const clearSeq = isWindows ? "" : "\x15";
 
-      if (cmd.trim() === "clear") {
-        // `clear` wipes the whole block history, not just the live viewport —
+      if (isClearCommand(cmd)) {
+        // `clear`/`cls` wipes the whole block history, not just the live viewport —
         // matches what a real terminal's clear does. Still forward the command
         // to the shell (keeps shell-side history/state in sync) but don't track
         // a block for it — there's nothing meaningful to show in a card for it.
@@ -230,9 +248,9 @@ export function useTerminalBlocks(
     (cmd: string) => {
       if (!sessionId) return;
 
-      if (cmd.trim() === "clear") {
-        // Same reasoning as submitCommand's `clear` handling — wipe the whole
-        // block history instead of tracking a card for it. The keystrokes
+      if (isClearCommand(cmd)) {
+        // Same reasoning as submitCommand's `clear`/`cls` handling — wipe the
+        // whole block history instead of tracking a card for it. The keystrokes
         // (including the trailing Enter) are already streaming to the PTY via
         // onData, so there's nothing to write here.
         clearAllBlocks();

@@ -614,12 +614,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         onSessionCreated?.(id);
         setStatus(`connected (${id.slice(0, 8)}…)`);
 
-        // On Windows, PowerShell doesn't emit OSC 133 shell-integration markers.
-        // We detect the PS prompt pattern in PTY output and inject a synthetic
-        // OSC 133;D so the agent loop (which waits for that signal) works normally.
-        const isWindows = navigator.platform.toLowerCase().startsWith("win");
-        let psPromptBuf = ""; // rolling buffer to handle prompts split across chunks
-
         unlistenData = await onPtyData(id, (bytes) => {
           const text = decoder.decode(bytes, { stream: true });
           term.write(text);
@@ -640,20 +634,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           const latestBlock = blocksRef.current[blocksRef.current.length - 1];
           if (latestBlock?.status === "running") {
             setLiveRows(MAX_LIVE_ROWS);
-          }
-
-          // Windows: detect PS prompt → inject synthetic OSC 133 D
-          if (isWindows) {
-            psPromptBuf = (psPromptBuf + text).slice(-300);
-            // Strip ANSI codes and check for a PS prompt at the end of the buffer
-            const stripped = psPromptBuf.replace(/\x1b\[[^a-zA-Z]*[a-zA-Z]/g, "").trimEnd();
-            if (/PS\s+[A-Za-z]:[^>]*>\s*$/.test(stripped)) {
-              psPromptBuf = "";
-              // Inject synthetic OSC 133;D — xterm.js parser fires our handler without
-              // rendering anything visible.  Exit code 0 is safe: the agent reads the
-              // full output text to determine success / failure.
-              term.write("\x1b]133;D;0\x07");
-            }
           }
 
           // Detect password prompts during agent mode

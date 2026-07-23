@@ -263,4 +263,41 @@ describe("useTerminalBlocks", () => {
     expect(result.current.blocks).toHaveLength(0);
     expect(writePtyMock).not.toHaveBeenCalled();
   });
+
+  it("submitCommand('cls') wipes existing blocks and does not create a block for itself", async () => {
+    const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+
+    act(() => { result.current.submitCommand("cmd1"); });
+    act(() => { result.current.appendOutput("first\r\n"); });
+    await act(async () => { await writeToTerm(term, "\x1b]133;D;0\x07"); });
+    await waitFor(() => {
+      expect(result.current.blocks).toHaveLength(1);
+    });
+
+    act(() => {
+      result.current.submitCommand("cls");
+    });
+
+    expect(result.current.blocks).toHaveLength(0);
+    expect(writePtyMock).toHaveBeenLastCalledWith("session-1", expect.stringContaining("cls\r"));
+  });
+
+  it("beginTrackedBlock('CLS') wipes existing blocks without writing to the PTY (case-insensitive)", async () => {
+    const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+
+    act(() => { result.current.submitCommand("cmd1"); });
+    act(() => { result.current.appendOutput("first\r\n"); });
+    await act(async () => { await writeToTerm(term, "\x1b]133;D;0\x07"); });
+    await waitFor(() => {
+      expect(result.current.blocks).toHaveLength(1);
+    });
+    writePtyMock.mockClear();
+
+    act(() => {
+      result.current.beginTrackedBlock("CLS");
+    });
+
+    expect(result.current.blocks).toHaveLength(0);
+    expect(writePtyMock).not.toHaveBeenCalled();
+  });
 });
