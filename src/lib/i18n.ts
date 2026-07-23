@@ -405,6 +405,10 @@ const zhTW = {
     warp_clear_all: "清除全部",
     warp_clear_all_title: "清除全部歷史記錄",
     warp_delete_item_title: "刪除此記錄",
+    warp_dir_picker_tooltip: "切換目錄",
+    warp_dir_picker_title: "子資料夾",
+    warp_dir_picker_empty: "此目錄下沒有子資料夾",
+    warp_dir_picker_loading: "載入中...",
 
     // Loop Studio — index.tsx
     ls_subtitle: "多 Agent 協作迴圈，直到目標達成",
@@ -1380,6 +1384,10 @@ const enRaw = {
     warp_clear_all: "Clear All",
     warp_clear_all_title: "Clear all history",
     warp_delete_item_title: "Delete this entry",
+    warp_dir_picker_tooltip: "Change directory",
+    warp_dir_picker_title: "Subfolders",
+    warp_dir_picker_empty: "No subfolders here",
+    warp_dir_picker_loading: "Loading...",
 
     // Loop Studio — index.tsx
     ls_subtitle: "Multi-agent collaboration loop until goal is achieved",

@@ -16,6 +16,32 @@
   padding-top: 2px;
 }
 
+.warp-dir-picker-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 0 0;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.warp-dir-picker-btn:hover:not(:disabled) {
+  opacity: 1;
+}
+
+.warp-dir-picker-btn:disabled {
+  cursor: default;
+  opacity: 0.3;
+}
+
+.warp-dir-status {
+  padding: 10px 14px;
+  color: #666;
+  font-size: 12px;
+}
+
 .warp-input-textarea {
   flex: 1;
   background: transparent;

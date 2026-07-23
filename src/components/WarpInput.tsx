@@ -1,21 +1,25 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { SubmitShortcut } from "../ipc/config";
 import { useLocale } from "../contexts/LocaleContext";
+import { listDirectory, type DirEntry } from "../ipc/fs";
 import "./WarpInput.css";
 
 export interface WarpInputProps {
   onSubmit: (cmd: string) => void;
   disabled?: boolean;
   shortcut?: SubmitShortcut;
+  sessionId?: string;
 }
 
 const STORAGE_KEY = "aiterm-command-history";
 
-export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputProps) {
+export function WarpInput({ onSubmit, disabled, shortcut = "enter", sessionId }: WarpInputProps) {
   const { t } = useLocale();
   const [value, setValue] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [dirPickerOpen, setDirPickerOpen] = useState(false);
+  const [dirEntries, setDirEntries] = useState<DirEntry[] | null>(null);
   // displayIndex: position in reversedHistory (0 = top = newest, length-1 = bottom = oldest)
   const [displayIndex, setDisplayIndex] = useState(-1);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -120,6 +124,29 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
     setTimeout(() => textareaRef.current?.focus(), 0);
   };
 
+  const toggleDirPicker = () => {
+    setHistoryOpen(false);
+    setDirPickerOpen((open) => {
+      const next = !open;
+      if (next) {
+        setDirEntries(null);
+        if (sessionId) {
+          listDirectory(sessionId, "")
+            .then((entries) => setDirEntries(entries.filter((e) => e.is_dir)))
+            .catch(() => setDirEntries([]));
+        } else {
+          setDirEntries([]);
+        }
+      }
+      return next;
+    });
+  };
+
+  const selectDirEntry = (entry: DirEntry) => {
+    setDirPickerOpen(false);
+    commitCommand(`cd "${entry.name}"`);
+  };
+
   const selectHistoryItem = (displayIdx: number) => {
     fillInput(displayHistory[displayIdx]);
     closeHistory(false);
@@ -155,6 +182,10 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
         e.preventDefault();
         closeHistory(true);
       }
+      if (dirPickerOpen) {
+        e.preventDefault();
+        setDirPickerOpen(false);
+      }
     } else if (e.key === "Delete" && historyOpen && displayIndex >= 0) {
       e.preventDefault();
       deleteHistoryItem(displayIndex, { stopPropagation: () => {} } as React.MouseEvent);
@@ -162,6 +193,7 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
     } else if (e.key === "ArrowUp") {
       if (history.length === 0) return;
       e.preventDefault();
+      setDirPickerOpen(false);
       if (!historyOpen) {
         // Save draft, open popover at bottom (newest item)
         draftValueRef.current = value;
@@ -244,6 +276,40 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter" }: WarpInputP
           </div>
         </div>
       )}
+      {dirPickerOpen && (
+        <div className="warp-history-popover warp-dir-popover">
+          <div className="warp-history-header">
+            <span className="warp-history-title">{t.warp_dir_picker_title}</span>
+          </div>
+          <div className="warp-history-items">
+            {dirEntries === null && (
+              <div className="warp-dir-status">{t.warp_dir_picker_loading}</div>
+            )}
+            {dirEntries !== null && dirEntries.length === 0 && (
+              <div className="warp-dir-status">{t.warp_dir_picker_empty}</div>
+            )}
+            {dirEntries?.map((entry) => (
+              <div
+                key={entry.path}
+                className="warp-history-item"
+                onClick={() => selectDirEntry(entry)}
+              >
+                <span className="warp-history-prefix">📁</span>
+                <span className="warp-history-text">{entry.name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <button
+        type="button"
+        className="warp-dir-picker-btn"
+        onClick={toggleDirPicker}
+        title={t.warp_dir_picker_tooltip}
+        disabled={!sessionId}
+      >
+        📁
+      </button>
       <div className="warp-input-prompt">▶</div>
       <textarea
         ref={textareaRef}

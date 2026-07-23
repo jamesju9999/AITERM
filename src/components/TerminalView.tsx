@@ -1067,6 +1067,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           block-list length — only the live xterm view above scrolls with block content. */}
       {!isAlternateBuffer && (
         <WarpInput
+          sessionId={sessionId}
           onSubmit={(cmd) => {
             const agentQuery = parseAgentPrefix(cmd);
             const aiQuery = parseAiPrefix(cmd);
