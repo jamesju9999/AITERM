@@ -925,7 +925,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           </div>
         )}
         {/* Terminal */}
-        <div style={{ display: viewTab === "terminal" ? "flex" : "none", flexDirection: "column", height: "100%", position: "relative" }}>
+        <div
+          ref={blockListRef}
+          style={{ display: viewTab === "terminal" ? "flex" : "none", flexDirection: "column", height: "100%", position: "relative", overflowY: "auto" }}
+        >
         {/* Find in Buffer search bar */}
         {searchOpen && (
           <div className="terminal-search-bar">
@@ -954,7 +957,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             alternate buffer — those programs must render exactly as they did before this
             refactor: full panel, no stale completed-command cards competing for space. */}
         {!isAlternateBuffer && (
-          <div className="aiterm-block-list" ref={blockListRef}>
+          <div className="aiterm-block-list">
             {blocks
               .filter((b) => b.status !== "running" && b.renderedLines)
               .map((b) => (
@@ -983,9 +986,11 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             flexShrink: 0,
           }}
         />
-        </div>{/* end terminal wrapper */}
-      </div>{/* end relative container */}
-      {!isAlternateBuffer && (
+        {/* Input follows the block-list flow (Warp-style) instead of being pinned to the
+            panel bottom, so it sits directly under the last block and moves down as
+            content grows — the whole area (blocks + live terminal + input) scrolls as
+            one unit via the overflowY:auto wrapper above. */}
+        {!isAlternateBuffer && (
         <WarpInput
           onSubmit={(cmd) => {
             const agentQuery = parseAgentPrefix(cmd);
@@ -1035,7 +1040,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           }}
           shortcut={submitShortcut}
         />
-      )}
+        )}
+        </div>{/* end terminal wrapper */}
+      </div>{/* end relative container */}
       {preview.loading && (
         <StreamingIndicator visible text={streamText} />
       )}
