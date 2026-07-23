@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual escape hatch for when the tag-push webhook is delayed/degraded
+  # (e.g. a GitHub-side incident). Invoke with `gh workflow run release.yml
+  # --ref <existing-tag>` — github.ref_name below then resolves to that tag,
+  # same as a normal tag-push trigger.
+  workflow_dispatch:
 
 permissions:
   contents: write
