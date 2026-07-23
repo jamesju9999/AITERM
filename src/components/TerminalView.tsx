@@ -1044,8 +1044,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           className="aiterm-live-frame"
           style={{
             height: isAlternateBuffer ? "100%" : `${liveHeightPx}px`,
-            width: "calc(100% - 20px)",
-            marginLeft: "20px",
+            width: "calc(100% - 16px)",
+            margin: "6px 8px",
             boxSizing: "border-box",
             flexShrink: 0,
             overflow: isAlternateBuffer ? "visible" : "hidden",
