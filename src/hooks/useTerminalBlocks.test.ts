@@ -187,4 +187,43 @@ describe("useTerminalBlocks", () => {
     // finalized.
     expect(onComplete1).toHaveBeenCalledTimes(1);
   });
+
+  it("beginTrackedBlock creates a running block without writing to the PTY", async () => {
+    const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+
+    act(() => {
+      result.current.beginTrackedBlock("ls -l");
+    });
+
+    expect(result.current.blocks).toHaveLength(1);
+    expect(result.current.blocks[0].command).toBe("ls -l");
+    expect(result.current.blocks[0].status).toBe("running");
+    expect(writePtyMock).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.appendOutput("total 0\r\n");
+    });
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;D;0\x07");
+    });
+
+    await waitFor(() => {
+      expect(result.current.blocks[0].status).toBe("completed");
+    });
+    expect(result.current.blocks[0].rawOutput).toBe("total 0\r\n");
+  });
+
+  it("beginTrackedBlock does not create a second block while one is already running", () => {
+    const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+
+    act(() => {
+      result.current.submitCommand("cmd1");
+    });
+    act(() => {
+      result.current.beginTrackedBlock("cmd2");
+    });
+
+    expect(result.current.blocks).toHaveLength(1);
+    expect(result.current.blocks[0].command).toBe("cmd1");
+  });
 });

@@ -20,6 +20,7 @@ export interface TerminalBlock {
 export interface UseTerminalBlocksResult {
   blocks: TerminalBlock[];
   submitCommand: (cmd: string, onComplete?: (block: TerminalBlock) => void) => void;
+  beginTrackedBlock: (cmd: string) => void;
   appendOutput: (chunk: string) => void;
   setBlockGitInfo: (id: string, info: GitBlockInfo | null) => void;
   isAlternateBuffer: boolean;
@@ -119,8 +120,10 @@ export function useTerminalBlocks(
 
     const disposeOsc = term.parser.registerOscHandler(133, (data) => {
       if (data === "C") {
-        // Command start — no marker bookkeeping needed anymore; the block
-        // was already created by submitCommand.
+        // Command start — no-op. The block was already created synchronously,
+        // either by submitCommand (WarpInput) or by beginTrackedBlock (typed
+        // directly into the live terminal) — both run well before this async
+        // shell-emitted event round-trips back to the frontend.
         return true;
       } else if (data.startsWith("D")) {
         const parts = data.split(";");
@@ -193,9 +196,48 @@ export function useTerminalBlocks(
     [sessionId, term, cwdRef, finalizeBlock],
   );
 
+  /**
+   * Starts tracking a block for a command that was typed directly into the
+   * live terminal (bypassing WarpInput's submitCommand — WarpInput isn't the
+   * only way to type into a real terminal). Unlike submitCommand, this does
+   * NOT write anything to the PTY: the caller (TerminalView's onData handler)
+   * has already streamed the keystrokes to the PTY character-by-character as
+   * the user typed, so writing here again would duplicate/corrupt input.
+   * This only does the block-bookkeeping half of submitCommand.
+   */
+  const beginTrackedBlock = useCallback(
+    (cmd: string) => {
+      if (!sessionId) return;
+
+      const prevBlocks = blocksRef.current;
+      const prevLatest = prevBlocks[prevBlocks.length - 1];
+      if (prevLatest?.status === "running") {
+        // Already tracking a block — most likely this Enter press belongs to
+        // a submitCommand-initiated command whose OSC 133 D hasn't fired yet.
+        // Don't create a second, competing block.
+        return;
+      }
+
+      const newBlock: TerminalBlock = {
+        id: Math.random().toString(36).substring(2, 15) + Date.now().toString(36),
+        command: cmd,
+        status: "running",
+        startTime: Date.now(),
+        cwd: cwdRef?.current,
+        rawOutput: "",
+      };
+
+      const updated = [...blocksRef.current, newBlock];
+      blocksRef.current = updated;
+      setBlocks(updated);
+    },
+    [sessionId, cwdRef],
+  );
+
   return {
     blocks,
     submitCommand,
+    beginTrackedBlock,
     appendOutput,
     setBlockGitInfo,
     isAlternateBuffer,

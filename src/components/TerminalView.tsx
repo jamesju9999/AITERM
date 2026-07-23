@@ -184,7 +184,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const searchInputRef = useRef<HTMLInputElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
 
-  const { blocks, isAlternateBuffer, submitCommand, appendOutput, setBlockGitInfo } = useTerminalBlocks(
+  const { blocks, isAlternateBuffer, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo } = useTerminalBlocks(
     sessionId,
     termState,
     lastCwdRef,
@@ -193,6 +193,11 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // Bridge submitCommand into a ref so the stale term.onData closure can access the latest version
   const submitCommandRef = useRef(submitCommand);
   useEffect(() => { submitCommandRef.current = submitCommand; }, [submitCommand]);
+
+  // Bridge beginTrackedBlock into a ref for the same reason — onData is registered
+  // inside a mount-once effect and would otherwise close over a stale version.
+  const beginTrackedBlockRef = useRef(beginTrackedBlock);
+  useEffect(() => { beginTrackedBlockRef.current = beginTrackedBlock; }, [beginTrackedBlock]);
 
   // Abort signal for agent loop — set to true to stop the loop
   const agentAbortRef = useRef(false);
@@ -707,6 +712,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               onStepComplete: (info) => sendRemoteResponse(formatAgentStepForRemote(info)),
             });
             continue;
+          }
+          // Track this as a block too, same as a WarpInput-submitted command —
+          // typing directly into the live terminal is a normal way to use it,
+          // not a fallback path. Skip whitespace-only lines (e.g. bare Enter,
+          // or a line arrow-key history recall didn't populate into lineBufRef
+          // reliably) rather than create a block with an empty/unknown command.
+          if (line.trim()) {
+            beginTrackedBlockRef.current(line);
           }
           writePty(session, ch).catch(console.error);
         } else if (ch === "\x7f" || ch === "\b") {
