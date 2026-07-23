@@ -1081,7 +1081,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         <CommandBookmarksPicker
           onSelect={(cmd) => {
             setBookmarksOpen(false);
-            window.dispatchEvent(new CustomEvent("aiterm:fill-input", { detail: { cmd } }));
+            window.dispatchEvent(new CustomEvent("warp-fill-command", { detail: { cmd } }));
           }}
           onClose={() => setBookmarksOpen(false)}
         />
