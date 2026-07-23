@@ -230,6 +230,20 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     blockListRef.current?.scrollTo({ top: blockListRef.current.scrollHeight });
   }, [visibleBlockCount]);
 
+  // The terminal wrapper is `display:none` while viewTab === "files" (see the
+  // JSX below). xterm.js can receive writes (e.g. the shell's own prompt
+  // redraw after a `cd` finishes) while hidden without actually painting them
+  // — canvas-based rendering can't measure a zero-size/hidden element — so
+  // switching back to the Terminal tab can show a blank live pane until some
+  // other interaction (typing) forces a repaint. Force one explicitly here.
+  useEffect(() => {
+    if (viewTab !== "terminal") return;
+    const term = termRef.current;
+    if (!term) return;
+    fitAddonRef.current?.fit();
+    term.refresh(0, term.rows - 1);
+  }, [viewTab]);
+
   // The live terminal pane visually shrinks to just MIN_LIVE_ROWS while idle
   // (just a prompt, nothing running) instead of always reserving a big fixed
   // box, and snaps straight to MAX_LIVE_ROWS the instant any real PTY output
