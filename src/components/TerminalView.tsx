@@ -92,6 +92,14 @@ export interface TerminalViewProps {
   onAgentProgress?: (done: number, total: number) => void;
 }
 
+// The live terminal pane's visible height shrinks to just the current content
+// (down to MIN_LIVE_ROWS) instead of always reserving MAX_LIVE_ROWS worth of
+// mostly-empty space. The underlying xterm host div stays a fixed MAX_LIVE_ROWS
+// tall at all times — only an outer wrapper's CSS height is animated, so this
+// never touches xterm's actual row count / triggers a PTY resize.
+const MIN_LIVE_ROWS = 3;
+const MAX_LIVE_ROWS = 16;
+
 const SEARCH_OPTS = {
   regex: false,
   caseSensitive: false,
@@ -221,6 +229,27 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   useEffect(() => {
     blockListRef.current?.scrollTo({ top: blockListRef.current.scrollHeight });
   }, [visibleBlockCount]);
+
+  // The live terminal pane visually shrinks to just the current content instead of
+  // always reserving a big fixed box (see MIN_LIVE_ROWS/MAX_LIVE_ROWS near the JSX
+  // below). liveRows tracks how many rows are actually in use; it resets to the
+  // minimum whenever the visible block count changes, since that only happens right
+  // after useTerminalBlocks clears the live terminal (a real command finished) or
+  // wipes it (the `clear` command) — either way the live pane is freshly empty.
+  // term.onCursorMove does NOT fire from term.clear() itself, so this can't rely on
+  // cursor tracking alone to notice the reset (verified directly against xterm.js).
+  const [liveRows, setLiveRows] = useState(MIN_LIVE_ROWS);
+  useEffect(() => {
+    setLiveRows(MIN_LIVE_ROWS);
+  }, [visibleBlockCount]);
+
+  // xterm doesn't expose cell height as public API — this reads the same internal
+  // renderer field the (now-removed) old block overlay used, with a font-metrics
+  // fallback for the first render or if that internal ever changes shape.
+  const cellHeightPx =
+    (termState as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } } } | null)
+      ?._core?._renderService?.dimensions?.css?.cell?.height || 14 * 1.1;
+  const liveHeightPx = Math.round(liveRows * cellHeightPx);
 
   // Fetch git info (branch, insertions/deletions) for completed blocks, debounced 500ms.
   const gitFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -744,6 +773,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       }
     });
 
+    // Grows the visually-clipped live pane (see MIN/MAX_LIVE_ROWS) as content
+    // streams in. Does not fire from term.clear() itself — the visibleBlockCount
+    // effect above handles resetting back to MIN_LIVE_ROWS for that case.
+    term.onCursorMove(() => {
+      const rows = Math.min(MAX_LIVE_ROWS, Math.max(MIN_LIVE_ROWS, term.buffer.active.cursorY + 1));
+      setLiveRows(rows);
+    });
+
     let ro: ResizeObserver | null = null;
     if (hostRef.current) {
       ro = new ResizeObserver(() => {
@@ -999,17 +1036,31 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               ))}
           </div>
         )}
+        {/* Outer wrapper clips + frames the live view; hostRef itself always stays a
+            fixed 220px internally so its ResizeObserver never sees a size change from
+            this — only this wrapper's height/overflow changes, so xterm's actual row
+            count (and the PTY size it reports to the shell) is never affected. */}
         <div
-          ref={hostRef}
-          className="aiterm-terminal-root"
+          className="aiterm-live-frame"
           style={{
-            height: isAlternateBuffer ? "100%" : "220px",
+            height: isAlternateBuffer ? "100%" : `${liveHeightPx}px`,
             width: "calc(100% - 20px)",
             marginLeft: "20px",
             boxSizing: "border-box",
             flexShrink: 0,
+            overflow: isAlternateBuffer ? "visible" : "hidden",
           }}
-        />
+        >
+          <div
+            ref={hostRef}
+            className="aiterm-terminal-root"
+            style={{
+              height: isAlternateBuffer ? "100%" : "220px",
+              width: "100%",
+              boxSizing: "border-box",
+            }}
+          />
+        </div>
         </div>{/* end terminal wrapper */}
       </div>{/* end relative container */}
       {/* WarpInput (the actual typing box) stays pinned to the panel bottom regardless of
