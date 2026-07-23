@@ -58,6 +58,16 @@ export function useTerminalBlocks(
     setBlocks(updated);
   }, []);
 
+  // Wipes the whole block history — used when the user runs `clear`, which in a
+  // real terminal resets everything visible, not just whatever the live viewport
+  // happens to be showing. Any block still "running" at this point is simply
+  // dropped: appendOutput/finalizeBlock already no-op safely against an empty
+  // blocksRef (see their own `prev.length === 0` guards), so no crash risk.
+  const clearAllBlocks = useCallback(() => {
+    blocksRef.current = [];
+    setBlocks([]);
+  }, []);
+
   /**
    * Marks a still-running block as completed/failed, freezes its rawOutput,
    * kicks off headless ANSI parsing, and fires+clears its onComplete callback
@@ -151,6 +161,24 @@ export function useTerminalBlocks(
     (cmd: string, onComplete?: (block: TerminalBlock) => void) => {
       if (!term || !sessionId) return;
 
+      // On Windows conpty: \x15 echoes as visible "^U", and \x1b gets merged with
+      // the first char of the command as an Alt+key (e.g. \x1b + "d" = Alt+D which
+      // deletes a word, dropping the "d").  WarpInput owns all keyboard input so the
+      // PTY line is always empty — no clear sequence needed on Windows.
+      // On macOS/Linux, \x15 (Ctrl+U) clears bash/zsh input silently.
+      const isWindows = navigator.platform.toLowerCase().startsWith("win");
+      const clearSeq = isWindows ? "" : "\x15";
+
+      if (cmd.trim() === "clear") {
+        // `clear` wipes the whole block history, not just the live viewport —
+        // matches what a real terminal's clear does. Still forward the command
+        // to the shell (keeps shell-side history/state in sync) but don't track
+        // a block for it — there's nothing meaningful to show in a card for it.
+        clearAllBlocks();
+        writePty(sessionId, clearSeq + cmd + "\r").catch(console.error);
+        return;
+      }
+
       // If the previous block is still "running", its OSC 133 D never fired
       // (caller raced ahead, or the shell doesn't reliably emit exactly one D
       // per command). Defensively finalize it as failed/interrupted (exitCode
@@ -183,17 +211,10 @@ export function useTerminalBlocks(
       blocksRef.current = updated;
       setBlocks(updated);
 
-      // Clear the current line before sending the command.
-      // On Windows conpty: \x15 echoes as visible "^U", and \x1b gets merged with
-      // the first char of the command as an Alt+key (e.g. \x1b + "d" = Alt+D which
-      // deletes a word, dropping the "d").  WarpInput owns all keyboard input so the
-      // PTY line is always empty — no clear sequence needed on Windows.
-      // On macOS/Linux, \x15 (Ctrl+U) clears bash/zsh input silently.
-      const isWindows = navigator.platform.toLowerCase().startsWith("win");
-      const clearSeq = isWindows ? "" : "\x15";
+      // Clear the current line before sending the command (see isWindows/clearSeq above).
       writePty(sessionId, clearSeq + cmd + "\r").catch(console.error);
     },
-    [sessionId, term, cwdRef, finalizeBlock],
+    [sessionId, term, cwdRef, finalizeBlock, clearAllBlocks],
   );
 
   /**
@@ -208,6 +229,15 @@ export function useTerminalBlocks(
   const beginTrackedBlock = useCallback(
     (cmd: string) => {
       if (!sessionId) return;
+
+      if (cmd.trim() === "clear") {
+        // Same reasoning as submitCommand's `clear` handling — wipe the whole
+        // block history instead of tracking a card for it. The keystrokes
+        // (including the trailing Enter) are already streaming to the PTY via
+        // onData, so there's nothing to write here.
+        clearAllBlocks();
+        return;
+      }
 
       const prevBlocks = blocksRef.current;
       const prevLatest = prevBlocks[prevBlocks.length - 1];
@@ -231,7 +261,7 @@ export function useTerminalBlocks(
       blocksRef.current = updated;
       setBlocks(updated);
     },
-    [sessionId, cwdRef],
+    [sessionId, cwdRef, clearAllBlocks],
   );
 
   return {
