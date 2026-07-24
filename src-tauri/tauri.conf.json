@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "AITerm",
-  "version": "0.1.142",
+  "version": "0.1.143",
   "identifier": "com.aiterm.app",
   "build": {
     "frontendDist": "../dist",
@@ -16,7 +16,8 @@
         "width": 800,
         "height": 600,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "decorations": false
       }
     ],
     "security": {

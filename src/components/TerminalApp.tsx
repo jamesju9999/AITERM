@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { TerminalView } from "./TerminalView";
 import { TabBar, type Tab } from "./TabBar";
+import { TitleBar } from "./TitleBar";
 import { DatabaseView } from "./DatabaseView";
 import { DesignView } from "./DesignView/DesignView";
 import { NewTabPicker } from "./NewTabPicker";
@@ -266,7 +267,9 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
   const toggleSidebar = useCallback(() => setIsSidebarOpen(o => !o), []);
 
   return (
-    <div style={{ display: "flex", flexDirection: "row", height: "100vh", backgroundColor: "#0c0c0c", position: "relative" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh", backgroundColor: "#0c0c0c", position: "relative" }}>
+      <TitleBar />
+      <div style={{ display: "flex", flexDirection: "row", flex: 1, minHeight: 0, position: "relative" }}>
       <div>
         <TabBar
           tabs={tabs}
@@ -362,6 +365,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
           );
         })}
       </div>
+      </div>{/* end sidebar+content row */}
 
       {/* Enterprise: Background Task Progress Panel (10.2) */}
       {(() => {

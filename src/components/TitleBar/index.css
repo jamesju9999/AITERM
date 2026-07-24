@@ -1,0 +1,83 @@
+.aiterm-titlebar {
+  height: 34px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  background: #0c0c0c;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  user-select: none;
+  position: relative;
+  z-index: 100;
+}
+
+/* macOS: leave room for the native traffic lights on the left and center the
+   title, matching the reference layout. */
+.aiterm-titlebar.is-mac {
+  padding-left: 78px;
+}
+
+.aiterm-titlebar__title {
+  flex: 1;
+  font-size: 12px;
+  color: #9aa0a6;
+  padding: 0 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aiterm-titlebar.is-mac .aiterm-titlebar__title {
+  text-align: center;
+  padding-right: 78px; /* balance the left traffic-light gutter so text truly centers */
+}
+
+.aiterm-titlebar__controls {
+  display: flex;
+  align-self: stretch;
+}
+
+.aiterm-titlebar__btn {
+  width: 46px;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #cfcfcf;
+  cursor: default;
+  padding: 0;
+}
+
+.aiterm-titlebar__btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.aiterm-titlebar__btn--close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
+/* Fixed edge/corner grips that give a frameless (decorations:false) window its
+   resize borders back. The layer itself is click-through; only the thin grips
+   capture the mouse. */
+.aiterm-rz-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+}
+
+.aiterm-rz {
+  position: absolute;
+  pointer-events: auto;
+}
+
+.aiterm-rz--n { top: 0; left: 0; right: 0; height: 4px; cursor: ns-resize; }
+.aiterm-rz--s { bottom: 0; left: 0; right: 0; height: 4px; cursor: ns-resize; }
+.aiterm-rz--e { top: 0; bottom: 0; right: 0; width: 4px; cursor: ew-resize; }
+.aiterm-rz--w { top: 0; bottom: 0; left: 0; width: 4px; cursor: ew-resize; }
+.aiterm-rz--ne { top: 0; right: 0; width: 10px; height: 10px; cursor: nesw-resize; }
+.aiterm-rz--nw { top: 0; left: 0; width: 10px; height: 10px; cursor: nwse-resize; }
+.aiterm-rz--se { bottom: 0; right: 0; width: 10px; height: 10px; cursor: nwse-resize; }
+.aiterm-rz--sw { bottom: 0; left: 0; width: 10px; height: 10px; cursor: nesw-resize; }
