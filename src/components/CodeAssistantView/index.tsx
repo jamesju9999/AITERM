@@ -34,7 +34,10 @@ export function CodeAssistantView({ isActive }: Props) {
   const [submitShortcut, setSubmitShortcut] = useState<SubmitShortcut>("enter");
   const submitShortcutRef = useRef<SubmitShortcut>("enter");
   submitShortcutRef.current = submitShortcut;
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  // True while the user is parked at (or near) the bottom — only then do we
+  // auto-follow new content. Flips to false the moment they scroll up to read.
+  const shouldAutoScrollRef = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const { messages, isStreaming, error, isFallbackMode, tokenCount, tokenLimit, send, clear } = useCodeAssistant();
@@ -59,11 +62,62 @@ export function CodeAssistantView({ isActive }: Props) {
     }
   }, [isActive]);
 
+  // Auto-scroll to the newest content while generating — but only when the user
+  // is already at the bottom, and keep following as content keeps GROWING. The
+  // reply's Mermaid diagram and markdown render asynchronously (their height
+  // lands after `messages` updates), so scrolling on `messages` alone left the
+  // view stranded in the middle once the diagram appeared. A ResizeObserver on
+  // the message elements (plus a MutationObserver for newly-added ones) catches
+  // that late height and re-pins to the bottom.
   useEffect(() => {
-    if (isActive) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const scrollToBottom = () => {
+      if (shouldAutoScrollRef.current) container.scrollTop = container.scrollHeight;
+    };
+
+    const ro = new ResizeObserver(scrollToBottom);
+    const observeChildren = () => {
+      for (const child of Array.from(container.children)) ro.observe(child);
+    };
+    observeChildren();
+
+    const mo = new MutationObserver(() => {
+      observeChildren();
+      scrollToBottom();
+    });
+    mo.observe(container, { childList: true, subtree: true });
+
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, []);
+
+  // Track whether the user is parked at the bottom (auto-follow) or has scrolled
+  // up to read (stop yanking them down).
+  const handleMessagesScroll = useCallback(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    shouldAutoScrollRef.current = distanceFromBottom < 80;
+  }, []);
+
+  // On a brand-new user turn (the user just sent), re-pin to the bottom and
+  // resume following — even if they had scrolled up while reading the last
+  // answer. Keyed on the user-message count so assistant/tool messages arriving
+  // mid-generation don't yank a user who deliberately scrolled up.
+  const userMsgCountRef = useRef(0);
+  useEffect(() => {
+    const userCount = messages.reduce((n, m) => (m.role === "user" ? n + 1 : n), 0);
+    if (userCount > userMsgCountRef.current) {
+      shouldAutoScrollRef.current = true;
+      const container = messagesContainerRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
     }
-  }, [messages, isActive]);
+    userMsgCountRef.current = userCount;
+  }, [messages]);
 
   const handlePickFolder = useCallback(async () => {
     const folder = await pickFolder();
@@ -147,7 +201,7 @@ export function CodeAssistantView({ isActive }: Props) {
   return (
     <div className="ca-view">
       {/* Messages area */}
-      <div className="ca-messages">
+      <div className="ca-messages" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
         {messages.length === 0 && (
           <div className="ca-hint-center">
             <div className="ca-hint-icon">
@@ -252,7 +306,6 @@ export function CodeAssistantView({ isActive }: Props) {
           );
         })}
         {error && <div className="ca-error">{error}</div>}
-        <div ref={messagesEndRef} />
       </div>
 
       {/* Fallback mode banner */}
