@@ -27,7 +27,14 @@ import {
   anthropicOAuthComplete,
   anthropicOAuthLogout,
   getAnthropicOAuthModels,
-
+  getOpenRouterModels,
+  getOpenRouterModelsByProvider,
+  getXaiModels,
+  getXaiModelsByProvider,
+  getDeepseekModels,
+  getDeepseekModelsByProvider,
+  getKimiModels,
+  getKimiModelsByProvider,
 } from "../../ipc/provider";
 import type { ProviderType } from "../../ipc/config";
 import { useLocale } from "../../contexts/LocaleContext";
@@ -84,6 +91,14 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
   const [copilotLoading, setCopilotLoading] = useState(false);
   const [googleAiModels, setGoogleAiModels] = useState<string[]>([]);
   const [googleAiLoading, setGoogleAiLoading] = useState(false);
+  const [openRouterModels, setOpenRouterModels] = useState<string[]>([]);
+  const [openRouterLoading, setOpenRouterLoading] = useState(false);
+  const [xaiModels, setXaiModels] = useState<string[]>([]);
+  const [xaiLoading, setXaiLoading] = useState(false);
+  const [deepseekModels, setDeepseekModels] = useState<string[]>([]);
+  const [deepseekLoading, setDeepseekLoading] = useState(false);
+  const [kimiModels, setKimiModels] = useState<string[]>([]);
+  const [kimiLoading, setKimiLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [authing, setAuthing] = useState(false);
@@ -191,6 +206,134 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         })
         .catch(() => setGoogleAiModels([]))
         .finally(() => setGoogleAiLoading(false));
+    }, 500);
+
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerType, apiKey, isEdit, existing?.has_api_key, id]);
+
+  useEffect(() => {
+    if (providerType !== "openrouter") return;
+
+    if (!apiKey.trim() && isEdit && existing?.has_api_key && id.trim()) {
+      setOpenRouterLoading(true);
+      getOpenRouterModelsByProvider(id.trim())
+        .then((models) => {
+          setOpenRouterModels(models);
+          if (models.length > 0 && !models.includes(model)) setModel(models[0]);
+        })
+        .catch(() => setOpenRouterModels([]))
+        .finally(() => setOpenRouterLoading(false));
+      return;
+    }
+
+    if (!apiKey.trim()) { setOpenRouterModels([]); return; }
+
+    const timer = setTimeout(() => {
+      setOpenRouterLoading(true);
+      getOpenRouterModels(apiKey.trim())
+        .then((models) => {
+          setOpenRouterModels(models);
+          if (models.length > 0 && !models.includes(model)) setModel(models[0]);
+        })
+        .catch(() => setOpenRouterModels([]))
+        .finally(() => setOpenRouterLoading(false));
+    }, 500);
+
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerType, apiKey, isEdit, existing?.has_api_key, id]);
+
+  useEffect(() => {
+    if (providerType !== "xai") return;
+
+    if (!apiKey.trim() && isEdit && existing?.has_api_key && id.trim()) {
+      setXaiLoading(true);
+      getXaiModelsByProvider(id.trim())
+        .then((models) => {
+          setXaiModels(models);
+          if (models.length > 0 && !models.includes(model)) setModel(models[0]);
+        })
+        .catch(() => setXaiModels([]))
+        .finally(() => setXaiLoading(false));
+      return;
+    }
+
+    if (!apiKey.trim()) { setXaiModels([]); return; }
+
+    const timer = setTimeout(() => {
+      setXaiLoading(true);
+      getXaiModels(apiKey.trim())
+        .then((models) => {
+          setXaiModels(models);
+          if (models.length > 0 && !models.includes(model)) setModel(models[0]);
+        })
+        .catch(() => setXaiModels([]))
+        .finally(() => setXaiLoading(false));
+    }, 500);
+
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerType, apiKey, isEdit, existing?.has_api_key, id]);
+
+  useEffect(() => {
+    if (providerType !== "deepseek") return;
+
+    if (!apiKey.trim() && isEdit && existing?.has_api_key && id.trim()) {
+      setDeepseekLoading(true);
+      getDeepseekModelsByProvider(id.trim())
+        .then((models) => {
+          setDeepseekModels(models);
+          if (models.length > 0 && !models.includes(model)) setModel(models[0]);
+        })
+        .catch(() => setDeepseekModels([]))
+        .finally(() => setDeepseekLoading(false));
+      return;
+    }
+
+    if (!apiKey.trim()) { setDeepseekModels([]); return; }
+
+    const timer = setTimeout(() => {
+      setDeepseekLoading(true);
+      getDeepseekModels(apiKey.trim())
+        .then((models) => {
+          setDeepseekModels(models);
+          if (models.length > 0 && !models.includes(model)) setModel(models[0]);
+        })
+        .catch(() => setDeepseekModels([]))
+        .finally(() => setDeepseekLoading(false));
+    }, 500);
+
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerType, apiKey, isEdit, existing?.has_api_key, id]);
+
+  useEffect(() => {
+    if (providerType !== "kimi") return;
+
+    if (!apiKey.trim() && isEdit && existing?.has_api_key && id.trim()) {
+      setKimiLoading(true);
+      getKimiModelsByProvider(id.trim())
+        .then((models) => {
+          setKimiModels(models);
+          if (models.length > 0 && !models.includes(model)) setModel(models[0]);
+        })
+        .catch(() => setKimiModels([]))
+        .finally(() => setKimiLoading(false));
+      return;
+    }
+
+    if (!apiKey.trim()) { setKimiModels([]); return; }
+
+    const timer = setTimeout(() => {
+      setKimiLoading(true);
+      getKimiModels(apiKey.trim())
+        .then((models) => {
+          setKimiModels(models);
+          if (models.length > 0 && !models.includes(model)) setModel(models[0]);
+        })
+        .catch(() => setKimiModels([]))
+        .finally(() => setKimiLoading(false));
     }, 500);
 
     return () => clearTimeout(timer);
@@ -617,6 +760,90 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
               {googleAiModels.length > 0 && (
                 <datalist id="google-ai-models-list">
                   {googleAiModels.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              )}
+            </>
+          )
+        ) : providerType === "openrouter" ? (
+          openRouterLoading ? (
+            <input type="text" value={t.provider_model_loading} disabled />
+          ) : (
+            <>
+              <input
+                type="text"
+                list="openrouter-models-list"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={openRouterModels.length > 0 ? t.settings_provider_model_placeholder : DEFAULT_MODELS[providerType]}
+              />
+              {openRouterModels.length > 0 && (
+                <datalist id="openrouter-models-list">
+                  {openRouterModels.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              )}
+            </>
+          )
+        ) : providerType === "xai" ? (
+          xaiLoading ? (
+            <input type="text" value={t.provider_model_loading} disabled />
+          ) : (
+            <>
+              <input
+                type="text"
+                list="xai-models-list"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={xaiModels.length > 0 ? t.settings_provider_model_placeholder : DEFAULT_MODELS[providerType]}
+              />
+              {xaiModels.length > 0 && (
+                <datalist id="xai-models-list">
+                  {xaiModels.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              )}
+            </>
+          )
+        ) : providerType === "deepseek" ? (
+          deepseekLoading ? (
+            <input type="text" value={t.provider_model_loading} disabled />
+          ) : (
+            <>
+              <input
+                type="text"
+                list="deepseek-models-list"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={deepseekModels.length > 0 ? t.settings_provider_model_placeholder : DEFAULT_MODELS[providerType]}
+              />
+              {deepseekModels.length > 0 && (
+                <datalist id="deepseek-models-list">
+                  {deepseekModels.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              )}
+            </>
+          )
+        ) : providerType === "kimi" ? (
+          kimiLoading ? (
+            <input type="text" value={t.provider_model_loading} disabled />
+          ) : (
+            <>
+              <input
+                type="text"
+                list="kimi-models-list"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={kimiModels.length > 0 ? t.settings_provider_model_placeholder : DEFAULT_MODELS[providerType]}
+              />
+              {kimiModels.length > 0 && (
+                <datalist id="kimi-models-list">
+                  {kimiModels.map((m) => (
                     <option key={m} value={m} />
                   ))}
                 </datalist>
