@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "AITerm",
-  "version": "0.1.140",
+  "version": "0.1.141",
   "identifier": "com.aiterm.app",
   "build": {
     "frontendDist": "../dist",

@@ -31,6 +31,11 @@ export function sanitizeMermaid(code: string): string {
   // diagram types (classDiagram, stateDiagram, sequenceDiagram, ...) use
   // [] {} for unrelated constructs and would be corrupted by this pass.
   if (/^\s*(flowchart|graph)\b/im.test(result)) {
+    // Repair edge labels the model broke by putting the delimiter `|` (and
+    // quotes / angle brackets) INSIDE the label text, e.g.
+    // `B -->|"有 |"Bearer <key>"|"| C`. Runs first, anchored on the arrow, so it
+    // rebuilds a clean single-quoted-free `|"…"|` before anything else.
+    result = repairEdgeLabels(result);
     result = quoteBracketLabels(result);
     // Protect every already-quoted "..." span before the diamond/edge passes so
     // they can't reach INSIDE a quoted label. Without this, a `{id}` written
@@ -41,7 +46,9 @@ export function sanitizeMermaid(code: string): string {
     // rectangle labels are protected too.
     const quoted: string[] = [];
     result = result.replace(/"[^"\n]*"/g, (m) => {
-      quoted.push(m);
+      // Neutralize angle brackets inside already-quoted labels too — `<x>` is
+      // lexed as an HTML tag (TAGSTART) and breaks the parse even when quoted.
+      quoted.push(m.replace(/</g, "＜").replace(/>/g, "＞"));
       return `${MASK}${quoted.length - 1}${MASK}`;
     });
     result = quoteDiamondLabels(result);
@@ -94,7 +101,33 @@ function isMaskedQuoted(inner: string): boolean {
 }
 
 function wrapQuoted(inner: string): string {
-  return `"${inner.replace(/"/g, "'")}"`;
+  // "→' (a straight " would re-open the label as a STR token) and <>→fullwidth
+  // (angle brackets are lexed as HTML tags and break the parse).
+  const safe = inner.replace(/"/g, "'").replace(/</g, "＜").replace(/>/g, "＞");
+  return `"${safe}"`;
+}
+
+// Edge labels the model broke by embedding the delimiter `|`, quotes, or angle
+// brackets in the label text. Anchored on the arrow (a run of link chars) and
+// bounded by the `|` that precedes the target node, so it only rewrites genuine
+// edge labels. Strips the stray delimiters/quotes and neutralizes <>, then
+// re-wraps once. Assumes one edge per line (the usual LLM layout); a node label
+// that itself contains a raw `|` could be over-matched, but that is far rarer
+// than the broken-edge case this fixes.
+function repairEdgeLabels(code: string): string {
+  return code.replace(
+    /([-.=<>ox]{2,})[ \t]*\|([^\n]*)\|(?=[ \t]*[A-Za-z0-9_])/g,
+    (_full: string, link: string, label: string) => {
+      const clean = label
+        .replace(/"/g, "")
+        .replace(/\|/g, " ")
+        .replace(/</g, "＜")
+        .replace(/>/g, "＞")
+        .replace(/\s+/g, " ")
+        .trim();
+      return `${link}|"${clean}"|`;
+    },
+  );
 }
 
 // Shape syntaxes that reuse [...] but aren't plain rectangles — must not be

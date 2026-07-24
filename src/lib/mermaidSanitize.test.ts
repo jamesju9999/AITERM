@@ -84,4 +84,26 @@ describe("sanitizeMermaid", () => {
     const out = sanitizeMermaid("flowchart TD\n  A[\"start\"] --> B\n  style A fill:#f9f");
     await expect(mermaid.parse(out)).resolves.toBeTruthy();
   });
+
+  it("repairs an edge label that embeds the | delimiter and <key>", () => {
+    const out = sanitizeMermaid(
+      'flowchart TD\n  B -->|"有 |""Bearer <key>""|""| C["提取 Bearer Token"]',
+    );
+    expect(out).toContain('|"有 Bearer ＜key＞"|');
+    expect(out).not.toContain("<key>");
+  });
+
+  it("parses a diagram whose edge labels contained pipes and angle brackets", async () => {
+    const broken = `flowchart TD
+    A["使用者發送請求"] -->|"1. 提取 API Key"| B{"檢查 Authorization\\nHeader"}
+    B -->|"有 |""Bearer <key>""|""| C["提取 Bearer Token"]
+    K -->|"有 /vscode/<token>/...|"| M["提取 URL Token"]
+    style A fill:#f9f,stroke:#333`;
+    await expect(mermaid.parse(sanitizeMermaid(broken))).resolves.toBeTruthy();
+  });
+
+  it("leaves a normal quoted edge label intact", () => {
+    const out = sanitizeMermaid('flowchart TD\n  A -->|"1. 提取 API Key"| B');
+    expect(out).toContain('|"1. 提取 API Key"|');
+  });
 });
