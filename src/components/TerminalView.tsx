@@ -843,6 +843,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             const fullLine = renderedNow + pendingThisChunk;
             const snapshot = lineStartSnapshotRef.current ?? "";
             line = (fullLine.startsWith(snapshot) ? fullLine.slice(snapshot.length) : fullLine).trim();
+            if (navigator.platform.toLowerCase().startsWith("win")) {
+              console.log("[WIN-LINE]",
+                "snapshot=" + JSON.stringify(snapshot),
+                "renderedNow=" + JSON.stringify(renderedNow),
+                "pending=" + JSON.stringify(pendingThisChunk),
+                "matched=" + fullLine.startsWith(snapshot),
+                "=> line=" + JSON.stringify(line));
+            }
           } else {
             // A later embedded line within the same chunk (multiple commands
             // pasted at once) has no real rendered prompt to diff against —
