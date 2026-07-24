@@ -29,10 +29,10 @@ const GOOGLE_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_OAUTH_CLIENT_ID: &str = "";
 const GOOGLE_OAUTH_CLIENT_SECRET: &str = "";
 
-const OPENROUTER_DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
-const XAI_DEFAULT_BASE_URL: &str = "https://api.x.ai/v1";
-const DEEPSEEK_DEFAULT_BASE_URL: &str = "https://api.deepseek.com/v1";
-const KIMI_DEFAULT_BASE_URL: &str = "https://api.moonshot.ai/v1";
+pub(crate) const OPENROUTER_DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
+pub(crate) const XAI_DEFAULT_BASE_URL: &str = "https://api.x.ai/v1";
+pub(crate) const DEEPSEEK_DEFAULT_BASE_URL: &str = "https://api.deepseek.com/v1";
+pub(crate) const KIMI_DEFAULT_BASE_URL: &str = "https://api.moonshot.ai/v1";
 
 /// Returns a valid OAuth access token, refreshing it first if it's expired or
 /// within 5 minutes of expiry. Falls back to the stored token on refresh failure.

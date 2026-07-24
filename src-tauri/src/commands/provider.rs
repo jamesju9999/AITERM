@@ -10,7 +10,13 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
-    ai::{AiError, router::AiRouter},
+    ai::{
+        router::{
+            AiRouter, DEEPSEEK_DEFAULT_BASE_URL, KIMI_DEFAULT_BASE_URL,
+            OPENROUTER_DEFAULT_BASE_URL, XAI_DEFAULT_BASE_URL,
+        },
+        AiError,
+    },
     config::{ConfigStore, ProviderConfig, ProviderType},
     secret::SecretStore,
 };
@@ -1154,11 +1160,6 @@ pub async fn list_openai_style_models(base_url: &str, api_key: &str) -> Result<V
 
     Ok(payload.data.into_iter().map(|m| m.id).collect())
 }
-
-const OPENROUTER_DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
-const XAI_DEFAULT_BASE_URL: &str = "https://api.x.ai/v1";
-const DEEPSEEK_DEFAULT_BASE_URL: &str = "https://api.deepseek.com/v1";
-const KIMI_DEFAULT_BASE_URL: &str = "https://api.moonshot.ai/v1";
 
 /// Fetch available OpenRouter models using an API key supplied directly
 /// (used while the user is typing the key before saving the provider).
