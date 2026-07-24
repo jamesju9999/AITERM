@@ -1,0 +1,129 @@
+// Mermaid source sanitization for AI-generated diagrams (Knowledge Base, Code
+// Assistant, chat). LLMs frequently emit flowchart labels containing characters
+// the Mermaid lexer chokes on (parens, colons, braces, pipes, angle brackets),
+// so we normalize punctuation and then unconditionally quote every node/edge
+// label — quoting a label is always syntactically safe, which removes the whole
+// class of "unquoted special character confuses the lexer" errors at once.
+
+// Pass 1 — conservative sanitization.
+export function sanitizeMermaid(code: string): string {
+  let result = code
+    // Full-width punctuation → ASCII
+    .replace(/（/g, "(").replace(/）/g, ")")
+    .replace(/【/g, "[").replace(/】/g, "]")
+    .replace(/｛/g, "{").replace(/｝/g, "}")
+    .replace(/＜/g, "<").replace(/＞/g, ">")
+    .replace(/｜/g, "|")
+    .replace(/，/g, ",").replace(/。/g, ".").replace(/、/g, ",")
+    .replace(/：/g, ":").replace(/；/g, ";")
+    // Chinese corner quotes and curly double quotes → ASCII SINGLE quotes.
+    // Only CURLY doubles (“ ”) are normalized here, never straight " — a label
+    // that is already correctly straight-double-quoted (["text"], {"text"}) must
+    // be left intact, otherwise it gets re-wrapped into ugly ["'text'"] and, for
+    // diamonds, mis-quoted. wrapQuoted still collapses any straight " that ends
+    // up INSIDE a label we quote ourselves.
+    .replace(/[「」『』“”]/g, "'");
+
+  // <br/> → space: the ">" is lexed as LINK_ID inside node labels.
+  result = result.replace(/<br\s*\/?>/gi, " ");
+
+  // Blanket label quoting only applies to flowchart/graph syntax — other
+  // diagram types (classDiagram, stateDiagram, sequenceDiagram, ...) use
+  // [] {} for unrelated constructs and would be corrupted by this pass.
+  if (/^\s*(flowchart|graph)\b/im.test(result)) {
+    result = quoteBracketLabels(result);
+    // Protect every already-quoted "..." span before the diamond/edge passes so
+    // they can't reach INSIDE a quoted label. Without this, a `{id}` written
+    // inside a rectangle label — e.g. ["...Key: oauth:google:{id}"] — was
+    // matched by the diamond pass and rewritten to {"id"}, injecting a stray "
+    // into the quoted string and producing a "got 'STR'" parse error (reported
+    // from the Knowledge Base). quoteBracketLabels runs first so freshly-quoted
+    // rectangle labels are protected too.
+    const quoted: string[] = [];
+    result = result.replace(/"[^"\n]*"/g, (m) => {
+      quoted.push(m);
+      return `${MASK}${quoted.length - 1}${MASK}`;
+    });
+    result = quoteDiamondLabels(result);
+    result = quoteEdgeLabels(result);
+    result = result.replace(new RegExp(`${MASK}(\\d+)${MASK}`, "g"), (_m, i) => quoted[Number(i)]);
+  }
+
+  return result;
+}
+
+// Sentinel wrapping a masked-out quoted span. A private-use-area code point
+// never appears in real Mermaid source, so it can't collide with content, and
+// computing it at runtime keeps any special byte out of the source file.
+const MASK = String.fromCharCode(0xE000);
+
+// A masked span (a "..." that was already quoted) looks like <PUA>3<PUA>. The
+// diamond/edge passes must leave these untouched — they already represent a
+// quoted string, so re-wrapping them would double-quote and corrupt the label.
+function isMaskedQuoted(inner: string): boolean {
+  return new RegExp(`^${MASK}\\d+${MASK}$`).test(inner.trim());
+}
+
+function wrapQuoted(inner: string): string {
+  return `"${inner.replace(/"/g, "'")}"`;
+}
+
+// Shape syntaxes that reuse [...] but aren't plain rectangles — must not be
+// rewrapped in quotes or their shape (cylinder/parallelogram/trapezoid)
+// would be lost.
+function isNonRectangleBracketShape(inner: string): boolean {
+  return (
+    /^\(.*\)$/.test(inner) ||   // [(cylinder)]
+    /^\/.*\/$/.test(inner) ||   // [/parallelogram/]
+    /^\\.*\\$/.test(inner) ||   // [\parallelogram\]
+    /^\/.*\\$/.test(inner) ||   // [/trapezoid\]
+    /^\\.*\/$/.test(inner)      // [\trapezoid/]
+  );
+}
+
+// Rectangle node labels: A[text] → A["text"].
+function quoteBracketLabels(code: string): string {
+  // Negative lookbehind/lookahead skip the inner brackets of [[subroutine]].
+  return code.replace(/(?<!\[)\[([^[\]\n]*)\](?!\])/g, (match, inner: string) => {
+    if (!inner) return match;
+    if (inner.startsWith('"') && inner.endsWith('"')) return match;
+    if (isNonRectangleBracketShape(inner)) return match;
+    return `[${wrapQuoted(inner)}]`;
+  });
+}
+
+// Diamond decision node labels: C{text} → C{"text"}.
+function quoteDiamondLabels(code: string): string {
+  // Negative lookbehind/lookahead skip the inner braces of {{hexagon}}.
+  return code.replace(/(?<!\{)\{([^{}\n]*)\}(?!\})/g, (match, inner: string) => {
+    if (!inner) return match;
+    if (isMaskedQuoted(inner)) return match;
+    if (inner.startsWith('"') && inner.endsWith('"')) return match;
+    return `{${wrapQuoted(inner)}}`;
+  });
+}
+
+// Edge labels: -->|text|--> → -->|"text"|-->.
+function quoteEdgeLabels(code: string): string {
+  return code.replace(/\|([^\n|]*)\|/g, (match, inner: string) => {
+    if (!inner) return match;
+    if (isMaskedQuoted(inner)) return match;
+    if (inner.startsWith('"') && inner.endsWith('"')) return match;
+    return `|${wrapQuoted(inner)}|`;
+  });
+}
+
+// Pass 2 — aggressive fallback when Pass 1 still fails to parse.
+// Removes double-quote characters inside [...] and (...) node labels,
+// which are the most common source of STR token errors.
+export function aggressiveSanitize(code: string): string {
+  return code
+    // Strip " inside square-bracket node labels
+    .replace(/\[([^\]]*)\]/g, (_m, inner: string) => "[" + inner.replace(/"/g, "'") + "]")
+    // Strip " inside round-bracket node labels
+    .replace(/\(([^)]*)\)/g, (_m, inner: string) => "(" + inner.replace(/"/g, "'") + ")")
+    // Strip " inside subgraph labels (subgraph ID ["label"])
+    .replace(/(subgraph\s+\w*\s*)\[([^\]]*)\]/g, (_m, pre: string, label: string) =>
+      pre + "[" + label.replace(/"/g, "'") + "]"
+    );
+}
