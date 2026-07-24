@@ -15,6 +15,7 @@ import {
   DEFAULT_MODELS,
   DEFAULT_BASE_URLS,
   COMPATIBLE_PRESETS,
+  ANTHROPIC_COMPATIBLE_PRESETS,
   getOllamaModels,
   githubCopilotDeviceStart,
   githubCopilotDevicePoll,
@@ -45,6 +46,11 @@ const PROVIDER_TYPES: ProviderType[] = [
   "openai-compatible",
   "github-copilot",
   "google-ai",
+  "openrouter",
+  "xai",
+  "deepseek",
+  "kimi",
+  "anthropic-compatible",
 ];
 
 export function ProviderForm({ existing, onSave, onCancel }: Props) {
@@ -494,12 +500,27 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
       {(providerType === "ollama" ||
         providerType === "openai-compatible" ||
         providerType === "github-copilot" ||
-        providerType === "google-ai") && (
+        providerType === "google-ai" ||
+        providerType === "anthropic-compatible") && (
         <div className="form-group">
           <label>{t.provider_base_url}</label>
           {providerType === "openai-compatible" && (
             <div className="presets">
               {COMPATIBLE_PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  className="preset-btn"
+                  onClick={() => setBaseUrl(p.url)}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {providerType === "anthropic-compatible" && (
+            <div className="presets">
+              {ANTHROPIC_COMPATIBLE_PRESETS.map((p) => (
                 <button
                   key={p.label}
                   type="button"
