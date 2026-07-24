@@ -673,13 +673,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
         unlistenData = await onPtyData(id, (bytes) => {
           const text = decoder.decode(bytes, { stream: true });
-          // [WIN-DIAG] Log short Windows PTY chunks (keystroke echoes / cursor
-          // sequences) — skips the big output dumps so the input/redraw traffic
-          // that matters for the second-input freeze stays readable.
-          if (isWindows && text.length <= 90) {
-            const b = term.buffer.active;
-            console.log("[WIN-PTY]", JSON.stringify(text), `cy=${b.cursorY} by=${b.baseY} len=${b.length}`);
-          }
           if (isWindows) {
             // Force a repaint once xterm has actually finished processing this
             // chunk (the write() completion callback, not just the write() call
@@ -764,12 +757,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       const session = sessionRef.current;
       if (!session) return;
 
-      // [WIN-DIAG] what the user actually typed into the live pane.
-      if (navigator.platform.toLowerCase().startsWith("win")) {
-        const b = term.buffer.active;
-        console.log("[WIN-DATA]", JSON.stringify(data), `cy=${b.cursorY} by=${b.baseY} len=${b.length}`);
-      }
-
       // Drop focus-tracking events that xterm.js emits when it loses / gains focus.
       // PSReadLine enables focus tracking (ESC[?1004h), so xterm.js sends ESC[O (focus-out)
       // or ESC[I (focus-in) when the WarpInput textarea steals focus.  Forwarding them
@@ -843,14 +830,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             const fullLine = renderedNow + pendingThisChunk;
             const snapshot = lineStartSnapshotRef.current ?? "";
             line = (fullLine.startsWith(snapshot) ? fullLine.slice(snapshot.length) : fullLine).trim();
-            if (navigator.platform.toLowerCase().startsWith("win")) {
-              console.log("[WIN-LINE]",
-                "snapshot=" + JSON.stringify(snapshot),
-                "renderedNow=" + JSON.stringify(renderedNow),
-                "pending=" + JSON.stringify(pendingThisChunk),
-                "matched=" + fullLine.startsWith(snapshot),
-                "=> line=" + JSON.stringify(line));
-            }
           } else {
             // A later embedded line within the same chunk (multiple commands
             // pasted at once) has no real rendered prompt to diff against —
@@ -946,7 +925,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     });
 
     term.onResize(({ rows: r, cols: c }) => {
-      console.log("[WIN-RESIZE]", `rows=${r} cols=${c}`);
       // Hold this back until it's safe to send — see hasUnsubmittedPasteRef.
       if (hasUnsubmittedPasteRef.current) {
         pendingResizeRef.current = { rows: r, cols: c };
