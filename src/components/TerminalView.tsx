@@ -185,6 +185,17 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // moment a fresh input line starts — see the onData handler below for why.
   // null means "no line in progress, capture a fresh snapshot on next input".
   const lineStartSnapshotRef = useRef<string | null>(null);
+  // True while a bracketed paste has landed on the prompt line but Enter
+  // hasn't been pressed yet. Both zsh and PowerShell/PSReadLine render
+  // pasted-but-unsubmitted text with special styling (reverse video / dim),
+  // and redrawing that line in response to a PTY resize (SIGWINCH) — even
+  // one triggered by a legitimate, unrelated layout change — can leave it
+  // corrupted/invisible. See pendingResizeRef below for how this is used.
+  const hasUnsubmittedPasteRef = useRef(false);
+  const unsubmittedPasteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // A resize computed while hasUnsubmittedPasteRef was true, held back from
+  // the PTY until it's safe to send (Enter, or the safety timeout below).
+  const pendingResizeRef = useRef<{ rows: number; cols: number } | null>(null);
 
   // Find in Buffer state
   const [searchOpen, setSearchOpen] = useState(false);
@@ -618,6 +629,27 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     term.open(hostRef.current);
     requestAnimationFrame(() => fit.fit());
 
+    // Pin the live frame's internal scroll to the top. The frame is
+    // overflow:hidden but its xterm host is a fixed 220px (taller than the
+    // frame's visible height while idle), so the browser CAN still scroll the
+    // frame internally — notably it scrolls ancestors to reveal xterm's focused
+    // helper-textarea after a paste. That pushed the actual content (row 0, the
+    // live prompt + typed/pasted command) up out of the clipped viewport,
+    // leaving the pane looking blank even though the buffer and DOM were
+    // perfectly correct. Root-caused via geometry logging: on the second paste
+    // the frame's scrollTop jumped to ~170px, offsetting the host's row 0 that
+    // far above the visible window. The live pane always renders from the top
+    // (xterm handles content scrolling internally within its own rows), so any
+    // non-zero frame scroll is spurious — snap it back. The `!== 0` guards keep
+    // the corrective assignment from firing a second scroll event and looping.
+    const liveFrame = hostRef.current.parentElement;
+    const pinLiveFrameScroll = () => {
+      if (!liveFrame) return;
+      if (liveFrame.scrollTop !== 0) liveFrame.scrollTop = 0;
+      if (liveFrame.scrollLeft !== 0) liveFrame.scrollLeft = 0;
+    };
+    liveFrame?.addEventListener("scroll", pinLiveFrameScroll);
+
     const decoder = new TextDecoder("utf-8");
 
     let unlistenData: (() => void) | null = null;
@@ -699,6 +731,25 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       }
     });
 
+    // Sends a resize that was held back while hasUnsubmittedPasteRef was
+    // true, once it's safe to do so (see term.onResize below).
+    const flushPendingResize = () => {
+      const pending = pendingResizeRef.current;
+      pendingResizeRef.current = null;
+      if (pending && sessionRef.current) {
+        resizePty(sessionRef.current, pending).catch(console.error);
+      }
+    };
+
+    const clearUnsubmittedPaste = () => {
+      hasUnsubmittedPasteRef.current = false;
+      if (unsubmittedPasteTimeoutRef.current) {
+        clearTimeout(unsubmittedPasteTimeoutRef.current);
+        unsubmittedPasteTimeoutRef.current = null;
+      }
+      flushPendingResize();
+    };
+
     term.onData((data) => {
       // Panel owns keyboard while open — drop input.
       if (panelOpenRef.current) return;
@@ -741,14 +792,18 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       // naturally by the snapshot-diff above when Enter is later pressed.
       if (data.startsWith("\x1b")) {
         writePty(session, data).catch(console.error);
-        // A macOS paste can leave xterm's own text-selection overlay
-        // (.xterm-selection) active and rendered on top of the pasted row,
-        // visually blanking/covering it until something else forces a
-        // repaint — confirmed via DevTools inspection. Explicitly clearing
-        // any selection after a paste-shaped chunk (bracketed paste starts
-        // with this exact marker) removes the stray highlight regardless of
-        // what triggered it.
-        if (data.startsWith("\x1b[200~")) term.clearSelection();
+        // Mark unsubmitted-paste state so term.onResize below holds back any
+        // PTY resize until Enter is pressed (clearUnsubmittedPaste) or this
+        // safety timeout fires — root-caused via DevTools + console logging:
+        // a PTY resize while pasted-but-unsubmitted text sits on the prompt
+        // line makes the shell redraw it, and that redraw can leave the
+        // reverse-video/dim styling shells use for such text corrupted
+        // (rendered invisible) — reproduced consistently on a second paste.
+        if (data.startsWith("\x1b[200~")) {
+          hasUnsubmittedPasteRef.current = true;
+          if (unsubmittedPasteTimeoutRef.current) clearTimeout(unsubmittedPasteTimeoutRef.current);
+          unsubmittedPasteTimeoutRef.current = setTimeout(clearUnsubmittedPaste, 5000);
+        }
         return;
       }
 
@@ -785,6 +840,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           sawNewlineThisChunk = true;
           pendingThisChunk = "";
           lineStartSnapshotRef.current = null;
+          if (hasUnsubmittedPasteRef.current) clearUnsubmittedPaste();
 
           // If agent is running and user presses Enter:
           // - If a command is still running (e.g. awaiting password), pass Enter to PTY
@@ -869,21 +925,42 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     });
 
     term.onResize(({ rows: r, cols: c }) => {
+      // Hold this back until it's safe to send — see hasUnsubmittedPasteRef.
+      if (hasUnsubmittedPasteRef.current) {
+        pendingResizeRef.current = { rows: r, cols: c };
+        return;
+      }
       if (sessionRef.current) {
         resizePty(sessionRef.current, { rows: r, cols: c }).catch(console.error);
       }
     });
 
+    // Debounced: a real layout change (window resize, sidebar toggle, font
+    // change) can fire the ResizeObserver dozens of times in rapid
+    // succession while it settles, each one calling fit() and — if the
+    // measured size actually differs — firing a real PTY resize. Diagnostic
+    // logging caught exactly this: a burst of 50+ resizes over ~700ms, each
+    // one making the shell redraw its current prompt line, corrupting
+    // whatever was on it (reproduced as pasted-but-unsubmitted text
+    // rendering invisible, since the shell draws it with a reverse-video
+    // escape that a mid-burst redraw could leave applied inconsistently).
+    // Only the FINAL settled size actually matters to the PTY, so coalesce
+    // the whole burst into one fit() call after resizing quiets down.
+    let resizeSettleTimer: ReturnType<typeof setTimeout> | null = null;
     let ro: ResizeObserver | null = null;
     if (hostRef.current) {
       ro = new ResizeObserver(() => {
-        requestAnimationFrame(() => fit.fit());
+        if (resizeSettleTimer) clearTimeout(resizeSettleTimer);
+        resizeSettleTimer = setTimeout(() => fit.fit(), 120);
       });
       ro.observe(hostRef.current);
     }
 
     return () => {
+      if (resizeSettleTimer) clearTimeout(resizeSettleTimer);
+      if (unsubmittedPasteTimeoutRef.current) clearTimeout(unsubmittedPasteTimeoutRef.current);
       if (ro && hostRef.current) ro.unobserve(hostRef.current);
+      liveFrame?.removeEventListener("scroll", pinLiveFrameScroll);
       if (unlistenData) unlistenData();
       if (unlistenStream) unlistenStream.then((f: () => void) => f());
       const id = sessionRef.current;
