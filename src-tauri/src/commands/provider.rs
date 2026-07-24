@@ -1154,3 +1154,141 @@ pub async fn list_openai_style_models(base_url: &str, api_key: &str) -> Result<V
 
     Ok(payload.data.into_iter().map(|m| m.id).collect())
 }
+
+const OPENROUTER_DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
+const XAI_DEFAULT_BASE_URL: &str = "https://api.x.ai/v1";
+const DEEPSEEK_DEFAULT_BASE_URL: &str = "https://api.deepseek.com/v1";
+const KIMI_DEFAULT_BASE_URL: &str = "https://api.moonshot.ai/v1";
+
+/// Fetch available OpenRouter models using an API key supplied directly
+/// (used while the user is typing the key before saving the provider).
+#[tauri::command]
+pub async fn get_openrouter_models(api_key: String) -> Result<Vec<String>, String> {
+    list_openai_style_models(OPENROUTER_DEFAULT_BASE_URL, &api_key).await
+}
+
+/// Fetch available OpenRouter models for a saved provider (reads key from keychain).
+#[tauri::command]
+pub async fn get_openrouter_models_by_provider(
+    id: String,
+    config: State<'_, Arc<ConfigStore>>,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<Vec<String>, String> {
+    let provider = config
+        .get()
+        .find_provider(&id)
+        .cloned()
+        .ok_or_else(|| format!("provider '{id}' not found"))?;
+    if provider.provider_type != ProviderType::Openrouter {
+        return Err(format!("provider '{id}' is not openrouter"));
+    }
+    let key = secrets
+        .get(&id)
+        .map_err(|e| format!("failed to read provider secret: {e}"))?
+        .filter(|v| !v.trim().is_empty())
+        .ok_or_else(|| format!("provider '{id}' has no saved API key"))?;
+    list_openai_style_models(
+        provider.base_url.as_deref().unwrap_or(OPENROUTER_DEFAULT_BASE_URL),
+        key.trim(),
+    )
+    .await
+}
+
+/// Fetch available xAI models using an API key supplied directly.
+#[tauri::command]
+pub async fn get_xai_models(api_key: String) -> Result<Vec<String>, String> {
+    list_openai_style_models(XAI_DEFAULT_BASE_URL, &api_key).await
+}
+
+/// Fetch available xAI models for a saved provider (reads key from keychain).
+#[tauri::command]
+pub async fn get_xai_models_by_provider(
+    id: String,
+    config: State<'_, Arc<ConfigStore>>,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<Vec<String>, String> {
+    let provider = config
+        .get()
+        .find_provider(&id)
+        .cloned()
+        .ok_or_else(|| format!("provider '{id}' not found"))?;
+    if provider.provider_type != ProviderType::Xai {
+        return Err(format!("provider '{id}' is not xai"));
+    }
+    let key = secrets
+        .get(&id)
+        .map_err(|e| format!("failed to read provider secret: {e}"))?
+        .filter(|v| !v.trim().is_empty())
+        .ok_or_else(|| format!("provider '{id}' has no saved API key"))?;
+    list_openai_style_models(
+        provider.base_url.as_deref().unwrap_or(XAI_DEFAULT_BASE_URL),
+        key.trim(),
+    )
+    .await
+}
+
+/// Fetch available DeepSeek models using an API key supplied directly.
+#[tauri::command]
+pub async fn get_deepseek_models(api_key: String) -> Result<Vec<String>, String> {
+    list_openai_style_models(DEEPSEEK_DEFAULT_BASE_URL, &api_key).await
+}
+
+/// Fetch available DeepSeek models for a saved provider (reads key from keychain).
+#[tauri::command]
+pub async fn get_deepseek_models_by_provider(
+    id: String,
+    config: State<'_, Arc<ConfigStore>>,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<Vec<String>, String> {
+    let provider = config
+        .get()
+        .find_provider(&id)
+        .cloned()
+        .ok_or_else(|| format!("provider '{id}' not found"))?;
+    if provider.provider_type != ProviderType::Deepseek {
+        return Err(format!("provider '{id}' is not deepseek"));
+    }
+    let key = secrets
+        .get(&id)
+        .map_err(|e| format!("failed to read provider secret: {e}"))?
+        .filter(|v| !v.trim().is_empty())
+        .ok_or_else(|| format!("provider '{id}' has no saved API key"))?;
+    list_openai_style_models(
+        provider.base_url.as_deref().unwrap_or(DEEPSEEK_DEFAULT_BASE_URL),
+        key.trim(),
+    )
+    .await
+}
+
+/// Fetch available Kimi models using an API key supplied directly.
+#[tauri::command]
+pub async fn get_kimi_models(api_key: String) -> Result<Vec<String>, String> {
+    list_openai_style_models(KIMI_DEFAULT_BASE_URL, &api_key).await
+}
+
+/// Fetch available Kimi models for a saved provider (reads key from keychain).
+#[tauri::command]
+pub async fn get_kimi_models_by_provider(
+    id: String,
+    config: State<'_, Arc<ConfigStore>>,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<Vec<String>, String> {
+    let provider = config
+        .get()
+        .find_provider(&id)
+        .cloned()
+        .ok_or_else(|| format!("provider '{id}' not found"))?;
+    if provider.provider_type != ProviderType::Kimi {
+        return Err(format!("provider '{id}' is not kimi"));
+    }
+    let key = secrets
+        .get(&id)
+        .map_err(|e| format!("failed to read provider secret: {e}"))?
+        .filter(|v| !v.trim().is_empty())
+        .ok_or_else(|| format!("provider '{id}' has no saved API key"))?;
+    list_openai_style_models(
+        provider.base_url.as_deref().unwrap_or(KIMI_DEFAULT_BASE_URL),
+        key.trim(),
+    )
+    .await
+}
