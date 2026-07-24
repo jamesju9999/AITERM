@@ -29,6 +29,11 @@ const GOOGLE_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_OAUTH_CLIENT_ID: &str = "";
 const GOOGLE_OAUTH_CLIENT_SECRET: &str = "";
 
+const OPENROUTER_DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
+const XAI_DEFAULT_BASE_URL: &str = "https://api.x.ai/v1";
+const DEEPSEEK_DEFAULT_BASE_URL: &str = "https://api.deepseek.com/v1";
+const KIMI_DEFAULT_BASE_URL: &str = "https://api.moonshot.ai/v1";
+
 /// Returns a valid OAuth access token, refreshing it first if it's expired or
 /// within 5 minutes of expiry. Falls back to the stored token on refresh failure.
 async fn get_valid_oauth_token(provider_id: &str, secrets: &SecretStore) -> Result<String, AiError> {
@@ -338,7 +343,7 @@ impl AiRouter {
                 Arc::new(OpenAiCompatibleClient::new(
                     provider_cfg
                         .base_url
-                        .unwrap_or_else(|| "https://openrouter.ai/api/v1".into()),
+                        .unwrap_or_else(|| OPENROUTER_DEFAULT_BASE_URL.into()),
                     provider_cfg.model.clone(),
                     Some(key),
                     provider_cfg.supports_json_mode,
@@ -353,7 +358,7 @@ impl AiRouter {
                 Arc::new(OpenAiCompatibleClient::new(
                     provider_cfg
                         .base_url
-                        .unwrap_or_else(|| "https://api.x.ai/v1".into()),
+                        .unwrap_or_else(|| XAI_DEFAULT_BASE_URL.into()),
                     provider_cfg.model.clone(),
                     Some(key),
                     provider_cfg.supports_json_mode,
@@ -368,7 +373,7 @@ impl AiRouter {
                 Arc::new(OpenAiCompatibleClient::new(
                     provider_cfg
                         .base_url
-                        .unwrap_or_else(|| "https://api.deepseek.com/v1".into()),
+                        .unwrap_or_else(|| DEEPSEEK_DEFAULT_BASE_URL.into()),
                     provider_cfg.model.clone(),
                     Some(key),
                     provider_cfg.supports_json_mode,
@@ -383,7 +388,7 @@ impl AiRouter {
                 Arc::new(OpenAiCompatibleClient::new(
                     provider_cfg
                         .base_url
-                        .unwrap_or_else(|| "https://api.moonshot.ai/v1".into()),
+                        .unwrap_or_else(|| KIMI_DEFAULT_BASE_URL.into()),
                     provider_cfg.model.clone(),
                     Some(key),
                     provider_cfg.supports_json_mode,
@@ -393,8 +398,9 @@ impl AiRouter {
                 // Check base_url before the API key so a missing base_url is
                 // reported as AiError::Network regardless of whether a key
                 // happens to be present — mirrors OpenaiCompatible's ordering
-                // and keeps this branch independently testable (see Task 1
-                // tests below).
+                // and keeps this branch independently testable without
+                // needing a real secret in the keychain (see the tests
+                // below).
                 let base_url = provider_cfg.base_url.ok_or_else(|| AiError::Network {
                     message: format!("provider '{}' has no base_url configured", provider_cfg.id),
                 })?;
@@ -430,6 +436,14 @@ mod tests {
         let config = Arc::new(crate::config::ConfigStore::from_config(cfg));
         let secrets = Arc::new(SecretStore::new());
         AiRouter::new(config, secrets)
+    }
+
+    #[test]
+    fn openai_compatible_provider_default_base_urls_are_correct() {
+        assert_eq!(OPENROUTER_DEFAULT_BASE_URL, "https://openrouter.ai/api/v1");
+        assert_eq!(XAI_DEFAULT_BASE_URL, "https://api.x.ai/v1");
+        assert_eq!(DEEPSEEK_DEFAULT_BASE_URL, "https://api.deepseek.com/v1");
+        assert_eq!(KIMI_DEFAULT_BASE_URL, "https://api.moonshot.ai/v1");
     }
 
     #[tokio::test]
