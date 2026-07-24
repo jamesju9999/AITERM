@@ -63,4 +63,25 @@ describe("sanitizeMermaid", () => {
     expect(out).toContain('C{"already quoted"}');
     expect(out).not.toContain('{""');
   });
+
+  it("adds dark text color to a light node fill for contrast", () => {
+    const out = sanitizeMermaid("flowchart TD\n  A --> B\n  style A fill:#f9f");
+    expect(out).toContain("color:#111827");
+  });
+
+  it("adds light text color to a dark node fill for contrast", () => {
+    const out = sanitizeMermaid("flowchart TD\n  A --> B\n  style A fill:#222222");
+    expect(out).toContain("color:#f3f4f6");
+  });
+
+  it("does not override a text color the author already set", () => {
+    const out = sanitizeMermaid("flowchart TD\n  A --> B\n  style A fill:#f9f,color:#000000");
+    expect(out).toContain("color:#000000");
+    expect(out).not.toContain("color:#111827");
+  });
+
+  it("keeps the styled diagram parseable", async () => {
+    const out = sanitizeMermaid("flowchart TD\n  A[\"start\"] --> B\n  style A fill:#f9f");
+    await expect(mermaid.parse(out)).resolves.toBeTruthy();
+  });
 });

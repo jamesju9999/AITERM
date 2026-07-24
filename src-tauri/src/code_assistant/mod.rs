@@ -147,6 +147,9 @@ fn build_system_prompt(project_root: &str, locale: Locale) -> String {
     format!(
 r#"You are a code assistant helping the user understand and work with a software project.
 
+## Reply Language — MANDATORY
+Write your ENTIRE reply in {language}: every sentence of explanation, every heading, every summary, and every text label inside Mermaid diagrams. The project's code, file names, and tool output stay in their original language, but that must NOT change the language you write in. Do not default to English. This rule overrides everything else in this prompt.
+
 Project root: {project_root}
 
 ## Tools
@@ -200,8 +203,8 @@ Show a code block ONLY when ALL of the following are true:
 - Control flow, call chains → read EVERY file in the chain, not just the entry point.
 - search_in_files snippets are LEADS ONLY. A truncated 300-char line proves the text exists somewhere — it does NOT prove file structure, class layout, or surrounding logic.
 
-- Respond in {language}.
-- **Mermaid diagrams**: node IDs must be plain ASCII identifiers (e.g. `A`, `LoadConf`). Wrap every node label and edge label in double quotes, e.g. `A["使用者點擊「連線」按鈕"]` and `-->|"host, port, user"|`. Do not use `<br/>` inside labels — use a space instead."#
+- Reminder: the entire reply, including all diagram labels, must be in {language}.
+- **Mermaid diagrams**: node IDs must be plain ASCII identifiers (e.g. `A`, `LoadConf`). Wrap every node label and edge label in double quotes, e.g. `A["使用者點擊「連線」按鈕"]` and `-->|"host, port, user"|`. Do not use `<br/>` inside labels — use a space instead. Prefer the theme's default node colors; if you must set a `fill`, keep it dark/muted so light text stays readable, and do not rely on custom colors to convey meaning."#
     )
 }
 

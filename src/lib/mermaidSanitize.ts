@@ -49,7 +49,36 @@ export function sanitizeMermaid(code: string): string {
     result = result.replace(new RegExp(`${MASK}(\\d+)${MASK}`, "g"), (_m, i) => quoted[Number(i)]);
   }
 
+  result = ensureStyleContrast(result);
+
   return result;
+}
+
+// LLM-generated diagrams often add `style X fill:#f9f` with a light fill but no
+// text color. The app renders Mermaid with the dark theme (light text), so a
+// light fill leaves light-on-light, unreadable text (reported from the Code
+// Assistant). For any style/classDef declaration that sets a fill but no color,
+// append a text color chosen for contrast against that fill.
+function ensureStyleContrast(code: string): string {
+  return code.replace(
+    /((?:^|\n)[ \t]*(?:style|classDef)\b[^\n]*?fill\s*:\s*#([0-9a-fA-F]{3,8})[^\n]*)/g,
+    (line: string, _full: string, hex: string) => {
+      if (/\bcolor\s*:/.test(line)) return line; // author already set a text color
+      const text = relativeLuminance(hex) > 0.55 ? "#111827" : "#f3f4f6";
+      return `${line},color:${text}`;
+    },
+  );
+}
+
+// Perceptual luminance (0–1) of a #RGB / #RRGGBB / #RRGGBBAA hex color.
+function relativeLuminance(hex: string): number {
+  let h = hex.slice(0, 6);
+  if (hex.length === 3) h = hex.split("").map((c) => c + c).join("");
+  if (h.length < 6) h = h.padEnd(6, h[h.length - 1] ?? "0");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
 }
 
 // Sentinel wrapping a masked-out quoted span. A private-use-area code point
