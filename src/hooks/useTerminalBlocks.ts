@@ -167,7 +167,10 @@ export function useTerminalBlocks(
         // this deferred-clear timing is still needed on its own merits.
         const isWindows = navigator.platform.toLowerCase().startsWith("win");
         if (isWindows) {
+          console.log("[WIN-CLEAR] D marker, scheduling term.clear()", { exitCode });
           setTimeout(() => {
+            const b = term?.buffer.active;
+            console.log("[WIN-CLEAR] firing term.clear()", `cy=${b?.cursorY} by=${b?.baseY} len=${b?.length}`);
             term?.clear();
             term?.scrollToBottom();
             onLiveClear?.();
