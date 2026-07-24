@@ -1243,7 +1243,21 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             margin: "6px 8px",
             boxSizing: "border-box",
             flexShrink: 0,
-            overflow: isAlternateBuffer ? "visible" : "hidden",
+            // `clip`, not `hidden`: both visually clip the fixed-220px xterm
+            // host down to the live pane's height, but `clip` establishes NO
+            // scroll container, so the browser physically cannot scroll this
+            // element. `hidden` still allows programmatic/focus scrolling —
+            // and the browser DID scroll it (to reveal xterm's focused
+            // helper-textarea after a paste, and again on window resize),
+            // pushing row 0 (the live prompt + typed/pasted command) up out of
+            // the clipped viewport and leaving the pane looking blank/frozen
+            // even though the buffer was correct. `clip` makes scrollIntoView &
+            // friends skip this box entirely (they scroll the real container,
+            // the block list, instead), fixing it at the source rather than
+            // snapping scrollTop back after the fact. Supported in WebView2
+            // (Chromium) and macOS WKWebView. The scroll-pin listener on mount
+            // is a redundant safety net for the same failure mode.
+            overflow: isAlternateBuffer ? "visible" : "clip",
           }}
         >
           <div
