@@ -117,6 +117,9 @@ const zhTW = {
     // ProviderForm
     edit_provider: "編輯供應商",
     new_provider: "新增供應商",
+    provider_section_basic: "基本資訊",
+    provider_section_auth: "驗證方式",
+    provider_section_endpoint: "端點與模型",
     provider_type: "類型",
     provider_display_name: "顯示名稱",
     provider_api_key: "API Key",
@@ -1100,6 +1103,9 @@ const enRaw = {
     // ProviderForm
     edit_provider: "Edit Provider",
     new_provider: "New Provider",
+    provider_section_basic: "Basic Info",
+    provider_section_auth: "Authentication",
+    provider_section_endpoint: "Endpoint & Model",
     provider_type: "Type",
     provider_display_name: "Display Name",
     provider_api_key: "API Key",
