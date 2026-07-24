@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 
 const ANTHROPIC_CLAUDE_MODELS = [
   "claude-opus-4-8",
@@ -59,6 +59,15 @@ const PROVIDER_TYPES: ProviderType[] = [
   "kimi",
   "anthropic-compatible",
 ];
+
+function FormSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="form-section">
+      <div className="form-section-title">{title}</div>
+      {children}
+    </div>
+  );
+}
 
 export function ProviderForm({ existing, onSave, onCancel }: Props) {
   const { t } = useLocale();
@@ -447,270 +456,286 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
 
       {error && <div className="form-error">{error}</div>}
 
-      <div className="form-group">
-        <label>{t.provider_type}</label>
-        <select
-          value={providerType}
-          onChange={(e) => setProviderType(e.target.value as ProviderType)}
-          disabled={isEdit}
-        >
-          {PROVIDER_TYPES.map((pt) => (
-            <option key={pt} value={pt}>
-              {PROVIDER_TYPE_LABELS[pt]}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="form-group">
-        <label>ID</label>
-        <input
-          type="text"
-          value={id}
-          onChange={(e) => setId(e.target.value)}
-          placeholder="e.g. claude-sonnet"
-          disabled={isEdit}
-        />
-      </div>
-
-      <div className="form-group">
-        <label>{t.provider_display_name}</label>
-        <input
-          type="text"
-          value={displayName}
-          onChange={(e) => setDisplayName(e.target.value)}
-          placeholder="e.g. Claude Sonnet"
-        />
-      </div>
-
-      {providerType === "anthropic" && (
+      <FormSection title={t.provider_section_basic}>
         <div className="form-group">
-          <label>{t.settings_provider_auth_type}</label>
-          <div className="anthropic-auth-tabs">
-            <button
-              type="button"
-              className={`auth-tab ${anthropicAuthMethod === "api_key" ? "active" : ""}`}
-              onClick={() => { setAnthropicAuthMethod("api_key"); setAnthropicOAuthCode(""); setAuthStatus(null); }}
-            >
-              {t.settings_provider_auth_api_key}
-            </button>
-            <button
-              type="button"
-              className={`auth-tab ${anthropicAuthMethod === "oauth" ? "active" : ""}`}
-              onClick={() => { setAnthropicAuthMethod("oauth"); setApiKey(""); setAuthStatus(null); }}
-            >
-              {t.settings_provider_auth_oauth("Claude Pro/Max")}
-            </button>
-          </div>
+          <label>{t.provider_type}</label>
+          <select
+            value={providerType}
+            onChange={(e) => setProviderType(e.target.value as ProviderType)}
+            disabled={isEdit}
+          >
+            {PROVIDER_TYPES.map((pt) => (
+              <option key={pt} value={pt}>
+                {PROVIDER_TYPE_LABELS[pt]}
+              </option>
+            ))}
+          </select>
         </div>
-      )}
 
-      {providerType === "anthropic" && anthropicAuthMethod === "api_key" && (
         <div className="form-group">
-          <label>{t.provider_api_key}</label>
+          <label>ID</label>
           <input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder={isEdit ? t.provider_api_key_placeholder_edit : t.provider_api_key_placeholder_new}
-            autoComplete="off"
+            type="text"
+            value={id}
+            onChange={(e) => setId(e.target.value)}
+            placeholder="e.g. claude-sonnet"
+            disabled={isEdit}
           />
         </div>
-      )}
 
-      {providerType === "anthropic" && anthropicAuthMethod === "oauth" && (
         <div className="form-group">
-          <label>{t.settings_provider_auth_oauth("")}</label>
-          {anthropicOAuthLoggedIn ? (
-            <div className="anthropic-oauth-done">
-              <span className="anthropic-oauth-ok">{t.settings_provider_oauth_ok}</span>
-              <button
-                type="button"
-                className="anthropic-oauth-logout"
-                disabled={saving}
-                onClick={async () => {
-                  if (!isEdit) return;
-                  try {
-                    await anthropicOAuthLogout(id.trim());
-                    setAnthropicOAuthLoggedIn(false);
-                    setAnthropicAuthMethod("api_key");
-                  } catch (e: unknown) {
-                    setAuthStatus(String(e));
-                  }
-                }}
-              >
-                {t.settings_provider_oauth_logout}
-              </button>
+          <label>{t.provider_display_name}</label>
+          <input
+            type="text"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="e.g. Claude Sonnet"
+          />
+        </div>
+      </FormSection>
+
+      {providerType !== "ollama" && (
+        <FormSection title={t.provider_section_auth}>
+          {providerType === "anthropic" && (
+            <div className="form-group">
+              <label>{t.settings_provider_auth_type}</label>
+              <div className="anthropic-auth-tabs">
+                <button
+                  type="button"
+                  className={`auth-tab ${anthropicAuthMethod === "api_key" ? "active" : ""}`}
+                  onClick={() => { setAnthropicAuthMethod("api_key"); setAnthropicOAuthCode(""); setAuthStatus(null); }}
+                >
+                  {t.settings_provider_auth_api_key}
+                </button>
+                <button
+                  type="button"
+                  className={`auth-tab ${anthropicAuthMethod === "oauth" ? "active" : ""}`}
+                  onClick={() => { setAnthropicAuthMethod("oauth"); setApiKey(""); setAuthStatus(null); }}
+                >
+                  {t.settings_provider_auth_oauth("Claude Pro/Max")}
+                </button>
+              </div>
             </div>
-          ) : (
-            <div className="anthropic-oauth-flow">
-              {authing ? (
-                <div className="anthropic-oauth-paste-ui">
-                  <p className="anthropic-oauth-paste-hint">
-                    {t.settings_provider_oauth_instructions}
-                  </p>
-                  <textarea
-                    className="anthropic-oauth-url-input"
-                    value={anthropicOAuthCode}
-                    onChange={(e) => setAnthropicOAuthCode(e.target.value)}
-                    placeholder={t.settings_provider_oauth_placeholder}
-                    rows={2}
-                    autoFocus
-                  />
-                  <div className="anthropic-oauth-btns">
-                    <button
-                      type="button"
-                      className="anthropic-oauth-open"
-                      disabled={!anthropicOAuthCode.trim()}
-                      onClick={async () => {
-                        const pid = id.trim();
-                        if (!pid) {
-                          setAuthStatus(t.settings_provider_oauth_err_save_first);
-                          setAuthing(false);
-                          return;
-                        }
-                        try {
-                          await anthropicOAuthComplete(pid, anthropicOAuthCode.trim());
-                          setAnthropicOAuthLoggedIn(true);
-                          setAuthStatus(t.settings_provider_oauth_success);
-                          setAnthropicOAuthCode("");
-                          fetchAnthropicModels(pid);
-                        } catch (e: unknown) {
-                          setAuthStatus(t.settings_provider_oauth_err(String(e)));
-                        } finally {
-                          setAuthing(false);
-                        }
-                      }}
-                    >
-                      {t.settings_provider_btn_confirm_auth}
-                    </button>
-                    <button
-                      type="button"
-                      className="anthropic-oauth-cancel-btn"
-                      onClick={() => { setAuthing(false); setAnthropicOAuthCode(""); }}
-                    >
-                      {t.settings_provider_btn_cancel}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <>
+          )}
+
+          {providerType === "anthropic" && anthropicAuthMethod === "api_key" && (
+            <div className="form-group">
+              <label>{t.provider_api_key}</label>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={isEdit ? t.provider_api_key_placeholder_edit : t.provider_api_key_placeholder_new}
+                autoComplete="off"
+              />
+            </div>
+          )}
+
+          {providerType === "anthropic" && anthropicAuthMethod === "oauth" && (
+            <div className="form-group">
+              <label>{t.settings_provider_auth_oauth("")}</label>
+              {anthropicOAuthLoggedIn ? (
+                <div className="anthropic-oauth-done">
+                  <span className="anthropic-oauth-ok">{t.settings_provider_oauth_ok}</span>
                   <button
                     type="button"
-                    className="anthropic-oauth-open"
-                    disabled={!id.trim()}
+                    className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                    disabled={saving}
                     onClick={async () => {
-                      setAuthing(true);
-                      setAuthStatus(null);
+                      if (!isEdit) return;
                       try {
-                        await anthropicOAuthStart();
+                        await anthropicOAuthLogout(id.trim());
+                        setAnthropicOAuthLoggedIn(false);
+                        setAnthropicAuthMethod("api_key");
                       } catch (e: unknown) {
-                        setAuthStatus(t.settings_provider_oauth_err(String(e)));
-                        setAuthing(false);
+                        setAuthStatus(String(e));
                       }
                     }}
                   >
-                    {t.settings_provider_btn_open_auth}
+                    {t.settings_provider_oauth_logout}
                   </button>
-                  {!id.trim() && (
-                    <div className="form-hint">{t.settings_provider_oauth_id_required}</div>
+                </div>
+              ) : (
+                <div className="anthropic-oauth-flow">
+                  {authing ? (
+                    <div className="anthropic-oauth-paste-ui">
+                      <p className="anthropic-oauth-paste-hint">
+                        {t.settings_provider_oauth_instructions}
+                      </p>
+                      <textarea
+                        className="anthropic-oauth-url-input"
+                        value={anthropicOAuthCode}
+                        onChange={(e) => setAnthropicOAuthCode(e.target.value)}
+                        placeholder={t.settings_provider_oauth_placeholder}
+                        rows={2}
+                        autoFocus
+                      />
+                      <div className="anthropic-oauth-btns">
+                        <button
+                          type="button"
+                          className="aiterm-btn aiterm-btn--primary"
+                          disabled={!anthropicOAuthCode.trim()}
+                          onClick={async () => {
+                            const pid = id.trim();
+                            if (!pid) {
+                              setAuthStatus(t.settings_provider_oauth_err_save_first);
+                              setAuthing(false);
+                              return;
+                            }
+                            try {
+                              await anthropicOAuthComplete(pid, anthropicOAuthCode.trim());
+                              setAnthropicOAuthLoggedIn(true);
+                              setAuthStatus(t.settings_provider_oauth_success);
+                              setAnthropicOAuthCode("");
+                              fetchAnthropicModels(pid);
+                            } catch (e: unknown) {
+                              setAuthStatus(t.settings_provider_oauth_err(String(e)));
+                            } finally {
+                              setAuthing(false);
+                            }
+                          }}
+                        >
+                          {t.settings_provider_btn_confirm_auth}
+                        </button>
+                        <button
+                          type="button"
+                          className="aiterm-btn aiterm-btn--secondary"
+                          onClick={() => { setAuthing(false); setAnthropicOAuthCode(""); }}
+                        >
+                          {t.settings_provider_btn_cancel}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="aiterm-btn aiterm-btn--primary"
+                        disabled={!id.trim()}
+                        onClick={async () => {
+                          setAuthing(true);
+                          setAuthStatus(null);
+                          try {
+                            await anthropicOAuthStart();
+                          } catch (e: unknown) {
+                            setAuthStatus(t.settings_provider_oauth_err(String(e)));
+                            setAuthing(false);
+                          }
+                        }}
+                      >
+                        {t.settings_provider_btn_open_auth}
+                      </button>
+                      {!id.trim() && (
+                        <div className="form-hint">{t.settings_provider_oauth_id_required}</div>
+                      )}
+                    </>
                   )}
-                </>
-              )}
-              {authStatus && (
-                <div className={`form-hint ${authStatus.startsWith("錯誤") || authStatus.startsWith("Error") ? "form-hint--error" : ""}`}>
-                  {authStatus}
+                  {authStatus && (
+                    <div className={`form-hint ${authStatus.startsWith("錯誤") || authStatus.startsWith("Error") ? "form-hint--error" : ""}`}>
+                      {authStatus}
+                    </div>
+                  )}
                 </div>
               )}
+              {anthropicOAuthLoggedIn && authStatus && <div className="form-hint">{authStatus}</div>}
             </div>
           )}
-          {anthropicOAuthLoggedIn && authStatus && <div className="form-hint">{authStatus}</div>}
-        </div>
-      )}
 
-      {providerType !== "ollama" && providerType !== "github-copilot" && providerType !== "anthropic" && (
-        <div className="form-group">
-          <label>
-            {providerType === "openai-compatible" ? t.provider_api_key_optional : t.provider_api_key}
-          </label>
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder={isEdit ? t.provider_api_key_placeholder_edit : t.provider_api_key_placeholder_new}
-            autoComplete="off"
-          />
-        </div>
-      )}
+          {providerType !== "github-copilot" && providerType !== "anthropic" && (
+            <div className="form-group">
+              <label>
+                {providerType === "openai-compatible" ? t.provider_api_key_optional : t.provider_api_key}
+              </label>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={isEdit ? t.provider_api_key_placeholder_edit : t.provider_api_key_placeholder_new}
+                autoComplete="off"
+              />
+            </div>
+          )}
 
-      {(providerType === "ollama" ||
-        providerType === "openai-compatible" ||
-        providerType === "github-copilot" ||
-        providerType === "google-ai" ||
-        providerType === "anthropic-compatible") && (
-        <div className="form-group">
-          <label>{t.provider_base_url}</label>
-          {providerType === "openai-compatible" && (
-            <div className="presets">
-              {COMPATIBLE_PRESETS.map((p) => (
+          {providerType === "github-copilot" && (
+            <>
+              <div className="form-group">
+                <label>{t.provider_oauth_client_id}</label>
+                <input
+                  type="text"
+                  value={oauthClientId}
+                  onChange={(e) => setOauthClientId(e.target.value)}
+                  placeholder={t.provider_oauth_client_id_placeholder}
+                />
+              </div>
+              <div className="form-group">
+                <label>{t.provider_auth_action}</label>
                 <button
-                  key={p.label}
                   type="button"
-                  className="preset-btn"
-                  onClick={() => setBaseUrl(p.url)}
+                  className="aiterm-btn aiterm-btn--primary"
+                  onClick={runCopilotDeviceAuth}
+                  disabled={authing}
                 >
-                  {p.label}
+                  {authing
+                    ? t.provider_auth_running
+                    : (apiKey.trim() || (isEdit && existing?.has_api_key))
+                      ? t.provider_auth_ok
+                      : t.provider_copilot_device_auth}
                 </button>
-              ))}
-            </div>
+                {authStatus && <div className="form-hint">{authStatus}</div>}
+              </div>
+            </>
           )}
-          {providerType === "anthropic-compatible" && (
-            <div className="presets">
-              {ANTHROPIC_COMPATIBLE_PRESETS.map((p) => (
-                <button
-                  key={p.label}
-                  type="button"
-                  className="preset-btn"
-                  onClick={() => setBaseUrl(p.url)}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-          )}
-          <input
-            type="text"
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder={DEFAULT_BASE_URLS[providerType] || "https://..."}
-          />
-        </div>
+        </FormSection>
       )}
 
-      {providerType === "github-copilot" && (
+      <FormSection title={t.provider_section_endpoint}>
+        {(providerType === "ollama" ||
+          providerType === "openai-compatible" ||
+          providerType === "github-copilot" ||
+          providerType === "google-ai" ||
+          providerType === "anthropic-compatible") && (
+          <div className="form-group">
+            <label>{t.provider_base_url}</label>
+            {providerType === "openai-compatible" && (
+              <div className="presets">
+                {COMPATIBLE_PRESETS.map((p) => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                    onClick={() => setBaseUrl(p.url)}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {providerType === "anthropic-compatible" && (
+              <div className="presets">
+                {ANTHROPIC_COMPATIBLE_PRESETS.map((p) => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                    onClick={() => setBaseUrl(p.url)}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <input
+              type="text"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder={DEFAULT_BASE_URLS[providerType] || "https://..."}
+            />
+          </div>
+        )}
+
         <div className="form-group">
-          <label>{t.provider_oauth_client_id}</label>
-          <input
-            type="text"
-            value={oauthClientId}
-            onChange={(e) => setOauthClientId(e.target.value)}
-            placeholder={t.provider_oauth_client_id_placeholder}
-          />
-          <label>{t.provider_auth_action}</label>
-          <button type="button" onClick={runCopilotDeviceAuth} disabled={authing}>
-            {authing
-              ? t.provider_auth_running
-              : (apiKey.trim() || (isEdit && existing?.has_api_key))
-                ? t.provider_auth_ok
-                : t.provider_copilot_device_auth}
-          </button>
-          {authStatus && <div className="form-hint">{authStatus}</div>}
-        </div>
-      )}
-
-      <div className="form-group">
-        <label>{t.provider_model}</label>
-        {providerType === "ollama" ? (
+          <label>{t.provider_model}</label>
+          {providerType === "ollama" ? (
           ollamaLoading ? (
             <input type="text" value={t.provider_ollama_loading} disabled />
           ) : ollamaModels.length > 0 ? (
@@ -874,34 +899,40 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
             placeholder={DEFAULT_MODELS[providerType]}
           />
         )}
-      </div>
-
-      {(providerType === "openai-compatible" ||
-        providerType === "github-copilot" ||
-        providerType === "google-ai" ||
-        providerType === "openrouter" ||
-        providerType === "xai" ||
-        providerType === "deepseek" ||
-        providerType === "kimi") && (
-        <div className="form-group form-group--checkbox">
-          <label>
-            <input
-              type="checkbox"
-              checked={supportsJsonMode}
-              onChange={(e) => setSupportsJsonMode(e.target.checked)}
-            />
-            {t.provider_json_mode}
-          </label>
         </div>
-      )}
+
+        {(providerType === "openai-compatible" ||
+          providerType === "github-copilot" ||
+          providerType === "google-ai" ||
+          providerType === "openrouter" ||
+          providerType === "xai" ||
+          providerType === "deepseek" ||
+          providerType === "kimi") && (
+          <div className="form-group form-group--checkbox">
+            <label>
+              <input
+                type="checkbox"
+                checked={supportsJsonMode}
+                onChange={(e) => setSupportsJsonMode(e.target.checked)}
+              />
+              {t.provider_json_mode}
+            </label>
+          </div>
+        )}
+      </FormSection>
 
       <div className="form-actions">
-        <button type="button" onClick={onCancel} disabled={saving}>
+        <button
+          type="button"
+          className="aiterm-btn aiterm-btn--secondary"
+          onClick={onCancel}
+          disabled={saving}
+        >
           {t.cancel}
         </button>
         <button
           type="button"
-          className="btn-primary"
+          className="aiterm-btn aiterm-btn--primary"
           onClick={handleSave}
           disabled={saving}
         >
