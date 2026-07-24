@@ -329,6 +329,82 @@ impl AiRouter {
                     provider_cfg.supports_json_mode,
                 ))
             }
+            ProviderType::Openrouter => {
+                let key = self
+                    .secrets
+                    .get(&provider_cfg.id)
+                    .map_err(|_| AiError::NotConfigured)?
+                    .ok_or(AiError::NotConfigured)?;
+                Arc::new(OpenAiCompatibleClient::new(
+                    provider_cfg
+                        .base_url
+                        .unwrap_or_else(|| "https://openrouter.ai/api/v1".into()),
+                    provider_cfg.model.clone(),
+                    Some(key),
+                    provider_cfg.supports_json_mode,
+                ))
+            }
+            ProviderType::Xai => {
+                let key = self
+                    .secrets
+                    .get(&provider_cfg.id)
+                    .map_err(|_| AiError::NotConfigured)?
+                    .ok_or(AiError::NotConfigured)?;
+                Arc::new(OpenAiCompatibleClient::new(
+                    provider_cfg
+                        .base_url
+                        .unwrap_or_else(|| "https://api.x.ai/v1".into()),
+                    provider_cfg.model.clone(),
+                    Some(key),
+                    provider_cfg.supports_json_mode,
+                ))
+            }
+            ProviderType::Deepseek => {
+                let key = self
+                    .secrets
+                    .get(&provider_cfg.id)
+                    .map_err(|_| AiError::NotConfigured)?
+                    .ok_or(AiError::NotConfigured)?;
+                Arc::new(OpenAiCompatibleClient::new(
+                    provider_cfg
+                        .base_url
+                        .unwrap_or_else(|| "https://api.deepseek.com/v1".into()),
+                    provider_cfg.model.clone(),
+                    Some(key),
+                    provider_cfg.supports_json_mode,
+                ))
+            }
+            ProviderType::Kimi => {
+                let key = self
+                    .secrets
+                    .get(&provider_cfg.id)
+                    .map_err(|_| AiError::NotConfigured)?
+                    .ok_or(AiError::NotConfigured)?;
+                Arc::new(OpenAiCompatibleClient::new(
+                    provider_cfg
+                        .base_url
+                        .unwrap_or_else(|| "https://api.moonshot.ai/v1".into()),
+                    provider_cfg.model.clone(),
+                    Some(key),
+                    provider_cfg.supports_json_mode,
+                ))
+            }
+            ProviderType::AnthropicCompatible => {
+                // Check base_url before the API key so a missing base_url is
+                // reported as AiError::Network regardless of whether a key
+                // happens to be present — mirrors OpenaiCompatible's ordering
+                // and keeps this branch independently testable (see Task 1
+                // tests below).
+                let base_url = provider_cfg.base_url.ok_or_else(|| AiError::Network {
+                    message: format!("provider '{}' has no base_url configured", provider_cfg.id),
+                })?;
+                let key = self
+                    .secrets
+                    .get(&provider_cfg.id)
+                    .map_err(|_| AiError::NotConfigured)?
+                    .ok_or(AiError::NotConfigured)?;
+                Arc::new(AnthropicClient::with_base_url(key, provider_cfg.model.clone(), base_url))
+            }
         };
         Ok(provider)
     }
@@ -401,5 +477,125 @@ mod tests {
         let router = make_router(cfg);
         // Should succeed even with no secret in the keychain.
         assert!(router.resolve().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn openrouter_provider_without_api_key_is_not_configured() {
+        let _g = ENV_LOCK.lock().await;
+        std::env::remove_var("OPENAI_API_KEY");
+        let mut cfg = AppConfig::default();
+        cfg.providers.push(ProviderConfig {
+            id: "or".into(),
+            display_name: "OpenRouter".into(),
+            provider_type: ProviderType::Openrouter,
+            base_url: None,
+            oauth_client_id: None,
+            model: "openai/gpt-4o-mini".into(),
+            supports_json_mode: true,
+            auth_method: None,
+        });
+        cfg.default_provider = Some("or".into());
+        let router = make_router(cfg);
+        assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
+    }
+
+    #[tokio::test]
+    async fn xai_provider_without_api_key_is_not_configured() {
+        let _g = ENV_LOCK.lock().await;
+        std::env::remove_var("OPENAI_API_KEY");
+        let mut cfg = AppConfig::default();
+        cfg.providers.push(ProviderConfig {
+            id: "grok".into(),
+            display_name: "xAI".into(),
+            provider_type: ProviderType::Xai,
+            base_url: None,
+            oauth_client_id: None,
+            model: "grok-4".into(),
+            supports_json_mode: true,
+            auth_method: None,
+        });
+        cfg.default_provider = Some("grok".into());
+        let router = make_router(cfg);
+        assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
+    }
+
+    #[tokio::test]
+    async fn deepseek_provider_without_api_key_is_not_configured() {
+        let _g = ENV_LOCK.lock().await;
+        std::env::remove_var("OPENAI_API_KEY");
+        let mut cfg = AppConfig::default();
+        cfg.providers.push(ProviderConfig {
+            id: "ds".into(),
+            display_name: "DeepSeek".into(),
+            provider_type: ProviderType::Deepseek,
+            base_url: None,
+            oauth_client_id: None,
+            model: "deepseek-chat".into(),
+            supports_json_mode: true,
+            auth_method: None,
+        });
+        cfg.default_provider = Some("ds".into());
+        let router = make_router(cfg);
+        assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
+    }
+
+    #[tokio::test]
+    async fn kimi_provider_without_api_key_is_not_configured() {
+        let _g = ENV_LOCK.lock().await;
+        std::env::remove_var("OPENAI_API_KEY");
+        let mut cfg = AppConfig::default();
+        cfg.providers.push(ProviderConfig {
+            id: "kimi".into(),
+            display_name: "Kimi".into(),
+            provider_type: ProviderType::Kimi,
+            base_url: None,
+            oauth_client_id: None,
+            model: "kimi-latest".into(),
+            supports_json_mode: true,
+            auth_method: None,
+        });
+        cfg.default_provider = Some("kimi".into());
+        let router = make_router(cfg);
+        assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
+    }
+
+    #[tokio::test]
+    async fn anthropic_compatible_without_base_url_is_network_error() {
+        let _g = ENV_LOCK.lock().await;
+        std::env::remove_var("OPENAI_API_KEY");
+        let mut cfg = AppConfig::default();
+        cfg.providers.push(ProviderConfig {
+            id: "kimi-coding".into(),
+            display_name: "Kimi Coding".into(),
+            provider_type: ProviderType::AnthropicCompatible,
+            base_url: None,
+            oauth_client_id: None,
+            model: "kimi-for-coding".into(),
+            supports_json_mode: true,
+            auth_method: None,
+        });
+        cfg.default_provider = Some("kimi-coding".into());
+        let router = make_router(cfg);
+        assert!(matches!(router.resolve().await, Err(AiError::Network { .. })));
+    }
+
+    #[tokio::test]
+    async fn anthropic_compatible_with_base_url_but_no_key_is_not_configured() {
+        let _g = ENV_LOCK.lock().await;
+        std::env::remove_var("OPENAI_API_KEY");
+        let mut cfg = AppConfig::default();
+        cfg.providers.push(ProviderConfig {
+            id: "kimi-coding".into(),
+            display_name: "Kimi Coding".into(),
+            provider_type: ProviderType::AnthropicCompatible,
+            base_url: Some("https://api.kimi.com/coding".into()),
+            oauth_client_id: None,
+            model: "kimi-for-coding".into(),
+            supports_json_mode: true,
+            auth_method: None,
+        });
+        cfg.default_provider = Some("kimi-coding".into());
+        let router = make_router(cfg);
+        assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
     }
 }

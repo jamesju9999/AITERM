@@ -170,6 +170,11 @@ pub enum ProviderType {
     OpenaiCompatible,
     GithubCopilot,
     GoogleAi,
+    Openrouter,
+    Xai,
+    Deepseek,
+    Kimi,
+    AnthropicCompatible,
 }
 
 impl std::fmt::Display for ProviderType {
@@ -181,6 +186,11 @@ impl std::fmt::Display for ProviderType {
             ProviderType::OpenaiCompatible => write!(f, "OpenAI-Compatible"),
             ProviderType::GithubCopilot => write!(f, "GitHub Copilot"),
             ProviderType::GoogleAi => write!(f, "Google AI"),
+            ProviderType::Openrouter => write!(f, "OpenRouter"),
+            ProviderType::Xai => write!(f, "xAI (Grok)"),
+            ProviderType::Deepseek => write!(f, "DeepSeek"),
+            ProviderType::Kimi => write!(f, "Kimi (Moonshot)"),
+            ProviderType::AnthropicCompatible => write!(f, "Anthropic-Compatible"),
         }
     }
 }
@@ -385,6 +395,11 @@ mod tests {
             (ProviderType::OpenaiCompatible, "openai-compatible"),
             (ProviderType::GithubCopilot, "github-copilot"),
             (ProviderType::GoogleAi, "google-ai"),
+            (ProviderType::Openrouter, "openrouter"),
+            (ProviderType::Xai, "xai"),
+            (ProviderType::Deepseek, "deepseek"),
+            (ProviderType::Kimi, "kimi"),
+            (ProviderType::AnthropicCompatible, "anthropic-compatible"),
         ] {
             let w = W { ty };
             let serialized = toml::to_string(&w).unwrap();
