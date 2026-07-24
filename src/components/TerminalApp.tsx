@@ -267,7 +267,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
   const toggleSidebar = useCallback(() => setIsSidebarOpen(o => !o), []);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh", backgroundColor: "#0c0c0c", position: "relative" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", backgroundColor: "#0c0c0c", position: "relative" }}>
       <TitleBar />
       <div style={{ display: "flex", flexDirection: "row", flex: 1, minHeight: 0, position: "relative" }}>
       <div>

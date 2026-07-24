@@ -38,6 +38,19 @@ body,
   -webkit-font-smoothing: antialiased;
 }
 
+/* Neutralize the Vite-template #root rule (index.css): its `min-height: 100svh`
+   makes WebKitGTK/Linux compute the root taller than the actual window, which
+   pushed the app past the bottom edge and clipped the terminal's last row. Pin
+   #root to the real client height instead. Also drops the template's flex /
+   fixed-width / centering, none of which the full-window shell wants. */
+#root {
+  display: block;
+  min-height: 0;
+  max-width: none;
+  border-inline: 0;
+  text-align: left;
+}
+
 /* Form element global enhancements */
 input, textarea, select {
   transition: var(--transition-smooth);
@@ -50,8 +63,8 @@ input:focus, textarea:focus, select:focus {
 }
 
 .aiterm-app {
-  height: 100vh;
-  width: 100vw;
+  height: 100%;
+  width: 100%;
   overflow: hidden;
 }
 

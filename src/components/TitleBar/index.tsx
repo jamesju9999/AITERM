@@ -4,13 +4,11 @@ import "./index.css";
 
 const PLATFORM = navigator.platform.toLowerCase();
 const IS_MAC = PLATFORM.includes("mac");
-const IS_LINUX = PLATFORM.includes("linux");
-// macOS keeps the native frame (traffic lights) via titleBarStyle:"overlay", so
-// we draw NO custom buttons/resize borders — the OS owns them. Linux keeps the
-// native GTK title bar too (decorations:true): a frameless custom bar makes
-// WebKitGTK clip the webview's bottom row, so we render nothing there. Only
-// Windows runs decorations:false and needs app-drawn controls + resize grips.
-const FRAMELESS = !IS_MAC && !IS_LINUX;
+// macOS keeps the native window frame (traffic lights) via
+// titleBarStyle: "overlay", so we draw NO custom buttons and NO resize borders
+// there — the OS still owns them. Windows/Linux run decorations:false, so the
+// app must supply the window controls and edge-resize handles itself.
+const FRAMELESS = !IS_MAC;
 
 type Dir =
   | "North" | "South" | "East" | "West"
@@ -44,10 +42,6 @@ export function TitleBar({ title = "AITerm" }: { title?: string }) {
       .catch(() => {});
     return () => unlisten?.();
   }, []);
-
-  // Linux uses the native GTK title bar — render no app-drawn bar at all, so the
-  // shell reclaims the full client height and nothing clips the bottom row.
-  if (IS_LINUX) return null;
 
   return (
     <>

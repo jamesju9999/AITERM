@@ -72,7 +72,7 @@ function AppRoutes() {
   const isTerminal = location.pathname === "/";
 
   return (
-    <div style={{ position: "relative", width: "100vw", height: "100vh", overflow: "hidden" }}>
+    <div style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden" }}>
       {/* 
         TerminalApp sits permanently in the background. 
         This is critical so React Router doesn't unmount it, which would destroy 

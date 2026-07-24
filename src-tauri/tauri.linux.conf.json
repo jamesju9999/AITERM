@@ -1,16 +1,4 @@
 {
-  "app": {
-    "windows": [
-      {
-        "title": "AITerm",
-        "width": 800,
-        "height": 600,
-        "resizable": true,
-        "fullscreen": false,
-        "decorations": true
-      }
-    ]
-  },
   "bundle": {
     "externalBin": [],
     "resources": {
