@@ -1,6 +1,8 @@
 .aiterm-titlebar {
   height: 34px;
+  min-height: 34px;
   flex-shrink: 0;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   background: #0c0c0c;

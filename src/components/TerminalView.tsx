@@ -1056,8 +1056,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         position: "relative",
       }}
     >
-      <div className="aiterm-status">
-        <span className="aiterm-status-left" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+      <div className="aiterm-status" data-tauri-drag-region>
+        <span className="aiterm-status-left" data-tauri-drag-region style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           {onToggleSidebar && (
             <button
               className="aiterm-settings-btn"
@@ -1068,7 +1068,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               {isSidebarOpen ? "◧" : "☰"}
             </button>
           )}
-          <span>AITerm · {status}</span>
+          <span data-tauri-drag-region>AITerm · {status}</span>
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           {activeProvider ? (
