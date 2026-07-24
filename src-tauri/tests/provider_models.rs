@@ -75,3 +75,19 @@ async fn trailing_slash_on_base_url_is_handled() {
         .unwrap();
     assert_eq!(models, vec!["m1".to_string()]);
 }
+
+#[tokio::test]
+async fn malformed_json_body_returns_parse_error() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+        .mount(&server)
+        .await;
+
+    let err = list_openai_style_models(&server.uri(), "k")
+        .await
+        .unwrap_err();
+    assert!(err.contains("parse models response failed"), "got: {err}");
+}
