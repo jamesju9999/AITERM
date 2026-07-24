@@ -1118,3 +1118,39 @@ struct OpenAiModelsResponse {
 struct OpenAiModelItem {
     id: String,
 }
+
+/// Fetch and parse a `/models` endpoint that returns the OpenAI-shaped
+/// `{ "data": [{ "id": "..." }, ...] }` payload. Shared by the OpenRouter,
+/// xAI, DeepSeek, and Kimi model-list commands below, which are otherwise
+/// identical except for their default base URL.
+pub async fn list_openai_style_models(base_url: &str, api_key: &str) -> Result<Vec<String>, String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("api_key is required".into());
+    }
+
+    let base = base_url.trim_end_matches('/');
+    let url = format!("{base}/models");
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .bearer_auth(key)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("list models failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("list models failed ({status}): {body}"));
+    }
+
+    let payload: OpenAiModelsResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("parse models response failed: {e}"))?;
+
+    Ok(payload.data.into_iter().map(|m| m.id).collect())
+}
