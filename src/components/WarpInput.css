@@ -1,12 +1,49 @@
 .warp-input-container {
   position: relative;
   display: flex;
-  align-items: flex-start;
-  padding: 12px 16px;
-  background-color: #121212;
-  border-top: 1px solid #2a2a2a;
-  gap: 12px;
+  align-items: center;
+  margin: 10px 14px;
+  padding: 6px 8px 6px 14px;
+  background-color: #161616;
+  border: 1.5px solid #2f9e7f;
+  border-radius: 24px;
+  gap: 10px;
   font-family: "Cascadia Mono", Consolas, monospace;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.warp-input-container:focus-within {
+  border-color: #35c99a;
+  box-shadow: 0 0 0 3px rgba(53, 201, 154, 0.13);
+}
+
+.warp-send-btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: #2f9e7f;
+  color: #0a0a0a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.08s ease;
+}
+
+.warp-send-btn:hover:not(:disabled) {
+  background: #35c99a;
+}
+
+.warp-send-btn:active:not(:disabled) {
+  transform: scale(0.93);
+}
+
+.warp-send-btn:disabled {
+  background: #262626;
+  color: #5c5c5c;
+  cursor: default;
 }
 
 .warp-input-prompt {

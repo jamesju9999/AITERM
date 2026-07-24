@@ -333,6 +333,18 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter", sessionId }:
         autoCapitalize="off"
         spellCheck={false}
       />
+      <button
+        type="button"
+        className="warp-send-btn"
+        onClick={() => commitCommand(value)}
+        disabled={disabled || !value.trim()}
+        title={t.warp_send_title}
+        aria-label={t.warp_send_title}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <path d="M12 20V5M12 5l-6 6M12 5l6 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
     </div>
   );
 }

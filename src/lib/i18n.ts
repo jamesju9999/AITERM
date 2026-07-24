@@ -26,6 +26,7 @@ const zhTW = {
     new_cross_db_desc: "AI 跨資料庫查詢與分析",
     input_placeholder: (key: string) =>
       `輸入指令... (${key} 送出，按 ↑ 檢視歷史)`,
+    warp_send_title: "送出",
 
     // DatabaseConnectionsPage
     add_connection: "+ 新增連線",
@@ -1008,6 +1009,7 @@ const enRaw = {
     new_cross_db_desc: "AI cross-database query and analysis",
     input_placeholder: (key: string) =>
       `Enter command... (${key} to submit, ↑ for history)`,
+    warp_send_title: "Send",
 
     // DatabaseConnectionsPage
     add_connection: "+ New Connection",
