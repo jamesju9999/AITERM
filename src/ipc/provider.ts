@@ -152,6 +152,30 @@ export const getGoogleOAuthModels = (
     baseUrlOverride: baseUrlOverride ?? null,
   });
 
+export const getOpenRouterModels = (apiKey: string): Promise<string[]> =>
+  invoke("get_openrouter_models", { apiKey });
+
+export const getOpenRouterModelsByProvider = (id: string): Promise<string[]> =>
+  invoke("get_openrouter_models_by_provider", { id });
+
+export const getXaiModels = (apiKey: string): Promise<string[]> =>
+  invoke("get_xai_models", { apiKey });
+
+export const getXaiModelsByProvider = (id: string): Promise<string[]> =>
+  invoke("get_xai_models_by_provider", { id });
+
+export const getDeepseekModels = (apiKey: string): Promise<string[]> =>
+  invoke("get_deepseek_models", { apiKey });
+
+export const getDeepseekModelsByProvider = (id: string): Promise<string[]> =>
+  invoke("get_deepseek_models_by_provider", { id });
+
+export const getKimiModels = (apiKey: string): Promise<string[]> =>
+  invoke("get_kimi_models", { apiKey });
+
+export const getKimiModelsByProvider = (id: string): Promise<string[]> =>
+  invoke("get_kimi_models_by_provider", { id });
+
 // ── Display helpers ───────────────────────────────────────────────────────────
 
 export const PROVIDER_TYPE_LABELS: Record<ProviderType, string> = {
@@ -161,6 +185,11 @@ export const PROVIDER_TYPE_LABELS: Record<ProviderType, string> = {
   "openai-compatible": "OpenAI-Compatible",
   "github-copilot": "GitHub Copilot",
   "google-ai": "Google AI",
+  openrouter: "OpenRouter",
+  xai: "xAI (Grok)",
+  deepseek: "DeepSeek",
+  kimi: "Kimi (Moonshot)",
+  "anthropic-compatible": "Anthropic-Compatible",
 };
 
 export const DEFAULT_MODELS: Record<ProviderType, string> = {
@@ -170,6 +199,11 @@ export const DEFAULT_MODELS: Record<ProviderType, string> = {
   "openai-compatible": "",
   "github-copilot": "gpt-4o-mini",
   "google-ai": "gemini-2.5-pro",
+  openrouter: "",
+  xai: "grok-4",
+  deepseek: "deepseek-chat",
+  kimi: "kimi-latest",
+  "anthropic-compatible": "",
 };
 
 export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
@@ -179,12 +213,23 @@ export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   "openai-compatible": "",
   "github-copilot": "https://api.githubcopilot.com",
   "google-ai": "https://generativelanguage.googleapis.com/v1beta/openai",
+  openrouter: "https://openrouter.ai/api/v1",
+  xai: "https://api.x.ai/v1",
+  deepseek: "https://api.deepseek.com/v1",
+  kimi: "https://api.moonshot.ai/v1",
+  "anthropic-compatible": "",
 };
 
-/** OpenAI-compatible quick-pick presets shown in the form. */
+/** OpenAI-compatible quick-pick presets shown in the form — for servers with
+ *  no dedicated provider type (self-hosted / local). OpenRouter and DeepSeek
+ *  used to be listed here but are now dedicated provider types above; keep
+ *  this list to genuine "bring your own endpoint" cases only. */
 export const COMPATIBLE_PRESETS = [
   { label: "LM Studio", url: "http://localhost:1234/v1" },
   { label: "vLLM", url: "http://localhost:8000/v1" },
-  { label: "OpenRouter", url: "https://openrouter.ai/api/v1" },
-  { label: "DeepSeek", url: "https://api.deepseek.com/v1" },
+];
+
+/** Anthropic-compatible quick-pick presets shown in the form. */
+export const ANTHROPIC_COMPATIBLE_PRESETS = [
+  { label: "Kimi Coding", url: "https://api.kimi.com/coding" },
 ];

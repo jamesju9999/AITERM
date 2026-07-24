@@ -8,7 +8,12 @@ export type ProviderType =
   | "ollama"
   | "openai-compatible"
   | "github-copilot"
-  | "google-ai";
+  | "google-ai"
+  | "openrouter"
+  | "xai"
+  | "deepseek"
+  | "kimi"
+  | "anthropic-compatible";
 
 export type ExecutionMode = "always-confirm" | "graded" | "full-auto";
 
