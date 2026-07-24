@@ -353,7 +353,10 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
       setError(t.err_copilot_auth_required);
       return;
     }
-    if (providerType === "openai-compatible" && !baseUrl.trim()) {
+    if (
+      (providerType === "openai-compatible" || providerType === "anthropic-compatible") &&
+      !baseUrl.trim()
+    ) {
       setError(t.err_base_url_required);
       return;
     }
@@ -875,7 +878,11 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
 
       {(providerType === "openai-compatible" ||
         providerType === "github-copilot" ||
-        providerType === "google-ai") && (
+        providerType === "google-ai" ||
+        providerType === "openrouter" ||
+        providerType === "xai" ||
+        providerType === "deepseek" ||
+        providerType === "kimi") && (
         <div className="form-group form-group--checkbox">
           <label>
             <input
