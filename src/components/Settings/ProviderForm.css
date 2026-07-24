@@ -19,8 +19,6 @@
 .form-group label {
   font-size: 12px;
   color: #aaa;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .form-group input,
@@ -62,26 +60,35 @@
   margin: 0;
 }
 
+.form-section {
+  background: var(--bg-secondary, #141414);
+  border: 1px solid var(--border-color, #2a2a2a);
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+.form-section:last-of-type {
+  margin-bottom: 16px;
+}
+
+.form-section-title {
+  color: var(--accent, #a855f7);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  margin-bottom: 10px;
+}
+
+.form-section .form-group:last-child {
+  margin-bottom: 0;
+}
+
 .presets {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
   margin-bottom: 4px;
-}
-
-.preset-btn {
-  background: #2a2a2a;
-  border: 1px solid #3a3a3a;
-  border-radius: 4px;
-  color: #bbb;
-  cursor: pointer;
-  font-size: 11px;
-  padding: 3px 8px;
-}
-
-.preset-btn:hover {
-  background: #333;
-  color: #e6e6e6;
 }
 
 .form-error {
@@ -99,35 +106,6 @@
   gap: 8px;
   justify-content: flex-end;
   margin-top: 20px;
-}
-
-.form-actions button {
-  background: #2a2a2a;
-  border: 1px solid #3a3a3a;
-  border-radius: 4px;
-  color: #ccc;
-  cursor: pointer;
-  font-size: 13px;
-  padding: 7px 16px;
-}
-
-.form-actions button:hover:not(:disabled) {
-  background: #333;
-}
-
-.form-actions button.btn-primary {
-  background: #2d5aab;
-  border-color: #3d6ac0;
-  color: #fff;
-}
-
-.form-actions button.btn-primary:hover:not(:disabled) {
-  background: #3265be;
-}
-
-.form-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
 }
 
 /* Anthropic OAuth — segmented auth method selector */
@@ -163,7 +141,7 @@
 }
 
 .auth-tab.active {
-  background: #2d5aab;
+  background: var(--accent-gradient, linear-gradient(135deg, #a855f7, #6366f1));
   color: #fff;
 }
 
@@ -188,22 +166,6 @@
   font-size: 12px;
   color: #5cb85c;
   flex: 1;
-}
-
-.anthropic-oauth-logout {
-  font-size: 11px;
-  padding: 3px 10px;
-  background: transparent;
-  border: 1px solid #444;
-  color: #999;
-  border-radius: 4px;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.anthropic-oauth-logout:hover:not(:disabled) {
-  border-color: #777;
-  color: #ddd;
 }
 
 /* Step-by-step flow */
@@ -232,27 +194,6 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-}
-
-.anthropic-oauth-open {
-  font-size: 12px;
-  padding: 5px 14px;
-  background: #1e3a6e;
-  border: 1px solid #3d6ac0;
-  color: #7aadff;
-  border-radius: 5px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.anthropic-oauth-open:hover:not(:disabled) {
-  background: #2a4a8a;
-  color: #fff;
-}
-
-.anthropic-oauth-open:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .anthropic-oauth-code-input {
@@ -313,17 +254,3 @@
   border-color: #5a8dee;
 }
 
-.anthropic-oauth-cancel-btn {
-  font-size: 12px;
-  padding: 5px 12px;
-  background: transparent;
-  border: 1px solid #444;
-  color: #888;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.anthropic-oauth-cancel-btn:hover {
-  border-color: #666;
-  color: #bbb;
-}
