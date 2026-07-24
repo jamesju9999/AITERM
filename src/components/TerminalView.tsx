@@ -1185,14 +1185,20 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             scrollbarGutter: "stable",
           }}
           onMouseDown={(e) => {
-            // Clicking the empty terminal area (this scroll-container's own
-            // background below the live pane — not a card, button, or the xterm
-            // host itself) returns keyboard focus to the live terminal so the
-            // user can type at the prompt, matching standard terminal behavior.
-            // Guarded to `e.target === e.currentTarget` so it only fires on the
-            // bare background and never hijacks card text-selection or control
-            // clicks (those land on child elements, not the container).
-            if (e.target === e.currentTarget) termRef.current?.focus();
+            // Clicking the empty terminal area returns keyboard focus to the
+            // live terminal so the user can type at the prompt, matching
+            // standard terminal behavior. Skip clicks on cards, controls, and
+            // the xterm host itself (xterm handles its own focus) so we don't
+            // hijack text-selection or button clicks.
+            const target = e.target as HTMLElement;
+            if (target.closest('button, a, input, textarea, [id^="aiterm-block-"], .aiterm-terminal-root')) return;
+            // preventDefault is essential: a mousedown on a non-focusable
+            // element otherwise blurs the active element as its default action,
+            // which runs AFTER this handler — so without it the browser would
+            // immediately undo the focus() below and the caret would never
+            // return to the prompt (the reported bug).
+            e.preventDefault();
+            termRef.current?.focus();
           }}
         >
         {/* Find in Buffer search bar */}
