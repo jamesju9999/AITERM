@@ -191,10 +191,13 @@ def test_ai_generic_returns_raw_text_needs_ai():
     assert content.openapi_spec is None
 
 
-def test_ai_generic_fetch_tree_returns_empty():
+def test_ai_generic_fetch_tree_crawls_links():
+    # ai-generic now crawls the site into a browsable tree instead of returning
+    # nothing. A page with no doc links still yields the entry page as a node.
     detection = Detection(platform="ai-generic", confidence="low")
     with patch("strategies.ai_generic.requests.get",
                return_value=make_response(200, "<html><body>docs</body></html>")):
         strategy = AiGenericStrategy(detection)
         tree = strategy.fetch_tree("https://example.com/docs", {})
-    assert tree == []
+    hrefs = [n.href for n in tree if n.href]
+    assert "/docs" in hrefs
