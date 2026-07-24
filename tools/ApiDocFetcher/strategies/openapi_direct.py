@@ -4,8 +4,32 @@ from __future__ import annotations
 import json
 import re
 import yaml
+from urllib.parse import urlparse, urljoin, parse_qs, unquote
 from curl_cffi import requests
 from strategies import Detection, DocNode, PageContent
+
+
+def _parse_spec(text: str) -> dict:
+    """Parse *text* into an OpenAPI/Swagger spec dict, or raise ValueError.
+
+    Guards against the common failure where the resolved "spec URL" actually
+    serves an HTML page (Swagger UI shell, error page, ...): yaml.safe_load on
+    HTML/CSS throws an ugly ScannerError, so we reject non-spec content cleanly
+    and let the caller fall back."""
+    text = text.strip()
+    if not text or text[0] in "<":
+        raise ValueError("content is HTML, not an OpenAPI spec")
+    data = None
+    try:
+        data = json.loads(text)
+    except Exception:
+        try:
+            data = yaml.safe_load(text)
+        except Exception as exc:
+            raise ValueError(f"content is neither JSON nor valid YAML: {exc}") from exc
+    if not isinstance(data, dict) or not ("openapi" in data or "swagger" in data):
+        raise ValueError("parsed content is not an OpenAPI spec")
+    return data
 
 OPENAPI_PROBE_PATHS = [
     "/openapi.json", "/swagger.json", "/openapi.yaml",
@@ -15,7 +39,31 @@ OPENAPI_PROBE_PATHS = [
 
 
 def _resolve_spec_url(page_url: str, detection: Detection, cookies: dict) -> str:
-    """Return a spec URL: use detection.spec_url if set, else probe the page."""
+    """Return a spec URL. The ?url=/?configUrl= query params are the most
+    authoritative source for a Swagger UI page and are checked first (the
+    detector's HTML-scraped spec_url can be wrong), then detection.spec_url,
+    then page scripts / common probe paths."""
+    # Swagger UI passes the spec via ?url=<spec> or ?configUrl=<config>. The
+    # config resource is itself JSON that names the real spec(s) — resolve it.
+    qs = parse_qs(urlparse(page_url).query)
+    if qs.get("url"):
+        return urljoin(page_url, unquote(qs["url"][0]))
+    if qs.get("configUrl"):
+        config_url = urljoin(page_url, unquote(qs["configUrl"][0]))
+        try:
+            cr = requests.get(config_url, impersonate="chrome120", timeout=10, cookies=cookies)
+            cfg = json.loads(cr.text.strip())
+            if isinstance(cfg, dict):
+                if "openapi" in cfg or "swagger" in cfg:
+                    return config_url  # configUrl already points at the spec
+                if cfg.get("url"):
+                    return urljoin(config_url, cfg["url"])
+                urls = cfg.get("urls")
+                if isinstance(urls, list) and urls and isinstance(urls[0], dict) and urls[0].get("url"):
+                    return urljoin(config_url, urls[0]["url"])
+        except Exception:
+            pass
+
     if detection.spec_url:
         return detection.spec_url
 
@@ -47,7 +95,6 @@ def _resolve_spec_url(page_url: str, detection: Detection, cookies: dict) -> str
         pass
 
     # Probe common paths
-    from urllib.parse import urlparse
     parsed = urlparse(page_url)
     base_root = f"{parsed.scheme}://{parsed.netloc}"
     for path in OPENAPI_PROBE_PATHS:
@@ -72,10 +119,7 @@ class OpenApiDirectStrategy:
         url = _resolve_spec_url(page_url, self._detection, cookies)
         r = requests.get(url, impersonate="chrome120", timeout=30, cookies=cookies)
         r.raise_for_status()
-        text = r.text.strip()
-        if text.startswith("{"):
-            return json.loads(text)
-        return yaml.safe_load(text)
+        return _parse_spec(r.text)
 
     def fetch_tree(self, url: str, cookies: dict) -> list[DocNode]:
         spec = self._load_spec(url, cookies)

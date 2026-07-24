@@ -84,7 +84,16 @@ def cmd_tree(args) -> None:
     _emit({"type": "detected", "platform": detection.platform,
            "confidence": detection.confidence})
     strategy = get_strategy(detection)
-    nodes = strategy.fetch_tree(args.url, cookies)
+    try:
+        nodes = strategy.fetch_tree(args.url, cookies)
+    except Exception as exc:
+        # A platform strategy can fail on a real-world quirk (e.g. a Swagger UI
+        # page whose spec URL actually serves HTML). Don't crash the whole tool —
+        # fall back to the generic crawler so the user still gets a tree.
+        _emit({"type": "log", "level": "warn",
+               "message": f"{detection.platform} strategy failed ({exc}); using generic crawler"})
+        from strategies.ai_generic import AiGenericStrategy
+        nodes = AiGenericStrategy(detection).fetch_tree(args.url, cookies)
     _emit({"type": "tree", "data": [_node_to_dict(n) for n in nodes]})
 
 
@@ -117,7 +126,15 @@ def cmd_extract(args) -> None:
         _emit({"type": "progress", "current": i + 1, "total": total,
                "page": page_title})
         try:
-            content = strategy.fetch_page(page_url, cookies)
+            try:
+                content = strategy.fetch_page(page_url, cookies)
+            except Exception as exc:
+                # Same resilience as the tree path: if the detected strategy
+                # can't render this page, fall back to the generic extractor.
+                _emit({"type": "log", "level": "warn",
+                       "message": f"{detection.platform} failed on {page_title} ({exc}); using generic extractor"})
+                from strategies.ai_generic import AiGenericStrategy
+                content = AiGenericStrategy(detection).fetch_page(page_url, cookies)
             if content.needs_ai:
                 # Signal to Rust that AI processing is needed for this page
                 _emit({"type": "needs_ai", "title": content.title,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urljoin
 from curl_cffi import requests
 from strategies import Detection
 
@@ -40,11 +41,11 @@ def detect(url: str, cookies: dict) -> Detection:
         return Detection(platform="mintlify-next", confidence=confidence)
 
     if "swagger-ui" in html.lower() or "SwaggerUIBundle" in html:
-        spec_url = _extract_swagger_spec_url(html, base)
+        spec_url = _extract_swagger_spec_url(html, url)
         return Detection(platform="swagger-ui", confidence="high", spec_url=spec_url)
 
     if re.search(r"<redoc[\s>]", html, re.IGNORECASE) or "ReDoc.init" in html:
-        spec_url = _extract_redoc_spec_url(html, base)
+        spec_url = _extract_redoc_spec_url(html, url)
         return Detection(platform="redoc", confidence="high", spec_url=spec_url)
 
     if "__docusaurus" in html or "docusaurus" in html:
@@ -58,25 +59,24 @@ def _looks_like_openapi(text: str) -> bool:
     return "openapi" in t or "swagger" in t
 
 
-def _extract_swagger_spec_url(html: str, base: str) -> str | None:
+def _extract_swagger_spec_url(html: str, page_url: str) -> str | None:
     for pat in [
         r'url\s*:\s*["\']([^"\']+\.(?:json|yaml))["\']',
         r'SwaggerUIBundle\b[^)]*?url\s*:\s*["\']([^"\']+)["\']',
     ]:
         m = re.search(pat, html)
         if m:
-            u = m.group(1)
-            return u if u.startswith("http") else base + u
+            # urljoin resolves absolute ("/api/x") and relative paths correctly
+            # against the page URL; plain concatenation produced ".../index.html/api/x".
+            return urljoin(page_url, m.group(1))
     return None
 
 
-def _extract_redoc_spec_url(html: str, base: str) -> str | None:
+def _extract_redoc_spec_url(html: str, page_url: str) -> str | None:
     m = re.search(r'<redoc[^>]+spec-url=["\']([^"\']+)["\']', html, re.IGNORECASE)
     if m:
-        u = m.group(1)
-        return u if u.startswith("http") else base + u
+        return urljoin(page_url, m.group(1))
     m = re.search(r'ReDoc\.init\(["\']([^"\']+)["\']', html)
     if m:
-        u = m.group(1)
-        return u if u.startswith("http") else base + u
+        return urljoin(page_url, m.group(1))
     return None

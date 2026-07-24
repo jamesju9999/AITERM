@@ -201,3 +201,39 @@ def test_ai_generic_fetch_tree_crawls_links():
         tree = strategy.fetch_tree("https://example.com/docs", {})
     hrefs = [n.href for n in tree if n.href]
     assert "/docs" in hrefs
+
+
+def test_parse_spec_rejects_html():
+    from strategies.openapi_direct import _parse_spec
+    import pytest
+    with pytest.raises(ValueError):
+        _parse_spec("<html><head><style>a{box-sizing: border-box;}</style></head></html>")
+
+
+def test_parse_spec_rejects_non_spec_yaml():
+    from strategies.openapi_direct import _parse_spec
+    import pytest
+    with pytest.raises(ValueError):
+        _parse_spec("title: hello\nvalue: 1")  # valid YAML, not an OpenAPI spec
+
+
+def test_parse_spec_accepts_json_and_yaml_specs():
+    from strategies.openapi_direct import _parse_spec
+    assert _parse_spec('{"openapi":"3.0.0","paths":{}}')["openapi"] == "3.0.0"
+    assert _parse_spec("swagger: '2.0'\npaths: {}")["swagger"] == "2.0"
+
+
+def test_resolve_spec_url_follows_configurl():
+    from strategies.openapi_direct import _resolve_spec_url
+    from tests.conftest import make_response
+    config = make_response(200, '{"urls":[{"url":"/api/v1/openapi/spec.json","name":"v1"}]}')
+    page = "https://data.example.gov.tw/swagger-ui/index.html?configUrl=%2Fapi%2Fv1%2Fconfig"
+
+    def side_effect(url, **kwargs):
+        if url == "https://data.example.gov.tw/api/v1/config":
+            return config
+        return make_response(404, "")
+
+    with patch("strategies.openapi_direct.requests.get", side_effect=side_effect):
+        spec_url = _resolve_spec_url(page, Detection(platform="swagger-ui", confidence="high"), {})
+    assert spec_url == "https://data.example.gov.tw/api/v1/openapi/spec.json"
