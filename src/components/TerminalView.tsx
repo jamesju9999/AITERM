@@ -1184,6 +1184,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             // magnitude (~12px, a scrollbar's width) exactly.
             scrollbarGutter: "stable",
           }}
+          onMouseDown={(e) => {
+            // Clicking the empty terminal area (this scroll-container's own
+            // background below the live pane — not a card, button, or the xterm
+            // host itself) returns keyboard focus to the live terminal so the
+            // user can type at the prompt, matching standard terminal behavior.
+            // Guarded to `e.target === e.currentTarget` so it only fires on the
+            // bare background and never hijacks card text-selection or control
+            // clicks (those land on child elements, not the container).
+            if (e.target === e.currentTarget) termRef.current?.focus();
+          }}
         >
         {/* Find in Buffer search bar */}
         {searchOpen && (
