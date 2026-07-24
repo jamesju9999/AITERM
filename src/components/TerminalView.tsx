@@ -869,14 +869,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     });
 
     term.onResize(({ rows: r, cols: c }) => {
-      // TEMP DIAGNOSTIC — remove once root-caused. Fires for ANY resize,
-      // regardless of what triggered it (fit(), a real window resize, font
-      // change, etc.) — the stack trace pinpoints the caller.
-      console.log(
-        "[AITERM-DIAG2] term.onResize", performance.now().toFixed(1),
-        "rows:", r, "cols:", c,
-        "stack:", new Error().stack,
-      );
       if (sessionRef.current) {
         resizePty(sessionRef.current, { rows: r, cols: c }).catch(console.error);
       }
@@ -884,14 +876,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
     let ro: ResizeObserver | null = null;
     if (hostRef.current) {
-      ro = new ResizeObserver((entries) => {
-        // TEMP DIAGNOSTIC — remove once root-caused.
-        for (const entry of entries) {
-          console.log(
-            "[AITERM-DIAG2] ResizeObserver fired", performance.now().toFixed(1),
-            "contentRect:", JSON.stringify(entry.contentRect),
-          );
-        }
+      ro = new ResizeObserver(() => {
         requestAnimationFrame(() => fit.fit());
       });
       ro.observe(hostRef.current);
@@ -1102,7 +1087,26 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         {/* Terminal */}
         <div
           ref={blockListRef}
-          style={{ display: viewTab === "terminal" ? "flex" : "none", flexDirection: "column", height: "100%", position: "relative", overflowY: "auto" }}
+          style={{
+            display: viewTab === "terminal" ? "flex" : "none",
+            flexDirection: "column",
+            height: "100%",
+            position: "relative",
+            overflowY: "auto",
+            // Reserves the scrollbar's width at all times, whether or not it's
+            // actually showing. Without this, the live pane below (a sibling
+            // of the block-card list, both children of this scroll container)
+            // width-percentage its way to a few pixels narrower the instant a
+            // new card makes the block list tall enough to need a scrollbar —
+            // which happens to land right when a command finishes. FitAddon's
+            // ResizeObserver picks that up and calls term.resize(), firing a
+            // real PTY resize; on Windows, ConPTY responds by re-transmitting
+            // its currently-visible screen content, overwriting the
+            // freshly-cleared prompt with stale output. Root-caused via
+            // DevTools: logged every resize source and matched the timing and
+            // magnitude (~12px, a scrollbar's width) exactly.
+            scrollbarGutter: "stable",
+          }}
         >
         {/* Find in Buffer search bar */}
         {searchOpen && (
