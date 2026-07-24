@@ -167,13 +167,25 @@ export function useTerminalBlocks(
         // this deferred-clear timing is still needed on its own merits.
         const isWindows = navigator.platform.toLowerCase().startsWith("win");
         if (isWindows) {
-          console.log("[WIN-CLEAR] D marker, scheduling term.clear()", { exitCode });
+          console.log("[WIN-CLEAR] D marker, scheduling term.clear() + Ctrl+L resync", { exitCode });
           setTimeout(() => {
             const b = term?.buffer.active;
             console.log("[WIN-CLEAR] firing term.clear()", `cy=${b?.cursorY} by=${b?.baseY} len=${b?.length}`);
             term?.clear();
             term?.scrollToBottom();
             onLiveClear?.();
+            // Re-sync ConPTY with xterm's now-cleared buffer. term.clear() only
+            // reset xterm; ConPTY still models the prompt at whatever row it
+            // scrolled to, and PowerShell/PSReadLine redraws the next input line
+            // with ABSOLUTE cursor positioning (e.g. ESC[24;34H) from that stale
+            // model — landing every keystroke far below the visible row-0 prompt
+            // (proven via byte-stream logging: first input used ESC[1;..H and
+            // worked; the second, after a scrolled command, used ESC[24;..H and
+            // stuck at row 11). Ctrl+L makes the shell itself clear and re-home
+            // the prompt to the top, so ConPTY's model and xterm's cleared
+            // buffer agree again — and, as a bonus, a resize then replays only
+            // the clean prompt instead of the stale duplicated output.
+            writePty(sessionId, "\x0c").catch(console.error);
           }, 0);
           finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode);
         } else {
@@ -189,7 +201,11 @@ export function useTerminalBlocks(
       disposeBuffer.dispose();
       disposeOsc.dispose();
     };
-  }, [term, finalizeBlock, onLiveClear]);
+    // sessionId is in the deps because the Windows Ctrl+L resync in the D
+    // handler writes to it — the effect must re-register once the PTY session
+    // id lands (it's set async after `term`) so the handler's closure isn't
+    // holding the initial empty id.
+  }, [term, finalizeBlock, onLiveClear, sessionId]);
 
   const submitCommand = useCallback(
     (cmd: string, onComplete?: (block: TerminalBlock) => void) => {
