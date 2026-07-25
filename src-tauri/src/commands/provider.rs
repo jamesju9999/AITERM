@@ -1,7 +1,6 @@
 //! Tauri commands for provider management (list / add / update / remove / test).
 
 use std::sync::Arc;
-use std::process::Command;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -597,22 +596,14 @@ fn resolve_github_client_id(client_id: Option<String>) -> String {
 }
 
 fn open_browser(url: &str) {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        let _ = Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .spawn();
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = Command::new("open").arg(url).spawn();
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let _ = Command::new("xdg-open").arg(url).spawn();
-    }
+    // Delegate to the `open` crate. Its Windows path launches the default browser
+    // via `cmd /c start "" "<url>"` with the URL QUOTED, so ampersands in the OAuth
+    // query string survive. The old hand-rolled `cmd /C start "" <url>` passed the
+    // URL UNQUOTED (Rust doesn't quote args without spaces), and cmd.exe treats `&`
+    // as a command separator — so it opened only `...?code=true` and dropped every
+    // param after the first, which made claude.ai report "Missing client_id parameter".
+    // macOS uses `/usr/bin/open`, Linux `xdg-open`, both passing the URL as one arg.
+    let _ = open::that_detached(url);
 }
 
 
