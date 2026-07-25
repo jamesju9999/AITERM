@@ -257,9 +257,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // command(s). Debounced so rapid successive commands are captured together;
   // the ref guard makes it fire at most once per terminal session (the view
   // stays mounted across tab switches). Summarizes command text only — see
-  // summarizeCommands. Silent on failure; a failed first attempt just leaves
-  // the tab showing its plain name until the app restarts.
+  // summarizeCommands. On a transient failure the guard is released so a later
+  // finalized command can retry, rather than leaving the tab plainly named for
+  // the whole session.
   const summaryGeneratedRef = useRef(false);
+  // Bridge onSummaryUpdate into a ref: TerminalApp passes a new inline arrow on
+  // every render, so keeping it in the trigger effect's dep array would re-run
+  // (and reset the 1.5s debounce) on every parent render — starving the summary
+  // during busy/agent scenarios that re-render sub-1.5s.
+  const onSummaryUpdateRef = useRef(onSummaryUpdate);
+  useEffect(() => { onSummaryUpdateRef.current = onSummaryUpdate; }, [onSummaryUpdate]);
   useEffect(() => {
     if (summaryGeneratedRef.current) return;
     const hasFinalized = blocks.some((b) => b.status === "completed" || b.status === "failed");
@@ -268,12 +275,21 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       summaryGeneratedRef.current = true;
       summarizeCommands(blocks, sessionId, locale)
         .then((summary) => {
-          if (summary) onSummaryUpdate?.(summary);
+          if (summary) {
+            onSummaryUpdateRef.current?.(summary);
+          } else {
+            // Generation failed (or empty) — release the guard so the next
+            // finalized command can retry, rather than leaving this tab
+            // permanently unnamed for the session.
+            summaryGeneratedRef.current = false;
+          }
         })
-        .catch(() => {});
+        .catch(() => {
+          summaryGeneratedRef.current = false;
+        });
     }, 1500);
     return () => clearTimeout(timer);
-  }, [blocks, sessionId, locale, onSummaryUpdate]);
+  }, [blocks, sessionId, locale]);
 
   // Bridge blockSearchCursor into a ref so doSearch can read the latest cursor without
   // depending on the state value itself — depending on it directly would give doSearch a
