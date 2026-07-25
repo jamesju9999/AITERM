@@ -43,6 +43,7 @@ import { getActiveTheme, type AppTheme } from "../lib/themes";
 import { RobotIcon, SparklesIcon, SmartphoneIcon } from "./Icons";
 import { TerminalBlockCard } from "./TerminalBlockCard";
 import { findNextBlockMatch, findPreviousBlockMatch, type BlockSearchCursor } from "../lib/blockSearch";
+import { summarizeCommands } from "../lib/summarizeTab";
 import { getGitBlockInfo } from "../ipc/vcs";
 import "./TerminalView.css";
 
@@ -116,7 +117,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onSummaryUpdate }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -251,6 +252,28 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // Bridge blocks into a ref so the stale closure can check if a command is running
   const blocksRef = useRef(blocks);
   useEffect(() => { blocksRef.current = blocks; }, [blocks]);
+
+  // Generate a one-time identifying tab title from the first executed
+  // command(s). Debounced so rapid successive commands are captured together;
+  // the ref guard makes it fire at most once per terminal session (the view
+  // stays mounted across tab switches). Summarizes command text only — see
+  // summarizeCommands. Silent on failure; a failed first attempt just leaves
+  // the tab showing its plain name until the app restarts.
+  const summaryGeneratedRef = useRef(false);
+  useEffect(() => {
+    if (summaryGeneratedRef.current) return;
+    const hasFinalized = blocks.some((b) => b.status === "completed" || b.status === "failed");
+    if (!hasFinalized) return;
+    const timer = setTimeout(() => {
+      summaryGeneratedRef.current = true;
+      summarizeCommands(blocks, sessionId, locale)
+        .then((summary) => {
+          if (summary) onSummaryUpdate?.(summary);
+        })
+        .catch(() => {});
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [blocks, sessionId, locale, onSummaryUpdate]);
 
   // Bridge blockSearchCursor into a ref so doSearch can read the latest cursor without
   // depending on the state value itself — depending on it directly would give doSearch a
