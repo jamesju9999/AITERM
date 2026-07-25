@@ -12,16 +12,37 @@ const DEFAULT_CONFIG = {
 
 // Per-command mock registry: tests can push response objects.
 const aiChatQueue: { content: string; tool_calls?: unknown[]; tool_calling_unsupported?: boolean }[] = [];
-// Records the `messages` array sent on each "ai_chat" invoke call, in order.
-const aiChatCalls: { role: string; content: unknown }[][] = [];
+// Records the sessionId + `messages` array sent on each "ai_chat" invoke
+// call, in order. sessionId lets tests distinguish real chat turns from the
+// background tab-summary calls fired by summarizeConversation (session id
+// suffixed "-summary") — see realChatCalls() below.
+const aiChatCalls: { sessionId: string; messages: { role: string; content: unknown }[] }[] = [];
+
+/** Real conversational turns only — excludes the background summary calls
+ *  fired by the title-bar AI summary feature (see summarizeTab.ts). */
+const realChatCalls = () => aiChatCalls.filter((c) => !c.sessionId.endsWith("-summary"));
+
+// Content returned for the background "-summary" session's ai_chat call.
+// Defaults to "" (falsy → onSummaryUpdate never fires) so the other tests'
+// behavior is unaffected; a test that wants to exercise onSummaryUpdate can
+// set this before rendering.
+let summaryResponseContent = "";
 
 const listenMock = vi.fn().mockResolvedValue(() => {});
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (cmd: string, payload?: { messages?: { role: string; content: unknown }[] }) => {
+  invoke: (cmd: string, payload?: { sessionId?: string; messages?: { role: string; content: unknown }[] }) => {
     if (cmd === "get_config") return Promise.resolve(DEFAULT_CONFIG);
     if (cmd === "get_mcp_tools") return Promise.resolve([]);
     if (cmd === "ai_chat") {
-      aiChatCalls.push(payload?.messages ?? []);
+      const sessionId = payload?.sessionId ?? "";
+      aiChatCalls.push({ sessionId, messages: payload?.messages ?? [] });
+      // Background tab-summary calls (see summarizeTab.ts) must not consume
+      // aiChatQueue — that queue holds scripted replies for the real
+      // conversational turns under test, and letting the summary call steal
+      // an entry desyncs which reply lands on which turn.
+      if (sessionId.endsWith("-summary")) {
+        return Promise.resolve({ content: summaryResponseContent, tool_calls: [], tool_calling_unsupported: false });
+      }
       const next = aiChatQueue.shift();
       if (next) return Promise.resolve({ tool_calls: [], tool_calling_unsupported: false, ...next });
       return Promise.resolve({ content: "", tool_calls: [], tool_calling_unsupported: false });
@@ -49,6 +70,7 @@ import { AiPanel } from "./index";
 beforeEach(() => {
   aiChatQueue.length = 0;
   aiChatCalls.length = 0;
+  summaryResponseContent = "";
   listenMock.mockClear();
   listenMock.mockResolvedValue(() => {});
 });
@@ -125,6 +147,29 @@ describe("AiPanel", () => {
     await waitFor(() => expect(screen.getByText("好的")).toBeInTheDocument());
   });
 
+  it("calls onSummaryUpdate with the trimmed summary after a turn settles", async () => {
+    aiChatQueue.push({ content: "好的" });
+    summaryResponseContent = "  除錯 OAuth 流程  ";
+    const onSummaryUpdate = vi.fn();
+    render(
+      <AiPanel
+        sessionId="s1"
+        isOpen={true}
+        providerName="Ollama"
+        onClose={vi.fn()}
+        onExecuteCommand={vi.fn()}
+        onOpenProviderPalette={vi.fn()}
+        onSummaryUpdate={onSummaryUpdate}
+      />,
+    );
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(textbox, "列出檔案");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByText("好的")).toBeInTheDocument());
+
+    await waitFor(() => expect(onSummaryUpdate).toHaveBeenCalledWith("除錯 OAuth 流程"));
+  });
+
   it("🗑 New Chat button clears messages", async () => {
     aiChatQueue.push({ content: "ok" });
     render(
@@ -180,8 +225,8 @@ describe("AiPanel", () => {
     // The second ai_chat call's message history must include the first
     // turn's user request and the AI's proposed plan, not just this turn's
     // new message.
-    expect(aiChatCalls.length).toBe(2);
-    const secondCallContents = aiChatCalls[1].map((m) => m.content);
+    expect(realChatCalls().length).toBe(2);
+    const secondCallContents = realChatCalls()[1].messages.map((m) => m.content);
     expect(secondCallContents).toContain("請規劃整理資料夾的計畫");
     expect(secondCallContents).toContain("這是計畫內容，要執行嗎？");
     expect(secondCallContents).toContain("請執行計畫");
@@ -219,8 +264,8 @@ describe("AiPanel", () => {
     await waitFor(() => expect(screen.getByText("完成了")).toBeInTheDocument());
 
     expect(onExecuteCommand).toHaveBeenCalledWith("ls", expect.any(Function));
-    expect(aiChatCalls.length).toBe(2);
-    const secondCallContents = aiChatCalls[1].map((m) => m.content);
+    expect(realChatCalls().length).toBe(2);
+    const secondCallContents = realChatCalls()[1].messages.map((m) => m.content);
     expect(secondCallContents.some((c) => typeof c === "string" && c.includes("ls"))).toBe(true);
   });
 
