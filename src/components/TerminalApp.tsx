@@ -266,9 +266,16 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
 
   const toggleSidebar = useCallback(() => setIsSidebarOpen(o => !o), []);
 
+  const activeTabForTitle = tabs.find((t) => t.id === activeId);
+  const titleBarText = activeTabForTitle
+    ? (activeTabForTitle.type === "terminal" && activeTabForTitle.aiSummary
+        ? `${activeTabForTitle.title} - ${activeTabForTitle.aiSummary}`
+        : activeTabForTitle.title)
+    : undefined;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", backgroundColor: "#0c0c0c", position: "relative" }}>
-      <TitleBar />
+      <TitleBar title={titleBarText} />
       <div style={{ display: "flex", flexDirection: "row", flex: 1, minHeight: 0, position: "relative" }}>
       <div>
         <TabBar
@@ -357,6 +364,11 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
                   onAgentProgress={(done, total) => {
                     setTabs((prev) =>
                       prev.map((t) => t.id === tab.id ? { ...t, agentProgress: { done, total } } : t)
+                    );
+                  }}
+                  onSummaryUpdate={(summary) => {
+                    setTabs((prev) =>
+                      prev.map((t) => t.id === tab.id ? { ...t, aiSummary: summary } : t)
                     );
                   }}
                 />
