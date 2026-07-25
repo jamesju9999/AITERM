@@ -90,6 +90,8 @@ export interface TerminalViewProps {
   enterpriseTask?: { taskId: string; workBranch: string; onComplete: unknown };
   /** Called on each agent step when running an enterprise task, for the progress panel. */
   onAgentProgress?: (done: number, total: number) => void;
+  /** Called with a freshly generated AI summary of this tab's conversation, for the title bar. */
+  onSummaryUpdate?: (summary: string) => void;
 }
 
 // The live terminal pane's visible height shrinks to just the current content
@@ -114,7 +116,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onSummaryUpdate }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -1382,6 +1384,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             setPaletteOpen(true);
           }}
           sendRemoteResponse={sendRemoteResponse}
+          onSummaryUpdate={onSummaryUpdate}
         />
       )}
     </div>
