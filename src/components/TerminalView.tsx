@@ -1332,6 +1332,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       {/* WarpInput (the actual typing box) stays pinned to the panel bottom regardless of
           block-list length — only the live xterm view above scrolls with block content. */}
       {!isAlternateBuffer && (
+        preview.loading ? (
+          <StreamingIndicator visible text={streamText} />
+        ) : (
         <WarpInput
           sessionId={sessionId}
           onSubmit={(cmd) => {
@@ -1382,9 +1385,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           }}
           shortcut={submitShortcut}
         />
-      )}
-      {preview.loading && (
-        <StreamingIndicator visible text={streamText} />
+        )
       )}
       {preview.visible && (
         <CommandPreview

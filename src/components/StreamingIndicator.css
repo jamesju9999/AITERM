@@ -1,14 +1,11 @@
 .aiterm-streaming {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: rgba(12, 12, 12, 0.95);
-  border-top: 1px solid #333;
-  padding: 6px 10px;
+  margin: 10px 14px;
+  padding: 8px 14px;
+  background-color: #161616;
+  border: 1.5px solid #2f9e7f;
+  border-radius: 24px;
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 12px;
-  z-index: 10;
 }
 
 .aiterm-streaming__label {
