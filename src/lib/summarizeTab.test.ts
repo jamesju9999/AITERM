@@ -5,33 +5,47 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-import { summarizeConversation } from "./summarizeTab";
-import type { McpChatMessage } from "../hooks/useMcpChat";
+import { summarizeCommands } from "./summarizeTab";
+import type { TerminalBlock } from "../hooks/useTerminalBlocks";
 
 beforeEach(() => {
   invokeMock.mockReset();
 });
 
-const userMsg = (text: string): McpChatMessage => ({ role: "user", content: text });
-const assistantMsg = (text: string): McpChatMessage => ({ role: "assistant", content: text });
+function block(command: string, overrides: Partial<TerminalBlock> = {}): TerminalBlock {
+  return {
+    id: Math.random().toString(36).slice(2),
+    command,
+    status: "completed",
+    startTime: Date.now(),
+    rawOutput: "",
+    ...overrides,
+  };
+}
 
-describe("summarizeConversation", () => {
-  it("returns null when there is no assistant reply yet", async () => {
-    const result = await summarizeConversation([userMsg("hello")], "sess-1", "zh-TW");
+describe("summarizeCommands", () => {
+  it("returns null and makes no AI call when there are no commands", async () => {
+    const result = await summarizeCommands([], "sess-1", "zh-TW");
+    expect(result).toBeNull();
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("returns null and makes no AI call when all commands are blank/whitespace", async () => {
+    const result = await summarizeCommands([block("   "), block("")], "sess-1", "zh-TW");
     expect(result).toBeNull();
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
   it("calls ai_chat with a summary-suffixed session id and returns the trimmed reply", async () => {
-    invokeMock.mockResolvedValue({ content: "  除錯 OAuth 流程  ", tool_calls: [], tool_calling_unsupported: false });
+    invokeMock.mockResolvedValue({ content: "  查詢本機 IP  ", tool_calls: [], tool_calling_unsupported: false });
 
-    const result = await summarizeConversation(
-      [userMsg("幫我看一下這段程式碼"), assistantMsg("好的，我看看")],
+    const result = await summarizeCommands(
+      [block("ifconfig en0", { cwd: "/Users/jamesju/Downloads" })],
       "sess-1",
       "zh-TW",
     );
 
-    expect(result).toBe("除錯 OAuth 流程");
+    expect(result).toBe("查詢本機 IP");
     expect(invokeMock).toHaveBeenCalledWith(
       "ai_chat",
       expect.objectContaining({ sessionId: "sess-1-summary" }),
@@ -40,42 +54,27 @@ describe("summarizeConversation", () => {
 
   it("returns null when invokeAiChat rejects", async () => {
     invokeMock.mockRejectedValue(new Error("network error"));
-
-    const result = await summarizeConversation(
-      [userMsg("hi"), assistantMsg("hello")],
-      "sess-1",
-      "zh-TW",
-    );
-
+    const result = await summarizeCommands([block("ls")], "sess-1", "zh-TW");
     expect(result).toBeNull();
   });
 
-  it("returns null when the reply content is empty", async () => {
+  it("returns null when the reply content is empty/whitespace", async () => {
     invokeMock.mockResolvedValue({ content: "   ", tool_calls: [], tool_calling_unsupported: false });
-
-    const result = await summarizeConversation(
-      [userMsg("hi"), assistantMsg("hello")],
-      "sess-1",
-      "zh-TW",
-    );
-
+    const result = await summarizeCommands([block("ls")], "sess-1", "zh-TW");
     expect(result).toBeNull();
   });
 
-  it("only includes the last 10 messages in the prompt sent to invokeAiChat", async () => {
+  it("only includes the last 10 commands in the prompt sent to invokeAiChat", async () => {
     invokeMock.mockResolvedValue({ content: "summary", tool_calls: [], tool_calling_unsupported: false });
 
-    const many: McpChatMessage[] = [];
-    for (let i = 0; i < 14; i++) {
-      many.push(userMsg(`user-msg-${i}`));
-      many.push(assistantMsg(`assistant-msg-${i}`));
-    }
-    // 28 messages total; only the last 10 should appear in the prompt.
-    await summarizeConversation(many, "sess-1", "zh-TW");
+    const many: TerminalBlock[] = [];
+    for (let i = 0; i < 14; i++) many.push(block(`command-${i}`));
+    await summarizeCommands(many, "sess-1", "zh-TW");
 
-    const call = invokeMock.mock.calls[0];
-    const promptText = (call[1] as { messages: { content: string }[] }).messages[0].content as string;
-    expect(promptText).not.toContain("user-msg-0");
-    expect(promptText).toContain("assistant-msg-13");
+    const promptText = (invokeMock.mock.calls[0][1] as { messages: { content: string }[] }).messages[0].content;
+    expect(promptText).not.toContain("command-0");
+    expect(promptText).not.toContain("command-3");
+    expect(promptText).toContain("command-4");
+    expect(promptText).toContain("command-13");
   });
 });
