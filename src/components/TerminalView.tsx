@@ -116,7 +116,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onSummaryUpdate }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -1384,7 +1384,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             setPaletteOpen(true);
           }}
           sendRemoteResponse={sendRemoteResponse}
-          onSummaryUpdate={onSummaryUpdate}
         />
       )}
     </div>
