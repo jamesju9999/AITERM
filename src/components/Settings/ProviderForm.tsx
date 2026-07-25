@@ -736,35 +736,161 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         <div className="form-group">
           <label>{t.provider_model}</label>
           {providerType === "ollama" ? (
-          ollamaLoading ? (
-            <input type="text" value={t.provider_ollama_loading} disabled />
-          ) : ollamaModels.length > 0 ? (
-            <select value={model} onChange={(e) => setModel(e.target.value)}>
-              {ollamaModels.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              type="text"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder={t.provider_ollama_fallback_placeholder}
-            />
-          )
-        ) : providerType === "github-copilot" ? (
-          copilotLoading ? (
-            <input type="text" value={t.provider_model_loading} disabled />
-          ) : copilotModels.length > 0 ? (
-            <select value={model} onChange={(e) => setModel(e.target.value)}>
-              {copilotModels.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
+            ollamaLoading ? (
+              <input type="text" value={t.provider_ollama_loading} disabled />
+            ) : ollamaModels.length > 0 ? (
+              <select value={model} onChange={(e) => setModel(e.target.value)}>
+                {ollamaModels.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={t.provider_ollama_fallback_placeholder}
+              />
+            )
+          ) : providerType === "github-copilot" ? (
+            copilotLoading ? (
+              <input type="text" value={t.provider_model_loading} disabled />
+            ) : copilotModels.length > 0 ? (
+              <select value={model} onChange={(e) => setModel(e.target.value)}>
+                {copilotModels.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={DEFAULT_MODELS[providerType]}
+              />
+            )
+          ) : providerType === "google-ai" ? (
+            googleAiLoading ? (
+              <input type="text" value={t.provider_model_loading} disabled />
+            ) : (
+              <>
+                <input
+                  type="text"
+                  list="google-ai-models-list"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder={googleAiModels.length > 0 ? t.settings_provider_model_placeholder : DEFAULT_MODELS[providerType]}
+                />
+                {googleAiModels.length > 0 && (
+                  <datalist id="google-ai-models-list">
+                    {googleAiModels.map((m) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                )}
+              </>
+            )
+          ) : providerType === "openrouter" ? (
+            openRouterLoading ? (
+              <input type="text" value={t.provider_model_loading} disabled />
+            ) : (
+              <>
+                <input
+                  type="text"
+                  list="openrouter-models-list"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder={openRouterModels.length > 0 ? t.settings_provider_model_placeholder : DEFAULT_MODELS[providerType]}
+                />
+                {openRouterModels.length > 0 && (
+                  <datalist id="openrouter-models-list">
+                    {openRouterModels.map((m) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                )}
+              </>
+            )
+          ) : providerType === "xai" ? (
+            xaiLoading ? (
+              <input type="text" value={t.provider_model_loading} disabled />
+            ) : (
+              <>
+                <input
+                  type="text"
+                  list="xai-models-list"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder={xaiModels.length > 0 ? t.settings_provider_model_placeholder : DEFAULT_MODELS[providerType]}
+                />
+                {xaiModels.length > 0 && (
+                  <datalist id="xai-models-list">
+                    {xaiModels.map((m) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                )}
+              </>
+            )
+          ) : providerType === "deepseek" ? (
+            deepseekLoading ? (
+              <input type="text" value={t.provider_model_loading} disabled />
+            ) : (
+              <>
+                <input
+                  type="text"
+                  list="deepseek-models-list"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder={deepseekModels.length > 0 ? t.settings_provider_model_placeholder : DEFAULT_MODELS[providerType]}
+                />
+                {deepseekModels.length > 0 && (
+                  <datalist id="deepseek-models-list">
+                    {deepseekModels.map((m) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                )}
+              </>
+            )
+          ) : providerType === "kimi" ? (
+            kimiLoading ? (
+              <input type="text" value={t.provider_model_loading} disabled />
+            ) : (
+              <>
+                <input
+                  type="text"
+                  list="kimi-models-list"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder={kimiModels.length > 0 ? t.settings_provider_model_placeholder : DEFAULT_MODELS[providerType]}
+                />
+                {kimiModels.length > 0 && (
+                  <datalist id="kimi-models-list">
+                    {kimiModels.map((m) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                )}
+              </>
+            )
+          ) : providerType === "anthropic" && anthropicAuthMethod === "oauth" && anthropicOAuthLoggedIn ? (
+            anthropicModelsLoading ? (
+              <input type="text" value={t.settings_provider_model_loading_placeholder} disabled />
+            ) : (
+              <select value={model} onChange={(e) => setModel(e.target.value)}>
+                {!anthropicModels.includes(model) && model && (
+                  <option value={model}>{model}</option>
+                )}
+                {anthropicModels.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            )
           ) : (
             <input
               type="text"
@@ -772,133 +898,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
               onChange={(e) => setModel(e.target.value)}
               placeholder={DEFAULT_MODELS[providerType]}
             />
-          )
-        ) : providerType === "google-ai" ? (
-          googleAiLoading ? (
-            <input type="text" value={t.provider_model_loading} disabled />
-          ) : (
-            <>
-              <input
-                type="text"
-                list="google-ai-models-list"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder={googleAiModels.length > 0 ? t.settings_provider_model_placeholder : DEFAULT_MODELS[providerType]}
-              />
-              {googleAiModels.length > 0 && (
-                <datalist id="google-ai-models-list">
-                  {googleAiModels.map((m) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
-              )}
-            </>
-          )
-        ) : providerType === "openrouter" ? (
-          openRouterLoading ? (
-            <input type="text" value={t.provider_model_loading} disabled />
-          ) : (
-            <>
-              <input
-                type="text"
-                list="openrouter-models-list"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder={openRouterModels.length > 0 ? t.settings_provider_model_placeholder : DEFAULT_MODELS[providerType]}
-              />
-              {openRouterModels.length > 0 && (
-                <datalist id="openrouter-models-list">
-                  {openRouterModels.map((m) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
-              )}
-            </>
-          )
-        ) : providerType === "xai" ? (
-          xaiLoading ? (
-            <input type="text" value={t.provider_model_loading} disabled />
-          ) : (
-            <>
-              <input
-                type="text"
-                list="xai-models-list"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder={xaiModels.length > 0 ? t.settings_provider_model_placeholder : DEFAULT_MODELS[providerType]}
-              />
-              {xaiModels.length > 0 && (
-                <datalist id="xai-models-list">
-                  {xaiModels.map((m) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
-              )}
-            </>
-          )
-        ) : providerType === "deepseek" ? (
-          deepseekLoading ? (
-            <input type="text" value={t.provider_model_loading} disabled />
-          ) : (
-            <>
-              <input
-                type="text"
-                list="deepseek-models-list"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder={deepseekModels.length > 0 ? t.settings_provider_model_placeholder : DEFAULT_MODELS[providerType]}
-              />
-              {deepseekModels.length > 0 && (
-                <datalist id="deepseek-models-list">
-                  {deepseekModels.map((m) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
-              )}
-            </>
-          )
-        ) : providerType === "kimi" ? (
-          kimiLoading ? (
-            <input type="text" value={t.provider_model_loading} disabled />
-          ) : (
-            <>
-              <input
-                type="text"
-                list="kimi-models-list"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder={kimiModels.length > 0 ? t.settings_provider_model_placeholder : DEFAULT_MODELS[providerType]}
-              />
-              {kimiModels.length > 0 && (
-                <datalist id="kimi-models-list">
-                  {kimiModels.map((m) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
-              )}
-            </>
-          )
-        ) : providerType === "anthropic" && anthropicAuthMethod === "oauth" && anthropicOAuthLoggedIn ? (
-          anthropicModelsLoading ? (
-            <input type="text" value={t.settings_provider_model_loading_placeholder} disabled />
-          ) : (
-            <select value={model} onChange={(e) => setModel(e.target.value)}>
-              {!anthropicModels.includes(model) && model && (
-                <option value={model}>{model}</option>
-              )}
-              {anthropicModels.map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
-          )
-        ) : (
-          <input
-            type="text"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            placeholder={DEFAULT_MODELS[providerType]}
-          />
-        )}
+          )}
         </div>
 
         {(providerType === "openai-compatible" ||

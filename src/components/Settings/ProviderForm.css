@@ -219,6 +219,14 @@
   padding-left: 28px;
 }
 
+.anthropic-oauth-btns button {
+  white-space: nowrap;
+}
+
+.anthropic-oauth-flow > button {
+  white-space: nowrap;
+}
+
 .form-hint--error {
   color: #f47a7a;
 }
