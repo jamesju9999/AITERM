@@ -31,9 +31,9 @@ export interface Tab {
   initialMission?: { goal: string; maxSteps: number };
   enterpriseTask?: { taskId: string; workBranch: string; onComplete: unknown };
   agentProgress?: { done: number; total: number };
-  /** AI-generated one-line summary of this tab's /ai conversation, shown in
-   *  the title bar as "<title> - <aiSummary>". In-memory only — never
-   *  persisted to localStorage, regenerated after the app restarts. */
+  /** AI-generated one-line summary of this tab's executed shell commands,
+   *  shown in the title bar as "<title> - <aiSummary>". In-memory only —
+   *  never persisted to localStorage, regenerated after the app restarts. */
   aiSummary?: string;
 }
 
