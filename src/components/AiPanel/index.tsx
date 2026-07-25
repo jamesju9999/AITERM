@@ -5,6 +5,7 @@ import {
 import { readFileAsAttachment, contentToDisplayString } from "../../types/attachment";
 import type { Attachment } from "../../types/attachment";
 import { useMcpChat } from "../../hooks/useMcpChat";
+import { summarizeConversation } from "../../lib/summarizeTab";
 import { invokeAiChat, type ChatMessage as AiChatMessage } from "../../ipc/ai";
 import { getSessionCwd, listDirectory } from "../../ipc/fs";
 import { getPtyRecentOutput, writePty } from "../../ipc/pty";
@@ -55,6 +56,9 @@ export interface AiPanelProps {
   onExecuteCommand: (cmd: string, onComplete?: (block: TerminalBlock) => void) => void;
   onOpenProviderPalette: () => void;
   sendRemoteResponse?: (text: string) => void;
+  /** Called with a freshly generated one-line summary of this tab's /ai
+   *  conversation, after each response settles. See summarizeTab.ts. */
+  onSummaryUpdate?: (summary: string) => void;
 }
 
 /**
@@ -70,6 +74,7 @@ export function AiPanel({
   onExecuteCommand,
   onOpenProviderPalette,
   sendRemoteResponse,
+  onSummaryUpdate,
 }: AiPanelProps) {
   const { t, locale } = useLocale();
   const chat = useMcpChat(sessionId);
@@ -184,6 +189,22 @@ export function AiPanel({
       localStorage.setItem(STORAGE_USE_MCP_KEY, String(useMcp));
     } catch { /* ignore */ }
   }, [useMcp]);
+
+  // Regenerate the title-bar summary once an AI turn fully settles (not
+  // mid-stream, not mid-agent-loop) and the message count actually grew —
+  // the ref guard stops this from re-firing on unrelated re-renders.
+  const lastSummarizedCountRef = useRef(0);
+  useEffect(() => {
+    if (chat.isStreaming || agentRunning) return;
+    if (chat.messages.length === 0) return;
+    if (chat.messages.length === lastSummarizedCountRef.current) return;
+    lastSummarizedCountRef.current = chat.messages.length;
+    summarizeConversation(chat.messages, sessionId, locale)
+      .then((summary) => {
+        if (summary) onSummaryUpdate?.(summary);
+      })
+      .catch(() => {});
+  }, [chat.messages, chat.isStreaming, agentRunning, sessionId, locale, onSummaryUpdate]);
 
   /** Build system prompt with live CWD + dir listing. */
   const buildAgentSystemPrompt = useCallback(async (): Promise<string> => {
