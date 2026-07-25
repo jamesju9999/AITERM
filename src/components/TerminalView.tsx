@@ -34,6 +34,7 @@ import { webSearch, webFetch } from "../ipc/web";
 import { parseAiPrefix, parseAgentPrefix } from "./parseAiPrefix";
 import { CommandPreview } from "./CommandPreview";
 import { StreamingIndicator } from "./StreamingIndicator";
+import { AgentStatusBar, type AgentPhase } from "./AgentStatusBar";
 import { AiPanel } from "./AiPanel";
 import { ProviderPalette } from "./ProviderPalette";
 import { WarpInput } from "./WarpInput";
@@ -328,6 +329,21 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     setLiveRows(MIN_LIVE_ROWS);
   }, [visibleBlockCount]);
 
+  // Agent lifecycle status shown in the AgentStatusBar above the input, driven by
+  // runAgentLoop/handleAiQuery via the onPhase callback (see handleAgentPhase).
+  const [agentPhase, setAgentPhase] = useState<AgentPhase | null>(null);
+  const agentStepRef = useRef(0);
+  const handleAgentPhase = useCallback((update: AgentPhase) => {
+    // Track the count of steps that actually did work (ran a command / did web),
+    // NOT the "asking" iterations — the final iteration is just the AI confirming
+    // DONE and executes nothing, so counting it would inflate the "done (N steps)"
+    // total (e.g. a one-command task would misreport as 2).
+    if (update.phase === "running" || update.phase === "web") {
+      agentStepRef.current = update.step;
+    }
+    setAgentPhase(update);
+  }, []);
+
   // xterm doesn't expose cell height as public API — this reads the same internal
   // renderer field the (now-removed) old block overlay used, with a font-metrics
   // fallback for the first render or if that internal ever changes shape.
@@ -457,17 +473,15 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             stepCount: 0,
             maxSteps: maxAgentStepsRef.current,
             history: [],
+            onPhase: handleAgentPhase,
             onComplete: (explanation?: string) => {
-              if (explanation) {
-                termRef.current?.write(`\r\n\x1b[36m${explanation.replace(/\n/g, "\r\n")}\x1b[0m\r\n`);
-              }
-              termRef.current?.write(`\r\n\x1b[32m[Agent Mission Completed] 🎉\x1b[0m\r\n`);
+              setAgentPhase({ phase: "done", steps: agentStepRef.current });
               stopMission();
               if (sessionRef.current) writePty(sessionRef.current, "\r").catch(console.error);
               sendRemoteResponse(explanation ? `Agent: ${explanation}` : "[Agent Mission Completed] 🎉");
             },
             onFail: (msg) => {
-              termRef.current?.write(`\r\n\x1b[33m⚠ Agent stopped: ${msg}\x1b[0m\r\n`);
+              setAgentPhase({ phase: "failed", reason: msg });
               stopMission();
               if (sessionRef.current) writePty(sessionRef.current, "\r").catch(console.error);
               sendRemoteResponse(`⚠ Agent stopped: ${msg}`);
@@ -918,14 +932,15 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               stepCount: 0,
               maxSteps: maxAgentStepsRef.current,
               history: [],
+              onPhase: handleAgentPhase,
               onComplete: () => {
-                term.write(`\r\n\x1b[32m[Agent Mission Completed] 🎉\x1b[0m\r\n`);
+                setAgentPhase({ phase: "done", steps: agentStepRef.current });
                 stopMission();
                 writePty(session, "\r").catch(console.error);
                 sendRemoteResponse("[Agent Mission Completed] 🎉");
               },
               onFail: (msg) => {
-                term.write(`\r\n\x1b[33m⚠ Agent stopped: ${msg}\x1b[0m\r\n`);
+                setAgentPhase({ phase: "failed", reason: msg });
                 stopMission();
                 writePty(session, "\r").catch(console.error);
                 sendRemoteResponse(`⚠ Agent stopped: ${msg}`);
@@ -1322,13 +1337,17 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       </div>{/* end relative container */}
       {/* WarpInput (the actual typing box) stays pinned to the panel bottom regardless of
           block-list length — only the live xterm view above scrolls with block content. */}
+      {!isAlternateBuffer && agentPhase && (
+        <AgentStatusBar status={agentPhase} onDismiss={() => setAgentPhase(null)} />
+      )}
       {!isAlternateBuffer && (
-        preview.loading ? (
+        preview.loading && !agentPhase ? (
           <StreamingIndicator visible text={streamText} />
         ) : (
         <WarpInput
           sessionId={sessionId}
           onSubmit={(cmd) => {
+            setAgentPhase(null);
             const agentQuery = parseAgentPrefix(cmd);
             const aiQuery = parseAiPrefix(cmd);
             if (agentQuery !== null || aiQuery !== null) {
@@ -1357,13 +1376,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                   stepCount: 0,
                   maxSteps: maxAgentStepsRef.current,
                   history: [],
+                  onPhase: handleAgentPhase,
                   onComplete: () => {
-                    termRef.current?.write(`\r\n\x1b[32m[Agent Mission Completed] 🎉\x1b[0m\r\n`);
+                    setAgentPhase({ phase: "done", steps: agentStepRef.current });
                     stopMission();
                     if (sessionId) writePty(sessionId, "\r").catch(console.error);
                   },
                   onFail: (msg) => {
-                    termRef.current?.write(`\r\n\x1b[33m⚠ Agent stopped: ${msg}\x1b[0m\r\n`);
+                    setAgentPhase({ phase: "failed", reason: msg });
                     stopMission();
                     if (sessionId) writePty(sessionId, "\r").catch(console.error);
                   },
@@ -1444,11 +1464,12 @@ function handleAiQuery(
   agentActive = false,
   onCommandComplete?: (block: import("../hooks/useTerminalBlocks").TerminalBlock) => void,
   onAiError?: (err: AiError) => void,
-  onWebAction?: (type: "search" | "fetch", value: string) => void
+  onWebAction?: (type: "search" | "fetch", value: string) => void,
+  onPhase?: (update: AgentPhase) => void,
+  agentStep = 0,
+  agentMaxSteps = 0,
 ) {
   void originalLine;
-  term.write("\r\x1b[2K");
-  term.write("→ asking AI...\r\n");
   setStreamText("");
   streamingRef.current = true;
   setPreview({ loading: true, visible: false, command: "", explanation: "", riskLevel: "safe" });
@@ -1456,8 +1477,7 @@ function handleAiQuery(
   invokeAiQuery(query, sessionId, locale)
     .then((resp) => {
       streamingRef.current = false;
-      term.write("\x1b[1A\x1b[2K");
-      
+
       if (resp.command === "DONE") {
         setPreview(INITIAL_PREVIEW);
         if (onDone) onDone(resp.explanation);
@@ -1485,6 +1505,7 @@ function handleAiQuery(
         // Auto-execute: write a subtle confirmation line then submit.
         const riskColor = risk === "safe" ? "\x1b[32m" : "\x1b[33m";
         term.write(`\r\n${riskColor}▶ ${resp.command}\x1b[0m\r\n`);
+        onPhase?.({ phase: "running", step: agentStep, maxSteps: agentMaxSteps, command: resp.command });
         // Pass onCommandComplete so the block hook calls it when OSC 133;D fires
         submitCommand(resp.command, onCommandComplete);
         setPreview(INITIAL_PREVIEW);
@@ -1505,7 +1526,6 @@ function handleAiQuery(
     .catch((rawErr: unknown) => {
       streamingRef.current = false;
       setStreamText("");
-      term.write("\x1b[1A\x1b[2K");
       const err = normalizeAiError(rawErr);
       writeRed(formatAiError(err));
 
@@ -1535,7 +1555,7 @@ function handleAiQuery(
  * This does NOT rely on React useEffect — the loop is driven by OSC 133;D completion callbacks.
  */
 interface AgentStepInfo {
-  /** 1-based step index for display (matches the "[Agent: 思考下一步... (N/M)]" prompt). */
+  /** 1-based step index for display (matches the AgentStatusBar "步驟 N/M" counter). */
   stepIndex: number;
   maxSteps: number;
   command: string;
@@ -1583,6 +1603,8 @@ interface AgentLoopParams {
   onFail: (msg: string) => void;
   /** Fires after each shell command finishes; used to mirror progress to Telegram. */
   onStepComplete?: (info: AgentStepInfo) => void;
+  /** Pushes agent lifecycle status to the React status bar (replaces term.write status lines). */
+  onPhase?: (update: AgentPhase) => void;
 }
 
 function runAgentLoop(params: AgentLoopParams) {
@@ -1610,9 +1632,7 @@ function runAgentLoop(params: AgentLoopParams) {
     ).join('\n\n')}\n\nAnalyze the result above and decide the next step to achieve the goal. If the goal is fully achieved, respond with command set to 'DONE'.${webSearchNote}`;
   }
 
-  if (stepCount > 0) {
-    term.write(`\r\n\x1b[35m${t.term_agent_thinking(stepCount + 1, maxSteps)}\x1b[0m\r\n`);
-  }
+  params.onPhase?.({ phase: "asking", step: stepCount + 1, maxSteps });
 
   // This callback fires when the command FINISHES executing in the PTY (via OSC 133;D)
   let stepResolved = false; // Set to true when either block completes OR AI returns DONE
@@ -1666,8 +1686,7 @@ function runAgentLoop(params: AgentLoopParams) {
   // Handle web search/fetch actions from the AI (intercept before PTY execution)
   const onWebAction = (type: "search" | "fetch", value: string) => {
     stepResolved = true; // prevent timeout from firing while waiting for web result
-    const label = type === "search" ? `\x1b[36m🔍 搜尋: ${value}\x1b[0m` : `\x1b[36m📄 取得: ${value}\x1b[0m`;
-    term.write(`\r\n${label}\r\n`);
+    params.onPhase?.({ phase: "web", step: stepCount + 1, maxSteps, query: value, webKind: type });
     const webPromise = type === "search" ? webSearch(value) : webFetch(value);
     webPromise
       .then((result) => {
@@ -1725,6 +1744,9 @@ function runAgentLoop(params: AgentLoopParams) {
       onFail(`AI 請求失敗: ${errMsg}`);
     },
     onWebAction,          // onWebAction: intercept web search/fetch commands
+    params.onPhase,       // onPhase: push running-phase status to the React status bar
+    stepCount + 1,        // agentStep (1-based)
+    maxSteps,             // agentMaxSteps
   );
 }
 
