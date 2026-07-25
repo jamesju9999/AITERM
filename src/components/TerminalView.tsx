@@ -328,6 +328,19 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     setLiveRows(MIN_LIVE_ROWS);
   }, [visibleBlockCount]);
 
+  // When an agent mission ends, its final "[Agent Mission Completed]"/"⚠ stopped"
+  // message is written straight into the live pane via term.write. Unlike real PTY
+  // output that never trips the MAX_LIVE_ROWS snap in onPtyData, so at MIN_LIVE_ROWS
+  // that message lands on the last visible row and gets clipped by the frame's
+  // bottom edge. Expand the pane on the active→inactive edge so it shows in full;
+  // the next command creates a block and shrinks it back to MIN via the effect above.
+  const prevMissionActiveRef = useRef(false);
+  const missionActive = agentMission?.active ?? false;
+  useEffect(() => {
+    if (prevMissionActiveRef.current && !missionActive) setLiveRows(MAX_LIVE_ROWS);
+    prevMissionActiveRef.current = missionActive;
+  }, [missionActive]);
+
   // xterm doesn't expose cell height as public API — this reads the same internal
   // renderer field the (now-removed) old block overlay used, with a font-metrics
   // fallback for the first render or if that internal ever changes shape.
@@ -1444,7 +1457,14 @@ function handleAiQuery(
   agentActive = false,
   onCommandComplete?: (block: import("../hooks/useTerminalBlocks").TerminalBlock) => void,
   onAiError?: (err: AiError) => void,
-  onWebAction?: (type: "search" | "fetch", value: string) => void
+  onWebAction?: (type: "search" | "fetch", value: string) => void,
+  /**
+   * True when the caller (agent loop) printed a "[Agent: 思考下一步...]" line
+   * just above this query. On the paths that DON'T print a following command
+   * (DONE / error), that optimistic line is now stale and must be erased —
+   * otherwise it lingers in the buffer until the next command redraws it.
+   */
+  clearThinkingLine = false,
 ) {
   void originalLine;
   term.write("\r\x1b[2K");
@@ -1459,6 +1479,9 @@ function handleAiQuery(
       term.write("\x1b[1A\x1b[2K");
       
       if (resp.command === "DONE") {
+        // Cursor is directly below the optimistic thinking line (the "→ asking
+        // AI..." helper above was just cleared). No command follows, so erase it.
+        if (clearThinkingLine) term.write("\x1b[1A\x1b[2K");
         setPreview(INITIAL_PREVIEW);
         if (onDone) onDone(resp.explanation);
         return;
@@ -1506,6 +1529,8 @@ function handleAiQuery(
       streamingRef.current = false;
       setStreamText("");
       term.write("\x1b[1A\x1b[2K");
+      // Same as the DONE path: no command follows, so drop the stale thinking line.
+      if (clearThinkingLine) term.write("\x1b[1A\x1b[2K");
       const err = normalizeAiError(rawErr);
       writeRed(formatAiError(err));
 
@@ -1725,6 +1750,7 @@ function runAgentLoop(params: AgentLoopParams) {
       onFail(`AI 請求失敗: ${errMsg}`);
     },
     onWebAction,          // onWebAction: intercept web search/fetch commands
+    stepCount > 0,        // clearThinkingLine: a thinking line was printed above (line ~1614)
   );
 }
 
