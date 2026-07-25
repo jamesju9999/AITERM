@@ -34,6 +34,7 @@ import { webSearch, webFetch } from "../ipc/web";
 import { parseAiPrefix, parseAgentPrefix } from "./parseAiPrefix";
 import { CommandPreview } from "./CommandPreview";
 import { StreamingIndicator } from "./StreamingIndicator";
+import { type AgentPhase } from "./AgentStatusBar";
 import { AiPanel } from "./AiPanel";
 import { ProviderPalette } from "./ProviderPalette";
 import { WarpInput } from "./WarpInput";
@@ -1458,17 +1459,11 @@ function handleAiQuery(
   onCommandComplete?: (block: import("../hooks/useTerminalBlocks").TerminalBlock) => void,
   onAiError?: (err: AiError) => void,
   onWebAction?: (type: "search" | "fetch", value: string) => void,
-  /**
-   * True when the caller (agent loop) printed a "[Agent: 思考下一步...]" line
-   * just above this query. On the paths that DON'T print a following command
-   * (DONE / error), that optimistic line is now stale and must be erased —
-   * otherwise it lingers in the buffer until the next command redraws it.
-   */
-  clearThinkingLine = false,
+  onPhase?: (update: AgentPhase) => void,
+  agentStep = 0,
+  agentMaxSteps = 0,
 ) {
   void originalLine;
-  term.write("\r\x1b[2K");
-  term.write("→ asking AI...\r\n");
   setStreamText("");
   streamingRef.current = true;
   setPreview({ loading: true, visible: false, command: "", explanation: "", riskLevel: "safe" });
@@ -1476,12 +1471,8 @@ function handleAiQuery(
   invokeAiQuery(query, sessionId, locale)
     .then((resp) => {
       streamingRef.current = false;
-      term.write("\x1b[1A\x1b[2K");
-      
+
       if (resp.command === "DONE") {
-        // Cursor is directly below the optimistic thinking line (the "→ asking
-        // AI..." helper above was just cleared). No command follows, so erase it.
-        if (clearThinkingLine) term.write("\x1b[1A\x1b[2K");
         setPreview(INITIAL_PREVIEW);
         if (onDone) onDone(resp.explanation);
         return;
@@ -1508,6 +1499,7 @@ function handleAiQuery(
         // Auto-execute: write a subtle confirmation line then submit.
         const riskColor = risk === "safe" ? "\x1b[32m" : "\x1b[33m";
         term.write(`\r\n${riskColor}▶ ${resp.command}\x1b[0m\r\n`);
+        onPhase?.({ phase: "running", step: agentStep, maxSteps: agentMaxSteps, command: resp.command });
         // Pass onCommandComplete so the block hook calls it when OSC 133;D fires
         submitCommand(resp.command, onCommandComplete);
         setPreview(INITIAL_PREVIEW);
@@ -1528,9 +1520,6 @@ function handleAiQuery(
     .catch((rawErr: unknown) => {
       streamingRef.current = false;
       setStreamText("");
-      term.write("\x1b[1A\x1b[2K");
-      // Same as the DONE path: no command follows, so drop the stale thinking line.
-      if (clearThinkingLine) term.write("\x1b[1A\x1b[2K");
       const err = normalizeAiError(rawErr);
       writeRed(formatAiError(err));
 
@@ -1608,6 +1597,8 @@ interface AgentLoopParams {
   onFail: (msg: string) => void;
   /** Fires after each shell command finishes; used to mirror progress to Telegram. */
   onStepComplete?: (info: AgentStepInfo) => void;
+  /** Pushes agent lifecycle status to the React status bar (replaces term.write status lines). */
+  onPhase?: (update: AgentPhase) => void;
 }
 
 function runAgentLoop(params: AgentLoopParams) {
@@ -1635,9 +1626,7 @@ function runAgentLoop(params: AgentLoopParams) {
     ).join('\n\n')}\n\nAnalyze the result above and decide the next step to achieve the goal. If the goal is fully achieved, respond with command set to 'DONE'.${webSearchNote}`;
   }
 
-  if (stepCount > 0) {
-    term.write(`\r\n\x1b[35m${t.term_agent_thinking(stepCount + 1, maxSteps)}\x1b[0m\r\n`);
-  }
+  params.onPhase?.({ phase: "asking", step: stepCount + 1, maxSteps });
 
   // This callback fires when the command FINISHES executing in the PTY (via OSC 133;D)
   let stepResolved = false; // Set to true when either block completes OR AI returns DONE
@@ -1691,8 +1680,7 @@ function runAgentLoop(params: AgentLoopParams) {
   // Handle web search/fetch actions from the AI (intercept before PTY execution)
   const onWebAction = (type: "search" | "fetch", value: string) => {
     stepResolved = true; // prevent timeout from firing while waiting for web result
-    const label = type === "search" ? `\x1b[36m🔍 搜尋: ${value}\x1b[0m` : `\x1b[36m📄 取得: ${value}\x1b[0m`;
-    term.write(`\r\n${label}\r\n`);
+    params.onPhase?.({ phase: "web", step: stepCount + 1, maxSteps, query: value, webKind: type });
     const webPromise = type === "search" ? webSearch(value) : webFetch(value);
     webPromise
       .then((result) => {
@@ -1750,7 +1738,9 @@ function runAgentLoop(params: AgentLoopParams) {
       onFail(`AI 請求失敗: ${errMsg}`);
     },
     onWebAction,          // onWebAction: intercept web search/fetch commands
-    stepCount > 0,        // clearThinkingLine: a thinking line was printed above (line ~1614)
+    params.onPhase,       // onPhase: push running-phase status to the React status bar
+    stepCount + 1,        // agentStep (1-based)
+    maxSteps,             // agentMaxSteps
   );
 }
 
