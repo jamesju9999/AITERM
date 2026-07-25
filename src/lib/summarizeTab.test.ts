@@ -50,6 +50,9 @@ describe("summarizeCommands", () => {
       "ai_chat",
       expect.objectContaining({ sessionId: "sess-1-summary" }),
     );
+
+    const promptText = (invokeMock.mock.calls[0][1] as { messages: { content: string }[] }).messages[0].content;
+    expect(promptText).toContain("/Users/jamesju/Downloads");
   });
 
   it("returns null when invokeAiChat rejects", async () => {
@@ -62,6 +65,18 @@ describe("summarizeCommands", () => {
     invokeMock.mockResolvedValue({ content: "   ", tool_calls: [], tool_calling_unsupported: false });
     const result = await summarizeCommands([block("ls")], "sess-1", "zh-TW");
     expect(result).toBeNull();
+  });
+
+  it("builds an English prompt for the en locale", async () => {
+    invokeMock.mockResolvedValue({ content: "check local IP", tool_calls: [], tool_calling_unsupported: false });
+
+    const result = await summarizeCommands([block("ifconfig en0", { cwd: "/tmp" })], "sess-1", "en");
+
+    expect(result).toBe("check local IP");
+
+    const promptText = (invokeMock.mock.calls[0][1] as { messages: { content: string }[] }).messages[0].content;
+    expect(promptText).toContain("Working directory: /tmp");
+    expect(promptText).toContain("shell commands a user ran in one terminal session");
   });
 
   it("only includes the last 10 commands in the prompt sent to invokeAiChat", async () => {
