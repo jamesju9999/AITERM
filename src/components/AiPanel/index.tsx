@@ -198,10 +198,13 @@ export function AiPanel({
     if (chat.isStreaming || agentRunning) return;
     if (chat.messages.length === 0) return;
     if (chat.messages.length === lastSummarizedCountRef.current) return;
-    lastSummarizedCountRef.current = chat.messages.length;
+    const requestCount = chat.messages.length;
+    lastSummarizedCountRef.current = requestCount;
     summarizeConversation(chat.messages, sessionId, locale)
       .then((summary) => {
-        if (summary) onSummaryUpdate?.(summary);
+        if (summary && lastSummarizedCountRef.current === requestCount) {
+          onSummaryUpdate?.(summary);
+        }
       })
       .catch(() => {});
   }, [chat.messages, chat.isStreaming, agentRunning, sessionId, locale, onSummaryUpdate]);
@@ -455,7 +458,7 @@ Rules:
           <button
             type="button"
             className="aiterm-ai-panel-clear-btn"
-            onClick={() => { chat.clear(); setHistoryOpen(false); }}
+            onClick={() => { chat.clear(); lastSummarizedCountRef.current = 0; setHistoryOpen(false); }}
             disabled={isDisabled}
             title="清空當前對話"
           >
