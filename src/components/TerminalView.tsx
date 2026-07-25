@@ -34,7 +34,7 @@ import { webSearch, webFetch } from "../ipc/web";
 import { parseAiPrefix, parseAgentPrefix } from "./parseAiPrefix";
 import { CommandPreview } from "./CommandPreview";
 import { StreamingIndicator } from "./StreamingIndicator";
-import { type AgentPhase } from "./AgentStatusBar";
+import { AgentStatusBar, type AgentPhase } from "./AgentStatusBar";
 import { AiPanel } from "./AiPanel";
 import { ProviderPalette } from "./ProviderPalette";
 import { WarpInput } from "./WarpInput";
@@ -329,18 +329,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     setLiveRows(MIN_LIVE_ROWS);
   }, [visibleBlockCount]);
 
-  // When an agent mission ends, its final "[Agent Mission Completed]"/"⚠ stopped"
-  // message is written straight into the live pane via term.write. Unlike real PTY
-  // output that never trips the MAX_LIVE_ROWS snap in onPtyData, so at MIN_LIVE_ROWS
-  // that message lands on the last visible row and gets clipped by the frame's
-  // bottom edge. Expand the pane on the active→inactive edge so it shows in full;
-  // the next command creates a block and shrinks it back to MIN via the effect above.
-  const prevMissionActiveRef = useRef(false);
-  const missionActive = agentMission?.active ?? false;
-  useEffect(() => {
-    if (prevMissionActiveRef.current && !missionActive) setLiveRows(MAX_LIVE_ROWS);
-    prevMissionActiveRef.current = missionActive;
-  }, [missionActive]);
+  // Agent lifecycle status shown in the AgentStatusBar above the input, driven by
+  // runAgentLoop/handleAiQuery via the onPhase callback (see handleAgentPhase).
+  const [agentPhase, setAgentPhase] = useState<AgentPhase | null>(null);
+  const agentStepRef = useRef(0);
+  const handleAgentPhase = useCallback((update: AgentPhase) => {
+    if (update.phase === "asking" || update.phase === "running" || update.phase === "web") {
+      agentStepRef.current = update.step;
+    }
+    setAgentPhase(update);
+  }, []);
 
   // xterm doesn't expose cell height as public API — this reads the same internal
   // renderer field the (now-removed) old block overlay used, with a font-metrics
@@ -471,17 +469,15 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             stepCount: 0,
             maxSteps: maxAgentStepsRef.current,
             history: [],
+            onPhase: handleAgentPhase,
             onComplete: (explanation?: string) => {
-              if (explanation) {
-                termRef.current?.write(`\r\n\x1b[36m${explanation.replace(/\n/g, "\r\n")}\x1b[0m\r\n`);
-              }
-              termRef.current?.write(`\r\n\x1b[32m[Agent Mission Completed] 🎉\x1b[0m\r\n`);
+              setAgentPhase({ phase: "done", steps: agentStepRef.current });
               stopMission();
               if (sessionRef.current) writePty(sessionRef.current, "\r").catch(console.error);
               sendRemoteResponse(explanation ? `Agent: ${explanation}` : "[Agent Mission Completed] 🎉");
             },
             onFail: (msg) => {
-              termRef.current?.write(`\r\n\x1b[33m⚠ Agent stopped: ${msg}\x1b[0m\r\n`);
+              setAgentPhase({ phase: "failed", reason: msg });
               stopMission();
               if (sessionRef.current) writePty(sessionRef.current, "\r").catch(console.error);
               sendRemoteResponse(`⚠ Agent stopped: ${msg}`);
@@ -932,14 +928,15 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               stepCount: 0,
               maxSteps: maxAgentStepsRef.current,
               history: [],
+              onPhase: handleAgentPhase,
               onComplete: () => {
-                term.write(`\r\n\x1b[32m[Agent Mission Completed] 🎉\x1b[0m\r\n`);
+                setAgentPhase({ phase: "done", steps: agentStepRef.current });
                 stopMission();
                 writePty(session, "\r").catch(console.error);
                 sendRemoteResponse("[Agent Mission Completed] 🎉");
               },
               onFail: (msg) => {
-                term.write(`\r\n\x1b[33m⚠ Agent stopped: ${msg}\x1b[0m\r\n`);
+                setAgentPhase({ phase: "failed", reason: msg });
                 stopMission();
                 writePty(session, "\r").catch(console.error);
                 sendRemoteResponse(`⚠ Agent stopped: ${msg}`);
@@ -1336,13 +1333,17 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       </div>{/* end relative container */}
       {/* WarpInput (the actual typing box) stays pinned to the panel bottom regardless of
           block-list length — only the live xterm view above scrolls with block content. */}
+      {!isAlternateBuffer && agentPhase && (
+        <AgentStatusBar status={agentPhase} onDismiss={() => setAgentPhase(null)} />
+      )}
       {!isAlternateBuffer && (
-        preview.loading ? (
+        preview.loading && !agentPhase ? (
           <StreamingIndicator visible text={streamText} />
         ) : (
         <WarpInput
           sessionId={sessionId}
           onSubmit={(cmd) => {
+            setAgentPhase(null);
             const agentQuery = parseAgentPrefix(cmd);
             const aiQuery = parseAiPrefix(cmd);
             if (agentQuery !== null || aiQuery !== null) {
@@ -1371,13 +1372,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                   stepCount: 0,
                   maxSteps: maxAgentStepsRef.current,
                   history: [],
+                  onPhase: handleAgentPhase,
                   onComplete: () => {
-                    termRef.current?.write(`\r\n\x1b[32m[Agent Mission Completed] 🎉\x1b[0m\r\n`);
+                    setAgentPhase({ phase: "done", steps: agentStepRef.current });
                     stopMission();
                     if (sessionId) writePty(sessionId, "\r").catch(console.error);
                   },
                   onFail: (msg) => {
-                    termRef.current?.write(`\r\n\x1b[33m⚠ Agent stopped: ${msg}\x1b[0m\r\n`);
+                    setAgentPhase({ phase: "failed", reason: msg });
                     stopMission();
                     if (sessionId) writePty(sessionId, "\r").catch(console.error);
                   },
