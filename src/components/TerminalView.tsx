@@ -334,7 +334,11 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const [agentPhase, setAgentPhase] = useState<AgentPhase | null>(null);
   const agentStepRef = useRef(0);
   const handleAgentPhase = useCallback((update: AgentPhase) => {
-    if (update.phase === "asking" || update.phase === "running" || update.phase === "web") {
+    // Track the count of steps that actually did work (ran a command / did web),
+    // NOT the "asking" iterations — the final iteration is just the AI confirming
+    // DONE and executes nothing, so counting it would inflate the "done (N steps)"
+    // total (e.g. a one-command task would misreport as 2).
+    if (update.phase === "running" || update.phase === "web") {
       agentStepRef.current = update.step;
     }
     setAgentPhase(update);
