@@ -22,6 +22,12 @@ const aiChatCalls: { sessionId: string; messages: { role: string; content: unkno
  *  fired by the title-bar AI summary feature (see summarizeTab.ts). */
 const realChatCalls = () => aiChatCalls.filter((c) => !c.sessionId.endsWith("-summary"));
 
+// Content returned for the background "-summary" session's ai_chat call.
+// Defaults to "" (falsy → onSummaryUpdate never fires) so the other tests'
+// behavior is unaffected; a test that wants to exercise onSummaryUpdate can
+// set this before rendering.
+let summaryResponseContent = "";
+
 const listenMock = vi.fn().mockResolvedValue(() => {});
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (cmd: string, payload?: { sessionId?: string; messages?: { role: string; content: unknown }[] }) => {
@@ -35,7 +41,7 @@ vi.mock("@tauri-apps/api/core", () => ({
       // conversational turns under test, and letting the summary call steal
       // an entry desyncs which reply lands on which turn.
       if (sessionId.endsWith("-summary")) {
-        return Promise.resolve({ content: "", tool_calls: [], tool_calling_unsupported: false });
+        return Promise.resolve({ content: summaryResponseContent, tool_calls: [], tool_calling_unsupported: false });
       }
       const next = aiChatQueue.shift();
       if (next) return Promise.resolve({ tool_calls: [], tool_calling_unsupported: false, ...next });
@@ -64,6 +70,7 @@ import { AiPanel } from "./index";
 beforeEach(() => {
   aiChatQueue.length = 0;
   aiChatCalls.length = 0;
+  summaryResponseContent = "";
   listenMock.mockClear();
   listenMock.mockResolvedValue(() => {});
 });
@@ -138,6 +145,29 @@ describe("AiPanel", () => {
     await userEvent.type(textbox, "列出檔案");
     await userEvent.keyboard("{Enter}");
     await waitFor(() => expect(screen.getByText("好的")).toBeInTheDocument());
+  });
+
+  it("calls onSummaryUpdate with the trimmed summary after a turn settles", async () => {
+    aiChatQueue.push({ content: "好的" });
+    summaryResponseContent = "  除錯 OAuth 流程  ";
+    const onSummaryUpdate = vi.fn();
+    render(
+      <AiPanel
+        sessionId="s1"
+        isOpen={true}
+        providerName="Ollama"
+        onClose={vi.fn()}
+        onExecuteCommand={vi.fn()}
+        onOpenProviderPalette={vi.fn()}
+        onSummaryUpdate={onSummaryUpdate}
+      />,
+    );
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(textbox, "列出檔案");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByText("好的")).toBeInTheDocument());
+
+    await waitFor(() => expect(onSummaryUpdate).toHaveBeenCalledWith("除錯 OAuth 流程"));
   });
 
   it("🗑 New Chat button clears messages", async () => {

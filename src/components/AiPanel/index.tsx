@@ -202,6 +202,8 @@ export function AiPanel({
     lastSummarizedCountRef.current = requestCount;
     summarizeConversation(chat.messages, sessionId, locale)
       .then((summary) => {
+        // A newer request may have started while this one was in flight;
+        // only apply the result if we're still the latest.
         if (summary && lastSummarizedCountRef.current === requestCount) {
           onSummaryUpdate?.(summary);
         }
@@ -458,7 +460,7 @@ Rules:
           <button
             type="button"
             className="aiterm-ai-panel-clear-btn"
-            onClick={() => { chat.clear(); lastSummarizedCountRef.current = 0; setHistoryOpen(false); }}
+            onClick={() => { chat.clear(); lastSummarizedCountRef.current = 0; /* reset so a new conversation isn't skipped if it settles at the same message count as the cleared one */ setHistoryOpen(false); }}
             disabled={isDisabled}
             title="清空當前對話"
           >
