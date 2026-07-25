@@ -1551,7 +1551,7 @@ function handleAiQuery(
  * This does NOT rely on React useEffect — the loop is driven by OSC 133;D completion callbacks.
  */
 interface AgentStepInfo {
-  /** 1-based step index for display (matches the "[Agent: 思考下一步... (N/M)]" prompt). */
+  /** 1-based step index for display (matches the AgentStatusBar "步驟 N/M" counter). */
   stepIndex: number;
   maxSteps: number;
   command: string;
