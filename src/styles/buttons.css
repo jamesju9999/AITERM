@@ -46,6 +46,27 @@
   background: var(--bg-hover, #252540);
 }
 
+/* "On" state for an .aiterm-btn carrying the .aiterm-agent-toggle--on modifier
+ * (e.g. the terminal toolbar's Remote toggle).
+ *
+ * This has to out-specify .aiterm-btn--secondary instead of relying on source
+ * order. AiPanel's bare .aiterm-agent-toggle--on has the same one-class
+ * specificity, and the built bundle emits .aiterm-btn--secondary more than once
+ * with its last copy landing afterwards — so background, border-color and color
+ * all got overridden and only the modifier's box-shadow survived. An enabled
+ * toggle then looked identical to a disabled one, which reads as a dead button.
+ * Two classes beat one whatever the order; DatabaseView already does this via
+ * .db-view__subtab.aiterm-agent-toggle--on. */
+.aiterm-btn.aiterm-agent-toggle--on {
+  background: var(--accent-dim, rgba(168, 85, 247, 0.15));
+  border-color: var(--accent, #a855f7);
+  color: var(--accent, #a855f7);
+}
+/* Kept above .aiterm-btn--secondary:hover:not(:disabled), which is (0,3,0). */
+.aiterm-btn.aiterm-agent-toggle--on:hover:not(:disabled) {
+  background: var(--accent-dim, rgba(168, 85, 247, 0.25));
+}
+
 /* 危險／刪除 — 靜止時淡底，hover 轉實心紅底 */
 .aiterm-btn--danger {
   background: rgba(239, 68, 68, 0.12);
