@@ -122,6 +122,17 @@ export function invokeAiQuery(
 }
 
 
+/**
+ * True for a 429 whose body carries no real explanation — Anthropic returns
+ * `{"error":{"type":"rate_limit_error","message":"Error"}}` when it refuses a
+ * request for a reason it won't disclose (e.g. subscription-OAuth traffic that
+ * doesn't look like Claude Code), including on the very first call. Calling that
+ * "too many requests" points debugging at quota, which is the wrong place.
+ */
+function isOpaqueRateLimit(body?: string | null): boolean {
+  return !!body && /"message"\s*:\s*"Error"/.test(body);
+}
+
 export function formatAiError(e: AiError): string {
   const t = getT();
   switch (e.kind) {
@@ -139,9 +150,11 @@ export function formatAiError(e: AiError): string {
     case "auth_failed":
       return t.ai_err_auth_failed;
     case "rate_limit": {
-      const base = e.retry_after
-        ? t.ai_err_rate_limit_secs(Number(e.retry_after))
-        : t.ai_err_rate_limit;
+      const base = isOpaqueRateLimit(e.body)
+        ? t.ai_err_rate_limit_opaque
+        : e.retry_after
+          ? t.ai_err_rate_limit_secs(Number(e.retry_after))
+          : t.ai_err_rate_limit;
       return e.body ? `${base}\n${e.body}` : base;
     }
     case "model_error":

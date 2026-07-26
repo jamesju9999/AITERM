@@ -78,6 +78,29 @@ describe("formatAiError", () => {
     expect(msg).not.toContain("undefined");
   });
 
+  // Anthropic rejects non-Claude-Code subscription-OAuth traffic with a 429 whose
+  // message is the literal string "Error". Reading that as a quota problem sent a
+  // real debugging session down the wrong path, so it must not say "too frequent".
+  it("does not blame quota for an opaque rate_limit body", () => {
+    const msg = formatAiError({
+      kind: "rate_limit",
+      retry_after: null,
+      body: '{"type":"error","error":{"type":"rate_limit_error","message":"Error"}}',
+    });
+    expect(msg).not.toContain("過於頻繁");
+    // The raw body stays visible for diagnosis.
+    expect(msg).toContain("rate_limit_error");
+  });
+
+  it("still reports a genuine rate limit as such", () => {
+    const msg = formatAiError({
+      kind: "rate_limit",
+      retry_after: null,
+      body: '{"error":{"type":"rate_limit_error","message":"Number of requests has exceeded your rate limit"}}',
+    });
+    expect(msg).toContain("過於頻繁");
+  });
+
   it("formats model_error with reason", () => {
     const msg = formatAiError({
       kind: "model_error",

@@ -725,6 +725,7 @@ pub async fn anthropic_oauth_complete(
     let resp = client
         .post(ANTHROPIC_OAUTH_TOKEN_URL)
         .header("Content-Type", "application/json")
+        .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
         .json(&TokenReq {
             grant_type: "authorization_code",
             code: &code,
@@ -814,7 +815,8 @@ pub async fn get_anthropic_oauth_models(
         .get("https://api.anthropic.com/v1/models")
         .header("Authorization", format!("Bearer {token}"))
         .header("anthropic-version", "2023-06-01")
-        .header("anthropic-beta", "oauth-2025-04-20")
+        .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+        .header("x-app", "cli")
         .send()
         .await
         .map_err(|e| format!("Request failed: {e}"))?;

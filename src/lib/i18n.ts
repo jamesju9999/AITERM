@@ -996,6 +996,7 @@ const zhTW = {
     ai_err_auth_failed: "aiterm: API Key 驗證失敗。",
     ai_err_rate_limit_secs: (sec: number) => `aiterm: 請求過於頻繁（${sec} 秒後重試）`,
     ai_err_rate_limit: "aiterm: 請求過於頻繁，請稍後再試",
+    ai_err_rate_limit_opaque: "aiterm: 請求被 API 拒絕（標示為 rate limit，但未附原因，通常不是配額用盡）",
     ai_err_format: (reason: string) => `aiterm: AI 回傳格式錯誤（${reason}）`,
     ai_err_invalid_input: (reason: string) => `aiterm: 前端傳送的訊息格式無效（${reason}）`,
 } as const;
@@ -1893,6 +1894,7 @@ const enRaw = {
     ai_err_auth_failed: "aiterm: API Key authentication failed.",
     ai_err_rate_limit_secs: (sec: number) => `aiterm: Request limit reached (retry in ${sec} seconds)`,
     ai_err_rate_limit: "aiterm: Request limit reached, please try again later",
+    ai_err_rate_limit_opaque: "aiterm: Request rejected by the API (labelled a rate limit, but no reason given — usually not a quota problem)",
     ai_err_format: (reason: string) => `aiterm: AI response format error (${reason})`,
     ai_err_invalid_input: (reason: string) => `aiterm: Invalid message format sent by client (${reason})`,
 } as const;

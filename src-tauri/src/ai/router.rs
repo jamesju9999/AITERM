@@ -85,7 +85,7 @@ async fn do_oauth_refresh(provider_id: &str, refresh_token: &str, secrets: &Secr
     let resp = client
         .post(ANTHROPIC_OAUTH_TOKEN_URL)
         .header("Content-Type", "application/json")
-        .header("anthropic-beta", "oauth-2025-04-20")
+        .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
         .json(&RefreshReq {
             grant_type: "refresh_token",
             refresh_token,
