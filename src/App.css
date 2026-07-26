@@ -15,6 +15,8 @@
   --accent-glow: rgba(168, 85, 247, 0.25);
   --accent-gradient: linear-gradient(135deg, var(--accent), #6366f1);
   --bg-glass: rgba(15, 17, 28, 0.7);
+  /* Opaque twin of --bg-glass, for platforms where backdrop-filter doesn't land. */
+  --bg-glass-solid: #0f111c;
   --border-glass: rgba(255, 255, 255, 0.08);
   --shadow-premium: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 20px rgba(168, 85, 247, 0.15);
   --transition-smooth: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);

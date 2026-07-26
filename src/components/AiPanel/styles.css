@@ -19,6 +19,20 @@
   box-shadow: -10px 0 30px rgba(0, 0, 0, 0.4), 0 0 20px var(--accent-glow);
 }
 
+/*
+ * The glass look above needs backdrop-filter to blur the terminal behind it —
+ * without the blur, a 30%-transparent panel lets xterm.js text show through and
+ * the chat becomes hard to read. That blur lands on macOS (WKWebView) but not on
+ * Windows (WebView2, which doesn't blur the terminal's canvas), so that platform
+ * gets an opaque surface instead. Applied via a class from `navigator.platform`
+ * rather than @supports: Chromium reports backdrop-filter as supported even here.
+ */
+.aiterm-ai-panel--solid {
+  background: var(--bg-glass-solid, #0f111c);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 /* ── Resize handle ── */
 .aiterm-panel-resize-handle {
   position: absolute;

@@ -76,6 +76,46 @@ describe("AiPanel", () => {
     expect(screen.getByRole("textbox", { hidden: true })).toBeInTheDocument();
   });
 
+  // The panel's glass background is only legible when backdrop-filter blurs the
+  // terminal behind it. That works on macOS but not on Windows, where the
+  // unblurred terminal text showed through and made the chat hard to read.
+  it("keeps the translucent glass panel on non-Windows platforms", () => {
+    const { container } = render(
+      <AiPanel
+        sessionId="s1"
+        isOpen
+        providerName="Ollama (llama3)"
+        onClose={vi.fn()}
+        onExecuteCommand={vi.fn()}
+        onOpenProviderPalette={vi.fn()}
+      />,
+    );
+    expect(container.querySelector(".aiterm-ai-panel")).not.toHaveClass("aiterm-ai-panel--solid");
+  });
+
+  it("switches to an opaque panel on Windows", async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "platform");
+    Object.defineProperty(navigator, "platform", { value: "Win32", configurable: true });
+    vi.resetModules();
+    try {
+      // Re-import so the module-level platform check re-evaluates as Windows.
+      const { AiPanel: WinAiPanel } = await import("./index");
+      const { container } = render(
+        <WinAiPanel
+          sessionId="s1"
+          isOpen
+          providerName="Ollama (llama3)"
+          onClose={vi.fn()}
+          onExecuteCommand={vi.fn()}
+          onOpenProviderPalette={vi.fn()}
+        />,
+      );
+      expect(container.querySelector(".aiterm-ai-panel")).toHaveClass("aiterm-ai-panel--solid");
+    } finally {
+      if (original) Object.defineProperty(navigator, "platform", original);
+    }
+  });
+
   it("autofocuses the textarea when transitioning to open", () => {
     render(
       <AiPanel

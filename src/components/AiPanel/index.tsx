@@ -17,6 +17,8 @@ import { MessageList } from "./MessageList";
 import { ZapIcon, WrenchIcon } from "../Icons";
 import "./styles.css";
 
+const IS_WINDOWS = navigator.platform.toLowerCase().startsWith("win");
+
 const MIN_WIDTH = 280;
 const MAX_WIDTH_RATIO = 0.75;
 const STORAGE_WIDTH_KEY = "aiterm-panel-width";
@@ -390,7 +392,12 @@ Rules:
     }
   };
 
-  const panelClass = isOpen ? "aiterm-ai-panel" : "aiterm-ai-panel aiterm-ai-panel-hidden";
+  const panelClass = [
+    "aiterm-ai-panel",
+    isOpen ? "" : "aiterm-ai-panel-hidden",
+    // Windows can't blur the terminal behind the glass panel — see styles.css.
+    IS_WINDOWS ? "aiterm-ai-panel--solid" : "",
+  ].filter(Boolean).join(" ");
   const isDisabled = chat.isStreaming || agentRunning;
 
   return (
