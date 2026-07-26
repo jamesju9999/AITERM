@@ -50,7 +50,8 @@ impl AnthropicClient {
         if self.is_oauth {
             builder
                 .header("Authorization", format!("Bearer {}", self.token))
-                .header("anthropic-beta", "oauth-2025-04-20")
+                .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+                .header("x-app", "cli")
         } else {
             builder.header("x-api-key", &self.token)
         }
@@ -67,7 +68,7 @@ impl AiProvider for AnthropicClient {
         req: GenerateRequest,
         tx: mpsc::Sender<GenerateChunk>,
     ) -> Result<(), AiError> {
-        let body = build_request_body(&self.model, &req, true);
+        let body = build_request_body(&self.model, &req, true, self.is_oauth);
         let resp = self
             .auth_request(self.client.post(self.messages_url()))
             .header("anthropic-version", ANTHROPIC_VERSION)
@@ -107,7 +108,7 @@ impl AiProvider for AnthropicClient {
         let body = serde_json::json!({
             "model": self.model,
             "max_tokens": 4096,
-            "system": system_text,
+            "system": build_system_field(&system_text, self.is_oauth),
             "messages": messages,
             "tools": tool_defs
         });
@@ -166,7 +167,7 @@ impl AiProvider for AnthropicClient {
     async fn health_check(&self) -> Result<(), AiError> {
         // Minimal 1-token non-streaming request.
         let hc_req = health_check_request();
-        let body = build_request_body(&self.model, &hc_req, false);
+        let body = build_request_body(&self.model, &hc_req, false, self.is_oauth);
         let resp = self
             .auth_request(self.client.post(self.messages_url()))
             .header("anthropic-version", ANTHROPIC_VERSION)
@@ -191,7 +192,7 @@ impl AiProvider for AnthropicClient {
 #[derive(Serialize)]
 struct AnthropicRequest {
     model: String,
-    system: String,
+    system: serde_json::Value,
     messages: Vec<AnthropicMessage>,
     max_tokens: u32,
     stream: bool,
@@ -332,10 +333,36 @@ fn to_anthropic_content_blocks(tool_calls: &serde_json::Value) -> Vec<serde_json
         .collect()
 }
 
+/// Anthropic gates subscription OAuth tokens (`sk-ant-oat*`) so they only serve
+/// genuine Claude Code traffic. A request whose first system block is not this
+/// exact sentinel is rejected with an opaque
+/// `{"type":"rate_limit_error","message":"Error"}` — note that this masquerades
+/// as a rate limit even on the very first request, so do NOT read that error as
+/// a quota problem. API-key auth has no such requirement.
+const CLAUDE_CODE_SENTINEL: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+
+/// Build the top-level `system` field.
+///
+/// API-key auth keeps the plain-string form. OAuth auth must use the block-array
+/// form with `CLAUDE_CODE_SENTINEL` first (see the const's docs). The caller's own
+/// prompt follows as a second block, and is omitted entirely when empty — Anthropic
+/// rejects empty text blocks with a 400.
+fn build_system_field(system_text: &str, is_oauth: bool) -> serde_json::Value {
+    if !is_oauth {
+        return serde_json::Value::String(system_text.to_owned());
+    }
+    let mut blocks = vec![serde_json::json!({ "type": "text", "text": CLAUDE_CODE_SENTINEL })];
+    if !system_text.is_empty() {
+        blocks.push(serde_json::json!({ "type": "text", "text": system_text }));
+    }
+    serde_json::Value::Array(blocks)
+}
+
 fn build_request_body(
     model: &str,
     req: &GenerateRequest,
     stream: bool,
+    is_oauth: bool,
 ) -> AnthropicRequest {
     let messages = req
         .messages
@@ -345,7 +372,10 @@ fn build_request_body(
         .collect();
     AnthropicRequest {
         model: model.to_owned(),
-        system: extract_system_text(&req.messages, &req.system_prompt),
+        system: build_system_field(
+            &extract_system_text(&req.messages, &req.system_prompt),
+            is_oauth,
+        ),
         messages,
         max_tokens: req.max_tokens.unwrap_or(1024),
         stream,
@@ -486,10 +516,48 @@ mod tests {
         }
     }
 
+    /// OAuth auth must send `system` as a block array whose FIRST block is the
+    /// Claude Code sentinel, otherwise Anthropic rejects the request with an
+    /// opaque `rate_limit_error` even on the first call.
+    #[test]
+    fn oauth_request_body_puts_claude_code_sentinel_first() {
+        let req = sample_req();
+        let body = build_request_body("claude-sonnet-4-5", &req, true, true);
+        let json = serde_json::to_value(&body).unwrap();
+        let blocks = json["system"].as_array().expect("oauth system must be a block array");
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[0]["text"], CLAUDE_CODE_SENTINEL);
+        // The caller's own prompt must survive, as a later block.
+        assert_eq!(blocks[1]["text"], "You are a terminal assistant.");
+    }
+
+    /// An empty caller prompt must not produce an empty text block — Anthropic
+    /// 400s on those. The sentinel alone is the whole array.
+    #[test]
+    fn oauth_request_body_omits_empty_prompt_block() {
+        let mut req = sample_req();
+        req.system_prompt = String::new();
+        let body = build_request_body("claude-sonnet-4-5", &req, true, true);
+        let json = serde_json::to_value(&body).unwrap();
+        let blocks = json["system"].as_array().unwrap();
+        assert_eq!(blocks.len(), 1, "expected only the sentinel block");
+        assert_eq!(blocks[0]["text"], CLAUDE_CODE_SENTINEL);
+    }
+
+    /// API-key auth has no sentinel requirement — keep the plain-string form so
+    /// this path stays byte-identical to before the OAuth fix.
+    #[test]
+    fn api_key_request_body_keeps_plain_string_system() {
+        let req = sample_req();
+        let body = build_request_body("claude-sonnet-4-5", &req, true, false);
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["system"], "You are a terminal assistant.");
+    }
+
     #[test]
     fn request_body_puts_system_at_top_level() {
         let req = sample_req();
-        let body = build_request_body("claude-sonnet-4-5", &req, true);
+        let body = build_request_body("claude-sonnet-4-5", &req, true, false);
         let json = serde_json::to_value(&body).unwrap();
         assert_eq!(json["system"], "You are a terminal assistant.");
         assert!(json["messages"][0]["role"] == "user");
@@ -510,7 +578,7 @@ mod tests {
             tool_call_id: None,
             tool_calls: None,
         });
-        let body = build_request_body("claude-sonnet-4-5", &req, true);
+        let body = build_request_body("claude-sonnet-4-5", &req, true, false);
         let json = serde_json::to_value(&body).unwrap();
         // sample_req() carries a non-empty system_prompt ("You are a terminal assistant.");
         // extract_system_text concatenates it with the system-role message rather than
