@@ -114,6 +114,122 @@ fn extract_codex_account_id(id_token: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+const ANTIGRAVITY_BOOTSTRAP_BASE_URL: &str = "https://cloudcode-pa.googleapis.com";
+
+/// `loadCodeAssist`'s response nests the project id as either a plain string
+/// or an `{"id": "..."}` object under `cloudaicompanionProject` — tolerate
+/// both. Empty strings count as "absent" (a fresh account with no project
+/// yet still returns the key, just empty).
+fn extract_cloudaicompanion_project_id(json: &serde_json::Value) -> Option<String> {
+    let field = json.get("cloudaicompanionProject")?;
+    let id = field
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| field.get("id").and_then(|v| v.as_str()).map(str::to_string))?;
+    if id.is_empty() { None } else { Some(id) }
+}
+
+fn antigravity_headers(builder: reqwest::RequestBuilder, access_token: &str) -> reqwest::RequestBuilder {
+    builder
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .header("User-Agent", format!("antigravity/ide/{} darwin/arm64", crate::ai::antigravity::ANTIGRAVITY_IDE_VERSION))
+        .bearer_auth(access_token)
+}
+
+/// Onboards a Google account for Antigravity/Cloud Code Assist and returns
+/// its Cloud Code project id. Called once right after OAuth token exchange.
+///
+/// Sequence (ported from OmniRoute's `postExchangeAntigravity`):
+/// 1. Call `loadCodeAssist`. If it already returns a project id, done.
+/// 2. If not (brand-new Google account with no Cloud Code project yet), call
+///    `onboardUser` and poll up to 10 times (5s apart, ~50s total) until it
+///    reports `done: true`, then retry `loadCodeAssist` once to pick up the
+///    freshly-provisioned project.
+async fn perform_antigravity_onboarding(access_token: &str) -> Result<String, String> {
+    let client = reqwest::Client::new();
+
+    let load_body = serde_json::json!({ "metadata": { "ideType": "ANTIGRAVITY" } });
+    let resp = antigravity_headers(
+        client.post(format!("{ANTIGRAVITY_BOOTSTRAP_BASE_URL}/v1internal:loadCodeAssist")),
+        access_token,
+    )
+    .json(&load_body)
+    .send()
+    .await
+    .map_err(|e| format!("loadCodeAssist request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("loadCodeAssist failed (HTTP {status}): {body}"));
+    }
+    let load_json: serde_json::Value = resp.json().await.map_err(|e| format!("loadCodeAssist parse error: {e}"))?;
+
+    if let Some(project_id) = extract_cloudaicompanion_project_id(&load_json) {
+        return Ok(project_id);
+    }
+
+    // No project yet — onboard, then retry loadCodeAssist once.
+    let tier_id = load_json
+        .get("allowedTiers")
+        .and_then(|t| t.as_array())
+        .and_then(|arr| arr.iter().find(|t| t.get("isDefault").and_then(|d| d.as_bool()).unwrap_or(false)))
+        .and_then(|t| t.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("legacy-tier")
+        .to_string();
+
+    let onboard_body = serde_json::json!({
+        "tierId": tier_id,
+        "metadata": { "ideType": "ANTIGRAVITY" },
+    });
+
+    for _ in 0..10 {
+        let resp = antigravity_headers(
+            client.post(format!("{ANTIGRAVITY_BOOTSTRAP_BASE_URL}/v1internal:onboardUser")),
+            access_token,
+        )
+        .json(&onboard_body)
+        .send()
+        .await
+        .map_err(|e| format!("onboardUser request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("onboardUser failed (HTTP {status}): {body}"));
+        }
+        let onboard_json: serde_json::Value = resp.json().await.map_err(|e| format!("onboardUser parse error: {e}"))?;
+        if onboard_json.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
+
+    let resp = antigravity_headers(
+        client.post(format!("{ANTIGRAVITY_BOOTSTRAP_BASE_URL}/v1internal:loadCodeAssist")),
+        access_token,
+    )
+    .json(&load_body)
+    .send()
+    .await
+    .map_err(|e| format!("loadCodeAssist (post-onboard) request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("loadCodeAssist (post-onboard) failed (HTTP {status}): {body}"));
+    }
+    let load_json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("loadCodeAssist (post-onboard) parse error: {e}"))?;
+
+    extract_cloudaicompanion_project_id(&load_json)
+        .ok_or_else(|| "Onboarding completed but no Cloud Code project id was returned".to_string())
+}
+
 #[derive(Deserialize)]
 struct AnthropicTokenResponse {
     access_token: String,
@@ -1637,5 +1753,34 @@ mod codex_models_tests {
     fn parse_codex_models_response_deduplicates_ids() {
         let json = serde_json::json!({"models": [{"slug": "a"}, {"id": "a"}, {"slug": "b"}]});
         assert_eq!(parse_codex_models_response(&json), vec!["a".to_string(), "b".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod antigravity_onboarding_tests {
+    use super::*;
+
+    #[test]
+    fn extract_project_id_reads_plain_string_field() {
+        let json = serde_json::json!({"cloudaicompanionProject": "proj-abc"});
+        assert_eq!(extract_cloudaicompanion_project_id(&json), Some("proj-abc".to_string()));
+    }
+
+    #[test]
+    fn extract_project_id_reads_nested_id_field() {
+        let json = serde_json::json!({"cloudaicompanionProject": {"id": "proj-xyz"}});
+        assert_eq!(extract_cloudaicompanion_project_id(&json), Some("proj-xyz".to_string()));
+    }
+
+    #[test]
+    fn extract_project_id_returns_none_when_absent() {
+        let json = serde_json::json!({"allowedTiers": []});
+        assert_eq!(extract_cloudaicompanion_project_id(&json), None);
+    }
+
+    #[test]
+    fn extract_project_id_returns_none_for_empty_string() {
+        let json = serde_json::json!({"cloudaicompanionProject": ""});
+        assert_eq!(extract_cloudaicompanion_project_id(&json), None);
     }
 }
