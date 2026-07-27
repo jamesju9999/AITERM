@@ -752,6 +752,7 @@ const zhTW = {
     settings_provider_btn_cancel: "取消",
     settings_provider_btn_open_auth: "開啟授權頁面",
     settings_provider_oauth_id_required: "請先輸入 Provider ID 後再進行 OAuth 驗證",
+    settings_provider_oauth_onboarding_wait: "登入中…（首次使用可能需要最多 45 秒準備 Google Cloud 專案）",
     settings_provider_model_placeholder: "選擇或輸入模型名稱",
     settings_provider_model_loading_placeholder: "載入模型清單中…",
 
@@ -1650,6 +1651,7 @@ const enRaw = {
     settings_provider_btn_cancel: "Cancel",
     settings_provider_btn_open_auth: "Open Authorization Page",
     settings_provider_oauth_id_required: "Please enter Provider ID before OAuth authentication",
+    settings_provider_oauth_onboarding_wait: "Signing in… (first-time setup may take up to 45s to prepare your Google Cloud project)",
     settings_provider_model_placeholder: "Select or enter model name",
     settings_provider_model_loading_placeholder: "Loading model list...",
 

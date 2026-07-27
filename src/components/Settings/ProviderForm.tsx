@@ -910,7 +910,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         {(providerType === "ollama" ||
           providerType === "openai-compatible" ||
           providerType === "github-copilot" ||
-          providerType === "google-ai" ||
+          (providerType === "google-ai" && googleAuthMethod !== "oauth") ||
           providerType === "anthropic-compatible") && (
           <div className="form-group">
             <label>{t.provider_base_url}</label>
