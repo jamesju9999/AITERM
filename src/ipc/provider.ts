@@ -176,6 +176,18 @@ export const getKimiModels = (apiKey: string): Promise<string[]> =>
 export const getKimiModelsByProvider = (id: string): Promise<string[]> =>
   invoke("get_kimi_models_by_provider", { id });
 
+/** Start Codex OAuth: opens browser, waits for the localhost:1455 callback, exchanges tokens. Blocks until done. */
+export const codexOAuthLogin = (providerId: string): Promise<void> =>
+  invoke("codex_oauth_login", { providerId });
+
+/** Log out from Codex OAuth (clears stored tokens + cached ChatGPT account id). */
+export const codexOAuthLogout = (providerId: string): Promise<void> =>
+  invoke("codex_oauth_logout", { providerId });
+
+/** Fetch available Codex models using the stored OAuth token. */
+export const getCodexOAuthModels = (providerId: string): Promise<string[]> =>
+  invoke("get_codex_oauth_models", { providerId });
+
 // ── Display helpers ───────────────────────────────────────────────────────────
 
 export const PROVIDER_TYPE_LABELS: Record<ProviderType, string> = {
@@ -190,6 +202,7 @@ export const PROVIDER_TYPE_LABELS: Record<ProviderType, string> = {
   deepseek: "DeepSeek",
   kimi: "Kimi (Moonshot)",
   "anthropic-compatible": "Anthropic-Compatible",
+  codex: "Codex (ChatGPT)",
 };
 
 export const DEFAULT_MODELS: Record<ProviderType, string> = {
@@ -204,6 +217,7 @@ export const DEFAULT_MODELS: Record<ProviderType, string> = {
   deepseek: "deepseek-chat",
   kimi: "kimi-latest",
   "anthropic-compatible": "",
+  codex: "gpt-5.1-codex",
 };
 
 export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
@@ -218,6 +232,7 @@ export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   deepseek: "https://api.deepseek.com/v1",
   kimi: "https://api.moonshot.ai/v1",
   "anthropic-compatible": "",
+  codex: "",
 };
 
 /** OpenAI-compatible quick-pick presets shown in the form — for servers with
