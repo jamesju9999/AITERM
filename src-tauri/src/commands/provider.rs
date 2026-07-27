@@ -442,42 +442,20 @@ pub async fn test_provider(
         return Ok("ok".into());
     }
 
-    // Google AI OAuth: validate by checking token info, then verify Vertex AI project access.
-    if provider_cfg.provider_type == ProviderType::GoogleAi
-        && provider_cfg.auth_method.as_deref() == Some("oauth")
-    {
-        let token = secrets
-            .get(&id)
-            .map_err(|e| AiError::Network { message: format!("keychain read failed: {e}") })?
-            .filter(|v| !v.trim().is_empty())
-            .ok_or(AiError::NotConfigured)?;
-
-        // Verify the token is valid via tokeninfo (no AI quota consumed).
-        let client = reqwest::Client::new();
-        let info_resp = client
-            .get("https://oauth2.googleapis.com/tokeninfo")
-            .query(&[("access_token", token.as_str())])
-            .send()
-            .await
-            .map_err(|e| AiError::Network { message: e.to_string() })?;
-        let info_status = info_resp.status();
-        if !info_status.is_success() {
-            let body = info_resp.text().await.unwrap_or_default();
-            return Err(AiError::Network {
-                message: format!("Token 已過期或無效，請重新登入 ({})", info_status.as_u16()),
-            });
-        }
-        drop(info_resp);
-
-        let base = provider_cfg.base_url.as_deref().unwrap_or("").trim_end_matches('/');
-        if base.is_empty() {
-            return Err(AiError::Network {
-                message: "請填入 GCP Project ID 並儲存後再測試".into(),
-            });
-        }
-
-        return Ok("ok".into());
-    }
+    // NOTE: Google AI OAuth deliberately has NO special case here — it falls
+    // through to the generic path below, same as Anthropic/Codex OAuth.
+    //
+    // There used to be one, written for an earlier design where the user
+    // hand-entered a GCP project id into `base_url`. That design is gone: the
+    // project id is now resolved automatically by `perform_antigravity_onboarding`
+    // at login and stored under `{id}:project_id`, and the base_url field is
+    // hidden entirely in OAuth mode. The old check had degenerated into a
+    // false positive — it verified the token via `tokeninfo` and then merely
+    // asserted `base_url` was non-empty (which the form auto-populates), so it
+    // returned "ok" without ever exercising the project id or the real
+    // endpoint. `AntigravityClient::health_check()` does the correct thing:
+    // one minimal streamGenerateContent call validating token + project id
+    // together against the actual backend.
 
     let router = AiRouter::new(config.inner().clone(), secrets.inner().clone());
     let provider = router.resolve_by_id(&id).await?;

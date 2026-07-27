@@ -26,7 +26,14 @@ const ANTHROPIC_OAUTH_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/to
 const ANTHROPIC_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
 const GOOGLE_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const GOOGLE_OAUTH_CLIENT_ID: &str = "";
+// MUST stay in sync with the same-named constants in `commands/provider.rs`,
+// which the initial login uses. This copy is what `do_google_oauth_refresh`
+// below sends. They were briefly out of sync during development (login had
+// the real id here while this still held ""), which produced a nasty failure
+// mode: login succeeded, then every background refresh silently 400'd and
+// was swallowed by the warn-and-reuse-old-token fallback, so the session
+// only died ~an hour later with no signal pointing at the real cause.
+const GOOGLE_OAUTH_CLIENT_ID: &str = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
 const GOOGLE_OAUTH_CLIENT_SECRET: &str = "";
 
 const CODEX_OAUTH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
