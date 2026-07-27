@@ -38,6 +38,9 @@ import {
   codexOAuthLogin,
   codexOAuthLogout,
   getCodexOAuthModels,
+  googleOAuthLogin,
+  googleOAuthLogout,
+  getGoogleOAuthModels,
 } from "../../ipc/provider";
 import type { ProviderType } from "../../ipc/config";
 import { useLocale } from "../../contexts/LocaleContext";
@@ -117,6 +120,15 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
   const [codexOAuthLoggedIn, setCodexOAuthLoggedIn] = useState(
     !!(existing?.provider_type === "codex" && existing?.auth_method === "oauth"),
   );
+  const [googleAuthMethod, setGoogleAuthMethod] = useState<"api_key" | "oauth">(
+    existing?.provider_type === "google-ai" && existing?.auth_method === "oauth" ? "oauth" : "api_key",
+  );
+  const [googleOAuthLoggedIn, setGoogleOAuthLoggedIn] = useState(
+    !!(existing?.provider_type === "google-ai" && existing?.auth_method === "oauth"),
+  );
+  const [googleOAuthModels, setGoogleOAuthModels] = useState<string[]>([]);
+  const [googleOAuthModelsLoading, setGoogleOAuthModelsLoading] = useState(false);
+  const [onboardingWait, setOnboardingWait] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [authing, setAuthing] = useState(false);
@@ -373,6 +385,21 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerType, codexOAuthLoggedIn, id]);
 
+  useEffect(() => {
+    if (providerType !== "google-ai" || googleAuthMethod !== "oauth" || !googleOAuthLoggedIn) return;
+    const pid = id.trim();
+    if (!pid) return;
+    setGoogleOAuthModelsLoading(true);
+    getGoogleOAuthModels(pid)
+      .then((models) => {
+        setGoogleOAuthModels(models);
+        if (models.length > 0 && !models.includes(model)) setModel(models[0]);
+      })
+      .catch(() => setGoogleOAuthModels([]))
+      .finally(() => setGoogleOAuthModelsLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerType, googleAuthMethod, googleOAuthLoggedIn, id]);
+
   const handleSave = async () => {
     setError(null);
     if (!id.trim()) { setError(t.err_id_empty); return; }
@@ -407,6 +434,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         auth_method:
           providerType === "anthropic" ? anthropicAuthMethod
           : providerType === "codex" && codexOAuthLoggedIn ? "oauth"
+          : providerType === "google-ai" && googleAuthMethod === "oauth" && googleOAuthLoggedIn ? "oauth"
           : null,
       });
     } catch (e: unknown) {
@@ -727,7 +755,111 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
             </div>
           )}
 
-          {providerType !== "github-copilot" && providerType !== "anthropic" && providerType !== "codex" && (
+          {providerType === "google-ai" && (
+            <div className="form-group">
+              <label>{t.settings_provider_auth_type}</label>
+              <div className="anthropic-auth-tabs">
+                <button
+                  type="button"
+                  className={`auth-tab ${googleAuthMethod === "api_key" ? "active" : ""}`}
+                  onClick={() => { setGoogleAuthMethod("api_key"); setAuthStatus(null); }}
+                >
+                  {t.settings_provider_auth_api_key}
+                </button>
+                <button
+                  type="button"
+                  className={`auth-tab ${googleAuthMethod === "oauth" ? "active" : ""}`}
+                  onClick={() => { setGoogleAuthMethod("oauth"); setApiKey(""); setAuthStatus(null); }}
+                >
+                  {t.settings_provider_auth_oauth("Google")}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {providerType === "google-ai" && googleAuthMethod === "api_key" && (
+            <div className="form-group">
+              <label>{t.provider_api_key}</label>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={isEdit ? t.provider_api_key_placeholder_edit : t.provider_api_key_placeholder_new}
+                autoComplete="off"
+              />
+            </div>
+          )}
+
+          {providerType === "google-ai" && googleAuthMethod === "oauth" && (
+            <div className="form-group">
+              <label>{t.settings_provider_auth_oauth("")}</label>
+              {googleOAuthLoggedIn ? (
+                <div className="anthropic-oauth-done">
+                  <span className="anthropic-oauth-ok">{t.settings_provider_oauth_ok}</span>
+                  <button
+                    type="button"
+                    className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                    disabled={saving}
+                    onClick={async () => {
+                      if (!isEdit) return;
+                      try {
+                        await googleOAuthLogout(id.trim());
+                        setGoogleOAuthLoggedIn(false);
+                        setGoogleOAuthModels([]);
+                      } catch (e: unknown) {
+                        setAuthStatus(String(e));
+                      }
+                    }}
+                  >
+                    {t.settings_provider_oauth_logout}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="aiterm-btn aiterm-btn--primary"
+                    disabled={!id.trim() || authing}
+                    onClick={async () => {
+                      setAuthing(true);
+                      setOnboardingWait(false);
+                      setAuthStatus(null);
+                      // Onboarding a brand-new Google account can take up to
+                      // ~45s (loadCodeAssist -> onboardUser polling); switch
+                      // to a longer-wait message if login is still running
+                      // after 5s so the user doesn't think it's stuck.
+                      const onboardingHintTimer = setTimeout(() => setOnboardingWait(true), 5000);
+                      try {
+                        await googleOAuthLogin(id.trim());
+                        setGoogleOAuthLoggedIn(true);
+                        setAuthStatus(t.settings_provider_oauth_success);
+                      } catch (e: unknown) {
+                        setAuthStatus(t.settings_provider_oauth_err(String(e)));
+                      } finally {
+                        clearTimeout(onboardingHintTimer);
+                        setOnboardingWait(false);
+                        setAuthing(false);
+                      }
+                    }}
+                  >
+                    {authing
+                      ? (onboardingWait ? t.settings_provider_oauth_onboarding_wait : t.provider_auth_running)
+                      : t.settings_provider_btn_open_auth}
+                  </button>
+                  {!id.trim() && (
+                    <div className="form-hint">{t.settings_provider_oauth_id_required}</div>
+                  )}
+                </>
+              )}
+              {authStatus && (
+                <div className={`form-hint ${authStatus.startsWith("錯誤") || authStatus.startsWith("Error") ? "form-hint--error" : ""}`}>
+                  {authStatus}
+                </div>
+              )}
+            </div>
+          )}
+
+          {providerType !== "github-copilot" && providerType !== "anthropic" && providerType !== "codex" && providerType !== "google-ai" && (
             <div className="form-group">
               <label>
                 {providerType === "openai-compatible" ? t.provider_api_key_optional : t.provider_api_key}
@@ -858,6 +990,19 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
                 onChange={(e) => setModel(e.target.value)}
                 placeholder={DEFAULT_MODELS[providerType]}
               />
+            )
+          ) : providerType === "google-ai" && googleAuthMethod === "oauth" && googleOAuthLoggedIn ? (
+            googleOAuthModelsLoading ? (
+              <input type="text" value={t.provider_model_loading} disabled />
+            ) : (
+              <select value={model} onChange={(e) => setModel(e.target.value)}>
+                {!googleOAuthModels.includes(model) && model && (
+                  <option value={model}>{model}</option>
+                )}
+                {googleOAuthModels.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
             )
           ) : providerType === "google-ai" ? (
             googleAiLoading ? (
