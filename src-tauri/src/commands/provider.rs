@@ -1548,9 +1548,19 @@ pub async fn get_codex_oauth_models(
     let models = match builder.send().await {
         Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
             Ok(json) => parse_codex_models_response(&json),
-            Err(_) => vec![],
+            Err(_) => {
+                log::warn!("Codex /models response was not valid JSON, using fallback list");
+                vec![]
+            }
         },
-        _ => vec![],
+        Ok(resp) => {
+            log::warn!("Codex /models returned {}, using fallback list", resp.status());
+            vec![]
+        }
+        Err(e) => {
+            log::warn!("Codex /models request failed: {e}");
+            vec![]
+        }
     };
 
     if models.is_empty() {
@@ -1592,7 +1602,7 @@ mod codex_models_tests {
 
     #[test]
     fn parse_codex_models_response_handles_models_key() {
-        let json = serde_json::json!({"models": [{"slug": "gpt-5.1-codex"}, {"id": "gpt-5.1-codex-high"}]});
+        let json = serde_json::json!({"models": [{"id": "gpt-5.1-codex-high"}, {"slug": "gpt-5.1-codex"}]});
         assert_eq!(
             parse_codex_models_response(&json),
             vec!["gpt-5.1-codex".to_string(), "gpt-5.1-codex-high".to_string()]
@@ -1621,5 +1631,11 @@ mod codex_models_tests {
     fn parse_codex_models_response_skips_items_with_no_id_field() {
         let json = serde_json::json!({"models": [{"display_name": "no id here"}]});
         assert!(parse_codex_models_response(&json).is_empty());
+    }
+
+    #[test]
+    fn parse_codex_models_response_deduplicates_ids() {
+        let json = serde_json::json!({"models": [{"slug": "a"}, {"id": "a"}, {"slug": "b"}]});
+        assert_eq!(parse_codex_models_response(&json), vec!["a".to_string(), "b".to_string()]);
     }
 }
