@@ -404,7 +404,10 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         model: model.trim(),
         supports_json_mode: supportsJsonMode,
         api_key: apiKey.trim() || null,
-        auth_method: providerType === "anthropic" ? anthropicAuthMethod : null,
+        auth_method:
+          providerType === "anthropic" ? anthropicAuthMethod
+          : providerType === "codex" && codexOAuthLoggedIn ? "oauth"
+          : null,
       });
     } catch (e: unknown) {
       setError(typeof e === "string" ? e : t.err_save_failed);
