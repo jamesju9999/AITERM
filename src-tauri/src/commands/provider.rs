@@ -75,6 +75,28 @@ fn gen_state() -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
+/// Decodes a JWT's payload (middle segment) without verifying the signature —
+/// safe here because the token came directly from the OAuth token endpoint
+/// over HTTPS; this only reads a claim, it doesn't trust the JWT as a
+/// standalone credential.
+fn decode_jwt_payload(jwt: &str) -> Option<serde_json::Value> {
+    let payload_b64 = jwt.split('.').nth(1)?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Extracts the `chatgpt_account_id` claim OpenAI nests under the
+/// `https://api.openai.com/auth` custom claim of a Codex id_token. Used to
+/// populate the `chatgpt-account-id` header required on Codex API requests.
+fn extract_codex_account_id(id_token: &str) -> Option<String> {
+    let payload = decode_jwt_payload(id_token)?;
+    payload
+        .get("https://api.openai.com/auth")?
+        .get("chatgpt_account_id")?
+        .as_str()
+        .map(str::to_string)
+}
+
 #[derive(Deserialize)]
 struct AnthropicTokenResponse {
     access_token: String,
@@ -1285,4 +1307,30 @@ pub async fn get_kimi_models_by_provider(
         key.trim(),
     )
     .await
+}
+
+#[cfg(test)]
+mod codex_jwt_tests {
+    use super::*;
+
+    #[test]
+    fn extract_codex_account_id_reads_nested_auth_claim() {
+        let payload = URL_SAFE_NO_PAD.encode(
+            br#"{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-abc123"}}"#,
+        );
+        let jwt = format!("header.{payload}.signature");
+        assert_eq!(extract_codex_account_id(&jwt), Some("acct-abc123".to_string()));
+    }
+
+    #[test]
+    fn extract_codex_account_id_returns_none_when_claim_missing() {
+        let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"user-1"}"#);
+        let jwt = format!("header.{payload}.signature");
+        assert_eq!(extract_codex_account_id(&jwt), None);
+    }
+
+    #[test]
+    fn extract_codex_account_id_returns_none_for_malformed_jwt() {
+        assert_eq!(extract_codex_account_id("not-a-jwt"), None);
+    }
 }
