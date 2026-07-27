@@ -1548,8 +1548,8 @@ pub async fn get_codex_oauth_models(
     let models = match builder.send().await {
         Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
             Ok(json) => parse_codex_models_response(&json),
-            Err(_) => {
-                log::warn!("Codex /models response was not valid JSON, using fallback list");
+            Err(e) => {
+                log::warn!("Codex /models response was not valid JSON, using fallback list ({e})");
                 vec![]
             }
         },

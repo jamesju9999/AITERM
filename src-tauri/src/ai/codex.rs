@@ -89,9 +89,19 @@ pub(crate) fn build_request_body(model: &str, req: &GenerateRequest) -> serde_js
                 serde_json::Value::String(s) => s.clone(),
                 other => other.to_string(),
             };
+            // The Responses API rejects `role: "system"` input items outright
+            // ("System messages are not allowed") — unlike Chat Completions,
+            // which accepts a system message natively. Callers that inject a
+            // system-role message directly into history (e.g. the Agent Mode
+            // loop in AiPanel/index.tsx, which sends `{role:"system",...}` as
+            // its own orchestration prompt, separate from `system_prompt`
+            // below) would otherwise make every Codex request fail with a
+            // silent 400. Remap to "developer", the Responses API's
+            // equivalent role for system-level instructions mid-conversation.
+            let role = if m.role == "system" { "developer" } else { m.role.as_str() };
             serde_json::json!({
                 "type": "message",
-                "role": m.role,
+                "role": role,
                 "content": [{ "type": "input_text", "text": text }]
             })
         })
@@ -309,6 +319,28 @@ mod tests {
         let r = req("sys", vec![]);
         let body = build_request_body("gpt-5.1-codex-high", &r);
         assert_eq!(body["model"], "gpt-5.1-codex-high");
+    }
+
+    /// Regression test: the Agent Mode loop (AiPanel/index.tsx) injects its own
+    /// orchestration prompt as `{role:"system",...}` directly into the message
+    /// history (separate from GenerateRequest.system_prompt). Codex's Responses
+    /// API rejects any input item with role "system" outright ("System messages
+    /// are not allowed"), which silently broke every Codex request made from
+    /// Agent Mode. Must be remapped to "developer".
+    #[test]
+    fn system_role_message_is_remapped_to_developer() {
+        let r = req(
+            "sys",
+            vec![
+                ChatMessage { role: "system".into(), content: serde_json::json!("orchestration prompt"), tool_call_id: None, tool_calls: None },
+                ChatMessage { role: "user".into(), content: serde_json::json!("go"), tool_call_id: None, tool_calls: None },
+            ],
+        );
+        let body = build_request_body("gpt-5.1-codex", &r);
+        let input = body["input"].as_array().unwrap();
+        assert_eq!(input[0]["role"], "developer");
+        assert_eq!(input[0]["content"][0]["text"], "orchestration prompt");
+        assert_eq!(input[1]["role"], "user", "other roles must pass through unchanged");
     }
 
     #[test]
