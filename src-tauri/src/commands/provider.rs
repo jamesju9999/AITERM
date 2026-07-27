@@ -1301,6 +1301,7 @@ pub async fn get_google_oauth_models(
     };
 
     if models.is_empty() {
+        log::warn!("Antigravity fetchAvailableModels returned no recognizable model ids, using fallback list");
         Ok(antigravity_known_models())
     } else {
         Ok(models)
