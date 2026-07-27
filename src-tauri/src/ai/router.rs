@@ -29,6 +29,9 @@ const GOOGLE_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_OAUTH_CLIENT_ID: &str = "";
 const GOOGLE_OAUTH_CLIENT_SECRET: &str = "";
 
+const CODEX_OAUTH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+const CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+
 pub(crate) const OPENROUTER_DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 pub(crate) const XAI_DEFAULT_BASE_URL: &str = "https://api.x.ai/v1";
 pub(crate) const DEEPSEEK_DEFAULT_BASE_URL: &str = "https://api.deepseek.com/v1";
@@ -178,6 +181,105 @@ async fn do_google_oauth_refresh(provider_id: &str, refresh_token: &str, secrets
     let data: RefreshResp = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
 
     let _ = secrets.set(provider_id, &data.access_token);
+    if let Some(expires_in) = data.expires_in {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let _ = secrets.set(&format!("{provider_id}:oauth_expires_at"), &(now + expires_in).to_string());
+    }
+
+    Ok(data.access_token)
+}
+
+/// Returns a valid Codex access token (refreshing first if within 5 minutes
+/// of expiry) plus the cached `chatgpt-account-id`, if any.
+async fn get_valid_codex_oauth_token(
+    provider_id: &str,
+    secrets: &SecretStore,
+) -> Result<(String, Option<String>), AiError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let needs_refresh = secrets
+        .get(&format!("{provider_id}:oauth_expires_at"))
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(|exp| exp < now + 300)
+        .unwrap_or(false);
+
+    if needs_refresh {
+        if let Some(refresh_token) = secrets.get(&format!("{provider_id}:oauth_refresh")).ok().flatten() {
+            match do_codex_oauth_refresh(provider_id, &refresh_token, secrets).await {
+                Ok(access_token) => {
+                    let account_id = secrets.get(&format!("{provider_id}:oauth_account_id")).ok().flatten();
+                    return Ok((access_token, account_id));
+                }
+                Err(e) => log::warn!("Codex OAuth token refresh failed, using existing token: {e}"),
+            }
+        }
+    }
+
+    let token = secrets.get(provider_id).map_err(|_| AiError::NotConfigured)?.ok_or(AiError::NotConfigured)?;
+    let account_id = secrets.get(&format!("{provider_id}:oauth_account_id")).ok().flatten();
+    Ok((token, account_id))
+}
+
+async fn do_codex_oauth_refresh(
+    provider_id: &str,
+    refresh_token: &str,
+    secrets: &SecretStore,
+) -> Result<String, String> {
+    #[derive(Serialize)]
+    struct RefreshReq<'a> {
+        grant_type: &'a str,
+        refresh_token: &'a str,
+        client_id: &'a str,
+    }
+    #[derive(Deserialize)]
+    struct RefreshResp {
+        access_token: String,
+        #[serde(default)]
+        refresh_token: Option<String>,
+        #[serde(default)]
+        expires_in: Option<u64>,
+    }
+
+    let client = reqwest::Client::new();
+    // `scope` is intentionally omitted — OpenAI/Auth0 treats a `scope` on the
+    // refresh_token grant as a re-scope request, which can invalidate sibling
+    // refresh-token families sharing this client_id (multi-account support
+    // depends on this NOT happening).
+    let resp = client
+        .post(CODEX_OAUTH_TOKEN_URL)
+        .header("Accept", "application/json")
+        .form(&RefreshReq {
+            grant_type: "refresh_token",
+            refresh_token,
+            client_id: CODEX_OAUTH_CLIENT_ID,
+        })
+        .send()
+        .await
+        .map_err(|e| format!("Refresh request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {status}: {body}"));
+    }
+
+    let data: RefreshResp = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
+
+    let _ = secrets.set(provider_id, &data.access_token);
+    // Codex refresh tokens are one-time-use/rotating — the new refresh_token
+    // returned here MUST replace the old one, or the next refresh attempt
+    // fails with `refresh_token_reused` / `invalid_grant`.
+    if let Some(new_refresh) = data.refresh_token {
+        let _ = secrets.set(&format!("{provider_id}:oauth_refresh"), &new_refresh);
+    }
     if let Some(expires_in) = data.expires_in {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -412,7 +514,8 @@ impl AiRouter {
                 Arc::new(AnthropicClient::with_base_url(key, provider_cfg.model.clone(), base_url))
             }
             ProviderType::Codex => {
-                return Err(AiError::NotConfigured);
+                let (token, account_id) = get_valid_codex_oauth_token(&provider_cfg.id, &self.secrets).await?;
+                Arc::new(crate::ai::codex::CodexClient::new(token, provider_cfg.model.clone(), account_id))
             }
         };
         Ok(provider)
@@ -612,6 +715,26 @@ mod tests {
             auth_method: None,
         });
         cfg.default_provider = Some("kimi-coding".into());
+        let router = make_router(cfg);
+        assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
+    }
+
+    #[tokio::test]
+    async fn codex_provider_without_oauth_token_is_not_configured() {
+        let _g = ENV_LOCK.lock().await;
+        std::env::remove_var("OPENAI_API_KEY");
+        let mut cfg = AppConfig::default();
+        cfg.providers.push(ProviderConfig {
+            id: "codex".into(),
+            display_name: "Codex".into(),
+            provider_type: ProviderType::Codex,
+            base_url: None,
+            oauth_client_id: None,
+            model: "gpt-5.1-codex".into(),
+            supports_json_mode: false,
+            auth_method: Some("oauth".into()),
+        });
+        cfg.default_provider = Some("codex".into());
         let router = make_router(cfg);
         assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
     }
