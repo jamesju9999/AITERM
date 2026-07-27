@@ -1309,7 +1309,15 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         <div
           className="aiterm-live-frame"
           style={{
-            height: isAlternateBuffer ? "100%" : `${liveHeightPx}px`,
+            // `100%` alone overflows the parent by exactly the frame's own
+            // vertical margin (6px top + 6px bottom = 12px), since `height`
+            // sizes only the box, not the margin around it — confirmed via
+            // diagnostic logging: container scrollHeight was consistently
+            // 12px taller than its clientHeight the instant a full-screen
+            // TUI (e.g. Claude Code) filled this frame. Subtracting it here
+            // makes box + margin add up to exactly 100%, so the outer
+            // `overflow-y: auto` container never needs to scroll.
+            height: isAlternateBuffer ? "calc(100% - 12px)" : `${liveHeightPx}px`,
             width: "calc(100% - 16px)",
             margin: "6px 8px",
             boxSizing: "border-box",

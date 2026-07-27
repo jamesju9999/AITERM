@@ -22,6 +22,13 @@
   height: 100%;
 }
 
+/* Cosmetic only: xterm's own .xterm-viewport still scrolls normally (wheel,
+   trackpad, PageUp/Down) — this just hides the native scrollbar thumb/track
+   so it doesn't flash in the live pane during full-screen TUI apps. */
+.aiterm-terminal-root .xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
+
 .aiterm-status {
   color: #aaa;
   font-family: "Cascadia Mono", Consolas, monospace;
