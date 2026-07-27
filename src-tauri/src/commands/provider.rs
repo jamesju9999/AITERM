@@ -143,15 +143,31 @@ fn antigravity_headers(builder: reqwest::RequestBuilder, access_token: &str) -> 
 /// Sequence (ported from OmniRoute's `postExchangeAntigravity`):
 /// 1. Call `loadCodeAssist`. If it already returns a project id, done.
 /// 2. If not (brand-new Google account with no Cloud Code project yet), call
-///    `onboardUser` and poll up to 10 times (5s apart, ~50s total) until it
+///    `onboardUser` and poll up to 10 times (5s apart, ~45s total) until it
 ///    reports `done: true`, then retry `loadCodeAssist` once to pick up the
 ///    freshly-provisioned project.
 async fn perform_antigravity_onboarding(access_token: &str) -> Result<String, String> {
+    perform_antigravity_onboarding_at(
+        access_token,
+        ANTIGRAVITY_BOOTSTRAP_BASE_URL,
+        std::time::Duration::from_secs(5),
+    )
+    .await
+}
+
+/// Test-only hook: lets integration tests point at a wiremock server instead
+/// of the real cloudcode-pa.googleapis.com backend, and shrink the polling
+/// interval so exhaustion tests don't have to sleep for real.
+async fn perform_antigravity_onboarding_at(
+    access_token: &str,
+    base_url: &str,
+    poll_interval: std::time::Duration,
+) -> Result<String, String> {
     let client = reqwest::Client::new();
 
     let load_body = serde_json::json!({ "metadata": { "ideType": "ANTIGRAVITY" } });
     let resp = antigravity_headers(
-        client.post(format!("{ANTIGRAVITY_BOOTSTRAP_BASE_URL}/v1internal:loadCodeAssist")),
+        client.post(format!("{base_url}/v1internal:loadCodeAssist")),
         access_token,
     )
     .json(&load_body)
@@ -177,17 +193,22 @@ async fn perform_antigravity_onboarding(access_token: &str) -> Result<String, St
         .and_then(|arr| arr.iter().find(|t| t.get("isDefault").and_then(|d| d.as_bool()).unwrap_or(false)))
         .and_then(|t| t.get("id"))
         .and_then(|v| v.as_str())
-        .unwrap_or("legacy-tier")
-        .to_string();
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            log::warn!(
+                "Antigravity loadCodeAssist returned no default tier; falling back to \"legacy-tier\" (this value is reverse-engineered and may be wrong for this account type)"
+            );
+            "legacy-tier".to_string()
+        });
 
     let onboard_body = serde_json::json!({
         "tierId": tier_id,
         "metadata": { "ideType": "ANTIGRAVITY" },
     });
 
-    for _ in 0..10 {
+    for attempt in 0..10 {
         let resp = antigravity_headers(
-            client.post(format!("{ANTIGRAVITY_BOOTSTRAP_BASE_URL}/v1internal:onboardUser")),
+            client.post(format!("{base_url}/v1internal:onboardUser")),
             access_token,
         )
         .json(&onboard_body)
@@ -204,11 +225,13 @@ async fn perform_antigravity_onboarding(access_token: &str) -> Result<String, St
         if onboard_json.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        if attempt < 9 {
+            tokio::time::sleep(poll_interval).await;
+        }
     }
 
     let resp = antigravity_headers(
-        client.post(format!("{ANTIGRAVITY_BOOTSTRAP_BASE_URL}/v1internal:loadCodeAssist")),
+        client.post(format!("{base_url}/v1internal:loadCodeAssist")),
         access_token,
     )
     .json(&load_body)
@@ -1782,5 +1805,99 @@ mod antigravity_onboarding_tests {
     fn extract_project_id_returns_none_for_empty_string() {
         let json = serde_json::json!({"cloudaicompanionProject": ""});
         assert_eq!(extract_cloudaicompanion_project_id(&json), None);
+    }
+
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn onboarding_short_circuits_when_project_already_exists() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1internal:loadCodeAssist"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"cloudaicompanionProject": "proj-existing"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        // No onboardUser mock is mounted — if the code were to call it despite
+        // already having a project id, wiremock would 404 and the request
+        // would fail, turning that regression into a test failure here.
+
+        let result =
+            perform_antigravity_onboarding_at("test-token", &server.uri(), std::time::Duration::from_millis(1))
+                .await;
+
+        assert_eq!(result, Ok("proj-existing".to_string()));
+    }
+
+    #[tokio::test]
+    async fn onboarding_onboards_then_succeeds() {
+        let server = MockServer::start().await;
+
+        // First loadCodeAssist call: brand-new account, no project yet.
+        Mock::given(method("POST"))
+            .and(path("/v1internal:loadCodeAssist"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "allowedTiers": [{"id": "free-tier", "isDefault": true}]
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1internal:onboardUser"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"done": true})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // Second loadCodeAssist call (post-onboard retry): project now exists.
+        Mock::given(method("POST"))
+            .and(path("/v1internal:loadCodeAssist"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "cloudaicompanionProject": {"id": "proj-new"}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result =
+            perform_antigravity_onboarding_at("test-token", &server.uri(), std::time::Duration::from_millis(1))
+                .await;
+
+        assert_eq!(result, Ok("proj-new".to_string()));
+    }
+
+    #[tokio::test]
+    async fn onboarding_returns_err_when_polling_never_completes() {
+        let server = MockServer::start().await;
+
+        // Every loadCodeAssist call (initial + post-onboard) reports no project.
+        Mock::given(method("POST"))
+            .and(path("/v1internal:loadCodeAssist"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "allowedTiers": [{"id": "free-tier", "isDefault": true}]
+            })))
+            .mount(&server)
+            .await;
+
+        // onboardUser never reports done — polling exhausts all 10 attempts.
+        Mock::given(method("POST"))
+            .and(path("/v1internal:onboardUser"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"done": false})))
+            .expect(10)
+            .mount(&server)
+            .await;
+
+        // 1ms poll interval keeps this test fast despite the 10 polling attempts.
+        let result =
+            perform_antigravity_onboarding_at("test-token", &server.uri(), std::time::Duration::from_millis(1))
+                .await;
+
+        assert!(result.is_err());
     }
 }
