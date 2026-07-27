@@ -29,6 +29,23 @@ const ANTHROPIC_OAUTH_REDIRECT_URI_ENCODED: &str = "https%3A%2F%2Fplatform.claud
 // org:create_api_key must NOT be included (it switches to "Anthropic organization" mode)
 const ANTHROPIC_OAUTH_SCOPE_ENCODED: &str = "user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code";
 
+const CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+const CODEX_OAUTH_AUTH_URL: &str = "https://auth.openai.com/oauth/authorize";
+const CODEX_OAUTH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+const CODEX_OAUTH_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
+const CODEX_OAUTH_REDIRECT_PORT: u16 = 1455;
+
+#[derive(Deserialize)]
+struct CodexTokenResponse {
+    access_token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    id_token: Option<String>,
+    #[serde(default)]
+    expires_in: Option<u64>,
+}
+
 struct PkceSession {
     state: String,
     code_verifier: String,
@@ -1307,6 +1324,162 @@ pub async fn get_kimi_models_by_provider(
         key.trim(),
     )
     .await
+}
+
+// ── Codex OAuth ───────────────────────────────────────────────────────────────
+
+/// Starts the Codex OAuth flow: spins up a local HTTP server fixed to port
+/// 1455 (the only redirect_uri registered against Codex's public client_id),
+/// opens the browser, waits for the callback (up to 2 minutes), exchanges
+/// the code for tokens, extracts the ChatGPT account id from the id_token,
+/// and stores everything in the keychain. Blocks until complete or timeout.
+#[tauri::command]
+pub async fn codex_oauth_login(
+    provider_id: String,
+    config: State<'_, Arc<ConfigStore>>,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<(), String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let code_verifier = gen_code_verifier();
+    let code_challenge = gen_code_challenge(&code_verifier);
+    let state = gen_state();
+
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", CODEX_OAUTH_REDIRECT_PORT))
+        .await
+        .map_err(|e| format!("無法在 1455 port 啟動本機伺服器（可能已被其他程式占用）：{e}"))?;
+
+    // `prompt=login` forces re-authentication instead of silently reusing an
+    // existing Auth0 session — without it, logging in with a second ChatGPT
+    // account on this same client_id invalidates the first account's refresh
+    // token (session takeover).
+    let auth_url = format!(
+        "{url}?response_type=code&client_id={cid}&redirect_uri={redir}&scope=openid+profile+email+offline_access&code_challenge={cc}&code_challenge_method=S256&id_token_add_organizations=true&codex_cli_simplified_flow=true&originator=codex_cli_rs&prompt=login&state={st}",
+        url = CODEX_OAUTH_AUTH_URL,
+        cid = CODEX_OAUTH_CLIENT_ID,
+        redir = CODEX_OAUTH_REDIRECT_URI,
+        cc = code_challenge,
+        st = state,
+    );
+
+    open_browser(&auth_url);
+
+    let (mut stream, _) = tokio::time::timeout(std::time::Duration::from_secs(120), listener.accept())
+        .await
+        .map_err(|_| "OAuth 超時（2 分鐘），請重試".to_string())?
+        .map_err(|e| format!("Server accept error: {e}"))?;
+
+    let mut buf = vec![0u8; 8192];
+    let n = stream.read(&mut buf).await.map_err(|e| e.to_string())?;
+    let request = String::from_utf8_lossy(&buf[..n]);
+
+    let path_query = request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .ok_or("Invalid callback HTTP request")?;
+
+    let full_url = format!("http://localhost{path_query}");
+    let parsed_url =
+        url::Url::parse(&full_url).map_err(|e| format!("Failed to parse callback URL: {e}"))?;
+    let params: std::collections::HashMap<_, _> = parsed_url.query_pairs().collect();
+
+    let code = params.get("code").map(|v| v.to_string()).ok_or("No 'code' parameter in callback")?;
+    let returned_state = params.get("state").map(|v| v.to_string()).unwrap_or_default();
+
+    let html = concat!(
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Authorization Successful</title></head>",
+        "<body style=\"font-family:sans-serif;text-align:center;padding:60px 20px;background:#1a1a1a;color:#fff\">",
+        "<h2 style=\"color:#4caf50;margin-bottom:12px\">Authorization Successful!</h2>",
+        "<p style=\"color:#aaa\">You can close this window and return to AITerm.</p>",
+        "</body></html>"
+    );
+    let http_resp = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        html.len(),
+        html
+    );
+    let _ = stream.write_all(http_resp.as_bytes()).await;
+    drop(stream);
+
+    if returned_state != state {
+        return Err("State mismatch — the authorization code may be expired or tampered with".into());
+    }
+
+    let client = reqwest::Client::new();
+    let form_params = [
+        ("grant_type", "authorization_code"),
+        ("client_id", CODEX_OAUTH_CLIENT_ID),
+        ("code", code.as_str()),
+        ("redirect_uri", CODEX_OAUTH_REDIRECT_URI),
+        ("code_verifier", code_verifier.as_str()),
+    ];
+
+    let resp = client
+        .post(CODEX_OAUTH_TOKEN_URL)
+        .header("Accept", "application/json")
+        .form(&form_params)
+        .send()
+        .await
+        .map_err(|e| format!("Token exchange request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Token exchange failed (HTTP {status}): {body}"));
+    }
+
+    let token_resp: CodexTokenResponse =
+        resp.json().await.map_err(|e| format!("Failed to parse token response: {e}"))?;
+
+    secrets
+        .set(&provider_id, &token_resp.access_token)
+        .map_err(|e| format!("Failed to store access token: {e}"))?;
+
+    if let Some(refresh) = &token_resp.refresh_token {
+        let _ = secrets.set(&format!("{provider_id}:oauth_refresh"), refresh);
+    }
+    if let Some(expires_in) = token_resp.expires_in {
+        let exp = now_secs() + expires_in;
+        let _ = secrets.set(&format!("{provider_id}:oauth_expires_at"), &exp.to_string());
+    }
+    if let Some(id_token) = &token_resp.id_token {
+        if let Some(account_id) = extract_codex_account_id(id_token) {
+            let _ = secrets.set(&format!("{provider_id}:oauth_account_id"), &account_id);
+        }
+    }
+
+    config
+        .update(|cfg| {
+            if let Some(p) = cfg.providers.iter_mut().find(|p| p.id == provider_id) {
+                p.auth_method = Some("oauth".into());
+            }
+        })
+        .map_err(|e| format!("Failed to update provider config: {e}"))?;
+
+    Ok(())
+}
+
+/// Log out from Codex OAuth: clears the access token, refresh token, expiry,
+/// and cached ChatGPT account id.
+#[tauri::command]
+pub fn codex_oauth_logout(
+    provider_id: String,
+    config: State<'_, Arc<ConfigStore>>,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<(), String> {
+    let _ = secrets.delete(&provider_id);
+    let _ = secrets.delete(&format!("{provider_id}:oauth_refresh"));
+    let _ = secrets.delete(&format!("{provider_id}:oauth_expires_at"));
+    let _ = secrets.delete(&format!("{provider_id}:oauth_account_id"));
+
+    config
+        .update(|cfg| {
+            if let Some(p) = cfg.providers.iter_mut().find(|p| p.id == provider_id) {
+                p.auth_method = None;
+            }
+        })
+        .map_err(|e| format!("Failed to update provider config: {e}"))
 }
 
 #[cfg(test)]
