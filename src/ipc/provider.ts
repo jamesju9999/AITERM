@@ -141,16 +141,9 @@ export const googleOAuthLogin = (providerId: string): Promise<void> =>
 export const googleOAuthLogout = (providerId: string): Promise<void> =>
   invoke("google_oauth_logout", { providerId });
 
-/** Fetch available Gemini models using the stored Google OAuth token.
- *  Pass baseUrlOverride to use a URL before it's been saved to config. */
-export const getGoogleOAuthModels = (
-  providerId: string,
-  baseUrlOverride?: string,
-): Promise<string[]> =>
-  invoke("get_google_oauth_models", {
-    providerId,
-    baseUrlOverride: baseUrlOverride ?? null,
-  });
+/** Fetch available Gemini models using the stored Antigravity OAuth token. */
+export const getGoogleOAuthModels = (providerId: string): Promise<string[]> =>
+  invoke("get_google_oauth_models", { providerId });
 
 export const getOpenRouterModels = (apiKey: string): Promise<string[]> =>
   invoke("get_openrouter_models", { apiKey });
