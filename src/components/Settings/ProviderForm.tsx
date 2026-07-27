@@ -35,6 +35,9 @@ import {
   getDeepseekModelsByProvider,
   getKimiModels,
   getKimiModelsByProvider,
+  codexOAuthLogin,
+  codexOAuthLogout,
+  getCodexOAuthModels,
 } from "../../ipc/provider";
 import type { ProviderType } from "../../ipc/config";
 import { useLocale } from "../../contexts/LocaleContext";
@@ -58,6 +61,7 @@ const PROVIDER_TYPES: ProviderType[] = [
   "deepseek",
   "kimi",
   "anthropic-compatible",
+  "codex",
 ];
 
 function FormSection({ title, children }: { title: string; children: ReactNode }) {
@@ -108,6 +112,11 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
   const [deepseekLoading, setDeepseekLoading] = useState(false);
   const [kimiModels, setKimiModels] = useState<string[]>([]);
   const [kimiLoading, setKimiLoading] = useState(false);
+  const [codexModels, setCodexModels] = useState<string[]>([]);
+  const [codexModelsLoading, setCodexModelsLoading] = useState(false);
+  const [codexOAuthLoggedIn, setCodexOAuthLoggedIn] = useState(
+    !!(existing?.provider_type === "codex" && existing?.auth_method === "oauth"),
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [authing, setAuthing] = useState(false);
@@ -348,6 +357,21 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
     return () => clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerType, apiKey, isEdit, existing?.has_api_key, id]);
+
+  useEffect(() => {
+    if (providerType !== "codex" || !codexOAuthLoggedIn) return;
+    const pid = id.trim();
+    if (!pid) return;
+    setCodexModelsLoading(true);
+    getCodexOAuthModels(pid)
+      .then((models) => {
+        setCodexModels(models);
+        if (models.length > 0 && !models.includes(model)) setModel(models[0]);
+      })
+      .catch(() => setCodexModels([]))
+      .finally(() => setCodexModelsLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerType, codexOAuthLoggedIn, id]);
 
   const handleSave = async () => {
     setError(null);
@@ -641,7 +665,66 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
             </div>
           )}
 
-          {providerType !== "github-copilot" && providerType !== "anthropic" && (
+          {providerType === "codex" && (
+            <div className="form-group">
+              <label>{t.settings_provider_auth_oauth("ChatGPT")}</label>
+              {codexOAuthLoggedIn ? (
+                <div className="anthropic-oauth-done">
+                  <span className="anthropic-oauth-ok">{t.settings_provider_oauth_ok}</span>
+                  <button
+                    type="button"
+                    className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                    disabled={saving}
+                    onClick={async () => {
+                      if (!isEdit) return;
+                      try {
+                        await codexOAuthLogout(id.trim());
+                        setCodexOAuthLoggedIn(false);
+                        setCodexModels([]);
+                      } catch (e: unknown) {
+                        setAuthStatus(String(e));
+                      }
+                    }}
+                  >
+                    {t.settings_provider_oauth_logout}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="aiterm-btn aiterm-btn--primary"
+                    disabled={!id.trim() || authing}
+                    onClick={async () => {
+                      setAuthing(true);
+                      setAuthStatus(null);
+                      try {
+                        await codexOAuthLogin(id.trim());
+                        setCodexOAuthLoggedIn(true);
+                        setAuthStatus(t.settings_provider_oauth_success);
+                      } catch (e: unknown) {
+                        setAuthStatus(t.settings_provider_oauth_err(String(e)));
+                      } finally {
+                        setAuthing(false);
+                      }
+                    }}
+                  >
+                    {authing ? t.provider_auth_running : t.settings_provider_btn_open_auth}
+                  </button>
+                  {!id.trim() && (
+                    <div className="form-hint">{t.settings_provider_oauth_id_required}</div>
+                  )}
+                </>
+              )}
+              {authStatus && (
+                <div className={`form-hint ${authStatus.startsWith("錯誤") || authStatus.startsWith("Error") ? "form-hint--error" : ""}`}>
+                  {authStatus}
+                </div>
+              )}
+            </div>
+          )}
+
+          {providerType !== "github-copilot" && providerType !== "anthropic" && providerType !== "codex" && (
             <div className="form-group">
               <label>
                 {providerType === "openai-compatible" ? t.provider_api_key_optional : t.provider_api_key}
@@ -872,6 +955,27 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
                 {kimiModels.length > 0 && (
                   <datalist id="kimi-models-list">
                     {kimiModels.map((m) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                )}
+              </>
+            )
+          ) : providerType === "codex" ? (
+            codexModelsLoading ? (
+              <input type="text" value={t.provider_model_loading} disabled />
+            ) : (
+              <>
+                <input
+                  type="text"
+                  list="codex-models-list"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder={codexModels.length > 0 ? t.settings_provider_model_placeholder : DEFAULT_MODELS[providerType]}
+                />
+                {codexModels.length > 0 && (
+                  <datalist id="codex-models-list">
+                    {codexModels.map((m) => (
                       <option key={m} value={m} />
                     ))}
                   </datalist>
