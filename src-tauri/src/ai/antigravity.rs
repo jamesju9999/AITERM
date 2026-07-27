@@ -114,11 +114,14 @@ impl AiProvider for AntigravityClient {
     }
 
     async fn health_check(&self) -> Result<(), AiError> {
-        // A minimal real generate call is the only reliable way to validate an
+        // A minimal real request is the only reliable way to validate an
         // Antigravity token + project id pair — there is no cheap read-only
         // endpoint reused here (model discovery lives in commands/provider.rs
-        // and needs its own token, not this client's).
-        let (tx, mut rx) = mpsc::channel::<GenerateChunk>(4);
+        // and needs its own token, not this client's). Unlike `generate`,
+        // this deliberately does NOT drain the SSE stream: dropping `resp`
+        // after checking the status closes the connection, which is enough
+        // to confirm the token+project id pair was accepted without paying
+        // for (or waiting on) a full generation.
         let probe = GenerateRequest {
             system_prompt: String::new(),
             messages: vec![crate::ai::ChatMessage {
@@ -131,8 +134,17 @@ impl AiProvider for AntigravityClient {
             mode: crate::ai::QueryMode::Chat,
             max_tokens: Some(1),
         };
-        self.generate(probe, tx).await?;
-        while rx.recv().await.is_some() {}
+        let body = build_request_body(&self.model, &self.project_id, &probe);
+        let resp = self
+            .apply_headers(self.client.post(self.generate_content_url()))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AiError::Network { message: e.to_string() })?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(map_http_error(status, resp).await);
+        }
         Ok(())
     }
 }
@@ -165,6 +177,15 @@ async fn consume_gemini_sse(
             let Some(data) = line.strip_prefix("data:") else { continue };
             let data = data.trim();
             let Ok(chunk) = serde_json::from_str::<GeminiStreamChunk>(data) else { continue };
+
+            if chunk.candidates.is_empty() {
+                if let Some(reason) = chunk.prompt_feedback.as_ref().and_then(|f| f.block_reason.clone()) {
+                    return Err(AiError::ModelError {
+                        reason,
+                        raw: data.chars().take(300).collect(),
+                    });
+                }
+            }
 
             let candidate = chunk.candidates.into_iter().next();
             let text = candidate
@@ -201,6 +222,14 @@ struct GeminiStreamChunk {
     candidates: Vec<GeminiCandidate>,
     #[serde(default, rename = "usageMetadata")]
     usage_metadata: Option<GeminiUsageMetadata>,
+    #[serde(default, rename = "promptFeedback")]
+    prompt_feedback: Option<GeminiPromptFeedback>,
+}
+
+#[derive(Deserialize)]
+struct GeminiPromptFeedback {
+    #[serde(default, rename = "blockReason")]
+    block_reason: Option<String>,
 }
 
 #[derive(Deserialize)]

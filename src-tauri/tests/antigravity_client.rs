@@ -92,3 +92,79 @@ async fn returns_auth_failed_on_401() {
     let err = client.generate(req(), tx).await.unwrap_err();
     assert!(matches!(err, AiError::AuthFailed), "expected AuthFailed, got {err:?}");
 }
+
+#[tokio::test]
+async fn returns_model_error_on_blocked_prompt_feedback() {
+    let server = MockServer::start().await;
+
+    // Gemini's documented shape for a safety-blocked prompt: empty
+    // `candidates` plus a `promptFeedback.blockReason` — not an HTTP error
+    // and not a recognizably-different top-level SSE event type.
+    let sse_body = "data: {\"candidates\":[],\"promptFeedback\":{\"blockReason\":\"SAFETY\"}}\n\n";
+
+    Mock::given(method("POST"))
+        .and(path("/v1internal:streamGenerateContent"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse_body),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = AntigravityClient::with_base_url(
+        "test-token".into(),
+        "proj-123".into(),
+        "gemini-2.5-pro".into(),
+        server.uri(),
+    );
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
+    let err = client.generate(req(), tx).await.unwrap_err();
+    assert!(matches!(err, AiError::ModelError { .. }), "expected ModelError, got {err:?}");
+}
+
+/// `health_check` must not drain the SSE stream to validate a token+project
+/// id pair — it should return as soon as the response status/headers arrive.
+/// A wiremock `MockServer` sends its whole (buffered) body essentially
+/// instantly, so it can't distinguish "waited for body" from "didn't" on
+/// timing alone; this uses a raw TCP listener to send headers immediately
+/// and then stall for several seconds before writing any body bytes, proving
+/// `health_check` doesn't need the body to complete.
+#[tokio::test]
+async fn health_check_returns_without_waiting_for_response_body() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = socket.read(&mut buf).await; // drain the request, content unused
+
+        let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+        socket.write_all(headers.as_bytes()).await.unwrap();
+        socket.flush().await.unwrap();
+
+        // Stall well past the test's timeout before sending any body bytes.
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let _ = socket.write_all(b"data: {\"candidates\":[]}\n\n").await;
+    });
+
+    let client = AntigravityClient::with_base_url(
+        "test-token".into(),
+        "proj-123".into(),
+        "gemini-2.5-pro".into(),
+        format!("http://{addr}"),
+    );
+
+    let result =
+        tokio::time::timeout(std::time::Duration::from_secs(1), client.health_check()).await;
+    assert!(
+        result.is_ok(),
+        "health_check should return once headers arrive, without waiting on the response body"
+    );
+    assert!(result.unwrap().is_ok(), "health_check should treat a 200 status as success");
+}
