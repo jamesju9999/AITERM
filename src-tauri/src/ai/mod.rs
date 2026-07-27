@@ -11,6 +11,7 @@
 //! - `context.rs`: environment snapshot helper
 
 pub mod anthropic;
+pub mod codex;
 pub mod compatible;
 pub mod context;
 pub mod copilot;
