@@ -1482,6 +1482,84 @@ pub fn codex_oauth_logout(
         .map_err(|e| format!("Failed to update provider config: {e}"))
 }
 
+/// Extracts model ids from Codex's `/models` discovery response, tolerating
+/// the shapes it's known to return: `{"models":[...]}`, `{"data":[...]}`, a
+/// bare array, or an object keyed by model id.
+fn parse_codex_models_response(json: &serde_json::Value) -> Vec<String> {
+    let items: Vec<&serde_json::Value> = if let Some(arr) = json.get("models").and_then(|v| v.as_array()) {
+        arr.iter().collect()
+    } else if let Some(arr) = json.get("data").and_then(|v| v.as_array()) {
+        arr.iter().collect()
+    } else if let Some(arr) = json.as_array() {
+        arr.iter().collect()
+    } else if let Some(obj) = json.as_object() {
+        obj.values().collect()
+    } else {
+        vec![]
+    };
+
+    let mut ids: Vec<String> = items
+        .iter()
+        .filter_map(|item| {
+            item.get("slug")
+                .or_else(|| item.get("id"))
+                .or_else(|| item.get("model"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+const CODEX_FALLBACK_MODELS: &[&str] = &["gpt-5.1-codex", "gpt-5.1-codex-mini"];
+
+/// Fetches the live Codex model catalog using the stored OAuth token. Falls
+/// back to a small hardcoded list if the request fails or the response is
+/// empty/unparseable — never blocks saving the provider on this.
+#[tauri::command]
+pub async fn get_codex_oauth_models(
+    provider_id: String,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<Vec<String>, String> {
+    let token = secrets
+        .get(&provider_id)
+        .map_err(|e| format!("Failed to read token: {e}"))?
+        .ok_or("No OAuth token stored for this provider")?;
+    let account_id = secrets.get(&format!("{provider_id}:oauth_account_id")).ok().flatten();
+
+    let client = reqwest::Client::new();
+    let mut builder = client
+        .get(format!(
+            "https://chatgpt.com/backend-api/codex/models?client_version={}",
+            crate::ai::codex::CODEX_CLIENT_VERSION
+        ))
+        .bearer_auth(&token)
+        .header("originator", "codex_cli_rs")
+        .header("User-Agent", crate::ai::codex::CODEX_USER_AGENT)
+        .header("Version", crate::ai::codex::CODEX_CLIENT_VERSION)
+        .header("Openai-Beta", "responses=experimental")
+        .header("X-Codex-Beta-Features", "responses_websockets");
+    if let Some(id) = &account_id {
+        builder = builder.header("chatgpt-account-id", id.as_str());
+    }
+
+    let models = match builder.send().await {
+        Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+            Ok(json) => parse_codex_models_response(&json),
+            Err(_) => vec![],
+        },
+        _ => vec![],
+    };
+
+    if models.is_empty() {
+        Ok(CODEX_FALLBACK_MODELS.iter().map(|s| s.to_string()).collect())
+    } else {
+        Ok(models)
+    }
+}
+
 #[cfg(test)]
 mod codex_jwt_tests {
     use super::*;
@@ -1505,5 +1583,43 @@ mod codex_jwt_tests {
     #[test]
     fn extract_codex_account_id_returns_none_for_malformed_jwt() {
         assert_eq!(extract_codex_account_id("not-a-jwt"), None);
+    }
+}
+
+#[cfg(test)]
+mod codex_models_tests {
+    use super::*;
+
+    #[test]
+    fn parse_codex_models_response_handles_models_key() {
+        let json = serde_json::json!({"models": [{"slug": "gpt-5.1-codex"}, {"id": "gpt-5.1-codex-high"}]});
+        assert_eq!(
+            parse_codex_models_response(&json),
+            vec!["gpt-5.1-codex".to_string(), "gpt-5.1-codex-high".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_codex_models_response_handles_data_key() {
+        let json = serde_json::json!({"data": [{"model": "gpt-5.1-codex"}]});
+        assert_eq!(parse_codex_models_response(&json), vec!["gpt-5.1-codex".to_string()]);
+    }
+
+    #[test]
+    fn parse_codex_models_response_handles_bare_array() {
+        let json = serde_json::json!([{"slug": "gpt-5.1-codex"}]);
+        assert_eq!(parse_codex_models_response(&json), vec!["gpt-5.1-codex".to_string()]);
+    }
+
+    #[test]
+    fn parse_codex_models_response_handles_object_map() {
+        let json = serde_json::json!({"gpt-5.1-codex": {"slug": "gpt-5.1-codex"}});
+        assert_eq!(parse_codex_models_response(&json), vec!["gpt-5.1-codex".to_string()]);
+    }
+
+    #[test]
+    fn parse_codex_models_response_skips_items_with_no_id_field() {
+        let json = serde_json::json!({"models": [{"display_name": "no id here"}]});
+        assert!(parse_codex_models_response(&json).is_empty());
     }
 }
