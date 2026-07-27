@@ -121,7 +121,11 @@ async fn do_oauth_refresh(provider_id: &str, refresh_token: &str, secrets: &Secr
     Ok(data.access_token)
 }
 
-async fn get_valid_google_oauth_token(provider_id: &str, secrets: &SecretStore) -> Result<String, AiError> {
+/// Returns a valid Antigravity access token (refreshing first if within 15
+/// minutes of expiry — a longer lead than Anthropic/Codex's 5 minutes since
+/// Google's refresh tokens don't rotate, so there's no "stale refresh token"
+/// risk to hurry around) plus the account's onboarded Cloud Code project id.
+async fn get_valid_google_oauth_token(provider_id: &str, secrets: &SecretStore) -> Result<(String, String), AiError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -132,22 +136,30 @@ async fn get_valid_google_oauth_token(provider_id: &str, secrets: &SecretStore) 
         .ok()
         .flatten()
         .and_then(|s| s.parse::<u64>().ok())
-        .map(|exp| exp < now + 300)
+        .map(|exp| exp < now + 900)
         .unwrap_or(false);
 
     if needs_refresh {
         if let Some(refresh_token) = secrets.get(&format!("{provider_id}:oauth_refresh")).ok().flatten() {
             match do_google_oauth_refresh(provider_id, &refresh_token, secrets).await {
-                Ok(access_token) => return Ok(access_token),
+                Ok(access_token) => {
+                    let project_id = secrets
+                        .get(&format!("{provider_id}:project_id"))
+                        .map_err(|_| AiError::NotConfigured)?
+                        .ok_or(AiError::NotConfigured)?;
+                    return Ok((access_token, project_id));
+                }
                 Err(e) => log::warn!("Google OAuth token refresh failed, using existing token: {e}"),
             }
         }
     }
 
-    secrets
-        .get(provider_id)
+    let token = secrets.get(provider_id).map_err(|_| AiError::NotConfigured)?.ok_or(AiError::NotConfigured)?;
+    let project_id = secrets
+        .get(&format!("{provider_id}:project_id"))
         .map_err(|_| AiError::NotConfigured)?
-        .ok_or(AiError::NotConfigured)
+        .ok_or(AiError::NotConfigured)?;
+    Ok((token, project_id))
 }
 
 async fn do_google_oauth_refresh(provider_id: &str, refresh_token: &str, secrets: &SecretStore) -> Result<String, String> {
@@ -419,22 +431,24 @@ impl AiRouter {
             }
             ProviderType::GoogleAi => {
                 let is_oauth = provider_cfg.auth_method.as_deref() == Some("oauth");
-                let key = if is_oauth {
-                    get_valid_google_oauth_token(&provider_cfg.id, &self.secrets).await?
+                if is_oauth {
+                    let (token, project_id) = get_valid_google_oauth_token(&provider_cfg.id, &self.secrets).await?;
+                    Arc::new(crate::ai::antigravity::AntigravityClient::new(token, project_id, provider_cfg.model.clone()))
                 } else {
-                    self.secrets
+                    let key = self
+                        .secrets
                         .get(&provider_cfg.id)
                         .map_err(|_| AiError::NotConfigured)?
-                        .ok_or(AiError::NotConfigured)?
-                };
-                Arc::new(OpenAiCompatibleClient::new(
-                    provider_cfg
-                        .base_url
-                        .unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta/openai".into()),
-                    provider_cfg.model.clone(),
-                    Some(key),
-                    provider_cfg.supports_json_mode,
-                ))
+                        .ok_or(AiError::NotConfigured)?;
+                    Arc::new(OpenAiCompatibleClient::new(
+                        provider_cfg
+                            .base_url
+                            .unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta/openai".into()),
+                        provider_cfg.model.clone(),
+                        Some(key),
+                        provider_cfg.supports_json_mode,
+                    ))
+                }
             }
             ProviderType::Openrouter => {
                 let key = self
@@ -716,6 +730,51 @@ mod tests {
         });
         cfg.default_provider = Some("kimi-coding".into());
         let router = make_router(cfg);
+        assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
+    }
+
+    #[tokio::test]
+    async fn google_ai_oauth_provider_without_token_is_not_configured() {
+        let _g = ENV_LOCK.lock().await;
+        std::env::remove_var("OPENAI_API_KEY");
+        let mut cfg = AppConfig::default();
+        cfg.providers.push(ProviderConfig {
+            id: "gemini".into(),
+            display_name: "Gemini".into(),
+            provider_type: ProviderType::GoogleAi,
+            base_url: None,
+            oauth_client_id: None,
+            model: "gemini-2.5-pro".into(),
+            supports_json_mode: false,
+            auth_method: Some("oauth".into()),
+        });
+        cfg.default_provider = Some("gemini".into());
+        let router = make_router(cfg);
+        assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
+    }
+
+    #[tokio::test]
+    async fn google_ai_oauth_provider_with_token_but_no_project_id_is_not_configured() {
+        let _g = ENV_LOCK.lock().await;
+        std::env::remove_var("OPENAI_API_KEY");
+        let mut cfg = AppConfig::default();
+        cfg.providers.push(ProviderConfig {
+            id: "gemini-no-project".into(),
+            display_name: "Gemini".into(),
+            provider_type: ProviderType::GoogleAi,
+            base_url: None,
+            oauth_client_id: None,
+            model: "gemini-2.5-pro".into(),
+            supports_json_mode: false,
+            auth_method: Some("oauth".into()),
+        });
+        cfg.default_provider = Some("gemini-no-project".into());
+        let router = make_router(cfg);
+        // The in-memory test SecretStore has neither a token nor a project id
+        // stored, so this exercises the same NotConfigured path a real
+        // half-provisioned login would hit. Locks in that a missing
+        // project_id is a hard error, never an empty-string default silently
+        // sent in the request body.
         assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
     }
 
