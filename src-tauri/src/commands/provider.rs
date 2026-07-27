@@ -1013,11 +1013,27 @@ pub async fn get_anthropic_oauth_models(
 
 // ── Google OAuth ──────────────────────────────────────────────────────────────
 
-const GOOGLE_OAUTH_CLIENT_ID: &str = "";
+// Antigravity's OAuth client. This is Google's public installed-app client
+// id for Antigravity/Gemini Code Assist — confirmed byte-for-byte against
+// two independent client entry points (IDE login and the standalone `agy`
+// CLI login) that both use it. The client_secret for Google's installed-app
+// OAuth clients is not a confidential secret (Google's own docs describe
+// this client type as public); TODO before shipping: obtain the real secret
+// value via your own Antigravity/agy client traffic or documentation rather
+// than trusting a third-party's obfuscated constant — this repo intentionally
+// does not decode one from anywhere. Left empty here as a placeholder for
+// that follow-up; Google's token endpoint may or may not reject an empty
+// client_secret for this client type (verify at implementation time — see
+// design spec's "待驗證假設" #1).
+const GOOGLE_OAUTH_CLIENT_ID: &str = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
 const GOOGLE_OAUTH_CLIENT_SECRET: &str = "";
 const GOOGLE_OAUTH_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const GOOGLE_OAUTH_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile openid";
+// Deliberately NO "openid" scope — including it (even without PKCE) has been
+// found to route Google into a hanging `firstparty/nativeapp` consent screen
+// for this specific client. `cclog`/`experimentsandconfigs` are required by
+// the Antigravity backend itself, not optional extras.
+const GOOGLE_OAUTH_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs";
 
 #[derive(Deserialize)]
 struct GoogleTokenResponse {
@@ -1157,6 +1173,13 @@ pub async fn google_oauth_login(
         .await
         .map_err(|e| format!("Failed to parse token response: {e}"))?;
 
+    // Onboard BEFORE persisting anything — if this fails, the login as a
+    // whole fails and nothing is half-saved (no token stored without a
+    // matching project id).
+    let project_id = perform_antigravity_onboarding(&token_resp.access_token)
+        .await
+        .map_err(|e| format!("Antigravity onboarding failed: {e}"))?;
+
     secrets
         .set(&provider_id, &token_resp.access_token)
         .map_err(|e| format!("Failed to store access token: {e}"))?;
@@ -1168,6 +1191,7 @@ pub async fn google_oauth_login(
         let exp = now_secs() + expires_in;
         let _ = secrets.set(&format!("{provider_id}:oauth_expires_at"), &exp.to_string());
     }
+    let _ = secrets.set(&format!("{provider_id}:project_id"), &project_id);
 
     config
         .update(|cfg| {
@@ -1191,6 +1215,7 @@ pub fn google_oauth_logout(
     let _ = secrets.delete(&format!("{provider_id}:oauth_expires_at"));
     let _ = secrets.delete(&format!("{provider_id}:google_oauth_client_id"));
     let _ = secrets.delete(&format!("{provider_id}:google_oauth_client_secret"));
+    let _ = secrets.delete(&format!("{provider_id}:project_id"));
 
     config
         .update(|cfg| {
