@@ -1241,7 +1241,9 @@ fn antigravity_known_models() -> Vec<String> {
 
 /// Extracts model ids from Antigravity's model-discovery response, tolerating
 /// the shapes it might return: `{"models":[...]}` or a bare array, with each
-/// item's id read from `name` or `id`.
+/// item's id read from `name` or `id`. Deliberately covers fewer response
+/// shapes than the Codex sibling `parse_codex_models_response` (no `data`
+/// key, no object-values fallback) — don't assume parity between the two.
 fn parse_antigravity_models_response(json: &serde_json::Value) -> Vec<String> {
     let items: Vec<&serde_json::Value> = if let Some(arr) = json.get("models").and_then(|v| v.as_array()) {
         arr.iter().collect()
@@ -1257,7 +1259,12 @@ fn parse_antigravity_models_response(json: &serde_json::Value) -> Vec<String> {
             item.get("name")
                 .or_else(|| item.get("id"))
                 .and_then(|v| v.as_str())
-                .map(str::to_string)
+                // Google's model-listing APIs return `name` as a qualified
+                // resource path (e.g. "models/gemini-2.5-pro") rather than a
+                // bare id — see list_google_ai_models() in this same file,
+                // which strips the same prefix for the public API. The bare
+                // id is what must go into the request body's "model" field.
+                .map(|s| s.trim_start_matches("models/").to_string())
         })
         .collect();
     ids.sort();
@@ -1856,6 +1863,18 @@ mod antigravity_tests {
     fn parse_antigravity_models_response_deduplicates_ids() {
         let json = serde_json::json!({"models": [{"name": "a"}, {"id": "a"}, {"name": "b"}]});
         assert_eq!(parse_antigravity_models_response(&json), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn parse_antigravity_models_response_strips_models_prefix() {
+        let json = serde_json::json!({"models": [{"name": "models/gemini-2.5-pro"}]});
+        assert_eq!(parse_antigravity_models_response(&json), vec!["gemini-2.5-pro".to_string()]);
+    }
+
+    #[test]
+    fn parse_antigravity_models_response_leaves_bare_name_untouched() {
+        let json = serde_json::json!({"models": [{"name": "gemini-2.5-pro"}]});
+        assert_eq!(parse_antigravity_models_response(&json), vec!["gemini-2.5-pro".to_string()]);
     }
 
     use wiremock::matchers::{method, path};
