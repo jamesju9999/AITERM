@@ -13,7 +13,8 @@ export type ProviderType =
   | "xai"
   | "deepseek"
   | "kimi"
-  | "anthropic-compatible";
+  | "anthropic-compatible"
+  | "codex";
 
 export type ExecutionMode = "always-confirm" | "graded" | "full-auto";
 
