@@ -1226,28 +1226,48 @@ pub fn google_oauth_logout(
         .map_err(|e| format!("Failed to update provider config: {e}"))
 }
 
-/// Well-known Vertex AI Gemini models, used as fallback when the dynamic list fails.
-fn vertex_ai_known_models() -> Vec<String> {
+/// Known Gemini model ids as of this writing, used as a fallback when the
+/// live discovery call fails or returns nothing. Model availability through
+/// this internal API is known to shift over time (OmniRoute's own catalog
+/// carries this exact caveat) — treat this list as a starting point to
+/// re-verify periodically, not a permanent source of truth.
+fn antigravity_known_models() -> Vec<String> {
     vec![
-        "google/gemini-2.5-pro-preview-06-05".into(),
-        "google/gemini-2.5-pro-preview-05-06".into(),
-        "google/gemini-2.5-flash-preview-05-20".into(),
-        "google/gemini-2.5-flash-lite-preview-06-17".into(),
-        "google/gemini-2.0-flash-001".into(),
-        "google/gemini-2.0-flash-lite-001".into(),
-        "google/gemini-2.0-flash-exp".into(),
-        "google/gemini-1.5-pro-002".into(),
-        "google/gemini-1.5-pro-001".into(),
-        "google/gemini-1.5-flash-002".into(),
-        "google/gemini-1.5-flash-001".into(),
+        "gemini-2.5-pro".into(),
+        "gemini-2.5-flash".into(),
+        "gemini-2.5-flash-lite".into(),
     ]
+}
+
+/// Extracts model ids from Antigravity's model-discovery response, tolerating
+/// the shapes it might return: `{"models":[...]}` or a bare array, with each
+/// item's id read from `name` or `id`.
+fn parse_antigravity_models_response(json: &serde_json::Value) -> Vec<String> {
+    let items: Vec<&serde_json::Value> = if let Some(arr) = json.get("models").and_then(|v| v.as_array()) {
+        arr.iter().collect()
+    } else if let Some(arr) = json.as_array() {
+        arr.iter().collect()
+    } else {
+        vec![]
+    };
+
+    let mut ids: Vec<String> = items
+        .iter()
+        .filter_map(|item| {
+            item.get("name")
+                .or_else(|| item.get("id"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
 }
 
 #[tauri::command]
 pub async fn get_google_oauth_models(
     provider_id: String,
-    base_url_override: Option<String>,
-    config: State<'_, Arc<ConfigStore>>,
     secrets: State<'_, Arc<SecretStore>>,
 ) -> Result<Vec<String>, String> {
     let token = secrets
@@ -1255,57 +1275,35 @@ pub async fn get_google_oauth_models(
         .map_err(|e| format!("Failed to read token: {e}"))?
         .ok_or("No OAuth token stored for this provider")?;
 
-    // Prefer caller-supplied URL (before save), fall back to stored config.
-    let base_url = base_url_override.unwrap_or_else(|| {
-        config
-            .get()
-            .find_provider(&provider_id)
-            .and_then(|p| p.base_url.clone())
-            .unwrap_or_default()
-    });
-
-    if base_url.is_empty() {
-        return Ok(vertex_ai_known_models());
-    }
-
-    let models_url = format!("{}/models", base_url.trim_end_matches('/'));
     let client = reqwest::Client::new();
-    let resp = client
-        .get(&models_url)
-        .header("Authorization", format!("Bearer {token}"))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        log::warn!("Vertex AI /models returned {}, using known model list", resp.status());
-        return Ok(vertex_ai_known_models());
-    }
-
-    #[derive(Deserialize)]
-    struct ModelsResp {
-        data: Vec<ModelItem>,
-    }
-    #[derive(Deserialize)]
-    struct ModelItem {
-        id: String,
-    }
-
-    match resp.json::<ModelsResp>().await {
-        Ok(data) => {
-            let mut ids: Vec<String> = data
-                .data
-                .into_iter()
-                .map(|m| m.id)
-                .filter(|id| id.contains("gemini"))
-                .collect();
-            if ids.is_empty() {
-                return Ok(vertex_ai_known_models());
+    let models = match antigravity_headers(
+        client.get(format!("{ANTIGRAVITY_BOOTSTRAP_BASE_URL}/v1internal:fetchAvailableModels")),
+        &token,
+    )
+    .send()
+    .await
+    {
+        Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+            Ok(json) => parse_antigravity_models_response(&json),
+            Err(e) => {
+                log::warn!("Antigravity fetchAvailableModels response was not valid JSON, using fallback list ({e})");
+                vec![]
             }
-            ids.sort();
-            Ok(ids)
+        },
+        Ok(resp) => {
+            log::warn!("Antigravity fetchAvailableModels returned {}, using fallback list", resp.status());
+            vec![]
         }
-        Err(_) => Ok(vertex_ai_known_models()),
+        Err(e) => {
+            log::warn!("Antigravity fetchAvailableModels request failed: {e}");
+            vec![]
+        }
+    };
+
+    if models.is_empty() {
+        Ok(antigravity_known_models())
+    } else {
+        Ok(models)
     }
 }
 
@@ -1805,7 +1803,7 @@ mod codex_models_tests {
 }
 
 #[cfg(test)]
-mod antigravity_onboarding_tests {
+mod antigravity_tests {
     use super::*;
 
     #[test]
@@ -1830,6 +1828,33 @@ mod antigravity_onboarding_tests {
     fn extract_project_id_returns_none_for_empty_string() {
         let json = serde_json::json!({"cloudaicompanionProject": ""});
         assert_eq!(extract_cloudaicompanion_project_id(&json), None);
+    }
+
+    #[test]
+    fn parse_antigravity_models_response_handles_models_key() {
+        let json = serde_json::json!({"models": [{"name": "gemini-2.5-pro"}, {"id": "gemini-2.5-flash"}]});
+        assert_eq!(
+            parse_antigravity_models_response(&json),
+            vec!["gemini-2.5-flash".to_string(), "gemini-2.5-pro".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_antigravity_models_response_handles_bare_array() {
+        let json = serde_json::json!([{"name": "gemini-2.5-pro"}]);
+        assert_eq!(parse_antigravity_models_response(&json), vec!["gemini-2.5-pro".to_string()]);
+    }
+
+    #[test]
+    fn parse_antigravity_models_response_skips_items_with_no_id_field() {
+        let json = serde_json::json!({"models": [{"displayName": "no id here"}]});
+        assert!(parse_antigravity_models_response(&json).is_empty());
+    }
+
+    #[test]
+    fn parse_antigravity_models_response_deduplicates_ids() {
+        let json = serde_json::json!({"models": [{"name": "a"}, {"id": "a"}, {"name": "b"}]});
+        assert_eq!(parse_antigravity_models_response(&json), vec!["a".to_string(), "b".to_string()]);
     }
 
     use wiremock::matchers::{method, path};
