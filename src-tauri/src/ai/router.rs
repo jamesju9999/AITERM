@@ -411,6 +411,9 @@ impl AiRouter {
                     .ok_or(AiError::NotConfigured)?;
                 Arc::new(AnthropicClient::with_base_url(key, provider_cfg.model.clone(), base_url))
             }
+            ProviderType::Codex => {
+                return Err(AiError::NotConfigured);
+            }
         };
         Ok(provider)
     }

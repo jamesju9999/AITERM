@@ -175,6 +175,7 @@ pub enum ProviderType {
     Deepseek,
     Kimi,
     AnthropicCompatible,
+    Codex,
 }
 
 impl std::fmt::Display for ProviderType {
@@ -191,6 +192,7 @@ impl std::fmt::Display for ProviderType {
             ProviderType::Deepseek => write!(f, "DeepSeek"),
             ProviderType::Kimi => write!(f, "Kimi (Moonshot)"),
             ProviderType::AnthropicCompatible => write!(f, "Anthropic-Compatible"),
+            ProviderType::Codex => write!(f, "Codex"),
         }
     }
 }
@@ -400,6 +402,7 @@ mod tests {
             (ProviderType::Deepseek, "deepseek"),
             (ProviderType::Kimi, "kimi"),
             (ProviderType::AnthropicCompatible, "anthropic-compatible"),
+            (ProviderType::Codex, "codex"),
         ] {
             let w = W { ty };
             let serialized = toml::to_string(&w).unwrap();
