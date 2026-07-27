@@ -91,3 +91,27 @@ async fn returns_auth_failed_on_401() {
     let err = client.generate(req(), tx).await.unwrap_err();
     assert!(matches!(err, AiError::AuthFailed), "expected AuthFailed, got {err:?}");
 }
+
+#[tokio::test]
+async fn returns_model_error_on_response_failed_event() {
+    let server = MockServer::start().await;
+
+    let sse_body =
+        "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"something broke\"}}}\n\n";
+
+    Mock::given(method("POST"))
+        .and(path("/backend-api/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse_body),
+        )
+        .mount(&server)
+        .await;
+
+    let client =
+        CodexClient::with_base_url("test-token".into(), "gpt-5.1-codex".into(), None, server.uri());
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
+    let err = client.generate(req(), tx).await.unwrap_err();
+    assert!(matches!(err, AiError::ModelError { .. }), "expected ModelError, got {err:?}");
+}

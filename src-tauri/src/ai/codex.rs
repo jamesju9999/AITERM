@@ -310,4 +310,48 @@ mod tests {
         let body = build_request_body("gpt-5.1-codex-high", &r);
         assert_eq!(body["model"], "gpt-5.1-codex-high");
     }
+
+    #[test]
+    fn sse_event_output_text_delta_parses() {
+        let raw = r#"{"type":"response.output_text.delta","delta":"Hello"}"#;
+        let event: CodexSseEvent = serde_json::from_str(raw).unwrap();
+        match event {
+            CodexSseEvent::OutputTextDelta { delta } => assert_eq!(delta, "Hello"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn sse_event_completed_parses_usage() {
+        let raw = r#"{"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":2}}}"#;
+        let event: CodexSseEvent = serde_json::from_str(raw).unwrap();
+        match event {
+            CodexSseEvent::Completed { response } => {
+                let usage = response.expect("response present").usage.expect("usage present");
+                assert_eq!(usage.input_tokens, 10);
+                assert_eq!(usage.output_tokens, 2);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn sse_event_unknown_type_parses_as_other() {
+        let raw = r#"{"type":"response.created"}"#;
+        let event: CodexSseEvent = serde_json::from_str(raw).unwrap();
+        assert!(matches!(event, CodexSseEvent::Other));
+    }
+
+    #[test]
+    fn sse_event_failed_parses() {
+        let raw = r#"{"type":"response.failed","response":{"error":{"message":"something broke"}}}"#;
+        let event: CodexSseEvent = serde_json::from_str(raw).unwrap();
+        match event {
+            CodexSseEvent::Failed { response } => {
+                let error = response.expect("response present").error.expect("error present");
+                assert_eq!(error["message"], "something broke");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
 }
