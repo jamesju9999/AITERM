@@ -49,6 +49,188 @@ pub struct AntigravityClient {
     client: reqwest::Client,
 }
 
+impl AntigravityClient {
+    pub fn new(access_token: String, project_id: String, model: String) -> Self {
+        Self::with_base_url(access_token, project_id, model, "https://cloudcode-pa.googleapis.com".into())
+    }
+
+    /// Test-only hook: lets integration tests point at a wiremock server
+    /// instead of the real cloudcode-pa.googleapis.com backend. There is no
+    /// user-facing base_url setting for this provider — the endpoint is
+    /// fixed in production.
+    pub fn with_base_url(access_token: String, project_id: String, model: String, base_url: String) -> Self {
+        Self { access_token, project_id, model, base_url, client: reqwest::Client::new() }
+    }
+
+    fn generate_content_url(&self) -> String {
+        format!("{}/v1internal:streamGenerateContent?alt=sse", self.base_url.trim_end_matches('/'))
+    }
+
+    /// Fixed User-Agent presenting as the real Antigravity IDE client.
+    /// Deliberately reports darwin/arm64 regardless of host OS — the
+    /// upstream backend is known to treat the Mac build identity more
+    /// permissively (see this file's module doc for the OmniRoute-sourced
+    /// rationale this was ported from).
+    fn user_agent(&self) -> String {
+        format!("antigravity/ide/{ANTIGRAVITY_IDE_VERSION} darwin/arm64")
+    }
+
+    fn apply_headers(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        builder
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .header("User-Agent", self.user_agent())
+            .bearer_auth(&self.access_token)
+    }
+}
+
+#[async_trait]
+impl AiProvider for AntigravityClient {
+    fn id(&self) -> &str {
+        "google-ai"
+    }
+    fn display_name(&self) -> &str {
+        "Gemini (Google Account)"
+    }
+
+    async fn generate(
+        &self,
+        req: GenerateRequest,
+        tx: mpsc::Sender<GenerateChunk>,
+    ) -> Result<(), AiError> {
+        let body = build_request_body(&self.model, &self.project_id, &req);
+        let resp = self
+            .apply_headers(self.client.post(self.generate_content_url()))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AiError::Network { message: e.to_string() })?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(map_http_error(status, resp).await);
+        }
+        consume_gemini_sse(resp, tx).await
+    }
+
+    async fn health_check(&self) -> Result<(), AiError> {
+        // A minimal real generate call is the only reliable way to validate an
+        // Antigravity token + project id pair — there is no cheap read-only
+        // endpoint reused here (model discovery lives in commands/provider.rs
+        // and needs its own token, not this client's).
+        let (tx, mut rx) = mpsc::channel::<GenerateChunk>(4);
+        let probe = GenerateRequest {
+            system_prompt: String::new(),
+            messages: vec![crate::ai::ChatMessage {
+                role: "user".into(),
+                content: serde_json::json!("ping"),
+                tool_call_id: None,
+                tool_calls: None,
+            }],
+            context: crate::ai::EnvSnapshot::default(),
+            mode: crate::ai::QueryMode::Chat,
+            max_tokens: Some(1),
+        };
+        self.generate(probe, tx).await?;
+        while rx.recv().await.is_some() {}
+        Ok(())
+    }
+}
+
+async fn consume_gemini_sse(
+    resp: reqwest::Response,
+    tx: mpsc::Sender<GenerateChunk>,
+) -> Result<(), AiError> {
+    let mut stream = resp.bytes_stream();
+    let mut buf = Vec::<u8>::new();
+    let mut saw_done = false;
+
+    'outer: while let Some(item) = stream.next().await {
+        let bytes = item.map_err(|e| AiError::Network { message: e.to_string() })?;
+        buf.extend_from_slice(&bytes);
+
+        loop {
+            let Some(pos) = find_line_end(&buf) else { break };
+            let line_bytes: Vec<u8> = buf.drain(..pos).collect();
+            let sep = separator_len(&buf);
+            buf.drain(..sep);
+            let line = match std::str::from_utf8(&line_bytes) {
+                Ok(s) => s.trim(),
+                Err(_) => continue,
+            };
+            if line.is_empty() {
+                continue;
+            }
+
+            let Some(data) = line.strip_prefix("data:") else { continue };
+            let data = data.trim();
+            let Ok(chunk) = serde_json::from_str::<GeminiStreamChunk>(data) else { continue };
+
+            let candidate = chunk.candidates.into_iter().next();
+            let text = candidate
+                .as_ref()
+                .and_then(|c| c.content.as_ref())
+                .map(|c| c.parts.iter().filter_map(|p| p.text.clone()).collect::<String>())
+                .unwrap_or_default();
+            let finished = candidate.as_ref().and_then(|c| c.finish_reason.as_ref()).is_some();
+
+            if !text.is_empty() {
+                let _ = tx.send(GenerateChunk { delta: text, done: false, usage: None }).await;
+            }
+            if finished {
+                let usage = chunk.usage_metadata.map(|u| TokenUsage {
+                    prompt: u.prompt_token_count,
+                    completion: u.candidates_token_count,
+                });
+                let _ = tx.send(GenerateChunk { delta: String::new(), done: true, usage }).await;
+                saw_done = true;
+                break 'outer;
+            }
+        }
+    }
+
+    if !saw_done {
+        let _ = tx.send(GenerateChunk { delta: String::new(), done: true, usage: None }).await;
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct GeminiStreamChunk {
+    #[serde(default)]
+    candidates: Vec<GeminiCandidate>,
+    #[serde(default, rename = "usageMetadata")]
+    usage_metadata: Option<GeminiUsageMetadata>,
+}
+
+#[derive(Deserialize)]
+struct GeminiCandidate {
+    #[serde(default)]
+    content: Option<GeminiContent>,
+    #[serde(default, rename = "finishReason")]
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct GeminiContent {
+    #[serde(default)]
+    parts: Vec<GeminiPart>,
+}
+
+#[derive(Deserialize, Default)]
+struct GeminiPart {
+    #[serde(default)]
+    text: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GeminiUsageMetadata {
+    #[serde(default, rename = "promptTokenCount")]
+    prompt_token_count: u32,
+    #[serde(default, rename = "candidatesTokenCount")]
+    candidates_token_count: u32,
+}
+
 /// Build the Antigravity `streamGenerateContent` request envelope.
 pub(crate) fn build_request_body(model: &str, project_id: &str, req: &GenerateRequest) -> serde_json::Value {
     // Any {role:"system",...} message injected directly into history (see
