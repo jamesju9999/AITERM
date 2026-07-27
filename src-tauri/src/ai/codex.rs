@@ -35,6 +35,49 @@ pub struct CodexClient {
     client: reqwest::Client,
 }
 
+impl CodexClient {
+    pub fn new(access_token: String, model: String, chatgpt_account_id: Option<String>) -> Self {
+        Self::with_base_url(access_token, model, chatgpt_account_id, "https://chatgpt.com".into())
+    }
+
+    /// Test-only hook: lets integration tests point at a wiremock server
+    /// instead of the real chatgpt.com backend. There is no user-facing
+    /// base_url setting for Codex — the endpoint is fixed in production.
+    pub fn with_base_url(
+        access_token: String,
+        model: String,
+        chatgpt_account_id: Option<String>,
+        base_url: String,
+    ) -> Self {
+        Self { access_token, model, chatgpt_account_id, base_url, client: reqwest::Client::new() }
+    }
+
+    fn responses_url(&self) -> String {
+        format!("{}/backend-api/codex/responses", self.base_url.trim_end_matches('/'))
+    }
+
+    fn models_url(&self) -> String {
+        format!(
+            "{}/backend-api/codex/models?client_version={CODEX_CLIENT_VERSION}",
+            self.base_url.trim_end_matches('/')
+        )
+    }
+
+    fn apply_headers(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let builder = builder
+            .bearer_auth(&self.access_token)
+            .header("originator", "codex_cli_rs")
+            .header("User-Agent", CODEX_USER_AGENT)
+            .header("Version", CODEX_CLIENT_VERSION)
+            .header("Openai-Beta", "responses=experimental")
+            .header("X-Codex-Beta-Features", "responses_websockets");
+        match &self.chatgpt_account_id {
+            Some(id) => builder.header("chatgpt-account-id", id.as_str()),
+            None => builder,
+        }
+    }
+}
+
 /// Build the Responses API request body. `instructions` is Codex's required
 /// system-prompt-equivalent — the backend rejects requests without it.
 pub(crate) fn build_request_body(model: &str, req: &GenerateRequest) -> serde_json::Value {
@@ -61,6 +104,148 @@ pub(crate) fn build_request_body(model: &str, req: &GenerateRequest) -> serde_js
         "stream": true,
         "store": false,
     })
+}
+
+#[async_trait]
+impl AiProvider for CodexClient {
+    fn id(&self) -> &str {
+        "codex"
+    }
+    fn display_name(&self) -> &str {
+        "Codex"
+    }
+
+    async fn generate(
+        &self,
+        req: GenerateRequest,
+        tx: mpsc::Sender<GenerateChunk>,
+    ) -> Result<(), AiError> {
+        let body = build_request_body(&self.model, &req);
+        let resp = self
+            .apply_headers(self.client.post(self.responses_url()))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AiError::Network { message: e.to_string() })?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(map_http_error(status, resp).await);
+        }
+        consume_codex_sse(resp, tx).await
+    }
+
+    async fn health_check(&self) -> Result<(), AiError> {
+        let resp = self
+            .apply_headers(self.client.get(self.models_url()))
+            .send()
+            .await
+            .map_err(|e| AiError::Network { message: e.to_string() })?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(map_http_error(status, resp).await);
+        }
+        Ok(())
+    }
+}
+
+async fn consume_codex_sse(
+    resp: reqwest::Response,
+    tx: mpsc::Sender<GenerateChunk>,
+) -> Result<(), AiError> {
+    let mut stream = resp.bytes_stream();
+    let mut buf = Vec::<u8>::new();
+    let mut saw_done = false;
+
+    'outer: while let Some(item) = stream.next().await {
+        let bytes = item.map_err(|e| AiError::Network { message: e.to_string() })?;
+        buf.extend_from_slice(&bytes);
+
+        loop {
+            let Some(pos) = find_line_end(&buf) else { break };
+            let line_bytes: Vec<u8> = buf.drain(..pos).collect();
+            let sep = separator_len(&buf);
+            buf.drain(..sep);
+            let line = match std::str::from_utf8(&line_bytes) {
+                Ok(s) => s.trim(),
+                Err(_) => continue,
+            };
+            if line.is_empty() {
+                continue;
+            }
+
+            let Some(data) = line.strip_prefix("data:") else { continue };
+            let data = data.trim();
+            match serde_json::from_str::<CodexSseEvent>(data) {
+                Ok(CodexSseEvent::OutputTextDelta { delta }) => {
+                    let _ = tx.send(GenerateChunk { delta, done: false, usage: None }).await;
+                }
+                Ok(CodexSseEvent::Completed { response }) => {
+                    let usage = response.and_then(|r| r.usage).map(|u| TokenUsage {
+                        prompt: u.input_tokens,
+                        completion: u.output_tokens,
+                    });
+                    let _ = tx
+                        .send(GenerateChunk { delta: String::new(), done: true, usage })
+                        .await;
+                    saw_done = true;
+                    break 'outer;
+                }
+                Ok(CodexSseEvent::Failed { response }) => {
+                    let reason = response
+                        .and_then(|r| r.error)
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "Codex response failed".into());
+                    return Err(AiError::ModelError {
+                        reason,
+                        raw: data.chars().take(300).collect(),
+                    });
+                }
+                Ok(CodexSseEvent::Other) => {}
+                Err(_) => continue,
+            }
+        }
+    }
+
+    if !saw_done {
+        let _ = tx.send(GenerateChunk { delta: String::new(), done: true, usage: None }).await;
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum CodexSseEvent {
+    #[serde(rename = "response.output_text.delta")]
+    OutputTextDelta { delta: String },
+    #[serde(rename = "response.completed")]
+    Completed {
+        #[serde(default)]
+        response: Option<CodexResponseSummary>,
+    },
+    #[serde(rename = "response.failed")]
+    Failed {
+        #[serde(default)]
+        response: Option<CodexResponseSummary>,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize, Default)]
+struct CodexResponseSummary {
+    #[serde(default)]
+    usage: Option<CodexUsage>,
+    #[serde(default)]
+    error: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct CodexUsage {
+    #[serde(default)]
+    input_tokens: u32,
+    #[serde(default)]
+    output_tokens: u32,
 }
 
 #[cfg(test)]
