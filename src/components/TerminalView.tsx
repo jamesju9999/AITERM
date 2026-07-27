@@ -41,6 +41,7 @@ import { WarpInput } from "./WarpInput";
 import { FileExplorer } from "./FileExplorer/FileExplorer";
 import { CommandBookmarksPicker, addBookmark } from "./CommandBookmarks";
 import { getActiveTheme, type AppTheme } from "../lib/themes";
+import { readLineExcludingInlinePrediction } from "../lib/terminalLinePrediction";
 import { RobotIcon, SparklesIcon, SmartphoneIcon } from "./Icons";
 import { TerminalBlockCard } from "./TerminalBlockCard";
 import { findNextBlockMatch, findPreviousBlockMatch, type BlockSearchCursor } from "../lib/blockSearch";
@@ -819,11 +820,15 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       // pastes, bracketed paste never registering a command at all).
       // Whatever's actually on screen at Enter time, minus this prefix, IS
       // the command — ground truth from the terminal itself, and identical
-      // logic regardless of platform or input method.
+      // logic regardless of platform or input method. readLineExcludingInlinePrediction
+      // additionally strips shells' inline "ghost" suggestions (e.g. PSReadLine
+      // InlineView) so those never get captured as part of the typed text.
       if (lineStartSnapshotRef.current === null) {
         const baseY = term.buffer.active.baseY;
-        lineStartSnapshotRef.current =
-          term.buffer.active.getLine(term.buffer.active.cursorY + baseY)?.translateToString(true) ?? "";
+        lineStartSnapshotRef.current = readLineExcludingInlinePrediction(
+          term.buffer.active.getLine(term.buffer.active.cursorY + baseY),
+          term.buffer.active.cursorX,
+        );
       }
 
       // Escape sequences (arrow keys, function keys, Home/End, bracketed
@@ -872,7 +877,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           let line: string;
           if (!sawNewlineThisChunk) {
             const baseY = term.buffer.active.baseY;
-            const renderedNow = term.buffer.active.getLine(term.buffer.active.cursorY + baseY)?.translateToString(true) ?? "";
+            const renderedNow = readLineExcludingInlinePrediction(
+              term.buffer.active.getLine(term.buffer.active.cursorY + baseY),
+              term.buffer.active.cursorX,
+            );
             const fullLine = renderedNow + pendingThisChunk;
             const snapshot = lineStartSnapshotRef.current ?? "";
             line = (fullLine.startsWith(snapshot) ? fullLine.slice(snapshot.length) : fullLine).trim();
