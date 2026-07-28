@@ -627,11 +627,32 @@ fn compress_conversation(
         .filter(|m| m.role == "user")
         .collect();
 
+    // `summary` is raw streamed model output and normally ends with a newline
+    // (and is empty outright when the summarising call failed). Anthropic
+    // validates the last assistant turn as a prefill and rejects it with
+    // "final assistant content cannot end with trailing whitespace", so trim.
+    let summary = summary.trim();
+    let checkpoint = if summary.is_empty() {
+        format!("[Checkpoint #{checkpoint_n} — no findings could be summarised]")
+    } else {
+        format!("[Checkpoint #{checkpoint_n} — confirmed findings so far]\n{summary}")
+    };
+
     result.push(ChatMessage {
         role: "assistant".into(),
-        content: serde_json::Value::String(format!(
-            "[Checkpoint #{checkpoint_n} — confirmed findings so far]\n{summary}"
-        )),
+        content: serde_json::Value::String(checkpoint),
+        tool_call_id: None,
+        tool_calls: None,
+    });
+    // Newer Claude models reject a trailing assistant turn outright (prefill is
+    // unsupported), so close the compressed history with a user turn.
+    result.push(ChatMessage {
+        role: "user".into(),
+        content: serde_json::Value::String(
+            "Continue from the checkpoint above: keep searching the documents with the tools, \
+             or write the final answer if you already have enough."
+                .into(),
+        ),
         tool_call_id: None,
         tool_calls: None,
     });
@@ -673,5 +694,39 @@ mod tests {
         let k1 = tool_call_key("search_documents", &args);
         let k2 = tool_call_key("search_documents", &args);
         assert_eq!(k1, k2);
+    }
+
+    fn msg(role: &str, content: serde_json::Value) -> ChatMessage {
+        ChatMessage { role: role.into(), content, tool_call_id: None, tool_calls: None }
+    }
+
+    #[test]
+    fn compressed_conversation_is_anthropic_safe() {
+        let conversation = vec![
+            msg("user", serde_json::json!("這些文件的主要內容是什麼？")),
+            msg("assistant", serde_json::Value::Null),
+            msg("tool", serde_json::json!("search hit ...")),
+        ];
+
+        // Streamed model output normally ends with a newline.
+        let out = compress_conversation(conversation, "已確認：TableSchema 共 12 張表。\n\n", 1);
+
+        assert!(out.iter().all(|m| m.role != "tool"));
+        assert_eq!(out.last().unwrap().role, "user", "must not end on an assistant turn");
+
+        let checkpoint = out.iter().find(|m| m.role == "assistant").expect("checkpoint turn");
+        let text = checkpoint.content.as_str().expect("checkpoint is plain text");
+        assert!(text.contains("Checkpoint #1"));
+        assert_eq!(text, text.trim_end(), "assistant content must not end with whitespace");
+    }
+
+    #[test]
+    fn empty_checkpoint_summary_does_not_produce_blank_assistant_turn() {
+        let out = compress_conversation(vec![msg("user", serde_json::json!("問題"))], "  \n ", 2);
+
+        let checkpoint = out.iter().find(|m| m.role == "assistant").expect("checkpoint turn");
+        let text = checkpoint.content.as_str().expect("checkpoint is plain text");
+        assert!(!text.is_empty());
+        assert_eq!(text, text.trim_end());
     }
 }
