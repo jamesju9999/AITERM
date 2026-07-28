@@ -12,6 +12,7 @@ pub mod mcp;
 pub mod provider;
 pub mod secret;
 pub mod shell;
+pub mod updater;
 pub mod vcs;
 pub mod web;
 pub mod code_assistant;
