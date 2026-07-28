@@ -1818,11 +1818,19 @@ Launch the manually-installed v1.2.0 and confirm, in order:
 7. Pressing 重新啟動以完成更新 relaunches the app, and About now shows `v1.2.1`.
 8. On macOS specifically: the updated app opens without needing `xattr -cr`.
 
-- [ ] **Step 7: Verify the `.deb` fallback**
+- [ ] **Step 7: Check the toast does not collide with the Enterprise notification**
+
+`.update-modal-backdrop` sits at `bottom: 16px; right: 16px; z-index: 4000`. `TerminalApp`'s Enterprise task notification sits at `bottom: 24px; right: 24px; z-index: 9999`. The coordinates nearly coincide and the Enterprise one wins, so when both are on screen it covers the update toast's 【立即更新】/【稍後】 buttons.
+
+This is a pre-existing coordinate choice; the update toast merely made it reachable. With a real update pending, trigger an Enterprise task notification and confirm whether the overlap is tolerable in practice. If it is not, the fix is to move the update toast to a free corner — **not** to raise its `z-index`, which would just swap which one is hidden.
+
+Also confirm what the toast looks like during onboarding (`/onboarding`): it renders there too. The wizard is a centred card so there should be no overlap, but verify it is wanted at all.
+
+- [ ] **Step 8: Verify the `.deb` fallback**
 
 On a Linux machine with the `.deb` installed (not the AppImage), launch the app and confirm the modal shows 「此安裝方式不支援自動更新，請至 GitHub 下載新版。」 with a working download link — and that **no** 立即更新 button is offered.
 
-- [ ] **Step 8: Record the result**
+- [ ] **Step 9: Record the result**
 
 Append the outcome to `docs/superpowers/specs/2026-07-28-in-app-updater-design.md` under a new "驗證結果" section: which platforms were tested, on what OS versions, and anything that behaved unexpectedly.
 
