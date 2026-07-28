@@ -74,6 +74,54 @@ async fn happy_path_streams_and_sends_required_headers() {
     assert_eq!(buf, "Hello world");
 }
 
+/// Regression: the live endpoint wraps the Gemini payload in an envelope —
+/// `{"response": {candidates, ...}, "traceId": ..., "metadata": {}}` — but the
+/// first implementation looked for `candidates` at the top level. Every chunk
+/// therefore parsed as "no candidates", all text was dropped, and the user got
+/// "HTTP 200 but empty body" on every single query while the model was in fact
+/// responding correctly. The pre-existing happy-path test above used the bare
+/// (envelope-less) shape, so it passed throughout and never caught this —
+/// hence this test, whose body is copied verbatim from a real response.
+#[tokio::test]
+async fn unwraps_the_antigravity_response_envelope() {
+    let server = MockServer::start().await;
+
+    let sse_body = "data: {\"response\": {\"candidates\": [{\"content\": {\"role\": \"model\",\"parts\": [{\"text\": \"Hello\"}]}}],\"usageMetadata\": {\"promptTokenCount\": 703,\"candidatesTokenCount\": 2},\"modelVersion\": \"gemini-2.5-flash\"},\"traceId\": \"b7b1cde1bea597d4\",\"metadata\": {}}\n\n\
+                     data: {\"response\": {\"candidates\": [{\"content\": {\"role\": \"model\",\"parts\": [{\"text\": \" world\"}]},\"finishReason\": \"STOP\"}],\"usageMetadata\": {\"promptTokenCount\": 703,\"candidatesTokenCount\": 53}},\"traceId\": \"b7b1cde1bea597d4\",\"metadata\": {}}\n\n";
+
+    Mock::given(method("POST"))
+        .and(path("/v1internal:streamGenerateContent"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse_body),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = AntigravityClient::with_base_url(
+        "test-token".into(),
+        "proj-123".into(),
+        "gemini-2.5-pro".into(),
+        server.uri(),
+    );
+    let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
+    client.generate(req(), tx).await.expect("generate ok");
+
+    let mut buf = String::new();
+    let mut saw_done = false;
+    while let Some(chunk) = rx.recv().await {
+        buf.push_str(&chunk.delta);
+        if chunk.done {
+            saw_done = true;
+            break;
+        }
+    }
+    assert!(saw_done, "expected a done chunk");
+    assert_eq!(buf, "Hello world", "envelope must be unwrapped, not silently dropped");
+}
+
 #[tokio::test]
 async fn returns_auth_failed_on_401() {
     let server = MockServer::start().await;

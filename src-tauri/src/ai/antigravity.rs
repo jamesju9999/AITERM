@@ -176,7 +176,19 @@ async fn consume_gemini_sse(
 
             let Some(data) = line.strip_prefix("data:") else { continue };
             let data = data.trim();
-            let Ok(chunk) = serde_json::from_str::<GeminiStreamChunk>(data) else { continue };
+            // Antigravity wraps the standard Gemini payload in an envelope:
+            // `{"response": {candidates, usageMetadata, ...}, "traceId": ...}`.
+            // Confirmed against the live endpoint. Fall back to reading the
+            // payload bare in case the envelope ever goes away — note the
+            // envelope must be tried FIRST, since GeminiStreamChunk's fields
+            // are all `#[serde(default)]` and would happily parse the
+            // envelope into an empty (silently text-less) chunk.
+            let chunk = match serde_json::from_str::<AntigravityStreamEnvelope>(data) {
+                Ok(env) => env.response,
+                Err(_) => None,
+            }
+            .or_else(|| serde_json::from_str::<GeminiStreamChunk>(data).ok());
+            let Some(chunk) = chunk else { continue };
 
             if chunk.candidates.is_empty() {
                 if let Some(reason) = chunk.prompt_feedback.as_ref().and_then(|f| f.block_reason.clone()) {
@@ -214,6 +226,13 @@ async fn consume_gemini_sse(
         let _ = tx.send(GenerateChunk { delta: String::new(), done: true, usage: None }).await;
     }
     Ok(())
+}
+
+/// Antigravity's SSE envelope around the standard Gemini payload.
+#[derive(Deserialize)]
+struct AntigravityStreamEnvelope {
+    #[serde(default)]
+    response: Option<GeminiStreamChunk>,
 }
 
 #[derive(Deserialize)]

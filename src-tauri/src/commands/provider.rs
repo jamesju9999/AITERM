@@ -1241,12 +1241,29 @@ fn antigravity_known_models() -> Vec<String> {
     ]
 }
 
-/// Extracts model ids from Antigravity's model-discovery response, tolerating
-/// the shapes it might return: `{"models":[...]}` or a bare array, with each
-/// item's id read from `name` or `id`. Deliberately covers fewer response
-/// shapes than the Codex sibling `parse_codex_models_response` (no `data`
-/// key, no object-values fallback) — don't assume parity between the two.
+/// Extracts model ids from Antigravity's model-discovery response.
+///
+/// The real shape (confirmed against the live endpoint) is an OBJECT keyed by
+/// model id, whose values hold metadata:
+/// `{"models": {"gemini-pro-agent": {"displayName": "...", ...}, ...}}`
+/// — so the id we want is the KEY, not a field inside the value. Entries
+/// flagged `isInternal` are Antigravity's own internal/placeholder models and
+/// aren't usable as chat models, so they're skipped.
+///
+/// The array forms (`{"models": [...]}` / a bare array, id read from `name`
+/// or `id`) are kept as a fallback in case the shape shifts again.
 fn parse_antigravity_models_response(json: &serde_json::Value) -> Vec<String> {
+    if let Some(map) = json.get("models").and_then(|v| v.as_object()) {
+        let mut ids: Vec<String> = map
+            .iter()
+            .filter(|(_, meta)| !meta.get("isInternal").and_then(|v| v.as_bool()).unwrap_or(false))
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        return ids;
+    }
+
     let items: Vec<&serde_json::Value> = if let Some(arr) = json.get("models").and_then(|v| v.as_array()) {
         arr.iter().collect()
     } else if let Some(arr) = json.as_array() {
@@ -1888,6 +1905,45 @@ mod antigravity_tests {
     fn parse_antigravity_models_response_leaves_bare_name_untouched() {
         let json = serde_json::json!({"models": [{"name": "gemini-2.5-pro"}]});
         assert_eq!(parse_antigravity_models_response(&json), vec!["gemini-2.5-pro".to_string()]);
+    }
+
+    /// Regression: the live endpoint returns `models` as an OBJECT keyed by
+    /// model id, not an array. An earlier revision only handled the array
+    /// forms, so a perfectly good 200 response parsed to zero ids and every
+    /// user silently got the 3-item hardcoded fallback list instead of the
+    /// real catalog. Shape captured verbatim from a real response.
+    #[test]
+    fn parse_antigravity_models_response_handles_object_keyed_by_model_id() {
+        let json = serde_json::json!({
+            "models": {
+                "gemini-pro-agent": {
+                    "displayName": "Gemini 3.1 Pro (High)",
+                    "supportsThinking": true,
+                    "model": "MODEL_PLACEHOLDER_M16"
+                },
+                "gemini-3.1-flash-image": {
+                    "displayName": "Gemini 3.1 Flash Image",
+                    "model": "MODEL_PLACEHOLDER_M21"
+                }
+            }
+        });
+        assert_eq!(
+            parse_antigravity_models_response(&json),
+            vec!["gemini-3.1-flash-image".to_string(), "gemini-pro-agent".to_string()]
+        );
+    }
+
+    /// `isInternal` entries (e.g. "chat_23310") are Antigravity's own
+    /// internal/placeholder models — not selectable as chat models.
+    #[test]
+    fn parse_antigravity_models_response_skips_internal_models() {
+        let json = serde_json::json!({
+            "models": {
+                "chat_23310": { "model": "MODEL_CHAT_23310", "isInternal": true },
+                "gemini-pro-agent": { "displayName": "Gemini 3.1 Pro (High)" }
+            }
+        });
+        assert_eq!(parse_antigravity_models_response(&json), vec!["gemini-pro-agent".to_string()]);
     }
 
     use wiremock::matchers::{method, path};
