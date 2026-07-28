@@ -8,7 +8,7 @@ import { useUpdaterContext } from "./contexts/UpdaterContext";
 import { isOnboardingDone } from "./ipc/config";
 import "./App.css";
 
-function AppRoutes() {
+export function AppRoutes() {
   const navigate = useNavigate();
   const location = useLocation();
   const [ready, setReady] = useState(false);

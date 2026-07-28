@@ -41,6 +41,12 @@ function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/**
+ * Publish interval when the server omits Content-Length. A 30MB download
+ * publishes ~120 times, comparable to the one-percent rule below.
+ */
+const UNKNOWN_TOTAL_STEP = 256 * 1024;
+
 export function useUpdater(): UpdaterApi {
   const [state, setState] = useState<UpdaterState>({ status: "idle" });
   const [dismissed, setDismissed] = useState(false);
@@ -113,7 +119,7 @@ export function useUpdater(): UpdaterApi {
 
     let total: number | null = null;
     let downloaded = 0;
-    let lastPublished = -1;
+    let lastPublished = 0;
     set({ status: "downloading", version: update.version, downloaded: 0, total: null });
 
     try {
@@ -126,11 +132,13 @@ export function useUpdater(): UpdaterApi {
           case "Progress": {
             downloaded += event.data.chunkLength;
             // Tauri streams ~8-16KB chunks, so a 30MB update fires thousands of
-            // these. Publishing each one re-renders the whole app tree from
-            // AppRoutes down. A percentage point is finer than the progress bar
-            // can render anyway.
-            const advanced = total === null || downloaded - lastPublished >= total / 100;
-            if (advanced || downloaded === total) {
+            // these, and every one re-renders the app tree from AppRoutes down.
+            // Publish ~100 times instead: one percent when the size is known, a
+            // fixed byte floor when it is not. The unknown-size case matters
+            // most — the modal renders an indeterminate bar there and ignores
+            // `downloaded` entirely, so extra updates buy literally nothing.
+            const step = total !== null && total > 0 ? total / 100 : UNKNOWN_TOTAL_STEP;
+            if (downloaded - lastPublished >= step || downloaded === total) {
               lastPublished = downloaded;
               set({ status: "downloading", version: update.version, downloaded, total });
             }

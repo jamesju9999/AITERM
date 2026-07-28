@@ -167,6 +167,48 @@ describe("useUpdater", () => {
       status: "downloading", version: "1.2.0", downloaded: 210, total: 10_000,
     });
 
+    // 9950 of 10000: over the threshold, publishes normally.
+    await act(async () => { download.emit({ event: "Progress", data: { chunkLength: 9740 } }); });
+    expect(result.current.state).toEqual({
+      status: "downloading", version: "1.2.0", downloaded: 9950, total: 10_000,
+    });
+
+    // The last 50 bytes are under the 100-byte threshold, but completing the
+    // download publishes regardless so the bar reaches 100%.
+    await act(async () => { download.emit({ event: "Progress", data: { chunkLength: 50 } }); });
+    expect(result.current.state).toEqual({
+      status: "downloading", version: "1.2.0", downloaded: 10_000, total: 10_000,
+    });
+
+    await act(async () => {
+      download.emit({ event: "Finished" });
+      download.release();
+      await installed;
+    });
+  });
+
+  it("throttles by bytes when the total size is unknown", async () => {
+    const download = deferredDownload();
+    checkMock.mockResolvedValue(fakeUpdate({ downloadAndInstall: download.fn }));
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.state.status).toBe("available"));
+
+    let installed: Promise<void> | undefined;
+    await act(async () => { installed = result.current.install(); });
+    await act(async () => { download.emit({ event: "Started", data: {} }); });
+
+    // Below the byte floor. The indeterminate bar ignores `downloaded` anyway,
+    // so publishing here would be pure re-render cost.
+    await act(async () => { download.emit({ event: "Progress", data: { chunkLength: 10 } }); });
+    expect(result.current.state).toEqual({
+      status: "downloading", version: "1.2.0", downloaded: 0, total: null,
+    });
+
+    await act(async () => { download.emit({ event: "Progress", data: { chunkLength: 300_000 } }); });
+    expect(result.current.state).toEqual({
+      status: "downloading", version: "1.2.0", downloaded: 300_010, total: null,
+    });
+
     await act(async () => {
       download.emit({ event: "Finished" });
       download.release();
@@ -190,9 +232,9 @@ describe("useUpdater", () => {
       status: "downloading", version: "1.2.0", downloaded: 0, total: null,
     });
 
-    await act(async () => { download.emit({ event: "Progress", data: { chunkLength: 10 } }); });
+    await act(async () => { download.emit({ event: "Progress", data: { chunkLength: 300_000 } }); });
     expect(result.current.state).toEqual({
-      status: "downloading", version: "1.2.0", downloaded: 10, total: null,
+      status: "downloading", version: "1.2.0", downloaded: 300_000, total: null,
     });
 
     await act(async () => {
