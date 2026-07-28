@@ -44,6 +44,18 @@ Tauri updater 的安全性完全建立在簽章上：App 只接受用專屬私�
    - `TAURI_SIGNING_PRIVATE_KEY`
    - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
 
+### 已完成（2026-07-28）
+
+金鑰對已產生於 `~/.tauri/aiterm_updater.key{,.pub}`，GitHub Secrets 已設定完成。
+
+minisign key ID：`B5F4C8732C15A4A`
+
+寫入 `tauri.conf.json` 的 `plugins.updater.pubkey` 值（base64 全文，可公開）：
+
+```
+dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI1RjRDODczMkMxNUE0QQpSV1JLV3NFeWgweGZDMktVNHhiOUpxUnE5WXdRaHRqV3JnRnFMOFg0V1ByMWRVQ2Yxc1JVcGR6SQo=
+```
+
 ### 兩個不可逆的前提
 
 - **私鑰遺失 = 自動更新永久失效。** 所有已安裝的 App 都只信任內嵌的那把公鑰；更換金鑰等同要求全體使用者手動重裝一次。金鑰檔必須另行備份保存。
