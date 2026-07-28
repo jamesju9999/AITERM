@@ -202,6 +202,16 @@ AITerm 是終端機應用程式——重啟會終止所有 PTY session 與正在
 
 前提是要先有 XSS。AITerm 會渲染 AI 輸出與 web-fetch 內容，這個前提並非全然不可及。`csp: null` 是既有設定、不屬於本次變更，但「替一個 `csp: null` 的 app 接上網路更新器」正是風險計算改變的時點，故記錄於此。收窄權限無法消除這點（`allow-check` 就足以觸發）。
 
+### 已知殘留風險：同 tag 多個 draft release
+
+`releaseDraft: true` 讓 `tauri-action` 無法用 `getReleaseByTag` 取得既有 release（draft 沒有真正的 tag ref），改成分頁掃描全部 release 尋找同名 tag 的 draft，找不到就建立。GitHub **允許**同一個 `tag_name` 存在多個 draft，所以兩個 build job 同時撲空時會產生兩個 draft，資產各分一半。
+
+觸發窗口只有幾秒（release 建立發生在 build 完成後，六個 leg 的時長差距通常是數十分鐘），且後果 fail-safe——`finalize` 下載到的 draft 缺 `.sig`，`expected` 檢查會 hard fail，不會發出殘缺的 manifest。但需要人工刪除多餘 draft。
+
+根治方式是新增一個先跑的 `create-release` job 產出 `releaseId`，六個 build 步驟改吃該 input（會整段跳過 `getOrCreateRelease`）。這超出本次「surgical」範圍，列為後續工作。
+
+**首次實跑時應確認**：draft 只有一個，且其中只有一份 `latest.json`。
+
 ### 開發者本機建置
 
 `createUpdaterArtifacts: true` 一旦啟用，`tauri build` 在偵測到 pubkey 卻找不到 `TAURI_SIGNING_PRIVATE_KEY` 時會直接失敗。沒有私鑰的開發者必須改用 `npm run tauri build -- --no-sign`。此限制記錄於 `CLAUDE.md` 的 Commands 區塊。
