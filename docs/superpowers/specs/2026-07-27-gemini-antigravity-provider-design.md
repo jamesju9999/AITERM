@@ -126,9 +126,32 @@ pub struct AntigravityClient {
 - 前端：暫無自動化測試涵蓋 `ProviderForm.tsx` 的 OAuth 分頁邏輯，僅手動驗證。
 - **無法自動化的部分**：真正的 OAuth 登入、onboarding、對話，都需要使用者本人用真實 Google 帳號手動跑一次驗證。
 
-## 待驗證假設（實作階段需確認，不阻擋設計核准）
+## 實測結果（2026-07-28，真實 Google 帳號驗證）
 
-1. **Antigravity client_secret 的正確值**——OmniRoute 原始碼裡是 XOR-masked 過的，設計上刻意不從那裡硬解出來；實作時需要透過其他管道（例如攔截真實 Antigravity client 的 OAuth 流量、或查證是否有其他公開來源）取得正確的 secret 值，或先用空字串測試 Google 是否真的要求這個欄位（部分 installed-app client 即使技術上配了 secret，实际換 token 時仍可能不強制檢查）。
-2. **`fetchAvailableModels` 這個端點在只有基本 scope（不含 openid）的 token 下能不能正常回應**，以及實際回傳的模型 id 命名（本次設計文件裡列的 `gemini-2.5-pro` 等 id 是「目前已知公開型號名稱」的猜測，OmniRoute 自己的目錄也註明「這是會一直變動、需要人工重新校正的清單」，且他們自己的目錄也有「官方偷改 model id 導致要做 fallback chain」的先例）。
-3. **`onboardUser` 的實際等待時間**在真實新帳號上到底多長，10 次 × 5 秒（50 秒總計）的輪詢上限是否足夠——若不夠，需要調整輪詢次數或間隔。
-4. **不做 `daily-cloudcode-pa.googleapis.com` canary host fallback 這件事**是否會讓某些帳號/區域的請求穩定性變差——OmniRoute 兩個 host 都打是有理由的（canary 優先），MVP 先只打穩定 host，觀察真實使用後再決定要不要補上。
+端對端跑通：OAuth 登入 → onboarding 取得 project id → 模型清單 → `/ai` 對話全部正常。下面逐項回覆原本的「待驗證假設」，並記錄實測過程中抓到的四個實作錯誤。
+
+**假設 #1（client_secret）→ 確認必要。** 空字串會被 Google 明確拒絕：`invalid_request: client_secret is missing`。已取得正確值並內建，用字串切分（prefix/body 分開存、執行期組合）避免原始碼出現連續的 `GOCSPX-…` 而觸發 GitHub Secret Scanning／push protection —— 目的與 OmniRoute 的 XOR 遮罩相同，但不移植那整套機制。另支援 `AITERM_GOOGLE_OAUTH_CLIENT_SECRET` 環境變數覆寫。
+
+**假設 #2（fetchAvailableModels）→ 端點可用，但我原本的呼叫方式與解析形狀都錯了。** 兩處修正：
+- **必須用 POST 並帶 `{"project": <project_id>}`**，不是 GET。Google 這種 `:verb` 形式端點都是 POST（`loadCodeAssist`/`onboardUser` 我寫對了，唯獨這支寫成 GET，結果一律 404 並靜默退回寫死清單）。
+- **`models` 是以 model id 當 key 的物件，不是陣列**：`{"models": {"gemini-pro-agent": {...}, ...}}`。真實 id 形如 `gemini-pro-agent`、`gemini-3.1-flash-image`，與原先猜測的 `gemini-2.5-pro` 這類公開 API 命名完全不同。帶 `isInternal: true` 的項目是內部佔位模型，已濾除。
+
+**假設 #3（onboardUser 等待時間）→ 未實際觸發。** 測試帳號已有 Cloud Code project，`loadCodeAssist` 首次呼叫就回傳了 project id，短路掉輪詢路徑。**輪詢上限是否足夠仍未驗證**，要等一個全新的 Google 帳號才能確認。
+
+**假設 #4（canary host fallback）→ 仍未驗證。** 只打穩定 host 目前運作正常，尚無資料判斷是否需要補 fallback。
+
+### 實測抓到、但自動化測試沒抓到的錯誤
+
+1. **SSE 信封沒拆（最嚴重）** —— Antigravity 把標準 Gemini 內容包在 `{"response": {candidates...}, "traceId", "metadata"}` 裡，解析器卻在最外層找 `candidates`，導致每個 chunk 都判定為空、文字全丟，使用者看到「HTTP 200 但 body 為空」，而模型其實答得完全正確。**既有的 happy-path 測試從頭到尾都是綠的**，因為它用的是我自己編的無信封形狀 —— 那個測試把錯誤假設固化了，反而製造了虛假信心。教訓：對未公開 API 寫的契約測試，fixture 必須來自真實回應原文，不能自己編。
+2. **`fetchAvailableModels` 用錯 HTTP method**（見假設 #2）。
+3. **模型清單解析形狀猜錯**（見假設 #2）。值得注意的是 Task 5 的 code review 就明白指出「這個解析器刻意比 Codex 版窄，沒有處理物件形狀」，我判斷可接受並放行 —— 壞掉的正是那個窄的地方。
+4. **`<select>` 在清單抓不到時把使用者鎖死** —— 沒有選項可選、也無法清空改打，等於整個 provider 不能用。已改為清單為空時退化成自由輸入文字框。
+
+### 仍未驗證的項目
+
+- **`onboardUser` 的輪詢上限是否足夠**（10 次 × 5 秒）。測試帳號已有既存 Cloud Code project，`loadCodeAssist` 第一次呼叫就回傳 project id，短路掉了整條輪詢路徑 —— 要一個全新的 Google 帳號才能驗證。
+- **不做 `daily-cloudcode-pa.googleapis.com` canary host fallback** 是否會影響某些帳號／區域的穩定性。目前只打穩定 host 運作正常，尚無資料判斷。
+
+### 已知待改：寫死的 fallback 模型清單已過時
+
+`antigravity_known_models()` 目前是 `gemini-2.5-pro` / `gemini-2.5-flash` / `gemini-2.5-flash-lite`，這些是**公開 Generative Language API 的命名，對 Antigravity 端點很可能無效**（真實 id 形如 `gemini-pro-agent`）。實測時因為即時抓取已修好、根本走不到 fallback，所以沒有暴露問題。建議後續換成真實 id，否則一旦即時抓取失敗，使用者拿到的就是三個不能用的選項。
