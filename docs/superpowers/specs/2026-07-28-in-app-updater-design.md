@@ -202,7 +202,17 @@ AITerm 是終端機應用程式——重啟會終止所有 PTY session 與正在
 
 前提是要先有 XSS。AITerm 會渲染 AI 輸出與 web-fetch 內容，這個前提並非全然不可及。`csp: null` 是既有設定、不屬於本次變更，但「替一個 `csp: null` 的 app 接上網路更新器」正是風險計算改變的時點，故記錄於此。收窄權限無法消除這點（`allow-check` 就足以觸發）。
 
-### 已知殘留風險：同 tag 多個 draft release
+### 已解決：同 tag 多個 draft release（2026-07-28）
+
+下述風險已由 `create-release` job 根治：該 job 先建立 draft 並輸出 `release_id`，六個 build 步驟改吃 `releaseId`。`tauri-action` 的 `src/index.ts` 以 `if (tagName && !releaseId)` 守住建立路徑，所以傳入 `releaseId` 等於整段短路，競爭窗口從源頭消失。副作用是 release 標題與說明從六份收斂為一份。
+
+同時修正一個**先前無效的修正**：擋住六個 build job 各自寫 `latest.json` 用的是 `uploadUpdaterJson: false`，但那不是 `tauri-action` 的 input（正確名稱為 `includeUpdaterJson`），而 GitHub Actions 對未知 input 靜默忽略。v1.2.1 的 macOS build log 中確實有 `Uploading latest.json...`，證明六個 job 一直在競寫，只是 `finalize` 的 `--clobber` 最後落地把它遮住了。
+
+**教訓**：當時的驗證是「release 上只有一份 `latest.json`」——這個檢查在有 `--clobber` 的情況下**永遠**會通過，證明不了任何事。下次發版要驗證這條路徑，正確訊號在 build log：不該再出現 `Uploading latest.json...`，也不該出現 `No releaseId or tagName provided`。
+
+歷史證據顯示這不是理論風險：本 repo 的 `v0.1.77` 與 `v0.1.94` 各存在兩個同 tag release（殘留 draft + 正式版）。
+
+### 原始風險描述（保留供參）
 
 `releaseDraft: true` 讓 `tauri-action` 無法用 `getReleaseByTag` 取得既有 release（draft 沒有真正的 tag ref），改成分頁掃描全部 release 尋找同名 tag 的 draft，找不到就建立。GitHub **允許**同一個 `tag_name` 存在多個 draft，所以兩個 build job 同時撲空時會產生兩個 draft，資產各分一半。
 
