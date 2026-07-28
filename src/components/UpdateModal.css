@@ -38,6 +38,7 @@
   max-height: 120px;
   overflow-y: auto;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .update-modal-warning {

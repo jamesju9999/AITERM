@@ -70,8 +70,27 @@ describe("UpdateModalView", () => {
     expect(screen.queryByText(/%/)).toBeNull();
   });
 
+  it("clamps the percentage at 100 if the download overruns the reported size", () => {
+    // chunkLength sums can exceed a content-encoded response's declared length.
+    renderView({ status: "downloading", version: "1.2.0", downloaded: 1500, total: 1000 });
+    expect(screen.getByText(/100%/)).toBeTruthy();
+  });
+
+  it("hides the dismiss button while downloading", () => {
+    // Dismissing mid-download would persist past Finished — the hook only resets
+    // `dismissed` in runCheck — leaving the user with no restart prompt.
+    renderView({ status: "downloading", version: "1.2.0", downloaded: 500, total: 1000 });
+    expect(screen.queryByRole("button", { name: "稍後" })).toBeNull();
+  });
+
   it("warns about losing terminal sessions before restarting", async () => {
     const props = renderView({ status: "ready", version: "1.2.0" });
+
+    // The title must switch: a restart prompt headed "an update is available"
+    // is stale, and the accessible name must not contradict the visible one.
+    expect(screen.getByText("更新已下載完成")).toBeTruthy();
+    expect(screen.queryByText("有新版本可用")).toBeNull();
+    expect(screen.getByRole("status", { name: "更新已下載完成" })).toBeTruthy();
 
     expect(screen.getByText(/重新啟動將結束所有終端機分頁與執行中的指令。/)).toBeTruthy();
 

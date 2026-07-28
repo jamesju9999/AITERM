@@ -35,25 +35,32 @@ export function UpdateModalView({
 
   if (!visible) return null;
 
-  // total is distinct from 0: a real contentLength of 0 is not "unknown", but
-  // dividing by it would produce NaN/Infinity, so both are treated as "no
-  // percentage to show" rather than truthy-testing total (which would also be
-  // correct here but conflates the two cases less explicitly).
+  // null (size unknown) and 0 are different things, but neither yields a usable
+  // percentage — dividing by 0 gives NaN/Infinity — so both fall through to the
+  // indeterminate bar.
   const percent =
     state.status === "downloading" && state.total !== null && state.total > 0
       ? Math.min(100, Math.round((state.downloaded / state.total) * 100))
       : null;
 
+  const title =
+    state.status === "error"
+      ? t.update_failed
+      : state.status === "ready"
+        ? t.update_ready
+        : t.update_modal_title;
+
   return (
     <div className="update-modal-backdrop">
-      <div className="update-modal" role="dialog" aria-label={t.update_modal_title}>
-        <p className="update-modal-title">
-          {state.status === "error"
-            ? t.update_failed
-            : state.status === "ready"
-              ? t.update_ready
-              : t.update_modal_title}
-        </p>
+      {/*
+        role="status" (not "dialog"): this element traps no focus and sets no
+        aria-modal, so a bare "dialog" role that never receives focus would be
+        both an overclaim and functionally silent. "status" carries an implicit
+        aria-live="polite", announcing the update without stealing focus from
+        whatever the user is typing in the terminal.
+      */}
+      <div className="update-modal" role="status" aria-label={title}>
+        <p className="update-modal-title">{title}</p>
 
         {"version" in state && <p className="update-modal-version">v{state.version}</p>}
 
