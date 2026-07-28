@@ -94,7 +94,11 @@ export function AboutPage() {
         <button
           className="aiterm-btn aiterm-btn--primary"
           onClick={() => void check()}
-          disabled={state.status === "checking" || state.status === "downloading"}
+          disabled={
+            state.status === "checking" ||
+            state.status === "downloading" ||
+            state.status === "ready"
+          }
         >
           {t.about_check_updates}
         </button>

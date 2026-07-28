@@ -414,6 +414,23 @@ describe("useUpdater", () => {
     expect(update.downloadAndInstall).not.toHaveBeenCalled();
   });
 
+  it("refuses to re-check once an update has been staged", async () => {
+    checkMock.mockResolvedValue(fakeUpdate());
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.state.status).toBe("available"));
+
+    await act(async () => { await result.current.install(); });
+    expect(result.current.state).toEqual({ status: "ready", version: "1.2.0" });
+
+    const callsBefore = checkMock.mock.calls.length;
+    await act(async () => { await result.current.check(); });
+
+    // Re-checking would overwrite `ready` and re-offer an already-downloaded
+    // update, asking the user to fetch the same bytes twice.
+    expect(checkMock).toHaveBeenCalledTimes(callsBefore);
+    expect(result.current.state).toEqual({ status: "ready", version: "1.2.0" });
+  });
+
   it("does not claim an update when the support probe fails", async () => {
     checkMock.mockResolvedValue(fakeUpdate());
     invokeMock.mockRejectedValue(new Error("command not found"));

@@ -62,6 +62,11 @@ export function useUpdater(): UpdaterApi {
   // the same install target), and stops check() from stomping a live download.
   // Must be a ref: install()'s closure would see a stale `state`.
   const installingRef = useRef(false);
+  // Set once an install has been staged. Nothing clears it: the only exit from
+  // `ready` is a relaunch, which restarts the process. Without this, a manual
+  // check would overwrite `ready` and re-offer an update the user has already
+  // downloaded.
+  const stagedRef = useRef(false);
 
   // Guard against setState after unmount (Tauri async invoke race), same as
   // useAiChat does.
@@ -76,9 +81,9 @@ export function useUpdater(): UpdaterApi {
   }, []);
 
   const runCheck = useCallback(async (silent: boolean) => {
-    // Never disturb an install in progress: the checking/available transitions
-    // would stomp on `downloading` and swap pendingRef out from under it.
-    if (installingRef.current) return;
+    // Never disturb an install in progress, and never discard one that has
+    // already been staged and is waiting for the user to restart.
+    if (installingRef.current || stagedRef.current) return;
 
     set({ status: "checking" });
     try {
@@ -149,6 +154,7 @@ export function useUpdater(): UpdaterApi {
             break;
         }
       });
+      stagedRef.current = true;
       set({ status: "ready", version: update.version });
     } catch (e) {
       set({ status: "error", message: errorMessage(e) });
