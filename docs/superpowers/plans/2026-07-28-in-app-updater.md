@@ -1241,10 +1241,13 @@ Then add the modal as the last child of the outer wrapper `<div>` in the returne
 - [ ] **Step 5: Verify**
 
 ```bash
-npx tsc --noEmit && npm run lint && npm run test
+npx tsc --noEmit && npm run test
+npx eslint src/App.tsx
 ```
 
-Expected: no type errors, no lint errors, all tests pass. In particular `src/components/TabBar/index.test.tsx` must still pass — it drives `hasUpdate` as a prop and is unaffected.
+Expected: no type errors, all tests pass, and `eslint` on the changed file exits 0.
+
+**Do not run bare `npm run lint` as a pass/fail gate** — this repo has ~181 pre-existing lint problems (162 errors), so it never exits clean. Lint the files you changed instead. In particular `src/components/TabBar/index.test.tsx` must still pass — it drives `hasUpdate` as a prop and is unaffected.
 
 - [ ] **Step 6: Commit**
 
@@ -1397,10 +1400,11 @@ Expected: `no references remain`.
 - [ ] **Step 3: Verify**
 
 ```bash
-npx tsc --noEmit && npm run lint && npm run test
+npx tsc --noEmit && npm run test
+npx eslint src/components/Settings/AboutPage.tsx src/lib/i18n.ts
 ```
 
-Expected: clean.
+Expected: no type errors, all tests pass, `eslint` on the changed files exits 0. (Bare `npm run lint` never exits clean here — ~181 pre-existing problems.)
 
 - [ ] **Step 4: Manually confirm the app still boots**
 
@@ -1662,10 +1666,11 @@ Auto-update cannot be verified under `tauri:dev` — a dev build never self-upda
 - [ ] **Step 1: Full local verification first**
 
 ```bash
-npx tsc --noEmit && npm run lint && npm run test && (cd src-tauri && cargo test)
+npx tsc --noEmit && npm run test && (cd src-tauri && cargo test)
+npx eslint $(git diff --name-only master...HEAD -- '*.ts' '*.tsx')
 ```
 
-Expected: all clean. Do not proceed until this passes.
+Expected: no type errors, all frontend tests pass, all Rust tests pass, and `eslint` on every file this branch touched exits 0. (Bare `npm run lint` never exits clean here — ~181 pre-existing problems unrelated to this work.) Do not proceed until this passes.
 
 - [ ] **Step 2: Ask the user before tagging**
 
@@ -1738,6 +1743,8 @@ git commit -m "docs: record in-app updater end-to-end verification results"
 
 ## Notes for the implementer
 
+- **Green tests are not evidence.** Task 3's original suite passed 10/10 while 5 of 7 mutations survived, because one test observed `result.current` only after the operation it was meant to measure had already finished — making its assertion vacuous. When a test targets an *intermediate* state, drive the operation event-by-event (park the stub on a deferred promise) so React can re-render between steps, and assert the full state object at each step. If you are unsure a test earns its keep, mutate the implementation and confirm the test fails.
+- **Do not use bare `npm run lint` as a gate** — this repo carries ~181 pre-existing problems (162 errors) unrelated to this work. Run `npx eslint <changed files>` instead.
 - **`docs/` is gitignored** (`.gitignore:47`) but specs and plans are tracked anyway. Use `git add -f` for anything under `docs/`.
 - **Never push a tag without asking.** Tags trigger release builds.
 - **The private key at `~/.tauri/aiterm_updater.key` is irreplaceable.** If it is lost, every installed AITerm is stranded on the old public key and all users must reinstall by hand. It should be backed up outside this machine and its permissions tightened (`chmod 600`).
