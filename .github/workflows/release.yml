@@ -395,3 +395,85 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: --target aarch64-unknown-linux-gnu --bundles deb
+
+  # Six parallel build jobs cannot each write latest.json — the later writer would
+  # drop the earlier writer's platform entries. This job is the single writer: it
+  # runs only after every build finishes, composes the full manifest, then flips
+  # the release out of draft so users never see a half-populated manifest.
+  finalize:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download updater signatures
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p sigs
+          gh release download "${{ github.ref_name }}" --pattern '*.sig' --dir sigs
+          ls -la sigs
+
+      - name: Compose latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          # Already RFC 3339, and present on both push and workflow_dispatch events,
+          # so no shell date arithmetic is needed. Tauri only displays pub_date.
+          PUB_DATE: ${{ github.event.repository.updated_at }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, sys
+
+          tag = os.environ["TAG"]
+          repo = os.environ["GH_REPO"]
+          version = tag[1:] if tag.startswith("v") else tag
+
+          def platform_for(name):
+              if name.endswith(".app.tar.gz"):
+                  return "darwin-aarch64"
+              if name.endswith("-setup.exe"):
+                  return "windows-x86_64"
+              if name.endswith(".AppImage"):
+                  return "linux-aarch64" if ("aarch64" in name or "arm64" in name) else "linux-x86_64"
+              return None
+
+          platforms = {}
+          for sig_path in sorted(pathlib.Path("sigs").glob("*.sig")):
+              artifact = sig_path.name[:-4]  # strip ".sig"
+              key = platform_for(artifact)
+              if key is None:
+                  print(f"skipping unrecognised artifact: {artifact}")
+                  continue
+              platforms[key] = {
+                  "signature": sig_path.read_text().strip(),
+                  "url": f"https://github.com/{repo}/releases/download/{tag}/{artifact}",
+              }
+              print(f"{key} <- {artifact}")
+
+          # Load-bearing: this is the only thing preventing a silent gap. Tasks 7/8
+          # gave the app no fallback update check, so if a build target is ever added
+          # without a matching platform key here, that platform's users will see
+          # "up to date" forever with no notification that a release shipped.
+          expected = {"darwin-aarch64", "windows-x86_64", "linux-x86_64", "linux-aarch64"}
+          missing = expected - set(platforms)
+          if missing:
+              sys.exit(f"missing updater artifacts for: {sorted(missing)}")
+
+          manifest = {
+              "version": version,
+              "notes": f"https://github.com/{repo}/releases/tag/{tag}",
+              "pub_date": os.environ["PUB_DATE"],
+              "platforms": platforms,
+          }
+          pathlib.Path("latest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          print(json.dumps(manifest, indent=2))
+          PY
+
+      - name: Upload latest.json and publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release upload "${{ github.ref_name }}" latest.json --clobber
+          gh release edit "${{ github.ref_name }}" --draft=false --latest
