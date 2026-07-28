@@ -109,7 +109,18 @@ describe("UpdateModalView", () => {
   });
 
   it("shows the failure message on error", () => {
-    renderView({ status: "error", message: "signature mismatch" });
+    renderView({ status: "error", phase: "install", message: "signature mismatch" });
     expect(screen.getByText(/signature mismatch/)).toBeTruthy();
+  });
+
+  it("titles an install failure as 更新失敗", () => {
+    renderView({ status: "error", phase: "install", message: "signature mismatch" });
+    expect(screen.getByText("更新失敗")).toBeTruthy();
+  });
+
+  it("titles a check failure as 檢查更新失敗, not 更新失敗", () => {
+    renderView({ status: "error", phase: "check", message: "offline" });
+    expect(screen.getByText("檢查更新失敗")).toBeTruthy();
+    expect(screen.queryByText("更新失敗")).toBeNull();
   });
 });

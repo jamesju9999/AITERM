@@ -102,7 +102,7 @@ describe("useUpdater", () => {
     checkMock.mockRejectedValue(new Error("offline"));
     await act(async () => { await result.current.check(); });
 
-    expect(result.current.state.status).toBe("error");
+    expect(result.current.state).toEqual({ status: "error", phase: "check", message: "offline" });
   });
 
   it("tracks download progress and ends in 'ready'", async () => {
@@ -256,6 +256,7 @@ describe("useUpdater", () => {
 
     expect(result.current.state.status).toBe("error");
     if (result.current.state.status === "error") {
+      expect(result.current.state.phase).toBe("install");
       expect(result.current.state.message).toContain("signature mismatch");
     }
   });
@@ -286,6 +287,23 @@ describe("useUpdater", () => {
     expect(result.current.state).toEqual({
       status: "available", version: "1.3.0", notes: "Bug fixes",
     });
+  });
+
+  it("re-shows the toast when a dismissed error is re-checked", async () => {
+    checkMock.mockRejectedValue(new Error("offline"));
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.state.status).toBe("idle"));
+
+    await act(async () => { await result.current.check(); });
+    expect(result.current.state.status).toBe("error");
+
+    act(() => { result.current.dismiss(); });
+    expect(result.current.dismissed).toBe(true);
+
+    // A check the user explicitly asked for must be allowed to surface its
+    // result; otherwise one dismissal silences the toast for the whole session.
+    await act(async () => { await result.current.check(); });
+    expect(result.current.dismissed).toBe(false);
   });
 
   it("relaunch() delegates to the process plugin", async () => {
@@ -373,7 +391,7 @@ describe("useUpdater", () => {
     checkMock.mockRejectedValue(new Error("offline"));
     await act(async () => { await result.current.check(); });
 
-    expect(result.current.state.status).toBe("error");
+    expect(result.current.state).toEqual({ status: "error", phase: "check", message: "offline" });
     // The update we already know about must not disappear from the TabBar.
     expect(result.current.hasUpdate).toBe(true);
   });
@@ -387,7 +405,7 @@ describe("useUpdater", () => {
     await waitFor(() => expect(result.current.state.status).toBe("available"));
 
     await act(async () => { await result.current.install(); });
-    expect(result.current.state.status).toBe("error");
+    expect(result.current.state).toEqual({ status: "error", phase: "install", message: "boom" });
 
     // The reentrancy flag must be released on failure, or every later install
     // and check would be a silent no-op until the app restarts.

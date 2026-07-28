@@ -11,7 +11,7 @@ export type UpdaterState =
   | { status: "downloading"; version: string; downloaded: number; total: number | null }
   | { status: "ready"; version: string }
   | { status: "unsupported"; version: string }
-  | { status: "error"; message: string };
+  | { status: "error"; phase: "check" | "install"; message: string };
 
 /**
  * Download progress as a whole percent, or null when it cannot be computed.
@@ -100,6 +100,11 @@ export function useUpdater(): UpdaterApi {
     // already been staged and is waiting for the user to restart.
     if (installingRef.current || stagedRef.current) return;
 
+    // Any check the user explicitly asked for must be allowed to surface its
+    // result. There is no periodic background check — only the mount check
+    // and the About page button — so this cannot resurrect a toast the user
+    // dismissed without asking for anything.
+    setDismissed(false);
     set({ status: "checking" });
     try {
       const update = (await check()) as PendingUpdate | null;
@@ -115,7 +120,6 @@ export function useUpdater(): UpdaterApi {
       pendingRef.current = null;
       const supported = await invoke<boolean>("updater_supported");
       setPendingVersion(update.version);
-      setDismissed(false);
       if (!supported) {
         set({ status: "unsupported", version: update.version });
         return;
@@ -126,7 +130,7 @@ export function useUpdater(): UpdaterApi {
       // The mount check is best-effort: an offline user should not see an error.
       // pendingVersion is deliberately left alone so a failed re-check does not
       // erase an update we already know about.
-      set(silent ? { status: "idle" } : { status: "error", message: errorMessage(e) });
+      set(silent ? { status: "idle" } : { status: "error", phase: "check", message: errorMessage(e) });
     }
   }, [set]);
 
@@ -173,7 +177,7 @@ export function useUpdater(): UpdaterApi {
       pendingRef.current = null;
       set({ status: "ready", version: update.version });
     } catch (e) {
-      set({ status: "error", message: errorMessage(e) });
+      set({ status: "error", phase: "install", message: errorMessage(e) });
     } finally {
       installingRef.current = false;
     }

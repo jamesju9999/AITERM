@@ -71,7 +71,7 @@ export function AboutPage() {
           </span>
         );
       case "error":
-        return <span>{t.update_failed}</span>;
+        return <span>{state.phase === "check" ? t.update_check_failed : t.update_failed}</span>;
       default:
         return null;
     }

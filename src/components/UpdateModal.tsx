@@ -38,7 +38,7 @@ export function UpdateModalView({
 
   const title =
     state.status === "error"
-      ? t.update_failed
+      ? state.phase === "check" ? t.update_check_failed : t.update_failed
       : state.status === "ready"
         ? t.update_ready
         : t.update_modal_title;

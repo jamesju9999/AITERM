@@ -100,12 +100,19 @@ describe("AboutPage", () => {
     expect(screen.getByText("尚未檢查更新")).toBeTruthy();
   });
 
-  it("renders the failure text on error", () => {
-    // The whole reason about_update_error was deleted is that update_failed
-    // covers this state — assert the claim rather than assuming it.
-    mockUpdater({ status: "error", message: "boom" });
+  it("renders the install-failure text when the error came from install()", () => {
+    mockUpdater({ status: "error", phase: "install", message: "boom" });
     render(<AboutPage />);
     expect(screen.getByText("更新失敗")).toBeTruthy();
+  });
+
+  it("renders the check-failure text when the error came from check(), not install failure text", () => {
+    // A failed check must not read as "your installation is damaged" — that
+    // string belongs to a failed downloadAndInstall(), a different failure mode.
+    mockUpdater({ status: "error", phase: "check", message: "boom" });
+    render(<AboutPage />);
+    expect(screen.getByText("檢查更新失敗")).toBeTruthy();
+    expect(screen.queryByText("更新失敗")).toBeNull();
   });
 
   const checkButtonCases: { label: string; state: UpdaterState; disabled: boolean }[] = [
@@ -122,7 +129,7 @@ describe("AboutPage", () => {
     // check, so the button is disabled here even though nothing is in flight.
     { label: "ready", state: { status: "ready", version: "1.3.0" }, disabled: true },
     { label: "unsupported", state: { status: "unsupported", version: "1.3.0" }, disabled: false },
-    { label: "error", state: { status: "error", message: "boom" }, disabled: false },
+    { label: "error", state: { status: "error", phase: "check", message: "boom" }, disabled: false },
   ];
 
   it.each(checkButtonCases)(
