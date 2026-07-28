@@ -24,7 +24,16 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI1RjRDODczMkMxNUE0QQpSV1JLV3NFeWgweGZDMktVNHhiOUpxUnE5WXdRaHRqV3JnRnFMOFg0V1ByMWRVQ2Yxc1JVcGR6SQo=",
+      "endpoints": [
+        "https://github.com/jamesju9999/AITERM/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
+    "createUpdaterArtifacts": true,
     "active": true,
     "targets": "all",
     "icon": [

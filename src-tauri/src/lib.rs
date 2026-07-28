@@ -69,6 +69,7 @@ use commands::{
     },
     secret::{delete_api_key, has_api_key},
     shell::open_url,
+    updater::updater_supported,
     web::{web_fetch, web_search, npm_mcp_search},
     vcs::{
         pick_folder, vcs_add_connection, vcs_agent_step, vcs_detect_repo, vcs_get_block_info,
@@ -211,6 +212,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_log::Builder::default()
                 .level(log::LevelFilter::Info)
@@ -310,6 +313,7 @@ pub fn run() {
             delete_api_key,
             // Shell
             open_url,
+            updater_supported,
             // Web
             web_search,
             web_fetch,
