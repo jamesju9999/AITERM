@@ -740,6 +740,8 @@ git add src/contexts/UpdaterContext.tsx src/main.tsx
 git commit -m "feat(updater): share updater state through UpdaterContext"
 ```
 
+> ⚠️ **The branch is not shippable between this task and Task 7.** Mounting the provider puts `useUpdater`'s mount check into the tree, but `App.tsx:34-52`'s old `TAGS_API` fetch is still there and still runs — it is declared above the `if (!ready) return null`, so the early return does not stop it. Every launch now performs two independent update checks against two different sources. Task 7 removes the old one. Do not merge or cut a build in between; if something must ship mid-plan, do Task 7 first.
+
 ---
 
 ## Task 5: i18n strings
@@ -1244,21 +1246,91 @@ Then add the modal as the last child of the outer wrapper `<div>` in the returne
     </div>
 ```
 
-- [ ] **Step 5: Verify**
+- [ ] **Step 5: Throttle download progress**
+
+This step exists *because of* Step 2. Until now the only context consumer was `UpdateModal`, and `main.tsx` passes `<App />` as `children` — a stable element reference, so React bailed out and provider re-renders never reached the app tree. Making `AppRoutes` a consumer removes that protection: every context update now re-renders from `AppRoutes` down, including the unmemoized 483-line `TerminalApp`.
+
+That matters because `install()` calls `set(...)` on every `Progress` event. Tauri streams the download in ~8–16 KB chunks, so a 30 MB update produces roughly 2000–4000 state updates over a few seconds — hundreds of full-tree reconciliations per second.
+
+It is jank, not breakage: `TerminalApp`'s effect dependencies (`TerminalApp.tsx:95,169,247,265`) are all primitives or stable state objects, so there is no effect storm and no repeated `localStorage` writes. But it is avoidable in one place.
+
+In `src/hooks/useUpdater.ts`, replace the `Progress` case:
+
+```ts
+          case "Progress": {
+            downloaded += event.data.chunkLength;
+            // Tauri streams ~8-16KB chunks, so a 30MB update fires thousands of
+            // these. Publishing each one re-renders the whole app tree from
+            // AppRoutes down. A percentage point is finer than the progress bar
+            // can render anyway.
+            const advanced = total === null || downloaded - lastPublished >= total / 100;
+            if (advanced || downloaded === total) {
+              lastPublished = downloaded;
+              set({ status: "downloading", version: update.version, downloaded, total });
+            }
+            break;
+          }
+```
+
+and declare the tracker next to `downloaded`:
+
+```ts
+    let downloaded = 0;
+    let lastPublished = -1;
+```
+
+When `total` is `null` the size is unknown, so there is no percentage to throttle against — publish every event, as before.
+
+Then add a test to `src/hooks/useUpdater.test.ts` pinning the behaviour:
+
+```ts
+  it("throttles progress updates to about one percent", async () => {
+    const download = deferredDownload();
+    checkMock.mockResolvedValue(fakeUpdate({ downloadAndInstall: download.fn }));
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.state.status).toBe("available"));
+
+    let installed: Promise<void> | undefined;
+    await act(async () => { installed = result.current.install(); });
+    await act(async () => { download.emit({ event: "Started", data: { contentLength: 10_000 } }); });
+
+    // 10 bytes of 10000 is 0.1% — below the threshold, so nothing is published.
+    await act(async () => { download.emit({ event: "Progress", data: { chunkLength: 10 } }); });
+    expect(result.current.state).toEqual({
+      status: "downloading", version: "1.2.0", downloaded: 0, total: 10_000,
+    });
+
+    // Crossing a full percent publishes the accumulated total, not just the chunk.
+    await act(async () => { download.emit({ event: "Progress", data: { chunkLength: 200 } }); });
+    expect(result.current.state).toEqual({
+      status: "downloading", version: "1.2.0", downloaded: 210, total: 10_000,
+    });
+
+    await act(async () => {
+      download.emit({ event: "Finished" });
+      download.release();
+      await installed;
+    });
+  });
+```
+
+Confirm the existing progress tests still pass — the values in "tracks download progress and ends in 'ready'" (400 then 1000 of 1000) are both well over one percent, so they are unaffected.
+
+- [ ] **Step 6: Verify**
 
 ```bash
 npx tsc --noEmit && npm run test
-npx eslint src/App.tsx
+npx eslint src/App.tsx src/hooks/useUpdater.ts src/hooks/useUpdater.test.ts
 ```
 
-Expected: no type errors, all tests pass, and `eslint` on the changed file exits 0.
+Expected: no type errors, all tests pass, and `eslint` on the changed files exits 0.
 
 **Do not run bare `npm run lint` as a pass/fail gate** — this repo has ~181 pre-existing lint problems (162 errors), so it never exits clean. Lint the files you changed instead. In particular `src/components/TabBar/index.test.tsx` must still pass — it drives `hasUpdate` as a prop and is unaffected.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/App.tsx
+git add src/App.tsx src/hooks/useUpdater.ts src/hooks/useUpdater.test.ts
 git commit -m "refactor(updater): drive App update state from useUpdater, mount modal"
 ```
 
