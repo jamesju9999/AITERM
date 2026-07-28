@@ -113,6 +113,7 @@ export function useUpdater(): UpdaterApi {
 
     let total: number | null = null;
     let downloaded = 0;
+    let lastPublished = -1;
     set({ status: "downloading", version: update.version, downloaded: 0, total: null });
 
     try {
@@ -122,10 +123,19 @@ export function useUpdater(): UpdaterApi {
             total = event.data.contentLength ?? null;
             set({ status: "downloading", version: update.version, downloaded: 0, total });
             break;
-          case "Progress":
+          case "Progress": {
             downloaded += event.data.chunkLength;
-            set({ status: "downloading", version: update.version, downloaded, total });
+            // Tauri streams ~8-16KB chunks, so a 30MB update fires thousands of
+            // these. Publishing each one re-renders the whole app tree from
+            // AppRoutes down. A percentage point is finer than the progress bar
+            // can render anyway.
+            const advanced = total === null || downloaded - lastPublished >= total / 100;
+            if (advanced || downloaded === total) {
+              lastPublished = downloaded;
+              set({ status: "downloading", version: update.version, downloaded, total });
+            }
             break;
+          }
           case "Finished":
             set({ status: "ready", version: update.version });
             break;

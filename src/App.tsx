@@ -1,24 +1,18 @@
 import { useEffect, useState } from "react";
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from "react-router-dom";
-import { getVersion } from "@tauri-apps/api/app";
 import { TerminalApp } from "./components/TerminalApp";
 import { SettingsView } from "./components/Settings/SettingsView";
 import { OnboardingWizard } from "./components/Onboarding/OnboardingWizard";
+import { UpdateModal } from "./components/UpdateModal";
+import { useUpdaterContext } from "./contexts/UpdaterContext";
 import { isOnboardingDone } from "./ipc/config";
 import "./App.css";
-
-interface UpdateInfo {
-  hasUpdate: boolean;
-  latestVersion: string;
-}
-
-const TAGS_API = "https://api.github.com/repos/jamesju9999/AITERM/tags";
 
 function AppRoutes() {
   const navigate = useNavigate();
   const location = useLocation();
   const [ready, setReady] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const { hasUpdate } = useUpdaterContext();
 
   useEffect(() => {
     // On mount: check if this is the first launch.
@@ -30,42 +24,20 @@ function AppRoutes() {
       .finally(() => setReady(true));
   }, [navigate]);
 
-  // Auto-check for updates once on mount
-  useEffect(() => {
-    getVersion()
-      .then(async (current) => {
-        try {
-          const res = await fetch(TAGS_API);
-          if (!res.ok) return;
-          const tags = await res.json() as { name: string }[];
-          if (tags.length === 0) return;
-          const latest = tags[0].name.replace(/^v/, "");
-          const cur = current.replace(/^v/, "");
-          if (latest !== cur) {
-            setUpdateInfo({ hasUpdate: true, latestVersion: latest });
-          }
-        } catch {
-          // silently ignore — update check is best-effort
-        }
-      })
-      .catch(() => {});
-  }, []);
-
   // Keyboard shortcut: Ctrl+, → settings
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.key === ",") {
         e.preventDefault();
-        const hasUpdate = updateInfo?.hasUpdate ?? false;
         navigate("/settings", hasUpdate ? { state: { tab: "about" } } : undefined);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-    // updateInfo must stay in deps — the handler is registered once via
+    // hasUpdate must stay in deps — the handler is registered once via
     // addEventListener, and without it the closure would keep seeing the
-    // initial null value even after the async version-check resolves.
-  }, [navigate, updateInfo]);
+    // initial false value even after the async version-check resolves.
+  }, [navigate, hasUpdate]);
 
   if (!ready) return null;
 
@@ -85,7 +57,7 @@ function AppRoutes() {
           pointerEvents: isTerminal ? "auto" : "none"
         }}
       >
-        <TerminalApp hasUpdate={updateInfo?.hasUpdate ?? false} />
+        <TerminalApp hasUpdate={hasUpdate} />
       </div>
 
       {/* Settings / Onboarding Overlays */}
@@ -97,6 +69,7 @@ function AppRoutes() {
           </Routes>
         </div>
       )}
+      <UpdateModal />
     </div>
   );
 }

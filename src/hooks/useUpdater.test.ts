@@ -145,6 +145,35 @@ describe("useUpdater", () => {
     expect(result.current.state).toEqual({ status: "ready", version: "1.2.0" });
   });
 
+  it("throttles progress updates to about one percent", async () => {
+    const download = deferredDownload();
+    checkMock.mockResolvedValue(fakeUpdate({ downloadAndInstall: download.fn }));
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.state.status).toBe("available"));
+
+    let installed: Promise<void> | undefined;
+    await act(async () => { installed = result.current.install(); });
+    await act(async () => { download.emit({ event: "Started", data: { contentLength: 10_000 } }); });
+
+    // 10 bytes of 10000 is 0.1% — below the threshold, so nothing is published.
+    await act(async () => { download.emit({ event: "Progress", data: { chunkLength: 10 } }); });
+    expect(result.current.state).toEqual({
+      status: "downloading", version: "1.2.0", downloaded: 0, total: 10_000,
+    });
+
+    // Crossing a full percent publishes the accumulated total, not just the chunk.
+    await act(async () => { download.emit({ event: "Progress", data: { chunkLength: 200 } }); });
+    expect(result.current.state).toEqual({
+      status: "downloading", version: "1.2.0", downloaded: 210, total: 10_000,
+    });
+
+    await act(async () => {
+      download.emit({ event: "Finished" });
+      download.release();
+      await installed;
+    });
+  });
+
   it("treats a missing contentLength as an unknown total", async () => {
     const download = deferredDownload();
     checkMock.mockResolvedValue(fakeUpdate({ downloadAndInstall: download.fn }));
