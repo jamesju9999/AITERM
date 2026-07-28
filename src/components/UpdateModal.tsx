@@ -2,9 +2,8 @@ import { useLocale } from "../contexts/LocaleContext";
 import { useUpdaterContext } from "../contexts/UpdaterContext";
 import { openUrl } from "../ipc/shell";
 import type { UpdaterState } from "../hooks/useUpdater";
+import { GITHUB_RELEASES_URL } from "../lib/repo";
 import "./UpdateModal.css";
-
-const RELEASES_URL = "https://github.com/jamesju9999/AITERM/releases/latest";
 
 interface UpdateModalViewProps {
   state: UpdaterState;
@@ -145,7 +144,7 @@ export function UpdateModal() {
       onInstall={() => void install()}
       onDismiss={dismiss}
       onRelaunch={() => void relaunch()}
-      onOpenReleases={() => openUrl(RELEASES_URL).catch(console.error)}
+      onOpenReleases={() => openUrl(GITHUB_RELEASES_URL).catch(console.error)}
     />
   );
 }

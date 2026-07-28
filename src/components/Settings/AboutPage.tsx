@@ -1,74 +1,79 @@
 import { useState, useEffect } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { useLocale } from "../../contexts/LocaleContext";
+import { useUpdaterContext } from "../../contexts/UpdaterContext";
 import { openUrl } from "../../ipc/shell";
+import { GITHUB_REPO_URL, GITHUB_RELEASES_URL } from "../../lib/repo";
 import iconUrl from "../../../src-tauri/icons/128x128.png";
 import "./AboutPage.css";
 
-const GITHUB_URL = "https://github.com/jamesju9999/AITERM";
-// Use tags API instead of /releases/latest so draft releases are included in version tracking.
-const TAGS_API = "https://api.github.com/repos/jamesju9999/AITERM/tags";
-
-type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "error";
-
 export function AboutPage() {
   const { t } = useLocale();
+  const { state, check, install, relaunch } = useUpdaterContext();
   const [version, setVersion] = useState<string>("…");
-  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
-  const [latestVersion, setLatestVersion] = useState<string>("");
-
-  const checkUpdates = async (currentVersion: string) => {
-    setUpdateStatus("checking");
-    try {
-      const res = await fetch(TAGS_API);
-      if (!res.ok) throw new Error("network");
-      const tags = await res.json() as { name: string }[];
-      if (tags.length === 0) {
-        setUpdateStatus("up-to-date");
-        return;
-      }
-      const latest = tags[0].name.replace(/^v/, "");
-      const current = currentVersion.replace(/^v/, "");
-      setLatestVersion(latest);
-      // String equality (not semver): tags are sorted newest-first by GitHub,
-      // so any mismatch reliably means a newer version is available.
-      setUpdateStatus(latest === current ? "up-to-date" : "available");
-    } catch {
-      setUpdateStatus("error");
-    }
-  };
 
   useEffect(() => {
     getVersion()
-      .then((v) => { setVersion(v); checkUpdates(v); })
+      .then(setVersion)
       .catch(() => setVersion("—"));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleGitHub = () => {
-    openUrl(GITHUB_URL).catch(console.error);
+    openUrl(GITHUB_REPO_URL).catch(console.error);
   };
 
-  const handleCheckUpdates = () => checkUpdates(version);
+  const percent =
+    state.status === "downloading" && state.total !== null && state.total > 0
+      ? Math.min(100, Math.round((state.downloaded / state.total) * 100))
+      : null;
 
   const statusText = () => {
-    switch (updateStatus) {
-      case "checking": return <span>{t.about_checking}</span>;
-      case "up-to-date": return <span>{t.about_up_to_date}</span>;
+    switch (state.status) {
+      case "checking":
+        return <span>{t.about_checking}</span>;
+      case "none":
+        return <span>{t.about_up_to_date}</span>;
       case "available":
         return (
           <span>
-            {t.about_update_available} v{latestVersion} —{" "}
+            {t.about_update_available} v{state.version} —{" "}
+            <button className="about-link-btn" onClick={() => void install()}>
+              {t.update_now}
+            </button>
+          </span>
+        );
+      case "downloading":
+        return (
+          <span>
+            {t.update_downloading}
+            {percent !== null && ` ${percent}%`}
+          </span>
+        );
+      case "ready":
+        return (
+          <span>
+            {t.update_ready} v{state.version} —{" "}
+            <button className="about-link-btn" onClick={() => void relaunch()}>
+              {t.update_restart_now}
+            </button>
+          </span>
+        );
+      case "unsupported":
+        return (
+          <span>
+            {t.about_update_available} v{state.version} —{" "}
             <button
               className="about-link-btn"
-              onClick={() => openUrl(`https://github.com/jamesju9999/AITERM/releases/tag/v${latestVersion}`).catch(console.error)}
+              onClick={() => openUrl(GITHUB_RELEASES_URL).catch(console.error)}
             >
               {t.about_update_link}
             </button>
           </span>
         );
-      case "error": return <span>{t.about_update_error}</span>;
-      default: return null;
+      case "error":
+        return <span>{t.update_failed}</span>;
+      default:
+        return null;
     }
   };
 
@@ -88,8 +93,8 @@ export function AboutPage() {
         </button>
         <button
           className="aiterm-btn aiterm-btn--primary"
-          onClick={handleCheckUpdates}
-          disabled={updateStatus === "checking" || version === "…"}
+          onClick={() => void check()}
+          disabled={state.status === "checking" || state.status === "downloading"}
         >
           {t.about_check_updates}
         </button>
