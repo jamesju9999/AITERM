@@ -36,13 +36,29 @@ type DownloadEvent =
   | { event: "Progress"; data: { chunkLength: number } }
   | { event: "Finished" };
 
+/** Matches the convention in FileViewer.tsx and useAiChat.ts. */
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 export function useUpdater(): UpdaterApi {
   const [state, setState] = useState<UpdaterState>({ status: "idle" });
   const [dismissed, setDismissed] = useState(false);
-  const pendingRef = useRef<PendingUpdate | null>(null);
+  // Tracks "an update exists" independently of the transient checking/error
+  // states. Deriving hasUpdate from `state` made the TabBar dot blink off during
+  // a manual re-check, and disappear entirely if that re-check failed offline.
+  const [pendingVersion, setPendingVersion] = useState<string | null>(null);
 
-  // Tauri's async plugin calls can resolve after unmount; guard setState the
-  // same way useAiChat does to avoid the React warning.
+  // Only populated once the update is confirmed installable. Leaving it null is
+  // what makes install() a no-op on install types the updater cannot service.
+  const pendingRef = useRef<PendingUpdate | null>(null);
+  // Stops a double-click starting two concurrent installs (which would race on
+  // the same install target), and stops check() from stomping a live download.
+  // Must be a ref: install()'s closure would see a stale `state`.
+  const installingRef = useRef(false);
+
+  // Guard against setState after unmount (Tauri async invoke race), same as
+  // useAiChat does.
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -54,25 +70,35 @@ export function useUpdater(): UpdaterApi {
   }, []);
 
   const runCheck = useCallback(async (silent: boolean) => {
+    // Never disturb an install in progress: the checking/available transitions
+    // would stomp on `downloading` and swap pendingRef out from under it.
+    if (installingRef.current) return;
+
     set({ status: "checking" });
     try {
       const update = (await check()) as PendingUpdate | null;
       if (!update) {
+        pendingRef.current = null;
+        setPendingVersion(null);
         set({ status: "none" });
         return;
       }
-      pendingRef.current = update;
+      // Held back until the gate passes — see commands/updater.rs.
+      pendingRef.current = null;
+      setPendingVersion(update.version);
       setDismissed(false);
-      // Gate before offering the one-click path — see commands/updater.rs.
       const supported = await invoke<boolean>("updater_supported");
       if (!supported) {
         set({ status: "unsupported", version: update.version });
         return;
       }
+      pendingRef.current = update;
       set({ status: "available", version: update.version, notes: update.body ?? "" });
     } catch (e) {
       // The mount check is best-effort: an offline user should not see an error.
-      set(silent ? { status: "idle" } : { status: "error", message: String(e) });
+      // pendingVersion is deliberately left alone so a failed re-check does not
+      // erase an update we already know about.
+      set(silent ? { status: "idle" } : { status: "error", message: errorMessage(e) });
     }
   }, [set]);
 
@@ -80,7 +106,8 @@ export function useUpdater(): UpdaterApi {
 
   const install = useCallback(async () => {
     const update = pendingRef.current;
-    if (!update) return;
+    if (!update || installingRef.current) return;
+    installingRef.current = true;
 
     let total: number | null = null;
     let downloaded = 0;
@@ -104,7 +131,9 @@ export function useUpdater(): UpdaterApi {
       });
       set({ status: "ready", version: update.version });
     } catch (e) {
-      set({ status: "error", message: String(e) });
+      set({ status: "error", message: errorMessage(e) });
+    } finally {
+      installingRef.current = false;
     }
   }, [set]);
 
@@ -123,11 +152,13 @@ export function useUpdater(): UpdaterApi {
     void runCheck(true);
   }, [runCheck]);
 
-  const hasUpdate =
-    state.status === "available" ||
-    state.status === "downloading" ||
-    state.status === "ready" ||
-    state.status === "unsupported";
-
-  return { state, hasUpdate, dismissed, check: check_, install, relaunch, dismiss };
+  return {
+    state,
+    hasUpdate: pendingVersion !== null,
+    dismissed,
+    check: check_,
+    install,
+    relaunch,
+    dismiss,
+  };
 }

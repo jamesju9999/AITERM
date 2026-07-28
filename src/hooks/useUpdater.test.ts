@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { StrictMode } from "react";
 
 const checkMock = vi.fn();
 const relaunchMock = vi.fn();
@@ -72,6 +73,7 @@ describe("useUpdater", () => {
       notes: "Bug fixes",
     });
     expect(result.current.hasUpdate).toBe(true);
+    expect(invokeMock).toHaveBeenCalledWith("updater_supported");
   });
 
   it("reports 'unsupported' when updater_supported is false (.deb install)", async () => {
@@ -223,5 +225,85 @@ describe("useUpdater", () => {
     await act(async () => { await result.current.relaunch(); });
 
     expect(relaunchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks only once on mount under StrictMode double-invoke", async () => {
+    checkMock.mockResolvedValue(fakeUpdate());
+    const { result } = renderHook(() => useUpdater(), { wrapper: StrictMode });
+
+    await waitFor(() => expect(result.current.state.status).toBe("available"));
+    expect(checkMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a second install() while one is already running", async () => {
+    const download = deferredDownload();
+    checkMock.mockResolvedValue(fakeUpdate({ downloadAndInstall: download.fn }));
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.state.status).toBe("available"));
+
+    let first: Promise<void> | undefined;
+    await act(async () => { first = result.current.install(); });
+    await act(async () => { await result.current.install(); });
+
+    // Two concurrent installs would race on the same install target.
+    expect(download.fn).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      download.emit({ event: "Finished" });
+      download.release();
+      await first;
+    });
+  });
+
+  it("ignores check() while an install is in flight", async () => {
+    const download = deferredDownload();
+    checkMock.mockResolvedValue(fakeUpdate({ downloadAndInstall: download.fn }));
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.state.status).toBe("available"));
+
+    let installed: Promise<void> | undefined;
+    await act(async () => { installed = result.current.install(); });
+    await act(async () => { download.emit({ event: "Started", data: { contentLength: 100 } }); });
+
+    checkMock.mockResolvedValue(fakeUpdate({ version: "9.9.9" }));
+    await act(async () => { await result.current.check(); });
+
+    // The download must be untouched: no "checking" flicker, no swap to 9.9.9.
+    expect(result.current.state).toEqual({
+      status: "downloading", version: "1.2.0", downloaded: 0, total: 100,
+    });
+
+    await act(async () => {
+      download.emit({ event: "Finished" });
+      download.release();
+      await installed;
+    });
+    expect(result.current.state).toEqual({ status: "ready", version: "1.2.0" });
+  });
+
+  it("install() does nothing on an install the updater cannot service", async () => {
+    const update = fakeUpdate();
+    checkMock.mockResolvedValue(update);
+    invokeMock.mockResolvedValue(false);
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.state.status).toBe("unsupported"));
+
+    await act(async () => { await result.current.install(); });
+
+    expect(update.downloadAndInstall).not.toHaveBeenCalled();
+    expect(result.current.state).toEqual({ status: "unsupported", version: "1.2.0" });
+  });
+
+  it("keeps hasUpdate true when a manual re-check fails", async () => {
+    checkMock.mockResolvedValue(fakeUpdate());
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.state.status).toBe("available"));
+
+    checkMock.mockRejectedValue(new Error("offline"));
+    await act(async () => { await result.current.check(); });
+
+    expect(result.current.state.status).toBe("error");
+    // The update we already know about must not disappear from the TabBar.
+    expect(result.current.hasUpdate).toBe(true);
   });
 });
