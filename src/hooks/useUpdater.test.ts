@@ -16,7 +16,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-import { useUpdater } from "./useUpdater";
+import { downloadPercent, useUpdater } from "./useUpdater";
 
 /** Minimal stand-in for the plugin's Update object. */
 function fakeUpdate(overrides: Record<string, unknown> = {}) {
@@ -439,5 +439,31 @@ describe("useUpdater", () => {
     await waitFor(() => expect(result.current.state.status).toBe("idle"));
     // A lit dot over an `idle` state renders as a blank About panel.
     expect(result.current.hasUpdate).toBe(false);
+  });
+});
+
+describe("downloadPercent", () => {
+  it("computes a whole percent from a known size", () => {
+    expect(downloadPercent({ status: "downloading", version: "1.2.0", downloaded: 500, total: 1000 })).toBe(50);
+  });
+
+  it("clamps an overrun to 100", () => {
+    expect(downloadPercent({ status: "downloading", version: "1.2.0", downloaded: 1500, total: 1000 })).toBe(100);
+  });
+
+  it("returns null when the size is unknown", () => {
+    expect(downloadPercent({ status: "downloading", version: "1.2.0", downloaded: 500, total: null })).toBeNull();
+  });
+
+  it("returns null when the server reports an empty body", () => {
+    // Without the > 0 guard this renders NaN% on the first frame and then a
+    // confident 100% for the rest of the download.
+    expect(downloadPercent({ status: "downloading", version: "1.2.0", downloaded: 0, total: 0 })).toBeNull();
+    expect(downloadPercent({ status: "downloading", version: "1.2.0", downloaded: 500, total: 0 })).toBeNull();
+  });
+
+  it("returns null for every non-downloading state", () => {
+    expect(downloadPercent({ status: "idle" })).toBeNull();
+    expect(downloadPercent({ status: "ready", version: "1.2.0" })).toBeNull();
   });
 });

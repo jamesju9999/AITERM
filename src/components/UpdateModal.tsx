@@ -1,7 +1,7 @@
 import { useLocale } from "../contexts/LocaleContext";
 import { useUpdaterContext } from "../contexts/UpdaterContext";
 import { openUrl } from "../ipc/shell";
-import type { UpdaterState } from "../hooks/useUpdater";
+import { downloadPercent, type UpdaterState } from "../hooks/useUpdater";
 import { GITHUB_RELEASES_URL } from "../lib/repo";
 import "./UpdateModal.css";
 
@@ -34,13 +34,7 @@ export function UpdateModalView({
 
   if (!visible) return null;
 
-  // null (size unknown) and 0 are different things, but neither yields a usable
-  // percentage — dividing by 0 gives NaN/Infinity — so both fall through to the
-  // indeterminate bar.
-  const percent =
-    state.status === "downloading" && state.total !== null && state.total > 0
-      ? Math.min(100, Math.round((state.downloaded / state.total) * 100))
-      : null;
+  const percent = downloadPercent(state);
 
   const title =
     state.status === "error"

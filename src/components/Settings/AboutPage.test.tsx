@@ -92,6 +92,22 @@ describe("AboutPage", () => {
     expect(api.relaunch).toHaveBeenCalledTimes(1);
   });
 
+  it("renders the not-yet-checked text on idle", () => {
+    // After Task 7 the mount check is silent and maps failures to idle; an
+    // offline user must not see a blank status line with no explanation.
+    mockUpdater({ status: "idle" });
+    render(<AboutPage />);
+    expect(screen.getByText("尚未檢查更新")).toBeTruthy();
+  });
+
+  it("renders the failure text on error", () => {
+    // The whole reason about_update_error was deleted is that update_failed
+    // covers this state — assert the claim rather than assuming it.
+    mockUpdater({ status: "error", message: "boom" });
+    render(<AboutPage />);
+    expect(screen.getByText("更新失敗")).toBeTruthy();
+  });
+
   const checkButtonCases: { label: string; state: UpdaterState; disabled: boolean }[] = [
     { label: "idle", state: { status: "idle" }, disabled: false },
     { label: "checking", state: { status: "checking" }, disabled: true },

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { useLocale } from "../../contexts/LocaleContext";
 import { useUpdaterContext } from "../../contexts/UpdaterContext";
+import { downloadPercent } from "../../hooks/useUpdater";
 import { openUrl } from "../../ipc/shell";
 import { GITHUB_REPO_URL, GITHUB_RELEASES_URL } from "../../lib/repo";
 import iconUrl from "../../../src-tauri/icons/128x128.png";
@@ -22,13 +23,12 @@ export function AboutPage() {
     openUrl(GITHUB_REPO_URL).catch(console.error);
   };
 
-  const percent =
-    state.status === "downloading" && state.total !== null && state.total > 0
-      ? Math.min(100, Math.round((state.downloaded / state.total) * 100))
-      : null;
+  const percent = downloadPercent(state);
 
   const statusText = () => {
     switch (state.status) {
+      case "idle":
+        return <span>{t.about_update_not_checked}</span>;
       case "checking":
         return <span>{t.about_checking}</span>;
       case "none":

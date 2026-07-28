@@ -13,6 +13,21 @@ export type UpdaterState =
   | { status: "unsupported"; version: string }
   | { status: "error"; message: string };
 
+/**
+ * Download progress as a whole percent, or null when it cannot be computed.
+ *
+ * `total` is null when the server omits Content-Length and 0 when it reports an
+ * empty body; neither yields a usable percentage — 0/0 is NaN and n/0 is
+ * Infinity, which `Math.min` clamps to a confident, wrong 100%. Both callers
+ * render an indeterminate bar instead.
+ *
+ * Shared so the guard cannot drift between the modal and the About page.
+ */
+export function downloadPercent(state: UpdaterState): number | null {
+  if (state.status !== "downloading" || state.total === null || state.total <= 0) return null;
+  return Math.min(100, Math.round((state.downloaded / state.total) * 100));
+}
+
 export interface UpdaterApi {
   state: UpdaterState;
   /** True while an update exists, regardless of whether the modal was dismissed. */
@@ -155,6 +170,7 @@ export function useUpdater(): UpdaterApi {
         }
       });
       stagedRef.current = true;
+      pendingRef.current = null;
       set({ status: "ready", version: update.version });
     } catch (e) {
       set({ status: "error", message: errorMessage(e) });
