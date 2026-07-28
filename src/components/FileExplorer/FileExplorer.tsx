@@ -161,7 +161,9 @@ export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerPr
   };
 
   // "C:/Users/foo" → "C:"; null when the path carries no drive letter.
-  const currentDrive = /^([A-Za-z]:)/.exec(cwd.replace(/\\/g, "/"))?.[1] ?? null;
+  // Uppercased because PowerShell's `cd d:\work` keeps the argument verbatim,
+  // so cwd can come back lowercase while the drive menu always shows "D:".
+  const currentDrive = /^([A-Za-z]:)/.exec(cwd.replace(/\\/g, "/"))?.[1]?.toUpperCase() ?? null;
 
   const goUp = () => {
     // Normalize to forward slashes (already done by Rust, but defensive)
@@ -233,7 +235,7 @@ export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerPr
               title={t.file_switch_drive}
               onClick={() => (driveMenuOpen ? setDriveMenuOpen(false) : openDriveMenu())}
             >
-              {currentDrive ?? drives[0].replace("/", "")} ▾
+              {(currentDrive ?? "—")} ▾
             </button>
             {driveMenuOpen && (
               <>

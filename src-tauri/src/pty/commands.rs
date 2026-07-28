@@ -218,6 +218,7 @@ pub fn write_text_file(path: String, content: String) -> Result<(), String> {
 ///
 /// Kept free of the Win32 call so it is testable on any platform — the bit
 /// arithmetic is the part that can actually be wrong.
+#[cfg(any(windows, test))]
 fn drives_from_mask(mask: u32) -> Vec<String> {
     (0..26u32)
         .filter(|bit| mask & (1 << bit) != 0)

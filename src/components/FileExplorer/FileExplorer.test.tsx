@@ -175,6 +175,31 @@ describe("FileExplorer — drive switcher", () => {
     expect(button).toHaveTextContent("D:");
   });
 
+  it("shows a neutral marker when the path carries no drive letter", async () => {
+    // A UNC path (\\server\share) normalises to //server/share and matches no
+    // drive letter. Claiming "C:" there would be worse than admitting none.
+    mockCommands({
+      pty_get_cwd: () => "//server/share/x",
+      list_drives: () => ["C:/", "D:/"],
+    });
+    render(<FileExplorer sessionId="s1" />);
+
+    const button = await screen.findByTitle("切換磁碟機");
+    expect(button).toHaveTextContent("—");
+    expect(button).not.toHaveTextContent("C:");
+  });
+
+  it("normalises a lowercase drive letter to match the menu", async () => {
+    // `cd d:\work` keeps the argument verbatim, so cwd can be lowercase.
+    mockCommands({
+      pty_get_cwd: () => "d:/work",
+      list_drives: () => ["C:/", "D:/"],
+    });
+    render(<FileExplorer sessionId="s1" />);
+
+    expect(await screen.findByTitle("切換磁碟機")).toHaveTextContent("D:");
+  });
+
   it("navigates to the drive root when one is picked", async () => {
     mockCommands({
       pty_get_cwd: () => "C:/Users",
@@ -272,5 +297,22 @@ describe("FileExplorer — drive switcher", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("closes the menu when the backdrop is clicked", async () => {
+    mockCommands({
+      pty_get_cwd: () => "C:/Users",
+      list_drives: () => ["C:/", "D:/"],
+    });
+    const { container } = render(<FileExplorer sessionId="s1" />);
+
+    await userEvent.click(await screen.findByTitle("切換磁碟機"));
+    expect(screen.getByRole("button", { name: "D:" })).toBeInTheDocument();
+
+    const backdrop = container.querySelector(".fe-drive-backdrop");
+    expect(backdrop).not.toBeNull();
+    await userEvent.click(backdrop!);
+
+    expect(screen.queryByRole("button", { name: "D:" })).not.toBeInTheDocument();
   });
 });
