@@ -210,6 +210,32 @@ pub fn write_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&expanded, content.as_bytes()).map_err(|e| e.to_string())
 }
 
+/// A drive root plus what sort of device it is, for the file panel's switcher.
+#[derive(serde::Serialize)]
+pub struct DriveInfo {
+    /// Root path, forward-slashed to match `norm()` — e.g. "C:/".
+    pub path: String,
+    /// "fixed" | "removable" | "network" | "cdrom" | "ramdisk" | "unknown".
+    pub kind: String,
+}
+
+/// Maps a `GetDriveTypeW` result to a stable string the frontend can label.
+///
+/// Deliberately pure: the numeric values are a fixed Win32 ABI, so the mapping
+/// can be verified on any platform even though the call that produces them
+/// cannot be.
+#[cfg(any(windows, test))]
+fn drive_kind(drive_type: u32) -> &'static str {
+    match drive_type {
+        2 => "removable",
+        3 => "fixed",
+        4 => "network",
+        5 => "cdrom",
+        6 => "ramdisk",
+        _ => "unknown", // DRIVE_UNKNOWN (0) and DRIVE_NO_ROOT_DIR (1)
+    }
+}
+
 /// Expands a `GetLogicalDrives` bitmask into drive roots.
 ///
 /// Bit 0 is `A:`, bit 1 is `B:`, through bit 25 for `Z:`; higher bits are
@@ -231,7 +257,7 @@ fn drives_from_mask(mask: u32) -> Vec<String> {
 /// Windows only — every other platform has a single rooted filesystem, so an
 /// empty list is the honest answer and the frontend hides the control.
 #[tauri::command]
-pub fn list_drives() -> Vec<String> {
+pub fn list_drives() -> Vec<DriveInfo> {
     #[cfg(windows)]
     {
         // A single kernel32 call reading a bitmask: no per-drive filesystem
@@ -239,6 +265,23 @@ pub fn list_drives() -> Vec<String> {
         // the way probing each letter with fs::metadata would.
         let mask = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
         drives_from_mask(mask)
+            .into_iter()
+            .map(|path| {
+                // GetDriveTypeW reads the drive mapping table, so it answers
+                // without touching the device. That also means it reports
+                // "network" for a mapped drive whether or not it is currently
+                // reachable — it labels the risk, it does not remove it.
+                let wide: Vec<u16> = path
+                    .replace('/', "\\")
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                let t = unsafe {
+                    windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(wide.as_ptr())
+                };
+                DriveInfo { path, kind: drive_kind(t).to_string() }
+            })
+            .collect()
     }
     #[cfg(not(windows))]
     {
@@ -284,5 +327,21 @@ mod drive_tests {
         // Nothing beyond Z: exists, so the high bits must not invent entries.
         assert!(drives_from_mask(1 << 26).is_empty());
         assert_eq!(drives_from_mask((1 << 31) | 0b100), vec!["C:/"]);
+    }
+
+    #[test]
+    fn drive_kinds_cover_the_win32_values() {
+        assert_eq!(super::drive_kind(2), "removable");
+        assert_eq!(super::drive_kind(3), "fixed");
+        assert_eq!(super::drive_kind(4), "network");
+        assert_eq!(super::drive_kind(5), "cdrom");
+        assert_eq!(super::drive_kind(6), "ramdisk");
+    }
+
+    #[test]
+    fn unknown_and_no_root_dir_fall_back_to_unknown() {
+        assert_eq!(super::drive_kind(0), "unknown");
+        assert_eq!(super::drive_kind(1), "unknown");
+        assert_eq!(super::drive_kind(99), "unknown");
     }
 }

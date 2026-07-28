@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const invokeMock = vi.fn();
@@ -156,7 +156,7 @@ describe("FileExplorer — drive switcher", () => {
     // Nothing to switch to, and the breadcrumb already shows C:.
     mockCommands({
       pty_get_cwd: () => "C:/Users",
-      list_drives: () => ["C:/"],
+      list_drives: () => [{ path: "C:/", kind: "fixed" }],
     });
     render(<FileExplorer sessionId="s1" />);
     await waitFor(() => expect(invokeMock).toHaveBeenCalled());
@@ -167,7 +167,7 @@ describe("FileExplorer — drive switcher", () => {
   it("shows the drive taken from the current path", async () => {
     mockCommands({
       pty_get_cwd: () => "D:/work",
-      list_drives: () => ["C:/", "D:/"],
+      list_drives: () => [{ path: "C:/", kind: "fixed" }, { path: "D:/", kind: "fixed" }],
     });
     render(<FileExplorer sessionId="s1" />);
 
@@ -180,7 +180,7 @@ describe("FileExplorer — drive switcher", () => {
     // drive letter. Claiming "C:" there would be worse than admitting none.
     mockCommands({
       pty_get_cwd: () => "//server/share/x",
-      list_drives: () => ["C:/", "D:/"],
+      list_drives: () => [{ path: "C:/", kind: "fixed" }, { path: "D:/", kind: "fixed" }],
     });
     render(<FileExplorer sessionId="s1" />);
 
@@ -193,7 +193,7 @@ describe("FileExplorer — drive switcher", () => {
     // `cd d:\work` keeps the argument verbatim, so cwd can be lowercase.
     mockCommands({
       pty_get_cwd: () => "d:/work",
-      list_drives: () => ["C:/", "D:/"],
+      list_drives: () => [{ path: "C:/", kind: "fixed" }, { path: "D:/", kind: "fixed" }],
     });
     render(<FileExplorer sessionId="s1" />);
 
@@ -203,7 +203,7 @@ describe("FileExplorer — drive switcher", () => {
   it("navigates to the drive root when one is picked", async () => {
     mockCommands({
       pty_get_cwd: () => "C:/Users",
-      list_drives: () => ["C:/", "D:/"],
+      list_drives: () => [{ path: "C:/", kind: "fixed" }, { path: "D:/", kind: "fixed" }],
     });
     render(<FileExplorer sessionId="s1" />);
 
@@ -219,7 +219,7 @@ describe("FileExplorer — drive switcher", () => {
     // A USB stick plugged in after launch has to show up.
     mockCommands({
       pty_get_cwd: () => "C:/Users",
-      list_drives: () => ["C:/", "D:/"],
+      list_drives: () => [{ path: "C:/", kind: "fixed" }, { path: "D:/", kind: "fixed" }],
     });
     render(<FileExplorer sessionId="s1" />);
 
@@ -241,7 +241,7 @@ describe("FileExplorer — drive switcher", () => {
     mockCommands({
       pty_get_cwd: () => "C:/Users",
       list_drives: () => {
-        if (firstCall) { firstCall = false; return ["C:/", "D:/"]; }
+        if (firstCall) { firstCall = false; return [{ path: "C:/", kind: "fixed" }, { path: "D:/", kind: "fixed" }]; }
         throw new Error("drive enumeration failed");
       },
     });
@@ -261,7 +261,7 @@ describe("FileExplorer — drive switcher", () => {
       let terminalCwd = "C:/Users";
       mockCommands({
         pty_get_cwd: () => terminalCwd,
-        list_drives: () => ["C:/", "D:/"],
+        list_drives: () => [{ path: "C:/", kind: "fixed" }, { path: "D:/", kind: "fixed" }],
       });
       render(<FileExplorer sessionId="s1" />);
 
@@ -302,7 +302,7 @@ describe("FileExplorer — drive switcher", () => {
   it("closes the menu when the backdrop is clicked", async () => {
     mockCommands({
       pty_get_cwd: () => "C:/Users",
-      list_drives: () => ["C:/", "D:/"],
+      list_drives: () => [{ path: "C:/", kind: "fixed" }, { path: "D:/", kind: "fixed" }],
     });
     const { container } = render(<FileExplorer sessionId="s1" />);
 
@@ -314,5 +314,25 @@ describe("FileExplorer — drive switcher", () => {
     await userEvent.click(backdrop!);
 
     expect(screen.queryByRole("button", { name: "D:" })).not.toBeInTheDocument();
+  });
+
+  it("labels network drives so a slow one is not a surprise", async () => {
+    // GetDriveTypeW cannot tell a disconnected mapping from a live one, so the
+    // label is a warning, not a guarantee — see the spec.
+    mockCommands({
+      pty_get_cwd: () => "C:/Users",
+      list_drives: () => [
+        { path: "C:/", kind: "fixed" },
+        { path: "Z:/", kind: "network" },
+      ],
+    });
+    const { container } = render(<FileExplorer sessionId="s1" />);
+
+    await userEvent.click(await screen.findByTitle("切換磁碟機"));
+
+    const menu = within(container.querySelector(".fe-drive-menu")!);
+    const zItem = await menu.findByRole("button", { name: /^Z:/ });
+    expect(zItem).toHaveTextContent("網路");
+    expect(menu.getByRole("button", { name: /^C:/ })).not.toHaveTextContent("網路");
   });
 });

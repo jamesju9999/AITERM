@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { listDirectory, getSessionCwd, listDrives, type DirEntry } from "../../ipc/fs";
+import { listDirectory, getSessionCwd, listDrives, type DirEntry, type DriveInfo } from "../../ipc/fs";
 import { FileViewer } from "./FileViewer";
 import { useLocale } from "../../contexts/LocaleContext";
+import type { Translations } from "../../lib/i18n";
 import "./FileExplorer.css";
 
 interface FileExplorerProps {
@@ -33,6 +34,14 @@ function getFileIcon(entry: DirEntry): string {
   return icons[ext] ?? "📄";
 }
 
+/** Label for the drive types worth warning about; others render bare. */
+function driveKindLabel(kind: DriveInfo["kind"], t: Translations): string | null {
+  if (kind === "network") return t.drive_kind_network;
+  if (kind === "removable") return t.drive_kind_removable;
+  if (kind === "cdrom") return t.drive_kind_cdrom;
+  return null;
+}
+
 export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerProps) {
   const { t } = useLocale();
   const [entries, setEntries] = useState<DirEntry[]>([]);
@@ -51,7 +60,7 @@ export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerPr
   const [subEntries, setSubEntries] = useState<Record<string, DirEntry[]>>({});
   const [showDotfiles, setShowDotfiles] = useState(false);
   const [selectedFile, setSelectedFile] = useState<DirEntry | null>(null);
-  const [drives, setDrives] = useState<string[]>([]);
+  const [drives, setDrives] = useState<DriveInfo[]>([]);
   const [driveMenuOpen, setDriveMenuOpen] = useState(false);
   // Tracks the last PTY CWD we observed — used only by the polling loop to
   // detect terminal-driven directory changes. Must NOT be updated on user-
@@ -243,11 +252,14 @@ export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerPr
                 <div className="fe-drive-menu">
                   {drives.map((d) => (
                     <button
-                      key={d}
+                      key={d.path}
                       className="fe-drive-item"
-                      onClick={() => selectDrive(d)}
+                      onClick={() => selectDrive(d.path)}
                     >
-                      {d.replace("/", "")}
+                      {d.path.replace("/", "")}
+                      {driveKindLabel(d.kind, t) && (
+                        <span className="fe-drive-kind">{driveKindLabel(d.kind, t)}</span>
+                      )}
                     </button>
                   ))}
                 </div>

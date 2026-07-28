@@ -575,6 +575,9 @@ const zhTW = {
     // FileExplorer
     file_go_up: "上一層",
     file_switch_drive: "切換磁碟機",
+    drive_kind_network: "網路",
+    drive_kind_removable: "卸除式",
+    drive_kind_cdrom: "光碟機",
     file_refresh: "重新整理",
     file_toggle_dotfiles: "顯示/隱藏隱藏檔案",
     file_loading: "載入中…",
@@ -1582,6 +1585,9 @@ const enRaw = {
     // FileExplorer
     file_go_up: "Go up one level",
     file_switch_drive: "Switch drive",
+    drive_kind_network: "Network",
+    drive_kind_removable: "Removable",
+    drive_kind_cdrom: "Optical",
     file_refresh: "Refresh",
     file_toggle_dotfiles: "Show/hide hidden files",
     file_loading: "Loading…",
