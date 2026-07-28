@@ -118,6 +118,7 @@ dependencies = [
  "toml 0.8.2",
  "url",
  "uuid",
+ "windows-sys 0.60.2",
  "wiremock",
 ]
 

@@ -63,3 +63,9 @@ url = "2"
 wiremock = "0.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
+
+# Windows-only: GetLogicalDrives for the file panel's drive switcher.
+# Already present in Cargo.lock as a transitive dependency, so this adds no
+# meaningful build cost, and nothing is compiled on macOS or Linux.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_Storage_FileSystem"] }

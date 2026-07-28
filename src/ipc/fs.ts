@@ -15,6 +15,10 @@ export const getSessionCwd = (id: string): Promise<string | null> =>
 export const listDirectory = (id: string, path: string = ""): Promise<DirEntry[]> =>
   invoke<DirEntry[]>("pty_list_dir", { id, path });
 
+/** Drive roots (e.g. ["C:/", "D:/"]). Empty on non-Windows platforms. */
+export const listDrives = (): Promise<string[]> =>
+  invoke<string[]>("list_drives");
+
 export interface FileContent {
   content: string;
   truncated: boolean;

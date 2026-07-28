@@ -84,6 +84,7 @@ use enterprise::task_runner::VcsCredentialManager;
 use pty::commands::{
     pty_close, pty_create, pty_get_cwd, pty_get_recent_output, pty_get_shell_type,
     pty_list_dir, pty_read_file, pty_resize, pty_write, read_file_as_bytes, write_text_file,
+    list_drives,
 };
 use pty::PtyManager;
 use secret::SecretStore;
@@ -248,6 +249,7 @@ pub fn run() {
             pty_get_recent_output,
             pty_get_shell_type,
             pty_list_dir,
+            list_drives,
             pty_read_file,
             read_file_as_bytes,
             write_text_file,
