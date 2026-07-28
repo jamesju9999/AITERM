@@ -200,7 +200,11 @@ AITerm 是終端機應用程式——重啟會終止所有 PTY session 與正在
 
 新增字串至 `src/lib/i18n.ts`，en 與 zh-TW 兩組並行。
 
-既有 key 的處置：`about_update_available`、`about_update_error`、`about_checking`、`about_up_to_date`、`about_check_updates` 全部沿用，文案不動。`about_update_link`（「前往下載」）僅保留給 `unsupported` 狀態使用。新增的 key 涵蓋彈窗標題、【立即更新】、【稍後】、下載進度、【重新啟動以完成更新】、重啟警告文字、簽章驗證失敗訊息。
+既有 key 的處置：`about_update_available`、`about_checking`、`about_up_to_date`、`about_check_updates` 全部沿用，文案不動。`about_update_link`（「前往下載」）僅保留給 `unsupported` 狀態使用。
+
+`about_update_error`（「檢查失敗，請稍後再試」）**淘汰**，由新的 `update_failed`（「更新失敗」）取代——hook 用同一個 `error` 狀態涵蓋「檢查失敗」與「下載失敗」兩種情況，原文案對後者是錯的。
+
+新增的 key 涵蓋彈窗標題、【立即更新】、【稍後】、下載進度、【重新啟動以完成更新】、重啟警告文字、更新失敗訊息、不支援自動更新的說明。
 
 ## 測試策略
 
