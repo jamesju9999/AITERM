@@ -26,15 +26,14 @@ const ANTHROPIC_OAUTH_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/to
 const ANTHROPIC_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
 const GOOGLE_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-// MUST stay in sync with the same-named constants in `commands/provider.rs`,
-// which the initial login uses. This copy is what `do_google_oauth_refresh`
-// below sends. They were briefly out of sync during development (login had
-// the real id here while this still held ""), which produced a nasty failure
-// mode: login succeeded, then every background refresh silently 400'd and
-// was swallowed by the warn-and-reuse-old-token fallback, so the session
-// only died ~an hour later with no signal pointing at the real cause.
-const GOOGLE_OAUTH_CLIENT_ID: &str = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
-const GOOGLE_OAUTH_CLIENT_SECRET: &str = "";
+// Deliberately NOT duplicated here — imported from the single definition in
+// `commands/provider.rs`, which the initial login also uses. A previous
+// revision kept a second copy in this file, and it silently stayed empty
+// after login got the real value: logins worked, but every refresh 400'd
+// into the warn-and-reuse-stale-token fallback below, killing sessions ~an
+// hour later with nothing pointing at the cause. Sharing one definition
+// makes that failure structurally impossible.
+use crate::commands::provider::{google_oauth_client_secret, GOOGLE_OAUTH_CLIENT_ID};
 
 const CODEX_OAUTH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -178,11 +177,12 @@ async fn do_google_oauth_refresh(provider_id: &str, refresh_token: &str, secrets
     }
 
     let http = reqwest::Client::new();
+    let client_secret = google_oauth_client_secret();
     let params = [
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),
         ("client_id", GOOGLE_OAUTH_CLIENT_ID),
-        ("client_secret", GOOGLE_OAUTH_CLIENT_SECRET),
+        ("client_secret", client_secret.as_str()),
     ];
     let resp = http
         .post(GOOGLE_OAUTH_TOKEN_URL)
