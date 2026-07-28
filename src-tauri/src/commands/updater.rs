@@ -1,11 +1,18 @@
 /// Decides whether the in-app updater can service this install.
 ///
-/// AppImage is the only self-updatable Linux bundle we ship — `.deb` installs
-/// are served by `latest.json`'s AppImage URL, which would be the wrong artifact.
-/// Tauri's AppImage launcher exports `APPIMAGE`, so its presence identifies the bundle.
+/// AppImage is the only self-updatable Linux bundle we ship — every other Linux
+/// packaging we produce (`.deb`, `.rpm`, Snap, Flatpak) is served by `latest.json`'s
+/// AppImage URL, which would be the wrong artifact. `APPIMAGE` is exported by the
+/// AppImage type-2 runtime embedded in every AppImage per the AppImage spec itself,
+/// not something Tauri adds — so its presence is a durable, format-level signal
+/// rather than a plugin implementation detail that could change on upgrade. It's
+/// also the same signal `tauri-plugin-updater` uses to decide whether it can
+/// install on Linux, so this gate mirrors the plugin's real capability rather than
+/// guessing at it.
 ///
-/// Kept env-free so it is testable without mutating process state, which races
-/// under cargo's parallel test threads.
+/// Kept env-free so it is testable without mutating process state: that's a race
+/// under cargo's parallel test threads, and as of Rust 2024 `std::env::set_var` is
+/// `unsafe` besides.
 fn supported_for(is_linux: bool, appimage_env: Option<&str>) -> bool {
     !is_linux || appimage_env.is_some()
 }
