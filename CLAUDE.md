@@ -14,6 +14,7 @@ npm run tauri:dev          # Tauri dev server (first build is slow — Rust)
 # Build
 npm run build              # Frontend only (tsc + vite)
 npm run tauri:build        # Full production build
+npm run tauri:build -- --no-sign   # Build without the updater signing key (contributors)
 
 # Lint
 npm run lint               # ESLint
