@@ -1,0 +1,83 @@
+.update-modal-backdrop {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 4000;
+  max-width: 380px;
+}
+
+.update-modal {
+  background: #1b1b1b;
+  border: 1px solid #333;
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+  padding: 16px 18px;
+  color: #e6e6e6;
+  font-family: "Consolas", "Cascadia Code", "Menlo", monospace;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.update-modal-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.update-modal-version {
+  font-size: 13px;
+  color: #7aadff;
+  margin: 0;
+}
+
+.update-modal-notes {
+  font-size: 12px;
+  color: #aaa;
+  margin: 0;
+  max-height: 120px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+.update-modal-warning {
+  font-size: 12px;
+  color: #d9a441;
+  margin: 0;
+}
+
+.update-modal-error {
+  font-size: 12px;
+  color: #e06c75;
+  margin: 0;
+  word-break: break-word;
+}
+
+.update-modal-progress {
+  height: 6px;
+  border-radius: 3px;
+  background: #2c2c2c;
+  overflow: hidden;
+}
+
+.update-modal-progress-bar {
+  height: 100%;
+  background: #7aadff;
+  transition: width 120ms linear;
+}
+
+.update-modal-progress-bar--indeterminate {
+  width: 40%;
+  animation: update-modal-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes update-modal-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
+.update-modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
