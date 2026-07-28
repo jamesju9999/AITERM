@@ -209,6 +209,7 @@ jobs:
             > ```
           releaseDraft: true
           prerelease: false
+          uploadUpdaterJson: false
           args: --target aarch64-apple-darwin
 
       - name: Copy ApiDocFetcher scripts (Windows)
@@ -258,6 +259,7 @@ jobs:
             > ```
           releaseDraft: true
           prerelease: false
+          uploadUpdaterJson: false
           args: --target x86_64-pc-windows-msvc --bundles nsis
 
       # Ubuntu 22.04: AppImage only (distro-agnostic, works on Ubuntu 22.04+)
@@ -292,6 +294,7 @@ jobs:
             > ```
           releaseDraft: true
           prerelease: false
+          uploadUpdaterJson: false
           args: --target x86_64-unknown-linux-gnu --bundles appimage
 
       # Ubuntu 24.04 x64: .deb only (uses t64 runtime deps, works on Ubuntu 24.04+)
@@ -326,6 +329,7 @@ jobs:
             > ```
           releaseDraft: true
           prerelease: false
+          uploadUpdaterJson: false
           args: --target x86_64-unknown-linux-gnu --bundles deb
 
       # Ubuntu 22.04 ARM64: AppImage only (works on ARM Ubuntu 22.04+)
@@ -360,6 +364,7 @@ jobs:
             > ```
           releaseDraft: true
           prerelease: false
+          uploadUpdaterJson: false
           args: --target aarch64-unknown-linux-gnu --bundles appimage
 
       # Ubuntu 24.04 ARM64: .deb only (uses t64 runtime deps, works on ARM Ubuntu 24.04+)
@@ -394,6 +399,7 @@ jobs:
             > ```
           releaseDraft: true
           prerelease: false
+          uploadUpdaterJson: false
           args: --target aarch64-unknown-linux-gnu --bundles deb
 
   # Six parallel build jobs cannot each write latest.json — the later writer would
@@ -403,14 +409,16 @@ jobs:
   finalize:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Download updater signatures
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
         run: |
           mkdir -p sigs
-          gh release download "${{ github.ref_name }}" --pattern '*.sig' --dir sigs
+          gh release download "$TAG" --pattern '*.sig' --dir sigs
           ls -la sigs
 
       - name: Compose latest.json
@@ -418,12 +426,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
-          # Already RFC 3339, and present on both push and workflow_dispatch events,
-          # so no shell date arithmetic is needed. Tauri only displays pub_date.
-          PUB_DATE: ${{ github.event.repository.updated_at }}
         run: |
           python3 - <<'PY'
           import json, os, pathlib, sys
+          from datetime import datetime, timezone
 
           tag = os.environ["TAG"]
           repo = os.environ["GH_REPO"]
@@ -463,7 +469,10 @@ jobs:
           manifest = {
               "version": version,
               "notes": f"https://github.com/{repo}/releases/tag/{tag}",
-              "pub_date": os.environ["PUB_DATE"],
+              # RFC 3339 with a Z suffix. tauri-plugin-updater parses this strictly —
+              # a malformed value fails deserialization of the whole manifest for every
+              # platform, so it is generated here rather than taken from event payload.
+              "pub_date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
               "platforms": platforms,
           }
           pathlib.Path("latest.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -474,6 +483,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
         run: |
-          gh release upload "${{ github.ref_name }}" latest.json --clobber
-          gh release edit "${{ github.ref_name }}" --draft=false --latest
+          gh release upload "$TAG" latest.json --clobber
+          gh release edit "$TAG" --draft=false --latest
