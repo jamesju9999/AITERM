@@ -209,3 +209,79 @@ pub fn write_text_file(path: String, content: String) -> Result<(), String> {
 
     std::fs::write(&expanded, content.as_bytes()).map_err(|e| e.to_string())
 }
+
+/// Expands a `GetLogicalDrives` bitmask into drive roots.
+///
+/// Bit 0 is `A:`, bit 1 is `B:`, through bit 25 for `Z:`; higher bits are
+/// undefined and ignored. Roots use a forward slash to match `norm()`'s output
+/// so the frontend never has to normalise separators.
+///
+/// Kept free of the Win32 call so it is testable on any platform — the bit
+/// arithmetic is the part that can actually be wrong.
+fn drives_from_mask(mask: u32) -> Vec<String> {
+    (0..26u32)
+        .filter(|bit| mask & (1 << bit) != 0)
+        .map(|bit| format!("{}:/", (b'A' + bit as u8) as char))
+        .collect()
+}
+
+/// Drive roots available on this machine, for the file panel's drive switcher.
+///
+/// Windows only — every other platform has a single rooted filesystem, so an
+/// empty list is the honest answer and the frontend hides the control.
+#[tauri::command]
+pub fn list_drives() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        // A single kernel32 call reading a bitmask: no per-drive filesystem
+        // access, so a mapped-but-disconnected network drive cannot stall it
+        // the way probing each letter with fs::metadata would.
+        let mask = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
+        drives_from_mask(mask)
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod drive_tests {
+    use super::drives_from_mask;
+
+    #[test]
+    fn empty_mask_yields_no_drives() {
+        assert!(drives_from_mask(0).is_empty());
+    }
+
+    #[test]
+    fn bit_zero_is_drive_a() {
+        assert_eq!(drives_from_mask(0b1), vec!["A:/"]);
+    }
+
+    #[test]
+    fn typical_windows_machine_has_c_and_d() {
+        // bits 2 and 3
+        assert_eq!(drives_from_mask(0b1100), vec!["C:/", "D:/"]);
+    }
+
+    #[test]
+    fn bit_twenty_five_is_drive_z() {
+        assert_eq!(drives_from_mask(1 << 25), vec!["Z:/"]);
+    }
+
+    #[test]
+    fn all_twenty_six_letters_are_expanded_in_order() {
+        let all = drives_from_mask((1 << 26) - 1);
+        assert_eq!(all.len(), 26);
+        assert_eq!(all[0], "A:/");
+        assert_eq!(all[25], "Z:/");
+    }
+
+    #[test]
+    fn bits_above_twenty_five_are_ignored() {
+        // Nothing beyond Z: exists, so the high bits must not invent entries.
+        assert!(drives_from_mask(1 << 26).is_empty());
+        assert_eq!(drives_from_mask((1 << 31) | 0b100), vec!["C:/"]);
+    }
+}
