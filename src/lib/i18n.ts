@@ -574,6 +574,7 @@ const zhTW = {
     cmd_confirm_execute: "確認執行？",
     // FileExplorer
     file_go_up: "上一層",
+    file_switch_drive: "切換磁碟機",
     file_refresh: "重新整理",
     file_toggle_dotfiles: "顯示/隱藏隱藏檔案",
     file_loading: "載入中…",
@@ -1580,6 +1581,7 @@ const enRaw = {
     cmd_confirm_execute: "Confirm execution?",
     // FileExplorer
     file_go_up: "Go up one level",
+    file_switch_drive: "Switch drive",
     file_refresh: "Refresh",
     file_toggle_dotfiles: "Show/hide hidden files",
     file_loading: "Loading…",
