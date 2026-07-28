@@ -1284,11 +1284,22 @@ pub async fn get_google_oauth_models(
         .map_err(|e| format!("Failed to read token: {e}"))?
         .ok_or("No OAuth token stored for this provider")?;
 
+    // POST, not GET, and the onboarded project id goes in the body — Google's
+    // `:verb`-style endpoints are POST (same as loadCodeAssist/onboardUser
+    // above). An earlier revision used GET with no body and got a flat 404,
+    // which silently degraded every user to the hardcoded fallback list.
+    let project_id = secrets.get(&format!("{provider_id}:project_id")).ok().flatten();
+    let request_body = match &project_id {
+        Some(p) => serde_json::json!({ "project": p }),
+        None => serde_json::json!({}),
+    };
+
     let client = reqwest::Client::new();
     let models = match antigravity_headers(
-        client.get(format!("{ANTIGRAVITY_BOOTSTRAP_BASE_URL}/v1internal:fetchAvailableModels")),
+        client.post(format!("{ANTIGRAVITY_BOOTSTRAP_BASE_URL}/v1internal:fetchAvailableModels")),
         &token,
     )
+    .json(&request_body)
     .send()
     .await
     {

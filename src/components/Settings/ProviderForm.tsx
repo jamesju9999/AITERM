@@ -994,7 +994,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
           ) : providerType === "google-ai" && googleAuthMethod === "oauth" && googleOAuthLoggedIn ? (
             googleOAuthModelsLoading ? (
               <input type="text" value={t.provider_model_loading} disabled />
-            ) : (
+            ) : googleOAuthModels.length > 0 ? (
               <select value={model} onChange={(e) => setModel(e.target.value)}>
                 {!googleOAuthModels.includes(model) && model && (
                   <option value={model}>{model}</option>
@@ -1003,6 +1003,18 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>
+            ) : (
+              // Discovery failed (no token yet, endpoint down, unrecognized
+              // response shape...). A <select> with nothing to select is a
+              // dead end — the user can't even clear it to type a model id
+              // they know is valid. Degrade to free text so they're never
+              // locked out of a provider they've otherwise configured.
+              <input
+                type="text"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={DEFAULT_MODELS[providerType]}
+              />
             )
           ) : providerType === "google-ai" ? (
             googleAiLoading ? (
