@@ -28,7 +28,7 @@ AITerm 的檔案面板（`src/components/FileExplorer/FileExplorer.tsx`）在 Wi
 | 決策點 | 選擇 |
 |---|---|
 | 互動方式 | **工具列下拉選單**，不動 `↑` / `atRoot` / `goUp` |
-| 清單內容 | **僅磁碟機代號**（`C:`、`D:`），不含卷標與剩餘空間 |
+| 清單內容 | **磁碟機代號 + 裝置類型標示**（`C:`、`Z: 網路`），不含卷標與剩餘空間 |
 | 列舉方式 | **`GetLogicalDrives()`**（單次 Win32 呼叫，不碰磁碟 I/O） |
 | 選取行為 | **只切換面板**，不 `cd` 終端機 |
 | 麵包屑 `/` | **不動**（見「明確排除」） |
@@ -36,7 +36,8 @@ AITerm 的檔案面板（`src/components/FileExplorer/FileExplorer.tsx`）在 Wi
 ### 明確排除（Non-goals）
 
 - **不修改麵包屑最前面的 `/`。** 使用者截圖中的 `//C:` 來自該 `/` span 加分隔符再加 `C:`；它在 Windows 上沒有語意，但修改它會動到既有導覽行為，屬於獨立議題。
-- 不顯示卷標（需 `GetVolumeInformationW`）或剩餘空間（需 `GetDiskFreeSpaceExW`，且網路碟碟可能阻塞數秒）。
+- 不顯示卷標（需 `GetVolumeInformationW`）或剩餘空間（需 `GetDiskFreeSpaceExW`，且網路磁碟機取容量可能阻塞數秒）。
+- **不為 `pty_list_dir` 加逾時**。見下方「已知限制：斷線的網路磁碟機」。
 - 不修改 `↑` 按鈕在磁碟機根目錄的停用行為，也不新增「本機」這種虛擬層級。
 - 不讓選取磁碟機連帶切換終端機工作目錄——工具列已有獨立的「切換終端機到這裡」按鈕負責該職責。
 - 不處理 UNC 路徑（`\\server\share`）。
@@ -51,11 +52,15 @@ AITerm 的檔案面板（`src/components/FileExplorer/FileExplorer.tsx`）在 Wi
 
 ```rust
 #[tauri::command]
-pub fn list_drives() -> Vec<String>
+pub fn list_drives() -> Vec<DriveInfo>   // { path: "C:/", kind: "fixed" }
 ```
 
-- **Windows**：呼叫 `GetLogicalDrives()`，回傳 32 位元遮罩（bit 0 = `A:`，bit 1 = `B:`…），轉為 `["C:/", "D:/"]`。
+- **Windows**：呼叫 `GetLogicalDrives()`，回傳 32 位元遮罩（bit 0 = `A:`，bit 1 = `B:`…）轉為根路徑；再對每個根路徑呼叫 `GetDriveTypeW` 取得裝置類型。
 - **非 Windows**：回傳空 `Vec`。
+
+`DRIVE_*` 常數位於 `windows_sys::Win32::System::WindowsProgramming`，**不在** `Win32_Storage_FileSystem`，因此需要額外的 `Win32_System_WindowsProgramming` feature。`GetDriveTypeW` 需要反斜線根路徑（`C:\\`）的 NUL 結尾 UTF-16 字串。以上皆已針對 `x86_64-pc-windows-msvc` 交叉編譯驗證。
+
+類型到字串的對映同樣抽成純函式 `drive_kind(u32) -> &'static str`，可在任何平台測試。UI 只為 `network` / `removable` / `cdrom` 加標籤——那是可能變慢或令人意外的三種；其餘留白以免雜訊。
 
 位元運算抽成純函式：
 
@@ -118,6 +123,25 @@ if (newCwd && newCwd !== ptyCwdRef.current) { ptyCwdRef.current = newCwd; loadDi
 若選取磁碟機時一併更新 `ptyCwdRef`，輪詢會誤以為終端機已在 `D:`；之後終端機真的 `cd` 時，比對結果可能相等而不觸發重載，**檔案面板將從此不再跟隨終端機**。
 
 行為結果：切到 `D:` 後面板停在 `D:`；待終端機自行 `cd` 時才跳回跟隨。這與現行麵包屑導覽的行為一致。
+
+## 已知限制：斷線的網路磁碟機（未解決）
+
+`GetLogicalDrives()` 會為**每一個已指派的代號**設位元，包含空的光碟機、空的讀卡機，以及**已對映但斷線的網路磁碟機**。
+
+列舉本身確實不碰任何磁碟 I/O——這是選它而非逐一 `fs::metadata` 探測的理由，而那個理由成立。但**選取之後**會走 `pty_list_dir` → `std::fs::read_dir`，對一個死掉的 SMB 對映會阻塞整個重連逾時（數十秒），面板停在載入中，最後顯示 `The device is not ready. (os error 21)`。
+
+換言之：原本宣稱避開的阻塞，實際上只是從「開啟選單」移到了「點選磁碟機」。企業環境幾乎必然存在對映網路碟，而本 App 具備 Enterprise 模組，正是會部署在該環境。
+
+**目前的緩解措施是標示而非修復。** `GetDriveTypeW` 讀取的是對映表而非實際連線，因此：
+
+- 它能標出「這是網路磁碟機」，讓使用者對可能的延遲有心理準備；
+- 它**無法**判斷該對映當下是否可達。已斷線的對映同樣回傳 `DRIVE_REMOTE`。
+
+所以標籤降低意外感，**阻塞本身仍然存在**。
+
+根治需要為 `pty_list_dir` 加上逾時，但 `std::fs::read_dir` 沒有原生逾時機制，必須搬到獨立執行緒；而該指令是檔案面板**所有**目錄列表的共用路徑，影響面遠超本功能，故列為獨立議題。
+
+恢復是乾淨的：`cwd` 不變，按 ↻ 即可回到原本的清單。
 
 ## 錯誤處理
 
