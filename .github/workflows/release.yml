@@ -66,7 +66,13 @@ jobs:
               repo: context.repo.repo,
               per_page: 100,
             });
-            const existing = releases.find((r) => r.tag_name === tag);
+            const matches = releases.filter((r) => r.tag_name === tag);
+            // Prefer a published release: `gh` resolves a tag via
+            // /releases/tags/{tag}, which returns the published one, so picking a
+            // leftover draft here would have the builds upload to one release
+            // while finalize reads another. This repo already carries such
+            // duplicates from before releaseId was used (v0.1.77, v0.1.94).
+            const existing = matches.find((r) => !r.draft) ?? matches[0];
             if (existing) {
               core.info(`Reusing release ${existing.id} (draft=${existing.draft})`);
               return String(existing.id);
@@ -75,6 +81,9 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag_name: tag,
+              // Parity with tauri-action's create-release, which passed
+              // `commitish || context.sha`. Ignored when the tag already exists.
+              target_commitish: context.sha,
               name: `AITerm ${tag}`,
               body: process.env.RELEASE_BODY,
               draft: true,
@@ -125,6 +134,16 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      # An empty release_id makes tauri-action fall through to
+      # "No releaseId or tagName provided, skipping all uploads..." and exit 0 —
+      # six green builds with nothing uploaded. Reachable via a partial
+      # "Re-run failed jobs", which does not re-run create-release. Fail loudly.
+      - name: Assert releaseId is present
+        shell: bash
+        run: |
+          test -n "${{ needs.create-release.outputs.release_id }}" \
+            || { echo "::error::create-release produced an empty release_id"; exit 1; }
+
       - name: Checkout
         uses: actions/checkout@v4
 
