@@ -1078,6 +1078,12 @@ export function UpdateModalView({
           <p className="update-modal-notes">{t.update_manual_hint}</p>
         )}
 
+        {/*
+          Not localized, and deliberately so: this is the raw error from the
+          Rust side (e.g. "signature error: invalid signature"). The localized
+          title above says what failed; this line says why, and mistranslating
+          or hiding it would make update failures undiagnosable.
+        */}
         {state.status === "error" && (
           <p className="update-modal-error">{state.message}</p>
         )}
