@@ -254,6 +254,39 @@ AITerm 是終端機應用程式——重啟會終止所有 PTY session 與正在
 
 實作計畫中必須排入此步驟，不得以「單元測試通過」代替端對端驗證。
 
+## 驗證結果（2026-07-28）
+
+### 自動化
+
+前端 358 個測試 / 47 個檔案、Rust 294 個單元測試加整合測試全數通過，`tsc --noEmit` 乾淨。分支變更檔案的 `eslint` 只剩一個既有例外（`UpdaterContext.tsx` 的 `react-refresh/only-export-components`，與 `LocaleContext.tsx` 完全同型）。
+
+關鍵路徑以 mutation testing 驗證，非僅看綠燈：`useUpdater` 共 12 個變異全數被抓、`UpdateModal` 7 個全數被抓、`AboutPage` 4 個全數被抓。
+
+### 發佈端（v1.2.0 與 v1.2.1 各驗一次，結果一致）
+
+| 檢查 | 結果 |
+|---|---|
+| release 已發佈並標為 latest | `draft=false latest=true` |
+| 同 tag release 筆數 | 1（未觸發多 draft 風險） |
+| `latest.json` 份數 | 1（證實 `uploadUpdaterJson: false` 生效） |
+| 平台 key | 四個齊全，無缺少無多餘 |
+| 簽章長度 | 404–420 字元，非空 |
+| App 實際 endpoint | HTTP 200，解析到正確版本 |
+| manifest 內四個下載 URL | 全部 HTTP 200 |
+| `.deb.sig` | 出現在資產清單，未進入 `latest.json`（如預期被跳過） |
+
+一併證實了 Task 10 當時標記為未驗證的假設：`gh release download --pattern '*.sig'` 讀得到 draft release 的資產。
+
+### 端對端（macOS Apple Silicon，使用者實機操作）
+
+v1.1.0 → 手動安裝 v1.2.0 → 自動更新至 v1.2.1，使用者確認全部項目無問題，涵蓋：更新提示框自動出現、【稍後】後 TabBar 紅點續亮、About 頁顯示可用更新、下載進度前進、重啟警告出現、**不會自行重啟**、按下重啟後版本正確、macOS 無需 `xattr -cr`。
+
+已安裝的 v1.2.0 在 `latest.json` 尚為 1.2.0 時正確顯示「已是最新版」，證明版本比較不會誤報。
+
+### 尚未驗證
+
+Windows 與 Linux（AppImage / `.deb` fallback）的端對端更新未實機測試——僅 macOS 走完全程。發佈端產物對所有平台皆已驗證齊全。
+
 ## 受影響檔案
 
 | 檔案 | 改動 |
