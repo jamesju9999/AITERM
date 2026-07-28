@@ -14,7 +14,77 @@ permissions:
   contents: write
 
 jobs:
+  # Single writer for release creation. Six parallel build jobs each calling
+  # tauri-action's getOrCreateRelease would scan for a same-tag draft and, on a
+  # simultaneous miss, create duplicates — GitHub permits several drafts per tag
+  # because a draft carries no real tag ref. Passing releaseId to the build steps
+  # skips that path entirely: tauri-action only calls getOrCreateRelease when
+  # tagName is set and releaseId is not (src/index.ts, `if (tagName && !releaseId)`).
+  #
+  # It also puts the release name and body in one place rather than six, which is
+  # how two of them drifted out of sync with the real artifact names.
+  create-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_id: ${{ steps.create.outputs.result }}
+    steps:
+      - name: Create or reuse the draft release
+        id: create
+        uses: actions/github-script@v7
+        env:
+          TAG: ${{ github.ref_name }}
+          RELEASE_BODY: |
+            ## AITerm ${{ github.ref_name }}
+
+            ### 下載
+            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
+            - **Windows**: 下載 `-setup.exe` 安裝檔
+            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_amd64.AppImage`
+            - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
+            - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
+            - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
+
+            > **macOS 首次開啟提示（僅限手動安裝 `.dmg`）：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
+            > ```
+            > xattr -cr /Applications/AITerm.app
+            > ```
+            > 之後改用 App 內建的自動更新升級時就不會再遇到——更新檔由 App 直接下載，不經瀏覽器，因此不會被加上 quarantine 屬性。
+            > **Linux AppImage：** 執行前需加執行權限：
+            > ```
+            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
+            > ```
+        with:
+          result-encoding: string
+          script: |
+            const tag = process.env.TAG;
+            // A draft has no tag ref, so getReleaseByTag cannot see it — scan
+            // instead. This also makes a re-run reuse the previous attempt's
+            // draft rather than adding a second one.
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const existing = releases.find((r) => r.tag_name === tag);
+            if (existing) {
+              core.info(`Reusing release ${existing.id} (draft=${existing.draft})`);
+              return String(existing.id);
+            }
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `AITerm ${tag}`,
+              body: process.env.RELEASE_BODY,
+              draft: true,
+              prerelease: false,
+            });
+            core.info(`Created draft release ${data.id}`);
+            return String(data.id);
+
   build:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -186,31 +256,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: AITerm ${{ github.ref_name }}
-          releaseBody: |
-            ## AITerm ${{ github.ref_name }}
-
-            ### 下載
-            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
-            - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_amd64.AppImage`
-            - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
-            - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
-            - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
-
-            > **macOS 首次開啟提示（僅限手動安裝 `.dmg`）：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
-            > ```
-            > xattr -cr /Applications/AITerm.app
-            > ```
-            > 之後改用 App 內建的自動更新升級時就不會再遇到——更新檔由 App 直接下載，不經瀏覽器，因此不會被加上 quarantine 屬性。
-            > **Linux AppImage：** 執行前需加執行權限：
-            > ```
-            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
-            > ```
-          releaseDraft: true
-          prerelease: false
-          uploadUpdaterJson: false
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          includeUpdaterJson: false
           args: --target aarch64-apple-darwin
 
       - name: Copy ApiDocFetcher scripts (Windows)
@@ -237,31 +284,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: AITerm ${{ github.ref_name }}
-          releaseBody: |
-            ## AITerm ${{ github.ref_name }}
-
-            ### 下載
-            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
-            - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_amd64.AppImage`
-            - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
-            - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
-            - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
-
-            > **macOS 首次開啟提示（僅限手動安裝 `.dmg`）：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
-            > ```
-            > xattr -cr /Applications/AITerm.app
-            > ```
-            > 之後改用 App 內建的自動更新升級時就不會再遇到——更新檔由 App 直接下載，不經瀏覽器，因此不會被加上 quarantine 屬性。
-            > **Linux AppImage：** 執行前需加執行權限：
-            > ```
-            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
-            > ```
-          releaseDraft: true
-          prerelease: false
-          uploadUpdaterJson: false
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          includeUpdaterJson: false
           args: --target x86_64-pc-windows-msvc --bundles nsis
 
       # Ubuntu 22.04: AppImage only (distro-agnostic, works on Ubuntu 22.04+)
@@ -273,31 +297,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: AITerm ${{ github.ref_name }}
-          releaseBody: |
-            ## AITerm ${{ github.ref_name }}
-
-            ### 下載
-            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
-            - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_amd64.AppImage`
-            - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
-            - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
-            - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
-
-            > **macOS 首次開啟提示（僅限手動安裝 `.dmg`）：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
-            > ```
-            > xattr -cr /Applications/AITerm.app
-            > ```
-            > 之後改用 App 內建的自動更新升級時就不會再遇到——更新檔由 App 直接下載，不經瀏覽器，因此不會被加上 quarantine 屬性。
-            > **Linux AppImage：** 執行前需加執行權限：
-            > ```
-            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
-            > ```
-          releaseDraft: true
-          prerelease: false
-          uploadUpdaterJson: false
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          includeUpdaterJson: false
           args: --target x86_64-unknown-linux-gnu --bundles appimage
 
       # Ubuntu 24.04 x64: .deb only (uses t64 runtime deps, works on Ubuntu 24.04+)
@@ -309,31 +310,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: AITerm ${{ github.ref_name }}
-          releaseBody: |
-            ## AITerm ${{ github.ref_name }}
-
-            ### 下載
-            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
-            - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_amd64.AppImage`
-            - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
-            - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
-            - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
-
-            > **macOS 首次開啟提示（僅限手動安裝 `.dmg`）：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
-            > ```
-            > xattr -cr /Applications/AITerm.app
-            > ```
-            > 之後改用 App 內建的自動更新升級時就不會再遇到——更新檔由 App 直接下載，不經瀏覽器，因此不會被加上 quarantine 屬性。
-            > **Linux AppImage：** 執行前需加執行權限：
-            > ```
-            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
-            > ```
-          releaseDraft: true
-          prerelease: false
-          uploadUpdaterJson: false
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          includeUpdaterJson: false
           args: --target x86_64-unknown-linux-gnu --bundles deb
 
       # Ubuntu 22.04 ARM64: AppImage only (works on ARM Ubuntu 22.04+)
@@ -345,31 +323,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: AITerm ${{ github.ref_name }}
-          releaseBody: |
-            ## AITerm ${{ github.ref_name }}
-
-            ### 下載
-            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
-            - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_amd64.AppImage`
-            - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
-            - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
-            - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
-
-            > **macOS 首次開啟提示（僅限手動安裝 `.dmg`）：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
-            > ```
-            > xattr -cr /Applications/AITerm.app
-            > ```
-            > 之後改用 App 內建的自動更新升級時就不會再遇到——更新檔由 App 直接下載，不經瀏覽器，因此不會被加上 quarantine 屬性。
-            > **Linux AppImage：** 執行前需加執行權限：
-            > ```
-            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
-            > ```
-          releaseDraft: true
-          prerelease: false
-          uploadUpdaterJson: false
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          includeUpdaterJson: false
           args: --target aarch64-unknown-linux-gnu --bundles appimage
 
       # Ubuntu 24.04 ARM64: .deb only (uses t64 runtime deps, works on ARM Ubuntu 24.04+)
@@ -381,31 +336,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: AITerm ${{ github.ref_name }}
-          releaseBody: |
-            ## AITerm ${{ github.ref_name }}
-
-            ### 下載
-            - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
-            - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_amd64.AppImage`
-            - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
-            - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
-            - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
-
-            > **macOS 首次開啟提示（僅限手動安裝 `.dmg`）：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
-            > ```
-            > xattr -cr /Applications/AITerm.app
-            > ```
-            > 之後改用 App 內建的自動更新升級時就不會再遇到——更新檔由 App 直接下載，不經瀏覽器，因此不會被加上 quarantine 屬性。
-            > **Linux AppImage：** 執行前需加執行權限：
-            > ```
-            > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
-            > ```
-          releaseDraft: true
-          prerelease: false
-          uploadUpdaterJson: false
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          includeUpdaterJson: false
           args: --target aarch64-unknown-linux-gnu --bundles deb
 
   # Six parallel build jobs cannot each write latest.json — the later writer would
