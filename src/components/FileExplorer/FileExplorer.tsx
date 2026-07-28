@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { listDirectory, getSessionCwd, type DirEntry } from "../../ipc/fs";
+import { listDirectory, getSessionCwd, listDrives, type DirEntry } from "../../ipc/fs";
 import { FileViewer } from "./FileViewer";
 import { useLocale } from "../../contexts/LocaleContext";
 import "./FileExplorer.css";
@@ -51,6 +51,8 @@ export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerPr
   const [subEntries, setSubEntries] = useState<Record<string, DirEntry[]>>({});
   const [showDotfiles, setShowDotfiles] = useState(false);
   const [selectedFile, setSelectedFile] = useState<DirEntry | null>(null);
+  const [drives, setDrives] = useState<string[]>([]);
+  const [driveMenuOpen, setDriveMenuOpen] = useState(false);
   // Tracks the last PTY CWD we observed — used only by the polling loop to
   // detect terminal-driven directory changes. Must NOT be updated on user-
   // initiated file-explorer navigation, otherwise the poll would revert the
@@ -90,6 +92,11 @@ export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerPr
       .then((c) => { if (c) ptyCwdRef.current = c; })
       .catch(() => {});
   }, [sessionId]);
+
+  // Drive list for the switcher. Empty on non-Windows, which hides the control.
+  useEffect(() => {
+    listDrives().then(setDrives).catch(() => {});
+  }, []);
 
   useEffect(() => {
     loadDir("");
@@ -133,6 +140,28 @@ export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerPr
       setExpanded(prev => new Set([...prev, key]));
     }
   };
+
+  const openDriveMenu = () => {
+    setDriveMenuOpen(true);
+    // Re-read on open so a drive mounted after launch shows up. On failure keep
+    // the list we already have — blanking a menu the user just opened is worse
+    // than showing one that may be a moment stale.
+    listDrives().then((d) => { if (d.length) setDrives(d); }).catch(() => {});
+  };
+
+  const selectDrive = (drive: string) => {
+    setDriveMenuOpen(false);
+    // Deliberately identical to a breadcrumb click, and deliberately NOT
+    // touching ptyCwdRef: that ref is the poll's record of where the *terminal*
+    // is. Updating it here would make the poll think the terminal had already
+    // moved, and the panel would stop following it for the rest of the session.
+    loadDir(drive);
+    setExpanded(new Set());
+    setSubEntries({});
+  };
+
+  // "C:/Users/foo" → "C:"; null when the path carries no drive letter.
+  const currentDrive = /^([A-Za-z]:)/.exec(cwd.replace(/\\/g, "/"))?.[1] ?? null;
 
   const goUp = () => {
     // Normalize to forward slashes (already done by Rust, but defensive)
@@ -197,6 +226,33 @@ export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerPr
         <button className="fe-btn aiterm-btn aiterm-btn--secondary" onClick={() => loadDir(cwd)} title={t.file_refresh}>
           ↻
         </button>
+        {drives.length > 1 && (
+          <div className="fe-drive">
+            <button
+              className="fe-btn aiterm-btn aiterm-btn--secondary"
+              title={t.file_switch_drive}
+              onClick={() => (driveMenuOpen ? setDriveMenuOpen(false) : openDriveMenu())}
+            >
+              {currentDrive ?? drives[0].replace("/", "")} ▾
+            </button>
+            {driveMenuOpen && (
+              <>
+                <div className="fe-drive-backdrop" onClick={() => setDriveMenuOpen(false)} />
+                <div className="fe-drive-menu">
+                  {drives.map((d) => (
+                    <button
+                      key={d}
+                      className="fe-drive-item"
+                      onClick={() => selectDrive(d)}
+                    >
+                      {d.replace("/", "")}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
         <div className="fe-breadcrumb">
           <span className="fe-breadcrumb-item" onClick={() => {
             if (!focusedPath) { loadDir(""); return; }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const invokeMock = vi.fn();
@@ -17,6 +17,7 @@ beforeEach(() => {
 const DEFAULT_RESULTS: Record<string, unknown> = {
   pty_get_cwd: null,
   pty_list_dir: [],
+  list_drives: [],
 };
 
 /**
@@ -34,7 +35,13 @@ function mockCommands(
 ) {
   invokeMock.mockImplementation((cmd: string, args: Record<string, unknown> = {}) => {
     const handler = handlers[cmd];
-    if (handler) return Promise.resolve(handler(args));
+    // Real Tauri invoke() always returns a Promise and never throws
+    // synchronously. Wrapping the handler call itself in the Promise (rather
+    // than passing its already-evaluated result to Promise.resolve) keeps a
+    // handler that throws synchronously — as list_drives does in the
+    // "re-reading fails" test — behaving like a rejected promise instead of an
+    // uncaught synchronous exception.
+    if (handler) return Promise.resolve().then(() => handler(args));
     return Promise.resolve(cmd in DEFAULT_RESULTS ? DEFAULT_RESULTS[cmd] : null);
   });
 }
@@ -133,5 +140,137 @@ describe("FileExplorer — switch terminal here", () => {
 
     await userEvent.click(screen.getByTitle("切換終端機到此目錄"));
     expect(onSwitch).toHaveBeenCalledWith("/Users/jamesju/Downloads/08_軟體安裝檔");
+  });
+});
+
+describe("FileExplorer — drive switcher", () => {
+  it("does not render the control when there are no drives (non-Windows)", async () => {
+    mockCommands({ pty_get_cwd: () => "/p" });
+    render(<FileExplorer sessionId="s1" />);
+    await waitFor(() => expect(invokeMock).toHaveBeenCalled());
+
+    expect(screen.queryByTitle("切換磁碟機")).not.toBeInTheDocument();
+  });
+
+  it("does not render the control when there is only one drive", async () => {
+    // Nothing to switch to, and the breadcrumb already shows C:.
+    mockCommands({
+      pty_get_cwd: () => "C:/Users",
+      list_drives: () => ["C:/"],
+    });
+    render(<FileExplorer sessionId="s1" />);
+    await waitFor(() => expect(invokeMock).toHaveBeenCalled());
+
+    expect(screen.queryByTitle("切換磁碟機")).not.toBeInTheDocument();
+  });
+
+  it("shows the drive taken from the current path", async () => {
+    mockCommands({
+      pty_get_cwd: () => "D:/work",
+      list_drives: () => ["C:/", "D:/"],
+    });
+    render(<FileExplorer sessionId="s1" />);
+
+    const button = await screen.findByTitle("切換磁碟機");
+    expect(button).toHaveTextContent("D:");
+  });
+
+  it("navigates to the drive root when one is picked", async () => {
+    mockCommands({
+      pty_get_cwd: () => "C:/Users",
+      list_drives: () => ["C:/", "D:/"],
+    });
+    render(<FileExplorer sessionId="s1" />);
+
+    await userEvent.click(await screen.findByTitle("切換磁碟機"));
+    await userEvent.click(await screen.findByRole("button", { name: "D:" }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("pty_list_dir", { id: "s1", path: "D:/" })
+    );
+  });
+
+  it("re-reads the drive list each time the menu opens", async () => {
+    // A USB stick plugged in after launch has to show up.
+    mockCommands({
+      pty_get_cwd: () => "C:/Users",
+      list_drives: () => ["C:/", "D:/"],
+    });
+    render(<FileExplorer sessionId="s1" />);
+
+    const button = await screen.findByTitle("切換磁碟機");
+    const afterMount = invokeMock.mock.calls.filter((c) => c[0] === "list_drives").length;
+
+    await userEvent.click(button);
+
+    await waitFor(() =>
+      expect(invokeMock.mock.calls.filter((c) => c[0] === "list_drives").length)
+        .toBeGreaterThan(afterMount)
+    );
+  });
+
+  it("keeps the previous list when re-reading fails", async () => {
+    // The user has the menu open; blanking it is worse than showing a list that
+    // may be a moment stale.
+    let firstCall = true;
+    mockCommands({
+      pty_get_cwd: () => "C:/Users",
+      list_drives: () => {
+        if (firstCall) { firstCall = false; return ["C:/", "D:/"]; }
+        throw new Error("drive enumeration failed");
+      },
+    });
+    render(<FileExplorer sessionId="s1" />);
+
+    await userEvent.click(await screen.findByTitle("切換磁碟機"));
+
+    expect(await screen.findByRole("button", { name: "D:" })).toBeInTheDocument();
+  });
+
+  it("keeps following the terminal after a drive is picked", async () => {
+    // The invariant this whole design is shaped around: picking a drive is user
+    // navigation, so it must not touch ptyCwdRef. If it did, the poll would
+    // believe the terminal had already moved and would stop following it.
+    vi.useFakeTimers();
+    try {
+      let terminalCwd = "C:/Users";
+      mockCommands({
+        pty_get_cwd: () => terminalCwd,
+        list_drives: () => ["C:/", "D:/"],
+      });
+      render(<FileExplorer sessionId="s1" />);
+
+      await vi.waitFor(() => screen.getByTitle("切換磁碟機"));
+      // userEvent.click() hangs indefinitely here even with advanceTimers +
+      // delay: null passed to userEvent.setup() — its internal pointer-event
+      // sequencing never settles under these fake timers. fireEvent.click()
+      // dispatches the same DOM click event without that machinery.
+      fireEvent.click(screen.getByTitle("切換磁碟機"));
+      await vi.waitFor(() => screen.getByRole("button", { name: "D:" }));
+      fireEvent.click(screen.getByRole("button", { name: "D:" }));
+      await vi.waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith("pty_list_dir", { id: "s1", path: "D:/" })
+      );
+
+      // The terminal itself has NOT moved (it is still where it was before the
+      // drive pick). If selectDrive had updated ptyCwdRef to "D:/", the poll
+      // would wrongly see a mismatch against the terminal's real, unchanged
+      // "C:/Users" and revert the user's manual D: browsing right back to it.
+      await vi.advanceTimersByTimeAsync(1600);
+      expect(invokeMock).not.toHaveBeenCalledWith(
+        "pty_list_dir", { id: "s1", path: "C:/Users" }
+      );
+
+      // Now the terminal itself moves somewhere new — the panel must still
+      // pick that up.
+      terminalCwd = "C:/Windows";
+      await vi.advanceTimersByTimeAsync(1600);
+
+      await vi.waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith("pty_list_dir", { id: "s1", path: "C:/Windows" })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

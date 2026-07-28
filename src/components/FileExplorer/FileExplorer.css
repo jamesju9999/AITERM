@@ -297,3 +297,50 @@
   color: #ccc;
   flex: 1;
 }
+
+/* ── Drive switcher ── */
+.fe-drive {
+  position: relative;
+  flex-shrink: 0;
+}
+
+/* Catches clicks anywhere else so the menu closes without a document listener. */
+.fe-drive-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+}
+
+.fe-drive-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 11;
+  min-width: 72px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: #1b1b1b;
+  border: 1px solid #333;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fe-drive-item {
+  background: none;
+  border: none;
+  color: #e6e6e6;
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.fe-drive-item:hover {
+  background: #2a2a2a;
+}
