@@ -306,4 +306,50 @@ describe("useUpdater", () => {
     // The update we already know about must not disappear from the TabBar.
     expect(result.current.hasUpdate).toBe(true);
   });
+
+  it("allows a retry after a failed install", async () => {
+    const downloadAndInstall = vi.fn()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValue(undefined);
+    checkMock.mockResolvedValue(fakeUpdate({ downloadAndInstall }));
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.state.status).toBe("available"));
+
+    await act(async () => { await result.current.install(); });
+    expect(result.current.state.status).toBe("error");
+
+    // The reentrancy flag must be released on failure, or every later install
+    // and check would be a silent no-op until the app restarts.
+    await act(async () => { await result.current.install(); });
+
+    expect(downloadAndInstall).toHaveBeenCalledTimes(2);
+    expect(result.current.state).toEqual({ status: "ready", version: "1.2.0" });
+  });
+
+  it("clears the pending update when a later check finds none", async () => {
+    const update = fakeUpdate();
+    checkMock.mockResolvedValue(update);
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.state.status).toBe("available"));
+
+    checkMock.mockResolvedValue(null);
+    await act(async () => { await result.current.check(); });
+
+    expect(result.current.state.status).toBe("none");
+    expect(result.current.hasUpdate).toBe(false);
+
+    // The stale update object must not remain installable.
+    await act(async () => { await result.current.install(); });
+    expect(update.downloadAndInstall).not.toHaveBeenCalled();
+  });
+
+  it("does not claim an update when the support probe fails", async () => {
+    checkMock.mockResolvedValue(fakeUpdate());
+    invokeMock.mockRejectedValue(new Error("command not found"));
+    const { result } = renderHook(() => useUpdater());
+
+    await waitFor(() => expect(result.current.state.status).toBe("idle"));
+    // A lit dot over an `idle` state renders as a blank About panel.
+    expect(result.current.hasUpdate).toBe(false);
+  });
 });

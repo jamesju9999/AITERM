@@ -83,11 +83,13 @@ export function useUpdater(): UpdaterApi {
         set({ status: "none" });
         return;
       }
-      // Held back until the gate passes — see commands/updater.rs.
+      // Nothing claims an update until the probe succeeds: a rejected probe
+      // would otherwise light the TabBar dot while leaving the UI with an
+      // `idle` state it renders as blank, and install() permanently inert.
       pendingRef.current = null;
+      const supported = await invoke<boolean>("updater_supported");
       setPendingVersion(update.version);
       setDismissed(false);
-      const supported = await invoke<boolean>("updater_supported");
       if (!supported) {
         set({ status: "unsupported", version: update.version });
         return;
