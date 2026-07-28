@@ -199,10 +199,11 @@ jobs:
             - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
             - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
 
-            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
+            > **macOS 首次開啟提示（僅限手動安裝 `.dmg`）：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
             > ```
             > xattr -cr /Applications/AITerm.app
             > ```
+            > 之後改用 App 內建的自動更新升級時就不會再遇到——更新檔由 App 直接下載，不經瀏覽器，因此不會被加上 quarantine 屬性。
             > **Linux AppImage：** 執行前需加執行權限：
             > ```
             > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
@@ -249,10 +250,11 @@ jobs:
             - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
             - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
 
-            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
+            > **macOS 首次開啟提示（僅限手動安裝 `.dmg`）：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
             > ```
             > xattr -cr /Applications/AITerm.app
             > ```
+            > 之後改用 App 內建的自動更新升級時就不會再遇到——更新檔由 App 直接下載，不經瀏覽器，因此不會被加上 quarantine 屬性。
             > **Linux AppImage：** 執行前需加執行權限：
             > ```
             > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
@@ -284,10 +286,11 @@ jobs:
             - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
             - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
 
-            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
+            > **macOS 首次開啟提示（僅限手動安裝 `.dmg`）：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
             > ```
             > xattr -cr /Applications/AITerm.app
             > ```
+            > 之後改用 App 內建的自動更新升級時就不會再遇到——更新檔由 App 直接下載，不經瀏覽器，因此不會被加上 quarantine 屬性。
             > **Linux AppImage：** 執行前需加執行權限：
             > ```
             > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
@@ -319,10 +322,11 @@ jobs:
             - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
             - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
 
-            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
+            > **macOS 首次開啟提示（僅限手動安裝 `.dmg`）：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
             > ```
             > xattr -cr /Applications/AITerm.app
             > ```
+            > 之後改用 App 內建的自動更新升級時就不會再遇到——更新檔由 App 直接下載，不經瀏覽器，因此不會被加上 quarantine 屬性。
             > **Linux AppImage：** 執行前需加執行權限：
             > ```
             > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
@@ -354,10 +358,11 @@ jobs:
             - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
             - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
 
-            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
+            > **macOS 首次開啟提示（僅限手動安裝 `.dmg`）：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
             > ```
             > xattr -cr /Applications/AITerm.app
             > ```
+            > 之後改用 App 內建的自動更新升級時就不會再遇到——更新檔由 App 直接下載，不經瀏覽器，因此不會被加上 quarantine 屬性。
             > **Linux AppImage：** 執行前需加執行權限：
             > ```
             > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
@@ -389,10 +394,11 @@ jobs:
             - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
             - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
 
-            > **macOS 首次開啟提示：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
+            > **macOS 首次開啟提示（僅限手動安裝 `.dmg`）：** 若出現「已損毀」或「無法驗證開發者」，請在「終端機」執行：
             > ```
             > xattr -cr /Applications/AITerm.app
             > ```
+            > 之後改用 App 內建的自動更新升級時就不會再遇到——更新檔由 App 直接下載，不經瀏覽器，因此不會被加上 quarantine 屬性。
             > **Linux AppImage：** 執行前需加執行權限：
             > ```
             > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
