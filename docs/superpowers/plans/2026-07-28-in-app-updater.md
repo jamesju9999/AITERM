@@ -1059,7 +1059,7 @@ export function UpdateModalView({
   if (!visible) return null;
 
   const percent =
-    state.status === "downloading" && state.total
+    state.status === "downloading" && state.total !== null && state.total > 0
       ? Math.min(100, Math.round((state.downloaded / state.total) * 100))
       : null;
 
@@ -1343,8 +1343,22 @@ Delete the second duplicated tags check. The page keeps `getVersion()` for showi
 This task also retires `about_update_error`: the hook's single `error` state covers both a failed check and a failed download, and "檢查失敗，請稍後再試" is wrong for the latter. `update_failed` replaces it, and this is the commit where the old key becomes unused.
 
 **Files:**
+- Create: `src/lib/repo.ts`
 - Modify: `src/components/Settings/AboutPage.tsx` (full rewrite)
+- Modify: `src/components/UpdateModal.tsx` (import the hoisted URL)
 - Modify: `src/lib/i18n.ts` (delete `about_update_error` from both locales)
+
+**First, kill the duplicated repo URL.** By this point the GitHub URL exists in four places: `AboutPage.tsx` has `GITHUB_URL` and an inline releases link, `UpdateModal.tsx` has `RELEASES_URL`, and the rewrite below would add a fourth. Create `src/lib/repo.ts`:
+
+```ts
+/** Single source for the project's GitHub URLs — they were drifting across four files. */
+export const GITHUB_REPO_URL = "https://github.com/jamesju9999/AITERM";
+export const GITHUB_RELEASES_URL = `${GITHUB_REPO_URL}/releases/latest`;
+```
+
+Then have `UpdateModal.tsx` import `GITHUB_RELEASES_URL` instead of declaring its own, and use both constants in the `AboutPage` rewrite below.
+
+Note the `percent` computation below deliberately matches the guard `UpdateModal.tsx` settled on (`total !== null && total > 0`, not a truthy test) — two copies of the same calculation reading differently invites exactly the drift this hoist is fixing.
 
 - [ ] **Step 1: Rewrite the component**
 
@@ -1356,11 +1370,10 @@ import { getVersion } from "@tauri-apps/api/app";
 import { useLocale } from "../../contexts/LocaleContext";
 import { useUpdaterContext } from "../../contexts/UpdaterContext";
 import { openUrl } from "../../ipc/shell";
+import { GITHUB_REPO_URL, GITHUB_RELEASES_URL } from "../../lib/repo";
 import iconUrl from "../../../src-tauri/icons/128x128.png";
 import "./AboutPage.css";
 
-const GITHUB_URL = "https://github.com/jamesju9999/AITERM";
-const RELEASES_URL = "https://github.com/jamesju9999/AITERM/releases/latest";
 
 export function AboutPage() {
   const { t } = useLocale();
@@ -1374,11 +1387,11 @@ export function AboutPage() {
   }, []);
 
   const handleGitHub = () => {
-    openUrl(GITHUB_URL).catch(console.error);
+    openUrl(GITHUB_REPO_URL).catch(console.error);
   };
 
   const percent =
-    state.status === "downloading" && state.total
+    state.status === "downloading" && state.total !== null && state.total > 0
       ? Math.min(100, Math.round((state.downloaded / state.total) * 100))
       : null;
 
@@ -1419,7 +1432,7 @@ export function AboutPage() {
             {t.about_update_available} v{state.version} —{" "}
             <button
               className="about-link-btn"
-              onClick={() => openUrl(RELEASES_URL).catch(console.error)}
+              onClick={() => openUrl(GITHUB_RELEASES_URL).catch(console.error)}
             >
               {t.about_update_link}
             </button>
@@ -1497,7 +1510,8 @@ Stop the dev server before continuing.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/components/Settings/AboutPage.tsx src/lib/i18n.ts
+git add src/components/Settings/AboutPage.tsx src/components/UpdateModal.tsx \
+        src/lib/repo.ts src/lib/i18n.ts
 git commit -m "refactor(updater): drive AboutPage from shared updater state"
 ```
 
