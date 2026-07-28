@@ -13,19 +13,35 @@ beforeEach(() => {
   invokeMock.mockReset();
 });
 
-// Component call order on mount:
-//   1. getSessionCwd (seed ptyCwdRef useEffect)
-//   2. listDirectory (loadDir useEffect)
-//   3. getSessionCwd (inside loadDir when path === "")
-// Then polling getSessionCwd every 1500ms (ignored in tests)
+/** Results returned for commands a test does not explicitly handle. */
+const DEFAULT_RESULTS: Record<string, unknown> = {
+  pty_get_cwd: null,
+  pty_list_dir: [],
+};
+
+/**
+ * Dispatch invoke() by command name and arguments instead of by call order.
+ *
+ * These tests used to chain mockResolvedValueOnce in the exact sequence the
+ * component happens to call things. That made every test hostage to that
+ * sequence: adding one new call on mount shifts every queued value by one and
+ * breaks the whole file at once, with failures that look like feature bugs.
+ * Keying on the command name means a new call only affects the tests that
+ * actually care about it.
+ */
+function mockCommands(
+  handlers: Record<string, (args: Record<string, unknown>) => unknown> = {},
+) {
+  invokeMock.mockImplementation((cmd: string, args: Record<string, unknown> = {}) => {
+    const handler = handlers[cmd];
+    if (handler) return Promise.resolve(handler(args));
+    return Promise.resolve(cmd in DEFAULT_RESULTS ? DEFAULT_RESULTS[cmd] : null);
+  });
+}
 
 describe("FileExplorer — file selection", () => {
   it("shows empty viewer state initially", async () => {
-    invokeMock
-      .mockResolvedValueOnce(null) // getSessionCwd (ptyCwdRef seed)
-      .mockResolvedValueOnce([])   // listDirectory → empty
-      .mockResolvedValueOnce(null) // getSessionCwd (inside loadDir)
-      .mockResolvedValue(null);    // polling
+    mockCommands();
     render(<FileExplorer sessionId="s1" />);
     await waitFor(() =>
       expect(screen.getByText(/選擇左側檔案以預覽內容/)).toBeInTheDocument()
@@ -33,14 +49,11 @@ describe("FileExplorer — file selection", () => {
   });
 
   it("clicking a file loads its content in the viewer", async () => {
-    invokeMock
-      .mockResolvedValueOnce(null) // getSessionCwd (ptyCwdRef seed)
-      .mockResolvedValueOnce([     // listDirectory
-        { name: "index.ts", path: "/p/index.ts", is_dir: false, size: 20 },
-      ])
-      .mockResolvedValueOnce("/p") // getSessionCwd (inside loadDir)
-      .mockResolvedValueOnce({ content: "export default 1;", truncated: false }) // readFile
-      .mockResolvedValue(null); // polling
+    mockCommands({
+      pty_get_cwd: () => "/p",
+      pty_list_dir: () => [{ name: "index.ts", path: "/p/index.ts", is_dir: false, size: 20 }],
+      pty_read_file: () => ({ content: "export default 1;", truncated: false }),
+    });
 
     render(<FileExplorer sessionId="s1" />);
     await waitFor(() => screen.getByText("index.ts"));
@@ -53,14 +66,11 @@ describe("FileExplorer — file selection", () => {
   });
 
   it("clicking a directory does NOT load file content", async () => {
-    invokeMock
-      .mockResolvedValueOnce(null) // getSessionCwd (ptyCwdRef seed)
-      .mockResolvedValueOnce([     // listDirectory
-        { name: "src", path: "/p/src", is_dir: true, size: null },
-      ])
-      .mockResolvedValueOnce("/p") // getSessionCwd (inside loadDir)
-      .mockResolvedValueOnce([])   // listDirectory for expanded dir
-      .mockResolvedValue(null);    // polling
+    mockCommands({
+      pty_get_cwd: () => "/p",
+      pty_list_dir: ({ path }) =>
+        path === "/p/src" ? [] : [{ name: "src", path: "/p/src", is_dir: true, size: null }],
+    });
 
     render(<FileExplorer sessionId="s1" />);
     await waitFor(() => screen.getByText("src"));
@@ -74,22 +84,14 @@ describe("FileExplorer — file selection", () => {
 
 describe("FileExplorer — switch terminal here", () => {
   it("does not render the button when onSwitchTerminalHere is not provided", async () => {
-    invokeMock
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce("/p")
-      .mockResolvedValue(null);
+    mockCommands({ pty_get_cwd: () => "/p" });
     render(<FileExplorer sessionId="s1" />);
     await waitFor(() => expect(invokeMock).toHaveBeenCalled());
     expect(screen.queryByTitle("切換終端機到此目錄")).not.toBeInTheDocument();
   });
 
   it("calls onSwitchTerminalHere with the currently-browsed directory when clicked", async () => {
-    invokeMock
-      .mockResolvedValueOnce(null) // getSessionCwd (ptyCwdRef seed)
-      .mockResolvedValueOnce([])   // listDirectory
-      .mockResolvedValueOnce("/Users/jamesju/Downloads") // getSessionCwd (inside loadDir)
-      .mockResolvedValue(null);    // polling
+    mockCommands({ pty_get_cwd: () => "/Users/jamesju/Downloads" });
 
     const onSwitch = vi.fn();
     render(<FileExplorer sessionId="s1" onSwitchTerminalHere={onSwitch} />);
@@ -102,16 +104,15 @@ describe("FileExplorer — switch terminal here", () => {
   });
 
   it("follows the last-clicked tree folder without navigating away from the root listing", async () => {
-    invokeMock
-      .mockResolvedValueOnce(null) // getSessionCwd (ptyCwdRef seed)
-      .mockResolvedValueOnce([     // listDirectory (root)
-        { name: "08_軟體安裝檔", path: "/Users/jamesju/Downloads/08_軟體安裝檔", is_dir: true, size: null },
-      ])
-      .mockResolvedValueOnce("/Users/jamesju/Downloads") // getSessionCwd (inside loadDir)
-      .mockResolvedValueOnce([     // listDirectory for the expanded child
-        { name: "desktop.ini", path: "/Users/jamesju/Downloads/08_軟體安裝檔/desktop.ini", is_dir: false, size: 282 },
-      ])
-      .mockResolvedValue(null);   // polling
+    const ROOT = "/Users/jamesju/Downloads";
+    const CHILD = `${ROOT}/08_軟體安裝檔`;
+    mockCommands({
+      pty_get_cwd: () => ROOT,
+      pty_list_dir: ({ path }) =>
+        path === CHILD
+          ? [{ name: "desktop.ini", path: `${CHILD}/desktop.ini`, is_dir: false, size: 282 }]
+          : [{ name: "08_軟體安裝檔", path: CHILD, is_dir: true, size: null }],
+    });
 
     const onSwitch = vi.fn();
     render(<FileExplorer sessionId="s1" onSwitchTerminalHere={onSwitch} />);
