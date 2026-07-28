@@ -194,7 +194,7 @@ jobs:
             ### 下載
             - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
             - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_x86_64.AppImage`
+            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_amd64.AppImage`
             - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
             - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
             - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
@@ -245,7 +245,7 @@ jobs:
             ### 下載
             - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
             - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_x86_64.AppImage`
+            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_amd64.AppImage`
             - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
             - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
             - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
@@ -281,7 +281,7 @@ jobs:
             ### 下載
             - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
             - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_x86_64.AppImage`
+            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_amd64.AppImage`
             - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
             - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
             - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
@@ -317,7 +317,7 @@ jobs:
             ### 下載
             - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
             - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_x86_64.AppImage`
+            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_amd64.AppImage`
             - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
             - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
             - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
@@ -353,7 +353,7 @@ jobs:
             ### 下載
             - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
             - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_x86_64.AppImage`
+            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_amd64.AppImage`
             - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
             - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
             - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
@@ -389,7 +389,7 @@ jobs:
             ### 下載
             - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
             - **Windows**: 下載 `-setup.exe` 安裝檔
-            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_x86_64.AppImage`
+            - **Linux x86_64 AppImage** (Ubuntu 22.04+): 下載 `_amd64.AppImage`
             - **Linux x86_64 .deb** (Ubuntu 24.04+): 下載 `_amd64.deb`
             - **Linux ARM64 AppImage** (Ubuntu 22.04+ ARM): 下載 `_aarch64.AppImage`
             - **Linux ARM64 .deb** (Ubuntu 24.04+ ARM): 下載 `_arm64.deb`
