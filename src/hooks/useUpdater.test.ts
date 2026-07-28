@@ -27,6 +27,24 @@ function fakeUpdate(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * A `downloadAndInstall` stub the test drives event-by-event.
+ *
+ * The hook's intermediate `downloading` states are only observable if React can
+ * re-render between events, so the stub parks on a promise the test resolves at
+ * the end rather than running to completion synchronously.
+ */
+function deferredDownload() {
+  let onEvent!: (e: unknown) => void;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const fn = vi.fn(async (handler: (e: unknown) => void) => {
+    onEvent = handler;
+    await gate;
+  });
+  return { fn, emit: (e: unknown) => onEvent(e), release: () => release() };
+}
+
 beforeEach(() => {
   checkMock.mockReset();
   relaunchMock.mockReset();
@@ -86,42 +104,71 @@ describe("useUpdater", () => {
   });
 
   it("tracks download progress and ends in 'ready'", async () => {
-    const update = fakeUpdate({
-      downloadAndInstall: vi.fn(async (onEvent: (e: unknown) => void) => {
-        onEvent({ event: "Started", data: { contentLength: 1000 } });
-        onEvent({ event: "Progress", data: { chunkLength: 400 } });
-        onEvent({ event: "Progress", data: { chunkLength: 600 } });
-        onEvent({ event: "Finished" });
-      }),
-    });
-    checkMock.mockResolvedValue(update);
+    const download = deferredDownload();
+    checkMock.mockResolvedValue(fakeUpdate({ downloadAndInstall: download.fn }));
     const { result } = renderHook(() => useUpdater());
     await waitFor(() => expect(result.current.state.status).toBe("available"));
 
-    await act(async () => { await result.current.install(); });
+    let installed: Promise<void> | undefined;
+    await act(async () => { installed = result.current.install(); });
 
+    // Before any event arrives the total is not yet known.
+    expect(result.current.state).toEqual({
+      status: "downloading", version: "1.2.0", downloaded: 0, total: null,
+    });
+
+    await act(async () => { download.emit({ event: "Started", data: { contentLength: 1000 } }); });
+    expect(result.current.state).toEqual({
+      status: "downloading", version: "1.2.0", downloaded: 0, total: 1000,
+    });
+    // The TabBar dot must stay lit through the download.
+    expect(result.current.hasUpdate).toBe(true);
+
+    await act(async () => { download.emit({ event: "Progress", data: { chunkLength: 400 } }); });
+    expect(result.current.state).toEqual({
+      status: "downloading", version: "1.2.0", downloaded: 400, total: 1000,
+    });
+
+    // Accumulates rather than overwrites.
+    await act(async () => { download.emit({ event: "Progress", data: { chunkLength: 600 } }); });
+    expect(result.current.state).toEqual({
+      status: "downloading", version: "1.2.0", downloaded: 1000, total: 1000,
+    });
+
+    await act(async () => {
+      download.emit({ event: "Finished" });
+      download.release();
+      await installed;
+    });
     expect(result.current.state).toEqual({ status: "ready", version: "1.2.0" });
   });
 
   it("treats a missing contentLength as an unknown total", async () => {
-    let seenTotal: number | null | undefined;
-    const update = fakeUpdate({
-      downloadAndInstall: vi.fn(async (onEvent: (e: unknown) => void) => {
-        onEvent({ event: "Started", data: {} });
-        onEvent({ event: "Progress", data: { chunkLength: 10 } });
-      }),
-    });
-    checkMock.mockResolvedValue(update);
+    const download = deferredDownload();
+    checkMock.mockResolvedValue(fakeUpdate({ downloadAndInstall: download.fn }));
     const { result } = renderHook(() => useUpdater());
     await waitFor(() => expect(result.current.state.status).toBe("available"));
 
-    await act(async () => {
-      const p = result.current.install();
-      if (result.current.state.status === "downloading") seenTotal = result.current.state.total;
-      await p;
+    let installed: Promise<void> | undefined;
+    await act(async () => { installed = result.current.install(); });
+
+    // Servers are not obliged to send Content-Length; total stays null so the UI
+    // can fall back to an indeterminate bar instead of dividing by zero.
+    await act(async () => { download.emit({ event: "Started", data: {} }); });
+    expect(result.current.state).toEqual({
+      status: "downloading", version: "1.2.0", downloaded: 0, total: null,
     });
 
-    expect(seenTotal ?? null).toBeNull();
+    await act(async () => { download.emit({ event: "Progress", data: { chunkLength: 10 } }); });
+    expect(result.current.state).toEqual({
+      status: "downloading", version: "1.2.0", downloaded: 10, total: null,
+    });
+
+    await act(async () => {
+      download.emit({ event: "Finished" });
+      download.release();
+      await installed;
+    });
   });
 
   it("surfaces install failures as an error", async () => {
@@ -149,6 +196,23 @@ describe("useUpdater", () => {
 
     expect(result.current.dismissed).toBe(true);
     expect(result.current.hasUpdate).toBe(true);
+  });
+
+  it("re-shows a dismissed modal when a later check finds a new update", async () => {
+    checkMock.mockResolvedValue(fakeUpdate());
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.state.status).toBe("available"));
+
+    act(() => { result.current.dismiss(); });
+    expect(result.current.dismissed).toBe(true);
+
+    checkMock.mockResolvedValue(fakeUpdate({ version: "1.3.0" }));
+    await act(async () => { await result.current.check(); });
+
+    expect(result.current.dismissed).toBe(false);
+    expect(result.current.state).toEqual({
+      status: "available", version: "1.3.0", notes: "Bug fixes",
+    });
   });
 
   it("relaunch() delegates to the process plugin", async () => {
