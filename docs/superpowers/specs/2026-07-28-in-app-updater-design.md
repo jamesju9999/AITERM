@@ -186,6 +186,26 @@ AITerm 是終端機應用程式——重啟會終止所有 PTY session 與正在
 
 這使得體驗實際上是「兩鍵」而非「一鍵」，是為了資料安全刻意付出的代價。
 
+## 已知風險與權衡
+
+### 權限收窄
+
+`capabilities/default.json` 使用 `updater:allow-check` + `updater:allow-download-and-install`，而非 `updater:default`。後者額外含 `allow-download` 與 `allow-install` 兩項本專案用不到的授權——`install(update_rid, bytes_rid)` 接受呼叫端提供的 bytes resource，等於通往同一個安裝原語的第二條無人使用路徑。此檔既有風格本就是窄授權（`dialog:allow-open`/`allow-save` 而非 `dialog:default`，六條顯式 `core:window:allow-*`）。
+
+`process` 只授予 `allow-restart`，不用 `process:default`——後者含 `allow-exit`，等於給前端一個「無確認直接終止所有 PTY」的原語，與本設計刻意要求使用者確認重啟的原則直接衝突。
+
+### `csp: null` 與 updater 的交集
+
+更新的網路請求走 Rust 端的 `reqwest`，不受 webview CSP 管轄，且 minisign 驗簽無條件執行——被注入的 JS 無法讓 updater 安裝任意程式碼。這部分是正交的。
+
+但有一個非零交集：plugin 的 `check` command 接受前端傳入的 `allow_downgrades`，為 true 時版本比較器從 `update.version > current` 換成 `update.version != current`。也就是說 webview 中的任意 JS 可以繞過單調遞增保證，強制回滾到任何**經過正確簽章的舊版**，重新引入已修掉的漏洞。同一個 command 也接受呼叫端指定的 `proxy`。
+
+前提是要先有 XSS。AITerm 會渲染 AI 輸出與 web-fetch 內容，這個前提並非全然不可及。`csp: null` 是既有設定、不屬於本次變更，但「替一個 `csp: null` 的 app 接上網路更新器」正是風險計算改變的時點，故記錄於此。收窄權限無法消除這點（`allow-check` 就足以觸發）。
+
+### 開發者本機建置
+
+`createUpdaterArtifacts: true` 一旦啟用，`tauri build` 在偵測到 pubkey 卻找不到 `TAURI_SIGNING_PRIVATE_KEY` 時會直接失敗。沒有私鑰的開發者必須改用 `npm run tauri build -- --no-sign`。此限制記錄於 `CLAUDE.md` 的 Commands 區塊。
+
 ## 錯誤處理
 
 | 情境 | 行為 |

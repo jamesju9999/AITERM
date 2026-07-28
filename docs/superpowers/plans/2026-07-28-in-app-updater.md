@@ -1452,7 +1452,9 @@ and every other step's becomes:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 ```
 
-The `.deb` steps get the secrets too. `createUpdaterArtifacts` is a global config flag, and a build with it enabled but no key available fails outright — the `.deb` bundler simply produces no updater artifact, which is what we want.
+The `.deb` steps need the secrets too, and **not** for the reason you might assume. `tauri-cli`'s `sign_updaters` treats `Deb` as an updater-enabled package type alongside `Updater`, `Nsis`, `WindowsMsi`, `AppImage` and `Rpm`. So a `.deb` build with `createUpdaterArtifacts` enabled but no key available fails outright with *"A public key has been found, but no private key."* — and when the key **is** present it emits an extra `AITerm_<version>_amd64.deb.sig`.
+
+That stray `.deb.sig` is harmless: Task 10's `platform_for()` returns `None` for it and logs `skipping unrecognised artifact`, so it never reaches `latest.json`. The only visible effect is two extra `.sig` assets on the release page.
 
 In the same six steps, change:
 
