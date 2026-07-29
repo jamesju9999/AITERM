@@ -181,3 +181,32 @@ Icon=aiterm
 3. 把 AppImage 搬到別的目錄後重新啟動，選單項目仍可用
 4. 設定頁的移除按鈕確實移除項目與圖示
 5. `.deb` 與 macOS 上該區塊完全不出現
+
+## 驗證結果（v1.2.4，Ubuntu 26.04）
+
+使用者於 2026-07-29 以 v1.2.4 的 AppImage 實機測試。**該機器同時安裝了 `.deb` 與 AppImage。**
+
+| 項目 | 結果 |
+|---|---|
+| 建立選單項目 | 使用者回報「有點選建立圖示，已是沒有問題的」 |
+| 與 `.deb` 共存（審查推理出的風險） | **只顯示一個圖示，無重複** |
+
+### 這次驗證未能證明的事
+
+**「dock 圖示正確」無法歸因於本功能。** 驗證機器上裝有 `.deb`，而 `.deb` 會把自己的 `.desktop` 安裝到 `/usr/share/applications/`，其中同樣帶有 `StartupWMClass=app`——那正是 AppImage 視窗的 WM_CLASS。因此以下兩種情況在該機器上外觀完全相同：
+
+- 本功能有效
+- 本功能完全沒作用，但 `.deb` 的選單項目頂替了它
+
+要分辨只能讓 `.deb` 不在場（移除套件或暫時搬走其 `.desktop`），此條件下未測試。這與本設計文件開頭記載的失敗模式同類：**症狀與成功長得一樣**。
+
+**下列項目未取得回報，一律視為未驗證：**
+
+- 提示是否在啟動時出現，以及是否與更新提示互斥
+- `~/.local/share/applications/aiterm.desktop` 的實際內容（`StartupWMClass=app`、加引號的 `Exec=`、`Icon=aiterm`、`Name`/`Comment`/`Categories` 是否自 bundle 帶入）
+- 搬移 AppImage 後 `Exec=` 是否自動修正
+- 設定頁的移除是否同時清除 `.desktop` 與圖示
+- 【不用了】與「移除後不再提示」的旗標行為
+- **`ls $APPDIR/usr/share/icons/hicolor` 的輸出**——`.desktop` 的來源路徑對過真實建置，圖示來源路徑始終未經確認。若該樹不存在，選單項目會裝成 `Icon=aiterm` 指向不存在的圖示，dock 仍是齒輪，而 UI 會回報成功
+
+`.deb` 與 macOS 上該區塊不出現一項，macOS 端已於開發期間確認（`not_appimage` 分支），Linux `.deb` 端未取得回報。
