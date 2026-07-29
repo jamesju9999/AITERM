@@ -2,7 +2,7 @@ import { useLocale } from "../contexts/LocaleContext";
 import { useUpdaterContext } from "../contexts/UpdaterContext";
 import { openUrl } from "../ipc/shell";
 import { downloadPercent, type UpdaterState } from "../hooks/useUpdater";
-import { GITHUB_RELEASES_URL } from "../lib/repo";
+import { GITHUB_RELEASES_URL, releaseTagUrl } from "../lib/repo";
 import "./UpdateModal.css";
 
 interface UpdateModalViewProps {
@@ -12,6 +12,7 @@ interface UpdateModalViewProps {
   onDismiss: () => void;
   onRelaunch: () => void;
   onOpenReleases: () => void;
+  onOpenNotes: (version: string) => void;
 }
 
 export function UpdateModalView({
@@ -21,6 +22,7 @@ export function UpdateModalView({
   onDismiss,
   onRelaunch,
   onOpenReleases,
+  onOpenNotes,
 }: UpdateModalViewProps) {
   const { t } = useLocale();
 
@@ -59,6 +61,16 @@ export function UpdateModalView({
 
         {state.status === "available" && state.notes && (
           <p className="update-modal-notes">{state.notes}</p>
+        )}
+
+        {state.status === "available" && (
+          <button
+            type="button"
+            className="update-modal-notes-link"
+            onClick={() => onOpenNotes(state.version)}
+          >
+            {t.update_view_full_notes}
+          </button>
         )}
 
         {state.status === "unsupported" && (
@@ -139,6 +151,7 @@ export function UpdateModal() {
       onDismiss={dismiss}
       onRelaunch={() => void relaunch()}
       onOpenReleases={() => openUrl(GITHUB_RELEASES_URL).catch(console.error)}
+      onOpenNotes={(version) => openUrl(releaseTagUrl(version)).catch(console.error)}
     />
   );
 }

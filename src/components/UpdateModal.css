@@ -41,6 +41,21 @@
   overflow-wrap: anywhere;
 }
 
+/* A text link rather than a button: it is a secondary escape hatch, not an
+   action competing with 立即更新. `.update-modal` is a flex column, so
+   align-self keeps it from stretching the full width. */
+.update-modal-notes-link {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: #7aadff;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 .update-modal-warning {
   font-size: 12px;
   color: #d9a441;

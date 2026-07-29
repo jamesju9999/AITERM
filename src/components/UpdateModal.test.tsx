@@ -13,6 +13,7 @@ function renderView(state: UpdaterState, overrides: Record<string, unknown> = {}
     onDismiss: vi.fn(),
     onRelaunch: vi.fn(),
     onOpenReleases: vi.fn(),
+    onOpenNotes: vi.fn(),
     ...overrides,
   };
   render(<UpdateModalView {...props} />);
@@ -29,6 +30,7 @@ describe("UpdateModalView", () => {
         onDismiss={vi.fn()}
         onRelaunch={vi.fn()}
         onOpenReleases={vi.fn()}
+        onOpenNotes={vi.fn()}
       />,
     );
     expect(container).toBeEmptyDOMElement();
@@ -43,6 +45,7 @@ describe("UpdateModalView", () => {
         onDismiss={vi.fn()}
         onRelaunch={vi.fn()}
         onOpenReleases={vi.fn()}
+        onOpenNotes={vi.fn()}
       />,
     );
     expect(container).toBeEmptyDOMElement();
@@ -122,5 +125,44 @@ describe("UpdateModalView", () => {
     renderView({ status: "error", phase: "check", message: "offline" });
     expect(screen.getByText("檢查更新失敗")).toBeTruthy();
     expect(screen.queryByText("更新失敗")).toBeNull();
+  });
+
+  it("offers a link to the full release notes when available", async () => {
+    const onOpenNotes = vi.fn();
+    const props = renderView(
+      { status: "available", version: "1.2.5", notes: "- 修正了一件事" },
+      { onOpenNotes },
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "查看完整說明" }));
+    // The view stays pure: it hands back the version and lets the container
+    // build the URL, so the URL itself is covered by repo.test.ts.
+    expect(props.onOpenNotes).toHaveBeenCalledWith("1.2.5");
+  });
+
+  it("still offers the link when the release carries no notes", () => {
+    // An empty notes field is when the user most needs somewhere to look.
+    renderView({ status: "available", version: "1.2.5", notes: "" }, { onOpenNotes: vi.fn() });
+
+    expect(screen.getByRole("button", { name: "查看完整說明" })).toBeTruthy();
+  });
+
+  it("renders multi-line notes without collapsing them", () => {
+    renderView(
+      { status: "available", version: "1.2.5", notes: "- 第一項\n- 第二項" },
+      { onOpenNotes: vi.fn() },
+    );
+
+    expect(screen.getByText(/第一項/)).toBeTruthy();
+    expect(screen.getByText(/第二項/)).toBeTruthy();
+  });
+
+  it("does not offer the link while downloading", () => {
+    renderView(
+      { status: "downloading", version: "1.2.5", downloaded: 1, total: 2 },
+      { onOpenNotes: vi.fn() },
+    );
+
+    expect(screen.queryByRole("button", { name: "查看完整說明" })).toBeNull();
   });
 });
