@@ -82,7 +82,11 @@ v1.2.4 的六條腿曾全部失敗於一個測試檔的型別錯誤，因為當�
 
 **但該實測只涵蓋 macOS，結論不可推廣到 Windows。** `tauri.windows.conf.json` 把 sidecar 列在 `bundle.resources`（而非 `externalBin`），而 `tauri-build` **會**驗證 resources 是否存在。首次執行時六個 leg 中只有 Windows 失敗於 `resource path binaries\db2-sidecar-win-x64 doesn't exist`。
 
-Windows leg 因此先建立一個佔位檔。此 job 從不打包，resources 僅被檢查存在性，而本快取要暖的相依編譯與該檔內容無關。`release.yml` 仍以 `scripts/setup-db2-win.ps1` 建置真正的 sidecar。
+Windows leg 因此先建立一個佔位檔。此 job 從不打包，resources 僅被檢查存在性，而本快取要暖的相依編譯與該檔內容無關。`release.yml` 仍以 `scripts/setup-db2-win.ps1` 建置真正的 sidecar，**發版流程完全未改動**。
+
+佔位檔傳不進發版，兩項證據：rust-cache 的 Cache Paths 只有 `~/.cargo/*` 與 `src-tauri/target`，不含 `src-tauri/binaries/`；且該目錄在 `.gitignore:42`。
+
+**仍須實際確認**：下一次 Windows 發版後，安裝檔中的 `db2-sidecar` 必須是真正的 JAR 而非空檔，且 DB2 連線功能正常。理論上打包由 tauri CLI 在 build script 之後執行、屆時真 sidecar 已就緒，但本設計已因「在 macOS 實測後推廣到 Windows」錯過一次，故不以推論結案。
 
 排程存在的理由：GitHub 的快取 **7 天無存取即淘汰**。若兩次發版間隔超過七天且 master 無提交，暖好的快取會消失。
 
