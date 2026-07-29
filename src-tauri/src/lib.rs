@@ -22,6 +22,7 @@ use commands::{
         api_docs_auth_status, api_docs_detect, api_docs_extract,
         api_docs_fetch_tree, api_docs_login, api_docs_logout,
     },
+    appimage::{appimage_integrate, appimage_integration_state, appimage_remove_integration},
     ai::{agent_chat, ai_chat, ai_query},
     code_assistant::code_assistant_chat,
     knowledge_base::{
@@ -237,6 +238,7 @@ pub fn run() {
         .setup(|app| {
             telegram::init(app.handle());
             enterprise::agent::init(app.handle());
+            commands::appimage::repair_integration_on_startup();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -316,6 +318,9 @@ pub fn run() {
             // Shell
             open_url,
             updater_supported,
+            appimage_integration_state,
+            appimage_integrate,
+            appimage_remove_integration,
             // Web
             web_search,
             web_fetch,
