@@ -1,6 +1,6 @@
 pub mod ai;
-pub mod appimage;
 pub mod api_docs;
+pub mod appimage;
 pub mod config;
 pub mod db;
 pub mod design;
