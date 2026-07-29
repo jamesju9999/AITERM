@@ -123,3 +123,31 @@ CI workflow 本身無法在本機執行。可事前驗證的僅有：
 `warm-cache` 是否真的縮短發版時間，只有在下次發版時才知道。這與快取跨 ref 的假設是同一件事。
 
 第一次 push 到 master 時 `warm-cache` 必然是 `No cache found.`（尚無 master 快取可還原），這是預期行為而非失敗；第二次 push 才應出現還原。
+
+## 驗證結果（master 內部，2026-07-29）
+
+第二次推送時五個 leg 皆命中，且為完全匹配：
+
+```
+Restored from cache key "v0-rust-linux-x64-appimage-Linux-x64-db7c195c-439e96dc" full match: true.
+Restored from cache key "v0-rust-mac-Darwin-arm64-af5aa912-439e96dc" full match: true.
+```
+
+建置步驟耗時：
+
+| leg | 冷編 | 命中後 |
+|---|---|---|
+| linux-x64-appimage | 473s | **85s** |
+| linux-arm64-deb | 413s | **87s** |
+| linux-x64-deb | 454s | **97s** |
+| linux-arm64-appimage | 373s | **103s** |
+| mac | 508s | **150s** |
+| windows | 488s（首次成功，寫入快取） | 尚未量測 |
+
+約五倍。六份 master 快取皆已就位（含修正後的 Windows）。
+
+`test` job 耗時 60 秒。
+
+**這只證明快取機制在 master 內部有效，不證明 tag 執行讀得到。** 後者仍是本設計唯一未經實證的假設，須於下次發版驗證。
+
+快取總量目前 10.06 GB，其中 15 份仍屬舊 tag。由於 LRU 淘汰且 tag 快取從未被讀取，這些會優先被清除。
