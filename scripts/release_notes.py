@@ -12,6 +12,13 @@ import sys
 
 PLACEHOLDER = "- （本版無使用者可見的變更，請改寫此行）"
 
+START = "<!-- changelog:start -->"
+END = "<!-- changelog:end -->"
+
+
+class ChangelogError(Exception):
+    """The release body does not contain a usable changelog block."""
+
 # Conventional-commit types worth showing a user. Anchored and followed by an
 # optional scope, an optional "!", then ":" — so "feature:" and "fixes:" do not
 # match.
@@ -28,3 +35,23 @@ def render_draft(kept):
     if not kept:
         return PLACEHOLDER
     return "\n".join(f"- {s}" for s in kept)
+
+
+def extract_changelog(body):
+    """Return the text between the changelog markers.
+
+    Raises rather than returning a fallback: a silent fallback would publish a
+    release whose update prompt is blank or shows a bare URL, with every CI job
+    green. Blocking the release is the recoverable failure; shipping is not.
+    """
+    start = body.find(START)
+    if start == -1:
+        raise ChangelogError(f"release body is missing {START}")
+    after_start = start + len(START)
+    end = body.find(END, after_start)
+    if end == -1:
+        raise ChangelogError(f"release body is missing {END} after {START}")
+    text = body[after_start:end].strip()
+    if not text:
+        raise ChangelogError("the changelog block is empty")
+    return text

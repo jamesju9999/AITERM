@@ -1,6 +1,6 @@
 import unittest
 
-from release_notes import filter_commits, render_draft
+from release_notes import ChangelogError, extract_changelog, filter_commits, render_draft
 
 PLACEHOLDER = "- （本版無使用者可見的變更，請改寫此行）"
 
@@ -61,6 +61,60 @@ class RenderDraftTest(unittest.TestCase):
         # Never an empty block: extract_changelog rejects one, which would block
         # the release with a confusing error instead of showing this line.
         self.assertEqual(render_draft([]), PLACEHOLDER)
+
+
+BODY = """## AITerm v1.2.5
+
+### 更新項目
+<!-- changelog:start -->
+- AppImage 可建立桌面選單項目
+- 修正磁碟機切換的卡頓
+<!-- changelog:end -->
+
+### 下載
+- **macOS**: 下載 `.dmg`
+"""
+
+
+class ExtractChangelogTest(unittest.TestCase):
+    def test_returns_the_block_contents(self):
+        self.assertEqual(
+            extract_changelog(BODY),
+            "- AppImage 可建立桌面選單項目\n- 修正磁碟機切換的卡頓",
+        )
+
+    def test_excludes_the_markers_themselves(self):
+        self.assertNotIn("changelog:start", extract_changelog(BODY))
+        self.assertNotIn("changelog:end", extract_changelog(BODY))
+
+    def test_missing_start_marker_raises(self):
+        body = BODY.replace("<!-- changelog:start -->", "")
+        with self.assertRaises(ChangelogError):
+            extract_changelog(body)
+
+    def test_missing_end_marker_raises(self):
+        body = BODY.replace("<!-- changelog:end -->", "")
+        with self.assertRaises(ChangelogError):
+            extract_changelog(body)
+
+    def test_reversed_markers_raise(self):
+        body = "<!-- changelog:end -->\n- x\n<!-- changelog:start -->"
+        with self.assertRaises(ChangelogError):
+            extract_changelog(body)
+
+    def test_empty_block_raises(self):
+        # An empty notes field ships a release whose update prompt says nothing,
+        # with every job green. Failing loud is the whole point of this function.
+        body = "<!-- changelog:start -->\n   \n<!-- changelog:end -->"
+        with self.assertRaises(ChangelogError):
+            extract_changelog(body)
+
+    def test_uses_the_first_pair_when_the_body_has_several(self):
+        body = (
+            "<!-- changelog:start -->\nfirst\n<!-- changelog:end -->\n"
+            "<!-- changelog:start -->\nsecond\n<!-- changelog:end -->"
+        )
+        self.assertEqual(extract_changelog(body), "first")
 
 
 if __name__ == "__main__":
