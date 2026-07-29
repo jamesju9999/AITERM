@@ -55,3 +55,33 @@ def extract_changelog(body):
     if not text:
         raise ChangelogError("the changelog block is empty")
     return text
+
+
+def main(argv):
+    if len(argv) != 2:
+        print("usage: release_notes.py {draft|extract}", file=sys.stderr)
+        return 2
+    command = argv[1]
+    data = sys.stdin.read()
+    if command == "draft":
+        print(render_draft(filter_commits(data.splitlines())))
+        return 0
+    if command == "extract":
+        try:
+            print(extract_changelog(data))
+        except ChangelogError as error:
+            print(
+                f"{error}\n"
+                f"Restore both marker lines in the release body:\n"
+                f"  {START}\n  ...\n  {END}\n"
+                f"then re-run the finalize job.",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
+    print(f"unknown command: {command}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

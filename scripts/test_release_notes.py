@@ -2,6 +2,22 @@ import unittest
 
 from release_notes import ChangelogError, extract_changelog, filter_commits, render_draft
 
+import pathlib
+import subprocess
+import sys
+
+SCRIPT = str(pathlib.Path(__file__).with_name("release_notes.py"))
+
+
+def run_cli(args, stdin_text):
+    return subprocess.run(
+        [sys.executable, SCRIPT, *args],
+        input=stdin_text,
+        capture_output=True,
+        text=True,
+    )
+
+
 PLACEHOLDER = "- （本版無使用者可見的變更，請改寫此行）"
 
 
@@ -120,6 +136,34 @@ class ExtractChangelogTest(unittest.TestCase):
             "<!-- changelog:start -->\nsecond\n<!-- changelog:end -->"
         )
         self.assertEqual(extract_changelog(body), "first")
+
+
+class CliTest(unittest.TestCase):
+    def test_draft_reads_stdin_and_writes_bullets(self):
+        result = run_cli(["draft"], "feat: add tabs\nchore: bump version\n")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "- feat: add tabs")
+
+    def test_draft_with_no_matching_commits_still_succeeds(self):
+        result = run_cli(["draft"], "chore: bump version\n")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), PLACEHOLDER)
+
+    def test_extract_writes_the_block(self):
+        result = run_cli(["extract"], BODY)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("AppImage 可建立桌面選單項目", result.stdout)
+
+    def test_extract_exits_1_when_markers_are_missing(self):
+        # The workflow relies on this exit code to stop the release. If it ever
+        # became 0, finalize would publish with whatever happened to be on stdout.
+        result = run_cli(["extract"], "no markers here")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("changelog:start", result.stderr)
+
+    def test_unknown_command_exits_2(self):
+        result = run_cli(["bogus"], "")
+        self.assertEqual(result.returncode, 2)
 
 
 if __name__ == "__main__":
