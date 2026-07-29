@@ -184,3 +184,25 @@ if (newCwd && newCwd !== ptyCwdRef.current) { ptyCwdRef.current = newCwd; loadDi
 ## 驗證限制
 
 `GetLogicalDrives()` 的實際行為**無法在 macOS 上驗證**——只有純函式部分測得到。完整驗證需要在 Windows 實機開啟檔案面板，確認：下拉列出的磁碟機與物件管理員一致、切換後檔案清單正確、切換後終端機 `cd` 時面板仍會跟隨、以及 macOS 上此 UI 不出現。
+
+## 驗證結果（2026-07-29）
+
+### 自動化
+
+`drives_from_mask` 6 個 Rust 單元測試、`drive_kind` 2 個；前端 `FileExplorer` 17 個測試。關鍵路徑以 mutation testing 驗證而非僅看綠燈：M1–M6、N1–N3、K1–K4 全數被抓，其中 **M1（在 `selectDrive` 裡汙染 `ptyCwdRef`）是本設計的主要防線**。
+
+M1 最初**存活**於計畫原本寫的測試——原斷言只驗「終端機移動後面板是否跟隨」，而該情境在有無汙染下都會通過。真正的傷害是**終端機未移動時**：被汙染的 `ptyCwdRef` 與實際 CWD 不符，下一次輪詢會把使用者剛切換的磁碟機硬拉回去。測試據此強化後才真正守住。
+
+`GetLogicalDrives` 與 `GetDriveTypeW` 的呼叫路徑無法在 macOS 執行，改以獨立最小 crate 對 `x86_64-pc-windows-msvc` 交叉編譯驗證通過（整包無法交叉編譯，`ring` 的 build script 需要 Windows C 工具鏈）。過程中發現 `DRIVE_*` 常數不在 `Win32_Storage_FileSystem` 而在 `Win32::System::WindowsProgramming`，需額外開啟該 feature——若照直覺撰寫會等到 Windows CI 才發現。
+
+### macOS
+
+`tauri:dev` 實機確認：檔案面板**不出現**磁碟機控制項，dev log 無任何 `list_drives` 錯誤，證實非 Windows 分支乾淨回傳空清單而非靜默失敗。
+
+### Windows
+
+使用者於 v1.2.2 實機驗證通過，涵蓋計畫列出的六項：控制項出現並顯示目前磁碟機、清單與檔案總管一致、網路／卸除式碟有類型標示、切換後檔案清單正確、**切換後終端機 `cd` 時面板仍跟隨**（核心不變式）、單一磁碟機時不顯示控制項。
+
+### 尚未驗證
+
+已對映但**斷線**的網路磁碟機所造成的數十秒阻塞未實機重現——該限制屬已知且未解決，見上方「已知限制」一節。
