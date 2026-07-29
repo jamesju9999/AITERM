@@ -401,10 +401,29 @@ jobs:
           fi
           rm -v "$workdir"/squashfs-root/usr/lib/libwayland-*.so*
 
-          curl -sSfL -o "$workdir/appimagetool" \
-            "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-$ARCH.AppImage"
-          curl -sSfL -o "$workdir/runtime" \
-            "https://github.com/AppImage/type2-runtime/releases/download/$TYPE2_RUNTIME_VERSION/runtime-$ARCH"
+          case "$ARCH" in
+            x86_64)
+              APPIMAGETOOL_SHA=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+              RUNTIME_SHA=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d ;;
+            aarch64)
+              APPIMAGETOOL_SHA=f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+              RUNTIME_SHA=00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444 ;;
+            *) echo "::error::unexpected arch $ARCH"; exit 1 ;;
+          esac
+
+          fetch_pinned() { # url dest sha256
+            curl -sSfL -o "$2" "$1"
+            if ! echo "$3  $2" | sha256sum -c - >/dev/null 2>&1; then
+              echo "::error::checksum mismatch for $1 — upstream replaced a pinned asset"
+              exit 1
+            fi
+          }
+          fetch_pinned \
+            "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-$ARCH.AppImage" \
+            "$workdir/appimagetool" "$APPIMAGETOOL_SHA"
+          fetch_pinned \
+            "https://github.com/AppImage/type2-runtime/releases/download/$TYPE2_RUNTIME_VERSION/runtime-$ARCH" \
+            "$workdir/runtime" "$RUNTIME_SHA"
           chmod +x "$workdir/appimagetool"
 
           ARCH="$ARCH" "$workdir/appimagetool" --appimage-extract-and-run \
