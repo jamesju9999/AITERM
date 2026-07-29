@@ -23,13 +23,14 @@ function fakeUpdate(overrides: Record<string, unknown> = {}) {
   return {
     version: "1.2.0",
     body: "Bug fixes",
-    downloadAndInstall: vi.fn().mockResolvedValue(undefined),
+    download: vi.fn().mockResolvedValue(undefined),
+    install: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
 
 /**
- * A `downloadAndInstall` stub the test drives event-by-event.
+ * A `download` stub the test drives event-by-event.
  *
  * The hook's intermediate `downloading` states are only observable if React can
  * re-render between events, so the stub parks on a promise the test resolves at
@@ -107,7 +108,7 @@ describe("useUpdater", () => {
 
   it("tracks download progress and ends in 'ready'", async () => {
     const download = deferredDownload();
-    checkMock.mockResolvedValue(fakeUpdate({ downloadAndInstall: download.fn }));
+    checkMock.mockResolvedValue(fakeUpdate({ download: download.fn }));
     const { result } = renderHook(() => useUpdater());
     await waitFor(() => expect(result.current.state.status).toBe("available"));
 
@@ -147,7 +148,7 @@ describe("useUpdater", () => {
 
   it("throttles progress updates to about one percent", async () => {
     const download = deferredDownload();
-    checkMock.mockResolvedValue(fakeUpdate({ downloadAndInstall: download.fn }));
+    checkMock.mockResolvedValue(fakeUpdate({ download: download.fn }));
     const { result } = renderHook(() => useUpdater());
     await waitFor(() => expect(result.current.state.status).toBe("available"));
 
@@ -189,7 +190,7 @@ describe("useUpdater", () => {
 
   it("throttles by bytes when the total size is unknown", async () => {
     const download = deferredDownload();
-    checkMock.mockResolvedValue(fakeUpdate({ downloadAndInstall: download.fn }));
+    checkMock.mockResolvedValue(fakeUpdate({ download: download.fn }));
     const { result } = renderHook(() => useUpdater());
     await waitFor(() => expect(result.current.state.status).toBe("available"));
 
@@ -218,7 +219,7 @@ describe("useUpdater", () => {
 
   it("treats a missing contentLength as an unknown total", async () => {
     const download = deferredDownload();
-    checkMock.mockResolvedValue(fakeUpdate({ downloadAndInstall: download.fn }));
+    checkMock.mockResolvedValue(fakeUpdate({ download: download.fn }));
     const { result } = renderHook(() => useUpdater());
     await waitFor(() => expect(result.current.state.status).toBe("available"));
 
@@ -246,7 +247,7 @@ describe("useUpdater", () => {
 
   it("surfaces install failures as an error", async () => {
     const update = fakeUpdate({
-      downloadAndInstall: vi.fn().mockRejectedValue(new Error("signature mismatch")),
+      download: vi.fn().mockRejectedValue(new Error("signature mismatch")),
     });
     checkMock.mockResolvedValue(update);
     const { result } = renderHook(() => useUpdater());
@@ -307,10 +308,13 @@ describe("useUpdater", () => {
   });
 
   it("relaunch() delegates to the process plugin", async () => {
-    checkMock.mockResolvedValue(null);
+    checkMock.mockResolvedValue(fakeUpdate());
     const { result } = renderHook(() => useUpdater());
-    await waitFor(() => expect(result.current.state.status).toBe("none"));
+    await waitFor(() => expect(result.current.state.status).toBe("available"));
 
+    // relaunch() only proceeds once an update has been downloaded (see
+    // "installs before relaunching" for the ordering guarantee).
+    await act(async () => { await result.current.install(); });
     await act(async () => { await result.current.relaunch(); });
 
     expect(relaunchMock).toHaveBeenCalledTimes(1);
@@ -326,7 +330,7 @@ describe("useUpdater", () => {
 
   it("ignores a second install() while one is already running", async () => {
     const download = deferredDownload();
-    checkMock.mockResolvedValue(fakeUpdate({ downloadAndInstall: download.fn }));
+    checkMock.mockResolvedValue(fakeUpdate({ download: download.fn }));
     const { result } = renderHook(() => useUpdater());
     await waitFor(() => expect(result.current.state.status).toBe("available"));
 
@@ -346,7 +350,7 @@ describe("useUpdater", () => {
 
   it("ignores check() while an install is in flight", async () => {
     const download = deferredDownload();
-    checkMock.mockResolvedValue(fakeUpdate({ downloadAndInstall: download.fn }));
+    checkMock.mockResolvedValue(fakeUpdate({ download: download.fn }));
     const { result } = renderHook(() => useUpdater());
     await waitFor(() => expect(result.current.state.status).toBe("available"));
 
@@ -379,7 +383,7 @@ describe("useUpdater", () => {
 
     await act(async () => { await result.current.install(); });
 
-    expect(update.downloadAndInstall).not.toHaveBeenCalled();
+    expect(update.download).not.toHaveBeenCalled();
     expect(result.current.state).toEqual({ status: "unsupported", version: "1.2.0" });
   });
 
@@ -397,10 +401,10 @@ describe("useUpdater", () => {
   });
 
   it("allows a retry after a failed install", async () => {
-    const downloadAndInstall = vi.fn()
+    const download = vi.fn()
       .mockRejectedValueOnce(new Error("boom"))
       .mockResolvedValue(undefined);
-    checkMock.mockResolvedValue(fakeUpdate({ downloadAndInstall }));
+    checkMock.mockResolvedValue(fakeUpdate({ download }));
     const { result } = renderHook(() => useUpdater());
     await waitFor(() => expect(result.current.state.status).toBe("available"));
 
@@ -411,7 +415,7 @@ describe("useUpdater", () => {
     // and check would be a silent no-op until the app restarts.
     await act(async () => { await result.current.install(); });
 
-    expect(downloadAndInstall).toHaveBeenCalledTimes(2);
+    expect(download).toHaveBeenCalledTimes(2);
     expect(result.current.state).toEqual({ status: "ready", version: "1.2.0" });
   });
 
@@ -429,7 +433,7 @@ describe("useUpdater", () => {
 
     // The stale update object must not remain installable.
     await act(async () => { await result.current.install(); });
-    expect(update.downloadAndInstall).not.toHaveBeenCalled();
+    expect(update.download).not.toHaveBeenCalled();
   });
 
   it("refuses to re-check once an update has been staged", async () => {
@@ -457,6 +461,72 @@ describe("useUpdater", () => {
     await waitFor(() => expect(result.current.state.status).toBe("idle"));
     // A lit dot over an `idle` state renders as a blank About panel.
     expect(result.current.hasUpdate).toBe(false);
+  });
+
+  it("downloads without installing when the user presses update", async () => {
+    // The whole point of this change: on Windows install() exits the process,
+    // so calling it here would kill the app before the restart warning is ever
+    // shown. Without this assertion, reverting to downloadAndInstall breaks
+    // nothing visible on macOS while silently regressing Windows.
+    const update = fakeUpdate();
+    checkMock.mockResolvedValue(update);
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.state.status).toBe("available"));
+
+    await act(async () => { await result.current.install(); });
+
+    expect(update.download).toHaveBeenCalledTimes(1);
+    expect(update.install).not.toHaveBeenCalled();
+    expect(result.current.state.status).toBe("ready");
+  });
+
+  it("installs before relaunching", async () => {
+    const update = fakeUpdate();
+    checkMock.mockResolvedValue(update);
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.state.status).toBe("available"));
+    await act(async () => { await result.current.install(); });
+
+    await act(async () => { await result.current.relaunch(); });
+
+    expect(update.install).toHaveBeenCalledTimes(1);
+    expect(relaunchMock).toHaveBeenCalledTimes(1);
+    expect(update.install.mock.invocationCallOrder[0])
+      .toBeLessThan(relaunchMock.mock.invocationCallOrder[0]);
+  });
+
+  it("reports an install failure instead of relaunching", async () => {
+    const update = fakeUpdate({
+      install: vi.fn().mockRejectedValue(new Error("signature error")),
+    });
+    checkMock.mockResolvedValue(update);
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.state.status).toBe("available"));
+    await act(async () => { await result.current.install(); });
+
+    await act(async () => { await result.current.relaunch(); });
+
+    expect(result.current.state).toMatchObject({
+      status: "error",
+      phase: "install",
+      message: "signature error",
+    });
+    expect(relaunchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the downloaded update usable after a later check", async () => {
+    // stagedRef guards this; if it regressed, the update would download fine
+    // and then fail to install with no obvious cause.
+    const update = fakeUpdate();
+    checkMock.mockResolvedValue(update);
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.state.status).toBe("available"));
+    await act(async () => { await result.current.install(); });
+
+    await act(async () => { await result.current.check(); });
+    await act(async () => { await result.current.relaunch(); });
+
+    expect(update.install).toHaveBeenCalledTimes(1);
   });
 });
 
