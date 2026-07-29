@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod appimage;
 pub mod api_docs;
 pub mod config;
 pub mod db;
