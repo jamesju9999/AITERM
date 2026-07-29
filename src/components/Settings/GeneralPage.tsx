@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { getConfig, setExecutionMode, setSubmitShortcut, setMaxAgentSteps, setDefaultTab, appimageIntegrationState, appimageIntegrate, appimageRemoveIntegration } from "../../ipc/config";
+import { getConfig, setExecutionMode, setSubmitShortcut, setMaxAgentSteps, setDefaultTab, appimageIntegrationState, appimageIntegrate, appimageRemoveIntegration, setAppImageIntegrationDeclined } from "../../ipc/config";
 import type { ExecutionMode, SubmitShortcut, DefaultTab, AppImageIntegrationState } from "../../ipc/config";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { Locale } from "../../lib/i18n";
@@ -41,6 +41,7 @@ export function GeneralPage() {
     () => (localStorage.getItem(LOOP_TIMING_KEY) as "full" | "compact" | null) ?? "compact"
   );
   const [appimage, setAppimage] = useState<AppImageIntegrationState>({ state: "not_appimage" });
+  const [appimageError, setAppimageError] = useState<string | null>(null);
 
   const loadAppimage = useCallback(() => {
     appimageIntegrationState().then(setAppimage).catch(() => {});
@@ -420,11 +421,26 @@ export function GeneralPage() {
             onClick={() => {
               const action =
                 appimage.state === "integrated" ? appimageRemoveIntegration : appimageIntegrate;
-              action().then(loadAppimage).catch(() => {});
+              setAppimageError(null);
+              action()
+                .then(async () => {
+                  // Removing is an explicit "no" — record it, or the first-run
+                  // prompt reappears next launch asking again.
+                  if (appimage.state === "integrated") {
+                    await setAppImageIntegrationDeclined().catch(() => {});
+                  }
+                  loadAppimage();
+                })
+                .catch((e) => setAppimageError(String(e)));
             }}
           >
             {appimage.state === "integrated" ? t.appimage_remove : t.appimage_create}
           </button>
+          {appimageError && (
+            <p className="section-desc" style={{ color: "#e06c75" }}>
+              {t.appimage_failed}: {appimageError}
+            </p>
+          )}
         </section>
       )}
     </div>

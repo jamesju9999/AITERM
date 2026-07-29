@@ -18,11 +18,12 @@ const ENTRY_NAME: &str = "aiterm";
 /// while the dock still shows a generic icon — a failure with no visible symptom.
 #[cfg(any(target_os = "linux", test))]
 fn rewrite_desktop(source: &str, appimage_path: &str) -> String {
+    let escaped = escape_exec(appimage_path);
     source
         .lines()
         .map(|line| {
             if line.starts_with("Exec=") {
-                format!("Exec=\"{appimage_path}\" %U")
+                format!("Exec=\"{escaped}\" %U")
             } else if line.starts_with("Icon=") {
                 format!("Icon={ENTRY_NAME}")
             } else {
@@ -32,6 +33,19 @@ fn rewrite_desktop(source: &str, appimage_path: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
         + "\n"
+}
+
+/// Escapes a path for a quoted `Exec=` value per the Desktop Entry spec.
+#[cfg(any(target_os = "linux", test))]
+fn escape_exec(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for c in path.chars() {
+        if matches!(c, '"' | '`' | '$' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// The path in a `.desktop`'s `Exec=` line, unquoted and without trailing
@@ -56,12 +70,20 @@ fn repair_exec(desktop: &str, appimage_path: &str) -> Option<String> {
     if current == appimage_path {
         return None;
     }
+    // Only repair an Exec we plausibly wrote: a bare absolute path. Anything
+    // else — `env FOO=1 …`, a shell one-liner, a wrapper script — is the user's
+    // own edit. Rewriting it would silently undo workarounds like
+    // WEBKIT_DISABLE_DMABUF_RENDERER on every launch.
+    if !current.starts_with('/') {
+        return None;
+    }
+    let escaped = escape_exec(appimage_path);
     Some(
         desktop
             .lines()
             .map(|line| {
                 if line.starts_with("Exec=") {
-                    format!("Exec=\"{appimage_path}\" %U")
+                    format!("Exec=\"{escaped}\" %U")
                 } else {
                     line.to_string()
                 }
@@ -146,7 +168,9 @@ pub fn appimage_integrate() -> Result<(), String> {
 
         // A missing icon is not fatal: the menu entry still works, it just
         // falls back to a generic image. Failing here would be worse.
-        let _ = copy_icons(&appdir);
+        if let Err(e) = copy_icons(&appdir) {
+            log::warn!("AppImage integration: icons not copied ({e}); the menu entry will use a generic image");
+        }
         Ok(())
     }
     #[cfg(not(target_os = "linux"))]
@@ -215,7 +239,9 @@ pub fn repair_integration_on_startup() {
         let Some(path) = paths::desktop_file() else { return };
         let Ok(contents) = std::fs::read_to_string(&path) else { return };
         if let Some(updated) = repair_exec(&contents, &appimage) {
-            let _ = std::fs::write(&path, updated);
+            if let Err(e) = std::fs::write(&path, updated) {
+                log::warn!("AppImage integration: could not update the menu entry path: {e}");
+            }
         }
     }
 }
@@ -312,5 +338,24 @@ Type=Application
     fn repair_is_none_when_there_is_nothing_to_repair() {
         // No Exec= line at all: the user mangled it, leave it alone.
         assert_eq!(repair_exec("[Desktop Entry]\nName=X\n", "/x/A.AppImage"), None);
+    }
+
+    #[test]
+    fn repair_leaves_a_wrapped_exec_alone() {
+        let d = "[Desktop Entry]\nExec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 \"/x/A.AppImage\" %U\n";
+        assert_eq!(repair_exec(d, "/x/A.AppImage"), None);
+        assert_eq!(repair_exec(d, "/moved/A.AppImage"), None);
+    }
+
+    #[test]
+    fn repair_still_fixes_a_plain_absolute_path() {
+        let d = "[Desktop Entry]\nExec=\"/old/A.AppImage\" %U\n";
+        assert!(repair_exec(d, "/new/A.AppImage").is_some());
+    }
+
+    #[test]
+    fn exec_escapes_shell_metacharacters() {
+        let out = rewrite_desktop(APPDIR_DESKTOP, "/home/u/AITerm$1.AppImage");
+        assert!(out.contains("Exec=\"/home/u/AITerm\\$1.AppImage\" %U"), "got:\n{out}");
     }
 }

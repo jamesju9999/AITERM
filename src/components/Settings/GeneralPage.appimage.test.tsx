@@ -70,4 +70,36 @@ describe("GeneralPage — AppImage integration", () => {
       expect(invokeMock).toHaveBeenCalledWith("appimage_remove_integration"),
     );
   });
+
+  it("records the refusal when the entry is removed", async () => {
+    mockCommands({
+      appimage_integration_state: { state: "integrated", exec_path: "/x/A.AppImage" },
+    });
+    render(<GeneralPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "移除選單項目" }));
+
+    // Otherwise the first-run prompt asks again next launch, right after the
+    // user explicitly removed it.
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("set_appimage_integration_declined"),
+    );
+  });
+
+  it("surfaces a failure instead of doing nothing visible", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "appimage_integrate") return Promise.reject("permission denied");
+      if (cmd === "appimage_integration_state") return Promise.resolve({ state: "available" });
+      if (cmd === "get_config") return Promise.resolve({
+        execution_mode: "graded", submit_shortcut: "enter", max_agent_steps: 5, default_tab: "terminal",
+      });
+      if (cmd === "telegram_get_config") return Promise.resolve({ bot_token: null, chat_id: null });
+      return Promise.resolve(null);
+    });
+    render(<GeneralPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "建立" }));
+
+    expect(await screen.findByText(/permission denied/)).toBeInTheDocument();
+  });
 });
