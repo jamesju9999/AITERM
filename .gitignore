@@ -49,3 +49,6 @@ docs/superpowers/
 
 # Python bytecode (scripts/ tests, tools/ApiDocFetcher)
 __pycache__/
+
+# NSIS bitmap previews are a viewing aid; scripts/gen_nsis_images.py regenerates them
+src-tauri/installer/*.preview.png

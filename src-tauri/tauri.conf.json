@@ -36,6 +36,7 @@
     "createUpdaterArtifacts": true,
     "category": "DeveloperTool",
     "shortDescription": "AI TERM Studio",
+    "copyright": "AI TERM STUDIO · © 2026",
     "active": true,
     "targets": "all",
     "icon": [

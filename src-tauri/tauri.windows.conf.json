@@ -1,5 +1,12 @@
 {
   "bundle": {
+    "windows": {
+      "nsis": {
+        "headerImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp",
+        "installerIcon": "icons/icon.ico"
+      }
+    },
     "externalBin": [],
     "resources": {
       "binaries/db2-sidecar-win-x64": "db2-sidecar",
