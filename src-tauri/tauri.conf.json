@@ -34,6 +34,8 @@
   },
   "bundle": {
     "createUpdaterArtifacts": true,
+    "category": "DeveloperTool",
+    "shortDescription": "AI TERM Studio",
     "active": true,
     "targets": "all",
     "icon": [
