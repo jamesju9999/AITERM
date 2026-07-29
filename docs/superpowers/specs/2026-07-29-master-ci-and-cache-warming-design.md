@@ -148,6 +148,36 @@ Restored from cache key "v0-rust-mac-Darwin-arm64-af5aa912-439e96dc" full match:
 
 `test` job 耗時 60 秒。
 
-**這只證明快取機制在 master 內部有效，不證明 tag 執行讀得到。** 後者仍是本設計唯一未經實證的假設，須於下次發版驗證。
+**這只證明快取機制在 master 內部有效，不證明 tag 執行讀得到。** 後者於 v1.2.6 驗證，見下。
+
+## 核心假設驗證結果（v1.2.6，2026-07-29）
+
+**假設成立：tag 觸發的執行能還原預設分支建立的快取。** 六條腿全數命中，取自完成後的 build log：
+
+```
+linux-x64-appimage     Restored from cache key "v0-rust-linux-x64-appimage-Linux-x64-db…"
+linux-x64-deb          Restored from cache key "v0-rust-linux-x64-deb-Linux-x64-db…"
+linux-arm64-appimage   Restored from cache key "v0-rust-linux-arm64-appimage-Linux-arm64-…"
+linux-arm64-deb        Restored from cache key "v0-rust-linux-arm64-deb-Linux-arm64-27a…"
+mac                    Restored from cache key "v0-rust-mac-Darwin-arm64-af5aa912-439e9…"
+windows                Restored from cache key "v0-rust-windows-Windows_NT-x64-8af1e26a…"
+```
+
+步驟耗時對照（同一條 linux-x64-appimage）：
+
+| 步驟 | v1.2.5（`No cache found.`） | v1.2.6 |
+|---|---|---|
+| `Rust cache` | **0 秒** | **15 秒** |
+| `Build` | **508 秒** | **271 秒** |
+
+`Rust cache` 耗時 0 秒代表無物可還原；15 秒代表確實下載並解開了約 660 MB。這在 log 出現之前就是強力指標，兩者結論一致。
+
+v1.2.6 六條腿的 Build 耗時：127s（arm64-deb）、144s（arm64-appimage）、233s（x64-deb）、271s（x64-appimage）、323s（mac）、390s（windows）。
+
+較 `warm-cache` 的 85 秒為長，是因為發版還要打包、執行 linuxdeploy、產生 AppImage，那些 `cargo build` 不做。
+
+### 後續優化現已解鎖
+
+假設既已成立，`release.yml` 的 rust-cache 可加上 `save-if: false`，停止每次發版寫入約 3.8 GB 永遠無人讀取的快取。**尚未執行。**
 
 快取總量目前 10.06 GB，其中 15 份仍屬舊 tag。由於 LRU 淘汰且 tag 快取從未被讀取，這些會優先被清除。

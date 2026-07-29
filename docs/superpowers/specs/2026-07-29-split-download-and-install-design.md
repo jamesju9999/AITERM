@@ -91,3 +91,18 @@ downloadAndInstall(onEvent?, options?): Promise<void>;
 4. macOS 與 Linux 的更新流程未回歸
 
 第 3 項若不成立（安裝後不自動啟動），屬 NSIS 行為而非本設計缺陷，但須據實記錄，因為使用者按下的按鈕寫著「重新啟動以完成更新」。
+
+## 驗證狀態（v1.2.6，2026-07-29）
+
+**本次發版無法驗證任何一項。**
+
+更新流程由**舊版**的程式碼執行：使用者從 v1.2.5 更新到 v1.2.6 時，跑的是 v1.2.5 的 `downloadAndInstall()`，行為與改動前完全相同。新流程要到 **v1.2.6 更新至 v1.2.7** 時才會首次執行。
+
+這與本專案先前遇到的【查看完整說明】按鈕是同一個結構性限制的兩種樣貌：
+
+- **UI 元素**：由新版渲染，但只出現在更新提示中，而收到提示的機器跑的是舊版
+- **updater 行為**：由舊版執行，新版的改動要到下一次更新才生效
+
+一般化的說法是：**任何位於更新路徑上的改動，都無法在引入它的那一版被觀察到。**
+
+安裝畫面的外觀（`headerImage` / `sidebarImage` / branding 文字）不受此限，因為它屬於安裝檔本身——但**App 內建更新看不到**：`tauri-plugin-updater` 的 `WindowsUpdateInstallMode` 預設為 `Passive`，其原始碼註解為「unattended mode, which means the installation only shows a progress bar」，歡迎頁與頁首橫幅皆不顯示。須手動執行 `setup.exe` 才看得到。使用者已於 v1.2.6 確認安裝畫面更新無誤。
