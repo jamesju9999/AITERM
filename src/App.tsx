@@ -4,6 +4,7 @@ import { TerminalApp } from "./components/TerminalApp";
 import { SettingsView } from "./components/Settings/SettingsView";
 import { OnboardingWizard } from "./components/Onboarding/OnboardingWizard";
 import { UpdateModal } from "./components/UpdateModal";
+import { AppImageIntegrationPrompt } from "./components/AppImageIntegrationPrompt";
 import { useUpdaterContext } from "./contexts/UpdaterContext";
 import { isOnboardingDone } from "./ipc/config";
 import "./App.css";
@@ -70,6 +71,7 @@ export function AppRoutes() {
         </div>
       )}
       <UpdateModal />
+      <AppImageIntegrationPrompt hasUpdate={hasUpdate} />
     </div>
   );
 }
