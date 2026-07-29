@@ -1098,6 +1098,9 @@ On the Ubuntu machine, with the new AppImage:
 4. Move the AppImage to another directory, launch it from there, then check the file again: `Exec=` now points at the new location and the menu entry still works.
 5. Settings → 一般 → 移除選單項目 removes both the entry and `~/.local/share/icons/hicolor/*/apps/aiterm.png`.
 6. Pressing 不用了 means the prompt does not return on the next launch, while Settings still offers to create it.
+7. **Removing from Settings must also stop the prompt returning** — the flag means "don't ask again", and removal is an explicit no.
+8. **Coexistence with the `.deb`.** The verification machine has both installed. Both menu entries carry `StartupWMClass=app`, so GNOME sees two candidates for the same window class. Check for a duplicated dock icon, and check which binary "New Window" launches when the `.deb` copy is running. This is an inherent limit of WM_CLASS matching rather than something to fix in code, but it must be observed once rather than assumed benign.
+9. `ls $APPDIR/usr/share/icons/hicolor` inside the running AppImage — the `.desktop` path was verified against a real build, the icon path never was. If that tree is absent, the entry installs with `Icon=aiterm` pointing at nothing and the dock keeps its gear.
 
 - [ ] **Step 5: Record the result**
 
