@@ -27,14 +27,26 @@ _KEEP = re.compile(r"^(feat|fix)(\([^)]*\))?!?:")
 
 def filter_commits(subjects):
     """Keep only the commit subjects a user would care about."""
-    return [s for s in subjects if _KEEP.match(s.strip())]
+    stripped = (s.strip() for s in subjects)
+    return [s for s in stripped if _KEEP.match(s)]
+
+
+def _neutralise_markers(subject):
+    """Stop a commit subject from closing the changelog block.
+
+    "-->" terminates the HTML comment that ends the block, so a subject
+    containing it would make extract_changelog stop early and publish a
+    truncated changelog with exit 0 and every job green. Escaping the closer is
+    enough: GitHub renders "--&gt;" as "-->", and a human rewrites the line anyway.
+    """
+    return subject.replace("-->", "--&gt;")
 
 
 def render_draft(kept):
     """Render the changelog block body. Never returns an empty string."""
     if not kept:
         return PLACEHOLDER
-    return "\n".join(f"- {s}" for s in kept)
+    return "\n".join(f"- {_neutralise_markers(s)}" for s in kept)
 
 
 def extract_changelog(body):
@@ -44,6 +56,10 @@ def extract_changelog(body):
     release whose update prompt is blank or shows a bare URL, with every CI job
     green. Blocking the release is the recoverable failure; shipping is not.
     """
+    # The block is rewritten in GitHub's web editor, so CRLF is the normal
+    # input here. Left alone, every \r would travel into latest.json's notes
+    # and then into a `white-space: pre-wrap` element in the update prompt.
+    body = body.replace("\r\n", "\n").replace("\r", "\n")
     start = body.find(START)
     if start == -1:
         raise ChangelogError(f"release body is missing {START}")
@@ -61,14 +77,19 @@ def main(argv):
     if len(argv) != 2:
         print("usage: release_notes.py {draft|extract}", file=sys.stderr)
         return 2
+    # The placeholder and the extracted text are Traditional Chinese. Without
+    # this, a non-UTF-8 locale turns either subcommand into a traceback with
+    # exit 1 — the same exit code the workflow reads as "changelog is broken".
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
     command = argv[1]
-    data = sys.stdin.read()
     if command == "draft":
-        print(render_draft(filter_commits(data.splitlines())))
+        print(render_draft(filter_commits(sys.stdin.read().splitlines())))
         return 0
     if command == "extract":
         try:
-            print(extract_changelog(data))
+            print(extract_changelog(sys.stdin.read()))
         except ChangelogError as error:
             print(
                 f"{error}\n"

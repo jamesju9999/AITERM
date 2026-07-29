@@ -1,6 +1,13 @@
 import unittest
 
-from release_notes import ChangelogError, extract_changelog, filter_commits, render_draft
+from release_notes import (
+    END,
+    START,
+    ChangelogError,
+    extract_changelog,
+    filter_commits,
+    render_draft,
+)
 
 import pathlib
 import subprocess
@@ -65,6 +72,24 @@ class FilterCommitsTest(unittest.TestCase):
     def test_drops_blank_lines(self):
         self.assertEqual(filter_commits(["", "   ", "feat: real"]), ["feat: real"])
 
+    def test_only_matches_at_the_start_of_the_subject(self):
+        # Anchoring is the point: these all contain "fix:" or "feat:" partway
+        # through and must not be mistaken for changes worth showing a user.
+        self.assertEqual(
+            filter_commits(
+                [
+                    "docs: explain the fix: rationale",
+                    "chore: revert feat: add tabs",
+                ]
+            ),
+            [],
+        )
+
+    def test_strips_surrounding_whitespace(self):
+        # Judged on the stripped string, so it must be emitted stripped too:
+        # "-    feat: x" is an indented code block in markdown, not a list item.
+        self.assertEqual(filter_commits(["   feat: padded   "]), ["feat: padded"])
+
 
 class RenderDraftTest(unittest.TestCase):
     def test_prefixes_each_line_with_a_bullet(self):
@@ -77,6 +102,17 @@ class RenderDraftTest(unittest.TestCase):
         # Never an empty block: extract_changelog rejects one, which would block
         # the release with a confusing error instead of showing this line.
         self.assertEqual(render_draft([]), PLACEHOLDER)
+
+    def test_neutralises_a_subject_that_would_close_the_block(self):
+        rendered = render_draft(["feat: document the <!-- changelog:end --> marker"])
+        self.assertNotIn("-->", rendered)
+        self.assertIn("--&gt;", rendered)
+
+    def test_a_marker_in_a_subject_cannot_truncate_the_block(self):
+        subjects = ["feat: handle a missing <!-- changelog:end --> marker"]
+        block = render_draft(filter_commits(subjects))
+        body = f"{START}\n{block}\n{END}"
+        self.assertIn("marker", extract_changelog(body))
 
 
 BODY = """## AITerm v1.2.5
@@ -105,12 +141,12 @@ class ExtractChangelogTest(unittest.TestCase):
 
     def test_missing_start_marker_raises(self):
         body = BODY.replace("<!-- changelog:start -->", "")
-        with self.assertRaises(ChangelogError):
+        with self.assertRaisesRegex(ChangelogError, "missing <!-- changelog:start -->"):
             extract_changelog(body)
 
     def test_missing_end_marker_raises(self):
         body = BODY.replace("<!-- changelog:end -->", "")
-        with self.assertRaises(ChangelogError):
+        with self.assertRaisesRegex(ChangelogError, "missing <!-- changelog:end -->"):
             extract_changelog(body)
 
     def test_reversed_markers_raise(self):
@@ -137,6 +173,10 @@ class ExtractChangelogTest(unittest.TestCase):
         )
         self.assertEqual(extract_changelog(body), "first")
 
+    def test_normalises_crlf_from_the_web_editor(self):
+        body = "<!-- changelog:start -->\r\n- 甲\r\n- 乙\r\n<!-- changelog:end -->"
+        self.assertEqual(extract_changelog(body), "- 甲\n- 乙")
+
 
 class CliTest(unittest.TestCase):
     def test_draft_reads_stdin_and_writes_bullets(self):
@@ -159,10 +199,20 @@ class CliTest(unittest.TestCase):
         # became 0, finalize would publish with whatever happened to be on stdout.
         result = run_cli(["extract"], "no markers here")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("changelog:start", result.stderr)
+        self.assertIn("release body is missing <!-- changelog:start -->", result.stderr)
 
     def test_unknown_command_exits_2(self):
         result = run_cli(["bogus"], "")
+        self.assertEqual(result.returncode, 2)
+
+    def test_no_command_exits_2(self):
+        # Without the guard this is an IndexError traceback and exit 1, which
+        # collides with the "changelog is broken" exit code the workflow acts on.
+        result = run_cli([], "")
+        self.assertEqual(result.returncode, 2)
+
+    def test_extra_arguments_exit_2(self):
+        result = run_cli(["draft", "extra"], "")
         self.assertEqual(result.returncode, 2)
 
 
