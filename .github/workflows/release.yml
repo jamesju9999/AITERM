@@ -359,23 +359,38 @@ jobs:
       # Tauri pins predates the entry. Bumping tauri-cli does not help: 2.10.1
       # and 2.11.4 fetch the identical pinned linuxdeploy URL.
       #
+      # Two consequences worth knowing:
+      #  * Repacking swaps linuxdeploy's runtime for appimagetool's, so both the
+      #    tool and the runtime are pinned rather than tracking `continuous` —
+      #    a release pipeline should not pull floating upstream binaries.
+      #  * Dropping the bundled libwayland raises the compatibility floor to
+      #    hosts with libwayland >= 1.20 (Ubuntu 22.04+), because the bundled
+      #    GTK3 needs wl_proxy_marshal_flags. That matches what the release
+      #    notes already promise, but it is now load-bearing.
+      #
       # Repacking invalidates the updater signature, so it is regenerated here
       # and both assets are re-uploaded before `finalize` reads the .sig files.
       - name: Strip bundled libwayland from the AppImage
-        if: matrix.artifact_name == 'linux-x64-appimage' || matrix.artifact_name == 'linux-arm64-appimage'
+        if: matrix.os == 'ubuntu-22.04' || matrix.os == 'ubuntu-22.04-arm'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPIMAGETOOL_VERSION: "1.9.1"
+          TYPE2_RUNTIME_VERSION: "20251108"
         run: |
           set -euo pipefail
           ARCH=$(echo "${{ matrix.target }}" | cut -d- -f1)
-          APP=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage)
+          # Absolute: the self-check below runs inside `cd "$workdir"` subshells.
+          APP=$(realpath "$(ls src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage)")
           echo "Repacking $(basename "$APP") for $ARCH"
 
           workdir=$(mktemp -d)
+          trap 'rm -rf "$workdir"' EXIT
           cp "$APP" "$workdir/orig.AppImage"
+          chmod +x "$workdir/orig.AppImage"
           ( cd "$workdir" && ./orig.AppImage --appimage-extract >/dev/null )
 
           # Fail loudly if the premise no longer holds — a silent no-op here
@@ -387,25 +402,37 @@ jobs:
           rm -v "$workdir"/squashfs-root/usr/lib/libwayland-*.so*
 
           curl -sSfL -o "$workdir/appimagetool" \
-            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$ARCH.AppImage"
+            "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-$ARCH.AppImage"
+          curl -sSfL -o "$workdir/runtime" \
+            "https://github.com/AppImage/type2-runtime/releases/download/$TYPE2_RUNTIME_VERSION/runtime-$ARCH"
           chmod +x "$workdir/appimagetool"
-          ARCH="$ARCH" "$workdir/appimagetool" --appimage-extract-and-run \
-            "$workdir/squashfs-root" "$APP"
 
-          # Prove the repack actually removed them, rather than trusting the rm.
-          ( cd "$workdir" && rm -rf squashfs-root && cp "$APP" check.AppImage \
-            && ./check.AppImage --appimage-extract >/dev/null )
+          ARCH="$ARCH" "$workdir/appimagetool" --appimage-extract-and-run \
+            --runtime-file "$workdir/runtime" \
+            "$workdir/squashfs-root" "$workdir/repacked.AppImage"
+          # Move into place only once the repack succeeded, so a failure never
+          # leaves a half-written AppImage in the bundle directory.
+          mv "$workdir/repacked.AppImage" "$APP"
+          rm -f "$workdir/orig.AppImage"
+
+          # Prove the repack removed them, rather than trusting the rm. This also
+          # confirms the pinned runtime can read the archive appimagetool wrote.
+          rm -rf "$workdir/squashfs-root"
+          cp "$APP" "$workdir/check.AppImage"
+          chmod +x "$workdir/check.AppImage"
+          ( cd "$workdir" && ./check.AppImage --appimage-extract >/dev/null )
           if ls "$workdir"/squashfs-root/usr/lib/libwayland-*.so* >/dev/null 2>&1; then
             echo "::error::libwayland still present after repack"
             exit 1
           fi
           echo "Confirmed: no libwayland in the repacked AppImage"
 
+          # Delete first so the assertion cannot pass on tauri-action's stale .sig.
+          rm -f "$APP.sig"
           npx tauri signer sign "$APP"
           test -f "$APP.sig" || { echo "::error::signature not regenerated"; exit 1; }
 
           gh release upload "$TAG" "$APP" "$APP.sig" --clobber
-          rm -rf "$workdir"
 
       # Ubuntu 24.04 ARM64: .deb only (uses t64 runtime deps, works on ARM Ubuntu 24.04+)
       - name: Build (Linux ARM64 .deb — Ubuntu 24.04)
