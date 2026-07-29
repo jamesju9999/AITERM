@@ -506,8 +506,21 @@ jobs:
   finalize:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Pauses here until a required reviewer approves, which is the window in
+    # which the changelog block in the draft release body gets rewritten by hand.
+    # WARNING: if this environment does not exist, or exists without required
+    # reviewers, GitHub runs the job immediately and reports no error at all.
+    # Verify with `gh api repos/<owner>/<repo>/environments/release-approval`,
+    # not by looking at the web UI.
+    environment: release-approval
+    # Raised defensively. Whether the approval wait counts toward timeout-minutes
+    # is not something this plan verified, and a finalize cancelled mid-wait would
+    # leave the release as a draft with no latest.json.
+    timeout-minutes: 720
     steps:
+      # finalize needs scripts/release_notes.py.
+      - uses: actions/checkout@v4
+
       - name: Download updater signatures
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -524,6 +537,13 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
+          # Read the body now, not at create-release time: the whole point of the
+          # approval gate above is that a human edited it in between.
+          gh release view "$TAG" --json body -q .body > body.md
+          # Exits 1 when the markers are missing or the block is empty, which
+          # fails this job and leaves the release as a draft. The updater endpoint
+          # resolves through releases/latest, so a draft reaches nobody.
+          python3 scripts/release_notes.py extract < body.md > notes.txt
           python3 - <<'PY'
           import json, os, pathlib, sys
           from datetime import datetime, timezone
@@ -565,7 +585,7 @@ jobs:
 
           manifest = {
               "version": version,
-              "notes": f"https://github.com/{repo}/releases/tag/{tag}",
+              "notes": pathlib.Path("notes.txt").read_text().strip(),
               # RFC 3339 with a Z suffix. tauri-plugin-updater parses this strictly —
               # a malformed value fails deserialization of the whole manifest for every
               # platform, so it is generated here rather than taken from event payload.
