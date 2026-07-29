@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
-import { getConfig, setExecutionMode, setSubmitShortcut, setMaxAgentSteps, setDefaultTab } from "../../ipc/config";
-import type { ExecutionMode, SubmitShortcut, DefaultTab } from "../../ipc/config";
+import { useState, useEffect, useCallback } from "react";
+import { getConfig, setExecutionMode, setSubmitShortcut, setMaxAgentSteps, setDefaultTab, appimageIntegrationState, appimageIntegrate, appimageRemoveIntegration } from "../../ipc/config";
+import type { ExecutionMode, SubmitShortcut, DefaultTab, AppImageIntegrationState } from "../../ipc/config";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { Locale } from "../../lib/i18n";
 import { THEMES, getActiveTheme, applyTheme, type ThemeId } from "../../lib/themes";
@@ -40,6 +40,12 @@ export function GeneralPage() {
   const [timingMode, setTimingMode] = useState<"full" | "compact">(
     () => (localStorage.getItem(LOOP_TIMING_KEY) as "full" | "compact" | null) ?? "compact"
   );
+  const [appimage, setAppimage] = useState<AppImageIntegrationState>({ state: "not_appimage" });
+
+  const loadAppimage = useCallback(() => {
+    appimageIntegrationState().then(setAppimage).catch(() => {});
+  }, []);
+  useEffect(() => { loadAppimage(); }, [loadAppimage]);
 
   const MODES: { value: ExecutionMode; label: string; desc: string }[] = [
     { value: "always-confirm", label: t.mode_always_confirm_label, desc: t.mode_always_confirm_desc },
@@ -399,6 +405,28 @@ export function GeneralPage() {
           ))}
         </div>
       </section>
+
+      {appimage.state !== "not_appimage" && (
+        <section className="settings-section">
+          <h3>{t.appimage_section_title}</h3>
+          <p className="section-desc">{t.appimage_section_desc}</p>
+          {appimage.state === "integrated" && (
+            <p className="section-desc">
+              {t.appimage_current_path} <code>{appimage.exec_path}</code>
+            </p>
+          )}
+          <button
+            className="aiterm-btn aiterm-btn--secondary"
+            onClick={() => {
+              const action =
+                appimage.state === "integrated" ? appimageRemoveIntegration : appimageIntegrate;
+              action().then(loadAppimage).catch(() => {});
+            }}
+          >
+            {appimage.state === "integrated" ? t.appimage_remove : t.appimage_create}
+          </button>
+        </section>
+      )}
     </div>
   );
 }
