@@ -483,6 +483,22 @@ Task 1-3 完成後的獨立程式品質審查跑了 18 個 mutation，找出七�
 
 ---
 
+## Task 5b: 最終審查發現的修正（已完成）
+
+Tasks 4-5 完成後對 workflow 的獨立審查（Python 模組另有審查）找出三項，皆已修正（commit `3c14893`、`de7fa18`）：
+
+| # | 問題 | 為何重要 |
+|---|---|---|
+| 1 | `extract` 不擋未編輯的 placeholder | placeholder 是非空字串，`extract` 回 0。某次發版若只有 `chore:`/`docs:` commit，草稿即為 placeholder；GitHub 的核准畫面只顯示 environment 名稱，**沒有任何提示要先改 body**，而按核准比編輯容易得多。結果是「請改寫此行」出現在每個使用者的更新視窗。這繞過了模組自己宣稱的安全網 |
+| 2 | 草稿 step 沒有 `pipefail` | 未指定 `shell:` 的 `run` 拿到的是 `bash -e`，**不含 `-o pipefail`**。`git log` 失敗時 pipeline 狀態取自最後一個指令（0），step 綠燈通過並產出 placeholder。與第 1 項串成完整的靜默失敗鏈 |
+| 3 | `timeout-minutes: 720` 的註解前提錯誤 | 等待核准時 job 處於 Waiting、未配到 runner，本就不計入 `timeout-minutes`；GitHub-hosted job 硬上限 360 分鐘，720 會被截斷。防禦無效，副作用是把約 2 分鐘的 job 失控上限拉高數小時。已還原為 10 |
+
+第 2 項的驗證用的是**實際的 workflow 構造**（pipeline 位於 `{ ... } >> "$GITHUB_OUTPUT"` 群組內），而非簡化版——`set -e` 在群組加重導向下的行為不必然與裸跑相同。實測 step exit=128，且在寫入結尾分隔符之前中止。
+
+審查同時確認了兩件先前只能推論的事，皆以證據退場：**六個 tauri-action build job 不會覆寫 release body**（比對已發布的 v1.2.4，與 `create-release` 寫入的內容逐字相符），以及 environment 的 `deployment_branch_policy` 為 `null`——若設成 "Protected branches"，tag push 會被直接拒絕，**每一次發版都會失敗**。
+
+---
+
 ## Task 4: `create-release` 產生草稿
 
 **Files:**
