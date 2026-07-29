@@ -46,3 +46,6 @@ superpowers/
 # Docs
 docs
 docs/superpowers/
+
+# Python bytecode (scripts/ tests, tools/ApiDocFetcher)
+__pycache__/
