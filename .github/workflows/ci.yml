@@ -49,6 +49,14 @@ jobs:
       - name: Release-notes helper tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
+      # Guards the whole point of warm-cache: a drifted matrix produces caches
+      # under keys no release run looks up, and the only symptom is that some
+      # legs stay slow.
+      - name: Check the cache matrix matches release.yml
+        run: |
+          pip install --quiet pyyaml
+          python3 scripts/check_ci_matrix.py
+
   # Produces the caches that release.yml restores. Every field below is aligned
   # with release.yml's build matrix on purpose: swatinem/rust-cache derives its
   # key from the runner OS, the shared-key and the Cargo.lock hash, so any
