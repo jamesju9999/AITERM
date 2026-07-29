@@ -346,6 +346,67 @@ jobs:
           includeUpdaterJson: false
           args: --target aarch64-unknown-linux-gnu --bundles appimage
 
+      # linuxdeploy bundles libwayland-client.so.0 from the build base, and
+      # AppRun puts $APPDIR/usr/lib ahead of the system on LD_LIBRARY_PATH. The
+      # host's Mesa then loads a build-base-era libwayland, eglGetPlatformDisplay
+      # fails with EGL_BAD_PARAMETER, and WebKitGTK aborts — a blank window on
+      # any host newer than the builder. Verified on Ubuntu 26.04 aarch64:
+      # removing these four files and nothing else makes the app render.
+      #
+      # libwayland-client.so.0 is on the official AppImage excludelist for
+      # exactly this reason (pkg2appimage excludelist, citing mesa#11316), but
+      # linuxdeploy embeds that list at compile time and the prebuilt binary
+      # Tauri pins predates the entry. Bumping tauri-cli does not help: 2.10.1
+      # and 2.11.4 fetch the identical pinned linuxdeploy URL.
+      #
+      # Repacking invalidates the updater signature, so it is regenerated here
+      # and both assets are re-uploaded before `finalize` reads the .sig files.
+      - name: Strip bundled libwayland from the AppImage
+        if: matrix.artifact_name == 'linux-x64-appimage' || matrix.artifact_name == 'linux-arm64-appimage'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          ARCH=$(echo "${{ matrix.target }}" | cut -d- -f1)
+          APP=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage)
+          echo "Repacking $(basename "$APP") for $ARCH"
+
+          workdir=$(mktemp -d)
+          cp "$APP" "$workdir/orig.AppImage"
+          ( cd "$workdir" && ./orig.AppImage --appimage-extract >/dev/null )
+
+          # Fail loudly if the premise no longer holds — a silent no-op here
+          # would ship a broken AppImage that still looks fine on the release page.
+          if ! ls "$workdir"/squashfs-root/usr/lib/libwayland-*.so* >/dev/null 2>&1; then
+            echo "::error::No bundled libwayland found — linuxdeploy behaviour changed, re-check this workaround"
+            exit 1
+          fi
+          rm -v "$workdir"/squashfs-root/usr/lib/libwayland-*.so*
+
+          curl -sSfL -o "$workdir/appimagetool" \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$ARCH.AppImage"
+          chmod +x "$workdir/appimagetool"
+          ARCH="$ARCH" "$workdir/appimagetool" --appimage-extract-and-run \
+            "$workdir/squashfs-root" "$APP"
+
+          # Prove the repack actually removed them, rather than trusting the rm.
+          ( cd "$workdir" && rm -rf squashfs-root && cp "$APP" check.AppImage \
+            && ./check.AppImage --appimage-extract >/dev/null )
+          if ls "$workdir"/squashfs-root/usr/lib/libwayland-*.so* >/dev/null 2>&1; then
+            echo "::error::libwayland still present after repack"
+            exit 1
+          fi
+          echo "Confirmed: no libwayland in the repacked AppImage"
+
+          npx tauri signer sign "$APP"
+          test -f "$APP.sig" || { echo "::error::signature not regenerated"; exit 1; }
+
+          gh release upload "$TAG" "$APP" "$APP.sig" --clobber
+          rm -rf "$workdir"
+
       # Ubuntu 24.04 ARM64: .deb only (uses t64 runtime deps, works on ARM Ubuntu 24.04+)
       - name: Build (Linux ARM64 .deb — Ubuntu 24.04)
         if: matrix.os == 'ubuntu-24.04-arm'
