@@ -242,8 +242,13 @@ class ExtractChangelogTest(unittest.TestCase):
             extract_changelog(body)
 
     def test_reversed_markers_raise(self):
+        # Asserts the *reason*, not just the type. A start>stop slice returns ""
+        # in Python rather than raising, so dropping the after_start argument to
+        # find() still raises — via the empty-block check, for the wrong reason.
+        # assertRaises(ChangelogError) alone passes either way and leaves the
+        # search-start argument untested. (Found by mutation M2 surviving.)
         body = "<!-- changelog:end -->\n- x\n<!-- changelog:start -->"
-        with self.assertRaises(ChangelogError):
+        with self.assertRaisesRegex(ChangelogError, "missing <!-- changelog:end -->"):
             extract_changelog(body)
 
     def test_empty_block_raises(self):
@@ -312,7 +317,7 @@ Expected: PASS，15 個測試（前一個任務的 8 個加上 `ExtractChangelog
 | # | 改動 | 必須失敗的測試 |
 |---|---|---|
 | M1 | 三個 `raise ChangelogError(...)` 全改成 `return ""` | 四個 raise 測試 |
-| M2 | `body.find(END, after_start)` 改成 `body.find(END)` | `test_reversed_markers_raise` |
+| M2 | `body.find(END, after_start)` 改成 `body.find(END)` | `test_reversed_markers_raise`（只有在該測試斷言錯誤訊息時才會失敗——用 `assertRaises(ChangelogError)` 會存活） |
 | M3 | `body[after_start:end]` 改成 `body[start:end]` | `test_excludes_the_markers_themselves` |
 | M4 | 拿掉 `if not text:` 那段 | `test_empty_block_raises` |
 | M5 | `.strip()` 拿掉 | `test_returns_the_block_contents` |
