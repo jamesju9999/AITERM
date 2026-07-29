@@ -86,7 +86,9 @@ Windows leg 因此先建立一個佔位檔。此 job 從不打包，resources �
 
 佔位檔傳不進發版，兩項證據：rust-cache 的 Cache Paths 只有 `~/.cargo/*` 與 `src-tauri/target`，不含 `src-tauri/binaries/`；且該目錄在 `.gitignore:42`。
 
-**仍須實際確認**：下一次 Windows 發版後，安裝檔中的 `db2-sidecar` 必須是真正的 JAR 而非空檔，且 DB2 連線功能正常。理論上打包由 tauri CLI 在 build script 之後執行、屆時真 sidecar 已就緒，但本設計已因「在 macOS 實測後推廣到 Windows」錯過一次，故不以推論結案。
+**已於 v1.2.6 實際確認**：Windows 安裝後 `db2-sidecar` 的 JAR 檔仍存在且完好。佔位檔未污染發版產物，與上述兩項證據一致。
+
+（此項刻意不以推論結案，因為本設計已因「在 macOS 實測後推廣到 Windows」錯過一次。）
 
 排程存在的理由：GitHub 的快取 **7 天無存取即淘汰**。若兩次發版間隔超過七天且 master 無提交，暖好的快取會消失。
 
