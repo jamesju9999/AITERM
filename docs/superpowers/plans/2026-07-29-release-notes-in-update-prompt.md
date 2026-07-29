@@ -463,6 +463,26 @@ git commit -m "feat(release): add the release_notes CLI used by the workflow"
 
 ---
 
+## Task 3b: 審查發現的修正（已完成）
+
+Task 1-3 完成後的獨立程式品質審查跑了 18 個 mutation，找出七項，皆已修正（commit `07a3ee5`）。記錄於此以免日後重蹈：
+
+| # | 問題 | 為何重要 |
+|---|---|---|
+| 1 | `extract_changelog` 不處理 CRLF | 區塊是在 GitHub **網頁編輯器**改寫的，CRLF 是正常輸入而非罕見情形。`\r` 會直接進入 `latest.json` 的 `notes`，再進入 `pre-wrap` 元素 |
+| 2 | commit subject 含 `-->` 會提早關閉 HTML 註解 | `extract` 在該處截斷，**exit 0、所有 job 全綠、release 照發**，更新說明被靜默削掉。這正是本模組要防的「錯誤輸出而非錯誤」。本 repo 正在開發這個功能，這種 subject 並不牽強 |
+| 3 | 「只從行首比對」零覆蓋 | 單獨拿掉 `^` 是等價 mutation，但 `match`→`search` 加拿掉 `^` 會存活。`docs: explain the fix: rationale` 會被誤留 |
+| 4 | `assertIn("changelog:start", result.stderr)` 恆真 | 錯誤訊息的補救說明永遠印出兩個標記，該斷言分辨不出任何事。與先前修掉的 reversed-markers 同一種病 |
+| 5 | `filter_commits` 用 strip 後的字串判斷、回傳未 strip 的原字串 | 行首空白會產生 `-    feat: ...`，markdown 視為縮排程式碼區塊 |
+| 6 | argv 守衛無測試 | 守衛若失效，零參數會變成 IndexError + exit 1，與「changelog 壞掉」撞號 |
+| 7 | stdio 編碼與無條件讀取 stdin | 中文字串在非 UTF-8 locale（如 zh-TW Windows）會 traceback + exit 1，同樣撞號 |
+
+第 2 項的修法在**草稿端**中和標記（`-->` → `--&gt;`），而非在取出端偵測——被截斷這件事在 extract 端根本無從察覺。
+
+審查同時指出一件**尚未解決**的事：這些測試沒有任何 CI 會執行。模組被抽出來的全部理由就是「內嵌在 workflow 的邏輯無法在發佈前測試」，但目前只靠人工執行。Task 4 會把測試接進 `create-release`，作為最低限度的保障；repo 層級缺少 PR 測試閘是更大的問題，不在本計畫範圍。
+
+---
+
 ## Task 4: `create-release` 產生草稿
 
 **Files:**
@@ -478,6 +498,12 @@ git commit -m "feat(release): add the release_notes CLI used by the workflow"
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # These tests have no other CI gate — this repo has no PR-level workflow.
+      # Running them here means a broken release_notes.py stops the release
+      # before it can write a malformed body, rather than after.
+      - name: Test the release-notes helpers
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
       - name: Generate the changelog draft
         id: changelog
