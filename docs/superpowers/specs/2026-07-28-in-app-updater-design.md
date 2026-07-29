@@ -314,3 +314,29 @@ Windows 與 Linux（AppImage / `.deb` fallback）的端對端更新未實機測�
 | `src/App.tsx` | 移除內嵌 tags 檢查，改用 `useUpdater`，掛載彈窗 |
 | `src/components/Settings/AboutPage.tsx` | 移除內嵌 tags 檢查，改用 `useUpdater`，加【立即更新】 |
 | `src/lib/i18n.ts` | 新增字串 |
+
+## 已知問題：Windows 上【立即更新】會直接結束 App，且不顯示警告
+
+**2026-07-29 發現，尚未修正。**
+
+`tauri-plugin-updater` 2.10.1 的 Windows 安裝路徑在啟動 NSIS 安裝程式後，最後一行是 `std::process::exit(0)`（`updater.rs`；其 doc comment 亦寫明「run before we run the installer and exit the app through `std::process::exit(0)` on Windows」）。
+
+因此三平台行為不同：
+
+| 平台 | 安裝方式 | App | `ready` 狀態畫面 |
+|---|---|---|---|
+| macOS | 解壓 `.app.tar.gz` 就地替換 | 存活 | 顯示 |
+| Linux AppImage | 就地替換 AppImage | 存活 | 顯示 |
+| **Windows** | 啟動 NSIS 安裝程式後 `exit(0)` | **立即結束** | **無法顯示** |
+
+Windows 上 `downloadAndInstall` 不會回傳，所以「更新已下載完成 / 重新啟動以完成更新」不可能出現。這不是本專案的缺陷，也**無法**藉由改前端狀態機解決——程序已經結束。
+
+### 真正的問題不是那個畫面
+
+本設計刻意要求使用者明確操作才重啟，理由是 AITerm 是終端機，重啟會結束所有 PTY 分頁與執行中的指令。該警告（`update_restart_warning`）顯示於 `ready` 狀態。
+
+**Windows 上這個警告永遠不會出現。** 使用者可能正在執行長時間指令，按下【立即更新】的下一秒 App 就消失，事前毫無告知。同一顆按鈕在 macOS 上意為「下載」，在 Windows 上意為「立刻關閉所有東西」。
+
+### 修正方向
+
+不是設法讓 `ready` 畫面出現（做不到），而是在 Windows 上把警告**提前到按下【立即更新】之前**。需要前端可取得平台資訊；`commands/updater.rs` 已有 `updater_supported` 的先例可循。
