@@ -30,8 +30,8 @@ use commands::{
         kb_create_chat_session, kb_list_chat_sessions, kb_load_chat_session, kb_delete_chat_session,
     },
     config::{
-        get_config, is_onboarding_done, set_default_tab, set_execution_mode, set_max_agent_steps,
-        set_onboarding_done, set_submit_shortcut,
+        get_config, is_appimage_integration_declined, is_onboarding_done, set_appimage_integration_declined,
+        set_default_tab, set_execution_mode, set_max_agent_steps, set_onboarding_done, set_submit_shortcut,
     },
     enterprise::{
         enterprise_accept_task, enterprise_complete_task, enterprise_install_service,
@@ -278,6 +278,8 @@ pub fn run() {
             set_max_agent_steps,
             is_onboarding_done,
             set_onboarding_done,
+            is_appimage_integration_declined,
+            set_appimage_integration_declined,
             set_submit_shortcut,
             set_default_tab,
             // Provider management

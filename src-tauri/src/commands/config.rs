@@ -29,6 +29,18 @@ pub fn set_onboarding_done(config: State<Arc<ConfigStore>>) -> Result<(), String
 }
 
 #[tauri::command]
+pub fn is_appimage_integration_declined(config: State<Arc<ConfigStore>>) -> bool {
+    config.get().appimage_integration_declined
+}
+
+#[tauri::command]
+pub fn set_appimage_integration_declined(config: State<Arc<ConfigStore>>) -> Result<(), String> {
+    config
+        .update(|cfg| { cfg.appimage_integration_declined = true; })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn set_submit_shortcut(
     shortcut: SubmitShortcut,
     config: State<Arc<ConfigStore>>,

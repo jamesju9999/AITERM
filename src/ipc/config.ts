@@ -75,3 +75,23 @@ export const setMaxAgentSteps = (steps: number): Promise<void> =>
 
 export const setDefaultTab = (tab: DefaultTab): Promise<void> =>
   invoke("set_default_tab", { tab });
+
+export type AppImageIntegrationState =
+  | { state: "not_appimage" }
+  | { state: "available" }
+  | { state: "integrated"; exec_path: string };
+
+export const appimageIntegrationState = (): Promise<AppImageIntegrationState> =>
+  invoke<AppImageIntegrationState>("appimage_integration_state");
+
+export const appimageIntegrate = (): Promise<void> =>
+  invoke<void>("appimage_integrate");
+
+export const appimageRemoveIntegration = (): Promise<void> =>
+  invoke<void>("appimage_remove_integration");
+
+export const isAppImageIntegrationDeclined = (): Promise<boolean> =>
+  invoke<boolean>("is_appimage_integration_declined");
+
+export const setAppImageIntegrationDeclined = (): Promise<void> =>
+  invoke<void>("set_appimage_integration_declined");

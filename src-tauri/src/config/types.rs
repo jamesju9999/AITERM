@@ -30,6 +30,11 @@ pub struct AppConfig {
     #[serde(default)]
     pub onboarding_done: bool,
 
+    /// Set when the user declines the AppImage menu-entry prompt, so it is
+    /// asked once rather than on every launch. Settings still offers it.
+    #[serde(default)]
+    pub appimage_integration_declined: bool,
+
     /// Which shortcut submits the command (Enter vs Shift+Enter, etc).
     #[serde(default)]
     pub submit_shortcut: SubmitShortcut,
@@ -110,6 +115,7 @@ impl Default for AppConfig {
             execution_mode: ExecutionMode::default(),
             max_agent_steps: default_max_agent_steps(),
             onboarding_done: false,
+            appimage_integration_declined: false,
             submit_shortcut: SubmitShortcut::default(),
             db_connections: vec![],
             default_tab: DefaultTab::default(),
