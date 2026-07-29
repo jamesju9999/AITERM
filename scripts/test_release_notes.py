@@ -177,6 +177,17 @@ class ExtractChangelogTest(unittest.TestCase):
         body = "<!-- changelog:start -->\r\n- 甲\r\n- 乙\r\n<!-- changelog:end -->"
         self.assertEqual(extract_changelog(body), "- 甲\n- 乙")
 
+    def test_unedited_placeholder_raises(self):
+        # The placeholder is non-empty, so the empty-block check lets it through.
+        # Approving a deployment is one click and shows no hint that the body
+        # still needs editing, so without this the placeholder reaches every
+        # user's update prompt.
+        from release_notes import PLACEHOLDER as MODULE_PLACEHOLDER
+
+        body = f"<!-- changelog:start -->\n{MODULE_PLACEHOLDER}\n<!-- changelog:end -->"
+        with self.assertRaisesRegex(ChangelogError, "never rewritten"):
+            extract_changelog(body)
+
 
 class CliTest(unittest.TestCase):
     def test_draft_reads_stdin_and_writes_bullets(self):
@@ -214,6 +225,12 @@ class CliTest(unittest.TestCase):
     def test_extra_arguments_exit_2(self):
         result = run_cli(["draft", "extra"], "")
         self.assertEqual(result.returncode, 2)
+
+    def test_extract_exits_1_on_an_unedited_placeholder(self):
+        body = f"<!-- changelog:start -->\n{PLACEHOLDER}\n<!-- changelog:end -->"
+        result = run_cli(["extract"], body)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("never rewritten", result.stderr)
 
 
 if __name__ == "__main__":

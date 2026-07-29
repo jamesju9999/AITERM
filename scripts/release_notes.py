@@ -70,6 +70,11 @@ def extract_changelog(body):
     text = body[after_start:end].strip()
     if not text:
         raise ChangelogError("the changelog block is empty")
+    if text == PLACEHOLDER:
+        raise ChangelogError(
+            "the changelog block still holds the generated placeholder — "
+            "it was never rewritten"
+        )
     return text
 
 
@@ -93,9 +98,10 @@ def main(argv):
         except ChangelogError as error:
             print(
                 f"{error}\n"
-                f"Restore both marker lines in the release body:\n"
-                f"  {START}\n  ...\n  {END}\n"
-                f"then re-run the finalize job.",
+                f"Fix the changelog block in the release body, then re-run the\n"
+                f"finalize job. It must sit between these two lines and describe\n"
+                f"the release in the words a user would understand:\n"
+                f"  {START}\n  ...\n  {END}",
                 file=sys.stderr,
             )
             return 1
