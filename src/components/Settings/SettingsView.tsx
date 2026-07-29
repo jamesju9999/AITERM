@@ -14,7 +14,6 @@ import {
   DatabaseIcon,
   BranchIcon,
   WrenchIcon,
-  BuildingIcon,
   InfoIcon
 } from "../Icons";
 import "./SettingsView.css";
@@ -64,12 +63,11 @@ export function SettingsView() {
         >
           <WrenchIcon size={16} /> {t.mcp_servers}
         </button>
-        <button
-          className={`sidebar-item ${tab === "enterprise" ? "sidebar-item--active" : ""}`}
-          onClick={() => setTab("enterprise")}
-        >
-          <BuildingIcon size={16} /> {t.settings_tab_enterprise}
-        </button>
+        {/*
+          The Enterprise entry is hidden from the sidebar. The tab, its page and
+          the render branch below are all still wired up, so restoring it means
+          putting this button back — nothing else was removed.
+        */}
         <button
           className={`sidebar-item ${tab === "about" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("about")}
