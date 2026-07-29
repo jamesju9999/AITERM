@@ -199,6 +199,14 @@ jobs:
           # Isolate cache per build target so AppImage/deb/macOS/Windows never
           # share partial artifacts, which causes E0463 "can't find crate" errors.
           shared-key: ${{ matrix.artifact_name }}
+          # Restore only, never save. GitHub scopes caches by ref and this
+          # workflow only runs on tag pushes, so anything saved here lands under
+          # refs/tags/<tag> where no later tag can reach it — ~3.8 GB of dead
+          # weight per release against a 10 GB repo limit. ci.yml's warm-cache
+          # job writes the caches this restores, on the default branch, which
+          # v1.2.6 confirmed a tag run can read (all six legs: "Restored from
+          # cache", build 508s -> 271s).
+          save-if: 'false'
 
       # Linux: install WebKitGTK and other Tauri system dependencies
       - name: Install Linux system dependencies
