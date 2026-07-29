@@ -98,8 +98,13 @@ class ExtractChangelogTest(unittest.TestCase):
             extract_changelog(body)
 
     def test_reversed_markers_raise(self):
+        # Asserts the *reason*, not just the type. A start>stop slice returns ""
+        # in Python rather than raising, so dropping the after_start argument to
+        # find() still raises — via the empty-block check, for the wrong reason.
+        # assertRaises(ChangelogError) alone passes either way and leaves the
+        # search-start argument untested.
         body = "<!-- changelog:end -->\n- x\n<!-- changelog:start -->"
-        with self.assertRaises(ChangelogError):
+        with self.assertRaisesRegex(ChangelogError, "missing <!-- changelog:end -->"):
             extract_changelog(body)
 
     def test_empty_block_raises(self):
