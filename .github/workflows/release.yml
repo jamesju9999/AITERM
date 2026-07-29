@@ -29,6 +29,34 @@ jobs:
     outputs:
       release_id: ${{ steps.create.outputs.result }}
     steps:
+      # git log needs the full history and every tag to resolve the previous
+      # release. The default shallow checkout has neither.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # These tests have no other CI gate — this repo has no PR-level workflow.
+      # Running them here means a broken release_notes.py stops the release
+      # before it can write a malformed body, rather than after.
+      - name: Test the release-notes helpers
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
+      - name: Generate the changelog draft
+        id: changelog
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          PREV=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+          # No previous tag (first release): RANGE degrades to $TAG, covering
+          # the whole history rather than failing.
+          RANGE=${PREV:+$PREV..}$TAG
+          echo "range: $RANGE"
+          {
+            echo "list<<CHANGELOG_EOF"
+            git log --pretty=format:%s "$RANGE" | python3 scripts/release_notes.py draft
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create or reuse the draft release
         id: create
         uses: actions/github-script@v7
@@ -36,6 +64,11 @@ jobs:
           TAG: ${{ github.ref_name }}
           RELEASE_BODY: |
             ## AITerm ${{ github.ref_name }}
+
+            ### 更新項目
+            <!-- changelog:start -->
+            ${{ steps.changelog.outputs.list }}
+            <!-- changelog:end -->
 
             ### 下載
             - **macOS** (Apple Silicon): 下載 `.dmg` 安裝檔
