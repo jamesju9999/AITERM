@@ -46,6 +46,7 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
           PREV=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
           # No previous tag (first release): RANGE degrades to $TAG, covering
           # the whole history rather than failing.
@@ -513,10 +514,9 @@ jobs:
     # Verify with `gh api repos/<owner>/<repo>/environments/release-approval`,
     # not by looking at the web UI.
     environment: release-approval
-    # Raised defensively. Whether the approval wait counts toward timeout-minutes
-    # is not something this plan verified, and a finalize cancelled mid-wait would
-    # leave the release as a draft with no latest.json.
-    timeout-minutes: 720
+    # The approval wait happens before a runner is assigned, so it does not count
+    # toward this. Kept at the same value as the other jobs.
+    timeout-minutes: 10
     steps:
       # finalize needs scripts/release_notes.py.
       - uses: actions/checkout@v4
@@ -585,7 +585,7 @@ jobs:
 
           manifest = {
               "version": version,
-              "notes": pathlib.Path("notes.txt").read_text().strip(),
+              "notes": pathlib.Path("notes.txt").read_text(encoding="utf-8").strip(),
               # RFC 3339 with a Z suffix. tauri-plugin-updater parses this strictly —
               # a malformed value fails deserialization of the whole manifest for every
               # platform, so it is generated here rather than taken from event payload.
