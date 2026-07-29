@@ -366,7 +366,7 @@ const zhTW = {
     update_manual_hint: "此安裝方式不支援自動更新，請至 GitHub 下載新版。",
     about_update_unavailable: "目前尚未開放更新檢查",
     about_github: "GitHub",
-    about_copyright: "© 2025 AITerm",
+    about_copyright: "© 2026 AITerm",
     // MCP Settings
     mcp_servers: "MCP Servers",
     mcp_servers_desc: "設定 Model Context Protocol 伺服器，讓 AI 可以使用外部工具。",
@@ -1387,7 +1387,7 @@ const enRaw = {
     update_manual_hint: "This install type does not support auto-update. Please download the new version from GitHub.",
     about_update_unavailable: "Update check not available",
     about_github: "GitHub",
-    about_copyright: "© 2025 AITerm",
+    about_copyright: "© 2026 AITerm",
     // MCP Settings
     mcp_servers: "MCP Servers",
     mcp_servers_desc: "Configure Model Context Protocol servers to give AI access to external tools.",
