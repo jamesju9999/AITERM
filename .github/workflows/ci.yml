@@ -1,0 +1,129 @@
+name: CI
+
+# The release workflow only runs on tag pushes, and GitHub scopes caches by ref,
+# so a cache written by one tag can never be read by the next. Caches written on
+# the default branch are the only ones a tag run can restore — that is what
+# warm-cache below exists to produce.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  # Caches are evicted after 7 days without access. Without this, a quiet week
+  # loses everything warm-cache built.
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast gate. Kept separate from warm-cache so a type error is reported in two
+  # minutes rather than after a six-platform build.
+  test:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm install
+
+      # `tsc -b`, never `tsc --noEmit`: the root tsconfig.json is a solution file
+      # ("files": []), so --noEmit type-checks nothing and always exits 0. That is
+      # exactly how a type error reached CI and failed all six release legs of
+      # v1.2.4. This line is the reason this job exists.
+      - name: Type check
+        run: npx tsc -b
+
+      - name: Frontend tests
+        run: npm run test
+
+      - name: Release-notes helper tests
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
+  # Produces the caches that release.yml restores. Every field below is aligned
+  # with release.yml's build matrix on purpose: swatinem/rust-cache derives its
+  # key from the runner OS, the shared-key and the Cargo.lock hash, so any
+  # mismatch silently yields a cache no release run will ever read.
+  warm-cache:
+    # A PR's cache would be scoped to the PR ref and unreadable by anything else.
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            shared_key: mac
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            shared_key: windows
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            shared_key: linux-x64-appimage
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            shared_key: linux-x64-deb
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            shared_key: linux-arm64-appimage
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            shared_key: linux-arm64-deb
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm install
+
+      # tauri-build resolves frontendDist ("../dist"), so the directory has to
+      # exist before cargo runs.
+      - name: Build frontend
+        run: npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: ${{ matrix.shared_key }}
+
+      - name: Install Linux system dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+
+      # --release, matching the profile `tauri build` uses. A debug target dir
+      # would fill the cache with artifacts the release run cannot reuse.
+      #
+      # cargo build rather than the full tauri build: this skips bundling and
+      # signing, which the cache does not need, while still compiling every
+      # dependency — the part that costs 8 minutes.
+      #
+      # No Java sidecar: tauri-build does not verify externalBin (measured —
+      # cargo check exits 0 with src-tauri/binaries/ moved away).
+      - name: Build (release profile)
+        working-directory: src-tauri
+        run: cargo build --release --target ${{ matrix.target }}
