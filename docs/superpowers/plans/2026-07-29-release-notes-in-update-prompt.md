@@ -808,13 +808,18 @@ git commit -m "feat(update): add a per-version release page URL"
   });
 
   it("does not offer the link while downloading", () => {
-    renderView({ status: "downloading", downloaded: 1, total: 2 }, { onOpenNotes: vi.fn() });
+    renderView(
+      { status: "downloading", version: "1.2.5", downloaded: 1, total: 2 },
+      { onOpenNotes: vi.fn() },
+    );
 
     expect(screen.queryByRole("button", { name: "查看完整說明" })).toBeNull();
   });
 ```
 
-並把檔案頂端的 `renderView` 輔助函式中的 props 物件加入 `onOpenNotes: vi.fn(),`（放在 `onOpenReleases: vi.fn(),` 之後），使其他既有測試不因缺少必要 prop 而報型別錯誤。
+`downloading` 變體帶有 `version: string`（見 `src/hooks/useUpdater.ts`），省略它會讓 `tsc -b` 失敗。
+
+並把 `onOpenNotes: vi.fn(),` 加進兩處：檔案頂端 `renderView` 輔助函式的 props 物件（放在 `onOpenReleases: vi.fn(),` 之後），**以及那兩個不經 `renderView`、直接組 `<UpdateModalView>` 的測試**（`renders nothing while idle`、`renders nothing once dismissed`）。`onOpenNotes` 是必要 prop，漏掉任何一處都會讓 `tsc -b` 失敗。
 
 - [ ] **Step 2: 執行測試確認失敗**
 
