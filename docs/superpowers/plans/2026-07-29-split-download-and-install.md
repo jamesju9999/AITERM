@@ -159,6 +159,8 @@ git commit -m "fix(update): download and install as separate user-approved steps
 Run: `npx vitest run src/hooks/useUpdater.test.ts`
 Expected: 28 個測試通過。**數字若不符，以實際為準並回報**，不要假設計畫寫的一定對。
 
+**改名不足以讓既有測試全綠。** 既有的 `relaunch() delegates to the process plugin` 會失敗，原因不是 mock 形狀，而是 `relaunch()` 的契約變了——它現在要求先有已下載的更新，否則進入 error 狀態而不呼叫 `processRelaunch`。該測試需改為先 `install()` 再 `relaunch()`。這是實作時才發現的計畫缺口。
+
 - [ ] **Step 3: 新增五項行為測試**
 
 加入 `describe` 內：
