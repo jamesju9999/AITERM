@@ -43,7 +43,8 @@ export interface UpdaterApi {
 interface PendingUpdate {
   version: string;
   body?: string;
-  downloadAndInstall: (onEvent: (event: DownloadEvent) => void) => Promise<void>;
+  download: (onEvent: (event: DownloadEvent) => void) => Promise<void>;
+  install: () => Promise<void>;
 }
 
 type DownloadEvent =
@@ -147,7 +148,7 @@ export function useUpdater(): UpdaterApi {
     set({ status: "downloading", version: update.version, downloaded: 0, total: null });
 
     try {
-      await update.downloadAndInstall((event) => {
+      await update.download((event) => {
         switch (event.event) {
           case "Started":
             total = event.data.contentLength ?? null;
@@ -174,7 +175,9 @@ export function useUpdater(): UpdaterApi {
         }
       });
       stagedRef.current = true;
-      pendingRef.current = null;
+      // pendingRef is deliberately NOT cleared: relaunch() needs this same
+      // Update object to call install(). runCheck returns early while
+      // stagedRef is set, so nothing overwrites it.
       set({ status: "ready", version: update.version });
     } catch (e) {
       set({ status: "error", phase: "install", message: errorMessage(e) });
@@ -184,8 +187,26 @@ export function useUpdater(): UpdaterApi {
   }, [set]);
 
   const relaunch = useCallback(async () => {
-    await processRelaunch();
-  }, []);
+    const update = pendingRef.current;
+    if (!update) {
+      // Unreachable through the UI — `ready` is only set after a download that
+      // keeps pendingRef — but the type is nullable and relaunching without
+      // installing would restart into the same version with no sign anything
+      // went wrong. Fail loudly instead.
+      set({ status: "error", phase: "install", message: "no downloaded update to install" });
+      return;
+    }
+    try {
+      // On Windows this launches the NSIS installer and calls exit(0), so
+      // nothing below runs — by design, and now it happens only after the user
+      // has seen the warning and pressed the button. On macOS and Linux it
+      // swaps the bundle in place and returns, and the relaunch completes it.
+      await update.install();
+      await processRelaunch();
+    } catch (e) {
+      set({ status: "error", phase: "install", message: errorMessage(e) });
+    }
+  }, [set]);
 
   const dismiss = useCallback(() => setDismissed(true), []);
 
