@@ -1070,7 +1070,7 @@ git commit -m "feat(appimage): add a Settings section to create or remove the en
 - [ ] **Step 1: Full local verification**
 
 ```bash
-npx tsc --noEmit && npm run test && (cd src-tauri && cargo test)
+npx tsc -b && npm run test && (cd src-tauri && cargo test)
 npx eslint $(git diff --name-only master...HEAD -- '*.ts' '*.tsx')
 ```
 
@@ -1104,7 +1104,7 @@ On the Ubuntu machine, with the new AppImage:
 
 - [ ] **Step 5: Record the result**
 
-Append a 驗證結果 section to `docs/superpowers/specs/2026-07-29-appimage-desktop-integration-design.md` covering which of the six checks passed, on what distro, and anything unexpected. State explicitly whatever was not verified.
+Append a 驗證結果 section to `docs/superpowers/specs/2026-07-29-appimage-desktop-integration-design.md` covering which of the nine checks passed, on what distro, and anything unexpected. State explicitly whatever was not verified.
 
 ```bash
 git add -f docs/superpowers/specs/2026-07-29-appimage-desktop-integration-design.md
