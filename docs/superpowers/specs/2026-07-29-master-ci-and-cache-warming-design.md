@@ -80,6 +80,10 @@ v1.2.4 的六條腿曾全部失敗於一個測試檔的型別錯誤，因為當�
 
 **不建 Java sidecar。** 已實測：把 `src-tauri/binaries/` 移走後 `cargo check` 仍 exit 0，代表 `tauri-build` 不驗證 `externalBin`。省去 setup-java 與 Maven。
 
+**但該實測只涵蓋 macOS，結論不可推廣到 Windows。** `tauri.windows.conf.json` 把 sidecar 列在 `bundle.resources`（而非 `externalBin`），而 `tauri-build` **會**驗證 resources 是否存在。首次執行時六個 leg 中只有 Windows 失敗於 `resource path binaries\db2-sidecar-win-x64 doesn't exist`。
+
+Windows leg 因此先建立一個佔位檔。此 job 從不打包，resources 僅被檢查存在性，而本快取要暖的相依編譯與該檔內容無關。`release.yml` 仍以 `scripts/setup-db2-win.ps1` 建置真正的 sidecar。
+
 排程存在的理由：GitHub 的快取 **7 天無存取即淘汰**。若兩次發版間隔超過七天且 master 無提交，暖好的快取會消失。
 
 ## 本設計賴以成立的假設

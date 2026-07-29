@@ -112,6 +112,25 @@ jobs:
           workspaces: src-tauri
           shared-key: ${{ matrix.shared_key }}
 
+      # tauri-build validates every entry in bundle.resources, and only
+      # tauri.windows.conf.json lists binaries/db2-sidecar-win-x64 — macOS and
+      # Linux ship the sidecar through externalBin, which tauri-build does NOT
+      # validate. That asymmetry is why the first run of this workflow failed on
+      # Windows alone.
+      #
+      # A placeholder is enough here: this job never bundles, so the file is only
+      # ever checked for existence, and the dependency compilation this cache
+      # exists for does not depend on its contents. release.yml builds the real
+      # sidecar with scripts/setup-db2-win.ps1.
+      - name: Placeholder for the Windows sidecar resource
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          if (-not (Test-Path src-tauri/binaries/db2-sidecar-win-x64)) {
+            New-Item -ItemType File -Path src-tauri/binaries/db2-sidecar-win-x64 | Out-Null
+          }
+
       - name: Install Linux system dependencies
         if: startsWith(matrix.os, 'ubuntu')
         run: |
