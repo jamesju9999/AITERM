@@ -216,4 +216,33 @@ Python 測試用標準庫 `unittest`，不引入新相依。執行：`python3 -m
 
 單元測試涵蓋了行為（點擊帶版本號回呼、`notes` 為空時仍顯示、下載中不顯示、URL 指向 `releases/tag/v<版本>` 而非 `releases/latest`），但那不等於實機驗證。
 
-第 6 項（失敗路徑）尚未執行。
+### 第 6 項：失敗路徑（已驗證）
+
+在已發布的 v1.2.5 body 上移除 `<!-- changelog:end -->` 後重跑 `finalize`。標記是 HTML 註解，GitHub 不顯示，因此讀者看到的內容全程未變。
+
+結果符合設計：
+
+```
+release body is missing <!-- changelog:end --> after <!-- changelog:start -->
+Fix the changelog block in the release body, then re-run the
+finalize job. It must sit between these two lines and describe
+the release in the words a user would understand:
+  <!-- changelog:start -->
+  ...
+  <!-- changelog:end -->
+##[error]Process completed with exit code 1.
+```
+
+job 在 `Compose latest.json` 中止，上傳與發布步驟未執行；`latest.json` 保持原狀（version 1.2.5、notes 不變）。重跑同樣停在審核閘，**審核閘第二次確認生效**。
+
+驗證後 body 已逐位元組還原（1060 bytes，24 個 CRLF 行）。
+
+## 附帶發現：GitHub 儲存的 release body 確實是 CRLF
+
+還原 body 時發現整份檔案的行尾差異，追查後確認**發版當時從 GitHub 讀回的 body 有 24 行 CRLF**。這不是推測而是實測資料。
+
+程式碼審查提出 CRLF 風險時，理由是「區塊在網頁編輯器改寫，CRLF 是正常輸入」。該推論成立。
+
+精確地說，這次發版**還不足以證明正規化是必要的**：本版 changelog 只有一行，`extract_changelog` 的 `.strip()` 本身就會移除頭尾的 `\r`。正規化真正發揮作用是在 changelog 有兩行以上時——`"\r\n- a\r\n- b\r\n"` 經 `.strip()` 後仍是 `"- a\r\n- b"`，行間的 `\r` 會存活並寫進 `latest.json`，再進入更新提示的 `white-space: pre-wrap` 元素。
+
+也就是說：**下一次寫兩行以上的更新項目時，若沒有這個正規化就會出問題**。修正時機正確。
