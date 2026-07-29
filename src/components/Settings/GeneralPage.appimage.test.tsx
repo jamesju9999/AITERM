@@ -23,7 +23,7 @@ const BASE_CONFIG = {
 };
 
 function mockCommands(table: Record<string, unknown>) {
-  const full = {
+  const full: Record<string, unknown> = {
     get_config: BASE_CONFIG,
     // GeneralPage also fetches this on mount. Leaving it unstubbed makes
     // every run emit an unhandled rejection, which is exactly the noise

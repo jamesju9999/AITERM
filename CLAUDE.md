@@ -22,7 +22,10 @@ npm run lint               # ESLint
 # Tests
 npm run test               # Frontend Vitest suite
 cd src-tauri && cargo test # Rust unit + integration tests
-npx tsc --noEmit           # Type check only (no output)
+npx tsc -b                 # Type check (what `npm run build` runs)
+                           # NOT `tsc --noEmit`: the root tsconfig.json is a
+                           # solution file ("files": []), so it checks nothing
+                           # and always exits 0.
 ```
 
 ## Architecture
