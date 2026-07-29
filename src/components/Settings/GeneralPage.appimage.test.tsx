@@ -23,7 +23,14 @@ const BASE_CONFIG = {
 };
 
 function mockCommands(table: Record<string, unknown>) {
-  const full = { get_config: BASE_CONFIG, ...table };
+  const full = {
+    get_config: BASE_CONFIG,
+    // GeneralPage also fetches this on mount. Leaving it unstubbed makes
+    // every run emit an unhandled rejection, which is exactly the noise
+    // that hides a real one later.
+    telegram_get_config: { bot_token: null, chat_id: null },
+    ...table,
+  };
   invokeMock.mockImplementation((cmd: string) =>
     Promise.resolve(cmd in full ? full[cmd] : null),
   );
