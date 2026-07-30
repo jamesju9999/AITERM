@@ -875,6 +875,19 @@ git add src-tauri/src/python_env
 git commit -m "feat(python-env): build uv invocations as assertable data"
 ```
 
+### 這一層的測試必須斷言字面值，不能只比對常數（兩次踩到）
+
+審查過程中連續發現兩個同類盲點，兩次都是**實驗證明**的，不是推論：
+
+1. `PYTHON_VERSION` 改成任何值，五個測試全綠 —— 因為它們比對的是常數符號本身，實作與預期會一起漂移。修法：加 `assert_eq!(PYTHON_VERSION, "3.12")`
+2. 把 `create_venv` 的 `spec(..., Some(runtime_dir))` 偷偷改成 `None`（等於拿掉 uv 找剛裝好 interpreter 所需的環境變數），六個測試依然全綠。修法：在該測試內斷言 `UV_PYTHON_INSTALL_DIR == Some("/data/rt")`，並在 `install_requirements` 的測試斷言它**不該**存在
+
+教訓：既然這一層是參數正確性的唯一防線（整合測試被刻意放棄），測試就必須釘住「該傳的東西真的在、值真的對」，而不只是「函式有把常數傳下去」。補測試後都要用「暫時破壞實作 → 確認只有該測試轉紅」驗證有效性。
+
+### 已知限制（刻意接受）
+
+`CommandSpec.args` 是 `Vec<String>`，路徑經 `to_string_lossy` 轉換，所以非 UTF-8 路徑會被破壞。改用 `OsString` 雖然嚴謹，但會讓斷言變複雜，正好破壞這個檔案「可在無 uv 環境下斷言參數」的存在理由。app data 與 tools 路徑由 OS 與 repo 決定，實務上是 UTF-8。
+
 ---
 
 ## Task 6: `ensure()` 編排與事件串流
