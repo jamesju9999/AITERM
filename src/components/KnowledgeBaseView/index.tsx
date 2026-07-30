@@ -217,7 +217,7 @@ export function KnowledgeBaseView({ isActive }: Props) {
     const ready = await pythonEnv.ensureProfile("doc_core");
     if (!ready) return;
     await sync(id);
-  }, [pythonEnv, sync]);
+  }, [pythonEnv.ensureProfile, sync]);
 
   const handleOpenSource = useCallback((path: string) => {
     if (!activeNotebookId) return;

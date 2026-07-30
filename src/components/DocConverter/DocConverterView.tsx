@@ -120,7 +120,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
     } finally {
       setExtracting(false);
     }
-  }, [selectedProviderId, pythonEnv, t]);
+  }, [selectedProviderId, pythonEnv.ensureProfile, t]);
 
   useEffect(() => {
     listProviders().then((list) => {

@@ -14,8 +14,17 @@ vi.mock("../../ipc/ai", () => ({
   aiChat: vi.fn(),
   formatAiError: vi.fn((e) => String(e)),
 }));
+const dragDropListenCalls: number[] = [];
+let pythonEnvLogListener: ((e: { payload: { level: string; message: string } }) => void) | undefined;
+const listenMock = vi.fn((eventName: string, cb: (e: unknown) => void) => {
+  if (eventName === "tauri://drag-drop") dragDropListenCalls.push(dragDropListenCalls.length);
+  if (eventName === "python-env-log") {
+    pythonEnvLogListener = cb as (e: { payload: { level: string; message: string } }) => void;
+  }
+  return Promise.resolve(() => {});
+});
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
+  listen: (eventName: string, cb: (e: unknown) => void) => listenMock(eventName, cb),
 }));
 
 const pythonEnvEnsure = vi.fn();
@@ -29,6 +38,8 @@ import { markitdownConvert, markitdownPickFile } from "../../ipc/markitdown";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 
 beforeEach(() => {
+  dragDropListenCalls.length = 0;
+  pythonEnvLogListener = undefined;
   const localStorageMock = {
     getItem: vi.fn((key: string) => (key === "aiterm_locale" ? "zh-TW" : null)),
     setItem: vi.fn(),
@@ -106,6 +117,26 @@ describe("DocConverterView", () => {
       fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
     });
     expect(markitdownConvert).not.toHaveBeenCalled();
+  });
+
+  it("registers the OS drag-drop listener exactly once, even as install log lines re-render the view", async () => {
+    // usePythonEnvGate() returns a new object every render. processFilePath
+    // used to depend on that whole object, so every log line appended during
+    // an install (each one a state update, each one a re-render) produced a
+    // brand-new processFilePath — and the drag-drop useEffect tore down and
+    // re-registered its listener on every single one of them.
+    renderView();
+    await act(async () => {}); // let the initial effects run
+    expect(dragDropListenCalls.length).toBe(1);
+
+    expect(pythonEnvLogListener).toBeDefined();
+    await act(async () => {
+      for (let i = 0; i < 20; i++) {
+        pythonEnvLogListener!({ payload: { level: "info", message: `line ${i}` } });
+      }
+    });
+
+    expect(dragDropListenCalls.length).toBe(1);
   });
 });
 
