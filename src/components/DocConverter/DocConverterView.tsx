@@ -1,5 +1,6 @@
 // src/components/DocConverter/DocConverterView.tsx
 import React, { useState, useRef, useCallback, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { aiChat, formatAiError } from "../../ipc/ai";
@@ -77,6 +78,7 @@ const NORMALIZATION_SYSTEM_PROMPT = `你是資料字典格式化工具。將輸�
 
 export function DocConverterView({ isActive: _isActive }: { isActive: boolean }) {
   const { t } = useLocale();
+  const navigate = useNavigate();
   const [extractState, setExtractState] = useState<ExtractState | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -269,6 +271,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
         error={pythonEnv.error}
         onInstall={() => pythonEnv.ensureProfile(gateProfile)}
         onRecheck={() => pythonEnv.ensureProfile(gateProfile)}
+        onPickInterpreter={() => navigate("/settings", { state: { tab: "general" } })}
       />
 
       {error && (

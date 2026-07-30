@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { DocConverterView } from "./DocConverterView";
 
 // Mock IPC
@@ -56,9 +57,11 @@ beforeEach(() => {
 
 function renderView() {
   return render(
-    <LocaleProvider>
-      <DocConverterView isActive={true} />
-    </LocaleProvider>
+    <MemoryRouter>
+      <LocaleProvider>
+        <DocConverterView isActive={true} />
+      </LocaleProvider>
+    </MemoryRouter>
   );
 }
 
@@ -269,5 +272,42 @@ describe("DocConverterView audio profile candidate install", () => {
     expect(window.confirm).not.toHaveBeenCalled();
     expect(pythonEnvEnsure).not.toHaveBeenCalledWith("doc_audio");
     expect(markitdownConvert).toHaveBeenCalledWith("/tmp/photo.png", undefined);
+  });
+});
+
+describe("DocConverterView pick-interpreter escape hatch", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pythonEnvEnsure.mockRejectedValue("無法取得 Python：network unreachable");
+    pythonEnvStatusMock.mockResolvedValue({
+      uvAvailable: true,
+      pythonVersion: null,
+      installed: [],
+      venvPath: "/data/python-env",
+      userInterpreter: null,
+    });
+  });
+
+  it("navigates to Settings → General when the user picks an interpreter manually", async () => {
+    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/report.pdf");
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <LocaleProvider>
+          <Routes>
+            <Route path="/" element={<DocConverterView isActive={true} />} />
+            <Route path="/settings" element={<div>SETTINGS_STUB</div>} />
+          </Routes>
+        </LocaleProvider>
+      </MemoryRouter>
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
+    });
+
+    const pickBtn = await screen.findByRole("button", { name: /interpreter|手動指定/ });
+    fireEvent.click(pickBtn);
+
+    expect(screen.getByText("SETTINGS_STUB")).toBeInTheDocument();
   });
 });

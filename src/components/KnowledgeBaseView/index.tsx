@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { kbOpenDocument } from "../../ipc/knowledgeBase";
@@ -93,6 +94,7 @@ interface Props {
 
 export function KnowledgeBaseView({ isActive }: Props) {
   const { t } = useLocale();
+  const navigate = useNavigate();
   const { notebooks, loading, syncingId, syncProgress, create, remove, sync } = useNotebooks();
   const pythonEnv = usePythonEnvGate();
   const [activeNotebookId, setActiveNotebookId] = useState<string | null>(loadSavedNotebookId);
@@ -247,6 +249,7 @@ export function KnowledgeBaseView({ isActive }: Props) {
           error={pythonEnv.error}
           onInstall={() => pythonEnv.ensureProfile("doc_core")}
           onRecheck={() => pythonEnv.ensureProfile("doc_core")}
+          onPickInterpreter={() => navigate("/settings", { state: { tab: "general" } })}
         />
         {!activeNotebook ? (
           <div className="ca-empty">

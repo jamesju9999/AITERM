@@ -1,5 +1,6 @@
 // src/components/ApiDocsView/ApiDocsView.tsx
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { useLocale } from "../../contexts/LocaleContext";
 import {
   apiDocsDetect,
@@ -43,6 +44,7 @@ function extractDomain(url: string): string {
 
 export function ApiDocsView({ isActive }: Props) {
   const { t } = useLocale();
+  const navigate = useNavigate();
 
   // URL input
   const [url, setUrl] = useState("");
@@ -487,6 +489,7 @@ Reformat the following raw API documentation page into clean Markdown.
         error={pythonEnv.error}
         onInstall={() => pythonEnv.ensureProfile("api_docs")}
         onRecheck={() => pythonEnv.ensureProfile("api_docs")}
+        onPickInterpreter={() => navigate("/settings", { state: { tab: "general" } })}
       />
 
       {/* Main layout: left tree + right settings */}

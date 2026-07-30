@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { KnowledgeBaseView } from "./index";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import type { Notebook } from "../../ipc/knowledgeBase";
@@ -70,9 +71,11 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 function renderView() {
   return render(
-    <LocaleProvider>
-      <KnowledgeBaseView isActive={true} />
-    </LocaleProvider>
+    <MemoryRouter>
+      <LocaleProvider>
+        <KnowledgeBaseView isActive={true} />
+      </LocaleProvider>
+    </MemoryRouter>
   );
 }
 
@@ -118,5 +121,41 @@ describe("KnowledgeBaseView python env gate", () => {
 
     expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_core");
     expect(sync).not.toHaveBeenCalled();
+  });
+});
+
+describe("KnowledgeBaseView pick-interpreter escape hatch", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pythonEnvEnsure.mockRejectedValue("無法取得 Python：network unreachable");
+    pythonEnvStatusMock.mockResolvedValue({
+      uvAvailable: true,
+      pythonVersion: null,
+      installed: [],
+      venvPath: "/data/python-env",
+      userInterpreter: null,
+    });
+  });
+
+  it("navigates to Settings → General when the user picks an interpreter manually", async () => {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <LocaleProvider>
+          <Routes>
+            <Route path="/" element={<KnowledgeBaseView isActive={true} />} />
+            <Route path="/settings" element={<div>SETTINGS_STUB</div>} />
+          </Routes>
+        </LocaleProvider>
+      </MemoryRouter>
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^(同步|Sync)$/ }));
+    });
+
+    const pickBtn = await screen.findByRole("button", { name: /interpreter|手動指定/ });
+    fireEvent.click(pickBtn);
+
+    expect(screen.getByText("SETTINGS_STUB")).toBeInTheDocument();
   });
 });
