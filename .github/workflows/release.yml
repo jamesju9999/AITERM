@@ -233,6 +233,11 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: bash scripts/setup-db2-mac.sh
 
+      # macOS: download the uv binary (Python env manager) for externalBin bundling
+      - name: Fetch uv (macOS)
+        if: matrix.os == 'macos-latest'
+        run: bash scripts/setup-uv-mac.sh
+
       # Windows: reqwest uses rustls-tls, tiberius uses native-tls (Schannel) — no OpenSSL needed
 
       # Windows: build Java sidecar from source and download bundled JRE
@@ -241,6 +246,12 @@ jobs:
         shell: pwsh
         run: pwsh -ExecutionPolicy Bypass -File scripts\setup-db2-win.ps1
 
+      # Windows: download the uv binary (Python env manager) for externalBin bundling
+      - name: Fetch uv (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: pwsh -ExecutionPolicy Bypass -File scripts\setup-uv-win.ps1
+
       # Linux .deb only: build Java sidecar and bundle it.
       # AppImage builds intentionally skip DB2 — linuxdeploy fails when the JRE's .so
       # files are in the AppDir (it tries to resolve libjvm.so's internal deps and errors out).
@@ -248,6 +259,15 @@ jobs:
       - name: Build DB2 sidecar (Linux .deb)
         if: matrix.os == 'ubuntu-24.04' || matrix.os == 'ubuntu-24.04-arm'
         run: ARCH=${{ matrix.db2_arch }} bash scripts/setup-db2-linux.sh
+
+      # Linux: download the uv binary (Python env manager) for externalBin bundling.
+      # Unlike DB2 (which AppImage legs intentionally skip), tauri.linux.conf.json's
+      # externalBin applies to all four Linux legs, so AppImage legs need uv too —
+      # they read the repo's committed conf as-is (only the two .deb legs regenerate
+      # it below), and tauri build validates externalBin exists on every leg.
+      - name: Fetch uv (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: ARCH=${{ matrix.db2_arch }} bash scripts/setup-uv-linux.sh
 
       # This rewrites the file wholesale rather than patching it, so anything
       # missing from the dict below is missing from the .deb — the MarkItDown
@@ -262,7 +282,7 @@ jobs:
           import json
           conf = {
             'bundle': {
-              'externalBin': [],
+              'externalBin': ['binaries/uv'],
               'resources': {
                 '${{ matrix.db2_sidecar_dir }}': 'db2-sidecar',
                 '../tools/ApiDocFetcher/*.py': 'ApiDocFetcher/',
