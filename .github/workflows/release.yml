@@ -249,6 +249,12 @@ jobs:
         if: matrix.os == 'ubuntu-24.04' || matrix.os == 'ubuntu-24.04-arm'
         run: ARCH=${{ matrix.db2_arch }} bash scripts/setup-db2-linux.sh
 
+      # This rewrites the file wholesale rather than patching it, so anything
+      # missing from the dict below is missing from the .deb — the MarkItDown
+      # entries were, which shipped .deb builds with no converter.py at all,
+      # breaking document conversion and knowledge-base import on Linux. Keep
+      # this dict in sync with src-tauri/tauri.linux.conf.json; the only
+      # intended difference is the db2_sidecar_dir path.
       - name: Patch tauri.linux.conf.json with DB2 resources (Linux .deb)
         if: matrix.os == 'ubuntu-24.04' || matrix.os == 'ubuntu-24.04-arm'
         run: |
@@ -261,7 +267,9 @@ jobs:
                 '${{ matrix.db2_sidecar_dir }}': 'db2-sidecar',
                 '../tools/ApiDocFetcher/*.py': 'ApiDocFetcher/',
                 '../tools/ApiDocFetcher/strategies/*.py': 'ApiDocFetcher/strategies/',
-                '../tools/ApiDocFetcher/requirements.txt': 'ApiDocFetcher/requirements.txt'
+                '../tools/ApiDocFetcher/requirements.txt': 'ApiDocFetcher/requirements.txt',
+                '../tools/MarkItDown/converter.py': 'MarkItDown/converter.py',
+                '../tools/MarkItDown/requirements.txt': 'MarkItDown/requirements.txt'
               }
             }
           }
