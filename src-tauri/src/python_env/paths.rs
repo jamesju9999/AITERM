@@ -32,7 +32,7 @@ pub fn venv_interpreter(venv: &Path) -> PathBuf {
 }
 
 /// Locate the bundled uv binary, or `None` if it wasn't shipped.
-pub fn uv_binary(app: &AppHandle) -> Option<PathBuf> {
+pub fn uv_binary() -> Option<PathBuf> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
     let plain = exe_dir.join(exe_name(UV_STEM));
     if plain.exists() {
