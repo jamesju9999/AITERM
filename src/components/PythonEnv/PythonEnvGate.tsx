@@ -23,25 +23,16 @@ export function PythonEnvGate({ state, lines, error, onInstall, onRecheck, onPic
 
   if (state === "ready") return null;
 
+  // The install log and any captured error are meaningful in every non-ready
+  // state, not just "installing" — a failure that flips the state to
+  // missing/failed/broken must not make the log (or the error) disappear,
+  // since that log is often the only place the real uv/pip error is visible.
   return (
     <div className="python-env-gate">
       {state === "installing" && (
         <>
           <div className="python-env-gate__title">{t.python_env_preparing}</div>
           <div className="python-env-gate__hint">{t.python_env_first_run_hint}</div>
-          <div className="python-env-gate__log">
-            {lines.map((line, i) => (
-              <div
-                key={i}
-                className={`python-env-gate__log-line python-env-gate__log-line--${
-                  line.isError ? "error" : "ok"
-                }`}
-              >
-                {line.text}
-              </div>
-            ))}
-            <div ref={bottomRef} />
-          </div>
         </>
       )}
 
@@ -49,6 +40,37 @@ export function PythonEnvGate({ state, lines, error, onInstall, onRecheck, onPic
         <>
           <div className="python-env-gate__title">{t.python_env_missing_title}</div>
           <div className="python-env-gate__hint">{t.python_env_missing_body}</div>
+        </>
+      )}
+
+      {state === "failed" && (
+        <div className="python-env-gate__title">{t.python_env_failed_title}</div>
+      )}
+
+      {state === "broken" && (
+        <div className="python-env-gate__title">{t.python_env_broken_title}</div>
+      )}
+
+      {error && <div className="python-env-gate__error">{error}</div>}
+
+      {lines.length > 0 && (
+        <div className="python-env-gate__log">
+          {lines.map((line, i) => (
+            <div
+              key={i}
+              className={`python-env-gate__log-line python-env-gate__log-line--${
+                line.isError ? "error" : "ok"
+              }`}
+            >
+              {line.text}
+            </div>
+          ))}
+          <div ref={bottomRef} />
+        </div>
+      )}
+
+      {state === "missing" && (
+        <>
           <div className="python-env-gate__actions">
             <button className="python-env-gate__btn python-env-gate__btn--primary" onClick={onInstall}>
               {t.python_env_install}
@@ -67,16 +89,16 @@ export function PythonEnvGate({ state, lines, error, onInstall, onRecheck, onPic
       )}
 
       {state === "failed" && (
-        <>
-          <div className="python-env-gate__title">{t.python_env_failed_title}</div>
-          {error && <div className="python-env-gate__error">{error}</div>}
-          <div className="python-env-gate__actions">
-            <button className="python-env-gate__btn python-env-gate__btn--primary" onClick={onInstall}>
-              {t.python_env_retry}
-            </button>
-          </div>
-        </>
+        <div className="python-env-gate__actions">
+          <button className="python-env-gate__btn python-env-gate__btn--primary" onClick={onInstall}>
+            {t.python_env_retry}
+          </button>
+        </div>
       )}
+
+      {/* "broken" gets no retry button — the bundled uv binary is what's
+          broken, and clicking "install" would just fail the same way again.
+          Reinstalling AITerm is the actual fix. */}
     </div>
   );
 }

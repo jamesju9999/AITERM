@@ -56,6 +56,27 @@ describe("usePythonEnvGate", () => {
     expect(result.current.state).toBe("missing");
   });
 
+  it("shows the broken-install card when uv itself is unusable, not the missing-Python card", async () => {
+    // uvAvailable: false means the bundled uv binary is gone or unusable — no
+    // "install it for me" button can fix that, so it must not collapse into
+    // "missing" the way a plain missing-Python failure does.
+    ensure.mockRejectedValue("uv 無法執行：permission denied");
+    status.mockResolvedValue({
+      uvAvailable: false,
+      pythonVersion: null,
+      installed: [],
+      venvPath: "/data/python-env",
+      userInterpreter: null,
+    });
+    const { result } = renderHook(() => usePythonEnvGate());
+
+    await act(async () => {
+      await result.current.ensureProfile("doc_core");
+    });
+
+    expect(result.current.state).toBe("broken");
+  });
+
   it("shows a plain failure when Python exists but the install broke", async () => {
     ensure.mockRejectedValue("安裝 doc_core 相依套件失敗：…");
     status.mockResolvedValue({

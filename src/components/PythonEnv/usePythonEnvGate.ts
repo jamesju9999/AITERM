@@ -8,7 +8,7 @@ import {
 } from "../../ipc/pythonEnv";
 import type { InstallLogLine } from "../Settings/McpInstallTerminal";
 
-export type GateState = "ready" | "installing" | "missing" | "failed";
+export type GateState = "ready" | "installing" | "missing" | "failed" | "broken";
 
 /**
  * Shared state for every feature that needs the managed Python environment:
@@ -57,7 +57,15 @@ export function usePythonEnvGate() {
     } catch (e) {
       setError(String(e));
       const status = await pythonEnvStatus().catch(() => null);
-      setState(status && status.pythonVersion === null ? "missing" : "failed");
+      if (status && !status.uvAvailable) {
+        // The bundled uv binary itself is missing or unusable (broken package,
+        // quarantine, permissions) — no amount of retrying "install" fixes that.
+        setState("broken");
+      } else if (status && status.pythonVersion === null) {
+        setState("missing");
+      } else {
+        setState("failed");
+      }
       return false;
     }
   }, []);

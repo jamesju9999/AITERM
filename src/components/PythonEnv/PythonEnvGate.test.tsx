@@ -35,6 +35,39 @@ describe("PythonEnvGate", () => {
     expect(screen.getByRole("button", { name: /interpreter|手動指定/ })).toBeTruthy();
   });
 
+  it("still shows the error and log lines from a failed first attempt when Python is missing", () => {
+    // A first-run failure (e.g. no network, or uv rejecting a corrupt
+    // download) must not be swallowed just because the resulting state is
+    // "missing" rather than "failed" — that error is the only clue the user
+    // gets about what actually went wrong.
+    render(
+      <PythonEnvGate
+        state="missing"
+        lines={[{ text: "Resolved 36 packages", isError: false }, { text: "error: connection reset", isError: true }]}
+        error="無法取得 Python：network unreachable"
+        onInstall={() => {}}
+        onRecheck={() => {}}
+      />,
+    );
+    expect(screen.getByText(/network unreachable/)).toBeTruthy();
+    expect(screen.getByText("Resolved 36 packages")).toBeTruthy();
+    expect(screen.getByText("error: connection reset")).toBeTruthy();
+  });
+
+  it("shows the broken-install message and error, but no install button, when uv itself is unusable", () => {
+    render(
+      <PythonEnvGate
+        state="broken"
+        lines={[]}
+        error="uv 無法執行：permission denied"
+        onInstall={() => {}}
+        onRecheck={() => {}}
+      />,
+    );
+    expect(screen.getByText(/permission denied/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Install it for me|幫我安裝/ })).toBeNull();
+  });
+
   it("shows the error and a retry when the install failed", () => {
     render(
       <PythonEnvGate
