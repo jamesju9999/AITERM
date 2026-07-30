@@ -74,6 +74,12 @@ pub struct AppConfig {
     /// Configured MCP server connections.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+
+    /// Interpreter the user pointed us at when uv can't fetch one (offline or
+    /// behind a proxy). The venv is still created under app data — this only
+    /// changes which interpreter it's based on.
+    #[serde(default)]
+    pub python_interpreter: Option<String>,
 }
 
 fn default_max_agent_steps() -> u32 { 5 }
@@ -126,6 +132,7 @@ impl Default for AppConfig {
             enterprise_policy: None,
             mcp_enabled: true,
             mcp_servers: vec![],
+            python_interpreter: None,
         }
     }
 }
@@ -636,5 +643,18 @@ mod tests {
         let cfg = AppConfig::default();
         assert!(cfg.mcp_enabled);
         assert!(cfg.mcp_servers.is_empty());
+    }
+
+    #[test]
+    fn python_interpreter_defaults_to_none_for_existing_configs() {
+        let cfg: AppConfig = toml::from_str("").expect("empty config should parse");
+        assert_eq!(cfg.python_interpreter, None);
+    }
+
+    #[test]
+    fn python_interpreter_round_trips() {
+        let cfg: AppConfig =
+            toml::from_str("python_interpreter = \"/usr/local/bin/python3.12\"").unwrap();
+        assert_eq!(cfg.python_interpreter.as_deref(), Some("/usr/local/bin/python3.12"));
     }
 }
