@@ -9,6 +9,7 @@ pub mod guard;
 pub mod knowledge_base;
 pub mod mcp;
 pub mod pty;
+pub mod python_env;
 pub mod secret;
 pub mod telegram;
 pub mod vcs;
