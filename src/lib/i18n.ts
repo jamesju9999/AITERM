@@ -1025,6 +1025,19 @@ const zhTW = {
     ai_err_rate_limit_opaque: "aiterm: 請求被 API 拒絕（標示為 rate limit，但未附原因，通常不是配額用盡）",
     ai_err_format: (reason: string) => `aiterm: AI 回傳格式錯誤（${reason}）`,
     ai_err_invalid_input: (reason: string) => `aiterm: 前端傳送的訊息格式無效（${reason}）`,
+
+    // Python environment
+    python_env_title: "Python 環境",
+    python_env_preparing: "正在準備 Python 環境…",
+    python_env_first_run_hint: "首次使用需要下載 Python 與相依套件，約需 20–30 秒。",
+    python_env_missing_title: "需要 Python 環境",
+    python_env_missing_body: "這項功能需要 Python。AITerm 可以自行安裝一份，不會影響你系統上的 Python。",
+    python_env_install: "幫我安裝",
+    python_env_recheck: "我自己裝好了，重新偵測",
+    python_env_pick_interpreter: "手動指定路徑",
+    python_env_failed_title: "Python 環境準備失敗",
+    python_env_retry: "重試",
+    python_env_manual_hint: "若無法自動安裝（例如公司網路限制），可自行安裝 Python 3.10 或更新版本後手動指定路徑：\n• macOS：brew install python3  或前往 https://www.python.org/downloads/\n• Windows：前往 https://www.python.org/downloads/\n• Linux：sudo apt install python3.10（或更新版本）",
 } as const;
 
 const enRaw = {
@@ -1949,6 +1962,19 @@ const enRaw = {
     ai_err_rate_limit_opaque: "aiterm: Request rejected by the API (labelled a rate limit, but no reason given — usually not a quota problem)",
     ai_err_format: (reason: string) => `aiterm: AI response format error (${reason})`,
     ai_err_invalid_input: (reason: string) => `aiterm: Invalid message format sent by client (${reason})`,
+
+    // Python environment
+    python_env_title: "Python Environment",
+    python_env_preparing: "Preparing the Python environment…",
+    python_env_first_run_hint: "First use needs to download Python and its dependencies, about 20–30 seconds.",
+    python_env_missing_title: "Python Environment Needed",
+    python_env_missing_body: "This feature needs Python. AITerm can install its own copy without touching the Python already on your system.",
+    python_env_install: "Install it for me",
+    python_env_recheck: "I already installed it, check again",
+    python_env_pick_interpreter: "Point to an interpreter manually",
+    python_env_failed_title: "Python Environment Setup Failed",
+    python_env_retry: "Retry",
+    python_env_manual_hint: "If automatic install doesn't work (e.g. a restricted corporate network), install Python 3.10 or newer yourself and point to it manually:\n• macOS: brew install python3, or visit https://www.python.org/downloads/\n• Windows: visit https://www.python.org/downloads/\n• Linux: sudo apt install python3.10 (or newer)",
 } as const;
 
 export const translations = {
