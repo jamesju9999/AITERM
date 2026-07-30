@@ -480,11 +480,17 @@ markitdown[pdf,docx,pptx,xlsx]>=0.1.0
 markitdown[image,audio-transcription]>=0.1.0
 ```
 
-`src-tauri/tauri.conf.json` 的 `resources` 中，`"../tools/MarkItDown/requirements.txt"` 那一行之後加入：
+**base `tauri.conf.json` 原本沒有 `resources` key** —— MarkItDown 與 ApiDocFetcher 的條目只存在於三份平台 conf，各自完整重複列出。所以這裡是新增整個 key，只放新項目：
 
 ```json
-      "../tools/MarkItDown/requirements-media.txt": "MarkItDown/requirements-media.txt",
+    "resources": {
+      "../tools/MarkItDown/requirements-media.txt": "MarkItDown/requirements-media.txt"
+    }
 ```
+
+**為什麼放 base 就夠（已實證，不是推論）**：`externalBin` 是陣列，JSON Merge Patch 對陣列是整體取代，所以 Task 1 必須改四份。但 `resources` 是物件，對物件是**遞迴合併**。實驗方法：在 base 的 resources 放一個不存在的路徑，`cargo check --lib` 會失敗並指名該路徑（`tauri-build` 驗證每個 resources 項目是否存在）—— 即使平台 conf 也定義了完整的 resources 物件，base 的項目依然生效。
+
+這留下一個刻意的不對稱：media 條目在 base，其餘在平台 conf。不把既有重複項目一併搬進 base，是因為那是範圍外的重構；而 media 放 base 反而更穩健 —— `release.yml` 會整檔重寫 `tauri.linux.conf.json`，放在 base 的項目不會被那個重寫波及。
 
 - [ ] **Step 5: 執行測試**
 
@@ -1949,14 +1955,17 @@ git commit -m "feat(doc-converter): offer the media profile only when the file n
                 '../tools/ApiDocFetcher/strategies/*.py': 'ApiDocFetcher/strategies/',
                 '../tools/ApiDocFetcher/requirements.txt': 'ApiDocFetcher/requirements.txt',
                 '../tools/MarkItDown/converter.py': 'MarkItDown/converter.py',
-                '../tools/MarkItDown/requirements.txt': 'MarkItDown/requirements.txt',
-                '../tools/MarkItDown/requirements-media.txt': 'MarkItDown/requirements-media.txt'
+                '../tools/MarkItDown/requirements.txt': 'MarkItDown/requirements.txt'
               }
             }
           }
 ```
 
-改完後比對一次：這份生成的內容除了 `db2_sidecar_dir` 之外，應與 repo 的 `src-tauri/tauri.linux.conf.json` 完全一致。兩份不一致就是下一個潛伏 bug 的來源。
+（`converter.py` 與 `requirements.txt` 這兩行已由 master 上的 hotfix `27b280b` 補上，此處只需確認 `externalBin` 帶上 `binaries/uv`。）
+
+**不要在這裡加 `requirements-media.txt`。** Task 3 把它放進 base `tauri.conf.json` 的 `resources`，而 `resources` 是物件、走遞迴合併，所以 base 的項目在每個平台都生效 —— 包含這份被 CI 整檔重寫的 Linux conf（重寫只覆蓋平台 conf，動不到 base）。在這裡重複列出不會壞，但會讓「media 條目歸屬於 base」這個刻意的決定變模糊。
+
+改完後比對一次：這份生成的內容除了 `db2_sidecar_dir` 之外，應與 repo 的 `src-tauri/tauri.linux.conf.json` 完全一致 —— 注意兩者都**不該**含 media 條目，那一項只在 base。
 
 同時確認 macOS／Windows 兩邊：`release.yml:271` 之後的 macOS 注入步驟與 `tauri.windows.conf.json` 若也會覆寫 `externalBin`，要一併帶上 `binaries/uv`。
 
