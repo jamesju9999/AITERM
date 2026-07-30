@@ -112,11 +112,12 @@ jobs:
           workspaces: src-tauri
           shared-key: ${{ matrix.shared_key }}
 
-      # tauri-build validates every entry in bundle.resources, and only
-      # tauri.windows.conf.json lists binaries/db2-sidecar-win-x64 — macOS and
-      # Linux ship the sidecar through externalBin, which tauri-build does NOT
-      # validate. That asymmetry is why the first run of this workflow failed on
-      # Windows alone.
+      # tauri-build validates every entry in bundle.resources and bundle.externalBin
+      # (both — see the uv placeholder step below for the externalBin case). Only
+      # tauri.windows.conf.json references binaries/db2-sidecar-win-x64 as a
+      # committed resource; the macOS and Linux confs only gain a db2-sidecar
+      # resource entry when release.yml patches them at release-build time, which
+      # this job never runs. That's why only Windows needs a db2 placeholder here.
       #
       # A placeholder is enough here: this job never bundles, so the file is only
       # ever checked for existence, and the dependency compilation this cache
@@ -130,6 +131,27 @@ jobs:
           if (-not (Test-Path src-tauri/binaries/db2-sidecar-win-x64)) {
             New-Item -ItemType File -Path src-tauri/binaries/db2-sidecar-win-x64 | Out-Null
           }
+
+      # tauri-build DOES validate every entry in bundle.externalBin (measured —
+      # cargo check fails with "resource path ... doesn't exist" when
+      # src-tauri/binaries/uv-<triple> is missing, and a 0-byte file is enough
+      # to pass, same as the db2 placeholder above). uv is registered in
+      # externalBin on all three platform confs, so every leg here needs its
+      # own placeholder before cargo runs.
+      #
+      # A placeholder is enough here for the same reason as the Windows sidecar
+      # one: this job never bundles, only checks existence, and the dependency
+      # compilation this cache exists for does not depend on the binary's
+      # contents. release.yml fetches the real binary with scripts/setup-uv-*.
+      - name: Placeholder for the uv externalBin
+        shell: bash
+        run: |
+          mkdir -p src-tauri/binaries
+          FILE="src-tauri/binaries/uv-${{ matrix.target }}"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            FILE="${FILE}.exe"
+          fi
+          [ -f "$FILE" ] || : > "$FILE"
 
       - name: Install Linux system dependencies
         if: startsWith(matrix.os, 'ubuntu')
@@ -149,8 +171,8 @@ jobs:
       # signing, which the cache does not need, while still compiling every
       # dependency — the part that costs 8 minutes.
       #
-      # No Java sidecar: tauri-build does not verify externalBin (measured —
-      # cargo check exits 0 with src-tauri/binaries/ moved away).
+      # tauri-build DOES verify externalBin (see the placeholder step above) —
+      # the uv-<triple> placeholder created there is what lets this succeed.
       - name: Build (release profile)
         working-directory: src-tauri
         run: cargo build --release --target ${{ matrix.target }}

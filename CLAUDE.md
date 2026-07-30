@@ -75,6 +75,7 @@ The shell of the app is `TerminalApp.tsx` (multi-tab state, keyboard shortcuts: 
 
 - **Cross-platform requirement**: All features and bug fixes must work on **macOS, Windows, and Linux** unless the feature is explicitly platform-specific (e.g. DB2). Before finalizing any implementation, consider whether it uses platform-specific APIs, paths, shell behavior, or dependencies.
 - **DB2 uses a Java (JDBC) sidecar** (`db2-sidecar-java/`) — cross-platform (macOS, Windows, Linux). The sidecar runs `java -jar db2sidecar.jar` and must be built locally (see `scripts/setup-db2-*.sh`). `src-tauri/binaries/` is gitignored; build the JAR before running `tauri:dev`.
+- **uv is a bundled sidecar too** (`binaries/uv`), registered in `externalBin` on all three platform confs. `tauri-build`'s `build.rs` validates every `externalBin` entry exists on disk *at compile time* — so without first running the matching `scripts/setup-uv-{mac,linux,win}.{sh,ps1}`, not just `tauri:dev`/`tauri:build` but even `cd src-tauri && cargo test` or `cargo check` will fail with a missing resource-path error. Run the setup script for your platform first.
 - **Platform-specific Tauri config**: use `src-tauri/tauri.{macos|windows|linux}.conf.json` to override `tauri.conf.json` per platform
 - `src-tauri/binaries/` is gitignored — platform binaries are never committed; handle via CI steps or platform config overrides
 - **TLS**: `reqwest` uses `rustls-tls`; `tiberius` uses `native-tls` (Schannel on Windows, SecureTransport on macOS) — OpenSSL is not required on any CI platform
