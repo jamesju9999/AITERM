@@ -29,7 +29,16 @@ pub fn record_installed(venv: &Path, profile: Profile, requirements: &Path) -> R
 
     std::fs::create_dir_all(venv).with_context(|| format!("creating {}", venv.display()))?;
     let body = serde_json::to_string_pretty(&marker)?;
-    std::fs::write(venv.join(MARKER_FILE), body).with_context(|| format!("writing {MARKER_FILE}"))
+
+    // Write-then-rename rather than writing in place: every profile shares this
+    // one file, so a write interrupted midway would leave JSON that reads as
+    // "nothing installed" and force a reinstall of everything already set up,
+    // not just the profile being recorded. rename is atomic within a filesystem,
+    // and the temp file sits in the same directory to guarantee that.
+    let tmp = venv.join(format!("{MARKER_FILE}.tmp"));
+    std::fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, venv.join(MARKER_FILE))
+        .with_context(|| format!("replacing {MARKER_FILE}"))
 }
 
 /// Profiles with a recorded hash, whatever it is. Used for status display, so
@@ -115,6 +124,10 @@ mod tests {
         assert!(!needs_install(dir.path(), Profile::DocCore, &req).unwrap());
         assert!(!needs_install(dir.path(), Profile::DocMedia, &req).unwrap());
         assert!(needs_install(dir.path(), Profile::ApiDocs, &req).unwrap());
+
+        // Write-then-rename must not leave a temp file behind after two
+        // consecutive writes to the shared marker file.
+        assert!(!dir.path().join(format!("{MARKER_FILE}.tmp")).exists());
     }
 
     #[test]
@@ -124,5 +137,25 @@ mod tests {
         record_installed(dir.path(), Profile::DocCore, &req).unwrap();
 
         assert_eq!(installed_profiles(dir.path()), vec![Profile::DocCore]);
+    }
+
+    #[test]
+    fn needs_install_errors_when_the_requirements_file_is_missing() {
+        // Task 6 calls this and defaults to "install" on Err. That only stays a
+        // sane default if a missing requirements file is an Err and not Ok(true)
+        // — the two mean different things (packaging bug vs. first run), and
+        // collapsing them here would hide the former.
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist.txt");
+        assert!(needs_install(dir.path(), Profile::DocCore, &missing).is_err());
+    }
+
+    #[test]
+    fn a_corrupt_marker_also_reads_as_nothing_installed_for_the_listing() {
+        // The "corrupt means nothing installed" guarantee has to hold on both
+        // public read paths, not just needs_install.
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join(MARKER_FILE), b"{not json").unwrap();
+        assert!(installed_profiles(dir.path()).is_empty());
     }
 }
