@@ -34,6 +34,9 @@ pub enum PythonEnvError {
     #[error("找不到內建的 uv 執行檔。開發環境請先執行 scripts/setup-uv-mac.sh（或對應平台的 setup-uv 腳本）。")]
     UvMissing,
 
+    #[error("內建的 uv 執行檔無法啟動（可能是權限或 macOS 隔離屬性問題）：{0}")]
+    UvUnusable(String),
+
     #[error("無法取得 Python：{0}")]
     PythonUnavailable(String),
 
@@ -104,31 +107,40 @@ pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, Python
     let mut python = paths::venv_interpreter(&venv);
     if !python.exists() {
         if interpreter.is_none() {
-            log(app, "info", "正在取得 Python…");
+            emit_log(app, "info", "正在取得 Python…");
             run(app, commands::install_python(&uv, &runtimes))
                 .await
-                .map_err(PythonEnvError::PythonUnavailable)?;
+                .map_err(|f| match f {
+                    RunFailure::NotExecutable(e) => PythonEnvError::UvUnusable(e),
+                    RunFailure::Failed(e) => PythonEnvError::PythonUnavailable(e),
+                })?;
         }
-        log(app, "info", "正在建立 Python 環境…");
+        emit_log(app, "info", "正在建立 Python 環境…");
         run(
             app,
             commands::create_venv(&uv, &venv, &runtimes, interpreter.as_deref()),
         )
         .await
-        .map_err(PythonEnvError::VenvFailed)?;
+        .map_err(|f| match f {
+            RunFailure::NotExecutable(e) => PythonEnvError::UvUnusable(e),
+            RunFailure::Failed(e) => PythonEnvError::VenvFailed(e),
+        })?;
     }
 
     // A venv can survive on disk but stop working (deleted files, an OS
     // upgrade moving dylibs). Rebuild once before giving up.
     if !interpreter_works(&python).await {
-        log(app, "warn", "Python 環境無法執行，正在重建…");
+        emit_log(app, "warn", "Python 環境無法執行，正在重建…");
         let _ = tokio::fs::remove_dir_all(&venv).await;
         run(
             app,
             commands::create_venv(&uv, &venv, &runtimes, interpreter.as_deref()),
         )
         .await
-        .map_err(PythonEnvError::VenvFailed)?;
+        .map_err(|f| match f {
+            RunFailure::NotExecutable(e) => PythonEnvError::UvUnusable(e),
+            RunFailure::Failed(e) => PythonEnvError::VenvFailed(e),
+        })?;
         python = paths::venv_interpreter(&venv);
         if !interpreter_works(&python).await {
             return Err(PythonEnvError::VenvFailed(
@@ -147,16 +159,19 @@ pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, Python
         true
     });
     if needs {
-        log(app, "info", "正在安裝相依套件（首次使用需要一些時間）…");
+        emit_log(app, "info", "正在安裝相依套件（首次使用需要一些時間）…");
         run(app, commands::install_requirements(&uv, &python, &requirements))
             .await
-            .map_err(|output| {
-                if looks_like_compile_failure(&output) {
-                    PythonEnvError::ToolchainMissing(tail(&output))
-                } else {
-                    PythonEnvError::InstallFailed {
-                        profile: profile.marker_key().to_string(),
-                        output: tail(&output),
+            .map_err(|f| match f {
+                RunFailure::NotExecutable(e) => PythonEnvError::UvUnusable(e),
+                RunFailure::Failed(output) => {
+                    if looks_like_compile_failure(&output) {
+                        PythonEnvError::ToolchainMissing(tail(&output))
+                    } else {
+                        PythonEnvError::InstallFailed {
+                            profile: profile.marker_key().to_string(),
+                            output: tail(&output),
+                        }
                     }
                 }
             })?;
@@ -169,21 +184,32 @@ pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, Python
 
 /// `tools/<dir>/<file>` in dev, the resource bundle in production.
 fn requirements_path(app: &AppHandle, profile: Profile) -> PathBuf {
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let dev_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap_or(Path::new("."))
-        .join("tools")
-        .join(profile.tool_dir())
-        .join(profile.requirements_file());
+        .join("tools");
+    let resource_root = app.path().resource_dir().ok();
+    resolve_requirements(&dev_root, resource_root.as_deref(), profile)
+}
+
+/// Split from `requirements_path` so the dev-first, resource-fallback choice is
+/// testable without an AppHandle.
+fn resolve_requirements(dev_root: &Path, resource_root: Option<&Path>, profile: Profile) -> PathBuf {
+    let dev = dev_root.join(profile.tool_dir()).join(profile.requirements_file());
     if dev.exists() {
         return dev;
     }
-    app.path()
-        .resource_dir()
+    resource_root
         .map(|r| r.join(profile.tool_dir()).join(profile.requirements_file()))
         .unwrap_or(dev)
 }
 
+/// Whether the venv's interpreter runs at all.
+///
+/// Deliberately shallow: it does not touch site-packages, so a half-written
+/// package left by an interrupted install still passes. That case has no
+/// automatic recovery — the marker hash is unchanged, so nothing re-installs —
+/// and the user's way out is the settings page's rebuild action (Task 12).
 async fn interpreter_works(python: &Path) -> bool {
     let mut cmd = tokio::process::Command::new(python);
     cmd.arg("-c").arg("import sys");
@@ -191,9 +217,17 @@ async fn interpreter_works(python: &Path) -> bool {
     matches!(cmd.status().await, Ok(s) if s.success())
 }
 
+/// Why a uv invocation didn't succeed. The distinction matters: a binary that
+/// can't be launched needs the setup script or a quarantine fix, while a
+/// process that ran and failed needs its own output read.
+enum RunFailure {
+    NotExecutable(String),
+    Failed(String),
+}
+
 /// Run a spec, streaming both streams to the log panel. On failure returns the
 /// combined output so the caller can classify it.
-async fn run(app: &AppHandle, spec: CommandSpec) -> Result<(), String> {
+async fn run(app: &AppHandle, spec: CommandSpec) -> Result<(), RunFailure> {
     let mut cmd = tokio::process::Command::new(&spec.program);
     cmd.args(&spec.args)
         .envs(&spec.env)
@@ -201,18 +235,34 @@ async fn run(app: &AppHandle, spec: CommandSpec) -> Result<(), String> {
         .stderr(std::process::Stdio::piped());
     no_window(&mut cmd);
 
-    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    let stdout = child.stdout.take().ok_or("stdout not piped")?;
-    let stderr = child.stderr.take().ok_or("stderr not piped")?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| RunFailure::NotExecutable(e.to_string()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| RunFailure::Failed("stdout not piped".to_string()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| RunFailure::Failed("stderr not piped".to_string()))?;
 
     // stderr on its own task, matching api_docs/runner.rs:133. A `select!` over
     // both readers would break out of the loop on whichever stream ended first
     // and lose the other's remaining output — which is exactly the output that
     // explains a failure, since uv reports errors on stderr.
+    //
+    // Emitting inside this loop (rather than collecting and emitting once the
+    // task finishes) matters for a progress panel: uv writes warnings to
+    // stderr throughout the run, and batching them to the end would show them
+    // after a later "installation complete" stdout line, misrepresenting when
+    // they actually happened.
+    let app_for_stderr = app.clone();
     let stderr_task = tokio::spawn(async move {
         let mut buf = String::new();
         let mut reader = tokio::io::BufReader::new(stderr).lines();
         while let Ok(Some(line)) = reader.next_line().await {
+            emit_log(&app_for_stderr, "warn", &line);
             buf.push_str(&line);
             buf.push('\n');
         }
@@ -221,31 +271,39 @@ async fn run(app: &AppHandle, spec: CommandSpec) -> Result<(), String> {
 
     let mut collected = String::new();
     let mut out_lines = tokio::io::BufReader::new(stdout).lines();
-    while let Some(line) = out_lines.next_line().await.map_err(|e| e.to_string())? {
+    while let Some(line) = out_lines
+        .next_line()
+        .await
+        .map_err(|e| RunFailure::Failed(e.to_string()))?
+    {
         collected.push_str(&line);
         collected.push('\n');
-        log(app, "info", &line);
+        emit_log(app, "info", &line);
     }
 
     let stderr_output = stderr_task.await.unwrap_or_default();
-    for line in stderr_output.lines() {
-        log(app, "warn", line);
-    }
 
-    let status = child.wait().await.map_err(|e| e.to_string())?;
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| RunFailure::Failed(e.to_string()))?;
     if status.success() {
         Ok(())
     } else {
         collected.push_str(&stderr_output);
-        Err(collected)
+        Err(RunFailure::Failed(collected))
     }
 }
 
+/// Last lines of a failure, for showing the user. 40 rather than 20: a compile
+/// failure's decisive line ("command 'cc' failed") often sits above the trailing
+/// compiler noise.
 fn tail(output: &str) -> String {
-    output.lines().rev().take(20).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
+    let lines: Vec<&str> = output.lines().collect();
+    lines[lines.len().saturating_sub(40)..].join("\n")
 }
 
-fn log(app: &AppHandle, level: &str, message: &str) {
+fn emit_log(app: &AppHandle, level: &str, message: &str) {
     let _ = app.emit(
         "python-env-log",
         PythonEnvLogEvent { level: level.into(), message: message.into() },
@@ -287,6 +345,49 @@ mod tests {
         // retrying, so it must not read like a generic pip error.
         assert!(looks_like_compile_failure("error: command 'cc' failed"));
         assert!(looks_like_compile_failure("Microsoft Visual C++ 14.0 or greater is required"));
+        assert!(looks_like_compile_failure("error: command 'gcc' failed with exit code 1"));
+        assert!(looks_like_compile_failure("error: linker `cc` not found"));
         assert!(!looks_like_compile_failure("ERROR: No matching distribution found"));
+    }
+
+    #[test]
+    fn an_unlaunchable_uv_is_reported_as_unusable_not_as_a_venv_failure() {
+        // Permission or quarantine problems need the same remedy as a missing
+        // binary; folding them into VenvFailed hides that.
+        let msg = PythonEnvError::UvUnusable("Permission denied".into()).to_string();
+        assert!(msg.contains("uv"));
+        assert!(msg.contains("Permission denied"));
+    }
+
+    #[test]
+    fn tail_keeps_short_output_intact() {
+        assert_eq!(tail("one\ntwo"), "one\ntwo");
+    }
+
+    #[test]
+    fn tail_keeps_the_last_lines_in_order() {
+        let long: String = (1..=50).map(|n| format!("line{n}\n")).collect();
+        let kept = tail(&long);
+        assert!(kept.starts_with("line11"));
+        assert!(kept.ends_with("line50"));
+        assert_eq!(kept.lines().count(), 40);
+    }
+
+    #[test]
+    fn requirements_prefer_the_dev_tree_when_it_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = dir.path().join("MarkItDown");
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::write(tools.join("requirements.txt"), b"markitdown\n").unwrap();
+
+        let found = resolve_requirements(dir.path(), Some(Path::new("/resources")), Profile::DocCore);
+        assert!(found.starts_with(dir.path()));
+    }
+
+    #[test]
+    fn requirements_fall_back_to_the_resource_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        let found = resolve_requirements(dir.path(), Some(Path::new("/resources")), Profile::DocCore);
+        assert_eq!(found, Path::new("/resources/MarkItDown/requirements.txt"));
     }
 }
