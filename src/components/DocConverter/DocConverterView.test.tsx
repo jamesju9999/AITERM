@@ -18,6 +18,13 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
 }));
 
+const pythonEnvEnsure = vi.fn();
+const pythonEnvStatusMock = vi.fn();
+vi.mock("../../ipc/pythonEnv", () => ({
+  pythonEnvEnsure: (p: string) => pythonEnvEnsure(p),
+  pythonEnvStatus: () => pythonEnvStatusMock(),
+}));
+
 import { markitdownConvert, markitdownPickFile } from "../../ipc/markitdown";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 
@@ -47,6 +54,14 @@ function renderView() {
 describe("DocConverterView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    pythonEnvEnsure.mockResolvedValue(undefined);
+    pythonEnvStatusMock.mockResolvedValue({
+      uvAvailable: true,
+      pythonVersion: "3.12.13",
+      installed: ["doc_core"],
+      venvPath: "/data/python-env",
+      userInterpreter: null,
+    });
   });
 
   it("renders dropzone", () => {
@@ -91,5 +106,88 @@ describe("DocConverterView", () => {
       fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
     });
     expect(markitdownConvert).not.toHaveBeenCalled();
+  });
+});
+
+describe("DocConverterView media profile candidate install", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pythonEnvEnsure.mockResolvedValue(undefined);
+    pythonEnvStatusMock.mockResolvedValue({
+      uvAvailable: true,
+      pythonVersion: "3.12.13",
+      installed: ["doc_core"],
+      venvPath: "/data/python-env",
+      userInterpreter: null,
+    });
+  });
+
+  it("prompts before installing doc_media for an image file, then converts once confirmed", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/photo.png");
+    vi.mocked(markitdownConvert).mockResolvedValue("# photo");
+    renderView();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
+    });
+
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringMatching(/影像/));
+    expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_core");
+    expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_media");
+    expect(markitdownConvert).toHaveBeenCalledWith("/tmp/photo.png", undefined);
+    expect(screen.getByText(/photo\.png/)).toBeInTheDocument();
+  });
+
+  it("aborts the conversion, without calling markitdownConvert, when the user declines the media install", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/photo.png");
+    renderView();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
+    });
+
+    expect(window.confirm).toHaveBeenCalled();
+    expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_core");
+    expect(pythonEnvEnsure).not.toHaveBeenCalledWith("doc_media");
+    expect(markitdownConvert).not.toHaveBeenCalled();
+  });
+
+  it("does not prompt again when doc_media is already installed", async () => {
+    pythonEnvStatusMock.mockResolvedValue({
+      uvAvailable: true,
+      pythonVersion: "3.12.13",
+      installed: ["doc_core", "doc_media"],
+      venvPath: "/data/python-env",
+      userInterpreter: null,
+    });
+    vi.spyOn(window, "confirm");
+    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/photo.png");
+    vi.mocked(markitdownConvert).mockResolvedValue("# photo");
+    renderView();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
+    });
+
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(pythonEnvEnsure).not.toHaveBeenCalledWith("doc_media");
+    expect(markitdownConvert).toHaveBeenCalledWith("/tmp/photo.png", undefined);
+  });
+
+  it("does not check for the media profile at all for a non-media file", async () => {
+    vi.spyOn(window, "confirm");
+    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/report.pdf");
+    vi.mocked(markitdownConvert).mockResolvedValue("# report");
+    renderView();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
+    });
+
+    expect(pythonEnvStatusMock).not.toHaveBeenCalled();
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(markitdownConvert).toHaveBeenCalledWith("/tmp/report.pdf", undefined);
   });
 });

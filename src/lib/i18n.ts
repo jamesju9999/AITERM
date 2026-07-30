@@ -1052,6 +1052,7 @@ const zhTW = {
     python_env_use_bundled: "改用內建 Python",
     python_env_interpreter_rebuild_hint: "變更 Interpreter 來源後不會立即生效，需按上方「重建環境」才會套用到實際的套件環境。",
     python_env_legacy_note: "舊版曾以 pip --user 將套件裝進你自己的 Python；那些套件不再被使用，可自行移除。",
+    python_env_media_prompt: "這個檔案需要影像／語音支援，需要額外下載約 30 MB。要現在安裝嗎？",
 } as const;
 
 const enRaw = {
@@ -2003,6 +2004,7 @@ const enRaw = {
     python_env_use_bundled: "Switch back to bundled Python",
     python_env_interpreter_rebuild_hint: "Picking or reverting the interpreter doesn't take effect immediately — click \"Rebuild environment\" above to apply it to the actual package environment.",
     python_env_legacy_note: "Older versions installed packages into your own Python via pip --user; those packages are no longer used and can be removed manually.",
+    python_env_media_prompt: "This file needs image/audio support, which requires downloading about 30 MB more. Install it now?",
 } as const;
 
 export const translations = {

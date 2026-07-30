@@ -11,6 +11,8 @@ import { ModelPickerButton } from "../ModelPickerButton";
 import { NotebookSidebar } from "./NotebookSidebar";
 import { NotebookCreateDialog } from "./NotebookCreateDialog";
 import { ChatHistorySidebar } from "./ChatHistorySidebar";
+import { usePythonEnvGate } from "../PythonEnv/usePythonEnvGate";
+import { PythonEnvGate } from "../PythonEnv/PythonEnvGate";
 // 重用 Code Assistant 的聊天氣泡/工具卡片樣式（ca-msg、ca-hint-*、ca-toolbar 等）。
 // 這裡明確 import，不依賴「CodeAssistantView 剛好也被載入過」這種隱性順序。
 import "../CodeAssistantView/styles.css";
@@ -92,6 +94,7 @@ interface Props {
 export function KnowledgeBaseView({ isActive }: Props) {
   const { t } = useLocale();
   const { notebooks, loading, syncingId, syncProgress, create, remove, sync } = useNotebooks();
+  const pythonEnv = usePythonEnvGate();
   const [activeNotebookId, setActiveNotebookId] = useState<string | null>(loadSavedNotebookId);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [input, setInput] = useState("");
@@ -207,6 +210,15 @@ export function KnowledgeBaseView({ isActive }: Props) {
     if (activeNotebookId === id) setActiveNotebookId(null);
   }, [remove, activeNotebookId]);
 
+  const handleSync = useCallback(async (id: string) => {
+    // The import walks the notebook's folder via markitdown_convert, which
+    // only guarantees the doc_core profile — see DocConverterView for the
+    // same gate on the single-file path.
+    const ready = await pythonEnv.ensureProfile("doc_core");
+    if (!ready) return;
+    await sync(id);
+  }, [pythonEnv, sync]);
+
   const handleOpenSource = useCallback((path: string) => {
     if (!activeNotebookId) return;
     setSourceOpenError(null);
@@ -223,12 +235,19 @@ export function KnowledgeBaseView({ isActive }: Props) {
         syncingId={syncingId}
         syncProgress={syncProgress}
         onSelect={setActiveNotebookId}
-        onSync={sync}
+        onSync={handleSync}
         onDelete={handleDeleteNotebook}
         onAddClick={() => setShowCreateDialog(true)}
       />
 
       <div className="kb-main">
+        <PythonEnvGate
+          state={pythonEnv.state}
+          lines={pythonEnv.lines}
+          error={pythonEnv.error}
+          onInstall={() => pythonEnv.ensureProfile("doc_core")}
+          onRecheck={() => pythonEnv.ensureProfile("doc_core")}
+        />
         {!activeNotebook ? (
           <div className="ca-empty">
             <div className="ca-empty__icon">📚</div>
@@ -245,7 +264,7 @@ export function KnowledgeBaseView({ isActive }: Props) {
                 <span>{t.kb_unsynced_prompt(activeNotebook.name)}</span>
                 <button
                   className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
-                  onClick={() => void sync(activeNotebook.id)}
+                  onClick={() => void handleSync(activeNotebook.id)}
                 >
                   {t.kb_sync_button}
                 </button>

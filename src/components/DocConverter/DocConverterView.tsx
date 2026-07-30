@@ -4,9 +4,29 @@ import { listen } from "@tauri-apps/api/event";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { aiChat, formatAiError } from "../../ipc/ai";
 import { markitdownConvert, markitdownPickFile } from "../../ipc/markitdown";
+import { pythonEnvStatus } from "../../ipc/pythonEnv";
 import { useLocale } from "../../contexts/LocaleContext";
 import { ModelPickerButton } from "../ModelPickerButton";
+import { usePythonEnvGate } from "../PythonEnv/usePythonEnvGate";
+import { PythonEnvGate } from "../PythonEnv/PythonEnvGate";
 import "./DocConverterView.css";
+
+/** Extensions that need the on-demand media profile. Mirrors the formats
+ *  converter.py handles via markitdown's image/audio extras. */
+const MEDIA_EXTENSIONS = new Set([
+  "png", "jpg", "jpeg", "gif", "bmp", "webp",
+  "mp3", "wav", "m4a", "flac",
+]);
+
+export function needsMediaProfile(fileName: string): boolean {
+  // The picker/drag-drop handlers hand back a full path, not a bare file
+  // name — strip to the last path segment first so a dot in a directory
+  // name (e.g. "/Users/me/v1.2/report") isn't mistaken for an extension.
+  const base = fileName.split(/[\\/]/).pop() ?? fileName;
+  const dot = base.lastIndexOf(".");
+  if (dot < 0) return false;
+  return MEDIA_EXTENSIONS.has(base.slice(dot + 1).toLowerCase());
+}
 
 interface ExtractState {
   fileName: string;
@@ -66,6 +86,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
   const [normalizing, setNormalizing] = useState(false);
   const [normalizeProgress, setNormalizeProgress] = useState<{ step: number; total: number } | null>(null);
   const stoppedRef = useRef(false);
+  const pythonEnv = usePythonEnvGate();
 
   const processFilePath = useCallback(async (filePath: string) => {
     stoppedRef.current = true;
@@ -76,6 +97,20 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
     setExtractState(null);
     setMdOutput("");
     setExtracting(true);
+
+    const coreReady = await pythonEnv.ensureProfile("doc_core");
+    if (!coreReady) { setExtracting(false); return; }
+
+    if (needsMediaProfile(filePath)) {
+      const status = await pythonEnvStatus().catch(() => null);
+      const mediaInstalled = status?.installed.includes("doc_media") ?? false;
+      if (!mediaInstalled) {
+        if (!window.confirm(t.python_env_media_prompt)) { setExtracting(false); return; }
+        const mediaReady = await pythonEnv.ensureProfile("doc_media");
+        if (!mediaReady) { setExtracting(false); return; }
+      }
+    }
+
     try {
       const markdown = await markitdownConvert(filePath, selectedProviderId || undefined);
       const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
@@ -85,7 +120,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
     } finally {
       setExtracting(false);
     }
-  }, [selectedProviderId]);
+  }, [selectedProviderId, pythonEnv, t]);
 
   useEffect(() => {
     listProviders().then((list) => {
@@ -218,6 +253,14 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
           </>
         )}
       </div>
+
+      <PythonEnvGate
+        state={pythonEnv.state}
+        lines={pythonEnv.lines}
+        error={pythonEnv.error}
+        onInstall={() => pythonEnv.ensureProfile("doc_core")}
+        onRecheck={() => pythonEnv.ensureProfile("doc_core")}
+      />
 
       {error && (
         <div className="doc-converter__error" style={error.includes("\n") ? { whiteSpace: "pre-line" } : undefined}>
