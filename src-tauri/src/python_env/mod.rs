@@ -182,6 +182,65 @@ pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, Python
     Ok(python)
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvStatus {
+    pub uv_available: bool,
+    pub python_version: Option<String>,
+    pub installed: Vec<Profile>,
+    pub venv_path: String,
+    pub user_interpreter: Option<String>,
+}
+
+/// Snapshot for the settings page and the feature gates. Never runs uv.
+///
+/// Reads `pyvenv.cfg` rather than running `python --version`. This is called
+/// every time the settings page or a feature gate wants state, and spawning a
+/// process for that would flash a console window on Windows (the sync
+/// `std::process::Command` can't reuse `no_window`, which takes a tokio
+/// Command) and cost far more than reading one small file. It reports the
+/// version the venv was built with, not whether the interpreter still runs —
+/// `ensure()` owns that check via `interpreter_works`.
+pub fn status(app: &AppHandle) -> EnvStatus {
+    let venv = paths::venv_dir(app);
+    EnvStatus {
+        uv_available: paths::uv_binary().is_some(),
+        python_version: venv_python_version(&venv),
+        installed: marker::installed_profiles(&venv),
+        venv_path: venv.to_string_lossy().into_owned(),
+        user_interpreter: user_interpreter(app).map(|p| p.to_string_lossy().into_owned()),
+    }
+}
+
+/// Version recorded in the venv's `pyvenv.cfg`, which uv writes as
+/// `version_info = 3.12.13`. `None` when there's no venv or no such key.
+fn venv_python_version(venv: &Path) -> Option<String> {
+    let cfg = std::fs::read_to_string(venv.join("pyvenv.cfg")).ok()?;
+    cfg.lines()
+        .filter_map(|line| line.split_once('='))
+        .find(|(key, _)| key.trim() == "version_info")
+        .map(|(_, value)| value.trim().to_string())
+}
+
+/// Delete the venv (and optionally the downloaded interpreters). The next
+/// `ensure` rebuilds from scratch.
+pub async fn reset(app: &AppHandle, purge_runtimes: bool) -> Result<(), PythonEnvError> {
+    let _guard = ENSURE_LOCK.lock().await;
+    remove_if_present(&paths::venv_dir(app)).await?;
+    if purge_runtimes {
+        remove_if_present(&paths::runtime_dir(app)).await?;
+    }
+    Ok(())
+}
+
+async fn remove_if_present(dir: &Path) -> Result<(), PythonEnvError> {
+    match tokio::fs::remove_dir_all(dir).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(PythonEnvError::Io(format!("刪除 {} 失敗：{e}", dir.display()))),
+    }
+}
+
 /// `tools/<dir>/<file>` in dev, the resource bundle in production.
 fn requirements_path(app: &AppHandle, profile: Profile) -> PathBuf {
     let dev_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -389,5 +448,47 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let found = resolve_requirements(dir.path(), Some(Path::new("/resources")), Profile::DocCore);
         assert_eq!(found, Path::new("/resources/MarkItDown/requirements.txt"));
+    }
+
+    #[test]
+    fn reads_the_python_version_from_pyvenv_cfg() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("pyvenv.cfg"),
+            "home = /opt/homebrew/opt/python@3.12/bin\nimplementation = CPython\nversion_info = 3.12.13\n",
+        )
+        .unwrap();
+        assert_eq!(venv_python_version(dir.path()).as_deref(), Some("3.12.13"));
+    }
+
+    #[test]
+    fn version_is_none_without_a_venv() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(venv_python_version(dir.path()), None);
+    }
+
+    #[test]
+    fn version_is_none_when_pyvenv_cfg_has_no_version_key() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pyvenv.cfg"), "implementation = CPython\n").unwrap();
+        assert_eq!(venv_python_version(dir.path()), None);
+    }
+
+    #[tokio::test]
+    async fn removing_a_missing_directory_is_not_an_error() {
+        // reset() runs on a fresh install too, where neither directory exists.
+        let dir = tempfile::tempdir().unwrap();
+        assert!(remove_if_present(&dir.path().join("never-existed")).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn removing_an_existing_directory_deletes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("python-env");
+        std::fs::create_dir_all(target.join("bin")).unwrap();
+
+        remove_if_present(&target).await.unwrap();
+
+        assert!(!target.exists());
     }
 }
