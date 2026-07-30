@@ -1,1 +1,0 @@
-markitdown[image,audio-transcription]>=0.1.0

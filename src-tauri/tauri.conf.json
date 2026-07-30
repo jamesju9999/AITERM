@@ -51,7 +51,7 @@
       "binaries/uv"
     ],
     "resources": {
-      "../tools/MarkItDown/requirements-media.txt": "MarkItDown/requirements-media.txt"
+      "../tools/MarkItDown/requirements-audio.txt": "MarkItDown/requirements-audio.txt"
     }
   }
 }

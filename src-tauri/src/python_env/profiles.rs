@@ -12,26 +12,29 @@ pub enum Profile {
     ApiDocs,
     /// Document conversion for the formats most people convert.
     DocCore,
-    /// Image and audio conversion — installed on demand, since these extras
-    /// are the bulk of the download.
-    DocMedia,
+    /// Audio transcription — installed on demand, since most users never
+    /// convert an audio file and its SpeechRecognition dependency is a
+    /// sizeable download nobody else needs. (Not image conversion: images go
+    /// through a vision API directly, and their PIL-based metadata fallback
+    /// is already covered by doc_core's `markitdown[pdf]` -> pillow chain.)
+    DocAudio,
 }
 
 impl Profile {
-    pub const ALL: [Profile; 3] = [Profile::ApiDocs, Profile::DocCore, Profile::DocMedia];
+    pub const ALL: [Profile; 3] = [Profile::ApiDocs, Profile::DocCore, Profile::DocAudio];
 
     /// Directory under `tools/` (dev) or the resource bundle (production).
     pub fn tool_dir(&self) -> &'static str {
         match self {
             Profile::ApiDocs => "ApiDocFetcher",
-            Profile::DocCore | Profile::DocMedia => "MarkItDown",
+            Profile::DocCore | Profile::DocAudio => "MarkItDown",
         }
     }
 
     pub fn requirements_file(&self) -> &'static str {
         match self {
             Profile::ApiDocs | Profile::DocCore => "requirements.txt",
-            Profile::DocMedia => "requirements-media.txt",
+            Profile::DocAudio => "requirements-audio.txt",
         }
     }
 
@@ -40,7 +43,7 @@ impl Profile {
         match self {
             Profile::ApiDocs => "api_docs",
             Profile::DocCore => "doc_core",
-            Profile::DocMedia => "doc_media",
+            Profile::DocAudio => "doc_audio",
         }
     }
 }
@@ -59,8 +62,8 @@ mod tests {
     }
 
     #[test]
-    fn media_profile_reads_the_media_requirements_file() {
-        assert_eq!(Profile::DocMedia.requirements_file(), "requirements-media.txt");
+    fn audio_profile_reads_the_audio_requirements_file() {
+        assert_eq!(Profile::DocAudio.requirements_file(), "requirements-audio.txt");
         assert_eq!(Profile::DocCore.requirements_file(), "requirements.txt");
         assert_eq!(Profile::ApiDocs.requirements_file(), "requirements.txt");
     }
@@ -68,7 +71,7 @@ mod tests {
     #[test]
     fn doc_profiles_share_the_markitdown_tool_dir() {
         assert_eq!(Profile::DocCore.tool_dir(), "MarkItDown");
-        assert_eq!(Profile::DocMedia.tool_dir(), "MarkItDown");
+        assert_eq!(Profile::DocAudio.tool_dir(), "MarkItDown");
         assert_eq!(Profile::ApiDocs.tool_dir(), "ApiDocFetcher");
     }
 
@@ -81,7 +84,7 @@ mod tests {
         // fails until ALL is updated too.
         fn variant_count(profile: Profile) -> usize {
             match profile {
-                Profile::ApiDocs | Profile::DocCore | Profile::DocMedia => 3,
+                Profile::ApiDocs | Profile::DocCore | Profile::DocAudio => 3,
             }
         }
         assert_eq!(Profile::ALL.len(), variant_count(Profile::ApiDocs));
@@ -91,7 +94,7 @@ mod tests {
     fn marker_key_matches_the_serialized_form() {
         // These are two representations of one wire format: the marker file keys
         // off marker_key(), while Tauri commands and the frontend type
-        // ("api_docs" | "doc_core" | "doc_media") go through serde. Pin them
+        // ("api_docs" | "doc_core" | "doc_audio") go through serde. Pin them
         // together so changing either one can't silently split them apart.
         for profile in Profile::ALL {
             let serialized = serde_json::to_string(&profile).unwrap();

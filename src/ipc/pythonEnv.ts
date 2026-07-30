@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type PythonProfile = "api_docs" | "doc_core" | "doc_media";
+export type PythonProfile = "api_docs" | "doc_core" | "doc_audio";
 
 export interface PythonEnvStatus {
   uvAvailable: boolean;

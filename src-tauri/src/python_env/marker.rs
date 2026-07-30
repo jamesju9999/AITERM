@@ -119,10 +119,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let req = write_requirements(dir.path(), "markitdown>=0.1.0\n");
         record_installed(dir.path(), Profile::DocCore, &req).unwrap();
-        record_installed(dir.path(), Profile::DocMedia, &req).unwrap();
+        record_installed(dir.path(), Profile::DocAudio, &req).unwrap();
 
         assert!(!needs_install(dir.path(), Profile::DocCore, &req).unwrap());
-        assert!(!needs_install(dir.path(), Profile::DocMedia, &req).unwrap());
+        assert!(!needs_install(dir.path(), Profile::DocAudio, &req).unwrap());
         assert!(needs_install(dir.path(), Profile::ApiDocs, &req).unwrap());
 
         // Write-then-rename must not leave a temp file behind after two
