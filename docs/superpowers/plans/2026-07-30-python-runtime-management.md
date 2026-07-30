@@ -1193,6 +1193,21 @@ rm -rf /tmp/drift-probe
 
 若版本不變 → 記錄結論、不需處理。若被升級 → 兩份檔案改成相同的上下界（例如 `>=0.1.0,<0.2.0`），確保不論安裝順序或時間差都落在同一版本。**不要在沒實測前就加上界** —— 猜錯當前版本會直接把安裝鎖死。
 
+#### 實測結果（2026-07-30，macOS arm64，真實網路）
+
+**風險不成立，requirements 不需改動。** core 裝完 `markitdown==0.1.7`，接著裝 media 後**仍是 0.1.7**。`uv pip install` 與 pip 行為一致：已安裝且滿足未鎖上界的約束（`>=0.1.0`）就視為已滿足、不升級。`commands::install_requirements` 從不傳 `--upgrade`，所以數週前裝的舊版不會被後來的 media 安裝悄悄換掉。
+
+順帶量到的數字（Task 14 與體驗判斷會用到）：
+
+| 步驟 | 耗時 | 需要網路 |
+|---|---|---|
+| `uv venv --python 3.12`（單獨執行，會找到系統既有 Python） | 0.36s | 否 |
+| `uv python install 3.12`（帶 `UV_PYTHON_INSTALL_DIR`，app 的實際路徑） | ~9.2s（23.8 MB） | **是** |
+| core requirements（36 個套件，~72 MB） | ~12.9s | 是 |
+| media requirements（僅 `pydub` + `speechrecognition`，~31 MB） | ~3s | 是 |
+
+**真正首次執行約 25 秒，且一定需要網路** —— 即使使用者機器上已經有合格的 Python。這是刻意的：`ensure()` 只在使用者**沒有**手動指定 interpreter 時才跑 `uv python install`，而受管的 CPython 保證所有使用者拿到同一個版本，代價是那 23.8 MB。不想下載的使用者有逃生門：手動指定自己的 interpreter，此時 `ensure()` 會跳過下載那一步（`if interpreter.is_none()`）。
+
 - [ ] **Step 4: 執行測試**
 
 Run: `cd src-tauri && cargo test --lib python_env`
@@ -1229,53 +1244,14 @@ git commit -m "feat(python-env): orchestrate install with progress events and a 
 
 ---
 
-## Task 7: `status` / `reset` / `set_interpreter` 與 config 欄位
+## Task 7: `status` / `reset` / `set_interpreter`
 
 **Files:**
-- Modify: `src-tauri/src/python_env/mod.rs`, `src-tauri/src/config/types.rs`
+- Modify: `src-tauri/src/python_env/mod.rs`
 
-- [ ] **Step 1: 寫失敗測試**
+> **`AppConfig.python_interpreter` 欄位與 `user_interpreter()` helper 已在 Task 6 完成。** 原本排在這裡，但 Task 6 的 `ensure()` 就呼叫 `user_interpreter`，照原順序實作會編譯失敗 —— 這是計畫的相依性錯誤。config 欄位、它的兩個 serde 測試、以及 helper 都已隨 Task 6 落地，本任務只做下面三個對外 API。
 
-`src-tauri/src/config/types.rs` 的 tests 模組（若無則建立 `#[cfg(test)] mod python_interpreter_tests`）：
-
-```rust
-#[cfg(test)]
-mod python_interpreter_tests {
-    use super::*;
-
-    #[test]
-    fn python_interpreter_defaults_to_none_for_existing_configs() {
-        let cfg: AppConfig = toml::from_str("").expect("empty config should parse");
-        assert_eq!(cfg.python_interpreter, None);
-    }
-
-    #[test]
-    fn python_interpreter_round_trips() {
-        let cfg: AppConfig =
-            toml::from_str("python_interpreter = \"/usr/local/bin/python3.12\"").unwrap();
-        assert_eq!(cfg.python_interpreter.as_deref(), Some("/usr/local/bin/python3.12"));
-    }
-}
-```
-
-- [ ] **Step 2: 執行確認失敗**
-
-Run: `cd src-tauri && cargo test --lib python_interpreter_tests`
-Expected: 編譯失敗，`no field python_interpreter`
-
-- [ ] **Step 3: 加 config 欄位**
-
-`src-tauri/src/config/types.rs` 的 `AppConfig` 內加入：
-
-```rust
-    /// Interpreter the user pointed us at when uv can't fetch one (offline or
-    /// behind a proxy). The venv is still created under app data — this only
-    /// changes which interpreter it's based on.
-    #[serde(default)]
-    pub python_interpreter: Option<String>,
-```
-
-- [ ] **Step 4: 實作三個 API**
+- [ ] **Step 1: 實作三個 API**
 
 `src-tauri/src/python_env/mod.rs` 加入：
 
@@ -1332,26 +1308,20 @@ async fn remove_if_present(dir: &Path) -> Result<(), PythonEnvError> {
     }
 }
 
-fn user_interpreter(app: &AppHandle) -> Option<PathBuf> {
-    let config = app.state::<std::sync::Arc<crate::config::ConfigStore>>();
-    config
-        .get()
-        .python_interpreter
-        .filter(|s| !s.trim().is_empty())
-        .map(PathBuf::from)
-}
 ```
 
-- [ ] **Step 5: 執行測試**
+（`user_interpreter` 已在 Task 6 加入，此處不需重複。）
 
-Run: `cd src-tauri && cargo test --lib` 
+- [ ] **Step 2: 執行測試**
+
+Run: `cd src-tauri && cargo test --lib`
 Expected: 全數 passed
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add src-tauri/src/python_env src-tauri/src/config/types.rs
-git commit -m "feat(python-env): expose status, reset and a user-specified interpreter"
+git add src-tauri/src/python_env
+git commit -m "feat(python-env): expose status and reset for the settings page"
 ```
 
 ---
