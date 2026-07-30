@@ -92,6 +92,12 @@ mod tests {
         let spec = create_venv(&uv(), &PathBuf::from("/data/python-env"), &PathBuf::from("/data/rt"), None);
 
         assert_eq!(spec.args, vec!["venv", "/data/python-env", "--python", PYTHON_VERSION]);
+        // Without this, uv can't find the interpreter it just installed into the
+        // managed runtime dir — and dropping it silently left all six tests green.
+        assert_eq!(
+            spec.env.get("UV_PYTHON_INSTALL_DIR").map(String::as_str),
+            Some("/data/rt")
+        );
     }
 
     #[test]
@@ -128,6 +134,9 @@ mod tests {
                 "/tools/MarkItDown/requirements.txt",
             ]
         );
+        // Deliberately absent here: --python already names the exact interpreter,
+        // so this call has no business pointing uv at the managed runtime dir.
+        assert!(!spec.env.contains_key("UV_PYTHON_INSTALL_DIR"));
     }
 
     #[test]
