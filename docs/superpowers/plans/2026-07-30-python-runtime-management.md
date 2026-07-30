@@ -1233,6 +1233,18 @@ git add src-tauri/src/python_env src-tauri/Cargo.toml
 git commit -m "feat(python-env): orchestrate install with progress events and a single lock"
 ```
 
+### Review 後的七項加固（已落地於 `ec15ede`）
+
+1. **stderr 改為即時 emit**。原本 stderr 在獨立 task 裡只收集、等 stdout 全跑完才整批 emit，結果 uv 中途的警告會出現在「安裝完成」之後 —— 對進度面板是有意義的誤導。把 `emit_log` 搬進該 task 的讀取迴圈（clone `AppHandle`），仍收進 buf 供錯誤分類。**已實測驗證**：另建 scratch 專案重現 `run()` 的併發形狀、以 150ms 間隔交錯寫兩個 stream，修正前兩行 stderr 擠在同一瞬間並排在所有 stdout 之後（`OUT1(9ms) OUT2(323ms) OUT3(645ms) ERR1(646ms) ERR2(646ms)`），修正後落在真實寫入時間（`OUT1(4ms) ERR1(163ms) OUT2(322ms) ERR2(481ms) OUT3(642ms)`）。
+2. **新增 `UvUnusable(String)` 變體**。uv 檔案存在但無法啟動（macOS quarantine、缺 `+x`）原本會落到 `PythonUnavailable`／`VenvFailed`，使用者看到「建立 Python 環境失敗：Permission denied」，看不出這與 `UvMissing` 同類、解法也相同。做法刻意**不是**在 `ensure()` 開頭多跑一次 `uv --version`（那會在環境已就緒的常見路徑上白花一次 spawn），而是讓 `run()` 回傳 `RunFailure { NotExecutable, Failed }`，四個呼叫點各自映射。
+3. **`interpreter_works` 的盲區寫進 doc comment**。`python -c "import sys"` 不碰 site-packages，所以「安裝被中斷留下半殘套件」會通過檢查，而 marker hash 未變也不會重裝 —— 沒有自動修復路徑。不試圖偵測（要可靠偵測得 import 每個套件，成本與脆弱度都不划算），改為註明限制並指向使用者的出路：設定頁的重建動作（Task 12）。
+4. `tail()` 從 20 行放寬到 40 行（編譯失敗的關鍵那行常被 20 行截掉），實作改用 slice 取代兩次 reverse，並補兩個測試。
+5. `looks_like_compile_failure` 補齊 `gcc` 與 `error: linker` 兩個 marker 的正向測試（原本 4 個只測了 2 個）。
+6. 本地 `log()` 改名 `emit_log()`，避免與 `log::warn!` 巨集撞名造成閱讀停頓。
+7. `requirements_path()` 抽出可注入的 `resolve_requirements(dev_root, resource_root, profile)`，讓「dev 優先、否則 resource」這條分支終於能用 tempdir 測到（原本綁死 `CARGO_MANIFEST_DIR`，完全沒被驗證過）。
+
+**刻意不做**：把 `run()`／`emit_log()`／`tail()` 拆成 `exec.rs`。審查者自己的判斷是現況合理（約 300 行，Task 7 只再加約 40 行），且 `run()` 與 `emit_log` 緊密相依。若之後還有東西往 `mod.rs` 塞，那時才是拆的時機。
+
 ### 跨程序競爭：已評估、刻意接受（不要默默忽略）
 
 `ENSURE_LOCK` 是 `tokio::sync::Mutex`，只在程序內有效。這個 app **沒有** single-instance 保護（`Cargo.toml` 與 `lib.rs` 都沒有 `tauri-plugin-single-instance`），所以使用者可以同時開兩個實例，各自觸發 `ensure()`：兩個 uv 會同時寫同一個 venv 的 site-packages，標記檔的 read-modify-write 也可能互相覆蓋。
@@ -1280,27 +1292,65 @@ pub struct EnvStatus {
 }
 
 /// Snapshot for the settings page and the feature gates. Never runs uv.
+///
+/// Reads `pyvenv.cfg` rather than running `python --version`. This is called
+/// every time the settings page or a feature gate wants state, and spawning a
+/// process for that would flash a console window on Windows (the sync
+/// `std::process::Command` can't reuse `no_window`, which takes a tokio
+/// Command) and cost far more than reading one small file. It reports the
+/// version the venv was built with, not whether the interpreter still runs —
+/// `ensure()` owns that check via `interpreter_works`.
 pub fn status(app: &AppHandle) -> EnvStatus {
     let venv = paths::venv_dir(app);
-    let python = paths::venv_interpreter(&venv);
-    let python_version = std::process::Command::new(&python)
-        .arg("--version")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            let raw = if o.stdout.is_empty() { o.stderr } else { o.stdout };
-            String::from_utf8_lossy(&raw).trim().to_string()
-        });
-
     EnvStatus {
         uv_available: paths::uv_binary().is_some(),
-        python_version,
+        python_version: venv_python_version(&venv),
         installed: marker::installed_profiles(&venv),
         venv_path: venv.to_string_lossy().into_owned(),
         user_interpreter: user_interpreter(app).map(|p| p.to_string_lossy().into_owned()),
     }
 }
+
+/// Version recorded in the venv's `pyvenv.cfg`, which uv writes as
+/// `version_info = 3.12.13`. `None` when there's no venv or no such key.
+fn venv_python_version(venv: &Path) -> Option<String> {
+    let cfg = std::fs::read_to_string(venv.join("pyvenv.cfg")).ok()?;
+    cfg.lines()
+        .filter_map(|line| line.split_once('='))
+        .find(|(key, _)| key.trim() == "version_info")
+        .map(|(_, value)| value.trim().to_string())
+}
+```
+
+（`pyvenv.cfg` 的格式已實測確認 —— uv 0.11.19 產出的內容是 `home` / `implementation` / `uv` / `version_info` / `include-system-site-packages`，其中 `version_info = 3.12.13` 就是完整版本號。）
+
+把版本讀取獨立成 `venv_python_version` 的附帶好處是它成為可測的純函式，而原本的 `python --version` 寫法完全無法單元測試。三個測試：
+
+```rust
+    #[test]
+    fn reads_the_python_version_from_pyvenv_cfg() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("pyvenv.cfg"),
+            "home = /opt/homebrew/opt/python@3.12/bin\nimplementation = CPython\nversion_info = 3.12.13\n",
+        )
+        .unwrap();
+        assert_eq!(venv_python_version(dir.path()).as_deref(), Some("3.12.13"));
+    }
+
+    #[test]
+    fn version_is_none_without_a_venv() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(venv_python_version(dir.path()), None);
+    }
+
+    #[test]
+    fn version_is_none_when_pyvenv_cfg_has_no_version_key() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pyvenv.cfg"), "implementation = CPython\n").unwrap();
+        assert_eq!(venv_python_version(dir.path()), None);
+    }
+```
 
 /// Delete the venv (and optionally the downloaded interpreters). The next
 /// `ensure` rebuilds from scratch.
