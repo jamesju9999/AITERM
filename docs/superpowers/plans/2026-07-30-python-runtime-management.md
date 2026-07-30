@@ -109,6 +109,11 @@ tar -xzf "$TMP/uv.tar.gz" -C "$TMP"
 cp "$TMP/uv-${TRIPLE}/uv" "$DEST/uv-${TRIPLE}"
 chmod +x "$DEST/uv-${TRIPLE}"
 echo "==> Wrote $DEST/uv-${TRIPLE}"
+# Smoke-test like the mac/windows scripts and all three setup-db2-* do: Linux
+# is the one platform whose triple comes from an env var, so a wrong ARCH
+# should fail here rather than at runtime. Skip only if the CI runner turns
+# out to be cross-fetching (arm64 binary on an x64 host).
+"$DEST/uv-${TRIPLE}" --version
 ```
 
 - [ ] **Step 3: 寫 Windows 腳本**
@@ -142,7 +147,7 @@ try {
 }
 ```
 
-- [ ] **Step 4: 登記 externalBin**
+- [ ] **Step 4: 登記 externalBin（四個檔案，缺一不可）**
 
 `src-tauri/tauri.conf.json` 的 `externalBin` 改為：
 
@@ -152,6 +157,16 @@ try {
       "binaries/uv"
     ]
 ```
+
+**base config 單獨改是無效的。** `tauri.macos.conf.json:19`、`tauri.windows.conf.json:10`、`tauri.linux.conf.json:3` 三者都設 `"externalBin": []`，而 Tauri 的平台專屬 config 走 JSON Merge Patch（RFC 7396）—— 陣列是**整體取代**而非合併，所以 base 的 `binaries/uv` 在三個平台打包時全被清空，binary 永遠不會進 app bundle。只有 dev 模式（Task 2 會掃 `CARGO_MANIFEST_DIR/binaries`）看起來能用，這種 bug 會潛伏到有人測安裝檔才爆。三個平台 conf 都要改為：
+
+```json
+    "externalBin": ["binaries/uv"],
+```
+
+為何不比照 db2：db2-sidecar 是「一整個目錄（JRE + jar）」，才走 `resources` + `scripts/tauri-build.js` 的 cpSync 手動複製。uv 是單一可執行檔，正是 `externalBin` 的標準用法，而且它**必須**落在執行檔旁邊才能被 `paths::uv_binary` 找到 —— 走 resources 會進 macOS 的 `Contents/Resources/`，位置不對。
+
+已知代價（刻意接受）：沒先跑 setup-uv 腳本的貢獻者，`tauri:dev` / `tauri:build` 會因找不到 `binaries/uv-<triple>` 而失敗。專案對 db2 sidecar 已有同樣前提（CLAUDE.md 要求先 build JAR 才能跑 `tauri:dev`）。
 
 - [ ] **Step 5: 本機執行並確認**
 
@@ -1882,6 +1897,33 @@ git commit -m "feat(doc-converter): offer the media profile only when the file n
 ```
 
 （`matrix.db2_arch` 是 matrix 裡既有的 x64／arm64 值，直接沿用，不新增 matrix 變數。）
+
+- [ ] **Step 1b: 修正 Linux conf 的重新生成（否則前面全部白做）**
+
+`release.yml:252-269` 的「Patch tauri.linux.conf.json」步驟會用 python 重新生成整個 `tauri.linux.conf.json`，**覆蓋掉 repo 裡的版本**。它目前寫死 `'externalBin': []`，會把 Task 1 加的 uv 登記清掉；而且它的 `resources` 只列 ApiDocFetcher，**漏了 MarkItDown 的兩個條目**（repo 版本 `tauri.linux.conf.json:8-9` 有）——這是既有缺陷，代表現在打包出來的 Linux `.deb` 根本沒有 `converter.py`，文件轉換與知識庫匯入在 Linux 上必定失敗。順手一起修，因為本任務正要往同一份 resources 再加一個檔案。
+
+該步驟的 python heredoc 改為：
+
+```python
+          conf = {
+            'bundle': {
+              'externalBin': ['binaries/uv'],
+              'resources': {
+                '${{ matrix.db2_sidecar_dir }}': 'db2-sidecar',
+                '../tools/ApiDocFetcher/*.py': 'ApiDocFetcher/',
+                '../tools/ApiDocFetcher/strategies/*.py': 'ApiDocFetcher/strategies/',
+                '../tools/ApiDocFetcher/requirements.txt': 'ApiDocFetcher/requirements.txt',
+                '../tools/MarkItDown/converter.py': 'MarkItDown/converter.py',
+                '../tools/MarkItDown/requirements.txt': 'MarkItDown/requirements.txt',
+                '../tools/MarkItDown/requirements-media.txt': 'MarkItDown/requirements-media.txt'
+              }
+            }
+          }
+```
+
+改完後比對一次：這份生成的內容除了 `db2_sidecar_dir` 之外，應與 repo 的 `src-tauri/tauri.linux.conf.json` 完全一致。兩份不一致就是下一個潛伏 bug 的來源。
+
+同時確認 macOS／Windows 兩邊：`release.yml:271` 之後的 macOS 注入步驟與 `tauri.windows.conf.json` 若也會覆寫 `externalBin`，要一併帶上 `binaries/uv`。
 
 - [ ] **Step 2: 驗證 workflow 語法**
 
