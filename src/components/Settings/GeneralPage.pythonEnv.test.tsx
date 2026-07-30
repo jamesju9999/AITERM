@@ -61,7 +61,7 @@ describe("GeneralPage — Python environment", () => {
     render(<GeneralPage />);
     await waitFor(() => expect(status).toHaveBeenCalled());
 
-    await userEvent.click(screen.getByRole("button", { name: /Rebuild|重建環境/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Clear environment|清除環境/ }));
     expect(reset).toHaveBeenCalledWith(false);
   });
 
@@ -123,7 +123,7 @@ describe("GeneralPage — Python environment", () => {
     render(<GeneralPage />);
     await waitFor(() => expect(status).toHaveBeenCalled());
 
-    await userEvent.click(screen.getByRole("button", { name: /Rebuild|重建環境/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Clear environment|清除環境/ }));
 
     await waitFor(() => expect(screen.getByText(/Permission denied/)).toBeTruthy());
   });
