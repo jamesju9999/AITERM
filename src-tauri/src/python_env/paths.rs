@@ -47,17 +47,35 @@ pub fn uv_binary() -> Option<PathBuf> {
 }
 
 /// First `uv-<triple>` entry in `dir`, if any.
+///
+/// A dev machine can accumulate binaries for several triples, and `read_dir`
+/// order is platform- and filesystem-dependent — so prefer the one whose
+/// triple carries this machine's architecture (picking another would fail at
+/// exec time with an error that says nothing about where it came from), and
+/// sort so the remaining case is at least deterministic.
 fn find_suffixed_uv(dir: &Path) -> Option<PathBuf> {
     let prefix = format!("{UV_STEM}-");
-    std::fs::read_dir(dir)
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .find(|p| {
+        .filter(|p| p.is_file())
+        .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.starts_with(&prefix))
         })
+        .collect();
+    candidates.sort();
+    candidates
+        .iter()
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.contains(std::env::consts::ARCH))
+        })
+        .cloned()
+        .or_else(|| candidates.pop())
 }
 
 fn exe_name(stem: &str) -> String {
@@ -100,6 +118,31 @@ mod tests {
     fn ignores_unrelated_files_when_looking_for_uv() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("db2sidecar.jar"), b"").unwrap();
+        assert!(find_suffixed_uv(dir.path()).is_none());
+    }
+
+    #[test]
+    fn prefers_the_binary_matching_this_machines_architecture() {
+        let dir = tempdir().unwrap();
+        // Both are plausible on a dev machine that ran the setup script under
+        // different architectures; picking the wrong one fails at exec time.
+        let other = if std::env::consts::ARCH == "aarch64" {
+            "uv-x86_64-apple-darwin"
+        } else {
+            "uv-aarch64-apple-darwin"
+        };
+        std::fs::write(dir.path().join(other), b"").unwrap();
+        let mine = format!("uv-{}-some-target", std::env::consts::ARCH);
+        std::fs::write(dir.path().join(&mine), b"").unwrap();
+
+        let found = find_suffixed_uv(dir.path()).expect("should find a binary");
+        assert_eq!(found.file_name().unwrap().to_str().unwrap(), mine);
+    }
+
+    #[test]
+    fn ignores_directories_that_look_like_the_binary() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("uv-aarch64-apple-darwin")).unwrap();
         assert!(find_suffixed_uv(dir.path()).is_none());
     }
 }
