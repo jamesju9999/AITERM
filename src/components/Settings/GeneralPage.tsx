@@ -46,6 +46,7 @@ export function GeneralPage() {
   const [appimage, setAppimage] = useState<AppImageIntegrationState>({ state: "not_appimage" });
   const [appimageError, setAppimageError] = useState<string | null>(null);
   const [pyEnv, setPyEnv] = useState<PythonEnvStatus | null>(null);
+  const [pyEnvError, setPyEnvError] = useState<string | null>(null);
 
   const loadAppimage = useCallback(() => {
     appimageIntegrationState().then(setAppimage).catch(() => {});
@@ -61,20 +62,38 @@ export function GeneralPage() {
     // Purging removes downloaded interpreters too, so it needs a confirmation —
     // a rebuild is cheap and recoverable.
     if (purge && !window.confirm(t.python_env_purge_confirm)) return;
-    await pythonEnvReset(purge);
-    refreshPyEnv();
+    setPyEnvError(null);
+    try {
+      await pythonEnvReset(purge);
+      refreshPyEnv();
+    } catch (e) {
+      // This section is the way out when something broke; a silent failure
+      // here sends the user back to advice (pip install markitdown) that no
+      // longer applies to the managed venv.
+      setPyEnvError(String(e));
+    }
   };
 
   const handlePickInterpreter = async () => {
     const path = await open({ multiple: false, directory: false });
     if (!path || Array.isArray(path)) return;
-    await pythonEnvSetInterpreter(path);
-    refreshPyEnv();
+    setPyEnvError(null);
+    try {
+      await pythonEnvSetInterpreter(path);
+      refreshPyEnv();
+    } catch (e) {
+      setPyEnvError(String(e));
+    }
   };
 
   const handleUseBundledInterpreter = async () => {
-    await pythonEnvSetInterpreter(null);
-    refreshPyEnv();
+    setPyEnvError(null);
+    try {
+      await pythonEnvSetInterpreter(null);
+      refreshPyEnv();
+    } catch (e) {
+      setPyEnvError(String(e));
+    }
   };
 
   const MODES: { value: ExecutionMode; label: string; desc: string }[] = [
@@ -459,7 +478,7 @@ export function GeneralPage() {
               <button className="aiterm-btn aiterm-btn--secondary" onClick={() => handlePyEnvReset(false)}>
                 {t.python_env_rebuild}
               </button>
-              <button className="aiterm-btn aiterm-btn--secondary" onClick={() => handlePyEnvReset(true)}>
+              <button className="aiterm-btn aiterm-btn--danger" onClick={() => handlePyEnvReset(true)}>
                 {t.python_env_purge}
               </button>
               {pyEnv.userInterpreter ? (
@@ -475,6 +494,9 @@ export function GeneralPage() {
 
             <p className="section-desc">{t.python_env_interpreter_rebuild_hint}</p>
             <p className="section-desc">{t.python_env_legacy_note}</p>
+            {pyEnvError && (
+              <p className="section-desc" style={{ color: "#e06c75" }}>{pyEnvError}</p>
+            )}
           </>
         )}
       </section>

@@ -26,9 +26,27 @@ pub fn python_env_set_interpreter(
     path: Option<String>,
     config: State<'_, Arc<ConfigStore>>,
 ) -> Result<(), String> {
+    let normalized = path.as_ref().map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+
+    // Verify before storing: the settings page shows the new source immediately,
+    // so an unusable path would leave the UI claiming an interpreter that only
+    // fails later, when a rebuild finally hands it to uv. MarkItDown needs 3.10+.
+    if let Some(candidate) = &normalized {
+        let mut cmd = std::process::Command::new(candidate);
+        cmd.arg("-c").arg("import sys; exit(0 if sys.version_info >= (3, 10) else 1)");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        match cmd.status() {
+            Ok(s) if s.success() => {}
+            Ok(_) => return Err("這個 Python 版本太舊，需要 3.10 或更新版本".to_string()),
+            Err(e) => return Err(format!("無法執行這個路徑，請確認它是 Python 執行檔：{e}")),
+        }
+    }
+
     config
-        .update(|cfg| {
-            cfg.python_interpreter = path.as_ref().map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
-        })
+        .update(|cfg| cfg.python_interpreter = normalized)
         .map_err(|e| format!("儲存設定失敗：{e}"))
 }

@@ -13,6 +13,11 @@ vi.mock("../../ipc/pythonEnv", () => ({
   pythonEnvSetInterpreter: (p: string | null) => setInterpreter(p),
 }));
 
+const pickFile = vi.fn();
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: (...args: unknown[]) => pickFile(...args),
+}));
+
 // GeneralPage also calls getConfig()/getTelegramConfig()/appimageIntegrationState()
 // on mount via the real `invoke`, which throws outside a Tauri context (see
 // GeneralPage.appimage.test.tsx). Stub it so those unrelated calls don't blow up.
@@ -68,5 +73,58 @@ describe("GeneralPage — Python environment", () => {
   it("shows the bundled source when no interpreter was chosen", async () => {
     render(<GeneralPage />);
     await waitFor(() => expect(screen.getByText(/Bundled|內建/)).toBeTruthy());
+  });
+
+  it("lets the user point at their own interpreter", async () => {
+    pickFile.mockResolvedValue("/usr/local/bin/python3.12");
+    render(<GeneralPage />);
+    await waitFor(() => expect(status).toHaveBeenCalled());
+
+    await userEvent.click(screen.getByRole("button", { name: /own Python|使用自己的/ }));
+
+    expect(setInterpreter).toHaveBeenCalledWith("/usr/local/bin/python3.12");
+  });
+
+  it("switches back to the bundled interpreter", async () => {
+    status.mockResolvedValue({
+      uvAvailable: true,
+      pythonVersion: "3.12.13",
+      installed: ["doc_core"],
+      venvPath: "/data/python-env",
+      userInterpreter: "/usr/local/bin/python3.12",
+    });
+    render(<GeneralPage />);
+    await waitFor(() => expect(status).toHaveBeenCalled());
+
+    await userEvent.click(screen.getByRole("button", { name: /bundled|內建/ }));
+
+    expect(setInterpreter).toHaveBeenCalledWith(null);
+  });
+
+  it("only purges after the user confirms", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<GeneralPage />);
+    await waitFor(() => expect(status).toHaveBeenCalled());
+
+    await userEvent.click(screen.getByRole("button", { name: /Delete everything|完全刪除/ }));
+    expect(reset).not.toHaveBeenCalled();
+
+    confirm.mockReturnValue(true);
+    await userEvent.click(screen.getByRole("button", { name: /Delete everything|完全刪除/ }));
+    expect(reset).toHaveBeenCalledWith(true);
+
+    confirm.mockRestore();
+  });
+
+  it("surfaces a failure instead of doing nothing visible", async () => {
+    // The whole point of this section is being the way out when something broke;
+    // a silent failure sends the user back to advice that no longer works.
+    reset.mockRejectedValue("刪除 /data/python-env 失敗：Permission denied");
+    render(<GeneralPage />);
+    await waitFor(() => expect(status).toHaveBeenCalled());
+
+    await userEvent.click(screen.getByRole("button", { name: /Rebuild|重建環境/ }));
+
+    await waitFor(() => expect(screen.getByText(/Permission denied/)).toBeTruthy());
   });
 });
