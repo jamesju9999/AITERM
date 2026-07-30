@@ -1898,6 +1898,10 @@ git commit -m "feat(doc-converter): offer the media profile only when the file n
 
 （`matrix.db2_arch` 是 matrix 裡既有的 x64／arm64 值，直接沿用，不新增 matrix 變數。）
 
+**Linux 的條件式不可照抄 db2 的。** db2 的 Linux 步驟只跑在 `.deb` 兩條 leg（`ubuntu-24.04` / `ubuntu-24.04-arm`），因為 AppImage 刻意跳過 DB2。但 uv 不同：`tauri.linux.conf.json` 的 `externalBin` 對**全部 4 條** Linux leg 都是 `["binaries/uv"]`（AppImage 兩條 leg 用的是 repo 內的版本，不會被 CI 覆寫），所以 AppImage 的 `tauri build` 同樣需要 `binaries/uv-<triple>` 存在，否則會撞上與 `.deb` 相同的 resource-path 驗證失敗。uv 的 Linux fetch 步驟必須涵蓋 `ubuntu-22.04`、`ubuntu-22.04-arm`、`ubuntu-24.04`、`ubuntu-24.04-arm` 全部四條。
+
+**為什麼這裡必須用真的 fetch 而不是 placeholder**：`ci.yml` 的 warm-cache job 只編譯不打包，所以 0-byte placeholder 足夠（實測：缺檔 `cargo check` 失敗、0-byte 通過）；但 release.yml 會真的 bundle，空檔會產出一個帶著 0-byte uv 的安裝檔，執行期才爆。兩者不可混用。
+
 - [ ] **Step 1b: 修正 Linux conf 的重新生成（否則前面全部白做）**
 
 `release.yml:252-269` 的「Patch tauri.linux.conf.json」步驟會用 python 重新生成整個 `tauri.linux.conf.json`，**覆蓋掉 repo 裡的版本**。它目前寫死 `'externalBin': []`，會把 Task 1 加的 uv 登記清掉；而且它的 `resources` 只列 ApiDocFetcher，**漏了 MarkItDown 的兩個條目**（repo 版本 `tauri.linux.conf.json:8-9` 有）——這是既有缺陷，代表現在打包出來的 Linux `.deb` 根本沒有 `converter.py`，文件轉換與知識庫匯入在 Linux 上必定失敗。順手一起修，因為本任務正要往同一份 resources 再加一個檔案。
