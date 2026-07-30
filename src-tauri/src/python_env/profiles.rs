@@ -73,6 +73,21 @@ mod tests {
     }
 
     #[test]
+    fn all_lists_every_variant() {
+        // ALL is a hand-written literal, so unlike the exhaustive matches above,
+        // no compiler check catches a variant missing from it — and the tests
+        // that iterate ALL would just silently cover one less profile. This
+        // match forces whoever adds a variant to come here, and the assert then
+        // fails until ALL is updated too.
+        fn variant_count(profile: Profile) -> usize {
+            match profile {
+                Profile::ApiDocs | Profile::DocCore | Profile::DocMedia => 3,
+            }
+        }
+        assert_eq!(Profile::ALL.len(), variant_count(Profile::ApiDocs));
+    }
+
+    #[test]
     fn marker_key_matches_the_serialized_form() {
         // These are two representations of one wire format: the marker file keys
         // off marker_key(), while Tauri commands and the frontend type
