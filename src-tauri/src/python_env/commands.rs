@@ -1,0 +1,146 @@
+//! uv invocations, as data.
+//!
+//! Building the command and running it are separate so the arguments can be
+//! asserted on every platform without uv present.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+/// Pinned rather than "latest" so a new uv default can't silently move the
+/// interpreter under existing installs. MarkItDown needs >= 3.10.
+pub const PYTHON_VERSION: &str = "3.12";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandSpec {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
+}
+
+fn spec(program: &Path, args: &[&str], runtime_dir: Option<&Path>) -> CommandSpec {
+    let mut env = BTreeMap::new();
+    env.insert("UV_NO_PROGRESS".to_string(), "1".to_string());
+    if let Some(dir) = runtime_dir {
+        env.insert(
+            "UV_PYTHON_INSTALL_DIR".to_string(),
+            dir.to_string_lossy().into_owned(),
+        );
+    }
+    CommandSpec {
+        program: program.to_path_buf(),
+        args: args.iter().map(|s| s.to_string()).collect(),
+        env,
+    }
+}
+
+/// Download a managed interpreter into `runtime_dir`.
+pub fn install_python(uv: &Path, runtime_dir: &Path) -> CommandSpec {
+    spec(uv, &["python", "install", PYTHON_VERSION], Some(runtime_dir))
+}
+
+/// Create the managed venv. `interpreter` overrides the managed interpreter
+/// when the user pointed the app at their own Python.
+pub fn create_venv(
+    uv: &Path,
+    venv: &Path,
+    runtime_dir: &Path,
+    interpreter: Option<&Path>,
+) -> CommandSpec {
+    let venv = venv.to_string_lossy().into_owned();
+    let python = match interpreter {
+        Some(path) => path.to_string_lossy().into_owned(),
+        None => PYTHON_VERSION.to_string(),
+    };
+    spec(
+        uv,
+        &["venv", &venv, "--python", &python],
+        Some(runtime_dir),
+    )
+}
+
+/// Install a requirements file into the venv.
+pub fn install_requirements(uv: &Path, venv_python: &Path, requirements: &Path) -> CommandSpec {
+    let python = venv_python.to_string_lossy().into_owned();
+    let req = requirements.to_string_lossy().into_owned();
+    spec(
+        uv,
+        &["pip", "install", "--python", &python, "-r", &req],
+        None,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn uv() -> PathBuf { PathBuf::from("/opt/aiterm/uv") }
+
+    #[test]
+    fn python_install_pins_the_version_and_redirects_the_install_dir() {
+        let spec = install_python(&uv(), &PathBuf::from("/data/python-runtimes"));
+
+        assert_eq!(spec.program, uv());
+        assert_eq!(spec.args, vec!["python", "install", PYTHON_VERSION]);
+        assert_eq!(
+            spec.env.get("UV_PYTHON_INSTALL_DIR").map(String::as_str),
+            Some("/data/python-runtimes")
+        );
+    }
+
+    #[test]
+    fn venv_creation_uses_the_managed_interpreter_by_default() {
+        let spec = create_venv(&uv(), &PathBuf::from("/data/python-env"), &PathBuf::from("/data/rt"), None);
+
+        assert_eq!(spec.args, vec!["venv", "/data/python-env", "--python", PYTHON_VERSION]);
+    }
+
+    #[test]
+    fn venv_creation_honours_a_user_specified_interpreter() {
+        let spec = create_venv(
+            &uv(),
+            &PathBuf::from("/data/python-env"),
+            &PathBuf::from("/data/rt"),
+            Some(&PathBuf::from("/usr/local/bin/python3.12")),
+        );
+
+        assert_eq!(
+            spec.args,
+            vec!["venv", "/data/python-env", "--python", "/usr/local/bin/python3.12"]
+        );
+    }
+
+    #[test]
+    fn pip_install_targets_the_venv_interpreter_not_the_system_one() {
+        let spec = install_requirements(
+            &uv(),
+            &PathBuf::from("/data/python-env/bin/python"),
+            &PathBuf::from("/tools/MarkItDown/requirements.txt"),
+        );
+
+        assert_eq!(
+            spec.args,
+            vec![
+                "pip",
+                "install",
+                "--python",
+                "/data/python-env/bin/python",
+                "-r",
+                "/tools/MarkItDown/requirements.txt",
+            ]
+        );
+    }
+
+    #[test]
+    fn every_spec_disables_uvs_progress_animation() {
+        // The log panel shows plain lines; uv's spinner would render as noise.
+        let specs = [
+            install_python(&uv(), &PathBuf::from("/rt")),
+            create_venv(&uv(), &PathBuf::from("/env"), &PathBuf::from("/rt"), None),
+            install_requirements(&uv(), &PathBuf::from("/env/bin/python"), &PathBuf::from("/r.txt")),
+        ];
+        for spec in specs {
+            assert_eq!(spec.env.get("UV_NO_PROGRESS").map(String::as_str), Some("1"));
+        }
+    }
+}
