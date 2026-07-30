@@ -71,4 +71,16 @@ mod tests {
         assert_eq!(Profile::DocMedia.tool_dir(), "MarkItDown");
         assert_eq!(Profile::ApiDocs.tool_dir(), "ApiDocFetcher");
     }
+
+    #[test]
+    fn marker_key_matches_the_serialized_form() {
+        // These are two representations of one wire format: the marker file keys
+        // off marker_key(), while Tauri commands and the frontend type
+        // ("api_docs" | "doc_core" | "doc_media") go through serde. Pin them
+        // together so changing either one can't silently split them apart.
+        for profile in Profile::ALL {
+            let serialized = serde_json::to_string(&profile).unwrap();
+            assert_eq!(serialized, format!("\"{}\"", profile.marker_key()));
+        }
+    }
 }
