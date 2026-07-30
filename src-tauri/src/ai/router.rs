@@ -112,19 +112,53 @@ async fn do_oauth_refresh(provider_id: &str, refresh_token: &str, secrets: &Secr
 
     let data: RefreshResp = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
 
-    let _ = secrets.set(provider_id, &data.access_token);
-    if let Some(new_refresh) = data.refresh_token {
-        let _ = secrets.set(&format!("{provider_id}:oauth_refresh"), &new_refresh);
+    // Unlike a fresh login, a failed write here is NOT rolled back: deleting a
+    // token that did store would throw away the only usable credential. Report
+    // it instead — silently swallowing these turned a dead refresh token into a
+    // session that mysteriously expired an hour later.
+    store_refreshed_secrets(
+        secrets,
+        provider_id,
+        &data.access_token,
+        data.refresh_token.as_deref(),
+        data.expires_in,
+    )?;
+
+    Ok(data.access_token)
+}
+
+/// Persist a refreshed token set, reporting rather than hiding write failures.
+///
+/// The rotated refresh token is the critical one: Anthropic and Codex hand out
+/// one-time-use refresh tokens, so if the new one can't be stored the old one is
+/// already spent and the account needs a fresh login.
+fn store_refreshed_secrets(
+    secrets: &SecretStore,
+    provider_id: &str,
+    access_token: &str,
+    new_refresh: Option<&str>,
+    expires_in: Option<u64>,
+) -> Result<(), String> {
+    secrets
+        .set(provider_id, access_token)
+        .map_err(|e| format!("Refreshed access token could not be stored: {e}"))?;
+    if let Some(new_refresh) = new_refresh {
+        secrets
+            .set(&format!("{provider_id}:oauth_refresh"), new_refresh)
+            .map_err(|e| {
+                format!("Rotated refresh token could not be stored (re-login required): {e}")
+            })?;
     }
-    if let Some(expires_in) = data.expires_in {
+    if let Some(expires_in) = expires_in {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let _ = secrets.set(&format!("{provider_id}:oauth_expires_at"), &(now + expires_in).to_string());
+        secrets
+            .set(&format!("{provider_id}:oauth_expires_at"), &(now + expires_in).to_string())
+            .map_err(|e| format!("Token expiry could not be stored: {e}"))?;
     }
-
-    Ok(data.access_token)
+    Ok(())
 }
 
 /// Returns a valid Antigravity access token (refreshing first if within 15
@@ -199,14 +233,8 @@ async fn do_google_oauth_refresh(provider_id: &str, refresh_token: &str, secrets
 
     let data: RefreshResp = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
 
-    let _ = secrets.set(provider_id, &data.access_token);
-    if let Some(expires_in) = data.expires_in {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let _ = secrets.set(&format!("{provider_id}:oauth_expires_at"), &(now + expires_in).to_string());
-    }
+    // Google's refresh tokens don't rotate, so there's no new one to store.
+    store_refreshed_secrets(secrets, provider_id, &data.access_token, None, data.expires_in)?;
 
     Ok(data.access_token)
 }
@@ -292,20 +320,16 @@ async fn do_codex_oauth_refresh(
 
     let data: RefreshResp = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
 
-    let _ = secrets.set(provider_id, &data.access_token);
     // Codex refresh tokens are one-time-use/rotating — the new refresh_token
     // returned here MUST replace the old one, or the next refresh attempt
     // fails with `refresh_token_reused` / `invalid_grant`.
-    if let Some(new_refresh) = data.refresh_token {
-        let _ = secrets.set(&format!("{provider_id}:oauth_refresh"), &new_refresh);
-    }
-    if let Some(expires_in) = data.expires_in {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let _ = secrets.set(&format!("{provider_id}:oauth_expires_at"), &(now + expires_in).to_string());
-    }
+    store_refreshed_secrets(
+        secrets,
+        provider_id,
+        &data.access_token,
+        data.refresh_token.as_deref(),
+        data.expires_in,
+    )?;
 
     Ok(data.access_token)
 }
@@ -556,6 +580,29 @@ mod tests {
     /// test can interleave with a guarded one regardless of lock duration.
     /// Uses a tokio (async-aware) mutex so it's safe to hold across `.await`.
     static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// The rotated refresh token used to be written with `let _ =`, so a failed
+    /// write left the spent one in place and the session died an hour later with
+    /// `refresh_token_reused`. Guard that every part of the set lands.
+    #[test]
+    #[ignore = "requires OS keychain"]
+    fn store_refreshed_secrets_persists_the_rotated_refresh_token() {
+        let secrets = SecretStore::new();
+        let id = "aiterm-test-refresh-rotation";
+
+        store_refreshed_secrets(&secrets, id, "new-access", Some("new-refresh"), Some(3600)).unwrap();
+
+        assert_eq!(secrets.get(id).unwrap().as_deref(), Some("new-access"));
+        assert_eq!(
+            secrets.get(&format!("{id}:oauth_refresh")).unwrap().as_deref(),
+            Some("new-refresh")
+        );
+        assert!(secrets.get(&format!("{id}:oauth_expires_at")).unwrap().is_some());
+
+        for key in [id.to_string(), format!("{id}:oauth_refresh"), format!("{id}:oauth_expires_at")] {
+            let _ = secrets.delete(&key);
+        }
+    }
 
     fn make_router(cfg: AppConfig) -> AiRouter {
         // Use an in-memory ConfigStore (temp path) and a SecretStore that

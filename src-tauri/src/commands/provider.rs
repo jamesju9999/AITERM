@@ -751,6 +751,25 @@ fn resolve_github_client_id(client_id: Option<String>) -> String {
     DEFAULT_GITHUB_DEVICE_CLIENT_ID.to_string()
 }
 
+/// Persist an OAuth login's secrets as a unit.
+///
+/// Every entry matters: without `:oauth_refresh` the session silently dies at
+/// the first refresh, and without `:project_id`/`:oauth_account_id` the provider
+/// can't build a request at all — so a half-stored login is worse than none.
+/// On failure whatever was already written is removed and the caller reports the
+/// error, which is what lets the user simply log in again.
+fn store_login_secrets(secrets: &SecretStore, entries: &[(String, String)]) -> Result<(), String> {
+    for (i, (key, value)) in entries.iter().enumerate() {
+        if let Err(e) = secrets.set(key, value) {
+            for (written, _) in &entries[..i] {
+                let _ = secrets.delete(written);
+            }
+            return Err(format!("Failed to store keychain entry '{key}': {e}"));
+        }
+    }
+    Ok(())
+}
+
 fn open_browser(url: &str) {
     // Delegate to the `open` crate. Its Windows path launches the default browser
     // via `cmd /c start "" "<url>"` with the URL QUOTED, so ampersands in the OAuth
@@ -905,17 +924,14 @@ pub async fn anthropic_oauth_complete(
         .await
         .map_err(|e| format!("Failed to parse token response: {e}"))?;
 
-    secrets
-        .set(&provider_id, &token_resp.access_token)
-        .map_err(|e| format!("Failed to store access token: {e}"))?;
-
+    let mut entries = vec![(provider_id.clone(), token_resp.access_token)];
     if let Some(refresh) = token_resp.refresh_token {
-        let _ = secrets.set(&format!("{provider_id}:oauth_refresh"), &refresh);
+        entries.push((format!("{provider_id}:oauth_refresh"), refresh));
     }
     if let Some(expires_in) = token_resp.expires_in {
-        let exp = now_secs() + expires_in;
-        let _ = secrets.set(&format!("{provider_id}:oauth_expires_at"), &exp.to_string());
+        entries.push((format!("{provider_id}:oauth_expires_at"), (now_secs() + expires_in).to_string()));
     }
+    store_login_secrets(&secrets, &entries)?;
 
     config
         .update(|cfg| {
@@ -1182,18 +1198,15 @@ pub async fn google_oauth_login(
         .await
         .map_err(|e| format!("Antigravity onboarding failed: {e}"))?;
 
-    secrets
-        .set(&provider_id, &token_resp.access_token)
-        .map_err(|e| format!("Failed to store access token: {e}"))?;
-
+    let mut entries = vec![(provider_id.clone(), token_resp.access_token)];
     if let Some(refresh) = token_resp.refresh_token {
-        let _ = secrets.set(&format!("{provider_id}:oauth_refresh"), &refresh);
+        entries.push((format!("{provider_id}:oauth_refresh"), refresh));
     }
     if let Some(expires_in) = token_resp.expires_in {
-        let exp = now_secs() + expires_in;
-        let _ = secrets.set(&format!("{provider_id}:oauth_expires_at"), &exp.to_string());
+        entries.push((format!("{provider_id}:oauth_expires_at"), (now_secs() + expires_in).to_string()));
     }
-    let _ = secrets.set(&format!("{provider_id}:project_id"), &project_id);
+    entries.push((format!("{provider_id}:project_id"), project_id));
+    store_login_secrets(&secrets, &entries)?;
 
     config
         .update(|cfg| {
@@ -1632,22 +1645,17 @@ pub async fn codex_oauth_login(
     let token_resp: CodexTokenResponse =
         resp.json().await.map_err(|e| format!("Failed to parse token response: {e}"))?;
 
-    secrets
-        .set(&provider_id, &token_resp.access_token)
-        .map_err(|e| format!("Failed to store access token: {e}"))?;
-
-    if let Some(refresh) = &token_resp.refresh_token {
-        let _ = secrets.set(&format!("{provider_id}:oauth_refresh"), refresh);
+    let mut entries = vec![(provider_id.clone(), token_resp.access_token)];
+    if let Some(refresh) = token_resp.refresh_token {
+        entries.push((format!("{provider_id}:oauth_refresh"), refresh));
     }
     if let Some(expires_in) = token_resp.expires_in {
-        let exp = now_secs() + expires_in;
-        let _ = secrets.set(&format!("{provider_id}:oauth_expires_at"), &exp.to_string());
+        entries.push((format!("{provider_id}:oauth_expires_at"), (now_secs() + expires_in).to_string()));
     }
-    if let Some(id_token) = &token_resp.id_token {
-        if let Some(account_id) = extract_codex_account_id(id_token) {
-            let _ = secrets.set(&format!("{provider_id}:oauth_account_id"), &account_id);
-        }
+    if let Some(account_id) = token_resp.id_token.as_deref().and_then(extract_codex_account_id) {
+        entries.push((format!("{provider_id}:oauth_account_id"), account_id));
     }
+    store_login_secrets(&secrets, &entries)?;
 
     config
         .update(|cfg| {
@@ -1767,6 +1775,50 @@ pub async fn get_codex_oauth_models(
         Ok(CODEX_FALLBACK_MODELS.iter().map(|s| s.to_string()).collect())
     } else {
         Ok(models)
+    }
+}
+
+#[cfg(test)]
+mod login_secrets_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires OS keychain"]
+    fn rolls_back_everything_written_before_a_failure() {
+        let secrets = SecretStore::new();
+        let id = "aiterm-test-login-rollback";
+        // An empty key is always rejected by the keychain, so the second write
+        // fails after the first one has already landed.
+        let entries = vec![
+            (id.to_string(), "access-token".to_string()),
+            (String::new(), "refresh-token".to_string()),
+        ];
+
+        assert!(store_login_secrets(&secrets, &entries).is_err());
+        assert!(!secrets.has(id), "a half-stored login must be rolled back");
+    }
+
+    #[test]
+    #[ignore = "requires OS keychain"]
+    fn stores_every_entry_on_success() {
+        let secrets = SecretStore::new();
+        let id = "aiterm-test-login-success";
+        let entries = vec![
+            (id.to_string(), "access-token".to_string()),
+            (format!("{id}:oauth_refresh"), "refresh-token".to_string()),
+        ];
+
+        store_login_secrets(&secrets, &entries).unwrap();
+
+        assert_eq!(secrets.get(id).unwrap().as_deref(), Some("access-token"));
+        assert_eq!(
+            secrets.get(&format!("{id}:oauth_refresh")).unwrap().as_deref(),
+            Some("refresh-token")
+        );
+
+        for (key, _) in &entries {
+            let _ = secrets.delete(key);
+        }
     }
 }
 
