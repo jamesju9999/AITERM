@@ -5,15 +5,6 @@ pub mod runner;
 use std::path::PathBuf;
 use tauri::Manager;
 
-/// Locate the Python interpreter on the host machine.
-/// Tries `python3` then `python` — returns the first that resolves.
-pub fn find_python() -> &'static str {
-    // Try python3 first; on Windows the launcher may only have "python"
-    // We keep this simple — actual execution will fail fast if the binary
-    // doesn't exist and the error propagates to the frontend.
-    if cfg!(target_os = "windows") { "python" } else { "python3" }
-}
-
 /// Absolute path to `tools/ApiDocFetcher/fetcher.py` relative to the
 /// Cargo manifest directory (dev) or the app resource bundle (production).
 pub fn fetcher_script_path(app_handle: &tauri::AppHandle) -> PathBuf {
