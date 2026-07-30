@@ -294,17 +294,35 @@ pub fn uv_binary() -> Option<PathBuf> {
 }
 
 /// First `uv-<triple>` entry in `dir`, if any.
+///
+/// A dev machine can accumulate binaries for several triples, and `read_dir`
+/// order is platform- and filesystem-dependent — so prefer the one whose
+/// triple carries this machine's architecture (picking another would fail at
+/// exec time with an error that says nothing about where it came from), and
+/// sort so the remaining case is at least deterministic.
 fn find_suffixed_uv(dir: &Path) -> Option<PathBuf> {
     let prefix = format!("{UV_STEM}-");
-    std::fs::read_dir(dir)
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .find(|p| {
+        .filter(|p| p.is_file())
+        .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.starts_with(&prefix))
         })
+        .collect();
+    candidates.sort();
+    candidates
+        .iter()
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.contains(std::env::consts::ARCH))
+        })
+        .cloned()
+        .or_else(|| candidates.pop())
 }
 
 fn exe_name(stem: &str) -> String {
@@ -955,6 +973,16 @@ fn looks_like_compile_failure(output: &str) -> bool {
 /// step, so the common path is a couple of filesystem checks.
 pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, PythonEnvError> {
     let _guard = ENSURE_LOCK.lock().await;
+
+    // `paths::app_data` falls back to "." when app_data_dir() fails, which would
+    // silently build the venv in the process's working directory. Failing is
+    // better than writing a multi-hundred-MB environment somewhere the user
+    // never looks and the app can't find again.
+    if app.path().app_data_dir().is_err() {
+        return Err(PythonEnvError::Io(
+            "無法取得應用程式資料目錄，請確認磁碟權限".to_string(),
+        ));
+    }
 
     let uv = paths::uv_binary().ok_or(PythonEnvError::UvMissing)?;
     let venv = paths::venv_dir(app);
