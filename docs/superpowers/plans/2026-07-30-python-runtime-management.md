@@ -405,8 +405,22 @@ mod tests {
         assert_eq!(Profile::DocMedia.tool_dir(), "MarkItDown");
         assert_eq!(Profile::ApiDocs.tool_dir(), "ApiDocFetcher");
     }
+
+    #[test]
+    fn marker_key_matches_the_serialized_form() {
+        // These are two representations of one wire format: the marker file keys
+        // off marker_key(), while Tauri commands and the frontend type
+        // ("api_docs" | "doc_core" | "doc_media") go through serde. Pin them
+        // together so changing either one can't silently split them apart.
+        for profile in Profile::ALL {
+            let serialized = serde_json::to_string(&profile).unwrap();
+            assert_eq!(serialized, format!("\"{}\"", profile.marker_key()));
+        }
+    }
 }
 ```
+
+最後一個測試在初次實作時就是綠燈 —— 它的價值不在當下抓 bug，而在鎖住契約。**驗證它真的有效**：暫時改掉某個 `marker_key()` 的回傳字串，確認測試轉紅，再改回。永遠不會失敗的測試等於沒有測試。
 
 - [ ] **Step 2: 執行確認失敗**
 
