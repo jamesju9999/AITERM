@@ -72,7 +72,6 @@ pub fn install_requirements(uv: &Path, venv_python: &Path, requirements: &Path) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn uv() -> PathBuf { PathBuf::from("/opt/aiterm/uv") }
 
@@ -142,5 +141,15 @@ mod tests {
         for spec in specs {
             assert_eq!(spec.env.get("UV_NO_PROGRESS").map(String::as_str), Some("1"));
         }
+    }
+
+    #[test]
+    fn python_version_is_pinned_to_the_intended_release() {
+        // The other tests compare against PYTHON_VERSION itself, so they stay
+        // green no matter what it's changed to. The whole point of pinning is
+        // that this value doesn't drift, so assert the literal — MarkItDown
+        // needs >= 3.10, and moving off 3.12 should be a deliberate edit that
+        // updates this test too.
+        assert_eq!(PYTHON_VERSION, "3.12");
     }
 }
