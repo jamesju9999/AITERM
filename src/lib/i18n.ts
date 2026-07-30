@@ -1038,6 +1038,20 @@ const zhTW = {
     python_env_failed_title: "Python 環境準備失敗",
     python_env_retry: "重試",
     python_env_manual_hint: "若無法自動安裝（例如公司網路限制），可自行安裝 Python 3.10 或更新版本後手動指定路徑：\n• macOS：brew install python3  或前往 https://www.python.org/downloads/\n• Windows：前往 https://www.python.org/downloads/\n• Linux：sudo apt install python3.10（或更新版本）",
+    python_env_version_label: "Python 版本",
+    python_env_path_label: "環境路徑",
+    python_env_source_label: "Interpreter 來源",
+    python_env_source_bundled: "內建",
+    python_env_installed_label: "已安裝套件組",
+    python_env_none_installed: "尚未安裝",
+    python_env_not_created: "尚未建立",
+    python_env_rebuild: "重建環境",
+    python_env_purge: "完全刪除",
+    python_env_purge_confirm: "確定要刪除整個 Python 環境嗎？下次使用需要重新下載。",
+    python_env_use_own: "使用自己的 Python",
+    python_env_use_bundled: "改用內建 Python",
+    python_env_interpreter_rebuild_hint: "變更 Interpreter 來源後不會立即生效，需按上方「重建環境」才會套用到實際的套件環境。",
+    python_env_legacy_note: "舊版曾以 pip --user 將套件裝進你自己的 Python；那些套件不再被使用，可自行移除。",
 } as const;
 
 const enRaw = {
@@ -1975,6 +1989,20 @@ const enRaw = {
     python_env_failed_title: "Python Environment Setup Failed",
     python_env_retry: "Retry",
     python_env_manual_hint: "If automatic install doesn't work (e.g. a restricted corporate network), install Python 3.10 or newer yourself and point to it manually:\n• macOS: brew install python3, or visit https://www.python.org/downloads/\n• Windows: visit https://www.python.org/downloads/\n• Linux: sudo apt install python3.10 (or newer)",
+    python_env_version_label: "Python version",
+    python_env_path_label: "Environment path",
+    python_env_source_label: "Interpreter source",
+    python_env_source_bundled: "Bundled",
+    python_env_installed_label: "Installed package sets",
+    python_env_none_installed: "None installed yet",
+    python_env_not_created: "Not created yet",
+    python_env_rebuild: "Rebuild environment",
+    python_env_purge: "Delete everything",
+    python_env_purge_confirm: "Delete the entire Python environment? It will need to be downloaded again next time it's used.",
+    python_env_use_own: "Use my own Python",
+    python_env_use_bundled: "Switch back to bundled Python",
+    python_env_interpreter_rebuild_hint: "Picking or reverting the interpreter doesn't take effect immediately — click \"Rebuild environment\" above to apply it to the actual package environment.",
+    python_env_legacy_note: "Older versions installed packages into your own Python via pip --user; those packages are no longer used and can be removed manually.",
 } as const;
 
 export const translations = {
