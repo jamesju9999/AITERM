@@ -140,7 +140,7 @@ describe("DocConverterView", () => {
   });
 });
 
-describe("DocConverterView media profile candidate install", () => {
+describe("DocConverterView audio profile candidate install", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pythonEnvEnsure.mockResolvedValue(undefined);
@@ -153,26 +153,55 @@ describe("DocConverterView media profile candidate install", () => {
     });
   });
 
-  it("prompts before installing doc_media for an image file, then converts once confirmed", async () => {
+  it("prompts before installing doc_audio for an audio file, then converts once confirmed", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
-    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/photo.png");
-    vi.mocked(markitdownConvert).mockResolvedValue("# photo");
+    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/voice.mp3");
+    vi.mocked(markitdownConvert).mockResolvedValue("# voice");
     renderView();
 
     await act(async () => {
       fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
     });
 
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringMatching(/影像/));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringMatching(/音訊/));
     expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_core");
-    expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_media");
-    expect(markitdownConvert).toHaveBeenCalledWith("/tmp/photo.png", undefined);
-    expect(screen.getByText(/photo\.png/)).toBeInTheDocument();
+    expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_audio");
+    expect(markitdownConvert).toHaveBeenCalledWith("/tmp/voice.mp3", undefined);
+    expect(screen.getByText(/voice\.mp3/)).toBeInTheDocument();
   });
 
-  it("aborts the conversion, without calling markitdownConvert, when the user declines the media install", async () => {
+  it("retries doc_audio, not doc_core, when the gate's retry button is clicked after the audio install fails", async () => {
+    // doc_core succeeds; the separate doc_audio ensureProfile call fails.
+    // Retrying doc_core here would succeed instantly (it's already
+    // installed) and silently close the gate without fixing anything.
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/voice.mp3");
+    pythonEnvEnsure.mockImplementation((p: string) =>
+      p === "doc_audio"
+        ? Promise.reject("安裝 doc_audio 相依套件失敗：boom")
+        : Promise.resolve(undefined)
+    );
+    renderView();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
+    });
+
+    const retryBtn = await screen.findByRole("button", { name: /重試|Retry/ });
+    pythonEnvEnsure.mockClear();
+    pythonEnvEnsure.mockResolvedValue(undefined);
+
+    await act(async () => {
+      fireEvent.click(retryBtn);
+    });
+
+    expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_audio");
+    expect(pythonEnvEnsure).not.toHaveBeenCalledWith("doc_core");
+  });
+
+  it("aborts the conversion, without calling markitdownConvert, when the user declines the audio install", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(false);
-    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/photo.png");
+    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/voice.mp3");
     renderView();
 
     await act(async () => {
@@ -181,21 +210,21 @@ describe("DocConverterView media profile candidate install", () => {
 
     expect(window.confirm).toHaveBeenCalled();
     expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_core");
-    expect(pythonEnvEnsure).not.toHaveBeenCalledWith("doc_media");
+    expect(pythonEnvEnsure).not.toHaveBeenCalledWith("doc_audio");
     expect(markitdownConvert).not.toHaveBeenCalled();
   });
 
-  it("does not prompt again when doc_media is already installed", async () => {
+  it("does not prompt again when doc_audio is already installed", async () => {
     pythonEnvStatusMock.mockResolvedValue({
       uvAvailable: true,
       pythonVersion: "3.12.13",
-      installed: ["doc_core", "doc_media"],
+      installed: ["doc_core", "doc_audio"],
       venvPath: "/data/python-env",
       userInterpreter: null,
     });
     vi.spyOn(window, "confirm");
-    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/photo.png");
-    vi.mocked(markitdownConvert).mockResolvedValue("# photo");
+    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/voice.mp3");
+    vi.mocked(markitdownConvert).mockResolvedValue("# voice");
     renderView();
 
     await act(async () => {
@@ -203,11 +232,11 @@ describe("DocConverterView media profile candidate install", () => {
     });
 
     expect(window.confirm).not.toHaveBeenCalled();
-    expect(pythonEnvEnsure).not.toHaveBeenCalledWith("doc_media");
-    expect(markitdownConvert).toHaveBeenCalledWith("/tmp/photo.png", undefined);
+    expect(pythonEnvEnsure).not.toHaveBeenCalledWith("doc_audio");
+    expect(markitdownConvert).toHaveBeenCalledWith("/tmp/voice.mp3", undefined);
   });
 
-  it("does not check for the media profile at all for a non-media file", async () => {
+  it("does not check for the audio profile at all for a non-audio file", async () => {
     vi.spyOn(window, "confirm");
     vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/report.pdf");
     vi.mocked(markitdownConvert).mockResolvedValue("# report");
@@ -220,5 +249,25 @@ describe("DocConverterView media profile candidate install", () => {
     expect(pythonEnvStatusMock).not.toHaveBeenCalled();
     expect(window.confirm).not.toHaveBeenCalled();
     expect(markitdownConvert).toHaveBeenCalledWith("/tmp/report.pdf", undefined);
+  });
+
+  it("converts an image straight away — it no longer triggers the audio-profile prompt", async () => {
+    // Regression guard: images used to be lumped into the "media" profile
+    // alongside audio, but markitdown[image] isn't a real extra. converter.py
+    // handles images itself (vision API, Pillow fallback from doc_core), so
+    // an image must behave exactly like any other doc_core-only format.
+    vi.spyOn(window, "confirm");
+    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/photo.png");
+    vi.mocked(markitdownConvert).mockResolvedValue("# photo");
+    renderView();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
+    });
+
+    expect(pythonEnvStatusMock).not.toHaveBeenCalled();
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(pythonEnvEnsure).not.toHaveBeenCalledWith("doc_audio");
+    expect(markitdownConvert).toHaveBeenCalledWith("/tmp/photo.png", undefined);
   });
 });

@@ -173,6 +173,7 @@ pub async fn markitdown_pick_file() -> Option<String> {
                 "xlsx", "xls", "csv", "docx", "pdf", "pptx", "html", "htm",
                 "jpg", "jpeg", "png", "gif", "webp", "epub", "msg",
                 "txt", "md", "rst", "xml", "json", "yaml", "yml",
+                "mp3", "wav", "m4a", "flac",
             ],
         )
         .pick_file()

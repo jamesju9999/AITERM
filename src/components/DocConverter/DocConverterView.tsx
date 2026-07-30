@@ -4,28 +4,29 @@ import { listen } from "@tauri-apps/api/event";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { aiChat, formatAiError } from "../../ipc/ai";
 import { markitdownConvert, markitdownPickFile } from "../../ipc/markitdown";
-import { pythonEnvStatus } from "../../ipc/pythonEnv";
+import { pythonEnvStatus, type PythonProfile } from "../../ipc/pythonEnv";
 import { useLocale } from "../../contexts/LocaleContext";
 import { ModelPickerButton } from "../ModelPickerButton";
 import { usePythonEnvGate } from "../PythonEnv/usePythonEnvGate";
 import { PythonEnvGate } from "../PythonEnv/PythonEnvGate";
 import "./DocConverterView.css";
 
-/** Extensions that need the on-demand media profile. Mirrors the formats
- *  converter.py handles via markitdown's image/audio extras. */
-const MEDIA_EXTENSIONS = new Set([
-  "png", "jpg", "jpeg", "gif", "bmp", "webp",
-  "mp3", "wav", "m4a", "flac",
-]);
+/** Extensions that need the on-demand audio profile (speech-to-text via
+ *  markitdown[audio-transcription]). Images are deliberately NOT included:
+ *  converter.py bypasses markitdown for images and calls the vision API
+ *  itself, falling back to Pillow when there's no vision-capable provider —
+ *  and Pillow already ships in doc_core. There is no markitdown[image]
+ *  extra (it doesn't exist), so images never need a second profile. */
+const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "m4a", "flac"]);
 
-export function needsMediaProfile(fileName: string): boolean {
+export function needsAudioProfile(fileName: string): boolean {
   // The picker/drag-drop handlers hand back a full path, not a bare file
   // name — strip to the last path segment first so a dot in a directory
   // name (e.g. "/Users/me/v1.2/report") isn't mistaken for an extension.
   const base = fileName.split(/[\\/]/).pop() ?? fileName;
   const dot = base.lastIndexOf(".");
   if (dot < 0) return false;
-  return MEDIA_EXTENSIONS.has(base.slice(dot + 1).toLowerCase());
+  return AUDIO_EXTENSIONS.has(base.slice(dot + 1).toLowerCase());
 }
 
 interface ExtractState {
@@ -87,6 +88,12 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
   const [normalizeProgress, setNormalizeProgress] = useState<{ step: number; total: number } | null>(null);
   const stoppedRef = useRef(false);
   const pythonEnv = usePythonEnvGate();
+  // Which profile the gate should retry: ensureProfile("doc_core") always
+  // runs first, but a file needing audio support can fail on the second,
+  // separate ensureProfile("doc_audio") call — the gate's retry/install
+  // buttons must retry whichever one actually failed, not always doc_core
+  // (which would already be installed and "succeed" without fixing anything).
+  const [gateProfile, setGateProfile] = useState<PythonProfile>("doc_core");
 
   const processFilePath = useCallback(async (filePath: string) => {
     stoppedRef.current = true;
@@ -98,16 +105,18 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
     setMdOutput("");
     setExtracting(true);
 
+    setGateProfile("doc_core");
     const coreReady = await pythonEnv.ensureProfile("doc_core");
     if (!coreReady) { setExtracting(false); return; }
 
-    if (needsMediaProfile(filePath)) {
+    if (needsAudioProfile(filePath)) {
       const status = await pythonEnvStatus().catch(() => null);
-      const mediaInstalled = status?.installed.includes("doc_media") ?? false;
-      if (!mediaInstalled) {
-        if (!window.confirm(t.python_env_media_prompt)) { setExtracting(false); return; }
-        const mediaReady = await pythonEnv.ensureProfile("doc_media");
-        if (!mediaReady) { setExtracting(false); return; }
+      const audioInstalled = status?.installed.includes("doc_audio") ?? false;
+      if (!audioInstalled) {
+        if (!window.confirm(t.python_env_audio_prompt)) { setExtracting(false); return; }
+        setGateProfile("doc_audio");
+        const audioReady = await pythonEnv.ensureProfile("doc_audio");
+        if (!audioReady) { setExtracting(false); return; }
       }
     }
 
@@ -258,8 +267,8 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
         state={pythonEnv.state}
         lines={pythonEnv.lines}
         error={pythonEnv.error}
-        onInstall={() => pythonEnv.ensureProfile("doc_core")}
-        onRecheck={() => pythonEnv.ensureProfile("doc_core")}
+        onInstall={() => pythonEnv.ensureProfile(gateProfile)}
+        onRecheck={() => pythonEnv.ensureProfile(gateProfile)}
       />
 
       {error && (
