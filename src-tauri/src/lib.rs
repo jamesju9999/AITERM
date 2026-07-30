@@ -48,6 +48,9 @@ use commands::{
     exec::agent_exec,
     loop_session::{loop_session_save, loop_session_list, loop_session_load, loop_session_delete, loop_session_clear_all, loop_project_pick_open, loop_project_pick_save},
     markitdown::{markitdown_convert, markitdown_pick_file},
+    python_env::{
+        python_env_status, python_env_ensure, python_env_reset, python_env_set_interpreter,
+    },
     mcp::{
         list_mcp_servers, add_mcp_server, update_mcp_server, remove_mcp_server,
         get_mcp_tools, execute_mcp_tool, import_claude_desktop_mcp, set_mcp_enabled,
@@ -385,6 +388,11 @@ pub fn run() {
             // MarkItDown
             markitdown_convert,
             markitdown_pick_file,
+            // Python environment
+            python_env_status,
+            python_env_ensure,
+            python_env_reset,
+            python_env_set_interpreter,
             // MCP
             list_mcp_servers,
             add_mcp_server,
