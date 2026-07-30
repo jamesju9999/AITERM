@@ -1586,8 +1586,18 @@ git commit -m "refactor(markitdown): use the managed Python env instead of the u
 ## Task 11: 前端引導卡與安裝進度面板
 
 **Files:**
-- Create: `src/components/PythonEnv/PythonEnvGate.tsx`, `src/components/PythonEnv/PythonEnvGate.test.tsx`
+- Create: `src/components/PythonEnv/usePythonEnvGate.ts`, `src/components/PythonEnv/usePythonEnvGate.test.ts`, `src/components/PythonEnv/PythonEnvGate.tsx`, `src/components/PythonEnv/PythonEnvGate.test.tsx`
 - Modify: `src/lib/i18n.ts`
+
+### 為什麼多一個 hook（計畫的修正）
+
+原本的規格讓每個功能入口各自監聽 `python-env-log`、各自管 gate 狀態。但有**三個**入口要做同一件事：文件轉換（`DocConverterView`）、API 文件抓取（`ApiDocsView`）、知識庫匯入（`KnowledgeBaseView`）。三份重複的事件監聽與狀態機是 bug 溫床，而且 Task 9 已經產生一個具體缺口 —— `api_docs` 刪掉的 `api-docs-log` 進度訊息（`"Checking Python dependencies…"` 與兩則 pip warn）改由 `python-env-log` 發出，而 `ApiDocsView` 不監聽它，使用者首次使用會看到「卡住 25 秒卻沒有任何訊息」。把監聽與狀態集中到 `usePythonEnvGate()`，三個入口共用，這個缺口就只需要修一次。
+
+### 判斷「該顯示哪種 UI」不要靠字串比對錯誤訊息
+
+`python_env_ensure` 失敗只會回一個 `String`。要區分「缺 Python，該顯示引導卡」與「安裝失敗，該顯示錯誤與重試」，**不要去比對錯誤字串內容** —— 那種寫法在這個專案已經害過一次：`AiPanel` 把 Anthropic 的假 `rate_limit_error` 依 i18n 顯示成「請求過於頻繁，請稍後再試」，把除錯方向整個帶偏。
+
+改用狀態判斷：`ensure` 失敗後呼叫 `pythonEnvStatus()`，依 `uvAvailable` 與 `pythonVersion` 決定 UI。若日後需要更精確的分類，正確做法是比照專案既有的 `AiError`（`kind` 的 discriminated union）讓 command 回傳結構化錯誤，而不是在前端猜字串。
 
 - [ ] **Step 1: 加 i18n key**
 
@@ -1625,7 +1635,182 @@ git commit -m "refactor(markitdown): use the managed Python env instead of the u
     python_env_media_prompt: "This file needs image/audio support. Install it now?",
 ```
 
-- [ ] **Step 2: 寫失敗測試**
+- [ ] **Step 1b: 寫 hook 的失敗測試**
+
+`src/components/PythonEnv/usePythonEnvGate.test.ts`：
+
+```ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { renderHook, act, waitFor } from "@testing-library/react";
+import { usePythonEnvGate } from "./usePythonEnvGate";
+
+const ensure = vi.fn();
+const status = vi.fn();
+const listeners: Array<(e: { payload: { level: string; message: string } }) => void> = [];
+
+vi.mock("../../ipc/pythonEnv", () => ({
+  pythonEnvEnsure: (p: string) => ensure(p),
+  pythonEnvStatus: () => status(),
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (_name: string, cb: (e: { payload: { level: string; message: string } }) => void) => {
+    listeners.push(cb);
+    return Promise.resolve(() => {});
+  },
+}));
+
+describe("usePythonEnvGate", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listeners.length = 0;
+  });
+
+  it("reports ready and returns true when ensure succeeds", async () => {
+    ensure.mockResolvedValue(undefined);
+    const { result } = renderHook(() => usePythonEnvGate());
+
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.ensureProfile("doc_core");
+    });
+
+    expect(ok).toBe(true);
+    expect(result.current.state).toBe("ready");
+  });
+
+  it("shows the guidance card when the failure is a missing Python, not a failed install", async () => {
+    // Decided from status(), not by matching words in the error string.
+    ensure.mockRejectedValue("無法取得 Python：network unreachable");
+    status.mockResolvedValue({
+      uvAvailable: true,
+      pythonVersion: null,
+      installed: [],
+      venvPath: "/data/python-env",
+      userInterpreter: null,
+    });
+    const { result } = renderHook(() => usePythonEnvGate());
+
+    await act(async () => {
+      await result.current.ensureProfile("doc_core");
+    });
+
+    expect(result.current.state).toBe("missing");
+  });
+
+  it("shows a plain failure when Python exists but the install broke", async () => {
+    ensure.mockRejectedValue("安裝 doc_core 相依套件失敗：…");
+    status.mockResolvedValue({
+      uvAvailable: true,
+      pythonVersion: "3.12.13",
+      installed: [],
+      venvPath: "/data/python-env",
+      userInterpreter: null,
+    });
+    const { result } = renderHook(() => usePythonEnvGate());
+
+    await act(async () => {
+      await result.current.ensureProfile("doc_core");
+    });
+
+    expect(result.current.state).toBe("failed");
+    expect(result.current.error).toContain("相依套件失敗");
+  });
+
+  it("accumulates log lines from python-env-log and marks warn lines as errors", async () => {
+    ensure.mockResolvedValue(undefined);
+    const { result } = renderHook(() => usePythonEnvGate());
+    await waitFor(() => expect(listeners.length).toBe(1));
+
+    act(() => {
+      listeners[0]({ payload: { level: "info", message: "Resolved 36 packages" } });
+      listeners[0]({ payload: { level: "warn", message: "could not fetch wheel" } });
+    });
+
+    expect(result.current.lines).toEqual([
+      { text: "Resolved 36 packages", isError: false },
+      { text: "could not fetch wheel", isError: true },
+    ]);
+  });
+}
+```
+
+- [ ] **Step 1c: 實作 hook**
+
+`src/components/PythonEnv/usePythonEnvGate.ts`：
+
+```ts
+import { useCallback, useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import {
+  pythonEnvEnsure,
+  pythonEnvStatus,
+  type PythonEnvLogEvent,
+  type PythonProfile,
+} from "../../ipc/pythonEnv";
+import type { InstallLogLine } from "../Settings/McpInstallTerminal";
+
+export type GateState = "ready" | "installing" | "missing" | "failed";
+
+/**
+ * Shared state for every feature that needs the managed Python environment:
+ * document conversion, API doc scraping, and knowledge-base import all call
+ * this rather than each wiring up its own listener and state machine.
+ */
+export function usePythonEnvGate() {
+  const [state, setState] = useState<GateState>("ready");
+  const [lines, setLines] = useState<InstallLogLine[]>([]);
+  const [error, setError] = useState<string>();
+  // Tauri's listen resolves after unmount in tests and on fast navigation.
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    const unlisten = listen<PythonEnvLogEvent>("python-env-log", (event) => {
+      if (!mounted.current) return;
+      setLines((prev) => [
+        ...prev,
+        { text: event.payload.message, isError: event.payload.level !== "info" },
+      ]);
+    });
+    return () => {
+      mounted.current = false;
+      unlisten.then((off) => off());
+    };
+  }, []);
+
+  /**
+   * Prepare `profile`, returning false when the caller should stop and let the
+   * gate's UI take over.
+   *
+   * Which UI that is comes from `pythonEnvStatus()`, not from reading words out
+   * of the error string — the app has been burned once by inferring a cause
+   * from a message (a fake rate_limit_error rendered as "too many requests",
+   * which sent debugging in the wrong direction for a day).
+   */
+  const ensureProfile = useCallback(async (profile: PythonProfile): Promise<boolean> => {
+    setLines([]);
+    setError(undefined);
+    setState("installing");
+    try {
+      await pythonEnvEnsure(profile);
+      setState("ready");
+      return true;
+    } catch (e) {
+      setError(String(e));
+      const status = await pythonEnvStatus().catch(() => null);
+      setState(status && status.pythonVersion === null ? "missing" : "failed");
+      return false;
+    }
+  }, []);
+
+  const dismiss = useCallback(() => setState("ready"), []);
+
+  return { state, lines, error, ensureProfile, dismiss };
+}
+```
+
+- [ ] **Step 2: 寫元件的失敗測試**
 
 `src/components/PythonEnv/PythonEnvGate.test.tsx`：
 
