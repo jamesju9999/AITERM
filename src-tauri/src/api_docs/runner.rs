@@ -65,7 +65,7 @@ pub async fn run_fetcher(
     // when the path contains the \\?\ long-path prefix on Windows.
     let script_dir = script.parent().unwrap_or(script);
 
-    let mut fetch_cmd = Command::new(&python);
+    let mut fetch_cmd = Command::new(python);
     fetch_cmd
         .arg(script)
         .arg(subcommand)

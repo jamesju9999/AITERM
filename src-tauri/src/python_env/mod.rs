@@ -31,7 +31,7 @@ pub struct PythonEnvLogEvent {
 
 #[derive(Debug, thiserror::Error)]
 pub enum PythonEnvError {
-    #[error("找不到內建的 uv 執行檔。開發環境請先執行 scripts/setup-uv-mac.sh（或對應平台的 setup-uv 腳本）。")]
+    #[error("Python 環境元件遺失，請重新安裝 AITerm。（開發環境：需先執行 scripts/setup-uv-* 取得 uv 執行檔）")]
     UvMissing,
 
     #[error("內建的 uv 執行檔無法啟動（可能是權限或 macOS 隔離屬性問題）：{0}")]
@@ -412,9 +412,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn missing_uv_names_the_setup_script_for_the_current_platform() {
+    fn missing_uv_message_tells_users_what_to_do_and_still_hints_developers() {
+        // This message reaches end users too (a broken package build), who can't
+        // run a setup script and shouldn't be told to — so it must lead with an
+        // action they *can* take (reinstall), while still keeping the
+        // "setup-uv" hint for the from-source / contributor case.
         let msg = PythonEnvError::UvMissing.to_string();
-        assert!(msg.contains("setup-uv"), "should point at the setup script: {msg}");
+        assert!(msg.contains("重新安裝"), "should tell the end user what to do: {msg}");
+        assert!(msg.contains("setup-uv"), "should still hint at the setup script for contributors: {msg}");
     }
 
     #[test]
@@ -476,6 +481,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let found = resolve_requirements(dir.path(), Some(Path::new("/resources")), Profile::DocCore);
         assert_eq!(found, Path::new("/resources/MarkItDown/requirements.txt"));
+    }
+
+    #[test]
+    fn env_status_serializes_to_the_field_names_the_frontend_reads() {
+        // src/ipc/pythonEnv.ts hand-writes this shape, and nothing checks the two
+        // stay aligned — renaming a field here would compile fine and leave the
+        // settings page reading undefined. Pin the wire names.
+        let json = serde_json::to_value(EnvStatus {
+            uv_available: true,
+            python_version: Some("3.12.13".into()),
+            installed: vec![Profile::DocCore],
+            venv_path: "/data/python-env".into(),
+            user_interpreter: None,
+        })
+        .unwrap();
+
+        assert_eq!(json["uvAvailable"], serde_json::json!(true));
+        assert_eq!(json["pythonVersion"], serde_json::json!("3.12.13"));
+        assert_eq!(json["installed"], serde_json::json!(["doc_core"]));
+        assert_eq!(json["venvPath"], serde_json::json!("/data/python-env"));
+        assert_eq!(json["userInterpreter"], serde_json::json!(null));
     }
 
     #[test]
