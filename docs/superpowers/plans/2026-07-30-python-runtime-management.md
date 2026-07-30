@@ -276,7 +276,10 @@ pub fn venv_interpreter(venv: &Path) -> PathBuf {
 }
 
 /// Locate the bundled uv binary, or `None` if it wasn't shipped.
-pub fn uv_binary(app: &AppHandle) -> Option<PathBuf> {
+///
+/// Takes no `AppHandle`: the binary's location follows from the executable's
+/// own path, so requiring app context would only mislead callers.
+pub fn uv_binary() -> Option<PathBuf> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
     let plain = exe_dir.join(exe_name(UV_STEM));
     if plain.exists() {
@@ -953,7 +956,7 @@ fn looks_like_compile_failure(output: &str) -> bool {
 pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, PythonEnvError> {
     let _guard = ENSURE_LOCK.lock().await;
 
-    let uv = paths::uv_binary(app).ok_or(PythonEnvError::UvMissing)?;
+    let uv = paths::uv_binary().ok_or(PythonEnvError::UvMissing)?;
     let venv = paths::venv_dir(app);
     let runtimes = paths::runtime_dir(app);
     let interpreter = user_interpreter(app);
@@ -1211,7 +1214,7 @@ pub fn status(app: &AppHandle) -> EnvStatus {
         });
 
     EnvStatus {
-        uv_available: paths::uv_binary(app).is_some(),
+        uv_available: paths::uv_binary().is_some(),
         python_version,
         installed: marker::installed_profiles(&venv),
         venv_path: venv.to_string_lossy().into_owned(),
