@@ -13,28 +13,6 @@ interface Props {
   onPickInterpreter?: () => void;
 }
 
-/**
- * The manual-install hint and the "pick interpreter" button both legitimately
- * contain the phrase "手動指定路徑" ("point to a path manually") — one names
- * the fallback in a sentence, the other is the button that performs it. DOM
- * text queries (getByText) match by an element's own direct text, so with
- * both rendered verbatim the phrase is ambiguous between the two nodes.
- * Splitting the hint around the shared phrase keeps the exact same visible
- * sentence while moving the tail into its own node, so only the button's
- * label matches on that substring.
- */
-function ManualHint({ hint, pickLabel }: { hint: string; pickLabel: string }) {
-  const idx = pickLabel.length > 1 ? hint.indexOf(pickLabel) : -1;
-  if (idx === -1) return <>{hint}</>;
-  const mid = idx + Math.ceil(pickLabel.length / 2);
-  return (
-    <>
-      {hint.slice(0, mid)}
-      <span>{hint.slice(mid)}</span>
-    </>
-  );
-}
-
 export function PythonEnvGate({ state, lines, error, onInstall, onRecheck, onPickInterpreter }: Props) {
   const { t } = useLocale();
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -84,9 +62,7 @@ export function PythonEnvGate({ state, lines, error, onInstall, onRecheck, onPic
               </button>
             )}
           </div>
-          <div className="python-env-gate__manual-hint">
-            <ManualHint hint={t.python_env_manual_hint} pickLabel={t.python_env_pick_interpreter} />
-          </div>
+          <div className="python-env-gate__manual-hint">{t.python_env_manual_hint}</div>
         </>
       )}
 

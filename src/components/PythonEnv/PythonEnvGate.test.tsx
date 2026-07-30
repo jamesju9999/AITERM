@@ -27,9 +27,12 @@ describe("PythonEnvGate", () => {
         onPickInterpreter={() => {}}
       />,
     );
-    expect(screen.getByText(/Install it for me|幫我安裝/)).toBeTruthy();
-    expect(screen.getByText(/check again|重新偵測/)).toBeTruthy();
-    expect(screen.getByText(/interpreter|手動指定/)).toBeTruthy();
+    // Query by role: the manual-hint paragraph mentions the same phrase as the
+    // button, and matching on text alone can't tell them apart — nor should the
+    // markup be contorted to make it possible.
+    expect(screen.getByRole("button", { name: /Install it for me|幫我安裝/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /check again|重新偵測/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /interpreter|手動指定/ })).toBeTruthy();
   });
 
   it("shows the error and a retry when the install failed", () => {
@@ -43,7 +46,7 @@ describe("PythonEnvGate", () => {
       />,
     );
     expect(screen.getByText(/could not build wheel/)).toBeTruthy();
-    expect(screen.getByText(/Retry|重試/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Retry|重試/ })).toBeTruthy();
   });
 
   it("renders nothing once the environment is ready", () => {
