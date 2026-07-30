@@ -1046,7 +1046,15 @@ pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, Python
     }
 
     let requirements = requirements_path(app, profile);
-    if marker::needs_install(&venv, profile, &requirements).unwrap_or(true) {
+    // Defaulting to "install" on Err is right — a first run and an unreadable
+    // marker should both install — but a missing requirements file is a
+    // packaging bug, not a first run. Log before collapsing them, or that
+    // distinction is gone by the time uv fails on a path that doesn't exist.
+    let needs = marker::needs_install(&venv, profile, &requirements).unwrap_or_else(|e| {
+        log::warn!("could not read install marker for {}: {e:#}", profile.marker_key());
+        true
+    });
+    if needs {
         log(app, "info", "正在安裝相依套件（首次使用需要一些時間）…");
         run(app, commands::install_requirements(&uv, &python, &requirements))
             .await
@@ -1196,6 +1204,20 @@ Expected: 全數 passed（含前面任務的 14 個）
 git add src-tauri/src/python_env src-tauri/Cargo.toml
 git commit -m "feat(python-env): orchestrate install with progress events and a single lock"
 ```
+
+### 跨程序競爭：已評估、刻意接受（不要默默忽略）
+
+`ENSURE_LOCK` 是 `tokio::sync::Mutex`，只在程序內有效。這個 app **沒有** single-instance 保護（`Cargo.toml` 與 `lib.rs` 都沒有 `tauri-plugin-single-instance`），所以使用者可以同時開兩個實例，各自觸發 `ensure()`：兩個 uv 會同時寫同一個 venv 的 site-packages，標記檔的 read-modify-write 也可能互相覆蓋。
+
+**接受這個風險，理由**：
+
+1. 觸發條件需要使用者在兩個實例裡幾乎同時觸發 Python 功能，實務上罕見
+2. 標記檔互相覆蓋的後果是「某個 profile 看起來沒裝」→ 下次使用時重裝，自我修復，不會跑到錯誤的套件版本
+3. venv 真的被寫壞時，`ensure()` 的 `interpreter_works` 檢查會偵測到並自動重建一次 —— 這條既有的降級路徑正好兜住最嚴重的情況
+
+**若日後要真正解決**，順序是：先加 `tauri-plugin-single-instance`（一併解決其他共享狀態的競爭，例如 config 與 db），而不是只為這裡加一個 OS file lock。加檔案鎖需要新依賴（std 沒有 file locking），而且崩潰後留下的 stale lock 又要另一套 PID／timestamp 判斷，複雜度換來的保障不成比例。
+
+這一段是在 Task 4 的 review 中被提出的；記錄下來是為了讓下一個人知道它被評估過、以及評估的依據，而不是沒人想到。
 
 ### 關於「假 uv 整合測試」的取捨（spec 要求明確記錄，不得默默省略）
 
