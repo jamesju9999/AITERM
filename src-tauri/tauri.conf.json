@@ -49,6 +49,9 @@
     "externalBin": [
       "binaries/db2-sidecar",
       "binaries/uv"
-    ]
+    ],
+    "resources": {
+      "../tools/MarkItDown/requirements-media.txt": "MarkItDown/requirements-media.txt"
+    }
   }
 }

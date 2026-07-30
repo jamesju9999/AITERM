@@ -5,3 +5,4 @@
 //! feature touches the user's own Python installation.
 
 pub mod paths;
+pub mod profiles;
