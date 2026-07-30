@@ -7,7 +7,7 @@
         "installerIcon": "icons/icon.ico"
       }
     },
-    "externalBin": [],
+    "externalBin": ["binaries/uv"],
     "resources": {
       "binaries/db2-sidecar-win-x64": "db2-sidecar",
       "../tools/ApiDocFetcher/*.py": "ApiDocFetcher/",

@@ -26,3 +26,4 @@ tar -xzf "$TMP/uv.tar.gz" -C "$TMP"
 cp "$TMP/uv-${TRIPLE}/uv" "$DEST/uv-${TRIPLE}"
 chmod +x "$DEST/uv-${TRIPLE}"
 echo "==> Wrote $DEST/uv-${TRIPLE}"
+"$DEST/uv-${TRIPLE}" --version
