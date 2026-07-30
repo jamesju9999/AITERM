@@ -1,6 +1,7 @@
 /* src/components/PythonEnv/PythonEnvGate.css */
 
 .python-env-gate {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -11,6 +12,30 @@
   border-radius: 8px;
   font-size: 13px;
   flex-shrink: 0;
+}
+
+.python-env-gate__dismiss {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--text-secondary, #888);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.python-env-gate__dismiss:hover {
+  background: var(--bg-input, #0d0d1a);
+  color: var(--text-primary, #e0e0e0);
 }
 
 .python-env-gate__title {

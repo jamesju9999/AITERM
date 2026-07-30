@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { PythonEnvGate } from "./PythonEnvGate";
 
 describe("PythonEnvGate", () => {
@@ -80,6 +80,48 @@ describe("PythonEnvGate", () => {
     );
     expect(screen.getByText(/could not build wheel/)).toBeTruthy();
     expect(screen.getByRole("button", { name: /Retry|重試/ })).toBeTruthy();
+  });
+
+  it("lets the user dismiss the missing/failed/broken card so it stops blocking the rest of the app", () => {
+    // Without onDismiss, the card only ever closes via a successful ensure()
+    // — there's no way to just get it out of the way and use another feature.
+    for (const state of ["missing", "failed", "broken"] as const) {
+      const onDismiss = vi.fn();
+      const { unmount } = render(
+        <PythonEnvGate
+          state={state}
+          lines={[]}
+          onInstall={() => {}}
+          onRecheck={() => {}}
+          onDismiss={onDismiss}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Dismiss|關閉/ }));
+      expect(onDismiss).toHaveBeenCalledOnce();
+      unmount();
+    }
+  });
+
+  it("does not offer a dismiss button while installing, even if onDismiss is provided", () => {
+    // Closing the card mid-install would read as "cancel the install", which
+    // it doesn't actually do.
+    render(
+      <PythonEnvGate
+        state="installing"
+        lines={[]}
+        onInstall={() => {}}
+        onRecheck={() => {}}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /Dismiss|關閉/ })).toBeNull();
+  });
+
+  it("does not offer a dismiss button when the caller doesn't pass onDismiss", () => {
+    render(
+      <PythonEnvGate state="missing" lines={[]} onInstall={() => {}} onRecheck={() => {}} />,
+    );
+    expect(screen.queryByRole("button", { name: /Dismiss|關閉/ })).toBeNull();
   });
 
   it("renders nothing once the environment is ready", () => {

@@ -250,6 +250,7 @@ export function KnowledgeBaseView({ isActive }: Props) {
           onInstall={() => pythonEnv.ensureProfile("doc_core")}
           onRecheck={() => pythonEnv.ensureProfile("doc_core")}
           onPickInterpreter={() => navigate("/settings", { state: { tab: "general" } })}
+          onDismiss={pythonEnv.dismiss}
         />
         {!activeNotebook ? (
           <div className="ca-empty">

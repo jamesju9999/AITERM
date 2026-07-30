@@ -272,6 +272,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
         onInstall={() => pythonEnv.ensureProfile(gateProfile)}
         onRecheck={() => pythonEnv.ensureProfile(gateProfile)}
         onPickInterpreter={() => navigate("/settings", { state: { tab: "general" } })}
+        onDismiss={pythonEnv.dismiss}
       />
 
       {error && (

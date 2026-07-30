@@ -490,6 +490,7 @@ Reformat the following raw API documentation page into clean Markdown.
         onInstall={() => pythonEnv.ensureProfile("api_docs")}
         onRecheck={() => pythonEnv.ensureProfile("api_docs")}
         onPickInterpreter={() => navigate("/settings", { state: { tab: "general" } })}
+        onDismiss={pythonEnv.dismiss}
       />
 
       {/* Main layout: left tree + right settings */}

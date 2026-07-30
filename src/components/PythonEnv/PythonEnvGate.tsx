@@ -11,9 +11,10 @@ interface Props {
   onInstall: () => void;
   onRecheck: () => void;
   onPickInterpreter?: () => void;
+  onDismiss?: () => void;
 }
 
-export function PythonEnvGate({ state, lines, error, onInstall, onRecheck, onPickInterpreter }: Props) {
+export function PythonEnvGate({ state, lines, error, onInstall, onRecheck, onPickInterpreter, onDismiss }: Props) {
   const { t } = useLocale();
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -29,6 +30,18 @@ export function PythonEnvGate({ state, lines, error, onInstall, onRecheck, onPic
   // since that log is often the only place the real uv/pip error is visible.
   return (
     <div className="python-env-gate">
+      {/* No dismiss while installing — closing the card mid-install could
+          read as "cancel the install", which it doesn't do. */}
+      {onDismiss && state !== "installing" && (
+        <button
+          className="python-env-gate__dismiss"
+          onClick={onDismiss}
+          aria-label={t.python_env_dismiss}
+        >
+          ×
+        </button>
+      )}
+
       {state === "installing" && (
         <>
           <div className="python-env-gate__title">{t.python_env_preparing}</div>
