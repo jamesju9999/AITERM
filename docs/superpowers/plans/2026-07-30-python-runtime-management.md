@@ -1164,6 +1164,27 @@ fn no_window(cmd: &mut tokio::process::Command) {
 
 `Cargo.toml` 確認有 `thiserror`；若無則加入 `thiserror = "2"`。
 
+- [ ] **Step 3b: 實測 markitdown 的版本漂移風險**
+
+拆成 core／media 兩份 requirements 後，兩者都用開放式 `>=0.1.0`，而它們是**分兩次**解析安裝的。風險情境：使用者先觸發 `DocCore` 安裝（當時 markitdown 是 0.1.0），數週後第一次選了 PNG 觸發 `DocMedia`，此時 PyPI 上已是 0.3.0 —— 若解析器不保留已裝版本，markitdown 本體會被靜默升級，使用者只想加圖片支援卻連帶換掉已經跑穩的文件轉換核心。拆分前只有一次解析，不存在這個問題。
+
+這個風險是否真的存在，取決於 uv 的實際行為（是否像 pip 一樣「已滿足約束就不動」），必須實測而非推論：
+
+```bash
+# 在暫時的 venv 裡先裝 core，記下版本
+uv venv /tmp/drift-probe --python 3.12
+uv pip install --python /tmp/drift-probe/bin/python -r tools/MarkItDown/requirements.txt
+uv pip list --python /tmp/drift-probe/bin/python | grep -i markitdown
+
+# 再裝 media，看本體版本有沒有變
+uv pip install --python /tmp/drift-probe/bin/python -r tools/MarkItDown/requirements-media.txt
+uv pip list --python /tmp/drift-probe/bin/python | grep -i markitdown
+
+rm -rf /tmp/drift-probe
+```
+
+若版本不變 → 記錄結論、不需處理。若被升級 → 兩份檔案改成相同的上下界（例如 `>=0.1.0,<0.2.0`），確保不論安裝順序或時間差都落在同一版本。**不要在沒實測前就加上界** —— 猜錯當前版本會直接把安裝鎖死。
+
 - [ ] **Step 4: 執行測試**
 
 Run: `cd src-tauri && cargo test --lib python_env`
