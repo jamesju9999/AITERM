@@ -50,6 +50,7 @@ use commands::{
     markitdown::{markitdown_convert, markitdown_pick_file},
     python_env::{
         python_env_status, python_env_ensure, python_env_reset, python_env_set_interpreter,
+        python_env_set_index_url,
     },
     mcp::{
         list_mcp_servers, add_mcp_server, update_mcp_server, remove_mcp_server,
@@ -393,6 +394,7 @@ pub fn run() {
             python_env_ensure,
             python_env_reset,
             python_env_set_interpreter,
+            python_env_set_index_url,
             // MCP
             list_mcp_servers,
             add_mcp_server,

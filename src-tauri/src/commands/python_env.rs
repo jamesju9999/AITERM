@@ -71,3 +71,15 @@ pub fn python_env_set_interpreter(
         .update(|cfg| cfg.python_interpreter = normalized)
         .map_err(|e| format!("儲存設定失敗：{e}"))
 }
+
+#[tauri::command]
+pub fn python_env_set_index_url(
+    url: Option<String>,
+    config: State<'_, Arc<ConfigStore>>,
+) -> Result<(), String> {
+    config
+        .update(|cfg| {
+            cfg.python_index_url = url.as_ref().map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
+        })
+        .map_err(|e| format!("儲存設定失敗：{e}"))
+}

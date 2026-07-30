@@ -67,15 +67,27 @@ pub fn create_venv(
     )
 }
 
-/// Install a requirements file into the venv.
-pub fn install_requirements(uv: &Path, venv_python: &Path, requirements: &Path) -> CommandSpec {
+/// Install a requirements file into the venv. `index_url`, when set, points uv
+/// at a package index other than PyPI — a corporate mirror, typically —
+/// since uv reads neither `pip.conf` nor `PIP_INDEX_URL`, the settings that let
+/// the old `pip install --user` path work behind a firewall.
+pub fn install_requirements(
+    uv: &Path,
+    venv_python: &Path,
+    requirements: &Path,
+    index_url: Option<&str>,
+) -> CommandSpec {
     let python = venv_python.to_string_lossy().into_owned();
     let req = requirements.to_string_lossy().into_owned();
-    spec(
+    let mut cmd = spec(
         uv,
         &["pip", "install", "--python", &python, "-r", &req],
         None,
-    )
+    );
+    if let Some(url) = index_url {
+        cmd.env.insert("UV_INDEX_URL".to_string(), url.to_string());
+    }
+    cmd
 }
 
 #[cfg(test)]
@@ -140,6 +152,7 @@ mod tests {
             &uv(),
             &PathBuf::from("/data/python-env/bin/python"),
             &PathBuf::from("/tools/MarkItDown/requirements.txt"),
+            None,
         );
 
         assert_eq!(
@@ -159,12 +172,41 @@ mod tests {
     }
 
     #[test]
+    fn pip_install_without_an_index_url_does_not_set_one() {
+        let spec = install_requirements(
+            &uv(),
+            &PathBuf::from("/env/bin/python"),
+            &PathBuf::from("/r.txt"),
+            None,
+        );
+        assert!(!spec.env.contains_key("UV_INDEX_URL"));
+    }
+
+    #[test]
+    fn pip_install_with_an_index_url_passes_it_to_uv() {
+        // Verified against the bundled uv 0.11.19: pointed at a bogus host via
+        // UV_INDEX_URL, it tried to fetch from that host rather than pypi.org —
+        // this is the env var uv actually reads, not UV_INDEX or
+        // UV_DEFAULT_INDEX.
+        let spec = install_requirements(
+            &uv(),
+            &PathBuf::from("/env/bin/python"),
+            &PathBuf::from("/r.txt"),
+            Some("https://pypi.mycompany.com/simple"),
+        );
+        assert_eq!(
+            spec.env.get("UV_INDEX_URL").map(String::as_str),
+            Some("https://pypi.mycompany.com/simple")
+        );
+    }
+
+    #[test]
     fn every_spec_disables_uvs_progress_animation() {
         // The log panel shows plain lines; uv's spinner would render as noise.
         let specs = [
             install_python(&uv(), &PathBuf::from("/rt")),
             create_venv(&uv(), &PathBuf::from("/env"), &PathBuf::from("/rt"), None),
-            install_requirements(&uv(), &PathBuf::from("/env/bin/python"), &PathBuf::from("/r.txt")),
+            install_requirements(&uv(), &PathBuf::from("/env/bin/python"), &PathBuf::from("/r.txt"), None),
         ];
         for spec in specs {
             assert_eq!(spec.env.get("UV_NO_PROGRESS").map(String::as_str), Some("1"));

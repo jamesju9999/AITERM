@@ -80,6 +80,12 @@ pub struct AppConfig {
     /// changes which interpreter it's based on.
     #[serde(default)]
     pub python_interpreter: Option<String>,
+
+    /// Package index for the managed environment, for networks that block PyPI.
+    /// uv reads neither pip.conf nor PIP_INDEX_URL, so a corporate mirror has
+    /// no effect unless it's passed explicitly.
+    #[serde(default)]
+    pub python_index_url: Option<String>,
 }
 
 fn default_max_agent_steps() -> u32 { 5 }
@@ -133,6 +139,7 @@ impl Default for AppConfig {
             mcp_enabled: true,
             mcp_servers: vec![],
             python_interpreter: None,
+            python_index_url: None,
         }
     }
 }
@@ -656,5 +663,18 @@ mod tests {
         let cfg: AppConfig =
             toml::from_str("python_interpreter = \"/usr/local/bin/python3.12\"").unwrap();
         assert_eq!(cfg.python_interpreter.as_deref(), Some("/usr/local/bin/python3.12"));
+    }
+
+    #[test]
+    fn python_index_url_defaults_to_none_for_existing_configs() {
+        let cfg: AppConfig = toml::from_str("").expect("empty config should parse");
+        assert_eq!(cfg.python_index_url, None);
+    }
+
+    #[test]
+    fn python_index_url_round_trips() {
+        let cfg: AppConfig =
+            toml::from_str("python_index_url = \"https://pypi.mycompany.com/simple\"").unwrap();
+        assert_eq!(cfg.python_index_url.as_deref(), Some("https://pypi.mycompany.com/simple"));
     }
 }

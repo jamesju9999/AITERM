@@ -82,6 +82,13 @@ fn user_interpreter(app: &AppHandle) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Package index the user pointed us at, for networks that block PyPI. `None`
+/// means "let uv use its default" (pypi.org).
+fn index_url(app: &AppHandle) -> Option<String> {
+    let config = app.state::<std::sync::Arc<crate::config::ConfigStore>>();
+    config.get().python_index_url.filter(|s| !s.trim().is_empty())
+}
+
 /// Prepare the environment for `profile` and return its interpreter.
 ///
 /// Idempotent and cheap once warm: the marker file short-circuits the install
@@ -169,8 +176,12 @@ pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, Python
     });
     if needs {
         emit_log(app, "info", "正在安裝相依套件（首次使用需要一些時間）…");
-        run(app, commands::install_requirements(&uv, &python, &requirements))
-            .await
+        let index = index_url(app);
+        run(
+            app,
+            commands::install_requirements(&uv, &python, &requirements, index.as_deref()),
+        )
+        .await
             .map_err(|f| match f {
                 RunFailure::NotExecutable(e) => PythonEnvError::UvUnusable(e),
                 RunFailure::Failed(output) => {
@@ -199,6 +210,7 @@ pub struct EnvStatus {
     pub installed: Vec<Profile>,
     pub venv_path: String,
     pub user_interpreter: Option<String>,
+    pub index_url: Option<String>,
 }
 
 /// Snapshot for the settings page and the feature gates. Never runs uv.
@@ -219,6 +231,7 @@ pub fn status(app: &AppHandle) -> EnvStatus {
         installed: marker::installed_profiles(&venv),
         venv_path: venv.to_string_lossy().into_owned(),
         user_interpreter: user_interpreter(app).map(|p| p.to_string_lossy().into_owned()),
+        index_url: index_url(app),
     }
 }
 
@@ -503,6 +516,7 @@ mod tests {
             installed: vec![Profile::DocCore],
             venv_path: "/data/python-env".into(),
             user_interpreter: None,
+            index_url: Some("https://pypi.mycompany.com/simple".into()),
         })
         .unwrap();
 
@@ -511,6 +525,7 @@ mod tests {
         assert_eq!(json["installed"], serde_json::json!(["doc_core"]));
         assert_eq!(json["venvPath"], serde_json::json!("/data/python-env"));
         assert_eq!(json["userInterpreter"], serde_json::json!(null));
+        assert_eq!(json["indexUrl"], serde_json::json!("https://pypi.mycompany.com/simple"));
     }
 
     #[test]

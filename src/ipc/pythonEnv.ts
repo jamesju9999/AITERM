@@ -8,6 +8,7 @@ export interface PythonEnvStatus {
   installed: PythonProfile[];
   venvPath: string;
   userInterpreter: string | null;
+  indexUrl: string | null;
 }
 
 export interface PythonEnvLogEvent {
@@ -27,3 +28,6 @@ export const pythonEnvReset = (purgeRuntimes: boolean): Promise<void> =>
 
 export const pythonEnvSetInterpreter = (path: string | null): Promise<void> =>
   invoke("python_env_set_interpreter", { path });
+
+export const pythonEnvSetIndexUrl = (url: string | null): Promise<void> =>
+  invoke("python_env_set_index_url", { url });
