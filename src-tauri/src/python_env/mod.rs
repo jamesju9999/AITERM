@@ -4,5 +4,6 @@
 //! creates a venv under app data, and installs per-profile requirements. No
 //! feature touches the user's own Python installation.
 
+pub mod marker;
 pub mod paths;
 pub mod profiles;
