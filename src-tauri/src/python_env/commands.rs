@@ -40,6 +40,15 @@ pub fn install_python(uv: &Path, runtime_dir: &Path) -> CommandSpec {
 
 /// Create the managed venv. `interpreter` overrides the managed interpreter
 /// when the user pointed the app at their own Python.
+///
+/// Always passes `--clear`: uv refuses outright if `venv` already exists as a
+/// directory ("A virtual environment already exists at: ..."), even when it's
+/// an empty shell left by an interrupted install (the app closed mid-`uv
+/// venv`, antivirus quarantining `Scripts\python.exe` on Windows, a partial
+/// `remove_dir_all`). Without `--clear`, that leftover directory makes every
+/// retry fail with the same unhelpful message — nothing in the app can dig
+/// itself out. `--clear` makes "the target must be empty" the command's own
+/// guarantee, so both call sites in `ensure()` get it for free.
 pub fn create_venv(
     uv: &Path,
     venv: &Path,
@@ -53,7 +62,7 @@ pub fn create_venv(
     };
     spec(
         uv,
-        &["venv", &venv, "--python", &python],
+        &["venv", &venv, "--python", &python, "--clear"],
         Some(runtime_dir),
     )
 }
@@ -91,7 +100,7 @@ mod tests {
     fn venv_creation_uses_the_managed_interpreter_by_default() {
         let spec = create_venv(&uv(), &PathBuf::from("/data/python-env"), &PathBuf::from("/data/rt"), None);
 
-        assert_eq!(spec.args, vec!["venv", "/data/python-env", "--python", PYTHON_VERSION]);
+        assert_eq!(spec.args, vec!["venv", "/data/python-env", "--python", PYTHON_VERSION, "--clear"]);
         // Without this, uv can't find the interpreter it just installed into the
         // managed runtime dir — and dropping it silently left all six tests green.
         assert_eq!(
@@ -111,8 +120,18 @@ mod tests {
 
         assert_eq!(
             spec.args,
-            vec!["venv", "/data/python-env", "--python", "/usr/local/bin/python3.12"]
+            vec!["venv", "/data/python-env", "--python", "/usr/local/bin/python3.12", "--clear"]
         );
+    }
+
+    #[test]
+    fn venv_creation_always_clears_a_pre_existing_target() {
+        // uv refuses outright ("A virtual environment already exists at: ...")
+        // if the directory is already there — including the empty shell an
+        // interrupted install leaves behind. Without --clear, every retry after
+        // such an interruption fails the same unhelpful way forever.
+        let spec = create_venv(&uv(), &PathBuf::from("/data/python-env"), &PathBuf::from("/data/rt"), None);
+        assert!(spec.args.contains(&"--clear".to_string()));
     }
 
     #[test]

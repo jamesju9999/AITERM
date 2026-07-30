@@ -129,6 +129,15 @@ pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, Python
 
     // A venv can survive on disk but stop working (deleted files, an OS
     // upgrade moving dylibs). Rebuild once before giving up.
+    //
+    // `create_venv` now always passes `--clear`, so this `remove_dir_all` is no
+    // longer what makes uv accept a pre-existing directory — that's covered
+    // unconditionally. It stays anyway: this branch is a different failure mode
+    // (an interpreter that's there but broken, not one that's merely missing),
+    // and starting from a directory that's actually gone — rather than trusting
+    // `--clear` to fully undo whatever left the interpreter broken — is the
+    // more conservative recovery. The result is ignored deliberately: if
+    // removal fails partway, `--clear` still gets a chance to finish the job.
     if !interpreter_works(&python).await {
         emit_log(app, "warn", "Python 環境無法執行，正在重建…");
         let _ = tokio::fs::remove_dir_all(&venv).await;
