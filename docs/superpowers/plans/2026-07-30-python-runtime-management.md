@@ -1593,6 +1593,14 @@ git commit -m "refactor(markitdown): use the managed Python env instead of the u
 
 原本的規格讓每個功能入口各自監聽 `python-env-log`、各自管 gate 狀態。但有**三個**入口要做同一件事：文件轉換（`DocConverterView`）、API 文件抓取（`ApiDocsView`）、知識庫匯入（`KnowledgeBaseView`）。三份重複的事件監聽與狀態機是 bug 溫床，而且 Task 9 已經產生一個具體缺口 —— `api_docs` 刪掉的 `api-docs-log` 進度訊息（`"Checking Python dependencies…"` 與兩則 pip warn）改由 `python-env-log` 發出，而 `ApiDocsView` 不監聽它，使用者首次使用會看到「卡住 25 秒卻沒有任何訊息」。把監聽與狀態集中到 `usePythonEnvGate()`，三個入口共用，這個缺口就只需要修一次。
 
+### 驗收標準：正常首次安裝也要有進度，不只是「缺 Python」時的引導卡
+
+合併 review 實地追過這條路徑後確認，缺口比原本設想的大：`python-env-log` 在整個 `src/` **沒有任何監聽者**，而 `ApiDocsView` 的 log 面板要 `logs.length > 0` 才渲染。所以使用者首次抓取 API 文件時，那實測 25 秒（9.2s 下載 Python + 12.9s 裝套件，都需要網路）內畫面上只有一個靜態的「Loading…」按鈕文字，log 面板連出現都沒有 —— 成功時一行訊息也沒有，失敗時才冒出一行不透明的錯誤。
+
+這是**常見的首次使用路徑**，不是例外情況。所以本任務的驗收標準是「正常首次安裝過程可見」，而非只有「缺 Python 時顯示引導卡」。
+
+（`markitdown` 那邊沒有同樣的退化 —— 它舊的 pip 階段本來也沒 emit 任何 UI 事件。）
+
 ### 判斷「該顯示哪種 UI」不要靠字串比對錯誤訊息
 
 `python_env_ensure` 失敗只會回一個 `String`。要區分「缺 Python，該顯示引導卡」與「安裝失敗，該顯示錯誤與重試」，**不要去比對錯誤字串內容** —— 那種寫法在這個專案已經害過一次：`AiPanel` 把 Anthropic 的假 `rate_limit_error` 依 i18n 顯示成「請求過於頻繁，請稍後再試」，把除錯方向整個帶偏。
@@ -1940,6 +1948,8 @@ git commit -m "feat(python-env): add the setup gate with install progress and es
 ---
 
 ## Task 12: 設定頁「Python 環境」區塊
+
+> **這不是便利功能，而是讓錯誤訊息重新可行動的關鍵。** Task 10 刪掉的舊訊息會叫使用者執行 `pip install markitdown` —— 那在受管 venv 模型下已經是**錯誤建議**（app 不再碰系統 Python，裝進系統 Python 也不會被用到）。取代它的 `InstallFailed`／`ToolchainMissing` 診斷資訊更豐富（帶 40 行真實 uv 輸出，且 `ToolchainMissing` 正確區分出「缺編譯工具鏈」這個重試也沒用的情況），但沒有任何一個告訴使用者能做什麼。真正的逃生門是「手動指定 interpreter」與「重建環境」，而它們在這個任務之前沒有 UI 可達。合併 review 特別點出這一點，實作時不要把它當成錦上添花。
 
 **Files:**
 - Modify: `src/components/Settings/GeneralPage.tsx`
