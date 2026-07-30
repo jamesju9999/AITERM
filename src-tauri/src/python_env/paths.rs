@@ -11,7 +11,8 @@ use tauri::{AppHandle, Manager};
 
 const UV_STEM: &str = "uv";
 
-/// The venv the app manages. Deleting this directory is always safe.
+/// The venv the app manages. Safe to delete — but only once the caller has
+/// confirmed app_data_dir() resolved, since this falls back to "." otherwise.
 pub fn venv_dir(app: &AppHandle) -> PathBuf {
     app_data(app).join("python-env")
 }

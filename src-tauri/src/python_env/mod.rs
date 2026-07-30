@@ -195,12 +195,13 @@ pub struct EnvStatus {
 /// Snapshot for the settings page and the feature gates. Never runs uv.
 ///
 /// Reads `pyvenv.cfg` rather than running `python --version`. This is called
-/// every time the settings page or a feature gate wants state, and spawning a
-/// process for that would flash a console window on Windows (the sync
-/// `std::process::Command` can't reuse `no_window`, which takes a tokio
-/// Command) and cost far more than reading one small file. It reports the
-/// version the venv was built with, not whether the interpreter still runs —
-/// `ensure()` owns that check via `interpreter_works`.
+/// every time the settings page or a feature gate wants state, and paying for a
+/// process spawn each time is the wrong trade for reading one small file. (A
+/// sync `std::process::Command` could set CREATE_NO_WINDOW itself via
+/// CommandExt, so the Windows console flash alone wouldn't have decided this —
+/// the per-call cost did.) It reports the version the venv was built with, not
+/// whether the interpreter still runs — `ensure()` owns that check via
+/// `interpreter_works`.
 pub fn status(app: &AppHandle) -> EnvStatus {
     let venv = paths::venv_dir(app);
     EnvStatus {
@@ -224,13 +225,40 @@ fn venv_python_version(venv: &Path) -> Option<String> {
 
 /// Delete the venv (and optionally the downloaded interpreters). The next
 /// `ensure` rebuilds from scratch.
+///
+/// A `remove_dir_all` that fails partway (a loaded dylib on Windows, permissions
+/// on Unix) leaves the directory present but partly emptied, and ensure()'s
+/// "no interpreter yet" branch creates the venv without clearing first — so
+/// recovery then depends on uv tolerating a non-empty target. Reporting the
+/// error lets the user retry, which is the reliable path out.
 pub async fn reset(app: &AppHandle, purge_runtimes: bool) -> Result<(), PythonEnvError> {
+    // Same guard as ensure(), and it matters more here: paths::app_data falls
+    // back to "." when app_data_dir() fails, so without this a reset would
+    // recursively delete ./python-env relative to the process's working
+    // directory. Writing to the wrong place is bad; deleting there is worse.
+    if app.path().app_data_dir().is_err() {
+        return Err(PythonEnvError::Io(
+            "無法取得應用程式資料目錄，請確認磁碟權限".to_string(),
+        ));
+    }
+
     let _guard = ENSURE_LOCK.lock().await;
-    remove_if_present(&paths::venv_dir(app)).await?;
-    if purge_runtimes {
-        remove_if_present(&paths::runtime_dir(app)).await?;
+    let venv = paths::venv_dir(app);
+    let runtimes = paths::runtime_dir(app);
+    for dir in dirs_to_purge(&venv, &runtimes, purge_runtimes) {
+        remove_if_present(dir).await?;
     }
     Ok(())
+}
+
+/// Directories a reset removes. Split out so the purge_runtimes branch is
+/// testable without an AppHandle.
+fn dirs_to_purge<'a>(venv: &'a Path, runtimes: &'a Path, purge_runtimes: bool) -> Vec<&'a Path> {
+    if purge_runtimes {
+        vec![venv, runtimes]
+    } else {
+        vec![venv]
+    }
 }
 
 async fn remove_if_present(dir: &Path) -> Result<(), PythonEnvError> {
@@ -490,5 +518,35 @@ mod tests {
         remove_if_present(&target).await.unwrap();
 
         assert!(!target.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn removing_a_locked_directory_reports_the_path() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("python-env");
+        std::fs::create_dir_all(target.join("bin")).unwrap();
+        // Clearing write permission on the parent makes the child undeletable.
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        let err = remove_if_present(&target).await.unwrap_err();
+        assert!(err.to_string().contains("python-env"), "message should name the path: {err}");
+
+        // Restore so tempdir cleanup can run.
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[test]
+    fn a_rebuild_keeps_the_downloaded_runtimes() {
+        let dirs = dirs_to_purge(Path::new("/env"), Path::new("/rt"), false);
+        assert_eq!(dirs, vec![Path::new("/env")]);
+    }
+
+    #[test]
+    fn a_full_delete_removes_the_runtimes_too() {
+        let dirs = dirs_to_purge(Path::new("/env"), Path::new("/rt"), true);
+        assert_eq!(dirs, vec![Path::new("/env"), Path::new("/rt")]);
     }
 }
