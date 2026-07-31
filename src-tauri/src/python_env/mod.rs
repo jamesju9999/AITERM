@@ -205,6 +205,10 @@ pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, Python
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvStatus {
+    /// Whether the bundled uv binary is present *and* (where the platform has
+    /// the concept) marked executable. This does not run it — see
+    /// `is_executable` for why a full `uv --version` spawn isn't worth doing
+    /// here, and for the one class of "unusable" this still can't see.
     pub uv_available: bool,
     pub python_version: Option<String>,
     pub installed: Vec<Profile>,
@@ -226,13 +230,44 @@ pub struct EnvStatus {
 pub fn status(app: &AppHandle) -> EnvStatus {
     let venv = paths::venv_dir(app);
     EnvStatus {
-        uv_available: paths::uv_binary().is_some(),
+        uv_available: paths::uv_binary().is_some_and(|uv| is_executable(&uv)),
         python_version: venv_python_version(&venv),
         installed: marker::installed_profiles(&venv),
         venv_path: venv.to_string_lossy().into_owned(),
         user_interpreter: user_interpreter(app).map(|p| p.to_string_lossy().into_owned()),
         index_url: index_url(app),
     }
+}
+
+/// Whether `path` is usable as-is, without running it.
+///
+/// On Unix this checks the executable bit, which catches the concrete,
+/// reproducible failure this exists for: a uv binary that lost its execute
+/// permission (a copy that didn't preserve modes, an overzealous antivirus, a
+/// restrictive ACL) — that's exactly what turns into `UvUnusable` when
+/// `ensure()` tries to spawn it. On Windows, where there's no separate
+/// executable-bit concept, existence is the only thing left to check.
+///
+/// What this deliberately does *not* cover: macOS Gatekeeper/quarantine.
+/// Verified empirically (chmod +x, then `xattr -w com.apple.quarantine`, then
+/// exec'd directly as a subprocess — not through Finder/`open`) that a
+/// quarantined-but-executable binary still runs. Gatekeeper's block applies to
+/// launches through LaunchServices, not to a plain `exec` from a spawned
+/// child process, so quarantine isn't actually a gap here in practice — and
+/// even if it were, closing it would mean running `uv --version` on every
+/// call, which is the same per-call process-spawn cost `status()` already
+/// rejects for `python_version` above, for a benefit this narrow.
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.exists()
 }
 
 /// Version recorded in the venv's `pyvenv.cfg`, which uv writes as
@@ -598,5 +633,41 @@ mod tests {
     fn a_full_delete_removes_the_runtimes_too() {
         let dirs = dirs_to_purge(Path::new("/env"), Path::new("/rt"), true);
         assert_eq!(dirs, vec![Path::new("/env"), Path::new("/rt")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_executable_file_is_reported_as_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("uv");
+        std::fs::write(&bin, b"").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(is_executable(&bin));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_missing_the_executable_bit_is_reported_as_not_executable() {
+        // This is the concrete, reproducible case `is_executable` exists for: a
+        // copy that didn't preserve permissions, or a restrictive ACL — the
+        // same condition that turns into `PythonEnvError::UvUnusable` when
+        // `ensure()` actually tries to spawn it.
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("uv");
+        std::fs::write(&bin, b"").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(!is_executable(&bin));
+    }
+
+    #[test]
+    fn a_missing_file_is_reported_as_not_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_executable(&dir.path().join("does-not-exist")));
     }
 }

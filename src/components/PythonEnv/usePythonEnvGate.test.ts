@@ -60,6 +60,12 @@ describe("usePythonEnvGate", () => {
     // uvAvailable: false means the bundled uv binary is gone or unusable — no
     // "install it for me" button can fix that, so it must not collapse into
     // "missing" the way a plain missing-Python failure does.
+    //
+    // This combination is one the backend can actually produce: `status()`'s
+    // uvAvailable checks the executable bit (not just that the file exists),
+    // so a uv binary that lost its execute permission (a copy that didn't
+    // preserve modes, a restrictive ACL) reports uvAvailable: false at the
+    // same time ensure() fails to spawn it with a permission error.
     ensure.mockRejectedValue("uv 無法執行：permission denied");
     status.mockResolvedValue({
       uvAvailable: false,
