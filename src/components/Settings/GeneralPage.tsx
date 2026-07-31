@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getConfig, setExecutionMode, setSubmitShortcut, setMaxAgentSteps, setDefaultTab, appimageIntegrationState, appimageIntegrate, appimageRemoveIntegration, setAppImageIntegrationDeclined } from "../../ipc/config";
 import type { ExecutionMode, SubmitShortcut, DefaultTab, AppImageIntegrationState } from "../../ipc/config";
-import { pythonEnvStatus, pythonEnvReset, pythonEnvSetInterpreter } from "../../ipc/pythonEnv";
+import { pythonEnvStatus, pythonEnvReset, pythonEnvSetInterpreter, pythonEnvSetIndexUrl } from "../../ipc/pythonEnv";
 import type { PythonEnvStatus } from "../../ipc/pythonEnv";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { Locale } from "../../lib/i18n";
@@ -47,6 +47,7 @@ export function GeneralPage() {
   const [appimageError, setAppimageError] = useState<string | null>(null);
   const [pyEnv, setPyEnv] = useState<PythonEnvStatus | null>(null);
   const [pyEnvError, setPyEnvError] = useState<string | null>(null);
+  const [indexUrl, setIndexUrlState] = useState("");
 
   const loadAppimage = useCallback(() => {
     appimageIntegrationState().then(setAppimage).catch(() => {});
@@ -57,6 +58,13 @@ export function GeneralPage() {
     pythonEnvStatus().then(setPyEnv).catch(() => setPyEnv(null));
   }, []);
   useEffect(refreshPyEnv, [refreshPyEnv]);
+
+  // Prefill from the persisted value once the status loads. Not re-synced on
+  // every keystroke below — handleIndexUrlChange saves directly, so there's
+  // nothing to reconcile.
+  useEffect(() => {
+    if (pyEnv) setIndexUrlState(pyEnv.indexUrl ?? "");
+  }, [pyEnv]);
 
   const handlePyEnvReset = async (purge: boolean) => {
     // Purging removes downloaded interpreters too, so it needs a confirmation —
@@ -91,6 +99,16 @@ export function GeneralPage() {
     try {
       await pythonEnvSetInterpreter(null);
       refreshPyEnv();
+    } catch (e) {
+      setPyEnvError(String(e));
+    }
+  };
+
+  const handleIndexUrlChange = async (value: string) => {
+    setIndexUrlState(value);
+    setPyEnvError(null);
+    try {
+      await pythonEnvSetIndexUrl(value.trim() ? value : null);
     } catch (e) {
       setPyEnvError(String(e));
     }
@@ -494,6 +512,22 @@ export function GeneralPage() {
 
             <p className="section-desc">{t.python_env_interpreter_rebuild_hint}</p>
             <p className="section-desc">{t.python_env_legacy_note}</p>
+
+            <div style={{ marginTop: "12px" }}>
+              <label style={{ display: "block", marginBottom: "4px", fontSize: "13px", color: "#aaa" }}>
+                {t.python_env_index_url_label}
+              </label>
+              <p className="section-desc" style={{ margin: "0 0 8px 0" }}>{t.python_env_index_url_desc}</p>
+              <input
+                type="text"
+                className="settings-input"
+                style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #333", background: "#1e1e1e", color: "#eee" }}
+                placeholder={t.python_env_index_url_placeholder}
+                value={indexUrl}
+                onChange={(e) => handleIndexUrlChange(e.target.value)}
+              />
+            </div>
+
             {pyEnvError && (
               <p className="section-desc" style={{ color: "#e06c75" }}>{pyEnvError}</p>
             )}

@@ -1039,7 +1039,7 @@ const zhTW = {
     python_env_broken_title: "Python 環境元件遺失，請重新安裝 AITerm",
     python_env_retry: "重試",
     python_env_dismiss: "關閉",
-    python_env_manual_hint: "若無法自動安裝（例如公司網路限制），可自行安裝 Python 3.10 或更新版本後手動指定路徑：\n• macOS：brew install python3  或前往 https://www.python.org/downloads/\n• Windows：前往 https://www.python.org/downloads/\n• Linux：sudo apt install python3.10（或更新版本）",
+    python_env_manual_hint: "若是 Python 本身下載不了（例如公司網路封鎖 GitHub），可自行安裝 Python 3.10 或更新版本後手動指定路徑：\n• macOS：brew install python3  或前往 https://www.python.org/downloads/\n• Windows：前往 https://www.python.org/downloads/\n• Linux：sudo apt install python3.10（或更新版本）\n若是相依套件安裝失敗（PyPI 被封鎖），手動指定 Python 並不能解決——那一步只會跳過 Python 下載，套件仍然要連到 PyPI。請改到下方設定 Index URL，指向公司內部的套件鏡像。",
     python_env_version_label: "Python 版本",
     python_env_path_label: "環境路徑",
     python_env_source_label: "Interpreter 來源",
@@ -1054,6 +1054,9 @@ const zhTW = {
     python_env_use_bundled: "改用內建 Python",
     python_env_interpreter_rebuild_hint: "變更 Interpreter 來源後，請先按上方「清除環境」；下次使用該功能時，才會用新的 Interpreter 重建環境。",
     python_env_legacy_note: "舊版曾以 pip --user 將套件裝進你自己的 Python；那些套件不再被使用，可自行移除。",
+    python_env_index_url_label: "PyPI Index URL",
+    python_env_index_url_desc: "公司網路封鎖 PyPI 時，在這裡指定內部套件鏡像的位址；留空則使用預設的 PyPI。",
+    python_env_index_url_placeholder: "https://pypi.mycompany.com/simple",
     python_env_audio_prompt: "這個音訊檔需要語音轉文字支援，需要額外下載約 33 MB。要現在安裝嗎？",
 } as const;
 
@@ -1993,7 +1996,7 @@ const enRaw = {
     python_env_broken_title: "A Python environment component is missing — please reinstall AITerm",
     python_env_retry: "Retry",
     python_env_dismiss: "Dismiss",
-    python_env_manual_hint: "If automatic install doesn't work (e.g. a restricted corporate network), install Python 3.10 or newer yourself and point to it manually:\n• macOS: brew install python3, or visit https://www.python.org/downloads/\n• Windows: visit https://www.python.org/downloads/\n• Linux: sudo apt install python3.10 (or newer)",
+    python_env_manual_hint: "If Python itself can't be downloaded (e.g. a corporate network blocks GitHub), install Python 3.10 or newer yourself and point to it manually:\n• macOS: brew install python3, or visit https://www.python.org/downloads/\n• Windows: visit https://www.python.org/downloads/\n• Linux: sudo apt install python3.10 (or newer)\nIf dependency installation is what's failing (PyPI is blocked), pointing to your own Python won't fix that — it only skips the Python download, and packages still need to reach PyPI. Set an Index URL below instead, pointing at your company's internal package mirror.",
     python_env_version_label: "Python version",
     python_env_path_label: "Environment path",
     python_env_source_label: "Interpreter source",
@@ -2008,6 +2011,9 @@ const enRaw = {
     python_env_use_bundled: "Switch back to bundled Python",
     python_env_interpreter_rebuild_hint: "After picking or reverting the interpreter, click \"Clear environment\" above first — it will be rebuilt with the new interpreter the next time you use that feature.",
     python_env_legacy_note: "Older versions installed packages into your own Python via pip --user; those packages are no longer used and can be removed manually.",
+    python_env_index_url_label: "PyPI Index URL",
+    python_env_index_url_desc: "If your corporate network blocks PyPI, set an internal package mirror address here. Leave blank to use the default PyPI.",
+    python_env_index_url_placeholder: "https://pypi.mycompany.com/simple",
     python_env_audio_prompt: "This audio file needs speech-to-text support, which requires downloading about 33 MB more. Install it now?",
 } as const;
 

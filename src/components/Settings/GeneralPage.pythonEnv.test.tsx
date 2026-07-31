@@ -6,11 +6,13 @@ import { GeneralPage } from "./GeneralPage";
 const status = vi.fn();
 const reset = vi.fn();
 const setInterpreter = vi.fn();
+const setIndexUrl = vi.fn();
 
 vi.mock("../../ipc/pythonEnv", () => ({
   pythonEnvStatus: () => status(),
   pythonEnvReset: (purge: boolean) => reset(purge),
   pythonEnvSetInterpreter: (p: string | null) => setInterpreter(p),
+  pythonEnvSetIndexUrl: (url: string | null) => setIndexUrl(url),
 }));
 
 const pickFile = vi.fn();
@@ -48,6 +50,7 @@ describe("GeneralPage — Python environment", () => {
       installed: ["doc_core"],
       venvPath: "/data/python-env",
       userInterpreter: null,
+      indexUrl: null,
     });
   });
 
@@ -126,5 +129,51 @@ describe("GeneralPage — Python environment", () => {
     await userEvent.click(screen.getByRole("button", { name: /Clear environment|清除環境/ }));
 
     await waitFor(() => expect(screen.getByText(/Permission denied/)).toBeTruthy());
+  });
+
+  it("prefills the Index URL field from the persisted config", async () => {
+    status.mockResolvedValue({
+      uvAvailable: true,
+      pythonVersion: "3.12.13",
+      installed: ["doc_core"],
+      venvPath: "/data/python-env",
+      userInterpreter: null,
+      indexUrl: "https://pypi.mycompany.com/simple",
+    });
+    render(<GeneralPage />);
+
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText(/pypi\.mycompany\.com/)).toHaveValue(
+        "https://pypi.mycompany.com/simple",
+      ),
+    );
+  });
+
+  it("saves the index url as the user types it", async () => {
+    render(<GeneralPage />);
+    await waitFor(() => expect(status).toHaveBeenCalled());
+
+    const input = screen.getByPlaceholderText(/pypi\.mycompany\.com/);
+    await userEvent.type(input, "https://x");
+
+    expect(setIndexUrl).toHaveBeenLastCalledWith("https://x");
+  });
+
+  it("clears the index url (passes null) when the field is emptied", async () => {
+    status.mockResolvedValue({
+      uvAvailable: true,
+      pythonVersion: "3.12.13",
+      installed: ["doc_core"],
+      venvPath: "/data/python-env",
+      userInterpreter: null,
+      indexUrl: "https://pypi.mycompany.com/simple",
+    });
+    render(<GeneralPage />);
+    const input = await screen.findByPlaceholderText(/pypi\.mycompany\.com/);
+    await waitFor(() => expect(input).toHaveValue("https://pypi.mycompany.com/simple"));
+
+    await userEvent.clear(input);
+
+    expect(setIndexUrl).toHaveBeenLastCalledWith(null);
   });
 });
