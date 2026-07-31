@@ -83,22 +83,19 @@ export function PythonEnvGate({ state, lines, error, onInstall, onRecheck, onPic
       )}
 
       {state === "missing" && (
-        <>
-          <div className="python-env-gate__actions">
-            <button className="python-env-gate__btn python-env-gate__btn--primary" onClick={onInstall}>
-              {t.python_env_install}
+        <div className="python-env-gate__actions">
+          <button className="python-env-gate__btn python-env-gate__btn--primary" onClick={onInstall}>
+            {t.python_env_install}
+          </button>
+          <button className="python-env-gate__btn" onClick={onRecheck}>
+            {t.python_env_recheck}
+          </button>
+          {onPickInterpreter && (
+            <button className="python-env-gate__btn" onClick={onPickInterpreter}>
+              {t.python_env_pick_interpreter}
             </button>
-            <button className="python-env-gate__btn" onClick={onRecheck}>
-              {t.python_env_recheck}
-            </button>
-            {onPickInterpreter && (
-              <button className="python-env-gate__btn" onClick={onPickInterpreter}>
-                {t.python_env_pick_interpreter}
-              </button>
-            )}
-          </div>
-          <div className="python-env-gate__manual-hint">{t.python_env_manual_hint}</div>
-        </>
+          )}
+        </div>
       )}
 
       {state === "failed" && (
@@ -106,7 +103,23 @@ export function PythonEnvGate({ state, lines, error, onInstall, onRecheck, onPic
           <button className="python-env-gate__btn python-env-gate__btn--primary" onClick={onInstall}>
             {t.python_env_retry}
           </button>
+          {onPickInterpreter && (
+            <button className="python-env-gate__btn" onClick={onPickInterpreter}>
+              {t.python_env_pick_interpreter}
+            </button>
+          )}
         </div>
+      )}
+
+      {/* Both escape hatches this hint describes (interpreter for a blocked
+          GitHub, Index URL for a blocked PyPI) apply here. "missing" is uv
+          failing to fetch Python; "failed" is Python and the venv working fine
+          but `uv pip install` failing to reach PyPI — the actual path a
+          PyPI-blocked user hits, since the venv gets built before pip runs. If
+          this only rendered for "missing", the one user it exists for would
+          never see it. */}
+      {(state === "missing" || state === "failed") && (
+        <div className="python-env-gate__manual-hint">{t.python_env_manual_hint}</div>
       )}
 
       {/* "broken" gets no retry button — the bundled uv binary is what's

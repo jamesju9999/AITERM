@@ -82,6 +82,25 @@ describe("PythonEnvGate", () => {
     expect(screen.getByRole("button", { name: /Retry|重試/ })).toBeTruthy();
   });
 
+  it("also offers the manual hint and pick-interpreter escape hatch when the install failed", () => {
+    // This is the path a PyPI-blocked user actually hits: uv fetches Python
+    // and builds the venv fine, so the state is "failed" (not "missing") by
+    // the time `uv pip install` fails to reach PyPI — the Index URL guidance
+    // has to live here too, or the one user it was built for never sees it.
+    render(
+      <PythonEnvGate
+        state="failed"
+        lines={[]}
+        error="安裝 doc_core 相依套件失敗：ERROR: could not build wheel"
+        onInstall={() => {}}
+        onRecheck={() => {}}
+        onPickInterpreter={() => {}}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /interpreter|手動指定/ })).toBeTruthy();
+    expect(screen.getByText(/Index URL/)).toBeTruthy();
+  });
+
   it("lets the user dismiss the missing/failed/broken card so it stops blocking the rest of the app", () => {
     // Without onDismiss, the card only ever closes via a successful ensure()
     // — there's no way to just get it out of the way and use another feature.
