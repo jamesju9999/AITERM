@@ -149,4 +149,34 @@ describe("PythonEnvGate", () => {
     );
     expect(container.firstChild).toBeNull();
   });
+
+  it("keeps its log scrolled without touching the page", () => {
+    // This card is in normal flow, so scrollIntoView would walk up to the
+    // document and scroll the entire app — during an install that fires once
+    // per log line, and the app stayed scrolled up after the card unmounted.
+    // Spy on HTMLElement.prototype, not Element.prototype: src/test-setup.ts
+    // already stubs it there, and that stub shadows anything placed further up
+    // the chain — a spy on Element.prototype would never see the call.
+    const scrollIntoView = vi.fn();
+    const original = window.HTMLElement.prototype.scrollIntoView;
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+
+    try {
+      render(
+        <PythonEnvGate
+          state="installing"
+          lines={[
+            { text: "Resolved 36 packages", isError: false },
+            { text: "Prepared 36 packages", isError: false },
+          ]}
+          onInstall={() => {}}
+          onRecheck={() => {}}
+        />,
+      );
+
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    } finally {
+      window.HTMLElement.prototype.scrollIntoView = original;
+    }
+  });
 });

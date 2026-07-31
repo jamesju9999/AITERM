@@ -16,10 +16,19 @@ interface Props {
 
 export function PythonEnvGate({ state, lines, error, onInstall, onRecheck, onPickInterpreter, onDismiss }: Props) {
   const { t } = useLocale();
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    // Scroll the log element itself rather than calling scrollIntoView on a
+    // sentinel inside it. This card sits in normal flow, unlike
+    // McpInstallTerminal (position: fixed) whose pattern this borrowed —
+    // scrollIntoView walks up to the nearest scrollable ancestor, which here is
+    // the document, so every log line during an install scrolled the whole app
+    // upward and left it there once the card unmounted.
+    const el = logRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [lines]);
 
   if (state === "ready") return null;
@@ -67,7 +76,7 @@ export function PythonEnvGate({ state, lines, error, onInstall, onRecheck, onPic
       {error && <div className="python-env-gate__error">{error}</div>}
 
       {lines.length > 0 && (
-        <div className="python-env-gate__log">
+        <div className="python-env-gate__log" ref={logRef}>
           {lines.map((line, i) => (
             <div
               key={i}
@@ -78,7 +87,6 @@ export function PythonEnvGate({ state, lines, error, onInstall, onRecheck, onPic
               {line.text}
             </div>
           ))}
-          <div ref={bottomRef} />
         </div>
       )}
 
