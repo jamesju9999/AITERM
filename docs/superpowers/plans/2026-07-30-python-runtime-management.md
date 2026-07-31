@@ -371,7 +371,7 @@ git commit -m "feat(python-env): resolve the bundled uv binary and managed env p
 ## Task 3: Profile 與 requirements 分層
 
 **Files:**
-- Create: `src-tauri/src/python_env/profiles.rs`, `tools/MarkItDown/requirements-media.txt`
+- Create: `src-tauri/src/python_env/profiles.rs`, `tools/MarkItDown/requirements-audio.txt`
 - Modify: `tools/MarkItDown/requirements.txt`, `src-tauri/tauri.conf.json`（resources）, `src-tauri/src/python_env/mod.rs`
 
 - [ ] **Step 1: 寫失敗測試**
@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn media_profile_reads_the_media_requirements_file() {
-        assert_eq!(Profile::DocMedia.requirements_file(), "requirements-media.txt");
+        assert_eq!(Profile::DocAudio.requirements_file(), "requirements-audio.txt");
         assert_eq!(Profile::DocCore.requirements_file(), "requirements.txt");
         assert_eq!(Profile::ApiDocs.requirements_file(), "requirements.txt");
     }
@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn doc_profiles_share_the_markitdown_tool_dir() {
         assert_eq!(Profile::DocCore.tool_dir(), "MarkItDown");
-        assert_eq!(Profile::DocMedia.tool_dir(), "MarkItDown");
+        assert_eq!(Profile::DocAudio.tool_dir(), "MarkItDown");
         assert_eq!(Profile::ApiDocs.tool_dir(), "ApiDocFetcher");
     }
 
@@ -410,7 +410,7 @@ mod tests {
     fn marker_key_matches_the_serialized_form() {
         // These are two representations of one wire format: the marker file keys
         // off marker_key(), while Tauri commands and the frontend type
-        // ("api_docs" | "doc_core" | "doc_media") go through serde. Pin them
+        // ("api_docs" | "doc_core" | "doc_audio") go through serde. Pin them
         // together so changing either one can't silently split them apart.
         for profile in Profile::ALL {
             let serialized = serde_json::to_string(&profile).unwrap();
@@ -446,24 +446,24 @@ pub enum Profile {
     DocCore,
     /// Image and audio conversion — installed on demand, since these extras
     /// are the bulk of the download.
-    DocMedia,
+    DocAudio,
 }
 
 impl Profile {
-    pub const ALL: [Profile; 3] = [Profile::ApiDocs, Profile::DocCore, Profile::DocMedia];
+    pub const ALL: [Profile; 3] = [Profile::ApiDocs, Profile::DocCore, Profile::DocAudio];
 
     /// Directory under `tools/` (dev) or the resource bundle (production).
     pub fn tool_dir(&self) -> &'static str {
         match self {
             Profile::ApiDocs => "ApiDocFetcher",
-            Profile::DocCore | Profile::DocMedia => "MarkItDown",
+            Profile::DocCore | Profile::DocAudio => "MarkItDown",
         }
     }
 
     pub fn requirements_file(&self) -> &'static str {
         match self {
             Profile::ApiDocs | Profile::DocCore => "requirements.txt",
-            Profile::DocMedia => "requirements-media.txt",
+            Profile::DocAudio => "requirements-audio.txt",
         }
     }
 
@@ -472,7 +472,7 @@ impl Profile {
         match self {
             Profile::ApiDocs => "api_docs",
             Profile::DocCore => "doc_core",
-            Profile::DocMedia => "doc_media",
+            Profile::DocAudio => "doc_audio",
         }
     }
 }
@@ -488,17 +488,17 @@ impl Profile {
 markitdown[pdf,docx,pptx,xlsx]>=0.1.0
 ```
 
-`tools/MarkItDown/requirements-media.txt`（新）：
+`tools/MarkItDown/requirements-audio.txt`（新）：
 
 ```
-markitdown[image,audio-transcription]>=0.1.0
+markitdown[audio-transcription]>=0.1.0
 ```
 
 **base `tauri.conf.json` 原本沒有 `resources` key** —— MarkItDown 與 ApiDocFetcher 的條目只存在於三份平台 conf，各自完整重複列出。所以這裡是新增整個 key，只放新項目：
 
 ```json
     "resources": {
-      "../tools/MarkItDown/requirements-media.txt": "MarkItDown/requirements-media.txt"
+      "../tools/MarkItDown/requirements-audio.txt": "MarkItDown/requirements-audio.txt"
     }
 ```
 
@@ -587,10 +587,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let req = write_requirements(dir.path(), "markitdown>=0.1.0\n");
         record_installed(dir.path(), Profile::DocCore, &req).unwrap();
-        record_installed(dir.path(), Profile::DocMedia, &req).unwrap();
+        record_installed(dir.path(), Profile::DocAudio, &req).unwrap();
 
         assert!(!needs_install(dir.path(), Profile::DocCore, &req).unwrap());
-        assert!(!needs_install(dir.path(), Profile::DocMedia, &req).unwrap());
+        assert!(!needs_install(dir.path(), Profile::DocAudio, &req).unwrap());
         assert!(needs_install(dir.path(), Profile::ApiDocs, &req).unwrap());
     }
 
@@ -1187,7 +1187,7 @@ fn no_window(cmd: &mut tokio::process::Command) {
 
 - [ ] **Step 3b: 實測 markitdown 的版本漂移風險**
 
-拆成 core／media 兩份 requirements 後，兩者都用開放式 `>=0.1.0`，而它們是**分兩次**解析安裝的。風險情境：使用者先觸發 `DocCore` 安裝（當時 markitdown 是 0.1.0），數週後第一次選了 PNG 觸發 `DocMedia`，此時 PyPI 上已是 0.3.0 —— 若解析器不保留已裝版本，markitdown 本體會被靜默升級，使用者只想加圖片支援卻連帶換掉已經跑穩的文件轉換核心。拆分前只有一次解析，不存在這個問題。
+拆成 core／media 兩份 requirements 後，兩者都用開放式 `>=0.1.0`，而它們是**分兩次**解析安裝的。風險情境：使用者先觸發 `DocCore` 安裝（當時 markitdown 是 0.1.0），數週後第一次選了 PNG 觸發 `DocAudio`，此時 PyPI 上已是 0.3.0 —— 若解析器不保留已裝版本，markitdown 本體會被靜默升級，使用者只想加圖片支援卻連帶換掉已經跑穩的文件轉換核心。拆分前只有一次解析，不存在這個問題。
 
 這個風險是否真的存在，取決於 uv 的實際行為（是否像 pip 一樣「已滿足約束就不動」），必須實測而非推論：
 
@@ -1198,7 +1198,7 @@ uv pip install --python /tmp/drift-probe/bin/python -r tools/MarkItDown/requirem
 uv pip list --python /tmp/drift-probe/bin/python | grep -i markitdown
 
 # 再裝 media，看本體版本有沒有變
-uv pip install --python /tmp/drift-probe/bin/python -r tools/MarkItDown/requirements-media.txt
+uv pip install --python /tmp/drift-probe/bin/python -r tools/MarkItDown/requirements-audio.txt
 uv pip list --python /tmp/drift-probe/bin/python | grep -i markitdown
 
 rm -rf /tmp/drift-probe
@@ -1457,7 +1457,7 @@ pub fn python_env_set_interpreter(
 ```ts
 import { invoke } from "@tauri-apps/api/core";
 
-export type PythonProfile = "api_docs" | "doc_core" | "doc_media";
+export type PythonProfile = "api_docs" | "doc_core" | "doc_audio";
 
 export interface PythonEnvStatus {
   uvAvailable: boolean;
@@ -2150,13 +2150,13 @@ const ensureMediaProfileIfNeeded = async (filePath: string): Promise<boolean> =>
   if (!needsMediaProfile(filePath)) return true;
 
   const status = await pythonEnvStatus();
-  if (status.installed.includes("doc_media")) return true;
+  if (status.installed.includes("doc_audio")) return true;
 
   if (!window.confirm(t("python_env_media_prompt"))) return false;
 
   setGateState("installing");
   try {
-    await pythonEnvEnsure("doc_media");
+    await pythonEnvEnsure("doc_audio");
     return true;
   } finally {
     setGateState("ready");
@@ -2248,7 +2248,7 @@ git commit -m "feat(doc-converter): offer the media profile only when the file n
 
 （`converter.py` 與 `requirements.txt` 這兩行已由 master 上的 hotfix `27b280b` 補上，此處只需確認 `externalBin` 帶上 `binaries/uv`。）
 
-**不要在這裡加 `requirements-media.txt`。** Task 3 把它放進 base `tauri.conf.json` 的 `resources`，而 `resources` 是物件、走遞迴合併，所以 base 的項目在每個平台都生效 —— 包含這份被 CI 整檔重寫的 Linux conf（重寫只覆蓋平台 conf，動不到 base）。在這裡重複列出不會壞，但會讓「media 條目歸屬於 base」這個刻意的決定變模糊。
+**不要在這裡加 `requirements-audio.txt`。** Task 3 把它放進 base `tauri.conf.json` 的 `resources`，而 `resources` 是物件、走遞迴合併，所以 base 的項目在每個平台都生效 —— 包含這份被 CI 整檔重寫的 Linux conf（重寫只覆蓋平台 conf，動不到 base）。在這裡重複列出不會壞，但會讓「media 條目歸屬於 base」這個刻意的決定變模糊。
 
 改完後比對一次：這份生成的內容除了 `db2_sidecar_dir` 之外，應與 repo 的 `src-tauri/tauri.linux.conf.json` 完全一致 —— 注意兩者都**不該**含 media 條目，那一項只在 base。
 
