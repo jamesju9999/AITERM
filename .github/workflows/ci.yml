@@ -57,6 +57,114 @@ jobs:
           pip install --quiet pyyaml
           python3 scripts/check_ci_matrix.py
 
+  # Runs `cargo test` for the Rust backend. Before this job existed, the only
+  # Rust step in CI was warm-cache's `cargo build --release`, which never runs
+  # `cargo test` and is skipped on pull_request entirely — so a PR that broke
+  # a Rust unit test (or a wire-format invariant like Profile::marker_key()
+  # matching its serde form) went fully green. This job is the fix, and it
+  # MUST run on pull_request — that's the whole point, unlike warm-cache.
+  #
+  # Three OSes, not ubuntu-only: several tests branch on platform (paths.rs
+  # venv_interpreter returns "Scripts/python.exe" on Windows, exe_name uses
+  # cfg!(windows), marker.rs has a #[cfg(unix)] permission test), and those
+  # branches are only exercised by actually running on that OS. The extra
+  # runner cost buys real coverage of code this branch added.
+  rust-test:
+    if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            shared_key: pr-test-mac
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            shared_key: pr-test-windows
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            shared_key: pr-test-linux
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm install
+
+      # Same reason as warm-cache: build.rs calls tauri_build::build(), which
+      # resolves frontendDist ("../dist") at compile time — on `cargo test`
+      # just as much as `cargo build` — so dist/ has to exist first.
+      - name: Build frontend
+        run: npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Deliberately separate shared-key namespace from warm-cache's (mac /
+      # windows / linux-*): this job caches a debug-profile `cargo test`
+      # build, not the release-profile build release.yml restores, and PR-ref
+      # caches are never readable outside the PR anyway (see warm-cache's own
+      # comment on why it skips pull_request). Keeping the keys apart avoids
+      # any chance of this job's cache being confused with the one
+      # release.yml depends on.
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: ${{ matrix.shared_key }}
+
+      # Same placeholder as warm-cache's, and needed for the same reason:
+      # tauri-build validates every bundle.externalBin entry at compile time
+      # regardless of whether the invocation ever bundles, and a 0-byte file
+      # is enough to satisfy the existence check (measured — see warm-cache's
+      # uv placeholder step for the full explanation).
+      - name: Placeholder for the uv externalBin
+        shell: bash
+        run: |
+          mkdir -p src-tauri/binaries
+          FILE="src-tauri/binaries/uv-${{ matrix.target }}"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            FILE="${FILE}.exe"
+          fi
+          [ -f "$FILE" ] || : > "$FILE"
+
+      # Windows-only, same reason as warm-cache: only tauri.windows.conf.json
+      # has a db2-sidecar entry under bundle.resources.
+      - name: Placeholder for the Windows sidecar resource
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          if (-not (Test-Path src-tauri/binaries/db2-sidecar-win-x64)) {
+            New-Item -ItemType File -Path src-tauri/binaries/db2-sidecar-win-x64 | Out-Null
+          }
+
+      - name: Install Linux system dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+
+      # Full `cargo test`, not `--lib`: the tests/ integration suite (wiremock
+      # HTTP mocks against a local server, in-memory sqlite, real-but-local
+      # PTY/shell processes) has no network or OS-keychain dependency, so it
+      # runs cleanly here (verified locally: 367 lib tests + all tests/
+      # integration tests pass). The 7 keychain-gated tests are #[ignore]d;
+      # plain `cargo test` never adds `--ignored`, so they stay skipped.
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test --target ${{ matrix.target }}
+
   # Produces the caches that release.yml restores. Every field below is aligned
   # with release.yml's build matrix on purpose: swatinem/rust-cache derives its
   # key from the runner OS, the shared-key and the Cargo.lock hash, so any
