@@ -145,8 +145,12 @@ pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, Python
     // `--clear` to fully undo whatever left the interpreter broken — is the
     // more conservative recovery. The result is ignored deliberately: if
     // removal fails partway, `--clear` still gets a chance to finish the job.
-    if !interpreter_works(&python).await {
-        emit_log(app, "warn", "Python 環境無法執行，正在重建…");
+    if let Err(reason) = probe_interpreter(&python).await {
+        // Log the interpreter's own words. Without this the rebuild — and the
+        // failure after it — are the only things the user ever sees, and
+        // neither says anything about the actual cause.
+        emit_log(app, "warn", &format!("Python 環境無法執行：{reason}"));
+        emit_log(app, "warn", "正在重建…");
         let _ = tokio::fs::remove_dir_all(&venv).await;
         run(
             app,
@@ -158,10 +162,13 @@ pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, Python
             RunFailure::Failed(e) => PythonEnvError::VenvFailed(e),
         })?;
         python = paths::venv_interpreter(&venv);
-        if !interpreter_works(&python).await {
-            return Err(PythonEnvError::VenvFailed(
-                "重建後仍無法執行 Python".to_string(),
-            ));
+        if let Err(reason) = probe_interpreter(&python).await {
+            // Carry the reason into the error, not just the log: the gate shows
+            // the error even when the log panel is scrolled or collapsed, and
+            // this is the message that reaches a bug report.
+            return Err(PythonEnvError::VenvFailed(format!(
+                "重建後仍無法執行 Python：{reason}"
+            )));
         }
     }
 
@@ -348,17 +355,45 @@ fn resolve_requirements(dev_root: &Path, resource_root: Option<&Path>, profile: 
         .unwrap_or(dev)
 }
 
-/// Whether the venv's interpreter runs at all.
+/// Whether the venv's interpreter runs at all, and if not, why.
 ///
 /// Deliberately shallow: it does not touch site-packages, so a half-written
 /// package left by an interrupted install still passes. That case has no
 /// automatic recovery — the marker hash is unchanged, so nothing re-installs —
-/// and the user's way out is the settings page's rebuild action (Task 12).
-async fn interpreter_works(python: &Path) -> bool {
+/// and the user's way out is the settings page's rebuild action.
+///
+/// Captures both streams rather than letting them inherit. The earlier version
+/// returned a bare `bool` from `status()`, which sent the interpreter's own
+/// error to the app's stderr — invisible to anyone running a packaged build,
+/// and the only thing that explains *why* a freshly created venv won't run
+/// (a truncated download, a missing shared library, an exec-format mismatch).
+/// Users then saw "重建後仍無法執行 Python" with nothing to act on.
+async fn probe_interpreter(python: &Path) -> Result<(), String> {
     let mut cmd = tokio::process::Command::new(python);
-    cmd.arg("-c").arg("import sys");
+    cmd.arg("-c")
+        .arg("import sys")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
     no_window(&mut cmd);
-    matches!(cmd.status().await, Ok(s) if s.success())
+    crate::appimage_env::strip_appimage_env(cmd.as_std_mut());
+
+    let out = match cmd.output().await {
+        Ok(out) => out,
+        // Spawn itself failed: no such file, not executable, bad ELF header.
+        Err(e) => return Err(format!("{} 無法啟動：{e}", python.display())),
+    };
+    if out.status.success() {
+        return Ok(());
+    }
+
+    let mut detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if detail.is_empty() {
+        detail = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    }
+    if detail.is_empty() {
+        detail = format!("結束碼 {}", out.status);
+    }
+    Err(tail(&detail))
 }
 
 /// Why a uv invocation didn't succeed. The distinction matters: a binary that
@@ -378,6 +413,10 @@ async fn run(app: &AppHandle, spec: CommandSpec) -> Result<(), RunFailure> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     no_window(&mut cmd);
+    // uv needs this too, not just the interpreter: `uv pip install` runs the
+    // target interpreter to read its metadata, and that child would inherit
+    // AppRun's PYTHONHOME and fail exactly as the probe does.
+    crate::appimage_env::strip_appimage_env(cmd.as_std_mut());
 
     let mut child = cmd
         .spawn()
@@ -669,5 +708,66 @@ mod tests {
     fn a_missing_file_is_reported_as_not_executable() {
         let dir = tempfile::tempdir().unwrap();
         assert!(!is_executable(&dir.path().join("does-not-exist")));
+    }
+
+    #[tokio::test]
+    async fn probing_an_interpreter_that_cannot_be_spawned_names_the_path() {
+        // The venv directory can exist while its interpreter doesn't — a
+        // partial `remove_dir_all`, or an antivirus quarantining the binary.
+        let dir = tempfile::tempdir().unwrap();
+        let err = probe_interpreter(&dir.path().join("bin/python")).await.unwrap_err();
+        assert!(err.contains("python"), "should name the path it tried: {err}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn probing_a_working_interpreter_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = write_fake_python(dir.path(), "exit 0");
+        assert!(probe_interpreter(&fake).await.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn probing_a_broken_interpreter_returns_what_it_printed_on_stderr() {
+        // This is the whole point: on Ubuntu a freshly created venv failed this
+        // probe and the app said only "重建後仍無法執行 Python". The
+        // interpreter's own message — the one line that identifies the cause —
+        // went to the app's stderr and was never seen.
+        let dir = tempfile::tempdir().unwrap();
+        let fake = write_fake_python(
+            dir.path(),
+            "echo 'error while loading shared libraries: libpython3.12.so.1.0' >&2; exit 1",
+        );
+
+        let err = probe_interpreter(&fake).await.unwrap_err();
+
+        assert!(
+            err.contains("libpython3.12.so.1.0"),
+            "the interpreter's own error must survive: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn probing_a_silent_failure_still_reports_the_exit_status() {
+        // A crash on startup (SIGSEGV from a truncated binary) prints nothing.
+        // Reporting an empty reason would be no better than the bool it replaced.
+        let dir = tempfile::tempdir().unwrap();
+        let fake = write_fake_python(dir.path(), "exit 1");
+
+        let err = probe_interpreter(&fake).await.unwrap_err();
+
+        assert!(!err.trim().is_empty(), "a silent failure still needs a reason");
+        assert!(err.contains("結束碼"), "should fall back to the exit status: {err}");
+    }
+
+    #[cfg(unix)]
+    fn write_fake_python(dir: &Path, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("python");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
     }
 }

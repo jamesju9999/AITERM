@@ -119,6 +119,11 @@ fn build_command(command: &str, args: &[String], env: &HashMap<String, String>) 
 fn build_command(command: &str, args: &[String], env: &HashMap<String, String>) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(command);
     cmd.args(args);
+    // Only on this arm because AppImage is Linux-only. AppRun exports
+    // PYTHONHOME into every child, which breaks any Python-based MCP server
+    // (uvx, `python -m …`). Before the configured env, so an explicit setting
+    // still wins.
+    crate::appimage_env::strip_appimage_env(cmd.as_std_mut());
     for (k, v) in env {
         cmd.env(k, v);
     }

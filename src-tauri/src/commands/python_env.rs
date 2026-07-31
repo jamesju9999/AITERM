@@ -40,6 +40,9 @@ pub fn python_env_set_interpreter(
         let mut cmd = std::process::Command::new(candidate);
         cmd.arg("-c")
             .arg("import sys; print(sys.version_info[0], sys.version_info[1])");
+        // Without this, an AppImage's inherited PYTHONHOME makes every
+        // interpreter the user picks look broken — including working ones.
+        crate::appimage_env::strip_appimage_env(&mut cmd);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;

@@ -143,6 +143,17 @@ impl PtySession {
         for arg in shell.args {
             cmd.arg(arg);
         }
+        // Applied before the configured envs, so an explicit setting still
+        // wins. An AppImage's AppRun exports PYTHONHOME and LD_LIBRARY_PATH
+        // pointing into the AppDir, and a shell hands them to everything the
+        // user runs — `python3` in this terminal would fail to find its own
+        // standard library. No-op everywhere else.
+        for (key, value) in crate::appimage_env::appimage_env_fixes() {
+            match value {
+                Some(v) => cmd.env(key, v),
+                None => cmd.env_remove(key),
+            }
+        }
         for (k, v) in shell.envs {
             cmd.env(k, v);
         }
@@ -252,6 +263,17 @@ impl PtySession {
         let mut cmd = CommandBuilder::new(shell.program);
         for arg in shell.args {
             cmd.arg(arg);
+        }
+        // Applied before the configured envs, so an explicit setting still
+        // wins. An AppImage's AppRun exports PYTHONHOME and LD_LIBRARY_PATH
+        // pointing into the AppDir, and a shell hands them to everything the
+        // user runs — `python3` in this terminal would fail to find its own
+        // standard library. No-op everywhere else.
+        for (key, value) in crate::appimage_env::appimage_env_fixes() {
+            match value {
+                Some(v) => cmd.env(key, v),
+                None => cmd.env_remove(key),
+            }
         }
         for (k, v) in shell.envs {
             cmd.env(k, v);

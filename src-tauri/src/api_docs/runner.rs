@@ -75,6 +75,9 @@ pub async fn run_fetcher(
         .env("PYTHONIOENCODING", "utf-8")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    // An AppImage's AppRun exports PYTHONHOME into every child; without this the
+    // interpreter can't find its own standard library.
+    crate::appimage_env::strip_appimage_env(fetch_cmd.as_std_mut());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
