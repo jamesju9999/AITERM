@@ -49,6 +49,18 @@ pub fn install_python(uv: &Path, runtime_dir: &Path) -> CommandSpec {
 /// retry fail with the same unhelpful message — nothing in the app can dig
 /// itself out. `--clear` makes "the target must be empty" the command's own
 /// guarantee, so both call sites in `ensure()` get it for free.
+///
+/// Always passes `--force` too, and it has to travel with `--clear` rather
+/// than replace it: `--clear` is what makes uv accept a directory that's
+/// already a venv; `--force` is what makes it accept one that *isn't* a venv
+/// at all — a stray, non-venv directory at the target path (verified against
+/// uv 0.11.19: without `--force`, `--clear` alone still succeeds there, but
+/// prints a deprecation warning that uv says becomes a hard error in a future
+/// release). Both leftover shapes come from the same interruption — an
+/// install that dies between `remove_dir_all` clearing `pyvenv.cfg` and uv
+/// finishing the rebuild, or an antivirus quarantining `python.exe` mid-copy —
+/// so both flags need to be here, not just whichever one today's uv happens
+/// to require.
 pub fn create_venv(
     uv: &Path,
     venv: &Path,
@@ -62,7 +74,7 @@ pub fn create_venv(
     };
     spec(
         uv,
-        &["venv", &venv, "--python", &python, "--clear"],
+        &["venv", &venv, "--python", &python, "--clear", "--force"],
         Some(runtime_dir),
     )
 }
@@ -112,7 +124,7 @@ mod tests {
     fn venv_creation_uses_the_managed_interpreter_by_default() {
         let spec = create_venv(&uv(), &PathBuf::from("/data/python-env"), &PathBuf::from("/data/rt"), None);
 
-        assert_eq!(spec.args, vec!["venv", "/data/python-env", "--python", PYTHON_VERSION, "--clear"]);
+        assert_eq!(spec.args, vec!["venv", "/data/python-env", "--python", PYTHON_VERSION, "--clear", "--force"]);
         // Without this, uv can't find the interpreter it just installed into the
         // managed runtime dir — and dropping it silently left all six tests green.
         assert_eq!(
@@ -132,7 +144,7 @@ mod tests {
 
         assert_eq!(
             spec.args,
-            vec!["venv", "/data/python-env", "--python", "/usr/local/bin/python3.12", "--clear"]
+            vec!["venv", "/data/python-env", "--python", "/usr/local/bin/python3.12", "--clear", "--force"]
         );
     }
 
@@ -144,6 +156,17 @@ mod tests {
         // such an interruption fails the same unhelpful way forever.
         let spec = create_venv(&uv(), &PathBuf::from("/data/python-env"), &PathBuf::from("/data/rt"), None);
         assert!(spec.args.contains(&"--clear".to_string()));
+    }
+
+    #[test]
+    fn venv_creation_always_forces_past_a_non_venv_directory_too() {
+        // --clear alone still succeeds against a stray non-venv directory (a
+        // different interrupted-install shape than the "already a venv" case
+        // --clear itself covers), but only with a deprecation warning that uv
+        // has said becomes a hard error in a future release — --force is what
+        // silences that and keeps the guarantee once uv makes the change.
+        let spec = create_venv(&uv(), &PathBuf::from("/data/python-env"), &PathBuf::from("/data/rt"), None);
+        assert!(spec.args.contains(&"--force".to_string()));
     }
 
     #[test]
