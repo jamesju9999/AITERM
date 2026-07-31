@@ -96,11 +96,11 @@ fn index_url(app: &AppHandle) -> Option<String> {
 pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, PythonEnvError> {
     let _guard = ENSURE_LOCK.lock().await;
 
-    // `paths::app_data` falls back to "." when app_data_dir() fails, which would
-    // silently build the venv in the process's working directory. Failing is
-    // better than writing a multi-hundred-MB environment somewhere the user
-    // never looks and the app can't find again.
-    if app.path().app_data_dir().is_err() {
+    // `paths::app_local_data` falls back to "." when app_local_data_dir() fails,
+    // which would silently build the venv in the process's working directory.
+    // Failing is better than writing a multi-hundred-MB environment somewhere
+    // the user never looks and the app can't find again.
+    if app.path().app_local_data_dir().is_err() {
         return Err(PythonEnvError::Io(
             "無法取得應用程式資料目錄，請確認磁碟權限".to_string(),
         ));
@@ -110,6 +110,12 @@ pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, Python
     let venv = paths::venv_dir(app);
     let runtimes = paths::runtime_dir(app);
     let interpreter = user_interpreter(app);
+
+    // Before anything reads either directory: 1.3.0 and 1.3.1 kept them in the
+    // Windows roaming profile. Cheap enough to check on every call (two
+    // `exists()` on a path that normally isn't there), and this is the only
+    // entry point that can be relied on to run before they're used.
+    paths::migrate_legacy_layout(&paths::legacy_root(app), &paths::local_root(app));
 
     let mut python = paths::venv_interpreter(&venv);
     if !python.exists() {
@@ -297,10 +303,10 @@ fn venv_python_version(venv: &Path) -> Option<String> {
 /// error lets the user retry, which is the reliable path out.
 pub async fn reset(app: &AppHandle, purge_runtimes: bool) -> Result<(), PythonEnvError> {
     // Same guard as ensure(), and it matters more here: paths::app_data falls
-    // back to "." when app_data_dir() fails, so without this a reset would
+    // back to "." when app_local_data_dir() fails, so without this a reset would
     // recursively delete ./python-env relative to the process's working
     // directory. Writing to the wrong place is bad; deleting there is worse.
-    if app.path().app_data_dir().is_err() {
+    if app.path().app_local_data_dir().is_err() {
         return Err(PythonEnvError::Io(
             "無法取得應用程式資料目錄，請確認磁碟權限".to_string(),
         ));
