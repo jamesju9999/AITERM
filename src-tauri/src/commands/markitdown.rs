@@ -7,52 +7,6 @@ use serde::Deserialize;
 use crate::config::{ConfigStore, ProviderType};
 use crate::secret::SecretStore;
 
-/// Find the best Python interpreter for markitdown (requires Python >= 3.10).
-/// Returns Err with an actionable message if no suitable interpreter is found.
-fn find_python_for_markitdown() -> Result<String, String> {
-    let candidates: &[&str] = &[
-        #[cfg(not(target_os = "windows"))]
-        "/opt/homebrew/bin/python3",  // Homebrew (Apple Silicon macOS)
-        #[cfg(not(target_os = "windows"))]
-        "/usr/local/bin/python3",     // Homebrew (Intel macOS) or system
-        "python3.13",
-        "python3.12",
-        "python3.11",
-        "python3.10",
-        // Generic fallback — might be too old, but worth checking
-        #[cfg(not(target_os = "windows"))]
-        "python3",
-        #[cfg(target_os = "windows")]
-        "python",
-    ];
-
-    for candidate in candidates {
-        let mut cmd = std::process::Command::new(candidate);
-        cmd.arg("-c")
-            .arg("import sys; exit(0 if sys.version_info >= (3,10) else 1)");
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000);
-        }
-        if let Ok(status) = cmd.status() {
-            if status.success() {
-                return Ok(candidate.to_string());
-            }
-        }
-    }
-
-    Err(
-        "找不到 Python 3.10 或更新版本。\n\
-         MarkItDown 需要 Python 3.10+，請先安裝：\n\
-         • macOS：brew install python3  或前往 https://www.python.org/downloads/\n\
-         • Windows：前往 https://www.python.org/downloads/\n\
-         • Linux：sudo apt install python3.10（或更新版本）\n\
-         安裝後重新嘗試即可。"
-        .to_string(),
-    )
-}
-
 fn converter_script_path(app: &AppHandle) -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let dev_path = manifest_dir
@@ -126,60 +80,16 @@ pub async fn markitdown_convert(
     secrets: tauri::State<'_, Arc<SecretStore>>,
 ) -> Result<String, String> {
     let script = converter_script_path(&app);
-    let python = find_python_for_markitdown()?;
+    let python = crate::python_env::ensure(&app, crate::python_env::profiles::Profile::DocCore)
+        .await
+        .map_err(String::from)?;
     let script_dir = script.parent().unwrap_or(script.as_path());
-    let req_file = script_dir.join("requirements.txt");
 
     // Resolve vision credentials (if a provider is selected)
     let vision_creds = provider_id
         .as_deref()
         .filter(|id| !id.is_empty())
         .and_then(|id| resolve_vision_credentials(&config, &secrets, id));
-
-    // Auto-install deps (same pattern as api_docs/runner.rs)
-    if req_file.exists() {
-        #[allow(unused_mut)]
-        let mut pip_cmd = tokio::process::Command::new(&python);
-        pip_cmd
-            .args(["-m", "pip", "install", "-r"])
-            .arg(&req_file)
-            .args(["--quiet", "--disable-pip-version-check"])
-            .current_dir(script_dir);
-        // Both Linux (Ubuntu 22.04+) and macOS Homebrew Python mark themselves as
-        // "externally-managed"; --break-system-packages bypasses the guard, --user
-        // installs into the user's home directory (~/.local or ~/Library/Python).
-        #[cfg(not(target_os = "windows"))]
-        pip_cmd.args(["--user", "--break-system-packages"]);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            pip_cmd.creation_flags(0x08000000);
-        }
-        match pip_cmd.output().await {
-            Err(e) => return Err(format!("Failed to run pip (is Python installed?): {e}")),
-            Ok(out) if !out.status.success() => {
-                let pip_err = String::from_utf8_lossy(&out.stderr);
-                let pip_out = String::from_utf8_lossy(&out.stdout);
-                let detail = if !pip_err.trim().is_empty() {
-                    pip_err.trim().to_string()
-                } else if !pip_out.trim().is_empty() {
-                    pip_out.trim().to_string()
-                } else {
-                    String::new()
-                };
-                let detail_str = if detail.is_empty() {
-                    String::new()
-                } else {
-                    format!("\n\n詳情：{}", detail)
-                };
-                return Err(format!(
-                    "安裝 MarkItDown 相依套件失敗，請手動執行：\npip install markitdown{}",
-                    detail_str
-                ));
-            }
-            _ => {}
-        }
-    }
 
     let mut cmd = tokio::process::Command::new(python);
     cmd.arg(&script)
@@ -263,6 +173,7 @@ pub async fn markitdown_pick_file() -> Option<String> {
                 "xlsx", "xls", "csv", "docx", "pdf", "pptx", "html", "htm",
                 "jpg", "jpeg", "png", "gif", "webp", "epub", "msg",
                 "txt", "md", "rst", "xml", "json", "yaml", "yml",
+                "mp3", "wav", "m4a", "flac",
             ],
         )
         .pick_file()

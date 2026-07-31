@@ -1,12 +1,34 @@
 // src/components/DocConverter/DocConverterView.tsx
 import React, { useState, useRef, useCallback, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { aiChat, formatAiError } from "../../ipc/ai";
 import { markitdownConvert, markitdownPickFile } from "../../ipc/markitdown";
+import { pythonEnvStatus, type PythonProfile } from "../../ipc/pythonEnv";
 import { useLocale } from "../../contexts/LocaleContext";
 import { ModelPickerButton } from "../ModelPickerButton";
+import { usePythonEnvGate } from "../PythonEnv/usePythonEnvGate";
+import { PythonEnvGate } from "../PythonEnv/PythonEnvGate";
 import "./DocConverterView.css";
+
+/** Extensions that need the on-demand audio profile (speech-to-text via
+ *  markitdown[audio-transcription]). Images are deliberately NOT included:
+ *  converter.py bypasses markitdown for images and calls the vision API
+ *  itself, falling back to Pillow when there's no vision-capable provider —
+ *  and Pillow already ships in doc_core. There is no markitdown[image]
+ *  extra (it doesn't exist), so images never need a second profile. */
+const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "m4a", "flac"]);
+
+export function needsAudioProfile(fileName: string): boolean {
+  // The picker/drag-drop handlers hand back a full path, not a bare file
+  // name — strip to the last path segment first so a dot in a directory
+  // name (e.g. "/Users/me/v1.2/report") isn't mistaken for an extension.
+  const base = fileName.split(/[\\/]/).pop() ?? fileName;
+  const dot = base.lastIndexOf(".");
+  if (dot < 0) return false;
+  return AUDIO_EXTENSIONS.has(base.slice(dot + 1).toLowerCase());
+}
 
 interface ExtractState {
   fileName: string;
@@ -56,6 +78,7 @@ const NORMALIZATION_SYSTEM_PROMPT = `你是資料字典格式化工具。將輸�
 
 export function DocConverterView({ isActive: _isActive }: { isActive: boolean }) {
   const { t } = useLocale();
+  const navigate = useNavigate();
   const [extractState, setExtractState] = useState<ExtractState | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,6 +89,13 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
   const [normalizing, setNormalizing] = useState(false);
   const [normalizeProgress, setNormalizeProgress] = useState<{ step: number; total: number } | null>(null);
   const stoppedRef = useRef(false);
+  const pythonEnv = usePythonEnvGate();
+  // Which profile the gate should retry: ensureProfile("doc_core") always
+  // runs first, but a file needing audio support can fail on the second,
+  // separate ensureProfile("doc_audio") call — the gate's retry/install
+  // buttons must retry whichever one actually failed, not always doc_core
+  // (which would already be installed and "succeed" without fixing anything).
+  const [gateProfile, setGateProfile] = useState<PythonProfile>("doc_core");
 
   const processFilePath = useCallback(async (filePath: string) => {
     stoppedRef.current = true;
@@ -76,6 +106,22 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
     setExtractState(null);
     setMdOutput("");
     setExtracting(true);
+
+    setGateProfile("doc_core");
+    const coreReady = await pythonEnv.ensureProfile("doc_core");
+    if (!coreReady) { setExtracting(false); return; }
+
+    if (needsAudioProfile(filePath)) {
+      const status = await pythonEnvStatus().catch(() => null);
+      const audioInstalled = status?.installed.includes("doc_audio") ?? false;
+      if (!audioInstalled) {
+        if (!window.confirm(t.python_env_audio_prompt)) { setExtracting(false); return; }
+        setGateProfile("doc_audio");
+        const audioReady = await pythonEnv.ensureProfile("doc_audio");
+        if (!audioReady) { setExtracting(false); return; }
+      }
+    }
+
     try {
       const markdown = await markitdownConvert(filePath, selectedProviderId || undefined);
       const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
@@ -85,7 +131,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
     } finally {
       setExtracting(false);
     }
-  }, [selectedProviderId]);
+  }, [selectedProviderId, pythonEnv.ensureProfile, t]);
 
   useEffect(() => {
     listProviders().then((list) => {
@@ -218,6 +264,16 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
           </>
         )}
       </div>
+
+      <PythonEnvGate
+        state={pythonEnv.state}
+        lines={pythonEnv.lines}
+        error={pythonEnv.error}
+        onInstall={() => pythonEnv.ensureProfile(gateProfile)}
+        onRecheck={() => pythonEnv.ensureProfile(gateProfile)}
+        onPickInterpreter={() => navigate("/settings", { state: { tab: "general" } })}
+        onDismiss={pythonEnv.dismiss}
+      />
 
       {error && (
         <div className="doc-converter__error" style={error.includes("\n") ? { whiteSpace: "pre-line" } : undefined}>

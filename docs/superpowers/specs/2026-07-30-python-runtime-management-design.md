@@ -25,7 +25,7 @@ AITerm 有兩條 Python 依賴鏈：
 |---|---|
 | 安裝時檢查 Python | **不做**。Python 只是週邊功能的依賴，安裝門檻換不到價值；且安裝程式看到的 PATH ≠ app 執行時的 PATH，檢查結果不可靠 |
 | 環境建立時機 | **首次使用該功能時自動建立**，過程顯示進度面板 |
-| 依賴範圍 | MarkItDown 拆成兩層：預設只裝文件類（pdf/docx/pptx/xlsx），影像／語音為**候選安裝** |
+| 依賴範圍 | MarkItDown 拆成兩層：預設只裝文件類（pdf/docx/pptx/xlsx），語音轉文字為**候選安裝**（原本寫「影像／語音」，實作後證實 `markitdown[image]` 這個 extra 不存在、且圖片根本不需要它 —— 見文末「實作後推翻的設計前提」） |
 | 缺 Python 時 | 引導卡 + 手動指定路徑 + **「幫我安裝」按鈕** |
 | 舊版 `--user` 殘留套件 | **不動**，只在設定頁說明。自動移除他人環境中的套件風險過高（其專案可能正在用 markitdown） |
 | 環境管理方式 | **內建 uv sidecar**，由 uv 統一負責裝 Python、建 venv、裝套件 |
@@ -63,14 +63,15 @@ AITerm 有兩條 Python 依賴鏈：
 新模組取代目前兩份偵測實作（`api_docs::find_python` 與 `markitdown::find_python_for_markitdown` **一併刪除**）。
 
 ```rust
-pub enum Profile { ApiDocs, DocCore, DocMedia }
+pub enum Profile { ApiDocs, DocCore, DocAudio }
 
 pub struct EnvStatus {
-    pub uv_available: bool,
+    pub uv_available: bool,        // 實作後：只代表「檔案存在且有 exec bit」，見文末
     pub python_version: Option<String>,
     pub installed: Vec<Profile>,
-    pub venv_path: PathBuf,
-    pub interpreter_source: InterpreterSource,  // UvManaged | UserSpecified(path)
+    pub venv_path: String,
+    pub user_interpreter: Option<String>,
+    pub index_url: Option<String>,  // 實作後新增，見文末「企業鏡像」
 }
 
 pub fn status(app: &AppHandle) -> EnvStatus;
@@ -78,8 +79,9 @@ pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, Python
 /// 刪除 venv 與 profile 標記檔；`purge_runtimes` 為 true 時連
 /// `python-runtimes/` 一併刪除（對應設定頁的「完全刪除」）。
 pub async fn reset(app: &AppHandle, purge_runtimes: bool) -> Result<(), PythonEnvError>;
-pub fn set_interpreter(app: &AppHandle, path: &Path) -> Result<(), PythonEnvError>;
 ```
+
+（`set_interpreter` 實作在 command 層而非模組層，因為它只是寫 config 加一次驗證，不需要模組內部狀態。`InterpreterSource` 這個列舉沒有實作 —— `Option<String>` 已足夠表達「內建 vs 使用者指定」。）
 
 `ensure` 是唯一入口，依序保證：uv 可用 → Python 可用 → venv 存在 → 該 profile 套件已安裝，回傳 **venv 內的 interpreter 路徑**。呼叫端因此縮成一行：
 
@@ -106,7 +108,7 @@ let py = python_env::ensure(&app, Profile::DocCore).await?;
 |---|---|---|
 | `ApiDocs` | `tools/ApiDocFetcher/requirements.txt` | 現況不變 |
 | `DocCore` | `tools/MarkItDown/requirements.txt` | 改為 `markitdown[pdf,docx,pptx,xlsx]>=0.1.0` |
-| `DocMedia` | `tools/MarkItDown/requirements-media.txt`（新增） | `markitdown[image,audio-transcription]>=0.1.0` |
+| `DocAudio` | `tools/MarkItDown/requirements-audio.txt`（新增） | `markitdown[audio-transcription]>=0.1.0` |
 
 兩個 MarkItDown requirements 檔都要加入 `tauri.conf.json` 的 `resources`。
 
@@ -126,7 +128,7 @@ let py = python_env::ensure(&app, Profile::DocCore).await?;
 
 - **功能入口 gate**：`ensure` 進行中顯示進度面板；缺 Python 時顯示引導卡，提供三個出口 ——「幫我安裝」（`uv python install`）、「我自己裝好了，重新偵測」、「手動指定路徑」
 - **設定頁**（`components/Settings/GeneralPage.tsx`）新增「Python 環境」區塊：狀態、Python 版本、venv 路徑、interpreter 來源，以及兩個動作 ——「重建」（刪除 venv 後重建，保留已下載的 Python runtime）與「完全刪除」（venv 與 `python-runtimes/` 一併清除，供空間回收或徹底重來）。另附舊版 `pip --user` 殘留套件的說明文字
-- **候選安裝**：DocConverter 選到需要 `DocMedia` 的檔案而該 profile 尚未安裝時就地提示。判斷依據是副檔名白名單，實作階段須明列（影像：png/jpg/jpeg/gif/bmp/webp；音訊：mp3/wav/m4a/flac），與 `converter.py` 實際支援的格式對齊
+- **候選安裝**：DocConverter 選到需要 `DocAudio` 的檔案而該 profile 尚未安裝時就地提示。判斷依據是副檔名白名單，實作階段須明列（影像：png/jpg/jpeg/gif/bmp/webp；音訊：mp3/wav/m4a/flac），與 `converter.py` 實際支援的格式對齊
 - 知識庫匯入路徑也需接 `python-env-log` 事件以顯示同一進度面板
 
 ## 錯誤處理
@@ -160,3 +162,45 @@ let py = python_env::ensure(&app, Profile::DocCore).await?;
 1. uv 解析 `markitdown[...]` extras 的行為與 pip 一致。若某 wheel 在目標平台無 prebuilt 版本（`curl_cffi` 在較舊的 Windows／Linux 有此風險），uv 同樣需要編譯工具鏈 —— 需在 Windows 實測。
 2. uv binary 打包壓縮後對安裝檔的實際增量，需在三平台實測後確認可接受。
 3. `UV_PYTHON_INSTALL_DIR` 指向 app data 後，`uv python install` 與 `uv venv --python` 的互動行為需實測確認（尤其 Windows 路徑長度限制）。
+
+---
+
+## 實作後推翻的設計前提（2026-07-31 最終審查）
+
+這份 spec 的部分內容在實作與審查過程中被證實為錯，記錄於此以免誤導後人。上面的內文已就地更正，這一節說明「原本錯在哪、怎麼發現的」。
+
+### 1. `markitdown[image]` 這個 extra 不存在，而且圖片根本不需要它
+
+原設計把 MarkItDown 的 extras 拆成「文件類」與「影像／語音」兩層，前提是 `markitdown[image]` 存在。最終審查查了 PyPI metadata 並實測 uv：
+
+```
+warning: The package `markitdown==0.1.7` does not have an extra named `image`
+```
+
+markitdown 0.1.7 的 `provides_extra` 沒有 `image`。更關鍵的是**圖片本來就不需要它**：`tools/MarkItDown/converter.py` 對圖片刻意繞過 markitdown、自己用 urllib 打 vision API，唯一的 fallback 用 Pillow，而 Pillow 早就隨 `markitdown[pdf]` → pdfplumber 進了 `DocCore`。
+
+所以原本的行為是：使用者選一張 PNG → 被要求下載 33 MB 的音訊套件 → log 冒出一行紅色警告 → 轉換結果與沒裝完全相同；若他按取消，一個本來會成功的轉換就被中止。
+
+`DocMedia` 已更名 `DocAudio`，`requirements-audio.txt` 只含 `markitdown[audio-transcription]`，副檔名白名單只留 mp3/wav/m4a/flac。順帶發現 `markitdown_pick_file` 的 filter 完全沒有音訊副檔名 —— 那個 profile 的主要入口原本碰不到它。
+
+**教訓**：設計階段假設了一個第三方套件的 extra 名稱卻沒查證，這個錯誤一路帶到實作完成才被發現。查一次 PyPI metadata 的成本是幾秒。
+
+### 2. 「venv 損壞自動重建一次」兜不住安裝中斷
+
+錯誤處理表裡寫「venv 損壞 → 自動重建一次」。實作後審查發現 `ensure()` 的控制流讓那段**永遠到不了**：「venv 不存在」的分支沒有先清空目錄就 `create_venv`，失敗立刻 return。
+
+而審查者實測 uv：目錄存在（不論是不是 venv）它就拒絕，必須 `--clear`。所以任何「venv 目錄在、interpreter 不在」的中斷（app 在 `uv venv` 中被關、防毒隔離 `python.exe`、`reset()` 半途失敗）都會變成永久失敗迴圈。
+
+修法是讓 `create_venv` 一律帶 `--clear --force`（`--force` 讓它也接受非 venv 的髒目錄，並消除 uv 對未來會變 error 的 deprecation 警告）。
+
+### 3. 企業鏡像的路斷了（uv 不讀 `pip.conf`）
+
+原設計沒有考慮到：uv **不讀** `pip.conf`，也不讀 `PIP_INDEX_URL`，只認 `UV_INDEX_URL`。而前兩者正是防火牆後的公司環境能讓舊版（`pip install --user`）成功的原因 —— 也就是說這個改動對企業使用者是**功能退步**。
+
+已補上可設定的 index URL（`AppConfig.python_index_url` → `UV_INDEX_URL`，設定頁有輸入框）。引導卡的文案也拆成兩種情況：GitHub 被封 → 手動指定 interpreter；PyPI 被封 → 設定 index URL（原本把兩者混在一起，而手動指定對 PyPI 被封毫無幫助，因為套件仍要抓 PyPI）。
+
+### 4. `uv_available` 沒有檢查它宣稱的東西
+
+`EnvStatus.uv_available` 原本只檢查檔案存在，但前端用它來判斷「是不是安裝檔壞了」。實作後加上 exec bit 檢查。
+
+**殘留的已知限制**：macOS quarantine 造成的 spawn 失敗不會被這個檢查抓到（實測確認：對加了 `com.apple.quarantine` 的執行檔直接 exec 並不會被 Gatekeeper 擋，所以它其實不是這條路徑的真實風險）。要完全涵蓋得在 `status()` 裡跑一次 `uv --version`，而 `status()` 在設定頁與三個 gate 的熱路徑上，代價不划算。

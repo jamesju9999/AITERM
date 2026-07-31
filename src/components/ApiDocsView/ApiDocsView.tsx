@@ -1,5 +1,6 @@
 // src/components/ApiDocsView/ApiDocsView.tsx
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { useLocale } from "../../contexts/LocaleContext";
 import {
   apiDocsDetect,
@@ -27,6 +28,8 @@ import { aiChat, formatAiError, type AiError } from "../../ipc/ai";
 import { DocTree } from "./DocTree";
 import { ExtractionSettings } from "./ExtractionSettings";
 import { ExtractionLog } from "./ExtractionLog";
+import { usePythonEnvGate } from "../PythonEnv/usePythonEnvGate";
+import { PythonEnvGate } from "../PythonEnv/PythonEnvGate";
 import "./ApiDocsView.css";
 
 interface Props {
@@ -41,6 +44,7 @@ function extractDomain(url: string): string {
 
 export function ApiDocsView({ isActive }: Props) {
   const { t } = useLocale();
+  const navigate = useNavigate();
 
   // URL input
   const [url, setUrl] = useState("");
@@ -70,6 +74,8 @@ export function ApiDocsView({ isActive }: Props) {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [translateToZh, setTranslateToZh] = useState(true);
+
+  const pythonEnv = usePythonEnvGate();
 
   const mountedRef = useRef(true);
   const outputFilesRef = useRef<string[]>([]);
@@ -131,6 +137,11 @@ export function ApiDocsView({ isActive }: Props) {
     setSelected(new Set());
     setLogs([]);
     setOutputFiles([]);
+    const ready = await pythonEnv.ensureProfile("api_docs");
+    if (!ready) {
+      if (mountedRef.current) setTreeLoading(false);
+      return;
+    }
     try {
       await apiDocsDetect(url);
       const nodes = await apiDocsFetchTree(url);
@@ -142,7 +153,7 @@ export function ApiDocsView({ isActive }: Props) {
     } finally {
       if (mountedRef.current) setTreeLoading(false);
     }
-  }, [url]);
+  }, [url, pythonEnv.ensureProfile]);
 
   const handleOutputDirChange = useCallback((v: string) => {
     setOutputDir(v);
@@ -471,6 +482,16 @@ Reformat the following raw API documentation page into clean Markdown.
           </span>
         )}
       </div>
+
+      <PythonEnvGate
+        state={pythonEnv.state}
+        lines={pythonEnv.lines}
+        error={pythonEnv.error}
+        onInstall={() => pythonEnv.ensureProfile("api_docs")}
+        onRecheck={() => pythonEnv.ensureProfile("api_docs")}
+        onPickInterpreter={() => navigate("/settings", { state: { tab: "general" } })}
+        onDismiss={pythonEnv.dismiss}
+      />
 
       {/* Main layout: left tree + right settings */}
       <div className="api-docs-view__body">

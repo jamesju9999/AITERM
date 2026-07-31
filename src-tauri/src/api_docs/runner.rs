@@ -56,55 +56,14 @@ pub async fn run_fetcher(
     subcommand: &str,
     extra_args: &[&str],
 ) -> Result<Option<Vec<DocNode>>, String> {
-    let python = super::find_python();
+    let python = crate::python_env::ensure(app, crate::python_env::profiles::Profile::ApiDocs)
+        .await
+        .map_err(String::from)?;
 
     // Set CWD to the script's directory so Python's sys.path[0] resolves
     // local imports (e.g. `from strategies import …`) correctly, including
     // when the path contains the \\?\ long-path prefix on Windows.
     let script_dir = script.parent().unwrap_or(script);
-
-    // Auto-install Python dependencies on first use (fast no-op if already installed).
-    let req_file = script_dir.join("requirements.txt");
-    if req_file.exists() {
-        let _ = app.emit("api-docs-log", ApiDocsLogEvent {
-            level: "info".into(),
-            message: "Checking Python dependencies…".into(),
-        });
-        #[allow(unused_mut)]
-        let mut pip_cmd = Command::new(python);
-        pip_cmd
-            .args(["-m", "pip", "install", "-r"])
-            .arg(&req_file)
-            .args(["--quiet", "--disable-pip-version-check"])
-            .current_dir(script_dir);
-        // Both Linux (Ubuntu 22.04+) and macOS Homebrew Python mark themselves as
-        // "externally-managed"; --break-system-packages bypasses the guard, --user
-        // installs into the user's home directory (~/.local or ~/Library/Python).
-        #[cfg(not(target_os = "windows"))]
-        pip_cmd.args(["--user", "--break-system-packages"]);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            pip_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-        match pip_cmd.output().await
-        {
-            Ok(out) if !out.status.success() => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                let _ = app.emit("api-docs-log", ApiDocsLogEvent {
-                    level: "warn".into(),
-                    message: format!("pip install warning: {}", stderr.trim()),
-                });
-            }
-            Err(e) => {
-                let _ = app.emit("api-docs-log", ApiDocsLogEvent {
-                    level: "warn".into(),
-                    message: format!("Could not run pip: {e}"),
-                });
-            }
-            _ => {}
-        }
-    }
 
     let mut fetch_cmd = Command::new(python);
     fetch_cmd

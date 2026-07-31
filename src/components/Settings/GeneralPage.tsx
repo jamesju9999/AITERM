@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { getConfig, setExecutionMode, setSubmitShortcut, setMaxAgentSteps, setDefaultTab, appimageIntegrationState, appimageIntegrate, appimageRemoveIntegration, setAppImageIntegrationDeclined } from "../../ipc/config";
 import type { ExecutionMode, SubmitShortcut, DefaultTab, AppImageIntegrationState } from "../../ipc/config";
+import { pythonEnvStatus, pythonEnvReset, pythonEnvSetInterpreter, pythonEnvSetIndexUrl } from "../../ipc/pythonEnv";
+import type { PythonEnvStatus } from "../../ipc/pythonEnv";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { Locale } from "../../lib/i18n";
 import { THEMES, getActiveTheme, applyTheme, type ThemeId } from "../../lib/themes";
@@ -42,11 +45,74 @@ export function GeneralPage() {
   );
   const [appimage, setAppimage] = useState<AppImageIntegrationState>({ state: "not_appimage" });
   const [appimageError, setAppimageError] = useState<string | null>(null);
+  const [pyEnv, setPyEnv] = useState<PythonEnvStatus | null>(null);
+  const [pyEnvError, setPyEnvError] = useState<string | null>(null);
+  const [indexUrl, setIndexUrlState] = useState("");
 
   const loadAppimage = useCallback(() => {
     appimageIntegrationState().then(setAppimage).catch(() => {});
   }, []);
   useEffect(() => { loadAppimage(); }, [loadAppimage]);
+
+  const refreshPyEnv = useCallback(() => {
+    pythonEnvStatus().then(setPyEnv).catch(() => setPyEnv(null));
+  }, []);
+  useEffect(refreshPyEnv, [refreshPyEnv]);
+
+  // Prefill from the persisted value once the status loads. Not re-synced on
+  // every keystroke below — handleIndexUrlChange saves directly, so there's
+  // nothing to reconcile.
+  useEffect(() => {
+    if (pyEnv) setIndexUrlState(pyEnv.indexUrl ?? "");
+  }, [pyEnv]);
+
+  const handlePyEnvReset = async (purge: boolean) => {
+    // Purging removes downloaded interpreters too, so it needs a confirmation —
+    // a rebuild is cheap and recoverable.
+    if (purge && !window.confirm(t.python_env_purge_confirm)) return;
+    setPyEnvError(null);
+    try {
+      await pythonEnvReset(purge);
+      refreshPyEnv();
+    } catch (e) {
+      // This section is the way out when something broke; a silent failure
+      // here sends the user back to advice (pip install markitdown) that no
+      // longer applies to the managed venv.
+      setPyEnvError(String(e));
+    }
+  };
+
+  const handlePickInterpreter = async () => {
+    const path = await open({ multiple: false, directory: false });
+    if (!path || Array.isArray(path)) return;
+    setPyEnvError(null);
+    try {
+      await pythonEnvSetInterpreter(path);
+      refreshPyEnv();
+    } catch (e) {
+      setPyEnvError(String(e));
+    }
+  };
+
+  const handleUseBundledInterpreter = async () => {
+    setPyEnvError(null);
+    try {
+      await pythonEnvSetInterpreter(null);
+      refreshPyEnv();
+    } catch (e) {
+      setPyEnvError(String(e));
+    }
+  };
+
+  const handleIndexUrlChange = async (value: string) => {
+    setIndexUrlState(value);
+    setPyEnvError(null);
+    try {
+      await pythonEnvSetIndexUrl(value.trim() ? value : null);
+    } catch (e) {
+      setPyEnvError(String(e));
+    }
+  };
 
   const MODES: { value: ExecutionMode; label: string; desc: string }[] = [
     { value: "always-confirm", label: t.mode_always_confirm_label, desc: t.mode_always_confirm_desc },
@@ -405,6 +471,68 @@ export function GeneralPage() {
             </label>
           ))}
         </div>
+      </section>
+
+      <section className="settings-section">
+        <h3>{t.python_env_title}</h3>
+        {pyEnv && (
+          <>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "16px" }}>
+              <p className="section-desc" style={{ margin: 0 }}>
+                {t.python_env_version_label}: {pyEnv.pythonVersion ?? t.python_env_not_created}
+              </p>
+              <p className="section-desc" style={{ margin: 0 }}>
+                {t.python_env_path_label}: <code>{pyEnv.venvPath}</code>
+              </p>
+              <p className="section-desc" style={{ margin: 0 }}>
+                {t.python_env_source_label}: {pyEnv.userInterpreter ?? t.python_env_source_bundled}
+              </p>
+              <p className="section-desc" style={{ margin: 0 }}>
+                {t.python_env_installed_label}: {pyEnv.installed.length > 0 ? pyEnv.installed.join(", ") : t.python_env_none_installed}
+              </p>
+            </div>
+
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "16px" }}>
+              <button className="aiterm-btn aiterm-btn--secondary" onClick={() => handlePyEnvReset(false)}>
+                {t.python_env_rebuild}
+              </button>
+              <button className="aiterm-btn aiterm-btn--danger" onClick={() => handlePyEnvReset(true)}>
+                {t.python_env_purge}
+              </button>
+              {pyEnv.userInterpreter ? (
+                <button className="aiterm-btn aiterm-btn--secondary" onClick={handleUseBundledInterpreter}>
+                  {t.python_env_use_bundled}
+                </button>
+              ) : (
+                <button className="aiterm-btn aiterm-btn--secondary" onClick={handlePickInterpreter}>
+                  {t.python_env_use_own}
+                </button>
+              )}
+            </div>
+
+            <p className="section-desc">{t.python_env_interpreter_rebuild_hint}</p>
+            <p className="section-desc">{t.python_env_legacy_note}</p>
+
+            <div style={{ marginTop: "12px" }}>
+              <label style={{ display: "block", marginBottom: "4px", fontSize: "13px", color: "#aaa" }}>
+                {t.python_env_index_url_label}
+              </label>
+              <p className="section-desc" style={{ margin: "0 0 8px 0" }}>{t.python_env_index_url_desc}</p>
+              <input
+                type="text"
+                className="settings-input"
+                style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #333", background: "#1e1e1e", color: "#eee" }}
+                placeholder={t.python_env_index_url_placeholder}
+                value={indexUrl}
+                onChange={(e) => handleIndexUrlChange(e.target.value)}
+              />
+            </div>
+
+            {pyEnvError && (
+              <p className="section-desc" style={{ color: "#e06c75" }}>{pyEnvError}</p>
+            )}
+          </>
+        )}
       </section>
 
       {appimage.state !== "not_appimage" && (

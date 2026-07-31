@@ -109,6 +109,11 @@ tar -xzf "$TMP/uv.tar.gz" -C "$TMP"
 cp "$TMP/uv-${TRIPLE}/uv" "$DEST/uv-${TRIPLE}"
 chmod +x "$DEST/uv-${TRIPLE}"
 echo "==> Wrote $DEST/uv-${TRIPLE}"
+# Smoke-test like the mac/windows scripts and all three setup-db2-* do: Linux
+# is the one platform whose triple comes from an env var, so a wrong ARCH
+# should fail here rather than at runtime. Skip only if the CI runner turns
+# out to be cross-fetching (arm64 binary on an x64 host).
+"$DEST/uv-${TRIPLE}" --version
 ```
 
 - [ ] **Step 3: 寫 Windows 腳本**
@@ -142,7 +147,7 @@ try {
 }
 ```
 
-- [ ] **Step 4: 登記 externalBin**
+- [ ] **Step 4: 登記 externalBin（四個檔案，缺一不可）**
 
 `src-tauri/tauri.conf.json` 的 `externalBin` 改為：
 
@@ -152,6 +157,16 @@ try {
       "binaries/uv"
     ]
 ```
+
+**base config 單獨改是無效的。** `tauri.macos.conf.json:19`、`tauri.windows.conf.json:10`、`tauri.linux.conf.json:3` 三者都設 `"externalBin": []`，而 Tauri 的平台專屬 config 走 JSON Merge Patch（RFC 7396）—— 陣列是**整體取代**而非合併，所以 base 的 `binaries/uv` 在三個平台打包時全被清空，binary 永遠不會進 app bundle。只有 dev 模式（Task 2 會掃 `CARGO_MANIFEST_DIR/binaries`）看起來能用，這種 bug 會潛伏到有人測安裝檔才爆。三個平台 conf 都要改為：
+
+```json
+    "externalBin": ["binaries/uv"],
+```
+
+為何不比照 db2：db2-sidecar 是「一整個目錄（JRE + jar）」，才走 `resources` + `scripts/tauri-build.js` 的 cpSync 手動複製。uv 是單一可執行檔，正是 `externalBin` 的標準用法，而且它**必須**落在執行檔旁邊才能被 `paths::uv_binary` 找到 —— 走 resources 會進 macOS 的 `Contents/Resources/`，位置不對。
+
+已知代價（刻意接受）：沒先跑 setup-uv 腳本的貢獻者，`tauri:dev` / `tauri:build` 會因找不到 `binaries/uv-<triple>` 而失敗。專案對 db2 sidecar 已有同樣前提（CLAUDE.md 要求先 build JAR 才能跑 `tauri:dev`）。
 
 - [ ] **Step 5: 本機執行並確認**
 
@@ -261,7 +276,10 @@ pub fn venv_interpreter(venv: &Path) -> PathBuf {
 }
 
 /// Locate the bundled uv binary, or `None` if it wasn't shipped.
-pub fn uv_binary(app: &AppHandle) -> Option<PathBuf> {
+///
+/// Takes no `AppHandle`: the binary's location follows from the executable's
+/// own path, so requiring app context would only mislead callers.
+pub fn uv_binary() -> Option<PathBuf> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
     let plain = exe_dir.join(exe_name(UV_STEM));
     if plain.exists() {
@@ -276,17 +294,35 @@ pub fn uv_binary(app: &AppHandle) -> Option<PathBuf> {
 }
 
 /// First `uv-<triple>` entry in `dir`, if any.
+///
+/// A dev machine can accumulate binaries for several triples, and `read_dir`
+/// order is platform- and filesystem-dependent — so prefer the one whose
+/// triple carries this machine's architecture (picking another would fail at
+/// exec time with an error that says nothing about where it came from), and
+/// sort so the remaining case is at least deterministic.
 fn find_suffixed_uv(dir: &Path) -> Option<PathBuf> {
     let prefix = format!("{UV_STEM}-");
-    std::fs::read_dir(dir)
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .find(|p| {
+        .filter(|p| p.is_file())
+        .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.starts_with(&prefix))
         })
+        .collect();
+    candidates.sort();
+    candidates
+        .iter()
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.contains(std::env::consts::ARCH))
+        })
+        .cloned()
+        .or_else(|| candidates.pop())
 }
 
 fn exe_name(stem: &str) -> String {
@@ -335,7 +371,7 @@ git commit -m "feat(python-env): resolve the bundled uv binary and managed env p
 ## Task 3: Profile 與 requirements 分層
 
 **Files:**
-- Create: `src-tauri/src/python_env/profiles.rs`, `tools/MarkItDown/requirements-media.txt`
+- Create: `src-tauri/src/python_env/profiles.rs`, `tools/MarkItDown/requirements-audio.txt`
 - Modify: `tools/MarkItDown/requirements.txt`, `src-tauri/tauri.conf.json`（resources）, `src-tauri/src/python_env/mod.rs`
 
 - [ ] **Step 1: 寫失敗測試**
@@ -358,7 +394,7 @@ mod tests {
 
     #[test]
     fn media_profile_reads_the_media_requirements_file() {
-        assert_eq!(Profile::DocMedia.requirements_file(), "requirements-media.txt");
+        assert_eq!(Profile::DocAudio.requirements_file(), "requirements-audio.txt");
         assert_eq!(Profile::DocCore.requirements_file(), "requirements.txt");
         assert_eq!(Profile::ApiDocs.requirements_file(), "requirements.txt");
     }
@@ -366,11 +402,25 @@ mod tests {
     #[test]
     fn doc_profiles_share_the_markitdown_tool_dir() {
         assert_eq!(Profile::DocCore.tool_dir(), "MarkItDown");
-        assert_eq!(Profile::DocMedia.tool_dir(), "MarkItDown");
+        assert_eq!(Profile::DocAudio.tool_dir(), "MarkItDown");
         assert_eq!(Profile::ApiDocs.tool_dir(), "ApiDocFetcher");
+    }
+
+    #[test]
+    fn marker_key_matches_the_serialized_form() {
+        // These are two representations of one wire format: the marker file keys
+        // off marker_key(), while Tauri commands and the frontend type
+        // ("api_docs" | "doc_core" | "doc_audio") go through serde. Pin them
+        // together so changing either one can't silently split them apart.
+        for profile in Profile::ALL {
+            let serialized = serde_json::to_string(&profile).unwrap();
+            assert_eq!(serialized, format!("\"{}\"", profile.marker_key()));
+        }
     }
 }
 ```
+
+最後一個測試在初次實作時就是綠燈 —— 它的價值不在當下抓 bug，而在鎖住契約。**驗證它真的有效**：暫時改掉某個 `marker_key()` 的回傳字串，確認測試轉紅，再改回。永遠不會失敗的測試等於沒有測試。
 
 - [ ] **Step 2: 執行確認失敗**
 
@@ -396,24 +446,24 @@ pub enum Profile {
     DocCore,
     /// Image and audio conversion — installed on demand, since these extras
     /// are the bulk of the download.
-    DocMedia,
+    DocAudio,
 }
 
 impl Profile {
-    pub const ALL: [Profile; 3] = [Profile::ApiDocs, Profile::DocCore, Profile::DocMedia];
+    pub const ALL: [Profile; 3] = [Profile::ApiDocs, Profile::DocCore, Profile::DocAudio];
 
     /// Directory under `tools/` (dev) or the resource bundle (production).
     pub fn tool_dir(&self) -> &'static str {
         match self {
             Profile::ApiDocs => "ApiDocFetcher",
-            Profile::DocCore | Profile::DocMedia => "MarkItDown",
+            Profile::DocCore | Profile::DocAudio => "MarkItDown",
         }
     }
 
     pub fn requirements_file(&self) -> &'static str {
         match self {
             Profile::ApiDocs | Profile::DocCore => "requirements.txt",
-            Profile::DocMedia => "requirements-media.txt",
+            Profile::DocAudio => "requirements-audio.txt",
         }
     }
 
@@ -422,7 +472,7 @@ impl Profile {
         match self {
             Profile::ApiDocs => "api_docs",
             Profile::DocCore => "doc_core",
-            Profile::DocMedia => "doc_media",
+            Profile::DocAudio => "doc_audio",
         }
     }
 }
@@ -438,17 +488,23 @@ impl Profile {
 markitdown[pdf,docx,pptx,xlsx]>=0.1.0
 ```
 
-`tools/MarkItDown/requirements-media.txt`（新）：
+`tools/MarkItDown/requirements-audio.txt`（新）：
 
 ```
-markitdown[image,audio-transcription]>=0.1.0
+markitdown[audio-transcription]>=0.1.0
 ```
 
-`src-tauri/tauri.conf.json` 的 `resources` 中，`"../tools/MarkItDown/requirements.txt"` 那一行之後加入：
+**base `tauri.conf.json` 原本沒有 `resources` key** —— MarkItDown 與 ApiDocFetcher 的條目只存在於三份平台 conf，各自完整重複列出。所以這裡是新增整個 key，只放新項目：
 
 ```json
-      "../tools/MarkItDown/requirements-media.txt": "MarkItDown/requirements-media.txt",
+    "resources": {
+      "../tools/MarkItDown/requirements-audio.txt": "MarkItDown/requirements-audio.txt"
+    }
 ```
+
+**為什麼放 base 就夠（已實證，不是推論）**：`externalBin` 是陣列，JSON Merge Patch 對陣列是整體取代，所以 Task 1 必須改四份。但 `resources` 是物件，對物件是**遞迴合併**。實驗方法：在 base 的 resources 放一個不存在的路徑，`cargo check --lib` 會失敗並指名該路徑（`tauri-build` 驗證每個 resources 項目是否存在）—— 即使平台 conf 也定義了完整的 resources 物件，base 的項目依然生效。
+
+這留下一個刻意的不對稱：media 條目在 base，其餘在平台 conf。不把既有重複項目一併搬進 base，是因為那是範圍外的重構；而 media 放 base 反而更穩健 —— `release.yml` 會整檔重寫 `tauri.linux.conf.json`，放在 base 的項目不會被那個重寫波及。
 
 - [ ] **Step 5: 執行測試**
 
@@ -531,10 +587,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let req = write_requirements(dir.path(), "markitdown>=0.1.0\n");
         record_installed(dir.path(), Profile::DocCore, &req).unwrap();
-        record_installed(dir.path(), Profile::DocMedia, &req).unwrap();
+        record_installed(dir.path(), Profile::DocAudio, &req).unwrap();
 
         assert!(!needs_install(dir.path(), Profile::DocCore, &req).unwrap());
-        assert!(!needs_install(dir.path(), Profile::DocMedia, &req).unwrap());
+        assert!(!needs_install(dir.path(), Profile::DocAudio, &req).unwrap());
         assert!(needs_install(dir.path(), Profile::ApiDocs, &req).unwrap());
     }
 
@@ -819,6 +875,19 @@ git add src-tauri/src/python_env
 git commit -m "feat(python-env): build uv invocations as assertable data"
 ```
 
+### 這一層的測試必須斷言字面值，不能只比對常數（兩次踩到）
+
+審查過程中連續發現兩個同類盲點，兩次都是**實驗證明**的，不是推論：
+
+1. `PYTHON_VERSION` 改成任何值，五個測試全綠 —— 因為它們比對的是常數符號本身，實作與預期會一起漂移。修法：加 `assert_eq!(PYTHON_VERSION, "3.12")`
+2. 把 `create_venv` 的 `spec(..., Some(runtime_dir))` 偷偷改成 `None`（等於拿掉 uv 找剛裝好 interpreter 所需的環境變數），六個測試依然全綠。修法：在該測試內斷言 `UV_PYTHON_INSTALL_DIR == Some("/data/rt")`，並在 `install_requirements` 的測試斷言它**不該**存在
+
+教訓：既然這一層是參數正確性的唯一防線（整合測試被刻意放棄），測試就必須釘住「該傳的東西真的在、值真的對」，而不只是「函式有把常數傳下去」。補測試後都要用「暫時破壞實作 → 確認只有該測試轉紅」驗證有效性。
+
+### 已知限制（刻意接受）
+
+`CommandSpec.args` 是 `Vec<String>`，路徑經 `to_string_lossy` 轉換，所以非 UTF-8 路徑會被破壞。改用 `OsString` 雖然嚴謹，但會讓斷言變複雜，正好破壞這個檔案「可在無 uv 環境下斷言參數」的存在理由。app data 與 tools 路徑由 OS 與 repo 決定，實務上是 UTF-8。
+
 ---
 
 ## Task 6: `ensure()` 編排與事件串流
@@ -938,7 +1007,17 @@ fn looks_like_compile_failure(output: &str) -> bool {
 pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, PythonEnvError> {
     let _guard = ENSURE_LOCK.lock().await;
 
-    let uv = paths::uv_binary(app).ok_or(PythonEnvError::UvMissing)?;
+    // `paths::app_data` falls back to "." when app_data_dir() fails, which would
+    // silently build the venv in the process's working directory. Failing is
+    // better than writing a multi-hundred-MB environment somewhere the user
+    // never looks and the app can't find again.
+    if app.path().app_data_dir().is_err() {
+        return Err(PythonEnvError::Io(
+            "無法取得應用程式資料目錄，請確認磁碟權限".to_string(),
+        ));
+    }
+
+    let uv = paths::uv_binary().ok_or(PythonEnvError::UvMissing)?;
     let venv = paths::venv_dir(app);
     let runtimes = paths::runtime_dir(app);
     let interpreter = user_interpreter(app);
@@ -980,7 +1059,15 @@ pub async fn ensure(app: &AppHandle, profile: Profile) -> Result<PathBuf, Python
     }
 
     let requirements = requirements_path(app, profile);
-    if marker::needs_install(&venv, profile, &requirements).unwrap_or(true) {
+    // Defaulting to "install" on Err is right — a first run and an unreadable
+    // marker should both install — but a missing requirements file is a
+    // packaging bug, not a first run. Log before collapsing them, or that
+    // distinction is gone by the time uv fails on a path that doesn't exist.
+    let needs = marker::needs_install(&venv, profile, &requirements).unwrap_or_else(|e| {
+        log::warn!("could not read install marker for {}: {e:#}", profile.marker_key());
+        true
+    });
+    if needs {
         log(app, "info", "正在安裝相依套件（首次使用需要一些時間）…");
         run(app, commands::install_requirements(&uv, &python, &requirements))
             .await
@@ -1098,6 +1185,42 @@ fn no_window(cmd: &mut tokio::process::Command) {
 
 `Cargo.toml` 確認有 `thiserror`；若無則加入 `thiserror = "2"`。
 
+- [ ] **Step 3b: 實測 markitdown 的版本漂移風險**
+
+拆成 core／media 兩份 requirements 後，兩者都用開放式 `>=0.1.0`，而它們是**分兩次**解析安裝的。風險情境：使用者先觸發 `DocCore` 安裝（當時 markitdown 是 0.1.0），數週後第一次選了 PNG 觸發 `DocAudio`，此時 PyPI 上已是 0.3.0 —— 若解析器不保留已裝版本，markitdown 本體會被靜默升級，使用者只想加圖片支援卻連帶換掉已經跑穩的文件轉換核心。拆分前只有一次解析，不存在這個問題。
+
+這個風險是否真的存在，取決於 uv 的實際行為（是否像 pip 一樣「已滿足約束就不動」），必須實測而非推論：
+
+```bash
+# 在暫時的 venv 裡先裝 core，記下版本
+uv venv /tmp/drift-probe --python 3.12
+uv pip install --python /tmp/drift-probe/bin/python -r tools/MarkItDown/requirements.txt
+uv pip list --python /tmp/drift-probe/bin/python | grep -i markitdown
+
+# 再裝 media，看本體版本有沒有變
+uv pip install --python /tmp/drift-probe/bin/python -r tools/MarkItDown/requirements-audio.txt
+uv pip list --python /tmp/drift-probe/bin/python | grep -i markitdown
+
+rm -rf /tmp/drift-probe
+```
+
+若版本不變 → 記錄結論、不需處理。若被升級 → 兩份檔案改成相同的上下界（例如 `>=0.1.0,<0.2.0`），確保不論安裝順序或時間差都落在同一版本。**不要在沒實測前就加上界** —— 猜錯當前版本會直接把安裝鎖死。
+
+#### 實測結果（2026-07-30，macOS arm64，真實網路）
+
+**風險不成立，requirements 不需改動。** core 裝完 `markitdown==0.1.7`，接著裝 media 後**仍是 0.1.7**。`uv pip install` 與 pip 行為一致：已安裝且滿足未鎖上界的約束（`>=0.1.0`）就視為已滿足、不升級。`commands::install_requirements` 從不傳 `--upgrade`，所以數週前裝的舊版不會被後來的 media 安裝悄悄換掉。
+
+順帶量到的數字（Task 14 與體驗判斷會用到）：
+
+| 步驟 | 耗時 | 需要網路 |
+|---|---|---|
+| `uv venv --python 3.12`（單獨執行，會找到系統既有 Python） | 0.36s | 否 |
+| `uv python install 3.12`（帶 `UV_PYTHON_INSTALL_DIR`，app 的實際路徑） | ~9.2s（23.8 MB） | **是** |
+| core requirements（36 個套件，~72 MB） | ~12.9s | 是 |
+| media requirements（僅 `pydub` + `speechrecognition`，~31 MB） | ~3s | 是 |
+
+**真正首次執行約 25 秒，且一定需要網路** —— 即使使用者機器上已經有合格的 Python。這是刻意的：`ensure()` 只在使用者**沒有**手動指定 interpreter 時才跑 `uv python install`，而受管的 CPython 保證所有使用者拿到同一個版本，代價是那 23.8 MB。不想下載的使用者有逃生門：手動指定自己的 interpreter，此時 `ensure()` 會跳過下載那一步（`if interpreter.is_none()`）。
+
 - [ ] **Step 4: 執行測試**
 
 Run: `cd src-tauri && cargo test --lib python_env`
@@ -1110,6 +1233,32 @@ git add src-tauri/src/python_env src-tauri/Cargo.toml
 git commit -m "feat(python-env): orchestrate install with progress events and a single lock"
 ```
 
+### Review 後的七項加固（已落地於 `ec15ede`）
+
+1. **stderr 改為即時 emit**。原本 stderr 在獨立 task 裡只收集、等 stdout 全跑完才整批 emit，結果 uv 中途的警告會出現在「安裝完成」之後 —— 對進度面板是有意義的誤導。把 `emit_log` 搬進該 task 的讀取迴圈（clone `AppHandle`），仍收進 buf 供錯誤分類。**已實測驗證**：另建 scratch 專案重現 `run()` 的併發形狀、以 150ms 間隔交錯寫兩個 stream，修正前兩行 stderr 擠在同一瞬間並排在所有 stdout 之後（`OUT1(9ms) OUT2(323ms) OUT3(645ms) ERR1(646ms) ERR2(646ms)`），修正後落在真實寫入時間（`OUT1(4ms) ERR1(163ms) OUT2(322ms) ERR2(481ms) OUT3(642ms)`）。
+2. **新增 `UvUnusable(String)` 變體**。uv 檔案存在但無法啟動（macOS quarantine、缺 `+x`）原本會落到 `PythonUnavailable`／`VenvFailed`，使用者看到「建立 Python 環境失敗：Permission denied」，看不出這與 `UvMissing` 同類、解法也相同。做法刻意**不是**在 `ensure()` 開頭多跑一次 `uv --version`（那會在環境已就緒的常見路徑上白花一次 spawn），而是讓 `run()` 回傳 `RunFailure { NotExecutable, Failed }`，四個呼叫點各自映射。
+3. **`interpreter_works` 的盲區寫進 doc comment**。`python -c "import sys"` 不碰 site-packages，所以「安裝被中斷留下半殘套件」會通過檢查，而 marker hash 未變也不會重裝 —— 沒有自動修復路徑。不試圖偵測（要可靠偵測得 import 每個套件，成本與脆弱度都不划算），改為註明限制並指向使用者的出路：設定頁的重建動作（Task 12）。
+4. `tail()` 從 20 行放寬到 40 行（編譯失敗的關鍵那行常被 20 行截掉），實作改用 slice 取代兩次 reverse，並補兩個測試。
+5. `looks_like_compile_failure` 補齊 `gcc` 與 `error: linker` 兩個 marker 的正向測試（原本 4 個只測了 2 個）。
+6. 本地 `log()` 改名 `emit_log()`，避免與 `log::warn!` 巨集撞名造成閱讀停頓。
+7. `requirements_path()` 抽出可注入的 `resolve_requirements(dev_root, resource_root, profile)`，讓「dev 優先、否則 resource」這條分支終於能用 tempdir 測到（原本綁死 `CARGO_MANIFEST_DIR`，完全沒被驗證過）。
+
+**刻意不做**：把 `run()`／`emit_log()`／`tail()` 拆成 `exec.rs`。審查者自己的判斷是現況合理（約 300 行，Task 7 只再加約 40 行），且 `run()` 與 `emit_log` 緊密相依。若之後還有東西往 `mod.rs` 塞，那時才是拆的時機。
+
+### 跨程序競爭：已評估、刻意接受（不要默默忽略）
+
+`ENSURE_LOCK` 是 `tokio::sync::Mutex`，只在程序內有效。這個 app **沒有** single-instance 保護（`Cargo.toml` 與 `lib.rs` 都沒有 `tauri-plugin-single-instance`），所以使用者可以同時開兩個實例，各自觸發 `ensure()`：兩個 uv 會同時寫同一個 venv 的 site-packages，標記檔的 read-modify-write 也可能互相覆蓋。
+
+**接受這個風險，理由**：
+
+1. 觸發條件需要使用者在兩個實例裡幾乎同時觸發 Python 功能，實務上罕見
+2. 標記檔互相覆蓋的後果是「某個 profile 看起來沒裝」→ 下次使用時重裝，自我修復，不會跑到錯誤的套件版本
+3. venv 真的被寫壞時，`ensure()` 的 `interpreter_works` 檢查會偵測到並自動重建一次 —— 這條既有的降級路徑正好兜住最嚴重的情況
+
+**若日後要真正解決**，順序是：先加 `tauri-plugin-single-instance`（一併解決其他共享狀態的競爭，例如 config 與 db），而不是只為這裡加一個 OS file lock。加檔案鎖需要新依賴（std 沒有 file locking），而且崩潰後留下的 stale lock 又要另一套 PID／timestamp 判斷，複雜度換來的保障不成比例。
+
+這一段是在 Task 4 的 review 中被提出的；記錄下來是為了讓下一個人知道它被評估過、以及評估的依據，而不是沒人想到。
+
 ### 關於「假 uv 整合測試」的取捨（spec 要求明確記錄，不得默默省略）
 
 **決定：不做，改以純函式測試 + Task 14 的端到端驗證覆蓋。**
@@ -1120,53 +1269,14 @@ git commit -m "feat(python-env): orchestrate install with progress events and a 
 
 ---
 
-## Task 7: `status` / `reset` / `set_interpreter` 與 config 欄位
+## Task 7: `status` / `reset` / `set_interpreter`
 
 **Files:**
-- Modify: `src-tauri/src/python_env/mod.rs`, `src-tauri/src/config/types.rs`
+- Modify: `src-tauri/src/python_env/mod.rs`
 
-- [ ] **Step 1: 寫失敗測試**
+> **`AppConfig.python_interpreter` 欄位與 `user_interpreter()` helper 已在 Task 6 完成。** 原本排在這裡，但 Task 6 的 `ensure()` 就呼叫 `user_interpreter`，照原順序實作會編譯失敗 —— 這是計畫的相依性錯誤。config 欄位、它的兩個 serde 測試、以及 helper 都已隨 Task 6 落地，本任務只做下面三個對外 API。
 
-`src-tauri/src/config/types.rs` 的 tests 模組（若無則建立 `#[cfg(test)] mod python_interpreter_tests`）：
-
-```rust
-#[cfg(test)]
-mod python_interpreter_tests {
-    use super::*;
-
-    #[test]
-    fn python_interpreter_defaults_to_none_for_existing_configs() {
-        let cfg: AppConfig = toml::from_str("").expect("empty config should parse");
-        assert_eq!(cfg.python_interpreter, None);
-    }
-
-    #[test]
-    fn python_interpreter_round_trips() {
-        let cfg: AppConfig =
-            toml::from_str("python_interpreter = \"/usr/local/bin/python3.12\"").unwrap();
-        assert_eq!(cfg.python_interpreter.as_deref(), Some("/usr/local/bin/python3.12"));
-    }
-}
-```
-
-- [ ] **Step 2: 執行確認失敗**
-
-Run: `cd src-tauri && cargo test --lib python_interpreter_tests`
-Expected: 編譯失敗，`no field python_interpreter`
-
-- [ ] **Step 3: 加 config 欄位**
-
-`src-tauri/src/config/types.rs` 的 `AppConfig` 內加入：
-
-```rust
-    /// Interpreter the user pointed us at when uv can't fetch one (offline or
-    /// behind a proxy). The venv is still created under app data — this only
-    /// changes which interpreter it's based on.
-    #[serde(default)]
-    pub python_interpreter: Option<String>,
-```
-
-- [ ] **Step 4: 實作三個 API**
+- [ ] **Step 1: 實作三個 API**
 
 `src-tauri/src/python_env/mod.rs` 加入：
 
@@ -1182,27 +1292,65 @@ pub struct EnvStatus {
 }
 
 /// Snapshot for the settings page and the feature gates. Never runs uv.
+///
+/// Reads `pyvenv.cfg` rather than running `python --version`. This is called
+/// every time the settings page or a feature gate wants state, and spawning a
+/// process for that would flash a console window on Windows (the sync
+/// `std::process::Command` can't reuse `no_window`, which takes a tokio
+/// Command) and cost far more than reading one small file. It reports the
+/// version the venv was built with, not whether the interpreter still runs —
+/// `ensure()` owns that check via `interpreter_works`.
 pub fn status(app: &AppHandle) -> EnvStatus {
     let venv = paths::venv_dir(app);
-    let python = paths::venv_interpreter(&venv);
-    let python_version = std::process::Command::new(&python)
-        .arg("--version")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            let raw = if o.stdout.is_empty() { o.stderr } else { o.stdout };
-            String::from_utf8_lossy(&raw).trim().to_string()
-        });
-
     EnvStatus {
-        uv_available: paths::uv_binary(app).is_some(),
-        python_version,
+        uv_available: paths::uv_binary().is_some(),
+        python_version: venv_python_version(&venv),
         installed: marker::installed_profiles(&venv),
         venv_path: venv.to_string_lossy().into_owned(),
         user_interpreter: user_interpreter(app).map(|p| p.to_string_lossy().into_owned()),
     }
 }
+
+/// Version recorded in the venv's `pyvenv.cfg`, which uv writes as
+/// `version_info = 3.12.13`. `None` when there's no venv or no such key.
+fn venv_python_version(venv: &Path) -> Option<String> {
+    let cfg = std::fs::read_to_string(venv.join("pyvenv.cfg")).ok()?;
+    cfg.lines()
+        .filter_map(|line| line.split_once('='))
+        .find(|(key, _)| key.trim() == "version_info")
+        .map(|(_, value)| value.trim().to_string())
+}
+```
+
+（`pyvenv.cfg` 的格式已實測確認 —— uv 0.11.19 產出的內容是 `home` / `implementation` / `uv` / `version_info` / `include-system-site-packages`，其中 `version_info = 3.12.13` 就是完整版本號。）
+
+把版本讀取獨立成 `venv_python_version` 的附帶好處是它成為可測的純函式，而原本的 `python --version` 寫法完全無法單元測試。三個測試：
+
+```rust
+    #[test]
+    fn reads_the_python_version_from_pyvenv_cfg() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("pyvenv.cfg"),
+            "home = /opt/homebrew/opt/python@3.12/bin\nimplementation = CPython\nversion_info = 3.12.13\n",
+        )
+        .unwrap();
+        assert_eq!(venv_python_version(dir.path()).as_deref(), Some("3.12.13"));
+    }
+
+    #[test]
+    fn version_is_none_without_a_venv() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(venv_python_version(dir.path()), None);
+    }
+
+    #[test]
+    fn version_is_none_when_pyvenv_cfg_has_no_version_key() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pyvenv.cfg"), "implementation = CPython\n").unwrap();
+        assert_eq!(venv_python_version(dir.path()), None);
+    }
+```
 
 /// Delete the venv (and optionally the downloaded interpreters). The next
 /// `ensure` rebuilds from scratch.
@@ -1223,26 +1371,20 @@ async fn remove_if_present(dir: &Path) -> Result<(), PythonEnvError> {
     }
 }
 
-fn user_interpreter(app: &AppHandle) -> Option<PathBuf> {
-    let config = app.state::<std::sync::Arc<crate::config::ConfigStore>>();
-    config
-        .get()
-        .python_interpreter
-        .filter(|s| !s.trim().is_empty())
-        .map(PathBuf::from)
-}
 ```
 
-- [ ] **Step 5: 執行測試**
+（`user_interpreter` 已在 Task 6 加入，此處不需重複。）
 
-Run: `cd src-tauri && cargo test --lib` 
+- [ ] **Step 2: 執行測試**
+
+Run: `cd src-tauri && cargo test --lib`
 Expected: 全數 passed
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add src-tauri/src/python_env src-tauri/src/config/types.rs
-git commit -m "feat(python-env): expose status, reset and a user-specified interpreter"
+git add src-tauri/src/python_env
+git commit -m "feat(python-env): expose status and reset for the settings page"
 ```
 
 ---
@@ -1315,7 +1457,7 @@ pub fn python_env_set_interpreter(
 ```ts
 import { invoke } from "@tauri-apps/api/core";
 
-export type PythonProfile = "api_docs" | "doc_core" | "doc_media";
+export type PythonProfile = "api_docs" | "doc_core" | "doc_audio";
 
 export interface PythonEnvStatus {
   uvAvailable: boolean;
@@ -1444,8 +1586,26 @@ git commit -m "refactor(markitdown): use the managed Python env instead of the u
 ## Task 11: 前端引導卡與安裝進度面板
 
 **Files:**
-- Create: `src/components/PythonEnv/PythonEnvGate.tsx`, `src/components/PythonEnv/PythonEnvGate.test.tsx`
+- Create: `src/components/PythonEnv/usePythonEnvGate.ts`, `src/components/PythonEnv/usePythonEnvGate.test.ts`, `src/components/PythonEnv/PythonEnvGate.tsx`, `src/components/PythonEnv/PythonEnvGate.test.tsx`
 - Modify: `src/lib/i18n.ts`
+
+### 為什麼多一個 hook（計畫的修正）
+
+原本的規格讓每個功能入口各自監聽 `python-env-log`、各自管 gate 狀態。但有**三個**入口要做同一件事：文件轉換（`DocConverterView`）、API 文件抓取（`ApiDocsView`）、知識庫匯入（`KnowledgeBaseView`）。三份重複的事件監聽與狀態機是 bug 溫床，而且 Task 9 已經產生一個具體缺口 —— `api_docs` 刪掉的 `api-docs-log` 進度訊息（`"Checking Python dependencies…"` 與兩則 pip warn）改由 `python-env-log` 發出，而 `ApiDocsView` 不監聽它，使用者首次使用會看到「卡住 25 秒卻沒有任何訊息」。把監聽與狀態集中到 `usePythonEnvGate()`，三個入口共用，這個缺口就只需要修一次。
+
+### 驗收標準：正常首次安裝也要有進度，不只是「缺 Python」時的引導卡
+
+合併 review 實地追過這條路徑後確認，缺口比原本設想的大：`python-env-log` 在整個 `src/` **沒有任何監聽者**，而 `ApiDocsView` 的 log 面板要 `logs.length > 0` 才渲染。所以使用者首次抓取 API 文件時，那實測 25 秒（9.2s 下載 Python + 12.9s 裝套件，都需要網路）內畫面上只有一個靜態的「Loading…」按鈕文字，log 面板連出現都沒有 —— 成功時一行訊息也沒有，失敗時才冒出一行不透明的錯誤。
+
+這是**常見的首次使用路徑**，不是例外情況。所以本任務的驗收標準是「正常首次安裝過程可見」，而非只有「缺 Python 時顯示引導卡」。
+
+（`markitdown` 那邊沒有同樣的退化 —— 它舊的 pip 階段本來也沒 emit 任何 UI 事件。）
+
+### 判斷「該顯示哪種 UI」不要靠字串比對錯誤訊息
+
+`python_env_ensure` 失敗只會回一個 `String`。要區分「缺 Python，該顯示引導卡」與「安裝失敗，該顯示錯誤與重試」，**不要去比對錯誤字串內容** —— 那種寫法在這個專案已經害過一次：`AiPanel` 把 Anthropic 的假 `rate_limit_error` 依 i18n 顯示成「請求過於頻繁，請稍後再試」，把除錯方向整個帶偏。
+
+改用狀態判斷：`ensure` 失敗後呼叫 `pythonEnvStatus()`，依 `uvAvailable` 與 `pythonVersion` 決定 UI。若日後需要更精確的分類，正確做法是比照專案既有的 `AiError`（`kind` 的 discriminated union）讓 command 回傳結構化錯誤，而不是在前端猜字串。
 
 - [ ] **Step 1: 加 i18n key**
 
@@ -1483,7 +1643,182 @@ git commit -m "refactor(markitdown): use the managed Python env instead of the u
     python_env_media_prompt: "This file needs image/audio support. Install it now?",
 ```
 
-- [ ] **Step 2: 寫失敗測試**
+- [ ] **Step 1b: 寫 hook 的失敗測試**
+
+`src/components/PythonEnv/usePythonEnvGate.test.ts`：
+
+```ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { renderHook, act, waitFor } from "@testing-library/react";
+import { usePythonEnvGate } from "./usePythonEnvGate";
+
+const ensure = vi.fn();
+const status = vi.fn();
+const listeners: Array<(e: { payload: { level: string; message: string } }) => void> = [];
+
+vi.mock("../../ipc/pythonEnv", () => ({
+  pythonEnvEnsure: (p: string) => ensure(p),
+  pythonEnvStatus: () => status(),
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (_name: string, cb: (e: { payload: { level: string; message: string } }) => void) => {
+    listeners.push(cb);
+    return Promise.resolve(() => {});
+  },
+}));
+
+describe("usePythonEnvGate", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listeners.length = 0;
+  });
+
+  it("reports ready and returns true when ensure succeeds", async () => {
+    ensure.mockResolvedValue(undefined);
+    const { result } = renderHook(() => usePythonEnvGate());
+
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.ensureProfile("doc_core");
+    });
+
+    expect(ok).toBe(true);
+    expect(result.current.state).toBe("ready");
+  });
+
+  it("shows the guidance card when the failure is a missing Python, not a failed install", async () => {
+    // Decided from status(), not by matching words in the error string.
+    ensure.mockRejectedValue("無法取得 Python：network unreachable");
+    status.mockResolvedValue({
+      uvAvailable: true,
+      pythonVersion: null,
+      installed: [],
+      venvPath: "/data/python-env",
+      userInterpreter: null,
+    });
+    const { result } = renderHook(() => usePythonEnvGate());
+
+    await act(async () => {
+      await result.current.ensureProfile("doc_core");
+    });
+
+    expect(result.current.state).toBe("missing");
+  });
+
+  it("shows a plain failure when Python exists but the install broke", async () => {
+    ensure.mockRejectedValue("安裝 doc_core 相依套件失敗：…");
+    status.mockResolvedValue({
+      uvAvailable: true,
+      pythonVersion: "3.12.13",
+      installed: [],
+      venvPath: "/data/python-env",
+      userInterpreter: null,
+    });
+    const { result } = renderHook(() => usePythonEnvGate());
+
+    await act(async () => {
+      await result.current.ensureProfile("doc_core");
+    });
+
+    expect(result.current.state).toBe("failed");
+    expect(result.current.error).toContain("相依套件失敗");
+  });
+
+  it("accumulates log lines from python-env-log and marks warn lines as errors", async () => {
+    ensure.mockResolvedValue(undefined);
+    const { result } = renderHook(() => usePythonEnvGate());
+    await waitFor(() => expect(listeners.length).toBe(1));
+
+    act(() => {
+      listeners[0]({ payload: { level: "info", message: "Resolved 36 packages" } });
+      listeners[0]({ payload: { level: "warn", message: "could not fetch wheel" } });
+    });
+
+    expect(result.current.lines).toEqual([
+      { text: "Resolved 36 packages", isError: false },
+      { text: "could not fetch wheel", isError: true },
+    ]);
+  });
+}
+```
+
+- [ ] **Step 1c: 實作 hook**
+
+`src/components/PythonEnv/usePythonEnvGate.ts`：
+
+```ts
+import { useCallback, useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import {
+  pythonEnvEnsure,
+  pythonEnvStatus,
+  type PythonEnvLogEvent,
+  type PythonProfile,
+} from "../../ipc/pythonEnv";
+import type { InstallLogLine } from "../Settings/McpInstallTerminal";
+
+export type GateState = "ready" | "installing" | "missing" | "failed";
+
+/**
+ * Shared state for every feature that needs the managed Python environment:
+ * document conversion, API doc scraping, and knowledge-base import all call
+ * this rather than each wiring up its own listener and state machine.
+ */
+export function usePythonEnvGate() {
+  const [state, setState] = useState<GateState>("ready");
+  const [lines, setLines] = useState<InstallLogLine[]>([]);
+  const [error, setError] = useState<string>();
+  // Tauri's listen resolves after unmount in tests and on fast navigation.
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    const unlisten = listen<PythonEnvLogEvent>("python-env-log", (event) => {
+      if (!mounted.current) return;
+      setLines((prev) => [
+        ...prev,
+        { text: event.payload.message, isError: event.payload.level !== "info" },
+      ]);
+    });
+    return () => {
+      mounted.current = false;
+      unlisten.then((off) => off());
+    };
+  }, []);
+
+  /**
+   * Prepare `profile`, returning false when the caller should stop and let the
+   * gate's UI take over.
+   *
+   * Which UI that is comes from `pythonEnvStatus()`, not from reading words out
+   * of the error string — the app has been burned once by inferring a cause
+   * from a message (a fake rate_limit_error rendered as "too many requests",
+   * which sent debugging in the wrong direction for a day).
+   */
+  const ensureProfile = useCallback(async (profile: PythonProfile): Promise<boolean> => {
+    setLines([]);
+    setError(undefined);
+    setState("installing");
+    try {
+      await pythonEnvEnsure(profile);
+      setState("ready");
+      return true;
+    } catch (e) {
+      setError(String(e));
+      const status = await pythonEnvStatus().catch(() => null);
+      setState(status && status.pythonVersion === null ? "missing" : "failed");
+      return false;
+    }
+  }, []);
+
+  const dismiss = useCallback(() => setState("ready"), []);
+
+  return { state, lines, error, ensureProfile, dismiss };
+}
+```
+
+- [ ] **Step 2: 寫元件的失敗測試**
 
 `src/components/PythonEnv/PythonEnvGate.test.tsx`：
 
@@ -1613,6 +1948,8 @@ git commit -m "feat(python-env): add the setup gate with install progress and es
 ---
 
 ## Task 12: 設定頁「Python 環境」區塊
+
+> **這不是便利功能，而是讓錯誤訊息重新可行動的關鍵。** Task 10 刪掉的舊訊息會叫使用者執行 `pip install markitdown` —— 那在受管 venv 模型下已經是**錯誤建議**（app 不再碰系統 Python，裝進系統 Python 也不會被用到）。取代它的 `InstallFailed`／`ToolchainMissing` 診斷資訊更豐富（帶 40 行真實 uv 輸出，且 `ToolchainMissing` 正確區分出「缺編譯工具鏈」這個重試也沒用的情況），但沒有任何一個告訴使用者能做什麼。真正的逃生門是「手動指定 interpreter」與「重建環境」，而它們在這個任務之前沒有 UI 可達。合併 review 特別點出這一點，實作時不要把它當成錦上添花。
 
 **Files:**
 - Modify: `src/components/Settings/GeneralPage.tsx`
@@ -1813,13 +2150,13 @@ const ensureMediaProfileIfNeeded = async (filePath: string): Promise<boolean> =>
   if (!needsMediaProfile(filePath)) return true;
 
   const status = await pythonEnvStatus();
-  if (status.installed.includes("doc_media")) return true;
+  if (status.installed.includes("doc_audio")) return true;
 
   if (!window.confirm(t("python_env_media_prompt"))) return false;
 
   setGateState("installing");
   try {
-    await pythonEnvEnsure("doc_media");
+    await pythonEnvEnsure("doc_audio");
     return true;
   } finally {
     setGateState("ready");
@@ -1882,6 +2219,40 @@ git commit -m "feat(doc-converter): offer the media profile only when the file n
 ```
 
 （`matrix.db2_arch` 是 matrix 裡既有的 x64／arm64 值，直接沿用，不新增 matrix 變數。）
+
+**Linux 的條件式不可照抄 db2 的。** db2 的 Linux 步驟只跑在 `.deb` 兩條 leg（`ubuntu-24.04` / `ubuntu-24.04-arm`），因為 AppImage 刻意跳過 DB2。但 uv 不同：`tauri.linux.conf.json` 的 `externalBin` 對**全部 4 條** Linux leg 都是 `["binaries/uv"]`（AppImage 兩條 leg 用的是 repo 內的版本，不會被 CI 覆寫），所以 AppImage 的 `tauri build` 同樣需要 `binaries/uv-<triple>` 存在，否則會撞上與 `.deb` 相同的 resource-path 驗證失敗。uv 的 Linux fetch 步驟必須涵蓋 `ubuntu-22.04`、`ubuntu-22.04-arm`、`ubuntu-24.04`、`ubuntu-24.04-arm` 全部四條。
+
+**為什麼這裡必須用真的 fetch 而不是 placeholder**：`ci.yml` 的 warm-cache job 只編譯不打包，所以 0-byte placeholder 足夠（實測：缺檔 `cargo check` 失敗、0-byte 通過）；但 release.yml 會真的 bundle，空檔會產出一個帶著 0-byte uv 的安裝檔，執行期才爆。兩者不可混用。
+
+- [ ] **Step 1b: 修正 Linux conf 的重新生成（否則前面全部白做）**
+
+`release.yml:252-269` 的「Patch tauri.linux.conf.json」步驟會用 python 重新生成整個 `tauri.linux.conf.json`，**覆蓋掉 repo 裡的版本**。它目前寫死 `'externalBin': []`，會把 Task 1 加的 uv 登記清掉；而且它的 `resources` 只列 ApiDocFetcher，**漏了 MarkItDown 的兩個條目**（repo 版本 `tauri.linux.conf.json:8-9` 有）——這是既有缺陷，代表現在打包出來的 Linux `.deb` 根本沒有 `converter.py`，文件轉換與知識庫匯入在 Linux 上必定失敗。順手一起修，因為本任務正要往同一份 resources 再加一個檔案。
+
+該步驟的 python heredoc 改為：
+
+```python
+          conf = {
+            'bundle': {
+              'externalBin': ['binaries/uv'],
+              'resources': {
+                '${{ matrix.db2_sidecar_dir }}': 'db2-sidecar',
+                '../tools/ApiDocFetcher/*.py': 'ApiDocFetcher/',
+                '../tools/ApiDocFetcher/strategies/*.py': 'ApiDocFetcher/strategies/',
+                '../tools/ApiDocFetcher/requirements.txt': 'ApiDocFetcher/requirements.txt',
+                '../tools/MarkItDown/converter.py': 'MarkItDown/converter.py',
+                '../tools/MarkItDown/requirements.txt': 'MarkItDown/requirements.txt'
+              }
+            }
+          }
+```
+
+（`converter.py` 與 `requirements.txt` 這兩行已由 master 上的 hotfix `27b280b` 補上，此處只需確認 `externalBin` 帶上 `binaries/uv`。）
+
+**不要在這裡加 `requirements-audio.txt`。** Task 3 把它放進 base `tauri.conf.json` 的 `resources`，而 `resources` 是物件、走遞迴合併，所以 base 的項目在每個平台都生效 —— 包含這份被 CI 整檔重寫的 Linux conf（重寫只覆蓋平台 conf，動不到 base）。在這裡重複列出不會壞，但會讓「media 條目歸屬於 base」這個刻意的決定變模糊。
+
+改完後比對一次：這份生成的內容除了 `db2_sidecar_dir` 之外，應與 repo 的 `src-tauri/tauri.linux.conf.json` 完全一致 —— 注意兩者都**不該**含 media 條目，那一項只在 base。
+
+同時確認 macOS／Windows 兩邊：`release.yml:271` 之後的 macOS 注入步驟與 `tauri.windows.conf.json` 若也會覆寫 `externalBin`，要一併帶上 `binaries/uv`。
 
 - [ ] **Step 2: 驗證 workflow 語法**
 

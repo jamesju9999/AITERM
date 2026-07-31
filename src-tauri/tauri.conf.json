@@ -47,7 +47,11 @@
       "icons/icon.ico"
     ],
     "externalBin": [
-      "binaries/db2-sidecar"
-    ]
+      "binaries/db2-sidecar",
+      "binaries/uv"
+    ],
+    "resources": {
+      "../tools/MarkItDown/requirements-audio.txt": "MarkItDown/requirements-audio.txt"
+    }
   }
 }

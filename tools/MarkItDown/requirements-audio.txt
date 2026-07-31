@@ -1,0 +1,1 @@
+markitdown[audio-transcription]>=0.1.0

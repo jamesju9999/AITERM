@@ -16,7 +16,7 @@
     ]
   },
   "bundle": {
-    "externalBin": [],
+    "externalBin": ["binaries/uv"],
     "resources": {
 "../tools/ApiDocFetcher/*.py": "ApiDocFetcher/",
       "../tools/ApiDocFetcher/strategies/*.py": "ApiDocFetcher/strategies/",

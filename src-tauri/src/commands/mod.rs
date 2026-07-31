@@ -11,6 +11,7 @@ pub mod loop_session;
 pub mod markitdown;
 pub mod mcp;
 pub mod provider;
+pub mod python_env;
 pub mod secret;
 pub mod shell;
 pub mod updater;
