@@ -105,6 +105,53 @@ fn effective_cwd_with_pending(cwd: &PathBuf, pending: &VecDeque<ParsedCd>) -> Pa
     current
 }
 
+/// CWD from the last PowerShell prompt (`PS <path>> `) in ANSI-stripped output.
+///
+/// Split out of `scan_output_for_ps_cwd` so it can be tested against a string
+/// instead of a live shell. It had no coverage at all, which is how the
+/// carriage-return bug below survived into a release.
+fn ps_cwd_from_output(stripped: &str) -> Option<PathBuf> {
+    let mut last_cwd: Option<PathBuf> = None;
+
+    // Split on '\r' as well as '\n'. A shell redrawing its prompt in place —
+    // which PSReadLine does routinely — emits a carriage return with no
+    // newline, so two prompts land in what splitting on '\n' alone treats as a
+    // single line. The parse below then reads the whole thing as one path,
+    // because `strip_suffix('>')` only removes the *last* '>' and leaves the
+    // first prompt's, producing `C:\Users\me\Downloads> PS C:\Users\me\Downloads`.
+    // That value passes the drive-letter check, reaches `read_dir`, and comes
+    // back as Windows error 123 (ERROR_INVALID_NAME) — the red banner the file
+    // explorer showed on the first switch to it. The previous code's comment
+    // already claimed it split on both; only the code disagreed.
+    for line in stripped.split(['\n', '\r']) {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("PS ") else { continue };
+
+        // PowerShell prompt: "PS <path>> " (one '>', then a space)
+        let path_str = match rest.strip_suffix("> ").or_else(|| rest.strip_suffix('>')) {
+            Some(s) => s.trim(),
+            None => continue,
+        };
+
+        // '>' is not a legal character in a Windows path, so finding one here
+        // means this is two prompts run together rather than one. Keeping the
+        // check makes the whole class impossible, not just the '\r' spelling of
+        // it that was observed.
+        if path_str.contains('>') {
+            continue;
+        }
+
+        // Sanity-check: must look like an absolute path (drive letter or UNC).
+        if !path_str.is_empty()
+            && (path_str.as_bytes().get(1) == Some(&b':') || path_str.starts_with("\\\\"))
+        {
+            last_cwd = Some(PathBuf::from(path_str));
+        }
+    }
+
+    last_cwd
+}
+
 /// For Bash/Pwsh sessions, scans an incoming chunk for OSC 133 D markers and
 /// confirms or discards the oldest pending cd for each one found, in order.
 /// A no-op chunk with no markers is the overwhelmingly common case, so this
@@ -487,33 +534,7 @@ impl PtySession {
 
         let raw = String::from_utf8_lossy(&bytes);
         let stripped = crate::pty::ansi::strip_ansi(&raw);
-
-        // Walk lines in reverse to find the LAST prompt.
-        // Split on both \n and \r to handle various line-ending styles.
-        let mut last_cwd: Option<PathBuf> = None;
-        for line in stripped.split('\n') {
-            let line = line.trim_start_matches('\r').trim();
-            // PowerShell prompt: "PS <path>> " (note: one '>' then space)
-            if let Some(rest) = line.strip_prefix("PS ") {
-                // Strip the trailing "> " (or just ">")
-                let path_str = if let Some(s) = rest.strip_suffix("> ") {
-                    s
-                } else if let Some(s) = rest.strip_suffix('>') {
-                    s
-                } else {
-                    continue;
-                };
-                let path_str = path_str.trim();
-                // Sanity-check: must look like an absolute path (drive letter or UNC).
-                if !path_str.is_empty()
-                    && (path_str.as_bytes().get(1) == Some(&b':')
-                        || path_str.starts_with("\\\\"))
-                {
-                    last_cwd = Some(PathBuf::from(path_str));
-                }
-            }
-        }
-        last_cwd
+        ps_cwd_from_output(&stripped)
     }
 
     /// Read the shell variant detected at spawn time.
@@ -887,4 +908,79 @@ mod tests {
     // Suppress unused import warning - Arc is used in some test setups
     #[allow(dead_code)]
     fn _use_arc<T>(_: Arc<T>) {}
+
+    #[test]
+    fn reads_the_cwd_out_of_a_powershell_prompt() {
+        assert_eq!(
+            ps_cwd_from_output("PS C:\\Users\\jamesju\\Downloads> "),
+            Some(PathBuf::from("C:\\Users\\jamesju\\Downloads"))
+        );
+    }
+
+    #[test]
+    fn a_repainted_prompt_does_not_merge_into_one_path() {
+        // The reported Windows bug. PSReadLine redraws the prompt with a bare
+        // carriage return, so both prompts sit in one '\n'-delimited line. The
+        // old scanner returned "C:\...\Downloads> PS C:\...\Downloads", which
+        // read_dir rejected with error 123 and the file explorer showed as a
+        // red banner on first open.
+        let out = "PS C:\\Users\\jamesju\\Downloads> \rPS C:\\Users\\jamesju\\Downloads> ";
+        assert_eq!(
+            ps_cwd_from_output(out),
+            Some(PathBuf::from("C:\\Users\\jamesju\\Downloads"))
+        );
+    }
+
+    #[test]
+    fn a_merged_prompt_is_ignored_rather_than_guessed_at() {
+        // Same class, different spelling: two prompts with no separator at all.
+        // '>' cannot occur in a Windows path, so this is unambiguously not one
+        // path — but which of the two it is *is* ambiguous, so the answer is
+        // "no reading", not a guess. Recovering the trailing one would mean
+        // splitting on the last "PS ", which mangles any real path containing
+        // that substring (`C:\My PS Scripts\`).
+        //
+        // Returning None is safe: get_cwd() then keeps the cwd it was already
+        // tracking, which is a valid directory, instead of adopting one that
+        // read_dir would reject.
+        assert_eq!(ps_cwd_from_output("PS C:\\a> PS C:\\b>"), None);
+    }
+
+    #[test]
+    fn the_last_prompt_wins() {
+        // The scanner's whole purpose: the newest prompt is the current cwd.
+        let out = "PS C:\\one> \r\nsome output\r\nPS C:\\two> ";
+        assert_eq!(ps_cwd_from_output(out), Some(PathBuf::from("C:\\two")));
+    }
+
+    #[test]
+    fn a_path_containing_spaces_survives() {
+        // Guards the fix: rejecting on '>' must not turn into rejecting on
+        // anything unusual. Spaces are legal and common.
+        assert_eq!(
+            ps_cwd_from_output("PS C:\\Program Files\\Git> "),
+            Some(PathBuf::from("C:\\Program Files\\Git"))
+        );
+    }
+
+    #[test]
+    fn a_unc_path_is_accepted() {
+        assert_eq!(
+            ps_cwd_from_output("PS \\\\server\\share> "),
+            Some(PathBuf::from("\\\\server\\share"))
+        );
+    }
+
+    #[test]
+    fn output_with_no_prompt_yields_nothing() {
+        assert_eq!(ps_cwd_from_output("just some command output\r\n"), None);
+        assert_eq!(ps_cwd_from_output(""), None);
+    }
+
+    #[test]
+    fn a_line_that_merely_mentions_a_prompt_is_not_one() {
+        // Nothing should read a cwd out of text that only looks prompt-shaped
+        // without the drive letter or UNC prefix.
+        assert_eq!(ps_cwd_from_output("PS not-a-path> "), None);
+    }
 }
