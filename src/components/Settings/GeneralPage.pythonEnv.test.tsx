@@ -62,9 +62,9 @@ describe("GeneralPage — Python environment", () => {
 
   it("rebuild keeps the runtimes, delete-everything purges them", async () => {
     render(<GeneralPage />);
-    await waitFor(() => expect(status).toHaveBeenCalled());
-
-    await userEvent.click(screen.getByRole("button", { name: /Clear environment|清除環境/ }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Clear environment|清除環境/ }),
+    );
     expect(reset).toHaveBeenCalledWith(false);
   });
 
@@ -81,9 +81,9 @@ describe("GeneralPage — Python environment", () => {
   it("lets the user point at their own interpreter", async () => {
     pickFile.mockResolvedValue("/usr/local/bin/python3.12");
     render(<GeneralPage />);
-    await waitFor(() => expect(status).toHaveBeenCalled());
-
-    await userEvent.click(screen.getByRole("button", { name: /own Python|使用自己的/ }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /own Python|使用自己的/ }),
+    );
 
     expect(setInterpreter).toHaveBeenCalledWith("/usr/local/bin/python3.12");
   });
@@ -97,9 +97,7 @@ describe("GeneralPage — Python environment", () => {
       userInterpreter: "/usr/local/bin/python3.12",
     });
     render(<GeneralPage />);
-    await waitFor(() => expect(status).toHaveBeenCalled());
-
-    await userEvent.click(screen.getByRole("button", { name: /bundled|內建/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /bundled|內建/ }));
 
     expect(setInterpreter).toHaveBeenCalledWith(null);
   });
@@ -107,9 +105,9 @@ describe("GeneralPage — Python environment", () => {
   it("only purges after the user confirms", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<GeneralPage />);
-    await waitFor(() => expect(status).toHaveBeenCalled());
-
-    await userEvent.click(screen.getByRole("button", { name: /Delete everything|完全刪除/ }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Delete everything|完全刪除/ }),
+    );
     expect(reset).not.toHaveBeenCalled();
 
     confirm.mockReturnValue(true);
@@ -124,9 +122,9 @@ describe("GeneralPage — Python environment", () => {
     // a silent failure sends the user back to advice that no longer works.
     reset.mockRejectedValue("刪除 /data/python-env 失敗：Permission denied");
     render(<GeneralPage />);
-    await waitFor(() => expect(status).toHaveBeenCalled());
-
-    await userEvent.click(screen.getByRole("button", { name: /Clear environment|清除環境/ }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Clear environment|清除環境/ }),
+    );
 
     await waitFor(() => expect(screen.getByText(/Permission denied/)).toBeTruthy());
   });
@@ -151,9 +149,7 @@ describe("GeneralPage — Python environment", () => {
 
   it("saves the index url as the user types it", async () => {
     render(<GeneralPage />);
-    await waitFor(() => expect(status).toHaveBeenCalled());
-
-    const input = screen.getByPlaceholderText(/pypi\.mycompany\.com/);
+    const input = await screen.findByPlaceholderText(/pypi\.mycompany\.com/);
     await userEvent.type(input, "https://x");
 
     expect(setIndexUrl).toHaveBeenLastCalledWith("https://x");

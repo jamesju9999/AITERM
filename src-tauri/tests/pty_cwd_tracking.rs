@@ -16,10 +16,39 @@ fn small_size() -> PtySize {
     PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }
 }
 
+/// How long to keep polling before giving up. Generous on purpose: this bounds
+/// how slow a machine may be, not how long the operation should take. A run on
+/// an idle laptop returns in milliseconds either way.
+const SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Poll `f` until it returns true, or the timeout elapses.
+///
+/// Replaces the fixed sleeps this test used to rely on. Those encoded a guess
+/// about how long a shell takes to start, run a command, and print a prompt
+/// carrying its OSC 133 exit-code marker — and the guess (100 ms) was wrong on
+/// a loaded Windows CI runner, where pwsh alone can take over a second to reach
+/// its first prompt. Every run of this test on CI since it was added has failed
+/// there for that reason.
+///
+/// This does not weaken the assertions: the caller still asserts the condition
+/// afterwards, so a genuinely broken cwd hook still fails the test — it just
+/// takes the full timeout to say so instead of failing instantly on a machine
+/// that was merely busy.
+fn wait_until(mut f: impl FnMut() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + SETTLE_TIMEOUT;
+    while std::time::Instant::now() < deadline {
+        if f() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    f()
+}
+
 #[test]
 fn tracks_cd_through_real_shell() {
     let manager = PtyManager::new();
-    let (tx, _rx) = mpsc::channel::<Vec<u8>>();
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
 
     let id = manager
         .create_with_callback(small_size(), move |chunk| {
@@ -27,9 +56,10 @@ fn tracks_cd_through_real_shell() {
         })
         .expect("create session");
 
-    // Give the shell time to finish printing its banner/prompt before we
-    // start sending commands. On Windows conpty this is flaky under 200 ms.
-    std::thread::sleep(Duration::from_millis(500));
+    // Wait for the shell to say something — its banner or first prompt — before
+    // typing at it, rather than guessing how long that takes. A timeout here is
+    // not fatal on its own: the assertions below are what decide the test.
+    let _ = rx.recv_timeout(SETTLE_TIMEOUT);
 
     let initial = manager.get_cwd(&id).expect("initial cwd");
 
@@ -41,8 +71,11 @@ fn tracks_cd_through_real_shell() {
     #[cfg(not(windows))]
     manager.write(&id, b"cd ..\n").unwrap();
 
-    // Allow the write hook to process.
-    std::thread::sleep(Duration::from_millis(100));
+    // On Bash/Pwsh the cd is only staged when written; it is committed once the
+    // shell's own OSC 133 marker reports the exit code. That round trip is what
+    // has to complete here, and its duration is a property of the machine.
+    let parent = initial.parent().expect("initial had a parent").to_path_buf();
+    wait_until(|| manager.get_cwd(&id).as_deref() == Some(parent.as_path()));
 
     let after = manager.get_cwd(&id).expect("after cwd");
     assert_ne!(after, initial, "cwd should have changed after `cd ..`");
@@ -67,7 +100,7 @@ fn tracks_cd_through_real_shell() {
         .write(&id, format!("cd {}\n", child_name).as_bytes())
         .unwrap();
 
-    std::thread::sleep(Duration::from_millis(100));
+    wait_until(|| manager.get_cwd(&id).as_deref() == Some(initial.as_path()));
     assert_eq!(manager.get_cwd(&id).unwrap(), initial);
 
     manager.close(&id).ok();
