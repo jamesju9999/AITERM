@@ -89,6 +89,49 @@ describe("FileExplorer — file selection", () => {
   });
 });
 
+describe("FileExplorer — hidden files toggle", () => {
+  // This control had no coverage at all while its label was a literal ".",
+  // which is also roughly how visible it was on screen.
+  //
+  // Both tests query by accessible name. Note what that does *not* buy: the
+  // button carries both `aria-label` and `title`, and `title` is itself a
+  // fallback source for the accessible name, so deleting the aria-label leaves
+  // these tests green (checked, not assumed). They pin the behaviour and the
+  // exposed state — not which attribute supplies the name.
+  it("hides dotfiles until asked, then shows them", async () => {
+    mockCommands({
+      pty_get_cwd: () => "/p",
+      pty_list_dir: () => [
+        { name: ".zshrc", path: "/p/.zshrc", is_dir: false, size: 10 },
+        { name: "notes.md", path: "/p/notes.md", is_dir: false, size: 10 },
+      ],
+    });
+
+    render(<FileExplorer sessionId="s1" />);
+    await waitFor(() => screen.getByText("notes.md"));
+    expect(screen.queryByText(".zshrc")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "顯示/隱藏隱藏檔案" }));
+
+    await waitFor(() => expect(screen.getByText(".zshrc")).toBeInTheDocument());
+  });
+
+  it("reports whether it is on, since the icon alone does not change", async () => {
+    // The icon is the same whichever way the toggle sits — the on-state is
+    // carried by styling, which assistive technology cannot see. aria-pressed
+    // is what makes the state available to something other than an eye.
+    mockCommands({ pty_get_cwd: () => "/p" });
+    render(<FileExplorer sessionId="s1" />);
+
+    const toggle = await screen.findByRole("button", { name: "顯示/隱藏隱藏檔案" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
 describe("FileExplorer — switch terminal here", () => {
   it("does not render the button when onSwitchTerminalHere is not provided", async () => {
     mockCommands({ pty_get_cwd: () => "/p" });

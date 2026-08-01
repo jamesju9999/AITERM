@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { listDirectory, getSessionCwd, listDrives, type DirEntry, type DriveInfo } from "../../ipc/fs";
 import { FileViewer } from "./FileViewer";
 import { useLocale } from "../../contexts/LocaleContext";
+import { EyeIcon, TerminalIcon } from "../Icons";
 import type { Translations } from "../../lib/i18n";
 import "./FileExplorer.css";
 
@@ -293,21 +294,29 @@ export function FileExplorer({ sessionId, onSwitchTerminalHere }: FileExplorerPr
             );
           })}
         </div>
+        {/* Both buttons carry an aria-label rather than leaning on `title`
+            alone: with the text gone, that label is the only name a screen
+            reader — or a test — has to find them by. */}
         <button
-          className={`fe-btn fe-btn--dot aiterm-btn aiterm-btn--secondary ${showDotfiles ? "fe-btn--active" : ""}`}
+          className={`fe-btn aiterm-btn aiterm-btn--secondary ${showDotfiles ? "fe-btn--active" : ""}`}
           onClick={() => setShowDotfiles(p => !p)}
           title={t.file_toggle_dotfiles}
+          aria-label={t.file_toggle_dotfiles}
+          aria-pressed={showDotfiles}
         >
-          .
+          <EyeIcon size={14} />
         </button>
         {onSwitchTerminalHere && (
           <button
             className="fe-btn aiterm-btn aiterm-btn--secondary"
             onClick={() => onSwitchTerminalHere(focusedPath)}
             title={t.file_switch_terminal_here}
+            aria-label={t.file_switch_terminal_here}
             disabled={!focusedPath}
           >
-            {t.file_switch_terminal_here_short}
+            {/* The same glyph the sidebar uses for the terminal tab, so the
+                action points visibly at where it sends you. */}
+            <TerminalIcon size={14} />
           </button>
         )}
       </div>

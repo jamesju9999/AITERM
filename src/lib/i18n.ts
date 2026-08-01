@@ -594,7 +594,6 @@ const zhTW = {
     file_loading: "載入中…",
     file_empty_dir: "（空目錄）",
     file_switch_terminal_here: "切換終端機到此目錄",
-    file_switch_terminal_here_short: "cd",
     // FileViewer
     file_viewer_empty: "選擇左側檔案以預覽內容",
     file_viewer_binary: "此檔案為二進位格式，無法預覽",
@@ -1648,7 +1647,6 @@ const enRaw = {
     file_loading: "Loading…",
     file_empty_dir: "(Empty directory)",
     file_switch_terminal_here: "Switch terminal to this directory",
-    file_switch_terminal_here_short: "cd",
     // FileViewer
     file_viewer_empty: "Select a file on the left to preview",
     file_viewer_binary: "Binary file, cannot preview",

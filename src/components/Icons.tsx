@@ -177,6 +177,33 @@ export function TerminalIcon({ size = 16, ...props }: IconProps) {
   );
 }
 
+// 8b. Eye Icon — "show hidden files" in the file explorer.
+//
+// Deliberately does not have an EyeOff counterpart. The button carrying it is a
+// toggle whose state is already shown by `.fe-btn--active` (accent background,
+// border and colour), and swapping the glyph as well invites the classic
+// icon-toggle ambiguity: a crossed-out eye reads as "hidden right now" to half
+// of users and "click to hide" to the other half. One stable icon plus an
+// unambiguous on-state says it once.
+export function EyeIcon({ size = 16, ...props }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
 // 9. Design / Spec Theme Icon
 export function PaintbrushIcon({ size = 16, ...props }: IconProps) {
   return (

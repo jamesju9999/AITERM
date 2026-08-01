@@ -33,11 +33,6 @@
   border-color: var(--accent, #a855f7) !important;
 }
 
-.fe-btn--dot {
-  font-weight: bold;
-  font-family: monospace;
-}
-
 .fe-breadcrumb {
   flex: 1;
   overflow: hidden;
