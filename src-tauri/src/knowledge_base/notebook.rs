@@ -14,7 +14,16 @@ const PROBE_TEXT: &str = "test";
 
 /// 用一次真實的 embed 呼叫驗證模型，成功才寫入筆記本。
 ///
-/// 回傳的向量長度會被記成 `embed_dim`。這是這個欄位唯一的寫入點。
+/// 回傳的向量長度會被記成 `embed_dim`。這是目前唯一實際生效的寫入點
+/// （`db::knowledge_base::update_embed_settings` 也會寫這個欄位，但還沒有呼叫者，
+/// 它是留給日後「換模型」功能的地基）。
+///
+/// # 呼叫端必須自己保證的前提
+///
+/// `embedder` 必須是用這裡傳入的同一組 `embed_provider_id` / `embed_model` 建出來的。
+/// `Embedder` trait 不帶身分資訊，本函式無從檢查；若兩者兜不起來，寫進去的就會是
+/// 一次「驗證了別的模型」的假紀錄。（不為此在 trait 上加 `fn model()`：只有一個
+/// 呼叫端，不值得。）
 pub async fn create_notebook_verified(
     pool: &SqlitePool,
     name: &str,
@@ -23,6 +32,15 @@ pub async fn create_notebook_verified(
     embed_model: &str,
     embedder: &dyn Embedder,
 ) -> Result<NotebookRow, String> {
+    // 先擋掉空的 provider/model 再探測：這種筆記本就算探測成功也永遠同步不了
+    // （`resolve_embedder_config` 會找不到 provider），沒必要為它多花一趟 round trip。
+    if embed_provider_id.trim().is_empty() {
+        return Err("缺少 embedding provider".into());
+    }
+    if embed_model.trim().is_empty() {
+        return Err("缺少 embedding model".into());
+    }
+
     let vectors = embedder
         .embed(&[PROBE_TEXT.to_string()])
         .await

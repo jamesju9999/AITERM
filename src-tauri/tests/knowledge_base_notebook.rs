@@ -55,6 +55,27 @@ impl Embedder for EmptyVectorEmbedder {
     }
 }
 
+/// 回傳空清單，連一個向量都沒有。真實世界會這樣：`embed_openai_compatible`
+/// 對 `{"data":[]}`、`embed_ollama` 對 `{"embeddings":[]}` 都原封不動回 `Ok(vec![])`。
+struct NoVectorsEmbedder;
+
+#[async_trait]
+impl Embedder for NoVectorsEmbedder {
+    async fn embed(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        Ok(vec![])
+    }
+}
+
+/// 用來證明「輸入不合法時根本不該花一趟 round trip 去探測」：被呼叫到就讓測試爆掉。
+struct NeverCalledEmbedder;
+
+#[async_trait]
+impl Embedder for NeverCalledEmbedder {
+    async fn embed(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        unreachable!("輸入不合法時不該真的去探測模型");
+    }
+}
+
 #[tokio::test]
 async fn successful_probe_records_the_returned_dimension() {
     let pool = setup_pool().await;
@@ -87,10 +108,55 @@ async fn empty_vector_counts_as_failure_and_writes_no_row() {
     let pool = setup_pool().await;
     let embedder = EmptyVectorEmbedder;
 
-    create_notebook_verified(
+    let err = create_notebook_verified(
         &pool, "Docs", "/tmp/docs", "lmstudio", "weird-model", &embedder,
     ).await.expect_err("a zero-length vector is not a usable embedding");
 
+    assert!(err.contains("沒有回傳可用的向量"), "unexpected message: {err}");
+
     let rows = list_notebooks(&pool).await.expect("list notebooks");
     assert!(rows.is_empty());
+}
+
+#[tokio::test]
+async fn no_vectors_at_all_counts_as_failure_and_writes_no_row() {
+    let pool = setup_pool().await;
+    let embedder = NoVectorsEmbedder;
+
+    let err = create_notebook_verified(
+        &pool, "Docs", "/tmp/docs", "lmstudio", "half-baked-gateway", &embedder,
+    ).await.expect_err("an empty vector list is not a usable embedding");
+
+    assert!(err.contains("沒有回傳可用的向量"), "unexpected message: {err}");
+
+    let rows = list_notebooks(&pool).await.expect("list notebooks");
+    assert!(rows.is_empty());
+}
+
+#[tokio::test]
+async fn empty_provider_id_is_rejected_without_probing() {
+    let pool = setup_pool().await;
+
+    let err = create_notebook_verified(
+        &pool, "Docs", "/tmp/docs", "  ", "nomic-embed-text", &NeverCalledEmbedder,
+    ).await.expect_err("an empty provider id must not produce a notebook");
+
+    assert!(err.contains("provider"), "unexpected message: {err}");
+
+    let rows = list_notebooks(&pool).await.expect("list notebooks");
+    assert!(rows.is_empty(), "a notebook must not exist without a provider to sync it");
+}
+
+#[tokio::test]
+async fn empty_model_is_rejected_without_probing() {
+    let pool = setup_pool().await;
+
+    let err = create_notebook_verified(
+        &pool, "Docs", "/tmp/docs", "ollama-local", "  ", &NeverCalledEmbedder,
+    ).await.expect_err("an empty model must not produce a notebook");
+
+    assert!(err.contains("model"), "unexpected message: {err}");
+
+    let rows = list_notebooks(&pool).await.expect("list notebooks");
+    assert!(rows.is_empty(), "a notebook must not exist without a model to sync it");
 }
