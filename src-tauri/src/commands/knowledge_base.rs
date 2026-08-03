@@ -121,7 +121,7 @@ pub async fn kb_sync_notebook(
 
     let mut embedder_cfg = resolve_embedder_config(&config, &secrets, &provider_id)?;
     embedder_cfg.model = model;
-    let embedder = HttpEmbedder::new(embedder_cfg);
+    let embedder = HttpEmbedder::new(embedder_cfg)?;
 
     let converter = MarkItDownConverter {
         app: app.clone(),
@@ -194,7 +194,9 @@ pub async fn kb_chat(
     let mut embedder_cfg = resolve_embedder_config(&config, &secrets, &embed_provider_id)
         .map_err(|reason| AiError::InvalidInput { reason })?;
     embedder_cfg.model = embed_model;
-    let embedder: Arc<dyn Embedder> = Arc::new(HttpEmbedder::new(embedder_cfg));
+    let embedder: Arc<dyn Embedder> = Arc::new(
+        HttpEmbedder::new(embedder_cfg).map_err(|reason| AiError::InvalidInput { reason })?,
+    );
 
     let chat_provider = match provider_id.as_deref() {
         Some(id) => router.resolve_by_id(id).await?,
