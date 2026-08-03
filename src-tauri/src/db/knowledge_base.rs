@@ -137,13 +137,14 @@ pub async fn create_notebook(
     folder_path: &str,
     embed_provider_id: Option<&str>,
     embed_model: Option<&str>,
+    embed_dim: i64,
 ) -> Result<NotebookRow, sqlx::Error> {
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO notebooks (id, name, folder_path, embed_provider_id, embed_model)
-         VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO notebooks (id, name, folder_path, embed_provider_id, embed_model, embed_dim)
+         VALUES (?, ?, ?, ?, ?, ?)"
     )
-    .bind(&id).bind(name).bind(folder_path).bind(embed_provider_id).bind(embed_model)
+    .bind(&id).bind(name).bind(folder_path).bind(embed_provider_id).bind(embed_model).bind(embed_dim)
     .execute(pool).await?;
 
     get_notebook(pool, &id).await

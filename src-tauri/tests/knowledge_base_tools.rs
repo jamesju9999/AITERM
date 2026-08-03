@@ -50,7 +50,7 @@ fn tool_definitions_include_search_and_read() {
 #[tokio::test]
 async fn search_documents_returns_formatted_hits_with_citation_info() {
     let pool = setup_pool().await;
-    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None).await.unwrap();
+    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None, 0).await.unwrap();
     let doc_id = upsert_document(
         &pool, &notebook.id, "report.pdf", 0, "hash1", Some("# Report\n\ncontent"), "ok", None,
     ).await.unwrap();
@@ -72,7 +72,7 @@ async fn search_documents_returns_formatted_hits_with_citation_info() {
 #[tokio::test]
 async fn search_documents_with_empty_query_returns_error() {
     let pool = setup_pool().await;
-    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None).await.unwrap();
+    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None, 0).await.unwrap();
     let (content, _) = dispatch_tool(
         &pool, &notebook.id, &FakeEmbedder,
         "search_documents", &serde_json::json!({ "query": "" }),
@@ -83,7 +83,7 @@ async fn search_documents_with_empty_query_returns_error() {
 #[tokio::test]
 async fn read_document_returns_full_markdown_content() {
     let pool = setup_pool().await;
-    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None).await.unwrap();
+    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None, 0).await.unwrap();
     upsert_document(
         &pool, &notebook.id, "notes.md", 0, "hash1", Some("# Notes\n\nfull content here"), "ok", None,
     ).await.unwrap();
@@ -100,7 +100,7 @@ async fn read_document_returns_full_markdown_content() {
 #[tokio::test]
 async fn read_document_missing_path_returns_error() {
     let pool = setup_pool().await;
-    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None).await.unwrap();
+    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None, 0).await.unwrap();
     let (content, _) = dispatch_tool(
         &pool, &notebook.id, &FakeEmbedder,
         "read_document", &serde_json::json!({ "path": "does-not-exist.md" }),

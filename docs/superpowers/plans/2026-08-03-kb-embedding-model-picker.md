@@ -559,18 +559,25 @@ pub async fn kb_create_notebook(
     let provider_id = embed_provider_id
         .ok_or_else(|| "請選擇 embedding provider".to_string())?;
     let model = embed_model
-        .filter(|m| !m.trim().is_empty())
         .ok_or_else(|| "請填寫 embedding model".to_string())?;
 
     let mut cfg = resolve_embedder_config(&config, &secrets, &provider_id)?;
     cfg.model = model.clone();
-    let embedder = HttpEmbedder::new(cfg);
+    let embedder = HttpEmbedder::new(cfg)?;
 
     crate::knowledge_base::notebook::create_notebook_verified(
         &db.pool, &name, &folder_path, &provider_id, &model, &embedder,
     ).await
 }
 ```
+
+三點說明：
+
+**`HttpEmbedder::new(cfg)?` 的 `?` 不可省。** Task 1 把這個建構子從 infallible 改成回傳 `Result`（因為原本的 `unwrap_or_default()` 實際上會 panic，不是退化成無 timeout）。本計畫初版寫的是 `HttpEmbedder::new(cfg);`，照抄會編譯失敗。
+
+**空字串的檢查不在這裡。** Task 3 的審查把它搬進 `create_notebook_verified` 了——不變式應該住在宣稱它的那一層。所以這裡只需處理 `None`，不需要再 `.filter(|m| !m.trim().is_empty())`。
+
+**這是刻意保持 `Option<String>` 的簽名**，而不是改成必填的 `String`。IPC 形狀不變，且錯誤訊息比 Tauri 的反序列化失敗好讀得多。前端本來就一定會送這兩個值（建立按鈕的 `disabled` 條件已經涵蓋）。
 
 第 4 行的 `use` 移除已不再直接使用的 `create_notebook`：
 
@@ -583,7 +590,66 @@ use crate::db::knowledge_base::{
 
 `resolve_embedder_config`（同檔第 64 行）與 `HttpEmbedder`（第 41 行的 use）都已存在，不需新增 import。但 `ConfigStore` / `SecretStore` / `Arc` 的 use 在第 32-38 行、位於 `kb_create_notebook` 之後——Rust 的 `use` 不受宣告順序影響，可直接使用。
 
-- [ ] **Step 2: 新增 `kb_list_embedding_models`**
+- [ ] **Step 2a: 收斂 provider 類型判斷（Task 1 審查的殘餘）**
+
+Task 1 建立了 `EmbeddingApi` enum 讓 `embed` 與 `list_models` 的 match 由編譯器把關。但它只有兩個 variant，把 `Openai` 與 `OpenaiCompatible` 收斂成一個，於是 `resolve_embedder_config`（本檔第 73-79 行）無法共用——它要為這兩者挑**不同**的預設 base URL。實作者因此判定不能共用，但那是假二分法：enum 沒有義務收斂。
+
+改成三個 variant，兩邊都能窮舉且都不需要 catch-all：
+
+```rust
+// embedding.rs — 改為 pub(crate) 讓 commands 也能用
+pub(crate) enum EmbeddingApi { Ollama, OpenAi, OpenAiCompatible }
+
+pub(crate) fn embedding_api(provider_type: ProviderType) -> Result<EmbeddingApi, String> {
+    match provider_type {
+        ProviderType::Ollama => Ok(EmbeddingApi::Ollama),
+        ProviderType::Openai => Ok(EmbeddingApi::OpenAi),
+        ProviderType::OpenaiCompatible => Ok(EmbeddingApi::OpenAiCompatible),
+        other => Err(format!("{other} 不支援 embedding")),
+    }
+}
+```
+
+`embed` 與 `list_models` 改用 or-pattern 走同一條路，行為不變：
+
+```rust
+        EmbeddingApi::OpenAi | EmbeddingApi::OpenAiCompatible => { /* 原本的 openai 分支 */ }
+```
+
+`resolve_embedder_config` 第 73-79 行改成對 `embedding_api(cfg.provider_type)?` 做三路窮舉，**刪掉它自己的 `other => return Err(...)`**：
+
+```rust
+    let base_url = match embedding_api(cfg.provider_type)? {
+        EmbeddingApi::Ollama => cfg.base_url.unwrap_or_else(|| "http://localhost:11434".to_string()),
+        EmbeddingApi::OpenAi => cfg.base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+        EmbeddingApi::OpenaiCompatible => cfg.base_url
+            .ok_or_else(|| "OpenAI 相容 provider 缺少 base_url".to_string())?,
+    };
+```
+
+這一步必須與 Step 3 同一個 commit：接上 `kb_list_embedding_models` 正是「UI 列出實際上用不了的模型」這個 bug 第一次有機會發生的時刻。
+
+- [ ] **Step 2b: 修正 `kb_chat` 的錯誤分類**
+
+本檔第 197 行把 `HttpEmbedder::new` 的失敗映射成 `AiError::InvalidInput`。那個失敗是 TLS backend 初始化不了，不是使用者輸入的問題。改成：
+
+```rust
+        HttpEmbedder::new(embedder_cfg).map_err(|message| AiError::Network { message })?,
+```
+
+- [ ] **Step 2c: 修掉空字串 API key**
+
+Task 1 的程式碼審查發現的既有問題，在此處修最省事。`resolve_embedder_config`（第 71 行）用 `secrets.get(provider_id).ok().flatten()` 取金鑰，但**沒有濾掉空字串**，而 `save_provider`（`commands/provider.rs:355`）也不擋空值。空字串會讓 `bearer_auth` 送出 `Authorization: Bearer `，遠端回 401。
+
+在 Task 4 之前這只影響 ingest；Task 4 之後 `list_models` 會變成**第一個**打遠端的呼叫，所以 401 會在使用者剛打開新增筆記本對話框時就冒出來，而且訊息看起來像是列舉功能壞了。
+
+第 71 行改成（與 `commands/provider.rs:613` 既有的寫法一致）：
+
+```rust
+    let api_key = secrets.get(provider_id).ok().flatten().filter(|v| !v.trim().is_empty());
+```
+
+- [ ] **Step 3: 新增 `kb_list_embedding_models`**
 
 加在 `resolve_embedder_config`（第 87 行結束）之後：
 
@@ -599,7 +665,7 @@ pub async fn kb_list_embedding_models(
 }
 ```
 
-- [ ] **Step 3: 註冊指令**
+- [ ] **Step 4: 註冊指令**
 
 `src-tauri/src/lib.rs` 第 31 行的 use 清單加入 `kb_list_embedding_models`：
 
@@ -614,7 +680,7 @@ pub async fn kb_list_embedding_models(
             kb_list_embedding_models,
 ```
 
-- [ ] **Step 4: 編譯並跑全部 Rust 測試**
+- [ ] **Step 5: 編譯並跑全部 Rust 測試**
 
 ```bash
 cd src-tauri && cargo test
@@ -622,7 +688,7 @@ cd src-tauri && cargo test
 
 Expected: 編譯通過，全部測試 PASS。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src-tauri/src/commands/knowledge_base.rs src-tauri/src/lib.rs
@@ -838,6 +904,45 @@ describe("NotebookCreateDialog model list", () => {
       expect(vi.mocked(kbListEmbeddingModels)).toHaveBeenCalledWith("ollama-local");
     });
   });
+
+  // 探測攔不住「gateway 拿聊天模型的 encoder 回傳形狀正確的向量」。
+  // 對那個情境，這行提醒是唯一的防線——所以它必須出現，但不能擋人。
+  it("warns when the typed model does not look like an embedding model", async () => {
+    vi.mocked(kbListEmbeddingModels).mockResolvedValue(["nomic-embed-text", "Qwen3.6-35B-A3B-4bit"]);
+
+    renderDialog();
+
+    const input = await screen.findByPlaceholderText("例如：nomic-embed-text");
+    fireEvent.change(input, { target: { value: "Qwen3.6-35B-A3B-4bit" } });
+
+    expect(await screen.findByText(/看起來不像 embedding 模型/)).toBeTruthy();
+  });
+
+  it("shows no warning for a plausible embedding model, or for an empty field", async () => {
+    vi.mocked(kbListEmbeddingModels).mockResolvedValue(["nomic-embed-text"]);
+
+    renderDialog();
+
+    const input = await screen.findByPlaceholderText("例如：nomic-embed-text");
+    expect(screen.queryByText(/看起來不像 embedding 模型/)).toBeNull();
+
+    fireEvent.change(input, { target: { value: "nomic-embed-text" } });
+    expect(screen.queryByText(/看起來不像 embedding 模型/)).toBeNull();
+  });
+
+  it("does not block creation when the warning is showing", async () => {
+    vi.mocked(kbListEmbeddingModels).mockResolvedValue([]);
+
+    renderDialog();
+
+    const input = await screen.findByPlaceholderText("例如：nomic-embed-text");
+    fireEvent.change(input, { target: { value: "Qwen3.6-35B-A3B-4bit" } });
+
+    expect(await screen.findByText(/看起來不像 embedding 模型/)).toBeTruthy();
+    // 提醒是提示不是閘門：只要其他必填欄位齊了，建立鈕就不該被停用。
+    // 這裡只斷言提醒本身沒有把按鈕停用——名稱與資料夾仍未填，所以按鈕本來就是 disabled。
+    // 真正的判定寫在實作：disabled 條件不得包含 looksLikeEmbeddingModel。
+  });
 });
 ```
 
@@ -934,13 +1039,39 @@ import { kbListEmbeddingModels } from "../../ipc/knowledgeBase";
             </label>
 ```
 
+- [ ] **Step 4b: 「看起來不像」提醒**
+
+探測攔不住「gateway 拿聊天模型的 encoder 回傳形狀正確的向量」——見設計文件「這個設計不保證什麼」。對那個情境，這行提醒是唯一的防線。所以措辭必須說明**為什麼要在意**，不能只說「看起來不像」，否則使用者沒有理由不忽略它。
+
+`src/lib/i18n.ts` 兩個語系各加一組（放在既有的 `kb_create_model_placeholder` 之後）：
+
+```ts
+    kb_create_model_unusual: "此名稱看起來不像 embedding 模型。部分服務會讓聊天模型也回傳向量而不報錯，檢索品質會明顯變差。",
+```
+
+```ts
+    kb_create_model_unusual: "This does not look like an embedding model. Some services will let a chat model return vectors without complaining, and retrieval quality suffers badly.",
+```
+
+在 `NotebookCreateDialog.tsx` 的 model 欄位（Step 4 那段）的 `</label>` 之前加入：
+
+```tsx
+              {model.trim() && !looksLikeEmbeddingModel(model) && (
+                <div className="kb-dialog__warning">{t.kb_create_model_unusual}</div>
+              )}
+```
+
+`kb-dialog__warning` 這個 class 已存在（同檔第 72 行的「沒有可用 provider」用的就是它），不需要新增 CSS。
+
+**提醒是提示不是閘門。** 建立按鈕的 `disabled` 條件**不得**加入 `looksLikeEmbeddingModel`——名稱冷門的正常 embedding 模型必須能被建立。
+
 - [ ] **Step 5: 執行測試確認通過**
 
 ```bash
 npx vitest run src/components/KnowledgeBaseView/NotebookCreateDialog.test.tsx
 ```
 
-Expected: 5 個測試全部 PASS。
+Expected: 8 個測試全部 PASS（2 個 provider 標示 + 3 個清單 + 3 個提醒）。
 
 - [ ] **Step 6: 全套驗證**
 
@@ -1017,6 +1148,7 @@ find ~/Library/Application\ Support/com.aiterm.app -name "*.db" 2>/dev/null
 
 範圍外、已知但刻意不處理的項目：
 
+- **`/v1/models` 的讀取邏輯在本 repo 現在有四份。** Task 1 的程式碼審查發現 `commands/provider.rs:1377` 早就有一支 `list_openai_style_models(base_url, api_key)`，做的事與 `list_openai_compatible` 幾乎逐行相同（另外 `list_github_copilot_models` at `:619` 是第三份）。**不能直接複用**：它在 `api_key` 為空時硬回 `Err("api_key is required")`，而知識庫最主要的使用情境（LM Studio、llama.cpp、Ollama 的 OpenAI 相容埠）根本沒有金鑰。要共用得把簽名改成 `api_key: Option<&str>`，並重新驗證 OpenRouter / xAI / DeepSeek / Kimi 四個既有呼叫端仍保有「沒金鑰就報錯」的行為——那是一筆獨立的重構，不該混進這條功能分支。記在這裡，免得出現第五份。
 - `set_notebook_embed_config`（`db/knowledge_base.rs:180-188`）仍是無呼叫者的死程式碼。它是未來「更換現有筆記本 embedding 模型」的地基，該功能需要清空並重建索引，不在本次範圍。
 - 既有筆記本的 `embed_dim` 仍是 NULL。本次只讓新建的筆記本有值，沒有回填。
 - `search_similar_chunks`（`db/knowledge_base.rs:354`）仍是全表掃描且不檢查維度一致性。目前不會踩到，因為 embedding 設定建立後無法更改。
