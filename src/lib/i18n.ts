@@ -7,6 +7,13 @@ export function languageDirective(locale: Locale): string {
 }
 
 const zhTW = {
+    // 對話框按鈕。原生對話框不指定 label 就會沿用 OS 語言，於是英文介面配
+    // 上中文系統會出現訊息與按鈕不同語言。刪除類刻意用動詞而非「確定」——
+    // 按鈕上寫著要做什麼，比按下去才知道好。
+    common_delete: "刪除",
+    common_cancel: "取消",
+    common_confirm: "確定",
+
     // Settings sidebar
     settings_title: "設定",
     general: "一般",
@@ -1061,6 +1068,11 @@ const zhTW = {
 } as const;
 
 const enRaw = {
+    // Dialog buttons — see the zh-TW block for why these are set explicitly.
+    common_delete: "Delete",
+    common_cancel: "Cancel",
+    common_confirm: "OK",
+
     // Settings sidebar
     settings_title: "Settings",
     general: "General",

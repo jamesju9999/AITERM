@@ -116,7 +116,11 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
       const status = await pythonEnvStatus().catch(() => null);
       const audioInstalled = status?.installed.includes("doc_audio") ?? false;
       if (!audioInstalled) {
-        if (!(await confirm(t.python_env_audio_prompt))) { setExtracting(false); return; }
+        // Not a delete — this one installs something, so it keeps a neutral OK.
+        if (!(await confirm(t.python_env_audio_prompt, {
+          okLabel: t.common_confirm,
+          cancelLabel: t.common_cancel,
+        }))) { setExtracting(false); return; }
         setGateProfile("doc_audio");
         const audioReady = await pythonEnv.ensureProfile("doc_audio");
         if (!audioReady) { setExtracting(false); return; }

@@ -118,7 +118,11 @@ export function ChatHistorySidebar({
                 disabled={isStreaming && s.id === activeSessionId}
                 onClick={async (e) => {
                   e.stopPropagation();
-                  if (await confirm(t.kb_delete_conversation_confirm(s.title), { kind: "warning" })) {
+                  if (await confirm(t.kb_delete_conversation_confirm(s.title), {
+                    kind: "warning",
+                    okLabel: t.common_delete,
+                    cancelLabel: t.common_cancel,
+                  })) {
                     onDelete(s.id);
                   }
                 }}

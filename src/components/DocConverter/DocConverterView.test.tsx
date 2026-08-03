@@ -174,7 +174,12 @@ describe("DocConverterView audio profile candidate install", () => {
       fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
     });
 
-    expect(askConfirm).toHaveBeenCalledWith(expect.stringMatching(/音訊/));
+    expect(askConfirm).toHaveBeenCalledWith(
+      expect.stringMatching(/音訊/),
+      // Labels come from the app's locale; without them the buttons follow the
+      // OS language and can end up in a different language than the message.
+      expect.objectContaining({ okLabel: "確定", cancelLabel: "取消" }),
+    );
     expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_core");
     expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_audio");
     expect(markitdownConvert).toHaveBeenCalledWith("/tmp/voice.mp3", undefined);

@@ -64,7 +64,11 @@ export function NotebookSidebar({
                     // Not window.confirm: Tauri's webview has no JS dialog panel,
                     // so it returns without showing anything and the delete just
                     // happens. jsdom returns falsy, which is why tests never saw it.
-                    if (await confirm(t.kb_delete_notebook_confirm(nb.name), { kind: "warning" })) {
+                    if (await confirm(t.kb_delete_notebook_confirm(nb.name), {
+                      kind: "warning",
+                      okLabel: t.common_delete,
+                      cancelLabel: t.common_cancel,
+                    })) {
                       onDelete(nb.id);
                     }
                   }}

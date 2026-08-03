@@ -69,7 +69,11 @@ export function GeneralPage() {
   const handlePyEnvReset = async (purge: boolean) => {
     // Purging removes downloaded interpreters too, so it needs a confirmation —
     // a rebuild is cheap and recoverable.
-    if (purge && !(await confirm(t.python_env_purge_confirm, { kind: "warning" }))) return;
+    if (purge && !(await confirm(t.python_env_purge_confirm, {
+      kind: "warning",
+      okLabel: t.common_delete,
+      cancelLabel: t.common_cancel,
+    }))) return;
     setPyEnvError(null);
     try {
       await pythonEnvReset(purge);

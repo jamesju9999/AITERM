@@ -64,6 +64,23 @@ describe("NotebookSidebar delete confirmation", () => {
     });
   });
 
+  // Without explicit labels the buttons come from the OS, not the app's locale
+  // setting — an English UI on a Chinese macOS would read "Delete notebook…?"
+  // over 好/取消. "刪除" also beats "確定" for saying what the button does.
+  it("labels the buttons from the app's locale, not the OS", async () => {
+    vi.mocked(confirm).mockResolvedValue(true);
+    renderSidebar();
+
+    clickDelete();
+
+    await waitFor(() => {
+      expect(vi.mocked(confirm)).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ okLabel: "刪除", cancelLabel: "取消" })
+      );
+    });
+  });
+
   it("does not delete when the user cancels", async () => {
     vi.mocked(confirm).mockResolvedValue(false);
     const onDelete = renderSidebar();
