@@ -130,7 +130,14 @@
       "Bash(grep -A5 \"block_info\\\\|running.*tests$\\\\|test result\")",
       "Bash(grep -rniE '\\(port|listen|bind\\).*[0-9]{4,5}' src-tauri/src --include=\"*.rs\")",
       "Bash(awk '/^export const PROVIDERS/,/^};/' open-sse/config/constants.ts)",
-      "Bash(xargs ls -la)"
+      "Bash(xargs ls -la)",
+      "Bash(sed -i '' 's/\"version\": \"0.1.153\"/\"version\": \"0.1.154\"/' package.json src-tauri/tauri.conf.json)",
+      "Bash(sed -i '' 's/^version = \"0.1.153\"$/version = \"0.1.154\"/' src-tauri/Cargo.toml)",
+      "Bash(sed -i '' '86s/version = \"0.1.153\"/version = \"0.1.154\"/' src-tauri/Cargo.lock)",
+      "Bash(npx vite *)",
+      "Bash(lsof -iTCP:1420 -sTCP:LISTEN)",
+      "Read(//Applications/AITerm.app/**)",
+      "Bash(mdfind -name \"AITerm.app\")"
     ]
   }
 }
