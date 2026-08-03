@@ -89,7 +89,7 @@ async fn schema_allows_notebook_insert_and_select() {
 async fn notebook_crud_roundtrip() {
     let pool = setup_pool().await;
 
-    let created = create_notebook(&pool, "My Docs", "/tmp/docs", Some("ollama-local"), Some("nomic-embed-text"))
+    let created = create_notebook(&pool, "My Docs", "/tmp/docs", Some("ollama-local"), Some("nomic-embed-text"), 768)
         .await.expect("create notebook");
     assert_eq!(created.name, "My Docs");
     assert_eq!(created.folder_path, "/tmp/docs");
@@ -121,7 +121,7 @@ async fn real_init_creates_working_schema() {
     let db = KnowledgeBaseDb { pool };
     db.init().await.expect("init should succeed against a fresh in-memory db");
 
-    let created = create_notebook(&db.pool, "Real Init Notebook", "/tmp/x", None, None)
+    let created = create_notebook(&db.pool, "Real Init Notebook", "/tmp/x", None, None, 0)
         .await.expect("create notebook against real init() schema");
     let fetched = get_notebook(&db.pool, &created.id).await.expect("get notebook");
     assert_eq!(fetched.name, "Real Init Notebook");
@@ -130,7 +130,7 @@ async fn real_init_creates_working_schema() {
 #[tokio::test]
 async fn delete_notebook_cascades_to_documents_and_chunks() {
     let pool = setup_pool().await;
-    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None).await.unwrap();
+    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None, 0).await.unwrap();
 
     sqlx::query(
         "INSERT INTO documents (id, notebook_id, rel_path, mtime, content_hash, status)
@@ -159,7 +159,7 @@ async fn delete_notebook_cascades_to_documents_and_chunks() {
 #[tokio::test]
 async fn delete_notebook_cascades_to_chat_sessions() {
     let pool = setup_pool().await;
-    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None).await.unwrap();
+    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None, 0).await.unwrap();
 
     sqlx::query(
         "INSERT INTO kb_chat_sessions (id, notebook_id, title)
@@ -195,7 +195,7 @@ fn cosine_similarity_known_values() {
 #[tokio::test]
 async fn document_and_chunk_lifecycle() {
     let pool = setup_pool().await;
-    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None).await.expect("create notebook");
+    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None, 0).await.expect("create notebook");
 
     let doc_id = upsert_document(
         &pool, &notebook.id, "report.pdf", 1000, "hash1",
@@ -238,7 +238,7 @@ async fn document_and_chunk_lifecycle() {
 #[tokio::test]
 async fn search_excludes_chunks_from_error_status_documents() {
     let pool = setup_pool().await;
-    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None).await.unwrap();
+    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None, 0).await.unwrap();
 
     let doc_id = upsert_document(
         &pool, &notebook.id, "stale.txt", 0, "old-hash",
@@ -262,7 +262,7 @@ async fn search_excludes_chunks_from_error_status_documents() {
 #[tokio::test]
 async fn keyword_match_can_outrank_higher_cosine_similarity() {
     let pool = setup_pool().await;
-    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None).await.unwrap();
+    let notebook = create_notebook(&pool, "NB", "/tmp/docs", None, None, 0).await.unwrap();
 
     let doc_id = upsert_document(
         &pool, &notebook.id, "swift_sdk.pdf", 0, "hash1",
@@ -287,4 +287,19 @@ async fn keyword_match_can_outrank_higher_cosine_similarity() {
         hits[0].text, "Retry of Tracker API calls documentation",
         "the lexically-matching chunk should be boosted above the purely-more-cosine-similar one"
     );
+}
+
+#[tokio::test]
+async fn create_notebook_records_embedding_dimension() {
+    let pool = setup_pool().await;
+
+    let created = create_notebook(
+        &pool, "Docs", "/tmp/docs",
+        Some("ollama-local"), Some("nomic-embed-text"), 768,
+    ).await.expect("create notebook");
+
+    assert_eq!(created.embed_dim, Some(768));
+
+    let fetched = get_notebook(&pool, &created.id).await.expect("get notebook");
+    assert_eq!(fetched.embed_dim, Some(768), "dimension must survive a round trip");
 }

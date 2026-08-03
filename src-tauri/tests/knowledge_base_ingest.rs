@@ -60,7 +60,7 @@ async fn sync_indexes_new_files_and_reports_progress() {
     fs::write(dir.path().join("b.pdf"), "fake pdf bytes").unwrap();
     fs::write(dir.path().join("ignored.exe"), "not supported").unwrap();
 
-    let notebook = create_notebook(&pool, "NB", dir.path().to_str().unwrap(), None, None)
+    let notebook = create_notebook(&pool, "NB", dir.path().to_str().unwrap(), None, None, 0)
         .await.unwrap();
 
     let mut progress_events: Vec<SyncProgress> = Vec::new();
@@ -86,7 +86,7 @@ async fn sync_skips_unchanged_files_on_second_run() {
     let pool = setup_pool().await;
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("a.txt"), "hello").unwrap();
-    let notebook = create_notebook(&pool, "NB", dir.path().to_str().unwrap(), None, None)
+    let notebook = create_notebook(&pool, "NB", dir.path().to_str().unwrap(), None, None, 0)
         .await.unwrap();
 
     sync_notebook(&pool, &notebook, Arc::new(FakeConverter), Arc::new(FakeEmbedder), |_| {}).await.unwrap();
@@ -103,7 +103,7 @@ async fn sync_removes_documents_for_deleted_files() {
     let dir = tempdir().unwrap();
     let file_path = dir.path().join("a.txt");
     fs::write(&file_path, "hello").unwrap();
-    let notebook = create_notebook(&pool, "NB", dir.path().to_str().unwrap(), None, None)
+    let notebook = create_notebook(&pool, "NB", dir.path().to_str().unwrap(), None, None, 0)
         .await.unwrap();
 
     sync_notebook(&pool, &notebook, Arc::new(FakeConverter), Arc::new(FakeEmbedder), |_| {}).await.unwrap();
@@ -136,7 +136,7 @@ async fn a_panicking_converter_does_not_abort_the_whole_sync() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("good.txt"), "fine").unwrap();
     fs::write(dir.path().join("bad.txt"), "will panic").unwrap();
-    let notebook = create_notebook(&pool, "NB", dir.path().to_str().unwrap(), None, None)
+    let notebook = create_notebook(&pool, "NB", dir.path().to_str().unwrap(), None, None, 0)
         .await.unwrap();
 
     let converter = Arc::new(PanicOnFileConverter { panic_on: "bad.txt".to_string() });

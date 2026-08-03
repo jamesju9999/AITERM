@@ -14,7 +14,7 @@ pub async fn kb_create_notebook(
 ) -> Result<NotebookRow, String> {
     create_notebook(
         &db.pool, &name, &folder_path,
-        embed_provider_id.as_deref(), embed_model.as_deref(),
+        embed_provider_id.as_deref(), embed_model.as_deref(), 0,
     ).await.map_err(|e| e.to_string())
 }
 
