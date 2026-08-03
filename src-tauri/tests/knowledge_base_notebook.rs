@@ -12,15 +12,16 @@ async fn setup_pool() -> sqlx::SqlitePool {
         .expect("open in-memory sqlite");
 
     sqlx::query(
+        // Mirrors the `notebooks` table in KnowledgeBaseDb::init column-for-column.
         "CREATE TABLE notebooks (
-            id TEXT PRIMARY KEY,
+            id TEXT PRIMARY KEY NOT NULL,
             name TEXT NOT NULL,
             folder_path TEXT NOT NULL,
             embed_provider_id TEXT,
             embed_model TEXT,
             embed_dim INTEGER,
             last_synced_at INTEGER,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )"
     ).execute(&pool).await.expect("create notebooks table");
 
@@ -75,7 +76,7 @@ async fn failed_probe_writes_no_row() {
         &pool, "Docs", "/tmp/docs", "lmstudio", "Qwen3.6-35B-A3B-4bit", &embedder,
     ).await.expect_err("probe failure must propagate");
 
-    assert!(err.contains("embedding"), "unexpected message: {err}");
+    assert!(err.contains("此模型無法用於"), "unexpected message: {err}");
 
     let rows = list_notebooks(&pool).await.expect("list notebooks");
     assert!(rows.is_empty(), "a notebook must not exist when its model was never verified");

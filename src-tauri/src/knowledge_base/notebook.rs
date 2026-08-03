@@ -30,7 +30,7 @@ pub async fn create_notebook_verified(
 
     let dim = vectors.first().map(|v| v.len()).unwrap_or(0);
     if dim == 0 {
-        return Err("此模型未回傳任何向量，無法用於 embedding".into());
+        return Err("此模型沒有回傳可用的向量，無法用於 embedding".into());
     }
 
     create_notebook(
