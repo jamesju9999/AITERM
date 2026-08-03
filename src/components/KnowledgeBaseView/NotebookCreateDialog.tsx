@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { pickFolder } from "../../ipc/vcs";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
+import { kbListEmbeddingModels } from "../../ipc/knowledgeBase";
 import { useLocale } from "../../contexts/LocaleContext";
 
 interface Props {
@@ -24,6 +25,21 @@ const TYPE_LABELS: Record<string, string> = {
   "openai-compatible": "OpenAI-Compatible",
 };
 
+// 只影響排序，不影響可選性——名稱不含這些字的 embedding 模型仍在清單裡，
+// 只是排得比較後面，而使用者永遠可以直接手打。
+const EMBEDDING_NAME_HINTS = ["embed", "bge", "gte", "e5", "nomic", "minilm", "mxbai", "jina"];
+
+function looksLikeEmbeddingModel(name: string): boolean {
+  const lower = name.toLowerCase();
+  return EMBEDDING_NAME_HINTS.some((hint) => lower.includes(hint));
+}
+
+function sortEmbeddingFirst(models: string[]): string[] {
+  const likely = models.filter(looksLikeEmbeddingModel);
+  const rest = models.filter((m) => !looksLikeEmbeddingModel(m));
+  return [...likely, ...rest];
+}
+
 function providerOptionLabel(p: ProviderInfo): string {
   const endpoint = p.base_url ?? DEFAULT_ENDPOINTS[p.provider_type] ?? "";
   const host = endpoint.replace(/^https?:\/\//, "").replace(/\/+$/, "");
@@ -38,6 +54,8 @@ export function NotebookCreateDialog({ onCreate, onClose }: Props) {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [providerId, setProviderId] = useState("");
   const [model, setModel] = useState("");
+  const [models, setModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,6 +66,27 @@ export function NotebookCreateDialog({ onCreate, onClose }: Props) {
       if (embeddable.length > 0) setProviderId(embeddable[0].id);
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    // providerId 只會從 "" 變成某個真實 id（select 永遠帶值），不會再變回空字串，
+    // 所以這裡直接跳過就好；在 effect 本體同步 setModels([]) 只會多一輪 render。
+    if (!providerId) return;
+    let cancelled = false;
+    setModelsLoading(true);
+    kbListEmbeddingModels(providerId)
+      .then((list) => {
+        if (!cancelled) setModels(sortEmbeddingFirst(list));
+      })
+      .catch(() => {
+        // 列舉失敗不擋人：不少自架端點沒有 /v1/models，跳錯誤只是噪音。
+        // 靜默退回純文字輸入，使用者仍可手打，建立時的探測會把關。
+        if (!cancelled) setModels([]);
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [providerId]);
 
   const handlePickFolder = async () => {
     const folder = await pickFolder();
@@ -103,11 +142,24 @@ export function NotebookCreateDialog({ onCreate, onClose }: Props) {
 
             <label className="kb-dialog__field">
               <span>{t.kb_create_model_label}</span>
-              <input
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder={t.kb_create_model_placeholder}
-              />
+              {modelsLoading ? (
+                <input type="text" value={t.provider_model_loading} disabled readOnly />
+              ) : (
+                <>
+                  <input
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    placeholder={t.kb_create_model_placeholder}
+                    list="kb-embedding-models-list"
+                  />
+                  <datalist id="kb-embedding-models-list">
+                    {models.map((m) => <option key={m} value={m} />)}
+                  </datalist>
+                </>
+              )}
+              {model.trim() && !looksLikeEmbeddingModel(model) && (
+                <div className="kb-dialog__warning">{t.kb_create_model_unusual}</div>
+              )}
             </label>
           </>
         )}
