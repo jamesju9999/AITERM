@@ -71,6 +71,10 @@ export function kbDeleteNotebook(id: string): Promise<void> {
   return invoke<void>("kb_delete_notebook", { id });
 }
 
+export function kbListEmbeddingModels(providerId: string): Promise<string[]> {
+  return invoke<string[]>("kb_list_embedding_models", { providerId });
+}
+
 export function kbSyncNotebook(notebookId: string): Promise<SyncSummary> {
   return invoke<SyncSummary>("kb_sync_notebook", { notebookId });
 }

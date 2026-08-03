@@ -11,6 +11,26 @@ interface Props {
 // Anthropic 沒有 embedding API，只有這三種 provider 類型可用於 embedding。
 const EMBEDDING_CAPABLE_TYPES = new Set(["ollama", "openai", "openai-compatible"]);
 
+// base_url 為 null 時 resolve_embedder_config 會套用這些預設值，
+// 選單必須顯示同樣的位址，否則畫面上會出現空白的 endpoint。
+const DEFAULT_ENDPOINTS: Record<string, string> = {
+  ollama: "http://localhost:11434",
+  openai: "https://api.openai.com/v1",
+};
+
+const TYPE_LABELS: Record<string, string> = {
+  ollama: "Ollama",
+  openai: "OpenAI",
+  "openai-compatible": "OpenAI-Compatible",
+};
+
+function providerOptionLabel(p: ProviderInfo): string {
+  const endpoint = p.base_url ?? DEFAULT_ENDPOINTS[p.provider_type] ?? "";
+  const host = endpoint.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  const type = TYPE_LABELS[p.provider_type] ?? p.provider_type;
+  return host ? `${p.display_name} — ${type} · ${host}` : `${p.display_name} — ${type}`;
+}
+
 export function NotebookCreateDialog({ onCreate, onClose }: Props) {
   const { t } = useLocale();
   const [name, setName] = useState("");
@@ -76,7 +96,7 @@ export function NotebookCreateDialog({ onCreate, onClose }: Props) {
               <span>{t.kb_create_provider_label}</span>
               <select value={providerId} onChange={(e) => setProviderId(e.target.value)}>
                 {providers.map((p) => (
-                  <option key={p.id} value={p.id}>{p.display_name}</option>
+                  <option key={p.id} value={p.id}>{providerOptionLabel(p)}</option>
                 ))}
               </select>
             </label>
