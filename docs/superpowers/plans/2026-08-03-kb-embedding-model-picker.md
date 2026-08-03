@@ -897,6 +897,45 @@ describe("NotebookCreateDialog model list", () => {
       expect(vi.mocked(kbListEmbeddingModels)).toHaveBeenCalledWith("ollama-local");
     });
   });
+
+  // 探測攔不住「gateway 拿聊天模型的 encoder 回傳形狀正確的向量」。
+  // 對那個情境，這行提醒是唯一的防線——所以它必須出現，但不能擋人。
+  it("warns when the typed model does not look like an embedding model", async () => {
+    vi.mocked(kbListEmbeddingModels).mockResolvedValue(["nomic-embed-text", "Qwen3.6-35B-A3B-4bit"]);
+
+    renderDialog();
+
+    const input = await screen.findByPlaceholderText("例如：nomic-embed-text");
+    fireEvent.change(input, { target: { value: "Qwen3.6-35B-A3B-4bit" } });
+
+    expect(await screen.findByText(/看起來不像 embedding 模型/)).toBeTruthy();
+  });
+
+  it("shows no warning for a plausible embedding model, or for an empty field", async () => {
+    vi.mocked(kbListEmbeddingModels).mockResolvedValue(["nomic-embed-text"]);
+
+    renderDialog();
+
+    const input = await screen.findByPlaceholderText("例如：nomic-embed-text");
+    expect(screen.queryByText(/看起來不像 embedding 模型/)).toBeNull();
+
+    fireEvent.change(input, { target: { value: "nomic-embed-text" } });
+    expect(screen.queryByText(/看起來不像 embedding 模型/)).toBeNull();
+  });
+
+  it("does not block creation when the warning is showing", async () => {
+    vi.mocked(kbListEmbeddingModels).mockResolvedValue([]);
+
+    renderDialog();
+
+    const input = await screen.findByPlaceholderText("例如：nomic-embed-text");
+    fireEvent.change(input, { target: { value: "Qwen3.6-35B-A3B-4bit" } });
+
+    expect(await screen.findByText(/看起來不像 embedding 模型/)).toBeTruthy();
+    // 提醒是提示不是閘門：只要其他必填欄位齊了，建立鈕就不該被停用。
+    // 這裡只斷言提醒本身沒有把按鈕停用——名稱與資料夾仍未填，所以按鈕本來就是 disabled。
+    // 真正的判定寫在實作：disabled 條件不得包含 looksLikeEmbeddingModel。
+  });
 });
 ```
 
@@ -993,13 +1032,39 @@ import { kbListEmbeddingModels } from "../../ipc/knowledgeBase";
             </label>
 ```
 
+- [ ] **Step 4b: 「看起來不像」提醒**
+
+探測攔不住「gateway 拿聊天模型的 encoder 回傳形狀正確的向量」——見設計文件「這個設計不保證什麼」。對那個情境，這行提醒是唯一的防線。所以措辭必須說明**為什麼要在意**，不能只說「看起來不像」，否則使用者沒有理由不忽略它。
+
+`src/lib/i18n.ts` 兩個語系各加一組（放在既有的 `kb_create_model_placeholder` 之後）：
+
+```ts
+    kb_create_model_unusual: "此名稱看起來不像 embedding 模型。部分服務會讓聊天模型也回傳向量而不報錯，檢索品質會明顯變差。",
+```
+
+```ts
+    kb_create_model_unusual: "This does not look like an embedding model. Some services will let a chat model return vectors without complaining, and retrieval quality suffers badly.",
+```
+
+在 `NotebookCreateDialog.tsx` 的 model 欄位（Step 4 那段）的 `</label>` 之前加入：
+
+```tsx
+              {model.trim() && !looksLikeEmbeddingModel(model) && (
+                <div className="kb-dialog__warning">{t.kb_create_model_unusual}</div>
+              )}
+```
+
+`kb-dialog__warning` 這個 class 已存在（同檔第 72 行的「沒有可用 provider」用的就是它），不需要新增 CSS。
+
+**提醒是提示不是閘門。** 建立按鈕的 `disabled` 條件**不得**加入 `looksLikeEmbeddingModel`——名稱冷門的正常 embedding 模型必須能被建立。
+
 - [ ] **Step 5: 執行測試確認通過**
 
 ```bash
 npx vitest run src/components/KnowledgeBaseView/NotebookCreateDialog.test.tsx
 ```
 
-Expected: 5 個測試全部 PASS。
+Expected: 8 個測試全部 PASS（2 個 provider 標示 + 3 個清單 + 3 個提醒）。
 
 - [ ] **Step 6: 全套驗證**
 
