@@ -81,6 +81,10 @@ Model 欄位從純 `<input>` 改為 `<input list>` + `<datalist>`。這是 `Prov
 
 分界：**列舉失敗不擋人，探測失敗一定擋。** 前者是便利功能，不少自架服務根本沒有 `/v1/models`，跳錯誤只是噪音；後者關係到資料正確性，錯了就是整批向量報廢。
 
+**但「回傳錯誤」不等於「什麼都沒建立」。** `create_notebook` 是 INSERT 之後再 SELECT 讀回整列，兩者不是同一個交易。INSERT 成功而後續 SELECT 失敗（SQLITE_BUSY、連線中斷）時會回傳 `Err`，可是那一列已經在資料庫裡了——而 `notebooks` 沒有 `folder_path` 的 UNIQUE 約束，使用者重試就會建出第二筆。
+
+不變式仍然成立（存在的每一列都確實通過過探測），但方向是單向的。因此**前端在建立失敗時必須無條件重新載入筆記本列表**，不能因為收到 `Err` 就假設列表沒變。這個 INSERT-then-SELECT 的非原子性本身不在本次範圍（乾淨的修法是 `INSERT ... RETURNING`），這裡只處理它的後果。
+
 ### 測試
 
 Rust（`src-tauri/tests/`，wiremock）：

@@ -559,18 +559,25 @@ pub async fn kb_create_notebook(
     let provider_id = embed_provider_id
         .ok_or_else(|| "請選擇 embedding provider".to_string())?;
     let model = embed_model
-        .filter(|m| !m.trim().is_empty())
         .ok_or_else(|| "請填寫 embedding model".to_string())?;
 
     let mut cfg = resolve_embedder_config(&config, &secrets, &provider_id)?;
     cfg.model = model.clone();
-    let embedder = HttpEmbedder::new(cfg);
+    let embedder = HttpEmbedder::new(cfg)?;
 
     crate::knowledge_base::notebook::create_notebook_verified(
         &db.pool, &name, &folder_path, &provider_id, &model, &embedder,
     ).await
 }
 ```
+
+三點說明：
+
+**`HttpEmbedder::new(cfg)?` 的 `?` 不可省。** Task 1 把這個建構子從 infallible 改成回傳 `Result`（因為原本的 `unwrap_or_default()` 實際上會 panic，不是退化成無 timeout）。本計畫初版寫的是 `HttpEmbedder::new(cfg);`，照抄會編譯失敗。
+
+**空字串的檢查不在這裡。** Task 3 的審查把它搬進 `create_notebook_verified` 了——不變式應該住在宣稱它的那一層。所以這裡只需處理 `None`，不需要再 `.filter(|m| !m.trim().is_empty())`。
+
+**這是刻意保持 `Option<String>` 的簽名**，而不是改成必填的 `String`。IPC 形狀不變，且錯誤訊息比 Tauri 的反序列化失敗好讀得多。前端本來就一定會送這兩個值（建立按鈕的 `disabled` 條件已經涵蓋）。
 
 第 4 行的 `use` 移除已不再直接使用的 `create_notebook`：
 
