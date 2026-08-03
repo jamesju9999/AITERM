@@ -30,6 +30,7 @@ use commands::{
     knowledge_base::{
         kb_create_notebook, kb_list_notebooks, kb_delete_notebook, kb_sync_notebook, kb_chat, kb_open_document,
         kb_create_chat_session, kb_list_chat_sessions, kb_load_chat_session, kb_delete_chat_session,
+        kb_list_embedding_models,
     },
     config::{
         get_config, is_appimage_integration_declined, is_onboarding_done, set_appimage_integration_declined,
@@ -269,6 +270,7 @@ pub fn run() {
             agent_exec,
             // Knowledge Base
             kb_create_notebook,
+            kb_list_embedding_models,
             kb_list_notebooks,
             kb_delete_notebook,
             kb_sync_notebook,

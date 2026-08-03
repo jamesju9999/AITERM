@@ -18,23 +18,25 @@ fn build_client(timeout: Duration) -> Result<reqwest::Client, String> {
 
 /// 一個 provider 類型該用哪一套 embedding HTTP API。
 ///
-/// 這是「哪些 provider 類型能做 embedding」在本模組的唯一來源。`embed` 與
-/// `list_models` 都是對這個 enum 做 **沒有 catch-all** 的 exhaustive match，
-/// 所以日後新增一種能做 embedding 的 provider 時，compiler 會逼著把兩邊都補齊，
-/// 不會只改一邊就編得過、害 UI 列出實際上用不了的模型。
+/// 這是「哪些 provider 類型能做 embedding」的唯一來源。`embed`、`list_models`
+/// 與 `commands::knowledge_base::resolve_embedder_config` 都是對這個 enum 做
+/// **沒有 catch-all** 的 exhaustive match，所以日後新增一種能做 embedding 的
+/// provider 時，compiler 會逼著把三邊都補齊，不會只改一邊就編得過、
+/// 害 UI 列出實際上用不了的模型。
 ///
-/// 注意 `commands::knowledge_base::resolve_embedder_config` 還有一份同樣的判斷，
-/// 但它同時要挑各類型的預設 base_url（Openai 與 OpenaiCompatible 在那裡行為不同，
-/// 無法收斂成這裡的同一個 variant），所以沒有共用；改這裡時記得順手看那邊。
-enum EmbeddingApi {
+/// `OpenAi` 與 `OpenAiCompatible` 走同一套 HTTP API（前兩處用 or-pattern 合併），
+/// 分成兩個 variant 是因為 `resolve_embedder_config` 要給它們不同的預設 base_url。
+pub(crate) enum EmbeddingApi {
     Ollama,
+    OpenAi,
     OpenAiCompatible,
 }
 
-fn embedding_api(provider_type: ProviderType) -> Result<EmbeddingApi, String> {
+pub(crate) fn embedding_api(provider_type: ProviderType) -> Result<EmbeddingApi, String> {
     match provider_type {
         ProviderType::Ollama => Ok(EmbeddingApi::Ollama),
-        ProviderType::Openai | ProviderType::OpenaiCompatible => Ok(EmbeddingApi::OpenAiCompatible),
+        ProviderType::Openai => Ok(EmbeddingApi::OpenAi),
+        ProviderType::OpenaiCompatible => Ok(EmbeddingApi::OpenAiCompatible),
         other => Err(format!("{other} 不支援 embedding")),
     }
 }
@@ -80,7 +82,7 @@ impl Embedder for HttpEmbedder {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
         match embedding_api(self.config.provider_type)? {
             EmbeddingApi::Ollama => embed_ollama(&self.client, &self.config, texts).await,
-            EmbeddingApi::OpenAiCompatible => {
+            EmbeddingApi::OpenAi | EmbeddingApi::OpenAiCompatible => {
                 embed_openai_compatible(&self.client, &self.config, texts).await
             }
         }
@@ -95,7 +97,9 @@ pub async fn list_models(cfg: &EmbedderConfig) -> Result<Vec<String>, String> {
 
     match api {
         EmbeddingApi::Ollama => list_ollama(&client, cfg).await,
-        EmbeddingApi::OpenAiCompatible => list_openai_compatible(&client, cfg).await,
+        EmbeddingApi::OpenAi | EmbeddingApi::OpenAiCompatible => {
+            list_openai_compatible(&client, cfg).await
+        }
     }
 }
 
