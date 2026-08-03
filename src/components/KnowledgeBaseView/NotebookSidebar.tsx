@@ -1,3 +1,4 @@
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { Notebook } from "../../ipc/knowledgeBase";
 import type { SyncProgressState } from "../../hooks/useNotebooks";
@@ -59,8 +60,13 @@ export function NotebookSidebar({
                 </button>
                 <button
                   className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
-                  onClick={() => {
-                    if (window.confirm(t.kb_delete_notebook_confirm(nb.name))) onDelete(nb.id);
+                  onClick={async () => {
+                    // Not window.confirm: Tauri's webview has no JS dialog panel,
+                    // so it returns without showing anything and the delete just
+                    // happens. jsdom returns falsy, which is why tests never saw it.
+                    if (await confirm(t.kb_delete_notebook_confirm(nb.name), { kind: "warning" })) {
+                      onDelete(nb.id);
+                    }
                   }}
                 >
                   ✕

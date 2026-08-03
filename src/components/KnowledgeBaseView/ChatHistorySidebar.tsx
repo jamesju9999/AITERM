@@ -1,4 +1,4 @@
-import { save } from "@tauri-apps/plugin-dialog";
+import { save, confirm } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "../../ipc/fs";
 import { kbLoadChatSession, type ChatSessionSummary } from "../../ipc/knowledgeBase";
 import { reconstructKbMessages, type KbMessage } from "../../hooks/useKnowledgeBaseChat";
@@ -116,9 +116,11 @@ export function ChatHistorySidebar({
               <button
                 className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
                 disabled={isStreaming && s.id === activeSessionId}
-                onClick={(e) => {
+                onClick={async (e) => {
                   e.stopPropagation();
-                  if (window.confirm(t.kb_delete_conversation_confirm(s.title))) onDelete(s.id);
+                  if (await confirm(t.kb_delete_conversation_confirm(s.title), { kind: "warning" })) {
+                    onDelete(s.id);
+                  }
                 }}
               >
                 ✕

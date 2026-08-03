@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { getConfig, setExecutionMode, setSubmitShortcut, setMaxAgentSteps, setDefaultTab, appimageIntegrationState, appimageIntegrate, appimageRemoveIntegration, setAppImageIntegrationDeclined } from "../../ipc/config";
 import type { ExecutionMode, SubmitShortcut, DefaultTab, AppImageIntegrationState } from "../../ipc/config";
 import { pythonEnvStatus, pythonEnvReset, pythonEnvSetInterpreter, pythonEnvSetIndexUrl } from "../../ipc/pythonEnv";
@@ -69,7 +69,7 @@ export function GeneralPage() {
   const handlePyEnvReset = async (purge: boolean) => {
     // Purging removes downloaded interpreters too, so it needs a confirmation —
     // a rebuild is cheap and recoverable.
-    if (purge && !window.confirm(t.python_env_purge_confirm)) return;
+    if (purge && !(await confirm(t.python_env_purge_confirm, { kind: "warning" }))) return;
     setPyEnvError(null);
     try {
       await pythonEnvReset(purge);

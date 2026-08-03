@@ -24,6 +24,14 @@ const listenMock = vi.fn((eventName: string, cb: (e: unknown) => void) => {
   }
   return Promise.resolve(() => {});
 });
+const askConfirm = vi.fn();
+// Not window.confirm: Tauri's webview never shows the JS dialog, so the audio
+// prompt was treated as an unconditional yes in production. jsdom returns
+// falsy, so this suite passed while behaving the opposite way.
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  confirm: (...args: unknown[]) => askConfirm(...args),
+}));
+
 vi.mock("@tauri-apps/api/event", () => ({
   listen: (eventName: string, cb: (e: unknown) => void) => listenMock(eventName, cb),
 }));
@@ -157,7 +165,7 @@ describe("DocConverterView audio profile candidate install", () => {
   });
 
   it("prompts before installing doc_audio for an audio file, then converts once confirmed", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    askConfirm.mockResolvedValue(true);
     vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/voice.mp3");
     vi.mocked(markitdownConvert).mockResolvedValue("# voice");
     renderView();
@@ -166,7 +174,7 @@ describe("DocConverterView audio profile candidate install", () => {
       fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
     });
 
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringMatching(/音訊/));
+    expect(askConfirm).toHaveBeenCalledWith(expect.stringMatching(/音訊/));
     expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_core");
     expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_audio");
     expect(markitdownConvert).toHaveBeenCalledWith("/tmp/voice.mp3", undefined);
@@ -177,7 +185,7 @@ describe("DocConverterView audio profile candidate install", () => {
     // doc_core succeeds; the separate doc_audio ensureProfile call fails.
     // Retrying doc_core here would succeed instantly (it's already
     // installed) and silently close the gate without fixing anything.
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    askConfirm.mockResolvedValue(true);
     vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/voice.mp3");
     pythonEnvEnsure.mockImplementation((p: string) =>
       p === "doc_audio"
@@ -203,7 +211,7 @@ describe("DocConverterView audio profile candidate install", () => {
   });
 
   it("aborts the conversion, without calling markitdownConvert, when the user declines the audio install", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(false);
+    askConfirm.mockResolvedValue(false);
     vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/voice.mp3");
     renderView();
 
@@ -211,7 +219,7 @@ describe("DocConverterView audio profile candidate install", () => {
       fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
     });
 
-    expect(window.confirm).toHaveBeenCalled();
+    expect(askConfirm).toHaveBeenCalled();
     expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_core");
     expect(pythonEnvEnsure).not.toHaveBeenCalledWith("doc_audio");
     expect(markitdownConvert).not.toHaveBeenCalled();
@@ -225,7 +233,7 @@ describe("DocConverterView audio profile candidate install", () => {
       venvPath: "/data/python-env",
       userInterpreter: null,
     });
-    vi.spyOn(window, "confirm");
+    askConfirm.mockReset();
     vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/voice.mp3");
     vi.mocked(markitdownConvert).mockResolvedValue("# voice");
     renderView();
@@ -234,13 +242,13 @@ describe("DocConverterView audio profile candidate install", () => {
       fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
     });
 
-    expect(window.confirm).not.toHaveBeenCalled();
+    expect(askConfirm).not.toHaveBeenCalled();
     expect(pythonEnvEnsure).not.toHaveBeenCalledWith("doc_audio");
     expect(markitdownConvert).toHaveBeenCalledWith("/tmp/voice.mp3", undefined);
   });
 
   it("does not check for the audio profile at all for a non-audio file", async () => {
-    vi.spyOn(window, "confirm");
+    askConfirm.mockReset();
     vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/report.pdf");
     vi.mocked(markitdownConvert).mockResolvedValue("# report");
     renderView();
@@ -250,7 +258,7 @@ describe("DocConverterView audio profile candidate install", () => {
     });
 
     expect(pythonEnvStatusMock).not.toHaveBeenCalled();
-    expect(window.confirm).not.toHaveBeenCalled();
+    expect(askConfirm).not.toHaveBeenCalled();
     expect(markitdownConvert).toHaveBeenCalledWith("/tmp/report.pdf", undefined);
   });
 
@@ -259,7 +267,7 @@ describe("DocConverterView audio profile candidate install", () => {
     // alongside audio, but markitdown[image] isn't a real extra. converter.py
     // handles images itself (vision API, Pillow fallback from doc_core), so
     // an image must behave exactly like any other doc_core-only format.
-    vi.spyOn(window, "confirm");
+    askConfirm.mockReset();
     vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/photo.png");
     vi.mocked(markitdownConvert).mockResolvedValue("# photo");
     renderView();
@@ -269,7 +277,7 @@ describe("DocConverterView audio profile candidate install", () => {
     });
 
     expect(pythonEnvStatusMock).not.toHaveBeenCalled();
-    expect(window.confirm).not.toHaveBeenCalled();
+    expect(askConfirm).not.toHaveBeenCalled();
     expect(pythonEnvEnsure).not.toHaveBeenCalledWith("doc_audio");
     expect(markitdownConvert).toHaveBeenCalledWith("/tmp/photo.png", undefined);
   });

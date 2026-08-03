@@ -16,8 +16,13 @@ vi.mock("../../ipc/pythonEnv", () => ({
 }));
 
 const pickFile = vi.fn();
+const askConfirm = vi.fn();
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: (...args: unknown[]) => pickFile(...args),
+  // Not window.confirm: Tauri's webview never shows the JS dialog, so a purge
+  // guarded by it runs unasked. jsdom's returns falsy, which is why this suite
+  // passed while production purged without a prompt.
+  confirm: (...args: unknown[]) => askConfirm(...args),
 }));
 
 // GeneralPage also calls getConfig()/getTelegramConfig()/appimageIntegrationState()
@@ -103,18 +108,17 @@ describe("GeneralPage — Python environment", () => {
   });
 
   it("only purges after the user confirms", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    askConfirm.mockResolvedValue(false);
     render(<GeneralPage />);
     await userEvent.click(
       await screen.findByRole("button", { name: /Delete everything|完全刪除/ }),
     );
+    expect(askConfirm).toHaveBeenCalled();
     expect(reset).not.toHaveBeenCalled();
 
-    confirm.mockReturnValue(true);
+    askConfirm.mockResolvedValue(true);
     await userEvent.click(screen.getByRole("button", { name: /Delete everything|完全刪除/ }));
     expect(reset).toHaveBeenCalledWith(true);
-
-    confirm.mockRestore();
   });
 
   it("surfaces a failure instead of doing nothing visible", async () => {

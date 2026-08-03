@@ -2,6 +2,7 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { aiChat, formatAiError } from "../../ipc/ai";
 import { markitdownConvert, markitdownPickFile } from "../../ipc/markitdown";
@@ -115,7 +116,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
       const status = await pythonEnvStatus().catch(() => null);
       const audioInstalled = status?.installed.includes("doc_audio") ?? false;
       if (!audioInstalled) {
-        if (!window.confirm(t.python_env_audio_prompt)) { setExtracting(false); return; }
+        if (!(await confirm(t.python_env_audio_prompt))) { setExtracting(false); return; }
         setGateProfile("doc_audio");
         const audioReady = await pythonEnv.ensureProfile("doc_audio");
         if (!audioReady) { setExtracting(false); return; }
