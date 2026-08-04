@@ -26,6 +26,16 @@ export function closePty(id: string): Promise<void> {
   return invoke<void>("pty_close", { id });
 }
 
+/**
+ * Writes a pasted/dropped file's bytes to a real file on disk and returns
+ * its path. A `File` from a clipboard paste has no usable filesystem path
+ * (unlike OS drag-and-drop), so there's nothing for a program in the PTY to
+ * open unless we materialize the bytes ourselves.
+ */
+export function writePastedFile(name: string, base64Data: string): Promise<string> {
+  return invoke<string>("write_pasted_file", { name, base64Data });
+}
+
 /** Return the last ~4 KiB of ANSI-stripped output for the session, or null. */
 export function getPtyRecentOutput(id: string): Promise<string | null> {
   return invoke<string | null>("pty_get_recent_output", { id });

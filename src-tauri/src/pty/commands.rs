@@ -210,6 +210,45 @@ pub fn write_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&expanded, content.as_bytes()).map_err(|e| e.to_string())
 }
 
+const MAX_PASTED_FILE_BYTES: usize = MAX_FILE_BYTES as usize;
+
+/// Writes a pasted/copied file's bytes to a real file on disk and returns its
+/// path. Needed because a `File` obtained from a clipboard paste (as opposed
+/// to an OS drag-and-drop) never carries a usable filesystem path on Windows
+/// — there is nothing for the PTY's program to open unless we materialize
+/// the bytes ourselves.
+#[tauri::command]
+pub fn write_pasted_file(name: String, base64_data: String) -> Result<String, String> {
+    use base64::{Engine as _, engine::general_purpose};
+
+    let bytes = general_purpose::STANDARD
+        .decode(base64_data)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_PASTED_FILE_BYTES {
+        return Err(format!(
+            "pasted file is {} bytes, exceeds the {} byte limit",
+            bytes.len(),
+            MAX_PASTED_FILE_BYTES
+        ));
+    }
+
+    // Keep only the base name — the browser-supplied name is untrusted and
+    // must not be interpreted as a path (no "../", no drive letters, etc).
+    let safe_name = std::path::Path::new(&name)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "pasted-file".to_string());
+
+    let dir = std::env::temp_dir().join("aiterm_pasted");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let path = dir.join(format!("{}_{}", uuid::Uuid::new_v4(), safe_name));
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// A drive root plus what sort of device it is, for the file panel's switcher.
 #[derive(serde::Serialize)]
 pub struct DriveInfo {

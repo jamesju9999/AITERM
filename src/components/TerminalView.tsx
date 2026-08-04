@@ -14,6 +14,7 @@ import {
   createPty,
   onPtyData,
   resizePty,
+  writePastedFile,
   writePty,
 } from "../ipc/pty";
 import {
@@ -64,6 +65,25 @@ const INITIAL_PREVIEW: PreviewState = {
   explanation: "",
   riskLevel: "safe",
 };
+
+/**
+ * Resolve a pasted/dropped File to a real filesystem path. Uses `.path` when
+ * the webview provides one (OS drag-and-drop); otherwise (clipboard paste,
+ * which never carries a real path) writes the bytes to a temp file.
+ */
+async function resolvePastedFilePath(file: File): Promise<string> {
+  const existingPath = (file as File & { path?: string }).path;
+  if (existingPath) return existingPath;
+
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+  const base64Data = dataUrl.slice(dataUrl.indexOf(",") + 1);
+  return writePastedFile(file.name, base64Data);
+}
 
 /** Decide whether to auto-execute based on execution mode and risk level. */
 function shouldAutoExecute(mode: ExecutionMode, risk: RiskLevel, agentActive = false): boolean {
@@ -413,9 +433,12 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       e.stopPropagation();
       const sid = sessionRef.current;
       if (!sid) return;
-      const paths = Array.from(files)
-        .map((f) => (f as File & { path?: string }).path ?? f.name)
-        .join(" ");
+      // A clipboard-pasted File has no usable filesystem path (unlike OS
+      // drag-and-drop) — materialize its bytes to a real temp file so the
+      // program in the PTY has something it can actually open.
+      const paths = (await Promise.all(
+        Array.from(files).map((f) => resolvePastedFilePath(f))
+      )).join(" ");
       await writePty(sid, paths).catch(() => {});
     };
 
