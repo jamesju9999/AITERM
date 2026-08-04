@@ -12,6 +12,10 @@ const DEFAULT_CONFIG = {
 
 // Per-command mock registry: tests can push response objects.
 const aiChatQueue: { content: string; tool_calls?: unknown[]; tool_calling_unsupported?: boolean }[] = [];
+// Tests can push an error here to make the Nth "ai_chat" call (by call order,
+// interleaved with aiChatQueue) reject instead of resolve. Keyed by the 1-based
+// call index at which it should fire.
+const aiChatRejectAt = new Map<number, unknown>();
 // Records the `messages` array sent on each "ai_chat" invoke call, in order.
 const aiChatCalls: { role: string; content: unknown }[][] = [];
 
@@ -22,6 +26,8 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "get_mcp_tools") return Promise.resolve([]);
     if (cmd === "ai_chat") {
       aiChatCalls.push(payload?.messages ?? []);
+      const callIndex = aiChatCalls.length;
+      if (aiChatRejectAt.has(callIndex)) return Promise.reject(aiChatRejectAt.get(callIndex));
       const next = aiChatQueue.shift();
       if (next) return Promise.resolve({ tool_calls: [], tool_calling_unsupported: false, ...next });
       return Promise.resolve({ content: "", tool_calls: [], tool_calling_unsupported: false });
@@ -48,6 +54,7 @@ import { AiPanel } from "./index";
 
 beforeEach(() => {
   aiChatQueue.length = 0;
+  aiChatRejectAt.clear();
   aiChatCalls.length = 0;
   listenMock.mockClear();
   listenMock.mockResolvedValue(() => {});
@@ -262,6 +269,41 @@ describe("AiPanel", () => {
     expect(aiChatCalls.length).toBe(2);
     const secondCallContents = aiChatCalls[1].map((m) => m.content);
     expect(secondCallContents.some((c) => typeof c === "string" && c.includes("ls"))).toBe(true);
+  });
+
+  it("Agent Mode surfaces the error and stops when the follow-up AI call fails", async () => {
+    aiChatQueue.push({ content: "<cmd>ls</cmd>" });
+    aiChatRejectAt.set(2, new Error("model_error: reasoning item required"));
+
+    const onExecuteCommand = vi.fn(
+      (_cmd: string, onComplete?: (block: TerminalBlock) => void) => {
+        onComplete?.({ id: "b1", command: "ls", rawOutput: "file.txt", status: "completed", exitCode: 0, startTime: Date.now() });
+      },
+    );
+
+    render(
+      <AiPanel
+        sessionId="s1"
+        isOpen={true}
+        providerName="Codex"
+        onClose={vi.fn()}
+        onExecuteCommand={onExecuteCommand}
+        onOpenProviderPalette={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
+
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(textbox, "列出檔案");
+    await userEvent.keyboard("{Enter}");
+
+    // Command executes fine (visible in the terminal), but the follow-up
+    // AI call that should analyze the result fails — the error must be
+    // shown to the user, not silently dropped.
+    await waitFor(() => expect(screen.getByText(/Agent 呼叫 AI 失敗，已停止/)).toBeInTheDocument());
+    expect(screen.getByText(/reasoning item required/)).toBeInTheDocument();
+    expect(aiChatCalls.length).toBe(2);
   });
 
   it("provider badge calls onOpenProviderPalette when clicked", async () => {

@@ -256,7 +256,13 @@ Rules:
       ];
       const replyObj = await invokeAiChat(agentMessages, sessionId, undefined, false, locale);
       reply = replyObj.content ?? "";
-    } catch {
+    } catch (e) {
+      chat.addMessage({
+        role: "assistant",
+        content: locale === "zh-TW"
+          ? `（Agent 呼叫 AI 失敗，已停止：${String(e)}）`
+          : `(Agent failed to call the AI and stopped: ${String(e)})`,
+      });
       setAgentRunning(false);
       return;
     }
