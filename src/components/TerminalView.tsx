@@ -435,11 +435,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       await writePty(sid, paths + " ").catch(() => {});
     };
 
-    el.addEventListener("paste", handlePaste);
+    // Capture phase: xterm.js's own paste listener lives on its textarea (the
+    // event target) and unconditionally calls stopPropagation() regardless of
+    // whether the clipboard held text or files, which would otherwise stop
+    // this handler — registered on an ancestor — from ever seeing file/image
+    // pastes at all.
+    el.addEventListener("paste", handlePaste, true);
     el.addEventListener("dragover", handleDragOver);
     el.addEventListener("drop", handleDrop);
     return () => {
-      el.removeEventListener("paste", handlePaste);
+      el.removeEventListener("paste", handlePaste, true);
       el.removeEventListener("dragover", handleDragOver);
       el.removeEventListener("drop", handleDrop);
     };
