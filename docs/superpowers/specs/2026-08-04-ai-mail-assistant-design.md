@@ -18,7 +18,7 @@ AITerm 目前是「終端機 + AI 指令輔助」工具，沒有任何信箱相�
 
 **含：**
 - 多組 IMAP/SMTP 信箱帳號（通用協定，不做特定廠商 OAuth）
-- App 開啟期間、每帳號定時輪詢新信，AI 摘要 + 重要性判斷；重要信件跳 OS 通知，其餘只更新側邊欄未讀數字
+- App 開啟期間、每帳號定時輪詢新信，AI 摘要 + 重要性判斷；重要信件跳 OS 通知，其餘只更新分頁圖示上的未讀數字
 - 摘要／回信草稿歷史本機持久化（SQLite），App 重啟後仍看得到
 - AI 自然語言語意搜尋（embedding 向量 + 關鍵字混合排序），本機找不到時退回即時 IMAP SEARCH
 - 附件（PDF/Word/Excel）文字擷取，併入摘要與搜尋索引；其餘類型只記 metadata
@@ -48,49 +48,51 @@ AITerm 目前是「終端機 + AI 指令輔助」工具，沒有任何信箱相�
 
 ## 架構總覽
 
-新增後端模組 `src-tauri/src/mail/`，比照 `pty/`、`ai/`、`db/` 的組織方式：每個信箱帳號對應一個 tokio 背景任務，由後端擁有生命週期（App 啟動或帳號新增時 spawn，帳號移除或 App 結束時任務自然結束），透過 Tauri event 把結果推給前端 —— 這跟 `pty://data/{sessionId}`、`ai-stream` 的既有事件模式一致，前端只需訂閱事件，不用自己管 timer。
+新增後端模組 `src-tauri/src/mail/`（domain 邏輯）＋ `src-tauri/src/commands/mail.rs`（`#[tauri::command]` 進入點）＋ `src-tauri/src/db/mail.rs`（SQLite 存取），比照既有 `knowledge_base`/`db`/`ai` 的檔案組織慣例。每個信箱帳號對應一個 tokio 背景任務，由 `MailState { tasks: HashMap<account_id, JoinHandle<()>> }`（`tokio::sync::Mutex` 包住，比照 `telegram::TelegramState` 的 spawn/abort 模式）管理生命週期：帳號新增時 spawn、帳號移除或任務要重啟時先 `.abort()` 舊的再 spawn 新的，App 結束時任務隨行程結束。輪詢結果透過固定名稱的 Tauri event `mail-sync-event`（payload 帶 `kind` 標籤與 `account_id`）推給前端，比照既有 `ai-stream`、`kb-sync-event` 的扁平事件模式；前端只需訂閱事件，不用自己管 timer。
 
 語意搜尋直接重用知識庫功能已經寫好的向量搜尋管線（`knowledge_base/embedding.rs`、`chunk.rs`，以及 `db/knowledge_base.rs::search_similar_chunks` 的暴力法 cosine + 關鍵字加權演算法），只是把資料表換成信件專用的 `mail_messages` / `mail_chunks`，不新增向量資料庫依賴。
 
 ## 元件拆解
 
-### 後端 `src-tauri/src/mail/`
+後端檔案分三處，比照 `knowledge_base`/`db`/`commands` 的既有分工（domain 邏輯與 SQLite 存取分開、`#[tauri::command]` 進入點集中在 `commands/`，而非像 `pty` 那樣把 commands 收在自己資料夾內）：
 
 | 檔案 | 職責 |
 |---|---|
-| `client.rs` | IMAP/SMTP 連線封裝：抓信（`BODY.PEEK`，不動 `\Seen` 避免影響使用者其他信箱用戶端的已讀狀態）、抓附件、SEARCH、寄信 |
-| `poller.rs` | 每帳號一個背景任務：定時抓新信 → 附件下載＋文字擷取 → AI 摘要＋重要性判斷＋廣告信判斷（同一次 AI 呼叫的結構化輸出，本文＋附件文字一起送進 prompt）→ 寫 SQLite → 發 `mail://summary/{account_id}`、重要信另發 `mail://important/{account_id}` |
-| `attachment.rs` | 附件落地存檔（App data 目錄）＋文字擷取（PDF/DOCX/XLSX），失敗或超過大小上限只記 metadata |
-| `search.rs` | 自然語言查詢 → embed → 本機 `mail_chunks` 暴力法 cosine＋關鍵字加權；分數過低時用 AI 抽取關鍵字/日期範圍，退回即時 IMAP SEARCH，找到後立刻快取＋切塊＋embed |
-| `cleanup.rs` | 從 `mail_messages` 撈 `is_promotional = 1` 且尚未處理的候選信（可套用自然語言解析出的日期/帳號篩選），確認後對選中信件執行 IMAP MOVE 到 Trash 資料夾，並同步清掉本機快取 |
-| `store.rs` | SQLite 存取層，沿用現有 `db/` 的 SQLite adapter |
-| `commands.rs` | 曝露給前端的 `#[tauri::command]`（見下方 IPC 清單） |
+| `src-tauri/src/mail/client.rs` | IMAP/SMTP 連線封裝：抓信（`BODY.PEEK`，不動 `\Seen` 避免影響使用者其他信箱用戶端的已讀狀態）、抓附件、SEARCH、寄信 |
+| `src-tauri/src/mail/poller.rs` | 每帳號一個背景任務：定時抓新信 → 附件下載＋文字擷取 → AI 摘要＋重要性判斷＋廣告信判斷（同一次 AI 呼叫的結構化輸出，本文＋附件文字一起送進 prompt）→ 寫 SQLite → 發固定名稱事件 `mail-sync-event`（payload 用 `kind` 欄位區分 `summary`/`important`，並帶 `account_id`——比照現有 `ai-stream`、`kb-sync-event` 的扁平事件模式，而非 PTY 那種每個 session 一個獨立事件名稱的 URI 命名法，因為信件同步不像終端機輸出那樣是高頻逐字元串流） |
+| `src-tauri/src/mail/attachment.rs` | 附件落地存檔（App data 目錄）＋文字擷取（PDF/DOCX/XLSX），失敗或超過大小上限只記 metadata |
+| `src-tauri/src/mail/search.rs` | 自然語言查詢 → embed → 本機 `mail_chunks` 暴力法 cosine＋關鍵字加權；分數過低時用 AI 抽取關鍵字/日期範圍，退回即時 IMAP SEARCH，找到後立刻快取＋切塊＋embed |
+| `src-tauri/src/mail/cleanup.rs` | 從 `mail_messages` 撈 `is_promotional = 1` 且尚未處理的候選信（可套用自然語言解析出的日期/帳號篩選），確認後對選中信件執行 IMAP MOVE 到 Trash 資料夾，並同步清掉本機快取 |
+| `src-tauri/src/db/mail.rs` | SQLite 存取層（`mail.db`），沿用現有 `db/knowledge_base.rs` 的 `SqlitePool` + 手寫 `CREATE TABLE IF NOT EXISTS` 模式 |
+| `src-tauri/src/commands/mail.rs` | 曝露給前端的 `#[tauri::command]`（見下方 IPC 清單），比照 `commands/knowledge_base.rs` |
 
-**憑證**：帳號的 host/port/使用者名稱等非機密設定走現有 `config/` JSON store；密碼/app password 走現有 OS keyring 封裝，一帳號一組 key（沿用 AI provider API key 現有模式）。移除帳號時一併刪除對應 keyring 項目與所有快取資料（cascade）。
+**憑證**：帳號的 host/port/使用者名稱等非機密設定走現有 `config/` 的 `AppConfig.mail_accounts: Vec<MailAccountConfig>`（比照既有 `db_connections`/`vcs_connections` 模式）；密碼/app password 走現有 OS keyring 封裝，一帳號一組 key（沿用既有 `SecretStore` 模式）。移除帳號時一併刪除對應 keyring 項目與所有快取資料（cascade）。
 
 **Embedding provider**：語意搜尋需要一個 embedding provider，沿用知識庫「建立前先探測驗證」的模式；預設帶入使用者已設定給某個知識庫筆記本的那組，也可另外指定。沒有任何可用 provider 時，搜尋功能停用，但摘要/輪詢/回信等其他功能不受影響。
 
 ### 前端 `src/`
 
+AITerm 沒有「可切換的側邊欄功能面板」這種模型：每個大功能是透過 `NewTabPicker` 開的一種**分頁類型**（比照現有 `"knowledge-base"` 分頁類型 + `KnowledgeBaseView`），分頁切換靠 CSS visibility 而非 mount/unmount；跟帳密相關的設定則走獨立的 Settings 路由（比照 `DatabaseConnectionsPage`/`VcsConnectionsPage`）。
+
 | 元件 | 職責 |
 |---|---|
-| `components/Mail/MailPanel.tsx` | 新側邊欄面板（比照 Settings/知識庫）：帳號切換器、信件列表（未讀數字）、搜尋框、摘要/回信草稿檢視 |
-| `components/Mail/MailAccountSettings.tsx` | 新增/編輯/刪除信箱帳號表單（比照 Provider 設定表單）：host/port/帳密、輪詢間隔（預設 300 秒，可調）、選擇 embedding provider |
-| `components/Mail/MailDetailView.tsx` | 點選信件後顯示完整原文（含附件清單，可下載/開啟） |
-| `components/Mail/ComposeReplyModal.tsx` | AI 草擬回信、可編輯，Send 前走確認閘門（比照 `CommandPreview`） |
-| `components/Mail/MailCleanupConfirm.tsx` | 顯示 AI 找到的廣告信候選清單，每筆預設勾選、使用者可取消勾選排除誤判，確認後才執行刪除（比照 `CommandPreview` 的批次版本） |
-| `hooks/useMailAccounts.ts` | 帳號 CRUD、訂閱輪詢事件 |
-| `hooks/useMailSearch.ts` | 呼叫 `mail_search`，管理搜尋結果狀態 |
+| `src/components/MailView/MailView.tsx` | 新分頁類型 `"mail"` 的內容（`TabBar`/`NewTabPicker`/`TerminalApp.tsx` 三處各加一筆註冊，比照知識庫分頁）：帳號切換器、信件列表（未讀數字）、摘要檢視 |
+| `src/components/Settings/MailAccountsPage.tsx` | 新增/編輯/刪除信箱帳號表單（比照 `DatabaseConnectionsPage`），掛在 `SettingsView.tsx` 新增的 `"mail"` sidebar 分頁下：host/port/帳密、輪詢間隔（預設 300 秒，可調）、選擇 embedding provider |
+| `src/components/MailView/MailDetailView.tsx` | 點選信件後顯示完整原文（含附件清單，可下載/開啟） |
+| `src/components/MailView/ComposeReplyModal.tsx` | AI 草擬回信、可編輯，Send 前走確認閘門（比照 `CommandPreview`） |
+| `src/components/MailView/MailCleanupConfirm.tsx` | 顯示 AI 找到的廣告信候選清單，每筆預設勾選、使用者可取消勾選排除誤判，確認後才執行刪除（比照 `CommandPreview` 的批次版本） |
+| `src/hooks/useMailSync.ts` | 訂閱 `mail-sync-event`，管理帳號/信件列表狀態（比照 `useAiChat.ts` 的 `mountedRef` + `active` 雙重保護寫法） |
+| `src/hooks/useMailSearch.ts` | 呼叫 `mail_search`，管理搜尋結果狀態 |
 
-重要信件觸發時呼叫 Tauri notification API 跳出 OS 通知；一般未讀只更新側邊欄圖示上的未讀數字。
+重要信件觸發時呼叫 `tauri-plugin-notification`（目前專案未安裝，需新增）跳出 OS 通知；一般未讀只更新分頁圖示上的未讀數字。
 
 ## 資料模型（SQLite，沿用 `db/` 現有 SQLite adapter）
 
+帳號的 host/port/使用者名稱/輪詢間隔/embedding provider 等**非機密設定存在 `config/` 的 `AppConfig.mail_accounts: Vec<MailAccountConfig>`**（比照既有的 `db_connections`/`vcs_connections` 模式，同樣提供 `add_mail_account`/`update_mail_account`/`remove_mail_account`），密碼/app password 存 OS keyring；不進 SQLite，避免同一份帳號設定存在兩個地方。SQLite（`mail.db`）只放信件資料與輪詢運作狀態：
+
 ```
-mail_accounts(id, email, imap_host, imap_port, smtp_host, smtp_port, username,
-              poll_interval_secs DEFAULT 300, embedding_provider_id NULL,
-              created_at)
-mail_messages(id, account_id FK, uid, sender, subject, date, body_text,
+mail_poll_state(account_id PRIMARY KEY, last_seen_uid INTEGER, last_polled_at)
+mail_messages(id, account_id, uid, sender, subject, date, body_text,
               ai_summary, is_important BOOLEAN, is_promotional BOOLEAN,
               is_read_locally BOOLEAN DEFAULT 0, fetched_at)
 mail_chunks(id, message_id FK, source ENUM('body','attachment'), source_filename NULL,
@@ -101,13 +103,13 @@ mail_attachments(id, message_id FK, filename, mime_type, size_bytes,
 mail_reply_drafts(id, message_id FK, draft_text, created_at, sent_at NULL)
 ```
 
-已讀狀態（`is_read_locally`）只在本機追蹤，不寫回伺服器 `\Seen`——避免使用者在手機或其他信箱用戶端看到「被 AI 讀過」的已讀標記。側邊欄未讀數字＝所有帳號 `is_read_locally = 0` 的筆數。
+已讀狀態（`is_read_locally`）只在本機追蹤，不寫回伺服器 `\Seen`——避免使用者在手機或其他信箱用戶端看到「被 AI 讀過」的已讀標記。Mail 分頁圖示上的未讀數字＝所有帳號 `is_read_locally = 0` 的筆數。
 
 ## 資料流程
 
-**輪詢**：`poller.rs` 定時任務 → IMAP 抓新信（`BODY.PEEK`）→ 有附件則下載＋文字擷取（`attachment.rs`）→ AI 摘要＋重要性判斷＋廣告信判斷（本文＋附件文字，同一次 AI 呼叫的結構化輸出）→ 寫 `mail_messages`＋切塊 embed 寫 `mail_chunks`＋附件 metadata 寫 `mail_attachments` → 發事件。重要 → 額外發 `mail://important/{account_id}`，前端跳 OS 通知；否則前端只更新未讀數字。
+**輪詢**：`poller.rs` 定時任務 → IMAP 抓新信（`BODY.PEEK`）→ 有附件則下載＋文字擷取（`attachment.rs`）→ AI 摘要＋重要性判斷＋廣告信判斷（本文＋附件文字，同一次 AI 呼叫的結構化輸出）→ 寫 `mail_messages`＋切塊 embed 寫 `mail_chunks`＋附件 metadata 寫 `mail_attachments` → 發 `mail-sync-event`（`kind: "summary"`）。重要 → 額外發一筆 `kind: "important"` 的 `mail-sync-event`，前端跳 OS 通知；否則前端只更新未讀數字。
 
-**搜尋**：使用者在 `MailPanel` 輸入自然語言 → `mail_search` → embed 查詢 → 本機 `mail_chunks` cosine+關鍵字比對 top-K，同信取最高分片段代表 → 分數過低 → AI 抽關鍵字/日期範圍 → IMAP SEARCH → 找到即快取入庫 → 回傳結果（寄件人/主旨/日期/既有 AI 摘要/命中片段）→ 前端列表；點選 → `MailDetailView` 顯示 `mail_messages.body_text` 全文與附件清單。
+**搜尋**：使用者在 `MailView` 輸入自然語言 → `mail_search` → embed 查詢 → 本機 `mail_chunks` cosine+關鍵字比對 top-K，同信取最高分片段代表 → 分數過低 → AI 抽關鍵字/日期範圍 → IMAP SEARCH → 找到即快取入庫 → 回傳結果（寄件人/主旨/日期/既有 AI 摘要/命中片段）→ 前端列表；點選 → `MailDetailView` 顯示 `mail_messages.body_text` 全文與附件清單。
 
 **回信**：使用者對某封信按「AI 回信」→ 可附加指示（如「婉拒」「確認時間」）→ AI 生成草稿存入 `mail_reply_drafts` → `ComposeReplyModal` 顯示可編輯 → 使用者按送出前走確認閘門（比照 `CommandPreview` 的 risk 確認 UI，寄出郵件視為必須手動確認的動作，絕不自動送出）→ 確認後 `mail_send_reply` 走 SMTP，正確帶 `In-Reply-To`/`References` header 維持信件串；可選擇夾帶本機檔案。
 
@@ -146,7 +148,7 @@ Rust（`src-tauri/tests/`，wiremock 模擬 IMAP/SMTP 與 AI provider）：
 - 廣告信清理：候選清單只來自 `is_promotional = 1` 的信；沒有 Trash 資料夾時整批回錯誤且不刪除任何信；批次中單筆刪除失敗不影響其他筆
 
 前端（Vitest + React Testing Library）：
-- `MailPanel` 未讀數字與重要信通知的觸發時機
+- `MailView` 未讀數字與重要信通知的觸發時機
 - `ComposeReplyModal` 送出前必須經過確認閘門，不能一按就送
 - 搜尋結果點選後 `MailDetailView` 正確顯示全文與附件
 - `MailCleanupConfirm` 預設全選、取消勾選後該筆不會出現在送出的 `message_ids` 裡、沒有勾選任何一筆時確認按鈕為 disabled
