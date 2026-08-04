@@ -439,7 +439,15 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       const paths = (await Promise.all(
         Array.from(files).map((f) => resolvePastedFilePath(f))
       )).join(" ");
-      await writePty(sid, paths).catch(() => {});
+      // Wrap in the same bracketed-paste sequence xterm.js uses for genuine
+      // text pastes (ESC[200~...ESC[201~), so a program like Claude Code CLI
+      // can tell this arrived as one pasted unit rather than typed
+      // characters — that's what lets it render a "[Image #1]" attachment
+      // chip instead of echoing the raw path.
+      const bracketed = termRef.current?.modes.bracketedPasteMode
+        ? "\x1b[200~" + paths + "\x1b[201~"
+        : paths;
+      await writePty(sid, bracketed).catch(() => {});
     };
 
     const handleDragOver = (e: DragEvent) => {
