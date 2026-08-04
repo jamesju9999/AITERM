@@ -1804,12 +1804,7 @@ function runAgentLoop(params: AgentLoopParams) {
     onBlockDone,         // onCommandComplete: fires when OSC 133;D marks the block done
     (err) => {           // onAiError: AI call failed, abort the mission immediately
       stepResolved = true;
-      let errMsg = "未知錯誤";
-      if ("message" in err) errMsg = err.message;
-      else if ("reason" in err) errMsg = err.reason;
-      else if (err.kind === "not_configured") errMsg = "未設定 API Key";
-      else if (err.kind === "rate_limit") errMsg = err.body ? `請求過於頻繁，請稍後再試\n${err.body}` : "請求過於頻繁，請稍後再試";
-      onFail(`AI 請求失敗: ${errMsg}`);
+      onFail(formatAiError(err));
     },
     onWebAction,          // onWebAction: intercept web search/fetch commands
     params.onPhase,       // onPhase: push running-phase status to the React status bar
