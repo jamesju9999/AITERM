@@ -667,6 +667,22 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     termRef.current = term;
     setTermState(term);
 
+    // xterm.js maps Ctrl+<letter> to the matching Unix control byte (Ctrl+V →
+    // \x16, SYN) and sends it straight to the pty, which is correct terminal
+    // behavior but means it also swallows the keydown (preventDefault +
+    // stopPropagation) before the browser's native paste ever runs — so
+    // Ctrl+V does nothing on Windows/Linux where users expect it to paste.
+    // macOS is unaffected since paste there is Cmd+V (metaKey), which never
+    // enters this path. Returning false here tells xterm.js to skip its own
+    // handling for this one combination and let the browser's default paste
+    // action proceed instead.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type === "keydown" && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key === "v") {
+        return false;
+      }
+      return true;
+    });
+
     const fit = new FitAddon();
     term.loadAddon(fit);
     fitAddonRef.current = fit;
