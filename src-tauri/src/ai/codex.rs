@@ -99,10 +99,20 @@ pub(crate) fn build_request_body(model: &str, req: &GenerateRequest) -> serde_js
             // silent 400. Remap to "developer", the Responses API's
             // equivalent role for system-level instructions mid-conversation.
             let role = if m.role == "system" { "developer" } else { m.role.as_str() };
+            // The Responses API distinguishes content-part types by who they
+            // came from: "input_text" for text supplied to the model
+            // (user/developer), "output_text" for the model's own prior
+            // output being replayed back as context (assistant). Multi-turn
+            // callers like the Agent Mode loop in AiPanel/index.tsx echo the
+            // assistant's previous reply back into history — tagging it
+            // "input_text" gets rejected with "Invalid value: 'input_text'.
+            // Supported values are: 'output_text' and 'refusal'." on any
+            // request past the first turn.
+            let content_type = if role == "assistant" { "output_text" } else { "input_text" };
             serde_json::json!({
                 "type": "message",
                 "role": role,
-                "content": [{ "type": "input_text", "text": text }]
+                "content": [{ "type": content_type, "text": text }]
             })
         })
         .collect();
@@ -304,6 +314,30 @@ mod tests {
         assert_eq!(input[0]["role"], "user");
         assert_eq!(input[0]["content"][0]["type"], "input_text");
         assert_eq!(input[0]["content"][0]["text"], "list files");
+    }
+
+    /// Regression test: multi-turn callers (e.g. the Agent Mode loop) echo the
+    /// assistant's own previous reply back into history. The Responses API
+    /// rejects that content tagged "input_text" — it must be "output_text",
+    /// the type reserved for the model's own prior output — with a 400
+    /// ("Invalid value: 'input_text'. Supported values are: 'output_text'
+    /// and 'refusal'."). This silently broke every second-and-later turn of
+    /// Agent Mode against Codex.
+    #[test]
+    fn assistant_role_message_uses_output_text_content_type() {
+        let r = req(
+            "sys",
+            vec![
+                ChatMessage { role: "user".into(), content: serde_json::json!("list files"), tool_call_id: None, tool_calls: None },
+                ChatMessage { role: "assistant".into(), content: serde_json::json!("<cmd>ls</cmd>"), tool_call_id: None, tool_calls: None },
+            ],
+        );
+        let body = build_request_body("gpt-5.1-codex", &r);
+        let input = body["input"].as_array().unwrap();
+        assert_eq!(input[0]["role"], "user");
+        assert_eq!(input[0]["content"][0]["type"], "input_text", "user content must stay input_text");
+        assert_eq!(input[1]["role"], "assistant");
+        assert_eq!(input[1]["content"][0]["type"], "output_text", "assistant content must be output_text");
     }
 
     #[test]
