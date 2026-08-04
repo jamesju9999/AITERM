@@ -19,6 +19,7 @@
     "updater:allow-check",
     "updater:allow-download",
     "updater:allow-install",
-    "process:allow-restart"
+    "process:allow-restart",
+    "notification:default"
   ]
 }
