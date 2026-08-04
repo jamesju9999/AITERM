@@ -55,6 +55,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub vcs_connections: Vec<VcsConnection>,
 
+    /// Saved mail accounts (passwords stored separately in Keychain).
+    #[serde(default)]
+    pub mail_accounts: Vec<MailAccountConfig>,
+
     /// Enterprise Management Server URL. When set, enterprise mode is active.
     #[serde(default)]
     pub enterprise_server_url: Option<String>,
@@ -133,6 +137,7 @@ impl Default for AppConfig {
             default_tab: DefaultTab::default(),
             telegram_chat_id: None,
             vcs_connections: vec![],
+            mail_accounts: vec![],
             enterprise_server_url: None,
             enterprise_device_id: None,
             enterprise_policy: None,
@@ -335,6 +340,23 @@ pub struct VcsConnection {
     #[serde(default)]
     pub write_mode: VcsWriteMode,
 }
+
+/// A saved mail account (IMAP/SMTP). Password lives in Keychain under "mail:{id}".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MailAccountConfig {
+    pub id: String,
+    pub email: String,
+    pub imap_host: String,
+    pub imap_port: u16,
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub username: String,
+    /// How often to poll while the app is open. Defaults to 5 minutes.
+    #[serde(default = "default_mail_poll_interval_secs")]
+    pub poll_interval_secs: u32,
+}
+
+fn default_mail_poll_interval_secs() -> u32 { 300 }
 
 /// Policy pushed from the Management Server. Fields present here override local AppConfig.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
