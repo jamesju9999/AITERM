@@ -5,7 +5,7 @@ import {
 import { readFileAsAttachment, contentToDisplayString } from "../../types/attachment";
 import type { Attachment } from "../../types/attachment";
 import { useMcpChat } from "../../hooks/useMcpChat";
-import { invokeAiChat, type ChatMessage as AiChatMessage } from "../../ipc/ai";
+import { invokeAiChat, formatAiError, type AiError, type ChatMessage as AiChatMessage } from "../../ipc/ai";
 import { getSessionCwd, listDirectory } from "../../ipc/fs";
 import { getPtyRecentOutput, writePty } from "../../ipc/pty";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
@@ -257,11 +257,15 @@ Rules:
       const replyObj = await invokeAiChat(agentMessages, sessionId, undefined, false, locale);
       reply = replyObj.content ?? "";
     } catch (e) {
+      // e may be an AiError object from Tauri IPC — use formatAiError to
+      // produce a readable message instead of "[object Object]"
+      const isAiError = e != null && typeof e === "object" && "kind" in (e as object);
+      const errText = isAiError ? formatAiError(e as AiError) : String(e);
       chat.addMessage({
         role: "assistant",
         content: locale === "zh-TW"
-          ? `（Agent 呼叫 AI 失敗，已停止：${String(e)}）`
-          : `(Agent failed to call the AI and stopped: ${String(e)})`,
+          ? `（Agent 呼叫 AI 失敗，已停止：${errText}）`
+          : `(Agent failed to call the AI and stopped: ${errText})`,
       });
       setAgentRunning(false);
       return;

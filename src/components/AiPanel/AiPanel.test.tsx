@@ -273,7 +273,9 @@ describe("AiPanel", () => {
 
   it("Agent Mode surfaces the error and stops when the follow-up AI call fails", async () => {
     aiChatQueue.push({ content: "<cmd>ls</cmd>" });
-    aiChatRejectAt.set(2, new Error("model_error: reasoning item required"));
+    // Tauri IPC rejects with the plain AiError object the Rust side returned
+    // (not a JS Error) — e.g. an expired/rotated Codex OAuth token.
+    aiChatRejectAt.set(2, { kind: "auth_failed" });
 
     const onExecuteCommand = vi.fn(
       (_cmd: string, onComplete?: (block: TerminalBlock) => void) => {
@@ -300,9 +302,11 @@ describe("AiPanel", () => {
 
     // Command executes fine (visible in the terminal), but the follow-up
     // AI call that should analyze the result fails — the error must be
-    // shown to the user, not silently dropped.
+    // shown to the user (formatted via formatAiError), not silently
+    // dropped or rendered as "[object Object]".
     await waitFor(() => expect(screen.getByText(/Agent 呼叫 AI 失敗，已停止/)).toBeInTheDocument());
-    expect(screen.getByText(/reasoning item required/)).toBeInTheDocument();
+    expect(screen.getByText(/API Key 驗證失敗/)).toBeInTheDocument();
+    expect(screen.queryByText(/\[object Object\]/)).not.toBeInTheDocument();
     expect(aiChatCalls.length).toBe(2);
   });
 
