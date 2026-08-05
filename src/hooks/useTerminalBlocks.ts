@@ -40,6 +40,10 @@ export function useTerminalBlocks(
   term: Terminal | null,
   cwdRef?: React.RefObject<string>,
   onLiveClear?: () => void,
+  /** 每次有指令跑完就呼叫，帶上它的 exit code。給側邊欄提示點用。
+   *  必須是穩定的參考（useCallback 空依賴或 ref 橋接）——它進了下面
+   *  OSC handler effect 的依賴陣列，每次換身分都會重新註冊 handler。 */
+  onCommandSettled?: (exitCode: number) => void,
 ): UseTerminalBlocksResult {
   const [blocks, setBlocks] = useState<TerminalBlock[]>([]);
   const [isAlternateBuffer, setIsAlternateBuffer] = useState(false);
@@ -189,6 +193,10 @@ export function useTerminalBlocks(
           finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode, { clearOnParsed: true });
         }
 
+        // 兩條分支（Windows/ConPTY 與其他平台）的差別只在畫面清除時機，
+        // 對「指令結束了、結果是什麼」沒有影響，所以放在合流之後呼叫一次。
+        onCommandSettled?.(isNaN(exitCode) ? 0 : exitCode);
+
         return true;
       }
       return false;
@@ -202,7 +210,7 @@ export function useTerminalBlocks(
     // handler writes to it — the effect must re-register once the PTY session
     // id lands (it's set async after `term`) so the handler's closure isn't
     // holding the initial empty id.
-  }, [term, finalizeBlock, onLiveClear, sessionId]);
+  }, [term, finalizeBlock, onLiveClear, sessionId, onCommandSettled]);
 
   const submitCommand = useCallback(
     (cmd: string, onComplete?: (block: TerminalBlock) => void) => {
