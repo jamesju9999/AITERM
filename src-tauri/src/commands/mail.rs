@@ -56,8 +56,10 @@ pub async fn mail_remove_account(
     mail_db: State<'_, MailDb>,
 ) -> Result<(), String> {
     stop_account(&app, &id).await;
-    let _ = secret_store.delete(&mail_secret_key(&id));
     config_store.remove_mail_account(&id).map_err(|e| e.to_string())?;
+    // Best-effort: config is already removed; ignore Keychain errors so
+    // the command doesn't fail if the secret was never stored.
+    let _ = secret_store.delete(&mail_secret_key(&id));
     mail_db::delete_account_data(&mail_db.pool, &id).await.map_err(|e| e.to_string())?;
     Ok(())
 }
