@@ -28,7 +28,7 @@ interface MailViewProps {
 // and letting TerminalApp's wrapper div (visibility: hidden / pointerEvents:
 // none) handle hiding inactive tabs, so its own state and effects persist
 // across tab switches.
-export function MailView({ isActive: _isActive, onMessageRead }: MailViewProps) {
+export function MailView({ isActive, onMessageRead }: MailViewProps) {
   const { t } = useLocale();
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
@@ -50,11 +50,27 @@ export function MailView({ isActive: _isActive, onMessageRead }: MailViewProps) 
     return () => { mountedRef.current = false; };
   }, []);
 
+  // Keyed on isActive, not [] — the same reactivation idiom KnowledgeBaseView
+  // uses. Settings lives in an overlay that never unmounts TerminalApp, so a
+  // mount-only fetch would leave this tab showing `mail_no_accounts` forever
+  // after the user adds their first account in Settings and switches back,
+  // while the TabBar badge (fed by mail_count_unread) already shows a count.
+  // The dep array is what keeps this to one fetch per false -> true edge
+  // rather than one per render.
   useEffect(() => {
+    if (!isActive) return;
     mailListAccounts().then((list) => {
       if (!mountedRef.current) return;
       setAccounts(list);
-      setSelectedAccountId((prev) => prev ?? list[0]?.id ?? null);
+      // Keep the user's current pick across a refetch; fall back to the first
+      // account only when the selection is gone (removed in Settings) or was
+      // never made.
+      setSelectedAccountId((prev) =>
+        prev && list.some((a) => a.id === prev) ? prev : list[0]?.id ?? null
+      );
+      // Cleared on success, or a first-load failure would stick as a permanent
+      // error screen even once a later refetch succeeds.
+      setLoadFailed(false);
     }).catch((err) => {
       // Never swallow: a failed fetch would otherwise be indistinguishable
       // from "no accounts configured" and send the user off to re-add an
@@ -66,7 +82,7 @@ export function MailView({ isActive: _isActive, onMessageRead }: MailViewProps) 
     }).finally(() => {
       if (mountedRef.current) setLoading(false);
     });
-  }, []);
+  }, [isActive]);
 
   useEffect(() => {
     if (!selectedAccountId) {

@@ -43,6 +43,11 @@ export type MailSyncEvent =
 
 export const MAIL_SYNC_EVENT = "mail-sync-event";
 
+/** IMAP LOGIN + SELECT INBOX round-trip. SMTP is not exercised. */
+export function mailTestConnection(input: MailAccountInput): Promise<void> {
+  return invoke<void>("mail_test_connection", { input });
+}
+
 export function mailAddAccount(input: MailAccountInput): Promise<MailAccount> {
   return invoke<MailAccount>("mail_add_account", { input });
 }

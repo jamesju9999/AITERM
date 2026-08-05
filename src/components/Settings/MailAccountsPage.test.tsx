@@ -8,6 +8,7 @@ vi.mock("../../ipc/mail", () => ({
   mailListAccounts: vi.fn(),
   mailAddAccount: vi.fn(),
   mailRemoveAccount: vi.fn(),
+  mailTestConnection: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/plugin-notification", () => ({
@@ -15,7 +16,7 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
   requestPermission: vi.fn(),
 }));
 
-import { mailListAccounts, mailAddAccount, mailRemoveAccount } from "../../ipc/mail";
+import { mailListAccounts, mailAddAccount, mailRemoveAccount, mailTestConnection } from "../../ipc/mail";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 
 // Pinned explicitly rather than relying on LocaleProvider's fallback: if the
@@ -83,6 +84,7 @@ describe("MailAccountsPage", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(mailListAccounts).mockResolvedValue([] as never);
     vi.mocked(mailAddAccount).mockResolvedValue(ACCOUNT as never);
+    vi.mocked(mailTestConnection).mockResolvedValue(undefined as never);
     vi.mocked(mailRemoveAccount).mockResolvedValue(undefined as never);
     vi.mocked(isPermissionGranted).mockResolvedValue(true as never);
     vi.mocked(requestPermission).mockResolvedValue("granted" as never);
@@ -328,6 +330,89 @@ describe("MailAccountsPage", () => {
       // Form still open, values preserved — retyping eight fields after a
       // transient failure would be miserable.
       expect(screen.getByLabelText(t.mail_email)).toHaveValue("new@example.com");
+    });
+  });
+
+  // mail_add_account writes the keychain entry + config and spawns a poller
+  // unconditionally, and poll failures only reach log::warn!. Without an
+  // up-front check, the likeliest first-run mistake (an account password
+  // instead of a Gmail App Password, or IMAP not enabled) is silent forever
+  // while the poller retries a failing login every cycle.
+  describe("connection validation", () => {
+    const LOGIN_FAILED = new Error("login failed: AUTHENTICATIONFAILED");
+
+    it("tests the connection with the entered values before creating the account", async () => {
+      renderPage();
+      await fillForm();
+
+      clickSave();
+
+      await waitFor(() => expect(mailAddAccount).toHaveBeenCalled());
+      expect(mailTestConnection).toHaveBeenCalledWith(expect.objectContaining({
+        imap_host: "imap.new.com",
+        imap_port: 1993,
+        username: "newuser",
+        password: "s3cret",
+      }));
+      // The ordering is the whole point: a check that ran after the add would
+      // not prevent the keychain write, the config write, or the poller spawn.
+      expect(vi.mocked(mailTestConnection).mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(mailAddAccount).mock.invocationCallOrder[0]);
+    });
+
+    it("does not create the account when the connection test fails", async () => {
+      vi.mocked(mailTestConnection).mockRejectedValue(LOGIN_FAILED as never);
+
+      renderPage();
+      await fillForm();
+
+      clickSave();
+
+      // Barrier: wait until the rejection has actually been handled (the catch
+      // logs), otherwise this would pass simply by asserting too early.
+      await waitFor(() => expect(console.error).toHaveBeenCalledWith(
+        "[mail] connection test failed:", expect.anything()
+      ));
+      expect(mailAddAccount).not.toHaveBeenCalled();
+    });
+
+    it("surfaces the connection failure in the error banner", async () => {
+      vi.mocked(mailTestConnection).mockRejectedValue(LOGIN_FAILED as never);
+
+      renderPage();
+      await fillForm();
+
+      clickSave();
+
+      expect(await screen.findByText(/AUTHENTICATIONFAILED/)).toBeTruthy();
+    });
+
+    it("keeps the form populated after a failed connection test so the password can be fixed", async () => {
+      vi.mocked(mailTestConnection).mockRejectedValue(LOGIN_FAILED as never);
+
+      renderPage();
+      await fillForm();
+
+      clickSave();
+
+      await waitFor(() => expect(console.error).toHaveBeenCalledWith(
+        "[mail] connection test failed:", expect.anything()
+      ));
+      expect(screen.getByLabelText(t.mail_password)).toHaveValue("s3cret");
+    });
+
+    it("keeps the save button disabled while the connection test is in flight", async () => {
+      // Never resolves — the IMAP round-trip stays in flight.
+      vi.mocked(mailTestConnection).mockReturnValue(new Promise(() => {}) as never);
+
+      renderPage();
+      await fillForm();
+
+      clickSave();
+
+      // A TLS+LOGIN round-trip against a wrong host can take seconds, so the
+      // button has to say what it is waiting on rather than look wedged.
+      expect(await screen.findByRole("button", { name: t.mail_testing })).toBeDisabled();
     });
   });
 

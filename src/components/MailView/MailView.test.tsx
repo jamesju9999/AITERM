@@ -218,4 +218,93 @@ describe("MailView", () => {
       expect(await screen.findByRole("listitem")).toBeTruthy();
     });
   });
+
+  // App.tsx keeps TerminalApp — and therefore this component — permanently
+  // mounted behind the Settings overlay, so an account added in Settings can
+  // only reach an already-open Mail tab by refetching when the tab is shown
+  // again. Without it the tab reads "no accounts" forever while the TabBar
+  // badge (fed by mail_count_unread) already shows unread counts.
+  describe("refetch on tab reactivation", () => {
+    const ACCOUNT_2 = { ...ACCOUNT, id: "acc-2", email: "second@example.com" };
+    const ACCOUNT_3 = { ...ACCOUNT, id: "acc-3", email: "third@example.com" };
+
+    const tree = (isActive: boolean) => (
+      <LocaleProvider>
+        <MailView isActive={isActive} />
+      </LocaleProvider>
+    );
+
+    it("refetches and shows an account added while the tab was hidden", async () => {
+      vi.mocked(mailListAccounts)
+        .mockResolvedValueOnce([] as never)
+        .mockResolvedValueOnce([ACCOUNT] as never);
+
+      const { rerender } = render(tree(true));
+      expect(await screen.findByText(t.mail_no_accounts)).toBeTruthy();
+
+      // Switch to another tab (still mounted, just hidden) and back.
+      rerender(tree(false));
+      rerender(tree(true));
+
+      await waitFor(() => expect(mailListAccounts).toHaveBeenCalledTimes(2));
+      expect(await screen.findByText(ACCOUNT.email)).toBeTruthy();
+    });
+
+    it("does not refetch on re-renders while the tab stays active", async () => {
+      vi.mocked(mailListAccounts).mockResolvedValue([ACCOUNT] as never);
+
+      const { rerender } = render(tree(true));
+      // Barrier: the initial fetch has landed, so the count below is measured
+      // against a settled component rather than a still-loading one.
+      expect(await screen.findByText(ACCOUNT.email)).toBeTruthy();
+
+      // Unrelated re-renders: isActive is unchanged, only the callback identity
+      // differs. An IMAP-account fetch per parent render would be wasteful.
+      rerender(<LocaleProvider><MailView isActive onMessageRead={() => {}} /></LocaleProvider>);
+      rerender(<LocaleProvider><MailView isActive onMessageRead={() => {}} /></LocaleProvider>);
+
+      expect(mailListAccounts).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the selected account across a reactivation refetch", async () => {
+      vi.mocked(mailListAccounts)
+        .mockResolvedValueOnce([ACCOUNT, ACCOUNT_2] as never)
+        .mockResolvedValueOnce([ACCOUNT, ACCOUNT_2, ACCOUNT_3] as never);
+
+      const { rerender } = render(tree(true));
+      const select = await screen.findByLabelText(t.mail_select_account);
+      fireEvent.change(select, { target: { value: "acc-2" } });
+
+      rerender(tree(false));
+      rerender(tree(true));
+
+      // Barrier: the refetched list has actually landed in state, so the
+      // selection assertion below cannot pass merely by running too early.
+      expect(await screen.findByText(ACCOUNT_3.email)).toBeTruthy();
+      expect(select).toHaveValue("acc-2");
+    });
+
+    it("falls back to the first account when the selected one was removed", async () => {
+      vi.mocked(mailListAccounts)
+        .mockResolvedValueOnce([ACCOUNT, ACCOUNT_2] as never)
+        .mockResolvedValueOnce([ACCOUNT] as never);
+
+      const { rerender } = render(tree(true));
+      const select = await screen.findByLabelText(t.mail_select_account);
+      fireEvent.change(select, { target: { value: "acc-2" } });
+      await waitFor(() => expect(mailListMessages).toHaveBeenLastCalledWith("acc-2"));
+
+      rerender(tree(false));
+      rerender(tree(true));
+
+      // Barrier: the removed account is gone from the list.
+      await waitFor(() => expect(screen.queryByText(ACCOUNT_2.email)).toBeNull());
+      // Asserted through the message fetch rather than the <select> value: a
+      // <select> whose value matches no option falls back to showing the first
+      // option anyway, so the DOM alone cannot tell a real reselection from a
+      // stale selectedAccountId still pointing at the deleted account — which
+      // is what actually decides whose mail is listed.
+      expect(mailListMessages).toHaveBeenLastCalledWith("acc-1");
+    });
+  });
 });

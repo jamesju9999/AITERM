@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import {
-  mailAddAccount, mailListAccounts, mailRemoveAccount,
+  mailAddAccount, mailListAccounts, mailRemoveAccount, mailTestConnection,
   type MailAccount, type MailAccountInput,
 } from "../../ipc/mail";
 import { useLocale } from "../../contexts/LocaleContext";
@@ -49,6 +49,10 @@ export function MailAccountsPage() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  // Label-only: `saving` stays the gate that disables the button for the whole
+  // test+add sequence. The IMAP round-trip can take seconds on a bad host, so
+  // the button says what it is waiting on.
+  const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const mountedRef = useRef(true);
@@ -97,7 +101,27 @@ export function MailAccountsPage() {
 
   const handleSave = async () => {
     setSaving(true);
+    setTesting(true);
     setError(null);
+    // Verify the credentials before anything is persisted: mail_add_account
+    // writes the keychain entry + config and spawns a poller unconditionally,
+    // and poll failures only reach log::warn!. Without this, the most likely
+    // first-run mistake — an account password instead of a Gmail App Password,
+    // or IMAP not enabled — is completely silent in the UI while the poller
+    // retries a failing login every cycle.
+    try {
+      await mailTestConnection(form);
+    } catch (err) {
+      console.error("[mail] connection test failed:", err);
+      if (!mountedRef.current) return;
+      // Nothing was created, and the form keeps its values so the user only has
+      // to fix the password.
+      setError(`${t.mail_test_failed}${String(err)}`);
+      setTesting(false);
+      setSaving(false);
+      return;
+    }
+    if (mountedRef.current) setTesting(false);
     try {
       await mailAddAccount(form);
       if (mountedRef.current) {
@@ -270,7 +294,7 @@ export function MailAccountsPage() {
           <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center", justifyContent: "flex-end" }}>
             <button onClick={closeForm} className="aiterm-btn aiterm-btn--secondary">{t.cancel}</button>
             <button onClick={handleSave} disabled={saving || !canSave} className="aiterm-btn aiterm-btn--primary">
-              {saving ? t.mail_saving : t.save}
+              {testing ? t.mail_testing : saving ? t.mail_saving : t.save}
             </button>
           </div>
         </div>
