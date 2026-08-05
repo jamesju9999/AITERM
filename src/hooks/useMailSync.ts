@@ -44,6 +44,12 @@ export function useMailSync() {
   // costs another permission round-trip, and a burst of them would stack
   // concurrent requestPermission() prompts — including re-prompting a user who
   // already said no.
+  //
+  // Desktop caveat (tauri-plugin-notification 2.3.3, desktop.rs:61-66): both
+  // permission_state() and request_permission() unconditionally return Granted
+  // on desktop — the OS permission is never actually consulted here. This stays
+  // because it is the plugin's documented API and is load-bearing on mobile,
+  // but on macOS/Windows/Linux it always resolves true.
   const ensureNotificationPermission = useCallback((): Promise<boolean> => {
     permissionRef.current ??= isPermissionGranted()
       .then((granted) => granted || requestPermission().then((p) => p === "granted"))
@@ -71,6 +77,15 @@ export function useMailSync() {
           // Matches the backend's own placeholder (parse_raw_message) so a
           // genuinely empty subject doesn't produce a blank notification title.
           const title = event.payload.subject || "(no subject)";
+          // Do not expect this to be visible under `tauri dev` on macOS: the
+          // plugin posts as "com.apple.Terminal" whenever tauri::is_dev() is
+          // true (desktop.rs:207-214), because an unbundled dev binary cannot
+          // post under its own bundle id. So in dev it surfaces as a Terminal
+          // notification — and silently does nothing if Terminal itself lacks
+          // notification permission. The plugin also discards the result
+          // (`let _ = notification.show()`, desktop.rs:216-218), so a failure
+          // is unobservable from here. Verify this path against a real
+          // `tauri build` bundle, where the app's own identifier is used.
           sendNotification({ title, body: event.payload.summary });
         }
       }
