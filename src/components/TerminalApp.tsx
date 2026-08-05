@@ -1,4 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { sendNotification } from "@tauri-apps/plugin-notification";
+import { ensureNotificationPermission } from "../lib/notifyPermission";
+import { routeAttention, type AttentionKind } from "../lib/terminalAttention";
 import { TerminalView } from "./TerminalView";
 import { TabBar, type Tab } from "./TabBar";
 import { TitleBar } from "./TitleBar";
@@ -88,6 +92,20 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
   const unregisterCloseGuard = useCallback((tabId: string) => {
     closeGuardsRef.current.delete(tabId);
   }, []);
+  // 視窗焦點放在 ref 而非 state：它只被事件 callback 讀取，不影響任何渲染，
+  // 用 state 會讓每次切換視窗都重繪整個 app。初始值樂觀設為 true，
+  // 這樣在 isFocused() 回來之前不會誤發通知。
+  const windowFocusedRef = useRef(true);
+  useEffect(() => {
+    const win = getCurrentWindow();
+    let unlisten: (() => void) | undefined;
+    win.isFocused().then((f) => { windowFocusedRef.current = f; }).catch(() => {});
+    win.onFocusChanged(({ payload }) => { windowFocusedRef.current = payload; })
+      .then((u) => { unlisten = u; })
+      .catch(() => {});
+    return () => unlisten?.();
+  }, []);
+
   // PTY session ID of the most recently active terminal tab — used by VcsView for CWD polling.
   const [lastTerminalPtyId, setLastTerminalPtyId] = useState<string>("");
   useEffect(() => {
@@ -208,6 +226,39 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
   const handleRename = useCallback((id: string, newTitle: string) => {
     setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, title: newTitle } : t)));
   }, []);
+
+  // 使用者選定的規則：切過去就算讀取過了。所以當前 active 的分頁
+  // 永遠不會有提示點。用函式式 setTabs 並在無事可做時回傳同一個陣列，
+  // 避免每次切分頁都製造新的 tabs 參考。
+  useEffect(() => {
+    setTabs((prev) =>
+      prev.some((t) => t.id === activeId && t.attention)
+        ? prev.map((t) => (t.id === activeId ? { ...t, attention: undefined } : t))
+        : prev
+    );
+  }, [activeId]);
+
+  // 一個 attention 事件 → 兩個互相獨立的決定。規則本體在 routeAttention
+  // （src/lib/terminalAttention.ts），那裡有單元測試釘住「提示點看分頁、
+  // 通知看視窗焦點」這兩者不能被合併。
+  const handleAttention = useCallback((tabId: string, tabTitle: string, kind: AttentionKind) => {
+    const { badge, notify } = routeAttention({
+      isActiveTab: activeIdRef.current === tabId,
+      windowFocused: windowFocusedRef.current,
+      kind,
+    });
+
+    if (badge) {
+      setTabs((prev) => prev.map((t) => (t.id === tabId ? { ...t, attention: badge } : t)));
+    }
+
+    if (notify) {
+      const body = kind === "waiting" ? t.terminal_notify_waiting : t.terminal_notify_failed;
+      ensureNotificationPermission().then((granted) => {
+        if (granted) sendNotification({ title: tabTitle, body });
+      }).catch(() => { /* 通知失敗不是使用者能處理的事 */ });
+    }
+  }, [t]);
 
   // Global Keyboard shortcuts for Tab Management
   useEffect(() => {
@@ -385,6 +436,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
                       prev.map((t) => t.id === tab.id ? { ...t, aiSummary: summary } : t)
                     );
                   }}
+                  onAttention={(kind) => handleAttention(tab.id, tab.title, kind)}
                 />
               )}
             </div>
