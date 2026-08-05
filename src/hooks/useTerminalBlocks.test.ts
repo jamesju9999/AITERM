@@ -282,6 +282,73 @@ describe("useTerminalBlocks", () => {
     expect(writePtyMock).toHaveBeenLastCalledWith("session-1", expect.stringContaining("cls\r"));
   });
 
+  it("calls onCommandSettled with the parsed exit code on OSC 133 D", async () => {
+    const onCommandSettled = vi.fn();
+    const { result } = renderHook(() =>
+      useTerminalBlocks("session-1", term, undefined, undefined, onCommandSettled),
+    );
+
+    act(() => {
+      result.current.submitCommand("false");
+    });
+    act(() => {
+      result.current.appendOutput("boom\r\n");
+    });
+
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;D;1\x07");
+    });
+
+    await waitFor(() => {
+      expect(onCommandSettled).toHaveBeenCalledWith(1);
+    });
+  });
+
+  it("calls onCommandSettled with 0 on a successful command", async () => {
+    const onCommandSettled = vi.fn();
+    const { result } = renderHook(() =>
+      useTerminalBlocks("session-1", term, undefined, undefined, onCommandSettled),
+    );
+
+    act(() => {
+      result.current.submitCommand("echo hi");
+    });
+    act(() => {
+      result.current.appendOutput("hi\r\n");
+    });
+
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;D;0\x07");
+    });
+
+    await waitFor(() => {
+      expect(onCommandSettled).toHaveBeenCalledWith(0);
+    });
+  });
+
+  it("does not call onCommandSettled when D carries no exit code (cmd.exe's PROMPT)", async () => {
+    const onCommandSettled = vi.fn();
+    const { result } = renderHook(() =>
+      useTerminalBlocks("session-1", term, undefined, undefined, onCommandSettled),
+    );
+
+    act(() => {
+      result.current.submitCommand("dir");
+    });
+    act(() => {
+      result.current.appendOutput("boom\r\n");
+    });
+
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;D\x07");
+    });
+
+    await waitFor(() => {
+      expect(result.current.blocks[0].status).toBe("completed");
+    });
+    expect(onCommandSettled).not.toHaveBeenCalled();
+  });
+
   it("beginTrackedBlock('CLS') wipes existing blocks without writing to the PTY (case-insensitive)", async () => {
     const { result } = renderHook(() => useTerminalBlocks("session-1", term));
 

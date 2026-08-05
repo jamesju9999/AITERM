@@ -141,7 +141,7 @@ export function routeAttention({ isActiveTab, windowFocused, kind }: AttentionIn
 - [ ] **Step 4: 執行測試，確認它通過**
 
 Run: `npx vitest run src/lib/terminalAttention.test.ts`
-Expected: PASS，9 個 test 全綠。
+Expected: PASS，6 個 test 全綠。
 
 - [ ] **Step 5: Commit**
 
@@ -351,7 +351,7 @@ function attentionLabel(kind: AttentionKind, t: ReturnType<typeof useLocale>["t"
 
 ```css
 /* 終端機提示點 — 錨在圖示右下角，與 mail unread（右上）分開。
-   狀態靠顏色區分；文字語意由 aria-label 承擔，點本身不含文字。 */
+   語意給看得見的人是「顏色 + 形狀」，給讀屏器是 aria-label；點本身不含文字。 */
 .terminal-attention-badge {
   position: absolute;
   bottom: -5px;
@@ -374,8 +374,14 @@ function attentionLabel(kind: AttentionKind, t: ReturnType<typeof useLocale>["t"
   background: #22c55e;
 }
 
+/* 方形而非圓形。紅綠是最典型的色盲失效組合，約 8% 的男性分不出
+   #22c55e 與 #ef4444——而「成功 vs 失敗」正是本功能最重要的區別，
+   aria-label 幫不了他們（看得見、不用讀屏器、也不會有 tooltip）。
+   同一支檔案的 .mail-connection-badge 早就不信任單靠顏色，
+   它在紅點裡放了一個字面的 "!"。 */
 .terminal-attention-badge--failed {
   background: #ef4444;
+  border-radius: 2px;
   box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
 }
 
@@ -421,6 +427,10 @@ git commit -m "feat(tabbar): 終端機分頁的三色提示點"
 **但有一個測試層面的真實後果，必須一併處理。** 現在的記憶化是 hook 內的 `useRef`，所以每個 hook 實例都有全新的快取；`useMailSync.test.ts` 第 174-229 行那批「權限被拒絕」的測試正是靠這點才成立——它們各自 mount 一次、各自重新走一遍權限流程。改成模組層級的單一 promise 之後，快取會跨測試存活：第 54 行那個測試會先把 `true` 快取起來，後面那些測試就再也不會呼叫 `requestPermission`。
 
 因此模組必須提供一個測試用的重設函式。**不要**改成 mock 掉 `../lib/notifyPermission` 來閃過——那會把整批專門驗證權限處理的測試架空，等於用刪測試來讓測試變綠。
+
+**而且真正危險的方向不是「變紅」。** 上面描述的是看得見的失敗：後面的 test 走不到 `requestPermission`，紅燈會告訴你。相反方向才難察覺——先跑的 test 把 `granted = true` 快取起來之後，後面任何斷言「有發出通知」的 test **都會通過**，即使權限處理已經壞掉。它會為了錯誤的理由變綠，而且沒有任何訊號。所以「每個會觸發通知的測試檔都要在 `beforeEach` 重設」是硬性要求，不是整潔問題。
+
+（跨檔案不用擔心：vitest 預設 `isolate: true`，每個測試檔有獨立的 module registry。危險只在單一檔案內的 test 順序。）
 
 **Files:**
 - Create: `src/lib/notifyPermission.ts`
@@ -741,22 +751,32 @@ import { routeAttention, type AttentionKind } from "../lib/terminalAttention";
   }, []);
 ```
 
-- [ ] **Step 3: 切到某分頁時清掉它的提示點**
+- [ ] **Step 3: 把清除收進「選取分頁」這個動作**
 
-在 Step 2 插入的內容**後面**再加一個 effect：
+在 Step 2 插入的內容**後面**加入：
 
 ```tsx
-  // 使用者選定的規則：切過去就算讀取過了。所以當前 active 的分頁
-  // 永遠不會有提示點。用函式式 setTabs 並在無事可做時回傳同一個陣列，
-  // 避免每次切分頁都製造新的 tabs 參考。
-  useEffect(() => {
+  // 切到某個分頁就把它的提示點清掉——使用者選定的規則是「切過去就算讀過」。
+  // 這裡而不是用一個以 activeId 為依賴的 effect：清除在語意上是「選取分頁」
+  // 的一部分，屬於事件本身，不是事後補償。也因此 active 分頁永遠不會有提示點。
+  const selectTab = useCallback((id: string) => {
+    setActiveId(id);
     setTabs((prev) =>
-      prev.some((t) => t.id === activeId && t.attention)
-        ? prev.map((t) => (t.id === activeId ? { ...t, attention: undefined } : t))
+      prev.some((t) => t.id === id && t.attention)
+        ? prev.map((t) => (t.id === id ? { ...t, attention: undefined } : t))
         : prev
     );
-  }, [activeId]);
+  }, []);
 ```
+
+然後把所有切換分頁的 `setActiveId(...)` 呼叫改走 `selectTab(...)`（本檔約 9 處）。`setActiveId` 保留為單純的 state setter，只有 `selectTab` 該被事件處理器與 props 呼叫。
+
+每一個呼叫點都真的需要清除，包括兩個不那麼明顯的：
+
+- 開新分頁那幾處是 no-op（新分頁不可能有 `attention`），無害，且讓選取語意保持一致。
+- **關閉分頁那一處最值得注意**：關掉分頁後會選到鄰居，而那個鄰居很可能正帶著提示點。在那裡清除是正確的，不是順帶。
+
+> 為什麼不用 effect：`react-hooks/set-state-in-effect` 會對 effect 版本報錯。要澄清的是，那個規則常見的疑慮（每次切分頁多一輪 render）在這裡**並不成立**——沒東西可清時 `setTabs` 回傳同一個陣列參考，React 會依 `Object.is` bail out。真正的問題是邏輯歸屬：清除屬於選取這個事件，不屬於事後的狀態調解。lint 變乾淨是副作用，不是目的。
 
 - [ ] **Step 4: 寫分派函式**
 
@@ -803,8 +823,10 @@ Expected: 兩者皆 exit 0。
 
 - [ ] **Step 7: Lint**
 
-Run: `npm run lint`
-Expected: exit 0、沒有新的警告。
+Run: `npx eslint src/lib/terminalAttention.ts src/lib/notifyPermission.ts src/components/TabBar/index.tsx src/components/TerminalView.tsx src/components/TerminalApp.tsx src/hooks/useTerminalBlocks.ts src/hooks/useMailSync.ts`
+Expected: 沒有輸出、exit 0。
+
+> **不要用 `npm run lint` 當作通過標準。** 這個 repo 的全庫 lint 現況本來就是紅的（91 個問題／71 個 error），全部落在與本功能無關的檔案（`CodeAssistantView`、`CommandBookmarks`、`DocConverterView`、`FileExplorer` 等）。那是既有債務，不屬於本功能的範圍，也不該由本功能順手清理。只檢查自己動過的檔案。
 
 - [ ] **Step 8: Commit**
 
@@ -835,32 +857,62 @@ Run: `npm run tauri:dev`
 4. 5 秒後，側邊欄的分頁 2 圖示右下角應出現**綠點**。
 5. 切到分頁 2 → 綠點消失。
 
-- [ ] **Step 3: 驗證「失敗」（紅點）**
+- [ ] **Step 3: 驗證「失敗」（紅色方點）**
 
-1. 在分頁 2 執行 `sleep 3; exit 1`（Windows：`Start-Sleep 3; exit 1`）。
+1. 在分頁 2 執行 `sleep 3; false`（Windows PowerShell：`Start-Sleep 3; cmd /c exit 1`）。
 2. 立刻切到分頁 1。
-3. 應出現**紅點**（不是綠點）。
+3. 應出現**紅色方點**（不是綠色圓點）。形狀差異是這裡的重點：`done` 與 `failed` 不能只靠紅綠區分，那組顏色對約 8% 的男性無效。截圖或瞇眼確認方形真的看得出來——`border-radius: 2px` 在 8px 見方上很容易被誤設成看起來仍像圓的。
+
+> **不要用 `exit 1`。** `exit` 會終止互動式 shell 本身，而 `D;<exitCode>` 是 shell 在**下一個 prompt** 的 `precmd` 裡送出的——shell 都結束了就不會有下一個 prompt，`D;1` 永遠不會送出，分頁的 PTY 直接死掉。你會看到「沒有紅點」並誤判成實作壞了。
 
 - [ ] **Step 4: 驗證「等待輸入」（橘色脈動點）**
 
-1. 在分頁 2 執行 `sleep 3; printf '\a'`（Windows PowerShell：`Start-Sleep 3; [console]::beep()` 不會走 PTY，改用 `Start-Sleep 3; Write-Host "`a" -NoNewline`）。
+1. 在分頁 2 執行 `sleep 3; printf '\a'; sleep 30`（Windows PowerShell：``Start-Sleep 3; Write-Host "`a" -NoNewline; Start-Sleep 30``）。
 2. 立刻切到分頁 1。
-3. 應出現**會脈動的橘點**。
+3. 3 秒後應出現**會脈動的橘點**，並且在後面那 30 秒內持續維持橘色。
+
+> **結尾的 `sleep 30` 不是湊數的，少了它這一步會自我抵銷。** 若指令在 bell 之後立刻結束，shell 的 `precmd` 會馬上送出 `D;0`，而依設計「後到的事件覆蓋前一個」，橘點會在幾毫秒內被綠點取代。你會看到綠點並誤判成「bell 沒接上」。留著行程不結束，才看得到 `waiting` 本身。
+>
+> Windows PowerShell 的 `[console]::beep()` **不會**走 PTY（它直接呼叫 Win32 API），所以一定要用 `Write-Host "`a"`。
 
 - [ ] **Step 5: 驗證 active 分頁不會有點**
 
-在**當前正在看的**分頁執行 `printf '\a'` 與 `exit 1`。側邊欄不該出現任何點。
+在**當前正在看的**分頁執行 `printf '\a'` 與 `false`。側邊欄不該出現任何點。（同樣不要用 `exit 1`。）
+
+- [ ] **Step 5b: 驗證關閉分頁時，切過去的鄰居會被清掉**
+
+這條路徑在自動測試裡零覆蓋（把 `handleCloseTab` 裡的清除拿掉，571 個測試依然全綠），所以只能靠這一步。
+
+1. 開三個分頁，當前停在分頁 1。
+2. 在分頁 3 執行 `sleep 5`，確認它跑完後出現綠點。
+3. **關閉分頁 1**（`Ctrl+W`），讓焦點落到帶著點的那個分頁上。
+4. 切過去的那個分頁上的點應該消失。
 
 - [ ] **Step 6: 驗證通知條件（僅限正式 build）**
 
 > **這一步在 `tauri:dev` 下驗證不了。** 依 `useMailSync.ts:104-111` 的說明，dev 模式下通知會以 `com.apple.Terminal` 的身分送出，且 `show()` 的結果被丟棄、失敗完全不可觀測。必須跑 `npm run tauri:build`（貢獻者用 `npm run tauri:build -- --no-sign`）並開啟產出的 bundle。
 
-1. 在分頁 2 執行 `sleep 8; printf '\a'`，然後**切換到別的 app**（讓 AITerm 失焦）。
+1. 在分頁 2 執行 `sleep 8; printf '\a'; sleep 30`，然後**切換到別的 app**（讓 AITerm 失焦）。
 2. 應收到桌面通知，標題為分頁名稱、內文為「正在等待你的回應」。
-3. 重複但改成 `sleep 8` 單獨執行（結束時 exit code 0）→ **不應**有通知（`done` 不發通知）。
-4. 讓 AITerm 保持在前景並重複第 1 步 → **不應**有通知（只有側邊欄的點）。
+3. 在分頁 2 執行 `sleep 8; false` 並切走 → 應收到通知，內文為「**指令執行失敗**」。這一項要分開驗：兩則內文的對應在 `notifyBodyKeyFor` 有測試釘住，但「哪一則會被送出去」只有這裡看得到。
+4. 重複但改成 `sleep 8` 單獨執行（結束時 exit code 0）→ **不應**有通知（`done` 不發通知）。
+5. 讓 AITerm 保持在前景並重複第 1 步 → **不應**有通知（只有側邊欄的點）。
+6. **冷卻驗證**：失焦狀態下在**同一個分頁**連續觸發兩次 `waiting`（例如 `sleep 5; printf '\a'; sleep 5; printf '\a'; sleep 30`）→ 只應收到**一則**通知（同分頁 30 秒冷卻）。
+7. **跨分頁不受冷卻影響**：失焦狀態下讓分頁 2 與分頁 3 各觸發一次 → 兩則通知都要收到。
 
-- [ ] **Step 7: 記錄結果**
+- [ ] **Step 7: 驗證 bell 的誤報率（這是本設計唯一會誤報的訊號）**
+
+`onBell` 對**每一個** `\x07` 都會觸發，不只是「CLI 在問你問題」。已知的無辜來源至少有：bash readline 在 tab 補全有歧義時的嗶聲、zsh 走到歷史盡頭的嗶聲。
+
+設計文件的原則是「寧可漏報，不可誤報」，所以這一項要實測：
+
+1. 在**預設的 bash**（不是你自訂過的 shell）開一個分頁，切到別的分頁。
+2. 在該分頁打幾個字後連按兩次 Tab 製造歧義補全，讓它嗶。
+3. 看側邊欄是否亮起橘點。
+
+實務上這個誤報對提示點影響有限（你當時人就在那個分頁打字，而 active 分頁不會亮點），對通知更小（要打字就代表視窗有 focus，而通知只在失焦時發）。但如果背景腳本會嗶，橘點就會無故亮起。若實測發現吵到無法接受，回頭調整的方向是「只在 alternate buffer 中才把 bell 視為 waiting」，不是加靜默啟發式。
+
+- [ ] **Step 8: 記錄結果**
 
 把每一步的實際結果寫下來。若 Step 4 的 bell 在你的 shell 上沒有觸發，先確認該 shell 有沒有把 bell 靜音（zsh 的 `unsetopt beep`、`.inputrc` 的 `set bell-style none`），再判定是實作問題。
 
@@ -869,7 +921,7 @@ Run: `npm run tauri:dev`
 ## 已知限制（實作時不要試圖「修好」）
 
 - **全螢幕 TUI 期間沒有 OSC 133 訊號。** Claude Code、vim、lazygit 執行期間，shell 只把它們視為一個還在跑的指令；`D` 要等程式退出才發出。那段時間唯一的訊號是 bell。
-- **因此「Claude Code 問問題時會不會亮橘燈」取決於它自己有沒有敲 bell**，那是該工具的通知設定，AITerm 控制不了。第一版接受這個漏報。
+- **因此「Claude Code 問問題時會不會亮橘燈」取決於它自己有沒有敲 bell**，那是該工具的通知設定，AITerm 控制不了。Claude Code 預設**只在 Ghostty / Kitty / iTerm2 送通知**，其他終端機要在 `~/.claude/settings.json` 設 `"preferredNotifChannel": "terminal_bell"`（設完要開新分頁才生效）。2026-08-05 已實測通過，詳見設計文件〈已知限制〉。
 - **不要為了補上這個漏報而加輸出靜默的啟發式判斷。** 設計文件已經評估並否決：跑很久的編譯、卡住的下載、開著沒動的 vim 都會被誤判成「等你回答」，而誤判過幾次之後使用者就會永久無視這個提示。原則是**寧可漏報，不可誤報**。
 
 ## 跨平台

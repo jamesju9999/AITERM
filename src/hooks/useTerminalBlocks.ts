@@ -40,6 +40,10 @@ export function useTerminalBlocks(
   term: Terminal | null,
   cwdRef?: React.RefObject<string>,
   onLiveClear?: () => void,
+  /** 每次有指令跑完就呼叫，帶上它的 exit code。給側邊欄提示點用。
+   *  必須是穩定的參考（useCallback 空依賴或 ref 橋接）——它進了下面
+   *  OSC handler effect 的依賴陣列，每次換身分都會重新註冊 handler。 */
+  onCommandSettled?: (exitCode: number) => void,
 ): UseTerminalBlocksResult {
   const [blocks, setBlocks] = useState<TerminalBlock[]>([]);
   const [isAlternateBuffer, setIsAlternateBuffer] = useState(false);
@@ -148,7 +152,11 @@ export function useTerminalBlocks(
         return true;
       } else if (data.startsWith("D")) {
         const parts = data.split(";");
-        const exitCode = parts.length > 1 ? parseInt(parts[1], 10) : 0;
+        // parts.length > 1 也拿來判斷「這次的 D 到底有沒有帶 exit code」，
+        // 給下面的 onCommandSettled 用——這裡沿用既有 parse 出來的 exitCode
+        // 本身完全不動，只是額外記住它是不是真的被送出來的。
+        const hasExitCode = parts.length > 1;
+        const exitCode = hasExitCode ? parseInt(parts[1], 10) : 0;
 
         const prev = blocksRef.current;
         if (prev.length === 0) return true;
@@ -189,6 +197,18 @@ export function useTerminalBlocks(
           finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode, { clearOnParsed: true });
         }
 
+        // 兩條分支（Windows/ConPTY 與其他平台）的差別只在畫面清除時機，
+        // 對「指令結束了、結果是什麼」沒有影響，所以放在合流之後呼叫一次。
+        //
+        // 但只有真的帶了 exit code 才通知側邊欄。cmd.exe 的 PROMPT（見
+        // src-tauri/src/pty/shell.rs）只送出裸的 "D"，不像 PowerShell/zsh/bash
+        // 那樣附上 exit code——這種情況下無法分辨指令是成功還是失敗，若照舊
+        // 假設成 0 會把失敗的指令顯示成綠色的 "done"，是誤報。沒有 exit code
+        // 就什麼提示點都不設，符合「寧可漏報，不可誤報」的原則。
+        if (hasExitCode) {
+          onCommandSettled?.(isNaN(exitCode) ? 0 : exitCode);
+        }
+
         return true;
       }
       return false;
@@ -202,7 +222,7 @@ export function useTerminalBlocks(
     // handler writes to it — the effect must re-register once the PTY session
     // id lands (it's set async after `term`) so the handler's closure isn't
     // holding the initial empty id.
-  }, [term, finalizeBlock, onLiveClear, sessionId]);
+  }, [term, finalizeBlock, onLiveClear, sessionId, onCommandSettled]);
 
   const submitCommand = useCallback(
     (cmd: string, onComplete?: (block: TerminalBlock) => void) => {

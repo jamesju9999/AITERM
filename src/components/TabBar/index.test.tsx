@@ -98,3 +98,81 @@ describe("TabBar mail connection-failure indicator", () => {
     expect(failure.className).not.toBe(unread.className);
   });
 });
+
+// LocaleProvider 預設 zh-TW，所以這裡斷言 zh-TW 的無障礙名稱。
+describe("TabBar terminal attention indicator", () => {
+  // 提示點只出現在非 active 分頁上，所以這裡刻意讓 activeId 指向另一個分頁。
+  const twoTabs: Tab[] = [
+    { id: "t1", title: "Tab 1", type: "terminal" },
+    { id: "t2", title: "Tab 2", type: "terminal" },
+  ];
+
+  it("等待輸入時標示該分頁", () => {
+    renderTabBar({
+      tabs: [twoTabs[0], { ...twoTabs[1], attention: "waiting" }],
+      activeId: "t1",
+    });
+    expect(screen.getByRole("img", { name: "終端機正在等待你的回應" })).toBeTruthy();
+  });
+
+  it("指令完成時標示該分頁", () => {
+    renderTabBar({
+      tabs: [twoTabs[0], { ...twoTabs[1], attention: "done" }],
+      activeId: "t1",
+    });
+    expect(screen.getByRole("img", { name: "終端機指令已完成" })).toBeTruthy();
+  });
+
+  it("指令失敗時標示該分頁", () => {
+    renderTabBar({
+      tabs: [twoTabs[0], { ...twoTabs[1], attention: "failed" }],
+      activeId: "t1",
+    });
+    expect(screen.getByRole("img", { name: "終端機指令失敗" })).toBeTruthy();
+  });
+
+  it("三種狀態用不同的 class，才能是三種不同顏色", () => {
+    for (const attention of ["waiting", "done", "failed"] as const) {
+      const { unmount } = renderTabBar({
+        tabs: [twoTabs[0], { ...twoTabs[1], attention }],
+        activeId: "t1",
+      });
+      expect(screen.getByRole("img", { name: /終端機/ }).className)
+        .toContain(`terminal-attention-badge--${attention}`);
+      unmount();
+    }
+  });
+
+  it("沒有 attention 時什麼都不顯示", () => {
+    renderTabBar({ tabs: twoTabs, activeId: "t1" });
+    expect(screen.queryByRole("img", { name: /終端機/ })).toBeNull();
+  });
+
+  it("非終端機分頁不顯示提示點", () => {
+    renderTabBar({
+      tabs: [twoTabs[0], { id: "m1", title: "Mail", type: "mail", attention: "waiting" }],
+      activeId: "t1",
+    });
+    expect(screen.queryByRole("img", { name: /終端機/ })).toBeNull();
+  });
+
+  // 與既有 mail badge 的關係：兩者語意完全不同，class 必須可區分。
+  // 比照本檔既有的「stays distinguishable from the unread badge」測試。
+  it("與 mail 的 badge class 不相同", () => {
+    const { unmount } = renderTabBar({
+      tabs: [twoTabs[0], { ...twoTabs[1], attention: "failed" }],
+      activeId: "t1",
+    });
+    const attention = screen.getByRole("img", { name: "終端機指令失敗" }).className;
+    unmount();
+
+    renderTabBar({
+      tabs: [{ id: "m1", title: "Mail", type: "mail" }],
+      activeId: "t1",
+      mailFailedAccountCount: 1,
+    });
+    const mailFailure = screen.getByRole("img", { name: "1 個信箱帳號連線失敗" }).className;
+
+    expect(attention).not.toBe(mailFailure);
+  });
+});

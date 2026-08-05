@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { sendNotification } from "@tauri-apps/plugin-notification";
 import { MAIL_SYNC_EVENT, mailCountUnread, type MailSyncEvent } from "../ipc/mail";
+import { ensureNotificationPermission } from "../lib/notifyPermission";
 
 /**
  * Tracks the global unread mail count and per-account connection health, and
@@ -24,7 +25,6 @@ export function useMailSync() {
   const [failedAccountIds, setFailedAccountIds] = useState<ReadonlySet<string>>(() => new Set());
   const mountedRef = useRef(true);
   const seqRef = useRef(0);
-  const permissionRef = useRef<Promise<boolean> | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -47,28 +47,6 @@ export function useMailSync() {
     }).catch((err) => {
       console.error("[mail] failed to count unread messages:", err);
     });
-  }, []);
-
-  // Resolved once per session and cached: otherwise every important message
-  // costs another permission round-trip, and a burst of them would stack
-  // concurrent requestPermission() prompts — including re-prompting a user who
-  // already said no.
-  //
-  // Desktop caveat (tauri-plugin-notification 2.3.3, desktop.rs:61-66): both
-  // permission_state() and request_permission() unconditionally return Granted
-  // on desktop — the OS permission is never actually consulted here. This stays
-  // because it is the plugin's documented API and is load-bearing on mobile,
-  // but on macOS/Windows/Linux it always resolves true.
-  const ensureNotificationPermission = useCallback((): Promise<boolean> => {
-    permissionRef.current ??= isPermissionGranted()
-      .then((granted) => granted || requestPermission().then((p) => p === "granted"))
-      .catch((err) => {
-        console.error("[mail] notification permission check failed:", err);
-        // Don't cache a transient IPC failure as a denial.
-        permissionRef.current = null;
-        return false;
-      });
-    return permissionRef.current;
   }, []);
 
   useEffect(() => {
@@ -128,7 +106,7 @@ export function useMailSync() {
         try { Promise.resolve(unlisten()).catch(() => {}); } catch { /* teardown races are not actionable */ }
       }
     };
-  }, [refreshUnread, ensureNotificationPermission]);
+  }, [refreshUnread]);
 
   return { unreadCount, failedAccountCount: failedAccountIds.size, refreshUnread };
 }

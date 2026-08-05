@@ -659,6 +659,14 @@ const zhTW = {
     preview_blocked_msg: "此操作因安全原因被永久封鎖。[Esc] 取消",
     // TabBar
     tabbar_sidebar_expand: "開啟側邊欄 (Ctrl+B)",
+    // 側邊欄終端機提示點：aria-label（顏色只對看得見的人有意義，
+    // 狀態語意必須另外用文字表達）
+    terminal_attention_waiting_label: "終端機正在等待你的回應",
+    terminal_attention_done_label: "終端機指令已完成",
+    terminal_attention_failed_label: "終端機指令失敗",
+    // 桌面通知內文（標題用分頁名稱）
+    terminal_notify_waiting: "正在等待你的回應",
+    terminal_notify_failed: "指令執行失敗",
     tabbar_sidebar_collapse: "關閉側邊欄 (Ctrl+B)",
     tabbar_header: "AITerm 分頁",
     tabbar_new_tab_tip: "新分頁 (Ctrl+T)",
@@ -1751,6 +1759,11 @@ const enRaw = {
     preview_blocked_msg: "This operation is permanently blocked for safety. [Esc] Cancel",
     // TabBar
     tabbar_sidebar_expand: "Open Sidebar (Ctrl+B)",
+    terminal_attention_waiting_label: "Terminal is waiting for your response",
+    terminal_attention_done_label: "Terminal command finished",
+    terminal_attention_failed_label: "Terminal command failed",
+    terminal_notify_waiting: "Waiting for your response",
+    terminal_notify_failed: "A command failed",
     tabbar_sidebar_collapse: "Close Sidebar (Ctrl+B)",
     tabbar_header: "AITerm Tabs",
     tabbar_new_tab_tip: "New Tab (Ctrl+T)",

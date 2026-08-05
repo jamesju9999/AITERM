@@ -333,3 +333,49 @@
   border-radius: 8px;
   gap: 0;
 }
+
+/* 終端機提示點 — 錨在圖示右下角，與 mail unread（右上）分開。
+   語意給看得見的人是「顏色 + 形狀」，給讀屏器是 aria-label；點本身不含文字。 */
+.terminal-attention-badge {
+  position: absolute;
+  bottom: -5px;
+  right: -7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--bg-secondary, #151515);
+  pointer-events: none;
+}
+
+/* 只有「等待輸入」會動：它是唯一需要使用者「現在」動手的狀態。 */
+.terminal-attention-badge--waiting {
+  background: #f59e0b;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+  animation: terminal-attention-pulse 1.6s ease-in-out infinite;
+}
+
+.terminal-attention-badge--done {
+  background: #22c55e;
+}
+
+/* 方形而非圓形。紅綠是最典型的色盲失效組合，約 8% 的男性分不出
+   #22c55e 與 #ef4444——而「成功 vs 失敗」正是這個功能最重要的區別。
+   aria-label 幫不了他們：他們看得見、不用讀屏器，aria-label 也不會產生
+   tooltip。上面的 .mail-connection-badge 早就不信任單靠顏色傳達故障，
+   它在紅點裡放了一個字面的 "!"。 */
+.terminal-attention-badge--failed {
+  background: #ef4444;
+  border-radius: 2px;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
+}
+
+@keyframes terminal-attention-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .terminal-attention-badge--waiting {
+    animation: none;
+  }
+}
