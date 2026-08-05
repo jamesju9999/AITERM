@@ -41,6 +41,18 @@ pub fn set_appimage_integration_declined(config: State<Arc<ConfigStore>>) -> Res
 }
 
 #[tauri::command]
+pub fn is_claude_notif_declined(config: State<Arc<ConfigStore>>) -> bool {
+    config.get().claude_notif_declined
+}
+
+#[tauri::command]
+pub fn set_claude_notif_declined(config: State<Arc<ConfigStore>>) -> Result<(), String> {
+    config
+        .update(|cfg| { cfg.claude_notif_declined = true; })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn set_submit_shortcut(
     shortcut: SubmitShortcut,
     config: State<Arc<ConfigStore>>,

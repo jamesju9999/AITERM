@@ -27,6 +27,7 @@ use commands::{
     },
     appimage::{appimage_integrate, appimage_integration_state, appimage_remove_integration},
     ai::{agent_chat, ai_chat, ai_query},
+    claude_notif::{claude_notif_enable_bell, claude_notif_needs_prompt},
     code_assistant::code_assistant_chat,
     knowledge_base::{
         kb_create_notebook, kb_list_notebooks, kb_delete_notebook, kb_sync_notebook, kb_chat, kb_open_document,
@@ -34,7 +35,8 @@ use commands::{
         kb_list_embedding_models,
     },
     config::{
-        get_config, is_appimage_integration_declined, is_onboarding_done, set_appimage_integration_declined,
+        get_config, is_appimage_integration_declined, is_claude_notif_declined, is_onboarding_done,
+        set_appimage_integration_declined, set_claude_notif_declined,
         set_default_tab, set_execution_mode, set_max_agent_steps, set_onboarding_done, set_submit_shortcut,
     },
     enterprise::{
@@ -310,6 +312,10 @@ pub fn run() {
             set_onboarding_done,
             is_appimage_integration_declined,
             set_appimage_integration_declined,
+            is_claude_notif_declined,
+            set_claude_notif_declined,
+            claude_notif_needs_prompt,
+            claude_notif_enable_bell,
             set_submit_shortcut,
             set_default_tab,
             // Provider management

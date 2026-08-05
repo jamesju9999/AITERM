@@ -84,6 +84,17 @@ pub(crate) fn enable_bell_at(settings_path: &Path) -> Result<(), String> {
     })
 }
 
+#[tauri::command]
+pub fn claude_notif_needs_prompt() -> bool {
+    claude_settings_path().map(|p| needs_prompt_at(&p)).unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn claude_notif_enable_bell() -> Result<(), String> {
+    let path = claude_settings_path().ok_or_else(|| "could not resolve the user's home directory".to_string())?;
+    enable_bell_at(&path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
