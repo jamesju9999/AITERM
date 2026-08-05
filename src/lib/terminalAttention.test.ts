@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { routeAttention } from "./terminalAttention";
+import { attentionForExitCode, routeAttention } from "./terminalAttention";
 
 describe("routeAttention — 提示點", () => {
   it("非 active 分頁會設出對應的提示點", () => {
@@ -37,5 +37,17 @@ describe("routeAttention — 桌面通知", () => {
     const r = routeAttention({ isActiveTab: true, windowFocused: false, kind: "waiting" });
     expect(r.badge).toBeNull();
     expect(r.notify).toBe(true);
+  });
+});
+
+describe("attentionForExitCode", () => {
+  it("exit code 0 → done", () => {
+    expect(attentionForExitCode(0)).toBe("done");
+  });
+
+  it("非 0 的 exit code → failed", () => {
+    expect(attentionForExitCode(1)).toBe("failed");
+    expect(attentionForExitCode(-1)).toBe("failed");
+    expect(attentionForExitCode(127)).toBe("failed");
   });
 });

@@ -43,7 +43,7 @@ import { FileExplorer } from "./FileExplorer/FileExplorer";
 import { CommandBookmarksPicker, addBookmark } from "./CommandBookmarks";
 import { getActiveTheme, type AppTheme } from "../lib/themes";
 import { readLineExcludingInlinePrediction } from "../lib/terminalLinePrediction";
-import type { AttentionKind } from "../lib/terminalAttention";
+import { attentionForExitCode, type AttentionKind } from "../lib/terminalAttention";
 import { RobotIcon, SparklesIcon, SmartphoneIcon } from "./Icons";
 import { TerminalBlockCard } from "./TerminalBlockCard";
 import { findNextBlockMatch, findPreviousBlockMatch, type BlockSearchCursor } from "../lib/blockSearch";
@@ -267,7 +267,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   }, []);
 
   const handleCommandSettled = useCallback((exitCode: number) => {
-    emitAttention(exitCode === 0 ? "done" : "failed");
+    emitAttention(attentionForExitCode(exitCode));
   }, [emitAttention]);
 
   const { blocks, isAlternateBuffer, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo } = useTerminalBlocks(

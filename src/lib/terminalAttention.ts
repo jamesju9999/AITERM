@@ -29,3 +29,8 @@ export function routeAttention({ isActiveTab, windowFocused, kind }: AttentionIn
     notify: !windowFocused && (kind === "waiting" || kind === "failed"),
   };
 }
+
+/** OSC 133 D 帶回來的 exit code 對應到哪一種 attention。 */
+export function attentionForExitCode(exitCode: number): AttentionKind {
+  return exitCode === 0 ? "done" : "failed";
+}
