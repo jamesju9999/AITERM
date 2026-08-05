@@ -163,7 +163,18 @@ git commit -m "feat(claude-notif): 判斷指令是否在啟動 Claude Code"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 ```
 
-沒有這個 feature 的話，`serde_json::Map` 是 `BTreeMap`，「解析 → 插入 → 序列化」會把使用者的 key **全部按字母重排**，整個設定檔改頭換面。這個 feature 把它換成 `IndexMap`，保留插入順序。只影響無型別 `Value` 的序列化順序（`derive` 的結構本來就照宣告順序），對送往 API 的 JSON 無關緊要。
+沒有這個 feature 的話，`serde_json::Map` 是 `BTreeMap`，「解析 → 插入 → 序列化」會把使用者的 key **全部按字母重排**，整個設定檔改頭換面。這個 feature 把它換成 `IndexMap`，保留插入順序。
+
+**但它有一個跨模組的副作用，必須在同一個分支修掉。** `Value` 的 `Display` 不再是正規化形式，而 `src-tauri/src/code_assistant/mod.rs:321` 與 `src-tauri/src/knowledge_base/chat.rs:136` 的 `tool_call_key` 正是用 `format!("{}", args)` 當 tool call 的去重／防迴圈 key。實測：
+
+```
+開 preserve_order：{"path":"src","depth":3} 與 {"depth":3,"path":"src"} → 視為不同呼叫
+未開：            兩者相同 → 正確去重
+```
+
+args 來自 LLM，而這個守衛存在的理由正是擋住會重複呼叫的小型／本地模型——也正是最會亂排 key 順序的那群。`tool_call_key` 要自己做正規化，不能依賴 `Display`。既有的 `dedup_key_is_stable` 測試（`code_assistant/mod.rs:833`）拿同一個 `Value` 比兩次，兩種設定都會過，抓不到這件事。
+
+送往 API 的 JSON 順序改變本身無關緊要。`derive` 的結構本來就照宣告順序，不受影響。
 
 - [ ] **Step 2: 宣告模組**
 
@@ -300,6 +311,30 @@ mod tests {
         assert!(enable_bell_at(&path).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), original);
     }
+
+    // 空檔案要當成「還沒有設定」，不是壞檔案。理由不只是嚴謹：非原子的
+    // 寫入在磁碟滿時產生的就是空檔案，若把它當成壞檔案，needs_prompt 會
+    // 回 false，功能對這位使用者靜默失效——正是本功能想解決的失效方式。
+    #[test]
+    fn empty_settings_file_asks() {
+        let path = claude_dir_with(Some(""));
+        assert!(needs_prompt_at(&path));
+    }
+
+    #[test]
+    fn enable_bell_fills_in_an_empty_file() {
+        let path = claude_dir_with(Some("   \n"));
+        enable_bell_at(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains(r#""preferredNotifChannel": "terminal_bell""#));
+    }
+
+    #[test]
+    fn write_ends_with_a_trailing_newline() {
+        let path = claude_dir_with(Some(r#"{"model":"sonnet"}"#));
+        enable_bell_at(&path).unwrap();
+        assert!(fs::read_to_string(&path).unwrap().ends_with("}\n"));
+    }
 }
 ```
 
@@ -366,22 +401,42 @@ pub(crate) fn needs_prompt_at(settings_path: &Path) -> bool {
 
 /// 把 `preferredNotifChannel` 設成 `terminal_bell`，其餘內容原樣保留。
 ///
-/// 檔案不存在就建立（含上層目錄）。JSON 壞掉時回 Err 而且**不寫入**：
-/// 使用者的設定檔壞掉是他自己要處理的事，不是我們拿來重置的理由。
+/// JSON 壞掉時回 Err 而且**不寫入**：使用者的設定檔壞掉是他自己要處理的事，
+/// 不是我們拿來重置的理由。
+///
+/// 寫入走「暫存檔 + rename」而非 fs::write。fs::write 會在寫入任何一個
+/// byte 之前先 truncate——實測過，磁碟滿的時候一個 24570 bytes 的設定檔
+/// 會變成 0 bytes，而且錯誤訊息如實回報：使用者看到「設定失敗」，同時他的
+/// Claude Code 設定已經全毀。同倉庫的 config/mod.rs:141-146 對本 app 自己
+/// 的設定檔早就這樣做了，這裡動的是別人的檔案更沒理由不做。
 pub(crate) fn enable_bell_at(settings_path: &Path) -> Result<(), String> {
     let mut map = read_object(settings_path)?;
     map.insert(KEY.to_string(), Value::String(BELL.to_string()));
 
-    if let Some(parent) = settings_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("建立 {} 失敗：{e}", parent.display()))?;
-    }
     let text = serde_json::to_string_pretty(&Value::Object(map))
-        .map_err(|e| format!("序列化設定失敗：{e}"))?;
-    fs::write(settings_path, text + "\n")
-        .map_err(|e| format!("寫入 {} 失敗：{e}", settings_path.display()))
+        .map_err(|e| format!("failed to serialise settings: {e}"))?
+        + "\n";
+
+    // 先解 symlink：dotfile 管理器（chezmoi / stow / yadm）常把 settings.json
+    // 做成連結，直接 rename 蓋上去會把連結換成普通檔，默默弄壞他們的設定。
+    let target = fs::canonicalize(settings_path).unwrap_or_else(|_| settings_path.to_path_buf());
+    let tmp = target.with_extension("json.aiterm-tmp");
+    fs::write(&tmp, &text)
+        .map_err(|e| { let _ = fs::remove_file(&tmp); format!("failed to write temp file: {e}") })?;
+    // 沿用原檔權限：新建的暫存檔是 0644，而使用者的設定檔很可能是 0600。
+    if let Ok(meta) = fs::metadata(&target) {
+        let _ = fs::set_permissions(&tmp, meta.permissions());
+    }
+    fs::rename(&tmp, &target)
+        .map_err(|e| { let _ = fs::remove_file(&tmp); format!("failed to write {}: {e}", target.display()) })
 }
 ```
+
+> **沒有 `create_dir_all`。** `needs_prompt_at` 已經要求 parent 是目錄，卡片才會出現，所以「上層目錄不存在」是不可達的狀態——CLAUDE.md §2 明說不要為不可能的情境寫錯誤處理。萬一 `~/.claude` 真的在檢查與點擊之間消失，暫存檔寫入會失敗並回一個乾淨的錯誤，原檔不動，這本來就是正確結果。
+>
+> **不加 `fsync`。** `config/mod.rs` 也沒有，而 rename 已經堵住真正會傷人的「截斷」那一類。
+>
+> **錯誤字串用英文**，比照本模組的樣板 `src-tauri/src/commands/appimage.rs`。卡片會把 `String(e)` 原樣渲染在一張其他文字都有 i18n 的介面上，中文錯誤會讓 en 使用者看到中英混雜。doc comment 維持繁體中文——那是給我們看的，錯誤字串是給使用者看的。
 
 - [ ] **Step 6: 執行測試，確認它通過**
 
