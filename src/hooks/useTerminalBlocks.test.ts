@@ -304,6 +304,28 @@ describe("useTerminalBlocks", () => {
     });
   });
 
+  it("calls onCommandSettled with 0 on a successful command", async () => {
+    const onCommandSettled = vi.fn();
+    const { result } = renderHook(() =>
+      useTerminalBlocks("session-1", term, undefined, undefined, onCommandSettled),
+    );
+
+    act(() => {
+      result.current.submitCommand("echo hi");
+    });
+    act(() => {
+      result.current.appendOutput("hi\r\n");
+    });
+
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;D;0\x07");
+    });
+
+    await waitFor(() => {
+      expect(onCommandSettled).toHaveBeenCalledWith(0);
+    });
+  });
+
   it("beginTrackedBlock('CLS') wipes existing blocks without writing to the PTY (case-insensitive)", async () => {
     const { result } = renderHook(() => useTerminalBlocks("session-1", term));
 
