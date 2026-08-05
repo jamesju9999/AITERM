@@ -214,13 +214,9 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
       const canClose = await guard();
       if (!canClose) return;
     }
-    // 這裡不能直接呼叫 selectTab：它內部也會呼叫 setTabs，若在下面這個
-    // setTabs 的 updater 裡巢狀呼叫，等於在同一個 state 的更新佇列還在
-    // 處理時再次 dispatch 同一個 state，時機沒有保證、有兩邊更新互相蓋掉
-    // 的風險。改成先在 updater 裡把「切到誰」記下來，等這次 setTabs 呼叫
-    // 完再依序（非巢狀）補一次 setTabs 清點——跟連續呼叫兩次 setState 一樣，
-    // 保證照順序疊加。
-    let nextActiveId: string | null = null;
+    // 這裡不能直接呼叫 selectTab：它內部也會呼叫 setTabs，巢狀呼叫等於在
+    // 同一個 state 的更新佇列還在處理時再次 dispatch 同一個 state。改成
+    // 清除跟著同一個 updater 的回傳值一起算，不另外呼叫 setTabs。
     setTabs((prev) => {
       const idx = prev.findIndex((t) => t.id === id);
       if (idx === -1) return prev;
@@ -230,26 +226,19 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
       if (nextTabs.length === 0) {
         const newId = crypto.randomUUID();
         setActiveId(newId);
-        nextActiveId = newId;
         return [{ id: newId, title: "Terminal", type: "terminal" }];
       }
 
       // If closing active tab, switch to adjacent tab
       if (activeIdRef.current === id) {
-        const nextActive = nextTabs[Math.min(idx, nextTabs.length - 1)].id;
-        setActiveId(nextActive);
-        nextActiveId = nextActive;
+        const nextActive = nextTabs[Math.min(idx, nextTabs.length - 1)];
+        setActiveId(nextActive.id);
+        // 切過去的鄰居可能正帶著提示點，一併清掉——與 selectTab 同一條規則，
+        // 只是這裡在同一個 updater 裡純粹地做完，不需要第二次 setTabs。
+        return nextTabs.map((t) => (t.id === nextActive.id ? { ...t, attention: undefined } : t));
       }
       return nextTabs;
     });
-    if (nextActiveId) {
-      const clearedId = nextActiveId;
-      setTabs((prev) =>
-        prev.some((t) => t.id === clearedId && t.attention)
-          ? prev.map((t) => (t.id === clearedId ? { ...t, attention: undefined } : t))
-          : prev
-      );
-    }
   }, []);
 
   const handleRename = useCallback((id: string, newTitle: string) => {
