@@ -43,6 +43,7 @@ import { FileExplorer } from "./FileExplorer/FileExplorer";
 import { CommandBookmarksPicker, addBookmark } from "./CommandBookmarks";
 import { getActiveTheme, type AppTheme } from "../lib/themes";
 import { readLineExcludingInlinePrediction } from "../lib/terminalLinePrediction";
+import type { AttentionKind } from "../lib/terminalAttention";
 import { RobotIcon, SparklesIcon, SmartphoneIcon } from "./Icons";
 import { TerminalBlockCard } from "./TerminalBlockCard";
 import { findNextBlockMatch, findPreviousBlockMatch, type BlockSearchCursor } from "../lib/blockSearch";
@@ -115,6 +116,10 @@ export interface TerminalViewProps {
   onAgentProgress?: (done: number, total: number) => void;
   /** Called with a freshly generated AI summary of this tab's conversation, for the title bar. */
   onSummaryUpdate?: (summary: string) => void;
+  /** 這個分頁發生了需要使用者注意的事。TerminalView 一律回報，
+   *  「這個分頁是不是 active」與「視窗有沒有 focus」都由 TerminalApp 判斷——
+   *  避免那些條件在 xterm / PTY 事件的 closure 裡變 stale。 */
+  onAttention?: (kind: AttentionKind) => void;
 }
 
 // The live terminal pane's visible height shrinks to just the current content
@@ -139,7 +144,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onSummaryUpdate }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onSummaryUpdate, onAttention }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -250,12 +255,38 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     term.refresh(0, term.rows - 1);
   }, []);
 
+  // TerminalApp 傳進來的是 inline arrow function，每次 render 都是新身分。
+  // 直接把它放進 useTerminalBlocks 的依賴會讓 OSC handler 每次 render
+  // 重新註冊。橋接成 ref，對外露出一個永久穩定的 emitAttention——
+  // 與本檔 submitCommandRef / beginTrackedBlockRef 同樣的理由與作法。
+  const onAttentionRef = useRef(onAttention);
+  useEffect(() => { onAttentionRef.current = onAttention; }, [onAttention]);
+
+  const emitAttention = useCallback((kind: AttentionKind) => {
+    onAttentionRef.current?.(kind);
+  }, []);
+
+  const handleCommandSettled = useCallback((exitCode: number) => {
+    emitAttention(exitCode === 0 ? "done" : "failed");
+  }, [emitAttention]);
+
   const { blocks, isAlternateBuffer, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo } = useTerminalBlocks(
     sessionId,
     termState,
     lastCwdRef,
     forceLiveRepaint,
+    handleCommandSettled,
   );
+
+  // 終端機的 bell（\x07）。CLI 工具停下來等使用者回答時多半會敲一次——
+  // 這是全螢幕 TUI（Claude Code、vim、lazygit）執行期間唯一可用的訊號，
+  // 因為 shell 在那段期間把整個 TUI 視為「一個還在跑的指令」，
+  // OSC 133 D 要等它退出才會發出。
+  useEffect(() => {
+    if (!termState) return;
+    const disposable = termState.onBell(() => emitAttention("waiting"));
+    return () => disposable.dispose();
+  }, [termState, emitAttention]);
 
   // Bridge submitCommand into a ref so the stale term.onData closure can access the latest version
   const submitCommandRef = useRef(submitCommand);
