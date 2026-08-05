@@ -351,7 +351,7 @@ function attentionLabel(kind: AttentionKind, t: ReturnType<typeof useLocale>["t"
 
 ```css
 /* 終端機提示點 — 錨在圖示右下角，與 mail unread（右上）分開。
-   狀態靠顏色區分；文字語意由 aria-label 承擔，點本身不含文字。 */
+   語意給看得見的人是「顏色 + 形狀」，給讀屏器是 aria-label；點本身不含文字。 */
 .terminal-attention-badge {
   position: absolute;
   bottom: -5px;
@@ -374,8 +374,14 @@ function attentionLabel(kind: AttentionKind, t: ReturnType<typeof useLocale>["t"
   background: #22c55e;
 }
 
+/* 方形而非圓形。紅綠是最典型的色盲失效組合，約 8% 的男性分不出
+   #22c55e 與 #ef4444——而「成功 vs 失敗」正是本功能最重要的區別，
+   aria-label 幫不了他們（看得見、不用讀屏器、也不會有 tooltip）。
+   同一支檔案的 .mail-connection-badge 早就不信任單靠顏色，
+   它在紅點裡放了一個字面的 "!"。 */
 .terminal-attention-badge--failed {
   background: #ef4444;
+  border-radius: 2px;
   box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
 }
 
@@ -841,7 +847,7 @@ Run: `npm run tauri:dev`
 
 1. 在分頁 2 執行 `sleep 3; exit 1`（Windows：`Start-Sleep 3; exit 1`）。
 2. 立刻切到分頁 1。
-3. 應出現**紅點**（不是綠點）。
+3. 應出現**紅色方點**（不是綠色圓點）。形狀差異是這裡的重點：`done` 與 `failed` 不能只靠紅綠區分，那組顏色對約 8% 的男性無效。截圖或瞇眼確認方形真的看得出來——`border-radius: 2px` 在 8px 見方上很容易被誤設成看起來仍像圓的。
 
 - [ ] **Step 4: 驗證「等待輸入」（橘色脈動點）**
 

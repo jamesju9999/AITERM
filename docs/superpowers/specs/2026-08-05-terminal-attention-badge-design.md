@@ -91,17 +91,19 @@ onAttention={(kind) => {
 
 渲染在既有的 `.aiterm-tab-icon` 內（`TabBar/index.tsx:176` 已經是 `position: relative`）。Mail 的兩個 badge 只出現在 mail 分頁、這個只出現在 terminal 分頁，位置不會互撞。
 
-| 狀態 | 顏色 | 動態 |
-|---|---|---|
-| `waiting` | 橘 `#f59e0b` | 緩慢脈動 |
-| `done` | 綠 `#22c55e` | 靜態 |
-| `failed` | 紅 `#ef4444` | 靜態 |
+| 狀態 | 顏色 | 形狀 | 動態 |
+|---|---|---|---|
+| `waiting` | 橘 `#f59e0b` | 圓 | 緩慢脈動 |
+| `done` | 綠 `#22c55e` | 圓 | 靜態 |
+| `failed` | 紅 `#ef4444` | **方**（`border-radius: 2px`） | 靜態 |
 
-只有 `waiting` 會動，因為只有它需要使用者**現在**做事。
+只有 `waiting` 會動，因為只有它需要使用者**現在**做事。脈動動畫包在 `@media (prefers-reduced-motion: reduce)` 裡關掉。
 
-脈動動畫包在 `@media (prefers-reduced-motion: reduce)` 裡關掉。
+**`failed` 用形狀而非只用顏色與 `done` 區分。** 紅綠是最典型的色盲失效組合，約 8% 的男性分不出 `#22c55e` 與 `#ef4444`——而「成功 vs 失敗」正是這個功能最重要的一個區別。`aria-label` 幫不了這群人：他們看得見，不用讀屏器，`aria-label` 也不會產生 tooltip。而且在 `prefers-reduced-motion` 之下三種狀態會全部退化成「一個彩色圓點」。
 
-每個點都有 `role="img"` 與 i18n 的 `aria-label`（en / zh-TW，字串放 `src/lib/i18n.ts`），比照 Mail badge 現有做法。點本身不含文字——狀態由顏色表達，無障礙資訊由 aria-label 表達。
+同一支檔案裡已有先例：`.mail-connection-badge`（`TabBar/index.css:224-226`）的註解寫明它用紅色是因為「回報的是故障而非數量」，然後 `index.tsx` 仍然在裡面放了一個字面的 `!` 字元——既有程式碼本來就不信任單靠顏色傳達故障。
+
+每個點都有 `role="img"` 與 i18n 的 `aria-label`（en / zh-TW，字串放 `src/lib/i18n.ts`），比照 Mail badge 現有做法。點本身不含文字：語意由「顏色 + 形狀」給看得見的人，由 `aria-label` 給讀屏器使用者。
 
 側邊欄折疊與展開時都顯示同一個點，位置不變（點錨定在圖示上，不在標題列上）。
 
