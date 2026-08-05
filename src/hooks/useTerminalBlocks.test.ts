@@ -326,6 +326,29 @@ describe("useTerminalBlocks", () => {
     });
   });
 
+  it("does not call onCommandSettled when D carries no exit code (cmd.exe's PROMPT)", async () => {
+    const onCommandSettled = vi.fn();
+    const { result } = renderHook(() =>
+      useTerminalBlocks("session-1", term, undefined, undefined, onCommandSettled),
+    );
+
+    act(() => {
+      result.current.submitCommand("dir");
+    });
+    act(() => {
+      result.current.appendOutput("boom\r\n");
+    });
+
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;D\x07");
+    });
+
+    await waitFor(() => {
+      expect(result.current.blocks[0].status).toBe("completed");
+    });
+    expect(onCommandSettled).not.toHaveBeenCalled();
+  });
+
   it("beginTrackedBlock('CLS') wipes existing blocks without writing to the PTY (case-insensitive)", async () => {
     const { result } = renderHook(() => useTerminalBlocks("session-1", term));
 
