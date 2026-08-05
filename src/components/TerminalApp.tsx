@@ -70,7 +70,11 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
   const [isDragging, setIsDragging] = useState(false);
   // Mounted here, in the always-mounted shell, rather than in MailView:
   // important mail must notify the user even if the Mail tab was never opened.
-  const { unreadCount: mailUnreadCount, refreshUnread: refreshMailUnread } = useMailSync();
+  const {
+    unreadCount: mailUnreadCount,
+    failedAccountCount: mailFailedAccountCount,
+    refreshUnread: refreshMailUnread,
+  } = useMailSync();
 
   // We use refs to avoid binding stale values in keyboard listeners
   const tabsRef = useRef(tabs);
@@ -296,6 +300,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
           width={sidebarWidth}
           hasUpdate={hasUpdate}
           mailUnreadCount={mailUnreadCount}
+          mailFailedAccountCount={mailFailedAccountCount}
         />
       </div>
       

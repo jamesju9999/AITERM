@@ -50,6 +50,10 @@ export interface TabBarProps {
   width: number;
   hasUpdate?: boolean;
   mailUnreadCount?: number;
+  /** Accounts whose mail server connection has broken. Anything above zero puts
+   *  a warning marker on the Mail tab's icon — the only way a user who never
+   *  opens the Mail tab learns their inbox has stopped updating. */
+  mailFailedAccountCount?: number;
 }
 
 // Single source of truth for the cap rule, so the badge's visible text and its
@@ -86,7 +90,8 @@ export function TabBar({
   onToggle,
   width,
   hasUpdate = false,
-  mailUnreadCount = 0
+  mailUnreadCount = 0,
+  mailFailedAccountCount = 0
 }: TabBarProps) {
   const navigate = useNavigate();
   const { t } = useLocale();
@@ -172,6 +177,12 @@ export function TabBar({
               {getTabIcon(tab.type)}
               {tab.type === "mail" && mailUnreadCount > 0 && (
                 <span className="mail-unread-badge" role="img" aria-label={t.mail_unread_label(formatUnreadCount(mailUnreadCount))}>{formatUnreadCount(mailUnreadCount)}</span>
+              )}
+              {/* Opposite corner from the unread pill so the two never overlap,
+                  and deliberately not a count: "how many accounts are broken"
+                  is not the point, "something is broken" is. */}
+              {tab.type === "mail" && mailFailedAccountCount > 0 && (
+                <span className="mail-connection-badge" role="img" aria-label={t.mail_connection_failed_label(String(mailFailedAccountCount))}>!</span>
               )}
             </span>
 

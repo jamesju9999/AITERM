@@ -199,6 +199,7 @@ const zhTW = {
     mail_delete_aria: (subject: string) => `將「${subject}」移到垃圾桶`,
     mail_delete_failed: "移到垃圾桶失敗：",
     mail_connection_failed: (email: string) => `無法連線到 ${email} 的信箱伺服器，新信件暫時不會更新：`,
+    mail_connection_failed_label: (n: string) => `${n} 個信箱帳號連線失敗`,
     // Mail accounts settings page
     mail_accounts_settings_title: "信箱帳號",
     mail_email: "電子郵件地址",
@@ -1290,6 +1291,7 @@ const enRaw = {
     mail_delete_aria: (subject: string) => `Move "${subject}" to Trash`,
     mail_delete_failed: "Failed to move the message to Trash: ",
     mail_connection_failed: (email: string) => `Can't reach the mail server for ${email}, so new mail is not arriving: `,
+    mail_connection_failed_label: (n: string) => n === "1" ? "1 mail account can't connect" : `${n} mail accounts can't connect`,
     // Mail accounts settings page
     mail_accounts_settings_title: "Mail Accounts",
     mail_email: "Email address",

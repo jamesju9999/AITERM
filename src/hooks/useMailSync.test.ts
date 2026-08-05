@@ -228,4 +228,71 @@ describe("useMailSync", () => {
     await waitFor(() => expect(requestPermission).toHaveBeenCalled());
     expect(sendNotification).not.toHaveBeenCalled();
   });
+
+  // Connection health is tracked here as well as in MailView, because MailView
+  // only exists while the Mail tab is open: an account that stops connecting
+  // while the user sits in a terminal tab would otherwise be invisible.
+  describe("connection health", () => {
+    const emit = async (payload: unknown) => {
+      await act(async () => { listeners["mail-sync-event"]({ payload }); });
+    };
+
+    it("marks an account as failing when its connection breaks", async () => {
+      const { result } = renderHook(() => useMailSync());
+      await waitFor(() => expect(listeners["mail-sync-event"]).toBeDefined());
+
+      await emit({ kind: "connection_failed", account_id: "a1", message: "login failed: bad password" });
+
+      expect(result.current.failedAccountCount).toBe(1);
+    });
+
+    it("clears the failure when the account reconnects", async () => {
+      const { result } = renderHook(() => useMailSync());
+      await waitFor(() => expect(listeners["mail-sync-event"]).toBeDefined());
+
+      await emit({ kind: "connection_failed", account_id: "a1", message: "connection error: timed out" });
+      await emit({ kind: "connection_restored", account_id: "a1" });
+
+      expect(result.current.failedAccountCount).toBe(0);
+    });
+
+    // The indicator is per-account, not a single global flag: one account coming
+    // back must not hide the fact that another one is still down.
+    it("keeps reporting a failure while a second account is still down", async () => {
+      const { result } = renderHook(() => useMailSync());
+      await waitFor(() => expect(listeners["mail-sync-event"]).toBeDefined());
+
+      await emit({ kind: "connection_failed", account_id: "a1", message: "login failed" });
+      await emit({ kind: "connection_failed", account_id: "a2", message: "connection error" });
+      expect(result.current.failedAccountCount).toBe(2);
+
+      await emit({ kind: "connection_restored", account_id: "a1" });
+
+      expect(result.current.failedAccountCount).toBe(1);
+    });
+
+    it("reports no failures while every account is healthy", async () => {
+      const { result } = renderHook(() => useMailSync());
+      await waitFor(() => expect(listeners["mail-sync-event"]).toBeDefined());
+
+      await emit({ kind: "summary", account_id: "a1", message_id: "m1" });
+      await emit({ kind: "important", account_id: "a1", message_id: "m2", subject: "s", summary: "b" });
+      await emit({ kind: "removed", account_id: "a1", removed_count: 1 });
+
+      expect(result.current.failedAccountCount).toBe(0);
+    });
+
+    // A broken mailbox is a standing condition the user finds when they next
+    // look at the sidebar — not something worth interrupting them with, and
+    // worse, the poller's reconnect attempts would make it recur.
+    it("does not raise an OS notification for a connection failure", async () => {
+      renderHook(() => useMailSync());
+      await waitFor(() => expect(listeners["mail-sync-event"]).toBeDefined());
+
+      await emit({ kind: "connection_failed", account_id: "a1", message: "login failed" });
+
+      await new Promise((r) => setTimeout(r, 0));
+      expect(sendNotification).not.toHaveBeenCalled();
+    });
+  });
 });

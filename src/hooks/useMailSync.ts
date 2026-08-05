@@ -4,15 +4,24 @@ import { isPermissionGranted, requestPermission, sendNotification } from "@tauri
 import { MAIL_SYNC_EVENT, mailCountUnread, type MailSyncEvent } from "../ipc/mail";
 
 /**
- * Tracks the global unread mail count and raises an OS notification when the
- * backend flags an incoming message as important.
+ * Tracks the global unread mail count and per-account connection health, and
+ * raises an OS notification when the backend flags an incoming message as
+ * important.
  *
  * Mounted once in TerminalApp (the always-mounted shell), NOT in MailView:
  * important mail has to notify the user even if the Mail tab was never opened
- * this session.
+ * this session — and so does an account that has stopped connecting, which
+ * MailView's own banner can only show once the Mail tab is open. Both listen to
+ * the same broadcast: Tauri's `Emitter::emit` runs every registered handler for
+ * the event name (event/listener.rs `emit_filter`, and the injected webview
+ * dispatcher loops over every listener id), so neither consumes it.
  */
 export function useMailSync() {
   const [unreadCount, setUnreadCount] = useState(0);
+  // Accounts currently in the failed state. The backend emits these only on a
+  // health transition, so this needs no debouncing — it is add-on-failed,
+  // remove-on-restored, with no other clear path.
+  const [failedAccountIds, setFailedAccountIds] = useState<ReadonlySet<string>>(() => new Set());
   const mountedRef = useRef(true);
   const seqRef = useRef(0);
   const permissionRef = useRef<Promise<boolean> | null>(null);
@@ -72,6 +81,20 @@ export function useMailSync() {
       if (!active) return;
       refreshUnread();
 
+      if (event.payload.kind === "connection_failed" || event.payload.kind === "connection_restored") {
+        const failing = event.payload.kind === "connection_failed";
+        const accountId = event.payload.account_id;
+        setFailedAccountIds((prev) => {
+          if (prev.has(accountId) === failing) return prev;
+          const next = new Set(prev);
+          if (failing) next.add(accountId); else next.delete(accountId);
+          return next;
+        });
+        // Deliberately no notification: this is a standing condition, not an
+        // arrival, and the sidebar indicator is where it belongs.
+        return;
+      }
+
       if (event.payload.kind === "important") {
         if (await ensureNotificationPermission()) {
           // Matches the backend's own placeholder (parse_raw_message) so a
@@ -107,5 +130,5 @@ export function useMailSync() {
     };
   }, [refreshUnread, ensureNotificationPermission]);
 
-  return { unreadCount, refreshUnread };
+  return { unreadCount, failedAccountCount: failedAccountIds.size, refreshUnread };
 }
