@@ -4,6 +4,7 @@ import { ProvidersPage } from "./ProvidersPage";
 import { GeneralPage } from "./GeneralPage";
 import { DatabaseConnectionsPage } from "./DatabaseConnectionsPage";
 import { VcsConnectionsPage } from "./VcsConnectionsPage";
+import { MailAccountsPage } from "./MailAccountsPage";
 import { EnterprisePage } from "./EnterprisePage";
 import { AboutPage } from "./AboutPage";
 import { McpServersPage } from "./McpServersPage";
@@ -14,11 +15,12 @@ import {
   DatabaseIcon,
   BranchIcon,
   WrenchIcon,
-  InfoIcon
+  InfoIcon,
+  MailIcon
 } from "../Icons";
 import "./SettingsView.css";
 
-type SettingsTab = "general" | "providers" | "databases" | "vcs" | "enterprise" | "about" | "mcp";
+type SettingsTab = "general" | "providers" | "databases" | "vcs" | "enterprise" | "about" | "mcp" | "mail";
 
 export function SettingsView() {
   const navigate = useNavigate();
@@ -58,6 +60,12 @@ export function SettingsView() {
           <BranchIcon size={16} /> {t.vcs_connections}
         </button>
         <button
+          className={`sidebar-item ${tab === "mail" ? "sidebar-item--active" : ""}`}
+          onClick={() => setTab("mail")}
+        >
+          <MailIcon size={16} /> {t.mail_accounts_settings_title}
+        </button>
+        <button
           className={`sidebar-item ${tab === "mcp" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("mcp")}
         >
@@ -88,6 +96,7 @@ export function SettingsView() {
         {tab === "providers" && <ProvidersPage />}
         {tab === "databases" && <DatabaseConnectionsPage />}
         {tab === "vcs" && <VcsConnectionsPage />}
+        {tab === "mail" && <MailAccountsPage />}
         {tab === "mcp" && <McpServersPage />}
         {tab === "enterprise" && <EnterprisePage />}
         {tab === "about" && <AboutPage />}
