@@ -203,6 +203,24 @@
   right: 8px;
 }
 
+.mail-unread-badge {
+  position: absolute;
+  top: -6px;
+  right: -8px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  background: #f97316;
+  border-radius: 7px;
+  border: 1.5px solid var(--bg-secondary, #151515);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 11px;
+  text-align: center;
+  pointer-events: none;
+}
+
 /* Prevent popup menu from clipping off-screen bottom */
 .aiterm-new-tab-picker-popup .new-tab-picker {
   position: relative !important;

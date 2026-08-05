@@ -11,6 +11,7 @@ import {
   RefreshIcon,
   CodeIcon,
   LibraryIcon,
+  MailIcon,
 } from "../Icons";
 import "./index.css";
 
@@ -48,6 +49,7 @@ export function NewTabPicker({ onSelect, onClose }: Props) {
     { type: "loop-studio",   icon: <RefreshIcon size={18} />,     label: t.loop_studio_tab,    desc: t.new_loop_studio_desc },
     { type: "code-assistant", icon: <CodeIcon size={18} />,       label: t.code_assistant_tab, desc: t.new_code_assistant_desc },
     { type: "knowledge-base", icon: <LibraryIcon size={18} />,     label: t.knowledge_base_tab, desc: t.new_knowledge_base_desc },
+    { type: "mail",           icon: <MailIcon size={18} />,       label: t.mail_tab,           desc: t.new_mail_desc },
   ];
 
   return (

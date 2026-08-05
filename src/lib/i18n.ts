@@ -187,6 +187,11 @@ const zhTW = {
     // Knowledge Base tab
     knowledge_base_tab: "知識庫",
     new_knowledge_base_desc: "以自然語言對一整個資料夾的文件提問",
+    mail_tab: "信箱",
+    new_mail_desc: "AI 摘要信箱、通知重要信件",
+    mail_no_accounts: "尚未設定信箱帳號",
+    mail_add_account: "新增信箱帳號",
+    mail_select_account: "選擇信箱帳號",
     kb_empty_title: "尚未建立筆記本",
     kb_empty_desc: "建立一個筆記本，指定資料夾後即可對其中的文件提問",
     kb_create_notebook: "新增筆記本",
@@ -1246,6 +1251,11 @@ const enRaw = {
     // Knowledge Base tab
     knowledge_base_tab: "Knowledge Base",
     new_knowledge_base_desc: "Ask questions about a whole folder of documents in natural language",
+    mail_tab: "Mail",
+    new_mail_desc: "AI-summarized inbox with important-mail alerts",
+    mail_no_accounts: "No mail accounts configured yet",
+    mail_add_account: "Add mail account",
+    mail_select_account: "Select a mail account",
     kb_empty_title: "No Notebooks Yet",
     kb_empty_desc: "Create a notebook and point it at a folder to start asking questions",
     kb_create_notebook: "New Notebook",

@@ -14,11 +14,12 @@ import {
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   CodeIcon,
-  LibraryIcon
+  LibraryIcon,
+  MailIcon
 } from "../Icons";
 import "./index.css";
 
-export type TabType = "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant" | "knowledge-base";
+export type TabType = "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant" | "knowledge-base" | "mail";
 
 export interface Tab {
   id: string;
@@ -48,6 +49,7 @@ export interface TabBarProps {
   onToggle: () => void;
   width: number;
   hasUpdate?: boolean;
+  mailUnreadCount?: number;
 }
 
 function getTabIcon(type: TabType): React.ReactNode {
@@ -62,6 +64,7 @@ function getTabIcon(type: TabType): React.ReactNode {
     case "loop-studio": return <RefreshIcon size={18} />;
     case "code-assistant": return <CodeIcon size={18} />;
     case "knowledge-base": return <LibraryIcon size={18} />;
+    case "mail": return <MailIcon size={18} />;
     default: return <FileTextIcon size={18} />;
   }
 }
@@ -76,7 +79,8 @@ export function TabBar({
   isSidebarOpen,
   onToggle,
   width,
-  hasUpdate = false
+  hasUpdate = false,
+  mailUnreadCount = 0
 }: TabBarProps) {
   const navigate = useNavigate();
   const { t } = useLocale();
@@ -158,8 +162,13 @@ export function TabBar({
             onDoubleClick={isSidebarOpen ? () => setEditingId(tab.id) : undefined}
             title={isSidebarOpen ? `Switch to Tab (Ctrl+${idx + 1}) — Double click to rename` : `${tab.title} (Ctrl+${idx + 1})`}
           >
-            <span className="aiterm-tab-icon">{getTabIcon(tab.type)}</span>
-            
+            <span className="aiterm-tab-icon" style={{ position: "relative" }}>
+              {getTabIcon(tab.type)}
+              {tab.type === "mail" && mailUnreadCount > 0 && (
+                <span className="mail-unread-badge">{mailUnreadCount > 99 ? "99+" : mailUnreadCount}</span>
+              )}
+            </span>
+
             {isSidebarOpen && (
               editingId === tab.id ? (
                 <input
