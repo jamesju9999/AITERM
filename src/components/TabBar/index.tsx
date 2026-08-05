@@ -165,7 +165,7 @@ export function TabBar({
             <span className="aiterm-tab-icon" style={{ position: "relative" }}>
               {getTabIcon(tab.type)}
               {tab.type === "mail" && mailUnreadCount > 0 && (
-                <span className="mail-unread-badge" aria-label={t.mail_unread_label}>{mailUnreadCount > 99 ? "99+" : mailUnreadCount}</span>
+                <span className="mail-unread-badge" role="img" aria-label={`${mailUnreadCount > 99 ? "99+" : mailUnreadCount} ${t.mail_unread_label}`}>{mailUnreadCount > 99 ? "99+" : mailUnreadCount}</span>
               )}
             </span>
 

@@ -27,8 +27,15 @@ export function MailView({ isActive: _isActive }: MailViewProps) {
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [messages, setMessages] = useState<MailMessage[]>([]);
   // Guards the empty state: without this, `mail_no_accounts` flashes on every
-  // mount before the accounts fetch resolves. Mirrors useNotebooks' `loading`.
+  // mount before the accounts fetch resolves. Mirrors useNotebooks' `loading`
+  // + `error` pair — the error half matters just as much, since without it a
+  // failed fetch renders as "no accounts configured".
   const [loading, setLoading] = useState(true);
+  // Held as a flag rather than a message string so the accounts effect does
+  // not have to close over `t` (which would drag the whole translation table
+  // into its dep array and refetch on every locale switch); the message is
+  // resolved at render time instead, and stays correct if the locale changes.
+  const [loadFailed, setLoadFailed] = useState(false);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -44,8 +51,11 @@ export function MailView({ isActive: _isActive }: MailViewProps) {
     }).catch((err) => {
       // Never swallow: a failed fetch would otherwise be indistinguishable
       // from "no accounts configured" and send the user off to re-add an
-      // account they already have.
+      // account they already have. Console logging alone is not enough —
+      // this app's Tauri window is hard to attach devtools to, so the error
+      // has to reach the UI.
       console.error("[mail] failed to list accounts:", err);
+      if (mountedRef.current) setLoadFailed(true);
     }).finally(() => {
       if (mountedRef.current) setLoading(false);
     });
@@ -100,10 +110,21 @@ export function MailView({ isActive: _isActive }: MailViewProps) {
     );
     mailMarkRead(message.id).catch((err) => {
       console.error("[mail] failed to mark message read:", err);
+      // Roll back, otherwise the row reads as read while the backend still
+      // has it unread — and the next sync refetch would flip it back to bold,
+      // looking like a glitch.
+      if (!mountedRef.current) return;
+      setMessages((prev) =>
+        prev.map((m) => m.id === message.id ? { ...m, is_read_locally: false } : m)
+      );
     });
   };
 
   if (loading) return <div className="mail-view" />;
+
+  if (loadFailed) {
+    return <div className="mail-view mail-view--empty">{t.mail_load_failed}</div>;
+  }
 
   if (accounts.length === 0) {
     return <div className="mail-view mail-view--empty">{t.mail_no_accounts}</div>;
@@ -122,25 +143,33 @@ export function MailView({ isActive: _isActive }: MailViewProps) {
         ))}
       </select>
       <ul className="mail-view__list">
-        {messages.map((m) => (
-          <li
-            key={m.id}
-            className={`mail-view__item ${m.is_read_locally ? "" : "mail-view__item--unread"}`}
-            role="button"
-            tabIndex={0}
-            onClick={() => handleMarkRead(m)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                handleMarkRead(m);
-              }
-            }}
-          >
-            <div className="mail-view__item-sender">{m.sender}</div>
-            <div className="mail-view__item-subject">{m.subject}</div>
-            {m.ai_summary && <div className="mail-view__item-summary">{m.ai_summary}</div>}
-          </li>
-        ))}
+        {messages.map((m) => {
+          // Only unread rows are interactive — a read row has nothing left to
+          // do, so it must not advertise a button role or take a tab stop.
+          const unread = !m.is_read_locally;
+          return (
+            <li key={m.id} className={`mail-view__item ${unread ? "mail-view__item--unread" : ""}`}>
+              {/* The role lives on this inner div, not the <li>: overriding the
+                  li's implicit listitem role would leave the <ul> with no list
+                  items and stop screen readers announcing the list at all. */}
+              <div
+                role={unread ? "button" : undefined}
+                tabIndex={unread ? 0 : undefined}
+                onClick={unread ? () => handleMarkRead(m) : undefined}
+                onKeyDown={unread ? (e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    handleMarkRead(m);
+                  }
+                } : undefined}
+              >
+                <div className="mail-view__item-sender">{m.sender}</div>
+                <div className="mail-view__item-subject">{m.subject}</div>
+                {m.ai_summary && <div className="mail-view__item-summary">{m.ai_summary}</div>}
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
