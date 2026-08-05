@@ -4,6 +4,8 @@
   height: 100%;
   padding: 12px;
   overflow: hidden;
+  background: var(--bg-primary, #0a0b14);
+  color: var(--text-primary, #e0e0e0);
 }
 
 .mail-view--empty {
@@ -29,6 +31,7 @@
 .mail-view__item {
   padding: 10px 8px;
   border-bottom: 1px solid var(--border-color, #2a2a2a);
+  cursor: pointer;
 }
 
 .mail-view__item--unread {
