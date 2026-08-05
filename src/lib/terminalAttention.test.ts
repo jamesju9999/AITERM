@@ -18,6 +18,8 @@ describe("routeAttention — 桌面通知", () => {
   it("視窗有 focus 時一律不發通知——側邊欄的點就夠了", () => {
     expect(routeAttention({ isActiveTab: false, windowFocused: true, kind: "waiting" }).notify).toBe(false);
     expect(routeAttention({ isActiveTab: false, windowFocused: true, kind: "failed" }).notify).toBe(false);
+    // active 分頁 + 有 focus：使用者正看著它，最不該打擾的情況。
+    expect(routeAttention({ isActiveTab: true, windowFocused: true, kind: "waiting" }).notify).toBe(false);
   });
 
   it("視窗失焦時，waiting 與 failed 會發通知", () => {
