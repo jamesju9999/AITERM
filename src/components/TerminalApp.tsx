@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { sendNotification } from "@tauri-apps/plugin-notification";
 import { ensureNotificationPermission } from "../lib/notifyPermission";
-import { routeAttention, notifyBodyKeyFor, type AttentionKind } from "../lib/terminalAttention";
+import { routeAttention, notifyBodyKeyFor, isPastNotifyCooldown, type AttentionKind } from "../lib/terminalAttention";
 import { TerminalView } from "./TerminalView";
 import { TabBar, type Tab } from "./TabBar";
 import { TitleBar } from "./TitleBar";
@@ -245,6 +245,11 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
     setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, title: newTitle } : t)));
   }, []);
 
+  // 每個分頁各自的通知冷卻時間戳記。用 ref 而非 state：它只被
+  // handleAttention 這個事件處理器讀寫，不影響任何渲染，用 state
+  // 只會讓 handleAttention 每次都換一個新的參考。
+  const notifyCooldownRef = useRef<Map<string, number>>(new Map());
+
   // 一個 attention 事件 → 兩個互相獨立的決定。規則本體在 routeAttention
   // （src/lib/terminalAttention.ts），那裡有單元測試釘住「提示點看分頁、
   // 通知看視窗焦點」這兩者不能被合併。
@@ -261,7 +266,16 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
 
     if (notify) {
       const bodyKey = notifyBodyKeyFor(kind);
-      if (bodyKey) {
+      const now = Date.now();
+      if (bodyKey && isPastNotifyCooldown(notifyCooldownRef.current.get(tabId), now)) {
+        // 時間戳記要在這裡、同步地、在 ensureNotificationPermission() 這個
+        // 非同步流程「開始之前」就寫入冷卻 Map——不是等它 resolve 之後才寫。
+        // 這個分頁如果在權限 promise 回來之前又響了好幾次 bell，那些事件
+        // 會在各自呼叫這裡時同步檢查冷卻 Map；如果時間戳記要等 resolve
+        // 才寫入，這些事件會全部在還沒人動過 Map 的那一刻就通過冷卻檢查，
+        // 排隊各自送出通知——冷卻機制形同虛設，防不了它原本要防的那種
+        // 連環 bell。同步先佔位，才能讓同一個 tick 內的後續事件立刻被擋。
+        notifyCooldownRef.current.set(tabId, now);
         ensureNotificationPermission().then((granted) => {
           if (granted) sendNotification({ title: tabTitle, body: t[bodyKey] });
         }).catch(() => { /* 通知失敗不是使用者能處理的事 */ });

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { attentionForExitCode, notifyBodyKeyFor, routeAttention } from "./terminalAttention";
+import {
+  attentionForExitCode,
+  isPastNotifyCooldown,
+  notifyBodyKeyFor,
+  NOTIFY_COOLDOWN_MS,
+  routeAttention,
+} from "./terminalAttention";
 
 describe("routeAttention — 提示點", () => {
   it("非 active 分頁會設出對應的提示點", () => {
@@ -65,5 +71,29 @@ describe("notifyBodyKeyFor", () => {
 
   it("done → null——done 不發通知，沒有對應的文案", () => {
     expect(notifyBodyKeyFor("done")).toBeNull();
+  });
+});
+
+describe("isPastNotifyCooldown", () => {
+  it("這個分頁從來沒發過通知——直接放行", () => {
+    expect(isPastNotifyCooldown(undefined, 1_000)).toBe(true);
+  });
+
+  it("在冷卻時間之內——擋下來", () => {
+    const lastNotifiedAt = 1_000;
+    const now = lastNotifiedAt + NOTIFY_COOLDOWN_MS - 1;
+    expect(isPastNotifyCooldown(lastNotifiedAt, now)).toBe(false);
+  });
+
+  it("剛好在冷卻時間的邊界上——放行", () => {
+    const lastNotifiedAt = 1_000;
+    const now = lastNotifiedAt + NOTIFY_COOLDOWN_MS;
+    expect(isPastNotifyCooldown(lastNotifiedAt, now)).toBe(true);
+  });
+
+  it("超過冷卻時間——放行", () => {
+    const lastNotifiedAt = 1_000;
+    const now = lastNotifiedAt + NOTIFY_COOLDOWN_MS + 5_000;
+    expect(isPastNotifyCooldown(lastNotifiedAt, now)).toBe(true);
   });
 });

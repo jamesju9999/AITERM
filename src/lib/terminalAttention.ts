@@ -43,3 +43,12 @@ export function notifyBodyKeyFor(kind: AttentionKind): "terminal_notify_waiting"
     case "done": return null;
   }
 }
+
+/** 同一個分頁的通知冷卻時間。防止會重複敲 bell 的 TUI 或連續失敗的
+ *  agent mission 疊出一串桌面通知——通知洪水和假警報一樣，會讓使用者
+ *  永久關掉這個功能。 */
+export const NOTIFY_COOLDOWN_MS = 30_000;
+
+export function isPastNotifyCooldown(lastNotifiedAt: number | undefined, now: number): boolean {
+  return lastNotifiedAt === undefined || now - lastNotifiedAt >= NOTIFY_COOLDOWN_MS;
+}
