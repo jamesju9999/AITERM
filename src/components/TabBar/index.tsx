@@ -52,6 +52,12 @@ export interface TabBarProps {
   mailUnreadCount?: number;
 }
 
+// Single source of truth for the cap rule, so the badge's visible text and its
+// accessible name can never disagree.
+function formatUnreadCount(n: number): string {
+  return n > 99 ? "99+" : String(n);
+}
+
 function getTabIcon(type: TabType): React.ReactNode {
   switch (type) {
     case "terminal": return <TerminalIcon size={18} />;
@@ -165,7 +171,7 @@ export function TabBar({
             <span className="aiterm-tab-icon" style={{ position: "relative" }}>
               {getTabIcon(tab.type)}
               {tab.type === "mail" && mailUnreadCount > 0 && (
-                <span className="mail-unread-badge" role="img" aria-label={`${mailUnreadCount > 99 ? "99+" : mailUnreadCount} ${t.mail_unread_label}`}>{mailUnreadCount > 99 ? "99+" : mailUnreadCount}</span>
+                <span className="mail-unread-badge" role="img" aria-label={t.mail_unread_label(formatUnreadCount(mailUnreadCount))}>{formatUnreadCount(mailUnreadCount)}</span>
               )}
             </span>
 

@@ -2,7 +2,7 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { MailView } from "./MailView";
 import { LocaleProvider } from "../../contexts/LocaleContext";
-import { translations } from "../../lib/i18n";
+import { translations, LOCALE_STORAGE_KEY } from "../../lib/i18n";
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
@@ -17,9 +17,11 @@ vi.mock("../../ipc/mail", () => ({
 
 import { mailListAccounts, mailListMessages, mailMarkRead } from "../../ipc/mail";
 
-// LocaleProvider defaults to zh-TW when nothing is stored, so assert against
-// that table rather than hard-coding the strings.
-const t = translations["zh-TW"];
+// Pinned explicitly rather than relying on LocaleProvider's fallback: if the
+// default ever changed, the negative assertions below (queryByText(...) is
+// null) would silently pass for the wrong reason.
+const LOCALE = "zh-TW";
+const t = translations[LOCALE];
 
 const ACCOUNT = {
   id: "acc-1",
@@ -61,6 +63,7 @@ function renderView() {
 describe("MailView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.setItem(LOCALE_STORAGE_KEY, LOCALE);
     // The error-path tests log intentionally; keep the suite output clean.
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(mailListMessages).mockResolvedValue([] as never);
@@ -137,7 +140,10 @@ describe("MailView", () => {
       // A read row is inert: no button role, so no dead tab stop either.
       expect(screen.queryByRole("button", { name: /Quarterly report/ })).toBeNull();
 
-      fireEvent.click(container.querySelector(".mail-view__item")!);
+      // Must click the inner div, not the <li>: the handlers live on the inner
+      // element, and events bubble up rather than down — clicking the <li>
+      // could never reach them, making this assertion vacuously true.
+      fireEvent.click(container.querySelector(".mail-view__item > div")!);
 
       expect(mailMarkRead).not.toHaveBeenCalled();
     });
