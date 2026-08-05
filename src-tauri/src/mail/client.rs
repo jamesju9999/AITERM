@@ -1,0 +1,1322 @@
+// src-tauri/src/mail/client.rs
+use std::future::Future;
+use std::time::{Duration, Instant};
+use async_imap::extensions::idle::IdleResponse;
+use async_imap::types::{Capability, Name, NameAttribute};
+use tokio::net::TcpStream;
+use futures_util::TryStreamExt;
+
+/// Ceiling on a single IMAP round trip (login, SELECT, SEARCH, one UID FETCH).
+const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Ceiling on the whole batch loop. Applied *between* batches, so it never
+/// discards a batch that already succeeded: once the budget is spent the loop
+/// simply stops starting new batches and returns what it has, and the
+/// remaining UIDs are picked up by the next poll.
+const TOTAL_FETCH_BUDGET: Duration = Duration::from_secs(120);
+
+/// How many messages the *first* poll of an account pulls down. A brand new
+/// account has no `since_uid`, and "everything in the mailbox" is not a
+/// workable answer on a real INBOX: the UID set would overflow the IMAP
+/// command-length limit (Gmail answers BAD) and the bodies could never be
+/// downloaded inside `FETCH_TIMEOUT`, so the first poll would fail, never
+/// record a `last_seen_uid`, and repeat that identical failure forever.
+/// Seeding from the newest N messages instead gives the user immediate
+/// content and bounded work.
+const FIRST_POLL_MAX_MESSAGES: usize = 50;
+
+/// UIDs per `UID FETCH` command. Keeps each command short and each round
+/// trip inside the timeout, and is the unit at which the poller persists
+/// `last_seen_uid`. Deliberately well below `FIRST_POLL_MAX_MESSAGES`: when
+/// the two were equal the first poll was a single batch, which made the
+/// batching machinery inert on exactly the sync it exists to protect — one
+/// slow fetch and the whole seed was lost, forever, every cycle.
+const FETCH_BATCH_SIZE: usize = 10;
+
+type ImapSession = async_imap::Session<tokio_native_tls::TlsStream<TcpStream>>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum MailClientError {
+    #[error("connection error: {0}")]
+    Connect(String),
+    #[error("login failed: {0}")]
+    Login(String),
+    #[error("IMAP command failed: {0}")]
+    Command(String),
+    #[error("IMAP operation timed out after {0:?}")]
+    Timeout(Duration),
+    /// The server cannot do what was asked in a way that is safe, and AITerm
+    /// refuses to approximate it. Distinct from `Command` because nothing was
+    /// left half-done: the session is still clean and usable, so the caller
+    /// reports the refusal without tearing the connection down.
+    #[error("{0}")]
+    Unsupported(String),
+}
+
+pub struct RawMessage {
+    pub uid: i64,
+    pub raw: Vec<u8>,
+}
+
+/// One `UID FETCH` worth of messages, plus the highest UID that batch
+/// *asked* for. The caller advances `last_seen_uid` to `max_uid` — not to
+/// the highest UID it actually got a body for — so a UID the server declines
+/// to return (deleted between SEARCH and FETCH, say) is skipped once instead
+/// of being re-requested on every future poll forever.
+pub struct MessageBatch {
+    pub max_uid: i64,
+    pub messages: Vec<RawMessage>,
+}
+
+/// Everything one poll learned from the mailbox.
+pub struct PollOutcome {
+    /// The mailbox's UIDVALIDITY as reported by SELECT, or `None` from a server
+    /// that does not support UIDs at all.
+    pub uid_validity: Option<i64>,
+    /// The stored UIDVALIDITY existed and disagreed with the server's, so every
+    /// UID the caller has cached for this account — `last_seen_uid` included —
+    /// belongs to a previous incarnation of the mailbox and means nothing now.
+    pub uid_validity_changed: bool,
+    /// The complete `UID SEARCH ALL` result: every UID INBOX currently holds.
+    ///
+    /// `None` — not an empty vec — whenever that SEARCH did not come back
+    /// cleanly. The caller deletes cached messages missing from this set, so
+    /// collapsing a failed command into `Some(vec![])` would read as "the
+    /// mailbox is empty" and destroy the entire local cache. The two cases are
+    /// kept apart in the type so that mistake cannot be made downstream.
+    pub server_uids: Option<Vec<i64>>,
+    pub batches: Vec<MessageBatch>,
+    /// The caller's `should_stop` fired between two batches, so this sync is
+    /// incomplete in a way no other field can express: `batches` covers only
+    /// part of what the SEARCH found, and the rest was never requested.
+    ///
+    /// The caller must therefore drop the whole outcome rather than commit it —
+    /// see `sync_and_persist`, which returns without advancing the cursor.
+    pub interrupted: bool,
+}
+
+/// How an IDLE wait ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdleOutcome {
+    /// The server pushed an untagged response. IDLE does not say *which*
+    /// messages changed (it is EXISTS/EXPUNGE/FETCH), so the only useful
+    /// reaction is an ordinary sync.
+    NewData,
+    /// Nothing was heard from the server for the liveness interval.
+    Timeout,
+    /// The caller's `reconcile_in` deadline elapsed: time to run a sync that
+    /// also reconciles deletions.
+    ReconcileDue,
+    /// The caller's shutdown signal interrupted the wait.
+    Interrupted,
+}
+
+/// A live, logged-in IMAP session.
+///
+/// Exists because IDLE turns mail sync from "one connection per poll" into one
+/// long-lived connection per account: the session has to outlive a single sync
+/// so it can sit in IDLE between them.
+///
+/// The session is deliberately *not* reachable from outside this module, and
+/// every method that can lose it either returns `Self` back to the caller or
+/// consumes it — so the caller always knows whether it still owns something
+/// that needs a LOGOUT.
+pub struct MailConnection {
+    session: ImapSession,
+    supports_idle: bool,
+    /// How — or whether — this server can move a message to Trash without
+    /// risking mail AITerm was never asked to touch. `None` means it cannot,
+    /// and every delete against it is refused.
+    delete_strategy: Option<DeleteStrategy>,
+}
+
+/// The only two ways this module will ever remove a message from INBOX.
+///
+/// Both are exact: they act on the UID named and nothing else. The obvious
+/// third option — `UID STORE +FLAGS (\Deleted)` followed by a plain `EXPUNGE`
+/// — is deliberately absent, and must stay absent: plain `EXPUNGE` permanently
+/// removes *every* message in the mailbox currently flagged `\Deleted`,
+/// including messages the user flagged from a different mail client, so it
+/// would silently destroy unrelated mail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteStrategy {
+    /// RFC 6851 `UID MOVE`. One atomic command; the `\Deleted` flag is never
+    /// involved at all.
+    UidMove,
+    /// RFC 4315 `UIDPLUS`: `UID COPY` to Trash, `UID STORE +FLAGS (\Deleted)`,
+    /// then `UID EXPUNGE` — which, unlike `EXPUNGE`, expunges only the UIDs it
+    /// is given.
+    CopyThenUidExpunge,
+}
+
+/// One mailbox from a `LIST` response, reduced to what Trash resolution needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailboxEntry {
+    pub name: String,
+    /// The server tagged this mailbox `\Trash` (RFC 6154 SPECIAL-USE).
+    pub special_use_trash: bool,
+    /// The absence of `\Noselect`. A `\Noselect` name is a hierarchy node
+    /// rather than a mailbox — Gmail's `[Gmail]` is one — and cannot receive a
+    /// COPY or a MOVE.
+    pub selectable: bool,
+}
+
+impl MailConnection {
+    /// Connect, log in, and ask what the server can do.
+    ///
+    /// Every step keeps the per-round-trip `FETCH_TIMEOUT`; note that the
+    /// CAPABILITY step is the first point at which a live session exists, so
+    /// its failure path logs out rather than dropping the socket.
+    pub async fn connect(
+        host: &str,
+        port: u16,
+        username: &str,
+        password: &str,
+    ) -> Result<Self, MailClientError> {
+        let mut session = connect_and_login(host, port, username, password).await?;
+
+        let capabilities = with_timeout(async {
+            session.capabilities().await.map_err(|e| MailClientError::Command(e.to_string()))
+        })
+        .await;
+
+        match capabilities {
+            Ok(capabilities) => {
+                let names: Vec<String> = capabilities.iter().map(capability_name).collect();
+                let supports_idle = advertises_idle(names.iter().map(String::as_str));
+                if !supports_idle {
+                    log::info!("mail: {host} does not advertise IDLE; falling back to interval polling");
+                }
+                let delete_strategy = choose_delete_strategy(names.iter().map(String::as_str));
+                if delete_strategy.is_none() {
+                    log::info!("mail: {host} advertises neither MOVE nor UIDPLUS; deleting mail on it will be refused");
+                }
+                Ok(Self { session, supports_idle, delete_strategy })
+            }
+            Err(e) => {
+                logout(session).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Whether this server advertised RFC 2177 IDLE, i.e. whether the caller
+    /// may push instead of poll.
+    pub fn supports_idle(&self) -> bool {
+        self.supports_idle
+    }
+
+    /// One sync over this connection. See `fetch_selected` for the batching
+    /// and timeout contract, which is unchanged from the days when each sync
+    /// got its own connection, and for what `reconcile` costs and skips.
+    ///
+    /// `should_stop` is polled between batches and is what makes the network
+    /// phase of a sync abandonable — without it a stop signalled here waits out
+    /// the whole `TOTAL_FETCH_BUDGET`. It is a plain predicate rather than a
+    /// future so this module needs to know nothing about how the caller
+    /// signals a shutdown.
+    pub async fn sync(
+        &mut self,
+        since_uid: Option<i64>,
+        stored_uid_validity: Option<i64>,
+        reconcile: bool,
+        should_stop: impl Fn() -> bool,
+    ) -> Result<PollOutcome, MailClientError> {
+        fetch_selected(&mut self.session, since_uid, stored_uid_validity, reconcile, should_stop).await
+    }
+
+    /// Sit in IDLE until the server says something, `liveness` elapses,
+    /// `reconcile_in` elapses, or `shutdown` resolves.
+    ///
+    /// Consumes and returns the connection, because `Session::idle` consumes
+    /// the session and only a successful `DONE` hands it back. An `Err` from
+    /// here therefore always means the caller has no connection left — though
+    /// not always because the socket died: see the `init` note below, where a
+    /// possibly-live session is dropped because the crate offers no way to
+    /// retrieve it.
+    ///
+    /// `liveness` is deliberately far below the crate's 29-minute default. A
+    /// TCP connection killed by laptop sleep or a NAT timeout dies *silently*,
+    /// and the wait would otherwise block for half an hour before noticing,
+    /// making mail arbitrarily stale after every wake. The crate resets the
+    /// timer on every server response (`* OK Still here` keepalives included),
+    /// so a healthy connection rarely reaches it.
+    ///
+    /// `reconcile_in` exists precisely *because* of that reset. Servers such as
+    /// Dovecot send keepalives every couple of minutes, so on a healthy
+    /// connection `liveness` may never fire at all, and anything hung off it —
+    /// notably deletion reconciliation — would never run either. This is an
+    /// independent wall-clock deadline that keepalives cannot push out.
+    ///
+    /// The IDLE wait itself is the one round trip *not* wrapped in
+    /// `FETCH_TIMEOUT`: blocking for minutes is the entire point of it.
+    pub async fn idle_wait(
+        self,
+        liveness: Duration,
+        reconcile_in: Duration,
+        shutdown: impl Future<Output = ()>,
+    ) -> Result<(Self, IdleOutcome), MailClientError> {
+        let supports_idle = self.supports_idle;
+        let delete_strategy = self.delete_strategy;
+        let mut handle = self.session.idle();
+
+        // An ordinary round trip, so an ordinary timeout — but note that on
+        // failure the `Handle` is dropped rather than logged out, and the
+        // session inside it may well still be alive: a server answering `BAD`
+        // to IDLE leaves a perfectly usable connection, and so does this
+        // timeout firing. It is dropped anyway because 0.11.3's `Handle`
+        // offers no way back to the `Session` other than `done()`, and `done()`
+        // after a `BAD` blocks for a further `FETCH_TIMEOUT` waiting on a tag
+        // the server has already sent. Dropping closes the socket at once,
+        // which at least frees the server's slot immediately; the alternative
+        // is holding the poll loop hostage for 30s per attempt.
+        with_timeout(async {
+            handle.init().await.map_err(|e| MailClientError::Command(e.to_string()))
+        })
+        .await?;
+
+        // Scoped: `wait_with_timeout` borrows the handle mutably for as long as
+        // its future lives, and `done()` below needs the handle back.
+        let mut woke_to_reconcile = false;
+        let response = {
+            let (wait, stop) = handle.wait_with_timeout(liveness);
+            tokio::pin!(wait);
+            tokio::pin!(shutdown);
+            let reconcile_timer = tokio::time::sleep(reconcile_in);
+            tokio::pin!(reconcile_timer);
+            // Held alive on purpose: dropping the `StopSource` is the crate's
+            // documented way to end an IDLE, and it makes the wait resolve as
+            // `ManualInterrupt` at a defined point instead of cancelling the
+            // future mid-read. That is what lets both wakes below still send
+            // DONE — and, for a shutdown, LOGOUT — rather than yanking the
+            // socket.
+            let mut stop = Some(stop);
+            loop {
+                tokio::select! {
+                    result = &mut wait => break result,
+                    // Both arms are disabled once either has fired, so neither
+                    // completed future is ever polled again — and whichever
+                    // fired first is the one `woke_to_reconcile` reports.
+                    _ = &mut shutdown, if stop.is_some() => stop = None,
+                    _ = &mut reconcile_timer, if stop.is_some() => {
+                        woke_to_reconcile = true;
+                        stop = None;
+                    }
+                }
+            }
+        };
+
+        // A wait that errors is a broken stream, so `done()` would only fail
+        // too; drop the handle and let the caller reconnect.
+        let response = response.map_err(|e| MailClientError::Command(e.to_string()))?;
+
+        let session = with_timeout(async {
+            handle.done().await.map_err(|e| MailClientError::Command(e.to_string()))
+        })
+        .await?;
+
+        let outcome = match response {
+            IdleResponse::NewData(_) => IdleOutcome::NewData,
+            IdleResponse::Timeout => IdleOutcome::Timeout,
+            IdleResponse::ManualInterrupt if woke_to_reconcile => IdleOutcome::ReconcileDue,
+            IdleResponse::ManualInterrupt => IdleOutcome::Interrupted,
+        };
+        Ok((Self { session, supports_idle, delete_strategy }, outcome))
+    }
+
+    /// Move one message to this server's Trash folder.
+    ///
+    /// The only command in this module that changes anything on the server.
+    /// Everything else is strictly read-only (`BODY.PEEK[]`, read state kept
+    /// locally) precisely so AITerm never disturbs what the user sees in their
+    /// other mail clients; this is the one deliberate, explicitly
+    /// user-initiated exception, so it errors out rather than improvising
+    /// whenever it cannot do exactly what was asked.
+    ///
+    /// Borrows rather than consuming: a delete happens on the account's
+    /// long-lived session between two IDLEs, and the caller must be able to go
+    /// straight back into IDLE afterwards — and must still own the connection
+    /// for the single LOGOUT that ends it.
+    ///
+    /// A `MailClientError::Unsupported` leaves the session clean and usable; a
+    /// `Command` or `Timeout` may have left a response unread on the stream, so
+    /// the caller reconnects on those.
+    pub async fn move_to_trash(&mut self, uid: i64) -> Result<(), MailClientError> {
+        // Checked first, before a single byte is written: on a server that can
+        // do neither, this must be a refusal that cost nothing, not a partial
+        // delete.
+        let Some(strategy) = self.delete_strategy else {
+            return Err(MailClientError::Unsupported(
+                "this server advertises neither MOVE (RFC 6851) nor UIDPLUS (RFC 4315); \
+                 the only remaining way to delete would be a plain EXPUNGE, which would \
+                 permanently remove every message in the mailbox flagged \\Deleted — \
+                 including ones flagged from another mail client"
+                    .to_string(),
+            ));
+        };
+
+        // Stated explicitly rather than inherited. Every other command here
+        // runs against INBOX because `fetch_selected` selected it, and nothing
+        // in this module ever selects anything else — but this one *writes*,
+        // and a `UID MOVE` issued against the wrong selected mailbox moves the
+        // wrong message. One round trip on a user-initiated action is cheap
+        // insurance against a future caller breaking that invariant.
+        with_timeout(async {
+            self.session
+                .select("INBOX")
+                .await
+                .map(|_| ())
+                .map_err(|e| MailClientError::Command(e.to_string()))
+        })
+        .await?;
+
+        let mailboxes = list_mailboxes(&mut self.session).await?;
+        let Some(trash) = resolve_trash_mailbox(&mailboxes) else {
+            return Err(MailClientError::Unsupported(
+                "could not find a Trash folder on this server: no mailbox is flagged \\Trash \
+                 (RFC 6154 SPECIAL-USE) and none of the usual names exist"
+                    .to_string(),
+            ));
+        };
+
+        let uid_set = uid.to_string();
+        match strategy {
+            DeleteStrategy::UidMove => {
+                with_timeout(async {
+                    self.session
+                        .uid_mv(&uid_set, &trash)
+                        .await
+                        .map_err(|e| MailClientError::Command(e.to_string()))
+                })
+                .await
+            }
+            DeleteStrategy::CopyThenUidExpunge => {
+                copy_then_uid_expunge(&mut self.session, &uid_set, &trash).await
+            }
+        }
+    }
+
+    /// Graceful close. The counterpart to every method above that hands the
+    /// connection back.
+    pub async fn logout(self) {
+        logout(self.session).await;
+    }
+}
+
+/// Whether a CAPABILITY response advertises RFC 2177 IDLE.
+///
+/// Case-insensitive: IMAP atoms are case-insensitive per RFC 3501, but
+/// `Capabilities::has_str` resolves an atom by exact `HashSet` membership, so a
+/// server answering `idle` would read as "no IDLE" and be silently demoted to
+/// polling forever. Matching whole atoms (not substrings) also keeps an
+/// unrelated `XIDLE`-style extension from being mistaken for the real thing.
+fn advertises_idle<'a>(capabilities: impl IntoIterator<Item = &'a str>) -> bool {
+    capabilities.into_iter().any(|cap| cap.eq_ignore_ascii_case("IDLE"))
+}
+
+/// Which safe delete primitive this server offers, if any.
+///
+/// `MOVE` wins whenever it is advertised: it is one atomic command, it never
+/// touches the `\Deleted` flag, and the server guarantees the message ends up
+/// in exactly one of the two mailboxes even on a partial failure.
+///
+/// `None` — "this server can do neither" — is a real answer that MUST be
+/// surfaced as an error. There is deliberately no third branch: falling back to
+/// `\Deleted` + plain `EXPUNGE` would permanently remove every message in the
+/// mailbox that is flagged `\Deleted`, including messages the user flagged from
+/// another client, which is silent destruction of mail nobody asked us to
+/// touch. Gmail advertises both, so `None` is a safety net rather than a
+/// common path.
+///
+/// Matched case-insensitively and per whole atom, for the same reasons
+/// `advertises_idle` is: IMAP atoms are case-insensitive, and a substring match
+/// would mistake an unrelated `XMOVE`-style extension for the real thing.
+fn choose_delete_strategy<'a>(
+    capabilities: impl IntoIterator<Item = &'a str>,
+) -> Option<DeleteStrategy> {
+    let mut uidplus = false;
+    for capability in capabilities {
+        if capability.eq_ignore_ascii_case("MOVE") {
+            return Some(DeleteStrategy::UidMove);
+        }
+        if capability.eq_ignore_ascii_case("UIDPLUS") {
+            uidplus = true;
+        }
+    }
+    uidplus.then_some(DeleteStrategy::CopyThenUidExpunge)
+}
+
+/// Mailbox names probed only when the server flags no mailbox `\Trash`, in
+/// preference order.
+///
+/// Deliberately short and provider-shaped rather than clever: guessing wrong
+/// here does not fail, it silently files the user's mail somewhere they never
+/// asked for. `[Gmail]/Trash` leads because a Gmail account whose SPECIAL-USE
+/// flags did not come through would otherwise match its own localized `Trash`
+/// only by accident.
+const TRASH_FALLBACK_NAMES: [&str; 3] = ["[Gmail]/Trash", "Trash", "INBOX.Trash"];
+
+/// Which mailbox a delete moves messages into.
+///
+/// The `\Trash` SPECIAL-USE attribute (RFC 6154) is the only authoritative
+/// answer, and is the only one that survives localization — Gmail's Trash is
+/// `[Gmail]/&V4NXPpCuTvY-` for a Japanese account, so hardcoding
+/// `[Gmail]/Trash` would resolve to nothing there. Names are consulted only
+/// when no mailbox carries the flag, and `None` — meaning "do not delete, tell
+/// the user" — is preferred over guessing.
+fn resolve_trash_mailbox(mailboxes: &[MailboxEntry]) -> Option<String> {
+    if let Some(entry) = mailboxes.iter().find(|m| m.special_use_trash && m.selectable) {
+        return Some(entry.name.clone());
+    }
+    TRASH_FALLBACK_NAMES.iter().find_map(|candidate| {
+        mailboxes
+            .iter()
+            .find(|m| m.selectable && m.name.eq_ignore_ascii_case(candidate))
+            .map(|m| m.name.clone())
+    })
+}
+
+/// Every mailbox the account can see, with the two attributes Trash resolution
+/// cares about.
+async fn list_mailboxes(session: &mut ImapSession) -> Result<Vec<MailboxEntry>, MailClientError> {
+    let names: Vec<Name> = with_timeout(async {
+        session
+            .list(Some(""), Some("*"))
+            .await
+            .map_err(|e| MailClientError::Command(e.to_string()))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|e| MailClientError::Command(e.to_string()))
+    })
+    .await?;
+
+    Ok(names
+        .iter()
+        .map(|name| MailboxEntry {
+            name: name.name().to_string(),
+            special_use_trash: name.attributes().iter().any(|a| matches!(a, NameAttribute::Trash)),
+            selectable: !name.attributes().iter().any(|a| matches!(a, NameAttribute::NoSelect)),
+        })
+        .collect())
+}
+
+/// The UIDPLUS fallback, for servers without `MOVE`.
+///
+/// `UID EXPUNGE` is what makes this safe, and is not interchangeable with
+/// `EXPUNGE`: it removes only the UIDs named here, so a message another client
+/// flagged `\Deleted` is left exactly as it was.
+///
+/// Both streaming commands are drained to completion. An undrained response
+/// leaves its tagged reply sitting in the buffer, and every later command on
+/// this session then reads the wrong tag.
+async fn copy_then_uid_expunge(
+    session: &mut ImapSession,
+    uid_set: &str,
+    trash: &str,
+) -> Result<(), MailClientError> {
+    with_timeout(async {
+        session
+            .uid_copy(uid_set, trash)
+            .await
+            .map_err(|e| MailClientError::Command(e.to_string()))
+    })
+    .await?;
+
+    with_timeout(async {
+        session
+            .uid_store(uid_set, "+FLAGS (\\Deleted)")
+            .await
+            .map_err(|e| MailClientError::Command(e.to_string()))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map(|_| ())
+            .map_err(|e| MailClientError::Command(e.to_string()))
+    })
+    .await?;
+
+    with_timeout(async {
+        session
+            .uid_expunge(uid_set)
+            .await
+            .map_err(|e| MailClientError::Command(e.to_string()))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map(|_| ())
+            .map_err(|e| MailClientError::Command(e.to_string()))
+    })
+    .await
+}
+
+fn capability_name(capability: &Capability) -> String {
+    match capability {
+        Capability::Imap4rev1 => "IMAP4rev1".to_string(),
+        Capability::Auth(mechanism) => format!("AUTH={mechanism}"),
+        Capability::Atom(atom) => atom.clone(),
+    }
+}
+
+/// Verify that credentials actually work: connect, log in, and SELECT INBOX,
+/// then log out. Used by `mail_test_connection` so the UI can tell the user
+/// their password/App Password/IMAP setting is wrong at the moment they add
+/// the account, instead of failing silently in the background poller.
+pub async fn test_connection(
+    host: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+) -> Result<(), MailClientError> {
+    let mut session = connect_and_login(host, port, username, password).await?;
+    let result = with_timeout(async {
+        session
+            .select("INBOX")
+            .await
+            .map(|_| ())
+            .map_err(|e| MailClientError::Command(e.to_string()))
+    })
+    .await;
+    logout(session).await;
+    result
+}
+
+/// Bounded by the same timeout, but safe to abandon on expiry: no session
+/// exists yet, so there is nothing to log out of.
+async fn connect_and_login(
+    host: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+) -> Result<ImapSession, MailClientError> {
+    with_timeout(connect_and_login_inner(host, port, username, password)).await
+}
+
+async fn connect_and_login_inner(
+    host: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+) -> Result<ImapSession, MailClientError> {
+    let tcp = TcpStream::connect((host, port))
+        .await
+        .map_err(|e| MailClientError::Connect(e.to_string()))?;
+
+    let native_connector = native_tls::TlsConnector::new()
+        .map_err(|e| MailClientError::Connect(e.to_string()))?;
+    let connector = tokio_native_tls::TlsConnector::from(native_connector);
+    let tls_stream = connector
+        .connect(host, tcp)
+        .await
+        .map_err(|e| MailClientError::Connect(e.to_string()))?;
+
+    let client = async_imap::Client::new(tls_stream);
+    client
+        .login(username, password)
+        .await
+        .map_err(|(e, _client)| MailClientError::Login(e.to_string()))
+}
+
+/// Best-effort graceful close. Bounded too, so a wedged connection can't hang
+/// the poll loop in cleanup — if it does time out we simply drop the session.
+async fn logout(mut session: ImapSession) {
+    let _ = tokio::time::timeout(FETCH_TIMEOUT, session.logout()).await;
+}
+
+async fn with_timeout<T>(
+    fut: impl Future<Output = Result<T, MailClientError>>,
+) -> Result<T, MailClientError> {
+    tokio::time::timeout(FETCH_TIMEOUT, fut)
+        .await
+        .unwrap_or(Err(MailClientError::Timeout(FETCH_TIMEOUT)))
+}
+
+/// Fetch messages newer than `since_uid` from INBOX (or, on the first sync
+/// for an account, the newest `FIRST_POLL_MAX_MESSAGES`), in batches of
+/// `FETCH_BATCH_SIZE`, using `BODY.PEEK[]` so the server's `\Seen` flag is
+/// never touched — AITerm tracks read/unread locally (see
+/// `db/mail.rs::mark_read_locally`) so it doesn't clobber the read state the
+/// user sees in their phone's mail app.
+///
+/// Batches come back oldest-first and are meant to be processed and committed
+/// one at a time: if the fetch dies partway through a large sync, the batches
+/// that already made it are returned as `Ok` (the failure is logged) so the
+/// caller can commit them and make forward progress, rather than throwing
+/// away work that succeeded and retrying it identically next cycle. Only a
+/// failure on the *first* batch — where there is no progress to preserve —
+/// surfaces as `Err`. Timeouts flow through that same path: they are applied
+/// per round trip, never around the loop, because a timeout wrapped around
+/// the loop drops the whole future and destroys every batch collected so far,
+/// which is precisely the failure mode this batching exists to survive.
+///
+/// The timeouts also live here, per round trip, rather than around the caller:
+/// an outer timeout drops the future mid-await and so skips the caller's
+/// LOGOUT — and a hung connection is precisely the case that leaves a dangling
+/// session on the server. Timing out per round trip produces an ordinary `Err`
+/// that flows out through the caller's normal cleanup instead.
+///
+/// The returned `PollOutcome` also carries what this session learned about the
+/// mailbox as a whole: its UIDVALIDITY, and — when `reconcile` — the full
+/// `UID SEARCH ALL` UID set the caller reconciles server-side deletions
+/// against. `reconcile == false` yields `server_uids: None`, which the caller
+/// already treats as "reconciliation did not happen", so skipping it can never
+/// read as "the mailbox is empty".
+///
+/// SELECT is issued here on every sync, which is also what makes it safe for
+/// the caller to enter IDLE only after a successful sync: IDLE requires a
+/// selected mailbox, and this is the only place that selects one.
+async fn fetch_selected(
+    session: &mut ImapSession,
+    since_uid: Option<i64>,
+    stored_uid_validity: Option<i64>,
+    reconcile: bool,
+    should_stop: impl Fn() -> bool,
+) -> Result<PollOutcome, MailClientError> {
+    let mailbox = with_timeout(async {
+        session
+            .select("INBOX")
+            .await
+            .map_err(|e| MailClientError::Command(e.to_string()))
+    })
+    .await?;
+    let uid_validity = mailbox.uid_validity.map(|v| v as i64);
+
+    // Decided here rather than by the caller because it changes the query we
+    // are about to send: under a new UIDVALIDITY the stored `since_uid` indexes
+    // into the old numbering, so honoring it would search `UID {stale+1}:*` in
+    // a mailbox whose UIDs may have restarted at 1 — matching nothing, on
+    // every poll, silently and forever. Re-seed from scratch instead.
+    let uid_validity_changed = uid_validity_changed(stored_uid_validity, uid_validity);
+    let effective_since_uid = if uid_validity_changed { None } else { since_uid };
+
+    let search_query = match effective_since_uid {
+        Some(uid) => format!("UID {}:*", uid + 1),
+        None => "1:*".to_string(),
+    };
+    let uids = with_timeout(async {
+        session
+            .uid_search(&search_query)
+            .await
+            .map_err(|e| MailClientError::Command(e.to_string()))
+    })
+    .await?;
+
+    let planned = plan_fetch_batches(uids.into_iter().collect(), effective_since_uid);
+
+    let (batches, interrupted) =
+        collect_batches(session, planned, Instant::now() + TOTAL_FETCH_BUDGET, should_stop).await?;
+
+    // Deliberately *after* the fetch loop, never before: a UID SEARCH ALL taken
+    // first would not list the messages this poll is about to insert, and the
+    // caller — which deletes cached mail missing from this set — would erase
+    // them the instant they landed. Taken last, everything we fetched was in
+    // the mailbox at or before this point.
+    //
+    // Skipped entirely once the fetch was interrupted. The caller drops an
+    // interrupted sync whole, so the result would go unused — and this is the
+    // heaviest command in a sync, issued at the one moment the caller is on a
+    // seconds-long budget to send LOGOUT.
+    let server_uids = if reconcile && !interrupted { search_all_uids(session).await } else { None };
+
+    Ok(PollOutcome { uid_validity, uid_validity_changed, server_uids, batches, interrupted })
+}
+
+/// Whether our cached UIDs belong to a different incarnation of the mailbox.
+///
+/// Only a stored value that disagrees with a reported one counts. No stored
+/// value means a first poll (or a database upgraded from before the column
+/// existed) — there is nothing to invalidate. No reported value means a server
+/// that doesn't do UIDVALIDITY, which tells us nothing; treating that as
+/// "changed" would wipe and re-download the whole cache on every poll.
+fn uid_validity_changed(stored: Option<i64>, server: Option<i64>) -> bool {
+    matches!((stored, server), (Some(stored), Some(server)) if stored != server)
+}
+
+/// `UID SEARCH ALL` — every UID INBOX currently holds, numbers only, no bodies.
+///
+/// A failure is `None`, and is logged and swallowed rather than propagated: the
+/// messages this poll already fetched are worth committing even when
+/// reconciliation can't run, and skipping one cycle's deletions costs nothing
+/// but a stale row until the next poll.
+async fn search_all_uids(session: &mut ImapSession) -> Option<Vec<i64>> {
+    let result = with_timeout(async {
+        session
+            .uid_search("ALL")
+            .await
+            .map_err(|e| MailClientError::Command(e.to_string()))
+    })
+    .await;
+
+    match result {
+        Ok(uids) => Some(uids.into_iter().map(|uid| uid as i64).collect()),
+        Err(e) => {
+            log::warn!("mail: UID SEARCH ALL failed, skipping deletion reconciliation this cycle: {e}");
+            None
+        }
+    }
+}
+
+/// One batch fetch. Abstracted over the session purely so the loop below —
+/// which decides what survives a mid-sync failure — can be tested without a
+/// live IMAP server.
+trait BatchSource {
+    async fn fetch_batch(&mut self, uid_batch: &[u32]) -> Result<Vec<RawMessage>, MailClientError>;
+}
+
+impl BatchSource for ImapSession {
+    async fn fetch_batch(&mut self, uid_batch: &[u32]) -> Result<Vec<RawMessage>, MailClientError> {
+        with_timeout(fetch_uid_batch(self, uid_batch)).await
+    }
+}
+
+/// Run the planned batches in order, keeping every batch that succeeds.
+///
+/// A failing batch (including a timed-out one) stops the loop but does not
+/// throw away its predecessors — they are returned as `Ok` so the caller can
+/// commit them and advance `last_seen_uid` past them. Only a failure with no
+/// progress behind it surfaces as `Err`. `deadline` bounds the total time the
+/// same way: it is checked *between* batches, so it can delay progress but
+/// never destroy it.
+///
+/// `should_stop` is the exception to that "never destroy it" rule, and is the
+/// only cancellation point in the network phase of a sync. When it fires the
+/// loop returns `interrupted = true` alongside whatever it had, and the caller
+/// discards the lot: a stop is on a five-second budget, and every batch kept
+/// would cost an LLM call per message to process before the LOGOUT could be
+/// sent. Fetching them again on the next connection is the cheap half of that
+/// trade.
+///
+/// Returns `(batches, interrupted)`.
+async fn collect_batches<S: BatchSource>(
+    source: &mut S,
+    planned: Vec<Vec<u32>>,
+    deadline: Instant,
+    should_stop: impl Fn() -> bool,
+) -> Result<(Vec<MessageBatch>, bool), MailClientError> {
+    let mut batches: Vec<MessageBatch> = Vec::new();
+    for uid_batch in planned {
+        // Checked before the first batch too, unlike the deadline below: the
+        // SELECT and the UID SEARCH that precede this loop are worth up to a
+        // `FETCH_TIMEOUT` each, so a stop signalled during them arrives here
+        // with nothing fetched yet and must still be honored.
+        if should_stop() {
+            log::info!(
+                "mail: fetch interrupted after {} batch(es); they are dropped and refetched on the next connection",
+                batches.len()
+            );
+            return Ok((batches, true));
+        }
+        // The first batch is always attempted: there is no progress to
+        // protect yet, and returning `Ok(vec![])` for an untried fetch would
+        // look to the caller like "no new mail".
+        if !batches.is_empty() && Instant::now() >= deadline {
+            log::warn!("mail: fetch budget exhausted after {} batch(es)", batches.len());
+            break;
+        }
+        let max_uid = uid_batch.iter().copied().max().unwrap_or(0) as i64;
+        match source.fetch_batch(&uid_batch).await {
+            Ok(messages) => batches.push(MessageBatch { max_uid, messages }),
+            Err(e) => {
+                if batches.is_empty() {
+                    return Err(e);
+                }
+                // Keep what already succeeded so the caller can commit it;
+                // the remaining UIDs are simply picked up next poll.
+                log::warn!("mail: fetch failed after {} batch(es): {e}", batches.len());
+                break;
+            }
+        }
+    }
+
+    Ok((batches, false))
+}
+
+async fn fetch_uid_batch(
+    session: &mut ImapSession,
+    uid_batch: &[u32],
+) -> Result<Vec<RawMessage>, MailClientError> {
+    let uid_set = uid_batch.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
+    let fetches = session
+        .uid_fetch(&uid_set, "(UID BODY.PEEK[])")
+        .await
+        .map_err(|e| MailClientError::Command(e.to_string()))?
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| MailClientError::Command(e.to_string()))?;
+
+    let mut messages = Vec::new();
+    for fetch in fetches {
+        if let (Some(uid), Some(body)) = (fetch.uid, fetch.body()) {
+            messages.push(RawMessage { uid: uid as i64, raw: body.to_vec() });
+        }
+    }
+    // A fetch item without a UID or a body is dropped, and since `max_uid` is
+    // the highest *requested* UID it is dropped permanently — that is the
+    // intended tradeoff (a message deleted between SEARCH and FETCH must not
+    // wedge the poll loop forever), but it must not be silent, or a server
+    // returning incomplete responses would lose mail with no trace at all.
+    if messages.len() < uid_batch.len() {
+        log::warn!(
+            "mail: server returned {} of {} requested message(s); the missing UIDs are skipped permanently",
+            messages.len(),
+            uid_batch.len()
+        );
+    }
+    Ok(messages)
+}
+
+/// Decide which UIDs to fetch, and in what batches, from the raw UID SEARCH
+/// result. Pure so it can be tested without a live IMAP server.
+///
+/// Batches are ascending (oldest first) and never exceed `FETCH_BATCH_SIZE`.
+/// On a first poll (`since_uid == None`) the *newest* `FIRST_POLL_MAX_MESSAGES`
+/// are kept, since seeding an account should show recent mail, not the oldest
+/// mail in the archive.
+fn plan_fetch_batches(uids: Vec<u32>, since_uid: Option<i64>) -> Vec<Vec<u32>> {
+    // Per RFC 3501, "UID {n}:*" can resolve to a *reversed* range when there
+    // is no mail with UID >= n (the server may report the highest UID as
+    // the "start" and n as the "end", re-including UID n itself). Re-check
+    // against `since_uid` client-side so a mailbox with no new mail never
+    // re-yields an already-seen UID and causes a duplicate refetch.
+    let mut new_uids: Vec<u32> = uids
+        .into_iter()
+        .filter(|uid| since_uid.map_or(true, |since| (*uid as i64) > since))
+        .collect();
+    new_uids.sort_unstable();
+
+    if since_uid.is_none() && new_uids.len() > FIRST_POLL_MAX_MESSAGES {
+        new_uids.drain(..new_uids.len() - FIRST_POLL_MAX_MESSAGES);
+    }
+
+    new_uids.chunks(FETCH_BATCH_SIZE).map(|chunk| chunk.to_vec()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flatten(batches: &[Vec<u32>]) -> Vec<u32> {
+        batches.iter().flatten().copied().collect()
+    }
+
+    #[test]
+    fn first_poll_keeps_only_the_newest_capped_window() {
+        let uids: Vec<u32> = (1..=120).collect();
+
+        let batches = plan_fetch_batches(uids, None);
+
+        let planned = flatten(&batches);
+        assert_eq!(planned.len(), FIRST_POLL_MAX_MESSAGES, "first poll must be capped");
+        let newest_window: Vec<u32> = (121 - FIRST_POLL_MAX_MESSAGES as u32..=120).collect();
+        assert_eq!(planned, newest_window, "the window must be the newest UIDs, not the oldest");
+    }
+
+    #[test]
+    fn first_poll_below_the_cap_takes_everything() {
+        let batches = plan_fetch_batches(vec![3, 1, 2], None);
+        assert_eq!(flatten(&batches), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn subsequent_poll_takes_everything_newer_than_since_uid_uncapped() {
+        let uids: Vec<u32> = (1..=200).collect();
+
+        let batches = plan_fetch_batches(uids, Some(10));
+
+        let planned = flatten(&batches);
+        assert!(
+            planned.len() > FIRST_POLL_MAX_MESSAGES,
+            "subsequent polls must not be capped, got {} UIDs",
+            planned.len()
+        );
+        assert_eq!(planned, (11..=200).collect::<Vec<u32>>(), "every UID newer than since_uid must be planned");
+    }
+
+    #[test]
+    fn subsequent_poll_drops_already_seen_uids() {
+        // A reversed "UID n:*" range can re-include since_uid itself.
+        assert!(
+            plan_fetch_batches(vec![7, 8, 9], Some(9)).is_empty(),
+            "nothing newer than since_uid means nothing to fetch"
+        );
+        assert_eq!(
+            flatten(&plan_fetch_batches(vec![7, 8, 9], Some(7))),
+            vec![8, 9],
+            "since_uid itself must be excluded but everything above it kept"
+        );
+    }
+
+    #[test]
+    fn batches_never_exceed_the_chunk_size_and_stay_ascending() {
+        let uids: Vec<u32> = (1..=120).collect();
+
+        let batches = plan_fetch_batches(uids, Some(0));
+
+        assert!(
+            batches.iter().all(|b| b.len() <= FETCH_BATCH_SIZE && !b.is_empty()),
+            "every batch must be non-empty and within {FETCH_BATCH_SIZE}: {:?}",
+            batches.iter().map(|b| b.len()).collect::<Vec<_>>()
+        );
+        assert_eq!(flatten(&batches), (1..=120).collect::<Vec<u32>>(), "batches must cover every UID in ascending order");
+    }
+
+    #[test]
+    fn empty_search_result_produces_no_batches() {
+        assert!(plan_fetch_batches(Vec::new(), None).is_empty());
+        assert!(plan_fetch_batches(Vec::new(), Some(42)).is_empty());
+    }
+
+    #[test]
+    fn first_poll_is_split_into_many_batches_not_one_giant_fetch() {
+        // The whole point of batching: the first sync must be committable in
+        // pieces. Sizes are hard-coded rather than derived from the constants
+        // so that making FETCH_BATCH_SIZE == FIRST_POLL_MAX_MESSAGES again —
+        // which silently collapses the first poll back to a single
+        // all-or-nothing fetch — fails here.
+        let batches = plan_fetch_batches((1..=120).collect(), None);
+
+        assert_eq!(batches.len(), 5, "a 50-message first poll must be 5 batches, got {:?}", batches.iter().map(|b| b.len()).collect::<Vec<_>>());
+        assert!(batches.iter().all(|b| b.len() == 10), "each first-poll batch must hold 10 UIDs: {:?}", batches.iter().map(|b| b.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_uid_validity_that_disagrees_with_the_stored_one_invalidates_the_cache() {
+        assert!(
+            uid_validity_changed(Some(1), Some(2)),
+            "a mailbox reporting a different UIDVALIDITY has renumbered; the cached UIDs mean nothing"
+        );
+    }
+
+    #[test]
+    fn a_matching_uid_validity_leaves_the_cache_alone() {
+        assert!(
+            !uid_validity_changed(Some(2), Some(2)),
+            "the ordinary case must not wipe the cache and re-download the mailbox every poll"
+        );
+    }
+
+    #[test]
+    fn a_first_poll_with_nothing_stored_is_not_a_change() {
+        assert!(
+            !uid_validity_changed(None, Some(2)),
+            "a first poll (or a database upgraded from before the column) has nothing to invalidate"
+        );
+    }
+
+    #[test]
+    fn a_server_that_reports_no_uid_validity_is_not_a_change() {
+        assert!(
+            !uid_validity_changed(Some(2), None),
+            "a server that omits UIDVALIDITY tells us nothing; guessing 'changed' would wipe the cache every poll"
+        );
+        assert!(!uid_validity_changed(None, None));
+    }
+
+    #[test]
+    fn a_server_advertising_idle_gets_push() {
+        assert!(
+            advertises_idle(["IMAP4rev1", "IDLE", "MOVE"]),
+            "a server listing IDLE must be driven by push, not by the polling fallback"
+        );
+    }
+
+    #[test]
+    fn the_idle_capability_is_matched_case_insensitively() {
+        // IMAP atoms are case-insensitive, and async-imap's own `has_str` is
+        // not — a server answering `idle` would be demoted to polling forever.
+        assert!(
+            advertises_idle(["imap4rev1", "idle"]),
+            "a lowercase IDLE atom is still IDLE"
+        );
+    }
+
+    #[test]
+    fn a_server_without_idle_falls_back_to_polling() {
+        assert!(
+            !advertises_idle(["IMAP4rev1", "UIDPLUS", "MOVE"]),
+            "using IDLE against a server that never advertised it is forbidden by RFC 2177"
+        );
+        assert!(
+            !advertises_idle(["IMAP4rev1", "XIDLE-SOMETHING"]),
+            "a capability that merely contains 'IDLE' is a different extension"
+        );
+        assert!(
+            !advertises_idle(Vec::<&str>::new()),
+            "an empty capability list cannot be assumed to support IDLE"
+        );
+    }
+
+    #[test]
+    fn move_is_preferred_over_the_copy_and_expunge_dance() {
+        assert_eq!(
+            choose_delete_strategy(["IMAP4rev1", "UIDPLUS", "MOVE"]),
+            Some(DeleteStrategy::UidMove),
+            "one atomic UID MOVE beats COPY + STORE + UID EXPUNGE whenever the server offers it"
+        );
+    }
+
+    #[test]
+    fn a_server_with_only_move_uses_it() {
+        assert_eq!(
+            choose_delete_strategy(["IMAP4rev1", "IDLE", "MOVE"]),
+            Some(DeleteStrategy::UidMove)
+        );
+    }
+
+    #[test]
+    fn a_server_with_only_uidplus_falls_back_to_copy_then_uid_expunge() {
+        assert_eq!(
+            choose_delete_strategy(["IMAP4rev1", "IDLE", "UIDPLUS"]),
+            Some(DeleteStrategy::CopyThenUidExpunge),
+            "UID EXPUNGE removes only the UIDs it is given, so this is still exact"
+        );
+    }
+
+    // The safety-critical case. Plain EXPUNGE permanently removes every message
+    // in the mailbox flagged \Deleted, including ones the user flagged from a
+    // different mail client, so "delete anyway" is not an option here — the
+    // only correct answer is to refuse.
+    #[test]
+    fn a_server_with_neither_extension_refuses_rather_than_falling_back_to_plain_expunge() {
+        assert_eq!(
+            choose_delete_strategy(["IMAP4rev1", "IDLE", "LITERAL+"]),
+            None,
+            "with no exact primitive available the delete must be refused, never approximated with EXPUNGE"
+        );
+        assert_eq!(
+            choose_delete_strategy(Vec::<&str>::new()),
+            None,
+            "an empty capability list cannot be assumed to support anything"
+        );
+    }
+
+    #[test]
+    fn the_delete_capabilities_are_matched_case_insensitively_per_whole_atom() {
+        assert_eq!(
+            choose_delete_strategy(["move"]),
+            Some(DeleteStrategy::UidMove),
+            "IMAP atoms are case-insensitive; a lowercase MOVE is still MOVE"
+        );
+        assert_eq!(
+            choose_delete_strategy(["uidplus"]),
+            Some(DeleteStrategy::CopyThenUidExpunge),
+            "and likewise for UIDPLUS"
+        );
+        assert_eq!(
+            choose_delete_strategy(["XMOVE-SOMETHING", "UIDPLUSX"]),
+            None,
+            "a capability that merely contains MOVE or UIDPLUS is a different extension entirely"
+        );
+    }
+
+    fn mailbox(name: &str) -> MailboxEntry {
+        MailboxEntry { name: name.to_string(), special_use_trash: false, selectable: true }
+    }
+
+    fn trash_mailbox(name: &str) -> MailboxEntry {
+        MailboxEntry { name: name.to_string(), special_use_trash: true, selectable: true }
+    }
+
+    #[test]
+    fn the_special_use_trash_flag_wins_over_any_name() {
+        // A Japanese Gmail account: the real Trash is not spelled "Trash" at
+        // all, and a folder literally named Trash may exist alongside it.
+        let mailboxes = vec![
+            mailbox("INBOX"),
+            mailbox("Trash"),
+            trash_mailbox("[Gmail]/&V4NXPpCuTvY-"),
+        ];
+
+        assert_eq!(
+            resolve_trash_mailbox(&mailboxes).as_deref(),
+            Some("[Gmail]/&V4NXPpCuTvY-"),
+            "RFC 6154 is the only answer that survives localization; a name match must not override it"
+        );
+    }
+
+    #[test]
+    fn a_server_without_special_use_probes_the_known_names_in_order() {
+        let mailboxes = vec![mailbox("INBOX"), mailbox("Trash"), mailbox("[Gmail]/Trash")];
+
+        assert_eq!(
+            resolve_trash_mailbox(&mailboxes).as_deref(),
+            Some("[Gmail]/Trash"),
+            "the fallback order decides, not the order the server happened to list mailboxes in"
+        );
+        assert_eq!(
+            resolve_trash_mailbox(&[mailbox("INBOX"), mailbox("INBOX.Trash")]).as_deref(),
+            Some("INBOX.Trash"),
+            "a Courier-style flat hierarchy still resolves"
+        );
+    }
+
+    #[test]
+    fn a_mailbox_that_cannot_be_selected_is_never_a_delete_target() {
+        // `[Gmail]` itself is \Noselect: a hierarchy node, not a mailbox. A
+        // COPY or MOVE into one fails, so it must not be resolved as Trash.
+        let container = MailboxEntry {
+            name: "Trash".to_string(),
+            special_use_trash: false,
+            selectable: false,
+        };
+        assert_eq!(
+            resolve_trash_mailbox(&[mailbox("INBOX"), container]),
+            None,
+            "a \\Noselect name cannot receive a COPY or a MOVE"
+        );
+
+        let flagged_but_unselectable = MailboxEntry {
+            name: "[Gmail]".to_string(),
+            special_use_trash: true,
+            selectable: false,
+        };
+        assert_eq!(
+            resolve_trash_mailbox(&[flagged_but_unselectable, mailbox("Trash")]).as_deref(),
+            Some("Trash"),
+            "an unselectable \\Trash must fall through to the name probe, not win it"
+        );
+    }
+
+    #[test]
+    fn a_mailbox_list_with_no_trash_at_all_resolves_to_nothing() {
+        assert_eq!(
+            resolve_trash_mailbox(&[mailbox("INBOX"), mailbox("Archive"), mailbox("Sent")]),
+            None,
+            "with no Trash to be found the delete must fail loudly rather than file the mail somewhere arbitrary"
+        );
+        assert_eq!(resolve_trash_mailbox(&[]), None);
+    }
+
+    fn msg(uid: i64) -> RawMessage {
+        RawMessage { uid, raw: Vec::new() }
+    }
+
+    struct FakeSource {
+        outcomes: Vec<Result<Vec<RawMessage>, MailClientError>>,
+        requested: Vec<Vec<u32>>,
+    }
+
+    impl FakeSource {
+        fn new(outcomes: Vec<Result<Vec<RawMessage>, MailClientError>>) -> Self {
+            Self { outcomes, requested: Vec::new() }
+        }
+    }
+
+    impl BatchSource for FakeSource {
+        async fn fetch_batch(&mut self, uid_batch: &[u32]) -> Result<Vec<RawMessage>, MailClientError> {
+            self.requested.push(uid_batch.to_vec());
+            assert!(!self.outcomes.is_empty(), "collect_batches fetched more batches than the test scripted");
+            self.outcomes.remove(0)
+        }
+    }
+
+    fn far_future() -> Instant {
+        Instant::now() + Duration::from_secs(3600)
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_batch_keeps_the_batches_that_already_succeeded() {
+        let mut source = FakeSource::new(vec![
+            Ok(vec![msg(1)]),
+            Ok(vec![msg(2)]),
+            Err(MailClientError::Timeout(FETCH_TIMEOUT)),
+            Ok(vec![msg(4)]),
+        ]);
+
+        let (batches, interrupted) =
+            collect_batches(&mut source, vec![vec![1], vec![2], vec![3], vec![4]], far_future(), || false)
+                .await
+                .expect("a timeout after progress must not fail the whole fetch");
+
+        assert_eq!(
+            source.requested,
+            vec![vec![1u32], vec![2], vec![3]],
+            "the loop must stop at the failing batch instead of pressing on"
+        );
+        assert_eq!(
+            batches.iter().map(|b| b.max_uid).collect::<Vec<_>>(),
+            vec![1, 2],
+            "both batches that succeeded before the timeout must survive it"
+        );
+        assert!(!interrupted, "a fetch error is not a shutdown; the caller must still commit what it got");
+    }
+
+    #[tokio::test]
+    async fn a_failure_on_the_very_first_batch_surfaces_as_an_error() {
+        let mut source = FakeSource::new(vec![Err(MailClientError::Timeout(FETCH_TIMEOUT))]);
+
+        let result = collect_batches(&mut source, vec![vec![1], vec![2]], far_future(), || false).await;
+
+        assert!(
+            matches!(result, Err(MailClientError::Timeout(_))),
+            "with no progress to preserve the failure must surface, not masquerade as an empty inbox"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_exhausted_budget_stops_new_batches_but_keeps_the_finished_ones() {
+        let mut source = FakeSource::new(vec![Ok(vec![msg(1)]), Ok(vec![msg(2)]), Ok(vec![msg(3)])]);
+        let already_passed = Instant::now() - Duration::from_secs(1);
+
+        let (batches, interrupted) =
+            collect_batches(&mut source, vec![vec![1], vec![2], vec![3]], already_passed, || false)
+                .await
+                .expect("running out of budget is not an error");
+
+        assert_eq!(source.requested, vec![vec![1u32]], "the first batch must run, and no batch may start after the budget is gone");
+        assert_eq!(
+            batches.iter().map(|b| b.max_uid).collect::<Vec<_>>(),
+            vec![1],
+            "the batch that finished must still be returned for the caller to commit"
+        );
+        assert!(!interrupted, "an exhausted budget is ordinary progress, not an abandoned sync");
+    }
+
+    // The whole network phase of a sync used to be uninterruptible: a stop
+    // arriving here was not seen until `TOTAL_FETCH_BUDGET` (120s) ran out,
+    // against a 5s graceful-stop budget — after which the task is aborted, no
+    // LOGOUT is sent, and the session sits on the server's connection cap until
+    // it times out on its own.
+    #[tokio::test]
+    async fn a_stop_between_batches_abandons_the_fetch_instead_of_running_it_to_the_end() {
+        let mut source = FakeSource::new(vec![Ok(vec![msg(1)]), Ok(vec![msg(2)]), Ok(vec![msg(3)])]);
+        // `should_stop` is consulted once per batch, so "false, then true" is
+        // precisely a stop signalled while the first batch was on the wire.
+        let checks = std::cell::Cell::new(0usize);
+        let should_stop = || {
+            checks.set(checks.get() + 1);
+            checks.get() > 1
+        };
+
+        let (batches, interrupted) =
+            collect_batches(&mut source, vec![vec![1], vec![2], vec![3]], far_future(), should_stop)
+                .await
+                .expect("an interrupted fetch is not an error");
+
+        assert!(interrupted, "the caller has to be told this sync is partial, or it will commit a cursor past UIDs it never fetched");
+        assert_eq!(
+            source.requested,
+            vec![vec![1u32]],
+            "no batch may start once the stop is visible; the remaining ones are what a 120s uninterruptible fetch was made of"
+        );
+        assert_eq!(
+            batches.len(),
+            1,
+            "what was already fetched is still handed back; it is the caller that drops it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stop_already_pending_fetches_nothing_at_all() {
+        let mut source = FakeSource::new(vec![Ok(vec![msg(1)])]);
+
+        let (batches, interrupted) =
+            collect_batches(&mut source, vec![vec![1], vec![2]], far_future(), || true)
+                .await
+                .expect("an interrupted fetch is not an error");
+
+        assert!(interrupted);
+        assert!(
+            source.requested.is_empty(),
+            "the SELECT and UID SEARCH before this loop are worth 30s each, so a stop can arrive with nothing fetched yet"
+        );
+        assert!(batches.is_empty());
+    }
+}

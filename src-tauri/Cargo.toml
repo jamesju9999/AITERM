@@ -55,6 +55,13 @@ tokio-util = { version = "0.7", features = ["compat"] }
 
 rfd = "0.15"
 
+# Mail (M-mail Phase 1)
+async-imap = { version = "0.11", default-features = false, features = ["runtime-tokio"] }
+tokio-native-tls = "0.3"
+native-tls = "0.2"
+mail-parser = "0.11"
+tauri-plugin-notification = "2"
+
 # Enterprise module
 chrono = { version = "0.4", features = ["serde"] }
 url = "2"

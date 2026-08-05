@@ -12,7 +12,9 @@ import { ApiDocsView } from "./ApiDocsView";
 import { LoopStudioView } from "./LoopStudio";
 import { CodeAssistantView } from "./CodeAssistantView";
 import { KnowledgeBaseView } from "./KnowledgeBaseView";
+import { MailView } from "./MailView";
 import { useLocale } from "../contexts/LocaleContext";
+import { useMailSync } from "../hooks/useMailSync";
 import {
   onEnterpriseTaskReceived,
   onEnterpriseTaskReady,
@@ -66,6 +68,13 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(76);
   const [isDragging, setIsDragging] = useState(false);
+  // Mounted here, in the always-mounted shell, rather than in MailView:
+  // important mail must notify the user even if the Mail tab was never opened.
+  const {
+    unreadCount: mailUnreadCount,
+    failedAccountCount: mailFailedAccountCount,
+    refreshUnread: refreshMailUnread,
+  } = useMailSync();
 
   // We use refs to avoid binding stale values in keyboard listeners
   const tabsRef = useRef(tabs);
@@ -151,7 +160,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
     setPickerOpen(true);
   }, []);
 
-  const handlePickerSelect = useCallback((type: "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant" | "knowledge-base") => {
+  const handlePickerSelect = useCallback((type: "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant" | "knowledge-base" | "mail") => {
     const newId = crypto.randomUUID();
     let title = t.terminal_tab;
     if (type === "database") title = t.database_tab;
@@ -163,10 +172,11 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
     if (type === "loop-studio") title = t.loop_studio_tab;
     if (type === "code-assistant") title = t.code_assistant_tab;
     if (type === "knowledge-base") title = t.knowledge_base_tab;
+    if (type === "mail") title = t.mail_tab;
     setTabs((prev) => [...prev, { id: newId, title, type }]);
     setActiveId(newId);
     setPickerOpen(false);
-  }, [t.terminal_tab, t.database_tab, t.design_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab, t.loop_studio_tab, t.code_assistant_tab, t.knowledge_base_tab]);
+  }, [t.terminal_tab, t.database_tab, t.design_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab, t.loop_studio_tab, t.code_assistant_tab, t.knowledge_base_tab, t.mail_tab]);
 
   const handleCloseTab = useCallback(async (id: string) => {
     const guard = closeGuardsRef.current.get(id);
@@ -289,6 +299,8 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
           onToggle={toggleSidebar}
           width={sidebarWidth}
           hasUpdate={hasUpdate}
+          mailUnreadCount={mailUnreadCount}
+          mailFailedAccountCount={mailFailedAccountCount}
         />
       </div>
       
@@ -349,6 +361,8 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
                 <CodeAssistantView isActive={isActive} />
               ) : tab.type === "knowledge-base" ? (
                 <KnowledgeBaseView isActive={isActive} />
+              ) : tab.type === "mail" ? (
+                <MailView isActive={isActive} onMessageRead={refreshMailUnread} />
               ) : (
                 <TerminalView
                   isActive={isActive}

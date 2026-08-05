@@ -14,11 +14,12 @@ import {
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   CodeIcon,
-  LibraryIcon
+  LibraryIcon,
+  MailIcon
 } from "../Icons";
 import "./index.css";
 
-export type TabType = "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant" | "knowledge-base";
+export type TabType = "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant" | "knowledge-base" | "mail";
 
 export interface Tab {
   id: string;
@@ -48,6 +49,17 @@ export interface TabBarProps {
   onToggle: () => void;
   width: number;
   hasUpdate?: boolean;
+  mailUnreadCount?: number;
+  /** Accounts whose mail server connection has broken. Anything above zero puts
+   *  a warning marker on the Mail tab's icon — the only way a user who never
+   *  opens the Mail tab learns their inbox has stopped updating. */
+  mailFailedAccountCount?: number;
+}
+
+// Single source of truth for the cap rule, so the badge's visible text and its
+// accessible name can never disagree.
+function formatUnreadCount(n: number): string {
+  return n > 99 ? "99+" : String(n);
 }
 
 function getTabIcon(type: TabType): React.ReactNode {
@@ -62,6 +74,7 @@ function getTabIcon(type: TabType): React.ReactNode {
     case "loop-studio": return <RefreshIcon size={18} />;
     case "code-assistant": return <CodeIcon size={18} />;
     case "knowledge-base": return <LibraryIcon size={18} />;
+    case "mail": return <MailIcon size={18} />;
     default: return <FileTextIcon size={18} />;
   }
 }
@@ -76,7 +89,9 @@ export function TabBar({
   isSidebarOpen,
   onToggle,
   width,
-  hasUpdate = false
+  hasUpdate = false,
+  mailUnreadCount = 0,
+  mailFailedAccountCount = 0
 }: TabBarProps) {
   const navigate = useNavigate();
   const { t } = useLocale();
@@ -158,8 +173,19 @@ export function TabBar({
             onDoubleClick={isSidebarOpen ? () => setEditingId(tab.id) : undefined}
             title={isSidebarOpen ? `Switch to Tab (Ctrl+${idx + 1}) — Double click to rename` : `${tab.title} (Ctrl+${idx + 1})`}
           >
-            <span className="aiterm-tab-icon">{getTabIcon(tab.type)}</span>
-            
+            <span className="aiterm-tab-icon" style={{ position: "relative" }}>
+              {getTabIcon(tab.type)}
+              {tab.type === "mail" && mailUnreadCount > 0 && (
+                <span className="mail-unread-badge" role="img" aria-label={t.mail_unread_label(formatUnreadCount(mailUnreadCount))}>{formatUnreadCount(mailUnreadCount)}</span>
+              )}
+              {/* Opposite corner from the unread pill so the two never overlap,
+                  and deliberately not a count: "how many accounts are broken"
+                  is not the point, "something is broken" is. */}
+              {tab.type === "mail" && mailFailedAccountCount > 0 && (
+                <span className="mail-connection-badge" role="img" aria-label={t.mail_connection_failed_label(String(mailFailedAccountCount))}>!</span>
+              )}
+            </span>
+
             {isSidebarOpen && (
               editingId === tab.id ? (
                 <input

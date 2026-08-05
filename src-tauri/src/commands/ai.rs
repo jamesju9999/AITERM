@@ -47,7 +47,7 @@ pub struct AiStreamEvent {
 /// - Prefix with prose before the JSON object
 ///
 /// This function strips all of these and returns a string starting with `{`.
-fn extract_json_from_response(raw: &str) -> String {
+pub(crate) fn extract_json_from_response(raw: &str) -> String {
     // 1. Strip <think>...</think> blocks (DeepSeek, Qwen thinking mode)
     let without_think = {
         let mut s = raw.to_string();

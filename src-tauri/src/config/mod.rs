@@ -96,6 +96,20 @@ impl ConfigStore {
         })
     }
 
+    /// Add a new mail account config.
+    pub fn add_mail_account(&self, account: MailAccountConfig) -> anyhow::Result<()> {
+        self.update(|cfg| {
+            cfg.mail_accounts.push(account);
+        })
+    }
+
+    /// Remove a mail account by id.
+    pub fn remove_mail_account(&self, id: &str) -> anyhow::Result<()> {
+        self.update(|cfg| {
+            cfg.mail_accounts.retain(|a| a.id != id);
+        })
+    }
+
     /// Shortcut: get a single provider by id.
     pub fn get_provider(&self, id: &str) -> Option<ProviderConfig> {
         self.state.read().find_provider(id).cloned()
@@ -275,6 +289,36 @@ mod tests {
 
         store.remove_db_connection("conn-1").unwrap();
         assert!(store.get().db_connections.is_empty());
+    }
+
+    #[test]
+    fn mail_account_crud() {
+        use crate::config::types::MailAccountConfig;
+        let (store, _) = temp_store();
+
+        let account = MailAccountConfig {
+            id: "acct-1".into(),
+            email: "me@example.com".into(),
+            imap_host: "imap.example.com".into(),
+            imap_port: 993,
+            smtp_host: "smtp.example.com".into(),
+            smtp_port: 587,
+            username: "me@example.com".into(),
+            poll_interval_secs: 300,
+        };
+
+        store.add_mail_account(account.clone()).unwrap();
+        assert_eq!(store.get().mail_accounts.len(), 1);
+        assert_eq!(store.get().mail_accounts[0].email, "me@example.com");
+
+        store.remove_mail_account("acct-1").unwrap();
+        assert!(store.get().mail_accounts.is_empty());
+    }
+
+    #[test]
+    fn app_config_has_mail_accounts_default() {
+        let cfg = AppConfig::default();
+        assert!(cfg.mail_accounts.is_empty());
     }
 
     #[test]

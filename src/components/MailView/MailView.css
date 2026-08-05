@@ -1,0 +1,90 @@
+.mail-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 12px;
+  overflow: hidden;
+  background: var(--bg-primary, #0a0b14);
+  color: var(--text-primary, #e0e0e0);
+}
+
+.mail-view--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary, #888);
+}
+
+.mail-view__account-select {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+}
+
+.mail-view__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.mail-view__error {
+  color: #f87171;
+  font-size: 12px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+/* Deliberately a different shape from the delete failure above, not just a
+   different shade: that one is a one-off about a single row, this one says the
+   whole tab has stopped updating and stays until the account reconnects. */
+.mail-view__error--connection {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.1);
+  border-left: 3px solid #fbbf24;
+  padding: 6px 8px;
+  border-radius: 3px;
+}
+
+.mail-view__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border-color, #2a2a2a);
+}
+
+/* Takes the slack so the delete controls stay pinned right, and clips long
+   subjects instead of pushing them off the row. */
+.mail-view__item-main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.mail-view__item-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Only unread rows are clickable, so only they get the pointer cursor. */
+.mail-view__item--unread {
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mail-view__item-sender {
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+}
+
+.mail-view__item-subject {
+  font-size: 14px;
+}
+
+.mail-view__item-summary {
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  margin-top: 2px;
+}

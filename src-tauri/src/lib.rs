@@ -8,6 +8,7 @@ pub mod db;
 pub mod enterprise;
 pub mod guard;
 pub mod knowledge_base;
+pub mod mail;
 pub mod mcp;
 pub mod pty;
 pub mod python_env;
@@ -49,6 +50,11 @@ use commands::{
     design::{design_chat, design_list_sessions, design_load_session, design_start_session, design_update_draft, design_list_messages, design_advance_stage, design_save_file, design_delete_session},
     exec::agent_exec,
     loop_session::{loop_session_save, loop_session_list, loop_session_load, loop_session_delete, loop_session_clear_all, loop_project_pick_open, loop_project_pick_save},
+    mail::{
+        mail_add_account, mail_remove_account, mail_list_accounts,
+        mail_list_messages, mail_mark_read, mail_count_unread, mail_test_connection,
+        mail_delete_message,
+    },
     markitdown::{markitdown_convert, markitdown_pick_file},
     python_env::{
         python_env_status, python_env_ensure, python_env_reset, python_env_set_interpreter,
@@ -86,9 +92,10 @@ use commands::{
     },
 };
 use config::ConfigStore;
-use db::{design::DesignDb, loop_sessions::LoopSessionDb, manager::DbManager, Db2SidecarState};
+use db::{design::DesignDb, loop_sessions::LoopSessionDb, mail::MailDb, manager::DbManager, Db2SidecarState};
 use enterprise::agent::EnterpriseTaskState;
 use enterprise::task_runner::VcsCredentialManager;
+use mail::manager::MailState;
 use pty::commands::{
     pty_close, pty_create, pty_get_cwd, pty_get_recent_output, pty_get_shell_type,
     pty_list_dir, pty_read_file, pty_resize, pty_write, read_file_as_bytes, write_text_file,
@@ -115,6 +122,7 @@ pub fn run() {
     let design_db = tauri::async_runtime::block_on(async { DesignDb::new().await });
     let loop_session_db = tauri::async_runtime::block_on(async { LoopSessionDb::new().await });
     let kb_db = tauri::async_runtime::block_on(async { db::knowledge_base::KnowledgeBaseDb::new().await });
+    let mail_db = tauri::async_runtime::block_on(async { MailDb::new().await });
 
     // Initialize McpManager and connect to enabled servers
     let mcp_manager: McpManagerState = {
@@ -223,6 +231,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_log::Builder::default()
                 .level(log::LevelFilter::Info)
@@ -236,6 +245,8 @@ pub fn run() {
         .manage(design_db)
         .manage(loop_session_db)
         .manage(kb_db)
+        .manage(mail_db)
+        .manage(tokio::sync::Mutex::new(MailState::new()))
         .manage(Db2SidecarState::new(sidecar_path))
         .manage(Arc::new(Mutex::new(VcsCredentialManager::new())))
         .manage(Arc::new(Mutex::new(EnterpriseTaskState::new())))
@@ -244,6 +255,7 @@ pub fn run() {
         .manage(AnthropicOAuthState::new())
         .setup(|app| {
             telegram::init(app.handle());
+            mail::poller::init(app.handle());
             enterprise::agent::init(app.handle());
             commands::appimage::repair_integration_on_startup();
             Ok(())
@@ -281,6 +293,15 @@ pub fn run() {
             kb_list_chat_sessions,
             kb_load_chat_session,
             kb_delete_chat_session,
+            // Mail
+            mail_add_account,
+            mail_remove_account,
+            mail_list_accounts,
+            mail_list_messages,
+            mail_mark_read,
+            mail_count_unread,
+            mail_test_connection,
+            mail_delete_message,
             // Config
             get_config,
             set_execution_mode,
@@ -417,6 +438,24 @@ pub fn run() {
             api_docs_logout,
             api_docs_auth_status,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Mail tasks are the one background task that holds an open,
+            // authenticated socket essentially all the time: with IMAP IDLE
+            // they park *inside* a live session rather than sleeping between
+            // connections. Quitting without this hook abandons one session per
+            // account with no LOGOUT, and a provider keeps an abandoned IDLE
+            // session until its own autologout (~30 minutes for Gmail) while
+            // capping concurrent connections per account (~15) — so a handful
+            // of quick restarts, i.e. an ordinary debugging session, is enough
+            // to lock the account out of IMAP entirely.
+            //
+            // `Exit` rather than `ExitRequested`: the latter can still be
+            // cancelled, and doing the logout there would tear down live
+            // connections for a quit that never happens.
+            if let tauri::RunEvent::Exit = event {
+                tauri::async_runtime::block_on(mail::poller::stop_all(app_handle));
+            }
+        });
 }
