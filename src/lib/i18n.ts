@@ -193,6 +193,11 @@ const zhTW = {
     mail_load_failed: "無法載入信箱帳號",
     mail_select_account: "選擇信箱帳號",
     mail_unread_label: (n: string) => `${n} 封未讀郵件`,
+    mail_delete: "刪除",
+    mail_delete_confirm: "確定刪除？",
+    mail_delete_cancel: "取消刪除",
+    mail_delete_aria: (subject: string) => `將「${subject}」移到垃圾桶`,
+    mail_delete_failed: "移到垃圾桶失敗：",
     // Mail accounts settings page
     mail_accounts_settings_title: "信箱帳號",
     mail_email: "電子郵件地址",
@@ -1278,6 +1283,11 @@ const enRaw = {
     mail_load_failed: "Failed to load mail accounts",
     mail_select_account: "Select a mail account",
     mail_unread_label: (n: string) => n === "1" ? "1 unread message" : `${n} unread messages`,
+    mail_delete: "Delete",
+    mail_delete_confirm: "Delete?",
+    mail_delete_cancel: "Cancel delete",
+    mail_delete_aria: (subject: string) => `Move "${subject}" to Trash`,
+    mail_delete_failed: "Failed to move the message to Trash: ",
     // Mail accounts settings page
     mail_accounts_settings_title: "Mail Accounts",
     mail_email: "Email address",

@@ -53,6 +53,7 @@ use commands::{
     mail::{
         mail_add_account, mail_remove_account, mail_list_accounts,
         mail_list_messages, mail_mark_read, mail_count_unread, mail_test_connection,
+        mail_delete_message,
     },
     markitdown::{markitdown_convert, markitdown_pick_file},
     python_env::{
@@ -300,6 +301,7 @@ pub fn run() {
             mail_mark_read,
             mail_count_unread,
             mail_test_connection,
+            mail_delete_message,
             // Config
             get_config,
             set_execution_mode,

@@ -28,9 +28,33 @@
   flex: 1;
 }
 
+.mail-view__error {
+  color: #f87171;
+  font-size: 12px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
 .mail-view__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   padding: 10px 8px;
   border-bottom: 1px solid var(--border-color, #2a2a2a);
+}
+
+/* Takes the slack so the delete controls stay pinned right, and clips long
+   subjects instead of pushing them off the row. */
+.mail-view__item-main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.mail-view__item-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 /* Only unread rows are clickable, so only they get the pointer cursor. */

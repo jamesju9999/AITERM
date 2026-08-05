@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useLocale } from "../../contexts/LocaleContext";
 import {
   MAIL_SYNC_EVENT,
+  mailDeleteMessage,
   mailListAccounts,
   mailListMessages,
   mailMarkRead,
@@ -43,6 +44,18 @@ export function MailView({ isActive, onMessageRead }: MailViewProps) {
   // into its dep array and refetch on every locale switch); the message is
   // resolved at render time instead, and stays correct if the locale changes.
   const [loadFailed, setLoadFailed] = useState(false);
+  // Which row is currently asking "delete?". At most one, so the confirm
+  // control never needs a per-row accessible name to stay unambiguous.
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  // Disables the confirm control for the duration of the round trip. This is a
+  // write to the mail server, and it is not instant — the account's connection
+  // spends its life parked in IDLE and has to be woken for it — so without this
+  // an impatient second click would queue a second server-side move.
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Held as a resolved string, not a flag: unlike the load failure this one
+  // carries the server's own reason ("no Trash folder", "server supports
+  // neither MOVE nor UIDPLUS"), which is the whole point of showing it.
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -147,6 +160,39 @@ export function MailView({ isActive, onMessageRead }: MailViewProps) {
     });
   };
 
+  // Moves the message to the server's Trash folder — the one place this app
+  // writes to IMAP at all.
+  //
+  // Nothing is removed optimistically, unlike `handleMarkRead` above. A
+  // mark-read that fails costs a rolled-back font weight; a delete that fails
+  // and was optimistically applied would tell the user their mail is gone when
+  // it is still sitting in their inbox, which is the single worst thing this
+  // feature could do. The row goes only after the backend confirms the server
+  // accepted the move.
+  const handleDelete = (message: MailMessage) => {
+    setDeleteError(null);
+    setDeletingId(message.id);
+    mailDeleteMessage(message.id).then(() => {
+      if (!mountedRef.current) return;
+      setConfirmingDeleteId(null);
+      // The backend also emits a `removed` sync event, which the listener above
+      // turns into a refetch (and which refreshes the unread badge). Dropping
+      // the row here too just makes the list respond immediately instead of one
+      // IPC round trip later; the two agree, so the refetch is a no-op.
+      setMessages((prev) => prev.filter((m) => m.id !== message.id));
+    }).catch((err) => {
+      // Console logging alone is not enough: this app's Tauri window is hard to
+      // attach devtools to, and a silent failure here means the user believes
+      // mail was deleted when it wasn't.
+      console.error("[mail] failed to delete message:", err);
+      if (!mountedRef.current) return;
+      setConfirmingDeleteId(null);
+      setDeleteError(`${t.mail_delete_failed}${String(err)}`);
+    }).finally(() => {
+      if (mountedRef.current) setDeletingId(null);
+    });
+  };
+
   if (loading) return <div className="mail-view" />;
 
   if (loadFailed) {
@@ -169,17 +215,35 @@ export function MailView({ isActive, onMessageRead }: MailViewProps) {
           <option key={a.id} value={a.id}>{a.email}</option>
         ))}
       </select>
+      {/* Inline rather than replacing the list the way the load-failure states
+          do: the messages are all still there, and the user needs to see which
+          row they just failed to delete. */}
+      {deleteError && <div className="mail-view__error" role="alert">{deleteError}</div>}
       <ul className="mail-view__list">
         {messages.map((m) => {
           // Only unread rows are interactive — a read row has nothing left to
           // do, so it must not advertise a button role or take a tab stop.
           const unread = !m.is_read_locally;
+          const confirming = confirmingDeleteId === m.id;
           return (
-            <li key={m.id} className={`mail-view__item ${unread ? "mail-view__item--unread" : ""}`}>
+            <li
+              key={m.id}
+              className={`mail-view__item ${unread ? "mail-view__item--unread" : ""}`}
+              // Leaving the row abandons a half-started delete, so a confirm
+              // state can't be left armed under the pointer for a later stray
+              // click. Only attached while this row is the one confirming, so
+              // ordinary mouse traffic over the list costs nothing.
+              onMouseLeave={confirming ? () => setConfirmingDeleteId(null) : undefined}
+            >
               {/* The role lives on this inner div, not the <li>: overriding the
                   li's implicit listitem role would leave the <ul> with no list
-                  items and stop screen readers announcing the list at all. */}
+                  items and stop screen readers announcing the list at all.
+                  The delete controls are a *sibling* of it rather than a child,
+                  because a role="button" element may not contain real buttons —
+                  nesting them would hide them from screen readers, and would
+                  also fold "Delete" into this row's accessible name. */}
               <div
+                className="mail-view__item-main"
                 role={unread ? "button" : undefined}
                 tabIndex={unread ? 0 : undefined}
                 onClick={unread ? () => handleMarkRead(m) : undefined}
@@ -193,6 +257,45 @@ export function MailView({ isActive, onMessageRead }: MailViewProps) {
                 <div className="mail-view__item-sender">{m.sender}</div>
                 <div className="mail-view__item-subject">{m.subject}</div>
                 {m.ai_summary && <div className="mail-view__item-summary">{m.ai_summary}</div>}
+              </div>
+              {/* Two-step confirm, same shape as removing an account in
+                  Settings (aiterm-btn--danger -> --danger-solid): a single
+                  click can never reach the server. Every handler stops
+                  propagation as well, so that moving these controls inside the
+                  clickable row later cannot silently turn a delete into a
+                  mark-read. */}
+              <div className="mail-view__item-actions">
+                {confirming ? (
+                  <>
+                    <button
+                      type="button"
+                      className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                      aria-label={t.mail_delete_cancel}
+                      onClick={(e) => { e.stopPropagation(); setConfirmingDeleteId(null); }}
+                    >
+                      {t.cancel}
+                    </button>
+                    <button
+                      type="button"
+                      className="aiterm-btn aiterm-btn--danger-solid aiterm-btn--sm"
+                      disabled={deletingId === m.id}
+                      onClick={(e) => { e.stopPropagation(); handleDelete(m); }}
+                    >
+                      {t.mail_delete_confirm}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="aiterm-btn aiterm-btn--danger aiterm-btn--sm"
+                    // Per-row, and naming the subject: "Delete" repeated once
+                    // per message is useless in a screen reader's element list.
+                    aria-label={t.mail_delete_aria(m.subject)}
+                    onClick={(e) => { e.stopPropagation(); setDeleteError(null); setConfirmingDeleteId(m.id); }}
+                  >
+                    {t.mail_delete}
+                  </button>
+                )}
               </div>
             </li>
           );

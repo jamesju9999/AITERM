@@ -3,7 +3,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 use aiterm_lib::db::mail::{
     init_schema, insert_message, list_messages, get_message, mark_read_locally, count_unread,
     get_last_seen_uid, set_last_seen_uid, delete_account_data, list_uids,
-    get_uid_validity, set_uid_validity, reset_for_uid_validity,
+    get_uid_validity, set_uid_validity, reset_for_uid_validity, delete_message_locally,
     uids_absent_from_server, delete_messages_absent_from_server, NewMessage,
 };
 
@@ -369,4 +369,60 @@ async fn init_schema_is_idempotent_across_launches() {
     init_schema(&pool).await.expect("a second launch must not fail on the already-added column");
 
     assert_eq!(get_uid_validity(&pool, "acct-1").await.unwrap(), Some(7), "re-running the migration must not clobber stored state");
+}
+
+/// The local half of a user-initiated delete, which runs only after the server
+/// has confirmed the message was moved to Trash.
+#[tokio::test]
+async fn delete_message_locally_removes_only_that_row() {
+    let pool = setup_pool().await;
+    let doomed = insert_message(&pool, sample_message("acct-1", 1)).await.unwrap();
+    let keep = insert_message(&pool, sample_message("acct-1", 2)).await.unwrap();
+    let other_account = insert_message(&pool, sample_message("acct-2", 1)).await.unwrap();
+
+    let removed = delete_message_locally(&pool, &doomed.id).await.unwrap();
+
+    assert_eq!(removed, 1, "the caller only tells the UI about a removal when a row actually went");
+    assert!(get_message(&pool, &doomed.id).await.unwrap().is_none(), "the deleted message must be gone");
+    assert!(get_message(&pool, &keep.id).await.unwrap().is_some(), "a sibling message in the same account must survive");
+    assert!(
+        get_message(&pool, &other_account.id).await.unwrap().is_some(),
+        "another account's message that happens to share the UID must survive"
+    );
+}
+
+/// Reconciliation and a user-initiated delete both remove local rows, and can
+/// race. Losing that race must be a quiet no-op — reported as `0` so the caller
+/// does not emit a second removal event for a row it did not remove — rather
+/// than an error the user sees after a delete that actually worked.
+#[tokio::test]
+async fn deleting_an_already_removed_message_reports_zero_rather_than_failing() {
+    let pool = setup_pool().await;
+    let message = insert_message(&pool, sample_message("acct-1", 1)).await.unwrap();
+    delete_message_locally(&pool, &message.id).await.unwrap();
+
+    let removed = delete_message_locally(&pool, &message.id).await
+        .expect("a row that is already gone is a race, not a failure");
+
+    assert_eq!(removed, 0, "nothing was removed, so nothing must be reported as removed");
+}
+
+/// Same invariant `delete_messages_absent_from_server` holds: dropping a cached
+/// row must never make the next poll re-download mail. Rewinding `last_seen_uid`
+/// here would make every delete re-fetch and re-classify the message it just
+/// removed, forever.
+#[tokio::test]
+async fn delete_message_locally_leaves_the_poll_cursor_alone() {
+    let pool = setup_pool().await;
+    let message = insert_message(&pool, sample_message("acct-1", 7)).await.unwrap();
+    set_last_seen_uid(&pool, "acct-1", 7).await.unwrap();
+    set_uid_validity(&pool, "acct-1", 42).await.unwrap();
+
+    delete_message_locally(&pool, &message.id).await.unwrap();
+
+    assert_eq!(
+        get_last_seen_uid(&pool, "acct-1").await.unwrap(), Some(7),
+        "the poll cursor must not rewind, or the deleted message is re-fetched on the next poll"
+    );
+    assert_eq!(get_uid_validity(&pool, "acct-1").await.unwrap(), Some(42), "and UIDVALIDITY must be untouched too");
 }

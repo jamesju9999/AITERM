@@ -21,9 +21,10 @@ vi.mock("../../ipc/mail", () => ({
   mailListAccounts: vi.fn(),
   mailListMessages: vi.fn(),
   mailMarkRead: vi.fn(),
+  mailDeleteMessage: vi.fn(),
 }));
 
-import { mailListAccounts, mailListMessages, mailMarkRead } from "../../ipc/mail";
+import { mailDeleteMessage, mailListAccounts, mailListMessages, mailMarkRead } from "../../ipc/mail";
 
 // Pinned explicitly rather than relying on LocaleProvider's fallback: if the
 // default ever changed, the negative assertions below (queryByText(...) is
@@ -60,6 +61,11 @@ function makeMessage(over: Partial<Record<string, unknown>> = {}) {
   };
 }
 
+// The click-to-mark-read row, matched on the sender rather than the subject:
+// the row now has a delete button beside it whose accessible name names the
+// subject, so a /Quarterly report/ query would match both.
+const ROW_NAME = /sender@example\.com/;
+
 function renderView(onMessageRead?: () => void) {
   return render(
     <LocaleProvider>
@@ -76,6 +82,7 @@ describe("MailView", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(mailListMessages).mockResolvedValue([] as never);
     vi.mocked(mailMarkRead).mockResolvedValue(undefined as never);
+    vi.mocked(mailDeleteMessage).mockResolvedValue(undefined as never);
     syncListener = null;
   });
 
@@ -125,7 +132,7 @@ describe("MailView", () => {
 
       const { container } = renderView();
 
-      const row = await screen.findByRole("button", { name: /Quarterly report/ });
+      const row = await screen.findByRole("button", { name: ROW_NAME });
       expect(container.querySelector(".mail-view__item--unread")).toBeTruthy();
 
       fireEvent.click(row);
@@ -147,7 +154,7 @@ describe("MailView", () => {
         expect(container.querySelector(".mail-view__item")).toBeTruthy();
       });
       // A read row is inert: no button role, so no dead tab stop either.
-      expect(screen.queryByRole("button", { name: /Quarterly report/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: ROW_NAME })).toBeNull();
 
       // Must click the inner div, not the <li>: the handlers live on the inner
       // element, and events bubble up rather than down — clicking the <li>
@@ -163,7 +170,7 @@ describe("MailView", () => {
 
       const { container } = renderView();
 
-      const row = await screen.findByRole("button", { name: /Quarterly report/ });
+      const row = await screen.findByRole("button", { name: ROW_NAME });
       fireEvent.click(row);
 
       // Optimistically cleared, then restored once the backend call rejects.
@@ -182,7 +189,7 @@ describe("MailView", () => {
 
       renderView(onMessageRead);
 
-      fireEvent.click(await screen.findByRole("button", { name: /Quarterly report/ }));
+      fireEvent.click(await screen.findByRole("button", { name: ROW_NAME }));
 
       await waitFor(() => expect(onMessageRead).toHaveBeenCalledTimes(1));
     });
@@ -194,7 +201,7 @@ describe("MailView", () => {
 
       renderView(onMessageRead);
 
-      fireEvent.click(await screen.findByRole("button", { name: /Quarterly report/ }));
+      fireEvent.click(await screen.findByRole("button", { name: ROW_NAME }));
 
       // Barrier: wait until the rejection has actually been handled (the catch
       // logs), otherwise this would pass simply by asserting too early — the
@@ -225,6 +232,123 @@ describe("MailView", () => {
       renderView();
 
       expect(await screen.findByRole("listitem")).toBeTruthy();
+    });
+  });
+
+  // Moving a message to the server's Trash folder is the only thing this app
+  // ever writes to IMAP, so the UI's job is to make it impossible to trigger by
+  // accident and impossible to *believe* happened when it didn't.
+  describe("delete a message", () => {
+    beforeEach(() => {
+      vi.mocked(mailListAccounts).mockResolvedValue([ACCOUNT] as never);
+      vi.mocked(mailListMessages).mockResolvedValue([makeMessage()] as never);
+    });
+
+    const findDeleteButton = () =>
+      screen.findByRole("button", { name: t.mail_delete_aria("Quarterly report") });
+
+    it("does not touch the server on the first click, only arms the confirmation", async () => {
+      renderView();
+
+      fireEvent.click(await findDeleteButton());
+
+      expect(mailDeleteMessage).not.toHaveBeenCalled();
+      expect(screen.getByText(t.mail_delete_confirm)).toBeTruthy();
+    });
+
+    it("deletes on the second click and drops the row", async () => {
+      renderView();
+
+      fireEvent.click(await findDeleteButton());
+      fireEvent.click(screen.getByText(t.mail_delete_confirm));
+
+      expect(mailDeleteMessage).toHaveBeenCalledWith("msg-1");
+      await waitFor(() => expect(screen.queryByText("Quarterly report")).toBeNull());
+    });
+
+    it("disarms the confirmation when the cancel control is used", async () => {
+      renderView();
+
+      fireEvent.click(await findDeleteButton());
+      fireEvent.click(screen.getByLabelText(t.mail_delete_cancel));
+
+      expect(screen.queryByText(t.mail_delete_confirm)).toBeNull();
+      expect(mailDeleteMessage).not.toHaveBeenCalled();
+    });
+
+    it("disarms the confirmation when the pointer leaves the row", async () => {
+      const { container } = renderView();
+
+      fireEvent.click(await findDeleteButton());
+      fireEvent.mouseLeave(container.querySelector(".mail-view__item")!);
+
+      expect(screen.queryByText(t.mail_delete_confirm)).toBeNull();
+      expect(mailDeleteMessage).not.toHaveBeenCalled();
+    });
+
+    // The worst thing this feature could do is tell the user their mail is gone
+    // while it is still sitting in their inbox.
+    it("keeps the message in the list and shows the reason when the move fails", async () => {
+      vi.mocked(mailDeleteMessage).mockRejectedValue(
+        new Error("could not find a Trash folder on this server") as never
+      );
+
+      renderView();
+
+      fireEvent.click(await findDeleteButton());
+      fireEvent.click(screen.getByText(t.mail_delete_confirm));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain(t.mail_delete_failed);
+      // The server's own reason, not a generic "delete failed" — a user whose
+      // provider supports neither MOVE nor UIDPLUS can act on this one.
+      expect(alert.textContent).toContain("could not find a Trash folder on this server");
+      expect(screen.getByText("Quarterly report")).toBeTruthy();
+    });
+
+    // The row is a click-to-mark-read target and the delete control lives in
+    // it. Deleting a message must not also flip it to read behind the user's
+    // back — and if the delete then fails, the row would be left silently
+    // marked read for a message that never went anywhere.
+    it("does not mark the message read while deleting it", async () => {
+      renderView();
+
+      fireEvent.click(await findDeleteButton());
+      fireEvent.click(screen.getByText(t.mail_delete_confirm));
+
+      await waitFor(() => expect(mailDeleteMessage).toHaveBeenCalled());
+      expect(mailMarkRead).not.toHaveBeenCalled();
+    });
+
+    it("blocks a second confirm click while the first is still in flight", async () => {
+      // Never resolves: the delete is still on the wire when the second click
+      // lands, which is exactly the window an impatient user clicks in.
+      vi.mocked(mailDeleteMessage).mockReturnValue(new Promise(() => {}) as never);
+
+      renderView();
+
+      fireEvent.click(await findDeleteButton());
+      const confirm = screen.getByText(t.mail_delete_confirm);
+      fireEvent.click(confirm);
+      await waitFor(() => expect(confirm).toBeDisabled());
+      fireEvent.click(confirm);
+
+      expect(mailDeleteMessage).toHaveBeenCalledTimes(1);
+    });
+
+    // A read message has no button role on its row, but it must still be
+    // deletable — otherwise reading a message traps it in the list forever.
+    it("offers the delete control on an already-read message too", async () => {
+      vi.mocked(mailListMessages).mockResolvedValue(
+        [makeMessage({ is_read_locally: true })] as never
+      );
+
+      renderView();
+
+      fireEvent.click(await findDeleteButton());
+      fireEvent.click(screen.getByText(t.mail_delete_confirm));
+
+      expect(mailDeleteMessage).toHaveBeenCalledWith("msg-1");
     });
   });
 

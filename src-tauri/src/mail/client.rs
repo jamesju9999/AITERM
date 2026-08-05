@@ -2,7 +2,7 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 use async_imap::extensions::idle::IdleResponse;
-use async_imap::types::Capability;
+use async_imap::types::{Capability, Name, NameAttribute};
 use tokio::net::TcpStream;
 use futures_util::TryStreamExt;
 
@@ -45,6 +45,12 @@ pub enum MailClientError {
     Command(String),
     #[error("IMAP operation timed out after {0:?}")]
     Timeout(Duration),
+    /// The server cannot do what was asked in a way that is safe, and AITerm
+    /// refuses to approximate it. Distinct from `Command` because nothing was
+    /// left half-done: the session is still clean and usable, so the caller
+    /// reports the refusal without tearing the connection down.
+    #[error("{0}")]
+    Unsupported(String),
 }
 
 pub struct RawMessage {
@@ -111,6 +117,41 @@ pub enum IdleOutcome {
 pub struct MailConnection {
     session: ImapSession,
     supports_idle: bool,
+    /// How — or whether — this server can move a message to Trash without
+    /// risking mail AITerm was never asked to touch. `None` means it cannot,
+    /// and every delete against it is refused.
+    delete_strategy: Option<DeleteStrategy>,
+}
+
+/// The only two ways this module will ever remove a message from INBOX.
+///
+/// Both are exact: they act on the UID named and nothing else. The obvious
+/// third option — `UID STORE +FLAGS (\Deleted)` followed by a plain `EXPUNGE`
+/// — is deliberately absent, and must stay absent: plain `EXPUNGE` permanently
+/// removes *every* message in the mailbox currently flagged `\Deleted`,
+/// including messages the user flagged from a different mail client, so it
+/// would silently destroy unrelated mail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteStrategy {
+    /// RFC 6851 `UID MOVE`. One atomic command; the `\Deleted` flag is never
+    /// involved at all.
+    UidMove,
+    /// RFC 4315 `UIDPLUS`: `UID COPY` to Trash, `UID STORE +FLAGS (\Deleted)`,
+    /// then `UID EXPUNGE` — which, unlike `EXPUNGE`, expunges only the UIDs it
+    /// is given.
+    CopyThenUidExpunge,
+}
+
+/// One mailbox from a `LIST` response, reduced to what Trash resolution needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailboxEntry {
+    pub name: String,
+    /// The server tagged this mailbox `\Trash` (RFC 6154 SPECIAL-USE).
+    pub special_use_trash: bool,
+    /// The absence of `\Noselect`. A `\Noselect` name is a hierarchy node
+    /// rather than a mailbox — Gmail's `[Gmail]` is one — and cannot receive a
+    /// COPY or a MOVE.
+    pub selectable: bool,
 }
 
 impl MailConnection {
@@ -139,7 +180,11 @@ impl MailConnection {
                 if !supports_idle {
                     log::info!("mail: {host} does not advertise IDLE; falling back to interval polling");
                 }
-                Ok(Self { session, supports_idle })
+                let delete_strategy = choose_delete_strategy(names.iter().map(String::as_str));
+                if delete_strategy.is_none() {
+                    log::info!("mail: {host} advertises neither MOVE nor UIDPLUS; deleting mail on it will be refused");
+                }
+                Ok(Self { session, supports_idle, delete_strategy })
             }
             Err(e) => {
                 logout(session).await;
@@ -198,6 +243,7 @@ impl MailConnection {
         shutdown: impl Future<Output = ()>,
     ) -> Result<(Self, IdleOutcome), MailClientError> {
         let supports_idle = self.supports_idle;
+        let delete_strategy = self.delete_strategy;
         let mut handle = self.session.idle();
 
         // An ordinary round trip, so an ordinary timeout — but note that on
@@ -261,7 +307,79 @@ impl MailConnection {
             IdleResponse::ManualInterrupt if woke_to_reconcile => IdleOutcome::ReconcileDue,
             IdleResponse::ManualInterrupt => IdleOutcome::Interrupted,
         };
-        Ok((Self { session, supports_idle }, outcome))
+        Ok((Self { session, supports_idle, delete_strategy }, outcome))
+    }
+
+    /// Move one message to this server's Trash folder.
+    ///
+    /// The only command in this module that changes anything on the server.
+    /// Everything else is strictly read-only (`BODY.PEEK[]`, read state kept
+    /// locally) precisely so AITerm never disturbs what the user sees in their
+    /// other mail clients; this is the one deliberate, explicitly
+    /// user-initiated exception, so it errors out rather than improvising
+    /// whenever it cannot do exactly what was asked.
+    ///
+    /// Borrows rather than consuming: a delete happens on the account's
+    /// long-lived session between two IDLEs, and the caller must be able to go
+    /// straight back into IDLE afterwards — and must still own the connection
+    /// for the single LOGOUT that ends it.
+    ///
+    /// A `MailClientError::Unsupported` leaves the session clean and usable; a
+    /// `Command` or `Timeout` may have left a response unread on the stream, so
+    /// the caller reconnects on those.
+    pub async fn move_to_trash(&mut self, uid: i64) -> Result<(), MailClientError> {
+        // Checked first, before a single byte is written: on a server that can
+        // do neither, this must be a refusal that cost nothing, not a partial
+        // delete.
+        let Some(strategy) = self.delete_strategy else {
+            return Err(MailClientError::Unsupported(
+                "this server advertises neither MOVE (RFC 6851) nor UIDPLUS (RFC 4315); \
+                 the only remaining way to delete would be a plain EXPUNGE, which would \
+                 permanently remove every message in the mailbox flagged \\Deleted — \
+                 including ones flagged from another mail client"
+                    .to_string(),
+            ));
+        };
+
+        // Stated explicitly rather than inherited. Every other command here
+        // runs against INBOX because `fetch_selected` selected it, and nothing
+        // in this module ever selects anything else — but this one *writes*,
+        // and a `UID MOVE` issued against the wrong selected mailbox moves the
+        // wrong message. One round trip on a user-initiated action is cheap
+        // insurance against a future caller breaking that invariant.
+        with_timeout(async {
+            self.session
+                .select("INBOX")
+                .await
+                .map(|_| ())
+                .map_err(|e| MailClientError::Command(e.to_string()))
+        })
+        .await?;
+
+        let mailboxes = list_mailboxes(&mut self.session).await?;
+        let Some(trash) = resolve_trash_mailbox(&mailboxes) else {
+            return Err(MailClientError::Unsupported(
+                "could not find a Trash folder on this server: no mailbox is flagged \\Trash \
+                 (RFC 6154 SPECIAL-USE) and none of the usual names exist"
+                    .to_string(),
+            ));
+        };
+
+        let uid_set = uid.to_string();
+        match strategy {
+            DeleteStrategy::UidMove => {
+                with_timeout(async {
+                    self.session
+                        .uid_mv(&uid_set, &trash)
+                        .await
+                        .map_err(|e| MailClientError::Command(e.to_string()))
+                })
+                .await
+            }
+            DeleteStrategy::CopyThenUidExpunge => {
+                copy_then_uid_expunge(&mut self.session, &uid_set, &trash).await
+            }
+        }
     }
 
     /// Graceful close. The counterpart to every method above that hands the
@@ -280,6 +398,139 @@ impl MailConnection {
 /// unrelated `XIDLE`-style extension from being mistaken for the real thing.
 fn advertises_idle<'a>(capabilities: impl IntoIterator<Item = &'a str>) -> bool {
     capabilities.into_iter().any(|cap| cap.eq_ignore_ascii_case("IDLE"))
+}
+
+/// Which safe delete primitive this server offers, if any.
+///
+/// `MOVE` wins whenever it is advertised: it is one atomic command, it never
+/// touches the `\Deleted` flag, and the server guarantees the message ends up
+/// in exactly one of the two mailboxes even on a partial failure.
+///
+/// `None` — "this server can do neither" — is a real answer that MUST be
+/// surfaced as an error. There is deliberately no third branch: falling back to
+/// `\Deleted` + plain `EXPUNGE` would permanently remove every message in the
+/// mailbox that is flagged `\Deleted`, including messages the user flagged from
+/// another client, which is silent destruction of mail nobody asked us to
+/// touch. Gmail advertises both, so `None` is a safety net rather than a
+/// common path.
+///
+/// Matched case-insensitively and per whole atom, for the same reasons
+/// `advertises_idle` is: IMAP atoms are case-insensitive, and a substring match
+/// would mistake an unrelated `XMOVE`-style extension for the real thing.
+fn choose_delete_strategy<'a>(
+    capabilities: impl IntoIterator<Item = &'a str>,
+) -> Option<DeleteStrategy> {
+    let mut uidplus = false;
+    for capability in capabilities {
+        if capability.eq_ignore_ascii_case("MOVE") {
+            return Some(DeleteStrategy::UidMove);
+        }
+        if capability.eq_ignore_ascii_case("UIDPLUS") {
+            uidplus = true;
+        }
+    }
+    uidplus.then_some(DeleteStrategy::CopyThenUidExpunge)
+}
+
+/// Mailbox names probed only when the server flags no mailbox `\Trash`, in
+/// preference order.
+///
+/// Deliberately short and provider-shaped rather than clever: guessing wrong
+/// here does not fail, it silently files the user's mail somewhere they never
+/// asked for. `[Gmail]/Trash` leads because a Gmail account whose SPECIAL-USE
+/// flags did not come through would otherwise match its own localized `Trash`
+/// only by accident.
+const TRASH_FALLBACK_NAMES: [&str; 3] = ["[Gmail]/Trash", "Trash", "INBOX.Trash"];
+
+/// Which mailbox a delete moves messages into.
+///
+/// The `\Trash` SPECIAL-USE attribute (RFC 6154) is the only authoritative
+/// answer, and is the only one that survives localization — Gmail's Trash is
+/// `[Gmail]/&V4NXPpCuTvY-` for a Japanese account, so hardcoding
+/// `[Gmail]/Trash` would resolve to nothing there. Names are consulted only
+/// when no mailbox carries the flag, and `None` — meaning "do not delete, tell
+/// the user" — is preferred over guessing.
+fn resolve_trash_mailbox(mailboxes: &[MailboxEntry]) -> Option<String> {
+    if let Some(entry) = mailboxes.iter().find(|m| m.special_use_trash && m.selectable) {
+        return Some(entry.name.clone());
+    }
+    TRASH_FALLBACK_NAMES.iter().find_map(|candidate| {
+        mailboxes
+            .iter()
+            .find(|m| m.selectable && m.name.eq_ignore_ascii_case(candidate))
+            .map(|m| m.name.clone())
+    })
+}
+
+/// Every mailbox the account can see, with the two attributes Trash resolution
+/// cares about.
+async fn list_mailboxes(session: &mut ImapSession) -> Result<Vec<MailboxEntry>, MailClientError> {
+    let names: Vec<Name> = with_timeout(async {
+        session
+            .list(Some(""), Some("*"))
+            .await
+            .map_err(|e| MailClientError::Command(e.to_string()))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|e| MailClientError::Command(e.to_string()))
+    })
+    .await?;
+
+    Ok(names
+        .iter()
+        .map(|name| MailboxEntry {
+            name: name.name().to_string(),
+            special_use_trash: name.attributes().iter().any(|a| matches!(a, NameAttribute::Trash)),
+            selectable: !name.attributes().iter().any(|a| matches!(a, NameAttribute::NoSelect)),
+        })
+        .collect())
+}
+
+/// The UIDPLUS fallback, for servers without `MOVE`.
+///
+/// `UID EXPUNGE` is what makes this safe, and is not interchangeable with
+/// `EXPUNGE`: it removes only the UIDs named here, so a message another client
+/// flagged `\Deleted` is left exactly as it was.
+///
+/// Both streaming commands are drained to completion. An undrained response
+/// leaves its tagged reply sitting in the buffer, and every later command on
+/// this session then reads the wrong tag.
+async fn copy_then_uid_expunge(
+    session: &mut ImapSession,
+    uid_set: &str,
+    trash: &str,
+) -> Result<(), MailClientError> {
+    with_timeout(async {
+        session
+            .uid_copy(uid_set, trash)
+            .await
+            .map_err(|e| MailClientError::Command(e.to_string()))
+    })
+    .await?;
+
+    with_timeout(async {
+        session
+            .uid_store(uid_set, "+FLAGS (\\Deleted)")
+            .await
+            .map_err(|e| MailClientError::Command(e.to_string()))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map(|_| ())
+            .map_err(|e| MailClientError::Command(e.to_string()))
+    })
+    .await?;
+
+    with_timeout(async {
+        session
+            .uid_expunge(uid_set)
+            .await
+            .map_err(|e| MailClientError::Command(e.to_string()))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map(|_| ())
+            .map_err(|e| MailClientError::Command(e.to_string()))
+    })
+    .await
 }
 
 fn capability_name(capability: &Capability) -> String {
@@ -747,6 +998,147 @@ mod tests {
             !advertises_idle(Vec::<&str>::new()),
             "an empty capability list cannot be assumed to support IDLE"
         );
+    }
+
+    #[test]
+    fn move_is_preferred_over_the_copy_and_expunge_dance() {
+        assert_eq!(
+            choose_delete_strategy(["IMAP4rev1", "UIDPLUS", "MOVE"]),
+            Some(DeleteStrategy::UidMove),
+            "one atomic UID MOVE beats COPY + STORE + UID EXPUNGE whenever the server offers it"
+        );
+    }
+
+    #[test]
+    fn a_server_with_only_move_uses_it() {
+        assert_eq!(
+            choose_delete_strategy(["IMAP4rev1", "IDLE", "MOVE"]),
+            Some(DeleteStrategy::UidMove)
+        );
+    }
+
+    #[test]
+    fn a_server_with_only_uidplus_falls_back_to_copy_then_uid_expunge() {
+        assert_eq!(
+            choose_delete_strategy(["IMAP4rev1", "IDLE", "UIDPLUS"]),
+            Some(DeleteStrategy::CopyThenUidExpunge),
+            "UID EXPUNGE removes only the UIDs it is given, so this is still exact"
+        );
+    }
+
+    // The safety-critical case. Plain EXPUNGE permanently removes every message
+    // in the mailbox flagged \Deleted, including ones the user flagged from a
+    // different mail client, so "delete anyway" is not an option here — the
+    // only correct answer is to refuse.
+    #[test]
+    fn a_server_with_neither_extension_refuses_rather_than_falling_back_to_plain_expunge() {
+        assert_eq!(
+            choose_delete_strategy(["IMAP4rev1", "IDLE", "LITERAL+"]),
+            None,
+            "with no exact primitive available the delete must be refused, never approximated with EXPUNGE"
+        );
+        assert_eq!(
+            choose_delete_strategy(Vec::<&str>::new()),
+            None,
+            "an empty capability list cannot be assumed to support anything"
+        );
+    }
+
+    #[test]
+    fn the_delete_capabilities_are_matched_case_insensitively_per_whole_atom() {
+        assert_eq!(
+            choose_delete_strategy(["move"]),
+            Some(DeleteStrategy::UidMove),
+            "IMAP atoms are case-insensitive; a lowercase MOVE is still MOVE"
+        );
+        assert_eq!(
+            choose_delete_strategy(["uidplus"]),
+            Some(DeleteStrategy::CopyThenUidExpunge),
+            "and likewise for UIDPLUS"
+        );
+        assert_eq!(
+            choose_delete_strategy(["XMOVE-SOMETHING", "UIDPLUSX"]),
+            None,
+            "a capability that merely contains MOVE or UIDPLUS is a different extension entirely"
+        );
+    }
+
+    fn mailbox(name: &str) -> MailboxEntry {
+        MailboxEntry { name: name.to_string(), special_use_trash: false, selectable: true }
+    }
+
+    fn trash_mailbox(name: &str) -> MailboxEntry {
+        MailboxEntry { name: name.to_string(), special_use_trash: true, selectable: true }
+    }
+
+    #[test]
+    fn the_special_use_trash_flag_wins_over_any_name() {
+        // A Japanese Gmail account: the real Trash is not spelled "Trash" at
+        // all, and a folder literally named Trash may exist alongside it.
+        let mailboxes = vec![
+            mailbox("INBOX"),
+            mailbox("Trash"),
+            trash_mailbox("[Gmail]/&V4NXPpCuTvY-"),
+        ];
+
+        assert_eq!(
+            resolve_trash_mailbox(&mailboxes).as_deref(),
+            Some("[Gmail]/&V4NXPpCuTvY-"),
+            "RFC 6154 is the only answer that survives localization; a name match must not override it"
+        );
+    }
+
+    #[test]
+    fn a_server_without_special_use_probes_the_known_names_in_order() {
+        let mailboxes = vec![mailbox("INBOX"), mailbox("Trash"), mailbox("[Gmail]/Trash")];
+
+        assert_eq!(
+            resolve_trash_mailbox(&mailboxes).as_deref(),
+            Some("[Gmail]/Trash"),
+            "the fallback order decides, not the order the server happened to list mailboxes in"
+        );
+        assert_eq!(
+            resolve_trash_mailbox(&[mailbox("INBOX"), mailbox("INBOX.Trash")]).as_deref(),
+            Some("INBOX.Trash"),
+            "a Courier-style flat hierarchy still resolves"
+        );
+    }
+
+    #[test]
+    fn a_mailbox_that_cannot_be_selected_is_never_a_delete_target() {
+        // `[Gmail]` itself is \Noselect: a hierarchy node, not a mailbox. A
+        // COPY or MOVE into one fails, so it must not be resolved as Trash.
+        let container = MailboxEntry {
+            name: "Trash".to_string(),
+            special_use_trash: false,
+            selectable: false,
+        };
+        assert_eq!(
+            resolve_trash_mailbox(&[mailbox("INBOX"), container]),
+            None,
+            "a \\Noselect name cannot receive a COPY or a MOVE"
+        );
+
+        let flagged_but_unselectable = MailboxEntry {
+            name: "[Gmail]".to_string(),
+            special_use_trash: true,
+            selectable: false,
+        };
+        assert_eq!(
+            resolve_trash_mailbox(&[flagged_but_unselectable, mailbox("Trash")]).as_deref(),
+            Some("Trash"),
+            "an unselectable \\Trash must fall through to the name probe, not win it"
+        );
+    }
+
+    #[test]
+    fn a_mailbox_list_with_no_trash_at_all_resolves_to_nothing() {
+        assert_eq!(
+            resolve_trash_mailbox(&[mailbox("INBOX"), mailbox("Archive"), mailbox("Sent")]),
+            None,
+            "with no Trash to be found the delete must fail loudly rather than file the mail somewhere arbitrary"
+        );
+        assert_eq!(resolve_trash_mailbox(&[]), None);
     }
 
     fn msg(uid: i64) -> RawMessage {

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 use crate::ai::router::AiRouter;
 use crate::config::{ConfigStore, MailAccountConfig};
@@ -11,8 +11,8 @@ use crate::db::mail::{self as mail_db, MailDb, NewMessage};
 use crate::secret::SecretStore;
 
 use super::classify::classify_message;
-use super::client::{IdleOutcome, MailConnection};
-use super::manager::{MailState, MailTask};
+use super::client::{IdleOutcome, MailClientError, MailConnection};
+use super::manager::{DeleteRequest, MailState, MailTask};
 use super::parse::parse_raw_message;
 
 /// IMAP must not be hit more than once a minute no matter what the config
@@ -43,6 +43,12 @@ const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// at `RECONNECT_BASE_DELAY` and turns the loop into a login-and-abandon storm,
 /// which is exactly how an account hits a provider's connection cap.
 const HEALTHY_SESSION_LIFETIME: Duration = Duration::from_secs(10);
+
+/// How many deletes may be queued for one account's task at a time. Small on
+/// purpose: the task services them one at a time between IDLEs, and a user
+/// clicking faster than that should be told the account is busy rather than
+/// building a backlog of writes they can no longer see the outcome of.
+const DELETE_QUEUE_DEPTH: usize = 4;
 
 /// Keychain key for an account's IMAP/SMTP password. Matches the existing
 /// `"{domain}:{id}"` convention (see `commands/db.rs::secret_key`).
@@ -101,15 +107,16 @@ pub async fn restart_account(app: &AppHandle, account_id: &str) {
     };
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (delete_tx, delete_rx) = mpsc::channel::<DeleteRequest>(DELETE_QUEUE_DEPTH);
     let app_clone = app.clone();
     let id_for_map = account.id.clone();
     let handle = tokio::spawn(async move {
-        poll_loop(app_clone, account, shutdown_rx).await;
+        poll_loop(app_clone, account, shutdown_rx, delete_rx).await;
     });
 
     let state = app.state::<tokio::sync::Mutex<MailState>>();
     let mut guard = state.lock().await;
-    guard.tasks.insert(id_for_map, MailTask { handle, shutdown: shutdown_tx });
+    guard.tasks.insert(id_for_map, MailTask { handle, shutdown: shutdown_tx, delete: delete_tx });
 }
 
 /// Stop an account's task without starting a new one. Called before removing
@@ -259,12 +266,19 @@ enum SessionExit {
 /// it dies. Mail arrives by push (IMAP IDLE) rather than on a timer; the
 /// configured interval is now the IDLE liveness check and the fallback polling
 /// period for servers that cannot push.
-async fn poll_loop(app: AppHandle, account: MailAccountConfig, mut shutdown: watch::Receiver<bool>) {
+async fn poll_loop(
+    app: AppHandle,
+    account: MailAccountConfig,
+    mut shutdown: watch::Receiver<bool>,
+    // Owned here rather than per connection so a delete queued while the
+    // account is reconnecting is still waiting when the new session comes up.
+    mut delete_rx: mpsc::Receiver<DeleteRequest>,
+) {
     let interval = effective_interval(account.poll_interval_secs);
 
     let mut consecutive_failures: u32 = 0;
     loop {
-        match run_connection(&app, &account, interval, &mut shutdown).await {
+        match run_connection(&app, &account, interval, &mut shutdown, &mut delete_rx).await {
             ConnectionExit::Shutdown => return,
             ConnectionExit::Retry { session_lifetime } => {
                 consecutive_failures = next_failure_count(consecutive_failures, session_lifetime);
@@ -293,6 +307,7 @@ async fn run_connection(
     account: &MailAccountConfig,
     interval: Duration,
     shutdown: &mut watch::Receiver<bool>,
+    delete_rx: &mut mpsc::Receiver<DeleteRequest>,
 ) -> ConnectionExit {
     let secret_store = app.state::<Arc<SecretStore>>();
     let password = match secret_store.get(&mail_secret_key(&account.id)) {
@@ -333,7 +348,7 @@ async fn run_connection(
         return ConnectionExit::Shutdown;
     }
 
-    let (conn, exit) = drive_session(app, account, conn, interval, shutdown).await;
+    let (conn, exit) = drive_session(app, account, conn, interval, shutdown, delete_rx).await;
     // Taken before the logout: the session's life ends when the loop above
     // gives it up, and a slow logout is not uptime.
     let session_lifetime = connected_at.elapsed();
@@ -358,6 +373,7 @@ async fn drive_session(
     mut conn: MailConnection,
     interval: Duration,
     shutdown: &mut watch::Receiver<bool>,
+    delete_rx: &mut mpsc::Receiver<DeleteRequest>,
 ) -> (Option<MailConnection>, SessionExit) {
     // Checked before the first sync, not only after it: that sync classifies
     // every message it finds, one LLM call each, so on a first sync it is
@@ -381,11 +397,35 @@ async fn drive_session(
     }
 
     if !conn.supports_idle() {
-        // Unchanged pre-IDLE behavior, for servers that cannot push.
+        // Unchanged pre-IDLE behavior, for servers that cannot push — plus the
+        // same delete arm the IDLE loop has, or a delete against a non-pushing
+        // server would sit in the queue until the poll interval elapsed and
+        // then be serviced only by luck.
         loop {
+            let mut pending_delete: Option<DeleteRequest> = None;
             tokio::select! {
                 _ = tokio::time::sleep(interval) => {}
                 _ = wait_for_shutdown(shutdown) => return (Some(conn), SessionExit::Shutdown),
+                request = delete_rx.recv() => match request {
+                    Some(request) => pending_delete = Some(request),
+                    // Every sender is gone, which happens only when this task's
+                    // registry entry was dropped — the same thing
+                    // `wait_for_shutdown` reads as a stop. Returning here
+                    // rather than falling through to a sync keeps an orphaned
+                    // task from spinning on a channel that is closed forever.
+                    None => return (Some(conn), SessionExit::Shutdown),
+                },
+            }
+            if let Some(request) = pending_delete {
+                // Same rule as the IDLE loop: a stop that arrived alongside the
+                // request wins, and dropping the request answers its caller.
+                if *shutdown.borrow() {
+                    return (Some(conn), SessionExit::Shutdown);
+                }
+                match handle_delete(&mut conn, request).await {
+                    DeleteExit::Continue => continue,
+                    DeleteExit::Reconnect => return (Some(conn), SessionExit::Retry),
+                }
             }
             let reconcile = should_reconcile(SyncTrigger::PollInterval, last_reconcile.elapsed(), interval);
             if reconcile {
@@ -407,15 +447,68 @@ async fn drive_session(
         }
 
         let reconcile_in = time_until_reconcile(last_reconcile.elapsed(), interval);
-        let (returned, outcome) =
-            match conn.idle_wait(interval, reconcile_in, wait_for_shutdown(shutdown)).await {
-                Ok(returned) => returned,
-                Err(e) => {
-                    log::warn!("mail: IDLE ended for account {}: {e}", account.id);
-                    return (None, SessionExit::Retry);
+        // A delete rides in on the *same* interrupt the shutdown signal uses,
+        // rather than on a new arm inside `idle_wait`: that keeps the client
+        // free of any knowledge of delete requests, and reuses the
+        // `StopSource`-drop machinery that already ends an IDLE at a defined
+        // point so DONE is still sent. Which of the two fired is decided below,
+        // exactly as it already was for shutdown-versus-unexplained.
+        //
+        // `Receiver::recv` is cancel-safe, so a request that arrives just as
+        // the IDLE ends for some other reason stays queued rather than being
+        // dropped on the floor.
+        let mut pending_delete: Option<DeleteRequest> = None;
+        let waited = {
+            let interrupt = async {
+                tokio::select! {
+                    _ = wait_for_shutdown(shutdown) => {}
+                    request = delete_rx.recv() => { pending_delete = request; }
                 }
             };
+            conn.idle_wait(interval, reconcile_in, interrupt).await
+        };
+        let (returned, outcome) = match waited {
+            Ok(returned) => returned,
+            Err(e) => {
+                log::warn!("mail: IDLE ended for account {}: {e}", account.id);
+                // The request never reached the server, and the caller is
+                // waiting on a reply it would otherwise only get by timing out.
+                if let Some(request) = pending_delete {
+                    let _ = request.reply.send(Err(format!(
+                        "the connection to the mail server ended before the message could be moved to Trash: {e}"
+                    )));
+                }
+                return (None, SessionExit::Retry);
+            }
+        };
         conn = returned;
+
+        // Serviced before the outcome is classified rather than inside the
+        // `Interrupted` arm below, because a request can arrive in the same
+        // instant the IDLE ends for some *other* reason — a push landing
+        // concurrently makes the outcome `NewData` even though the delete was
+        // taken off the channel. Handling it only under `Interrupted` would
+        // drop that request and report "the connection ended" to a user whose
+        // connection is perfectly fine.
+        //
+        // Skipped when a stop is pending: the IDLE is over and DONE is sent, so
+        // the session is free for a command, but a delete is three or four
+        // round trips and the graceful stop is on a 5s budget — overrunning it
+        // costs the LOGOUT this connection is guaranteed. The request is
+        // dropped instead, which tells the caller the connection ended. That is
+        // true, and safe: nothing was moved.
+        let serviced_delete = pending_delete.is_some() && !*shutdown.borrow();
+        if serviced_delete {
+            let request = pending_delete.take().expect("guarded by is_some");
+            // `handle_delete` never consumes the connection, so the loop goes
+            // back into IDLE below and `run_connection`'s single LOGOUT still
+            // ends this session — a delete must not leave it parked outside
+            // IDLE, nor bypass that logout.
+            match handle_delete(&mut conn, request).await {
+                DeleteExit::Continue => {}
+                DeleteExit::Reconnect => return (Some(conn), SessionExit::Retry),
+            }
+        }
 
         let trigger = match outcome {
             // IDLE says only that *something* changed (EXISTS/EXPUNGE/FETCH),
@@ -430,6 +523,10 @@ async fn drive_session(
             IdleOutcome::Interrupted if *shutdown.borrow() => {
                 return (Some(conn), SessionExit::Shutdown)
             }
+            // Our own interrupt, and the delete it carried is already done.
+            // Straight back into IDLE: a delete is not new mail, so there is
+            // nothing to sync and nothing to reconcile.
+            IdleOutcome::Interrupted if serviced_delete => continue,
             IdleOutcome::Interrupted => {
                 log::warn!(
                     "mail: IDLE for account {} was interrupted with no stop pending; reconnecting",
@@ -449,6 +546,44 @@ async fn drive_session(
             return (Some(conn), SessionExit::Retry);
         }
     }
+}
+
+/// What a serviced delete leaves the session fit for.
+enum DeleteExit {
+    /// The session is clean; carry on with it.
+    Continue,
+    /// The session may be desynced; drop it and reconnect.
+    Reconnect,
+}
+
+/// Move one message to Trash on the live session, and answer the caller.
+///
+/// Deliberately does *not* touch the local database. The command that queued
+/// this request removes the row only after seeing a successful reply, which is
+/// what makes a failed move structurally incapable of deleting the user's
+/// cached mail: there is no code path here that could.
+///
+/// The two error classes are not the same kind of problem. An `Unsupported`
+/// refusal is decided either before any byte is written or straight after a
+/// LIST that completed normally, so the session is untouched and reconnecting
+/// would achieve nothing but churn (and this is a user-repeatable action — a
+/// server with no Trash folder would otherwise turn every click into a
+/// reconnect). Anything else may have left a response unread on the stream,
+/// where every later command reads the wrong tag, so the connection goes.
+async fn handle_delete(conn: &mut MailConnection, request: DeleteRequest) -> DeleteExit {
+    let result = conn.move_to_trash(request.uid).await;
+    let exit = match &result {
+        Ok(()) => DeleteExit::Continue,
+        Err(MailClientError::Unsupported(_)) => DeleteExit::Continue,
+        Err(_) => DeleteExit::Reconnect,
+    };
+    if let Err(e) = &result {
+        log::warn!("mail: could not move uid={} to Trash: {e}", request.uid);
+    }
+    // A dropped receiver means the caller already gave up (it times out); the
+    // move still happened, and reconciliation will catch the local row up.
+    let _ = request.reply.send(result.map_err(|e| e.to_string()));
+    exit
 }
 
 /// Resolves once this account has been asked to stop — immediately if it
@@ -658,7 +793,11 @@ async fn sync_and_persist(
     Ok(())
 }
 
-fn emit_removed(app: &AppHandle, account_id: &str, removed_count: u64) {
+/// The one way a removal reaches the UI. Shared with `mail_delete_message` on
+/// purpose: a user-initiated delete and a reconciliation both simply mean
+/// "cached rows for this account went away", and the Mail list's refetch and
+/// the unread badge's refresh already both hang off this single event.
+pub fn emit_removed(app: &AppHandle, account_id: &str, removed_count: u64) {
     if let Err(e) = app.emit(MAIL_SYNC_EVENT, MailSyncEvent::Removed {
         account_id: account_id.to_string(),
         removed_count,

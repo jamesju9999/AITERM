@@ -294,6 +294,20 @@ pub async fn delete_messages_absent_from_server(
     Ok(deleted)
 }
 
+/// Drop one cached message, after its server-side copy has already been moved
+/// to Trash. Returns how many rows went — `0` when reconciliation removed the
+/// row first, which is a race, not an error, and which the caller uses to avoid
+/// telling the UI about a removal twice.
+///
+/// Never touches `mail_poll_state`, for exactly the reason
+/// `delete_messages_absent_from_server` doesn't: dropping a local row must not
+/// make the next poll re-download anything.
+pub async fn delete_message_locally(pool: &SqlitePool, id: &str) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM mail_messages WHERE id = ?")
+        .bind(id).execute(pool).await?;
+    Ok(result.rows_affected())
+}
+
 pub async fn delete_account_data(pool: &SqlitePool, account_id: &str) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM mail_messages WHERE account_id = ?")

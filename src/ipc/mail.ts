@@ -73,6 +73,18 @@ export function mailMarkRead(messageId: string): Promise<void> {
   return invoke<void>("mail_mark_read", { messageId });
 }
 
+/**
+ * Move one message to the server's Trash folder and drop the local row.
+ *
+ * The only call in this module that writes to IMAP — everything else is
+ * strictly read-only so AITerm never disturbs what the user sees in their other
+ * mail clients. Rejects (with the server's reason) rather than resolving when
+ * the move did not happen, so the caller must not remove the row optimistically.
+ */
+export function mailDeleteMessage(messageId: string): Promise<void> {
+  return invoke<void>("mail_delete_message", { messageId });
+}
+
 export function mailCountUnread(): Promise<number> {
   return invoke<number>("mail_count_unread");
 }
