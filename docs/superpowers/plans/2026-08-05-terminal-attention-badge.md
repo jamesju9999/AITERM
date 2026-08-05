@@ -921,7 +921,7 @@ Run: `npm run tauri:dev`
 ## 已知限制（實作時不要試圖「修好」）
 
 - **全螢幕 TUI 期間沒有 OSC 133 訊號。** Claude Code、vim、lazygit 執行期間，shell 只把它們視為一個還在跑的指令；`D` 要等程式退出才發出。那段時間唯一的訊號是 bell。
-- **因此「Claude Code 問問題時會不會亮橘燈」取決於它自己有沒有敲 bell**，那是該工具的通知設定，AITerm 控制不了。第一版接受這個漏報。
+- **因此「Claude Code 問問題時會不會亮橘燈」取決於它自己有沒有敲 bell**，那是該工具的通知設定，AITerm 控制不了。Claude Code 預設**只在 Ghostty / Kitty / iTerm2 送通知**，其他終端機要在 `~/.claude/settings.json` 設 `"preferredNotifChannel": "terminal_bell"`（設完要開新分頁才生效）。2026-08-05 已實測通過，詳見設計文件〈已知限制〉。
 - **不要為了補上這個漏報而加輸出靜默的啟發式判斷。** 設計文件已經評估並否決：跑很久的編譯、卡住的下載、開著沒動的 vim 都會被誤判成「等你回答」，而誤判過幾次之後使用者就會永久無視這個提示。原則是**寧可漏報，不可誤報**。
 
 ## 跨平台

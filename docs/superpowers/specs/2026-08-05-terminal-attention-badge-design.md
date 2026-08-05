@@ -161,7 +161,21 @@ onAttention={(kind) => {
 
 **全螢幕 TUI 期間沒有 OSC 133 訊號。** Claude Code、vim、lazygit 這類程式在 alternate buffer 執行期間，shell 只把它們視為「一個還在跑的指令」，OSC 133 `D` 要等到程式退出才會發出。那段時間唯一的提示來源是 bell。
 
-**因此「Claude Code 問問題時會不會亮橘燈」取決於它有沒有敲 bell**，那是該工具自身的通知設定，AITerm 無法控制。第一版接受這個漏報。
+**因此「Claude Code 問問題時會不會亮橘燈」取決於它有沒有敲 bell**，那是該工具自身的通知設定，AITerm 無法控制。
+
+**Claude Code 需要使用者設定一次才會敲。** 依 Claude Code 官方文件（terminal-config），它**預設只在 Ghostty、Kitty、iTerm2 送通知**；其他終端機一律不送，AITerm 不在名單內。使用者要在 `~/.claude/settings.json` 加上：
+
+```json
+"preferredNotifChannel": "terminal_bell"
+```
+
+（合法值：`auto | iterm2 | terminal_bell | iterm2_with_bell | kitty | ghostty | notifications_disabled`。）
+
+設好之後**要開新的分頁**才生效——Claude Code 只在啟動時讀設定。權限提示確實會觸發（文件列的 `Notification` 事件含 `permission_prompt`），2026-08-05 已在 AITerm 實測通過：Claude Code 停在「Do you want to create abc.txt?」時，背景分頁會亮橘色脈動點。
+
+我們刻意**不**去偽裝成 Ghostty/Kitty/iTerm2（例如設 `TERM_PROGRAM`）來繞過偵測：那會讓 Claude Code 送出 AITerm 不支援的終端機專屬跳脫序列。
+
+備援方案（若上述設定失效或使用者想更精確控制）是 `Notification` hook 搭配 `matcher: "permission_prompt"` 直接敲 bell。注意：hook 的 stdout 在 fullscreen TUI 下會落到哪個 tty 並無文件保證，可能需要 `> /dev/tty`，要實測。
 
 **macOS 通知無法在 `tauri:dev` 下驗證。** 依既有紀錄，dev 模式下通知會以「終端機」的身分送出且錯誤被吞掉，桌面版的 `requestPermission` 是 no-op。通知這部分必須出正式 build 才能確認。側邊欄的提示點則可以在 dev 下直接驗證。
 
