@@ -132,9 +132,34 @@ fn estimate_tokens(s: &str) -> usize {
     s.len() / 4
 }
 
+/// Recursively sort object keys so two JSON-equivalent values always format
+/// to the same string, regardless of the order the model emitted them in.
+/// `serde_json`'s `preserve_order` feature (needed elsewhere for settings
+/// files) makes `Value`'s `Display` reflect insertion order rather than a
+/// canonical one, so without this two calls with the same arguments in a
+/// different order would no longer dedupe.
+/// Identical logic to `code_assistant::canonicalize_json` — duplicated rather
+/// than shared to keep the two agent loops independently evolvable (see Plan
+/// B Architecture note on `parse_xml_tool_calls` above).
+fn canonicalize_json(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let sorted: std::collections::BTreeMap<String, serde_json::Value> = map
+                .iter()
+                .map(|(k, v)| (k.clone(), canonicalize_json(v)))
+                .collect();
+            serde_json::Value::Object(sorted.into_iter().collect())
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(canonicalize_json).collect())
+        }
+        other => other.clone(),
+    }
+}
+
 /// Build a deduplication key for a tool call.
 fn tool_call_key(tool_name: &str, args: &serde_json::Value) -> String {
-    format!("{}:{}", tool_name, args)
+    format!("{}:{}", tool_name, canonicalize_json(args))
 }
 
 /// Parse tool calls from XML text that local models emit instead of proper JSON tool-calls.
@@ -694,6 +719,15 @@ mod tests {
         let k1 = tool_call_key("search_documents", &args);
         let k2 = tool_call_key("search_documents", &args);
         assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn dedup_key_ignores_argument_order() {
+        // Same arguments, different key order — models reorder keys often enough
+        // that this is a realistic way to accidentally repeat a call.
+        let a = serde_json::json!({"query": "pricing", "top_k": 5});
+        let b = serde_json::json!({"top_k": 5, "query": "pricing"});
+        assert_eq!(tool_call_key("search_documents", &a), tool_call_key("search_documents", &b));
     }
 
     fn msg(role: &str, content: serde_json::Value) -> ChatMessage {
