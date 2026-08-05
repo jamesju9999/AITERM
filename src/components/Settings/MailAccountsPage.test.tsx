@@ -163,6 +163,94 @@ describe("MailAccountsPage", () => {
       await waitFor(() => expect(mailListAccounts).toHaveBeenCalledTimes(2));
     });
 
+    // `Number("")` is 0, so backspacing the field clean used to send
+    // poll_interval_secs: 0 — the backend only defaults on None, so Some(0)
+    // reaches poller.rs's sleep(Duration::from_secs(0)) and becomes an
+    // unthrottled IMAP reconnect loop. With no edit command, the only recovery
+    // would be remove-and-re-add.
+    it("clamps a cleared poll interval up to the 60s floor", async () => {
+      renderPage();
+      await fillForm();
+
+      fireEvent.change(screen.getByLabelText(t.mail_poll_interval), { target: { value: "" } });
+      clickSave();
+
+      await waitFor(() => expect(mailAddAccount).toHaveBeenCalledWith(
+        expect.objectContaining({ poll_interval_secs: 60 })
+      ));
+    });
+
+    it("clamps an explicit 0 poll interval up to the 60s floor", async () => {
+      renderPage();
+      await fillForm();
+
+      fireEvent.change(screen.getByLabelText(t.mail_poll_interval), { target: { value: "0" } });
+      clickSave();
+
+      await waitFor(() => expect(mailAddAccount).toHaveBeenCalledWith(
+        expect.objectContaining({ poll_interval_secs: 60 })
+      ));
+    });
+
+    // Saving a blank email/host/credential writes the account to config AND the
+    // keychain and starts the poller, which then fails every cycle with only a
+    // log::warn! and no UI feedback at all.
+    it("keeps save disabled until every essential field is filled", async () => {
+      renderPage();
+
+      fireEvent.click(await screen.findByRole("button", { name: t.mail_add }));
+      const save = screen.getByRole("button", { name: t.save });
+      expect(save).toBeDisabled();
+
+      fireEvent.change(screen.getByLabelText(t.mail_email), { target: { value: "new@example.com" } });
+      fireEvent.change(screen.getByLabelText(t.mail_imap_host), { target: { value: "imap.new.com" } });
+      fireEvent.change(screen.getByLabelText(t.mail_username), { target: { value: "newuser" } });
+      // Still one field short.
+      expect(save).toBeDisabled();
+
+      fireEvent.change(screen.getByLabelText(t.mail_password), { target: { value: "s3cret" } });
+      expect(save).toBeEnabled();
+    });
+
+    it("does not submit an account with a blank password", async () => {
+      renderPage();
+
+      fireEvent.click(await screen.findByRole("button", { name: t.mail_add }));
+      fireEvent.change(screen.getByLabelText(t.mail_email), { target: { value: "new@example.com" } });
+      fireEvent.change(screen.getByLabelText(t.mail_imap_host), { target: { value: "imap.new.com" } });
+      fireEvent.change(screen.getByLabelText(t.mail_username), { target: { value: "newuser" } });
+
+      clickSave();
+
+      expect(mailAddAccount).not.toHaveBeenCalled();
+    });
+
+    it("clears the entered password when the form is cancelled", async () => {
+      renderPage();
+      await fillForm();
+
+      fireEvent.click(screen.getByRole("button", { name: t.cancel }));
+      // A live mailbox credential must not sit in component state for as long
+      // as SettingsView stays mounted.
+      fireEvent.click(screen.getByRole("button", { name: t.mail_add }));
+
+      expect(screen.getByLabelText(t.mail_password)).toHaveValue("");
+      expect(screen.getByLabelText(t.mail_email)).toHaveValue("");
+    });
+
+    it("clears a previous failure banner when the form is cancelled", async () => {
+      vi.mocked(mailAddAccount).mockRejectedValue(new Error("imap unreachable") as never);
+
+      renderPage();
+      await fillForm();
+      clickSave();
+      expect(await screen.findByText(/imap unreachable/)).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: t.cancel }));
+
+      expect(screen.queryByText(/imap unreachable/)).toBeNull();
+    });
+
     it("disables the save button while the add is in flight", async () => {
       // Never resolves — the add stays in flight.
       vi.mocked(mailAddAccount).mockReturnValue(new Promise(() => {}) as never);

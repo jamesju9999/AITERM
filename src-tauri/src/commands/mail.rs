@@ -37,7 +37,12 @@ pub async fn mail_add_account(
         smtp_host: input.smtp_host,
         smtp_port: input.smtp_port,
         username: input.username,
-        poll_interval_secs: input.poll_interval_secs.unwrap_or(300),
+        // Clamped, not just defaulted: 0 would make the poller's
+        // sleep(Duration::from_secs(..)) a no-op and turn polling into an
+        // unthrottled IMAP reconnect loop. The frontend clamps too, but this
+        // command is callable by anything in the webview — and clamping here
+        // also keeps the persisted config honest about what the poller does.
+        poll_interval_secs: input.poll_interval_secs.map(|s| s.max(60)).unwrap_or(300),
     };
 
     secret_store.set(&mail_secret_key(&id), &input.password).map_err(|e| e.to_string())?;

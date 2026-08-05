@@ -75,7 +75,12 @@ async fn poll_loop(app: AppHandle, account: MailAccountConfig) {
         if let Err(e) = poll_once(&app, &account).await {
             log::warn!("mail poll failed for account {}: {e}", account.id);
         }
-        tokio::time::sleep(std::time::Duration::from_secs(account.poll_interval_secs as u64)).await;
+        // Floored here as well as in mail_add_account: this is the only place
+        // the interval is actually consumed, so it is the only clamp that also
+        // covers a hand-edited config, where a 0 would make this sleep a no-op
+        // and turn polling into an unthrottled IMAP reconnect loop.
+        let interval = (account.poll_interval_secs as u64).max(60);
+        tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
     }
 }
 

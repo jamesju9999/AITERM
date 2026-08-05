@@ -8,6 +8,10 @@ import { useLocale } from "../../contexts/LocaleContext";
 
 type FormState = MailAccountInput & { poll_interval_secs: number };
 
+// Polling IMAP more than once a minute is abusive regardless of what the user
+// asks for. Mirrored in mail_add_account, since the config file is hand-editable.
+const MIN_POLL_INTERVAL_SECS = 60;
+
 const EMPTY_FORM: FormState = {
   email: "", imap_host: "", imap_port: 993,
   smtp_host: "", smtp_port: 587,
@@ -71,14 +75,28 @@ export function MailAccountsPage() {
 
   useEffect(() => { load(); }, []);
 
+  // Closing is the single place the form is reset — including on cancel, so a
+  // live mailbox password does not sit in component state for as long as
+  // SettingsView stays mounted.
+  const closeForm = () => {
+    setShowForm(false);
+    setForm(EMPTY_FORM);
+    setError(null);
+  };
+
+  // Every field the poller and the keychain entry actually need. Saving with
+  // any of them blank writes an account to config AND the keychain and starts
+  // a poller that fails every cycle with only a log::warn! — and with no edit
+  // command, the only recovery is remove-and-re-add.
+  const canSave = Boolean(form.email && form.imap_host && form.username && form.password);
+
   const handleSave = async () => {
     setSaving(true);
     setError(null);
     try {
       await mailAddAccount(form);
       if (mountedRef.current) {
-        setShowForm(false);
-        setForm(EMPTY_FORM);
+        closeForm();
         load();
       }
       promptForNotificationPermission();
@@ -111,7 +129,7 @@ export function MailAccountsPage() {
         <h2 style={{ margin: 0, fontSize: 16, color: "#e6e6e6" }}>{t.mail_accounts_settings_title}</h2>
         {!showForm && (
           <button
-            onClick={() => { setForm(EMPTY_FORM); setError(null); setShowForm(true); }}
+            onClick={() => { setError(null); setShowForm(true); }}
             className="aiterm-btn aiterm-btn--primary"
           >
             {t.mail_add}
@@ -182,6 +200,8 @@ export function MailAccountsPage() {
             <input
               aria-label={t.mail_imap_port}
               type="number"
+              min={1}
+              max={65535}
               value={form.imap_port}
               onChange={(e) => setForm((f) => ({ ...f, imap_port: Number(e.target.value) }))}
               style={inputStyle}
@@ -200,6 +220,8 @@ export function MailAccountsPage() {
             <input
               aria-label={t.mail_smtp_port}
               type="number"
+              min={1}
+              max={65535}
               value={form.smtp_port}
               onChange={(e) => setForm((f) => ({ ...f, smtp_port: Number(e.target.value) }))}
               style={inputStyle}
@@ -226,15 +248,23 @@ export function MailAccountsPage() {
             <input
               aria-label={t.mail_poll_interval}
               type="number"
+              min={MIN_POLL_INTERVAL_SECS}
               value={form.poll_interval_secs}
-              onChange={(e) => setForm((f) => ({ ...f, poll_interval_secs: Number(e.target.value) }))}
+              // Clamped here, not just at submit: Number("") is 0, and the
+              // backend defaults only on None — Some(0) reaches poller.rs's
+              // sleep(Duration::from_secs(0)) and turns into an unthrottled
+              // IMAP reconnect loop. Same idiom as LoopStudio's max-loops field.
+              onChange={(e) => setForm((f) => ({
+                ...f,
+                poll_interval_secs: Math.max(MIN_POLL_INTERVAL_SECS, Number(e.target.value)),
+              }))}
               style={inputStyle}
             />
           </div>
 
           <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center", justifyContent: "flex-end" }}>
-            <button onClick={() => setShowForm(false)} className="aiterm-btn aiterm-btn--secondary">{t.cancel}</button>
-            <button onClick={handleSave} disabled={saving} className="aiterm-btn aiterm-btn--primary">
+            <button onClick={closeForm} className="aiterm-btn aiterm-btn--secondary">{t.cancel}</button>
+            <button onClick={handleSave} disabled={saving || !canSave} className="aiterm-btn aiterm-btn--primary">
               {saving ? t.mail_saving : t.save}
             </button>
           </div>
