@@ -14,6 +14,13 @@ import "./MailView.css";
 
 interface MailViewProps {
   isActive: boolean;
+  /**
+   * Called after a message is successfully marked read locally. Marking read
+   * only touches the backing store, so without this the global unread badge
+   * would keep showing a stale count until the next sync event (up to
+   * poll_interval_secs, default 300s).
+   */
+  onMessageRead?: () => void;
 }
 
 // NOTE: unlike TerminalView, this component does not early-return null when
@@ -21,7 +28,7 @@ interface MailViewProps {
 // and letting TerminalApp's wrapper div (visibility: hidden / pointerEvents:
 // none) handle hiding inactive tabs, so its own state and effects persist
 // across tab switches.
-export function MailView({ isActive: _isActive }: MailViewProps) {
+export function MailView({ isActive: _isActive, onMessageRead }: MailViewProps) {
   const { t } = useLocale();
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
@@ -108,7 +115,11 @@ export function MailView({ isActive: _isActive }: MailViewProps) {
     setMessages((prev) =>
       prev.map((m) => m.id === message.id ? { ...m, is_read_locally: true } : m)
     );
-    mailMarkRead(message.id).catch((err) => {
+    mailMarkRead(message.id).then(() => {
+      // Only on success: the failure path below rolls the row back to unread,
+      // so refreshing the badge there would just re-report the same count.
+      onMessageRead?.();
+    }).catch((err) => {
       console.error("[mail] failed to mark message read:", err);
       // Roll back, otherwise the row reads as read while the backend still
       // has it unread — and the next sync refetch would flip it back to bold,

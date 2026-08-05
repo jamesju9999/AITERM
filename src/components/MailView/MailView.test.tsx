@@ -52,10 +52,10 @@ function makeMessage(over: Partial<Record<string, unknown>> = {}) {
   };
 }
 
-function renderView() {
+function renderView(onMessageRead?: () => void) {
   return render(
     <LocaleProvider>
-      <MailView isActive />
+      <MailView isActive onMessageRead={onMessageRead} />
     </LocaleProvider>
   );
 }
@@ -161,6 +161,40 @@ describe("MailView", () => {
       await waitFor(() => {
         expect(container.querySelector(".mail-view__item--unread")).toBeTruthy();
       });
+    });
+
+    // The global unread badge lives in TabBar, fed by useMailSync. Marking a
+    // message read here only touches the backing store and emits no sync
+    // event, so without this callback the badge would stay stale for up to
+    // poll_interval_secs (default 300s) after the user clears a row.
+    it("notifies the parent after a successful mark-read so the unread badge can refresh", async () => {
+      vi.mocked(mailListMessages).mockResolvedValue([makeMessage()] as never);
+      const onMessageRead = vi.fn();
+
+      renderView(onMessageRead);
+
+      fireEvent.click(await screen.findByRole("button", { name: /Quarterly report/ }));
+
+      await waitFor(() => expect(onMessageRead).toHaveBeenCalledTimes(1));
+    });
+
+    it("does not notify the parent when marking read fails", async () => {
+      vi.mocked(mailListMessages).mockResolvedValue([makeMessage()] as never);
+      vi.mocked(mailMarkRead).mockRejectedValue(new Error("write failed") as never);
+      const onMessageRead = vi.fn();
+
+      renderView(onMessageRead);
+
+      fireEvent.click(await screen.findByRole("button", { name: /Quarterly report/ }));
+
+      // Barrier: wait until the rejection has actually been handled (the catch
+      // logs), otherwise this would pass simply by asserting too early — the
+      // unread class alone is a weak signal, since it is also present before
+      // the optimistic update lands.
+      await waitFor(() => expect(console.error).toHaveBeenCalledWith(
+        "[mail] failed to mark message read:", expect.anything()
+      ));
+      expect(onMessageRead).not.toHaveBeenCalled();
     });
 
     it("omits the summary element when a message has no ai_summary", async () => {

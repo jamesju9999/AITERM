@@ -14,6 +14,7 @@ import { CodeAssistantView } from "./CodeAssistantView";
 import { KnowledgeBaseView } from "./KnowledgeBaseView";
 import { MailView } from "./MailView";
 import { useLocale } from "../contexts/LocaleContext";
+import { useMailSync } from "../hooks/useMailSync";
 import {
   onEnterpriseTaskReceived,
   onEnterpriseTaskReady,
@@ -67,6 +68,9 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(76);
   const [isDragging, setIsDragging] = useState(false);
+  // Mounted here, in the always-mounted shell, rather than in MailView:
+  // important mail must notify the user even if the Mail tab was never opened.
+  const { unreadCount: mailUnreadCount, refreshUnread: refreshMailUnread } = useMailSync();
 
   // We use refs to avoid binding stale values in keyboard listeners
   const tabsRef = useRef(tabs);
@@ -291,6 +295,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
           onToggle={toggleSidebar}
           width={sidebarWidth}
           hasUpdate={hasUpdate}
+          mailUnreadCount={mailUnreadCount}
         />
       </div>
       
@@ -352,7 +357,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
               ) : tab.type === "knowledge-base" ? (
                 <KnowledgeBaseView isActive={isActive} />
               ) : tab.type === "mail" ? (
-                <MailView isActive={isActive} />
+                <MailView isActive={isActive} onMessageRead={refreshMailUnread} />
               ) : (
                 <TerminalView
                   isActive={isActive}
