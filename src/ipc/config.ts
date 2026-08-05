@@ -95,3 +95,15 @@ export const isAppImageIntegrationDeclined = (): Promise<boolean> =>
 
 export const setAppImageIntegrationDeclined = (): Promise<void> =>
   invoke<void>("set_appimage_integration_declined");
+
+export const isClaudeNotifDeclined = (): Promise<boolean> =>
+  invoke<boolean>("is_claude_notif_declined");
+
+export const setClaudeNotifDeclined = (): Promise<void> =>
+  invoke<void>("set_claude_notif_declined");
+
+export const claudeNotifNeedsPrompt = (): Promise<boolean> =>
+  invoke<boolean>("claude_notif_needs_prompt");
+
+export const claudeNotifEnableBell = (): Promise<void> =>
+  invoke<void>("claude_notif_enable_bell");

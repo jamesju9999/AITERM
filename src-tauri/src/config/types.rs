@@ -35,6 +35,11 @@ pub struct AppConfig {
     #[serde(default)]
     pub appimage_integration_declined: bool,
 
+    /// Set when the user declines the Claude Code terminal-bell prompt, so it is
+    /// asked once rather than on every `claude` run.
+    #[serde(default)]
+    pub claude_notif_declined: bool,
+
     /// Which shortcut submits the command (Enter vs Shift+Enter, etc).
     #[serde(default)]
     pub submit_shortcut: SubmitShortcut,
@@ -132,6 +137,7 @@ impl Default for AppConfig {
             max_agent_steps: default_max_agent_steps(),
             onboarding_done: false,
             appimage_integration_declined: false,
+            claude_notif_declined: false,
             submit_shortcut: SubmitShortcut::default(),
             db_connections: vec![],
             default_tab: DefaultTab::default(),

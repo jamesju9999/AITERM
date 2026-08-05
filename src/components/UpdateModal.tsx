@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useLocale } from "../contexts/LocaleContext";
 import { useUpdaterContext } from "../contexts/UpdaterContext";
 import { openUrl } from "../ipc/shell";
@@ -13,6 +14,8 @@ interface UpdateModalViewProps {
   onRelaunch: () => void;
   onOpenReleases: () => void;
   onOpenNotes: (version: string) => void;
+  /** 回報這張卡片是否正在顯示，讓 App 能排出角落卡片的優先序。 */
+  onVisibleChange?: (visible: boolean) => void;
 }
 
 export function UpdateModalView({
@@ -23,6 +26,7 @@ export function UpdateModalView({
   onRelaunch,
   onOpenReleases,
   onOpenNotes,
+  onVisibleChange,
 }: UpdateModalViewProps) {
   const { t } = useLocale();
 
@@ -33,6 +37,8 @@ export function UpdateModalView({
       state.status === "ready" ||
       state.status === "unsupported" ||
       state.status === "error");
+
+  useEffect(() => { onVisibleChange?.(visible); }, [visible, onVisibleChange]);
 
   if (!visible) return null;
 
@@ -140,7 +146,12 @@ export function UpdateModalView({
   );
 }
 
-export function UpdateModal() {
+interface UpdateModalProps {
+  /** 回報這張卡片是否正在顯示，讓 App 能排出角落卡片的優先序。 */
+  onVisibleChange?: (visible: boolean) => void;
+}
+
+export function UpdateModal({ onVisibleChange }: UpdateModalProps) {
   const { state, dismissed, dismiss, install, relaunch } = useUpdaterContext();
 
   return (
@@ -152,6 +163,7 @@ export function UpdateModal() {
       onRelaunch={() => void relaunch()}
       onOpenReleases={() => openUrl(GITHUB_RELEASES_URL).catch(console.error)}
       onOpenNotes={(version) => openUrl(releaseTagUrl(version)).catch(console.error)}
+      onVisibleChange={onVisibleChange}
     />
   );
 }

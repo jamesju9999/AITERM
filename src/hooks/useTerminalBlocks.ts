@@ -44,6 +44,10 @@ export function useTerminalBlocks(
    *  必須是穩定的參考（useCallback 空依賴或 ref 橋接）——它進了下面
    *  OSC handler effect 的依賴陣列，每次換身分都會重新註冊 handler。 */
   onCommandSettled?: (exitCode: number) => void,
+  /** 每次開始追蹤一個新指令就呼叫，帶上指令文字。給「偵測使用者跑了什麼」用。
+   *  必須是穩定的參考（useCallback 空依賴或 ref 橋接）——它進了 submitCommand
+   *  與 beginTrackedBlock 的依賴陣列，每次換身分都會讓兩者的識別跟著變。 */
+  onCommandStarted?: (cmd: string) => void,
 ): UseTerminalBlocksResult {
   const [blocks, setBlocks] = useState<TerminalBlock[]>([]);
   const [isAlternateBuffer, setIsAlternateBuffer] = useState(false);
@@ -228,6 +232,8 @@ export function useTerminalBlocks(
     (cmd: string, onComplete?: (block: TerminalBlock) => void) => {
       if (!term || !sessionId) return;
 
+      onCommandStarted?.(cmd);
+
       // On Windows conpty: \x15 echoes as visible "^U", and \x1b gets merged with
       // the first char of the command as an Alt+key (e.g. \x1b + "d" = Alt+D which
       // deletes a word, dropping the "d").  WarpInput owns all keyboard input so the
@@ -281,7 +287,7 @@ export function useTerminalBlocks(
       // Clear the current line before sending the command (see isWindows/clearSeq above).
       writePty(sessionId, clearSeq + cmd + "\r").catch(console.error);
     },
-    [sessionId, term, cwdRef, finalizeBlock, clearAllBlocks],
+    [sessionId, term, cwdRef, finalizeBlock, clearAllBlocks, onCommandStarted],
   );
 
   /**
@@ -296,6 +302,8 @@ export function useTerminalBlocks(
   const beginTrackedBlock = useCallback(
     (cmd: string) => {
       if (!sessionId) return;
+
+      onCommandStarted?.(cmd);
 
       if (isClearCommand(cmd)) {
         // Same reasoning as submitCommand's `clear`/`cls` handling — wipe the
@@ -328,7 +336,7 @@ export function useTerminalBlocks(
       blocksRef.current = updated;
       setBlocks(updated);
     },
-    [sessionId, cwdRef, clearAllBlocks],
+    [sessionId, cwdRef, clearAllBlocks, onCommandStarted],
   );
 
   return {

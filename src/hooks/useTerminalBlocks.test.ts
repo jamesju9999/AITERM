@@ -367,4 +367,47 @@ describe("useTerminalBlocks", () => {
     expect(result.current.blocks).toHaveLength(0);
     expect(writePtyMock).not.toHaveBeenCalled();
   });
+
+  it("calls onCommandStarted with the command text on submitCommand", () => {
+    const onCommandStarted = vi.fn();
+    const { result } = renderHook(() =>
+      useTerminalBlocks("session-1", term, undefined, undefined, undefined, onCommandStarted),
+    );
+
+    act(() => {
+      result.current.submitCommand("claude");
+    });
+
+    expect(onCommandStarted).toHaveBeenCalledWith("claude");
+  });
+
+  it("calls onCommandStarted with the command text on beginTrackedBlock", () => {
+    const onCommandStarted = vi.fn();
+    const { result } = renderHook(() =>
+      useTerminalBlocks("session-1", term, undefined, undefined, undefined, onCommandStarted),
+    );
+
+    act(() => {
+      result.current.beginTrackedBlock("claude");
+    });
+
+    expect(onCommandStarted).toHaveBeenCalledWith("claude");
+  });
+
+  it("calls onCommandStarted for 'clear' even though it creates no block", () => {
+    // Pins the deliberate decision to report "what did the user run" rather
+    // than "which blocks were created" — clear/cls return early before any
+    // block exists, but onCommandStarted must still fire.
+    const onCommandStarted = vi.fn();
+    const { result } = renderHook(() =>
+      useTerminalBlocks("session-1", term, undefined, undefined, undefined, onCommandStarted),
+    );
+
+    act(() => {
+      result.current.submitCommand("clear");
+    });
+
+    expect(onCommandStarted).toHaveBeenCalledWith("clear");
+    expect(result.current.blocks).toHaveLength(0);
+  });
 });

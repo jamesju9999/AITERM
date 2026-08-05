@@ -80,9 +80,36 @@ JSON 解析失敗時回 **false**：不提示。看不懂的檔案就不要碰�
 
 ### `claude_notif_enable_bell() -> Result<(), String>`
 
-解析 `~/.claude/settings.json` → 設定 `preferredNotifChannel = "terminal_bell"` → 寫回。檔案不存在就建立（含必要的上層目錄）。
+解析 `~/.claude/settings.json` → 設定 `preferredNotifChannel = "terminal_bell"` → 寫回。
 
 **JSON 解析失敗時回傳錯誤，絕不覆寫。** 使用者的設定檔壞掉是他自己要處理的事，不是我們拿來重置的理由。
+
+### 寫入必須是原子的
+
+**這一節比下面的 key 順序重要得多。** key 順序是觀感問題，寫入失敗則是資料毀損。
+
+`fs::write` 會在寫入任何一個 byte 之前先 truncate。實測過（600KB 磁碟映像檔、填滿、跑真實流程）：一個 24570 bytes 的 `settings.json` 會變成 **0 bytes**，而且錯誤訊息會如實回報——使用者看到「設定失敗」，同時他的 Claude Code 設定已經全毀。
+
+所以寫入走「暫存檔 + rename」。同倉庫的 `src-tauri/src/config/mod.rs:141-146` 對本 app 自己的設定檔早就這樣做了，而這裡動的是別人的檔案，更沒有理由不做。
+
+但單純換成 temp+rename 會退化兩件 `fs::write` 本來做對的事，實測數據：
+
+| | symlink | 權限 |
+|---|---|---|
+| `fs::write` | 保持（寫進連結指向的真檔） | 保持 0600 |
+| naive temp+rename | **連結被換成普通檔** | **放寬成 0644** |
+
+dotfile 管理器（chezmoi / stow / yadm）常把 `settings.json` 做成連結，而設定檔是 0600 也很正常。所以三件事要一起做：**先 `canonicalize` 解 symlink → 寫暫存檔 → 從原檔複製權限 → rename**。
+
+不加 `fsync`：`config/mod.rs` 也沒有，而 rename 已經堵住真正會傷人的「截斷」那一類。
+
+代價是 temp+rename 需要**目錄**的寫入權限而非只要檔案的。`~/.claude` 唯讀而 `settings.json` 可寫是極罕見的組合，且失敗方式乾淨（回 Err、不動原檔）。
+
+### 空檔案算「還沒有設定」
+
+存在但內容為空（或只有空白）的 `settings.json` 要當成空物件處理，不是解析錯誤。
+
+理由不只是嚴謹：**空檔案正是非原子寫入在磁碟滿時產生的東西**。若把它當成壞檔案，`needs_prompt` 會回 false，功能對這位使用者靜默失效——正是這個功能想解決的那種失效方式。
 
 ### key 順序
 
@@ -90,7 +117,18 @@ JSON 解析失敗時回 **false**：不提示。看不懂的檔案就不要碰�
 
 沒有這個 feature 的話，`serde_json::Map` 是 `BTreeMap`，「解析 → 插入 → 序列化」會把使用者的 key **全部按字母重排**，整個檔案改頭換面。功能上無害，但在別人的設定檔上這樣做觀感很差。
 
-選擇真正的 JSON 解析器而非定點文字插入，是因為在別人的設定檔上動手時，「key 順序改變」遠比「手刻解析寫錯把檔案弄壞」輕微。這個 feature 只影響無型別 `Value` 的序列化順序（derive 的結構本來就照宣告順序），對送往 API 的 JSON 無關緊要。
+選擇真正的 JSON 解析器而非定點文字插入，是因為在別人的設定檔上動手時，「key 順序改變」遠比「手刻解析寫錯把檔案弄壞」輕微。
+
+**但這個 feature 有一個跨模組的副作用，必須一併處理。** 它把 `serde_json::Map` 從 `BTreeMap` 換成 `IndexMap`，於是 `Value` 的 `Display` 不再是正規化形式。`code_assistant/mod.rs` 與 `knowledge_base/chat.rs` 的 `tool_call_key` 正是用 `format!("{}", args)` 當 tool call 的去重 key——在 BTreeMap 下它剛好是正規化的，換之後就不是了。實測：
+
+```
+開 preserve_order：  {"path":"src","depth":3} 與 {"depth":3,"path":"src"} → 視為不同呼叫
+未開：              兩者相同 → 正確去重
+```
+
+args 來自 LLM，而這個守衛存在的理由正是擋住會重複呼叫的小型／本地模型——也正是最會亂排 key 順序的那群。所以 `tool_call_key` 要自己做正規化，不能依賴 `Display`。這條在本功能之前就是隱性的脆弱假設，只是 `preserve_order` 讓它浮出來。
+
+送往 API 的 JSON 順序改變本身無關緊要。
 
 ### 婉拒旗標
 
@@ -165,6 +203,12 @@ Rust 測試必須涵蓋的六種情況——**這是全功能最需要測試的�
 **設定寫入後不影響已在執行的 claude session。** 見〈成功狀態必須說「要開新分頁」〉。
 
 **只處理使用者層級的 `~/.claude/settings.json`。** 專案層級（`.claude/settings.json`）與企業管理設定不在範圍內。
+
+**與 Claude Code 本身的並行修改沒有互斥保護。** 我們的 read-modify-write 不是原子的：使用者按下按鈕的那一刻若 Claude Code 正在寫 `settings.json`（例如 onboarding 寫 `hasCompletedOnboarding`／`theme`，而那正是 `claude` 啟動時、也正是卡片跳出來的時候），兩邊會互相蓋掉。
+
+視窗是毫秒級而使用者點擊要好幾秒，實務風險低。真要解需要檔案鎖，而 Claude Code 自己沒有加，我們單方面加也擋不住對方——寫成已知限制比做半套誠實。
+
+**CRLF 與數字格式會被正規化。** 走 `Value` round-trip 之後，CRLF 行尾會全部變成 LF，`1e10` 這種寫法會變成 `10000000000.0`。前者是純觀感，後者機率極低；都**不要**用 `arbitrary_precision` 去修——那會全域改變 `Value` 的形狀並破壞其他模組的 `as_f64` 比對。
 
 ## 跨平台
 
