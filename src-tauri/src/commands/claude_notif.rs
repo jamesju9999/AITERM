@@ -153,6 +153,20 @@ mod tests {
     }
 
     #[test]
+    fn empty_settings_file_asks() {
+        let path = claude_dir_with(Some(""));
+        assert!(needs_prompt_at(&path));
+    }
+
+    #[test]
+    fn enable_bell_fills_in_an_empty_file() {
+        let path = claude_dir_with(Some("   \n"));
+        enable_bell_at(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains(r#""preferredNotifChannel": "terminal_bell""#));
+    }
+
+    #[test]
     fn creates_file_when_missing() {
         let path = claude_dir_with(None);
         enable_bell_at(&path).unwrap();
@@ -203,6 +217,13 @@ mod tests {
         let path = claude_dir_with(Some(original));
         assert!(enable_bell_at(&path).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn write_ends_with_a_trailing_newline() {
+        let path = claude_dir_with(Some(r#"{"model":"sonnet"}"#));
+        enable_bell_at(&path).unwrap();
+        assert!(fs::read_to_string(&path).unwrap().ends_with("}\n"));
     }
 
     #[cfg(unix)]
