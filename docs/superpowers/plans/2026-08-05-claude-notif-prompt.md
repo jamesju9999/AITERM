@@ -43,7 +43,10 @@
 
 自動測試涵蓋：比對規則（純函式）、設定檔讀寫（Rust + tempfile）、卡片的顯示／隱藏／接受／婉拒（Vitest）。
 
-**偵測的接線（`useTerminalBlocks` → `TerminalView` → `TerminalApp` → `App.tsx`）沒有自動化防護**，與上一個功能相同：那條路徑要真的 mount `TerminalView` 才測得到，而那需要偽造 Tauri IPC、xterm 與 PTY。Task 8 的手動驗證是它唯一的閘門。
+**接線的覆蓋要分成兩段看，不要一概而論。**
+
+- **`useTerminalBlocks` 這一段是測得到的，而且必須測。** `src/hooks/useTerminalBlocks.test.ts` 已經用 `renderHook` 直接驅動真實的 hook 搭配真的 `@xterm/xterm` `Terminal`，姊妹回呼 `onCommandSettled` 在那裡就有三個專屬測試。`onCommandStarted` 要照同樣的方式測——包含「`clear` 也會觸發」這條，它釘住「放在 early return 之前」的刻意決定。
+- **`TerminalView` → `TerminalApp` → `App.tsx` 這一段沒有自動化防護。** 那要真的 mount `TerminalView`，而那需要偽造 Tauri IPC、xterm 與 PTY。Task 7 的手動驗證是它唯一的閘門。
 
 **不要為此寫「鏡像 harness」測試。** 上一個功能有人為 `TerminalView` 寫過手抄同樣邏輯的測試，後來刪掉了：它與出貨程式碼零耦合（唯一的 `src/` import 是 `import type`，編譯時就被抹掉），把實作反轉之後仍然全綠。若某段邏輯非鏡像不能測，那是「該把邏輯搬進純函式」的訊號。
 
@@ -1072,6 +1075,10 @@ Run: `npm run tauri:dev`
 
 在終端機分頁執行 `claude`。右下角應出現「讓 Claude Code 在背景分頁提醒你？」卡片。
 
+> **卡片沒出現時先排除這兩個原因，不要直接當成偵測壞掉。**
+> 1. **有別的角落卡片正在顯示。** 三張卡片共用右下角同一個位置，更新提示與 AppImage 提示都會讓位在前。若畫面右下角已經有卡片，先處理掉它再重試。
+> 2. **婉拒旗標還留著。** 若這台機器先前跑過 Step 7，`claude_notif_declined` 會是 true，卡片永遠不會出現。做法見 Step 8 的第 2 點。
+
 - [ ] **Step 4: 驗證接受路徑，並確認沒有弄壞設定檔**
 
 1. 按「幫我設定」。
@@ -1112,11 +1119,24 @@ Expected: 沒有輸出。
 
 - [ ] **Step 8: 記錄結果與清理**
 
-把每一步的實際結果寫下來。確認 `~/.claude/settings.json` 最終狀態正確之後刪掉備份：
+把每一步的實際結果寫下來，然後**兩份**狀態都要還原。
+
+1. 確認 `~/.claude/settings.json` 最終狀態正確之後刪掉備份：
 
 ```bash
 rm ~/.claude/settings.json.bak
 ```
+
+2. **把婉拒旗標改回去。** Step 7 走完之後，`claude_notif_declined = true` 會永久留在 AITerm 自己的設定裡，而設定頁**沒有**對應的重設開關（只有 AppImage 那個有）。不改回去的話，這台機器之後再也看不到這張卡片，也無法重跑驗證：
+
+```bash
+# macOS（dirs::config_dir() 在 macOS 是 ~/Library/Application Support）
+# Windows: %APPDATA%\AITerm\config.toml
+# Linux:   ~/.config/AITerm/config.toml
+grep claude_notif_declined ~/Library/Application\ Support/AITerm/config.toml
+```
+
+把那一行改成 `claude_notif_declined = false`（或整行刪掉，`#[serde(default)]` 會補成 false）。**改之前要先關掉 app**，否則 app 結束時會用記憶體裡的狀態覆寫回去。
 
 ---
 
