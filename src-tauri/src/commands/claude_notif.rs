@@ -239,6 +239,47 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn enable_bell_at_preserves_a_symlinked_settings_file() {
+        // dotfile 管理工具（chezmoi/stow/yadm）常把 settings.json 做成連結到別處
+        // 的真正檔案。寫入時如果直接對連結路徑操作（沒先 canonicalize），
+        // rename 會把連結整個換成一份普通檔案，砍斷它跟原始檔案的關係。
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let real = dir.path().join("real-settings.json");
+        fs::write(&real, r#"{"model":"sonnet"}"#).unwrap();
+        let link = dir.path().join("settings.json");
+        symlink(&real, &link).unwrap();
+
+        enable_bell_at(&link).unwrap();
+
+        // 連結本身還是連結，沒有被 rename 換成普通檔案。
+        let link_meta = fs::symlink_metadata(&link).unwrap();
+        assert!(link_meta.file_type().is_symlink());
+
+        // 連結指向的真正檔案內容有更新。
+        let text = fs::read_to_string(&real).unwrap();
+        assert!(text.contains(r#""preferredNotifChannel": "terminal_bell""#));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn enable_bell_at_preserves_file_permissions() {
+        // 使用者可能刻意把 settings.json 設成 0600（其他 dotfile 管理慣例），
+        // 這次寫入不該把它放寬。
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = claude_dir_with(Some(r#"{"model":"sonnet"}"#));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        enable_bell_at(&path).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn write_failure_leaves_original_untouched() {
         // 目的是證明 temp+rename 真的有擋住「寫到一半失敗」把原檔清空的問題
         // （這正是 fs::write 直接 truncate 原檔會犯的錯）。用跨平台可控的方式
