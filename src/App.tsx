@@ -17,6 +17,10 @@ export function AppRoutes() {
   const { hasUpdate } = useUpdaterContext();
   const [claudeSeen, setClaudeSeen] = useState(false);
   const [appImageOffering, setAppImageOffering] = useState(false);
+  // hasUpdate（有沒有可用更新）不等於「更新卡片正在畫面上」——使用者按過
+  // 「稍後」之後 hasUpdate 仍是 true（見 useUpdater.ts），所以改看 UpdateModal
+  // 自己回報的實際顯示狀態，避免我們的卡片被一個已經不在畫面上的更新卡永久擋住。
+  const [updateVisible, setUpdateVisible] = useState(false);
   // 三張角落卡片固定在右下角同一個位置，同時出現會完全重疊。
   // 優先序：更新 > AppImage > Claude 通知。
   const onClaudeDetected = useCallback(() => setClaudeSeen(true), []);
@@ -76,9 +80,9 @@ export function AppRoutes() {
           </Routes>
         </div>
       )}
-      <UpdateModal />
+      <UpdateModal onVisibleChange={setUpdateVisible} />
       <AppImageIntegrationPrompt hasUpdate={hasUpdate} onOfferingChange={setAppImageOffering} />
-      <ClaudeNotifPrompt claudeSeen={claudeSeen} blocked={hasUpdate || appImageOffering} />
+      <ClaudeNotifPrompt claudeSeen={claudeSeen} blocked={updateVisible || appImageOffering} />
     </div>
   );
 }
