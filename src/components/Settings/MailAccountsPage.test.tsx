@@ -39,6 +39,24 @@ function renderPage() {
   return render(<LocaleProvider><MailAccountsPage /></LocaleProvider>);
 }
 
+/** The fields the save guard requires; the first three are trim-checked. */
+const REQUIRED_VALUES = {
+  mail_email: "new@example.com",
+  mail_imap_host: "imap.new.com",
+  mail_username: "newuser",
+  mail_password: "s3cret",
+} as const;
+const REQUIRED_FIELDS = Object.keys(REQUIRED_VALUES) as (keyof typeof REQUIRED_VALUES)[];
+const TRIMMED_FIELDS = REQUIRED_FIELDS.filter((f) => f !== "mail_password");
+
+/** Fills the guard's required fields, optionally leaving one of them blank. */
+function fillRequired(omit?: keyof typeof REQUIRED_VALUES) {
+  for (const field of REQUIRED_FIELDS) {
+    if (field === omit) continue;
+    fireEvent.change(screen.getByLabelText(t[field]), { target: { value: REQUIRED_VALUES[field] } });
+  }
+}
+
 /** Opens the add form and fills every field with known values. */
 async function fillForm() {
   fireEvent.click(await screen.findByRole("button", { name: t.mail_add }));
@@ -195,34 +213,64 @@ describe("MailAccountsPage", () => {
     // Saving a blank email/host/credential writes the account to config AND the
     // keychain and starts the poller, which then fails every cycle with only a
     // log::warn! and no UI feedback at all.
-    it("keeps save disabled until every essential field is filled", async () => {
+    //
+    // One case per field rather than one cumulative test: a test that fills
+    // three fields before asserting "still disabled" only ever witnesses the
+    // fourth, so dropping any of the other three from the guard would go
+    // undetected.
+    it("enables save once every essential field is filled", async () => {
       renderPage();
 
       fireEvent.click(await screen.findByRole("button", { name: t.mail_add }));
-      const save = screen.getByRole("button", { name: t.save });
-      expect(save).toBeDisabled();
+      expect(screen.getByRole("button", { name: t.save })).toBeDisabled();
 
-      fireEvent.change(screen.getByLabelText(t.mail_email), { target: { value: "new@example.com" } });
-      fireEvent.change(screen.getByLabelText(t.mail_imap_host), { target: { value: "imap.new.com" } });
-      fireEvent.change(screen.getByLabelText(t.mail_username), { target: { value: "newuser" } });
-      // Still one field short.
-      expect(save).toBeDisabled();
+      fillRequired();
 
-      fireEvent.change(screen.getByLabelText(t.mail_password), { target: { value: "s3cret" } });
-      expect(save).toBeEnabled();
+      expect(screen.getByRole("button", { name: t.save })).toBeEnabled();
     });
 
-    it("does not submit an account with a blank password", async () => {
+    it.each(REQUIRED_FIELDS)("keeps save disabled when %s is the only blank field", async (field) => {
       renderPage();
 
       fireEvent.click(await screen.findByRole("button", { name: t.mail_add }));
-      fireEvent.change(screen.getByLabelText(t.mail_email), { target: { value: "new@example.com" } });
-      fireEvent.change(screen.getByLabelText(t.mail_imap_host), { target: { value: "imap.new.com" } });
-      fireEvent.change(screen.getByLabelText(t.mail_username), { target: { value: "newuser" } });
+      fillRequired(field);
+
+      expect(screen.getByRole("button", { name: t.save })).toBeDisabled();
+    });
+
+    it.each(REQUIRED_FIELDS)("does not submit when %s is the only blank field", async (field) => {
+      renderPage();
+
+      fireEvent.click(await screen.findByRole("button", { name: t.mail_add }));
+      fillRequired(field);
 
       clickSave();
 
       expect(mailAddAccount).not.toHaveBeenCalled();
+    });
+
+    // Boolean(" ") is true, so an untrimmed guard would let a stray space
+    // through and produce exactly the failure the guard exists to prevent.
+    it.each(TRIMMED_FIELDS)("keeps save disabled when %s holds only whitespace", async (field) => {
+      renderPage();
+
+      fireEvent.click(await screen.findByRole("button", { name: t.mail_add }));
+      fillRequired();
+      fireEvent.change(screen.getByLabelText(t[field]), { target: { value: "   " } });
+
+      expect(screen.getByRole("button", { name: t.save })).toBeDisabled();
+    });
+
+    // Deliberately asymmetric: leading/trailing whitespace can be legitimate in
+    // a password, so it must not be trimmed away when deciding validity.
+    it("still allows save when the password is entirely whitespace", async () => {
+      renderPage();
+
+      fireEvent.click(await screen.findByRole("button", { name: t.mail_add }));
+      fillRequired();
+      fireEvent.change(screen.getByLabelText(t.mail_password), { target: { value: "   " } });
+
+      expect(screen.getByRole("button", { name: t.save })).toBeEnabled();
     });
 
     it("clears the entered password when the form is cancelled", async () => {

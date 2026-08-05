@@ -88,7 +88,12 @@ export function MailAccountsPage() {
   // any of them blank writes an account to config AND the keychain and starts
   // a poller that fails every cycle with only a log::warn! — and with no edit
   // command, the only recovery is remove-and-re-add.
-  const canSave = Boolean(form.email && form.imap_host && form.username && form.password);
+  // Trimmed, since Boolean(" ") is true and a stray space would sail through.
+  // The password is deliberately untrimmed: leading/trailing whitespace can be
+  // legitimate there.
+  const canSave = Boolean(
+    form.email.trim() && form.imap_host.trim() && form.username.trim() && form.password
+  );
 
   const handleSave = async () => {
     setSaving(true);
