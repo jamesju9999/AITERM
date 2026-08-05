@@ -5,6 +5,7 @@ use tauri::{AppHandle, State};
 
 use crate::config::{ConfigStore, MailAccountConfig};
 use crate::db::mail::{self as mail_db, MailDb, MailMessageRow};
+use crate::mail::client;
 use crate::mail::poller::{mail_secret_key, restart_account, stop_account};
 use crate::secret::SecretStore;
 
@@ -19,6 +20,19 @@ pub struct MailAccountInput {
     pub password: String,
     #[serde(default)]
     pub poll_interval_secs: Option<u32>,
+}
+
+/// Verify credentials before an account is saved. The frontend calls this
+/// first, so the overwhelmingly likely first-run mistakes — a Google account
+/// password instead of an App Password, or IMAP not enabled — surface as an
+/// error the user can read, rather than as a background poller silently
+/// retrying a failing login every cycle (which is itself enough to trip a
+/// provider's account-protection).
+#[tauri::command]
+pub async fn mail_test_connection(input: MailAccountInput) -> Result<(), String> {
+    client::test_connection(&input.imap_host, input.imap_port, &input.username, &input.password)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

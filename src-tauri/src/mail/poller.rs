@@ -93,7 +93,7 @@ async fn poll_once(app: &AppHandle, account: &MailAccountConfig) -> anyhow::Resu
     let mail_db = app.state::<MailDb>();
     let since_uid = mail_db::get_last_seen_uid(&mail_db.pool, &account.id).await?;
 
-    let raw_messages = fetch_new_messages(
+    let batches = fetch_new_messages(
         &account.imap_host,
         account.imap_port,
         &account.username,
@@ -101,86 +101,92 @@ async fn poll_once(app: &AppHandle, account: &MailAccountConfig) -> anyhow::Resu
         since_uid,
     ).await?;
 
-    if raw_messages.is_empty() {
+    if batches.is_empty() {
         return Ok(());
     }
 
     let router = app.state::<AiRouter>();
     let provider = router.resolve().await?;
 
-    let mut max_uid = since_uid.unwrap_or(0);
-    for raw in raw_messages {
-        max_uid = max_uid.max(raw.uid);
-
-        // Deliberate: a message that fails to parse is folded into `max_uid`
-        // above and thus never retried. Retrying a message that will never
-        // parse would stall this account's poll loop on it forever, which is
-        // worse than permanently skipping it — this is a one-way skip, not
-        // an oversight.
-        let Some(parsed) = parse_raw_message(&raw.raw) else {
-            log::warn!("mail: could not parse message uid={} for account {}", raw.uid, account.id);
-            continue;
-        };
-
-        let mut classification = classify_message(provider.clone(), &parsed.sender, &parsed.subject, &parsed.body_text)
-            .await
-            .unwrap_or_else(|e| {
-                log::warn!("mail classification failed for uid={}: {e}", raw.uid);
-                Default::default()
-            });
-        // The prompt asks the model to never mark promotional mail as
-        // important too, but LLMs don't reliably honor soft constraints —
-        // enforce it here so a misclassification can't trigger a spurious
-        // "important" OS notification for what's actually a marketing email.
-        if classification.is_promotional {
-            classification.is_important = false;
-        }
-
-        // Log-and-continue rather than `?`-propagate: a single failed insert
-        // (e.g. transient SQLITE_BUSY) must not abort the whole batch, since
-        // that would leave `set_last_seen_uid` below unreached and wedge
-        // this account's `last_seen_uid` at the pre-failure UID forever —
-        // every subsequent poll would re-fetch the same batch and hit the
-        // same failure (or a UNIQUE constraint violation on the messages
-        // already inserted this cycle) on the very first message.
-        let row = match mail_db::insert_message(&mail_db.pool, NewMessage {
-            account_id: &account.id,
-            uid: raw.uid,
-            sender: &parsed.sender,
-            subject: &parsed.subject,
-            date: parsed.date.as_deref(),
-            body_text: &parsed.body_text,
-            ai_summary: Some(&classification.summary),
-            is_important: classification.is_important,
-            is_promotional: classification.is_promotional,
-        }).await {
-            Ok(row) => row,
-            Err(e) => {
-                log::warn!("mail: failed to insert message uid={} for account {}: {e}", raw.uid, account.id);
+    for batch in batches {
+        for raw in batch.messages {
+            // Deliberate: a message that fails to parse is still covered by
+            // the batch's `max_uid` below and thus never retried. Retrying a
+            // message that will never parse would stall this account's poll
+            // loop on it forever, which is worse than permanently skipping
+            // it — this is a one-way skip, not an oversight.
+            let Some(parsed) = parse_raw_message(&raw.raw) else {
+                log::warn!("mail: could not parse message uid={} for account {}", raw.uid, account.id);
                 continue;
+            };
+
+            let mut classification = classify_message(provider.clone(), &parsed.sender, &parsed.subject, &parsed.body_text)
+                .await
+                .unwrap_or_else(|e| {
+                    log::warn!("mail classification failed for uid={}: {e}", raw.uid);
+                    Default::default()
+                });
+            // The prompt asks the model to never mark promotional mail as
+            // important too, but LLMs don't reliably honor soft constraints —
+            // enforce it here so a misclassification can't trigger a spurious
+            // "important" OS notification for what's actually a marketing email.
+            if classification.is_promotional {
+                classification.is_important = false;
             }
-        };
 
-        if let Err(e) = app.emit(MAIL_SYNC_EVENT, MailSyncEvent::Summary {
-            account_id: account.id.clone(),
-            message_id: row.id.clone(),
-        }) {
-            log::error!("mail: failed to emit {MAIL_SYNC_EVENT} (summary) for account {}: {e}", account.id);
-        }
+            // Log-and-continue rather than `?`-propagate: a single failed
+            // insert (e.g. transient SQLITE_BUSY) must not abort the whole
+            // batch, since that would leave this batch's `set_last_seen_uid`
+            // below unreached and wedge this account's `last_seen_uid` at the
+            // pre-failure UID forever — every subsequent poll would re-fetch
+            // the same batch and hit the same failure (or a UNIQUE constraint
+            // violation on the messages already inserted this cycle) on the
+            // very first message.
+            let row = match mail_db::insert_message(&mail_db.pool, NewMessage {
+                account_id: &account.id,
+                uid: raw.uid,
+                sender: &parsed.sender,
+                subject: &parsed.subject,
+                date: parsed.date.as_deref(),
+                body_text: &parsed.body_text,
+                ai_summary: Some(&classification.summary),
+                is_important: classification.is_important,
+                is_promotional: classification.is_promotional,
+            }).await {
+                Ok(row) => row,
+                Err(e) => {
+                    log::warn!("mail: failed to insert message uid={} for account {}: {e}", raw.uid, account.id);
+                    continue;
+                }
+            };
 
-        if classification.is_important {
-            if let Err(e) = app.emit(MAIL_SYNC_EVENT, MailSyncEvent::Important {
+            if let Err(e) = app.emit(MAIL_SYNC_EVENT, MailSyncEvent::Summary {
                 account_id: account.id.clone(),
-                message_id: row.id,
-                subject: parsed.subject,
-                summary: classification.summary,
+                message_id: row.id.clone(),
             }) {
-                log::error!("mail: failed to emit {MAIL_SYNC_EVENT} (important) for account {}: {e}", account.id);
+                log::error!("mail: failed to emit {MAIL_SYNC_EVENT} (summary) for account {}: {e}", account.id);
+            }
+
+            if classification.is_important {
+                if let Err(e) = app.emit(MAIL_SYNC_EVENT, MailSyncEvent::Important {
+                    account_id: account.id.clone(),
+                    message_id: row.id,
+                    subject: parsed.subject,
+                    summary: classification.summary,
+                }) {
+                    log::error!("mail: failed to emit {MAIL_SYNC_EVENT} (important) for account {}: {e}", account.id);
+                }
             }
         }
+
+        // Commit progress per batch, not once at the end: a failure partway
+        // through a large first sync must not throw away the batches that
+        // already landed in the DB, or the next cycle would re-fetch and
+        // re-classify them (and hit the UNIQUE(account_id, uid) constraint)
+        // instead of moving forward.
+        mail_db::set_last_seen_uid(&mail_db.pool, &account.id, batch.max_uid).await?;
     }
 
-    mail_db::set_last_seen_uid(&mail_db.pool, &account.id, max_uid).await?;
     Ok(())
 }
 

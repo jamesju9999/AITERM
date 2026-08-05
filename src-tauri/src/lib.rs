@@ -52,7 +52,7 @@ use commands::{
     loop_session::{loop_session_save, loop_session_list, loop_session_load, loop_session_delete, loop_session_clear_all, loop_project_pick_open, loop_project_pick_save},
     mail::{
         mail_add_account, mail_remove_account, mail_list_accounts,
-        mail_list_messages, mail_mark_read, mail_count_unread,
+        mail_list_messages, mail_mark_read, mail_count_unread, mail_test_connection,
     },
     markitdown::{markitdown_convert, markitdown_pick_file},
     python_env::{
@@ -299,6 +299,7 @@ pub fn run() {
             mail_list_messages,
             mail_mark_read,
             mail_count_unread,
+            mail_test_connection,
             // Config
             get_config,
             set_execution_mode,
