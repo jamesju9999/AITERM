@@ -126,6 +126,33 @@ describe("useMailSync", () => {
     expect(result.current.unreadCount).toBe(9);
   });
 
+  // Mail deleted on the server is removed from the local cache by the poller,
+  // which emits a `removed` event. Without a refresh here the badge would keep
+  // counting messages that no longer exist, for up to poll_interval_secs.
+  it("refreshes the unread count when messages are removed server-side", async () => {
+    const { result } = renderHook(() => useMailSync());
+    await waitFor(() => expect(result.current.unreadCount).toBe(2));
+
+    vi.mocked(mailCountUnread).mockResolvedValue(0);
+    listeners["mail-sync-event"]({
+      payload: { kind: "removed", account_id: "a1", removed_count: 2 },
+    });
+
+    await waitFor(() => expect(result.current.unreadCount).toBe(0));
+  });
+
+  it("does not raise a notification for a removal event", async () => {
+    renderHook(() => useMailSync());
+    await waitFor(() => expect(listeners["mail-sync-event"]).toBeDefined());
+
+    listeners["mail-sync-event"]({
+      payload: { kind: "removed", account_id: "a1", removed_count: 2 },
+    });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sendNotification).not.toHaveBeenCalled();
+  });
+
   it("checks notification permission only once across multiple important events", async () => {
     renderHook(() => useMailSync());
     await waitFor(() => expect(listeners["mail-sync-event"]).toBeDefined());

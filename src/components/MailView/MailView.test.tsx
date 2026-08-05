@@ -4,8 +4,16 @@ import { MailView } from "./MailView";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import { translations, LOCALE_STORAGE_KEY } from "../../lib/i18n";
 
+// Captures the most recently registered callback so tests can drive a
+// mail-sync-event through the component. MailView re-registers whenever the
+// selected account changes, so "most recent" is always the live listener.
+let syncListener: ((event: { payload: unknown }) => void) | null = null;
+
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
+  listen: vi.fn((_eventName: string, cb: (event: { payload: unknown }) => void) => {
+    syncListener = cb;
+    return Promise.resolve(() => { syncListener = null; });
+  }),
 }));
 
 vi.mock("../../ipc/mail", () => ({
@@ -68,6 +76,7 @@ describe("MailView", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(mailListMessages).mockResolvedValue([] as never);
     vi.mocked(mailMarkRead).mockResolvedValue(undefined as never);
+    syncListener = null;
   });
 
   afterEach(() => {
@@ -216,6 +225,40 @@ describe("MailView", () => {
       renderView();
 
       expect(await screen.findByRole("listitem")).toBeTruthy();
+    });
+  });
+
+  // Mail deleted or archived on the server is removed from the local cache by
+  // the poller, which emits a `removed` sync event. The list has to refetch on
+  // it, or the Mail tab keeps showing messages that no longer exist.
+  describe("server-side deletions", () => {
+    it("drops a message from the list when a removal event arrives", async () => {
+      vi.mocked(mailListAccounts).mockResolvedValue([ACCOUNT] as never);
+      vi.mocked(mailListMessages).mockResolvedValueOnce([makeMessage()] as never);
+
+      renderView();
+      expect(await screen.findByText("Quarterly report")).toBeTruthy();
+
+      vi.mocked(mailListMessages).mockResolvedValue([] as never);
+      await waitFor(() => expect(syncListener).not.toBeNull());
+      syncListener!({ payload: { kind: "removed", account_id: "acc-1", removed_count: 1 } });
+
+      await waitFor(() => expect(screen.queryByText("Quarterly report")).toBeNull());
+    });
+
+    it("ignores a removal event for an account other than the selected one", async () => {
+      vi.mocked(mailListAccounts).mockResolvedValue([ACCOUNT] as never);
+      vi.mocked(mailListMessages).mockResolvedValue([makeMessage()] as never);
+
+      renderView();
+      expect(await screen.findByText("Quarterly report")).toBeTruthy();
+      const callsBefore = vi.mocked(mailListMessages).mock.calls.length;
+
+      await waitFor(() => expect(syncListener).not.toBeNull());
+      syncListener!({ payload: { kind: "removed", account_id: "some-other-account", removed_count: 1 } });
+
+      await new Promise((r) => setTimeout(r, 0));
+      expect(vi.mocked(mailListMessages).mock.calls.length).toBe(callsBefore);
     });
   });
 

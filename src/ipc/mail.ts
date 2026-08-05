@@ -39,7 +39,12 @@ export interface MailMessage {
 
 export type MailSyncEvent =
   | { kind: "summary"; account_id: string; message_id: string }
-  | { kind: "important"; account_id: string; message_id: string; subject: string; summary: string };
+  | { kind: "important"; account_id: string; message_id: string; subject: string; summary: string }
+  // Cached messages disappeared — deleted or archived on the server, or dropped
+  // wholesale because the mailbox's UIDVALIDITY changed. Carries `account_id`
+  // like the others, which is all MailView's refetch and useMailSync's badge
+  // refresh need to reflect a removal.
+  | { kind: "removed"; account_id: string; removed_count: number };
 
 export const MAIL_SYNC_EVENT = "mail-sync-event";
 

@@ -24,6 +24,11 @@ pub fn mail_secret_key(account_id: &str) -> String {
 pub enum MailSyncEvent {
     Summary { account_id: String, message_id: String },
     Important { account_id: String, message_id: String, subject: String, summary: String },
+    /// Cached messages disappeared (deleted/archived on the server, or dropped
+    /// wholesale because UIDVALIDITY changed). Carries `account_id` like the
+    /// others so the Mail tab's existing per-account refetch and the unread
+    /// badge's refresh both pick removals up with no extra wiring.
+    Removed { account_id: String, removed_count: u64 },
 }
 
 pub const MAIL_SYNC_EVENT: &str = "mail-sync-event";
@@ -92,6 +97,7 @@ async fn poll_once(app: &AppHandle, account: &MailAccountConfig) -> anyhow::Resu
 
     let mail_db = app.state::<MailDb>();
     let since_uid = mail_db::get_last_seen_uid(&mail_db.pool, &account.id).await?;
+    let stored_uid_validity = mail_db::get_uid_validity(&mail_db.pool, &account.id).await?;
 
     // Resolved *before* any IMAP traffic: without a classifier the poll can't
     // proceed at all, and resolving afterwards meant a user with mail but no
@@ -108,15 +114,36 @@ async fn poll_once(app: &AppHandle, account: &MailAccountConfig) -> anyhow::Resu
     let router = app.state::<AiRouter>();
     let provider = router.resolve().await?;
 
-    let batches = fetch_new_messages(
+    let outcome = fetch_new_messages(
         &account.imap_host,
         account.imap_port,
         &account.username,
         &password,
         since_uid,
+        stored_uid_validity,
     ).await?;
 
-    for batch in batches {
+    // Before anything is inserted: under a new UIDVALIDITY the cached rows are
+    // keyed by UIDs that no longer identify anything, and the batches below
+    // were already re-seeded from scratch by the client, so keeping them would
+    // mean stale rows plus UNIQUE(account_id, uid) collisions against the new
+    // numbering.
+    if let Some(server_uid_validity) = outcome.uid_validity {
+        if outcome.uid_validity_changed {
+            log::warn!(
+                "mail: UIDVALIDITY for account {} changed from {:?} to {}; dropping the cached messages and re-syncing",
+                account.id, stored_uid_validity, server_uid_validity
+            );
+            let dropped = mail_db::reset_for_uid_validity(&mail_db.pool, &account.id, server_uid_validity).await?;
+            if dropped > 0 {
+                emit_removed(app, &account.id, dropped);
+            }
+        } else {
+            mail_db::set_uid_validity(&mail_db.pool, &account.id, server_uid_validity).await?;
+        }
+    }
+
+    for batch in outcome.batches {
         for raw in batch.messages {
             // Deliberate: a message that fails to parse is still covered by
             // the batch's `max_uid` below and thus never retried. Retrying a
@@ -195,7 +222,39 @@ async fn poll_once(app: &AppHandle, account: &MailAccountConfig) -> anyhow::Resu
         mail_db::set_last_seen_uid(&mail_db.pool, &account.id, batch.max_uid).await?;
     }
 
+    // Mail deleted or archived on the server has to leave the local cache too,
+    // or the Mail tab keeps listing messages that no longer exist and the
+    // unread badge counts them forever.
+    //
+    // `server_uids` is `None` when the UID SEARCH ALL didn't come back cleanly,
+    // and that case never reaches the delete at all — a reconciliation we
+    // couldn't perform must be a no-op, not a mass delete. Note also that this
+    // deliberately does not touch `last_seen_uid`: removing a local row must
+    // never make the next poll re-download anything.
+    if let Some(server_uids) = outcome.server_uids {
+        match mail_db::delete_messages_absent_from_server(&mail_db.pool, &account.id, &server_uids).await {
+            Ok(0) => {}
+            Ok(removed) => {
+                log::info!("mail: removed {removed} message(s) no longer on the server for account {}", account.id);
+                emit_removed(app, &account.id, removed);
+            }
+            // Log-and-continue for the same reason as the insert path: a
+            // transient DB error here must not fail the poll and undo the
+            // batches that already committed.
+            Err(e) => log::warn!("mail: deletion reconciliation failed for account {}: {e}", account.id),
+        }
+    }
+
     Ok(())
+}
+
+fn emit_removed(app: &AppHandle, account_id: &str, removed_count: u64) {
+    if let Err(e) = app.emit(MAIL_SYNC_EVENT, MailSyncEvent::Removed {
+        account_id: account_id.to_string(),
+        removed_count,
+    }) {
+        log::error!("mail: failed to emit {MAIL_SYNC_EVENT} (removed) for account {account_id}: {e}");
+    }
 }
 
 /// Called once from `lib.rs`'s `.setup()` closure.

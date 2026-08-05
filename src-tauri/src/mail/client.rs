@@ -60,6 +60,26 @@ pub struct MessageBatch {
     pub messages: Vec<RawMessage>,
 }
 
+/// Everything one poll learned from the mailbox.
+pub struct PollOutcome {
+    /// The mailbox's UIDVALIDITY as reported by SELECT, or `None` from a server
+    /// that does not support UIDs at all.
+    pub uid_validity: Option<i64>,
+    /// The stored UIDVALIDITY existed and disagreed with the server's, so every
+    /// UID the caller has cached for this account — `last_seen_uid` included —
+    /// belongs to a previous incarnation of the mailbox and means nothing now.
+    pub uid_validity_changed: bool,
+    /// The complete `UID SEARCH ALL` result: every UID INBOX currently holds.
+    ///
+    /// `None` — not an empty vec — whenever that SEARCH did not come back
+    /// cleanly. The caller deletes cached messages missing from this set, so
+    /// collapsing a failed command into `Some(vec![])` would read as "the
+    /// mailbox is empty" and destroy the entire local cache. The two cases are
+    /// kept apart in the type so that mistake cannot be made downstream.
+    pub server_uids: Option<Vec<i64>>,
+    pub batches: Vec<MessageBatch>,
+}
+
 /// Fetch messages newer than `since_uid` from INBOX (or, on the first poll
 /// for an account, the newest `FIRST_POLL_MAX_MESSAGES`), in batches of
 /// `FETCH_BATCH_SIZE`, using `BODY.PEEK[]` so the server's `\Seen` flag is
@@ -77,13 +97,19 @@ pub struct MessageBatch {
 /// per round trip, never around the loop, because a timeout wrapped around
 /// the loop drops the whole future and destroys every batch collected so far,
 /// which is precisely the failure mode this batching exists to survive.
+///
+/// The returned `PollOutcome` also carries what the same session learned about
+/// the mailbox as a whole — its UIDVALIDITY, and the full `UID SEARCH ALL` UID
+/// set the caller reconciles server-side deletions against. Both ride along on
+/// this one connection rather than opening a second.
 pub async fn fetch_new_messages(
     host: &str,
     port: u16,
     username: &str,
     password: &str,
     since_uid: Option<i64>,
-) -> Result<Vec<MessageBatch>, MailClientError> {
+    stored_uid_validity: Option<i64>,
+) -> Result<PollOutcome, MailClientError> {
     let mut session = connect_and_login(host, port, username, password).await?;
 
     // From here on, every exit path (success, error, or empty result) must
@@ -100,7 +126,7 @@ pub async fn fetch_new_messages(
     // a dangling connection on the server. Timing out per round trip instead
     // produces an ordinary `Err` that flows through the same cleanup path
     // (and, for a batch fetch, through the partial-success path too).
-    let result = fetch_selected(&mut session, since_uid).await;
+    let result = fetch_selected(&mut session, since_uid, stored_uid_validity).await;
     logout(session).await;
     result
 }
@@ -181,17 +207,26 @@ async fn with_timeout<T>(
 async fn fetch_selected(
     session: &mut ImapSession,
     since_uid: Option<i64>,
-) -> Result<Vec<MessageBatch>, MailClientError> {
-    with_timeout(async {
+    stored_uid_validity: Option<i64>,
+) -> Result<PollOutcome, MailClientError> {
+    let mailbox = with_timeout(async {
         session
             .select("INBOX")
             .await
-            .map(|_| ())
             .map_err(|e| MailClientError::Command(e.to_string()))
     })
     .await?;
+    let uid_validity = mailbox.uid_validity.map(|v| v as i64);
 
-    let search_query = match since_uid {
+    // Decided here rather than by the caller because it changes the query we
+    // are about to send: under a new UIDVALIDITY the stored `since_uid` indexes
+    // into the old numbering, so honoring it would search `UID {stale+1}:*` in
+    // a mailbox whose UIDs may have restarted at 1 — matching nothing, on
+    // every poll, silently and forever. Re-seed from scratch instead.
+    let uid_validity_changed = uid_validity_changed(stored_uid_validity, uid_validity);
+    let effective_since_uid = if uid_validity_changed { None } else { since_uid };
+
+    let search_query = match effective_since_uid {
         Some(uid) => format!("UID {}:*", uid + 1),
         None => "1:*".to_string(),
     };
@@ -203,9 +238,53 @@ async fn fetch_selected(
     })
     .await?;
 
-    let planned = plan_fetch_batches(uids.into_iter().collect(), since_uid);
+    let planned = plan_fetch_batches(uids.into_iter().collect(), effective_since_uid);
 
-    collect_batches(session, planned, Instant::now() + TOTAL_FETCH_BUDGET).await
+    let batches = collect_batches(session, planned, Instant::now() + TOTAL_FETCH_BUDGET).await?;
+
+    // Deliberately *after* the fetch loop, never before: a UID SEARCH ALL taken
+    // first would not list the messages this poll is about to insert, and the
+    // caller — which deletes cached mail missing from this set — would erase
+    // them the instant they landed. Taken last, everything we fetched was in
+    // the mailbox at or before this point.
+    let server_uids = search_all_uids(session).await;
+
+    Ok(PollOutcome { uid_validity, uid_validity_changed, server_uids, batches })
+}
+
+/// Whether our cached UIDs belong to a different incarnation of the mailbox.
+///
+/// Only a stored value that disagrees with a reported one counts. No stored
+/// value means a first poll (or a database upgraded from before the column
+/// existed) — there is nothing to invalidate. No reported value means a server
+/// that doesn't do UIDVALIDITY, which tells us nothing; treating that as
+/// "changed" would wipe and re-download the whole cache on every poll.
+fn uid_validity_changed(stored: Option<i64>, server: Option<i64>) -> bool {
+    matches!((stored, server), (Some(stored), Some(server)) if stored != server)
+}
+
+/// `UID SEARCH ALL` — every UID INBOX currently holds, numbers only, no bodies.
+///
+/// A failure is `None`, and is logged and swallowed rather than propagated: the
+/// messages this poll already fetched are worth committing even when
+/// reconciliation can't run, and skipping one cycle's deletions costs nothing
+/// but a stale row until the next poll.
+async fn search_all_uids(session: &mut ImapSession) -> Option<Vec<i64>> {
+    let result = with_timeout(async {
+        session
+            .uid_search("ALL")
+            .await
+            .map_err(|e| MailClientError::Command(e.to_string()))
+    })
+    .await;
+
+    match result {
+        Ok(uids) => Some(uids.into_iter().map(|uid| uid as i64).collect()),
+        Err(e) => {
+            log::warn!("mail: UID SEARCH ALL failed, skipping deletion reconciliation this cycle: {e}");
+            None
+        }
+    }
 }
 
 /// One batch fetch. Abstracted over the session purely so the loop below —
@@ -407,6 +486,39 @@ mod tests {
 
         assert_eq!(batches.len(), 5, "a 50-message first poll must be 5 batches, got {:?}", batches.iter().map(|b| b.len()).collect::<Vec<_>>());
         assert!(batches.iter().all(|b| b.len() == 10), "each first-poll batch must hold 10 UIDs: {:?}", batches.iter().map(|b| b.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_uid_validity_that_disagrees_with_the_stored_one_invalidates_the_cache() {
+        assert!(
+            uid_validity_changed(Some(1), Some(2)),
+            "a mailbox reporting a different UIDVALIDITY has renumbered; the cached UIDs mean nothing"
+        );
+    }
+
+    #[test]
+    fn a_matching_uid_validity_leaves_the_cache_alone() {
+        assert!(
+            !uid_validity_changed(Some(2), Some(2)),
+            "the ordinary case must not wipe the cache and re-download the mailbox every poll"
+        );
+    }
+
+    #[test]
+    fn a_first_poll_with_nothing_stored_is_not_a_change() {
+        assert!(
+            !uid_validity_changed(None, Some(2)),
+            "a first poll (or a database upgraded from before the column) has nothing to invalidate"
+        );
+    }
+
+    #[test]
+    fn a_server_that_reports_no_uid_validity_is_not_a_change() {
+        assert!(
+            !uid_validity_changed(Some(2), None),
+            "a server that omits UIDVALIDITY tells us nothing; guessing 'changed' would wipe the cache every poll"
+        );
+        assert!(!uid_validity_changed(None, None));
     }
 
     fn msg(uid: i64) -> RawMessage {
