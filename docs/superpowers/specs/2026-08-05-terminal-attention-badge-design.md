@@ -83,9 +83,11 @@ onAttention={(kind) => {
 
 ### 清除
 
-一個以 `activeId` 為依賴的 effect，把切過去的那個分頁 `attention` 設回 `undefined`。
-
 使用者選定的規則是「切到該分頁就清掉」：看過了就算讀取，與 Mail 未讀的邏輯一致。當前 active 的分頁因此永遠不會有提示點。
+
+清除跟著**選取分頁這個動作**走，不用以 `activeId` 為依賴的 effect。清除在語意上就是選取的一部分，屬於事件本身，不是事後的狀態調解；`react-hooks/set-state-in-effect` 也會對 effect 版本報錯。實作上是一個 `selectTab` callback（`setActiveId` + 清點），所有切換分頁的呼叫點都走它。
+
+關閉分頁那條路徑要特別處理：關掉後會選到鄰居，而那個鄰居可能正帶著點。它不能直接呼叫 `selectTab`（那會在 `setTabs` 的 updater 裡巢狀 dispatch 同一份 state），所以清除折進同一個 updater 的回傳值裡完成。
 
 ## 側邊欄呈現
 
@@ -117,7 +119,13 @@ onAttention={(kind) => {
 
 焦點判斷用 `getCurrentWindow().isFocused()`（Tauri 視窗狀態），不用 `document.hasFocus()`。
 
-通知內容：標題為分頁名稱，內文為「等待你的回應」／「指令失敗」（i18n）。
+通知內容：標題為分頁名稱，內文為「正在等待你的回應」／「指令執行失敗」（i18n）。kind 對應到哪一個 i18n key 由 `terminalAttention.ts` 的 `notifyBodyKeyFor` 決定並有測試釘住——它回傳的是 key 而不是字串，這樣 `terminalAttention.ts` 不必依賴 i18n，而 TypeScript 也會擋掉打錯的 key。
+
+**同一分頁 30 秒冷卻。** 每個 `waiting`／`failed` 都發一則的話，一個會重複敲 bell 的 TUI，或一次失焦時執行的 agent mission（每個失敗指令一則），就會疊出一串桌面通知。通知洪水和假警報是同一種傷害——都會讓使用者永久關掉這個功能。
+
+- 冷卻是**per 分頁**的，別的分頁有事不會被壓掉。
+- 只有真的送出去的通知才更新時間戳。被壓掉的事件不更新，否則連續的 bell 會把視窗一路往後推，等於永久靜音該分頁。
+- 時間戳在呼叫 `ensureNotificationPermission()` **之前**同步記錄。同一 tick 內連發的事件會在任何 promise resolve 前就全部通過檢查，等到 `.then()` 才記錄的話就擋不住——那正是冷卻要防的情況。
 
 ### 權限取得共用
 
@@ -137,12 +145,17 @@ onAttention={(kind) => {
 - 非 terminal 型別的分頁即使有 `attention` 也不渲染。
 - 提示點的 class 與 Mail 的 unread / connection badge 都不相同（比照該檔第 91 行既有測試的精神：避免兩種語意不同的標記在視覺上被混為一談）。
 
-**`TerminalApp`**
-- `onAttention` 不會在當前 active 的分頁上設出提示點。
-- 切換到某個有 `attention` 的分頁會清掉它。
+**`terminalAttention.test.ts`（純函式，真正的防護所在）**
+- `routeAttention`：提示點只看是不是 active 分頁；通知只看視窗焦點與 kind。必測案例：**app 失焦 + active 分頁 + `waiting` → 不設點但要發通知**（兩個條件互相獨立，這是最容易在實作時被合併掉的一條）。另外必測「active 分頁 + 有 focus → 不發通知」，少了它，`notify: isActiveTab || (...)` 這種變異體能全綠通過。
+- `attentionForExitCode`：0 → `done`，非 0 → `failed`。
+- `notifyBodyKeyFor`：三種 kind 各自的 i18n key。
+- `isPastNotifyCooldown`：首次、視窗內、邊界、視窗後。
 
-**通知條件**
-抽成純函式（輸入：是否 focus、狀態；輸出：是否發送），直接單元測試。避開在測試環境模擬 Tauri 視窗焦點。必測案例：**app 失焦 + active 分頁 + `waiting` → 應發送**（提示點與通知的條件互相獨立，這是最容易在實作時被合併掉的一條）。
+**`TerminalApp` 不寫測試。** 它沒有測試檔，要建一個得同時偽造 Tauri IPC、xterm、react-router 與 localStorage。因此本設計刻意把所有**決策**推進 `terminalAttention.ts`，讓 `TerminalApp` 只剩接線。
+
+代價要講清楚：接線本身完全沒有自動化防護。實測過——把 `onAttention={...}` 整行刪掉，整個功能斷線，571 個測試依然全綠（唯一會叫的是 `tsc` 抱怨未使用變數，那是意外的守門員不是設計）。**所以 Task 8 的手動驗證不是形式，它是接線的唯一閘門。**
+
+**不寫鏡像測試。** 開發過程中曾有人為 `TerminalView` 寫過一支手抄同樣邏輯的 harness 測試，後來刪掉了：它與出貨程式碼零耦合（唯一的 `src/` import 是 `import type`，編譯時就被抹掉），把實作反轉之後它依然全綠，卻掛著「已涵蓋此迴歸」的註解。綠燈加上不實的涵蓋宣稱比沒有測試更糟。若某段邏輯非鏡像不能測，那是「該把邏輯搬進純函式」的訊號，不是該寫鏡像。
 
 ## 已知限制
 
@@ -152,6 +165,16 @@ onAttention={(kind) => {
 
 **macOS 通知無法在 `tauri:dev` 下驗證。** 依既有紀錄，dev 模式下通知會以「終端機」的身分送出且錯誤被吞掉，桌面版的 `requestPermission` 是 no-op。通知這部分必須出正式 build 才能確認。側邊欄的提示點則可以在 dev 下直接驗證。
 
+**cmd.exe 沒有 `done`／`failed` 提示點。** cmd.exe 的 `PROMPT`（`src-tauri/src/pty/shell.rs:103`）送出的是不帶 exit code 的裸 `D`。前端因此無從得知指令成功或失敗——若沿用「沒帶就當 0」的既有解析，失敗的指令會亮**綠燈**，那是誤報，與本設計「寧可漏報，不可誤報」的原則正好相反。所以 `onCommandSettled` 在 `D` 不帶 exit code 時不發事件：寧可沒有點。
+
+僅影響 cmd.exe。PowerShell（`shell.rs:58`）、zsh（`:207`）、bash（`:246`）都有送 exit code，不受影響。cmd.exe 仍然有 bell 帶來的 `waiting` 提示。
+
+**bell 是本設計唯一會誤報的訊號。** `onBell` 對每一個 `\x07` 都觸發，包含 bash readline 在 tab 補全有歧義時的嗶聲、zsh 走到歷史盡頭的嗶聲。實務影響有限（會嗶多半是因為你正在該分頁打字，而 active 分頁不亮點；通知又只在失焦時發，而打字代表有 focus），但背景腳本若會嗶就會無故亮橘點。Task 8 有一步專門實測這件事。
+
+（已驗證不會誤觸的一類：xterm **不會**為「OSC 序列結尾的 BEL」觸發 `onBell`。所以 shell prompt 每次都在送的 `\x1b]0;title\x07`，以及 OSC 133 序列本身，都不會造成假橘燈。整個 `waiting` 訊號的可用性建立在這個前提上。）
+
 ## 跨平台
 
-三種訊號（xterm bell、OSC 133、Tauri 通知）在 macOS / Windows / Linux 上行為一致，沒有平台專屬 API。Windows 的 OSC 133 路徑走既有的 ConPTY 分支，本功能只在其旁邊多加一個 callback，不改變該分支的時序。
+三種訊號（xterm bell、OSC 133、Tauri 通知）沒有平台專屬 API。Windows 的 OSC 133 路徑走既有的 ConPTY 分支，本功能只在其旁邊多加一個 callback，不改變該分支的時序。
+
+行為在 macOS / Linux / Windows PowerShell 上一致。唯一的例外是 Windows cmd.exe，見〈已知限制〉。

@@ -751,22 +751,32 @@ import { routeAttention, type AttentionKind } from "../lib/terminalAttention";
   }, []);
 ```
 
-- [ ] **Step 3: 切到某分頁時清掉它的提示點**
+- [ ] **Step 3: 把清除收進「選取分頁」這個動作**
 
-在 Step 2 插入的內容**後面**再加一個 effect：
+在 Step 2 插入的內容**後面**加入：
 
 ```tsx
-  // 使用者選定的規則：切過去就算讀取過了。所以當前 active 的分頁
-  // 永遠不會有提示點。用函式式 setTabs 並在無事可做時回傳同一個陣列，
-  // 避免每次切分頁都製造新的 tabs 參考。
-  useEffect(() => {
+  // 切到某個分頁就把它的提示點清掉——使用者選定的規則是「切過去就算讀過」。
+  // 這裡而不是用一個以 activeId 為依賴的 effect：清除在語意上是「選取分頁」
+  // 的一部分，屬於事件本身，不是事後補償。也因此 active 分頁永遠不會有提示點。
+  const selectTab = useCallback((id: string) => {
+    setActiveId(id);
     setTabs((prev) =>
-      prev.some((t) => t.id === activeId && t.attention)
-        ? prev.map((t) => (t.id === activeId ? { ...t, attention: undefined } : t))
+      prev.some((t) => t.id === id && t.attention)
+        ? prev.map((t) => (t.id === id ? { ...t, attention: undefined } : t))
         : prev
     );
-  }, [activeId]);
+  }, []);
 ```
+
+然後把所有切換分頁的 `setActiveId(...)` 呼叫改走 `selectTab(...)`（本檔約 9 處）。`setActiveId` 保留為單純的 state setter，只有 `selectTab` 該被事件處理器與 props 呼叫。
+
+每一個呼叫點都真的需要清除，包括兩個不那麼明顯的：
+
+- 開新分頁那幾處是 no-op（新分頁不可能有 `attention`），無害，且讓選取語意保持一致。
+- **關閉分頁那一處最值得注意**：關掉分頁後會選到鄰居，而那個鄰居很可能正帶著提示點。在那裡清除是正確的，不是順帶。
+
+> 為什麼不用 effect：`react-hooks/set-state-in-effect` 會對 effect 版本報錯。要澄清的是，那個規則常見的疑慮（每次切分頁多一輪 render）在這裡**並不成立**——沒東西可清時 `setTabs` 回傳同一個陣列參考，React 會依 `Object.is` bail out。真正的問題是邏輯歸屬：清除屬於選取這個事件，不屬於事後的狀態調解。lint 變乾淨是副作用，不是目的。
 
 - [ ] **Step 4: 寫分派函式**
 
@@ -847,30 +857,48 @@ Run: `npm run tauri:dev`
 4. 5 秒後，側邊欄的分頁 2 圖示右下角應出現**綠點**。
 5. 切到分頁 2 → 綠點消失。
 
-- [ ] **Step 3: 驗證「失敗」（紅點）**
+- [ ] **Step 3: 驗證「失敗」（紅色方點）**
 
-1. 在分頁 2 執行 `sleep 3; exit 1`（Windows：`Start-Sleep 3; exit 1`）。
+1. 在分頁 2 執行 `sleep 3; false`（Windows PowerShell：`Start-Sleep 3; cmd /c exit 1`）。
 2. 立刻切到分頁 1。
 3. 應出現**紅色方點**（不是綠色圓點）。形狀差異是這裡的重點：`done` 與 `failed` 不能只靠紅綠區分，那組顏色對約 8% 的男性無效。截圖或瞇眼確認方形真的看得出來——`border-radius: 2px` 在 8px 見方上很容易被誤設成看起來仍像圓的。
 
+> **不要用 `exit 1`。** `exit` 會終止互動式 shell 本身，而 `D;<exitCode>` 是 shell 在**下一個 prompt** 的 `precmd` 裡送出的——shell 都結束了就不會有下一個 prompt，`D;1` 永遠不會送出，分頁的 PTY 直接死掉。你會看到「沒有紅點」並誤判成實作壞了。
+
 - [ ] **Step 4: 驗證「等待輸入」（橘色脈動點）**
 
-1. 在分頁 2 執行 `sleep 3; printf '\a'`（Windows PowerShell：`Start-Sleep 3; [console]::beep()` 不會走 PTY，改用 `Start-Sleep 3; Write-Host "`a" -NoNewline`）。
+1. 在分頁 2 執行 `sleep 3; printf '\a'; sleep 30`（Windows PowerShell：``Start-Sleep 3; Write-Host "`a" -NoNewline; Start-Sleep 30``）。
 2. 立刻切到分頁 1。
-3. 應出現**會脈動的橘點**。
+3. 3 秒後應出現**會脈動的橘點**，並且在後面那 30 秒內持續維持橘色。
+
+> **結尾的 `sleep 30` 不是湊數的，少了它這一步會自我抵銷。** 若指令在 bell 之後立刻結束，shell 的 `precmd` 會馬上送出 `D;0`，而依設計「後到的事件覆蓋前一個」，橘點會在幾毫秒內被綠點取代。你會看到綠點並誤判成「bell 沒接上」。留著行程不結束，才看得到 `waiting` 本身。
+>
+> Windows PowerShell 的 `[console]::beep()` **不會**走 PTY（它直接呼叫 Win32 API），所以一定要用 `Write-Host "`a"`。
 
 - [ ] **Step 5: 驗證 active 分頁不會有點**
 
-在**當前正在看的**分頁執行 `printf '\a'` 與 `exit 1`。側邊欄不該出現任何點。
+在**當前正在看的**分頁執行 `printf '\a'` 與 `false`。側邊欄不該出現任何點。（同樣不要用 `exit 1`。）
+
+- [ ] **Step 5b: 驗證關閉分頁時，切過去的鄰居會被清掉**
+
+這條路徑在自動測試裡零覆蓋（把 `handleCloseTab` 裡的清除拿掉，571 個測試依然全綠），所以只能靠這一步。
+
+1. 開三個分頁，當前停在分頁 1。
+2. 在分頁 3 執行 `sleep 5`，確認它跑完後出現綠點。
+3. **關閉分頁 1**（`Ctrl+W`），讓焦點落到帶著點的那個分頁上。
+4. 切過去的那個分頁上的點應該消失。
 
 - [ ] **Step 6: 驗證通知條件（僅限正式 build）**
 
 > **這一步在 `tauri:dev` 下驗證不了。** 依 `useMailSync.ts:104-111` 的說明，dev 模式下通知會以 `com.apple.Terminal` 的身分送出，且 `show()` 的結果被丟棄、失敗完全不可觀測。必須跑 `npm run tauri:build`（貢獻者用 `npm run tauri:build -- --no-sign`）並開啟產出的 bundle。
 
-1. 在分頁 2 執行 `sleep 8; printf '\a'`，然後**切換到別的 app**（讓 AITerm 失焦）。
+1. 在分頁 2 執行 `sleep 8; printf '\a'; sleep 30`，然後**切換到別的 app**（讓 AITerm 失焦）。
 2. 應收到桌面通知，標題為分頁名稱、內文為「正在等待你的回應」。
-3. 重複但改成 `sleep 8` 單獨執行（結束時 exit code 0）→ **不應**有通知（`done` 不發通知）。
-4. 讓 AITerm 保持在前景並重複第 1 步 → **不應**有通知（只有側邊欄的點）。
+3. 在分頁 2 執行 `sleep 8; false` 並切走 → 應收到通知，內文為「**指令執行失敗**」。這一項要分開驗：兩則內文的對應在 `notifyBodyKeyFor` 有測試釘住，但「哪一則會被送出去」只有這裡看得到。
+4. 重複但改成 `sleep 8` 單獨執行（結束時 exit code 0）→ **不應**有通知（`done` 不發通知）。
+5. 讓 AITerm 保持在前景並重複第 1 步 → **不應**有通知（只有側邊欄的點）。
+6. **冷卻驗證**：失焦狀態下在**同一個分頁**連續觸發兩次 `waiting`（例如 `sleep 5; printf '\a'; sleep 5; printf '\a'; sleep 30`）→ 只應收到**一則**通知（同分頁 30 秒冷卻）。
+7. **跨分頁不受冷卻影響**：失焦狀態下讓分頁 2 與分頁 3 各觸發一次 → 兩則通知都要收到。
 
 - [ ] **Step 7: 驗證 bell 的誤報率（這是本設計唯一會誤報的訊號）**
 
