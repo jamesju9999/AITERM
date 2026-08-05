@@ -121,6 +121,18 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
     saveSessionTabs(tabs);
   }, [tabs, activeId, isSidebarOpen]);
 
+  // 切到某個分頁就把它的提示點清掉——使用者選定的規則是「切過去就算讀過」。
+  // 這裡而不是用一個以 activeId 為依賴的 effect：清除在語意上是「選取分頁」
+  // 的一部分，屬於事件本身，不是事後補償。也因此 active 分頁永遠不會有提示點。
+  const selectTab = useCallback((id: string) => {
+    setActiveId(id);
+    setTabs((prev) =>
+      prev.some((t) => t.id === id && t.attention)
+        ? prev.map((t) => (t.id === id ? { ...t, attention: undefined } : t))
+        : prev
+    );
+  }, []);
+
   // Enterprise: pending task notification + skill toast
   const [pendingTask, setPendingTask] = useState<TaskPacket | null>(null);
   const [skillToast, setSkillToast] = useState<SkillInstalledPayload | null>(null);
@@ -159,7 +171,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
           },
         },
       ]);
-      setActiveId(newId);
+      selectTab(newId);
     }).then((fn) => { unlistenTaskReady = fn; });
 
     onEnterpriseSkillInstalled((payload) => {
@@ -172,7 +184,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
       unlistenTaskReady?.();
       unlistenSkill?.();
     };
-  }, []);
+  }, [selectTab]);
 
   const handleAddTab = useCallback(() => {
     setPickerOpen(true);
@@ -192,9 +204,9 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
     if (type === "knowledge-base") title = t.knowledge_base_tab;
     if (type === "mail") title = t.mail_tab;
     setTabs((prev) => [...prev, { id: newId, title, type }]);
-    setActiveId(newId);
+    selectTab(newId);
     setPickerOpen(false);
-  }, [t.terminal_tab, t.database_tab, t.design_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab, t.loop_studio_tab, t.code_assistant_tab, t.knowledge_base_tab, t.mail_tab]);
+  }, [t.terminal_tab, t.database_tab, t.design_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab, t.loop_studio_tab, t.code_assistant_tab, t.knowledge_base_tab, t.mail_tab, selectTab]);
 
   const handleCloseTab = useCallback(async (id: string) => {
     const guard = closeGuardsRef.current.get(id);
@@ -202,41 +214,47 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
       const canClose = await guard();
       if (!canClose) return;
     }
+    // 這裡不能直接呼叫 selectTab：它內部也會呼叫 setTabs，若在下面這個
+    // setTabs 的 updater 裡巢狀呼叫，等於在同一個 state 的更新佇列還在
+    // 處理時再次 dispatch 同一個 state，時機沒有保證、有兩邊更新互相蓋掉
+    // 的風險。改成先在 updater 裡把「切到誰」記下來，等這次 setTabs 呼叫
+    // 完再依序（非巢狀）補一次 setTabs 清點——跟連續呼叫兩次 setState 一樣，
+    // 保證照順序疊加。
+    let nextActiveId: string | null = null;
     setTabs((prev) => {
       const idx = prev.findIndex((t) => t.id === id);
       if (idx === -1) return prev;
-      
+
       const nextTabs = prev.filter((t) => t.id !== id);
       // If we close the last tab, create a new fresh one so the window isn't empty
       if (nextTabs.length === 0) {
         const newId = crypto.randomUUID();
         setActiveId(newId);
+        nextActiveId = newId;
         return [{ id: newId, title: "Terminal", type: "terminal" }];
       }
-      
+
       // If closing active tab, switch to adjacent tab
       if (activeIdRef.current === id) {
         const nextActive = nextTabs[Math.min(idx, nextTabs.length - 1)].id;
         setActiveId(nextActive);
+        nextActiveId = nextActive;
       }
       return nextTabs;
     });
+    if (nextActiveId) {
+      const clearedId = nextActiveId;
+      setTabs((prev) =>
+        prev.some((t) => t.id === clearedId && t.attention)
+          ? prev.map((t) => (t.id === clearedId ? { ...t, attention: undefined } : t))
+          : prev
+      );
+    }
   }, []);
 
   const handleRename = useCallback((id: string, newTitle: string) => {
     setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, title: newTitle } : t)));
   }, []);
-
-  // 使用者選定的規則：切過去就算讀取過了。所以當前 active 的分頁
-  // 永遠不會有提示點。用函式式 setTabs 並在無事可做時回傳同一個陣列，
-  // 避免每次切分頁都製造新的 tabs 參考。
-  useEffect(() => {
-    setTabs((prev) =>
-      prev.some((t) => t.id === activeId && t.attention)
-        ? prev.map((t) => (t.id === activeId ? { ...t, attention: undefined } : t))
-        : prev
-    );
-  }, [activeId]);
 
   // 一個 attention 事件 → 兩個互相獨立的決定。規則本體在 routeAttention
   // （src/lib/terminalAttention.ts），那裡有單元測試釘住「提示點看分頁、
@@ -285,11 +303,11 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
         if (e.shiftKey) {
           // Prev tab
           const prevIdx = (idx - 1 + currentTabs.length) % currentTabs.length;
-          setActiveId(currentTabs[prevIdx].id);
+          selectTab(currentTabs[prevIdx].id);
         } else {
           // Next tab
           const nextIdx = (idx + 1) % currentTabs.length;
-          setActiveId(currentTabs[nextIdx].id);
+          selectTab(currentTabs[nextIdx].id);
         }
       } else if (e.key >= "1" && e.key <= "9") {
         // Go to specific tab (1-indexed)
@@ -297,7 +315,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
         const currentTabs = tabsRef.current;
         if (i >= 0 && i < currentTabs.length) {
           e.preventDefault();
-          setActiveId(currentTabs[i].id);
+          selectTab(currentTabs[i].id);
         }
       }
     };
@@ -305,7 +323,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
     // Use capture phase to intercept before xterm.js potentially swallows them
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [handleAddTab, handleCloseTab]);
+  }, [handleAddTab, handleCloseTab, selectTab]);
 
   useEffect(() => {
     if (!isDragging) return;
@@ -342,7 +360,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
         <TabBar
           tabs={tabs}
           activeId={activeId}
-          onSelect={setActiveId}
+          onSelect={selectTab}
           onClose={handleCloseTab}
           onAdd={handleAddTab}
           onRename={handleRename}
@@ -462,7 +480,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
               return (
                 <div
                   key={t.id}
-                  onClick={() => setActiveId(t.id)}
+                  onClick={() => selectTab(t.id)}
                   style={{
                     background: "#1e1e2e", border: "1px solid #3a3a6a", borderRadius: 6,
                     padding: "8px 14px", minWidth: 220, cursor: "pointer",
