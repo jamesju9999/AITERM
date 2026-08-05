@@ -218,3 +218,22 @@ mail_reply_drafts(id, message_id FK, draft_text, created_at, sent_at NULL) -- �
 **廣告信清理涵蓋不到尚未輪詢過的舊信。** 跟語意搜尋一樣，`is_promotional` 只在輪詢當下算過，本次範圍明確不做「回頭掃描整個信箱歷史」，所以清理功能天生只對「AITerm 開始監控之後收到的信」有效。（`is_promotional` 欄位跟分類邏輯本身在第 1 期已經跑在每封信上；只是候選清單/批次確認/批次刪除這個 UI 流程還沒做，是第 6 期的範圍。）
 
 **附件文字擷取的品質取決於檔案本身的結構。** 掃描版 PDF（純圖片、沒有文字層）擷取不到任何文字，會被視同「沒有可用內容」，摘要與搜尋都無法涵蓋——這不是解析失敗，而是這次範圍明確不含 OCR 的直接後果。（這條也是第 3 期的設計限制，附件下載/擷取本身還沒實作。）
+
+## 暫停開發時的交接（2026-08-05）
+
+信箱功能在此暫停開發。Phase 1 已完整實作、合併進 master、並用真實 Gmail 帳號端對端驗證過（收信、AI 摘要、重要信 OS 通知、廣告信不通知、未讀 badge、已讀不回寫伺服器、伺服器端刪除同步、單封刪除到 Trash、連線失敗提示、關閉時優雅登出）。以下是**還沒做、但已經知道該怎麼做**的事，記錄下來以免下次重新推導。
+
+### 已知待辦（小，都不影響現有功能）
+
+1. **poller 對每封新信各發一次 `mail-sync-event`**，前端兩個 listener 都會反應，`MailView` 每次都重抓整份清單（含每封信完整 `body_text`）。一次進 N 封信 = 2N 次 IPC，其中 N 次是全量。改法：一輪同步結束後只發一次 `summary`（`important` 仍各自發），或前端加去抖動。另外 `list_messages` 的 SELECT 可以不要撈 `body_text`（Phase 1 沒有詳情頁，前端一個字都沒用到）。
+2. **首次同步的清單排序會反過來**（最舊在最上）。`db/mail.rs::list_messages` 是 `ORDER BY fetched_at DESC`，而 `fetched_at` 是秒級精度，同一批插入的信時間戳相同，於是退回 rowid 順序＝UID 遞增＝最舊在前。改法：`ORDER BY fetched_at DESC, uid DESC`。
+3. **AI 分類失敗與「AI 認為沒什麼好摘要」在資料上無法區分**。分類失敗時 `poller.rs` 用 `Default::default()`（空摘要、兩個 flag 都 false）直接入庫，schema 沒有欄位記錄「這封的分類失敗過」，所以永遠不會補摘要。規格原本要求「標記失敗、可手動重試」，未實作。
+4. **`scripts/tauri-build.js` 不轉發參數**（專案既有問題，非本功能造成）：它直接 `execSync('npx tauri build')`，所以 CLAUDE.md 文件化的 `npm run tauri:build -- --no-sign` 無效，一定會撞到 `A public key has been found, but no private key`。該步驟發生在 .app 打包完成之後，所以 bundle 仍然可用，直接 `open` 即可。
+
+### 發布時若要隱藏此功能
+
+比照 Enterprise 功能既有的隱藏方式（見 `SettingsView.tsx` 裡那段註解）：拿掉兩個 UI 入口即可——`NewTabPicker/index.tsx` 的 `mail` 項目、`SettingsView.tsx` 側邊欄的「信箱帳號」按鈕。程式碼其餘部分留著沒有執行期成本：沒有設定任何信箱帳號時不會 spawn 任何背景任務，`poller::stop_all` 也會在 `account_ids.is_empty()` 時立刻返回，關閉 App 零延遲。
+
+### 尚未開始的原規劃期數
+
+第 3 期附件解析、第 4 期語意搜尋、第 5 期 AI 草擬回信、第 6 期廣告信批次清理，都維持原設計未動。其中第 6 期需要的「移到 Trash」原語已在第 1 期做出來（`client.rs::move_to_trash`），可直接重用。第 4 期開始前必須先解決上面「首次同步只抓最新 50 封」那條限制，否則搜尋範圍會小到沒有意義。
