@@ -428,6 +428,10 @@ git commit -m "feat(tabbar): 終端機分頁的三色提示點"
 
 因此模組必須提供一個測試用的重設函式。**不要**改成 mock 掉 `../lib/notifyPermission` 來閃過——那會把整批專門驗證權限處理的測試架空，等於用刪測試來讓測試變綠。
 
+**而且真正危險的方向不是「變紅」。** 上面描述的是看得見的失敗：後面的 test 走不到 `requestPermission`，紅燈會告訴你。相反方向才難察覺——先跑的 test 把 `granted = true` 快取起來之後，後面任何斷言「有發出通知」的 test **都會通過**，即使權限處理已經壞掉。它會為了錯誤的理由變綠，而且沒有任何訊號。所以「每個會觸發通知的測試檔都要在 `beforeEach` 重設」是硬性要求，不是整潔問題。
+
+（跨檔案不用擔心：vitest 預設 `isolate: true`，每個測試檔有獨立的 module registry。危險只在單一檔案內的 test 順序。）
+
 **Files:**
 - Create: `src/lib/notifyPermission.ts`
 - Modify: `src/hooks/useMailSync.ts:3`、`:27`、`:52-72`、`:131`
