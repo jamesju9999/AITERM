@@ -107,6 +107,11 @@ async fn poll_once(app: &AppHandle, account: &MailAccountConfig) -> anyhow::Resu
     for raw in raw_messages {
         max_uid = max_uid.max(raw.uid);
 
+        // Deliberate: a message that fails to parse is folded into `max_uid`
+        // above and thus never retried. Retrying a message that will never
+        // parse would stall this account's poll loop on it forever, which is
+        // worse than permanently skipping it — this is a one-way skip, not
+        // an oversight.
         let Some(parsed) = parse_raw_message(&raw.raw) else {
             log::warn!("mail: could not parse message uid={} for account {}", raw.uid, account.id);
             continue;
@@ -126,7 +131,14 @@ async fn poll_once(app: &AppHandle, account: &MailAccountConfig) -> anyhow::Resu
             classification.is_important = false;
         }
 
-        let row = mail_db::insert_message(&mail_db.pool, NewMessage {
+        // Log-and-continue rather than `?`-propagate: a single failed insert
+        // (e.g. transient SQLITE_BUSY) must not abort the whole batch, since
+        // that would leave `set_last_seen_uid` below unreached and wedge
+        // this account's `last_seen_uid` at the pre-failure UID forever —
+        // every subsequent poll would re-fetch the same batch and hit the
+        // same failure (or a UNIQUE constraint violation on the messages
+        // already inserted this cycle) on the very first message.
+        let row = match mail_db::insert_message(&mail_db.pool, NewMessage {
             account_id: &account.id,
             uid: raw.uid,
             sender: &parsed.sender,
@@ -136,20 +148,30 @@ async fn poll_once(app: &AppHandle, account: &MailAccountConfig) -> anyhow::Resu
             ai_summary: Some(&classification.summary),
             is_important: classification.is_important,
             is_promotional: classification.is_promotional,
-        }).await?;
+        }).await {
+            Ok(row) => row,
+            Err(e) => {
+                log::warn!("mail: failed to insert message uid={} for account {}: {e}", raw.uid, account.id);
+                continue;
+            }
+        };
 
-        let _ = app.emit(MAIL_SYNC_EVENT, MailSyncEvent::Summary {
+        if let Err(e) = app.emit(MAIL_SYNC_EVENT, MailSyncEvent::Summary {
             account_id: account.id.clone(),
             message_id: row.id.clone(),
-        });
+        }) {
+            log::error!("mail: failed to emit {MAIL_SYNC_EVENT} (summary) for account {}: {e}", account.id);
+        }
 
         if classification.is_important {
-            let _ = app.emit(MAIL_SYNC_EVENT, MailSyncEvent::Important {
+            if let Err(e) = app.emit(MAIL_SYNC_EVENT, MailSyncEvent::Important {
                 account_id: account.id.clone(),
                 message_id: row.id,
                 subject: parsed.subject,
                 summary: classification.summary,
-            });
+            }) {
+                log::error!("mail: failed to emit {MAIL_SYNC_EVENT} (important) for account {}: {e}", account.id);
+            }
         }
     }
 
