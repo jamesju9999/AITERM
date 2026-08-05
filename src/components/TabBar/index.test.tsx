@@ -132,17 +132,15 @@ describe("TabBar terminal attention indicator", () => {
   });
 
   it("三種狀態用不同的 class，才能是三種不同顏色", () => {
-    const kinds = ["waiting", "done", "failed"] as const;
-    const classNames = kinds.map((attention) => {
+    for (const attention of ["waiting", "done", "failed"] as const) {
       const { unmount } = renderTabBar({
         tabs: [twoTabs[0], { ...twoTabs[1], attention }],
         activeId: "t1",
       });
-      const cls = screen.getByRole("img", { name: /終端機/ }).className;
+      expect(screen.getByRole("img", { name: /終端機/ }).className)
+        .toContain(`terminal-attention-badge--${attention}`);
       unmount();
-      return cls;
-    });
-    expect(new Set(classNames).size).toBe(3);
+    }
   });
 
   it("沒有 attention 時什麼都不顯示", () => {

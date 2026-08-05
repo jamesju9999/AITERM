@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { AttentionKind } from "../../lib/terminalAttention";
+import type { Translations } from "../../lib/i18n";
 import appIcon from "../../assets/icon.png";
 import {
   TerminalIcon,
@@ -84,7 +85,7 @@ function getTabIcon(type: TabType): React.ReactNode {
 }
 
 // 顏色只對看得見的人有意義，所以每個狀態都要有自己的文字說明。
-function attentionLabel(kind: AttentionKind, t: ReturnType<typeof useLocale>["t"]): string {
+function attentionLabel(kind: AttentionKind, t: Translations): string {
   switch (kind) {
     case "waiting": return t.terminal_attention_waiting_label;
     case "done": return t.terminal_attention_done_label;
