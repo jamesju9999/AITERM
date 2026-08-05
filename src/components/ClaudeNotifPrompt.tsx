@@ -23,6 +23,7 @@ export function ClaudeNotifPrompt({ claudeSeen, blocked }: Props) {
   const [offer, setOffer] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     // 沒偵測到 claude 就完全不查——沒有理由去碰使用者的設定檔。
@@ -45,14 +46,22 @@ export function ClaudeNotifPrompt({ claudeSeen, blocked }: Props) {
     // claudeSeen 只會 false → true 一次，所以這個查詢一個 session 只跑一次。
   }, [claudeSeen]);
 
-  if (!offer || blocked) return null;
+  if (!offer) return null;
+  // done 狀態不受 blocked 影響：卡片已經在畫面上，使用者按下「設定」後
+  // 若剛好有更新提示插進來，「請開新分頁」這句話不能因此消失——設定其實
+  // 已經寫入了，少了這句使用者會以為沒生效。
+  if (blocked && !done) return null;
 
   const accept = async () => {
+    if (busy) return;
+    setBusy(true);
     try {
       await claudeNotifEnableBell();
       setDone(true);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -85,7 +94,7 @@ export function ClaudeNotifPrompt({ claudeSeen, blocked }: Props) {
               <button className="aiterm-btn aiterm-btn--secondary" onClick={() => void decline()}>
                 {t.claude_notif_decline}
               </button>
-              <button className="aiterm-btn aiterm-btn--primary" onClick={() => void accept()}>
+              <button className="aiterm-btn aiterm-btn--primary" onClick={() => void accept()} disabled={busy}>
                 {t.claude_notif_enable}
               </button>
             </div>
