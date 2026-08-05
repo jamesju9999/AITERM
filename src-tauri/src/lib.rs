@@ -436,6 +436,24 @@ pub fn run() {
             api_docs_logout,
             api_docs_auth_status,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Mail tasks are the one background task that holds an open,
+            // authenticated socket essentially all the time: with IMAP IDLE
+            // they park *inside* a live session rather than sleeping between
+            // connections. Quitting without this hook abandons one session per
+            // account with no LOGOUT, and a provider keeps an abandoned IDLE
+            // session until its own autologout (~30 minutes for Gmail) while
+            // capping concurrent connections per account (~15) — so a handful
+            // of quick restarts, i.e. an ordinary debugging session, is enough
+            // to lock the account out of IMAP entirely.
+            //
+            // `Exit` rather than `ExitRequested`: the latter can still be
+            // cancelled, and doing the logout there would tear down live
+            // connections for a quit that never happens.
+            if let tauri::RunEvent::Exit = event {
+                tauri::async_runtime::block_on(mail::poller::stop_all(app_handle));
+            }
+        });
 }

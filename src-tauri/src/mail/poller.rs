@@ -33,6 +33,17 @@ const RECONNECT_BASE_DELAY: Duration = Duration::from_secs(5);
 /// for a wedged one, which must not make removing an account hang the UI.
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long a session must last to count as "came up properly", and so to
+/// clear the reconnect backoff.
+///
+/// The question the backoff needs answered is *not* "did a sync succeed" — a
+/// connection can sync once and then fail the same way forever (a server that
+/// answers `BAD` to IDLE despite advertising it, a middlebox that kills the
+/// socket the moment IDLE is issued). Counting that as progress pins the delay
+/// at `RECONNECT_BASE_DELAY` and turns the loop into a login-and-abandon storm,
+/// which is exactly how an account hits a provider's connection cap.
+const HEALTHY_SESSION_LIFETIME: Duration = Duration::from_secs(10);
+
 /// Keychain key for an account's IMAP/SMTP password. Matches the existing
 /// `"{domain}:{id}"` convention (see `commands/db.rs::secret_key`).
 pub fn mail_secret_key(account_id: &str) -> String {
@@ -74,9 +85,14 @@ pub async fn restart_account(app: &AppHandle, account_id: &str) {
     // Note that this means the stop and the spawn are no longer one atomic
     // step under the `MailState` lock — the stop takes that lock itself, and
     // holding it while awaiting a task that may need seconds to log out would
-    // stall every other account. Two *concurrent* restarts of the same account
-    // could therefore both spawn. No caller does that today: add-account uses
-    // a fresh id, `restart_all` is sequential, and each is one user action.
+    // stall every other account. Two concurrent restarts of the same account
+    // can therefore both spawn (`restart_all` snapshots the account list at
+    // its start, so an account added during startup is one way in).
+    //
+    // Benign, and not by luck: `tasks.insert` drops the `MailTask` it evicts,
+    // which drops its `watch::Sender`, which makes the orphaned task's
+    // `wait_for_shutdown` return on `changed().is_err()`. The loser shuts
+    // itself down the same graceful way, LOGOUT included.
     stop_account(app, account_id).await;
 
     let config_store = app.state::<Arc<ConfigStore>>();
@@ -139,6 +155,8 @@ enum SyncTrigger {
     IdleNotification,
     /// The IDLE liveness timeout expired with the server having said nothing.
     LivenessTimeout,
+    /// The reconciliation deadline came due while we sat in IDLE.
+    ReconcileDue,
     /// A fallback poll, on a server that does not advertise IDLE.
     PollInterval,
 }
@@ -154,31 +172,81 @@ enum SyncTrigger {
 /// They cannot wait for the liveness timeout, though, tempting as that is:
 /// async-imap resets that timer on *any* server response, keepalives included,
 /// and servers such as Dovecot emit `* OK Still here` every couple of minutes —
-/// so on a healthy connection the timeout may never fire at all, and a
-/// connection can stay healthy for days. Elapsed time since the last
-/// reconciliation is the honest backstop, and it keeps the worst-case staleness
-/// of a deleted message at one interval, exactly as the old timer-based poller
-/// had it.
+/// so on a healthy connection the timeout may never fire at all.
+///
+/// The backstop is therefore an explicit deadline: `time_until_reconcile` wakes
+/// the IDLE itself (`SyncTrigger::ReconcileDue`), which is what actually bounds
+/// staleness at one interval. The elapsed-time condition below is the second
+/// half of the same rule, for the case where a notification arrives after the
+/// deadline has already passed — it costs nothing and keeps the two paths from
+/// disagreeing about when a reconciliation is due.
 fn should_reconcile(
     trigger: SyncTrigger,
     since_last_reconcile: Duration,
     interval: Duration,
 ) -> bool {
     match trigger {
-        SyncTrigger::Connected | SyncTrigger::LivenessTimeout | SyncTrigger::PollInterval => true,
+        SyncTrigger::Connected
+        | SyncTrigger::LivenessTimeout
+        | SyncTrigger::ReconcileDue
+        | SyncTrigger::PollInterval => true,
         SyncTrigger::IdleNotification => since_last_reconcile >= interval,
     }
+}
+
+/// How long the next IDLE may block before it must be woken to reconcile.
+///
+/// Zero once the deadline has passed, which makes the wake immediate rather
+/// than waiting out another whole interval.
+fn time_until_reconcile(since_last_reconcile: Duration, interval: Duration) -> Duration {
+    interval.saturating_sub(since_last_reconcile)
+}
+
+/// The reconnect backoff counter after one connection ended.
+///
+/// `lifetime` is how long the *established session* lasted — measured from a
+/// successful login, so a connect attempt that hangs and times out reports
+/// nothing and stays a failure. A session that came up and died again inside
+/// `HEALTHY_SESSION_LIFETIME` counts as a failure however much it managed to
+/// do first; anything longer clears the counter.
+fn next_failure_count(current: u32, lifetime: Duration) -> u32 {
+    if lifetime >= HEALTHY_SESSION_LIFETIME {
+        0
+    } else {
+        current.saturating_add(1)
+    }
+}
+
+/// Stop every account's task, concurrently. Called from the app's exit hook.
+///
+/// Concurrently because the stops are independent and each is allowed
+/// `GRACEFUL_SHUTDOWN_TIMEOUT`: run in sequence, N accounts would hold the quit
+/// for 5N seconds in the worst case, which is exactly the sort of delay that
+/// gets a cleanup hook deleted.
+pub async fn stop_all(app: &AppHandle) {
+    let account_ids: Vec<String> = {
+        let state = app.state::<tokio::sync::Mutex<MailState>>();
+        let guard = state.lock().await;
+        guard.tasks.keys().cloned().collect()
+    };
+    if account_ids.is_empty() {
+        return;
+    }
+
+    log::info!("mail: stopping {} account task(s) before exit", account_ids.len());
+    futures_util::future::join_all(account_ids.iter().map(|id| stop_account(app, id))).await;
+    log::info!("mail: stopped {} account task(s)", account_ids.len());
 }
 
 /// One connection's lifetime, from the outside.
 enum ConnectionExit {
     /// The account was asked to stop. Do not reconnect.
     Shutdown,
-    /// The connection is gone. `progressed` records whether it managed at
-    /// least one successful sync first, which is what tells a connection that
-    /// merely ended apart from a server that is refusing us and must not be
-    /// hammered.
-    Retry { progressed: bool },
+    /// The connection is gone. `session_lifetime` is how long there was a
+    /// logged-in session — `ZERO` when the connection never came up at all —
+    /// and is what the backoff uses to tell a connection that ran from one
+    /// that failed on arrival.
+    Retry { session_lifetime: Duration },
 }
 
 /// How a connection's inner loop ended, from the inside.
@@ -198,9 +266,8 @@ async fn poll_loop(app: AppHandle, account: MailAccountConfig, mut shutdown: wat
     loop {
         match run_connection(&app, &account, interval, &mut shutdown).await {
             ConnectionExit::Shutdown => return,
-            ConnectionExit::Retry { progressed } => {
-                consecutive_failures =
-                    if progressed { 0 } else { consecutive_failures.saturating_add(1) };
+            ConnectionExit::Retry { session_lifetime } => {
+                consecutive_failures = next_failure_count(consecutive_failures, session_lifetime);
             }
         }
 
@@ -232,15 +299,18 @@ async fn run_connection(
         Ok(Some(password)) => password,
         Ok(None) => {
             log::warn!("mail: no password stored for account {}", account.id);
-            return ConnectionExit::Retry { progressed: false };
+            return ConnectionExit::Retry { session_lifetime: Duration::ZERO };
         }
         Err(e) => {
             log::warn!("mail: could not read the password for account {}: {e}", account.id);
-            return ConnectionExit::Retry { progressed: false };
+            return ConnectionExit::Retry { session_lifetime: Duration::ZERO };
         }
     };
 
-    // No session exists yet, so an error here has nothing to log out of.
+    // No session exists yet, so an error here has nothing to log out of — and
+    // nothing to report as a lifetime either, however long the attempt took.
+    // A connect that hangs for the full timeout must not look like a session
+    // that ran for 30 seconds, or every hung connect would clear the backoff.
     let conn = match MailConnection::connect(
         &account.imap_host,
         account.imap_port,
@@ -250,18 +320,30 @@ async fn run_connection(
         Ok(conn) => conn,
         Err(e) => {
             log::warn!("mail: could not connect account {}: {e}", account.id);
-            return ConnectionExit::Retry { progressed: false };
+            return ConnectionExit::Retry { session_lifetime: Duration::ZERO };
         }
     };
+    let connected_at = Instant::now();
 
-    let (conn, exit, progressed) = drive_session(app, account, conn, interval, shutdown).await;
+    // Connecting can take up to three timeouts; a stop signalled in the middle
+    // of it would otherwise not be seen until after the first sync, which is
+    // the longest uninterruptible stretch there is.
+    if *shutdown.borrow() {
+        conn.logout().await;
+        return ConnectionExit::Shutdown;
+    }
+
+    let (conn, exit) = drive_session(app, account, conn, interval, shutdown).await;
+    // Taken before the logout: the session's life ends when the loop above
+    // gives it up, and a slow logout is not uptime.
+    let session_lifetime = connected_at.elapsed();
     if let Some(conn) = conn {
         conn.logout().await;
     }
 
     match exit {
         SessionExit::Shutdown => ConnectionExit::Shutdown,
-        SessionExit::Retry => ConnectionExit::Retry { progressed },
+        SessionExit::Retry => ConnectionExit::Retry { session_lifetime },
     }
 }
 
@@ -276,7 +358,16 @@ async fn drive_session(
     mut conn: MailConnection,
     interval: Duration,
     shutdown: &mut watch::Receiver<bool>,
-) -> (Option<MailConnection>, SessionExit, bool) {
+) -> (Option<MailConnection>, SessionExit) {
+    // Checked before the first sync, not only after it: that sync classifies
+    // every message it finds, one LLM call each, so on a first sync it is
+    // minutes long. A stop that arrives just before it must not have to wait
+    // it out. (`sync_and_persist` also checks between messages, which is what
+    // bounds a stop that arrives *during* it.)
+    if *shutdown.borrow() {
+        return (Some(conn), SessionExit::Shutdown);
+    }
+
     // Always sync first on a (re)connect. IDLE only reports what happens while
     // we are listening, so this is what catches whatever arrived while the
     // account had no connection, and it reconciles deletions. It also SELECTs
@@ -284,9 +375,9 @@ async fn drive_session(
     // unreachable unless this succeeded.
     let mut last_reconcile = Instant::now();
     let reconcile = should_reconcile(SyncTrigger::Connected, last_reconcile.elapsed(), interval);
-    if let Err(e) = sync_and_persist(app, account, &mut conn, reconcile).await {
+    if let Err(e) = sync_and_persist(app, account, &mut conn, reconcile, shutdown).await {
         log::warn!("mail sync failed for account {}: {e}", account.id);
-        return (Some(conn), SessionExit::Retry, false);
+        return (Some(conn), SessionExit::Retry);
     }
 
     if !conn.supports_idle() {
@@ -294,15 +385,15 @@ async fn drive_session(
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(interval) => {}
-                _ = wait_for_shutdown(shutdown) => return (Some(conn), SessionExit::Shutdown, true),
+                _ = wait_for_shutdown(shutdown) => return (Some(conn), SessionExit::Shutdown),
             }
             let reconcile = should_reconcile(SyncTrigger::PollInterval, last_reconcile.elapsed(), interval);
             if reconcile {
                 last_reconcile = Instant::now();
             }
-            if let Err(e) = sync_and_persist(app, account, &mut conn, reconcile).await {
+            if let Err(e) = sync_and_persist(app, account, &mut conn, reconcile, shutdown).await {
                 log::warn!("mail poll failed for account {}: {e}", account.id);
-                return (Some(conn), SessionExit::Retry, true);
+                return (Some(conn), SessionExit::Retry);
             }
         }
     }
@@ -312,16 +403,18 @@ async fn drive_session(
         // cost an IDLE and a DONE round trip before being noticed, and the
         // stop is on a budget.
         if *shutdown.borrow() {
-            return (Some(conn), SessionExit::Shutdown, true);
+            return (Some(conn), SessionExit::Shutdown);
         }
 
-        let (returned, outcome) = match conn.idle_wait(interval, wait_for_shutdown(shutdown)).await {
-            Ok(returned) => returned,
-            Err(e) => {
-                log::warn!("mail: IDLE ended for account {}: {e}", account.id);
-                return (None, SessionExit::Retry, true);
-            }
-        };
+        let reconcile_in = time_until_reconcile(last_reconcile.elapsed(), interval);
+        let (returned, outcome) =
+            match conn.idle_wait(interval, reconcile_in, wait_for_shutdown(shutdown)).await {
+                Ok(returned) => returned,
+                Err(e) => {
+                    log::warn!("mail: IDLE ended for account {}: {e}", account.id);
+                    return (None, SessionExit::Retry);
+                }
+            };
         conn = returned;
 
         let trigger = match outcome {
@@ -329,7 +422,21 @@ async fn drive_session(
             // never what — so the one useful reaction is an ordinary sync.
             IdleOutcome::NewData => SyncTrigger::IdleNotification,
             IdleOutcome::Timeout => SyncTrigger::LivenessTimeout,
-            IdleOutcome::Interrupted => return (Some(conn), SessionExit::Shutdown, true),
+            IdleOutcome::ReconcileDue => SyncTrigger::ReconcileDue,
+            // Only a stop we actually signalled ends the account's task.
+            // Reading any other interrupt as a stop would silently kill mail
+            // for this account until the app is restarted, so an unexplained
+            // one reconnects instead — the one outcome that is always safe.
+            IdleOutcome::Interrupted if *shutdown.borrow() => {
+                return (Some(conn), SessionExit::Shutdown)
+            }
+            IdleOutcome::Interrupted => {
+                log::warn!(
+                    "mail: IDLE for account {} was interrupted with no stop pending; reconnecting",
+                    account.id
+                );
+                return (Some(conn), SessionExit::Retry);
+            }
         };
 
         let reconcile = should_reconcile(trigger, last_reconcile.elapsed(), interval);
@@ -337,9 +444,9 @@ async fn drive_session(
             last_reconcile = Instant::now();
         }
 
-        if let Err(e) = sync_and_persist(app, account, &mut conn, reconcile).await {
+        if let Err(e) = sync_and_persist(app, account, &mut conn, reconcile, shutdown).await {
             log::warn!("mail sync failed for account {}: {e}", account.id);
-            return (Some(conn), SessionExit::Retry, true);
+            return (Some(conn), SessionExit::Retry);
         }
     }
 }
@@ -370,8 +477,9 @@ fn effective_interval(configured_secs: u32) -> Duration {
 /// hammered — and unlike the old poller, whose fixed sleep bounded reconnect
 /// attempts for free, this loop reconnects as soon as a connection ends.
 fn reconnect_delay(consecutive_failures: u32, cap: Duration) -> Duration {
-    // Clamped before shifting: `1u64 << 64` is undefined behavior in the sense
-    // that Rust panics on it, and a long outage reaches large counts.
+    // Clamped before shifting: an over-wide shift panics in debug and silently
+    // masks the shift amount (so `<< 64` becomes `<< 0`, i.e. no delay at all)
+    // in release. A long outage reaches counts that large easily.
     let factor = 1u64 << consecutive_failures.min(32);
     Duration::from_secs(RECONNECT_BASE_DELAY.as_secs().saturating_mul(factor)).min(cap)
 }
@@ -381,6 +489,7 @@ async fn sync_and_persist(
     account: &MailAccountConfig,
     conn: &mut MailConnection,
     reconcile: bool,
+    shutdown: &watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let mail_db = app.state::<MailDb>();
     let since_uid = mail_db::get_last_seen_uid(&mail_db.pool, &account.id).await?;
@@ -425,7 +534,16 @@ async fn sync_and_persist(
     }
 
     for batch in outcome.batches {
+        let mut stopped_mid_batch = false;
         for raw in batch.messages {
+            // The only cancellation point inside a sync, and it has to be here
+            // rather than between batches: every message below is an LLM call,
+            // so one batch alone can outlast the whole graceful-stop budget.
+            if *shutdown.borrow() {
+                stopped_mid_batch = true;
+                break;
+            }
+
             // Deliberate: a message that fails to parse is still covered by
             // the batch's `max_uid` below and thus never retried. Retrying a
             // message that will never parse would stall this account's poll
@@ -493,6 +611,17 @@ async fn sync_and_persist(
                     log::error!("mail: failed to emit {MAIL_SYNC_EVENT} (important) for account {}: {e}", account.id);
                 }
             }
+        }
+
+        if stopped_mid_batch {
+            // Deliberately returns *without* `set_last_seen_uid`: this batch's
+            // `max_uid` covers messages we never got to, and advancing the
+            // cursor past them would skip them permanently. The handful
+            // already inserted are simply re-fetched on the next connection,
+            // where UNIQUE(account_id, uid) turns the re-insert into the
+            // logged no-op below. Skips the reconciliation too — a partial
+            // view of the mailbox is not something to reconcile against.
+            return Ok(());
         }
 
         // Commit progress per batch, not once at the end: a failure partway
@@ -579,8 +708,101 @@ mod tests {
             "a liveness timeout means the server went quiet, which is exactly when the local cache may have drifted"
         );
         assert!(
+            should_reconcile(SyncTrigger::ReconcileDue, Duration::ZERO, INTERVAL),
+            "the deadline wake exists only to reconcile; skipping it would make the wake pointless"
+        );
+        assert!(
             should_reconcile(SyncTrigger::PollInterval, Duration::ZERO, INTERVAL),
             "the non-IDLE fallback must keep reconciling on every poll, exactly as the old timer-based poller did"
+        );
+    }
+
+    // The case the previous round got wrong: one notification early in a
+    // connection, then silence. `should_reconcile` alone never fires again
+    // (elapsed stays below the interval and nothing re-evaluates it), and the
+    // liveness timeout cannot be the backstop because keepalives reset it. The
+    // deadline handed to the next IDLE is what actually bounds the staleness.
+    #[test]
+    fn a_mailbox_that_goes_quiet_after_a_notification_still_reconciles_within_one_interval() {
+        let after_notification = Duration::from_secs(30);
+
+        assert!(
+            !should_reconcile(SyncTrigger::IdleNotification, after_notification, INTERVAL),
+            "the notification itself must stay cheap"
+        );
+        assert_eq!(
+            time_until_reconcile(after_notification, INTERVAL),
+            Duration::from_secs(270),
+            "so the IDLE it re-enters must be woken for the remainder of the interval, not left to a liveness timeout keepalives keep pushing out"
+        );
+    }
+
+    #[test]
+    fn an_overdue_reconciliation_wakes_the_next_idle_immediately() {
+        assert_eq!(
+            time_until_reconcile(INTERVAL * 2, INTERVAL),
+            Duration::ZERO,
+            "a deadline already passed must not wait out another whole interval"
+        );
+    }
+
+    #[test]
+    fn a_session_that_dies_immediately_counts_as_a_failure_however_much_it_did_first() {
+        // The IDLE-broken case: connect, sync fine, then IDLE fails at once,
+        // over and over. Counting the successful sync as progress pinned the
+        // delay at 5s forever — a login and an abandoned session every 5s,
+        // which caps a Gmail account inside about 75 seconds.
+        assert_eq!(
+            next_failure_count(1, Duration::from_secs(1)),
+            2,
+            "a session that came up and died a second later has not proved anything works"
+        );
+    }
+
+    #[test]
+    fn a_session_that_ran_for_a_while_clears_the_backoff() {
+        assert_eq!(
+            next_failure_count(7, Duration::from_secs(3600)),
+            0,
+            "an hour of uptime means the next failure is a fresh one, not a continuing outage"
+        );
+        assert_eq!(
+            next_failure_count(7, HEALTHY_SESSION_LIFETIME),
+            0,
+            "the threshold itself counts as healthy"
+        );
+    }
+
+    #[test]
+    fn the_failure_count_saturates_instead_of_wrapping() {
+        assert_eq!(
+            next_failure_count(u32::MAX, Duration::ZERO),
+            u32::MAX,
+            "wrapping to 0 would silently reset the backoff during the longest outages"
+        );
+    }
+
+    #[test]
+    fn a_connection_that_keeps_dying_on_arrival_backs_off_instead_of_retrying_every_five_seconds() {
+        let mut failures = 0u32;
+        let delays: Vec<Duration> = (0..5)
+            .map(|_| {
+                // Each attempt: connects, syncs, dies a second later.
+                failures = next_failure_count(failures, Duration::from_secs(1));
+                reconnect_delay(failures, INTERVAL)
+            })
+            .collect();
+
+        assert_eq!(
+            delays,
+            vec![
+                Duration::from_secs(10),
+                Duration::from_secs(20),
+                Duration::from_secs(40),
+                Duration::from_secs(80),
+                Duration::from_secs(160),
+            ],
+            "a persistently broken connection must escalate; a flat 5s here is a login-and-abandon storm against the provider"
         );
     }
 

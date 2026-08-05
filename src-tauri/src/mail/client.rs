@@ -91,6 +91,9 @@ pub enum IdleOutcome {
     NewData,
     /// Nothing was heard from the server for the liveness interval.
     Timeout,
+    /// The caller's `reconcile_in` deadline elapsed: time to run a sync that
+    /// also reconciles deletions.
+    ReconcileDue,
     /// The caller's shutdown signal interrupted the wait.
     Interrupted,
 }
@@ -163,13 +166,15 @@ impl MailConnection {
         fetch_selected(&mut self.session, since_uid, stored_uid_validity, reconcile).await
     }
 
-    /// Sit in IDLE until the server says something, `liveness` elapses, or
-    /// `shutdown` resolves.
+    /// Sit in IDLE until the server says something, `liveness` elapses,
+    /// `reconcile_in` elapses, or `shutdown` resolves.
     ///
     /// Consumes and returns the connection, because `Session::idle` consumes
-    /// the session and only a successful `DONE` hands it back: an `Err` from
-    /// here means the session died with the socket and there is nothing left
-    /// to log out.
+    /// the session and only a successful `DONE` hands it back. An `Err` from
+    /// here therefore always means the caller has no connection left — though
+    /// not always because the socket died: see the `init` note below, where a
+    /// possibly-live session is dropped because the crate offers no way to
+    /// retrieve it.
     ///
     /// `liveness` is deliberately far below the crate's 29-minute default. A
     /// TCP connection killed by laptop sleep or a NAT timeout dies *silently*,
@@ -178,22 +183,33 @@ impl MailConnection {
     /// timer on every server response (`* OK Still here` keepalives included),
     /// so a healthy connection rarely reaches it.
     ///
+    /// `reconcile_in` exists precisely *because* of that reset. Servers such as
+    /// Dovecot send keepalives every couple of minutes, so on a healthy
+    /// connection `liveness` may never fire at all, and anything hung off it —
+    /// notably deletion reconciliation — would never run either. This is an
+    /// independent wall-clock deadline that keepalives cannot push out.
+    ///
     /// The IDLE wait itself is the one round trip *not* wrapped in
     /// `FETCH_TIMEOUT`: blocking for minutes is the entire point of it.
     pub async fn idle_wait(
         self,
         liveness: Duration,
+        reconcile_in: Duration,
         shutdown: impl Future<Output = ()>,
     ) -> Result<(Self, IdleOutcome), MailClientError> {
         let supports_idle = self.supports_idle;
         let mut handle = self.session.idle();
 
-        // An ordinary round trip, so an ordinary timeout. On failure the
-        // `Handle` is dropped rather than logged out: it owns the session and
-        // the only way back out is `done()`, which panics (`assert!`) when
-        // IDLE never started — and a failure here cannot distinguish the two.
-        // Dropping closes the socket immediately, which is the same thing an
-        // aborted task did, and the connection has just proven unusable.
+        // An ordinary round trip, so an ordinary timeout — but note that on
+        // failure the `Handle` is dropped rather than logged out, and the
+        // session inside it may well still be alive: a server answering `BAD`
+        // to IDLE leaves a perfectly usable connection, and so does this
+        // timeout firing. It is dropped anyway because 0.11.3's `Handle`
+        // offers no way back to the `Session` other than `done()`, and `done()`
+        // after a `BAD` blocks for a further `FETCH_TIMEOUT` waiting on a tag
+        // the server has already sent. Dropping closes the socket at once,
+        // which at least frees the server's slot immediately; the alternative
+        // is holding the poll loop hostage for 30s per attempt.
         with_timeout(async {
             handle.init().await.map_err(|e| MailClientError::Command(e.to_string()))
         })
@@ -201,22 +217,31 @@ impl MailConnection {
 
         // Scoped: `wait_with_timeout` borrows the handle mutably for as long as
         // its future lives, and `done()` below needs the handle back.
+        let mut woke_to_reconcile = false;
         let response = {
             let (wait, stop) = handle.wait_with_timeout(liveness);
             tokio::pin!(wait);
             tokio::pin!(shutdown);
+            let reconcile_timer = tokio::time::sleep(reconcile_in);
+            tokio::pin!(reconcile_timer);
             // Held alive on purpose: dropping the `StopSource` is the crate's
             // documented way to end an IDLE, and it makes the wait resolve as
             // `ManualInterrupt` at a defined point instead of cancelling the
-            // future mid-read. That is what lets a shutdown still send DONE
-            // and LOGOUT rather than yanking the socket.
+            // future mid-read. That is what lets both wakes below still send
+            // DONE — and, for a shutdown, LOGOUT — rather than yanking the
+            // socket.
             let mut stop = Some(stop);
             loop {
                 tokio::select! {
                     result = &mut wait => break result,
-                    // Disabled once fired, so the completed future is never
-                    // polled again.
+                    // Both arms are disabled once either has fired, so neither
+                    // completed future is ever polled again — and whichever
+                    // fired first is the one `woke_to_reconcile` reports.
                     _ = &mut shutdown, if stop.is_some() => stop = None,
+                    _ = &mut reconcile_timer, if stop.is_some() => {
+                        woke_to_reconcile = true;
+                        stop = None;
+                    }
                 }
             }
         };
@@ -233,6 +258,7 @@ impl MailConnection {
         let outcome = match response {
             IdleResponse::NewData(_) => IdleOutcome::NewData,
             IdleResponse::Timeout => IdleOutcome::Timeout,
+            IdleResponse::ManualInterrupt if woke_to_reconcile => IdleOutcome::ReconcileDue,
             IdleResponse::ManualInterrupt => IdleOutcome::Interrupted,
         };
         Ok((Self { session, supports_idle }, outcome))
