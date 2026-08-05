@@ -1,10 +1,17 @@
 // src-tauri/src/mail/client.rs
 use std::future::Future;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use futures_util::TryStreamExt;
 
+/// Ceiling on a single IMAP round trip (login, SELECT, SEARCH, one UID FETCH).
 const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Ceiling on the whole batch loop. Applied *between* batches, so it never
+/// discards a batch that already succeeded: once the budget is spent the loop
+/// simply stops starting new batches and returns what it has, and the
+/// remaining UIDs are picked up by the next poll.
+const TOTAL_FETCH_BUDGET: Duration = Duration::from_secs(120);
 
 /// How many messages the *first* poll of an account pulls down. A brand new
 /// account has no `since_uid`, and "everything in the mailbox" is not a
@@ -18,8 +25,11 @@ const FIRST_POLL_MAX_MESSAGES: usize = 50;
 
 /// UIDs per `UID FETCH` command. Keeps each command short and each round
 /// trip inside the timeout, and is the unit at which the poller persists
-/// `last_seen_uid`.
-const FETCH_BATCH_SIZE: usize = 50;
+/// `last_seen_uid`. Deliberately well below `FIRST_POLL_MAX_MESSAGES`: when
+/// the two were equal the first poll was a single batch, which made the
+/// batching machinery inert on exactly the sync it exists to protect — one
+/// slow fetch and the whole seed was lost, forever, every cycle.
+const FETCH_BATCH_SIZE: usize = 10;
 
 type ImapSession = async_imap::Session<tokio_native_tls::TlsStream<TcpStream>>;
 
@@ -63,7 +73,10 @@ pub struct MessageBatch {
 /// caller can commit them and make forward progress, rather than throwing
 /// away work that succeeded and retrying it identically next cycle. Only a
 /// failure on the *first* batch — where there is no progress to preserve —
-/// surfaces as `Err`.
+/// surfaces as `Err`. Timeouts flow through that same path: they are applied
+/// per round trip, never around the loop, because a timeout wrapped around
+/// the loop drops the whole future and destroys every batch collected so far,
+/// which is precisely the failure mode this batching exists to survive.
 pub async fn fetch_new_messages(
     host: &str,
     port: u16,
@@ -80,13 +93,14 @@ pub async fn fetch_new_messages(
     // connections per account, so a recurring per-poll error here could
     // otherwise accumulate ungraceful terminations against the mail server.
     //
-    // That is also why the timeout is applied *inside* this function, to the
-    // fetch work alone, rather than wrapping the whole function from the
+    // That is also why the timeouts live *inside* `fetch_selected`, around
+    // each individual round trip, rather than wrapping this call from the
     // outside: an outer timeout drops the future mid-await, which skips the
     // logout below — and a hung connection is precisely the case that leaves
-    // a dangling connection on the server. Timing out here instead produces
-    // an ordinary `Err` that flows through the same cleanup path.
-    let result = with_timeout(fetch_selected(&mut session, since_uid)).await;
+    // a dangling connection on the server. Timing out per round trip instead
+    // produces an ordinary `Err` that flows through the same cleanup path
+    // (and, for a batch fetch, through the partial-success path too).
+    let result = fetch_selected(&mut session, since_uid).await;
     logout(session).await;
     result
 }
@@ -168,26 +182,69 @@ async fn fetch_selected(
     session: &mut ImapSession,
     since_uid: Option<i64>,
 ) -> Result<Vec<MessageBatch>, MailClientError> {
-    session
-        .select("INBOX")
-        .await
-        .map_err(|e| MailClientError::Command(e.to_string()))?;
+    with_timeout(async {
+        session
+            .select("INBOX")
+            .await
+            .map(|_| ())
+            .map_err(|e| MailClientError::Command(e.to_string()))
+    })
+    .await?;
 
     let search_query = match since_uid {
         Some(uid) => format!("UID {}:*", uid + 1),
         None => "1:*".to_string(),
     };
-    let uids = session
-        .uid_search(&search_query)
-        .await
-        .map_err(|e| MailClientError::Command(e.to_string()))?;
+    let uids = with_timeout(async {
+        session
+            .uid_search(&search_query)
+            .await
+            .map_err(|e| MailClientError::Command(e.to_string()))
+    })
+    .await?;
 
     let planned = plan_fetch_batches(uids.into_iter().collect(), since_uid);
 
+    collect_batches(session, planned, Instant::now() + TOTAL_FETCH_BUDGET).await
+}
+
+/// One batch fetch. Abstracted over the session purely so the loop below —
+/// which decides what survives a mid-sync failure — can be tested without a
+/// live IMAP server.
+trait BatchSource {
+    async fn fetch_batch(&mut self, uid_batch: &[u32]) -> Result<Vec<RawMessage>, MailClientError>;
+}
+
+impl BatchSource for ImapSession {
+    async fn fetch_batch(&mut self, uid_batch: &[u32]) -> Result<Vec<RawMessage>, MailClientError> {
+        with_timeout(fetch_uid_batch(self, uid_batch)).await
+    }
+}
+
+/// Run the planned batches in order, keeping every batch that succeeds.
+///
+/// A failing batch (including a timed-out one) stops the loop but does not
+/// throw away its predecessors — they are returned as `Ok` so the caller can
+/// commit them and advance `last_seen_uid` past them. Only a failure with no
+/// progress behind it surfaces as `Err`. `deadline` bounds the total time the
+/// same way: it is checked *between* batches, so it can delay progress but
+/// never destroy it.
+async fn collect_batches<S: BatchSource>(
+    source: &mut S,
+    planned: Vec<Vec<u32>>,
+    deadline: Instant,
+) -> Result<Vec<MessageBatch>, MailClientError> {
     let mut batches: Vec<MessageBatch> = Vec::new();
     for uid_batch in planned {
+        // The first batch is always attempted: there is no progress to
+        // protect yet, and returning `Ok(vec![])` for an untried fetch would
+        // look to the caller like "no new mail".
+        if !batches.is_empty() && Instant::now() >= deadline {
+            log::warn!("mail: fetch budget exhausted after {} batch(es)", batches.len());
+            break;
+        }
         let max_uid = uid_batch.iter().copied().max().unwrap_or(0) as i64;
-        match fetch_uid_batch(session, &uid_batch).await {
+        match source.fetch_batch(&uid_batch).await {
             Ok(messages) => batches.push(MessageBatch { max_uid, messages }),
             Err(e) => {
                 if batches.is_empty() {
@@ -222,6 +279,18 @@ async fn fetch_uid_batch(
         if let (Some(uid), Some(body)) = (fetch.uid, fetch.body()) {
             messages.push(RawMessage { uid: uid as i64, raw: body.to_vec() });
         }
+    }
+    // A fetch item without a UID or a body is dropped, and since `max_uid` is
+    // the highest *requested* UID it is dropped permanently — that is the
+    // intended tradeoff (a message deleted between SEARCH and FETCH must not
+    // wedge the poll loop forever), but it must not be silent, or a server
+    // returning incomplete responses would lose mail with no trace at all.
+    if messages.len() < uid_batch.len() {
+        log::warn!(
+            "mail: server returned {} of {} requested message(s); the missing UIDs are skipped permanently",
+            messages.len(),
+            uid_batch.len()
+        );
     }
     Ok(messages)
 }
@@ -325,5 +394,99 @@ mod tests {
     fn empty_search_result_produces_no_batches() {
         assert!(plan_fetch_batches(Vec::new(), None).is_empty());
         assert!(plan_fetch_batches(Vec::new(), Some(42)).is_empty());
+    }
+
+    #[test]
+    fn first_poll_is_split_into_many_batches_not_one_giant_fetch() {
+        // The whole point of batching: the first sync must be committable in
+        // pieces. Sizes are hard-coded rather than derived from the constants
+        // so that making FETCH_BATCH_SIZE == FIRST_POLL_MAX_MESSAGES again —
+        // which silently collapses the first poll back to a single
+        // all-or-nothing fetch — fails here.
+        let batches = plan_fetch_batches((1..=120).collect(), None);
+
+        assert_eq!(batches.len(), 5, "a 50-message first poll must be 5 batches, got {:?}", batches.iter().map(|b| b.len()).collect::<Vec<_>>());
+        assert!(batches.iter().all(|b| b.len() == 10), "each first-poll batch must hold 10 UIDs: {:?}", batches.iter().map(|b| b.len()).collect::<Vec<_>>());
+    }
+
+    fn msg(uid: i64) -> RawMessage {
+        RawMessage { uid, raw: Vec::new() }
+    }
+
+    struct FakeSource {
+        outcomes: Vec<Result<Vec<RawMessage>, MailClientError>>,
+        requested: Vec<Vec<u32>>,
+    }
+
+    impl FakeSource {
+        fn new(outcomes: Vec<Result<Vec<RawMessage>, MailClientError>>) -> Self {
+            Self { outcomes, requested: Vec::new() }
+        }
+    }
+
+    impl BatchSource for FakeSource {
+        async fn fetch_batch(&mut self, uid_batch: &[u32]) -> Result<Vec<RawMessage>, MailClientError> {
+            self.requested.push(uid_batch.to_vec());
+            assert!(!self.outcomes.is_empty(), "collect_batches fetched more batches than the test scripted");
+            self.outcomes.remove(0)
+        }
+    }
+
+    fn far_future() -> Instant {
+        Instant::now() + Duration::from_secs(3600)
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_batch_keeps_the_batches_that_already_succeeded() {
+        let mut source = FakeSource::new(vec![
+            Ok(vec![msg(1)]),
+            Ok(vec![msg(2)]),
+            Err(MailClientError::Timeout(FETCH_TIMEOUT)),
+            Ok(vec![msg(4)]),
+        ]);
+
+        let batches = collect_batches(&mut source, vec![vec![1], vec![2], vec![3], vec![4]], far_future())
+            .await
+            .expect("a timeout after progress must not fail the whole fetch");
+
+        assert_eq!(
+            source.requested,
+            vec![vec![1u32], vec![2], vec![3]],
+            "the loop must stop at the failing batch instead of pressing on"
+        );
+        assert_eq!(
+            batches.iter().map(|b| b.max_uid).collect::<Vec<_>>(),
+            vec![1, 2],
+            "both batches that succeeded before the timeout must survive it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failure_on_the_very_first_batch_surfaces_as_an_error() {
+        let mut source = FakeSource::new(vec![Err(MailClientError::Timeout(FETCH_TIMEOUT))]);
+
+        let result = collect_batches(&mut source, vec![vec![1], vec![2]], far_future()).await;
+
+        assert!(
+            matches!(result, Err(MailClientError::Timeout(_))),
+            "with no progress to preserve the failure must surface, not masquerade as an empty inbox"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_exhausted_budget_stops_new_batches_but_keeps_the_finished_ones() {
+        let mut source = FakeSource::new(vec![Ok(vec![msg(1)]), Ok(vec![msg(2)]), Ok(vec![msg(3)])]);
+        let already_passed = Instant::now() - Duration::from_secs(1);
+
+        let batches = collect_batches(&mut source, vec![vec![1], vec![2], vec![3]], already_passed)
+            .await
+            .expect("running out of budget is not an error");
+
+        assert_eq!(source.requested, vec![vec![1u32]], "the first batch must run, and no batch may start after the budget is gone");
+        assert_eq!(
+            batches.iter().map(|b| b.max_uid).collect::<Vec<_>>(),
+            vec![1],
+            "the batch that finished must still be returned for the caller to commit"
+        );
     }
 }

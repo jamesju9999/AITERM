@@ -93,6 +93,21 @@ async fn poll_once(app: &AppHandle, account: &MailAccountConfig) -> anyhow::Resu
     let mail_db = app.state::<MailDb>();
     let since_uid = mail_db::get_last_seen_uid(&mail_db.pool, &account.id).await?;
 
+    // Resolved *before* any IMAP traffic: without a classifier the poll can't
+    // proceed at all, and resolving afterwards meant a user with mail but no
+    // AI provider configured downloaded up to a full batch window of message
+    // bodies (attachments included) on every single cycle, bailed here, never
+    // reached `set_last_seen_uid`, and re-downloaded the identical messages
+    // forever — a fast track to Gmail's daily IMAP bandwidth cap, with
+    // nothing to show for it in the UI.
+    //
+    // This does resolve on cycles that turn out to have no new mail, which is
+    // fine: `resolve()` reads config plus the keychain and constructs a
+    // client — no network, except for an OAuth token refresh that is due
+    // anyway and happens at most once per token lifetime.
+    let router = app.state::<AiRouter>();
+    let provider = router.resolve().await?;
+
     let batches = fetch_new_messages(
         &account.imap_host,
         account.imap_port,
@@ -100,13 +115,6 @@ async fn poll_once(app: &AppHandle, account: &MailAccountConfig) -> anyhow::Resu
         &password,
         since_uid,
     ).await?;
-
-    if batches.is_empty() {
-        return Ok(());
-    }
-
-    let router = app.state::<AiRouter>();
-    let provider = router.resolve().await?;
 
     for batch in batches {
         for raw in batch.messages {
