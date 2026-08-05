@@ -11,7 +11,6 @@ import {
   RefreshIcon,
   CodeIcon,
   LibraryIcon,
-  MailIcon,
 } from "../Icons";
 import "./index.css";
 
@@ -49,7 +48,12 @@ export function NewTabPicker({ onSelect, onClose }: Props) {
     { type: "loop-studio",   icon: <RefreshIcon size={18} />,     label: t.loop_studio_tab,    desc: t.new_loop_studio_desc },
     { type: "code-assistant", icon: <CodeIcon size={18} />,       label: t.code_assistant_tab, desc: t.new_code_assistant_desc },
     { type: "knowledge-base", icon: <LibraryIcon size={18} />,     label: t.knowledge_base_tab, desc: t.new_knowledge_base_desc },
-    { type: "mail",           icon: <MailIcon size={18} />,       label: t.mail_tab,           desc: t.new_mail_desc },
+    // The Mail entry is hidden while the feature is not being shipped to
+    // users. The "mail" tab type, MailView, and its whole backend remain wired
+    // up — restoring it means putting this line back, plus the matching button
+    // in SettingsView, and re-adding the MailIcon import above. See the notes in
+    // docs/superpowers/specs/2026-08-04-ai-mail-assistant-design.md.
+    // { type: "mail",         icon: <MailIcon size={18} />,       label: t.mail_tab,           desc: t.new_mail_desc },
   ];
 
   return (
