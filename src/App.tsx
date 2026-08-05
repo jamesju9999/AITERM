@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import { TerminalApp } from "./components/TerminalApp";
 import { SettingsView } from "./components/Settings/SettingsView";
 import { OnboardingWizard } from "./components/Onboarding/OnboardingWizard";
 import { UpdateModal } from "./components/UpdateModal";
 import { AppImageIntegrationPrompt } from "./components/AppImageIntegrationPrompt";
+import { ClaudeNotifPrompt } from "./components/ClaudeNotifPrompt";
 import { useUpdaterContext } from "./contexts/UpdaterContext";
 import { isOnboardingDone } from "./ipc/config";
 import "./App.css";
@@ -14,6 +15,11 @@ export function AppRoutes() {
   const location = useLocation();
   const [ready, setReady] = useState(false);
   const { hasUpdate } = useUpdaterContext();
+  const [claudeSeen, setClaudeSeen] = useState(false);
+  const [appImageOffering, setAppImageOffering] = useState(false);
+  // 三張角落卡片固定在右下角同一個位置，同時出現會完全重疊。
+  // 優先序：更新 > AppImage > Claude 通知。
+  const onClaudeDetected = useCallback(() => setClaudeSeen(true), []);
 
   useEffect(() => {
     // On mount: check if this is the first launch.
@@ -58,7 +64,7 @@ export function AppRoutes() {
           pointerEvents: isTerminal ? "auto" : "none"
         }}
       >
-        <TerminalApp hasUpdate={hasUpdate} />
+        <TerminalApp hasUpdate={hasUpdate} onClaudeDetected={onClaudeDetected} />
       </div>
 
       {/* Settings / Onboarding Overlays */}
@@ -71,7 +77,8 @@ export function AppRoutes() {
         </div>
       )}
       <UpdateModal />
-      <AppImageIntegrationPrompt hasUpdate={hasUpdate} />
+      <AppImageIntegrationPrompt hasUpdate={hasUpdate} onOfferingChange={setAppImageOffering} />
+      <ClaudeNotifPrompt claudeSeen={claudeSeen} blocked={hasUpdate || appImageOffering} />
     </div>
   );
 }

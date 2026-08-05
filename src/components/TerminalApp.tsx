@@ -54,9 +54,10 @@ function saveSessionTabs(tabs: Tab[]) {
 
 interface TerminalAppProps {
   hasUpdate?: boolean;
+  onClaudeDetected?: () => void;
 }
 
-export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
+export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalAppProps) {
   const { t } = useLocale();
   const [tabs, setTabs] = useState<Tab[]>(() => {
     // Try to restore previous session tabs first
@@ -460,6 +461,7 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
                     );
                   }}
                   onAttention={(kind) => handleAttention(tab.id, tab.title, kind)}
+                  onClaudeDetected={onClaudeDetected}
                 />
               )}
             </div>

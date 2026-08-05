@@ -49,6 +49,7 @@ import { TerminalBlockCard } from "./TerminalBlockCard";
 import { findNextBlockMatch, findPreviousBlockMatch, type BlockSearchCursor } from "../lib/blockSearch";
 import { summarizeCommands } from "../lib/summarizeTab";
 import { getGitBlockInfo } from "../ipc/vcs";
+import { isClaudeCommand } from "../lib/claudeCommand";
 import "./TerminalView.css";
 
 interface PreviewState {
@@ -120,6 +121,8 @@ export interface TerminalViewProps {
    *  「這個分頁是不是 active」與「視窗有沒有 focus」都由 TerminalApp 判斷——
    *  避免那些條件在 xterm / PTY 事件的 closure 裡變 stale。 */
   onAttention?: (kind: AttentionKind) => void;
+  /** 使用者在這個分頁執行了 Claude Code。用來提示他設定 terminal bell。 */
+  onClaudeDetected?: () => void;
 }
 
 // The live terminal pane's visible height shrinks to just the current content
@@ -144,7 +147,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onSummaryUpdate, onAttention }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onSummaryUpdate, onAttention, onClaudeDetected }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -270,12 +273,20 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     emitAttention(attentionForExitCode(exitCode));
   }, [emitAttention]);
 
+  const onClaudeDetectedRef = useRef(onClaudeDetected);
+  useEffect(() => { onClaudeDetectedRef.current = onClaudeDetected; }, [onClaudeDetected]);
+
+  const handleCommandStarted = useCallback((cmd: string) => {
+    if (isClaudeCommand(cmd)) onClaudeDetectedRef.current?.();
+  }, []);
+
   const { blocks, isAlternateBuffer, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo } = useTerminalBlocks(
     sessionId,
     termState,
     lastCwdRef,
     forceLiveRepaint,
     handleCommandSettled,
+    handleCommandStarted,
   );
 
   // 終端機的 bell（\x07）。CLI 工具停下來等使用者回答時多半會敲一次——

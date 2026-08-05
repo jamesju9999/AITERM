@@ -14,9 +14,11 @@ import "./UpdateModal.css";
 interface Props {
   /** The update prompt occupies the same corner and takes precedence. */
   hasUpdate: boolean;
+  /** 回報這張卡片是否正在顯示，讓 App 能排出角落卡片的優先序。 */
+  onOfferingChange?: (offering: boolean) => void;
 }
 
-export function AppImageIntegrationPrompt({ hasUpdate }: Props) {
+export function AppImageIntegrationPrompt({ hasUpdate, onOfferingChange }: Props) {
   const { t } = useLocale();
   const [offer, setOffer] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +41,10 @@ export function AppImageIntegrationPrompt({ hasUpdate }: Props) {
     return () => { cancelled = true; };
   }, []);
 
-  if (!offer || hasUpdate) return null;
+  const offering = offer && !hasUpdate;
+  useEffect(() => { onOfferingChange?.(offering); }, [offering, onOfferingChange]);
+
+  if (!offering) return null;
 
   const accept = async () => {
     try {
