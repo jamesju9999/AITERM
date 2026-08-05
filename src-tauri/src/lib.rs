@@ -8,6 +8,7 @@ pub mod db;
 pub mod enterprise;
 pub mod guard;
 pub mod knowledge_base;
+pub mod mail;
 pub mod mcp;
 pub mod pty;
 pub mod python_env;
