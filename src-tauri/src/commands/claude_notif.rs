@@ -20,14 +20,14 @@ fn read_object(settings_path: &Path) -> Result<Map<String, Value>, String> {
         return Ok(Map::new());
     }
     let text = fs::read_to_string(settings_path)
-        .map_err(|e| format!("讀取 {} 失敗：{e}", settings_path.display()))?;
+        .map_err(|e| format!("failed to read {}: {e}", settings_path.display()))?;
     if text.trim().is_empty() {
         return Ok(Map::new());
     }
     match serde_json::from_str::<Value>(&text) {
         Ok(Value::Object(map)) => Ok(map),
-        Ok(_) => Err(format!("{} 的最外層不是 JSON 物件", settings_path.display())),
-        Err(e) => Err(format!("{} 不是合法的 JSON：{e}", settings_path.display())),
+        Ok(_) => Err(format!("{} does not have a JSON object at its top level", settings_path.display())),
+        Err(e) => Err(format!("{} is not valid JSON: {e}", settings_path.display())),
     }
 }
 
@@ -51,20 +51,37 @@ pub(crate) fn needs_prompt_at(settings_path: &Path) -> bool {
 
 /// 把 `preferredNotifChannel` 設成 `terminal_bell`，其餘內容原樣保留。
 ///
-/// 檔案不存在就建立（含上層目錄）。JSON 壞掉時回 Err 而且**不寫入**：
-/// 使用者的設定檔壞掉是他自己要處理的事，不是我們拿來重置的理由。
+/// 檔案不存在就建立——上層目錄不用另外建：`needs_prompt_at` 在卡片出現前
+/// 就已經確認過 parent 是目錄，這裡不會遇到目錄不存在的情況。JSON 壞掉時
+/// 回 Err 而且**不寫入**：使用者的設定檔壞掉是他自己要處理的事，不是我們
+/// 拿來重置的理由。
+///
+/// 寫入採「先寫暫存檔、成功了才 rename 過去」，避免磁碟空間不足或其他寫入
+/// 失敗把使用者原本的內容清空（`fs::write` 是先 truncate 再寫，寫到一半失敗
+/// 就會留下空檔案或半份 JSON）。rename 前先解開符號連結、複製原檔權限：
+/// dotfile 管理工具（chezmoi/stow/yadm）常把 settings.json 做成連結，且原檔
+/// 可能刻意設成 0600，兩者都不該被這次寫入動到。
 pub(crate) fn enable_bell_at(settings_path: &Path) -> Result<(), String> {
     let mut map = read_object(settings_path)?;
     map.insert(KEY.to_string(), Value::String(BELL.to_string()));
 
-    if let Some(parent) = settings_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("建立 {} 失敗：{e}", parent.display()))?;
-    }
     let text = serde_json::to_string_pretty(&Value::Object(map))
-        .map_err(|e| format!("序列化設定失敗：{e}"))?;
-    fs::write(settings_path, text + "\n")
-        .map_err(|e| format!("寫入 {} 失敗：{e}", settings_path.display()))
+        .map_err(|e| format!("failed to serialize settings: {e}"))?
+        + "\n";
+
+    let target = fs::canonicalize(settings_path).unwrap_or_else(|_| settings_path.to_path_buf());
+    let tmp = target.with_extension("json.aiterm-tmp");
+    fs::write(&tmp, &text).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("failed to write temp file: {e}")
+    })?;
+    if let Ok(meta) = fs::metadata(&target) {
+        let _ = fs::set_permissions(&tmp, meta.permissions());
+    }
+    fs::rename(&tmp, &target).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("failed to write {}: {e}", target.display())
+    })
 }
 
 #[cfg(test)]
@@ -185,6 +202,29 @@ mod tests {
         let original = "[1, 2, 3]";
         let path = claude_dir_with(Some(original));
         assert!(enable_bell_at(&path).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_failure_leaves_original_untouched() {
+        // 目的是證明 temp+rename 真的有擋住「寫到一半失敗」把原檔清空的問題
+        // （這正是 fs::write 直接 truncate 原檔會犯的錯）。用跨平台可控的方式
+        // 讓寫入真的失敗很難——這裡用拿掉目錄寫入權限來逼暫存檔寫不進去，
+        // 是 Unix-only 的權限模型，Windows 沒有對等的可攜作法，所以不跑。
+        use std::os::unix::fs::PermissionsExt;
+
+        let original = r#"{"model":"sonnet"}"#;
+        let path = claude_dir_with(Some(original));
+        let dir = path.parent().unwrap();
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o500)).unwrap();
+
+        let result = enable_bell_at(&path);
+
+        // 先復原權限，才能讀檔驗證、也才能讓 tempdir 之後清得掉。
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(result.is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), original);
     }
 }
