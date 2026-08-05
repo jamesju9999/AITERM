@@ -333,3 +333,43 @@
   border-radius: 8px;
   gap: 0;
 }
+
+/* 終端機提示點 — 錨在圖示右下角，與 mail unread（右上）分開。
+   狀態靠顏色區分；文字語意由 aria-label 承擔，點本身不含文字。 */
+.terminal-attention-badge {
+  position: absolute;
+  bottom: -5px;
+  right: -7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--bg-secondary, #151515);
+  pointer-events: none;
+}
+
+/* 只有「等待輸入」會動：它是唯一需要使用者「現在」動手的狀態。 */
+.terminal-attention-badge--waiting {
+  background: #f59e0b;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+  animation: terminal-attention-pulse 1.6s ease-in-out infinite;
+}
+
+.terminal-attention-badge--done {
+  background: #22c55e;
+}
+
+.terminal-attention-badge--failed {
+  background: #ef4444;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
+}
+
+@keyframes terminal-attention-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .terminal-attention-badge--waiting {
+    animation: none;
+  }
+}

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLocale } from "../../contexts/LocaleContext";
+import type { AttentionKind } from "../../lib/terminalAttention";
 import appIcon from "../../assets/icon.png";
 import {
   TerminalIcon,
@@ -36,6 +37,9 @@ export interface Tab {
    *  shown in the title bar as "<title> - <aiSummary>". In-memory only —
    *  never persisted to localStorage, regenerated after the app restarts. */
   aiSummary?: string;
+  /** 非 active 的終端機分頁發生了值得注意的事：在側邊欄圖示上顯示一個彩色點。
+   *  只存在記憶體，不進 localStorage——重開 app 後這些事件已經沒有意義。 */
+  attention?: AttentionKind;
 }
 
 export interface TabBarProps {
@@ -76,6 +80,15 @@ function getTabIcon(type: TabType): React.ReactNode {
     case "knowledge-base": return <LibraryIcon size={18} />;
     case "mail": return <MailIcon size={18} />;
     default: return <FileTextIcon size={18} />;
+  }
+}
+
+// 顏色只對看得見的人有意義，所以每個狀態都要有自己的文字說明。
+function attentionLabel(kind: AttentionKind, t: ReturnType<typeof useLocale>["t"]): string {
+  switch (kind) {
+    case "waiting": return t.terminal_attention_waiting_label;
+    case "done": return t.terminal_attention_done_label;
+    case "failed": return t.terminal_attention_failed_label;
   }
 }
 
@@ -183,6 +196,15 @@ export function TabBar({
                   is not the point, "something is broken" is. */}
               {tab.type === "mail" && mailFailedAccountCount > 0 && (
                 <span className="mail-connection-badge" role="img" aria-label={t.mail_connection_failed_label(String(mailFailedAccountCount))}>!</span>
+              )}
+              {/* 錨在圖示右下角。mail 的兩個 badge 只出現在 mail 分頁、
+                  這個只出現在 terminal 分頁，位置不會互撞。 */}
+              {tab.type === "terminal" && tab.attention && (
+                <span
+                  className={`terminal-attention-badge terminal-attention-badge--${tab.attention}`}
+                  role="img"
+                  aria-label={attentionLabel(tab.attention, t)}
+                />
               )}
             </span>
 
