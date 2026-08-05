@@ -141,7 +141,7 @@ export function routeAttention({ isActiveTab, windowFocused, kind }: AttentionIn
 - [ ] **Step 4: 執行測試，確認它通過**
 
 Run: `npx vitest run src/lib/terminalAttention.test.ts`
-Expected: PASS，9 個 test 全綠。
+Expected: PASS，6 個 test 全綠。
 
 - [ ] **Step 5: Commit**
 
@@ -803,8 +803,10 @@ Expected: 兩者皆 exit 0。
 
 - [ ] **Step 7: Lint**
 
-Run: `npm run lint`
-Expected: exit 0、沒有新的警告。
+Run: `npx eslint src/lib/terminalAttention.ts src/lib/notifyPermission.ts src/components/TabBar/index.tsx src/components/TerminalView.tsx src/components/TerminalApp.tsx src/hooks/useTerminalBlocks.ts src/hooks/useMailSync.ts`
+Expected: 沒有輸出、exit 0。
+
+> **不要用 `npm run lint` 當作通過標準。** 這個 repo 的全庫 lint 現況本來就是紅的（91 個問題／71 個 error），全部落在與本功能無關的檔案（`CodeAssistantView`、`CommandBookmarks`、`DocConverterView`、`FileExplorer` 等）。那是既有債務，不屬於本功能的範圍，也不該由本功能順手清理。只檢查自己動過的檔案。
 
 - [ ] **Step 8: Commit**
 
