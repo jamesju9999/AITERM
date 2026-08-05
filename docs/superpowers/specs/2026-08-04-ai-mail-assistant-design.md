@@ -18,7 +18,7 @@ AITerm 目前是「終端機 + AI 指令輔助」工具，沒有任何信箱相�
 
 **含：**
 - 多組 IMAP/SMTP 信箱帳號（通用協定，不做特定廠商 OAuth）
-- App 開啟期間、每帳號定時輪詢新信，AI 摘要 + 重要性判斷；重要信件跳 OS 通知，其餘只更新分頁圖示上的未讀數字
+- App 開啟期間、每帳號一條長連線，新信由伺服器即時推播（IMAP IDLE，RFC 2177；伺服器不支援才退回定時輪詢），AI 摘要 + 重要性判斷；重要信件跳 OS 通知，其餘只更新分頁圖示上的未讀數字
 - 摘要／回信草稿歷史本機持久化（SQLite），App 重啟後仍看得到
 - AI 自然語言語意搜尋（embedding 向量 + 關鍵字混合排序），本機找不到時退回即時 IMAP SEARCH
 - 附件（PDF/Word/Excel）文字擷取，併入摘要與搜尋索引；其餘類型只記 metadata
@@ -59,7 +59,7 @@ AITerm 目前是「終端機 + AI 指令輔助」工具，沒有任何信箱相�
 | 檔案 | 職責 |
 |---|---|
 | `src-tauri/src/mail/client.rs` | IMAP/SMTP 連線封裝：抓信（`BODY.PEEK`，不動 `\Seen` 避免影響使用者其他信箱用戶端的已讀狀態）、抓附件、SEARCH、寄信 |
-| `src-tauri/src/mail/poller.rs` | 每帳號一個背景任務：定時抓新信 → 附件下載＋文字擷取 → AI 摘要＋重要性判斷＋廣告信判斷（同一次 AI 呼叫的結構化輸出，本文＋附件文字一起送進 prompt）→ 寫 SQLite → 發固定名稱事件 `mail-sync-event`（payload 用 `kind` 欄位區分 `summary`/`important`，並帶 `account_id`——比照現有 `ai-stream`、`kb-sync-event` 的扁平事件模式，而非 PTY 那種每個 session 一個獨立事件名稱的 URI 命名法，因為信件同步不像終端機輸出那樣是高頻逐字元串流） |
+| `src-tauri/src/mail/poller.rs` | 每帳號一個背景任務，維持一條長連線並停在 IMAP IDLE 等伺服器推播（伺服器不支援 IDLE 才退回 `poll_interval_secs` 定時輪詢；連線斷掉以指數退避重連，上限為該間隔）：抓新信 → 附件下載＋文字擷取 → AI 摘要＋重要性判斷＋廣告信判斷（同一次 AI 呼叫的結構化輸出，本文＋附件文字一起送進 prompt）→ 寫 SQLite → 發固定名稱事件 `mail-sync-event`（payload 用 `kind` 欄位區分 `summary`/`important`，並帶 `account_id`——比照現有 `ai-stream`、`kb-sync-event` 的扁平事件模式，而非 PTY 那種每個 session 一個獨立事件名稱的 URI 命名法，因為信件同步不像終端機輸出那樣是高頻逐字元串流） |
 | `src-tauri/src/mail/attachment.rs` | 附件落地存檔（App data 目錄）＋文字擷取（PDF/DOCX/XLSX），失敗或超過大小上限只記 metadata |
 | `src-tauri/src/mail/search.rs` | 自然語言查詢 → embed → 本機 `mail_chunks` 暴力法 cosine＋關鍵字加權；分數過低時用 AI 抽取關鍵字/日期範圍，退回即時 IMAP SEARCH，找到後立刻快取＋切塊＋embed |
 | `src-tauri/src/mail/cleanup.rs` | 從 `mail_messages` 撈 `is_promotional = 1` 且尚未處理的候選信（可套用自然語言解析出的日期/帳號篩選），確認後對選中信件執行 IMAP MOVE 到 Trash 資料夾，並同步清掉本機快取 |
@@ -107,7 +107,7 @@ mail_reply_drafts(id, message_id FK, draft_text, created_at, sent_at NULL)
 
 ## 資料流程
 
-**輪詢**：`poller.rs` 定時任務 → IMAP 抓新信（`BODY.PEEK`）→ 有附件則下載＋文字擷取（`attachment.rs`）→ AI 摘要＋重要性判斷＋廣告信判斷（本文＋附件文字，同一次 AI 呼叫的結構化輸出）→ 寫 `mail_messages`＋切塊 embed 寫 `mail_chunks`＋附件 metadata 寫 `mail_attachments` → 發 `mail-sync-event`（`kind: "summary"`）。重要 → 額外發一筆 `kind: "important"` 的 `mail-sync-event`，前端跳 OS 通知；否則前端只更新未讀數字。
+**收信**：`poller.rs` 連上 IMAP 後先同步一次（補齊斷線期間的信，並比對伺服器端刪除），接著停在 IDLE 等推播。IDLE 只會說「有東西變了」而不會說是哪一封，所以收到通知就跑一次同步；`poll_interval_secs` 有兩個用途：一是 IDLE 的存活檢查上限，避免筆電睡眠或 NAT 斷線讓連線靜默死掉，二是刪除比對（`UID SEARCH ALL`，大信箱很重）的最小間隔——推播通知本身不做比對，但距離上次比對超過一個間隔就補做一次。同步內容：IMAP 抓新信（`BODY.PEEK`）→ 有附件則下載＋文字擷取（`attachment.rs`）→ AI 摘要＋重要性判斷＋廣告信判斷（本文＋附件文字，同一次 AI 呼叫的結構化輸出）→ 寫 `mail_messages`＋切塊 embed 寫 `mail_chunks`＋附件 metadata 寫 `mail_attachments` → 發 `mail-sync-event`（`kind: "summary"`）。重要 → 額外發一筆 `kind: "important"` 的 `mail-sync-event`，前端跳 OS 通知；否則前端只更新未讀數字。
 
 **搜尋**：使用者在 `MailView` 輸入自然語言 → `mail_search` → embed 查詢 → 本機 `mail_chunks` cosine+關鍵字比對 top-K，同信取最高分片段代表 → 分數過低 → AI 抽關鍵字/日期範圍 → IMAP SEARCH → 找到即快取入庫 → 回傳結果（寄件人/主旨/日期/既有 AI 摘要/命中片段）→ 前端列表；點選 → `MailDetailView` 顯示 `mail_messages.body_text` 全文與附件清單。
 

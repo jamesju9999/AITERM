@@ -289,6 +289,11 @@ export function MailAccountsPage() {
               }))}
               style={inputStyle}
             />
+            {/* The field no longer decides how fast mail arrives — that is
+                pushed by the server over IMAP IDLE — so say what it does
+                affect, or a user tuning it for faster mail is just tuning a
+                liveness check. */}
+            <div style={hintStyle}>{t.mail_poll_interval_hint}</div>
           </div>
 
           <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center", justifyContent: "flex-end" }}>
@@ -304,6 +309,8 @@ export function MailAccountsPage() {
 }
 
 const labelStyle: CSSProperties = { color: "#888", fontSize: 12 };
+// Sits under the input it explains, in the grid's value column.
+const hintStyle: CSSProperties = { gridColumn: 2, color: "#777", fontSize: 11, lineHeight: 1.5 };
 const inputStyle: CSSProperties = {
   background: "#0f0f0f", border: "1px solid #2a2a2a", color: "#e6e6e6",
   borderRadius: 4, padding: "6px 8px", fontSize: 13, width: "100%", boxSizing: "border-box",

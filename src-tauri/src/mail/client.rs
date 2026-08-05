@@ -1,6 +1,8 @@
 // src-tauri/src/mail/client.rs
 use std::future::Future;
 use std::time::{Duration, Instant};
+use async_imap::extensions::idle::IdleResponse;
+use async_imap::types::Capability;
 use tokio::net::TcpStream;
 use futures_util::TryStreamExt;
 
@@ -80,55 +82,186 @@ pub struct PollOutcome {
     pub batches: Vec<MessageBatch>,
 }
 
-/// Fetch messages newer than `since_uid` from INBOX (or, on the first poll
-/// for an account, the newest `FIRST_POLL_MAX_MESSAGES`), in batches of
-/// `FETCH_BATCH_SIZE`, using `BODY.PEEK[]` so the server's `\Seen` flag is
-/// never touched — AITerm tracks read/unread locally (see
-/// `db/mail.rs::mark_read_locally`) so it doesn't clobber the read state the
-/// user sees in their phone's mail app.
-///
-/// Batches come back oldest-first and are meant to be processed and committed
-/// one at a time: if the fetch dies partway through a large sync, the batches
-/// that already made it are returned as `Ok` (the failure is logged) so the
-/// caller can commit them and make forward progress, rather than throwing
-/// away work that succeeded and retrying it identically next cycle. Only a
-/// failure on the *first* batch — where there is no progress to preserve —
-/// surfaces as `Err`. Timeouts flow through that same path: they are applied
-/// per round trip, never around the loop, because a timeout wrapped around
-/// the loop drops the whole future and destroys every batch collected so far,
-/// which is precisely the failure mode this batching exists to survive.
-///
-/// The returned `PollOutcome` also carries what the same session learned about
-/// the mailbox as a whole — its UIDVALIDITY, and the full `UID SEARCH ALL` UID
-/// set the caller reconciles server-side deletions against. Both ride along on
-/// this one connection rather than opening a second.
-pub async fn fetch_new_messages(
-    host: &str,
-    port: u16,
-    username: &str,
-    password: &str,
-    since_uid: Option<i64>,
-    stored_uid_validity: Option<i64>,
-) -> Result<PollOutcome, MailClientError> {
-    let mut session = connect_and_login(host, port, username, password).await?;
+/// How an IDLE wait ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdleOutcome {
+    /// The server pushed an untagged response. IDLE does not say *which*
+    /// messages changed (it is EXISTS/EXPUNGE/FETCH), so the only useful
+    /// reaction is an ordinary sync.
+    NewData,
+    /// Nothing was heard from the server for the liveness interval.
+    Timeout,
+    /// The caller's shutdown signal interrupted the wait.
+    Interrupted,
+}
 
-    // From here on, every exit path (success, error, or empty result) must
-    // log out gracefully instead of dropping the session — an abrupt
-    // non-LOGOUT socket close leaves state on the server side until its own
-    // idle-timeout notices, and some providers (e.g. Gmail) cap concurrent
-    // connections per account, so a recurring per-poll error here could
-    // otherwise accumulate ungraceful terminations against the mail server.
-    //
-    // That is also why the timeouts live *inside* `fetch_selected`, around
-    // each individual round trip, rather than wrapping this call from the
-    // outside: an outer timeout drops the future mid-await, which skips the
-    // logout below — and a hung connection is precisely the case that leaves
-    // a dangling connection on the server. Timing out per round trip instead
-    // produces an ordinary `Err` that flows through the same cleanup path
-    // (and, for a batch fetch, through the partial-success path too).
-    let result = fetch_selected(&mut session, since_uid, stored_uid_validity).await;
-    logout(session).await;
-    result
+/// A live, logged-in IMAP session.
+///
+/// Exists because IDLE turns mail sync from "one connection per poll" into one
+/// long-lived connection per account: the session has to outlive a single sync
+/// so it can sit in IDLE between them.
+///
+/// The session is deliberately *not* reachable from outside this module, and
+/// every method that can lose it either returns `Self` back to the caller or
+/// consumes it — so the caller always knows whether it still owns something
+/// that needs a LOGOUT.
+pub struct MailConnection {
+    session: ImapSession,
+    supports_idle: bool,
+}
+
+impl MailConnection {
+    /// Connect, log in, and ask what the server can do.
+    ///
+    /// Every step keeps the per-round-trip `FETCH_TIMEOUT`; note that the
+    /// CAPABILITY step is the first point at which a live session exists, so
+    /// its failure path logs out rather than dropping the socket.
+    pub async fn connect(
+        host: &str,
+        port: u16,
+        username: &str,
+        password: &str,
+    ) -> Result<Self, MailClientError> {
+        let mut session = connect_and_login(host, port, username, password).await?;
+
+        let capabilities = with_timeout(async {
+            session.capabilities().await.map_err(|e| MailClientError::Command(e.to_string()))
+        })
+        .await;
+
+        match capabilities {
+            Ok(capabilities) => {
+                let names: Vec<String> = capabilities.iter().map(capability_name).collect();
+                let supports_idle = advertises_idle(names.iter().map(String::as_str));
+                if !supports_idle {
+                    log::info!("mail: {host} does not advertise IDLE; falling back to interval polling");
+                }
+                Ok(Self { session, supports_idle })
+            }
+            Err(e) => {
+                logout(session).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Whether this server advertised RFC 2177 IDLE, i.e. whether the caller
+    /// may push instead of poll.
+    pub fn supports_idle(&self) -> bool {
+        self.supports_idle
+    }
+
+    /// One sync over this connection. See `fetch_selected` for the batching
+    /// and timeout contract, which is unchanged from the days when each sync
+    /// got its own connection, and for what `reconcile` costs and skips.
+    pub async fn sync(
+        &mut self,
+        since_uid: Option<i64>,
+        stored_uid_validity: Option<i64>,
+        reconcile: bool,
+    ) -> Result<PollOutcome, MailClientError> {
+        fetch_selected(&mut self.session, since_uid, stored_uid_validity, reconcile).await
+    }
+
+    /// Sit in IDLE until the server says something, `liveness` elapses, or
+    /// `shutdown` resolves.
+    ///
+    /// Consumes and returns the connection, because `Session::idle` consumes
+    /// the session and only a successful `DONE` hands it back: an `Err` from
+    /// here means the session died with the socket and there is nothing left
+    /// to log out.
+    ///
+    /// `liveness` is deliberately far below the crate's 29-minute default. A
+    /// TCP connection killed by laptop sleep or a NAT timeout dies *silently*,
+    /// and the wait would otherwise block for half an hour before noticing,
+    /// making mail arbitrarily stale after every wake. The crate resets the
+    /// timer on every server response (`* OK Still here` keepalives included),
+    /// so a healthy connection rarely reaches it.
+    ///
+    /// The IDLE wait itself is the one round trip *not* wrapped in
+    /// `FETCH_TIMEOUT`: blocking for minutes is the entire point of it.
+    pub async fn idle_wait(
+        self,
+        liveness: Duration,
+        shutdown: impl Future<Output = ()>,
+    ) -> Result<(Self, IdleOutcome), MailClientError> {
+        let supports_idle = self.supports_idle;
+        let mut handle = self.session.idle();
+
+        // An ordinary round trip, so an ordinary timeout. On failure the
+        // `Handle` is dropped rather than logged out: it owns the session and
+        // the only way back out is `done()`, which panics (`assert!`) when
+        // IDLE never started — and a failure here cannot distinguish the two.
+        // Dropping closes the socket immediately, which is the same thing an
+        // aborted task did, and the connection has just proven unusable.
+        with_timeout(async {
+            handle.init().await.map_err(|e| MailClientError::Command(e.to_string()))
+        })
+        .await?;
+
+        // Scoped: `wait_with_timeout` borrows the handle mutably for as long as
+        // its future lives, and `done()` below needs the handle back.
+        let response = {
+            let (wait, stop) = handle.wait_with_timeout(liveness);
+            tokio::pin!(wait);
+            tokio::pin!(shutdown);
+            // Held alive on purpose: dropping the `StopSource` is the crate's
+            // documented way to end an IDLE, and it makes the wait resolve as
+            // `ManualInterrupt` at a defined point instead of cancelling the
+            // future mid-read. That is what lets a shutdown still send DONE
+            // and LOGOUT rather than yanking the socket.
+            let mut stop = Some(stop);
+            loop {
+                tokio::select! {
+                    result = &mut wait => break result,
+                    // Disabled once fired, so the completed future is never
+                    // polled again.
+                    _ = &mut shutdown, if stop.is_some() => stop = None,
+                }
+            }
+        };
+
+        // A wait that errors is a broken stream, so `done()` would only fail
+        // too; drop the handle and let the caller reconnect.
+        let response = response.map_err(|e| MailClientError::Command(e.to_string()))?;
+
+        let session = with_timeout(async {
+            handle.done().await.map_err(|e| MailClientError::Command(e.to_string()))
+        })
+        .await?;
+
+        let outcome = match response {
+            IdleResponse::NewData(_) => IdleOutcome::NewData,
+            IdleResponse::Timeout => IdleOutcome::Timeout,
+            IdleResponse::ManualInterrupt => IdleOutcome::Interrupted,
+        };
+        Ok((Self { session, supports_idle }, outcome))
+    }
+
+    /// Graceful close. The counterpart to every method above that hands the
+    /// connection back.
+    pub async fn logout(self) {
+        logout(self.session).await;
+    }
+}
+
+/// Whether a CAPABILITY response advertises RFC 2177 IDLE.
+///
+/// Case-insensitive: IMAP atoms are case-insensitive per RFC 3501, but
+/// `Capabilities::has_str` resolves an atom by exact `HashSet` membership, so a
+/// server answering `idle` would read as "no IDLE" and be silently demoted to
+/// polling forever. Matching whole atoms (not substrings) also keeps an
+/// unrelated `XIDLE`-style extension from being mistaken for the real thing.
+fn advertises_idle<'a>(capabilities: impl IntoIterator<Item = &'a str>) -> bool {
+    capabilities.into_iter().any(|cap| cap.eq_ignore_ascii_case("IDLE"))
+}
+
+fn capability_name(capability: &Capability) -> String {
+    match capability {
+        Capability::Imap4rev1 => "IMAP4rev1".to_string(),
+        Capability::Auth(mechanism) => format!("AUTH={mechanism}"),
+        Capability::Atom(atom) => atom.clone(),
+    }
 }
 
 /// Verify that credentials actually work: connect, log in, and SELECT INBOX,
@@ -204,10 +337,45 @@ async fn with_timeout<T>(
         .unwrap_or(Err(MailClientError::Timeout(FETCH_TIMEOUT)))
 }
 
+/// Fetch messages newer than `since_uid` from INBOX (or, on the first sync
+/// for an account, the newest `FIRST_POLL_MAX_MESSAGES`), in batches of
+/// `FETCH_BATCH_SIZE`, using `BODY.PEEK[]` so the server's `\Seen` flag is
+/// never touched — AITerm tracks read/unread locally (see
+/// `db/mail.rs::mark_read_locally`) so it doesn't clobber the read state the
+/// user sees in their phone's mail app.
+///
+/// Batches come back oldest-first and are meant to be processed and committed
+/// one at a time: if the fetch dies partway through a large sync, the batches
+/// that already made it are returned as `Ok` (the failure is logged) so the
+/// caller can commit them and make forward progress, rather than throwing
+/// away work that succeeded and retrying it identically next cycle. Only a
+/// failure on the *first* batch — where there is no progress to preserve —
+/// surfaces as `Err`. Timeouts flow through that same path: they are applied
+/// per round trip, never around the loop, because a timeout wrapped around
+/// the loop drops the whole future and destroys every batch collected so far,
+/// which is precisely the failure mode this batching exists to survive.
+///
+/// The timeouts also live here, per round trip, rather than around the caller:
+/// an outer timeout drops the future mid-await and so skips the caller's
+/// LOGOUT — and a hung connection is precisely the case that leaves a dangling
+/// session on the server. Timing out per round trip produces an ordinary `Err`
+/// that flows out through the caller's normal cleanup instead.
+///
+/// The returned `PollOutcome` also carries what this session learned about the
+/// mailbox as a whole: its UIDVALIDITY, and — when `reconcile` — the full
+/// `UID SEARCH ALL` UID set the caller reconciles server-side deletions
+/// against. `reconcile == false` yields `server_uids: None`, which the caller
+/// already treats as "reconciliation did not happen", so skipping it can never
+/// read as "the mailbox is empty".
+///
+/// SELECT is issued here on every sync, which is also what makes it safe for
+/// the caller to enter IDLE only after a successful sync: IDLE requires a
+/// selected mailbox, and this is the only place that selects one.
 async fn fetch_selected(
     session: &mut ImapSession,
     since_uid: Option<i64>,
     stored_uid_validity: Option<i64>,
+    reconcile: bool,
 ) -> Result<PollOutcome, MailClientError> {
     let mailbox = with_timeout(async {
         session
@@ -247,7 +415,7 @@ async fn fetch_selected(
     // caller — which deletes cached mail missing from this set — would erase
     // them the instant they landed. Taken last, everything we fetched was in
     // the mailbox at or before this point.
-    let server_uids = search_all_uids(session).await;
+    let server_uids = if reconcile { search_all_uids(session).await } else { None };
 
     Ok(PollOutcome { uid_validity, uid_validity_changed, server_uids, batches })
 }
@@ -519,6 +687,40 @@ mod tests {
             "a server that omits UIDVALIDITY tells us nothing; guessing 'changed' would wipe the cache every poll"
         );
         assert!(!uid_validity_changed(None, None));
+    }
+
+    #[test]
+    fn a_server_advertising_idle_gets_push() {
+        assert!(
+            advertises_idle(["IMAP4rev1", "IDLE", "MOVE"]),
+            "a server listing IDLE must be driven by push, not by the polling fallback"
+        );
+    }
+
+    #[test]
+    fn the_idle_capability_is_matched_case_insensitively() {
+        // IMAP atoms are case-insensitive, and async-imap's own `has_str` is
+        // not — a server answering `idle` would be demoted to polling forever.
+        assert!(
+            advertises_idle(["imap4rev1", "idle"]),
+            "a lowercase IDLE atom is still IDLE"
+        );
+    }
+
+    #[test]
+    fn a_server_without_idle_falls_back_to_polling() {
+        assert!(
+            !advertises_idle(["IMAP4rev1", "UIDPLUS", "MOVE"]),
+            "using IDLE against a server that never advertised it is forbidden by RFC 2177"
+        );
+        assert!(
+            !advertises_idle(["IMAP4rev1", "XIDLE-SOMETHING"]),
+            "a capability that merely contains 'IDLE' is a different extension"
+        );
+        assert!(
+            !advertises_idle(Vec::<&str>::new()),
+            "an empty capability list cannot be assumed to support IDLE"
+        );
     }
 
     fn msg(uid: i64) -> RawMessage {
