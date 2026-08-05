@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attentionForExitCode, routeAttention } from "./terminalAttention";
+import { attentionForExitCode, notifyBodyKeyFor, routeAttention } from "./terminalAttention";
 
 describe("routeAttention — 提示點", () => {
   it("非 active 分頁會設出對應的提示點", () => {
@@ -49,5 +49,21 @@ describe("attentionForExitCode", () => {
     expect(attentionForExitCode(1)).toBe("failed");
     expect(attentionForExitCode(-1)).toBe("failed");
     expect(attentionForExitCode(127)).toBe("failed");
+  });
+});
+
+describe("notifyBodyKeyFor", () => {
+  // 曾經被 reviewer 對調過一次，全部 563 個測試照樣綠燈——這三條就是專門
+  // 釘住這個對應關係，避免同樣的錯誤再發生一次卻沒有測試會發現。
+  it("waiting → terminal_notify_waiting", () => {
+    expect(notifyBodyKeyFor("waiting")).toBe("terminal_notify_waiting");
+  });
+
+  it("failed → terminal_notify_failed", () => {
+    expect(notifyBodyKeyFor("failed")).toBe("terminal_notify_failed");
+  });
+
+  it("done → null——done 不發通知，沒有對應的文案", () => {
+    expect(notifyBodyKeyFor("done")).toBeNull();
   });
 });

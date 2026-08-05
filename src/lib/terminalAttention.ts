@@ -34,3 +34,12 @@ export function routeAttention({ isActiveTab, windowFocused, kind }: AttentionIn
 export function attentionForExitCode(exitCode: number): AttentionKind {
   return exitCode === 0 ? "done" : "failed";
 }
+
+/** 通知內文要用哪一個 i18n key。done 不發通知，所以沒有對應。 */
+export function notifyBodyKeyFor(kind: AttentionKind): "terminal_notify_waiting" | "terminal_notify_failed" | null {
+  switch (kind) {
+    case "waiting": return "terminal_notify_waiting";
+    case "failed": return "terminal_notify_failed";
+    case "done": return null;
+  }
+}

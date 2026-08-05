@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { sendNotification } from "@tauri-apps/plugin-notification";
 import { ensureNotificationPermission } from "../lib/notifyPermission";
-import { routeAttention, type AttentionKind } from "../lib/terminalAttention";
+import { routeAttention, notifyBodyKeyFor, type AttentionKind } from "../lib/terminalAttention";
 import { TerminalView } from "./TerminalView";
 import { TabBar, type Tab } from "./TabBar";
 import { TitleBar } from "./TitleBar";
@@ -260,10 +260,12 @@ export function TerminalApp({ hasUpdate = false }: TerminalAppProps) {
     }
 
     if (notify) {
-      const body = kind === "waiting" ? t.terminal_notify_waiting : t.terminal_notify_failed;
-      ensureNotificationPermission().then((granted) => {
-        if (granted) sendNotification({ title: tabTitle, body });
-      }).catch(() => { /* 通知失敗不是使用者能處理的事 */ });
+      const bodyKey = notifyBodyKeyFor(kind);
+      if (bodyKey) {
+        ensureNotificationPermission().then((granted) => {
+          if (granted) sendNotification({ title: tabTitle, body: t[bodyKey] });
+        }).catch(() => { /* 通知失敗不是使用者能處理的事 */ });
+      }
     }
   }, [t]);
 
