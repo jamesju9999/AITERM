@@ -24,11 +24,15 @@ vi.mock("../ipc/mail", () => ({
 
 import { mailCountUnread } from "../ipc/mail";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { resetNotificationPermissionForTests } from "../lib/notifyPermission";
 
 describe("useMailSync", () => {
   beforeEach(() => {
     for (const key of Object.keys(listeners)) delete listeners[key];
     vi.clearAllMocks();
+    // 權限快取是模組層級的，會跨 test 存活。不重設的話，先跑的 test
+    // 快取了「已授權」，後面驗證「被拒絕」路徑的 test 就走不到 requestPermission。
+    resetNotificationPermissionForTests();
     vi.mocked(mailCountUnread).mockResolvedValue(2);
     vi.mocked(isPermissionGranted).mockResolvedValue(true);
     vi.mocked(requestPermission).mockResolvedValue("granted");
