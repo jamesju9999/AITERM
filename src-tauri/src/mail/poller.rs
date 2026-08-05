@@ -33,8 +33,8 @@ const RECONNECT_BASE_DELAY: Duration = Duration::from_secs(5);
 /// for a wedged one, which must not make removing an account hang the UI.
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How long a session must last to count as "came up properly", and so to
-/// clear the reconnect backoff.
+/// How long a session must hold *steady state* to count as "came up properly",
+/// and so to clear the reconnect backoff.
 ///
 /// The question the backoff needs answered is *not* "did a sync succeed" — a
 /// connection can sync once and then fail the same way forever (a server that
@@ -42,6 +42,12 @@ const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// socket the moment IDLE is issued). Counting that as progress pins the delay
 /// at `RECONNECT_BASE_DELAY` and turns the loop into a login-and-abandon storm,
 /// which is exactly how an account hits a provider's connection cap.
+///
+/// Measured from the point `drive_session` enters its wait loop, *not* from
+/// login — see `steady_lifetime`. Timed from login it was a proxy that the slow
+/// paths defeated: a server whose `SELECT INBOX` or `UID FETCH` hangs until
+/// `FETCH_TIMEOUT` produced a 30-second "lifetime" for a session that never
+/// worked at all, cleared the counter, and retried 5 seconds later, forever.
 const HEALTHY_SESSION_LIFETIME: Duration = Duration::from_secs(10);
 
 /// How many deletes may be queued for one account's task at a time. Small on
@@ -66,6 +72,18 @@ pub enum MailSyncEvent {
     /// others so the Mail tab's existing per-account refetch and the unread
     /// badge's refresh both pick removals up with no extra wiring.
     Removed { account_id: String, removed_count: u64 },
+    /// This account can no longer reach its mail server, so its Mail tab has
+    /// silently stopped updating. `message` is the underlying failure verbatim
+    /// (`login failed: …`, `connection error: …`), which is the part a user can
+    /// actually act on — a wrong App Password reads very differently from a
+    /// refused TCP connection.
+    ///
+    /// Emitted on the healthy → failing *transition* only, never per retry: see
+    /// `report_health`.
+    ConnectionFailed { account_id: String, message: String },
+    /// The account is reaching its mail server again. The counterpart
+    /// transition, and the only thing that clears the failure in the UI.
+    ConnectionRestored { account_id: String },
 }
 
 pub const MAIL_SYNC_EVENT: &str = "mail-sync-event";
@@ -211,16 +229,83 @@ fn time_until_reconcile(since_last_reconcile: Duration, interval: Duration) -> D
 
 /// The reconnect backoff counter after one connection ended.
 ///
-/// `lifetime` is how long the *established session* lasted — measured from a
-/// successful login, so a connect attempt that hangs and times out reports
-/// nothing and stays a failure. A session that came up and died again inside
-/// `HEALTHY_SESSION_LIFETIME` counts as a failure however much it managed to
-/// do first; anything longer clears the counter.
+/// `lifetime` is how long the session held *steady state* — the IDLE (or
+/// fallback poll) loop it reaches only after a sync has succeeded — and is
+/// `ZERO` for every exit that never got there, however long the attempt took.
+/// A session that reached steady state and lost it again inside
+/// `HEALTHY_SESSION_LIFETIME` counts as a failure; anything longer clears the
+/// counter.
+///
+/// Timing from login instead was the bug this replaces. The session clock then
+/// included the startup sync, and the slow failures live in the startup sync:
+/// a `SELECT INBOX` or `UID FETCH` that hangs until `FETCH_TIMEOUT` reported 30
+/// seconds of "lifetime" for a connection that never once worked, which cleared
+/// the counter and pinned the retry at `RECONNECT_BASE_DELAY` — one login every
+/// ~35s, forever, with the backoff never growing at all. Measured from steady
+/// state, the rule says exactly what it means: the session got up and stayed up.
 fn next_failure_count(current: u32, lifetime: Duration) -> u32 {
     if lifetime >= HEALTHY_SESSION_LIFETIME {
         0
     } else {
         current.saturating_add(1)
+    }
+}
+
+/// What, if anything, the UI must be told after a change in an account's
+/// connection health.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HealthReport {
+    /// Nothing changed. The overwhelmingly common answer.
+    Quiet,
+    Failed,
+    Recovered,
+}
+
+/// Whether an account's connection health crossed a boundary the user has to
+/// see, given the state last reported to them and whether it is working now.
+///
+/// Transitions only. A failing account retries on the backoff schedule above,
+/// which at the start of an outage is every five seconds: reporting each
+/// attempt would put an event on the bus and a banner repaint in the Mail tab
+/// at that rate for as long as the outage lasts, which is how a diagnostic
+/// becomes noise the user learns to ignore.
+///
+/// "Working" is deliberately *reaching* steady state rather than staying there
+/// for `HEALTHY_SESSION_LIFETIME`. The user's question is "is my mail arriving",
+/// and it starts arriving the moment the first sync of a connection succeeds;
+/// tying recovery to the backoff's threshold instead would leave the banner up
+/// for the entire life of a working connection, since that threshold is only
+/// known once the connection has already ended.
+fn health_report(was_failing: bool, working: bool) -> HealthReport {
+    match (was_failing, working) {
+        (false, false) => HealthReport::Failed,
+        (true, true) => HealthReport::Recovered,
+        _ => HealthReport::Quiet,
+    }
+}
+
+/// Emit the transition `health_report` decides on, and record it in `failing`.
+///
+/// Deliberately no OS notification: a connection that is down is not worth
+/// interrupting the user for — the poller is already retrying, and the Mail tab
+/// says so when they next look at it.
+fn report_health(app: &AppHandle, account_id: &str, failing: &mut bool, working: bool, reason: &str) {
+    let event = match health_report(*failing, working) {
+        HealthReport::Quiet => return,
+        HealthReport::Failed => {
+            *failing = true;
+            MailSyncEvent::ConnectionFailed {
+                account_id: account_id.to_string(),
+                message: reason.to_string(),
+            }
+        }
+        HealthReport::Recovered => {
+            *failing = false;
+            MailSyncEvent::ConnectionRestored { account_id: account_id.to_string() }
+        }
+    };
+    if let Err(e) = app.emit(MAIL_SYNC_EVENT, event) {
+        log::error!("mail: failed to emit {MAIL_SYNC_EVENT} (connection health) for account {account_id}: {e}");
     }
 }
 
@@ -249,17 +334,25 @@ pub async fn stop_all(app: &AppHandle) {
 enum ConnectionExit {
     /// The account was asked to stop. Do not reconnect.
     Shutdown,
-    /// The connection is gone. `session_lifetime` is how long there was a
-    /// logged-in session — `ZERO` when the connection never came up at all —
-    /// and is what the backoff uses to tell a connection that ran from one
-    /// that failed on arrival.
-    Retry { session_lifetime: Duration },
+    /// The connection is gone. `steady_lifetime` is how long the session held
+    /// steady state — `ZERO` when it never reached it — and is what the backoff
+    /// uses to tell a connection that ran from one that never worked.
+    Retry { steady_lifetime: Duration },
 }
 
 /// How a connection's inner loop ended, from the inside.
 enum SessionExit {
     Shutdown,
-    Retry,
+    Retry { steady_lifetime: Duration },
+}
+
+/// How long a session has held steady state, or `ZERO` if it never reached it.
+///
+/// The clock that `HEALTHY_SESSION_LIFETIME` is compared against. It starts
+/// after the first successful sync — not at login — so that every failure
+/// *during* startup counts as a failure no matter how slowly it failed.
+fn steady_lifetime(steady_since: Option<Instant>) -> Duration {
+    steady_since.map_or(Duration::ZERO, |since| since.elapsed())
 }
 
 /// One long-lived connection per account, re-established with backoff whenever
@@ -277,11 +370,15 @@ async fn poll_loop(
     let interval = effective_interval(account.poll_interval_secs);
 
     let mut consecutive_failures: u32 = 0;
+    // The health last reported to the UI, owned here so it survives across
+    // connections — which is what makes `report_health` able to emit on
+    // transitions rather than on every attempt.
+    let mut failing = false;
     loop {
-        match run_connection(&app, &account, interval, &mut shutdown, &mut delete_rx).await {
+        match run_connection(&app, &account, interval, &mut shutdown, &mut delete_rx, &mut failing).await {
             ConnectionExit::Shutdown => return,
-            ConnectionExit::Retry { session_lifetime } => {
-                consecutive_failures = next_failure_count(consecutive_failures, session_lifetime);
+            ConnectionExit::Retry { steady_lifetime } => {
+                consecutive_failures = next_failure_count(consecutive_failures, steady_lifetime);
             }
         }
 
@@ -308,17 +405,20 @@ async fn run_connection(
     interval: Duration,
     shutdown: &mut watch::Receiver<bool>,
     delete_rx: &mut mpsc::Receiver<DeleteRequest>,
+    failing: &mut bool,
 ) -> ConnectionExit {
     let secret_store = app.state::<Arc<SecretStore>>();
     let password = match secret_store.get(&mail_secret_key(&account.id)) {
         Ok(Some(password)) => password,
         Ok(None) => {
             log::warn!("mail: no password stored for account {}", account.id);
-            return ConnectionExit::Retry { session_lifetime: Duration::ZERO };
+            report_health(app, &account.id, failing, false, "no password is stored for this account");
+            return ConnectionExit::Retry { steady_lifetime: Duration::ZERO };
         }
         Err(e) => {
             log::warn!("mail: could not read the password for account {}: {e}", account.id);
-            return ConnectionExit::Retry { session_lifetime: Duration::ZERO };
+            report_health(app, &account.id, failing, false, &format!("could not read the stored password: {e}"));
+            return ConnectionExit::Retry { steady_lifetime: Duration::ZERO };
         }
     };
 
@@ -335,10 +435,14 @@ async fn run_connection(
         Ok(conn) => conn,
         Err(e) => {
             log::warn!("mail: could not connect account {}: {e}", account.id);
-            return ConnectionExit::Retry { session_lifetime: Duration::ZERO };
+            // `MailClientError`'s own wording, verbatim: "login failed: …" tells
+            // the user to check their App Password, "connection error: …" tells
+            // them to check the host or their network. Inventing a taxonomy
+            // here would only throw that distinction away.
+            report_health(app, &account.id, failing, false, &e.to_string());
+            return ConnectionExit::Retry { steady_lifetime: Duration::ZERO };
         }
     };
-    let connected_at = Instant::now();
 
     // Connecting can take up to three timeouts; a stop signalled in the middle
     // of it would otherwise not be seen until after the first sync, which is
@@ -348,17 +452,18 @@ async fn run_connection(
         return ConnectionExit::Shutdown;
     }
 
-    let (conn, exit) = drive_session(app, account, conn, interval, shutdown, delete_rx).await;
-    // Taken before the logout: the session's life ends when the loop above
-    // gives it up, and a slow logout is not uptime.
-    let session_lifetime = connected_at.elapsed();
+    // `drive_session` reports health itself: recovery is only observable from
+    // the inside, at the moment the session reaches steady state, and a
+    // connection that ends *after* reaching it is an ordinary reconnect rather
+    // than something to put in front of the user.
+    let (conn, exit) = drive_session(app, account, conn, interval, shutdown, delete_rx, failing).await;
     if let Some(conn) = conn {
         conn.logout().await;
     }
 
     match exit {
         SessionExit::Shutdown => ConnectionExit::Shutdown,
-        SessionExit::Retry => ConnectionExit::Retry { session_lifetime },
+        SessionExit::Retry { steady_lifetime } => ConnectionExit::Retry { steady_lifetime },
     }
 }
 
@@ -374,12 +479,13 @@ async fn drive_session(
     interval: Duration,
     shutdown: &mut watch::Receiver<bool>,
     delete_rx: &mut mpsc::Receiver<DeleteRequest>,
+    failing: &mut bool,
 ) -> (Option<MailConnection>, SessionExit) {
     // Checked before the first sync, not only after it: that sync classifies
     // every message it finds, one LLM call each, so on a first sync it is
     // minutes long. A stop that arrives just before it must not have to wait
-    // it out. (`sync_and_persist` also checks between messages, which is what
-    // bounds a stop that arrives *during* it.)
+    // it out. (`sync_and_persist` also checks before the fetch and between
+    // messages, which is what bounds a stop that arrives *during* it.)
     if *shutdown.borrow() {
         return (Some(conn), SessionExit::Shutdown);
     }
@@ -393,8 +499,28 @@ async fn drive_session(
     let reconcile = should_reconcile(SyncTrigger::Connected, last_reconcile.elapsed(), interval);
     if let Err(e) = sync_and_persist(app, account, &mut conn, reconcile, shutdown).await {
         log::warn!("mail sync failed for account {}: {e}", account.id);
-        return (Some(conn), SessionExit::Retry);
+        // The one exit in this function that never reached steady state, and
+        // so the one that means "this account is not working". Every exit
+        // below has already had a sync succeed on this connection, which is
+        // an ordinary reconnect and not the user's problem.
+        report_health(app, &account.id, failing, false, &e.to_string());
+        return (Some(conn), SessionExit::Retry { steady_lifetime: Duration::ZERO });
     }
+
+    // The sync above returns `Ok(())` without doing anything when a stop was
+    // already pending, so without this a stop landing there would be read as a
+    // sync that succeeded — declaring steady state, and telling a user whose
+    // account is failing that it just recovered.
+    if *shutdown.borrow() {
+        return (Some(conn), SessionExit::Shutdown);
+    }
+
+    // Steady state: a sync has succeeded, so mail is flowing, and the clock the
+    // reconnect backoff measures starts here rather than at login. Everything
+    // above is startup, and a failure in startup must count as a failure
+    // however long it took to fail.
+    let steady_since = Some(Instant::now());
+    report_health(app, &account.id, failing, true, "");
 
     if !conn.supports_idle() {
         // Unchanged pre-IDLE behavior, for servers that cannot push — plus the
@@ -424,7 +550,9 @@ async fn drive_session(
                 }
                 match handle_delete(&mut conn, request).await {
                     DeleteExit::Continue => continue,
-                    DeleteExit::Reconnect => return (Some(conn), SessionExit::Retry),
+                    DeleteExit::Reconnect => {
+                        return (Some(conn), SessionExit::Retry { steady_lifetime: steady_lifetime(steady_since) })
+                    }
                 }
             }
             let reconcile = should_reconcile(SyncTrigger::PollInterval, last_reconcile.elapsed(), interval);
@@ -433,7 +561,7 @@ async fn drive_session(
             }
             if let Err(e) = sync_and_persist(app, account, &mut conn, reconcile, shutdown).await {
                 log::warn!("mail poll failed for account {}: {e}", account.id);
-                return (Some(conn), SessionExit::Retry);
+                return (Some(conn), SessionExit::Retry { steady_lifetime: steady_lifetime(steady_since) });
             }
         }
     }
@@ -478,7 +606,7 @@ async fn drive_session(
                         "the connection to the mail server ended before the message could be moved to Trash: {e}"
                     )));
                 }
-                return (None, SessionExit::Retry);
+                return (None, SessionExit::Retry { steady_lifetime: steady_lifetime(steady_since) });
             }
         };
         conn = returned;
@@ -506,7 +634,9 @@ async fn drive_session(
             // IDLE, nor bypass that logout.
             match handle_delete(&mut conn, request).await {
                 DeleteExit::Continue => {}
-                DeleteExit::Reconnect => return (Some(conn), SessionExit::Retry),
+                DeleteExit::Reconnect => {
+                    return (Some(conn), SessionExit::Retry { steady_lifetime: steady_lifetime(steady_since) })
+                }
             }
         }
 
@@ -515,6 +645,16 @@ async fn drive_session(
             // never what — so the one useful reaction is an ordinary sync.
             IdleOutcome::NewData => SyncTrigger::IdleNotification,
             IdleOutcome::Timeout => SyncTrigger::LivenessTimeout,
+            // The reconcile deadline and a stop can become ready in the same
+            // poll of the `select!` inside `idle_wait`, and it is free to pick
+            // the deadline. Servicing it would then cost a provider resolve, a
+            // `UID SEARCH ALL` and a fetch before the check at the top of this
+            // loop was reached again — all of it inside the five seconds the
+            // stop has to send LOGOUT in. Ordered above the plain arm on
+            // purpose: below it, it would never match.
+            IdleOutcome::ReconcileDue if *shutdown.borrow() => {
+                return (Some(conn), SessionExit::Shutdown)
+            }
             IdleOutcome::ReconcileDue => SyncTrigger::ReconcileDue,
             // Only a stop we actually signalled ends the account's task.
             // Reading any other interrupt as a stop would silently kill mail
@@ -532,7 +672,7 @@ async fn drive_session(
                     "mail: IDLE for account {} was interrupted with no stop pending; reconnecting",
                     account.id
                 );
-                return (Some(conn), SessionExit::Retry);
+                return (Some(conn), SessionExit::Retry { steady_lifetime: steady_lifetime(steady_since) });
             }
         };
 
@@ -543,7 +683,7 @@ async fn drive_session(
 
         if let Err(e) = sync_and_persist(app, account, &mut conn, reconcile, shutdown).await {
             log::warn!("mail sync failed for account {}: {e}", account.id);
-            return (Some(conn), SessionExit::Retry);
+            return (Some(conn), SessionExit::Retry { steady_lifetime: steady_lifetime(steady_since) });
         }
     }
 }
@@ -646,7 +786,34 @@ async fn sync_and_persist(
     let router = app.state::<AiRouter>();
     let provider = router.resolve().await?;
 
-    let outcome = conn.sync(since_uid, stored_uid_validity, reconcile).await?;
+    // The last free moment before the network phase. Everything from here to
+    // the batch loop is IMAP I/O — a SELECT and a UID SEARCH worth up to
+    // `FETCH_TIMEOUT` each, then up to `TOTAL_FETCH_BUDGET` of UID FETCHes —
+    // and `resolve()` above can itself have just spent a round trip refreshing
+    // an OAuth token, which is exactly the window a stop lands in.
+    if *shutdown.borrow() {
+        return Ok(());
+    }
+
+    // `should_stop` is what makes the rest of that phase abandonable: without
+    // it the check above is the last one for up to two minutes, far past the
+    // graceful-stop budget, so the task gets aborted and the session is left on
+    // the server with no LOGOUT.
+    let outcome = conn.sync(since_uid, stored_uid_validity, reconcile, || *shutdown.borrow()).await?;
+
+    // A stop landed between two fetch batches. Treated exactly like the
+    // mid-classification stop further down: return *without*
+    // `set_last_seen_uid`, because the UIDs this sync planned to fetch and
+    // never did sit below batches it did fetch, and advancing the cursor over
+    // them would skip them permanently. Nothing has been classified or
+    // inserted yet, so there is nothing to keep — the fetched batches are
+    // simply fetched again on the next connection, at no LLM cost.
+    // Reconciliation is skipped too (`server_uids` is already `None` for an
+    // interrupted fetch): a partial view of the mailbox is not something to
+    // reconcile against.
+    if outcome.interrupted {
+        return Ok(());
+    }
 
     // Before anything is inserted: under a new UIDVALIDITY the cached rows are
     // keyed by UIDs that no longer identify anything, and the batches below
@@ -751,11 +918,21 @@ async fn sync_and_persist(
         if stopped_mid_batch {
             // Deliberately returns *without* `set_last_seen_uid`: this batch's
             // `max_uid` covers messages we never got to, and advancing the
-            // cursor past them would skip them permanently. The handful
-            // already inserted are simply re-fetched on the next connection,
-            // where UNIQUE(account_id, uid) turns the re-insert into the
-            // logged no-op below. Skips the reconciliation too — a partial
-            // view of the mailbox is not something to reconcile against.
+            // cursor past them would skip them permanently. That is the right
+            // trade, but it is not a free one, and it is worth being honest
+            // about the price. The messages this batch already inserted are
+            // fetched again on the next connection, and `classify_message`
+            // above runs *before* `insert_message` — so each duplicate costs a
+            // fresh LLM call, and the insert that follows it is a plain INSERT
+            // that then trips `UNIQUE(account_id, uid)` and surfaces as the
+            // `failed to insert message uid=…` warning below, which reads like
+            // a real error but is expected here. The waste is bounded at
+            // `FETCH_BATCH_SIZE - 1` (9) redundant classifications, since every
+            // earlier batch has already committed its cursor. Skipping mail
+            // permanently is the worse outcome by a wide margin.
+            //
+            // Skips the reconciliation too — a partial view of the mailbox is
+            // not something to reconcile against.
             return Ok(());
         }
 
@@ -892,24 +1069,95 @@ mod tests {
         // delay at 5s forever — a login and an abandoned session every 5s,
         // which caps a Gmail account inside about 75 seconds.
         assert_eq!(
-            next_failure_count(1, Duration::from_secs(1)),
+            next_failure_count(1, steady_lifetime_of(Duration::from_secs(1))),
             2,
-            "a session that came up and died a second later has not proved anything works"
+            "a session that reached steady state and lost it a second later has not proved anything works"
         );
     }
 
     #[test]
     fn a_session_that_ran_for_a_while_clears_the_backoff() {
         assert_eq!(
-            next_failure_count(7, Duration::from_secs(3600)),
+            next_failure_count(7, steady_lifetime_of(Duration::from_secs(3600))),
             0,
             "an hour of uptime means the next failure is a fresh one, not a continuing outage"
         );
         assert_eq!(
+            // The exact boundary, so passed straight in rather than through
+            // `steady_lifetime_of`, whose `elapsed()` would land just above it.
             next_failure_count(7, HEALTHY_SESSION_LIFETIME),
             0,
             "the threshold itself counts as healthy"
         );
+    }
+
+    // The residual the previous round left behind. The session clock used to
+    // start at login, so it included the startup sync — and the slow failures
+    // live in the startup sync. A server whose `SELECT INBOX` or `UID FETCH`
+    // hangs until `FETCH_TIMEOUT` (30s) produced a "lifetime" of 30s for a
+    // connection that never worked once, which cleared the counter and left the
+    // delay at 5s: one login every ~35 seconds, forever, with the backoff never
+    // growing at all.
+    #[test]
+    fn a_sync_that_hangs_until_it_times_out_never_counted_as_uptime() {
+        let never_reached_steady_state = steady_lifetime(None);
+
+        assert_eq!(
+            never_reached_steady_state,
+            Duration::ZERO,
+            "an exit before the wait loop must report nothing, however long the attempt took"
+        );
+
+        let mut failures = 0u32;
+        let delays: Vec<Duration> = (0..4)
+            .map(|_| {
+                failures = next_failure_count(failures, never_reached_steady_state);
+                reconnect_delay(failures, INTERVAL)
+            })
+            .collect();
+        assert_eq!(
+            delays,
+            vec![
+                Duration::from_secs(10),
+                Duration::from_secs(20),
+                Duration::from_secs(40),
+                Duration::from_secs(80),
+            ],
+            "a sync that fails slowly must back off exactly like one that fails fast; a flat 5s here is a login storm"
+        );
+    }
+
+    // The other half of the same residual: a first sync on a large mailbox over
+    // a slow link can take longer than HEALTHY_SESSION_LIFETIME all by itself,
+    // so a login-timed clock read a connection that died the instant it reached
+    // IDLE as twelve healthy seconds.
+    #[test]
+    fn a_slow_startup_sync_does_not_count_towards_the_healthy_threshold() {
+        // Logged in 12 seconds ago, all of it spent in the startup sync, and
+        // IDLE fails the instant that sync returns.
+        let logged_in_at = Instant::now() - Duration::from_secs(12);
+        let steady_state_reached_at = Instant::now();
+        // Precondition, not a claim about the code under test: this only
+        // reproduces the bug if the old login-timed clock would have called
+        // this session healthy.
+        assert!(logged_in_at.elapsed() >= HEALTHY_SESSION_LIFETIME);
+
+        let lifetime = steady_lifetime(Some(steady_state_reached_at));
+
+        assert!(
+            lifetime < HEALTHY_SESSION_LIFETIME,
+            "the clock must start at steady state, so a 12s sync followed by an instant IDLE failure is not 12s of health"
+        );
+        assert_eq!(
+            next_failure_count(0, lifetime),
+            1,
+            "and the attempt must therefore count as a failure"
+        );
+    }
+
+    /// A session that reached steady state `held` ago.
+    fn steady_lifetime_of(held: Duration) -> Duration {
+        steady_lifetime(Some(Instant::now() - held))
     }
 
     #[test]
@@ -942,6 +1190,94 @@ mod tests {
                 Duration::from_secs(160),
             ],
             "a persistently broken connection must escalate; a flat 5s here is a login-and-abandon storm against the provider"
+        );
+    }
+
+    // Fix 1's whole point: a wrong password, a revoked App Password or a dead
+    // network used to reach the user as nothing but a `log::warn!` in a log
+    // already full of unrelated heartbeat warnings.
+    #[test]
+    fn the_first_failure_is_reported_to_the_user() {
+        assert_eq!(
+            health_report(false, false),
+            HealthReport::Failed,
+            "an account that stops reaching its server must say so; the Mail tab otherwise just stops updating"
+        );
+    }
+
+    // The property that keeps the diagnostic from becoming noise. A failing
+    // account retries every 5s at the start of an outage, so reporting per
+    // attempt would mean an event and a banner repaint at that rate for as long
+    // as the outage lasts.
+    #[test]
+    fn a_failing_account_is_reported_once_and_not_once_per_retry() {
+        let mut failing = false;
+        let mut reports = Vec::new();
+        // Ten consecutive failed attempts — a plain outage.
+        for _ in 0..10 {
+            let report = health_report(failing, false);
+            if report != HealthReport::Quiet {
+                failing = report == HealthReport::Failed;
+            }
+            reports.push(report);
+        }
+
+        // Asserted as the whole sequence rather than as a count plus a spot
+        // check: "how many" and "which one" are one fact here, and splitting
+        // them would leave the second assertion unable to fail on its own.
+        let mut expected = vec![HealthReport::Quiet; 10];
+        expected[0] = HealthReport::Failed;
+        assert_eq!(
+            reports, expected,
+            "the first attempt reports, and the nine retries behind it say nothing"
+        );
+    }
+
+    #[test]
+    fn recovery_is_reported_so_the_banner_can_clear() {
+        assert_eq!(
+            health_report(true, true),
+            HealthReport::Recovered,
+            "a failure the user can never see the end of is worse than no failure report at all"
+        );
+    }
+
+    // Also the ordinary-reconnect case — a server hanging up a long-lived
+    // socket, a laptop waking. The next attempt reaches steady state, so the
+    // health never left "working" and no error may flash at a user whose mail
+    // is arriving perfectly normally.
+    #[test]
+    fn an_account_that_is_working_and_stays_working_says_nothing() {
+        assert_eq!(
+            health_report(false, true),
+            HealthReport::Quiet,
+            "every successful sync — and every ordinary reconnect — would otherwise emit an event"
+        );
+    }
+
+    #[test]
+    fn an_outage_that_ends_and_returns_is_reported_each_time() {
+        let mut failing = false;
+        let mut events = Vec::new();
+        // down, down, up, up, down, up
+        for working in [false, false, true, true, false, true] {
+            let report = health_report(failing, working);
+            match report {
+                HealthReport::Quiet => {}
+                HealthReport::Failed => { failing = true; events.push(report); }
+                HealthReport::Recovered => { failing = false; events.push(report); }
+            }
+        }
+
+        assert_eq!(
+            events,
+            vec![
+                HealthReport::Failed,
+                HealthReport::Recovered,
+                HealthReport::Failed,
+                HealthReport::Recovered,
+            ],
+            "each crossing must be reported exactly once, and none may be swallowed"
         );
     }
 

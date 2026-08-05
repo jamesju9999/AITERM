@@ -35,6 +35,17 @@
   flex-shrink: 0;
 }
 
+/* Deliberately a different shape from the delete failure above, not just a
+   different shade: that one is a one-off about a single row, this one says the
+   whole tab has stopped updating and stays until the account reconnects. */
+.mail-view__error--connection {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.1);
+  border-left: 3px solid #fbbf24;
+  padding: 6px 8px;
+  border-radius: 3px;
+}
+
 .mail-view__item {
   display: flex;
   align-items: flex-start;

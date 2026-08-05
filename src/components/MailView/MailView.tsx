@@ -56,6 +56,14 @@ export function MailView({ isActive, onMessageRead }: MailViewProps) {
   // carries the server's own reason ("no Trash folder", "server supports
   // neither MOVE nor UIDPLUS"), which is the whole point of showing it.
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Which accounts the poller currently can't reach, and why. Keyed by account
+  // rather than held as a single string because the poller runs one task per
+  // account: an account that broke while another one was on screen still has to
+  // explain itself when the user switches to it.
+  //
+  // Fed only by the backend's healthy <-> failing transition events, so this
+  // never churns per reconnect attempt.
+  const [connectionErrors, setConnectionErrors] = useState<Record<string, string>>({});
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -114,6 +122,25 @@ export function MailView({ isActive, onMessageRead }: MailViewProps) {
     let active = true;
     listen<MailSyncEvent>(MAIL_SYNC_EVENT, (event) => {
       if (!active) return;
+      // Handled ahead of the selected-account filter below, and for every
+      // account: a connection failure is the one event whose whole purpose is
+      // to still be on screen later, so dropping it because the user happened
+      // to be looking at a different account would defeat it.
+      if (event.payload.kind === "connection_failed") {
+        const { account_id, message } = event.payload;
+        setConnectionErrors((prev) => ({ ...prev, [account_id]: message }));
+        return;
+      }
+      if (event.payload.kind === "connection_restored") {
+        const { account_id } = event.payload;
+        setConnectionErrors((prev) => {
+          if (!(account_id in prev)) return prev;
+          const next = { ...prev };
+          delete next[account_id];
+          return next;
+        });
+        return;
+      }
       if (event.payload.account_id !== selectedAccountId) return;
       mailListMessages(event.payload.account_id).then((list) => {
         if (mountedRef.current) setMessages(list);
@@ -203,6 +230,9 @@ export function MailView({ isActive, onMessageRead }: MailViewProps) {
     return <div className="mail-view mail-view--empty">{t.mail_no_accounts}</div>;
   }
 
+  const selectedAccount = accounts.find((a) => a.id === selectedAccountId);
+  const connectionError = selectedAccountId ? connectionErrors[selectedAccountId] : undefined;
+
   return (
     <div className="mail-view">
       <select
@@ -215,6 +245,16 @@ export function MailView({ isActive, onMessageRead }: MailViewProps) {
           <option key={a.id} value={a.id}>{a.email}</option>
         ))}
       </select>
+      {/* A standing condition, not a transient one: it stays until the poller
+          reconnects, and it explains why the list below is not growing. Given
+          its own modifier class so it cannot be mistaken for the delete failure
+          underneath it — that one is about a single row and goes away by
+          itself; this one means nothing in this tab is up to date. */}
+      {connectionError && selectedAccount && (
+        <div className="mail-view__error mail-view__error--connection" role="alert">
+          {t.mail_connection_failed(selectedAccount.email)}{connectionError}
+        </div>
+      )}
       {/* Inline rather than replacing the list the way the load-failure states
           do: the messages are all still there, and the user needs to see which
           row they just failed to delete. */}

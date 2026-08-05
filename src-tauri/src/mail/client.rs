@@ -86,6 +86,13 @@ pub struct PollOutcome {
     /// kept apart in the type so that mistake cannot be made downstream.
     pub server_uids: Option<Vec<i64>>,
     pub batches: Vec<MessageBatch>,
+    /// The caller's `should_stop` fired between two batches, so this sync is
+    /// incomplete in a way no other field can express: `batches` covers only
+    /// part of what the SEARCH found, and the rest was never requested.
+    ///
+    /// The caller must therefore drop the whole outcome rather than commit it —
+    /// see `sync_and_persist`, which returns without advancing the cursor.
+    pub interrupted: bool,
 }
 
 /// How an IDLE wait ended.
@@ -202,13 +209,20 @@ impl MailConnection {
     /// One sync over this connection. See `fetch_selected` for the batching
     /// and timeout contract, which is unchanged from the days when each sync
     /// got its own connection, and for what `reconcile` costs and skips.
+    ///
+    /// `should_stop` is polled between batches and is what makes the network
+    /// phase of a sync abandonable — without it a stop signalled here waits out
+    /// the whole `TOTAL_FETCH_BUDGET`. It is a plain predicate rather than a
+    /// future so this module needs to know nothing about how the caller
+    /// signals a shutdown.
     pub async fn sync(
         &mut self,
         since_uid: Option<i64>,
         stored_uid_validity: Option<i64>,
         reconcile: bool,
+        should_stop: impl Fn() -> bool,
     ) -> Result<PollOutcome, MailClientError> {
-        fetch_selected(&mut self.session, since_uid, stored_uid_validity, reconcile).await
+        fetch_selected(&mut self.session, since_uid, stored_uid_validity, reconcile, should_stop).await
     }
 
     /// Sit in IDLE until the server says something, `liveness` elapses,
@@ -653,6 +667,7 @@ async fn fetch_selected(
     since_uid: Option<i64>,
     stored_uid_validity: Option<i64>,
     reconcile: bool,
+    should_stop: impl Fn() -> bool,
 ) -> Result<PollOutcome, MailClientError> {
     let mailbox = with_timeout(async {
         session
@@ -685,16 +700,22 @@ async fn fetch_selected(
 
     let planned = plan_fetch_batches(uids.into_iter().collect(), effective_since_uid);
 
-    let batches = collect_batches(session, planned, Instant::now() + TOTAL_FETCH_BUDGET).await?;
+    let (batches, interrupted) =
+        collect_batches(session, planned, Instant::now() + TOTAL_FETCH_BUDGET, should_stop).await?;
 
     // Deliberately *after* the fetch loop, never before: a UID SEARCH ALL taken
     // first would not list the messages this poll is about to insert, and the
     // caller — which deletes cached mail missing from this set — would erase
     // them the instant they landed. Taken last, everything we fetched was in
     // the mailbox at or before this point.
-    let server_uids = if reconcile { search_all_uids(session).await } else { None };
+    //
+    // Skipped entirely once the fetch was interrupted. The caller drops an
+    // interrupted sync whole, so the result would go unused — and this is the
+    // heaviest command in a sync, issued at the one moment the caller is on a
+    // seconds-long budget to send LOGOUT.
+    let server_uids = if reconcile && !interrupted { search_all_uids(session).await } else { None };
 
-    Ok(PollOutcome { uid_validity, uid_validity_changed, server_uids, batches })
+    Ok(PollOutcome { uid_validity, uid_validity_changed, server_uids, batches, interrupted })
 }
 
 /// Whether our cached UIDs belong to a different incarnation of the mailbox.
@@ -753,13 +774,35 @@ impl BatchSource for ImapSession {
 /// progress behind it surfaces as `Err`. `deadline` bounds the total time the
 /// same way: it is checked *between* batches, so it can delay progress but
 /// never destroy it.
+///
+/// `should_stop` is the exception to that "never destroy it" rule, and is the
+/// only cancellation point in the network phase of a sync. When it fires the
+/// loop returns `interrupted = true` alongside whatever it had, and the caller
+/// discards the lot: a stop is on a five-second budget, and every batch kept
+/// would cost an LLM call per message to process before the LOGOUT could be
+/// sent. Fetching them again on the next connection is the cheap half of that
+/// trade.
+///
+/// Returns `(batches, interrupted)`.
 async fn collect_batches<S: BatchSource>(
     source: &mut S,
     planned: Vec<Vec<u32>>,
     deadline: Instant,
-) -> Result<Vec<MessageBatch>, MailClientError> {
+    should_stop: impl Fn() -> bool,
+) -> Result<(Vec<MessageBatch>, bool), MailClientError> {
     let mut batches: Vec<MessageBatch> = Vec::new();
     for uid_batch in planned {
+        // Checked before the first batch too, unlike the deadline below: the
+        // SELECT and the UID SEARCH that precede this loop are worth up to a
+        // `FETCH_TIMEOUT` each, so a stop signalled during them arrives here
+        // with nothing fetched yet and must still be honored.
+        if should_stop() {
+            log::info!(
+                "mail: fetch interrupted after {} batch(es); they are dropped and refetched on the next connection",
+                batches.len()
+            );
+            return Ok((batches, true));
+        }
         // The first batch is always attempted: there is no progress to
         // protect yet, and returning `Ok(vec![])` for an untried fetch would
         // look to the caller like "no new mail".
@@ -782,7 +825,7 @@ async fn collect_batches<S: BatchSource>(
         }
     }
 
-    Ok(batches)
+    Ok((batches, false))
 }
 
 async fn fetch_uid_batch(
@@ -1177,9 +1220,10 @@ mod tests {
             Ok(vec![msg(4)]),
         ]);
 
-        let batches = collect_batches(&mut source, vec![vec![1], vec![2], vec![3], vec![4]], far_future())
-            .await
-            .expect("a timeout after progress must not fail the whole fetch");
+        let (batches, interrupted) =
+            collect_batches(&mut source, vec![vec![1], vec![2], vec![3], vec![4]], far_future(), || false)
+                .await
+                .expect("a timeout after progress must not fail the whole fetch");
 
         assert_eq!(
             source.requested,
@@ -1191,13 +1235,14 @@ mod tests {
             vec![1, 2],
             "both batches that succeeded before the timeout must survive it"
         );
+        assert!(!interrupted, "a fetch error is not a shutdown; the caller must still commit what it got");
     }
 
     #[tokio::test]
     async fn a_failure_on_the_very_first_batch_surfaces_as_an_error() {
         let mut source = FakeSource::new(vec![Err(MailClientError::Timeout(FETCH_TIMEOUT))]);
 
-        let result = collect_batches(&mut source, vec![vec![1], vec![2]], far_future()).await;
+        let result = collect_batches(&mut source, vec![vec![1], vec![2]], far_future(), || false).await;
 
         assert!(
             matches!(result, Err(MailClientError::Timeout(_))),
@@ -1210,9 +1255,10 @@ mod tests {
         let mut source = FakeSource::new(vec![Ok(vec![msg(1)]), Ok(vec![msg(2)]), Ok(vec![msg(3)])]);
         let already_passed = Instant::now() - Duration::from_secs(1);
 
-        let batches = collect_batches(&mut source, vec![vec![1], vec![2], vec![3]], already_passed)
-            .await
-            .expect("running out of budget is not an error");
+        let (batches, interrupted) =
+            collect_batches(&mut source, vec![vec![1], vec![2], vec![3]], already_passed, || false)
+                .await
+                .expect("running out of budget is not an error");
 
         assert_eq!(source.requested, vec![vec![1u32]], "the first batch must run, and no batch may start after the budget is gone");
         assert_eq!(
@@ -1220,5 +1266,57 @@ mod tests {
             vec![1],
             "the batch that finished must still be returned for the caller to commit"
         );
+        assert!(!interrupted, "an exhausted budget is ordinary progress, not an abandoned sync");
+    }
+
+    // The whole network phase of a sync used to be uninterruptible: a stop
+    // arriving here was not seen until `TOTAL_FETCH_BUDGET` (120s) ran out,
+    // against a 5s graceful-stop budget — after which the task is aborted, no
+    // LOGOUT is sent, and the session sits on the server's connection cap until
+    // it times out on its own.
+    #[tokio::test]
+    async fn a_stop_between_batches_abandons_the_fetch_instead_of_running_it_to_the_end() {
+        let mut source = FakeSource::new(vec![Ok(vec![msg(1)]), Ok(vec![msg(2)]), Ok(vec![msg(3)])]);
+        // `should_stop` is consulted once per batch, so "false, then true" is
+        // precisely a stop signalled while the first batch was on the wire.
+        let checks = std::cell::Cell::new(0usize);
+        let should_stop = || {
+            checks.set(checks.get() + 1);
+            checks.get() > 1
+        };
+
+        let (batches, interrupted) =
+            collect_batches(&mut source, vec![vec![1], vec![2], vec![3]], far_future(), should_stop)
+                .await
+                .expect("an interrupted fetch is not an error");
+
+        assert!(interrupted, "the caller has to be told this sync is partial, or it will commit a cursor past UIDs it never fetched");
+        assert_eq!(
+            source.requested,
+            vec![vec![1u32]],
+            "no batch may start once the stop is visible; the remaining ones are what a 120s uninterruptible fetch was made of"
+        );
+        assert_eq!(
+            batches.len(),
+            1,
+            "what was already fetched is still handed back; it is the caller that drops it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stop_already_pending_fetches_nothing_at_all() {
+        let mut source = FakeSource::new(vec![Ok(vec![msg(1)])]);
+
+        let (batches, interrupted) =
+            collect_batches(&mut source, vec![vec![1], vec![2]], far_future(), || true)
+                .await
+                .expect("an interrupted fetch is not an error");
+
+        assert!(interrupted);
+        assert!(
+            source.requested.is_empty(),
+            "the SELECT and UID SEARCH before this loop are worth 30s each, so a stop can arrive with nothing fetched yet"
+        );
+        assert!(batches.is_empty());
     }
 }

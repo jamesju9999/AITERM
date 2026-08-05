@@ -386,6 +386,115 @@ describe("MailView", () => {
     });
   });
 
+  // A wrong password, a revoked Gmail App Password or a network outage used to
+  // reach the user as nothing but a log line, in a log already full of
+  // unrelated warnings — the Mail tab simply stopped updating with no
+  // explanation at all.
+  describe("connection failures", () => {
+    const FAILED = {
+      kind: "connection_failed",
+      account_id: "acc-1",
+      message: "login failed: [AUTHENTICATIONFAILED] Invalid credentials",
+    };
+
+    const driveEvent = async (payload: unknown) => {
+      await waitFor(() => expect(syncListener).not.toBeNull());
+      syncListener!({ payload });
+    };
+
+    beforeEach(() => {
+      vi.mocked(mailListAccounts).mockResolvedValue([ACCOUNT] as never);
+      vi.mocked(mailListMessages).mockResolvedValue([makeMessage()] as never);
+    });
+
+    it("surfaces the server's own reason, named against the account", async () => {
+      renderView();
+      expect(await screen.findByText("Quarterly report")).toBeTruthy();
+
+      await driveEvent(FAILED);
+
+      const alert = await screen.findByRole("alert");
+      // The account, so a user with several knows which one to go and fix.
+      expect(alert.textContent).toContain(ACCOUNT.email);
+      // And the backend's wording verbatim: "login failed" sends the user to
+      // their App Password, "connection error" to their network.
+      expect(alert.textContent).toContain("[AUTHENTICATIONFAILED] Invalid credentials");
+    });
+
+    it("clears the banner when the account reconnects", async () => {
+      renderView();
+      await driveEvent(FAILED);
+      expect(await screen.findByRole("alert")).toBeTruthy();
+
+      await driveEvent({ kind: "connection_restored", account_id: "acc-1" });
+
+      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    });
+
+    // Both are red text in the same corner of the same tab, and they mean
+    // completely different things: one row failed to move vs. nothing in this
+    // tab is up to date.
+    it("is visually distinct from a transient delete failure", async () => {
+      vi.mocked(mailDeleteMessage).mockRejectedValue(new Error("no Trash folder") as never);
+
+      const { container } = renderView();
+      await driveEvent(FAILED);
+      await screen.findByRole("alert");
+
+      const connectionBanner = container.querySelector(".mail-view__error--connection");
+      expect(connectionBanner).toBeTruthy();
+      expect(connectionBanner!.textContent).toContain(ACCOUNT.email);
+
+      // Now provoke a delete failure alongside it.
+      fireEvent.click(await screen.findByRole("button", { name: t.mail_delete_aria("Quarterly report") }));
+      fireEvent.click(screen.getByText(t.mail_delete_confirm));
+
+      // Barrier: the delete rejection has landed and rendered. Without it
+      // `getAllByRole` below would see only the connection banner and the
+      // length assertion would fail for the wrong reason.
+      const deleteBanner = await screen.findByText(new RegExp(t.mail_delete_failed));
+      const banners = screen.getAllByRole("alert");
+      expect(banners).toHaveLength(2);
+      // The delete failure must NOT carry the connection modifier, or the two
+      // would render identically and the user could not tell a one-off from a
+      // standing outage.
+      // (The length assertion above is also what catches a delete failure
+      // clearing the standing banner, so there is no separate check for it.)
+      expect(deleteBanner.classList.contains("mail-view__error--connection")).toBe(false);
+    });
+
+    it("does not refetch the message list on a connection event", async () => {
+      renderView();
+      expect(await screen.findByText("Quarterly report")).toBeTruthy();
+      const callsBefore = vi.mocked(mailListMessages).mock.calls.length;
+
+      await driveEvent(FAILED);
+
+      // The banner is up, so the event was definitely processed.
+      expect(await screen.findByRole("alert")).toBeTruthy();
+      expect(vi.mocked(mailListMessages).mock.calls.length).toBe(callsBefore);
+    });
+
+    it("remembers a failure raised while another account was selected", async () => {
+      const ACCOUNT_2 = { ...ACCOUNT, id: "acc-2", email: "second@example.com" };
+      vi.mocked(mailListAccounts).mockResolvedValue([ACCOUNT, ACCOUNT_2] as never);
+
+      renderView();
+      const select = await screen.findByLabelText(t.mail_select_account);
+      fireEvent.change(select, { target: { value: "acc-2" } });
+      await waitFor(() => expect(mailListMessages).toHaveBeenLastCalledWith("acc-2"));
+
+      // acc-1 breaks while acc-2 is on screen.
+      await driveEvent(FAILED);
+      expect(screen.queryByRole("alert")).toBeNull();
+
+      fireEvent.change(select, { target: { value: "acc-1" } });
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain(ACCOUNT.email);
+    });
+  });
+
   // App.tsx keeps TerminalApp — and therefore this component — permanently
   // mounted behind the Settings overlay, so an account added in Settings can
   // only reach an already-open Mail tab by refetching when the tab is shown

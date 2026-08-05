@@ -44,7 +44,18 @@ export type MailSyncEvent =
   // wholesale because the mailbox's UIDVALIDITY changed. Carries `account_id`
   // like the others, which is all MailView's refetch and useMailSync's badge
   // refresh need to reflect a removal.
-  | { kind: "removed"; account_id: string; removed_count: number };
+  | { kind: "removed"; account_id: string; removed_count: number }
+  // The account's connection to its mail server broke, so its Mail tab has
+  // silently stopped updating. `message` is the backend's own reason ("login
+  // failed: ...", "connection error: ..."), which is what tells a wrong App
+  // Password apart from a network outage.
+  //
+  // Emitted on the healthy -> failing transition only, never once per retry —
+  // a failing account reconnects on a backoff schedule, and an event per
+  // attempt would repaint the banner every few seconds for the whole outage.
+  | { kind: "connection_failed"; account_id: string; message: string }
+  // ...and once on the way back, which is the only thing that clears it.
+  | { kind: "connection_restored"; account_id: string };
 
 export const MAIL_SYNC_EVENT = "mail-sync-event";
 
