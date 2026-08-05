@@ -14,6 +14,8 @@ import { MAIL_SYNC_EVENT, mailCountUnread, type MailSyncEvent } from "../ipc/mai
 export function useMailSync() {
   const [unreadCount, setUnreadCount] = useState(0);
   const mountedRef = useRef(true);
+  const seqRef = useRef(0);
+  const permissionRef = useRef<Promise<boolean> | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -25,11 +27,33 @@ export function useMailSync() {
   // the badge would keep showing the stale count until the next sync event
   // (up to poll_interval_secs, default 300s).
   const refreshUnread = useCallback(() => {
+    // The poller emits one event per inserted message, so a single poll cycle
+    // can fire dozens of refreshes at once. Their round-trips resolve in
+    // arbitrary order, so without this guard the badge would be last-RESOLVED-
+    // wins: an older, lower count could land after a newer one and stick until
+    // the next poll cycle — the very staleness this refresh exists to avoid.
+    const seq = ++seqRef.current;
     mailCountUnread().then((count) => {
-      if (mountedRef.current) setUnreadCount(count);
+      if (mountedRef.current && seq === seqRef.current) setUnreadCount(count);
     }).catch((err) => {
       console.error("[mail] failed to count unread messages:", err);
     });
+  }, []);
+
+  // Resolved once per session and cached: otherwise every important message
+  // costs another permission round-trip, and a burst of them would stack
+  // concurrent requestPermission() prompts — including re-prompting a user who
+  // already said no.
+  const ensureNotificationPermission = useCallback((): Promise<boolean> => {
+    permissionRef.current ??= isPermissionGranted()
+      .then((granted) => granted || requestPermission().then((p) => p === "granted"))
+      .catch((err) => {
+        console.error("[mail] notification permission check failed:", err);
+        // Don't cache a transient IPC failure as a denial.
+        permissionRef.current = null;
+        return false;
+      });
+    return permissionRef.current;
   }, []);
 
   useEffect(() => {
@@ -43,13 +67,11 @@ export function useMailSync() {
       refreshUnread();
 
       if (event.payload.kind === "important") {
-        let granted = await isPermissionGranted();
-        if (!granted) {
-          const permission = await requestPermission();
-          granted = permission === "granted";
-        }
-        if (granted) {
-          sendNotification({ title: event.payload.subject, body: event.payload.summary });
+        if (await ensureNotificationPermission()) {
+          // Matches the backend's own placeholder (parse_raw_message) so a
+          // genuinely empty subject doesn't produce a blank notification title.
+          const title = event.payload.subject || "(no subject)";
+          sendNotification({ title, body: event.payload.summary });
         }
       }
     }).then((fn) => {
@@ -68,7 +90,7 @@ export function useMailSync() {
         try { Promise.resolve(unlisten()).catch(() => {}); } catch { /* teardown races are not actionable */ }
       }
     };
-  }, [refreshUnread]);
+  }, [refreshUnread, ensureNotificationPermission]);
 
   return { unreadCount, refreshUnread };
 }

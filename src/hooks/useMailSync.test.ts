@@ -92,6 +92,89 @@ describe("useMailSync", () => {
     expect(result.current.unreadCount).toBe(1);
   });
 
+  // The poller emits one Summary event per inserted message (plus an Important
+  // event for important ones), so a single poll cycle ingesting 20 messages
+  // fires 20-40 refreshes in a burst. Those round-trips resolve independently,
+  // so without a sequence guard the badge is last-RESOLVED-wins rather than
+  // last-REQUESTED-wins, and a stale lower count can stick until the next poll.
+  it("keeps the newest count when an older in-flight request resolves last", async () => {
+    const deferred = () => {
+      let resolve!: (n: number) => void;
+      const promise = new Promise<number>((r) => { resolve = r; });
+      return { promise, resolve };
+    };
+    const mount = deferred();
+    const older = deferred();
+    const newer = deferred();
+    vi.mocked(mailCountUnread)
+      .mockReturnValueOnce(mount.promise)
+      .mockReturnValueOnce(older.promise)
+      .mockReturnValueOnce(newer.promise);
+
+    const { result } = renderHook(() => useMailSync());
+    await act(async () => { mount.resolve(2); });
+    expect(result.current.unreadCount).toBe(2);
+
+    // Two overlapping refreshes; the OLDER request is the one that resolves last.
+    act(() => {
+      result.current.refreshUnread();
+      result.current.refreshUnread();
+    });
+    await act(async () => { newer.resolve(9); });
+    await act(async () => { older.resolve(4); });
+
+    expect(result.current.unreadCount).toBe(9);
+  });
+
+  it("checks notification permission only once across multiple important events", async () => {
+    renderHook(() => useMailSync());
+    await waitFor(() => expect(listeners["mail-sync-event"]).toBeDefined());
+
+    listeners["mail-sync-event"]({
+      payload: { kind: "important", account_id: "a1", message_id: "m1", subject: "s1", summary: "b1" },
+    });
+    await waitFor(() => expect(sendNotification).toHaveBeenCalledWith({ title: "s1", body: "b1" }));
+
+    listeners["mail-sync-event"]({
+      payload: { kind: "important", account_id: "a1", message_id: "m2", subject: "s2", summary: "b2" },
+    });
+    await waitFor(() => expect(sendNotification).toHaveBeenCalledWith({ title: "s2", body: "b2" }));
+
+    expect(isPermissionGranted).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-prompt for permission after the user has denied it", async () => {
+    vi.mocked(isPermissionGranted).mockResolvedValue(false);
+    vi.mocked(requestPermission).mockResolvedValue("denied");
+    renderHook(() => useMailSync());
+    await waitFor(() => expect(listeners["mail-sync-event"]).toBeDefined());
+
+    const important = (id: string) => ({
+      payload: { kind: "important", account_id: "a1", message_id: id, subject: "s", summary: "b" },
+    });
+    listeners["mail-sync-event"](important("m1"));
+    await waitFor(() => expect(requestPermission).toHaveBeenCalledTimes(1));
+    listeners["mail-sync-event"](important("m2"));
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    expect(sendNotification).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a placeholder title when the subject is empty", async () => {
+    renderHook(() => useMailSync());
+    await waitFor(() => expect(listeners["mail-sync-event"]).toBeDefined());
+
+    listeners["mail-sync-event"]({
+      payload: { kind: "important", account_id: "a1", message_id: "m1", subject: "", summary: "問今天能否開會" },
+    });
+
+    // Matches the backend's own placeholder in parse_raw_message.
+    await waitFor(() => expect(sendNotification).toHaveBeenCalledWith({
+      title: "(no subject)", body: "問今天能否開會",
+    }));
+  });
+
   it("requests permission before notifying when it has not been granted yet", async () => {
     vi.mocked(isPermissionGranted).mockResolvedValue(false);
     renderHook(() => useMailSync());
