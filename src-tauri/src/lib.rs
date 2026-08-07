@@ -28,7 +28,7 @@ use commands::{
     },
     appimage::{appimage_integrate, appimage_integration_state, appimage_remove_integration},
     ai::{agent_chat, ai_chat, ai_query},
-    bridge::{bridge_apply, bridge_status},
+    bridge::{bridge_apply, bridge_set_config, bridge_status},
     claude_notif::{claude_notif_enable_bell, claude_notif_needs_prompt},
     code_assistant::code_assistant_chat,
     knowledge_base::{
@@ -393,6 +393,7 @@ pub fn run() {
             // Claude Code bridge
             bridge_status,
             bridge_apply,
+            bridge_set_config,
             // Shell
             open_url,
             updater_supported,

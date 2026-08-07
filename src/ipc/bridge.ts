@@ -17,3 +17,26 @@ export function bridgeStatus(): Promise<BridgeStatus> {
 export function bridgeApply(): Promise<BridgeStatus> {
   return invoke<BridgeStatus>("bridge_apply");
 }
+
+export interface TierMapping {
+  provider_id: string;
+  model: string;
+}
+
+export interface ClaudeBridgeConfig {
+  enabled: boolean;
+  port: number;
+  default_on_new_tab: boolean;
+  opus: TierMapping | null;
+  sonnet: TierMapping | null;
+  haiku: TierMapping | null;
+}
+
+/**
+ * 存下橋接設定並立刻套用。欄位名用 snake_case——`ClaudeBridgeConfig` 的
+ * serde 沒有 rename_all，序列化出來就是 Rust 的欄位名，跟 `BridgeStatus`
+ * 的 camelCase 不同（後者刻意 rename_all = "camelCase"）。
+ */
+export function bridgeSetConfig(value: ClaudeBridgeConfig): Promise<BridgeStatus> {
+  return invoke<BridgeStatus>("bridge_set_config", { value });
+}

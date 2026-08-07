@@ -6,6 +6,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::bridge::{auth, BridgeState};
+use crate::config::types::ClaudeBridgeConfig;
 use crate::config::ConfigStore;
 use crate::secret::SecretStore;
 
@@ -78,4 +79,18 @@ pub async fn bridge_apply(
             error: Some(e.to_string()),
         }),
     }
+}
+
+/// 存下橋接設定並立刻套用（啟動或停止 server）。
+#[tauri::command]
+pub async fn bridge_set_config(
+    bridge: State<'_, Arc<BridgeState>>,
+    config: State<'_, Arc<ConfigStore>>,
+    secrets: State<'_, Arc<SecretStore>>,
+    value: ClaudeBridgeConfig,
+) -> Result<BridgeStatus, String> {
+    config
+        .update(|c| c.claude_bridge = value.clone())
+        .map_err(|e| e.to_string())?;
+    bridge_apply(bridge, config, secrets).await
 }

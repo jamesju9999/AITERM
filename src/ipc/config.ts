@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ClaudeBridgeConfig } from "./bridge";
 
 // ── Types (mirrors Rust config/types.rs) ──────────────────────────────────────
 
@@ -52,6 +53,7 @@ export interface AppConfig {
   enterprise_device_id: string | null;
   enterprise_policy: EnterprisePolicy | null;
   mcp_enabled?: boolean;
+  claude_bridge: ClaudeBridgeConfig;
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────

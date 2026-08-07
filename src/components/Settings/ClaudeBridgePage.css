@@ -1,0 +1,135 @@
+.bridge-page {
+  padding: 24px 32px;
+}
+
+.bridge-page h2 {
+  color: #e6e6e6;
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.bridge-desc {
+  color: #777;
+  font-size: 12px;
+  margin: 0 0 20px;
+}
+
+.bridge-status {
+  align-items: center;
+  color: #ccc;
+  display: flex;
+  font-size: 13px;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.bridge-dot {
+  background: #666;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+  height: 8px;
+  width: 8px;
+}
+
+.bridge-dot--on {
+  background: #34d399;
+}
+
+.bridge-error {
+  background: rgba(220, 50, 50, 0.15);
+  border: 1px solid rgba(220, 50, 50, 0.4);
+  border-radius: 4px;
+  color: #f87171;
+  font-size: 12px;
+  margin-bottom: 16px;
+  padding: 8px 12px;
+}
+
+.bridge-row {
+  align-items: center;
+  color: #e6e6e6;
+  display: flex;
+  font-size: 13px;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.bridge-row input[type="number"] {
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  color: #e6e6e6;
+  font-size: 13px;
+  padding: 6px 10px;
+  width: 100px;
+}
+
+.bridge-row input[type="number"]:focus {
+  border-color: #2d5aab;
+  outline: none;
+}
+
+.bridge-tier {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.bridge-tier label {
+  color: #ccc;
+  flex-shrink: 0;
+  font-size: 13px;
+  min-width: 220px;
+}
+
+.bridge-tier select,
+.bridge-tier input {
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  color: #e6e6e6;
+  font-size: 13px;
+  padding: 6px 10px;
+}
+
+.bridge-tier select {
+  min-width: 200px;
+}
+
+.bridge-tier select:focus,
+.bridge-tier input:focus {
+  border-color: #2d5aab;
+  outline: none;
+}
+
+.bridge-tier option:disabled {
+  color: #666;
+}
+
+.bridge-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.bridge-actions button {
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  color: #e6e6e6;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 8px 16px;
+}
+
+.bridge-actions button:hover:not(:disabled) {
+  border-color: #2d5aab;
+}
+
+.bridge-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
