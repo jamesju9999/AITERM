@@ -9,6 +9,63 @@ use aes_gcm::{Aes256Gcm, Key, Nonce};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
+use serde::{Deserialize, Serialize};
+
+use crate::config::types::DbType;
+
+const FORMAT_TAG: &str = "aiterm-db-export";
+
+// Argon2id 參數，採 OWASP 建議值（m=19 MiB, t=2, p=1）。
+const ARGON2_M_COST: u32 = 19456;
+const ARGON2_T_COST: u32 = 2;
+const ARGON2_P_COST: u32 = 1;
+
+/// 匯出檔的明文 header。刻意不含任何連線資訊——所有連線資料都在
+/// `data` 的密文裡。留這層明文是為了讓「檔案不對」和「passphrase 錯誤」
+/// 成為兩種可分辨的錯誤，並讓版本檢查能在解密前完成。
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Envelope {
+    pub format: String,
+    pub version: u32,
+    pub kdf: KdfParams,
+    pub cipher: String,
+    pub nonce: String,
+    pub data: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct KdfParams {
+    pub alg: String,
+    pub salt: String,
+    pub m_cost: u32,
+    pub t_cost: u32,
+    pub p_cost: u32,
+}
+
+/// 密文解開後的內容。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportPayload {
+    pub connections: Vec<ExportedConnection>,
+}
+
+/// 匯出檔中的單筆連線。與 `DbConnection` 的差別只在多一個 `password`——
+/// `DbConnection` 的密碼存在 Keychain，不在設定檔裡。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportedConnection {
+    pub id: String,
+    pub name: String,
+    pub db_type: DbType,
+    pub host: String,
+    pub port: u16,
+    pub database: String,
+    pub username: String,
+    #[serde(default)]
+    pub default_schema: Option<String>,
+    /// 空字串代表這筆本來就沒有密碼（例如 SQLite），
+    /// 匯入時不會拿它去覆寫既有的 Keychain 內容。
+    #[serde(default)]
+    pub password: String,
+}
 
 /// 目前支援的最高格式版本。讀到比這個大的檔案一律拒絕。
 pub const EXPORT_VERSION: u32 = 1;
