@@ -160,6 +160,7 @@ dependencies = [
  "tokio-native-tls",
  "tokio-util",
  "toml 0.8.2",
+ "tower",
  "url",
  "uuid",
  "windows-sys 0.60.2",

@@ -160,6 +160,22 @@ impl ConfigStore {
         let path = config_path();
         Self { path, state: RwLock::new(cfg) }
     }
+
+    /// Create a store backed by `path` instead of the real user config file.
+    ///
+    /// 給整合測試用（例如 `tests/bridge_server.rs`）：避免測試讀到執行者
+    /// 電腦上真實的 `config.toml`，導致例如剛好設定了 `claude_bridge.sonnet`
+    /// 就讓「未映射層級應回 400」這類測試假失敗。
+    pub fn new_at(path: PathBuf) -> Self {
+        let state = match Self::load_from(&path) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                log::warn!("Failed to load config (using defaults): {e}");
+                AppConfig::default()
+            }
+        };
+        Self { path, state: RwLock::new(state) }
+    }
 }
 
 /// Platform-specific config file path.

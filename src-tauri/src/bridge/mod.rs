@@ -14,3 +14,80 @@ pub mod model_map;
 pub mod server;
 pub mod stream;
 pub mod upstream;
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use parking_lot::Mutex;
+
+use crate::config::ConfigStore;
+use crate::secret::SecretStore;
+
+/// 橋接 server 的生命週期：持有目前執行中 server 的 handle，能 start/stop。
+pub struct BridgeState {
+    running: Mutex<Option<Running>>,
+}
+
+struct Running {
+    port: u16,
+    shutdown: tokio::sync::oneshot::Sender<()>,
+}
+
+impl Default for BridgeState {
+    fn default() -> Self {
+        Self { running: Mutex::new(None) }
+    }
+}
+
+impl BridgeState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn port(&self) -> Option<u16> {
+        self.running.lock().as_ref().map(|r| r.port)
+    }
+
+    /// 啟動 server。已經在跑就先停掉（換 port 時會用到）。
+    ///
+    /// 埠被占用時回錯誤而不是換一個 —— 環境變數只能在分頁 spawn 的瞬間決定，
+    /// 埠若會漂移，已開的分頁會指向死位址。
+    pub async fn start(
+        &self,
+        config: Arc<ConfigStore>,
+        secrets: Arc<SecretStore>,
+        token: String,
+        port: u16,
+    ) -> anyhow::Result<()> {
+        self.stop();
+
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+            anyhow::anyhow!("無法綁定 127.0.0.1:{port}（{e}）。請在設定裡換一個埠。")
+        })?;
+
+        let app = server::router(server::AppState {
+            config,
+            secrets,
+            token: Arc::new(token),
+        });
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let served = axum::serve(listener, app)
+                .with_graceful_shutdown(async { let _ = rx.await; })
+                .await;
+            if let Err(e) = served {
+                log::error!("bridge server 結束於錯誤：{e}");
+            }
+        });
+
+        *self.running.lock() = Some(Running { port, shutdown: tx });
+        Ok(())
+    }
+
+    pub fn stop(&self) {
+        if let Some(r) = self.running.lock().take() {
+            let _ = r.shutdown.send(());
+        }
+    }
+}

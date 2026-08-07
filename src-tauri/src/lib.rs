@@ -28,6 +28,7 @@ use commands::{
     },
     appimage::{appimage_integrate, appimage_integration_state, appimage_remove_integration},
     ai::{agent_chat, ai_chat, ai_query},
+    bridge::{bridge_apply, bridge_status},
     claude_notif::{claude_notif_enable_bell, claude_notif_needs_prompt},
     code_assistant::code_assistant_chat,
     knowledge_base::{
@@ -259,11 +260,43 @@ pub fn run() {
         .manage(tokio::sync::Mutex::new(telegram::TelegramState { active_task: None }))
         .manage(mcp_manager)
         .manage(AnthropicOAuthState::new())
+        .manage(Arc::new(bridge::BridgeState::new()))
         .setup(|app| {
             telegram::init(app.handle());
             mail::poller::init(app.handle());
             enterprise::agent::init(app.handle());
             commands::appimage::repair_integration_on_startup();
+
+            // 橋接 server：設定為 enabled 時隨 app 啟動。失敗只記 log 不擋啟動
+            // ——埠被占用不該讓整個 app 起不來，設定頁會顯示錯誤。
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Manager;
+                    let bridge = handle.state::<Arc<bridge::BridgeState>>().inner().clone();
+                    let config = handle.state::<Arc<ConfigStore>>().inner().clone();
+                    let secrets = handle.state::<Arc<SecretStore>>().inner().clone();
+                    let cfg = config.get().claude_bridge;
+                    if !cfg.enabled {
+                        return;
+                    }
+                    let token = match secrets.get(bridge::auth::BRIDGE_TOKEN_KEY) {
+                        Ok(Some(t)) if !t.is_empty() => t,
+                        _ => {
+                            let t = bridge::auth::generate_token();
+                            if let Err(e) = secrets.set(bridge::auth::BRIDGE_TOKEN_KEY, &t) {
+                                log::error!("bridge token 寫入 keychain 失敗：{e}");
+                                return;
+                            }
+                            t
+                        }
+                    };
+                    if let Err(e) = bridge.start(config, secrets, token, cfg.port).await {
+                        log::error!("bridge server 啟動失敗：{e}");
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -357,6 +390,9 @@ pub fn run() {
             // Secrets
             has_api_key,
             delete_api_key,
+            // Claude Code bridge
+            bridge_status,
+            bridge_apply,
             // Shell
             open_url,
             updater_supported,
