@@ -8,3 +8,4 @@
 //! （見 `upstream/` 各 adapter）。
 
 pub mod auth;
+pub mod model_map;
