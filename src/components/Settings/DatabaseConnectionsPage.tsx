@@ -6,6 +6,7 @@ import {
   DB_TYPE_LABELS, DB_DEFAULT_PORTS,
 } from "../../ipc/db";
 import { useLocale } from "../../contexts/LocaleContext";
+import { DbExportPanel, DbImportPanel } from "./DbConnectionTransfer";
 
 type FormState = Omit<DbConnectionInput, "id"> & { id?: string };
 
@@ -23,6 +24,8 @@ export function DatabaseConnectionsPage() {
   const [testMsg, setTestMsg] = useState("");
   const [saving, setSaving] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [transfer, setTransfer] = useState<"export" | "import" | null>(null);
+  const [notice, setNotice] = useState("");
 
   const load = () => dbListConnections().then(setConnections).catch(console.error);
   useEffect(() => { load(); }, []);
@@ -83,17 +86,48 @@ export function DatabaseConnectionsPage() {
     <div style={{ width: "100%", padding: "24px 32px", boxSizing: "border-box" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <h2 style={{ margin: 0, fontSize: 16, color: "#e6e6e6" }}>{t.db_connections}</h2>
-        {!showForm && (
-          <button
-            onClick={() => { setForm(EMPTY_FORM); setShowForm(true); setTestStatus("idle"); }}
-            className="aiterm-btn aiterm-btn--primary"
-          >
-            {t.add_connection}
-          </button>
+        {!showForm && !transfer && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => { setTransfer("export"); setNotice(""); }}
+              disabled={connections.length === 0}
+              className="aiterm-btn aiterm-btn--secondary"
+            >
+              {t.db_export}
+            </button>
+            <button
+              onClick={() => { setTransfer("import"); setNotice(""); }}
+              className="aiterm-btn aiterm-btn--secondary"
+            >
+              {t.db_import}
+            </button>
+            <button
+              onClick={() => { setForm(EMPTY_FORM); setShowForm(true); setTestStatus("idle"); }}
+              className="aiterm-btn aiterm-btn--primary"
+            >
+              {t.add_connection}
+            </button>
+          </div>
         )}
       </div>
 
-      {!showForm && (
+      {notice && <div style={{ color: "#34d399", fontSize: 12, marginBottom: 12 }}>{notice}</div>}
+
+      {transfer === "export" && (
+        <DbExportPanel
+          connections={connections}
+          onClose={() => setTransfer(null)}
+          onDone={(msg) => { setNotice(msg); setTransfer(null); }}
+        />
+      )}
+      {transfer === "import" && (
+        <DbImportPanel
+          onClose={() => setTransfer(null)}
+          onDone={() => load()}
+        />
+      )}
+
+      {!showForm && !transfer && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {connections.length === 0 && (
             <div style={{ color: "#555", fontSize: 13, padding: "20px 0" }}>{t.no_connections}</div>
