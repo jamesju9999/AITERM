@@ -3,6 +3,8 @@
 //! 本檔案前半的純函式不依賴 Tauri，可單獨測試；後半的
 //! `#[tauri::command]` 只負責讀寫檔案與接上 ConfigStore／SecretStore。
 
+use std::collections::HashSet;
+
 use aes_gcm::aead::rand_core::RngCore;
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
@@ -227,6 +229,10 @@ pub fn check_import_file(bytes: &[u8]) -> Result<u32, ImportError> {
 pub enum ConflictKind {
     New,
     Overwrite,
+    /// 目標已被同一份匯出檔中前面某一筆認領。照樣套用會把前一筆寫進去的
+    /// 內容默默蓋掉，而回傳筆數還會把兩筆都算成成功——所以這種筆數直接
+    /// 略過，並在預覽裡標示出來讓使用者知道為什麼。
+    Duplicate,
 }
 
 /// 匯出檔中某一筆該如何套用。
@@ -244,32 +250,48 @@ pub struct Resolution {
 /// 先比 id，沒中再比名稱（trim + 忽略大小寫）。比名稱是為了處理
 /// 「同事在自己機器上手動建了同名連線」——id 不同但實際是同一筆，
 /// 不比名稱的話會變成兩筆同名連線並存。
+///
+/// 每個目標只能被認領一次。同一份匯出檔裡第二筆指向同一個目標的資料
+/// 會被判為 `Duplicate`——若照樣套用，它會把前一筆剛寫進去的內容默默
+/// 蓋掉，而 `ImportResult` 還會把兩筆都算成成功。逐筆誠實回報正是
+/// 「不做 rollback」這個決策所倚賴的東西。
+///
+/// id／名稱比對的對象不只是匯入前的 `existing` 快照，還包含同一份
+/// 匯出檔裡「前面已經處理過」的那些筆——否則兩筆全新、彼此同名的
+/// 連線（誰都沒命中 `existing`）會被雙雙判成 New，恰好是名稱比對這條
+/// 規則原本想擋下的情況。
 pub fn resolve_conflicts(
     exported: &[ExportedConnection],
     existing: &[DbConnection],
 ) -> Vec<Resolution> {
+    let mut claimed: HashSet<String> = HashSet::new();
+    // 從既有連線出發，每處理完一筆就把它的目標 id／名稱也併進來，
+    // 讓後面的筆數可以比對到「前面這份檔案裡剛認領的目標」。
+    let mut pool: Vec<(String, String)> =
+        existing.iter().map(|x| (x.id.clone(), x.name.clone())).collect();
+
     exported
         .iter()
         .enumerate()
         .map(|(index, e)| {
-            let hit = existing.iter().find(|x| x.id == e.id).or_else(|| {
+            let hit = pool.iter().find(|(id, _)| *id == e.id).or_else(|| {
                 let key = e.name.trim().to_lowercase();
-                existing.iter().find(|x| x.name.trim().to_lowercase() == key)
+                pool.iter().find(|(_, name)| name.trim().to_lowercase() == key)
             });
-            match hit {
-                Some(x) => Resolution {
-                    index,
-                    kind: ConflictKind::Overwrite,
-                    target_id: x.id.clone(),
-                    existing_name: Some(x.name.clone()),
-                },
-                None => Resolution {
-                    index,
-                    kind: ConflictKind::New,
-                    target_id: e.id.clone(),
-                    existing_name: None,
-                },
-            }
+            let (target_id, existing_name) = match hit {
+                Some((id, name)) => (id.clone(), Some(name.clone())),
+                None => (e.id.clone(), None),
+            };
+            // `insert` 回傳 false 表示這個目標稍早已被認領。
+            let kind = if !claimed.insert(target_id.clone()) {
+                ConflictKind::Duplicate
+            } else if hit.is_some() {
+                ConflictKind::Overwrite
+            } else {
+                ConflictKind::New
+            };
+            pool.push((target_id.clone(), e.name.clone()));
+            Resolution { index, kind, target_id, existing_name }
         })
         .collect()
 }
@@ -412,6 +434,12 @@ pub async fn db_import_connections(
             continue;
         }
 
+        // 目標已被同一份檔案裡前面那筆認領。預覽已經標示過，這裡直接跳過——
+        // 不計入任何一個計數器，`ImportResult` 才不會謊報。
+        if r.kind == ConflictKind::Duplicate {
+            continue;
+        }
+
         let conn = DbConnection {
             id: r.target_id.clone(),
             name: e.name.clone(),
@@ -425,6 +453,7 @@ pub async fn db_import_connections(
         let applied = match r.kind {
             ConflictKind::Overwrite => config.update_db_connection(conn),
             ConflictKind::New => config.add_db_connection(conn),
+            ConflictKind::Duplicate => unreachable!("Duplicate 在迴圈開頭就 continue 了"),
         };
         if let Err(err) = applied {
             result.failures.push(ImportFailure {
@@ -436,6 +465,7 @@ pub async fn db_import_connections(
         match r.kind {
             ConflictKind::Overwrite => result.overwritten += 1,
             ConflictKind::New => result.added += 1,
+            ConflictKind::Duplicate => unreachable!("Duplicate 在迴圈開頭就 continue 了"),
         }
 
         // 空密碼代表匯出時這筆本來就沒有密碼，不能拿它清掉既有的。

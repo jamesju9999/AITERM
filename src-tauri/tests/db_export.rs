@@ -376,3 +376,70 @@ fn invalid_base64_in_the_header_is_not_an_export_file() {
     }));
     assert_eq!(decrypt_payload(&bytes, "pw").unwrap_err(), ImportError::NotAnExportFile);
 }
+
+// ---- 同一份匯出檔內部的目標衝突 ----
+
+/// 兩筆匯出資料分別以 id 和名稱命中同一筆現有連線。若兩筆都套用，
+/// 後者會把前者剛寫進去的內容默默蓋掉，而回傳筆數會說「覆蓋了 2 筆」。
+#[test]
+fn a_second_entry_claiming_the_same_target_is_marked_duplicate() {
+    let r = resolve_conflicts(
+        &[incoming("local-1", "Staging"), incoming("exp-9", "Prod")],
+        &[existing("local-1", "Prod")],
+    );
+    assert_eq!(r[0].kind, ConflictKind::Overwrite);
+    assert_eq!(r[0].target_id, "local-1");
+    assert_eq!(r[1].kind, ConflictKind::Duplicate);
+    assert_eq!(r[1].target_id, "local-1", "仍然指向同一個目標，只是不套用");
+}
+
+/// 匯出檔裡兩筆同名、目標機器全新。第二筆若也判 New，就會產生兩筆
+/// 同名連線——正是名稱比對規則想避免的情況。
+#[test]
+fn two_same_named_new_entries_do_not_both_get_created() {
+    let r = resolve_conflicts(&[incoming("x", "Dupe"), incoming("y", "Dupe")], &[]);
+    assert_eq!(r[0].kind, ConflictKind::New);
+    assert_eq!(r[1].kind, ConflictKind::Duplicate);
+}
+
+/// 手動合併兩份匯出檔就會產生重複 id。`add_db_connection` 只是 push、
+/// 沒有重複檢查，兩筆都建立的話設定裡會出現兩筆相同 id。
+#[test]
+fn two_entries_sharing_an_id_do_not_both_get_created() {
+    let r = resolve_conflicts(&[incoming("same", "A"), incoming("same", "B")], &[]);
+    assert_eq!(r[0].kind, ConflictKind::New);
+    assert_eq!(r[1].kind, ConflictKind::Duplicate);
+}
+
+/// 去重不能誤傷正常情況：目標各不相同時，全部照舊。
+#[test]
+fn distinct_targets_are_all_still_applied() {
+    let r = resolve_conflicts(
+        &[incoming("a", "Hit"), incoming("x", "Fresh1"), incoming("y", "Fresh2")],
+        &[existing("a", "Hit")],
+    );
+    assert_eq!(r[0].kind, ConflictKind::Overwrite);
+    assert_eq!(r[1].kind, ConflictKind::New);
+    assert_eq!(r[2].kind, ConflictKind::New);
+}
+
+/// 認領是照輸入順序先到先得——第一筆保留，後面的才被降級。
+#[test]
+fn the_first_entry_wins_the_target() {
+    let r = resolve_conflicts(
+        &[incoming("x", "Same"), incoming("y", "Same"), incoming("z", "Same")],
+        &[],
+    );
+    assert_eq!(r[0].kind, ConflictKind::New);
+    assert_eq!(r[0].target_id, "x");
+    assert_eq!(r[1].kind, ConflictKind::Duplicate);
+    assert_eq!(r[2].kind, ConflictKind::Duplicate);
+}
+
+/// `ConflictKind` 會序列化送到前端，字串值是介面契約的一部分。
+#[test]
+fn conflict_kind_serializes_in_snake_case() {
+    assert_eq!(serde_json::to_value(ConflictKind::New).unwrap(), "new");
+    assert_eq!(serde_json::to_value(ConflictKind::Overwrite).unwrap(), "overwrite");
+    assert_eq!(serde_json::to_value(ConflictKind::Duplicate).unwrap(), "duplicate");
+}
