@@ -47,7 +47,6 @@ const zhTW = {
     db_transfer_passphrase_confirm: "確認加密密碼",
     db_transfer_passphrase_mismatch: "兩次輸入的加密密碼不一致",
     db_transfer_passphrase_hint: "匯入時需要這組密碼。密碼遺失後檔案無法復原。",
-    db_transfer_choosing_file: "選擇檔案中…",
     db_transfer_next: "下一步",
     db_export_done: (n: number) => `已匯出 ${n} 筆連線`,
     db_import_done: (added: number, overwritten: number) =>
@@ -1176,7 +1175,6 @@ const enRaw = {
     db_transfer_passphrase_confirm: "Confirm passphrase",
     db_transfer_passphrase_mismatch: "The two passphrases do not match",
     db_transfer_passphrase_hint: "You will need this passphrase to import. The file cannot be recovered without it.",
-    db_transfer_choosing_file: "Choosing file…",
     db_transfer_next: "Next",
     db_export_done: (n: number) => `Exported ${n} connection${n === 1 ? "" : "s"}`,
     db_import_done: (added: number, overwritten: number) =>

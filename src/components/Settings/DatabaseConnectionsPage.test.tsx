@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { StrictMode } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { vi } from "vitest";
 import { DatabaseConnectionsPage } from "./DatabaseConnectionsPage";
@@ -109,5 +110,58 @@ describe("DatabaseConnectionsPage transfer buttons", () => {
     await waitFor(() => expect(dbListConnections).toHaveBeenCalledTimes(2));
     // 匯入面板刻意留在畫面上，讓使用者看得到結果與失敗清單
     expect(screen.getByText("新增 1 筆、覆蓋 0 筆")).toBeInTheDocument();
+  });
+
+  it("opens no panel when the file dialog is cancelled", async () => {
+    vi.mocked(dbListConnections).mockResolvedValue(ONE_CONN);
+    vi.mocked(open).mockResolvedValue(null);
+    renderPage();
+    await waitFor(() => expect(dbListConnections).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "匯入" }));
+    await waitFor(() => expect(open).toHaveBeenCalled());
+    expect(dbCheckImportFile).not.toHaveBeenCalled();
+    expect(screen.queryByText("匯入資料庫連線")).not.toBeInTheDocument();
+  });
+
+  // 壞掉的檔案在點擊當下就結束，使用者不會為一個注定被拒的檔案白打一次密碼
+  it("reports a rejected file at page level and never opens the panel", async () => {
+    vi.mocked(dbListConnections).mockResolvedValue(ONE_CONN);
+    vi.mocked(open).mockResolvedValue("/tmp/bad.json");
+    vi.mocked(dbCheckImportFile).mockRejectedValue("unsupported_version");
+    renderPage();
+    await waitFor(() => expect(dbListConnections).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "匯入" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("此檔案由較新版本的 AITerm 匯出，請先更新 AITerm")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("匯入資料庫連線")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("加密密碼")).not.toBeInTheDocument();
+  });
+
+  // 對話框本身失敗時也要有訊息，不能無聲卡住
+  it("reports a failing file dialog instead of doing nothing", async () => {
+    vi.mocked(dbListConnections).mockResolvedValue(ONE_CONN);
+    vi.mocked(open).mockRejectedValue("io_error: dialog failed");
+    renderPage();
+    await waitFor(() => expect(dbListConnections).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "匯入" }));
+    await waitFor(() => expect(screen.getByText("io_error: dialog failed")).toBeInTheDocument());
+  });
+
+  // 使用者實際踩到的回歸：一次點擊只能開一個對話框
+  it("opens exactly one file dialog per click, even under StrictMode", async () => {
+    vi.mocked(dbListConnections).mockResolvedValue(ONE_CONN);
+    vi.mocked(open).mockResolvedValue("/tmp/ok.json");
+    vi.mocked(dbCheckImportFile).mockResolvedValue(1);
+    render(
+      <StrictMode>
+        <LocaleProvider><DatabaseConnectionsPage /></LocaleProvider>
+      </StrictMode>,
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "匯入" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "匯入" }));
+    await waitFor(() => expect(screen.getByLabelText("加密密碼")).toBeInTheDocument());
+    expect(open).toHaveBeenCalledTimes(1);
   });
 });

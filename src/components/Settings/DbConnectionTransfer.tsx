@@ -1,7 +1,7 @@
-import { useState, useEffect, type CSSProperties } from "react";
-import { save, open } from "@tauri-apps/plugin-dialog";
+import { useState, type CSSProperties } from "react";
+import { save } from "@tauri-apps/plugin-dialog";
 import {
-  dbCheckImportFile, dbExportConnections, dbPreviewImport, dbImportConnections,
+  dbExportConnections, dbPreviewImport, dbImportConnections,
   DB_TYPE_LABELS,
   type DbConnectionInfo, type ImportPreviewItem, type ConflictKind,
 } from "../../ipc/db";
@@ -140,13 +140,16 @@ function conflictLabel(t: Translations, item: ImportPreviewItem): string {
 }
 
 export function DbImportPanel({
-  onClose, onDone,
+  path, onClose, onDone,
 }: {
+  /** 父層已經選好並通過 header 檢查的檔案路徑。面板不自己開對話框——
+   *  原生 modal 當成掛載副作用在 StrictMode 的雙呼叫下會開兩次，而且
+   *  第一次的結果會被 cleanup 的 cancelled 旗標丟掉，面板就永遠卡住。 */
+  path: string;
   onClose: () => void;
-  onDone: (message: string) => void;
+  onDone: () => void;
 }) {
   const { t } = useLocale();
-  const [path, setPath] = useState<string | null>(null);
   const [passphrase, setPassphrase] = useState("");
   const [preview, setPreview] = useState<ImportPreviewItem[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -154,35 +157,6 @@ export function DbImportPanel({
   const [summary, setSummary] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-
-  // 一掛載就開檔案對話框。使用者取消就直接關掉面板——沒有檔案就沒有
-  // 後續流程可言。`cancelled` 擋住 unmount 後的 setState（Tauri 對話框
-  // 是非同步的，使用者可能在期間就離開設定頁）。
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const picked = await open({
-        multiple: false,
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      });
-      if (cancelled) return;
-      if (typeof picked !== "string") {
-        onClose();
-        return;
-      }
-      try {
-        // 先只看明文 header：格式或版本不合就在這裡結束，不必讓
-        // 使用者為一個注定被拒的檔案白打一次密碼。
-        await dbCheckImportFile(picked);
-        if (!cancelled) setPath(picked);
-      } catch (e) {
-        if (!cancelled) setError(translateDbTransferError(t, e));
-      }
-    })();
-    return () => { cancelled = true; };
-    // 只在掛載時跑一次；t / onClose 變動不該重新開檔案對話框。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const toggle = (id: string) =>
     setSelected((prev) => {
@@ -193,7 +167,6 @@ export function DbImportPanel({
     });
 
   const handlePreview = async () => {
-    if (!path) return;
     setBusy(true);
     setError("");
     try {
@@ -209,7 +182,6 @@ export function DbImportPanel({
   };
 
   const handleImport = async () => {
-    if (!path) return;
     setBusy(true);
     setError("");
     setFailures([]);
@@ -218,7 +190,7 @@ export function DbImportPanel({
       const r = await dbImportConnections(path, passphrase, [...selected]);
       setFailures(r.failures);
       setSummary(t.db_import_done(r.added, r.overwritten));
-      onDone(t.db_import_done(r.added, r.overwritten));
+      onDone();
     } catch (e) {
       setError(translateDbTransferError(t, e));
     } finally {
@@ -230,9 +202,7 @@ export function DbImportPanel({
     <div style={panelStyle}>
       <h3 style={headingStyle}>{t.db_import_title}</h3>
 
-      {!path && !error && <div style={{ color: "#888", fontSize: 12 }}>{t.db_transfer_choosing_file}</div>}
-
-      {path && !preview && (
+      {!preview && (
         <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: "10px 12px", alignItems: "center" }}>
           <label style={labelStyle} htmlFor="db-import-pass">{t.db_transfer_passphrase}</label>
           <input
@@ -277,7 +247,7 @@ export function DbImportPanel({
 
       <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
         <button onClick={onClose} disabled={busy} className="aiterm-btn aiterm-btn--secondary">{t.cancel}</button>
-        {path && !preview && (
+        {!preview && (
           <button
             onClick={handlePreview}
             disabled={busy || passphrase.length === 0}

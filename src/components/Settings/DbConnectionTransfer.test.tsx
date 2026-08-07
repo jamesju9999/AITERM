@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { StrictMode } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import { translateDbTransferError, DbExportPanel, DbImportPanel } from "./DbConnectionTransfer";
@@ -138,7 +139,7 @@ const PREVIEW: ImportPreviewItem[] = [
 function renderImport(onDone = vi.fn(), onClose = vi.fn()) {
   render(
     <LocaleProvider>
-      <DbImportPanel onClose={onClose} onDone={onDone} />
+      <DbImportPanel path="/tmp/ok.json" onClose={onClose} onDone={onDone} />
     </LocaleProvider>,
   );
   return { onDone, onClose };
@@ -151,54 +152,19 @@ const PREVIEW_WITH_DUPLICATE: ImportPreviewItem[] = [
     database: "LBOTHODB", username: "nuntio", conflict: "duplicate", existing_name: "舊的總行" },
 ];
 
-/// 走完「選檔 → 檢查 header → 輸入密碼 → 預覽」，讓測試從勾選清單開始。
+/// 走完「輸入密碼 → 預覽」，讓測試從勾選清單開始。
 async function advanceToPreview(items: ImportPreviewItem[]) {
-  vi.mocked(open).mockResolvedValue("/tmp/ok.json");
-  vi.mocked(dbCheckImportFile).mockResolvedValue(1);
   vi.mocked(dbPreviewImport).mockResolvedValue(items);
-  await waitFor(() => expect(screen.getByLabelText("加密密碼")).toBeInTheDocument());
   fireEvent.change(screen.getByLabelText("加密密碼"), { target: { value: "pw" } });
   fireEvent.click(screen.getByRole("button", { name: "下一步" }));
   await waitFor(() => expect(screen.getAllByRole("checkbox").length).toBe(items.length));
 }
 
 describe("DbImportPanel", () => {
-  it("closes without any IPC when the open dialog is cancelled", async () => {
-    vi.mocked(open).mockResolvedValue(null);
-    const { onClose } = renderImport();
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(dbCheckImportFile).not.toHaveBeenCalled();
-  });
-
-  it("shows the error and no passphrase field when the file is rejected", async () => {
-    vi.mocked(open).mockResolvedValue("/tmp/bad.json");
-    vi.mocked(dbCheckImportFile).mockRejectedValue("unsupported_version");
-    renderImport();
-
-    await waitFor(() =>
-      expect(
-        screen.getByText("此檔案由較新版本的 AITerm 匯出，請先更新 AITerm"),
-      ).toBeInTheDocument(),
-    );
-    // 使用者不該為一個注定被拒的檔案白打一次密碼
-    expect(screen.queryByLabelText("加密密碼")).not.toBeInTheDocument();
-    expect(dbPreviewImport).not.toHaveBeenCalled();
-  });
-
-  it("asks for the passphrase once the file passes the header check", async () => {
-    vi.mocked(open).mockResolvedValue("/tmp/ok.json");
-    vi.mocked(dbCheckImportFile).mockResolvedValue(1);
-    renderImport();
-    await waitFor(() => expect(screen.getByLabelText("加密密碼")).toBeInTheDocument());
-  });
-
   it("renders new and overwrite labels in the preview", async () => {
-    vi.mocked(open).mockResolvedValue("/tmp/ok.json");
-    vi.mocked(dbCheckImportFile).mockResolvedValue(1);
     vi.mocked(dbPreviewImport).mockResolvedValue(PREVIEW);
     renderImport();
 
-    await waitFor(() => expect(screen.getByLabelText("加密密碼")).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText("加密密碼"), { target: { value: "pw" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
 
@@ -207,12 +173,9 @@ describe("DbImportPanel", () => {
   });
 
   it("shows a localized message for a wrong passphrase", async () => {
-    vi.mocked(open).mockResolvedValue("/tmp/ok.json");
-    vi.mocked(dbCheckImportFile).mockResolvedValue(1);
     vi.mocked(dbPreviewImport).mockRejectedValue("wrong_passphrase");
     renderImport();
 
-    await waitFor(() => expect(screen.getByLabelText("加密密碼")).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText("加密密碼"), { target: { value: "nope" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
 
@@ -222,13 +185,10 @@ describe("DbImportPanel", () => {
   });
 
   it("imports only the checked ids and reports the counts", async () => {
-    vi.mocked(open).mockResolvedValue("/tmp/ok.json");
-    vi.mocked(dbCheckImportFile).mockResolvedValue(1);
     vi.mocked(dbPreviewImport).mockResolvedValue(PREVIEW);
     vi.mocked(dbImportConnections).mockResolvedValue({ added: 1, overwritten: 0, failures: [] });
     const { onDone } = renderImport();
 
-    await waitFor(() => expect(screen.getByLabelText("加密密碼")).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText("加密密碼"), { target: { value: "pw" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
 
@@ -239,12 +199,11 @@ describe("DbImportPanel", () => {
     await waitFor(() =>
       expect(dbImportConnections).toHaveBeenCalledWith("/tmp/ok.json", "pw", ["z"]),
     );
-    await waitFor(() => expect(onDone).toHaveBeenCalledWith("新增 1 筆、覆蓋 0 筆"));
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(screen.getByText("新增 1 筆、覆蓋 0 筆")).toBeInTheDocument();
   });
 
   it("lists per-item failures alongside the summary", async () => {
-    vi.mocked(open).mockResolvedValue("/tmp/ok.json");
-    vi.mocked(dbCheckImportFile).mockResolvedValue(1);
     vi.mocked(dbPreviewImport).mockResolvedValue(PREVIEW);
     vi.mocked(dbImportConnections).mockResolvedValue({
       added: 1, overwritten: 1,
@@ -252,7 +211,6 @@ describe("DbImportPanel", () => {
     });
     renderImport();
 
-    await waitFor(() => expect(screen.getByLabelText("加密密碼")).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText("加密密碼"), { target: { value: "pw" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(2));
@@ -262,12 +220,26 @@ describe("DbImportPanel", () => {
       expect(screen.getByText(/secret_write_failed: denied/)).toBeInTheDocument(),
     );
   });
+
+  /// 這正是使用者踩到的那個卡死：面板原本在掛載 effect 裡開原生對話框，
+  /// StrictMode 的雙呼叫會開兩次，而第一次的結果被 cleanup 的旗標丟掉，
+  /// 面板就永遠停在「選擇檔案中…」。現在面板根本不碰對話框。
+  it("opens no file dialog of its own, even under StrictMode's double-invoked effects", async () => {
+    render(
+      <StrictMode>
+        <LocaleProvider>
+          <DbImportPanel path="/tmp/ok.json" onClose={vi.fn()} onDone={vi.fn()} />
+        </LocaleProvider>
+      </StrictMode>,
+    );
+    await waitFor(() => expect(screen.getByLabelText("加密密碼")).toBeInTheDocument());
+    expect(open).not.toHaveBeenCalled();
+    expect(dbCheckImportFile).not.toHaveBeenCalled();
+  });
 });
 
 describe("DbImportPanel duplicate rows", () => {
   it("labels a duplicate row and will not let it be selected", async () => {
-    vi.mocked(open).mockResolvedValue("/tmp/ok.json");
-    vi.mocked(dbCheckImportFile).mockResolvedValue(1);
     vi.mocked(dbPreviewImport).mockResolvedValue(PREVIEW_WITH_DUPLICATE);
     renderImport();
     await advanceToPreview(PREVIEW_WITH_DUPLICATE);
@@ -280,8 +252,6 @@ describe("DbImportPanel duplicate rows", () => {
   });
 
   it("never sends a duplicate id to the backend", async () => {
-    vi.mocked(open).mockResolvedValue("/tmp/ok.json");
-    vi.mocked(dbCheckImportFile).mockResolvedValue(1);
     vi.mocked(dbPreviewImport).mockResolvedValue(PREVIEW_WITH_DUPLICATE);
     vi.mocked(dbImportConnections).mockResolvedValue({ added: 0, overwritten: 1, failures: [] });
     renderImport();
