@@ -294,3 +294,123 @@ pub async fn db_export_connections(
     std::fs::write(&path, bytes).map_err(|e| format!("io_error: {e}"))?;
     Ok(count)
 }
+
+/// 匯入預覽的單筆。**刻意不含 password**——現有的 `DbConnectionInfo`
+/// 就從不外送密碼，這裡維持同樣的界線：明文密碼只在 Rust 內部流動。
+/// 代價是套用時要再解密一次，換取密碼不跨 IPC 邊界。
+#[derive(Debug, Serialize)]
+pub struct ImportPreviewItem {
+    /// 匯出檔裡的 id，前端用它當勾選的 key。
+    pub id: String,
+    pub name: String,
+    pub db_type: DbType,
+    pub host: String,
+    pub port: u16,
+    pub database: String,
+    pub username: String,
+    pub conflict: ConflictKind,
+    pub existing_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImportFailure {
+    pub name: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct ImportResult {
+    pub added: usize,
+    pub overwritten: usize,
+    pub failures: Vec<ImportFailure>,
+}
+
+#[tauri::command]
+pub async fn db_preview_import(
+    path: String,
+    passphrase: String,
+    config: State<'_, Arc<ConfigStore>>,
+) -> Result<Vec<ImportPreviewItem>, String> {
+    let bytes = std::fs::read(&path).map_err(|e| format!("io_error: {e}"))?;
+    let payload = decrypt_payload(&bytes, &passphrase).map_err(|e| e.to_string())?;
+    let existing = config.get().db_connections;
+
+    Ok(resolve_conflicts(&payload.connections, &existing)
+        .into_iter()
+        .map(|r| {
+            let e = &payload.connections[r.index];
+            ImportPreviewItem {
+                id: e.id.clone(),
+                name: e.name.clone(),
+                db_type: e.db_type,
+                host: e.host.clone(),
+                port: e.port,
+                database: e.database.clone(),
+                username: e.username.clone(),
+                conflict: r.kind,
+                existing_name: r.existing_name,
+            }
+        })
+        .collect())
+}
+
+/// 套用勾選的項目。逐筆進行、不做全有全無——`ConfigStore` 沒有交易
+/// 語意，硬做 rollback 需要自行實作快照與還原，而還原本身也可能失敗。
+#[tauri::command]
+pub async fn db_import_connections(
+    path: String,
+    passphrase: String,
+    ids: Vec<String>,
+    config: State<'_, Arc<ConfigStore>>,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<ImportResult, String> {
+    let bytes = std::fs::read(&path).map_err(|e| format!("io_error: {e}"))?;
+    let payload = decrypt_payload(&bytes, &passphrase).map_err(|e| e.to_string())?;
+    let existing = config.get().db_connections;
+    let resolutions = resolve_conflicts(&payload.connections, &existing);
+
+    let mut result = ImportResult::default();
+    for r in resolutions {
+        let e = &payload.connections[r.index];
+        if !ids.contains(&e.id) {
+            continue;
+        }
+
+        let conn = DbConnection {
+            id: r.target_id.clone(),
+            name: e.name.clone(),
+            db_type: e.db_type,
+            host: e.host.clone(),
+            port: e.port,
+            database: e.database.clone(),
+            username: e.username.clone(),
+            default_schema: e.default_schema.clone(),
+        };
+        let applied = match r.kind {
+            ConflictKind::Overwrite => config.update_db_connection(conn),
+            ConflictKind::New => config.add_db_connection(conn),
+        };
+        if let Err(err) = applied {
+            result.failures.push(ImportFailure {
+                name: e.name.clone(),
+                reason: err.to_string(),
+            });
+            continue;
+        }
+        match r.kind {
+            ConflictKind::Overwrite => result.overwritten += 1,
+            ConflictKind::New => result.added += 1,
+        }
+
+        // 空密碼代表匯出時這筆本來就沒有密碼，不能拿它清掉既有的。
+        if !e.password.is_empty() {
+            if let Err(err) = secrets.set(&secret_key(&r.target_id), &e.password) {
+                result.failures.push(ImportFailure {
+                    name: e.name.clone(),
+                    reason: format!("secret_write_failed: {err}"),
+                });
+            }
+        }
+    }
+    Ok(result)
+}
