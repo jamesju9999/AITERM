@@ -121,14 +121,14 @@ async fn messages(
     };
 
     let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
-    let _ = (&mapping, &req, &raw, &message_id); // Task 15 才會用到，先壓掉 unused 警告。
     Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "text/event-stream")
         .header("cache-control", "no-cache")
         .header("connection", "keep-alive")
-        // Task 15 會換成 super::stream::run(state, mapping, req, raw, message_id)。
-        .body(Body::empty())
+        .body(Body::from_stream(super::stream::run(
+            state, mapping, req, raw, message_id,
+        )))
         .expect("建立 SSE 回應不應失敗")
 }
 

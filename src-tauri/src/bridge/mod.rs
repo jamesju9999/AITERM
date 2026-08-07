@@ -12,4 +12,5 @@ pub mod auth;
 pub mod factory;
 pub mod model_map;
 pub mod server;
+pub mod stream;
 pub mod upstream;
