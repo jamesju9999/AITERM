@@ -10,8 +10,16 @@ export interface PtySize {
   cols: number;
 }
 
-export function createPty(size: PtySize, cwd?: string): Promise<string> {
-  return invoke<string>("pty_create", { size, cwd: cwd ?? null });
+export function createPty(
+  size: PtySize,
+  cwd?: string,
+  claudeBridge?: boolean,
+): Promise<string> {
+  return invoke<string>("pty_create", {
+    size,
+    cwd: cwd ?? null,
+    claudeBridge: claudeBridge ?? false,
+  });
 }
 
 export function writePty(id: string, data: string): Promise<void> {
