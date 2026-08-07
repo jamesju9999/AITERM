@@ -176,3 +176,38 @@ describe("TabBar terminal attention indicator", () => {
     expect(attention).not.toBe(mailFailure);
   });
 });
+
+// LocaleProvider 預設 zh-TW，所以這裡斷言 zh-TW 的 badge 文字（i18n bridge_tab_badge = "CC"）。
+describe("TabBar Claude Code bridge badge", () => {
+  it("claudeBridge 為 true 的終端機分頁顯示 CC 標記", () => {
+    renderTabBar({
+      tabs: [{ id: "t1", title: "Tab 1", type: "terminal", claudeBridge: true }],
+      activeId: "t1",
+    });
+    expect(screen.getByText("CC")).toBeInTheDocument();
+  });
+
+  it("claudeBridge 為 false／未設定時不顯示標記", () => {
+    renderTabBar({ tabs: baseTabs, activeId: "t1" });
+    expect(screen.queryByText("CC")).not.toBeInTheDocument();
+  });
+
+  it("非終端機分頁即使 claudeBridge 為 true 也不顯示標記", () => {
+    renderTabBar({
+      tabs: [{ id: "m1", title: "Mail", type: "mail", claudeBridge: true } as Tab],
+      activeId: "m1",
+    });
+    expect(screen.queryByText("CC")).not.toBeInTheDocument();
+  });
+
+  // 兩者可能同時出現在同一顆圖示上（等待輸入 + 已啟用橋接），class 必須可分辨才不會互撞版位。
+  it("與 attention 提示點的 class 不相同，兩者能同時顯示", () => {
+    renderTabBar({
+      tabs: [{ id: "t1", title: "Tab 1", type: "terminal", claudeBridge: true, attention: "waiting" }],
+      activeId: "t2",
+    });
+    const bridgeBadge = screen.getByText("CC");
+    const attentionBadge = screen.getByRole("img", { name: "終端機正在等待你的回應" });
+    expect(bridgeBadge.className).not.toBe(attentionBadge.className);
+  });
+});
