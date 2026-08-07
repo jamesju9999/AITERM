@@ -1991,6 +1991,15 @@ vi.mock("../../ipc/db", () => ({
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn(), open: vi.fn() }));
 ```
 
+現有的 `beforeEach` 只 stub 了 `localStorage`，沒有清 mock，於是呼叫次數會跨測試累積、讓 `toHaveBeenCalledTimes` 讀到前面測試留下的數字。在 `beforeEach` 開頭補一行（`clearAllMocks` 只清呼叫紀錄，不會清掉 `vi.mock` factory 裡設定的 `mockResolvedValue`）：
+
+```tsx
+beforeEach(() => {
+  vi.clearAllMocks();
+  Object.defineProperty(window, "localStorage", { /* 既有內容不動 */ });
+});
+```
+
 再加測試：
 
 ```tsx
@@ -2015,7 +2024,12 @@ describe("DatabaseConnectionsPage transfer buttons", () => {
   it("opens the export panel and hides the connection list", async () => {
     vi.mocked(dbListConnections).mockResolvedValue(ONE_CONN);
     renderPage();
-    await waitFor(() => fireEvent.click(screen.getByRole("button", { name: "匯出" })));
+    // 必須先等清單載入完。「匯出」鈕在 connections 還是空陣列時是 disabled，
+    // 而 waitFor 的第一次檢查是同步跑的——getByRole 當下就找得到那顆
+    // （存在，只是 disabled），callback 不 throw 就立刻 resolve，於是點擊
+    // 會落在 disabled 按鈕上變成 no-op。要等的是「鈕變成可按」，不是「鈕存在」。
+    await waitFor(() => expect(screen.getByRole("button", { name: "匯出" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "匯出" }));
     expect(screen.getByText("匯出資料庫連線")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "+ 新增連線" })).not.toBeInTheDocument();
   });
@@ -2116,7 +2130,7 @@ import { DbExportPanel, DbImportPanel } from "./DbConnectionTransfer";
       {transfer === "import" && (
         <DbImportPanel
           onClose={() => setTransfer(null)}
-          onDone={(msg) => { setNotice(msg); load(); }}
+          onDone={() => load()}
         />
       )}
 ```
@@ -2128,6 +2142,8 @@ import { DbExportPanel, DbImportPanel } from "./DbConnectionTransfer";
 ```
 
 匯入的 `onDone` 刻意**不**關閉面板——`ImportResult.failures` 要留在畫面上讓使用者看到哪幾筆失敗。使用者自己按「取消」離開。
+
+也因此匯入的 `onDone` 只呼叫 `load()`，**不**設 `notice`：面板留在畫面上、已經自己顯示了結果摘要與失敗清單，頁面再顯示一次會讓同一句話同時出現在畫面上兩處。`notice` 只服務匯出流程——那個面板完成後會關閉，需要頁面接手報告結果。
 
 - [ ] **Step 4: 執行測試確認通過**
 
@@ -2218,4 +2234,9 @@ git commit -m "fix(db-export): 手動驗證修正"
 
 ## 已知限制
 
-同一份匯出檔內部若有兩筆同名連線，且兩者在現有設定中都沒有對應，衝突判定會把兩筆都判為 `New`（判定是對匯入前的設定快照做的，不會把前一筆剛加入的結果算進去），結果是兩筆同名連線並存。這需要使用者刻意製造，不值得為它增加複雜度。
+衝突判定是對**匯入前的設定快照**做的，不會把迴圈中前幾筆剛套用的結果算進去。這帶來兩個邊界行為：
+
+1. 同一份匯出檔內部若有兩筆同名連線，且兩者在現有設定中都沒有對應，兩筆都會判為 `New`，結果是兩筆同名連線並存。
+2. 反之，若兩筆都對應到**同一個**現有連線，兩筆會拿到相同的 `target_id`，第二筆覆蓋掉第一筆，但 `overwritten` 會計為 2 而實際只有一列。
+
+兩者都需要使用者刻意製造出「一份匯出檔內含重複名稱」的檔案才會發生，不值得為它們增加複雜度。
