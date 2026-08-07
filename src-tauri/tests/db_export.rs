@@ -264,3 +264,115 @@ fn resolutions_come_back_in_input_order_with_matching_indexes() {
     assert_eq!(r.iter().map(|x| x.index).collect::<Vec<_>>(), vec![0, 1, 2]);
     assert_eq!(r[1].kind, ConflictKind::Overwrite);
 }
+
+// ---- KDF 參數上界（Finding 1）----
+
+#[test]
+fn an_absurd_memory_cost_is_rejected_rather_than_allocated() {
+    // 3.8 GiB。沒有上界的話 argon2 會真的去配置，配不到就 abort 整個行程。
+    let bytes = tweak_header("kdf", serde_json::json!({
+        "alg": "argon2id", "salt": "AAAAAAAAAAAAAAAAAAAAAA==",
+        "m_cost": 4_000_000u32, "t_cost": 2, "p_cost": 1,
+    }));
+    assert_eq!(decrypt_payload(&bytes, "pw").unwrap_err(), ImportError::UnsupportedKdf);
+}
+
+#[test]
+fn an_absurd_time_cost_is_rejected() {
+    let bytes = tweak_header("kdf", serde_json::json!({
+        "alg": "argon2id", "salt": "AAAAAAAAAAAAAAAAAAAAAA==",
+        "m_cost": 19456, "t_cost": u32::MAX, "p_cost": 1,
+    }));
+    assert_eq!(decrypt_payload(&bytes, "pw").unwrap_err(), ImportError::UnsupportedKdf);
+}
+
+/// 上界檢查必須在 `check_import_file` 這一關就生效——UI 是在要求使用者
+/// 輸入 passphrase 之前呼叫它的，晚一步擋就等於沒擋。
+#[test]
+fn absurd_kdf_params_are_caught_before_the_passphrase_is_needed() {
+    let bytes = tweak_header("kdf", serde_json::json!({
+        "alg": "argon2id", "salt": "AAAAAAAAAAAAAAAAAAAAAA==",
+        "m_cost": 4_000_000u32, "t_cost": 2, "p_cost": 1,
+    }));
+    assert_eq!(check_import_file(&bytes).unwrap_err(), ImportError::UnsupportedKdf);
+}
+
+#[test]
+fn our_own_export_is_within_the_kdf_bounds() {
+    let bytes = encrypt_payload(&sample_payload(), "pw").unwrap();
+    assert!(check_import_file(&bytes).is_ok());
+    assert!(decrypt_payload(&bytes, "pw").is_ok());
+}
+
+// ---- 版本閘門優先於其餘 header 結構（Finding 2）----
+
+/// v2 若改動了 header 的其餘結構，使用者該看到「請更新 AITerm」，
+/// 而不是「這不是匯出檔」。
+#[test]
+fn a_newer_version_is_reported_as_such_even_when_the_rest_of_the_header_changed() {
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "format": "aiterm-db-export",
+        "version": 2,
+        "kdf": { "alg": "scrypt", "salt": "AAAA", "log_n": 15 },  // v1 的欄位全不見了
+        "aead": "chacha20-poly1305",                               // 連 cipher 都改名了
+        "payload": "AAAA",
+    })).unwrap();
+    assert_eq!(check_import_file(&bytes).unwrap_err(), ImportError::UnsupportedVersion);
+}
+
+/// 認不得的版本表示法一律視為「比我們新」。
+#[test]
+fn a_non_numeric_version_is_treated_as_unsupported() {
+    let bytes = tweak_header("version", serde_json::json!("2.0"));
+    assert_eq!(check_import_file(&bytes).unwrap_err(), ImportError::UnsupportedVersion);
+}
+
+/// 沒有 format 欄位的 JSON 仍然要是「不是匯出檔」，不能因為版本閘門
+/// 的改動而變成別的錯誤。
+#[test]
+fn json_without_a_format_field_is_still_not_an_export_file() {
+    let bytes = serde_json::to_vec(&serde_json::json!({ "version": 1 })).unwrap();
+    assert_eq!(check_import_file(&bytes).unwrap_err(), ImportError::NotAnExportFile);
+}
+
+// ---- 既有但未被測到的路徑（Finding 3）----
+
+#[test]
+fn an_unknown_kdf_algorithm_is_rejected() {
+    let bytes = tweak_header("kdf", serde_json::json!({
+        "alg": "scrypt", "salt": "AAAAAAAAAAAAAAAAAAAAAA==",
+        "m_cost": 19456, "t_cost": 2, "p_cost": 1,
+    }));
+    assert_eq!(decrypt_payload(&bytes, "pw").unwrap_err(), ImportError::UnsupportedKdf);
+}
+
+#[test]
+fn an_unknown_cipher_is_rejected() {
+    let bytes = tweak_header("cipher", serde_json::json!("chacha20-poly1305"));
+    assert_eq!(decrypt_payload(&bytes, "pw").unwrap_err(), ImportError::UnsupportedKdf);
+}
+
+/// `Nonce::from_slice` 對長度不符會 panic。長度檢查是唯一擋在它前面的
+/// 東西，刪掉它所有其他測試依然全綠——所以這條測試要釘住它。
+#[test]
+fn a_wrong_length_nonce_is_rejected_instead_of_panicking() {
+    let bytes = tweak_header("nonce", serde_json::json!("AAAAAAAAAAA=")); // 8 bytes，不是 12
+    assert_eq!(decrypt_payload(&bytes, "pw").unwrap_err(), ImportError::NotAnExportFile);
+}
+
+#[test]
+fn invalid_base64_in_the_header_is_not_an_export_file() {
+    for field in ["nonce", "data"] {
+        let bytes = tweak_header(field, serde_json::json!("!!!not base64!!!"));
+        assert_eq!(
+            decrypt_payload(&bytes, "pw").unwrap_err(),
+            ImportError::NotAnExportFile,
+            "field={field}"
+        );
+    }
+    let bytes = tweak_header("kdf", serde_json::json!({
+        "alg": "argon2id", "salt": "!!!not base64!!!",
+        "m_cost": 19456, "t_cost": 2, "p_cost": 1,
+    }));
+    assert_eq!(decrypt_payload(&bytes, "pw").unwrap_err(), ImportError::NotAnExportFile);
+}

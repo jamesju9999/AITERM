@@ -20,6 +20,15 @@ const ARGON2_M_COST: u32 = 19456;
 const ARGON2_T_COST: u32 = 2;
 const ARGON2_P_COST: u32 = 1;
 
+// 這三個參數來自匯入檔。argon2 的 `Params::new` 只擋到 u32::MAX，而
+// `hash_password_into` 內部是不可失敗配置——配不到記憶體就 abort 整個
+// 行程，使用者連錯誤訊息都看不到。m_cost 以 KiB 計，1 GiB 對合法檔案
+// 綽綽有餘（我們自己寫出去的是 19 MiB），對惡意檔案則把記憶體壓在
+// 可承受範圍內。
+const ARGON2_MAX_M_COST: u32 = 1024 * 1024; // 1 GiB
+const ARGON2_MAX_T_COST: u32 = 16;
+const ARGON2_MAX_P_COST: u32 = 4;
+
 /// 匯出檔的明文 header。刻意不含任何連線資訊——所有連線資料都在
 /// `data` 的密文裡。留這層明文是為了讓「檔案不對」和「passphrase 錯誤」
 /// 成為兩種可分辨的錯誤，並讓版本檢查能在解密前完成。
@@ -165,19 +174,46 @@ pub fn decrypt_payload(bytes: &[u8], passphrase: &str) -> Result<ExportPayload, 
     serde_json::from_slice(&plaintext).map_err(|_| ImportError::WrongPassphrase)
 }
 
+fn check_kdf_bounds(kdf: &KdfParams) -> Result<(), ImportError> {
+    if kdf.m_cost > ARGON2_MAX_M_COST
+        || kdf.t_cost > ARGON2_MAX_T_COST
+        || kdf.p_cost > ARGON2_MAX_P_COST
+    {
+        return Err(ImportError::UnsupportedKdf);
+    }
+    Ok(())
+}
+
+/// 版本閘門只解析這兩個欄位。刻意獨立於 `Envelope`：若用完整結構解，
+/// 一份改動過 header 結構的 v2 檔案會先失敗在 serde，使用者拿到的是
+/// 「這不是匯出檔」而不是「請先更新 AITerm」——版本欄位就白設了。
+/// `format` 與 `version` 是這個格式唯一承諾永遠不變的兩個欄位。
+#[derive(Deserialize)]
+struct VersionGate {
+    format: String,
+    /// 用 `Value` 而非 `u32`：未來版本若把它寫成字串或超出 u32，
+    /// 應該回報「版本不支援」，而不是「這不是匯出檔」。
+    version: serde_json::Value,
+}
+
 /// 只讀明文 header：確認這是 AITerm 的匯出檔，且版本在支援範圍內。
 /// 完全不碰密文，所以可以在要求使用者輸入 passphrase 之前呼叫。
 fn check_envelope(bytes: &[u8]) -> Result<Envelope, ImportError> {
-    let envelope: Envelope =
+    let gate: VersionGate =
         serde_json::from_slice(bytes).map_err(|_| ImportError::NotAnExportFile)?;
-    if envelope.format != FORMAT_TAG {
+    if gate.format != FORMAT_TAG {
         return Err(ImportError::NotAnExportFile);
     }
-    // 高版本一律擋下。v1 無法分辨 v2 是「只新增欄位」還是「改了既有
-    // 欄位的語意」，硬讀會安靜地匯入錯誤資料。反之低版本必須支援。
-    if envelope.version > EXPORT_VERSION {
+    // 認不得的版本表示法一律當成「比我們新」——我們無法理解它。
+    let version = gate.version.as_u64().unwrap_or(u64::MAX);
+    if version > EXPORT_VERSION as u64 {
         return Err(ImportError::UnsupportedVersion);
     }
+
+    // 版本確定在支援範圍內，才用完整結構解。
+    let envelope: Envelope =
+        serde_json::from_slice(bytes).map_err(|_| ImportError::NotAnExportFile)?;
+    check_kdf_bounds(&envelope.kdf)?;
     Ok(envelope)
 }
 
