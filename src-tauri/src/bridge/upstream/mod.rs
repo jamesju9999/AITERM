@@ -12,6 +12,7 @@ use futures_util::stream::BoxStream;
 use crate::ai::AiError;
 use crate::bridge::anthropic::request::MessagesRequest;
 
+pub mod anthropic;
 pub mod openai;
 
 #[derive(Debug, Clone, PartialEq)]
