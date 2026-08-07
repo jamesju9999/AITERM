@@ -290,7 +290,12 @@ pub fn resolve_conflicts(
             } else {
                 ConflictKind::New
             };
-            pool.push((target_id.clone(), e.name.clone()));
+            // 只有真的會被套用的筆數才進池。Duplicate 不會套用，把它的
+            // 名稱放進去會讓後面某筆比對到一個匯入後根本不存在的名稱，
+            // 於是也被誤判成 Duplicate 而漏掉。
+            if kind != ConflictKind::Duplicate {
+                pool.push((target_id.clone(), e.name.clone()));
+            }
             Resolution { index, kind, target_id, existing_name }
         })
         .collect()

@@ -443,3 +443,18 @@ fn conflict_kind_serializes_in_snake_case() {
     assert_eq!(serde_json::to_value(ConflictKind::Overwrite).unwrap(), "overwrite");
     assert_eq!(serde_json::to_value(ConflictKind::Duplicate).unwrap(), "duplicate");
 }
+
+/// Duplicate 不會被套用，所以它的名稱不該進入後續的比對池——否則
+/// 後面一筆會比對到一個匯入後根本不存在的名稱，被誤判成 Duplicate
+/// 而漏掉。這裡的 C 應該要以 New 建立。
+#[test]
+fn a_skipped_duplicates_name_does_not_shadow_a_later_entry() {
+    let r = resolve_conflicts(
+        &[incoming("x", "Foo"), incoming("x", "Bar"), incoming("q", "Bar")],
+        &[],
+    );
+    assert_eq!(r[0].kind, ConflictKind::New);
+    assert_eq!(r[1].kind, ConflictKind::Duplicate, "id 與第一筆重複");
+    assert_eq!(r[2].kind, ConflictKind::New, "Bar 從未被真正建立，這筆該建立");
+    assert_eq!(r[2].target_id, "q");
+}
