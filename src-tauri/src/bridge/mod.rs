@@ -10,3 +10,4 @@
 pub mod anthropic;
 pub mod auth;
 pub mod model_map;
+pub mod upstream;
