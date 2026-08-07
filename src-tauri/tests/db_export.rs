@@ -2,6 +2,7 @@
 //! 所以可以直接呼叫，不需要建立 AppHandle。
 
 use aiterm_lib::commands::db_export::*;
+use aiterm_lib::config::types::{DbConnection, DbType};
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
@@ -182,4 +183,84 @@ fn the_version_check_happens_before_decryption() {
 fn the_current_version_is_accepted() {
     let bytes = encrypt_payload(&sample_payload(), "pw").unwrap();
     assert_eq!(check_import_file(&bytes).unwrap(), EXPORT_VERSION);
+}
+
+fn existing(id: &str, name: &str) -> DbConnection {
+    DbConnection {
+        id: id.into(),
+        name: name.into(),
+        db_type: DbType::Postgresql,
+        host: "localhost".into(),
+        port: 5432,
+        database: "db".into(),
+        username: "u".into(),
+        default_schema: None,
+    }
+}
+
+fn incoming(id: &str, name: &str) -> ExportedConnection {
+    ExportedConnection {
+        id: id.into(),
+        name: name.into(),
+        db_type: DbType::Postgresql,
+        host: "localhost".into(),
+        port: 5432,
+        database: "db".into(),
+        username: "u".into(),
+        default_schema: None,
+        password: "pw".into(),
+    }
+}
+
+#[test]
+fn an_unknown_connection_is_new_and_keeps_its_exported_id() {
+    let r = resolve_conflicts(&[incoming("x", "Fresh")], &[existing("a", "Other")]);
+    assert_eq!(r[0].kind, ConflictKind::New);
+    // 沿用匯出檔的 id，讓同一份檔案重複匯入是冪等的。
+    assert_eq!(r[0].target_id, "x");
+    assert_eq!(r[0].existing_name, None);
+}
+
+#[test]
+fn a_matching_id_overwrites_that_connection() {
+    let r = resolve_conflicts(&[incoming("a", "Renamed")], &[existing("a", "Original")]);
+    assert_eq!(r[0].kind, ConflictKind::Overwrite);
+    assert_eq!(r[0].target_id, "a");
+    assert_eq!(r[0].existing_name.as_deref(), Some("Original"));
+}
+
+#[test]
+fn a_matching_name_overwrites_even_when_the_id_differs() {
+    // 同事在他的機器上手動建了同名連線——id 不同但實際是同一筆。
+    let r = resolve_conflicts(&[incoming("x", "總行LBOTHODB")], &[existing("a", "總行LBOTHODB")]);
+    assert_eq!(r[0].kind, ConflictKind::Overwrite);
+    assert_eq!(r[0].target_id, "a", "要覆蓋現有那筆，沿用它的 id");
+}
+
+#[test]
+fn name_matching_ignores_case_and_surrounding_whitespace() {
+    let r = resolve_conflicts(&[incoming("x", "  MyDb  ")], &[existing("a", "mydb")]);
+    assert_eq!(r[0].kind, ConflictKind::Overwrite);
+    assert_eq!(r[0].target_id, "a");
+}
+
+#[test]
+fn an_id_match_wins_over_a_name_match_on_a_different_connection() {
+    let r = resolve_conflicts(
+        &[incoming("a", "Beta")],
+        &[existing("a", "Alpha"), existing("b", "Beta")],
+    );
+    assert_eq!(r[0].target_id, "a", "id 比對優先於名稱比對");
+    assert_eq!(r[0].existing_name.as_deref(), Some("Alpha"));
+}
+
+#[test]
+fn resolutions_come_back_in_input_order_with_matching_indexes() {
+    let r = resolve_conflicts(
+        &[incoming("x", "New1"), incoming("a", "Hit"), incoming("y", "New2")],
+        &[existing("a", "Hit")],
+    );
+    assert_eq!(r.len(), 3);
+    assert_eq!(r.iter().map(|x| x.index).collect::<Vec<_>>(), vec![0, 1, 2]);
+    assert_eq!(r[1].kind, ConflictKind::Overwrite);
 }

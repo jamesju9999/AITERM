@@ -11,7 +11,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
-use crate::config::types::DbType;
+use crate::config::types::{DbConnection, DbType};
 
 const FORMAT_TAG: &str = "aiterm-db-export";
 
@@ -184,4 +184,56 @@ fn check_envelope(bytes: &[u8]) -> Result<Envelope, ImportError> {
 /// 對外的檔案檢查入口，回傳檔案的格式版本。
 pub fn check_import_file(bytes: &[u8]) -> Result<u32, ImportError> {
     check_envelope(bytes).map(|e| e.version)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictKind {
+    New,
+    Overwrite,
+}
+
+/// 匯出檔中某一筆該如何套用。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Resolution {
+    /// 在匯出檔 `connections` 陣列中的索引。
+    pub index: usize,
+    pub kind: ConflictKind,
+    /// Overwrite 時是現有那筆的 id；New 時是匯出檔裡的 id。
+    pub target_id: String,
+    /// Overwrite 時填現有那筆的名稱，供 UI 顯示「覆蓋（原：xxx）」。
+    pub existing_name: Option<String>,
+}
+
+/// 先比 id，沒中再比名稱（trim + 忽略大小寫）。比名稱是為了處理
+/// 「同事在自己機器上手動建了同名連線」——id 不同但實際是同一筆，
+/// 不比名稱的話會變成兩筆同名連線並存。
+pub fn resolve_conflicts(
+    exported: &[ExportedConnection],
+    existing: &[DbConnection],
+) -> Vec<Resolution> {
+    exported
+        .iter()
+        .enumerate()
+        .map(|(index, e)| {
+            let hit = existing.iter().find(|x| x.id == e.id).or_else(|| {
+                let key = e.name.trim().to_lowercase();
+                existing.iter().find(|x| x.name.trim().to_lowercase() == key)
+            });
+            match hit {
+                Some(x) => Resolution {
+                    index,
+                    kind: ConflictKind::Overwrite,
+                    target_id: x.id.clone(),
+                    existing_name: Some(x.name.clone()),
+                },
+                None => Resolution {
+                    index,
+                    kind: ConflictKind::New,
+                    target_id: e.id.clone(),
+                    existing_name: None,
+                },
+            }
+        })
+        .collect()
 }
