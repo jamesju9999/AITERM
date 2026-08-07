@@ -5,6 +5,8 @@ pub struct ShellSpec {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub envs: Vec<(String, String)>,
+    /// 要從繼承環境中移除的變數名。
+    pub env_removals: Vec<String>,
 }
 
 /// Return the first available shell on this platform.
@@ -84,6 +86,7 @@ function global:prompt {
             ("COLORTERM".into(), "truecolor".into()),
             ("PYTHONIOENCODING".into(), "utf-8".into()),
         ],
+        env_removals: Vec::new(),
     }
 }
 
@@ -105,6 +108,7 @@ fn inject_cmd_integration() -> ShellSpec {
             ("COLORTERM".into(), "truecolor".into()),
             ("PYTHONIOENCODING".into(), "utf-8".into()),
         ],
+        env_removals: Vec::new(),
     }
 }
 
@@ -272,6 +276,7 @@ PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
         program,
         args,
         envs,
+        env_removals: Vec::new(),
     }
 }
 

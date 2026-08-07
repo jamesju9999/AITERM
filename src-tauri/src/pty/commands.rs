@@ -26,11 +26,23 @@ impl From<PtySizeArg> for PtySize {
 pub fn pty_create(
     app: AppHandle,
     manager: State<'_, PtyManager>,
+    bridge: State<'_, std::sync::Arc<crate::bridge::BridgeState>>,
+    secrets: State<'_, std::sync::Arc<crate::secret::SecretStore>>,
     size: PtySizeArg,
     cwd: Option<String>,
+    claude_bridge: Option<bool>,
 ) -> Result<String, PtyError> {
     let cwd = cwd.map(std::path::PathBuf::from);
-    manager.create_with_app(app, size.into(), cwd)
+    // server 沒在跑就不注入 —— 注入指向死埠的位址比不注入更難除錯。
+    let bridge_env = match (claude_bridge.unwrap_or(false), bridge.port()) {
+        (true, Some(port)) => secrets
+            .get(crate::bridge::auth::BRIDGE_TOKEN_KEY)
+            .ok()
+            .flatten()
+            .map(|t| (port, t)),
+        _ => None,
+    };
+    manager.create_with_app(app, size.into(), cwd, bridge_env)
 }
 
 #[tauri::command]

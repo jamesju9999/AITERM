@@ -9,6 +9,7 @@
 
 pub mod anthropic;
 pub mod auth;
+pub mod env;
 pub mod factory;
 pub mod model_map;
 pub mod server;
