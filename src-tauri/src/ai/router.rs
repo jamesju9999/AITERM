@@ -68,6 +68,36 @@ pub(crate) fn default_base_url(provider_type: ProviderType) -> Option<&'static s
     }
 }
 
+/// 這個供應商的 OpenAI 相容 chat.completions 端點。
+///
+/// 注意這跟 `ai/` 底下各 client 用的 URL 不一定相同：router 對每個供應商
+/// 用它偏好的 client（Ollama 走原生 /api/chat、OpenAI 走專用 client），
+/// 而橋接一律講 OpenAI chat.completions，所以問的是不同的問題。
+///
+/// 端點形狀無法從 URL 樣式（結尾是否有 `/v1`）推導，只能逐 provider type
+/// 明確列出：GitHub Copilot 的預設 base 沒有版本前綴，端點卻不加 `/v1`
+/// （加了會 404）；Openrouter/Xai/Deepseek/Kimi 的預設 base 常數已經以
+/// `/v1` 結尾；GoogleAi 的預設 base 已含 `/v1beta/openai`。
+pub fn openai_chat_url(provider_type: ProviderType, base_url: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    match provider_type {
+        // 預設 base 沒有版本前綴，端點要自己補 `/v1`。
+        ProviderType::Openai | ProviderType::Ollama => format!("{base}/v1/chat/completions"),
+        // 其餘型別的 base（無論是預設值還是使用者自填）已經包含所需的版本
+        // 路徑，端點直接接在後面即可。
+        ProviderType::GithubCopilot
+        | ProviderType::GoogleAi
+        | ProviderType::Openrouter
+        | ProviderType::Xai
+        | ProviderType::Deepseek
+        | ProviderType::Kimi
+        | ProviderType::OpenaiCompatible
+        | ProviderType::Anthropic
+        | ProviderType::AnthropicCompatible
+        | ProviderType::Codex => format!("{base}/chat/completions"),
+    }
+}
+
 /// Returns a valid OAuth access token, refreshing it first if it's expired or
 /// within 5 minutes of expiry. Falls back to the stored token on refresh failure.
 pub(crate) async fn get_valid_oauth_token(provider_id: &str, secrets: &SecretStore) -> Result<String, AiError> {
@@ -664,6 +694,63 @@ mod tests {
         assert_eq!(XAI_DEFAULT_BASE_URL, "https://api.x.ai/v1");
         assert_eq!(DEEPSEEK_DEFAULT_BASE_URL, "https://api.deepseek.com/v1");
         assert_eq!(KIMI_DEFAULT_BASE_URL, "https://api.moonshot.ai/v1");
+    }
+
+    #[test]
+    fn openai_chat_url_is_correct_per_provider_type() {
+        // 逐一驗證每種橋接會用到的 provider type，用該 type 的預設
+        // base_url——這是 acceptance test 抓到的 bug（GitHub Copilot 被誤補
+        // 了 `/v1` 導致 404）的回歸測試，規則不能靠 URL 形狀猜，只能列表。
+        assert_eq!(
+            openai_chat_url(ProviderType::Openai, default_base_url(ProviderType::Openai).unwrap()),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            openai_chat_url(ProviderType::Ollama, default_base_url(ProviderType::Ollama).unwrap()),
+            "http://localhost:11434/v1/chat/completions"
+        );
+        assert_eq!(
+            openai_chat_url(ProviderType::GithubCopilot, default_base_url(ProviderType::GithubCopilot).unwrap()),
+            "https://api.githubcopilot.com/chat/completions"
+        );
+        assert_eq!(
+            openai_chat_url(ProviderType::GoogleAi, default_base_url(ProviderType::GoogleAi).unwrap()),
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        );
+        assert_eq!(
+            openai_chat_url(ProviderType::Openrouter, default_base_url(ProviderType::Openrouter).unwrap()),
+            "https://openrouter.ai/api/v1/chat/completions"
+        );
+        assert_eq!(
+            openai_chat_url(ProviderType::Xai, default_base_url(ProviderType::Xai).unwrap()),
+            "https://api.x.ai/v1/chat/completions"
+        );
+        assert_eq!(
+            openai_chat_url(ProviderType::Deepseek, default_base_url(ProviderType::Deepseek).unwrap()),
+            "https://api.deepseek.com/v1/chat/completions"
+        );
+        assert_eq!(
+            openai_chat_url(ProviderType::Kimi, default_base_url(ProviderType::Kimi).unwrap()),
+            "https://api.moonshot.ai/v1/chat/completions"
+        );
+        // OpenaiCompatible 沒有預設值，使用者自填的 base 要自己帶版本路徑
+        // ——這是這個 app 既有的約定，跟 ai/compatible.rs 的組法一致。
+        assert_eq!(
+            openai_chat_url(ProviderType::OpenaiCompatible, "https://my-server.example.com/v1"),
+            "https://my-server.example.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn openai_chat_url_trims_trailing_slash() {
+        assert_eq!(
+            openai_chat_url(ProviderType::Openai, "https://api.openai.com/"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            openai_chat_url(ProviderType::GithubCopilot, "https://api.githubcopilot.com/"),
+            "https://api.githubcopilot.com/chat/completions"
+        );
     }
 
     #[tokio::test]

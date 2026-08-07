@@ -83,6 +83,7 @@ pub async fn build(
     match kind {
         UpstreamKind::OpenAi => {
             let base = resolve_base_url(p, provider_id)?;
+            let url = crate::ai::router::openai_chat_url(p.provider_type, &base);
 
             // GitHub Copilot 是這個分支裡唯一不是「拿 API key 直接打 base_url」
             // 的 provider type：原始 GitHub OAuth token 要先換成短期的 Copilot
@@ -95,14 +96,14 @@ pub async fn build(
                     .await
                     .map_err(|message| AiError::Network { message })?;
                 Ok(Upstream::OpenAi(OpenAiUpstream::with_extra_headers(
-                    base,
+                    url,
                     copilot_token,
                     crate::ai::copilot::copilot_headers(),
                     tool_meta.clone(),
                 )))
             } else {
                 let key = secrets.get(provider_id).ok().flatten().unwrap_or_default();
-                Ok(Upstream::OpenAi(OpenAiUpstream::new(base, key, tool_meta.clone())))
+                Ok(Upstream::OpenAi(OpenAiUpstream::new(url, key, tool_meta.clone())))
             }
         }
         UpstreamKind::Anthropic => {

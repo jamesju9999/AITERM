@@ -51,7 +51,7 @@ async fn streams_text_and_tool_calls() {
         .mount(&server)
         .await;
 
-    let up = OpenAiUpstream::new(server.uri(), "sk-test".into(), empty_cache());
+    let up = OpenAiUpstream::new(format!("{}/v1/chat/completions", server.uri()), "sk-test".into(), empty_cache());
     let resp = up
         .send(
             &req(serde_json::json!({
@@ -79,7 +79,7 @@ async fn http_error_is_mapped_to_ai_error() {
         .mount(&server)
         .await;
 
-    let up = OpenAiUpstream::new(server.uri(), "bad".into(), empty_cache());
+    let up = OpenAiUpstream::new(format!("{}/v1/chat/completions", server.uri()), "bad".into(), empty_cache());
     let err = up
         .send(&req(serde_json::json!({
             "model": "m", "messages": [{"role":"user","content":"x"}]
@@ -90,21 +90,28 @@ async fn http_error_is_mapped_to_ai_error() {
 }
 
 #[tokio::test]
-async fn base_url_already_ending_in_v1_is_not_doubled() {
+async fn upstream_uses_the_given_url_verbatim_without_appending_anything() {
+    // OpenAiUpstream 不再自己猜端點形狀（那條規則本身就是這次修的
+    // bug——GitHub Copilot 沒有版本前綴卻被誤補了 `/v1`）。端點 URL 由呼叫端
+    // （`bridge/factory.rs` 透過 `ai::router::openai_chat_url`）依 provider
+    // type 算好整個路徑再傳進來，`OpenAiUpstream` 只能原樣打那個 URL，不能
+    // 再自作主張加東西。這裡故意傳一個「怪」路徑（不是 `/v1/chat/completions`
+    // 也不是 `/chat/completions`）來證明它沒有被猜測邏輯改寫。
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/chat/completions"))
+        .and(path("/weird/custom/path"))
         .respond_with(ResponseTemplate::new(200).set_body_raw("data: [DONE]\n\n", "text/event-stream"))
         .mount(&server)
         .await;
 
-    let up = OpenAiUpstream::new(format!("{}/v1", server.uri()), "k".into(), empty_cache());
+    let up = OpenAiUpstream::new(format!("{}/weird/custom/path", server.uri()), "k".into(), empty_cache());
     let resp = up
         .send(&req(serde_json::json!({
             "model": "m", "messages": [{"role":"user","content":"x"}]
         })), "m")
         .await
         .unwrap();
-    // 沒有 panic 就代表打到了 /v1/chat/completions 而不是 /v1/v1/...
+    // 沒有 panic（wiremock 沒收到請求會在 mount 的 mock 未被呼叫時於其他
+    // 斷言曝露問題）就代表打到了原樣傳入的 URL，而不是被加工過的版本。
     assert!(matches!(collect(resp).await.last(), Some(UpstreamEvent::Done { .. })));
 }

@@ -13,7 +13,11 @@ use crate::bridge::tool_meta::ToolMetaCache;
 use crate::bridge::upstream::{BridgeUpstream, UpstreamEvent, UpstreamResponse};
 
 pub struct OpenAiUpstream {
-    base_url: String,
+    /// 完整的 chat.completions 端點 URL——由呼叫端（`bridge/factory.rs`）
+    /// 透過 `ai::router::openai_chat_url` 依 `ProviderType` 算好再傳進來。
+    /// 端點形狀無法從 base_url 的樣式推導（見該函式的註解），所以這裡不再
+    /// 猜，原樣使用。
+    url: String,
     api_key: String,
     client: reqwest::Client,
     /// 部分供應商（如 GitHub Copilot）要求每個請求都帶固定的額外標頭。
@@ -23,32 +27,17 @@ pub struct OpenAiUpstream {
 }
 
 impl OpenAiUpstream {
-    pub fn new(base_url: String, api_key: String, tool_meta: Arc<ToolMetaCache>) -> Self {
-        Self::with_extra_headers(base_url, api_key, Vec::new(), tool_meta)
+    pub fn new(url: String, api_key: String, tool_meta: Arc<ToolMetaCache>) -> Self {
+        Self::with_extra_headers(url, api_key, Vec::new(), tool_meta)
     }
 
     pub fn with_extra_headers(
-        base_url: String,
+        url: String,
         api_key: String,
         extra_headers: Vec<(String, String)>,
         tool_meta: Arc<ToolMetaCache>,
     ) -> Self {
-        Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
-            api_key,
-            client: reqwest::Client::new(),
-            extra_headers,
-            tool_meta,
-        }
-    }
-
-    /// 使用者填的 base_url 有人帶 `/v1` 有人不帶，兩種都要能用。
-    fn completions_url(&self) -> String {
-        if self.base_url.ends_with("/v1") {
-            format!("{}/chat/completions", self.base_url)
-        } else {
-            format!("{}/v1/chat/completions", self.base_url)
-        }
+        Self { url, api_key, client: reqwest::Client::new(), extra_headers, tool_meta }
     }
 }
 
@@ -61,7 +50,7 @@ impl BridgeUpstream for OpenAiUpstream {
     ) -> Result<UpstreamResponse, AiError> {
         let mut request_builder = self
             .client
-            .post(self.completions_url())
+            .post(&self.url)
             .bearer_auth(&self.api_key);
         for (key, value) in &self.extra_headers {
             request_builder = request_builder.header(key, value);
