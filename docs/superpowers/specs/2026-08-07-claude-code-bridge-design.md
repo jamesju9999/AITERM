@@ -391,9 +391,28 @@ M2 與 M3 各自以「探勘測試 dump 原始 SSE」為第一步。若 dump 顯
 
 - **Gemini（google-ai，API key 模式）的多輪工具呼叫**：真的 Claude Code 透過 Gemini 3.5 Flash 跑完整的讀檔 → 改檔 → 回報循環。見下方「供應商工具呼叫中繼資料的往返」。
 
-**已驗證不可用：**
+- **GitHub Copilot**：實測可用。過程中修掉兩個 bug —— 完全沒做 token 交換與 IDE 標頭，以及端點 URL 被誤補 `/v1` 導致 404。
 
-- **GitHub Copilot**：程式碼路徑已修好（token 交換 + IDE 標頭），但實測時使用者的 GitHub token 已過期（`Bad credentials`），未能完成端到端驗證。
+M1 宣稱支援的三個協定家族全部以真實供應商驗證完畢，沒有已知不可用的路徑。
+
+### 端點 URL 不能從 base_url 的形狀推導
+
+橋接一開始用「base 不以 `/v1` 結尾就補 `/v1`」的猜測規則，那是錯的：
+
+- **GitHub Copilot** 的 base `https://api.githubcopilot.com` 沒有版本前綴，但端點就在根目錄 → 補了 `/v1` 就 404。
+- **Gemini** 的 base 是 `/v1beta/openai`，同一條規則會產生 `/v1beta/openai/v1/chat/completions`。實測 Google **兩種路徑都回 200**，所以它先前「能用」純屬上游寬容，不是規則正確 —— 這個 bug 被掩蓋了好幾天，直到 GitHub 這個不寬容的上游把它暴露出來。
+
+正確做法是 `router::openai_chat_url` 對 `ProviderType` 做**窮舉 match**：`Openai` 與 `Ollama` 補 `/v1/chat/completions`，其餘接 `/chat/completions`。窮舉是刻意的 —— 未來新增供應商時編譯器會強迫在這裡做決定，不會再有靜默的猜測。
+
+**教訓**：上游寬容會掩蓋錯誤。單一供應商測通不代表規則正確。
+
+### 開發時的環境陷阱：macOS 鑰匙圈重新授權
+
+`cargo build` 每次都會重新簽章（log 裡的 `replacing existing signature`），macOS 因此把它當成不同的程式，所有 keychain 存取都要重新授權。
+
+症狀極具誤導性：**app 進程活著、視窗可能也開著，但一筆 `aiterm_lib` log 都沒有、橋接不上線**。因為橋接啟動、Telegram、provider 金鑰全都要讀 keychain，第一個請求就卡住整條啟動路徑。
+
+診斷方式：`pgrep -f SecurityAgent`（有東西在等授權），以及 `sample <pid>` 看 stack 是否落在 keychain 呼叫上。解法是點掉螢幕上的授權對話框（選「一律允許」）。這不是程式碼問題。
 
 ## 供應商工具呼叫中繼資料的往返（`tool_meta.rs`）
 
