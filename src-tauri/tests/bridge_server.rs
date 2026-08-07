@@ -48,7 +48,11 @@ async fn rejects_wrong_token() {
 }
 
 #[tokio::test]
-async fn rejects_non_streaming_request() {
+async fn accepts_non_streaming_request_and_fails_only_on_unmapped_tier() {
+    // 曾經：`stream != true` 在這一步就被直接拒絕（400 +「只支援串流」）。
+    // 非串流路徑補上之後，這個請求應該走到下一關（層級映射），而不是被
+    // stream 欄位擋下——用「錯誤訊息指向設定頁」而非「隨便一個 400」，
+    // 證明擋下它的是這個乾淨的 config 沒映射 sonnet 層，不是 stream:false。
     let dir = tempfile::tempdir().unwrap();
     let resp = router(state(&dir))
         .oneshot(post(
@@ -59,6 +63,10 @@ async fn rejects_non_streaming_request() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(text.contains("設定"), "訊息要指向設定頁（未映射層級）：{text}");
+    assert!(!text.contains("只支援串流"), "非串流請求不該再被直接拒絕：{text}");
 }
 
 #[tokio::test]

@@ -390,3 +390,97 @@ async fn ping_keepalive_is_sent_before_the_first_real_frame() {
 
     bridge.stop();
 }
+
+// ── 7. 非串流：OpenAI 上游仍以串流方式收，我們聚合成一個 JSON Message ──
+
+#[tokio::test]
+async fn non_streaming_request_returns_an_aggregated_json_message() {
+    let server = MockServer::start().await;
+    let sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"開始列目錄\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",",
+        "\"function\":{\"name\":\"Bash\",\"arguments\":\"{\\\"command\\\":\\\"ls\\\"}\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream"))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (bridge, base) = start_bridge(&dir, Some(&server.uri())).await;
+
+    let body = json!({
+        "model": "aiterm:sonnet",
+        "stream": false,
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "列出這個目錄的檔案"}]
+    });
+    let resp = post_messages(&base, Some(TOKEN), &body).await;
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        content_type.starts_with("application/json"),
+        "非串流回應要是完整的 JSON，不是 SSE：{content_type}"
+    );
+
+    let msg: Value = resp.json().await.expect("回應要能解析成 JSON Message");
+    assert_eq!(msg["type"], "message");
+    assert_eq!(msg["role"], "assistant");
+
+    let content = msg["content"].as_array().expect("content 要是陣列");
+    let text_block = content.iter().find(|b| b["type"] == "text").expect("要有 text block");
+    assert_eq!(text_block["text"], "開始列目錄");
+
+    let tool_block = content.iter().find(|b| b["type"] == "tool_use").expect("要有 tool_use block");
+    assert_eq!(tool_block["name"], "Bash");
+    assert!(
+        tool_block["input"].is_object(),
+        "input 必須是解析後的物件，不是字串：{}",
+        tool_block["input"]
+    );
+    assert_eq!(tool_block["input"], json!({"command": "ls"}));
+
+    assert_eq!(msg["stop_reason"], "tool_use");
+
+    bridge.stop();
+}
+
+// ── 8. 省略 stream 欄位時也要走非串流路徑（不是預設拒絕） ────────────────
+
+#[tokio::test]
+async fn omitted_stream_field_also_uses_the_non_streaming_path() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n",
+            "text/event-stream",
+        ))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (bridge, base) = start_bridge(&dir, Some(&server.uri())).await;
+
+    let body = json!({
+        "model": "aiterm:sonnet",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "hi"}]
+    });
+    let resp = post_messages(&base, Some(TOKEN), &body).await;
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let msg: Value = resp.json().await.expect("回應要能解析成 JSON");
+    assert_eq!(msg["type"], "message");
+    assert_eq!(msg["content"][0]["text"], "hi");
+
+    bridge.stop();
+}

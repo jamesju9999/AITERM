@@ -12,10 +12,14 @@ use serde_json::{json, Value};
 
 use crate::ai::AiError;
 use crate::bridge::anthropic::request::{parse_content, system_text, ContentBlock, MessagesRequest};
-use crate::bridge::anthropic::response::error_frame;
+use crate::bridge::anthropic::response::{error_frame, MessageAggregator};
+use crate::bridge::factory::{build, Upstream};
+use crate::bridge::upstream::{BridgeUpstream, UpstreamResponse};
 use crate::bridge::{auth, model_map};
+use crate::config::types::TierMapping;
 use crate::config::ConfigStore;
 use crate::secret::SecretStore;
+use futures_util::StreamExt;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -105,14 +109,6 @@ async fn messages(
             )
         }
     };
-    if req.stream != Some(true) {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_request_error",
-            "AITerm 橋接只支援串流請求（stream: true）。",
-        );
-    }
-
     let cfg = state.config.get();
     // resolve 回傳擁有權（見 model_map.rs 的註解），這裡不需要再 clone。
     let mapping = match model_map::resolve(&cfg.claude_bridge, &req.model) {
@@ -121,15 +117,99 @@ async fn messages(
     };
 
     let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", "text/event-stream")
-        .header("cache-control", "no-cache")
-        .header("connection", "keep-alive")
-        .body(Body::from_stream(super::stream::run(
-            state, mapping, req, raw, message_id,
-        )))
-        .expect("建立 SSE 回應不應失敗")
+
+    if req.stream == Some(true) {
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "text/event-stream")
+            .header("cache-control", "no-cache")
+            .header("connection", "keep-alive")
+            .body(Body::from_stream(super::stream::run(
+                state, mapping, req, raw, message_id,
+            )))
+            .expect("建立 SSE 回應不應失敗")
+    } else {
+        messages_non_streaming(state, mapping, req, raw, message_id).await
+    }
+}
+
+/// 非串流路徑：等上游整段回應收完再一次回傳一個 JSON `Message`，而不是 SSE。
+///
+/// OpenAI 家族仍然對上游用串流請求（`build_body` 照舊送 `stream: true`），
+/// 只是把收到的 `UpstreamEvent` 聚合成一個完整的 Message JSON 再回——這樣
+/// 請求翻譯、SSE 解析、tool_calls 累積器全部原封不動重用。Anthropic 家族
+/// 的上游本來看到 `stream: false` 就會回一個完整 JSON 物件（不是 SSE），
+/// 原樣轉發即可，不解析。
+async fn messages_non_streaming(
+    state: AppState,
+    mapping: TierMapping,
+    req: MessagesRequest,
+    raw: Value,
+    message_id: String,
+) -> Response {
+    let up = match build(&state.config, &state.secrets, &mapping.provider_id).await {
+        Ok(u) => u,
+        Err(e) => return ai_error_response(&e),
+    };
+
+    match up {
+        Upstream::Anthropic(a) => match a.send_raw(&raw, &mapping.model).await {
+            Ok(UpstreamResponse::Passthrough(resp)) => passthrough_response(resp).await,
+            // send_raw 只會回 Passthrough，這條分支留著只為了讓 match 窮盡。
+            Ok(UpstreamResponse::Events(_)) => {
+                json_error(StatusCode::INTERNAL_SERVER_ERROR, "api_error", "Anthropic 上游不應回串流事件。")
+            }
+            Err(e) => ai_error_response(&e),
+        },
+        Upstream::OpenAi(o) => match o.send(&req, &mapping.model).await {
+            Ok(UpstreamResponse::Events(mut events)) => {
+                let mut agg =
+                    MessageAggregator::new(message_id, req.model.clone(), estimate_input_tokens(&req));
+                while let Some(item) = events.next().await {
+                    match item {
+                        Ok(ev) => agg.push(ev),
+                        Err(e) => return ai_error_response(&e),
+                    }
+                }
+                Json(agg.finish()).into_response()
+            }
+            Ok(UpstreamResponse::Passthrough(_)) => {
+                json_error(StatusCode::INTERNAL_SERVER_ERROR, "api_error", "OpenAI 上游不應回 passthrough。")
+            }
+            Err(e) => ai_error_response(&e),
+        },
+    }
+}
+
+/// 上游 [`AiError`] → 非串流的 JSON 錯誤回應（HTTP 狀態碼 + body），
+/// 跟串流路徑用的 `error_frame_for`（SSE error frame）是同一份資訊的兩種
+/// 輸出形態。
+fn ai_error_response(err: &AiError) -> Response {
+    json_error(
+        StatusCode::from_u16(status_for(err)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        error_kind(err),
+        &error_text(err),
+    )
+}
+
+/// Anthropic 家族的非串流回應：原樣轉發上游的 body 與 content-type，不解析。
+async fn passthrough_response(resp: reqwest::Response) -> Response {
+    let status = resp.status();
+    let content_type = resp.headers().get("content-type").cloned();
+    match resp.bytes().await {
+        Ok(bytes) => {
+            let mut builder = Response::builder().status(status);
+            if let Some(ct) = content_type {
+                builder = builder.header("content-type", ct);
+            }
+            builder.body(Body::from(bytes)).expect("建立 passthrough 回應不應失敗")
+        }
+        Err(e) => json_error(
+            StatusCode::BAD_GATEWAY,
+            "api_error",
+            &format!("讀取上游回應失敗：{e}"),
+        ),
+    }
 }
 
 async fn count_tokens(

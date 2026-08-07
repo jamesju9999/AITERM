@@ -197,6 +197,130 @@ impl SseEncoder {
     }
 }
 
+/// 目前累積中的區塊（尚未收到能讓它結束的下一個事件）。
+/// 與 `SseEncoder` 的 `OpenBlock` 是同名不同用途：那邊只需要記「開著哪一
+/// 種」，這裡要連內容一起累積，所以帶欄位。
+enum AggregatorBlock {
+    Text(String),
+    Thinking(String),
+    ToolUse { id: String, name: String, partial: String },
+}
+
+/// 把 [`UpstreamEvent`] 序列聚合成一個完整的 Anthropic Message JSON。
+///
+/// 非串流請求用；串流請求走 [`SseEncoder`]。兩者吃同一種事件序列，輸出的
+/// 欄位形狀必須一致——這裡只是把 `SseEncoder` 的區塊合併/切換邏輯改成直接
+/// 建構最終 JSON，而不是逐一送 frame。
+pub struct MessageAggregator {
+    message_id: String,
+    model: String,
+    input_tokens: u32,
+    content: Vec<Value>,
+    open: Option<AggregatorBlock>,
+    stop_reason: StopReason,
+    usage: Usage,
+}
+
+impl MessageAggregator {
+    pub fn new(message_id: String, model: String, input_tokens: u32) -> Self {
+        Self {
+            message_id,
+            model,
+            input_tokens,
+            content: Vec::new(),
+            open: None,
+            stop_reason: StopReason::EndTurn,
+            usage: Usage::default(),
+        }
+    }
+
+    pub fn push(&mut self, ev: UpstreamEvent) {
+        match ev {
+            UpstreamEvent::TextDelta(t) => match &mut self.open {
+                Some(AggregatorBlock::Text(buf)) => buf.push_str(&t),
+                _ => {
+                    self.close_open();
+                    self.open = Some(AggregatorBlock::Text(t));
+                }
+            },
+            UpstreamEvent::ThinkingDelta(t) => match &mut self.open {
+                Some(AggregatorBlock::Thinking(buf)) => buf.push_str(&t),
+                _ => {
+                    self.close_open();
+                    self.open = Some(AggregatorBlock::Thinking(t));
+                }
+            },
+            UpstreamEvent::ToolUseStart { id, name } => {
+                // 跟 SseEncoder 一樣：工具區塊一律開新的，同一回合可能連續呼叫多個工具。
+                self.close_open();
+                self.open = Some(AggregatorBlock::ToolUse { id, name, partial: String::new() });
+            }
+            UpstreamEvent::ToolInputDelta(partial) => match &mut self.open {
+                Some(AggregatorBlock::ToolUse { partial: buf, .. }) => buf.push_str(&partial),
+                _ => {
+                    log::warn!(
+                        "bridge::anthropic::response::MessageAggregator: 丟棄 ToolInputDelta，目前沒有開啟中的工具區塊"
+                    );
+                }
+            },
+            UpstreamEvent::ToolUseEnd => self.close_open(),
+            UpstreamEvent::Done { stop_reason, usage } => {
+                self.close_open();
+                self.stop_reason = stop_reason;
+                self.usage = usage;
+            }
+        }
+    }
+
+    /// 關掉目前開啟中的區塊，把它序列化成一個 content block 推進 `content`。
+    fn close_open(&mut self) {
+        let Some(block) = self.open.take() else { return };
+        let value = match block {
+            AggregatorBlock::Text(t) => json!({"type": "text", "text": t}),
+            AggregatorBlock::Thinking(t) => json!({"type": "thinking", "thinking": t}),
+            AggregatorBlock::ToolUse { id, name, partial } => {
+                // partial 是串接起來的 JSON 片段，可能不完整或壞掉——不能讓
+                // 整個請求失敗，退回空物件並記警告。
+                let input = if partial.is_empty() {
+                    json!({})
+                } else {
+                    match serde_json::from_str::<Value>(&partial) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            log::warn!(
+                                "bridge::anthropic::response::MessageAggregator: tool_use「{name}」的 input 解析失敗（{e}），退回空物件，原始片段：{partial}"
+                            );
+                            json!({})
+                        }
+                    }
+                };
+                json!({"type": "tool_use", "id": id, "name": name, "input": input})
+            }
+        };
+        self.content.push(value);
+    }
+
+    /// 消費 aggregator，產出完整的 Anthropic Message JSON。
+    pub fn finish(mut self) -> Value {
+        self.close_open();
+        json!({
+            "id": self.message_id,
+            "type": "message",
+            "role": "assistant",
+            "model": self.model,
+            "content": self.content,
+            "stop_reason": self.stop_reason.as_str(),
+            "stop_sequence": Value::Null,
+            "usage": {
+                "input_tokens": self.input_tokens,
+                "output_tokens": self.usage.output_tokens,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,5 +512,142 @@ mod tests {
         assert!(f.starts_with("event: error\n"));
         assert!(f.contains("\"invalid_request_error\""));
         assert!(f.contains("壞掉了"));
+    }
+
+    // ── MessageAggregator ───────────────────────────────────────────────
+
+    fn aggregator() -> MessageAggregator {
+        MessageAggregator::new("msg_test".into(), "aiterm:sonnet".into(), 12)
+    }
+
+    #[test]
+    fn empty_content_is_a_legal_message() {
+        let msg = aggregator().finish();
+        assert_eq!(msg["content"], json!([]));
+        assert_eq!(msg["id"], "msg_test");
+        assert_eq!(msg["type"], "message");
+        assert_eq!(msg["role"], "assistant");
+        assert_eq!(msg["model"], "aiterm:sonnet");
+        assert_eq!(msg["stop_reason"], "end_turn");
+        assert_eq!(msg["stop_sequence"], Value::Null);
+    }
+
+    #[test]
+    fn consecutive_text_deltas_merge_into_one_block() {
+        let mut a = aggregator();
+        a.push(UpstreamEvent::TextDelta("你".into()));
+        a.push(UpstreamEvent::TextDelta("好".into()));
+        let msg = a.finish();
+        let content = msg["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1, "應該合併成一個 block：{content:?}");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "你好");
+    }
+
+    #[test]
+    fn consecutive_thinking_deltas_merge_into_one_block() {
+        let mut a = aggregator();
+        a.push(UpstreamEvent::ThinkingDelta("嗯".into()));
+        a.push(UpstreamEvent::ThinkingDelta("...".into()));
+        let msg = a.finish();
+        let content = msg["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"], "thinking");
+        assert_eq!(content[0]["thinking"], "嗯...");
+    }
+
+    #[test]
+    fn tool_use_input_is_parsed_into_an_object_not_left_as_a_string() {
+        let mut a = aggregator();
+        a.push(UpstreamEvent::ToolUseStart { id: "toolu_1".into(), name: "Read".into() });
+        a.push(UpstreamEvent::ToolInputDelta("{\"file_path\":".into()));
+        a.push(UpstreamEvent::ToolInputDelta("\"/tmp/a\"}".into()));
+        let msg = a.finish();
+        let content = msg["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"], "tool_use");
+        assert_eq!(content[0]["id"], "toolu_1");
+        assert_eq!(content[0]["name"], "Read");
+        assert_eq!(content[0]["input"], json!({"file_path": "/tmp/a"}));
+        assert!(content[0]["input"].is_object(), "input 必須是物件，不是字串：{}", content[0]["input"]);
+    }
+
+    #[test]
+    fn broken_partial_json_falls_back_to_an_empty_object() {
+        let mut a = aggregator();
+        a.push(UpstreamEvent::ToolUseStart { id: "toolu_1".into(), name: "Read".into() });
+        a.push(UpstreamEvent::ToolInputDelta("{not valid json".into()));
+        let msg = a.finish();
+        let content = msg["content"].as_array().unwrap();
+        assert_eq!(content[0]["input"], json!({}));
+    }
+
+    #[test]
+    fn tool_use_with_no_input_delta_defaults_to_an_empty_object() {
+        let mut a = aggregator();
+        a.push(UpstreamEvent::ToolUseStart { id: "toolu_1".into(), name: "Read".into() });
+        let msg = a.finish();
+        let content = msg["content"].as_array().unwrap();
+        assert_eq!(content[0]["input"], json!({}));
+    }
+
+    #[test]
+    fn multiple_tool_calls_each_get_their_own_block() {
+        let mut a = aggregator();
+        a.push(UpstreamEvent::ToolUseStart { id: "t1".into(), name: "Read".into() });
+        a.push(UpstreamEvent::ToolInputDelta("{\"a\":1}".into()));
+        a.push(UpstreamEvent::ToolUseStart { id: "t2".into(), name: "Write".into() });
+        a.push(UpstreamEvent::ToolInputDelta("{\"b\":2}".into()));
+        let msg = a.finish();
+        let content = msg["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2, "實際：{content:?}");
+        assert_eq!(content[0]["name"], "Read");
+        assert_eq!(content[0]["input"], json!({"a": 1}));
+        assert_eq!(content[1]["name"], "Write");
+        assert_eq!(content[1]["input"], json!({"b": 2}));
+    }
+
+    #[test]
+    fn text_then_tool_use_produces_two_separate_blocks() {
+        let mut a = aggregator();
+        a.push(UpstreamEvent::TextDelta("先講話".into()));
+        a.push(UpstreamEvent::ToolUseStart { id: "t1".into(), name: "Bash".into() });
+        a.push(UpstreamEvent::ToolInputDelta("{}".into()));
+        let msg = a.finish();
+        let content = msg["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "tool_use");
+    }
+
+    #[test]
+    fn done_sets_stop_reason_and_usage() {
+        let mut a = aggregator();
+        a.push(UpstreamEvent::TextDelta("hi".into()));
+        a.push(UpstreamEvent::Done {
+            stop_reason: StopReason::ToolUse,
+            usage: Usage { input_tokens: 999, output_tokens: 7 },
+        });
+        let msg = a.finish();
+        assert_eq!(msg["stop_reason"], "tool_use");
+        // input_tokens 用建構時傳入的估算值，不是 Done 事件裡上游回的那個
+        // （那個是上游看到的真值，我們選擇跟 SseEncoder 的 message_start 一致）。
+        assert_eq!(msg["usage"]["input_tokens"], 12);
+        assert_eq!(msg["usage"]["output_tokens"], 7);
+        assert_eq!(msg["usage"]["cache_creation_input_tokens"], 0);
+        assert_eq!(msg["usage"]["cache_read_input_tokens"], 0);
+    }
+
+    #[test]
+    fn dangling_open_block_is_closed_even_without_done() {
+        // 上游串流中斷、沒送 Done：finish() 仍要把開啟中的區塊收進 content，
+        // 而不是把它整個丟掉。
+        let mut a = aggregator();
+        a.push(UpstreamEvent::TextDelta("被截斷".into()));
+        let msg = a.finish();
+        let content = msg["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["text"], "被截斷");
+        assert_eq!(msg["stop_reason"], "end_turn", "沒收到 Done 時應維持預設值");
     }
 }
