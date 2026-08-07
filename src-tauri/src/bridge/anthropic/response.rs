@@ -35,13 +35,22 @@ enum OpenBlock {
 pub struct SseEncoder {
     message_id: String,
     model: String,
+    input_tokens: u32,
     next_index: usize,
     open: Option<OpenBlock>,
+    done_sent: bool,
 }
 
 impl SseEncoder {
-    pub fn new(message_id: String, model: String) -> Self {
-        Self { message_id, model, next_index: 0, open: None }
+    pub fn new(message_id: String, model: String, input_tokens: u32) -> Self {
+        Self {
+            message_id,
+            model,
+            input_tokens,
+            next_index: 0,
+            open: None,
+            done_sent: false,
+        }
     }
 
     pub fn start(&mut self) -> Vec<String> {
@@ -57,7 +66,12 @@ impl SseEncoder {
                     "content": [],
                     "stop_reason": Value::Null,
                     "stop_sequence": Value::Null,
-                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                    "usage": {
+                        "input_tokens": self.input_tokens,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "output_tokens": 0,
+                    },
                 }
             }),
         )]
@@ -88,16 +102,42 @@ impl SseEncoder {
                 out
             }
             UpstreamEvent::ToolInputDelta(partial) => {
+                // 沒有開啟中的工具區塊時（未開過、或目前開的是文字/思考區塊），
+                // input_json_delta 沒有合法的區塊可以掛，直接丟棄並記警告。
+                if self.open != Some(OpenBlock::ToolUse) {
+                    log::warn!(
+                        "bridge::anthropic::response: 丟棄 ToolInputDelta，目前沒有開啟中的工具區塊（open={:?}）",
+                        self.open
+                    );
+                    return Vec::new();
+                }
                 vec![self.delta(json!({"type": "input_json_delta", "partial_json": partial}))]
             }
             UpstreamEvent::ToolUseEnd => self.close_open(),
             UpstreamEvent::Done { stop_reason, usage } => {
-                let mut out = self.close_open();
-                out.push(self.message_delta(stop_reason, usage));
-                out.push(frame("message_stop", json!({"type": "message_stop"})));
-                out
+                self.done_sent = true;
+                self.tail(stop_reason, usage)
             }
         }
+    }
+
+    /// 上游串流在沒送 `Done` 的情況下結束時呼叫，補完收尾的 frame。
+    /// 已經收過 `Done` 時回空 vec，可安全重複呼叫。
+    pub fn finish(&mut self) -> Vec<String> {
+        if self.done_sent {
+            return Vec::new();
+        }
+        self.done_sent = true;
+        self.tail(StopReason::EndTurn, Usage::default())
+    }
+
+    /// `Done` 與 `finish()` 共用的收尾序列：關掉開啟中的區塊，
+    /// 接著 message_delta、message_stop。
+    fn tail(&mut self, stop_reason: StopReason, usage: Usage) -> Vec<String> {
+        let mut out = self.close_open();
+        out.push(self.message_delta(stop_reason, usage));
+        out.push(frame("message_stop", json!({"type": "message_stop"})));
+        out
     }
 
     /// 目前開著的若已是同型別區塊就沿用，否則關掉舊的再開新的。
@@ -163,7 +203,31 @@ mod tests {
     use crate::bridge::upstream::{StopReason, Usage};
 
     fn encoder() -> SseEncoder {
-        SseEncoder::new("msg_test".into(), "aiterm:sonnet".into())
+        SseEncoder::new("msg_test".into(), "aiterm:sonnet".into(), 0)
+    }
+
+    #[test]
+    fn message_start_reports_the_input_token_count() {
+        let mut e = SseEncoder::new("msg_1".into(), "aiterm:sonnet".into(), 1234);
+        let frames = e.start();
+        assert!(frames[0].contains("\"input_tokens\":1234"), "實際：{}", frames[0]);
+    }
+
+    #[test]
+    fn message_start_includes_cache_usage_fields() {
+        // SDK 把這兩個欄位宣告成 number|null 而非 optional，缺席會讓 JS 端
+        // 的加總變成 NaN。
+        let mut e = SseEncoder::new("m".into(), "aiterm:sonnet".into(), 0);
+        let f = &e.start()[0];
+        assert!(f.contains("\"cache_creation_input_tokens\":0"), "實際：{f}");
+        assert!(f.contains("\"cache_read_input_tokens\":0"), "實際：{f}");
+    }
+
+    #[test]
+    fn message_start_echoes_the_model_string_it_was_given() {
+        // 必須回 Claude Code 送來的哨兵字串，不是上游真實模型名。
+        let mut e = SseEncoder::new("m".into(), "aiterm:opus".into(), 0);
+        assert!(e.start()[0].contains("\"model\":\"aiterm:opus\""));
     }
 
     /// 從一串 frame 裡抽出 `event:` 行的名稱，方便斷言事件序列。
@@ -227,6 +291,22 @@ mod tests {
     }
 
     #[test]
+    fn tool_input_delta_without_an_open_tool_block_is_dropped() {
+        let mut e = encoder();
+        e.start();
+        assert_eq!(e.push(UpstreamEvent::ToolInputDelta("{}".into())), Vec::<String>::new());
+    }
+
+    #[test]
+    fn tool_input_delta_is_dropped_while_a_text_block_is_open() {
+        // 文字區塊吃不下 input_json_delta，掛上去會讓客戶端解析失敗。
+        let mut e = encoder();
+        e.start();
+        e.push(UpstreamEvent::TextDelta("hi".into()));
+        assert_eq!(e.push(UpstreamEvent::ToolInputDelta("{}".into())), Vec::<String>::new());
+    }
+
+    #[test]
     fn thinking_delta_uses_thinking_block() {
         let mut e = encoder();
         e.start();
@@ -270,6 +350,36 @@ mod tests {
         e.push(UpstreamEvent::TextDelta("a".into()));
         let frames = e.push(UpstreamEvent::ToolUseStart { id: "t".into(), name: "N".into() });
         assert!(frames[1].contains("\"index\":1"), "第二個區塊的 index 應為 1：{}", frames[1]);
+    }
+
+    #[test]
+    fn finish_closes_a_dangling_stream() {
+        let mut e = encoder();
+        e.start();
+        e.push(UpstreamEvent::TextDelta("被截斷".into()));
+        assert_eq!(
+            names(&e.finish()),
+            vec!["content_block_stop", "message_delta", "message_stop"]
+        );
+    }
+
+    #[test]
+    fn finish_is_a_noop_after_done() {
+        let mut e = encoder();
+        e.start();
+        e.push(UpstreamEvent::Done {
+            stop_reason: StopReason::EndTurn,
+            usage: Usage::default(),
+        });
+        assert_eq!(e.finish(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn finish_is_idempotent() {
+        let mut e = encoder();
+        e.start();
+        assert_eq!(names(&e.finish()), vec!["message_delta", "message_stop"]);
+        assert_eq!(e.finish(), Vec::<String>::new());
     }
 
     #[test]
