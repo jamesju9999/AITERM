@@ -466,10 +466,10 @@ pub fn tier_for_model(model: &str) -> Option<Tier> {
 
 /// 查出這個 model 字串該打到哪。錯誤訊息會直接回給 Claude Code 顯示，
 /// 所以要寫成使用者看得懂、且指向設定頁的句子。
-pub fn resolve<'a>(
-    cfg: &'a ClaudeBridgeConfig,
-    model: &str,
-) -> Result<&'a TierMapping, String> {
+/// 回傳擁有權而非借用：呼叫端是 axum handler，會把 `cfg` 的 guard 在同一個
+/// 敘述句裡丟掉，借用會撞上 E0716。`TierMapping` 只有兩個 String，複製成本
+/// 可忽略。
+pub fn resolve(cfg: &ClaudeBridgeConfig, model: &str) -> Result<TierMapping, String> {
     let Some(tier) = tier_for_model(model) else {
         return Err(format!(
             "AITerm 橋接無法判斷模型「{model}」屬於哪一層。請在設定 → Claude Code 橋接檢查模型映射。"
@@ -480,7 +480,7 @@ pub fn resolve<'a>(
         Tier::Sonnet => &cfg.sonnet,
         Tier::Haiku => &cfg.haiku,
     };
-    slot.as_ref().ok_or_else(|| {
+    slot.clone().ok_or_else(|| {
         format!(
             "AITerm 橋接的 {} 層尚未設定供應商。請到設定 → Claude Code 橋接指定。",
             tier.as_str()
@@ -3232,8 +3232,9 @@ async fn messages(
     }
 
     let cfg = state.config.get();
+    // resolve 回傳擁有權（見 model_map.rs 的註解），這裡不需要再 clone。
     let mapping = match model_map::resolve(&cfg.claude_bridge, &req.model) {
-        Ok(m) => m.clone(),
+        Ok(m) => m,
         Err(msg) => return json_error(StatusCode::BAD_REQUEST, "invalid_request_error", &msg),
     };
 
