@@ -14,6 +14,7 @@ use crate::bridge::anthropic::request::MessagesRequest;
 use crate::bridge::anthropic::response::{ping_frame, SseEncoder};
 use crate::bridge::factory::{build, Upstream};
 use crate::bridge::server::{error_frame_for, AppState};
+use crate::bridge::upstream::anthropic::ClientHeaders;
 use crate::bridge::upstream::UpstreamResponse;
 use crate::config::types::TierMapping;
 
@@ -26,6 +27,7 @@ pub fn run(
     req: MessagesRequest,
     raw: Value,
     message_id: String,
+    client_headers: ClientHeaders,
 ) -> impl futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send {
     let (tx, rx) = tokio::sync::mpsc::channel::<Bytes>(64);
 
@@ -39,7 +41,7 @@ pub fn run(
         let upstream_fut = async {
             let up = build(&state.config, &state.secrets, &mapping.provider_id).await?;
             match up {
-                Upstream::Anthropic(a) => a.send_raw(&raw, &mapping.model).await,
+                Upstream::Anthropic(a) => a.send_raw(&raw, &mapping.model, &client_headers).await,
                 Upstream::OpenAi(o) => {
                     use crate::bridge::upstream::BridgeUpstream;
                     o.send(&req, &mapping.model).await

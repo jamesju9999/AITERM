@@ -14,6 +14,7 @@ use crate::ai::AiError;
 use crate::bridge::anthropic::request::{parse_content, system_text, ContentBlock, MessagesRequest};
 use crate::bridge::anthropic::response::{error_frame, MessageAggregator};
 use crate::bridge::factory::{build, Upstream};
+use crate::bridge::upstream::anthropic::ClientHeaders;
 use crate::bridge::upstream::{BridgeUpstream, UpstreamResponse};
 use crate::bridge::{auth, model_map};
 use crate::config::types::TierMapping;
@@ -113,10 +114,28 @@ async fn messages(
     // resolve 回傳擁有權（見 model_map.rs 的註解），這裡不需要再 clone。
     let mapping = match model_map::resolve(&cfg.claude_bridge, &req.model) {
         Ok(m) => m,
-        Err(msg) => return json_error(StatusCode::BAD_REQUEST, "invalid_request_error", &msg),
+        Err(msg) => {
+            log::warn!("bridge 無法映射模型「{}」：{msg}", req.model);
+            return json_error(StatusCode::BAD_REQUEST, "invalid_request_error", &msg);
+        }
     };
 
+    // 客戶端那端只看得到最終的錯誤字串，沒有這一行就無從得知請求究竟被
+    // 導到哪個供應商 —— 尤其是 Claude Code 送真實型號、靠子字串後備規則
+    // 判層級的時候。
+    log::info!(
+        "bridge 請求 model={} → provider={} model={} stream={}",
+        req.model,
+        mapping.provider_id,
+        mapping.model,
+        req.stream == Some(true),
+    );
+
     let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
+    let client_headers = ClientHeaders {
+        beta: headers.get("anthropic-beta").and_then(|v| v.to_str().ok()).map(String::from),
+        version: headers.get("anthropic-version").and_then(|v| v.to_str().ok()).map(String::from),
+    };
 
     if req.stream == Some(true) {
         Response::builder()
@@ -125,11 +144,11 @@ async fn messages(
             .header("cache-control", "no-cache")
             .header("connection", "keep-alive")
             .body(Body::from_stream(super::stream::run(
-                state, mapping, req, raw, message_id,
+                state, mapping, req, raw, message_id, client_headers,
             )))
             .expect("建立 SSE 回應不應失敗")
     } else {
-        messages_non_streaming(state, mapping, req, raw, message_id).await
+        messages_non_streaming(state, mapping, req, raw, message_id, client_headers).await
     }
 }
 
@@ -146,6 +165,7 @@ async fn messages_non_streaming(
     req: MessagesRequest,
     raw: Value,
     message_id: String,
+    client_headers: ClientHeaders,
 ) -> Response {
     let up = match build(&state.config, &state.secrets, &mapping.provider_id).await {
         Ok(u) => u,
@@ -153,7 +173,7 @@ async fn messages_non_streaming(
     };
 
     match up {
-        Upstream::Anthropic(a) => match a.send_raw(&raw, &mapping.model).await {
+        Upstream::Anthropic(a) => match a.send_raw(&raw, &mapping.model, &client_headers).await {
             Ok(UpstreamResponse::Passthrough(resp)) => passthrough_response(resp).await,
             // send_raw 只會回 Passthrough，這條分支留著只為了讓 match 窮盡。
             Ok(UpstreamResponse::Events(_)) => {

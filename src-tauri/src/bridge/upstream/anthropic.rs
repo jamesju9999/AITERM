@@ -29,6 +29,43 @@ impl AnthropicUpstream {
     }
 }
 
+/// Claude Code 自己送來、轉發時要沿用（而非被覆蓋）的標頭。
+///
+/// 只放這條轉發路徑需要的兩個欄位，不直接吃 axum 的 `HeaderMap`——那會讓
+/// upstream 層依賴 axum。呼叫端（`bridge::server` / `bridge::stream`）
+/// 負責從 `HeaderMap` 抽出字串。
+#[derive(Debug, Default, Clone)]
+pub struct ClientHeaders {
+    pub beta: Option<String>,
+    pub version: Option<String>,
+}
+
+/// OAuth 模式下我們必須送的 beta 旗標；上游靠它們判斷這是 Claude Code 的
+/// OAuth 請求，缺了就不會把 token 當 OAuth token 看待。
+const REQUIRED_OAUTH_BETA: &[&str] = &["claude-code-20250219", "oauth-2025-04-20"];
+
+/// 合併我們要求的 beta 旗標與客戶端自己宣告的旗標。
+///
+/// 規則：我們必需的在前、客戶端的接在後，去重且保留順序，用 `,` 連接。
+/// `required` 傳空陣列（API key 模式）時就是「原樣保留客戶端的」。
+/// 客戶端沒帶、且沒有必需項目時回 `None`（不送這個 header）。
+fn merge_beta_header(required: &[&str], client: Option<&str>) -> Option<String> {
+    let mut out: Vec<String> = Vec::new();
+    for r in required {
+        if !out.iter().any(|x| x == r) {
+            out.push((*r).to_string());
+        }
+    }
+    if let Some(c) = client {
+        for part in c.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            if !out.iter().any(|x| x == part) {
+                out.push(part.to_string());
+            }
+        }
+    }
+    if out.is_empty() { None } else { Some(out.join(",")) }
+}
+
 pub fn messages_url(base_url: &str) -> String {
     format!("{}/v1/messages", base_url.trim_end_matches('/'))
 }
@@ -105,18 +142,33 @@ impl BridgeUpstream for AnthropicUpstream {
 
 impl AnthropicUpstream {
     /// Anthropic 路徑專用：吃原始 JSON，回未解析的 HTTP 回應。
-    pub async fn send_raw(&self, raw: &Value, model: &str) -> Result<UpstreamResponse, AiError> {
+    ///
+    /// `client` 是 Claude Code 自己送的 `anthropic-beta` / `anthropic-version`
+    /// ——不能整組覆蓋掉：客戶端送 `context_management` 之類欄位時，會在
+    /// `anthropic-beta` 裡宣告對應的 beta 旗標，我們如果換成固定字串，上游
+    /// 會看到沒宣告 beta 卻出現該欄位而 400。
+    pub async fn send_raw(
+        &self,
+        raw: &Value,
+        model: &str,
+        client: &ClientHeaders,
+    ) -> Result<UpstreamResponse, AiError> {
         let body = rewrite_body(raw, model, self.is_oauth);
+        let required: &[&str] = if self.is_oauth { REQUIRED_OAUTH_BETA } else { &[] };
+        let beta = merge_beta_header(required, client.beta.as_deref());
+        let version = client.version.as_deref().unwrap_or("2023-06-01");
+
         let mut rb = self.client.post(messages_url(&self.base_url)).json(&body);
         rb = if self.is_oauth {
-            rb.bearer_auth(&self.token)
-                .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
-                .header("x-app", "cli")
+            rb.bearer_auth(&self.token).header("x-app", "cli")
         } else {
             rb.header("x-api-key", &self.token)
         };
+        if let Some(beta) = beta {
+            rb = rb.header("anthropic-beta", beta);
+        }
         let resp = rb
-            .header("anthropic-version", "2023-06-01")
+            .header("anthropic-version", version)
             .send()
             .await
             .map_err(|e| AiError::Network { message: e.to_string() })?;
@@ -229,5 +281,44 @@ mod tests {
     fn messages_url_appends_v1_messages() {
         assert_eq!(messages_url("https://api.anthropic.com"), "https://api.anthropic.com/v1/messages");
         assert_eq!(messages_url("https://x.test/"), "https://x.test/v1/messages");
+    }
+
+    #[test]
+    fn oauth_without_client_beta_yields_only_required() {
+        let merged = merge_beta_header(REQUIRED_OAUTH_BETA, None);
+        assert_eq!(merged.as_deref(), Some("claude-code-20250219,oauth-2025-04-20"));
+    }
+
+    #[test]
+    fn oauth_with_client_beta_appends_after_required_in_order() {
+        let merged = merge_beta_header(REQUIRED_OAUTH_BETA, Some("context-management-2025-06-27"));
+        assert_eq!(
+            merged.as_deref(),
+            Some("claude-code-20250219,oauth-2025-04-20,context-management-2025-06-27")
+        );
+    }
+
+    #[test]
+    fn oauth_does_not_duplicate_a_flag_the_client_already_sent() {
+        // Claude Code 有時自己也會帶 oauth-2025-04-20，不能合併成兩份。
+        let merged = merge_beta_header(REQUIRED_OAUTH_BETA, Some("oauth-2025-04-20"));
+        assert_eq!(merged.as_deref(), Some("claude-code-20250219,oauth-2025-04-20"));
+    }
+
+    #[test]
+    fn api_key_mode_keeps_client_beta_as_is_without_adding_ours() {
+        let merged = merge_beta_header(&[], Some("context-management-2025-06-27"));
+        assert_eq!(merged.as_deref(), Some("context-management-2025-06-27"));
+    }
+
+    #[test]
+    fn api_key_mode_without_client_beta_sets_no_header() {
+        assert_eq!(merge_beta_header(&[], None), None);
+    }
+
+    #[test]
+    fn client_beta_list_is_trimmed_when_split() {
+        let merged = merge_beta_header(&[], Some("a, b"));
+        assert_eq!(merged.as_deref(), Some("a,b"));
     }
 }
