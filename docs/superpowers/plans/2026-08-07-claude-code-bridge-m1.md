@@ -3552,7 +3552,13 @@ pub mod stream;
 Run: `cd src-tauri && cargo check`
 Expected: 成功。
 
-`tokio::time::interval` 的第一個 tick 會立刻完成，所以連線一建立就會先收到一個 ping —— 這是想要的行為，不要改成 `interval_at`。
+> ⚠️ **這裡原本寫「`tokio::time::interval` 的第一個 tick 會立刻完成，所以連線一
+> 建立就會先收到一個 ping —— 這是想要的行為，不要改成 `interval_at`」，那是錯的。**
+> 第一個 tick 期限是 `Instant::now()`（已到期），在 `select!` 裡它會贏過上游請求
+> （上游至少要一次 async hop），於是**每一個**請求都會在 `message_start` 之前多送
+> 一個 ping，而不只是慢的上游。若客戶端對「`message_start` 必須是第一個 frame」
+> 嚴格，那會是 100% 的請求失敗而非只有慢的那些。commit `e5ef932` 改用
+> `interval_at(Instant::now() + PING_INTERVAL, PING_INTERVAL)`。以實際檔案為準。
 
 - [ ] **Step 3: Commit**
 

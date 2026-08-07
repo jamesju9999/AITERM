@@ -378,3 +378,5 @@ M2 與 M3 各自以「探勘測試 dump 原始 SSE」為第一步。若 dump 顯
 - **`StopReason` 沒有失敗類的變體。** 目前只有 `end_turn / max_tokens / tool_use / stop_sequence`。上游若回 OpenAI 的 `finish_reason: "content_filter"`，會被映射成 `end_turn`，Claude Code 收到的是一個被靜默截斷的回答，沒有任何「內容被擋下」的訊號。要修就要在中立事件型別加變體並決定對應到 Anthropic 的哪個 `stop_reason`，這牽動三條路徑，留到 M2 一起處理。
 - **無簽章的 thinking 區塊。** 走 OpenAI 路徑產生的 thinking 區塊沒有 Anthropic 的簽章。跨路徑轉發已用剝除迴避，但這也代表 thinking 內容不會在切換模型層後保留。
 - **非串流的 `/v1/messages`。** 收到 `stream: false` 一律回 400，不實作 JSON 版的 `Message` 序列化器。Claude Code 一律用串流。
+- **重開 app 後還原的分頁不帶橋接。** 分頁還原不經過新分頁流程，且橋接 server 是在 `setup()` 裡非同步啟動的 —— 還原的分頁若比 server 早一步 spawn PTY，`pty_create` 的守衛會拒絕注入，結果會是一個「有 CC 標記但實際上沒接通」的分頁，比不還原更難察覺。目前的行為（沒標記 = 沒接通）是誠實的。要改善得讓還原流程等待 server 就緒。
+- **`BridgeState` 與兩個 Tauri 指令沒有專屬測試**，只有 `cargo check` 與端到端測試間接涵蓋。router 那一層本身測試齊全。
