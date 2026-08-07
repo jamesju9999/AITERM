@@ -5,9 +5,13 @@
 //! `content_block_start` 卻要求一開始就帶完整的 name，所以必須緩衝到名稱
 //! 確定才發第一個事件。
 //!
-//! 「名稱確定」的判準：收到第一個非空的 arguments 片段、串流結束，或是
-//! 在 id 已經確定之後，單獨到達的名稱片段（此時不會再有新的 id 更新，
-//! 這片段就是名稱的最後一塊，可以直接發 `ToolUseStart`）。
+//! 「名稱確定」的判準只有兩個：**收到第一個非空的 arguments 片段**，或
+//! **串流結束**（`finish`）。
+//!
+//! 曾經考慮過第三個判準「id 已知之後單獨到達的名稱片段」，但那是錯的：
+//! 名稱真的被切成兩片時（`id+"Re"` → `"ad"` → `arguments`），第二片會觸發
+//! `ToolUseStart` 並送出被截斷的名稱 `"Re"`。用「等到參數或結束」則兩種
+//! 情況都正確，而且分支更少。沒有參數的工具呼叫由 `finish` 收尾。
 
 use std::collections::BTreeMap;
 
@@ -59,10 +63,6 @@ impl ToolCallAccumulator {
                 // 有參數進來就代表名稱已經完結，可以開區塊了。
                 out.extend(self.activate(index));
                 out.push(UpstreamEvent::ToolInputDelta(args.to_string()));
-            } else if id.is_none() && name.is_some() {
-                // 這個片段沒帶 id（id 在更早的片段就確定過了），卻補上了
-                // 名稱——代表名稱片段已經送完，即使還沒看到參數也視為確定。
-                out.extend(self.activate(index));
             }
         }
         out
@@ -143,14 +143,33 @@ mod tests {
     }
 
     #[test]
-    fn start_is_deferred_until_the_name_arrives() {
-        // 有些 server 先送 id、名稱下一片才到。此時不能發 ToolUseStart，
-        // 因為 Anthropic 的 content_block_start 就要帶 name。
+    fn start_is_deferred_until_arguments_arrive() {
+        // 有些 server 先送 id、名稱下一片才到。名稱到齊之前都不能發
+        // ToolUseStart，因為 Anthropic 的 content_block_start 就要帶完整的
+        // name，而我們無從知道名稱是否還有後續片段——直到參數開始流入。
         let mut a = acc();
         assert_eq!(a.push(&[json!({"index": 0, "id": "call_1"})]), vec![]);
+        assert_eq!(a.push(&[json!({"index": 0, "function": {"name": "Read"}})]), vec![]);
         assert_eq!(
-            a.push(&[json!({"index": 0, "function": {"name": "Read"}})]),
-            vec![UpstreamEvent::ToolUseStart { id: "call_1".into(), name: "Read".into() }]
+            a.push(&[json!({"index": 0, "function": {"arguments": "{}"}})]),
+            vec![
+                UpstreamEvent::ToolUseStart { id: "call_1".into(), name: "Read".into() },
+                UpstreamEvent::ToolInputDelta("{}".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_split_across_two_fragments_is_never_emitted_truncated() {
+        // 這是「單獨到達的名稱片段就觸發」那條規則會踩到的地雷：第二片
+        // 到達時若立刻觸發，送出的是被截斷的 "Re"。
+        let mut a = acc();
+        a.push(&[json!({"index": 0, "id": "c1", "function": {"name": "Re"}})]);
+        assert_eq!(a.push(&[json!({"index": 0, "function": {"name": "ad"}})]), vec![]);
+        let ev = a.push(&[json!({"index": 0, "function": {"arguments": "{}"}})]);
+        assert_eq!(
+            ev[0],
+            UpstreamEvent::ToolUseStart { id: "c1".into(), name: "Read".into() }
         );
     }
 
