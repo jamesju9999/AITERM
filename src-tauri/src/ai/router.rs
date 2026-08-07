@@ -45,7 +45,7 @@ pub(crate) const KIMI_DEFAULT_BASE_URL: &str = "https://api.moonshot.ai/v1";
 
 /// Returns a valid OAuth access token, refreshing it first if it's expired or
 /// within 5 minutes of expiry. Falls back to the stored token on refresh failure.
-async fn get_valid_oauth_token(provider_id: &str, secrets: &SecretStore) -> Result<String, AiError> {
+pub(crate) async fn get_valid_oauth_token(provider_id: &str, secrets: &SecretStore) -> Result<String, AiError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
