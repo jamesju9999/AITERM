@@ -7,5 +7,6 @@
 //! 受益者卻只有一個消費者。因此另開模組，但憑證解析與端點常數共用
 //! （見 `upstream/` 各 adapter）。
 
+pub mod anthropic;
 pub mod auth;
 pub mod model_map;
