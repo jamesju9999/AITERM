@@ -123,6 +123,11 @@ export interface TerminalViewProps {
   onAttention?: (kind: AttentionKind) => void;
   /** 使用者在這個分頁執行了 Claude Code。用來提示他設定 terminal bell。 */
   onClaudeDetected?: () => void;
+  /**
+   * 這個分頁是否注入 Claude Code 橋接環境變數。
+   * 環境變數只能在 PTY spawn 的瞬間決定，所以這個值在分頁建立後改變沒有效果。
+   */
+  claudeBridge?: boolean;
 }
 
 // The live terminal pane's visible height shrinks to just the current content
@@ -147,7 +152,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onSummaryUpdate, onAttention, onClaudeDetected }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onSummaryUpdate, onAttention, onClaudeDetected, claudeBridge }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -804,7 +809,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       try {
         const { rows, cols } = term;
         const lastCwd = initialCwd ?? localStorage.getItem("aiterm_last_cwd") ?? undefined;
-        const id = await createPty({ rows, cols }, lastCwd);
+        const id = await createPty({ rows, cols }, lastCwd, claudeBridge);
         sessionRef.current = id;
         setSessionId(id);
         onSessionCreated?.(id);

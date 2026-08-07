@@ -4,7 +4,7 @@ import { sendNotification } from "@tauri-apps/plugin-notification";
 import { ensureNotificationPermission } from "../lib/notifyPermission";
 import { routeAttention, notifyBodyKeyFor, isPastNotifyCooldown, type AttentionKind } from "../lib/terminalAttention";
 import { TerminalView } from "./TerminalView";
-import { TabBar, type Tab } from "./TabBar";
+import { TabBar, type Tab, type TabType } from "./TabBar";
 import { TitleBar } from "./TitleBar";
 import { DatabaseView } from "./DatabaseView";
 import { DesignView } from "./DesignView/DesignView";
@@ -19,6 +19,7 @@ import { KnowledgeBaseView } from "./KnowledgeBaseView";
 import { MailView } from "./MailView";
 import { useLocale } from "../contexts/LocaleContext";
 import { useMailSync } from "../hooks/useMailSync";
+import { getConfig } from "../ipc/config";
 import {
   onEnterpriseTaskReceived,
   onEnterpriseTaskReady,
@@ -107,6 +108,14 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     return () => unlisten?.();
   }, []);
 
+  // Claude Code 橋接：新建的一般終端機分頁要不要預設注入橋接環境變數。
+  // 用 ref 而非 state——只有分頁建立當下的回呼會讀它，config 讀回來之後
+  // 不需要觸發任何重繪。
+  const defaultBridgeOnNewTabRef = useRef(false);
+  useEffect(() => {
+    getConfig().then((c) => { defaultBridgeOnNewTabRef.current = c.claude_bridge.default_on_new_tab; }).catch(() => {});
+  }, []);
+
   // PTY session ID of the most recently active terminal tab — used by VcsView for CWD polling.
   const [lastTerminalPtyId, setLastTerminalPtyId] = useState<string>("");
   useEffect(() => {
@@ -191,7 +200,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     setPickerOpen(true);
   }, []);
 
-  const handlePickerSelect = useCallback((type: "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant" | "knowledge-base" | "mail") => {
+  const handlePickerSelect = useCallback((type: TabType, opts?: { claudeBridge?: boolean }) => {
     const newId = crypto.randomUUID();
     let title = t.terminal_tab;
     if (type === "database") title = t.database_tab;
@@ -204,7 +213,10 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     if (type === "code-assistant") title = t.code_assistant_tab;
     if (type === "knowledge-base") title = t.knowledge_base_tab;
     if (type === "mail") title = t.mail_tab;
-    setTabs((prev) => [...prev, { id: newId, title, type }]);
+    // 「新增 Claude Code 分頁」強制帶 true；一般新增終端機分頁沿用設定的預設值。
+    // 其他分頁類型沒有 PTY，這個旗標對它們沒有意義。
+    const claudeBridge = type === "terminal" ? (opts?.claudeBridge ?? defaultBridgeOnNewTabRef.current) : undefined;
+    setTabs((prev) => [...prev, { id: newId, title, type, claudeBridge }]);
     selectTab(newId);
     setPickerOpen(false);
   }, [t.terminal_tab, t.database_tab, t.design_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab, t.loop_studio_tab, t.code_assistant_tab, t.knowledge_base_tab, t.mail_tab, selectTab]);
@@ -227,7 +239,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       if (nextTabs.length === 0) {
         const newId = crypto.randomUUID();
         setActiveId(newId);
-        return [{ id: newId, title: "Terminal", type: "terminal" }];
+        return [{ id: newId, title: "Terminal", type: "terminal", claudeBridge: defaultBridgeOnNewTabRef.current }];
       }
 
       // If closing active tab, switch to adjacent tab
@@ -444,6 +456,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   initialCwd={tab.initialCwd}
                   initialMission={tab.initialMission}
                   enterpriseTask={tab.enterpriseTask}
+                  claudeBridge={tab.claudeBridge}
                   onSessionCreated={(ptyId) => {
                     setTabs((prev) =>
                       prev.map((t) => t.id === tab.id ? { ...t, ptySessionId: ptyId } : t)

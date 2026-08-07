@@ -41,6 +41,8 @@ export interface Tab {
   /** 非 active 的終端機分頁發生了值得注意的事：在側邊欄圖示上顯示一個彩色點。
    *  只存在記憶體，不進 localStorage——重開 app 後這些事件已經沒有意義。 */
   attention?: AttentionKind;
+  /** 這個分頁是否注入了 Claude Code 橋接環境變數，只在分頁建立時決定，事後不變。 */
+  claudeBridge?: boolean;
 }
 
 export interface TabBarProps {
@@ -206,6 +208,11 @@ export function TabBar({
                   role="img"
                   aria-label={attentionLabel(tab.attention, t)}
                 />
+              )}
+              {/* Claude Code 橋接標記——錨在左上角，跟右下角的 attention 點、
+                  mail 的兩個角落都不會撞。 */}
+              {tab.type === "terminal" && tab.claudeBridge && (
+                <span className="terminal-bridge-badge">{t.bridge_tab_badge}</span>
               )}
             </span>
 

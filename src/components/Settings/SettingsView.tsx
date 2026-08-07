@@ -8,6 +8,7 @@ import { MailAccountsPage } from "./MailAccountsPage";
 import { EnterprisePage } from "./EnterprisePage";
 import { AboutPage } from "./AboutPage";
 import { McpServersPage } from "./McpServersPage";
+import { ClaudeBridgePage } from "./ClaudeBridgePage";
 import { useLocale } from "../../contexts/LocaleContext";
 import {
   SettingsIcon,
@@ -15,11 +16,12 @@ import {
   DatabaseIcon,
   BranchIcon,
   WrenchIcon,
-  InfoIcon
+  InfoIcon,
+  LinkIcon
 } from "../Icons";
 import "./SettingsView.css";
 
-type SettingsTab = "general" | "providers" | "databases" | "vcs" | "enterprise" | "about" | "mcp" | "mail";
+type SettingsTab = "general" | "providers" | "databases" | "vcs" | "enterprise" | "about" | "mcp" | "mail" | "bridge";
 
 export function SettingsView() {
   const navigate = useNavigate();
@@ -80,6 +82,12 @@ export function SettingsView() {
         >
           <WrenchIcon size={16} /> {t.mcp_servers}
         </button>
+        <button
+          className={`sidebar-item ${tab === "bridge" ? "sidebar-item--active" : ""}`}
+          onClick={() => setTab("bridge")}
+        >
+          <LinkIcon size={16} /> {t.bridge_title}
+        </button>
         {/*
           The Enterprise entry is hidden from the sidebar. The tab, its page and
           the render branch below are all still wired up, so restoring it means
@@ -107,6 +115,7 @@ export function SettingsView() {
         {tab === "vcs" && <VcsConnectionsPage />}
         {tab === "mail" && <MailAccountsPage />}
         {tab === "mcp" && <McpServersPage />}
+        {tab === "bridge" && <ClaudeBridgePage />}
         {tab === "enterprise" && <EnterprisePage />}
         {tab === "about" && <AboutPage />}
       </main>

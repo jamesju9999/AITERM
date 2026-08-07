@@ -37,6 +37,19 @@
   color: var(--accent, #a855f7);
 }
 
+.new-tab-picker__item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.new-tab-picker__item:disabled:hover {
+  background: transparent;
+}
+
+.new-tab-picker__item:disabled:hover .new-tab-picker__icon {
+  color: var(--text-muted, #666);
+}
+
 .new-tab-picker__icon {
   flex-shrink: 0;
   width: 20px;

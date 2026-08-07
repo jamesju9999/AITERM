@@ -339,7 +339,7 @@ fn to_anthropic_content_blocks(tool_calls: &serde_json::Value) -> Vec<serde_json
 /// `{"type":"rate_limit_error","message":"Error"}` — note that this masquerades
 /// as a rate limit even on the very first request, so do NOT read that error as
 /// a quota problem. API-key auth has no such requirement.
-const CLAUDE_CODE_SENTINEL: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+pub const CLAUDE_CODE_SENTINEL: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 /// Build the top-level `system` field.
 ///

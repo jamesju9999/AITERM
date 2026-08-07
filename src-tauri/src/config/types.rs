@@ -95,9 +95,58 @@ pub struct AppConfig {
     /// no effect unless it's passed explicitly.
     #[serde(default)]
     pub python_index_url: Option<String>,
+
+    /// Claude Code 橋接設定。舊的 config.toml 沒有這個區塊，靠 `default` 補齊。
+    #[serde(default)]
+    pub claude_bridge: ClaudeBridgeConfig,
 }
 
 fn default_max_agent_steps() -> u32 { 5 }
+
+/// 橋接 server 的預設埠。被占用時啟動失敗而非漂移 —— 環境變數只能在分頁
+/// spawn 的瞬間決定，埠若會漂移，已開的分頁會指向死位址。
+pub fn default_bridge_port() -> u16 { 8317 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeBridgeConfig {
+    /// server 是否常駐。
+    #[serde(default)]
+    pub enabled: bool,
+
+    #[serde(default = "default_bridge_port")]
+    pub port: u16,
+
+    /// 新開的終端機分頁是否預設注入橋接環境變數。
+    #[serde(default)]
+    pub default_on_new_tab: bool,
+
+    #[serde(default)]
+    pub opus: Option<TierMapping>,
+    #[serde(default)]
+    pub sonnet: Option<TierMapping>,
+    #[serde(default)]
+    pub haiku: Option<TierMapping>,
+}
+
+impl Default for ClaudeBridgeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_bridge_port(),
+            default_on_new_tab: false,
+            opus: None,
+            sonnet: None,
+            haiku: None,
+        }
+    }
+}
+
+/// 一個 Claude Code 模型層級要打到哪個供應商的哪個模型。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TierMapping {
+    pub provider_id: String,
+    pub model: String,
+}
 
 impl AppConfig {
     /// Find a provider by id.
@@ -151,6 +200,7 @@ impl Default for AppConfig {
             mcp_servers: vec![],
             python_interpreter: None,
             python_index_url: None,
+            claude_bridge: ClaudeBridgeConfig::default(),
         }
     }
 }
@@ -704,5 +754,37 @@ mod tests {
         let cfg: AppConfig =
             toml::from_str("python_index_url = \"https://pypi.mycompany.com/simple\"").unwrap();
         assert_eq!(cfg.python_index_url.as_deref(), Some("https://pypi.mycompany.com/simple"));
+    }
+}
+
+#[cfg(test)]
+mod bridge_config_tests {
+    use super::*;
+
+    #[test]
+    fn missing_section_gets_defaults() {
+        // 舊的 config.toml 沒有 [claude_bridge] 區塊，必須照常載入。
+        let cfg: AppConfig = toml::from_str("").expect("空 config 應可載入");
+        assert!(!cfg.claude_bridge.enabled);
+        assert_eq!(cfg.claude_bridge.port, 8317);
+        assert!(cfg.claude_bridge.opus.is_none());
+    }
+
+    #[test]
+    fn tier_mapping_round_trips() {
+        let toml_src = r#"
+[claude_bridge]
+enabled = true
+port = 9000
+
+[claude_bridge.sonnet]
+provider_id = "local-qwen"
+model = "Qwen3.6-35B-A3B-4bit"
+"#;
+        let cfg: AppConfig = toml::from_str(toml_src).unwrap();
+        assert_eq!(cfg.claude_bridge.port, 9000);
+        let sonnet = cfg.claude_bridge.sonnet.as_ref().unwrap();
+        assert_eq!(sonnet.provider_id, "local-qwen");
+        assert_eq!(sonnet.model, "Qwen3.6-35B-A3B-4bit");
     }
 }

@@ -204,6 +204,10 @@ impl PtySession {
         for (k, v) in shell.envs {
             cmd.env(k, v);
         }
+        // 順序必須在 envs 之後：兩份清單若不慎重疊，移除要贏。
+        for k in &shell.env_removals {
+            cmd.env_remove(k);
+        }
         let initial_cwd = cwd
             .filter(|p| p.is_dir())
             .or_else(|| std::env::current_dir().ok())
@@ -324,6 +328,10 @@ impl PtySession {
         }
         for (k, v) in shell.envs {
             cmd.env(k, v);
+        }
+        // 順序必須在 envs 之後：兩份清單若不慎重疊，移除要贏。
+        for k in &shell.env_removals {
+            cmd.env_remove(k);
         }
         let initial_cwd = cwd
             .filter(|p| p.is_dir())
@@ -596,6 +604,7 @@ mod tests {
                 program: "cmd.exe".into(),
                 args: vec!["/Q".into()], // no banner
                 envs: vec![],
+                env_removals: vec![],
             }
         }
         #[cfg(not(windows))]
@@ -604,6 +613,7 @@ mod tests {
                 program: "/bin/sh".into(),
                 args: vec![],
                 envs: vec![],
+                env_removals: vec![],
             }
         }
     }

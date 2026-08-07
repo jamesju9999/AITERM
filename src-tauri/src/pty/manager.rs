@@ -23,8 +23,24 @@ impl PtyManager {
     }
 
     /// High-level: spawn a session and wire its output to a Tauri event.
-    pub fn create_with_app(&self, app: AppHandle, size: PtySize, cwd: Option<PathBuf>) -> PtyResult<String> {
-        let shell: ShellSpec = default_shell().ok_or(PtyError::NoShellAvailable)?;
+    ///
+    /// `bridge_env` 非 None 時，把 Claude Code 橋接的環境變數注入這個分頁。
+    /// 環境變數只能在 spawn 的瞬間決定，所以事後無法對已開的分頁切換。
+    pub fn create_with_app(
+        &self,
+        app: AppHandle,
+        size: PtySize,
+        cwd: Option<PathBuf>,
+        bridge_env: Option<(u16, String)>,
+    ) -> PtyResult<String> {
+        let mut shell: ShellSpec = default_shell().ok_or(PtyError::NoShellAvailable)?;
+
+        if let Some((port, token)) = bridge_env {
+            shell.envs.extend(crate::bridge::env::bridge_envs(port, &token));
+            shell
+                .env_removals
+                .extend(crate::bridge::env::ENV_TO_REMOVE.iter().map(|s| s.to_string()));
+        }
 
         // Pre-generate id so the closure can reference it.
         let id = uuid::Uuid::new_v4().to_string();

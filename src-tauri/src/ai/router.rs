@@ -43,9 +43,34 @@ pub(crate) const XAI_DEFAULT_BASE_URL: &str = "https://api.x.ai/v1";
 pub(crate) const DEEPSEEK_DEFAULT_BASE_URL: &str = "https://api.deepseek.com/v1";
 pub(crate) const KIMI_DEFAULT_BASE_URL: &str = "https://api.moonshot.ai/v1";
 
+/// Provider type → 預設 base_url。回傳 `None` 表示這個 type 沒有合理的預設值
+/// ——缺 base_url 時必須向使用者要求明確設定（自架/相容端點沒有「猜」的
+/// 空間，猜錯會把憑證送去錯的 host）。
+///
+/// 這裡是端點知識唯一的一份定義。`resolve_by_id`（下面）與
+/// `bridge/factory.rs::build` 都呼叫這裡，而非各自硬編一份 —— 後者曾經漏掉
+/// 這份預設值，導致橋接把請求打到空 host。
+pub(crate) fn default_base_url(provider_type: ProviderType) -> Option<&'static str> {
+    match provider_type {
+        ProviderType::Openai => Some("https://api.openai.com"),
+        ProviderType::Ollama => Some("http://localhost:11434"),
+        ProviderType::GithubCopilot => Some("https://api.githubcopilot.com"),
+        ProviderType::GoogleAi => Some("https://generativelanguage.googleapis.com/v1beta/openai"),
+        ProviderType::Openrouter => Some(OPENROUTER_DEFAULT_BASE_URL),
+        ProviderType::Xai => Some(XAI_DEFAULT_BASE_URL),
+        ProviderType::Deepseek => Some(DEEPSEEK_DEFAULT_BASE_URL),
+        ProviderType::Kimi => Some(KIMI_DEFAULT_BASE_URL),
+        ProviderType::Anthropic => Some("https://api.anthropic.com"),
+        // 相容端點沒有「官方」host 可猜，缺 base_url 就是設定錯誤。
+        ProviderType::OpenaiCompatible | ProviderType::AnthropicCompatible => None,
+        // Codex 走 OAuth，不經過這裡的 base_url 解析。
+        ProviderType::Codex => None,
+    }
+}
+
 /// Returns a valid OAuth access token, refreshing it first if it's expired or
 /// within 5 minutes of expiry. Falls back to the stored token on refresh failure.
-async fn get_valid_oauth_token(provider_id: &str, secrets: &SecretStore) -> Result<String, AiError> {
+pub(crate) async fn get_valid_oauth_token(provider_id: &str, secrets: &SecretStore) -> Result<String, AiError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -384,7 +409,9 @@ impl AiRouter {
                 Arc::new(OpenAiClient::with_base_url(
                     key,
                     provider_cfg.model.clone(),
-                    provider_cfg.base_url.unwrap_or_else(|| "https://api.openai.com".into()),
+                    provider_cfg
+                        .base_url
+                        .unwrap_or_else(|| default_base_url(ProviderType::Openai).unwrap().into()),
                 ))
             }
             ProviderType::Anthropic => {
@@ -397,7 +424,9 @@ impl AiRouter {
                         .map_err(|_| AiError::NotConfigured)?
                         .ok_or(AiError::NotConfigured)?
                 };
-                let base_url = provider_cfg.base_url.unwrap_or_else(|| "https://api.anthropic.com".into());
+                let base_url = provider_cfg
+                    .base_url
+                    .unwrap_or_else(|| default_base_url(ProviderType::Anthropic).unwrap().into());
                 if is_oauth {
                     Arc::new(AnthropicClient::with_oauth(token, provider_cfg.model.clone(), base_url))
                 } else {
@@ -408,7 +437,9 @@ impl AiRouter {
                 // Ollama has no API key.
                 Arc::new(OllamaClient::with_base_url(
                     provider_cfg.model.clone(),
-                    provider_cfg.base_url.unwrap_or_else(|| "http://localhost:11434".into()),
+                    provider_cfg
+                        .base_url
+                        .unwrap_or_else(|| default_base_url(ProviderType::Ollama).unwrap().into()),
                 ))
             }
             ProviderType::OpenaiCompatible => {
@@ -443,21 +474,14 @@ impl AiRouter {
                     crate::ai::copilot::get_copilot_session_token(&github_token)
                         .await
                         .map_err(|msg| AiError::Network { message: msg })?;
-                // Copilot API requires IDE-style headers on every request.
-                let copilot_headers = vec![
-                    ("Editor-Version".into(), "vscode/1.99.0".into()),
-                    ("Editor-Plugin-Version".into(), "copilot/1.0.0".into()),
-                    ("Copilot-Integration-Id".into(), "vscode-chat".into()),
-                    ("Openai-Intent".into(), "conversation-panel".into()),
-                ];
                 Arc::new(OpenAiCompatibleClient::with_extra_headers(
                     provider_cfg
                         .base_url
-                        .unwrap_or_else(|| "https://api.githubcopilot.com".into()),
+                        .unwrap_or_else(|| default_base_url(ProviderType::GithubCopilot).unwrap().into()),
                     provider_cfg.model.clone(),
                     Some(copilot_token),
                     provider_cfg.supports_json_mode,
-                    copilot_headers,
+                    crate::ai::copilot::copilot_headers(),
                 ))
             }
             ProviderType::GoogleAi => {
@@ -474,7 +498,7 @@ impl AiRouter {
                     Arc::new(OpenAiCompatibleClient::new(
                         provider_cfg
                             .base_url
-                            .unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta/openai".into()),
+                            .unwrap_or_else(|| default_base_url(ProviderType::GoogleAi).unwrap().into()),
                         provider_cfg.model.clone(),
                         Some(key),
                         provider_cfg.supports_json_mode,
@@ -490,7 +514,7 @@ impl AiRouter {
                 Arc::new(OpenAiCompatibleClient::new(
                     provider_cfg
                         .base_url
-                        .unwrap_or_else(|| OPENROUTER_DEFAULT_BASE_URL.into()),
+                        .unwrap_or_else(|| default_base_url(ProviderType::Openrouter).unwrap().into()),
                     provider_cfg.model.clone(),
                     Some(key),
                     provider_cfg.supports_json_mode,
@@ -505,7 +529,7 @@ impl AiRouter {
                 Arc::new(OpenAiCompatibleClient::new(
                     provider_cfg
                         .base_url
-                        .unwrap_or_else(|| XAI_DEFAULT_BASE_URL.into()),
+                        .unwrap_or_else(|| default_base_url(ProviderType::Xai).unwrap().into()),
                     provider_cfg.model.clone(),
                     Some(key),
                     provider_cfg.supports_json_mode,
@@ -520,7 +544,7 @@ impl AiRouter {
                 Arc::new(OpenAiCompatibleClient::new(
                     provider_cfg
                         .base_url
-                        .unwrap_or_else(|| DEEPSEEK_DEFAULT_BASE_URL.into()),
+                        .unwrap_or_else(|| default_base_url(ProviderType::Deepseek).unwrap().into()),
                     provider_cfg.model.clone(),
                     Some(key),
                     provider_cfg.supports_json_mode,
@@ -535,7 +559,7 @@ impl AiRouter {
                 Arc::new(OpenAiCompatibleClient::new(
                     provider_cfg
                         .base_url
-                        .unwrap_or_else(|| KIMI_DEFAULT_BASE_URL.into()),
+                        .unwrap_or_else(|| default_base_url(ProviderType::Kimi).unwrap().into()),
                     provider_cfg.model.clone(),
                     Some(key),
                     provider_cfg.supports_json_mode,
@@ -610,6 +634,28 @@ mod tests {
         let config = Arc::new(crate::config::ConfigStore::from_config(cfg));
         let secrets = Arc::new(SecretStore::new());
         AiRouter::new(config, secrets)
+    }
+
+    #[test]
+    fn default_base_url_covers_every_provider_type() {
+        // 這個函式是 resolve_by_id 與 bridge/factory.rs::build 共用的唯一一份
+        // 端點知識，逐一驗證每種 type，確保兩邊都能拿到一致、正確的預設值。
+        assert_eq!(default_base_url(ProviderType::Openai), Some("https://api.openai.com"));
+        assert_eq!(default_base_url(ProviderType::Ollama), Some("http://localhost:11434"));
+        assert_eq!(default_base_url(ProviderType::GithubCopilot), Some("https://api.githubcopilot.com"));
+        assert_eq!(
+            default_base_url(ProviderType::GoogleAi),
+            Some("https://generativelanguage.googleapis.com/v1beta/openai")
+        );
+        assert_eq!(default_base_url(ProviderType::Openrouter), Some(OPENROUTER_DEFAULT_BASE_URL));
+        assert_eq!(default_base_url(ProviderType::Xai), Some(XAI_DEFAULT_BASE_URL));
+        assert_eq!(default_base_url(ProviderType::Deepseek), Some(DEEPSEEK_DEFAULT_BASE_URL));
+        assert_eq!(default_base_url(ProviderType::Kimi), Some(KIMI_DEFAULT_BASE_URL));
+        assert_eq!(default_base_url(ProviderType::Anthropic), Some("https://api.anthropic.com"));
+        // 這兩種沒有「官方」host 可猜，缺 base_url 必須是設定錯誤，不是預設值。
+        assert_eq!(default_base_url(ProviderType::OpenaiCompatible), None);
+        assert_eq!(default_base_url(ProviderType::AnthropicCompatible), None);
+        assert_eq!(default_base_url(ProviderType::Codex), None);
     }
 
     #[test]
