@@ -110,7 +110,7 @@ export function dbPreviewTable(connectionId: string, schema: string, table: stri
   return invoke("db_preview_table", { connectionId, schema, table, page, pageSize });
 }
 
-export type ConflictKind = "new" | "overwrite";
+export type ConflictKind = "new" | "overwrite" | "duplicate";
 
 /** 匯入預覽的單筆。後端刻意不送密碼過來。 */
 export interface ImportPreviewItem {

@@ -3,7 +3,7 @@ import { save, open } from "@tauri-apps/plugin-dialog";
 import {
   dbCheckImportFile, dbExportConnections, dbPreviewImport, dbImportConnections,
   DB_TYPE_LABELS,
-  type DbConnectionInfo, type ImportPreviewItem,
+  type DbConnectionInfo, type ImportPreviewItem, type ConflictKind,
 } from "../../ipc/db";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { Translations } from "../../lib/i18n";
@@ -55,14 +55,14 @@ export function DbExportPanel({
     });
 
   const handleExport = async () => {
-    const path = await save({
-      defaultPath: DEFAULT_EXPORT_NAME,
-      filters: [{ name: "JSON", extensions: ["json"] }],
-    });
-    if (!path) return; // 使用者取消對話框——不呼叫任何 IPC
     setBusy(true);
     setError("");
     try {
+      const path = await save({
+        defaultPath: DEFAULT_EXPORT_NAME,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return; // 使用者取消對話框——不呼叫任何 IPC
       const n = await dbExportConnections(path, [...selected], passphrase);
       onDone(t.db_export_done(n));
     } catch (e) {
@@ -118,13 +118,25 @@ export function DbExportPanel({
       {error && <div style={errorStyle}>{error}</div>}
 
       <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
-        <button onClick={onClose} className="aiterm-btn aiterm-btn--secondary">{t.cancel}</button>
+        <button onClick={onClose} disabled={busy} className="aiterm-btn aiterm-btn--secondary">{t.cancel}</button>
         <button onClick={handleExport} disabled={!canExport} className="aiterm-btn aiterm-btn--primary">
           {t.db_export}
         </button>
       </div>
     </div>
   );
+}
+
+const CONFLICT_COLORS: Record<ConflictKind, string> = {
+  new: "#34d399",
+  overwrite: "#f9a825",
+  duplicate: "#888",
+};
+
+function conflictLabel(t: Translations, item: ImportPreviewItem): string {
+  if (item.conflict === "new") return t.db_import_new;
+  if (item.conflict === "duplicate") return t.db_import_duplicate;
+  return t.db_import_overwrite(item.existing_name ?? item.name);
 }
 
 export function DbImportPanel({
@@ -187,7 +199,8 @@ export function DbImportPanel({
     try {
       const items = await dbPreviewImport(path, passphrase);
       setPreview(items);
-      setSelected(new Set(items.map((i) => i.id)));
+      // Duplicate 的目標已被檔案中前一筆認領，後端不會套用它，勾了也沒有意義。
+      setSelected(new Set(items.filter((i) => i.conflict !== "duplicate").map((i) => i.id)));
     } catch (e) {
       setError(translateDbTransferError(t, e));
     } finally {
@@ -199,6 +212,8 @@ export function DbImportPanel({
     if (!path) return;
     setBusy(true);
     setError("");
+    setFailures([]);
+    setSummary("");
     try {
       const r = await dbImportConnections(path, passphrase, [...selected]);
       setFailures(r.failures);
@@ -234,17 +249,20 @@ export function DbImportPanel({
         <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
           {preview.map((item) => (
             <label key={item.id} style={rowStyle}>
-              <input type="checkbox" checked={selected.has(item.id)} onChange={() => toggle(item.id)} />
+              <input
+                type="checkbox"
+                checked={selected.has(item.id)}
+                disabled={item.conflict === "duplicate"}
+                onChange={() => toggle(item.id)}
+              />
               <span style={{ flex: 1, minWidth: 0 }}>
                 <span style={{ color: "#e6e6e6", fontSize: 13 }}>{item.name}</span>
                 <span style={{ color: "#888", fontSize: 11, marginLeft: 8 }}>
                   {DB_TYPE_LABELS[item.db_type]} · {item.host}:{item.port}
                 </span>
               </span>
-              <span style={{ fontSize: 11, color: item.conflict === "new" ? "#34d399" : "#f9a825" }}>
-                {item.conflict === "new"
-                  ? t.db_import_new
-                  : t.db_import_overwrite(item.existing_name ?? item.name)}
+              <span style={{ fontSize: 11, color: CONFLICT_COLORS[item.conflict] }}>
+                {conflictLabel(t, item)}
               </span>
             </label>
           ))}
@@ -258,7 +276,7 @@ export function DbImportPanel({
       {error && <div style={errorStyle}>{error}</div>}
 
       <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
-        <button onClick={onClose} className="aiterm-btn aiterm-btn--secondary">{t.cancel}</button>
+        <button onClick={onClose} disabled={busy} className="aiterm-btn aiterm-btn--secondary">{t.cancel}</button>
         {path && !preview && (
           <button
             onClick={handlePreview}

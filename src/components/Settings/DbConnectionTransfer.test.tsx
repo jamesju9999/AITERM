@@ -144,6 +144,24 @@ function renderImport(onDone = vi.fn(), onClose = vi.fn()) {
   return { onDone, onClose };
 }
 
+const PREVIEW_WITH_DUPLICATE: ImportPreviewItem[] = [
+  { id: "a", name: "總行LBOTHODB", db_type: "db2", host: "172.19.2.83", port: 25000,
+    database: "LBOTHODB", username: "nuntio", conflict: "overwrite", existing_name: "舊的總行" },
+  { id: "b", name: "重複的那筆", db_type: "db2", host: "172.19.2.83", port: 25000,
+    database: "LBOTHODB", username: "nuntio", conflict: "duplicate", existing_name: "舊的總行" },
+];
+
+/// 走完「選檔 → 檢查 header → 輸入密碼 → 預覽」，讓測試從勾選清單開始。
+async function advanceToPreview(items: ImportPreviewItem[]) {
+  vi.mocked(open).mockResolvedValue("/tmp/ok.json");
+  vi.mocked(dbCheckImportFile).mockResolvedValue(1);
+  vi.mocked(dbPreviewImport).mockResolvedValue(items);
+  await waitFor(() => expect(screen.getByLabelText("加密密碼")).toBeInTheDocument());
+  fireEvent.change(screen.getByLabelText("加密密碼"), { target: { value: "pw" } });
+  fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+  await waitFor(() => expect(screen.getAllByRole("checkbox").length).toBe(items.length));
+}
+
 describe("DbImportPanel", () => {
   it("closes without any IPC when the open dialog is cancelled", async () => {
     vi.mocked(open).mockResolvedValue(null);
@@ -243,5 +261,94 @@ describe("DbImportPanel", () => {
     await waitFor(() =>
       expect(screen.getByText(/secret_write_failed: denied/)).toBeInTheDocument(),
     );
+  });
+});
+
+describe("DbImportPanel duplicate rows", () => {
+  it("labels a duplicate row and will not let it be selected", async () => {
+    vi.mocked(open).mockResolvedValue("/tmp/ok.json");
+    vi.mocked(dbCheckImportFile).mockResolvedValue(1);
+    vi.mocked(dbPreviewImport).mockResolvedValue(PREVIEW_WITH_DUPLICATE);
+    renderImport();
+    await advanceToPreview(PREVIEW_WITH_DUPLICATE);
+
+    expect(screen.getByText("與檔案中前一筆重複，將略過")).toBeInTheDocument();
+    const boxes = screen.getAllByRole("checkbox");
+    expect(boxes[0]).toBeChecked();
+    expect(boxes[1]).not.toBeChecked();
+    expect(boxes[1]).toBeDisabled();
+  });
+
+  it("never sends a duplicate id to the backend", async () => {
+    vi.mocked(open).mockResolvedValue("/tmp/ok.json");
+    vi.mocked(dbCheckImportFile).mockResolvedValue(1);
+    vi.mocked(dbPreviewImport).mockResolvedValue(PREVIEW_WITH_DUPLICATE);
+    vi.mocked(dbImportConnections).mockResolvedValue({ added: 0, overwritten: 1, failures: [] });
+    renderImport();
+    await advanceToPreview(PREVIEW_WITH_DUPLICATE);
+
+    fireEvent.click(screen.getByRole("button", { name: "匯入" }));
+    await waitFor(() =>
+      expect(dbImportConnections).toHaveBeenCalledWith("/tmp/ok.json", "pw", ["a"]),
+    );
+  });
+});
+
+describe("DbConnectionTransfer in-flight state", () => {
+  it("blocks cancel while an import is running, so the failure list cannot be lost", async () => {
+    let finish!: (r: { added: number; overwritten: number; failures: never[] }) => void;
+    vi.mocked(dbImportConnections).mockReturnValue(new Promise((r) => { finish = r; }));
+    const { onClose } = renderImport();
+    await advanceToPreview(PREVIEW);
+
+    const cancel = screen.getByRole("button", { name: "取消" });
+    expect(cancel).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "匯入" }));
+    await waitFor(() => expect(cancel).toBeDisabled());
+    fireEvent.click(cancel);
+    expect(onClose).not.toHaveBeenCalled();
+
+    finish({ added: 1, overwritten: 0, failures: [] });
+    await waitFor(() => expect(cancel).toBeEnabled());
+  });
+
+  it("clears the previous run's summary and failures when import is retried", async () => {
+    vi.mocked(dbImportConnections).mockResolvedValue({
+      added: 1, overwritten: 0,
+      failures: [{ name: "總行LBOTHODB", reason: "secret_write_failed: denied" }],
+    });
+    renderImport();
+    await advanceToPreview(PREVIEW);
+
+    fireEvent.click(screen.getByRole("button", { name: "匯入" }));
+    await waitFor(() =>
+      expect(screen.getByText(/secret_write_failed: denied/)).toBeInTheDocument(),
+    );
+
+    vi.mocked(dbImportConnections).mockRejectedValue("io_error: no such file");
+    fireEvent.click(screen.getByRole("button", { name: "匯入" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("io_error: no such file")).toBeInTheDocument(),
+    );
+    // 舊的成功摘要與失敗列都不該還留在畫面上和新的錯誤互相矛盾
+    expect(screen.queryByText(/secret_write_failed: denied/)).not.toBeInTheDocument();
+    expect(screen.queryByText("新增 1 筆、覆蓋 0 筆")).not.toBeInTheDocument();
+  });
+
+  it("cannot start a second export while the save dialog is still open", async () => {
+    let choosePath!: (p: string | null) => void;
+    vi.mocked(save).mockReturnValue(new Promise((r) => { choosePath = r; }));
+    renderExport();
+    typePassphrases("pw", "pw");
+
+    const btn = screen.getByRole("button", { name: "匯出" });
+    fireEvent.click(btn);
+    await waitFor(() => expect(btn).toBeDisabled());
+    fireEvent.click(btn);
+    expect(save).toHaveBeenCalledTimes(1);
+
+    choosePath(null);
+    await waitFor(() => expect(btn).toBeEnabled());
   });
 });
