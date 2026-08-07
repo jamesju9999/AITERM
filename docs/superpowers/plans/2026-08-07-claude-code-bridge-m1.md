@@ -895,6 +895,15 @@ git commit -m "feat(bridge): 中立上游事件型別與 BridgeUpstream trait"
 
 ### Task 7: Anthropic SSE 序列化器
 
+> ⚠️ **已完成，且已被 commit `05382ef` 補強。** 下面的程式碼是原始版本，協定
+> 審查後做了四項修改，請以實際檔案為準：
+> 1. `SseEncoder::new` 多收第三個參數 `input_tokens: u32`，`start()` 回報它
+>    （寫死 0 會讓 Claude Code 的自動壓縮太晚觸發）
+> 2. `message_start.usage` 補上 `cache_creation_input_tokens` 與
+>    `cache_read_input_tokens`（SDK 宣告為 `number|null` 非 optional）
+> 3. `ToolInputDelta` 在沒有開啟中的工具區塊時丟棄並記警告
+> 4. 新增 `pub fn finish()`，供上游沒送 `Done` 就結束時收尾
+
 **Files:**
 - Create: `src-tauri/src/bridge/anthropic/response.rs`
 - Modify: `src-tauri/src/bridge/anthropic/mod.rs`
@@ -2602,6 +2611,45 @@ mod tests {
     }
 
     #[test]
+    fn unsigned_thinking_blocks_are_stripped_from_history() {
+        // 走 OpenAI 路徑產生的 thinking 區塊沒有簽章，使用者切到 Anthropic
+        // 層之後這段歷史會被原樣轉發，上游會驗簽。
+        let body = rewrite_body(
+            &json!({"model": "m", "messages": [{"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "沒簽章"},
+                {"type": "text", "text": "保留"}
+            ]}]}),
+            "m",
+            false,
+        );
+        let blocks = body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "text");
+    }
+
+    #[test]
+    fn signed_thinking_blocks_survive() {
+        let body = rewrite_body(
+            &json!({"model": "m", "messages": [{"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "有簽章", "signature": "sig-abc"}
+            ]}]}),
+            "m",
+            false,
+        );
+        assert_eq!(body["messages"][0]["content"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn string_content_messages_are_left_alone() {
+        let body = rewrite_body(
+            &json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]}),
+            "m",
+            false,
+        );
+        assert_eq!(body["messages"][0]["content"], "hi");
+    }
+
+    #[test]
     fn messages_url_appends_v1_messages() {
         assert_eq!(messages_url("https://api.anthropic.com"), "https://api.anthropic.com/v1/messages");
         assert_eq!(messages_url("https://x.test/"), "https://x.test/v1/messages");
@@ -2662,7 +2710,30 @@ pub fn rewrite_body(raw: &Value, model: &str, is_oauth: bool) -> Value {
     if is_oauth {
         body["system"] = ensure_sentinel(raw.get("system"));
     }
+    strip_unsigned_thinking(&mut body);
     body
+}
+
+/// 移除歷史訊息裡沒有 `signature` 的 thinking 區塊。
+///
+/// 三層映射是各自獨立的，使用者可以 sonnet 走 OpenAI、opus 走 Anthropic。
+/// 走 OpenAI 那條路徑時我們的序列化器產生的 thinking 區塊沒有簽章（我們簽
+/// 不出來），而使用者一旦 /model 切到 opus，這段歷史就會被原樣 POST 到真的
+/// api.anthropic.com —— 那邊會驗證 thinking 區塊的簽章。與其賭它會不會 400，
+/// 不如轉發前就拿掉。
+fn strip_unsigned_thinking(body: &mut Value) {
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for m in messages {
+        let Some(blocks) = m.get_mut("content").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        blocks.retain(|b| {
+            let is_thinking = b.get("type").and_then(Value::as_str) == Some("thinking");
+            !is_thinking || b.get("signature").and_then(Value::as_str).is_some_and(|s| !s.is_empty())
+        });
+    }
 }
 
 fn ensure_sentinel(system: Option<&Value>) -> Value {
@@ -2740,7 +2811,7 @@ pub mod anthropic;
 - [ ] **Step 4: 執行測試確認通過**
 
 Run: `cd src-tauri && cargo test --lib bridge::upstream::anthropic`
-Expected: 6 passed。
+Expected: 9 passed。
 
 - [ ] **Step 5: 寫轉發的整合測試**
 
@@ -3412,7 +3483,14 @@ pub fn run(
                 }
             }
             UpstreamResponse::Events(mut events) => {
-                let mut enc = SseEncoder::new(message_id, req.model.clone());
+                // input_tokens 用估算值：多數 OpenAI 相容端點要到串流結束才
+                // 給 usage，但 Claude Code 在 message_start 就要讀它來算
+                // context 與自動壓縮門檻。任何合理的估算都好過保證錯的 0。
+                let mut enc = SseEncoder::new(
+                    message_id,
+                    req.model.clone(),
+                    crate::bridge::server::estimate_input_tokens(&req),
+                );
                 for f in enc.start() {
                     if !send(Bytes::from(f)).await { return; }
                 }
@@ -3429,6 +3507,11 @@ pub fn run(
                             return;
                         }
                     }
+                }
+                // 上游沒送 Done 就結束時補收尾，否則 Claude Code 會永遠等下去。
+                // 已收過 Done 時 finish() 回空 vec，可安全無條件呼叫。
+                for f in enc.finish() {
+                    if !send(Bytes::from(f)).await { return; }
                 }
             }
         }

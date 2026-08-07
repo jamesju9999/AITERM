@@ -368,3 +368,13 @@ M2 與 M3 各自以「探勘測試 dump 原始 SSE」為第一步。若 dump 顯
 3. Antigravity `v1internal` 接受 `tools` 並吐 `functionCall` part。→ 同上。
 4. Claude Code 對 `count_tokens` 的粗估誤差不敏感。→ M1 手動驗收時觀察是否出現異常的 context 壓縮行為。
 5. Claude Code 在 `ANTHROPIC_AUTH_TOKEN` 與 `ANTHROPIC_API_KEY` 並存時優先用前者。→ 本設計以「直接清掉 `ANTHROPIC_API_KEY`」迴避，不依賴此假設。
+6. Claude Code 接受沒有 `signature` 的 thinking 區塊。→ 影響的是顯示，我們自己簽不出來。M1 以「轉發到 Anthropic 前先剝除無簽章的 thinking 區塊」迴避跨路徑的硬失敗（見計畫 Task 12），但 Claude Code 本身是否接受仍未驗證。
+7. Claude Code 會從 `message_delta.usage.input_tokens` 補讀 token 數。→ M1 不依賴此假設：`message_start` 就回報估算值。
+
+**驗證這幾項的最有效實驗**（一次解決 1、6、7）：用 `curl -N` 對真的 `api.anthropic.com` 抓一份完整的串流回應，跟我們序列化器的輸出逐 frame diff。
+
+## 已知限制（M1 不處理，記錄以免被誤認為疏漏）
+
+- **`StopReason` 沒有失敗類的變體。** 目前只有 `end_turn / max_tokens / tool_use / stop_sequence`。上游若回 OpenAI 的 `finish_reason: "content_filter"`，會被映射成 `end_turn`，Claude Code 收到的是一個被靜默截斷的回答，沒有任何「內容被擋下」的訊號。要修就要在中立事件型別加變體並決定對應到 Anthropic 的哪個 `stop_reason`，這牽動三條路徑，留到 M2 一起處理。
+- **無簽章的 thinking 區塊。** 走 OpenAI 路徑產生的 thinking 區塊沒有 Anthropic 的簽章。跨路徑轉發已用剝除迴避，但這也代表 thinking 內容不會在切換模型層後保留。
+- **非串流的 `/v1/messages`。** 收到 `stream: false` 一律回 400，不實作 JSON 版的 `Message` 序列化器。Claude Code 一律用串流。
