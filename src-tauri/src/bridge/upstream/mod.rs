@@ -13,6 +13,7 @@ use crate::ai::AiError;
 use crate::bridge::anthropic::request::MessagesRequest;
 
 pub mod anthropic;
+pub mod codex;
 pub mod openai;
 
 #[derive(Debug, Clone, PartialEq)]
