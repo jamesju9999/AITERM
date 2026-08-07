@@ -373,6 +373,27 @@ M2 與 M3 各自以「探勘測試 dump 原始 SSE」為第一步。若 dump 顯
 
 **驗證這幾項的最有效實驗**（一次解決 1、6、7）：用 `curl -N` 對真的 `api.anthropic.com` 抓一份完整的串流回應，跟我們序列化器的輸出逐 frame diff。
 
+## 實測驗收結果（2026-08-07，Claude Code v2.1.223）
+
+用真的 Claude Code CLI 打過來，發現四件設計階段沒料到的事：
+
+1. **Claude Code 會發非串流請求。** 原本設計寫「一律用串流，`stream: false` 回 400」是錯的，實際會直接撞上這個 400。已實作非串流路徑（`MessageAggregator` 把 `UpstreamEvent` 聚合成完整的 Message JSON；Anthropic 家族原樣轉發上游的 JSON）。
+2. **`anthropic-beta` 不能覆蓋，必須合併。** Claude Code 送 `context_management` 等欄位時會同時在自己的 `anthropic-beta` 裡宣告對應 beta。轉發時把整個 header 換成我們固定的值，上游會回 `context_management: Extra inputs are not permitted`。已改成合併去重，`anthropic-version` 也改成有客戶端值就沿用。
+3. **`~/.claude/settings.json` 的 `env` 區塊優先於 shell 環境變數。** 使用者若在那裡設了 `ANTHROPIC_MODEL`，我們注入的哨兵字串會被靜默蓋掉，請求就會依真實型號走子字串後備規則。這不是 bug，但**是排錯時的第一嫌疑**，UI 上值得提示。
+4. **哨兵字串本身是有效的**（排除第 3 點後實測 `model=aiterm:sonnet` / `aiterm:haiku` 確實送達）。副作用：Claude Code 會警告「不認得這個模型」並假設 200k context，可用 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 修正。
+
+**已驗證可用：**
+
+- Anthropic 家族（轉發）：真的 Claude Code 跑完整的讀檔 → 改檔 → 回報循環，磁碟檔案確實被修改。
+- OpenAI 翻譯路徑：對真實 Gemini 端點的單輪請求，回傳完整正確的 Anthropic 事件序列。
+- 分頁層級的環境變數注入與 `CC` 標記：在 AITerm 終端機分頁裡實際運作。
+- 授權（401）、未映射層級（400）、`count_tokens`、上游錯誤包裝成 Anthropic 形狀。
+
+**已驗證不可用：**
+
+- **Gemini（google-ai，API key 模式）的多輪工具呼叫。** 上游回 `Function call is missing a thought_signature in functionCall parts`。Gemini 要求把它原本回傳的 `thought_signature` 隨工具呼叫回送，而 Anthropic 的 `tool_use` 區塊沒有欄位承載它。`ai/compatible.rs` 保留 `raw` 欄位的註解顯示這個 repo 已知此事，但橋接的翻譯層沒有做往返。**單輪請求正常**，只有多輪工具循環會失敗 —— 也就是 Claude Code 的主要使用方式。列入 M2。
+- **GitHub Copilot**：程式碼路徑已修好（token 交換 + IDE 標頭），但實測時使用者的 GitHub token 已過期（`Bad credentials`），未能完成端到端驗證。
+
 ## 已知限制（M1 不處理，記錄以免被誤認為疏漏）
 
 - **`StopReason` 沒有失敗類的變體。** 目前只有 `end_turn / max_tokens / tool_use / stop_sequence`。上游若回 OpenAI 的 `finish_reason: "content_filter"`，會被映射成 `end_turn`，Claude Code 收到的是一個被靜默截斷的回答，沒有任何「內容被擋下」的訊號。要修就要在中立事件型別加變體並決定對應到 Anthropic 的哪個 `stop_reason`，這牽動三條路徑，留到 M2 一起處理。
