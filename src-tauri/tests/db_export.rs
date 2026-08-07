@@ -3,6 +3,17 @@
 
 use aiterm_lib::commands::db_export::*;
 
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine;
+
+fn base64_decode(s: &str) -> Vec<u8> {
+    B64.decode(s).unwrap()
+}
+
+fn base64_encode(b: &[u8]) -> String {
+    B64.encode(b)
+}
+
 fn sample_payload() -> ExportPayload {
     ExportPayload {
         connections: vec![
@@ -92,4 +103,83 @@ fn exported_connection_defaults_password_and_schema_when_absent() {
     .unwrap();
     assert_eq!(e.password, "");
     assert_eq!(e.default_schema, None);
+}
+
+/// 把一份合法匯出檔的某個 header 欄位換掉，用來製造各種壞檔。
+fn tweak_header(field: &str, value: serde_json::Value) -> Vec<u8> {
+    let bytes = encrypt_payload(&sample_payload(), "pw").unwrap();
+    let mut json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    json[field] = value;
+    serde_json::to_vec(&json).unwrap()
+}
+
+#[test]
+fn a_wrong_passphrase_is_reported_as_such() {
+    let bytes = encrypt_payload(&sample_payload(), "right").unwrap();
+    assert_eq!(
+        decrypt_payload(&bytes, "wrong").unwrap_err(),
+        ImportError::WrongPassphrase
+    );
+}
+
+#[test]
+fn tampering_with_the_ciphertext_is_detected() {
+    let bytes = encrypt_payload(&sample_payload(), "pw").unwrap();
+    let mut json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let mut ct = base64_decode(json["data"].as_str().unwrap());
+    ct[0] ^= 0x01; // 翻一個位元
+    json["data"] = serde_json::Value::String(base64_encode(&ct));
+    let tampered = serde_json::to_vec(&json).unwrap();
+
+    assert_eq!(
+        decrypt_payload(&tampered, "pw").unwrap_err(),
+        ImportError::WrongPassphrase
+    );
+}
+
+#[test]
+fn arbitrary_json_is_not_an_export_file() {
+    assert_eq!(
+        check_import_file(br#"{"hello":"world"}"#).unwrap_err(),
+        ImportError::NotAnExportFile
+    );
+    assert_eq!(
+        check_import_file(b"not json at all").unwrap_err(),
+        ImportError::NotAnExportFile
+    );
+}
+
+#[test]
+fn a_wrong_format_tag_is_rejected() {
+    let bytes = tweak_header("format", serde_json::json!("some-other-tool"));
+    assert_eq!(
+        check_import_file(&bytes).unwrap_err(),
+        ImportError::NotAnExportFile
+    );
+}
+
+#[test]
+fn a_newer_version_is_rejected() {
+    let bytes = tweak_header("version", serde_json::json!(2));
+    assert_eq!(
+        check_import_file(&bytes).unwrap_err(),
+        ImportError::UnsupportedVersion
+    );
+}
+
+/// 版本檢查必須發生在解密之前，UI 才能在要求輸入 passphrase 前就擋下來。
+/// 用一個絕對錯誤的 passphrase 驗證：仍應得到版本錯誤，而不是 passphrase 錯誤。
+#[test]
+fn the_version_check_happens_before_decryption() {
+    let bytes = tweak_header("version", serde_json::json!(2));
+    assert_eq!(
+        decrypt_payload(&bytes, "definitely-not-the-passphrase").unwrap_err(),
+        ImportError::UnsupportedVersion
+    );
+}
+
+#[test]
+fn the_current_version_is_accepted() {
+    let bytes = encrypt_payload(&sample_payload(), "pw").unwrap();
+    assert_eq!(check_import_file(&bytes).unwrap(), EXPORT_VERSION);
 }

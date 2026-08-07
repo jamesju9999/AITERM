@@ -165,6 +165,23 @@ pub fn decrypt_payload(bytes: &[u8], passphrase: &str) -> Result<ExportPayload, 
     serde_json::from_slice(&plaintext).map_err(|_| ImportError::WrongPassphrase)
 }
 
+/// 只讀明文 header：確認這是 AITerm 的匯出檔，且版本在支援範圍內。
+/// 完全不碰密文，所以可以在要求使用者輸入 passphrase 之前呼叫。
 fn check_envelope(bytes: &[u8]) -> Result<Envelope, ImportError> {
-    serde_json::from_slice(bytes).map_err(|_| ImportError::NotAnExportFile)
+    let envelope: Envelope =
+        serde_json::from_slice(bytes).map_err(|_| ImportError::NotAnExportFile)?;
+    if envelope.format != FORMAT_TAG {
+        return Err(ImportError::NotAnExportFile);
+    }
+    // 高版本一律擋下。v1 無法分辨 v2 是「只新增欄位」還是「改了既有
+    // 欄位的語意」，硬讀會安靜地匯入錯誤資料。反之低版本必須支援。
+    if envelope.version > EXPORT_VERSION {
+        return Err(ImportError::UnsupportedVersion);
+    }
+    Ok(envelope)
+}
+
+/// 對外的檔案檢查入口，回傳檔案的格式版本。
+pub fn check_import_file(bytes: &[u8]) -> Result<u32, ImportError> {
+    check_envelope(bytes).map(|e| e.version)
 }
