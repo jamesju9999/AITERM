@@ -18,7 +18,10 @@ pub struct MessagesRequest {
     #[serde(default)]
     pub stream: Option<bool>,
     #[serde(default)]
-    pub temperature: Option<f32>,
+    /// 用 f64 而非 f32：JSON 數字本來就是 f64，先窄化成 f32 再加寬回去會
+    /// 夾帶精度雜訊（`0.3f32 as f64` = 0.30000001192092896），送到上游就
+    /// 不再是使用者輸入的值。
+    pub temperature: Option<f64>,
     #[serde(default)]
     pub stop_sequences: Option<Vec<String>>,
     #[serde(default)]

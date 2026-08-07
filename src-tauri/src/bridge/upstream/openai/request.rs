@@ -29,12 +29,7 @@ pub fn build_body(req: &MessagesRequest, model: &str) -> Value {
         body.insert("max_tokens".into(), json!(v));
     }
     if let Some(v) = req.temperature {
-        // f32 直接轉 f64（json! 的做法）會夾帶精度雜訊，
-        // 例如 0.3f32 as f64 = 0.30000001192092896，不是 0.3。
-        // 先轉成字串（f32 的 Display 會給最短可還原表示）再解析回 f64，
-        // 才能拿到使用者原本輸入的十進位值。
-        let v64: f64 = v.to_string().parse().unwrap_or(v as f64);
-        body.insert("temperature".into(), json!(v64));
+        body.insert("temperature".into(), json!(v));
     }
     if let Some(v) = &req.stop_sequences {
         if !v.is_empty() {
