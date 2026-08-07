@@ -4,3 +4,4 @@
 //! xai / github-copilot，以及 API key 模式的 google-ai。
 
 pub mod request;
+pub mod tool_calls;
