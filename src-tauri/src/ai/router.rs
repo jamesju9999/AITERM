@@ -296,7 +296,10 @@ async fn do_google_oauth_refresh(provider_id: &str, refresh_token: &str, secrets
 
 /// Returns a valid Codex access token (refreshing first if within 5 minutes
 /// of expiry) plus the cached `chatgpt-account-id`, if any.
-async fn get_valid_codex_oauth_token(
+///
+/// pub（非 private）是探勘測試需要的最小可見度提升——src-tauri/tests/ 下的
+/// 整合測試是獨立 crate。純粹放寬可見度，行為不變。見 codex_probe.rs。
+pub async fn get_valid_codex_oauth_token(
     provider_id: &str,
     secrets: &SecretStore,
 ) -> Result<(String, Option<String>), AiError> {

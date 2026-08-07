@@ -52,7 +52,10 @@ impl CodexClient {
         Self { access_token, model, chatgpt_account_id, base_url, client: reqwest::Client::new() }
     }
 
-    fn responses_url(&self) -> String {
+    // pub（非 pub(crate)）是探勘測試需要的最小可見度提升——
+    // src-tauri/tests/ 下的整合測試是獨立 crate，看不到 pub(crate) 項目。
+    // 純粹放寬可見度，行為不變。見 codex_probe.rs。
+    pub fn responses_url(&self) -> String {
         format!("{}/backend-api/codex/responses", self.base_url.trim_end_matches('/'))
     }
 
@@ -63,7 +66,7 @@ impl CodexClient {
         )
     }
 
-    fn apply_headers(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    pub fn apply_headers(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         let builder = builder
             .bearer_auth(&self.access_token)
             .header("originator", "codex_cli_rs")
@@ -80,7 +83,7 @@ impl CodexClient {
 
 /// Build the Responses API request body. `instructions` is Codex's required
 /// system-prompt-equivalent — the backend rejects requests without it.
-pub(crate) fn build_request_body(model: &str, req: &GenerateRequest) -> serde_json::Value {
+pub fn build_request_body(model: &str, req: &GenerateRequest) -> serde_json::Value {
     let input: Vec<serde_json::Value> = req
         .messages
         .iter()
