@@ -1,6 +1,10 @@
-import { useState, type CSSProperties } from "react";
-import { save } from "@tauri-apps/plugin-dialog";
-import { dbExportConnections, DB_TYPE_LABELS, type DbConnectionInfo } from "../../ipc/db";
+import { useState, useEffect, type CSSProperties } from "react";
+import { save, open } from "@tauri-apps/plugin-dialog";
+import {
+  dbCheckImportFile, dbExportConnections, dbPreviewImport, dbImportConnections,
+  DB_TYPE_LABELS,
+  type DbConnectionInfo, type ImportPreviewItem,
+} from "../../ipc/db";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { Translations } from "../../lib/i18n";
 
@@ -118,6 +122,161 @@ export function DbExportPanel({
         <button onClick={handleExport} disabled={!canExport} className="aiterm-btn aiterm-btn--primary">
           {t.db_export}
         </button>
+      </div>
+    </div>
+  );
+}
+
+export function DbImportPanel({
+  onClose, onDone,
+}: {
+  onClose: () => void;
+  onDone: (message: string) => void;
+}) {
+  const { t } = useLocale();
+  const [path, setPath] = useState<string | null>(null);
+  const [passphrase, setPassphrase] = useState("");
+  const [preview, setPreview] = useState<ImportPreviewItem[] | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [failures, setFailures] = useState<{ name: string; reason: string }[]>([]);
+  const [summary, setSummary] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  // 一掛載就開檔案對話框。使用者取消就直接關掉面板——沒有檔案就沒有
+  // 後續流程可言。`cancelled` 擋住 unmount 後的 setState（Tauri 對話框
+  // 是非同步的，使用者可能在期間就離開設定頁）。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (cancelled) return;
+      if (typeof picked !== "string") {
+        onClose();
+        return;
+      }
+      try {
+        // 先只看明文 header：格式或版本不合就在這裡結束，不必讓
+        // 使用者為一個注定被拒的檔案白打一次密碼。
+        await dbCheckImportFile(picked);
+        if (!cancelled) setPath(picked);
+      } catch (e) {
+        if (!cancelled) setError(translateDbTransferError(t, e));
+      }
+    })();
+    return () => { cancelled = true; };
+    // 只在掛載時跑一次；t / onClose 變動不該重新開檔案對話框。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const handlePreview = async () => {
+    if (!path) return;
+    setBusy(true);
+    setError("");
+    try {
+      const items = await dbPreviewImport(path, passphrase);
+      setPreview(items);
+      setSelected(new Set(items.map((i) => i.id)));
+    } catch (e) {
+      setError(translateDbTransferError(t, e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleImport = async () => {
+    if (!path) return;
+    setBusy(true);
+    setError("");
+    try {
+      const r = await dbImportConnections(path, passphrase, [...selected]);
+      setFailures(r.failures);
+      setSummary(t.db_import_done(r.added, r.overwritten));
+      onDone(t.db_import_done(r.added, r.overwritten));
+    } catch (e) {
+      setError(translateDbTransferError(t, e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={panelStyle}>
+      <h3 style={headingStyle}>{t.db_import_title}</h3>
+
+      {!path && !error && <div style={{ color: "#888", fontSize: 12 }}>{t.db_transfer_choosing_file}</div>}
+
+      {path && !preview && (
+        <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: "10px 12px", alignItems: "center" }}>
+          <label style={labelStyle} htmlFor="db-import-pass">{t.db_transfer_passphrase}</label>
+          <input
+            id="db-import-pass"
+            type="password"
+            value={passphrase}
+            onChange={(e) => setPassphrase(e.target.value)}
+            style={inputStyle}
+          />
+        </div>
+      )}
+
+      {preview && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+          {preview.map((item) => (
+            <label key={item.id} style={rowStyle}>
+              <input type="checkbox" checked={selected.has(item.id)} onChange={() => toggle(item.id)} />
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ color: "#e6e6e6", fontSize: 13 }}>{item.name}</span>
+                <span style={{ color: "#888", fontSize: 11, marginLeft: 8 }}>
+                  {DB_TYPE_LABELS[item.db_type]} · {item.host}:{item.port}
+                </span>
+              </span>
+              <span style={{ fontSize: 11, color: item.conflict === "new" ? "#34d399" : "#f9a825" }}>
+                {item.conflict === "new"
+                  ? t.db_import_new
+                  : t.db_import_overwrite(item.existing_name ?? item.name)}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      {summary && <div style={{ color: "#34d399", fontSize: 12, marginTop: 8 }}>{summary}</div>}
+      {failures.map((f) => (
+        <div key={`${f.name}:${f.reason}`} style={errorStyle}>{f.name}：{f.reason}</div>
+      ))}
+      {error && <div style={errorStyle}>{error}</div>}
+
+      <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+        <button onClick={onClose} className="aiterm-btn aiterm-btn--secondary">{t.cancel}</button>
+        {path && !preview && (
+          <button
+            onClick={handlePreview}
+            disabled={busy || passphrase.length === 0}
+            className="aiterm-btn aiterm-btn--primary"
+          >
+            {t.db_transfer_next}
+          </button>
+        )}
+        {preview && (
+          <button
+            onClick={handleImport}
+            disabled={busy || selected.size === 0}
+            className="aiterm-btn aiterm-btn--primary"
+          >
+            {t.db_import}
+          </button>
+        )}
       </div>
     </div>
   );
