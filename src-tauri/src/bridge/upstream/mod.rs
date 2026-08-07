@@ -58,6 +58,18 @@ pub enum UpstreamResponse {
     Events(BoxStream<'static, Result<UpstreamEvent, AiError>>),
 }
 
+// 手動實作而非 `#[derive(Debug)]`：`Events` 裡的 `BoxStream` 是 trait object，
+// 不會自動滿足 `Debug`，但整合測試用到的 `Result::unwrap_err` 要求
+// `T: Debug`。
+impl std::fmt::Debug for UpstreamResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UpstreamResponse::Passthrough(_) => write!(f, "UpstreamResponse::Passthrough(..)"),
+            UpstreamResponse::Events(_) => write!(f, "UpstreamResponse::Events(..)"),
+        }
+    }
+}
+
 #[async_trait]
 pub trait BridgeUpstream: Send + Sync {
     /// `model` 是映射後的上游模型名，不是 Claude Code 送來的哨兵字串。
