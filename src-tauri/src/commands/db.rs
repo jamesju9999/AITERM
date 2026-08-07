@@ -51,7 +51,7 @@ pub struct DbConnectionInfo {
     pub is_connected: bool,
 }
 
-fn secret_key(id: &str) -> String {
+pub(crate) fn secret_key(id: &str) -> String {
     format!("db:{id}")
 }
 

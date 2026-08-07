@@ -237,3 +237,60 @@ pub fn resolve_conflicts(
         })
         .collect()
 }
+
+// ---- Tauri 接線 ----
+// 以下只負責讀寫檔案並接上 ConfigStore／SecretStore；所有邏輯都在上面的純函式。
+
+use std::sync::Arc;
+use tauri::State;
+
+use crate::commands::db::secret_key;
+use crate::config::ConfigStore;
+use crate::secret::SecretStore;
+
+/// 只檢查明文 header，讓 UI 能在要求輸入 passphrase 之前就擋掉不合的檔案。
+#[tauri::command]
+pub async fn db_check_import_file(path: String) -> Result<u32, String> {
+    let bytes = std::fs::read(&path).map_err(|e| format!("io_error: {e}"))?;
+    check_import_file(&bytes).map_err(|e| e.to_string())
+}
+
+/// 把選取的連線加密寫到 `path`，回傳實際匯出的筆數。
+#[tauri::command]
+pub async fn db_export_connections(
+    path: String,
+    ids: Vec<String>,
+    passphrase: String,
+    config: State<'_, Arc<ConfigStore>>,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<usize, String> {
+    let connections: Vec<ExportedConnection> = config
+        .get()
+        .db_connections
+        .into_iter()
+        .filter(|c| ids.contains(&c.id))
+        .map(|c| ExportedConnection {
+            // Keychain 讀不到就以空密碼匯出。匯入端會把空字串視為
+            // 「這筆本來就沒有密碼」，不會拿它去清掉既有密碼。
+            password: secrets
+                .get(&secret_key(&c.id))
+                .ok()
+                .flatten()
+                .unwrap_or_default(),
+            id: c.id,
+            name: c.name,
+            db_type: c.db_type,
+            host: c.host,
+            port: c.port,
+            database: c.database,
+            username: c.username,
+            default_schema: c.default_schema,
+        })
+        .collect();
+
+    let count = connections.len();
+    let bytes =
+        encrypt_payload(&ExportPayload { connections }, &passphrase).map_err(|e| e.to_string())?;
+    std::fs::write(&path, bytes).map_err(|e| format!("io_error: {e}"))?;
+    Ok(count)
+}
