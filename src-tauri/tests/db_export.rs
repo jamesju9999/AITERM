@@ -3,10 +3,60 @@
 
 use aiterm_lib::commands::db_export::*;
 
+fn sample_payload() -> ExportPayload {
+    ExportPayload {
+        connections: vec![
+            ExportedConnection {
+                id: "id-db2".into(),
+                name: "總行LBOTHODB".into(),
+                db_type: aiterm_lib::config::types::DbType::Db2,
+                host: "172.19.2.83".into(),
+                port: 25000,
+                database: "LBOTHODB".into(),
+                username: "nuntio".into(),
+                default_schema: Some("NUNTIO".into()),
+                password: "s3cret".into(),
+            },
+            ExportedConnection {
+                id: "id-sqlite".into(),
+                name: "AITERM知識庫".into(),
+                db_type: aiterm_lib::config::types::DbType::Sqlite,
+                host: "/tmp/knowledge_base.db".into(),
+                port: 0,
+                database: String::new(),
+                username: String::new(),
+                default_schema: None,
+                password: String::new(),
+            },
+        ],
+    }
+}
+
 #[test]
-fn crypto_dependencies_have_the_expected_api() {
-    let out = crypto_smoke_test();
-    assert!(!out.is_empty());
+fn encrypt_then_decrypt_restores_the_payload() {
+    let payload = sample_payload();
+    let bytes = encrypt_payload(&payload, "correct horse").unwrap();
+    let back = decrypt_payload(&bytes, "correct horse").unwrap();
+    assert_eq!(back, payload);
+}
+
+#[test]
+fn the_ciphertext_contains_no_plaintext_connection_data() {
+    let bytes = encrypt_payload(&sample_payload(), "pw").unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    assert!(!text.contains("172.19.2.83"));
+    assert!(!text.contains("nuntio"));
+    assert!(!text.contains("s3cret"));
+    assert!(!text.contains("LBOTHODB"));
+    // 明文 header 仍然要看得到，版本檢查才能在解密前做。
+    assert!(text.contains("aiterm-db-export"));
+}
+
+#[test]
+fn encrypting_the_same_payload_twice_gives_different_bytes() {
+    let a = encrypt_payload(&sample_payload(), "pw").unwrap();
+    let b = encrypt_payload(&sample_payload(), "pw").unwrap();
+    assert_ne!(a, b, "salt 與 nonce 必須每次重新隨機產生");
 }
 
 #[test]

@@ -73,23 +73,98 @@ pub const EXPORT_VERSION: u32 = 1;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 
-/// 只用來確認相依的 API 形狀正確；Task 2 會被真正的加密取代。
-pub fn crypto_smoke_test() -> Vec<u8> {
+/// 匯入失敗的原因。變體名稱會以 `to_string()` 送到前端當作錯誤碼，
+/// 由前端對應到 i18n 字串——所以這些字串是介面的一部分，不要隨意改。
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ImportError {
+    #[error("not_an_export_file")]
+    NotAnExportFile,
+    #[error("unsupported_version")]
+    UnsupportedVersion,
+    #[error("wrong_passphrase")]
+    WrongPassphrase,
+    #[error("unsupported_kdf")]
+    UnsupportedKdf,
+}
+
+fn derive_key(passphrase: &str, salt: &[u8], kdf: &KdfParams) -> Result<[u8; 32], ImportError> {
+    if kdf.alg != "argon2id" {
+        return Err(ImportError::UnsupportedKdf);
+    }
+    let params = Params::new(kdf.m_cost, kdf.t_cost, kdf.p_cost, Some(32))
+        .map_err(|_| ImportError::UnsupportedKdf)?;
+    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut key = [0u8; 32];
+    argon
+        .hash_password_into(passphrase.as_bytes(), salt, &mut key)
+        .map_err(|_| ImportError::UnsupportedKdf)?;
+    Ok(key)
+}
+
+/// 把 payload 加密成一份完整的匯出檔位元組。
+pub fn encrypt_payload(payload: &ExportPayload, passphrase: &str) -> anyhow::Result<Vec<u8>> {
     let mut salt = [0u8; SALT_LEN];
     let mut nonce = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut salt);
     OsRng.fill_bytes(&mut nonce);
 
-    let params = Params::new(19456, 2, 1, Some(32)).expect("valid argon2 params");
-    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    let mut key = [0u8; 32];
-    argon
-        .hash_password_into(b"pw", &salt, &mut key)
-        .expect("argon2 hashes into a 32-byte key");
+    let kdf = KdfParams {
+        alg: "argon2id".into(),
+        salt: B64.encode(salt),
+        m_cost: ARGON2_M_COST,
+        t_cost: ARGON2_T_COST,
+        p_cost: ARGON2_P_COST,
+    };
+    let key = derive_key(passphrase, &salt, &kdf)
+        .map_err(|e| anyhow::anyhow!("key derivation failed: {e}"))?;
 
+    let plaintext = serde_json::to_vec(payload)?;
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
-    let ct = cipher
-        .encrypt(Nonce::from_slice(&nonce), b"hello".as_ref())
-        .expect("encrypt succeeds");
-    B64.encode(ct).into_bytes()
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), plaintext.as_ref())
+        .map_err(|_| anyhow::anyhow!("encryption failed"))?;
+
+    let envelope = Envelope {
+        format: FORMAT_TAG.into(),
+        version: EXPORT_VERSION,
+        kdf,
+        cipher: "aes-256-gcm".into(),
+        nonce: B64.encode(nonce),
+        data: B64.encode(ciphertext),
+    };
+    Ok(serde_json::to_vec_pretty(&envelope)?)
+}
+
+/// 解開一份匯出檔。GCM 的驗證標籤讓「passphrase 錯誤」與「檔案遭竄改」
+/// 都表現為 `WrongPassphrase`——兩者對使用者而言是同一件事：這份檔案
+/// 配這組密碼打不開。
+pub fn decrypt_payload(bytes: &[u8], passphrase: &str) -> Result<ExportPayload, ImportError> {
+    let envelope = check_envelope(bytes)?;
+    if envelope.cipher != "aes-256-gcm" {
+        return Err(ImportError::UnsupportedKdf);
+    }
+    let salt = B64
+        .decode(&envelope.kdf.salt)
+        .map_err(|_| ImportError::NotAnExportFile)?;
+    let nonce = B64
+        .decode(&envelope.nonce)
+        .map_err(|_| ImportError::NotAnExportFile)?;
+    let ciphertext = B64
+        .decode(&envelope.data)
+        .map_err(|_| ImportError::NotAnExportFile)?;
+    if nonce.len() != NONCE_LEN {
+        return Err(ImportError::NotAnExportFile);
+    }
+
+    let key = derive_key(passphrase, &salt, &envelope.kdf)?;
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
+        .map_err(|_| ImportError::WrongPassphrase)?;
+
+    serde_json::from_slice(&plaintext).map_err(|_| ImportError::WrongPassphrase)
+}
+
+fn check_envelope(bytes: &[u8]) -> Result<Envelope, ImportError> {
+    serde_json::from_slice(bytes).map_err(|_| ImportError::NotAnExportFile)
 }
