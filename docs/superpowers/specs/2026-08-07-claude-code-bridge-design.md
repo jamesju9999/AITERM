@@ -389,10 +389,33 @@ M2 與 M3 各自以「探勘測試 dump 原始 SSE」為第一步。若 dump 顯
 - 分頁層級的環境變數注入與 `CC` 標記：在 AITerm 終端機分頁裡實際運作。
 - 授權（401）、未映射層級（400）、`count_tokens`、上游錯誤包裝成 Anthropic 形狀。
 
+- **Gemini（google-ai，API key 模式）的多輪工具呼叫**：真的 Claude Code 透過 Gemini 3.5 Flash 跑完整的讀檔 → 改檔 → 回報循環。見下方「供應商工具呼叫中繼資料的往返」。
+
 **已驗證不可用：**
 
-- **Gemini（google-ai，API key 模式）的多輪工具呼叫。** 上游回 `Function call is missing a thought_signature in functionCall parts`。Gemini 要求把它原本回傳的 `thought_signature` 隨工具呼叫回送，而 Anthropic 的 `tool_use` 區塊沒有欄位承載它。`ai/compatible.rs` 保留 `raw` 欄位的註解顯示這個 repo 已知此事，但橋接的翻譯層沒有做往返。**單輪請求正常**，只有多輪工具循環會失敗 —— 也就是 Claude Code 的主要使用方式。列入 M2。
 - **GitHub Copilot**：程式碼路徑已修好（token 交換 + IDE 標頭），但實測時使用者的 GitHub token 已過期（`Bad credentials`），未能完成端到端驗證。
+
+## 供應商工具呼叫中繼資料的往返（`tool_meta.rs`）
+
+Gemini 的 OpenAI 相容端點在串流的工具呼叫上夾帶不透明資料：
+
+```json
+"tool_calls": [{
+  "extra_content": {"google": {"thought_signature": "Eq8C…"}},
+  "function": {"arguments": "…", "name": "Bash"},
+  "id": "rdwtxmwr", "type": "function"
+}]
+```
+
+實測對照（直接打 Gemini 端點，兩組只差這個欄位）：第二輪**帶** `extra_content` → HTTP 200；**不帶** → HTTP 400 `Function call is missing a thought_signature in functionCall parts`。
+
+問題在於這個值必須撐過「我們 → Claude Code → 我們」的往返，而 Anthropic 的 `tool_use` 區塊沒有欄位承載它。
+
+**做法：以工具呼叫 `id` 為鍵的有界伺服器端快取**（容量 512，FIFO 淘汰）。
+
+為什麼不在 Anthropic 區塊上加自訂欄位：那要賭 Claude Code 會保留未知欄位，未經驗證。而 `id` 是協定**強制**要原樣回送的（`tool_result.tool_use_id` 靠它對應），這條路徑有保證。快取沒命中時的行為等於沒有這個功能時的行為（400），不會更糟。
+
+快取存的是**整個 `extra_content` 的 JSON 值**而非 `thought_signature` 本身 —— 語意是「這個工具呼叫上游附了什麼不透明資料，回送時原樣帶回」，不寫死任何供應商的欄位路徑。快取隨 `BridgeState::start()` 重建，跨 server 重啟不保留。
 
 ## 已知限制（M1 不處理，記錄以免被誤認為疏漏）
 
