@@ -14,6 +14,7 @@ pub mod factory;
 pub mod model_map;
 pub mod server;
 pub mod stream;
+pub mod tool_meta;
 pub mod upstream;
 
 use std::net::SocketAddr;
@@ -23,6 +24,7 @@ use parking_lot::Mutex;
 
 use crate::config::ConfigStore;
 use crate::secret::SecretStore;
+use tool_meta::ToolMetaCache;
 
 /// 橋接 server 的生命週期：持有目前執行中 server 的 handle，能 start/stop。
 pub struct BridgeState {
@@ -71,6 +73,9 @@ impl BridgeState {
             config,
             secrets,
             token: Arc::new(token),
+            // 每次 start() 都是一個新的 server 生命週期，快取跟著重建即可
+            // ——它只是把「200 而非 400」機率最大化，不需要跨 restart 存活。
+            tool_meta: Arc::new(ToolMetaCache::default()),
         });
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {

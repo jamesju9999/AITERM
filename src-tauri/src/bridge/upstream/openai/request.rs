@@ -5,8 +5,9 @@ use serde_json::{json, Map, Value};
 use crate::bridge::anthropic::request::{
     parse_content, system_text, ContentBlock, MessagesRequest,
 };
+use crate::bridge::tool_meta::ToolMetaCache;
 
-pub fn build_body(req: &MessagesRequest, model: &str) -> Value {
+pub fn build_body(req: &MessagesRequest, model: &str, tool_meta: &ToolMetaCache) -> Value {
     let mut messages: Vec<Value> = Vec::new();
 
     let system = system_text(req.system.as_ref());
@@ -14,7 +15,7 @@ pub fn build_body(req: &MessagesRequest, model: &str) -> Value {
         messages.push(json!({"role": "system", "content": system}));
     }
     for m in &req.messages {
-        push_message(&mut messages, &m.role, &parse_content(&m.content));
+        push_message(&mut messages, &m.role, &parse_content(&m.content), tool_meta);
     }
 
     let mut body = Map::new();
@@ -97,7 +98,7 @@ fn reasoning_effort(budget: u32) -> &'static str {
 ///
 /// 一個 turn 可能含多個 `tool_result`，OpenAI 要求每個結果各自一則 `tool`
 /// 訊息；而 `tool` 訊息不能帶圖片，所以圖片會被提到後面新增的 user turn。
-fn push_message(out: &mut Vec<Value>, role: &str, blocks: &[ContentBlock]) {
+fn push_message(out: &mut Vec<Value>, role: &str, blocks: &[ContentBlock], tool_meta: &ToolMetaCache) {
     let mut text_parts: Vec<String> = Vec::new();
     let mut images: Vec<Value> = Vec::new();
     let mut tool_calls: Vec<Value> = Vec::new();
@@ -109,15 +110,27 @@ fn push_message(out: &mut Vec<Value>, role: &str, blocks: &[ContentBlock]) {
             // thinking 區塊不回送給上游：它是模型自己的產出，重送只是浪費 token。
             ContentBlock::Thinking(_) => {}
             ContentBlock::Image { media_type, data } => images.push(image_part(media_type, data)),
-            ContentBlock::ToolUse { id, name, input } => tool_calls.push(json!({
-                "id": id,
-                "type": "function",
-                "function": {
-                    "name": name,
-                    // OpenAI 的 arguments 是 JSON 字串，不是物件。
-                    "arguments": serde_json::to_string(input).unwrap_or_else(|_| "{}".into()),
+            ContentBlock::ToolUse { id, name, input } => {
+                let mut call = Map::new();
+                call.insert("id".into(), json!(id));
+                call.insert("type".into(), json!("function"));
+                call.insert(
+                    "function".into(),
+                    json!({
+                        "name": name,
+                        // OpenAI 的 arguments 是 JSON 字串，不是物件。
+                        "arguments": serde_json::to_string(input).unwrap_or_else(|_| "{}".into()),
+                    }),
+                );
+                // Gemini 等供應商要求第二輪把工具呼叫附帶的 extra_content
+                // （如 thought_signature）原樣回送，否則 400——見
+                // `tool_meta.rs`。快取沒命中時完全不加這個欄位，不能塞
+                // `null`，那對某些上游一樣算「缺少」。
+                if let Some(extra) = tool_meta.get(id) {
+                    call.insert("extra_content".into(), extra);
                 }
-            })),
+                tool_calls.push(Value::Object(call));
+            }
             ContentBlock::ToolResult { tool_use_id, content, .. } => {
                 let mut result_text: Vec<String> = Vec::new();
                 for inner in content {
@@ -184,6 +197,11 @@ mod tests {
         serde_json::from_value(v).unwrap()
     }
 
+    /// 大多數測試不關心 extra_content 快取，給一個空的即可。
+    fn empty_cache() -> ToolMetaCache {
+        ToolMetaCache::new(512)
+    }
+
     #[test]
     fn system_becomes_first_message() {
         let body = build_body(
@@ -192,6 +210,7 @@ mod tests {
                 "messages": [{"role": "user", "content": "hi"}]
             })),
             "qwen",
+            &empty_cache(),
         );
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs[0]["role"], "system");
@@ -204,6 +223,7 @@ mod tests {
         let body = build_body(
             &req(json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]})),
             "qwen",
+            &empty_cache(),
         );
         assert_eq!(body["messages"].as_array().unwrap().len(), 1);
     }
@@ -213,6 +233,7 @@ mod tests {
         let body = build_body(
             &req(json!({"model": "aiterm:opus", "messages": [{"role":"user","content":"x"}]})),
             "gpt-4o",
+            &empty_cache(),
         );
         assert_eq!(body["model"], "gpt-4o", "要用映射後的模型名，不是哨兵字串");
         assert_eq!(body["stream"], true);
@@ -230,6 +251,7 @@ mod tests {
                 ]}]
             })),
             "gpt-4o",
+            &empty_cache(),
         );
         let parts = body["messages"][0]["content"].as_array().unwrap();
         assert_eq!(parts[0]["type"], "text");
@@ -242,6 +264,7 @@ mod tests {
         let body = build_body(
             &req(json!({"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]})),
             "m",
+            &empty_cache(),
         );
         assert_eq!(body["messages"][0]["content"], "hi");
     }
@@ -256,6 +279,7 @@ mod tests {
                 ]}]
             })),
             "m",
+            &empty_cache(),
         );
         let msg = &body["messages"][0];
         assert_eq!(msg["role"], "assistant");
@@ -263,6 +287,44 @@ mod tests {
         assert_eq!(msg["tool_calls"][0]["function"]["name"], "Read");
         // arguments 必須是 JSON 字串，不是物件。
         assert_eq!(msg["tool_calls"][0]["function"]["arguments"], "{\"p\":1}");
+    }
+
+    #[test]
+    fn tool_use_with_cached_extra_content_includes_it() {
+        // 這是本次功能的核心：快取命中時，翻譯出的 tool_calls[0] 要帶著
+        // 原封不動的 extra_content。
+        let cache = empty_cache();
+        let extra = json!({"google": {"thought_signature": "Eq8CCqwC…"}});
+        cache.insert("toolu_1".into(), extra.clone());
+
+        let body = build_body(
+            &req(json!({
+                "model": "m",
+                "messages": [{"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"p": 1}}
+                ]}]
+            })),
+            "m",
+            &cache,
+        );
+        assert_eq!(body["messages"][0]["tool_calls"][0]["extra_content"], extra);
+    }
+
+    #[test]
+    fn tool_use_without_cached_extra_content_omits_the_field() {
+        // 快取沒命中時不能生出 "extra_content": null——那對某些上游一樣
+        // 算「有這個欄位但缺內容」，跟完全不送不是同一件事。
+        let body = build_body(
+            &req(json!({
+                "model": "m",
+                "messages": [{"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"p": 1}}
+                ]}]
+            })),
+            "m",
+            &empty_cache(),
+        );
+        assert!(body["messages"][0]["tool_calls"][0].get("extra_content").is_none());
     }
 
     #[test]
@@ -276,6 +338,7 @@ mod tests {
                 ]}]
             })),
             "m",
+            &empty_cache(),
         );
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 1);
@@ -298,6 +361,7 @@ mod tests {
                 ]}]
             })),
             "m",
+            &empty_cache(),
         );
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 2, "應該多出一個 user turn 承載圖片");
@@ -318,6 +382,7 @@ mod tests {
                 ]}]
             })),
             "m",
+            &empty_cache(),
         );
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 2);
@@ -335,6 +400,7 @@ mod tests {
                            "input_schema": {"type":"object","properties":{}}}]
             })),
             "m",
+            &empty_cache(),
         );
         let t = &body["tools"][0];
         assert_eq!(t["type"], "function");
@@ -354,6 +420,7 @@ mod tests {
                     "tool_choice": tc
                 })),
                 "m",
+                &empty_cache(),
             )["tool_choice"]
                 .clone()
         };
@@ -371,6 +438,7 @@ mod tests {
         let body = build_body(
             &req(json!({"model":"m","messages":[{"role":"user","content":"x"}]})),
             "m",
+            &empty_cache(),
         );
         assert!(body.get("tools").is_none());
         assert!(body.get("tool_choice").is_none());
@@ -384,6 +452,7 @@ mod tests {
                 "max_tokens": 4096, "temperature": 0.3, "stop_sequences": ["END"]
             })),
             "m",
+            &empty_cache(),
         );
         assert_eq!(body["max_tokens"], 4096);
         assert_eq!(body["temperature"], 0.3);
@@ -399,6 +468,7 @@ mod tests {
                     "thinking": {"type":"enabled","budget_tokens": budget}
                 })),
                 "m",
+                &empty_cache(),
             )["reasoning_effort"]
                 .clone()
         };

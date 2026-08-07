@@ -11,6 +11,7 @@ use crate::config::types::{ProviderConfig, ProviderType};
 use crate::config::ConfigStore;
 use crate::secret::SecretStore;
 
+use super::tool_meta::ToolMetaCache;
 use super::upstream::anthropic::AnthropicUpstream;
 use super::upstream::openai::client::OpenAiUpstream;
 
@@ -63,6 +64,7 @@ pub enum Upstream {
 pub async fn build(
     config: &Arc<ConfigStore>,
     secrets: &Arc<SecretStore>,
+    tool_meta: &Arc<ToolMetaCache>,
     provider_id: &str,
 ) -> Result<Upstream, AiError> {
     let cfg = config.get();
@@ -96,10 +98,11 @@ pub async fn build(
                     base,
                     copilot_token,
                     crate::ai::copilot::copilot_headers(),
+                    tool_meta.clone(),
                 )))
             } else {
                 let key = secrets.get(provider_id).ok().flatten().unwrap_or_default();
-                Ok(Upstream::OpenAi(OpenAiUpstream::new(base, key)))
+                Ok(Upstream::OpenAi(OpenAiUpstream::new(base, key, tool_meta.clone())))
             }
         }
         UpstreamKind::Anthropic => {

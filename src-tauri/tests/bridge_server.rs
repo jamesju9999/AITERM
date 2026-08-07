@@ -8,6 +8,7 @@ use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
 use aiterm_lib::bridge::server::{router, AppState};
+use aiterm_lib::bridge::tool_meta::ToolMetaCache;
 use aiterm_lib::config::ConfigStore;
 use aiterm_lib::secret::SecretStore;
 
@@ -16,6 +17,7 @@ fn state(dir: &tempfile::TempDir) -> AppState {
         config: Arc::new(ConfigStore::new_at(dir.path().join("config.toml"))),
         secrets: Arc::new(SecretStore::new()),
         token: Arc::new("t0ken".into()),
+        tool_meta: Arc::new(ToolMetaCache::new(512)),
     }
 }
 

@@ -4,14 +4,16 @@
 //! `GenerateChunk { delta: String }`，工具呼叫在型別上就表達不出來。行切分
 //! 的工具函式仍然共用。
 
+use std::sync::Arc;
+
 use serde_json::Value;
 
 use super::tool_calls::ToolCallAccumulator;
+use crate::bridge::tool_meta::ToolMetaCache;
 use crate::bridge::upstream::{StopReason, UpstreamEvent, Usage};
 
 /// 逐行餵入的 SSE 解析器。呼叫端負責把 byte 串切成行
 /// （見 `ai::sse::find_line_end`）。
-#[derive(Default)]
 pub struct StreamParser {
     tools: ToolCallAccumulator,
     /// 收到 finish_reason 後暫存，等 usage 那一片到了才發 Done。
@@ -21,6 +23,15 @@ pub struct StreamParser {
 }
 
 impl StreamParser {
+    pub fn new(tool_meta: Arc<ToolMetaCache>) -> Self {
+        Self {
+            tools: ToolCallAccumulator::new(tool_meta),
+            pending_stop: None,
+            usage: Usage::default(),
+            done_sent: false,
+        }
+    }
+
     pub fn feed_line(&mut self, line: &str) -> Vec<UpstreamEvent> {
         let line = line.trim();
         let Some(payload) = line.strip_prefix("data:") else {
@@ -105,7 +116,7 @@ mod tests {
 
     /// 把幾個 SSE 資料行餵進解析器，收集全部事件。
     fn run(lines: &[&str]) -> Vec<UpstreamEvent> {
-        let mut p = StreamParser::default();
+        let mut p = StreamParser::new(Arc::new(ToolMetaCache::new(512)));
         let mut out = Vec::new();
         for l in lines {
             out.extend(p.feed_line(l));

@@ -39,7 +39,7 @@ pub fn run(
 
         // ── 解析上游憑證並發出請求，期間持續送 ping ──────────────────
         let upstream_fut = async {
-            let up = build(&state.config, &state.secrets, &mapping.provider_id).await?;
+            let up = build(&state.config, &state.secrets, &state.tool_meta, &mapping.provider_id).await?;
             match up {
                 Upstream::Anthropic(a) => a.send_raw(&raw, &mapping.model, &client_headers).await,
                 Upstream::OpenAi(o) => {

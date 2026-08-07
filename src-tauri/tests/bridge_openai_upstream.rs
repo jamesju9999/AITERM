@@ -1,15 +1,22 @@
 //! OpenAI 上游 adapter 的端到端測試（假上游）。
 
+use std::sync::Arc;
+
 use futures_util::StreamExt;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use aiterm_lib::bridge::anthropic::request::MessagesRequest;
+use aiterm_lib::bridge::tool_meta::ToolMetaCache;
 use aiterm_lib::bridge::upstream::openai::client::OpenAiUpstream;
 use aiterm_lib::bridge::upstream::{BridgeUpstream, StopReason, UpstreamEvent, UpstreamResponse};
 
 fn req(v: serde_json::Value) -> MessagesRequest {
     serde_json::from_value(v).unwrap()
+}
+
+fn empty_cache() -> Arc<ToolMetaCache> {
+    Arc::new(ToolMetaCache::new(512))
 }
 
 async fn collect(resp: UpstreamResponse) -> Vec<UpstreamEvent> {
@@ -44,7 +51,7 @@ async fn streams_text_and_tool_calls() {
         .mount(&server)
         .await;
 
-    let up = OpenAiUpstream::new(server.uri(), "sk-test".into());
+    let up = OpenAiUpstream::new(server.uri(), "sk-test".into(), empty_cache());
     let resp = up
         .send(
             &req(serde_json::json!({
@@ -72,7 +79,7 @@ async fn http_error_is_mapped_to_ai_error() {
         .mount(&server)
         .await;
 
-    let up = OpenAiUpstream::new(server.uri(), "bad".into());
+    let up = OpenAiUpstream::new(server.uri(), "bad".into(), empty_cache());
     let err = up
         .send(&req(serde_json::json!({
             "model": "m", "messages": [{"role":"user","content":"x"}]
@@ -91,7 +98,7 @@ async fn base_url_already_ending_in_v1_is_not_doubled() {
         .mount(&server)
         .await;
 
-    let up = OpenAiUpstream::new(format!("{}/v1", server.uri()), "k".into());
+    let up = OpenAiUpstream::new(format!("{}/v1", server.uri()), "k".into(), empty_cache());
     let resp = up
         .send(&req(serde_json::json!({
             "model": "m", "messages": [{"role":"user","content":"x"}]

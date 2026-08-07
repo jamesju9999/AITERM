@@ -16,6 +16,7 @@ use crate::bridge::anthropic::response::{error_frame, MessageAggregator};
 use crate::bridge::factory::{build, Upstream};
 use crate::bridge::upstream::anthropic::ClientHeaders;
 use crate::bridge::upstream::{BridgeUpstream, UpstreamResponse};
+use crate::bridge::tool_meta::ToolMetaCache;
 use crate::bridge::{auth, model_map};
 use crate::config::types::TierMapping;
 use crate::config::ConfigStore;
@@ -27,6 +28,8 @@ pub struct AppState {
     pub config: Arc<ConfigStore>,
     pub secrets: Arc<SecretStore>,
     pub token: Arc<String>,
+    /// 存活期跨單一請求，見 `tool_meta.rs` 的模組說明。
+    pub tool_meta: Arc<ToolMetaCache>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -167,7 +170,7 @@ async fn messages_non_streaming(
     message_id: String,
     client_headers: ClientHeaders,
 ) -> Response {
-    let up = match build(&state.config, &state.secrets, &mapping.provider_id).await {
+    let up = match build(&state.config, &state.secrets, &state.tool_meta, &mapping.provider_id).await {
         Ok(u) => u,
         Err(e) => return ai_error_response(&e),
     };

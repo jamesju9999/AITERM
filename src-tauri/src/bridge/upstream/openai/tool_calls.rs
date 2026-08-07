@@ -14,9 +14,11 @@
 //! 情況都正確，而且分支更少。沒有參數的工具呼叫由 `finish` 收尾。
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::bridge::tool_meta::ToolMetaCache;
 use crate::bridge::upstream::UpstreamEvent;
 
 #[derive(Debug, Default)]
@@ -26,15 +28,27 @@ struct Slot {
     started: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ToolCallAccumulator {
     slots: BTreeMap<u64, Slot>,
     /// 目前已發出 `ToolUseStart` 但還沒 `ToolUseEnd` 的槽位。
     active: Option<u64>,
     saw_any: bool,
+    /// 見 `tool_meta.rs`：暫存供應商夾帶的不透明 `extra_content`，讓下一輪
+    /// 請求把它原樣回送給上游。
+    tool_meta: Arc<ToolMetaCache>,
 }
 
 impl ToolCallAccumulator {
+    pub fn new(tool_meta: Arc<ToolMetaCache>) -> Self {
+        Self {
+            slots: BTreeMap::new(),
+            active: None,
+            saw_any: false,
+            tool_meta,
+        }
+    }
+
     /// 餵進一個 SSE chunk 的 `delta.tool_calls` 陣列，回傳要發出的事件。
     pub fn push(&mut self, tool_calls: &[Value]) -> Vec<UpstreamEvent> {
         let mut out = Vec::new();
@@ -51,6 +65,15 @@ impl ToolCallAccumulator {
             }
             if let Some(name) = name {
                 slot.name.push_str(name);
+            }
+
+            // Gemini 等供應商會在 tool_call 片段夾帶不透明的 extra_content
+            // （例如 thought_signature）；實測 id 與 extra_content 在同一個
+            // chunk 一起到達，直接用剛更新過的 slot.id 當快取鍵即可。
+            if let Some(extra) = tc.get("extra_content").filter(|v| !v.is_null()) {
+                if !slot.id.is_empty() {
+                    self.tool_meta.insert(slot.id.clone(), extra.clone());
+                }
             }
 
             let args = tc
@@ -123,7 +146,7 @@ mod tests {
     use serde_json::json;
 
     fn acc() -> ToolCallAccumulator {
-        ToolCallAccumulator::default()
+        ToolCallAccumulator::new(Arc::new(ToolMetaCache::new(512)))
     }
 
     #[test]
@@ -274,5 +297,31 @@ mod tests {
         assert!(!a.saw_any());
         a.push(&[json!({"index": 0, "id": "c1", "function": {"name": "A"}})]);
         assert!(a.saw_any());
+    }
+
+    #[test]
+    fn extra_content_is_written_to_the_cache() {
+        let cache = Arc::new(ToolMetaCache::new(512));
+        let mut a = ToolCallAccumulator::new(cache.clone());
+        a.push(&[json!({
+            "index": 0, "id": "call_1",
+            "extra_content": {"google": {"thought_signature": "abc"}},
+            "function": {"name": "Bash", "arguments": "{\"command\":\"ls\"}"}
+        })]);
+        assert_eq!(
+            cache.get("call_1"),
+            Some(json!({"google": {"thought_signature": "abc"}}))
+        );
+    }
+
+    #[test]
+    fn missing_extra_content_does_not_touch_the_cache() {
+        let cache = Arc::new(ToolMetaCache::new(512));
+        let mut a = ToolCallAccumulator::new(cache.clone());
+        a.push(&[json!({
+            "index": 0, "id": "call_1",
+            "function": {"name": "Bash", "arguments": "{}"}
+        })]);
+        assert_eq!(cache.get("call_1"), None);
     }
 }

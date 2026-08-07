@@ -267,6 +267,81 @@ async fn tool_result_block_is_forwarded_as_a_tool_role_message() {
     bridge.stop();
 }
 
+// ── 2b. extra_content 往返：第二輪要把第一輪快取下來的不透明資料原樣送回 ──
+
+#[tokio::test]
+async fn second_turn_forwards_the_cached_extra_content_to_the_upstream() {
+    // 模擬 Gemini 的 OpenAI 相容端點：tool_call 片段夾帶
+    // extra_content.google.thought_signature。第二輪請求若沒有原樣帶回，
+    // 真的 Gemini 端點會回 400（"missing a thought_signature"）——這支測試
+    // 驗證的就是橋接有沒有把這段不透明資料存起來、在下一輪原樣送回上游。
+    let server = MockServer::start().await;
+    let sse = format!(
+        "data: {}\n\ndata: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+        json!({"choices": [{"delta": {"content": "開始列目錄"}}]}),
+        json!({"choices": [{"delta": {"tool_calls": [{
+            "index": 0, "id": "call_1",
+            "extra_content": {"google": {"thought_signature": "sig-abc"}},
+            "function": {"name": "Bash", "arguments": "{\"command\":\"ls -la /tmp\"}"}
+        }]}}]}),
+        json!({"choices": [{"finish_reason": "tool_calls"}]}),
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream"))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (bridge, base) = start_bridge(&dir, Some(&server.uri())).await;
+
+    // 第一輪：假上游回一個帶 extra_content 的 tool_call，橋接應該把它快取
+    // 起來（鍵是 tool_call 的 id `call_1`）。
+    let first = post_messages(&base, Some(TOKEN), &simple_request()).await;
+    assert_eq!(first.status(), reqwest::StatusCode::OK);
+    let _ = collect_all_frames(first).await;
+
+    // 第二輪：client（Claude Code）把 assistant 的 tool_use 與對應的
+    // tool_result 送回，跟真實對話流程一致——client 端完全不知道
+    // extra_content 這件事，它只認得 Anthropic 的 tool_use 區塊。
+    let second_body = json!({
+        "model": "aiterm:sonnet",
+        "stream": true,
+        "max_tokens": 1024,
+        "messages": [
+            {"role": "user", "content": "列出這個目錄的檔案"},
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "call_1", "name": "Bash", "input": {"command": "ls -la /tmp"}}
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": "a.txt\nb.txt"}
+            ]}
+        ]
+    });
+    let second = post_messages(&base, Some(TOKEN), &second_body).await;
+    assert_eq!(second.status(), reqwest::StatusCode::OK);
+    let _ = collect_all_frames(second).await;
+
+    let received = server.received_requests().await.expect("wiremock 應該有記錄請求");
+    assert_eq!(received.len(), 2, "應該有兩輪對話各送出一個上游請求");
+
+    let second_sent: Value = serde_json::from_slice(&received[1].body).unwrap();
+    let messages = second_sent["messages"].as_array().expect("上游請求要有 messages 陣列");
+    let assistant_tool_call = messages
+        .iter()
+        .find_map(|m| m.get("tool_calls").and_then(|tc| tc.as_array()))
+        .and_then(|tcs| tcs.first())
+        .unwrap_or_else(|| panic!("上游第二個請求裡沒有 assistant tool_calls：{messages:?}"));
+
+    assert_eq!(
+        assistant_tool_call["extra_content"],
+        json!({"google": {"thought_signature": "sig-abc"}}),
+        "第二輪送給上游的 tool_call 必須帶著第一輪快取下來的 extra_content，實際請求：{second_sent}"
+    );
+
+    bridge.stop();
+}
+
 // ── 3. 授權：沒帶 token / 帶錯 token → 401 ──────────────────────────────
 
 #[tokio::test]
