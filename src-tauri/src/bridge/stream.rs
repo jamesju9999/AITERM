@@ -48,7 +48,14 @@ pub fn run(
         };
         tokio::pin!(upstream_fut);
 
-        let mut ticker = tokio::time::interval(PING_INTERVAL);
+        // 必須用 interval_at 而非 interval：後者的第一個 tick 期限是
+        // Instant::now()，也就是「已經到期」。在下面的 select! 裡它會贏過
+        // 上游請求（上游至少要一次 async hop），於是每一個請求都會在
+        // message_start 之前多送一個 ping，而不是只有慢的上游才送。
+        let mut ticker = tokio::time::interval_at(
+            tokio::time::Instant::now() + PING_INTERVAL,
+            PING_INTERVAL,
+        );
         let resp = loop {
             tokio::select! {
                 r = &mut upstream_fut => break r,
