@@ -4,3 +4,4 @@
 //! `docs/superpowers/plans/2026-08-08-claude-code-bridge-m2-codex.md`。
 
 pub mod request;
+pub mod stream;
