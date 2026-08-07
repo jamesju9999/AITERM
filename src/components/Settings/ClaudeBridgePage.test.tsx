@@ -70,6 +70,18 @@ const PROVIDERS: ProviderInfo[] = [
     is_default: false,
     auth_method: null,
   },
+  {
+    id: "gemini",
+    display_name: "Gemini",
+    provider_type: "google-ai",
+    base_url: null,
+    oauth_client_id: null,
+    model: "gemini-3-pro",
+    supports_json_mode: true,
+    has_api_key: false,
+    is_default: false,
+    auth_method: "oauth",
+  },
 ];
 
 beforeEach(() => {
@@ -93,14 +105,26 @@ describe("ClaudeBridgePage", () => {
     expect(await screen.findByText(/未啟動|Stopped/)).toBeInTheDocument();
   });
 
-  it("把不支援的供應商標示出來且不可選", async () => {
+  it("Codex 選項可選", async () => {
     render(<ClaudeBridgePage />);
     const select = await screen.findByLabelText(/Opus/);
     const codex = Array.from(select.querySelectorAll("option")).find((o) =>
       o.textContent?.includes("Codex"),
     );
     expect(codex).toBeDefined();
-    expect(codex).toBeDisabled();
+    expect(codex).not.toBeDisabled();
+  });
+
+  it("把不支援的供應商標示出來且不可選", async () => {
+    // google-ai + auth_method: oauth 走 Antigravity，M3 才支援，目前仍是
+    // 「不支援」的樣本。
+    render(<ClaudeBridgePage />);
+    const select = await screen.findByLabelText(/Opus/);
+    const gemini = Array.from(select.querySelectorAll("option")).find((o) =>
+      o.textContent?.includes("Gemini"),
+    );
+    expect(gemini).toBeDefined();
+    expect(gemini).toBeDisabled();
   });
 
   it("選了供應商就帶入它的預設模型", async () => {

@@ -46,6 +46,10 @@ pub fn run(
                     use crate::bridge::upstream::BridgeUpstream;
                     o.send(&req, &mapping.model).await
                 }
+                Upstream::Codex(c) => {
+                    use crate::bridge::upstream::BridgeUpstream;
+                    c.send(&req, &mapping.model).await
+                }
             }
         };
         tokio::pin!(upstream_fut);

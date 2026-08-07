@@ -13,15 +13,17 @@ use crate::secret::SecretStore;
 
 use super::tool_meta::ToolMetaCache;
 use super::upstream::anthropic::AnthropicUpstream;
+use super::upstream::codex::client::CodexUpstream;
 use super::upstream::openai::client::OpenAiUpstream;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpstreamKind {
     OpenAi,
     Anthropic,
+    Codex,
 }
 
-/// M1 支援的上游種類；不支援的回 `None`。
+/// 目前支援的上游種類；不支援的回 `None`。
 pub fn kind_for(p: &ProviderConfig) -> Option<UpstreamKind> {
     match p.provider_type {
         ProviderType::Openai
@@ -42,8 +44,8 @@ pub fn kind_for(p: &ProviderConfig) -> Option<UpstreamKind> {
             _ => Some(UpstreamKind::OpenAi),
         },
 
-        // M2 / M3。
-        ProviderType::Codex => None,
+        // M2。
+        ProviderType::Codex => Some(UpstreamKind::Codex),
     }
 }
 
@@ -58,6 +60,7 @@ pub fn unsupported_message(p: &ProviderConfig) -> String {
 pub enum Upstream {
     OpenAi(OpenAiUpstream),
     Anthropic(AnthropicUpstream),
+    Codex(CodexUpstream),
 }
 
 /// 建立上游實例。每個請求呼叫一次。
@@ -115,6 +118,17 @@ pub async fn build(
                 secrets.get(provider_id).ok().flatten().unwrap_or_default()
             };
             Ok(Upstream::Anthropic(AnthropicUpstream::new(base, token, is_oauth)))
+        }
+        UpstreamKind::Codex => {
+            // Codex 的 access token 300 秒就過期且 refresh token 會輪替，
+            // 所以每個請求都重新解析（見模組頂端的註解）。這個函式會處理
+            // 刷新與回存，不要自己重寫。
+            let (token, account_id) =
+                crate::ai::router::get_valid_codex_oauth_token(provider_id, secrets).await?;
+            // base_url 固定 https://chatgpt.com（見 ai/codex.rs），
+            // 使用者填的 base_url 只在測試時用得到。
+            let base = p.base_url.clone().unwrap_or_else(|| "https://chatgpt.com".into());
+            Ok(Upstream::Codex(CodexUpstream::new(base, token, account_id)))
         }
     }
 }
@@ -192,8 +206,11 @@ mod tests {
     }
 
     #[test]
-    fn codex_is_not_supported_in_m1() {
-        assert_eq!(kind_for(&provider(ProviderType::Codex, None)), None);
+    fn codex_maps_to_codex_kind() {
+        assert_eq!(
+            kind_for(&provider(ProviderType::Codex, Some("oauth"))),
+            Some(UpstreamKind::Codex)
+        );
     }
 
     fn provider_without_base_url(ty: ProviderType) -> ProviderConfig {

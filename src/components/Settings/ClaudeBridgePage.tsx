@@ -15,10 +15,10 @@ import {
 import "./ClaudeBridgePage.css";
 
 /**
- * M1 支援的 provider type，與 src-tauri/src/bridge/factory.rs 的 kind_for
+ * 目前支援的 provider type，與 src-tauri/src/bridge/factory.rs 的 kind_for
  * 逐項對齊：openai 系（含 openai/openai-compatible/ollama/openrouter/
- * deepseek/kimi/xai/github-copilot）與 anthropic 系（anthropic/
- * anthropic-compatible）皆支援；codex 完全不支援（M2/M3）。
+ * deepseek/kimi/xai/github-copilot）、anthropic 系（anthropic/
+ * anthropic-compatible）與 codex（M2）皆支援。
  */
 const SUPPORTED_TYPES = new Set([
   "openai",
@@ -31,6 +31,7 @@ const SUPPORTED_TYPES = new Set([
   "github-copilot",
   "anthropic",
   "anthropic-compatible",
+  "codex",
 ]);
 
 function isSupported(p: ProviderInfo): boolean {
