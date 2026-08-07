@@ -1699,6 +1699,15 @@ git commit -m "feat(bridge): Anthropic → OpenAI 請求翻譯"
 
 這是 M1 最容易寫錯的一塊。`ai/sse.rs:120` 的 `OpenAiSseDelta` 只宣告 `content`，串流的工具呼叫目前是被整包丟掉的 —— 這裡從零建立。
 
+> ⚠️ **已完成，且下面的測試有一處是錯的。** `start_is_deferred_until_the_name_arrives`
+> 與 `name_split_across_chunks_is_concatenated` 互相矛盾：前者要求「只帶 name
+> 的片段立刻觸發」，後者要求「帶 id+name 的片段不觸發」。調和用的第三條規則
+> 在名稱真被切成兩片時會送出截斷的名稱（`id+"Re"` → `"ad"` 就觸發並送 `"Re"`）。
+> commit `9c43394` 改回只認兩個判準（**第一個非空 arguments** 或 **finish**），
+> 並把錯的測試改寫成 `start_is_deferred_until_arguments_arrive`、新增
+> `a_name_split_across_two_fragments_is_never_emitted_truncated` 釘住回歸。
+> 以實際檔案為準。
+
 **Files:**
 - Create: `src-tauri/src/bridge/upstream/openai/tool_calls.rs`
 - Modify: `src-tauri/src/bridge/upstream/openai/mod.rs`
