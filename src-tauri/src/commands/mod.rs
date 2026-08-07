@@ -4,6 +4,7 @@ pub mod appimage;
 pub mod claude_notif;
 pub mod config;
 pub mod db;
+pub mod db_export;
 pub mod design;
 pub mod enterprise;
 pub mod exec;

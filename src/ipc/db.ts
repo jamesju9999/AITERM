@@ -109,3 +109,47 @@ export function dbExecuteQuery(connectionId: string, sql: string, schema?: strin
 export function dbPreviewTable(connectionId: string, schema: string, table: string, page: number, pageSize: number): Promise<QueryResult> {
   return invoke("db_preview_table", { connectionId, schema, table, page, pageSize });
 }
+
+export type ConflictKind = "new" | "overwrite" | "duplicate";
+
+/** 匯入預覽的單筆。後端刻意不送密碼過來。 */
+export interface ImportPreviewItem {
+  id: string;
+  name: string;
+  db_type: DbType;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  conflict: ConflictKind;
+  existing_name?: string | null;
+}
+
+export interface ImportFailure {
+  name: string;
+  reason: string;
+}
+
+export interface ImportResult {
+  added: number;
+  overwritten: number;
+  failures: ImportFailure[];
+}
+
+/** 只檢查明文 header，回傳檔案的格式版本。不需要 passphrase。 */
+export function dbCheckImportFile(path: string): Promise<number> {
+  return invoke("db_check_import_file", { path });
+}
+
+/** 回傳實際匯出的筆數。 */
+export function dbExportConnections(path: string, ids: string[], passphrase: string): Promise<number> {
+  return invoke("db_export_connections", { path, ids, passphrase });
+}
+
+export function dbPreviewImport(path: string, passphrase: string): Promise<ImportPreviewItem[]> {
+  return invoke("db_preview_import", { path, passphrase });
+}
+
+export function dbImportConnections(path: string, passphrase: string, ids: string[]): Promise<ImportResult> {
+  return invoke("db_import_connections", { path, passphrase, ids });
+}

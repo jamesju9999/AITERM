@@ -1,11 +1,13 @@
 import { useEffect, useState, type CSSProperties } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   dbListConnections, dbAddConnection, dbUpdateConnection, dbRemoveConnection,
-  dbTestConnection,
+  dbTestConnection, dbCheckImportFile,
   type DbConnectionInfo, type DbConnectionInput, type DbType,
   DB_TYPE_LABELS, DB_DEFAULT_PORTS,
 } from "../../ipc/db";
 import { useLocale } from "../../contexts/LocaleContext";
+import { DbExportPanel, DbImportPanel, translateDbTransferError } from "./DbConnectionTransfer";
 
 type FormState = Omit<DbConnectionInput, "id"> & { id?: string };
 
@@ -23,6 +25,11 @@ export function DatabaseConnectionsPage() {
   const [testMsg, setTestMsg] = useState("");
   const [saving, setSaving] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [transfer, setTransfer] = useState<
+    { kind: "export" } | { kind: "import"; path: string } | null
+  >(null);
+  const [notice, setNotice] = useState("");
+  const [transferError, setTransferError] = useState("");
 
   const load = () => dbListConnections().then(setConnections).catch(console.error);
   useEffect(() => { load(); }, []);
@@ -79,21 +86,72 @@ export function DatabaseConnectionsPage() {
     load();
   };
 
+  // 選檔與 header 檢查都放在 click handler 裡——這是使用者手勢，StrictMode
+  // 不會像對待 effect 那樣重跑一次。壞掉的檔案在這裡就結束，連面板都不會開。
+  const handleImportClick = async () => {
+    setNotice("");
+    setTransferError("");
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (typeof picked !== "string") return; // 使用者取消
+      await dbCheckImportFile(picked);
+      setTransfer({ kind: "import", path: picked });
+    } catch (e) {
+      setTransferError(translateDbTransferError(t, e));
+    }
+  };
+
   return (
     <div style={{ width: "100%", padding: "24px 32px", boxSizing: "border-box" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <h2 style={{ margin: 0, fontSize: 16, color: "#e6e6e6" }}>{t.db_connections}</h2>
-        {!showForm && (
-          <button
-            onClick={() => { setForm(EMPTY_FORM); setShowForm(true); setTestStatus("idle"); }}
-            className="aiterm-btn aiterm-btn--primary"
-          >
-            {t.add_connection}
-          </button>
+        {!showForm && !transfer && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => { setTransfer({ kind: "export" }); setNotice(""); setTransferError(""); }}
+              disabled={connections.length === 0}
+              className="aiterm-btn aiterm-btn--secondary"
+            >
+              {t.db_export}
+            </button>
+            <button
+              onClick={handleImportClick}
+              className="aiterm-btn aiterm-btn--secondary"
+            >
+              {t.db_import}
+            </button>
+            <button
+              onClick={() => { setForm(EMPTY_FORM); setShowForm(true); setTestStatus("idle"); }}
+              className="aiterm-btn aiterm-btn--primary"
+            >
+              {t.add_connection}
+            </button>
+          </div>
         )}
       </div>
 
-      {!showForm && (
+      {notice && <div style={{ color: "#34d399", fontSize: 12, marginBottom: 12 }}>{notice}</div>}
+      {transferError && <div style={{ color: "#f87171", fontSize: 12, marginBottom: 12 }}>{transferError}</div>}
+
+      {transfer?.kind === "export" && (
+        <DbExportPanel
+          connections={connections}
+          onClose={() => setTransfer(null)}
+          onDone={(msg) => { setNotice(msg); setTransfer(null); }}
+        />
+      )}
+      {transfer?.kind === "import" && (
+        <DbImportPanel
+          path={transfer.path}
+          onClose={() => setTransfer(null)}
+          onDone={() => load()}
+        />
+      )}
+
+      {!showForm && !transfer && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {connections.length === 0 && (
             <div style={{ color: "#555", fontSize: 13, padding: "20px 0" }}>{t.no_connections}</div>
