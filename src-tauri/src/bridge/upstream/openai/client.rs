@@ -13,14 +13,21 @@ pub struct OpenAiUpstream {
     base_url: String,
     api_key: String,
     client: reqwest::Client,
+    /// 部分供應商（如 GitHub Copilot）要求每個請求都帶固定的額外標頭。
+    extra_headers: Vec<(String, String)>,
 }
 
 impl OpenAiUpstream {
     pub fn new(base_url: String, api_key: String) -> Self {
+        Self::with_extra_headers(base_url, api_key, Vec::new())
+    }
+
+    pub fn with_extra_headers(base_url: String, api_key: String, extra_headers: Vec<(String, String)>) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
             client: reqwest::Client::new(),
+            extra_headers,
         }
     }
 
@@ -41,10 +48,14 @@ impl BridgeUpstream for OpenAiUpstream {
         req: &MessagesRequest,
         model: &str,
     ) -> Result<UpstreamResponse, AiError> {
-        let resp = self
+        let mut request_builder = self
             .client
             .post(self.completions_url())
-            .bearer_auth(&self.api_key)
+            .bearer_auth(&self.api_key);
+        for (key, value) in &self.extra_headers {
+            request_builder = request_builder.header(key, value);
+        }
+        let resp = request_builder
             .json(&build_body(req, model))
             .send()
             .await

@@ -87,6 +87,18 @@ pub async fn get_copilot_session_token(github_token: &str) -> Result<String, Str
     Ok(token)
 }
 
+/// Copilot API 要求每個請求都帶這些 IDE 風格標頭，否則
+/// `api.githubcopilot.com` 回 403。router.rs 與 bridge/factory.rs 都要用
+/// 到，抽成純函式讓兩邊共用同一份也方便直接測。
+pub(crate) fn copilot_headers() -> Vec<(String, String)> {
+    vec![
+        ("Editor-Version".into(), "vscode/1.99.0".into()),
+        ("Editor-Plugin-Version".into(), "copilot/1.0.0".into()),
+        ("Copilot-Integration-Id".into(), "vscode-chat".into()),
+        ("Openai-Intent".into(), "conversation-panel".into()),
+    ]
+}
+
 fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -99,4 +111,23 @@ fn hash_str(s: &str) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     s.hash(&mut h);
     h.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copilot_headers_matches_required_ide_headers() {
+        let headers = copilot_headers();
+        assert_eq!(
+            headers,
+            vec![
+                ("Editor-Version".to_string(), "vscode/1.99.0".to_string()),
+                ("Editor-Plugin-Version".to_string(), "copilot/1.0.0".to_string()),
+                ("Copilot-Integration-Id".to_string(), "vscode-chat".to_string()),
+                ("Openai-Intent".to_string(), "conversation-panel".to_string()),
+            ]
+        );
+    }
 }

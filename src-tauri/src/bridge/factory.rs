@@ -80,15 +80,30 @@ pub async fn build(
 
     match kind {
         UpstreamKind::OpenAi => {
-            let base = p.base_url.clone().unwrap_or_default();
-            let key = secrets.get(provider_id).ok().flatten().unwrap_or_default();
-            Ok(Upstream::OpenAi(OpenAiUpstream::new(base, key)))
+            let base = resolve_base_url(p, provider_id)?;
+
+            // GitHub Copilot 是這個分支裡唯一不是「拿 API key 直接打 base_url」
+            // 的 provider type：原始 GitHub OAuth token 要先換成短期的 Copilot
+            // session token，而且每個請求要多帶幾個 IDE 風格標頭，否則
+            // api.githubcopilot.com 回 403。邏輯與 router.rs 的 GithubCopilot
+            // 分支共用同一份 `get_copilot_session_token` / `copilot_headers`。
+            if p.provider_type == ProviderType::GithubCopilot {
+                let github_token = secrets.get(provider_id).ok().flatten().unwrap_or_default();
+                let copilot_token = crate::ai::copilot::get_copilot_session_token(&github_token)
+                    .await
+                    .map_err(|message| AiError::Network { message })?;
+                Ok(Upstream::OpenAi(OpenAiUpstream::with_extra_headers(
+                    base,
+                    copilot_token,
+                    crate::ai::copilot::copilot_headers(),
+                )))
+            } else {
+                let key = secrets.get(provider_id).ok().flatten().unwrap_or_default();
+                Ok(Upstream::OpenAi(OpenAiUpstream::new(base, key)))
+            }
         }
         UpstreamKind::Anthropic => {
-            let base = p
-                .base_url
-                .clone()
-                .unwrap_or_else(|| "https://api.anthropic.com".into());
+            let base = resolve_base_url(p, provider_id)?;
             let is_oauth = p.auth_method.as_deref() == Some("oauth");
             let token = if is_oauth {
                 crate::ai::router::get_valid_oauth_token(provider_id, secrets).await?
@@ -97,6 +112,22 @@ pub async fn build(
             };
             Ok(Upstream::Anthropic(AnthropicUpstream::new(base, token, is_oauth)))
         }
+    }
+}
+
+/// `p.base_url` 若有填就用，否則用 `ai::router::default_base_url` 補上該
+/// provider type 的預設值——與 `ai/router.rs::resolve_by_id` 共用同一份端點
+/// 知識，不在這裡另外硬編一次。`OpenaiCompatible` / `AnthropicCompatible`
+/// 沒有預設值，缺 base_url 時回明確錯誤，而不是把空字串送去打一個沒有
+/// host 的 URL。
+fn resolve_base_url(p: &ProviderConfig, provider_id: &str) -> Result<String, AiError> {
+    match p.base_url.clone() {
+        Some(base) => Ok(base),
+        None => crate::ai::router::default_base_url(p.provider_type)
+            .map(str::to_string)
+            .ok_or_else(|| AiError::Network {
+                message: format!("provider '{provider_id}' has no base_url configured"),
+            }),
     }
 }
 
@@ -159,6 +190,63 @@ mod tests {
     #[test]
     fn codex_is_not_supported_in_m1() {
         assert_eq!(kind_for(&provider(ProviderType::Codex, None)), None);
+    }
+
+    fn provider_without_base_url(ty: ProviderType) -> ProviderConfig {
+        let mut p = provider(ty, None);
+        p.base_url = None;
+        p
+    }
+
+    #[test]
+    fn resolve_base_url_uses_explicit_base_url_when_present() {
+        let p = provider(ProviderType::Openai, None); // base_url = "https://x.test"
+        assert_eq!(resolve_base_url(&p, "p1").unwrap(), "https://x.test");
+    }
+
+    #[test]
+    fn resolve_base_url_falls_back_to_default_for_every_known_type() {
+        // 這是這次修的核心 bug：base_url 沒填時，factory 必須套用跟
+        // router.rs 一樣的預設值，而不是空字串。逐一驗證每一種有預設值
+        // 的 provider type。
+        let cases = [
+            (ProviderType::Openai, "https://api.openai.com"),
+            (ProviderType::Ollama, "http://localhost:11434"),
+            (ProviderType::GithubCopilot, "https://api.githubcopilot.com"),
+            (ProviderType::GoogleAi, "https://generativelanguage.googleapis.com/v1beta/openai"),
+            (ProviderType::Openrouter, "https://openrouter.ai/api/v1"),
+            (ProviderType::Xai, "https://api.x.ai/v1"),
+            (ProviderType::Deepseek, "https://api.deepseek.com/v1"),
+            (ProviderType::Kimi, "https://api.moonshot.ai/v1"),
+            (ProviderType::Anthropic, "https://api.anthropic.com"),
+        ];
+        for (ty, expected) in cases {
+            let p = provider_without_base_url(ty);
+            assert_eq!(resolve_base_url(&p, "p1").unwrap(), expected, "{ty:?}");
+        }
+    }
+
+    #[test]
+    fn resolve_base_url_errors_for_openai_compatible_without_base_url() {
+        let p = provider_without_base_url(ProviderType::OpenaiCompatible);
+        let err = resolve_base_url(&p, "p1").unwrap_err();
+        match err {
+            AiError::Network { message } => assert!(message.contains("no base_url configured"), "{message}"),
+            other => panic!("expected AiError::Network, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_base_url_errors_for_anthropic_compatible_without_base_url() {
+        // AnthropicCompatible 跟 Anthropic 共用 UpstreamKind::Anthropic，但不
+        // 該共用預設值——它存在的目的就是打非官方 host，猜一個
+        // api.anthropic.com 出來等於把憑證送去錯的地方。
+        let p = provider_without_base_url(ProviderType::AnthropicCompatible);
+        let err = resolve_base_url(&p, "p1").unwrap_err();
+        match err {
+            AiError::Network { message } => assert!(message.contains("no base_url configured"), "{message}"),
+            other => panic!("expected AiError::Network, got {other:?}"),
+        }
     }
 
     #[test]
