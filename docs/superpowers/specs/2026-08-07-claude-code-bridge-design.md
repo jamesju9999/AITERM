@@ -476,6 +476,56 @@ Claude Code 會在 `messages` 裡送 `role: "system"` 的訊息，Codex 後端�
 
 串流路徑在 `stream.rs` 有 `log::warn!`，非串流那條原本沒有。Claude Code 用非串流請求撞牆時 server 端一片空白，只能靠客戶端那個被截斷的錯誤字串猜。上面那個 400 正是補上日誌後才看到全文。
 
+## M3（Antigravity）：完成並驗證（2026-08-08）
+
+真實 Claude Code CLI 透過 Antigravity（Google 訂閱制 OAuth 的 Gemini）跑通完整工具循環。**四個協定家族全部以真實供應商驗證完畢。**
+
+### 探勘的發現
+
+兩輪探勘（`src-tauri/tests/antigravity_probe.rs`）：
+
+- `functionCall` **有原生 `id`** —— 這推翻了計畫階段「Gemini 的 functionCall 沒有 id，adapter 要自己合成」的假設
+- **`thoughtSignature` 強制但不是每個都有**：三個並行呼叫**只有第 1 個帶簽章**，其餘欄位根本不存在。A/B 對照確認拿掉它就 400
+- 並行呼叫**各自獨立成一個 SSE 事件**，不是塞在同一個 parts 陣列
+- `args` 一次到齊，沒觀察到分片
+- 兩輪都沒觀察到可讀的 `thought` part，只有不透明簽章 —— 所以這條路徑不產生 `ThinkingDelta`
+
+因此簽章的處理規則是「**伺服器給了就存、回送時有就帶沒有就不帶**」，不要幫沒有的合成。這條規則對任何分布都正確，即使探勘沒測出分布規律（只看到「第一個帶」，樣本是 3 次同 prompt 重跑）。
+
+複用 M1 為 Gemini API key 路徑建的 `tool_meta.rs`，而且因為 id 是原生的，鍵不用合成。
+
+### 翻譯層的一個坑（探勘沒發現，寫計畫時對照格式才看出來）
+
+`functionResponse` 需要 `name`，但 Anthropic 的 `tool_result` 只帶 `tool_use_id`。解法是先掃一遍 `messages` 建立 `id → name` 對照。
+
+### 驗收時撞到的兩個 bug
+
+**① 端點位址（`404`，空 body）**
+
+factory 沿用了 provider 設定裡的 `base_url`，而使用者的 `google-ai` 設定帶的是 **API key 路徑**的 `generativelanguage.googleapis.com/v1beta/openai`。Antigravity 的端點是固定的 `cloudcode-pa.googleapis.com`。
+
+證據顯示這個錯誤本不該發生：`router.rs` 走的 `AntigravityClient::new` 寫死端點、`with_base_url` 的 doc comment 明寫「There is no user-facing base_url setting for this provider」、**連 factory 裡我自己寫的註解都說端點固定** —— 下一行程式碼卻優先採用 `p.base_url`。修法是抽成 `ANTIGRAVITY_BASE_URL` 常數兩邊共用。
+
+**② 工具 schema（`400: Unknown name "$schema"`）**
+
+Gemini 的 `functionDeclarations[].parameters` 只接受 **OpenAPI Schema 的受限子集**，而 Claude Code 的工具 schema 是 zod 產生的，帶 `$schema`、`additionalProperties` 等欄位。
+
+修法是**白名單遞迴清洗**（遞迴處理 `properties` 的每個值、`items`、`anyOf`），不是黑名單 —— 黑名單只擋得掉今天看得到的欄位，Claude Code 換個 schema 產生器就會再破一次。OpenAI 家族路徑不受影響（那邊 `parameters` 原樣透傳沒問題）。
+
+## 反覆出現的錯誤模式：端點位址
+
+這個專案在「端點位址怎麼決定」上**連續犯了三次同類錯誤**，值得單獨記下：
+
+1. **M1 Copilot 404** —— `OpenAiUpstream` 用「base 不以 `/v1` 結尾就補 `/v1`」的猜測規則。Copilot 沒有版本前綴卻不需要 `/v1`。**而且 Gemini 因為 Google 寬容（兩種路徑都回 200）掩蓋了這個錯誤好幾天**
+2. **M1 factory 沒沿用 router 的預設 base_url** —— 9 種「支援」的 provider 只有 `openai-compatible` 可靠，其餘拿到空字串。順帶還讓 `AnthropicCompatible` fallback 到真的 `api.anthropic.com`，會把憑證靜默送去 Anthropic
+3. **M3 Antigravity 404** —— 反過來，沿用了**不該沿用**的 `base_url`
+
+共同模式：**對「端點位址怎麼決定」套用通則，而該供應商需要特定處理。**
+
+對策：端點位址一律逐 `ProviderType` **窮舉 match** 明確決定（`router::openai_chat_url` 就是這樣寫的），不要從 URL 形狀推導、也不要假設「有設定就用設定的」。窮舉能讓未來新增供應商時編譯器強迫做決定。
+
+**另一個教訓**：上游寬容會掩蓋錯誤。單一供應商測通不代表規則正確。
+
 ## 已知限制（M1 不處理，記錄以免被誤認為疏漏）
 
 - **`StopReason` 沒有失敗類的變體。** 目前只有 `end_turn / max_tokens / tool_use / stop_sequence`。上游若回 OpenAI 的 `finish_reason: "content_filter"`，會被映射成 `end_turn`，Claude Code 收到的是一個被靜默截斷的回答，沒有任何「內容被擋下」的訊號。要修就要在中立事件型別加變體並決定對應到 Anthropic 的哪個 `stop_reason`，這牽動三條路徑，留到 M2 一起處理。
