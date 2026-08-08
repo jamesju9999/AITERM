@@ -81,6 +81,49 @@ impl CodexClient {
     }
 }
 
+/// The Responses API rejects `role: "system"` input items outright
+/// ("System messages are not allowed") — unlike Chat Completions, which
+/// accepts a system message natively. Callers that inject a system-role
+/// message directly into history (e.g. the Agent Mode loop in
+/// AiPanel/index.tsx, which sends `{role:"system",...}` as its own
+/// orchestration prompt, separate from `system_prompt`; or Claude Code,
+/// which sends `role: "system"` messages through the Anthropic-bridge) would
+/// otherwise make every Codex request fail with a silent 400. Remap to
+/// "developer", the Responses API's equivalent role for system-level
+/// instructions mid-conversation.
+///
+/// Shared by both Codex request builders (this module's `build_request_body`
+/// and `bridge/upstream/codex/request.rs`'s `build_body`) so this piece of
+/// endpoint knowledge exists exactly once.
+pub fn map_input_role(role: &str) -> &str {
+    if role == "system" {
+        "developer"
+    } else {
+        role
+    }
+}
+
+/// The Responses API distinguishes content-part types by who they came
+/// from: "input_text" for text supplied to the model (user/developer),
+/// "output_text" for the model's own prior output being replayed back as
+/// context (assistant). Multi-turn callers echo the assistant's previous
+/// reply back into history — tagging it "input_text" gets rejected with
+/// "Invalid value: 'input_text'. Supported values are: 'output_text' and
+/// 'refusal'." on any request past the first turn.
+///
+/// Takes the *already-mapped* role (post `map_input_role`) — not that it
+/// matters here, since "system" never resolves to "output_text" either way.
+///
+/// Shared with `bridge/upstream/codex/request.rs`'s `build_body` for the
+/// same reason as `map_input_role`.
+pub fn content_type_for_role(role: &str) -> &str {
+    if role == "assistant" {
+        "output_text"
+    } else {
+        "input_text"
+    }
+}
+
 /// Build the Responses API request body. `instructions` is Codex's required
 /// system-prompt-equivalent — the backend rejects requests without it.
 pub fn build_request_body(model: &str, req: &GenerateRequest) -> serde_json::Value {
@@ -92,26 +135,8 @@ pub fn build_request_body(model: &str, req: &GenerateRequest) -> serde_json::Val
                 serde_json::Value::String(s) => s.clone(),
                 other => other.to_string(),
             };
-            // The Responses API rejects `role: "system"` input items outright
-            // ("System messages are not allowed") — unlike Chat Completions,
-            // which accepts a system message natively. Callers that inject a
-            // system-role message directly into history (e.g. the Agent Mode
-            // loop in AiPanel/index.tsx, which sends `{role:"system",...}` as
-            // its own orchestration prompt, separate from `system_prompt`
-            // below) would otherwise make every Codex request fail with a
-            // silent 400. Remap to "developer", the Responses API's
-            // equivalent role for system-level instructions mid-conversation.
-            let role = if m.role == "system" { "developer" } else { m.role.as_str() };
-            // The Responses API distinguishes content-part types by who they
-            // came from: "input_text" for text supplied to the model
-            // (user/developer), "output_text" for the model's own prior
-            // output being replayed back as context (assistant). Multi-turn
-            // callers like the Agent Mode loop in AiPanel/index.tsx echo the
-            // assistant's previous reply back into history — tagging it
-            // "input_text" gets rejected with "Invalid value: 'input_text'.
-            // Supported values are: 'output_text' and 'refusal'." on any
-            // request past the first turn.
-            let content_type = if role == "assistant" { "output_text" } else { "input_text" };
+            let role = map_input_role(&m.role);
+            let content_type = content_type_for_role(role);
             serde_json::json!({
                 "type": "message",
                 "role": role,
@@ -378,6 +403,22 @@ mod tests {
         assert_eq!(input[0]["role"], "developer");
         assert_eq!(input[0]["content"][0]["text"], "orchestration prompt");
         assert_eq!(input[1]["role"], "user", "other roles must pass through unchanged");
+    }
+
+    #[test]
+    fn map_input_role_remaps_system_to_developer() {
+        assert_eq!(map_input_role("system"), "developer");
+    }
+
+    #[test]
+    fn map_input_role_passes_through_known_roles() {
+        assert_eq!(map_input_role("user"), "user");
+        assert_eq!(map_input_role("assistant"), "assistant");
+    }
+
+    #[test]
+    fn map_input_role_passes_through_unknown_roles_unchanged() {
+        assert_eq!(map_input_role("tool"), "tool");
     }
 
     #[test]

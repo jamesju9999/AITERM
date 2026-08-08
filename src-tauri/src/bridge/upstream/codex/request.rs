@@ -5,6 +5,7 @@
 
 use serde_json::{json, Map, Value};
 
+use crate::ai::codex::{content_type_for_role, map_input_role};
 use crate::bridge::anthropic::request::{
     parse_content, system_text, ContentBlock, MessagesRequest,
 };
@@ -103,12 +104,15 @@ fn push_message(out: &mut Vec<Value>, role: &str, blocks: &[ContentBlock]) {
     }
 
     if !text_parts.is_empty() {
-        // assistant 的文字用 output_text，其餘用 input_text
-        // （沿用 ai/codex.rs:111 的既有判斷）。
-        let content_type = if role == "assistant" { "output_text" } else { "input_text" };
+        // 角色映射（system → developer）與 content type 判斷
+        // （assistant → output_text，其餘 → input_text）都是同一份端點知識，
+        // 共用 ai/codex.rs 的 map_input_role / content_type_for_role，
+        // 不在這裡另外複製一份。
+        let mapped_role = map_input_role(role);
+        let content_type = content_type_for_role(mapped_role);
         out.push(json!({
             "type": "message",
-            "role": role,
+            "role": mapped_role,
             "content": [{"type": content_type, "text": text_parts.join("\n")}],
         }));
     }
@@ -160,6 +164,23 @@ mod tests {
         assert_eq!(item["role"], "user");
         assert_eq!(item["content"][0]["type"], "input_text");
         assert_eq!(item["content"][0]["text"], "hi");
+    }
+
+    #[test]
+    fn system_role_messages_are_remapped_to_developer() {
+        // Codex 後端拒絕 system 角色（{"detail":"System messages are not
+        // allowed"}）。Claude Code 確實會在 messages 裡送 system 角色，
+        // 這是實測撞到的 400。
+        let body = build_body(
+            &req(json!({"model":"m","messages":[
+                {"role":"system","content":"你很簡潔"},
+                {"role":"user","content":"hi"}
+            ]})),
+            "m",
+        );
+        assert_eq!(body["input"][0]["role"], "developer");
+        assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(body["input"][1]["role"], "user");
     }
 
     #[test]
