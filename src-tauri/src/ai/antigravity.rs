@@ -49,9 +49,20 @@ pub struct AntigravityClient {
     client: reqwest::Client,
 }
 
+/// The Antigravity endpoint host. Fixed — there is no user-facing base_url
+/// setting for this provider.
+///
+/// A `google-ai` provider entry usually *does* carry a `base_url`, but it is
+/// the public Generative Language API one (`generativelanguage.googleapis.com`)
+/// used by the API-key path. Honouring it here silently sends OAuth requests to
+/// the wrong host and yields a bare `404` — that is a real bug the Claude Code
+/// bridge shipped and had to fix, so callers must use this constant rather than
+/// reading `ProviderConfig.base_url`.
+pub const ANTIGRAVITY_BASE_URL: &str = "https://cloudcode-pa.googleapis.com";
+
 impl AntigravityClient {
     pub fn new(access_token: String, project_id: String, model: String) -> Self {
-        Self::with_base_url(access_token, project_id, model, "https://cloudcode-pa.googleapis.com".into())
+        Self::with_base_url(access_token, project_id, model, ANTIGRAVITY_BASE_URL.into())
     }
 
     /// Test-only hook: lets integration tests point at a wiremock server

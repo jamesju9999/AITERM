@@ -138,10 +138,16 @@ pub async fn build(
             // 同一個函式解析（含過期時的自動刷新），不要自己重寫。
             let (token, project_id) =
                 crate::ai::router::get_valid_google_oauth_token(provider_id, secrets).await?;
-            // base_url 固定 https://cloudcode-pa.googleapis.com（見
-            // ai/antigravity.rs），使用者填的 base_url 只在測試時用得到。
-            let base = p.base_url.clone().unwrap_or_else(|| "https://cloudcode-pa.googleapis.com".into());
-            Ok(Upstream::Antigravity(AntigravityUpstream::new(base, token, project_id, tool_meta.clone())))
+            // 端點固定，**刻意不讀 p.base_url** —— google-ai 的 provider 設定
+            // 通常帶著 API key 路徑的 generativelanguage.googleapis.com，沿用
+            // 它會把 OAuth 請求送到錯的主機並得到一個沒有 body 的 404。這是
+            // 實際出過的 bug，router.rs 的 AntigravityClient::new 也是寫死的。
+            Ok(Upstream::Antigravity(AntigravityUpstream::new(
+                crate::ai::antigravity::ANTIGRAVITY_BASE_URL.to_string(),
+                token,
+                project_id,
+                tool_meta.clone(),
+            )))
         }
     }
 }
