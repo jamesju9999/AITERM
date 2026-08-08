@@ -28,6 +28,9 @@
 use aiterm_lib::ai::antigravity::{build_request_body, AntigravityClient};
 use aiterm_lib::ai::router::get_valid_google_oauth_token;
 use aiterm_lib::ai::{ChatMessage, EnvSnapshot, GenerateRequest, QueryMode};
+use aiterm_lib::bridge::anthropic::request::MessagesRequest;
+use aiterm_lib::bridge::tool_meta::ToolMetaCache;
+use aiterm_lib::bridge::upstream::antigravity::request::build_body;
 use aiterm_lib::secret::SecretStore;
 use std::path::PathBuf;
 
@@ -329,6 +332,126 @@ async fn probe_antigravity_tools_support_and_multiturn() {
     }
 }
 
+// ============================================================================
+// M3 驗收 bug 修正驗證：真實 Claude Code 打過來時，上游回 400
+// "Unknown name \"$schema\" ... Cannot find field"——Gemini 的
+// Schema 型別只接受 OpenAPI Schema 的受限子集，Claude Code（zod-to-json-
+// schema 輸出）帶的 $schema、additionalProperties 等欄位不被接受。
+// bridge/upstream/antigravity/request.rs 的 build_body 現在會用白名單遞迴
+// 清洗 input_schema 再組進 functionDeclarations。
+//
+// 這裡直接打真實端點做對照：同一份「貼近 Claude Code 真實形狀」的巢狀
+// schema（帶 $schema、頂層與巢狀 additionalProperties），
+//   - 未清洗（模擬修正前）→ 預期 400，把完整錯誤訊息 dump 出來——這是
+//     bug 報告裡看不到的部分（原本的 400 訊息在 ai/sse.rs 被截斷在 300
+//     字元）。
+//   - 清洗後（build_body 現在的行為）→ 預期 200。
+// ============================================================================
+
+/// 貼近 Claude Code（zod-to-json-schema 輸出）真實形狀的工具 schema：帶
+/// `$schema`、頂層與巢狀 `properties` 都帶 `additionalProperties`，用來
+/// 同時驗證清洗有沒有生效、遞迴有沒有真的下探到巢狀層。
+fn claude_code_like_tool_def() -> serde_json::Value {
+    serde_json::json!({
+        "name": "Read",
+        "description": "Read a file from the local filesystem",
+        "input_schema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+                "file_path": { "type": "string", "description": "The path to read" },
+                "limit": { "type": "number", "description": "Line limit" },
+                "options": {
+                    "type": "object",
+                    "properties": { "deep": { "type": "boolean" } },
+                    "additionalProperties": false
+                }
+            },
+            "required": ["file_path"],
+            "additionalProperties": false
+        }
+    })
+}
+
+#[tokio::test]
+#[ignore = "探勘測試：需要真實 Antigravity OAuth 憑證與網路，不進常規 CI"]
+async fn probe_antigravity_tool_schema_sanitization() {
+    let secrets = SecretStore::new();
+    let (access_token, project_id) = get_valid_google_oauth_token(PROVIDER_ID, &secrets)
+        .await
+        .unwrap_or_else(|e| panic!("BLOCKED: 拿不到 {PROVIDER_ID} 的有效 token/project_id: {e:?}"));
+    println!("[probe-schema] got token (len={}), project_id_len={}", access_token.len(), project_id.len());
+
+    let client = AntigravityClient::new(access_token, project_id.clone(), MODEL.into());
+    let http = reqwest::Client::new();
+
+    // 走真正的 bridge 路徑（Claude Code → AITerm axum server → build_body）
+    // 組出請求，而不是自己手刻信封——這樣測的才是真正會跑的程式碼，不是
+    // 「看起來像」的等價物。
+    let messages_req: MessagesRequest = serde_json::from_value(serde_json::json!({
+        "model": "aiterm:sonnet",
+        "messages": [{ "role": "user", "content": "Read the file /tmp/foo.txt" }],
+        "tools": [claude_code_like_tool_def()]
+    }))
+    .expect("MessagesRequest 反序列化失敗");
+
+    // build_body 現在一定會清洗，所以「清洗後」直接是它的正常輸出。
+    let sanitized_body = build_body(&messages_req, MODEL, &project_id, &ToolMetaCache::new(512));
+
+    // 「未清洗」版本：拿清洗後的 body 當骨架，把 parameters 換回原始、未清
+    // 洗的 input_schema——這樣兩邊除了 parameters 之外完全一致，才是乾淨
+    // 的對照組（不會因為其他欄位不同而干擾判讀）。
+    let mut unsanitized_body = sanitized_body.clone();
+    unsanitized_body["request"]["tools"][0]["functionDeclarations"][0]["parameters"] =
+        claude_code_like_tool_def()["input_schema"].clone();
+    unsanitized_body["requestId"] = serde_json::json!(format!("agent/probe/{}", uuid_like()));
+
+    write_dump(
+        "antigravity_probe_schema_unsanitized_request.json",
+        &serde_json::to_string_pretty(&unsanitized_body).unwrap(),
+    );
+    let resp_unsan = client
+        .apply_headers(http.post(client.generate_content_url()))
+        .json(&unsanitized_body)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("unsanitized request failed to send: {e}"));
+    let (status_unsan, body_unsan) =
+        dump_response(resp_unsan, "antigravity_probe_schema_unsanitized_raw_response.txt").await;
+    println!("[probe-schema] unsanitized status = {status_unsan}");
+    println!("[probe-schema] unsanitized FULL error body:\n{body_unsan}");
+
+    write_dump(
+        "antigravity_probe_schema_sanitized_request.json",
+        &serde_json::to_string_pretty(&sanitized_body).unwrap(),
+    );
+    let resp_san = client
+        .apply_headers(http.post(client.generate_content_url()))
+        .json(&sanitized_body)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("sanitized request failed to send: {e}"));
+    let (status_san, body_san) = dump_response(resp_san, "antigravity_probe_schema_sanitized_raw_response.txt").await;
+    println!("[probe-schema] sanitized status = {status_san}");
+    if status_san >= 400 {
+        println!("[probe-schema] sanitized FULL error body (unexpected — 白名單還有問題):\n{body_san}");
+    }
+
+    let summary = format!(
+        "未清洗（原封不動 input_schema，含頂層 $schema、頂層與巢狀 additionalProperties）status={status_unsan}\n\
+         清洗後（build_body 白名單遞迴清洗）status={status_san}\n\n\
+         結論指引：若 unsan=400 且 san=200 → 修正確認有效，bug 重現且白名單可行。\n\
+         若 san 也是 400 → 白名單還有問題，見上面「sanitized FULL error body」找出還漏了什麼欄位。\n\
+         完整錯誤內容見 antigravity_probe_schema_unsanitized_raw_response.txt / \
+         antigravity_probe_schema_sanitized_raw_response.txt。",
+    );
+    write_dump("antigravity_probe_schema_SUMMARY.txt", &summary);
+    println!("[probe-schema] === SUMMARY ===\n{summary}");
+
+    assert_eq!(status_unsan, 400, "預期未清洗 schema 被上游拒絕（400）——若不是，這個 bug 沒有如預期重現，見上面 dump");
+    assert_eq!(status_san, 200, "預期清洗後的 schema 通過上游驗證（200）——若不是，白名單還有問題，不要調整斷言，回報完整錯誤");
+}
+
 /// 探勘用途的簡易亂數字串（避免每次 requestId 撞號），不追求密碼學品質。
 fn uuid_like() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -465,4 +588,402 @@ async fn probe_antigravity_thought_part_with_harder_prompt() {
     };
     write_dump("antigravity_probe_r2_thought_SUMMARY.txt", &summary);
     println!("[probe-r2] === SUMMARY ===\n{summary}");
+}
+
+// ============================================================================
+// 第二輪探勘（延續）：M2 在 Codex 上補第二輪才發現 reasoning 事件；這裡的
+// 風險對稱點是「並行工具呼叫」——Claude Code 是重度並行工具呼叫的客戶端，
+// 第一輪只測了單一 functionCall，這裡專門測：
+//
+//   問題 A：模型會不會在同一輪回多個 functionCall part？在同一個
+//           candidates[0].content.parts[] 裡還是分散在不同 SSE chunk？
+//           id 與 thoughtSignature 是否一對一？args 會不會跨 chunk 分片？
+//   問題 B（最重要）：並行時 functionResponse 要不要帶 id 才能正確對應？
+//           對照「都不帶 id」vs「都帶 id」，並檢查模型有沒有張冠李戴。
+//   問題 C：thoughtSignature 的回送粒度——並行時是否每個 functionCall part
+//           都要帶自己的 thoughtSignature？只帶其中一個會怎樣？
+//
+// 為了让模型有機會出現「同一函式被呼叫兩次、參數不同」這種必須靠 id 才能
+// 消歧義的情境，工具刻意設計成同一個 get_weather 對兩個不同城市，外加一個
+// 完全不同的 list_files 工具，逼模型至少要並行呼叫兩個不同工具。
+// ============================================================================
+
+/// 送一次 generateContent 請求，回傳 (status, raw_body, all_parts,
+/// function_call_parts)。集中處理共用的送出/dump/parse 邏輯，避免三個對照
+/// 組各自重複一份。
+async fn send_and_collect(
+    http: &reqwest::Client,
+    client: &AntigravityClient,
+    body: &serde_json::Value,
+    dump_prefix: &str,
+) -> (u16, String, Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    write_dump(&format!("{dump_prefix}_request.json"), &serde_json::to_string_pretty(body).unwrap());
+    let resp = client
+        .apply_headers(http.post(client.generate_content_url()))
+        .json(body)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("{dump_prefix} request failed to send: {e}"));
+    let (status, raw) = dump_response(resp, &format!("{dump_prefix}_raw_sse.txt")).await;
+    println!("[probe-r2-parallel] {dump_prefix} status = {status}");
+
+    if status >= 400 {
+        return (status, raw, Vec::new(), Vec::new());
+    }
+
+    let events = parse_sse_events(&raw);
+    let mut all_parts: Vec<serde_json::Value> = Vec::new();
+    for ev in &events {
+        let resp_body = unwrap_response(ev);
+        if let Some(candidates) = resp_body.get("candidates").and_then(|c| c.as_array()) {
+            for cand in candidates {
+                if let Some(parts) = cand.get("content").and_then(|c| c.get("parts")).and_then(|p| p.as_array()) {
+                    for part in parts {
+                        all_parts.push(part.clone());
+                    }
+                }
+            }
+        }
+    }
+    write_dump(&format!("{dump_prefix}_all_parts.json"), &serde_json::to_string_pretty(&all_parts).unwrap());
+
+    let function_call_parts: Vec<serde_json::Value> =
+        all_parts.iter().filter(|p| p.get("functionCall").is_some()).cloned().collect();
+    write_dump(
+        &format!("{dump_prefix}_function_call_parts.json"),
+        &serde_json::to_string_pretty(&function_call_parts).unwrap(),
+    );
+
+    (status, raw, all_parts, function_call_parts)
+}
+
+/// 把 all_parts 裡所有 text part 串接起來，方便肉眼檢查模型最終回答有沒有
+/// 張冠李戴（例如把台北的天氣講成東京的、把檔名對錯目錄）。
+fn concat_text_parts(all_parts: &[serde_json::Value]) -> String {
+    all_parts.iter().filter_map(|p| p.get("text").and_then(|t| t.as_str())).collect::<Vec<_>>().join("")
+}
+
+#[tokio::test]
+#[ignore = "探勘測試：需要真實 Antigravity OAuth 憑證與網路，不進常規 CI"]
+async fn probe_antigravity_parallel_tool_calls() {
+    let secrets = SecretStore::new();
+    let (access_token, project_id) = get_valid_google_oauth_token(PROVIDER_ID, &secrets)
+        .await
+        .unwrap_or_else(|e| panic!("BLOCKED: 拿不到 {PROVIDER_ID} 的有效 token/project_id: {e:?}"));
+    println!("[probe-r2-parallel] got token (len={}), project_id_len={}", access_token.len(), project_id.len());
+
+    let client = AntigravityClient::new(access_token, project_id.clone(), MODEL.into());
+    let http = reqwest::Client::new();
+
+    // 兩個不同工具：get_weather + list_files。刻意在 prompt 裡明講「兩個城
+    // 市的天氣都要查、還要列目錄」，逼模型有機會並行呼叫 3 次（含同一工具
+    // 呼叫兩次、參數不同——這是最需要 id 消歧義的情境）。
+    let tools = serde_json::json!([{
+        "functionDeclarations": [
+            {
+                "name": "get_weather",
+                "description": "Get the current weather for a given city",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "city": { "type": "string", "description": "City name" } },
+                    "required": ["city"]
+                }
+            },
+            {
+                "name": "list_files",
+                "description": "List files in a given directory path",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "path": { "type": "string", "description": "Directory path" } },
+                    "required": ["path"]
+                }
+            }
+        ]
+    }]);
+
+    // 幾種不同措辭的 prompt 依序試，只要有一次拿到 >=2 個 functionCall part
+    // 就停止——「試過幾種都誘不出並行」本身也是有用的結論，屆時全部 dump。
+    let prompts = [
+        "Call get_weather for Taipei AND get_weather for Tokyo AND list_files for /private/tmp \
+         — all three calls right now, in this same turn, in parallel. Do not answer in text, \
+         do not call them one at a time waiting for results — issue all three tool calls together.",
+        "I need three things simultaneously: the weather in Taipei, the weather in Tokyo, and a \
+         directory listing of /private/tmp. Use the available tools to fetch all three at once \
+         in a single turn rather than sequentially.",
+        "Please invoke get_weather(city=\"Taipei\"), get_weather(city=\"Tokyo\"), and \
+         list_files(path=\"/private/tmp\") together in one response, in parallel.",
+    ];
+
+    let mut chosen: Option<(serde_json::Value, Vec<serde_json::Value>, Vec<serde_json::Value>)> = None;
+    for (i, prompt) in prompts.iter().enumerate() {
+        let req = GenerateRequest {
+            system_prompt: "You are a coding CLI assistant with access to tools. When multiple \
+                independent pieces of information are requested, call all the relevant tools in \
+                the same turn instead of one at a time."
+                .into(),
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: serde_json::json!(*prompt),
+                tool_call_id: None,
+                tool_calls: None,
+            }],
+            context: env_ctx(),
+            mode: QueryMode::Chat,
+            max_tokens: Some(1024),
+        };
+        let mut body = build_request_body(MODEL, &project_id, &req);
+        body["request"]["tools"] = tools.clone();
+
+        let (status, _raw, all_parts, fc_parts) =
+            send_and_collect(&http, &client, &body, &format!("antigravity_probe_r2_parallel_attempt{i}")).await;
+
+        println!("[probe-r2-parallel] attempt{i}: status={status} functionCall parts={}", fc_parts.len());
+        if status < 400 && fc_parts.len() >= 2 {
+            chosen = Some((body, all_parts, fc_parts));
+            println!("[probe-r2-parallel] attempt{i} produced >=2 functionCall parts, stopping prompt search");
+            break;
+        }
+    }
+
+    let Some((round1_body, all_parts, fc_parts)) = chosen else {
+        write_dump(
+            "antigravity_probe_r2_parallel_SUMMARY.txt",
+            "試過 3 種不同措辭的 prompt（明講同時查兩個城市天氣 + 列目錄、要求平行），\
+             沒有任何一次拿到 >=2 個 functionCall part。可能是這個模型/端點組合在這個情境下\
+             傾向序列呼叫，或每次只挑一個工具呼叫。完整內容見各 attemptN_* dump 檔。\
+             結論：本輪探勘沒有觀察到並行 functionCall——不代表『不存在』，只是『試過這些\
+             prompt 誘不出來』。問題 B/C（functionResponse id、thoughtSignature 粒度）因此\
+             無法在『真正並行』的情境下驗證，只能等以後找到更可靠的誘發方式再補。",
+        );
+        println!("[probe-r2-parallel] === 無法誘發並行呼叫，探勘到此為止（本身是有效結論）===");
+        return;
+    };
+
+    // ---- 問題 A：分析拿到的 functionCall part 們 ----
+    println!("[probe-r2-parallel] === 問題 A：並行 functionCall 的形狀 ===");
+    println!("[probe-r2-parallel] 總計 {} 個 functionCall part（在 all_parts 裡的位置關係見 dump）", fc_parts.len());
+
+    let mut per_call_info = Vec::new();
+    for (idx, fc_part) in fc_parts.iter().enumerate() {
+        let fc = fc_part.get("functionCall").cloned().unwrap_or(serde_json::Value::Null);
+        let name = fc.get("name").and_then(|v| v.as_str()).unwrap_or("<none>").to_string();
+        let id = fc.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let has_sig = fc_part.get("thoughtSignature").is_some();
+        let sig_len = fc_part.get("thoughtSignature").and_then(|v| v.as_str()).map(|s| s.len());
+        let args = fc.get("args").cloned().unwrap_or(serde_json::Value::Null);
+        println!(
+            "  [{idx}] name={name} id={id:?} has_thoughtSignature={has_sig} sig_len={sig_len:?} args={args}"
+        );
+        per_call_info.push(serde_json::json!({
+            "index": idx, "name": name, "id": id, "has_thoughtSignature": has_sig,
+            "thoughtSignature_len": sig_len, "args": args,
+        }));
+    }
+    write_dump(
+        "antigravity_probe_r2_parallel_per_call_analysis.json",
+        &serde_json::to_string_pretty(&per_call_info).unwrap(),
+    );
+
+    // id 是否每個都有、是否互不相同（1:1 而非共用）。
+    let ids: Vec<Option<String>> =
+        fc_parts.iter().map(|p| p.get("functionCall").and_then(|fc| fc.get("id")).and_then(|v| v.as_str()).map(String::from)).collect();
+    let all_have_id = ids.iter().all(|id| id.is_some());
+    let distinct_ids: std::collections::HashSet<&Option<String>> = ids.iter().collect();
+    let ids_all_distinct = distinct_ids.len() == ids.len();
+
+    // thoughtSignature 是否每個都有、是否互不相同。
+    let sigs: Vec<Option<String>> =
+        fc_parts.iter().map(|p| p.get("thoughtSignature").and_then(|v| v.as_str()).map(String::from)).collect();
+    let all_have_sig = sigs.iter().all(|s| s.is_some());
+    let distinct_sigs: std::collections::HashSet<&Option<String>> = sigs.iter().collect();
+    let sigs_all_distinct = distinct_sigs.len() == sigs.len();
+
+    // 是否所有 functionCall part 都落在同一個 SSE event（同一個 candidates[0]
+    // .content.parts[] 陣列）裡，還是分散在多個 chunk。用「這個 part 在
+    // all_parts 裡是否緊鄰其他 functionCall part」粗略判斷；精確答案要看
+    // per-event dump（antigravity_probe_r2_parallel_attemptN_raw_sse.txt）。
+    let fc_indices_in_all_parts: Vec<usize> = all_parts
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.get("functionCall").is_some())
+        .map(|(i, _)| i)
+        .collect();
+
+    let a_summary = format!(
+        "拿到 {} 個 functionCall part。\n\
+         - 每個都有 id: {all_have_id}；id 互不相同（1:1 非共用）: {ids_all_distinct}；原始 ids={ids:?}\n\
+         - 每個都有 thoughtSignature: {all_have_sig}；簽章互不相同: {sigs_all_distinct}\n\
+         - functionCall part 在 all_parts 陣列中的位置索引: {fc_indices_in_all_parts:?}\n\
+         - 精確的『同一 event 還是跨 chunk』要對照 antigravity_probe_r2_parallel_attemptN_raw_sse.txt \
+           裡每個 `data:` 行各自帶了幾個 part 來判斷。\n\
+         - 詳細每筆 id/thoughtSignature/args 見 antigravity_probe_r2_parallel_per_call_analysis.json",
+        fc_parts.len()
+    );
+    println!("[probe-r2-parallel] {a_summary}");
+
+    // ---- 問題 B + C：多輪回送對照實驗 ----
+    // base_contents 是「round1 request 的 contents」；round2 的 body 都從
+    // round1_body clone 出來改 contents/requestId，這樣 systemInstruction /
+    // generationConfig / userAgent / requestType 等既有欄位會原樣沿用，不
+    // 用手刻一份可能漏欄位的 skeleton。
+    let base_contents: Vec<serde_json::Value> =
+        round1_body["request"]["contents"].as_array().cloned().unwrap_or_default();
+
+    // 準備刻意可分辨、彼此不該混淆的假回應內容，方便事後檢查模型有沒有張冠
+    // 李戴：兩個 get_weather（不同城市）內容差異很大，list_files 回傳一組
+    // 一望即知不是天氣的檔名。
+    fn fake_response_for(name: &str, args: &serde_json::Value) -> serde_json::Value {
+        match name {
+            "get_weather" => {
+                let city = args.get("city").and_then(|v| v.as_str()).unwrap_or("");
+                if city.eq_ignore_ascii_case("taipei") {
+                    serde_json::json!({ "temperature_c": 31, "condition": "monsoon rain" })
+                } else {
+                    serde_json::json!({ "temperature_c": -4, "condition": "heavy snow" })
+                }
+            }
+            "list_files" => serde_json::json!({ "files": ["zephyr.cfg", "glimmer.dat", "catnip.log"] }),
+            _ => serde_json::json!({ "result": "ok" }),
+        }
+    }
+
+    let model_turn_full = serde_json::json!({ "role": "model", "parts": all_parts.clone() });
+
+    // 變體 1：functionResponse 都不帶 id（只有 name + response）。
+    let fr_parts_no_id: Vec<serde_json::Value> = fc_parts
+        .iter()
+        .map(|p| {
+            let fc = p.get("functionCall").cloned().unwrap_or_default();
+            let name = fc.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let args = fc.get("args").cloned().unwrap_or(serde_json::json!({}));
+            serde_json::json!({ "functionResponse": { "name": name, "response": fake_response_for(&name, &args) } })
+        })
+        .collect();
+    let mut contents_no_id = base_contents.clone();
+    contents_no_id.push(model_turn_full.clone());
+    contents_no_id.push(serde_json::json!({ "role": "user", "parts": fr_parts_no_id }));
+    let mut body_no_id = round1_body.clone();
+    body_no_id["request"]["contents"] = serde_json::Value::Array(contents_no_id);
+    body_no_id["request"]["tools"] = tools.clone();
+    body_no_id["requestId"] = serde_json::json!(format!("agent/probe/{}", uuid_like()));
+
+    let (status_no_id, _raw_no_id, all_parts_no_id, _fc_no_id) =
+        send_and_collect(&http, &client, &body_no_id, "antigravity_probe_r2_parallel_B_no_id").await;
+    let text_no_id = concat_text_parts(&all_parts_no_id);
+    println!("[probe-r2-parallel] B(no id) status={status_no_id} final_text={text_no_id:?}");
+
+    // 變體 2：functionResponse 都帶 id（對應各自 functionCall 的 id，若有）。
+    let fr_parts_with_id: Vec<serde_json::Value> = fc_parts
+        .iter()
+        .map(|p| {
+            let fc = p.get("functionCall").cloned().unwrap_or_default();
+            let name = fc.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let args = fc.get("args").cloned().unwrap_or(serde_json::json!({}));
+            let id = fc.get("id").cloned();
+            let mut obj = serde_json::json!({ "name": name, "response": fake_response_for(&name, &args) });
+            if let Some(id) = id {
+                obj["id"] = id;
+            }
+            serde_json::json!({ "functionResponse": obj })
+        })
+        .collect();
+    let mut contents_with_id = base_contents.clone();
+    contents_with_id.push(model_turn_full.clone());
+    contents_with_id.push(serde_json::json!({ "role": "user", "parts": fr_parts_with_id }));
+    let mut body_with_id = round1_body.clone();
+    body_with_id["request"]["contents"] = serde_json::Value::Array(contents_with_id);
+    body_with_id["request"]["tools"] = tools.clone();
+    body_with_id["requestId"] = serde_json::json!(format!("agent/probe/{}", uuid_like()));
+
+    let (status_with_id, _raw_with_id, all_parts_with_id, _fc_with_id) =
+        send_and_collect(&http, &client, &body_with_id, "antigravity_probe_r2_parallel_B_with_id").await;
+    let text_with_id = concat_text_parts(&all_parts_with_id);
+    println!("[probe-r2-parallel] B(with id) status={status_with_id} final_text={text_with_id:?}");
+
+    let b_summary = format!(
+        "變體 1（不帶 id）status={status_no_id}\n最終文字回答：{text_no_id}\n\n\
+         變體 2（帶 id）status={status_with_id}\n最終文字回答：{text_with_id}\n\n\
+         人工檢查重點：兩段最終文字是否都正確把台北天氣（31°C/monsoon rain）、東京天氣\
+         （-4°C/heavy snow，若第二個 get_weather 真的存在）、目錄檔名（zephyr.cfg/\
+         glimmer.dat/catnip.log）各自對應正確，沒有互相調換。",
+    );
+    write_dump("antigravity_probe_r2_parallel_B_SUMMARY.txt", &b_summary);
+    println!("[probe-r2-parallel] === 問題 B SUMMARY ===\n{b_summary}");
+
+    // ---- 問題 C：thoughtSignature 回送粒度 ----
+    // 實測發現（問題 A 已確認）：並行呼叫時「不是每個 functionCall part 都
+    // 有自己的 thoughtSignature」——3 個 functionCall part 裡只有 1 個帶
+    // signature（兩次重跑都是同一個位置：第 1 個 get_weather）。所以「每個
+    // part 各自帶一個簽章」這個假設本身在這次觀察中不成立，C1/C2「拿掉某個
+    // 位置的簽章」這組對照失去意義（因為多數位置本來就沒有簽章）。
+    //
+    // 改測真正對得上實測情境的問題：伺服器實際附掛的那個（些）簽章，回送時
+    // 拿掉會不會 400？這是問題 A 的觀察結果直接導出的、真正決定 adapter 快
+    // 取粒度的問題——若答案是「會 400」，代表 adapter 只需要在有簽章的那個
+    // part 上快取/回送，其餘沒簽章的 part 原樣（不帶 thoughtSignature 欄位）
+    // 回送即可，不需要幫每個 functionCall 都合成一個。
+    let sig_bearing_indices: Vec<usize> =
+        fc_parts.iter().enumerate().filter(|(_, p)| p.get("thoughtSignature").is_some()).map(|(i, _)| i).collect();
+
+    if sig_bearing_indices.is_empty() {
+        write_dump(
+            "antigravity_probe_r2_parallel_C_SUMMARY.txt",
+            "跳過問題 C 的對照實驗：這次並行呼叫拿到的 functionCall part 裡，沒有任何一個帶 \
+             thoughtSignature（不同於單一呼叫時第一輪的觀察）。無簽章可拿掉來做對照。",
+        );
+    } else {
+        // 把「有帶 thoughtSignature 的那幾個 functionCall part」的簽章全部
+        // 拿掉，其餘 part（包含本來就沒簽章的）維持原樣，其他都跟基準（問題
+        // B 變體 2，已知 200）完全一樣。
+        let mut parts_sig_stripped = all_parts.clone();
+        let mut fc_seen = 0usize;
+        for p in parts_sig_stripped.iter_mut() {
+            if p.get("functionCall").is_some() {
+                if sig_bearing_indices.contains(&fc_seen) {
+                    if let Some(obj) = p.as_object_mut() {
+                        obj.remove("thoughtSignature");
+                    }
+                }
+                fc_seen += 1;
+            }
+        }
+        let model_turn_sig_stripped = serde_json::json!({ "role": "model", "parts": parts_sig_stripped });
+        let mut contents_c = base_contents.clone();
+        contents_c.push(model_turn_sig_stripped);
+        contents_c.push(serde_json::json!({ "role": "user", "parts": fr_parts_with_id.clone() }));
+        let mut body_c = round1_body.clone();
+        body_c["request"]["contents"] = serde_json::Value::Array(contents_c);
+        body_c["request"]["tools"] = tools.clone();
+        body_c["requestId"] = serde_json::json!(format!("agent/probe/{}", uuid_like()));
+        let (status_c, raw_c, _, _) =
+            send_and_collect(&http, &client, &body_c, "antigravity_probe_r2_parallel_C_strip_present_sigs").await;
+        println!(
+            "[probe-r2-parallel] C(拿掉實際存在的 {} 個 thoughtSignature，其餘 part 不變) status={status_c}",
+            sig_bearing_indices.len()
+        );
+
+        let c_summary = format!(
+            "問題 A 已確認：3 個 functionCall part 中只有 index {sig_bearing_indices:?} 帶 \
+             thoughtSignature，其餘完全沒有這個欄位（不是『每個都有、只是不同簽章』）。\n\n\
+             基準（原樣回送，含那 {} 個 part 各自的簽章狀態，即問題 B 變體 2）status={status_with_id}\n\
+             把『實際存在的』{} 個 thoughtSignature 全部拿掉（其餘本來就沒有的 part 不受影響）：\
+             status={status_c}\n\n\
+             結論指引：若基準 200、拿掉後 400 → 證實 M1/round1 的『不透明簽章必須原樣回送』\
+             規則在並行情境下依然成立，但粒度是『伺服器給了簽章的那個 part 才需要回送』，不是\
+             『每個 functionCall 都要有一個』。adapter 只需在有 thoughtSignature 的 part 上快取\
+             (id → signature)，沒有的 part 直接不帶這個欄位即可。\n\
+             若拿掉後仍是 200 → 這次觀察到的唯一簽章其實不是必須的，需要更多樣本才能下定論。\n\
+             400 情境完整錯誤訊息見 antigravity_probe_r2_parallel_C_strip_present_sigs_raw_sse.txt。",
+            sig_bearing_indices.len(),
+            sig_bearing_indices.len(),
+        );
+        write_dump("antigravity_probe_r2_parallel_C_SUMMARY.txt", &c_summary);
+        println!("[probe-r2-parallel] === 問題 C SUMMARY ===\n{c_summary}");
+        if status_c >= 400 {
+            println!("[probe-r2-parallel] C strip-present-sigs raw body: {raw_c}");
+        }
+    }
+
+    // ---- 總結 dump（含問題 A 的結論文字）----
+    write_dump("antigravity_probe_r2_parallel_A_SUMMARY.txt", &a_summary);
 }
