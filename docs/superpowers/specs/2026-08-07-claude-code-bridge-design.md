@@ -436,6 +436,46 @@ Gemini 的 OpenAI 相容端點在串流的工具呼叫上夾帶不透明資料�
 
 快取存的是**整個 `extra_content` 的 JSON 值**而非 `thought_signature` 本身 —— 語意是「這個工具呼叫上游附了什麼不透明資料，回送時原樣帶回」，不寫死任何供應商的欄位路徑。快取隨 `BridgeState::start()` 重建，跨 server 重啟不保留。
 
+## M2（Codex）：完成並驗證（2026-08-08）
+
+真實 Claude Code CLI 透過 Codex（ChatGPT 訂閱）跑通完整工具循環。
+
+### 先探勘再實作，這次證明是對的
+
+M2 的第一個動作不是寫 adapter，而是用真憑證 dump 原始 SSE（`src-tauri/tests/codex_probe.rs`，`#[ignore]`）。三個**「照 Responses API 文件寫會出錯」**的發現：
+
+1. **`response.completed.response.output` 是空陣列 `[]`**，即使呼叫了工具 —— 官方文件說它帶完整 output。權威記錄只在串流過程的 `response.output_item.done`。
+2. **`call_id` 與 `name` 在 `item` 物件上**，不在 delta 事件裡。
+3. **往返用 `call_id`（`call_…`）不是 `id`（`fc_…`）。** A/B/C 三組對照確認：重建一個只有 `type`/`call_id`/`name`/`arguments` 的 item 即可（200），完全不帶則 400。
+
+比 Gemini 簡單的地方：**沒有必須原樣回送的不透明欄位**。reasoning item 連同一大包 `encrypted_content` 整個不回送也回 200，`tool_meta` 快取在這條路徑用不到。
+
+比 OpenAI 簡單的地方：`output_item.added` 就同時帶了 `call_id` 與 `name`，`ToolUseStart` 可以立刻發，不需要 OpenAI 路徑那種「緩衝到參數到達才確定名稱」的延後邏輯。
+
+### 探勘沒涵蓋到、實作按「可能發生」處理的
+
+- 長 reasoning summary 是否分片（實測只有 1 個 delta）
+- 兩個並行呼叫的 delta 是否真的能交錯（實測 arguments 太短，各只有 1 個 delta）
+- 3 個以上並行呼叫
+
+因此累加一律**以 `item_id` 分桶**，在「不交錯」與「假設交錯」兩種情況下都正確。
+
+另有一項實測直接影響實作：**arguments 分片與否跟長度有關** —— 長內容有多個字元級 delta，短內容一次到齊。所以 `.done` 必須能在完全沒有 delta 時補位，否則短參數的工具呼叫會沒有參數。
+
+### 驗收時撞到的 bug：漏抄既有知識
+
+Claude Code 會在 `messages` 裡送 `role: "system"` 的訊息，Codex 後端拒絕：`{"detail":"System messages are not allowed"}`。
+
+**而 `ai/codex.rs:104` 早就處理過這件事**（重映射成 `developer`，註解還寫著會造成 silent 400，也有既有測試）—— 是 M2 的翻譯層漏抄了。
+
+修法不是在 bridge 裡複製一個 `if`，而是把 `map_input_role` 與 `content_type_for_role` 抽成共用函式讓兩邊呼叫，並回頭逐項比對 `build_request_body` 與 `build_body` 確認沒有其他漏抄（結果：沒有，剩下的差異都是架構性的）。
+
+**教訓**：新增一條翻譯路徑時，要逐項對照 `ai/` 底下同一個供應商的既有 client —— 那裡累積的端點知識是踩過坑換來的。
+
+### 另一個補上的缺口：非串流路徑沒有錯誤日誌
+
+串流路徑在 `stream.rs` 有 `log::warn!`，非串流那條原本沒有。Claude Code 用非串流請求撞牆時 server 端一片空白，只能靠客戶端那個被截斷的錯誤字串猜。上面那個 400 正是補上日誌後才看到全文。
+
 ## 已知限制（M1 不處理，記錄以免被誤認為疏漏）
 
 - **`StopReason` 沒有失敗類的變體。** 目前只有 `end_turn / max_tokens / tool_use / stop_sequence`。上游若回 OpenAI 的 `finish_reason: "content_filter"`，會被映射成 `end_turn`，Claude Code 收到的是一個被靜默截斷的回答，沒有任何「內容被擋下」的訊號。要修就要在中立事件型別加變體並決定對應到 Anthropic 的哪個 `stop_reason`，這牽動三條路徑，留到 M2 一起處理。
