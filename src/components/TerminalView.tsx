@@ -242,6 +242,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const [blockSearchCursor, setBlockSearchCursor] = useState<BlockSearchCursor | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  /** IME（注音等）組字進行中。見寫入路徑的 isWindows 分支。 */
+  const isComposingRef = useRef(false);
   const fitAddonRef = useRef<FitAddon | null>(null);
 
   // Deliberately does NOT call fitAddon.fit() here (unlike the Files-tab ->
@@ -796,6 +798,26 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     };
     liveFrame?.addEventListener("scroll", pinLiveFrameScroll);
 
+    // 注音/中文組字進行中就不要強制重繪（見下方寫入路徑的 isWindows 分支）。
+    //
+    // 那個強制 refresh 是 Windows/WebView2 專屬的補償，用來避免直接打進即時
+    // 終端的字沒被畫出來。但它會打斷瀏覽器正在合成的 IME 字串——同一個衝突
+    // 早就在 macOS 上被發現過，所以 macOS 分支才不做這件事。
+    //
+    // 一般 shell 不會撞到，因為你打字的當下沒有輸出進來；但持續重繪的 TUI
+    // （Claude Code）每秒吐好幾塊，組字期間必然對撞。實測確認：同樣的環境
+    // 變數在一般終端機分頁也重現，所以與分頁類型無關，就是輸出頻率。
+    const term$ = term as unknown as { textarea?: HTMLTextAreaElement };
+    const ta = term$.textarea;
+    const onCompositionStart = () => { isComposingRef.current = true; };
+    const onCompositionEnd = () => {
+      isComposingRef.current = false;
+      // 組字期間跳過的重繪在這裡一次補上，否則那段輸出可能停在沒畫出來的狀態。
+      termRef.current?.refresh(0, (termRef.current.rows ?? 1) - 1);
+    };
+    ta?.addEventListener("compositionstart", onCompositionStart);
+    ta?.addEventListener("compositionend", onCompositionEnd);
+
     const decoder = new TextDecoder("utf-8");
 
     let unlistenData: (() => void) | null = null;
@@ -833,7 +855,13 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             // corrupt in-progress IME composition (e.g. Zhuyin/Bopomofo input)
             // in the live pane, which never needed this — macOS renders every
             // write reliably on its own.
-            term.write(text, () => term.refresh(0, term.rows - 1));
+            // 組字進行中一律走普通寫入——強制 refresh 會打斷 IME 合成，
+            // 讓組字中的字串跑到畫面別處。compositionend 會補一次重繪。
+            if (isComposingRef.current) {
+              term.write(text);
+            } else {
+              term.write(text, () => term.refresh(0, term.rows - 1));
+            }
           } else {
             term.write(text);
           }
@@ -1115,6 +1143,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       if (unsubmittedPasteTimeoutRef.current) clearTimeout(unsubmittedPasteTimeoutRef.current);
       if (ro && hostRef.current) ro.unobserve(hostRef.current);
       liveFrame?.removeEventListener("scroll", pinLiveFrameScroll);
+      ta?.removeEventListener("compositionstart", onCompositionStart);
+      ta?.removeEventListener("compositionend", onCompositionEnd);
       if (unlistenData) unlistenData();
       if (unlistenStream) unlistenStream.then((f: () => void) => f());
       const id = sessionRef.current;

@@ -146,6 +146,17 @@ export function useTerminalBlocks(
       setIsAlternateBuffer(term.buffer.active.type === "alternate");
     };
     const disposeBuffer = term.buffer.onBufferChange(onBufferChange);
+    // 註冊當下就同步一次，不要只等事件。
+    //
+    // 這個 effect 的 deps 含三個 callback（finalizeBlock / onLiveClear /
+    // onCommandSettled），任一個識別性改變就會重跑：舊監聽 dispose、新監聽
+    // 註冊——中間沒有人重讀「現在是不是 alternate」。於是若程式已經切進
+    // alt-screen 之後才發生重跑，狀態會永遠停在 false，即時窗格縮回
+    // MAX_LIVE_ROWS。實際症狀是 Claude Code 時而滿版、時而只有 16 列；
+    // vim 較少遇到只是因為開啟時比較不會剛好觸發那幾個 callback 重建。
+    //
+    // 冪等：setState 同值不會觸發重繪。
+    onBufferChange();
 
     const disposeOsc = term.parser.registerOscHandler(133, (data) => {
       if (data === "C") {
