@@ -225,6 +225,10 @@ async fn messages_non_streaming(
 /// 跟串流路徑用的 `error_frame_for`（SSE error frame）是同一份資訊的兩種
 /// 輸出形態。
 fn ai_error_response(err: &AiError) -> Response {
+    // 串流路徑在 stream.rs 有對應的 log::warn!，非串流這條原本沒有——
+    // 於是 Claude Code 用非串流請求撞牆時，server 端一片空白，只能靠
+    // 客戶端那個被截斷的錯誤字串猜。這是實際排錯時吃過的虧。
+    log::warn!("bridge 非串流請求失敗：{err:?}");
     json_error(
         StatusCode::from_u16(status_for(err)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
         error_kind(err),
