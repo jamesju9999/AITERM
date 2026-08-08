@@ -285,6 +285,27 @@ struct GeminiUsageMetadata {
     candidates_token_count: u32,
 }
 
+/// Wrap a Gemini `request` payload in the Antigravity envelope.
+///
+/// The outer fields (`project`, `requestId`, `userAgent`, `requestType`) are
+/// endpoint knowledge shared with the Claude Code bridge — keep one copy
+/// (see `bridge/upstream/antigravity/request.rs`).
+pub fn wrap_envelope(project_id: &str, model: &str, request: serde_json::Value) -> serde_json::Value {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let request_id = format!("agent/{now_ms}/{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    serde_json::json!({
+        "project": project_id,
+        "requestId": request_id,
+        "userAgent": "antigravity",
+        "requestType": "agent",
+        "model": model,
+        "request": request,
+    })
+}
+
 /// Build the Antigravity `streamGenerateContent` request envelope.
 ///
 /// pub（非 pub(crate)）是 M3 探勘測試需要的最小可見度提升——見
@@ -320,24 +341,15 @@ pub fn build_request_body(model: &str, project_id: &str, req: &GenerateRequest) 
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let request_id = format!("agent/{now_ms}/{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
-
-    serde_json::json!({
-        "project": project_id,
-        "requestId": request_id,
-        "userAgent": "antigravity",
-        "requestType": "agent",
-        "model": model,
-        "request": {
+    wrap_envelope(
+        project_id,
+        model,
+        serde_json::json!({
             "contents": contents,
             "systemInstruction": { "parts": [{ "text": system_instruction_text }] },
             "generationConfig": { "topK": 40, "topP": 1.0, "maxOutputTokens": 16384 },
-        },
-    })
+        }),
+    )
 }
 
 #[cfg(test)]
