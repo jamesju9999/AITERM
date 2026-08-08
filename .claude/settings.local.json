@@ -137,7 +137,8 @@
       "Bash(npx vite *)",
       "Bash(lsof -iTCP:1420 -sTCP:LISTEN)",
       "Read(//Applications/AITerm.app/**)",
-      "Bash(mdfind -name \"AITerm.app\")"
+      "Bash(mdfind -name \"AITerm.app\")",
+      "Bash(echo \"started with pid $!\")"
     ]
   }
 }
