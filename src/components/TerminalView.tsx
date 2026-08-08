@@ -1354,6 +1354,20 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             height: "100%",
             position: "relative",
             overflowY: "auto",
+            // 水平方向一律不可捲動。CSS 規則是「一軸非 visible 時，另一軸的
+            // visible 會被計算成 auto」，所以只寫 overflowY:auto 會讓這個容器
+            // 意外變成可水平捲動的 —— 瀏覽器就會拿它來「捲去顯示取得焦點的
+            // 元素」，也就是 xterm 那個隱藏的 helper textarea。
+            //
+            // 症狀：Claude Code 這類把游標停在遠右欄位的 TUI，會讓整個畫面
+            // 左移一個字元（`aiterm:opus` 顯示成 `iterm:opus`、`manual mode`
+            // 顯示成 `anual mode`），而注音組字框跟著 textarea 跑到右下角。
+            // vim 不會，因為它把游標留在插入點。
+            //
+            // 用 clip 不是 hidden：hidden 仍然是捲動容器（程式與瀏覽器都還能
+            // 捲它），clip 才真的不是。xterm 自己處理內容的換行與捲動，這一層
+            // 的水平捲動永遠是假的。
+            overflowX: "clip",
             // Reserves the scrollbar's width at all times, whether or not it's
             // actually showing. Without this, the live pane below (a sibling
             // of the block-card list, both children of this scroll container)
