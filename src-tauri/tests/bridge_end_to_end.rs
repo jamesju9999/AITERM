@@ -559,3 +559,66 @@ async fn omitted_stream_field_also_uses_the_non_streaming_path() {
 
     bridge.stop();
 }
+
+// ── 9. Codex 供應商沒有鑰匙圈憑證 → 乾淨的 error frame，不是 panic/卡住 ──
+//
+// Codex 路徑的 `factory::build` 會呼叫 `get_valid_codex_oauth_token`，那會
+// 讀（必要時刷新並回存）使用者真實的 OS 鑰匙圈。這支測試不能像
+// `start_bridge` 幫 OpenAI 假上游那樣塞一組假憑證進去：Codex 的 refresh
+// token 是會輪替的真實憑證，測試環境沒有、也不該偽造一個寫進使用者的
+// 鑰匙圈。所以這裡只驗證「找不到憑證」這條乾淨的錯誤路徑——這仍然有
+// 價值：證明了路由到 Codex kind、factory 分派、`AiError::NotConfigured`
+// 包裝成 Anthropic 錯誤 frame 全部正確；驗不到的是真的打上游成功的那條
+// 路徑，那一層留給 `bridge_codex_upstream.rs` 的 adapter 測試與手動端到端
+// 驗收（見 M2 計畫 Task 6）。
+//
+// provider_id 用一個不會撞到真實供應商設定的字串。`SecretStore::get`
+// 對鑰匙圈裡不存在的 key 回 `Ok(None)`（見 secret/mod.rs 的 `NoEntry` 分
+// 支），不會 panic 也不會寫入任何東西——整支測試全程只有讀，沒有
+// `set`/`delete`。
+#[tokio::test]
+async fn codex_provider_without_credentials_returns_a_clean_error_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = ConfigStore::new_at(dir.path().join("config.toml"));
+    config
+        .update(|cfg| {
+            cfg.claude_bridge.sonnet = Some(TierMapping {
+                provider_id: "e2e-codex-no-creds".into(),
+                model: "gpt-5-codex".into(),
+            });
+            cfg.providers.push(ProviderConfig {
+                id: "e2e-codex-no-creds".into(),
+                display_name: "Codex (no creds)".into(),
+                provider_type: ProviderType::Codex,
+                base_url: None,
+                oauth_client_id: None,
+                model: "gpt-5-codex".into(),
+                supports_json_mode: false,
+                auth_method: Some("oauth".into()),
+            });
+        })
+        .expect("寫入暫存 config 不應失敗");
+
+    let bridge = BridgeState::new();
+    let port = free_port().await;
+    bridge
+        .start(Arc::new(config), Arc::new(SecretStore::new()), TOKEN.to_string(), port)
+        .await
+        .expect("bridge 啟動不應失敗");
+    let base = format!("http://127.0.0.1:{port}");
+
+    let resp = post_messages(&base, Some(TOKEN), &simple_request()).await;
+    // `build()` 是在 SSE stream 裡才被 await 的（見 stream.rs），headers 早就
+    // 送出 200 了，所以跟 `upstream_500_becomes_an_anthropic_shaped_error_frame`
+    // 一樣：錯誤要用 SSE error frame 表達，不是把狀態碼改掉。
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+    let frames = collect_content_frames(resp).await;
+    assert!(!frames.is_empty(), "找不到憑證，至少要收到一個 error frame");
+    let (event, data) = &frames[0];
+    assert_eq!(event, "error", "第一個 frame 應該就是 error（沒有機會先送 message_start）");
+    assert_eq!(data["type"], "error");
+    assert_eq!(data["error"]["type"], "invalid_request_error");
+
+    bridge.stop();
+}
