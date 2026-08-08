@@ -62,7 +62,10 @@ impl AntigravityClient {
         Self { access_token, project_id, model, base_url, client: reqwest::Client::new() }
     }
 
-    fn generate_content_url(&self) -> String {
+    /// pub（非 private）是 M3 探勘測試需要的最小可見度提升——見
+    /// antigravity_probe.rs（比照 M2 對 CodexClient::responses_url 的做法）。
+    /// 純粹放寬可見度，行為不變。
+    pub fn generate_content_url(&self) -> String {
         format!("{}/v1internal:streamGenerateContent?alt=sse", self.base_url.trim_end_matches('/'))
     }
 
@@ -75,7 +78,10 @@ impl AntigravityClient {
         format!("antigravity/ide/{ANTIGRAVITY_IDE_VERSION} darwin/arm64")
     }
 
-    fn apply_headers(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    /// pub（非 private）是 M3 探勘測試需要的最小可見度提升——見
+    /// antigravity_probe.rs（比照 M2 對 CodexClient::apply_headers 的做法）。
+    /// 純粹放寬可見度，行為不變。
+    pub fn apply_headers(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         builder
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
@@ -280,7 +286,11 @@ struct GeminiUsageMetadata {
 }
 
 /// Build the Antigravity `streamGenerateContent` request envelope.
-pub(crate) fn build_request_body(model: &str, project_id: &str, req: &GenerateRequest) -> serde_json::Value {
+///
+/// pub（非 pub(crate)）是 M3 探勘測試需要的最小可見度提升——見
+/// antigravity_probe.rs（比照 M2 對 codex::build_request_body 的做法）。
+/// 純粹放寬可見度，行為不變。
+pub fn build_request_body(model: &str, project_id: &str, req: &GenerateRequest) -> serde_json::Value {
     // Any {role:"system",...} message injected directly into history (see
     // this file's module doc) is folded into systemInstruction rather than
     // emitted as a contents turn — Gemini's contents array only supports

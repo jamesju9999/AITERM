@@ -220,7 +220,11 @@ fn store_refreshed_secrets(
 /// minutes of expiry — a longer lead than Anthropic/Codex's 5 minutes since
 /// Google's refresh tokens don't rotate, so there's no "stale refresh token"
 /// risk to hurry around) plus the account's onboarded Cloud Code project id.
-async fn get_valid_google_oauth_token(provider_id: &str, secrets: &SecretStore) -> Result<(String, String), AiError> {
+///
+/// pub（非 private）是 M3 探勘測試需要的最小可見度提升——src-tauri/tests/
+/// 下的整合測試是獨立 crate。純粹放寬可見度，行為不變。見
+/// antigravity_probe.rs（比照 M2 對 `get_valid_codex_oauth_token` 的做法）。
+pub async fn get_valid_google_oauth_token(provider_id: &str, secrets: &SecretStore) -> Result<(String, String), AiError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
