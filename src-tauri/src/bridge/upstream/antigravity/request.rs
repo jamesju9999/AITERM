@@ -37,7 +37,7 @@ pub fn build_body(
         .messages
         .iter()
         .filter_map(|m| {
-            let role = if m.role == "assistant" { "model" } else { "user" };
+            let role = crate::ai::antigravity::gemini_role(&m.role);
             let parts = build_parts(&parse_content(&m.content), tool_meta, &call_names);
             // 一個 turn 的區塊全被丟棄（例如只有一個沒帶文字的 thinking
             // 區塊）就不送空 parts 的 turn——那不是合法的 Gemini turn。

@@ -285,6 +285,17 @@ struct GeminiUsageMetadata {
     candidates_token_count: u32,
 }
 
+/// Map a chat role to Gemini's native role scheme.
+///
+/// Gemini's `contents` array only accepts `"user"` or `"model"` — there is
+/// no `"system"`/`"developer"` role slot (see this file's module doc).
+/// `"assistant"` maps to `"model"`; every other role (including `"system"`,
+/// which callers should fold into `systemInstruction` before reaching this
+/// function — see `build_request_body` below) maps to `"user"`.
+pub fn gemini_role(role: &str) -> &'static str {
+    if role == "assistant" { "model" } else { "user" }
+}
+
 /// Wrap a Gemini `request` payload in the Antigravity envelope.
 ///
 /// The outer fields (`project`, `requestId`, `userAgent`, `requestType`) are
@@ -330,7 +341,7 @@ pub fn build_request_body(model: &str, project_id: &str, req: &GenerateRequest) 
                 system_parts.push(text);
                 return None;
             }
-            let role = if m.role == "assistant" { "model" } else { "user" };
+            let role = gemini_role(&m.role);
             Some(serde_json::json!({ "role": role, "parts": [{ "text": text }] }))
         })
         .collect();
@@ -375,6 +386,13 @@ mod tests {
 
     fn msg(role: &str, text: &str) -> ChatMessage {
         ChatMessage { role: role.into(), content: serde_json::json!(text), tool_call_id: None, tool_calls: None }
+    }
+
+    #[test]
+    fn gemini_role_maps_assistant_to_model_and_everything_else_to_user() {
+        assert_eq!(gemini_role("assistant"), "model");
+        assert_eq!(gemini_role("user"), "user");
+        assert_eq!(gemini_role("system"), "user");
     }
 
     #[test]
