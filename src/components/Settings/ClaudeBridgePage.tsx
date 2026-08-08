@@ -35,8 +35,9 @@ const SUPPORTED_TYPES = new Set([
 ]);
 
 function isSupported(p: ProviderInfo): boolean {
-  // google-ai 的 oauth 模式走 Antigravity（M3）；API key 模式等同 OpenAI 相容端點。
-  if (p.provider_type === "google-ai") return p.auth_method !== "oauth";
+  // google-ai 兩種模式現在都支援：oauth 走 Antigravity（M3），API key 模式
+  // 等同 OpenAI 相容端點。
+  if (p.provider_type === "google-ai") return true;
   return SUPPORTED_TYPES.has(p.provider_type);
 }
 

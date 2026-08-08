@@ -218,6 +218,23 @@ async fn messages_non_streaming(
             }
             Err(e) => ai_error_response(&e),
         },
+        Upstream::Antigravity(a) => match a.send(&req, &mapping.model).await {
+            Ok(UpstreamResponse::Events(mut events)) => {
+                let mut agg =
+                    MessageAggregator::new(message_id, req.model.clone(), estimate_input_tokens(&req));
+                while let Some(item) = events.next().await {
+                    match item {
+                        Ok(ev) => agg.push(ev),
+                        Err(e) => return ai_error_response(&e),
+                    }
+                }
+                Json(agg.finish()).into_response()
+            }
+            Ok(UpstreamResponse::Passthrough(_)) => {
+                json_error(StatusCode::INTERNAL_SERVER_ERROR, "api_error", "Antigravity 上游不應回 passthrough。")
+            }
+            Err(e) => ai_error_response(&e),
+        },
     }
 }
 

@@ -50,6 +50,10 @@ pub fn run(
                     use crate::bridge::upstream::BridgeUpstream;
                     c.send(&req, &mapping.model).await
                 }
+                Upstream::Antigravity(a) => {
+                    use crate::bridge::upstream::BridgeUpstream;
+                    a.send(&req, &mapping.model).await
+                }
             }
         };
         tokio::pin!(upstream_fut);

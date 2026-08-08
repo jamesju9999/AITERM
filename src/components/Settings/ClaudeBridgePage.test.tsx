@@ -115,16 +115,16 @@ describe("ClaudeBridgePage", () => {
     expect(codex).not.toBeDisabled();
   });
 
-  it("把不支援的供應商標示出來且不可選", async () => {
-    // google-ai + auth_method: oauth 走 Antigravity，M3 才支援，目前仍是
-    // 「不支援」的樣本。
+  it("Antigravity（google-ai + oauth）選項可選", async () => {
+    // M3 之後 google-ai 的 oauth 模式走 Antigravity，已無不支援的 provider
+    // type——這裡改成驗證它可選，取代 M2 時「不支援」的舊斷言。
     render(<ClaudeBridgePage />);
     const select = await screen.findByLabelText(/Opus/);
     const gemini = Array.from(select.querySelectorAll("option")).find((o) =>
       o.textContent?.includes("Gemini"),
     );
     expect(gemini).toBeDefined();
-    expect(gemini).toBeDisabled();
+    expect(gemini).not.toBeDisabled();
   });
 
   it("選了供應商就帶入它的預設模型", async () => {

@@ -13,6 +13,7 @@ use crate::secret::SecretStore;
 
 use super::tool_meta::ToolMetaCache;
 use super::upstream::anthropic::AnthropicUpstream;
+use super::upstream::antigravity::client::AntigravityUpstream;
 use super::upstream::codex::client::CodexUpstream;
 use super::upstream::openai::client::OpenAiUpstream;
 
@@ -21,6 +22,7 @@ pub enum UpstreamKind {
     OpenAi,
     Anthropic,
     Codex,
+    Antigravity,
 }
 
 /// 目前支援的上游種類；不支援的回 `None`。
@@ -40,7 +42,7 @@ pub fn kind_for(p: &ProviderConfig) -> Option<UpstreamKind> {
         // router.rs:463 的同一個判斷：oauth 走 Antigravity（M3），其餘是
         // OpenAI 相容端點。
         ProviderType::GoogleAi => match p.auth_method.as_deref() {
-            Some("oauth") => None,
+            Some("oauth") => Some(UpstreamKind::Antigravity),
             _ => Some(UpstreamKind::OpenAi),
         },
 
@@ -61,6 +63,7 @@ pub enum Upstream {
     OpenAi(OpenAiUpstream),
     Anthropic(AnthropicUpstream),
     Codex(CodexUpstream),
+    Antigravity(AntigravityUpstream),
 }
 
 /// 建立上游實例。每個請求呼叫一次。
@@ -130,6 +133,16 @@ pub async fn build(
             let base = p.base_url.clone().unwrap_or_else(|| "https://chatgpt.com".into());
             Ok(Upstream::Codex(CodexUpstream::new(base, token, account_id)))
         }
+        UpstreamKind::Antigravity => {
+            // Antigravity 每個請求都要帶 project id，跟 access token 一起由
+            // 同一個函式解析（含過期時的自動刷新），不要自己重寫。
+            let (token, project_id) =
+                crate::ai::router::get_valid_google_oauth_token(provider_id, secrets).await?;
+            // base_url 固定 https://cloudcode-pa.googleapis.com（見
+            // ai/antigravity.rs），使用者填的 base_url 只在測試時用得到。
+            let base = p.base_url.clone().unwrap_or_else(|| "https://cloudcode-pa.googleapis.com".into());
+            Ok(Upstream::Antigravity(AntigravityUpstream::new(base, token, project_id, tool_meta.clone())))
+        }
     }
 }
 
@@ -197,12 +210,15 @@ mod tests {
 
     #[test]
     fn google_ai_splits_on_auth_method() {
-        // 沿用 router.rs:463 的判斷：oauth 走 Antigravity，其餘走 OpenAI 相容。
+        // 沿用 router.rs:463 的判斷：oauth 走 Antigravity（M3），其餘走 OpenAI 相容。
         assert_eq!(
             kind_for(&provider(ProviderType::GoogleAi, None)),
             Some(UpstreamKind::OpenAi)
         );
-        assert_eq!(kind_for(&provider(ProviderType::GoogleAi, Some("oauth"))), None);
+        assert_eq!(
+            kind_for(&provider(ProviderType::GoogleAi, Some("oauth"))),
+            Some(UpstreamKind::Antigravity)
+        );
     }
 
     #[test]
