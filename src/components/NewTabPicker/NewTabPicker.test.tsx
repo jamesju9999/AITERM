@@ -76,7 +76,7 @@ describe("NewTabPicker — Claude Code tab option", () => {
     const onClose = vi.fn();
     renderPicker(onSelect, onClose);
 
-    const button = await screen.findByText("新增 Claude Code 分頁");
+    const button = await screen.findByText("Claude Code");
     await waitFor(() => expect(button.closest("button")).toBeEnabled());
     fireEvent.click(button);
 
@@ -89,7 +89,7 @@ describe("NewTabPicker — Claude Code tab option", () => {
     const onSelect = vi.fn();
     renderPicker(onSelect);
 
-    const button = await screen.findByText("新增 Claude Code 分頁");
+    const button = await screen.findByText("Claude Code");
     const buttonEl = button.closest("button")!;
     await waitFor(() => expect(buttonEl).toBeDisabled());
     expect(buttonEl.title).toBe("橋接 server 尚未啟動，請先到設定頁啟用");

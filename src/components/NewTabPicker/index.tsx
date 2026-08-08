@@ -91,7 +91,7 @@ export function NewTabPicker({ onSelect, onClose }: Props) {
         <div>
           <div className="new-tab-picker__label">{t.bridge_new_tab}</div>
           <div className="new-tab-picker__desc">
-            {bridgeRunning ? t.bridge_desc : t.bridge_new_tab_disabled_hint}
+            {bridgeRunning ? t.bridge_new_tab_desc : t.bridge_new_tab_disabled_hint}
           </div>
         </div>
       </button>

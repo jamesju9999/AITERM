@@ -14,6 +14,9 @@ import {
 } from "../../ipc/bridge";
 import "./ClaudeBridgePage.css";
 
+/** 與 `useTerminalBlocks.ts` 的判斷方式一致，避免兩處用不同的偵測。 */
+const isWindows = navigator.platform.toLowerCase().startsWith("win");
+
 /**
  * 目前支援的 provider type，與 src-tauri/src/bridge/factory.rs 的 kind_for
  * 逐項對齊：openai 系（含 openai/openai-compatible/ollama/openrouter/
@@ -106,19 +109,40 @@ export function ClaudeBridgePage() {
     }
   }, [cfg]);
 
+  /**
+   * 產生可直接貼進終端機的手動啟動命令。
+   *
+   * 必須分平台：PowerShell 不認得 POSIX 的 `VAR=value cmd` 前綴語法，會把
+   * `ANTHROPIC_BASE_URL=...` 當成指令名稱並回報「is not recognized as a name
+   * of a cmdlet」——這是使用者在 Windows 上實際撞到的。
+   *
+   * 環境變數清單與 `src-tauri/src/bridge/env.rs` 的 `bridge_envs` /
+   * `ENV_TO_REMOVE` 對應：分頁自動注入的與這裡手動貼的必須一致，否則兩條
+   * 路徑的行為會分歧。
+   */
   const manualCommand = (): string => {
     const port = status?.port ?? cfg?.port ?? 8317;
     const token = status?.token ?? "<token>";
-    return [
-      `ANTHROPIC_BASE_URL='http://127.0.0.1:${port}'`,
-      `ANTHROPIC_AUTH_TOKEN='${token}'`,
-      `ANTHROPIC_DEFAULT_OPUS_MODEL='aiterm:opus'`,
-      `ANTHROPIC_DEFAULT_SONNET_MODEL='aiterm:sonnet'`,
-      `ANTHROPIC_DEFAULT_HAIKU_MODEL='aiterm:haiku'`,
-      `API_TIMEOUT_MS=3000000`,
-      `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`,
-      `claude`,
-    ].join(" ");
+    const vars: [string, string][] = [
+      // 不能帶 /v1 後綴，Claude Code 自己會接上 /v1/messages。
+      ["ANTHROPIC_BASE_URL", `http://127.0.0.1:${port}`],
+      ["ANTHROPIC_AUTH_TOKEN", token],
+      ["ANTHROPIC_DEFAULT_OPUS_MODEL", "aiterm:opus"],
+      ["ANTHROPIC_DEFAULT_SONNET_MODEL", "aiterm:sonnet"],
+      ["ANTHROPIC_DEFAULT_HAIKU_MODEL", "aiterm:haiku"],
+      ["API_TIMEOUT_MS", "3000000"],
+      ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"],
+    ];
+    if (isWindows) {
+      return [
+        ...vars.map(([k, v]) => `$env:${k} = "${v}"`),
+        // 使用者環境本來就有的 API key 是難查的干擾源（症狀是「設了橋接卻
+        // 打到真的 Anthropic」），跟分頁注入時的 env_removals 一致。
+        `Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue`,
+        `claude`,
+      ].join("\n");
+    }
+    return [...vars.map(([k, v]) => `${k}='${v}'`), `ANTHROPIC_API_KEY=`, `claude`].join(" ");
   };
 
   if (!cfg) return <div className="bridge-page" />;
