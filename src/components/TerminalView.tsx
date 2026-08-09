@@ -308,15 +308,28 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   );
 
   /**
-   * 游標被應用程式藏起來時（見 cursorHidden），把 helper textarea 釘在終端左下角，
-   * 也就是全螢幕 TUI 放輸入框的位置。只在 alternate buffer 生效——一般 shell 底下
-   * 短暫藏游標（spinner、進度條）時真游標仍是可信的輸入位置，不該亂動。
+   * 游標停在終端的最後一欄。那是「繪製到此結束」的殘留（寫滿一列後的 pending
+   * wrap），不是應用程式擺出來的 caret。
+   */
+  const [cursorAtLastColumn, setCursorAtLastColumn] = useState(false);
+
+  /**
+   * 要不要把 xterm 的組字 UI 釘走，不跟著 buffer 游標。
    *
-   * 位置用 CSS 變數傳給 TerminalView.css 的規則，而不是直接寫 inline style：
-   * xterm 每次繪製都會覆寫 textarea 的 style.left/top，只有 `!important` 蓋得過，
+   * 三個條件缺一不可，各自擋掉一種誤判：
+   * - alternate buffer：一般 shell 的游標永遠可信，不該碰。
+   * - 游標被藏起來：vim 這類會顯示游標的 TUI 自己就把游標放對位置了。
+   * - 游標在最後一欄：這才是真正區分「壞掉」與「正常」的訊號。實測 Windows
+   *   壞掉時一律是 col=95/96、col=81/82；macOS 正常時是 col=2/80，正好在
+   *   Claude Code 輸入框的 `❯ ` 後面。單看「有沒有藏起來」分不出來——兩個
+   *   平台閒置時都停在 ESC[?25l。
+   *
+   * 釘住的位置用 CSS 變數傳給 TerminalView.css，而不是直接寫 inline style：
+   * xterm 每次繪製都會覆寫組字元素的 style.left/top，只有 `!important` 蓋得過，
    * 而 `!important` 必須寫在樣式表裡。
    */
-  const parkIme = isAlternateBuffer && cursorHidden;
+  const parkIme = isAlternateBuffer && cursorHidden && cursorAtLastColumn;
+
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -873,16 +886,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     // 可能被 PTY chunk 邊界切開，字串比對會漏。
     // ?25 只是眾多 DEC private mode 之一（?1049、?2004… 都會走進這裡）。
     //
-    // ESC[?25h 一到就立刻採信：那是應用程式在說「游標現在在該在的地方」，
-    // 這時 xterm 的組字 UI 跟著游標走就是對的，不該再去釘位。
-    //
-    // 反方向才需要去抖。實測（pty 錄下 Claude Code 的原始位元組）每一幀都是
+    // ESC[?25h 一到就立刻採信：那是應用程式在說「游標現在在該在的地方」。
+    // 反方向才去抖：實測（pty 錄下 Claude Code 的原始位元組）每一幀都是
     //   ESC[?25l → 重畫 → ESC[<row>;<col>H → ESC[?25h
-    // vim 之類也是同一套。所以「藏了一下下」是每個 TUI 的正常重繪行為，不代表
-    // 游標不可信；只有連續藏著超過門檻，才是真的把游標交出去不管了。
+    // vim 之類也是同一套，所以「藏了一下下」是 TUI 正常的重繪行為，不代表游標
+    // 不可信；連續藏著超過門檻才算真的把游標交出去不管了。
     //
-    // Windows 上 ConPTY 會停在 ESC[?25l（診斷面板的 tog 是奇數就是證據），
-    // 游標因此留在最後繪製結束的位置——那才是需要釘位的情形。
+    // 注意：這個旗標**不足以**判斷該不該釘 IME 位置。實測 macOS 閒置時同樣停在
+    // ESC[?25l，兩個平台都是隱藏——真正能區分的是游標欄位，見 cursorAtLastColumn。
     const HIDDEN_SETTLE_MS = 500;
     let visibilityTimer: ReturnType<typeof setTimeout> | null = null;
     let rawHidden = false;
@@ -896,6 +907,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       }
       return false;
     };
+    // 見 cursorAtLastColumn 的註解。onCursorMove 觸發得很頻繁，但值沒變時
+    // React 會自行略過重繪，不必另外節流。
+    const trackCursorColumn = () => {
+      const t = termRef.current;
+      if (t) setCursorAtLastColumn(t.buffer.active.cursorX >= t.cols - 1);
+    };
+    const cursorMove = term.onCursorMove(trackCursorColumn);
+
     const decSet = term.parser.registerCsiHandler({ prefix: "?", final: "h" }, trackCursorVisibility(true));
     const decReset = term.parser.registerCsiHandler({ prefix: "?", final: "l" }, trackCursorVisibility(false));
 
@@ -1226,6 +1245,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       liveFrame?.removeEventListener("scroll", pinLiveFrameScroll);
       ta?.removeEventListener("compositionstart", onCompositionStart);
       ta?.removeEventListener("compositionend", onCompositionEnd);
+      cursorMove.dispose();
       decSet.dispose();
       decReset.dispose();
       if (visibilityTimer) clearTimeout(visibilityTimer);
