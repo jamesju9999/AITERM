@@ -325,7 +325,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           `frame x=${fr ? Math.round(fr.x) : "-"}..${fr ? Math.round(fr.right) : "-"}`,
           // fit 現在會算出幾欄？若跟實際 cols 不同，代表 fit 沒被套用（RO/時序問題）；
           // 若相同，代表 fit 算出來的就是過寬的值（量測基準錯）。
-          `fit   ${(() => { try { const p = fitAddonRef.current?.proposeDimensions(); return p ? `${p.cols}x${p.rows}` : "-"; } catch { return "err"; } })()}  cell=${Math.round((cellHeightPx || 0) * 10) / 10}`,
+          `fit   ${(() => { try { const p = fitAddonRef.current?.proposeDimensions(); return p ? `${p.cols}x${p.rows}` : "-"; } catch { return "err"; } })()}  cellW=${(() => { const d = (termRef.current as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { width?: number } } } } } } | null)?._core?._renderService?.dimensions?.css?.cell?.width; return d ? Math.round(d * 10) / 10 : "-"; })()}`,
         ].join("\n"),
       );
     };
