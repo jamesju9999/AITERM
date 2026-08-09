@@ -323,6 +323,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           // textarea 的視窗座標：IME 組字框就畫在這裡。x 若超出 frame 右緣即為病因。
           `ta    x=${r ? Math.round(r.x) : "-"} y=${r ? Math.round(r.y) : "-"} w=${r ? Math.round(r.width) : "-"}`,
           `frame x=${fr ? Math.round(fr.x) : "-"}..${fr ? Math.round(fr.right) : "-"}`,
+          // fit 現在會算出幾欄？若跟實際 cols 不同，代表 fit 沒被套用（RO/時序問題）；
+          // 若相同，代表 fit 算出來的就是過寬的值（量測基準錯）。
+          `fit   ${(() => { try { const p = fitAddonRef.current?.proposeDimensions(); return p ? `${p.cols}x${p.rows}` : "-"; } catch { return "err"; } })()}  cell=${Math.round((cellHeightPx || 0) * 10) / 10}`,
         ].join("\n"),
       );
     };
@@ -1371,7 +1374,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           不受任何容器的 clip/scroll 影響，確保組字當下一定看得到。 */}
       <pre
         style={{
-          position: "fixed", right: 6, top: 6, zIndex: 99999,
+          position: "fixed", left: 6, bottom: 6, zIndex: 99999,
           margin: 0, padding: "6px 8px", pointerEvents: "none",
           font: "11px/1.35 ui-monospace, monospace", whiteSpace: "pre",
           color: "#9ef", background: "rgba(0,0,0,0.82)",

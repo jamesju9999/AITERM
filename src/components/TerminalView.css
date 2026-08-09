@@ -14,7 +14,11 @@
   background: #0c0c0c;
   padding: 4px;
   box-sizing: border-box;
-  overflow: hidden;
+  /* clip 不是 hidden：hidden 仍是捲動容器，瀏覽器會為了顯示取得焦點的
+     helper-textarea 而捲動它。實測（診斷面板）量到 host 865/939/70 ——
+     內容比宿主寬 74px，且 scrollLeft 真的被捲到 70，整個畫面因此左移，
+     注音組字框跟著 textarea 出現在右側。clip 讓 scrollIntoView 跳過這個框。 */
+  overflow: clip;
 }
 
 .aiterm-terminal-root .xterm {
