@@ -254,6 +254,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
    * 因此跑到右上角。見 `--ime-park-top` 的效果與 TerminalView.css 的對應規則。
    */
   const [cursorHidden, setCursorHidden] = useState(false);
+  /** ⚠️ 臨時診斷用：ESC[?25h/l 的原始切換次數，用來分辨「一直藏著」跟「每幀閃一下」。 */
+  const cursorToggleCountRef = useRef(0);
 
   const fitAddonRef = useRef<FitAddon | null>(null);
 
@@ -323,7 +325,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         el ? `${el.clientWidth}/${el.scrollWidth}/${Math.round(el.scrollLeft)}` : "-";
       setDiag(
         [
-          `cols×rows ${term?.cols ?? "-"}×${term?.rows ?? "-"}  alt=${isAlternateBuffer ? 1 : 0}  comp=${isComposingRef.current ? 1 : 0}  hid=${cursorHidden ? 1 : 0}`,
+          `cols×rows ${term?.cols ?? "-"}×${term?.rows ?? "-"}  alt=${isAlternateBuffer ? 1 : 0}  comp=${isComposingRef.current ? 1 : 0}  hid=${cursorHidden ? 1 : 0}  tog=${cursorToggleCountRef.current}`,
+          // park=class 真的掛上了嗎；top=釘住的位置；hy=host 在視窗中的 y。
+          // ta.y 應該等於 hy+top，對不上就是釘位算錯而不是 IME 沒跟。
+          `park=${host?.classList.contains("aiterm-terminal-root--ime-park") ? 1 : 0} top=${host?.style.getPropertyValue("--ime-park-top") || "-"} hy=${host ? Math.round(host.getBoundingClientRect().y) : "-"}`,
           `cursor col=${term?.buffer.active.cursorX ?? "-"} row=${term?.buffer.active.cursorY ?? "-"}`,
           // client/scroll/scrollLeft —— scrollWidth > clientWidth 代表有水平溢出，
           // scrollLeft > 0 代表這一層真的被捲動了（誰在捲就看這個）。
@@ -361,18 +366,26 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       host.style.removeProperty("--ime-park-top");
       return;
     }
+    // 高度用 rows × 列高算，不用 .xterm-screen.clientHeight：host 的 ResizeObserver
+    // 先於 xterm 自己的 resize 觸發（fit 還被 debounce 120ms），量到的是改變前的
+    // 舊高度，而且之後不會再有第二次 RO 通知去修正它——實測就這樣把 textarea 釘在
+    // 畫面中間（量到 ta y=304，約第 12 列，剛好是非全螢幕時 220px 的殘值）。
     const apply = () => {
-      const cellHeight = (termRef.current as unknown as {
+      const term = termRef.current;
+      const cellHeight = (term as unknown as {
         _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } };
       } | null)?._core?._renderService?.dimensions?.css?.cell?.height;
-      const screen = host.querySelector<HTMLElement>(".xterm-screen");
-      if (!screen || !cellHeight) return;
-      host.style.setProperty("--ime-park-top", `${Math.max(0, screen.clientHeight - cellHeight)}px`);
+      if (!term || !cellHeight) return;
+      host.style.setProperty("--ime-park-top", `${Math.max(0, (term.rows - 1) * cellHeight)}px`);
     };
     apply();
-    const ro = new ResizeObserver(apply);
-    ro.observe(host);
-    return () => ro.disconnect();
+    // 剛切進 alternate buffer 時列高可能還沒量好，補一次。
+    const retry = setTimeout(apply, 300);
+    const disposable = termRef.current?.onResize(apply);
+    return () => {
+      clearTimeout(retry);
+      disposable?.dispose();
+    };
   }, [parkIme]);
 
   // 終端機的 bell（\x07）。CLI 工具停下來等使用者回答時多半會敲一次——
@@ -900,13 +913,20 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     // DECTCEM（ESC[?25h / ESC[?25l）。回傳 false 代表「我只是旁聽」，xterm 自己
     // 的 handler 仍會照常執行。用 parser handler 而不是自己掃位元組，是因為序列
     // 可能被 PTY chunk 邊界切開，字串比對會漏。
-    // ?25 只是眾多 DEC private mode 之一（?1049、?2004… 都會走進這裡），而
-    // TUI 每一幀都可能重送一次，所以先用 ref 擋掉沒變化的通知，避免每幀 setState。
-    const cursorHiddenRef = { current: false };
+    // ?25 只是眾多 DEC private mode 之一（?1049、?2004… 都會走進這裡）。
+    //
+    // 非對稱去抖：要連續藏 150ms 才算「這支 TUI 自己畫游標」，但要連續顯示 1 秒
+    // 才解除。vim 這類每次重繪都會 ESC[?25l → 畫 → ESC[?25h，前者擋掉誤判；反過來
+    // 若 TUI 每幀都閃一下 ?25h，後者確保釘住的狀態不會在使用者組字到一半時消失
+    // ——IME 組字框的位置是 Windows 在組字開始時決定的，中途換位置它不會跟。
+    let visibilityTimer: ReturnType<typeof setTimeout> | null = null;
+    let rawHidden = false;
     const trackCursorVisibility = (visible: boolean) => (params: (number | number[])[]) => {
-      if (params.some((p) => p === 25) && cursorHiddenRef.current === visible) {
-        cursorHiddenRef.current = !visible;
-        setCursorHidden(!visible);
+      if (params.some((p) => p === 25) && rawHidden === visible) {
+        rawHidden = !visible;
+        cursorToggleCountRef.current += 1;
+        if (visibilityTimer) clearTimeout(visibilityTimer);
+        visibilityTimer = setTimeout(() => setCursorHidden(!visible), visible ? 1000 : 150);
       }
       return false;
     };
@@ -1242,6 +1262,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       ta?.removeEventListener("compositionend", onCompositionEnd);
       decSet.dispose();
       decReset.dispose();
+      if (visibilityTimer) clearTimeout(visibilityTimer);
       if (unlistenData) unlistenData();
       if (unlistenStream) unlistenStream.then((f: () => void) => f());
       const id = sessionRef.current;
