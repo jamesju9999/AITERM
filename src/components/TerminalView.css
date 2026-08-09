@@ -26,6 +26,18 @@
   height: 100%;
 }
 
+/* 全螢幕 TUI 自己畫游標、把真游標關掉（ESC[?25l）時，xterm 的 buffer 游標會停在
+   最後一次繪製結束的位置——Claude Code 實測停在狀態列右緣（96 欄的終端量到
+   cursor col=95），跟使用者眼中的輸入框無關。IME 組字框畫在 helper textarea 上、
+   textarea 又跟著 buffer 游標，注音待選字因此跑到右上角。這種情況下沒有任何可信
+   的游標位置可用，固定停在左下角（TUI 輸入框的慣例位置）比跟著假游標亂跑好。
+   `--ime-park-top` 由 TerminalView.tsx 依實際列高算出；xterm 每次繪製都會覆寫
+   textarea 的 inline left/top，所以這裡必須用 !important。 */
+.aiterm-terminal-root--ime-park .xterm-helper-textarea {
+  top: var(--ime-park-top, 0) !important;
+  left: 0 !important;
+}
+
 /* Cosmetic only: xterm's own .xterm-viewport still scrolls normally (wheel,
    trackpad, PageUp/Down) — this just hides the native scrollbar thumb/track
    so it doesn't flash in the live pane during full-screen TUI apps. */

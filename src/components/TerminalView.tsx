@@ -244,6 +244,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const searchInputRef = useRef<HTMLInputElement>(null);
   /** IME（注音等）組字進行中。見寫入路徑的 isWindows 分支。 */
   const isComposingRef = useRef(false);
+  /**
+   * 應用程式是否用 ESC[?25l 把游標藏起來（DECTCEM）。
+   *
+   * Claude Code 這類 Ink/TUI 會自己畫一個反白方塊當游標、把真游標關掉，於是
+   * xterm 的 buffer 游標就停在「最後一次繪製結束的地方」——實測是狀態列右緣
+   * （96 欄的終端量到 cursor col=95），跟使用者眼中的輸入框毫無關係。
+   * IME 組字框畫在 helper textarea 上、textarea 又跟著 buffer 游標，注音待選字
+   * 因此跑到右上角。見 `--ime-park-top` 的效果與 TerminalView.css 的對應規則。
+   */
+  const [cursorHidden, setCursorHidden] = useState(false);
 
   const fitAddonRef = useRef<FitAddon | null>(null);
 
@@ -313,7 +323,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         el ? `${el.clientWidth}/${el.scrollWidth}/${Math.round(el.scrollLeft)}` : "-";
       setDiag(
         [
-          `cols×rows ${term?.cols ?? "-"}×${term?.rows ?? "-"}  alt=${isAlternateBuffer ? 1 : 0}  composing=${isComposingRef.current ? 1 : 0}`,
+          `cols×rows ${term?.cols ?? "-"}×${term?.rows ?? "-"}  alt=${isAlternateBuffer ? 1 : 0}  comp=${isComposingRef.current ? 1 : 0}  hid=${cursorHidden ? 1 : 0}`,
           `cursor col=${term?.buffer.active.cursorX ?? "-"} row=${term?.buffer.active.cursorY ?? "-"}`,
           // client/scroll/scrollLeft —— scrollWidth > clientWidth 代表有水平溢出，
           // scrollLeft > 0 代表這一層真的被捲動了（誰在捲就看這個）。
@@ -332,7 +342,38 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     tick();
     const id = setInterval(tick, 150);
     return () => clearInterval(id);
-  }, [isAlternateBuffer]);
+  }, [isAlternateBuffer, cursorHidden]);
+
+  /**
+   * 游標被應用程式藏起來時（見 cursorHidden），把 helper textarea 釘在終端左下角，
+   * 也就是全螢幕 TUI 放輸入框的位置。只在 alternate buffer 生效——一般 shell 底下
+   * 短暫藏游標（spinner、進度條）時真游標仍是可信的輸入位置，不該亂動。
+   *
+   * 位置用 CSS 變數傳給 TerminalView.css 的規則，而不是直接寫 inline style：
+   * xterm 每次繪製都會覆寫 textarea 的 style.left/top，只有 `!important` 蓋得過，
+   * 而 `!important` 必須寫在樣式表裡。
+   */
+  const parkIme = isAlternateBuffer && cursorHidden;
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    if (!parkIme) {
+      host.style.removeProperty("--ime-park-top");
+      return;
+    }
+    const apply = () => {
+      const cellHeight = (termRef.current as unknown as {
+        _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } };
+      } | null)?._core?._renderService?.dimensions?.css?.cell?.height;
+      const screen = host.querySelector<HTMLElement>(".xterm-screen");
+      if (!screen || !cellHeight) return;
+      host.style.setProperty("--ime-park-top", `${Math.max(0, screen.clientHeight - cellHeight)}px`);
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, [parkIme]);
 
   // 終端機的 bell（\x07）。CLI 工具停下來等使用者回答時多半會敲一次——
   // 這是全螢幕 TUI（Claude Code、vim、lazygit）執行期間唯一可用的訊號，
@@ -856,6 +897,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     ta?.addEventListener("compositionstart", onCompositionStart);
     ta?.addEventListener("compositionend", onCompositionEnd);
 
+    // DECTCEM（ESC[?25h / ESC[?25l）。回傳 false 代表「我只是旁聽」，xterm 自己
+    // 的 handler 仍會照常執行。用 parser handler 而不是自己掃位元組，是因為序列
+    // 可能被 PTY chunk 邊界切開，字串比對會漏。
+    const trackCursorVisibility = (visible: boolean) => (params: (number | number[])[]) => {
+      if (params.some((p) => p === 25)) setCursorHidden(!visible);
+      return false;
+    };
+    const decSet = term.parser.registerCsiHandler({ prefix: "?", final: "h" }, trackCursorVisibility(true));
+    const decReset = term.parser.registerCsiHandler({ prefix: "?", final: "l" }, trackCursorVisibility(false));
+
     const decoder = new TextDecoder("utf-8");
 
     let unlistenData: (() => void) | null = null;
@@ -1183,6 +1234,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       liveFrame?.removeEventListener("scroll", pinLiveFrameScroll);
       ta?.removeEventListener("compositionstart", onCompositionStart);
       ta?.removeEventListener("compositionend", onCompositionEnd);
+      decSet.dispose();
+      decReset.dispose();
       if (unlistenData) unlistenData();
       if (unlistenStream) unlistenStream.then((f: () => void) => f());
       const id = sessionRef.current;
@@ -1536,7 +1589,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         >
           <div
             ref={hostRef}
-            className="aiterm-terminal-root"
+            className={parkIme ? "aiterm-terminal-root aiterm-terminal-root--ime-park" : "aiterm-terminal-root"}
             style={{
               height: isAlternateBuffer ? "100%" : "220px",
               width: "100%",
