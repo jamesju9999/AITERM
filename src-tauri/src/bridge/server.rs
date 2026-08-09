@@ -75,7 +75,58 @@ pub fn status_for(err: &AiError) -> u16 {
 fn error_text(err: &AiError) -> String {
     // AiError 每個變體都用 thiserror 的 #[error(...)] 定義了 Display，
     // 比逐變體反序列化欄位更省事，且新增變體會自動涵蓋（不會漏字串）。
-    err.to_string()
+    //
+    // 例外是 RateLimit：它的 Display 只有一句 "rate limit exceeded"，把上游的
+    // body 整個丟掉。但「每分鐘打太多次」和「方案額度用完、還有 17 天才重置」
+    // 對使用者的意義完全相反——後者重試毫無意義。實測 Codex 回的是
+    //   {"error":{"type":"usage_limit_reached","plan_type":"free",
+    //             "resets_in_seconds":1460795,...}}
+    // 而我們只轉一句 "rate limit exceeded"，害人往速率限制的方向猜了半天。
+    match err {
+        AiError::RateLimit { body: Some(body), .. } => match upstream_detail(body) {
+            Some(detail) => format!("{err}: {detail}"),
+            // 解析不出來就原樣附上（截斷）——看得懂總比一句空話好。
+            None => format!("{err}: {}", truncate_chars(body, 300)),
+        },
+        _ => err.to_string(),
+    }
+}
+
+/// 從上游錯誤 body 取出人看得懂的說明。
+///
+/// OpenAI / Anthropic / Codex / Gemini 的錯誤都長成 `{"error":{"message":...}}`，
+/// 所以只認這一個形狀；認不出來由呼叫端退回原樣附上。
+fn upstream_detail(body: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(body).ok()?;
+    let err = v.get("error")?;
+    let mut out = err.get("message").and_then(Value::as_str)?.to_string();
+
+    // 免費方案撞到的是額度而不是速率，這個欄位是關鍵線索。
+    if let Some(plan) = err.get("plan_type").and_then(Value::as_str) {
+        out.push_str(&format!(" (plan: {plan})"));
+    }
+    // 給「還要等多久」而不是 epoch 秒數：使用者要判斷的是該不該重試。
+    if let Some(secs) = err.get("resets_in_seconds").and_then(Value::as_u64) {
+        out.push_str(&format!(" (resets in {})", humanize_duration(secs)));
+    }
+    Some(out)
+}
+
+fn humanize_duration(secs: u64) -> String {
+    match secs {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 86400 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86400),
+    }
+}
+
+/// 依字元截斷，不是位元組——上游訊息可能含非 ASCII，切在多位元組字元中間會 panic。
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    s.chars().take(max).collect::<String>() + "…"
 }
 
 fn error_kind(err: &AiError) -> &'static str {
@@ -323,6 +374,61 @@ pub fn error_frame_for(err: &AiError) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// 實測從 Codex 收到的 body（見 AITerm.log）。免費方案額度用完、17 天後重置，
+    /// 這跟「每分鐘打太多次」完全是兩回事，訊息必須說得出差別。
+    #[test]
+    fn rate_limit_surfaces_codex_usage_limit_body() {
+        let err = AiError::RateLimit {
+            retry_after: None,
+            body: Some(
+                r#"{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"free","resets_at":1787744844,"eligible_promo":null,"resets_in_seconds":1460795}}"#
+                    .to_string(),
+            ),
+        };
+        let text = error_text(&err);
+        assert!(text.contains("The usage limit has been reached"), "實際：{text}");
+        assert!(text.contains("plan: free"), "實際：{text}");
+        assert!(text.contains("resets in 16d"), "實際：{text}");
+    }
+
+    #[test]
+    fn rate_limit_without_body_keeps_plain_display() {
+        let err = AiError::RateLimit { retry_after: None, body: None };
+        assert_eq!(error_text(&err), "rate limit exceeded");
+    }
+
+    /// 認不出形狀就原樣附上——看得懂總比一句空話好。
+    #[test]
+    fn rate_limit_with_unparseable_body_falls_back_to_raw() {
+        let err = AiError::RateLimit {
+            retry_after: None,
+            body: Some("<html>502 Bad Gateway</html>".to_string()),
+        };
+        assert!(error_text(&err).contains("502 Bad Gateway"));
+    }
+
+    /// 上游訊息可能含非 ASCII，依位元組截斷會切在多位元組字元中間而 panic。
+    #[test]
+    fn truncate_is_char_safe() {
+        let long = "額".repeat(400);
+        let out = truncate_chars(&long, 300);
+        assert_eq!(out.chars().count(), 301); // 300 個字 + 省略號
+    }
+
+    #[test]
+    fn humanize_duration_picks_a_readable_unit() {
+        assert_eq!(humanize_duration(45), "45s");
+        assert_eq!(humanize_duration(600), "10m");
+        assert_eq!(humanize_duration(7200), "2h");
+        assert_eq!(humanize_duration(1460795), "16d");
+    }
+
+    /// 其他變體不受影響。
+    #[test]
+    fn other_variants_keep_display_text() {
+        assert_eq!(error_text(&AiError::AuthFailed), "authentication failed (check your API key)");
+    }
     use super::*;
     use serde_json::json;
 
