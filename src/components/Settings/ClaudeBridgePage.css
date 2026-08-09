@@ -71,41 +71,78 @@
   outline: none;
 }
 
-.bridge-tier {
-  align-items: center;
-  display: flex;
-  gap: 12px;
-  margin-bottom: 12px;
+.bridge-section {
+  margin-bottom: 28px;
 }
 
-.bridge-tier label {
+.bridge-section h3 {
+  border-bottom: 1px solid #232323;
   color: #ccc;
-  flex-shrink: 0;
   font-size: 13px;
-  min-width: 220px;
+  font-weight: 600;
+  margin: 0 0 12px;
+  padding-bottom: 6px;
 }
 
-.bridge-tier select,
-.bridge-tier input {
+.bridge-section-desc {
+  color: #777;
+  font-size: 12px;
+  margin: -4px 0 14px;
+}
+
+/* 三欄對齊，而且模型欄要能跟著面板縮。前一版每列各自 flex，
+   標籤 min-width:220px + select min-width:200px + 不會縮的 input
+   加起來撐破面板，整個設定頁被推出一條水平捲軸、模型 ID 尾巴看不到。
+   minmax(0, …) 是關鍵：grid 項目預設 min-width:auto，不寫這個
+   input 一樣不肯縮。 */
+.bridge-tier-grid {
+  align-items: center;
+  column-gap: 12px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) minmax(0, 1.2fr);
+  row-gap: 10px;
+}
+
+.bridge-tier-head {
+  color: #777;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.bridge-tier-name {
+  color: #ccc;
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  gap: 2px;
+  padding-right: 8px;
+}
+
+.bridge-tier-hint {
+  color: #777;
+  font-size: 11px;
+}
+
+.bridge-tier-grid select,
+.bridge-tier-grid input {
   background: #1a1a1a;
   border: 1px solid #2e2e2e;
   border-radius: 6px;
   color: #e6e6e6;
   font-size: 13px;
+  min-width: 0;
   padding: 6px 10px;
+  width: 100%;
 }
 
-.bridge-tier select {
-  min-width: 200px;
-}
-
-.bridge-tier select:focus,
-.bridge-tier input:focus {
+.bridge-tier-grid select:focus,
+.bridge-tier-grid input:focus {
   border-color: #2d5aab;
   outline: none;
 }
 
-.bridge-tier option:disabled {
+.bridge-tier-grid option:disabled {
   color: #666;
 }
 

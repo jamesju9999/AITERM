@@ -147,6 +147,21 @@ describe("ClaudeBridgePage", () => {
     await waitFor(() => expect(bridgeSetConfig).toHaveBeenCalledTimes(1));
   });
 
+  it("存檔後按鈕顯示已儲存，再改動設定就撤回", async () => {
+    const user = userEvent.setup();
+    render(<ClaudeBridgePage />);
+    const save = await screen.findByRole("button", { name: /儲存|Save/ });
+    await waitFor(() => expect(save).toBeEnabled());
+    await user.click(save);
+    await screen.findByRole("button", { name: /已儲存|Saved/ });
+
+    // 一改動就不該再宣稱存過了——否則按鈕會對著已經不同的內容說「已儲存」。
+    await user.selectOptions(await screen.findByLabelText(/Haiku/), "qwen");
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /已儲存|Saved/ })).not.toBeInTheDocument(),
+    );
+  });
+
   it("啟動失敗時顯示錯誤而不是拋例外", async () => {
     vi.mocked(bridgeStatus).mockResolvedValue({
       running: false,

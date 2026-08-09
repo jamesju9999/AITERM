@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import type { Translations } from "../../lib/i18n";
@@ -61,6 +61,17 @@ function tierLabel(t: Translations, tier: TierKey): string {
   }
 }
 
+function tierHint(t: Translations, tier: TierKey): string {
+  switch (tier) {
+    case "opus":
+      return t.bridge_tier_opus_hint;
+    case "sonnet":
+      return t.bridge_tier_sonnet_hint;
+    case "haiku":
+      return t.bridge_tier_haiku_hint;
+  }
+}
+
 export function ClaudeBridgePage() {
   const { t } = useLocale();
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
@@ -68,6 +79,7 @@ export function ClaudeBridgePage() {
   const [status, setStatus] = useState<BridgeStatus | null>(null);
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -78,9 +90,20 @@ export function ClaudeBridgePage() {
     })();
   }, []);
 
+  /**
+   * 所有對設定的改動都走這裡，順便撤掉「已儲存」——不然按鈕會對著已經不同的
+   * 內容繼續宣稱存過了。放在改動處而不是 cfg 的 useEffect 裡：effect 裡同步
+   * setState 會觸發連鎖 render（eslint react-hooks/set-state-in-effect），
+   * 而且初次載入設定時也會多跑一次。
+   */
+  const updateCfg: typeof setCfg = useCallback((next) => {
+    setSaved(false);
+    setCfg(next);
+  }, []);
+
   const setTier = useCallback(
     (tier: TierKey, providerId: string) => {
-      setCfg((prev) => {
+      updateCfg((prev) => {
         if (!prev) return prev;
         if (!providerId) return { ...prev, [tier]: null };
         const p = providers.find((x) => x.id === providerId);
@@ -88,26 +111,28 @@ export function ClaudeBridgePage() {
         return { ...prev, [tier]: mapping };
       });
     },
-    [providers],
+    [providers, updateCfg],
   );
 
   const setTierModel = useCallback((tier: TierKey, model: string) => {
-    setCfg((prev) => {
+    updateCfg((prev) => {
       const current = prev?.[tier];
       if (!prev || !current) return prev;
       return { ...prev, [tier]: { ...current, model } };
     });
-  }, []);
+  }, [updateCfg]);
 
   const save = useCallback(async () => {
     if (!cfg) return;
     setSaving(true);
     try {
       setStatus(await bridgeSetConfig(cfg));
+      setSaved(true);
     } finally {
       setSaving(false);
     }
   }, [cfg]);
+
 
   /**
    * 產生可直接貼進終端機的手動啟動命令。
@@ -159,65 +184,89 @@ export function ClaudeBridgePage() {
       </div>
       {status?.error && <div className="bridge-error">{status.error}</div>}
 
-      <label className="bridge-row">
-        <input
-          type="checkbox"
-          checked={cfg.enabled}
-          onChange={(e) => setCfg({ ...cfg, enabled: e.target.checked })}
-        />
-        {t.bridge_enable}
-      </label>
+      <section className="bridge-section">
+        <h3>{t.bridge_section_server}</h3>
 
-      <label className="bridge-row">
-        {t.bridge_port}
-        <input
-          type="number"
-          value={cfg.port}
-          onChange={(e) => setCfg({ ...cfg, port: Number(e.target.value) || 8317 })}
-        />
-      </label>
+        <label className="bridge-row">
+          <input
+            type="checkbox"
+            checked={cfg.enabled}
+            onChange={(e) => updateCfg({ ...cfg, enabled: e.target.checked })}
+          />
+          {t.bridge_enable}
+        </label>
 
-      <label className="bridge-row">
-        <input
-          type="checkbox"
-          checked={cfg.default_on_new_tab}
-          onChange={(e) => setCfg({ ...cfg, default_on_new_tab: e.target.checked })}
-        />
-        {t.bridge_default_on_new_tab}
-      </label>
+        <label className="bridge-row">
+          {t.bridge_port}
+          <input
+            type="number"
+            value={cfg.port}
+            onChange={(e) => updateCfg({ ...cfg, port: Number(e.target.value) || 8317 })}
+          />
+        </label>
 
-      {TIERS.map((tier) => {
-        const label = tierLabel(t, tier);
-        return (
-          <div className="bridge-tier" key={tier}>
-            <label htmlFor={`bridge-${tier}`}>{label}</label>
-            <select
-              id={`bridge-${tier}`}
-              value={cfg[tier]?.provider_id ?? ""}
-              onChange={(e) => setTier(tier, e.target.value)}
-            >
-              <option value="">{t.bridge_tier_unset}</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.id} disabled={!isSupported(p)}>
-                  {p.display_name}
-                  {isSupported(p) ? "" : t.bridge_unsupported_suffix}
-                </option>
-              ))}
-            </select>
-            {cfg[tier] && (
-              <input
-                aria-label={`${label} ${t.bridge_tier_model}`}
-                value={cfg[tier]!.model}
-                onChange={(e) => setTierModel(tier, e.target.value)}
-              />
-            )}
-          </div>
-        );
-      })}
+        <label className="bridge-row">
+          <input
+            type="checkbox"
+            checked={cfg.default_on_new_tab}
+            onChange={(e) => updateCfg({ ...cfg, default_on_new_tab: e.target.checked })}
+          />
+          {t.bridge_default_on_new_tab}
+        </label>
+      </section>
+
+      <section className="bridge-section">
+        <h3>{t.bridge_section_tiers}</h3>
+        <p className="bridge-section-desc">{t.bridge_section_tiers_desc}</p>
+
+        {/* grid 而不是每列各自 flex：三欄要對齊，而且模型欄得能跟著面板寬度縮，
+            原本 label 220px + select 200px + 不會縮的 input 加起來撐破面板，
+            整頁被推出一條水平捲軸、模型 ID 尾巴看不到。 */}
+        <div className="bridge-tier-grid">
+          <span className="bridge-tier-head">{t.bridge_tier_column}</span>
+          <span className="bridge-tier-head">{t.bridge_tier_provider}</span>
+          <span className="bridge-tier-head">{t.bridge_tier_model}</span>
+
+          {TIERS.map((tier) => {
+            const label = tierLabel(t, tier);
+            return (
+              <Fragment key={tier}>
+                <label className="bridge-tier-name" htmlFor={`bridge-${tier}`}>
+                  {label}
+                  <span className="bridge-tier-hint">{tierHint(t, tier)}</span>
+                </label>
+                <select
+                  id={`bridge-${tier}`}
+                  value={cfg[tier]?.provider_id ?? ""}
+                  onChange={(e) => setTier(tier, e.target.value)}
+                >
+                  <option value="">{t.bridge_tier_unset}</option>
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id} disabled={!isSupported(p)}>
+                      {p.display_name}
+                      {isSupported(p) ? "" : t.bridge_unsupported_suffix}
+                    </option>
+                  ))}
+                </select>
+                {cfg[tier] ? (
+                  <input
+                    aria-label={`${label} ${t.bridge_tier_model}`}
+                    value={cfg[tier]!.model}
+                    onChange={(e) => setTierModel(tier, e.target.value)}
+                  />
+                ) : (
+                  // 佔住格子，否則沒設供應商的那一列會讓下一列往上遞補，整個表格錯位。
+                  <span />
+                )}
+              </Fragment>
+            );
+          })}
+        </div>
+      </section>
 
       <div className="bridge-actions">
         <button onClick={() => void save()} disabled={saving}>
-          {t.save}
+          {saved ? `${t.bridge_saved} ✓` : t.save}
         </button>
         <button
           onClick={() => {
