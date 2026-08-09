@@ -17,7 +17,8 @@ import {
   PanelLeftOpenIcon,
   CodeIcon,
   LibraryIcon,
-  MailIcon
+  MailIcon,
+  RobotIcon
 } from "../Icons";
 import "./index.css";
 
@@ -69,9 +70,12 @@ function formatUnreadCount(n: number): string {
   return n > 99 ? "99+" : String(n);
 }
 
-function getTabIcon(type: TabType): React.ReactNode {
+function getTabIcon(type: TabType, claudeBridge?: boolean): React.ReactNode {
   switch (type) {
-    case "terminal": return <TerminalIcon size={18} />;
+    // 橋接分頁用機器人圖示——跟「新增分頁」選單裡 Claude Code 那一項同一顆，
+    // 選單看到什麼、分頁就長什麼。原本是終端機圖示疊一顆 "CC" 徽章，兩者重疊，
+    // 而且側邊欄收起來只剩圖示時，一疊小貼紙比換一顆圖示難認。
+    case "terminal": return claudeBridge ? <RobotIcon size={18} /> : <TerminalIcon size={18} />;
     case "database": return <DatabaseIcon size={18} />;
     case "design": return <PaintbrushIcon size={18} />;
     case "cross-db": return <LinkIcon size={18} />;
@@ -190,7 +194,7 @@ export function TabBar({
             title={isSidebarOpen ? `Switch to Tab (Ctrl+${idx + 1}) — Double click to rename` : `${tab.title} (Ctrl+${idx + 1})`}
           >
             <span className="aiterm-tab-icon" style={{ position: "relative" }}>
-              {getTabIcon(tab.type)}
+              {getTabIcon(tab.type, tab.claudeBridge)}
               {tab.type === "mail" && mailUnreadCount > 0 && (
                 <span className="mail-unread-badge" role="img" aria-label={t.mail_unread_label(formatUnreadCount(mailUnreadCount))}>{formatUnreadCount(mailUnreadCount)}</span>
               )}
@@ -208,11 +212,6 @@ export function TabBar({
                   role="img"
                   aria-label={attentionLabel(tab.attention, t)}
                 />
-              )}
-              {/* Claude Code 橋接標記——錨在左上角，跟右下角的 attention 點、
-                  mail 的兩個角落都不會撞。 */}
-              {tab.type === "terminal" && tab.claudeBridge && (
-                <span className="terminal-bridge-badge">{t.bridge_tab_badge}</span>
               )}
             </span>
 

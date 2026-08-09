@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 
 const navigateMock = vi.fn();
 vi.mock("react-router-dom", async () => {
@@ -177,37 +177,38 @@ describe("TabBar terminal attention indicator", () => {
   });
 });
 
-// LocaleProvider 預設 zh-TW，所以這裡斷言 zh-TW 的 badge 文字（i18n bridge_tab_badge = "CC"）。
-describe("TabBar Claude Code bridge badge", () => {
-  it("claudeBridge 為 true 的終端機分頁顯示 CC 標記", () => {
-    renderTabBar({
-      tabs: [{ id: "t1", title: "Tab 1", type: "terminal", claudeBridge: true }],
-      activeId: "t1",
-    });
-    expect(screen.getByText("CC")).toBeInTheDocument();
+// 橋接分頁不再疊 "CC" 徽章，改成整顆圖示換掉。圖示是內聯 SVG，沒有可查詢的
+// 文字或 role，所以認 svg 元素本身——同一個 .aiterm-tab-icon 裡有沒有換成
+// 另一顆，用 innerHTML 比對最直接，也不用替每顆圖示加 test id。
+function iconMarkupOf(tab: Tab): string {
+  const { container } = renderTabBar({ tabs: [tab], activeId: tab.id });
+  // 一定要限定在分頁清單裡：側邊欄收合鈕自己也掛 .aiterm-tab-icon，而且排在
+  // 更前面，抓第一個會兩次都拿到同一顆收合圖示，測試就永遠通過。
+  return container.querySelector(".aiterm-tabbar-tabs .aiterm-tab-icon")!.innerHTML;
+}
+
+describe("TabBar Claude Code bridge icon", () => {
+  it("claudeBridge 為 true 的終端機分頁換成另一顆圖示", () => {
+    const plain = iconMarkupOf({ id: "t1", title: "Tab 1", type: "terminal" });
+    cleanup();
+    const bridged = iconMarkupOf({ id: "t1", title: "Tab 1", type: "terminal", claudeBridge: true });
+    expect(bridged).not.toBe(plain);
   });
 
-  it("claudeBridge 為 false／未設定時不顯示標記", () => {
-    renderTabBar({ tabs: baseTabs, activeId: "t1" });
-    expect(screen.queryByText("CC")).not.toBeInTheDocument();
+  it("非終端機分頁即使 claudeBridge 為 true 也維持原本的圖示", () => {
+    const plain = iconMarkupOf({ id: "m1", title: "Mail", type: "mail" });
+    cleanup();
+    const bridged = iconMarkupOf({ id: "m1", title: "Mail", type: "mail", claudeBridge: true } as Tab);
+    expect(bridged).toBe(plain);
   });
 
-  it("非終端機分頁即使 claudeBridge 為 true 也不顯示標記", () => {
-    renderTabBar({
-      tabs: [{ id: "m1", title: "Mail", type: "mail", claudeBridge: true } as Tab],
-      activeId: "m1",
-    });
-    expect(screen.queryByText("CC")).not.toBeInTheDocument();
-  });
-
-  // 兩者可能同時出現在同一顆圖示上（等待輸入 + 已啟用橋接），class 必須可分辨才不會互撞版位。
-  it("與 attention 提示點的 class 不相同，兩者能同時顯示", () => {
+  // 曾經是壓在圖示上的徽章，跟 attention 點搶同一塊版位。換成整顆圖示後兩者
+  // 各自獨立，這裡守住「橋接分頁仍看得到 attention 提示」。
+  it("橋接分頁仍然顯示 attention 提示點", () => {
     renderTabBar({
       tabs: [{ id: "t1", title: "Tab 1", type: "terminal", claudeBridge: true, attention: "waiting" }],
       activeId: "t2",
     });
-    const bridgeBadge = screen.getByText("CC");
-    const attentionBadge = screen.getByRole("img", { name: "終端機正在等待你的回應" });
-    expect(bridgeBadge.className).not.toBe(attentionBadge.className);
+    expect(screen.getByRole("img", { name: "終端機正在等待你的回應" })).toBeInTheDocument();
   });
 });

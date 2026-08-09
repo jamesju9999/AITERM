@@ -216,10 +216,12 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     // 「新增 Claude Code 分頁」強制帶 true；一般新增終端機分頁沿用設定的預設值。
     // 其他分頁類型沒有 PTY，這個旗標對它們沒有意義。
     const claudeBridge = type === "terminal" ? (opts?.claudeBridge ?? defaultBridgeOnNewTabRef.current) : undefined;
+    // 標題也要分得出來，否則側邊欄會出現兩個都叫「終端機」的分頁。
+    if (claudeBridge) title = t.bridge_tab_title;
     setTabs((prev) => [...prev, { id: newId, title, type, claudeBridge }]);
     selectTab(newId);
     setPickerOpen(false);
-  }, [t.terminal_tab, t.database_tab, t.design_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab, t.loop_studio_tab, t.code_assistant_tab, t.knowledge_base_tab, t.mail_tab, selectTab]);
+  }, [t.terminal_tab, t.database_tab, t.design_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab, t.loop_studio_tab, t.code_assistant_tab, t.knowledge_base_tab, t.mail_tab, t.bridge_tab_title, selectTab]);
 
   const handleCloseTab = useCallback(async (id: string) => {
     const guard = closeGuardsRef.current.get(id);
@@ -239,7 +241,9 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       if (nextTabs.length === 0) {
         const newId = crypto.randomUUID();
         setActiveId(newId);
-        return [{ id: newId, title: "Terminal", type: "terminal", claudeBridge: defaultBridgeOnNewTabRef.current }];
+        const bridged = defaultBridgeOnNewTabRef.current;
+        // 這條路徑本來就用未經 i18n 的字面標題，跟著它走，別為此把 t 拉進依賴。
+        return [{ id: newId, title: bridged ? "Claude Code" : "Terminal", type: "terminal", claudeBridge: bridged }];
       }
 
       // If closing active tab, switch to adjacent tab
