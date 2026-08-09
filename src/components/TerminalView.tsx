@@ -244,6 +244,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const searchInputRef = useRef<HTMLInputElement>(null);
   /** IME（注音等）組字進行中。見寫入路徑的 isWindows 分支。 */
   const isComposingRef = useRef(false);
+
   const fitAddonRef = useRef<FitAddon | null>(null);
 
   // Deliberately does NOT call fitAddon.fit() here (unlike the Files-tab ->
@@ -295,6 +296,40 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     handleCommandSettled,
     handleCommandStarted,
   );
+
+  // ⚠️ 臨時診斷面板 —— 用來定位 Windows 上注音組字框錯位的成因，查出後整段移除。
+  // Tauri 視窗連不上 devtools，所以把幾何數值直接畫在畫面上讓使用者截圖回報。
+  const [diag, setDiag] = useState("");
+  useEffect(() => {
+    const tick = () => {
+      const term = termRef.current;
+      const host = hostRef.current;
+      const frame = host?.parentElement ?? null;
+      const list = blockListRef.current;
+      const ta = (term as unknown as { textarea?: HTMLTextAreaElement } | null)?.textarea ?? null;
+      const r = ta?.getBoundingClientRect();
+      const fr = frame?.getBoundingClientRect();
+      const box = (el: HTMLElement | null) =>
+        el ? `${el.clientWidth}/${el.scrollWidth}/${Math.round(el.scrollLeft)}` : "-";
+      setDiag(
+        [
+          `cols×rows ${term?.cols ?? "-"}×${term?.rows ?? "-"}  alt=${isAlternateBuffer ? 1 : 0}  composing=${isComposingRef.current ? 1 : 0}`,
+          `cursor col=${term?.buffer.active.cursorX ?? "-"} row=${term?.buffer.active.cursorY ?? "-"}`,
+          // client/scroll/scrollLeft —— scrollWidth > clientWidth 代表有水平溢出，
+          // scrollLeft > 0 代表這一層真的被捲動了（誰在捲就看這個）。
+          `host  ${box(host)}`,
+          `frame ${box(frame as HTMLElement | null)}`,
+          `list  ${box(list)}`,
+          // textarea 的視窗座標：IME 組字框就畫在這裡。x 若超出 frame 右緣即為病因。
+          `ta    x=${r ? Math.round(r.x) : "-"} y=${r ? Math.round(r.y) : "-"} w=${r ? Math.round(r.width) : "-"}`,
+          `frame x=${fr ? Math.round(fr.x) : "-"}..${fr ? Math.round(fr.right) : "-"}`,
+        ].join("\n"),
+      );
+    };
+    tick();
+    const id = setInterval(tick, 150);
+    return () => clearInterval(id);
+  }, [isAlternateBuffer]);
 
   // 終端機的 bell（\x07）。CLI 工具停下來等使用者回答時多半會敲一次——
   // 這是全螢幕 TUI（Claude Code、vim、lazygit）執行期間唯一可用的訊號，
@@ -1331,6 +1366,20 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           </span>
         )}
       </div>
+
+      {/* ⚠️ 臨時診斷面板 —— 查出注音錯位成因後整段移除。position:fixed 讓它
+          不受任何容器的 clip/scroll 影響，確保組字當下一定看得到。 */}
+      <pre
+        style={{
+          position: "fixed", right: 6, top: 6, zIndex: 99999,
+          margin: 0, padding: "6px 8px", pointerEvents: "none",
+          font: "11px/1.35 ui-monospace, monospace", whiteSpace: "pre",
+          color: "#9ef", background: "rgba(0,0,0,0.82)",
+          border: "1px solid #9ef", borderRadius: 4,
+        }}
+      >
+        {diag}
+      </pre>
 
       <div style={{ position: "relative", flex: 1, minHeight: 0, width: "100%", display: "flex", flexDirection: "column" }}>
         {/* File Explorer */}
