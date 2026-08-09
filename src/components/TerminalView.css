@@ -28,9 +28,9 @@
 
 /* 全螢幕 TUI 自己畫游標、把真游標關掉（ESC[?25l）時，xterm 的 buffer 游標會停在
    最後一次繪製結束的位置——Claude Code 實測停在狀態列右緣（96 欄的終端量到
-   cursor col=95），跟使用者眼中的輸入框無關。IME 組字框畫在 helper textarea 上、
-   textarea 又跟著 buffer 游標，注音待選字因此跑到右上角。這種情況下沒有任何可信
-   的游標位置可用，固定停在左下角（TUI 輸入框的慣例位置）比跟著假游標亂跑好。
+   cursor col=95），跟使用者眼中的輸入框無關。xterm 的組字 UI 跟著 buffer 游標走，
+   注音的預覽字與待選字視窗因此跑到畫面另一頭。這種情況下沒有任何可信的游標位置
+   可用，固定停在左下角（TUI 輸入框的慣例位置）比跟著假游標亂跑好。
    `--ime-park-top` 由 TerminalView.tsx 依實際列高算出；xterm 每次繪製都會覆寫
    inline left/top，所以這裡必須用 !important。
 

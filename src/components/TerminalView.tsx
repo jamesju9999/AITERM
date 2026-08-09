@@ -250,12 +250,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
    * Claude Code 這類 Ink/TUI 會自己畫一個反白方塊當游標、把真游標關掉，於是
    * xterm 的 buffer 游標就停在「最後一次繪製結束的地方」——實測是狀態列右緣
    * （96 欄的終端量到 cursor col=95），跟使用者眼中的輸入框毫無關係。
-   * IME 組字框畫在 helper textarea 上、textarea 又跟著 buffer 游標，注音待選字
-   * 因此跑到右上角。見 `--ime-park-top` 的效果與 TerminalView.css 的對應規則。
+   * xterm 的組字 UI（.composition-view 與 helper textarea）都跟著 buffer 游標走，
+   * 注音的預覽字與待選字視窗因此跑到畫面另一頭。見 TerminalView.css 的對應規則。
    */
   const [cursorHidden, setCursorHidden] = useState(false);
-  /** ⚠️ 臨時診斷用：ESC[?25h/l 的原始切換次數，用來分辨「一直藏著」跟「每幀閃一下」。 */
-  const cursorToggleCountRef = useRef(0);
 
   const fitAddonRef = useRef<FitAddon | null>(null);
 
@@ -308,46 +306,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     handleCommandSettled,
     handleCommandStarted,
   );
-
-  // ⚠️ 臨時診斷面板 —— 用來定位 Windows 上注音組字框錯位的成因，查出後整段移除。
-  // Tauri 視窗連不上 devtools，所以把幾何數值直接畫在畫面上讓使用者截圖回報。
-  const [diag, setDiag] = useState("");
-  useEffect(() => {
-    const tick = () => {
-      const term = termRef.current;
-      const host = hostRef.current;
-      const frame = host?.parentElement ?? null;
-      const list = blockListRef.current;
-      const ta = (term as unknown as { textarea?: HTMLTextAreaElement } | null)?.textarea ?? null;
-      const r = ta?.getBoundingClientRect();
-      const fr = frame?.getBoundingClientRect();
-      const box = (el: HTMLElement | null) =>
-        el ? `${el.clientWidth}/${el.scrollWidth}/${Math.round(el.scrollLeft)}` : "-";
-      setDiag(
-        [
-          `cols×rows ${term?.cols ?? "-"}×${term?.rows ?? "-"}  alt=${isAlternateBuffer ? 1 : 0}  comp=${isComposingRef.current ? 1 : 0}  hid=${cursorHidden ? 1 : 0}  tog=${cursorToggleCountRef.current}`,
-          // park=class 真的掛上了嗎；top=釘住的位置；hy=host 在視窗中的 y。
-          // ta.y 應該等於 hy+top，對不上就是釘位算錯而不是 IME 沒跟。
-          `park=${host?.classList.contains("aiterm-terminal-root--ime-park") ? 1 : 0} top=${host?.style.getPropertyValue("--ime-park-top") || "-"} hy=${host ? Math.round(host.getBoundingClientRect().y) : "-"}`,
-          `cursor col=${term?.buffer.active.cursorX ?? "-"} row=${term?.buffer.active.cursorY ?? "-"}`,
-          // client/scroll/scrollLeft —— scrollWidth > clientWidth 代表有水平溢出，
-          // scrollLeft > 0 代表這一層真的被捲動了（誰在捲就看這個）。
-          `host  ${box(host)}`,
-          `frame ${box(frame as HTMLElement | null)}`,
-          `list  ${box(list)}`,
-          // textarea 的視窗座標：IME 組字框就畫在這裡。x 若超出 frame 右緣即為病因。
-          `ta    x=${r ? Math.round(r.x) : "-"} y=${r ? Math.round(r.y) : "-"} w=${r ? Math.round(r.width) : "-"}`,
-          `frame x=${fr ? Math.round(fr.x) : "-"}..${fr ? Math.round(fr.right) : "-"}`,
-          // fit 現在會算出幾欄？若跟實際 cols 不同，代表 fit 沒被套用（RO/時序問題）；
-          // 若相同，代表 fit 算出來的就是過寬的值（量測基準錯）。
-          `fit   ${(() => { try { const p = fitAddonRef.current?.proposeDimensions(); return p ? `${p.cols}x${p.rows}` : "-"; } catch { return "err"; } })()}  cellW=${(() => { const d = (termRef.current as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { width?: number } } } } } } | null)?._core?._renderService?.dimensions?.css?.cell?.width; return d ? Math.round(d * 10) / 10 : "-"; })()}`,
-        ].join("\n"),
-      );
-    };
-    tick();
-    const id = setInterval(tick, 150);
-    return () => clearInterval(id);
-  }, [isAlternateBuffer, cursorHidden]);
 
   /**
    * 游標被應用程式藏起來時（見 cursorHidden），把 helper textarea 釘在終端左下角，
@@ -915,16 +873,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     // 可能被 PTY chunk 邊界切開，字串比對會漏。
     // ?25 只是眾多 DEC private mode 之一（?1049、?2004… 都會走進這裡）。
     //
-    // 非對稱去抖：要連續藏 150ms 才算「這支 TUI 自己畫游標」，但要連續顯示 1 秒
-    // 才解除。vim 這類每次重繪都會 ESC[?25l → 畫 → ESC[?25h，前者擋掉誤判；反過來
-    // 若 TUI 每幀都閃一下 ?25h，後者確保釘住的狀態不會在使用者組字到一半時消失
-    // ——IME 組字框的位置是 Windows 在組字開始時決定的，中途換位置它不會跟。
+    // 非對稱去抖。要連續藏 150ms 才算「這支 TUI 自己畫游標」：vim 這類每次重繪都會
+    // ESC[?25l → 畫 → ESC[?25h，沒有這個門檻就會被誤判成自繪游標。反方向要連續顯示
+    // 1 秒才解除，免得偶發的一次 ?25h 讓組字框在使用者打到一半時跳回假游標。
     let visibilityTimer: ReturnType<typeof setTimeout> | null = null;
     let rawHidden = false;
     const trackCursorVisibility = (visible: boolean) => (params: (number | number[])[]) => {
       if (params.some((p) => p === 25) && rawHidden === visible) {
         rawHidden = !visible;
-        cursorToggleCountRef.current += 1;
         if (visibilityTimer) clearTimeout(visibilityTimer);
         visibilityTimer = setTimeout(() => setCursorHidden(!visible), visible ? 1000 : 150);
       }
@@ -1450,19 +1406,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         )}
       </div>
 
-      {/* ⚠️ 臨時診斷面板 —— 查出注音錯位成因後整段移除。position:fixed 讓它
-          不受任何容器的 clip/scroll 影響，確保組字當下一定看得到。 */}
-      <pre
-        style={{
-          position: "fixed", left: 6, bottom: 6, zIndex: 99999,
-          margin: 0, padding: "6px 8px", pointerEvents: "none",
-          font: "11px/1.35 ui-monospace, monospace", whiteSpace: "pre",
-          color: "#9ef", background: "rgba(0,0,0,0.82)",
-          border: "1px solid #9ef", borderRadius: 4,
-        }}
-      >
-        {diag}
-      </pre>
 
       <div style={{ position: "relative", flex: 1, minHeight: 0, width: "100%", display: "flex", flexDirection: "column" }}>
         {/* File Explorer */}
