@@ -873,16 +873,26 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     // 可能被 PTY chunk 邊界切開，字串比對會漏。
     // ?25 只是眾多 DEC private mode 之一（?1049、?2004… 都會走進這裡）。
     //
-    // 非對稱去抖。要連續藏 150ms 才算「這支 TUI 自己畫游標」：vim 這類每次重繪都會
-    // ESC[?25l → 畫 → ESC[?25h，沒有這個門檻就會被誤判成自繪游標。反方向要連續顯示
-    // 1 秒才解除，免得偶發的一次 ?25h 讓組字框在使用者打到一半時跳回假游標。
+    // ESC[?25h 一到就立刻採信：那是應用程式在說「游標現在在該在的地方」，
+    // 這時 xterm 的組字 UI 跟著游標走就是對的，不該再去釘位。
+    //
+    // 反方向才需要去抖。實測（pty 錄下 Claude Code 的原始位元組）每一幀都是
+    //   ESC[?25l → 重畫 → ESC[<row>;<col>H → ESC[?25h
+    // vim 之類也是同一套。所以「藏了一下下」是每個 TUI 的正常重繪行為，不代表
+    // 游標不可信；只有連續藏著超過門檻，才是真的把游標交出去不管了。
+    //
+    // Windows 上 ConPTY 會停在 ESC[?25l（診斷面板的 tog 是奇數就是證據），
+    // 游標因此留在最後繪製結束的位置——那才是需要釘位的情形。
+    const HIDDEN_SETTLE_MS = 500;
     let visibilityTimer: ReturnType<typeof setTimeout> | null = null;
     let rawHidden = false;
     const trackCursorVisibility = (visible: boolean) => (params: (number | number[])[]) => {
       if (params.some((p) => p === 25) && rawHidden === visible) {
         rawHidden = !visible;
         if (visibilityTimer) clearTimeout(visibilityTimer);
-        visibilityTimer = setTimeout(() => setCursorHidden(!visible), visible ? 1000 : 150);
+        visibilityTimer = null;
+        if (visible) setCursorHidden(false);
+        else visibilityTimer = setTimeout(() => setCursorHidden(true), HIDDEN_SETTLE_MS);
       }
       return false;
     };
