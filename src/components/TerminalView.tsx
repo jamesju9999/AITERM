@@ -900,8 +900,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     // DECTCEM（ESC[?25h / ESC[?25l）。回傳 false 代表「我只是旁聽」，xterm 自己
     // 的 handler 仍會照常執行。用 parser handler 而不是自己掃位元組，是因為序列
     // 可能被 PTY chunk 邊界切開，字串比對會漏。
+    // ?25 只是眾多 DEC private mode 之一（?1049、?2004… 都會走進這裡），而
+    // TUI 每一幀都可能重送一次，所以先用 ref 擋掉沒變化的通知，避免每幀 setState。
+    const cursorHiddenRef = { current: false };
     const trackCursorVisibility = (visible: boolean) => (params: (number | number[])[]) => {
-      if (params.some((p) => p === 25)) setCursorHidden(!visible);
+      if (params.some((p) => p === 25) && cursorHiddenRef.current === visible) {
+        cursorHiddenRef.current = !visible;
+        setCursorHidden(!visible);
+      }
       return false;
     };
     const decSet = term.parser.registerCsiHandler({ prefix: "?", final: "h" }, trackCursorVisibility(true));
