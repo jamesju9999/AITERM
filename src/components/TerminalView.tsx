@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLocale } from "../contexts/LocaleContext";
 import type { Locale } from "../lib/i18n";
+import { findAppCaret } from "../lib/terminalCaret";
 import { listen } from "@tauri-apps/api/event";
 import { homeDir } from "@tauri-apps/api/path";
 import { Terminal } from "@xterm/xterm";
@@ -308,56 +309,93 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   );
 
   /**
-   * 游標停在終端的最後一欄。那是「繪製到此結束」的殘留（寫滿一列後的 pending
-   * wrap），不是應用程式擺出來的 caret。
+   * 應用程式自己在畫面上畫的游標（一格反白）。
+   *
+   * 全螢幕 TUI 會用 ESC[?25l 關掉終端機的真游標，改用一格反白當視覺 caret。
+   * 真游標一關，就沒人負責把它擺回 caret：Windows 的 ConPTY 讓它停在最後寫到
+   * 的那格（實測 col 51、col 81 都出現過，不是固定在最後一欄）。xterm 的 IME
+   * 組字 UI 跟著真游標走，注音因此跑到畫面別處。
+   *
+   * 找得到這格反白，就等於拿到了可信的 caret 位置——這是個正面訊號，比先前用
+   * 「游標是不是在最後一欄」去反推可靠得多。
    */
-  const [cursorAtLastColumn, setCursorAtLastColumn] = useState(false);
+  const [appCaret, setAppCaret] = useState<{ x: number; y: number } | null>(null);
 
   /**
-   * 要不要把 xterm 的組字 UI 釘走，不跟著 buffer 游標。
+   * 要不要把 xterm 的組字 UI 釘到 appCaret 上，不跟著真游標。
    *
-   * 三個條件缺一不可，各自擋掉一種誤判：
    * - alternate buffer：一般 shell 的游標永遠可信，不該碰。
    * - 游標被藏起來：vim 這類會顯示游標的 TUI 自己就把游標放對位置了。
-   * - 游標在最後一欄：這才是真正區分「壞掉」與「正常」的訊號。實測 Windows
-   *   壞掉時一律是 col=95/96、col=81/82；macOS 正常時是 col=2/80，正好在
-   *   Claude Code 輸入框的 `❯ ` 後面。單看「有沒有藏起來」分不出來——兩個
-   *   平台閒置時都停在 ESC[?25l。
+   * - 找得到自繪 caret：沒找到就沒有更好的位置可用，維持原狀不動。
    *
-   * 釘住的位置用 CSS 變數傳給 TerminalView.css，而不是直接寫 inline style：
-   * xterm 每次繪製都會覆寫組字元素的 style.left/top，只有 `!important` 蓋得過，
-   * 而 `!important` 必須寫在樣式表裡。
+   * 位置用 CSS 變數傳給 TerminalView.css，而不是直接寫 inline style：xterm 每次
+   * 繪製都會覆寫組字元素的 style.left/top，只有 `!important` 蓋得過，而
+   * `!important` 必須寫在樣式表裡。
    */
-  const parkIme = isAlternateBuffer && cursorHidden && cursorAtLastColumn;
+  const parkIme = isAlternateBuffer && cursorHidden && appCaret !== null;
 
+  // 只在「TUI 且游標被藏起來」時才掃描——一般情況真游標可信，掃了也是白費。
+  const scanCaret = isAlternateBuffer && cursorHidden;
   useEffect(() => {
     const host = hostRef.current;
-    if (!host) return;
-    if (!parkIme) {
-      host.style.removeProperty("--ime-park-top");
+    if (!host || !scanCaret) {
+      setAppCaret(null);
       return;
     }
-    // 高度用 rows × 列高算，不用 .xterm-screen.clientHeight：host 的 ResizeObserver
-    // 先於 xterm 自己的 resize 觸發（fit 還被 debounce 120ms），量到的是改變前的
-    // 舊高度，而且之後不會再有第二次 RO 通知去修正它——實測就這樣把 textarea 釘在
-    // 畫面中間（量到 ta y=304，約第 12 列，剛好是非全螢幕時 220px 的殘值）。
     const apply = () => {
       const term = termRef.current;
-      const cellHeight = (term as unknown as {
-        _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } };
-      } | null)?._core?._renderService?.dimensions?.css?.cell?.height;
-      if (!term || !cellHeight) return;
-      host.style.setProperty("--ime-park-top", `${Math.max(0, (term.rows - 1) * cellHeight)}px`);
+      const cell = (term as unknown as {
+        _core?: { _renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } } };
+      } | null)?._core?._renderService?.dimensions?.css?.cell;
+      if (!term || !cell?.width || !cell.height) return;
+      const caret = findAppCaret(term);
+      setAppCaret((prev) =>
+        prev?.x === caret?.x && prev?.y === caret?.y ? prev : caret && { x: caret.x, y: caret.y },
+      );
+      if (!caret) return;
+      // 位置一律用格子尺寸算，不量 DOM：host 的 ResizeObserver 先於 xterm 自己的
+      // resize 觸發（fit 還被 debounce 120ms），量到的是改變前的舊值，而且之後不會
+      // 再有第二次通知修正它——實測就這樣把 textarea 釘在畫面中間。
+      host.style.setProperty("--ime-park-left", `${Math.max(0, caret.x * cell.width)}px`);
+      host.style.setProperty("--ime-park-top", `${Math.max(0, caret.y * cell.height)}px`);
     };
     apply();
-    // 剛切進 alternate buffer 時列高可能還沒量好，補一次。
+    // 剛切進 alternate buffer 時格子尺寸可能還沒量好，補一次。
     const retry = setTimeout(apply, 300);
-    const disposable = termRef.current?.onResize(apply);
+    // caret 會隨打字移動，所以每次重繪都要重算。TUI 每秒重繪好幾次，全螢幕掃一遍
+    // 雖然便宜也沒必要每幀做，節流到 ~10Hz。
+    //
+    // 必須補跑最後一次（trailing edge）：Claude Code 送出文字後會連續重繪好幾幀，
+    // 最後那幾幀落在節流窗內就被丟掉，而之後畫面靜止、不再有重繪，掃描就永遠不會
+    // 再跑——appCaret 會一直停在送出前的舊值。實測就是這樣讓 caret 卡在第 2 欄，
+    // 下一段組字從行首疊上去把已送出的字蓋掉。
+    let lastScan = 0;
+    let trailing: ReturnType<typeof setTimeout> | null = null;
+    const scanThrottled = () => {
+      const wait = 100 - (performance.now() - lastScan);
+      if (wait <= 0) {
+        lastScan = performance.now();
+        apply();
+        return;
+      }
+      if (trailing) return;
+      trailing = setTimeout(() => {
+        trailing = null;
+        lastScan = performance.now();
+        apply();
+      }, wait);
+    };
+    const onRender = termRef.current?.onRender(scanThrottled);
+    const onResize = termRef.current?.onResize(apply);
     return () => {
       clearTimeout(retry);
-      disposable?.dispose();
+      if (trailing) clearTimeout(trailing);
+      onRender?.dispose();
+      onResize?.dispose();
+      host.style.removeProperty("--ime-park-top");
+      host.style.removeProperty("--ime-park-left");
     };
-  }, [parkIme]);
+  }, [scanCaret]);
 
   // 終端機的 bell（\x07）。CLI 工具停下來等使用者回答時多半會敲一次——
   // 這是全螢幕 TUI（Claude Code、vim、lazygit）執行期間唯一可用的訊號，
@@ -893,7 +931,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     // 不可信；連續藏著超過門檻才算真的把游標交出去不管了。
     //
     // 注意：這個旗標**不足以**判斷該不該釘 IME 位置。實測 macOS 閒置時同樣停在
-    // ESC[?25l，兩個平台都是隱藏——真正能區分的是游標欄位，見 cursorAtLastColumn。
+    // ESC[?25l，兩個平台都是隱藏——真正的判準是找不找得到自繪 caret，見 appCaret。
     const HIDDEN_SETTLE_MS = 500;
     let visibilityTimer: ReturnType<typeof setTimeout> | null = null;
     let rawHidden = false;
@@ -907,13 +945,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       }
       return false;
     };
-    // 見 cursorAtLastColumn 的註解。onCursorMove 觸發得很頻繁，但值沒變時
-    // React 會自行略過重繪，不必另外節流。
-    const trackCursorColumn = () => {
-      const t = termRef.current;
-      if (t) setCursorAtLastColumn(t.buffer.active.cursorX >= t.cols - 1);
-    };
-    const cursorMove = term.onCursorMove(trackCursorColumn);
 
     const decSet = term.parser.registerCsiHandler({ prefix: "?", final: "h" }, trackCursorVisibility(true));
     const decReset = term.parser.registerCsiHandler({ prefix: "?", final: "l" }, trackCursorVisibility(false));
@@ -1245,7 +1276,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       liveFrame?.removeEventListener("scroll", pinLiveFrameScroll);
       ta?.removeEventListener("compositionstart", onCompositionStart);
       ta?.removeEventListener("compositionend", onCompositionEnd);
-      cursorMove.dispose();
       decSet.dispose();
       decReset.dispose();
       if (visibilityTimer) clearTimeout(visibilityTimer);

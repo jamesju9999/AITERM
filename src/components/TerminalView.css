@@ -42,7 +42,7 @@
 .aiterm-terminal-root--ime-park .xterm-helper-textarea,
 .aiterm-terminal-root--ime-park .composition-view {
   top: var(--ime-park-top, 0) !important;
-  left: 0 !important;
+  left: var(--ime-park-left, 0) !important;
 }
 
 /* Cosmetic only: xterm's own .xterm-viewport still scrolls normally (wheel,
