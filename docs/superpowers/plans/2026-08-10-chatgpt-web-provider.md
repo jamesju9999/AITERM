@@ -1130,13 +1130,29 @@ npx vitest run src/lib/chatgptWebInject.test.ts
   // config 需要的瀏覽器特徵在頁面內全是真值。OmniRoute 跑在伺服器上必須捏造
   // （假螢幕尺寸、假核心數、從硬編清單隨機挑 key），我們送出的指紋則與 OpenAI
   // 看到的其他一切一致——這是把 webview 當傳輸層的額外好處。
+  // 從 Object.keys 隨機取一個 key，空物件回空字串。
+  //
+  // 過濾 `__aiterm` / `__TAURI` 開頭：抽到的名字會 base64 進 config、POST 到
+  // OpenAI 的 sentinel 端點。把自己的掛載點名稱遞交過去等於主動標記自己是
+  // 自動化。掛載點本身已經是不可列舉的（`Object.defineProperty`，見 Task 6），
+  // 這是第二道防線——Tauri 的 `__TAURI_INTERNALS__` 也是不可列舉的，但別把
+  // 正確性建立在第三方的實作細節上。
+  const pickKey = (obj) => {
+    const keys = Object.keys(obj).filter(
+      (k) => !k.startsWith("__aiterm") && !k.startsWith("__TAURI")
+    );
+    return keys.length ? keys[Math.floor(Math.random() * keys.length)] : "";
+  };
+
+  const uuid = () => crypto.randomUUID();
+
   const buildConfig = () => {
-    const dplAttr = doc().documentElement.getAttribute("data-build");
-    const script = doc().querySelector('script[src*=".js"]');
-    const perfNow = perf().now();
-    const nav = navigatorRef();
+    const dplAttr = document.documentElement.getAttribute("data-build");
+    const script = document.querySelector('script[src*=".js"]');
+    const perfNow = performance.now();
+    const nav = navigator;
     return [
-      scr().width + scr().height,
+      screen.width + screen.height,
       new Date().toString(),
       4294705152,
       0, // solver 改寫這一格
@@ -1147,8 +1163,8 @@ npx vitest run src/lib/chatgptWebInject.test.ts
       (nav.languages || []).join(","),
       0,
       pickKey(nav),
-      pickKey(doc()),
-      pickKey(win),
+      pickKey(document),
+      pickKey(window),
       perfNow,
       uuid(),
       "",
@@ -1159,12 +1175,25 @@ npx vitest run src/lib/chatgptWebInject.test.ts
 
   const b64 = (obj) => btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
 
+  /// 同步 PoW 迴圈跑在 webview 主執行緒上，所以要有牆鐘上限而不只是迭代上限。
+  ///
+  /// 實測單次雜湊約 0.1–0.17ms（Node，900 bytes 輸入），WebKit 的位元運算迴圈
+  /// 通常再慢 2–4 倍。純用迭代數當上限，等於把「視窗要凍多久」交給上游決定：
+  /// difficulty 每多一個十六進位位數，期望迭代數就乘以 16。
+  const POW_DEADLINE_MS = 15000;
+
   // 把 config[3] 換成遞增計數器，算 SHA3-512(seed + base64(JSON(config)))，
   // 取十六進位前綴與 difficulty 做字串比較。實測 difficulty 是 "06b931" 這種
   // 6 位值，命中機率約 2.6%，平均數十次即可。
   const solvePow = (seed, target, prefix, maxIter) => {
     const cfg = buildConfig();
+    const deadline = Date.now() + POW_DEADLINE_MS;
     for (let i = 0; i < maxIter; i++) {
+      // 每 256 次才看一次時鐘：Date.now() 本身不便宜，而 256 次的誤差
+      // （最壞約 100ms）遠小於 15 秒的預算。
+      if ((i & 255) === 255 && Date.now() > deadline) {
+        return { token: prefix + b64(cfg), iters: i + 1, exhausted: true };
+      }
       cfg[3] = i;
       const enc = b64(cfg);
       if (sha3_512Hex(seed + enc).slice(0, target.length) <= target) {
@@ -1175,7 +1204,26 @@ npx vitest run src/lib/chatgptWebInject.test.ts
   };
 ```
 
-`doc()` / `scr()` / `navigatorRef()` / `perf()` / `win` / `uuid()` / `pickKey()` 是為了讓腳本在 vitest 的假 window 下也能求值而加的取值輔助：真實環境回瀏覽器全域，測試環境回可用的替身。`pickKey(obj)` 從 `Object.keys(obj)` 隨機取一個，空物件回空字串。
+**不要**加 `doc()` / `scr()` / `navigatorRef()` / `perf()` 這類取值輔助。計畫原本
+寫「為了讓腳本在 vitest 的假 window 下也能求值」，這個前提**經實測是錯的**：
+`vitest.config.ts` 設 `environment: "jsdom"`，而 `new Function("window", src)` 的
+作用域鏈是 [函式] → [全域]，只有 `window` 這個名字被參數遮蔽，其他裸全域一律
+解析到 jsdom 的真實全域。實測 dump：
+
+```
+screen "0x0" | navigator.userAgent 有 | navigator.languages ["en-US","en"]
+navigator.hardwareConcurrency 14 | performance.now() number
+document.documentElement true | document.querySelector(...) null
+btoa function | unescape function | crypto.randomUUID function
+```
+
+`buildConfig()` 需要的每一個全域在 vitest 下都直接可用，`querySelector` 回 `null`
+也已被 `script ? script.src : ""` 處理掉。寫那些輔助不只是投機性抽象，更會**讓
+測試驗到假路徑**：斷言 `toHaveLength(18)` 在替身分支下照樣成立，`nav.userAgent`
+打成 `nav.userAgnet` 這種錯誤會是隱形的（`undefined` 也佔一格）。
+
+唯一需要 `window` 綁定的是 `pickKey(window)`——那在 vitest 裡是被遮蔽的參數
+（`{}`，`Object.keys` 為空，回 `""`），在生產是真 window。這正是我們要的。
 
 - [ ] **Step 4: 執行測試確認通過**
 
@@ -1197,9 +1245,48 @@ git commit -m "feat(chatgpt-web): PoW solver 與真實瀏覽器特徵的 config"
 ## Task 8：注入腳本的認證、sentinel 與串流
 
 這一段沒有單元測試——它全是網路 I/O，只能靠 Task 16 的端到端探勘測試驗證。
+正因為沒有測試接住，下面的 Step 0 一定要先做。
 
 **Files:**
 - Modify: `src-tauri/src/chatgpt_web/inject.js`
+
+- [ ] **Step 0: 定義 `invoke` 與 `reportError`**
+
+`invoke` **不是全域**。`tauri.conf.json` 沒有設 `withGlobalTauri`（預設 `false`），
+所以頁面上沒有 `window.__TAURI__`。真正存在的是 `window.__TAURI_INTERNALS__.invoke`
+——探勘碼 `src-tauri/src/probe_chatgpt.rs:38` 用的正是這個，已實測可行。
+
+漏了這一步的失效方式是最壞的那種：Rust `eval("window.__aiterm.pull(id)")` →
+`pull` 內第一行 `await invoke(…)` → `ReferenceError: invoke is not defined` →
+進 `catch` → catch 裡**也是** `invoke(…)` → 再拋一次 → unhandled rejection，
+沒有任何東西送回 Rust。Rust 端既收不到 chunk 也收不到 error，**請求永久掛住**。
+
+加在 IIFE 頂端：
+
+```js
+  // 必須是惰性的：不可寫成 `const invoke = window.__TAURI_INTERNALS__.invoke;`
+  // ——vitest 裡 window 是 `{}`，那行會在載入期 TypeError，把 Task 6/7 的
+  // 全部測試一起炸掉（而且錯誤訊息會指向掛載失敗，不是這裡）。
+  const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
+
+  // 錯誤回報自己也可能失敗（IPC 不通、視窗正在關閉）。這是唯一把失敗告知
+  // Rust 的管道，它靜默拋出就等於請求永久掛住，所以要吞掉自己的例外。
+  //
+  // 不要用 `String(e)`：Tauri IPC 的 rejection 值常常是序列化後的物件，
+  // `String(e)` 會得到 "[object Object]"。這個專案已經踩過一次。
+  const errText = (e) =>
+    e instanceof Error ? e.message
+    : typeof e === "string" ? e
+    : (() => { try { return JSON.stringify(e); } catch { return String(e); } })();
+
+  const reportError = (id, e) => {
+    try {
+      invoke("chatgpt_web_chunk", { id, data: JSON.stringify({ error: errText(e) }) });
+    } catch {
+      /* IPC 都不通了，沒有別的管道可用。 */
+    }
+  };
+```
 
 - [ ] **Step 1: 實作認證**
 
@@ -1250,16 +1337,25 @@ git commit -m "feat(chatgpt-web): PoW solver 與真實瀏覽器特徵的 config"
 ```js
   // Rust 端只送 id，payload 由這裡反向拉取——Claude Code 的 system prompt
   // 動輒 30K 字元，用 eval 拼進 JS 字串會踩上跳脫與長度限制。
-  window.__aiterm = {
+  //
+  // `__aiterm` 與 `__aitermTest` 一樣要用 defineProperty 掛成**不可列舉**：
+  // Task 7 的 `pickKey(window)` 會把 `Object.keys(window)` 抽到的名字送進
+  // OpenAI 的 sentinel 端點，可列舉的掛載點等於主動遞交自動化標記。
+  // 不可寫也擋掉頁面腳本覆寫——Rust 端會 `eval("window.__aiterm.pull(id)")`，
+  // 掛載點被換掉就是一個任意程式碼執行點。
+  // Task 10 會往這個物件加 `watchLogin`，所以先宣告成具名物件——
+  // `writable: false` 意味著不能重新 defineProperty，只能往裡面加 key。
+  const aiterm = {
     pull: async (id) => {
       try {
         const payload = await invoke("chatgpt_web_take", { id });
         await run(id, payload);
       } catch (e) {
-        invoke("chatgpt_web_chunk", { id, data: JSON.stringify({ error: String(e) }) });
+        reportError(id, e);
       }
     },
   };
+  Object.defineProperty(window, "__aiterm", { value: aiterm });
 
   const run = async (id, payload) => {
     if (!(await ensureAuth())) throw new Error("not_logged_in");
@@ -1574,18 +1670,47 @@ git commit -m "feat(chatgpt-web): Session、視窗管理與 IPC command"
 ```js
   // 顯示視窗期間輪詢登入狀態。拿到 token 就通知 Rust 收起視窗——不做這件事
   // 視窗會一直開著，使用者很自然會去關掉它，之後每次請求都要多付一次載入成本。
-  window.__aitermWatchLogin = () => {
+  //
+  // 掛在 `window.__aiterm` 底下，不要新增第三個頂層全域：整個腳本只有兩個
+  // 掛載點——`__aiterm`（Rust 透過 eval 呼叫）與 `__aitermTest`（測試用純
+  // 函式），兩個都不可列舉。理由見 Task 6 的檔頭註解與 Task 7 的 `pickKey`。
+  //
+  // 這個函式**不可以在載入期自動啟動**：測試是在載入時求值的，載入即啟動的
+  // timer 會漏出來讓 vitest 不結束。只能由 Rust 端 eval 觸發。
+  let loginWatcher = null;
+  const watchLogin = () => {
+    // 去重：`ensure_window(true)` 每次被呼叫都會 eval 一次，沒有這道防護就會
+    // 疊出多個並行輪詢器，每個都在打 /api/auth/session。
+    if (loginWatcher) return;
+    // 上限：使用者始終不登入時，輪詢不該永遠跑下去。
+    const deadline = Date.now() + 10 * 60 * 1000;
     const tick = async () => {
+      loginWatcher = null;
       accessToken = null;               // 強制重新查，別用登入前的快取值
-      if (await ensureAuth()) {
-        invoke("chatgpt_web_logged_in", {});
-        return;
+      try {
+        if (await ensureAuth()) {
+          invoke("chatgpt_web_logged_in", {});
+          return;
+        }
+      } catch {
+        /* 網路暫時不通就繼續等下一輪。 */
       }
-      setTimeout(tick, 2000);
+      if (Date.now() < deadline) {
+        loginWatcher = setTimeout(tick, 2000);
+      }
     };
-    tick();
+    loginWatcher = setTimeout(tick, 0);
   };
 ```
+
+Task 8 把掛載物件宣告成具名的 `const aiterm = { pull }`，所以這裡只要加一行：
+
+```js
+  aiterm.watchLogin = watchLogin;
+```
+
+**不要**再 `Object.defineProperty(window, "__aiterm", …)` 一次——那個屬性是
+`writable: false, configurable: false`，重複定義會拋 `TypeError`。
 
 - [ ] **Step 2: 加入對應的 command**
 
@@ -1614,7 +1739,8 @@ pub async fn chatgpt_web_logged_in() {
 
 ```rust
         if visible {
-            let _ = w.eval("window.__aitermWatchLogin && window.__aitermWatchLogin()");
+            // 腳本可能還沒注入完（視窗剛建立），所以要防呆取用。
+            let _ = w.eval("window.__aiterm && window.__aiterm.watchLogin()");
         }
 ```
 
@@ -2457,7 +2583,7 @@ git commit -m "feat(chatgpt-web): 實作 BridgeUpstream，接上 Claude Code 橋
       const r = await fetch("/backend-api/models", { headers: authHeaders() });
       invoke("chatgpt_web_chunk", { id, data: await r.text() });
     } catch (e) {
-      invoke("chatgpt_web_chunk", { id, data: JSON.stringify({ error: String(e) }) });
+      reportError(id, e);
     }
   };
 ```
