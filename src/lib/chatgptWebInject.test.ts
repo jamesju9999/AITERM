@@ -60,3 +60,36 @@ describe("inject.js SHA3-512", () => {
     );
   });
 });
+
+describe("inject.js PoW", () => {
+  const { __aitermTest } = loadInject() as {
+    __aitermTest: {
+      sha3_512Hex(s: string): string;
+      buildConfig(): unknown[];
+      solvePow(seed: string, target: string, prefix: string, maxIter: number):
+        { token: string; iters: number; exhausted?: boolean };
+    };
+  };
+
+  it("解出的 token 前綴正確且雜湊真的落在目標之下", () => {
+    const r = __aitermTest.solvePow("seed", "0fffff", "gAAAAAC", 100000);
+    expect(r.exhausted).toBeFalsy();
+    expect(r.token.startsWith("gAAAAAC")).toBe(true);
+    const encoded = r.token.slice("gAAAAAC".length);
+    expect(__aitermTest.sha3_512Hex("seed" + encoded).slice(0, 6) <= "0fffff").toBe(true);
+  });
+
+  it("超過上限時回 exhausted 而不是無限跑", () => {
+    // 目標 "000000" 幾乎不可能命中，用極小的 maxIter 逼出這條路徑。
+    const r = __aitermTest.solvePow("seed", "000000", "gAAAAAB", 5);
+    expect(r.exhausted).toBe(true);
+    expect(r.iters).toBe(5);
+    expect(r.token.startsWith("gAAAAAB")).toBe(true);
+  });
+
+  it("config 是 18 元素，第 4 格由 solver 改寫", () => {
+    const c = __aitermTest.buildConfig();
+    expect(c).toHaveLength(18);
+    expect(c[3]).toBe(0);
+  });
+});
