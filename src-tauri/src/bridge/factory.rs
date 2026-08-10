@@ -48,6 +48,10 @@ pub fn kind_for(p: &ProviderConfig) -> Option<UpstreamKind> {
 
         // M2。
         ProviderType::Codex => Some(UpstreamKind::Codex),
+
+        // 網頁版走 webview 傳輸，不是這裡橋接的上游種類之一，回 None
+        // （= 不支援）。
+        ProviderType::ChatgptWeb => None,
     }
 }
 

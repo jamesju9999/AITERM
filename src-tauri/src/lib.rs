@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod appimage_env;
 pub mod bridge;
+pub mod chatgpt_web;
 pub mod code_assistant;
 pub mod api_docs;
 pub mod commands;
