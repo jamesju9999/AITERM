@@ -275,6 +275,10 @@ pub fn run() {
                 probe_chatgpt::start(app.handle());
             }
 
+            // ChatGPT Web 供應商的傳輸層。這裡只是把 AppHandle 存起來——
+            // webview 要到第一個請求進來時才建立。
+            chatgpt_web::session::init(app.handle().clone());
+
             // 橋接 server：設定為 enabled 時隨 app 啟動。失敗只記 log 不擋啟動
             // ——埠被占用不該讓整個 app 起不來，設定頁會顯示錯誤。
             {
@@ -310,6 +314,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // ⚠️ 臨時可行性探勘，查完刪除。
             probe_chatgpt::probe_report,
+            // ChatGPT Web
+            chatgpt_web::session::chatgpt_web_take,
+            chatgpt_web::session::chatgpt_web_chunk,
             // PTY
             pty_create,
             pty_write,

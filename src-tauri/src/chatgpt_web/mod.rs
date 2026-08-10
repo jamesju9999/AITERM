@@ -5,4 +5,5 @@
 //! 依據見 docs/superpowers/specs/2026-08-10-chatgpt-web-provider-design.md。
 
 pub mod protocol;
+pub mod session;
 pub mod tools;

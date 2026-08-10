@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "chatgpt-web",
+  "description": "只讓 chatgpt-web 視窗裡的 chatgpt.com 頁面能用 IPC 回傳串流內容。",
+  "windows": ["chatgpt-web"],
+  "local": false,
+  "remote": {
+    "urls": ["https://chatgpt.com/*"]
+  },
+  "permissions": ["core:event:default"]
+}
