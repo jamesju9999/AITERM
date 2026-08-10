@@ -975,6 +975,11 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         </FormSection>
       )}
 
+      {/* chatgpt-web 在這一節裡三個區塊都不適用：base_url 固定在
+          https://chatgpt.com（不從設定讀）、模型由上面的下拉負責、
+          JSON mode 是 OpenAI 相容 API 的參數。整節都藏掉，否則會留下
+          一個只有標題、裡面空無一物的區塊。 */}
+      {providerType !== "chatgpt-web" && (
       <FormSection title={t.provider_section_endpoint}>
         {(providerType === "ollama" ||
           providerType === "openai-compatible" ||
@@ -1020,10 +1025,6 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
           </div>
         )}
 
-        {/* chatgpt-web 的模型由「驗證方式」區塊的下拉負責——那份清單是向
-            帳號實際查來的。這裡再放一個綁同一個 state 的輸入框，只會讓使用者
-            看到兩個「模型」欄位而不知道該設哪一個。 */}
-        {providerType !== "chatgpt-web" && (
         <div className="form-group">
           <label>{t.provider_model}</label>
           {providerType === "ollama" ? (
@@ -1237,7 +1238,6 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
             />
           )}
         </div>
-        )}
 
         {(providerType === "openai-compatible" ||
           providerType === "github-copilot" ||
@@ -1258,6 +1258,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
           </div>
         )}
       </FormSection>
+      )}
 
       <div className="form-actions">
         <button

@@ -92,6 +92,11 @@ describe("ProviderForm — ChatGPT Web", () => {
     // API Key 的 <label> 沒有 htmlFor，抓不到 label 關聯，只能用 placeholder。
     expect(screen.queryByPlaceholderText(/貼上你的 API Key|Paste your API key/i))
       .not.toBeInTheDocument();
+
+    // 「端點與模型」整節對這個供應商都不適用（base_url 固定、模型走上面的
+    // 下拉、JSON mode 是 OpenAI 相容 API 的參數）。上一條斷言只看得到「有沒有
+    // 多餘輸入框」，看不到「只剩標題的空區塊」——實測時就是這樣留下一個空殼。
+    expect(screen.queryByText(/端點與模型|Endpoint & Model/i)).not.toBeInTheDocument();
   });
 
   /**
