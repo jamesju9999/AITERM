@@ -169,9 +169,9 @@
   // 把 config[3] 換成遞增計數器，算 SHA3-512(seed + base64(JSON(config)))，
   // 取十六進位前綴與 difficulty 做字串比較。實測 difficulty 是 "06b931" 這種
   // 6 位值，命中機率約 2.6%，平均數十次即可。
-  const solvePow = (seed, target, prefix, maxIter) => {
+  const solvePow = (seed, target, prefix, maxIter, deadlineMs) => {
     const cfg = buildConfig();
-    const deadline = Date.now() + POW_DEADLINE_MS;
+    const deadline = Date.now() + (deadlineMs ?? POW_DEADLINE_MS);
     for (let i = 0; i < maxIter; i++) {
       // 每 256 次才看一次時鐘：Date.now() 本身不便宜，而 256 次的誤差
       // （最壞約 100ms）遠小於 15 秒的預算。

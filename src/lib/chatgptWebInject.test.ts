@@ -1,13 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 
 /**
  * inject.js 是給瀏覽器用的平鋪 script，直接 import 會找不到 window。這裡把它
  * 讀進來、在一個假的 window 上求值，再取出掛上去的純函式來測。
+ *
+ * win 可傳入自訂內容——用來讓 pickKey(window) 的抽樣結果變成決定性的（見
+ * "pickKey(window) 過濾" 測試）。不傳時預設空物件，行為與原本相同。
  */
-function loadInject(): Record<string, unknown> {
+function loadInject(win: Record<string, unknown> = {}): Record<string, unknown> {
   const src = readFileSync("src-tauri/src/chatgpt_web/inject.js", "utf8");
-  const win: Record<string, unknown> = {};
   new Function("window", src)(win);
   return win;
 }
@@ -66,7 +68,7 @@ describe("inject.js PoW", () => {
     __aitermTest: {
       sha3_512Hex(s: string): string;
       buildConfig(): unknown[];
-      solvePow(seed: string, target: string, prefix: string, maxIter: number):
+      solvePow(seed: string, target: string, prefix: string, maxIter: number, deadlineMs?: number):
         { token: string; iters: number; exhausted?: boolean };
     };
   };
@@ -91,5 +93,46 @@ describe("inject.js PoW", () => {
     const c = __aitermTest.buildConfig();
     expect(c).toHaveLength(18);
     expect(c[3]).toBe(0);
+  });
+
+  it("pickKey(window) 過濾掉自動化標記，只剩真實 key 才會被抽中", () => {
+    // config[12] 是 pickKey(window) 的結果，會 base64 進 PoW payload、POST 到
+    // OpenAI 的 sentinel 端點。fakeWin 裡混入我們自己會掛的 __aiterm* /
+    // __TAURI* key（刻意排在 Object.keys 順序最前面）——若過濾邏輯被拿掉，
+    // 這兩個都有機會被抽中送出去，等於主動標記自己是自動化。
+    //
+    // Math.random 鎖定回傳 0：pickKey 內部是 `keys[Math.floor(Math.random() *
+    // keys.length)]`，回傳 0 時永遠選 keys[0]。過濾後 keys 只剩 ["realKey"]，
+    // 選到的必是它；若過濾被拿掉，keys[0] 會是 "__aitermFake"，斷言必定失敗。
+    // 這讓紅/綠都是決定性的，不依賴抽樣運氣。
+    const fakeWin: Record<string, unknown> = {
+      __aitermFake: 1,
+      __TAURI_x: 1,
+      realKey: 1,
+    };
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      const { __aitermTest: fakeAitermTest } = loadInject(fakeWin) as {
+        __aitermTest: { buildConfig(): unknown[] };
+      };
+      const c = fakeAitermTest.buildConfig();
+      expect(c[12]).toBe("realKey");
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it("PoW 牆鐘上限會在合理時間內提早停止，不會跑滿 maxIter（防止 webview 主執行緒被凍住數分鐘）", () => {
+    const start = Date.now();
+    // 目標 "000000" 幾乎不可能命中，maxIter 給極大值，逼牆鐘（而非迭代上限）
+    // 成為真正生效的煞車。
+    const r = __aitermTest.solvePow("seed", "000000", "gAAAAAB", 10_000_000, 50);
+    const elapsed = Date.now() - start;
+    expect(r.exhausted).toBe(true);
+    expect(r.iters).toBeLessThan(10_000_000);
+    // 每 256 次才看一次時鐘，所以至少要跑滿一輪（i=0..255）才可能第一次停下。
+    // 這條斷言釘住「每 256 次檢查一次」這個取捨本身。
+    expect(r.iters).toBeGreaterThanOrEqual(256);
+    expect(elapsed).toBeLessThan(2000);
   });
 });
