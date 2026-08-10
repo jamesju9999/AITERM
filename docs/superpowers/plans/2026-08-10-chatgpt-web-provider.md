@@ -772,6 +772,30 @@ git commit -m "feat(chatgpt-web): 工具契約序列化，雙位置注入"
         assert!(calls.is_none());
         assert_eq!(content, "就只是一段回答");
     }
+
+    /// 交叉檢查：契約教模型的封套格式，剖析器必須真的吃得下。
+    ///
+    /// 這兩段程式碼相隔兩個檔案、只靠字串常數對齊——`build_contract` 把
+    /// `<tool>` 改成別的標籤時，Task 4 的測試全綠、Task 5 的測試也全綠，
+    /// 但模型會照契約產出剖析器認不得的東西，表現成「模型不會用工具」，
+    /// 真正的原因藏在一個字串常數裡。這個測試是唯一會叫的地方。
+    #[test]
+    fn the_envelope_the_contract_teaches_is_actually_parseable() {
+        let contract = build_contract(&[tool("Read")], "n1");
+        // 從契約裡把範例封套那一行抓出來，直接餵給剖析器。
+        let example = contract
+            .lines()
+            .find(|l| l.trim_start().starts_with("<tool>"))
+            .expect("契約裡要有一行範例封套，且以 <tool> 開頭");
+        // 範例裡的 `<tool_name>` 與 `{ ... }` 是佔位符，換成真值再剖析。
+        let concrete = example
+            .replace("<tool_name>", "Read")
+            .replace("{ ... }", r#"{"path":"a.txt"}"#);
+        let (_, calls) = parse_tool_calls(&concrete, "n1");
+        let calls = calls.expect("契約教的格式必須剖析得出來");
+        assert_eq!(calls[0].tool_name, "Read");
+        assert_eq!(calls[0].args, serde_json::json!({"path":"a.txt"}));
+    }
 ```
 
 - [ ] **Step 2: 執行測試確認失敗**
@@ -869,8 +893,12 @@ fn next_envelope(text: &str) -> Option<(&str, &str, &str, &str)> {
 cd src-tauri && cargo test --lib chatgpt_web::tools
 ```
 
-預期：11 個測試全 PASS（Task 4 的 3 個 + 本任務的 8 個）。
+預期：14 個測試全 PASS（Task 4 的 5 個 + 本任務的 9 個）。
 若看到 `0 passed`，是 `pub mod tools;` 沒宣告——見 Task 4 開頭的警告。
+
+> `the_envelope_the_contract_teaches_is_actually_parseable` 若失敗，先看是
+> `build_contract` 的範例封套格式變了，還是剖析器認得的標籤變了——這個測試
+> 存在的意義就是讓這兩者不能各自漂移。**不要**為了讓它過而放寬剖析器。
 
 - [ ] **Step 5: Commit**
 
