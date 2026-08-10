@@ -442,4 +442,60 @@ mod tests {
         assert_eq!(calls[0].tool_name, "Read");
         assert_eq!(calls[0].args, serde_json::json!({"path":"a.txt"}));
     }
+
+    /// nonce 前綴不是裝飾：`flatten_history`（protocol.rs）會把歷史裡的 id
+    /// 以 `[[tool_call:name#id]]` / `[[tool_result:id]]` 印進 prompt。若 id
+    /// 退化成單純 `call_0`，三個回合之後 prompt 裡會出現三組 `#call_0`，
+    /// 模型要配對「哪個結果對應哪個呼叫」就只剩位置相鄰可以靠。
+    #[test]
+    fn tool_call_ids_are_unique_and_derived_from_the_nonce() {
+        let text = r#"<tool>{"name":"Read","arguments":{},"_nonce":"n1"}</tool><tool>{"name":"Edit","arguments":{},"_nonce":"n1"}</tool>"#;
+        let (_, calls) = parse_tool_calls(text, "n1");
+        let calls = calls.expect("應該剖析出兩個工具呼叫");
+        assert_eq!(calls.len(), 2);
+        assert_ne!(calls[0].id, calls[1].id, "同一次呼叫的多個工具 id 要互異");
+        assert!(calls[0].id.contains("n1"), "id 要帶得出 nonce，實際：{}", calls[0].id);
+
+        // 不同 nonce（等於不同請求）即使呼叫序位相同，id 也要不同——否則
+        // 前綴形同虛設，回到 `call_0` 跨回合碰撞的問題。
+        let (_, calls_n2) =
+            parse_tool_calls(r#"<tool>{"name":"Read","arguments":{},"_nonce":"n2"}</tool>"#, "n2");
+        let calls_n2 = calls_n2.expect("應該剖析出工具呼叫");
+        assert_ne!(calls[0].id, calls_n2[0].id, "不同 nonce 要產生不同 id");
+    }
+
+    /// 現有 fixture 都有帶 `arguments`，這條專門補「模型省略它」的路徑。
+    /// MCP 的參數應該是物件；若預設成 `null`，會被原樣送進
+    /// `executeMcpTool`，行為沒人保證。
+    #[test]
+    fn missing_arguments_defaults_to_empty_object_not_null() {
+        let text = r#"<tool>{"name":"Read","_nonce":"n1"}</tool>"#;
+        let (_, calls) = parse_tool_calls(text, "n1");
+        let calls = calls.expect("應該剖析出工具呼叫");
+        assert_eq!(
+            calls[0].args,
+            serde_json::json!({}),
+            "缺 arguments 時要預設空物件，不可是 null"
+        );
+    }
+
+    /// 兩種封套標籤同時出現在同一段文字裡時，兩個都要被剖析出來，且順序
+    /// 要跟文字裡出現的先後一致，content 不可殘留任何封套標籤。
+    ///
+    /// 這條後果最實際：`next_envelope` 若把「選最早出現的封套」改成「後面
+    /// 的 pair 贏」，遇到 `<tool>A</tool>` 在前、`<tool_call>B</tool_call>`
+    /// 在後的文字時，`before` 會把整段 `<tool>A</tool>` 一起當成普通文字
+    /// 推回 content——A 這個工具呼叫不會被剖析出來，而是以原始封套文字
+    /// 洩漏給使用者看：工具靜默不執行，畫面上還多出一段 `<tool>{…}</tool>`。
+    #[test]
+    fn both_envelope_types_present_are_both_parsed_in_order() {
+        let text = r#"先讀 <tool>{"name":"Read","arguments":{},"_nonce":"n1"}</tool> 再編輯 <tool_call>{"name":"Edit","arguments":{},"_nonce":"n1"}</tool_call> 完成"#;
+        let (content, calls) = parse_tool_calls(text, "n1");
+        let calls = calls.expect("兩個封套都要剖析出工具呼叫");
+        assert_eq!(calls.len(), 2, "兩個封套都要被剖析出來");
+        assert_eq!(calls[0].tool_name, "Read", "順序要跟文字裡的先後一致");
+        assert_eq!(calls[1].tool_name, "Edit");
+        assert!(!content.contains("<tool"), "content 裡不可殘留任何封套標籤：{content}");
+        assert!(content.contains("先讀") && content.contains("再編輯") && content.contains("完成"));
+    }
 }
