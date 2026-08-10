@@ -41,6 +41,19 @@ type」的測試不受編譯器保護——新增變體時窮舉 match 會強制
    編譯，無錯誤也無警告，`cargo test` 會印 `0 passed` 且 exit code 0。每個新模組
    任務都要先確認 `mod.rs` 有宣告，並把「N 個測試 PASS」當成斷言看。
 
+**Task 3 的審查發現（後續任務要沿用的教訓）**：
+
+5. **手寫的 fixture 會把「我以為的上游長相」固化成測試**。Task 3 的 7 個測試全綠，
+   但解析器有兩個真實 bug：串流中段夾一個沒有內容的 frame 會清空差分狀態、
+   使用者看到重複文字；以及沒人負責跨 chunk 組行，回答結尾會永久少一截。兩者
+   都是因為測試的 JSON 太乾淨。Task 16 刪探勘程式碼前要先錄一條真實串流。
+6. **測試的「位置」跟輸入一樣重要**。`malformed_frames_are_skipped_not_fatal`
+   把畸形 frame 放在串流最開頭，那時狀態本來就是空的，重設沒有可觀察後果；
+   同樣的輸入放到中段就會爆。有狀態的東西，邊界案例要放在中段測。
+7. **審查者要去讀還沒執行的後續任務**。Task 3 的品質審查是因為去讀了 Task 8/9/
+   11/12/13 的計畫內容，才發現「組行責任無人認領」與「`sinks` 從不移除會讓三個
+   消費端永久卡住」。那些任務還沒動工，當下修的成本接近零。
+
 ---
 
 **設計依據：** `docs/superpowers/specs/2026-08-10-chatgpt-web-provider-design.md`。該 spec 的「探勘實證」章節是實測值，實作時不要重新推測。
@@ -1325,16 +1338,23 @@ impl Session {
         Ok(w)
     }
 
-    /// 送出一個請求，回傳接收 chunk 的通道。
-    pub fn request(&self, payload: String) -> Result<mpsc::UnboundedReceiver<String>, tauri::Error> {
+    /// 送出一個請求，回傳接收 chunk 的通道與一個清理守衛。
+    ///
+    /// **守衛一定要綁在具名變數上**（`let (mut rx, _guard) = …`）。綁成 `_`
+    /// 會當場 drop，sink 立刻被移除，接下來收不到任何 chunk。
+    pub fn request(
+        self: &Arc<Self>,
+        payload: String,
+    ) -> Result<(mpsc::UnboundedReceiver<String>, SinkGuard), tauri::Error> {
         let id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = mpsc::unbounded_channel();
         self.pending.insert(id.clone(), payload);
         self.sinks.lock().expect("sinks poisoned").insert(id.clone(), tx);
+        let guard = SinkGuard { session: Arc::clone(self), id: id.clone() };
         let w = self.ensure_window(false)?;
         // 只送 id，payload 由 JS 反向拉取。
         w.eval(format!("window.__aiterm.pull({})", serde_json::json!(id)))?;
-        Ok(rx)
+        Ok((rx, guard))
     }
 
     pub fn take_pending(&self, id: &str) -> Option<String> {
@@ -1345,6 +1365,25 @@ impl Session {
         if let Some(tx) = self.sinks.lock().expect("sinks poisoned").get(id) {
             let _ = tx.send(data);
         }
+    }
+}
+
+/// 請求結束時把 sink 從 map 移掉。
+///
+/// 沒有它的話 `sinks` 會永遠握著一份 sender clone，`rx.recv().await` 永遠不會
+/// 回 `None`——任何靠「通道關閉」收尾的消費端都會永久卡住（UI 一直轉圈、
+/// 沒有錯誤訊息）。用 `Drop` 而不是在每個結束點手動移除，是為了同時涵蓋
+/// 錯誤路徑與提早 `return`。
+pub struct SinkGuard {
+    session: Arc<Session>,
+    id: String,
+}
+
+impl Drop for SinkGuard {
+    fn drop(&mut self) {
+        self.session.sinks.lock().expect("sinks poisoned").remove(&self.id);
+        // JS 若因故沒來拉取，payload 也不該留著。
+        let _ = self.session.pending.take(&self.id);
     }
 }
 ```
@@ -1596,7 +1635,9 @@ impl AiProvider for ChatgptWebProvider {
     ) -> Result<(), AiError> {
         let s = session::get().ok_or(AiError::NotConfigured)?;
         let payload = build_payload(&req, &self.model).to_string();
-        let mut rx = s.request(payload)
+        // `_guard` 必須綁具名變數：綁成 `_` 會當場 drop，sink 立刻被移除，
+        // 接下來一個 chunk 都收不到。
+        let (mut rx, _guard) = s.request(payload)
             .map_err(|e| AiError::Network { message: e.to_string() })?;
 
         let mut parser = SseParser::default();
@@ -1607,23 +1648,24 @@ impl AiProvider for ChatgptWebProvider {
                     return Err(map_upstream_error(err, v.get("status").and_then(|s| s.as_u64())));
                 }
             }
-            for line in raw.lines() {
-                for out in parser.feed_line(line) {
-                    match out {
-                        SseOut::Text(delta) => {
-                            let _ = tx.send(GenerateChunk { delta, done: false, usage: None }).await;
-                        }
-                        SseOut::Done => {
-                            let _ = tx.send(GenerateChunk {
-                                delta: String::new(), done: true, usage: None,
-                            }).await;
-                            return Ok(());
-                        }
+            // 餵原始 chunk，不要自己 `raw.lines()`——HTTP chunk 不保證切在行
+            // 邊界上，切開的半行兩邊都會被靜默丟掉。行緩衝在 SseParser 裡。
+            for out in parser.feed_str(&raw) {
+                match out {
+                    SseOut::Text(delta) => {
+                        let _ = tx.send(GenerateChunk { delta, done: false, usage: None }).await;
+                    }
+                    SseOut::Done => {
+                        let _ = tx.send(GenerateChunk {
+                            delta: String::new(), done: true, usage: None,
+                        }).await;
+                        return Ok(());
                     }
                 }
             }
         }
-        // 通道關閉但沒收到 [DONE]：仍要補一個 done，否則呼叫端會一直等。
+        // 通道關閉但沒收到 [DONE]（視窗被關、上游斷線）：仍要補一個 done，
+        // 否則呼叫端會一直等。SinkGuard 會讓通道真的關得起來。
         let _ = tx.send(GenerateChunk { delta: String::new(), done: true, usage: None }).await;
         Ok(())
     }
@@ -1804,7 +1846,9 @@ pub fn build_payload_with_tools(
         let s = session::get().ok_or(AiError::NotConfigured)?;
         let nonce = uuid::Uuid::new_v4().simple().to_string();
         let payload = build_payload_with_tools(&req, &self.model, &tool_defs, &nonce).to_string();
-        let mut rx = s.request(payload)
+        // `_guard` 必須綁具名變數：綁成 `_` 會當場 drop，sink 立刻被移除，
+        // 接下來一個 chunk 都收不到。
+        let (mut rx, _guard) = s.request(payload)
             .map_err(|e| AiError::Network { message: e.to_string() })?;
 
         // 工具呼叫只能在整段回覆收完後才判斷得出來（封套可能跨 chunk），
@@ -1817,18 +1861,22 @@ pub fn build_payload_with_tools(
                     return Err(map_upstream_error(err, v.get("status").and_then(|s| s.as_u64())));
                 }
             }
-            for line in raw.lines() {
-                for out in parser.feed_line(line) {
-                    match out {
-                        SseOut::Text(delta) => {
-                            full.push_str(&delta);
-                            let _ = tx.send(GenerateChunk {
-                                delta, done: false, usage: None,
-                            }).await;
-                        }
-                        SseOut::Done => {}
+            // 餵原始 chunk，不要自己 `raw.lines()`——理由同 Task 11。
+            let mut finished = false;
+            for out in parser.feed_str(&raw) {
+                match out {
+                    SseOut::Text(delta) => {
+                        full.push_str(&delta);
+                        let _ = tx.send(GenerateChunk {
+                            delta, done: false, usage: None,
+                        }).await;
                     }
+                    // 一定要主動結束，不能等通道關閉。
+                    SseOut::Done => finished = true,
                 }
+            }
+            if finished {
+                break;
             }
         }
         let _ = tx.send(GenerateChunk { delta: String::new(), done: true, usage: None }).await;
@@ -2028,7 +2076,9 @@ impl BridgeUpstream for ChatgptWebUpstream {
         let s = session::get().ok_or(AiError::NotConfigured)?;
         let nonce = uuid::Uuid::new_v4().simple().to_string();
         let payload = build_payload(req, model, &nonce).to_string();
-        let mut rx = s.request(payload)
+        // `_guard` 必須綁具名變數：綁成 `_` 會當場 drop，sink 立刻被移除，
+        // 接下來一個 chunk 都收不到。
+        let (mut rx, _guard) = s.request(payload)
             .map_err(|e| AiError::Network { message: e.to_string() })?;
 
         // 工具封套可能跨 chunk，必須收滿整段才剖析——所以這裡不是逐 chunk
@@ -2043,10 +2093,17 @@ impl BridgeUpstream for ChatgptWebUpstream {
                     return Err(crate::ai::chatgpt_web::map_upstream_error(err, status));
                 }
             }
-            for line in raw.lines() {
-                for out in parser.feed_line(line) {
-                    if let SseOut::Text(d) = out { full.push_str(&d); }
+            // 餵原始 chunk，不要自己 `raw.lines()`——理由同 Task 11。
+            let mut finished = false;
+            for out in parser.feed_str(&raw) {
+                match out {
+                    SseOut::Text(d) => full.push_str(&d),
+                    // 一定要主動結束，不能等通道關閉。
+                    SseOut::Done => finished = true,
                 }
+            }
+            if finished {
+                break;
             }
         }
 
@@ -2195,7 +2252,7 @@ git commit -m "feat(chatgpt-web): 實作 BridgeUpstream，接上 Claude Code 橋
 #[tauri::command]
 pub async fn chatgpt_web_models() -> Result<Vec<ChatgptWebModel>, String> {
     let s = get().ok_or("session 未初始化")?;
-    let mut rx = s.request_raw("__aitermModels").map_err(|e| e.to_string())?;
+    let (mut rx, _guard) = s.request_raw("__aitermModels").map_err(|e| e.to_string())?;
     let body = rx.recv().await.ok_or("沒有回應")?;
     let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
     if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
@@ -2223,13 +2280,17 @@ pub struct ChatgptWebModel {
 ```rust
     /// 呼叫注入腳本上某個具名函式（模型查詢等一次性用途），不經過 pending map
     /// ——這類請求沒有 payload 要拉取。
-    pub fn request_raw(&self, js_fn: &str) -> Result<mpsc::UnboundedReceiver<String>, tauri::Error> {
+    pub fn request_raw(
+        self: &Arc<Self>,
+        js_fn: &str,
+    ) -> Result<(mpsc::UnboundedReceiver<String>, SinkGuard), tauri::Error> {
         let id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = mpsc::unbounded_channel();
         self.sinks.lock().expect("sinks poisoned").insert(id.clone(), tx);
+        let guard = SinkGuard { session: Arc::clone(self), id: id.clone() };
         let w = self.ensure_window(false)?;
         w.eval(format!("window.{js_fn}({})", serde_json::json!(id)))?;
-        Ok(rx)
+        Ok((rx, guard))
     }
 ```
 
@@ -2353,6 +2414,21 @@ git commit -m "feat(chatgpt-web): 設定 UI、動態模型清單與風險提示"
 - Delete: `src-tauri/capabilities/probe-chatgpt.json`
 - Modify: `src-tauri/src/lib.rs`
 - Create: `src-tauri/tests/chatgpt_web_probe.rs`
+
+> **刪掉探勘程式碼之前，先用它錄一條真實的 SSE 串流存成 fixture。**
+>
+> Task 3 的 `SseParser` 測試全部是手寫的極簡 JSON（`{"message":{"content":
+> {"parts":[…]}}}`），沒有 `author`、`id`、`status`、`end_turn`、`metadata`。
+> 手寫 fixture 會把「我以為的上游長相」固化成測試——Task 3 就是因此讓兩個
+> 真實 bug（中段空 frame 重設狀態、跨 chunk 切行）溜過 7 個綠燈測試。
+>
+> 錄下來之後要回頭確認三件事，並補測試：
+> 1. 非內容 frame（moderation、`role:"system"`、只帶 `conversation_id`）
+>    實際長什麼樣，`SseParser` 是否真的原封不動略過。
+> 2. **兩則訊息會不會在同一條串流裡交錯**（思考區塊與答案）。目前的
+>    `SseParser` 只保留一份 `emitted`，交錯時每次切換都會整段重送。若確認
+>    會交錯，`emitted` 要改成以 `message.id` 為鍵。
+> 3. chunk 實際切在哪裡——確認行緩衝真的有派上用場。
 
 - [ ] **Step 1: 移除探勘程式碼**
 
