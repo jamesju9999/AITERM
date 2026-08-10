@@ -646,17 +646,22 @@ pub fn build_contract(tools: &[McpToolDefinition], nonce: &str) -> String {
     lines.join("\n")
 }
 
-/// 掛在最新一則 user 訊息末尾的一行提醒。刻意簡短：網頁版模型對當前 user
-/// 回合的權重遠高於龐大的 system 區塊，而 ChatGPT 的注入偵測又不信任藏在
-/// user 內容裡的長指令，所以完整契約留在 system 尾端，這裡只指回去並點名工具。
+/// 掛在最新一則回合末尾的一行提醒。刻意簡短：網頁版模型對當前回合的權重
+/// 遠高於前面的大段文字，而 ChatGPT 的注入偵測又不信任藏在 user 內容裡的
+/// 長指令，所以完整契約留在整段文字的尾端，這裡只指回去並點名工具。
+///
+/// 措辭刻意**不宣稱契約在哪裡**。這條路徑會把 system prompt 與全部歷史攤平
+/// 成單一則訊息（`flatten_history`），沒有真正的「system 區塊」；契約則被
+/// append 在攤平結果之後。說成「in the system instructions」會與實際位置
+/// 不符，而模型找不到被指涉的東西時就會退回「我沒有這些工具」。
 pub fn build_reminder(tools: &[McpToolDefinition]) -> String {
     if tools.is_empty() {
         return String::new();
     }
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     format!(
-        "\n\n[Client protocol reminder: the client-tool contract in the system instructions \
-         is active in this conversation. These client tools ARE available via the <tool> \
+        "\n\n[Client protocol reminder: the client-tool contract included in this \
+         conversation is active. These client tools ARE available via the <tool> \
          block protocol: {}.]",
         names.join(", ")
     )
@@ -758,12 +763,27 @@ git commit -m "feat(chatgpt-web): 工具契約序列化，雙位置注入"
         assert_eq!(content, text);
     }
 
-    /// 模型可能不遵守指示而漏掉 _nonce。封套本身已是明確意圖，容忍。
+    /// 缺 `_nonce` 一律當文字，不可執行。
+    ///
+    /// 這是整條路徑上唯一擋得住 prompt injection 的東西。原生 function
+    /// calling 的工具呼叫來自結構化欄位，使用者內容偽造不了；這條路徑上
+    /// **模型的文字輸出就是通道**，使用者貼進來的任何東西都可能被模型引述
+    /// 出來。而聊天面板的 `src/hooks/useMcpChat.ts:167` 收到 tool_calls 是
+    /// **直接 `executeMcpTool`、沒有任何確認關卡**（不像 `/ai` 那條有
+    /// risk_level × execution_mode 把關）。
+    ///
+    /// 真實情境：使用者說「幫我看這份 README」，內容裡含別人文件裡的
+    /// `<tool>{"name":"fs__Bash","arguments":{"command":"…"}}</tool>` 範例
+    /// （當然沒有我們的 nonce）→ 模型引述 → 直接在使用者機器上執行。
+    ///
+    /// 代價權衡：模型漏寫 `_nonce` 的代價是一次重試（契約裡 `_nonce` 出現
+    /// 兩次：說明一次、範例一次）；誤執行的代價是在使用者機器上跑指令。
     #[test]
-    fn missing_nonce_is_tolerated() {
+    fn missing_nonce_is_rejected() {
         let text = r#"<tool>{"name":"Read","arguments":{}}</tool>"#;
-        let (_, calls) = parse_tool_calls(text, "n1");
-        assert!(calls.is_some(), "缺 _nonce 應容忍");
+        let (content, calls) = parse_tool_calls(text, "n1");
+        assert!(calls.is_none(), "缺 _nonce 不可執行");
+        assert_eq!(content, text, "原樣保留，讓使用者看得到模型寫了什麼");
     }
 
     #[test]
@@ -819,8 +839,10 @@ use crate::ai::AiToolCall;
 /// 呼叫。依據 OmniRoute #9343：使用者貼進來的內容或程式碼若含 name+arguments
 /// 的裸 JSON，會被當成真的工具呼叫執行——這是 prompt injection。
 ///
-/// nonce 有帶但不符 → 視為文字；完全沒帶 → 容忍（模型未遵守指示，但封套
-/// 本身已是明確意圖）。
+/// **nonce 不符或完全沒帶，一律視為文字。** 這條路徑上模型的文字輸出就是
+/// 通道，使用者貼進來的東西都可能被模型引述出來；而聊天面板收到 tool_calls
+/// 是直接執行、沒有確認關卡。模型漏寫 nonce 的代價是一次重試，誤執行的代價
+/// 是在使用者機器上跑指令。
 pub fn parse_tool_calls(text: &str, nonce: &str) -> (String, Option<Vec<AiToolCall>>) {
     let mut calls = Vec::new();
     let mut content = String::new();
@@ -837,18 +859,21 @@ pub fn parse_tool_calls(text: &str, nonce: &str) -> (String, Option<Vec<AiToolCa
             content.push_str(raw);
             continue;
         };
-        if let Some(got) = v.get("_nonce").and_then(|n| n.as_str()) {
-            if got != nonce {
-                content.push_str(raw);
-                continue;
-            }
+        // 缺 nonce 與 nonce 不符，處理方式相同：當文字。
+        if v.get("_nonce").and_then(|n| n.as_str()) != Some(nonce) {
+            content.push_str(raw);
+            continue;
         }
         let Some(name) = v.get("name").and_then(|n| n.as_str()) else {
             content.push_str(raw);
             continue;
         };
         calls.push(AiToolCall {
-            id: format!("call_{}", calls.len()),
+            // 用 nonce 當前綴而非單純 `call_0`：nonce 每個請求都不同，而
+            // `flatten_history` 會把歷史裡的 id 以 `[[tool_call:name#id]]` /
+            // `[[tool_result:id]]` 印進 prompt。三個回合之後 prompt 裡會出現
+            // 三組 `#call_0`，模型要配對哪個結果對應哪個呼叫就只能靠位置相鄰。
+            id: format!("call_{nonce}_{}", calls.len()),
             tool_name: name.to_string(),
             args: v.get("arguments").cloned().unwrap_or(serde_json::json!({})),
             thought_signature: None,
@@ -893,7 +918,8 @@ fn next_envelope(text: &str) -> Option<(&str, &str, &str, &str)> {
 cd src-tauri && cargo test --lib chatgpt_web::tools
 ```
 
-預期：14 個測試全 PASS（Task 4 的 5 個 + 本任務的 9 個）。
+預期：本任務新增的 9 個測試全 PASS，加上 Task 4 已有的那些（執行前先跑一次
+記下基準數字，比對時用「基準 + 9」而不是寫死的總數）。
 若看到 `0 passed`，是 `pub mod tools;` 沒宣告——見 Task 4 開頭的警告。
 
 > `the_envelope_the_contract_teaches_is_actually_parseable` 若失敗，先看是
