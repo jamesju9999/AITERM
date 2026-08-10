@@ -11,6 +11,8 @@ pub mod guard;
 pub mod knowledge_base;
 pub mod mail;
 pub mod mcp;
+/// ⚠️ 臨時可行性探勘，查完刪除。見 probe_chatgpt.rs。
+pub mod probe_chatgpt;
 pub mod pty;
 pub mod python_env;
 pub mod secret;
@@ -267,6 +269,11 @@ pub fn run() {
             enterprise::agent::init(app.handle());
             commands::appimage::repair_integration_on_startup();
 
+            // ⚠️ 臨時可行性探勘，查完連同 probe_chatgpt.rs 一起刪除。
+            if std::env::var("AITERM_PROBE_CHATGPT").as_deref() == Ok("1") {
+                probe_chatgpt::start(app.handle());
+            }
+
             // 橋接 server：設定為 enabled 時隨 app 啟動。失敗只記 log 不擋啟動
             // ——埠被占用不該讓整個 app 起不來，設定頁會顯示錯誤。
             {
@@ -300,6 +307,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // ⚠️ 臨時可行性探勘，查完刪除。
+            probe_chatgpt::probe_report,
             // PTY
             pty_create,
             pty_write,
