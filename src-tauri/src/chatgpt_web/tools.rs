@@ -5,12 +5,12 @@
 
 use crate::ai::McpToolDefinition;
 
-/// 完整契約。放在客戶端訊息**之後**（executor 摺疊 system 訊息後會落在
-/// 區塊尾端）。
+/// 完整契約。append 在 `flatten_history` 的輸出**之後**，也就是整段文字的
+/// 最尾端。
 ///
 /// 依據 OmniRoute #7679 的實測：prepend 在巨大 system 區塊開頭時，30K 字元
 /// prompt 下 chatgpt-web 會回答「tool X is not in my tool set」，成功率 0/3；
-/// 改成尾端 + user 訊息提醒的雙位置為 16/17。Claude Code 正是那個形狀。
+/// 改成尾端 + 當前回合提醒的雙位置為 16/17。Claude Code 正是那個形狀。
 pub fn build_contract(tools: &[McpToolDefinition], nonce: &str) -> String {
     if tools.is_empty() {
         return String::new();
@@ -62,9 +62,15 @@ pub fn build_contract(tools: &[McpToolDefinition], nonce: &str) -> String {
 /// 模式（長指令藏在 user 內容裡，觸發 ChatGPT 的注入偵測）。
 const MAX_NAMED_TOOLS_IN_REMINDER: usize = 8;
 
-/// 掛在最新一則 user 訊息末尾的一行提醒。刻意簡短：網頁版模型對當前 user
-/// 回合的權重遠高於龐大的 system 區塊，而 ChatGPT 的注入偵測又不信任藏在
-/// user 內容裡的長指令，所以完整契約留在 system 尾端，這裡只指回去並點名工具。
+/// 掛在最新一則回合末尾的一行提醒。刻意簡短：網頁版模型對當前回合的權重
+/// 遠高於前面的大段文字，而 ChatGPT 的注入偵測又不信任藏在 user 內容裡的
+/// 長指令，所以完整契約留在整段文字的尾端，這裡只指回去並點名工具。
+///
+/// 措辭刻意**不宣稱契約在哪裡**。這條路徑會把 system prompt 與全部歷史攤平
+/// 成單一則訊息（`flatten_history`），沒有真正的「system 區塊」；契約則被
+/// append 在攤平結果之後。說成「in the system instructions」會與實際位置
+/// 不符，而模型找不到被指涉的東西時，正是會退回「我沒有這些工具」——也就是
+/// OmniRoute #7679 那個失敗模式本身。
 pub fn build_reminder(tools: &[McpToolDefinition]) -> String {
     if tools.is_empty() {
         return String::new();
@@ -77,13 +83,13 @@ pub fn build_reminder(tools: &[McpToolDefinition]) -> String {
         .join(", ");
     if tools.len() > MAX_NAMED_TOOLS_IN_REMINDER {
         listed.push_str(&format!(
-            ", …and {} more (see the contract in the system instructions)",
+            ", …and {} more (all listed in the contract below)",
             tools.len() - MAX_NAMED_TOOLS_IN_REMINDER
         ));
     }
     format!(
-        "\n\n[Client protocol reminder: the client-tool contract in the system instructions \
-         is active in this conversation. These client tools ARE available via the <tool> \
+        "\n\n[Client protocol reminder: the client-tool contract included in this \
+         conversation is active. These client tools ARE available via the <tool> \
          block protocol: {listed}.]"
     )
 }
@@ -210,9 +216,17 @@ mod tests {
         let tools = realistic_tools(2);
         let r = build_reminder(&tools);
         assert!(r.contains(&tools[0].name) && r.contains(&tools[1].name), "要點名工具");
-        assert!(r.len() < 400, "只是指回 system 區塊的一行提示，不是完整契約：{}", r.len());
+        assert!(r.len() < 400, "只是指回契約的一行提示，不是完整契約：{}", r.len());
         assert!(!r.contains("_nonce"), "nonce 只放在完整契約，避免重複洩漏");
-        // reminder 刻意只點名工具、指回 system 區塊裡的完整契約。塞進
+        // 提醒不可宣稱契約在「system instructions」：這條路徑會把 system
+        // prompt 與全部歷史攤平成單一則訊息，沒有 system 區塊，契約是 append
+        // 在攤平結果之後。指涉一個不存在的位置，模型找不到就會退回「我沒有
+        // 這些工具」——正是 OmniRoute #7679 那個失敗模式本身。
+        assert!(
+            !r.contains("system instructions"),
+            "提醒不可宣稱契約在 system instructions，那個位置不存在：{r}"
+        );
+        // reminder 刻意只點名工具、指回契約。塞進
         // description 會讓它膨脹並失去「簡短」這個設計目的——依據
         // OmniRoute #7679，長指令藏在 user 內容裡反而會觸發 ChatGPT 的注入
         // 偵測。len < 400 只是鬆散的替代指標，抓不到「只多塞了 description」
