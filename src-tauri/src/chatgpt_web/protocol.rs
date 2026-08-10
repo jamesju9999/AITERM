@@ -300,4 +300,17 @@ mod tests {
         assert_eq!(p.feed_line(frame), vec![SseOut::Text("你好".into())]);
         assert!(p.feed_line(frame).is_empty(), "重送不該再輸出一次");
     }
+
+    /// 規格明確要求文字取自 `message.content.parts[0]`。多個 parts 時如何合併
+    /// 明確不在本任務範圍內，這裡只固化「取索引 0」這個決定。用兩個以上、
+    /// 彼此不同的元素，才能區分出取值走的是第一個還是別的位置——單元素陣列上
+    /// `first()`／`last()`／任何索引結果都相同，測不出取值路徑選對沒有。
+    #[test]
+    fn text_comes_from_the_first_part() {
+        let mut p = SseParser::default();
+        assert_eq!(
+            p.feed_line(r#"data: {"message":{"content":{"parts":["第一","第二","第三"]}}}"#),
+            vec![SseOut::Text("第一".into())],
+        );
+    }
 }
