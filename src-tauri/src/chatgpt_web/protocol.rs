@@ -66,6 +66,21 @@ mod tests {
         assert!(out.contains("只有這句"));
     }
 
+    /// 鎖住 `trim()`：純空白（非空字串）的 system prompt 也要被視為「無 system」，
+    /// 不能只靠 `is_empty()` 判斷，否則會在輸出前面留下一段空白／空行。
+    #[test]
+    fn whitespace_only_system_prompt_omitted() {
+        let out = flatten_history("   \n\t", &[FlatTurn::User("只有這句".into())]);
+        assert!(
+            !out.starts_with(char::is_whitespace),
+            "純空白 system 不該留下開頭空白，實際：{out:?}"
+        );
+        assert_eq!(
+            out, "User: 只有這句",
+            "純空白 system 應該被整段省略，實際：{out:?}"
+        );
+    }
+
     /// 界定符刻意與模型要輸出的 `<tool>` 封套不同——共用會讓剖析器把歷史
     /// 誤判成模型發出的新呼叫。
     #[test]
