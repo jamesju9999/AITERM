@@ -13,7 +13,8 @@
 | 任務 | 狀態 | commit |
 |---|---|---|
 | Task 1 模組骨架與 ProviderType | ✅ 完成 | `cb88bcd` |
-| Task 2–16 | 未開始 | |
+| Task 2 歷史攤平 | ✅ 完成 | `4a7b413` `a147e19` `c5e155b` + 收尾 |
+| Task 3–16 | 未開始 | |
 
 **分支**：`feat/chatgpt-web-provider`（master 未動）
 **執行方式**：Task 2–7 用 subagent 全套（實作＋規格審查＋品質審查）；
@@ -24,6 +25,21 @@ Task 8–16 由主 session 直接實作並自行驗證。理由：純函式的�
 `ai/router.rs` 的 `default_base_url_covers_every_provider_type` 這類「自稱涵蓋每種
 type」的測試不受編譯器保護——新增變體時窮舉 match 會強制你補 match 臂，但不會
 強制你補測試斷言。新增任何 provider 相關分支後，要手動檢查這類清單型測試。
+
+**Task 2 的審查發現（後續任務要沿用的教訓）**：
+
+1. **判斷測試有沒有效，要把實作改壞去跑，不要用推理**。Task 2 的
+   `system_prompt_omitted_when_empty` 原本只餵 `""`，把實作的 `trim()` 拿掉後測試
+   照樣全綠——這個關鍵細節根本沒被鎖住。審查者是實際暫改實作才發現的。
+   後續每個純函式任務（Task 3–7）都用這招驗一遍。
+2. **序列化格式要用一個 `assert_eq!` 精確比對來鎖**，不要只用 `contains`。
+   `contains` 鎖不住角色前綴、分隔符、區塊順序——而這些就是格式本身，
+   Task 5 的剖析器要靠它。意圖測試保留（失敗訊息好讀），精確比對是額外一道鎖。
+3. **守衛用了 `trim()`，推進去的值也要用**。Task 2 一度只 trim 判斷、卻推原字串，
+   使得「格式鎖」對「system 區塊帶尾端換行」這個最常見的真實輸入並不成立。
+4. **`0 passed` 不是通過**。Rust 對「模組目錄下存在但未被宣告的 `.rs` 檔」靜默不
+   編譯，無錯誤也無警告，`cargo test` 會印 `0 passed` 且 exit code 0。每個新模組
+   任務都要先確認 `mod.rs` 有宣告，並把「N 個測試 PASS」當成斷言看。
 
 ---
 
@@ -146,9 +162,10 @@ cd src-tauri && cargo check 2>&1 | grep -A5 "non-exhaustive\|patterns.*not cover
 //! 該頁面的 JS 發出，因此天然帶有真實瀏覽器的 TLS 指紋與 cookie。設計與實測
 //! 依據見 docs/superpowers/specs/2026-08-10-chatgpt-web-provider-design.md。
 
-pub mod protocol;
-pub mod tools;
 ```
+
+> 注意：Task 1 **不**宣告任何子模組——`protocol.rs` 與 `tools.rs` 都還不存在，
+> 宣告了會編譯失敗。`pub mod protocol;` 由 Task 2 補、`pub mod tools;` 由 Task 4 補。
 
 `src-tauri/src/lib.rs`，在 `pub mod bridge;` 之後加入：
 
@@ -439,6 +456,16 @@ git commit -m "feat(chatgpt-web): SSE 快照轉增量差分"
 
 **Files:**
 - Create: `src-tauri/src/chatgpt_web/tools.rs`
+- Modify: `src-tauri/src/chatgpt_web/mod.rs`（加 `pub mod tools;`）
+
+> ⚠️ **先做這件事，否則整個 TDD 循環是假的**：在 `src-tauri/src/chatgpt_web/mod.rs`
+> 加上 `pub mod tools;`。Task 1 並**沒有**預先宣告它（宣告不存在的模組會編譯失敗），
+> Task 2 只補了 `pub mod protocol;`。
+>
+> Rust 對「模組目錄下存在但未被宣告的 `.rs` 檔」是**靜默不編譯**，無錯誤也無警告。
+> 漏掉這步的話：Step 2 期待的編譯失敗不會出現，你只會看到 `0 tests`；Step 4 也不會
+> 是「3 個測試全 PASS」，而是 `0 passed` 且 **exit code 0**——看起來像通過。
+> `tools.rs` 會一路沒被編譯過，直到 Task 12／13 才爆。
 
 - [ ] **Step 1: 寫失敗的測試**
 
@@ -565,9 +592,10 @@ cd src-tauri && cargo test --lib chatgpt_web::tools
 
 預期：3 個測試全 PASS
 
-- [ ] **Step 5: 在 mod.rs 掛上模組並確認編譯**
+- [ ] **Step 5: 確認測試數字不是零**
 
-`src-tauri/src/chatgpt_web/mod.rs` 已在 Task 1 宣告 `pub mod tools;`。執行：
+上面那句「3 個測試全 PASS」要當成斷言看：若輸出是 `0 passed`，代表 `pub mod tools;`
+沒加成功（見本任務開頭的警告），**不要**當作通過。
 
 ```bash
 cd src-tauri && cargo check
@@ -578,7 +606,7 @@ cd src-tauri && cargo check
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src-tauri/src/chatgpt_web/tools.rs
+git add src-tauri/src/chatgpt_web/tools.rs src-tauri/src/chatgpt_web/mod.rs
 git commit -m "feat(chatgpt-web): 工具契約序列化，雙位置注入"
 ```
 
@@ -1652,13 +1680,12 @@ pub fn build_payload_with_tools(
 
     let reminder = tools::build_reminder(tool_defs);
     if !reminder.is_empty() {
-        // 找最後一則 user 回合，把提醒接在它後面。
-        if let Some(last_user) = turns.iter_mut().rev()
-            .find(|t| matches!(t, FlatTurn::User(_)))
-        {
-            if let FlatTurn::User(text) = last_user {
-                text.push_str(&reminder);
-            }
+        // 掛在最後一個回合。這條路徑攤不出 ToolResult，所以最後一個回合實際上
+        // 一定是 User；但寫法刻意與 Task 13 的 BridgeUpstream 一致——那邊會有
+        // 只含 tool_result 的回合，兩處邏輯若分岔，之後只會修到其中一邊。
+        match turns.last_mut() {
+            Some(FlatTurn::User(text)) => text.push_str(&reminder),
+            _ => turns.push(FlatTurn::User(reminder.trim_start().to_string())),
         }
     }
 
@@ -1790,6 +1817,38 @@ mod tests {
         let text = build_payload(&r, "gpt-5-5", "n1")["text"].as_str().unwrap().to_string();
         assert!(text.contains("你是助理"));
     }
+
+    /// agent loop 的常態：最後一則訊息只含 tool_result，攤出來一個 FlatTurn::User
+    /// 都沒有。提醒必須落在整段文字的尾端（契約之前），不能被丟回很前面的
+    /// user 回合——多輪工具迴圈正是最需要提醒生效的場景。
+    #[test]
+    fn reminder_stays_at_the_end_when_last_turn_is_a_tool_result() {
+        let r = req(serde_json::json!({
+            "model": "aiterm:opus",
+            "tools": [{ "name": "Read", "description": "讀檔",
+                        "input_schema": {"type": "object"} }],
+            "messages": [
+                { "role": "user", "content": "讀檔" },
+                { "role": "assistant", "content": [
+                    { "type": "tool_use", "id": "tu_1", "name": "Read", "input": {"path": "a"} }
+                ]},
+                { "role": "user", "content": [
+                    { "type": "tool_result", "tool_use_id": "tu_1", "content": "內容" }
+                ]}
+            ]
+        }));
+        let p = build_payload(&r, "gpt-5-5", "n1");
+        let text = p["text"].as_str().unwrap();
+        let first_user_at = text.find("讀檔").unwrap();
+        let result_at = text.find("[[tool_result:tu_1]]").unwrap();
+        let reminder_at = text.find("Client protocol reminder")
+            .unwrap_or_else(|| panic!("提醒完全沒出現，實際：{text}"));
+        let contract_at = text.find("Available tools").unwrap();
+        assert!(result_at < reminder_at,
+                "提醒被掛到工具結果之前了（掉回舊的 user 回合），實際：{text}");
+        assert!(first_user_at < reminder_at);
+        assert!(reminder_at < contract_at, "完整契約仍要在最後");
+    }
 }
 ```
 
@@ -1850,10 +1909,14 @@ pub fn build_payload(req: &MessagesRequest, model: &str, nonce: &str) -> serde_j
     let tool_defs = tools::from_anthropic_tools(req.tools.as_ref());
     let reminder = tools::build_reminder(&tool_defs);
     if !reminder.is_empty() {
-        if let Some(FlatTurn::User(text)) = turns.iter_mut().rev()
-            .find(|t| matches!(t, FlatTurn::User(_)))
-        {
-            text.push_str(&reminder);
+        // 掛在「最後一個回合」而非「最後一個 user 回合」：agent loop 裡最後一則
+        // 訊息通常只含 tool_result 區塊，攤出來一個 FlatTurn::User 都沒有。往回
+        // 找 User 會把提醒掛到很前面的回合、甚至掛不上去——而雙位置注入的依據
+        // （OmniRoute #7679）正是「貼近當前回合」才有效。多輪工具迴圈是這個
+        // provider 最需要提醒生效的場景，不能剛好是它失準的場景。
+        match turns.last_mut() {
+            Some(FlatTurn::User(text)) => text.push_str(&reminder),
+            _ => turns.push(FlatTurn::User(reminder.trim_start().to_string())),
         }
     }
 
