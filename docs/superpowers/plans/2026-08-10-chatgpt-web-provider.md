@@ -15,9 +15,14 @@
 | Task 1 模組骨架與 ProviderType | ✅ 完成 | `cb88bcd` |
 | Task 2 歷史攤平 | ✅ 完成 | `4a7b413` `a147e19` `c5e155b` `d55d5f2` |
 | Task 3 SSE 解析 | ✅ 完成 | `7912e63` `7e10bb3` `50c77ca` `7cbce81` |
-| Task 4–16 | 未開始 | |
+| Task 4 工具契約序列化 | ✅ 完成 | `0f695a3` `d782ee2` `74c5ab5` `18d862a` `704465a` `4334508` |
+| Task 5–16 | 未開始 | |
 
-全庫測試：702 passed、7 ignored（Task 1 基準 682）。
+全庫測試：709 passed、7 ignored（Task 1 基準 682）。
+
+**Task 4 對後續任務的影響**：`build_reminder` 現在最多逐一點名
+`MAX_NAMED_TOOLS_IN_REMINDER`（8）個工具，其餘用「…and N more」帶過——
+Task 12／13 若要斷言「每個工具都被點名」，在工具數超過 8 時不會成立。
 
 **分支**：`feat/chatgpt-web-provider`（master 未動）
 **執行方式**：Task 2–7 用 subagent 全套（實作＋規格審查＋品質審查）；
@@ -65,6 +70,28 @@ type」的測試不受編譯器保護——新增變體時窮舉 match 會強制
    暫改並預測誰會紅，結果三個預測是錯的（有多層重疊防護、或既有的 `.trim()` 先
    接住了）。實作者沒有去改測試或實作來符合預測，而是逐一找出真正的保護在哪裡
    ——上面第 8 條就是這樣挖出來的。預測只是假設，實測結果才是事實。
+
+**Task 4 的審查發現（後續任務要沿用的教訓）**：
+
+10. **測試 fixture 用了這條路徑上不會出現的資料形狀，斷言就是假的保護**。
+    `reminder_is_short_and_names_the_tools` 的 `len < 400` 是用 `Read`／`Edit`
+    這種 4 字元短名撐起來的，但真實工具名是編碼過的（`{server}__{tool}`，約
+    26–28 字元），7 個就破線、40 個約 1677 字元。寫長度／數量相關的斷言前，
+    先確認 fixture 的形狀跟真實資料一樣。
+11. **兩段只靠字串常數對齊的程式碼，各自的測試都不會發現對方漂移**。把契約裡的
+    `<tool>` 全改成 `<call>`，Task 4 的測試全綠、Task 5 的測試也會全綠——模型
+    會照契約產出剖析器認不得的東西，表現成「模型不會用工具」。解法是一個把
+    上游輸出直接餵給下游的交叉檢查測試（見 Task 5 的
+    `the_envelope_the_contract_teaches_is_actually_parseable`）。
+12. **prompt 裡指涉的位置必須真的存在**。`build_reminder` 原本說契約在
+    「the system instructions」，但這條路徑會把 system prompt 與全部歷史攤平成
+    單一則訊息，根本沒有 system 區塊。模型找不到被指涉的東西時，正是會退回
+    「我沒有這些工具」——也就是要解決的那個失敗模式本身。
+13. **安全性判斷要追到實際的執行點**。Task 5 原本寫「模型漏掉 `_nonce` 就容忍」，
+    看起來只是寬容度取捨；但追到 `src/hooks/useMcpChat.ts:167` 才發現聊天面板
+    收到 tool_calls 是**直接執行、沒有確認關卡**（不像 `/ai` 有 risk_level ×
+    execution_mode 把關）。而這條路徑上模型的文字輸出就是通道，使用者貼進來的
+    內容會被模型引述出來。改成一律拒絕。
 
 ---
 
