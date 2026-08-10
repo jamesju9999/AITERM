@@ -1875,6 +1875,37 @@ git commit -m "feat(chatgpt-web): 實作 AiProvider::generate 與 health_check"
         let text = p["text"].as_str().unwrap();
         assert!(!text.contains("Available tools"));
     }
+
+    /// 第二輪起，歷史裡會有聊天面板寫回去的 `<tool_call>`（不帶 `_nonce`，
+    /// 見 `src/hooks/useMcpChat.ts:194-197`）。原樣攤回 prompt 等於 few-shot
+    /// 教模型省略 nonce，之後每次呼叫都會被 `parse_tool_calls` 拒絕——
+    /// 使用者看到的是「第一個工具會動，之後就不動了」。
+    ///
+    /// 這條測試守的是「`rewrite_envelopes_as_history_markers` 真的有被呼叫」，
+    /// 光有那個函式不算數。
+    #[test]
+    fn history_tool_call_envelopes_never_reach_the_payload() {
+        let r = req(
+            "系統指示",
+            &[
+                ("user", "請讀檔"),
+                ("assistant", r#"<tool_call>{"name":"fs__read","arguments":{"path":"a"}}</tool_call>"#),
+                ("user", "結果是 hello"),
+            ],
+        );
+        let p = build_payload_with_tools(&r, "gpt-5-5", &[tool("fs__read")], "n1");
+        let text = p["text"].as_str().unwrap();
+        let history_end = text.find("Available tools").unwrap();
+        let history = &text[..history_end];
+        assert!(
+            !history.contains("<tool_call"),
+            "歷史裡不可留下封套形狀，否則等於教模型省略 nonce：{history}"
+        );
+        assert!(
+            history.contains("[[tool_call:fs__read#history]]"),
+            "應改寫成界定符：{history}"
+        );
+    }
 ```
 
 - [ ] **Step 2: 執行測試確認失敗**
@@ -1900,7 +1931,8 @@ pub fn build_payload_with_tools(
 ) -> serde_json::Value {
     let mut turns: Vec<FlatTurn> = req.messages.iter().map(|m| {
         if m.role == "assistant" {
-            FlatTurn::Assistant(m.content.clone())
+            // 不可原樣塞回去——見 `strip_envelopes_from_history` 的說明。
+            FlatTurn::Assistant(strip_envelopes_from_history(&m.content))
         } else {
             FlatTurn::User(m.content.clone())
         }
@@ -1925,6 +1957,85 @@ pub fn build_payload_with_tools(
     }
     serde_json::json!({ "text": text, "model": model })
 }
+
+fn strip_envelopes_from_history(content: &str) -> String {
+    tools::rewrite_envelopes_as_history_markers(content)
+}
+```
+
+**同時要加到 `src-tauri/src/chatgpt_web/tools.rs`**（封套的知識屬於那個檔案，
+`next_envelope` 是私有的）：
+
+```rust
+/// 把文字裡的 `<tool>` / `<tool_call>` 封套改寫成 `flatten_history` 用的
+/// `[[tool_call:…]]` 界定符形式。
+///
+/// **為什麼一定要做這件事**：聊天面板收到工具呼叫後會把它寫回歷史——
+/// `src/hooks/useMcpChat.ts:194-197` 產生的是
+/// `<tool_call>{"name":…,"arguments":…}</tool_call>`，**沒有 `_nonce`**
+/// （那個格式是給所有供應商共用的）。若原樣攤平回 prompt，第二輪的模型就會
+/// 在上下文裡看到一則「我自己上一輪成功呼叫工具的範例」而它不帶 nonce——
+/// 這是 few-shot 教它省略 nonce。模型照抄 → `parse_tool_calls` 依規拒絕 →
+/// 沒有工具可執行 → 一路耗到 `MAX_TOOL_ITERATIONS`。使用者看到的是
+/// 「第一個工具會動，之後就不動了」。
+///
+/// 「歷史回合沒有 `_nonce`」既是第二道安全防線、也是對模型的反向教學——
+/// 同一個事實的兩面。改寫成界定符之後，歷史裡不再有任何 `<tool>` 形狀的
+/// 東西可抄，也與 Task 13 的 `FlatTurn::ToolCall` 表示法一致。
+pub fn rewrite_envelopes_as_history_markers(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some((before, body, raw, after)) = next_envelope(rest) {
+        out.push_str(before);
+        rest = after;
+        match serde_json::from_str::<serde_json::Value>(body.trim()) {
+            Ok(v) => {
+                let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let args = v
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({}));
+                if name.is_empty() {
+                    // 認不出名字就整段丟掉：留著只會讓模型看到封套形狀。
+                    continue;
+                }
+                // id 用固定的 `history`：這是給模型看的轉錄稿，不需要能配對回
+                // 某次真實呼叫，而放進真 id 只會把舊 nonce 帶進 prompt。
+                out.push_str(&format!(
+                    "[[tool_call:{name}#history]]\n{args}\n[[/tool_call]]"
+                ));
+            }
+            // 不是合法 JSON 的封套：整段丟掉，理由同上。
+            Err(_) => {
+                let _ = raw;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+```
+
+對應的測試（加到 `tools.rs` 的 `mod tests`）：
+
+```rust
+    /// 歷史裡的封套不可以留下 `<tool>` 形狀——那會 few-shot 教模型省略 nonce。
+    #[test]
+    fn history_envelopes_are_rewritten_to_markers() {
+        let history = r#"我來讀檔。<tool_call>{"name":"fs__read","arguments":{"path":"a"}}</tool_call>"#;
+        let out = rewrite_envelopes_as_history_markers(history);
+        assert!(out.contains("我來讀檔。"));
+        assert!(out.contains("[[tool_call:fs__read#history]]"), "實際：{out}");
+        assert!(!out.contains("<tool_call"), "不可留下封套形狀：{out}");
+        assert!(!out.contains("<tool>"), "不可留下封套形狀：{out}");
+    }
+
+    #[test]
+    fn unparseable_history_envelope_is_dropped_entirely() {
+        let out = rewrite_envelopes_as_history_markers("前面<tool>{壞掉}</tool>後面");
+        assert_eq!(out, "前面後面");
+        assert!(!out.contains("<tool>"));
+    }
 ```
 
 在 `impl AiProvider for ChatgptWebProvider` 內加入：
