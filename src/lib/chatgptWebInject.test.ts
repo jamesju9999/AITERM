@@ -81,6 +81,35 @@ describe("inject.js SHA3-512", () => {
   });
 });
 
+describe("inject.js 對 Rust 的介面", () => {
+  const win: Record<string, unknown> = {};
+  loadInject(win);
+
+  /**
+   * Rust 端是 `w.eval("window.__aiterm.pull(id)")`。這個掛載點名稱或形狀一改，
+   * 那行 eval 就會靜默失敗——沒有編譯器、沒有型別檢查會發現，只會表現成
+   * 「請求送出去但永遠沒有回應」。這條測試是唯一會叫的地方。
+   */
+  it("__aiterm.pull 存在且是函式", () => {
+    const aiterm = win.__aiterm as { pull?: unknown } | undefined;
+    expect(aiterm, "Rust 端 eval 的掛載點不存在").toBeDefined();
+    expect(typeof aiterm?.pull, "pull 不是函式，eval 會靜默失敗").toBe("function");
+  });
+
+  /**
+   * 理由同 __aitermTest：可列舉的掛載點會被 pickKey(window) 抽中送給 OpenAI。
+   * 另外 writable:false 擋掉頁面腳本覆寫——Rust 直接 eval 這個名字，被換掉
+   * 就是一個任意程式碼執行點。
+   */
+  it("__aiterm 不可列舉且不可覆寫", () => {
+    expect(Object.keys(win)).not.toContain("__aiterm");
+    const d = Object.getOwnPropertyDescriptor(win, "__aiterm");
+    expect(d?.enumerable).toBe(false);
+    expect(d?.writable).toBe(false);
+    expect(d?.configurable).toBe(false);
+  });
+});
+
 describe("inject.js PoW", () => {
   const { __aitermTest } = loadInject() as {
     __aitermTest: {

@@ -1422,8 +1422,14 @@ git commit -m "feat(chatgpt-web): PoW solver 與真實瀏覽器特徵的 config"
   const aiterm = {
     pull: async (id) => {
       try {
-        const payload = await invoke("chatgpt_web_take", { id });
-        await run(id, payload);
+        // `chatgpt_web_take` 回的是 `Option<String>`——Rust 端存進 pending map
+        // 的是 `build_payload(...).to_string()`，也就是一份 **JSON 字串**。
+        // 直接拿去 `raw.text` 會得到 undefined，而 `JSON.stringify` 會把陣列裡
+        // 的 undefined 轉成 null，於是送給上游的是 `parts: [null]`——請求不會
+        // 報錯，只會得到莫名其妙的回覆。
+        const raw = await invoke("chatgpt_web_take", { id });
+        if (raw == null) throw new Error("payload_missing: " + id);
+        await run(id, JSON.parse(raw));
       } catch (e) {
         reportError(id, e);
       }

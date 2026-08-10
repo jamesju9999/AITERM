@@ -33,6 +33,40 @@
 // 只能定義函式並掛載——測試是在載入時求值的，若之後（如 Task 10 的登入輪詢
 // 器）寫成「載入即啟動」，會漏一個 timer 出來讓 vitest 掛住不結束。
 (() => {
+  // Tauri IPC 的入口。**不是全域**：tauri.conf.json 沒有設 withGlobalTauri
+  // （預設 false），所以頁面上沒有 window.__TAURI__，真正存在的是
+  // window.__TAURI_INTERNALS__.invoke。
+  //
+  // 必須寫成惰性的箭頭函式，不可寫成 `const invoke = window.__TAURI_INTERNALS__.invoke;`
+  // ——vitest 裡 window 是 `{}`，那行會在載入期 TypeError，把所有純函式測試
+  // 一起炸掉，而且錯誤會指向掛載失敗、不是指向這裡。
+  const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
+
+  // Tauri IPC 的 rejection 值常常是序列化後的物件，String(e) 會得到
+  // "[object Object]"，把真正的原因整個吃掉。
+  const errText = (e) =>
+    e instanceof Error
+      ? e.message
+      : typeof e === "string"
+        ? e
+        : (() => {
+            try {
+              return JSON.stringify(e);
+            } catch {
+              return String(e);
+            }
+          })();
+
+  // 這是唯一把失敗告知 Rust 的管道。它自己靜默拋出就等於請求永久掛住
+  // （Rust 端既收不到 chunk 也收不到 error，只會一直等），所以要吞掉自身例外。
+  const reportError = (id, e) => {
+    try {
+      invoke("chatgpt_web_chunk", { id, data: JSON.stringify({ error: errText(e) }) });
+    } catch {
+      /* IPC 都不通了，沒有別的管道可用。 */
+    }
+  };
+
   // 精簡 SHA3-512（Keccak-f[1600]，rate 72 bytes）。以 32 位元 lo/hi 對表示 64 位元字，
   // 避免 BigInt 的效能與相容性問題。
   function sha3_512Hex(input) {
@@ -197,6 +231,152 @@
     }
     return { token: prefix + b64(cfg), iters: maxIter, exhausted: true };
   };
+
+  // backend-api 認的是 Bearer access token，不是 cookie。少了它，sentinel 回應
+  // 的 persona 會是 "chatgpt-noauth"，對話請求則是 403 "Unusual activity has
+  // been detected from your device"（實測）。
+  let accessToken = null;
+
+  // `force` 用在 401 之後重取。**沒有它會永久卡死**：token 有有效期
+  // （/api/auth/session 自己就回 expires），而 AITerm 是終端機 App、開一整天
+  // 是常態。過期後 `if (accessToken) return` 讓這個函式永遠不重查，所有請求
+  // 一路 401 到使用者重啟整個 App 為止——而隱藏的 ChatGPT 頁面其實還登著，
+  // 使用者完全沒有線索。
+  const ensureAuth = async (force) => {
+    if (accessToken && !force) return accessToken;
+    const r = await fetch("/api/auth/session", { headers: { accept: "application/json" } });
+    const j = await r.json().catch(() => ({}));
+    accessToken = j.accessToken || null;
+    return accessToken;
+  };
+
+  const authHeaders = () => ({
+    "content-type": "application/json",
+    ...(accessToken ? { authorization: "Bearer " + accessToken } : {}),
+  });
+
+  // 帶 Bearer 的 POST，遇 401 就重取一次 token 再試。
+  // 只重試一次：第二次仍 401 表示真的沒登入（或帳號被登出），再重試只是拖延
+  // 錯誤回報。
+  const postAuthed = async (url, body) => {
+    const send = () =>
+      fetch(url, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
+    let r = await send();
+    if (r.status === 401) {
+      await ensureAuth(true);
+      r = await send();
+    }
+    return r;
+  };
+
+  // 解 PoW，超時就丟出可辨識的錯，而不是把解不出來的 token 送出去。
+  //
+  // solvePow 超時時仍會回一個 token，但那個 token **保證不符合 difficulty**。
+  // 照送的話伺服器回 403「Unusual activity has been detected from your device」
+  // ——使用者看到的是與真正原因（PoW 超時）毫無關聯的字串，而且每次請求都會
+  // 重犯；反覆遞交無效的工作量證明本身也是反濫用系統會記的行為。
+  const powToken = (seed, target, prefix, maxIter) => {
+    const r = solvePow(seed, target, prefix, maxIter);
+    if (r.exhausted) {
+      throw new Error("pow_timeout: 工作量證明超時（difficulty=" + target + "）");
+    }
+    return r.token;
+  };
+
+  // 兩段 chat-requirements：prepare 拿 prepare_token，再換取對話用的 token 與
+  // proofofwork 參數。兩段的 p 都是解過的 PoW token（prepare 階段 seed 為空、
+  // target 固定 "0fffff"）。
+  const sentinel = async () => {
+    const prep = await postAuthed("/backend-api/sentinel/chat-requirements/prepare", {
+      p: powToken("", "0fffff", "gAAAAAC", 100000),
+    });
+    if (!prep.ok) throw new Error("sentinel prepare " + prep.status);
+    const prepJson = await prep.json();
+
+    const cr = await postAuthed("/backend-api/sentinel/chat-requirements", {
+      p: powToken("", "0fffff", "gAAAAAC", 100000),
+      prepare_token: prepJson.prepare_token,
+    });
+    if (!cr.ok) throw new Error("sentinel chat-requirements " + cr.status);
+    const crJson = await cr.json();
+    return { ...crJson, prepare_token: prepJson.prepare_token };
+  };
+
+  const run = async (id, payload) => {
+    if (!(await ensureAuth())) throw new Error("not_logged_in");
+    const reqs = await sentinel();
+    const pow = reqs.proofofwork || {};
+    const headers = { ...authHeaders(), accept: "text/event-stream" };
+    if (reqs.token) headers["openai-sentinel-chat-requirements-token"] = reqs.token;
+    if (reqs.prepare_token) {
+      headers["openai-sentinel-chat-requirements-prepare-token"] = reqs.prepare_token;
+    }
+    headers["openai-sentinel-proof-token"] = powToken(
+      pow.seed || "",
+      (pow.difficulty || "").toLowerCase(),
+      "gAAAAAB",
+      500000
+    );
+
+    const r = await fetch("/backend-api/conversation", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        action: "next",
+        messages: [
+          {
+            id: uuid(),
+            author: { role: "user" },
+            content: { content_type: "text", parts: [payload.text] },
+          },
+        ],
+        model: payload.model,
+        parent_message_id: uuid(),
+        websocket_request_id: uuid(),
+        conversation_mode: { kind: "primary_assistant" },
+      }),
+    });
+    if (!r.ok || !r.body) {
+      const body = await r.text();
+      invoke("chatgpt_web_chunk", { id, data: JSON.stringify({ error: body, status: r.status }) });
+      return;
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      // 送原始 chunk，不在這裡切行——HTTP chunk 不保證切在 \n 上，Rust 端的
+      // SseParser 自己有行緩衝。
+      invoke("chatgpt_web_chunk", { id, data: dec.decode(value, { stream: true }) });
+    }
+    // 結尾一定要帶換行：SseParser.feed_str 只處理完整的行，沒有 \n 的殘缺尾巴
+    // 會永遠留在緩衝裡，Rust 端就等不到結束訊號。
+    invoke("chatgpt_web_chunk", { id, data: "data: [DONE]\n\n" });
+  };
+
+  // Rust 端只送 id，payload 由這裡反向拉取——Claude Code 的 system prompt 動輒
+  // 30K 字元，用 eval 拼進 JS 字串會踩上跳脫與長度限制。
+  //
+  // Task 10 會往這個物件加 watchLogin，所以宣告成具名物件：defineProperty 預設
+  // writable: false，不能重新定義同一個屬性，只能往裡面加 key。
+  const aiterm = {
+    pull: async (id) => {
+      try {
+        // chatgpt_web_take 回的是 Option<String>——Rust 端存進 pending map 的是
+        // build_payload(...).to_string()，也就是一份 **JSON 字串**。直接拿去存取
+        // .text 會得到 undefined，而 JSON.stringify 會把陣列裡的 undefined 轉成
+        // null，於是送給上游的是 parts: [null]——請求不會報錯，只會得到莫名其妙
+        // 的回覆。
+        const raw = await invoke("chatgpt_web_take", { id });
+        if (raw == null) throw new Error("payload_missing: " + id);
+        await run(id, JSON.parse(raw));
+      } catch (e) {
+        reportError(id, e);
+      }
+    },
+  };
+  Object.defineProperty(window, "__aiterm", { value: aiterm });
 
   // 不可列舉：見檔頭說明，避免被 Task 7 的 buildConfig() 隨機抽中送給 OpenAI。
   Object.defineProperty(window, "__aitermTest", {
