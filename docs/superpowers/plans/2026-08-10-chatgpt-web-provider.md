@@ -19,7 +19,23 @@
 | Task 5 封套剖析與 nonce | ✅ 完成 | `e8306af` `b10b912` `9af1918` `4b2ece0` |
 | Task 6 注入腳本的 SHA3-512 | ✅ 完成 | `8e966ab` `77dad7d` |
 | Task 7 PoW solver 與 config | ✅ 完成 | `4398135` `eb38054` `6384e2d` `6f5f1bb` |
-| Task 8–16 | 未開始 | |
+| Task 8 注入腳本的認證與串流 | ✅ 完成 | `6709bec` |
+| Task 9 Session 與 IPC command | ✅ 完成 | `9721c18` |
+| Task 10 登入偵測與自動隱藏 | ✅ 完成 | `5b1b2d6` |
+| Task 11 AiProvider::generate | ✅ 完成 | `7897944` |
+| Task 12 generate_with_tools | ✅ 完成 | `6c12053` |
+| Task 13 BridgeUpstream | ✅ 完成 | `c55e70f` |
+| Task 14 模型清單命令 | ✅ 完成 | `a56e3b4` |
+| Task 15 前端設定 UI 與 i18n | ✅ 完成 | `6cbff97` |
+| Task 16 移除探勘碼、端到端測試 | ✅ 完成 | `ce588a7` |
+
+**全部 16 個任務完成。** 驗證狀態：Rust 747 個單元測試 + 整合測試全過、
+前端 659 個測試全過、`npx tsc -b` 乾淨、lint 維持 92 problems 的基準值、
+clippy 對 `chatgpt_web` 零告警。
+
+**尚未做的**：真實登入的端到端手動驗證。清單在
+`src-tauri/tests/chatgpt_web_probe.rs` 檔尾，六項，其中第 5 項（錄一條真實
+SSE 串流當 fixture）會決定 `SseParser` 要不要改成以 `message.id` 為鍵。
 
 Rust 全庫測試：730 passed、7 ignored（Task 1 基準 682）。
 前端：`src/lib/chatgptWebInject.test.ts` 13 passed。
