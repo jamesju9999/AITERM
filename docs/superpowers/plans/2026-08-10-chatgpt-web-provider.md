@@ -1316,8 +1316,14 @@ git commit -m "feat(chatgpt-web): PoW solver 與真實瀏覽器特徵的 config"
   // 的 persona 會是 "chatgpt-noauth"，對話請求則是 403 "Unusual activity has
   // been detected from your device"（實測）。
   let accessToken = null;
-  const ensureAuth = async () => {
-    if (accessToken) return accessToken;
+
+  // `force` 用在 401 之後重取。**沒有它會永久卡死**：token 有有效期
+  // （`/api/auth/session` 自己就回 `expires`），而 AITerm 是終端機 App、
+  // 開一整天是常態。token 過期後 `if (accessToken) return` 讓這個函式永遠
+  // 不重查，所有請求一路 401 到使用者重啟整個 App 為止——而隱藏的 ChatGPT
+  // 頁面其實還登著，使用者完全沒有線索。
+  const ensureAuth = async (force) => {
+    if (accessToken && !force) return accessToken;
     const r = await fetch("/api/auth/session", { headers: { accept: "application/json" } });
     const j = await r.json().catch(() => ({}));
     accessToken = j.accessToken || null;
@@ -1327,6 +1333,21 @@ git commit -m "feat(chatgpt-web): PoW solver 與真實瀏覽器特徵的 config"
     "content-type": "application/json",
     ...(accessToken ? { authorization: "Bearer " + accessToken } : {}),
   });
+
+  /// 帶 Bearer 的 POST，遇 401 就重取一次 token 再試。
+  ///
+  /// 只重試一次：第二次仍 401 表示真的沒登入（或帳號被登出），再重試只是
+  /// 拖延錯誤回報。
+  const postAuthed = async (url, body) => {
+    const send = () =>
+      fetch(url, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
+    let r = await send();
+    if (r.status === 401) {
+      await ensureAuth(true);
+      r = await send();
+    }
+    return r;
+  };
 ```
 
 - [ ] **Step 2: 實作 sentinel 兩段流程**
@@ -1335,18 +1356,29 @@ git commit -m "feat(chatgpt-web): PoW solver 與真實瀏覽器特徵的 config"
   // 兩段 chat-requirements：prepare 拿 prepare_token，再換取對話用的 token
   // 與 proofofwork 參數。兩段的 p 都是解過的 PoW token（prepare 階段
   // seed 為空、target 固定 "0fffff"）。
-  const sentinel = async () => {
-    const post = (url, body) =>
-      fetch(url, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
+  /// 解 PoW，超時就丟出可辨識的錯而不是把解不出來的 token 送出去。
+  ///
+  /// `solvePow` 超時時仍會回一個 token，但那個 token **保證不符合 difficulty**。
+  /// 照送的話伺服器回 403「Unusual activity has been detected from your device」
+  /// ——使用者看到的是一個與真正原因（PoW 超時）毫無關聯的字串，而且會每次
+  /// 請求都重犯。反覆遞交無效的工作量證明本身也是反濫用系統會記的行為。
+  const powToken = (seed, target, prefix, maxIter) => {
+    const r = solvePow(seed, target, prefix, maxIter);
+    if (r.exhausted) {
+      throw new Error("pow_timeout: 工作量證明超時（difficulty=" + target + "）");
+    }
+    return r.token;
+  };
 
-    const prep = await post("/backend-api/sentinel/chat-requirements/prepare",
-                            { p: solvePow("", "0fffff", "gAAAAAC", 100000).token });
+  const sentinel = async () => {
+    const prep = await postAuthed("/backend-api/sentinel/chat-requirements/prepare",
+                                  { p: powToken("", "0fffff", "gAAAAAC", 100000) });
     if (!prep.ok) throw new Error("sentinel prepare " + prep.status);
     const prepJson = await prep.json();
 
-    const cr = await post("/backend-api/sentinel/chat-requirements",
-                          { p: solvePow("", "0fffff", "gAAAAAC", 100000).token,
-                            prepare_token: prepJson.prepare_token });
+    const cr = await postAuthed("/backend-api/sentinel/chat-requirements",
+                                { p: powToken("", "0fffff", "gAAAAAC", 100000),
+                                  prepare_token: prepJson.prepare_token });
     if (!cr.ok) throw new Error("sentinel chat-requirements " + cr.status);
     const crJson = await cr.json();
     return { ...crJson, prepare_token: prepJson.prepare_token };
@@ -1386,7 +1418,7 @@ git commit -m "feat(chatgpt-web): PoW solver 與真實瀏覽器特徵的 config"
     if (reqs.token) headers["openai-sentinel-chat-requirements-token"] = reqs.token;
     if (reqs.prepare_token) headers["openai-sentinel-chat-requirements-prepare-token"] = reqs.prepare_token;
     headers["openai-sentinel-proof-token"] =
-      solvePow(pow.seed || "", (pow.difficulty || "").toLowerCase(), "gAAAAAB", 500000).token;
+      powToken(pow.seed || "", (pow.difficulty || "").toLowerCase(), "gAAAAAB", 500000);
 
     const r = await fetch("/backend-api/conversation", {
       method: "POST",
@@ -1937,6 +1969,15 @@ impl AiProvider for ChatgptWebProvider {
 fn map_upstream_error(err: &str, status: Option<u64>) -> AiError {
     if err.contains("not_logged_in") {
         return AiError::AuthFailed;
+    }
+    // 注入腳本在 PoW 超時時丟這個。不辨識的話使用者只會看到一串原始字串，
+    // 而真正該傳達的是「上游把難度調高了，重試或稍後再試」——這跟網路錯誤
+    // 的處置完全不同。
+    if err.contains("pow_timeout") {
+        return AiError::ModelError {
+            reason: "ChatGPT 網頁版的工作量證明超時，請稍後再試".into(),
+            raw: err.to_string(),
+        };
     }
     match status {
         Some(401) | Some(403) => AiError::ModelError {
@@ -2788,7 +2829,28 @@ git commit -m "feat(chatgpt-web): 設定 UI、動態模型清單與風險提示"
 > 手寫 fixture 會把「我以為的上游長相」固化成測試——Task 3 就是因此讓兩個
 > 真實 bug（中段空 frame 重設狀態、跨 chunk 切行）溜過 7 個綠燈測試。
 >
-> 錄下來之後要回頭確認三件事，並補測試：
+> **另外兩件只能在真實頁面上量的事**：
+>
+> 1. **config[10] / config[11] 在真瀏覽器裡是不是空字串。** `Object.keys(navigator)`
+>    在瀏覽器回 `[]`（`Navigator` 的屬性全在 prototype 上，不是 own property），
+>    `Object.keys(document)` 同理。若屬實，`pickKey(nav)` / `pickKey(document)` 的
+>    過濾在生產環境是死碼，真正有作用的只有 `pickKey(window)`——而「18 格全是
+>    真值、不像 OmniRoute 要從硬編清單挑 key」這個賣點對這兩格反而是**反過來**的：
+>    OmniRoute 的硬編清單（都是 `Navigator.prototype` 上的方法名）比空字串更接近
+>    OpenAI 自家 JS 會採到的值，那份清單的形狀強烈暗示上游用的是 `for...in` 或
+>    prototype 列舉語意。量一行就知道：
+>    ```js
+>    [Object.keys(navigator).length, Object.keys(document).length, Object.keys(window).length]
+>    ```
+>    （探勘版送的是 `undefined` → JSON `null`，現在送 `""`——伺服器接受過前者，
+>    所以風險低，但這是與已實測版本的一處行為差異。）
+>
+> 2. **Google SSO 走不走得完。** Google 的 `disallowed_useragent` 政策會擋掉內嵌
+>    webview 裡的 OAuth 流程。若使用者的 ChatGPT 帳號是用「Continue with Google」
+>    登入，Task 10 的登入視窗可能根本走不完，而輪詢器只會安靜地等到 10 分鐘
+>    deadline。要實測一次，並確認 Task 10 的逾時分支有給使用者可行動的訊息。
+>
+> 錄下 SSE 串流之後要回頭確認三件事，並補測試：
 > 1. 非內容 frame（moderation、`role:"system"`、只帶 `conversation_id`）
 >    實際長什麼樣，`SseParser` 是否真的原封不動略過。
 > 2. **兩則訊息會不會在同一條串流裡交錯**（思考區塊與答案）。目前的
