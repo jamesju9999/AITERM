@@ -64,6 +64,37 @@ describe("ProviderForm — ChatGPT Web", () => {
   });
 
   /**
+   * 表單上只能有**一個**模型欄位。
+   *
+   * 通用的「端點與模型 → Model」輸入框與這裡的下拉綁同一個 state，兩個都顯示
+   * 時使用者看到的是兩個「模型」欄位、值還長得不一樣（一個顯示 title、一個
+   * 顯示 slug），不知道該設哪一個。實測時就是這樣被發現的。
+   *
+   * API Key 同理：這個供應商沒有金鑰可填，登入狀態在 webview 自己身上。而那
+   * 個欄位的顯示條件是「排除清單」——新增的供應商型別預設會被包含進來，所以
+   * 這條測試守的是「有人動那份清單時會有人叫」。
+   */
+  it("不顯示重複的模型欄位與用不到的 API Key", async () => {
+    vi.mocked(chatgptWebModels).mockResolvedValue([
+      { slug: "gpt-5-6", title: "GPT-5.6 Luna", max_tokens: 34834 },
+    ]);
+    await selectChatgptWeb();
+    await userEvent.click(screen.getByRole("button", { name: /登入 ChatGPT/ }));
+    await waitFor(() => expect(chatgptWebModels).toHaveBeenCalled());
+
+    // 通用 Model 欄位的 placeholder 是 DEFAULT_MODELS[providerType]，對
+    // chatgpt-web 是空字串——所以改用「有幾個文字輸入框」來判斷。表單此時
+    // 應該只有 ID 與顯示名稱兩個 textbox；模型下拉是 combobox 不算在內。
+    expect(
+      screen.getAllByRole("textbox"),
+      "多出來的文字框就是通用 Model 欄位或 API Key 又冒出來了",
+    ).toHaveLength(2);
+    // API Key 的 <label> 沒有 htmlFor，抓不到 label 關聯，只能用 placeholder。
+    expect(screen.queryByPlaceholderText(/貼上你的 API Key|Paste your API key/i))
+      .not.toBeInTheDocument();
+  });
+
+  /**
    * 尚未登入時後端會回錯誤或空清單。要給出可行動的訊息，不能只是安靜地
    * 什麼都不顯示——那會讓使用者以為按鈕壞了。
    */

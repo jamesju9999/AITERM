@@ -925,7 +925,10 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
             </div>
           )}
 
-          {providerType !== "github-copilot" && providerType !== "anthropic" && providerType !== "codex" && providerType !== "google-ai" && (
+          {/* chatgpt-web 沒有金鑰可填——登入狀態在 webview 自己身上。這個條件是
+              「排除清單」，新增的供應商型別預設會被包含進來，所以每加一個不用
+              金鑰的型別都要記得排除。 */}
+          {providerType !== "github-copilot" && providerType !== "anthropic" && providerType !== "codex" && providerType !== "google-ai" && providerType !== "chatgpt-web" && (
             <div className="form-group">
               <label>
                 {providerType === "openai-compatible" ? t.provider_api_key_optional : t.provider_api_key}
@@ -1017,6 +1020,10 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
           </div>
         )}
 
+        {/* chatgpt-web 的模型由「驗證方式」區塊的下拉負責——那份清單是向
+            帳號實際查來的。這裡再放一個綁同一個 state 的輸入框，只會讓使用者
+            看到兩個「模型」欄位而不知道該設哪一個。 */}
+        {providerType !== "chatgpt-web" && (
         <div className="form-group">
           <label>{t.provider_model}</label>
           {providerType === "ollama" ? (
@@ -1230,6 +1237,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
             />
           )}
         </div>
+        )}
 
         {(providerType === "openai-compatible" ||
           providerType === "github-copilot" ||
