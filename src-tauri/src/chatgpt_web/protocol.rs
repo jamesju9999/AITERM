@@ -102,4 +102,32 @@ mod tests {
         assert!(!out.contains("<tool>"), "不可使用模型輸出用的封套標籤");
         assert!(!out.contains("<tool_call"), "不可使用模型輸出用的封套標籤");
     }
+
+    /// 精確比對整段攤平後的輸出。這是線上格式本身（後續 Task 3–5 的剖析器要
+    /// 靠它吃回來），涵蓋全部四種 `FlatTurn` 變體加一個非空 system prompt，
+    /// 一次鎖住：system 位置、角色前綴的確切文字、`\n\n` 分隔符、工具界定符、
+    /// 以及工具區塊的先後順序。上面幾個測試表達的是個別意圖，各自的錯誤訊息
+    /// 在壞掉時比較好讀；這個測試是額外一道格式鎖，不是取代品。
+    #[test]
+    fn flattened_format_is_exact() {
+        let out = flatten_history(
+            "你是助理",
+            &[
+                FlatTurn::User("第一問".into()),
+                FlatTurn::Assistant("第一答".into()),
+                FlatTurn::ToolCall {
+                    id: "call_1".into(),
+                    name: "Read".into(),
+                    args: r#"{"path":"a.txt"}"#.into(),
+                },
+                FlatTurn::ToolResult { id: "call_1".into(), content: "檔案內容".into() },
+            ],
+        );
+        let expected = "你是助理\n\n\
+            User: 第一問\n\n\
+            Assistant: 第一答\n\n\
+            [[tool_call:Read#call_1]]\n{\"path\":\"a.txt\"}\n[[/tool_call]]\n\n\
+            [[tool_result:call_1]]\n檔案內容\n[[/tool_result]]";
+        assert_eq!(out, expected, "實際：{out:?}");
+    }
 }
