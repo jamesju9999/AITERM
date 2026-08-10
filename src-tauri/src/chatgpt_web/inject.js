@@ -407,6 +407,25 @@
       }
     },
     watchLogin,
+
+    // /backend-api/models 回的是「該帳號實際可用」的清單，所以不需要維護方案
+    // 與模型的對應表——登入哪個帳號就顯示什麼。max_tokens 也一併取得。
+    models: async (id) => {
+      try {
+        if (!(await ensureAuth())) throw new Error("not_logged_in");
+        const r = await fetch("/backend-api/models", { headers: authHeaders() });
+        if (!r.ok) {
+          invoke("chatgpt_web_chunk", {
+            id,
+            data: JSON.stringify({ error: await r.text(), status: r.status }),
+          });
+          return;
+        }
+        invoke("chatgpt_web_chunk", { id, data: await r.text() });
+      } catch (e) {
+        reportError(id, e);
+      }
+    },
   };
   Object.defineProperty(window, "__aiterm", { value: aiterm });
 

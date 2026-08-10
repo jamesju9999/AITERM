@@ -101,6 +101,16 @@ describe("inject.js 對 Rust 的介面", () => {
   });
 
   /**
+   * `Session::request_raw("models")` eval 的是 `window.__aiterm.models(id)`。
+   * 這個名字改掉，設定頁的模型下拉會空著並在 30 秒後逾時——而逾時訊息不會
+   * 指向真正的原因。
+   */
+  it("__aiterm.models 存在且是函式", () => {
+    const aiterm = win.__aiterm as { models?: unknown } | undefined;
+    expect(typeof aiterm?.models, "models 不是函式，模型清單會逾時").toBe("function");
+  });
+
+  /**
    * 理由同 __aitermTest：可列舉的掛載點會被 pickKey(window) 抽中送給 OpenAI。
    * 另外 writable:false 擋掉頁面腳本覆寫——Rust 直接 eval 這個名字，被換掉
    * 就是一個任意程式碼執行點。

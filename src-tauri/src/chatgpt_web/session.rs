@@ -106,8 +106,12 @@ impl Session {
         Ok((rx, guard))
     }
 
-    /// 呼叫注入腳本上某個具名函式（模型查詢等一次性用途），不經過 pending map
-    /// ——這類請求沒有 payload 要拉取。
+    /// 呼叫 `window.__aiterm` 上某個具名函式（模型查詢等一次性用途），不經過
+    /// pending map——這類請求沒有 payload 要拉取。
+    ///
+    /// 名稱固定在 `__aiterm` 命名空間下，不接受任意的全域名：整個注入腳本只有
+    /// 兩個掛載點（`__aiterm` 與 `__aitermTest`），多一個頂層全域就多一個會被
+    /// `pickKey(window)` 抽中送給 OpenAI 的自動化標記。
     pub fn request_raw(
         self: &Arc<Self>,
         js_fn: &str,
@@ -117,7 +121,10 @@ impl Session {
         self.sinks.lock().expect("sinks poisoned").insert(id.clone(), tx);
         let guard = SinkGuard { session: Arc::clone(self), id: id.clone() };
         let w = self.ensure_window(false)?;
-        w.eval(format!("window.{js_fn}({})", serde_json::json!(id)))?;
+        w.eval(format!(
+            "window.__aiterm.{js_fn}({})",
+            serde_json::json!(id)
+        ))?;
         Ok((rx, guard))
     }
 
@@ -182,6 +189,58 @@ pub async fn chatgpt_web_logged_in() {
             let _ = w.hide();
         }
     }
+}
+
+/// 設定頁的模型下拉選單用的一筆。
+#[derive(serde::Serialize)]
+pub struct ChatgptWebModel {
+    pub slug: String,
+    pub title: String,
+    pub max_tokens: u32,
+}
+
+/// 等注入腳本回應的上限。
+///
+/// 沒有它的話這個 command 會永遠等下去：`SinkGuard` 在函式結束才 drop，所以
+/// 在 `recv().await` 期間通道永遠不會關。注入腳本的每條失敗路徑都會回報，
+/// 但「eval 根本沒送達」（視窗剛被關掉、頁面正在導向）不在它的掌控範圍內。
+const MODELS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// 設定頁用：取回該帳號可用的模型清單。
+///
+/// `/backend-api/models` 回的是「該帳號實際可用」的清單，所以不需要維護方案與
+/// 模型的對應表——登入哪個帳號就顯示什麼。
+#[tauri::command]
+pub async fn chatgpt_web_models() -> Result<Vec<ChatgptWebModel>, String> {
+    let s = get().ok_or("session 未初始化")?;
+    let (mut rx, _guard) = s.request_raw("models").map_err(|e| e.to_string())?;
+    let body = tokio::time::timeout(MODELS_TIMEOUT, rx.recv())
+        .await
+        .map_err(|_| "等待 ChatGPT 網頁回應逾時".to_string())?
+        .ok_or("沒有回應")?;
+    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+        return Err(err.to_string());
+    }
+    Ok(v.get("models")
+        .and_then(|m| m.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| {
+                    Some(ChatgptWebModel {
+                        slug: m.get("slug")?.as_str()?.to_string(),
+                        title: m
+                            .get("title")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        max_tokens: m.get("max_tokens").and_then(|t| t.as_u64()).unwrap_or(0)
+                            as u32,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
 #[cfg(test)]
