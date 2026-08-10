@@ -18,10 +18,14 @@
 | Task 4 工具契約序列化 | ✅ 完成 | `0f695a3` `d782ee2` `74c5ab5` `18d862a` `704465a` `4334508` |
 | Task 5 封套剖析與 nonce | ✅ 完成 | `e8306af` `b10b912` `9af1918` `4b2ece0` |
 | Task 6 注入腳本的 SHA3-512 | ✅ 完成 | `8e966ab` `77dad7d` |
-| Task 7–16 | 未開始 | |
+| Task 7 PoW solver 與 config | ✅ 完成 | `4398135` `eb38054` `6384e2d` `6f5f1bb` |
+| Task 8–16 | 未開始 | |
 
 Rust 全庫測試：730 passed、7 ignored（Task 1 基準 682）。
-前端：`src/lib/chatgptWebInject.test.ts` 4 passed。
+前端：`src/lib/chatgptWebInject.test.ts` 13 passed。
+
+**Task 2–7 的 subagent 階段到此結束**（實作＋規格審查＋品質審查各一輪以上）。
+Task 8–16 依當初決定由主 session 直接實作並自行驗證。
 
 **Task 4 對後續任務的影響**：`build_reminder` 現在最多逐一點名
 `MAX_NAMED_TOOLS_IN_REMINDER`（8）個工具，其餘用「…and N more」帶過——
@@ -128,6 +132,23 @@ type」的測試不受編譯器保護——新增變體時窮舉 match 會強制
 20. **同步迴圈跑在 webview 主執行緒上，上限要用牆鐘而非迭代數**。`solvePow` 的
     `maxIter=500000` 依實測是 3–6 分鐘的完全凍結；difficulty 每多一個十六進位
     位數期望迭代數就乘 16，用純迭代數當上限等於把凍結時間交給上游決定。
+
+**Task 7 的審查發現（後續任務要沿用的教訓）**：
+
+21. **逾時／期限要用單調時鐘（`performance.now()`），不是 `Date.now()`**。
+    後者可被 NTP 往回校正（這個專案本來就跑在 Parallels 上，睡醒／還原都會觸發），
+    剛好落在迴圈中時 deadline 會變成未來，煞車完全失效。探勘版用的就是
+    `performance.now()`。
+22. **時間相關的測試，斷言要能區分「機制生效」與「只是慢」**。Task 7 收尾時我
+    給的斷言組合（`exhausted` / `iters < max` / `iters >= 256`）即使實作退回
+    `Date.now()` 也會**意外全部通過**——只是測試從 0.5 秒變成 15 秒。實作者發現
+    這點，另外加了一條用未被 mock 的時鐘量測真實耗時的斷言，那才是真正會紅的。
+    寫時間相關的測試時，先問「機制壞掉時這條斷言會紅，還是只是變慢」。
+23. **快取一個會過期的東西，就要有重取路徑**。Task 8 的 `accessToken` 一旦有值
+    就永不重查，過期後所有請求 401 到重啟 App 為止——而隱藏的頁面其實還登著，
+    使用者沒有任何線索。同一類的還有：回傳失敗旗標卻沒人讀（`exhausted`）。
+24. **不可列舉擋得住 `Object.keys`，擋不住 `Object.getOwnPropertyNames`**。
+    註解不要把防線講得比實際寬——指紋腳本偵測注入全域的標準做法正是後者。
 
 ---
 
