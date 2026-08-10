@@ -883,6 +883,19 @@ const zhTW = {
     settings_provider_btn_cancel: "取消",
     settings_provider_btn_open_auth: "開啟授權頁面",
     settings_provider_oauth_id_required: "請先輸入 Provider ID 後再進行 OAuth 驗證",
+    chatgpt_web_risk_tos:
+      "以程式化方式驅動 ChatGPT 網頁介面違反 OpenAI 服務條款，帳號有被停權的風險。",
+    chatgpt_web_risk_tools:
+      "工具呼叫是 prompt 模擬的，模型可能不照格式輸出，多輪保真度低於原生 tool calling。",
+    chatgpt_web_risk_upstream:
+      "認證機制是逆向而來，上游變更即失效，整個供應商會回 403。",
+    chatgpt_web_login: "登入 ChatGPT",
+    chatgpt_web_login_hint: "會開啟一個 ChatGPT 視窗，登入完成後自動收起。",
+    chatgpt_web_models_loading: "讀取可用模型中…",
+    chatgpt_web_models_empty: "尚未取得模型清單，請先登入。",
+    chatgpt_web_context_hint: (n: string) => `上下文上限：${n} tokens`,
+    chatgpt_web_tier_hint:
+      "建議對應到 Haiku 層——Claude Code 用它跑背景小任務，請求短、不需長上下文。",
     settings_provider_oauth_onboarding_wait: "登入中…（首次使用可能需要最多 45 秒準備 Google Cloud 專案）",
     settings_provider_model_placeholder: "選擇或輸入模型名稱",
     settings_provider_model_loading_placeholder: "載入模型清單中…",
@@ -1940,6 +1953,19 @@ const enRaw = {
     settings_provider_btn_cancel: "Cancel",
     settings_provider_btn_open_auth: "Open Authorization Page",
     settings_provider_oauth_id_required: "Please enter Provider ID before OAuth authentication",
+    chatgpt_web_risk_tos:
+      "Driving the ChatGPT web interface programmatically violates OpenAI's Terms of Service; your account may be suspended.",
+    chatgpt_web_risk_tools:
+      "Tool calls are prompt-emulated. The model may not follow the format, so multi-turn fidelity is lower than native tool calling.",
+    chatgpt_web_risk_upstream:
+      "The authentication flow is reverse-engineered. Any upstream change breaks it and the whole provider starts returning 403.",
+    chatgpt_web_login: "Sign in to ChatGPT",
+    chatgpt_web_login_hint: "Opens a ChatGPT window; it hides itself once you are signed in.",
+    chatgpt_web_models_loading: "Loading available models…",
+    chatgpt_web_models_empty: "No model list yet — sign in first.",
+    chatgpt_web_context_hint: (n: string) => `Context limit: ${n} tokens`,
+    chatgpt_web_tier_hint:
+      "Map it to the Haiku tier — Claude Code uses that for short background tasks that do not need a long context.",
     settings_provider_oauth_onboarding_wait: "Signing in… (first-time setup may take up to 45s to prepare your Google Cloud project)",
     settings_provider_model_placeholder: "Select or enter model name",
     settings_provider_model_loading_placeholder: "Loading model list...",

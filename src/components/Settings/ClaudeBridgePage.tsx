@@ -35,6 +35,7 @@ const SUPPORTED_TYPES = new Set([
   "anthropic",
   "anthropic-compatible",
   "codex",
+  "chatgpt-web",
 ]);
 
 function isSupported(p: ProviderInfo): boolean {

@@ -1,16 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
+// `?raw` 是 Vite 原生的原文匯入，型別由 vite/client 提供。
+//
+// 刻意不用 `node:fs`：`tsconfig.app.json` 的 `types` 只有 `["vite/client"]`，
+// 而它 `include` 整個 `src`——測試檔也在型別檢查範圍內。為了一個測試把 `node`
+// 加進去，會讓所有前端程式碼都能通過「誤用 Node API」的型別檢查，而那類錯誤
+// 要到執行時才會炸。`?raw` 同時解掉「路徑相對於 cwd」的隱性依賴。
+import injectSource from "../../src-tauri/src/chatgpt_web/inject.js?raw";
 
 /**
  * inject.js 是給瀏覽器用的平鋪 script，直接 import 會找不到 window。這裡把它
- * 讀進來、在一個假的 window 上求值，再取出掛上去的純函式來測。
+ * 在一個假的 window 上求值，再取出掛上去的純函式來測。
  *
  * win 可傳入自訂內容——用來讓 pickKey(window) 的抽樣結果變成決定性的（見
  * "pickKey(window) 過濾" 測試）。不傳時預設空物件，行為與原本相同。
  */
 function loadInject(win: Record<string, unknown> = {}): Record<string, unknown> {
-  const src = readFileSync("src-tauri/src/chatgpt_web/inject.js", "utf8");
-  new Function("window", src)(win);
+  new Function("window", injectSource)(win);
   return win;
 }
 
