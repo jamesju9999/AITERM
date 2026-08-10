@@ -230,6 +230,55 @@ fn next_envelope(text: &str) -> Option<Envelope<'_>> {
     })
 }
 
+/// 把文字裡的 `<tool>` / `<tool_call>` 封套改寫成 `flatten_history` 用的
+/// `[[tool_call:…]]` 界定符形式。
+///
+/// **為什麼一定要做這件事**：聊天面板收到工具呼叫後會把它寫回歷史——
+/// `src/hooks/useMcpChat.ts:194-197` 產生的是
+/// `<tool_call>{"name":…,"arguments":…}</tool_call>`，**沒有 `_nonce`**
+/// （那個格式是給所有供應商共用的）。若原樣攤平回 prompt，第二輪的模型就會
+/// 在上下文裡看到一則「我自己上一輪成功呼叫工具的範例」而它不帶 nonce——
+/// 這是 few-shot 教它省略 nonce。模型照抄 → `parse_tool_calls` 依規拒絕 →
+/// 沒有工具可執行 → 一路耗到 `MAX_TOOL_ITERATIONS`。使用者看到的是
+/// 「第一個工具會動，之後就不動了」。
+///
+/// 「歷史回合沒有 `_nonce`」既是第二道安全防線、也是對模型的反向教學——
+/// 同一個事實的兩面。改寫成界定符之後，歷史裡不再有任何 `<tool>` 形狀的
+/// 東西可抄，也與 `BridgeUpstream` 的 `FlatTurn::ToolCall` 表示法一致。
+///
+/// **已知限制**：散文裡落單、沒有配對結束標籤的 `<tool>` 會原樣留下。移除它
+/// 得連帶砍掉使用者可能正在討論這個協定的正當內容，而落單的裸標籤沒有 JSON
+/// 內容，教不出「省略 nonce 的完整呼叫」——這是刻意的取捨，不是疏漏。
+///
+/// 與 `parse_tool_calls` 的一處差異：這裡剖析失敗時是從**結束標籤之後**繼續
+/// （整段丟掉），不是從開標籤之後重掃。歷史是已經執行過的轉錄稿，寧可少一段
+/// 也不要留下封套形狀；`parse_tool_calls` 的優先序相反，那邊不能漏掉真正的
+/// 工具呼叫。
+pub fn rewrite_envelopes_as_history_markers(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(env) = next_envelope(rest) {
+        out.push_str(env.before);
+        rest = env.after;
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(env.body.trim()) {
+            let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            if name.is_empty() {
+                // 認不出名字就整段丟掉：留著只會讓模型看到封套形狀。
+                continue;
+            }
+            let args = v.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+            // id 用固定的 `history`：這是給模型看的轉錄稿，不需要能配對回某次
+            // 真實呼叫，而放進真 id 只會把舊 nonce 帶進 prompt。
+            out.push_str(&format!(
+                "[[tool_call:{name}#history]]\n{args}\n[[/tool_call]]"
+            ));
+        }
+        // 不是合法 JSON 的封套：整段丟掉，理由同上。
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -688,5 +737,50 @@ mod tests {
         let calls = calls.expect("真正的 <tool> 封套要被剖析出來");
         assert_eq!(calls[0].tool_name, "Read");
         assert_eq!(content, "我會用 <tool_call 這種格式，後來改用");
+    }
+
+    /// 歷史裡的封套不可以留下 `<tool>` 形狀——那會 few-shot 教模型省略 nonce。
+    #[test]
+    fn history_envelopes_are_rewritten_to_markers() {
+        let history =
+            r#"我來讀檔。<tool_call>{"name":"fs__read","arguments":{"path":"a"}}</tool_call>"#;
+        let out = rewrite_envelopes_as_history_markers(history);
+        assert!(out.contains("我來讀檔。"));
+        assert!(out.contains("[[tool_call:fs__read#history]]"), "實際：{out}");
+        assert!(out.contains(r#"{"path":"a"}"#), "參數要留著：{out}");
+        assert!(!out.contains("<tool_call"), "不可留下封套形狀：{out}");
+        assert!(!out.contains("<tool>"), "不可留下封套形狀：{out}");
+    }
+
+    #[test]
+    fn unparseable_history_envelope_is_dropped_entirely() {
+        let out = rewrite_envelopes_as_history_markers("前面<tool>{壞掉}</tool>後面");
+        assert_eq!(out, "前面後面");
+        assert!(!out.contains("<tool>"));
+    }
+
+    /// 歷史裡的封套帶著別人的 nonce（或根本沒有）時，一樣要改寫——`parse_tool_calls`
+    /// 會拒絕它們，但這個函式的職責是「移除形狀」，跟 nonce 是否正確無關。
+    #[test]
+    fn history_rewrite_ignores_nonce_entirely() {
+        let out = rewrite_envelopes_as_history_markers(
+            r#"<tool>{"name":"a","arguments":{},"_nonce":"別人的"}</tool>"#,
+        );
+        assert!(out.contains("[[tool_call:a#history]]"), "實際：{out}");
+        assert!(!out.contains("_nonce"), "舊 nonce 不該被帶進新的 prompt：{out}");
+    }
+
+    /// 多個封套與文字交錯時，順序與中間的文字都要保留。
+    #[test]
+    fn history_rewrite_preserves_interleaved_text_and_order() {
+        let out = rewrite_envelopes_as_history_markers(
+            r#"先<tool_call>{"name":"a","arguments":{}}</tool_call>中<tool>{"name":"b","arguments":{}}</tool>後"#,
+        );
+        let a = out.find("[[tool_call:a#history]]").expect("第一個要在");
+        let b = out.find("[[tool_call:b#history]]").expect("第二個要在");
+        assert!(a < b, "順序要保留：{out}");
+        assert!(out.starts_with("先"));
+        assert!(out.contains("中"));
+        assert!(out.ends_with("後"));
     }
 }
