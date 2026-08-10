@@ -8,6 +8,25 @@
 
 **Tech Stack:** Rust（Tauri 2.10、axum、tokio）、TypeScript／JS（注入腳本，vitest 測試）、React（設定 UI）
 
+## 執行進度
+
+| 任務 | 狀態 | commit |
+|---|---|---|
+| Task 1 模組骨架與 ProviderType | ✅ 完成 | `cb88bcd` |
+| Task 2–16 | 未開始 | |
+
+**分支**：`feat/chatgpt-web-provider`（master 未動）
+**執行方式**：Task 2–7 用 subagent 全套（實作＋規格審查＋品質審查）；
+Task 8–16 由主 session 直接實作並自行驗證。理由：純函式的錯誤不會編譯失敗、
+也看不出來，值得雙重審查；整合與 UI 的錯誤回饋很快。
+
+**Task 1 的審查發現（後續任務要沿用的教訓）**：
+`ai/router.rs` 的 `default_base_url_covers_every_provider_type` 這類「自稱涵蓋每種
+type」的測試不受編譯器保護——新增變體時窮舉 match 會強制你補 match 臂，但不會
+強制你補測試斷言。新增任何 provider 相關分支後，要手動檢查這類清單型測試。
+
+---
+
 **設計依據：** `docs/superpowers/specs/2026-08-10-chatgpt-web-provider-design.md`。該 spec 的「探勘實證」章節是實測值，實作時不要重新推測。
 
 ---
@@ -44,7 +63,7 @@
 - Modify: `src-tauri/src/config/types.rs`
 - Modify: `src-tauri/src/lib.rs`
 
-- [ ] **Step 1: 寫失敗的測試**
+- [x] **Step 1: 寫失敗的測試**
 
 在 `src-tauri/src/config/types.rs` 既有的 `mod tests` 內加入：
 
@@ -59,7 +78,7 @@ fn chatgpt_web_provider_type_round_trips() {
 }
 ```
 
-- [ ] **Step 2: 執行測試確認失敗**
+- [x] **Step 2: 執行測試確認失敗**
 
 ```bash
 cd src-tauri && cargo test --lib config::types::tests::chatgpt_web_provider_type_round_trips
@@ -67,7 +86,7 @@ cd src-tauri && cargo test --lib config::types::tests::chatgpt_web_provider_type
 
 預期：編譯失敗，`no variant named ChatgptWeb found for enum ProviderType`
 
-- [ ] **Step 3: 加入 enum 變體**
+- [x] **Step 3: 加入 enum 變體**
 
 `src-tauri/src/config/types.rs`，在 `ProviderType` 的 `Codex,` 之後加入：
 
@@ -90,7 +109,7 @@ cd src-tauri && cargo test --lib config::types::tests::chatgpt_web_provider_type
             (ProviderType::ChatgptWeb, "chatgpt-web"),
 ```
 
-- [ ] **Step 4: 執行測試確認通過**
+- [x] **Step 4: 執行測試確認通過**
 
 ```bash
 cd src-tauri && cargo test --lib config::types
@@ -98,7 +117,7 @@ cd src-tauri && cargo test --lib config::types
 
 預期：全部 PASS
 
-- [ ] **Step 5: 補齊所有窮舉點**
+- [x] **Step 5: 補齊所有窮舉點**
 
 ```bash
 cd src-tauri && cargo check 2>&1 | grep -A5 "non-exhaustive\|patterns.*not covered"
@@ -116,7 +135,7 @@ cd src-tauri && cargo check 2>&1 | grep -A5 "non-exhaustive\|patterns.*not cover
 
 `src-tauri/src/ai/router.rs` 的 `openai_chat_url()`：把 `ProviderType::ChatgptWeb` 加進**現有的 `Codex` 那一組**（同樣不會被實際使用，但必須列出）。
 
-- [ ] **Step 6: 建立模組骨架**
+- [x] **Step 6: 建立模組骨架**
 
 `src-tauri/src/chatgpt_web/mod.rs`：
 
@@ -137,7 +156,7 @@ pub mod tools;
 pub mod chatgpt_web;
 ```
 
-- [ ] **Step 7: 確認編譯與既有測試**
+- [x] **Step 7: 確認編譯與既有測試**
 
 ```bash
 cd src-tauri && cargo check && cargo test --lib config
@@ -145,7 +164,7 @@ cd src-tauri && cargo check && cargo test --lib config
 
 預期：`Finished`，測試全 PASS
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src-tauri/src/chatgpt_web/mod.rs src-tauri/src/config/types.rs src-tauri/src/ai/router.rs src-tauri/src/lib.rs
