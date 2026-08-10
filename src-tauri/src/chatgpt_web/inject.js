@@ -12,9 +12,22 @@
 //   2. vitest：用 `new Function("window", src)(win)` 求值，把整份檔案當成
 //      以 window 為參數的函式主體，win 是假的空物件。
 //
-// 內部用 IIFE 包住避免污染全域，純函式另外掛到 window.__aitermTest 供測試
-// 存取。這個任務只掛 sha3_512Hex；之後的任務會再往 __aitermTest 和
-// window.__aiterm 上加東西。
+// IIFE 只用來把中間狀態（RC 表、keccakf 等）關在閉包裡，不對外洩漏。對外只有
+// 兩個掛載點：window.__aitermTest（測試用純函式）與 window.__aiterm（Rust 端
+// 透過 eval 呼叫的介面，Task 8 才加）。兩者都必須用 Object.defineProperty
+// 掛成不可列舉（不寫 enumerable，預設就是 false），理由：
+//   - Task 7 的 buildConfig() 會從 Object.keys(window) 隨機挑一個 key 塞進
+//     PoW payload，送去 OpenAI 的 sentinel 端點。用一般賦值掛的 __aitermTest
+//     是可列舉屬性，累積幾十次請求後幾乎必然被抽中送出去，等於主動告訴
+//     OpenAI「這是自動化在操縱這個頁面」。
+//   - window.__aiterm 若可列舉又可寫，等於給頁面腳本一個能被覆寫的掛載點；
+//     Rust 端會直接 eval("window.__aiterm.pull(id)")，被換掉就是任意程式碼
+//     執行點。defineProperty 預設的 writable: false, configurable: false
+//     同時擋掉這個風險。
+//
+// 不變式：這個檔案在載入期不可以有任何副作用（不可啟動 timer、不可發請求），
+// 只能定義函式並掛載——測試是在載入時求值的，若之後（如 Task 10 的登入輪詢
+// 器）寫成「載入即啟動」，會漏一個 timer 出來讓 vitest 掛住不結束。
 (() => {
   // 精簡 SHA3-512（Keccak-f[1600]，rate 72 bytes）。以 32 位元 lo/hi 對表示 64 位元字，
   // 避免 BigInt 的效能與相容性問題。
@@ -98,5 +111,6 @@
     return out;
   }
 
-  window.__aitermTest = { sha3_512Hex };
+  // 不可列舉：見檔頭說明，避免被 Task 7 的 buildConfig() 隨機抽中送給 OpenAI。
+  Object.defineProperty(window, "__aitermTest", { value: { sha3_512Hex } });
 })();
