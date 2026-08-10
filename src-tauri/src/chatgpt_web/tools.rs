@@ -96,6 +96,15 @@ mod tests {
         assert_eq!(build_contract(&[], "abc123"), "");
     }
 
+    /// 呼叫端（Task 12/13）都是 `if !reminder.is_empty() { …掛上去… }`。若這裡
+    /// 哪天回了非空字串，每一個沒帶工具的請求都會被塞一段「你有這些客戶端
+    /// 工具」的提醒——而那時一個工具都沒有，模型行為會在使用者毫無工具時
+    /// 悄悄變怪，測試卻是綠的。
+    #[test]
+    fn empty_tool_list_produces_no_reminder() {
+        assert_eq!(build_reminder(&[]), "");
+    }
+
     /// 依據 OmniRoute #7679 的實測：契約 prepend 在巨大 system 區塊開頭時，
     /// 30K 字元 prompt 下模型會直接忽略它（0/3），雙位置為 16/17。
     #[test]
@@ -104,5 +113,11 @@ mod tests {
         assert!(r.contains("Read") && r.contains("Edit"), "要點名工具");
         assert!(r.len() < 400, "只是指回 system 區塊的一行提示，不是完整契約：{}", r.len());
         assert!(!r.contains("_nonce"), "nonce 只放在完整契約，避免重複洩漏");
+        // reminder 刻意只點名工具、指回 system 區塊裡的完整契約。塞進
+        // description 會讓它膨脹並失去「簡短」這個設計目的——依據
+        // OmniRoute #7679，長指令藏在 user 內容裡反而會觸發 ChatGPT 的注入
+        // 偵測。len < 400 只是鬆散的替代指標，抓不到「只多塞了 description」
+        // 這種沒讓長度爆表的情況，所以另外精確斷言不含 description 文字。
+        assert!(!r.contains("的說明"), "reminder 不可包含工具的 description");
     }
 }
