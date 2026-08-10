@@ -451,6 +451,95 @@ mod tests {
         assert!(p.feed_line(f).is_empty());
     }
 
+    /// **一次真實請求的完整 frame 序列**（2026-08-10 錄下）。
+    ///
+    /// 這條測試存在的理由是：先前所有 SSE 測試都是一次餵一種 frame，而真實
+    /// 串流是這些 frame 交織成的一長串。兩個實測抓到的 bug（回放自己的 prompt、
+    /// 串流內錯誤）都只在「照真實順序走一遍」時才顯現。
+    ///
+    /// 實測觀察到的重點：
+    /// - 一次請求裡出現**三個不同的 assistant message id**。前兩個沒有字串
+    ///   `parts[0]`（略過，且不可碰到差分狀態），第三個才是答案。
+    /// - 答案訊息是**逐步累積**的（0 → 12 → 32 → 77 字元），差分要正確。
+    /// - 答案訊息一旦開始，後續 frame 全屬於它——**沒有觀察到交錯**。
+    #[test]
+    fn real_captured_frame_sequence_yields_only_incremental_answer() {
+        let mut p = SseParser::default();
+        let mut got = String::new();
+        let feed = |p: &mut SseParser, got: &mut String, line: &str| {
+            for out in p.feed_line(line) {
+                if let SseOut::Text(d) = out {
+                    got.push_str(&d);
+                }
+            }
+        };
+
+        // 控制 frame（沒有 message 鍵）。
+        for f in [
+            r#"data: {"type":"resume_conversation_token","kind":"topic","token":"eyJ"}"#,
+            r#"data: {"type":"message_marker","marker":"user_visible_token","event":"first"}"#,
+            r#"data: {"type":"title_generation","title":"專案"}"#,
+        ] {
+            feed(&mut p, &mut got, f);
+        }
+        // 兩則 role:"system" 的空訊息。
+        for id in ["ed2b42f9", "dea9978c"] {
+            feed(&mut p, &mut got, &format!(
+                r#"data: {{"message":{{"id":"{id}","author":{{"role":"system"}},"content":{{"content_type":"text","parts":[""]}},"status":"finished_successfully"}}}}"#
+            ));
+        }
+        // 我們自己的 prompt 被回放（實測 2258 字元）。
+        feed(&mut p, &mut got, r#"data: {"message":{"id":"507b2e02","author":{"role":"user"},"content":{"content_type":"text","parts":["You are an AI command generator"]},"status":"finished_successfully"}}"#);
+        feed(&mut p, &mut got, r#"data: {"type":"input_message","input_message":{"author":{"role":"user"},"content":{"parts":["同一份 prompt 再回放一次"]}}}"#);
+
+        // 兩則 assistant 訊息，但 parts[0] 不是字串（實測 parts_len=None）。
+        // 這兩則**不可以**碰到 current_id / emitted——否則下面的答案會被當成
+        // 「換了訊息」而整段重送。
+        for id in ["7a02b6d6", "a8bcb6d8"] {
+            feed(&mut p, &mut got, &format!(
+                r#"data: {{"message":{{"id":"{id}","author":{{"role":"assistant"}},"content":{{"content_type":"thoughts","thoughts":[{{"summary":"想一下"}}]}},"status":"finished_successfully"}}}}"#
+            ));
+        }
+
+        // 答案訊息：逐步累積 0 → 12 → 32 → 77。
+        for text in [
+            "",
+            "{\"explanation\"",
+            "{\"explanation\":\"列出最近修改的檔案\"",
+            "{\"explanation\":\"列出最近修改的檔案\",\"command\":\"ls -lt | head -5\",\"risk_level\":\"safe\"}",
+        ] {
+            feed(&mut p, &mut got, &format!(
+                r#"data: {{"message":{{"id":"3e875844","author":{{"role":"assistant"}},"content":{{"content_type":"text","parts":[{}]}},"status":"in_progress"}}}}"#,
+                serde_json::Value::String(text.to_string())
+            ));
+        }
+
+        assert_eq!(
+            got,
+            "{\"explanation\":\"列出最近修改的檔案\",\"command\":\"ls -lt | head -5\",\"risk_level\":\"safe\"}",
+            "收到的應該恰好是答案本身：不含我們自己的 prompt、不含重複"
+        );
+    }
+
+    /// 實測（2026-08-10）確認 chunk 真的會切在行中間：
+    ///
+    /// ```text
+    /// [len=4220 ends_nl=false] tail="…,\"conversation_id\":\"6a79"
+    /// [len=36   ends_nl=true ] tail="e841-de64-83ee-a31b-fd9e6eaafd61\"}\n\n"
+    /// ```
+    ///
+    /// `conversation_id` 被從中間切開，下一個 36 bytes 的 chunk 才補完。沒有
+    /// 行緩衝的話那個 frame 兩半都無法剖析、會被靜默丟掉——而若被切開的是
+    /// **最後一個內容 frame**，回答結尾就永久少一截。
+    #[test]
+    fn real_chunk_boundary_falls_mid_line() {
+        let mut p = SseParser::default();
+        let head = r#"data: {"message":{"id":"m1","author":{"role":"assistant"},"content":{"parts":["答案"]}},"conversation_id":"6a79"#;
+        assert!(p.feed_str(head).is_empty(), "半行不可提早輸出");
+        let tail = "e841-de64\"}\n";
+        assert_eq!(p.feed_str(tail), vec![SseOut::Text("答案".into())]);
+    }
+
     /// 規格明確要求文字取自 `message.content.parts[0]`。多個 parts 時如何合併
     /// 明確不在本任務範圍內，這裡只固化「取索引 0」這個決定。用兩個以上、
     /// 彼此不同的元素，才能區分出取值走的是第一個還是別的位置——單元素陣列上

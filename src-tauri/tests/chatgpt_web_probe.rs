@@ -110,7 +110,9 @@ fn split_chunks_reassemble_into_incremental_deltas() {
 //      政策會擋掉內嵌 webview 裡的 OAuth 流程。要確認這條路走不走得完，
 //      走不完的話 watchLogin 會安靜地等到 10 分鐘 deadline。
 //
-// 2. `/ai` 下一句話 → 逐字串流出現 → 回答結尾完整（不少一截）。
+// 2. ✅ `/ai` 可用（2026-08-10 實測）。注意 `/ai` 不會逐字顯示——那條路徑要收
+//    完整份 JSON 才解析得出 command/explanation，然後一次顯示 CommandPreview。
+//    逐字串流要在聊天面板（AiPanel）才看得到，那條**尚未實測**。
 //
 // 3. 聊天面板帶 MCP 工具 → 第一個工具呼叫成功 → **第二、三輪仍然成功**。
 //    第二輪起失效是這條路徑最容易出的問題（歷史裡的封套形狀）。
@@ -126,12 +128,20 @@ fn split_chunks_reassemble_into_incremental_deltas() {
 //    b. ✅ 用量上限這類錯誤是 **HTTP 200 + SSE body 裡的 error 欄位**
 //       （`{"message":null,"error":"你已達到上限。","error_code":"usage_limit"}`），
 //       原本完全沒被偵測到。已加 `SseOut::Error` 與 `map_stream_error`。
-//    c. ⬜ **仍未確認**：兩則訊息會不會在同一條串流裡交錯（思考區塊與答案）。
-//       錄那次的帳號在 assistant 開始回覆前就撞到用量上限，所以沒有 assistant
-//       frame 可看。目前 `SseParser` 只保留一份 `emitted`，交錯時每次切換都會
-//       整段重送；若確認會交錯，`emitted` 要改成以 `message.id` 為鍵。
-//    d. ⬜ **仍未確認**：chunk 實際切在哪裡——那次的串流太短，沒能驗證行緩衝
-//       真的有派上用場。
+//    c. ✅ **沒有觀察到交錯**。一次請求裡出現三個不同的 assistant message id：
+//       前兩個沒有字串 `parts[0]`（content_type 不是 text，例如思考內容），
+//       被 parts guard 攔下、不會碰到 `current_id`/`emitted`；第三個才是答案，
+//       而且是逐步累積的（0 → 12 → 32 → 77 字元）。答案訊息一旦開始，後續
+//       frame 全屬於它。**保留** `emitted` 單一份的設計。
+//       ⚠️ 這只是一次取樣，而且非答案的那兩則剛好沒有可讀文字。若換成會輸出
+//       思考文字的模型，交錯仍有可能——那時就要改成以 `message.id` 為鍵。
+//       真實序列已寫成測試 `real_captured_frame_sequence_yields_only_incremental_answer`。
+//    d. ✅ **chunk 真的會切在行中間**，實測抓到：
+//         [len=4220 ends_nl=false] tail="…,\"conversation_id\":\"6a79"
+//         [len=36   ends_nl=true ] tail="e841-de64-83ee-a31b-fd9e6eaafd61\"}\n\n"
+//       `conversation_id` 被從中間切開，下一個 36 bytes 才補完。行緩衝是載重的
+//       ——沒有它那個 frame 兩半都無法剖析、會被靜默丟掉。已寫成測試
+//       `real_chunk_boundary_falls_mid_line`。
 //
 // 6. 量一次 `[Object.keys(navigator).length, Object.keys(document).length,
 //    Object.keys(window).length]`。前兩者在瀏覽器裡預期是 0（屬性都在
