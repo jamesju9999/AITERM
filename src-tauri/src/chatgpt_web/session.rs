@@ -60,6 +60,9 @@ impl Session {
         if let Some(w) = self.app.get_webview_window(Self::WINDOW_LABEL) {
             if visible {
                 let _ = w.show();
+                // 腳本可能還沒注入完（視窗剛建立），所以要防呆取用。
+                // watchLogin 自己有去重，重複 eval 不會疊出多個輪詢器。
+                let _ = w.eval("window.__aiterm && window.__aiterm.watchLogin()");
             }
             return Ok(w);
         }
@@ -69,6 +72,17 @@ impl Session {
             .inner_size(1100.0, 850.0)
             .visible(visible)
             .initialization_script(include_str!("inject.js"))
+            // 視窗剛建立時頁面還沒載入，上面那個分支的 eval 會落空（`window.__aiterm`
+            // 還不存在）。登入輪詢要掛在這裡才啟動得了。
+            //
+            // 每次導覽都會觸發（登入流程本身就是好幾次導覽），而導覽會換掉 JS
+            // context、`loginWatcher` 跟著重置——所以重新啟動正是我們要的，
+            // 不會疊加。只在視窗可見時啟動：隱藏的傳輸層不需要輪詢。
+            .on_page_load(|w, _| {
+                if w.is_visible().unwrap_or(false) {
+                    let _ = w.eval("window.__aiterm && window.__aiterm.watchLogin()");
+                }
+            })
             .build()?;
         Ok(w)
     }
@@ -153,6 +167,20 @@ pub async fn chatgpt_web_take(id: String) -> Result<Option<String>, String> {
 pub async fn chatgpt_web_chunk(id: String, data: String) {
     if let Some(s) = get() {
         s.push_chunk(&id, data);
+    }
+}
+
+/// 注入腳本偵測到登入完成時呼叫。收起視窗即可——傳輸層繼續存活，登入狀態
+/// 存在應用程式層級的 webview 儲存裡，不會因為隱藏而失效。
+///
+/// **必須是 `async`**：理由同上。
+#[tauri::command]
+pub async fn chatgpt_web_logged_in() {
+    if let Some(s) = get() {
+        use tauri::Manager;
+        if let Some(w) = s.app.get_webview_window(Session::WINDOW_LABEL) {
+            let _ = w.hide();
+        }
     }
 }
 

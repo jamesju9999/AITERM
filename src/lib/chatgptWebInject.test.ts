@@ -90,10 +90,14 @@ describe("inject.js 對 Rust 的介面", () => {
    * 那行 eval 就會靜默失敗——沒有編譯器、沒有型別檢查會發現，只會表現成
    * 「請求送出去但永遠沒有回應」。這條測試是唯一會叫的地方。
    */
-  it("__aiterm.pull 存在且是函式", () => {
-    const aiterm = win.__aiterm as { pull?: unknown } | undefined;
+  it("__aiterm.pull 與 __aiterm.watchLogin 存在且是函式", () => {
+    const aiterm = win.__aiterm as { pull?: unknown; watchLogin?: unknown } | undefined;
     expect(aiterm, "Rust 端 eval 的掛載點不存在").toBeDefined();
     expect(typeof aiterm?.pull, "pull 不是函式，eval 會靜默失敗").toBe("function");
+    // ensure_window 的 visible 分支與 on_page_load 都 eval 這個名字。
+    expect(typeof aiterm?.watchLogin, "watchLogin 不是函式，登入後不會自動收起視窗").toBe(
+      "function",
+    );
   });
 
   /**

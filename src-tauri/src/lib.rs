@@ -317,6 +317,7 @@ pub fn run() {
             // ChatGPT Web
             chatgpt_web::session::chatgpt_web_take,
             chatgpt_web::session::chatgpt_web_chunk,
+            chatgpt_web::session::chatgpt_web_logged_in,
             // PTY
             pty_create,
             pty_write,

@@ -355,6 +355,37 @@
     invoke("chatgpt_web_chunk", { id, data: "data: [DONE]\n\n" });
   };
 
+  // 顯示視窗期間輪詢登入狀態。拿到 token 就通知 Rust 收起視窗——不做這件事
+  // 視窗會一直開著，使用者很自然會去關掉它，之後每次請求都要多付一次載入成本。
+  //
+  // 這個函式**不可以在載入期自動啟動**：測試是在載入時求值的，載入即啟動的
+  // timer 會漏出來讓 vitest 不結束（檔頭的不變式）。只能由 Rust 端 eval 觸發。
+  let loginWatcher = null;
+  const watchLogin = () => {
+    // 去重：ensure_window(true) 每次被呼叫都會 eval 一次，沒有這道防護就會疊出
+    // 多個並行輪詢器，每個都在打 /api/auth/session。
+    if (loginWatcher) return;
+    // 上限：使用者始終不登入時（例如 Google SSO 在內嵌 webview 裡走不完），
+    // 輪詢不該永遠跑下去。
+    const deadline = Date.now() + 10 * 60 * 1000;
+    const tick = async () => {
+      loginWatcher = null;
+      accessToken = null; // 強制重新查，別用登入前的快取值
+      try {
+        if (await ensureAuth()) {
+          invoke("chatgpt_web_logged_in", {});
+          return;
+        }
+      } catch {
+        /* 網路暫時不通就繼續等下一輪。 */
+      }
+      if (Date.now() < deadline) {
+        loginWatcher = setTimeout(tick, 2000);
+      }
+    };
+    loginWatcher = setTimeout(tick, 0);
+  };
+
   // Rust 端只送 id，payload 由這裡反向拉取——Claude Code 的 system prompt 動輒
   // 30K 字元，用 eval 拼進 JS 字串會踩上跳脫與長度限制。
   //
@@ -375,6 +406,7 @@
         reportError(id, e);
       }
     },
+    watchLogin,
   };
   Object.defineProperty(window, "__aiterm", { value: aiterm });
 
