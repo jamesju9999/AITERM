@@ -89,6 +89,29 @@ mod tests {
             c.contains(r#"{"type":"object"}"#),
             "每個工具的 input_schema 要被序列化進契約，否則模型不知道參數長怎樣"
         );
+        // 這是實測依據，刪掉會讓契約失能，不要當成冗長文案清掉：
+        // Task 5 的剖析器只認 `<tool>` 與 `<tool_call` 這兩種封套標籤。若契約
+        // 教模型改用別的標籤（例如 <call>），模型會乖乖照做，但剖析器一筆都
+        // 認不出來——沒有錯誤、沒有 log，只會表現成「模型不會用工具」，真正
+        // 原因藏在這個字串常數裡。
+        assert!(
+            c.contains("<tool>") && c.contains("</tool>"),
+            "封套標籤必須是 <tool>...</tool>，否則 Task 5 的剖析器靜默吃不到任何一筆"
+        );
+        // 這是實測依據，刪掉會讓契約失能：少了「只在真的要呼叫工具時才發出
+        // 封套」這句，模型可能對每則回覆都夾帶 <tool> 區塊，把一般對話也
+        // 打斷成工具呼叫。
+        assert!(
+            c.contains("Only emit the <tool> block when you actually want to call a tool"),
+            "缺少「只在真的要呼叫工具時才發出封套，否則正常回答」的指示"
+        );
+        // 這是實測依據（OmniRoute #7679），刪掉會讓契約失能：缺這段時，
+        // 30K 字元 prompt 下模型會回「tool X is not in my tool set」，
+        // 成功率 0/3——正是這個功能要解決的核心問題。
+        assert!(
+            c.contains("NOT in your native tool registry"),
+            "缺少「這些工具不在原生註冊表但確實可用，不可宣稱不可用」的關鍵指示"
+        );
     }
 
     #[test]
