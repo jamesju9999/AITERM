@@ -77,6 +77,18 @@ mod tests {
         assert!(c.contains("Edit"));
         assert!(c.contains("abc123"), "nonce 要出現在契約裡");
         assert!(c.contains("_nonce"), "要明確告訴模型欄位名");
+        // 契約存在的唯一目的是讓模型知道「有哪些工具、各自做什麼、參數長怎樣」。
+        // 若退化成只有一串工具名稱，模型收到的是無用清單，整個工具模擬功能
+        // 會靜默壞掉——但只斷言 contains("Read") 這種測試不會發現，因為名稱
+        // 本身就會出現。必須分別鎖住 description 與 input_schema 有被序列化。
+        assert!(
+            c.contains("Read 的說明") && c.contains("Edit 的說明"),
+            "每個工具的 description 要出現在契約裡，否則模型不知道工具做什麼"
+        );
+        assert!(
+            c.contains(r#"{"type":"object"}"#),
+            "每個工具的 input_schema 要被序列化進契約，否則模型不知道參數長怎樣"
+        );
     }
 
     #[test]
