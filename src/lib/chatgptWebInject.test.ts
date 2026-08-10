@@ -14,6 +14,24 @@ function loadInject(win: Record<string, unknown> = {}): Record<string, unknown> 
   return win;
 }
 
+describe("inject.js 載入期無副作用", () => {
+  it("求值時不啟動任何 timer", () => {
+    // 檔頭不變式：載入期只能定義函式並掛載，不可啟動 timer、不可發請求。這條
+    // 是專門守這件事的——傳進去的假 window 是 {}，若腳本裡寫了
+    // setTimeout(...)，那會解析到 jsdom 的「全域」setTimeout 而不是這個假
+    // window（因為裸的 setTimeout 不會走 window 參數），不會拋錯，只會安靜地
+    // 漏一個 timer 出來，讓 vitest 掛住不結束（Task 10 的登入輪詢器如果寫成
+    // 「載入即啟動」就會踩到這個）。
+    vi.useFakeTimers();
+    try {
+      loadInject();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("inject.js SHA3-512", () => {
   const win = loadInject();
   const { __aitermTest } = win as { __aitermTest: { sha3_512Hex(s: string): string } };
@@ -78,7 +96,11 @@ describe("inject.js PoW", () => {
     expect(r.exhausted).toBeFalsy();
     expect(r.token.startsWith("gAAAAAC")).toBe(true);
     const encoded = r.token.slice("gAAAAAC".length);
-    expect(__aitermTest.sha3_512Hex("seed" + encoded).slice(0, 6) <= "0fffff").toBe(true);
+    const actualPrefix = __aitermTest.sha3_512Hex("seed" + encoded).slice(0, 6);
+    expect(
+      actualPrefix <= "0fffff",
+      `hash prefix ${actualPrefix} 應該 <= target 0fffff`,
+    ).toBe(true);
   });
 
   it("超過上限時回 exhausted 而不是無限跑", () => {
@@ -89,21 +111,16 @@ describe("inject.js PoW", () => {
     expect(r.token.startsWith("gAAAAAB")).toBe(true);
   });
 
-  it("config 是 18 元素，第 4 格由 solver 改寫", () => {
-    const c = __aitermTest.buildConfig();
-    expect(c).toHaveLength(18);
-    expect(c[3]).toBe(0);
-  });
-
   it("config 各格對應真實瀏覽器特徵，不能悄悄換掉來源——這是送給 OpenAI 的指紋，某一格換了來源不會讓 PoW 失敗（雜湊照樣算得出來），只會讓指紋跟同一個 session 的其他訊號兜不起來，只有反濫用系統看得到", () => {
     const c = __aitermTest.buildConfig();
+    expect(c).toHaveLength(18);
     // 可在 jsdom 下決定性比對的格子。
     expect(c[0]).toBe(screen.width + screen.height);
     expect(c[2]).toBe(4294705152);
     expect(c[3]).toBe(0);
     expect(c[4]).toBe(navigator.userAgent);
     expect(c[7]).toBe(navigator.language);
-    expect(c[8]).toBe((navigator.languages || []).join(","));
+    expect(c[8]).toBe(navigator.languages.join(","));
     expect(c[9]).toBe(0);
     expect(c[16]).toBe(navigator.hardwareConcurrency);
     // 其餘幾格（Date().toString()、script src、dpl、pickKey 三格、perfNow、
@@ -165,22 +182,36 @@ describe("inject.js PoW", () => {
   it("省略 deadlineMs 時，預設的 15 秒牆鐘上限真的有生效——前幾個測試都明確傳了 deadlineMs=50，繞過了預設值，這條補上「不傳參數」這條路徑", () => {
     const t0 = 1_000_000;
     let calls = 0;
-    // Date.now() 在 solvePow 裡被呼叫兩次才輪到迴圈內的牆鐘檢查：一次在
-    // buildConfig() 內（config 最後一格 Date.now()-perfNow），一次是算
-    // deadline。前兩次回 t0，之後（迴圈內 i=255 才第一次檢查）回 t0+20000——
-    // 超過預設的 15000ms 但小於 30000ms，藉此把「15 秒」這個數量級也釘住：
-    // 若有人把 POW_DEADLINE_MS 改成 30000，20000 就不會超時，這條測試會紅。
-    vi.spyOn(Date, "now").mockImplementation(() => {
+    // solvePow 的牆鐘用 performance.now()（單調時鐘，不是可被系統時鐘調整
+    // 跳動的 Date.now()——見 inject.js 的說明）。buildConfig() 內部也會呼叫
+    // 一次 performance.now()（算 perfNow，跟牆鐘無關），所以前兩次呼叫
+    // （buildConfig 的 perfNow、solvePow 算 deadline）回 t0，之後（迴圈內
+    // i=255 才第一次檢查）回 t0+20000——超過預設的 15000ms 但小於 30000ms，
+    // 藉此把「15 秒」這個數量級也釘住：若有人把 POW_DEADLINE_MS 改成
+    // 30000，20000 就不會超時，這條測試會紅。
+    //
+    // 只 mock performance.now，不動 Date.now：buildConfig() 最後一格仍會呼叫
+    // Date.now()（算 timeOrigin），但那跟牆鐘計算是兩支互不相干的時鐘，不會
+    // 再互相耦合——之前用 Date.now 時得靠「迴圈前剛好被呼叫兩次」分段，
+    // buildConfig 若多呼叫一次 Date.now() 就會讓那個假設靜默失效。
+    vi.spyOn(performance, "now").mockImplementation(() => {
       calls++;
       return calls <= 2 ? t0 : t0 + 20000;
     });
     try {
       const bigMaxIter = 10_000_000;
+      // 用未被 mock 的 Date.now() 量測真實耗時：若實作偷偷退回用 Date.now()
+      // 當牆鐘，這裡 mock 的 performance.now() 就不會生效，迴圈會在真實時間
+      // 裡老實地跑到真的超過 15 秒才停（exhausted/iters 斷言意外還是會過，
+      // 只是變慢）——這條 elapsed 斷言才是真正把「有沒有吃到 mock」釘住的。
+      const startReal = Date.now();
       // 不傳 deadlineMs，逼出預設值那條路徑。
       const r = __aitermTest.solvePow("seed", "000000", "gAAAAAB", bigMaxIter);
+      const elapsedReal = Date.now() - startReal;
       expect(r.exhausted).toBe(true);
       expect(r.iters).toBeLessThan(bigMaxIter);
       expect(r.iters).toBeGreaterThanOrEqual(256);
+      expect(elapsedReal).toBeLessThan(2000);
     } finally {
       vi.restoreAllMocks();
     }

@@ -19,11 +19,15 @@
 //   - Task 7 的 buildConfig() 會從 Object.keys(window) 隨機挑一個 key 塞進
 //     PoW payload，送去 OpenAI 的 sentinel 端點。用一般賦值掛的 __aitermTest
 //     是可列舉屬性，累積幾十次請求後幾乎必然被抽中送出去，等於主動告訴
-//     OpenAI「這是自動化在操縱這個頁面」。
+//     OpenAI「這是自動化在操縱這個頁面」。這道防線只擋得住 Object.keys 這類
+//     走可列舉屬性的列舉方式——指紋腳本常見的
+//     Object.getOwnPropertyNames(window) 一樣會列出不可列舉屬性，所以
+//     __aitermTest 在正式版仍是可被那種手法發現的表面；不可列舉不是「隱藏」
+//     的保證。
 //   - window.__aiterm 若可列舉又可寫，等於給頁面腳本一個能被覆寫的掛載點；
 //     Rust 端會直接 eval("window.__aiterm.pull(id)")，被換掉就是任意程式碼
 //     執行點。defineProperty 預設的 writable: false, configurable: false
-//     同時擋掉這個風險。
+//     同時擋掉這個風險（這點與是否可列舉無關）。
 //
 // 不變式：這個檔案在載入期不可以有任何副作用（不可啟動 timer、不可發請求），
 // 只能定義函式並掛載——測試是在載入時求值的，若之後（如 Task 10 的登入輪詢
@@ -115,7 +119,8 @@
   //
   // 過濾 `__aiterm` / `__TAURI` 開頭：抽到的名字會 base64 進 config、POST 到
   // OpenAI 的 sentinel 端點。把自己的掛載點名稱遞交過去等於主動標記自己是
-  // 自動化。掛載點本身已經是不可列舉的（見檔頭註解），這是第二道防線——
+  // 自動化。掛載點本身對這裡用的 Object.keys 是不可列舉的（見檔頭註解），這
+  // 是第二道防線——但只防得住 Object.keys 這種列舉方式，不是通用的隱藏保證；
   // Tauri 的 `__TAURI_INTERNALS__` 也是不可列舉的，但別把正確性建立在第三方
   // 的實作細節上。
   const pickKey = (obj) => {
@@ -144,7 +149,7 @@
       script ? script.src : "",
       dplAttr ? "dpl=" + dplAttr : "",
       nav.language,
-      (nav.languages || []).join(","),
+      nav.languages.join(","),
       0,
       pickKey(nav),
       pickKey(document),
@@ -171,11 +176,17 @@
   // 6 位值，命中機率約 2.6%，平均數十次即可。
   const solvePow = (seed, target, prefix, maxIter, deadlineMs) => {
     const cfg = buildConfig();
-    const deadline = Date.now() + (deadlineMs ?? POW_DEADLINE_MS);
+    // 用 performance.now()（單調時鐘）而不是 Date.now()（牆鐘，可被系統時鐘
+    // 調整跳動）。筆電睡醒、VM 還原快照時 NTP 可能把系統時鐘往回校正幾秒到
+    // 幾分鐘，若剛好落在這個迴圈中，用 Date.now() 算出的 deadline 會變成
+    // 「未來」，15 秒煞車完全失效，同步迴圈就會照 maxIter 跑到底——這正是這
+    // 個上限想防的事。buildConfig() 裡的 Date.now() - perfNow 是在算
+    // timeOrigin，那本來就要用牆鐘，不受影響。
+    const deadline = performance.now() + (deadlineMs ?? POW_DEADLINE_MS);
     for (let i = 0; i < maxIter; i++) {
-      // 每 256 次才看一次時鐘：Date.now() 本身不便宜，而 256 次的誤差
+      // 每 256 次才看一次時鐘：performance.now() 本身不便宜，而 256 次的誤差
       // （最壞約 100ms）遠小於 15 秒的預算。
-      if ((i & 255) === 255 && Date.now() > deadline) {
+      if ((i & 255) === 255 && performance.now() > deadline) {
         return { token: prefix + b64(cfg), iters: i + 1, exhausted: true };
       }
       cfg[3] = i;
