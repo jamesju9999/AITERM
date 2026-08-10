@@ -12,6 +12,7 @@
 
 pub mod anthropic;
 pub mod antigravity;
+pub mod chatgpt_web;
 pub mod codex;
 pub mod compatible;
 pub mod context;

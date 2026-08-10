@@ -629,9 +629,11 @@ impl AiRouter {
                 let (token, account_id) = get_valid_codex_oauth_token(&provider_cfg.id, &self.secrets).await?;
                 Arc::new(crate::ai::codex::CodexClient::new(token, provider_cfg.model.clone(), account_id))
             }
-            // 網頁版走 webview 傳輸，不是這裡建構的 `AiProvider` client。
-            // 骨架階段先擋掉，實際的 webview 轉接會在後續任務補上。
-            ProviderType::ChatgptWeb => return Err(AiError::NotConfigured),
+            // 憑證不在這裡——session 的 webview 自己持有登入狀態，所以這個
+            // 分支不查 keyring、也沒有 token 可以驗。
+            ProviderType::ChatgptWeb => Arc::new(
+                crate::ai::chatgpt_web::ChatgptWebProvider::new(provider_cfg.model.clone()),
+            ),
         };
         Ok(provider)
     }
