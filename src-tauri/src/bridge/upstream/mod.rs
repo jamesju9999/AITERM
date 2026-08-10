@@ -13,6 +13,7 @@ use crate::ai::AiError;
 use crate::bridge::anthropic::request::MessagesRequest;
 
 pub mod anthropic;
+pub mod chatgpt_web;
 pub mod antigravity;
 pub mod codex;
 pub mod openai;

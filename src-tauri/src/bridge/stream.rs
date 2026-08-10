@@ -54,6 +54,10 @@ pub fn run(
                     use crate::bridge::upstream::BridgeUpstream;
                     a.send(&req, &mapping.model).await
                 }
+                Upstream::ChatgptWeb(c) => {
+                    use crate::bridge::upstream::BridgeUpstream;
+                    c.send(&req, &mapping.model).await
+                }
             }
         };
         tokio::pin!(upstream_fut);

@@ -15,6 +15,7 @@ use super::tool_meta::ToolMetaCache;
 use super::upstream::anthropic::AnthropicUpstream;
 use super::upstream::antigravity::client::AntigravityUpstream;
 use super::upstream::codex::client::CodexUpstream;
+use super::upstream::chatgpt_web::ChatgptWebUpstream;
 use super::upstream::openai::client::OpenAiUpstream;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +24,7 @@ pub enum UpstreamKind {
     Anthropic,
     Codex,
     Antigravity,
+    ChatgptWeb,
 }
 
 /// 目前支援的上游種類；不支援的回 `None`。
@@ -49,9 +51,9 @@ pub fn kind_for(p: &ProviderConfig) -> Option<UpstreamKind> {
         // M2。
         ProviderType::Codex => Some(UpstreamKind::Codex),
 
-        // 網頁版走 webview 傳輸，不是這裡橋接的上游種類之一，回 None
-        // （= 不支援）。
-        ProviderType::ChatgptWeb => None,
+        // 網頁版走 webview 傳輸而非 HTTP client，但橋接一樣接得上——
+        // 它自己有 BridgeUpstream 實作。
+        ProviderType::ChatgptWeb => Some(UpstreamKind::ChatgptWeb),
     }
 }
 
@@ -68,6 +70,7 @@ pub enum Upstream {
     Anthropic(AnthropicUpstream),
     Codex(CodexUpstream),
     Antigravity(AntigravityUpstream),
+    ChatgptWeb(ChatgptWebUpstream),
 }
 
 /// 建立上游實例。每個請求呼叫一次。
@@ -153,6 +156,11 @@ pub async fn build(
                 tool_meta.clone(),
             )))
         }
+        UpstreamKind::ChatgptWeb => {
+            // 沒有憑證要解析、也沒有 base_url 要決定：傳輸是 session 持有的
+            // webview，登入狀態在它自己身上。
+            Ok(Upstream::ChatgptWeb(ChatgptWebUpstream))
+        }
     }
 }
 
@@ -236,6 +244,17 @@ mod tests {
         assert_eq!(
             kind_for(&provider(ProviderType::Codex, Some("oauth"))),
             Some(UpstreamKind::Codex)
+        );
+    }
+
+    /// 回 `None` 代表「橋接不支援這個 provider」，Claude Code 那邊會拿到一則
+    /// 拒絕訊息。ChatgptWeb 一度是 None（骨架階段），接上 BridgeUpstream 之後
+    /// 忘了改這裡的話，功能做完了卻用不到，而且不會有任何測試失敗。
+    #[test]
+    fn chatgpt_web_maps_to_its_own_kind() {
+        assert_eq!(
+            kind_for(&provider(ProviderType::ChatgptWeb, None)),
+            Some(UpstreamKind::ChatgptWeb)
         );
     }
 
