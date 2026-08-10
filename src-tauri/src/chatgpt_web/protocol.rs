@@ -67,17 +67,40 @@ pub enum SseOut {
     Done,
 }
 
-/// ChatGPT 網頁版 SSE 的逐行解析器。
+/// ChatGPT 網頁版 SSE 的解析器。
 ///
-/// 每個 data frame 是「到目前為止的完整文字」快照而非增量，所以要保留
-/// 已送出的內容自己算差分。
+/// 呼叫端餵原始 chunk（`feed_str`），不需要自己切行——HTTP chunk 不保證切在
+/// 行邊界上，殘缺的尾巴留在 `pending` 等下一個 chunk 接上。因為每個 frame 是
+/// 累積快照，中段被丟的 frame 會被下一個補回來，但**最後一個內容 frame 沒有
+/// 下一個**，所以少了行緩衝就是「回答結尾永久少一截且無聲無息」。
+///
+/// 每個 data frame 是「到目前為止的完整文字」快照而非增量，所以要保留已送出
+/// 的內容自己算差分。
+///
+/// `Done` 不會終止解析器，呼叫端負責停止餵資料。
 #[derive(Default)]
 pub struct SseParser {
+    pending: String,
+    current_id: Option<String>,
     emitted: String,
 }
 
 impl SseParser {
-    pub fn feed_line(&mut self, line: &str) -> Vec<SseOut> {
+    /// 餵一段原始 chunk。只有完整的行（遇到 `\n`）會被處理，殘缺的尾巴留著。
+    ///
+    /// 呼叫端必須確保串流最後一行有換行結尾，否則它會永遠留在緩衝裡——
+    /// 注入腳本送的 `data: [DONE]` 因此要帶 `\n`。
+    pub fn feed_str(&mut self, chunk: &str) -> Vec<SseOut> {
+        self.pending.push_str(chunk);
+        let mut out = Vec::new();
+        while let Some(nl) = self.pending.find('\n') {
+            let line: String = self.pending.drain(..=nl).collect();
+            out.extend(self.feed_line(line.trim_end_matches(['\r', '\n'])));
+        }
+        out
+    }
+
+    fn feed_line(&mut self, line: &str) -> Vec<SseOut> {
         let Some(payload) = line.strip_prefix("data:") else {
             return Vec::new();
         };
@@ -88,17 +111,37 @@ impl SseParser {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
             return Vec::new();
         };
-        let full = v
-            .get("message")
-            .and_then(|m| m.get("content"))
+        let Some(msg) = v.get("message") else {
+            return Vec::new();
+        };
+        // 沒有可讀文字的 frame（moderation、role:"system" 的空訊息、只帶
+        // conversation_id 的 frame）在串流裡是常態。這種 frame 必須完全不碰
+        // 差分狀態：先前用 `.unwrap_or("")` 把它壓成空字串，會讓 emitted 被
+        // 重設，下一個真正的快照就整段重送，使用者看到重複的文字。
+        let Some(full) = msg
+            .get("content")
             .and_then(|c| c.get("parts"))
             .and_then(|p| p.as_array())
             .and_then(|arr| arr.first())
             .and_then(|s| s.as_str())
-            .unwrap_or("");
+        else {
+            return Vec::new();
+        };
+        // message.id 換了就是換了一則訊息（例如思考區塊結束、答案開始），
+        // 重新起算。用 id 而不是「內容對不上」來判斷，是因為後者無法區分
+        // 「換訊息」與其他情況。
+        //
+        // 注意：這假設兩則訊息不會在同一條串流裡交錯（交錯時每次切換都會
+        // 整段重送）。Task 16 的端到端探針要錄一條真實串流確認這件事。
+        if let Some(id) = msg.get("id").and_then(|s| s.as_str()) {
+            if self.current_id.as_deref() != Some(id) {
+                self.current_id = Some(id.to_string());
+                self.emitted.clear();
+            }
+        }
         // 用 strip_prefix 而非 `full[self.emitted.len()..]`：後者按 byte 切字串，
-        // 當這個 frame 不是前一個的延續時（上游換了一則訊息），切點會落在多位元組
-        // 字元的中間而 panic。實測：emitted="ok"、full="你好世界" 會炸在
+        // 當這個 frame 不是前一個的延續時，切點會落在多位元組字元的中間而
+        // panic。實測：emitted="ok"、full="你好世界" 會炸在
         // 「byte index 2 is not a char boundary」。中文內容下這不是理論風險。
         match full.strip_prefix(self.emitted.as_str()) {
             // 沒有新增內容（上游重送同一份快照）。
@@ -109,15 +152,16 @@ impl SseParser {
                 self.emitted = full.to_string();
                 vec![SseOut::Text(delta)]
             }
-            // 不是延續——上游換了一則訊息。重新起算並把整段當新內容送出。
+            // 不是延續，而且 id 也沒告訴我們換了訊息。整段當新內容送出——
             // 不能沿用「比較長度」的判斷：新訊息比舊的短時會被整段靜默吃掉。
             None => {
-                self.emitted = full.to_string();
+                // 上游送了一個空的 parts[0] 但 id 沒變：不是新內容，忽略。
                 if full.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![SseOut::Text(full.to_string())]
+                    return Vec::new();
                 }
+                let owned = full.to_string();
+                self.emitted = owned.clone();
+                vec![SseOut::Text(owned)]
             }
         }
     }
@@ -312,5 +356,103 @@ mod tests {
             p.feed_line(r#"data: {"message":{"content":{"parts":["第一","第二","第三"]}}}"#),
             vec![SseOut::Text("第一".into())],
         );
+    }
+
+    /// Bug 1：moderation、role:"system" 的空訊息、只帶 conversation_id 的
+    /// frame 在串流裡是常態。這種沒有可讀文字的 frame 若被壓成空字串（舊寫法
+    /// `.unwrap_or("")`），會讓 `emitted` 被重設，下一個真正的快照就整段重送。
+    /// 這個測試刻意放在串流**中段**——放在開頭時 `emitted` 本來就是空的，
+    /// 重設沒有可觀察後果，測不出問題。
+    #[test]
+    fn mid_stream_frame_without_text_does_not_reset_state() {
+        let mut p = SseParser::default();
+        assert_eq!(
+            p.feed_line(r#"data: {"message":{"content":{"parts":["你好"]}}}"#),
+            vec![SseOut::Text("你好".into())],
+        );
+        assert!(p.feed_line(r#"data: {"message":null}"#).is_empty());
+        assert_eq!(
+            p.feed_line(r#"data: {"message":{"content":{"parts":["你好，世界"]}}}"#),
+            vec![SseOut::Text("，世界".into())],
+            "中段沒有文字的 frame 不該把 emitted 清空，否則這裡會整段重送",
+        );
+    }
+
+    /// 同上，但用 `parts:[""]`（欄位存在、內容是空字串）而不是整個 message
+    /// 缺欄位。兩種情況都要保留差分狀態，不能因此重送。
+    #[test]
+    fn frame_with_empty_parts_mid_stream_does_not_reset_state() {
+        let mut p = SseParser::default();
+        assert_eq!(
+            p.feed_line(r#"data: {"message":{"content":{"parts":["你好"]}}}"#),
+            vec![SseOut::Text("你好".into())],
+        );
+        assert!(p
+            .feed_line(r#"data: {"message":{"content":{"parts":[""]}}}"#)
+            .is_empty());
+        assert_eq!(
+            p.feed_line(r#"data: {"message":{"content":{"parts":["你好，世界"]}}}"#),
+            vec![SseOut::Text("，世界".into())],
+            "中段的空 parts[0] 不該把 emitted 清空，否則這裡會整段重送",
+        );
+    }
+
+    /// Bug 2：HTTP chunk 不保證切在行邊界上。用 `feed_str` 把一行拆成兩段
+    /// 餵，斷言殘缺的前半段不輸出，後半段接上後才輸出完整內容。
+    #[test]
+    fn chunks_split_mid_line_are_reassembled() {
+        let mut p = SseParser::default();
+        let first = p.feed_str(r#"data: {"message":{"content":{"parts":["完整答案在這"#);
+        assert!(first.is_empty(), "殘缺的前半段不該提早輸出");
+        let second = p.feed_str("裡\"]}}}\n");
+        assert_eq!(second, vec![SseOut::Text("完整答案在這裡".into())]);
+    }
+
+    /// 沒有換行結尾的完整 JSON 應該被留在緩衝裡等下一個 chunk，不能因為
+    /// JSON 本身可解析就提早當成一行處理。
+    #[test]
+    fn trailing_partial_line_is_held_not_emitted() {
+        let mut p = SseParser::default();
+        let out = p.feed_str(r#"data: {"message":{"content":{"parts":["還沒送出"]}}}"#);
+        assert!(out.is_empty(), "沒有換行結尾時應該還在等，不能提早輸出");
+    }
+
+    /// `message.id` 換了代表換了一則訊息（例如思考區塊結束、答案開始）。
+    /// 第二則的內容不是第一則的延續，要整段送出且不能 panic。
+    #[test]
+    fn new_message_id_restarts_the_diff() {
+        let mut p = SseParser::default();
+        assert_eq!(
+            p.feed_line(r#"data: {"message":{"id":"msg_1","content":{"parts":["第一則回答"]}}}"#),
+            vec![SseOut::Text("第一則回答".into())],
+        );
+        assert_eq!(
+            p.feed_line(r#"data: {"message":{"id":"msg_2","content":{"parts":["第二則回答"]}}}"#),
+            vec![SseOut::Text("第二則回答".into())],
+            "換了 id 要整段送出，不能 panic 也不能只送差異",
+        );
+    }
+
+    /// `id` 不變時仍照常算差分——確認 id 檢查不會誤傷正常的累積快照。
+    #[test]
+    fn same_message_id_keeps_diffing() {
+        let mut p = SseParser::default();
+        assert_eq!(
+            p.feed_line(r#"data: {"message":{"id":"msg_1","content":{"parts":["你好"]}}}"#),
+            vec![SseOut::Text("你好".into())],
+        );
+        assert_eq!(
+            p.feed_line(r#"data: {"message":{"id":"msg_1","content":{"parts":["你好，世界"]}}}"#),
+            vec![SseOut::Text("，世界".into())],
+        );
+    }
+
+    /// 部分環境可能送 `\r\n` 結尾，`trim_end_matches` 要同時處理 `\r`，
+    /// 否則殘留的 `\r` 會混進 JSON payload 導致解析失敗。
+    #[test]
+    fn crlf_line_endings_are_handled() {
+        let mut p = SseParser::default();
+        let out = p.feed_str("data: {\"message\":{\"content\":{\"parts\":[\"你好\"]}}}\r\n");
+        assert_eq!(out, vec![SseOut::Text("你好".into())]);
     }
 }
