@@ -373,6 +373,43 @@ ChatGPT 網頁版回的每個 SSE data 是一份完整的訊息快照（累積�
             vec![SseOut::Text("還活著".into())],
         );
     }
+
+    /// 上游換一則新訊息時，這個 frame 不是前一個的延續。按 byte 位移切字串
+    /// 會讓切點落在多位元組字元中間而 panic——中文內容下這不是理論風險。
+    #[test]
+    fn non_continuation_frame_does_not_panic_on_multibyte() {
+        let mut p = SseParser::default();
+        assert_eq!(
+            p.feed_line(r#"data: {"message":{"content":{"parts":["ok"]}}}"#),
+            vec![SseOut::Text("ok".into())],
+        );
+        // "ok" 是 2 bytes，"你好世界" 的 byte 2 在 '你' 的中間。
+        assert_eq!(
+            p.feed_line(r#"data: {"message":{"content":{"parts":["你好世界"]}}}"#),
+            vec![SseOut::Text("你好世界".into())],
+            "換訊息時要整段送出，不是 panic 也不是丟掉",
+        );
+    }
+
+    /// 新訊息比舊的短時，用長度比較會把它整段靜默吃掉。
+    #[test]
+    fn shorter_new_message_is_not_swallowed() {
+        let mut p = SseParser::default();
+        p.feed_line(r#"data: {"message":{"content":{"parts":["很長的第一則回答"]}}}"#);
+        assert_eq!(
+            p.feed_line(r#"data: {"message":{"content":{"parts":["短"]}}}"#),
+            vec![SseOut::Text("短".into())],
+        );
+    }
+
+    /// 上游重送同一份快照時不該重複輸出。
+    #[test]
+    fn identical_resend_emits_nothing() {
+        let mut p = SseParser::default();
+        let frame = r#"data: {"message":{"content":{"parts":["你好"]}}}"#;
+        assert_eq!(p.feed_line(frame), vec![SseOut::Text("你好".into())]);
+        assert!(p.feed_line(frame).is_empty(), "重送不該再輸出一次");
+    }
 ```
 
 - [ ] **Step 2: 執行測試確認失敗**
@@ -424,13 +461,30 @@ impl SseParser {
             .and_then(|arr| arr.first())
             .and_then(|s| s.as_str())
             .unwrap_or("");
-        if full.len() <= self.emitted.len() {
-            // 相同或更短（上游重送、或換了 message id）——沒有新內容可送。
-            return Vec::new();
+        // 用 strip_prefix 而非 `full[self.emitted.len()..]`：後者按 byte 切字串，
+        // 當這個 frame 不是前一個的延續時（上游換了一則訊息），切點會落在多位元組
+        // 字元的中間而 panic。實測：emitted="ok"、full="你好世界" 會炸在
+        // 「byte index 2 is not a char boundary」。中文內容下這不是理論風險。
+        match full.strip_prefix(self.emitted.as_str()) {
+            // 沒有新增內容（上游重送同一份快照）。
+            Some("") => Vec::new(),
+            // 正常的累積快照：只回新增的那一段。
+            Some(delta) => {
+                let delta = delta.to_string();
+                self.emitted = full.to_string();
+                vec![SseOut::Text(delta)]
+            }
+            // 不是延續——上游換了一則訊息。重新起算並把整段當新內容送出。
+            // 不能沿用「比較長度」的判斷：新訊息比舊的短時會被整段靜默吃掉。
+            None => {
+                self.emitted = full.to_string();
+                if full.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![SseOut::Text(full.to_string())]
+                }
+            }
         }
-        let delta = full[self.emitted.len()..].to_string();
-        self.emitted = full.to_string();
-        vec![SseOut::Text(delta)]
     }
 }
 ```
@@ -441,7 +495,7 @@ impl SseParser {
 cd src-tauri && cargo test --lib chatgpt_web::protocol
 ```
 
-預期：7 個測試全 PASS
+預期：12 個測試全 PASS（Task 2 的 5 個 + 本任務的 7 個）
 
 - [ ] **Step 5: Commit**
 
