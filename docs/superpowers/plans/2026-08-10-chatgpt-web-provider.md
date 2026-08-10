@@ -923,7 +923,13 @@ const ROT = [0,1,62,28,27, 36,44,6,55,20, 3,10,43,25,39, 41,45,15,21,8, 18,2,61,
 
 吸收階段：每 72 bytes 一區塊，補 `0x06`、末位元組 `|= 0x80`，逐 8 bytes 以 little-endian XOR 進狀態後跑一次 `keccakf()`。擠出階段：取前 8 個 lane（64 bytes）轉十六進位。
 
-完整可用的參考實作在 `probe/chatgpt-web` 分支的探勘腳本裡（已通過同樣的測試向量），直接搬過來即可。
+完整可用的參考實作**就在當前分支**的 `src-tauri/src/probe_chatgpt.rs`，`sha3_512Hex`
+從第 83 行開始（那個檔案是探勘用的 Rust，SHA3 以一段內嵌的 JS 字串存在）。該實作已
+用同樣的測試向量實測通過，直接搬過來即可，不要重寫。同一份檔案裡的 `solvePow`
+（約第 165 行起）是 Task 7 要用的，這次先不動。
+
+（沒有 `probe/chatgpt-web` 這個分支——探勘程式碼是以 commit `99d9c72` 直接留在
+`feat/chatgpt-web-provider` 上的，Task 16 才會連同它一起移除。）
 
 - [ ] **Step 4: 執行測試確認通過**
 
