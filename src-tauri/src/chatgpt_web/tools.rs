@@ -29,6 +29,12 @@ pub fn build_contract(tools: &[McpToolDefinition], nonce: &str) -> String {
         "Only emit the <tool> block when you actually want to call a tool; otherwise answer \
          normally."
             .to_string(),
+        // 這是實測依據：fence 包住封套時剖析器解得出來（fence 本身不在
+        // `<tool>`/`</tool>` 之間），但 content 會殘留一個空的 ```json 區塊
+        // 給使用者看到。這句同時降低模型把協定標籤用反引號括起來的機率——
+        // 對應 `stray_tool_open_tag_in_backticks_does_not_swallow_the_real_
+        // envelope` 那種「模型引述協定字彙」的情境。
+        "Do not wrap the <tool> block in a code fence or backticks.".to_string(),
         // 這是實測依據，刪掉會讓契約失能：原生 function calling 有 schema 約束
         // 住工具名，這個純文字協定唯一的約束就是這句話。工具名是編碼過的
         // (`{server}__{tool}`)；模型很容易把 `__` 前綴當成實作噪音而截短，
@@ -112,24 +118,36 @@ pub fn parse_tool_calls(text: &str, nonce: &str) -> (String, Option<Vec<AiToolCa
     // 被拒絕的封套要連同 `<tool>` / `</tool>` 標籤一起推回 content（用 `raw`
     // 而非 `body`）。只推回 body 會把使用者貼進來的原文改掉——而「使用者貼了
     // 一段含封套的範例」正是 nonce 檢查要處理的主要情境。
-    while let Some((before, body, raw, after)) = next_envelope(rest) {
-        content.push_str(before);
-        rest = after;
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(body.trim()) else {
-            // 封套內不是合法 JSON——原樣保留，別吞掉使用者看得到的內容。
-            content.push_str(raw);
+    while let Some(env) = next_envelope(rest) {
+        content.push_str(env.before);
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(env.body.trim()) else {
+            // 封套內不是合法 JSON。常見成因：找到的開標籤其實是散文裡提到
+            // 的字面 `<tool>`（甚至是契約自己教模型的措辭），配對到的結束
+            // 標籤屬於後面真正的那個封套，中間夾的文字當成 body 當然剖析
+            // 失敗。這種情況若沿用 `env.after`（結束標籤之後）當 `rest`，
+            // 會把中間夾著的真封套整段吞掉、永遠沒機會被看到。
+            //
+            // 只吐回開標籤本身，`rest` 從開標籤之後（`env.after_open`）
+            // 重新掃描——下一輪如果後面還有一個配對正確的封套，就會被找到；
+            // 若真的只是格式錯誤（例如 `malformed_envelope_body_is_
+            // preserved_verbatim` 那種情況），下一輪會找不到任何開標籤，
+            // 直接以 None 收尾，`rest` 原樣併回 content，等效於整段原樣
+            // 保留。
+            content.push_str(env.open_tag);
+            rest = env.after_open;
             continue;
         };
+        rest = env.after;
         // 缺 nonce 與 nonce 不符，處理方式相同：當文字。
         if v.get("_nonce").and_then(|n| n.as_str()) != Some(nonce) {
-            content.push_str(raw);
+            content.push_str(env.raw);
             continue;
         }
         // `.filter(|n| !n.is_empty())`：空字串 name 一樣要拒絕。`as_str()`
         // 對 `""` 回 `Some("")`，一個空名字不是模型的真實意圖，不能讓它
         // 走到 executeMcpTool。
         let Some(name) = v.get("name").and_then(|n| n.as_str()).filter(|n| !n.is_empty()) else {
-            content.push_str(raw);
+            content.push_str(env.raw);
             continue;
         };
         calls.push(AiToolCall {
@@ -148,10 +166,45 @@ pub fn parse_tool_calls(text: &str, nonce: &str) -> (String, Option<Vec<AiToolCa
     (content, if calls.is_empty() { None } else { Some(calls) })
 }
 
-/// 找出下一個封套，回傳（封套前的文字, 封套內容, 封套原文, 封套後的剩餘文字）。
+/// `next_envelope` 找到的下一個候選封套，連同前後文字的切片。
+struct Envelope<'a> {
+    /// 封套前的文字，無條件推回 content。
+    before: &'a str,
+    /// 開標籤本身（例如 `<tool>` 或 `<tool_call name="...">`）。只有「JSON
+    /// 剖析失敗」那條分支用得到——其餘分支拒絕時用 `raw`（整段封套）。
+    open_tag: &'a str,
+    /// 開標籤與結束標籤之間的內容，拿去剖析 JSON。
+    body: &'a str,
+    /// 整段封套原文（含開標籤與結束標籤）。格式良好但被 nonce/name 檢查
+    /// 拒絕時，原樣吐回用這個。
+    raw: &'a str,
+    /// 結束標籤之後的剩餘文字。除了「JSON 剖析失敗」以外的分支，下一輪都
+    /// 從這裡繼續。
+    after: &'a str,
+    /// 開標籤之後的剩餘文字（不受這次配對到的結束標籤位置限制）。只有
+    /// 「JSON 剖析失敗」那條分支用這個當 `rest` 繼續——那條分支代表配對到
+    /// 的結束標籤其實跟眼前這個開標籤無關（例如散文裡提到一次 `<tool>`，
+    /// 真正的封套在更後面），若沿用 `after` 會把中間夾著的真封套一起吞掉。
+    /// 只吐回開標籤本身、從它後面重新掃描，下一輪才有機會找到後面真正
+    /// 配對的封套。
+    after_open: &'a str,
+}
+
+/// 找出下一個候選封套。
 ///
-/// 「封套原文」含 `<tool>` / `</tool>` 標籤本身，給拒絕路徑原樣推回用。
-fn next_envelope(text: &str) -> Option<(&str, &str, &str, &str)> {
+/// **終止性**：呼叫端的 `while let Some(env) = next_envelope(rest)` 迴圈裡，
+/// `rest` 的 byte 長度每輪都嚴格遞減，所以一定會終止：
+/// - 正常分支（nonce/name 拒絕或成功）把 `rest` 設成 `env.after`，也就是
+///   結束標籤**之後**；`env_end`（結束標籤終點）至少比 `body_start`（開
+///   標籤終點）更晚，而 `body_start` 本身一定 `> start`（開標籤起點），
+///   所以 `env_end > start ≥ 0`，`after` 一定比原本的 `rest` 短。
+/// - 「JSON 剖析失敗」分支把 `rest` 設成 `env.after_open`，也就是開標籤
+///   **之後**；`body_start - start` 至少是 `open.len()`（`<tool>` 是 6、
+///   `<tool_call` 是 10 個 byte，若開標籤帶屬性則更多），所以這個分支下
+///   `rest` 至少縮短這個量。
+///
+/// 兩種分支都嚴格縮短 `rest`，迴圈必定終止。
+fn next_envelope(text: &str) -> Option<Envelope<'_>> {
     const PAIRS: [(&str, &str); 2] = [("<tool>", "</tool>"), ("<tool_call", "</tool_call>")];
     // (起點, 內容起點, 內容終點, 封套終點)
     let mut best: Option<(usize, usize, usize, usize)> = None;
@@ -167,12 +220,14 @@ fn next_envelope(text: &str) -> Option<(&str, &str, &str, &str)> {
         }
     }
     let (start, body_start, body_end, env_end) = best?;
-    Some((
-        &text[..start],
-        &text[body_start..body_end],
-        &text[start..env_end],
-        &text[env_end..],
-    ))
+    Some(Envelope {
+        before: &text[..start],
+        open_tag: &text[start..body_start],
+        body: &text[body_start..body_end],
+        raw: &text[start..env_end],
+        after: &text[env_end..],
+        after_open: &text[body_start..],
+    })
 }
 
 #[cfg(test)]
@@ -270,6 +325,13 @@ mod tests {
             c.contains("copy them exactly as printed"),
             "缺少「工具名要逐字照抄，含 `__` 前綴」的關鍵指示"
         );
+        // 這是實測依據，刪掉會讓契約失能：fence 包住封套時剖析器解得出來，
+        // 但 content 會殘留一個空的 ```json 區塊給使用者看到。這句同時降低
+        // 模型把協定標籤用反引號括起來的機率。
+        assert!(
+            c.contains("Do not wrap the <tool> block in a code fence or backticks"),
+            "缺少「不要用 code fence 或反引號包住 <tool> 區塊」的指示"
+        );
     }
 
     #[test]
@@ -365,13 +427,6 @@ mod tests {
         assert!(content.contains("rm -rf /"), "原文要原樣保留");
     }
 
-    #[test]
-    fn wrong_nonce_is_treated_as_text() {
-        let text = r#"<tool>{"name":"Read","arguments":{},"_nonce":"別人的"}</tool>"#;
-        let (_, calls) = parse_tool_calls(text, "n1");
-        assert!(calls.is_none(), "nonce 不符要當成文字，不可執行");
-    }
-
     /// 被拒絕的封套要連標籤一起原樣留在內容裡。使用者貼一段含 `<tool>` 的
     /// 範例進來時，回覆裡他的原文不該被改掉——而這正是 nonce 檢查要處理的
     /// 主要情境。
@@ -379,7 +434,7 @@ mod tests {
     fn rejected_envelope_is_preserved_verbatim_with_its_tags() {
         let text = r#"看這段：<tool>{"name":"Read","arguments":{},"_nonce":"別人的"}</tool>就這樣"#;
         let (content, calls) = parse_tool_calls(text, "n1");
-        assert!(calls.is_none());
+        assert!(calls.is_none(), "nonce 不符要當成文字，不可執行");
         assert_eq!(content, text, "拒絕路徑要原樣保留，包含 <tool> 與 </tool>");
     }
 
@@ -388,7 +443,7 @@ mod tests {
     fn malformed_envelope_body_is_preserved_verbatim() {
         let text = "前面<tool>{不是 JSON}</tool>後面";
         let (content, calls) = parse_tool_calls(text, "n1");
-        assert!(calls.is_none());
+        assert!(calls.is_none(), "封套內不是合法 JSON 時不可產生呼叫");
         assert_eq!(content, text);
     }
 
@@ -498,8 +553,12 @@ mod tests {
         assert_eq!(calls.len(), 2, "兩個封套都要被剖析出來");
         assert_eq!(calls[0].tool_name, "Read", "順序要跟文字裡的先後一致");
         assert_eq!(calls[1].tool_name, "Edit");
-        assert!(!content.contains("<tool"), "content 裡不可殘留任何封套標籤：{content}");
-        assert!(content.contains("先讀") && content.contains("再編輯") && content.contains("完成"));
+        // 用 assert_eq 精確比對，而非 contains：成功路徑目前沒有任何一條
+        // 鎖住空白處理——`multibyte_text_immediately_after_tool_tag_does_
+        // not_panic` 的教訓在此同樣適用：off-by-one 落在 ASCII 標籤字元上
+        // 不會 panic，卻會讓內容多一個雜訊字元，`contains` 這種寬鬆斷言
+        // 抓不到。
+        assert_eq!(content, "先讀  再編輯  完成", "content 不可殘留封套標籤或漏/多空白：{content}");
     }
 
     /// 探測發現：`name` 是空字串時，`.and_then(|n| n.as_str())` 對 `""` 回
@@ -585,5 +644,49 @@ mod tests {
         let (content, calls) = parse_tool_calls(text, "n1");
         assert!(calls.is_none(), "_nonce 非字串要視同缺 nonce，一律拒絕");
         assert_eq!(content, text);
+    }
+
+    /// 散文裡落單的 `<tool>` 在前、真正的封套在後。契約自己的措辭裡就有
+    /// `<tool>` 這個字面（`build_contract` 的 "Only emit the <tool> block
+    /// when..."，`build_reminder` 也有），模型被 prime 之後回一句「我用
+    /// `<tool>` 區塊呼叫：」是很自然的行為，不是理論邊界。
+    ///
+    /// `next_envelope` 對每個 pair 只取 `text.find(open)` 的第一個開標籤，
+    /// close 則從那裡往後找第一個——落單的開標籤會配對到後面真正封套的
+    /// 結束標籤，把兩者之間的內容當成 body，解析失敗，然後 `rest` 跳到
+    /// 那個結束標籤之後，真正的封套就再也沒機會被看到。
+    #[test]
+    fn stray_tool_open_tag_in_prose_does_not_swallow_the_real_envelope() {
+        let text = r#"我會用 <tool> 區塊來呼叫：<tool>{"name":"Read","arguments":{},"_nonce":"n1"}</tool>"#;
+        let (content, calls) = parse_tool_calls(text, "n1");
+        let calls = calls.expect("真正的封套要被剖析出來，不能被散文裡落單的 <tool> 吃掉");
+        assert_eq!(calls[0].tool_name, "Read");
+        assert_eq!(content, "我會用 <tool> 區塊來呼叫：", "散文裡落單的標籤要保留在 content 裡");
+    }
+
+    /// 同上，但落單標籤被反引號括住——模型把協定字彙當成程式碼片段引用，
+    /// 也是很自然的行為，同樣不能吃掉後面真正的封套。
+    #[test]
+    fn stray_tool_open_tag_in_backticks_does_not_swallow_the_real_envelope() {
+        let text = "我用 `<tool>` 區塊呼叫：".to_string()
+            + r#"<tool>{"name":"Read","arguments":{},"_nonce":"n1"}</tool>"#;
+        let (content, calls) = parse_tool_calls(&text, "n1");
+        let calls = calls.expect("真正的封套要被剖析出來");
+        assert_eq!(calls[0].tool_name, "Read");
+        assert_eq!(content, "我用 `<tool>` 區塊呼叫：");
+    }
+
+    /// 落單的 `<tool_call` 開標籤在前、真的 `<tool>` 封套在後（跨 pair）。
+    /// `<tool_call` 與 `<tool>` 是不同的字面，`text.find("<tool>")` 不會
+    /// 被 `<tool_call` 命中，兩個 pair 的掃描彼此獨立——這條用來把這個
+    /// 「跨 pair 天然安全」的保證明文釘住，避免未來有人合併兩個 pair 的
+    /// 掃描邏輯時不小心破壞它。
+    #[test]
+    fn stray_tool_call_open_tag_does_not_swallow_a_real_tool_envelope() {
+        let text = r#"我會用 <tool_call 這種格式，後來改用<tool>{"name":"Read","arguments":{},"_nonce":"n1"}</tool>"#;
+        let (content, calls) = parse_tool_calls(text, "n1");
+        let calls = calls.expect("真正的 <tool> 封套要被剖析出來");
+        assert_eq!(calls[0].tool_name, "Read");
+        assert_eq!(content, "我會用 <tool_call 這種格式，後來改用");
     }
 }
