@@ -126,6 +126,9 @@ impl BridgeUpstream for ChatgptWebUpstream {
             for out in parser.feed_str(&raw) {
                 match out {
                     SseOut::Text(d) => full.push_str(&d),
+                    SseOut::Error { message, code } => {
+                        return Err(crate::ai::chatgpt_web::map_stream_error(&message, &code));
+                    }
                     // 一定要主動結束，不能等通道關閉。
                     SseOut::Done => finished = true,
                 }

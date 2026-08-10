@@ -140,6 +140,9 @@ impl AiProvider for ChatgptWebProvider {
                             .send(GenerateChunk { delta, done: false, usage: None })
                             .await;
                     }
+                    SseOut::Error { message, code } => {
+                        return Err(map_stream_error(&message, &code));
+                    }
                     SseOut::Done => {
                         let _ = tx
                             .send(GenerateChunk {
@@ -207,6 +210,9 @@ impl AiProvider for ChatgptWebProvider {
                             .send(GenerateChunk { delta, done: false, usage: None })
                             .await;
                     }
+                    SseOut::Error { message, code } => {
+                        return Err(map_stream_error(&message, &code));
+                    }
                     // 一定要主動結束，不能等通道關閉。
                     SseOut::Done => finished = true,
                 }
@@ -224,6 +230,27 @@ impl AiProvider for ChatgptWebProvider {
             Some(calls) => GenerateWithToolsResult::ToolCalls { calls, raw: None },
             None => GenerateWithToolsResult::Text(content),
         })
+    }
+}
+
+/// 串流內錯誤 frame → `AiError`。
+///
+/// 這類錯誤的 HTTP 狀態是 **200**，錯誤藏在 SSE body 裡
+/// （`{"message":null,"error":"…","error_code":"usage_limit"}`），所以走不到
+/// `map_upstream_error` 那條看 HTTP status 的路徑。實測時「你已達到上限」
+/// 就是這樣被漏掉，最後表現成一個跟真正原因無關的「AI 回傳格式錯誤」。
+pub fn map_stream_error(message: &str, code: &str) -> AiError {
+    match code {
+        // 方案用量上限。對應到 RateLimit 前端才會顯示成「稍後再試」而不是
+        // 「模型壞了」——這兩種的處置完全不同。
+        "usage_limit" | "rate_limit_exceeded" => AiError::RateLimit {
+            retry_after: None,
+            body: Some(message.to_string()),
+        },
+        _ => AiError::ModelError {
+            reason: message.to_string(),
+            raw: format!("error_code={code}"),
+        },
     }
 }
 

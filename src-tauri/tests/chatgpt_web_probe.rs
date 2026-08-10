@@ -89,7 +89,7 @@ fn split_chunks_reassemble_into_incremental_deltas() {
     let mut got = String::new();
     // 一份累積快照被切成三段，最後一段才帶換行。
     for chunk in [
-        r#"data: {"message":{"id":"m1","content":{"parts":["你好"#,
+        r#"data: {"message":{"id":"m1","author":{"role":"assistant"},"content":{"parts":["你好"#,
         r#"，世界"]}}}"#,
         "\n",
     ] {
@@ -117,15 +117,21 @@ fn split_chunks_reassemble_into_incremental_deltas() {
 //
 // 4. Claude Code 橋接指到這個供應商 → 多輪工具迴圈跑得完。
 //
-// 5. 錄一條真實的 SSE 串流存成 fixture，回頭補測試。探勘程式碼已移除，改用
-//    在 `chatgpt_web::session::Session::push_chunk` 暫時加一行
-//    `eprintln!("{data}")` 來擷取，錄完拿掉。要確認三件事：
-//    a. 非內容 frame（moderation、`role:"system"`、只帶 conversation_id）
-//       實際長什麼樣，`SseParser` 是否真的原封不動略過。
-//    b. **兩則訊息會不會在同一條串流裡交錯**（思考區塊與答案）。目前
-//       `SseParser` 只保留一份 `emitted`，交錯時每次切換都會整段重送；
-//       若確認會交錯，`emitted` 要改成以 `message.id` 為鍵。
-//    c. chunk 實際切在哪裡——確認行緩衝真的有派上用場。
+// 5. ✅ 已錄過一次（2026-08-10），發現並修掉兩個 bug，fixture 已進
+//    `protocol.rs` 的測試（`user_echo_frame_is_not_treated_as_the_answer` 等）：
+//    a. ✅ 串流會**回放我們自己送出去的那則訊息**（`author.role == "user"`，
+//       內容就是完整的 system prompt），還夾著若干 `role:"system"` 的空訊息與
+//       `{"type":"input_message"}` 封套。原本沒有依 role 過濾，`/ai` 收到的
+//       「回答」是自己的 prompt 原樣回傳，表現成「AI 回傳格式錯誤」。
+//    b. ✅ 用量上限這類錯誤是 **HTTP 200 + SSE body 裡的 error 欄位**
+//       （`{"message":null,"error":"你已達到上限。","error_code":"usage_limit"}`），
+//       原本完全沒被偵測到。已加 `SseOut::Error` 與 `map_stream_error`。
+//    c. ⬜ **仍未確認**：兩則訊息會不會在同一條串流裡交錯（思考區塊與答案）。
+//       錄那次的帳號在 assistant 開始回覆前就撞到用量上限，所以沒有 assistant
+//       frame 可看。目前 `SseParser` 只保留一份 `emitted`，交錯時每次切換都會
+//       整段重送；若確認會交錯，`emitted` 要改成以 `message.id` 為鍵。
+//    d. ⬜ **仍未確認**：chunk 實際切在哪裡——那次的串流太短，沒能驗證行緩衝
+//       真的有派上用場。
 //
 // 6. 量一次 `[Object.keys(navigator).length, Object.keys(document).length,
 //    Object.keys(window).length]`。前兩者在瀏覽器裡預期是 0（屬性都在

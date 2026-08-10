@@ -64,6 +64,12 @@ pub fn flatten_history(system_prompt: &str, turns: &[FlatTurn]) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SseOut {
     Text(String),
+    /// 串流內的錯誤（HTTP 200，錯誤藏在 SSE body 裡）。`code` 例如
+    /// `usage_limit`，用來對應到可行動的訊息。
+    Error {
+        message: String,
+        code: String,
+    },
     Done,
 }
 
@@ -111,9 +117,33 @@ impl SseParser {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
             return Vec::new();
         };
+        // 串流裡的錯誤 frame：`{"message":null,"error":"…","error_code":"usage_limit"}`。
+        // 這種 frame HTTP 狀態是 200，錯誤藏在 SSE body 裡——不辨識的話會被
+        // 當成「沒有內容的 frame」略過，使用者最後看到的是一個跟真正原因無關
+        // 的下游錯誤（實測：用量上限被表現成「AI 回傳格式錯誤」）。
+        if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+            let code = v.get("error_code").and_then(|c| c.as_str()).unwrap_or("");
+            return vec![SseOut::Error { message: err.to_string(), code: code.to_string() }];
+        }
+
         let Some(msg) = v.get("message") else {
             return Vec::new();
         };
+        // **只收 assistant 的訊息。**
+        //
+        // `/backend-api/conversation` 的串流會回放整段對話，包括我們自己剛送
+        // 出去的那則（`author.role == "user"`，內容就是完整的 system prompt）
+        // 與若干 `role:"system"` 的空訊息。不過濾的話，第一個被當成「回答」
+        // 收下的就是我們自己的 prompt——實測時 `/ai` 收到的正是它原樣回傳，
+        // 表現成「AI 回傳格式錯誤」。
+        //
+        // 用「不是 assistant 就跳過」而不是「排除 user/system」：上游隨時可能
+        // 加新的 role（tool、moderation…），白名單才不會漏。
+        if msg.get("author").and_then(|a| a.get("role")).and_then(|r| r.as_str())
+            != Some("assistant")
+        {
+            return Vec::new();
+        }
         // 沒有可讀文字的 frame（moderation、role:"system" 的空訊息、只帶
         // conversation_id 的 frame）在串流裡是常態。這種 frame 必須完全不碰
         // 差分狀態：先前用 `.unwrap_or("")` 把它壓成空字串，會讓 emitted 被
@@ -287,8 +317,8 @@ mod tests {
     #[test]
     fn snapshot_frames_become_incremental_deltas() {
         let mut p = SseParser::default();
-        let a = p.feed_line(r#"data: {"message":{"content":{"parts":["你好"]}}}"#);
-        let b = p.feed_line(r#"data: {"message":{"content":{"parts":["你好，世界"]}}}"#);
+        let a = p.feed_line(r#"data: {"message":{"author":{"role":"assistant"},"content":{"parts":["你好"]}}}"#);
+        let b = p.feed_line(r#"data: {"message":{"author":{"role":"assistant"},"content":{"parts":["你好，世界"]}}}"#);
         assert_eq!(a, vec![SseOut::Text("你好".into())]);
         assert_eq!(b, vec![SseOut::Text("，世界".into())], "只能回新增的部分");
     }
@@ -314,7 +344,7 @@ mod tests {
         assert!(p.feed_line("data: {不是 JSON").is_empty());
         assert!(p.feed_line(r#"data: {"message":null}"#).is_empty());
         assert_eq!(
-            p.feed_line(r#"data: {"message":{"content":{"parts":["還活著"]}}}"#),
+            p.feed_line(r#"data: {"message":{"author":{"role":"assistant"},"content":{"parts":["還活著"]}}}"#),
             vec![SseOut::Text("還活著".into())],
         );
     }
@@ -325,12 +355,12 @@ mod tests {
     fn non_continuation_frame_does_not_panic_on_multibyte() {
         let mut p = SseParser::default();
         assert_eq!(
-            p.feed_line(r#"data: {"message":{"content":{"parts":["ok"]}}}"#),
+            p.feed_line(r#"data: {"message":{"author":{"role":"assistant"},"content":{"parts":["ok"]}}}"#),
             vec![SseOut::Text("ok".into())],
         );
         // "ok" 是 2 bytes，"你好世界" 的 byte 2 在 '你' 的中間。
         assert_eq!(
-            p.feed_line(r#"data: {"message":{"content":{"parts":["你好世界"]}}}"#),
+            p.feed_line(r#"data: {"message":{"author":{"role":"assistant"},"content":{"parts":["你好世界"]}}}"#),
             vec![SseOut::Text("你好世界".into())],
             "換訊息時要整段送出，不是 panic 也不是丟掉",
         );
@@ -340,9 +370,9 @@ mod tests {
     #[test]
     fn shorter_new_message_is_not_swallowed() {
         let mut p = SseParser::default();
-        p.feed_line(r#"data: {"message":{"content":{"parts":["很長的第一則回答"]}}}"#);
+        p.feed_line(r#"data: {"message":{"author":{"role":"assistant"},"content":{"parts":["很長的第一則回答"]}}}"#);
         assert_eq!(
-            p.feed_line(r#"data: {"message":{"content":{"parts":["短"]}}}"#),
+            p.feed_line(r#"data: {"message":{"author":{"role":"assistant"},"content":{"parts":["短"]}}}"#),
             vec![SseOut::Text("短".into())],
         );
     }
@@ -351,9 +381,74 @@ mod tests {
     #[test]
     fn identical_resend_emits_nothing() {
         let mut p = SseParser::default();
-        let frame = r#"data: {"message":{"content":{"parts":["你好"]}}}"#;
+        let frame = r#"data: {"message":{"author":{"role":"assistant"},"content":{"parts":["你好"]}}}"#;
         assert_eq!(p.feed_line(frame), vec![SseOut::Text("你好".into())]);
         assert!(p.feed_line(frame).is_empty(), "重送不該再輸出一次");
+    }
+
+    // ── 以下 fixture 是從真實串流錄下來的（`/backend-api/conversation`），
+    //    不是手寫的簡化 JSON。手寫 fixture 會把「我以為的上游長相」固化成
+    //    測試——這幾個 bug 全都是因此溜過先前 8 個綠燈測試的。
+
+    /// **上游會把我們自己送出去的訊息回放一遍。**
+    ///
+    /// 實測：`/ai` 收到的「回答」是我們自己的 system prompt 原樣回傳，表現成
+    /// 「AI 回傳格式錯誤」。真實 frame 的 `author.role` 是 `"user"`。
+    #[test]
+    fn user_echo_frame_is_not_treated_as_the_answer() {
+        let mut p = SseParser::default();
+        let echo = r#"data: {"message":{"id":"805ccd7d","author":{"role":"user","name":null,"metadata":{}},"content":{"content_type":"text","parts":["You are an AI command generator"]},"status":"finished_successfully"},"conversation_id":"6a79dfd3"}"#;
+        assert!(
+            p.feed_line(echo).is_empty(),
+            "使用者訊息的回放不是回答，不可當成內容送出"
+        );
+        // 真正的 assistant frame 仍要正常收下，而且不受剛才那則影響。
+        let real = r#"data: {"message":{"id":"aaa","author":{"role":"assistant"},"content":{"content_type":"text","parts":["好的"]}},"conversation_id":"x"}"#;
+        assert_eq!(p.feed_line(real), vec![SseOut::Text("好的".into())]);
+    }
+
+    /// 串流開頭會夾幾則 `role:"system"` 的空訊息（`parts:[""]`）。
+    #[test]
+    fn system_frames_are_skipped() {
+        let mut p = SseParser::default();
+        let sys = r#"data: {"message":{"id":"ce85b27b","author":{"role":"system","name":null,"metadata":{}},"content":{"content_type":"text","parts":[""]},"status":"finished_successfully"}}"#;
+        assert!(p.feed_line(sys).is_empty());
+    }
+
+    /// `{"type":"input_message","input_message":{…}}` 是另一種回放封套，
+    /// 沒有 `message` 鍵。
+    #[test]
+    fn input_message_envelope_is_skipped() {
+        let mut p = SseParser::default();
+        let f = r#"data: {"type":"input_message","input_message":{"id":"805ccd7d","author":{"role":"user"},"content":{"content_type":"text","parts":["整段 prompt"]}}}"#;
+        assert!(p.feed_line(f).is_empty());
+    }
+
+    /// 用量上限這類錯誤是 **HTTP 200 + SSE body 裡的 error 欄位**。
+    ///
+    /// 不辨識的話它會被當成「沒有內容的 frame」略過，使用者最後看到的是一個
+    /// 跟真正原因無關的下游錯誤——實測時「你已達到上限」被表現成
+    /// 「AI 回傳格式錯誤（expected value at line 4 column 21）」。
+    #[test]
+    fn in_stream_error_frame_is_surfaced() {
+        let mut p = SseParser::default();
+        let f = r#"data: {"message":null,"conversation_id":"6a79dfd3","error":"你已達到上限。請稍後再試一次。","error_code":"usage_limit"}"#;
+        let out = p.feed_line(f);
+        match out.first() {
+            Some(SseOut::Error { message, code }) => {
+                assert!(message.contains("上限"), "實際：{message}");
+                assert_eq!(code, "usage_limit");
+            }
+            other => panic!("串流內的錯誤要被辨識出來，實際：{other:?}"),
+        }
+    }
+
+    /// `resume_conversation_token` 這類沒有 `message` 的控制 frame。
+    #[test]
+    fn control_frames_without_message_are_skipped() {
+        let mut p = SseParser::default();
+        let f = r#"data: {"type":"resume_conversation_token","kind":"topic","token":"eyJhbGciOi"}"#;
+        assert!(p.feed_line(f).is_empty());
     }
 
     /// 規格明確要求文字取自 `message.content.parts[0]`。多個 parts 時如何合併
@@ -364,7 +459,7 @@ mod tests {
     fn text_comes_from_the_first_part() {
         let mut p = SseParser::default();
         assert_eq!(
-            p.feed_line(r#"data: {"message":{"content":{"parts":["第一","第二","第三"]}}}"#),
+            p.feed_line(r#"data: {"message":{"author":{"role":"assistant"},"content":{"parts":["第一","第二","第三"]}}}"#),
             vec![SseOut::Text("第一".into())],
         );
     }
@@ -378,12 +473,12 @@ mod tests {
     fn mid_stream_frame_without_text_does_not_reset_state() {
         let mut p = SseParser::default();
         assert_eq!(
-            p.feed_line(r#"data: {"message":{"content":{"parts":["你好"]}}}"#),
+            p.feed_line(r#"data: {"message":{"author":{"role":"assistant"},"content":{"parts":["你好"]}}}"#),
             vec![SseOut::Text("你好".into())],
         );
         assert!(p.feed_line(r#"data: {"message":null}"#).is_empty());
         assert_eq!(
-            p.feed_line(r#"data: {"message":{"content":{"parts":["你好，世界"]}}}"#),
+            p.feed_line(r#"data: {"message":{"author":{"role":"assistant"},"content":{"parts":["你好，世界"]}}}"#),
             vec![SseOut::Text("，世界".into())],
             "中段沒有文字的 frame 不該把 emitted 清空，否則這裡會整段重送",
         );
@@ -395,14 +490,14 @@ mod tests {
     fn frame_with_empty_parts_mid_stream_does_not_reset_state() {
         let mut p = SseParser::default();
         assert_eq!(
-            p.feed_line(r#"data: {"message":{"content":{"parts":["你好"]}}}"#),
+            p.feed_line(r#"data: {"message":{"author":{"role":"assistant"},"content":{"parts":["你好"]}}}"#),
             vec![SseOut::Text("你好".into())],
         );
         assert!(p
-            .feed_line(r#"data: {"message":{"content":{"parts":[""]}}}"#)
+            .feed_line(r#"data: {"message":{"author":{"role":"assistant"},"content":{"parts":[""]}}}"#)
             .is_empty());
         assert_eq!(
-            p.feed_line(r#"data: {"message":{"content":{"parts":["你好，世界"]}}}"#),
+            p.feed_line(r#"data: {"message":{"author":{"role":"assistant"},"content":{"parts":["你好，世界"]}}}"#),
             vec![SseOut::Text("，世界".into())],
             "中段的空 parts[0] 不該把 emitted 清空，否則這裡會整段重送",
         );
@@ -413,7 +508,7 @@ mod tests {
     #[test]
     fn chunks_split_mid_line_are_reassembled() {
         let mut p = SseParser::default();
-        let first = p.feed_str(r#"data: {"message":{"content":{"parts":["完整答案在這"#);
+        let first = p.feed_str(r#"data: {"message":{"author":{"role":"assistant"},"content":{"parts":["完整答案在這"#);
         assert!(first.is_empty(), "殘缺的前半段不該提早輸出");
         let second = p.feed_str("裡\"]}}}\n");
         assert_eq!(second, vec![SseOut::Text("完整答案在這裡".into())]);
@@ -424,7 +519,7 @@ mod tests {
     #[test]
     fn trailing_partial_line_is_held_not_emitted() {
         let mut p = SseParser::default();
-        let out = p.feed_str(r#"data: {"message":{"content":{"parts":["還沒送出"]}}}"#);
+        let out = p.feed_str(r#"data: {"message":{"author":{"role":"assistant"},"content":{"parts":["還沒送出"]}}}"#);
         assert!(out.is_empty(), "沒有換行結尾時應該還在等，不能提早輸出");
     }
 
@@ -443,11 +538,11 @@ mod tests {
     fn new_message_id_restarts_the_diff_even_when_content_overlaps() {
         let mut p = SseParser::default();
         assert_eq!(
-            p.feed_line(r#"data: {"message":{"id":"msg_1","content":{"parts":["你好"]}}}"#),
+            p.feed_line(r#"data: {"message":{"id":"msg_1","author":{"role":"assistant"},"content":{"parts":["你好"]}}}"#),
             vec![SseOut::Text("你好".into())],
         );
         assert_eq!(
-            p.feed_line(r#"data: {"message":{"id":"msg_2","content":{"parts":["你好，世界"]}}}"#),
+            p.feed_line(r#"data: {"message":{"id":"msg_2","author":{"role":"assistant"},"content":{"parts":["你好，世界"]}}}"#),
             vec![SseOut::Text("你好，世界".into())],
             "新 id 的訊息即使文字上恰好是舊 emitted 的延續，也該整段重送而非只送差異",
         );
@@ -458,11 +553,11 @@ mod tests {
     fn same_message_id_keeps_diffing() {
         let mut p = SseParser::default();
         assert_eq!(
-            p.feed_line(r#"data: {"message":{"id":"msg_1","content":{"parts":["你好"]}}}"#),
+            p.feed_line(r#"data: {"message":{"id":"msg_1","author":{"role":"assistant"},"content":{"parts":["你好"]}}}"#),
             vec![SseOut::Text("你好".into())],
         );
         assert_eq!(
-            p.feed_line(r#"data: {"message":{"id":"msg_1","content":{"parts":["你好，世界"]}}}"#),
+            p.feed_line(r#"data: {"message":{"id":"msg_1","author":{"role":"assistant"},"content":{"parts":["你好，世界"]}}}"#),
             vec![SseOut::Text("，世界".into())],
         );
     }
@@ -478,7 +573,7 @@ mod tests {
     #[test]
     fn crlf_line_endings_are_handled() {
         let mut p = SseParser::default();
-        let out = p.feed_str("data: {\"message\":{\"content\":{\"parts\":[\"你好\"]}}}\r\n");
+        let out = p.feed_str("data: {\"message\":{\"author\":{\"role\":\"assistant\"},\"content\":{\"parts\":[\"你好\"]}}}\r\n");
         assert_eq!(out, vec![SseOut::Text("你好".into())]);
     }
 }
