@@ -95,6 +95,32 @@ describe("inject.js PoW", () => {
     expect(c[3]).toBe(0);
   });
 
+  it("config 各格對應真實瀏覽器特徵，不能悄悄換掉來源——這是送給 OpenAI 的指紋，某一格換了來源不會讓 PoW 失敗（雜湊照樣算得出來），只會讓指紋跟同一個 session 的其他訊號兜不起來，只有反濫用系統看得到", () => {
+    const c = __aitermTest.buildConfig();
+    // 可在 jsdom 下決定性比對的格子。
+    expect(c[0]).toBe(screen.width + screen.height);
+    expect(c[2]).toBe(4294705152);
+    expect(c[3]).toBe(0);
+    expect(c[4]).toBe(navigator.userAgent);
+    expect(c[7]).toBe(navigator.language);
+    expect(c[8]).toBe((navigator.languages || []).join(","));
+    expect(c[9]).toBe(0);
+    expect(c[16]).toBe(navigator.hardwareConcurrency);
+    // 其餘幾格（Date().toString()、script src、dpl、pickKey 三格、perfNow、
+    // uuid、固定空字串、Date.now()-perfNow）沒有可決定性比對的基準值，退而
+    // 求其次驗證型別——至少擋住「整格被拿掉或悄悄換成 undefined」。
+    expect(typeof c[1]).toBe("string");
+    expect(typeof c[5]).toBe("string");
+    expect(typeof c[6]).toBe("string");
+    expect(typeof c[10]).toBe("string");
+    expect(typeof c[11]).toBe("string");
+    expect(typeof c[12]).toBe("string");
+    expect(typeof c[13]).toBe("number");
+    expect(typeof c[14]).toBe("string");
+    expect(typeof c[15]).toBe("string");
+    expect(typeof c[17]).toBe("number");
+  });
+
   it("pickKey(window) 過濾掉自動化標記，只剩真實 key 才會被抽中", () => {
     // config[12] 是 pickKey(window) 的結果，會 base64 進 PoW payload、POST 到
     // OpenAI 的 sentinel 端點。fakeWin 裡混入我們自己會掛的 __aiterm* /
@@ -134,5 +160,51 @@ describe("inject.js PoW", () => {
     // 這條斷言釘住「每 256 次檢查一次」這個取捨本身。
     expect(r.iters).toBeGreaterThanOrEqual(256);
     expect(elapsed).toBeLessThan(2000);
+  });
+
+  it("省略 deadlineMs 時，預設的 15 秒牆鐘上限真的有生效——前幾個測試都明確傳了 deadlineMs=50，繞過了預設值，這條補上「不傳參數」這條路徑", () => {
+    const t0 = 1_000_000;
+    let calls = 0;
+    // Date.now() 在 solvePow 裡被呼叫兩次才輪到迴圈內的牆鐘檢查：一次在
+    // buildConfig() 內（config 最後一格 Date.now()-perfNow），一次是算
+    // deadline。前兩次回 t0，之後（迴圈內 i=255 才第一次檢查）回 t0+20000——
+    // 超過預設的 15000ms 但小於 30000ms，藉此把「15 秒」這個數量級也釘住：
+    // 若有人把 POW_DEADLINE_MS 改成 30000，20000 就不會超時，這條測試會紅。
+    vi.spyOn(Date, "now").mockImplementation(() => {
+      calls++;
+      return calls <= 2 ? t0 : t0 + 20000;
+    });
+    try {
+      const bigMaxIter = 10_000_000;
+      // 不傳 deadlineMs，逼出預設值那條路徑。
+      const r = __aitermTest.solvePow("seed", "000000", "gAAAAAB", bigMaxIter);
+      expect(r.exhausted).toBe(true);
+      expect(r.iters).toBeLessThan(bigMaxIter);
+      expect(r.iters).toBeGreaterThanOrEqual(256);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("deadlineMs 傳 0 代表沒有時間預算、立刻放棄——0 是合法值，用 ?? 才會保留它，用 || 會把它當成「沒傳」而靜默退回 15 秒預設", () => {
+    const r = __aitermTest.solvePow("seed", "000000", "gAAAAAB", 10_000_000, 0);
+    expect(r.exhausted).toBe(true);
+    // deadline = Date.now()+0，第一個檢查點（i=255）當下真實時鐘必定已經過了
+    // deadline，所以在 256 次迭代內就會停。
+    expect(r.iters).toBe(256);
+  });
+
+  it("pickKey 用字首（startsWith）過濾，不是子字串（includes）——內含 __aiterm 但不是開頭的 key 應該被保留", () => {
+    // "x__aitermY" 不是我們的掛載點（開頭是 x），是一個普通的真實瀏覽器 key，
+    // 理論上應該被保留、有機會被抽中送給 OpenAI 當指紋的一部分。若過濾邏輯
+    // 誤用 includes，這種 key 會被誤判成自動化標記而濾掉，導致合法的瀏覽器
+    // 特徵被排除、pickKey 落回空字串。fixture 只放這一個 key，過濾後候選數量
+    // （1 或 0）本身就決定了結果，不需要另外鎖 Math.random。
+    const fakeWin: Record<string, unknown> = { x__aitermY: 1 };
+    const { __aitermTest: fakeAitermTest } = loadInject(fakeWin) as {
+      __aitermTest: { buildConfig(): unknown[] };
+    };
+    const c = fakeAitermTest.buildConfig();
+    expect(c[12]).toBe("x__aitermY");
   });
 });
