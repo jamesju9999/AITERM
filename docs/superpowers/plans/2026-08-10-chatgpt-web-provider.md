@@ -713,6 +713,26 @@ git commit -m "feat(chatgpt-web): 工具契約序列化，雙位置注入"
         assert!(calls.is_none(), "nonce 不符要當成文字，不可執行");
     }
 
+    /// 被拒絕的封套要連標籤一起原樣留在內容裡。使用者貼一段含 `<tool>` 的
+    /// 範例進來時，回覆裡他的原文不該被改掉——而這正是 nonce 檢查要處理的
+    /// 主要情境。
+    #[test]
+    fn rejected_envelope_is_preserved_verbatim_with_its_tags() {
+        let text = r#"看這段：<tool>{"name":"Read","arguments":{},"_nonce":"別人的"}</tool>就這樣"#;
+        let (content, calls) = parse_tool_calls(text, "n1");
+        assert!(calls.is_none());
+        assert_eq!(content, text, "拒絕路徑要原樣保留，包含 <tool> 與 </tool>");
+    }
+
+    /// 封套內不是合法 JSON 時同樣要原樣保留。
+    #[test]
+    fn malformed_envelope_body_is_preserved_verbatim() {
+        let text = "前面<tool>{不是 JSON}</tool>後面";
+        let (content, calls) = parse_tool_calls(text, "n1");
+        assert!(calls.is_none());
+        assert_eq!(content, text);
+    }
+
     /// 模型可能不遵守指示而漏掉 _nonce。封套本身已是明確意圖，容忍。
     #[test]
     fn missing_nonce_is_tolerated() {
@@ -757,22 +777,25 @@ pub fn parse_tool_calls(text: &str, nonce: &str) -> (String, Option<Vec<AiToolCa
     let mut content = String::new();
     let mut rest = text;
 
-    while let Some((before, body, after)) = next_envelope(rest) {
+    // 被拒絕的封套要連同 `<tool>` / `</tool>` 標籤一起推回 content（用 `raw`
+    // 而非 `body`）。只推回 body 會把使用者貼進來的原文改掉——而「使用者貼了
+    // 一段含封套的範例」正是 nonce 檢查要處理的主要情境。
+    while let Some((before, body, raw, after)) = next_envelope(rest) {
         content.push_str(before);
         rest = after;
         let Ok(v) = serde_json::from_str::<serde_json::Value>(body.trim()) else {
             // 封套內不是合法 JSON——原樣保留，別吞掉使用者看得到的內容。
-            content.push_str(body);
+            content.push_str(raw);
             continue;
         };
         if let Some(got) = v.get("_nonce").and_then(|n| n.as_str()) {
             if got != nonce {
-                content.push_str(body);
+                content.push_str(raw);
                 continue;
             }
         }
         let Some(name) = v.get("name").and_then(|n| n.as_str()) else {
-            content.push_str(body);
+            content.push_str(raw);
             continue;
         };
         calls.push(AiToolCall {
@@ -787,22 +810,31 @@ pub fn parse_tool_calls(text: &str, nonce: &str) -> (String, Option<Vec<AiToolCa
     (content, if calls.is_empty() { None } else { Some(calls) })
 }
 
-/// 找出下一個封套，回傳（封套前的文字, 封套內容, 封套後的剩餘文字）。
-fn next_envelope(text: &str) -> Option<(&str, &str, &str)> {
+/// 找出下一個封套，回傳（封套前的文字, 封套內容, 封套原文, 封套後的剩餘文字）。
+///
+/// 「封套原文」含 `<tool>` / `</tool>` 標籤本身，給拒絕路徑原樣推回用。
+fn next_envelope(text: &str) -> Option<(&str, &str, &str, &str)> {
     const PAIRS: [(&str, &str); 2] = [("<tool>", "</tool>"), ("<tool_call", "</tool_call>")];
-    let mut best: Option<(usize, usize, usize)> = None; // (起點, 內容起點, 內容終點)
+    // (起點, 內容起點, 內容終點, 封套終點)
+    let mut best: Option<(usize, usize, usize, usize)> = None;
     for (open, close) in PAIRS {
         let Some(start) = text.find(open) else { continue };
         // `<tool_call name="…">` 的屬性要跳過，內容從 '>' 之後開始。
         let Some(gt) = text[start..].find('>').map(|i| start + i + 1) else { continue };
         let Some(end) = text[gt..].find(close).map(|i| gt + i) else { continue };
-        if best.is_none_or(|(b, _, _)| start < b) {
-            best = Some((start, gt, end));
+        // 用 map_or 而非 is_none_or：後者是 Rust 1.82 才穩定，而 Cargo.toml
+        // 宣告的 rust-version 是 1.77.2，且整個 codebase 沒有用過它。
+        if best.map_or(true, |(b, _, _, _)| start < b) {
+            best = Some((start, gt, end, end + close.len()));
         }
     }
-    let (start, body_start, body_end) = best?;
-    let close_len = if text[start..].starts_with("<tool>") { "</tool>".len() } else { "</tool_call>".len() };
-    Some((&text[..start], &text[body_start..body_end], &text[body_end + close_len..]))
+    let (start, body_start, body_end, env_end) = best?;
+    Some((
+        &text[..start],
+        &text[body_start..body_end],
+        &text[start..env_end],
+        &text[env_end..],
+    ))
 }
 ```
 
@@ -812,7 +844,8 @@ fn next_envelope(text: &str) -> Option<(&str, &str, &str)> {
 cd src-tauri && cargo test --lib chatgpt_web::tools
 ```
 
-預期：9 個測試全 PASS
+預期：11 個測試全 PASS（Task 4 的 3 個 + 本任務的 8 個）。
+若看到 `0 passed`，是 `pub mod tools;` 沒宣告——見 Task 4 開頭的警告。
 
 - [ ] **Step 5: Commit**
 
