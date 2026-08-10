@@ -29,6 +29,16 @@ pub fn build_contract(tools: &[McpToolDefinition], nonce: &str) -> String {
         "Only emit the <tool> block when you actually want to call a tool; otherwise answer \
          normally."
             .to_string(),
+        // 這是實測依據，刪掉會讓契約失能：原生 function calling 有 schema 約束
+        // 住工具名，這個純文字協定唯一的約束就是這句話。工具名是編碼過的
+        // (`{server}__{tool}`)；模型很容易把 `__` 前綴當成實作噪音而截短，
+        // 結果送出的名字 decode_tool_name 解不回去，call_tool 回
+        // McpError::ToolNotFound（src-tauri/src/mcp/mod.rs:142-143），
+        // 錯誤被餵回模型重試，最壞耗到迭代上限，使用者只看到「工具一直失敗」。
+        "Tool names are opaque identifiers, not descriptions — copy them exactly as printed \
+         below, including everything before the `__` separator. Do not shorten, translate, \
+         or infer a friendlier name; an inexact name will fail to resolve."
+            .to_string(),
         String::new(),
         "Available tools:".to_string(),
     ];
@@ -41,6 +51,17 @@ pub fn build_contract(tools: &[McpToolDefinition], nonce: &str) -> String {
     lines.join("\n")
 }
 
+/// 提醒最多逐一點名的工具數；超過的用「…and N more」帶過，不逐一列出。
+///
+/// 工具名是編碼過的（`{server_id_sanitized}__{tool_name}`，見
+/// `src-tauri/src/mcp/types.rs`），真實形狀像 `filesystem__read_text_file`
+/// （27 字元）、`brave_search_v2__web_search`（28 字元），不是短英文單字。
+/// 固定樣板本身 179 字元，這個數字下逐一點名落在 400 字元上下——完整清單
+/// 本來就在契約裡，這裡的作用是「指回去」，不是把整份清單複述一次；複述會
+/// 讓 reminder 隨工具數量無上限成長，退化成 OmniRoute #7679 那個 0/3 的失敗
+/// 模式（長指令藏在 user 內容裡，觸發 ChatGPT 的注入偵測）。
+const MAX_NAMED_TOOLS_IN_REMINDER: usize = 8;
+
 /// 掛在最新一則 user 訊息末尾的一行提醒。刻意簡短：網頁版模型對當前 user
 /// 回合的權重遠高於龐大的 system 區塊，而 ChatGPT 的注入偵測又不信任藏在
 /// user 內容裡的長指令，所以完整契約留在 system 尾端，這裡只指回去並點名工具。
@@ -48,12 +69,22 @@ pub fn build_reminder(tools: &[McpToolDefinition]) -> String {
     if tools.is_empty() {
         return String::new();
     }
-    let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+    let mut listed = tools
+        .iter()
+        .take(MAX_NAMED_TOOLS_IN_REMINDER)
+        .map(|t| t.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if tools.len() > MAX_NAMED_TOOLS_IN_REMINDER {
+        listed.push_str(&format!(
+            ", …and {} more (see the contract in the system instructions)",
+            tools.len() - MAX_NAMED_TOOLS_IN_REMINDER
+        ));
+    }
     format!(
         "\n\n[Client protocol reminder: the client-tool contract in the system instructions \
          is active in this conversation. These client tools ARE available via the <tool> \
-         block protocol: {}.]",
-        names.join(", ")
+         block protocol: {listed}.]"
     )
 }
 
@@ -62,25 +93,43 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn tool(name: &str) -> crate::ai::McpToolDefinition {
-        crate::ai::McpToolDefinition {
+    fn tool(name: &str) -> McpToolDefinition {
+        McpToolDefinition {
             name: name.into(),
             description: format!("{name} 的說明"),
             input_schema: json!({"type": "object"}),
         }
     }
 
+    /// 真實工具名的形狀：`{server_id_sanitized}__{tool_name}`（見
+    /// `src-tauri/src/mcp/types.rs` 的 `encode_tool_name`）。`Read`/`Edit`
+    /// 這種 4 字元短名在這條路徑上不會出現，拿它們撐長度相關的斷言只是
+    /// 自欺欺人——見 `reminder_is_short_and_names_the_tools` 的教訓。
+    fn realistic_tools(n: usize) -> Vec<McpToolDefinition> {
+        let servers = ["filesystem", "brave_search_v2", "github", "postgres"];
+        let ops = [
+            "read_text_file",
+            "write_text_file",
+            "list_directory",
+            "create_directory",
+            "web_search",
+            "local_search",
+            "create_pull_request",
+            "run_query",
+        ];
+        (0..n)
+            .map(|i| tool(&format!("{}__{}", servers[i % servers.len()], ops[i % ops.len()])))
+            .collect()
+    }
+
     #[test]
-    fn contract_lists_every_tool_and_embeds_the_nonce() {
+    fn contract_serializes_description_and_schema_for_every_tool() {
         let c = build_contract(&[tool("Read"), tool("Edit")], "abc123");
-        assert!(c.contains("Read"));
-        assert!(c.contains("Edit"));
-        assert!(c.contains("abc123"), "nonce 要出現在契約裡");
-        assert!(c.contains("_nonce"), "要明確告訴模型欄位名");
         // 契約存在的唯一目的是讓模型知道「有哪些工具、各自做什麼、參數長怎樣」。
         // 若退化成只有一串工具名稱，模型收到的是無用清單，整個工具模擬功能
         // 會靜默壞掉——但只斷言 contains("Read") 這種測試不會發現，因為名稱
-        // 本身就會出現。必須分別鎖住 description 與 input_schema 有被序列化。
+        // 本身就會出現在 description 斷言裡。必須分別鎖住 description 與
+        // input_schema 有被序列化（下面兩條斷言已隱含涵蓋名稱本身有出現）。
         assert!(
             c.contains("Read 的說明") && c.contains("Edit 的說明"),
             "每個工具的 description 要出現在契約裡，否則模型不知道工具做什麼"
@@ -89,6 +138,18 @@ mod tests {
             c.contains(r#"{"type":"object"}"#),
             "每個工具的 input_schema 要被序列化進契約，否則模型不知道參數長怎樣"
         );
+    }
+
+    #[test]
+    fn contract_embeds_the_nonce() {
+        let c = build_contract(&[tool("Read"), tool("Edit")], "abc123");
+        assert!(c.contains("abc123"), "nonce 要出現在契約裡");
+        assert!(c.contains("_nonce"), "要明確告訴模型欄位名");
+    }
+
+    #[test]
+    fn contract_includes_required_protocol_instructions() {
+        let c = build_contract(&[tool("Read"), tool("Edit")], "abc123");
         // 這是實測依據，刪掉會讓契約失能，不要當成冗長文案清掉：
         // Task 5 的剖析器只認 `<tool>` 與 `<tool_call` 這兩種封套標籤。若契約
         // 教模型改用別的標籤（例如 <call>），模型會乖乖照做，但剖析器一筆都
@@ -112,6 +173,16 @@ mod tests {
             c.contains("NOT in your native tool registry"),
             "缺少「這些工具不在原生註冊表但確實可用，不可宣稱不可用」的關鍵指示"
         );
+        // 這是實測依據，刪掉會讓契約失能：原生 function calling 有 schema
+        // 約束住工具名，這裡唯一的約束就是這句話。工具名是編碼過的
+        // (`{server}__{tool}`)，少了這句，模型很容易把 `__` 前綴當成實作
+        // 噪音而截短，送出的名字 decode_tool_name 解不回去，call_tool 回
+        // McpError::ToolNotFound，錯誤被餵回模型重試，最壞耗到迭代上限，
+        // 使用者只看到「工具一直失敗」。
+        assert!(
+            c.contains("copy them exactly as printed"),
+            "缺少「工具名要逐字照抄，含 `__` 前綴」的關鍵指示"
+        );
     }
 
     #[test]
@@ -130,10 +201,15 @@ mod tests {
 
     /// 依據 OmniRoute #7679 的實測：契約 prepend 在巨大 system 區塊開頭時，
     /// 30K 字元 prompt 下模型會直接忽略它（0/3），雙位置為 16/17。
+    ///
+    /// 用真實編碼形狀的工具名（見 `realistic_tools`），不是 `Read`/`Edit`
+    /// 這種 4 字元短名——用短名撐起來的 `len < 400` 是假的保護，這條路徑上
+    /// 不會出現 4 字元的工具名。
     #[test]
     fn reminder_is_short_and_names_the_tools() {
-        let r = build_reminder(&[tool("Read"), tool("Edit")]);
-        assert!(r.contains("Read") && r.contains("Edit"), "要點名工具");
+        let tools = realistic_tools(2);
+        let r = build_reminder(&tools);
+        assert!(r.contains(&tools[0].name) && r.contains(&tools[1].name), "要點名工具");
         assert!(r.len() < 400, "只是指回 system 區塊的一行提示，不是完整契約：{}", r.len());
         assert!(!r.contains("_nonce"), "nonce 只放在完整契約，避免重複洩漏");
         // reminder 刻意只點名工具、指回 system 區塊裡的完整契約。塞進
@@ -142,5 +218,25 @@ mod tests {
         // 偵測。len < 400 只是鬆散的替代指標，抓不到「只多塞了 description」
         // 這種沒讓長度爆表的情況，所以另外精確斷言不含 description 文字。
         assert!(!r.contains("的說明"), "reminder 不可包含工具的 description");
+    }
+
+    /// 工具數量沒有上限，但 reminder 不能跟著無上限成長——那會退化成
+    /// OmniRoute #7679 那個 0/3 的失敗模式。50 個真實編碼形狀的工具名，
+    /// reminder 仍要落在 `MAX_NAMED_TOOLS_IN_REMINDER` 撐起的長度上限內，
+    /// 並用「還有幾個」的提示帶過沒點名的部分。
+    #[test]
+    fn reminder_caps_tool_count_for_large_toolsets() {
+        let tools = realistic_tools(50);
+        let r = build_reminder(&tools);
+        assert!(
+            r.len() < 500,
+            "50 個工具時 reminder 仍要維持上限，不能複述整份清單：{}",
+            r.len()
+        );
+        let hidden = 50 - MAX_NAMED_TOOLS_IN_REMINDER;
+        assert!(
+            r.contains(&format!("and {hidden} more")),
+            "超過上限的工具要用「還有幾個」帶過，不能默默消失: {r}"
+        );
     }
 }
