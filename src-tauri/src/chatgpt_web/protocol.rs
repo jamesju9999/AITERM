@@ -18,10 +18,32 @@ pub enum FlatTurn {
 /// `<tool>` 封套不同：若共用同一組標籤，`tools::parse_tool_calls` 可能把
 /// 歷史裡我們自己寫進去的回合誤判成模型發出的新呼叫。nonce 檢查雖然也會
 /// 擋下（歷史回合沒有 `_nonce`），但不該把正確性建立在第二道防線上。
+///
+/// `system_prompt` 會先 `trim()` 再判斷是否為空、也用 trim 後的內容放進輸出，
+/// 前後空白／換行不會殘留。system 區塊刻意**沒有** `System:` 前綴——這段文字
+/// 要讀起來像框架敘述本身，加前綴會讓模型把它降格成轉錄稿裡的一個回合。
+///
+/// 輸出格式範例（system + user + assistant + tool_call + tool_result）：
+///
+/// ```text
+/// 你是助理
+///
+/// User: 第一問
+///
+/// Assistant: 第一答
+///
+/// [[tool_call:Read#call_1]]
+/// {"path":"a.txt"}
+/// [[/tool_call]]
+///
+/// [[tool_result:call_1]]
+/// 檔案內容
+/// [[/tool_result]]
+/// ```
 pub fn flatten_history(system_prompt: &str, turns: &[FlatTurn]) -> String {
     let mut parts: Vec<String> = Vec::new();
     if !system_prompt.trim().is_empty() {
-        parts.push(system_prompt.to_string());
+        parts.push(system_prompt.trim().to_string());
     }
     for turn in turns {
         parts.push(match turn {
@@ -56,14 +78,7 @@ mod tests {
         let first = out.find("第一問").unwrap();
         let second = out.find("第二問").unwrap();
         assert!(first < second, "順序要保留");
-        assert!(out.contains("第一答"));
-    }
-
-    #[test]
-    fn system_prompt_omitted_when_empty() {
-        let out = flatten_history("", &[FlatTurn::User("只有這句".into())]);
-        assert!(!out.starts_with('\n'), "空的 system 不該留下空行，實際：{out:?}");
-        assert!(out.contains("只有這句"));
+        assert!(out.contains("第一答"), "實際：{out}");
     }
 
     /// 鎖住 `trim()`：純空白（非空字串）的 system prompt 也要被視為「無 system」，
@@ -94,24 +109,26 @@ mod tests {
             ],
         );
         assert!(out.contains("[[tool_call:Read#call_1]]"), "實際：{out}");
-        assert!(out.contains(r#"{"path":"a.txt"}"#));
-        assert!(out.contains("[[/tool_call]]"));
-        assert!(out.contains("[[tool_result:call_1]]"));
-        assert!(out.contains("檔案內容"));
-        assert!(out.contains("[[/tool_result]]"));
-        assert!(!out.contains("<tool>"), "不可使用模型輸出用的封套標籤");
-        assert!(!out.contains("<tool_call"), "不可使用模型輸出用的封套標籤");
+        assert!(out.contains(r#"{"path":"a.txt"}"#), "實際：{out}");
+        assert!(out.contains("[[/tool_call]]"), "實際：{out}");
+        assert!(out.contains("[[tool_result:call_1]]"), "實際：{out}");
+        assert!(out.contains("檔案內容"), "實際：{out}");
+        assert!(out.contains("[[/tool_result]]"), "實際：{out}");
+        assert!(!out.contains("<tool>"), "不可使用模型輸出用的封套標籤，實際：{out}");
+        assert!(!out.contains("<tool_call"), "不可使用模型輸出用的封套標籤，實際：{out}");
     }
 
     /// 精確比對整段攤平後的輸出。這是線上格式本身（後續 Task 3–5 的剖析器要
-    /// 靠它吃回來），涵蓋全部四種 `FlatTurn` 變體加一個非空 system prompt，
-    /// 一次鎖住：system 位置、角色前綴的確切文字、`\n\n` 分隔符、工具界定符、
+    /// 靠它吃回來），涵蓋全部四種 `FlatTurn` 變體加一個帶前後空白／尾端換行的
+    /// system prompt——Claude Code 送來的 system 區塊幾乎必然帶尾端換行，若
+    /// 只用乾淨字串測試，格式鎖對最常見的真實輸入其實不成立。一次鎖住：
+    /// system 位置與 trim、角色前綴的確切文字、`\n\n` 分隔符、工具界定符、
     /// 以及工具區塊的先後順序。上面幾個測試表達的是個別意圖，各自的錯誤訊息
     /// 在壞掉時比較好讀；這個測試是額外一道格式鎖，不是取代品。
     #[test]
     fn flattened_format_is_exact() {
         let out = flatten_history(
-            "你是助理",
+            "\n你是助理\n",
             &[
                 FlatTurn::User("第一問".into()),
                 FlatTurn::Assistant("第一答".into()),
@@ -128,6 +145,22 @@ mod tests {
             Assistant: 第一答\n\n\
             [[tool_call:Read#call_1]]\n{\"path\":\"a.txt\"}\n[[/tool_call]]\n\n\
             [[tool_result:call_1]]\n檔案內容\n[[/tool_result]]";
-        assert_eq!(out, expected, "實際：{out:?}");
+        assert_eq!(out, expected);
+    }
+
+    /// 使用者內容本身可能就含有界定符字面文字——例如用 `Read` 讀進本 repo 的
+    /// spec 檔（docs/superpowers/specs/2026-08-10-chatgpt-web-provider-design.md）
+    /// 本身就寫著字面的 `[[tool_call:<name>#<id>]]`。這裡刻意**不逃逸／不改寫**：
+    /// 沒有任何剖析器會把這段歷史文字吃回去重新剖析——Task 5 的剖析器只掃
+    /// 模型輸出裡的 `<tool>` / `<tool_call`，對 `[[…]]` 完全惰性，騙不到；
+    /// 加逃逸只會讓模型多看到一堆雜訊，沒有實際的安全效益。
+    #[test]
+    fn delimiters_inside_content_pass_through_verbatim() {
+        let literal = "spec 裡寫著 [[tool_call:Read#call_1]] ... [[/tool_call]]";
+        let out = flatten_history(
+            "",
+            &[FlatTurn::ToolResult { id: "call_1".into(), content: literal.into() }],
+        );
+        assert!(out.contains(literal), "應原樣通過、不逃逸，實際：{out}");
     }
 }
