@@ -12,8 +12,6 @@ pub mod guard;
 pub mod knowledge_base;
 pub mod mail;
 pub mod mcp;
-/// ⚠️ 臨時可行性探勘，查完刪除。見 probe_chatgpt.rs。
-pub mod probe_chatgpt;
 pub mod pty;
 pub mod python_env;
 pub mod secret;
@@ -270,11 +268,6 @@ pub fn run() {
             enterprise::agent::init(app.handle());
             commands::appimage::repair_integration_on_startup();
 
-            // ⚠️ 臨時可行性探勘，查完連同 probe_chatgpt.rs 一起刪除。
-            if std::env::var("AITERM_PROBE_CHATGPT").as_deref() == Ok("1") {
-                probe_chatgpt::start(app.handle());
-            }
-
             // ChatGPT Web 供應商的傳輸層。這裡只是把 AppHandle 存起來——
             // webview 要到第一個請求進來時才建立。
             chatgpt_web::session::init(app.handle().clone());
@@ -312,8 +305,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // ⚠️ 臨時可行性探勘，查完刪除。
-            probe_chatgpt::probe_report,
             // ChatGPT Web
             chatgpt_web::session::chatgpt_web_take,
             chatgpt_web::session::chatgpt_web_chunk,
