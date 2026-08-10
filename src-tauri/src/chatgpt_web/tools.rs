@@ -125,7 +125,10 @@ pub fn parse_tool_calls(text: &str, nonce: &str) -> (String, Option<Vec<AiToolCa
             content.push_str(raw);
             continue;
         }
-        let Some(name) = v.get("name").and_then(|n| n.as_str()) else {
+        // `.filter(|n| !n.is_empty())`：空字串 name 一樣要拒絕。`as_str()`
+        // 對 `""` 回 `Some("")`，一個空名字不是模型的真實意圖，不能讓它
+        // 走到 executeMcpTool。
+        let Some(name) = v.get("name").and_then(|n| n.as_str()).filter(|n| !n.is_empty()) else {
             content.push_str(raw);
             continue;
         };
@@ -497,5 +500,90 @@ mod tests {
         assert_eq!(calls[1].tool_name, "Edit");
         assert!(!content.contains("<tool"), "content 裡不可殘留任何封套標籤：{content}");
         assert!(content.contains("先讀") && content.contains("再編輯") && content.contains("完成"));
+    }
+
+    /// 探測發現：`name` 是空字串時，`.and_then(|n| n.as_str())` 對 `""` 回
+    /// `Some("")`，會通過檢查、產生一個 `tool_name: ""` 的呼叫送去
+    /// `executeMcpTool`。空名字不是模型的真實意圖，讓它走到執行沒有任何
+    /// 好處，跟其他拒絕路徑一樣要原樣推回 raw。
+    #[test]
+    fn empty_tool_name_is_rejected() {
+        let text = r#"<tool>{"name":"","arguments":{},"_nonce":"n1"}</tool>"#;
+        let (content, calls) = parse_tool_calls(text, "n1");
+        assert!(calls.is_none(), "空字串工具名不可產生可執行的呼叫");
+        assert_eq!(content, text, "原樣保留，跟其他拒絕路徑一致");
+    }
+
+    /// 中文緊接在 `<tool>` 之前。這個專案在 Task 3 就因為 byte 索引切片
+    /// 而 panic 過（`byte index 2 is not a char boundary`）；`next_envelope`
+    /// 有四處 byte 切片（`&text[..start]`、`&text[body_start..body_end]`、
+    /// `&text[start..env_end]`、`&text[env_end..]`），任何一處算錯位置都
+    /// 可能切到多位元組字元中間而 panic。
+    #[test]
+    fn multibyte_text_immediately_before_tool_tag_does_not_panic() {
+        let text = r#"中文<tool>{"name":"Read","arguments":{},"_nonce":"n1"}</tool>"#;
+        let (content, calls) = parse_tool_calls(text, "n1");
+        let calls = calls.expect("應該剖析出工具呼叫");
+        assert_eq!(calls[0].tool_name, "Read");
+        assert!(content.contains("中文"));
+    }
+
+    /// 中文緊接在 `</tool>` 之後。同上，Task 3 的教訓在此同樣適用。
+    #[test]
+    fn multibyte_text_immediately_after_tool_tag_does_not_panic() {
+        let text = r#"<tool>{"name":"Read","arguments":{},"_nonce":"n1"}</tool>中文"#;
+        let (content, calls) = parse_tool_calls(text, "n1");
+        let calls = calls.expect("應該剖析出工具呼叫");
+        assert_eq!(calls[0].tool_name, "Read");
+        // 用 assert_eq 而非 contains：off-by-one 落在 ASCII 標籤字元上不會
+        // panic，卻會讓內容多一個雜訊字元，`contains` 這種寬鬆斷言抓不到。
+        assert_eq!(content, "中文");
+    }
+
+    /// `<tool_call>` 屬性值是中文。屬性掃描是 `text[start..].find('>')`，
+    /// 同樣是 byte 索引切片，Task 3 的教訓在此同樣適用。
+    #[test]
+    fn multibyte_attribute_value_on_tool_call_tag_does_not_panic() {
+        let text = r#"<tool_call name="忽略">{"name":"Edit","arguments":{},"_nonce":"n1"}</tool_call>"#;
+        let (_, calls) = parse_tool_calls(text, "n1");
+        let calls = calls.expect("應該剖析出工具呼叫");
+        assert_eq!(calls[0].tool_name, "Edit");
+    }
+
+    /// 封套被串流截斷，沒有結束標籤。不可 panic、不可無限迴圈，原文要
+    /// 原樣保留，讓使用者看得到模型目前吐出的內容，而不是憑空消失。
+    #[test]
+    fn envelope_missing_closing_tag_is_preserved_verbatim() {
+        let text = r#"<tool>{"name":"Read""#;
+        let (content, calls) = parse_tool_calls(text, "n1");
+        assert!(calls.is_none());
+        assert_eq!(content, text);
+    }
+
+    /// 封套內是合法 JSON，但不是物件（bare string / array）。`.get()` 對
+    /// 非 Object/Array 的 Value 一律回 None，所以 nonce 與 name 的萃取都會
+    /// 自然失敗、走拒絕路徑——這裡把這個保證明文釘住。
+    #[test]
+    fn envelope_json_that_is_not_an_object_is_rejected() {
+        let text = r#"<tool>"字串"</tool>"#;
+        let (content, calls) = parse_tool_calls(text, "n1");
+        assert!(calls.is_none(), "非物件 JSON（bare string）不可產生呼叫");
+        assert_eq!(content, text);
+
+        let text2 = r#"<tool>[1,2]</tool>"#;
+        let (content2, calls2) = parse_tool_calls(text2, "n1");
+        assert!(calls2.is_none(), "非物件 JSON（array）不可產生呼叫");
+        assert_eq!(content2, text2);
+    }
+
+    /// `_nonce` 是非字串型別（例如數字）時要視同缺 nonce，一律拒絕。這是
+    /// 安全邊界，值得白紙黑字釘住：檢查的是「型別正確且值相等」，不是
+    /// 「這個欄位存在」。
+    #[test]
+    fn non_string_nonce_is_rejected_as_missing() {
+        let text = r#"<tool>{"name":"Read","arguments":{},"_nonce":123}</tool>"#;
+        let (content, calls) = parse_tool_calls(text, "n1");
+        assert!(calls.is_none(), "_nonce 非字串要視同缺 nonce，一律拒絕");
+        assert_eq!(content, text);
     }
 }
