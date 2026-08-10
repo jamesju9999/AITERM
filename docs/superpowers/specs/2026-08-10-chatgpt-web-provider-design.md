@@ -221,8 +221,23 @@ Claude Code 透過 `ANTHROPIC_DEFAULT_*_MODEL=aiterm:opus` 把該層當成 Opus�
 
 - webview 視窗**延遲建立**（首次使用時），預設隱藏
 - `/api/auth/session` 拿不到 token → **顯示視窗**讓使用者登入，同時回 `AuthFailed`
+- **登入成功後自動隱藏**：顯示視窗期間輪詢 `/api/auth/session`（每 2 秒），一拿到
+  `accessToken` 就 `hide()`。不做這件事的話視窗會一直開著，使用者很自然會去關掉它
 - 視窗被關閉或崩潰 → 下次請求自動重建
 - sentinel token 與 PoW **每次請求重算**（181ms，不值得為快取增加失效邏輯）
+
+### 隱藏 vs 關閉
+
+webview **就是傳輸層本身**（所有請求都是頁面內的 JS 發出的），所以兩者後果不同：
+
+| 動作 | 後果 |
+|---|---|
+| `hide()` | webview 仍存活，請求照常運作。這是登入後的正常狀態。 |
+| `close()` | webview 被銷毀，傳輸中斷；下次請求自動重建，但該次會多付一次載入成本。 |
+
+**登入狀態不受影響**。Tauri 的 webview 資料儲存是應用程式層級，不隨視窗生滅，cookie 留在那裡。探勘期間視窗因 Rust 重建被銷毀重開六次，每次 `/api/auth/session` 都直接回 `hasToken: true`，使用者只登入過一次。
+
+因此**必須使用預設資料儲存，不可用隔離分割區**。OmniRoute 的 Electron 登入管理器刻意每次開新的 `session.fromPartition('login-…-<timestamp>')`，是因為它的目的是把 cookie 撈出來；我們的目的相反，要的就是持久化。
 
 ### 錯誤對應
 
