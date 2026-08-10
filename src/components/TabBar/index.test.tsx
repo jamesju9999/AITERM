@@ -177,9 +177,9 @@ describe("TabBar terminal attention indicator", () => {
   });
 });
 
-// 橋接分頁不再疊 "CC" 徽章，改成整顆圖示換掉。圖示是內聯 SVG，沒有可查詢的
-// 文字或 role，所以認 svg 元素本身——同一個 .aiterm-tab-icon 裡有沒有換成
-// 另一顆，用 innerHTML 比對最直接，也不用替每顆圖示加 test id。
+// 橋接分頁的外觀分兩種來源：explicit 換整顆圖示，default 只加徽章。圖示是內聯
+// SVG，沒有可查詢的文字或 role，所以認 svg 元素本身——同一個 .aiterm-tab-icon 裡
+// 有沒有換成另一顆，用 innerHTML 比對最直接，也不用替每顆圖示加 test id。
 function iconMarkupOf(tab: Tab): string {
   const { container } = renderTabBar({ tabs: [tab], activeId: tab.id });
   // 一定要限定在分頁清單裡：側邊欄收合鈕自己也掛 .aiterm-tab-icon，而且排在
@@ -187,28 +187,61 @@ function iconMarkupOf(tab: Tab): string {
   return container.querySelector(".aiterm-tabbar-tabs .aiterm-tab-icon")!.innerHTML;
 }
 
-describe("TabBar Claude Code bridge icon", () => {
-  it("claudeBridge 為 true 的終端機分頁換成另一顆圖示", () => {
-    const plain = iconMarkupOf({ id: "t1", title: "Tab 1", type: "terminal" });
+/** 只取圖示本身（去掉徽章那些 span），才能單獨比對「圖示有沒有換」。 */
+function svgOnly(markup: string): string {
+  return markup.slice(0, markup.indexOf("</svg>") + 6);
+}
+
+describe("TabBar Claude Code bridge 外觀", () => {
+  it("explicit 來源換成另一顆圖示", () => {
+    const plain = svgOnly(iconMarkupOf({ id: "t1", title: "Tab 1", type: "terminal" }));
     cleanup();
-    const bridged = iconMarkupOf({ id: "t1", title: "Tab 1", type: "terminal", claudeBridge: true });
+    const bridged = svgOnly(
+      iconMarkupOf({ id: "t1", title: "Tab 1", type: "terminal", claudeBridge: "explicit" }),
+    );
     expect(bridged).not.toBe(plain);
   });
 
-  it("非終端機分頁即使 claudeBridge 為 true 也維持原本的圖示", () => {
+  // 使用者點的是「終端機」，把圖示整顆換掉會讓人以為自己點錯了。
+  it("default 來源維持終端機圖示，只多一顆徽章", () => {
+    const plain = svgOnly(iconMarkupOf({ id: "t1", title: "Tab 1", type: "terminal" }));
+    cleanup();
+    renderTabBar({
+      tabs: [{ id: "t1", title: "Tab 1", type: "terminal", claudeBridge: "default" }],
+      activeId: "t1",
+    });
+    const icon = document.querySelector(".aiterm-tabbar-tabs .aiterm-tab-icon")!;
+    expect(svgOnly(icon.innerHTML)).toBe(plain);
+    expect(screen.getByText("CC")).toBeInTheDocument();
+  });
+
+  it("explicit 來源不再疊徽章——已經換了整顆圖示", () => {
+    renderTabBar({
+      tabs: [{ id: "t1", title: "Tab 1", type: "terminal", claudeBridge: "explicit" }],
+      activeId: "t1",
+    });
+    expect(screen.queryByText("CC")).not.toBeInTheDocument();
+  });
+
+  it("沒有橋接的終端機分頁兩者都沒有", () => {
+    renderTabBar({ tabs: baseTabs, activeId: "t1" });
+    expect(screen.queryByText("CC")).not.toBeInTheDocument();
+  });
+
+  it("非終端機分頁即使帶了旗標也維持原本的圖示", () => {
     const plain = iconMarkupOf({ id: "m1", title: "Mail", type: "mail" });
     cleanup();
-    const bridged = iconMarkupOf({ id: "m1", title: "Mail", type: "mail", claudeBridge: true } as Tab);
+    const bridged = iconMarkupOf({ id: "m1", title: "Mail", type: "mail", claudeBridge: "explicit" });
     expect(bridged).toBe(plain);
   });
 
-  // 曾經是壓在圖示上的徽章，跟 attention 點搶同一塊版位。換成整顆圖示後兩者
-  // 各自獨立，這裡守住「橋接分頁仍看得到 attention 提示」。
-  it("橋接分頁仍然顯示 attention 提示點", () => {
+  // 徽章曾經跟 attention 點搶同一塊版位，兩者要能同時出現。
+  it("default 來源的橋接分頁仍然顯示 attention 提示點", () => {
     renderTabBar({
-      tabs: [{ id: "t1", title: "Tab 1", type: "terminal", claudeBridge: true, attention: "waiting" }],
+      tabs: [{ id: "t1", title: "Tab 1", type: "terminal", claudeBridge: "default", attention: "waiting" }],
       activeId: "t2",
     });
+    expect(screen.getByText("CC")).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "終端機正在等待你的回應" })).toBeInTheDocument();
   });
 });

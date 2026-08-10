@@ -42,8 +42,14 @@ export interface Tab {
   /** 非 active 的終端機分頁發生了值得注意的事：在側邊欄圖示上顯示一個彩色點。
    *  只存在記憶體，不進 localStorage——重開 app 後這些事件已經沒有意義。 */
   attention?: AttentionKind;
-  /** 這個分頁是否注入了 Claude Code 橋接環境變數，只在分頁建立時決定，事後不變。 */
-  claudeBridge?: boolean;
+  /**
+   * 這個終端機分頁有沒有注入 Claude Code 橋接環境變數，以及來源。
+   *
+   * 來源會影響外觀：`explicit`（使用者從選單挑了「Claude Code」）換整顆圖示與
+   * 標題；`default`（設定的「新分頁預設啟用」）只在終端機圖示上加徽章——使用者
+   * 點的是「終端機」，把它改名成 Claude Code 會讓人以為自己點錯了。
+   */
+  claudeBridge?: "explicit" | "default";
 }
 
 export interface TabBarProps {
@@ -70,12 +76,12 @@ function formatUnreadCount(n: number): string {
   return n > 99 ? "99+" : String(n);
 }
 
-function getTabIcon(type: TabType, claudeBridge?: boolean): React.ReactNode {
+function getTabIcon(type: TabType, claudeBridge?: Tab["claudeBridge"]): React.ReactNode {
   switch (type) {
     // 橋接分頁用機器人圖示——跟「新增分頁」選單裡 Claude Code 那一項同一顆，
     // 選單看到什麼、分頁就長什麼。原本是終端機圖示疊一顆 "CC" 徽章，兩者重疊，
     // 而且側邊欄收起來只剩圖示時，一疊小貼紙比換一顆圖示難認。
-    case "terminal": return claudeBridge ? <RobotIcon size={18} /> : <TerminalIcon size={18} />;
+    case "terminal": return claudeBridge === "explicit" ? <RobotIcon size={18} /> : <TerminalIcon size={18} />;
     case "database": return <DatabaseIcon size={18} />;
     case "design": return <PaintbrushIcon size={18} />;
     case "cross-db": return <LinkIcon size={18} />;
@@ -212,6 +218,11 @@ export function TabBar({
                   role="img"
                   aria-label={attentionLabel(tab.attention, t)}
                 />
+              )}
+              {/* 只有 default 來源需要徽章——explicit 已經換了整顆圖示。錨在左上角，
+                  跟右下角的 attention 點、mail 的兩個角落都不會撞。 */}
+              {tab.type === "terminal" && tab.claudeBridge === "default" && (
+                <span className="terminal-bridge-badge">{t.bridge_tab_badge}</span>
               )}
             </span>
 

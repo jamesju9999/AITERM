@@ -369,6 +369,27 @@
   box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
 }
 
+/* Claude Code 橋接標記——只給「設定預設啟用」建出來的分頁。使用者明確從選單挑
+   Claude Code 的那種已經換了整顆圖示，不需要再疊貼紙。文字本身（"CC"）已經可讀，
+   不像純色點需要 aria-label 才能傳達語意，所以就是一個普通文字 chip。 */
+.terminal-bridge-badge {
+  position: absolute;
+  top: -6px;
+  left: -8px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  background: var(--accent, #a855f7);
+  border-radius: 4px;
+  border: 1.5px solid var(--bg-secondary, #151515);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 11px;
+  text-align: center;
+  pointer-events: none;
+}
+
 @keyframes terminal-attention-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }

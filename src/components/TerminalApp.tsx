@@ -20,6 +20,7 @@ import { MailView } from "./MailView";
 import { useLocale } from "../contexts/LocaleContext";
 import { useMailSync } from "../hooks/useMailSync";
 import { getConfig } from "../ipc/config";
+import { bridgeStatus } from "../ipc/bridge";
 import {
   onEnterpriseTaskReceived,
   onEnterpriseTaskReady,
@@ -109,12 +110,22 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   }, []);
 
   // Claude Code 橋接：新建的一般終端機分頁要不要預設注入橋接環境變數。
-  // 用 ref 而非 state——只有分頁建立當下的回呼會讀它，config 讀回來之後
-  // 不需要觸發任何重繪。
+  // 用 ref 而非 state——只有分頁建立當下的回呼會讀它，讀回來之後不需要重繪。
+  //
+  // 必須同時滿足「設定開著」與「server 真的在跑」。NewTabPicker 的 Claude Code
+  // 選項本來就會在 server 沒啟動時停用（註解寫著「建立一個注入了死埠位址的分頁，
+  // 比不給選更難除錯」），但預設值這條路徑原本只讀設定、完全繞過那個防護——
+  // 於是選單擋著不讓建，一般終端機分頁卻照樣被注入指向死埠的環境變數。
   const defaultBridgeOnNewTabRef = useRef(false);
-  useEffect(() => {
-    getConfig().then((c) => { defaultBridgeOnNewTabRef.current = c.claude_bridge.default_on_new_tab; }).catch(() => {});
+  const refreshDefaultBridge = useCallback(async () => {
+    try {
+      const [cfg, status] = await Promise.all([getConfig(), bridgeStatus()]);
+      defaultBridgeOnNewTabRef.current = cfg.claude_bridge.default_on_new_tab && status.running;
+    } catch {
+      defaultBridgeOnNewTabRef.current = false;
+    }
   }, []);
+  useEffect(() => { void refreshDefaultBridge(); }, [refreshDefaultBridge]);
 
   // PTY session ID of the most recently active terminal tab — used by VcsView for CWD polling.
   const [lastTerminalPtyId, setLastTerminalPtyId] = useState<string>("");
@@ -197,8 +208,10 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   }, [selectTab]);
 
   const handleAddTab = useCallback(() => {
+    // 每次開選單都重讀：設定改過、或 server 中途啟動／停止，都不必重開 App。
+    void refreshDefaultBridge();
     setPickerOpen(true);
-  }, []);
+  }, [refreshDefaultBridge]);
 
   const handlePickerSelect = useCallback((type: TabType, opts?: { claudeBridge?: boolean }) => {
     const newId = crypto.randomUUID();
@@ -213,11 +226,19 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     if (type === "code-assistant") title = t.code_assistant_tab;
     if (type === "knowledge-base") title = t.knowledge_base_tab;
     if (type === "mail") title = t.mail_tab;
-    // 「新增 Claude Code 分頁」強制帶 true；一般新增終端機分頁沿用設定的預設值。
-    // 其他分頁類型沒有 PTY，這個旗標對它們沒有意義。
-    const claudeBridge = type === "terminal" ? (opts?.claudeBridge ?? defaultBridgeOnNewTabRef.current) : undefined;
-    // 標題也要分得出來，否則側邊欄會出現兩個都叫「終端機」的分頁。
-    if (claudeBridge) title = t.bridge_tab_title;
+    // 兩種來源要分得出來：選單挑「Claude Code」是使用者當下的意圖，換整顆圖示
+    // 與標題才不會跟一般終端機混淆；設定的「新分頁預設啟用」則是背景行為，使用者
+    // 點的是「終端機」，把它改名成 Claude Code 會讓人以為點錯了——那一種只在終端機
+    // 圖示上加個徽章。其他分頁類型沒有 PTY，這個旗標對它們沒有意義。
+    const claudeBridge: Tab["claudeBridge"] =
+      type !== "terminal"
+        ? undefined
+        : opts?.claudeBridge
+          ? "explicit"
+          : defaultBridgeOnNewTabRef.current
+            ? "default"
+            : undefined;
+    if (claudeBridge === "explicit") title = t.bridge_tab_title;
     setTabs((prev) => [...prev, { id: newId, title, type, claudeBridge }]);
     selectTab(newId);
     setPickerOpen(false);
@@ -241,9 +262,10 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       if (nextTabs.length === 0) {
         const newId = crypto.randomUUID();
         setActiveId(newId);
+        // 這條路徑是「關掉最後一個分頁時自動補一個」，不是使用者挑的，
+        // 所以算 default 來源：標題維持字面的 Terminal，不改名。
         const bridged = defaultBridgeOnNewTabRef.current;
-        // 這條路徑本來就用未經 i18n 的字面標題，跟著它走，別為此把 t 拉進依賴。
-        return [{ id: newId, title: bridged ? "Claude Code" : "Terminal", type: "terminal", claudeBridge: bridged }];
+        return [{ id: newId, title: "Terminal", type: "terminal", claudeBridge: bridged ? "default" as const : undefined }];
       }
 
       // If closing active tab, switch to adjacent tab
@@ -460,7 +482,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   initialCwd={tab.initialCwd}
                   initialMission={tab.initialMission}
                   enterpriseTask={tab.enterpriseTask}
-                  claudeBridge={tab.claudeBridge}
+                  claudeBridge={tab.claudeBridge !== undefined}
                   onSessionCreated={(ptyId) => {
                     setTabs((prev) =>
                       prev.map((t) => t.id === tab.id ? { ...t, ptySessionId: ptyId } : t)
