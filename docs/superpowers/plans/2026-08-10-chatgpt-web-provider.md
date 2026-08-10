@@ -17,9 +17,11 @@
 | Task 3 SSE 解析 | ✅ 完成 | `7912e63` `7e10bb3` `50c77ca` `7cbce81` |
 | Task 4 工具契約序列化 | ✅ 完成 | `0f695a3` `d782ee2` `74c5ab5` `18d862a` `704465a` `4334508` |
 | Task 5 封套剖析與 nonce | ✅ 完成 | `e8306af` `b10b912` `9af1918` `4b2ece0` |
-| Task 6–16 | 未開始 | |
+| Task 6 注入腳本的 SHA3-512 | ✅ 完成 | `8e966ab` `77dad7d` |
+| Task 7–16 | 未開始 | |
 
-全庫測試：730 passed、7 ignored（Task 1 基準 682）。
+Rust 全庫測試：730 passed、7 ignored（Task 1 基準 682）。
+前端：`src/lib/chatgptWebInject.test.ts` 4 passed。
 
 **Task 4 對後續任務的影響**：`build_reminder` 現在最多逐一點名
 `MAX_NAMED_TOOLS_IN_REMINDER`（8）個工具，其餘用「…and N more」帶過——
@@ -107,6 +109,25 @@ type」的測試不受編譯器保護——新增變體時窮舉 match 會強制
     第二輪照抄，之後每次呼叫都被拒絕。慶祝一個性質之前，先問它的反面是什麼。
 16. **審查者要往前追到既有的前端程式碼**，不只讀後續任務的計畫。第 13、15 兩條
     都是追到 `useMcpChat.ts` 才成立的——只讀 Rust 這一側看不出來。
+
+**Task 6 的審查發現（後續任務要沿用的教訓）**：
+
+17. **這個腳本注入的是第三方頁面，我們加的每樣東西 OpenAI 都可能看到**。
+    `window.__aitermTest = {…}` 是可列舉的，而 Task 7 的 `pickKey(window)` 會從
+    `Object.keys(window)` 抽一個名字送進 sentinel 端點——等於主動遞交自動化標記。
+    Tauri 自己就沒犯這個錯（`Object.defineProperty` 不帶 `enumerable`）。往
+    `inject.js` 加任何全域之前，先問「OpenAI 看得到嗎」。
+18. **測到的路徑要是生產會走的路徑**。SHA3 的兩個 NIST 向量（0 與 3 bytes）都只
+    跑一個吸收區塊，而生產輸入是 600–900 bytes（9–13 個區塊）——多區塊路徑覆蓋率
+    是 0%，卻是 100% 的生產路徑。改壞了兩個向量照樣全綠，症狀會是 sentinel 回一個
+    跟 SHA3 毫無關聯的 403。
+19. **計畫裡「為了測試而加的相容層」要先驗證前提**。Task 7 原本要加
+    `doc()`/`scr()`/`navigatorRef()`/`perf()`，理由是「vitest 的假 window 下無法
+    求值」——實測是錯的（jsdom 環境下裸全域一律可用）。寫了不只是投機性抽象，
+    還會讓測試驗到替身分支，typo 變成隱形的。
+20. **同步迴圈跑在 webview 主執行緒上，上限要用牆鐘而非迭代數**。`solvePow` 的
+    `maxIter=500000` 依實測是 3–6 分鐘的完全凍結；difficulty 每多一個十六進位
+    位數期望迭代數就乘 16，用純迭代數當上限等於把凍結時間交給上游決定。
 
 ---
 
