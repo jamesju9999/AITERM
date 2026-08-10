@@ -156,6 +156,17 @@ impl SseParser {
             // 不能沿用「比較長度」的判斷：新訊息比舊的短時會被整段靜默吃掉。
             None => {
                 // 上游送了一個空的 parts[0] 但 id 沒變：不是新內容，忽略。
+                // 這跟上面那個 `Some(full) = ... else` guard 攔的不是同一類
+                // 輸入——那個攔的是「結構上就沒有 content/parts 欄位」（例如
+                // `message:null`），這裡攔的是「有 parts[0]，但它是空字串」
+                // （例如 `parts:[""]`）。單獨拿掉這裡這道防護（改回「先
+                // reset 再判斷」的舊順序）就足以讓
+                // `frame_with_empty_parts_mid_stream_does_not_reset_state`
+                // 變紅；`mid_stream_frame_without_text_does_not_reset_state`
+                // 用的 `message:null` 則會在更早的 `Some(full) = ... else`
+                // 就被整段攔下，不會走到這裡，所以單獨拿掉上面那道 guard
+                // 不會讓任何測試變紅——要兩道防護都拿掉，`message:null` 那條
+                // 測試才會變紅。兩者不是重複，不要合併刪掉。
                 if full.is_empty() {
                     return Vec::new();
                 }
@@ -417,19 +428,28 @@ mod tests {
         assert!(out.is_empty(), "沒有換行結尾時應該還在等，不能提早輸出");
     }
 
-    /// `message.id` 換了代表換了一則訊息（例如思考區塊結束、答案開始）。
-    /// 第二則的內容不是第一則的延續，要整段送出且不能 panic。
+    /// `message.id` 換了代表換了一則訊息（例如思考區塊結束、答案開始）。這個
+    /// 情境是真的、不是為測試而測試：思考區塊與答案是兩則不同的 `message`，
+    /// 它們的開頭恰好重疊並不罕見（例如思考寫「我來看看」、答案也以「我來
+    /// 看看」開頭）。
+    ///
+    /// 這裡刻意讓第二則的內容是第一則 `emitted` 的**字串延續**——這是唯一能
+    /// 區分「靠 `strip_prefix` 回 `None`（內容對不上）」和「靠 `id` 重設」的
+    /// 情境：若只看內容是否為前綴延續，第二則會被誤判成第一則的延續，
+    /// 使用者只會看到後半段「，世界」而不是完整的第二則訊息。沒有這個測試，
+    /// `current_id`／`self.emitted.clear()` 整套機制形同沒有理由的複雜度：
+    /// 拿掉它其餘測試依然全綠。
     #[test]
-    fn new_message_id_restarts_the_diff() {
+    fn new_message_id_restarts_the_diff_even_when_content_overlaps() {
         let mut p = SseParser::default();
         assert_eq!(
-            p.feed_line(r#"data: {"message":{"id":"msg_1","content":{"parts":["第一則回答"]}}}"#),
-            vec![SseOut::Text("第一則回答".into())],
+            p.feed_line(r#"data: {"message":{"id":"msg_1","content":{"parts":["你好"]}}}"#),
+            vec![SseOut::Text("你好".into())],
         );
         assert_eq!(
-            p.feed_line(r#"data: {"message":{"id":"msg_2","content":{"parts":["第二則回答"]}}}"#),
-            vec![SseOut::Text("第二則回答".into())],
-            "換了 id 要整段送出，不能 panic 也不能只送差異",
+            p.feed_line(r#"data: {"message":{"id":"msg_2","content":{"parts":["你好，世界"]}}}"#),
+            vec![SseOut::Text("你好，世界".into())],
+            "新 id 的訊息即使文字上恰好是舊 emitted 的延續，也該整段重送而非只送差異",
         );
     }
 
@@ -447,8 +467,14 @@ mod tests {
         );
     }
 
-    /// 部分環境可能送 `\r\n` 結尾，`trim_end_matches` 要同時處理 `\r`，
-    /// 否則殘留的 `\r` 會混進 JSON payload 導致解析失敗。
+    /// 部分環境可能送 `\r\n` 結尾。這條鎖的是**端到端的 CRLF 行為**——
+    /// `feed_str` 餵 `\r\n` 結尾的一行要能正常解析——而不是單獨鎖
+    /// `trim_end_matches(['\r', '\n'])` 那一行本身：`feed_line` 裡的
+    /// `payload.trim()` 也會參與（`\r` 屬於 Unicode 空白字元，會被
+    /// `trim()` 一併吃掉），所以單獨把 `trim_end_matches` 改壞成只留
+    /// `'\n'` 並不會讓這條測試變紅。保留 `trim_end_matches(['\r', '\n'])`
+    /// 是因為「一行不該包含它自己的行終止符」是 `feed_str` 這一層自己的
+    /// 契約，不該依賴下游 `.trim()` 的副作用來成立。
     #[test]
     fn crlf_line_endings_are_handled() {
         let mut p = SseParser::default();
