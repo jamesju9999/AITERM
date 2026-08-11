@@ -147,6 +147,10 @@ fn split_chunks_reassemble_into_incremental_deltas() {
 //    人以為等一等就有）。`bridge/upstream/chatgpt_web.rs` 的實作與測試留著，
 //    重新啟用只需要改 `kind_for` 那一行——條件見那裡的註解。
 //
+//    ✅ 拒絕訊息已端到端驗證（2026-08-11）：Claude Code 收到
+//    `API Error: 400 invalid input:「…」不能用於 Claude Code 橋接：…`，
+//    含原因、實測數字、以及「仍可用於 /ai 與 Ask AI 面板」的替代路徑。
+//
 // 5. ✅ 已錄過一次（2026-08-10），發現並修掉兩個 bug，fixture 已進
 //    `protocol.rs` 的測試（`user_echo_frame_is_not_treated_as_the_answer` 等）：
 //    a. ✅ 串流會**回放我們自己送出去的那則訊息**（`author.role == "user"`，
