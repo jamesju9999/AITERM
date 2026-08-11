@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use crate::ai::{
     sse::{consume_openai_sse, map_http_error},
-    AiError, AiProvider, AiToolCall, ChatMessage, GenerateChunk, GenerateRequest,
+    AiError, AiProvider, ChatMessage, GenerateChunk, GenerateRequest,
     GenerateWithToolsResult, McpToolDefinition,
 };
 
@@ -145,12 +145,14 @@ impl AiProvider for OpenAiCompatibleClient {
             messages.push(msg);
         }
 
+        // 串流。這條路徑原本是 stream:false，所有帶工具的對話（終端機 MCP、
+        // 程式庫協助的研究階段）都因此變成「整段一次跳出來」。
         let body = serde_json::json!({
             "model": self.model,
             "messages": messages,
             "tools": tool_defs,
             "tool_choice": "auto",
-            "stream": false
+            "stream": true
         });
 
         let builder = self.apply_headers(self.client.post(self.completions_url()).json(&body));
@@ -165,44 +167,15 @@ impl AiProvider for OpenAiCompatibleClient {
             return Err(AiError::Network { message: format!("HTTP {status}: {body_text}") });
         }
 
-        let json: serde_json::Value = resp.json().await
-            .map_err(|e| AiError::Network { message: e.to_string() })?;
+        let streamed = crate::ai::sse::consume_openai_sse_with_tools(resp, tx).await?;
 
-        let choice = &json["choices"][0];
-        let finish_reason = choice["finish_reason"].as_str().unwrap_or("");
-
-        // Some providers (Claude extended-thinking via OpenAI-compat) split the response
-        // into multiple choices: one with content, one with tool_calls. Find whichever
-        // choice actually contains tool_calls instead of blindly using choices[0].
-        let any_tool_calls_finish = json["choices"].as_array()
-            .map(|cs| cs.iter().any(|c| c["finish_reason"].as_str() == Some("tool_calls")))
-            .unwrap_or(false);
-
-        if any_tool_calls_finish {
-            let tool_call_choice = json["choices"].as_array()
-                .and_then(|cs| cs.iter().find(|c| !c["message"]["tool_calls"].is_null()))
-                .unwrap_or(choice);
-
-            if let Some(raw_calls) = tool_call_choice["message"]["tool_calls"].as_array() {
-                let calls: Vec<AiToolCall> = raw_calls.iter().map(|c| AiToolCall {
-                    id: c["id"].as_str().unwrap_or("").to_string(),
-                    tool_name: c["function"]["name"].as_str().unwrap_or("").to_string(),
-                    args: serde_json::from_str(
-                        c["function"]["arguments"].as_str().unwrap_or("{}")
-                    ).unwrap_or(serde_json::json!({})),
-                    thought_signature: None,
-                }).collect();
-
-                // Preserve the raw tool_calls JSON verbatim so callers can echo it back
-                // to Gemini thinking-mode models which require thought_signature.
-                let raw = Some(tool_call_choice["message"]["tool_calls"].clone());
-                return Ok(GenerateWithToolsResult::ToolCalls { calls, raw });
-            }
+        if !streamed.calls.is_empty() {
+            return Ok(GenerateWithToolsResult::ToolCalls {
+                calls: streamed.calls,
+                raw: streamed.raw,
+            });
         }
-
-        let content = choice["message"]["content"].as_str().unwrap_or("").to_string();
-        let _ = tx.send(GenerateChunk { delta: content.clone(), done: true, usage: None }).await;
-        Ok(GenerateWithToolsResult::Text(content))
+        Ok(GenerateWithToolsResult::Text(streamed.text))
     }
 
     async fn health_check(&self) -> Result<(), AiError> {

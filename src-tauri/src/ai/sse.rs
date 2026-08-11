@@ -97,6 +97,138 @@ pub async fn consume_openai_sse(
     Ok(())
 }
 
+// ── 串流 + 工具呼叫 ───────────────────────────────────────────────────────────
+
+/// `consume_openai_sse_with_tools` 的累積結果。
+pub struct StreamedToolsResult {
+    pub text: String,
+    pub calls: Vec<crate::ai::AiToolCall>,
+    /// 原封不動的 tool_calls JSON，供需要回填的模型（如 Gemini thinking）echo 回去。
+    pub raw: Option<serde_json::Value>,
+}
+
+/// 像 `consume_openai_sse`，但同時累積 `tool_calls`。
+///
+/// 文字照樣邊收邊往 `tx` 送（這就是串流）；工具呼叫則是**分片**來的——同一個
+/// 呼叫的 `arguments` 會被切成好幾段，只能靠 `index` 對位接回完整 JSON，所以
+/// 不能邊收邊送，要等收齊。
+pub async fn consume_openai_sse_with_tools(
+    resp: reqwest::Response,
+    tx: mpsc::Sender<GenerateChunk>,
+) -> Result<StreamedToolsResult, AiError> {
+    use std::collections::BTreeMap;
+
+    let mut stream = resp.bytes_stream();
+    let mut buf = Vec::<u8>::new();
+    let mut text = String::new();
+    // BTreeMap 讓輸出順序跟著 index 走，而不是片段抵達的順序。
+    let mut acc: BTreeMap<usize, (Option<String>, Option<String>, String)> = BTreeMap::new();
+    let mut saw_data_prefix = false;
+    let mut raw_body = String::new();
+
+    'outer: while let Some(item) = stream.next().await {
+        let bytes = item.map_err(|e| AiError::Network { message: e.to_string() })?;
+        buf.extend_from_slice(&bytes);
+
+        loop {
+            let Some(pos) = find_line_end(&buf) else { break };
+            let line_bytes: Vec<u8> = buf.drain(..pos).collect();
+            let sep = separator_len(&buf);
+            buf.drain(..sep);
+            let line = match std::str::from_utf8(&line_bytes) {
+                Ok(s) => s.trim(),
+                Err(_) => continue,
+            };
+            if !saw_data_prefix {
+                raw_body.push_str(line);
+                raw_body.push('\n');
+            }
+            if line.is_empty() { continue; }
+            let payload = match line.strip_prefix("data:") {
+                Some(p) => { saw_data_prefix = true; p.trim() }
+                None => continue,
+            };
+            if payload == "[DONE]" { break 'outer; }
+            let Ok(p) = serde_json::from_str::<OpenAiSsePayload>(payload) else { continue };
+
+            let delta = p.delta_text();
+            if !delta.is_empty() {
+                text.push_str(&delta);
+                let _ = tx.send(GenerateChunk { delta, done: false, usage: p.usage_into() }).await;
+            }
+            for tc in p.tool_call_deltas() {
+                let slot = acc.entry(tc.index).or_insert((None, None, String::new()));
+                if let Some(id) = &tc.id { slot.0 = Some(id.clone()); }
+                if let Some(f) = &tc.function {
+                    if let Some(n) = &f.name { slot.1 = Some(n.clone()); }
+                    if let Some(a) = &f.arguments { slot.2.push_str(a); }
+                }
+            }
+            if p.finish_reason_present() {
+                let _ = tx.send(GenerateChunk { delta: String::new(), done: true, usage: p.usage_into() }).await;
+            }
+        }
+    }
+
+    // 有些本地伺服器會忽略 stream:true，直接回一包普通 JSON。沒有這段的話
+    // 使用者會拿到一則空白回覆，而且完全沒有錯誤訊息。
+    if !saw_data_prefix {
+        let raw = raw_body.trim();
+        if raw.starts_with('{') {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+                let msg = &v["choices"][0]["message"];
+                if let Some(arr) = msg["tool_calls"].as_array() {
+                    let calls = arr.iter().map(|c| crate::ai::AiToolCall {
+                        id: c["id"].as_str().unwrap_or("").to_string(),
+                        tool_name: c["function"]["name"].as_str().unwrap_or("").to_string(),
+                        args: serde_json::from_str(c["function"]["arguments"].as_str().unwrap_or("{}"))
+                            .unwrap_or(serde_json::json!({})),
+                        thought_signature: None,
+                    }).collect();
+                    return Ok(StreamedToolsResult { text: String::new(), calls, raw: Some(msg["tool_calls"].clone()) });
+                }
+                let content = msg["content"].as_str().unwrap_or("").to_string();
+                let _ = tx.send(GenerateChunk { delta: content.clone(), done: true, usage: None }).await;
+                return Ok(StreamedToolsResult { text: content, calls: vec![], raw: None });
+            }
+        }
+    }
+
+    let mut calls = Vec::new();
+    let mut raw_calls = Vec::new();
+    let acc_len = acc.len();
+    for (i, (id, name, args)) in acc {
+        let Some(name) = name else {
+            // 只收到 arguments 卻沒有函式名，組不出呼叫。靜靜丟掉的話，這一輪
+            // 會變成一則空白回覆——使用者只看得到一個空氣泡。
+            log::warn!("[sse] 丟棄沒有函式名的工具呼叫片段 index={i} args_len={}", args.len());
+            continue;
+        };
+        let id = id.unwrap_or_else(|| format!("call_{i}"));
+        let args_json: serde_json::Value = serde_json::from_str(&args).unwrap_or(serde_json::json!({}));
+        raw_calls.push(serde_json::json!({
+            "id": id, "type": "function",
+            "function": { "name": name, "arguments": args }
+        }));
+        calls.push(crate::ai::AiToolCall {
+            id, tool_name: name, args: args_json, thought_signature: None,
+        });
+    }
+
+    // 既沒文字也沒工具呼叫 = 使用者會看到一個空白氣泡，而且沒有任何線索。
+    // 實測遇過一次（工具執行失敗之後那一輪），但沒能重現，所以先留下線索。
+    if text.is_empty() && calls.is_empty() {
+        log::warn!(
+            "[sse] 這一輪既沒有文字也沒有工具呼叫（saw_data_prefix={saw_data_prefix} 片段數={acc_len}）；\
+             開頭: {}",
+            raw_body.chars().take(200).collect::<String>()
+        );
+    }
+
+    let raw = if raw_calls.is_empty() { None } else { Some(serde_json::Value::Array(raw_calls)) };
+    Ok(StreamedToolsResult { text, calls, raw })
+}
+
 // ── OpenAI SSE payload types ──────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -121,6 +253,27 @@ struct OpenAiSseChoice {
 struct OpenAiSseDelta {
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ToolCallDelta>>,
+}
+
+/// 工具呼叫的一個片段。同一個呼叫會被切成多則，靠 `index` 對位。
+#[derive(Deserialize, Default)]
+pub(crate) struct ToolCallDelta {
+    #[serde(default)]
+    pub index: usize,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub function: Option<FunctionDelta>,
+}
+
+#[derive(Deserialize, Default)]
+pub(crate) struct FunctionDelta {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub arguments: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -141,6 +294,12 @@ impl OpenAiSsePayload {
             }
             c.delta.content.clone()
         }).unwrap_or_default()
+    }
+    pub fn tool_call_deltas(&self) -> &[ToolCallDelta] {
+        self.choices
+            .first()
+            .and_then(|c| c.delta.tool_calls.as_deref())
+            .unwrap_or(&[])
     }
     pub fn finish_reason_present(&self) -> bool {
         self.choices.first().and_then(|c| c.finish_reason.as_ref()).is_some()
