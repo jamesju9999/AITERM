@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { ProviderForm } from "./ProviderForm";
+import type { ProviderInput } from "../../ipc/provider";
 
 vi.mock("../../ipc/chatgptWeb", () => ({
   chatgptWebModels: vi.fn(),
@@ -23,8 +24,10 @@ vi.mock("../../ipc/provider", async () => {
 
 import { chatgptWebModels, chatgptWebLogin } from "../../ipc/chatgptWeb";
 
+const onSave = vi.fn(async (_p: ProviderInput) => {});
+
 async function selectChatgptWeb() {
-  render(<ProviderForm onSave={async () => {}} onCancel={() => {}} />);
+  render(<ProviderForm onSave={onSave} onCancel={() => {}} />);
   // 供應商型別的 <label> 沒有 htmlFor，抓不到 label 關聯；它是表單上的第一個
   // 下拉，用角色定位比用文字穩（文字會隨語系變）。
   const select = screen.getAllByRole("combobox")[0];
@@ -64,6 +67,34 @@ describe("ProviderForm — ChatGPT Web", () => {
       expect(chatgptWebModels).toHaveBeenCalled();
       expect(screen.getByRole("option", { name: "GPT-5.5" })).toBeInTheDocument();
     });
+  });
+
+  /**
+   * 下拉的第一項一載入就是「看起來被選中」的（value="" 不對應任何 option，
+   * 瀏覽器就顯示第一項），但 onChange 從未觸發，model state 仍是空字串。
+   * 使用者於是看到選好的模型、按儲存卻被擋下「Model 不可為空」——實測回報
+   * （2026-08-11，Windows）。畫面顯示什麼，state 就必須是什麼。
+   */
+  it("模型清單載入後，state 要跟畫面上顯示的那一項一致", async () => {
+    vi.mocked(chatgptWebModels).mockResolvedValue([
+      { slug: "gpt-5-5", title: "GPT-5.5", max_tokens: 196000 },
+      { slug: "gpt-5-6", title: "GPT-5.6", max_tokens: 34834 },
+    ]);
+    await selectChatgptWeb();
+    await userEvent.click(screen.getByRole("button", { name: /登入 ChatGPT/ }));
+
+    // 不能用 select.value 斷言：jsdom 的 select 在 value 不匹配任何 option 時
+    // 會回傳第一個 option 的值，所以 DOM 看起來永遠是對的——錯的是 React
+    // state。唯一問得到 state 的地方是儲存路徑。
+    const select = await screen.findByLabelText(/選擇或輸入模型名稱/);
+    expect(select).toBeInTheDocument();
+
+    await userEvent.type(screen.getAllByRole("textbox")[0], "chat-gpt-web");
+    await userEvent.type(screen.getAllByRole("textbox")[1], "GPT-5.5-Web");
+    await userEvent.click(screen.getByRole("button", { name: /^儲存$/ }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0]).toMatchObject({ model: "gpt-5-5" });
   });
 
   /**

@@ -812,6 +812,18 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
                         // 等下去——那會讓使用者盯著一個永遠不會變的畫面。
                         const models = await chatgptWebModels();
                         setChatgptWebModelList(models);
+                        // 下拉的 value 綁 model state，而它的初值是空字串
+                        // （DEFAULT_MODELS["chatgpt-web"]）。空字串不對應任何
+                        // option，瀏覽器就把第一項畫成選中的——使用者看到模型
+                        // 已經選好了，但 onChange 從未觸發，state 仍是空的，
+                        // 按儲存被擋「Model 不可為空」（實測回報）。畫面顯示
+                        // 什麼，state 就必須是什麼。
+                        //
+                        // 只在目前的值不在清單裡才改：編輯既有供應商時，使用者
+                        // 原本選的模型不該被清單的第一項蓋掉。
+                        setModel((cur) =>
+                          models.some((m) => m.slug === cur) ? cur : (models[0]?.slug ?? cur),
+                        );
                         setAuthStatus(models.length === 0 ? t.chatgpt_web_models_empty : null);
                         return;
                       } catch (e: unknown) {
