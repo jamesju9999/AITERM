@@ -45,6 +45,63 @@ fn wait_until(mut f: impl FnMut() -> bool) -> bool {
     f()
 }
 
+/// Upper bound on shell cold start. Much larger than `SETTLE_TIMEOUT` because
+/// it bounds how slow the machine may be, not how long anything should take:
+/// measured on a busy Windows CI runner (2026-08-11), pwsh produced no output
+/// at all for 8.1 s and did not print its first prompt until 11.3 s.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Wait until the shell is *actually* ready — i.e. it has emitted its own
+/// OSC 133 A (prompt start) and gone quiet.
+///
+/// Why "the first chunk of output" is NOT a readiness signal: on Windows the
+/// first chunk is ConPTY's own `\e[?9001h\e[?1004h`, which arrives ~15 ms after
+/// spawn — seconds before pwsh even starts. Anything written before the shell
+/// attaches is dropped and never reaches it.
+///
+/// That alone would just be flakiness. The reason it went unnoticed is worse:
+/// the test still *passed* most of the time, because the shell's own startup
+/// prompt emits `133;D;0`, and `confirm_pending_cds_from_output` pops the
+/// pending queue on any exit code it sees — so that marker confirmed a `cd`
+/// the shell had never run. Whether this test passed came down to whether that
+/// free marker landed inside the 10 s window; it never once exercised the
+/// write-hook it exists to verify. Measured timeline of a passing run before
+/// this fix: write at 15 ms, no echo ever, `133;D;0` at 5872 ms, done at
+/// 5883 ms. Failing runs were simply the ones where cold start exceeded 10 s.
+///
+/// Waiting for readiness also makes the assertions mean something: by the time
+/// we stage the `cd`, the startup marker has already been consumed against an
+/// empty queue, so the only marker that can confirm it is the one its own
+/// execution produces.
+///
+/// All four integrations emit 133;A (pwsh, cmd's PROMPT, zsh, bash — see
+/// `pty::shell`), so this needs no per-platform branch.
+///
+/// The quiet period matters: 133;A is emitted *before* the prompt text is
+/// printed, at which point the shell is not yet reading input. Output going
+/// quiet is what says it is waiting for us.
+fn wait_for_shell_ready(rx: &mpsc::Receiver<Vec<u8>>) -> bool {
+    const PROMPT_START: &[u8] = b"\x1b]133;A";
+    let deadline = std::time::Instant::now() + STARTUP_TIMEOUT;
+    let mut seen: Vec<u8> = Vec::new();
+    let mut prompt_started = false;
+
+    while std::time::Instant::now() < deadline {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(chunk) => {
+                seen.extend_from_slice(&chunk);
+                if !prompt_started && seen.windows(PROMPT_START.len()).any(|w| w == PROMPT_START) {
+                    prompt_started = true;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) if prompt_started => return true,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+        }
+    }
+    false
+}
+
 #[test]
 fn tracks_cd_through_real_shell() {
     let manager = PtyManager::new();
@@ -56,10 +113,13 @@ fn tracks_cd_through_real_shell() {
         })
         .expect("create session");
 
-    // Wait for the shell to say something — its banner or first prompt — before
-    // typing at it, rather than guessing how long that takes. A timeout here is
-    // not fatal on its own: the assertions below are what decide the test.
-    let _ = rx.recv_timeout(SETTLE_TIMEOUT);
+    // Wait for the shell to actually be ready to read input. Not "some output
+    // arrived" — see wait_for_shell_ready for why that is a trap on Windows.
+    assert!(
+        wait_for_shell_ready(&rx),
+        "shell never printed a prompt within {STARTUP_TIMEOUT:?}; anything \
+         written before it is ready is dropped and never reaches it",
+    );
 
     let initial = manager.get_cwd(&id).expect("initial cwd");
 
