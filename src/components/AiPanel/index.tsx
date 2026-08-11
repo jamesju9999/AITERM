@@ -513,10 +513,19 @@ Rules:
         messages={chat.messages}
         streamBuf={chat.streamBuf}
         isStreaming={chat.isStreaming}
-        // Agent 迴圈不經過 chat.isStreaming（它自己呼叫 invokeAiChat），
-        // 所以要另外把「正在等 AI 想下一步」這個狀態接過來，否則 Agent
-        // 模式下對話框一樣是空白的。
-        thinking={chat.isStreaming || (agentRunning && agentPhase === "thinking")}
+        // Agent 迴圈不經過 chat.isStreaming（它自己呼叫 invokeAiChat），所以
+        // 要另外接。**兩個階段都要有指示**：等 AI 想、以及等指令跑完——
+        // 後者原本對話框是全靜的，使用者只看到氣泡消失然後乾等，回報成
+        // 「空檔很長」。
+        thinkingLabel={
+          agentRunning
+            ? agentPhase === "thinking"
+              ? t.ai_agent_thinking
+              : t.ai_agent_executing
+            : chat.isStreaming
+              ? t.ai_thinking
+              : null
+        }
         error={chat.error}
         onExecuteCommand={onExecuteCommand}
         onRetry={chat.resend}

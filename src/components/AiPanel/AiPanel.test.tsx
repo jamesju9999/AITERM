@@ -321,8 +321,11 @@ describe("AiPanel", () => {
     });
     const bar = document.querySelector(".aiterm-agent-status");
     expect(bar?.textContent ?? "").not.toContain("Agent 思考中");
-    // 執行指令階段不該還掛著思考氣泡——那會看起來像 AI 卡住了。
-    expect(document.querySelector(".aiterm-thinking")).toBeNull();
+    // 執行指令那段對話框**也要有指示**，只是文案不同。原本這裡是全靜的，
+    // 使用者看到氣泡消失後乾等下一則訊息，回報成「空檔很長」。
+    const bubble = document.querySelector(".aiterm-thinking");
+    expect(bubble, "執行指令時對話框不可以完全沒有指示").not.toBeNull();
+    expect(bubble?.textContent ?? "").toContain("Agent 執行指令中");
   });
 
   /**
