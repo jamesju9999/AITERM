@@ -51,14 +51,43 @@ pub fn kind_for(p: &ProviderConfig) -> Option<UpstreamKind> {
         // M2。
         ProviderType::Codex => Some(UpstreamKind::Codex),
 
-        // 網頁版走 webview 傳輸而非 HTTP client，但橋接一樣接得上——
-        // 它自己有 BridgeUpstream 實作。
-        ProviderType::ChatgptWeb => Some(UpstreamKind::ChatgptWeb),
+        // **刻意不支援**，不是還沒做。
+        //
+        // 網頁版沒有結構化的 system role，所以這條路徑必須把 system prompt、
+        // 整段歷史與工具契約攤平成**單一則訊息**——而網頁版對單則訊息有長度
+        // 上限。兩者先天衝突。
+        //
+        // 實測（2026-08-11，Claude Code 的一般請求）：
+        //   總長 163,206 字元 = system 27,935 + 42 個工具的完整 schema 約 135,000
+        //   上游回 message_length_exceeds_limit
+        // 同一條傳輸在 `/ai` 與聊天面板下實測到 24,092 字元是會成功的，
+        // 所以我們超標約 5–7 倍，主因是工具 schema。
+        //
+        // 砍掉 schema 只留名稱可以壓進去，但模型就不知道參數形狀——Claude Code
+        // 的工具（Read/Write/Bash/Glob…）正是靠那個。結果會是工具呼叫大量出錯，
+        // 比明講不支援更糟：使用者會看到它一直嘗試、一直失敗。
+        //
+        // 要重新啟用的條件：上游放寬單則訊息上限，或這裡改成能跨多則訊息送
+        // （需要維持 conversation 並多次往返）。`bridge/upstream/chatgpt_web.rs`
+        // 的實作與測試都還在，屆時把這裡改回 `Some(UpstreamKind::ChatgptWeb)`
+        // 即可。
+        ProviderType::ChatgptWeb => None,
     }
 }
 
 /// 回給 Claude Code 顯示的訊息，所以要寫成使用者看得懂的句子。
 pub fn unsupported_message(p: &ProviderConfig) -> String {
+    // ChatGPT Web 要單獨說明。通用訊息（「還不支援」）會讓人以為只是還沒做、
+    // 等一等就有——但這是上游的硬限制，等不到。
+    if p.provider_type == ProviderType::ChatgptWeb {
+        return format!(
+            "「{}」不能用於 Claude Code 橋接：ChatGPT 網頁版對單則訊息有長度上限，\
+             而這條路徑必須把 system prompt 與所有工具定義攤平成一則訊息。\
+             Claude Code 的請求實測約 16 萬字元，遠超上限。\
+             這個供應商仍可用於 /ai 與 Ask AI 面板。",
+            p.display_name
+        );
+    }
     format!(
         "AITerm 橋接目前還不支援供應商「{}」。請到設定 → Claude Code 橋接改選其他供應商。",
         p.display_name
@@ -247,15 +276,28 @@ mod tests {
         );
     }
 
-    /// 回 `None` 代表「橋接不支援這個 provider」，Claude Code 那邊會拿到一則
-    /// 拒絕訊息。ChatgptWeb 一度是 None（骨架階段），接上 BridgeUpstream 之後
-    /// 忘了改這裡的話，功能做完了卻用不到，而且不會有任何測試失敗。
+    /// ChatgptWeb **刻意**不支援橋接，不是還沒做。
+    ///
+    /// 網頁版沒有結構化的 system role，所以這條路徑必須把所有東西攤平成單一則
+    /// 訊息，而網頁版對單則訊息有長度上限。實測（2026-08-11）Claude Code 的
+    /// 一般請求是 163,206 字元（其中 42 個工具的 schema 約 135,000），上游回
+    /// `message_length_exceeds_limit`；同一條傳輸在 `/ai` 下 24,092 字元是成功的。
+    ///
+    /// 這條測試守的是「別好心把它改回 Some」——那會讓每一次橋接請求都失敗，
+    /// 而失敗訊息還會被歸成網路錯誤。
     #[test]
-    fn chatgpt_web_maps_to_its_own_kind() {
-        assert_eq!(
-            kind_for(&provider(ProviderType::ChatgptWeb, None)),
-            Some(UpstreamKind::ChatgptWeb)
-        );
+    fn chatgpt_web_is_deliberately_unsupported_for_the_bridge() {
+        assert_eq!(kind_for(&provider(ProviderType::ChatgptWeb, None)), None);
+    }
+
+    /// 拒絕訊息要說明**為什麼**，不能用通用的「還不支援」——那會讓使用者以為
+    /// 等一等就有，但這是上游的硬限制，等不到。
+    #[test]
+    fn chatgpt_web_rejection_explains_the_length_limit() {
+        let msg = unsupported_message(&provider(ProviderType::ChatgptWeb, None));
+        assert!(msg.contains("長度上限"), "實際：{msg}");
+        assert!(msg.contains("/ai"), "要告訴使用者它在哪些路徑仍可用：{msg}");
+        assert!(!msg.contains("還不支援"), "不可用通用訊息：{msg}");
     }
 
     fn provider_without_base_url(ty: ProviderType) -> ProviderConfig {

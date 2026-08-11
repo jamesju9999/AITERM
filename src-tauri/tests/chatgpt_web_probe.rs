@@ -132,7 +132,20 @@ fn split_chunks_reassemble_into_incremental_deltas() {
 //    規則，讓 `<tool>` 成為唯一被授權的行動方式。目前**沒有**做這件事，
 //    因為那會拿掉「點一下執行指令」這個既有功能。
 //
-// 4. Claude Code 橋接指到這個供應商 → 多輪工具迴圈跑得完。
+// 4. ❌ Claude Code 橋接：**刻意不支援**（2026-08-11 實測後決定）。
+//    路由與供應商解析都正常（log 有 `model=aiterm:sonnet → provider=Chatgpt-web`），
+//    但每一發都被上游擋下：`message_length_exceeds_limit`。
+//
+//    量到的數字：總長 163,206 字元 = system 27,935 + 42 個工具的完整 schema
+//    約 135,000。同一條傳輸在 `/ai` 下 24,092 字元是成功的，所以超標 5–7 倍，
+//    主因是工具 schema。
+//
+//    成因是設計上的先天衝突：網頁版沒有結構化的 system role，所以必須把所有
+//    東西攤平成單一則訊息，而網頁版又對單則訊息設了上限。
+//
+//    `kind_for` 已改回 `None`，並給了專屬的拒絕訊息（通用的「還不支援」會讓
+//    人以為等一等就有）。`bridge/upstream/chatgpt_web.rs` 的實作與測試留著，
+//    重新啟用只需要改 `kind_for` 那一行——條件見那裡的註解。
 //
 // 5. ✅ 已錄過一次（2026-08-10），發現並修掉兩個 bug，fixture 已進
 //    `protocol.rs` 的測試（`user_echo_frame_is_not_treated_as_the_answer` 等）：

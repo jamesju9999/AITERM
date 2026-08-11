@@ -1,5 +1,11 @@
 //! ChatGPT 網頁版上游（Claude Code 橋接用）。
 //!
+//! ⚠️ **目前不會被使用**：`bridge/factory.rs::kind_for` 對 `ChatgptWeb` 回
+//! `None`。網頁版對單則訊息有長度上限，而這條路徑必須把所有東西攤平成一則
+//! ——實測（2026-08-11）Claude Code 的請求是 163,206 字元，上游回
+//! `message_length_exceeds_limit`。實作與測試留著，是因為重新啟用只需要改
+//! `kind_for` 那一行（條件見那裡的註解）。
+//!
 //! 與 `ai/chatgpt_web.rs` 的差別只在輸入形狀：那邊吃 `GenerateRequest`，
 //! 這邊吃 Anthropic 的 `MessagesRequest`（含 tool_use / tool_result 區塊）。
 //! 契約與提醒的文字兩邊共用 `chatgpt_web::tools`，不要各寫一份。

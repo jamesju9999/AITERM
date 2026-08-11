@@ -268,6 +268,19 @@ pub fn map_upstream_error(err: &str, status: Option<u64>) -> AiError {
             raw: err.to_string(),
         };
     }
+    // ChatGPT 網頁版對**單則訊息**有長度上限，而且比模型的上下文視窗小得多。
+    // 這條路徑把 system prompt 與整段歷史攤平成單一則訊息，所以 Claude Code
+    // 那種數萬字元的 prompt 會直接撞牆。實測（2026-08-11）橋接每一發都是
+    // 這個錯。不辨識的話它會被歸成 Network，使用者看到「網路錯誤」——跟真正
+    // 的原因毫無關係，也不會知道該怎麼辦。
+    if err.contains("message_length_exceeds_limit") {
+        return AiError::InvalidInput {
+            reason: "訊息長度超過 ChatGPT 網頁版的單則上限。這條路徑會把整段歷史攤平成\
+                     一則訊息，Claude Code 的 system prompt 通常會超標——請改用其他供應商，\
+                     或縮短對話歷史。"
+                .into(),
+        };
+    }
     match status {
         Some(401) | Some(403) => AiError::ModelError {
             reason: "ChatGPT 網頁版拒絕了請求".into(),
@@ -406,6 +419,16 @@ mod tests {
         assert!(matches!(
             map_upstream_error("whatever", Some(429)),
             AiError::RateLimit { .. }
+        ));
+        // 這是實測依據（2026-08-11）：橋接路徑每一發都撞這個。網頁版對單則
+        // 訊息有長度上限，而這條路徑把整段歷史攤成一則。不辨識的話會被歸成
+        // Network，使用者看到「網路錯誤」，跟真正的原因毫無關係。
+        assert!(matches!(
+            map_upstream_error(
+                r#"{"detail":{"message":"你提交的訊息太長","code":"message_length_exceeds_limit"}}"#,
+                None
+            ),
+            AiError::InvalidInput { .. }
         ));
     }
 }
