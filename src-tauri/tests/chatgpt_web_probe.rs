@@ -175,8 +175,21 @@ fn split_chunks_reassemble_into_incremental_deltas() {
 //       ——沒有它那個 frame 兩半都無法剖析、會被靜默丟掉。已寫成測試
 //       `real_chunk_boundary_falls_mid_line`。
 //
-// 6. 量一次 `[Object.keys(navigator).length, Object.keys(document).length,
-//    Object.keys(window).length]`。前兩者在瀏覽器裡預期是 0（屬性都在
-//    prototype 上），若屬實則 `pickKey(nav)` / `pickKey(document)` 在生產
-//    環境是死碼，config[10]/[11] 恆為空字串——那與「18 格全是真值」這個
-//    賣點不符，要決定是否改成 prototype 列舉。
+// 6. ✅ 已量（2026-08-11，在真實的 chatgpt.com 頁面上）：
+//
+//      Object.keys(navigator).length === 0        ← 恆為 0，假設成立
+//      Object.keys(document).length   === 1..5    ← 只有頁面腳本自己加的
+//      Object.keys(window).length     === 221..270
+//      for (k in navigator) → 40   (hardwareConcurrency, gpu, clipboard, …)
+//      for (k in document)  → 264
+//
+//    也就是 config[10] 恆為空字串、config[11] 送的是「這個頁面剛好被加了
+//    什麼」（數量還會隨時間變）。已把 `pickKey` 改成 `for...in` 列舉。
+//
+//    ⚠️ 改的依據是推論不是實測：我們看不到 OpenAI 的腳本。支持的證據是
+//    OmniRoute 硬編的是一份 `Navigator.prototype` 方法名清單——他們跑在
+//    伺服器上、沒有瀏覽器，不會無故硬編那種形狀。改的理由是不對稱：對方
+//    不檢查則改不改都一樣，對方會檢查則恆為空是很明顯的訊號。
+//
+//    **這個改動沒有任何回饋能驗證好壞**，改前改後上游都接受。若日後出現
+//    疑似指紋偵測的症狀，這裡是第一個要回頭檢查的地方。

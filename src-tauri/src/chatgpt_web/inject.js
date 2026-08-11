@@ -149,18 +149,40 @@
     return out;
   }
 
-  // 從 Object.keys 隨機取一個 key，空物件回空字串。
+  // 隨機取一個屬性名，取不到就回空字串。
   //
-  // 過濾 `__aiterm` / `__TAURI` 開頭：抽到的名字會 base64 進 config、POST 到
-  // OpenAI 的 sentinel 端點。把自己的掛載點名稱遞交過去等於主動標記自己是
-  // 自動化。掛載點本身對這裡用的 Object.keys 是不可列舉的（見檔頭註解），這
-  // 是第二道防線——但只防得住 Object.keys 這種列舉方式，不是通用的隱藏保證；
-  // Tauri 的 `__TAURI_INTERNALS__` 也是不可列舉的，但別把正確性建立在第三方
-  // 的實作細節上。
+  // **用 `for...in` 而不是 `Object.keys`。** 實測（2026-08-11，在真實的
+  // chatgpt.com 頁面上量的）：
+  //
+  //   Object.keys(navigator).length === 0      ← 恆為 0
+  //   Object.keys(document).length   === 1..5  ← 只有頁面腳本自己加的那幾個
+  //   Object.keys(window).length     === 221..270
+  //
+  //   for (k in navigator) → 40 個   (hardwareConcurrency, gpu, clipboard, …)
+  //   for (k in document)  → 264 個
+  //
+  // `Navigator` / `Document` 的屬性都定義在 prototype 上，不是實例自己的可
+  // 列舉屬性，所以 `Object.keys` 對 navigator 永遠回空陣列——config 的那一格
+  // 恆為空字串，而真實瀏覽器跑 OpenAI 自家腳本時不會是空的。
+  //
+  // 判斷依據：OmniRoute 跑在伺服器上、根本沒有瀏覽器，只能捏造這幾格，而他們
+  // 硬編的是一份 `Navigator.prototype` 的**方法名清單**。沒有人會去硬編那種
+  // 清單，除非觀察到真實腳本產出的就是那個形狀。
+  //
+  // ⚠️ 這是推論不是實測：我們沒有辦法看到 OpenAI 的腳本，也沒有任何回饋能
+  // 告訴我們改了有沒有比較好。改的理由是不對稱——若對方不檢查，改不改都一樣；
+  // 若對方會檢查，一個恆為空的欄位是很明顯的訊號。
+  //
+  // 過濾 `__aiterm` / `__TAURI` 開頭的理由不變：抽到的名字會 base64 進 config、
+  // POST 到 OpenAI 的 sentinel 端點，把自己的掛載點名稱遞交過去等於主動標記
+  // 自己是自動化。`for...in` 與 `Object.keys` 一樣只看**可列舉**屬性，所以那
+  // 兩個用 `Object.defineProperty` 掛的掛載點依舊抽不到，這道過濾仍是第二道
+  // 防線而非唯一防線。
   const pickKey = (obj) => {
-    const keys = Object.keys(obj).filter(
-      (k) => !k.startsWith("__aiterm") && !k.startsWith("__TAURI")
-    );
+    const keys = [];
+    for (const k in obj) {
+      if (!k.startsWith("__aiterm") && !k.startsWith("__TAURI")) keys.push(k);
+    }
     return keys.length ? keys[Math.floor(Math.random() * keys.length)] : "";
   };
 

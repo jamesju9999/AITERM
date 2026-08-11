@@ -77,8 +77,13 @@ describe("inject.js SHA3-512", () => {
     );
   });
 
-  it("__aitermTest 掛載點不可列舉——Task 7 的 buildConfig() 會從 Object.keys(window) 隨機抽一個 key 送給 OpenAI 的 sentinel 端點，可列舉的話這個明顯的自動化標記遲早會被抽中洩漏出去", () => {
+  it("__aitermTest 掛載點不可列舉——buildConfig() 會隨機抽一個 window 屬性名送給 OpenAI 的 sentinel 端點，可列舉的話這個明顯的自動化標記遲早會被抽中洩漏出去", () => {
     expect(Object.keys(win)).not.toContain("__aitermTest");
+    // pickKey 實際用的是 for...in，所以要鎖住的是**那個**列舉方式看不到它。
+    // 只斷言 Object.keys 的話，測試守的機制跟程式碼用的機制就對不上了。
+    const viaForIn: string[] = [];
+    for (const k in win) viaForIn.push(k);
+    expect(viaForIn, "for...in 也不可以看到掛載點").not.toContain("__aitermTest");
     expect(__aitermTest.sha3_512Hex("abc")).toBe(
       "b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e" +
       "10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0",
@@ -122,6 +127,9 @@ describe("inject.js 對 Rust 的介面", () => {
    */
   it("__aiterm 不可列舉且不可覆寫", () => {
     expect(Object.keys(win)).not.toContain("__aiterm");
+    const viaForIn: string[] = [];
+    for (const k in win) viaForIn.push(k);
+    expect(viaForIn, "for...in 也不可以看到掛載點").not.toContain("__aiterm");
     const d = Object.getOwnPropertyDescriptor(win, "__aiterm");
     expect(d?.enumerable).toBe(false);
     expect(d?.writable).toBe(false);
