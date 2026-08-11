@@ -662,6 +662,7 @@ const zhTW = {
     tool_call_input: "輸入",
     tool_call_output: "輸出",
     ai_retry: "🔄 重試",
+    ai_thinking: "思考中…",
     // AiPanel/CmdTag
     cmd_multiline_tip: "多行命令 — 執行前會再確認一次",
     cmd_click_execute: "點擊即執行",
@@ -1835,6 +1836,7 @@ const enRaw = {
     tool_call_input: "Input",
     tool_call_output: "Output",
     ai_retry: "🔄 Retry",
+    ai_thinking: "Thinking…",
     // AiPanel/CmdTag
     cmd_multiline_tip: "Multi-line command — will confirm before execution",
     cmd_click_execute: "Click to execute",

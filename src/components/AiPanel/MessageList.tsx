@@ -118,6 +118,21 @@ export function MessageList({
           />
         );
       })}
+      {/* 還沒有任何文字之前的等待指示。
+          沒有它的話，從送出到第一個字之間畫面完全空白——使用者合理地以為
+          沒在運作。這段空窗在 ChatGPT Web 這條路徑上特別長：要先跑 sentinel
+          的兩段握手與工作量證明，模型才開始吐字。
+          有字之後就交給下面的串流氣泡，不要兩個同時出現。 */}
+      {isStreaming && !streamBuf && (
+        <div className="aiterm-bubble aiterm-bubble-assistant aiterm-thinking" aria-busy="true">
+          <span className="aiterm-thinking-dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+          <span className="aiterm-thinking-label">{t.ai_thinking}</span>
+        </div>
+      )}
       {isStreaming && streamBuf && (
         <MessageBubble
           role="assistant"

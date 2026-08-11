@@ -697,3 +697,48 @@
 .aiterm-pill-remove:hover {
   color: var(--error, #ff5f56);
 }
+
+/* 等待第一個字時的指示。沒有它的話，從送出到第一個 delta 之間畫面完全
+   空白——使用者合理地以為沒在運作。ChatGPT Web 這條路徑的空窗特別長：
+   sentinel 兩段握手 + 工作量證明跑完，模型才開始吐字。 */
+.aiterm-thinking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aiterm-thinking-label {
+  opacity: 0.7;
+  font-size: 0.9em;
+}
+
+.aiterm-thinking-dots {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.aiterm-thinking-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.35;
+  animation: aiterm-thinking-bounce 1.4s ease-in-out infinite;
+}
+
+.aiterm-thinking-dots i:nth-child(2) { animation-delay: 0.2s; }
+.aiterm-thinking-dots i:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes aiterm-thinking-bounce {
+  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+  40%           { opacity: 0.9;  transform: translateY(-3px); }
+}
+
+/* 尊重系統的「減少動態效果」設定：動畫關掉，但點點仍要看得見，
+   否則這個指示就完全消失了。 */
+@media (prefers-reduced-motion: reduce) {
+  .aiterm-thinking-dots i {
+    animation: none;
+    opacity: 0.6;
+  }
+}
