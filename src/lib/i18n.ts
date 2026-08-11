@@ -769,6 +769,8 @@ const zhTW = {
     ai_mcp_on: "MCP 開啟",
     ai_mcp_off: "MCP 關閉",
     ai_placeholder_agent_running: "Agent 執行中…",
+    ai_agent_thinking: "Agent 思考中…",
+    ai_agent_executing: "Agent 執行指令中…",
     ai_placeholder_agent_goal: "輸入目標，Agent 將自動執行指令… (Enter)",
     ai_placeholder_waiting: "等待 AI 回覆中...",
     ai_placeholder_default: "輸入訊息，Enter 送出...",
@@ -1837,6 +1839,8 @@ const enRaw = {
     tool_call_output: "Output",
     ai_retry: "🔄 Retry",
     ai_thinking: "Thinking…",
+    ai_agent_thinking: "Agent thinking…",
+    ai_agent_executing: "Agent running command…",
     // AiPanel/CmdTag
     cmd_multiline_tip: "Multi-line command — will confirm before execution",
     cmd_click_execute: "Click to execute",

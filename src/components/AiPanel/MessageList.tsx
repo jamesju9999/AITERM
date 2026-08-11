@@ -10,6 +10,9 @@ interface MessageListProps {
   messages: McpChatMessage[];
   streamBuf: string;
   isStreaming: boolean;
+  /** 正在等 AI 的第一個字。串流與 Agent 兩條路徑都會用到——Agent 迴圈走自己
+   *  的 invokeAiChat，不經過 `isStreaming`，所以不能只看那個旗標。 */
+  thinking?: boolean;
   error: AiError | string | null;
   onExecuteCommand: (cmd: string) => void;
   onRetry: () => void;
@@ -76,6 +79,7 @@ export function MessageList({
   messages,
   streamBuf,
   isStreaming,
+  thinking = false,
   error,
   onExecuteCommand,
   onRetry,
@@ -123,7 +127,7 @@ export function MessageList({
           沒在運作。這段空窗在 ChatGPT Web 這條路徑上特別長：要先跑 sentinel
           的兩段握手與工作量證明，模型才開始吐字。
           有字之後就交給下面的串流氣泡，不要兩個同時出現。 */}
-      {isStreaming && !streamBuf && (
+      {(thinking || isStreaming) && !streamBuf && (
         <div className="aiterm-bubble aiterm-bubble-assistant aiterm-thinking" aria-busy="true">
           <span className="aiterm-thinking-dots" aria-hidden="true">
             <i />

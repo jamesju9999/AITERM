@@ -16,6 +16,8 @@ const aiChatQueue: { content: string; tool_calls?: unknown[]; tool_calling_unsup
 // interleaved with aiChatQueue) reject instead of resolve. Keyed by the 1-based
 // call index at which it should fire.
 const aiChatRejectAt = new Map<number, unknown>();
+// 讓某次 ai_chat 掛著不回來，用來觀察「正在等 AI」那個瞬間的畫面。
+const aiChatHold: { value: Promise<never> | null } = { value: null };
 // Records the `messages` array sent on each "ai_chat" invoke call, in order.
 const aiChatCalls: { role: string; content: unknown }[][] = [];
 
@@ -26,6 +28,11 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "get_mcp_tools") return Promise.resolve([]);
     if (cmd === "ai_chat") {
       aiChatCalls.push(payload?.messages ?? []);
+      if (aiChatHold.value) {
+        const held = aiChatHold.value;
+        aiChatHold.value = null;
+        return held;
+      }
       const callIndex = aiChatCalls.length;
       if (aiChatRejectAt.has(callIndex)) return Promise.reject(aiChatRejectAt.get(callIndex));
       const next = aiChatQueue.shift();
@@ -38,21 +45,28 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/event", () => ({
   listen: (...args: unknown[]) => listenMock(...args),
 }));
-vi.mock("../../contexts/LocaleContext", () => ({
-  useLocale: () => ({
-    locale: "zh-TW",
-    t: {
-      mcp_toggle_on: (n: number) => `⚙ MCP (${n})`,
-      mcp_toggle_off: "⚙ MCP",
-      mcp_toggle_no_servers: "請先在設定中新增 MCP Server",
-    },
-    setLocale: () => {},
-  }),
-}));
+// 用**真實**的 translations，不要手寫只有幾個 key 的替身。
+// 原本這裡是 `t: { mcp_toggle_on, mcp_toggle_off, mcp_toggle_no_servers }`，
+// 於是任何新加的字串在這個測試檔裡都是 undefined——元件渲染成空白，而測試
+// 看起來還是綠的。加「Agent 思考中/執行指令中」時就是這樣踩到的：斷言查不到
+// 文案，卻找了半天以為是元件寫錯。
+vi.mock("../../contexts/LocaleContext", async () => {
+  const { translations } = await vi.importActual<typeof import("../../lib/i18n")>(
+    "../../lib/i18n",
+  );
+  return {
+    useLocale: () => ({
+      locale: "zh-TW" as const,
+      t: translations["zh-TW"],
+      setLocale: () => {},
+    }),
+  };
+});
 
 import { AiPanel } from "./index";
 
 beforeEach(() => {
+  aiChatHold.value = null;
   aiChatQueue.length = 0;
   aiChatRejectAt.clear();
   aiChatCalls.length = 0;
@@ -269,6 +283,78 @@ describe("AiPanel", () => {
     expect(aiChatCalls.length).toBe(2);
     const secondCallContents = aiChatCalls[1].map((m) => m.content);
     expect(secondCallContents.some((c) => typeof c === "string" && c.includes("ls"))).toBe(true);
+  });
+
+  /**
+   * Agent 迴圈有兩個等待階段：等 AI 想下一步、等指令跑完。狀態列原本兩段
+   * 顯示同一句「Agent 執行中…」，使用者看不出來卡在哪——尤其等 AI 那段
+   * 完全沒有畫面變化（實測回報）。
+   */
+  it("Agent 狀態列要區分「思考中」與「執行指令中」", async () => {
+    aiChatQueue.push({ content: "<cmd>ls</cmd>" });
+
+    // 不呼叫 onComplete：讓迴圈停在「等指令跑完」那個階段，好斷言當下的文案。
+    const onExecuteCommand = vi.fn();
+
+    render(
+      <AiPanel
+        sessionId="s1"
+        isOpen={true}
+        providerName="Ollama"
+        onClose={vi.fn()}
+        onExecuteCommand={onExecuteCommand}
+        onOpenProviderPalette={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(textbox, "列出檔案");
+    await userEvent.keyboard("{Enter}");
+
+    // 指令已送去執行、還沒回來——這時該顯示「執行指令中」而不是「思考中」。
+    await waitFor(() => expect(onExecuteCommand).toHaveBeenCalled());
+    // 文案與步驟數是相鄰的兩個文字節點，用 textContent 比對整塊比較穩。
+    await waitFor(() => {
+      const bar = document.querySelector(".aiterm-agent-status");
+      expect(bar?.textContent ?? "").toContain("Agent 執行指令中");
+    });
+    const bar = document.querySelector(".aiterm-agent-status");
+    expect(bar?.textContent ?? "").not.toContain("Agent 思考中");
+    // 執行指令階段不該還掛著思考氣泡——那會看起來像 AI 卡住了。
+    expect(document.querySelector(".aiterm-thinking")).toBeNull();
+  });
+
+  /**
+   * Agent 等 AI 想下一步時，**對話框裡**要有思考氣泡。
+   *
+   * Agent 迴圈走自己的 invokeAiChat，不經過 chat.isStreaming，所以只看那個
+   * 旗標的話 Agent 模式下對話框是全白的——使用者以為沒在運作（實測回報）。
+   */
+  it("Agent 等 AI 回覆時，對話框要出現思考氣泡", async () => {
+    // 佇列刻意留空：mock 會回一個空 content 的 promise，但那是同步 resolve 的，
+    // 停不住。改用 aiChatHold 讓這一次呼叫掛著，才觀察得到「思考中」那一刻。
+    aiChatHold.value = new Promise(() => {});
+
+    render(
+      <AiPanel
+        sessionId="s1"
+        isOpen={true}
+        providerName="Ollama"
+        onClose={vi.fn()}
+        onExecuteCommand={vi.fn()}
+        onOpenProviderPalette={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(textbox, "列出檔案");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(document.querySelector(".aiterm-thinking")).not.toBeNull();
+    });
   });
 
   it("Agent Mode surfaces the error and stops when the follow-up AI call fails", async () => {

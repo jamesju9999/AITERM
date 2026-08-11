@@ -156,6 +156,9 @@ export function AiPanel({
   const [agentMode, setAgentMode] = useState(loadSavedAgentMode);
   const [agentRunning, setAgentRunning] = useState(false);
   const [agentStep, setAgentStep] = useState(0);
+  // Agent 迴圈有兩個等待階段：等 AI 想下一步、等指令跑完。原本狀態列兩段
+  // 顯示同一句話，看不出來卡在哪——尤其等 AI 那段完全沒有畫面變化。
+  const [agentPhase, setAgentPhase] = useState<"thinking" | "running">("thinking");
   const agentAbortRef = useRef(false);
   const [maxAgentSteps, setMaxAgentSteps] = useState<number>(5);
 
@@ -246,6 +249,7 @@ Rules:
     }
 
     setAgentStep(step + 1);
+    setAgentPhase("thinking");
 
     // Ask AI
     let reply: string;
@@ -286,6 +290,7 @@ Rules:
     }
 
     const cmd = cmdMatch[1].trim();
+    setAgentPhase("running");
 
     // Execute and wait for completion
     await new Promise<void>((resolve) => {
@@ -508,6 +513,10 @@ Rules:
         messages={chat.messages}
         streamBuf={chat.streamBuf}
         isStreaming={chat.isStreaming}
+        // Agent 迴圈不經過 chat.isStreaming（它自己呼叫 invokeAiChat），
+        // 所以要另外把「正在等 AI 想下一步」這個狀態接過來，否則 Agent
+        // 模式下對話框一樣是空白的。
+        thinking={chat.isStreaming || (agentRunning && agentPhase === "thinking")}
         error={chat.error}
         onExecuteCommand={onExecuteCommand}
         onRetry={chat.resend}
@@ -515,8 +524,16 @@ Rules:
 
       {agentRunning && (
         <div className="aiterm-agent-status">
-          <span className="aiterm-agent-status__spinner">⟳</span>
-          <span>Agent 執行中… 步驟 {agentStep}/{maxAgentSteps >= 9999 ? "∞" : maxAgentSteps}</span>
+          <span
+            className={`aiterm-agent-status__spinner aiterm-agent-status__spinner--${agentPhase}`}
+            aria-hidden="true"
+          >
+            {agentPhase === "thinking" ? "⟳" : "▶"}
+          </span>
+          <span>
+            {agentPhase === "thinking" ? t.ai_agent_thinking : t.ai_agent_executing}
+            {" "}步驟 {agentStep}/{maxAgentSteps >= 9999 ? "∞" : maxAgentSteps}
+          </span>
           <button
             type="button"
             className="aiterm-agent-status__stop"

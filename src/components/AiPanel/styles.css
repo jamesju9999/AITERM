@@ -255,9 +255,16 @@
   font-size: 11px;
   color: var(--success, #10b981);
 }
+/* 只有「思考中」才轉。執行指令時是 ▶，跟著轉會看起來像壞掉；而且兩個階段
+   用同一個動畫的話，狀態列就退回「看不出卡在哪」——那正是要解決的問題。 */
 .aiterm-agent-status__spinner {
-  animation: aiterm-spin 1s linear infinite;
   display: inline-block;
+}
+.aiterm-agent-status__spinner--thinking {
+  animation: aiterm-spin 1s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .aiterm-agent-status__spinner--thinking { animation: none; }
 }
 @keyframes aiterm-spin {
   from { transform: rotate(0deg); }
