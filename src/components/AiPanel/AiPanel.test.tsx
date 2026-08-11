@@ -435,6 +435,54 @@ describe("AiPanel", () => {
     expect(aiChatCalls.length).toBe(2);
   });
 
+  /**
+   * 面板預設只有 420px，長回答（尤其帶表格或程式碼的）讀起來很擠。拖寬要一路
+   * 拖、而且會蓋掉終端機的寬度設定，所以給一顆「放大」直接吃滿寬。
+   */
+  describe("放大面板", () => {
+    function renderPanel() {
+      return render(
+        <AiPanel
+          sessionId="s1"
+          isOpen={true}
+          providerName="Ollama"
+          onClose={vi.fn()}
+          onExecuteCommand={vi.fn()}
+          onOpenProviderPalette={vi.fn()}
+        />,
+      );
+    }
+
+    it("按下放大後面板吃滿寬", async () => {
+      const { container } = renderPanel();
+      const panel = container.querySelector(".aiterm-ai-panel") as HTMLElement;
+      expect(panel.style.width).not.toBe("100%");
+
+      await userEvent.click(screen.getByTitle("放大面板"));
+      expect(panel.style.width).toBe("100%");
+    });
+
+    it("再按一次回到原本的寬度", async () => {
+      const { container } = renderPanel();
+      const panel = container.querySelector(".aiterm-ai-panel") as HTMLElement;
+      const before = panel.style.width;
+
+      await userEvent.click(screen.getByTitle("放大面板"));
+      await userEvent.click(screen.getByTitle("縮小面板"));
+      expect(panel.style.width).toBe(before);
+    });
+
+    // 滿版時左邊已經沒有終端機可以讓出來，留著拖曳手把只會讓人拖出一個
+    // 「看起來沒反應」的互動。
+    it("放大時收起拖曳手把", async () => {
+      const { container } = renderPanel();
+      expect(container.querySelector(".aiterm-panel-resize-handle")).not.toBeNull();
+
+      await userEvent.click(screen.getByTitle("放大面板"));
+      expect(container.querySelector(".aiterm-panel-resize-handle")).toBeNull();
+    });
+  });
+
   it("provider badge calls onOpenProviderPalette when clicked", async () => {
     const onOpenProviderPalette = vi.fn();
     render(

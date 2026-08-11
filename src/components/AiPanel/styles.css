@@ -27,6 +27,12 @@
  * gets an opaque surface instead. Applied via a class from `navigator.platform`
  * rather than @supports: Chromium reports backdrop-filter as supported even here.
  */
+/* 滿版時左邊沒有終端機露出來，邊框與投影就只是雜訊。 */
+.aiterm-ai-panel--expanded {
+  border-left: none;
+  box-shadow: none;
+}
+
 .aiterm-ai-panel--solid {
   background: var(--bg-glass-solid, #0f111c);
   backdrop-filter: none;

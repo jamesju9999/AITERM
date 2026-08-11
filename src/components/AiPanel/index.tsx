@@ -85,6 +85,7 @@ export function AiPanel({
   const [mcpToolCount, setMcpToolCount] = useState(0);
   const [useMcp, setUseMcp] = useState(loadSavedUseMcp);
   const [submitShortcut, setSubmitShortcut] = useState<SubmitShortcut>("enter");
+  const [expanded, setExpanded] = useState(false);
 
   const processFiles = useCallback(async (files: FileList | File[]) => {
     const arr = Array.from(files);
@@ -412,6 +413,7 @@ Rules:
     isOpen ? "" : "aiterm-ai-panel-hidden",
     // Windows can't blur the terminal behind the glass panel — see styles.css.
     IS_WINDOWS ? "aiterm-ai-panel--solid" : "",
+    expanded ? "aiterm-ai-panel--expanded" : "",
   ].filter(Boolean).join(" ");
   const isDisabled = chat.isStreaming || agentRunning;
 
@@ -419,18 +421,20 @@ Rules:
     <div
       className={panelClass}
       aria-hidden={!isOpen}
-      style={{ width: `${panelWidth}px` }}
+      style={{ width: expanded ? "100%" : `${panelWidth}px` }}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
-      {/* Resize handle on the left edge */}
-      <div
-        className="aiterm-panel-resize-handle"
-        onPointerDown={onResizePointerDown}
-        onPointerMove={onResizePointerMove}
-        onPointerUp={onResizePointerUp}
-        title="拖曳調整寬度"
-      />
+      {/* Resize handle on the left edge — 滿版時左邊沒有終端機可以讓，收起來。 */}
+      {!expanded && (
+        <div
+          className="aiterm-panel-resize-handle"
+          onPointerDown={onResizePointerDown}
+          onPointerMove={onResizePointerMove}
+          onPointerUp={onResizePointerUp}
+          title="拖曳調整寬度"
+        />
+      )}
 
       <div className="aiterm-ai-panel-header">
         <span className="aiterm-ai-panel-title" style={{ background: 'var(--accent-gradient)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '14px' }}>
@@ -445,6 +449,14 @@ Rules:
           {providerName || "(no provider)"}
         </button>
         <div style={{ display: "flex", gap: "8px" }}>
+          <button
+            type="button"
+            className="aiterm-ai-panel-clear-btn"
+            onClick={() => setExpanded((e) => !e)}
+            title={expanded ? "縮小面板" : "放大面板"}
+          >
+            {expanded ? "⤡" : "⤢"}
+          </button>
           <button
             type="button"
             className={`aiterm-ai-panel-clear-btn${historyOpen ? " aiterm-ai-panel-clear-btn--active" : ""}`}
