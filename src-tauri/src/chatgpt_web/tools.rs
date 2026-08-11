@@ -35,6 +35,24 @@ pub fn build_contract(tools: &[McpToolDefinition], nonce: &str) -> String {
         // 對應 `stray_tool_open_tag_in_backticks_does_not_swallow_the_real_
         // envelope` 那種「模型引述協定字彙」的情境。
         "Do not wrap the <tool> block in a code fence or backticks.".to_string(),
+        // 這是實測依據，刪掉會讓契約在聊天面板那條路徑上失效：
+        //
+        // `commands/ai.rs::build_chat_prompt` 在**這份契約之前**就教模型用
+        // `<cmd>…</cmd>` 包裝可執行的 shell 指令。實測（2026-08-11）問「幫我
+        // 找 Obsidian 裡的 FCS 內容」時，模型完整收到了契約（has_contract=true、
+        // nonce_in_text=true），卻回了兩個 `<cmd>` 區塊、一次都沒嘗試 `<tool>`。
+        //
+        // 兩份協定在同一個 prompt 裡競爭，而模型選了先讀到、講得更具體的那條。
+        // 決定性的差別不是格式而是**回饋方向**：`<cmd>` 只是給使用者看的建議、
+        // 結果不會回到模型手上；`<tool>` 才會把輸出送回來。講清楚這件事，模型
+        // 才有理由在「需要拿到資料才能回答」時選 `<tool>`。
+        "Other reply conventions in these instructions (for example a <cmd> block for a shell \
+         command) are separate from this protocol and are only suggestions rendered to the \
+         user — their output never comes back to you. A <tool> block is the only way to \
+         obtain data: the client runs it and feeds the result back into this conversation. \
+         When you need information you do not already have in order to answer, emit a <tool> \
+         block instead of suggesting a command for the user to run."
+            .to_string(),
         // 這是實測依據，刪掉會讓契約失能：原生 function calling 有 schema 約束
         // 住工具名，這個純文字協定唯一的約束就是這句話。工具名是編碼過的
         // (`{server}__{tool}`)；模型很容易把 `__` 前綴當成實作噪音而截短，
@@ -62,11 +80,15 @@ pub fn build_contract(tools: &[McpToolDefinition], nonce: &str) -> String {
 /// 工具名是編碼過的（`{server_id_sanitized}__{tool_name}`，見
 /// `src-tauri/src/mcp/types.rs`），真實形狀像 `filesystem__read_text_file`
 /// （27 字元）、`brave_search_v2__web_search`（28 字元），不是短英文單字。
-/// 固定樣板本身 179 字元，這個數字下逐一點名落在 400 字元上下——完整清單
-/// 本來就在契約裡，這裡的作用是「指回去」，不是把整份清單複述一次；複述會
-/// 讓 reminder 隨工具數量無上限成長，退化成 OmniRoute #7679 那個 0/3 的失敗
-/// 模式（長指令藏在 user 內容裡，觸發 ChatGPT 的注入偵測）。
-const MAX_NAMED_TOOLS_IN_REMINDER: usize = 8;
+/// 固定樣板本身約 270 字元（2026-08-11 加上「建議的指令不會被執行」那句之後
+/// 從 179 增加），這個數字下逐一點名落在 400 字元上下——完整清單本來就在契約
+/// 裡，這裡的作用是「指回去」，不是把整份清單複述一次；複述會讓 reminder 隨
+/// 工具數量無上限成長，退化成 OmniRoute #7679 那個 0/3 的失敗模式（長指令藏在
+/// user 內容裡，觸發 ChatGPT 的注入偵測）。
+///
+/// 樣板變長時**要調小這個數字**，不是放寬測試的長度斷言——那條斷言守的正是
+/// 「提醒不可以膨脹成第二份契約」。
+const MAX_NAMED_TOOLS_IN_REMINDER: usize = 5;
 
 /// 掛在最新一則回合末尾的一行提醒。刻意簡短：網頁版模型對當前回合的權重
 /// 遠高於前面的大段文字，而 ChatGPT 的注入偵測又不信任藏在 user 內容裡的
@@ -96,7 +118,8 @@ pub fn build_reminder(tools: &[McpToolDefinition]) -> String {
     format!(
         "\n\n[Client protocol reminder: the client-tool contract included in this \
          conversation is active. These client tools ARE available via the <tool> \
-         block protocol: {listed}.]"
+         block protocol: {listed}. To obtain data you do not have, emit a <tool> \
+         block — a suggested command is not executed for you.]"
     )
 }
 
@@ -373,6 +396,18 @@ mod tests {
         assert!(
             c.contains("copy them exactly as printed"),
             "缺少「工具名要逐字照抄，含 `__` 前綴」的關鍵指示"
+        );
+        // 這是實測依據（2026-08-11），刪掉會讓契約在聊天面板那條路徑上失效：
+        // `build_chat_prompt` 在契約之前就教模型用 `<cmd>` 包裝 shell 指令，
+        // 實測時模型完整收到契約卻只回 `<cmd>`、一次都沒嘗試 `<tool>`。決定
+        // 性的差別是回饋方向——`<cmd>` 的輸出不會回到模型手上，`<tool>` 才會。
+        assert!(
+            c.contains("their output never comes back to you"),
+            "缺少「其他回覆慣例（如 <cmd>）的輸出不會回到模型手上」的區辨"
+        );
+        assert!(
+            c.contains("only way to obtain data"),
+            "缺少「<tool> 是唯一能取得資料的方式」這個選擇理由"
         );
         // 這是實測依據，刪掉會讓契約失能：fence 包住封套時剖析器解得出來，
         // 但 content 會殘留一個空的 ```json 區塊給使用者看到。這句同時降低

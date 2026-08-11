@@ -114,8 +114,23 @@ fn split_chunks_reassemble_into_incremental_deltas() {
 //    完整份 JSON 才解析得出 command/explanation，然後一次顯示 CommandPreview。
 //    逐字串流要在聊天面板（AiPanel）才看得到，那條**尚未實測**。
 //
-// 3. 聊天面板帶 MCP 工具 → 第一個工具呼叫成功 → **第二、三輪仍然成功**。
-//    第二輪起失效是這條路徑最容易出的問題（歷史裡的封套形狀）。
+// 3. ✅ 聊天面板（右上角的「Ask AI」）帶 MCP 工具，2026-08-11 實測通過：
+//    模型發出 `<tool>{"name":"mcp_brave_search__brave_web_search","arguments":
+//    {...},"_nonce":"d2b8…"}</tool>`，nonce 正確、工具名的 `__` 前綴完整、
+//    沒有包 code fence；工具執行後**第二輪正常用結果作答**，沒有踩到「歷史
+//    裡的封套形狀」那個洞。
+//
+//    ⚠️ **重要前提：要點名工具它才會用。** 這個模型自己就有 web search，
+//    問「查匯率」「查 Tauri 2.10」時它直接用內建搜尋回答（回覆裡帶
+//    `citeturn0search…` 標記），完全不碰我們的契約；問本機檔案時則傾向回
+//    `<cmd>`（那是 `build_chat_prompt` 教的格式）。實測要說「請用
+//    `<server>__<tool>` 這個工具查…」才會走契約。
+//
+//    這不是契約失效——契約送達與否已用診斷確認過（has_contract=true、
+//    nonce_in_text=true）。是模型有更方便的替代品時不會選陌生的純文字協定。
+//    若要提高自發使用率，方向是 A：帶工具時不要在 system prompt 放 `<cmd>`
+//    規則，讓 `<tool>` 成為唯一被授權的行動方式。目前**沒有**做這件事，
+//    因為那會拿掉「點一下執行指令」這個既有功能。
 //
 // 4. Claude Code 橋接指到這個供應商 → 多輪工具迴圈跑得完。
 //
