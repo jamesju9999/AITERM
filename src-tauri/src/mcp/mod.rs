@@ -26,7 +26,14 @@ pub enum McpError {
 
 struct ServerConnection {
     config: McpServerConfig,
-    transport: McpTransport,
+    /// 每個連線各自一把鎖。
+    ///
+    /// **不要把它併回 manager 的那把鎖。** `execute_mcp_tool` 曾經寫成
+    /// `mcp.lock().await.call_tool(...).await`，那個 MutexGuard 會活到整個
+    /// 陳述式結束——也就是整個工具呼叫期間都握著 manager 的鎖。只要有一次
+    /// 呼叫卡住不回（server 沒回應、stdio 塞住），`list_mcp_servers` 就再也
+    /// 拿不到鎖，設定頁的 MCP 清單會永遠讀不出來，看起來就像「設定被刪了」。
+    transport: std::sync::Arc<tokio::sync::Mutex<McpTransport>>,
     tools: Vec<McpToolDescriptor>,
     status: McpServerStatus,
 }
@@ -48,7 +55,7 @@ impl McpManager {
             if !cfg.enabled {
                 self.connections.insert(cfg.id.clone(), ServerConnection {
                     config: cfg.clone(),
-                    transport: McpTransport::new_http(String::new()),
+                    transport: std::sync::Arc::new(tokio::sync::Mutex::new(McpTransport::new_http(String::new()))),
                     tools: vec![],
                     status: McpServerStatus::Disabled,
                 });
@@ -56,7 +63,7 @@ impl McpManager {
             }
             self.connections.insert(cfg.id.clone(), ServerConnection {
                 config: cfg.clone(),
-                transport: McpTransport::new_http(String::new()),
+                transport: std::sync::Arc::new(tokio::sync::Mutex::new(McpTransport::new_http(String::new()))),
                 tools: vec![],
                 status: McpServerStatus::Connecting,
             });
@@ -108,7 +115,7 @@ impl McpManager {
 
         let tool_count = tools.len();
         let conn = self.connections.get_mut(id).unwrap();
-        conn.transport = transport;
+        conn.transport = std::sync::Arc::new(tokio::sync::Mutex::new(transport));
         conn.tools = tools;
         conn.status = McpServerStatus::Connected { tool_count };
 
@@ -134,11 +141,15 @@ impl McpManager {
     }
 
     /// Execute a tool call on the appropriate server.
-    pub async fn call_tool(
-        &mut self,
+    /// 查出這個工具屬於哪個連線，回傳該連線的 transport 與解碼後的工具名。
+    ///
+    /// 刻意與實際送請求分成兩段：呼叫端拿到 `Arc` 之後就該**放掉 manager 的
+    /// 鎖**，再去鎖那一個連線。合在一起寫的話，整個工具呼叫期間都握著
+    /// manager 的鎖，任何一次卡住的呼叫都會讓 `list_mcp_servers` 永遠等下去。
+    pub fn resolve_tool(
+        &self,
         encoded_name: &str,
-        args: serde_json::Value,
-    ) -> Result<McpToolResult, McpError> {
+    ) -> Result<(std::sync::Arc<tokio::sync::Mutex<McpTransport>>, String), McpError> {
         let (server_id_sanitized, raw_tool_name) = decode_tool_name(encoded_name)
             .ok_or_else(|| McpError::ToolNotFound(encoded_name.to_string()))?;
 
@@ -153,15 +164,23 @@ impl McpManager {
             .cloned()
             .ok_or_else(|| McpError::ServerNotFound(server_id_sanitized.to_string()))?;
 
-        let conn = self.connections.get_mut(&conn_id)
+        let conn = self.connections.get(&conn_id)
             .ok_or_else(|| McpError::ServerNotFound(conn_id.clone()))?;
+        Ok((conn.transport.clone(), raw_tool_name.to_string()))
+    }
 
+    /// 對已解析出的連線送出 `tools/call`。此時 manager 的鎖應該已經放掉了。
+    pub async fn call_tool_on(
+        transport: std::sync::Arc<tokio::sync::Mutex<McpTransport>>,
+        raw_tool_name: &str,
+        args: serde_json::Value,
+    ) -> Result<McpToolResult, McpError> {
         let req = JsonRpcRequest::new(0, "tools/call", serde_json::json!({
             "name": raw_tool_name,
             "arguments": args
         }));
 
-        let resp = conn.transport.send_request(req).await?;
+        let resp = transport.lock().await.send_request(req).await?;
 
         if let Some(err) = resp.error {
             return Err(McpError::JsonRpc { code: err.code, message: err.message });
@@ -197,7 +216,7 @@ impl McpManager {
         self.connections.remove(&cfg.id);
         self.connections.insert(cfg.id.clone(), ServerConnection {
             config: cfg.clone(),
-            transport: McpTransport::new_http(String::new()),
+            transport: std::sync::Arc::new(tokio::sync::Mutex::new(McpTransport::new_http(String::new()))),
             tools: vec![],
             status: McpServerStatus::Connecting,
         });
@@ -229,5 +248,37 @@ mod tests {
         use crate::mcp::types::encode_tool_name;
         let encoded = encode_tool_name("my-server", "read_file");
         assert_eq!(encoded, "my_server__read_file");
+    }
+
+    /// **送請求時不可以還握著 manager 的鎖。**
+    ///
+    /// 曾經寫成 `mcp.lock().await.call_tool(...).await`——那個 MutexGuard 會活
+    /// 到整個陳述式結束，也就是整個工具呼叫期間都握著 manager 的鎖。只要一次
+    /// 呼叫卡住不回（server 沒回應、stdio 塞住），`list_mcp_servers` 就再也拿
+    /// 不到鎖，設定頁的 MCP 清單永遠讀不出來，看起來像「設定被刪了」。
+    ///
+    /// 型別本身就擋住這件事：`resolve_tool` 只需要 `&self`、且**不是** async，
+    /// 所以它拿到 `Arc` 就結束，guard 沒有理由跨過任何 await；真正會 await 的
+    /// `call_tool_on` 是關聯函式，簽名裡根本沒有 `self`，拿不到 manager 的鎖。
+    ///
+    /// 這條測試把那個性質釘住：如果有人把 `call_tool_on` 改回 `&mut self` 的
+    /// 方法，這裡就編不過。
+    #[test]
+    fn sending_a_tool_call_does_not_require_the_manager() {
+        let transport =
+            std::sync::Arc::new(tokio::sync::Mutex::new(McpTransport::new_http(String::new())));
+        // 建立 future 但不 await——async 函式的本體在被 poll 之前不會執行，
+        // 所以這裡不會真的送出任何請求。能編譯就證明送請求只需要一個
+        // transport 的 Arc，完全不需要 McpManager（也就拿不到它的鎖）。
+        let _fut = McpManager::call_tool_on(transport, "some_tool", serde_json::json!({}));
+    }
+
+    /// `resolve_tool` 不是 async——呼叫端拿到 `Arc` 之後鎖就能放掉。
+    #[test]
+    fn resolving_a_tool_is_synchronous() {
+        let manager = McpManager::new();
+        // 沒有連線時回 ServerNotFound / ToolNotFound，重點是這行不需要 .await。
+        let r = manager.resolve_tool("nonexistent__tool");
+        assert!(r.is_err());
     }
 }

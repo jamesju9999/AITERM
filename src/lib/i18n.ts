@@ -436,6 +436,8 @@ const zhTW = {
     mcp_add_server: "+ 新增 Server",
     mcp_import_claude: "Import from Claude Desktop",
     mcp_no_servers: "尚無 MCP Server。點擊「+ 新增 Server」或從 Claude Desktop 匯入。",
+    mcp_load_failed: (reason: string) =>
+      `讀取 MCP Server 清單失敗（${reason}）。設定檔沒有被更動——這是讀取失敗，不是設定不見了。`,
     mcp_status_connecting: "連線中",
     mcp_status_connected: (n: number) => `已連線 (${n} 個工具)`,
     mcp_status_error: "錯誤",
@@ -660,6 +662,7 @@ const zhTW = {
     tool_call_input: "輸入",
     tool_call_output: "輸出",
     ai_retry: "🔄 重試",
+    ai_thinking: "思考中…",
     // AiPanel/CmdTag
     cmd_multiline_tip: "多行命令 — 執行前會再確認一次",
     cmd_click_execute: "點擊即執行",
@@ -766,6 +769,8 @@ const zhTW = {
     ai_mcp_on: "MCP 開啟",
     ai_mcp_off: "MCP 關閉",
     ai_placeholder_agent_running: "Agent 執行中…",
+    ai_agent_thinking: "Agent 思考中…",
+    ai_agent_executing: "Agent 執行指令中…",
     ai_placeholder_agent_goal: "輸入目標，Agent 將自動執行指令… (Enter)",
     ai_placeholder_waiting: "等待 AI 回覆中...",
     ai_placeholder_default: "輸入訊息，Enter 送出...",
@@ -883,6 +888,19 @@ const zhTW = {
     settings_provider_btn_cancel: "取消",
     settings_provider_btn_open_auth: "開啟授權頁面",
     settings_provider_oauth_id_required: "請先輸入 Provider ID 後再進行 OAuth 驗證",
+    chatgpt_web_risk_tos:
+      "以程式化方式驅動 ChatGPT 網頁介面違反 OpenAI 服務條款，帳號有被停權的風險。",
+    chatgpt_web_risk_tools:
+      "工具呼叫是 prompt 模擬的，模型可能不照格式輸出，多輪保真度低於原生 tool calling。",
+    chatgpt_web_risk_upstream:
+      "認證機制是逆向而來，上游變更即失效，整個供應商會回 403。",
+    chatgpt_web_login: "登入 ChatGPT",
+    chatgpt_web_login_hint: "會開啟一個 ChatGPT 視窗，登入完成後自動收起。",
+    chatgpt_web_models_loading: "讀取可用模型中…",
+    chatgpt_web_models_empty: "尚未取得模型清單，請先登入。",
+    chatgpt_web_context_hint: (n: string) => `上下文上限：${n} tokens`,
+    chatgpt_web_tier_hint:
+      "建議對應到 Haiku 層——Claude Code 用它跑背景小任務，請求短、不需長上下文。",
     settings_provider_oauth_onboarding_wait: "登入中…（首次使用可能需要最多 45 秒準備 Google Cloud 專案）",
     settings_provider_model_placeholder: "選擇或輸入模型名稱",
     settings_provider_model_loading_placeholder: "載入模型清單中…",
@@ -1594,6 +1612,8 @@ const enRaw = {
     mcp_add_server: "+ Add Server",
     mcp_import_claude: "Import from Claude Desktop",
     mcp_no_servers: "No MCP servers configured. Click '+ Add Server' or import from Claude Desktop.",
+    mcp_load_failed: (reason: string) =>
+      `Failed to load the MCP server list (${reason}). Your config file is untouched — this is a read failure, not missing settings.`,
     mcp_status_connecting: "Connecting",
     mcp_status_connected: (n: number) => `Connected (${n} tools)`,
     mcp_status_error: "Error",
@@ -1818,6 +1838,9 @@ const enRaw = {
     tool_call_input: "Input",
     tool_call_output: "Output",
     ai_retry: "🔄 Retry",
+    ai_thinking: "Thinking…",
+    ai_agent_thinking: "Agent thinking…",
+    ai_agent_executing: "Agent running command…",
     // AiPanel/CmdTag
     cmd_multiline_tip: "Multi-line command — will confirm before execution",
     cmd_click_execute: "Click to execute",
@@ -1940,6 +1963,19 @@ const enRaw = {
     settings_provider_btn_cancel: "Cancel",
     settings_provider_btn_open_auth: "Open Authorization Page",
     settings_provider_oauth_id_required: "Please enter Provider ID before OAuth authentication",
+    chatgpt_web_risk_tos:
+      "Driving the ChatGPT web interface programmatically violates OpenAI's Terms of Service; your account may be suspended.",
+    chatgpt_web_risk_tools:
+      "Tool calls are prompt-emulated. The model may not follow the format, so multi-turn fidelity is lower than native tool calling.",
+    chatgpt_web_risk_upstream:
+      "The authentication flow is reverse-engineered. Any upstream change breaks it and the whole provider starts returning 403.",
+    chatgpt_web_login: "Sign in to ChatGPT",
+    chatgpt_web_login_hint: "Opens a ChatGPT window; it hides itself once you are signed in.",
+    chatgpt_web_models_loading: "Loading available models…",
+    chatgpt_web_models_empty: "No model list yet — sign in first.",
+    chatgpt_web_context_hint: (n: string) => `Context limit: ${n} tokens`,
+    chatgpt_web_tier_hint:
+      "Map it to the Haiku tier — Claude Code uses that for short background tasks that do not need a long context.",
     settings_provider_oauth_onboarding_wait: "Signing in… (first-time setup may take up to 45s to prepare your Google Cloud project)",
     settings_provider_model_placeholder: "Select or enter model name",
     settings_provider_model_loading_placeholder: "Loading model list...",

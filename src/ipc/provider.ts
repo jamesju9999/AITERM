@@ -196,6 +196,7 @@ export const PROVIDER_TYPE_LABELS: Record<ProviderType, string> = {
   kimi: "Kimi (Moonshot)",
   "anthropic-compatible": "Anthropic-Compatible",
   codex: "Codex (ChatGPT)",
+  "chatgpt-web": "ChatGPT Web",
 };
 
 export const DEFAULT_MODELS: Record<ProviderType, string> = {
@@ -211,6 +212,9 @@ export const DEFAULT_MODELS: Record<ProviderType, string> = {
   kimi: "kimi-latest",
   "anthropic-compatible": "",
   codex: "gpt-5.1-codex",
+  // 空字串：實際可用的模型由 chatgpt_web_models 動態取得，寫死一個 slug
+  // 只會在使用者的方案不含它時給出一個看不懂的錯誤。
+  "chatgpt-web": "",
 };
 
 export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
@@ -226,6 +230,8 @@ export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   kimi: "https://api.moonshot.ai/v1",
   "anthropic-compatible": "",
   codex: "",
+  // 傳輸是隱藏 webview，端點固定在 https://chatgpt.com，不從設定讀。
+  "chatgpt-web": "",
 };
 
 /** OpenAI-compatible quick-pick presets shown in the form — for servers with

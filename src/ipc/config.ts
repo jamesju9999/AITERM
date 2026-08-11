@@ -15,7 +15,8 @@ export type ProviderType =
   | "deepseek"
   | "kimi"
   | "anthropic-compatible"
-  | "codex";
+  | "codex"
+  | "chatgpt-web";
 
 export type ExecutionMode = "always-confirm" | "graded" | "full-auto";
 

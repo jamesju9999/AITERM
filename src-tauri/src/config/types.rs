@@ -257,6 +257,10 @@ pub enum ProviderType {
     Kimi,
     AnthropicCompatible,
     Codex,
+    /// ChatGPT 網頁版（chatgpt.com/backend-api/conversation）。
+    /// 與 `Codex` 不同：那是 Responses API + 原生 function calling，
+    /// 這是網頁前端自己的後端 + prompt 模擬工具。兩者吃同一份訂閱額度。
+    ChatgptWeb,
 }
 
 impl std::fmt::Display for ProviderType {
@@ -274,6 +278,7 @@ impl std::fmt::Display for ProviderType {
             ProviderType::Kimi => write!(f, "Kimi (Moonshot)"),
             ProviderType::AnthropicCompatible => write!(f, "Anthropic-Compatible"),
             ProviderType::Codex => write!(f, "Codex"),
+            ProviderType::ChatgptWeb => write!(f, "ChatGPT Web"),
         }
     }
 }
@@ -501,6 +506,7 @@ mod tests {
             (ProviderType::Kimi, "kimi"),
             (ProviderType::AnthropicCompatible, "anthropic-compatible"),
             (ProviderType::Codex, "codex"),
+            (ProviderType::ChatgptWeb, "chatgpt-web"),
         ] {
             let w = W { ty };
             let serialized = toml::to_string(&w).unwrap();
@@ -508,6 +514,15 @@ mod tests {
             let deserialized: W = toml::from_str(&serialized).unwrap();
             assert_eq!(deserialized.ty, w.ty);
         }
+    }
+
+    #[test]
+    fn chatgpt_web_provider_type_round_trips() {
+        let json = serde_json::to_string(&ProviderType::ChatgptWeb).unwrap();
+        assert_eq!(json, r#""chatgpt-web""#);
+        let back: ProviderType = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ProviderType::ChatgptWeb);
+        assert_eq!(ProviderType::ChatgptWeb.to_string(), "ChatGPT Web");
     }
 
     #[test]

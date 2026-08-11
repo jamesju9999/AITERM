@@ -35,6 +35,10 @@ const SUPPORTED_TYPES = new Set([
   "anthropic",
   "anthropic-compatible",
   "codex",
+  // chatgpt-web 刻意不列入：網頁版對單則訊息有長度上限，而橋接必須把
+  // system prompt 與所有工具定義攤平成一則。實測 Claude Code 的請求約
+  // 16 萬字元，遠超上限（見 bridge/factory.rs::kind_for）。列進來只會
+  // 讓使用者選到一個每次都失敗的選項。
 ]);
 
 function isSupported(p: ProviderInfo): boolean {

@@ -10,6 +10,12 @@ interface MessageListProps {
   messages: McpChatMessage[];
   streamBuf: string;
   isStreaming: boolean;
+  /** 忙碌指示的文案；`null` 代表不顯示。
+   *
+   *  用文案而不是布林，是因為 Agent 迴圈有兩個等待階段（等 AI 想、等指令跑完），
+   *  兩段都要有指示、但要講不同的話。只用布林的話，執行指令那段對話框會完全
+   *  安靜——實測回報「氣泡消失到下一則訊息之間的空檔很長」就是那一段。 */
+  thinkingLabel?: string | null;
   error: AiError | string | null;
   onExecuteCommand: (cmd: string) => void;
   onRetry: () => void;
@@ -76,6 +82,7 @@ export function MessageList({
   messages,
   streamBuf,
   isStreaming,
+  thinkingLabel = null,
   error,
   onExecuteCommand,
   onRetry,
@@ -118,6 +125,21 @@ export function MessageList({
           />
         );
       })}
+      {/* 還沒有任何文字之前的等待指示。
+          沒有它的話，從送出到第一個字之間畫面完全空白——使用者合理地以為
+          沒在運作。這段空窗在 ChatGPT Web 這條路徑上特別長：要先跑 sentinel
+          的兩段握手與工作量證明，模型才開始吐字。
+          有字之後就交給下面的串流氣泡，不要兩個同時出現。 */}
+      {(thinkingLabel || isStreaming) && !streamBuf && (
+        <div className="aiterm-bubble aiterm-bubble-assistant aiterm-thinking" aria-busy="true">
+          <span className="aiterm-thinking-dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+          <span className="aiterm-thinking-label">{thinkingLabel ?? t.ai_thinking}</span>
+        </div>
+      )}
       {isStreaming && streamBuf && (
         <MessageBubble
           role="assistant"

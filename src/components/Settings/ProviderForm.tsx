@@ -45,6 +45,7 @@ import {
 import type { ProviderType } from "../../ipc/config";
 import { useLocale } from "../../contexts/LocaleContext";
 import "./ProviderForm.css";
+import { chatgptWebModels, type ChatgptWebModel } from "../../ipc/chatgptWeb";
 
 interface Props {
   existing?: ProviderInfo;
@@ -65,6 +66,7 @@ const PROVIDER_TYPES: ProviderType[] = [
   "kimi",
   "anthropic-compatible",
   "codex",
+  "chatgpt-web",
 ];
 
 function FormSection({ title, children }: { title: string; children: ReactNode }) {
@@ -116,6 +118,8 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
   const [kimiModels, setKimiModels] = useState<string[]>([]);
   const [kimiLoading, setKimiLoading] = useState(false);
   const [codexModels, setCodexModels] = useState<string[]>([]);
+  const [chatgptWebModelList, setChatgptWebModelList] = useState<ChatgptWebModel[]>([]);
+  const [chatgptWebModelsLoading, setChatgptWebModelsLoading] = useState(false);
   const [codexModelsLoading, setCodexModelsLoading] = useState(false);
   const [codexOAuthLoggedIn, setCodexOAuthLoggedIn] = useState(
     !!(existing?.provider_type === "codex" && existing?.auth_method === "oauth"),
@@ -755,6 +759,68 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
             </div>
           )}
 
+          {providerType === "chatgpt-web" && (
+            <div className="form-group">
+              {/* 三項風險刻意都寫出來：這條路徑違反上游服務條款、工具呼叫是
+                  模擬的、認證是逆向而來。使用者要在啟用前就知道，不是壞掉之後
+                  才從錯誤訊息裡拼湊。 */}
+              <div className="form-hint form-hint--error">{t.chatgpt_web_risk_tos}</div>
+              <div className="form-hint">{t.chatgpt_web_risk_tools}</div>
+              <div className="form-hint">{t.chatgpt_web_risk_upstream}</div>
+
+              <button
+                type="button"
+                className="aiterm-btn aiterm-btn--primary"
+                disabled={chatgptWebModelsLoading}
+                onClick={async () => {
+                  // 讀模型清單這個動作本身就會把 webview 叫起來；未登入時
+                  // 後端會回錯誤，使用者接著在那個視窗登入即可。
+                  setChatgptWebModelsLoading(true);
+                  setAuthStatus(null);
+                  try {
+                    const models = await chatgptWebModels();
+                    setChatgptWebModelList(models);
+                    if (models.length === 0) setAuthStatus(t.chatgpt_web_models_empty);
+                  } catch (e: unknown) {
+                    setAuthStatus(String(e));
+                  } finally {
+                    setChatgptWebModelsLoading(false);
+                  }
+                }}
+              >
+                {chatgptWebModelsLoading ? t.chatgpt_web_models_loading : t.chatgpt_web_login}
+              </button>
+              <div className="form-hint">{t.chatgpt_web_login_hint}</div>
+
+              {chatgptWebModelList.length > 0 && (
+                <>
+                  <label htmlFor="chatgpt-web-model">{t.settings_provider_model_placeholder}</label>
+                  <select
+                    id="chatgpt-web-model"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                  >
+                    {chatgptWebModelList.map((m) => (
+                      <option key={m.slug} value={m.slug}>
+                        {m.title || m.slug}
+                      </option>
+                    ))}
+                  </select>
+                  {(() => {
+                    const sel = chatgptWebModelList.find((m) => m.slug === model);
+                    return sel && sel.max_tokens > 0 ? (
+                      <div className="form-hint">
+                        {t.chatgpt_web_context_hint(sel.max_tokens.toLocaleString())}
+                      </div>
+                    ) : null;
+                  })()}
+                </>
+              )}
+
+              {authStatus && <div className="form-hint form-hint--error">{authStatus}</div>}
+            </div>
+          )}
+
           {providerType === "google-ai" && (
             <div className="form-group">
               <label>{t.settings_provider_auth_type}</label>
@@ -859,7 +925,10 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
             </div>
           )}
 
-          {providerType !== "github-copilot" && providerType !== "anthropic" && providerType !== "codex" && providerType !== "google-ai" && (
+          {/* chatgpt-web 沒有金鑰可填——登入狀態在 webview 自己身上。這個條件是
+              「排除清單」，新增的供應商型別預設會被包含進來，所以每加一個不用
+              金鑰的型別都要記得排除。 */}
+          {providerType !== "github-copilot" && providerType !== "anthropic" && providerType !== "codex" && providerType !== "google-ai" && providerType !== "chatgpt-web" && (
             <div className="form-group">
               <label>
                 {providerType === "openai-compatible" ? t.provider_api_key_optional : t.provider_api_key}
@@ -906,6 +975,11 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
         </FormSection>
       )}
 
+      {/* chatgpt-web 在這一節裡三個區塊都不適用：base_url 固定在
+          https://chatgpt.com（不從設定讀）、模型由上面的下拉負責、
+          JSON mode 是 OpenAI 相容 API 的參數。整節都藏掉，否則會留下
+          一個只有標題、裡面空無一物的區塊。 */}
+      {providerType !== "chatgpt-web" && (
       <FormSection title={t.provider_section_endpoint}>
         {(providerType === "ollama" ||
           providerType === "openai-compatible" ||
@@ -1184,6 +1258,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
           </div>
         )}
       </FormSection>
+      )}
 
       <div className="form-actions">
         <button

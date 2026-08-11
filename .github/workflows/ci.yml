@@ -161,7 +161,46 @@ jobs:
       # runs cleanly here (verified locally: 367 lib tests + all tests/
       # integration tests pass). The 7 keychain-gated tests are #[ignore]d;
       # plain `cargo test` never adds `--ignored`, so they stay skipped.
+      # Windows 要多一步：先 --no-run 建出測試執行檔，替每一個放一份
+      # side-by-side manifest，再真的跑。
+      #
+      # 為什麼：muda（Tauri 的原生選單）靜態 import comctl32 的
+      # TaskDialogIndirect，而這個函式只存在 comctl32 **v6**。System32 的
+      # comctl32 是 v5.82，沒有這個匯出；v6 住在 WinSxS，只有執行檔宣告相依
+      # Microsoft.Windows.Common-Controls 6.0.0.0 時，載入器才解析得到。
+      # 正式的 app.exe 由 tauri-build 嵌了同樣內容的 manifest 所以一直沒事
+      # （tauri-build/src/windows-app-manifest.xml），但 Cargo 的測試 harness
+      # 是另一個 target，拿不到那份 manifest——測試執行檔會在 main 之前就死在
+      # 載入器手上，STATUS_ENTRYPOINT_NOT_FOUND (0xC0000139)，一個測試都不會
+      # 跑，而 CI 只看得到 exit code，完全看不出原因。
+      #
+      # master 只是剛好沒把 muda 連進測試執行檔而躲過；這顆地雷跟任何特定功能
+      # 無關，隨時可能被別的改動引爆。
+      #
+      # 為什麼用外部 .manifest 而不是連結參數（兩條都實測撞牆過）：
+      #   - build.rs 的 cargo::rustc-link-arg-tests 搆不到 lib 的單元測試
+      #     target：加了之後測試執行檔一個 byte 都沒變。
+      #   - RUSTFLAGS 的 /MANIFEST:EMBED 會連 `cargo test` 順便建的 app bin
+      #     一起套到，跟 tauri-build 已經嵌好的那份撞成
+      #     「CVT1100: duplicate resource type:MANIFEST」→ LNK1123。
+      # 外部 manifest 完全不碰連結參數，正式產物零影響。
+      - name: Rust tests (Windows)
+        if: matrix.os == 'windows-latest'
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          cargo test --target ${{ matrix.target }} --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exes = @(Get-ChildItem "target/${{ matrix.target }}/debug/deps/*.exe")
+          if ($exes.Count -eq 0) { throw "沒有找到任何測試執行檔，manifest 會放不到位" }
+          foreach ($e in $exes) {
+            Copy-Item windows-tests.manifest "$($e.FullName).manifest" -Force
+          }
+          Write-Host "已為 $($exes.Count) 個測試執行檔放置 side-by-side manifest"
+          cargo test --target ${{ matrix.target }}
+
       - name: Rust tests
+        if: matrix.os != 'windows-latest'
         working-directory: src-tauri
         run: cargo test --target ${{ matrix.target }}
 

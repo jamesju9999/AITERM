@@ -235,6 +235,30 @@ async fn messages_non_streaming(
             }
             Err(e) => ai_error_response(&e),
         },
+        // ChatgptWeb 與 OpenAi 走同一種收斂方式：都回 Events，靠
+        // MessageAggregator 聚成一則非串流回應。
+        Upstream::ChatgptWeb(c) => match c.send(&req, &mapping.model).await {
+            Ok(UpstreamResponse::Events(mut events)) => {
+                let mut agg = MessageAggregator::new(
+                    message_id,
+                    req.model.clone(),
+                    estimate_input_tokens(&req),
+                );
+                while let Some(item) = events.next().await {
+                    match item {
+                        Ok(ev) => agg.push(ev),
+                        Err(e) => return ai_error_response(&e),
+                    }
+                }
+                Json(agg.finish()).into_response()
+            }
+            Ok(UpstreamResponse::Passthrough(_)) => json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "api_error",
+                "ChatGPT Web 上游不應回 passthrough。",
+            ),
+            Err(e) => ai_error_response(&e),
+        },
         Upstream::OpenAi(o) => match o.send(&req, &mapping.model).await {
             Ok(UpstreamResponse::Events(mut events)) => {
                 let mut agg =

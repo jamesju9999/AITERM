@@ -65,6 +65,9 @@ pub(crate) fn default_base_url(provider_type: ProviderType) -> Option<&'static s
         ProviderType::OpenaiCompatible | ProviderType::AnthropicCompatible => None,
         // Codex 走 OAuth，不經過這裡的 base_url 解析。
         ProviderType::Codex => None,
+        // 網頁版走 webview 傳輸，base_url 由 session 固定為 https://chatgpt.com，
+        // 不從設定讀。
+        ProviderType::ChatgptWeb => None,
     }
 }
 
@@ -94,7 +97,10 @@ pub fn openai_chat_url(provider_type: ProviderType, base_url: &str) -> String {
         | ProviderType::OpenaiCompatible
         | ProviderType::Anthropic
         | ProviderType::AnthropicCompatible
-        | ProviderType::Codex => format!("{base}/chat/completions"),
+        // 網頁版不會實際呼叫這條路徑（走 webview 傳輸），但窮舉 match 必須列出；
+        // 併入 Codex 那組是保守處理，不代表這個端點形狀真的適用。
+        | ProviderType::Codex
+        | ProviderType::ChatgptWeb => format!("{base}/chat/completions"),
     }
 }
 
@@ -623,6 +629,11 @@ impl AiRouter {
                 let (token, account_id) = get_valid_codex_oauth_token(&provider_cfg.id, &self.secrets).await?;
                 Arc::new(crate::ai::codex::CodexClient::new(token, provider_cfg.model.clone(), account_id))
             }
+            // 憑證不在這裡——session 的 webview 自己持有登入狀態，所以這個
+            // 分支不查 keyring、也沒有 token 可以驗。
+            ProviderType::ChatgptWeb => Arc::new(
+                crate::ai::chatgpt_web::ChatgptWebProvider::new(provider_cfg.model.clone()),
+            ),
         };
         Ok(provider)
     }
@@ -693,6 +704,8 @@ mod tests {
         assert_eq!(default_base_url(ProviderType::OpenaiCompatible), None);
         assert_eq!(default_base_url(ProviderType::AnthropicCompatible), None);
         assert_eq!(default_base_url(ProviderType::Codex), None);
+        // 網頁版走 webview 傳輸，base_url 由 session 固定，不從這裡讀。
+        assert_eq!(default_base_url(ProviderType::ChatgptWeb), None);
     }
 
     #[test]
