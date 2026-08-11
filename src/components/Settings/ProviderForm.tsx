@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from "react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 
 const ANTHROPIC_CLAUDE_MODELS = [
   "claude-opus-4-8",
@@ -45,7 +45,16 @@ import {
 import type { ProviderType } from "../../ipc/config";
 import { useLocale } from "../../contexts/LocaleContext";
 import "./ProviderForm.css";
-import { chatgptWebModels, type ChatgptWebModel } from "../../ipc/chatgptWeb";
+import {
+  chatgptWebModels,
+  chatgptWebLogin,
+  type ChatgptWebModel,
+} from "../../ipc/chatgptWeb";
+
+/** 輪詢登入結果的間隔。注入腳本的 watchLogin 也在同時輪詢，所以不必更密。 */
+const CHATGPT_WEB_LOGIN_POLL_MS = 3000;
+/** 與 inject.js 的 watchLogin 上限一致：它停止偵測之後再問也沒有意義。 */
+const CHATGPT_WEB_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 
 interface Props {
   existing?: ProviderInfo;
@@ -137,6 +146,14 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [authing, setAuthing] = useState(false);
   const [authStatus, setAuthStatus] = useState<string | null>(null);
+  // 登入輪詢跑最久十分鐘；對話框關掉之後不該還在背景每三秒打一次後端。
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+    };
+  }, []);
 
   const fetchAnthropicModels = (providerId: string) => {
     setAnthropicModelsLoading(true);
@@ -773,14 +790,43 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
                 className="aiterm-btn aiterm-btn--primary"
                 disabled={chatgptWebModelsLoading}
                 onClick={async () => {
-                  // 讀模型清單這個動作本身就會把 webview 叫起來；未登入時
-                  // 後端會回錯誤，使用者接著在那個視窗登入即可。
                   setChatgptWebModelsLoading(true);
                   setAuthStatus(null);
                   try {
-                    const models = await chatgptWebModels();
-                    setChatgptWebModelList(models);
-                    if (models.length === 0) setAuthStatus(t.chatgpt_web_models_empty);
+                    // 先把視窗顯示出來——這顆按鈕的字面意思就是這件事。
+                    // 只呼叫 chatgptWebModels 是不夠的：那條路徑走
+                    // ensure_window(false)，視窗是隱藏建立的，使用者只會看到
+                    // not_logged_in 而沒有任何可以登入的介面（實測回報）。
+                    await chatgptWebLogin();
+                    setAuthStatus(t.chatgpt_web_login_waiting);
+                    // 登入是在另一個視窗裡完成的，沒有事件回傳，所以在這裡輪詢
+                    // 到拿得到模型清單為止。上限對齊 inject.js 的 watchLogin：
+                    // 超過那個時間連注入腳本自己都停止偵測了，再問也不會有結果。
+                    const deadline = Date.now() + CHATGPT_WEB_LOGIN_TIMEOUT_MS;
+                    for (;;) {
+                      // 對話框被關掉就別再打了，否則這個迴圈會自己跑滿十分鐘。
+                      if (unmountedRef.current) return;
+                      try {
+                        // 拿得到回應就代表已經登入了。空清單是「登入了但這個
+                        // 帳號沒有可用模型」，跟「還沒登入」是兩回事，不該繼續
+                        // 等下去——那會讓使用者盯著一個永遠不會變的畫面。
+                        const models = await chatgptWebModels();
+                        setChatgptWebModelList(models);
+                        setAuthStatus(models.length === 0 ? t.chatgpt_web_models_empty : null);
+                        return;
+                      } catch (e: unknown) {
+                        // 「還沒登入」是預期中的，繼續等；其他錯誤等下去沒有
+                        // 意義，直接呈現給使用者。
+                        if (!String(e).includes("not_logged_in")) throw e;
+                      }
+                      if (Date.now() >= deadline) {
+                        setAuthStatus(t.chatgpt_web_models_empty);
+                        return;
+                      }
+                      await new Promise((r) =>
+                        setTimeout(r, CHATGPT_WEB_LOGIN_POLL_MS),
+                      );
+                    }
                   } catch (e: unknown) {
                     setAuthStatus(String(e));
                   } finally {

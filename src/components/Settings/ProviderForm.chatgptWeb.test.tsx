@@ -4,7 +4,10 @@ import userEvent from "@testing-library/user-event";
 
 import { ProviderForm } from "./ProviderForm";
 
-vi.mock("../../ipc/chatgptWeb", () => ({ chatgptWebModels: vi.fn() }));
+vi.mock("../../ipc/chatgptWeb", () => ({
+  chatgptWebModels: vi.fn(),
+  chatgptWebLogin: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("../../ipc/provider", async () => {
   const actual = await vi.importActual<typeof import("../../ipc/provider")>(
     "../../ipc/provider",
@@ -18,7 +21,7 @@ vi.mock("../../ipc/provider", async () => {
   };
 });
 
-import { chatgptWebModels } from "../../ipc/chatgptWeb";
+import { chatgptWebModels, chatgptWebLogin } from "../../ipc/chatgptWeb";
 
 async function selectChatgptWeb() {
   render(<ProviderForm onSave={async () => {}} onCancel={() => {}} />);
@@ -97,6 +100,43 @@ describe("ProviderForm — ChatGPT Web", () => {
     // 下拉、JSON mode 是 OpenAI 相容 API 的參數）。上一條斷言只看得到「有沒有
     // 多餘輸入框」，看不到「只剩標題的空區塊」——實測時就是這樣留下一個空殼。
     expect(screen.queryByText(/端點與模型|Endpoint & Model/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * 這顆按鈕寫著「登入 ChatGPT」、提示寫著「會開啟一個 ChatGPT 視窗」，所以它
+   * 必須真的把視窗叫出來。
+   *
+   * 實測回報（2026-08-11，Windows）：按下去只出現 not_logged_in，視窗從頭到尾
+   * 沒出現。原因是它只呼叫了 chatgpt_web_models，而那條路徑走的是
+   * ensure_window(false)——視窗是隱藏建立的，使用者根本沒有登入的機會。
+   * 舊測試全部把 chatgptWebModels mock 成成功，因此鎖住的是錯誤的行為。
+   */
+  it("按下登入必須先把 ChatGPT 視窗顯示出來", async () => {
+    vi.mocked(chatgptWebModels).mockResolvedValue([
+      { slug: "gpt-5-5", title: "GPT-5.5", max_tokens: 196000 },
+    ]);
+    await selectChatgptWeb();
+
+    await userEvent.click(screen.getByRole("button", { name: /登入 ChatGPT/ }));
+
+    await waitFor(() => expect(chatgptWebLogin).toHaveBeenCalled());
+  });
+
+  /**
+   * 未登入時後端回的是 `not_logged_in`。使用者不該看到這串內部字串——實測回報
+   * 的畫面就是紅框裡孤零零一行 not_logged_in，既沒說要做什麼，也沒有視窗可登入。
+   * 現在應該顯示「請在開啟的視窗完成登入」，並繼續等使用者登入。
+   */
+  it("未登入時顯示可行動的提示，而不是 not_logged_in 這串內部字串", async () => {
+    vi.mocked(chatgptWebModels).mockRejectedValue("not_logged_in");
+    await selectChatgptWeb();
+
+    await userEvent.click(screen.getByRole("button", { name: /登入 ChatGPT/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/請在開啟的 ChatGPT 視窗完成登入/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/^not_logged_in$/)).not.toBeInTheDocument();
   });
 
   /**

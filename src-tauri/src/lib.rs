@@ -309,6 +309,7 @@ pub fn run() {
             chatgpt_web::session::chatgpt_web_take,
             chatgpt_web::session::chatgpt_web_chunk,
             chatgpt_web::session::chatgpt_web_logged_in,
+            chatgpt_web::session::chatgpt_web_login,
             chatgpt_web::session::chatgpt_web_models,
             // PTY
             pty_create,

@@ -191,6 +191,23 @@ pub async fn chatgpt_web_logged_in() {
     }
 }
 
+/// 設定頁的「登入 ChatGPT」按的：把 webview 顯示出來讓使用者登入。
+///
+/// 為什麼要獨立一個 command：其他所有進入點（送請求、讀模型）走的都是
+/// `ensure_window(false)`，視窗是**隱藏**建立的。這顆按鈕原本直接呼叫
+/// `chatgpt_web_models`，未登入時注入腳本只會回 `not_logged_in`，視窗從頭到尾
+/// 沒被顯示過——使用者根本沒有登入的機會（2026-08-11 Windows 實測回報）。
+/// 會顯示視窗的 `ensure_window(true)` 當時唯一的呼叫點是 `health_check`，也就是
+/// **已儲存**供應商上的「測試」按鈕；在「新增供應商」對話框裡按不到。
+///
+/// **必須是 `async`**：理由同 `chatgpt_web_take`（wry #583）。
+#[tauri::command]
+pub async fn chatgpt_web_login() -> Result<(), String> {
+    let s = get().ok_or("session 未初始化")?;
+    s.ensure_window(true).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// 設定頁的模型下拉選單用的一筆。
 #[derive(serde::Serialize)]
 pub struct ChatgptWebModel {
