@@ -197,8 +197,17 @@ pub async fn execute_mcp_tool(
     args: serde_json::Value,
     mcp: State<'_, McpManagerState>,
 ) -> Result<McpToolResult, String> {
-    mcp.lock().await
-        .call_tool(&encoded_name, args)
+    // 兩段式：先短暫鎖住 manager 查出是哪個連線，**放掉鎖之後**才送請求。
+    //
+    // 曾經寫成 `mcp.lock().await.call_tool(...).await`，那個 MutexGuard 會活到
+    // 整個陳述式結束——也就是整個工具呼叫期間都握著 manager 的鎖。只要有一次
+    // 呼叫卡住不回（server 沒回應、stdio 塞住），`list_mcp_servers` 就再也拿
+    // 不到鎖，設定頁的 MCP 清單永遠讀不出來，看起來像「設定被刪了」。
+    let (transport, raw_name) = {
+        let manager = mcp.lock().await;
+        manager.resolve_tool(&encoded_name).map_err(|e| e.to_string())?
+    };
+    crate::mcp::McpManager::call_tool_on(transport, &raw_name, args)
         .await
         .map_err(|e| e.to_string())
 }

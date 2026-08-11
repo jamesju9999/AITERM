@@ -23,11 +23,20 @@ export function McpServersPage() {
   const [importError, setImportError] = useState<string | null>(null);
   const [expandedServerId, setExpandedServerId] = useState<string | null>(null);
   const [allTools, setAllTools] = useState<McpToolInfo[]>([]);
+  // 載入失敗必須看得見。原本 reload() 沒有錯誤處理，`listMcpServers()` 一旦
+  // 拋出或永遠不回，兩個 setter 都不會執行——清單留在初始的空陣列、勾選框
+  // 留在初始的 true，畫面看起來就是「設定突然不見了」。
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const reload = async () => {
-    const [svrs, cfg] = await Promise.all([listMcpServers(), getConfig()]);
-    setServers(svrs);
-    setMcpEnabledState(cfg.mcp_enabled ?? true);
+    try {
+      const [svrs, cfg] = await Promise.all([listMcpServers(), getConfig()]);
+      setServers(svrs);
+      setMcpEnabledState(cfg.mcp_enabled ?? true);
+      setLoadError(null);
+    } catch (e: unknown) {
+      setLoadError(String(e));
+    }
   };
 
   useEffect(() => { reload(); }, []);
@@ -143,7 +152,9 @@ export function McpServersPage() {
       {/* Server list */}
       <div className="mcp-server-list">
         {servers.length === 0 && (
-          <p className="section-desc">{t.mcp_no_servers}</p>
+          <p className="section-desc">
+            {loadError ? t.mcp_load_failed(loadError) : t.mcp_no_servers}
+          </p>
         )}
         {servers.map(s => (
           <div key={s.id} className="mcp-server-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 0 }}>

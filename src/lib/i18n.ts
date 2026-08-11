@@ -436,6 +436,8 @@ const zhTW = {
     mcp_add_server: "+ 新增 Server",
     mcp_import_claude: "Import from Claude Desktop",
     mcp_no_servers: "尚無 MCP Server。點擊「+ 新增 Server」或從 Claude Desktop 匯入。",
+    mcp_load_failed: (reason: string) =>
+      `讀取 MCP Server 清單失敗（${reason}）。設定檔沒有被更動——這是讀取失敗，不是設定不見了。`,
     mcp_status_connecting: "連線中",
     mcp_status_connected: (n: number) => `已連線 (${n} 個工具)`,
     mcp_status_error: "錯誤",
@@ -1607,6 +1609,8 @@ const enRaw = {
     mcp_add_server: "+ Add Server",
     mcp_import_claude: "Import from Claude Desktop",
     mcp_no_servers: "No MCP servers configured. Click '+ Add Server' or import from Claude Desktop.",
+    mcp_load_failed: (reason: string) =>
+      `Failed to load the MCP server list (${reason}). Your config file is untouched — this is a read failure, not missing settings.`,
     mcp_status_connecting: "Connecting",
     mcp_status_connected: (n: number) => `Connected (${n} tools)`,
     mcp_status_error: "Error",
