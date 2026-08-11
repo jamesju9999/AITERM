@@ -191,16 +191,16 @@ jobs:
         run: |
           cargo test --target ${{ matrix.target }} --no-run
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # 只給 lib 的單元測試執行檔。它是唯一把 muda 連進去、因此需要
-          # comctl32 v6 的一個：tests/ 底下的整合測試執行檔在這個修法之前的
-          # master 上本來就跑得好好的（沒有任何 manifest），證明它們不需要。
-          # 放給全部反而是不必要地改動 34 個行程的啟動內容。
-          $exes = @(Get-ChildItem "target/${{ matrix.target }}/debug/deps/aiterm_lib-*.exe")
-          if ($exes.Count -eq 0) { throw "沒有找到 lib 測試執行檔，manifest 會放不到位" }
+          # 放給全部測試執行檔，不要試圖挑「只有需要的那些」：曾經縮成只給
+          # lib 的單元測試 exe，結果 bridge_end_to_end 立刻以 0xC0000139 死掉
+          # ——它走到 bridge → chatgpt_web → tauri webview，同樣連進了 muda。
+          # 哪些 exe 會連進去是連結器的決定，不是可以從測試名稱看出來的。
+          $exes = @(Get-ChildItem "target/${{ matrix.target }}/debug/deps/*.exe")
+          if ($exes.Count -eq 0) { throw "沒有找到任何測試執行檔，manifest 會放不到位" }
           foreach ($e in $exes) {
             Copy-Item windows-tests.manifest "$($e.FullName).manifest" -Force
           }
-          Write-Host "已為 $($exes.Count) 個 lib 測試執行檔放置 side-by-side manifest"
+          Write-Host "已為 $($exes.Count) 個測試執行檔放置 side-by-side manifest"
           cargo test --target ${{ matrix.target }}
 
       - name: Rust tests
