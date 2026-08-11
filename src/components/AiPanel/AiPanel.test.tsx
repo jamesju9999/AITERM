@@ -20,12 +20,17 @@ const aiChatRejectAt = new Map<number, unknown>();
 const aiChatHold: { value: Promise<never> | null } = { value: null };
 // Records the `messages` array sent on each "ai_chat" invoke call, in order.
 const aiChatCalls: { role: string; content: unknown }[][] = [];
+// MCP 工具清單：預設空的（面板會顯示 "MCP OFF" 且按鈕停用），要測 MCP 按鈕
+// 的測試自己 push 幾個進來。
+const mcpTools: { name: string }[] = [];
+// 面板讀了幾次設定 — 用來驗「每次開啟都重讀」。
+const configCalls = { n: 0 };
 
 const listenMock = vi.fn().mockResolvedValue(() => {});
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (cmd: string, payload?: { messages?: { role: string; content: unknown }[] }) => {
-    if (cmd === "get_config") return Promise.resolve(DEFAULT_CONFIG);
-    if (cmd === "get_mcp_tools") return Promise.resolve([]);
+    if (cmd === "get_config") { configCalls.n++; return Promise.resolve(DEFAULT_CONFIG); }
+    if (cmd === "get_mcp_tools") return Promise.resolve(mcpTools);
     if (cmd === "ai_chat") {
       aiChatCalls.push(payload?.messages ?? []);
       if (aiChatHold.value) {
@@ -70,6 +75,8 @@ beforeEach(() => {
   aiChatQueue.length = 0;
   aiChatRejectAt.clear();
   aiChatCalls.length = 0;
+  mcpTools.length = 0;
+  configCalls.n = 0;
   listenMock.mockClear();
   listenMock.mockResolvedValue(() => {});
 });
@@ -435,6 +442,110 @@ describe("AiPanel", () => {
     expect(aiChatCalls.length).toBe(2);
   });
 
+  describe("模式說明列", () => {
+    function renderPanel(isOpen = true) {
+      return render(
+        <AiPanel
+          sessionId="s1"
+          isOpen={isOpen}
+          providerName="Ollama"
+          onClose={vi.fn()}
+          onExecuteCommand={vi.fn()}
+          onOpenProviderPalette={vi.fn()}
+        />,
+      );
+    }
+
+    it("切換模式時說明列跟著換", async () => {
+      mcpTools.push({ name: "read_file" }, { name: "write_file" });
+      renderPanel();
+
+      // 預設：MCP 開著且有工具 → MCP 模式
+      expect(await screen.findByText(/2 個 MCP 工具/)).toBeInTheDocument();
+
+      // 關掉 MCP → 退回建議模式
+      await userEvent.click(screen.getByRole("button", { name: /MCP \(2\)/ }));
+      expect(screen.getByText(/只會建議指令/)).toBeInTheDocument();
+
+      // 開 Agent → 換成自動執行，並明講不使用 MCP
+      await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
+      expect(screen.getByText(/不使用 MCP 工具/)).toBeInTheDocument();
+    });
+
+    /**
+     * Agent 跑起來之後由 .aiterm-agent-status 接手（它有步驟數與中止鈕），
+     * 兩條同時堆在輸入框上只是噪音。
+     */
+    it("Agent 執行中時讓位給狀態列", async () => {
+      aiChatQueue.push({ content: "<cmd>ls</cmd>" });
+      renderPanel();
+
+      await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
+      expect(screen.getByText(/不使用 MCP 工具/)).toBeInTheDocument();
+
+      const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+      await userEvent.type(textbox, "列出檔案");
+      await userEvent.keyboard("{Enter}");
+
+      await waitFor(() => expect(document.querySelector(".aiterm-agent-status")).not.toBeNull());
+      expect(screen.queryByText(/不使用 MCP 工具/)).not.toBeInTheDocument();
+    });
+
+    /**
+     * max_agent_steps 原本只在掛載時讀一次，而面板是常駐不卸載的——使用者在
+     * 設定裡改了步數，這行字（跟狀態列）都還顯示舊值，要重開 app 才會更新。
+     */
+    it("每次開啟面板都重讀設定", async () => {
+      const { rerender } = renderPanel(false);
+      const before = configCalls.n;
+
+      rerender(
+        <AiPanel
+          sessionId="s1"
+          isOpen={true}
+          providerName="Ollama"
+          onClose={vi.fn()}
+          onExecuteCommand={vi.fn()}
+          onOpenProviderPalette={vi.fn()}
+        />,
+      );
+
+      await waitFor(() => expect(configCalls.n).toBeGreaterThan(before));
+    });
+  });
+
+  /**
+   * Agent 迴圈是 `invokeAiChat(..., use_mcp=false, ...)` 寫死的，handleSubmit 走
+   * agentMode 那條時也根本不讀 useMcp——所以 Agent 開著時 MCP 完全沒有作用。
+   * 但按鈕原本照樣亮綠色寫著「MCP (n)」、tooltip 還說「MCP 開啟」，看起來像
+   * 兩個都生效。這裡要求 UI 誠實反映它被忽略了。
+   */
+  it("Agent 模式開啟時，MCP 按鈕要停用並說明原因", async () => {
+    mcpTools.push({ name: "read_file" }, { name: "write_file" });
+
+    render(
+      <AiPanel
+        sessionId="s1"
+        isOpen={true}
+        providerName="Ollama"
+        onClose={vi.fn()}
+        onExecuteCommand={vi.fn()}
+        onOpenProviderPalette={vi.fn()}
+      />,
+    );
+
+    const mcpBtn = await screen.findByRole("button", { name: /MCP \(2\)/ });
+    expect(mcpBtn).toBeEnabled();
+    expect(mcpBtn.className).toMatch(/--on/);
+
+    await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
+
+    expect(mcpBtn).toBeDisabled();
+    expect(mcpBtn.getAttribute("title")).toMatch(/Agent/);
+    // 只是停用還不夠——留著亮綠的「開啟」樣式，看起來仍然像正在生效。
+    expect(mcpBtn.className).not.toMatch(/--on/);
+  });
+
   /**
    * 面板預設只有 420px，長回答（尤其帶表格或程式碼的）讀起來很擠。拖寬要一路
    * 拖、而且會蓋掉終端機的寬度設定，所以給一顆「放大」直接吃滿寬。
@@ -470,6 +581,16 @@ describe("AiPanel", () => {
       await userEvent.click(screen.getByTitle("放大面板"));
       await userEvent.click(screen.getByTitle("縮小面板"));
       expect(panel.style.width).toBe(before);
+    });
+
+    // 圖示本身很細，光靠它看不出來現在是不是放大狀態（實測回報「不夠明顯」）。
+    // 按鈕自己也要亮起來。
+    it("展開中時按鈕要呈現啟用樣式", async () => {
+      renderPanel();
+      expect(screen.getByTitle("放大面板").className).not.toMatch(/--active/);
+
+      await userEvent.click(screen.getByTitle("放大面板"));
+      expect(screen.getByTitle("縮小面板").className).toMatch(/--active/);
     });
 
     // 滿版時左邊已經沒有終端機可以讓出來，留著拖曳手把只會讓人拖出一個

@@ -5,6 +5,7 @@ import {
 import { readFileAsAttachment, contentToDisplayString } from "../../types/attachment";
 import type { Attachment } from "../../types/attachment";
 import { useMcpChat } from "../../hooks/useMcpChat";
+import { ModeHint, type PanelMode } from "./ModeHint";
 import { invokeAiChat, formatAiError, type AiError, type ChatMessage as AiChatMessage } from "../../ipc/ai";
 import { getSessionCwd, listDirectory } from "../../ipc/fs";
 import { getPtyRecentOutput, writePty } from "../../ipc/pty";
@@ -14,7 +15,7 @@ import { languageDirective } from "../../lib/i18n";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
 import { MessageList } from "./MessageList";
-import { ZapIcon, WrenchIcon } from "../Icons";
+import { ZapIcon, WrenchIcon, MaximizeIcon, MinimizeIcon } from "../Icons";
 import "./styles.css";
 
 const IS_WINDOWS = navigator.platform.toLowerCase().startsWith("win");
@@ -163,7 +164,10 @@ export function AiPanel({
   const agentAbortRef = useRef(false);
   const [maxAgentSteps, setMaxAgentSteps] = useState<number>(5);
 
+  // 每次開啟都重讀：面板是常駐不卸載的，只在掛載時讀一次的話，使用者在設定
+  // 裡改了 max_agent_steps（或裝了新的 MCP server），要重開 app 才會反映。
   useEffect(() => {
+    if (!isOpen) return;
     let cancelled = false;
     const load = async () => {
       const [cfg, tools] = await Promise.all([getConfig(), getMcpTools()]);
@@ -177,7 +181,7 @@ export function AiPanel({
     };
     load().catch(() => {});
     return () => { cancelled = true; };
-  }, []);
+  }, [isOpen]);
 
   useEffect(() => {
     try {
@@ -395,6 +399,11 @@ Rules:
     }
   };
 
+  // MCP 是否真的會被用到。送出時與模式說明列共用同一個判斷——拆成兩份寫的話
+  // 遲早會有一邊漏改，畫面就會說謊。
+  const mcpActive = useMcp && mcpEnabled && mcpToolCount > 0;
+  const mode: PanelMode = agentMode ? "agent" : mcpActive ? "mcp" : "suggest";
+
   const handleSubmit = () => {
     const text = input.trim();
     if ((!text && attachments.length === 0) || chat.isStreaming || agentRunning) return;
@@ -404,7 +413,7 @@ Rules:
     if (agentMode) {
       void submitAgent(text);
     } else {
-      void chat.send(text, useMcp && mcpEnabled && mcpToolCount > 0, undefined, currentAttachments.length > 0 ? currentAttachments : undefined);
+      void chat.send(text, mcpActive, undefined, currentAttachments.length > 0 ? currentAttachments : undefined);
     }
   };
 
@@ -451,11 +460,11 @@ Rules:
         <div style={{ display: "flex", gap: "8px" }}>
           <button
             type="button"
-            className="aiterm-ai-panel-clear-btn"
+            className={`aiterm-ai-panel-clear-btn aiterm-ai-panel-icon-btn${expanded ? " aiterm-ai-panel-clear-btn--active" : ""}`}
             onClick={() => setExpanded((e) => !e)}
             title={expanded ? "縮小面板" : "放大面板"}
           >
-            {expanded ? "⤡" : "⤢"}
+            {expanded ? <MinimizeIcon size={15} /> : <MaximizeIcon size={15} />}
           </button>
           <button
             type="button"
@@ -545,6 +554,11 @@ Rules:
         onRetry={chat.resend}
       />
 
+      {/* Agent 跑起來之後由狀態列接手（它有步驟數與中止鈕），兩條堆在一起是噪音。 */}
+      {!agentRunning && (
+        <ModeHint mode={mode} maxAgentSteps={maxAgentSteps} mcpToolCount={mcpToolCount} />
+      )}
+
       {agentRunning && (
         <div className="aiterm-agent-status">
           <span
@@ -612,9 +626,17 @@ Rules:
           {mcpEnabled && (
             <button
               type="button"
-              className={`aiterm-mcp-toggle${useMcp && mcpToolCount > 0 ? " aiterm-mcp-toggle--on" : ""}`}
-              title={mcpToolCount === 0 ? t.mcp_toggle_no_servers : (useMcp ? "MCP 開啟" : "MCP 關閉")}
-              disabled={mcpToolCount === 0 || isDisabled}
+              // Agent 迴圈是 use_mcp=false 寫死的（見 runAgentLoop），MCP 在
+              // Agent 模式下不會生效——按鈕就不該繼續亮著說自己開啟。
+              className={`aiterm-mcp-toggle${useMcp && mcpToolCount > 0 && !agentMode ? " aiterm-mcp-toggle--on" : ""}`}
+              title={
+                agentMode
+                  ? "Agent 模式下不使用 MCP 工具（AI 只透過終端機指令操作）"
+                  : mcpToolCount === 0
+                    ? t.mcp_toggle_no_servers
+                    : (useMcp ? "MCP 開啟" : "MCP 關閉")
+              }
+              disabled={agentMode || mcpToolCount === 0 || isDisabled}
               onClick={() => setUseMcp((v) => !v)}
             >
               <WrenchIcon size={12} />
