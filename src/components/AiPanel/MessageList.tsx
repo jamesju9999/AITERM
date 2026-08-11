@@ -4,6 +4,7 @@ import type { AiError } from "../../ipc/ai";
 import { formatAiError } from "../../ipc/ai";
 import type { McpChatMessage } from "../../hooks/useMcpChat";
 import { MessageBubble } from "./MessageBubble";
+import { truncateAtCmdTag } from "../../lib/cmdParser";
 import { useLocale } from "../../contexts/LocaleContext";
 
 interface MessageListProps {
@@ -89,6 +90,8 @@ export function MessageList({
 }: MessageListProps) {
   const { t } = useLocale();
   const listRef = useRef<HTMLDivElement>(null);
+  // 串流途中不顯示 <cmd>——它會在最終訊息裡以 CmdTag 卡片出現。
+  const streamPreview = truncateAtCmdTag(streamBuf);
 
   useEffect(() => {
     const el = listRef.current;
@@ -130,7 +133,7 @@ export function MessageList({
           沒在運作。這段空窗在 ChatGPT Web 這條路徑上特別長：要先跑 sentinel
           的兩段握手與工作量證明，模型才開始吐字。
           有字之後就交給下面的串流氣泡，不要兩個同時出現。 */}
-      {(thinkingLabel || isStreaming) && !streamBuf && (
+      {(thinkingLabel || isStreaming) && !streamPreview && (
         <div className="aiterm-bubble aiterm-bubble-assistant aiterm-thinking" aria-busy="true">
           <span className="aiterm-thinking-dots" aria-hidden="true">
             <i />
@@ -140,10 +143,10 @@ export function MessageList({
           <span className="aiterm-thinking-label">{thinkingLabel ?? t.ai_thinking}</span>
         </div>
       )}
-      {isStreaming && streamBuf && (
+      {isStreaming && streamPreview && (
         <MessageBubble
           role="assistant"
-          content={streamBuf}
+          content={streamPreview}
           onExecuteCommand={onExecuteCommand}
           streaming
         />

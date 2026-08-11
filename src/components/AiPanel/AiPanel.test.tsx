@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
 
@@ -358,6 +358,42 @@ describe("AiPanel", () => {
     await waitFor(() => {
       expect(document.querySelector(".aiterm-thinking")).not.toBeNull();
     });
+  });
+
+  /**
+   * Agent 迴圈跟一般對話走同一個 sessionId，後端的 `ai-stream` 事件本來就一直
+   * 在送，`useMcpChat` 也一直在收——但 MessageList 的 isStreaming 只綁
+   * chat.isStreaming，Agent 不經過它，所以字進來了卻沒人畫，使用者看到的是
+   * 「想很久然後整段一次跳出來」（實測回報）。
+   */
+  it("Agent 等 AI 回覆時，串流的字要即時出現在對話框", async () => {
+    aiChatHold.value = new Promise(() => {});
+
+    render(
+      <AiPanel
+        sessionId="s1"
+        isOpen={true}
+        providerName="Ollama"
+        onClose={vi.fn()}
+        onExecuteCommand={vi.fn()}
+        onOpenProviderPalette={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(textbox, "列出檔案");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(document.querySelector(".aiterm-thinking")).not.toBeNull());
+
+    const streamCall = listenMock.mock.calls.find((c) => c[0] === "ai-stream");
+    expect(streamCall, "useMcpChat 應該有註冊 ai-stream 監聽").toBeDefined();
+    const emit = streamCall![1] as (e: { payload: unknown }) => void;
+    act(() => {
+      emit({ payload: { session_id: "s1", kind: "chat", delta: "我先確認目錄內容", done: false } });
+    });
+
+    await waitFor(() => expect(screen.getByText("我先確認目錄內容")).toBeInTheDocument());
   });
 
   it("Agent Mode surfaces the error and stops when the follow-up AI call fails", async () => {

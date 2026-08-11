@@ -512,11 +512,13 @@ Rules:
       <MessageList
         messages={chat.messages}
         streamBuf={chat.streamBuf}
-        isStreaming={chat.isStreaming}
-        // Agent 迴圈不經過 chat.isStreaming（它自己呼叫 invokeAiChat），所以
-        // 要另外接。**兩個階段都要有指示**：等 AI 想、以及等指令跑完——
-        // 後者原本對話框是全靜的，使用者只看到氣泡消失然後乾等，回報成
-        // 「空檔很長」。
+        // Agent 迴圈不經過 chat.isStreaming（它自己呼叫 invokeAiChat），但它用
+        // 的是同一個 sessionId，所以 useMcpChat 的監聽一直有在收 delta——只是
+        // 沒人畫。不把思考階段算進來的話，Agent 模式就是「想很久然後整段一次
+        // 跳出來」。
+        isStreaming={chat.isStreaming || (agentRunning && agentPhase === "thinking")}
+        // **兩個階段都要有指示**：等 AI 想、以及等指令跑完——後者原本對話框
+        // 是全靜的，使用者只看到氣泡消失然後乾等，回報成「空檔很長」。
         thinkingLabel={
           agentRunning
             ? agentPhase === "thinking"

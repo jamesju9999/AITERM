@@ -57,3 +57,35 @@ describe("MessageList — 等待第一個字時的指示", () => {
     expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
   });
 });
+
+/**
+ * Agent 的回覆會夾帶 `<cmd>` 標籤。串流氣泡跟最終訊息用的是同一個
+ * MessageBubble，所以不處理的話串到一半就會冒出一顆可以按的 ▶——而 Agent
+ * 等一下自己也會跑同一條，使用者按下去就執行兩次。指令交給最終訊息呈現。
+ */
+describe("MessageList — 串流中的 <cmd>", () => {
+  it("串流途中不顯示指令，只顯示它前面的說明", () => {
+    const { container } = renderList({
+      isStreaming: true,
+      streamBuf: "我先確認目錄內容：<cmd>ls -la</cmd>",
+    });
+    expect(screen.getByText("我先確認目錄內容：")).toBeInTheDocument();
+    expect(container.querySelector(".aiterm-cmd-tag")).toBeNull();
+    expect(screen.queryByText(/ls -la/)).not.toBeInTheDocument();
+  });
+
+  it("目前串到的只有指令時，指示要留著而不是換成空氣泡", () => {
+    const { container } = renderList({ isStreaming: true, streamBuf: "<cmd>ls -la" });
+    expect(screen.getByText(/思考中|Thinking/)).toBeInTheDocument();
+    expect(container.querySelector(".aiterm-bubble-assistant--copyable")).toBeNull();
+  });
+
+  it("最終訊息仍然要把指令渲染成可執行的 CmdTag", () => {
+    const { container } = renderList({
+      isStreaming: false,
+      messages: [{ role: "assistant", content: "我先確認目錄內容：<cmd>ls -la</cmd>" }],
+    });
+    expect(container.querySelector(".aiterm-cmd-tag")).not.toBeNull();
+    expect(screen.getByText("ls -la")).toBeInTheDocument();
+  });
+});

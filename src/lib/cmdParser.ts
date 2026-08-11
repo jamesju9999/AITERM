@@ -7,6 +7,28 @@ export type CmdPart =
  * Uses a non-greedy regex so nested tags yield the innermost match first.
  * Unclosed tags are treated as plain text.
  */
+const CMD_OPEN = "<cmd>";
+
+/**
+ * Cut streaming text at the first `<cmd>` so the tag never reaches the UI.
+ *
+ * Mid-stream the tag is half-arrived, so `parseCmdTags` either shows it as raw
+ * text (no closing tag yet) or turns it into a clickable ▶ — which the Agent is
+ * about to run itself, so a click would execute it twice. The command belongs
+ * to the final message, not the live preview.
+ *
+ * Also drops a trailing partial opening tag (`<`, `<c`, `<cm`, …), since the
+ * tag is assembled one delta at a time.
+ */
+export function truncateAtCmdTag(text: string): string {
+  const idx = text.indexOf(CMD_OPEN);
+  if (idx >= 0) return text.slice(0, idx);
+  for (let len = CMD_OPEN.length - 1; len > 0; len--) {
+    if (text.endsWith(CMD_OPEN.slice(0, len))) return text.slice(0, text.length - len);
+  }
+  return text;
+}
+
 export function parseCmdTags(text: string): CmdPart[] {
   if (text === "") return [];
   const parts: CmdPart[] = [];
