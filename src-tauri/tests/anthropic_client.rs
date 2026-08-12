@@ -4,7 +4,7 @@
 
 use aiterm_lib::ai::{
     anthropic::AnthropicClient, AiError, AiProvider, ChatMessage, EnvSnapshot,
-    GenerateChunk, GenerateRequest, GenerateWithToolsResult, QueryMode,
+    GenerateChunk, GenerateRequest, GenerateWithToolsResult, QueryMode, ToolFallbackReason,
 };
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -754,8 +754,12 @@ async fn oauth_out_of_extra_usage_with_tools_maps_to_tool_calling_unsupported() 
     };
 
     assert!(
-        matches!(err, AiError::ToolCallingUnsupported),
-        "應對映成 ToolCallingUnsupported 以觸發既有的 fallback，實際是 {err:?}"
+        matches!(
+            err,
+            AiError::ToolCallingUnsupported { reason: ToolFallbackReason::SubscriptionBilling }
+        ),
+        "原因要帶出來：這不是「模型不支援工具」而是「訂閱憑證的計費歸屬」，\
+         兩者對使用者該講的話完全不同。實際是 {err:?}"
     );
 }
 
@@ -779,7 +783,7 @@ async fn api_key_out_of_usage_stays_an_error() {
     };
 
     assert!(
-        !matches!(err, AiError::ToolCallingUnsupported),
+        !matches!(err, AiError::ToolCallingUnsupported { .. }),
         "API key 用戶的餘額不足是真錯誤，不可以偽裝成不支援工具"
     );
 }
@@ -803,5 +807,5 @@ async fn oauth_other_400_is_not_swallowed() {
         Ok(_) => panic!("expected an error"),
     };
 
-    assert!(!matches!(err, AiError::ToolCallingUnsupported), "不相干的 400 不該被當成不支援工具");
+    assert!(!matches!(err, AiError::ToolCallingUnsupported { .. }), "不相干的 400 不該被當成不支援工具");
 }

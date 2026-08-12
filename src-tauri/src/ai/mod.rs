@@ -55,8 +55,21 @@ pub enum AiError {
     #[error("invalid input: {reason}")]
     InvalidInput { reason: String },
 
-    #[error("Provider does not support tool calling")]
-    ToolCallingUnsupported,
+    #[error("Provider cannot use native tool calling: {reason:?}")]
+    ToolCallingUnsupported { reason: ToolFallbackReason },
+}
+
+/// 為什麼改用「把工具說明寫進提示詞」的相容模式。
+///
+/// 兩者對使用者該講的話完全不同：一個是模型天生做不到、無解；另一個是這張憑證
+/// 的計費歸屬問題、加值就能用原生模式。混為一談會讓人以為 Claude 不會工具呼叫。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolFallbackReason {
+    /// 模型或供應商本身沒有原生工具呼叫。
+    Unsupported,
+    /// 憑證可用，但帶工具的請求會被算到另一個計費項目，而該項目餘額不足。
+    SubscriptionBilling,
 }
 
 /// Environment snapshot sent to the AI as context.

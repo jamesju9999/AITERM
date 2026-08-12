@@ -145,7 +145,9 @@ impl AiProvider for AnthropicClient {
                 log::warn!(
                     "Anthropic 訂閱憑證帶工具被計入 API credits（餘額不足），改用系統提示注入的相容模式"
                 );
-                return Err(AiError::ToolCallingUnsupported);
+                return Err(AiError::ToolCallingUnsupported {
+                    reason: crate::ai::ToolFallbackReason::SubscriptionBilling,
+                });
             }
             return Err(AiError::Network {
                 message: format!("http {}: {}", status.as_u16(), truncate(&body_text, 300)),

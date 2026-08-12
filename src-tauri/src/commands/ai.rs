@@ -290,6 +290,13 @@ pub struct AiChatReply {
     pub content: Option<String>,
     pub tool_calls: Vec<crate::ai::AiToolCall>,
     pub tool_calling_unsupported: bool,
+    /// 降級的原因。`None` 代表沒有降級。
+    ///
+    /// 光靠 `tool_calling_unsupported` 這個布林，畫面只能講「此供應商無法使用
+    /// 原生工具呼叫」——對 Claude 訂閱那種計費歸屬問題來說那句話是錯的，會讓
+    /// 使用者以為 Claude 不會工具呼叫。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_fallback_reason: Option<crate::ai::ToolFallbackReason>,
     /// Raw tool_calls JSON from the provider response, verbatim.
     /// Gemini thinking-mode models require this to be echoed back in conversation history.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -368,13 +375,20 @@ pub async fn ai_chat(
                 if chunk.done { break; }
             }
 
-            return match join.await {
+            let joined = join.await;
+            // 為什麼降級要能傳到畫面上——「模型做不到」跟「這張憑證的計費歸屬」
+            // 對使用者是兩件完全不同的事，該講的話也完全不同。
+            let fallback_reason = match &joined {
+                Ok(Err(AiError::ToolCallingUnsupported { reason })) => *reason,
+                _ => crate::ai::ToolFallbackReason::Unsupported,
+            };
+            return match joined {
                 Ok(Ok(crate::ai::GenerateWithToolsResult::ToolCalls { calls, raw })) =>
-                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, raw_tool_calls: raw }),
+                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: raw }),
                 Ok(Ok(crate::ai::GenerateWithToolsResult::Text(content))) =>
-                    Ok(AiChatReply { content: Some(content), tool_calls: vec![], tool_calling_unsupported: false, raw_tool_calls: None }),
+                    Ok(AiChatReply { content: Some(content), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None }),
                 Ok(Ok(crate::ai::GenerateWithToolsResult::Unsupported)) |
-                Ok(Err(AiError::ToolCallingUnsupported)) => {
+                Ok(Err(AiError::ToolCallingUnsupported { .. })) => {
                     // System prompt fallback: inject tool descriptions and re-call generate()
                     let tool_injection = build_tool_prompt_injection(&tools_for_fallback);
                     let mut fallback_req = req.clone();
@@ -419,9 +433,9 @@ pub async fn ai_chat(
                     // tool_calling_unsupported=true：讓前端知道這一輪是降級跑的，
                     // 不要靜默發生。
                     if let Some(calls) = parse_tool_calls_from_text(&buf2) {
-                        Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: true, raw_tool_calls: None })
+                        Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: true, tool_fallback_reason: Some(fallback_reason), raw_tool_calls: None })
                     } else {
-                        Ok(AiChatReply { content: Some(buf2), tool_calls: vec![], tool_calling_unsupported: true, raw_tool_calls: None })
+                        Ok(AiChatReply { content: Some(buf2), tool_calls: vec![], tool_calling_unsupported: true, tool_fallback_reason: Some(fallback_reason), raw_tool_calls: None })
                     }
                 }
                 Ok(Err(e)) => Err(e),
@@ -453,7 +467,7 @@ pub async fn ai_chat(
         Err(join_err) => return Err(AiError::Network { message: join_err.to_string() }),
     }
 
-    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, raw_tool_calls: None })
+    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None })
 }
 
 /// Build the tool injection suffix for providers that don't support native tool calling.
@@ -583,18 +597,18 @@ pub async fn agent_chat(
 
         return match join.await {
             Ok(Ok(crate::ai::GenerateWithToolsResult::ToolCalls { calls, raw })) =>
-                Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, raw_tool_calls: raw }),
+                Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: raw }),
             Ok(Ok(crate::ai::GenerateWithToolsResult::Text(content))) => {
                 // Model sometimes outputs tool calls in <tool_call> text format even when
                 // native function calling is available (Gemini occasionally does this).
                 if let Some(calls) = parse_tool_calls_from_text(&content) {
-                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, raw_tool_calls: None })
+                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None })
                 } else {
-                    Ok(AiChatReply { content: Some(content), tool_calls: vec![], tool_calling_unsupported: false, raw_tool_calls: None })
+                    Ok(AiChatReply { content: Some(content), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None })
                 }
             },
             Ok(Ok(crate::ai::GenerateWithToolsResult::Unsupported)) |
-            Ok(Err(AiError::ToolCallingUnsupported)) => {
+            Ok(Err(AiError::ToolCallingUnsupported { .. })) => {
                 // Fallback: inject tool descriptions into system prompt
                 let tool_injection = build_tool_prompt_injection(&tools_for_fallback);
                 let mut fallback_req = req.clone();
@@ -619,9 +633,9 @@ pub async fn agent_chat(
                 let _ = join2.await;
 
                 if let Some(calls) = parse_tool_calls_from_text(&buf2) {
-                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, raw_tool_calls: None })
+                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None })
                 } else {
-                    Ok(AiChatReply { content: Some(buf2), tool_calls: vec![], tool_calling_unsupported: false, raw_tool_calls: None })
+                    Ok(AiChatReply { content: Some(buf2), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None })
                 }
             }
             Ok(Err(e)) => Err(e),
@@ -652,7 +666,7 @@ pub async fn agent_chat(
         Err(join_err) => return Err(AiError::Network { message: join_err.to_string() }),
     }
 
-    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, raw_tool_calls: None })
+    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None })
 }
 
 #[cfg(test)]
@@ -743,6 +757,7 @@ mod tests {
                 thought_signature: None,
             }],
             tool_calling_unsupported: false,
+            tool_fallback_reason: None,
             raw_tool_calls: None,
         };
         let j = serde_json::to_value(&reply).unwrap();
@@ -756,6 +771,7 @@ mod tests {
             content: Some("hello world".into()),
             tool_calls: vec![],
             tool_calling_unsupported: false,
+            tool_fallback_reason: None,
             raw_tool_calls: None,
         };
         let j = serde_json::to_value(&reply).unwrap();

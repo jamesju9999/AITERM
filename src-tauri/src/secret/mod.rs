@@ -150,7 +150,27 @@ impl SecretStore {
         match self.entry(key)?.get_password() {
             Ok(secret) => Ok(Some(secret)),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(anyhow::anyhow!("keychain read error for {key}: {e}")),
+            Err(e) => {
+                // 「這一筆讀不到」與「根本沒有可用的憑證儲存區」是兩件事，前者要
+                // 讓使用者去看鑰匙圈授權，後者其實等於「什麼都沒設定過」——對無頭
+                // Linux 或 CI 說「讀不到已儲存的憑證」是新的誤導。
+                //
+                // 不去硬編各平台的錯誤碼（會過期、也各家不同），改用探測：拿一個
+                // 一定不存在的 key 去讀，回 NoEntry 就代表儲存區是好的。
+                if self.store_unavailable() {
+                    log::warn!("憑證儲存區不可用（{e}）——視同尚未設定");
+                    return Ok(None);
+                }
+                Err(anyhow::anyhow!("keychain read error for {key}: {e}"))
+            }
+        }
+    }
+
+    /// 憑證儲存區本身是否不可用（而不是某一筆讀不到）。
+    fn store_unavailable(&self) -> bool {
+        match Entry::new(&self.service, "__aiterm_probe_does_not_exist__") {
+            Ok(probe) => !matches!(probe.get_password(), Err(keyring::Error::NoEntry)),
+            Err(_) => true,
         }
     }
 

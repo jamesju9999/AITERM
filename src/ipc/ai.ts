@@ -12,6 +12,8 @@ export type ContentPart =
 
 export type RiskLevel = "safe" | "needs_confirm" | "dangerous" | "blocked";
 
+export type ToolFallbackReason = "unsupported" | "subscription_billing";
+
 export type AiError =
   | { kind: "not_configured" }
   /** 憑證存在但讀不出來（鑰匙圈拒絕存取等）。跟 not_configured 是兩件事。 */
@@ -51,6 +53,8 @@ export interface AiChatReply {
   content: string | null;               // null when tool_calls is non-empty
   tool_calls: AiToolCall[];             // AI-requested tool calls
   tool_calling_unsupported: boolean;    // true if provider doesn't support tools
+  /** 降級原因。`unsupported` = 模型做不到；`subscription_billing` = 憑證的計費歸屬。 */
+  tool_fallback_reason?: ToolFallbackReason | null;
 }
 
 export interface AgentToolDefinition {

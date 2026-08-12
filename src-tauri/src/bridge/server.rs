@@ -70,7 +70,7 @@ pub fn status_for(err: &AiError) -> u16 {
         // 這條路徑理論上不會從橋接的上游 adapter 冒出來（橋接不透過
         // ai::AiProvider trait），但 AiError 是窮舉 match，仍要給個
         // 合理的狀態碼：客戶端請求了目前設定無法滿足的能力。
-        AiError::ToolCallingUnsupported => 400,
+        AiError::ToolCallingUnsupported { .. } => 400,
     }
 }
 

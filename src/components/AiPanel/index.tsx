@@ -556,10 +556,14 @@ Rules:
 
       {/* 這個憑證無法使用原生工具呼叫時，後端會自動改用「工具描述注入系統提示」
           的文字協定。工具照樣能跑，但降級不該靜默發生。 */}
-      {chat.toolCallingUnsupported && (
+      {chat.toolFallbackReason && (
         <div className="aiterm-mode-hint aiterm-mode-hint--degraded">
           <span aria-hidden="true">⚠</span>
-          <span>{t.ai_tool_fallback_notice}</span>
+          <span>
+            {chat.toolFallbackReason === "subscription_billing"
+              ? t.ai_tool_fallback_billing
+              : t.ai_tool_fallback_unsupported}
+          </span>
         </div>
       )}
 

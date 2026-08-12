@@ -530,7 +530,7 @@ pub async fn run_chat(
                 });
                 return Err(AiError::Network { message: msg });
             }
-            Ok(Err(AiError::ToolCallingUnsupported)) |
+            Ok(Err(AiError::ToolCallingUnsupported { .. })) |
             Ok(Ok(GenerateWithToolsResult::Unsupported)) => {
                 let _ = app.emit("code-assistant-event", CodeAssistantEvent::FallbackMode {
                     session_id: session_id.clone(),

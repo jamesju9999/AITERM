@@ -11,7 +11,7 @@ const DEFAULT_CONFIG = {
 };
 
 // Per-command mock registry: tests can push response objects.
-const aiChatQueue: { content: string; tool_calls?: unknown[]; tool_calling_unsupported?: boolean }[] = [];
+const aiChatQueue: { content: string; tool_calls?: unknown[]; tool_calling_unsupported?: boolean; tool_fallback_reason?: string }[] = [];
 // Tests can push an error here to make the Nth "ai_chat" call (by call order,
 // interleaved with aiChatQueue) reject instead of resolve. Keyed by the 1-based
 // call index at which it should fire.
@@ -450,7 +450,7 @@ describe("AiPanel", () => {
    */
   it("降級成相容模式時要告訴使用者", async () => {
     mcpTools.push({ name: "read_file" }, { name: "write_file" });
-    aiChatQueue.push({ content: "好的", tool_calling_unsupported: true });
+    aiChatQueue.push({ content: "好的", tool_calling_unsupported: true, tool_fallback_reason: "unsupported" });
 
     render(
       <AiPanel
@@ -469,6 +469,42 @@ describe("AiPanel", () => {
 
     await waitFor(() => expect(screen.getByText("好的")).toBeInTheDocument());
     expect(screen.getByText(/相容模式/)).toBeInTheDocument();
+  });
+
+
+  /**
+   * 「此供應商無法使用原生工具呼叫」對 Claude 訂閱是**錯的**——Claude 做得到，
+   * 做不到的是「用這張訂閱憑證做工具呼叫而不被收 API 費用」。使用者看到那句話
+   * 的合理反應是「明明可以，是不是壞了」，而且它也沒說這件事其實可以解決。
+   */
+  it("訂閱計費造成的降級要講計費，不要說模型做不到", async () => {
+    mcpTools.push({ name: "read_file" });
+    aiChatQueue.push({
+      content: "好的",
+      tool_calling_unsupported: true,
+      tool_fallback_reason: "subscription_billing",
+    });
+
+    render(
+      <AiPanel
+        sessionId="s1"
+        isOpen={true}
+        providerName="Sonnet-4.5"
+        onClose={vi.fn()}
+        onExecuteCommand={vi.fn()}
+        onOpenProviderPalette={vi.fn()}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(textbox, "列出檔案");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByText("好的")).toBeInTheDocument());
+
+    const notice = screen.getByText(/相容模式/).textContent ?? "";
+    expect(notice).toMatch(/計費|credits/);
+    expect(notice).toMatch(/claude\.ai\/settings\/usage/);
+    expect(notice, "不可以說模型做不到——Claude 做得到").not.toMatch(/無法使用原生工具呼叫|不支援原生工具呼叫/);
   });
 
   it("沒有降級時不顯示那個提示", async () => {

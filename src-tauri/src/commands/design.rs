@@ -407,7 +407,7 @@ pub async fn design_chat(
     }
     let _ = crate::db::design::create_design_message(&design_db.pool, &session_id, "assistant", &buf).await;
 
-    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, raw_tool_calls: None })
+    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None })
 }
 
 #[cfg(test)]
