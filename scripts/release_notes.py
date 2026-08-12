@@ -42,8 +42,41 @@ def _neutralise_markers(subject):
     return subject.replace("-->", "--&gt;")
 
 
-def render_draft(kept):
-    """Render the changelog block body. Never returns an empty string."""
+def section_for_tag(changelog, tag):
+    """Return the CHANGELOG.md section for `tag`, or None if it has none.
+
+    A section runs from its `## <tag>` heading to the next `## ` heading. The
+    heading may carry a title after the version ("## v1.8.0 — 大改版").
+    """
+    if not changelog:
+        return None
+    changelog = changelog.replace("\r\n", "\n").replace("\r", "\n")
+    # The version must be followed by a boundary, or a query for "v1.7.1"
+    # would match the "## v1.7.12" heading (and ship the wrong section).
+    heading = re.compile(
+        r"^##\s+" + re.escape(tag) + r"(?:\s.*)?$",
+        re.MULTILINE,
+    )
+    match = heading.search(changelog)
+    if not match:
+        return None
+    rest = changelog[match.end():]
+    next_heading = re.search(r"^##\s", rest, re.MULTILINE)
+    section = rest[: next_heading.start()] if next_heading else rest
+    section = section.strip()
+    return section or None
+
+
+def render_draft(kept, changelog_section=None):
+    """Render the changelog block body. Never returns an empty string.
+
+    A CHANGELOG.md section wins over commit subjects: the notes a user reads
+    should be written and reviewed alongside the code, not retyped into the
+    GitHub web editor at release time. Falls back to commit subjects so a
+    release without a section still produces something to rewrite.
+    """
+    if changelog_section:
+        return _neutralise_markers(changelog_section)
     if not kept:
         return PLACEHOLDER
     return "\n".join(f"- {_neutralise_markers(s)}" for s in kept)
@@ -79,8 +112,12 @@ def extract_changelog(body):
 
 
 def main(argv):
-    if len(argv) != 2:
-        print("usage: release_notes.py {draft|extract}", file=sys.stderr)
+    if len(argv) not in (2, 4) or (len(argv) == 4 and argv[1] != "draft"):
+        print(
+            "usage: release_notes.py extract\n"
+            "       release_notes.py draft [<tag> <changelog-path>]",
+            file=sys.stderr,
+        )
         return 2
     # The placeholder and the extracted text are Traditional Chinese. Without
     # this, a non-UTF-8 locale turns either subcommand into a traceback with
@@ -90,7 +127,21 @@ def main(argv):
     sys.stderr.reconfigure(encoding="utf-8")
     command = argv[1]
     if command == "draft":
-        print(render_draft(filter_commits(sys.stdin.read().splitlines())))
+        section = None
+        if len(argv) == 4:
+            tag, path = argv[2], argv[3]
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    section = section_for_tag(handle.read(), tag)
+            except FileNotFoundError:
+                # 沒有 CHANGELOG.md 就退回 commit 標題——不要因此擋住發版。
+                section = None
+            if section is None:
+                print(
+                    f"CHANGELOG.md 沒有 {tag} 的段落，改用 commit 標題產生草稿",
+                    file=sys.stderr,
+                )
+        print(render_draft(filter_commits(sys.stdin.read().splitlines()), section))
         return 0
     if command == "extract":
         try:

@@ -41,6 +41,9 @@ jobs:
       - name: Test the release-notes helpers
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
+      # 更新項目優先取 CHANGELOG.md 裡對應版本的段落——那份文字隨程式碼一起
+      # review，不必每次發版在 GitHub 網頁編輯器裡重打。沒有對應段落時退回
+      # commit 標題（維持舊行為），發版不會因此被擋住。
       - name: Generate the changelog draft
         id: changelog
         env:
@@ -54,7 +57,8 @@ jobs:
           echo "range: $RANGE"
           {
             echo "list<<CHANGELOG_EOF"
-            git log --pretty=format:%s "$RANGE" | python3 scripts/release_notes.py draft
+            git log --pretty=format:%s "$RANGE" \
+              | python3 scripts/release_notes.py draft "$TAG" CHANGELOG.md
             echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"
 

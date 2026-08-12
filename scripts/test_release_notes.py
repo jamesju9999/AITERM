@@ -1,5 +1,6 @@
 import unittest
 
+import release_notes
 from release_notes import (
     END,
     START,
@@ -235,3 +236,61 @@ class CliTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SectionForTagTests(unittest.TestCase):
+    """更新項目應該能隨程式碼一起 review，而不是每次發版在網頁編輯器裡手打。
+
+    手打的代價實測過：v1.7.9 的更新項目就這樣直接長成 commit 標題
+    （`feat(ai-panel): 加入模式說明列…`），使用者看到的是開發者用語。
+    """
+
+    CHANGELOG = """# 變更記錄
+
+## v1.7.12
+
+**AI 回覆不再卡住不動**
+動用工具時不再停頓數秒才整段跳出。
+
+**錯誤訊息不再誤導**
+憑證讀不到時不再說成「尚未設定」。
+
+## v1.7.9
+
+**Agent 模式逐字串流**
+"""
+
+    def test_returns_the_section_for_the_tag(self):
+        text = release_notes.section_for_tag(self.CHANGELOG, "v1.7.12")
+        self.assertIn("AI 回覆不再卡住不動", text)
+        self.assertIn("錯誤訊息不再誤導", text)
+
+    def test_stops_at_the_next_version_heading(self):
+        text = release_notes.section_for_tag(self.CHANGELOG, "v1.7.12")
+        self.assertNotIn("Agent 模式逐字串流", text)
+
+    def test_returns_none_when_the_tag_is_absent(self):
+        self.assertIsNone(release_notes.section_for_tag(self.CHANGELOG, "v9.9.9"))
+
+    def test_tolerates_a_title_after_the_version(self):
+        text = release_notes.section_for_tag("## v1.8.0 — 大改版\n\n內容\n", "v1.8.0")
+        self.assertEqual(text, "內容")
+
+    def test_does_not_match_a_longer_version_that_starts_the_same(self):
+        # "## v1.7.1" 不可以被 "v1.7.12" 的查詢命中，反之亦然。
+        log = "## v1.7.1\n\n舊的\n\n## v1.7.12\n\n新的\n"
+        self.assertEqual(release_notes.section_for_tag(log, "v1.7.1"), "舊的")
+        self.assertEqual(release_notes.section_for_tag(log, "v1.7.12"), "新的")
+
+
+class DraftPrefersChangelogTests(unittest.TestCase):
+    def test_changelog_section_wins_over_commit_subjects(self):
+        out = release_notes.render_draft(
+            ["feat: 內部用語的 commit 標題"],
+            changelog_section="**使用者看得懂的說法**",
+        )
+        self.assertEqual(out, "**使用者看得懂的說法**")
+
+    def test_falls_back_to_commit_subjects_without_a_section(self):
+        out = release_notes.render_draft(["feat: 加了東西"], changelog_section=None)
+        self.assertEqual(out, "- feat: 加了東西")
