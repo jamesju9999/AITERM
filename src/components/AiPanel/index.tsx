@@ -555,7 +555,7 @@ Rules:
       />
 
       {/* 這個憑證無法使用原生工具呼叫時，後端會自動改用「工具描述注入系統提示」
-          的文字協定。工具照樣能跑，但降級不該靜默發生。 */}
+          的文字協定。工具照樣能跑，但切換方案不該靜默發生。 */}
       {chat.toolFallbackReason && (
         <div className="aiterm-mode-hint aiterm-mode-hint--degraded">
           <span aria-hidden="true">⚠</span>

@@ -1147,12 +1147,15 @@ const zhTW = {
     vcs_btn_comments: "檢視評論",
 
     ai_err_not_configured: "aiterm: 尚未設定 AI Provider。",
+    // 用詞刻意避開兩件事：
+    //   「相容模式」聽起來像次級品；「準確度略低」像在評價使用者的處境。
+    // 改成描述實際發生什麼（工具改由提示詞描述）與具體影響（複雜情境成功率）。
     ai_tool_fallback_unsupported:
-      "此模型不支援原生工具呼叫，已改用相容模式（把工具說明寫進提示詞）。工具仍可運作，準確度略低。",
+      "此模型沒有原生工具呼叫，已自動切換方案：工具改由提示詞描述。工具仍可正常呼叫，複雜情境的成功率會略受影響。",
     // 不要說「無法使用原生工具呼叫」——Claude 做得到，做不到的是「用這張訂閱憑證
     // 做工具呼叫而不被計入 API 費用」。而且要告訴使用者這是可以解決的。
     ai_tool_fallback_billing:
-      "此訂閱憑證在使用工具時會被計入 API credits，而目前餘額不足，已改用相容模式。工具仍可運作，準確度略低。若要改用原生工具呼叫，可到 claude.ai/settings/usage 加值。",
+      "此訂閱憑證使用工具時會計入 API credits，目前餘額不足，已自動切換方案：工具改由提示詞描述。工具仍可正常呼叫，複雜情境的成功率會略受影響。若要改用原生工具呼叫，可到 claude.ai/settings/usage 加值。",
     // 憑證是有的，只是拿不到——不要叫使用者去重設，那會害他刪掉能用的設定。
     ai_err_secret_access: (detail: string) =>
       `aiterm: 讀不到已儲存的憑證（不是沒設定）。多半是作業系統的鑰匙圈拒絕了存取——請在跳出授權視窗時選「一律允許」。原始錯誤：${detail}`,
@@ -2237,9 +2240,9 @@ const enRaw = {
 
     ai_err_not_configured: "aiterm: AI Provider is not configured.",
     ai_tool_fallback_unsupported:
-      "This model does not support native tool calling; switched to compatibility mode (tool descriptions are injected into the prompt). Tools still work, but less reliably.",
+      "This model has no native tool calling, so tools are now described in the prompt instead. Tools still work; success rates dip on more complex requests.",
     ai_tool_fallback_billing:
-      "Tool use on this subscription credential is billed to API credits, and the balance is insufficient — switched to compatibility mode. Tools still work, but less reliably. To use native tool calling, add credits at claude.ai/settings/usage.",
+      "Tool use on this subscription credential is billed to API credits and the balance is insufficient, so tools are now described in the prompt instead. Tools still work; success rates dip on more complex requests. To go back to native tool calling, add credits at claude.ai/settings/usage.",
     ai_err_secret_access: (detail: string) =>
       `aiterm: The stored credential could not be read (it is configured — just unreadable). This is usually the OS keychain denying access; choose "Always Allow" when prompted. Original error: ${detail}`,
     ai_err_ollama_failed: "aiterm: Cannot connect to Ollama. Make sure Ollama is running.",

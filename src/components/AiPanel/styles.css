@@ -786,7 +786,7 @@
   }
 }
 
-/* 降級提示：跟模式說明列同一條，但用警示色。 */
+/* 切換方案的提示：跟模式說明列同一條，但用警示色。 */
 .aiterm-mode-hint--degraded {
   border-left-color: var(--warning, #f59e0b);
   color: var(--warning, #f59e0b);

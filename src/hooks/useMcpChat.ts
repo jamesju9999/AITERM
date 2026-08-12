@@ -52,7 +52,7 @@ export function useMcpChat(sessionId: string) {
   const [messages, setMessages] = useState<McpChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamBuf, setStreamBuf] = useState("");
-  // 後端把工具呼叫降級成「注入系統提示」的文字協定時，這裡是降級的原因。
+  // 後端把工具呼叫切換成「注入系統提示」的文字協定時，這裡是切換的原因。
   // 用原因而不是布林：模型做不到、跟這張憑證的計費歸屬，是兩件該講不同話的事。
   const [toolFallbackReason, setToolFallbackReason] = useState<ToolFallbackReason | null>(null);
   const streamBufRef = useRef("");

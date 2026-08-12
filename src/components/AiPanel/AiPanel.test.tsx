@@ -448,7 +448,7 @@ describe("AiPanel", () => {
    * 注入系統提示」的文字協定，工具照樣能跑——但這不能靜默發生，使用者有權知道
    * 自己正在用比較弱的協定。
    */
-  it("降級成相容模式時要告訴使用者", async () => {
+  it("切換方案時要告訴使用者", async () => {
     mcpTools.push({ name: "read_file" }, { name: "write_file" });
     aiChatQueue.push({ content: "好的", tool_calling_unsupported: true, tool_fallback_reason: "unsupported" });
 
@@ -468,7 +468,7 @@ describe("AiPanel", () => {
     await userEvent.keyboard("{Enter}");
 
     await waitFor(() => expect(screen.getByText("好的")).toBeInTheDocument());
-    expect(screen.getByText(/相容模式/)).toBeInTheDocument();
+    expect(screen.getByText(/切換方案/)).toBeInTheDocument();
   });
 
 
@@ -477,7 +477,7 @@ describe("AiPanel", () => {
    * 做不到的是「用這張訂閱憑證做工具呼叫而不被收 API 費用」。使用者看到那句話
    * 的合理反應是「明明可以，是不是壞了」，而且它也沒說這件事其實可以解決。
    */
-  it("訂閱計費造成的降級要講計費，不要說模型做不到", async () => {
+  it("訂閱計費造成的切換要講計費，不要說模型做不到", async () => {
     mcpTools.push({ name: "read_file" });
     aiChatQueue.push({
       content: "好的",
@@ -501,13 +501,15 @@ describe("AiPanel", () => {
     await userEvent.keyboard("{Enter}");
     await waitFor(() => expect(screen.getByText("好的")).toBeInTheDocument());
 
-    const notice = screen.getByText(/相容模式/).textContent ?? "";
+    const notice = screen.getByText(/切換方案/).textContent ?? "";
     expect(notice).toMatch(/計費|credits/);
     expect(notice).toMatch(/claude\.ai\/settings\/usage/);
     expect(notice, "不可以說模型做不到——Claude 做得到").not.toMatch(/無法使用原生工具呼叫|不支援原生工具呼叫/);
+    // 不要用聽起來像次級品或在評價使用者處境的字眼。
+    expect(notice, "「相容模式」暗示次級品，「準確度略低」像在評價").not.toMatch(/相容模式|準確度較低|準確度略低/);
   });
 
-  it("沒有降級時不顯示那個提示", async () => {
+  it("沒有切換方案時不顯示那個提示", async () => {
     mcpTools.push({ name: "read_file" });
     aiChatQueue.push({ content: "好的" });
 
@@ -527,7 +529,7 @@ describe("AiPanel", () => {
     await userEvent.keyboard("{Enter}");
 
     await waitFor(() => expect(screen.getByText("好的")).toBeInTheDocument());
-    expect(screen.queryByText(/相容模式/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/切換方案/)).not.toBeInTheDocument();
   });
 
   describe("模式說明列", () => {
