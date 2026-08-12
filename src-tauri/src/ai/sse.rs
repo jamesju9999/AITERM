@@ -126,9 +126,23 @@ pub async fn consume_openai_sse_with_tools(
     let mut saw_data_prefix = false;
     let mut raw_body = String::new();
 
-    'outer: while let Some(item) = stream.next().await {
-        let bytes = item.map_err(|e| AiError::Network { message: e.to_string() })?;
-        buf.extend_from_slice(&bytes);
+    let mut stream_ended = false;
+    let mut saw_terminator = false;
+    while !stream_ended && !saw_terminator {
+        match stream.next().await {
+            Some(item) => {
+                let bytes = item.map_err(|e| AiError::Network { message: e.to_string() })?;
+                buf.extend_from_slice(&bytes);
+            }
+            None => {
+                stream_ended = true;
+                // 最後一行可能沒有換行結尾——非串流的 JSON 回應就是這樣。不補一個
+                // 換行的話，整包內容會卡在 buffer 裡永遠不被處理。
+                if !buf.is_empty() && buf.last() != Some(&b'\n') {
+                    buf.push(b'\n');
+                }
+            }
+        }
 
         loop {
             let Some(pos) = find_line_end(&buf) else { break };
@@ -148,7 +162,7 @@ pub async fn consume_openai_sse_with_tools(
                 Some(p) => { saw_data_prefix = true; p.trim() }
                 None => continue,
             };
-            if payload == "[DONE]" { break 'outer; }
+            if payload == "[DONE]" { saw_terminator = true; break; }
             let Ok(p) = serde_json::from_str::<OpenAiSsePayload>(payload) else { continue };
 
             let delta = p.delta_text();

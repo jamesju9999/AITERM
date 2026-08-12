@@ -1147,6 +1147,11 @@ const zhTW = {
     vcs_btn_comments: "檢視評論",
 
     ai_err_not_configured: "aiterm: 尚未設定 AI Provider。",
+    ai_tool_fallback_notice:
+      "此供應商無法使用原生工具呼叫，已改用相容模式（把工具說明寫進提示詞）。工具仍可運作，但準確度較低。",
+    // 憑證是有的，只是拿不到——不要叫使用者去重設，那會害他刪掉能用的設定。
+    ai_err_secret_access: (detail: string) =>
+      `aiterm: 讀不到已儲存的憑證（不是沒設定）。多半是作業系統的鑰匙圈拒絕了存取——請在跳出授權視窗時選「一律允許」。原始錯誤：${detail}`,
     ai_err_ollama_failed: "aiterm: 無法連線到 Ollama。請確認 Ollama 已啟動。",
     ai_err_network: (msg: string) => `aiterm: 網路錯誤 — ${msg}`,
     ai_err_auth_failed: "aiterm: API Key 驗證失敗。",
@@ -2227,6 +2232,10 @@ const enRaw = {
     vcs_btn_comments: "View Comments",
 
     ai_err_not_configured: "aiterm: AI Provider is not configured.",
+    ai_tool_fallback_notice:
+      "This provider cannot use native tool calling; switched to compatibility mode (tool descriptions are injected into the prompt). Tools still work, but less reliably.",
+    ai_err_secret_access: (detail: string) =>
+      `aiterm: The stored credential could not be read (it is configured — just unreadable). This is usually the OS keychain denying access; choose "Always Allow" when prompted. Original error: ${detail}`,
     ai_err_ollama_failed: "aiterm: Cannot connect to Ollama. Make sure Ollama is running.",
     ai_err_network: (msg: string) => `aiterm: Network error — ${msg}`,
     ai_err_auth_failed: "aiterm: API Key authentication failed.",

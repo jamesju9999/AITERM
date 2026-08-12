@@ -554,6 +554,15 @@ Rules:
         onRetry={chat.resend}
       />
 
+      {/* 這個憑證無法使用原生工具呼叫時，後端會自動改用「工具描述注入系統提示」
+          的文字協定。工具照樣能跑，但降級不該靜默發生。 */}
+      {chat.toolCallingUnsupported && (
+        <div className="aiterm-mode-hint aiterm-mode-hint--degraded">
+          <span aria-hidden="true">⚠</span>
+          <span>{t.ai_tool_fallback_notice}</span>
+        </div>
+      )}
+
       {/* Agent 跑起來之後由狀態列接手（它有步驟數與中止鈕），兩條堆在一起是噪音。 */}
       {!agentRunning && (
         <ModeHint mode={mode} maxAgentSteps={maxAgentSteps} mcpToolCount={mcpToolCount} />

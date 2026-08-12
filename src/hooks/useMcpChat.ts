@@ -52,6 +52,9 @@ export function useMcpChat(sessionId: string) {
   const [messages, setMessages] = useState<McpChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamBuf, setStreamBuf] = useState("");
+  // 後端把工具呼叫降級成「注入系統提示」的文字協定時為 true。工具照樣能跑，但
+  // 使用者有權知道自己在用比較弱的協定，不能靜默發生。
+  const [toolCallingUnsupported, setToolCallingUnsupported] = useState(false);
   const streamBufRef = useRef("");
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<McpChatSession[]>(loadAllSessions);
@@ -144,6 +147,8 @@ export function useMcpChat(sessionId: string) {
         const reply = await aiChat(iterHistory, sessionId, undefined, useMcp, locale);
 
         if (!mountedRef.current) break;
+
+        if (reply.tool_calling_unsupported) setToolCallingUnsupported(true);
 
         // Handle tool calls
         if (reply.tool_calls.length > 0) {
@@ -241,6 +246,7 @@ export function useMcpChat(sessionId: string) {
   const clearMessages = useCallback(() => {
     setMessages([]);
     setError(null);
+    setToolCallingUnsupported(false);
     currentSessionIdRef.current = null;
   }, []);
 
@@ -274,6 +280,7 @@ export function useMcpChat(sessionId: string) {
     isLoading,
     isStreaming: isLoading,   // alias for AiPanel compatibility
     streamBuf,
+    toolCallingUnsupported,
     error,
     sendMessage,
     send: sendMessage,        // alias for AiPanel compatibility

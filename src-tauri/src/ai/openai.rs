@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 
 use crate::ai::{
     sse::{consume_openai_sse, map_http_error},
-    AiError, AiProvider, AiToolCall, ChatMessage, GenerateChunk, GenerateRequest,
+    AiError, AiProvider, ChatMessage, GenerateChunk, GenerateRequest,
     GenerateWithToolsResult, McpToolDefinition,
 };
 
@@ -93,12 +93,13 @@ impl AiProvider for OpenAiClient {
             messages.push(msg);
         }
 
+        // 串流。原本是 stream:false，帶工具的對話因此整段一次跳出來。
         let body = serde_json::json!({
             "model": self.model,
             "messages": messages,
             "tools": tool_defs,
             "tool_choice": "auto",
-            "stream": false
+            "stream": true
         });
 
         let resp = self.client.post(self.completions_url())
@@ -115,34 +116,15 @@ impl AiProvider for OpenAiClient {
             return Err(AiError::Network { message: format!("HTTP {status}") });
         }
 
-        let json: serde_json::Value = resp.json().await
-            .map_err(|e| AiError::Network { message: e.to_string() })?;
+        let streamed = crate::ai::sse::consume_openai_sse_with_tools(resp, tx).await?;
 
-        let choice = &json["choices"][0];
-        let finish_reason = choice["finish_reason"].as_str().unwrap_or("");
-
-        if finish_reason == "tool_calls" {
-            let raw_calls = choice["message"]["tool_calls"].as_array()
-                .ok_or_else(|| AiError::ModelError {
-                    reason: "missing tool_calls".into(),
-                    raw: json.to_string(),
-                })?;
-
-            let calls: Vec<AiToolCall> = raw_calls.iter().map(|c| AiToolCall {
-                id: c["id"].as_str().unwrap_or("").to_string(),
-                tool_name: c["function"]["name"].as_str().unwrap_or("").to_string(),
-                args: serde_json::from_str(
-                    c["function"]["arguments"].as_str().unwrap_or("{}")
-                ).unwrap_or(serde_json::json!({})),
-                thought_signature: None,
-            }).collect();
-
-            return Ok(GenerateWithToolsResult::ToolCalls { calls, raw: Some(choice["message"]["tool_calls"].clone()) });
+        if !streamed.calls.is_empty() {
+            return Ok(GenerateWithToolsResult::ToolCalls {
+                calls: streamed.calls,
+                raw: streamed.raw,
+            });
         }
-
-        let content = choice["message"]["content"].as_str().unwrap_or("").to_string();
-        let _ = tx.send(GenerateChunk { delta: content.clone(), done: true, usage: None }).await;
-        Ok(GenerateWithToolsResult::Text(content))
+        Ok(GenerateWithToolsResult::Text(streamed.text))
     }
 
     async fn health_check(&self) -> Result<(), AiError> {

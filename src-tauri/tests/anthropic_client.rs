@@ -621,3 +621,187 @@ async fn generate_extracts_system_role_message_via_plain_streaming_path() {
         assert_ne!(m["role"], "system");
     }
 }
+
+// ── generate_with_tools：串流 ────────────────────────────────────────────────
+//
+// Anthropic 的工具參數是 `input_json_delta` 分片來的，要按 content block 的
+// index 對位累積，收齊才 parse 成 JSON。文字則是 `text_delta`，逐段送出。
+
+fn tool_req() -> GenerateRequest {
+    GenerateRequest {
+        system_prompt: "sys".into(),
+        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("read a.txt"), tool_call_id: None, tool_calls: None }],
+        context: EnvSnapshot { os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default() },
+        mode: QueryMode::Chat,
+        max_tokens: Some(256),
+    }
+}
+
+#[tokio::test]
+async fn generate_with_tools_streams_text_and_assembles_input_json_deltas() {
+    let server = MockServer::start().await;
+    let sse = concat!(
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"我看一下\"}}\n\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"那個檔案\"}}\n\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_9\",\"name\":\"read_file\",\"input\":{}}}\n\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"pa\"}}\n\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"th\\\":\\\"a.txt\\\"}\"}}\n\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = AnthropicClient::with_base_url("k".into(), "claude-sonnet-4-5".into(), server.uri());
+    let (tx, mut rx) = mpsc::channel::<GenerateChunk>(32);
+    let result = client.generate_with_tools(tool_req(), vec![], tx).await.expect("ok");
+
+    let mut deltas = Vec::new();
+    while let Some(c) = rx.recv().await {
+        if !c.delta.is_empty() { deltas.push(c.delta); }
+        if c.done { break; }
+    }
+    assert!(deltas.len() >= 2, "文字應逐段送出，實際 {} 段：{deltas:?}", deltas.len());
+    assert_eq!(deltas.concat(), "我看一下那個檔案");
+
+    match result {
+        GenerateWithToolsResult::ToolCalls { calls, raw } => {
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].id, "toolu_9");
+            assert_eq!(calls[0].tool_name, "read_file");
+            assert_eq!(calls[0].args["path"], "a.txt", "input_json_delta 的片段要拼回物件");
+            // 既有契約：raw 要含文字區塊與工具區塊兩者。
+            let blocks = raw.expect("raw").as_array().expect("array").clone();
+            assert_eq!(blocks.len(), 2);
+            assert_eq!(blocks[0]["type"], "text");
+            assert_eq!(blocks[0]["text"], "我看一下那個檔案");
+            assert_eq!(blocks[1]["type"], "tool_use");
+            assert_eq!(blocks[1]["id"], "toolu_9");
+        }
+        _ => panic!("expected ToolCalls"),
+    }
+}
+
+#[tokio::test]
+async fn generate_with_tools_streams_plain_text_answer() {
+    let server = MockServer::start().await;
+    let sse = concat!(
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"這個\"}}\n\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"專案\"}}\n\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = AnthropicClient::with_base_url("k".into(), "claude-sonnet-4-5".into(), server.uri());
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(32);
+    let result = client.generate_with_tools(tool_req(), vec![], tx).await.expect("ok");
+    match result {
+        GenerateWithToolsResult::Text(t) => assert_eq!(t, "這個專案"),
+        _ => panic!("expected Text"),
+    }
+}
+
+// ── 訂閱 OAuth + 工具呼叫的計費落差 ──────────────────────────────────────────
+//
+// 實測（Claude Pro 訂閱、credits 餘額 $0）：請求只要帶 `tools`，Anthropic 就回
+// 400「You're out of extra usage」——那些請求被算到 API credits 那個桶，不是訂閱
+// 額度（訂閱用量頁顯示 0%）。拿掉 tools 的同一組請求則正常走訂閱。
+//
+// 變數已用三次 A/B 切乾淨：串流與 max_tokens 都無關，唯一因素是 tools 的有無。
+//
+// 這等於「這個憑證在此情境下無法使用原生工具呼叫」，正是 ToolCallingUnsupported
+// 的語意——回這個錯誤，上層現成的「工具描述注入系統提示」fallback 就會接手，
+// 而 fallback 送出的請求不帶 tools，因此回到訂閱計費。
+
+const OUT_OF_USAGE_BODY: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"You're out of extra usage. Add more at claude.ai/settings/usage and keep going."},"request_id":"req_x"}"#;
+
+#[tokio::test]
+async fn oauth_out_of_extra_usage_with_tools_maps_to_tool_calling_unsupported() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(400).set_body_string(OUT_OF_USAGE_BODY))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = AnthropicClient::with_oauth("oat-token".into(), "claude-sonnet-4-5".into(), server.uri());
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
+    let err = match client.generate_with_tools(tool_req(), vec![], tx).await {
+        Err(e) => e,
+        Ok(_) => panic!("expected an error"),
+    };
+
+    assert!(
+        matches!(err, AiError::ToolCallingUnsupported),
+        "應對映成 ToolCallingUnsupported 以觸發既有的 fallback，實際是 {err:?}"
+    );
+}
+
+// API key（非訂閱）用戶付的是 API 額度，這個訊息對他們就是真的餘額不足——
+// 不能一併吞掉，否則會用一個假的「不支援工具」蓋掉真正的計費問題。
+#[tokio::test]
+async fn api_key_out_of_usage_stays_an_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(400).set_body_string(OUT_OF_USAGE_BODY))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = AnthropicClient::with_base_url("sk-ant-key".into(), "claude-sonnet-4-5".into(), server.uri());
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
+    let err = match client.generate_with_tools(tool_req(), vec![], tx).await {
+        Err(e) => e,
+        Ok(_) => panic!("expected an error"),
+    };
+
+    assert!(
+        !matches!(err, AiError::ToolCallingUnsupported),
+        "API key 用戶的餘額不足是真錯誤，不可以偽裝成不支援工具"
+    );
+}
+
+// 其他 400（例如請求真的畸形）必須照原樣是錯誤，不能被這條規則誤吞。
+#[tokio::test]
+async fn oauth_other_400_is_not_swallowed() {
+    let server = MockServer::start().await;
+    let body = r#"{"type":"error","error":{"type":"invalid_request_error","message":"messages: at least one message is required"}}"#;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(400).set_body_string(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = AnthropicClient::with_oauth("oat-token".into(), "claude-sonnet-4-5".into(), server.uri());
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
+    let err = match client.generate_with_tools(tool_req(), vec![], tx).await {
+        Err(e) => e,
+        Ok(_) => panic!("expected an error"),
+    };
+
+    assert!(!matches!(err, AiError::ToolCallingUnsupported), "不相干的 400 不該被當成不支援工具");
+}

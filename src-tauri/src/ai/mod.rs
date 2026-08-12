@@ -20,6 +20,7 @@ pub mod copilot;
 pub mod ollama;
 pub mod openai;
 pub mod router;
+pub mod tool_markup;
 pub(crate) mod sse;
 
 use std::path::PathBuf;
@@ -31,6 +32,13 @@ use thiserror::Error;
 pub enum AiError {
     #[error("OPENAI_API_KEY environment variable is not set")]
     NotConfigured,
+
+    /// 憑證存在但讀不出來（macOS keychain 拒絕存取、鑰匙圈鎖定…）。
+    ///
+    /// 跟 `NotConfigured` 是兩件事：那個代表「沒設定過」，這個代表「設定過但
+    /// 現在拿不到」。壓成同一種的話，畫面會叫使用者去重設一個其實好好的供應商。
+    #[error("cannot read stored credential: {message}")]
+    SecretAccess { message: String },
 
     #[error("network error: {message}")]
     Network { message: String },

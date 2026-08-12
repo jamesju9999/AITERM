@@ -4,7 +4,7 @@
 
 use aiterm_lib::ai::{
     ollama::OllamaClient, AiError, AiProvider, ChatMessage, EnvSnapshot,
-    GenerateChunk, GenerateRequest, QueryMode,
+    GenerateChunk, GenerateRequest, GenerateWithToolsResult, QueryMode,
 };
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -303,4 +303,100 @@ async fn tool_calls_round_trip_converts_arguments_to_object_shape() {
     let tool_msg = &messages[2];
     assert_eq!(tool_msg["role"], "tool");
     assert_eq!(tool_msg["content"], "file contents");
+}
+
+// ── generate_with_tools：串流 ────────────────────────────────────────────────
+//
+// Ollama 是 NDJSON 不是 SSE，而且工具呼叫是完整物件（arguments 已經是 JSON
+// object，不像 OpenAI 要拼字串片段）。所以這裡要驗的是「文字逐段送達」與
+// 「工具呼叫仍能從串流中取出」。
+
+#[tokio::test]
+async fn generate_with_tools_streams_text_incrementally() {
+    let server = MockServer::start().await;
+    let body = concat!(
+        "{\"message\":{\"role\":\"assistant\",\"content\":\"這個目錄\"},\"done\":false}\n",
+        "{\"message\":{\"role\":\"assistant\",\"content\":\"有三個檔案\"},\"done\":false}\n",
+        "{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true}\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = OllamaClient::with_base_url("qwen".into(), server.uri());
+    let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
+    let result = client.generate_with_tools(req("x"), vec![], tx).await.expect("ok");
+
+    let mut deltas = Vec::new();
+    while let Some(c) = rx.recv().await {
+        if !c.delta.is_empty() { deltas.push(c.delta); }
+        if c.done { break; }
+    }
+    assert!(deltas.len() >= 2, "文字應逐段送出，實際 {} 段：{deltas:?}", deltas.len());
+    assert_eq!(deltas.concat(), "這個目錄有三個檔案");
+
+    match result {
+        GenerateWithToolsResult::Text(t) => assert_eq!(t, "這個目錄有三個檔案"),
+        _ => panic!("expected Text"),
+    }
+}
+
+#[tokio::test]
+async fn generate_with_tools_picks_up_tool_calls_from_stream() {
+    let server = MockServer::start().await;
+    let body = concat!(
+        "{\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"function\":{\"name\":\"read_file\",\"arguments\":{\"path\":\"a.txt\"}}}]},\"done\":false}\n",
+        "{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true}\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = OllamaClient::with_base_url("qwen".into(), server.uri());
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
+    let result = client.generate_with_tools(req("x"), vec![], tx).await.expect("ok");
+
+    match result {
+        GenerateWithToolsResult::ToolCalls { calls, raw } => {
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].tool_name, "read_file");
+            assert_eq!(calls[0].args["path"], "a.txt");
+            // id 是我們合成的，同一段對話裡不可重複，所以不能是固定的 call_0。
+            assert!(calls[0].id.starts_with("call_"));
+            let raw = raw.expect("raw 要保留給需要回填的模型");
+            assert_eq!(raw[0]["function"]["name"], "read_file");
+        }
+        _ => panic!("expected ToolCalls"),
+    }
+}
+
+// <think> 區塊在串流時是跨 chunk 的，狀態要延續，不能每個 chunk 重置。
+#[tokio::test]
+async fn generate_with_tools_strips_think_blocks_across_chunks() {
+    let server = MockServer::start().await;
+    let body = concat!(
+        "{\"message\":{\"role\":\"assistant\",\"content\":\"<think>盤算\"},\"done\":false}\n",
+        "{\"message\":{\"role\":\"assistant\",\"content\":\"一下</think>答案\"},\"done\":false}\n",
+        "{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true}\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = OllamaClient::with_base_url("qwen".into(), server.uri());
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
+    let result = client.generate_with_tools(req("x"), vec![], tx).await.expect("ok");
+    match result {
+        GenerateWithToolsResult::Text(t) => assert_eq!(t, "答案", "<think> 內容不該外流"),
+        _ => panic!("expected Text"),
+    }
 }

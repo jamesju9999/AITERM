@@ -278,3 +278,88 @@ async fn generate_with_tools_populates_raw_tool_calls() {
         _ => panic!("expected ToolCalls"),
     }
 }
+
+// ── generate_with_tools：串流 ────────────────────────────────────────────────
+
+#[tokio::test]
+async fn generate_with_tools_streams_text_and_assembles_fragments() {
+    let server = MockServer::start().await;
+    let body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"先讀\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"檔案\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_x\",\"function\":{\"name\":\"read_file\",\"arguments\":\"\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\"}\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = OpenAiClient::with_base_url("k".into(), "gpt-4o-mini".into(), server.uri());
+    let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
+    let req = GenerateRequest {
+        system_prompt: "sys".into(),
+        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("go"), tool_call_id: None, tool_calls: None }],
+        context: EnvSnapshot { os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default() },
+        mode: QueryMode::Chat,
+        max_tokens: Some(256),
+    };
+
+    let result = client.generate_with_tools(req, vec![], tx).await.expect("ok");
+
+    // 文字要分多次送達，不能只是最後拿到全文。
+    let mut deltas = Vec::new();
+    while let Some(c) = rx.recv().await {
+        if !c.delta.is_empty() { deltas.push(c.delta); }
+        if c.done { break; }
+    }
+    assert!(deltas.len() >= 2, "文字應逐段送出，實際 {} 段：{deltas:?}", deltas.len());
+
+    match result {
+        GenerateWithToolsResult::ToolCalls { calls, .. } => {
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].id, "call_x");
+            assert_eq!(calls[0].args["path"], "a.txt");
+        }
+        _ => panic!("expected ToolCalls"),
+    }
+}
+
+#[tokio::test]
+async fn generate_with_tools_sends_stream_true() {
+    let server = MockServer::start().await;
+    let mock = Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"),
+        )
+        .expect(1)
+        .mount_as_scoped(&server)
+        .await;
+
+    let client = OpenAiClient::with_base_url("k".into(), "gpt-4o-mini".into(), server.uri());
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
+    let req = GenerateRequest {
+        system_prompt: "sys".into(),
+        messages: vec![ChatMessage { role: "user".into(), content: serde_json::json!("go"), tool_call_id: None, tool_calls: None }],
+        context: EnvSnapshot { os: "linux".into(), shell: "bash".into(), cwd: PathBuf::from("/"), ..Default::default() },
+        mode: QueryMode::Chat,
+        max_tokens: Some(256),
+    };
+    client.generate_with_tools(req, vec![], tx).await.expect("ok");
+
+    let received = &mock.received_requests().await[0];
+    let sent: serde_json::Value = serde_json::from_slice(&received.body).unwrap();
+    assert_eq!(sent["stream"], true, "帶工具的請求也要開串流");
+}

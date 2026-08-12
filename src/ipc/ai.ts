@@ -14,6 +14,8 @@ export type RiskLevel = "safe" | "needs_confirm" | "dangerous" | "blocked";
 
 export type AiError =
   | { kind: "not_configured" }
+  /** 憑證存在但讀不出來（鑰匙圈拒絕存取等）。跟 not_configured 是兩件事。 */
+  | { kind: "secret_access"; message: string }
   | { kind: "network"; message: string }
   | { kind: "auth_failed" }
   | { kind: "rate_limit"; retry_after: string | null; body?: string | null }
@@ -138,6 +140,8 @@ export function formatAiError(e: AiError): string {
   switch (e.kind) {
     case "not_configured":
       return t.ai_err_not_configured;
+    case "secret_access":
+      return t.ai_err_secret_access(e.message);
     case "network":
       if (
         e.message?.toLowerCase().includes("ollama") ||

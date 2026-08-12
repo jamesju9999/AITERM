@@ -442,6 +442,58 @@ describe("AiPanel", () => {
     expect(aiChatCalls.length).toBe(2);
   });
 
+  /**
+   * 有些憑證無法使用原生工具呼叫（實測：Claude Pro 訂閱的 OAuth token 只要帶
+   * tools 就被算到 API credits，餘額 0 就 400）。後端會自動降級成「把工具描述
+   * 注入系統提示」的文字協定，工具照樣能跑——但這不能靜默發生，使用者有權知道
+   * 自己正在用比較弱的協定。
+   */
+  it("降級成相容模式時要告訴使用者", async () => {
+    mcpTools.push({ name: "read_file" }, { name: "write_file" });
+    aiChatQueue.push({ content: "好的", tool_calling_unsupported: true });
+
+    render(
+      <AiPanel
+        sessionId="s1"
+        isOpen={true}
+        providerName="Sonnet-4.5"
+        onClose={vi.fn()}
+        onExecuteCommand={vi.fn()}
+        onOpenProviderPalette={vi.fn()}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(textbox, "列出檔案");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.getByText("好的")).toBeInTheDocument());
+    expect(screen.getByText(/相容模式/)).toBeInTheDocument();
+  });
+
+  it("沒有降級時不顯示那個提示", async () => {
+    mcpTools.push({ name: "read_file" });
+    aiChatQueue.push({ content: "好的" });
+
+    render(
+      <AiPanel
+        sessionId="s1"
+        isOpen={true}
+        providerName="Sonnet-4.5"
+        onClose={vi.fn()}
+        onExecuteCommand={vi.fn()}
+        onOpenProviderPalette={vi.fn()}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(textbox, "列出檔案");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.getByText("好的")).toBeInTheDocument());
+    expect(screen.queryByText(/相容模式/)).not.toBeInTheDocument();
+  });
+
   describe("模式說明列", () => {
     function renderPanel(isOpen = true) {
       return render(

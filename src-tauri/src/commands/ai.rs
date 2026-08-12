@@ -387,23 +387,41 @@ pub async fn ai_chat(
                         provider2.generate(fallback_req, tx2).await
                     });
 
+                    // 這條 fallback 是叫模型把工具呼叫寫成 `<tool_call>{…}` 文字。
+                    // 那是指令、不是講給使用者聽的話——只送標記之前的部分，否則
+                    // 整條指令會印在對話裡（程式庫協助那邊已經被這個咬過一次）。
                     let mut buf2 = String::new();
+                    let mut emitted = 0usize;
                     while let Some(chunk) = rx2.recv().await {
-                        let _ = app.emit("ai-stream", AiStreamEvent {
-                            session_id: session_id.clone(),
-                            kind: AiStreamKind::Chat,
-                            delta: chunk.delta.clone(),
-                            done: chunk.done,
-                        });
                         buf2.push_str(&chunk.delta);
-                        if chunk.done { break; }
+                        let visible = crate::ai::tool_markup::next_visible_delta(&buf2, emitted);
+                        if let Some((delta, next)) = visible {
+                            emitted = next;
+                            let _ = app.emit("ai-stream", AiStreamEvent {
+                                session_id: session_id.clone(),
+                                kind: AiStreamKind::Chat,
+                                delta,
+                                done: false,
+                            });
+                        }
+                        if chunk.done {
+                            let _ = app.emit("ai-stream", AiStreamEvent {
+                                session_id: session_id.clone(),
+                                kind: AiStreamKind::Chat,
+                                delta: String::new(),
+                                done: true,
+                            });
+                            break;
+                        }
                     }
                     let _ = join2.await;
 
+                    // tool_calling_unsupported=true：讓前端知道這一輪是降級跑的，
+                    // 不要靜默發生。
                     if let Some(calls) = parse_tool_calls_from_text(&buf2) {
-                        Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, raw_tool_calls: None })
+                        Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: true, raw_tool_calls: None })
                     } else {
-                        Ok(AiChatReply { content: Some(buf2), tool_calls: vec![], tool_calling_unsupported: false, raw_tool_calls: None })
+                        Ok(AiChatReply { content: Some(buf2), tool_calls: vec![], tool_calling_unsupported: true, raw_tool_calls: None })
                     }
                 }
                 Ok(Err(e)) => Err(e),

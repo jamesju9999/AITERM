@@ -49,6 +49,20 @@ describe("formatAiError", () => {
     expect(msg).toContain("設定");
   });
 
+  /**
+   * 「憑證讀不到」原本被後端壓成 not_configured，畫面於是叫使用者去設定一個
+   * 其實設定好好的供應商——實測就這樣把一個能用的供應商刪掉了，問題還在。
+   * 這兩種要講不同的話，而且要把原始的鑰匙圈錯誤帶出來。
+   */
+  it("formats secret_access as a credential-read failure, not a missing setup", () => {
+    const e: AiError = { kind: "secret_access", message: "keychain read error for anthropic-pro: denied" };
+    const msg = formatAiError(e);
+    expect(msg).toContain("鑰匙圈");
+    expect(msg).toContain("keychain read error for anthropic-pro");
+    // 不可以再叫人去「設定」——那正是誤導的來源。
+    expect(msg).not.toContain("尚未設定");
+  });
+
   it("formats network/ollama error with Ollama hint", () => {
     const e: AiError = { kind: "network", message: "connection refused to Ollama" };
     const msg = formatAiError(e);

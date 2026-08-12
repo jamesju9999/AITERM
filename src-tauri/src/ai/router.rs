@@ -10,6 +10,16 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+/// 憑證讀取失敗 → 帶著原因回報，不要壓成「尚未設定」。
+///
+/// 這兩件事的處置完全相反：「尚未設定」該去設定，「讀不到」該去看鑰匙圈授權。
+/// 混在一起的實測代價是使用者把一個好好的供應商刪掉重設，問題卻沒解決。
+fn secret_access_error(e: impl std::fmt::Display) -> AiError {
+    let message = e.to_string();
+    log::error!("讀取憑證失敗：{message}");
+    AiError::SecretAccess { message }
+}
+
 use crate::{
     ai::{
         anthropic::AnthropicClient,
@@ -131,7 +141,7 @@ pub(crate) async fn get_valid_oauth_token(provider_id: &str, secrets: &SecretSto
 
     secrets
         .get(provider_id)
-        .map_err(|_| AiError::NotConfigured)?
+        .map_err(secret_access_error)?
         .ok_or(AiError::NotConfigured)
 }
 
@@ -250,7 +260,7 @@ pub async fn get_valid_google_oauth_token(provider_id: &str, secrets: &SecretSto
                 Ok(access_token) => {
                     let project_id = secrets
                         .get(&format!("{provider_id}:project_id"))
-                        .map_err(|_| AiError::NotConfigured)?
+                        .map_err(secret_access_error)?
                         .ok_or(AiError::NotConfigured)?;
                     return Ok((access_token, project_id));
                 }
@@ -259,10 +269,10 @@ pub async fn get_valid_google_oauth_token(provider_id: &str, secrets: &SecretSto
         }
     }
 
-    let token = secrets.get(provider_id).map_err(|_| AiError::NotConfigured)?.ok_or(AiError::NotConfigured)?;
+    let token = secrets.get(provider_id).map_err(secret_access_error)?.ok_or(AiError::NotConfigured)?;
     let project_id = secrets
         .get(&format!("{provider_id}:project_id"))
-        .map_err(|_| AiError::NotConfigured)?
+        .map_err(secret_access_error)?
         .ok_or(AiError::NotConfigured)?;
     Ok((token, project_id))
 }
@@ -338,7 +348,7 @@ pub async fn get_valid_codex_oauth_token(
         }
     }
 
-    let token = secrets.get(provider_id).map_err(|_| AiError::NotConfigured)?.ok_or(AiError::NotConfigured)?;
+    let token = secrets.get(provider_id).map_err(secret_access_error)?.ok_or(AiError::NotConfigured)?;
     let account_id = secrets.get(&format!("{provider_id}:oauth_account_id")).ok().flatten();
     Ok((token, account_id))
 }
@@ -447,7 +457,7 @@ impl AiRouter {
                 let key = self
                     .secrets
                     .get(&provider_cfg.id)
-                    .map_err(|_| AiError::NotConfigured)?
+                    .map_err(secret_access_error)?
                     .ok_or(AiError::NotConfigured)?;
                 Arc::new(OpenAiClient::with_base_url(
                     key,
@@ -464,7 +474,7 @@ impl AiRouter {
                 } else {
                     self.secrets
                         .get(&provider_cfg.id)
-                        .map_err(|_| AiError::NotConfigured)?
+                        .map_err(secret_access_error)?
                         .ok_or(AiError::NotConfigured)?
                 };
                 let base_url = provider_cfg
@@ -507,7 +517,7 @@ impl AiRouter {
                 let github_token = self
                     .secrets
                     .get(&provider_cfg.id)
-                    .map_err(|_| AiError::NotConfigured)?
+                    .map_err(secret_access_error)?
                     .filter(|v| !v.trim().is_empty())
                     .ok_or(AiError::NotConfigured)?;
                 // Exchange the GitHub OAuth token for a short-lived Copilot
@@ -536,7 +546,7 @@ impl AiRouter {
                     let key = self
                         .secrets
                         .get(&provider_cfg.id)
-                        .map_err(|_| AiError::NotConfigured)?
+                        .map_err(secret_access_error)?
                         .ok_or(AiError::NotConfigured)?;
                     Arc::new(OpenAiCompatibleClient::new(
                         provider_cfg
@@ -552,7 +562,7 @@ impl AiRouter {
                 let key = self
                     .secrets
                     .get(&provider_cfg.id)
-                    .map_err(|_| AiError::NotConfigured)?
+                    .map_err(secret_access_error)?
                     .ok_or(AiError::NotConfigured)?;
                 Arc::new(OpenAiCompatibleClient::new(
                     provider_cfg
@@ -567,7 +577,7 @@ impl AiRouter {
                 let key = self
                     .secrets
                     .get(&provider_cfg.id)
-                    .map_err(|_| AiError::NotConfigured)?
+                    .map_err(secret_access_error)?
                     .ok_or(AiError::NotConfigured)?;
                 Arc::new(OpenAiCompatibleClient::new(
                     provider_cfg
@@ -582,7 +592,7 @@ impl AiRouter {
                 let key = self
                     .secrets
                     .get(&provider_cfg.id)
-                    .map_err(|_| AiError::NotConfigured)?
+                    .map_err(secret_access_error)?
                     .ok_or(AiError::NotConfigured)?;
                 Arc::new(OpenAiCompatibleClient::new(
                     provider_cfg
@@ -597,7 +607,7 @@ impl AiRouter {
                 let key = self
                     .secrets
                     .get(&provider_cfg.id)
-                    .map_err(|_| AiError::NotConfigured)?
+                    .map_err(secret_access_error)?
                     .ok_or(AiError::NotConfigured)?;
                 Arc::new(OpenAiCompatibleClient::new(
                     provider_cfg
@@ -621,7 +631,7 @@ impl AiRouter {
                 let key = self
                     .secrets
                     .get(&provider_cfg.id)
-                    .map_err(|_| AiError::NotConfigured)?
+                    .map_err(secret_access_error)?
                     .ok_or(AiError::NotConfigured)?;
                 Arc::new(AnthropicClient::with_base_url(key, provider_cfg.model.clone(), base_url))
             }
@@ -1003,5 +1013,20 @@ mod tests {
         cfg.default_provider = Some("codex".into());
         let router = make_router(cfg);
         assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
+    }
+    /// keychain 讀取失敗跟「沒設定過」是兩件事，但原本都被 map_err 壓成
+    /// NotConfigured。實測代價：畫面說「尚未設定 AI Provider」，使用者照著
+    /// 訊息把一個其實好好的供應商刪掉重設，問題卻還在——真正的原因（macOS
+    /// 拒絕存取 keychain 項目）從頭到尾沒被顯示過。
+    #[test]
+    fn secret_access_failure_is_not_reported_as_not_configured() {
+        let err = AiError::SecretAccess { message: "keychain read error for anthropic-pro: denied".into() };
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["kind"], "secret_access", "前端的 AiError union 依賴這個 tag");
+        assert!(
+            json["message"].as_str().unwrap().contains("keychain read error"),
+            "原始的 keychain 錯誤必須帶到前端，否則使用者又只能猜"
+        );
+        assert!(!matches!(err, AiError::NotConfigured));
     }
 }

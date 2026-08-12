@@ -138,10 +138,11 @@ impl AiProvider for OllamaClient {
             })
             .collect();
 
+        // 串流。原本是 stream:false，帶工具的對話因此整段一次跳出來。
         let body = OllamaToolRequest {
             model: self.model.clone(),
             messages: build_messages(&req),
-            stream: false,
+            stream: true,
             tools: ollama_tools,
         };
 
@@ -165,10 +166,13 @@ impl AiProvider for OllamaClient {
             });
         }
 
-        let data: OllamaToolResponse = resp
-            .json()
-            .await
-            .map_err(|e| AiError::Network { message: e.to_string() })?;
+        let (streamed_text, streamed_calls) = consume_ndjson_with_tools(resp, tx).await?;
+        let data = OllamaToolResponse {
+            message: OllamaToolResponseMessage {
+                content: Some(streamed_text),
+                tool_calls: streamed_calls,
+            },
+        };
 
         if !data.message.tool_calls.is_empty() {
             // Ollama's response has no per-call id, and this synthetic one must stay
@@ -204,13 +208,9 @@ impl AiProvider for OllamaClient {
                 .collect();
             Ok(GenerateWithToolsResult::ToolCalls { calls, raw })
         } else {
-            let raw = data.message.content.unwrap_or_default();
-            let mut in_think = false;
-            let content = strip_think_blocks(&raw, &mut in_think);
-            if !content.is_empty() {
-                let _ = tx.send(GenerateChunk { delta: content.clone(), done: true, usage: None }).await;
-            }
-            Ok(GenerateWithToolsResult::Text(content))
+            // <think> 已在串流時逐段剝除（狀態跨 chunk 延續），這裡拿到的就是
+            // 可見文字，也已經逐段送出去了。
+            Ok(GenerateWithToolsResult::Text(data.message.content.unwrap_or_default()))
         }
     }
 }
@@ -387,6 +387,72 @@ fn strip_think_blocks(text: &str, in_think: &mut bool) -> String {
     output
 }
 
+/// 像 `consume_ndjson`，但同時把串流中的工具呼叫收起來。
+///
+/// Ollama 的工具呼叫不像 OpenAI 是分片的——`arguments` 本來就是完整的 JSON
+/// object，所以只要在遇到的那一則收下即可，不需要拼接。
+async fn consume_ndjson_with_tools(
+    resp: reqwest::Response,
+    tx: mpsc::Sender<GenerateChunk>,
+) -> Result<(String, Vec<OllamaResponseToolCall>), AiError> {
+    let mut stream = resp.bytes_stream();
+    let mut buf = Vec::<u8>::new();
+    let mut text = String::new();
+    let mut calls: Vec<OllamaResponseToolCall> = Vec::new();
+    // `<think>` 區塊會跨 chunk，狀態必須延續，不能每則重置。
+    let mut in_think = false;
+    let mut stream_ended = false;
+    let mut saw_done = false;
+
+    while !stream_ended && !saw_done {
+        match stream.next().await {
+            Some(item) => {
+                let bytes = item.map_err(|e| AiError::Network { message: e.to_string() })?;
+                buf.extend_from_slice(&bytes);
+            }
+            None => {
+                stream_ended = true;
+                if !buf.is_empty() && buf.last() != Some(&b'\n') {
+                    buf.push(b'\n');
+                }
+            }
+        }
+
+        loop {
+            let Some(pos) = find_line_end(&buf) else { break };
+            let line_bytes: Vec<u8> = buf.drain(..pos).collect();
+            let sep = separator_len(&buf);
+            buf.drain(..sep);
+            let line = match std::str::from_utf8(&line_bytes) {
+                Ok(s) => s.trim(),
+                Err(_) => continue,
+            };
+            if line.is_empty() { continue; }
+            let Ok(chunk) = serde_json::from_str::<OllamaChunk>(line) else { continue };
+
+            if let Some(msg) = chunk.message {
+                let raw = msg.content.unwrap_or_default();
+                let visible = strip_think_blocks(&raw, &mut in_think);
+                if !visible.is_empty() {
+                    text.push_str(&visible);
+                    let _ = tx.send(GenerateChunk { delta: visible, done: false, usage: None }).await;
+                }
+                calls.extend(msg.tool_calls);
+            }
+            if chunk.done {
+                let _ = tx.send(GenerateChunk { delta: String::new(), done: true, usage: None }).await;
+                saw_done = true;
+                break;
+            }
+        }
+    }
+
+    if !saw_done {
+        let _ = tx.send(GenerateChunk { delta: String::new(), done: true, usage: None }).await;
+    }
+    Ok((text, calls))
+}
+
 async fn consume_ndjson(
     resp: reqwest::Response,
     tx: mpsc::Sender<GenerateChunk>,
@@ -447,6 +513,8 @@ struct OllamaChunk {
 struct OllamaChunkMessage {
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<OllamaResponseToolCall>,
 }
 
 #[cfg(test)]

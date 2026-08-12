@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::ai::{
-    sse::{find_line_end, map_http_error, separator_len},
+    sse::{find_line_end, map_http_error, separator_len, truncate},
     AiError, AiProvider, AiToolCall, ChatMessage, GenerateChunk, GenerateRequest,
     GenerateWithToolsResult, McpToolDefinition, TokenUsage,
 };
@@ -105,12 +105,14 @@ impl AiProvider for AnthropicClient {
         let system_text = extract_system_text(&req.messages, &req.system_prompt);
         let messages: Vec<serde_json::Value> = build_anthropic_messages(&req.messages);
 
+        // 串流。原本沒帶 stream，帶工具的對話因此整段一次跳出來。
         let body = serde_json::json!({
             "model": self.model,
             "max_tokens": 4096,
             "system": build_system_field(&system_text, self.is_oauth),
             "messages": messages,
-            "tools": tool_defs
+            "tools": tool_defs,
+            "stream": true
         });
 
         let resp = self
@@ -128,40 +130,37 @@ impl AiProvider for AnthropicClient {
             return Err(AiError::Network { message: "Anthropic API is overloaded".into() });
         }
         if !status.is_success() {
-            return Err(map_http_error(status, resp).await);
-        }
-
-        let json: serde_json::Value = resp.json().await
-            .map_err(|e| AiError::Network { message: e.to_string() })?;
-
-        let stop_reason = json["stop_reason"].as_str().unwrap_or("");
-
-        if stop_reason == "tool_use" {
-            let content_blocks = json["content"].as_array()
-                .ok_or_else(|| AiError::ModelError {
-                    reason: "missing content".into(),
-                    raw: json.to_string(),
-                })?;
-
-            let calls: Vec<AiToolCall> = content_blocks.iter()
-                .filter(|b| b["type"].as_str() == Some("tool_use"))
-                .map(|b| AiToolCall {
-                    id: b["id"].as_str().unwrap_or("").to_string(),
-                    tool_name: b["name"].as_str().unwrap_or("").to_string(),
-                    args: b["input"].clone(),
-                    thought_signature: None,
-                })
-                .collect();
-
-            return Ok(GenerateWithToolsResult::ToolCalls {
-                calls,
-                raw: Some(serde_json::Value::Array(content_blocks.clone())),
+            let body_text = resp.text().await.unwrap_or_default();
+            // 訂閱（OAuth）憑證帶 `tools` 時，Anthropic 會把請求算到 API credits
+            // 而不是訂閱額度；credits 是 0 就回這個 400。實測用三次 A/B 確認過
+            // 唯一的變數是 tools 的有無（串流與 max_tokens 都無關）。
+            //
+            // 對這個憑證而言，這等同「無法使用原生工具呼叫」——回
+            // ToolCallingUnsupported 讓上層改用「工具描述注入系統提示」的
+            // fallback，那條不帶 tools，因此回到訂閱計費。
+            //
+            // 只限 OAuth：API key 用戶付的就是 API 額度，同一句話對他們是真的
+            // 餘額不足，偽裝成「不支援工具」會蓋掉真正的問題。
+            if self.is_oauth && status.as_u16() == 400 && body_text.contains("out of extra usage") {
+                log::warn!(
+                    "Anthropic 訂閱憑證帶工具被計入 API credits（餘額不足），改用系統提示注入的相容模式"
+                );
+                return Err(AiError::ToolCallingUnsupported);
+            }
+            return Err(AiError::Network {
+                message: format!("http {}: {}", status.as_u16(), truncate(&body_text, 300)),
             });
         }
 
-        let content = json["content"][0]["text"].as_str().unwrap_or("").to_string();
-        let _ = tx.send(GenerateChunk { delta: content.clone(), done: true, usage: None }).await;
-        Ok(GenerateWithToolsResult::Text(content))
+        let streamed = consume_anthropic_sse_with_tools(resp, tx).await?;
+
+        if !streamed.calls.is_empty() {
+            return Ok(GenerateWithToolsResult::ToolCalls {
+                calls: streamed.calls,
+                raw: streamed.raw,
+            });
+        }
+        Ok(GenerateWithToolsResult::Text(streamed.text))
     }
 
     async fn health_check(&self) -> Result<(), AiError> {
@@ -399,6 +398,174 @@ fn health_check_request() -> GenerateRequest {
     }
 }
 
+// ── SSE consumer（帶工具）─────────────────────────────────────────────────────
+
+/// 串流中累積起來的 content blocks。
+pub(crate) struct AnthropicStreamed {
+    pub text: String,
+    pub calls: Vec<AiToolCall>,
+    /// 完整的 content blocks 陣列（含文字區塊），供需要回填的模型 echo 回去。
+    pub raw: Option<serde_json::Value>,
+}
+
+/// 像 `consume_anthropic_sse`，但同時累積 `tool_use` 區塊。
+///
+/// 文字（`text_delta`）邊收邊送；工具參數（`input_json_delta`）是分片的 JSON
+/// 字串，要按 content block 的 index 對位累積，收齊才 parse。
+async fn consume_anthropic_sse_with_tools(
+    resp: reqwest::Response,
+    tx: mpsc::Sender<GenerateChunk>,
+) -> Result<AnthropicStreamed, AiError> {
+    use std::collections::BTreeMap;
+
+    #[derive(Default)]
+    struct Block {
+        ty: String,
+        id: Option<String>,
+        name: Option<String>,
+        text: String,
+        json: String,
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut buf = Vec::<u8>::new();
+    // BTreeMap：輸出順序照 content block 的 index，而不是事件抵達的順序。
+    let mut blocks: BTreeMap<usize, Block> = BTreeMap::new();
+    let mut text = String::new();
+    let mut stream_ended = false;
+    let mut saw_stop = false;
+    let mut saw_data_prefix = false;
+    let mut raw_body = String::new();
+
+    while !stream_ended && !saw_stop {
+        match stream.next().await {
+            Some(item) => {
+                let bytes = item.map_err(|e| AiError::Network { message: e.to_string() })?;
+                buf.extend_from_slice(&bytes);
+            }
+            None => {
+                stream_ended = true;
+                if !buf.is_empty() && buf.last() != Some(&b'\n') {
+                    buf.push(b'\n');
+                }
+            }
+        }
+
+        loop {
+            let Some(pos) = find_line_end(&buf) else { break };
+            let line_bytes: Vec<u8> = buf.drain(..pos).collect();
+            let sep = separator_len(&buf);
+            buf.drain(..sep);
+            let line = match std::str::from_utf8(&line_bytes) {
+                Ok(s) => s.trim(),
+                Err(_) => continue,
+            };
+            if !saw_data_prefix {
+                raw_body.push_str(line);
+            }
+            if line.is_empty() { continue; }
+            let Some(data) = line.strip_prefix("data:") else { continue };
+            saw_data_prefix = true;
+            let Ok(event) = serde_json::from_str::<AnthropicSseEvent>(data.trim()) else { continue };
+
+            match event {
+                AnthropicSseEvent::ContentBlockStart { index, content_block } => {
+                    let b = blocks.entry(index).or_default();
+                    b.ty = content_block.ty;
+                    b.id = content_block.id;
+                    b.name = content_block.name;
+                }
+                AnthropicSseEvent::ContentBlockDelta { index, delta } => {
+                    let b = blocks.entry(index).or_default();
+                    if let Some(t) = delta.text {
+                        b.text.push_str(&t);
+                        text.push_str(&t);
+                        let _ = tx.send(GenerateChunk { delta: t, done: false, usage: None }).await;
+                    }
+                    if let Some(j) = delta.partial_json {
+                        b.json.push_str(&j);
+                    }
+                }
+                AnthropicSseEvent::MessageDelta { usage } => {
+                    let token_usage = usage.map(|u| TokenUsage {
+                        prompt: u.input_tokens,
+                        completion: u.output_tokens,
+                    });
+                    let _ = tx.send(GenerateChunk { delta: String::new(), done: false, usage: token_usage }).await;
+                }
+                AnthropicSseEvent::MessageStop => {
+                    let _ = tx.send(GenerateChunk { delta: String::new(), done: true, usage: None }).await;
+                    saw_stop = true;
+                    break;
+                }
+                AnthropicSseEvent::Other => {}
+            }
+        }
+    }
+
+    if !saw_stop {
+        let _ = tx.send(GenerateChunk { delta: String::new(), done: true, usage: None }).await;
+    }
+
+    // 沒有半個 `data:` 行 = 對方把串流收合成了單一 JSON 回應（企業 LLM gateway
+    // 會這樣做）。照非串流的形狀解一次，否則使用者會拿到一則空白回覆。
+    if !saw_data_prefix {
+        let raw = raw_body.trim();
+        if raw.starts_with('{') {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+                if let Some(content_blocks) = v["content"].as_array() {
+                    let calls: Vec<AiToolCall> = content_blocks.iter()
+                        .filter(|b| b["type"].as_str() == Some("tool_use"))
+                        .map(|b| AiToolCall {
+                            id: b["id"].as_str().unwrap_or("").to_string(),
+                            tool_name: b["name"].as_str().unwrap_or("").to_string(),
+                            args: b["input"].clone(),
+                            thought_signature: None,
+                        })
+                        .collect();
+                    let joined: String = content_blocks.iter()
+                        .filter_map(|b| b["text"].as_str())
+                        .collect();
+                    let raw_value = if calls.is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::Value::Array(content_blocks.clone()))
+                    };
+                    return Ok(AnthropicStreamed { text: joined, calls, raw: raw_value });
+                }
+            }
+        }
+    }
+
+    let mut calls = Vec::new();
+    let mut raw_blocks = Vec::new();
+    for (_, b) in blocks {
+        if b.ty == "tool_use" {
+            let input: serde_json::Value = if b.json.trim().is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::from_str(&b.json).unwrap_or(serde_json::json!({}))
+            };
+            let id = b.id.unwrap_or_default();
+            let name = b.name.unwrap_or_default();
+            raw_blocks.push(serde_json::json!({
+                "type": "tool_use", "id": id, "name": name, "input": input
+            }));
+            calls.push(AiToolCall {
+                id,
+                tool_name: name,
+                args: input,
+                thought_signature: None,
+            });
+        } else if !b.text.is_empty() {
+            raw_blocks.push(serde_json::json!({ "type": "text", "text": b.text }));
+        }
+    }
+
+    let raw = if calls.is_empty() { None } else { Some(serde_json::Value::Array(raw_blocks)) };
+    Ok(AnthropicStreamed { text, calls, raw })
+}
+
 // ── SSE consumer ─────────────────────────────────────────────────────────────
 
 async fn consume_anthropic_sse(
@@ -429,7 +596,8 @@ async fn consume_anthropic_sse(
                 let data = data.trim();
                 match serde_json::from_str::<AnthropicSseEvent>(data) {
                     Ok(event) => match event {
-                        AnthropicSseEvent::ContentBlockDelta { delta } => {
+                        AnthropicSseEvent::ContentBlockStart { .. } => {}
+                        AnthropicSseEvent::ContentBlockDelta { delta, .. } => {
                             if let Some(text) = delta.text {
                                 let _ = tx
                                     .send(GenerateChunk { delta: text, done: false, usage: None })
@@ -471,7 +639,14 @@ async fn consume_anthropic_sse(
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AnthropicSseEvent {
+    ContentBlockStart {
+        #[serde(default)]
+        index: usize,
+        content_block: ContentBlockStart,
+    },
     ContentBlockDelta {
+        #[serde(default)]
+        index: usize,
         delta: ContentDelta,
     },
     MessageDelta {
@@ -490,6 +665,19 @@ struct ContentDelta {
     _ty: Option<String>,
     #[serde(default)]
     text: Option<String>,
+    /// 工具參數的片段。整個 `input` 物件是被切成好幾段 JSON 字串送來的。
+    #[serde(default)]
+    partial_json: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ContentBlockStart {
+    #[serde(rename = "type")]
+    ty: String,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -594,7 +782,8 @@ mod tests {
         let raw = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}"#;
         let event: AnthropicSseEvent = serde_json::from_str(raw).unwrap();
         match event {
-            AnthropicSseEvent::ContentBlockDelta { delta } => {
+            AnthropicSseEvent::ContentBlockDelta { delta, index } => {
+                assert_eq!(index, 0);
                 assert_eq!(delta.text.unwrap(), "hello");
             }
             _ => panic!("wrong variant"),

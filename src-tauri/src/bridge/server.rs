@@ -63,6 +63,8 @@ pub fn status_for(err: &AiError) -> u16 {
         AiError::AuthFailed => 401,
         AiError::RateLimit { .. } => 429,
         AiError::NotConfigured | AiError::InvalidInput { .. } => 400,
+        // 憑證存在但讀不出來是本機環境問題（鑰匙圈授權），不是請求有問題。
+        AiError::SecretAccess { .. } => 500,
         AiError::Network { .. } => 502,
         AiError::ModelError { .. } => 500,
         // 這條路徑理論上不會從橋接的上游 adapter 冒出來（橋接不透過
