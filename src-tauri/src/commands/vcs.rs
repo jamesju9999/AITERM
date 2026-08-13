@@ -1,10 +1,13 @@
 //! Tauri commands for VCS connection management and natural-language queries.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use tokio::sync::mpsc;
+use tokio::task::AbortHandle;
 
 use crate::ai::{router::AiRouter, ChatMessage, GenerateChunk, GenerateRequest, QueryMode};
 use crate::config::{
@@ -17,6 +20,22 @@ use crate::vcs::{
     svn::SvnClient,
     VcsAgentDecision, VcsAgentHistoryEntry, VcsIntent, VcsManager, VcsRepoInfo, VcsResult,
 };
+
+/// Tracks the in-flight AI call behind each `vcs_agent_step`, keyed by the
+/// VCS agent loop's session id, so a stuck step can actually be cancelled
+/// from the frontend's Stop button instead of just being ignored client-side.
+#[derive(Default)]
+pub struct VcsAgentStepRegistry(Mutex<HashMap<String, AbortHandle>>);
+
+impl VcsAgentStepRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Steps rarely need more than a few seconds; if the provider stalls this
+/// keeps the loop from hanging forever with the Stop button unable to help.
+const VCS_AGENT_STEP_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn vcs_secret_key(id: &str) -> String {
     format!("vcs:{id}")
@@ -142,10 +161,27 @@ pub async fn vcs_remove_connection(
 }
 
 #[tauri::command]
-pub async fn vcs_test_connection(input: VcsConnectionInput) -> Result<String, String> {
+pub async fn vcs_test_connection(
+    input: VcsConnectionInput,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<String, String> {
+    // The edit form leaves the secret field blank ("leave blank to keep
+    // unchanged") when editing an existing connection, so an empty
+    // `input.secret` doesn't mean "no secret" — fall back to whatever is
+    // already stored for this connection id.
+    let stored_secret = input
+        .id
+        .as_deref()
+        .and_then(|id| secrets.get(&vcs_secret_key(id)).ok().flatten());
+    let effective_secret = input
+        .secret
+        .clone()
+        .filter(|s| !s.is_empty())
+        .or(stored_secret);
+
     match input.vcs_type {
         VcsType::Git => {
-            let secret = input.secret.as_deref().unwrap_or("");
+            let secret = effective_secret.as_deref().unwrap_or("");
             if secret.is_empty() {
                 return Ok("Local Git mode — no test needed".into());
             }
@@ -177,21 +213,28 @@ pub async fn vcs_test_connection(input: VcsConnectionInput) -> Result<String, St
                 return Err("SVN URL is required for testing".into());
             }
 
-            let mut args = vec!["info".to_string(), "--non-interactive".to_string(), url.to_string()];
+            let mut args = vec![
+                "info".to_string(),
+                "--non-interactive".to_string(),
+                // Trust unknown-CA server certs (e.g. internal/self-signed)
+                // since --non-interactive can't show the accept-cert prompt.
+                "--trust-server-cert-failures=unknown-ca".to_string(),
+                url.to_string(),
+            ];
             if let Some(u) = &input.username {
                 if !u.is_empty() {
                     args.push("--username".to_string());
                     args.push(u.clone());
                 }
             }
-            if let Some(p) = &input.secret {
+            if let Some(p) = &effective_secret {
                 if !p.is_empty() {
                     args.push("--password".to_string());
                     args.push(p.clone());
                 }
             }
 
-            let mut cmd = std::process::Command::new("svn");
+            let mut cmd = std::process::Command::new(crate::vcs::svn::svn_program());
             cmd.args(&args);
             #[cfg(windows)]
             {
@@ -354,9 +397,10 @@ pub async fn vcs_agent_step(
     goal: String,
     history: Vec<VcsAgentHistoryEntry>,
     repo_info: VcsRepoInfo,
-    _session_id: String,
+    session_id: String,
     provider_id: Option<String>,
     router: State<'_, AiRouter>,
+    step_registry: State<'_, VcsAgentStepRegistry>,
 ) -> Result<serde_json::Value, String> {
     // Resolve the provider (optional override)
     let provider = match provider_id.as_deref() {
@@ -469,22 +513,56 @@ Output ONLY the JSON object. No prose, no markdown fences."#,
     let provider_clone = provider.clone();
     let join = tokio::spawn(async move { provider_clone.generate(req, tx).await });
 
-    let mut buf = String::new();
-    while let Some(chunk) = rx.recv().await {
-        buf.push_str(&chunk.delta);
-        if chunk.done {
-            break;
+    step_registry
+        .0
+        .lock()
+        .unwrap()
+        .insert(session_id.clone(), join.abort_handle());
+
+    let recv_outcome = tokio::time::timeout(VCS_AGENT_STEP_TIMEOUT, async {
+        let mut buf = String::new();
+        while let Some(chunk) = rx.recv().await {
+            buf.push_str(&chunk.delta);
+            if chunk.done {
+                break;
+            }
         }
-    }
+        buf
+    })
+    .await;
+
+    step_registry.0.lock().unwrap().remove(&session_id);
+
+    let buf = match recv_outcome {
+        Ok(buf) => buf,
+        Err(_) => {
+            join.abort();
+            return Err("AI 回應逾時（60 秒），已中止此步驟".to_string());
+        }
+    };
 
     match join.await {
         Ok(Ok(())) => {}
         Ok(Err(e)) => return Err(e.to_string()),
+        Err(e) if e.is_cancelled() => return Err("已停止".to_string()),
         Err(e) => return Err(e.to_string()),
     }
 
     let decision = parse_vcs_agent_decision(&buf)?;
     serde_json::to_value(&decision).map_err(|e| e.to_string())
+}
+
+/// Cancels the in-flight AI call for a `vcs_agent_step` invocation, if any is
+/// still running for this session. No-op if the step already finished.
+#[tauri::command]
+pub async fn vcs_agent_abort_step(
+    session_id: String,
+    step_registry: State<'_, VcsAgentStepRegistry>,
+) -> Result<(), String> {
+    if let Some(handle) = step_registry.0.lock().unwrap().remove(&session_id) {
+        handle.abort();
+    }
+    Ok(())
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────

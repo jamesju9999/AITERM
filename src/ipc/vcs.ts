@@ -156,6 +156,10 @@ export function vcsAgentStep(
   });
 }
 
+export function vcsAgentAbortStep(sessionId: string): Promise<void> {
+  return invoke("vcs_agent_abort_step", { sessionId });
+}
+
 export function pickFolder(): Promise<string | null> {
   return invoke<string | null>("pick_folder");
 }

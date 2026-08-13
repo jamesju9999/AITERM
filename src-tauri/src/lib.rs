@@ -94,9 +94,9 @@ use commands::{
     updater::updater_supported,
     web::{web_fetch, web_search, npm_mcp_search},
     vcs::{
-        pick_folder, vcs_add_connection, vcs_agent_step, vcs_detect_repo, vcs_get_block_info,
-        vcs_list_connections, vcs_query, vcs_remove_connection, vcs_test_connection,
-        vcs_update_connection,
+        pick_folder, vcs_add_connection, vcs_agent_abort_step, vcs_agent_step, vcs_detect_repo,
+        vcs_get_block_info, vcs_list_connections, vcs_query, vcs_remove_connection,
+        vcs_test_connection, vcs_update_connection, VcsAgentStepRegistry,
     },
 };
 use config::ConfigStore;
@@ -257,6 +257,7 @@ pub fn run() {
         .manage(tokio::sync::Mutex::new(MailState::new()))
         .manage(Db2SidecarState::new(sidecar_path))
         .manage(Arc::new(Mutex::new(VcsCredentialManager::new())))
+        .manage(VcsAgentStepRegistry::new())
         .manage(Arc::new(Mutex::new(EnterpriseTaskState::new())))
         .manage(tokio::sync::Mutex::new(telegram::TelegramState { active_task: None }))
         .manage(mcp_manager)
@@ -472,6 +473,7 @@ pub fn run() {
             vcs_query,
             vcs_get_block_info,
             vcs_agent_step,
+            vcs_agent_abort_step,
             pick_folder,
             // MarkItDown
             markitdown_convert,

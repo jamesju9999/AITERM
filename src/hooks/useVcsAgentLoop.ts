@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { vcsAgentStep, vcsQuery, type VcsAgentHistoryEntry, type VcsRepoInfo, type VcsResult } from "../ipc/vcs";
+import { vcsAgentAbortStep, vcsAgentStep, vcsQuery, type VcsAgentHistoryEntry, type VcsRepoInfo, type VcsResult } from "../ipc/vcs";
 import { getConfig } from "../ipc/config";
 
 export type VcsLoopMessageKind =
@@ -113,10 +113,13 @@ export function useVcsAgentLoop(sessionId: string, repoInfo: VcsRepoInfo | null)
           decision = await vcsAgentStep(goal, history, currentRepoInfo, sessionId, providerId);
         } catch (e) {
           if (!mountedRef.current) break;
+          const stopped = stopFlagRef.current;
           setMessages((prev) =>
             prev.map((m) =>
               m.id === loadingId
-                ? { ...m, kind: "error" as VcsLoopMessageKind, content: `AI 無法規劃下一步：${String(e)}` }
+                ? stopped
+                  ? { ...m, kind: "stopped" as VcsLoopMessageKind, content: "已停止" }
+                  : { ...m, kind: "error" as VcsLoopMessageKind, content: `AI 無法規劃下一步：${String(e)}` }
                 : m
             )
           );
@@ -242,7 +245,11 @@ export function useVcsAgentLoop(sessionId: string, repoInfo: VcsRepoInfo | null)
 
   const stop = useCallback(() => {
     stopFlagRef.current = true;
-  }, []);
+    // The flag above is only checked between steps — if a vcs_agent_step
+    // call is already in flight (the common "stuck" case), it needs to be
+    // cancelled on the backend or the loop stays blocked on that await.
+    void vcsAgentAbortStep(sessionId).catch(() => {});
+  }, [sessionId]);
 
   return { messages, isRunning, send, stop };
 }

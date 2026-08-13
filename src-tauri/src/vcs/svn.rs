@@ -1,8 +1,87 @@
 //! SVN operations via the `svn` command-line tool.
 
+use std::ffi::OsString;
 use std::process::Command;
+#[cfg(windows)]
+use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use super::types::{BlameEntry, CommitEntry, VcsResult};
+
+/// Resolves the `svn` executable, falling back to the user's login-shell PATH
+/// (macOS/Linux) or common install locations (Windows) when it isn't visible
+/// on this process's own PATH.
+///
+/// AITerm's own process PATH is captured once at launch time (from launchd
+/// on macOS, or the parent process on Windows) and never picks up entries
+/// added afterward by Homebrew/winget/etc. — restarting the app doesn't help
+/// unless it's re-launched from a shell that already has the updated PATH.
+/// The embedded terminal doesn't hit this because it runs a real login shell
+/// that re-sources the user's profile (see `pty/shell.rs`); this mirrors
+/// that fallback for one-off `svn` invocations.
+pub fn svn_program() -> &'static OsString {
+    static PROGRAM: OnceLock<OsString> = OnceLock::new();
+    PROGRAM.get_or_init(|| {
+        if on_current_path("svn") {
+            return OsString::from("svn");
+        }
+        match fallback_svn_path() {
+            Some(found) => found.into_os_string(),
+            None => OsString::from("svn"),
+        }
+    })
+}
+
+fn on_current_path(program: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    let exe_name = if cfg!(windows) {
+        format!("{program}.exe")
+    } else {
+        program.to_string()
+    };
+    std::env::split_paths(&path).any(|dir| dir.join(&exe_name).is_file())
+}
+
+#[cfg(windows)]
+fn fallback_svn_path() -> Option<PathBuf> {
+    let bases: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)", "LocalAppData"]
+        .iter()
+        .filter_map(|var| std::env::var_os(var))
+        .map(PathBuf::from)
+        .collect();
+    let install_dirs = ["SlikSvn", "TortoiseSVN", "Subversion"];
+    for base in &bases {
+        for dir in &install_dirs {
+            let candidate = base.join(dir).join("bin").join("svn.exe");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn fallback_svn_path() -> Option<std::path::PathBuf> {
+    // Ask the user's login shell for its PATH — this sources .zprofile /
+    // .bash_profile, which is where Homebrew's shellenv (and similar PATH
+    // extensions) typically live.
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let output = std::process::Command::new(&shell)
+        .arg("-lc")
+        .arg("echo -n \"$PATH\"")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path_str = String::from_utf8_lossy(&output.stdout);
+    std::env::split_paths(path_str.trim())
+        .map(|dir| dir.join("svn"))
+        .find(|candidate| candidate.is_file())
+}
 
 pub struct SvnClient {
     pub working_copy_root: String,
@@ -161,7 +240,7 @@ impl SvnClient {
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     fn is_available(&self) -> bool {
-        let mut cmd = Command::new("svn");
+        let mut cmd = Command::new(svn_program());
         cmd.arg("--version");
         #[cfg(windows)]
         {
@@ -172,8 +251,12 @@ impl SvnClient {
     }
 
     fn svn(&self, args: &[String]) -> Result<String, String> {
-        let mut cmd = Command::new("svn");
-        cmd.args(args).current_dir(&self.working_copy_root);
+        let mut cmd = Command::new(svn_program());
+        cmd.args(args)
+            // Trust unknown-CA server certs (e.g. internal/self-signed) since
+            // --non-interactive can't show the usual accept-cert prompt.
+            .arg("--trust-server-cert-failures=unknown-ca")
+            .current_dir(&self.working_copy_root);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
