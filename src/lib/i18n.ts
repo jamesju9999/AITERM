@@ -959,7 +959,7 @@ const zhTW = {
     vcs_token_required: "此功能需要 GitHub token",
     vcs_btn_go_settings: "前往設定新增",
     vcs_svn_required: "需要安裝 SVN CLI 才能使用 SVN 功能",
-    vcs_loop_status_running: "⟳ 執行中…",
+    vcs_loop_status_running: "執行中…",
     vcs_loop_status_done: "✅ 目標達成",
     vcs_loop_status_stopped: "— 已停止 —",
 
@@ -2051,7 +2051,7 @@ const enRaw = {
     vcs_token_required: "GitHub token required for this feature",
     vcs_btn_go_settings: "Go to Settings to add",
     vcs_svn_required: "SVN CLI must be installed to use SVN features",
-    vcs_loop_status_running: "⟳ Running…",
+    vcs_loop_status_running: "Running…",
     vcs_loop_status_done: "✅ Goal achieved",
     vcs_loop_status_stopped: "— Stopped —",
 

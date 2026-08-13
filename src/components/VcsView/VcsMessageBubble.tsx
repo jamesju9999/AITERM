@@ -303,7 +303,9 @@ export function VcsLoopMessageBubble({ message, writeMode, onAction, onConfirmWr
           <div style={{ color: "#888", fontSize: 12, marginBottom: 4 }}>
             Step {message.stepNum}{maxSteps > 0 && maxSteps < 9999 ? `/${maxSteps}` : ""}
           </div>
-          <div style={{ color: "#a78bfa", fontSize: 13 }}>{t.vcs_loop_status_running}</div>
+          <div style={{ color: "#a78bfa", fontSize: 13 }}>
+            <span className="vcs-view__step-spinner">⟳</span> {t.vcs_loop_status_running}
+          </div>
         </div>
       </div>
     );
