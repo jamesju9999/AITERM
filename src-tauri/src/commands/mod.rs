@@ -19,6 +19,7 @@ pub mod python_env;
 pub mod secret;
 pub mod shell;
 pub mod updater;
+pub mod usage;
 pub mod vcs;
 pub mod web;
 pub mod code_assistant;
