@@ -146,11 +146,16 @@ pub struct QuotaWindow {
     pub used_percent: f64,
     /// 重置時間（Unix 秒）。來源沒給就是 None。
     pub resets_at: Option<i64>,
-    /// 上游自己的嚴重度，沒有就依 used_percent 推。
+    /// 嚴重度。**不是 used_percent 的函數** —— 上游若有明確的「已被擋住」
+    /// 訊號，adapter 必須把該窗提成 Critical。上游給了 severity 字串就採用它，
+    /// 都沒有才依 used_percent 推。
     pub severity: QuotaSeverity,
     /// 保留原始語意的補充說明（Copilot 的 "142 / 300 次"）。None 表示沒有更精確的說法。
     pub detail: Option<String>,
-    /// 這個窗是不是目前的代表窗（Anthropic 的 representative-claim）。
+    /// 上游標記的代表窗（Anthropic 的 representative-claim、Codex 的
+    /// primary_window、Copilot 的 premium_interactions）。
+    /// **契約：一個 ProviderQuota 內至多一個為 true。**
+    /// 只在多個窗嚴重度相同時用來 tie-break，不決定顯示哪個。
     pub is_primary: bool,
 }
 
