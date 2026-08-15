@@ -504,6 +504,8 @@ async fn consume_anthropic_sse_with_tools(
                     let token_usage = usage.map(|u| TokenUsage {
                         prompt: u.input_tokens,
                         completion: u.output_tokens,
+                        cache_read: u.cache_read_input_tokens,
+                        cache_write: u.cache_creation_input_tokens,
                     });
                     let _ = tx.send(GenerateChunk { delta: String::new(), done: false, usage: token_usage }).await;
                 }
@@ -622,6 +624,8 @@ async fn consume_anthropic_sse(
                             let token_usage = usage.map(|u| TokenUsage {
                                 prompt: u.input_tokens,
                                 completion: u.output_tokens,
+                                cache_read: u.cache_read_input_tokens,
+                                cache_write: u.cache_creation_input_tokens,
                             });
                             let _ = tx
                                 .send(GenerateChunk { delta: String::new(), done: false, usage: token_usage })
@@ -700,6 +704,10 @@ struct MessageDeltaUsage {
     input_tokens: u32,
     #[serde(default)]
     output_tokens: u32,
+    #[serde(default)]
+    cache_creation_input_tokens: u32,
+    #[serde(default)]
+    cache_read_input_tokens: u32,
 }
 
 #[cfg(test)]
@@ -709,6 +717,27 @@ mod tests {
     #[test]
     fn oauth_beta_two_forms_agree() {
         assert_eq!(OAUTH_BETA_PARTS.join(","), OAUTH_BETA_HEADER);
+    }
+
+    #[test]
+    fn message_delta_usage_parses_cache_tokens() {
+        // 欄位取自真實回應（探勘 dump），不是自編的。
+        let raw = r#"{"input_tokens":22,"cache_creation_input_tokens":150,
+                      "cache_read_input_tokens":4096,"output_tokens":7}"#;
+        let u: MessageDeltaUsage = serde_json::from_str(raw).expect("parse");
+        assert_eq!(u.input_tokens, 22);
+        assert_eq!(u.output_tokens, 7);
+        assert_eq!(u.cache_creation_input_tokens, 150);
+        assert_eq!(u.cache_read_input_tokens, 4096);
+    }
+
+    #[test]
+    fn message_delta_usage_defaults_cache_tokens_to_zero() {
+        // 舊版／非快取請求不會帶這兩個欄位，必須降級成 0 而不是解析失敗。
+        let raw = r#"{"input_tokens":10,"output_tokens":2}"#;
+        let u: MessageDeltaUsage = serde_json::from_str(raw).expect("parse");
+        assert_eq!(u.cache_creation_input_tokens, 0);
+        assert_eq!(u.cache_read_input_tokens, 0);
     }
 
     use super::*;

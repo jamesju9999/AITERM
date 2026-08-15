@@ -231,6 +231,7 @@ async fn consume_gemini_sse(
                 let usage = chunk.usage_metadata.map(|u| TokenUsage {
                     prompt: u.prompt_token_count,
                     completion: u.candidates_token_count,
+                    ..Default::default()
                 });
                 let _ = tx.send(GenerateChunk { delta: String::new(), done: true, usage }).await;
                 saw_done = true;

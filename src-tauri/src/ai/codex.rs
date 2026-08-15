@@ -232,6 +232,8 @@ async fn consume_codex_sse(
                     let usage = response.and_then(|r| r.usage).map(|u| TokenUsage {
                         prompt: u.input_tokens,
                         completion: u.output_tokens,
+                        cache_read: u.input_tokens_details.cached_tokens,
+                        cache_write: u.input_tokens_details.cache_write_tokens,
                     });
                     let _ = tx
                         .send(GenerateChunk { delta: String::new(), done: true, usage })
@@ -288,12 +290,22 @@ struct CodexResponseSummary {
     error: Option<serde_json::Value>,
 }
 
+#[derive(Deserialize, Default)]
+struct CodexInputTokensDetails {
+    #[serde(default)]
+    cached_tokens: u32,
+    #[serde(default)]
+    cache_write_tokens: u32,
+}
+
 #[derive(Deserialize)]
 struct CodexUsage {
     #[serde(default)]
     input_tokens: u32,
     #[serde(default)]
     output_tokens: u32,
+    #[serde(default)]
+    input_tokens_details: CodexInputTokensDetails,
 }
 
 #[cfg(test)]
@@ -301,6 +313,26 @@ mod tests {
     use super::*;
     use crate::ai::{ChatMessage, EnvSnapshot, QueryMode};
     use std::path::PathBuf;
+
+    #[test]
+    fn codex_usage_parses_cache_token_details() {
+        let raw = r#"{"input_tokens":17,
+                      "input_tokens_details":{"cache_write_tokens":320,"cached_tokens":8192},
+                      "output_tokens":13}"#;
+        let u: CodexUsage = serde_json::from_str(raw).expect("parse");
+        assert_eq!(u.input_tokens, 17);
+        assert_eq!(u.output_tokens, 13);
+        assert_eq!(u.input_tokens_details.cached_tokens, 8192);
+        assert_eq!(u.input_tokens_details.cache_write_tokens, 320);
+    }
+
+    #[test]
+    fn codex_usage_without_details_defaults_to_zero() {
+        let raw = r#"{"input_tokens":10,"output_tokens":2}"#;
+        let u: CodexUsage = serde_json::from_str(raw).expect("parse");
+        assert_eq!(u.input_tokens_details.cached_tokens, 0);
+        assert_eq!(u.input_tokens_details.cache_write_tokens, 0);
+    }
 
     fn req(system_prompt: &str, messages: Vec<ChatMessage>) -> GenerateRequest {
         GenerateRequest {

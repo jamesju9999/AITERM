@@ -145,6 +145,12 @@ pub struct GenerateChunk {
 pub struct TokenUsage {
     pub prompt: u32,
     pub completion: u32,
+    /// 從快取讀取的 token（Anthropic `cache_read_input_tokens`、
+    /// Codex `input_tokens_details.cached_tokens`）。來源沒提供就是 0。
+    pub cache_read: u32,
+    /// 寫入快取的 token（Anthropic `cache_creation_input_tokens`、
+    /// Codex `input_tokens_details.cache_write_tokens`）。
+    pub cache_write: u32,
 }
 
 /// The structured payload the AI is required to return for `/ai` queries.
