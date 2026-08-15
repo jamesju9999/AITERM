@@ -53,7 +53,15 @@ export function ModelPickerButton({ providers, selectedId, onChange, disabled }:
       // 背景放著不動的視窗不該一直打上游。
       if (!document.hidden) load();
     }, 5 * 60 * 1000);
-    return () => { cancelled = true; clearInterval(timer); };
+    // 使用者離開一段時間再回來時，最關心的就是「現在還剩多少」。只靠 interval
+    // 會讓他盯著最多 5 分鐘前的舊數字。後端有 60 秒快取，這裡補查很便宜。
+    const onVisible = () => { if (!document.hidden) load(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [selectedId]);
 
   // 展開時才查全部，這是唯一會一次打多個上游端點的時機。

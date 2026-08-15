@@ -114,4 +114,26 @@ describe("ModelPickerButton 配額徽章", () => {
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
     await waitFor(() => expect(mockQuota).toHaveBeenCalledTimes(2));
   });
+
+  it("視窗隱藏時跳過輪詢", async () => {
+    const spy = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    render(<ModelPickerButton providers={providers} selectedId="anthropic-pro" onChange={() => {}} />);
+    await waitFor(() => expect(mockQuota).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    expect(mockQuota).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it("視窗重新可見時立即補查，不必等下一次輪詢", async () => {
+    // 使用者離開一段時間再回來，最關心的就是「現在還剩多少」。
+    // 只靠 5 分鐘的 interval 會讓他盯著最多 5 分鐘前的舊數字。
+    const spy = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    render(<ModelPickerButton providers={providers} selectedId="anthropic-pro" onChange={() => {}} />);
+    await waitFor(() => expect(mockQuota).toHaveBeenCalledTimes(1));
+
+    spy.mockReturnValue(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() => expect(mockQuota).toHaveBeenCalledTimes(2));
+    spy.mockRestore();
+  });
 });
