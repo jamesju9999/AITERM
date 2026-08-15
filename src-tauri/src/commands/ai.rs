@@ -37,6 +37,9 @@ pub struct AiStreamEvent {
     pub kind: AiStreamKind,
     pub delta: String,
     pub done: bool,
+    /// 本次請求的總 token（prompt + completion）。只在 `done` 的事件上有值。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<u32>,
 }
 
 /// Extract the JSON object from raw AI output.
@@ -220,6 +223,7 @@ pub async fn ai_query(
             kind: AiStreamKind::Query,
             delta: chunk.delta.clone(),
             done: chunk.done,
+            tokens: chunk.usage.map(|u| u.prompt + u.completion),
         });
         buf.push_str(&chunk.delta);
         if chunk.done { break; }
@@ -371,6 +375,7 @@ pub async fn ai_chat(
                     kind: AiStreamKind::Chat,
                     delta: chunk.delta.clone(),
                     done: chunk.done,
+                    tokens: chunk.usage.map(|u| u.prompt + u.completion),
                 });
                 if chunk.done { break; }
             }
@@ -416,6 +421,7 @@ pub async fn ai_chat(
                                 kind: AiStreamKind::Chat,
                                 delta,
                                 done: false,
+                                tokens: None,
                             });
                         }
                         if chunk.done {
@@ -424,6 +430,7 @@ pub async fn ai_chat(
                                 kind: AiStreamKind::Chat,
                                 delta: String::new(),
                                 done: true,
+                                tokens: chunk.usage.map(|u| u.prompt + u.completion),
                             });
                             break;
                         }
@@ -456,6 +463,7 @@ pub async fn ai_chat(
             kind: AiStreamKind::Chat,
             delta: chunk.delta.clone(),
             done: chunk.done,
+            tokens: chunk.usage.map(|u| u.prompt + u.completion),
         });
         buf.push_str(&chunk.delta);
         if chunk.done { break; }
@@ -591,6 +599,7 @@ pub async fn agent_chat(
                 kind: AiStreamKind::Chat,
                 delta: chunk.delta.clone(),
                 done: chunk.done,
+                tokens: chunk.usage.map(|u| u.prompt + u.completion),
             });
             if chunk.done { break; }
         }
@@ -626,6 +635,7 @@ pub async fn agent_chat(
                         kind: AiStreamKind::Chat,
                         delta: chunk.delta.clone(),
                         done: chunk.done,
+                        tokens: chunk.usage.map(|u| u.prompt + u.completion),
                     });
                     buf2.push_str(&chunk.delta);
                     if chunk.done { break; }
@@ -655,6 +665,7 @@ pub async fn agent_chat(
             kind: AiStreamKind::Chat,
             delta: chunk.delta.clone(),
             done: chunk.done,
+            tokens: chunk.usage.map(|u| u.prompt + u.completion),
         });
         buf.push_str(&chunk.delta);
         if chunk.done { break; }

@@ -11,9 +11,11 @@ export type AgentPhase =
 interface AgentStatusBarProps {
   status: AgentPhase;
   onDismiss: () => void;
+  /** 本次 mission 累計 token；0 或未提供時不顯示。 */
+  missionTokens?: number;
 }
 
-export function AgentStatusBar({ status, onDismiss }: AgentStatusBarProps) {
+export function AgentStatusBar({ status, onDismiss, missionTokens }: AgentStatusBarProps) {
   const { t } = useLocale();
 
   let icon: string;
@@ -65,6 +67,13 @@ export function AgentStatusBar({ status, onDismiss }: AgentStatusBarProps) {
           {t.term_agent_status_step(status.step, status.maxSteps)}
         </span>
       )}
+      {missionTokens ? (
+        <span className="agent-status-tokens" data-testid="mission-tokens">
+          {missionTokens >= 1000
+            ? `${(missionTokens / 1000).toFixed(1)}k`
+            : String(missionTokens)}
+        </span>
+      ) : null}
       {dismissible && (
         <button
           type="button"
