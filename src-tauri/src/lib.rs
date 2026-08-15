@@ -126,7 +126,16 @@ pub fn run_headless() {
 pub fn run() {
     let config = Arc::new(ConfigStore::new());
     let secrets = Arc::new(SecretStore::new());
-    let router = AiRouter::new(config.clone(), secrets.clone());
+    let usage_store = Arc::new(tauri::async_runtime::block_on(async {
+        let s = usage::UsageStore::new().await;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        s.prune_expired(now).await;
+        s
+    }));
+    let router = AiRouter::new(config.clone(), secrets.clone(), usage_store.clone());
 
     let design_db = tauri::async_runtime::block_on(async { DesignDb::new().await });
     let loop_session_db = tauri::async_runtime::block_on(async { LoopSessionDb::new().await });
@@ -250,6 +259,7 @@ pub fn run() {
         .manage(config)
         .manage(secrets)
         .manage(router)
+        .manage(usage_store)
         .manage(Arc::new(usage::quota::cache::QuotaCache::new()))
         .manage(DbManager::new())
         .manage(design_db)

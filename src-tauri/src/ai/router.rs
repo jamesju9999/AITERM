@@ -419,11 +419,16 @@ async fn do_codex_oauth_refresh(
 pub struct AiRouter {
     config: Arc<ConfigStore>,
     secrets: Arc<SecretStore>,
+    usage: Arc<crate::usage::UsageStore>,
 }
 
 impl AiRouter {
-    pub fn new(config: Arc<ConfigStore>, secrets: Arc<SecretStore>) -> Self {
-        Self { config, secrets }
+    pub fn new(
+        config: Arc<ConfigStore>,
+        secrets: Arc<SecretStore>,
+        usage: Arc<crate::usage::UsageStore>,
+    ) -> Self {
+        Self { config, secrets, usage }
     }
 
     /// Resolve the default provider (from config) into a live `AiProvider`.
@@ -436,7 +441,16 @@ impl AiRouter {
                 if !key.trim().is_empty() {
                     let client: Arc<dyn AiProvider> =
                         Arc::new(OpenAiClient::new(key));
-                    return Ok(client);
+                    // 這條路徑繞過 resolve_by_id，同樣要包上記帳裝飾器，否則
+                    // 沒設定過 provider 的使用者完全沒有用量統計。
+                    // provider_id 用 env:OPENAI_API_KEY 是刻意的：跟真正設定
+                    // 過的 provider 在統計表裡要能區分開。
+                    return Ok(Arc::new(crate::usage::metered::MeteredProvider::new(
+                        client,
+                        self.usage.clone(),
+                        "env:OPENAI_API_KEY".into(),
+                        "gpt-4o-mini".into(),
+                    )));
                 }
             }
             return Err(AiError::NotConfigured);
@@ -649,7 +663,14 @@ impl AiRouter {
                 crate::ai::chatgpt_web::ChatgptWebProvider::new(provider_cfg.model.clone()),
             ),
         };
-        Ok(provider)
+        // 一般路徑的記帳接點：包上裝飾器後全部 6 個既有呼叫端零改動就自動
+        // 記帳（見 usage/metered.rs）。
+        Ok(Arc::new(crate::usage::metered::MeteredProvider::new(
+            provider,
+            self.usage.clone(),
+            provider_cfg.id.clone(),
+            provider_cfg.model.clone(),
+        )))
     }
 }
 
@@ -690,12 +711,14 @@ mod tests {
         }
     }
 
-    fn make_router(cfg: AppConfig) -> AiRouter {
+    async fn make_router(cfg: AppConfig) -> AiRouter {
         // Use an in-memory ConfigStore (temp path) and a SecretStore that
         // returns nothing from the keychain (no real keys needed for these tests).
         let config = Arc::new(crate::config::ConfigStore::from_config(cfg));
         let secrets = Arc::new(SecretStore::new());
-        AiRouter::new(config, secrets)
+        // 這些測試不驗證用量統計本身，記帳用純記憶體的 SQLite 即可。
+        let usage = Arc::new(crate::usage::UsageStore::new_at(":memory:").await);
+        AiRouter::new(config, secrets, usage)
     }
 
     #[test]
@@ -791,7 +814,7 @@ mod tests {
     async fn empty_config_no_env_var_returns_not_configured() {
         let _g = ENV_LOCK.lock().await;
         std::env::remove_var("OPENAI_API_KEY");
-        let router = make_router(AppConfig::default());
+        let router = make_router(AppConfig::default()).await;
         assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
     }
 
@@ -799,7 +822,7 @@ mod tests {
     async fn empty_config_with_env_var_returns_openai_provider() {
         let _g = ENV_LOCK.lock().await;
         std::env::set_var("OPENAI_API_KEY", "sk-test");
-        let router = make_router(AppConfig::default());
+        let router = make_router(AppConfig::default()).await;
         let result = router.resolve().await.is_ok();
         std::env::remove_var("OPENAI_API_KEY");
         assert!(result);
@@ -809,7 +832,7 @@ mod tests {
     async fn unknown_provider_id_returns_not_configured() {
         let _g = ENV_LOCK.lock().await;
         std::env::remove_var("OPENAI_API_KEY");
-        let router = make_router(AppConfig::default());
+        let router = make_router(AppConfig::default()).await;
         assert!(matches!(router.resolve_by_id("nonexistent").await, Err(AiError::NotConfigured)));
     }
 
@@ -829,7 +852,7 @@ mod tests {
             auth_method: None,
         });
         cfg.default_provider = Some("local-llama".into());
-        let router = make_router(cfg);
+        let router = make_router(cfg).await;
         // Should succeed even with no secret in the keychain.
         assert!(router.resolve().await.is_ok());
     }
@@ -850,7 +873,7 @@ mod tests {
             auth_method: None,
         });
         cfg.default_provider = Some("or".into());
-        let router = make_router(cfg);
+        let router = make_router(cfg).await;
         assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
     }
 
@@ -870,7 +893,7 @@ mod tests {
             auth_method: None,
         });
         cfg.default_provider = Some("grok".into());
-        let router = make_router(cfg);
+        let router = make_router(cfg).await;
         assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
     }
 
@@ -890,7 +913,7 @@ mod tests {
             auth_method: None,
         });
         cfg.default_provider = Some("ds".into());
-        let router = make_router(cfg);
+        let router = make_router(cfg).await;
         assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
     }
 
@@ -910,7 +933,7 @@ mod tests {
             auth_method: None,
         });
         cfg.default_provider = Some("kimi".into());
-        let router = make_router(cfg);
+        let router = make_router(cfg).await;
         assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
     }
 
@@ -930,7 +953,7 @@ mod tests {
             auth_method: None,
         });
         cfg.default_provider = Some("kimi-coding".into());
-        let router = make_router(cfg);
+        let router = make_router(cfg).await;
         assert!(matches!(router.resolve().await, Err(AiError::Network { .. })));
     }
 
@@ -950,7 +973,7 @@ mod tests {
             auth_method: None,
         });
         cfg.default_provider = Some("kimi-coding".into());
-        let router = make_router(cfg);
+        let router = make_router(cfg).await;
         assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
     }
 
@@ -970,7 +993,7 @@ mod tests {
             auth_method: Some("oauth".into()),
         });
         cfg.default_provider = Some("gemini".into());
-        let router = make_router(cfg);
+        let router = make_router(cfg).await;
         assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
     }
 
@@ -990,7 +1013,7 @@ mod tests {
             auth_method: Some("oauth".into()),
         });
         cfg.default_provider = Some("gemini-no-project".into());
-        let router = make_router(cfg);
+        let router = make_router(cfg).await;
         // The in-memory test SecretStore has neither a token nor a project id
         // stored, so this exercises the same NotConfigured path a real
         // half-provisioned login would hit. Locks in that a missing
@@ -1015,7 +1038,7 @@ mod tests {
             auth_method: Some("oauth".into()),
         });
         cfg.default_provider = Some("codex".into());
-        let router = make_router(cfg);
+        let router = make_router(cfg).await;
         assert!(matches!(router.resolve().await, Err(AiError::NotConfigured)));
     }
     /// keychain 讀取失敗跟「沒設定過」是兩件事，但原本都被 map_err 壓成

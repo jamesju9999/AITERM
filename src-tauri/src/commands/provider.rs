@@ -425,6 +425,7 @@ pub async fn test_provider(
     id: String,
     config: State<'_, Arc<ConfigStore>>,
     secrets: State<'_, Arc<SecretStore>>,
+    usage: State<'_, Arc<crate::usage::UsageStore>>,
 ) -> Result<String, AiError> {
     let provider_cfg = config
         .get()
@@ -462,7 +463,7 @@ pub async fn test_provider(
     // one minimal streamGenerateContent call validating token + project id
     // together against the actual backend.
 
-    let router = AiRouter::new(config.inner().clone(), secrets.inner().clone());
+    let router = AiRouter::new(config.inner().clone(), secrets.inner().clone(), usage.inner().clone());
     let provider = router.resolve_by_id(&id).await?;
     provider.health_check().await?;
     Ok("ok".into())
