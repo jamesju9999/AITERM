@@ -116,7 +116,10 @@ pub fn openai_chat_url(provider_type: ProviderType, base_url: &str) -> String {
 
 /// Returns a valid OAuth access token, refreshing it first if it's expired or
 /// within 5 minutes of expiry. Falls back to the stored token on refresh failure.
-pub(crate) async fn get_valid_oauth_token(provider_id: &str, secrets: &SecretStore) -> Result<String, AiError> {
+///
+/// pub（非 pub(crate)）是探勘測試需要的最小可見度提升——src-tauri/tests/ 下的
+/// 整合測試是獨立 crate。純粹放寬可見度，行為不變。見 usage_probe.rs。
+pub async fn get_valid_oauth_token(provider_id: &str, secrets: &SecretStore) -> Result<String, AiError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
