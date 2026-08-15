@@ -285,16 +285,30 @@ async fn usage_summary(range: UsageRange) -> Result<UsageSummary, String>;
 
 ## 前端 UI
 
-### 第一層：`ModelPickerButton` 下拉選單
+### 第一層：`ModelPickerButton` —— 常駐徽章
 
-配額顯示放進既有的 `src/components/ModelPickerButton.tsx`，理由是這個元件已被 8 個檔案共用（TerminalView、LoopStudio 的 index 與 AgentRoster、VcsView、KnowledgeBaseView、CrossDbAiChat、DocConverterView、ApiDocs 的 ExtractionSettings），改一處就到處都有，不必新增一條狀態列。
+配額顯示放進既有的 `src/components/ModelPickerButton.tsx`，理由是這個元件已被 8 個檔案共用（TerminalView、LoopStudio 的 index 與 AgentRoster、VcsView、KnowledgeBaseView、CrossDbAiChat、DocConverterView、ApiDocs 的 ExtractionSettings）。改一處，終端、LoopStudio、VCS、知識庫等視圖就全部常駐可見，不必新增任何全域狀態列，也不會跟既有 `AgentStatusBar` 搶版面。
 
-- **下拉展開時**才觸發 `usage_quota_all`（不是掛載時），避免沒人看的時候一直打網路。
-- 每個 provider 列右側一個緊湊徽章：`5h 7%` 或 `premium 142/300`，依 `severity` 上色（normal 灰／warning 琥珀／critical 紅）。
-- 沒有配額概念的 provider 顯示今日 token 數，不顯示徽章。
-- 查詢失敗顯示灰色「—」加 tooltip，**不擋住選單、不跳錯誤**。
+**收合狀態（常駐）**：按鈕上一律顯示目前選中 provider 的代表窗徽章 —— `5h 7%`、`premium 142/300`。這是使用者「隨時知道還剩多少」的主要入口，**不是只有超標才出現**。
 
-按鈕本身（收合狀態）只在**目前選中的 provider 進入 warning 以上**時才顯示徽章，其餘保持現狀 —— 平常都是綠燈，常駐顯示只是噪音。
+- 代表窗的選擇：Anthropic 用 `representative-claim` 指定的那個；Codex 用 `primary_window`；Copilot 用唯一那個有限的 snapshot。即 `windows` 裡 `is_primary == true` 者，沒有就取第一個。
+- 依 `severity` 上色：normal 用低調的次要文字色（不搶注意力）、warning 琥珀、critical 紅。**平常靜、超標才跳**，靠顏色而非有無來分級。
+- 沒有配額概念的 provider（Ollama、API key 型）顯示今日 token 數，例如 `12.4k`。
+- 查詢失敗或尚未載入顯示灰色「—」，**絕不擋住按鈕的原有功能**。
+
+**展開狀態（下拉選單）**：每個 provider 列右側顯示各自的徽章，讓使用者能在切換前比較。多窗的 provider（Anthropic 的 5h + 7d）在這裡兩個都顯示，收合狀態則只顯示代表窗。
+
+- 查詢失敗顯示灰色「—」加 tooltip 說明原因，**不擋住選單、不跳錯誤**。
+
+**抓取時機**（因常駐顯示而必要）：
+
+- 掛載時查一次目前選中的 provider（只查一個，不是全部）。
+- 之後每 **5 分鐘**背景輪詢一次，同樣只查選中的那個。搭配 60 秒快取，多個視圖同時掛載也只會產生一次實際請求。
+- 切換 provider 時立即查新選中的那個。
+- **下拉展開時**才觸發 `usage_quota_all`（查全部），這是唯一會一次打三個端點的時機。
+- 視窗失去焦點時暫停輪詢，取得焦點時若快取已過期則立即補一次 —— 背景放著不動的視窗不該一直打上游。
+
+> 輪詢成本很低：三個都是單次 GET、幾百 ms，而常駐狀態每 5 分鐘只查一個。但這確實是「常駐顯示」相對「展開才查」多付的代價，實作時不要把它擴大成「每 5 分鐘查全部」。
 
 ### 第二層：Settings 新增「用量」頁
 
@@ -343,8 +357,12 @@ async fn usage_summary(range: UsageRange) -> Result<UsageSummary, String>;
 
 **前端 Vitest**：
 
-- `ModelPickerButton` 開啟時才呼叫 `usage_quota_all`（掛載時不呼叫）。
-- 配額查詢失敗時選單仍可正常選取 provider。
+- `ModelPickerButton` 掛載時只查**選中的那一個** provider（呼叫 `usage_quota`），**不是** `usage_quota_all`。
+- 下拉展開時才呼叫 `usage_quota_all`。
+- 收合狀態在 severity 為 normal 時**仍然顯示**徽章（這是 A 案的核心，最容易在改動中被退回成「只有超標才顯示」）。
+- 切換 provider 會立即重查新選中者。
+- 視窗失焦時停止輪詢。
+- 配額查詢失敗時選單仍可正常選取 provider，按鈕仍可點擊。
 - `UsagePage` 的區間切換與空狀態。
 
 > **fixture 一律取自探勘 dump 的真實回應，不要自己編。** 自編 fixture 會把錯誤的假設固化成「通過的測試」。
