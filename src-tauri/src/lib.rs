@@ -321,6 +321,7 @@ pub fn run() {
             // 用量／配額
             commands::usage::usage_quota,
             commands::usage::usage_quota_all,
+            commands::usage::usage_summary,
             // ChatGPT Web
             chatgpt_web::session::chatgpt_web_take,
             chatgpt_web::session::chatgpt_web_chunk,
