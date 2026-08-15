@@ -92,9 +92,17 @@
 .aiterm-status-provider {
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 11px;
-  max-width: 180px;
+  max-width: 260px;
+  overflow: hidden;
+}
+
+/* 這顆按鈕是 flex 容器，text-overflow 對它本身無效——要讓名稱那一段自己
+   縮、自己省略，否則加上配額徽章後名稱會被擠成兩行而且被裁掉。 */
+.aiterm-status-provider > span:first-of-type {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .aiterm-settings-btn {

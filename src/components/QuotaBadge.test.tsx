@@ -23,9 +23,28 @@ describe("QuotaBadge", () => {
     expect(screen.getByTestId("quota-badge").className).toContain("critical");
   });
 
-  it("有 detail 時優先顯示原始語意", () => {
-    render(<QuotaBadge window={win({ label: "premium", detail: "142 / 300" })} />);
-    expect(screen.getByTestId("quota-badge")).toHaveTextContent("premium 142 / 300");
+  it("有 detail 時只顯示 detail，標籤讓給 tooltip", () => {
+    // 徽章擠在標題列裡，寬度是稀缺資源。「premium 142/300」會把 provider
+    // 名稱擠成兩行並被裁掉（實機發生過），所以標籤不進徽章本文。
+    render(<QuotaBadge window={win({ label: "premium", detail: "142/300" })} />);
+    const badge = screen.getByTestId("quota-badge");
+    expect(badge).toHaveTextContent("142/300");
+    expect(badge.textContent).not.toContain("premium");
+    // 但脈絡不能消失——它要在 tooltip 裡。
+    expect(badge.title).toContain("premium");
+  });
+
+  it("tooltip 帶出百分比與重置時間", () => {
+    const inTwoHours = Math.floor(Date.now() / 1000) + 2 * 3600;
+    render(<QuotaBadge window={win({ label: "5h", used_percent: 7, resets_at: inTwoHours })} />);
+    const badge = screen.getByTestId("quota-badge");
+    expect(badge.title).toContain("已用 7%");
+    expect(badge.title).toContain("2 小時後重置");
+  });
+
+  it("重置時間已過或未提供時 tooltip 不提它", () => {
+    render(<QuotaBadge window={win({ resets_at: null })} />);
+    expect(screen.getByTestId("quota-badge").title).not.toContain("重置");
   });
 
   it("百分比四捨五入到整數", () => {

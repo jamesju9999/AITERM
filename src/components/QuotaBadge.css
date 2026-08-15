@@ -4,6 +4,8 @@
   border-radius: 4px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+  /* 徽章是這顆按鈕裡最不該被壓縮的東西：名稱可以省略號，數字不能。 */
+  flex-shrink: 0;
 }
 /* normal 刻意低調：常駐顯示但不搶注意力，靠顏色而非有無來分級。 */
 .quota-badge--normal { color: var(--text-secondary, #8a8a8a); }

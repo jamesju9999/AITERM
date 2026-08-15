@@ -83,7 +83,8 @@ pub fn parse_user(
                 used_percent: used,
                 resets_at,
                 severity: QuotaSeverity::from_percent(used),
-                detail: Some(format!("{} / {}", remaining, entitlement)),
+                // 不留空格：這個字串會擠在標題列的徽章裡，寬度是稀缺資源。
+                detail: Some(format!("{}/{}", remaining, entitlement)),
                 // 契約是「至多一個 is_primary」。Copilot 可能同時有多個有限
                 // 項目（chat / completions / premium 都有額度的方案），只有
                 // premium 值得放在收合徽章上 —— 其餘設 false，否則
@@ -205,7 +206,7 @@ mod tests {
     #[test]
     fn detail_preserves_the_original_count_semantics() {
         let q = parse_user("Github-Sonet4.5", REAL, 0).expect("parse");
-        assert_eq!(q.windows[0].detail.as_deref(), Some("142 / 300"));
+        assert_eq!(q.windows[0].detail.as_deref(), Some("142/300"));
     }
 
     #[test]
