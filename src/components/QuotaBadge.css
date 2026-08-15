@@ -1,4 +1,7 @@
 .quota-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 11px;
   padding: 1px 6px;
   border-radius: 4px;
@@ -7,7 +10,32 @@
   /* 徽章是這顆按鈕裡最不該被壓縮的東西：名稱可以省略號，數字不能。 */
   flex-shrink: 0;
 }
-/* normal 刻意低調：常駐顯示但不搶注意力，靠顏色而非有無來分級。 */
+
+/* 軌道寬度固定，長條才不會因為數字長短（7% vs 142/300）而跳動。 */
+.quota-bar {
+  display: inline-block;
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border, #3a3a3a);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.quota-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: currentColor;
+  transition: width 0.3s ease;
+}
+
+/* normal 刻意低調：常駐顯示但不搶注意力，靠顏色而非有無來分級。
+   長條用 currentColor，所以文字與長條永遠同色，只需改一處。 */
 .quota-badge--normal { color: var(--text-secondary, #8a8a8a); }
 .quota-badge--warning { color: #f59e0b; background: rgba(245, 158, 11, 0.12); }
 .quota-badge--critical { color: #ef4444; background: rgba(239, 68, 68, 0.14); }
+
+@media (prefers-reduced-motion: reduce) {
+  .quota-bar-fill { transition: none; }
+}

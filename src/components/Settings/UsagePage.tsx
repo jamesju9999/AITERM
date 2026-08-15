@@ -44,10 +44,11 @@ export function UsagePage() {
             <div className="usage-quota-windows">
               {r.quota.windows.map((w) => (
                 <div key={w.label} className="usage-quota-window">
-                  <QuotaBadge window={w} />
+                  <QuotaBadge window={w} bar={false} />
                   <div className="usage-quota-bar">
-                    <div className="usage-quota-bar-fill"
-                         style={{ width: `${Math.min(100, w.used_percent)}%` }} />
+                    {/* 長條跟著 severity 變色，否則超標的窗會畫成一樣的藍色。 */}
+                    <div className={`usage-quota-bar-fill usage-quota-bar-fill--${w.severity}`}
+                         style={{ width: `${Math.min(100, Math.max(0, w.used_percent))}%` }} />
                   </div>
                 </div>
               ))}

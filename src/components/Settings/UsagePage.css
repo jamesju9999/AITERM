@@ -12,5 +12,9 @@
   flex: 1; height: 6px; border-radius: 3px;
   background: var(--border, #2a2a2a); overflow: hidden;
 }
+/* 與標題列徽章同一套配色，兩邊看起來才是同一個東西。 */
 .usage-quota-bar-fill { height: 100%; background: var(--accent, #3b82f6); }
+.usage-quota-bar-fill--normal { background: var(--text-secondary, #8a8a8a); }
+.usage-quota-bar-fill--warning { background: #f59e0b; }
+.usage-quota-bar-fill--critical { background: #ef4444; }
 .usage-quota-card--failed .usage-quota-error { font-size: 12px; opacity: 0.7; }

@@ -51,4 +51,34 @@ describe("QuotaBadge", () => {
     render(<QuotaBadge window={win({ used_percent: 52.5 })} />);
     expect(screen.getByTestId("quota-badge")).toHaveTextContent("53%");
   });
+  it("畫出一條依已用百分比填充的長條", () => {
+    render(<QuotaBadge window={win({ used_percent: 42 })} />);
+    expect(screen.getByTestId("quota-bar-fill")).toHaveStyle({ width: "42%" });
+  });
+
+  it("填充寬度夾在 0–100 之間，不會溢出軌道", () => {
+    // 上游 burst 後短暫回超過 100 的值時，長條不該畫出容器外。
+    const { rerender } = render(<QuotaBadge window={win({ used_percent: 130 })} />);
+    expect(screen.getByTestId("quota-bar-fill")).toHaveStyle({ width: "100%" });
+    rerender(<QuotaBadge window={win({ used_percent: -5 })} />);
+    expect(screen.getByTestId("quota-bar-fill")).toHaveStyle({ width: "0%" });
+  });
+
+  it("剩餘型（Copilot）也畫得出長條", () => {
+    // detail 顯示的是剩餘次數，但長條畫的仍是「已用」比例。
+    render(<QuotaBadge window={win({ label: "premium", detail: "142/300", used_percent: 52.5 })} />);
+    expect(screen.getByTestId("quota-bar-fill")).toHaveStyle({ width: "52.5%" });
+    expect(screen.getByTestId("quota-badge")).toHaveTextContent("142/300");
+  });
+
+  it("長條與文字共用同一個 severity class", () => {
+    render(<QuotaBadge window={win({ severity: "critical" })} />);
+    expect(screen.getByTestId("quota-badge").className).toContain("critical");
+  });
+  it("bar={false} 時不畫迷你長條（設定頁自己有全寬長條，不要重複）", () => {
+    render(<QuotaBadge window={win()} bar={false} />);
+    expect(screen.queryByTestId("quota-bar-fill")).not.toBeInTheDocument();
+    // 數字還在。
+    expect(screen.getByTestId("quota-badge")).toHaveTextContent("7%");
+  });
 });
