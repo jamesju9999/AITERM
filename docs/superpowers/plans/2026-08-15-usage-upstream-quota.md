@@ -2209,9 +2209,9 @@ Expected: FAIL，找不到 `quota-refresh`
 ```tsx
       <section className="usage-quota-section">
         <div className="usage-quota-header">
-          <h3>{t("usageQuotaTitle")}</h3>
+          <h3>{t("usage_quota_title")}</h3>
           <button data-testid="quota-refresh" onClick={() => loadQuotas(true)}>
-            {t("usageRefresh")}
+            {t("usage_refresh")}
           </button>
         </div>
         {quotas.map((r) => {
@@ -2221,7 +2221,7 @@ Expected: FAIL，找不到 `quota-refresh`
               <div key={r.provider_id} className="usage-quota-card usage-quota-card--failed"
                    data-testid={`quota-failed-${r.provider_id}`}>
                 <span className="usage-quota-provider">{r.provider_id}</span>
-                <span className="usage-quota-error">{t("quotaUnavailable")}: {r.message}</span>
+                <span className="usage-quota-error">{t("quota_unavailable")}: {r.message}</span>
               </div>
             );
           }
@@ -2276,8 +2276,8 @@ Expected: FAIL，找不到 `quota-refresh`
 - [ ] **Step 5: i18n**
 
 ```ts
-  usageQuotaTitle: "Subscription quota",  // zh-TW: "訂閱額度"
-  usageRefresh: "Refresh",                // zh-TW: "重新整理"
+  usage_quota_title: "Subscription quota",  // zh-TW: "訂閱額度"
+  usage_refresh: "Refresh",                // zh-TW: "重新整理"
 ```
 
 - [ ] **Step 6: 跑測試確認通過**
