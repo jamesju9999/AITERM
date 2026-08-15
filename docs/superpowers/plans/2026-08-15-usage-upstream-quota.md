@@ -359,8 +359,9 @@ mod tests {
     fn parses_rfc3339_resets_at_into_unix_seconds() {
         let q = parse_usage("anthropic-pro", REAL, 1_786_760_000).expect("parse");
         let five = q.windows.iter().find(|w| w.label == "5h").expect("5h 窗");
-        // 2026-08-15T07:00:00Z
-        assert_eq!(five.resets_at, Some(1_786_770_000));
+        // 2026-08-15T07:00:00Z。這個值有獨立佐證：同一份探勘回應的 header
+        // `anthropic-ratelimit-unified-5h-reset` 就是 1786777200。
+        assert_eq!(five.resets_at, Some(1_786_777_200));
     }
 
     #[test]
