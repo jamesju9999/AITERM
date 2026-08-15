@@ -291,7 +291,9 @@ async fn usage_summary(range: UsageRange) -> Result<UsageSummary, String>;
 
 **收合狀態（常駐）**：按鈕上一律顯示目前選中 provider 的代表窗徽章 —— `5h 7%`、`premium 142/300`。這是使用者「隨時知道還剩多少」的主要入口，**不是只有超標才出現**。
 
-- 代表窗的選擇：Anthropic 用 `representative-claim` 指定的那個；Codex 用 `primary_window`；Copilot 用唯一那個有限的 snapshot。即 `windows` 裡 `is_primary == true` 者，沒有就取第一個。
+- 代表窗的選擇：**取最嚴重的那個窗**。同嚴重度時才用上游標記的代表窗（Anthropic 的 `representative-claim`、Codex 的 `primary_window`、Copilot 的 `premium_interactions`，即 `is_primary`），再同則取第一個。
+  > 一開始的設計是直接用上游的代表窗，但那會在「5h 窗剛重置 0%、7d 窗已 96%」時顯示綠色 0%，與這個功能的目的正好相反。收合狀態只有一格，那一格必須是最該讓人停手的數字。
+- **severity 不是 used_percent 的函數**：上游若有明確的「已被擋住」訊號（Codex 的 `limit_reached` / `allowed`、Anthropic 的 `spend.severity`），adapter 必須把該窗提成 critical —— 花費上限觸發時 `used_percent` 可能還是 0。
 - 依 `severity` 上色：normal 用低調的次要文字色（不搶注意力）、warning 琥珀、critical 紅。**平常靜、超標才跳**，靠顏色而非有無來分級。
 - 沒有配額概念的 provider（Ollama、API key 型）顯示今日 token 數，例如 `12.4k`。
 - 查詢失敗或尚未載入顯示灰色「—」，**絕不擋住按鈕的原有功能**。
