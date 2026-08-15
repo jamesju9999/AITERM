@@ -20,9 +20,14 @@ use crate::{
     secret::SecretStore,
 };
 
-const ANTHROPIC_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+/// 這裡是 Anthropic OAuth 端點知識唯一的一份定義；`ai/router.rs` 的 refresh
+/// 流程 import 這裡，不另外複製一份。同一個檔案先前對 Google 的 client
+/// secret 留了第二份副本，結果登入成功但每次 refresh 都 400，約一小時後
+/// session 死掉且毫無線索（見 router.rs 開頭的註解）。共用一份定義讓那種
+/// 失敗在結構上不可能發生。
+pub(crate) const ANTHROPIC_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const ANTHROPIC_OAUTH_AUTH_URL: &str = "https://claude.ai/oauth/authorize";
-const ANTHROPIC_OAUTH_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
+pub(crate) const ANTHROPIC_OAUTH_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const ANTHROPIC_OAUTH_REDIRECT_URI: &str = "https://platform.claude.com/oauth/code/callback";
 const ANTHROPIC_OAUTH_REDIRECT_URI_ENCODED: &str = "https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback";
 // Claude subscription scopes — platform.claude.com requires %20 (not +) for space
@@ -900,7 +905,7 @@ pub async fn anthropic_oauth_complete(
     let resp = client
         .post(ANTHROPIC_OAUTH_TOKEN_URL)
         .header("Content-Type", "application/json")
-        .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+        .header("anthropic-beta", crate::ai::anthropic::OAUTH_BETA_HEADER)
         .json(&TokenReq {
             grant_type: "authorization_code",
             code: &code,
@@ -987,7 +992,7 @@ pub async fn get_anthropic_oauth_models(
         .get("https://api.anthropic.com/v1/models")
         .header("Authorization", format!("Bearer {token}"))
         .header("anthropic-version", "2023-06-01")
-        .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+        .header("anthropic-beta", crate::ai::anthropic::OAUTH_BETA_HEADER)
         .header("x-app", "cli")
         .send()
         .await
@@ -1781,6 +1786,19 @@ pub async fn get_codex_oauth_models(
 #[cfg(test)]
 mod login_secrets_tests {
     use super::*;
+
+    /// URL-encoded 版本必須與原始 redirect_uri 等價。
+    ///
+    /// 這兩個常數是分開手寫的：一個進 authorize URL 的 query string，一個進
+    /// token 交換的 JSON body。不一致時 Anthropic 會拒絕交換，而錯誤訊息不會
+    /// 告訴你是 redirect_uri 對不上。
+    #[test]
+    fn redirect_uri_encoded_matches_plain() {
+        let encoded = ANTHROPIC_OAUTH_REDIRECT_URI
+            .replace(':', "%3A")
+            .replace('/', "%2F");
+        assert_eq!(encoded, ANTHROPIC_OAUTH_REDIRECT_URI_ENCODED);
+    }
 
     #[test]
     #[ignore = "requires OS keychain"]

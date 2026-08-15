@@ -40,9 +40,8 @@ pub struct ClientHeaders {
     pub version: Option<String>,
 }
 
-/// OAuth 模式下我們必須送的 beta 旗標；上游靠它們判斷這是 Claude Code 的
-/// OAuth 請求，缺了就不會把 token 當 OAuth token 看待。
-const REQUIRED_OAUTH_BETA: &[&str] = &["claude-code-20250219", "oauth-2025-04-20"];
+/// OAuth 模式下我們必須送的 beta 旗標。定義在 `ai::anthropic`，全專案共用。
+use crate::ai::anthropic::OAUTH_BETA_PARTS as REQUIRED_OAUTH_BETA;
 
 /// 合併我們要求的 beta 旗標與客戶端自己宣告的旗標。
 ///

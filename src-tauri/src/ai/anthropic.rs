@@ -20,9 +20,18 @@ use crate::ai::{
 };
 
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
-/// OAuth 請求必要的 beta header。`usage/quota/anthropic.rs` 查配額端點時
-/// 共用同一份常數，不要重複定義。
+
+/// OAuth 請求必要的 beta 旗標，逗號分隔的 header 形態。
+///
+/// **這是全專案唯一的定義**。上游靠這些旗標判斷這是 Claude Code 的 OAuth
+/// 請求，缺了就不會把 token 當 OAuth token 看待。先前這個字串散在四個檔案
+/// 共八處，改動時漏掉其中幾處會讓「某些功能壞掉、某些正常」——最難查的
+/// 那種症狀。
 pub const OAUTH_BETA_HEADER: &str = "claude-code-20250219,oauth-2025-04-20";
+
+/// 同一組旗標的陣列形態，給需要與客戶端旗標合併去重的 bridge 用。
+/// 與 [`OAUTH_BETA_HEADER`] 的一致性由 `oauth_beta_two_forms_agree` 測試保證。
+pub const OAUTH_BETA_PARTS: &[&str] = &["claude-code-20250219", "oauth-2025-04-20"];
 
 pub struct AnthropicClient {
     token: String,
@@ -695,6 +704,13 @@ struct MessageDeltaUsage {
 
 #[cfg(test)]
 mod tests {
+
+    /// 兩種形態必須永遠等價 —— 收斂之後，這是唯一還可能漂移的地方。
+    #[test]
+    fn oauth_beta_two_forms_agree() {
+        assert_eq!(OAUTH_BETA_PARTS.join(","), OAUTH_BETA_HEADER);
+    }
+
     use super::*;
     use crate::ai::{EnvSnapshot, QueryMode};
     use std::path::PathBuf;

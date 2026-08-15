@@ -32,8 +32,9 @@ use crate::{
     secret::SecretStore,
 };
 
-const ANTHROPIC_OAUTH_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
-const ANTHROPIC_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+// 刻意不在這裡複製一份 —— 與下方 Google 的常數同理，端點知識只留一份定義
+// 在 `commands/provider.rs`（初次登入也用同一份）。
+use crate::commands::provider::{ANTHROPIC_OAUTH_CLIENT_ID, ANTHROPIC_OAUTH_TOKEN_URL};
 
 const GOOGLE_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 // Deliberately NOT duplicated here — imported from the single definition in
@@ -168,7 +169,7 @@ async fn do_oauth_refresh(provider_id: &str, refresh_token: &str, secrets: &Secr
     let resp = client
         .post(ANTHROPIC_OAUTH_TOKEN_URL)
         .header("Content-Type", "application/json")
-        .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+        .header("anthropic-beta", crate::ai::anthropic::OAUTH_BETA_HEADER)
         .json(&RefreshReq {
             grant_type: "refresh_token",
             refresh_token,
