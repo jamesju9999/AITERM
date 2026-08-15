@@ -163,6 +163,58 @@ pub(crate) fn now_secs() -> i64 {
         .as_secs() as i64
 }
 
+use crate::config::types::ProviderType;
+use crate::config::ConfigStore;
+use crate::secret::SecretStore;
+
+/// 依 provider 設定建立對應的 `QuotaSource`。
+///
+/// 回傳 `Ok(None)` 代表**這個 provider 沒有配額概念**（Ollama、所有 API key
+/// 型），與查詢失敗是不同的狀態，呼叫端必須能分辨。
+pub async fn source_for(
+    provider_id: &str,
+    config: &ConfigStore,
+    secrets: &SecretStore,
+) -> Result<Option<Box<dyn QuotaSource>>, AiError> {
+    let Some(cfg) = config.get_provider(provider_id) else {
+        return Ok(None);
+    };
+    let is_oauth = cfg.auth_method.as_deref() == Some("oauth");
+
+    match cfg.provider_type {
+        ProviderType::Anthropic if is_oauth => {
+            let token = crate::ai::router::get_valid_oauth_token(provider_id, secrets).await?;
+            let base = cfg
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "https://api.anthropic.com".into());
+            Ok(Some(Box::new(anthropic::AnthropicQuota::new(
+                provider_id.into(),
+                token,
+                base,
+            ))))
+        }
+        ProviderType::Codex => {
+            let (token, account_id) =
+                crate::ai::router::get_valid_codex_oauth_token(provider_id, secrets).await?;
+            Ok(Some(Box::new(codex::CodexQuota::new(
+                provider_id.into(),
+                token,
+                account_id,
+            ))))
+        }
+        ProviderType::GithubCopilot => {
+            let token = secrets
+                .get(provider_id)
+                .map_err(|_| AiError::NotConfigured)?
+                .ok_or(AiError::NotConfigured)?;
+            Ok(Some(Box::new(copilot::CopilotQuota::new(provider_id.into(), token))))
+        }
+        // Ollama、OpenaiCompatible、所有 API key 型：沒有訂閱配額概念。
+        _ => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
