@@ -59,3 +59,30 @@ export function primaryWindow(q: ProviderQuota): QuotaWindow | null {
   }
   return best;
 }
+
+// --- 本地用量累計（依 provider/model 分組的 token 統計與成本估算） ---
+
+export type UsageRange = "today" | "days7" | "days30";
+
+export interface UsageSummaryEntry {
+  provider_id: string;
+  model: string;
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  /** null 代表查不到單價 —— 顯示「—」而不是 0。 */
+  estimated_cost_usd: number | null;
+}
+
+export function usageSummary(range: UsageRange): Promise<UsageSummaryEntry[]> {
+  return invoke<UsageSummaryEntry[]>("usage_summary", { range });
+}
+
+/** 快取命中率：讀自快取的 token 佔總輸入的比例。無輸入時回 null。 */
+export function cacheHitRate(e: UsageSummaryEntry): number | null {
+  const total = e.prompt_tokens + e.cache_read_tokens;
+  if (total === 0) return null;
+  return e.cache_read_tokens / total;
+}
