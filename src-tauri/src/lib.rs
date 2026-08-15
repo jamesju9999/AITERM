@@ -16,6 +16,7 @@ pub mod pty;
 pub mod python_env;
 pub mod secret;
 pub mod telegram;
+pub mod usage;
 pub mod vcs;
 
 use std::sync::Arc;
@@ -249,6 +250,7 @@ pub fn run() {
         .manage(config)
         .manage(secrets)
         .manage(router)
+        .manage(Arc::new(usage::quota::cache::QuotaCache::new()))
         .manage(DbManager::new())
         .manage(design_db)
         .manage(loop_session_db)
@@ -306,6 +308,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // 用量／配額
+            commands::usage::usage_quota,
+            commands::usage::usage_quota_all,
             // ChatGPT Web
             chatgpt_web::session::chatgpt_web_take,
             chatgpt_web::session::chatgpt_web_chunk,

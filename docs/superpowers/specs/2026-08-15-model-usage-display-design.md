@@ -146,11 +146,16 @@ pub struct QuotaWindow {
     pub used_percent: f64,
     /// 重置時間（Unix 秒）。來源沒給就是 None。
     pub resets_at: Option<i64>,
-    /// 上游自己的嚴重度，沒有就依 used_percent 推。
+    /// 嚴重度。**不是 used_percent 的函數** —— 上游若有明確的「已被擋住」
+    /// 訊號，adapter 必須把該窗提成 Critical。上游給了 severity 字串就採用它，
+    /// 都沒有才依 used_percent 推。
     pub severity: QuotaSeverity,
     /// 保留原始語意的補充說明（Copilot 的 "142 / 300 次"）。None 表示沒有更精確的說法。
     pub detail: Option<String>,
-    /// 這個窗是不是目前的代表窗（Anthropic 的 representative-claim）。
+    /// 上游標記的代表窗（Anthropic 的 representative-claim、Codex 的
+    /// primary_window、Copilot 的 premium_interactions）。
+    /// **契約：一個 ProviderQuota 內至多一個為 true。**
+    /// 只在多個窗嚴重度相同時用來 tie-break，不決定顯示哪個。
     pub is_primary: bool,
 }
 
@@ -291,7 +296,9 @@ async fn usage_summary(range: UsageRange) -> Result<UsageSummary, String>;
 
 **收合狀態（常駐）**：按鈕上一律顯示目前選中 provider 的代表窗徽章 —— `5h 7%`、`premium 142/300`。這是使用者「隨時知道還剩多少」的主要入口，**不是只有超標才出現**。
 
-- 代表窗的選擇：Anthropic 用 `representative-claim` 指定的那個；Codex 用 `primary_window`；Copilot 用唯一那個有限的 snapshot。即 `windows` 裡 `is_primary == true` 者，沒有就取第一個。
+- 代表窗的選擇：**取最嚴重的那個窗**。同嚴重度時才用上游標記的代表窗（Anthropic 的 `representative-claim`、Codex 的 `primary_window`、Copilot 的 `premium_interactions`，即 `is_primary`），再同則取第一個。
+  > 一開始的設計是直接用上游的代表窗，但那會在「5h 窗剛重置 0%、7d 窗已 96%」時顯示綠色 0%，與這個功能的目的正好相反。收合狀態只有一格，那一格必須是最該讓人停手的數字。
+- **severity 不是 used_percent 的函數**：上游若有明確的「已被擋住」訊號（Codex 的 `limit_reached` / `allowed`、Anthropic 的 `spend.severity`），adapter 必須把該窗提成 critical —— 花費上限觸發時 `used_percent` 可能還是 0。
 - 依 `severity` 上色：normal 用低調的次要文字色（不搶注意力）、warning 琥珀、critical 紅。**平常靜、超標才跳**，靠顏色而非有無來分級。
 - 沒有配額概念的 provider（Ollama、API key 型）顯示今日 token 數，例如 `12.4k`。
 - 查詢失敗或尚未載入顯示灰色「—」，**絕不擋住按鈕的原有功能**。
@@ -303,10 +310,11 @@ async fn usage_summary(range: UsageRange) -> Result<UsageSummary, String>;
 **抓取時機**（因常駐顯示而必要）：
 
 - 掛載時查一次目前選中的 provider（只查一個，不是全部）。
-- 之後每 **5 分鐘**背景輪詢一次，同樣只查選中的那個。搭配 60 秒快取，多個視圖同時掛載也只會產生一次實際請求。
+- 之後每 **5 分鐘**背景輪詢一次，同樣只查選中的那個。搭配 60 秒快取，先後掛載的視圖會共用同一份快照。
+  > 快取沒有做 in-flight 請求合併，所以若多個視圖在快取為空時**同一瞬間**掛載，仍會各自打一次上游。實務上影響很小（唯讀 GET、幾個重複請求遠低於各家速率上限），故不為此加合併機制。
 - 切換 provider 時立即查新選中的那個。
 - **下拉展開時**才觸發 `usage_quota_all`（查全部），這是唯一會一次打三個端點的時機。
-- 視窗失去焦點時暫停輪詢，取得焦點時若快取已過期則立即補一次 —— 背景放著不動的視窗不該一直打上游。
+- 視窗失去焦點時跳過輪詢；**回到前景時立即補查一次** —— 使用者離開再回來的那一刻，正是他最想知道「現在還剩多少」的時候，讓他盯著 5 分鐘前的舊數字違背這個功能的目的。後端 60 秒快取讓這次補查很便宜。
 
 > 輪詢成本很低：三個都是單次 GET、幾百 ms，而常駐狀態每 5 分鐘只查一個。但這確實是「常駐顯示」相對「展開才查」多付的代價，實作時不要把它擴大成「每 5 分鐘查全部」。
 

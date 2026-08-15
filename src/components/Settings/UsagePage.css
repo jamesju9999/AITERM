@@ -1,0 +1,20 @@
+.usage-quota-section { margin-bottom: 24px; }
+.usage-quota-header { display: flex; align-items: center; justify-content: space-between; }
+.usage-quota-card {
+  padding: 10px 12px; border: 1px solid var(--border, #2a2a2a);
+  border-radius: 8px; margin-bottom: 8px;
+}
+.usage-quota-card-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 8px; }
+.usage-quota-provider { font-weight: 600; }
+.usage-quota-plan { font-size: 12px; opacity: 0.6; }
+.usage-quota-window { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.usage-quota-bar {
+  flex: 1; height: 6px; border-radius: 3px;
+  background: var(--border, #2a2a2a); overflow: hidden;
+}
+/* 與標題列徽章同一套配色，兩邊看起來才是同一個東西。 */
+.usage-quota-bar-fill { height: 100%; background: var(--accent, #3b82f6); }
+.usage-quota-bar-fill--normal { background: var(--text-secondary, #8a8a8a); }
+.usage-quota-bar-fill--warning { background: #f59e0b; }
+.usage-quota-bar-fill--critical { background: #ef4444; }
+.usage-quota-card--failed .usage-quota-error { font-size: 12px; opacity: 0.7; }

@@ -39,6 +39,8 @@ import { StreamingIndicator } from "./StreamingIndicator";
 import { AgentStatusBar, type AgentPhase } from "./AgentStatusBar";
 import { AiPanel } from "./AiPanel";
 import { ProviderPalette } from "./ProviderPalette";
+import { QuotaBadge } from "./QuotaBadge";
+import { useProviderQuota } from "../hooks/useProviderQuota";
 import { WarpInput } from "./WarpInput";
 import { FileExplorer } from "./FileExplorer/FileExplorer";
 import { CommandBookmarksPicker, addBookmark } from "./CommandBookmarks";
@@ -210,6 +212,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
   // Provider status badge
   const [activeProvider, setActiveProvider] = useState<string>("");
+  /** 目前 provider 的 id。顯示名稱不能拿來查配額——後端是用 id 找設定的。 */
+  const [activeProviderId, setActiveProviderId] = useState<string>("");
+  /** 常駐配額徽章的代表窗；null 就不顯示。 */
+  const quotaWindow = useProviderQuota(activeProviderId);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   // Execution mode and shortcut are read once and cached; re-fetched when we return from settings.
@@ -698,6 +704,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       .then((list) => {
         const active = list.find((p) => p.is_default) ?? list[0];
         setActiveProvider(active?.display_name ?? "");
+        setActiveProviderId(active?.id ?? "");
       })
       .catch(() => {});
 
@@ -1398,6 +1405,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             >
               <RobotIcon size={14} style={{ color: "var(--accent)" }} />
               <span>{activeProvider}</span>
+              {quotaWindow && <QuotaBadge window={quotaWindow} />}
             </button>
           ) : (
             <button
@@ -1713,7 +1721,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       {paletteOpen && (
         <ProviderPalette
           onClose={() => setPaletteOpen(false)}
-          onSwitch={(p) => setActiveProvider(p.display_name)}
+          onSwitch={(p) => { setActiveProvider(p.display_name); setActiveProviderId(p.id); }}
         />
       )}
       {sessionId && (
@@ -1722,6 +1730,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           sessionId={sessionId}
           isOpen={panelOpen}
           providerName={activeProvider}
+          providerId={activeProviderId}
           onClose={() => setPanelOpen(false)}
           onExecuteCommand={(cmd, onComplete) => submitCommand(cmd, onComplete)}
           onOpenProviderPalette={() => {

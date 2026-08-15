@@ -359,8 +359,9 @@ mod tests {
     fn parses_rfc3339_resets_at_into_unix_seconds() {
         let q = parse_usage("anthropic-pro", REAL, 1_786_760_000).expect("parse");
         let five = q.windows.iter().find(|w| w.label == "5h").expect("5h 窗");
-        // 2026-08-15T07:00:00Z
-        assert_eq!(five.resets_at, Some(1_786_770_000));
+        // 2026-08-15T07:00:00Z。這個值有獨立佐證：同一份探勘回應的 header
+        // `anthropic-ratelimit-unified-5h-reset` 就是 1786777200。
+        assert_eq!(five.resets_at, Some(1_786_777_200));
     }
 
     #[test]
@@ -679,6 +680,33 @@ mod tests {
     }
 
     #[test]
+    fn limit_reached_forces_critical_even_at_zero_percent() {
+        // 花費上限觸發時 used_percent 還是 0，照百分比推會顯示成綠燈，
+        // 使用者以為隨便用、實際每次請求都被拒。
+        let raw = r#"{"rate_limit":{"allowed":false,"limit_reached":true,
+            "primary_window":{"used_percent":0,"limit_window_seconds":18000,"reset_at":1}}}"#;
+        let q = parse_usage("p", raw, 0).expect("parse");
+        assert_eq!(q.windows[0].severity, QuotaSeverity::Critical);
+    }
+
+    #[test]
+    fn allowed_defaults_to_true_when_absent() {
+        // 欄位缺席不可被當成「被擋住」，否則所有舊版回應都會變紅燈。
+        let raw = r#"{"rate_limit":{
+            "primary_window":{"used_percent":1,"limit_window_seconds":18000,"reset_at":1}}}"#;
+        let q = parse_usage("p", raw, 0).expect("parse");
+        assert_eq!(q.windows[0].severity, QuotaSeverity::Normal);
+    }
+
+    #[test]
+    fn absent_window_seconds_yields_empty_label_not_zero_d() {
+        // limit_window_seconds 缺席時 serde 預設 0，不可編出「0d」這種假標籤。
+        let raw = r#"{"rate_limit":{"primary_window":{"used_percent":5,"reset_at":1}}}"#;
+        let q = parse_usage("p", raw, 0).expect("parse");
+        assert_eq!(q.windows[0].label, "");
+    }
+
+    #[test]
     fn missing_rate_limit_yields_no_windows_not_an_error() {
         // 「查得到但沒有配額」與「查詢失敗」是不同狀態。
         let q = parse_usage("p", r#"{"plan_type":"pro"}"#, 0).expect("parse");
@@ -720,10 +748,21 @@ struct UsageResponse {
 
 #[derive(Deserialize)]
 struct RateLimit {
+    /// 上游明確說「已經擋住你了」。可能在 used_percent 還是 0 時就為 true
+    /// （花費上限、帳號層限流），所以**不能只看百分比**。
+    #[serde(default)]
+    limit_reached: bool,
+    /// 預設 true：欄位缺席時不要誤判成「被擋住」。
+    #[serde(default = "default_true")]
+    allowed: bool,
     #[serde(default)]
     primary_window: Option<Window>,
     #[serde(default)]
     secondary_window: Option<Window>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -737,12 +776,19 @@ struct Window {
 }
 
 impl Window {
-    fn into_quota_window(self, is_primary: bool) -> QuotaWindow {
+    /// `blocked` 為 true 時一律提成 Critical —— 上游說被擋住了，
+    /// 百分比是多少都不重要（實測 limit_reached 可能與 used_percent: 0 併存）。
+    fn into_quota_window(self, is_primary: bool, blocked: bool) -> QuotaWindow {
+        let severity = if blocked {
+            QuotaSeverity::Critical
+        } else {
+            QuotaSeverity::from_percent(self.used_percent)
+        };
         QuotaWindow {
             label: window_label(self.limit_window_seconds),
             used_percent: self.used_percent,
             resets_at: self.reset_at,
-            severity: QuotaSeverity::from_percent(self.used_percent),
+            severity,
             detail: None,
             is_primary,
         }
@@ -762,11 +808,12 @@ pub fn parse_usage(
 
     let mut windows = Vec::new();
     if let Some(rl) = r.rate_limit {
+        let blocked = rl.limit_reached || !rl.allowed;
         if let Some(w) = rl.primary_window {
-            windows.push(w.into_quota_window(true));
+            windows.push(w.into_quota_window(true, blocked));
         }
         if let Some(w) = rl.secondary_window {
-            windows.push(w.into_quota_window(false));
+            windows.push(w.into_quota_window(false, blocked));
         }
     }
 
@@ -840,7 +887,7 @@ impl QuotaSource for CodexQuota {
 - [ ] **Step 4: 跑測試確認通過**
 
 Run: `cd src-tauri && cargo test --lib usage::quota::codex 2>&1 | tail -8`
-Expected: `test result: ok. 8 passed`
+Expected: `test result: ok. 11 passed`
 
 - [ ] **Step 5: Commit**
 
@@ -944,6 +991,40 @@ mod tests {
         let q = parse_user("p", raw, 0).expect("parse");
         assert_eq!(q.windows[0].severity, QuotaSeverity::Critical);
     }
+
+    #[test]
+    fn missing_percent_remaining_is_skipped_not_treated_as_full() {
+        // 欄位缺席若補 0.0，100.0 - 0.0 = 已用 100%，會把解析失敗顯示成
+        // 額度耗盡的紅燈。必須跳過。
+        let raw = r#"{"quota_snapshots":{"premium_interactions":
+            {"unlimited":false,"entitlement":300,"remaining":142}}}"#;
+        let q = parse_user("p", raw, 0).expect("parse");
+        assert!(q.windows.is_empty());
+    }
+
+    #[test]
+    fn zero_entitlement_snapshots_are_skipped() {
+        // 這個 SKU 根本沒有這項額度，硬算會得到「0 / 0」加 100% 紅燈。
+        let raw = r#"{"quota_snapshots":{"chat":
+            {"unlimited":false,"percent_remaining":100.0,"entitlement":0,"remaining":0}}}"#;
+        let q = parse_user("p", raw, 0).expect("parse");
+        assert!(q.windows.is_empty());
+    }
+
+    #[test]
+    fn only_premium_is_marked_primary_when_several_are_limited() {
+        // 有些方案 chat / completions 也有額度。全部設 is_primary 會讓
+        // primary_window() 照字典序選到 "chat"，徽章顯示錯的那一項。
+        let raw = r#"{"quota_snapshots":{
+            "chat":{"unlimited":false,"percent_remaining":88.0,"entitlement":50,"remaining":44},
+            "premium_interactions":{"unlimited":false,"percent_remaining":47.5,
+                                    "entitlement":300,"remaining":142}}}"#;
+        let q = parse_user("p", raw, 0).expect("parse");
+        assert_eq!(q.windows.len(), 2);
+        let primaries: Vec<&str> = q.windows.iter()
+            .filter(|w| w.is_primary).map(|w| w.label.as_str()).collect();
+        assert_eq!(primaries, vec!["premium"], "至多一個 is_primary，且必須是 premium");
+    }
 }
 ```
 
@@ -984,8 +1065,10 @@ struct UserResponse {
 struct Snapshot {
     #[serde(default)]
     unlimited: bool,
+    /// **刻意用 Option**：欄位缺席時若 serde 補成 0.0，`100.0 - 0.0` 會算出
+    /// 「已用 100%」的滿格紅燈，把解析失敗偽裝成配額耗盡。缺席就跳過該窗。
     #[serde(default)]
-    percent_remaining: f64,
+    percent_remaining: Option<f64>,
     #[serde(default)]
     entitlement: i64,
     #[serde(default)]
@@ -1020,17 +1103,25 @@ pub fn parse_user(
     let windows: Vec<QuotaWindow> = r
         .quota_snapshots
         .into_iter()
-        .filter(|(_, s)| !s.unlimited)
-        .map(|(key, s)| {
-            let used = 100.0 - s.percent_remaining;
-            QuotaWindow {
+        // 無限的項目沒有配額可言；entitlement 為 0 代表這個 SKU 沒有這項
+        // 額度，硬算會得到「0 / 0」加 100% 紅燈。兩者都跳過。
+        .filter(|(_, s)| !s.unlimited && s.entitlement > 0)
+        .filter_map(|(key, s)| {
+            // 缺 percent_remaining 就跳過，不要用預設值編出假的 100%。
+            let remaining_pct = s.percent_remaining?;
+            let used = (100.0 - remaining_pct).clamp(0.0, 100.0);
+            Some(QuotaWindow {
                 label: label_for(&key),
                 used_percent: used,
                 resets_at,
                 severity: QuotaSeverity::from_percent(used),
                 detail: Some(format!("{} / {}", s.remaining, s.entitlement)),
-                is_primary: true,
-            }
+                // 契約是「至多一個 is_primary」。Copilot 可能同時有多個有限
+                // 項目（chat / completions / premium 都有額度的方案），只有
+                // premium 值得放在收合徽章上 —— 其餘設 false，否則
+                // primary_window() 會照 BTreeMap 字典序選到 "chat"。
+                is_primary: key == "premium_interactions",
+            })
         })
         .collect();
 
@@ -1095,7 +1186,7 @@ impl QuotaSource for CopilotQuota {
 - [ ] **Step 4: 跑測試確認通過**
 
 Run: `cd src-tauri && cargo test --lib usage::quota::copilot 2>&1 | tail -8`
-Expected: `test result: ok. 7 passed`
+Expected: `test result: ok. 10 passed`
 
 - [ ] **Step 5: Commit**
 
@@ -1681,9 +1772,30 @@ export function usageQuotaAll(force = false): Promise<QuotaResult[]> {
   return invoke<QuotaResult[]>("usage_quota_all", { force });
 }
 
-/** 收合狀態要顯示的那個窗。 */
+const SEVERITY_RANK: Record<QuotaSeverity, number> = {
+  normal: 0,
+  warning: 1,
+  critical: 2,
+};
+
+/**
+ * 收合狀態要顯示的那個窗。
+ *
+ * **取最嚴重的窗**，而不是上游標記的代表窗 —— 5h 窗剛重置 0% 但 7d 窗已
+ * 96% 時，顯示綠色 0% 會讓使用者誤以為還很寬裕。同嚴重度時才用 is_primary
+ * 決定，再同則取第一個。
+ *
+ * 這條規則在 `src-tauri/src/usage/quota/mod.rs` 的 `ProviderQuota::primary_window`
+ * 有一份對應的 Rust 實作。**改這裡就必須同步改那裡。**
+ */
 export function primaryWindow(q: ProviderQuota): QuotaWindow | null {
-  return q.windows.find((w) => w.is_primary) ?? q.windows[0] ?? null;
+  let best: QuotaWindow | null = null;
+  for (const w of q.windows) {
+    if (best === null) { best = w; continue; }
+    const d = SEVERITY_RANK[w.severity] - SEVERITY_RANK[best.severity];
+    if (d > 0 || (d === 0 && w.is_primary && !best.is_primary)) best = w;
+  }
+  return best;
 }
 ```
 
@@ -1855,6 +1967,26 @@ describe("ModelPickerButton 配額徽章", () => {
     await waitFor(() => expect(mockQuota).toHaveBeenCalledWith("anthropic-pro", false));
     rerender(<ModelPickerButton providers={providers} selectedId="ollama-local" onChange={() => {}} />);
     await waitFor(() => expect(mockQuota).toHaveBeenCalledWith("ollama-local", false));
+  });
+
+  it("多窗時徽章顯示最嚴重的那個，不是上游標記的代表窗", async () => {
+    // 5h 剛重置 0%（上游標成代表窗），7d 已 96%。顯示綠色 0% 會誤導。
+    mockQuota.mockResolvedValue({
+      status: "ok",
+      quota: {
+        provider_id: "anthropic-pro", plan: "Claude Pro", fetched_at: 0,
+        windows: [
+          { label: "5h", used_percent: 0, resets_at: null,
+            severity: "normal", detail: null, is_primary: true },
+          { label: "7d", used_percent: 96, resets_at: null,
+            severity: "critical", detail: null, is_primary: false },
+        ],
+      },
+    });
+    render(<ModelPickerButton providers={providers} selectedId="anthropic-pro" onChange={() => {}} />);
+    const badge = await screen.findByTestId("quota-badge");
+    expect(badge).toHaveTextContent("7d 96%");
+    expect(badge.className).toContain("critical");
   });
 
   it("查詢失敗時按鈕仍可點開", async () => {
@@ -2077,9 +2209,9 @@ Expected: FAIL，找不到 `quota-refresh`
 ```tsx
       <section className="usage-quota-section">
         <div className="usage-quota-header">
-          <h3>{t("usageQuotaTitle")}</h3>
+          <h3>{t("usage_quota_title")}</h3>
           <button data-testid="quota-refresh" onClick={() => loadQuotas(true)}>
-            {t("usageRefresh")}
+            {t("usage_refresh")}
           </button>
         </div>
         {quotas.map((r) => {
@@ -2089,7 +2221,7 @@ Expected: FAIL，找不到 `quota-refresh`
               <div key={r.provider_id} className="usage-quota-card usage-quota-card--failed"
                    data-testid={`quota-failed-${r.provider_id}`}>
                 <span className="usage-quota-provider">{r.provider_id}</span>
-                <span className="usage-quota-error">{t("quotaUnavailable")}: {r.message}</span>
+                <span className="usage-quota-error">{t("quota_unavailable")}: {r.message}</span>
               </div>
             );
           }
@@ -2144,8 +2276,8 @@ Expected: FAIL，找不到 `quota-refresh`
 - [ ] **Step 5: i18n**
 
 ```ts
-  usageQuotaTitle: "Subscription quota",  // zh-TW: "訂閱額度"
-  usageRefresh: "Refresh",                // zh-TW: "重新整理"
+  usage_quota_title: "Subscription quota",  // zh-TW: "訂閱額度"
+  usage_refresh: "Refresh",                // zh-TW: "重新整理"
 ```
 
 - [ ] **Step 6: 跑測試確認通過**

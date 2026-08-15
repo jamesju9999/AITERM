@@ -19,7 +19,10 @@ use crate::ai::{
     GenerateWithToolsResult, McpToolDefinition, TokenUsage,
 };
 
-const ANTHROPIC_VERSION: &str = "2023-06-01";
+pub const ANTHROPIC_VERSION: &str = "2023-06-01";
+/// OAuth 請求必要的 beta header。`usage/quota/anthropic.rs` 查配額端點時
+/// 共用同一份常數，不要重複定義。
+pub const OAUTH_BETA_HEADER: &str = "claude-code-20250219,oauth-2025-04-20";
 
 pub struct AnthropicClient {
     token: String,
@@ -50,7 +53,7 @@ impl AnthropicClient {
         if self.is_oauth {
             builder
                 .header("Authorization", format!("Bearer {}", self.token))
-                .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+                .header("anthropic-beta", OAUTH_BETA_HEADER)
                 .header("x-app", "cli")
         } else {
             builder.header("x-api-key", &self.token)
