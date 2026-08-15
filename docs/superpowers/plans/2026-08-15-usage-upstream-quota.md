@@ -1186,7 +1186,7 @@ impl QuotaSource for CopilotQuota {
 - [ ] **Step 4: 跑測試確認通過**
 
 Run: `cd src-tauri && cargo test --lib usage::quota::copilot 2>&1 | tail -8`
-Expected: `test result: ok. 11 passed`
+Expected: `test result: ok. 10 passed`
 
 - [ ] **Step 5: Commit**
 
