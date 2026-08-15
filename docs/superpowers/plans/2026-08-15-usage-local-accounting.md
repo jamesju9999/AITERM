@@ -1581,7 +1581,11 @@ git commit -m "feat(usage): Settings 用量頁（本地累計）
 
 `useAgentMission.ts` 的多步迴圈最會爆量，一次 mission 常比一整天手動問答還多。
 
-**前提（實際查證過的成本）：** `AiStreamEvent`（`src/ipc/ai.ts:115-120`）目前**不帶任何 token 資訊**，而 `useAgentMission.ts` 只有 `stepCount` / `history`。所以這個 Task 必須先把 usage 帶上事件 —— `commands/ai.rs` 有 **5 個 `app.emit("ai-stream", ...)` 點**（`:218`、`:369`、`:414`、`:422`，以及 `:588` 之後的迴圈），全部都要補欄位才編得過。
+**前提（實際查證過的成本）：** `AiStreamEvent`（`src/ipc/ai.ts:115-120`）目前**不帶任何 token 資訊**，而 `useAgentMission.ts` 只有 `stepCount` / `history`。所以這個 Task 必須先把 usage 帶上事件。
+
+> ⚠️ **實作時實測：emit 點是 9 個，不是原本寫的 5 個**，而且分布在**兩個檔案**——`commands/ai.rs` 有 8 個（`ai_query` 主迴圈、`ai_chat` 的 MCP／fallback／非 MCP 三條路徑、`agent_chat` 的三條路徑），另外 `commands/design.rs` 的 `design_chat` 也用同一個 `AiStreamEvent` 發同一個事件。原本的計畫連 `design.rs` 都沒提到。
+>
+> 不必逐一手數：加完欄位後 `cargo check` 的錯誤數就是實際的 emit 點數，照著補即可。
 
 **Files:**
 - Modify: `src-tauri/src/commands/ai.rs`（`AiStreamEvent` 定義 + 5 個 emit 點）
