@@ -77,9 +77,14 @@ pub struct QuotaWindow {
     /// 嚴重度。
     ///
     /// **severity 不是 used_percent 的函數。** 上游若有明確的「已被擋住」
-    /// 訊號（Codex 的 `limit_reached` / `allowed`、Anthropic 的
-    /// `spend.severity`），adapter 必須把該窗提成 Critical —— 花費上限
-    /// 觸發時 used_percent 可能還是 0，照百分比推會顯示成綠燈。
+    /// 訊號（Codex 的 `limit_reached` / `allowed` / `spend_control.reached`），
+    /// adapter 必須把該窗提成 Critical —— 花費上限觸發時 used_percent
+    /// 可能還是 0，照百分比推會顯示成綠燈。
+    ///
+    /// Anthropic 的封鎖訊號是 `limits[]` 各項自帶的 `severity` 字串（已處理）。
+    /// 它的 `spend` 區塊**不是**封鎖訊號 —— 那是方案額度用完後才生效的加購
+    /// 額度（上游 disclaimer：「Usage credits cover you when you hit your
+    /// plan limits」），額度耗盡時 utilization 本來就已接近 100。
     pub severity: QuotaSeverity,
     /// 保留原始語意的補充說明，例如 Copilot 的 "142 / 300"。
     pub detail: Option<String>,

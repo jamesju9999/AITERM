@@ -24,9 +24,12 @@ struct UsageResponse {
 
 #[derive(Deserialize)]
 struct Window {
-    /// **百分比 0-100**，不是小數。
+    /// **百分比 0-100**，不是小數。**刻意用 Option**：欄位缺席或上游改名
+    /// 時若讓 serde 補成 0.0，徽章會顯示「0%、綠色」卻沒有任何訊號說解析
+    /// 壞了；Anthropic 的回應本來就滿是 null，`utilization: null` 也在
+    /// 這個 API 的風格內。缺席或 null 就跳過該窗，不產生假窗。
     #[serde(default)]
-    utilization: f64,
+    utilization: Option<f64>,
     #[serde(default)]
     resets_at: Option<String>,
 }
@@ -56,7 +59,7 @@ pub fn parse_usage(
     let r: UsageResponse = serde_json::from_str(body)
         .map_err(|e| AiError::ModelError {
             reason: format!("配額回應解析失敗: {e}"),
-            raw: body.chars().take(500).collect(),
+            raw: String::new(),
         })?;
 
     // limits[] 裡 is_active 的那個 kind 決定代表窗。
@@ -71,24 +74,30 @@ pub fn parse_usage(
 
     let mut windows = Vec::new();
     if let Some(w) = r.five_hour {
-        windows.push(QuotaWindow {
-            label: "5h".into(),
-            used_percent: w.utilization,
-            resets_at: parse_ts(&w.resets_at),
-            severity: severity_of("session", w.utilization),
-            detail: None,
-            is_primary: active_kind == Some("session"),
-        });
+        if let Some(pct) = w.utilization {
+            let pct = pct.clamp(0.0, 100.0);
+            windows.push(QuotaWindow {
+                label: "5h".into(),
+                used_percent: pct,
+                resets_at: parse_ts(&w.resets_at),
+                severity: severity_of("session", pct),
+                detail: None,
+                is_primary: active_kind == Some("session"),
+            });
+        }
     }
     if let Some(w) = r.seven_day {
-        windows.push(QuotaWindow {
-            label: "7d".into(),
-            used_percent: w.utilization,
-            resets_at: parse_ts(&w.resets_at),
-            severity: severity_of("weekly_all", w.utilization),
-            detail: None,
-            is_primary: active_kind == Some("weekly_all"),
-        });
+        if let Some(pct) = w.utilization {
+            let pct = pct.clamp(0.0, 100.0);
+            windows.push(QuotaWindow {
+                label: "7d".into(),
+                used_percent: pct,
+                resets_at: parse_ts(&w.resets_at),
+                severity: severity_of("weekly_all", pct),
+                detail: None,
+                is_primary: active_kind == Some("weekly_all"),
+            });
+        }
     }
 
     Ok(ProviderQuota { provider_id: provider_id.into(), plan: None, windows, fetched_at })
@@ -98,12 +107,25 @@ pub struct AnthropicQuota {
     provider_id: String,
     access_token: String,
     base_url: String,
+    timeout: std::time::Duration,
     client: reqwest::Client,
 }
 
 impl AnthropicQuota {
     pub fn new(provider_id: String, access_token: String, base_url: String) -> Self {
-        Self { provider_id, access_token, base_url, client: reqwest::Client::new() }
+        Self {
+            provider_id,
+            access_token,
+            base_url,
+            timeout: std::time::Duration::from_secs(5),
+            client: reqwest::Client::new(),
+        }
+    }
+
+    /// 測試用：縮短逾時，讓逾時測試不必真的等 5 秒。
+    pub fn with_timeout(mut self, d: std::time::Duration) -> Self {
+        self.timeout = d;
+        self
     }
 }
 
@@ -118,20 +140,28 @@ impl QuotaSource for AnthropicQuota {
             .header("anthropic-beta", crate::ai::anthropic::OAUTH_BETA_HEADER)
             .header("anthropic-version", crate::ai::anthropic::ANTHROPIC_VERSION)
             .header("x-app", "cli")
-            .timeout(std::time::Duration::from_secs(5))
+            .timeout(self.timeout)
             .send()
             .await
             .map_err(|e| AiError::Network { message: e.to_string() })?;
 
         let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
         if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(AiError::AuthFailed);
         }
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            return Err(AiError::RateLimit { retry_after, body: None });
+        }
+        let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
             return Err(AiError::ModelError {
                 reason: format!("配額端點回 {status}"),
-                raw: body.chars().take(500).collect(),
+                raw: String::new(),
             });
         }
         parse_usage(&self.provider_id, &body, now_secs())
@@ -142,7 +172,7 @@ impl QuotaSource for AnthropicQuota {
 mod tests {
     use super::*;
 
-    /// 真實回應的精簡版，欄位與數值原封不動取自探勘 dump。
+    /// 取自探勘 dump 的精簡版，保留與解析相關的欄位。
     const REAL: &str = r#"{
       "five_hour": { "utilization": 7.0, "resets_at": "2026-08-15T07:00:00.318695+00:00",
                      "limit_dollars": null, "used_dollars": null, "remaining_dollars": null },
@@ -213,5 +243,38 @@ mod tests {
     #[test]
     fn malformed_json_is_an_error_not_a_panic() {
         assert!(parse_usage("p", "not json at all", 0).is_err());
+    }
+
+    #[test]
+    fn renamed_utilization_field_is_skipped_not_a_fake_zero() {
+        // 上游把欄位改名（例如 utilization_percent）時，serde default 會把
+        // f64 補成 0.0，徽章顯示「0%、綠色」卻沒有任何訊號說解析壞了。
+        // 用 Option 之後缺席的欄位必須讓該窗整個不產生。
+        let raw = r#"{"five_hour":{"utilization_percent":96.0},"limits":[]}"#;
+        let q = parse_usage("p", raw, 0).expect("parse");
+        assert!(q.windows.is_empty(), "缺席的 utilization 不該產生假窗，得到 {:?}", q.windows);
+    }
+
+    #[test]
+    fn null_utilization_skips_window_but_not_the_whole_response() {
+        // Anthropic 的回應本來就滿是 null，utilization: null 完全在風格內。
+        // 該窗跳過，但其他窗不能被拖累一起解析失敗。
+        let raw = r#"{"five_hour":{"utilization":null},
+                      "seven_day":{"utilization":4.0,"resets_at":null},"limits":[]}"#;
+        let q = parse_usage("p", raw, 0).expect("parse");
+        assert_eq!(q.windows.len(), 1, "得到 {:?}", q.windows);
+        assert_eq!(q.windows[0].label, "7d");
+    }
+
+    #[test]
+    fn used_percent_is_clamped_to_0_100() {
+        // 上游 burst 後短暫回超過 100 或負數，進度條不能畫出容器外。
+        let raw = r#"{"five_hour":{"utilization":105.0},
+                      "seven_day":{"utilization":-5.0},"limits":[]}"#;
+        let q = parse_usage("p", raw, 0).expect("parse");
+        let five = q.windows.iter().find(|w| w.label == "5h").expect("5h 窗");
+        let seven = q.windows.iter().find(|w| w.label == "7d").expect("7d 窗");
+        assert_eq!(five.used_percent, 100.0, "得到 {}", five.used_percent);
+        assert_eq!(seven.used_percent, 0.0, "得到 {}", seven.used_percent);
     }
 }

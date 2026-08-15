@@ -31,10 +31,13 @@ struct Snapshot {
     /// 「已用 100%」的滿格紅燈，把解析失敗偽裝成配額耗盡。缺席就跳過該窗。
     #[serde(default)]
     percent_remaining: Option<f64>,
+    /// **刻意用 Option**：`entitlement` / `remaining` 任一缺席時，若讓
+    /// serde 補成 0，`detail` 會印出「0 / 300」這種與百分比互相矛盾的
+    /// 數字 —— 使用者會相信比較具體的那個。缺席就跳過該窗。
     #[serde(default)]
-    entitlement: i64,
+    entitlement: Option<i64>,
     #[serde(default)]
-    remaining: i64,
+    remaining: Option<i64>,
 }
 
 /// snapshot 的 key 轉成短標籤。
@@ -53,7 +56,7 @@ pub fn parse_user(
     let r: UserResponse = serde_json::from_str(body)
         .map_err(|e| AiError::ModelError {
             reason: format!("配額回應解析失敗: {e}"),
-            raw: body.chars().take(500).collect(),
+            raw: String::new(),
         })?;
 
     let resets_at = r
@@ -65,19 +68,22 @@ pub fn parse_user(
     let windows: Vec<QuotaWindow> = r
         .quota_snapshots
         .into_iter()
-        // 無限的項目沒有配額可言；entitlement 為 0 代表這個 SKU 沒有這項
-        // 額度，硬算會得到「0 / 0」加 100% 紅燈。兩者都跳過。
-        .filter(|(_, s)| !s.unlimited && s.entitlement > 0)
+        // 無限的項目沒有配額可言；entitlement 缺席或為 0 代表這個 SKU 沒有
+        // 這項額度（或解析不到），硬算會得到「0 / 0」加 100% 紅燈。都跳過。
+        .filter(|(_, s)| !s.unlimited && s.entitlement.is_some_and(|e| e > 0))
         .filter_map(|(key, s)| {
-            // 缺 percent_remaining 就跳過，不要用預設值編出假的 100%。
+            // 缺 percent_remaining / entitlement / remaining 任一都跳過，
+            // 不要用預設值編出假的 100% 或互相矛盾的 "0 / 300"。
             let remaining_pct = s.percent_remaining?;
+            let entitlement = s.entitlement?;
+            let remaining = s.remaining?;
             let used = (100.0 - remaining_pct).clamp(0.0, 100.0);
             Some(QuotaWindow {
                 label: label_for(&key),
                 used_percent: used,
                 resets_at,
                 severity: QuotaSeverity::from_percent(used),
-                detail: Some(format!("{} / {}", s.remaining, s.entitlement)),
+                detail: Some(format!("{} / {}", remaining, entitlement)),
                 // 契約是「至多一個 is_primary」。Copilot 可能同時有多個有限
                 // 項目（chat / completions / premium 都有額度的方案），只有
                 // premium 值得放在收合徽章上 —— 其餘設 false，否則
@@ -99,17 +105,30 @@ pub struct CopilotQuota {
     provider_id: String,
     github_token: String,
     url: String,
+    timeout: std::time::Duration,
     client: reqwest::Client,
 }
 
 impl CopilotQuota {
     pub fn new(provider_id: String, github_token: String) -> Self {
-        Self { provider_id, github_token, url: USER_URL.into(), client: reqwest::Client::new() }
+        Self {
+            provider_id,
+            github_token,
+            url: USER_URL.into(),
+            timeout: std::time::Duration::from_secs(5),
+            client: reqwest::Client::new(),
+        }
     }
 
     /// 測試用：指向 wiremock 伺服器。
     pub fn with_url(mut self, url: String) -> Self {
         self.url = url;
+        self
+    }
+
+    /// 測試用：縮短逾時，讓逾時測試不必真的等 5 秒。
+    pub fn with_timeout(mut self, d: std::time::Duration) -> Self {
+        self.timeout = d;
         self
     }
 }
@@ -124,20 +143,28 @@ impl QuotaSource for CopilotQuota {
             .header("Authorization", format!("token {}", self.github_token))
             .header("User-Agent", "AITerm/1.0")
             .header("Accept", "application/json")
-            .timeout(std::time::Duration::from_secs(5))
+            .timeout(self.timeout)
             .send()
             .await
             .map_err(|e| AiError::Network { message: e.to_string() })?;
 
         let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
         if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(AiError::AuthFailed);
         }
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            return Err(AiError::RateLimit { retry_after, body: None });
+        }
+        let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
             return Err(AiError::ModelError {
                 reason: format!("配額端點回 {status}"),
-                raw: body.chars().take(500).collect(),
+                raw: String::new(),
             });
         }
         parse_user(&self.provider_id, &body, now_secs())
@@ -227,6 +254,24 @@ mod tests {
             {"unlimited":false,"percent_remaining":100.0,"entitlement":0,"remaining":0}}}"#;
         let q = parse_user("p", raw, 0).expect("parse");
         assert!(q.windows.is_empty());
+    }
+
+    #[test]
+    fn missing_remaining_is_skipped_not_treated_as_zero() {
+        // remaining 缺席若當 0 處理，detail 會印出「0 / 300」——跟 47.5%
+        // 的 percent_remaining 互相矛盾，使用者會相信比較具體的那個數字。
+        let raw = r#"{"quota_snapshots":{"premium_interactions":
+            {"unlimited":false,"percent_remaining":47.5,"entitlement":300}}}"#;
+        let q = parse_user("p", raw, 0).expect("parse");
+        assert!(q.windows.is_empty(), "得到 {:?}", q.windows);
+    }
+
+    #[test]
+    fn missing_entitlement_is_skipped_not_treated_as_zero() {
+        let raw = r#"{"quota_snapshots":{"premium_interactions":
+            {"unlimited":false,"percent_remaining":47.5,"remaining":142}}}"#;
+        let q = parse_user("p", raw, 0).expect("parse");
+        assert!(q.windows.is_empty(), "得到 {:?}", q.windows);
     }
 
     #[test]

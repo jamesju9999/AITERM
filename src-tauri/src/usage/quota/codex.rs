@@ -18,12 +18,24 @@ struct UsageResponse {
     plan_type: Option<String>,
     #[serde(default)]
     rate_limit: Option<RateLimit>,
+    /// top-level 欄位，**不在 `rate_limit` 底下**（見 REAL fixture）。
+    #[serde(default)]
+    spend_control: Option<SpendControl>,
+}
+
+#[derive(Deserialize)]
+struct SpendControl {
+    #[serde(default)]
+    reached: bool,
 }
 
 #[derive(Deserialize)]
 struct RateLimit {
-    /// 上游明確說「已經擋住你了」。可能在 used_percent 還是 0 時就為 true
-    /// （花費上限、帳號層限流），所以**不能只看百分比**。
+    /// 上游明確說「已經擋住你了」的欄位之一。**不能只看百分比** ——
+    /// 這個欄位可能在 used_percent 還是 0 時就為 true。是否涵蓋花費上限
+    /// 等情境未經驗證；花費上限另有獨立的 top-level `spend_control.reached`
+    /// 欄位，`blocked` 一併讀取三者（本欄位、`allowed`、
+    /// `spend_control.reached`），不假設彼此互相涵蓋。
     #[serde(default)]
     limit_reached: bool,
     /// 預設 true：欄位缺席時不要誤判成「被擋住」。
@@ -41,8 +53,10 @@ fn default_true() -> bool {
 
 #[derive(Deserialize)]
 struct Window {
+    /// **刻意用 Option**：欄位缺席或上游改名時若讓 serde 補成 0.0，徽章會
+    /// 顯示「0%、綠色」卻沒有任何訊號說解析壞了。缺席或 null 就跳過該窗。
     #[serde(default)]
-    used_percent: f64,
+    used_percent: Option<f64>,
     #[serde(default)]
     limit_window_seconds: i64,
     #[serde(default)]
@@ -50,22 +64,21 @@ struct Window {
 }
 
 impl Window {
+    /// `used_percent` 缺席就跳過該窗，不產生假窗。
+    ///
     /// `blocked` 為 true 時一律提成 Critical —— 上游說被擋住了，
     /// 百分比是多少都不重要（實測 limit_reached 可能與 used_percent: 0 併存）。
-    fn into_quota_window(self, is_primary: bool, blocked: bool) -> QuotaWindow {
-        let severity = if blocked {
-            QuotaSeverity::Critical
-        } else {
-            QuotaSeverity::from_percent(self.used_percent)
-        };
-        QuotaWindow {
+    fn into_quota_window(self, is_primary: bool, blocked: bool) -> Option<QuotaWindow> {
+        let pct = self.used_percent?.clamp(0.0, 100.0);
+        let severity = if blocked { QuotaSeverity::Critical } else { QuotaSeverity::from_percent(pct) };
+        Some(QuotaWindow {
             label: window_label(self.limit_window_seconds),
-            used_percent: self.used_percent,
+            used_percent: pct,
             resets_at: self.reset_at,
             severity,
             detail: None,
             is_primary,
-        }
+        })
     }
 }
 
@@ -77,17 +90,18 @@ pub fn parse_usage(
     let r: UsageResponse = serde_json::from_str(body)
         .map_err(|e| AiError::ModelError {
             reason: format!("配額回應解析失敗: {e}"),
-            raw: body.chars().take(500).collect(),
+            raw: String::new(),
         })?;
 
+    let spend_control_reached = r.spend_control.map(|s| s.reached).unwrap_or(false);
     let mut windows = Vec::new();
     if let Some(rl) = r.rate_limit {
-        let blocked = rl.limit_reached || !rl.allowed;
-        if let Some(w) = rl.primary_window {
-            windows.push(w.into_quota_window(true, blocked));
+        let blocked = rl.limit_reached || !rl.allowed || spend_control_reached;
+        if let Some(w) = rl.primary_window.and_then(|w| w.into_quota_window(true, blocked)) {
+            windows.push(w);
         }
-        if let Some(w) = rl.secondary_window {
-            windows.push(w.into_quota_window(false, blocked));
+        if let Some(w) = rl.secondary_window.and_then(|w| w.into_quota_window(false, blocked)) {
+            windows.push(w);
         }
     }
 
@@ -143,14 +157,22 @@ impl QuotaSource for CodexQuota {
         let resp = req.send().await.map_err(|e| AiError::Network { message: e.to_string() })?;
 
         let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
         if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(AiError::AuthFailed);
         }
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            return Err(AiError::RateLimit { retry_after, body: None });
+        }
+        let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
             return Err(AiError::ModelError {
                 reason: format!("配額端點回 {status}"),
-                raw: body.chars().take(500).collect(),
+                raw: String::new(),
             });
         }
         parse_usage(&self.provider_id, &body, now_secs())
@@ -261,5 +283,48 @@ mod tests {
         let q = parse_usage("p", r#"{"plan_type":"pro"}"#, 0).expect("parse");
         assert!(q.windows.is_empty());
         assert!(q.primary_window().is_none());
+    }
+
+    #[test]
+    fn renamed_used_percent_field_is_skipped_not_a_fake_zero() {
+        // 上游把欄位改名時，serde default 會把 f64 補成 0.0，徽章顯示
+        // 「0%、綠色」卻沒有任何訊號說解析壞了。改用 Option 之後缺席的
+        // 欄位必須讓該窗整個不產生。
+        let raw = r#"{"rate_limit":{
+            "primary_window":{"used_percent_x":96,"limit_window_seconds":18000,"reset_at":1}}}"#;
+        let q = parse_usage("p", raw, 0).expect("parse");
+        assert!(q.windows.is_empty(), "缺席的 used_percent 不該產生假窗，得到 {:?}", q.windows);
+    }
+
+    #[test]
+    fn null_used_percent_skips_window_but_not_the_whole_response() {
+        let raw = r#"{"rate_limit":{
+            "primary_window":{"used_percent":null,"limit_window_seconds":18000,"reset_at":1},
+            "secondary_window":{"used_percent":8,"limit_window_seconds":604800,"reset_at":2}}}"#;
+        let q = parse_usage("p", raw, 0).expect("parse");
+        assert_eq!(q.windows.len(), 1, "得到 {:?}", q.windows);
+        assert_eq!(q.windows[0].label, "7d");
+    }
+
+    #[test]
+    fn used_percent_is_clamped_to_0_100() {
+        let raw = r#"{"rate_limit":{
+            "primary_window":{"used_percent":105,"limit_window_seconds":18000,"reset_at":1},
+            "secondary_window":{"used_percent":-5,"limit_window_seconds":604800,"reset_at":2}}}"#;
+        let q = parse_usage("p", raw, 0).expect("parse");
+        assert_eq!(q.windows[0].used_percent, 100.0, "得到 {}", q.windows[0].used_percent);
+        assert_eq!(q.windows[1].used_percent, 0.0, "得到 {}", q.windows[1].used_percent);
+    }
+
+    #[test]
+    fn spend_control_reached_forces_critical_even_at_zero_percent() {
+        // spend_control 是 rate_limit 外層的 top-level 欄位（見 REAL fixture）。
+        // limit_reached 未經驗證涵蓋花費上限這個情境，spend_control.reached
+        // 是上游給的獨立訊號，必須併入 blocked。
+        let raw = r#"{"rate_limit":{"allowed":true,"limit_reached":false,
+            "primary_window":{"used_percent":0,"limit_window_seconds":18000,"reset_at":1}},
+            "spend_control":{"reached":true,"individual_limit":null}}"#;
+        let q = parse_usage("p", raw, 0).expect("parse");
+        assert_eq!(q.windows[0].severity, QuotaSeverity::Critical);
     }
 }
