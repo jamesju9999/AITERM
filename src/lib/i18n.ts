@@ -275,6 +275,8 @@ const zhTW = {
     kb_export_conversation: "匯出成 md",
     model_picker_no_provider: "未設定",
     quota_unavailable: "無法取得配額",
+    usage_quota_title: "訂閱額度",
+    usage_refresh: "重新整理",
     doc_converter_tab: "文件轉換器",
     new_doc_converter_desc: "將 Word/PDF/Excel 轉換成結構化 Markdown",
     // API Docs tab
@@ -1470,6 +1472,8 @@ const enRaw = {
     kb_export_conversation: "Export as .md",
     model_picker_no_provider: "Not configured",
     quota_unavailable: "Quota unavailable",
+    usage_quota_title: "Subscription quota",
+    usage_refresh: "Refresh",
     doc_converter_tab: "Doc Converter",
     new_doc_converter_desc: "Convert Word/PDF/Excel to structured Markdown",
     // API Docs tab
