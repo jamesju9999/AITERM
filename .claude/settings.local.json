@@ -138,7 +138,22 @@
       "Bash(lsof -iTCP:1420 -sTCP:LISTEN)",
       "Read(//Applications/AITerm.app/**)",
       "Bash(mdfind -name \"AITerm.app\")",
-      "Bash(echo \"started with pid $!\")"
+      "Bash(echo \"started with pid $!\")",
+      "Read(//Users/jamesju/Documents/BlogContent/Medium/AITERM/**)",
+      "Read(//Users/jamesju/Documents/BlogContent/Medium/AITERM/ChatGPT Bridge/**)",
+      "Bash(mkdir -p \"/Users/jamesju/Documents/BlogContent/Medium/AITERM/ChatGPT Bridge/images\")",
+      "Read(//Applications/Google Chrome.app/Contents/MacOS/**)",
+      "Read(//usr/bin/**)",
+      "Bash(xcode-select -p)",
+      "Bash(brew list *)",
+      "Bash(mdfind -name svn)",
+      "Bash(grep -i \"bin/svn$\")",
+      "Bash(brew install *)",
+      "Bash(grep *)",
+      "WebSearch",
+      "Read(//opt/homebrew/Cellar/subversion/1.14.5_4/bin/**)",
+      "Bash(/opt/homebrew/bin/svn --version --quiet)",
+      "Bash(launchctl getenv *)"
     ]
   }
 }
