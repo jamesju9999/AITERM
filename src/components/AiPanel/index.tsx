@@ -13,6 +13,8 @@ import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { getMcpTools } from "../../ipc/mcp";
 import { languageDirective } from "../../lib/i18n";
 import { useLocale } from "../../contexts/LocaleContext";
+import { QuotaBadge } from "../QuotaBadge";
+import { useProviderQuota } from "../../hooks/useProviderQuota";
 import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
 import { MessageList } from "./MessageList";
 import { ZapIcon, WrenchIcon, MaximizeIcon, MinimizeIcon } from "../Icons";
@@ -54,6 +56,8 @@ export interface AiPanelProps {
   sessionId: string;
   isOpen: boolean;
   providerName: string;
+  /** 用來查配額。顯示名稱查不了——後端是用 id 找設定的。 */
+  providerId?: string;
   onClose: () => void;
   onExecuteCommand: (cmd: string, onComplete?: (block: TerminalBlock) => void) => void;
   onOpenProviderPalette: () => void;
@@ -69,11 +73,14 @@ export function AiPanel({
   sessionId,
   isOpen,
   providerName,
+  providerId,
   onClose,
   onExecuteCommand,
   onOpenProviderPalette,
   sendRemoteResponse,
 }: AiPanelProps) {
+  /** 常駐配額徽章的代表窗；null 就不顯示。 */
+  const quotaWindow = useProviderQuota(providerId);
   const { t, locale } = useLocale();
   const chat = useMcpChat(sessionId);
   const [input, setInput] = useState("");
@@ -456,6 +463,7 @@ Rules:
           title="切換 Provider"
         >
           {providerName || "(no provider)"}
+          {quotaWindow && <QuotaBadge window={quotaWindow} />}
         </button>
         <div style={{ display: "flex", gap: "8px" }}>
           <button
