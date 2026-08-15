@@ -208,7 +208,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const streamingRef = useRef(false);
   const executionModeRef = useRef<ExecutionMode>("always-confirm");
   
-  const { agentMission, startMission, stopMission } = useAgentMission();
+  const { agentMission, startMission, stopMission, addTokens } = useAgentMission();
 
   // Provider status badge
   const [activeProvider, setActiveProvider] = useState<string>("");
@@ -1041,6 +1041,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       if (!event.payload.done) {
         setStreamText((t) => t + event.payload.delta);
       }
+      if (event.payload.tokens) {
+        addTokens(event.payload.tokens);
+      }
     });
 
     // Sends a resize that was held back while hasUnsubmittedPasteRef was
@@ -1640,7 +1643,11 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       {/* WarpInput (the actual typing box) stays pinned to the panel bottom regardless of
           block-list length — only the live xterm view above scrolls with block content. */}
       {!isAlternateBuffer && agentPhase && (
-        <AgentStatusBar status={agentPhase} onDismiss={() => setAgentPhase(null)} />
+        <AgentStatusBar
+          status={agentPhase}
+          onDismiss={() => setAgentPhase(null)}
+          missionTokens={agentMission?.tokensUsed ?? 0}
+        />
       )}
       {!isAlternateBuffer && (
         preview.loading && !agentPhase ? (

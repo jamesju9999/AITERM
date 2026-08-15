@@ -43,4 +43,30 @@ describe("AgentStatusBar", () => {
     renderBar({ phase: "done", steps: 3 });
     expect(screen.queryByText(/步驟/)).not.toBeInTheDocument();
   });
+
+  it("顯示本次 mission 的累計 token", () => {
+    render(
+      <LocaleProvider>
+        <AgentStatusBar
+          status={{ phase: "running", step: 1, maxSteps: 5, command: "ls" }}
+          onDismiss={vi.fn()}
+          missionTokens={12400}
+        />
+      </LocaleProvider>,
+    );
+    expect(screen.getByTestId("mission-tokens")).toHaveTextContent("12.4k");
+  });
+
+  it("token 為 0 時不顯示這一段", () => {
+    render(
+      <LocaleProvider>
+        <AgentStatusBar
+          status={{ phase: "running", step: 1, maxSteps: 5, command: "ls" }}
+          onDismiss={vi.fn()}
+          missionTokens={0}
+        />
+      </LocaleProvider>,
+    );
+    expect(screen.queryByTestId("mission-tokens")).not.toBeInTheDocument();
+  });
 });

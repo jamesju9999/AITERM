@@ -2,7 +2,9 @@
 
 use crate::config::ConfigStore;
 use crate::secret::SecretStore;
+use crate::usage::pricing::estimate_cost;
 use crate::usage::quota::{cache::QuotaCache, source_for, ProviderQuota};
+use crate::usage::{UsageRange, UsageStore};
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
@@ -82,6 +84,52 @@ pub async fn usage_quota_all(
     Ok(out)
 }
 
+/// 一列統計，比 `UsageSummaryRow` 多了成本估算。
+#[derive(Debug, Serialize)]
+pub struct UsageSummaryEntry {
+    pub provider_id: String,
+    pub model: String,
+    pub requests: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    /// 查不到單價時為 None —— 前端顯示「—」而不是 0。
+    pub estimated_cost_usd: Option<f64>,
+}
+
+#[tauri::command]
+pub async fn usage_summary(
+    range: UsageRange,
+    store: State<'_, Arc<UsageStore>>,
+) -> Result<Vec<UsageSummaryEntry>, String> {
+    let now = now_secs();
+    let rows = store
+        .summary_since(range.cutoff(now))
+        .await
+        .map_err(|e| format!("查詢用量統計失敗: {e}"))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| UsageSummaryEntry {
+            estimated_cost_usd: estimate_cost(
+                &r.model,
+                r.prompt_tokens,
+                r.completion_tokens,
+                r.cache_read_tokens,
+                r.cache_write_tokens,
+            ),
+            provider_id: r.provider_id,
+            model: r.model,
+            requests: r.requests,
+            prompt_tokens: r.prompt_tokens,
+            completion_tokens: r.completion_tokens,
+            cache_read_tokens: r.cache_read_tokens,
+            cache_write_tokens: r.cache_write_tokens,
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +148,22 @@ mod tests {
         };
         let j = serde_json::to_value(&f).expect("serialize");
         assert_eq!(j["status"], "failed");
+    }
+
+    #[test]
+    fn unknown_model_cost_serializes_as_null_not_zero() {
+        // 前端靠 null 顯示「—」。壓成 0 會讓使用者以為這個模型免費。
+        let entry = UsageSummaryEntry {
+            provider_id: "local".into(),
+            model: "some-local-gguf".into(),
+            requests: 3,
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            estimated_cost_usd: None,
+        };
+        let j = serde_json::to_value(&entry).expect("serialize");
+        assert!(j["estimated_cost_usd"].is_null());
     }
 }

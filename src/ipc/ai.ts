@@ -117,6 +117,8 @@ export interface AiStreamEvent {
   kind: AiStreamKind;
   delta: string;
   done: boolean;
+  /** 本次請求的總 token。只有 done 的事件會帶。 */
+  tokens?: number;
 }
 
 export function invokeAiQuery(

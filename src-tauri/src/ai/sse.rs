@@ -322,6 +322,7 @@ impl OpenAiSsePayload {
         self.usage.as_ref().map(|u| TokenUsage {
             prompt: u.prompt_tokens,
             completion: u.completion_tokens,
+            ..Default::default()
         })
     }
 }

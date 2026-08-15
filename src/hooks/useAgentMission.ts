@@ -6,6 +6,7 @@ export interface AgentMission {
   active: boolean;
   stepCount: number;
   maxSteps: number;
+  tokensUsed: number;
   history: {
     command: string;
     exitCode: number;
@@ -22,6 +23,7 @@ export function useAgentMission() {
       active: true,
       stepCount: 0,
       maxSteps,
+      tokensUsed: 0,
       history: [],
     });
   }, []);
@@ -37,6 +39,13 @@ export function useAgentMission() {
     });
   }, []);
 
+  const addTokens = useCallback((n: number) => {
+    setAgentMission((prev) => {
+      if (!prev || !prev.active) return prev;
+      return { ...prev, tokensUsed: prev.tokensUsed + n };
+    });
+  }, []);
+
   const stopMission = useCallback(() => {
     setAgentMission((prev) => (prev ? { ...prev, active: false } : null));
   }, []);
@@ -49,6 +58,7 @@ export function useAgentMission() {
     agentMission,
     startMission,
     appendHistory,
+    addTokens,
     stopMission,
     clearMission,
   };

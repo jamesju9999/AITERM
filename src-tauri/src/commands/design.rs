@@ -389,6 +389,7 @@ pub async fn design_chat(
             kind: AiStreamKind::Chat,
             delta: chunk.delta.clone(),
             done: chunk.done,
+            tokens: chunk.usage.map(|u| u.prompt + u.completion),
         });
         buf.push_str(&chunk.delta);
         if chunk.done { break; }

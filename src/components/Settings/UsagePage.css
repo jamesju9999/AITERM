@@ -18,3 +18,18 @@
 .usage-quota-bar-fill--warning { background: #f59e0b; }
 .usage-quota-bar-fill--critical { background: #ef4444; }
 .usage-quota-card--failed .usage-quota-error { font-size: 12px; opacity: 0.7; }
+
+.usage-local-section { margin-top: 24px; }
+.usage-local-range-tabs { display: flex; gap: 8px; margin: 8px 0 16px; }
+.usage-local-range-tabs button {
+  padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border, #3a3a3a);
+  background: transparent; color: inherit; cursor: pointer;
+}
+.usage-local-range-tabs button.active { background: var(--accent, #3b82f6); color: #fff; }
+.usage-local-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.usage-local-table th, .usage-local-table td {
+  text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border, #2a2a2a);
+}
+.usage-local-table th { font-weight: 600; opacity: 0.7; }
+.usage-local-empty { opacity: 0.6; padding: 24px; text-align: center; }
+.usage-local-error { color: var(--danger, #ef4444); padding: 12px; }

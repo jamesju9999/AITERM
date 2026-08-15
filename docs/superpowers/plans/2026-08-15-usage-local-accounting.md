@@ -1078,7 +1078,7 @@ git commit -m "feat(usage): MeteredProvider 記帳裝飾器
 - Modify: `src-tauri/src/ai/router.rs:417-450`（`AiRouter` 結構與 `new`）、`:429-448`（`resolve`）、`:451+`（`resolve_by_id` 結尾）
 - Modify: `src-tauri/src/lib.rs:131` 附近與 `:248-265` 的 `.manage()` 區塊
 
-- [ ] **Step 1: `AiRouter` 持有 `UsageStore`**
+- [x] **Step 1: `AiRouter` 持有 `UsageStore`**
 
 `src-tauri/src/ai/router.rs`，把結構與建構子改成：
 
@@ -1099,7 +1099,7 @@ impl AiRouter {
     }
 ```
 
-- [ ] **Step 2: `resolve_by_id` 結尾包上裝飾器**
+- [x] **Step 2: `resolve_by_id` 結尾包上裝飾器**
 
 `resolve_by_id` 目前的結尾是 `Ok(provider)`（`provider` 是 `Arc<dyn AiProvider>`）。改成：
 
@@ -1114,7 +1114,7 @@ impl AiRouter {
 
 > 注意 `provider_cfg` 在函式開頭已被 `.clone()` 出來，但後續分支可能已把 `provider_cfg.model` move 走。若編譯報 use-after-move，在函式開頭先 `let (meter_id, meter_model) = (provider_cfg.id.clone(), provider_cfg.model.clone());`，結尾改用這兩個變數。
 
-- [ ] **Step 3: `resolve` 的環境變數 fallback 路徑也要包**
+- [x] **Step 3: `resolve` 的環境變數 fallback 路徑也要包**
 
 `router.rs` 的 `resolve` 裡有一段在完全沒設定 provider 時用 `OPENAI_API_KEY` 建立 `OpenAiClient` 並直接回傳。那條路徑繞過 `resolve_by_id`，同樣要包：
 
@@ -1132,7 +1132,7 @@ impl AiRouter {
 
 > provider_id 用 `env:OPENAI_API_KEY` 是刻意的：它在統計表裡要能跟真正設定過的 provider 區分開。
 
-- [ ] **Step 4: `lib.rs` 建立並註冊 state**
+- [x] **Step 4: `lib.rs` 建立並註冊 state**
 
 在 `lib.rs` 建立 `loop_session_db` 的那一段附近（約 `:131`）加：
 
@@ -1156,7 +1156,7 @@ impl AiRouter {
         .manage(usage_store)
 ```
 
-- [ ] **Step 5: 修掉其他 `AiRouter::new` 呼叫端**
+- [x] **Step 5: 修掉其他 `AiRouter::new` 呼叫端**
 
 Run: `cd src-tauri && grep -rn "AiRouter::new" src/ tests/`
 
@@ -1166,12 +1166,19 @@ Run: `cd src-tauri && grep -rn "AiRouter::new" src/ tests/`
 Arc::new(UsageStore::new_at(temp_dir.path().join("usage.db")).await)
 ```
 
-- [ ] **Step 6: 全庫編譯與測試**
+> **實作偏離**：`router.rs` 的 `make_router` 測試輔助函式改用
+> `UsageStore::new_at(":memory:")` 而非 tempdir——router.rs 的既有測試
+> 從不檢查 usage store 的內容，只是把它當依賴穿過去，純記憶體 SQLite
+> 更簡單且不用擔心 tempdir 生命週期跨平台的邊界情況。另外找到的第三個
+> 呼叫端是 `commands/provider.rs` 的 `test_provider`（未列在計畫的
+> File 清單中），已補上 `usage: State<'_, Arc<UsageStore>>` 參數。
+
+- [x] **Step 6: 全庫編譯與測試**
 
 Run: `cd src-tauri && cargo test 2>&1 | tail -15`
 Expected: 全部通過
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src-tauri/src/ai/router.rs src-tauri/src/lib.rs
@@ -1181,6 +1188,8 @@ resolve_by_id 與 resolve 的 OPENAI_API_KEY fallback 兩條路徑都要包，
 後者繞過 resolve_by_id，漏掉會讓未設定 provider 的使用者完全沒有統計。
 啟動時清理 90 天前的舊紀錄。"
 ```
+
+Commit: `96c612e`（另外把 `src-tauri/src/commands/provider.rs` 也一併加入 commit，因為它是 Step 5 找到的第三個呼叫端）。
 
 ---
 
@@ -1572,7 +1581,11 @@ git commit -m "feat(usage): Settings 用量頁（本地累計）
 
 `useAgentMission.ts` 的多步迴圈最會爆量，一次 mission 常比一整天手動問答還多。
 
-**前提（實際查證過的成本）：** `AiStreamEvent`（`src/ipc/ai.ts:115-120`）目前**不帶任何 token 資訊**，而 `useAgentMission.ts` 只有 `stepCount` / `history`。所以這個 Task 必須先把 usage 帶上事件 —— `commands/ai.rs` 有 **5 個 `app.emit("ai-stream", ...)` 點**（`:218`、`:369`、`:414`、`:422`，以及 `:588` 之後的迴圈），全部都要補欄位才編得過。
+**前提（實際查證過的成本）：** `AiStreamEvent`（`src/ipc/ai.ts:115-120`）目前**不帶任何 token 資訊**，而 `useAgentMission.ts` 只有 `stepCount` / `history`。所以這個 Task 必須先把 usage 帶上事件。
+
+> ⚠️ **實作時實測：emit 點是 9 個，不是原本寫的 5 個**，而且分布在**兩個檔案**——`commands/ai.rs` 有 8 個（`ai_query` 主迴圈、`ai_chat` 的 MCP／fallback／非 MCP 三條路徑、`agent_chat` 的三條路徑），另外 `commands/design.rs` 的 `design_chat` 也用同一個 `AiStreamEvent` 發同一個事件。原本的計畫連 `design.rs` 都沒提到。
+>
+> 不必逐一手數：加完欄位後 `cargo check` 的錯誤數就是實際的 emit 點數，照著補即可。
 
 **Files:**
 - Modify: `src-tauri/src/commands/ai.rs`（`AiStreamEvent` 定義 + 5 個 emit 點）
