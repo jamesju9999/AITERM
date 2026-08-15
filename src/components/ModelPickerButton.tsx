@@ -3,6 +3,9 @@ import { createPortal } from "react-dom";
 import type { ProviderInfo } from "../ipc/provider";
 import { RobotIcon } from "./Icons";
 import { useLocale } from "../contexts/LocaleContext";
+import { QuotaBadge } from "./QuotaBadge";
+import { usageQuota, usageQuotaAll, primaryWindow,
+         type QuotaResult, type QuotaWindow } from "../ipc/usage";
 import "./ModelPickerButton.css";
 
 interface Props {
@@ -28,6 +31,49 @@ export function ModelPickerButton({ providers, selectedId, onChange, disabled }:
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const selected = providers.find((p) => p.id === selectedId) ?? null;
+
+  /** 選中 provider 的代表窗；null 代表沒有配額概念、查詢失敗或尚未載入。 */
+  const [selectedWindow, setSelectedWindow] = useState<QuotaWindow | null>(null);
+  /** 展開時查到的全部配額，key 是 provider id。 */
+  const [allWindows, setAllWindows] = useState<Record<string, QuotaWindow>>({});
+
+  // 常駐顯示：掛載與每 5 分鐘只查「選中的那一個」，不是全部。
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      usageQuota(selectedId, false)
+        .then((r: QuotaResult) => {
+          if (cancelled) return;
+          setSelectedWindow(r.status === "ok" ? primaryWindow(r.quota) : null);
+        })
+        .catch(() => { if (!cancelled) setSelectedWindow(null); });
+    };
+    load();
+    const timer = setInterval(() => {
+      // 背景放著不動的視窗不該一直打上游。
+      if (!document.hidden) load();
+    }, 5 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [selectedId]);
+
+  // 展開時才查全部，這是唯一會一次打多個上游端點的時機。
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    usageQuotaAll(false)
+      .then((results: QuotaResult[]) => {
+        if (cancelled) return;
+        const map: Record<string, QuotaWindow> = {};
+        for (const r of results) {
+          if (r.status !== "ok") continue;
+          const w = primaryWindow(r.quota);
+          if (w) map[r.quota.provider_id] = w;
+        }
+        setAllWindows(map);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [open]);
 
   const handleToggle = () => {
     if (disabled) return;
@@ -101,6 +147,7 @@ export function ModelPickerButton({ providers, selectedId, onChange, disabled }:
         <span className="model-picker-btn__label">
           {selected ? selected.display_name : t.model_picker_no_provider}
         </span>
+        {selectedWindow && <QuotaBadge window={selectedWindow} />}
       </button>
       {open && pos && createPortal(
         <div ref={dropdownRef} className="model-picker-dropdown" style={dropdownStyle}>
@@ -113,6 +160,7 @@ export function ModelPickerButton({ providers, selectedId, onChange, disabled }:
               <span className="model-picker-dropdown__check">{p.id === selectedId ? "✓" : ""}</span>
               <span className="model-picker-dropdown__name">{p.display_name}</span>
               <span className="model-picker-dropdown__model">{p.model}</span>
+              {allWindows[p.id] && <QuotaBadge window={allWindows[p.id]} />}
             </button>
           ))}
           {providers.length === 0 && (

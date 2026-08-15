@@ -1,0 +1,11 @@
+.quota-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* normal 刻意低調：常駐顯示但不搶注意力，靠顏色而非有無來分級。 */
+.quota-badge--normal { color: var(--text-secondary, #8a8a8a); }
+.quota-badge--warning { color: #f59e0b; background: rgba(245, 158, 11, 0.12); }
+.quota-badge--critical { color: #ef4444; background: rgba(239, 68, 68, 0.14); }
