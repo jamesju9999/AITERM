@@ -1,6 +1,8 @@
 // src/components/DesignView/DesignView.tsx
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { RobotIcon } from '../Icons';
+import { QuotaBadge } from "../QuotaBadge";
+import { useProviderQuota } from "../../hooks/useProviderQuota";
 import { SpecPreview } from './SpecPreview';
 import {
   designStartSession,
@@ -44,6 +46,8 @@ export function DesignView({ isActive }: { isActive: boolean }) {
   const [providerId, setProviderId] = useState<string | undefined>(undefined);
   const [providerName, setProviderName] = useState<string | undefined>(undefined);
   const [showProviderPalette, setShowProviderPalette] = useState(false);
+  /** 常駐配額徽章的代表窗；null 就不顯示。 */
+  const quotaWindow = useProviderQuota(providerId);
   const [submitShortcut, setSubmitShortcut] = useState<SubmitShortcut>('enter');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sessionList, setSessionList] = useState<DesignSession[]>([]);
@@ -562,6 +566,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 200 }}>
                   {providerName ? t.design_model(providerName) : t.design_default_model}
                 </span>
+                {quotaWindow && <QuotaBadge window={quotaWindow} />}
               </button>
             </div>
             <div className="design-input-container">
