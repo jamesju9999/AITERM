@@ -20,6 +20,8 @@ import { CodeAssistantView } from "./CodeAssistantView";
 import { KnowledgeBaseView } from "./KnowledgeBaseView";
 import { MailView } from "./MailView";
 import { HomeView } from "./HomeView";
+import { RouteHint } from "./RouteHint";
+import type { RouteResult } from "./HomeView/routeIntent";
 import { useLocale } from "../contexts/LocaleContext";
 import { setTabAgentProgress } from "../lib/tabAgentProgress";
 import { restoreSessionTabs, saveSessionTabs } from "../lib/sessionTabs";
@@ -61,6 +63,9 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   // 預設 true：開 app 先看到首頁，上次的分頁照常還原但不在前景。
   const [homeActive, setHomeActive] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // 首頁 AI 路由猜對／猜錯的反悔提示：記住開出來的分頁 id、AI 選了什麼類型、
+  // 使用者原句（換分頁類型時要用同一句重開）。null 代表沒有提示要顯示。
+  const [routeHint, setRouteHint] = useState<{ tabId: string; type: TabType; userText: string } | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(76);
   const [isDragging, setIsDragging] = useState(false);
@@ -243,6 +248,12 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     return newId;
   }, [t.terminal_tab, t.database_tab, t.design_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab, t.loop_studio_tab, t.code_assistant_tab, t.knowledge_base_tab, t.mail_tab, t.bridge_tab_title, selectTab]);
 
+  // 首頁 AI 路由開出一個分頁（非降級結果）：記住它，讓 RouteHint 能在
+  // 這個分頁上顯示「AI 判斷你要的是 X 分頁——不對？換成…」。
+  const handleAiRouted = useCallback((tabId: string, route: RouteResult) => {
+    setRouteHint({ tabId, type: route.type, userText: route.userText });
+  }, []);
+
   const handleCloseTab = useCallback(async (id: string) => {
     const guard = closeGuardsRef.current.get(id);
     if (guard) {
@@ -278,6 +289,18 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       return nextTabs;
     });
   }, []);
+
+  // RouteHint 的「換成…」：關掉猜錯的那個分頁，用同一句 userText 重開成
+  // 使用者選的類型，並把提示狀態指向新分頁。
+  const handleRouteHintPick = useCallback((type: TabType) => {
+    if (!routeHint) return;
+    const { tabId: oldId, userText } = routeHint;
+    void handleCloseTab(oldId);
+    const opts: TabOpenOpts | undefined =
+      type === "terminal" ? { initialMission: { goal: userText, maxSteps: 20 } } : undefined;
+    const newId = handlePickerSelect(type, opts);
+    setRouteHint({ tabId: newId, type, userText });
+  }, [routeHint, handleCloseTab, handlePickerSelect]);
 
   const handleRename = useCallback((id: string, newTitle: string) => {
     setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, title: newTitle } : t)));
@@ -442,7 +465,17 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
         {/* 首頁蓋在同一塊內容區。分頁一律留在 DOM 裡（見下方 isActive 附近的
             註解），所以這裡不能改成三元運算把分頁換掉。 */}
-        {homeActive && <HomeView onOpenTab={handlePickerSelect} tabs={tabs} onSelectTab={selectTab} />}
+        {homeActive && (
+          <HomeView onOpenTab={handlePickerSelect} tabs={tabs} onSelectTab={selectTab} onAiRouted={handleAiRouted} />
+        )}
+        {/* AI 路由猜錯分頁類型的反悔提示：只在猜出來的那個分頁正在前景時顯示。 */}
+        {!homeActive && routeHint && routeHint.tabId === activeId && (
+          <RouteHint
+            pickedType={routeHint.type}
+            onPick={handleRouteHintPick}
+            onDismiss={() => setRouteHint(null)}
+          />
+        )}
         {tabs.map((tab) => {
           const isActive = tab.id === activeId && !homeActive;
           return (
