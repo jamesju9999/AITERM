@@ -21,6 +21,7 @@ import { KnowledgeBaseView } from "./KnowledgeBaseView";
 import { MailView } from "./MailView";
 import { HomeView } from "./HomeView";
 import { useLocale } from "../contexts/LocaleContext";
+import { setTabAgentProgress } from "../lib/tabAgentProgress";
 import { useMailSync } from "../hooks/useMailSync";
 import { getConfig } from "../ipc/config";
 import { bridgeStatus } from "../ipc/bridge";
@@ -519,9 +520,12 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                     setLastTerminalPtyId(ptyId);
                   }}
                   onAgentProgress={(done, total) => {
-                    setTabs((prev) =>
-                      prev.map((t) => t.id === tab.id ? { ...t, agentProgress: { done, total } } : t)
-                    );
+                    setTabs((prev) => setTabAgentProgress(prev, tab.id, { done, total }));
+                  }}
+                  onAgentDone={() => {
+                    // 「進行中的任務」只該列真的在跑的——任務結束（成功或失敗）就清掉，
+                    // 不用 status 欄位標記完成/失敗，那個訊號已經由 onAttention 負責。
+                    setTabs((prev) => setTabAgentProgress(prev, tab.id, undefined));
                   }}
                   onSummaryUpdate={(summary) => {
                     setTabs((prev) =>
