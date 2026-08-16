@@ -1,5 +1,6 @@
 import { LaunchGrid } from "./LaunchGrid";
 import { RunningTasks } from "./RunningTasks";
+import { UsageSection } from "./UsageSection";
 import type { Tab, TabType } from "../TabBar";
 import type { TabOpenOpts } from "../NewTabPicker/tabCatalog";
 import "./index.css";
@@ -16,6 +17,8 @@ export function HomeView({ onOpenTab, tabs, onSelectTab }: Props) {
       {/* 進行中的任務比入口更該先看到，放在 LaunchGrid 之前。 */}
       <RunningTasks tabs={tabs} onSelectTab={onSelectTab} />
       <LaunchGrid onOpenTab={onOpenTab} />
+      {/* 用量是參考資訊而非行動入口，放在 LaunchGrid 之後。 */}
+      <UsageSection />
     </div>
   );
 }
