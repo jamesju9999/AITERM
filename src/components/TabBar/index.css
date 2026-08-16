@@ -413,8 +413,26 @@
   50% { opacity: 0.35; }
 }
 
+/* Telegram Remote 指示器——右上角，terminal 分頁裡唯一沒被 bridge/attention
+   佔用的角落。會動是刻意的：修好回歸之後這個分頁真的會在背景執行遠端指令，
+   不能只是一個容易被忽略的靜態小點。 */
+.terminal-remote-badge {
+  position: absolute;
+  top: -6px;
+  right: -8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #34d399;
+  border: 1.5px solid var(--bg-secondary, #151515);
+  box-shadow: 0 0 6px rgba(52, 211, 153, 0.6);
+  animation: terminal-attention-pulse 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .terminal-attention-badge--waiting {
+  .terminal-attention-badge--waiting,
+  .terminal-remote-badge {
     animation: none;
   }
 }

@@ -425,3 +425,46 @@ describe("TabBar Claude Code bridge 外觀", () => {
     expect(screen.getByRole("img", { name: "終端機正在等待你的回應" })).toBeInTheDocument();
   });
 });
+
+// LocaleProvider 預設 zh-TW，所以這裡斷言 zh-TW 的無障礙名稱。
+describe("TabBar Telegram remote indicator", () => {
+  const twoTabs: Tab[] = [
+    { id: "t1", title: "Tab 1", type: "terminal" },
+    { id: "t2", title: "Tab 2", type: "terminal" },
+  ];
+
+  it("remoteTabId 指到的那個分頁會顯示指示器", () => {
+    renderTabBar({ tabs: twoTabs, activeId: "t1", remoteTabId: "t2" });
+    expect(screen.getByRole("img", { name: "這個分頁已開啟 Telegram 遠端遙控" })).toBeTruthy();
+  });
+
+  it("沒有分頁開著 Remote 時什麼都不顯示", () => {
+    renderTabBar({ tabs: twoTabs, activeId: "t1", remoteTabId: null });
+    expect(screen.queryByRole("img", { name: "這個分頁已開啟 Telegram 遠端遙控" })).toBeNull();
+  });
+
+  it("非終端機分頁即使 id 對上 remoteTabId 也不顯示", () => {
+    renderTabBar({
+      tabs: [twoTabs[0], { id: "m1", title: "Mail", type: "mail" }],
+      activeId: "t1",
+      remoteTabId: "m1",
+    });
+    expect(screen.queryByRole("img", { name: "這個分頁已開啟 Telegram 遠端遙控" })).toBeNull();
+  });
+
+  // 指示器跟 attention 點、bridge 徽章分踞不同角落，三個要能同時出現且各自可分辨。
+  it("跟 attention 點、bridge 徽章同時出現時仍然可分辨", () => {
+    renderTabBar({
+      tabs: [
+        twoTabs[0],
+        { ...twoTabs[1], attention: "waiting", claudeBridge: "default" },
+      ],
+      activeId: "t1",
+      remoteTabId: "t2",
+    });
+    const remote = screen.getByRole("img", { name: "這個分頁已開啟 Telegram 遠端遙控" });
+    const attention = screen.getByRole("img", { name: "終端機正在等待你的回應" });
+    expect(screen.getByText("CC")).toBeInTheDocument();
+    expect(remote.className).not.toBe(attention.className);
+  });
+});

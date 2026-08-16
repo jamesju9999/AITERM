@@ -83,6 +83,10 @@ export interface TabBarProps {
    *  a warning marker on the Mail tab's icon — the only way a user who never
    *  opens the Mail tab learns their inbox has stopped updating. */
   mailFailedAccountCount?: number;
+  /** 目前唯一開著 Telegram Remote 的分頁 id（null 代表沒有）。修好首頁回歸之後
+   *  背景分頁也會真的執行遠端指令，所以側邊欄需要一個訊號，不能只靠分頁
+   *  內部那顆按鈕才看得到。 */
+  remoteTabId?: string | null;
 }
 
 // Single source of truth for the cap rule, so the badge's visible text and its
@@ -152,7 +156,8 @@ export function TabBar({
   width,
   hasUpdate = false,
   mailUnreadCount = 0,
-  mailFailedAccountCount = 0
+  mailFailedAccountCount = 0,
+  remoteTabId = null
 }: TabBarProps) {
   const navigate = useNavigate();
   const { t } = useLocale();
@@ -357,6 +362,12 @@ export function TabBar({
                   跟右下角的 attention 點、mail 的兩個角落都不會撞。 */}
               {tab.type === "terminal" && tab.claudeBridge === "default" && (
                 <span className="terminal-bridge-badge">{t.bridge_tab_badge}</span>
+              )}
+              {/* Remote 指示器：右上角。terminal 分頁本來就不會出現 mail 的兩個
+                  徽章，左上（bridge）跟右下（attention）也各自佔用中，右上是
+                  唯一沒被用到的角落。 */}
+              {tab.type === "terminal" && tab.id === remoteTabId && (
+                <span className="terminal-remote-badge" role="img" aria-label={t.term_remote_badge_label} />
               )}
             </span>
 

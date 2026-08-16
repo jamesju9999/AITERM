@@ -124,6 +124,12 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
 
   // PTY session ID of the most recently active terminal tab — used by VcsView for CWD polling.
   const [lastTerminalPtyId, setLastTerminalPtyId] = useState<string>("");
+  // 哪個終端機分頁目前是「唯一的 Telegram Remote 分頁」——天然互斥的單一真相
+  // 來源。取代原本以「這個分頁是否可見」（isActive）當作監聽器閘門的作法：
+  // 那個作法在首頁變成啟動預設畫面後，只要按首頁鍵就會主動 unlisten，
+  // 期間收到的 Telegram 訊息永久遺失（Tauri 的 emit 找不到 listener 就直接
+  // 丟棄，沒有 buffer）。null 代表沒有分頁開著 Remote。
+  const [remoteTabId, setRemoteTabId] = useState<string | null>(null);
   useEffect(() => {
     tabsRef.current = tabs;
     activeIdRef.current = activeId;
@@ -260,6 +266,9 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       const canClose = await guard();
       if (!canClose) return;
     }
+    // 關掉的剛好是目前的 remote 分頁：釋放這個位置，不留著一個指向已經不存在
+    // 分頁的 id。
+    setRemoteTabId((prev) => (prev === id ? null : prev));
     // 這裡不能直接呼叫 selectTab：它內部也會呼叫 setTabs，巢狀呼叫等於在
     // 同一個 state 的更新佇列還在處理時再次 dispatch 同一個 state。改成
     // 清除跟著同一個 updater 的回傳值一起算，不另外呼叫 setTabs。
@@ -459,6 +468,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
           mailFailedAccountCount={mailFailedAccountCount}
           onHome={() => setHomeActive(true)}
           homeActive={homeActive}
+          remoteTabId={remoteTabId}
         />
       </div>
       
@@ -568,6 +578,8 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   }}
                   onAttention={(kind) => handleAttention(tab.id, tab.title, kind)}
                   onClaudeDetected={onClaudeDetected}
+                  isRemoteTab={tab.id === remoteTabId}
+                  onRemoteTabChange={(enabled) => setRemoteTabId(enabled ? tab.id : null)}
                 />
               )}
             </div>

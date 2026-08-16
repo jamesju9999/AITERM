@@ -138,6 +138,17 @@ export interface TerminalViewProps {
    * 環境變數只能在 PTY spawn 的瞬間決定，所以這個值在分頁建立後改變沒有效果。
    */
   claudeBridge?: boolean;
+  /**
+   * 這個分頁是不是目前「唯一的 Remote 分頁」——由 TerminalApp 用 remoteTabId
+   * 互斥決定，跟這個分頁在畫面上看不看得到無關（切到首頁也一樣算數，
+   * 這正是本欄位存在的理由：修好 Telegram 遠端遙控在首頁按鈕出現後的回歸）。
+   */
+  isRemoteTab?: boolean;
+  /**
+   * 使用者切換這個分頁的 Remote 開關時呼叫，讓 TerminalApp 更新
+   * remoteTabId（天然互斥：在這裡開會自動關掉原本開著的那個分頁）。
+   */
+  onRemoteTabChange?: (enabled: boolean) => void;
 }
 
 // The live terminal pane's visible height shrinks to just the current content
@@ -162,7 +173,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, claudeBridge }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, claudeBridge, isRemoteTab = false, onRemoteTabChange }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -653,9 +664,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   }, []); // hostRef and sessionRef are stable refs — no deps needed
 
   // Telegram Remote Control
+  //
+  // hook 的第二個參數已經不影響是否監聽（見 hook 內註解），這裡傳 true 只是
+  // 佔位滿足簽章——「這個分頁算不算 remote 分頁」改由 isRemoteTab 決定，
+  // 靠下面的互斥 effect 反映到 isRemoteEnabled 上，不再是 isActive（分頁
+  // 是否可見）。
   const { isRemoteEnabled, setIsRemoteEnabled, sendRemoteResponse } = useTelegramRemoteControl(
     sessionId,
-    isActive,
+    true,
     (text) => {
       const agentQuery = parseAgentPrefix(text);
       const aiQuery = parseAiPrefix(text);
@@ -714,6 +730,27 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       }
     }
   );
+
+  // 互斥同步：這個分頁一旦不再是 TerminalApp 認定的 remote 分頁（使用者在
+  // 別的分頁開了 Remote），但本地的 isRemoteEnabled 還亮著，就把它關掉——
+  // 「開 B 會靜默關掉 A」需要 A 自己的按鈕也跟著滅掉，不能只在 TerminalApp
+  // 裡記一個 id 卻不通知 A。
+  useEffect(() => {
+    if (!isRemoteTab && isRemoteEnabled) {
+      setIsRemoteEnabled(false);
+    }
+  }, [isRemoteTab, isRemoteEnabled, setIsRemoteEnabled]);
+
+  // 使用者按下 Remote 開關：本地開/關之外，同時把「這個分頁是不是 remote
+  // 分頁」回報給 TerminalApp——它是天然互斥的唯一真相來源。
+  // 刻意不用 setIsRemoteEnabled 的 updater 形式：updater 必須是純函式，
+  // 在裡面呼叫 onRemoteTabChange 這種外部副作用在 React StrictMode 下會被
+  // 重複呼叫兩次。
+  const handleToggleRemote = useCallback(() => {
+    const next = !isRemoteEnabled;
+    setIsRemoteEnabled(next);
+    onRemoteTabChange?.(next);
+  }, [isRemoteEnabled, setIsRemoteEnabled, onRemoteTabChange]);
 
   /** Fetch active provider name and execution mode from config. */
   function refreshConfig() {
@@ -1465,7 +1502,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             title={t.term_remote_tooltip}
             onClick={(e) => {
               e.stopPropagation();
-              setIsRemoteEnabled((prev) => !prev);
+              handleToggleRemote();
             }}
             style={{ display: "flex", alignItems: "center", gap: "6px" }}
           >
