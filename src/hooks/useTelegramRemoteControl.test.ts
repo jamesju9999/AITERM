@@ -71,6 +71,42 @@ describe("useTelegramRemoteControl", () => {
     await waitFor(() => expect(unlistenSpy).toHaveBeenCalledTimes(1));
   });
 
+  // canListen 是「同時只有一個實例監聽」的保證。listen 是全域的，兩個實例
+  // 同時註冊，同一則 Telegram 指令就會被執行兩次。終端機分頁靠 remoteTabId
+  // 互斥，CrossDbView/DatabaseView/DesignView 靠自己的可見性——但保證的責任
+  // 都落在這個參數上。
+  it("canListen 為 false 時，就算 isRemoteEnabled 打開也不註冊", async () => {
+    const { result } = renderHook(() =>
+      useTelegramRemoteControl("tab-1", false, () => {})
+    );
+
+    act(() => {
+      result.current.setIsRemoteEnabled(true);
+    });
+
+    // 等一輪 microtask，確認不是「還沒註冊」而是「不會註冊」。
+    await Promise.resolve();
+    expect(listenMock).not.toHaveBeenCalled();
+  });
+
+  it("canListen 從 true 變 false 時會 unlisten（換別的分頁接手 remote）", async () => {
+    const { result, rerender } = renderHook(
+      ({ canListen }: { canListen: boolean }) =>
+        useTelegramRemoteControl("tab-1", canListen, () => {}),
+      { initialProps: { canListen: true } },
+    );
+
+    act(() => {
+      result.current.setIsRemoteEnabled(true);
+    });
+    await waitFor(() => expect(listenMock).toHaveBeenCalledTimes(1));
+    expect(unlistenSpy).not.toHaveBeenCalled();
+
+    rerender({ canListen: false });
+
+    await waitFor(() => expect(unlistenSpy).toHaveBeenCalledTimes(1));
+  });
+
   it("isRemoteEnabled 不會從 localStorage 讀回來（刻意不持久化）", () => {
     // 舊的（已拿掉的）持久化邏輯會用 `aiterm-remote:${tabId}` 當 key。
     // 就算 localStorage 裡有 "true"，開機當下也必須是 false。

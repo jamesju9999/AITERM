@@ -3,15 +3,24 @@ import { listenTelegramMessage, sendTelegramMessage } from "../ipc/telegram";
 
 export function useTelegramRemoteControl(
   tabId: string,
-  // 保留這個參數位置純粹是為了不動到其他呼叫端（CrossDbView / DatabaseView /
-  // DesignView）的函式簽章——它們仍傳入自己的「這個分頁是否可見」。這支
-  // hook 自己已經不再用它做任何判斷：是否註冊監聽器只看下面的
-  // isRemoteEnabled。「哪個分頁該是唯一的 remote 分頁」改由呼叫端決定
-  // （見 TerminalView + TerminalApp 的 remoteTabId 互斥機制），決定的結果
-  // 會直接反映在 isRemoteEnabled 上，不需要這裡再疊一層以「畫面上看不看得
-  // 到」為準的閘門——那正是原本的回歸成因：切到首頁等於分頁不可見，
-  // 監聽器就被主動 unlisten，期間收到的 Telegram 訊息永久遺失。
-  _isActive: boolean,
+  /**
+   * 這個實例可不可以註冊監聽器。
+   *
+   * `listen` 是全域的，所以同時有兩個實例註冊，同一則 Telegram 指令就會被
+   * 執行兩次——這個參數存在的唯一理由就是保證「同時只有一個」。
+   *
+   * 各呼叫端傳的東西不同，因為它們保證唯一性的方式不同：
+   * - `TerminalView` 傳「我是不是那個 remote 分頁」（`TerminalApp` 的
+   *   `remoteTabId` 互斥機制）。**不能**傳「分頁看不看得見」——首頁是啟動
+   *   預設畫面，按一下首頁就會 unlisten，期間的 Telegram 訊息永久遺失
+   *   （Tauri 的 emit 找不到 listener 就直接丟棄，沒有 buffer）。那就是這次
+   *   修掉的回歸。
+   * - `CrossDbView` / `DatabaseView` / `DesignView` 仍傳「這個分頁可不可見」。
+   *   它們沒有接上 `remoteTabId`，所以還是靠可見性當唯一性的代理，也因此
+   *   仍有同一個首頁回歸。修它們是另一個 Task 的事——但這個參數必須留著，
+   *   否則它們會跟終端機分頁同時註冊，指令被執行兩次。
+   */
+  canListen: boolean,
   onMessageReceived: (text: string) => void
 ) {
   // 刻意不持久化 isRemoteEnabled：Remote 開著時外部訊息可以直接讓終端機
@@ -30,7 +39,7 @@ export function useTelegramRemoteControl(
   }, [onMessageReceived]);
 
   useEffect(() => {
-    if (!isRemoteEnabled) return;
+    if (!isRemoteEnabled || !canListen) return;
 
     // Use the same active-flag pattern as useAiChat to handle the
     // async listen() race condition with React StrictMode / HMR cleanup.
@@ -60,7 +69,7 @@ export function useTelegramRemoteControl(
         } catch { /* ignore */ }
       }
     };
-  }, [isRemoteEnabled, tabId]);
+  }, [isRemoteEnabled, canListen, tabId]);
 
   const sendRemoteResponse = useCallback(
     async (text: string) => {

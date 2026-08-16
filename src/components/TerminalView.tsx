@@ -671,7 +671,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // 是否可見）。
   const { isRemoteEnabled, setIsRemoteEnabled, sendRemoteResponse } = useTelegramRemoteControl(
     sessionId,
-    true,
+    // 唯一性靠 TerminalApp 的 remoteTabId 互斥機制保證，不是靠分頁可見性——
+    // 傳 true 會讓這個分頁跟 CrossDbView 等其他呼叫端同時註冊，同一則指令
+    // 被執行兩次。
+    isRemoteTab,
     (text) => {
       const agentQuery = parseAgentPrefix(text);
       const aiQuery = parseAiPrefix(text);
