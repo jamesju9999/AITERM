@@ -23,7 +23,13 @@ export function HomeInput({ onRoute }: Props) {
     if (!userText || busy) return;
 
     setBusy(true);
+    // 依 type 去重：Claude Code 跟一般終端機的 type 都是 "terminal"，兩筆都列
+    // 會讓 AI 看到同一個鍵配兩個矛盾的說明。而且路由結果只帶 type、不帶 opts，
+    // 所以 AI 就算「想要」Claude Code 也傳達不了（它還需要橋接 server 在跑，
+    // 那是路由管道表達不了的狀態）。保留先出現的那筆，也就是一般終端機。
+    const seen = new Set<string>();
     const catalog = visibleTabCatalog(t)
+      .filter((e) => !seen.has(e.type) && seen.add(e.type))
       .map((e) => `${e.type}: ${e.label} — ${e.desc}`)
       .join("\n");
     const prompt =

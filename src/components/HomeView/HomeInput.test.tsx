@@ -107,4 +107,22 @@ describe("HomeInput", () => {
     expect(prompt).not.toContain("api-docs");
     expect(prompt).not.toContain("mail");
   });
+
+  // Claude Code 跟一般終端機的 type 都是 "terminal"，兩筆都列會讓 AI 看到同一個
+  // 鍵配兩個矛盾的說明。而且路由結果只帶 type、不帶 opts，AI 就算「想要」
+  // Claude Code 也傳達不了。
+  it("提示詞裡每個分頁類型只出現一次", async () => {
+    invokeAiChatMock.mockResolvedValue({ content: '{"type":"terminal"}' });
+    renderInput();
+    submit("做點事");
+    await waitFor(() => expect(invokeAiChatMock).toHaveBeenCalled());
+    const prompt = String(invokeAiChatMock.mock.calls[0][0][0].content);
+    // 清單每行的形狀是 "<type>: <label> — <desc>"，取冒號前的字。
+    const listed = prompt
+      .split("\n")
+      .map((line) => /^([a-z-]+):\s/.exec(line)?.[1])
+      .filter((x): x is string => !!x);
+    expect(listed.length).toBeGreaterThan(0);
+    expect(new Set(listed).size).toBe(listed.length);
+  });
 });
