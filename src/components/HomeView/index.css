@@ -34,12 +34,13 @@
   color: var(--text-primary, #eee);
   cursor: pointer;
   text-align: left;
+  font-family: inherit;
   transition: var(--transition-smooth);
 }
 
 .home-launch-card:hover {
   border-color: var(--accent);
-  background: var(--accent-dim, rgba(168, 85, 247, 0.06));
+  background: var(--accent-dim, rgba(168, 85, 247, 0.05));
 }
 
 .home-launch-label { font-size: 14px; font-weight: 600; }

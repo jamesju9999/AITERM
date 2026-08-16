@@ -92,6 +92,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   const tabsRef = useRef(tabs);
   const activeIdRef = useRef(activeId);
   const isSidebarOpenRef = useRef(isSidebarOpen);
+  const homeActiveRef = useRef(homeActive);
   // Tab close guards: components register an async fn that returns true = ok to close, false = cancel
   const closeGuardsRef = useRef<Map<string, () => Promise<boolean>>>(new Map());
   const registerCloseGuard = useCallback((tabId: string, guard: () => Promise<boolean>) => {
@@ -138,6 +139,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     tabsRef.current = tabs;
     activeIdRef.current = activeId;
     isSidebarOpenRef.current = isSidebarOpen;
+    homeActiveRef.current = homeActive;
     // When switching to a terminal tab that already has a PTY, update the tracked ID.
     const activeTab = tabs.find((t) => t.id === activeId);
     if (activeTab?.type === "terminal" && activeTab.ptySessionId) {
@@ -145,7 +147,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     }
     // Persist tab layout for session restoration
     saveSessionTabs(tabs);
-  }, [tabs, activeId, isSidebarOpen]);
+  }, [tabs, activeId, isSidebarOpen, homeActive]);
 
   // 切到某個分頁就把它的提示點清掉——使用者選定的規則是「切過去就算讀過」。
   // 這裡而不是用一個以 activeId 為依賴的 effect：清除在語意上是「選取分頁」
@@ -347,6 +349,8 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
         handleAddTab();
       } else if (e.key === "w" || e.key === "W") {
         e.preventDefault();
+        // 首頁沒有可關的分頁——不擋掉會靜默關掉背景那個看不見的分頁。
+        if (homeActiveRef.current) return;
         handleCloseTab(activeIdRef.current);
       } else if (e.key === "Tab") {
         e.preventDefault();
@@ -405,7 +409,9 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
 
   const toggleSidebar = useCallback(() => setIsSidebarOpen(o => !o), []);
 
-  const activeTabForTitle = tabs.find((t) => t.id === activeId);
+  // 首頁不是分頁，標題列要退回 TitleBar 的預設值（"AITerm"），不能沿用
+  // 背景分頁的標題／AI 摘要。
+  const activeTabForTitle = homeActive ? undefined : tabs.find((t) => t.id === activeId);
   const titleBarText = activeTabForTitle
     ? (activeTabForTitle.type === "terminal" && activeTabForTitle.aiSummary
         ? `${activeTabForTitle.title} - ${activeTabForTitle.aiSummary}`

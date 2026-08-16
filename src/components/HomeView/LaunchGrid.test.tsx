@@ -32,5 +32,7 @@ describe("LaunchGrid", () => {
   it("不顯示 hidden 的分頁類型", () => {
     renderGrid();
     expect(screen.queryByText("信箱")).not.toBeInTheDocument();
+    // api_docs_tab 的 zh-TW 值直接就是 "API Docs"（未翻譯）。
+    expect(screen.queryByText("API Docs")).not.toBeInTheDocument();
   });
 });
