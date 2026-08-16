@@ -27,6 +27,7 @@ const zhTW = {
     // 側邊欄固定的首頁按鈕（不是分頁）。
     home_tab: "首頁",
     home_launch_title: "開始工作",
+    home_running_title: "進行中的任務",
     terminal_tab: "終端機",
     files_tab: "檔案",
     database_tab: "資料庫",
@@ -1239,6 +1240,7 @@ const enRaw = {
     // Fixed home button in the sidebar (not a tab).
     home_tab: "Home",
     home_launch_title: "Start working",
+    home_running_title: "Running tasks",
     terminal_tab: "Terminal",
     files_tab: "Files",
     database_tab: "Database",

@@ -55,3 +55,32 @@
 
 .home-launch-label { font-size: 14px; font-weight: 600; }
 .home-launch-desc  { font-size: 12px; color: var(--text-secondary, #aaa); }
+
+.home-running-list { display: flex; flex-direction: column; gap: 8px; }
+
+.home-running-task {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-primary, #eee);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
+.home-running-name  { font-size: 13px; font-weight: 600; }
+.home-running-count { font-size: 12px; color: var(--text-secondary, #aaa); }
+
+.home-running-bar {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.home-running-fill { display: block; height: 100%; background: var(--accent); }

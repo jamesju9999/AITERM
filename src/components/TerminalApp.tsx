@@ -452,7 +452,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
         {/* 首頁蓋在同一塊內容區。分頁一律留在 DOM 裡（見下方 isActive 附近的
             註解），所以這裡不能改成三元運算把分頁換掉。 */}
-        {homeActive && <HomeView onOpenTab={handlePickerSelect} />}
+        {homeActive && <HomeView onOpenTab={handlePickerSelect} tabs={tabs} onSelectTab={selectTab} />}
         {tabs.map((tab) => {
           const isActive = tab.id === activeId && !homeActive;
           return (
@@ -540,6 +540,10 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
 
       {/* Enterprise: Background Task Progress Panel (10.2) */}
       {(() => {
+        // 首頁的 RunningTasks 已經涵蓋「顯示進行中任務」的職責且更完整
+        // （不受 enterpriseTask / activeId 過濾限制），停在首頁時這個浮動
+        // 面板不渲染，避免兩者重複出現、且較不完整的這個漏掉 activeId 那筆。
+        if (homeActive) return null;
         const bgTasks = tabs.filter(
           (t) => t.type === "terminal" && t.enterpriseTask && t.agentProgress && t.id !== activeId
         );
