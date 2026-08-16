@@ -15,12 +15,21 @@ function renderTasks(tabs: Tab[], onSelectTab = vi.fn()) {
 
 describe("RunningTasks", () => {
   it("沒有進行中的任務時整區不出現", () => {
-    const { container } = render(
+    render(
       <LocaleProvider>
         <RunningTasks tabs={[{ id: "t1", title: "Tab 1", type: "terminal" }]} onSelectTab={vi.fn()} />
       </LocaleProvider>,
     );
-    expect(container.querySelector(".home-running-task")).toBeNull();
+    // 查標題而不是查個別任務按鈕：沒有任務時 map 本來就產不出按鈕，
+    // 查按鈕的話不管 early return 在不在都會通過（這條測試原本就是這樣壞的）。
+    expect(screen.queryByText("進行中的任務")).not.toBeInTheDocument();
+  });
+
+  it("有任務時整區出現", () => {
+    renderTasks([
+      { id: "t1", title: "建置", type: "terminal", agentProgress: { done: 1, total: 2 } },
+    ]);
+    expect(screen.getByText("進行中的任務")).toBeInTheDocument();
   });
 
   it("列出有 agentProgress 的分頁與其進度", () => {
