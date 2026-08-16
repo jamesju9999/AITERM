@@ -12,6 +12,31 @@ use super::cd_parser::{self, ParsedCd, ShellVariant};
 use super::error::{PtyError, PtyResult};
 use super::shell::ShellSpec;
 
+/// 決定 PTY 的起始目錄。
+///
+/// 指定的目錄不存在時（分頁還原自上一個 session，而那個目錄被刪掉、改名，或
+/// 位於還沒掛載的磁碟區），必須退回一個一定存在的地方，否則 spawn 會失敗。
+///
+/// 退回家目錄而不是 `current_dir()`：後者是 AITerm 主行程自己的工作目錄，
+/// 取決於 app 怎麼被啟動——macOS 打包版從 Finder 開啟時通常是 `/`，使用者會
+/// 發現終端機開在根目錄。家目錄是一般終端機的預期行為，也跟 portable-pty
+/// 自己的 fallback 語意一致。
+fn resolve_initial_cwd(cwd: Option<PathBuf>) -> PathBuf {
+    cwd.filter(|p| p.is_dir())
+        .or_else(home_dir)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// 家目錄。Unix 讀 `HOME`，Windows 讀 `USERPROFILE`。
+/// 一併確認它真的是個目錄——環境變數可能指向不存在的路徑。
+fn home_dir() -> Option<PathBuf> {
+    let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(key)
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+}
+
 pub struct PtySession {
     pub id: String,
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -208,10 +233,7 @@ impl PtySession {
         for k in &shell.env_removals {
             cmd.env_remove(k);
         }
-        let initial_cwd = cwd
-            .filter(|p| p.is_dir())
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("."));
+        let initial_cwd = resolve_initial_cwd(cwd);
         cmd.cwd(&initial_cwd);
 
         let child = pair
@@ -333,10 +355,7 @@ impl PtySession {
         for k in &shell.env_removals {
             cmd.env_remove(k);
         }
-        let initial_cwd = cwd
-            .filter(|p| p.is_dir())
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("."));
+        let initial_cwd = resolve_initial_cwd(cwd);
         cmd.cwd(&initial_cwd);
 
         let child = pair
@@ -596,6 +615,45 @@ mod tests {
     use super::*;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
+
+    // 起始目錄的 fallback 在這之前完全沒有測試涵蓋，而它是「分頁還原到上次的
+    // 目錄」這個功能唯一的安全網——目錄被刪掉、改名或磁碟區沒掛載時全靠它。
+    #[test]
+    fn initial_cwd_uses_the_given_dir_when_it_exists() {
+        let dir = std::env::temp_dir();
+        assert_eq!(resolve_initial_cwd(Some(dir.clone())), dir);
+    }
+
+    #[test]
+    fn initial_cwd_falls_back_to_home_when_dir_is_missing() {
+        let missing = std::env::temp_dir().join("aiterm-does-not-exist-9f3a2b");
+        assert!(!missing.is_dir(), "測試前提：這個路徑必須不存在");
+
+        let resolved = resolve_initial_cwd(Some(missing));
+        assert!(resolved.is_dir(), "退回的目錄必須真的存在，否則 spawn 會失敗");
+        if let Some(home) = home_dir() {
+            // 重點不只是「有退回某處」，而是退回家目錄而非主行程的 current_dir
+            // ——後者在 macOS 打包版通常是 `/`。
+            assert_eq!(resolved, home);
+        }
+    }
+
+    #[test]
+    fn initial_cwd_falls_back_when_none_given() {
+        let resolved = resolve_initial_cwd(None);
+        assert!(resolved.is_dir());
+    }
+
+    // 檔案不是目錄。`is_dir()` 對它回傳 false，所以應該跟不存在一樣退回。
+    #[test]
+    fn initial_cwd_rejects_a_file_path() {
+        let file = std::env::temp_dir().join("aiterm-cwd-probe.txt");
+        std::fs::write(&file, b"x").expect("寫入測試檔");
+        let resolved = resolve_initial_cwd(Some(file.clone()));
+        assert_ne!(resolved, file);
+        assert!(resolved.is_dir());
+        let _ = std::fs::remove_file(&file);
+    }
 
     fn test_shell() -> ShellSpec {
         #[cfg(windows)]
