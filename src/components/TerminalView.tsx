@@ -785,7 +785,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
   // (Agent loop is now callback-driven via runAgentLoop — no useEffect needed)
 
-  // Auto-start agent loop when an enterprise task has been dispatched to this terminal.
+  // 分頁一建立就帶著任務時，自動啟動 agent loop。兩個來源：企業任務派送，
+  // 以及首頁輸入框（那個沒有 enterpriseTask）。底下 onComplete/onFail 裡的
+  // git push/PR 與 enterpriseCompleteTask 都包在 enterpriseTask 判斷內，
+  // 所以非企業來源的任務會正常跑完、正常清進度，只是跳過企業收尾。
   const initialMissionFiredRef = useRef(false);
   useEffect(() => {
     if (!initialMission || initialMissionFiredRef.current) return;

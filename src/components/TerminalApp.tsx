@@ -249,9 +249,16 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
             ? "default"
             : undefined;
     if (claudeBridge === "explicit") title = t.bridge_tab_title;
-    setTabs((prev) => [...prev, { id: newId, title, type, claudeBridge }]);
+    setTabs((prev) => [...prev, {
+      id: newId, title, type, claudeBridge,
+      initialCwd: opts?.initialCwd,
+      initialMission: opts?.initialMission,
+    }]);
     selectTab(newId);
     setPickerOpen(false);
+    // 回傳新分頁的 id：呼叫端（首頁的 AI 路由）需要知道自己開了哪一個，
+    // 才能在猜錯時把它換掉。
+    return newId;
   }, [t.terminal_tab, t.database_tab, t.design_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab, t.loop_studio_tab, t.code_assistant_tab, t.knowledge_base_tab, t.mail_tab, t.bridge_tab_title, selectTab]);
 
   const handleCloseTab = useCallback(async (id: string) => {
