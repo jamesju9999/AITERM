@@ -31,12 +31,12 @@ function renderHome(tabs: Tab[]) {
 }
 
 describe("HomeView", () => {
-  // 順序有意義：進行中的東西 → 行動入口 → 參考資訊。
-  it("區塊由上到下是進行中的任務、開始工作、今日 AI 用量", () => {
+  // 順序有意義：進行中的東西 → 接續上次的工作 → 行動入口 → 參考資訊。
+  it("區塊由上到下是進行中的任務、接續上次的工作、開始工作、今日 AI 用量", () => {
     const { container } = renderHome([
       { id: "t1", title: "建置", type: "terminal", agentProgress: { done: 1, total: 2 } },
     ]);
     const titles = Array.from(container.querySelectorAll(".home-section-title")).map((e) => e.textContent);
-    expect(titles).toEqual(["進行中的任務", "開始工作", "今日 AI 用量"]);
+    expect(titles).toEqual(["進行中的任務", "接續上次的工作", "開始工作", "今日 AI 用量"]);
   });
 });

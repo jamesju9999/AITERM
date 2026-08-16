@@ -23,6 +23,7 @@ import { HomeView } from "./HomeView";
 import { useLocale } from "../contexts/LocaleContext";
 import { setTabAgentProgress } from "../lib/tabAgentProgress";
 import { restoreSessionTabs, saveSessionTabs } from "../lib/sessionTabs";
+import { recordProject } from "../lib/recentProjects";
 import { useMailSync } from "../hooks/useMailSync";
 import { getConfig } from "../ipc/config";
 import { bridgeStatus } from "../ipc/bridge";
@@ -524,6 +525,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                     setTabs((prev) =>
                       prev.map((t) => t.id === tab.id ? { ...t, cwd } : t)
                     );
+                    recordProject(cwd);
                   }}
                   onAttention={(kind) => handleAttention(tab.id, tab.title, kind)}
                   onClaudeDetected={onClaudeDetected}

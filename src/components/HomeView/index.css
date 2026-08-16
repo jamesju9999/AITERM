@@ -93,6 +93,59 @@
 
 .home-empty { font-size: 13px; color: var(--text-muted, #666); margin: 0; }
 
+.home-resume-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.home-resume-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-primary, #eee);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: var(--transition-smooth);
+}
+
+.home-resume-card:hover {
+  border-color: var(--accent);
+  background: var(--accent-dim, rgba(168, 85, 247, 0.05));
+}
+
+.home-resume-title   { font-size: 13px; font-weight: 600; }
+.home-resume-cwd     { font-size: 11px; font-family: ui-monospace, monospace; color: var(--text-muted, #666); overflow-wrap: anywhere; }
+.home-resume-summary { font-size: 12px; color: var(--text-secondary, #aaa); }
+
+.home-subsection-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted, #666);
+  margin: 16px 0 8px;
+}
+
+.home-recent-list { display: flex; flex-direction: column; gap: 4px; }
+
+.home-recent-item {
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, #aaa);
+  font: 12px/1.5 ui-monospace, monospace;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.home-recent-item:hover { background: rgba(255, 255, 255, 0.05); color: var(--text-primary, #eee); }
+
 .home-usage-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .home-usage-table th {
   text-align: left;
