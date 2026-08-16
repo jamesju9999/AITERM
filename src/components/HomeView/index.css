@@ -70,6 +70,12 @@
   cursor: pointer;
   text-align: left;
   font-family: inherit;
+  transition: var(--transition-smooth);
+}
+
+.home-running-task:hover {
+  border-color: var(--accent);
+  background: var(--accent-dim, rgba(168, 85, 247, 0.05));
 }
 
 .home-running-name  { font-size: 13px; font-weight: 600; }
