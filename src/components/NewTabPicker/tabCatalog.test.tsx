@@ -27,15 +27,23 @@ describe("getTabCatalog", () => {
     }
   });
 
-  // mail 的後端是完整的，只是還沒對使用者開放；用 hidden 旗標記錄這件事，
-  // 比在兩個地方各註解掉一行可靠。
-  it("mail 標成 hidden，其餘不是", () => {
+  // mail 與 api-docs 的後端都是完整的，只是還沒對使用者開放；用 hidden 旗標記錄
+  // 這件事，比在兩個地方各註解掉一行可靠。api-docs 的隱藏是 commit 3547799 刻意
+  // 做的決定，不是遺漏。
+  it("mail 與 api-docs 標成 hidden，其餘不是", () => {
     const catalog = getTabCatalog(t);
     expect(catalog.find((e) => e.type === "mail")!.hidden).toBe(true);
-    expect(catalog.filter((e) => e.hidden).map((e) => e.type)).toEqual(["mail"]);
+    expect(catalog.find((e) => e.type === "api-docs")!.hidden).toBe(true);
+    expect(catalog.filter((e) => e.hidden).map((e) => e.type).sort()).toEqual(["api-docs", "mail"]);
   });
 
   it("visibleTabCatalog 濾掉 hidden 的項目", () => {
     expect(visibleTabCatalog(t).some((e) => e.type === "mail")).toBe(false);
+  });
+
+  // 這個回歸真的發生過：把清單抽成單一來源時，api-docs 曾經漏掉 hidden 標記，
+  // 導致它從「刻意收起來的入口」變成「重新出現在選單裡」。
+  it("visibleTabCatalog 不含 api-docs（迴歸測試，見 commit 3547799）", () => {
+    expect(visibleTabCatalog(t).some((e) => e.type === "api-docs")).toBe(false);
   });
 });
