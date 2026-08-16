@@ -100,10 +100,9 @@ describe("getTabCatalog", () => {
 
   // mail 的後端是完整的，只是還沒對使用者開放；用 hidden 旗標記錄這件事，
   // 比在兩個地方各註解掉一行可靠。
-  it("mail 標成 hidden，其餘不是", () => {
+  it("api-docs 與 mail 標成 hidden，其餘不是", () => {
     const catalog = getTabCatalog(t);
-    expect(catalog.find((e) => e.type === "mail")!.hidden).toBe(true);
-    expect(catalog.filter((e) => e.hidden).map((e) => e.type)).toEqual(["mail"]);
+    expect(catalog.filter((e) => e.hidden).map((e) => e.type)).toEqual(["api-docs", "mail"]);
   });
 
   it("visibleTabCatalog 濾掉 hidden 的項目", () => {
@@ -153,7 +152,7 @@ export function getTabCatalog(t: Translations): TabCatalogEntry[] {
     { type: "cross-db",       icon: <LinkIcon size={18} />,      label: t.cross_db_tab,       desc: t.new_cross_db_desc },
     { type: "vcs",            icon: <BranchIcon size={18} />,    label: t.vcs_tab,            desc: t.new_vcs_desc },
     { type: "doc-converter",  icon: <FileTextIcon size={18} />,  label: t.doc_converter_tab,  desc: t.new_doc_converter_desc },
-    { type: "api-docs",       icon: <BookOpenIcon size={18} />,  label: t.api_docs_tab,       desc: t.new_api_docs_desc },
+    { type: "api-docs",       icon: <BookOpenIcon size={18} />,  label: t.api_docs_tab,       desc: t.new_api_docs_desc, hidden: true },
     { type: "loop-studio",    icon: <RefreshIcon size={18} />,   label: t.loop_studio_tab,    desc: t.new_loop_studio_desc },
     { type: "code-assistant", icon: <CodeIcon size={18} />,      label: t.code_assistant_tab, desc: t.new_code_assistant_desc },
     { type: "knowledge-base", icon: <LibraryIcon size={18} />,   label: t.knowledge_base_tab, desc: t.new_knowledge_base_desc },
@@ -166,14 +165,9 @@ export function visibleTabCatalog(t: Translations): TabCatalogEntry[] {
 }
 ```
 
-**注意：** `api-docs` 原本不在 `NewTabPicker` 的清單裡。確認 `t.new_api_docs_desc` 這個 i18n key 是否存在（`grep -n "new_api_docs_desc" src/lib/i18n.ts`）。不存在就在 `zhTW` 與 `enRaw` 兩邊各補一筆：
+**注意：** `api-docs` 原本不在 `NewTabPicker` 的清單裡，而且那是**刻意**的——commit `3547799 feat(tabs): hide the API Docs entry from the new-tab picker` 明確說「只拿掉入口，程式碼保留」。它和 `mail` 是同一種狀況，所以兩者都要 `hidden: true`。**這個 Task 是純重構，使用者在選單裡看到的項目不可以有任何變化。**
 
-```ts
-// zhTW
-new_api_docs_desc: "瀏覽與測試 API 文件",
-// enRaw
-new_api_docs_desc: "Browse and test API documentation",
-```
+`t.new_api_docs_desc` 這個 i18n key 已經存在於 `zhTW` 與 `enRaw`（實測確認過），不需要新增。
 
 - [ ] **Step 4: 執行測試確認它通過**
 
