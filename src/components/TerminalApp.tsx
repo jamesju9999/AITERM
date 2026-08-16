@@ -574,7 +574,9 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                     setTabs((prev) =>
                       prev.map((t) => t.id === tab.id ? { ...t, cwd } : t)
                     );
-                    recordProject(cwd);
+                    // 傳上一次的目錄進去：相同就不記錄。理由見 recordProject
+                    // 的註解——沒有這個，開機本身就會洗掉整份最近專案清單。
+                    recordProject(cwd, tab.cwd);
                   }}
                   onAttention={(kind) => handleAttention(tab.id, tab.title, kind)}
                   onClaudeDetected={onClaudeDetected}

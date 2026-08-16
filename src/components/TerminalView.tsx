@@ -664,11 +664,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   }, []); // hostRef and sessionRef are stable refs — no deps needed
 
   // Telegram Remote Control
-  //
-  // hook 的第二個參數已經不影響是否監聽（見 hook 內註解），這裡傳 true 只是
-  // 佔位滿足簽章——「這個分頁算不算 remote 分頁」改由 isRemoteTab 決定，
-  // 靠下面的互斥 effect 反映到 isRemoteEnabled 上，不再是 isActive（分頁
-  // 是否可見）。
   const { isRemoteEnabled, setIsRemoteEnabled, sendRemoteResponse } = useTelegramRemoteControl(
     sessionId,
     // 唯一性靠 TerminalApp 的 remoteTabId 互斥機制保證，不是靠分頁可見性——

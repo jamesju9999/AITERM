@@ -38,6 +38,33 @@ describe("recentProjects", () => {
     expect(listRecentProjects()).toEqual([]);
   });
 
+  // 開機時每個還原的分頁都會回報一次自己原本就在的目錄（TerminalView 的
+  // 輪詢每次執行都把 lastSaved 重設為空字串）。少了這道判斷，開機本身就會
+  // 把清單洗成「反向的分頁清單」，開著十個分頁時整份清單會被一次擠光。
+  it("目錄沒變就不記錄", () => {
+    recordProject("/a");
+    recordProject("/b");
+    recordProject("/b", "/b"); // 還原後停在原地，不算一次新的使用
+    expect(listRecentProjects().map((p) => p.path)).toEqual(["/b", "/a"]);
+  });
+
+  it("目錄真的變了才記錄", () => {
+    recordProject("/a");
+    recordProject("/b", "/a"); // 從 /a cd 到 /b
+    expect(listRecentProjects().map((p) => p.path)).toEqual(["/b", "/a"]);
+  });
+
+  // 開機情境的完整重現：三個還原分頁各自回報自己原本的目錄。
+  it("開機時所有分頁回報原目錄，不會洗掉既有清單", () => {
+    recordProject("/really-recent");
+    recordProject("/x1");
+    const before = listRecentProjects().map((p) => p.path);
+
+    for (const p of ["/tabA", "/tabB", "/tabC"]) recordProject(p, p);
+
+    expect(listRecentProjects().map((p) => p.path)).toEqual(before);
+  });
+
   it("空字串不記錄", () => {
     recordProject("");
     expect(listRecentProjects()).toEqual([]);
