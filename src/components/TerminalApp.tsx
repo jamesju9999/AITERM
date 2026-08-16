@@ -18,6 +18,7 @@ import { LoopStudioView } from "./LoopStudio";
 import { CodeAssistantView } from "./CodeAssistantView";
 import { KnowledgeBaseView } from "./KnowledgeBaseView";
 import { MailView } from "./MailView";
+import { HomeView } from "./HomeView";
 import { useLocale } from "../contexts/LocaleContext";
 import { useMailSync } from "../hooks/useMailSync";
 import { getConfig } from "../ipc/config";
@@ -72,6 +73,9 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     return [{ id: crypto.randomUUID(), title: tabType === "database" ? "Database" : "Terminal", type: tabType }];
   });
   const [activeId, setActiveId] = useState(tabs[0].id);
+  // 首頁不是分頁，所以它不在 tabs 裡，而是一個「都不 active」的狀態。
+  // 預設 true：開 app 先看到首頁，上次的分頁照常還原但不在前景。
+  const [homeActive, setHomeActive] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(76);
@@ -148,6 +152,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   // 的一部分，屬於事件本身，不是事後補償。也因此 active 分頁永遠不會有提示點。
   const selectTab = useCallback((id: string) => {
     setActiveId(id);
+    setHomeActive(false);
     setTabs((prev) =>
       prev.some((t) => t.id === id && t.attention)
         ? prev.map((t) => (t.id === id ? { ...t, attention: undefined } : t))
@@ -359,6 +364,11 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
           const nextIdx = (idx + 1) % currentTabs.length;
           selectTab(currentTabs[nextIdx].id);
         }
+      } else if (e.key === "0") {
+        // Windows/Linux 的 webview 用 Ctrl+0 重設縮放，一定要擋掉。
+        // macOS 的重設縮放是 Cmd+0，不衝突。
+        e.preventDefault();
+        setHomeActive(true);
       } else if (e.key >= "1" && e.key <= "9") {
         // Go to specific tab (1-indexed)
         const i = parseInt(e.key, 10) - 1;
@@ -421,6 +431,8 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
           hasUpdate={hasUpdate}
           mailUnreadCount={mailUnreadCount}
           mailFailedAccountCount={mailFailedAccountCount}
+          onHome={() => setHomeActive(true)}
+          homeActive={homeActive}
         />
       </div>
       
@@ -431,8 +443,11 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       )}
       {/* Resizer divider disabled for layout [2] fixed 76px slim sidebar */}
       <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
+        {/* 首頁蓋在同一塊內容區。分頁一律留在 DOM 裡（見下方 isActive 附近的
+            註解），所以這裡不能改成三元運算把分頁換掉。 */}
+        {homeActive && <HomeView onOpenTab={handlePickerSelect} />}
         {tabs.map((tab) => {
-          const isActive = tab.id === activeId;
+          const isActive = tab.id === activeId && !homeActive;
           return (
             <div
               key={tab.id}
