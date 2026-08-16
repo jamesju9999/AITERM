@@ -31,7 +31,11 @@ export function ResumeSection({ tabs, onSelectTab, onOpenProject }: Props) {
           <button key={tab.id} className="home-resume-card" onClick={() => onSelectTab(tab.id)}>
             <span className="home-resume-title">{tab.title}</span>
             {tab.cwd && <span className="home-resume-cwd">{tab.cwd}</span>}
-            {tab.aiSummary && <span className="home-resume-summary">{tab.aiSummary}</span>}
+            {/* 這個 session 的新摘要優先；沒有就顯示上次那份。區塊標題已經
+                說了是「接續上次的工作」，顯示舊摘要在這裡是成立的。 */}
+            {(tab.aiSummary ?? tab.lastSessionSummary) && (
+              <span className="home-resume-summary">{tab.aiSummary ?? tab.lastSessionSummary}</span>
+            )}
           </button>
         ))}
       </div>

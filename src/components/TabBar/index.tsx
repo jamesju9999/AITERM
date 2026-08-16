@@ -41,6 +41,10 @@ export interface Tab {
    *  localStorage so「接續上次的工作」可以顯示上次做到哪——重開 app 後
    *  不會再更新，直到這個分頁又執行新指令觸發下一次摘要。 */
   aiSummary?: string;
+  /** 上一個 session 的 AI 摘要，由 restoreSessionTabs 還原。只給首頁的「接續
+   *  上次的工作」讀——標題列不能用它，那裡沒有「上次」的框架。這個 session
+   *  一旦跑出新摘要，aiSummary 就會蓋過它。 */
+  lastSessionSummary?: string;
   /** 這個終端機分頁目前實際所在的工作目錄。由 TerminalView 回報，會持久化。
    *  跟 initialCwd（開分頁時的起始目錄）是兩件事，不要混用。 */
   cwd?: string;
