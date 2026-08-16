@@ -26,6 +26,7 @@ const zhTW = {
     settings: "設定",
     // 側邊欄固定的首頁按鈕（不是分頁）。
     home_tab: "首頁",
+    home_input_placeholder: "打一句話，AI 幫你判斷該開哪種分頁……",
     home_launch_title: "開始工作",
     home_running_title: "進行中的任務",
     home_resume_title: "接續上次的工作",
@@ -1248,6 +1249,7 @@ const enRaw = {
     settings: "Settings",
     // Fixed home button in the sidebar (not a tab).
     home_tab: "Home",
+    home_input_placeholder: "Type what you want to do, and AI will pick the right tab…",
     home_launch_title: "Start working",
     home_running_title: "Running tasks",
     home_resume_title: "Pick up where you left off",

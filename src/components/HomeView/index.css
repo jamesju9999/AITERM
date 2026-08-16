@@ -5,6 +5,29 @@
   box-sizing: border-box;
 }
 
+.home-input { margin-bottom: 32px; }
+
+.home-input-box {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-primary, #eee);
+  font-family: inherit;
+  font-size: 15px;
+  transition: var(--transition-smooth);
+}
+
+.home-input-box:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--accent-dim, rgba(168, 85, 247, 0.05));
+}
+
+.home-input-box:disabled { opacity: 0.6; cursor: wait; }
+
 .home-section { margin-bottom: 32px; }
 
 .home-section-title {

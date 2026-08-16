@@ -1,3 +1,4 @@
+import { HomeInput } from "./HomeInput";
 import { LaunchGrid } from "./LaunchGrid";
 import { RunningTasks } from "./RunningTasks";
 import { ResumeSection } from "./ResumeSection";
@@ -15,6 +16,12 @@ interface Props {
 export function HomeView({ onOpenTab, tabs, onSelectTab }: Props) {
   return (
     <div className="home-view">
+      {/* 輸入框是首頁的主角，放在所有區塊之前。 */}
+      <HomeInput
+        onRoute={(r) =>
+          onOpenTab(r.type, r.mission ? { initialMission: { goal: r.mission, maxSteps: 20 } } : undefined)
+        }
+      />
       {/* 順序：進行中的任務 → 接續上次的工作 → 開始工作 → 今日 AI 用量。
           正在跑的最急，其次是接續昨天的事，再來才是開新的東西，用量是參考資訊。 */}
       <RunningTasks tabs={tabs} onSelectTab={onSelectTab} />
