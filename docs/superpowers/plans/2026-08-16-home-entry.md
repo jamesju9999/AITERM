@@ -2306,29 +2306,58 @@ onStepComplete: (info) => sendRemoteResponse(formatAgentStepForRemote(info)),
 
 ## Task 14：修好「預設停在首頁」造成的既有功能回歸
 
-Task 3+4 的品質審查發現的。**這是我們的改動造成的回歸，不是既有缺陷**，所以必須修。
+Task 3+4 的品質審查發現的。**追查後的結論跟當初的假設不同**，以下是實際查證過的事實（2026-08-16）。
 
-改動之前，app 啟動時第一個分頁就是 active；改動之後 `homeActive` 預設 true，**啟動當下沒有任何分頁是 active**。凡是閘門條件為 `isActive` 的東西，在使用者手動點一個分頁之前全部不會啟動。
+### 追查結果（已驗證，不要重新假設）
+
+**回歸成立，但範圍與性質跟原本以為的不一樣：**
+
+1. **`isActive` 只閘住入站。** 它只擋 `listen("telegram-message-received")` 的註冊（`useTelegramRemoteControl.ts:35-66`），而且在 deps 裡，所以離開分頁會**主動 unlisten**。出站的 `sendRemoteResponse` 只看 `isRemoteEnabled`，不受影響。所以失效是**單向的**：手機→終端機斷，終端機→手機正常。
+
+2. **訊息永久遺失，兩端都掉。** Tauri 2.10.3 的 `emit_js_filter`（`listener.rs:269-293`）查不到 listener 就直接 `Ok(())`，**沒有任何 buffer 或 replay**。更糟的是 `telegram/mod.rs:118` 的 `offset = offset.max(update.update_id + 1)` 在 emit **之前**執行且與成敗無關——下一輪 `getUpdates?offset=N` 等於對 Telegram 伺服器 ACK，訊息從 Telegram 佇列也被刪掉。**切回分頁不會補送。**
+
+3. **「開 app 就壞」不成立**，因為 `isRemoteEnabled` 的持久化本身是壞的（獨立的既有 bug）：storage key 用 PTY `sessionId`，而它在 `useState` initializer 執行時是 `""`（`TerminalView.tsx:179`），且每次啟動都是新 UUID（`manager.rs:46`）。所以**冷啟動恆為 false**，接著持久化 effect 立刻把 `"false"` 寫回去蓋掉舊值。程式碼註解自己寫著要檢查「non-empty, non-UUID-like」，但 UUID 那半段從沒實作。
+
+   **因此真正的回歸是**：使用者手動開啟 Remote 後，**只要按首頁按鈕**（而首頁是啟動預設畫面）listener 就 unlisten，該期間指令永久遺失。舊行為只有「切到別的分頁」會斷；首頁多了一條路徑，而且是預設畫面。
+
+4. **`lastTerminalPtyId` 不適合當新閘門**（原計畫的建議是錯的）：它在開機瞬間到 `createPty` 回來之間是 `""`；多分頁還原時誰先 resolve 誰贏、順序不確定；語意是「最近有 PTY 的終端機」而非「使用者開了 Remote 的那個」——開了 Remote 的分頁會被新開的終端機搶走。
+
+5. **`Ctrl+,` 不是問題，可以排除。** `App.tsx:39-51` 有一個完全沒有閘門、永遠掛載的全域 handler。`TerminalView` 那個其實是**重複註冊**（兩個都掛在 window 上）。側邊欄設定按鈕是第三條路徑。
+
+6. **被 `isActive` 閘住的完整清單共 7 項**，只有 Telegram 那項是真回歸。`Ctrl+F`／`Ctrl+Shift+R`／`Ctrl+I`／`aiterm:ask-ai` 在首頁失效都合理（後者甚至是必要的——它是廣播式 window event，不過濾會讓每個分頁都開 panel）。`Ctrl+Shift+P`（切 provider）是可接受的小退化，設定頁有替代路徑。
+
+### 已定案的決定
+
+- **不修持久化。** 現狀（每次啟動要手動開）雖然是 bug 造成的，但行為上較安全——修好等於讓外部訊息在重啟後能直接執行指令。**要做的是把那段不會生效的持久化程式碼拿掉，並寫明「刻意不持久化」**，不要留著一段騙下一個人的死碼。
+- **要加 Remote 指示器。** 修好之後背景分頁會真的執行遠端指令，而目前狀態只在分頁內部那顆按鈕看得到。側邊欄要有訊號，比照既有的 attention 提示點。
 
 **Files:**
 - Modify: `src/hooks/useTelegramRemoteControl.ts`
-- Test: `src/hooks/useTelegramRemoteControl.test.ts`（新建，若不存在）
+- Create: `src/hooks/useTelegramRemoteControl.test.ts`
+- Modify: `src/components/TerminalApp.tsx`、`src/components/TerminalView.tsx`
+- Modify: `src/components/TabBar/index.tsx` + `index.css`（指示器）
+- Modify: `src/lib/i18n.ts`
 
-- [ ] **Step 1: 先確認回歸真的存在**
+- [ ] **Step 1: 把「哪個分頁開了 Remote」提升成單一真相**
 
-讀 `src/hooks/useTelegramRemoteControl.ts:36` 的 `if (!isRemoteEnabled || !isActive) return;`，往上追 `isActive` 從哪裡來（`TerminalView` 的 prop，最終來自 `TerminalApp` 的 `tab.id === activeId && !homeActive`）。**寫一個測試證明「沒有分頁 active 時，遠端指令的 listener 不會註冊」**——先讓它綠（確認回歸存在），再改實作讓它變成你要的行為。
+`isActive` 出現在這裡的真正動機是「避免多個分頁同時註冊 listener、同一則指令被執行 N 次」——`listen` 是全域的。用 `isActive` 是拿「使用者在看哪裡」當作「只有一個」的廉價代理。
 
-- [ ] **Step 2: 決定正確的閘門**
+在 `TerminalApp` 加 `remoteTabId: string | null`，往下傳。`setIsRemoteEnabled` 改成設定/清除這個值（天然互斥，開 B 自動關 A）。hook 的閘門改成只看 `isRemoteEnabled`，**把 `isActive` 從條件與 deps 整個拿掉**。
 
-`isActive` 在這裡真正想表達的是「遠端指令該送到哪個終端機」，而不是「使用者現在在看哪個分頁」。停在首頁時，遠端指令仍然應該送到最後一個使用中的終端機。
+**互斥化是行為改變**：現在理論上可多個分頁各自開 Remote（只是同時只有 active 那個會收）。改成互斥後「在 B 開會靜默關掉 A」需要 UI 反饋。
 
-`TerminalApp` 已經有 `lastTerminalPtyId` 這個狀態在追這件事（給 `VcsView` 的 CWD 輪詢用），語意正好吻合。
+- [ ] **Step 2: 拿掉壞掉的持久化**
 
-**但這是一個會改變既有功能行為的決定，實作前先回報你追查的結果與建議做法，等我確認再動手。** 不要自己選一個做下去。
+見上。拿掉之後 `isRemoteEnabled` 就是純記憶體狀態，註解要寫明這是刻意的（安全考量），不是忘了做。
 
-- [ ] **Step 3: 順帶檢查同一個閘門下的其他東西**
+- [ ] **Step 3: 側邊欄的 Remote 指示器**
 
-`TerminalView.tsx:736` 那組 `isActive` 閘住的快捷鍵（`Ctrl+,` / `Ctrl+Shift+P` / `Ctrl+F` / `Ctrl+I`）在首頁也會失效。其中 `Ctrl+F`（搜尋終端機）、`Ctrl+I` 在首頁失效是合理的；但 **`Ctrl+,` 開設定在首頁失效是問題**——那是全域功能，跟有沒有終端機無關。確認側邊欄的設定按鈕仍可用（那是另一條路徑），並判斷 `Ctrl+,` 要不要提到 `TerminalApp` 層。
+比照既有的 `terminal-attention-badge`（`TabBar/index.tsx`）。注意那顆圖示右下角已經被 attention 佔用、左上角被 `claudeBridge` 徽章佔用、mail 用了右上與左下——**先讀過既有的四個角落分配再決定放哪**，不要疊在一起。
+
+- [ ] **Step 4: 不要做的**
+
+- 不要修冷啟動遺失（app 關著時累積的訊息）——那**前端怎麼改都救不了**，要在 Rust 端加 pending queue 或 emit 前檢查有無 listener。記一筆即可。
+- 不要碰 `Ctrl+,` 的重複註冊（既有問題，不在範圍）。
 
 ---
 
