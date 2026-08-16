@@ -1,13 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { TabType } from "../TabBar";
-import { bridgeStatus } from "../../ipc/bridge";
-import { visibleTabCatalog } from "./tabCatalog";
+import { useBridgeRunning } from "../../hooks/useBridgeRunning";
+import { visibleTabCatalog, type TabOpenOpts } from "./tabCatalog";
 import "./index.css";
 
 interface Props {
   /** opts.claudeBridge 只有「新增 Claude Code 分頁」那個選項會帶 true。 */
-  onSelect: (type: TabType, opts?: { claudeBridge?: boolean }) => void;
+  onSelect: (type: TabType, opts?: TabOpenOpts) => void;
   onClose: () => void;
 }
 
@@ -16,10 +16,7 @@ export function NewTabPicker({ onSelect, onClose }: Props) {
   const { t } = useLocale();
 
   // 橋接 server 沒在跑就不給選——建立一個注入了死埠位址的分頁，比不給選更難除錯。
-  const [bridgeRunning, setBridgeRunning] = useState(false);
-  useEffect(() => {
-    bridgeStatus().then((s) => setBridgeRunning(s.running)).catch(() => {});
-  }, []);
+  const bridgeRunning = useBridgeRunning();
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -48,7 +45,7 @@ export function NewTabPicker({ onSelect, onClose }: Props) {
             key={entry.id}
             className="new-tab-picker__item"
             disabled={disabled}
-            title={disabled ? t.bridge_new_tab_disabled_hint : undefined}
+            title={disabled ? entry.disabledHint : undefined}
             onClick={() => {
               onSelect(entry.type, entry.opts);
               onClose();
@@ -58,7 +55,7 @@ export function NewTabPicker({ onSelect, onClose }: Props) {
             <div>
               <div className="new-tab-picker__label">{entry.label}</div>
               <div className="new-tab-picker__desc">
-                {disabled ? t.bridge_new_tab_disabled_hint : entry.desc}
+                {disabled ? entry.disabledHint : entry.desc}
               </div>
             </div>
           </button>

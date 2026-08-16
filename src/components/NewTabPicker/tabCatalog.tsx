@@ -5,13 +5,20 @@ import {
   FileTextIcon, BookOpenIcon, RefreshIcon, CodeIcon, LibraryIcon, MailIcon, RobotIcon,
 } from "../Icons";
 
+/** 建立分頁時要一併傳給 onSelect/onOpenTab 的選項。NewTabPicker、HomeView、
+ *  TerminalApp 的 handler 型別都指到這一個型別，多一個欄位時漏改的消費端
+ *  會直接編譯錯誤，而不是靜默把選項丟掉。 */
+export interface TabOpenOpts {
+  claudeBridge?: boolean;
+}
+
 export interface TabCatalogEntry {
   /** React key 與識別用。Claude Code 與一般終端機的 type 都是 "terminal"，
    *  type 不足以區分，所以另外給 id。 */
   id: string;
   type: TabType;
   /** 建立分頁時要一併傳給 onSelect 的選項。 */
-  opts?: { claudeBridge?: boolean };
+  opts?: TabOpenOpts;
   icon: React.ReactNode;
   label: string;
   desc: string;
@@ -19,6 +26,8 @@ export interface TabCatalogEntry {
   hidden?: boolean;
   /** 需要橋接 server 正在執行才能使用。呼叫端自行決定沒在跑時要停用還是隱藏。 */
   requiresBridge?: boolean;
+  /** requiresBridge 為 true 且橋接沒在跑時，取代 desc 顯示的提示文字。 */
+  disabledHint?: string;
 }
 
 /** 分頁類型的唯一清單。NewTabPicker、首頁大圖入口、AI 路由提示詞都用這一份。 */
@@ -45,7 +54,7 @@ export function getTabCatalog(t: Translations): TabCatalogEntry[] {
     // Claude Code 不是獨立的 TabType，而是「終端機分頁 + claudeBridge 選項」，
     // 且需要橋接 server 正在跑才能用（見 requiresBridge）。放在陣列最後，
     // 跟它在新增分頁選單裡的位置一致。
-    { id: "claude-code",    type: "terminal",       opts: { claudeBridge: true }, icon: <RobotIcon size={18} />, label: t.bridge_new_tab, desc: t.bridge_new_tab_desc, requiresBridge: true },
+    { id: "claude-code",    type: "terminal",       opts: { claudeBridge: true }, icon: <RobotIcon size={18} />, label: t.bridge_new_tab, desc: t.bridge_new_tab_desc, requiresBridge: true, disabledHint: t.bridge_new_tab_disabled_hint },
   ];
 }
 

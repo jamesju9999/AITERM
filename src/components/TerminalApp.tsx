@@ -10,6 +10,7 @@ import { TitleBar } from "./TitleBar";
 import { DatabaseView } from "./DatabaseView";
 import { DesignView } from "./DesignView/DesignView";
 import { NewTabPicker } from "./NewTabPicker";
+import type { TabOpenOpts } from "./NewTabPicker/tabCatalog";
 import { CrossDbView } from "./CrossDbView";
 import { VcsView } from "./VcsView/VcsView";
 import { DocConverterView } from "./DocConverter/DocConverterView";
@@ -221,7 +222,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     setPickerOpen(true);
   }, [refreshDefaultBridge]);
 
-  const handlePickerSelect = useCallback((type: TabType, opts?: { claudeBridge?: boolean }) => {
+  const handlePickerSelect = useCallback((type: TabType, opts?: TabOpenOpts) => {
     const newId = crypto.randomUUID();
     let title = t.terminal_tab;
     if (type === "database") title = t.database_tab;

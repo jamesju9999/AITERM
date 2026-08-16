@@ -1,9 +1,10 @@
 import { LaunchGrid } from "./LaunchGrid";
 import type { TabType } from "../TabBar";
+import type { TabOpenOpts } from "../NewTabPicker/tabCatalog";
 import "./index.css";
 
 interface Props {
-  onOpenTab: (type: TabType, opts?: { claudeBridge?: boolean }) => void;
+  onOpenTab: (type: TabType, opts?: TabOpenOpts) => void;
 }
 
 export function HomeView({ onOpenTab }: Props) {

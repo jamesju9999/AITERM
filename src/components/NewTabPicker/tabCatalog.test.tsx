@@ -59,6 +59,9 @@ describe("getTabCatalog", () => {
     expect(entry.type).toBe("terminal");
     expect(entry.opts).toEqual({ claudeBridge: true });
     expect(entry.requiresBridge).toBe(true);
+    // 停用提示字串掛在 entry 上，消費端（NewTabPicker、LaunchGrid）不必
+    // 各自認識「這是橋接的提示」這件事，只要讀 entry.disabledHint。
+    expect(entry.disabledHint).toBe(t.bridge_new_tab_disabled_hint);
   });
 
   // 兩筆的 type 都是 "terminal"，所以 id 必須唯一，否則 React key 會撞。

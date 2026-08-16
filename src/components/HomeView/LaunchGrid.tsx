@@ -1,11 +1,10 @@
-import { useEffect, useState } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
-import { visibleTabCatalog } from "../NewTabPicker/tabCatalog";
+import { visibleTabCatalog, type TabOpenOpts } from "../NewTabPicker/tabCatalog";
 import type { TabType } from "../TabBar";
-import { bridgeStatus } from "../../ipc/bridge";
+import { useBridgeRunning } from "../../hooks/useBridgeRunning";
 
 interface Props {
-  onOpenTab: (type: TabType, opts?: { claudeBridge?: boolean }) => void;
+  onOpenTab: (type: TabType, opts?: TabOpenOpts) => void;
 }
 
 export function LaunchGrid({ onOpenTab }: Props) {
@@ -13,10 +12,7 @@ export function LaunchGrid({ onOpenTab }: Props) {
 
   // 選單看到什麼，首頁就該看到什麼——Claude Code 那一項要看橋接 server
   // 是否在跑，沒在跑時停用。
-  const [bridgeRunning, setBridgeRunning] = useState(false);
-  useEffect(() => {
-    bridgeStatus().then((s) => setBridgeRunning(s.running)).catch(() => {});
-  }, []);
+  const bridgeRunning = useBridgeRunning();
 
   return (
     <section className="home-section">
@@ -29,13 +25,13 @@ export function LaunchGrid({ onOpenTab }: Props) {
               key={entry.id}
               className="home-launch-card"
               disabled={disabled}
-              title={disabled ? t.bridge_new_tab_disabled_hint : undefined}
+              title={disabled ? entry.disabledHint : undefined}
               onClick={() => onOpenTab(entry.type, entry.opts)}
             >
               <span className="home-launch-icon">{entry.icon}</span>
               <span className="home-launch-label">{entry.label}</span>
               <span className="home-launch-desc">
-                {disabled ? t.bridge_new_tab_disabled_hint : entry.desc}
+                {disabled ? entry.disabledHint : entry.desc}
               </span>
             </button>
           );

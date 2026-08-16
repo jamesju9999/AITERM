@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { vi } from "vitest";
 
 vi.mock("../../ipc/bridge", () => ({ bridgeStatus: vi.fn() }));
@@ -22,9 +23,11 @@ beforeEach(() => {
 
 function renderPicker(onSelect = vi.fn(), onClose = vi.fn()) {
   return render(
-    <LocaleProvider>
-      <NewTabPicker onSelect={onSelect} onClose={onClose} />
-    </LocaleProvider>
+    <MemoryRouter initialEntries={["/"]}>
+      <LocaleProvider>
+        <NewTabPicker onSelect={onSelect} onClose={onClose} />
+      </LocaleProvider>
+    </MemoryRouter>
   );
 }
 
