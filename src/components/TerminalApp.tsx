@@ -5,6 +5,7 @@ import { ensureNotificationPermission } from "../lib/notifyPermission";
 import { routeAttention, notifyBodyKeyFor, isPastNotifyCooldown, type AttentionKind } from "../lib/terminalAttention";
 import { TerminalView } from "./TerminalView";
 import { TabBar, type Tab, type TabType } from "./TabBar";
+import { reorderTabs } from "./TabBar/reorderTabs";
 import { TitleBar } from "./TitleBar";
 import { DatabaseView } from "./DatabaseView";
 import { DesignView } from "./DesignView/DesignView";
@@ -284,6 +285,11 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, title: newTitle } : t)));
   }, []);
 
+  // 順序不需要另外儲存：saveSessionTabs 就是照陣列順序寫進 localStorage 的。
+  const handleReorder = useCallback((from: number, to: number) => {
+    setTabs((prev) => reorderTabs(prev, from, to));
+  }, []);
+
   // 每個分頁各自的通知冷卻時間戳記。用 ref 而非 state：它只被
   // handleAttention 這個事件處理器讀寫，不影響任何渲染，用 state
   // 只會讓 handleAttention 每次都換一個新的參考。
@@ -408,6 +414,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
           onClose={handleCloseTab}
           onAdd={handleAddTab}
           onRename={handleRename}
+          onReorder={handleReorder}
           isSidebarOpen={isSidebarOpen}
           onToggle={toggleSidebar}
           width={sidebarWidth}

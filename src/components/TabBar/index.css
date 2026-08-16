@@ -56,6 +56,15 @@
   gap: 4px;
 }
 
+/* 被拖曳的分頁要貼著游標走，所以不能吃 .aiterm-tab 的 transition——會慢一拍、
+   像被橡皮筋拉著。其他分頁反而要保留 transition，讓位才有滑動感。 */
+.aiterm-tab--dragging {
+  transition: none;
+  opacity: 0.85;
+  z-index: 5;
+  cursor: grabbing;
+}
+
 .aiterm-tab:hover {
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary, #fff);

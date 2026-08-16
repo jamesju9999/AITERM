@@ -9,6 +9,7 @@ vi.mock("react-router-dom", async () => {
 
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import { TabBar, type Tab, type TabBarProps } from "./index";
+import { reorderTabs } from "./reorderTabs";
 
 const baseTabs: Tab[] = [{ id: "t1", title: "Tab 1", type: "terminal" }];
 
@@ -174,6 +175,139 @@ describe("TabBar terminal attention indicator", () => {
     const mailFailure = screen.getByRole("img", { name: "1 個信箱帳號連線失敗" }).className;
 
     expect(attention).not.toBe(mailFailure);
+  });
+});
+
+describe("reorderTabs", () => {
+  it("把元素從 from 搬到 to", () => {
+    expect(reorderTabs(["a", "b", "c"], 2, 0)).toEqual(["c", "a", "b"]);
+    expect(reorderTabs(["a", "b", "c"], 0, 2)).toEqual(["b", "c", "a"]);
+    expect(reorderTabs(["a", "b", "c", "d"], 1, 2)).toEqual(["a", "c", "b", "d"]);
+  });
+
+  it("不動原陣列", () => {
+    const arr = ["a", "b", "c"];
+    reorderTabs(arr, 2, 0);
+    expect(arr).toEqual(["a", "b", "c"]);
+  });
+
+  // 回傳同一個參考，呼叫端才能靠 identity 判斷「沒有變化」而不觸發重繪。
+  it("原地不動時回傳原本那個陣列", () => {
+    const arr = ["a", "b", "c"];
+    expect(reorderTabs(arr, 1, 1)).toBe(arr);
+  });
+
+  it("索引超出範圍時回傳原本那個陣列", () => {
+    const arr = ["a", "b", "c"];
+    expect(reorderTabs(arr, 3, 0)).toBe(arr);
+    expect(reorderTabs(arr, 0, -1)).toBe(arr);
+  });
+});
+
+describe("TabBar 分頁拖曳排序", () => {
+  const threeTabs: Tab[] = [
+    { id: "t1", title: "Tab 1", type: "terminal" },
+    { id: "t2", title: "Tab 2", type: "terminal" },
+    { id: "t3", title: "Tab 3", type: "terminal" },
+  ];
+
+  /** .aiterm-tab 的高度（index.css）。 */
+  const ROW = 56;
+
+  /**
+   * jsdom 沒有版面引擎，getBoundingClientRect 一律回傳全 0，落點判定會整個失效。
+   * 這裡替每個分頁鋪上等距矩形，讓「拖到哪一格」算得出來。
+   *
+   * 也就是說：這些測試驗證的是排序邏輯，不是像素級的命中判定——手感仍須在真的
+   * app 裡拖過才算數。
+   */
+  function layoutTabs(container: HTMLElement): HTMLElement[] {
+    // 一定要限定在分頁清單裡：footer 的設定項也掛 .aiterm-tab。
+    const els = Array.from(
+      container.querySelectorAll<HTMLElement>(".aiterm-tabbar-tabs .aiterm-tab"),
+    );
+    els.forEach((el, i) => {
+      el.getBoundingClientRect = () =>
+        ({
+          top: i * ROW, bottom: (i + 1) * ROW, height: ROW,
+          left: 0, right: 48, width: 48, x: 0, y: i * ROW,
+          toJSON: () => ({}),
+        }) as DOMRect;
+    });
+    return els;
+  }
+
+  /** 第 i 格的垂直中心。 */
+  const centerOf = (i: number) => i * ROW + ROW / 2;
+
+  it("把第三個分頁往上拖到第一格，回報 (2, 0)", () => {
+    const onReorder = vi.fn();
+    const { container } = renderTabBar({ tabs: threeTabs, activeId: "t1", onReorder });
+    const els = layoutTabs(container);
+
+    fireEvent.mouseDown(els[2], { button: 0, clientY: centerOf(2) });
+    fireEvent.mouseMove(window, { clientY: centerOf(0) });
+    fireEvent.mouseUp(window, { clientY: centerOf(0) });
+
+    expect(onReorder).toHaveBeenCalledTimes(1);
+    expect(onReorder).toHaveBeenCalledWith(2, 0);
+  });
+
+  it("把第一個分頁往下拖到最後一格，回報 (0, 2)", () => {
+    const onReorder = vi.fn();
+    const { container } = renderTabBar({ tabs: threeTabs, activeId: "t1", onReorder });
+    const els = layoutTabs(container);
+
+    fireEvent.mouseDown(els[0], { button: 0, clientY: centerOf(0) });
+    fireEvent.mouseMove(window, { clientY: centerOf(2) });
+    fireEvent.mouseUp(window, { clientY: centerOf(2) });
+
+    expect(onReorder).toHaveBeenCalledWith(0, 2);
+  });
+
+  // 沒有這道門檻的話，單純點分頁切換會被誤判成拖曳。
+  it("移動不到門檻就不算拖曳：照常切換分頁、不重排", () => {
+    const onReorder = vi.fn();
+    const onSelect = vi.fn();
+    const { container } = renderTabBar({ tabs: threeTabs, activeId: "t1", onReorder, onSelect });
+    const els = layoutTabs(container);
+
+    fireEvent.mouseDown(els[2], { button: 0, clientY: centerOf(2) });
+    fireEvent.mouseMove(window, { clientY: centerOf(2) + 2 });
+    fireEvent.mouseUp(window, { clientY: centerOf(2) + 2 });
+    fireEvent.click(els[2]);
+
+    expect(onReorder).not.toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalledWith("t3");
+  });
+
+  it("拖曳後落回原本那一格，不回報重排", () => {
+    const onReorder = vi.fn();
+    const { container } = renderTabBar({ tabs: threeTabs, activeId: "t1", onReorder });
+    const els = layoutTabs(container);
+
+    // 往下移 20px：超過門檻算拖曳，但還沒越過下一格的中心。
+    fireEvent.mouseDown(els[0], { button: 0, clientY: centerOf(0) });
+    fireEvent.mouseMove(window, { clientY: centerOf(0) + 20 });
+    fireEvent.mouseUp(window, { clientY: centerOf(0) + 20 });
+
+    expect(onReorder).not.toHaveBeenCalled();
+  });
+
+  // 放開滑鼠後瀏覽器還會補一個 click，不擋掉的話拖完會順便切走分頁。
+  it("真的拖曳過之後，收尾的那次點擊不切換分頁", () => {
+    const onSelect = vi.fn();
+    const { container } = renderTabBar({
+      tabs: threeTabs, activeId: "t1", onSelect, onReorder: () => {},
+    });
+    const els = layoutTabs(container);
+
+    fireEvent.mouseDown(els[2], { button: 0, clientY: centerOf(2) });
+    fireEvent.mouseMove(window, { clientY: centerOf(0) });
+    fireEvent.mouseUp(window, { clientY: centerOf(0) });
+    fireEvent.click(els[2]);
+
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });
 

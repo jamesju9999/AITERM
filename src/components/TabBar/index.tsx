@@ -59,6 +59,8 @@ export interface TabBarProps {
   onClose: (id: string) => void;
   onAdd: () => void;
   onRename?: (id: string, title: string) => void;
+  /** 使用者把第 `from` 個分頁拖到第 `to` 個位置。沒給就不能拖曳。 */
+  onReorder?: (from: number, to: number) => void;
   isSidebarOpen: boolean;
   onToggle: () => void;
   width: number;
@@ -96,6 +98,23 @@ function getTabIcon(type: TabType, claudeBridge?: Tab["claudeBridge"]): React.Re
   }
 }
 
+/** 小於這個位移量都當成單純點擊——不然點分頁切換會被誤判成拖曳。 */
+const DRAG_THRESHOLD_PX = 4;
+
+/** 拖曳期間的即時狀態。掛在 window 上的 mousemove/mouseup 會抓到建立當下的
+ *  closure，所以這份資料只能放在 ref 裡，不能放 state。 */
+interface DragState {
+  from: number;
+  to: number;
+  startY: number;
+  /** 拖曳開始當下、每個分頁的垂直中心。用來判斷游標落在哪一格。 */
+  centers: number[];
+  /** 一格的位移量（相鄰兩格中心的距離），讓位動畫用。 */
+  row: number;
+  /** 位移是否已經超過門檻。沒超過就還不算拖曳。 */
+  started: boolean;
+}
+
 // 顏色只對看得見的人有意義，所以每個狀態都要有自己的文字說明。
 function attentionLabel(kind: AttentionKind, t: Translations): string {
   switch (kind) {
@@ -112,6 +131,7 @@ export function TabBar({
   onClose,
   onAdd,
   onRename,
+  onReorder,
   isSidebarOpen,
   onToggle,
   width,
@@ -124,12 +144,88 @@ export function TabBar({
   const [editingId, setEditingId] = useState<string | null>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
 
+  const tabRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const dragRef = useRef<DragState | null>(null);
+  /** 拖曳後瀏覽器還會補一個 click，不擋掉的話拖完會順便切走分頁。 */
+  const suppressClickRef = useRef(false);
+  /** 只為了畫出讓位效果；判斷落點的真實來源是 dragRef。 */
+  const [dragView, setDragView] = useState<{ from: number; to: number; row: number; dy: number } | null>(null);
+
   useEffect(() => {
     if (editingId && editInputRef.current) {
       editInputRef.current.focus();
       editInputRef.current.select();
     }
   }, [editingId]);
+
+  // 拖曳一旦開始，游標可能離開分頁本身（甚至離開側邊欄），所以移動與放開都必須
+  // 聽在 window 上，不能掛在分頁元素上。
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const st = dragRef.current;
+      if (!st) return;
+      const dy = e.clientY - st.startY;
+      if (!st.started) {
+        if (Math.abs(dy) < DRAG_THRESHOLD_PX) return;
+        st.started = true;
+      }
+      // 從「被拖的分頁現在的中心」往兩邊掃，看越過了幾格的中心。
+      const center = st.centers[st.from] + dy;
+      let to = st.from;
+      // 用 >= / <=：位移剛好整整一列時，就是剛好換一格。嚴格比較會讓「移動了
+      // 一整格卻沒有換位」這種明顯錯誤的結果發生。
+      if (dy > 0) {
+        while (to < st.centers.length - 1 && center >= st.centers[to + 1]) to++;
+      } else {
+        while (to > 0 && center <= st.centers[to - 1]) to--;
+      }
+      st.to = to;
+      setDragView({ from: st.from, to, row: st.row, dy });
+    };
+    const onUp = () => {
+      const st = dragRef.current;
+      dragRef.current = null;
+      setDragView(null);
+      if (!st?.started) return;
+      suppressClickRef.current = true;
+      if (st.to !== st.from) onReorder?.(st.from, st.to);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [onReorder]);
+
+  const handleTabMouseDown = (e: React.MouseEvent, index: number) => {
+    // 上一次拖曳如果沒收到收尾的 click（放開時游標已經不在原本那顆分頁上，
+    // click 就不會發生），旗標會留著；在這裡清掉，才不會吃掉下一次點擊。
+    suppressClickRef.current = false;
+    if (!onReorder || e.button !== 0 || editingId === tabs[index].id) return;
+    const rects = tabs.map((_, i) => tabRefs.current[i]?.getBoundingClientRect());
+    if (rects.some((r) => !r)) return;
+    const centers = rects.map((r) => r!.top + r!.height / 2);
+    dragRef.current = {
+      from: index,
+      to: index,
+      startY: e.clientY,
+      centers,
+      // 只有一個分頁時不會進到讓位邏輯，補 0 即可。
+      row: centers.length > 1 ? centers[1] - centers[0] : 0,
+      started: false,
+    };
+  };
+
+  /** 拖曳中每個分頁該位移多少：被拖的那顆跟著游標，被越過的那幾顆讓出一格。 */
+  const dragStyleOf = (i: number): React.CSSProperties | undefined => {
+    if (!dragView) return undefined;
+    const { from, to, row, dy } = dragView;
+    if (i === from) return { transform: `translateY(${dy}px)` };
+    if (from < to && i > from && i <= to) return { transform: `translateY(${-row}px)` };
+    if (from > to && i >= to && i < from) return { transform: `translateY(${row}px)` };
+    return undefined;
+  };
 
   return (
     <div
@@ -194,8 +290,17 @@ export function TabBar({
         {tabs.map((tab, idx) => (
           <div
             key={tab.id}
-            className={`aiterm-tab ${tab.id === activeId ? "active" : ""}`}
-            onClick={() => onSelect(tab.id)}
+            ref={(el) => { tabRefs.current[idx] = el; }}
+            className={`aiterm-tab ${tab.id === activeId ? "active" : ""} ${dragView?.from === idx ? "aiterm-tab--dragging" : ""}`}
+            style={dragStyleOf(idx)}
+            onMouseDown={(e) => handleTabMouseDown(e, idx)}
+            onClick={() => {
+              if (suppressClickRef.current) {
+                suppressClickRef.current = false;
+                return;
+              }
+              onSelect(tab.id);
+            }}
             onDoubleClick={isSidebarOpen ? () => setEditingId(tab.id) : undefined}
             title={isSidebarOpen ? `Switch to Tab (Ctrl+${idx + 1}) — Double click to rename` : `${tab.title} (Ctrl+${idx + 1})`}
           >
