@@ -50,8 +50,7 @@ export function NewTabPicker({ onSelect, onClose }: Props) {
             disabled={disabled}
             title={disabled ? t.bridge_new_tab_disabled_hint : undefined}
             onClick={() => {
-              if (entry.opts) onSelect(entry.type, entry.opts);
-              else onSelect(entry.type);
+              onSelect(entry.type, entry.opts);
               onClose();
             }}
           >

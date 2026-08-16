@@ -52,14 +52,14 @@ describe("NewTabPicker", () => {
     const onSelect = vi.fn();
     renderPicker(onSelect);
     fireEvent.click(screen.getByText("終端機"));
-    expect(onSelect).toHaveBeenCalledWith("terminal");
+    expect(onSelect).toHaveBeenCalledWith("terminal", undefined);
   });
 
   it("calls onSelect with database when 資料庫 clicked", () => {
     const onSelect = vi.fn();
     renderPicker(onSelect);
     fireEvent.click(screen.getByText("資料庫"));
-    expect(onSelect).toHaveBeenCalledWith("database");
+    expect(onSelect).toHaveBeenCalledWith("database", undefined);
   });
 
   it("calls onClose when Escape pressed", () => {
