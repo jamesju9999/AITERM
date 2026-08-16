@@ -67,9 +67,19 @@ describe("parseRouteReply", () => {
     expect(parseRouteReply('{"type":123}', userText)).toEqual(fallbackRoute(userText));
   });
 
-  // JSON 語法壞掉（模型輸出被截斷是常見情況）
-  it("JSON 語法壞掉時降級，不丟例外", () => {
+  // 模型輸出在收尾大括號之前就被截斷。這條走的是「找不到結尾 }」的邊界檢查，
+  // 到不了 JSON.parse——所以它不能用來證明 try/catch 有效，見下一條。
+  it("輸出被截斷（少了結尾大括號）時降級，不丟例外", () => {
     expect(() => parseRouteReply('{"type":"database"', userText)).not.toThrow();
     expect(parseRouteReply('{"type":"database"', userText)).toEqual(fallbackRoute(userText));
+  });
+
+  // 括號成對但內容語法壞掉（截斷點剛好落在物件內部、或模型吐出尾隨逗號）。
+  // 這是唯一會真的走到 JSON.parse 並丟例外的輸入——上面那條被邊界檢查提前
+  // 攔截，所以拿掉 try/catch 時它照樣通過。沒有這條，try/catch 等於無人看守。
+  it("括號成對但語法壞掉時降級，不丟例外", () => {
+    const raw = '{"type": "database",}';
+    expect(() => parseRouteReply(raw, userText)).not.toThrow();
+    expect(parseRouteReply(raw, userText)).toEqual(fallbackRoute(userText));
   });
 });
