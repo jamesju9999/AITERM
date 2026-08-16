@@ -606,7 +606,11 @@ Run: `npm run tauri:dev`
 
 ## Task 5：進行中的任務
 
-`agentProgress` 已經由 `TerminalView` 的 `onAgentProgress` 寫進 `tabs`（`TerminalApp.tsx:499`）。**不要沿用 `TerminalApp.tsx:522` 那個 `enterpriseTask` 過濾**——那是企業浮動面板的規則，首頁要顯示全部。
+`agentProgress` 已經由 `TerminalView` 的 `onAgentProgress` 寫進 `tabs`。**不要沿用企業浮動面板那個 `enterpriseTask` 過濾**——那是它自己的規則，首頁要顯示全部。
+
+**一併處理的既有互動（Task 3+4 的審查發現）：** 企業浮動面板的條件是 `t.id !== activeId`，用意是「只顯示看不到的分頁的進度」。但停在首頁時**所有**分頁都看不到，包括 `activeId` 那個，所以它會漏掉一個。而首頁本身又會有 RunningTasks 區塊列出全部任務——兩者同時出現在首頁上是重複的。
+
+決定：**首頁顯示時，整個企業浮動面板不要出現**（改成 `homeActive` 為 true 就不渲染）。理由是首頁的 RunningTasks 區塊已經涵蓋它的職責，而且涵蓋得更完整。這需要把 `homeActive` 傳進那段渲染邏輯。
 
 **Files:**
 - Create: `src/components/HomeView/RunningTasks.tsx`
@@ -2257,6 +2261,34 @@ git commit -m "feat(home): AI 猜錯分頁類型時可換一種或關掉提示"
 Run: `npm run tauri:dev`
 
 確認：從首頁打一句話 → 開出分頁後上方出現提示 → 用「換成…」挑另一種 → 原分頁關掉、新類型開起來且提示跟著更新 → 按 ✕ 提示消失且不再出現。
+
+---
+
+## Task 14：修好「預設停在首頁」造成的既有功能回歸
+
+Task 3+4 的品質審查發現的。**這是我們的改動造成的回歸，不是既有缺陷**，所以必須修。
+
+改動之前，app 啟動時第一個分頁就是 active；改動之後 `homeActive` 預設 true，**啟動當下沒有任何分頁是 active**。凡是閘門條件為 `isActive` 的東西，在使用者手動點一個分頁之前全部不會啟動。
+
+**Files:**
+- Modify: `src/hooks/useTelegramRemoteControl.ts`
+- Test: `src/hooks/useTelegramRemoteControl.test.ts`（新建，若不存在）
+
+- [ ] **Step 1: 先確認回歸真的存在**
+
+讀 `src/hooks/useTelegramRemoteControl.ts:36` 的 `if (!isRemoteEnabled || !isActive) return;`，往上追 `isActive` 從哪裡來（`TerminalView` 的 prop，最終來自 `TerminalApp` 的 `tab.id === activeId && !homeActive`）。**寫一個測試證明「沒有分頁 active 時，遠端指令的 listener 不會註冊」**——先讓它綠（確認回歸存在），再改實作讓它變成你要的行為。
+
+- [ ] **Step 2: 決定正確的閘門**
+
+`isActive` 在這裡真正想表達的是「遠端指令該送到哪個終端機」，而不是「使用者現在在看哪個分頁」。停在首頁時，遠端指令仍然應該送到最後一個使用中的終端機。
+
+`TerminalApp` 已經有 `lastTerminalPtyId` 這個狀態在追這件事（給 `VcsView` 的 CWD 輪詢用），語意正好吻合。
+
+**但這是一個會改變既有功能行為的決定，實作前先回報你追查的結果與建議做法，等我確認再動手。** 不要自己選一個做下去。
+
+- [ ] **Step 3: 順帶檢查同一個閘門下的其他東西**
+
+`TerminalView.tsx:736` 那組 `isActive` 閘住的快捷鍵（`Ctrl+,` / `Ctrl+Shift+P` / `Ctrl+F` / `Ctrl+I`）在首頁也會失效。其中 `Ctrl+F`（搜尋終端機）、`Ctrl+I` 在首頁失效是合理的；但 **`Ctrl+,` 開設定在首頁失效是問題**——那是全域功能，跟有沒有終端機無關。確認側邊欄的設定按鈕仍可用（那是另一條路徑），並判斷 `Ctrl+,` 要不要提到 `TerminalApp` 層。
 
 ---
 
