@@ -77,6 +77,15 @@
   box-shadow: 0 4px 12px rgba(168, 85, 247, 0.15), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 
+/* 首頁按鈕沿用 .aiterm-tab 的外觀，但它是 <button>，要把瀏覽器預設樣式清掉。 */
+.aiterm-home-button {
+  border: 1px solid transparent;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+
 /* glowing cyan border outline for the active tab */
 .aiterm-tab.active::before {
   content: "";

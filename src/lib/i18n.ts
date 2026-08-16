@@ -14,6 +14,9 @@ const zhTW = {
     common_cancel: "取消",
     common_confirm: "確定",
 
+    // 側邊欄固定的首頁按鈕（不是分頁）。
+    home_tab: "首頁",
+
     // Settings sidebar
     settings_title: "設定",
     general: "一般",
@@ -1222,6 +1225,9 @@ const enRaw = {
     common_delete: "Delete",
     common_cancel: "Cancel",
     common_confirm: "OK",
+
+    // Fixed home button in the sidebar (not a tab).
+    home_tab: "Home",
 
     // Settings sidebar
     settings_title: "Settings",

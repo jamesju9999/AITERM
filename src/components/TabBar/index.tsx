@@ -18,7 +18,8 @@ import {
   CodeIcon,
   LibraryIcon,
   MailIcon,
-  RobotIcon
+  RobotIcon,
+  HomeIcon
 } from "../Icons";
 import "./index.css";
 
@@ -59,6 +60,10 @@ export interface TabBarProps {
   onClose: (id: string) => void;
   onAdd: () => void;
   onRename?: (id: string, title: string) => void;
+  /** 使用者按了首頁。沒給就不顯示首頁按鈕。 */
+  onHome?: () => void;
+  /** 目前顯示的是不是首頁。 */
+  homeActive?: boolean;
   /** 使用者把第 `from` 個分頁拖到第 `to` 個位置。沒給就不能拖曳。 */
   onReorder?: (from: number, to: number) => void;
   isSidebarOpen: boolean;
@@ -132,6 +137,8 @@ export function TabBar({
   onAdd,
   onRename,
   onReorder,
+  onHome,
+  homeActive = false,
   isSidebarOpen,
   onToggle,
   width,
@@ -284,6 +291,19 @@ export function TabBar({
           </>
         )}
       </div>
+
+      {/* 首頁不是分頁：它固定在這裡，不進 .aiterm-tabbar-tabs，所以不會被
+          拖曳排序、也不佔 Ctrl+1~9 的編號。 */}
+      {onHome && (
+        <button
+          className={`aiterm-tab aiterm-home-button ${homeActive ? "active" : ""}`}
+          onClick={onHome}
+          title={`${t.home_tab} (Ctrl+0)`}
+        >
+          <span className="aiterm-tab-icon"><HomeIcon size={18} /></span>
+          {isSidebarOpen && <span className="aiterm-tab-title">{t.home_tab}</span>}
+        </button>
+      )}
 
       {/* Tabs list */}
       <div className="aiterm-tabbar-tabs" data-tauri-drag-region>

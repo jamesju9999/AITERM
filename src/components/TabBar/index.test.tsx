@@ -204,6 +204,33 @@ describe("reorderTabs", () => {
   });
 });
 
+describe("TabBar 首頁按鈕", () => {
+  it("點首頁按鈕會呼叫 onHome", () => {
+    const onHome = vi.fn();
+    renderTabBar({ onHome, homeActive: false });
+    fireEvent.click(screen.getByTitle(/Ctrl\+0/));
+    expect(onHome).toHaveBeenCalledTimes(1);
+  });
+
+  it("首頁是目前畫面時，按鈕標成 active", () => {
+    renderTabBar({ onHome: () => {}, homeActive: true });
+    expect(screen.getByTitle(/Ctrl\+0/).className).toContain("active");
+  });
+
+  // 首頁不是分頁：它不能被拖曳排序、也不能佔用 Ctrl+1~9 的編號。
+  it("首頁按鈕不在分頁清單裡", () => {
+    const { container } = renderTabBar({ onHome: () => {}, homeActive: true });
+    const inList = container.querySelectorAll(".aiterm-tabbar-tabs .aiterm-tab");
+    expect(inList.length).toBe(1); // 只有 baseTabs 的那一個分頁
+  });
+
+  // 側邊欄收合成 48px 只剩圖示時，首頁按鈕必須還在。
+  it("側邊欄收合時首頁按鈕仍在", () => {
+    renderTabBar({ onHome: () => {}, homeActive: false, isSidebarOpen: false });
+    expect(screen.getByTitle(/Ctrl\+0/)).toBeTruthy();
+  });
+});
+
 describe("TabBar 分頁拖曳排序", () => {
   const threeTabs: Tab[] = [
     { id: "t1", title: "Tab 1", type: "terminal" },
