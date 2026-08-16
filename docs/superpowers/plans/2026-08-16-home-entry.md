@@ -2264,6 +2264,46 @@ Run: `npm run tauri:dev`
 
 ---
 
+## Task 16：讓「進行中的任務」在一般使用情境下真的有東西
+
+Task 5 的審查發現的**計畫層缺口**——Task 5 的實作照計畫做對了，是計畫本身的價值敘述撐不住。
+
+**已查證的事實：**
+
+- `onAgentProgress` 全 repo 只有一個呼叫點：`TerminalView.tsx:810`，位於 `initialMission` 的自動啟動路徑裡
+- `initialMission` 只在企業任務派送時被建立（`TerminalApp.tsx:196`），且**必定**與 `enterpriseTask` 同時設定
+- 使用者手動打 `/agent` 開的 mission（`TerminalView.tsx:651`）的 `onStepComplete` 只做 `sendRemoteResponse`（轉發 Telegram），**不寫 `agentProgress`**
+
+**後果：首頁的「進行中的任務」在使用者手動跑 agent 時永遠是空的**，只有企業任務會出現。而企業任務是多數使用者不會用到的功能。連帶地，Task 5 刻意「不套 `enterpriseTask` 過濾」這個決定目前是 no-op——今天每個帶 `agentProgress` 的分頁都同時帶 `enterpriseTask`。
+
+- [ ] **Step 1: 把 `onAgentProgress` 接到手動 mission 路徑**
+
+`TerminalView.tsx:651` 那條 `runAgentLoop` 的 `onStepComplete` 目前是：
+```tsx
+onStepComplete: (info) => sendRemoteResponse(formatAgentStepForRemote(info)),
+```
+要在**不破壞既有 Telegram 轉發**的前提下，additionally 呼叫 `onAgentProgress?.(info.stepIndex, info.maxSteps)`。`TerminalView.tsx:1194` 那條路徑（另一個 `startMission`）也要檢查。
+
+**先寫測試證明現況**：手動 mission 跑完一步之後 `onAgentProgress` 不會被呼叫（會綠，證明缺口存在），再改實作讓它變成該被呼叫。
+
+- [ ] **Step 2: 任務結束時清掉 `agentProgress`**
+
+同一個審查發現的第二個缺口：`agentProgress` 全 repo 只有寫入、**沒有任何地方把它設回 `undefined`**。`onComplete` / `onFail` 都不碰它。所以一個跑完的 mission 會永遠以 `5 / 5` 掛在「進行中的任務」底下。
+
+這在企業浮動面板時代就存在（且較隱蔽，因為那面板只在非 active 分頁出現），但首頁把它擺在最上方、還冠上「進行中」的標題，會把既有瑕疵放大成明顯的錯誤資訊。
+
+兩種做法擇一（實作前先回報你的選擇與理由）：
+- 在 `onComplete` / `onFail` 把 `agentProgress` 設回 `undefined`
+- 把 `agentProgress` 擴成帶 `status: "running" | "done" | "failed"`，讓首頁能區分呈現
+
+- [ ] **Step 3: 考慮把選取邏輯抽成共用函式**
+
+審查者的觀察：`pct` 的計算與進度條結構現在在 `RunningTasks.tsx` 與 `TerminalApp.tsx` 的企業面板各寫了一份，而 Step 2 的 bug 會同時傷到兩邊。收斂點不是廢掉其中一個（兩者職責不同：企業面板是**通知**「你看不到的地方有事在動」，首頁是**總覽**），而是把 running-task 的選取與正規化抽成共用純函式（例如 `selectRunningTasks(tabs, { excludeId })`），兩個呈現層各自套自己的過濾規則。
+
+**這一步是選配。** 只有在 Step 1、2 做完後發現真的重複到痛，才做。
+
+---
+
 ## Task 14：修好「預設停在首頁」造成的既有功能回歸
 
 Task 3+4 的品質審查發現的。**這是我們的改動造成的回歸，不是既有缺陷**，所以必須修。
