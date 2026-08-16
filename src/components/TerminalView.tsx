@@ -122,7 +122,7 @@ export interface TerminalViewProps {
   onAgentProgress?: (done: number, total: number) => void;
   /** agent mission 結束時呼叫（不論成功或失敗），讓首頁清掉這個分頁的進度——
    *  「進行中的任務」只該列真的在跑的，跑完/失敗的訊號另外由 onAttention 負責。 */
-  onAgentDone?: () => void;
+  onMissionEnd?: () => void;
   /** Called with a freshly generated AI summary of this tab's conversation, for the title bar. */
   onSummaryUpdate?: (summary: string) => void;
   /** 這個分頁發生了需要使用者注意的事。TerminalView 一律回報，
@@ -160,7 +160,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onAgentDone, onSummaryUpdate, onAttention, onClaudeDetected, claudeBridge }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onAttention, onClaudeDetected, claudeBridge }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -677,14 +677,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               stopMission();
               if (sessionRef.current) writePty(sessionRef.current, "\r").catch(console.error);
               sendRemoteResponse(explanation ? `Agent: ${explanation}` : "[Agent Mission Completed] 🎉");
-              onAgentDone?.();
+              onMissionEnd?.();
             },
             onFail: (msg) => {
               setAgentPhase({ phase: "failed", reason: msg });
               stopMission();
               if (sessionRef.current) writePty(sessionRef.current, "\r").catch(console.error);
               sendRemoteResponse(`⚠ Agent stopped: ${msg}`);
-              onAgentDone?.();
+              onMissionEnd?.();
             },
             onStepComplete: (info: AgentStepInfo) => reportAgentStep(info, { sendRemoteResponse, onAgentProgress }),
           });
@@ -820,7 +820,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           term.write(`\r\n\x1b[32m[Enterprise Task Completed] ✓\x1b[0m\r\n`);
           stopMission();
           writePty(session, "\r").catch(console.error);
-          onAgentDone?.();
+          onMissionEnd?.();
           // Trigger on_complete (push + optional PR) and mark task done.
           if (enterpriseTask && initialCwd) {
             term.write(`\r\n\x1b[36m[Enterprise: running on_complete...]\x1b[0m\r\n`);
@@ -842,7 +842,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           term.write(`\r\n\x1b[33m⚠ Enterprise Task stopped: ${msg}\x1b[0m\r\n`);
           stopMission();
           writePty(session, "\r").catch(console.error);
-          onAgentDone?.();
+          onMissionEnd?.();
           if (enterpriseTask) {
             enterpriseCompleteTask(enterpriseTask.taskId).catch(console.error);
           }
@@ -1187,6 +1187,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
              agentAbortRef.current = true;
              term.write("\r\n\x1b[33m[Agent Interrupted]\x1b[0m");
              stopMission();
+             // 中斷後 runAgentLoop 開頭的 abortRef 檢查會直接 return，
+             // onComplete/onFail 都不會被呼叫——這裡是唯一會漏報 mission
+             // 結束的出口，得自己補一次，否則首頁的進度會永遠掛著。
+             onMissionEnd?.();
           }
 
           const agentQuery = parseAgentPrefix(line);
@@ -1223,14 +1227,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                 stopMission();
                 writePty(session, "\r").catch(console.error);
                 sendRemoteResponse("[Agent Mission Completed] 🎉");
-                onAgentDone?.();
+                onMissionEnd?.();
               },
               onFail: (msg) => {
                 setAgentPhase({ phase: "failed", reason: msg });
                 stopMission();
                 writePty(session, "\r").catch(console.error);
                 sendRemoteResponse(`⚠ Agent stopped: ${msg}`);
-                onAgentDone?.();
+                onMissionEnd?.();
               },
               onStepComplete: (info: AgentStepInfo) => reportAgentStep(info, { sendRemoteResponse, onAgentProgress }),
             });
@@ -1701,13 +1705,13 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                     setAgentPhase({ phase: "done", steps: agentStepRef.current });
                     stopMission();
                     if (sessionId) writePty(sessionId, "\r").catch(console.error);
-                    onAgentDone?.();
+                    onMissionEnd?.();
                   },
                   onFail: (msg) => {
                     setAgentPhase({ phase: "failed", reason: msg });
                     stopMission();
                     if (sessionId) writePty(sessionId, "\r").catch(console.error);
-                    onAgentDone?.();
+                    onMissionEnd?.();
                   },
                   onStepComplete: (info: AgentStepInfo) => reportAgentStep(info, { sendRemoteResponse, onAgentProgress }),
                 });

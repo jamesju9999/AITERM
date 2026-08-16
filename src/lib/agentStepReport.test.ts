@@ -18,16 +18,15 @@ describe("reportAgentStep", () => {
     expect(onAgentProgress).toHaveBeenCalledWith(2, 5);
   });
 
-  // WarpInput 送出的 mission 有轉 Telegram，但企業任務那條目前沒有——
-  // sendRemoteResponse 缺席時不能讓 onAgentProgress 也跟著不執行。
+  // 兩個 callback 彼此獨立：sendRemoteResponse 缺席不能讓 onAgentProgress
+  // 也跟著不執行。
   it("沒有 sendRemoteResponse 時仍會呼叫 onAgentProgress，且不拋錯", () => {
     const onAgentProgress = vi.fn();
     expect(() => reportAgentStep(info, { onAgentProgress })).not.toThrow();
     expect(onAgentProgress).toHaveBeenCalledWith(2, 5);
   });
 
-  // 反過來：onAgentProgress 缺席時（例如目前 WarpInput 的 onComplete 路徑
-  // 沒有掛首頁進度）sendRemoteResponse 仍要照常轉發。
+  // 反過來：onAgentProgress 缺席時 sendRemoteResponse 仍要照常轉發。
   it("沒有 onAgentProgress 時仍會呼叫 sendRemoteResponse，且不拋錯", () => {
     const sendRemoteResponse = vi.fn();
     expect(() => reportAgentStep(info, { sendRemoteResponse })).not.toThrow();
@@ -47,5 +46,25 @@ describe("formatAgentStepForRemote", () => {
   it("失敗時在標頭附上 exit code", () => {
     const failed: AgentStepInfo = { ...info, exitCode: 1, output: "" };
     expect(formatAgentStepForRemote(failed)).toBe("[2/5] $ ls -la ⚠️ exit 1");
+  });
+
+  // xterm 的 translateToString 理應已經是純文字，但這裡仍會防禦性剝掉殘留的
+  // ANSI 跳脫碼（例如複製貼上的 prompt）——這是這個函式唯二的非平凡邏輯之一。
+  it("剝掉輸出裡的 ANSI 跳脫碼", () => {
+    const withEscapes: AgentStepInfo = { ...info, output: "\x1b[32mHello\x1b[0m World" };
+    expect(formatAgentStepForRemote(withEscapes)).toBe("[2/5] $ ls -la\nHello World");
+  });
+
+  // Telegram 訊息上限 4096 字，超過 3500 字要從中間截斷並標註省略字數。
+  // 用可分辨頭尾的字元組出輸入，確認前後各取的是正確那一半、中段確實被
+  // 換成省略字數標記，不是隨便剪一刀。
+  it("超過 3500 字時從中間截斷，保留頭尾各一半並標註省略字數", () => {
+    const head = "H".repeat(1750);
+    const middle = "M".repeat(1000);
+    const tail = "T".repeat(1750);
+    const long: AgentStepInfo = { ...info, output: head + middle + tail };
+    // 總長 4500，超出 MAX(3500) 正好 1000 字；MAX/2 = 1750 正好對齊 head/tail 長度。
+    const expected = `[2/5] $ ls -la\n${head}\n... (truncated, 1000 chars omitted) ...\n${tail}`;
+    expect(formatAgentStepForRemote(long)).toBe(expected);
   });
 });

@@ -33,10 +33,9 @@ export function formatAgentStepForRemote(info: AgentStepInfo): string {
 }
 
 /**
- * 一個 agent 步驟完成時該做的兩件事：轉發到 Telegram（若有連遠端）、
- * 回報進度給首頁的「進行中的任務」（若有掛 callback）。兩者都是可選的——
- * 不是每個呼叫端都兩者兼具（例如企業任務目前只回報進度，不轉 Telegram；
- * WarpInput 送出的 mission 目前兩者都要）。
+ * 一個 agent 步驟完成時該做的兩件事：轉發到 Telegram、回報進度給首頁的
+ * 「進行中的任務」。兩個 callback 都是可選的、彼此獨立——任一個缺席都
+ * 不影響另一個執行。
  */
 export function reportAgentStep(
   info: AgentStepInfo,

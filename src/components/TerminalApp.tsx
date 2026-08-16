@@ -522,7 +522,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   onAgentProgress={(done, total) => {
                     setTabs((prev) => setTabAgentProgress(prev, tab.id, { done, total }));
                   }}
-                  onAgentDone={() => {
+                  onMissionEnd={() => {
                     // 「進行中的任務」只該列真的在跑的——任務結束（成功或失敗）就清掉，
                     // 不用 status 欄位標記完成/失敗，那個訊號已經由 onAttention 負責。
                     setTabs((prev) => setTabAgentProgress(prev, tab.id, undefined));
