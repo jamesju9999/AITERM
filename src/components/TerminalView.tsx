@@ -125,6 +125,8 @@ export interface TerminalViewProps {
   onMissionEnd?: () => void;
   /** Called with a freshly generated AI summary of this tab's conversation, for the title bar. */
   onSummaryUpdate?: (summary: string) => void;
+  /** 工作目錄變了就回報一次。上層用它更新分頁狀態並記進最近專案。 */
+  onCwdChange?: (cwd: string) => void;
   /** 這個分頁發生了需要使用者注意的事。TerminalView 一律回報，
    *  「這個分頁是不是 active」與「視窗有沒有 focus」都由 TerminalApp 判斷——
    *  避免那些條件在 xterm / PTY 事件的 closure 裡變 stale。 */
@@ -160,7 +162,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onAttention, onClaudeDetected, claudeBridge }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, claudeBridge }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -177,6 +179,13 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const [sessionId, setSessionId] = useState<string>("");
   const [displayCwd, setDisplayCwd] = useState<string>("");
   const lastCwdRef = useRef<string>("");
+
+  // Bridge onCwdChange into a ref，理由跟 onSummaryUpdateRef 一樣：TerminalApp
+  // 每次 render 都會傳新的 inline arrow，若放進下面輪詢 effect 的 dep array，
+  // 會害那個 effect 每次 render 就重跑一次（重置 lastSaved/homePath、重建
+  // setInterval），這裡刻意不動那段既有邏輯。
+  const onCwdChangeRef = useRef(onCwdChange);
+  useEffect(() => { onCwdChangeRef.current = onCwdChange; }, [onCwdChange]);
 
   // Persist the active terminal's CWD to localStorage so it can be
   // restored on the next session. Also updates the status bar CWD display.
@@ -197,6 +206,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             : normalized;
           lastCwdRef.current = cwd;
           setDisplayCwd(pretty);
+          onCwdChangeRef.current?.(cwd);
         }
       } catch { /* session may not be ready yet */ }
     }, 2000);

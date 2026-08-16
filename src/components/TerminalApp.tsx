@@ -22,6 +22,7 @@ import { MailView } from "./MailView";
 import { HomeView } from "./HomeView";
 import { useLocale } from "../contexts/LocaleContext";
 import { setTabAgentProgress } from "../lib/tabAgentProgress";
+import { restoreSessionTabs, saveSessionTabs } from "../lib/sessionTabs";
 import { useMailSync } from "../hooks/useMailSync";
 import { getConfig } from "../ipc/config";
 import { bridgeStatus } from "../ipc/bridge";
@@ -37,26 +38,6 @@ import {
 } from "../ipc/enterprise";
 
 const DEFAULT_TAB_STORAGE_KEY = "aiterm_default_tab";
-const SESSION_TABS_KEY = "aiterm-session-tabs";
-
-type SavedTab = Pick<Tab, "title" | "type" | "dbConnectionId">;
-
-function restoreSessionTabs(): Tab[] | null {
-  try {
-    const raw = localStorage.getItem(SESSION_TABS_KEY);
-    if (!raw) return null;
-    const saved: SavedTab[] = JSON.parse(raw);
-    if (!Array.isArray(saved) || saved.length === 0) return null;
-    return saved.map((s) => ({ ...s, id: crypto.randomUUID() }));
-  } catch {
-    return null;
-  }
-}
-
-function saveSessionTabs(tabs: Tab[]) {
-  const toSave: SavedTab[] = tabs.map(({ title, type, dbConnectionId }) => ({ title, type, dbConnectionId }));
-  localStorage.setItem(SESSION_TABS_KEY, JSON.stringify(toSave));
-}
 
 interface TerminalAppProps {
   hasUpdate?: boolean;
@@ -537,6 +518,11 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   onSummaryUpdate={(summary) => {
                     setTabs((prev) =>
                       prev.map((t) => t.id === tab.id ? { ...t, aiSummary: summary } : t)
+                    );
+                  }}
+                  onCwdChange={(cwd) => {
+                    setTabs((prev) =>
+                      prev.map((t) => t.id === tab.id ? { ...t, cwd } : t)
                     );
                   }}
                   onAttention={(kind) => handleAttention(tab.id, tab.title, kind)}

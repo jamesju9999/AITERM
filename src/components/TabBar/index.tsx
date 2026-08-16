@@ -37,9 +37,13 @@ export interface Tab {
   enterpriseTask?: { taskId: string; workBranch: string; onComplete: unknown };
   agentProgress?: { done: number; total: number };
   /** AI-generated one-line summary of this tab's executed shell commands,
-   *  shown in the title bar as "<title> - <aiSummary>". In-memory only —
-   *  never persisted to localStorage, regenerated after the app restarts. */
+   *  shown in the title bar as "<title> - <aiSummary>". Persisted to
+   *  localStorage so「接續上次的工作」可以顯示上次做到哪——重開 app 後
+   *  不會再更新，直到這個分頁又執行新指令觸發下一次摘要。 */
   aiSummary?: string;
+  /** 這個終端機分頁目前實際所在的工作目錄。由 TerminalView 回報，會持久化。
+   *  跟 initialCwd（開分頁時的起始目錄）是兩件事，不要混用。 */
+  cwd?: string;
   /** 非 active 的終端機分頁發生了值得注意的事：在側邊欄圖示上顯示一個彩色點。
    *  只存在記憶體，不進 localStorage——重開 app 後這些事件已經沒有意義。 */
   attention?: AttentionKind;
