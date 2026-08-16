@@ -298,6 +298,7 @@ export function TabBar({
         <button
           className={`aiterm-tab aiterm-home-button ${homeActive ? "active" : ""}`}
           onClick={onHome}
+          aria-current={homeActive ? "page" : undefined}
           title={`${t.home_tab} (Ctrl+0)`}
         >
           <span className="aiterm-tab-icon"><HomeIcon size={18} /></span>
@@ -311,7 +312,7 @@ export function TabBar({
           <div
             key={tab.id}
             ref={(el) => { tabRefs.current[idx] = el; }}
-            className={`aiterm-tab ${tab.id === activeId ? "active" : ""} ${dragView?.from === idx ? "aiterm-tab--dragging" : ""}`}
+            className={`aiterm-tab ${tab.id === activeId && !homeActive ? "active" : ""} ${dragView?.from === idx ? "aiterm-tab--dragging" : ""}`}
             style={dragStyleOf(idx)}
             onMouseDown={(e) => handleTabMouseDown(e, idx)}
             onClick={() => {

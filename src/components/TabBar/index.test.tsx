@@ -229,6 +229,25 @@ describe("TabBar 首頁按鈕", () => {
     renderTabBar({ onHome: () => {}, homeActive: false, isSidebarOpen: false });
     expect(screen.getByTitle(/Ctrl\+0/)).toBeTruthy();
   });
+
+  it("沒有給 onHome 就不顯示首頁按鈕", () => {
+    renderTabBar({});
+    expect(screen.queryByTitle(/Ctrl\+0/)).toBeNull();
+  });
+
+  // 停在首頁時，內容區顯示的是首頁而不是任何分頁；此時分頁若還亮著 active，
+  // 側邊欄會有兩個「選取中」訊號互相矛盾。
+  it("首頁顯示中時，分頁不顯示 active", () => {
+    const { container } = renderTabBar({ onHome: () => {}, homeActive: true });
+    const tab = container.querySelector(".aiterm-tabbar-tabs .aiterm-tab")!;
+    expect(tab.className).not.toContain("active");
+  });
+
+  it("離開首頁後，active 分頁恢復標示", () => {
+    const { container } = renderTabBar({ onHome: () => {}, homeActive: false });
+    const tab = container.querySelector(".aiterm-tabbar-tabs .aiterm-tab")!;
+    expect(tab.className).toContain("active");
+  });
 });
 
 describe("TabBar 分頁拖曳排序", () => {
