@@ -295,6 +295,12 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   const handleRouteHintPick = useCallback((type: TabType) => {
     if (!routeHint) return;
     const { tabId: oldId, userText } = routeHint;
+    // 這裡刻意不 await：終端機分頁目前沒有註冊任何 close guard（只有 LoopStudio
+    // 有），所以 handleCloseTab 對它是同步跑完的。
+    //
+    // 但如果哪天有人幫 TerminalView 加上 close guard，這行就會變成真的非同步，
+    // 於是新分頁會在使用者還沒回答確認對話框時就先開出來。屆時要改成 await，
+    // 而且要處理「使用者取消關閉」的情況——那時不應該開新分頁。
     void handleCloseTab(oldId);
     const opts: TabOpenOpts | undefined =
       type === "terminal" ? { initialMission: { goal: userText, maxSteps: 20 } } : undefined;
