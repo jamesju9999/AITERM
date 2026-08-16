@@ -52,4 +52,25 @@ describe("getTabCatalog", () => {
   it("visibleTabCatalog 不含 api-docs（迴歸測試，見 commit 3547799）", () => {
     expect(visibleTabCatalog(t).some((e) => e.type === "api-docs")).toBe(false);
   });
+
+  it("包含 Claude Code，且它是帶 claudeBridge 選項的終端機分頁", () => {
+    const entry = getTabCatalog(t).find((e) => e.id === "claude-code")!;
+    expect(entry).toBeDefined();
+    expect(entry.type).toBe("terminal");
+    expect(entry.opts).toEqual({ claudeBridge: true });
+    expect(entry.requiresBridge).toBe(true);
+  });
+
+  // 兩筆的 type 都是 "terminal"，所以 id 必須唯一，否則 React key 會撞。
+  it("每一筆的 id 都是唯一的", () => {
+    const ids = getTabCatalog(t).map((e) => e.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  // 首頁與新增分頁選單看到的項目數必須一致——這個缺口實際發生過：
+  // 選單有 10 個入口，首頁只渲染了 catalog 的 9 個。
+  it("可見項目包含一般終端機與 Claude Code 兩筆", () => {
+    const visible = visibleTabCatalog(t);
+    expect(visible.filter((e) => e.type === "terminal")).toHaveLength(2);
+  });
 });

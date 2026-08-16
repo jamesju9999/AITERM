@@ -3,7 +3,7 @@ import type { TabType } from "../TabBar";
 import "./index.css";
 
 interface Props {
-  onOpenTab: (type: TabType) => void;
+  onOpenTab: (type: TabType, opts?: { claudeBridge?: boolean }) => void;
 }
 
 export function HomeView({ onOpenTab }: Props) {
