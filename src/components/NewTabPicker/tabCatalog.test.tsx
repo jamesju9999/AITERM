@@ -5,12 +5,18 @@ import type { TabType } from "../TabBar";
 
 const t = translations["zh-TW"];
 
-// 這個測試存在的理由：新增一種 TabType 卻忘了在 catalog 補一筆時，首頁的大圖
-// 入口和 AI 路由都會默默地少一個選項，而且不會有任何錯誤。
-const ALL_TYPES: TabType[] = [
+// 新增一種 TabType 卻忘了在 catalog 補一筆時，首頁的大圖入口和 AI 路由都會默默地
+// 少一個選項，而且不會有任何錯誤。窮盡性（有沒有漏列 TabType）是靠下面的型別檢查
+// 擋住的，不是靠這個檔案裡的任何一個 it()——少列一種 TabType，`_exhaustive` 那行
+// 會是型別錯誤，`npx tsc -b` 會擋下來。
+const ALL_TYPES = [
   "terminal", "database", "design", "cross-db", "vcs", "doc-converter",
   "api-docs", "loop-studio", "code-assistant", "knowledge-base", "mail",
-];
+] as const satisfies readonly TabType[];
+
+// 少列一種 TabType 時，這行會是型別錯誤（tsc -b 會擋）
+const _exhaustive: [Exclude<TabType, (typeof ALL_TYPES)[number]>] extends [never] ? true : never = true;
+void _exhaustive;
 
 describe("getTabCatalog", () => {
   it("涵蓋每一種 TabType", () => {
