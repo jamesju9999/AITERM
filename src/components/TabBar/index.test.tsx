@@ -443,13 +443,31 @@ describe("TabBar Telegram remote indicator", () => {
     expect(screen.queryByRole("img", { name: "這個分頁已開啟 Telegram 遠端遙控" })).toBeNull();
   });
 
-  it("非終端機分頁即使 id 對上 remoteTabId 也不顯示", () => {
+  // 四種分頁類型都能擁有 Remote（terminal / database / design / cross-db），
+  // 指示器要跟著擁有者跑。這條原本斷言「非終端機分頁不顯示」，那是 Remote
+  // 還只有終端機能用時的寫法——擁有權擴及四種類型後就變成釘住錯誤行為，
+  // 使用者在資料庫分頁開了 Remote 卻看不到任何訊號。
+  it.each([
+    ["database", "資料庫"],
+    ["design", "設計"],
+    ["cross-db", "跨庫查詢"],
+  ] as const)("%s 分頁擁有 Remote 時也會顯示指示器", (type, title) => {
     renderTabBar({
-      tabs: [twoTabs[0], { id: "m1", title: "Mail", type: "mail" }],
+      tabs: [twoTabs[0], { id: "x1", title, type }],
       activeId: "t1",
-      remoteTabId: "m1",
+      remoteTabId: "x1",
     });
-    expect(screen.queryByRole("img", { name: "這個分頁已開啟 Telegram 遠端遙控" })).toBeNull();
+    expect(screen.getByRole("img", { name: "這個分頁已開啟 Telegram 遠端遙控" })).toBeTruthy();
+  });
+
+  // 只有擁有者顯示——這是「同時只有一個分頁能擁有 Remote」在 UI 上的體現。
+  it("只有 remoteTabId 指到的那一個顯示，其他分頁沒有", () => {
+    renderTabBar({
+      tabs: [twoTabs[0], { id: "d1", title: "資料庫", type: "database" }],
+      activeId: "t1",
+      remoteTabId: "d1",
+    });
+    expect(screen.getAllByRole("img", { name: "這個分頁已開啟 Telegram 遠端遙控" })).toHaveLength(1);
   });
 
   // 指示器跟 attention 點、bridge 徽章分踞不同角落，三個要能同時出現且各自可分辨。

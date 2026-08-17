@@ -363,10 +363,13 @@ export function TabBar({
               {tab.type === "terminal" && tab.claudeBridge === "default" && (
                 <span className="terminal-bridge-badge">{t.bridge_tab_badge}</span>
               )}
-              {/* Remote 指示器：右上角。terminal 分頁本來就不會出現 mail 的兩個
-                  徽章，左上（bridge）跟右下（attention）也各自佔用中，右上是
-                  唯一沒被用到的角落。 */}
-              {tab.type === "terminal" && tab.id === remoteTabId && (
+              {/* Remote 指示器：右上角。不限分頁類型——terminal / database /
+                  design / cross-db 四種都能擁有 Remote，指示器要跟著擁有者跑，
+                  不然使用者在資料庫分頁開了 Remote 卻看不到任何訊號。
+                  右上角在 mail 分頁是未讀數，但 mail 不能擁有 Remote（它沒用
+                  那支 hook），所以不會撞；terminal 的左上（bridge）與右下
+                  （attention）也各自錯開。 */}
+              {tab.id === remoteTabId && (
                 <span className="terminal-remote-badge" role="img" aria-label={t.term_remote_badge_label} />
               )}
             </span>
