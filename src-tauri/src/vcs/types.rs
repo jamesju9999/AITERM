@@ -112,6 +112,21 @@ pub struct PrEntry {
     pub updated_at: String,
 }
 
+/// 一個進行中功能的完整樣貌——PR 本身的資訊，加上它目前實際改動的檔案。
+/// 團隊可見度面板與重疊偵測都是建立在這個型別上；刻意跟既有給自然語言
+/// 對話流程用的 `PrEntry` 分開，兩邊的資料契約互不影響。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveFeature {
+    pub number: u64,
+    pub title: String,
+    pub author: String,
+    pub draft: bool,
+    pub url: String,
+    pub updated_at: String,
+    pub head_ref: String,
+    pub files: Vec<String>,
+}
+
 /// A GitHub Actions workflow run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowRun {

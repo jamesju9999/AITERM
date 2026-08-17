@@ -3,6 +3,7 @@
 //! Provides repo detection, local git/svn operations, and GitHub API calls.
 
 pub mod git;
+pub mod overlap;
 pub mod svn;
 pub mod types;
 
