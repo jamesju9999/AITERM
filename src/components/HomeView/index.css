@@ -31,17 +31,31 @@
 .home-section { margin-bottom: 32px; }
 
 .home-section-title {
-  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted, #666);
-  margin: 0 0 12px;
+  color: #d8d8d8;
+  letter-spacing: 0.01em;
+  margin: 0 0 11px;
+}
+
+.home-section-icon {
+  display: flex;
+  color: #f0f0f0;
+}
+
+.home-section-count {
+  margin-left: auto;
+  font-weight: 400;
+  color: #6b6b6b;
+  font-size: 12px;
 }
 
 .home-launch-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 12px;
 }
 
@@ -118,8 +132,16 @@
 
 .home-resume-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 10px;
+}
+
+/* ResumeSection 裡「最近的專案目錄」標題緊跟在上面的卡片格線後面，只靠
+   標題自己的 margin-bottom 撐不出間距，看起來像疊在卡片上。用相鄰選擇器
+   只加在「緊接在 resume grid 後面的標題」這個結構位置，不動
+   .home-section-title 本身——避免波及其他區塊裡「第一個」標題的間距節奏。 */
+.home-resume-grid + .home-section-title {
+  margin-top: 22px;
 }
 
 .home-resume-card {
@@ -142,32 +164,86 @@
   background: var(--accent-dim, rgba(168, 85, 247, 0.05));
 }
 
-.home-resume-title   { font-size: 13px; font-weight: 600; }
-.home-resume-cwd     { font-size: 11px; font-family: ui-monospace, monospace; color: var(--text-muted, #666); overflow-wrap: anywhere; }
-.home-resume-summary { font-size: 12px; color: var(--text-secondary, #aaa); }
-
-.home-subsection-title {
-  font-size: 12px;
-  font-weight: 500;
+/* 標題（分頁標題／連線名稱）跟摘要（AI 摘要／database@host）都可能是使用者
+   自訂、任意長度的單一字串，中間沒有空白可換行——實測過長字串會撐破卡片、
+   疊到旁邊那張卡片上。兩者都用一般的「尾端省略」：不是路徑，沒有需要保留
+   的「尾端才有用」語意，不套 direction:rtl 那組 bidi 處理（能不擴散就不
+   擴散）。 */
+.home-resume-title {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-resume-cwd {
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
   color: var(--text-muted, #666);
-  margin: 16px 0 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* 從開頭省略、保留尾端——路徑尾端（專案名）才是有用的部分。 */
+  direction: rtl;
+  text-align: left;
+}
+.home-resume-summary {
+  font-size: 12px;
+  color: var(--text-secondary, #aaa);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.home-resume-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 10px;
+  color: #999;
+  margin-top: 4px;
+  align-self: flex-start;
 }
 
 .home-recent-list { display: flex; flex-direction: column; gap: 4px; }
 
 .home-recent-item {
-  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
   border: none;
   border-radius: 6px;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.02);
   color: var(--text-secondary, #aaa);
   font: 12px/1.5 ui-monospace, monospace;
   text-align: left;
   cursor: pointer;
-  overflow-wrap: anywhere;
 }
 
 .home-recent-item:hover { background: rgba(255, 255, 255, 0.05); color: var(--text-primary, #eee); }
+
+.home-recent-chevron { color: var(--text-muted, #666); }
+
+.home-recent-name {
+  color: var(--text-primary, #eee);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.home-recent-parent {
+  margin-left: auto;
+  color: var(--text-muted, #666);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
 
 .home-usage-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .home-usage-table th {

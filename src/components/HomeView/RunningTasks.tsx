@@ -1,5 +1,7 @@
 import { useLocale } from "../../contexts/LocaleContext";
 import type { Tab } from "../TabBar";
+import { SectionTitle } from "./SectionTitle";
+import { ZapIcon } from "../Icons";
 
 interface Props {
   tabs: Tab[];
@@ -14,7 +16,7 @@ export function RunningTasks({ tabs, onSelectTab }: Props) {
 
   return (
     <section className="home-section">
-      <h2 className="home-section-title">{t.home_running_title}</h2>
+      <SectionTitle icon={<ZapIcon size={17} />}>{t.home_running_title}</SectionTitle>
       <div className="home-running-list">
         {running.map((tab) => {
           const { done, total } = tab.agentProgress!;

@@ -43,7 +43,7 @@ describe("HomeView", () => {
       { id: "t1", title: "建置", type: "terminal", agentProgress: { done: 1, total: 2 } },
     ]);
     const titles = Array.from(container.querySelectorAll(".home-section-title")).map((e) => e.textContent);
-    expect(titles).toEqual(["進行中的任務", "接續上次的工作", "開始工作", "今日 AI 用量"]);
+    expect(titles).toEqual(["一句話開始", "進行中的任務", "接續上次的工作1 個分頁", "開始工作", "今日 AI 用量"]);
   });
 });
 

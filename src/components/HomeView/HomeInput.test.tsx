@@ -29,6 +29,11 @@ function submit(text: string) {
 }
 
 describe("HomeInput", () => {
+  it("顯示標題「一句話開始」", () => {
+    renderInput();
+    expect(screen.getByText("一句話開始")).toBeInTheDocument();
+  });
+
   // 掛載時不可以打 AI：首頁每次顯示都重新掛載，那會變成一顆自動打點的按鈕。
   it("掛載時不呼叫 AI", () => {
     renderInput();

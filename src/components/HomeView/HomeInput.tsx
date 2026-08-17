@@ -3,6 +3,8 @@ import { useLocale } from "../../contexts/LocaleContext";
 import { visibleTabCatalog } from "../NewTabPicker/tabCatalog";
 import { invokeAiChat } from "../../ipc/ai";
 import { parseRouteReply, fallbackRoute, type RouteResult } from "./routeIntent";
+import { SectionTitle } from "./SectionTitle";
+import { SparklesIcon } from "../Icons";
 
 interface Props {
   onRoute: (result: RouteResult) => void;
@@ -55,6 +57,7 @@ export function HomeInput({ onRoute }: Props) {
 
   return (
     <div className="home-input">
+      <SectionTitle icon={<SparklesIcon size={17} />}>{t.home_input_title}</SectionTitle>
       <input
         type="text"
         className="home-input-box"

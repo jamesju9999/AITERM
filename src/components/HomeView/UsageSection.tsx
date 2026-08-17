@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
 import { usageSummary, type UsageSummaryEntry } from "../../ipc/usage";
+import { SectionTitle } from "./SectionTitle";
+import { ChartIcon } from "../Icons";
 
 type State =
   | { kind: "loading" }
@@ -21,7 +23,7 @@ export function UsageSection() {
 
   return (
     <section className="home-section">
-      <h2 className="home-section-title">{t.home_usage_title}</h2>
+      <SectionTitle icon={<ChartIcon size={17} />}>{t.home_usage_title}</SectionTitle>
       {/* 查不到就說查不到。顯示 0 會讓使用者以為自己今天沒用過。 */}
       {state.kind === "failed" && <p className="home-empty">{t.home_usage_failed}</p>}
       {state.kind === "ready" && state.entries.length === 0 && (

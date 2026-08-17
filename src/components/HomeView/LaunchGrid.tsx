@@ -2,6 +2,8 @@ import { useLocale } from "../../contexts/LocaleContext";
 import { visibleTabCatalog, type TabOpenOpts } from "../NewTabPicker/tabCatalog";
 import type { TabType } from "../TabBar";
 import { useBridgeRunning } from "../../hooks/useBridgeRunning";
+import { SectionTitle } from "./SectionTitle";
+import { ZapIcon } from "../Icons";
 
 interface Props {
   onOpenTab: (type: TabType, opts?: TabOpenOpts) => void;
@@ -16,7 +18,7 @@ export function LaunchGrid({ onOpenTab }: Props) {
 
   return (
     <section className="home-section">
-      <h2 className="home-section-title">{t.home_launch_title}</h2>
+      <SectionTitle icon={<ZapIcon size={17} />}>{t.home_launch_title}</SectionTitle>
       <div className="home-launch-grid">
         {visibleTabCatalog(t).map((entry) => {
           const disabled = !!entry.requiresBridge && !bridgeRunning;
