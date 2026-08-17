@@ -764,8 +764,12 @@ async fn dispatch_git(
         VcsIntent::CherryPick { revision } => client.cherry_pick(&revision).await,
         VcsIntent::CreatePr { title, head, base, body } => {
             client
-                .create_pr(&title, &head, &base, body.as_deref())
+                .create_pr(&title, &head, &base, body.as_deref(), false)
                 .await
+                .map(|(number, pr_url)| VcsResult::WriteSuccess {
+                    operation: "create_pr".to_string(),
+                    detail: format!("Created PR #{number}: {pr_url}"),
+                })
         }
         VcsIntent::MergePr { pr_number } => client.merge_pr(pr_number).await,
         VcsIntent::CreateIssue { title, body } => {

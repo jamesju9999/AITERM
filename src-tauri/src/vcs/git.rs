@@ -272,30 +272,27 @@ impl GitClient {
         head: &str,
         base: &str,
         body: Option<&str>,
-    ) -> Result<VcsResult, String> {
+        draft: bool,
+    ) -> Result<(u64, String), String> {
         let token = self.require_token(3)?;
         let (owner, repo) = self.parse_remote()?;
-        let url = format!("https://api.github.com/repos/{owner}/{repo}/pulls");
+        let url = format!("{}/repos/{owner}/{repo}/pulls", self.github_api_base);
 
         let payload = serde_json::json!({
             "title": title,
             "head": head,
             "base": base,
             "body": body.unwrap_or(""),
+            "draft": draft,
         });
 
-        let resp = self
-            .gh_post(&token, &url, &payload)
-            .await?;
+        let resp = self.gh_post(&token, &url, &payload).await?;
 
         let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
         let pr_url = json["html_url"].as_str().unwrap_or("").to_string();
         let number = json["number"].as_u64().unwrap_or(0);
 
-        Ok(VcsResult::WriteSuccess {
-            operation: "create_pr".to_string(),
-            detail: format!("Created PR #{number}: {pr_url}"),
-        })
+        Ok((number, pr_url))
     }
 
     pub async fn merge_pr(&self, pr_number: u64) -> Result<VcsResult, String> {
