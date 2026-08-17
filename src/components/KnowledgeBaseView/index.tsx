@@ -95,7 +95,7 @@ interface Props {
 export function KnowledgeBaseView({ isActive }: Props) {
   const { t } = useLocale();
   const navigate = useNavigate();
-  const { notebooks, loading, syncingId, syncProgress, create, remove, sync } = useNotebooks();
+  const { notebooks, loading, syncingIds, syncProgressById, create, remove, sync } = useNotebooks();
   const pythonEnv = usePythonEnvGate();
   const [activeNotebookId, setActiveNotebookId] = useState<string | null>(loadSavedNotebookId);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -234,8 +234,8 @@ export function KnowledgeBaseView({ isActive }: Props) {
       <NotebookSidebar
         notebooks={notebooks}
         activeId={activeNotebookId}
-        syncingId={syncingId}
-        syncProgress={syncProgress}
+        syncingIds={syncingIds}
+        syncProgressById={syncProgressById}
         onSelect={setActiveNotebookId}
         onSync={handleSync}
         onDelete={handleDeleteNotebook}
@@ -263,7 +263,7 @@ export function KnowledgeBaseView({ isActive }: Props) {
           </div>
         ) : (
           <>
-            {activeNotebook.last_synced_at === null && syncingId !== activeNotebook.id && (
+            {activeNotebook.last_synced_at === null && !syncingIds.has(activeNotebook.id) && (
               <div className="kb-unsynced-banner">
                 <span>{t.kb_unsynced_prompt(activeNotebook.name)}</span>
                 <button

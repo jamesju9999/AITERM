@@ -7,8 +7,8 @@ import { SyncProgress } from "./SyncProgress";
 interface Props {
   notebooks: Notebook[];
   activeId: string | null;
-  syncingId: string | null;
-  syncProgress: SyncProgressState | null;
+  syncingIds: Set<string>;
+  syncProgressById: Record<string, SyncProgressState>;
   onSelect: (id: string) => void;
   onSync: (id: string) => void;
   onDelete: (id: string) => void;
@@ -16,7 +16,7 @@ interface Props {
 }
 
 export function NotebookSidebar({
-  notebooks, activeId, syncingId, syncProgress, onSelect, onSync, onDelete, onAddClick,
+  notebooks, activeId, syncingIds, syncProgressById, onSelect, onSync, onDelete, onAddClick,
 }: Props) {
   const { t } = useLocale();
 
@@ -37,7 +37,7 @@ export function NotebookSidebar({
         )}
         {notebooks.map((nb) => {
           const isActive = nb.id === activeId;
-          const isSyncing = nb.id === syncingId;
+          const isSyncing = syncingIds.has(nb.id);
           return (
             <div key={nb.id} className={`kb-sidebar__item ${isActive ? "kb-sidebar__item--active" : ""}`}>
               <button className="kb-sidebar__item-main" onClick={() => onSelect(nb.id)}>
@@ -48,7 +48,7 @@ export function NotebookSidebar({
                 </div>
               </button>
 
-              {isSyncing && syncProgress && <SyncProgress progress={syncProgress} />}
+              {isSyncing && syncProgressById[nb.id] && <SyncProgress progress={syncProgressById[nb.id]} />}
 
               <div className="kb-sidebar__item-actions">
                 <button

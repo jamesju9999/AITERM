@@ -29,8 +29,8 @@ function renderSidebar(onDelete = vi.fn()) {
       <NotebookSidebar
         notebooks={[NOTEBOOK]}
         activeId={null}
-        syncingId={null}
-        syncProgress={null}
+        syncingIds={new Set()}
+        syncProgressById={{}}
         onSelect={vi.fn()}
         onSync={vi.fn()}
         onDelete={onDelete}

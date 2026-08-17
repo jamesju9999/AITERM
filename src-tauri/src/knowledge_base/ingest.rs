@@ -244,7 +244,18 @@ async fn process_one_file(
 }
 
 const CONVERT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+/// Must stay strictly less than `embedding::EMBED_TIMEOUT` (the HTTP client's own
+/// timeout) — see the comment there for why. Applies per batch (see
+/// `EMBED_BATCH_SIZE`), not to a whole file, so it stays meaningful regardless
+/// of how many chunks a document has.
 const EMBED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+/// Max chunks sent in a single `embedder.embed()` call. A large source file
+/// (multi-MB report, hundreds of chunks) used to be embedded in one HTTP
+/// request; real local embedding servers choked on ~900-chunk requests well
+/// past `EMBED_TIMEOUT`, so every chunk of an otherwise-fine document was lost
+/// to a single oversized call. Splitting into bounded batches keeps each
+/// request's cost roughly constant regardless of document size.
+const EMBED_BATCH_SIZE: usize = 32;
 
 async fn process_one_file_inner(
     pool: &SqlitePool,
@@ -261,24 +272,34 @@ async fn process_one_file_inner(
         .map_err(|_| format!("Document conversion timed out after {}s", CONVERT_TIMEOUT.as_secs()))??;
     let chunks = chunk_markdown(&markdown);
 
+    // A converter can succeed (Ok) while producing no extractable text at all —
+    // e.g. a scanned/image-only PDF with no OCR layer. Treating that as "ok" used
+    // to silently index a document with zero chunks: it counted toward `indexed`,
+    // showed no error anywhere, and was permanently unsearchable. Surface it as a
+    // failure instead so it shows up in `summary.failed` and the document's
+    // `error_message`, matching the "processing genuinely didn't work" contract
+    // every other failure path in this function already follows.
+    if chunks.is_empty() {
+        return Err("轉換後沒有可用文字內容，可能是掃描或純圖片檔案，缺乏可擷取的文字".to_string());
+    }
+
     let doc_id = knowledge_base::upsert_document(
         pool, notebook_id, rel_path, mtime, hash, Some(&markdown), "ok", None,
     ).await.map_err(|e| e.to_string())?;
 
-    if chunks.is_empty() {
-        knowledge_base::replace_chunks(pool, &doc_id, &[]).await.map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-
     let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
-    let embeddings = tokio::time::timeout(EMBED_TIMEOUT, embedder.embed(&texts))
-        .await
-        .map_err(|_| format!("Embedding request timed out after {}s", EMBED_TIMEOUT.as_secs()))??;
-    if embeddings.len() != chunks.len() {
-        return Err(format!(
-            "Embedding count mismatch: {} chunks vs {} embeddings",
-            chunks.len(), embeddings.len()
-        ));
+    let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+    for batch in texts.chunks(EMBED_BATCH_SIZE) {
+        let batch_embeddings = tokio::time::timeout(EMBED_TIMEOUT, embedder.embed(batch))
+            .await
+            .map_err(|_| format!("Embedding request timed out after {}s", EMBED_TIMEOUT.as_secs()))??;
+        if batch_embeddings.len() != batch.len() {
+            return Err(format!(
+                "Embedding count mismatch: {} chunks vs {} embeddings",
+                batch.len(), batch_embeddings.len()
+            ));
+        }
+        embeddings.extend(batch_embeddings);
     }
 
     let rows: Vec<(String, Option<String>, Vec<f32>)> = chunks.into_iter()

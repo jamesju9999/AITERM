@@ -1,5 +1,11 @@
-const TARGET_CHUNK_CHARS: usize = 3200;
-const OVERLAP_CHARS: usize = 600;
+// Was 3200/600. A real converted document (a PDF-derived scan report with
+// zero markdown headings anywhere) showed 3200 merging 2-4 unrelated
+// ~800-1500-char records into a single chunk, diluting its embedding badly
+// enough that semantic search over it returned nothing useful. Shrinking to
+// closer to one record's worth also lines up better with typical embedding
+// model guidance (roughly a paragraph, not several pages, per chunk).
+const TARGET_CHUNK_CHARS: usize = 1400;
+const OVERLAP_CHARS: usize = 250;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Chunk {
@@ -95,6 +101,27 @@ mod tests {
     fn empty_markdown_returns_no_chunks() {
         let chunks = chunk_markdown("   \n  ");
         assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn heading_less_records_do_not_all_collapse_into_one_chunk() {
+        // Mirrors a converted report with zero markdown headings anywhere
+        // (e.g. a PDF-derived vulnerability scan report) made of several
+        // fixed-size "record" blocks back to back — the shape that let 3-4
+        // unrelated records get merged into a single chunk and dilute its
+        // embedding. Three ~900-char records (~2.7k chars total) must not
+        // all fit in one chunk; a target as large as the old 3200 would let
+        // them.
+        let unit = "測試段落文字"; // 6 chars
+        let record = unit.repeat(150); // 900 chars
+        let md = format!("{record}\n\n{record}\n\n{record}");
+
+        let chunks = chunk_markdown(&md);
+        assert!(
+            chunks.len() > 1,
+            "~2.7k chars of heading-less content must split into more than one chunk, got {}",
+            chunks.len()
+        );
     }
 
     #[test]

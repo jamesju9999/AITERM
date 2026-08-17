@@ -15,8 +15,13 @@ export interface UseNotebooksResult {
   notebooks: Notebook[];
   loading: boolean;
   error: string | null;
-  syncingId: string | null;
-  syncProgress: SyncProgressState | null;
+  // Keyed by notebook id, not a single shared value: multiple notebooks can
+  // sync at the same time (the sidebar only disables the button for the
+  // notebook actually being synced), so tracking "the" syncing notebook in a
+  // single field let one sync's completion clobber another still-running
+  // sync's displayed state.
+  syncingIds: Set<string>;
+  syncProgressById: Record<string, SyncProgressState>;
   refresh: () => Promise<void>;
   create: (name: string, folderPath: string, embedProviderId?: string, embedModel?: string) => Promise<Notebook>;
   remove: (id: string) => Promise<void>;
@@ -27,8 +32,8 @@ export function useNotebooks(): UseNotebooksResult {
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [syncingId, setSyncingId] = useState<string | null>(null);
-  const [syncProgress, setSyncProgress] = useState<SyncProgressState | null>(null);
+  const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set());
+  const [syncProgressById, setSyncProgressById] = useState<Record<string, SyncProgressState>>({});
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -64,15 +69,18 @@ export function useNotebooks(): UseNotebooksResult {
   }, [refresh]);
 
   const sync = useCallback(async (id: string) => {
-    setSyncingId(id);
-    setSyncProgress({ processed: 0, total: 0, currentFile: "" });
+    setSyncingIds((prev) => new Set(prev).add(id));
+    setSyncProgressById((prev) => ({ ...prev, [id]: { processed: 0, total: 0, currentFile: "" } }));
 
     const unlisten = await listen<KbSyncEvent>(KB_SYNC_EVENT, (event) => {
       if (!mountedRef.current) return;
       const p = event.payload;
       if (p.notebook_id !== id) return;
       if (p.kind === "progress") {
-        setSyncProgress({ processed: p.processed, total: p.total, currentFile: p.current_file });
+        setSyncProgressById((prev) => ({
+          ...prev,
+          [id]: { processed: p.processed, total: p.total, currentFile: p.current_file },
+        }));
       }
     });
 
@@ -83,11 +91,19 @@ export function useNotebooks(): UseNotebooksResult {
     } finally {
       unlisten();
       if (mountedRef.current) {
-        setSyncingId(null);
-        setSyncProgress(null);
+        setSyncingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+        setSyncProgressById((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
       }
     }
   }, [refresh]);
 
-  return { notebooks, loading, error, syncingId, syncProgress, refresh, create, remove, sync };
+  return { notebooks, loading, error, syncingIds, syncProgressById, refresh, create, remove, sync };
 }

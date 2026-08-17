@@ -7,7 +7,14 @@ use crate::config::types::ProviderType;
 /// 列模型是使用者打開下拉選單時觸發的，必須感覺得到即時；連不上就早點放棄。
 const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
 /// Embedding 一次送一整批文字，本來就慢，逾時要給得比列模型寬。
-const EMBED_TIMEOUT: Duration = Duration::from_secs(60);
+///
+/// 必須嚴格大於 `ingest::EMBED_TIMEOUT`（目前 120s）：那邊用
+/// `tokio::time::timeout` 包住 `embedder.embed()` 想給使用者「Embedding
+/// request timed out after 120s」這種看得懂的訊息；如果這裡的 client 層
+/// timeout 比它短或相等，reqwest 會先掐斷連線，外層那句好懂的訊息永遠
+/// 沒機會出現，使用者只會看到一句「error decoding response body」之類、
+/// 看不出是逾時的原始 reqwest 錯誤。兩邊改動時要一起調整。
+const EMBED_TIMEOUT: Duration = Duration::from_secs(150);
 
 fn build_client(timeout: Duration) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
@@ -201,7 +208,13 @@ struct OpenAiEmbedResponse {
 #[derive(Deserialize)]
 struct OpenAiEmbedItem {
     embedding: Vec<f32>,
-    index: usize,
+    // Some self-hosted OpenAI-compatible servers (local MLX/Qwen gateways in
+    // particular) omit `index` and just return items in request order — a
+    // required `usize` here made every item in that response fail to
+    // deserialize, killing the whole batch with an opaque "error decoding
+    // response body". Optional so those servers still work; see fallback
+    // ordering logic below.
+    index: Option<usize>,
 }
 
 async fn embed_openai_compatible(
@@ -222,9 +235,30 @@ async fn embed_openai_compatible(
         return Err(format!("Embedding HTTP {status}: {body}"));
     }
 
-    let parsed: OpenAiEmbedResponse = resp.json().await
-        .map_err(|e| format!("Embedding parse error: {e}"))?;
+    // Read as text first (rather than resp.json()) so a shape mismatch can report
+    // what the server actually sent — "error decoding response body" alone gave no
+    // way to tell a wrong endpoint from a different response schema.
+    let body = resp.text().await.map_err(|e| format!("Embedding response read error: {e}"))?;
+    let parsed: OpenAiEmbedResponse = serde_json::from_str(&body)
+        .map_err(|e| format!("Embedding parse error: {e} (response: {})", truncate_for_error(&body)))?;
+
     let mut items = parsed.data;
-    items.sort_by_key(|i| i.index);
+    // Only sort when every item actually reports an index; a response missing it
+    // entirely relies on array order, and sorting on all-None would be a no-op
+    // that masks the real ordering if that ever changes.
+    if items.iter().all(|i| i.index.is_some()) {
+        items.sort_by_key(|i| i.index.unwrap());
+    }
     Ok(items.into_iter().map(|i| i.embedding).collect())
+}
+
+/// Truncates `s` to at most `max_chars` characters (char-boundary safe) for
+/// inclusion in an error message, appending `…` when it was cut.
+fn truncate_for_error(s: &str) -> String {
+    const MAX_CHARS: usize = 300;
+    let mut truncated: String = s.chars().take(MAX_CHARS).collect();
+    if s.chars().count() > MAX_CHARS {
+        truncated.push('…');
+    }
+    truncated
 }

@@ -57,6 +57,61 @@ async fn openai_compatible_embed_sorts_by_index_and_sends_bearer_token() {
 }
 
 #[tokio::test]
+async fn openai_compatible_embed_tolerates_missing_index_field() {
+    let server = MockServer::start().await;
+
+    // Some self-hosted OpenAI-compatible servers (e.g. local MLX/Qwen gateways)
+    // omit `index` and just rely on array order.
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [
+                {"embedding": [0.1, 0.1]},
+                {"embedding": [0.9, 0.9]}
+            ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let embedder = HttpEmbedder::new(EmbedderConfig {
+        provider_type: ProviderType::OpenaiCompatible,
+        base_url: server.uri(),
+        api_key: None,
+        model: "local-embed".into(),
+    }).expect("client build ok");
+
+    let result = embedder.embed(&["a".into(), "b".into()]).await
+        .expect("missing index field must not fail the whole embed call");
+    assert_eq!(result, vec![vec![0.1, 0.1], vec![0.9, 0.9]]);
+}
+
+#[tokio::test]
+async fn openai_compatible_embed_parse_error_includes_response_body() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"unexpected":"shape"}"#))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let embedder = HttpEmbedder::new(EmbedderConfig {
+        provider_type: ProviderType::OpenaiCompatible,
+        base_url: server.uri(),
+        api_key: None,
+        model: "local-embed".into(),
+    }).expect("client build ok");
+
+    let err = embedder.embed(&["a".into()]).await.unwrap_err();
+    assert!(
+        err.contains("unexpected"),
+        "parse error should include a snippet of the raw response body for diagnosis: {err}"
+    );
+}
+
+#[tokio::test]
 async fn http_error_becomes_readable_error_message() {
     let server = MockServer::start().await;
 
