@@ -7,7 +7,12 @@ import { useLocale } from "../../contexts/LocaleContext";
 import "./CrossDbView.css";
 
 export interface CrossDbViewProps {
-  isActive: boolean;
+  /** 這個分頁的穩定識別碼（`tab.id`），當作 Telegram Remote 的 ownerKey。 */
+  tabId: string;
+  /** 目前誰擁有 Telegram Remote（`TerminalApp` 的 `remoteTabId`）。null = 沒有人。 */
+  remoteOwner: string | null;
+  /** 使用者切換這個分頁的 Remote 開關時呼叫。 */
+  onRemoteOwnerChange: (owner: string | null) => void;
 }
 
 export interface ConnectedDb {
@@ -21,7 +26,7 @@ export interface ConnectedDb {
 
 type SubTab = "ai" | "sql";
 
-export function CrossDbView({ isActive }: CrossDbViewProps) {
+export function CrossDbView({ tabId, remoteOwner, onRemoteOwnerChange }: CrossDbViewProps) {
   const { t } = useLocale();
   const [allConnections, setAllConnections] = useState<DbConnectionInfo[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -30,9 +35,12 @@ export function CrossDbView({ isActive }: CrossDbViewProps) {
   const [started, setStarted] = useState(false);
   const [subTab, setSubTab] = useState<SubTab>("ai");
 
-  const { isRemoteEnabled, setIsRemoteEnabled, sendRemoteResponse } = useTelegramRemoteControl(
-    "cross-db",
-    isActive,
+  // ownerKey 用 tab.id，不是寫死的 "cross-db"：那個字串不保證唯一，兩個
+  // cross-db 分頁會撞。
+  const { isRemoteEnabled, toggleRemote, sendRemoteResponse } = useTelegramRemoteControl(
+    tabId,
+    remoteOwner,
+    onRemoteOwnerChange,
     (text) => {
       // Forward Telegram messages to the AI Chat
       window.dispatchEvent(new CustomEvent("aiterm:crossdb-remote-msg", { detail: { text } }));
@@ -141,7 +149,7 @@ export function CrossDbView({ isActive }: CrossDbViewProps) {
         <button
           className={`crossdb-subtab ${isRemoteEnabled ? "crossdb-subtab--active" : ""}`}
           style={{ marginLeft: 8 }}
-          onClick={() => setIsRemoteEnabled(!isRemoteEnabled)}
+          onClick={toggleRemote}
           title={t.db_remote_tooltip}
         >
           📱 Remote

@@ -520,11 +520,13 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                       prev.map((t) => t.id === tab.id ? { ...t, dbConnectionId: connId } : t)
                     );
                   }}
+                  remoteOwner={remoteTabId}
+                  onRemoteOwnerChange={setRemoteTabId}
                 />
               ) : tab.type === "design" ? (
-                <DesignView isActive={isActive} />
+                <DesignView isActive={isActive} tabId={tab.id} remoteOwner={remoteTabId} onRemoteOwnerChange={setRemoteTabId} />
               ) : tab.type === "cross-db" ? (
-                <CrossDbView isActive={isActive} />
+                <CrossDbView tabId={tab.id} remoteOwner={remoteTabId} onRemoteOwnerChange={setRemoteTabId} />
               ) : tab.type === "vcs" ? (
                 <VcsView sessionId={lastTerminalPtyId} isActive={isActive} />
               ) : tab.type === "doc-converter" ? (
@@ -580,8 +582,9 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   }}
                   onAttention={(kind) => handleAttention(tab.id, tab.title, kind)}
                   onClaudeDetected={onClaudeDetected}
-                  isRemoteTab={tab.id === remoteTabId}
-                  onRemoteTabChange={(enabled) => setRemoteTabId(enabled ? tab.id : null)}
+                  tabId={tab.id}
+                  remoteOwner={remoteTabId}
+                  onRemoteOwnerChange={setRemoteTabId}
                 />
               )}
             </div>
