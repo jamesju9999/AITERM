@@ -29,6 +29,10 @@ export function LaunchGrid({ onOpenTab }: Props) {
               disabled={disabled}
               title={disabled ? entry.disabledHint : undefined}
               onClick={() => onOpenTab(entry.type, entry.opts)}
+              // CSS 自訂屬性給 index.css 用來上圖示色與左邊框色。React 的
+              // CSSProperties 型別不接受任意 --* 屬性，比照 themes.ts 的做法
+              // 用 as 斷言放行。
+              style={{ "--card-color": entry.color } as React.CSSProperties}
             >
               <span className="home-launch-icon">{entry.icon}</span>
               <span className="home-launch-label">{entry.label}</span>

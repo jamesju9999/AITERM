@@ -73,6 +73,12 @@
   text-align: left;
   font-family: inherit;
   transition: var(--transition-smooth);
+  /* 分頁類型專屬色的左邊框，用 inset box-shadow 疊在 border 上面，而不是
+     把 border-left 加粗成 2px——border 佔版面寬度，加粗 1px 會讓十張卡片
+     的內容一起往右位移，一整排看起來歪掉；box-shadow 不佔版面，邊框粗細
+     用 spread 值控制，內容左緣完全不受影響。顏色用 color-mix 調成半透明，
+     跟圖示的全彩區隔開。 */
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--card-color, transparent) 55%, transparent);
 }
 
 .home-launch-card:hover {
@@ -83,6 +89,8 @@
 .home-launch-card:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+  /* 停用態把專屬色一併壓成灰階，避免上色後看起來仍像可點。 */
+  filter: grayscale(1);
 }
 
 .home-launch-card:disabled:hover {
@@ -92,6 +100,8 @@
 
 .home-launch-label { font-size: 14px; font-weight: 600; }
 .home-launch-desc  { font-size: 12px; color: var(--text-secondary, #aaa); }
+
+.home-launch-icon { color: var(--card-color, inherit); }
 
 .home-running-list { display: flex; flex-direction: column; gap: 8px; }
 

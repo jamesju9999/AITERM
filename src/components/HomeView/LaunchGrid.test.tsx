@@ -116,4 +116,14 @@ describe("LaunchGrid", () => {
     fireEvent.click(screen.getByText("資料庫"));
     expect(onOpenTab).toHaveBeenCalledWith("database", undefined);
   });
+
+  // 卡片的分頁類型專屬色是透過 CSS 自訂屬性 --card-color 傳給 CSS，不是
+  // 寫死的 class，所以要查 style 屬性才能確認顏色真的有從 catalog 傳下來。
+  it("每張卡片都帶有對應分頁類型的 --card-color", () => {
+    renderGrid();
+    const terminalCard = screen.getByText("終端機").closest("button")!;
+    const databaseCard = screen.getByText("資料庫").closest("button")!;
+    expect(terminalCard.style.getPropertyValue("--card-color")).toBe("#4ade80");
+    expect(databaseCard.style.getPropertyValue("--card-color")).toBe("#60a5fa");
+  });
 });

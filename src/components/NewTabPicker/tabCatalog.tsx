@@ -27,6 +27,12 @@ export interface TabCatalogEntry {
   icon: React.ReactNode;
   label: string;
   desc: string;
+  /** 分頁類型專屬色（hex），套用在首頁「開始工作」卡片的圖示與左邊框。
+   *  必填而非 optional：新增 TabType 時，下面的 `_exhaustive` 型別窮盡性
+   *  檢查已經會擋掉漏列的 entry，但那只保證「有沒有這一筆」，保證不了
+   *  「這一筆有沒有顏色」。設成必填，漏寫顏色會直接編譯失敗，而不是
+   *  默默生出一張沒有顏色的卡片。 */
+  color: string;
   /** 後端完整但尚未對使用者開放。隱藏的理由集中記在這裡，不要散在各個呼叫端。 */
   hidden?: boolean;
   /** 需要橋接 server 正在執行才能使用。呼叫端自行決定沒在跑時要停用還是隱藏。 */
@@ -50,34 +56,37 @@ interface TabCatalogMeta {
   icon: React.ReactNode;
   labelKey: StringTranslationKey;
   descKey: StringTranslationKey;
+  /** 見 TabCatalogEntry.color 的註解。 */
+  color: string;
   hidden?: boolean;
   requiresBridge?: boolean;
   disabledHintKey?: StringTranslationKey;
 }
 
 const TAB_CATALOG_META: readonly TabCatalogMeta[] = [
-  { id: "terminal",       type: "terminal",       icon: <TerminalIcon size={18} />,  labelKey: "terminal_tab",       descKey: "new_terminal_desc" },
-  { id: "database",       type: "database",       icon: <DatabaseIcon size={18} />,  labelKey: "database_tab",       descKey: "new_database_desc" },
-  { id: "design",         type: "design",         icon: <PaintbrushIcon size={18} />, labelKey: "design_tab",        descKey: "new_design_desc" },
-  { id: "cross-db",       type: "cross-db",       icon: <LinkIcon size={18} />,      labelKey: "cross_db_tab",       descKey: "new_cross_db_desc" },
-  { id: "vcs",            type: "vcs",            icon: <BranchIcon size={18} />,    labelKey: "vcs_tab",            descKey: "new_vcs_desc" },
-  { id: "doc-converter",  type: "doc-converter",  icon: <FileTextIcon size={18} />,  labelKey: "doc_converter_tab",  descKey: "new_doc_converter_desc" },
+  { id: "terminal",       type: "terminal",       icon: <TerminalIcon size={18} />,  labelKey: "terminal_tab",       descKey: "new_terminal_desc",       color: "#4ade80" },
+  { id: "database",       type: "database",       icon: <DatabaseIcon size={18} />,  labelKey: "database_tab",       descKey: "new_database_desc",       color: "#60a5fa" },
+  { id: "design",         type: "design",         icon: <PaintbrushIcon size={18} />, labelKey: "design_tab",        descKey: "new_design_desc",         color: "#a855f7" },
+  { id: "cross-db",       type: "cross-db",       icon: <LinkIcon size={18} />,      labelKey: "cross_db_tab",       descKey: "new_cross_db_desc",       color: "#22d3ee" },
+  { id: "vcs",            type: "vcs",            icon: <BranchIcon size={18} />,    labelKey: "vcs_tab",            descKey: "new_vcs_desc",            color: "#fb923c" },
+  { id: "doc-converter",  type: "doc-converter",  icon: <FileTextIcon size={18} />,  labelKey: "doc_converter_tab",  descKey: "new_doc_converter_desc",  color: "#94a3b8" },
   // api-docs 的入口在 commit 3547799 被刻意收起來（後端 ApiDocsView / api_docs /
   // ApiDocFetcher 全部保留），跟 mail 是同一種狀況：完整但不對使用者開放。
-  { id: "api-docs",       type: "api-docs",       icon: <BookOpenIcon size={18} />,  labelKey: "api_docs_tab",       descKey: "new_api_docs_desc", hidden: true },
-  { id: "loop-studio",    type: "loop-studio",    icon: <RefreshIcon size={18} />,   labelKey: "loop_studio_tab",    descKey: "new_loop_studio_desc" },
-  { id: "code-assistant", type: "code-assistant", icon: <CodeIcon size={18} />,      labelKey: "code_assistant_tab", descKey: "new_code_assistant_desc" },
-  { id: "knowledge-base", type: "knowledge-base", icon: <LibraryIcon size={18} />,   labelKey: "knowledge_base_tab", descKey: "new_knowledge_base_desc" },
+  { id: "api-docs",       type: "api-docs",       icon: <BookOpenIcon size={18} />,  labelKey: "api_docs_tab",       descKey: "new_api_docs_desc",       color: "#38bdf8", hidden: true },
+  { id: "loop-studio",    type: "loop-studio",    icon: <RefreshIcon size={18} />,   labelKey: "loop_studio_tab",    descKey: "new_loop_studio_desc",    color: "#f472b6" },
+  { id: "code-assistant", type: "code-assistant", icon: <CodeIcon size={18} />,      labelKey: "code_assistant_tab", descKey: "new_code_assistant_desc", color: "#facc15" },
+  { id: "knowledge-base", type: "knowledge-base", icon: <LibraryIcon size={18} />,   labelKey: "knowledge_base_tab", descKey: "new_knowledge_base_desc", color: "#818cf8" },
   // The Mail entry is hidden while the feature is not being shipped to
   // users. The "mail" tab type, MailView, and its whole backend remain wired
   // up — restoring it means putting this line back, plus the matching button
   // in SettingsView, and re-adding the MailIcon import above. See the notes in
   // docs/superpowers/specs/2026-08-04-ai-mail-assistant-design.md.
-  { id: "mail",           type: "mail",           icon: <MailIcon size={18} />,      labelKey: "mail_tab",           descKey: "new_mail_desc", hidden: true },
+  { id: "mail",           type: "mail",           icon: <MailIcon size={18} />,      labelKey: "mail_tab",           descKey: "new_mail_desc",           color: "#f87171", hidden: true },
   // Claude Code 不是獨立的 TabType，而是「終端機分頁 + claudeBridge 選項」，
   // 且需要橋接 server 正在跑才能用（見 requiresBridge）。放在陣列最後，
-  // 跟它在新增分頁選單裡的位置一致。
-  { id: "claude-code",    type: "terminal",       opts: { claudeBridge: true }, icon: <RobotIcon size={18} />, labelKey: "bridge_new_tab", descKey: "bridge_new_tab_desc", requiresBridge: true, disabledHintKey: "bridge_new_tab_disabled_hint" },
+  // 跟它在新增分頁選單裡的位置一致。顏色刻意跟 vcs 的橙拉開，用 Anthropic 的
+  // 品牌陶土色。
+  { id: "claude-code",    type: "terminal",       opts: { claudeBridge: true }, icon: <RobotIcon size={18} />, labelKey: "bridge_new_tab", descKey: "bridge_new_tab_desc", color: "#d97757", requiresBridge: true, disabledHintKey: "bridge_new_tab_disabled_hint" },
 ];
 
 /** 可路由的分頁類型：從 TAB_CATALOG_META 過濾掉 hidden 之後推導，不需要
@@ -98,6 +107,7 @@ export function getTabCatalog(t: Translations): TabCatalogEntry[] {
     icon: m.icon,
     label: t[m.labelKey],
     desc: t[m.descKey],
+    color: m.color,
     hidden: m.hidden,
     requiresBridge: m.requiresBridge,
     disabledHint: m.disabledHintKey ? t[m.disabledHintKey] : undefined,

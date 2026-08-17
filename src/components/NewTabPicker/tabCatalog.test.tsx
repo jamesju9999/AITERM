@@ -76,4 +76,18 @@ describe("getTabCatalog", () => {
     const visible = visibleTabCatalog(t);
     expect(visible.filter((e) => e.type === "terminal")).toHaveLength(2);
   });
+
+  // color 是必填欄位（型別上不是 optional），但型別檢查擋不住寫錯格式的
+  // 值（例如少打一個字元的 hex），這裡用 regex 補上執行期斷言。
+  it("每一筆的 color 都是合法的 6 位 hex", () => {
+    for (const entry of getTabCatalog(t)) {
+      expect(entry.color).toMatch(/^#[0-9a-f]{6}$/i);
+    }
+  });
+
+  // C 方案的重點是「每類一色」——兩筆撞色就失去分辨分頁類型的作用。
+  it("每一筆的 color 互不重複", () => {
+    const colors = getTabCatalog(t).map((e) => e.color.toLowerCase());
+    expect(new Set(colors).size).toBe(colors.length);
+  });
 });
