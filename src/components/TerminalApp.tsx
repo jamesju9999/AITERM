@@ -10,6 +10,7 @@ import { TitleBar } from "./TitleBar";
 import { DatabaseView } from "./DatabaseView";
 import { DesignView } from "./DesignView/DesignView";
 import { NewTabPicker } from "./NewTabPicker";
+import type { TabOpenOpts } from "./NewTabPicker/tabCatalog";
 import { CrossDbView } from "./CrossDbView";
 import { VcsView } from "./VcsView/VcsView";
 import { DocConverterView } from "./DocConverter/DocConverterView";
@@ -18,7 +19,13 @@ import { LoopStudioView } from "./LoopStudio";
 import { CodeAssistantView } from "./CodeAssistantView";
 import { KnowledgeBaseView } from "./KnowledgeBaseView";
 import { MailView } from "./MailView";
+import { HomeView } from "./HomeView";
+import { RouteHint } from "./RouteHint";
+import type { RouteResult } from "./HomeView/routeIntent";
 import { useLocale } from "../contexts/LocaleContext";
+import { setTabAgentProgress } from "../lib/tabAgentProgress";
+import { restoreSessionTabs, saveSessionTabs } from "../lib/sessionTabs";
+import { recordProject } from "../lib/recentProjects";
 import { useMailSync } from "../hooks/useMailSync";
 import { getConfig } from "../ipc/config";
 import { bridgeStatus } from "../ipc/bridge";
@@ -34,26 +41,6 @@ import {
 } from "../ipc/enterprise";
 
 const DEFAULT_TAB_STORAGE_KEY = "aiterm_default_tab";
-const SESSION_TABS_KEY = "aiterm-session-tabs";
-
-type SavedTab = Pick<Tab, "title" | "type" | "dbConnectionId">;
-
-function restoreSessionTabs(): Tab[] | null {
-  try {
-    const raw = localStorage.getItem(SESSION_TABS_KEY);
-    if (!raw) return null;
-    const saved: SavedTab[] = JSON.parse(raw);
-    if (!Array.isArray(saved) || saved.length === 0) return null;
-    return saved.map((s) => ({ ...s, id: crypto.randomUUID() }));
-  } catch {
-    return null;
-  }
-}
-
-function saveSessionTabs(tabs: Tab[]) {
-  const toSave: SavedTab[] = tabs.map(({ title, type, dbConnectionId }) => ({ title, type, dbConnectionId }));
-  localStorage.setItem(SESSION_TABS_KEY, JSON.stringify(toSave));
-}
 
 interface TerminalAppProps {
   hasUpdate?: boolean;
@@ -72,7 +59,13 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     return [{ id: crypto.randomUUID(), title: tabType === "database" ? "Database" : "Terminal", type: tabType }];
   });
   const [activeId, setActiveId] = useState(tabs[0].id);
+  // 首頁不是分頁，所以它不在 tabs 裡，而是一個「都不 active」的狀態。
+  // 預設 true：開 app 先看到首頁，上次的分頁照常還原但不在前景。
+  const [homeActive, setHomeActive] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // 首頁 AI 路由猜對／猜錯的反悔提示：記住開出來的分頁 id、AI 選了什麼類型、
+  // 使用者原句（換分頁類型時要用同一句重開）。null 代表沒有提示要顯示。
+  const [routeHint, setRouteHint] = useState<{ tabId: string; type: TabType; userText: string } | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(76);
   const [isDragging, setIsDragging] = useState(false);
@@ -88,6 +81,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   const tabsRef = useRef(tabs);
   const activeIdRef = useRef(activeId);
   const isSidebarOpenRef = useRef(isSidebarOpen);
+  const homeActiveRef = useRef(homeActive);
   // Tab close guards: components register an async fn that returns true = ok to close, false = cancel
   const closeGuardsRef = useRef<Map<string, () => Promise<boolean>>>(new Map());
   const registerCloseGuard = useCallback((tabId: string, guard: () => Promise<boolean>) => {
@@ -130,10 +124,17 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
 
   // PTY session ID of the most recently active terminal tab — used by VcsView for CWD polling.
   const [lastTerminalPtyId, setLastTerminalPtyId] = useState<string>("");
+  // 哪個終端機分頁目前是「唯一的 Telegram Remote 分頁」——天然互斥的單一真相
+  // 來源。取代原本以「這個分頁是否可見」（isActive）當作監聽器閘門的作法：
+  // 那個作法在首頁變成啟動預設畫面後，只要按首頁鍵就會主動 unlisten，
+  // 期間收到的 Telegram 訊息永久遺失（Tauri 的 emit 找不到 listener 就直接
+  // 丟棄，沒有 buffer）。null 代表沒有分頁開著 Remote。
+  const [remoteTabId, setRemoteTabId] = useState<string | null>(null);
   useEffect(() => {
     tabsRef.current = tabs;
     activeIdRef.current = activeId;
     isSidebarOpenRef.current = isSidebarOpen;
+    homeActiveRef.current = homeActive;
     // When switching to a terminal tab that already has a PTY, update the tracked ID.
     const activeTab = tabs.find((t) => t.id === activeId);
     if (activeTab?.type === "terminal" && activeTab.ptySessionId) {
@@ -141,13 +142,14 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     }
     // Persist tab layout for session restoration
     saveSessionTabs(tabs);
-  }, [tabs, activeId, isSidebarOpen]);
+  }, [tabs, activeId, isSidebarOpen, homeActive]);
 
   // 切到某個分頁就把它的提示點清掉——使用者選定的規則是「切過去就算讀過」。
   // 這裡而不是用一個以 activeId 為依賴的 effect：清除在語意上是「選取分頁」
   // 的一部分，屬於事件本身，不是事後補償。也因此 active 分頁永遠不會有提示點。
   const selectTab = useCallback((id: string) => {
     setActiveId(id);
+    setHomeActive(false);
     setTabs((prev) =>
       prev.some((t) => t.id === id && t.attention)
         ? prev.map((t) => (t.id === id ? { ...t, attention: undefined } : t))
@@ -214,7 +216,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     setPickerOpen(true);
   }, [refreshDefaultBridge]);
 
-  const handlePickerSelect = useCallback((type: TabType, opts?: { claudeBridge?: boolean }) => {
+  const handlePickerSelect = useCallback((type: TabType, opts?: TabOpenOpts) => {
     const newId = crypto.randomUUID();
     let title = t.terminal_tab;
     if (type === "database") title = t.database_tab;
@@ -240,10 +242,23 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
             ? "default"
             : undefined;
     if (claudeBridge === "explicit") title = t.bridge_tab_title;
-    setTabs((prev) => [...prev, { id: newId, title, type, claudeBridge }]);
+    setTabs((prev) => [...prev, {
+      id: newId, title, type, claudeBridge,
+      initialCwd: opts?.initialCwd,
+      initialMission: opts?.initialMission,
+    }]);
     selectTab(newId);
     setPickerOpen(false);
+    // 回傳新分頁的 id：呼叫端（首頁的 AI 路由）需要知道自己開了哪一個，
+    // 才能在猜錯時把它換掉。
+    return newId;
   }, [t.terminal_tab, t.database_tab, t.design_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab, t.loop_studio_tab, t.code_assistant_tab, t.knowledge_base_tab, t.mail_tab, t.bridge_tab_title, selectTab]);
+
+  // 首頁 AI 路由開出一個分頁（非降級結果）：記住它，讓 RouteHint 能在
+  // 這個分頁上顯示「AI 判斷你要的是 X 分頁——不對？換成…」。
+  const handleAiRouted = useCallback((tabId: string, route: RouteResult) => {
+    setRouteHint({ tabId, type: route.type, userText: route.userText });
+  }, []);
 
   const handleCloseTab = useCallback(async (id: string) => {
     const guard = closeGuardsRef.current.get(id);
@@ -251,6 +266,9 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       const canClose = await guard();
       if (!canClose) return;
     }
+    // 關掉的剛好是目前的 remote 分頁：釋放這個位置，不留著一個指向已經不存在
+    // 分頁的 id。
+    setRemoteTabId((prev) => (prev === id ? null : prev));
     // 這裡不能直接呼叫 selectTab：它內部也會呼叫 setTabs，巢狀呼叫等於在
     // 同一個 state 的更新佇列還在處理時再次 dispatch 同一個 state。改成
     // 清除跟著同一個 updater 的回傳值一起算，不另外呼叫 setTabs。
@@ -280,6 +298,24 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       return nextTabs;
     });
   }, []);
+
+  // RouteHint 的「換成…」：關掉猜錯的那個分頁，用同一句 userText 重開成
+  // 使用者選的類型，並把提示狀態指向新分頁。
+  const handleRouteHintPick = useCallback((type: TabType) => {
+    if (!routeHint) return;
+    const { tabId: oldId, userText } = routeHint;
+    // 這裡刻意不 await：終端機分頁目前沒有註冊任何 close guard（只有 LoopStudio
+    // 有），所以 handleCloseTab 對它是同步跑完的。
+    //
+    // 但如果哪天有人幫 TerminalView 加上 close guard，這行就會變成真的非同步，
+    // 於是新分頁會在使用者還沒回答確認對話框時就先開出來。屆時要改成 await，
+    // 而且要處理「使用者取消關閉」的情況——那時不應該開新分頁。
+    void handleCloseTab(oldId);
+    const opts: TabOpenOpts | undefined =
+      type === "terminal" ? { initialMission: { goal: userText, maxSteps: 20 } } : undefined;
+    const newId = handlePickerSelect(type, opts);
+    setRouteHint({ tabId: newId, type, userText });
+  }, [routeHint, handleCloseTab, handlePickerSelect]);
 
   const handleRename = useCallback((id: string, newTitle: string) => {
     setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, title: newTitle } : t)));
@@ -342,6 +378,8 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
         handleAddTab();
       } else if (e.key === "w" || e.key === "W") {
         e.preventDefault();
+        // 首頁沒有可關的分頁——不擋掉會靜默關掉背景那個看不見的分頁。
+        if (homeActiveRef.current) return;
         handleCloseTab(activeIdRef.current);
       } else if (e.key === "Tab") {
         e.preventDefault();
@@ -359,6 +397,11 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
           const nextIdx = (idx + 1) % currentTabs.length;
           selectTab(currentTabs[nextIdx].id);
         }
+      } else if (e.key === "0") {
+        // Windows/Linux 的 webview 用 Ctrl+0 重設縮放，一定要擋掉。
+        // macOS 的重設縮放是 Cmd+0，不衝突。
+        e.preventDefault();
+        setHomeActive(true);
       } else if (e.key >= "1" && e.key <= "9") {
         // Go to specific tab (1-indexed)
         const i = parseInt(e.key, 10) - 1;
@@ -395,7 +438,9 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
 
   const toggleSidebar = useCallback(() => setIsSidebarOpen(o => !o), []);
 
-  const activeTabForTitle = tabs.find((t) => t.id === activeId);
+  // 首頁不是分頁，標題列要退回 TitleBar 的預設值（"AITerm"），不能沿用
+  // 背景分頁的標題／AI 摘要。
+  const activeTabForTitle = homeActive ? undefined : tabs.find((t) => t.id === activeId);
   const titleBarText = activeTabForTitle
     ? (activeTabForTitle.type === "terminal" && activeTabForTitle.aiSummary
         ? `${activeTabForTitle.title} - ${activeTabForTitle.aiSummary}`
@@ -421,6 +466,9 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
           hasUpdate={hasUpdate}
           mailUnreadCount={mailUnreadCount}
           mailFailedAccountCount={mailFailedAccountCount}
+          onHome={() => setHomeActive(true)}
+          homeActive={homeActive}
+          remoteTabId={remoteTabId}
         />
       </div>
       
@@ -431,8 +479,21 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       )}
       {/* Resizer divider disabled for layout [2] fixed 76px slim sidebar */}
       <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
+        {/* 首頁蓋在同一塊內容區。分頁一律留在 DOM 裡（見下方 isActive 附近的
+            註解），所以這裡不能改成三元運算把分頁換掉。 */}
+        {homeActive && (
+          <HomeView onOpenTab={handlePickerSelect} tabs={tabs} onSelectTab={selectTab} onAiRouted={handleAiRouted} />
+        )}
+        {/* AI 路由猜錯分頁類型的反悔提示：只在猜出來的那個分頁正在前景時顯示。 */}
+        {!homeActive && routeHint && routeHint.tabId === activeId && (
+          <RouteHint
+            pickedType={routeHint.type}
+            onPick={handleRouteHintPick}
+            onDismiss={() => setRouteHint(null)}
+          />
+        )}
         {tabs.map((tab) => {
-          const isActive = tab.id === activeId;
+          const isActive = tab.id === activeId && !homeActive;
           return (
             <div
               key={tab.id}
@@ -459,11 +520,13 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                       prev.map((t) => t.id === tab.id ? { ...t, dbConnectionId: connId } : t)
                     );
                   }}
+                  remoteOwner={remoteTabId}
+                  onRemoteOwnerChange={setRemoteTabId}
                 />
               ) : tab.type === "design" ? (
-                <DesignView isActive={isActive} />
+                <DesignView isActive={isActive} tabId={tab.id} remoteOwner={remoteTabId} onRemoteOwnerChange={setRemoteTabId} />
               ) : tab.type === "cross-db" ? (
-                <CrossDbView isActive={isActive} />
+                <CrossDbView tabId={tab.id} remoteOwner={remoteTabId} onRemoteOwnerChange={setRemoteTabId} />
               ) : tab.type === "vcs" ? (
                 <VcsView sessionId={lastTerminalPtyId} isActive={isActive} />
               ) : tab.type === "doc-converter" ? (
@@ -497,17 +560,31 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                     setLastTerminalPtyId(ptyId);
                   }}
                   onAgentProgress={(done, total) => {
-                    setTabs((prev) =>
-                      prev.map((t) => t.id === tab.id ? { ...t, agentProgress: { done, total } } : t)
-                    );
+                    setTabs((prev) => setTabAgentProgress(prev, tab.id, { done, total }));
+                  }}
+                  onMissionEnd={() => {
+                    // 「進行中的任務」只該列真的在跑的——任務結束（成功或失敗）就清掉，
+                    // 不用 status 欄位標記完成/失敗，那個訊號已經由 onAttention 負責。
+                    setTabs((prev) => setTabAgentProgress(prev, tab.id, undefined));
                   }}
                   onSummaryUpdate={(summary) => {
                     setTabs((prev) =>
                       prev.map((t) => t.id === tab.id ? { ...t, aiSummary: summary } : t)
                     );
                   }}
+                  onCwdChange={(cwd) => {
+                    setTabs((prev) =>
+                      prev.map((t) => t.id === tab.id ? { ...t, cwd } : t)
+                    );
+                    // 傳上一次的目錄進去：相同就不記錄。理由見 recordProject
+                    // 的註解——沒有這個，開機本身就會洗掉整份最近專案清單。
+                    recordProject(cwd, tab.cwd);
+                  }}
                   onAttention={(kind) => handleAttention(tab.id, tab.title, kind)}
                   onClaudeDetected={onClaudeDetected}
+                  tabId={tab.id}
+                  remoteOwner={remoteTabId}
+                  onRemoteOwnerChange={setRemoteTabId}
                 />
               )}
             </div>
@@ -518,6 +595,10 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
 
       {/* Enterprise: Background Task Progress Panel (10.2) */}
       {(() => {
+        // 首頁的 RunningTasks 已經涵蓋「顯示進行中任務」的職責且更完整
+        // （不受 enterpriseTask / activeId 過濾限制），停在首頁時這個浮動
+        // 面板不渲染，避免兩者重複出現、且較不完整的這個漏掉 activeId 那筆。
+        if (homeActive) return null;
         const bgTasks = tabs.filter(
           (t) => t.type === "terminal" && t.enterpriseTask && t.agentProgress && t.id !== activeId
         );

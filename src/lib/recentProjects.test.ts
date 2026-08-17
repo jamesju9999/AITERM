@@ -1,0 +1,72 @@
+import { describe, expect, it, beforeEach } from "vitest";
+import { recordProject, listRecentProjects, RECENT_PROJECTS_KEY, MAX_RECENT_PROJECTS } from "./recentProjects";
+
+beforeEach(() => {
+  localStorage.clear();
+});
+
+describe("recentProjects", () => {
+  it("記錄下來的目錄讀得回來", () => {
+    recordProject("/repo/aiterm");
+    expect(listRecentProjects().map((p) => p.path)).toEqual(["/repo/aiterm"]);
+  });
+
+  it("最近使用的排在最前面", () => {
+    recordProject("/a");
+    recordProject("/b");
+    expect(listRecentProjects().map((p) => p.path)).toEqual(["/b", "/a"]);
+  });
+
+  // 同一個目錄反覆進出很常見，不去重的話清單會被同一筆塞滿。
+  it("同一個目錄只留一筆，並移到最前面", () => {
+    recordProject("/a");
+    recordProject("/b");
+    recordProject("/a");
+    expect(listRecentProjects().map((p) => p.path)).toEqual(["/a", "/b"]);
+  });
+
+  it(`最多保留 ${MAX_RECENT_PROJECTS} 筆，超過就丟掉最舊的`, () => {
+    for (let i = 0; i < MAX_RECENT_PROJECTS + 5; i++) recordProject(`/p${i}`);
+    const list = listRecentProjects();
+    expect(list).toHaveLength(MAX_RECENT_PROJECTS);
+    expect(list[0].path).toBe(`/p${MAX_RECENT_PROJECTS + 4}`);
+    expect(list.map((p) => p.path)).not.toContain("/p0");
+  });
+
+  it("內容壞掉時回空陣列而不是丟例外", () => {
+    localStorage.setItem(RECENT_PROJECTS_KEY, "{ not json");
+    expect(listRecentProjects()).toEqual([]);
+  });
+
+  // 開機時每個還原的分頁都會回報一次自己原本就在的目錄（TerminalView 的
+  // 輪詢每次執行都把 lastSaved 重設為空字串）。少了這道判斷，開機本身就會
+  // 把清單洗成「反向的分頁清單」，開著十個分頁時整份清單會被一次擠光。
+  it("目錄沒變就不記錄", () => {
+    recordProject("/a");
+    recordProject("/b");
+    recordProject("/b", "/b"); // 還原後停在原地，不算一次新的使用
+    expect(listRecentProjects().map((p) => p.path)).toEqual(["/b", "/a"]);
+  });
+
+  it("目錄真的變了才記錄", () => {
+    recordProject("/a");
+    recordProject("/b", "/a"); // 從 /a cd 到 /b
+    expect(listRecentProjects().map((p) => p.path)).toEqual(["/b", "/a"]);
+  });
+
+  // 開機情境的完整重現：三個還原分頁各自回報自己原本的目錄。
+  it("開機時所有分頁回報原目錄，不會洗掉既有清單", () => {
+    recordProject("/really-recent");
+    recordProject("/x1");
+    const before = listRecentProjects().map((p) => p.path);
+
+    for (const p of ["/tabA", "/tabB", "/tabC"]) recordProject(p, p);
+
+    expect(listRecentProjects().map((p) => p.path)).toEqual(before);
+  });
+
+  it("空字串不記錄", () => {
+    recordProject("");
+    expect(listRecentProjects()).toEqual([]);
+  });
+});

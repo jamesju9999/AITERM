@@ -543,3 +543,23 @@ export function MinimizeIcon({ size = 16, ...props }: IconProps) {
     </svg>
   );
 }
+
+// 32. Home（側邊欄固定的首頁按鈕）
+export function HomeIcon({ size = 16, ...props }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <path d="m3 9 9-7 9 7" />
+      <path d="M5 10v10a1 1 0 0 0 1 1h3v-6h6v6h3a1 1 0 0 0 1-1V10" />
+    </svg>
+  );
+}

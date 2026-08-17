@@ -13,20 +13,27 @@ export interface DatabaseViewProps {
   isActive: boolean;
   dbConnectionId?: string;
   onConnectionSelected: (connId: string) => void;
+  /** 目前誰擁有 Telegram Remote（`TerminalApp` 的 `remoteTabId`）。null = 沒有人。 */
+  remoteOwner: string | null;
+  /** 使用者切換這個分頁的 Remote 開關時呼叫。 */
+  onRemoteOwnerChange: (owner: string | null) => void;
 }
 
 type SubTab = "browse" | "ai" | "sql";
 
-export function DatabaseView({ tabId: _tabId, isActive: _isActive, dbConnectionId, onConnectionSelected }: DatabaseViewProps) {
+export function DatabaseView({ tabId, isActive: _isActive, dbConnectionId, onConnectionSelected, remoteOwner, onRemoteOwnerChange }: DatabaseViewProps) {
   const { t } = useLocale();
   const [subTab, setSubTab] = useState<SubTab>("browse");
   const [schemas, setSchemas] = useState<string[]>([]);
   const [activeSchema, setActiveSchema] = useState<string>("");
   const [connectError, setConnectError] = useState<string | null>(null);
 
-  const { isRemoteEnabled, setIsRemoteEnabled, sendRemoteResponse } = useTelegramRemoteControl(
-    dbConnectionId || "",
-    _isActive,
+  // ownerKey 用 tab.id，不是 dbConnectionId：後者在沒選連線前是 undefined，
+  // 且换連線就變，跟這個分頁本身「是不是唯一 Remote 分頁」無關。
+  const { isRemoteEnabled, toggleRemote, sendRemoteResponse } = useTelegramRemoteControl(
+    tabId,
+    remoteOwner,
+    onRemoteOwnerChange,
     (text) => {
       setSubTab("ai");
       setTimeout(() => {
@@ -118,7 +125,7 @@ export function DatabaseView({ tabId: _tabId, isActive: _isActive, dbConnectionI
           <button
             className={`db-view__subtab ${isRemoteEnabled ? "aiterm-agent-toggle--on" : ""}`}
             style={{ marginLeft: 8 }}
-            onClick={() => setIsRemoteEnabled(!isRemoteEnabled)}
+            onClick={toggleRemote}
             title={t.db_remote_tooltip}
           >
             📱 Remote

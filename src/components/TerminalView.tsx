@@ -51,6 +51,7 @@ import { RobotIcon, SparklesIcon, SmartphoneIcon } from "./Icons";
 import { TerminalBlockCard } from "./TerminalBlockCard";
 import { findNextBlockMatch, findPreviousBlockMatch, type BlockSearchCursor } from "../lib/blockSearch";
 import { summarizeCommands } from "../lib/summarizeTab";
+import { reportAgentStep, type AgentStepInfo } from "../lib/agentStepReport";
 import { getGitBlockInfo } from "../ipc/vcs";
 import { isClaudeCommand } from "../lib/claudeCommand";
 import "./TerminalView.css";
@@ -116,10 +117,16 @@ export interface TerminalViewProps {
   initialMission?: { goal: string; maxSteps: number };
   /** Enterprise task metadata — triggers on_complete actions when the mission finishes. */
   enterpriseTask?: { taskId: string; workBranch: string; onComplete: unknown };
-  /** Called on each agent step when running an enterprise task, for the progress panel. */
+  /** 每個 agent 步驟完成時呼叫，回報首頁「進行中的任務」的進度——
+   *  不限企業任務，Telegram 遠端指令、終端機內 `/agent`、WarpInput 送出的 mission 都會回報。 */
   onAgentProgress?: (done: number, total: number) => void;
+  /** agent mission 結束時呼叫（不論成功或失敗），讓首頁清掉這個分頁的進度——
+   *  「進行中的任務」只該列真的在跑的，跑完/失敗的訊號另外由 onAttention 負責。 */
+  onMissionEnd?: () => void;
   /** Called with a freshly generated AI summary of this tab's conversation, for the title bar. */
   onSummaryUpdate?: (summary: string) => void;
+  /** 工作目錄變了就回報一次。上層用它更新分頁狀態並記進最近專案。 */
+  onCwdChange?: (cwd: string) => void;
   /** 這個分頁發生了需要使用者注意的事。TerminalView 一律回報，
    *  「這個分頁是不是 active」與「視窗有沒有 focus」都由 TerminalApp 判斷——
    *  避免那些條件在 xterm / PTY 事件的 closure 裡變 stale。 */
@@ -131,6 +138,20 @@ export interface TerminalViewProps {
    * 環境變數只能在 PTY spawn 的瞬間決定，所以這個值在分頁建立後改變沒有效果。
    */
   claudeBridge?: boolean;
+  /** 這個分頁的穩定識別碼（`tab.id`），當作 Telegram Remote 的 ownerKey。 */
+  tabId: string;
+  /**
+   * 目前誰擁有 Remote（`TerminalApp` 的 `remoteTabId`）。null = 沒有人。
+   * isRemoteEnabled 由 `tabId === remoteOwner` 推導，跟這個分頁在畫面上
+   * 看不看得到無關（切到首頁也一樣算數，這正是本欄位存在的理由：修好
+   * Telegram 遠端遙控在首頁按鈕出現後的回歸）。
+   */
+  remoteOwner?: string | null;
+  /**
+   * 使用者切換這個分頁的 Remote 開關時呼叫，讓 TerminalApp 更新
+   * remoteTabId（天然互斥：在這裡開會自動關掉原本開著的那個分頁）。
+   */
+  onRemoteOwnerChange?: (owner: string | null) => void;
 }
 
 // The live terminal pane's visible height shrinks to just the current content
@@ -155,7 +176,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onSummaryUpdate, onAttention, onClaudeDetected, claudeBridge }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, claudeBridge, tabId, remoteOwner = null, onRemoteOwnerChange }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -172,6 +193,13 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const [sessionId, setSessionId] = useState<string>("");
   const [displayCwd, setDisplayCwd] = useState<string>("");
   const lastCwdRef = useRef<string>("");
+
+  // Bridge onCwdChange into a ref，理由跟 onSummaryUpdateRef 一樣：TerminalApp
+  // 每次 render 都會傳新的 inline arrow，若放進下面輪詢 effect 的 dep array，
+  // 會害那個 effect 每次 render 就重跑一次（重置 lastSaved/homePath、重建
+  // setInterval），這裡刻意不動那段既有邏輯。
+  const onCwdChangeRef = useRef(onCwdChange);
+  useEffect(() => { onCwdChangeRef.current = onCwdChange; }, [onCwdChange]);
 
   // Persist the active terminal's CWD to localStorage so it can be
   // restored on the next session. Also updates the status bar CWD display.
@@ -192,6 +220,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             : normalized;
           lastCwdRef.current = cwd;
           setDisplayCwd(pretty);
+          onCwdChangeRef.current?.(cwd);
         }
       } catch { /* session may not be ready yet */ }
     }, 2000);
@@ -638,9 +667,12 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   }, []); // hostRef and sessionRef are stable refs — no deps needed
 
   // Telegram Remote Control
-  const { isRemoteEnabled, setIsRemoteEnabled, sendRemoteResponse } = useTelegramRemoteControl(
-    sessionId,
-    isActive,
+  // ownerKey 用 tab.id，不是 sessionId：sessionId 在 PTY 建立前是空字串，
+  // 空字串跟 remoteOwner 的初始值 null 比較沒有意義；tab.id 是穩定的 UUID。
+  const { isRemoteEnabled, toggleRemote, sendRemoteResponse } = useTelegramRemoteControl(
+    tabId,
+    remoteOwner,
+    (owner) => onRemoteOwnerChange?.(owner),
     (text) => {
       const agentQuery = parseAgentPrefix(text);
       const aiQuery = parseAiPrefix(text);
@@ -672,14 +704,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               stopMission();
               if (sessionRef.current) writePty(sessionRef.current, "\r").catch(console.error);
               sendRemoteResponse(explanation ? `Agent: ${explanation}` : "[Agent Mission Completed] 🎉");
+              onMissionEnd?.();
             },
             onFail: (msg) => {
               setAgentPhase({ phase: "failed", reason: msg });
               stopMission();
               if (sessionRef.current) writePty(sessionRef.current, "\r").catch(console.error);
               sendRemoteResponse(`⚠ Agent stopped: ${msg}`);
+              onMissionEnd?.();
             },
-            onStepComplete: (info) => sendRemoteResponse(formatAgentStepForRemote(info)),
+            onStepComplete: (info: AgentStepInfo) => reportAgentStep(info, { sendRemoteResponse, onAgentProgress }),
           });
         }
       } else {
@@ -778,7 +812,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
   // (Agent loop is now callback-driven via runAgentLoop — no useEffect needed)
 
-  // Auto-start agent loop when an enterprise task has been dispatched to this terminal.
+  // 分頁一建立就帶著任務時，自動啟動 agent loop。兩個來源：企業任務派送，
+  // 以及首頁輸入框（那個沒有 enterpriseTask）。底下 onComplete/onFail 裡的
+  // git push/PR 與 enterpriseCompleteTask 都包在 enterpriseTask 判斷內，
+  // 所以非企業來源的任務會正常跑完、正常清進度，只是跳過企業收尾。
   const initialMissionFiredRef = useRef(false);
   useEffect(() => {
     if (!initialMission || initialMissionFiredRef.current) return;
@@ -813,6 +850,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           term.write(`\r\n\x1b[32m[Enterprise Task Completed] ✓\x1b[0m\r\n`);
           stopMission();
           writePty(session, "\r").catch(console.error);
+          onMissionEnd?.();
           // Trigger on_complete (push + optional PR) and mark task done.
           if (enterpriseTask && initialCwd) {
             term.write(`\r\n\x1b[36m[Enterprise: running on_complete...]\x1b[0m\r\n`);
@@ -834,6 +872,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           term.write(`\r\n\x1b[33m⚠ Enterprise Task stopped: ${msg}\x1b[0m\r\n`);
           stopMission();
           writePty(session, "\r").catch(console.error);
+          onMissionEnd?.();
           if (enterpriseTask) {
             enterpriseCompleteTask(enterpriseTask.taskId).catch(console.error);
           }
@@ -1178,6 +1217,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
              agentAbortRef.current = true;
              term.write("\r\n\x1b[33m[Agent Interrupted]\x1b[0m");
              stopMission();
+             // 中斷後 runAgentLoop 開頭的 abortRef 檢查會直接 return，
+             // onComplete/onFail 都不會被呼叫——這裡是唯一會漏報 mission
+             // 結束的出口，得自己補一次，否則首頁的進度會永遠掛著。
+             onMissionEnd?.();
           }
 
           const agentQuery = parseAgentPrefix(line);
@@ -1214,14 +1257,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                 stopMission();
                 writePty(session, "\r").catch(console.error);
                 sendRemoteResponse("[Agent Mission Completed] 🎉");
+                onMissionEnd?.();
               },
               onFail: (msg) => {
                 setAgentPhase({ phase: "failed", reason: msg });
                 stopMission();
                 writePty(session, "\r").catch(console.error);
                 sendRemoteResponse(`⚠ Agent stopped: ${msg}`);
+                onMissionEnd?.();
               },
-              onStepComplete: (info) => sendRemoteResponse(formatAgentStepForRemote(info)),
+              onStepComplete: (info: AgentStepInfo) => reportAgentStep(info, { sendRemoteResponse, onAgentProgress }),
             });
             continue;
           }
@@ -1437,7 +1482,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             title={t.term_remote_tooltip}
             onClick={(e) => {
               e.stopPropagation();
-              setIsRemoteEnabled((prev) => !prev);
+              toggleRemote();
             }}
             style={{ display: "flex", alignItems: "center", gap: "6px" }}
           >
@@ -1690,13 +1735,15 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                     setAgentPhase({ phase: "done", steps: agentStepRef.current });
                     stopMission();
                     if (sessionId) writePty(sessionId, "\r").catch(console.error);
+                    onMissionEnd?.();
                   },
                   onFail: (msg) => {
                     setAgentPhase({ phase: "failed", reason: msg });
                     stopMission();
                     if (sessionId) writePty(sessionId, "\r").catch(console.error);
+                    onMissionEnd?.();
                   },
-                  onStepComplete: (info) => sendRemoteResponse(formatAgentStepForRemote(info)),
+                  onStepComplete: (info: AgentStepInfo) => reportAgentStep(info, { sendRemoteResponse, onAgentProgress }),
                 });
               }
               return;
@@ -1864,35 +1911,6 @@ function handleAiQuery(
  * Each step: ask AI → auto-execute command → wait for block completion → extract output → repeat.
  * This does NOT rely on React useEffect — the loop is driven by OSC 133;D completion callbacks.
  */
-interface AgentStepInfo {
-  /** 1-based step index for display (matches the AgentStatusBar "步驟 N/M" counter). */
-  stepIndex: number;
-  maxSteps: number;
-  command: string;
-  exitCode: number;
-  /** Already trimmed and length-capped (~2000 chars) by the agent loop. */
-  output: string;
-}
-
-/** Format one agent step's command + output as a single Telegram message. */
-function formatAgentStepForRemote(info: AgentStepInfo): string {
-  // xterm's translateToString already returns plain text, but defend
-  // against stray escape codes from copy-pasted prompts etc.
-  const cleaned = info.output.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "").trim();
-  const exitTag = info.exitCode === 0 ? "" : ` ⚠️ exit ${info.exitCode}`;
-  const header = `[${info.stepIndex}/${info.maxSteps}] $ ${info.command}${exitTag}`;
-  if (!cleaned) return header;
-
-  // Telegram caps text messages at 4096 chars; reserve room for header + marker.
-  const MAX = 3500;
-  let body = cleaned;
-  if (body.length > MAX) {
-    const half = Math.floor(MAX / 2);
-    body = `${body.slice(0, half)}\n... (truncated, ${body.length - MAX} chars omitted) ...\n${body.slice(-half)}`;
-  }
-  return `${header}\n${body}`;
-}
-
 interface AgentLoopParams {
   t: any;
   goal: string;

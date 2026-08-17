@@ -204,6 +204,52 @@ describe("reorderTabs", () => {
   });
 });
 
+describe("TabBar 首頁按鈕", () => {
+  it("點首頁按鈕會呼叫 onHome", () => {
+    const onHome = vi.fn();
+    renderTabBar({ onHome, homeActive: false });
+    fireEvent.click(screen.getByTitle(/Ctrl\+0/));
+    expect(onHome).toHaveBeenCalledTimes(1);
+  });
+
+  it("首頁是目前畫面時，按鈕標成 active", () => {
+    renderTabBar({ onHome: () => {}, homeActive: true });
+    expect(screen.getByTitle(/Ctrl\+0/).className).toContain("active");
+  });
+
+  // 首頁不是分頁：它不能被拖曳排序、也不能佔用 Ctrl+1~9 的編號。
+  it("首頁按鈕不在分頁清單裡", () => {
+    const { container } = renderTabBar({ onHome: () => {}, homeActive: true });
+    const inList = container.querySelectorAll(".aiterm-tabbar-tabs .aiterm-tab");
+    expect(inList.length).toBe(1); // 只有 baseTabs 的那一個分頁
+  });
+
+  // 側邊欄收合成 48px 只剩圖示時，首頁按鈕必須還在。
+  it("側邊欄收合時首頁按鈕仍在", () => {
+    renderTabBar({ onHome: () => {}, homeActive: false, isSidebarOpen: false });
+    expect(screen.getByTitle(/Ctrl\+0/)).toBeTruthy();
+  });
+
+  it("沒有給 onHome 就不顯示首頁按鈕", () => {
+    renderTabBar({});
+    expect(screen.queryByTitle(/Ctrl\+0/)).toBeNull();
+  });
+
+  // 停在首頁時，內容區顯示的是首頁而不是任何分頁；此時分頁若還亮著 active，
+  // 側邊欄會有兩個「選取中」訊號互相矛盾。
+  it("首頁顯示中時，分頁不顯示 active", () => {
+    const { container } = renderTabBar({ onHome: () => {}, homeActive: true });
+    const tab = container.querySelector(".aiterm-tabbar-tabs .aiterm-tab")!;
+    expect(tab.className).not.toContain("active");
+  });
+
+  it("離開首頁後，active 分頁恢復標示", () => {
+    const { container } = renderTabBar({ onHome: () => {}, homeActive: false });
+    const tab = container.querySelector(".aiterm-tabbar-tabs .aiterm-tab")!;
+    expect(tab.className).toContain("active");
+  });
+});
+
 describe("TabBar 分頁拖曳排序", () => {
   const threeTabs: Tab[] = [
     { id: "t1", title: "Tab 1", type: "terminal" },
@@ -377,5 +423,66 @@ describe("TabBar Claude Code bridge 外觀", () => {
     });
     expect(screen.getByText("CC")).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "終端機正在等待你的回應" })).toBeInTheDocument();
+  });
+});
+
+// LocaleProvider 預設 zh-TW，所以這裡斷言 zh-TW 的無障礙名稱。
+describe("TabBar Telegram remote indicator", () => {
+  const twoTabs: Tab[] = [
+    { id: "t1", title: "Tab 1", type: "terminal" },
+    { id: "t2", title: "Tab 2", type: "terminal" },
+  ];
+
+  it("remoteTabId 指到的那個分頁會顯示指示器", () => {
+    renderTabBar({ tabs: twoTabs, activeId: "t1", remoteTabId: "t2" });
+    expect(screen.getByRole("img", { name: "這個分頁已開啟 Telegram 遠端遙控" })).toBeTruthy();
+  });
+
+  it("沒有分頁開著 Remote 時什麼都不顯示", () => {
+    renderTabBar({ tabs: twoTabs, activeId: "t1", remoteTabId: null });
+    expect(screen.queryByRole("img", { name: "這個分頁已開啟 Telegram 遠端遙控" })).toBeNull();
+  });
+
+  // 四種分頁類型都能擁有 Remote（terminal / database / design / cross-db），
+  // 指示器要跟著擁有者跑。這條原本斷言「非終端機分頁不顯示」，那是 Remote
+  // 還只有終端機能用時的寫法——擁有權擴及四種類型後就變成釘住錯誤行為，
+  // 使用者在資料庫分頁開了 Remote 卻看不到任何訊號。
+  it.each([
+    ["database", "資料庫"],
+    ["design", "設計"],
+    ["cross-db", "跨庫查詢"],
+  ] as const)("%s 分頁擁有 Remote 時也會顯示指示器", (type, title) => {
+    renderTabBar({
+      tabs: [twoTabs[0], { id: "x1", title, type }],
+      activeId: "t1",
+      remoteTabId: "x1",
+    });
+    expect(screen.getByRole("img", { name: "這個分頁已開啟 Telegram 遠端遙控" })).toBeTruthy();
+  });
+
+  // 只有擁有者顯示——這是「同時只有一個分頁能擁有 Remote」在 UI 上的體現。
+  it("只有 remoteTabId 指到的那一個顯示，其他分頁沒有", () => {
+    renderTabBar({
+      tabs: [twoTabs[0], { id: "d1", title: "資料庫", type: "database" }],
+      activeId: "t1",
+      remoteTabId: "d1",
+    });
+    expect(screen.getAllByRole("img", { name: "這個分頁已開啟 Telegram 遠端遙控" })).toHaveLength(1);
+  });
+
+  // 指示器跟 attention 點、bridge 徽章分踞不同角落，三個要能同時出現且各自可分辨。
+  it("跟 attention 點、bridge 徽章同時出現時仍然可分辨", () => {
+    renderTabBar({
+      tabs: [
+        twoTabs[0],
+        { ...twoTabs[1], attention: "waiting", claudeBridge: "default" },
+      ],
+      activeId: "t1",
+      remoteTabId: "t2",
+    });
+    const remote = screen.getByRole("img", { name: "這個分頁已開啟 Telegram 遠端遙控" });
+    const attention = screen.getByRole("img", { name: "終端機正在等待你的回應" });
+    expect(screen.getByText("CC")).toBeInTheDocument();
+    expect(remote.className).not.toBe(attention.className);
   });
 });

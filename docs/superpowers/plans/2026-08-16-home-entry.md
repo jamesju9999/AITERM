@@ -100,10 +100,9 @@ describe("getTabCatalog", () => {
 
   // mail 的後端是完整的，只是還沒對使用者開放；用 hidden 旗標記錄這件事，
   // 比在兩個地方各註解掉一行可靠。
-  it("mail 標成 hidden，其餘不是", () => {
+  it("api-docs 與 mail 標成 hidden，其餘不是", () => {
     const catalog = getTabCatalog(t);
-    expect(catalog.find((e) => e.type === "mail")!.hidden).toBe(true);
-    expect(catalog.filter((e) => e.hidden).map((e) => e.type)).toEqual(["mail"]);
+    expect(catalog.filter((e) => e.hidden).map((e) => e.type)).toEqual(["api-docs", "mail"]);
   });
 
   it("visibleTabCatalog 濾掉 hidden 的項目", () => {
@@ -153,7 +152,7 @@ export function getTabCatalog(t: Translations): TabCatalogEntry[] {
     { type: "cross-db",       icon: <LinkIcon size={18} />,      label: t.cross_db_tab,       desc: t.new_cross_db_desc },
     { type: "vcs",            icon: <BranchIcon size={18} />,    label: t.vcs_tab,            desc: t.new_vcs_desc },
     { type: "doc-converter",  icon: <FileTextIcon size={18} />,  label: t.doc_converter_tab,  desc: t.new_doc_converter_desc },
-    { type: "api-docs",       icon: <BookOpenIcon size={18} />,  label: t.api_docs_tab,       desc: t.new_api_docs_desc },
+    { type: "api-docs",       icon: <BookOpenIcon size={18} />,  label: t.api_docs_tab,       desc: t.new_api_docs_desc, hidden: true },
     { type: "loop-studio",    icon: <RefreshIcon size={18} />,   label: t.loop_studio_tab,    desc: t.new_loop_studio_desc },
     { type: "code-assistant", icon: <CodeIcon size={18} />,      label: t.code_assistant_tab, desc: t.new_code_assistant_desc },
     { type: "knowledge-base", icon: <LibraryIcon size={18} />,   label: t.knowledge_base_tab, desc: t.new_knowledge_base_desc },
@@ -166,14 +165,9 @@ export function visibleTabCatalog(t: Translations): TabCatalogEntry[] {
 }
 ```
 
-**注意：** `api-docs` 原本不在 `NewTabPicker` 的清單裡。確認 `t.new_api_docs_desc` 這個 i18n key 是否存在（`grep -n "new_api_docs_desc" src/lib/i18n.ts`）。不存在就在 `zhTW` 與 `enRaw` 兩邊各補一筆：
+**注意：** `api-docs` 原本不在 `NewTabPicker` 的清單裡，而且那是**刻意**的——commit `3547799 feat(tabs): hide the API Docs entry from the new-tab picker` 明確說「只拿掉入口，程式碼保留」。它和 `mail` 是同一種狀況，所以兩者都要 `hidden: true`。**這個 Task 是純重構，使用者在選單裡看到的項目不可以有任何變化。**
 
-```ts
-// zhTW
-new_api_docs_desc: "瀏覽與測試 API 文件",
-// enRaw
-new_api_docs_desc: "Browse and test API documentation",
-```
+`t.new_api_docs_desc` 這個 i18n key 已經存在於 `zhTW` 與 `enRaw`（實測確認過），不需要新增。
 
 - [ ] **Step 4: 執行測試確認它通過**
 
@@ -599,13 +593,24 @@ Run: `npm run tauri:dev`
 4. **在首頁與終端機分頁之間來回切換至少 5 次，終端機不會變空白或報錯**（xterm resize 地雷）
 5. `Ctrl+0` 在終端機有焦點時仍能回首頁，且畫面沒有被縮放
 
+**首頁按鈕的外觀（Task 2 的測試對這些一句話都沒有證明——jsdom 不套 CSS，那些結論全是從 CSS 推導出來的）：**
+
+6. 側邊欄展開與收合（48px）兩種狀態下，首頁按鈕都跟其他分頁等高、不突兀
+7. 停在首頁時，首頁按鈕亮起，而且**分頁沒有任何一個還亮著 active**（兩個選取中訊號會互相矛盾）
+8. `HomeIcon` 看起來確實是一棟房子，線條粗細與旁邊的分頁圖示一致
+9. 首頁按鈕與分頁清單之間的間距（`gap: 16px` + `margin-top: 8px` + `margin-bottom: 6px` = 30px）看起來合理，沒有大到像斷開
+
 ---
 
 # Phase 2：免費就有的狀態資料
 
 ## Task 5：進行中的任務
 
-`agentProgress` 已經由 `TerminalView` 的 `onAgentProgress` 寫進 `tabs`（`TerminalApp.tsx:499`）。**不要沿用 `TerminalApp.tsx:522` 那個 `enterpriseTask` 過濾**——那是企業浮動面板的規則，首頁要顯示全部。
+`agentProgress` 已經由 `TerminalView` 的 `onAgentProgress` 寫進 `tabs`。**不要沿用企業浮動面板那個 `enterpriseTask` 過濾**——那是它自己的規則，首頁要顯示全部。
+
+**一併處理的既有互動（Task 3+4 的審查發現）：** 企業浮動面板的條件是 `t.id !== activeId`，用意是「只顯示看不到的分頁的進度」。但停在首頁時**所有**分頁都看不到，包括 `activeId` 那個，所以它會漏掉一個。而首頁本身又會有 RunningTasks 區塊列出全部任務——兩者同時出現在首頁上是重複的。
+
+決定：**首頁顯示時，整個企業浮動面板不要出現**（改成 `homeActive` 為 true 就不渲染）。理由是首頁的 RunningTasks 區塊已經涵蓋它的職責，而且涵蓋得更完整。這需要把 `homeActive` 傳進那段渲染邏輯。
 
 **Files:**
 - Create: `src/components/HomeView/RunningTasks.tsx`
@@ -2256,6 +2261,103 @@ git commit -m "feat(home): AI 猜錯分頁類型時可換一種或關掉提示"
 Run: `npm run tauri:dev`
 
 確認：從首頁打一句話 → 開出分頁後上方出現提示 → 用「換成…」挑另一種 → 原分頁關掉、新類型開起來且提示跟著更新 → 按 ✕ 提示消失且不再出現。
+
+---
+
+## Task 16：讓「進行中的任務」在一般使用情境下真的有東西
+
+Task 5 的審查發現的**計畫層缺口**——Task 5 的實作照計畫做對了，是計畫本身的價值敘述撐不住。
+
+**已查證的事實：**
+
+- `onAgentProgress` 全 repo 只有一個呼叫點：`TerminalView.tsx:810`，位於 `initialMission` 的自動啟動路徑裡
+- `initialMission` 只在企業任務派送時被建立（`TerminalApp.tsx:196`），且**必定**與 `enterpriseTask` 同時設定
+- 使用者手動打 `/agent` 開的 mission（`TerminalView.tsx:651`）的 `onStepComplete` 只做 `sendRemoteResponse`（轉發 Telegram），**不寫 `agentProgress`**
+
+**後果：首頁的「進行中的任務」在使用者手動跑 agent 時永遠是空的**，只有企業任務會出現。而企業任務是多數使用者不會用到的功能。連帶地，Task 5 刻意「不套 `enterpriseTask` 過濾」這個決定目前是 no-op——今天每個帶 `agentProgress` 的分頁都同時帶 `enterpriseTask`。
+
+- [ ] **Step 1: 把 `onAgentProgress` 接到手動 mission 路徑**
+
+`TerminalView.tsx:651` 那條 `runAgentLoop` 的 `onStepComplete` 目前是：
+```tsx
+onStepComplete: (info) => sendRemoteResponse(formatAgentStepForRemote(info)),
+```
+要在**不破壞既有 Telegram 轉發**的前提下，additionally 呼叫 `onAgentProgress?.(info.stepIndex, info.maxSteps)`。`TerminalView.tsx:1194` 那條路徑（另一個 `startMission`）也要檢查。
+
+**先寫測試證明現況**：手動 mission 跑完一步之後 `onAgentProgress` 不會被呼叫（會綠，證明缺口存在），再改實作讓它變成該被呼叫。
+
+- [ ] **Step 2: 任務結束時清掉 `agentProgress`**
+
+同一個審查發現的第二個缺口：`agentProgress` 全 repo 只有寫入、**沒有任何地方把它設回 `undefined`**。`onComplete` / `onFail` 都不碰它。所以一個跑完的 mission 會永遠以 `5 / 5` 掛在「進行中的任務」底下。
+
+這在企業浮動面板時代就存在（且較隱蔽，因為那面板只在非 active 分頁出現），但首頁把它擺在最上方、還冠上「進行中」的標題，會把既有瑕疵放大成明顯的錯誤資訊。
+
+兩種做法擇一（實作前先回報你的選擇與理由）：
+- 在 `onComplete` / `onFail` 把 `agentProgress` 設回 `undefined`
+- 把 `agentProgress` 擴成帶 `status: "running" | "done" | "failed"`，讓首頁能區分呈現
+
+- [ ] **Step 3: 考慮把選取邏輯抽成共用函式**
+
+審查者的觀察：`pct` 的計算與進度條結構現在在 `RunningTasks.tsx` 與 `TerminalApp.tsx` 的企業面板各寫了一份，而 Step 2 的 bug 會同時傷到兩邊。收斂點不是廢掉其中一個（兩者職責不同：企業面板是**通知**「你看不到的地方有事在動」，首頁是**總覽**），而是把 running-task 的選取與正規化抽成共用純函式（例如 `selectRunningTasks(tabs, { excludeId })`），兩個呈現層各自套自己的過濾規則。
+
+**這一步是選配。** 只有在 Step 1、2 做完後發現真的重複到痛，才做。
+
+---
+
+## Task 14：修好「預設停在首頁」造成的既有功能回歸
+
+Task 3+4 的品質審查發現的。**追查後的結論跟當初的假設不同**，以下是實際查證過的事實（2026-08-16）。
+
+### 追查結果（已驗證，不要重新假設）
+
+**回歸成立，但範圍與性質跟原本以為的不一樣：**
+
+1. **`isActive` 只閘住入站。** 它只擋 `listen("telegram-message-received")` 的註冊（`useTelegramRemoteControl.ts:35-66`），而且在 deps 裡，所以離開分頁會**主動 unlisten**。出站的 `sendRemoteResponse` 只看 `isRemoteEnabled`，不受影響。所以失效是**單向的**：手機→終端機斷，終端機→手機正常。
+
+2. **訊息永久遺失，兩端都掉。** Tauri 2.10.3 的 `emit_js_filter`（`listener.rs:269-293`）查不到 listener 就直接 `Ok(())`，**沒有任何 buffer 或 replay**。更糟的是 `telegram/mod.rs:118` 的 `offset = offset.max(update.update_id + 1)` 在 emit **之前**執行且與成敗無關——下一輪 `getUpdates?offset=N` 等於對 Telegram 伺服器 ACK，訊息從 Telegram 佇列也被刪掉。**切回分頁不會補送。**
+
+3. **「開 app 就壞」不成立**，因為 `isRemoteEnabled` 的持久化本身是壞的（獨立的既有 bug）：storage key 用 PTY `sessionId`，而它在 `useState` initializer 執行時是 `""`（`TerminalView.tsx:179`），且每次啟動都是新 UUID（`manager.rs:46`）。所以**冷啟動恆為 false**，接著持久化 effect 立刻把 `"false"` 寫回去蓋掉舊值。程式碼註解自己寫著要檢查「non-empty, non-UUID-like」，但 UUID 那半段從沒實作。
+
+   **因此真正的回歸是**：使用者手動開啟 Remote 後，**只要按首頁按鈕**（而首頁是啟動預設畫面）listener 就 unlisten，該期間指令永久遺失。舊行為只有「切到別的分頁」會斷；首頁多了一條路徑，而且是預設畫面。
+
+4. **`lastTerminalPtyId` 不適合當新閘門**（原計畫的建議是錯的）：它在開機瞬間到 `createPty` 回來之間是 `""`；多分頁還原時誰先 resolve 誰贏、順序不確定；語意是「最近有 PTY 的終端機」而非「使用者開了 Remote 的那個」——開了 Remote 的分頁會被新開的終端機搶走。
+
+5. **`Ctrl+,` 不是問題，可以排除。** `App.tsx:39-51` 有一個完全沒有閘門、永遠掛載的全域 handler。`TerminalView` 那個其實是**重複註冊**（兩個都掛在 window 上）。側邊欄設定按鈕是第三條路徑。
+
+6. **被 `isActive` 閘住的完整清單共 7 項**，只有 Telegram 那項是真回歸。`Ctrl+F`／`Ctrl+Shift+R`／`Ctrl+I`／`aiterm:ask-ai` 在首頁失效都合理（後者甚至是必要的——它是廣播式 window event，不過濾會讓每個分頁都開 panel）。`Ctrl+Shift+P`（切 provider）是可接受的小退化，設定頁有替代路徑。
+
+### 已定案的決定
+
+- **不修持久化。** 現狀（每次啟動要手動開）雖然是 bug 造成的，但行為上較安全——修好等於讓外部訊息在重啟後能直接執行指令。**要做的是把那段不會生效的持久化程式碼拿掉，並寫明「刻意不持久化」**，不要留著一段騙下一個人的死碼。
+- **要加 Remote 指示器。** 修好之後背景分頁會真的執行遠端指令，而目前狀態只在分頁內部那顆按鈕看得到。側邊欄要有訊號，比照既有的 attention 提示點。
+
+**Files:**
+- Modify: `src/hooks/useTelegramRemoteControl.ts`
+- Create: `src/hooks/useTelegramRemoteControl.test.ts`
+- Modify: `src/components/TerminalApp.tsx`、`src/components/TerminalView.tsx`
+- Modify: `src/components/TabBar/index.tsx` + `index.css`（指示器）
+- Modify: `src/lib/i18n.ts`
+
+- [ ] **Step 1: 把「哪個分頁開了 Remote」提升成單一真相**
+
+`isActive` 出現在這裡的真正動機是「避免多個分頁同時註冊 listener、同一則指令被執行 N 次」——`listen` 是全域的。用 `isActive` 是拿「使用者在看哪裡」當作「只有一個」的廉價代理。
+
+在 `TerminalApp` 加 `remoteTabId: string | null`，往下傳。`setIsRemoteEnabled` 改成設定/清除這個值（天然互斥，開 B 自動關 A）。hook 的閘門改成只看 `isRemoteEnabled`，**把 `isActive` 從條件與 deps 整個拿掉**。
+
+**互斥化是行為改變**：現在理論上可多個分頁各自開 Remote（只是同時只有 active 那個會收）。改成互斥後「在 B 開會靜默關掉 A」需要 UI 反饋。
+
+- [ ] **Step 2: 拿掉壞掉的持久化**
+
+見上。拿掉之後 `isRemoteEnabled` 就是純記憶體狀態，註解要寫明這是刻意的（安全考量），不是忘了做。
+
+- [ ] **Step 3: 側邊欄的 Remote 指示器**
+
+比照既有的 `terminal-attention-badge`（`TabBar/index.tsx`）。注意那顆圖示右下角已經被 attention 佔用、左上角被 `claudeBridge` 徽章佔用、mail 用了右上與左下——**先讀過既有的四個角落分配再決定放哪**，不要疊在一起。
+
+- [ ] **Step 4: 不要做的**
+
+- 不要修冷啟動遺失（app 關著時累積的訊息）——那**前端怎麼改都救不了**，要在 Rust 端加 pending queue 或 emit 前檢查有無 listener。記一筆即可。
+- 不要碰 `Ctrl+,` 的重複註冊（既有問題，不在範圍）。
 
 ---
 

@@ -1,31 +1,31 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { listenTelegramMessage, sendTelegramMessage } from "../ipc/telegram";
 
 export function useTelegramRemoteControl(
-  tabId: string,
-  isActive: boolean,
+  /** 這個實例的身分。同一個 app 裡必須唯一（例如分頁的 `tab.id`）。 */
+  ownerKey: string,
+  /**
+   * 目前誰擁有 Remote。null = 沒有人。
+   *
+   * `listen` 是全域的，所以同時有兩個實例註冊，同一則 Telegram 指令就會被
+   * 執行兩次。以前是靠各呼叫端自己傳一個「可不可以註冊」的旗標（有的傳分頁
+   * 可見性、有的傳互斥 id），四個呼叫端傳的東西不一致，導致終端機分頁跟
+   * 資料庫分頁能同時判定自己可以監聽——這就是這次修的 bug。
+   *
+   * 現在唯一性從擁有權推導：`isRemoteEnabled = ownerKey === remoteOwner`，
+   * 而 `remoteOwner` 由所有呼叫端共用同一個上層 state（`TerminalApp` 的
+   * `remoteTabId`），天然互斥，「兩個地方同時亮著」在結構上不可能發生。
+   */
+  remoteOwner: string | null,
+  /** 要求變更擁有者。傳 null 表示關閉。 */
+  onRemoteOwnerChange: (owner: string | null) => void,
   onMessageReceived: (text: string) => void
 ) {
-  // Persist isRemoteEnabled per tabId so it survives HMR / hot reloads.
-  // Only persist when tabId is stable (non-empty, non-UUID-like).
-  const storageKey = tabId ? `aiterm-remote:${tabId}` : null;
-
-  const [isRemoteEnabled, setIsRemoteEnabled] = useState(() => {
-    if (!storageKey) return false;
-    try {
-      return localStorage.getItem(storageKey) === "true";
-    } catch {
-      return false;
-    }
-  });
-
-  // Persist state changes to localStorage.
-  useEffect(() => {
-    if (!storageKey) return;
-    try {
-      localStorage.setItem(storageKey, String(isRemoteEnabled));
-    } catch { /* ignore */ }
-  }, [storageKey, isRemoteEnabled]);
+  // 刻意不持久化：isRemoteEnabled 完全由 remoteOwner（上層 state，同樣刻意
+  // 不持久化）推導而來，沒有自己的 state 可以持久化。Remote 開著時外部訊息
+  // 可以直接讓終端機執行指令，這件事不該在使用者不知情的情況下跨重啟自動
+  // 恢復——這是安全考量，不是忘了做。
+  const isRemoteEnabled = ownerKey === remoteOwner;
 
   const onMessageReceivedRef = useRef(onMessageReceived);
   useEffect(() => {
@@ -33,7 +33,7 @@ export function useTelegramRemoteControl(
   }, [onMessageReceived]);
 
   useEffect(() => {
-    if (!isRemoteEnabled || !isActive) return;
+    if (!isRemoteEnabled) return;
 
     // Use the same active-flag pattern as useAiChat to handle the
     // async listen() race condition with React StrictMode / HMR cleanup.
@@ -63,7 +63,11 @@ export function useTelegramRemoteControl(
         } catch { /* ignore */ }
       }
     };
-  }, [isRemoteEnabled, isActive, tabId]);
+  }, [isRemoteEnabled]);
+
+  const toggleRemote = useCallback(() => {
+    onRemoteOwnerChange(isRemoteEnabled ? null : ownerKey);
+  }, [isRemoteEnabled, ownerKey, onRemoteOwnerChange]);
 
   const sendRemoteResponse = useCallback(
     async (text: string) => {
@@ -80,7 +84,7 @@ export function useTelegramRemoteControl(
 
   return {
     isRemoteEnabled,
-    setIsRemoteEnabled,
+    toggleRemote,
     sendRemoteResponse,
   };
 }

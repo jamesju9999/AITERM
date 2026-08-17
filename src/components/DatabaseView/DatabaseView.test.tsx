@@ -31,7 +31,7 @@ vi.mock("../../ipc/db", () => ({
 describe("DatabaseView", () => {
   it("shows connection selector when no connection is set", async () => {
     renderWithRouter(
-      <DatabaseView tabId="t1" isActive={true} onConnectionSelected={() => {}} />
+      <DatabaseView tabId="t1" isActive={true} onConnectionSelected={() => {}} remoteOwner={null} onRemoteOwnerChange={() => {}} />
     );
     await waitFor(() => expect(screen.getByText("選擇資料庫連線")).toBeInTheDocument());
     expect(screen.getByText("My PG")).toBeInTheDocument();
@@ -39,7 +39,7 @@ describe("DatabaseView", () => {
 
   it("shows sub-tabs after connection is provided", async () => {
     renderWithRouter(
-      <DatabaseView tabId="t1" isActive={true} dbConnectionId="c1" onConnectionSelected={() => {}} />
+      <DatabaseView tabId="t1" isActive={true} dbConnectionId="c1" onConnectionSelected={() => {}} remoteOwner={null} onRemoteOwnerChange={() => {}} />
     );
     await waitFor(() => expect(screen.getByText("瀏覽")).toBeInTheDocument());
     expect(screen.getByText("AI Chat")).toBeInTheDocument();

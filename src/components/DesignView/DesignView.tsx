@@ -34,7 +34,17 @@ import { getConfig, type SubmitShortcut } from '../../ipc/config';
 import { useLocale } from '../../contexts/LocaleContext';
 import './DesignView.css';
 
-export function DesignView({ isActive }: { isActive: boolean }) {
+export interface DesignViewProps {
+  isActive: boolean;
+  /** 這個分頁的穩定識別碼（`tab.id`），當作 Telegram Remote 的 ownerKey。 */
+  tabId: string;
+  /** 目前誰擁有 Telegram Remote（`TerminalApp` 的 `remoteTabId`）。null = 沒有人。 */
+  remoteOwner: string | null;
+  /** 使用者切換這個分頁的 Remote 開關時呼叫。 */
+  onRemoteOwnerChange: (owner: string | null) => void;
+}
+
+export function DesignView({ isActive, tabId, remoteOwner, onRemoteOwnerChange }: DesignViewProps) {
   const { t, locale } = useLocale();
   const [session, setSession] = useState<DesignSession | null>(null);
   const [loading, setLoading] = useState(false);
@@ -111,9 +121,12 @@ export function DesignView({ isActive }: { isActive: boolean }) {
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
-  const { isRemoteEnabled, setIsRemoteEnabled, sendRemoteResponse } = useTelegramRemoteControl(
-    session?.id || '',
-    isActive,
+  // ownerKey 用 tab.id，不是 session?.id：session 在載入完成前是 null，
+  // 空字串跟 remoteOwner 的初始值 null 比較沒有意義；tab.id 是穩定的 UUID。
+  const { isRemoteEnabled, toggleRemote, sendRemoteResponse } = useTelegramRemoteControl(
+    tabId,
+    remoteOwner,
+    onRemoteOwnerChange,
     (text) => {
       handleSendMessage(text);
     }
@@ -452,7 +465,7 @@ export function DesignView({ isActive }: { isActive: boolean }) {
             <button
               className={`aiterm-block-btn ${isRemoteEnabled ? 'aiterm-agent-toggle--on' : ''}`}
               title={t.design_remote}
-              onClick={() => setIsRemoteEnabled(!isRemoteEnabled)}
+              onClick={toggleRemote}
               style={{ padding: "2px 8px", fontSize: 11, background: isRemoteEnabled ? "rgba(52, 211, 153, 0.15)" : "transparent", color: isRemoteEnabled ? "#34d399" : "#666", border: isRemoteEnabled ? "1px solid rgba(52, 211, 153, 0.3)" : "1px solid #333", borderRadius: 4, cursor: "pointer" }}
             >
               {t.design_remote}

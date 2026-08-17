@@ -18,7 +18,8 @@ import {
   CodeIcon,
   LibraryIcon,
   MailIcon,
-  RobotIcon
+  RobotIcon,
+  HomeIcon
 } from "../Icons";
 import "./index.css";
 
@@ -36,9 +37,17 @@ export interface Tab {
   enterpriseTask?: { taskId: string; workBranch: string; onComplete: unknown };
   agentProgress?: { done: number; total: number };
   /** AI-generated one-line summary of this tab's executed shell commands,
-   *  shown in the title bar as "<title> - <aiSummary>". In-memory only —
-   *  never persisted to localStorage, regenerated after the app restarts. */
+   *  shown in the title bar as "<title> - <aiSummary>". Persisted to
+   *  localStorage so「接續上次的工作」可以顯示上次做到哪——重開 app 後
+   *  不會再更新，直到這個分頁又執行新指令觸發下一次摘要。 */
   aiSummary?: string;
+  /** 上一個 session 的 AI 摘要，由 restoreSessionTabs 還原。只給首頁的「接續
+   *  上次的工作」讀——標題列不能用它，那裡沒有「上次」的框架。這個 session
+   *  一旦跑出新摘要，aiSummary 就會蓋過它。 */
+  lastSessionSummary?: string;
+  /** 這個終端機分頁目前實際所在的工作目錄。由 TerminalView 回報，會持久化。
+   *  跟 initialCwd（開分頁時的起始目錄）是兩件事，不要混用。 */
+  cwd?: string;
   /** 非 active 的終端機分頁發生了值得注意的事：在側邊欄圖示上顯示一個彩色點。
    *  只存在記憶體，不進 localStorage——重開 app 後這些事件已經沒有意義。 */
   attention?: AttentionKind;
@@ -59,6 +68,10 @@ export interface TabBarProps {
   onClose: (id: string) => void;
   onAdd: () => void;
   onRename?: (id: string, title: string) => void;
+  /** 使用者按了首頁。沒給就不顯示首頁按鈕。 */
+  onHome?: () => void;
+  /** 目前顯示的是不是首頁。 */
+  homeActive?: boolean;
   /** 使用者把第 `from` 個分頁拖到第 `to` 個位置。沒給就不能拖曳。 */
   onReorder?: (from: number, to: number) => void;
   isSidebarOpen: boolean;
@@ -70,6 +83,10 @@ export interface TabBarProps {
    *  a warning marker on the Mail tab's icon — the only way a user who never
    *  opens the Mail tab learns their inbox has stopped updating. */
   mailFailedAccountCount?: number;
+  /** 目前唯一開著 Telegram Remote 的分頁 id（null 代表沒有）。修好首頁回歸之後
+   *  背景分頁也會真的執行遠端指令，所以側邊欄需要一個訊號，不能只靠分頁
+   *  內部那顆按鈕才看得到。 */
+  remoteTabId?: string | null;
 }
 
 // Single source of truth for the cap rule, so the badge's visible text and its
@@ -132,12 +149,15 @@ export function TabBar({
   onAdd,
   onRename,
   onReorder,
+  onHome,
+  homeActive = false,
   isSidebarOpen,
   onToggle,
   width,
   hasUpdate = false,
   mailUnreadCount = 0,
-  mailFailedAccountCount = 0
+  mailFailedAccountCount = 0,
+  remoteTabId = null
 }: TabBarProps) {
   const navigate = useNavigate();
   const { t } = useLocale();
@@ -285,13 +305,27 @@ export function TabBar({
         )}
       </div>
 
+      {/* 首頁不是分頁：它固定在這裡，不進 .aiterm-tabbar-tabs，所以不會被
+          拖曳排序、也不佔 Ctrl+1~9 的編號。 */}
+      {onHome && (
+        <button
+          className={`aiterm-tab aiterm-home-button ${homeActive ? "active" : ""}`}
+          onClick={onHome}
+          aria-current={homeActive ? "page" : undefined}
+          title={`${t.home_tab} (Ctrl+0)`}
+        >
+          <span className="aiterm-tab-icon"><HomeIcon size={18} /></span>
+          {isSidebarOpen && <span className="aiterm-tab-title">{t.home_tab}</span>}
+        </button>
+      )}
+
       {/* Tabs list */}
       <div className="aiterm-tabbar-tabs" data-tauri-drag-region>
         {tabs.map((tab, idx) => (
           <div
             key={tab.id}
             ref={(el) => { tabRefs.current[idx] = el; }}
-            className={`aiterm-tab ${tab.id === activeId ? "active" : ""} ${dragView?.from === idx ? "aiterm-tab--dragging" : ""}`}
+            className={`aiterm-tab ${tab.id === activeId && !homeActive ? "active" : ""} ${dragView?.from === idx ? "aiterm-tab--dragging" : ""}`}
             style={dragStyleOf(idx)}
             onMouseDown={(e) => handleTabMouseDown(e, idx)}
             onClick={() => {
@@ -328,6 +362,15 @@ export function TabBar({
                   跟右下角的 attention 點、mail 的兩個角落都不會撞。 */}
               {tab.type === "terminal" && tab.claudeBridge === "default" && (
                 <span className="terminal-bridge-badge">{t.bridge_tab_badge}</span>
+              )}
+              {/* Remote 指示器：右上角。不限分頁類型——terminal / database /
+                  design / cross-db 四種都能擁有 Remote，指示器要跟著擁有者跑，
+                  不然使用者在資料庫分頁開了 Remote 卻看不到任何訊號。
+                  右上角在 mail 分頁是未讀數，但 mail 不能擁有 Remote（它沒用
+                  那支 hook），所以不會撞；terminal 的左上（bridge）與右下
+                  （attention）也各自錯開。 */}
+              {tab.id === remoteTabId && (
+                <span className="terminal-remote-badge" role="img" aria-label={t.term_remote_badge_label} />
               )}
             </span>
 
