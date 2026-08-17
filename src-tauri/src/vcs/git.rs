@@ -13,11 +13,21 @@ use super::types::{
 pub struct GitClient {
     pub repo_root: String,
     pub token: Option<String>,
+    github_api_base: String,
 }
 
 impl GitClient {
     pub fn new(repo_root: String, token: Option<String>) -> Self {
-        Self { repo_root, token }
+        Self {
+            repo_root,
+            token,
+            github_api_base: "https://api.github.com".to_string(),
+        }
+    }
+
+    /// 只給測試用：讓 GitHub API 呼叫打向 wiremock 假伺服器而非真的 GitHub。
+    pub fn new_with_api_base(repo_root: String, token: Option<String>, github_api_base: String) -> Self {
+        Self { repo_root, token, github_api_base }
     }
 
     // ── Local git operations ─────────────────────────────────────────────────
