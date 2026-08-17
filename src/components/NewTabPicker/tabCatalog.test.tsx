@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getTabCatalog, visibleTabCatalog } from "./tabCatalog";
+import { colorForTab, getTabCatalog, visibleTabCatalog } from "./tabCatalog";
 import { translations } from "../../lib/i18n";
 import type { TabType } from "../TabBar";
 
@@ -89,5 +89,24 @@ describe("getTabCatalog", () => {
   it("每一筆的 color 互不重複", () => {
     const colors = getTabCatalog(t).map((e) => e.color.toLowerCase());
     expect(new Set(colors).size).toBe(colors.length);
+  });
+});
+
+describe("colorForTab", () => {
+  // 這是這個函式唯一有邏輯的分支：type 是 "terminal" 的分頁裡，帶
+  // claudeBridge 的那些要拿到 claude-code 的陶土色，不能被 type 一起
+  // find 到一般終端機的綠色。"explicit"／"default" 都算 Claude Code，
+  // 只要 claudeBridge 是 truthy。
+  it("terminal 型別但帶 claudeBridge 時拿到 Claude Code 的陶土色", () => {
+    expect(colorForTab("terminal", "explicit")).toBe("#d97757");
+    expect(colorForTab("terminal", "default")).toBe("#d97757");
+  });
+
+  it("一般終端機（沒有 claudeBridge）拿到終端機的綠色", () => {
+    expect(colorForTab("terminal")).toBe("#4ade80");
+  });
+
+  it("資料庫分頁拿到藍色", () => {
+    expect(colorForTab("database")).toBe("#60a5fa");
   });
 });

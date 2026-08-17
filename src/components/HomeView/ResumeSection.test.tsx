@@ -68,6 +68,19 @@ describe("ResumeSection", () => {
     expect(container.querySelector(".home-resume-chip")).toBeNull();
   });
 
+  // 左邊框色靠 CSS 自訂屬性 --card-color 傳進去（跟 LaunchGrid.tsx 同一套
+  // 機制）。分兩筆分別測一般終端機與 Claude Code，才擋得住「查色函式退化
+  // 成只用 type find」這種讓 Claude Code 分頁拿到綠色的錯誤。
+  it("分頁卡片帶有分頁類型專屬色的 --card-color", () => {
+    const { container } = renderResume([
+      { id: "t1", title: "終端機", type: "terminal" },
+      { id: "t2", title: "Claude Code", type: "terminal", claudeBridge: "explicit" },
+    ]);
+    const cards = container.querySelectorAll(".home-resume-card");
+    expect((cards[0] as HTMLElement).style.getPropertyValue("--card-color")).toBe("#4ade80");
+    expect((cards[1] as HTMLElement).style.getPropertyValue("--card-color")).toBe("#d97757");
+  });
+
   it("點分頁卡片會切到該分頁", () => {
     const { onSelectTab } = renderResume([{ id: "t7", title: "Tab 7", type: "terminal" }]);
     fireEvent.click(screen.getByText("Tab 7"));

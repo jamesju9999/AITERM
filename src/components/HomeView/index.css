@@ -167,6 +167,10 @@
   text-align: left;
   font-family: inherit;
   transition: var(--transition-smooth);
+  /* 跟 .home-launch-card 那一行完全相同，理由也相同（見上面的註解）——刻意
+     不抽成共用 class 或變數，因為兩張卡片其餘的 padding/gap/border-radius
+     都不一樣，硬抽出來只會讓其中一邊多背一個它不需要的耦合。 */
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--card-color, transparent) 55%, transparent);
 }
 
 .home-resume-card:hover {

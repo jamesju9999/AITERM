@@ -5,6 +5,7 @@ import { splitPathTail, withLrmGuard } from "../../lib/pathUtils";
 import { abbreviateHome } from "../../lib/homeDir";
 import { dbListConnections, type DbConnectionInfo } from "../../ipc/db";
 import type { Tab } from "../TabBar";
+import { colorForTab } from "../NewTabPicker/tabCatalog";
 import { SectionTitle } from "./SectionTitle";
 import { HistoryIcon, FolderIcon } from "../Icons";
 
@@ -78,7 +79,14 @@ export function ResumeSection({ tabs, onSelectTab, onOpenProject }: Props) {
 
       <div className="home-resume-grid">
         {tabs.map((tab) => (
-          <button key={tab.id} className="home-resume-card" onClick={() => onSelectTab(tab.id)}>
+          <button
+            key={tab.id}
+            className="home-resume-card"
+            onClick={() => onSelectTab(tab.id)}
+            // 跟 LaunchGrid.tsx 同一顆變數，讓 index.css 上左邊框色。CSSProperties
+            // 型別不接受任意 --* 屬性，用 as 斷言放行（同 LaunchGrid 的做法）。
+            style={{ "--card-color": colorForTab(tab.type, tab.claudeBridge) } as React.CSSProperties}
+          >
             <span className="home-resume-title">{tab.title}</span>
             {/* 前後包 LRM：direction:rtl 會把開頭的 "/" 排到視覺尾端，實測驗證過
                 （見 pathUtils.ts 的 LRM 常數說明），不是誤植的看不見字元。 */}

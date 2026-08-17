@@ -1,5 +1,5 @@
 import type { Translations } from "../../lib/i18n";
-import type { TabType } from "../TabBar";
+import type { Tab, TabType } from "../TabBar";
 import {
   TerminalIcon, DatabaseIcon, PaintbrushIcon, LinkIcon, BranchIcon,
   FileTextIcon, BookOpenIcon, RefreshIcon, CodeIcon, LibraryIcon, MailIcon, RobotIcon,
@@ -116,4 +116,18 @@ export function getTabCatalog(t: Translations): TabCatalogEntry[] {
 
 export function visibleTabCatalog(t: Translations): TabCatalogEntry[] {
   return getTabCatalog(t).filter((e) => !e.hidden);
+}
+
+/** 分頁類型對應的專屬色。只吃 type 與 claudeBridge 兩個欄位，不吃整個 Tab——
+ *  呼叫端（例如 ResumeSection）手上通常已經有一個 Tab，但這裡刻意收窄參數，
+ *  之後 Tab 多長欄位不會牽動這個函式，測試也只需要造兩個值。
+ *  "terminal" 這個 type 同時對應一般終端機與 Claude Code 兩筆 entry，光用
+ *  type 去 find 只會拿到陣列裡第一筆（一般終端機），把 Claude Code 分頁誤判
+ *  成綠色——所以要先用 claudeBridge 分流到 claude-code 那筆，其餘型別才用
+ *  type 找。 */
+export function colorForTab(type: TabType, claudeBridge?: Tab["claudeBridge"]): string {
+  if (type === "terminal" && claudeBridge) {
+    return TAB_CATALOG_META.find((m) => m.id === "claude-code")!.color;
+  }
+  return TAB_CATALOG_META.find((m) => m.type === type)!.color;
 }
