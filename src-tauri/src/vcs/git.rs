@@ -6,8 +6,8 @@ use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, USER_AGENT}
 use serde::Deserialize;
 
 use super::types::{
-    BlameEntry, BranchEntry, CommitEntry, GitBlockInfo, IssueEntry, PrEntry, VcsResult,
-    WorkflowRun,
+    ActiveFeature, BlameEntry, BranchEntry, CommitEntry, GitBlockInfo, IssueEntry, PrEntry,
+    VcsResult, WorkflowRun,
 };
 
 pub struct GitClient {
@@ -293,6 +293,48 @@ impl GitClient {
         let number = json["number"].as_u64().unwrap_or(0);
 
         Ok((number, pr_url))
+    }
+
+    /// 列出目前 repo 所有進行中的功能（open PR，含 draft），每個都附上
+    /// 目前實際改動的檔案清單。團隊可見度面板與重疊偵測共用這支方法。
+    pub async fn list_active_features(&self) -> Result<Vec<ActiveFeature>, String> {
+        let token = self.require_token(2)?;
+        let (owner, repo) = self.parse_remote()?;
+        let url = format!("{}/repos/{owner}/{repo}/pulls?state=open&per_page=30", self.github_api_base);
+
+        let prs: Vec<GhPrWithHead> = self
+            .gh_get(&token, &url)
+            .await?
+            .json()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut features = Vec::with_capacity(prs.len());
+        for pr in prs {
+            let files = self.pr_files(&token, &owner, &repo, pr.number).await?;
+            features.push(ActiveFeature {
+                number: pr.number,
+                title: pr.title,
+                author: pr.user.login,
+                draft: pr.draft,
+                url: pr.html_url,
+                updated_at: pr.updated_at,
+                head_ref: pr.head.ref_name,
+                files,
+            });
+        }
+        Ok(features)
+    }
+
+    async fn pr_files(&self, token: &str, owner: &str, repo: &str, pr_number: u64) -> Result<Vec<String>, String> {
+        let url = format!("{}/repos/{owner}/{repo}/pulls/{pr_number}/files?per_page=100", self.github_api_base);
+        let files: Vec<GhPrFile> = self
+            .gh_get(token, &url)
+            .await?
+            .json()
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(files.into_iter().map(|f| f.filename).collect())
     }
 
     pub async fn merge_pr(&self, pr_number: u64) -> Result<VcsResult, String> {
@@ -624,6 +666,28 @@ struct GhPr {
     state: String,
     html_url: String,
     updated_at: String,
+}
+
+#[derive(Deserialize)]
+struct GhPrWithHead {
+    number: u64,
+    title: String,
+    user: GhUser,
+    draft: bool,
+    html_url: String,
+    updated_at: String,
+    head: GhPrHead,
+}
+
+#[derive(Deserialize)]
+struct GhPrHead {
+    #[serde(rename = "ref")]
+    ref_name: String,
+}
+
+#[derive(Deserialize)]
+struct GhPrFile {
+    filename: String,
 }
 
 #[derive(Deserialize)]
