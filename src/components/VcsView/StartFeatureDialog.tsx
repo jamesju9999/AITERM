@@ -4,7 +4,7 @@ import { vcsCheckOverlap, vcsGetDefaultBranch, vcsStartFeature, type ActiveFeatu
 
 interface Props {
   repoInfo: VcsRepoInfo;
-  onStarted: () => void;
+  onStarted: (featureName: string) => void;
   onClose: () => void;
 }
 
@@ -44,7 +44,7 @@ export function StartFeatureDialog({ repoInfo, onStarted, onClose }: Props) {
     setError(null);
     try {
       await vcsStartFeature(repoInfo, name, baseBranch, parseFileList(filesText));
-      onStarted();
+      onStarted(name);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -85,19 +85,22 @@ export function StartFeatureDialog({ repoInfo, onStarted, onClose }: Props) {
           <input value={name} onChange={(e) => setName(e.target.value)} disabled={busy} />
         </label>
 
-        <label className="vcs-start-feature-dialog__field">
-          <span>{t.vcs_feature_files_label}</span>
-          <textarea
-            value={filesText}
-            onChange={(e) => {
-              setFilesText(e.target.value);
-              setOverlaps(null);
-            }}
-            disabled={busy}
-            rows={4}
-            placeholder={t.vcs_feature_files_placeholder}
-          />
-        </label>
+        <div className="vcs-start-feature-dialog__field">
+          <label className="vcs-start-feature-dialog__field">
+            <span>{t.vcs_feature_files_label}</span>
+            <textarea
+              value={filesText}
+              onChange={(e) => {
+                setFilesText(e.target.value);
+                setOverlaps(null);
+              }}
+              disabled={busy}
+              rows={4}
+              placeholder={t.vcs_feature_files_placeholder}
+            />
+          </label>
+          <span className="vcs-start-feature-dialog__field-hint">{t.vcs_files_check_disclaimer}</span>
+        </div>
 
         {overlaps && overlaps.length > 0 && (
           <div className="vcs-overlap-warning">

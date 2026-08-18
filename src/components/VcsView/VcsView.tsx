@@ -41,6 +41,7 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
   const [activeDialog, setActiveDialog] = useState<
     { kind: "start"; repo: VcsRepoInfo } | { kind: "finish"; feature: ActiveFeature; repo: VcsRepoInfo } | null
   >(null);
+  const [startedMessage, setStartedMessage] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState<string>("");
@@ -60,6 +61,12 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    if (!startedMessage) return;
+    const timer = setTimeout(() => setStartedMessage(null), 5000);
+    return () => clearTimeout(timer);
+  }, [startedMessage]);
 
   const confirmPath = (path: string) => {
     const trimmed = path.trim();
@@ -218,6 +225,18 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
             onStartFeature={() => setActiveDialog({ kind: "start", repo: repoInfo })}
             onFinishFeature={(f) => setActiveDialog({ kind: "finish", feature: f, repo: repoInfo })}
           />
+          {startedMessage && (
+            <div className="vcs-team-panel__started-notice">
+              {t.vcs_feature_started(startedMessage)}
+              <button
+                className="vcs-team-panel__started-notice-dismiss"
+                onClick={() => setStartedMessage(null)}
+                aria-label={t.common_cancel}
+              >
+                ✕
+              </button>
+            </div>
+          )}
           {featuresError && (
             <div style={{ padding: "4px 16px", fontSize: 11, color: "#f87171" }}>
               {featuresError.startsWith("no_token") ? t.vcs_no_token : featuresError}
@@ -303,7 +322,7 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
       {activeDialog?.kind === "start" && (
         <StartFeatureDialog
           repoInfo={activeDialog.repo}
-          onStarted={() => { setActiveDialog(null); void refreshFeatures(); }}
+          onStarted={(featureName) => { setActiveDialog(null); setStartedMessage(featureName); void refreshFeatures(); }}
           onClose={() => setActiveDialog(null)}
         />
       )}

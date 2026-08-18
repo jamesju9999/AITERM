@@ -1039,6 +1039,14 @@ pub async fn vcs_start_feature(
     let token = resolve_vcs_token(&repo_info, &secrets);
     let client = GitClient::new(repo_info.root, token);
 
+    // Remember exactly where the user was so a push failure can restore it —
+    // NOT necessarily `base_branch`: the user could have started this flow
+    // from any branch. Using their real starting point (and the
+    // non-destructive `checkout_branch`, not `-B`) avoids force-resetting
+    // whatever that branch happened to be, which could carry the user's own
+    // unpushed commits.
+    let original_branch = client.current_branch().await.ok();
+
     client.fetch_ref(&base_branch).await?;
     client.create_branch(&branch_name, Some(&format!("origin/{base_branch}"))).await?;
     // A freshly-created branch has zero commits ahead of base and doesn't
@@ -1050,7 +1058,13 @@ pub async fn vcs_start_feature(
         // Best-effort cleanup so a failed push doesn't leave the user stuck on
         // an orphaned local branch with an unpushed commit — mirrors the same
         // best-effort-cleanup pattern already used in vcs_merge_feature.
-        let _ = client.checkout_branch_from(&base_branch, &format!("origin/{base_branch}")).await;
+        // Restore the user's actual starting branch (not `base_branch`) using
+        // the non-destructive checkout — `checkout_branch_from`'s `-B` would
+        // force-reset that branch's pointer, destroying any unpushed commits
+        // the user had on it.
+        if let Some(original) = &original_branch {
+            let _ = client.checkout_branch(original).await;
+        }
         let _ = client.delete_branch_force(&branch_name).await;
         return Err(e);
     }

@@ -183,6 +183,19 @@ impl GitClient {
         })
     }
 
+    /// Returns the name of the currently checked-out branch (e.g. via `git
+    /// rev-parse --abbrev-ref HEAD`). Used to remember where the user was
+    /// before switching branches, so a rollback can restore their exact
+    /// starting point rather than resetting some other branch.
+    pub async fn current_branch(&self) -> Result<String, String> {
+        let out = self.git(&["rev-parse".to_string(), "--abbrev-ref".to_string(), "HEAD".to_string()])?;
+        let branch = out.trim().to_string();
+        if branch.is_empty() || branch == "HEAD" {
+            return Err("無法判斷目前所在的分支（可能處於 detached HEAD 狀態）".to_string());
+        }
+        Ok(branch)
+    }
+
     pub async fn checkout_branch(&self, name: &str) -> Result<VcsResult, String> {
         self.git(&["checkout".to_string(), name.to_string()])?;
         Ok(VcsResult::WriteSuccess {

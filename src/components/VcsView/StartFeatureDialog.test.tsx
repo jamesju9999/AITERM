@@ -57,7 +57,7 @@ describe("StartFeatureDialog", () => {
     await waitFor(() => expect(startFeatureMock).toHaveBeenCalledWith(
       REPO_INFO, "Login Fix", "main", [],
     ));
-    await waitFor(() => expect(onStarted).toHaveBeenCalled());
+    await waitFor(() => expect(onStarted).toHaveBeenCalledWith("Login Fix"));
   });
 
   it("shows a warning and waits for confirmation when files overlap", async () => {
