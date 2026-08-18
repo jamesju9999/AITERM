@@ -267,8 +267,21 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // corrupted/invisible. See pendingResizeRef below for how this is used.
   const hasUnsubmittedPasteRef = useRef(false);
   const unsubmittedPasteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // A resize computed while hasUnsubmittedPasteRef was true, held back from
-  // the PTY until it's safe to send (Enter, or the safety timeout below).
+  // A resize held back from the PTY until it's safe/possible to send: either
+  // hasUnsubmittedPasteRef was true (flushed on Enter or the safety timeout
+  // below), or — the other case this ref covers — term.onResize fired
+  // before createPty()'s promise had resolved (sessionRef.current still
+  // null), so there was no session id to resize yet. xterm.js's own
+  // rows/cols are already correct at that point (fit() already ran); only
+  // the downstream resizePty() call was impossible to make. Without holding
+  // this back and retrying once the session exists, that resize is lost
+  // permanently: FitAddon only calls terminal.resize() (which is what fires
+  // term.onResize) when the newly measured size actually differs from
+  // xterm's CURRENT rows/cols, so once xterm reflects the correct size, any
+  // later resize to roughly the same pane size computes the same value and
+  // never fires onResize again — no further retry would ever happen,
+  // leaving the PTY (and whatever a fullscreen TUI app queries) stuck at
+  // its stale creation-time size, immune to the user resizing the window.
   const pendingResizeRef = useRef<{ rows: number; cols: number } | null>(null);
 
   // Find in Buffer state
@@ -1018,6 +1031,19 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         const lastCwd = initialCwd ?? localStorage.getItem("aiterm_last_cwd") ?? undefined;
         const id = await createPty({ rows, cols }, lastCwd, claudeBridge);
         sessionRef.current = id;
+        // A real resize can land while createPty() was still in flight (no
+        // session id yet to resize) — see pendingResizeRef's comment. Flush
+        // it now that a session finally exists, same as the paste-guard
+        // case does on Enter/timeout.
+        if (pendingResizeRef.current) {
+          const pending = pendingResizeRef.current;
+          pendingResizeRef.current = null;
+          console.log(
+            "[AITERM-DIAG-RESIZE] flushing resize held back while session was still being created",
+            performance.now().toFixed(1), "rows:", pending.rows, "cols:", pending.cols,
+          );
+          resizePty(id, pending).catch(console.error);
+        }
         setSessionId(id);
         onSessionCreated?.(id);
         setStatus(`connected (${id.slice(0, 8)}…)`);
@@ -1318,6 +1344,12 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       }
       if (sessionRef.current) {
         resizePty(sessionRef.current, { rows: r, cols: c }).catch(console.error);
+      } else {
+        // No session yet — createPty() is still in flight. Stash it; the
+        // flush right after `sessionRef.current = id` above sends it once
+        // the session exists. Without this, the resize is lost for good —
+        // see pendingResizeRef's comment for why nothing would ever retry it.
+        pendingResizeRef.current = { rows: r, cols: c };
       }
     });
 
