@@ -81,6 +81,18 @@ describe("FinishFeatureReview", () => {
     await waitFor(() => expect(mergeMock).toHaveBeenCalledWith(REPO_INFO, 7, null));
   });
 
+  it("shows an error and keeps the merge button disabled when the diff fails to load", async () => {
+    getDiffMock.mockRejectedValueOnce("GitHub API error 404: Not Found");
+    render(
+      <LocaleProvider>
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onMerged={vi.fn()} onClose={vi.fn()} />
+      </LocaleProvider>
+    );
+
+    await waitFor(() => expect(screen.getByText(/Not Found/)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "合併" })).toBeDisabled();
+  });
+
   it("shows a clear conflict message when merge fails", async () => {
     getDiffMock.mockResolvedValueOnce("diff content");
     mergeMock.mockRejectedValueOnce("GitHub API error 405: Pull Request is not mergeable");

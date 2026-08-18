@@ -18,10 +18,20 @@ export function FinishFeatureReview({ repoInfo, feature, baseBranch, onMerged, o
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+    setDiff(null);
+    setError(null);
     vcsGetFeatureDiff(repoInfo, baseBranch, feature.head_ref)
-      .then(setDiff)
-      .catch((e) => setError(String(e)));
-  }, [repoInfo, baseBranch, feature.head_ref]);
+      .then((d) => {
+        if (!cancelled) setDiff(d);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [repoInfo.root, repoInfo.connection_id, baseBranch, feature.head_ref]);
 
   const handleMerge = async () => {
     setBusy(true);
