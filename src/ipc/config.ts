@@ -24,6 +24,8 @@ export type SubmitShortcut = "enter" | "shift-enter" | "ctrl-enter";
 
 export type DefaultTab = "terminal" | "database";
 
+export type DocConvertEngine = "auto" | "markitdown_only";
+
 export interface ProviderConfig {
   id: string;
   display_name: string;
@@ -47,6 +49,7 @@ export interface AppConfig {
   providers: ProviderConfig[];
   execution_mode: ExecutionMode;
   submit_shortcut: SubmitShortcut;
+  doc_convert_engine: DocConvertEngine;
   onboarding_done: boolean;
   max_agent_steps: number; // 0 = unlimited
   default_tab: DefaultTab;
@@ -72,6 +75,9 @@ export const setOnboardingDone = (): Promise<void> =>
 
 export const setSubmitShortcut = (shortcut: SubmitShortcut): Promise<void> =>
   invoke("set_submit_shortcut", { shortcut });
+
+export const setDocConvertEngine = (engine: DocConvertEngine): Promise<void> =>
+  invoke("set_doc_convert_engine", { engine });
 
 export const setMaxAgentSteps = (steps: number): Promise<void> =>
   invoke("set_max_agent_steps", { steps });
