@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
-import { getConfig, setExecutionMode, setSubmitShortcut, setMaxAgentSteps, setDefaultTab, appimageIntegrationState, appimageIntegrate, appimageRemoveIntegration, setAppImageIntegrationDeclined } from "../../ipc/config";
-import type { ExecutionMode, SubmitShortcut, DefaultTab, AppImageIntegrationState } from "../../ipc/config";
+import { getConfig, setExecutionMode, setSubmitShortcut, setMaxAgentSteps, setDefaultTab, setDocConvertEngine, appimageIntegrationState, appimageIntegrate, appimageRemoveIntegration, setAppImageIntegrationDeclined } from "../../ipc/config";
+import type { ExecutionMode, SubmitShortcut, DefaultTab, DocConvertEngine, AppImageIntegrationState } from "../../ipc/config";
 import { pythonEnvStatus, pythonEnvReset, pythonEnvSetInterpreter, pythonEnvSetIndexUrl } from "../../ipc/pythonEnv";
 import type { PythonEnvStatus } from "../../ipc/pythonEnv";
 import { useLocale } from "../../contexts/LocaleContext";
@@ -27,6 +27,7 @@ export function GeneralPage() {
   const { t, locale, setLocale } = useLocale();
   const [mode, setMode] = useState<ExecutionMode>("always-confirm");
   const [shortcut, setShortcut] = useState<SubmitShortcut>("enter");
+  const [docConvertEngine, setDocConvertEngineState] = useState<DocConvertEngine>("auto");
   const [maxSteps, setMaxSteps] = useState<number>(5);
   const [defaultTab, setDefaultTabState] = useState<DefaultTab>("terminal");
   const [fontSize, setFontSizeState] = useState<number>(() =>
@@ -130,12 +131,18 @@ export function GeneralPage() {
     { value: "ctrl-enter",  label: "Ctrl + Enter",    desc: t.shortcut_ctrl_enter_desc },
   ];
 
+  const DOC_CONVERT_ENGINE_MODES: { value: DocConvertEngine; label: string; desc: string }[] = [
+    { value: "auto",             label: t.doc_convert_engine_auto_label,             desc: t.doc_convert_engine_auto_desc },
+    { value: "markitdown_only",  label: t.doc_convert_engine_markitdown_only_label,  desc: t.doc_convert_engine_markitdown_only_desc },
+  ];
+
   useEffect(() => {
     getConfig().then((cfg) => {
       setMode(cfg.execution_mode);
       setShortcut(cfg.submit_shortcut);
       setMaxSteps(cfg.max_agent_steps ?? 5);
       setDefaultTabState(cfg.default_tab ?? "terminal");
+      setDocConvertEngineState(cfg.doc_convert_engine ?? "auto");
       if (cfg.enterprise_policy) {
         setPolicyControlled({
           execution_mode: !!cfg.enterprise_policy.execution_mode,
@@ -161,6 +168,12 @@ export function GeneralPage() {
     setShortcut(newShortcut);
     setSaving(true);
     try { await setSubmitShortcut(newShortcut); } finally { setSaving(false); }
+  };
+
+  const handleDocConvertEngineChange = async (newEngine: DocConvertEngine) => {
+    setDocConvertEngineState(newEngine);
+    setSaving(true);
+    try { await setDocConvertEngine(newEngine); } finally { setSaving(false); }
   };
 
   const handleMaxStepsChange = async (newSteps: number) => {
@@ -322,6 +335,29 @@ export function GeneralPage() {
               <div className="mode-text">
                 <span className="mode-label">{s.label}</span>
                 <span className="mode-desc">{s.desc}</span>
+              </div>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3>{t.doc_convert_engine}</h3>
+        <p className="section-desc">{t.doc_convert_engine_desc}</p>
+        <div className="mode-list">
+          {DOC_CONVERT_ENGINE_MODES.map((m) => (
+            <label key={m.value} className="mode-option">
+              <input
+                type="radio"
+                name="doc_convert_engine"
+                value={m.value}
+                checked={docConvertEngine === m.value}
+                onChange={() => handleDocConvertEngineChange(m.value)}
+                disabled={saving}
+              />
+              <div className="mode-text">
+                <span className="mode-label">{m.label}</span>
+                <span className="mode-desc">{m.desc}</span>
               </div>
             </label>
           ))}
