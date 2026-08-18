@@ -66,4 +66,19 @@ describe("useTeamFeatures", () => {
     expect(result.current.loading).toBe(false);
     expect(invokeMock).not.toHaveBeenCalled();
   });
+
+  it("does not refetch when repoInfo has the same values but a new object identity", async () => {
+    invokeMock.mockResolvedValueOnce([FEATURE]);
+    const { result, rerender } = renderHook(
+      ({ repo }) => useTeamFeatures(repo),
+      { initialProps: { repo: REPO_INFO } },
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+
+    // Same values, different object identity.
+    rerender({ repo: { ...REPO_INFO } });
+
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
 });

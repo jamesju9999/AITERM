@@ -31,7 +31,7 @@ export function useTeamFeatures(repoInfo: VcsRepoInfo | null): UseTeamFeaturesRe
     } finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, [repoInfo]);
+  }, [repoInfo?.root, repoInfo?.connection_id]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
