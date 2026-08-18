@@ -272,6 +272,34 @@ async fn convert_with_anydoc(file_path: String) -> Result<String, String> {
         .map_err(|e| format!("anydoc conversion task panicked: {e}"))?
 }
 
+/// Convert one file to Markdown, routing between anydoc and MarkItDown by
+/// extension (or forcing MarkItDown when `doc_convert_engine` is set to
+/// `MarkitdownOnly`), with automatic fallback in Auto mode. This is the one
+/// entry point both the knowledge-base sync path (`RoutedConverter`) and the
+/// manual `document_convert` Tauri command call into.
+pub async fn convert_document(
+    app: AppHandle,
+    path: &Path,
+    vision_provider_id: Option<String>,
+) -> Result<String, String> {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let file_path = path.to_string_lossy().to_string();
+
+    let config = app.state::<Arc<ConfigStore>>();
+    let secrets = app.state::<Arc<SecretStore>>();
+    let engine_pref = config.get().doc_convert_engine;
+
+    resolve_with_fallback(
+        &ext,
+        engine_pref,
+        convert_with_anydoc(file_path.clone()),
+        convert_with_markitdown(app.clone(), file_path, vision_provider_id, config, secrets),
+    ).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
