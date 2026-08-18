@@ -373,6 +373,7 @@ impl GitClient {
                 url: pr.html_url,
                 updated_at: pr.updated_at,
                 head_ref: pr.head.ref_name,
+                base_ref: pr.base.ref_name,
                 files,
             });
         }
@@ -388,6 +389,26 @@ impl GitClient {
             .await
             .map_err(|e| e.to_string())?;
         Ok(files.into_iter().map(|f| f.filename).collect())
+    }
+
+    /// Fetches the repo's actual default branch name from GitHub — used as
+    /// the base for a newly-started feature, since assuming "main" breaks on
+    /// any repo (including this one) whose default branch is named
+    /// something else, e.g. "master".
+    pub async fn get_default_branch(&self) -> Result<String, String> {
+        let token = self.require_token(2)?;
+        let (owner, repo) = self.parse_remote()?;
+        let url = format!("{}/repos/{owner}/{repo}", self.github_api_base);
+        let json: serde_json::Value = self
+            .gh_get(&token, &url)
+            .await?
+            .json()
+            .await
+            .map_err(|e| e.to_string())?;
+        json["default_branch"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| "GitHub 回應缺少 default_branch".to_string())
     }
 
     /// 把一個 draft PR 轉成 ready for review。GitHub REST 沒有對應端點，
@@ -468,7 +489,8 @@ impl GitClient {
         let token = self.require_token(3)?;
         let (owner, repo) = self.parse_remote()?;
         let url = format!(
-            "https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/merge"
+            "{}/repos/{owner}/{repo}/pulls/{pr_number}/merge",
+            self.github_api_base
         );
 
         self.gh_put(&token, &url, &serde_json::json!({})).await?;
@@ -832,6 +854,7 @@ struct GhPrWithHead {
     html_url: String,
     updated_at: String,
     head: GhPrHead,
+    base: GhPrHead,
 }
 
 #[derive(Deserialize)]

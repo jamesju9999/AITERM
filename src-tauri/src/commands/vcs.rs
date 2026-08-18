@@ -957,6 +957,16 @@ pub struct StartFeatureOutcome {
 }
 
 #[tauri::command]
+pub async fn vcs_get_default_branch(
+    repo_info: VcsRepoInfo,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<String, String> {
+    let token = resolve_vcs_token(&repo_info, &secrets);
+    let client = GitClient::new(repo_info.root, token);
+    client.get_default_branch().await
+}
+
+#[tauri::command]
 pub async fn vcs_list_active_features(
     repo_info: VcsRepoInfo,
     secrets: State<'_, Arc<SecretStore>>,

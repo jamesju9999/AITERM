@@ -1,10 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
-import { vcsCheckOverlap, vcsStartFeature, type ActiveFeature, type VcsRepoInfo } from "../../ipc/vcs";
+import { vcsCheckOverlap, vcsGetDefaultBranch, vcsStartFeature, type ActiveFeature, type VcsRepoInfo } from "../../ipc/vcs";
 
 interface Props {
   repoInfo: VcsRepoInfo;
-  baseBranch: string;
   onStarted: () => void;
   onClose: () => void;
 }
@@ -16,15 +15,31 @@ function parseFileList(text: string): string[] {
     .filter((line) => line.length > 0);
 }
 
-export function StartFeatureDialog({ repoInfo, baseBranch, onStarted, onClose }: Props) {
+export function StartFeatureDialog({ repoInfo, onStarted, onClose }: Props) {
   const { t } = useLocale();
   const [name, setName] = useState("");
   const [filesText, setFilesText] = useState("");
   const [overlaps, setOverlaps] = useState<ActiveFeature[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [baseBranch, setBaseBranch] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    vcsGetDefaultBranch(repoInfo)
+      .then((branch) => {
+        if (!cancelled) setBaseBranch(branch);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [repoInfo.root, repoInfo.connection_id]);
 
   const doStart = async () => {
+    if (baseBranch === null) return;
     setBusy(true);
     setError(null);
     try {
@@ -38,6 +53,7 @@ export function StartFeatureDialog({ repoInfo, baseBranch, onStarted, onClose }:
   };
 
   const handleSubmit = async () => {
+    if (baseBranch === null) return;
     const declaredFiles = parseFileList(filesText);
     if (declaredFiles.length === 0) {
       await doStart();
@@ -91,11 +107,13 @@ export function StartFeatureDialog({ repoInfo, baseBranch, onStarted, onClose }:
                 <li key={f.number}>{t.vcs_overlap_entry(f.author, f.title)}</li>
               ))}
             </ul>
-            <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" onClick={doStart} disabled={busy}>
+            <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" onClick={doStart} disabled={busy || baseBranch === null}>
               {t.vcs_start_anyway}
             </button>
           </div>
         )}
+
+        {baseBranch === null && !error && <div className="vcs-start-feature-dialog__hint">{t.vcs_detecting_base_branch}</div>}
 
         {error && <div className="vcs-start-feature-dialog__error">{error}</div>}
 
@@ -107,7 +125,7 @@ export function StartFeatureDialog({ repoInfo, baseBranch, onStarted, onClose }:
             <button
               className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
               onClick={handleSubmit}
-              disabled={busy || !name.trim()}
+              disabled={busy || !name.trim() || baseBranch === null}
             >
               {t.vcs_start_feature}
             </button>

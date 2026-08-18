@@ -5,13 +5,12 @@ import { vcsFinishFeature, vcsGetFeatureDiff, vcsMergeFeature, type ActiveFeatur
 interface Props {
   repoInfo: VcsRepoInfo;
   feature: ActiveFeature;
-  baseBranch: string;
   onSubmittedForReview: () => void;
   onMerged: () => void;
   onClose: () => void;
 }
 
-export function FinishFeatureReview({ repoInfo, feature, baseBranch, onSubmittedForReview, onMerged, onClose }: Props) {
+export function FinishFeatureReview({ repoInfo, feature, onSubmittedForReview, onMerged, onClose }: Props) {
   const { t } = useLocale();
   const [diff, setDiff] = useState<string | null>(null);
   const [isDraft, setIsDraft] = useState(feature.draft);
@@ -23,7 +22,7 @@ export function FinishFeatureReview({ repoInfo, feature, baseBranch, onSubmitted
     let cancelled = false;
     setDiff(null);
     setError(null);
-    vcsGetFeatureDiff(repoInfo, baseBranch, feature.head_ref)
+    vcsGetFeatureDiff(repoInfo, feature.base_ref, feature.head_ref)
       .then((d) => {
         if (!cancelled) setDiff(d);
       })
@@ -33,7 +32,7 @@ export function FinishFeatureReview({ repoInfo, feature, baseBranch, onSubmitted
     return () => {
       cancelled = true;
     };
-  }, [repoInfo.root, repoInfo.connection_id, baseBranch, feature.head_ref]);
+  }, [repoInfo.root, repoInfo.connection_id, feature.base_ref, feature.head_ref]);
 
   const handleSubmitForReview = async () => {
     setBusy(true);

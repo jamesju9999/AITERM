@@ -23,6 +23,7 @@ const FEATURE = {
   url: "https://github.com/acme/widget/pull/7",
   updated_at: "2026-08-17T00:00:00Z",
   head_ref: "feature/login-optimize",
+  base_ref: "main",
   files: ["src/Login.tsx"],
 };
 

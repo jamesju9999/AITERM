@@ -67,7 +67,8 @@ async fn list_active_features_combines_pr_list_and_per_pr_files() {
                 "draft": true,
                 "html_url": "https://github.com/acme/widget/pull/7",
                 "updated_at": "2026-08-17T00:00:00Z",
-                "head": {"ref": "feature/login-optimize"}
+                "head": {"ref": "feature/login-optimize"},
+                "base": {"ref": "main"}
             }
         ])))
         .mount(&server)
@@ -97,6 +98,7 @@ async fn list_active_features_combines_pr_list_and_per_pr_files() {
     assert_eq!(features[0].author, "alice");
     assert!(features[0].draft);
     assert_eq!(features[0].head_ref, "feature/login-optimize");
+    assert_eq!(features[0].base_ref, "main");
     assert_eq!(features[0].files, vec!["src/Login.tsx", "src/api/auth.ts"]);
 }
 
@@ -135,7 +137,8 @@ async fn list_active_features_degrades_gracefully_when_one_pr_files_fetch_fails(
                 "draft": true,
                 "html_url": "https://github.com/acme/widget/pull/7",
                 "updated_at": "2026-08-17T00:00:00Z",
-                "head": {"ref": "feature/login-optimize"}
+                "head": {"ref": "feature/login-optimize"},
+                "base": {"ref": "main"}
             },
             {
                 "number": 8,
@@ -144,7 +147,8 @@ async fn list_active_features_degrades_gracefully_when_one_pr_files_fetch_fails(
                 "draft": false,
                 "html_url": "https://github.com/acme/widget/pull/8",
                 "updated_at": "2026-08-17T01:00:00Z",
-                "head": {"ref": "feature/payment-refactor"}
+                "head": {"ref": "feature/payment-refactor"},
+                "base": {"ref": "main"}
             }
         ])))
         .mount(&server)
@@ -177,9 +181,41 @@ async fn list_active_features_degrades_gracefully_when_one_pr_files_fetch_fails(
 
     assert_eq!(features.len(), 2);
     assert_eq!(features[0].number, 7);
+    assert_eq!(features[0].base_ref, "main");
     assert_eq!(features[0].files, vec!["src/Login.tsx", "src/api/auth.ts"]);
     assert_eq!(features[1].number, 8);
+    assert_eq!(features[1].base_ref, "main");
     assert!(features[1].files.is_empty());
+}
+
+#[tokio::test]
+async fn get_default_branch_extracts_default_branch_from_repo_response() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/widget"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": 123456,
+            "name": "widget",
+            "full_name": "acme/widget",
+            "private": false,
+            "default_branch": "master"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    init_repo_with_origin(dir.path()).await;
+    let client = GitClient::new_with_api_base(
+        dir.path().to_string_lossy().to_string(),
+        Some("test-token".to_string()),
+        server.uri(),
+    );
+
+    let branch = client.get_default_branch().await.expect("should succeed");
+    assert_eq!(branch, "master");
 }
 
 #[tokio::test]
@@ -302,6 +338,57 @@ async fn pr_diff_requests_diff_media_type_and_returns_raw_text() {
         aiterm_lib::vcs::VcsResult::Diff { content, .. } => assert_eq!(content, diff_body),
         other => panic!("expected Diff variant, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn merge_pr_sends_put_to_the_correct_merge_endpoint() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/repos/acme/widget/pulls/7/merge"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "sha": "abc123",
+            "merged": true,
+            "message": "Pull Request successfully merged"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    init_repo_with_origin(dir.path()).await;
+    let client = GitClient::new_with_api_base(
+        dir.path().to_string_lossy().to_string(),
+        Some("test-token".to_string()),
+        server.uri(),
+    );
+
+    client.merge_pr(7).await.expect("should succeed");
+}
+
+#[tokio::test]
+async fn merge_pr_surfaces_not_mergeable_error() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/repos/acme/widget/pulls/7/merge"))
+        .respond_with(ResponseTemplate::new(405).set_body_json(serde_json::json!({
+            "message": "Pull Request is not mergeable"
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    init_repo_with_origin(dir.path()).await;
+    let client = GitClient::new_with_api_base(
+        dir.path().to_string_lossy().to_string(),
+        Some("test-token".to_string()),
+        server.uri(),
+    );
+
+    let err = client.merge_pr(7).await.unwrap_err();
+    assert!(err.contains("not mergeable"), "unexpected error: {err}");
 }
 
 /// Sets up two real git repos: a bare "remote" and a normal working repo

@@ -292,6 +292,11 @@
   color: #f87171;
 }
 
+.vcs-start-feature-dialog__hint {
+  font-size: 11px;
+  color: #888;
+}
+
 .vcs-start-feature-dialog__actions {
   display: flex;
   justify-content: flex-end;

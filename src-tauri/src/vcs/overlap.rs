@@ -45,6 +45,7 @@ mod tests {
             url: "https://github.com/x/y/pull/1".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             head_ref: format!("feature/{author}"),
+            base_ref: "main".to_string(),
             files: files.iter().map(|s| s.to_string()).collect(),
         }
     }

@@ -21,6 +21,7 @@ const FEATURE: ActiveFeature = {
   url: "https://github.com/acme/widget/pull/7",
   updated_at: "2026-08-17T00:00:00Z",
   head_ref: "feature/login-optimize",
+  base_ref: "main",
   files: ["src/Login.tsx"],
 };
 
@@ -44,7 +45,7 @@ describe("FinishFeatureReview", () => {
     getDiffMock.mockResolvedValueOnce("diff content");
     render(
       <LocaleProvider>
-        <FinishFeatureReview repoInfo={REPO_INFO} feature={draftFeature} baseBranch="main" onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={draftFeature} onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
       </LocaleProvider>
     );
 
@@ -60,7 +61,7 @@ describe("FinishFeatureReview", () => {
     const onSubmittedForReview = vi.fn();
     render(
       <LocaleProvider>
-        <FinishFeatureReview repoInfo={REPO_INFO} feature={draftFeature} baseBranch="main" onSubmittedForReview={onSubmittedForReview} onMerged={vi.fn()} onClose={vi.fn()} />
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={draftFeature} onSubmittedForReview={onSubmittedForReview} onMerged={vi.fn()} onClose={vi.fn()} />
       </LocaleProvider>
     );
 
@@ -80,7 +81,7 @@ describe("FinishFeatureReview", () => {
     getDiffMock.mockResolvedValueOnce("diff content");
     render(
       <LocaleProvider>
-        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
       </LocaleProvider>
     );
 
@@ -95,7 +96,7 @@ describe("FinishFeatureReview", () => {
     finishMock.mockRejectedValueOnce("此連線為唯讀模式，無法送審");
     render(
       <LocaleProvider>
-        <FinishFeatureReview repoInfo={REPO_INFO} feature={draftFeature} baseBranch="main" onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={draftFeature} onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
       </LocaleProvider>
     );
 
@@ -114,7 +115,7 @@ describe("FinishFeatureReview", () => {
     const onMerged = vi.fn();
     render(
       <LocaleProvider>
-        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onSubmittedForReview={vi.fn()} onMerged={onMerged} onClose={vi.fn()} />
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} onSubmittedForReview={vi.fn()} onMerged={onMerged} onClose={vi.fn()} />
       </LocaleProvider>
     );
 
@@ -131,7 +132,7 @@ describe("FinishFeatureReview", () => {
     mergeMock.mockResolvedValueOnce(undefined);
     render(
       <LocaleProvider>
-        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
       </LocaleProvider>
     );
 
@@ -146,7 +147,7 @@ describe("FinishFeatureReview", () => {
     getDiffMock.mockRejectedValueOnce("GitHub API error 404: Not Found");
     render(
       <LocaleProvider>
-        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
       </LocaleProvider>
     );
 
@@ -159,7 +160,7 @@ describe("FinishFeatureReview", () => {
     mergeMock.mockRejectedValueOnce("GitHub API error 405: Pull Request is not mergeable");
     render(
       <LocaleProvider>
-        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
       </LocaleProvider>
     );
 

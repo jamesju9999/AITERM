@@ -303,7 +303,6 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
       {activeDialog?.kind === "start" && (
         <StartFeatureDialog
           repoInfo={activeDialog.repo}
-          baseBranch="main"
           onStarted={() => { setActiveDialog(null); void refreshFeatures(); }}
           onClose={() => setActiveDialog(null)}
         />
@@ -313,7 +312,6 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
         <FinishFeatureReview
           repoInfo={activeDialog.repo}
           feature={activeDialog.feature}
-          baseBranch="main"
           onSubmittedForReview={refreshFeatures}
           onMerged={() => { setActiveDialog(null); void refreshFeatures(); }}
           onClose={() => setActiveDialog(null)}

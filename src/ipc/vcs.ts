@@ -93,6 +93,7 @@ export interface ActiveFeature {
   url: string;
   updated_at: string;
   head_ref: string;
+  base_ref: string;
   files: string[];
 }
 
@@ -150,6 +151,10 @@ export function vcsListActiveFeatures(repoInfo: VcsRepoInfo): Promise<ActiveFeat
 
 export function vcsCheckOverlap(repoInfo: VcsRepoInfo, files: string[]): Promise<ActiveFeature[]> {
   return invoke<ActiveFeature[]>("vcs_check_overlap", { repoInfo, files });
+}
+
+export function vcsGetDefaultBranch(repoInfo: VcsRepoInfo): Promise<string> {
+  return invoke<string>("vcs_get_default_branch", { repoInfo });
 }
 
 export function vcsStartFeature(

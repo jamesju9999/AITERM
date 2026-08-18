@@ -124,6 +124,7 @@ pub struct ActiveFeature {
     pub url: String,
     pub updated_at: String,
     pub head_ref: String,
+    pub base_ref: String,
     pub files: Vec<String>,
 }
 
