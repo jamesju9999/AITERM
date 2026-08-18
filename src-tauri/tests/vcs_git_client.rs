@@ -277,3 +277,90 @@ async fn pr_diff_requests_diff_media_type_and_returns_raw_text() {
         other => panic!("expected Diff variant, got {other:?}"),
     }
 }
+
+/// Sets up two real git repos: a bare "remote" and a normal working repo
+/// whose `origin` points at the bare repo's filesystem path. This lets tests
+/// exercise a genuine `git push` without any network dependency — wiremock
+/// only intercepts HTTP calls, not raw git subprocess I/O.
+async fn init_repo_with_local_remote(dir: &std::path::Path) -> std::path::PathBuf {
+    let bare_dir = dir.join("origin.git");
+    std::process::Command::new("git")
+        .args(["init", "--bare", "-q"])
+        .arg(&bare_dir)
+        .status()
+        .unwrap();
+
+    let work_dir = dir.join("work");
+    std::fs::create_dir(&work_dir).unwrap();
+    std::process::Command::new("git").args(["init", "-q"]).current_dir(&work_dir).status().unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.email", "test@test.com"])
+        .current_dir(&work_dir).status().unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(&work_dir).status().unwrap();
+    std::process::Command::new("git")
+        .args(["remote", "add", "origin"])
+        .arg(&bare_dir)
+        .current_dir(&work_dir).status().unwrap();
+
+    // Need at least one commit on the initial branch before it can be pushed
+    // and before a feature branch can meaningfully be created "from" it.
+    std::fs::write(work_dir.join("README.md"), "init").unwrap();
+    std::process::Command::new("git").args(["add", "."]).current_dir(&work_dir).status().unwrap();
+    std::process::Command::new("git").args(["commit", "-q", "-m", "init"]).current_dir(&work_dir).status().unwrap();
+    // Ensure the default branch is named "main" regardless of the test machine's git config.
+    std::process::Command::new("git").args(["branch", "-M", "main"]).current_dir(&work_dir).status().unwrap();
+    std::process::Command::new("git").args(["push", "-q", "origin", "main"]).current_dir(&work_dir).status().unwrap();
+
+    work_dir
+}
+
+#[tokio::test]
+async fn push_branch_pushes_the_current_branch_to_origin_with_upstream() {
+    let dir = tempfile::tempdir().unwrap();
+    let work_dir = init_repo_with_local_remote(dir.path()).await;
+
+    let client = GitClient::new(work_dir.to_string_lossy().to_string(), None);
+    client.create_branch("feature/test-push", Some("main")).await.expect("create_branch should succeed");
+
+    client.push_branch("feature/test-push").await.expect("push_branch should succeed");
+
+    // Verify the branch genuinely exists on the "remote" (the bare repo) now.
+    let bare_dir = dir.path().join("origin.git");
+    let out = std::process::Command::new("git")
+        .args(["branch", "--list", "feature/test-push"])
+        .current_dir(&bare_dir)
+        .output()
+        .unwrap();
+    let branches = String::from_utf8_lossy(&out.stdout);
+    assert!(branches.contains("feature/test-push"), "expected branch to exist on remote, got: {branches}");
+}
+
+#[tokio::test]
+async fn commit_empty_creates_a_commit_with_no_file_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let work_dir = init_repo_with_local_remote(dir.path()).await;
+
+    let client = GitClient::new(work_dir.to_string_lossy().to_string(), None);
+    client.create_branch("feature/test-commit", Some("main")).await.expect("create_branch should succeed");
+
+    client.commit_empty("Start feature: test").await.expect("commit_empty should succeed");
+
+    // Verify there is now a commit on this branch that main doesn't have.
+    let out = std::process::Command::new("git")
+        .args(["rev-list", "--count", "main..feature/test-commit"])
+        .current_dir(&work_dir)
+        .output()
+        .unwrap();
+    let count: i32 = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+    assert_eq!(count, 1, "expected exactly one new commit ahead of main");
+
+    // And that commit genuinely changes no files.
+    let diff_out = std::process::Command::new("git")
+        .args(["diff", "--stat", "main..feature/test-commit"])
+        .current_dir(&work_dir)
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&diff_out.stdout).trim().is_empty(), "empty commit should produce an empty diff");
+}

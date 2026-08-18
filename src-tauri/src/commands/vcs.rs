@@ -990,6 +990,19 @@ fn format_declared_files_body(declared_files: &[String]) -> String {
     }
 }
 
+/// 產生一段以目前時間為基礎的簡短十六進位字尾，用來讓不同人各自建立的分支名稱不會撞名
+/// （刻意不查詢 GitHub 使用者身分——那是本功能明確排除的能力）。
+fn unique_branch_suffix() -> String {
+    format!(
+        "{:x}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            % 0xFFFFFF
+    )
+}
+
 #[tauri::command]
 pub async fn vcs_start_feature(
     repo_info: VcsRepoInfo,
@@ -1007,12 +1020,22 @@ pub async fn vcs_start_feature(
     if slug.is_empty() {
         return Err("功能名稱需要至少包含一個英文字母或數字".to_string());
     }
-    let branch_name = format!("feature/{slug}");
+    // A short suffix derived from the current time (not a GitHub username —
+    // fetching "who am I on GitHub" is a separate capability this feature
+    // deliberately doesn't have) guarantees two teammates starting
+    // similarly-named features never collide on the same branch name.
+    let branch_name = format!("feature/{slug}-{}", unique_branch_suffix());
 
     let token = resolve_vcs_token(&repo_info, &secrets);
     let client = GitClient::new(repo_info.root, token);
 
     client.create_branch(&branch_name, Some(&base_branch)).await?;
+    // A freshly-created branch has zero commits ahead of base and doesn't
+    // exist on the remote yet — GitHub's create-PR API rejects both of
+    // those. An empty commit plus a push satisfies it before we call
+    // create_pr below.
+    client.commit_empty(&format!("Start feature: {feature_name}")).await?;
+    client.push_branch(&branch_name).await?;
 
     let body = format_declared_files_body(&declared_files);
     let (pr_number, pr_url) = client
@@ -1117,5 +1140,28 @@ mod format_declared_files_body_tests {
             format_declared_files_body(&files),
             "預計會動到的檔案：\n- src/foo.rs\n- src/bar.rs"
         );
+    }
+}
+
+#[cfg(test)]
+mod unique_branch_suffix_tests {
+    use super::unique_branch_suffix;
+
+    #[test]
+    fn suffix_is_non_empty_lowercase_hex() {
+        let suffix = unique_branch_suffix();
+        assert!(!suffix.is_empty());
+        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn branch_name_includes_slug_and_a_suffix_beyond_it() {
+        let slug = "login-fix";
+        let branch_name = format!("feature/{slug}-{}", unique_branch_suffix());
+        let suffix_part = branch_name
+            .strip_prefix("feature/login-fix-")
+            .expect("branch name should start with feature/{slug}-");
+        assert!(!suffix_part.is_empty(), "expected a non-empty suffix after the slug");
+        assert!(suffix_part.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }

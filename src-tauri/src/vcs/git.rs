@@ -167,6 +167,39 @@ impl GitClient {
         })
     }
 
+    /// Commits with `--allow-empty` — used to give a freshly-created feature
+    /// branch at least one commit ahead of its base, since GitHub's create-PR
+    /// API rejects a PR whose head and base have zero commits between them.
+    pub async fn commit_empty(&self, message: &str) -> Result<VcsResult, String> {
+        self.git(&[
+            "commit".to_string(),
+            "--allow-empty".to_string(),
+            "-m".to_string(),
+            message.to_string(),
+        ])?;
+        Ok(VcsResult::WriteSuccess {
+            operation: "commit_empty".to_string(),
+            detail: format!("Created empty commit: {message}"),
+        })
+    }
+
+    /// Pushes `branch_name` to `origin` with upstream tracking. GitHub's
+    /// create-PR API requires the head ref to already exist on the remote,
+    /// so this must run before `create_pr` when opening a PR for a
+    /// just-created local branch.
+    pub async fn push_branch(&self, branch_name: &str) -> Result<VcsResult, String> {
+        self.git(&[
+            "push".to_string(),
+            "--set-upstream".to_string(),
+            "origin".to_string(),
+            branch_name.to_string(),
+        ])?;
+        Ok(VcsResult::WriteSuccess {
+            operation: "push_branch".to_string(),
+            detail: format!("Pushed branch '{branch_name}' to origin"),
+        })
+    }
+
     // ── GitHub API operations ────────────────────────────────────────────────
 
     pub async fn pr_list(&self, state: Option<&str>) -> Result<VcsResult, String> {
