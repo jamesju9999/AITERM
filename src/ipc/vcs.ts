@@ -85,6 +85,23 @@ export interface BlameEntry {
   content: string;
 }
 
+export interface ActiveFeature {
+  number: number;
+  title: string;
+  author: string;
+  draft: boolean;
+  url: string;
+  updated_at: string;
+  head_ref: string;
+  files: string[];
+}
+
+export interface StartFeatureOutcome {
+  branch_name: string;
+  pr_number: number;
+  pr_url: string;
+}
+
 export type VcsResult =
   | { type: "log"; commits: CommitEntry[]; truncated: boolean }
   | { type: "diff"; content: string; revision: string }
@@ -125,6 +142,44 @@ export function vcsDetectRepo(path: string): Promise<VcsRepoInfo> {
 
 export function vcsQuery(query: string, repoInfo: VcsRepoInfo, sessionId: string): Promise<VcsResult> {
   return invoke("vcs_query", { query, repoInfo, sessionId });
+}
+
+export function vcsListActiveFeatures(repoInfo: VcsRepoInfo): Promise<ActiveFeature[]> {
+  return invoke<ActiveFeature[]>("vcs_list_active_features", { repoInfo });
+}
+
+export function vcsCheckOverlap(repoInfo: VcsRepoInfo, files: string[]): Promise<ActiveFeature[]> {
+  return invoke<ActiveFeature[]>("vcs_check_overlap", { repoInfo, files });
+}
+
+export function vcsStartFeature(
+  repoInfo: VcsRepoInfo,
+  featureName: string,
+  baseBranch: string,
+  declaredFiles: string[],
+): Promise<StartFeatureOutcome> {
+  return invoke<StartFeatureOutcome>("vcs_start_feature", {
+    repoInfo,
+    featureName,
+    baseBranch,
+    declaredFiles,
+  });
+}
+
+export function vcsFinishFeature(repoInfo: VcsRepoInfo, prNumber: number): Promise<void> {
+  return invoke<void>("vcs_finish_feature", { repoInfo, prNumber });
+}
+
+export function vcsGetFeatureDiff(repoInfo: VcsRepoInfo, base: string, head: string): Promise<string> {
+  return invoke<string>("vcs_get_feature_diff", { repoInfo, base, head });
+}
+
+export function vcsMergeFeature(
+  repoInfo: VcsRepoInfo,
+  prNumber: number,
+  branchToDelete?: string | null,
+): Promise<void> {
+  return invoke<void>("vcs_merge_feature", { repoInfo, prNumber, branchToDelete: branchToDelete ?? null });
 }
 
 // ── Agent loop types ─────────────────────────────────────────────────────────
