@@ -793,13 +793,32 @@ impl GitClient {
     pub async fn delete_remote_branch(&self, branch_name: &str) -> Result<VcsResult, String> {
         let token = self.require_token(3)?;
         let (owner, repo) = self.parse_remote()?;
-        let url = format!("{}/repos/{owner}/{repo}/git/refs/heads/{branch_name}", self.github_api_base);
+        let encoded_branch = encode_ref_path_segment(branch_name);
+        let url = format!("{}/repos/{owner}/{repo}/git/refs/heads/{encoded_branch}", self.github_api_base);
         self.gh_delete(&token, &url).await?;
         Ok(VcsResult::WriteSuccess {
             operation: "delete_remote_branch".to_string(),
             detail: format!("Deleted remote branch '{branch_name}'"),
         })
     }
+}
+
+/// Percent-encodes the characters that would otherwise corrupt a URL if a
+/// git ref name contains them (`#` is parsed as a fragment delimiter and
+/// silently truncates everything after it; `?`/`%`/space have similar
+/// issues). Preserves `/` as a literal separator, since GitHub's ref-path
+/// API endpoints expect real slashes between path segments, not `%2F`.
+fn encode_ref_path_segment(segment: &str) -> String {
+    segment
+        .chars()
+        .map(|c| match c {
+            '#' => "%23".to_string(),
+            '?' => "%3F".to_string(),
+            '%' => "%25".to_string(),
+            ' ' => "%20".to_string(),
+            other => other.to_string(),
+        })
+        .collect()
 }
 
 /// Parse `https://github.com/owner/repo[.git]` or `git@github.com:owner/repo[.git]`
@@ -984,6 +1003,26 @@ abcdef1234567890abcdef1234567890abcdef12 1 1 1\nauthor Alice\nauthor-time 170000
         assert_eq!(entries[0].author, "Alice");
         assert_eq!(entries[0].content, "hello world");
         assert_eq!(entries[0].line_number, 1);
+    }
+
+    #[test]
+    fn preserves_slashes_as_literal_separators() {
+        assert_eq!(encode_ref_path_segment("feature/login-fix"), "feature/login-fix");
+    }
+
+    #[test]
+    fn encodes_hash_which_would_otherwise_be_parsed_as_a_url_fragment() {
+        assert_eq!(encode_ref_path_segment("fix/issue#123"), "fix/issue%23123");
+    }
+
+    #[test]
+    fn encodes_question_mark_and_percent_and_space() {
+        assert_eq!(encode_ref_path_segment("weird?name%with space"), "weird%3Fname%25with%20space");
+    }
+
+    #[test]
+    fn leaves_ordinary_branch_names_unchanged() {
+        assert_eq!(encode_ref_path_segment("feature/x-abc123"), "feature/x-abc123");
     }
 }
 

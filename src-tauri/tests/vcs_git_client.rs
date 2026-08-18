@@ -314,6 +314,31 @@ async fn delete_remote_branch_sends_delete_to_the_correct_github_api_path() {
 }
 
 #[tokio::test]
+async fn delete_remote_branch_correctly_encodes_a_hash_character_instead_of_silently_truncating_it() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/repos/acme/widget/git/refs/heads/fix/issue%23123"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    init_repo_with_origin(dir.path()).await;
+    let client = GitClient::new_with_api_base(
+        dir.path().to_string_lossy().to_string(),
+        Some("test-token".to_string()),
+        server.uri(),
+    );
+
+    client
+        .delete_remote_branch("fix/issue#123")
+        .await
+        .expect("should succeed with the correctly encoded path");
+}
+
+#[tokio::test]
 async fn pr_diff_requests_diff_media_type_and_returns_raw_text() {
     let server = MockServer::start().await;
 
