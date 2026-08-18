@@ -392,6 +392,33 @@ impl GitClient {
         })
     }
 
+    /// 取得整個功能分支相對 base 的完整 diff（不是單一 commit）。
+    /// 用 GitHub compare 端點，Accept 要求 diff 格式而非 JSON，
+    /// 所以不透過 gh_get（它固定要求 application/vnd.github+json）。
+    pub async fn pr_diff(&self, base: &str, head: &str) -> Result<VcsResult, String> {
+        let token = self.require_token(2)?;
+        let (owner, repo) = self.parse_remote()?;
+        let url = format!("{}/repos/{owner}/{repo}/compare/{base}...{head}", self.github_api_base);
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(&url)
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .header(ACCEPT, "application/vnd.github.v3.diff")
+            .header(USER_AGENT, "AITerm")
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("GitHub API error {status}: {body}"));
+        }
+        let content = resp.text().await.map_err(|e| e.to_string())?;
+        Ok(VcsResult::Diff { content, revision: format!("{base}...{head}") })
+    }
+
     pub async fn merge_pr(&self, pr_number: u64) -> Result<VcsResult, String> {
         let token = self.require_token(3)?;
         let (owner, repo) = self.parse_remote()?;

@@ -250,3 +250,30 @@ async fn mark_pr_ready_surfaces_graphql_errors_even_though_http_status_is_200() 
     let err = client.mark_pr_ready(7).await.unwrap_err();
     assert!(err.contains("already ready for review"), "unexpected error: {err}");
 }
+
+#[tokio::test]
+async fn pr_diff_requests_diff_media_type_and_returns_raw_text() {
+    let server = MockServer::start().await;
+
+    let diff_body = "diff --git a/src/Login.tsx b/src/Login.tsx\n+added line\n";
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/widget/compare/main...feature/login-optimize"))
+        .and(header("accept", "application/vnd.github.v3.diff"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(diff_body))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    init_repo_with_origin(dir.path()).await;
+    let client = GitClient::new_with_api_base(
+        dir.path().to_string_lossy().to_string(),
+        Some("test-token".to_string()),
+        server.uri(),
+    );
+
+    let result = client.pr_diff("main", "feature/login-optimize").await.expect("should succeed");
+    match result {
+        aiterm_lib::vcs::VcsResult::Diff { content, .. } => assert_eq!(content, diff_body),
+        other => panic!("expected Diff variant, got {other:?}"),
+    }
+}
