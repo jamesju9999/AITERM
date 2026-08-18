@@ -6,13 +6,15 @@ interface Props {
   repoInfo: VcsRepoInfo;
   feature: ActiveFeature;
   baseBranch: string;
+  onSubmittedForReview: () => void;
   onMerged: () => void;
   onClose: () => void;
 }
 
-export function FinishFeatureReview({ repoInfo, feature, baseBranch, onMerged, onClose }: Props) {
+export function FinishFeatureReview({ repoInfo, feature, baseBranch, onSubmittedForReview, onMerged, onClose }: Props) {
   const { t } = useLocale();
   const [diff, setDiff] = useState<string | null>(null);
+  const [isDraft, setIsDraft] = useState(feature.draft);
   const [deleteBranch, setDeleteBranch] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,32 +23,31 @@ export function FinishFeatureReview({ repoInfo, feature, baseBranch, onMerged, o
     let cancelled = false;
     setDiff(null);
     setError(null);
-
-    const loadDiff = () =>
-      vcsGetFeatureDiff(repoInfo, baseBranch, feature.head_ref)
-        .then((d) => {
-          if (!cancelled) setDiff(d);
-        })
-        .catch((e) => {
-          if (!cancelled) setError(String(e));
-        });
-
-    if (feature.draft) {
-      vcsFinishFeature(repoInfo, feature.number)
-        .then(() => {
-          if (!cancelled) return loadDiff();
-        })
-        .catch((e) => {
-          if (!cancelled) setError(String(e));
-        });
-    } else {
-      void loadDiff();
-    }
-
+    vcsGetFeatureDiff(repoInfo, baseBranch, feature.head_ref)
+      .then((d) => {
+        if (!cancelled) setDiff(d);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
     return () => {
       cancelled = true;
     };
-  }, [repoInfo.root, repoInfo.connection_id, baseBranch, feature.head_ref, feature.draft, feature.number]);
+  }, [repoInfo.root, repoInfo.connection_id, baseBranch, feature.head_ref]);
+
+  const handleSubmitForReview = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await vcsFinishFeature(repoInfo, feature.number);
+      setIsDraft(false);
+      onSubmittedForReview();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handleMerge = async () => {
     setBusy(true);
@@ -74,27 +75,39 @@ export function FinishFeatureReview({ repoInfo, feature, baseBranch, onMerged, o
 
         {error && <div className="vcs-finish-review-dialog__error">{error}</div>}
 
-        <label className="vcs-delete-branch-checkbox">
-          <input
-            type="checkbox"
-            checked={deleteBranch}
-            onChange={(e) => setDeleteBranch(e.target.checked)}
-            disabled={busy}
-          />
-          {t.vcs_delete_branch_after_merge}
-        </label>
+        {!isDraft && (
+          <label className="vcs-delete-branch-checkbox">
+            <input
+              type="checkbox"
+              checked={deleteBranch}
+              onChange={(e) => setDeleteBranch(e.target.checked)}
+              disabled={busy}
+            />
+            {t.vcs_delete_branch_after_merge}
+          </label>
+        )}
 
         <div className="vcs-finish-review-dialog__actions">
           <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={onClose} disabled={busy}>
             {t.common_cancel}
           </button>
-          <button
-            className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
-            onClick={handleMerge}
-            disabled={busy || diff === null}
-          >
-            {t.vcs_merge_button}
-          </button>
+          {isDraft ? (
+            <button
+              className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
+              onClick={handleSubmitForReview}
+              disabled={busy || diff === null}
+            >
+              {t.vcs_submit_for_review}
+            </button>
+          ) : (
+            <button
+              className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
+              onClick={handleMerge}
+              disabled={busy || diff === null}
+            >
+              {t.vcs_merge_button}
+            </button>
+          )}
         </div>
       </div>
     </div>

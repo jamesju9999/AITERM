@@ -314,6 +314,7 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
           repoInfo={activeDialog.repo}
           feature={activeDialog.feature}
           baseBranch="main"
+          onSubmittedForReview={refreshFeatures}
           onMerged={() => { setActiveDialog(null); void refreshFeatures(); }}
           onClose={() => setActiveDialog(null)}
         />

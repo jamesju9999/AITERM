@@ -397,6 +397,7 @@ const zhTW = {
     vcs_loading_diff: "載入中…",
     vcs_merge_button: "合併",
     vcs_delete_branch_after_merge: "合併後刪除這個功能分支",
+    vcs_submit_for_review: "送出審核",
 
     // Design & Spec
     design_tab: "設計與規格",
@@ -1644,6 +1645,7 @@ const enRaw = {
     vcs_loading_diff: "Loading…",
     vcs_merge_button: "Merge",
     vcs_delete_branch_after_merge: "Delete this feature branch after merging",
+    vcs_submit_for_review: "Submit for Review",
 
     // Design & Spec
     design_tab: "Design & Spec",

@@ -39,16 +39,73 @@ beforeEach(() => {
 });
 
 describe("FinishFeatureReview", () => {
-  it("loads and shows the diff on mount", async () => {
-    getDiffMock.mockResolvedValueOnce("diff --git a/x b/x\n+hello\n");
+  it("loads the diff on mount regardless of draft status, without ever calling vcsFinishFeature automatically", async () => {
+    const draftFeature = { ...FEATURE, draft: true };
+    getDiffMock.mockResolvedValueOnce("diff content");
     render(
       <LocaleProvider>
-        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onMerged={vi.fn()} onClose={vi.fn()} />
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={draftFeature} baseBranch="main" onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
       </LocaleProvider>
     );
 
-    await waitFor(() => expect(screen.getByText(/\+hello/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("diff content")).toBeInTheDocument());
     expect(getDiffMock).toHaveBeenCalledWith(REPO_INFO, "main", "feature/login-optimize");
+    expect(finishMock).not.toHaveBeenCalled();
+  });
+
+  it("shows a submit-for-review button for a draft feature; clicking it calls vcsFinishFeature and then switches to the merge button", async () => {
+    const draftFeature = { ...FEATURE, draft: true };
+    getDiffMock.mockResolvedValueOnce("diff content");
+    finishMock.mockResolvedValueOnce(undefined);
+    const onSubmittedForReview = vi.fn();
+    render(
+      <LocaleProvider>
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={draftFeature} baseBranch="main" onSubmittedForReview={onSubmittedForReview} onMerged={vi.fn()} onClose={vi.fn()} />
+      </LocaleProvider>
+    );
+
+    await waitFor(() => expect(screen.getByText("diff content")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "送出審核" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "合併" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "送出審核" }));
+
+    await waitFor(() => expect(finishMock).toHaveBeenCalledWith(REPO_INFO, 7));
+    await waitFor(() => expect(onSubmittedForReview).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "合併" })).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "送出審核" })).not.toBeInTheDocument();
+  });
+
+  it("shows the merge button directly for a non-draft feature, without ever calling vcsFinishFeature", async () => {
+    getDiffMock.mockResolvedValueOnce("diff content");
+    render(
+      <LocaleProvider>
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
+      </LocaleProvider>
+    );
+
+    await waitFor(() => expect(screen.getByText("diff content")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "合併" })).toBeInTheDocument();
+    expect(finishMock).not.toHaveBeenCalled();
+  });
+
+  it("shows an error and lets the user retry when submitting for review fails", async () => {
+    const draftFeature = { ...FEATURE, draft: true };
+    getDiffMock.mockResolvedValueOnce("diff content");
+    finishMock.mockRejectedValueOnce("此連線為唯讀模式，無法送審");
+    render(
+      <LocaleProvider>
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={draftFeature} baseBranch="main" onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
+      </LocaleProvider>
+    );
+
+    await waitFor(() => expect(screen.getByText("diff content")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "送出審核" }));
+
+    await waitFor(() => expect(screen.getByText(/唯讀模式/)).toBeInTheDocument());
+    // Still draft (mark-ready failed), button still present and clickable again — not stuck busy.
+    const retryButton = screen.getByRole("button", { name: "送出審核" });
+    expect(retryButton).not.toBeDisabled();
   });
 
   it("merges and deletes the branch by default (checkbox starts checked)", async () => {
@@ -57,7 +114,7 @@ describe("FinishFeatureReview", () => {
     const onMerged = vi.fn();
     render(
       <LocaleProvider>
-        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onMerged={onMerged} onClose={vi.fn()} />
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onSubmittedForReview={vi.fn()} onMerged={onMerged} onClose={vi.fn()} />
       </LocaleProvider>
     );
 
@@ -74,7 +131,7 @@ describe("FinishFeatureReview", () => {
     mergeMock.mockResolvedValueOnce(undefined);
     render(
       <LocaleProvider>
-        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onMerged={vi.fn()} onClose={vi.fn()} />
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
       </LocaleProvider>
     );
 
@@ -89,7 +146,7 @@ describe("FinishFeatureReview", () => {
     getDiffMock.mockRejectedValueOnce("GitHub API error 404: Not Found");
     render(
       <LocaleProvider>
-        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onMerged={vi.fn()} onClose={vi.fn()} />
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
       </LocaleProvider>
     );
 
@@ -102,7 +159,7 @@ describe("FinishFeatureReview", () => {
     mergeMock.mockRejectedValueOnce("GitHub API error 405: Pull Request is not mergeable");
     render(
       <LocaleProvider>
-        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onMerged={vi.fn()} onClose={vi.fn()} />
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onSubmittedForReview={vi.fn()} onMerged={vi.fn()} onClose={vi.fn()} />
       </LocaleProvider>
     );
 
@@ -110,54 +167,5 @@ describe("FinishFeatureReview", () => {
     fireEvent.click(screen.getByRole("button", { name: "合併" }));
 
     await waitFor(() => expect(screen.getByText(/not mergeable/)).toBeInTheDocument());
-  });
-
-  it("marks a draft feature ready before loading the diff", async () => {
-    const draftFeature = { ...FEATURE, draft: true };
-    let resolveFinish!: () => void;
-    finishMock.mockReset();
-    finishMock.mockReturnValueOnce(new Promise<void>((resolve) => { resolveFinish = resolve; }));
-    getDiffMock.mockResolvedValueOnce("diff content");
-    render(
-      <LocaleProvider>
-        <FinishFeatureReview repoInfo={REPO_INFO} feature={draftFeature} baseBranch="main" onMerged={vi.fn()} onClose={vi.fn()} />
-      </LocaleProvider>
-    );
-
-    await waitFor(() => expect(finishMock).toHaveBeenCalledWith(REPO_INFO, 7));
-    // The diff should not be requested until mark-ready has resolved.
-    expect(getDiffMock).not.toHaveBeenCalled();
-
-    resolveFinish();
-
-    await waitFor(() => expect(screen.getByText("diff content")).toBeInTheDocument());
-    expect(getDiffMock).toHaveBeenCalledWith(REPO_INFO, "main", "feature/login-optimize");
-  });
-
-  it("does not call vcsFinishFeature for a non-draft feature and loads the diff directly", async () => {
-    getDiffMock.mockResolvedValueOnce("diff content");
-    render(
-      <LocaleProvider>
-        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onMerged={vi.fn()} onClose={vi.fn()} />
-      </LocaleProvider>
-    );
-
-    await waitFor(() => expect(screen.getByText("diff content")).toBeInTheDocument());
-    expect(finishMock).not.toHaveBeenCalled();
-    expect(getDiffMock).toHaveBeenCalledWith(REPO_INFO, "main", "feature/login-optimize");
-  });
-
-  it("shows an error and never fetches the diff when marking a draft feature ready fails", async () => {
-    const draftFeature = { ...FEATURE, draft: true };
-    finishMock.mockReset();
-    finishMock.mockRejectedValueOnce("此連線為唯讀模式，無法送審");
-    render(
-      <LocaleProvider>
-        <FinishFeatureReview repoInfo={REPO_INFO} feature={draftFeature} baseBranch="main" onMerged={vi.fn()} onClose={vi.fn()} />
-      </LocaleProvider>
-    );
-
-    await waitFor(() => expect(screen.getByText(/唯讀模式/)).toBeInTheDocument());
-    expect(getDiffMock).not.toHaveBeenCalled();
   });
 });
