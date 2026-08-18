@@ -381,6 +381,12 @@ const zhTW = {
     vcs_goal_achieved: "✅ 目標達成",
     vcs_loop_stopped: "已停止",
     vcs_step_running: (n: number) => `Step ${n} 執行中…`,
+    vcs_start_feature: "開始新功能",
+    vcs_refresh: "重新整理",
+    vcs_no_active_features: "目前沒有進行中的功能",
+    vcs_status_in_progress: "進行中",
+    vcs_status_in_review: "待審核",
+    vcs_finish_feature: "完成，送審",
 
     // Design & Spec
     design_tab: "設計與規格",
@@ -1612,6 +1618,12 @@ const enRaw = {
     vcs_goal_achieved: "✅ Goal achieved",
     vcs_loop_stopped: "Stopped",
     vcs_step_running: (n: number) => `Step ${n} running…`,
+    vcs_start_feature: "Start New Feature",
+    vcs_refresh: "Refresh",
+    vcs_no_active_features: "No features in progress",
+    vcs_status_in_progress: "In Progress",
+    vcs_status_in_review: "In Review",
+    vcs_finish_feature: "Finish & Submit",
 
     // Design & Spec
     design_tab: "Design & Spec",
