@@ -9,7 +9,7 @@ import { StartFeatureDialog } from "./StartFeatureDialog";
 import { FinishFeatureReview } from "./FinishFeatureReview";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
-import { pickFolder, type ActiveFeature } from "../../ipc/vcs";
+import { pickFolder, type ActiveFeature, type VcsRepoInfo } from "../../ipc/vcs";
 import { useLocale } from "../../contexts/LocaleContext";
 import { ModelPickerButton } from "../ModelPickerButton";
 import "./VcsView.css";
@@ -34,9 +34,12 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
 
   const repoInfo = useVcsCwd(sessionId, manualPath || undefined);
   const { messages, isRunning, send, stop } = useVcsAgentLoop(sessionId, repoInfo);
-  const { features, loading: featuresLoading, refresh: refreshFeatures } = useTeamFeatures(repoInfo);
-  const [showStartDialog, setShowStartDialog] = useState(false);
-  const [reviewingFeature, setReviewingFeature] = useState<ActiveFeature | null>(null);
+  const { features, loading: featuresLoading, error: featuresError, refresh: refreshFeatures } = useTeamFeatures(repoInfo);
+  // 開啟對話框當下就把 repoInfo 快照下來，避免 useVcsCwd 的輪詢在對話框開著時把它換掉或設成 null。
+  // 用單一 state 存兩種對話框，天然保證同時最多只有一個開著。
+  const [activeDialog, setActiveDialog] = useState<
+    { kind: "start"; repo: VcsRepoInfo } | { kind: "finish"; feature: ActiveFeature; repo: VcsRepoInfo } | null
+  >(null);
   const [input, setInput] = useState("");
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState<string>("");
@@ -206,13 +209,20 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
 
       {/* Team panel */}
       {repoInfo && (
-        <TeamPanel
-          features={features}
-          loading={featuresLoading}
-          onRefresh={refreshFeatures}
-          onStartFeature={() => setShowStartDialog(true)}
-          onFinishFeature={(f) => setReviewingFeature(f)}
-        />
+        <>
+          <TeamPanel
+            features={features}
+            loading={featuresLoading}
+            onRefresh={refreshFeatures}
+            onStartFeature={() => setActiveDialog({ kind: "start", repo: repoInfo })}
+            onFinishFeature={(f) => setActiveDialog({ kind: "finish", feature: f, repo: repoInfo })}
+          />
+          {featuresError && (
+            <div style={{ padding: "4px 16px", fontSize: 11, color: "#f87171" }}>
+              {featuresError.startsWith("no_token") ? t.vcs_no_token : featuresError}
+            </div>
+          )}
+        </>
       )}
 
       {/* Messages */}
@@ -289,22 +299,22 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
         </div>
       )}
 
-      {showStartDialog && repoInfo && (
+      {activeDialog?.kind === "start" && (
         <StartFeatureDialog
-          repoInfo={repoInfo}
+          repoInfo={activeDialog.repo}
           baseBranch="main"
-          onStarted={() => { setShowStartDialog(false); void refreshFeatures(); }}
-          onClose={() => setShowStartDialog(false)}
+          onStarted={() => { setActiveDialog(null); void refreshFeatures(); }}
+          onClose={() => setActiveDialog(null)}
         />
       )}
 
-      {reviewingFeature && repoInfo && (
+      {activeDialog?.kind === "finish" && (
         <FinishFeatureReview
-          repoInfo={repoInfo}
-          feature={reviewingFeature}
+          repoInfo={activeDialog.repo}
+          feature={activeDialog.feature}
           baseBranch="main"
-          onMerged={() => { setReviewingFeature(null); void refreshFeatures(); }}
-          onClose={() => setReviewingFeature(null)}
+          onMerged={() => { setActiveDialog(null); void refreshFeatures(); }}
+          onClose={() => setActiveDialog(null)}
         />
       )}
     </div>
