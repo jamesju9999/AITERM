@@ -345,6 +345,43 @@ impl GitClient {
         Ok(files.into_iter().map(|f| f.filename).collect())
     }
 
+    /// 把一個 draft PR 轉成 ready for review。GitHub REST 沒有對應端點，
+    /// 只能先用 REST 拿 node_id，再打 GraphQL mutation。
+    pub async fn mark_pr_ready(&self, pr_number: u64) -> Result<VcsResult, String> {
+        let token = self.require_token(3)?;
+        let (owner, repo) = self.parse_remote()?;
+
+        let detail_url = format!("{}/repos/{owner}/{repo}/pulls/{pr_number}", self.github_api_base);
+        let detail: serde_json::Value = self
+            .gh_get(&token, &detail_url)
+            .await?
+            .json()
+            .await
+            .map_err(|e| e.to_string())?;
+        let node_id = detail["node_id"]
+            .as_str()
+            .ok_or_else(|| "GitHub 回應缺少 node_id".to_string())?;
+
+        let mutation = serde_json::json!({
+            "query": "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }",
+            "variables": { "id": node_id }
+        });
+        let graphql_url = format!("{}/graphql", self.github_api_base);
+        let resp = self.gh_post(&token, &graphql_url, &mutation).await?;
+        let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+
+        // GraphQL 錯誤是 HTTP 200 + body 裡的 errors 陣列，不是靠狀態碼，
+        // 所以 gh_post 的狀態碼檢查不會抓到，這裡要自己額外檢查。
+        if let Some(errors) = body.get("errors") {
+            return Err(format!("GitHub GraphQL error: {errors}"));
+        }
+
+        Ok(VcsResult::WriteSuccess {
+            operation: "mark_pr_ready".to_string(),
+            detail: format!("PR #{pr_number} marked ready for review"),
+        })
+    }
+
     pub async fn merge_pr(&self, pr_number: u64) -> Result<VcsResult, String> {
         let token = self.require_token(3)?;
         let (owner, repo) = self.parse_remote()?;

@@ -181,3 +181,72 @@ async fn list_active_features_degrades_gracefully_when_one_pr_files_fetch_fails(
     assert_eq!(features[1].number, 8);
     assert!(features[1].files.is_empty());
 }
+
+#[tokio::test]
+async fn mark_pr_ready_fetches_node_id_then_calls_graphql_mutation() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/widget/pulls/7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "node_id": "PR_kwABC123"
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .and(body_json(serde_json::json!({
+            "query": "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }",
+            "variables": { "id": "PR_kwABC123" }
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": { "markPullRequestReadyForReview": { "pullRequest": { "id": "PR_kwABC123" } } }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    init_repo_with_origin(dir.path()).await;
+    let client = GitClient::new_with_api_base(
+        dir.path().to_string_lossy().to_string(),
+        Some("test-token".to_string()),
+        server.uri(),
+    );
+
+    client.mark_pr_ready(7).await.expect("should succeed");
+}
+
+#[tokio::test]
+async fn mark_pr_ready_surfaces_graphql_errors_even_though_http_status_is_200() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/widget/pulls/7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "node_id": "PR_kwABC123"
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": null,
+            "errors": [{"message": "Pull request is already ready for review"}]
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    init_repo_with_origin(dir.path()).await;
+    let client = GitClient::new_with_api_base(
+        dir.path().to_string_lossy().to_string(),
+        Some("test-token".to_string()),
+        server.uri(),
+    );
+
+    let err = client.mark_pr_ready(7).await.unwrap_err();
+    assert!(err.contains("already ready for review"), "unexpected error: {err}");
+}
