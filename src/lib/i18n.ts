@@ -387,6 +387,12 @@ const zhTW = {
     vcs_status_in_progress: "進行中",
     vcs_status_in_review: "待審核",
     vcs_finish_feature: "完成，送審",
+    vcs_feature_name_label: "功能名稱",
+    vcs_feature_files_label: "預計會動到的檔案",
+    vcs_feature_files_placeholder: "選填，一行一個",
+    vcs_overlap_warning: "這些人目前也在動同樣的檔案：",
+    vcs_overlap_entry: (author: string, title: string) => `${author}（${title}）`,
+    vcs_start_anyway: "仍要開始",
 
     // Design & Spec
     design_tab: "設計與規格",
@@ -1624,6 +1630,12 @@ const enRaw = {
     vcs_status_in_progress: "In Progress",
     vcs_status_in_review: "In Review",
     vcs_finish_feature: "Finish & Submit",
+    vcs_feature_name_label: "Feature Name",
+    vcs_feature_files_label: "Files you expect to touch",
+    vcs_feature_files_placeholder: "Optional, one per line",
+    vcs_overlap_warning: "These people are currently working on the same files:",
+    vcs_overlap_entry: (author: string, title: string) => `${author} (${title})`,
+    vcs_start_anyway: "Start Anyway",
 
     // Design & Spec
     design_tab: "Design & Spec",

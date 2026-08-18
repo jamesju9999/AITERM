@@ -232,3 +232,97 @@
   padding: 2px 0;
   font-family: monospace;
 }
+
+/* ── Start feature dialog ────────────────────────────────────────── */
+.vcs-start-feature-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.vcs-start-feature-dialog {
+  width: 380px;
+  max-width: 90vw;
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.vcs-start-feature-dialog__title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+.vcs-start-feature-dialog__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #888;
+}
+
+.vcs-start-feature-dialog__field input,
+.vcs-start-feature-dialog__field textarea {
+  background: #0c0c0c;
+  border: 1px solid #2a2a2a;
+  color: #e6e6e6;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 13px;
+  outline: none;
+  font-family: inherit;
+}
+
+.vcs-start-feature-dialog__field input:focus,
+.vcs-start-feature-dialog__field textarea:focus {
+  border-color: var(--accent, #818cf8);
+}
+
+.vcs-start-feature-dialog__error {
+  font-size: 11px;
+  color: #f87171;
+}
+
+.vcs-start-feature-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.vcs-overlap-warning {
+  font-size: 12px;
+  color: #f5c518;
+  background: rgba(245, 197, 24, 0.08);
+  border-left: 2px solid #f5c518;
+  border-radius: 4px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vcs-overlap-warning p {
+  margin: 0;
+}
+
+.vcs-overlap-warning ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.vcs-overlap-warning li {
+  font-size: 12px;
+  color: #ddd;
+  padding: 2px 0;
+}
