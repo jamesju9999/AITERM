@@ -540,3 +540,45 @@ async fn failed_push_can_be_rolled_back_via_checkout_and_force_delete() {
         "feature branch should have been deleted locally"
     );
 }
+
+#[tokio::test]
+async fn create_branch_from_a_freshly_fetched_remote_ref_picks_up_new_remote_commits_not_a_stale_local_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let work_dir = init_repo_with_local_remote(dir.path()).await;
+    let bare_dir = dir.path().join("origin.git");
+
+    // Simulate a second contributor pushing a new commit to origin/main that
+    // this local clone doesn't know about yet (its local `main` is stale).
+    let other_clone = dir.path().join("other-clone");
+    std::process::Command::new("git")
+        .args(["clone", "-q"]).arg(&bare_dir).arg(&other_clone)
+        .status().unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.email", "other@test.com"]).current_dir(&other_clone).status().unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.name", "Other"]).current_dir(&other_clone).status().unwrap();
+    std::fs::write(other_clone.join("new-file.txt"), "new content").unwrap();
+    std::process::Command::new("git")
+        .args(["add", "."]).current_dir(&other_clone).status().unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "-q", "-m", "second contributor's commit"]).current_dir(&other_clone).status().unwrap();
+    std::process::Command::new("git")
+        .args(["push", "-q", "origin", "main"]).current_dir(&other_clone).status().unwrap();
+
+    // The original working repo's local `main` is now stale (doesn't have
+    // "second contributor's commit"). Fetch + branch from origin/main should
+    // still pick it up correctly.
+    let client = GitClient::new(work_dir.to_string_lossy().to_string(), None);
+    client.fetch_ref("main").await.expect("fetch_ref should succeed");
+    client.create_branch("feature/from-fresh-remote", Some("origin/main")).await.expect("create_branch should succeed");
+
+    // The new branch must contain the second contributor's commit, which the
+    // local (stale) `main` never had.
+    let out = std::process::Command::new("git")
+        .args(["log", "--oneline", "feature/from-fresh-remote"])
+        .current_dir(&work_dir)
+        .output()
+        .unwrap();
+    let log = String::from_utf8_lossy(&out.stdout);
+    assert!(log.contains("second contributor's commit"), "expected the new branch to include the remote's latest commit, got log: {log}");
+}

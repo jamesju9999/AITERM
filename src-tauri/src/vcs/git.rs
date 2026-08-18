@@ -139,6 +139,18 @@ impl GitClient {
         })
     }
 
+    /// Fetches `ref_name` from `origin` so a subsequent `create_branch(...,
+    /// Some(&format!("origin/{ref_name}")))` starts from the actual current
+    /// remote state, not whatever a possibly-missing or stale local branch
+    /// of the same name happens to point at.
+    pub async fn fetch_ref(&self, ref_name: &str) -> Result<VcsResult, String> {
+        self.git(&["fetch".to_string(), "origin".to_string(), ref_name.to_string()])?;
+        Ok(VcsResult::WriteSuccess {
+            operation: "fetch_ref".to_string(),
+            detail: format!("Fetched '{ref_name}' from origin"),
+        })
+    }
+
     pub async fn create_branch(&self, name: &str, from: Option<&str>) -> Result<VcsResult, String> {
         let mut args = vec!["checkout".to_string(), "-b".to_string(), name.to_string()];
         if let Some(f) = from {

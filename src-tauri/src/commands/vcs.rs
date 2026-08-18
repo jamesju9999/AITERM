@@ -1039,7 +1039,8 @@ pub async fn vcs_start_feature(
     let token = resolve_vcs_token(&repo_info, &secrets);
     let client = GitClient::new(repo_info.root, token);
 
-    client.create_branch(&branch_name, Some(&base_branch)).await?;
+    client.fetch_ref(&base_branch).await?;
+    client.create_branch(&branch_name, Some(&format!("origin/{base_branch}"))).await?;
     // A freshly-created branch has zero commits ahead of base and doesn't
     // exist on the remote yet — GitHub's create-PR API rejects both of
     // those. An empty commit plus a push satisfies it before we call
