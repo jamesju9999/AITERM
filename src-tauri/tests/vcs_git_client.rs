@@ -478,6 +478,56 @@ async fn commit_empty_creates_a_commit_with_no_file_changes() {
     assert!(String::from_utf8_lossy(&diff_out.stdout).trim().is_empty(), "empty commit should produce an empty diff");
 }
 
+/// `--allow-empty` alone only PERMITS an empty commit — it does not FORCE
+/// one. If the caller's working directory has anything staged at the moment
+/// `commit_empty` runs (e.g. the user was mid-`git add` for unrelated work),
+/// a plain `--allow-empty` commit silently sweeps that staged content in.
+/// This proves `commit_empty` stays genuinely empty and leaves staged
+/// content untouched regardless of index state.
+#[tokio::test]
+async fn commit_empty_does_not_sweep_in_unrelated_staged_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let work_dir = init_repo_with_local_remote(dir.path()).await;
+
+    let client = GitClient::new(work_dir.to_string_lossy().to_string(), None);
+    client.create_branch("feature/test-stage-safety", Some("main")).await.expect("create_branch should succeed");
+
+    // Simulate a user who has unrelated content staged (mid-`git add`, e.g.)
+    // at the exact moment vcs_start_feature runs its marker commit.
+    std::fs::write(work_dir.join("unrelated_staged_work.txt"), "should not be swept in").unwrap();
+    std::process::Command::new("git")
+        .args(["add", "unrelated_staged_work.txt"])
+        .current_dir(&work_dir)
+        .status()
+        .unwrap();
+
+    client.commit_empty("Start feature: test").await.expect("commit_empty should succeed");
+
+    // The commit itself must be genuinely empty — no files changed.
+    let diff_out = std::process::Command::new("git")
+        .args(["diff", "--stat", "main..feature/test-stage-safety"])
+        .current_dir(&work_dir)
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&diff_out.stdout).trim().is_empty(),
+        "commit_empty must produce a commit with zero file changes, even when something else is staged"
+    );
+
+    // The unrelated staged content must still be staged afterward — not
+    // swept into the commit, not lost.
+    let status_out = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&work_dir)
+        .output()
+        .unwrap();
+    let status = String::from_utf8_lossy(&status_out.stdout);
+    assert!(
+        status.contains("unrelated_staged_work.txt"),
+        "unrelated staged content must remain staged (untouched) after commit_empty, got status: {status}"
+    );
+}
+
 /// Exercises the same create_branch -> commit_empty -> (failed push) ->
 /// rollback sequence that `vcs_start_feature` performs when `push_branch`
 /// fails, proving the cleanup (`checkout_branch` back to base +

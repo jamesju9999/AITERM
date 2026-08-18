@@ -222,13 +222,21 @@ impl GitClient {
         })
     }
 
-    /// Commits with `--allow-empty` — used to give a freshly-created feature
-    /// branch at least one commit ahead of its base, since GitHub's create-PR
-    /// API rejects a PR whose head and base have zero commits between them.
+    /// Commits with `--allow-empty --only` — used to give a freshly-created
+    /// feature branch at least one commit ahead of its base, since GitHub's
+    /// create-PR API rejects a PR whose head and base have zero commits
+    /// between them. `--allow-empty` alone only PERMITS an empty commit — it
+    /// does not FORCE one, so if the caller's working directory happens to
+    /// have anything staged at this moment (unrelated to this feature), a
+    /// plain `--allow-empty` commit would silently sweep that staged content
+    /// in. `--only` (with no pathspec) restricts the commit to nothing,
+    /// guaranteeing it's genuinely empty regardless of index state, and
+    /// leaves whatever was staged untouched afterward.
     pub async fn commit_empty(&self, message: &str) -> Result<VcsResult, String> {
         self.git(&[
             "commit".to_string(),
             "--allow-empty".to_string(),
+            "--only".to_string(),
             "-m".to_string(),
             message.to_string(),
         ])?;
