@@ -2,10 +2,14 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useVcsCwd } from "../../hooks/useVcsCwd";
 import { useVcsAgentLoop } from "../../hooks/useVcsAgentLoop";
+import { useTeamFeatures } from "../../hooks/useTeamFeatures";
 import { VcsLoopMessageBubble } from "./VcsMessageBubble";
+import { TeamPanel } from "./TeamPanel";
+import { StartFeatureDialog } from "./StartFeatureDialog";
+import { FinishFeatureReview } from "./FinishFeatureReview";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
-import { pickFolder } from "../../ipc/vcs";
+import { pickFolder, type ActiveFeature } from "../../ipc/vcs";
 import { useLocale } from "../../contexts/LocaleContext";
 import { ModelPickerButton } from "../ModelPickerButton";
 import "./VcsView.css";
@@ -30,6 +34,9 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
 
   const repoInfo = useVcsCwd(sessionId, manualPath || undefined);
   const { messages, isRunning, send, stop } = useVcsAgentLoop(sessionId, repoInfo);
+  const { features, loading: featuresLoading, refresh: refreshFeatures } = useTeamFeatures(repoInfo);
+  const [showStartDialog, setShowStartDialog] = useState(false);
+  const [reviewingFeature, setReviewingFeature] = useState<ActiveFeature | null>(null);
   const [input, setInput] = useState("");
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState<string>("");
@@ -197,6 +204,17 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
         )}
       </div>
 
+      {/* Team panel */}
+      {repoInfo && (
+        <TeamPanel
+          features={features}
+          loading={featuresLoading}
+          onRefresh={refreshFeatures}
+          onStartFeature={() => setShowStartDialog(true)}
+          onFinishFeature={(f) => setReviewingFeature(f)}
+        />
+      )}
+
       {/* Messages */}
       <div className="vcs-view__messages">
         {!repoInfo ? (
@@ -269,6 +287,25 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
             {t.vcs_add_conn_hint}
           </button>
         </div>
+      )}
+
+      {showStartDialog && repoInfo && (
+        <StartFeatureDialog
+          repoInfo={repoInfo}
+          baseBranch="main"
+          onStarted={() => { setShowStartDialog(false); void refreshFeatures(); }}
+          onClose={() => setShowStartDialog(false)}
+        />
+      )}
+
+      {reviewingFeature && repoInfo && (
+        <FinishFeatureReview
+          repoInfo={repoInfo}
+          feature={reviewingFeature}
+          baseBranch="main"
+          onMerged={() => { setReviewingFeature(null); void refreshFeatures(); }}
+          onClose={() => setReviewingFeature(null)}
+        />
       )}
     </div>
   );
