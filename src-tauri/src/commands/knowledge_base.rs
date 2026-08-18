@@ -44,7 +44,7 @@ pub async fn kb_delete_notebook(id: String, db: State<'_, KnowledgeBaseDb>) -> R
 use std::path::Path;
 use std::sync::Arc;
 use async_trait::async_trait;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use serde::Serialize;
 
 use crate::config::ConfigStore;
@@ -56,22 +56,18 @@ use crate::knowledge_base::embedding::{
 };
 use crate::knowledge_base::ingest::{sync_notebook, DocumentConverter, SyncProgress, SyncSummary};
 
-struct MarkItDownConverter {
+struct RoutedConverter {
     app: AppHandle,
     vision_provider_id: Option<String>,
 }
 
 #[async_trait]
-impl DocumentConverter for MarkItDownConverter {
+impl DocumentConverter for RoutedConverter {
     async fn convert(&self, path: &Path) -> Result<String, String> {
-        let config = self.app.state::<Arc<ConfigStore>>();
-        let secrets = self.app.state::<Arc<SecretStore>>();
-        crate::commands::markitdown::markitdown_convert(
+        crate::document_convert::convert_document(
             self.app.clone(),
-            path.to_string_lossy().to_string(),
+            path,
             self.vision_provider_id.clone(),
-            config,
-            secrets,
         ).await
     }
 }
@@ -150,7 +146,7 @@ pub async fn kb_sync_notebook(
     embedder_cfg.model = model;
     let embedder = HttpEmbedder::new(embedder_cfg)?;
 
-    let converter = MarkItDownConverter {
+    let converter = RoutedConverter {
         app: app.clone(),
         vision_provider_id: Some(provider_id),
     };
