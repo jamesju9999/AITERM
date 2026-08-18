@@ -62,4 +62,27 @@ describe("TeamPanel", () => {
     renderPanel({ features: [] });
     expect(screen.getByText(/目前沒有進行中的功能/)).toBeInTheDocument();
   });
+
+  it("calls onFinishFeature when finish button is clicked on a draft feature", () => {
+    const onFinishFeature = vi.fn();
+    renderPanel({ onFinishFeature });
+    fireEvent.click(screen.getByText("登入頁優化")); // expand
+    fireEvent.click(screen.getByRole("button", { name: "完成，送審" }));
+    expect(onFinishFeature).toHaveBeenCalledWith(FEATURE);
+  });
+
+  it("does not show the finish button for a feature that is already in review (not draft)", () => {
+    const inReview = { ...FEATURE, draft: false };
+    renderPanel({ features: [inReview] });
+    fireEvent.click(screen.getByText("登入頁優化")); // expand
+    expect(screen.queryByRole("button", { name: "完成，送審" })).not.toBeInTheDocument();
+  });
+
+  it("collapses the file list when the expanded row is clicked again", () => {
+    renderPanel();
+    fireEvent.click(screen.getByText("登入頁優化")); // expand
+    expect(screen.getByText("src/Login.tsx")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("登入頁優化")); // collapse
+    expect(screen.queryByText("src/Login.tsx")).not.toBeInTheDocument();
+  });
 });

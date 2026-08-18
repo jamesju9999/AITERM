@@ -34,7 +34,7 @@ export function TeamPanel({ features, loading, onRefresh, onStartFeature, onFini
             return (
               <li key={f.number} className="vcs-team-panel__item">
                 <button
-                  className="vcs-team-panel__item-main"
+                  className={`vcs-team-panel__item-main ${expanded ? "vcs-team-panel__item-main--expanded" : ""}`}
                   onClick={() => setExpandedNumber(expanded ? null : f.number)}
                 >
                   <span className="vcs-team-panel__title">{f.title}</span>
