@@ -102,6 +102,13 @@ async fn resolve_with_fallback(
     }
 }
 
+/// Runs anydoc's synchronous conversion on the blocking thread pool.
+async fn convert_with_anydoc(file_path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || anydoc::to_markdown(&file_path).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| format!("anydoc conversion task panicked: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +224,18 @@ mod tests {
             async { Ok("vision output".to_string()) },
         ).await;
         assert_eq!(result.unwrap(), "vision output");
+    }
+
+    #[tokio::test]
+    async fn anydoc_converts_a_real_csv_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sample.csv");
+        std::fs::write(&path, "name,age\nAlice,30\nBob,25\n").unwrap();
+
+        let markdown = convert_with_anydoc(path.to_string_lossy().to_string()).await
+            .expect("anydoc should convert a simple CSV");
+
+        assert!(markdown.contains("Alice"), "got: {markdown}");
+        assert!(markdown.contains("Bob"), "got: {markdown}");
     }
 }
