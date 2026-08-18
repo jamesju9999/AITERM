@@ -2,6 +2,17 @@
 //! MarkItDown (Python sidecar; handles images via vision, audio transcription,
 //! `.msg`, html, and plain-text formats that anydoc doesn't touch).
 
+use std::path::Path;
+use async_trait::async_trait;
+
+/// Converts one file to Markdown. Implemented by `RoutedConverter`
+/// (`commands/knowledge_base.rs`) in production; tests use fakes (see
+/// `tests/knowledge_base_ingest.rs`) to avoid depending on Python or anydoc.
+#[async_trait]
+pub trait DocumentConverter: Send + Sync {
+    async fn convert(&self, path: &Path) -> Result<String, String>;
+}
+
 /// Which engine converts a given file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Engine {
