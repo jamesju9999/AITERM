@@ -4,9 +4,13 @@ import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { DocConverterView } from "./DocConverterView";
 
 // Mock IPC
-vi.mock("../../ipc/markitdown", () => ({
-  markitdownConvert: vi.fn(),
-  markitdownPickFile: vi.fn(),
+vi.mock("../../ipc/docConvert", () => ({
+  documentConvert: vi.fn(),
+  documentConvertPickFile: vi.fn(),
+}));
+const getConfigMock = vi.fn();
+vi.mock("../../ipc/config", () => ({
+  getConfig: () => getConfigMock(),
 }));
 vi.mock("../../ipc/provider", () => ({
   listProviders: vi.fn().mockResolvedValue([]),
@@ -43,7 +47,7 @@ vi.mock("../../ipc/pythonEnv", () => ({
   pythonEnvStatus: () => pythonEnvStatusMock(),
 }));
 
-import { markitdownConvert, markitdownPickFile } from "../../ipc/markitdown";
+import { documentConvert, documentConvertPickFile } from "../../ipc/docConvert";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 
 beforeEach(() => {
@@ -76,6 +80,7 @@ function renderView() {
 describe("DocConverterView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getConfigMock.mockResolvedValue({ doc_convert_engine: "auto" });
     pythonEnvEnsure.mockResolvedValue(undefined);
     pythonEnvStatusMock.mockResolvedValue({
       uvAvailable: true,
@@ -91,29 +96,29 @@ describe("DocConverterView", () => {
     expect(screen.getByText(/拖放或點擊選擇檔案/)).toBeInTheDocument();
   });
 
-  it("calls markitdownPickFile when dropzone is clicked", async () => {
-    vi.mocked(markitdownPickFile).mockResolvedValue(null);
+  it("calls documentConvertPickFile when dropzone is clicked", async () => {
+    vi.mocked(documentConvertPickFile).mockResolvedValue(null);
     renderView();
     await act(async () => {
       fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
     });
-    expect(markitdownPickFile).toHaveBeenCalledOnce();
+    expect(documentConvertPickFile).toHaveBeenCalledOnce();
   });
 
-  it("calls markitdownConvert with picked path and shows extracted state", async () => {
-    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/test.docx");
-    vi.mocked(markitdownConvert).mockResolvedValue("# Hello\nworld");
+  it("calls documentConvert with picked path and shows extracted state", async () => {
+    vi.mocked(documentConvertPickFile).mockResolvedValue("/tmp/test.docx");
+    vi.mocked(documentConvert).mockResolvedValue("# Hello\nworld");
     renderView();
     await act(async () => {
       fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
     });
-    expect(markitdownConvert).toHaveBeenCalledWith("/tmp/test.docx", undefined);
+    expect(documentConvert).toHaveBeenCalledWith("/tmp/test.docx", undefined);
     expect(screen.getByText(/test\.docx/)).toBeInTheDocument();
   });
 
-  it("shows error when markitdownConvert rejects", async () => {
-    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/bad.xyz");
-    vi.mocked(markitdownConvert).mockRejectedValue(new Error("unsupported format"));
+  it("shows error when documentConvert rejects", async () => {
+    vi.mocked(documentConvertPickFile).mockResolvedValue("/tmp/bad.xyz");
+    vi.mocked(documentConvert).mockRejectedValue(new Error("unsupported format"));
     renderView();
     await act(async () => {
       fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
@@ -122,12 +127,12 @@ describe("DocConverterView", () => {
   });
 
   it("does nothing when file picker is cancelled (null path)", async () => {
-    vi.mocked(markitdownPickFile).mockResolvedValue(null);
+    vi.mocked(documentConvertPickFile).mockResolvedValue(null);
     renderView();
     await act(async () => {
       fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
     });
-    expect(markitdownConvert).not.toHaveBeenCalled();
+    expect(documentConvert).not.toHaveBeenCalled();
   });
 
   it("registers the OS drag-drop listener exactly once, even as install log lines re-render the view", async () => {
@@ -149,11 +154,58 @@ describe("DocConverterView", () => {
 
     expect(dragDropListenCalls.length).toBe(1);
   });
+
+  it("skips the Python gate entirely for an anydoc-covered file under auto engine", async () => {
+    getConfigMock.mockResolvedValue({ doc_convert_engine: "auto" });
+    vi.mocked(documentConvertPickFile).mockResolvedValue("/tmp/report.docx");
+    vi.mocked(documentConvert).mockResolvedValue("# report");
+    renderView();
+    await act(async () => {}); // let the config-fetch effect resolve
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
+    });
+
+    expect(pythonEnvEnsure).not.toHaveBeenCalled();
+    expect(documentConvert).toHaveBeenCalledWith("/tmp/report.docx", undefined);
+    expect(screen.getByText(/report\.docx/)).toBeInTheDocument();
+  });
+
+  it("still runs the Python gate for a MarkItDown-only file (image) under auto engine", async () => {
+    getConfigMock.mockResolvedValue({ doc_convert_engine: "auto" });
+    vi.mocked(documentConvertPickFile).mockResolvedValue("/tmp/photo.png");
+    vi.mocked(documentConvert).mockResolvedValue("# photo");
+    renderView();
+    await act(async () => {});
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
+    });
+
+    expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_core");
+    expect(documentConvert).toHaveBeenCalledWith("/tmp/photo.png", undefined);
+  });
+
+  it("runs the Python gate for every file, including anydoc-covered ones, under markitdown_only engine", async () => {
+    getConfigMock.mockResolvedValue({ doc_convert_engine: "markitdown_only" });
+    vi.mocked(documentConvertPickFile).mockResolvedValue("/tmp/report.docx");
+    vi.mocked(documentConvert).mockResolvedValue("# report");
+    renderView();
+    await act(async () => {});
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
+    });
+
+    expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_core");
+    expect(documentConvert).toHaveBeenCalledWith("/tmp/report.docx", undefined);
+  });
 });
 
 describe("DocConverterView audio profile candidate install", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getConfigMock.mockResolvedValue({ doc_convert_engine: "auto" });
     pythonEnvEnsure.mockResolvedValue(undefined);
     pythonEnvStatusMock.mockResolvedValue({
       uvAvailable: true,
@@ -166,8 +218,8 @@ describe("DocConverterView audio profile candidate install", () => {
 
   it("prompts before installing doc_audio for an audio file, then converts once confirmed", async () => {
     askConfirm.mockResolvedValue(true);
-    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/voice.mp3");
-    vi.mocked(markitdownConvert).mockResolvedValue("# voice");
+    vi.mocked(documentConvertPickFile).mockResolvedValue("/tmp/voice.mp3");
+    vi.mocked(documentConvert).mockResolvedValue("# voice");
     renderView();
 
     await act(async () => {
@@ -182,7 +234,7 @@ describe("DocConverterView audio profile candidate install", () => {
     );
     expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_core");
     expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_audio");
-    expect(markitdownConvert).toHaveBeenCalledWith("/tmp/voice.mp3", undefined);
+    expect(documentConvert).toHaveBeenCalledWith("/tmp/voice.mp3", undefined);
     expect(screen.getByText(/voice\.mp3/)).toBeInTheDocument();
   });
 
@@ -191,7 +243,7 @@ describe("DocConverterView audio profile candidate install", () => {
     // Retrying doc_core here would succeed instantly (it's already
     // installed) and silently close the gate without fixing anything.
     askConfirm.mockResolvedValue(true);
-    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/voice.mp3");
+    vi.mocked(documentConvertPickFile).mockResolvedValue("/tmp/voice.mp3");
     pythonEnvEnsure.mockImplementation((p: string) =>
       p === "doc_audio"
         ? Promise.reject("安裝 doc_audio 相依套件失敗：boom")
@@ -215,9 +267,9 @@ describe("DocConverterView audio profile candidate install", () => {
     expect(pythonEnvEnsure).not.toHaveBeenCalledWith("doc_core");
   });
 
-  it("aborts the conversion, without calling markitdownConvert, when the user declines the audio install", async () => {
+  it("aborts the conversion, without calling documentConvert, when the user declines the audio install", async () => {
     askConfirm.mockResolvedValue(false);
-    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/voice.mp3");
+    vi.mocked(documentConvertPickFile).mockResolvedValue("/tmp/voice.mp3");
     renderView();
 
     await act(async () => {
@@ -227,7 +279,7 @@ describe("DocConverterView audio profile candidate install", () => {
     expect(askConfirm).toHaveBeenCalled();
     expect(pythonEnvEnsure).toHaveBeenCalledWith("doc_core");
     expect(pythonEnvEnsure).not.toHaveBeenCalledWith("doc_audio");
-    expect(markitdownConvert).not.toHaveBeenCalled();
+    expect(documentConvert).not.toHaveBeenCalled();
   });
 
   it("does not prompt again when doc_audio is already installed", async () => {
@@ -239,8 +291,8 @@ describe("DocConverterView audio profile candidate install", () => {
       userInterpreter: null,
     });
     askConfirm.mockReset();
-    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/voice.mp3");
-    vi.mocked(markitdownConvert).mockResolvedValue("# voice");
+    vi.mocked(documentConvertPickFile).mockResolvedValue("/tmp/voice.mp3");
+    vi.mocked(documentConvert).mockResolvedValue("# voice");
     renderView();
 
     await act(async () => {
@@ -249,13 +301,13 @@ describe("DocConverterView audio profile candidate install", () => {
 
     expect(askConfirm).not.toHaveBeenCalled();
     expect(pythonEnvEnsure).not.toHaveBeenCalledWith("doc_audio");
-    expect(markitdownConvert).toHaveBeenCalledWith("/tmp/voice.mp3", undefined);
+    expect(documentConvert).toHaveBeenCalledWith("/tmp/voice.mp3", undefined);
   });
 
   it("does not check for the audio profile at all for a non-audio file", async () => {
     askConfirm.mockReset();
-    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/report.pdf");
-    vi.mocked(markitdownConvert).mockResolvedValue("# report");
+    vi.mocked(documentConvertPickFile).mockResolvedValue("/tmp/report.pdf");
+    vi.mocked(documentConvert).mockResolvedValue("# report");
     renderView();
 
     await act(async () => {
@@ -264,7 +316,7 @@ describe("DocConverterView audio profile candidate install", () => {
 
     expect(pythonEnvStatusMock).not.toHaveBeenCalled();
     expect(askConfirm).not.toHaveBeenCalled();
-    expect(markitdownConvert).toHaveBeenCalledWith("/tmp/report.pdf", undefined);
+    expect(documentConvert).toHaveBeenCalledWith("/tmp/report.pdf", undefined);
   });
 
   it("converts an image straight away — it no longer triggers the audio-profile prompt", async () => {
@@ -273,8 +325,8 @@ describe("DocConverterView audio profile candidate install", () => {
     // handles images itself (vision API, Pillow fallback from doc_core), so
     // an image must behave exactly like any other doc_core-only format.
     askConfirm.mockReset();
-    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/photo.png");
-    vi.mocked(markitdownConvert).mockResolvedValue("# photo");
+    vi.mocked(documentConvertPickFile).mockResolvedValue("/tmp/photo.png");
+    vi.mocked(documentConvert).mockResolvedValue("# photo");
     renderView();
 
     await act(async () => {
@@ -284,13 +336,14 @@ describe("DocConverterView audio profile candidate install", () => {
     expect(pythonEnvStatusMock).not.toHaveBeenCalled();
     expect(askConfirm).not.toHaveBeenCalled();
     expect(pythonEnvEnsure).not.toHaveBeenCalledWith("doc_audio");
-    expect(markitdownConvert).toHaveBeenCalledWith("/tmp/photo.png", undefined);
+    expect(documentConvert).toHaveBeenCalledWith("/tmp/photo.png", undefined);
   });
 });
 
 describe("DocConverterView pick-interpreter escape hatch", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getConfigMock.mockResolvedValue({ doc_convert_engine: "auto" });
     pythonEnvEnsure.mockRejectedValue("無法取得 Python：network unreachable");
     pythonEnvStatusMock.mockResolvedValue({
       uvAvailable: true,
@@ -302,7 +355,10 @@ describe("DocConverterView pick-interpreter escape hatch", () => {
   });
 
   it("navigates to Settings → General when the user picks an interpreter manually", async () => {
-    vi.mocked(markitdownPickFile).mockResolvedValue("/tmp/report.pdf");
+    // .png isn't anydoc-covered, so it still needs the MarkItDown Python
+    // gate under the default "auto" engine — unlike .pdf, which anydoc
+    // converts natively and would never trigger this gate at all.
+    vi.mocked(documentConvertPickFile).mockResolvedValue("/tmp/report.png");
     render(
       <MemoryRouter initialEntries={["/"]}>
         <LocaleProvider>
