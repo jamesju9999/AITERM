@@ -1050,7 +1050,7 @@ pub async fn vcs_start_feature(
         // Best-effort cleanup so a failed push doesn't leave the user stuck on
         // an orphaned local branch with an unpushed commit — mirrors the same
         // best-effort-cleanup pattern already used in vcs_merge_feature.
-        let _ = client.checkout_branch(&base_branch).await;
+        let _ = client.checkout_branch_from(&base_branch, &format!("origin/{base_branch}")).await;
         let _ = client.delete_branch_force(&branch_name).await;
         return Err(e);
     }

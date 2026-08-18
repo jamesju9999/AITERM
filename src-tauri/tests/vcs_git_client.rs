@@ -582,3 +582,33 @@ async fn create_branch_from_a_freshly_fetched_remote_ref_picks_up_new_remote_com
     let log = String::from_utf8_lossy(&out.stdout);
     assert!(log.contains("second contributor's commit"), "expected the new branch to include the remote's latest commit, got log: {log}");
 }
+
+#[tokio::test]
+async fn checkout_branch_from_creates_and_switches_to_a_branch_with_no_prior_local_existence() {
+    let dir = tempfile::tempdir().unwrap();
+    let work_dir = init_repo_with_local_remote(dir.path()).await;
+
+    // Simulate the exact rollback scenario: we're on some other branch, and
+    // there is no local branch named "main" — only origin/main exists (this
+    // harness's init already pushes "main" to the bare repo but the working
+    // repo itself IS on main after init, so first move away from it, then
+    // delete the local main branch entirely to simulate its absence).
+    let client = GitClient::new(work_dir.to_string_lossy().to_string(), None);
+    client.create_branch("some-other-branch", None).await.expect("should create a branch to move to");
+    std::process::Command::new("git")
+        .args(["branch", "-D", "main"])
+        .current_dir(&work_dir)
+        .status()
+        .unwrap();
+
+    // Now: no local "main" branch exists at all. checkout_branch_from must
+    // still succeed by creating it from origin/main directly.
+    client.checkout_branch_from("main", "origin/main").await.expect("checkout_branch_from should succeed even with no local branch of that name");
+
+    let out = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(&work_dir)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "main");
+}

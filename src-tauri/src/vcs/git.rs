@@ -191,6 +191,24 @@ impl GitClient {
         })
     }
 
+    /// `git checkout -B <name> <start_point>`: creates (or resets, if it
+    /// already exists) a local branch pointing at `start_point` and checks
+    /// it out — deterministic regardless of git's `checkout.guess` config,
+    /// unlike a bare `git checkout <name>` which silently depends on that
+    /// setting to auto-create a tracking branch from a same-named remote ref.
+    pub async fn checkout_branch_from(&self, name: &str, start_point: &str) -> Result<VcsResult, String> {
+        self.git(&[
+            "checkout".to_string(),
+            "-B".to_string(),
+            name.to_string(),
+            start_point.to_string(),
+        ])?;
+        Ok(VcsResult::WriteSuccess {
+            operation: "checkout_branch_from".to_string(),
+            detail: format!("Checked out '{name}' from '{start_point}'"),
+        })
+    }
+
     /// Commits with `--allow-empty` — used to give a freshly-created feature
     /// branch at least one commit ahead of its base, since GitHub's create-PR
     /// API rejects a PR whose head and base have zero commits between them.
