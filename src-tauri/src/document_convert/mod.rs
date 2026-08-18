@@ -4,6 +4,7 @@
 
 use std::path::Path;
 use async_trait::async_trait;
+use crate::config::DocConvertEngine;
 
 /// Converts one file to Markdown. Implemented by `RoutedConverter`
 /// (`commands/knowledge_base.rs`) in production; tests use fakes (see
@@ -71,6 +72,36 @@ pub fn engine_for_extension(ext: &str) -> Engine {
     }
 }
 
+/// Fallback control flow: Auto mode tries the routed engine first and falls
+/// back to the other one only when the routed engine fails on a format it's
+/// supposed to support. `MarkitdownOnly` never calls `try_anydoc` at all.
+///
+/// Takes futures rather than closures: an `async {}` block doesn't run its
+/// body until it's polled, so the caller can construct both up front and
+/// this function decides which ones actually get `.await`ed.
+async fn resolve_with_fallback(
+    ext: &str,
+    engine_pref: DocConvertEngine,
+    try_anydoc: impl std::future::Future<Output = Result<String, String>>,
+    try_markitdown: impl std::future::Future<Output = Result<String, String>>,
+) -> Result<String, String> {
+    if matches!(engine_pref, DocConvertEngine::MarkitdownOnly) {
+        return try_markitdown.await;
+    }
+    match engine_for_extension(ext) {
+        Engine::MarkItDown => try_markitdown.await,
+        Engine::Anydoc => match try_anydoc.await {
+            Ok(markdown) => Ok(markdown),
+            Err(anydoc_err) => match try_markitdown.await {
+                Ok(markdown) => Ok(markdown),
+                Err(markitdown_err) => Err(format!(
+                    "anydoc: {anydoc_err}；已改用 MarkItDown 重試但仍失敗：{markitdown_err}"
+                )),
+            },
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +160,62 @@ mod tests {
         let mut deduped = actual.clone();
         deduped.dedup();
         assert_eq!(actual.len(), deduped.len(), "SUPPORTED_EXTENSIONS has a duplicate entry");
+    }
+
+    #[tokio::test]
+    async fn auto_mode_uses_anydoc_when_it_succeeds() {
+        let result = resolve_with_fallback(
+            "docx",
+            DocConvertEngine::Auto,
+            async { Ok("anydoc output".to_string()) },
+            async { panic!("markitdown must not be called when anydoc succeeds") },
+        ).await;
+        assert_eq!(result.unwrap(), "anydoc output");
+    }
+
+    #[tokio::test]
+    async fn auto_mode_falls_back_to_markitdown_when_anydoc_fails() {
+        let result = resolve_with_fallback(
+            "docx",
+            DocConvertEngine::Auto,
+            async { Err("encrypted".to_string()) },
+            async { Ok("markitdown output".to_string()) },
+        ).await;
+        assert_eq!(result.unwrap(), "markitdown output");
+    }
+
+    #[tokio::test]
+    async fn auto_mode_combines_both_errors_when_both_engines_fail() {
+        let result = resolve_with_fallback(
+            "docx",
+            DocConvertEngine::Auto,
+            async { Err("encrypted".to_string()) },
+            async { Err("network error".to_string()) },
+        ).await;
+        let err = result.unwrap_err();
+        assert!(err.contains("encrypted"), "error should mention the anydoc failure: {err}");
+        assert!(err.contains("network error"), "error should mention the markitdown failure: {err}");
+    }
+
+    #[tokio::test]
+    async fn markitdown_only_mode_never_calls_anydoc() {
+        let result = resolve_with_fallback(
+            "docx",
+            DocConvertEngine::MarkitdownOnly,
+            async { panic!("anydoc must not be called in MarkitdownOnly mode") },
+            async { Ok("markitdown output".to_string()) },
+        ).await;
+        assert_eq!(result.unwrap(), "markitdown output");
+    }
+
+    #[tokio::test]
+    async fn image_extension_goes_straight_to_markitdown_even_in_auto_mode() {
+        let result = resolve_with_fallback(
+            "png",
+            DocConvertEngine::Auto,
+            async { panic!("anydoc must not be called for an image extension") },
+            async { Ok("vision output".to_string()) },
+        ).await;
+        assert_eq!(result.unwrap(), "vision output");
     }
 }
