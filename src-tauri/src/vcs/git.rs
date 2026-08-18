@@ -373,7 +373,17 @@ impl GitClient {
         // GraphQL 錯誤是 HTTP 200 + body 裡的 errors 陣列，不是靠狀態碼，
         // 所以 gh_post 的狀態碼檢查不會抓到，這裡要自己額外檢查。
         if let Some(errors) = body.get("errors") {
-            return Err(format!("GitHub GraphQL error: {errors}"));
+            let messages: Vec<String> = errors
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
+                        .map(str::to_string)
+                        .collect()
+                })
+                .filter(|v: &Vec<String>| !v.is_empty())
+                .unwrap_or_else(|| vec![errors.to_string()]);
+            return Err(format!("GitHub GraphQL error: {}", messages.join("; ")));
         }
 
         Ok(VcsResult::WriteSuccess {
