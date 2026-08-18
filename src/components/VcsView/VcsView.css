@@ -326,3 +326,61 @@
   color: #ddd;
   padding: 2px 0;
 }
+
+.vcs-finish-review-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.vcs-finish-review-dialog {
+  width: 640px;
+  max-width: 90vw;
+  max-height: 80vh;
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.vcs-diff-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #0c0c0c;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  padding: 10px;
+  font-size: 12px;
+  color: #e6e6e6;
+  font-family: var(--font-mono, monospace);
+}
+
+.vcs-finish-review-dialog__error {
+  font-size: 11px;
+  color: #f87171;
+}
+
+.vcs-delete-branch-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #888;
+}
+
+.vcs-finish-review-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}

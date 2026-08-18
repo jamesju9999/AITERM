@@ -393,6 +393,9 @@ const zhTW = {
     vcs_overlap_warning: "這些人目前也在動同樣的檔案：",
     vcs_overlap_entry: (author: string, title: string) => `${author}（${title}）`,
     vcs_start_anyway: "仍要開始",
+    vcs_loading_diff: "載入中…",
+    vcs_merge_button: "合併",
+    vcs_delete_branch_after_merge: "合併後刪除這個功能分支",
 
     // Design & Spec
     design_tab: "設計與規格",
@@ -1636,6 +1639,9 @@ const enRaw = {
     vcs_overlap_warning: "These people are currently working on the same files:",
     vcs_overlap_entry: (author: string, title: string) => `${author} (${title})`,
     vcs_start_anyway: "Start Anyway",
+    vcs_loading_diff: "Loading…",
+    vcs_merge_button: "Merge",
+    vcs_delete_branch_after_merge: "Delete this feature branch after merging",
 
     // Design & Spec
     design_tab: "Design & Spec",
