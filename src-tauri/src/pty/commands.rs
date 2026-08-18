@@ -32,11 +32,6 @@ pub fn pty_create(
     cwd: Option<String>,
     claude_bridge: Option<bool>,
 ) -> Result<String, PtyError> {
-    // TEMP DIAGNOSTIC — remove once root-caused. Confirms what size the PTY
-    // is actually created with, to check whether it's xterm's stale 80x24
-    // default (sent before the frontend's first real fit() has measured the
-    // container) rather than the real pane size.
-    log::info!("[AITERM-DIAG-RESIZE] pty_create size: rows={} cols={}", size.rows, size.cols);
     let cwd = cwd.map(std::path::PathBuf::from);
     // server 沒在跑就不注入 —— 注入指向死埠的位址比不注入更難除錯。
     let bridge_env = match (claude_bridge.unwrap_or(false), bridge.port()) {
@@ -65,13 +60,7 @@ pub fn pty_resize(
     id: String,
     size: PtySizeArg,
 ) -> Result<(), PtyError> {
-    // TEMP DIAGNOSTIC — remove once root-caused. Confirms the resize IPC
-    // call actually arrives here, with what size, and whether the
-    // underlying portable-pty/ConPTY resize call itself succeeds or errors.
-    log::info!("[AITERM-DIAG-RESIZE] pty_resize received: id={} rows={} cols={}", id, size.rows, size.cols);
-    let result = manager.resize(&id, size.into());
-    log::info!("[AITERM-DIAG-RESIZE] pty_resize result: {:?}", result.as_ref().map(|_| "ok").map_err(|e| e.to_string()));
-    result
+    manager.resize(&id, size.into())
 }
 
 #[tauri::command]
