@@ -75,6 +75,54 @@ fn resolve_write_mode(repo_info: &VcsRepoInfo, config: &ConfigStore) -> VcsWrite
         .unwrap_or(VcsWriteMode::Guarded)
 }
 
+#[cfg(test)]
+mod resolve_write_mode_tests {
+    use super::*;
+    use crate::config::types::{AppConfig, VcsConnection, VcsType};
+
+    fn repo_info(connection_id: Option<&str>) -> VcsRepoInfo {
+        VcsRepoInfo {
+            vcs_type: VcsType::Git,
+            root: "/tmp/repo".to_string(),
+            remote_url: None,
+            connection_id: connection_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn no_connection_id_defaults_to_guarded() {
+        let config = ConfigStore::from_config(AppConfig::default());
+        assert_eq!(resolve_write_mode(&repo_info(None), &config), VcsWriteMode::Guarded);
+    }
+
+    #[test]
+    fn connection_id_not_found_in_config_defaults_to_guarded() {
+        let config = ConfigStore::from_config(AppConfig::default());
+        assert_eq!(
+            resolve_write_mode(&repo_info(Some("missing")), &config),
+            VcsWriteMode::Guarded
+        );
+    }
+
+    #[test]
+    fn connection_id_found_returns_its_write_mode() {
+        let mut cfg = AppConfig::default();
+        cfg.vcs_connections.push(VcsConnection {
+            id: "conn-1".to_string(),
+            name: "Test Conn".to_string(),
+            vcs_type: VcsType::Git,
+            url: None,
+            username: None,
+            write_mode: VcsWriteMode::ReadOnly,
+        });
+        let config = ConfigStore::from_config(cfg);
+        assert_eq!(
+            resolve_write_mode(&repo_info(Some("conn-1")), &config),
+            VcsWriteMode::ReadOnly
+        );
+    }
+}
+
 /// Input for add/update/test — includes the secret (token/password).
 #[derive(Debug, Deserialize)]
 pub struct VcsConnectionInput {
@@ -930,6 +978,18 @@ pub async fn vcs_check_overlap(
     Ok(crate::vcs::overlap::find_overlaps(&files, &features))
 }
 
+/// 把使用者宣告會動到的檔案清單格式化成 PR body 的一段文字；沒有宣告任何檔案就回傳空字串。
+fn format_declared_files_body(declared_files: &[String]) -> String {
+    if declared_files.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "預計會動到的檔案：\n{}",
+            declared_files.iter().map(|f| format!("- {f}")).collect::<Vec<_>>().join("\n")
+        )
+    }
+}
+
 #[tauri::command]
 pub async fn vcs_start_feature(
     repo_info: VcsRepoInfo,
@@ -954,14 +1014,7 @@ pub async fn vcs_start_feature(
 
     client.create_branch(&branch_name, Some(&base_branch)).await?;
 
-    let body = if declared_files.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "預計會動到的檔案：\n{}",
-            declared_files.iter().map(|f| format!("- {f}")).collect::<Vec<_>>().join("\n")
-        )
-    };
+    let body = format_declared_files_body(&declared_files);
     let (pr_number, pr_url) = client
         .create_pr(&feature_name, &branch_name, &base_branch, Some(&body), true)
         .await?;
@@ -1039,5 +1092,30 @@ mod slugify_tests {
     #[test]
     fn consecutive_separators_collapse_to_one_hyphen() {
         assert_eq!(slugify("a   b---c"), "a-b-c");
+    }
+}
+
+#[cfg(test)]
+mod format_declared_files_body_tests {
+    use super::format_declared_files_body;
+
+    #[test]
+    fn empty_list_returns_empty_string() {
+        assert_eq!(format_declared_files_body(&[]), "");
+    }
+
+    #[test]
+    fn single_file_is_a_single_bullet_line_under_the_header() {
+        let files = vec!["src/foo.rs".to_string()];
+        assert_eq!(format_declared_files_body(&files), "預計會動到的檔案：\n- src/foo.rs");
+    }
+
+    #[test]
+    fn multiple_files_are_each_on_their_own_line_in_order() {
+        let files = vec!["src/foo.rs".to_string(), "src/bar.rs".to_string()];
+        assert_eq!(
+            format_declared_files_body(&files),
+            "預計會動到的檔案：\n- src/foo.rs\n- src/bar.rs"
+        );
     }
 }
