@@ -7,6 +7,7 @@ pub mod api_docs;
 pub mod commands;
 pub mod config;
 pub mod db;
+pub mod document_convert;
 pub mod enterprise;
 pub mod guard;
 pub mod knowledge_base;
