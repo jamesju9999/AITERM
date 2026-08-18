@@ -67,6 +67,28 @@ describe("StartFeatureDialog", () => {
     await waitFor(() => expect(startFeatureMock).toHaveBeenCalled());
   });
 
+  it("clears the overlap warning and re-checks when the file list is edited afterward", async () => {
+    checkOverlapMock.mockResolvedValueOnce([
+      { number: 3, title: "Bob 的功能", author: "bob", draft: true, url: "", updated_at: "", head_ref: "", files: ["src/App.tsx"] },
+    ]);
+    renderDialog();
+
+    fireEvent.change(screen.getByLabelText("功能名稱"), { target: { value: "My Feature" } });
+    fireEvent.change(screen.getByLabelText("預計會動到的檔案"), { target: { value: "src/App.tsx" } });
+    fireEvent.click(screen.getByRole("button", { name: "開始新功能" }));
+    await waitFor(() => expect(screen.getByText(/bob/)).toBeInTheDocument());
+
+    // Editing the file list after the warning should clear it, not leave "Start Anyway" as the only path.
+    fireEvent.change(screen.getByLabelText("預計會動到的檔案"), { target: { value: "src/Other.tsx" } });
+    expect(screen.queryByText(/bob/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "開始新功能" })).toBeInTheDocument();
+
+    // Submitting again should re-check overlap for the NEW file list, not skip straight to starting.
+    checkOverlapMock.mockResolvedValueOnce([]);
+    fireEvent.click(screen.getByRole("button", { name: "開始新功能" }));
+    await waitFor(() => expect(checkOverlapMock).toHaveBeenLastCalledWith(REPO_INFO, ["src/Other.tsx"]));
+  });
+
   it("skips the overlap check entirely when no files are declared", async () => {
     startFeatureMock.mockResolvedValueOnce({
       branch_name: "feature/x", pr_number: 1, pr_url: "",

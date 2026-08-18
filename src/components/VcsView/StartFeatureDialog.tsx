@@ -73,7 +73,10 @@ export function StartFeatureDialog({ repoInfo, baseBranch, onStarted, onClose }:
           <span>{t.vcs_feature_files_label}</span>
           <textarea
             value={filesText}
-            onChange={(e) => setFilesText(e.target.value)}
+            onChange={(e) => {
+              setFilesText(e.target.value);
+              setOverlaps(null);
+            }}
             disabled={busy}
             rows={4}
             placeholder={t.vcs_feature_files_placeholder}
