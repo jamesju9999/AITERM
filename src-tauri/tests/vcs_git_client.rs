@@ -364,3 +364,66 @@ async fn commit_empty_creates_a_commit_with_no_file_changes() {
         .unwrap();
     assert!(String::from_utf8_lossy(&diff_out.stdout).trim().is_empty(), "empty commit should produce an empty diff");
 }
+
+/// Exercises the same create_branch -> commit_empty -> (failed push) ->
+/// rollback sequence that `vcs_start_feature` performs when `push_branch`
+/// fails, proving the cleanup (`checkout_branch` back to base +
+/// `delete_branch_force`) genuinely undoes the local state left behind by a
+/// failed push. `vcs_start_feature` itself is a Tauri command that needs
+/// `State` args and can't be unit tested directly, so this tests the same
+/// sequence at the `GitClient` level instead, consistent with how this file
+/// already handles Tauri-command testability elsewhere.
+#[tokio::test]
+async fn failed_push_can_be_rolled_back_via_checkout_and_force_delete() {
+    let dir = tempfile::tempdir().unwrap();
+    let work_dir = dir.path().join("work");
+    std::fs::create_dir(&work_dir).unwrap();
+    std::process::Command::new("git").args(["init", "-q"]).current_dir(&work_dir).status().unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.email", "test@test.com"])
+        .current_dir(&work_dir).status().unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(&work_dir).status().unwrap();
+
+    // Point origin at a path with no repo there at all, so any push fails
+    // deterministically without any network dependency.
+    let missing_remote = dir.path().join("does-not-exist.git");
+    std::process::Command::new("git")
+        .args(["remote", "add", "origin"])
+        .arg(&missing_remote)
+        .current_dir(&work_dir).status().unwrap();
+
+    std::fs::write(work_dir.join("README.md"), "init").unwrap();
+    std::process::Command::new("git").args(["add", "."]).current_dir(&work_dir).status().unwrap();
+    std::process::Command::new("git").args(["commit", "-q", "-m", "init"]).current_dir(&work_dir).status().unwrap();
+    std::process::Command::new("git").args(["branch", "-M", "main"]).current_dir(&work_dir).status().unwrap();
+
+    let client = GitClient::new(work_dir.to_string_lossy().to_string(), None);
+    client.create_branch("feature/test-rollback", Some("main")).await.expect("create_branch should succeed");
+    client.commit_empty("Start feature: test").await.expect("commit_empty should succeed");
+
+    let push_result = client.push_branch("feature/test-rollback").await;
+    assert!(push_result.is_err(), "push should fail because origin doesn't exist");
+
+    // This mirrors the rollback vcs_start_feature performs on push failure.
+    client.checkout_branch("main").await.expect("checkout back to base should succeed");
+    client.delete_branch_force("feature/test-rollback").await.expect("force delete should succeed");
+
+    let branch_out = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(&work_dir)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&branch_out.stdout).trim(), "main", "should be back on base branch");
+
+    let list_out = std::process::Command::new("git")
+        .args(["branch", "--list", "feature/test-rollback"])
+        .current_dir(&work_dir)
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&list_out.stdout).trim().is_empty(),
+        "feature branch should have been deleted locally"
+    );
+}

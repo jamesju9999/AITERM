@@ -1035,7 +1035,14 @@ pub async fn vcs_start_feature(
     // those. An empty commit plus a push satisfies it before we call
     // create_pr below.
     client.commit_empty(&format!("Start feature: {feature_name}")).await?;
-    client.push_branch(&branch_name).await?;
+    if let Err(e) = client.push_branch(&branch_name).await {
+        // Best-effort cleanup so a failed push doesn't leave the user stuck on
+        // an orphaned local branch with an unpushed commit — mirrors the same
+        // best-effort-cleanup pattern already used in vcs_merge_feature.
+        let _ = client.checkout_branch(&base_branch).await;
+        let _ = client.delete_branch_force(&branch_name).await;
+        return Err(e);
+    }
 
     let body = format_declared_files_body(&declared_files);
     let (pr_number, pr_url) = client

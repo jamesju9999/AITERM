@@ -159,6 +159,18 @@ impl GitClient {
         })
     }
 
+    /// Force-deletes a local branch (`git branch -D`) even if it has commits
+    /// not merged/pushed anywhere — used for best-effort rollback of a
+    /// freshly-created feature branch that has an unpushed empty commit,
+    /// which plain `delete_branch` (`-d`) would refuse to remove.
+    pub async fn delete_branch_force(&self, name: &str) -> Result<VcsResult, String> {
+        self.git(&["branch".to_string(), "-D".to_string(), name.to_string()])?;
+        Ok(VcsResult::WriteSuccess {
+            operation: "delete_branch_force".to_string(),
+            detail: format!("Force-deleted branch '{name}'"),
+        })
+    }
+
     pub async fn checkout_branch(&self, name: &str) -> Result<VcsResult, String> {
         self.git(&["checkout".to_string(), name.to_string()])?;
         Ok(VcsResult::WriteSuccess {
