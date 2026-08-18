@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
-import { vcsGetFeatureDiff, vcsMergeFeature, type ActiveFeature, type VcsRepoInfo } from "../../ipc/vcs";
+import { vcsFinishFeature, vcsGetFeatureDiff, vcsMergeFeature, type ActiveFeature, type VcsRepoInfo } from "../../ipc/vcs";
 
 interface Props {
   repoInfo: VcsRepoInfo;
@@ -21,17 +21,32 @@ export function FinishFeatureReview({ repoInfo, feature, baseBranch, onMerged, o
     let cancelled = false;
     setDiff(null);
     setError(null);
-    vcsGetFeatureDiff(repoInfo, baseBranch, feature.head_ref)
-      .then((d) => {
-        if (!cancelled) setDiff(d);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(String(e));
-      });
+
+    const loadDiff = () =>
+      vcsGetFeatureDiff(repoInfo, baseBranch, feature.head_ref)
+        .then((d) => {
+          if (!cancelled) setDiff(d);
+        })
+        .catch((e) => {
+          if (!cancelled) setError(String(e));
+        });
+
+    if (feature.draft) {
+      vcsFinishFeature(repoInfo, feature.number)
+        .then(() => {
+          if (!cancelled) return loadDiff();
+        })
+        .catch((e) => {
+          if (!cancelled) setError(String(e));
+        });
+    } else {
+      void loadDiff();
+    }
+
     return () => {
       cancelled = true;
     };
-  }, [repoInfo.root, repoInfo.connection_id, baseBranch, feature.head_ref]);
+  }, [repoInfo.root, repoInfo.connection_id, baseBranch, feature.head_ref, feature.draft, feature.number]);
 
   const handleMerge = async () => {
     setBusy(true);

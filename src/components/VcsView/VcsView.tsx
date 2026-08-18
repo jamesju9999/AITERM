@@ -34,7 +34,8 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
 
   const repoInfo = useVcsCwd(sessionId, manualPath || undefined);
   const { messages, isRunning, send, stop } = useVcsAgentLoop(sessionId, repoInfo);
-  const { features, loading: featuresLoading, error: featuresError, refresh: refreshFeatures } = useTeamFeatures(repoInfo);
+  const isGitRepo = repoInfo?.vcs_type === "git";
+  const { features, loading: featuresLoading, error: featuresError, refresh: refreshFeatures } = useTeamFeatures(isGitRepo ? repoInfo : null);
   // 開啟對話框當下就把 repoInfo 快照下來，避免 useVcsCwd 的輪詢在對話框開著時把它換掉或設成 null。
   // 用單一 state 存兩種對話框，天然保證同時最多只有一個開著。
   const [activeDialog, setActiveDialog] = useState<
@@ -208,7 +209,7 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
       </div>
 
       {/* Team panel */}
-      {repoInfo && (
+      {repoInfo && isGitRepo && (
         <>
           <TeamPanel
             features={features}

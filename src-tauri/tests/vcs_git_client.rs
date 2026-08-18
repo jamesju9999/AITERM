@@ -252,6 +252,32 @@ async fn mark_pr_ready_surfaces_graphql_errors_even_though_http_status_is_200() 
 }
 
 #[tokio::test]
+async fn delete_remote_branch_sends_delete_to_the_correct_github_api_path() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/repos/acme/widget/git/refs/heads/feature/login-optimize"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    init_repo_with_origin(dir.path()).await;
+    let client = GitClient::new_with_api_base(
+        dir.path().to_string_lossy().to_string(),
+        Some("test-token".to_string()),
+        server.uri(),
+    );
+
+    client
+        .delete_remote_branch("feature/login-optimize")
+        .await
+        .expect("should succeed");
+}
+
+#[tokio::test]
 async fn pr_diff_requests_diff_media_type_and_returns_raw_text() {
     let server = MockServer::start().await;
 

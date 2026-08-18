@@ -1057,7 +1057,11 @@ pub async fn vcs_finish_feature(
     repo_info: VcsRepoInfo,
     pr_number: u64,
     secrets: State<'_, Arc<SecretStore>>,
+    config: State<'_, Arc<ConfigStore>>,
 ) -> Result<(), String> {
+    if resolve_write_mode(&repo_info, &config) == VcsWriteMode::ReadOnly {
+        return Err("此連線為唯讀模式，無法送審".to_string());
+    }
     let token = resolve_vcs_token(&repo_info, &secrets);
     let client = GitClient::new(repo_info.root, token);
     client.mark_pr_ready(pr_number).await?;
@@ -1095,7 +1099,7 @@ pub async fn vcs_merge_feature(
     client.merge_pr(pr_number).await?;
     if let Some(branch) = branch_to_delete {
         // 合併已經成功了；刪分支失敗不該讓整個操作回報失敗，忽略即可。
-        let _ = client.delete_branch(&branch).await;
+        let _ = client.delete_remote_branch(&branch).await;
     }
     Ok(())
 }

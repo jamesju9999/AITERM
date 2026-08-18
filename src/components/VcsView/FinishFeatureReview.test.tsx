@@ -6,9 +6,11 @@ import type { ActiveFeature } from "../../ipc/vcs";
 
 const getDiffMock = vi.fn();
 const mergeMock = vi.fn();
+const finishMock = vi.fn();
 vi.mock("../../ipc/vcs", () => ({
   vcsGetFeatureDiff: (...args: unknown[]) => getDiffMock(...args),
   vcsMergeFeature: (...args: unknown[]) => mergeMock(...args),
+  vcsFinishFeature: (...args: unknown[]) => finishMock(...args),
 }));
 
 const FEATURE: ActiveFeature = {
@@ -32,6 +34,8 @@ const REPO_INFO = {
 beforeEach(() => {
   getDiffMock.mockReset();
   mergeMock.mockReset();
+  finishMock.mockReset();
+  finishMock.mockResolvedValue(undefined);
 });
 
 describe("FinishFeatureReview", () => {
@@ -106,5 +110,54 @@ describe("FinishFeatureReview", () => {
     fireEvent.click(screen.getByRole("button", { name: "合併" }));
 
     await waitFor(() => expect(screen.getByText(/not mergeable/)).toBeInTheDocument());
+  });
+
+  it("marks a draft feature ready before loading the diff", async () => {
+    const draftFeature = { ...FEATURE, draft: true };
+    let resolveFinish!: () => void;
+    finishMock.mockReset();
+    finishMock.mockReturnValueOnce(new Promise<void>((resolve) => { resolveFinish = resolve; }));
+    getDiffMock.mockResolvedValueOnce("diff content");
+    render(
+      <LocaleProvider>
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={draftFeature} baseBranch="main" onMerged={vi.fn()} onClose={vi.fn()} />
+      </LocaleProvider>
+    );
+
+    await waitFor(() => expect(finishMock).toHaveBeenCalledWith(REPO_INFO, 7));
+    // The diff should not be requested until mark-ready has resolved.
+    expect(getDiffMock).not.toHaveBeenCalled();
+
+    resolveFinish();
+
+    await waitFor(() => expect(screen.getByText("diff content")).toBeInTheDocument());
+    expect(getDiffMock).toHaveBeenCalledWith(REPO_INFO, "main", "feature/login-optimize");
+  });
+
+  it("does not call vcsFinishFeature for a non-draft feature and loads the diff directly", async () => {
+    getDiffMock.mockResolvedValueOnce("diff content");
+    render(
+      <LocaleProvider>
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={FEATURE} baseBranch="main" onMerged={vi.fn()} onClose={vi.fn()} />
+      </LocaleProvider>
+    );
+
+    await waitFor(() => expect(screen.getByText("diff content")).toBeInTheDocument());
+    expect(finishMock).not.toHaveBeenCalled();
+    expect(getDiffMock).toHaveBeenCalledWith(REPO_INFO, "main", "feature/login-optimize");
+  });
+
+  it("shows an error and never fetches the diff when marking a draft feature ready fails", async () => {
+    const draftFeature = { ...FEATURE, draft: true };
+    finishMock.mockReset();
+    finishMock.mockRejectedValueOnce("此連線為唯讀模式，無法送審");
+    render(
+      <LocaleProvider>
+        <FinishFeatureReview repoInfo={REPO_INFO} feature={draftFeature} baseBranch="main" onMerged={vi.fn()} onClose={vi.fn()} />
+      </LocaleProvider>
+    );
+
+    await waitFor(() => expect(screen.getByText(/唯讀模式/)).toBeInTheDocument());
+    expect(getDiffMock).not.toHaveBeenCalled();
   });
 });

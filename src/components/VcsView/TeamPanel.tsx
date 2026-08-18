@@ -50,14 +50,12 @@ export function TeamPanel({ features, loading, onRefresh, onStartFeature, onFini
                         <li key={file}>{file}</li>
                       ))}
                     </ul>
-                    {f.draft && (
-                      <button
-                        className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
-                        onClick={() => onFinishFeature(f)}
-                      >
-                        {t.vcs_finish_feature}
-                      </button>
-                    )}
+                    <button
+                      className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
+                      onClick={() => onFinishFeature(f)}
+                    >
+                      {f.draft ? t.vcs_finish_feature : t.vcs_review_and_merge}
+                    </button>
                   </div>
                 )}
               </li>

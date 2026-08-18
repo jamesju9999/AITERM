@@ -699,6 +699,34 @@ impl GitClient {
         }
         Ok(resp)
     }
+
+    async fn gh_delete(&self, token: &str, url: &str) -> Result<reqwest::Response, String> {
+        let client = reqwest::Client::new();
+        let resp = client
+            .delete(url)
+            .headers(self.gh_headers(token))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("GitHub API error {status}: {text}"));
+        }
+        Ok(resp)
+    }
+
+    pub async fn delete_remote_branch(&self, branch_name: &str) -> Result<VcsResult, String> {
+        let token = self.require_token(3)?;
+        let (owner, repo) = self.parse_remote()?;
+        let url = format!("{}/repos/{owner}/{repo}/git/refs/heads/{branch_name}", self.github_api_base);
+        self.gh_delete(&token, &url).await?;
+        Ok(VcsResult::WriteSuccess {
+            operation: "delete_remote_branch".to_string(),
+            detail: format!("Deleted remote branch '{branch_name}'"),
+        })
+    }
 }
 
 /// Parse `https://github.com/owner/repo[.git]` or `git@github.com:owner/repo[.git]`

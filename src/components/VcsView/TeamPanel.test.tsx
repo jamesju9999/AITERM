@@ -71,11 +71,14 @@ describe("TeamPanel", () => {
     expect(onFinishFeature).toHaveBeenCalledWith(FEATURE);
   });
 
-  it("does not show the finish button for a feature that is already in review (not draft)", () => {
+  it("shows a '查看並合併' button for a feature that is already in review (not draft)", () => {
+    const onFinishFeature = vi.fn();
     const inReview = { ...FEATURE, draft: false };
-    renderPanel({ features: [inReview] });
+    renderPanel({ features: [inReview], onFinishFeature });
     fireEvent.click(screen.getByText("登入頁優化")); // expand
     expect(screen.queryByRole("button", { name: "完成，送審" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看並合併" }));
+    expect(onFinishFeature).toHaveBeenCalledWith(inReview);
   });
 
   it("collapses the file list when the expanded row is clicked again", () => {
