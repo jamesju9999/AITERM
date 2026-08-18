@@ -95,9 +95,11 @@ use commands::{
     updater::updater_supported,
     web::{web_fetch, web_search, npm_mcp_search},
     vcs::{
-        pick_folder, vcs_add_connection, vcs_agent_abort_step, vcs_agent_step, vcs_detect_repo,
-        vcs_get_block_info, vcs_list_connections, vcs_query, vcs_remove_connection,
-        vcs_test_connection, vcs_update_connection, VcsAgentStepRegistry,
+        pick_folder, vcs_add_connection, vcs_agent_abort_step, vcs_agent_step, vcs_check_overlap,
+        vcs_detect_repo, vcs_finish_feature, vcs_get_block_info, vcs_get_feature_diff,
+        vcs_list_active_features, vcs_list_connections, vcs_merge_feature, vcs_query,
+        vcs_remove_connection, vcs_start_feature, vcs_test_connection, vcs_update_connection,
+        VcsAgentStepRegistry,
     },
 };
 use config::ConfigStore;
@@ -490,6 +492,12 @@ pub fn run() {
             vcs_get_block_info,
             vcs_agent_step,
             vcs_agent_abort_step,
+            vcs_list_active_features,
+            vcs_check_overlap,
+            vcs_start_feature,
+            vcs_finish_feature,
+            vcs_get_feature_diff,
+            vcs_merge_feature,
             pick_folder,
             // MarkItDown
             markitdown_convert,

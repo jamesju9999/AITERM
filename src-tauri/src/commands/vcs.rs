@@ -41,6 +41,40 @@ fn vcs_secret_key(id: &str) -> String {
     format!("vcs:{id}")
 }
 
+/// 把功能名稱轉成適合當 git 分支名稱片段的字串：只留英數字元，
+/// 其他字元（含中文、空白、標點）都轉成 `-`，並收斂連續的 `-`。
+fn slugify(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn resolve_vcs_token(repo_info: &VcsRepoInfo, secrets: &SecretStore) -> Option<String> {
+    repo_info
+        .connection_id
+        .as_deref()
+        .and_then(|id| secrets.get(&vcs_secret_key(id)).ok().flatten())
+}
+
+fn resolve_write_mode(repo_info: &VcsRepoInfo, config: &ConfigStore) -> VcsWriteMode {
+    repo_info
+        .connection_id
+        .as_deref()
+        .and_then(|id| {
+            config
+                .get()
+                .vcs_connections
+                .into_iter()
+                .find(|c| c.id == id)
+                .map(|c| c.write_mode)
+        })
+        .unwrap_or(VcsWriteMode::Guarded)
+}
+
 /// Input for add/update/test — includes the secret (token/password).
 #[derive(Debug, Deserialize)]
 pub struct VcsConnectionInput {
@@ -865,4 +899,145 @@ pub async fn pick_folder() -> Option<String> {
         .pick_folder()
         .await
         .map(|handle| handle.path().to_string_lossy().to_string())
+}
+
+#[derive(Debug, Serialize)]
+pub struct StartFeatureOutcome {
+    pub branch_name: String,
+    pub pr_number: u64,
+    pub pr_url: String,
+}
+
+#[tauri::command]
+pub async fn vcs_list_active_features(
+    repo_info: VcsRepoInfo,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<Vec<crate::vcs::ActiveFeature>, String> {
+    let token = resolve_vcs_token(&repo_info, &secrets);
+    let client = GitClient::new(repo_info.root, token);
+    client.list_active_features().await
+}
+
+#[tauri::command]
+pub async fn vcs_check_overlap(
+    repo_info: VcsRepoInfo,
+    files: Vec<String>,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<Vec<crate::vcs::ActiveFeature>, String> {
+    let token = resolve_vcs_token(&repo_info, &secrets);
+    let client = GitClient::new(repo_info.root, token);
+    let features = client.list_active_features().await?;
+    Ok(crate::vcs::overlap::find_overlaps(&files, &features))
+}
+
+#[tauri::command]
+pub async fn vcs_start_feature(
+    repo_info: VcsRepoInfo,
+    feature_name: String,
+    base_branch: String,
+    declared_files: Vec<String>,
+    secrets: State<'_, Arc<SecretStore>>,
+    config: State<'_, Arc<ConfigStore>>,
+) -> Result<StartFeatureOutcome, String> {
+    if resolve_write_mode(&repo_info, &config) == VcsWriteMode::ReadOnly {
+        return Err("此連線為唯讀模式，無法開始新功能".to_string());
+    }
+
+    let slug = slugify(&feature_name);
+    if slug.is_empty() {
+        return Err("功能名稱需要至少包含一個英文字母或數字".to_string());
+    }
+    let branch_name = format!("feature/{slug}");
+
+    let token = resolve_vcs_token(&repo_info, &secrets);
+    let client = GitClient::new(repo_info.root, token);
+
+    client.create_branch(&branch_name, Some(&base_branch)).await?;
+
+    let body = if declared_files.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "預計會動到的檔案：\n{}",
+            declared_files.iter().map(|f| format!("- {f}")).collect::<Vec<_>>().join("\n")
+        )
+    };
+    let (pr_number, pr_url) = client
+        .create_pr(&feature_name, &branch_name, &base_branch, Some(&body), true)
+        .await?;
+
+    Ok(StartFeatureOutcome { branch_name, pr_number, pr_url })
+}
+
+#[tauri::command]
+pub async fn vcs_finish_feature(
+    repo_info: VcsRepoInfo,
+    pr_number: u64,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<(), String> {
+    let token = resolve_vcs_token(&repo_info, &secrets);
+    let client = GitClient::new(repo_info.root, token);
+    client.mark_pr_ready(pr_number).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn vcs_get_feature_diff(
+    repo_info: VcsRepoInfo,
+    base: String,
+    head: String,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<String, String> {
+    let token = resolve_vcs_token(&repo_info, &secrets);
+    let client = GitClient::new(repo_info.root, token);
+    match client.pr_diff(&base, &head).await? {
+        VcsResult::Diff { content, .. } => Ok(content),
+        _ => Err("pr_diff 回傳了非預期的結果型別".to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn vcs_merge_feature(
+    repo_info: VcsRepoInfo,
+    pr_number: u64,
+    branch_to_delete: Option<String>,
+    secrets: State<'_, Arc<SecretStore>>,
+    config: State<'_, Arc<ConfigStore>>,
+) -> Result<(), String> {
+    if resolve_write_mode(&repo_info, &config) == VcsWriteMode::ReadOnly {
+        return Err("此連線為唯讀模式，無法合併".to_string());
+    }
+    let token = resolve_vcs_token(&repo_info, &secrets);
+    let client = GitClient::new(repo_info.root, token);
+    client.merge_pr(pr_number).await?;
+    if let Some(branch) = branch_to_delete {
+        // 合併已經成功了；刪分支失敗不該讓整個操作回報失敗，忽略即可。
+        let _ = client.delete_branch(&branch).await;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod slugify_tests {
+    use super::slugify;
+
+    #[test]
+    fn ascii_words_become_hyphenated_lowercase() {
+        assert_eq!(slugify("Login Fix"), "login-fix");
+    }
+
+    #[test]
+    fn chinese_characters_are_dropped_not_kept() {
+        assert_eq!(slugify("登入頁優化"), "");
+    }
+
+    #[test]
+    fn mixed_chinese_and_ascii_keeps_only_ascii() {
+        assert_eq!(slugify("登入頁 Login 優化"), "login");
+    }
+
+    #[test]
+    fn consecutive_separators_collapse_to_one_hyphen() {
+        assert_eq!(slugify("a   b---c"), "a-b-c");
+    }
 }
