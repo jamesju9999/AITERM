@@ -1007,6 +1007,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     (async () => {
       try {
         const { rows, cols } = term;
+        // TEMP DIAGNOSTIC — remove once root-caused. Confirms whether the
+        // PTY is created at xterm's stale default size (before the first
+        // real fit() has measured the container) rather than the actual
+        // pane size.
+        console.log(
+          "[AITERM-DIAG-RESIZE] createPty initial size", performance.now().toFixed(1),
+          "rows:", rows, "cols:", cols,
+        );
         const lastCwd = initialCwd ?? localStorage.getItem("aiterm_last_cwd") ?? undefined;
         const id = await createPty({ rows, cols }, lastCwd, claudeBridge);
         sessionRef.current = id;
@@ -1293,6 +1301,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     });
 
     term.onResize(({ rows: r, cols: c }) => {
+      // TEMP DIAGNOSTIC — remove once root-caused. Confirms this fires at
+      // all on a real window resize, and whether it's being silently held
+      // back by the unsubmitted-paste guard (would explain a resize that
+      // never reaches the PTY even after manually resizing the window).
+      console.log(
+        "[AITERM-DIAG-RESIZE] term.onResize", performance.now().toFixed(1),
+        "rows:", r, "cols:", c,
+        "heldBackByPasteGuard:", hasUnsubmittedPasteRef.current,
+        "hasSession:", !!sessionRef.current,
+      );
       // Hold this back until it's safe to send — see hasUnsubmittedPasteRef.
       if (hasUnsubmittedPasteRef.current) {
         pendingResizeRef.current = { rows: r, cols: c };
@@ -1317,17 +1335,74 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     let resizeSettleTimer: ReturnType<typeof setTimeout> | null = null;
     let ro: ResizeObserver | null = null;
     if (hostRef.current) {
-      ro = new ResizeObserver(() => {
+      ro = new ResizeObserver((entries) => {
+        // TEMP DIAGNOSTIC — remove once root-caused. Confirms the observer
+        // fires at all when the OS window is resized on Windows (as opposed
+        // to xterm.js's cols/rows staying pinned so fit() never detects a
+        // change and term.onResize never fires downstream).
+        for (const entry of entries) {
+          console.log(
+            "[AITERM-DIAG-RESIZE] ResizeObserver fired", performance.now().toFixed(1),
+            "contentRect:", JSON.stringify(entry.contentRect),
+            "term.rows/cols before fit():", term.rows, term.cols,
+          );
+        }
         if (resizeSettleTimer) clearTimeout(resizeSettleTimer);
-        resizeSettleTimer = setTimeout(() => fit.fit(), 120);
+        resizeSettleTimer = setTimeout(() => {
+          console.log(
+            "[AITERM-DIAG-RESIZE] calling fit()", performance.now().toFixed(1),
+            "term.rows/cols before:", term.rows, term.cols,
+          );
+          fit.fit();
+          console.log(
+            "[AITERM-DIAG-RESIZE] fit() returned", performance.now().toFixed(1),
+            "term.rows/cols after:", term.rows, term.cols,
+          );
+        }, 120);
       });
       ro.observe(hostRef.current);
     }
+
+    // ResizeObserver only fires when the observed element's CSS-pixel
+    // content-box size changes. In a remote desktop session where the
+    // client's DPI scaling doesn't match the session's rendering scale
+    // (DPI virtualization), a window resize can change what the user sees
+    // on screen without changing the CSS-pixel dimensions WebView2 reports
+    // internally — so ResizeObserver never fires, fit() never re-runs, and
+    // the PTY is left at whatever size it had before, with no way to
+    // recover short of restarting the session. Watching devicePixelRatio
+    // itself catches exactly this case: a DPI change fires independently of
+    // (and in addition to) any CSS-pixel-size change. A `resolution`
+    // media query only matches once for a given DPR, so it has to be
+    // re-registered after each change to keep watching.
+    let dprMediaQuery: MediaQueryList | null = null;
+    const watchDpr = () => {
+      dprMediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      dprMediaQuery.addEventListener("change", onDprChange, { once: true });
+    };
+    function onDprChange() {
+      // TEMP DIAGNOSTIC — remove once root-caused. Confirms whether a DPI
+      // scale change (not just a CSS-pixel size change) is what's actually
+      // happening in the "resize does nothing" remote-desktop case.
+      console.log(
+        "[AITERM-DIAG-RESIZE] devicePixelRatio changed", performance.now().toFixed(1),
+        "new dpr:", window.devicePixelRatio,
+        "term.rows/cols before fit():", term.rows, term.cols,
+      );
+      fit.fit();
+      console.log(
+        "[AITERM-DIAG-RESIZE] fit() after dpr change returned", performance.now().toFixed(1),
+        "term.rows/cols after:", term.rows, term.cols,
+      );
+      watchDpr();
+    }
+    watchDpr();
 
     return () => {
       if (resizeSettleTimer) clearTimeout(resizeSettleTimer);
       if (unsubmittedPasteTimeoutRef.current) clearTimeout(unsubmittedPasteTimeoutRef.current);
       if (ro && hostRef.current) ro.unobserve(hostRef.current);
+      dprMediaQuery?.removeEventListener("change", onDprChange);
       liveFrame?.removeEventListener("scroll", pinLiveFrameScroll);
       ta?.removeEventListener("compositionstart", onCompositionStart);
       ta?.removeEventListener("compositionend", onCompositionEnd);
