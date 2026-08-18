@@ -311,7 +311,15 @@ impl GitClient {
 
         let mut features = Vec::with_capacity(prs.len());
         for pr in prs {
-            let files = self.pr_files(&token, &owner, &repo, pr.number).await?;
+            // A single PR's file-fetch failing (rate limit, transient error) shouldn't
+            // blank out visibility into every other teammate's PR — degrade to an empty
+            // file list for just that one entry instead of aborting the whole call.
+            // Note: an empty `files` here doesn't necessarily mean "no changes" — it can
+            // also mean "file list unavailable" for that specific PR.
+            let files = self
+                .pr_files(&token, &owner, &repo, pr.number)
+                .await
+                .unwrap_or_default();
             features.push(ActiveFeature {
                 number: pr.number,
                 title: pr.title,

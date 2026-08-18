@@ -120,3 +120,64 @@ async fn list_active_features_returns_empty_when_no_open_prs() {
     let features = client.list_active_features().await.expect("should succeed");
     assert!(features.is_empty());
 }
+
+#[tokio::test]
+async fn list_active_features_degrades_gracefully_when_one_pr_files_fetch_fails() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/widget/pulls"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "number": 7,
+                "title": "登入頁優化",
+                "user": {"login": "alice"},
+                "draft": true,
+                "html_url": "https://github.com/acme/widget/pull/7",
+                "updated_at": "2026-08-17T00:00:00Z",
+                "head": {"ref": "feature/login-optimize"}
+            },
+            {
+                "number": 8,
+                "title": "支付流程重構",
+                "user": {"login": "bob"},
+                "draft": false,
+                "html_url": "https://github.com/acme/widget/pull/8",
+                "updated_at": "2026-08-17T01:00:00Z",
+                "head": {"ref": "feature/payment-refactor"}
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/widget/pulls/7/files"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"filename": "src/Login.tsx"},
+            {"filename": "src/api/auth.ts"}
+        ])))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/widget/pulls/8/files"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    init_repo_with_origin(dir.path()).await;
+    let client = GitClient::new_with_api_base(
+        dir.path().to_string_lossy().to_string(),
+        Some("test-token".to_string()),
+        server.uri(),
+    );
+
+    let features = client.list_active_features().await.expect("should still succeed overall");
+
+    assert_eq!(features.len(), 2);
+    assert_eq!(features[0].number, 7);
+    assert_eq!(features[0].files, vec!["src/Login.tsx", "src/api/auth.ts"]);
+    assert_eq!(features[1].number, 8);
+    assert!(features[1].files.is_empty());
+}
