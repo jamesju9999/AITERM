@@ -2,10 +2,11 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm, save } from "@tauri-apps/plugin-dialog";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { aiChat, formatAiError } from "../../ipc/ai";
 import { documentConvert, documentConvertPickFile } from "../../ipc/docConvert";
+import { writeTextFile } from "../../ipc/fs";
 import { getConfig } from "../../ipc/config";
 import type { DocConvertEngine } from "../../ipc/config";
 import { pythonEnvStatus, type PythonProfile } from "../../ipc/pythonEnv";
@@ -244,35 +245,28 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
     setNormalizeProgress(null);
   }, [extractState, selectedProviderId]);
 
+  const saveMarkdown = useCallback(async (fileName: string, content: string) => {
+    const path = await save({
+      defaultPath: fileName,
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    });
+    if (!path) return; // User cancelled the dialog.
+    await writeTextFile(path, content);
+    setDownloadSuccess(t.dc_download_success(fileName));
+    setTimeout(() => setDownloadSuccess(null), 4000);
+  }, [t]);
+
   const downloadMd = useCallback(() => {
     if (!mdOutput) return;
     const baseName = extractState?.fileName.replace(/\.[^.]+$/, "") ?? "schema";
-    const fileName = `${baseName}.md`;
-    const blob = new Blob([mdOutput], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = fileName;
-    a.click();
-    URL.revokeObjectURL(url);
-    setDownloadSuccess(t.dc_download_success(fileName));
-    setTimeout(() => setDownloadSuccess(null), 4000);
-  }, [mdOutput, extractState, t]);
+    void saveMarkdown(`${baseName}.md`, mdOutput);
+  }, [mdOutput, extractState, saveMarkdown]);
 
   const downloadRawMd = useCallback(() => {
     if (!extractState) return;
     const baseName = extractState.fileName.replace(/\.[^.]+$/, "");
-    const fileName = `${baseName}.md`;
-    const blob = new Blob([extractState.rawText], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = fileName;
-    a.click();
-    URL.revokeObjectURL(url);
-    setDownloadSuccess(t.dc_download_success(fileName));
-    setTimeout(() => setDownloadSuccess(null), 4000);
-  }, [extractState, t]);
+    void saveMarkdown(`${baseName}.md`, extractState.rawText);
+  }, [extractState, saveMarkdown]);
 
   return (
     <div className="doc-converter">
@@ -288,7 +282,10 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
         onClick={handleDropzoneClick}
       >
         {extracting ? (
-          <span>{t.dc_extracting}</span>
+          <span className="doc-converter__extracting">
+            <span className="doc-converter__spinner" aria-hidden="true">⟳</span>
+            <span>{t.dc_extracting}</span>
+          </span>
         ) : (
           <>
             <span className="doc-converter__dropzone-icon">📂</span>

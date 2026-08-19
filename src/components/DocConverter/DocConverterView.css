@@ -45,6 +45,22 @@
 .doc-converter__dropzone-icon { font-size: 32px; }
 .doc-converter__dropzone-hint { font-size: 11px; color: #555; }
 
+.doc-converter__extracting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.doc-converter__spinner {
+  display: inline-block;
+  animation: doc-converter-spin 1s linear infinite;
+}
+
+@keyframes doc-converter-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .doc-converter__error {
   background: #2a1a1a;
   border: 1px solid #f87171;

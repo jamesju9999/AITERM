@@ -29,11 +29,18 @@ const listenMock = vi.fn((eventName: string, cb: (e: unknown) => void) => {
   return Promise.resolve(() => {});
 });
 const askConfirm = vi.fn();
+const saveDialogMock = vi.fn();
 // Not window.confirm: Tauri's webview never shows the JS dialog, so the audio
 // prompt was treated as an unconditional yes in production. jsdom returns
 // falsy, so this suite passed while behaving the opposite way.
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   confirm: (...args: unknown[]) => askConfirm(...args),
+  save: (...args: unknown[]) => saveDialogMock(...args),
+}));
+
+const writeTextFileMock = vi.fn();
+vi.mock("../../ipc/fs", () => ({
+  writeTextFile: (...args: unknown[]) => writeTextFileMock(...args),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -378,5 +385,56 @@ describe("DocConverterView pick-interpreter escape hatch", () => {
     fireEvent.click(pickBtn);
 
     expect(screen.getByText("SETTINGS_STUB")).toBeInTheDocument();
+  });
+});
+
+describe("DocConverterView download with save dialog", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getConfigMock.mockResolvedValue({ doc_convert_engine: "auto" });
+    pythonEnvEnsure.mockResolvedValue(undefined);
+    pythonEnvStatusMock.mockResolvedValue({
+      uvAvailable: true,
+      pythonVersion: "3.12.13",
+      installed: ["doc_core"],
+      venvPath: "/data/python-env",
+      userInterpreter: null,
+    });
+  });
+
+  async function convertAFile() {
+    vi.mocked(documentConvertPickFile).mockResolvedValue("/tmp/report.docx");
+    vi.mocked(documentConvert).mockResolvedValue("# Hello\nworld");
+    renderView();
+    await act(async () => {
+      fireEvent.click(screen.getByText(/拖放或點擊選擇檔案/).closest("div")!);
+    });
+  }
+
+  it("opens a native save dialog and writes the file when downloading the raw markdown", async () => {
+    saveDialogMock.mockResolvedValue("/Users/me/Desktop/report.md");
+    await convertAFile();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /下載 Markdown/ }));
+    });
+
+    expect(saveDialogMock).toHaveBeenCalledWith({
+      defaultPath: "report.md",
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    });
+    expect(writeTextFileMock).toHaveBeenCalledWith("/Users/me/Desktop/report.md", "# Hello\nworld");
+  });
+
+  it("does not write anything when the user cancels the save dialog", async () => {
+    saveDialogMock.mockResolvedValue(null);
+    await convertAFile();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /下載 Markdown/ }));
+    });
+
+    expect(saveDialogMock).toHaveBeenCalledOnce();
+    expect(writeTextFileMock).not.toHaveBeenCalled();
   });
 });
