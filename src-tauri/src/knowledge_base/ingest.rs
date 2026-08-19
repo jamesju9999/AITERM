@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use async_trait::async_trait;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
@@ -12,14 +11,10 @@ use crate::db::knowledge_base::{self, DocumentRow, NotebookRow};
 use crate::knowledge_base::chunk::chunk_markdown;
 use crate::knowledge_base::embedding::Embedder;
 
+pub use crate::document_convert::{DocumentConverter, SUPPORTED_EXTENSIONS};
+
 /// 單次同步最大併發轉換/embedding 數（見設計規格第 4 節安全限制）。
 const MAX_CONCURRENT: usize = 3;
-
-pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "xlsx", "xls", "csv", "docx", "pdf", "pptx", "html", "htm",
-    "jpg", "jpeg", "png", "gif", "webp", "epub", "msg",
-    "txt", "md", "rst", "xml", "json", "yaml", "yml",
-];
 
 #[derive(Debug, Clone)]
 pub struct ScannedFile {
@@ -72,13 +67,6 @@ pub fn hash_file(path: &Path) -> Result<String, String> {
     let mut h = Sha256::new();
     h.update(&bytes);
     Ok(h.finalize().iter().map(|b| format!("{:02x}", b)).collect())
-}
-
-/// 將檔案轉成 markdown 的抽象——正式環境由 MarkItDownConverter（Task 8）實作，
-/// 測試用 fake 實作避免依賴 Python/MarkItDown。
-#[async_trait]
-pub trait DocumentConverter: Send + Sync {
-    async fn convert(&self, path: &Path) -> Result<String, String>;
 }
 
 #[derive(Debug, Clone, Serialize)]

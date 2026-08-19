@@ -25,6 +25,7 @@ const BASE_CONFIG: AppConfig = {
   providers: [],
   execution_mode: "graded",
   submit_shortcut: "enter",
+  doc_convert_engine: "auto",
   onboarding_done: true,
   max_agent_steps: 5,
   default_tab: "terminal",

@@ -7,6 +7,7 @@ pub mod api_docs;
 pub mod commands;
 pub mod config;
 pub mod db;
+pub mod document_convert;
 pub mod enterprise;
 pub mod guard;
 pub mod knowledge_base;
@@ -41,7 +42,8 @@ use commands::{
     config::{
         get_config, is_appimage_integration_declined, is_claude_notif_declined, is_onboarding_done,
         set_appimage_integration_declined, set_claude_notif_declined,
-        set_default_tab, set_execution_mode, set_max_agent_steps, set_onboarding_done, set_submit_shortcut,
+        set_default_tab, set_doc_convert_engine, set_execution_mode, set_max_agent_steps,
+        set_onboarding_done, set_submit_shortcut,
     },
     enterprise::{
         enterprise_accept_task, enterprise_complete_task, enterprise_install_service,
@@ -64,7 +66,7 @@ use commands::{
         mail_list_messages, mail_mark_read, mail_count_unread, mail_test_connection,
         mail_delete_message,
     },
-    markitdown::{markitdown_convert, markitdown_pick_file},
+    doc_convert::{document_convert, document_convert_pick_file},
     python_env::{
         python_env_status, python_env_ensure, python_env_reset, python_env_set_interpreter,
         python_env_set_index_url,
@@ -384,6 +386,7 @@ pub fn run() {
             claude_notif_needs_prompt,
             claude_notif_enable_bell,
             set_submit_shortcut,
+            set_doc_convert_engine,
             set_default_tab,
             // Provider management
             list_providers,
@@ -500,9 +503,9 @@ pub fn run() {
             vcs_get_feature_diff,
             vcs_merge_feature,
             pick_folder,
-            // MarkItDown
-            markitdown_convert,
-            markitdown_pick_file,
+            // Document conversion (anydoc + MarkItDown)
+            document_convert,
+            document_convert_pick_file,
             // Python environment
             python_env_status,
             python_env_ensure,

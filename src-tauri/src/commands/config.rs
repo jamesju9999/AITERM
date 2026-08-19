@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use tauri::State;
 
-use crate::config::{AppConfig, ConfigStore, DefaultTab, ExecutionMode, SubmitShortcut};
+use crate::config::{AppConfig, ConfigStore, DefaultTab, DocConvertEngine, ExecutionMode, SubmitShortcut};
 
 #[tauri::command]
 pub fn get_config(config: State<Arc<ConfigStore>>) -> AppConfig {
@@ -58,6 +58,14 @@ pub fn set_submit_shortcut(
     config: State<Arc<ConfigStore>>,
 ) -> Result<(), String> {
     config.update(|cfg| { cfg.submit_shortcut = shortcut; }).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_doc_convert_engine(
+    engine: DocConvertEngine,
+    config: State<Arc<ConfigStore>>,
+) -> Result<(), String> {
+    config.update(|cfg| { cfg.doc_convert_engine = engine; }).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

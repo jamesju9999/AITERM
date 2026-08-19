@@ -43,6 +43,9 @@ pub struct AppConfig {
     /// Which shortcut submits the command (Enter vs Shift+Enter, etc).
     #[serde(default)]
     pub submit_shortcut: SubmitShortcut,
+    /// Which engine document conversion prefers (anydoc vs MarkItDown-only).
+    #[serde(default)]
+    pub doc_convert_engine: DocConvertEngine,
 
     /// Saved database connections (passwords stored separately in Keychain).
     #[serde(default)]
@@ -188,6 +191,7 @@ impl Default for AppConfig {
             appimage_integration_declined: false,
             claude_notif_declined: false,
             submit_shortcut: SubmitShortcut::default(),
+            doc_convert_engine: DocConvertEngine::default(),
             db_connections: vec![],
             default_tab: DefaultTab::default(),
             telegram_chat_id: None,
@@ -315,6 +319,17 @@ pub enum SubmitShortcut {
     Enter,
     ShiftEnter,
     CtrlEnter,
+}
+
+/// Which engine document conversion prefers. `Auto` routes anydoc-covered
+/// formats to anydoc (faster, better quality, no Python) and everything
+/// else to MarkItDown; `MarkitdownOnly` disables anydoc entirely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DocConvertEngine {
+    #[default]
+    Auto,
+    MarkitdownOnly,
 }
 
 /// Supported database backends.
@@ -535,6 +550,28 @@ mod tests {
             let s = toml::to_string(&w).unwrap();
             let d: W = toml::from_str(&s).unwrap();
             assert_eq!(d.mode, w.mode);
+        }
+    }
+
+    #[test]
+    fn doc_convert_engine_defaults_to_auto() {
+        let cfg: AppConfig = toml::from_str("").expect("empty config should parse");
+        assert_eq!(cfg.doc_convert_engine, DocConvertEngine::Auto);
+    }
+
+    #[test]
+    fn doc_convert_engine_roundtrips_toml() {
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct W { e: DocConvertEngine }
+        for (engine, expected) in [
+            (DocConvertEngine::Auto, "auto"),
+            (DocConvertEngine::MarkitdownOnly, "markitdown_only"),
+        ] {
+            let w = W { e: engine };
+            let s = toml::to_string(&w).unwrap();
+            assert!(s.contains(expected), "got: {s}");
+            let d: W = toml::from_str(&s).unwrap();
+            assert_eq!(d.e, w.e);
         }
     }
 

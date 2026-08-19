@@ -5,7 +5,9 @@ import { listen } from "@tauri-apps/api/event";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { aiChat, formatAiError } from "../../ipc/ai";
-import { markitdownConvert, markitdownPickFile } from "../../ipc/markitdown";
+import { documentConvert, documentConvertPickFile } from "../../ipc/docConvert";
+import { getConfig } from "../../ipc/config";
+import type { DocConvertEngine } from "../../ipc/config";
 import { pythonEnvStatus, type PythonProfile } from "../../ipc/pythonEnv";
 import { useLocale } from "../../contexts/LocaleContext";
 import { ModelPickerButton } from "../ModelPickerButton";
@@ -21,14 +23,36 @@ import "./DocConverterView.css";
  *  extra (it doesn't exist), so images never need a second profile. */
 const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "m4a", "flac"]);
 
-export function needsAudioProfile(fileName: string): boolean {
+/** Extensions anydoc converts natively — no Python needed at all. Mirrors
+ *  ANYDOC_EXTENSIONS in src-tauri/src/document_convert/mod.rs; keep in sync
+ *  if that list changes. */
+const ANYDOC_EXTENSIONS = new Set([
+  "doc", "docx", "docm", "odt", "pdf",
+  "ppt", "pps", "pot", "pptx", "pptm", "ppsx", "ppsm",
+  "rtf", "epub",
+  "xls", "xlsx", "xlsm", "xlsb", "ods", "odp",
+  "csv",
+]);
+
+function extOf(fileName: string): string {
   // The picker/drag-drop handlers hand back a full path, not a bare file
   // name — strip to the last path segment first so a dot in a directory
   // name (e.g. "/Users/me/v1.2/report") isn't mistaken for an extension.
   const base = fileName.split(/[\\/]/).pop() ?? fileName;
   const dot = base.lastIndexOf(".");
-  if (dot < 0) return false;
-  return AUDIO_EXTENSIONS.has(base.slice(dot + 1).toLowerCase());
+  return dot < 0 ? "" : base.slice(dot + 1).toLowerCase();
+}
+
+export function needsAudioProfile(fileName: string): boolean {
+  return AUDIO_EXTENSIONS.has(extOf(fileName));
+}
+
+/** Whether this file needs the MarkItDown Python profile at all, given the
+ *  current engine setting. `markitdown_only` always needs it; under `auto`,
+ *  only files anydoc can't convert do. */
+export function needsMarkItDownProfile(fileName: string, engine: DocConvertEngine): boolean {
+  if (engine === "markitdown_only") return true;
+  return !ANYDOC_EXTENSIONS.has(extOf(fileName));
 }
 
 interface ExtractState {
@@ -97,6 +121,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
   // buttons must retry whichever one actually failed, not always doc_core
   // (which would already be installed and "succeed" without fixing anything).
   const [gateProfile, setGateProfile] = useState<PythonProfile>("doc_core");
+  const [docConvertEngine, setDocConvertEngineState] = useState<DocConvertEngine>("auto");
 
   const processFilePath = useCallback(async (filePath: string) => {
     stoppedRef.current = true;
@@ -108,27 +133,29 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
     setMdOutput("");
     setExtracting(true);
 
-    setGateProfile("doc_core");
-    const coreReady = await pythonEnv.ensureProfile("doc_core");
-    if (!coreReady) { setExtracting(false); return; }
+    if (needsMarkItDownProfile(filePath, docConvertEngine)) {
+      setGateProfile("doc_core");
+      const coreReady = await pythonEnv.ensureProfile("doc_core");
+      if (!coreReady) { setExtracting(false); return; }
 
-    if (needsAudioProfile(filePath)) {
-      const status = await pythonEnvStatus().catch(() => null);
-      const audioInstalled = status?.installed.includes("doc_audio") ?? false;
-      if (!audioInstalled) {
-        // Not a delete — this one installs something, so it keeps a neutral OK.
-        if (!(await confirm(t.python_env_audio_prompt, {
-          okLabel: t.common_confirm,
-          cancelLabel: t.common_cancel,
-        }))) { setExtracting(false); return; }
-        setGateProfile("doc_audio");
-        const audioReady = await pythonEnv.ensureProfile("doc_audio");
-        if (!audioReady) { setExtracting(false); return; }
+      if (needsAudioProfile(filePath)) {
+        const status = await pythonEnvStatus().catch(() => null);
+        const audioInstalled = status?.installed.includes("doc_audio") ?? false;
+        if (!audioInstalled) {
+          // Not a delete — this one installs something, so it keeps a neutral OK.
+          if (!(await confirm(t.python_env_audio_prompt, {
+            okLabel: t.common_confirm,
+            cancelLabel: t.common_cancel,
+          }))) { setExtracting(false); return; }
+          setGateProfile("doc_audio");
+          const audioReady = await pythonEnv.ensureProfile("doc_audio");
+          if (!audioReady) { setExtracting(false); return; }
+        }
       }
     }
 
     try {
-      const markdown = await markitdownConvert(filePath, selectedProviderId || undefined);
+      const markdown = await documentConvert(filePath, selectedProviderId || undefined);
       const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
       setExtractState({ fileName, rawText: markdown });
     } catch (e) {
@@ -136,7 +163,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
     } finally {
       setExtracting(false);
     }
-  }, [selectedProviderId, pythonEnv.ensureProfile, t]);
+  }, [selectedProviderId, pythonEnv.ensureProfile, t, docConvertEngine]);
 
   useEffect(() => {
     listProviders().then((list) => {
@@ -144,6 +171,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
       const def = list.find((p) => p.is_default);
       if (def) setSelectedProviderId(def.id);
     }).catch(console.error);
+    getConfig().then((cfg) => setDocConvertEngineState(cfg.doc_convert_engine)).catch(console.error);
   }, []);
 
   // OS-level drag-drop (Tauri intercepts before the web DOM)
@@ -158,7 +186,7 @@ export function DocConverterView({ isActive: _isActive }: { isActive: boolean })
   }, [processFilePath]);
 
   const handleDropzoneClick = useCallback(async () => {
-    const path = await markitdownPickFile();
+    const path = await documentConvertPickFile();
     if (path) processFilePath(path);
   }, [processFilePath]);
 

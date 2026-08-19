@@ -224,9 +224,14 @@ export function KnowledgeBaseView({ isActive }: Props) {
   }, [remove, activeNotebookId]);
 
   const handleSync = useCallback(async (id: string) => {
-    // The import walks the notebook's folder via markitdown_convert, which
-    // only guarantees the doc_core profile — see DocConverterView for the
-    // same gate on the single-file path.
+    // The import walks the notebook's folder via document_convert, which
+    // routes anydoc-covered formats to anydoc but still needs the doc_core
+    // profile for anything MarkItDown handles. Unlike DocConverterView, this
+    // gate runs unconditionally: a notebook can mix formats, sync failures
+    // aren't surfaced per-document in this UI today, and skipping the gate
+    // only for notebooks with zero MarkItDown-only files would need a new
+    // backend check this plan deliberately doesn't add. See the "Known scope
+    // decision" note in docs/superpowers/plans/2026-08-18-anydoc-doc-converter.md.
     const ready = await pythonEnv.ensureProfile("doc_core");
     if (!ready) return;
     await sync(id);
