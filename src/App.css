@@ -38,6 +38,16 @@ body,
   color: var(--text-primary);
   font-family: var(--sans);
   -webkit-font-smoothing: antialiased;
+  /* Nothing should ever page-scroll the whole desktop shell — every
+     scrollable area (terminal, chat history, notebook lists, ...) manages
+     its own overflow-y locally. Without this, a transient element that
+     briefly renders taller than the window (e.g. the "+ Add Tab" picker
+     popup, positioned bottom-up near the sidebar) can make the whole
+     document scrollable, and once something scrolls it, the entire app
+     content stays shifted until the window is reloaded — every tab's
+     content renders a fixed number of pixels too high, overlapping the
+     custom title bar. */
+  overflow: hidden;
 }
 
 /* Neutralize the Vite-template #root rule (index.css): its `min-height: 100svh`
