@@ -43,9 +43,11 @@ pub(crate) async fn search_documents(
     }
     let top_k = top_k.unwrap_or(DEFAULT_TOP_K).clamp(1, MAX_TOP_K) as usize;
 
-    let notebook = get_notebook(pool, notebook_id)
-        .await
-        .map_err(|_| format!("notebook not found: {notebook_id}"))?;
+    let notebook = match get_notebook(pool, notebook_id).await {
+        Ok(nb) => nb,
+        Err(sqlx::Error::RowNotFound) => return Err(format!("notebook not found: {notebook_id}")),
+        Err(e) => return Err(e.to_string()),
+    };
     let embed_provider_id = notebook.embed_provider_id
         .ok_or_else(|| "this notebook has no embedding provider configured".to_string())?;
     let embed_model = notebook.embed_model
@@ -89,7 +91,6 @@ pub(crate) async fn read_document(pool: &SqlitePool, notebook_id: &str, path: &s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use sqlx::sqlite::SqlitePoolOptions;
     use crate::db::knowledge_base::{create_notebook, replace_chunks, upsert_document};
 
@@ -119,14 +120,6 @@ mod tests {
         pool
     }
 
-    struct FakeEmbedder;
-    #[async_trait]
-    impl Embedder for FakeEmbedder {
-        async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
-            Ok(texts.iter().map(|_| vec![1.0, 0.0, 0.0]).collect())
-        }
-    }
-
     #[tokio::test]
     async fn list_notebooks_reports_created_notebooks() {
         let pool = setup_pool().await;
@@ -142,15 +135,14 @@ mod tests {
         assert!(out.contains("No notebooks"));
     }
 
-    /// Two notebooks, each with their own document — proves search_documents
-    /// is properly scoped to the notebook_id it's given, not just "whatever
-    /// the first notebook happens to be" (there's no active-session state to
-    /// fall back on here, unlike knowledge_base::tools::dispatch_tool).
+    /// Two notebooks, each with their own document — proves search results
+    /// are correctly scoped by notebook_id at the storage layer (this is
+    /// what search_documents itself relies on via search_similar_chunks).
     #[tokio::test]
-    async fn search_documents_is_scoped_to_the_given_notebook() {
+    async fn search_similar_chunks_is_scoped_to_the_given_notebook() {
         let pool = setup_pool().await;
-        let nb_a = create_notebook(&pool, "A", "/tmp/a", Some("p"), Some("m"), 0).await.unwrap();
-        let nb_b = create_notebook(&pool, "B", "/tmp/b", Some("p"), Some("m"), 0).await.unwrap();
+        let nb_a = create_notebook(&pool, "A", "/tmp/a", None, None, 0).await.unwrap();
+        let nb_b = create_notebook(&pool, "B", "/tmp/b", None, None, 0).await.unwrap();
 
         let doc_a = upsert_document(&pool, &nb_a.id, "a.md", 0, "h1", Some("content A"), "ok", None).await.unwrap();
         replace_chunks(&pool, &doc_a, &[("內容 A".into(), None, vec![1.0, 0.0, 0.0])]).await.unwrap();
@@ -158,22 +150,17 @@ mod tests {
         let doc_b = upsert_document(&pool, &nb_b.id, "b.md", 0, "h2", Some("content B"), "ok", None).await.unwrap();
         replace_chunks(&pool, &doc_b, &[("內容 B".into(), None, vec![1.0, 0.0, 0.0])]).await.unwrap();
 
-        // Fake config/secrets: resolve_embedder_config would fail to find a real
-        // provider, so this test exercises the code path up to that point via a
-        // config with no matching provider — instead we test the notebook-scoping
-        // behavior directly against search_similar_chunks, bypassing the
-        // embedder-resolution branch by calling with a notebook whose
-        // embed_provider_id/model are unset and asserting the specific error.
-        let dir = tempfile::tempdir().unwrap();
-        let config = crate::config::ConfigStore::new_at(dir.path().join("config.toml"));
-        let secrets = crate::secret::SecretStore::new();
+        let hits_a = crate::db::knowledge_base::search_similar_chunks(&pool, &nb_a.id, "query", &[1.0, 0.0, 0.0], 10)
+            .await
+            .unwrap();
+        assert_eq!(hits_a.len(), 1);
+        assert_eq!(hits_a[0].rel_path, "a.md");
 
-        // nb_a/nb_b were created with embed_provider_id "p" / embed_model "m",
-        // which don't correspond to any real configured provider — so this
-        // exercises "notebook has an embedder configured but it doesn't resolve",
-        // proving the notebook lookup and field checks run before any network call.
-        let err = search_documents(&pool, &config, &secrets, &nb_a.id, "任何查詢", None).await.unwrap_err();
-        assert!(err.contains("找不到 provider") || err.contains("provider"), "{err}");
+        let hits_b = crate::db::knowledge_base::search_similar_chunks(&pool, &nb_b.id, "query", &[1.0, 0.0, 0.0], 10)
+            .await
+            .unwrap();
+        assert_eq!(hits_b.len(), 1);
+        assert_eq!(hits_b[0].rel_path, "b.md");
     }
 
     #[tokio::test]
