@@ -35,7 +35,7 @@ pub fn tool_definitions() -> Vec<McpToolDefinition> {
 
 /// 找不到剛好落在 max_bytes 的 UTF-8 字元邊界時往前找最近的合法邊界，
 /// 避免在多位元組字元（中文）中間切斷造成 panic。
-fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+pub(crate) fn safe_truncate(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
     }
@@ -44,6 +44,20 @@ fn safe_truncate(s: &str, max_bytes: usize) -> &str {
         end -= 1;
     }
     &s[..end]
+}
+
+/// Format search hits as citation-tagged text blocks. Shared by this module's
+/// `dispatch_tool("search_documents", ...)` and the MCP tool server's
+/// `search_documents` tool (`src-tauri/src/mcp_server/kb_ops.rs`) — both need
+/// the exact same "which chunk came from where" formatting.
+pub(crate) fn format_search_hits(hits: &[crate::db::knowledge_base::SearchHit]) -> String {
+    hits.iter().enumerate().map(|(i, h)| {
+        let loc = h.location_hint.as_deref().unwrap_or("(no section title)");
+        format!(
+            "[{}] {} — {} (score {:.2})\n{}",
+            i + 1, h.rel_path, loc, h.score, h.text
+        )
+    }).collect::<Vec<_>>().join("\n\n---\n\n")
 }
 
 pub async fn dispatch_tool(
@@ -73,16 +87,7 @@ pub async fn dispatch_tool(
 
             match knowledge_base::search_similar_chunks(pool, notebook_id, &query, &query_embedding, top_k).await {
                 Ok(hits) if hits.is_empty() => ("No matching content found.".into(), false),
-                Ok(hits) => {
-                    let formatted = hits.iter().enumerate().map(|(i, h)| {
-                        let loc = h.location_hint.as_deref().unwrap_or("(no section title)");
-                        format!(
-                            "[{}] {} — {} (score {:.2})\n{}",
-                            i + 1, h.rel_path, loc, h.score, h.text
-                        )
-                    }).collect::<Vec<_>>().join("\n\n---\n\n");
-                    (formatted, false)
-                }
+                Ok(hits) => (format_search_hits(&hits), false),
                 Err(e) => (format!("Error: {e}"), false),
             }
         }

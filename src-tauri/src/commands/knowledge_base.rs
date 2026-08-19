@@ -72,7 +72,7 @@ impl DocumentConverter for RoutedConverter {
     }
 }
 
-fn resolve_embedder_config(
+pub(crate) fn resolve_embedder_config(
     config: &ConfigStore,
     secrets: &SecretStore,
     provider_id: &str,
