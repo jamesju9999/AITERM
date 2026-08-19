@@ -144,3 +144,101 @@ impl Db2SidecarState {
         Ok(c)
     }
 }
+
+/// Resolve the directory containing `db2sidecar.jar` for the current platform.
+///
+/// Checks the production (bundled resources) location first, falling back to
+/// the local dev build output under `binaries/`. Extracted from `lib.rs` so
+/// both the main app startup and the MCP tool server (which needs its own
+/// independent `Db2SidecarState`, not the app's Tauri-managed one) can build
+/// this path without duplicating the per-platform logic.
+pub fn resolve_db2_sidecar_path() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let exe_dir = std::env::current_exe()
+            .expect("current_exe")
+            .parent()
+            .expect("parent dir")
+            .to_path_buf();
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+        let candidates = [
+            // Production: resources bundle into exe_dir/db2-sidecar/
+            exe_dir.join("db2-sidecar"),
+            // Dev: binaries dir
+            manifest_dir
+                .join("binaries")
+                .join("db2-sidecar-win-x64"),
+        ];
+
+        candidates
+            .into_iter()
+            .find(|p| p.join("db2sidecar.jar").exists())
+            .unwrap_or_else(|| exe_dir.join("db2-sidecar"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let exe_dir = std::env::current_exe()
+            .expect("current_exe")
+            .parent()
+            .expect("parent dir")
+            .to_path_buf();
+
+        let contents_dir = exe_dir.parent()
+            .expect("Contents dir")
+            .to_path_buf();
+
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+        #[cfg(target_arch = "aarch64")]
+        let dev_subdir = "db2-sidecar-mac-arm64";
+        #[cfg(target_arch = "x86_64")]
+        let dev_subdir = "db2-sidecar-mac-x64";
+
+        let candidates = [
+            // Production: Tauri resources land in Contents/Resources/db2-sidecar/
+            contents_dir.join("Resources").join("db2-sidecar"),
+            // Dev: local build output
+            manifest_dir
+                .join("binaries")
+                .join(dev_subdir),
+        ];
+
+        candidates
+            .into_iter()
+            .find(|p| p.join("db2sidecar.jar").exists())
+            .unwrap_or_else(|| contents_dir.join("Resources").join("db2-sidecar"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let exe_dir = std::env::current_exe()
+            .expect("current_exe")
+            .parent()
+            .expect("parent dir")
+            .to_path_buf();
+
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+        #[cfg(target_arch = "aarch64")]
+        let dev_subdir = "db2-sidecar-linux-arm64";
+        #[cfg(target_arch = "x86_64")]
+        let dev_subdir = "db2-sidecar-linux-x64";
+
+        // Production: AppImage ← {APPDIR}/usr/bin/aiterm → {APPDIR}/usr/lib/aiterm/db2-sidecar
+        //             .deb    ← /usr/bin/aiterm           → /usr/lib/aiterm/db2-sidecar
+        let prod_path = exe_dir.join("../../lib/AITerm/db2-sidecar");
+
+        let found = [
+            prod_path.clone(),
+            // Dev: local binaries directory (CARGO_MANIFEST_DIR is a compile-time path
+            // valid only on the build machine — used only when prod_path doesn't exist)
+            manifest_dir.join("binaries").join(dev_subdir),
+        ]
+        .into_iter()
+        .find(|p| p.join("db2sidecar.jar").exists());
+
+        // Default to prod_path so error messages reference the expected on-device location,
+        // not the CI build machine's CARGO_MANIFEST_DIR.
+        found.unwrap_or(prod_path)
+    }
+}

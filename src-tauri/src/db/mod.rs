@@ -14,4 +14,4 @@ pub mod mail;
 
 pub use adapter::{DbAdapter, TableInfo, ColumnInfo, QueryResult};
 pub use manager::DbManager;
-pub use db2_sidecar::Db2SidecarState;
+pub use db2_sidecar::{resolve_db2_sidecar_path, Db2SidecarState};
