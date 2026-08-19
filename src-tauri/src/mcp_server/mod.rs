@@ -59,10 +59,12 @@ impl McpToolServerState {
     /// would point at a dead address if the port silently drifted.
     ///
     /// Builds its own `DbManager`/`Db2SidecarState`/knowledge-base
-    /// `SqlitePool` rather than sharing the app's Tauri-managed ones — see
-    /// the module-level design doc for why. `config`/`secrets` ARE the
-    /// app-wide shared instances (already `Arc`-managed everywhere else),
-    /// passed in by the caller.
+    /// `SqlitePool` rather than sharing the app's Tauri-managed ones, to
+    /// avoid refactoring ~20 existing call sites that currently hold those
+    /// types un-`Arc`'d in Tauri state — see the module-level design doc for
+    /// the full tradeoff analysis. `config`/`secrets` ARE the app-wide shared
+    /// instances (already `Arc`-managed everywhere else), passed in by the
+    /// caller.
     pub async fn start(
         &self,
         config: Arc<ConfigStore>,
