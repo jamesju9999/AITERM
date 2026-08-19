@@ -509,13 +509,17 @@ mod ensure_connected_tests {
     async fn connects_when_not_already_connected() {
         let dir = tempfile::tempdir().unwrap();
         let config = ConfigStore::new_at(dir.path().join("config.toml"));
-        config.add_db_connection(sqlite_connection("sq1", ":memory:")).unwrap();
+        config
+            .add_db_connection(sqlite_connection("sq1", ":memory:"))
+            .unwrap();
         let secrets = SecretStore::new();
         let manager = DbManager::new();
         let sidecar = Db2SidecarState::new(dir.path().to_path_buf());
 
         assert!(!manager.is_connected("sq1").await);
-        ensure_connected("sq1", &config, &secrets, &manager, &sidecar).await.unwrap();
+        ensure_connected("sq1", &config, &secrets, &manager, &sidecar)
+            .await
+            .unwrap();
         assert!(manager.is_connected("sq1").await);
     }
 
@@ -523,14 +527,20 @@ mod ensure_connected_tests {
     async fn is_a_no_op_when_already_connected() {
         let dir = tempfile::tempdir().unwrap();
         let config = ConfigStore::new_at(dir.path().join("config.toml"));
-        config.add_db_connection(sqlite_connection("sq1", ":memory:")).unwrap();
+        config
+            .add_db_connection(sqlite_connection("sq1", ":memory:"))
+            .unwrap();
         let secrets = SecretStore::new();
         let manager = DbManager::new();
         let sidecar = Db2SidecarState::new(dir.path().to_path_buf());
 
-        ensure_connected("sq1", &config, &secrets, &manager, &sidecar).await.unwrap();
+        ensure_connected("sq1", &config, &secrets, &manager, &sidecar)
+            .await
+            .unwrap();
         // Second call must not error even though a live connection already exists.
-        ensure_connected("sq1", &config, &secrets, &manager, &sidecar).await.unwrap();
+        ensure_connected("sq1", &config, &secrets, &manager, &sidecar)
+            .await
+            .unwrap();
         assert!(manager.is_connected("sq1").await);
     }
 
@@ -542,7 +552,9 @@ mod ensure_connected_tests {
         let manager = DbManager::new();
         let sidecar = Db2SidecarState::new(dir.path().to_path_buf());
 
-        let err = ensure_connected("nonexistent", &config, &secrets, &manager, &sidecar).await.unwrap_err();
+        let err = ensure_connected("nonexistent", &config, &secrets, &manager, &sidecar)
+            .await
+            .unwrap_err();
         assert!(err.contains("connection not found"), "{err}");
     }
 }
