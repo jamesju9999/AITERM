@@ -422,8 +422,21 @@ async fn merge_pr_surfaces_not_mergeable_error() {
 /// only intercepts HTTP calls, not raw git subprocess I/O.
 async fn init_repo_with_local_remote(dir: &std::path::Path) -> std::path::PathBuf {
     let bare_dir = dir.join("origin.git");
+    // --initial-branch=main pins the bare repo's HEAD symref to
+    // refs/heads/main at creation time, regardless of the host's
+    // init.defaultBranch. Without this, HEAD falls back to git's built-in
+    // "master" default on hosts that never configured init.defaultBranch
+    // (this is the case on GitHub Actions runners, unlike this developer's
+    // local machine). Pushing "main" into that repo later never repoints an
+    // existing HEAD, so HEAD is left dangling at nonexistent refs/heads/master.
+    // A subsequent `git clone` of that repo then prints "remote HEAD refers
+    // to nonexistent ref, unable to checkout" and leaves the clone on an
+    // empty, unborn "master" branch instead of "main" — which silently
+    // breaks the "second contributor" simulation below (its `git push origin
+    // main` fails with "src refspec main does not match any", a failure this
+    // helper's unchecked `.status().unwrap()` calls never surface).
     std::process::Command::new("git")
-        .args(["init", "--bare", "-q"])
+        .args(["init", "--bare", "-q", "--initial-branch=main"])
         .arg(&bare_dir)
         .status()
         .unwrap();
