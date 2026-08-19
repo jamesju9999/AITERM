@@ -106,7 +106,7 @@ export function KnowledgeBaseView({ isActive }: Props) {
   const [sourceOpenError, setSourceOpenError] = useState<string | null>(null);
   const submitShortcutRef = useRef<SubmitShortcut>("enter");
   submitShortcutRef.current = submitShortcut;
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const activeNotebook = notebooks.find((nb) => nb.id === activeNotebookId) ?? null;
@@ -177,8 +177,19 @@ export function KnowledgeBaseView({ isActive }: Props) {
   }, [isActive]);
 
   useEffect(() => {
+    // Scroll the message list itself rather than calling scrollIntoView on a
+    // sentinel inside it. .ca-messages sits several position:absolute/flex
+    // layers below the app shell's own overflow:hidden wrapper (App.tsx),
+    // none of which are scroll containers — scrollIntoView can walk past
+    // .ca-messages and scroll THAT outer wrapper instead (confirmed: with an
+    // empty notebook, the hint screen fits within .ca-messages already, so
+    // scrollIntoView looks further up for something to adjust). Since that
+    // wrapper has overflow:hidden, the user can never scroll it back, so the
+    // whole app stays shifted until the window reloads. Same bug class as
+    // PythonEnvGate.tsx's log panel; same fix.
     if (isActive) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      const el = messagesContainerRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
     }
   }, [messages, isActive]);
 
@@ -274,7 +285,7 @@ export function KnowledgeBaseView({ isActive }: Props) {
                 </button>
               </div>
             )}
-            <div className="ca-messages">
+            <div className="ca-messages" ref={messagesContainerRef}>
               {messages.length === 0 && (
                 <div className="ca-hint-center">
                   <div className="ca-hint-title">{t.kb_hint_title}</div>
@@ -342,7 +353,6 @@ export function KnowledgeBaseView({ isActive }: Props) {
               })}
               {error && <div className="ca-error">{error}</div>}
               {sourceOpenError && <div className="ca-error">{sourceOpenError}</div>}
-              <div ref={messagesEndRef} />
             </div>
 
             {isFallbackMode && <div className="ca-fallback-banner">{t.ca_fallback_banner}</div>}
