@@ -39,19 +39,25 @@ pub struct ConnectionIdArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ListTablesArgs {
+    /// Connection id as returned by `list_connections`.
     pub connection_id: String,
+    /// Schema name as returned by `list_schemas`.
     pub schema: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TableSchemaArgs {
+    /// Connection id as returned by `list_connections`.
     pub connection_id: String,
+    /// Schema name as returned by `list_schemas`.
     pub schema: String,
+    /// Table name as returned by `list_tables`.
     pub table: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ExecuteQueryArgs {
+    /// Connection id as returned by `list_connections`.
     pub connection_id: String,
     /// Arbitrary SQL. Not restricted to read-only.
     pub sql: String,
@@ -70,6 +76,7 @@ pub struct SearchDocumentsArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ReadDocumentArgs {
+    /// Notebook id as returned by `list_notebooks`.
     pub notebook_id: String,
     /// Document path exactly as returned by `search_documents`.
     pub path: String,
