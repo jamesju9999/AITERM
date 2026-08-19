@@ -102,6 +102,10 @@ pub struct AppConfig {
     /// Claude Code 橋接設定。舊的 config.toml 沒有這個區塊，靠 `default` 補齊。
     #[serde(default)]
     pub claude_bridge: ClaudeBridgeConfig,
+
+    /// MCP tool server 設定。舊的 config.toml 沒有這個區塊，靠 `default` 補齊。
+    #[serde(default)]
+    pub mcp_tool_server: McpToolServerConfig,
 }
 
 fn default_max_agent_steps() -> u32 { 5 }
@@ -140,6 +144,31 @@ impl Default for ClaudeBridgeConfig {
             opus: None,
             sonnet: None,
             haiku: None,
+        }
+    }
+}
+
+pub fn default_mcp_tool_server_port() -> u16 { 8318 }
+
+/// Settings for AITerm's MCP tool server (exposes DB connections and
+/// knowledge base notebooks as MCP tools to external clients like Claude
+/// Code CLI). Independent from `ClaudeBridgeConfig` — different concern,
+/// different toggle, different port. See
+/// `docs/superpowers/specs/2026-08-19-mcp-tool-server-design.md`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpToolServerConfig {
+    #[serde(default)]
+    pub enabled: bool,
+
+    #[serde(default = "default_mcp_tool_server_port")]
+    pub port: u16,
+}
+
+impl Default for McpToolServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_mcp_tool_server_port(),
         }
     }
 }
@@ -205,6 +234,7 @@ impl Default for AppConfig {
             python_interpreter: None,
             python_index_url: None,
             claude_bridge: ClaudeBridgeConfig::default(),
+            mcp_tool_server: McpToolServerConfig::default(),
         }
     }
 }
