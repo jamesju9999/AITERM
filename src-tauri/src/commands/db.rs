@@ -314,15 +314,21 @@ pub async fn db_test_connection(
     }
 }
 
-#[tauri::command]
-pub async fn db_connect(
-    id: String,
-    config: State<'_, Arc<ConfigStore>>,
-    secrets: State<'_, Arc<SecretStore>>,
-    manager: State<'_, DbManager>,
-    sidecar: State<'_, Db2SidecarState>,
+/// Ensure a live connection exists for `id`, connecting on demand if it doesn't
+/// (reads the stored password, builds the right adapter for the DB type, and
+/// retries once if a dead DB2 sidecar caused the first attempt to fail).
+/// Shared by the `db_connect` Tauri command (used when the user opens the DB
+/// tab) and the MCP tool server's `execute_query`/`list_tables`/etc. (used
+/// when an external MCP client calls a tool without the DB tab ever being
+/// open) — both need identical connect-on-demand behavior.
+pub(crate) async fn ensure_connected(
+    id: &str,
+    config: &ConfigStore,
+    secrets: &SecretStore,
+    manager: &DbManager,
+    sidecar: &Db2SidecarState,
 ) -> Result<(), String> {
-    if manager.is_connected(&id).await {
+    if manager.is_connected(id).await {
         return Ok(());
     }
     let conn = config
@@ -332,22 +338,33 @@ pub async fn db_connect(
         .find(|c| c.id == id)
         .ok_or_else(|| format!("connection not found: {id}"))?;
     let password = secrets
-        .get(&secret_key(&id))
+        .get(&secret_key(id))
         .ok()
         .flatten()
         .unwrap_or_default();
-    let adapter = match build_adapter(&conn, &password, &sidecar).await {
+    let adapter = match build_adapter(&conn, &password, sidecar).await {
         Ok(adapter) => adapter,
         Err(err) if conn.db_type == DbType::Db2 && is_db2_sidecar_transport_error(&err) => {
             sidecar.reset().await;
-            build_adapter(&conn, &password, &sidecar)
+            build_adapter(&conn, &password, sidecar)
                 .await
                 .map_err(|e| e.to_string())?
         }
         Err(err) => return Err(err.to_string()),
     };
-    manager.insert(id, adapter).await;
+    manager.insert(id.to_string(), adapter).await;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn db_connect(
+    id: String,
+    config: State<'_, Arc<ConfigStore>>,
+    secrets: State<'_, Arc<SecretStore>>,
+    manager: State<'_, DbManager>,
+    sidecar: State<'_, Db2SidecarState>,
+) -> Result<(), String> {
+    ensure_connected(&id, &config, &secrets, &manager, &sidecar).await
 }
 
 #[tauri::command]
@@ -467,4 +484,65 @@ pub async fn db_preview_table(
         .execute(&connection_id, &sql)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod ensure_connected_tests {
+    use super::*;
+    use crate::config::types::{DbConnection, DbType};
+    use crate::secret::SecretStore;
+
+    fn sqlite_connection(id: &str, path: &str) -> DbConnection {
+        DbConnection {
+            id: id.to_string(),
+            name: "test".to_string(),
+            db_type: DbType::Sqlite,
+            host: path.to_string(),
+            port: 0,
+            database: String::new(),
+            username: String::new(),
+            default_schema: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn connects_when_not_already_connected() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = ConfigStore::new_at(dir.path().join("config.toml"));
+        config.add_db_connection(sqlite_connection("sq1", ":memory:")).unwrap();
+        let secrets = SecretStore::new();
+        let manager = DbManager::new();
+        let sidecar = Db2SidecarState::new(dir.path().to_path_buf());
+
+        assert!(!manager.is_connected("sq1").await);
+        ensure_connected("sq1", &config, &secrets, &manager, &sidecar).await.unwrap();
+        assert!(manager.is_connected("sq1").await);
+    }
+
+    #[tokio::test]
+    async fn is_a_no_op_when_already_connected() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = ConfigStore::new_at(dir.path().join("config.toml"));
+        config.add_db_connection(sqlite_connection("sq1", ":memory:")).unwrap();
+        let secrets = SecretStore::new();
+        let manager = DbManager::new();
+        let sidecar = Db2SidecarState::new(dir.path().to_path_buf());
+
+        ensure_connected("sq1", &config, &secrets, &manager, &sidecar).await.unwrap();
+        // Second call must not error even though a live connection already exists.
+        ensure_connected("sq1", &config, &secrets, &manager, &sidecar).await.unwrap();
+        assert!(manager.is_connected("sq1").await);
+    }
+
+    #[tokio::test]
+    async fn errors_when_connection_id_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = ConfigStore::new_at(dir.path().join("config.toml"));
+        let secrets = SecretStore::new();
+        let manager = DbManager::new();
+        let sidecar = Db2SidecarState::new(dir.path().to_path_buf());
+
+        let err = ensure_connected("nonexistent", &config, &secrets, &manager, &sidecar).await.unwrap_err();
+        assert!(err.contains("connection not found"), "{err}");
+    }
 }
