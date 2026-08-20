@@ -100,7 +100,7 @@ pub(crate) async fn spawn_tab(
     registry.record_baseline(&tab_id, 0);
 
     if let Some(cmd) = &command {
-        if let Err(e) = pty_manager.write(&tab_id, format!("{cmd}\n").as_bytes()) {
+        if let Err(e) = pty_manager.write(&tab_id, format!("{cmd}\r").as_bytes()) {
             let _ = pty_manager.close(&tab_id);
             return Err(e.to_string());
         }
@@ -128,7 +128,7 @@ pub(crate) fn send_input(
         ));
     }
     pty_manager
-        .write(tab_id, format!("{text}\n").as_bytes())
+        .write(tab_id, format!("{text}\r").as_bytes())
         .map_err(|e| e.to_string())?;
 
     // Reset the baseline to the count *as of right now*, before any reply has
@@ -278,5 +278,84 @@ mod tests {
         let registry = CoordinationRegistry::new();
         let err = wait_for_idle(&pty_manager, &registry, "not-a-real-tab", None).await.unwrap_err();
         assert!(err.contains("was not created by spawn_tab"), "{err}");
+    }
+
+    /// Regression test for the "text gets typed but Enter never fires" bug.
+    ///
+    /// A first attempt at this test sent `echo send_input_regression_check`
+    /// via `send_input` and checked that echo's own output showed up — but a
+    /// canonical-mode shell (bash/zsh, which is what `create_with_callback`
+    /// spawns here) tolerates a bare `\n` as a line terminator exactly the
+    /// same as `\r`, so that test passed even with the `\n` bug reintroduced
+    /// (confirmed manually). It gave false assurance: it can't distinguish
+    /// the fix from the bug, because the bug specifically only breaks
+    /// *raw-mode* input handling (like Claude Code CLI's own TUI), which is
+    /// hard to spawn deterministically in a unit test.
+    ///
+    /// This test instead inspects the literal terminator byte `send_input`
+    /// writes to the PTY, independent of any shell's tolerance for either
+    /// byte: it puts the pty's line discipline into raw mode (`stty raw
+    /// -echo`) and uses `od` to dump the exact bytes that arrive off the
+    /// wire. With the fix the terminator is `0d` (CR); with the bug it's
+    /// `0a` (LF).
+    #[tokio::test]
+    async fn send_input_terminates_the_line_with_cr_not_lf() {
+        let pty_manager = PtyManager::new();
+        let registry = CoordinationRegistry::new();
+        let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
+        registry.record_baseline(&tab_id, 0);
+
+        // Sent while the pty is still in normal canonical+echo mode, so this
+        // setup line's own `\n` terminator is unrelated to the bug under
+        // test. It flips the pty into raw mode, prints a marker (built via
+        // `''` string concatenation so the *typed/echoed* command text never
+        // contains the contiguous marker string — only the executed
+        // printf's actual output does), then blocks reading exactly 3 raw
+        // bytes and dumps them as hex.
+        pty_manager
+            .write(&tab_id, b"stty raw -echo; printf 'MARK''READY'; od -An -tx1 -N 3\n")
+            .unwrap();
+
+        // Wait for proof that `stty raw -echo` has already run (the marker
+        // only appears from printf's actual output, never from the echoed
+        // input line) before writing the bytes under test — otherwise they
+        // could race a still-canonical pty.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let output = pty_manager.get_recent_output(&tab_id, RECENT_OUTPUT_BYTES).unwrap_or_default();
+            if output.contains("MARKREADY") {
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "raw mode setup never completed: {output}");
+            tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
+        }
+
+        send_input(&pty_manager, &registry, &tab_id, "ab").unwrap();
+
+        // Poll for od's 3-byte hex dump of exactly what send_input wrote:
+        // "ab" (0x61 0x62) followed by whatever terminator byte it used.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let hex_bytes: Vec<String> = loop {
+            let output = pty_manager.get_recent_output(&tab_id, RECENT_OUTPUT_BYTES).unwrap_or_default();
+            let after_marker = output.split("MARKREADY").nth(1).unwrap_or("").to_string();
+            let hex_bytes: Vec<String> = after_marker
+                .split_whitespace()
+                .filter(|tok| tok.len() == 2 && tok.chars().all(|c| c.is_ascii_hexdigit()))
+                .map(str::to_string)
+                .collect();
+            if hex_bytes.len() >= 3 {
+                break hex_bytes;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "od never dumped 3 bytes: {output}");
+            tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
+        };
+
+        assert_eq!(
+            &hex_bytes[..3],
+            &["61", "62", "0d"],
+            "expected send_input's line terminator to be 0d (CR), matching every other place \
+             this app simulates pressing Enter (writePty(session, \"\\r\") in \
+             TerminalView.tsx / useTerminalBlocks.ts) — got hex bytes: {hex_bytes:?}"
+        );
     }
 }
