@@ -28,7 +28,7 @@ const BASE_CONFIG: AppConfig = {
   enterprise_device_id: null,
   enterprise_policy: null,
   claude_bridge: { enabled: false, port: 8317, default_on_new_tab: false, opus: null, sonnet: null, haiku: null },
-  mcp_tool_server: { enabled: false, port: 8318 },
+  mcp_tool_server: { enabled: false, port: 8318, coordination_enabled: false },
 };
 
 const STOPPED_STATUS: McpToolServerStatus = { running: false, port: null, token: null, error: null };
@@ -43,20 +43,37 @@ beforeEach(() => {
 describe("McpToolServerPage", () => {
   it("loads the saved config and shows the stopped status", async () => {
     render(<McpToolServerPage />);
-    await waitFor(() => expect(screen.getByRole("checkbox")).not.toBeChecked());
+    await waitFor(() => expect(screen.getAllByRole("checkbox")[0]).not.toBeChecked());
   });
 
   it("enabling and saving calls mcpToolServerSetConfig with enabled: true", async () => {
     const user = userEvent.setup();
     render(<McpToolServerPage />);
-    await waitFor(() => screen.getByRole("checkbox"));
+    await waitFor(() => screen.getAllByRole("checkbox"));
 
-    await user.click(screen.getByRole("checkbox"));
+    await user.click(screen.getAllByRole("checkbox")[0]);
     await user.click(screen.getByRole("button", { name: /save|儲存/i }));
 
     await waitFor(() => {
       expect(mcpToolServerSetConfig).toHaveBeenCalledWith(
         expect.objectContaining({ enabled: true, port: 8318 }),
+      );
+    });
+  });
+
+  it("enabling coordination tools calls mcpToolServerSetConfig with coordination_enabled: true", async () => {
+    const user = userEvent.setup();
+    render(<McpToolServerPage />);
+    await waitFor(() => screen.getAllByRole("checkbox"));
+
+    const checkboxes = screen.getAllByRole("checkbox");
+    // Second checkbox is the coordination toggle (first is the server enable toggle).
+    await user.click(checkboxes[1]);
+    await user.click(screen.getByRole("button", { name: /save|儲存/i }));
+
+    await waitFor(() => {
+      expect(mcpToolServerSetConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ coordination_enabled: true }),
       );
     });
   });

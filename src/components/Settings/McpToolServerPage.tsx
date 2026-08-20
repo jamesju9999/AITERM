@@ -80,6 +80,16 @@ export function McpToolServerPage() {
             onChange={(e) => updateCfg({ ...cfg, port: Number(e.target.value) || 8318 })}
           />
         </label>
+
+        <label className="mcp-tool-server-row">
+          <input
+            type="checkbox"
+            checked={cfg.coordination_enabled}
+            onChange={(e) => updateCfg({ ...cfg, coordination_enabled: e.target.checked })}
+          />
+          {t.mcp_tool_server_coordination_enable}
+        </label>
+        <p className="mcp-tool-server-desc">{t.mcp_tool_server_coordination_desc}</p>
       </section>
 
       {status?.running && (
