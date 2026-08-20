@@ -306,34 +306,67 @@ mod tests {
         registry.record_baseline(&tab_id, 0);
 
         // Sent while the pty is still in normal canonical+echo mode, so this
-        // setup line's own `\n` terminator is unrelated to the bug under
-        // test. It flips the pty into raw mode, prints a marker (built via
-        // `''` string concatenation so the *typed/echoed* command text never
-        // contains the contiguous marker string — only the executed
-        // printf's actual output does), then blocks reading exactly 3 raw
-        // bytes and dumps them as hex.
+        // setup line's own line terminator is unrelated to the bug under
+        // test. On Unix it flips the pty into raw mode, prints a marker
+        // (built via `''` string concatenation so the *typed/echoed*
+        // command text never contains the contiguous marker string — only
+        // the executed printf's actual output does), then blocks reading
+        // exactly 3 raw bytes and dumps them as hex.
+        //
+        // On Windows the default shell is PowerShell (see
+        // `pty::shell::windows_default_shell`), so there's no stty/od —
+        // instead this prints the marker (built via `+` string
+        // concatenation for the same echoed-text reason as above), then
+        // calls `[Console]::OpenStandardInput().Read($b, 0, 3)` to read 3
+        // raw bytes directly off stdin and prints them as hex. No explicit
+        // raw-mode toggle is needed: unlike a POSIX tty's ICRNL, Windows
+        // console line input does not remap CR to LF, so the byte this
+        // reads back is whatever `send_input` actually wrote — if it wrote
+        // `\r` (the fix), this unblocks as soon as that 3rd byte arrives;
+        // if it wrote `\n` (the bug), Windows console line-input mode never
+        // sees an Enter and the read blocks until the poll loop below times
+        // out. This branch is unverified by execution on this (macOS) dev
+        // machine — only Windows CI actually runs it — but is written to
+        // mirror the Unix branch's sequencing as closely as PowerShell
+        // allows.
+        #[cfg(windows)]
+        pty_manager
+            .write(
+                &tab_id,
+                b"Write-Host -NoNewline ('MARK'+'READY'); $b=[byte[]]::new(3); \
+                  [Console]::OpenStandardInput().Read($b,0,3)|Out-Null; \
+                  ($b|ForEach-Object{$_.ToString('x2')}) -join ' '\r\n",
+            )
+            .unwrap();
+        #[cfg(not(windows))]
         pty_manager
             .write(&tab_id, b"stty raw -echo; printf 'MARK''READY'; od -An -tx1 -N 3\n")
             .unwrap();
 
-        // Wait for proof that `stty raw -echo` has already run (the marker
-        // only appears from printf's actual output, never from the echoed
-        // input line) before writing the bytes under test — otherwise they
-        // could race a still-canonical pty.
+        // Wait for proof that the setup line has already put the shell into
+        // its byte-dumping read (the marker only appears from that setup
+        // line's own execution output, never from the echoed input line)
+        // before writing the bytes under test — otherwise they could race a
+        // shell that isn't ready to capture them yet.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
             let output = pty_manager.get_recent_output(&tab_id, RECENT_OUTPUT_BYTES).unwrap_or_default();
             if output.contains("MARKREADY") {
                 break;
             }
-            assert!(tokio::time::Instant::now() < deadline, "raw mode setup never completed: {output}");
+            assert!(tokio::time::Instant::now() < deadline, "byte-dump setup never completed: {output}");
             tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
         }
 
         send_input(&pty_manager, &registry, &tab_id, "ab").unwrap();
 
-        // Poll for od's 3-byte hex dump of exactly what send_input wrote:
-        // "ab" (0x61 0x62) followed by whatever terminator byte it used.
+        // Poll for the setup line's 3-byte hex dump of exactly what
+        // send_input wrote: "ab" (0x61 0x62) followed by whatever
+        // terminator byte it used. On Windows, if send_input wrote `\n`
+        // instead of `\r`, the shell's line-input read never unblocks, so
+        // this loop times out instead of observing a wrong byte — still a
+        // correct test failure, just via a different failure path than the
+        // Unix branch's exact-byte mismatch.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         let hex_bytes: Vec<String> = loop {
             let output = pty_manager.get_recent_output(&tab_id, RECENT_OUTPUT_BYTES).unwrap_or_default();
@@ -346,7 +379,7 @@ mod tests {
             if hex_bytes.len() >= 3 {
                 break hex_bytes;
             }
-            assert!(tokio::time::Instant::now() < deadline, "od never dumped 3 bytes: {output}");
+            assert!(tokio::time::Instant::now() < deadline, "3-byte hex dump never appeared: {output}");
             tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
         };
 
