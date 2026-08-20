@@ -58,7 +58,7 @@ pub fn router(
     sidecar: Arc<Db2SidecarState>,
     kb_pool: SqlitePool,
     pty_manager: Arc<PtyManager>,
-    app: AppHandle,
+    app: Option<AppHandle>,
     coordination_registry: Arc<CoordinationRegistry>,
 ) -> Router {
     let service = StreamableHttpService::new(

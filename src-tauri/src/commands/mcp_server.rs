@@ -70,7 +70,7 @@ pub async fn mcp_tool_server_apply(
             secrets.inner().clone(),
             token.clone(),
             cfg.port,
-            app,
+            Some(app),
             pty_manager.inner().clone(),
         )
         .await

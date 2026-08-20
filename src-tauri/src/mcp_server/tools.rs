@@ -126,7 +126,7 @@ pub struct AiTermTools {
     sidecar: Arc<Db2SidecarState>,
     kb_pool: SqlitePool,
     pty_manager: Arc<PtyManager>,
-    app: AppHandle,
+    app: Option<AppHandle>,
     coordination_registry: Arc<CoordinationRegistry>,
     tool_router: ToolRouter<AiTermTools>,
 }
@@ -141,7 +141,7 @@ impl AiTermTools {
         sidecar: Arc<Db2SidecarState>,
         kb_pool: SqlitePool,
         pty_manager: Arc<PtyManager>,
-        app: AppHandle,
+        app: Option<AppHandle>,
         coordination_registry: Arc<CoordinationRegistry>,
     ) -> Self {
         Self {
@@ -235,7 +235,12 @@ impl AiTermTools {
         if let Err(e) = self.require_coordination_enabled() {
             return to_call_result(Err(e));
         }
-        to_call_result(coordination_ops::spawn_tab(&self.app, &self.pty_manager, &self.coordination_registry, cwd, command).await)
+        let Some(app) = &self.app else {
+            return to_call_result(Err(
+                "spawn_tab requires a running AITerm app instance (not available in this context)".to_string(),
+            ));
+        };
+        to_call_result(coordination_ops::spawn_tab(app, &self.pty_manager, &self.coordination_registry, cwd, command).await)
     }
 
     #[tool(description = "Send text (as if typed, followed by Enter) to a tab previously created by spawn_tab. Cannot target a tab the user opened by hand. Disabled by default — must be enabled in Settings.")]

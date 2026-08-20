@@ -75,7 +75,7 @@ impl McpToolServerState {
         secrets: Arc<SecretStore>,
         token: String,
         port: u16,
-        app_handle: tauri::AppHandle,
+        app_handle: Option<tauri::AppHandle>,
         pty_manager: Arc<PtyManager>,
     ) -> anyhow::Result<()> {
         self.stop();

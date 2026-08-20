@@ -258,7 +258,7 @@ pub fn run() {
                             t
                         }
                     };
-                    if let Err(e) = server.start(config, secrets, token, cfg.port, handle.clone(), pty_manager).await {
+                    if let Err(e) = server.start(config, secrets, token, cfg.port, Some(handle.clone()), pty_manager).await {
                         log::error!("mcp tool server 啟動失敗：{e}");
                     }
                 });
