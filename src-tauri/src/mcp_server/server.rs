@@ -19,13 +19,16 @@ use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
 use sqlx::SqlitePool;
+use tauri::AppHandle;
 
 use crate::bridge::auth as bridge_auth;
 use crate::config::ConfigStore;
 use crate::db::db2_sidecar::Db2SidecarState;
 use crate::db::manager::DbManager;
+use crate::pty::manager::PtyManager;
 use crate::secret::SecretStore;
 
+use super::coordination_ops::CoordinationRegistry;
 use super::tools::AiTermTools;
 
 #[derive(Clone)]
@@ -46,6 +49,7 @@ async fn auth_middleware(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn router(
     token: Arc<String>,
     db_manager: Arc<DbManager>,
@@ -53,6 +57,9 @@ pub fn router(
     secrets: Arc<SecretStore>,
     sidecar: Arc<Db2SidecarState>,
     kb_pool: SqlitePool,
+    pty_manager: Arc<PtyManager>,
+    app: AppHandle,
+    coordination_registry: Arc<CoordinationRegistry>,
 ) -> Router {
     let service = StreamableHttpService::new(
         move || {
@@ -62,6 +69,9 @@ pub fn router(
                 secrets.clone(),
                 sidecar.clone(),
                 kb_pool.clone(),
+                pty_manager.clone(),
+                app.clone(),
+                coordination_registry.clone(),
             ))
         },
         LocalSessionManager::default().into(),

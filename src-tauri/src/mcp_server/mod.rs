@@ -20,7 +20,10 @@ use crate::config::ConfigStore;
 use crate::db::{resolve_db2_sidecar_path, Db2SidecarState};
 use crate::db::knowledge_base::KnowledgeBaseDb;
 use crate::db::manager::DbManager;
+use crate::pty::manager::PtyManager;
 use crate::secret::SecretStore;
+
+use coordination_ops::CoordinationRegistry;
 
 /// Keychain key for this server's bearer token. Distinct from
 /// `bridge::auth::BRIDGE_TOKEN_KEY` — separate server, separate token — but
@@ -66,12 +69,15 @@ impl McpToolServerState {
     /// the full tradeoff analysis. `config`/`secrets` ARE the app-wide shared
     /// instances (already `Arc`-managed everywhere else), passed in by the
     /// caller.
+    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         &self,
         config: Arc<ConfigStore>,
         secrets: Arc<SecretStore>,
         token: String,
         port: u16,
+        app_handle: tauri::AppHandle,
+        pty_manager: Arc<PtyManager>,
     ) -> anyhow::Result<()> {
         self.stop();
 
@@ -83,8 +89,19 @@ impl McpToolServerState {
         let db_manager = Arc::new(DbManager::new());
         let sidecar = Arc::new(Db2SidecarState::new(resolve_db2_sidecar_path()));
         let kb_pool = KnowledgeBaseDb::new().await.pool;
+        let coordination_registry = Arc::new(CoordinationRegistry::new());
 
-        let app = server::router(Arc::new(token), db_manager, config, secrets, sidecar, kb_pool);
+        let app = server::router(
+            Arc::new(token),
+            db_manager,
+            config,
+            secrets,
+            sidecar,
+            kb_pool,
+            pty_manager,
+            app_handle,
+            coordination_registry,
+        );
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let served = axum::serve(listener, app)
