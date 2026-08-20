@@ -13,6 +13,7 @@ pub mod guard;
 pub mod knowledge_base;
 pub mod mail;
 pub mod mcp;
+pub mod mcp_server;
 pub mod pty;
 pub mod python_env;
 pub mod secret;
