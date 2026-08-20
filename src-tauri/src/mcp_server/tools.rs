@@ -16,13 +16,16 @@ use rmcp::{
     schemars, tool, tool_handler, tool_router,
 };
 use sqlx::SqlitePool;
+use tauri::AppHandle;
 
 use crate::config::ConfigStore;
 use crate::db::db2_sidecar::Db2SidecarState;
 use crate::db::manager::DbManager;
+use crate::pty::manager::PtyManager;
 use crate::secret::SecretStore;
 
-use super::{db_ops, kb_ops};
+use super::coordination_ops::CoordinationRegistry;
+use super::{coordination_ops, db_ops, kb_ops};
 
 fn to_call_result(r: Result<String, String>) -> Result<CallToolResult, McpError> {
     match r {
@@ -82,6 +85,39 @@ pub struct ReadDocumentArgs {
     pub path: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SpawnTabArgs {
+    /// Working directory for the new tab. Defaults to the user's home directory if omitted.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// Initial command to run in the new tab once it's ready (e.g. "claude" or "codex").
+    #[serde(default)]
+    pub command: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SendInputArgs {
+    /// Tab id as returned by `spawn_tab`. Must be a tab this server spawned — never one the user opened by hand.
+    pub tab_id: String,
+    /// Text to send, as if typed into the tab followed by Enter.
+    pub text: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct TabIdArgs {
+    /// Tab id as returned by `spawn_tab`.
+    pub tab_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WaitForIdleArgs {
+    /// Tab id as returned by `spawn_tab`.
+    pub tab_id: String,
+    /// Max seconds to wait (default 300, capped at 1800).
+    #[serde(default)]
+    pub timeout_seconds: Option<u64>,
+}
+
 #[derive(Clone)]
 pub struct AiTermTools {
     db_manager: Arc<DbManager>,
@@ -89,17 +125,24 @@ pub struct AiTermTools {
     secrets: Arc<SecretStore>,
     sidecar: Arc<Db2SidecarState>,
     kb_pool: SqlitePool,
+    pty_manager: Arc<PtyManager>,
+    app: AppHandle,
+    coordination_registry: Arc<CoordinationRegistry>,
     tool_router: ToolRouter<AiTermTools>,
 }
 
 #[tool_router]
 impl AiTermTools {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         db_manager: Arc<DbManager>,
         config: Arc<ConfigStore>,
         secrets: Arc<SecretStore>,
         sidecar: Arc<Db2SidecarState>,
         kb_pool: SqlitePool,
+        pty_manager: Arc<PtyManager>,
+        app: AppHandle,
+        coordination_registry: Arc<CoordinationRegistry>,
     ) -> Self {
         Self {
             db_manager,
@@ -107,7 +150,22 @@ impl AiTermTools {
             secrets,
             sidecar,
             kb_pool,
+            pty_manager,
+            app,
+            coordination_registry,
             tool_router: Self::tool_router(),
+        }
+    }
+
+    /// Every coordination tool calls this first. `Ok(())` means proceed;
+    /// `Err` is a ready-to-return tool-level error explaining the toggle is
+    /// off. Kept as one shared check (not duplicated per tool) so the wording
+    /// can't drift between the 4 call sites.
+    fn require_coordination_enabled(&self) -> Result<(), String> {
+        if self.config.get().mcp_tool_server.coordination_enabled {
+            Ok(())
+        } else {
+            Err("Agent coordination tools are disabled. Enable them in AITerm's Settings → MCP Tool Server page.".to_string())
         }
     }
 
@@ -167,6 +225,50 @@ impl AiTermTools {
         Parameters(ReadDocumentArgs { notebook_id, path }): Parameters<ReadDocumentArgs>,
     ) -> Result<CallToolResult, McpError> {
         to_call_result(kb_ops::read_document(&self.kb_pool, &notebook_id, &path).await)
+    }
+
+    #[tool(description = "Spawn a new AITerm terminal tab, visible to the user, optionally running an initial command (e.g. 'claude' or 'codex') to start another coding agent in it. Returns the new tab's id. Disabled by default — must be enabled in Settings.")]
+    async fn spawn_tab(
+        &self,
+        Parameters(SpawnTabArgs { cwd, command }): Parameters<SpawnTabArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(e) = self.require_coordination_enabled() {
+            return to_call_result(Err(e));
+        }
+        to_call_result(coordination_ops::spawn_tab(&self.app, &self.pty_manager, &self.coordination_registry, cwd, command).await)
+    }
+
+    #[tool(description = "Send text (as if typed, followed by Enter) to a tab previously created by spawn_tab. Cannot target a tab the user opened by hand. Disabled by default — must be enabled in Settings.")]
+    async fn send_input(
+        &self,
+        Parameters(SendInputArgs { tab_id, text }): Parameters<SendInputArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(e) = self.require_coordination_enabled() {
+            return to_call_result(Err(e));
+        }
+        to_call_result(coordination_ops::send_input(&self.pty_manager, &self.coordination_registry, &tab_id, &text))
+    }
+
+    #[tool(description = "Check whether a spawn_tab-created tab is idle (a terminal bell was observed since the last send_input, meaning the agent inside replied and is waiting for more input) and get its recent output. Disabled by default — must be enabled in Settings.")]
+    async fn get_tab_status(
+        &self,
+        Parameters(TabIdArgs { tab_id }): Parameters<TabIdArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(e) = self.require_coordination_enabled() {
+            return to_call_result(Err(e));
+        }
+        to_call_result(coordination_ops::get_tab_status(&self.pty_manager, &self.coordination_registry, &tab_id))
+    }
+
+    #[tool(description = "Block until a spawn_tab-created tab becomes idle (see get_tab_status) or the timeout elapses, then return its status. Disabled by default — must be enabled in Settings.")]
+    async fn wait_for_idle(
+        &self,
+        Parameters(WaitForIdleArgs { tab_id, timeout_seconds }): Parameters<WaitForIdleArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(e) = self.require_coordination_enabled() {
+            return to_call_result(Err(e));
+        }
+        to_call_result(coordination_ops::wait_for_idle(&self.pty_manager, &self.coordination_registry, &tab_id, timeout_seconds).await)
     }
 }
 
