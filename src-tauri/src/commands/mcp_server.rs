@@ -4,12 +4,13 @@
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::bridge::auth as bridge_auth;
 use crate::config::types::McpToolServerConfig;
 use crate::config::ConfigStore;
 use crate::mcp_server::{McpToolServerState, MCP_TOOL_SERVER_TOKEN_KEY};
+use crate::pty::PtyManager;
 use crate::secret::SecretStore;
 
 #[derive(Serialize)]
@@ -53,6 +54,8 @@ pub async fn mcp_tool_server_apply(
     server: State<'_, Arc<McpToolServerState>>,
     config: State<'_, Arc<ConfigStore>>,
     secrets: State<'_, Arc<SecretStore>>,
+    app: AppHandle,
+    pty_manager: State<'_, Arc<PtyManager>>,
 ) -> Result<McpToolServerStatus, String> {
     let cfg = config.get().mcp_tool_server;
     if !cfg.enabled {
@@ -62,7 +65,14 @@ pub async fn mcp_tool_server_apply(
 
     let token = ensure_token(&secrets).map_err(|e| e.to_string())?;
     match server
-        .start(config.inner().clone(), secrets.inner().clone(), token.clone(), cfg.port)
+        .start(
+            config.inner().clone(),
+            secrets.inner().clone(),
+            token.clone(),
+            cfg.port,
+            app,
+            pty_manager.inner().clone(),
+        )
         .await
     {
         Ok(()) => Ok(McpToolServerStatus {
@@ -87,9 +97,11 @@ pub async fn mcp_tool_server_set_config(
     config: State<'_, Arc<ConfigStore>>,
     secrets: State<'_, Arc<SecretStore>>,
     value: McpToolServerConfig,
+    app: AppHandle,
+    pty_manager: State<'_, Arc<PtyManager>>,
 ) -> Result<McpToolServerStatus, String> {
     config
         .update(|c| c.mcp_tool_server = value.clone())
         .map_err(|e| e.to_string())?;
-    mcp_tool_server_apply(server, config, secrets).await
+    mcp_tool_server_apply(server, config, secrets, app, pty_manager).await
 }
