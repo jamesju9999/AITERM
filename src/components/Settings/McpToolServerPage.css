@@ -1,0 +1,62 @@
+.mcp-tool-server-page {
+  padding: 24px;
+  max-width: 640px;
+}
+
+.mcp-tool-server-desc {
+  color: var(--text-secondary, #888);
+  margin-bottom: 16px;
+}
+
+.mcp-tool-server-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.mcp-tool-server-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-secondary, #888);
+}
+
+.mcp-tool-server-dot--on {
+  background: #4ade80;
+}
+
+.mcp-tool-server-error {
+  color: #f87171;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.mcp-tool-server-section {
+  margin: 20px 0;
+}
+
+.mcp-tool-server-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.mcp-tool-server-command {
+  background: var(--bg-secondary, #1a1a1a);
+  border-radius: 6px;
+  padding: 12px;
+  font-family: monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 8px 0;
+}
+
+.mcp-tool-server-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
