@@ -162,6 +162,13 @@ pub struct McpToolServerConfig {
 
     #[serde(default = "default_mcp_tool_server_port")]
     pub port: u16,
+
+    /// Separately gates the 4 agent-coordination tools (spawn_tab/send_input/
+    /// get_tab_status/wait_for_idle) — a strictly higher-risk capability than
+    /// the DB/knowledge-base tools (it can run arbitrary commands in tabs it
+    /// spawns), so it defaults off even when the server itself is enabled.
+    #[serde(default)]
+    pub coordination_enabled: bool,
 }
 
 impl Default for McpToolServerConfig {
@@ -169,6 +176,7 @@ impl Default for McpToolServerConfig {
         Self {
             enabled: false,
             port: default_mcp_tool_server_port(),
+            coordination_enabled: false,
         }
     }
 }
