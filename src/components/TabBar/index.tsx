@@ -341,7 +341,10 @@ export function TabBar({
               onSelect(tab.id);
             }}
             onDoubleClick={isSidebarOpen ? () => setEditingId(tab.id) : undefined}
-            title={isSidebarOpen ? `Switch to Tab (Ctrl+${idx + 1}) — Double click to rename` : `${tab.title} (Ctrl+${idx + 1})`}
+            title={
+              (isSidebarOpen ? `Switch to Tab (Ctrl+${idx + 1}) — Double click to rename` : `${tab.title} (Ctrl+${idx + 1})`)
+              + (tab.spawnedByAgent ? ` · ${t.tab_spawned_by_agent_hint}` : "")
+            }
           >
             <span className="aiterm-tab-icon" style={{ position: "relative" }}>
               {getTabIcon(tab.type, tab.claudeBridge, tab.spawnedByAgent)}
