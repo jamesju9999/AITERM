@@ -105,6 +105,12 @@ impl PtyManager {
         self.sessions.lock().get(id).and_then(|s| s.get_recent_output(max_bytes))
     }
 
+    /// Bell-byte count for the given session, or `None` if the session
+    /// doesn't exist. See `PtySession::bell_count` for what this counts.
+    pub fn bell_count(&self, id: &str) -> Option<u64> {
+        self.sessions.lock().get(id).map(|s| s.bell_count())
+    }
+
     fn get(&self, id: &str) -> PtyResult<Arc<PtySession>> {
         self.sessions
             .lock()

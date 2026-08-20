@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
@@ -58,6 +59,16 @@ pub struct PtySession {
     /// OSC 133 D marker — committed to cwd/previous_cwd only if that marker
     /// reports exit code 0. See `cd_parser::find_exit_codes`.
     pending_cds: Arc<Mutex<VecDeque<ParsedCd>>>,
+    /// Counts how many output chunks have contained at least one bell
+    /// byte (`0x07`). Used by the MCP tool server's agent-coordination tools as an
+    /// idle signal: both Claude Code and Codex CLI fall back to a plain
+    /// terminal bell for "waiting for input" notifications when they can't
+    /// detect a richer-notification-capable terminal (verified against both
+    /// projects' source — see the design doc). A monotonic counter rather
+    /// than a boolean so a caller can detect "a *new* bell happened since I
+    /// last checked" by comparing against a remembered baseline, without this
+    /// field needing any consuming/resetting behavior of its own.
+    bell_count: Arc<AtomicU64>,
 }
 
 /// Commits a resolved cd to `cwd`/`previous_cwd`. Free function (not a method)
@@ -262,6 +273,8 @@ impl PtySession {
         let previous_cwd_for_thread = Arc::clone(&previous_cwd);
         let pending_cds: Arc<Mutex<VecDeque<ParsedCd>>> = Arc::new(Mutex::new(VecDeque::new()));
         let pending_cds_for_thread = Arc::clone(&pending_cds);
+        let bell_count: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+        let bell_count_for_thread = Arc::clone(&bell_count);
 
         let reader_thread = thread::Builder::new()
             .name(format!("pty-reader-{}", id))
@@ -288,6 +301,15 @@ impl PtySession {
                                     &previous_cwd_for_thread,
                                 );
                             }
+                            // Cheap to call unconditionally, same reasoning as the
+                            // OSC133 scan above: a chunk with no bell byte is the
+                            // overwhelmingly common case. One increment per chunk
+                            // containing at least one bell is enough — callers only
+                            // ever check "did the count change since my baseline",
+                            // never the exact number of bells.
+                            if chunk.contains(&0x07) {
+                                bell_count_for_thread.fetch_add(1, Ordering::SeqCst);
+                            }
                             on_data(chunk);
                         }
                         Err(e) => {
@@ -312,6 +334,7 @@ impl PtySession {
             line_esc_state: Mutex::new(0),
             output_ring,
             pending_cds,
+            bell_count,
         })
     }
 
@@ -381,6 +404,8 @@ impl PtySession {
         let previous_cwd_for_thread = Arc::clone(&previous_cwd);
         let pending_cds: Arc<Mutex<VecDeque<ParsedCd>>> = Arc::new(Mutex::new(VecDeque::new()));
         let pending_cds_for_thread = Arc::clone(&pending_cds);
+        let bell_count: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+        let bell_count_for_thread = Arc::clone(&bell_count);
 
         let reader_thread = thread::Builder::new()
             .name(format!("pty-reader-{}", id))
@@ -407,6 +432,15 @@ impl PtySession {
                                     &previous_cwd_for_thread,
                                 );
                             }
+                            // Cheap to call unconditionally, same reasoning as the
+                            // OSC133 scan above: a chunk with no bell byte is the
+                            // overwhelmingly common case. One increment per chunk
+                            // containing at least one bell is enough — callers only
+                            // ever check "did the count change since my baseline",
+                            // never the exact number of bells.
+                            if chunk.contains(&0x07) {
+                                bell_count_for_thread.fetch_add(1, Ordering::SeqCst);
+                            }
                             on_data(chunk);
                         }
                         Err(e) => {
@@ -431,6 +465,7 @@ impl PtySession {
             line_esc_state: Mutex::new(0),
             output_ring,
             pending_cds,
+            bell_count,
         })
     }
 
@@ -582,6 +617,13 @@ impl PtySession {
         let raw = String::from_utf8_lossy(&bytes).into_owned();
         let stripped = crate::pty::ansi::strip_ansi(&raw);
         if stripped.trim().is_empty() { None } else { Some(stripped) }
+    }
+
+    /// Monotonic count of output chunks that have contained at least one bell
+    /// byte (`0x07`) since this session started. See the field doc comment on
+    /// `bell_count` for why this is a counter, not a boolean.
+    pub fn bell_count(&self) -> u64 {
+        self.bell_count.load(Ordering::SeqCst)
     }
 
     pub fn resize(&self, size: PtySize) -> PtyResult<()> {
@@ -1050,5 +1092,60 @@ mod tests {
         // Nothing should read a cwd out of text that only looks prompt-shaped
         // without the drive letter or UNC prefix.
         assert_eq!(ps_cwd_from_output("PS not-a-path> "), None);
+    }
+
+    #[test]
+    fn bell_count_starts_at_zero_for_a_fresh_session() {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+        assert_eq!(session.bell_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn bell_byte_in_output_increments_bell_count() {
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            move |chunk| {
+                let _ = tx.send(chunk);
+            },
+        )
+        .expect("spawn pty");
+
+        assert_eq!(session.bell_count(), 0);
+
+        // Write a command that emits a bell byte in its output. printf is
+        // available on /bin/sh; on cmd.exe (Windows) echo simply emits the
+        // raw byte embedded in its argument.
+        #[cfg(windows)]
+        session.write(b"echo \x07\r\nexit\r\n").unwrap();
+        #[cfg(not(windows))]
+        session.write(b"printf '\\007'\n").unwrap();
+
+        // Poll briefly for the reader thread to observe it — this is
+        // inherently asynchronous (real PTY I/O on a background thread), so a
+        // short poll loop is appropriate here, not a fixed sleep.
+        let mut seen = false;
+        for _ in 0..50 {
+            if session.bell_count() > 0 {
+                seen = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(
+            seen,
+            "expected bell_count() to increment after a bell byte was written and echoed"
+        );
+
+        let _ = rx.try_recv(); // drain, avoid unused warning
+        drop(session);
     }
 }
