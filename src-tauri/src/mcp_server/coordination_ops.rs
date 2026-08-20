@@ -100,15 +100,18 @@ pub(crate) async fn spawn_tab(
     registry.record_baseline(&tab_id, 0);
 
     if let Some(cmd) = &command {
-        pty_manager
-            .write(&tab_id, format!("{cmd}\n").as_bytes())
-            .map_err(|e| e.to_string())?;
+        if let Err(e) = pty_manager.write(&tab_id, format!("{cmd}\n").as_bytes()) {
+            let _ = pty_manager.close(&tab_id);
+            return Err(e.to_string());
+        }
     }
 
-    let _ = app.emit("mcp-coordination-tab-spawned", TabSpawnedEvent {
+    if let Err(e) = app.emit("mcp-coordination-tab-spawned", TabSpawnedEvent {
         session_id: tab_id.clone(),
         command,
-    });
+    }) {
+        eprintln!("emit mcp-coordination-tab-spawned failed: {e}");
+    }
 
     Ok(tab_id)
 }
