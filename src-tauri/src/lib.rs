@@ -242,6 +242,7 @@ pub fn run() {
                     let server = handle.state::<Arc<mcp_server::McpToolServerState>>().inner().clone();
                     let config = handle.state::<Arc<ConfigStore>>().inner().clone();
                     let secrets = handle.state::<Arc<SecretStore>>().inner().clone();
+                    let pty_manager = handle.state::<Arc<PtyManager>>().inner().clone();
                     let cfg = config.get().mcp_tool_server;
                     if !cfg.enabled {
                         return;
@@ -257,7 +258,7 @@ pub fn run() {
                             t
                         }
                     };
-                    if let Err(e) = server.start(config, secrets, token, cfg.port).await {
+                    if let Err(e) = server.start(config, secrets, token, cfg.port, handle.clone(), pty_manager).await {
                         log::error!("mcp tool server 啟動失敗：{e}");
                     }
                 });
