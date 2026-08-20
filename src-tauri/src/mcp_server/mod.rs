@@ -5,6 +5,7 @@
 //! MCP *client* for its own AI chat) — this module is AITerm acting as an MCP
 //! *server*. See `docs/superpowers/specs/2026-08-19-mcp-tool-server-design.md`.
 
+pub mod coordination_ops;
 pub mod db_ops;
 pub mod kb_ops;
 pub mod server;
