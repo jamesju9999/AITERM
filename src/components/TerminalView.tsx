@@ -111,6 +111,17 @@ export interface TerminalViewProps {
   isSidebarOpen?: boolean;
   /** Called once with the backend-assigned PTY session ID when the PTY is created. */
   onSessionCreated?: (sessionId: string) => void;
+  /** If set, this tab adopts an already-existing backend PTY session instead
+   *  of creating a new one — used for tabs spawned by the MCP tool server's
+   *  agent-coordination tools (spawn_tab), where the backend already has a
+   *  live session before any TerminalView exists to render it. */
+  externalSessionId?: string;
+  /** Reports whether this tab's most recent command block is currently
+   *  running (as opposed to completed/failed/no blocks yet). Used by
+   *  TerminalApp to decide whether to steal focus for a newly agent-spawned
+   *  tab — never switch away from a tab the user is actively watching run
+   *  something. */
+  onRunningChange?: (isRunning: boolean) => void;
   /** If set, the PTY starts in this directory (overrides last-cwd from localStorage). */
   initialCwd?: string;
   /** If set, the agent loop starts automatically after the PTY is ready. */
@@ -176,7 +187,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, initialCwd, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, claudeBridge, tabId, remoteOwner = null, onRemoteOwnerChange }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, externalSessionId, onRunningChange, initialCwd, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, claudeBridge, tabId, remoteOwner = null, onRemoteOwnerChange }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -355,6 +366,11 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     handleCommandSettled,
     handleCommandStarted,
   );
+
+  useEffect(() => {
+    const latest = blocks[blocks.length - 1];
+    onRunningChange?.(latest?.status === "running");
+  }, [blocks, onRunningChange]);
 
   /**
    * 應用程式自己在畫面上畫的游標（一格反白）。
@@ -1020,8 +1036,15 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     (async () => {
       try {
         const { rows, cols } = term;
-        const lastCwd = initialCwd ?? localStorage.getItem("aiterm_last_cwd") ?? undefined;
-        const id = await createPty({ rows, cols }, lastCwd, claudeBridge);
+        let id: string;
+        if (externalSessionId) {
+          // Backend already has a live PTY session for us (spawned by an MCP
+          // coordination tool) — adopt it instead of creating a new one.
+          id = externalSessionId;
+        } else {
+          const lastCwd = initialCwd ?? localStorage.getItem("aiterm_last_cwd") ?? undefined;
+          id = await createPty({ rows, cols }, lastCwd, claudeBridge);
+        }
         sessionRef.current = id;
         // A real resize can land while createPty() was still in flight (no
         // session id yet to resize) — see pendingResizeRef's comment. Flush
