@@ -51,6 +51,9 @@ export interface Tab {
   /** 非 active 的終端機分頁發生了值得注意的事：在側邊欄圖示上顯示一個彩色點。
    *  只存在記憶體，不進 localStorage——重開 app 後這些事件已經沒有意義。 */
   attention?: AttentionKind;
+  /** 這個分頁是不是由 MCP 協調工具的 spawn_tab 開出來的——只影響圖示顯示，
+   *  不影響任何行為。只存在記憶體，不進 localStorage。 */
+  spawnedByAgent?: boolean;
   /**
    * 這個終端機分頁有沒有注入 Claude Code 橋接環境變數，以及來源。
    *
@@ -95,12 +98,14 @@ function formatUnreadCount(n: number): string {
   return n > 99 ? "99+" : String(n);
 }
 
-function getTabIcon(type: TabType, claudeBridge?: Tab["claudeBridge"]): React.ReactNode {
+function getTabIcon(type: TabType, claudeBridge?: Tab["claudeBridge"], spawnedByAgent?: boolean): React.ReactNode {
   switch (type) {
     // 橋接分頁用機器人圖示——跟「新增分頁」選單裡 Claude Code 那一項同一顆，
     // 選單看到什麼、分頁就長什麼。原本是終端機圖示疊一顆 "CC" 徽章，兩者重疊，
     // 而且側邊欄收起來只剩圖示時，一疊小貼紙比換一顆圖示難認。
-    case "terminal": return claudeBridge === "explicit" ? <RobotIcon size={18} /> : <TerminalIcon size={18} />;
+    case "terminal":
+      if (spawnedByAgent) return <RobotIcon size={18} className="tab-icon--agent-spawned" />;
+      return claudeBridge === "explicit" ? <RobotIcon size={18} /> : <TerminalIcon size={18} />;
     case "database": return <DatabaseIcon size={18} />;
     case "design": return <PaintbrushIcon size={18} />;
     case "cross-db": return <LinkIcon size={18} />;
@@ -339,7 +344,7 @@ export function TabBar({
             title={isSidebarOpen ? `Switch to Tab (Ctrl+${idx + 1}) — Double click to rename` : `${tab.title} (Ctrl+${idx + 1})`}
           >
             <span className="aiterm-tab-icon" style={{ position: "relative" }}>
-              {getTabIcon(tab.type, tab.claudeBridge)}
+              {getTabIcon(tab.type, tab.claudeBridge, tab.spawnedByAgent)}
               {tab.type === "mail" && mailUnreadCount > 0 && (
                 <span className="mail-unread-badge" role="img" aria-label={t.mail_unread_label(formatUnreadCount(mailUnreadCount))}>{formatUnreadCount(mailUnreadCount)}</span>
               )}
