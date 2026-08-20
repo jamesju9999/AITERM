@@ -1435,7 +1435,17 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       if (unlistenData) unlistenData();
       if (unlistenStream) unlistenStream.then((f: () => void) => f());
       const id = sessionRef.current;
-      if (id) {
+      if (id && !externalSessionId) {
+        // Adopted sessions (spawned by an MCP coordination tool, e.g.
+        // spawn_tab) are NOT owned by this component — don't kill the
+        // real backend PTY on unmount. This matters beyond normal
+        // unmount/close: React StrictMode's dev-mode mount→cleanup→mount
+        // cycle would otherwise close the one-and-only adopted session
+        // during its synthetic cleanup pass, then try to re-adopt the
+        // same (now-dead) session id on the second mount — the exact bug
+        // this comment is here to prevent regressing. Cleanup of
+        // agent-spawned sessions is intentionally out of scope for v1 —
+        // see the design doc's explicit "不含 close_tab" decision.
         closePty(id).catch(() => {});
       }
       term.dispose();
