@@ -6,11 +6,11 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::State;
 
-use crate::bridge::auth as bridge_auth;
 use crate::config::types::McpToolServerConfig;
 use crate::config::ConfigStore;
 use crate::mcp_server::{McpToolServerState, MCP_TOOL_SERVER_TOKEN_KEY};
 use crate::secret::SecretStore;
+use crate::bridge::auth as bridge_auth;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
