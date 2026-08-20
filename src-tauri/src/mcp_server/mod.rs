@@ -69,7 +69,6 @@ impl McpToolServerState {
     /// the full tradeoff analysis. `config`/`secrets` ARE the app-wide shared
     /// instances (already `Arc`-managed everywhere else), passed in by the
     /// caller.
-    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         &self,
         config: Arc<ConfigStore>,
