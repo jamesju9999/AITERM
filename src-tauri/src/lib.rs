@@ -33,6 +33,7 @@ use commands::{
     appimage::{appimage_integrate, appimage_integration_state, appimage_remove_integration},
     ai::{agent_chat, ai_chat, ai_query},
     bridge::{bridge_apply, bridge_set_config, bridge_status},
+    mcp_server::{mcp_tool_server_apply, mcp_tool_server_set_config, mcp_tool_server_status},
     claude_notif::{claude_notif_enable_bell, claude_notif_needs_prompt},
     code_assistant::code_assistant_chat,
     knowledge_base::{
@@ -191,6 +192,7 @@ pub fn run() {
         .manage(mcp_manager)
         .manage(AnthropicOAuthState::new())
         .manage(Arc::new(bridge::BridgeState::new()))
+        .manage(Arc::new(mcp_server::McpToolServerState::new()))
         .setup(|app| {
             telegram::init(app.handle());
             mail::poller::init(app.handle());
@@ -227,6 +229,36 @@ pub fn run() {
                     };
                     if let Err(e) = bridge.start(config, secrets, token, cfg.port).await {
                         log::error!("bridge server 啟動失敗：{e}");
+                    }
+                });
+            }
+
+            // MCP tool server：設定為 enabled 時隨 app 啟動。失敗只記 log 不擋啟動，
+            // 理由同橋接 server——埠被占用不該讓整個 app 起不來。
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Manager;
+                    let server = handle.state::<Arc<mcp_server::McpToolServerState>>().inner().clone();
+                    let config = handle.state::<Arc<ConfigStore>>().inner().clone();
+                    let secrets = handle.state::<Arc<SecretStore>>().inner().clone();
+                    let cfg = config.get().mcp_tool_server;
+                    if !cfg.enabled {
+                        return;
+                    }
+                    let token = match secrets.get(mcp_server::MCP_TOOL_SERVER_TOKEN_KEY) {
+                        Ok(Some(t)) if !t.is_empty() => t,
+                        _ => {
+                            let t = bridge::auth::generate_token();
+                            if let Err(e) = secrets.set(mcp_server::MCP_TOOL_SERVER_TOKEN_KEY, &t) {
+                                log::error!("mcp tool server token 寫入 keychain 失敗：{e}");
+                                return;
+                            }
+                            t
+                        }
+                    };
+                    if let Err(e) = server.start(config, secrets, token, cfg.port).await {
+                        log::error!("mcp tool server 啟動失敗：{e}");
                     }
                 });
             }
@@ -339,6 +371,9 @@ pub fn run() {
             bridge_status,
             bridge_apply,
             bridge_set_config,
+            mcp_tool_server_status,
+            mcp_tool_server_apply,
+            mcp_tool_server_set_config,
             // Shell
             open_url,
             updater_supported,
