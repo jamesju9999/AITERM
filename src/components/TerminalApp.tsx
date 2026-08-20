@@ -173,10 +173,14 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     let unlistenTaskReady: (() => void) | null = null;
     let unlistenSkill: (() => void) | null = null;
     let unlistenCoordination: (() => void) | null = null;
+    let cancelled = false;
 
     onEnterpriseTaskReceived((packet) => {
       setPendingTask(packet);
-    }).then((fn) => { unlistenTaskReceived = fn; });
+    }).then((fn) => {
+      if (cancelled) { fn(); return; }
+      unlistenTaskReceived = fn;
+    });
 
     onEnterpriseTaskReady((payload: TaskReadyPayload) => {
       // Create a new terminal tab that auto-starts the agent loop in the cloned repo.
@@ -203,12 +207,18 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
         },
       ]);
       selectTab(newId);
-    }).then((fn) => { unlistenTaskReady = fn; });
+    }).then((fn) => {
+      if (cancelled) { fn(); return; }
+      unlistenTaskReady = fn;
+    });
 
     onEnterpriseSkillInstalled((payload) => {
       setSkillToast(payload);
       setTimeout(() => setSkillToast(null), 8000);
-    }).then((fn) => { unlistenSkill = fn; });
+    }).then((fn) => {
+      if (cancelled) { fn(); return; }
+      unlistenSkill = fn;
+    });
 
     onCoordinationTabSpawned((payload) => {
       const newId = crypto.randomUUID();
@@ -224,9 +234,13 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       if (!activeIsBusy) {
         selectTab(newId);
       }
-    }).then((fn) => { unlistenCoordination = fn; });
+    }).then((fn) => {
+      if (cancelled) { fn(); return; }
+      unlistenCoordination = fn;
+    });
 
     return () => {
+      cancelled = true;
       unlistenTaskReceived?.();
       unlistenTaskReady?.();
       unlistenSkill?.();
