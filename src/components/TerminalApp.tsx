@@ -29,6 +29,7 @@ import { recordProject } from "../lib/recentProjects";
 import { useMailSync } from "../hooks/useMailSync";
 import { getConfig } from "../ipc/config";
 import { bridgeStatus } from "../ipc/bridge";
+import { onCoordinationTabSpawned } from "../ipc/mcpToolServer";
 import {
   onEnterpriseTaskReceived,
   onEnterpriseTaskReady,
@@ -161,11 +162,17 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   const [pendingTask, setPendingTask] = useState<TaskPacket | null>(null);
   const [skillToast, setSkillToast] = useState<SkillInstalledPayload | null>(null);
 
+  // Updated by each TerminalView's onRunningChange. Read (not written) by the
+  // mcp-coordination-tab-spawned handler below to decide whether switching
+  // focus to a newly agent-spawned tab would interrupt the user.
+  const tabRunningRef = useRef<Map<string, boolean>>(new Map());
+
   // Listen for enterprise events
   useEffect(() => {
     let unlistenTaskReceived: (() => void) | null = null;
     let unlistenTaskReady: (() => void) | null = null;
     let unlistenSkill: (() => void) | null = null;
+    let unlistenCoordination: (() => void) | null = null;
 
     onEnterpriseTaskReceived((packet) => {
       setPendingTask(packet);
@@ -203,12 +210,29 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       setTimeout(() => setSkillToast(null), 8000);
     }).then((fn) => { unlistenSkill = fn; });
 
+    onCoordinationTabSpawned((payload) => {
+      const newId = crypto.randomUUID();
+      const activeTab = tabsRef.current.find((tb) => tb.id === activeIdRef.current);
+      const activeIsBusy = activeTab?.type === "terminal" && tabRunningRef.current.get(activeTab.id) === true;
+      setTabs((prev) => [...prev, {
+        id: newId,
+        title: payload.command ? `Agent: ${payload.command}` : t.terminal_tab,
+        type: "terminal",
+        ptySessionId: payload.session_id,
+        spawnedByAgent: true,
+      }]);
+      if (!activeIsBusy) {
+        selectTab(newId);
+      }
+    }).then((fn) => { unlistenCoordination = fn; });
+
     return () => {
       unlistenTaskReceived?.();
       unlistenTaskReady?.();
       unlistenSkill?.();
+      unlistenCoordination?.();
     };
-  }, [selectTab]);
+  }, [selectTab, t.terminal_tab]);
 
   const handleAddTab = useCallback(() => {
     // 每次開選單都重讀：設定改過、或 server 中途啟動／停止，都不必重開 App。
@@ -581,6 +605,8 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                     recordProject(cwd, tab.cwd);
                   }}
                   onAttention={(kind) => handleAttention(tab.id, tab.title, kind)}
+                  externalSessionId={tab.spawnedByAgent ? tab.ptySessionId : undefined}
+                  onRunningChange={(isRunning) => { tabRunningRef.current.set(tab.id, isRunning); }}
                   onClaudeDetected={onClaudeDetected}
                   tabId={tab.id}
                   remoteOwner={remoteTabId}
