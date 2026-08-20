@@ -1154,7 +1154,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           const backfill = await getPtyRecentOutput(id);
           if (cancelled) return;
           if (backfill) {
-            term.write(`\r\n\x1b[2m[已錯過的輸出]\x1b[0m\r\n`);
+            term.write(`\r\n\x1b[2m${t.term_coordination_backfill_marker}\x1b[0m\r\n`);
             term.write(backfill.replace(/\n/g, "\r\n"));
             term.write(`\r\n`);
           }

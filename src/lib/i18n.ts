@@ -1180,6 +1180,7 @@ const zhTW = {
 
     // Terminal shell logs & warnings
     term_agent_wait_password: "🔒 [Agent: 等待密碼輸入，請在終端機中輸入密碼後按 Enter]",
+    term_coordination_backfill_marker: "[已錯過的輸出]",
     term_danger_warning: "⚠ 危險操作 — 請仔細確認後再執行",
     term_setup_hint_provider: "提示：按 Ctrl+, 開啟設定並新增一個 AI Provider。",
     term_setup_hint_ollama: "提示：請啟動 Ollama，或按 Ctrl+, 切換到雲端 Provider。",
@@ -2348,6 +2349,7 @@ const enRaw = {
 
     // Terminal shell logs & warnings
     term_agent_wait_password: "🔒 [Agent: Waiting for password, please enter password in terminal and press Enter]",
+    term_coordination_backfill_marker: "[Missed output]",
     term_danger_warning: "⚠ Dangerous Operation — Please verify carefully before execution",
     term_setup_hint_provider: "Hint: Press Ctrl+, to open Settings and add an AI Provider.",
     term_setup_hint_ollama: "Hint: Please start Ollama or press Ctrl+, to switch to a cloud Provider.",
