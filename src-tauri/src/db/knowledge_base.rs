@@ -4,6 +4,7 @@ use sqlx::sqlite::SqliteConnectOptions;
 use serde::{Serialize, Deserialize};
 use std::path::PathBuf;
 use std::fs;
+use std::time::Duration;
 
 pub struct KnowledgeBaseDb {
     pub pool: SqlitePool,
@@ -46,9 +47,14 @@ impl KnowledgeBaseDb {
         // an in-memory database with no error surfaced anywhere. That means every
         // notebook/document/chunk would vanish on app restart. Explicitly opt in to
         // file creation so a first run actually persists to disk.
+        // MCP tool server（見 src-tauri/src/mcp_server/mod.rs）建立自己獨立的一份
+        // KnowledgeBaseDb，跟這裡（app 本身管理的那份）寫同一個檔案。沒有
+        // busy_timeout 的話，兩邊剛好同時寫入會直接回 SQLITE_BUSY，而不是等一下
+        // 重試——對 MCP client 來說會是一個沒必要、偶發的查詢失敗。
         let options = SqliteConnectOptions::new()
             .filename(&db_path)
-            .create_if_missing(true);
+            .create_if_missing(true)
+            .busy_timeout(Duration::from_secs(5));
         let pool = SqlitePool::connect_with(options).await.unwrap_or_else(|_| {
             SqlitePool::connect_lazy("sqlite::memory:").unwrap()
         });
