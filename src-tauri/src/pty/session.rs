@@ -1166,37 +1166,25 @@ mod tests {
         // first one, before any command has run or any agent inside has done
         // anything. That marker must never be counted as a genuine agent
         // notification bell. `test_shell()` (plain /bin/sh / cmd.exe /Q) does
-        // not go through the real injection, so this test builds a minimal
-        // shell spec that fires the same BEL-terminated OSC133 "A" marker on
-        // its first prompt, mirroring shell.rs's own injected hooks exactly.
+        // not go through the real injection, so this test calls the REAL
+        // production injection functions directly (mirroring
+        // `PtySessionStubForCwd`'s note above on why tests in this file
+        // reuse production free functions, not a hand-copied mimic of them)
+        // so it actually guards against regressions in the real scripts.
         #[cfg(windows)]
-        let shell = ShellSpec {
-            program: "powershell.exe".into(),
-            args: vec![
-                "-NoProfile".into(),
-                "-NoExit".into(),
-                "-Command".into(),
-                // Mirrors inject_powershell_integration's own prompt-start marker.
-                "function prompt { [Console]::Write(\"$([char]27)]133;A$([char]7)\"); \"PS> \" }".into(),
-            ],
-            envs: vec![],
-            env_removals: vec![],
-        };
+        let shell = super::super::shell::inject_powershell_integration("powershell.exe".into());
         #[cfg(not(windows))]
         let shell = {
-            let temp_dir = std::env::temp_dir().join("aiterm_test_bell_osc133");
-            std::fs::create_dir_all(&temp_dir).expect("create temp rcfile dir");
-            let rcfile = temp_dir.join(".bashrc_test");
-            // Mirrors inject_shell_integration's own __aiterm_precmd: fires an
-            // OSC133 "A" marker, BEL-terminated, on every prompt draw.
-            std::fs::write(&rcfile, "PROMPT_COMMAND='printf \"\\x1b]133;A\\x07\"'\n")
-                .expect("write test rcfile");
-            ShellSpec {
-                program: "/bin/bash".into(),
-                args: vec!["--rcfile".into(), rcfile.to_string_lossy().into_owned()],
-                envs: vec![],
-                env_removals: vec![],
-            }
+            // inject_shell_integration only injects OSC133 hooks for
+            // programs whose path ends in "bash" or "zsh" (see shell.rs) —
+            // pick whichever of those is actually present, same as
+            // unix_default_shell()'s own fallback preference.
+            let program = if std::path::Path::new("/bin/bash").exists() {
+                PathBuf::from("/bin/bash")
+            } else {
+                PathBuf::from("/bin/zsh")
+            };
+            super::super::shell::inject_shell_integration(program)
         };
 
         let session = PtySession::spawn(

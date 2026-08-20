@@ -42,7 +42,7 @@ fn windows_default_shell() -> Option<ShellSpec> {
 /// `$LASTEXITCODE`. The user's original prompt function is preserved and called inside
 /// our wrapper.
 #[cfg(windows)]
-fn inject_powershell_integration(program: PathBuf) -> ShellSpec {
+pub(crate) fn inject_powershell_integration(program: PathBuf) -> ShellSpec {
     let temp_dir = std::env::temp_dir().join("aiterm_ps");
     let _ = std::fs::create_dir_all(&temp_dir);
     let script_path = temp_dir.join("shell_integration.ps1");
@@ -129,7 +129,7 @@ pub fn unix_default_shell() -> Option<ShellSpec> {
 
 /// Setup OS-specific shell integration hooks for block reporting (OSC 133).
 #[cfg(not(windows))]
-fn inject_shell_integration(program: PathBuf) -> ShellSpec {
+pub(crate) fn inject_shell_integration(program: PathBuf) -> ShellSpec {
     let mut envs = vec![];
     let mut args = vec![];
     
