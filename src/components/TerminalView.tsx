@@ -13,6 +13,7 @@ import "@xterm/xterm/css/xterm.css";
 import {
   closePty,
   createPty,
+  getPtyRecentOutput,
   onPtyData,
   resizePty,
   writePastedFile,
@@ -1114,6 +1115,26 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             }
           }
         });
+
+        if (externalSessionId) {
+          // Adopted sessions (spawned by an MCP coordination tool) may
+          // already have real output — shell prompt, an agent's startup
+          // banner, even its first reply — that streamed out on
+          // pty://data/{id} before this component existed to subscribe.
+          // Tauri events are fire-and-forget; there's no buffering for a
+          // late listener. Backfill from PtyManager's per-session ring
+          // buffer so the tab isn't misleadingly blank. This is
+          // ANSI-stripped plain text (get_recent_output strips escape
+          // codes for AI-context use), so it won't look pixel-identical
+          // to a live xterm stream — good enough to "catch up," not meant
+          // to replace real-time rendering.
+          const backfill = await getPtyRecentOutput(id);
+          if (backfill) {
+            term.write(`\r\n\x1b[2m[已錯過的輸出]\x1b[0m\r\n`);
+            term.write(backfill.replace(/\n/g, "\r\n"));
+            term.write(`\r\n`);
+          }
+        }
       } catch (err) {
         console.error("Failed to create pty", err);
       }
