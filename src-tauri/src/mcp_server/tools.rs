@@ -87,7 +87,14 @@ pub struct ReadDocumentArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SpawnTabArgs {
-    /// Working directory for the new tab. Defaults to the user's home directory if omitted.
+    /// Working directory for the new tab. Defaults to the user's home directory if
+    /// omitted. Recommended: pass your OWN current working directory (e.g. the
+    /// output of `pwd`) rather than omitting this — spawning in a directory the
+    /// initial command hasn't seen before can trigger that program's own
+    /// first-run trust/permission prompt (e.g. Claude Code CLI's "Do you trust
+    /// this folder?"), which blocks the new tab until a human answers it. Reusing
+    /// your own directory, which the same tool has very likely already been
+    /// trusted in, avoids that.
     #[serde(default)]
     pub cwd: Option<String>,
     /// Initial command to run in the new tab once it's ready (e.g. "claude" or "codex").
@@ -227,7 +234,7 @@ impl AiTermTools {
         to_call_result(kb_ops::read_document(&self.kb_pool, &notebook_id, &path).await)
     }
 
-    #[tool(description = "Spawn a new AITerm terminal tab, visible to the user, optionally running an initial command (e.g. 'claude' or 'codex') to start another coding agent in it. Returns the new tab's id. Disabled by default — must be enabled in Settings.")]
+    #[tool(description = "Spawn a new AITerm terminal tab, visible to the user, optionally running an initial command (e.g. 'claude' or 'codex') to start another coding agent in it. Pass cwd as your own current directory to avoid the spawned command's first-run trust prompt in an unfamiliar folder. Returns the new tab's id. Disabled by default — must be enabled in Settings.")]
     async fn spawn_tab(
         &self,
         Parameters(SpawnTabArgs { cwd, command }): Parameters<SpawnTabArgs>,
