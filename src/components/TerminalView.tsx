@@ -1029,6 +1029,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
     let unlistenData: (() => void) | null = null;
     let unlistenStream: Promise<() => void> | null = null;
+    let cancelled = false;
 
     const writeRed = (msg: string) => {
       term.write(`\r\n\x1b[31m${msg}\x1b[0m\r\n`);
@@ -1045,6 +1046,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         } else {
           const lastCwd = initialCwd ?? localStorage.getItem("aiterm_last_cwd") ?? undefined;
           id = await createPty({ rows, cols }, lastCwd, claudeBridge);
+          if (cancelled) {
+            // Torn down (e.g. React StrictMode's dev-mode synthetic
+            // remount) before this newly-created session could be used —
+            // nothing else knows about it yet, so close it now instead of
+            // leaking an orphaned PTY process. Never applies to an adopted
+            // (externalSessionId) session, which is owned elsewhere and
+            // must never be closed from here — see the cleanup below.
+            closePty(id).catch(() => {});
+            return;
+          }
         }
         sessionRef.current = id;
         // A real resize can land while createPty() was still in flight (no
@@ -1062,7 +1073,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
         const isWindows = navigator.platform.toLowerCase().startsWith("win");
 
-        unlistenData = await onPtyData(id, (bytes) => {
+        const unlisten = await onPtyData(id, (bytes) => {
           const text = decoder.decode(bytes, { stream: true });
           if (isWindows) {
             // Force a repaint once xterm has actually finished processing this
@@ -1115,6 +1126,18 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             }
           }
         });
+        if (cancelled) {
+          // Same race as above, but past the listener-registration await:
+          // this component's cleanup already ran (and can never run again
+          // for this mount) before the subscription finished setting up.
+          // Tear it down immediately instead of leaving a listener
+          // permanently subscribed to this session's real PTY output —
+          // otherwise a StrictMode-orphaned mount keeps double-processing
+          // every future chunk for the life of the session.
+          unlisten();
+          return;
+        }
+        unlistenData = unlisten;
 
         if (externalSessionId) {
           // Adopted sessions (spawned by an MCP coordination tool) may
@@ -1129,6 +1152,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           // to a live xterm stream — good enough to "catch up," not meant
           // to replace real-time rendering.
           const backfill = await getPtyRecentOutput(id);
+          if (cancelled) return;
           if (backfill) {
             term.write(`\r\n\x1b[2m[已錯過的輸出]\x1b[0m\r\n`);
             term.write(backfill.replace(/\n/g, "\r\n"));
@@ -1422,6 +1446,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     watchDpr();
 
     return () => {
+      cancelled = true;
       if (resizeSettleTimer) clearTimeout(resizeSettleTimer);
       if (unsubmittedPasteTimeoutRef.current) clearTimeout(unsubmittedPasteTimeoutRef.current);
       if (ro && hostRef.current) ro.unobserve(hostRef.current);
