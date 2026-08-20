@@ -244,17 +244,11 @@ mod tests {
         // AITerm's own OSC133 shell-integration hook (`__aiterm_precmd` in
         // `pty/shell.rs`, pre-existing, unrelated to this feature) fires once
         // on the shell's very first prompt draw and is BEL-terminated
-        // (`\x1b]133;A\x07`); `PtySession::bell_count` (Task 2) does a raw
-        // `chunk.contains(&0x07)` scan with no OSC-sequence awareness, so
-        // that marker always counts as one bell within ~milliseconds of
-        // spawn. Baselining at a hardcoded 0 (as `spawn_tab` does) races
-        // against it. Settle first and baseline against the count *after*
-        // that startup marker has landed, so this test actually exercises
-        // "no *further* bell arrives" — what wait_for_idle's timeout path is
-        // meant to guard — instead of racing the shell's own boot sequence.
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let baseline = pty_manager.bell_count(&tab_id).unwrap_or(0);
-        registry.record_baseline(&tab_id, baseline);
+        // (`\x1b]133;A\x07`). `PtySession::bell_count` uses
+        // `contains_bare_bell` (see `pty/cd_parser.rs`), which recognizes
+        // that terminator and excludes it, so this marker never counts as a
+        // bell. Baseline at 0 immediately, same as `spawn_tab` does.
+        registry.record_baseline(&tab_id, 0);
 
         let result_json = wait_for_idle(&pty_manager, &registry, &tab_id, Some(1)).await.unwrap();
         assert!(result_json.contains("\"timed_out\": true"), "{result_json}");

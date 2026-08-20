@@ -1177,8 +1177,10 @@ mod tests {
         let shell = {
             // inject_shell_integration only injects OSC133 hooks for
             // programs whose path ends in "bash" or "zsh" (see shell.rs) —
-            // pick whichever of those is actually present, same as
-            // unix_default_shell()'s own fallback preference.
+            // pick whichever of those is actually present. Bash is tried
+            // first since it's near-universally present on Unix test
+            // environments; either shell exercises the same OSC133 marker
+            // code path this test is guarding.
             let program = if std::path::Path::new("/bin/bash").exists() {
                 PathBuf::from("/bin/bash")
             } else {
