@@ -40,6 +40,7 @@ const BASE_CONFIG: AppConfig = {
     sonnet: null,
     haiku: null,
   },
+  mcp_tool_server: { enabled: false, port: 8318 },
 };
 
 // provider 列表改走 listProviders()（ipc/provider.ts 的 ProviderInfo），
