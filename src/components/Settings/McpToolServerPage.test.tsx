@@ -74,4 +74,14 @@ describe("McpToolServerPage", () => {
       expect(command!.textContent).toContain("abc123");
     });
   });
+
+  it("shows the error message instead of throwing when start fails", async () => {
+    vi.mocked(mcpToolServerStatus).mockResolvedValue({
+      running: false, port: null, token: null, error: "無法綁定 127.0.0.1:8318（埠已被占用）",
+    });
+    render(<McpToolServerPage />);
+    await waitFor(() => {
+      expect(screen.getByText(/埠已被占用|already in use|無法綁定/i)).toBeInTheDocument();
+    });
+  });
 });
