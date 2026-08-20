@@ -9,6 +9,7 @@ import { EnterprisePage } from "./EnterprisePage";
 import { AboutPage } from "./AboutPage";
 import { McpServersPage } from "./McpServersPage";
 import { ClaudeBridgePage } from "./ClaudeBridgePage";
+import { McpToolServerPage } from "./McpToolServerPage";
 import { UsagePage } from "./UsagePage";
 import { useLocale } from "../../contexts/LocaleContext";
 import {
@@ -19,11 +20,12 @@ import {
   WrenchIcon,
   InfoIcon,
   LinkIcon,
-  ZapIcon
+  ZapIcon,
+  SparklesIcon
 } from "../Icons";
 import "./SettingsView.css";
 
-type SettingsTab = "general" | "providers" | "databases" | "vcs" | "enterprise" | "about" | "mcp" | "mail" | "bridge" | "usage";
+type SettingsTab = "general" | "providers" | "databases" | "vcs" | "enterprise" | "about" | "mcp" | "mail" | "bridge" | "usage" | "mcpToolServer";
 
 export function SettingsView() {
   const navigate = useNavigate();
@@ -91,6 +93,12 @@ export function SettingsView() {
           <LinkIcon size={16} /> {t.bridge_title}
         </button>
         <button
+          className={`sidebar-item ${tab === "mcpToolServer" ? "sidebar-item--active" : ""}`}
+          onClick={() => setTab("mcpToolServer")}
+        >
+          <SparklesIcon size={16} /> {t.mcp_tool_server_title}
+        </button>
+        <button
           className={`sidebar-item ${tab === "usage" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("usage")}
         >
@@ -124,6 +132,7 @@ export function SettingsView() {
         {tab === "mail" && <MailAccountsPage />}
         {tab === "mcp" && <McpServersPage />}
         {tab === "bridge" && <ClaudeBridgePage />}
+        {tab === "mcpToolServer" && <McpToolServerPage />}
         {tab === "usage" && <UsagePage />}
         {tab === "enterprise" && <EnterprisePage />}
         {tab === "about" && <AboutPage />}
