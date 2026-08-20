@@ -306,8 +306,12 @@ impl PtySession {
                             // overwhelmingly common case. One increment per chunk
                             // containing at least one bell is enough — callers only
                             // ever check "did the count change since my baseline",
-                            // never the exact number of bells.
-                            if chunk.contains(&0x07) {
+                            // never the exact number of bells. Uses
+                            // `contains_bare_bell` (not a naive `contains(&0x07)`)
+                            // because our own OSC133 shell-integration markers are
+                            // themselves BEL-terminated and must not be mistaken
+                            // for a genuine agent notification bell.
+                            if cd_parser::contains_bare_bell(&chunk) {
                                 bell_count_for_thread.fetch_add(1, Ordering::SeqCst);
                             }
                             on_data(chunk);
@@ -437,8 +441,12 @@ impl PtySession {
                             // overwhelmingly common case. One increment per chunk
                             // containing at least one bell is enough — callers only
                             // ever check "did the count change since my baseline",
-                            // never the exact number of bells.
-                            if chunk.contains(&0x07) {
+                            // never the exact number of bells. Uses
+                            // `contains_bare_bell` (not a naive `contains(&0x07)`)
+                            // because our own OSC133 shell-integration markers are
+                            // themselves BEL-terminated and must not be mistaken
+                            // for a genuine agent notification bell.
+                            if cd_parser::contains_bare_bell(&chunk) {
                                 bell_count_for_thread.fetch_add(1, Ordering::SeqCst);
                             }
                             on_data(chunk);
@@ -1147,5 +1155,67 @@ mod tests {
 
         let _ = rx.try_recv(); // drain, avoid unused warning
         drop(session);
+    }
+
+    #[tokio::test]
+    async fn shells_own_osc133_prompt_markers_do_not_count_as_bells() {
+        // Reproduces the original bug: AITerm's own shell-integration hooks
+        // (see `pty::shell::inject_shell_integration` /
+        // `inject_powershell_integration`) emit a BEL-terminated OSC133 "A"
+        // (prompt-start) marker on every prompt draw — including the very
+        // first one, before any command has run or any agent inside has done
+        // anything. That marker must never be counted as a genuine agent
+        // notification bell. `test_shell()` (plain /bin/sh / cmd.exe /Q) does
+        // not go through the real injection, so this test builds a minimal
+        // shell spec that fires the same BEL-terminated OSC133 "A" marker on
+        // its first prompt, mirroring shell.rs's own injected hooks exactly.
+        #[cfg(windows)]
+        let shell = ShellSpec {
+            program: "powershell.exe".into(),
+            args: vec![
+                "-NoProfile".into(),
+                "-NoExit".into(),
+                "-Command".into(),
+                // Mirrors inject_powershell_integration's own prompt-start marker.
+                "function prompt { [Console]::Write(\"$([char]27)]133;A$([char]7)\"); \"PS> \" }".into(),
+            ],
+            envs: vec![],
+            env_removals: vec![],
+        };
+        #[cfg(not(windows))]
+        let shell = {
+            let temp_dir = std::env::temp_dir().join("aiterm_test_bell_osc133");
+            std::fs::create_dir_all(&temp_dir).expect("create temp rcfile dir");
+            let rcfile = temp_dir.join(".bashrc_test");
+            // Mirrors inject_shell_integration's own __aiterm_precmd: fires an
+            // OSC133 "A" marker, BEL-terminated, on every prompt draw.
+            std::fs::write(&rcfile, "PROMPT_COMMAND='printf \"\\x1b]133;A\\x07\"'\n")
+                .expect("write test rcfile");
+            ShellSpec {
+                program: "/bin/bash".into(),
+                args: vec!["--rcfile".into(), rcfile.to_string_lossy().into_owned()],
+                envs: vec![],
+                env_removals: vec![],
+            }
+        };
+
+        let session = PtySession::spawn(
+            shell,
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+
+        // Give the shell time to draw its first prompt (which fires its own
+        // OSC133 "A" marker, BEL-terminated) — this is exactly the false
+        // positive this fix addresses. Even after this settles, no bell
+        // should have been counted.
+        std::thread::sleep(Duration::from_millis(800));
+        assert_eq!(
+            session.bell_count(),
+            0,
+            "the shell's own boot-time OSC133 marker must not be counted as a bell"
+        );
     }
 }

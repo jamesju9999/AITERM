@@ -327,6 +327,39 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
+/// Scans a chunk of raw PTY output for a "bare" bell byte (`0x07`) — one that
+/// is NOT the terminator of an OSC (`ESC ]`) escape sequence. Needed because
+/// this codebase's own OSC 133 shell-integration hooks (see `pty::shell`) are
+/// themselves BEL-terminated (as are some shells' OSC 0/2 window-title
+/// sequences) — none of those represent a coding agent's own terminal-bell
+/// notification, which is what `PtySession::bell_count` needs to detect.
+/// Treats ANY OSC-introduced sequence generically (not just OSC 133), since
+/// BEL-termination is a general, long-standing xterm convention for OSC, not
+/// specific to shell-integration markers.
+pub fn contains_bare_bell(data: &[u8]) -> bool {
+    let mut i = 0;
+    let mut in_osc = false;
+    while i < data.len() {
+        if !in_osc && data[i] == 0x1b && data.get(i + 1) == Some(&b']') {
+            in_osc = true;
+            i += 2;
+            continue;
+        }
+        if data[i] == 0x07 {
+            if in_osc {
+                in_osc = false; // BEL terminates the OSC sequence — consumed, not a real bell
+            } else {
+                return true; // bare bell — a real notification
+            }
+        } else if in_osc && data[i] == 0x1b && data.get(i + 1) == Some(&b'\\') {
+            in_osc = false; // ST also terminates an OSC sequence
+            i += 1;
+        }
+        i += 1;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -606,5 +639,47 @@ mod tests {
     fn find_exit_codes_ignores_marker_missing_bel() {
         let data = b"\x1b]133;D;0 no bel here";
         assert_eq!(find_exit_codes(data), Vec::<i32>::new());
+    }
+
+    // --- contains_bare_bell ---
+
+    #[test]
+    fn contains_bare_bell_true_for_a_plain_bell_byte() {
+        assert!(contains_bare_bell(b"hello\x07world"));
+    }
+
+    #[test]
+    fn contains_bare_bell_false_for_osc133_a_marker() {
+        assert!(!contains_bare_bell(b"\x1b]133;A\x07"));
+    }
+
+    #[test]
+    fn contains_bare_bell_false_for_osc133_c_marker() {
+        assert!(!contains_bare_bell(b"\x1b]133;C\x07"));
+    }
+
+    #[test]
+    fn contains_bare_bell_false_for_osc133_d_marker_with_exit_code() {
+        assert!(!contains_bare_bell(b"\x1b]133;D;0\x07"));
+    }
+
+    #[test]
+    fn contains_bare_bell_true_when_a_real_bell_follows_an_osc133_marker() {
+        // Realistic case: shell draws its prompt (OSC133 A, BEL-terminated,
+        // not a real notification), then later the agent inside genuinely
+        // rings the bell to say it's waiting for input.
+        assert!(contains_bare_bell(b"\x1b]133;A\x07some output\x07"));
+    }
+
+    #[test]
+    fn contains_bare_bell_false_for_st_terminated_osc_sequence_with_later_bare_bell_absent() {
+        // OSC sequences can also be terminated with ST (ESC \\) instead of BEL.
+        // No bell anywhere here at all.
+        assert!(!contains_bare_bell(b"\x1b]0;window title\x1b\\"));
+    }
+
+    #[test]
+    fn contains_bare_bell_false_for_empty_input() {
+        assert!(!contains_bare_bell(b""));
     }
 }
