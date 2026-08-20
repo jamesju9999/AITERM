@@ -44,8 +44,24 @@
   margin: 8px 0;
 }
 
+.mcp-tool-server-row input[type="number"] {
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  color: #e6e6e6;
+  font-size: 13px;
+  padding: 6px 10px;
+  width: 100px;
+}
+
+.mcp-tool-server-row input[type="number"]:focus {
+  border-color: #2d5aab;
+  outline: none;
+}
+
 .mcp-tool-server-command {
   background: var(--bg-secondary, #1a1a1a);
+  border: 1px solid #2e2e2e;
   border-radius: 6px;
   padding: 12px;
   font-family: monospace;
@@ -59,4 +75,23 @@
   display: flex;
   gap: 8px;
   margin-top: 16px;
+}
+
+.mcp-tool-server-actions button {
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  color: #e6e6e6;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 8px 16px;
+}
+
+.mcp-tool-server-actions button:hover:not(:disabled) {
+  border-color: #2d5aab;
+}
+
+.mcp-tool-server-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
