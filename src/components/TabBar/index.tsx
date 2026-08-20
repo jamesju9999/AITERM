@@ -51,8 +51,9 @@ export interface Tab {
   /** 非 active 的終端機分頁發生了值得注意的事：在側邊欄圖示上顯示一個彩色點。
    *  只存在記憶體，不進 localStorage——重開 app 後這些事件已經沒有意義。 */
   attention?: AttentionKind;
-  /** 這個分頁是不是由 MCP 協調工具的 spawn_tab 開出來的——只影響圖示顯示，
-   *  不影響任何行為。只存在記憶體，不進 localStorage。 */
+  /** 這個分頁是不是由 MCP 協調工具的 spawn_tab 開出來的——影響圖示顯示，
+   *  也是 TerminalApp 決定要不要用 externalSessionId 接手既有 PTY session
+   *  （而非自己開新的）的依據。只存在記憶體，不進 localStorage。 */
   spawnedByAgent?: boolean;
   /**
    * 這個終端機分頁有沒有注入 Claude Code 橋接環境變數，以及來源。
