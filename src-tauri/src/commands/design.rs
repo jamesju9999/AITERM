@@ -312,7 +312,7 @@ pub async fn design_chat(
     locale: Locale,
     app: AppHandle,
     design_db: State<'_, DesignDb>,
-    pty_manager: State<'_, PtyManager>,
+    pty_manager: State<'_, std::sync::Arc<PtyManager>>,
     router: State<'_, AiRouter>,
 ) -> Result<AiChatReply, AiError> {
     if messages.is_empty() {

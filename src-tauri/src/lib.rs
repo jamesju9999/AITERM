@@ -172,7 +172,7 @@ pub fn run() {
                 .level(log::LevelFilter::Info)
                 .build(),
         )
-        .manage(PtyManager::new())
+        .manage(Arc::new(PtyManager::new()))
         .manage(config)
         .manage(secrets)
         .manage(router)

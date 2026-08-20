@@ -197,7 +197,7 @@ pub async fn ai_query(
     session_id: String,
     locale: Locale,
     app: AppHandle,
-    pty_manager: State<'_, PtyManager>,
+    pty_manager: State<'_, std::sync::Arc<PtyManager>>,
     router: State<'_, AiRouter>,
 ) -> Result<AiCommandReady, AiError> {
     let snapshot = context::snapshot(&pty_manager, &session_id);
@@ -315,7 +315,7 @@ pub async fn ai_chat(
     use_mcp: bool,
     locale: Locale,
     app: AppHandle,
-    pty_manager: State<'_, PtyManager>,
+    pty_manager: State<'_, std::sync::Arc<PtyManager>>,
     router: State<'_, AiRouter>,
     mcp_manager: State<'_, std::sync::Arc<tokio::sync::Mutex<crate::mcp::McpManager>>>,
     config: State<'_, std::sync::Arc<crate::config::ConfigStore>>,
@@ -560,7 +560,7 @@ pub async fn agent_chat(
     tools: Vec<AgentToolDefinition>,
     session_id: String,
     app: AppHandle,
-    pty_manager: State<'_, PtyManager>,
+    pty_manager: State<'_, std::sync::Arc<PtyManager>>,
     router: State<'_, AiRouter>,
 ) -> Result<AiChatReply, AiError> {
     if messages.is_empty() {

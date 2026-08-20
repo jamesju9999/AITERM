@@ -25,7 +25,7 @@ impl From<PtySizeArg> for PtySize {
 #[tauri::command]
 pub fn pty_create(
     app: AppHandle,
-    manager: State<'_, PtyManager>,
+    manager: State<'_, std::sync::Arc<PtyManager>>,
     bridge: State<'_, std::sync::Arc<crate::bridge::BridgeState>>,
     secrets: State<'_, std::sync::Arc<crate::secret::SecretStore>>,
     size: PtySizeArg,
@@ -47,7 +47,7 @@ pub fn pty_create(
 
 #[tauri::command]
 pub fn pty_write(
-    manager: State<'_, PtyManager>,
+    manager: State<'_, std::sync::Arc<PtyManager>>,
     id: String,
     data: String,
 ) -> Result<(), PtyError> {
@@ -56,7 +56,7 @@ pub fn pty_write(
 
 #[tauri::command]
 pub fn pty_resize(
-    manager: State<'_, PtyManager>,
+    manager: State<'_, std::sync::Arc<PtyManager>>,
     id: String,
     size: PtySizeArg,
 ) -> Result<(), PtyError> {
@@ -65,7 +65,7 @@ pub fn pty_resize(
 
 #[tauri::command]
 pub fn pty_close(
-    manager: State<'_, PtyManager>,
+    manager: State<'_, std::sync::Arc<PtyManager>>,
     id: String,
 ) -> Result<(), PtyError> {
     manager.close(&id)
@@ -74,7 +74,7 @@ pub fn pty_close(
 /// Return the shell type for a PTY session ("pwsh", "cmd", "bash", or "unknown").
 #[tauri::command]
 pub fn pty_get_shell_type(
-    manager: State<'_, PtyManager>,
+    manager: State<'_, std::sync::Arc<PtyManager>>,
     id: String,
 ) -> Option<String> {
     manager.get_shell_variant(&id).map(|v| match v {
@@ -93,7 +93,7 @@ fn norm(p: impl AsRef<std::path::Path>) -> String {
 /// Get the current working directory of a PTY session.
 #[tauri::command]
 pub fn pty_get_cwd(
-    manager: State<'_, PtyManager>,
+    manager: State<'_, std::sync::Arc<PtyManager>>,
     id: String,
 ) -> Option<String> {
     manager.get_cwd(&id).map(|p| norm(&p))
@@ -102,7 +102,7 @@ pub fn pty_get_cwd(
 /// Return the last ~4 KiB of ANSI-stripped PTY output for the session.
 #[tauri::command]
 pub fn pty_get_recent_output(
-    manager: State<'_, PtyManager>,
+    manager: State<'_, std::sync::Arc<PtyManager>>,
     id: String,
 ) -> Option<String> {
     manager.get_recent_output(&id, 4096)
@@ -120,7 +120,7 @@ pub struct DirEntry {
 /// List the immediate children of `path` (or the session's CWD if path is empty).
 #[tauri::command]
 pub fn pty_list_dir(
-    manager: State<'_, PtyManager>,
+    manager: State<'_, std::sync::Arc<PtyManager>>,
     id: String,
     path: String,
 ) -> Result<Vec<DirEntry>, String> {
