@@ -1279,6 +1279,518 @@ Expected: 無錯誤（本來就不該受影響，這步只是雙重確認沒有�
 
 這步驟沒有自動化測試涵蓋（需要真的 Claude Code CLI 跟真的 MCP 連線），照設計文件的說明，這是唯一能證明整條協作流程真的通的驗證。
 
+**這一步實測時真的抓到一個 bug**：第二段指示文字被目標端忽略，從未真正送出（見設計文件「第二段寫入被目標端忽略」段落）。修正見 Task 8。Task 8 完成後，Step 1-3 要重跑一次確認沒有回歸，Step 4 的手動驗證也要重新走一次確認指示文字這次真的被處理。
+
+---
+
+## Task 8：修正第二段寫入被目標端忽略（手動驗證階段發現）
+
+**背景**：Task 7 Step 4 手動驗證時，真實 Claude Code CLI 上重現：`send_input` 背靠背送出的兩次 `\r` 寫入，第一段（任務文字）送出後目標端要花實際時間處理（實測 6 秒），第二段（指示文字）幾乎同時抵達，其內容被打進輸入框、但那個 `\r` 沒有觸發送出——指示文字永遠卡在輸入框，從未被目標端處理。詳細分析見 `docs/superpowers/specs/2026-08-21-coordination-done-marker-design.md` 的「第二段寫入被目標端忽略」段落。
+
+**Files:**
+- Modify: `src-tauri/src/mcp_server/coordination_ops.rs`（`send_input` 改成 `async fn`，新增 `wait_for_new_bell` 輔助函式）
+- Modify: `src-tauri/src/mcp_server/tools.rs`（`send_input` 呼叫端補 `.await`；`SendInputArgs.request_done_marker` 與 `send_input` 工具描述文字更新，誠實告知會阻塞等待）
+- Test: `src-tauri/src/mcp_server/coordination_ops.rs`（`mod tests`）
+
+- [ ] **Step 1: 寫失敗的測試**
+
+在 `coordination_ops.rs` 的 `mod tests` 區塊最後加入（`use super::*;` 已經在檔案最上面，這裡直接呼叫 module-private 的 `wait_for_new_bell` 沒問題）：
+
+```rust
+    #[tokio::test]
+    async fn wait_for_new_bell_times_out_when_the_target_never_bells() {
+        let pty_manager = PtyManager::new();
+        let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
+
+        let became_idle = wait_for_new_bell(&pty_manager, &tab_id, 0, Duration::from_millis(300)).await;
+        assert!(!became_idle, "expected wait_for_new_bell to give up when no bell ever arrives");
+    }
+
+    #[tokio::test]
+    async fn wait_for_new_bell_returns_true_once_a_new_bell_arrives() {
+        let pty_manager = PtyManager::new();
+        let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
+
+        pty_manager.write(&tab_id, b"printf '\\007'\n").unwrap();
+
+        let became_idle = wait_for_new_bell(&pty_manager, &tab_id, 0, Duration::from_secs(5)).await;
+        assert!(became_idle, "expected wait_for_new_bell to observe the bell within the timeout");
+    }
+```
+
+- [ ] **Step 2: 執行測試確認失敗**
+
+Run: `cd src-tauri && cargo test --lib mcp_server::coordination_ops::tests::wait_for_new_bell_times_out_when_the_target_never_bells`
+Expected: 編譯失敗，`error[E0425]: cannot find function `wait_for_new_bell` in this scope`
+
+- [ ] **Step 3: 把 `send_input` 改成 `async fn`，新增 `wait_for_new_bell`**
+
+把 `src-tauri/src/mcp_server/coordination_ops.rs` 裡的：
+
+```rust
+pub(crate) fn send_input(
+    pty_manager: &PtyManager,
+    registry: &CoordinationRegistry,
+    tab_id: &str,
+    text: &str,
+    request_done_marker: bool,
+) -> Result<String, String> {
+    if !registry.is_known(tab_id) {
+        return Err(format!(
+            "tab_id '{tab_id}' was not created by spawn_tab — this tool can only target tabs it spawned itself, never a tab the user opened by hand"
+        ));
+    }
+    pty_manager
+        .write(tab_id, format!("{text}\r").as_bytes())
+        .map_err(|e| e.to_string())?;
+
+    // Sent as a second, independently \r-terminated write (a separate
+    // message) rather than appended via an embedded '\n' — this file's own
+    // send_input_terminates_the_line_with_cr_not_lf regression test exists
+    // precisely because raw-mode TUIs (Claude Code's own included) have no
+    // guaranteed behavior for a bare LF byte, only for CR. See the design
+    // doc's "指示文字" section.
+    //
+    // The instruction text below deliberately never writes the complete,
+    // contiguous marker string (prefix + tab_id + suffix back-to-back) —
+    // each piece is separated by other text. If it did, canonical-mode
+    // terminal echo alone (no cooperating agent needed) would write that
+    // same contiguous byte sequence right back into this session's output
+    // stream as a pure side effect of writing this instruction, and
+    // marker_count would increment immediately — a false "done" signal
+    // before the target has done anything. Verified live against a real
+    // PTY during implementation: the original (buggy) wording, which did
+    // embed the marker contiguously, triggered marker_count=1 from echo
+    // alone, with no agent involved.
+    if request_done_marker {
+        let instruction = format!(
+            "（可選：完成後請在新的一行印出一個完成標記，格式為三段直接相連、中間不留任何字元：前綴 {} ，接著是你的識別碼 {} ，最後接上 {} 。這能讓協調端提早得知你已完成，不影響任何其他行為。）",
+            crate::pty::session::DONE_MARKER_PREFIX,
+            tab_id,
+            crate::pty::session::DONE_MARKER_SUFFIX
+        );
+        pty_manager
+            .write(tab_id, format!("{instruction}\r").as_bytes())
+            .map_err(|e| e.to_string())?;
+    }
+
+    // Reset the baseline to the counts *as of right now*, after both of this
+    // call's own writes — before any reply has had a chance to arrive — so
+    // idle only flips true again once a *new* bell or marker (a reply to
+    // this specific input) is observed, not a stale one from before this
+    // send.
+    let bell_current = pty_manager.bell_count(tab_id).unwrap_or(0);
+    let marker_current = pty_manager.marker_count(tab_id).unwrap_or(0);
+    registry.record_baseline(tab_id, bell_current, marker_current);
+
+    Ok(format!("sent to {tab_id}"))
+}
+```
+
+改成：
+
+```rust
+pub(crate) async fn send_input(
+    pty_manager: &PtyManager,
+    registry: &CoordinationRegistry,
+    tab_id: &str,
+    text: &str,
+    request_done_marker: bool,
+) -> Result<String, String> {
+    if !registry.is_known(tab_id) {
+        return Err(format!(
+            "tab_id '{tab_id}' was not created by spawn_tab — this tool can only target tabs it spawned itself, never a tab the user opened by hand"
+        ));
+    }
+    pty_manager
+        .write(tab_id, format!("{text}\r").as_bytes())
+        .map_err(|e| e.to_string())?;
+
+    // Sent as a second, independently \r-terminated write (a separate
+    // message) rather than appended via an embedded '\n' — this file's own
+    // send_input_terminates_the_line_with_cr_not_lf regression test exists
+    // precisely because raw-mode TUIs (Claude Code's own included) have no
+    // guaranteed behavior for a bare LF byte, only for CR. See the design
+    // doc's "指示文字" section.
+    //
+    // The instruction text below deliberately never writes the complete,
+    // contiguous marker string (prefix + tab_id + suffix back-to-back) —
+    // each piece is separated by other text. If it did, canonical-mode
+    // terminal echo alone (no cooperating agent needed) would write that
+    // same contiguous byte sequence right back into this session's output
+    // stream as a pure side effect of writing this instruction, and
+    // marker_count would increment immediately — a false "done" signal
+    // before the target has done anything. Verified live against a real
+    // PTY during implementation: the original (buggy) wording, which did
+    // embed the marker contiguously, triggered marker_count=1 from echo
+    // alone, with no agent involved.
+    //
+    // The instruction is only sent once the target signals (via a fresh
+    // bell) that it finished processing `text` and is idle again — sending
+    // it immediately after the first write would race the target's own
+    // processing time. Verified live against a real Claude Code CLI: the
+    // instruction's characters got typed into the input box (proof the
+    // write arrived) but its own \r never triggered submission, because the
+    // target was still busy with `text` when it arrived. See the design
+    // doc's "第二段寫入被目標端忽略" section.
+    let mut instruction_sent = true;
+    if request_done_marker {
+        let bell_before = pty_manager.bell_count(tab_id).unwrap_or(0);
+        let became_idle = wait_for_new_bell(
+            pty_manager,
+            tab_id,
+            bell_before,
+            Duration::from_secs(DEFAULT_WAIT_SECONDS),
+        )
+        .await;
+
+        if became_idle {
+            let instruction = format!(
+                "（可選：完成後請在新的一行印出一個完成標記，格式為三段直接相連、中間不留任何字元：前綴 {} ，接著是你的識別碼 {} ，最後接上 {} 。這能讓協調端提早得知你已完成，不影響任何其他行為。）",
+                crate::pty::session::DONE_MARKER_PREFIX,
+                tab_id,
+                crate::pty::session::DONE_MARKER_SUFFIX
+            );
+            pty_manager
+                .write(tab_id, format!("{instruction}\r").as_bytes())
+                .map_err(|e| e.to_string())?;
+        } else {
+            instruction_sent = false;
+        }
+    }
+
+    // Reset the baseline to the counts *as of right now*, after both of this
+    // call's own writes (or just the first, if the instruction was skipped
+    // because the target never became idle) — before any reply has had a
+    // chance to arrive — so idle only flips true again once a *new* bell or
+    // marker (a reply to this specific input) is observed, not a stale one
+    // from before this send.
+    let bell_current = pty_manager.bell_count(tab_id).unwrap_or(0);
+    let marker_current = pty_manager.marker_count(tab_id).unwrap_or(0);
+    registry.record_baseline(tab_id, bell_current, marker_current);
+
+    if request_done_marker && !instruction_sent {
+        Ok(format!(
+            "sent to {tab_id} (task only — target did not become idle within {DEFAULT_WAIT_SECONDS}s, so the completion-marker instruction was not sent)"
+        ))
+    } else {
+        Ok(format!("sent to {tab_id}"))
+    }
+}
+
+/// Polls `pty_manager`'s bell count for `tab_id`, returning `true` once it
+/// exceeds `baseline` (a fresh bell — the target signaling it's idle again)
+/// or `false` if `timeout` elapses first. Extracted as its own function
+/// (rather than inlined in `send_input`) so tests can pass a short
+/// `timeout` to exercise the "target never bells" path without waiting out
+/// the real production timeout (`DEFAULT_WAIT_SECONDS` = 300s).
+async fn wait_for_new_bell(pty_manager: &PtyManager, tab_id: &str, baseline: u64, timeout: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if pty_manager.bell_count(tab_id).unwrap_or(baseline) > baseline {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
+    }
+}
+```
+
+- [ ] **Step 4: 執行測試確認通過**
+
+Run: `cd src-tauri && cargo test --lib mcp_server::coordination_ops::tests:: -- wait_for_new_bell`
+Expected: `wait_for_new_bell_times_out_when_the_target_never_bells`、`wait_for_new_bell_returns_true_once_a_new_bell_arrives` 全部 `ok`（第一個測試只會等 300ms，不會等到 `DEFAULT_WAIT_SECONDS`）
+
+Run: `cd src-tauri && cargo build --lib 2>&1 | head -60`
+Expected: 編譯失敗——`send_input` 現在是 `async fn`，但既有呼叫端（`coordination_ops.rs` 自己的測試、`tools.rs`）都還是同步呼叫，缺少 `.await`。這是預期中的失敗，Step 5-6 會修好。
+
+- [ ] **Step 5: 更新 `coordination_ops.rs` 既有測試呼叫點，補上 `.await`**
+
+`mod tests` 裡所有直接呼叫 `send_input(...)` 的地方（全部已經是 `#[tokio::test] async fn`，不需要改測試函式本身的 async 性質，只需要在呼叫後面補 `.await`）：
+
+把：
+```rust
+        let err = send_input(&pty_manager, &registry, "not-a-real-tab", "hello", false).unwrap_err();
+```
+改成：
+```rust
+        let err = send_input(&pty_manager, &registry, "not-a-real-tab", "hello", false).await.unwrap_err();
+```
+
+把：
+```rust
+        let sent = send_input(&pty_manager, &registry, &tab_id, "echo hi", false).unwrap();
+```
+改成：
+```rust
+        let sent = send_input(&pty_manager, &registry, &tab_id, "echo hi", false).await.unwrap();
+```
+
+把（`send_input_terminates_the_line_with_cr_not_lf` 測試裡）：
+```rust
+        send_input(&pty_manager, &registry, &tab_id, "ab", false).unwrap();
+```
+改成：
+```rust
+        send_input(&pty_manager, &registry, &tab_id, "ab", false).await.unwrap();
+```
+
+- [ ] **Step 6: 重寫 `send_input_with_request_done_marker_sends_the_instruction_without_self_triggering` 測試**
+
+**這個既有測試（Task 5 留下的）在新行為下會逾時**：它對一個空 shell 送 `request_done_marker: true`，空 shell 執行 `echo hi` 不會觸發任何 bell，新行為下 `send_input` 會等到 `DEFAULT_WAIT_SECONDS`（300 秒）才放棄——測試會直接卡住 5 分鐘，不能就這樣留著。修法：在背景另開一個 task，短暫延遲後手動送一個 bell 位元組序列進同一個 PTY，模擬「目標端剛處理完任務文字、回到閒置」，讓 `send_input` 內部的等待可以很快解除。
+
+把：
+
+```rust
+    #[tokio::test]
+    async fn send_input_with_request_done_marker_sends_the_instruction_without_self_triggering() {
+        let pty_manager = PtyManager::new();
+        let registry = CoordinationRegistry::new();
+        let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
+        registry.record_baseline(&tab_id, 0, 0);
+
+        send_input(&pty_manager, &registry, &tab_id, "echo hi", true).unwrap();
+
+        // Wait for the echoed instruction to actually arrive (it mentions
+        // this tab's own id, proving the instruction was sent).
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let output = pty_manager.get_recent_output(&tab_id, RECENT_OUTPUT_BYTES).unwrap_or_default();
+            if output.contains(&tab_id) {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "expected the echoed input to mention the tab_id, got: {output}"
+            );
+            tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
+        }
+
+        // But the full, contiguous marker must NEVER appear anywhere in what
+        // was echoed — if it did, the instruction itself would have
+        // self-triggered a false completion signal via terminal echo alone,
+        // with no agent involved. This is a regression test for a real bug
+        // found during review: the original wording embedded the complete
+        // contiguous marker in the instruction, and canonical-mode echo
+        // alone incremented marker_count to 1 against a plain shell that
+        // did nothing.
+        let output = pty_manager.get_recent_output(&tab_id, RECENT_OUTPUT_BYTES).unwrap_or_default();
+        let full_marker = crate::pty::session::done_marker(&tab_id);
+        assert!(
+            !output.contains(&full_marker),
+            "the instruction text must never contain the complete contiguous marker — got: {output}"
+        );
+        assert_eq!(
+            pty_manager.marker_count(&tab_id),
+            Some(0),
+            "writing the instruction alone must not increment marker_count — self-echo false positive"
+        );
+    }
+```
+
+改成：
+
+```rust
+    #[tokio::test]
+    async fn send_input_with_request_done_marker_sends_the_instruction_once_the_target_bells() {
+        let pty_manager = Arc::new(PtyManager::new());
+        let registry = CoordinationRegistry::new();
+        let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
+        registry.record_baseline(&tab_id, 0, 0);
+
+        // Simulate a cooperating target: shortly after send_input's first
+        // write lands, ring a bell — as if the target just finished
+        // processing the task text and is idle again, waiting for new
+        // input. Only once this bell is observed should send_input proceed
+        // to write the instruction (see wait_for_new_bell).
+        let pty_manager_for_bell = Arc::clone(&pty_manager);
+        let tab_id_for_bell = tab_id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            pty_manager_for_bell.write(&tab_id_for_bell, b"printf '\\007'\n").unwrap();
+        });
+
+        send_input(&pty_manager, &registry, &tab_id, "echo hi", true).await.unwrap();
+
+        // Wait for the echoed instruction to actually arrive (it mentions
+        // this tab's own id, proving the instruction was sent).
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let output = pty_manager.get_recent_output(&tab_id, RECENT_OUTPUT_BYTES).unwrap_or_default();
+            if output.contains(&tab_id) {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "expected the echoed input to mention the tab_id, got: {output}"
+            );
+            tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
+        }
+
+        // But the full, contiguous marker must NEVER appear anywhere in what
+        // was echoed — if it did, the instruction itself would have
+        // self-triggered a false completion signal via terminal echo alone,
+        // with no agent involved. This is a regression test for a real bug
+        // found during review: the original wording embedded the complete
+        // contiguous marker in the instruction, and canonical-mode echo
+        // alone incremented marker_count to 1 against a plain shell that
+        // did nothing.
+        let output = pty_manager.get_recent_output(&tab_id, RECENT_OUTPUT_BYTES).unwrap_or_default();
+        let full_marker = crate::pty::session::done_marker(&tab_id);
+        assert!(
+            !output.contains(&full_marker),
+            "the instruction text must never contain the complete contiguous marker — got: {output}"
+        );
+    }
+
+    /// Same scenario as the test above, but no background bell is ever
+    /// injected. This would take DEFAULT_WAIT_SECONDS (300s) to time out
+    /// for real, which is far too slow to run on every `cargo test` — so
+    /// this is `#[ignore]`d (run manually/in a slow-test lane when
+    /// touching this code path, e.g. `cargo test --lib -- --ignored
+    /// send_input_with_request_done_marker_skips_the_instruction_when_the_target_never_bells`).
+    /// `wait_for_new_bell`'s own give-up behavior is already covered fast
+    /// by `wait_for_new_bell_times_out_when_the_target_never_bells` above;
+    /// this test additionally confirms `send_input`'s own wiring and
+    /// returned message wording end-to-end.
+    #[ignore]
+    #[tokio::test]
+    async fn send_input_with_request_done_marker_skips_the_instruction_when_the_target_never_bells() {
+        let pty_manager = PtyManager::new();
+        let registry = CoordinationRegistry::new();
+        let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
+        registry.record_baseline(&tab_id, 0, 0);
+
+        let sent = send_input(&pty_manager, &registry, &tab_id, "echo hi", true).await.unwrap();
+        assert!(
+            sent.contains("task only") && sent.contains("was not sent"),
+            "expected the return message to note the instruction was skipped, got: {sent}"
+        );
+    }
+```
+
+- [ ] **Step 7: 加上 `Arc` import**
+
+Step 6 的新測試用到 `Arc::clone`——確認檔案最上面的 `use` 區塊有 `use std::sync::Arc;`（如果沒有就加上去；`PtyManager` 本身在 `pty/manager.rs` 裡已經用 `Arc` 包裝 session，這裡是測試自己另外包一層 `Arc<PtyManager>` 給背景 task 用，跟 `PtyManager` 內部的 `Arc` 無關）。
+
+- [ ] **Step 8: 執行測試確認通過**
+
+Run: `cd src-tauri && cargo test --lib mcp_server::coordination_ops::`
+Expected: 全部通過（`#[ignore]` 的那個測試預設不會跑，這是預期行為），包含新增的 `wait_for_new_bell_times_out_when_the_target_never_bells`、`wait_for_new_bell_returns_true_once_a_new_bell_arrives`、`send_input_with_request_done_marker_sends_the_instruction_once_the_target_bells`，以及所有既有測試（含補上 `.await` 的那幾個）
+
+Run: `cd src-tauri && cargo test --lib mcp_server::coordination_ops:: -- --ignored send_input_with_request_done_marker_skips_the_instruction_when_the_target_never_bells`
+Expected: 通過（會真的等 300 秒——這步驟很慢，只需要跑過一次確認邏輯正確即可，不需要每次都跑）
+
+- [ ] **Step 9: 更新 `tools.rs` 呼叫端補 `.await`**
+
+把 `src-tauri/src/mcp_server/tools.rs` 裡的：
+
+```rust
+        to_call_result(coordination_ops::send_input(
+            &self.pty_manager,
+            &self.coordination_registry,
+            &tab_id,
+            &text,
+            request_done_marker,
+        ))
+```
+
+改成：
+
+```rust
+        to_call_result(coordination_ops::send_input(
+            &self.pty_manager,
+            &self.coordination_registry,
+            &tab_id,
+            &text,
+            request_done_marker,
+        ).await)
+```
+
+- [ ] **Step 10: 更新 `SendInputArgs.request_done_marker` 與 `send_input` 工具描述文字，誠實告知會阻塞**
+
+把 `src-tauri/src/mcp_server/tools.rs` 裡的：
+
+```rust
+    /// Optional: if true, and the agent inside the target tab cooperates,
+    /// wait_for_idle can return sooner than it otherwise would. Sends a
+    /// short follow-up message asking the agent to print a specific marker
+    /// when it's fully done. Not required — if the agent never prints it,
+    /// this has no effect and idle detection falls back to the terminal
+    /// bell exactly as if this were false. Defaults to false.
+    #[serde(default)]
+    pub request_done_marker: bool,
+```
+
+改成：
+
+```rust
+    /// Optional: if true, and the agent inside the target tab cooperates,
+    /// wait_for_idle can return sooner than it otherwise would. Once the
+    /// target signals (via a bell) that it has finished processing `text`,
+    /// sends a short follow-up message asking it to print a specific
+    /// marker when fully done. Not required — if the target never prints
+    /// it, this has no effect and idle detection falls back to the
+    /// terminal bell exactly as if this were false.
+    ///
+    /// Important: when true, this call blocks (up to 300 seconds) until the
+    /// target becomes idle from `text` before returning — it is NOT instant
+    /// like a plain send_input call. If the target never bells within that
+    /// window, the follow-up message is simply not sent (noted in this
+    /// call's own response) rather than erroring. Defaults to false.
+    #[serde(default)]
+    pub request_done_marker: bool,
+```
+
+把：
+
+```rust
+    #[tool(description = "Send text (as if typed, followed by Enter) to a tab previously created by spawn_tab. Cannot target a tab the user opened by hand. Disabled by default — must be enabled in Settings.")]
+    async fn send_input(
+```
+
+改成：
+
+```rust
+    #[tool(description = "Send text (as if typed, followed by Enter) to a tab previously created by spawn_tab. Cannot target a tab the user opened by hand. If request_done_marker is true, this call blocks (up to 300s) waiting for the target to finish processing the text before sending a completion-marker request — it is not instant in that case. Disabled by default — must be enabled in Settings.")]
+    async fn send_input(
+```
+
+- [ ] **Step 11: 執行測試確認通過**
+
+Run: `cd src-tauri && cargo build --lib`
+Expected: 編譯成功，無新警告
+
+Run: `cd src-tauri && cargo test --test mcp_tool_server`
+Expected: 全部通過，包含既有的 `send_input_accepts_request_done_marker_without_breaking_the_unknown_tab_rejection`
+
+Run: `cd src-tauri && cargo test --lib`
+Expected: 全部通過，沒有回歸
+
+- [ ] **Step 12: Commit**
+
+```bash
+git add src-tauri/src/mcp_server/coordination_ops.rs src-tauri/src/mcp_server/tools.rs
+git commit -m "fix(mcp): wait for target to idle before sending done-marker instruction"
+```
+
+- [ ] **Step 13: 重跑 Task 7 的自動化驗證**
+
+Run: `cd src-tauri && cargo test`
+Expected: 全部通過，沒有回歸
+
+Run: `cd src-tauri && cargo clippy --all-targets -- -D warnings 2>&1 | grep -E "coordination_ops\.rs|tools\.rs"`
+Expected: 沒有新增的警告（既有的 `tool_router`/`ptr_arg` 既有警告不算）
+
+Run: `npx tsc -b`（在專案根目錄）
+Expected: 無錯誤
+
+- [ ] **Step 14: 重新手動驗證**
+
+比照 Task 7 Step 4 的流程再走一次，這次額外確認：協調端送出的指示文字**真的被目標端處理**，目標端印出完成標記，`wait_for_idle` 回報 `signal: "marker"`。
+
 ---
 
 ## Self-Review 摘要（寫計畫時做過，記錄在此供執行者參考）
