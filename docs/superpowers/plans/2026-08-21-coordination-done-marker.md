@@ -776,6 +776,13 @@ pub(crate) async fn spawn_tab(
 
 - [ ] **Step 3: 改 `send_input`**
 
+**前置修正（複審階段發現並補上）**：`send_input` 的指示文字需要分別引用 `DONE_MARKER_PREFIX`/`DONE_MARKER_SUFFIX`（Task 1 定義在 `src-tauri/src/pty/session.rs`，目前是 `const`，模組私有）。先把這兩個常數的可見性從 `const` 改成 `pub const`（只改可見性，數值與位置都不變，不影響 Task 1 已核准的任何行為或測試）：
+
+```rust
+pub const DONE_MARKER_PREFIX: &str = "<<AITERM_DONE:";
+pub const DONE_MARKER_SUFFIX: &str = ">>";
+```
+
 把：
 
 ```rust
@@ -830,10 +837,24 @@ pub(crate) fn send_input(
     // precisely because raw-mode TUIs (Claude Code's own included) have no
     // guaranteed behavior for a bare LF byte, only for CR. See the design
     // doc's "指示文字" section.
+    //
+    // The instruction text below deliberately never writes the complete,
+    // contiguous marker string (prefix + tab_id + suffix back-to-back) —
+    // each piece is separated by other text. If it did, canonical-mode
+    // terminal echo alone (no cooperating agent needed) would write that
+    // same contiguous byte sequence right back into this session's output
+    // stream as a pure side effect of writing this instruction, and
+    // marker_count would increment immediately — a false "done" signal
+    // before the target has done anything. Verified live against a real
+    // PTY during implementation: the original (buggy) wording, which did
+    // embed the marker contiguously, triggered marker_count=1 from echo
+    // alone, with no agent involved.
     if request_done_marker {
         let instruction = format!(
-            "（可選：完成後請在新的一行印出 {}，讓協調端提早得知你已完成，不影響任何其他行為。）",
-            crate::pty::session::done_marker(tab_id)
+            "（可選：完成後請在新的一行印出一個完成標記，格式為三段直接相連、中間不留任何字元：前綴 {} ，接著是你的識別碼 {} ，最後接上 {} 。這能讓協調端提早得知你已完成，不影響任何其他行為。）",
+            crate::pty::session::DONE_MARKER_PREFIX,
+            tab_id,
+            crate::pty::session::DONE_MARKER_SUFFIX
         );
         pty_manager
             .write(tab_id, format!("{instruction}\r").as_bytes())
@@ -1027,11 +1048,13 @@ Expected: 全部通過，包含既有的 `send_input_rejects_a_tab_id_not_in_the
 
 - [ ] **Step 9: 寫新行為的失敗測試**
 
+**這步的第一個測試在複審階段被替換過**：原始版本斷言「回顯的輸出包含完整標記字串」，但那正是自我觸發那個 bug 的斷言方式（拿 bug 的症狀當正確行為在測）。換成同時驗證「指示文字確實送達（含 tab_id）」且「完整連續標記不會出現在回顯裡、`marker_count` 維持在 baseline」——這才是真正鎖住修正結果的測試。
+
 在 `mod tests` 區塊最後加入：
 
 ```rust
     #[tokio::test]
-    async fn send_input_with_request_done_marker_writes_a_second_message_with_the_instruction() {
+    async fn send_input_with_request_done_marker_sends_the_instruction_without_self_triggering() {
         let pty_manager = PtyManager::new();
         let registry = CoordinationRegistry::new();
         let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
@@ -1039,19 +1062,40 @@ Expected: 全部通過，包含既有的 `send_input_rejects_a_tab_id_not_in_the
 
         send_input(&pty_manager, &registry, &tab_id, "echo hi", true).unwrap();
 
+        // Wait for the echoed instruction to actually arrive (it mentions
+        // this tab's own id, proving the instruction was sent).
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        let expected_marker = crate::pty::session::done_marker(&tab_id);
         loop {
             let output = pty_manager.get_recent_output(&tab_id, RECENT_OUTPUT_BYTES).unwrap_or_default();
-            if output.contains(&expected_marker) {
+            if output.contains(&tab_id) {
                 break;
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
-                "expected the echoed input to contain the instruction with the done marker, got: {output}"
+                "expected the echoed input to mention the tab_id, got: {output}"
             );
             tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
         }
+
+        // But the full, contiguous marker must NEVER appear anywhere in what
+        // was echoed — if it did, the instruction itself would have
+        // self-triggered a false completion signal via terminal echo alone,
+        // with no agent involved. This is a regression test for a real bug
+        // found during review: the original wording embedded the complete
+        // contiguous marker in the instruction, and canonical-mode echo
+        // alone incremented marker_count to 1 against a plain shell that
+        // did nothing.
+        let output = pty_manager.get_recent_output(&tab_id, RECENT_OUTPUT_BYTES).unwrap_or_default();
+        let full_marker = crate::pty::session::done_marker(&tab_id);
+        assert!(
+            !output.contains(&full_marker),
+            "the instruction text must never contain the complete contiguous marker — got: {output}"
+        );
+        assert_eq!(
+            pty_manager.marker_count(&tab_id),
+            Some(0),
+            "writing the instruction alone must not increment marker_count — self-echo false positive"
+        );
     }
 
     #[tokio::test]
@@ -1073,7 +1117,7 @@ Expected: 全部通過，包含既有的 `send_input_rejects_a_tab_id_not_in_the
 - [ ] **Step 10: 執行測試確認通過**
 
 Run: `cd src-tauri && cargo test --lib mcp_server::coordination_ops::`
-Expected: 全部通過，包含新增的 `send_input_with_request_done_marker_writes_a_second_message_with_the_instruction`、`wait_for_idle_returns_early_via_marker_signal_without_any_bell`
+Expected: 全部通過，包含新增的 `send_input_with_request_done_marker_sends_the_instruction_without_self_triggering`、`wait_for_idle_returns_early_via_marker_signal_without_any_bell`
 
 - [ ] **Step 11: Commit**
 
@@ -1095,7 +1139,7 @@ git commit -m "feat(mcp): dual bell/marker idle signal in agent coordination too
 
 **重要限制**：`test_router_with`（見檔案第 23-52 行）永遠把 `app: None` 傳給 `router(...)`（第 47 行 `None,`），代表這個 HTTP 層級的測試檔案裡 `spawn_tab` 永遠會走「沒有 AppHandle」的錯誤分支——這正是既有測試 `spawn_tab_without_an_app_handle_returns_a_clear_error` 在驗證的事。所以這裡沒辦法真的呼叫 `spawn_tab` 拿到一個可用的 `tab_id` 再測 `send_input`。`CoordinationRegistry::record_baseline` 也是模組私有（非 `pub`），這個外部整合測試檔案本來就呼叫不到，不能像 `coordination_ops.rs` 自己的單元測試那樣繞過 `spawn_tab` 直接塞一筆假資料。
 
-因此這裡只驗證「新欄位能正確通過 MCP schema 反序列化，且不會破壞既有的 tab_id 檢查」——`send_input` 實際執行「兩次寫入」「baseline 更新」的行為已經在 Task 5 的 `coordination_ops.rs` 單元測試（`send_input_with_request_done_marker_writes_a_second_message_with_the_instruction`、`wait_for_idle_returns_early_via_marker_signal_without_any_bell`）裡驗證過了，不需要在這裡重複。
+因此這裡只驗證「新欄位能正確通過 MCP schema 反序列化，且不會破壞既有的 tab_id 檢查」——`send_input` 實際執行「兩次寫入」「baseline 更新」的行為已經在 Task 5 的 `coordination_ops.rs` 單元測試（`send_input_with_request_done_marker_sends_the_instruction_without_self_triggering`、`wait_for_idle_returns_early_via_marker_signal_without_any_bell`）裡驗證過了，不需要在這裡重複。
 
 在 `src-tauri/tests/mcp_tool_server.rs` 最後加入（沿用檔案既有的 `test_router_with`/`call_tool` 輔助函式）：
 
@@ -1242,3 +1286,4 @@ Expected: 無錯誤（本來就不該受影響，這步只是雙重確認沒有�
 - **Spec 涵蓋**：設計文件的每個「含」項目都對應到 Task 1-6 的具體步驟；「不含」項目（新 MCP 工具、改變 bell 行為、`spawn()`/`spawn_with_id()` 重構、分頁清理）都沒有出現在任何 Task 裡。
 - **兩處在寫計畫過程中修正的設計缺口**（已回頭更新 spec 並各自 commit）：`request_done_marker` 從「`spawn_tab`+`send_input`都加」收斂成「只加在 `send_input`」（`spawn_tab` 的 `command` 沒有可回報完成的任務，且會有寫入競態風險）；指示文字從「用 `\n` 接成一次寫入」改成「兩次獨立 `\r` 結尾的寫入」（避免對 raw-mode TUI 送出未經驗證的 LF 位元組，這個檔案自己既有的 `send_input_terminates_the_line_with_cr_not_lf` 測試就是在防同一類問題）。
 - **型別一致性**：`CoordinationRegistry::record_baseline`/`baseline` 的簽名變化（Task 4）跟 Task 5 所有呼叫端（`spawn_tab`/`send_input`/`status_for`）用的都是同一組 `(bell, marker)` 語意；`done_marker`/`contains_marker`/`marker_tail_after`（Task 1）在 Task 2 的讀取迴圈、Task 5 的 `send_input`、Task 6 的整合測試裡都是同一個函式簽名，沒有重新定義過。
+- **執行階段發現並修正的設計缺陷（非寫計畫時發現，第一輪 code-quality 複審後才浮現）**：Task 5 的指示文字第一版直接把完整、連續的標記字串寫進指示文字本身。真實 PTY 上驗證過：canonical mode 的終端機本地 echo 會把寫進去的位元組原樣送回輸出流，讀取迴圈掃到的正是同一條資料流——只要指示文字包含完整連續標記，光是送出指示、什麼都還沒發生，`marker_count` 就會被觸發，跟目標端有沒有真的完成任何事無關。這不是實作誤差，是設計文件「指示文字」段落本身的結構性缺陷，已回頭修正 spec（拆成三段描述，中間插入其他文字，指示文字本身不會連續出現完整標記）並更新這份計畫的 Task 5 Step 3／Step 9（含新增 `DONE_MARKER_PREFIX`/`DONE_MARKER_SUFFIX` 可見性改成 `pub`、原本斷言「回顯含完整標記」的測試換成「回顯含 tab_id 但不含完整連續標記、且 `marker_count` 維持 0」）。
