@@ -211,3 +211,22 @@ async fn spawn_tab_without_an_app_handle_returns_a_clear_error() {
     let text = call_tool(app, "spawn_tab", serde_json::json!({})).await;
     assert!(text.contains("requires a running AITerm app instance"), "{text}");
 }
+
+/// `send_input`'s new `request_done_marker` field must deserialize through
+/// the MCP schema without disturbing the existing unknown-`tab_id`
+/// rejection. The full "two writes + baseline update" behavior of
+/// `request_done_marker` is covered by `coordination_ops.rs`'s own unit
+/// tests — this test file can't reach a real spawned tab (see module docs
+/// above), so it only proves the new argument doesn't break request
+/// parsing or the tab_id check.
+#[tokio::test]
+async fn send_input_accepts_request_done_marker_without_breaking_the_unknown_tab_rejection() {
+    let (app, _pool) = test_router_with(true).await;
+    let text = call_tool(
+        app,
+        "send_input",
+        serde_json::json!({"tab_id": "nonexistent-tab-id", "text": "hi", "request_done_marker": true}),
+    )
+    .await;
+    assert!(text.contains("was not created by spawn_tab"), "{text}");
+}

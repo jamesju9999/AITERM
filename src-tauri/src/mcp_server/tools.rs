@@ -108,6 +108,14 @@ pub struct SendInputArgs {
     pub tab_id: String,
     /// Text to send, as if typed into the tab followed by Enter.
     pub text: String,
+    /// Optional: if true, and the agent inside the target tab cooperates,
+    /// wait_for_idle can return sooner than it otherwise would. Sends a
+    /// short follow-up message asking the agent to print a specific marker
+    /// when it's fully done. Not required — if the agent never prints it,
+    /// this has no effect and idle detection falls back to the terminal
+    /// bell exactly as if this were false. Defaults to false.
+    #[serde(default)]
+    pub request_done_marker: bool,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -253,15 +261,21 @@ impl AiTermTools {
     #[tool(description = "Send text (as if typed, followed by Enter) to a tab previously created by spawn_tab. Cannot target a tab the user opened by hand. Disabled by default — must be enabled in Settings.")]
     async fn send_input(
         &self,
-        Parameters(SendInputArgs { tab_id, text }): Parameters<SendInputArgs>,
+        Parameters(SendInputArgs { tab_id, text, request_done_marker }): Parameters<SendInputArgs>,
     ) -> Result<CallToolResult, McpError> {
         if let Err(e) = self.require_coordination_enabled() {
             return to_call_result(Err(e));
         }
-        to_call_result(coordination_ops::send_input(&self.pty_manager, &self.coordination_registry, &tab_id, &text, false))
+        to_call_result(coordination_ops::send_input(
+            &self.pty_manager,
+            &self.coordination_registry,
+            &tab_id,
+            &text,
+            request_done_marker,
+        ))
     }
 
-    #[tool(description = "Check whether a spawn_tab-created tab is idle (a terminal bell was observed since the last send_input, meaning the agent inside replied and is waiting for more input) and get its recent output. Disabled by default — must be enabled in Settings.")]
+    #[tool(description = "Check whether a spawn_tab-created tab is idle — either a terminal bell was observed since the last send_input (meaning the agent inside replied and is waiting for more input), or, if send_input was called with request_done_marker: true, the agent printed the requested completion marker — and get its recent output. Disabled by default — must be enabled in Settings.")]
     async fn get_tab_status(
         &self,
         Parameters(TabIdArgs { tab_id }): Parameters<TabIdArgs>,
