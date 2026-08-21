@@ -1787,9 +1787,20 @@ Expected: 沒有新增的警告（既有的 `tool_router`/`ptr_arg` 既有警告
 Run: `npx tsc -b`（在專案根目錄）
 Expected: 無錯誤
 
-- [ ] **Step 14: 重新手動驗證**
+- [x] **Step 14: 重新手動驗證**——**完成，已通過**
 
-比照 Task 7 Step 4 的流程再走一次，這次額外確認：協調端送出的指示文字**真的被目標端處理**，目標端印出完成標記，`wait_for_idle` 回報 `signal: "marker"`。
+比照 Task 7 Step 4 的流程再走一次，這次額外確認：協調端送出的指示文字真的被目標端處理，目標端印出完成標記，`wait_for_idle` 回報 `signal: "marker"`。
+
+**實測過程中又發現並修正一個問題（不算在原本 Task 8 範圍內，記錄在此供完整追溯）**：
+
+1. **`send_input(request_done_marker: true)` 空等問題**：用真實 `claude` CLI 實測，完成一輪任務（2 秒內回完話）後**從未觀察到任何 bell**（30 秒觀察全程 `bell_count = 0`）。Task 8 當時內部等待沿用了 `wait_for_idle` 的 `DEFAULT_WAIT_SECONDS = 300`，這代表只要目標端的 bell 訊號不可靠，`send_input` 就會真的空等到 300 秒才回傳，完全對應使用者回報的「建立 Claude 很快、但送出請求後變成空等」。修正：改用獨立、短很多的 `DONE_MARKER_WAIT_SECONDS = 15`（commit `c99999e`，設計文件同步更新於 `25ad40c`）。
+2. **信任提示卡死問題**：進一步實測發現真正卡住協調端的根因——`spawn_tab` 開的分頁如果沒有傳 `cwd`（或傳了 `claude` 沒見過的目錄），`claude` 幾乎每次啟動都會停在「是否信任這個資料夾」的提示前，永遠不會自己過去，`wait_for_idle` 對這個畫面永遠等不到 bell。協調端（尤其是能力較弱的本地模型）容易誤判成「還在初始化」而不斷空等，實測卡了 3 分多鐘。這不是程式碼 bug，是協調端缺乏行為指引——修正方式是新增 `.claude/skills/agent-coordination/SKILL.md`（commit `e6d5592`），教協調端（a）一定要傳自己的 `cwd` 給 `spawn_tab`，（b）辨認 `recent_output` 裡的信任提示字樣並自動送出 `1` 確認過關（commit `437dc82`）。
+
+**最終驗收結果**：套用新版 skill 後，協調端連續完成兩輪「送任務→拿到真實回答」的完整迴圈都成功：
+- 第一輪（含信任提示 + `claude` 冷啟動）：`Sautéed for 3m 13s`，協調端正確拿到子分頁回覆的「測試」
+- 第二輪（同一個已熱機的分頁）：`Cooked for 1m 7s`，協調端正確拿到「第二次測試」——耗時明顯縮短，證實拖慢速度的是一次性冷啟動成本，不是協調機制本身的問題
+
+**這整個功能（Task 1-8 + 上述兩項驗收階段修正）到此正式完成、通過端到端驗證。**
 
 ---
 
