@@ -38,6 +38,45 @@ fn home_dir() -> Option<PathBuf> {
         .filter(|p| p.is_dir())
 }
 
+/// Prefix/suffix of the optional completion marker a cooperative agent can
+/// print to let the MCP coordination tools' `wait_for_idle` return faster
+/// than the mandatory bell fallback. See
+/// `docs/superpowers/specs/2026-08-21-coordination-done-marker-design.md`.
+const DONE_MARKER_PREFIX: &str = "<<AITERM_DONE:";
+const DONE_MARKER_SUFFIX: &str = ">>";
+
+/// Builds this session's own completion marker text. `tab_id` is always a
+/// UUID (see `Uuid::new_v4()` at the call site), so the marker is a fixed
+/// length in practice, but this function itself makes no assumption about
+/// that — any `tab_id` string works.
+pub fn done_marker(tab_id: &str) -> String {
+    format!("{DONE_MARKER_PREFIX}{tab_id}{DONE_MARKER_SUFFIX}")
+}
+
+/// Scans `tail` immediately followed by `chunk` for `marker`. `tail` should
+/// be the previous chunk's own trailing `marker.len() - 1` bytes (or empty
+/// for the very first chunk), so a marker split across a chunk boundary is
+/// still found. Only ever looks at these newly-arrived bytes — never
+/// rescans older history — so a stale marker from a previous round can
+/// never re-trigger a later scan.
+fn contains_marker(tail: &[u8], chunk: &[u8], marker: &[u8]) -> bool {
+    if marker.is_empty() {
+        return false;
+    }
+    let mut combined = Vec::with_capacity(tail.len() + chunk.len());
+    combined.extend_from_slice(tail);
+    combined.extend_from_slice(chunk);
+    combined.windows(marker.len()).any(|w| w == marker)
+}
+
+/// Computes the new tail to carry into the next `contains_marker` call: the
+/// last `marker_len - 1` bytes of `chunk` (or all of `chunk` if it's
+/// shorter than that window).
+fn marker_tail_after(chunk: &[u8], marker_len: usize) -> Vec<u8> {
+    let keep = marker_len.saturating_sub(1).min(chunk.len());
+    chunk[chunk.len() - keep..].to_vec()
+}
+
 pub struct PtySession {
     pub id: String,
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -1155,6 +1194,54 @@ mod tests {
 
         let _ = rx.try_recv(); // drain, avoid unused warning
         drop(session);
+    }
+
+    #[test]
+    fn done_marker_embeds_the_tab_id_between_fixed_delimiters() {
+        assert_eq!(done_marker("abc-123"), "<<AITERM_DONE:abc-123>>");
+    }
+
+    #[test]
+    fn contains_marker_true_when_marker_is_wholly_within_one_chunk() {
+        let marker = b"<<AITERM_DONE:abc>>";
+        assert!(contains_marker(b"", b"hello <<AITERM_DONE:abc>> world", marker));
+    }
+
+    #[test]
+    fn contains_marker_false_when_marker_absent() {
+        let marker = b"<<AITERM_DONE:abc>>";
+        assert!(!contains_marker(b"", b"nothing to see here", marker));
+    }
+
+    #[test]
+    fn contains_marker_finds_a_marker_split_across_the_tail_and_the_new_chunk() {
+        // Regression coverage for the cross-chunk correctness gap the design
+        // doc flags: bell detection is a single byte and can never straddle
+        // a chunk boundary, but this marker is 20 bytes long here (52 in
+        // production with a real UUID) and PTY reads are arbitrary-sized.
+        let marker = b"<<AITERM_DONE:abc>>";
+        let (first, second) = marker.split_at(marker.len() / 2);
+
+        // Round 1: only the first half has arrived — not present yet.
+        assert!(!contains_marker(b"", first, marker));
+        let tail = marker_tail_after(first, marker.len());
+
+        // Round 2: second half arrives — tail + this chunk together contain it.
+        assert!(contains_marker(&tail, second, marker));
+    }
+
+    #[test]
+    fn marker_tail_after_keeps_only_the_last_marker_len_minus_one_bytes() {
+        let marker_len = 5;
+        let chunk = b"abcdefgh";
+        assert_eq!(marker_tail_after(chunk, marker_len), b"efgh".to_vec());
+    }
+
+    #[test]
+    fn marker_tail_after_keeps_the_whole_chunk_when_shorter_than_the_window() {
+        let marker_len = 20;
+        let chunk = b"ab";
+        assert_eq!(marker_tail_after(chunk, marker_len), b"ab".to_vec());
     }
 
     #[tokio::test]
