@@ -79,11 +79,24 @@
 
 **只加在 `send_input`，不加在 `spawn_tab`：** 寫計畫時發現的修正。`spawn_tab` 的 `command` 語意上是「啟動一個程式」（例如打開 `claude` REPL），不是「交辦一項任務」——沒有一個具體任務讓標記去回報完成，加了也不知道要標記誰的完成。更關鍵的是正確性風險：如果把指示文字接在 `command` 後面一起寫入，等於在同一次 PTY 寫入裡塞進第二行文字，會在剛啟動的程式（例如 `claude` CLI）真正就緒、能讀取輸入之前就搶著送出去——這正是 `spawn_tab` 目前「寫入前不等 shell 就緒」這個既有行為底下的既有風險類別（見 2026-08-20 設計文件與後續冷啟動延遲討論），沒必要為了這個選用功能多開一個新的風險面。真正有意義的位置是 `send_input`：那才是協調端實際把任務內容送給一個「已經在跑、預期會讀取輸入」的 agent 的地方。
 
+### 第二段寫入被目標端忽略（手動驗證階段發現，回頭修正設計）
+
+`send_input` 目前把「任務文字」跟「指示文字」當成兩次幾乎零延遲、背靠背送出的獨立 `\r` 寫入。這個假設在真實 Claude Code CLI 上實測失敗：任務文字送出後，目標端要花實際時間處理（本次實測「Cogitated for 6s」），在這段忙碌期間，Claude Code 的 TUI 允許把接下來打的字元插進輸入框（所以指示文字的內容確實原樣出現在畫面上），但那個緊跟著送達的 `\r` 沒有被當成「送出」——它就這樣被吞掉，指示文字停留在輸入框裡，永遠不會被目標端處理。跟目標端本身的忙碌狀態賽跑，不是機率性的邊際案例，是這個两次背靠背寫入設計本身結構性會踩到的問題。
+
+**修法**：`send_input` 內部在寫完第一段（任務文字）之後，若 `request_done_marker: true`，先輪詢等待目標端「因為這次任務文字而觸發的新 bell」（沿用 `wait_for_idle` 現有的 250ms 輪詢間隔跟判斷邏輯，只是這次輪詢發生在 `send_input` 函式內部，等到才送出第二段），確認目標端真的處理完第一段、回到能接受新輸入的狀態，才送出指示文字。逾時（沿用 `wait_for_idle` 的 `DEFAULT_WAIT_SECONDS = 300`）就放棄送出指示文字，把這次呼叫當成單純「只送了任務文字，沒有請求加速訊號」處理——不報錯，只是回傳字串裡誠實註明沒送出指示文字的原因。
+
+**這是必要、不是選配的行為改變**：
+- `send_input` 的函式簽名要從同步 `fn` 改成 `async fn`（內部輪詢要用 `tokio::time::sleep` 而不是同步 `std::thread::sleep`，否則會佔住整個 Tokio 執行緒）；`tools.rs` 呼叫端要補上 `.await`
+- 輪詢邏輯抽成一個獨立、可注入逾時時間的私有 async 函式（例如 `wait_for_new_bell(pty_manager, tab_id, baseline, timeout) -> bool`），讓正式路徑用 `DEFAULT_WAIT_SECONDS`、測試路徑可以直接呼叫這個函式帶入極短逾時（例如數百毫秒），驗證「目標端一直不 bell，逾時後放棄送出指示文字」這條路徑時不需要真的等 300 秒
+- `request_done_marker: false` 時完全不受影響——不進入這段等待邏輯，維持原本零延遲的行為
+
+**這代表 `send_input(request_done_marker: true)` 不再是瞬間回傳的呼叫**：它現在的耗時等於「目標端處理完這次任務文字所需的時間」，跟另外呼叫一次 `wait_for_idle` 差不多量級——這是刻意的取捨，換來協調端一次呼叫就能正確完成，不需要自己分兩步管理「送任務→等待→送指示」。`SendInputArgs.request_done_marker` 的工具說明文字要更新，誠實告知呼叫端這件事（可能等到最多 300 秒），避免呼叫端誤以為這跟 `request_done_marker: false` 一樣是瞬間回傳。
+
 ### Baseline／訊號比較的正確性
 
 `send_input` 現有的順序是**先寫入、寫完立刻讀 `bell_count()` 當新 baseline**（不是寫入前）——註解說明理由是「這個時間點量到的數字，實務上不可能已經包含對方的回覆」，寫入本身跟讀計數器都是本地、近乎瞬間的操作，對方不可能在這麼短的間隔內就已經處理完並回覆。這次比照同一個順序，`marker_count` 也在寫入之後、回傳之前量測一次。
 
-當 `request_done_marker: true` 時（見下方「指示文字」），會有**兩次**寫入（任務文字一次、指示文字一次，各自獨立 `\r` 結尾）——baseline 的量測要放在**兩次寫入都完成之後**，只量一次，語意是「這整次 `send_input` 呼叫自己造成的輸出都算數，在那之前的都不算」。`spawn_tab` 同理，把 `marker_count` 的初始 baseline 記成 `0`。
+當 `request_done_marker: true` 時（見上方「第二段寫入被目標端忽略」），會有**兩次**寫入（任務文字一次、指示文字一次，各自獨立 `\r` 結尾），中間夾了一段等待目標端因任務文字而觸發新 bell 的輪詢——baseline 的量測要放在**兩次寫入都完成之後**（不管中間那段等待是等到 bell 才送出第二段、還是逾時放棄送第二段，都要走到這裡才量測），只量一次，語意是「這整次 `send_input` 呼叫自己造成的輸出都算數，在那之前的都不算」。`spawn_tab` 同理，把 `marker_count` 的初始 baseline 記成 `0`。
 
 ### `TabStatus`/`WaitResult` 的 `signal` 欄位
 
@@ -94,10 +107,14 @@
 - 標記不是強制訊號，跟 bell 一樣——不聽話或非 MCP-aware 的 worker（例如純 shell 腳本、或沒被告知要印標記的 agent）就是純粹落回等 bell，功能上等同沒開這個選項，不會更差也不會出錯
 - `spawn()`/`spawn_with_id()` 兩處重複邏輯這次會同步複製而非合併，維持既有程式碼重複的現狀
 - 理論上使用者自己手動在分頁裡打出一模一樣格式（含正確 tab_id）的字串，也會被誤判成完成訊號——機率因為 UUID 隨機性趨近於零，但非絕對零，這跟 bell 本身「重用既有通知管道、非絕對可靠」的既有共識一致，v1 不特別處理
+- `request_done_marker: true` 時 `send_input` 不再瞬間回傳——它會等到目標端因任務文字而觸發新 bell（最長等 `DEFAULT_WAIT_SECONDS = 300` 秒）才送出指示文字，逾時就放棄送出指示文字。目標端如果從不觸發 bell（例如 `preferredNotifChannel` 沒設成 `terminal_bell`），這次呼叫就要等到滿 300 秒才會回來——這是刻意的取捨，換來協調端不用自己分兩步管理「送任務→等待→送指示」，工具說明文字必須誠實告知這件事
 
 ## 測試
 
 - Rust 單元測試：比照現有 bell 測試——送標記位元組序列到讀取迴圈，確認 `marker_count()` 正確累加；確認一般輸出（含不含 tab_id 的相似文字）不會誤觸發，除非格式完全吻合；**專門測試標記被切在兩個 chunk 交界處的情境**（例如故意分兩次 `write` 各送標記字串的前半段與後半段），確認 `marker_tail` 機制仍能正確累加
 - `coordination_ops.rs` 單元測試：`request_done_marker: true` 時 `send_input` 寫入的文字有正確附加指示文字且含正確 tab_id；`status_for`/`get_tab_status`/`wait_for_idle` 在只有 marker 命中（bell 未命中）時仍正確回報 `idle: true` 且 `signal: "marker"`；`request_done_marker: false`（預設）時寫入文字不變、行為與既有測試完全一致；**自我觸發回歸測試**——`send_input(..., request_done_marker: true)` 對一個只會原樣 echo（不主動印出標記）的目標送出後，短時間內 `marker_count`／`idle` 不能變成 true（這是實作階段發現且修正過的真實 bug，必須有測試鎖住，不能靠人工複查）
+- **第二段等待邏輯回歸測試**（手動驗證階段發現且修正過的真實 bug，必須有自動化測試鎖住，不能只靠人工複查）：
+  - 對一個「先模擬觸發一次 bell（代表目標端因任務文字而回到閒置），才能觀察到第二段指示文字被送出」的情境，確認指示文字真的被送達——這是既有的 `send_input_with_request_done_marker_sends_the_instruction_without_self_triggering` 測試要補上的步驟：手動 `write` 一個 bell 位元組序列到 PTY，模擬「目標端剛處理完任務文字」，`send_input` 的內部等待才會解除去送第二段
+  - 對一個**從不觸發 bell** 的目標（例如單純的空 shell），確認 `send_input(..., request_done_marker: true)` 逾時後不會送出指示文字，且函式本身正常回傳（不是掛住或報錯）——這個測試必須透過內部可測試的輪詢函式（見「第二段寫入被目標端忽略」段落，帶入一個極短的逾時值），不能真的等 `DEFAULT_WAIT_SECONDS = 300` 秒
 - 整合測試：比照既有手法，跑一次 `spawn_tab` → `send_input(request_done_marker: true)`（送一個會印出標記的假指令）→ `wait_for_idle`，確認比純等 bell 提早返回且 `signal: "marker"`
-- 手動驗證：真的對一個跑 Claude Code 的分頁開啟這個選項，確認實際多輪協調流程中，加速訊號確實比 bell 更快浮現 idle，且沒開這個選項的既有流程完全不受影響
+- 手動驗證：真的對一個跑 Claude Code 的分頁開啟這個選項，確認實際多輪協調流程中，加速訊號確實比 bell 更快浮現 idle，且沒開這個選項的既有流程完全不受影響——**這一步實測時就是抓到「第二段寫入被目標端忽略」這個 bug 的地方**：修正前，指示文字會停留在目標端輸入框裡從未被送出；修正後要重新走一次這個手動驗證，確認指示文字真的被目標端處理、印出完成標記
