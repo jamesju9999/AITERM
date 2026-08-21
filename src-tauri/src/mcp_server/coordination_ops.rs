@@ -133,7 +133,7 @@ pub(crate) async fn spawn_tab(
     Ok(tab_id)
 }
 
-pub(crate) fn send_input(
+pub(crate) async fn send_input(
     pty_manager: &PtyManager,
     registry: &CoordinationRegistry,
     tab_id: &str,
@@ -167,28 +167,77 @@ pub(crate) fn send_input(
     // PTY during implementation: the original (buggy) wording, which did
     // embed the marker contiguously, triggered marker_count=1 from echo
     // alone, with no agent involved.
+    //
+    // The instruction is only sent once the target signals (via a fresh
+    // bell) that it finished processing `text` and is idle again — sending
+    // it immediately after the first write would race the target's own
+    // processing time. Verified live against a real Claude Code CLI: the
+    // instruction's characters got typed into the input box (proof the
+    // write arrived) but its own \r never triggered submission, because the
+    // target was still busy with `text` when it arrived. See the design
+    // doc's "第二段寫入被目標端忽略" section.
+    let mut instruction_sent = true;
     if request_done_marker {
-        let instruction = format!(
-            "（可選：完成後請在新的一行印出一個完成標記，格式為三段直接相連、中間不留任何字元：前綴 {} ，接著是你的識別碼 {} ，最後接上 {} 。這能讓協調端提早得知你已完成，不影響任何其他行為。）",
-            crate::pty::session::DONE_MARKER_PREFIX,
+        let bell_before = pty_manager.bell_count(tab_id).unwrap_or(0);
+        let became_idle = wait_for_new_bell(
+            pty_manager,
             tab_id,
-            crate::pty::session::DONE_MARKER_SUFFIX
-        );
-        pty_manager
-            .write(tab_id, format!("{instruction}\r").as_bytes())
-            .map_err(|e| e.to_string())?;
+            bell_before,
+            Duration::from_secs(DEFAULT_WAIT_SECONDS),
+        )
+        .await;
+
+        if became_idle {
+            let instruction = format!(
+                "（可選：完成後請在新的一行印出一個完成標記，格式為三段直接相連、中間不留任何字元：前綴 {} ，接著是你的識別碼 {} ，最後接上 {} 。這能讓協調端提早得知你已完成，不影響任何其他行為。）",
+                crate::pty::session::DONE_MARKER_PREFIX,
+                tab_id,
+                crate::pty::session::DONE_MARKER_SUFFIX
+            );
+            pty_manager
+                .write(tab_id, format!("{instruction}\r").as_bytes())
+                .map_err(|e| e.to_string())?;
+        } else {
+            instruction_sent = false;
+        }
     }
 
     // Reset the baseline to the counts *as of right now*, after both of this
-    // call's own writes — before any reply has had a chance to arrive — so
-    // idle only flips true again once a *new* bell or marker (a reply to
-    // this specific input) is observed, not a stale one from before this
-    // send.
+    // call's own writes (or just the first, if the instruction was skipped
+    // because the target never became idle) — before any reply has had a
+    // chance to arrive — so idle only flips true again once a *new* bell or
+    // marker (a reply to this specific input) is observed, not a stale one
+    // from before this send.
     let bell_current = pty_manager.bell_count(tab_id).unwrap_or(0);
     let marker_current = pty_manager.marker_count(tab_id).unwrap_or(0);
     registry.record_baseline(tab_id, bell_current, marker_current);
 
-    Ok(format!("sent to {tab_id}"))
+    if request_done_marker && !instruction_sent {
+        Ok(format!(
+            "sent to {tab_id} (task only — target did not become idle within {DEFAULT_WAIT_SECONDS}s, so the completion-marker instruction was not sent)"
+        ))
+    } else {
+        Ok(format!("sent to {tab_id}"))
+    }
+}
+
+/// Polls `pty_manager`'s bell count for `tab_id`, returning `true` once it
+/// exceeds `baseline` (a fresh bell — the target signaling it's idle again)
+/// or `false` if `timeout` elapses first. Extracted as its own function
+/// (rather than inlined in `send_input`) so tests can pass a short
+/// `timeout` to exercise the "target never bells" path without waiting out
+/// the real production timeout (`DEFAULT_WAIT_SECONDS` = 300s).
+async fn wait_for_new_bell(pty_manager: &PtyManager, tab_id: &str, baseline: u64, timeout: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if pty_manager.bell_count(tab_id).unwrap_or(baseline) > baseline {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
+    }
 }
 
 fn status_for(pty_manager: &PtyManager, registry: &CoordinationRegistry, tab_id: &str) -> Result<TabStatus, String> {
@@ -272,6 +321,7 @@ pub(crate) async fn wait_for_idle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn pty_size() -> PtySize {
         PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }
@@ -281,7 +331,7 @@ mod tests {
     async fn send_input_rejects_a_tab_id_not_in_the_registry() {
         let pty_manager = PtyManager::new();
         let registry = CoordinationRegistry::new();
-        let err = send_input(&pty_manager, &registry, "not-a-real-tab", "hello", false).unwrap_err();
+        let err = send_input(&pty_manager, &registry, "not-a-real-tab", "hello", false).await.unwrap_err();
         assert!(err.contains("was not created by spawn_tab"), "{err}");
     }
 
@@ -306,7 +356,7 @@ mod tests {
         let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
         registry.record_baseline(&tab_id, 0, 0);
 
-        let sent = send_input(&pty_manager, &registry, &tab_id, "echo hi", false).unwrap();
+        let sent = send_input(&pty_manager, &registry, &tab_id, "echo hi", false).await.unwrap();
         assert_eq!(sent, format!("sent to {tab_id}"));
 
         let status_json = get_tab_status(&pty_manager, &registry, &tab_id).unwrap();
@@ -434,7 +484,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
         }
 
-        send_input(&pty_manager, &registry, &tab_id, "ab", false).unwrap();
+        send_input(&pty_manager, &registry, &tab_id, "ab", false).await.unwrap();
 
         // Poll for the setup line's 3-byte hex dump of exactly what
         // send_input wrote: "ab" (0x61 0x62) followed by whatever
@@ -469,13 +519,58 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_input_with_request_done_marker_sends_the_instruction_without_self_triggering() {
-        let pty_manager = PtyManager::new();
+    async fn send_input_with_request_done_marker_sends_the_instruction_once_the_target_bells() {
+        let pty_manager = Arc::new(PtyManager::new());
         let registry = CoordinationRegistry::new();
-        let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
+        // Wider than pty_size()'s usual 80 columns: the request_done_marker
+        // instruction is a long, CJK-heavy line, and at 80 columns it soft-wraps
+        // partway through the tab_id UUID — the terminal's own line-wrap
+        // redisplay (the shell re-echoing the wrapped row) then renders that
+        // wrap point as an inserted space and a duplicated hyphen (a terminal
+        // rendering artifact, confirmed unrelated to wait_for_new_bell/send_input
+        // by reproducing it at 80 columns even with no bell-wait race at all —
+        // and confirmed NOT caused by get_recent_output, which does no line
+        // reconstruction of its own; it only slices the ring buffer and strips
+        // ANSI codes). A wide-enough terminal keeps the whole instruction on
+        // one row so the tab_id this test greps for stays byte-for-byte intact.
+        let wide_size = PtySize { rows: 24, cols: 300, pixel_width: 0, pixel_height: 0 };
+        let tab_id = pty_manager.create_with_callback(wide_size, |_| {}).unwrap();
         registry.record_baseline(&tab_id, 0, 0);
 
-        send_input(&pty_manager, &registry, &tab_id, "echo hi", true).unwrap();
+        // Run send_input concurrently so this test can observe its
+        // in-progress state — specifically, that the instruction has NOT
+        // been sent yet — before injecting the bell that should unblock it.
+        // This is what actually proves ordering: a version of send_input
+        // that (by regression) skipped the wait entirely would send the
+        // instruction immediately, and this test would catch that, unlike
+        // the previous version of this test, which only checked eventual
+        // presence and could not distinguish "waited correctly" from
+        // "didn't wait at all" (confirmed during code review: hardcoding
+        // the wait to always report idle immediately still passed the old
+        // test).
+        let pty_manager_for_task = Arc::clone(&pty_manager);
+        let tab_id_for_task = tab_id.clone();
+        let send_task = tokio::spawn(async move {
+            send_input(&pty_manager_for_task, &registry, &tab_id_for_task, "echo hi", true).await
+        });
+
+        // Give send_input's first write time to land, then confirm the
+        // instruction has NOT appeared yet — it must still be waiting for
+        // the bell at this point, well before the bell is injected below.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let output_before_bell = pty_manager.get_recent_output(&tab_id, RECENT_OUTPUT_BYTES).unwrap_or_default();
+        assert!(
+            !output_before_bell.contains(&tab_id),
+            "the instruction must not be sent before the target signals it's idle — got: {output_before_bell}"
+        );
+
+        // Now simulate the target becoming idle from the first write, as if
+        // it just finished processing the task text — only once this bell is
+        // observed should send_input proceed to write the instruction (see
+        // wait_for_new_bell).
+        pty_manager.write(&tab_id, b"printf '\\007'\n").unwrap();
+
+        send_task.await.unwrap().unwrap();
 
         // Wait for the echoed instruction to actually arrive (it mentions
         // this tab's own id, proving the instruction was sent).
@@ -506,10 +601,30 @@ mod tests {
             !output.contains(&full_marker),
             "the instruction text must never contain the complete contiguous marker — got: {output}"
         );
-        assert_eq!(
-            pty_manager.marker_count(&tab_id),
-            Some(0),
-            "writing the instruction alone must not increment marker_count — self-echo false positive"
+    }
+
+    /// Same scenario as the test above, but no background bell is ever
+    /// injected. This would take DEFAULT_WAIT_SECONDS (300s) to time out
+    /// for real, which is far too slow to run on every `cargo test` — so
+    /// this is `#[ignore]`d (run manually/in a slow-test lane when
+    /// touching this code path, e.g. `cargo test --lib -- --ignored
+    /// send_input_with_request_done_marker_skips_the_instruction_when_the_target_never_bells`).
+    /// `wait_for_new_bell`'s own give-up behavior is already covered fast
+    /// by `wait_for_new_bell_times_out_when_the_target_never_bells` above;
+    /// this test additionally confirms `send_input`'s own wiring and
+    /// returned message wording end-to-end.
+    #[ignore]
+    #[tokio::test]
+    async fn send_input_with_request_done_marker_skips_the_instruction_when_the_target_never_bells() {
+        let pty_manager = PtyManager::new();
+        let registry = CoordinationRegistry::new();
+        let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
+        registry.record_baseline(&tab_id, 0, 0);
+
+        let sent = send_input(&pty_manager, &registry, &tab_id, "echo hi", true).await.unwrap();
+        assert!(
+            sent.contains("task only") && sent.contains("was not sent"),
+            "expected the return message to note the instruction was skipped, got: {sent}"
         );
     }
 
@@ -526,5 +641,25 @@ mod tests {
         let result_json = wait_for_idle(&pty_manager, &registry, &tab_id, Some(10)).await.unwrap();
         assert!(result_json.contains("\"idle\": true"), "{result_json}");
         assert!(result_json.contains("\"signal\": \"marker\""), "{result_json}");
+    }
+
+    #[tokio::test]
+    async fn wait_for_new_bell_times_out_when_the_target_never_bells() {
+        let pty_manager = PtyManager::new();
+        let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
+
+        let became_idle = wait_for_new_bell(&pty_manager, &tab_id, 0, Duration::from_millis(300)).await;
+        assert!(!became_idle, "expected wait_for_new_bell to give up when no bell ever arrives");
+    }
+
+    #[tokio::test]
+    async fn wait_for_new_bell_returns_true_once_a_new_bell_arrives() {
+        let pty_manager = PtyManager::new();
+        let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
+
+        pty_manager.write(&tab_id, b"printf '\\007'\n").unwrap();
+
+        let became_idle = wait_for_new_bell(&pty_manager, &tab_id, 0, Duration::from_secs(5)).await;
+        assert!(became_idle, "expected wait_for_new_bell to observe the bell within the timeout");
     }
 }

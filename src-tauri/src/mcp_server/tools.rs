@@ -109,11 +109,18 @@ pub struct SendInputArgs {
     /// Text to send, as if typed into the tab followed by Enter.
     pub text: String,
     /// Optional: if true, and the agent inside the target tab cooperates,
-    /// wait_for_idle can return sooner than it otherwise would. Sends a
-    /// short follow-up message asking the agent to print a specific marker
-    /// when it's fully done. Not required — if the agent never prints it,
-    /// this has no effect and idle detection falls back to the terminal
-    /// bell exactly as if this were false. Defaults to false.
+    /// wait_for_idle can return sooner than it otherwise would. Once the
+    /// target signals (via a bell) that it has finished processing `text`,
+    /// sends a short follow-up message asking it to print a specific
+    /// marker when fully done. Not required — if the target never prints
+    /// it, this has no effect and idle detection falls back to the
+    /// terminal bell exactly as if this were false.
+    ///
+    /// Important: when true, this call blocks (up to 300 seconds) until the
+    /// target becomes idle from `text` before returning — it is NOT instant
+    /// like a plain send_input call. If the target never bells within that
+    /// window, the follow-up message is simply not sent (noted in this
+    /// call's own response) rather than erroring. Defaults to false.
     #[serde(default)]
     pub request_done_marker: bool,
 }
@@ -258,7 +265,7 @@ impl AiTermTools {
         to_call_result(coordination_ops::spawn_tab(app, &self.pty_manager, &self.coordination_registry, cwd, command).await)
     }
 
-    #[tool(description = "Send text (as if typed, followed by Enter) to a tab previously created by spawn_tab. Cannot target a tab the user opened by hand. Disabled by default — must be enabled in Settings.")]
+    #[tool(description = "Send text (as if typed, followed by Enter) to a tab previously created by spawn_tab. Cannot target a tab the user opened by hand. If request_done_marker is true, this call blocks (up to 300s) waiting for the target to finish processing the text before sending a completion-marker request — it is not instant in that case. Disabled by default — must be enabled in Settings.")]
     async fn send_input(
         &self,
         Parameters(SendInputArgs { tab_id, text, request_done_marker }): Parameters<SendInputArgs>,
@@ -272,7 +279,7 @@ impl AiTermTools {
             &tab_id,
             &text,
             request_done_marker,
-        ))
+        ).await)
     }
 
     #[tool(description = "Check whether a spawn_tab-created tab is idle — either a terminal bell was observed since the last send_input (meaning the agent inside replied and is waiting for more input), or, if send_input was called with request_done_marker: true, the agent printed the requested completion marker — and get its recent output. Disabled by default — must be enabled in Settings.")]
