@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useLocale } from "../contexts/LocaleContext";
 import type { Locale } from "../lib/i18n";
 import { findAppCaret } from "../lib/terminalCaret";
+import { collapseWholeStringRepeat } from "../lib/collapseWholeStringRepeat";
 import { listen } from "@tauri-apps/api/event";
 import { homeDir } from "@tauri-apps/api/path";
 import { Terminal } from "@xterm/xterm";
@@ -1030,6 +1031,11 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     let unlistenData: (() => void) | null = null;
     let unlistenStream: Promise<() => void> | null = null;
     let cancelled = false;
+    // Set the moment the live onPtyData listener below writes its first real
+    // chunk — read by the backfill check further down to avoid double-
+    // printing content the live path already handled. See that check's
+    // comment for why backfilling is needed at all.
+    let hasReceivedLiveChunk = false;
 
     const writeRed = (msg: string) => {
       term.write(`\r\n\x1b[31m${msg}\x1b[0m\r\n`);
@@ -1075,6 +1081,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
         const unlisten = await onPtyData(id, (bytes) => {
           const text = decoder.decode(bytes, { stream: true });
+          hasReceivedLiveChunk = true;
           if (isWindows) {
             // Force a repaint once xterm has actually finished processing this
             // chunk (the write() completion callback, not just the write() call
@@ -1139,24 +1146,60 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         }
         unlistenData = unlisten;
 
-        if (externalSessionId) {
-          // Adopted sessions (spawned by an MCP coordination tool) may
-          // already have real output — shell prompt, an agent's startup
-          // banner, even its first reply — that streamed out on
-          // pty://data/{id} before this component existed to subscribe.
-          // Tauri events are fire-and-forget; there's no buffering for a
-          // late listener. Backfill from PtyManager's per-session ring
-          // buffer so the tab isn't misleadingly blank. This is
-          // ANSI-stripped plain text (get_recent_output strips escape
-          // codes for AI-context use), so it won't look pixel-identical
-          // to a live xterm stream — good enough to "catch up," not meant
-          // to replace real-time rendering.
-          const backfill = await getPtyRecentOutput(id);
-          if (cancelled) return;
-          if (backfill) {
+        // Any session can have real output — a shell's own first prompt
+        // draw, an adopted coordination tab's startup banner, even an
+        // agent's first reply — that streamed out on pty://data/{id} before
+        // this listener's registration IPC round-trip completed. Tauri
+        // events are fire-and-forget; there's no buffering for a late
+        // subscriber. For adopted (externalSessionId) sessions this race is
+        // essentially always lost (the backend creates the session, and may
+        // write an initial command, well before the frontend even learns a
+        // tab exists); for freshly-created ones it's intermittent — a shell
+        // can draw its prompt faster than this subscribe round-trip
+        // completes, especially under load, leaving a freshly-opened tab
+        // looking permanently blank until some later PTY write (e.g. a
+        // resize-triggered shell redraw) finally arrives. Backfill from
+        // PtyManager's per-session ring buffer so a tab never opens to a
+        // misleadingly blank screen either way. This is ANSI-stripped plain
+        // text (get_recent_output strips escape codes for AI-context use),
+        // so it won't look pixel-identical to a live xterm stream — good
+        // enough to "catch up," not meant to replace real-time rendering.
+        // Guarded on hasReceivedLiveChunk to avoid double-printing output
+        // the live listener above already wrote in the (much narrower)
+        // window between subscribing and this backfill check completing.
+        const backfill = await getPtyRecentOutput(id);
+        if (cancelled || hasReceivedLiveChunk) return;
+        if (backfill) {
+          // Root-caused via diagnostic logging: xterm's own initial fit()
+          // call (right after term.open()) resizes from the default 80x24
+          // to the container's real size, and that resize is forwarded to
+          // the backend PTY — which, like any real terminal resize, makes
+          // the shell redraw its prompt in place (SIGWINCH). That redraw
+          // lands in the ring buffer right alongside the shell's own
+          // original connect-time draw. Since a redraw overwrites the same
+          // line (carriage return, not newline) and get_recent_output
+          // strips ANSI/control bytes for AI-context use, the two draws
+          // arrive back-to-back with no separator at all — not as two
+          // \n-delimited lines — so detect "the whole string is the same
+          // chunk repeated" directly rather than assuming any particular
+          // separator, and collapse it to one copy.
+          const deduped = collapseWholeStringRepeat(backfill);
+          if (externalSessionId) {
+            // Coordination tabs: separate the "you missed this" block from
+            // whatever real-time content follows with a trailing blank
+            // line — there's always more after it (the spawned agent's own
+            // banner/reply).
             term.write(`\r\n\x1b[2m${t.term_coordination_backfill_marker}\x1b[0m\r\n`);
-            term.write(backfill.replace(/\n/g, "\r\n"));
+            term.write(deduped.replace(/\n/g, "\r\n"));
             term.write(`\r\n`);
+          } else {
+            // A freshly-created tab's backfill is typically just the
+            // shell's own prompt, still awaiting input — not a completed
+            // line. Writing a trailing \r\n here would push xterm's cursor
+            // onto a blank line below the prompt instead of leaving it
+            // right after the prompt text, where the shell's real cursor
+            // actually is.
+            term.write(deduped.replace(/\n/g, "\r\n"));
           }
         }
       } catch (err) {
