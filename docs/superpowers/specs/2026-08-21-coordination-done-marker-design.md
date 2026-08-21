@@ -73,13 +73,15 @@
 
 `{tab_id}` 在寫入前用實際的 tab id 字串取代。這段文字就是最終版本，不再另外定案。
 
-`send_input` 在 `request_done_marker: true` 時，把這段文字接在使用者要送出的原文字後面（中間留一個換行），一次性 `pty_manager.write(...)`。
+`send_input` 在 `request_done_marker: true` 時，先照現有行為把 `text` 加 `\r` 寫入一次，緊接著把這段指示文字**再加一次獨立的 `\r`、分開寫入**（等同連續送出兩則訊息），而不是把兩段文字用 `\n` 接成一次寫入。理由：這份檔案自己既有的迴歸測試（`send_input_terminates_the_line_with_cr_not_lf`）就是在防「raw-mode 程式對 LF 位元組行為沒有保證，只有 `\r` 被驗證過能穩定觸發 Enter」這個問題——如果把指示文字用內嵌 `\n` 接在同一次寫入裡，等於在 Claude Code 這類 raw-mode TUI 面前送出未經驗證的位元組。拆成兩次各自 `\r` 結尾的寫入，完全重用已驗證安全的終止方式，不需要為這個選用功能承擔新的正確性風險。
 
 **只加在 `send_input`，不加在 `spawn_tab`：** 寫計畫時發現的修正。`spawn_tab` 的 `command` 語意上是「啟動一個程式」（例如打開 `claude` REPL），不是「交辦一項任務」——沒有一個具體任務讓標記去回報完成，加了也不知道要標記誰的完成。更關鍵的是正確性風險：如果把指示文字接在 `command` 後面一起寫入，等於在同一次 PTY 寫入裡塞進第二行文字，會在剛啟動的程式（例如 `claude` CLI）真正就緒、能讀取輸入之前就搶著送出去——這正是 `spawn_tab` 目前「寫入前不等 shell 就緒」這個既有行為底下的既有風險類別（見 2026-08-20 設計文件與後續冷啟動延遲討論），沒必要為了這個選用功能多開一個新的風險面。真正有意義的位置是 `send_input`：那才是協調端實際把任務內容送給一個「已經在跑、預期會讀取輸入」的 agent 的地方。
 
 ### Baseline／訊號比較的正確性
 
-`send_input` 目前的「重設 baseline 為當下的 `bell_count()`」邏輯，必須原封不動套用到 `marker_count` 上——重設的時機點是「文字寫進 PTY 之前」量測，避免這次送出後、worker 還沒開始處理就已經存在的舊標記，被誤判成這次的完成訊號（跟現有 bell baseline 重設的理由完全一樣）。`spawn_tab` 同理，把 `marker_count` 的初始 baseline 記成 `0`。
+`send_input` 現有的順序是**先寫入、寫完立刻讀 `bell_count()` 當新 baseline**（不是寫入前）——註解說明理由是「這個時間點量到的數字，實務上不可能已經包含對方的回覆」，寫入本身跟讀計數器都是本地、近乎瞬間的操作，對方不可能在這麼短的間隔內就已經處理完並回覆。這次比照同一個順序，`marker_count` 也在寫入之後、回傳之前量測一次。
+
+當 `request_done_marker: true` 時（見下方「指示文字」），會有**兩次**寫入（任務文字一次、指示文字一次，各自獨立 `\r` 結尾）——baseline 的量測要放在**兩次寫入都完成之後**，只量一次，語意是「這整次 `send_input` 呼叫自己造成的輸出都算數，在那之前的都不算」。`spawn_tab` 同理，把 `marker_count` 的初始 baseline 記成 `0`。
 
 ### `TabStatus`/`WaitResult` 的 `signal` 欄位
 
