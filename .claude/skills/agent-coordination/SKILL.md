@@ -10,9 +10,9 @@ description: 當你（協調端）要透過 AITerm 的 spawn_tab/send_input/get_
 正確流程永遠是這三步，不能省略最後一步：
 
 ```
-1. spawn_tab({...})           → 拿到 tab_id
-2. send_input({tab_id, ...})  → 任務送達（不代表做完）
-3. wait_for_idle({tab_id})    → 阻塞直到真的完成，這一步才算數
+1. spawn_tab({cwd: <你自己的工作目錄>, ...})  → 拿到 tab_id（cwd 務必填，見下方「信任提示」段落）
+2. send_input({tab_id, ...})                  → 任務送達（不代表做完）
+3. wait_for_idle({tab_id})                    → 阻塞直到真的完成，這一步才算數
 ```
 
 ## 四個工具的實際行為
@@ -27,6 +27,27 @@ description: 當你（協調端）要透過 AITerm 的 spawn_tab/send_input/get_
 `recent_output` 是終端機畫面最近 4096 bytes 的原始文字（已去除 ANSI 顏色碼），不是解析過的結構化答案——你要自己從裡面讀出你要的資訊。
 
 **`send_input` 只能對自己用 `spawn_tab` 開出來的 `tab_id` 下指令**——使用者手動開的分頁永遠不是合法目標，這是刻意的安全限制，會回錯誤而不是靜默失敗。
+
+## 開新分頁一定要傳自己的 `cwd`，否則極可能卡在信任提示
+
+實測證實（用真實 `claude` CLI 反覆驗證）：只要 `spawn_tab` 開分頁時沒有指定 `cwd`（或指定了一個 `claude` 沒見過的目錄），`claude` 啟動後幾乎每一次都會停在下面這個畫面，**卡住等人按鍵，不會自己過去**：
+
+```
+Is this a project you created or one you trust? ...
+❯ 1. Yes, I trust this folder
+  2. No, exit
+Enter to confirm · Esc to cancel
+```
+
+這是最容易被誤判成「子分頁還在初始化、卡住了」的情境——`wait_for_idle` 在這個畫面前會一直逾時（因為沒人按鍵，永遠不會有新 bell），如果你只是不斷重複 `wait_for_idle`／`get_tab_status` 死等而不去看 `recent_output` 裡實際寫了什麼，就會像真的卡住一樣、白白浪費好幾輪逾時。
+
+**兩件事都要做：**
+
+1. **`spawn_tab` 一定要傳 `cwd`，用你自己當下的工作目錄**（例如你能取得的 `pwd`）——這個工具本身極大機率已經被信任過，用同一個目錄開新分頁可以避開這個提示。不要讓 `cwd` 留空。
+2. **就算避開了，也要學會辨認並處理這個畫面**：每次 `get_tab_status`/`wait_for_idle` 逾時拿到 `recent_output` 後，先檢查裡面有沒有出現類似 `"trust this folder"`、`"Yes, I trust this folder"` 這類字樣。如果有：
+   - 呼叫 `send_input({tab_id, text: "1"})`（不需要開 `request_done_marker`）送出確認，選第一個選項信任該資料夾。
+   - 送出後再呼叫一次 `wait_for_idle` 讓子分頁真正進入可以工作的狀態。
+   - 不要把這次逾時當成任務失敗——這是預期中會發生的一次性關卡，處理掉就能繼續。
 
 ## `timed_out: true` 代表「還在做」，不是「失敗」或「放棄」
 
@@ -59,5 +80,6 @@ description: 當你（協調端）要透過 AITerm 的 spawn_tab/send_input/get_
 
 - ❌ 呼叫完 `spawn_tab` + `send_input` 就直接跟使用者說「已經完成」或結束回合——這時候任務可能才剛送達，子分頁根本還沒開始做。
 - ❌ 把 `wait_for_idle` 逾時當成任務失敗，直接放棄或報錯給使用者。
+- ❌ `spawn_tab` 沒傳 `cwd` 就開新分頁執行 `claude`——實測幾乎每次都會卡在信任提示前，且協調端容易誤判成「還在初始化」而不斷空等（見上方「開新分頁一定要傳自己的 `cwd`」段落）。
 - ❌ 對從未回應過的分頁無限期重複 `wait_for_idle` 而不查看 `recent_output` 找線索（例如子分頁其實卡在信任提示、需要人工按鍵確認）。
 - ❌ 開了 `request_done_marker: true` 卻預期它跟 `false` 一樣瞬間回傳——這會讓你誤判逾時邏輯。
