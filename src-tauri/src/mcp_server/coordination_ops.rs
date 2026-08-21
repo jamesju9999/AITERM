@@ -22,6 +22,16 @@ use crate::pty::manager::PtyManager;
 const DEFAULT_WAIT_SECONDS: u64 = 300;
 const MAX_WAIT_SECONDS: u64 = 1800;
 const POLL_INTERVAL_MS: u64 = 250;
+/// Bound for send_input's internal wait (via wait_for_new_bell) for the
+/// target to signal it finished the just-sent task text, before sending the
+/// optional done-marker instruction. Deliberately much shorter than
+/// wait_for_idle's DEFAULT_WAIT_SECONDS: live testing found a real `claude`
+/// CLI process can complete a real task in ~2s while never ringing a single
+/// bell over 30s of observation, so waiting anywhere near 300s here buys
+/// nothing and just makes send_input(request_done_marker: true) hang with
+/// zero feedback whenever the target's bell doesn't fire. Generous versus
+/// the fastest observed real turn, nowhere near wait_for_idle's default.
+const DONE_MARKER_WAIT_SECONDS: u64 = 15;
 /// Matches `pty_get_recent_output`'s existing cap (`src-tauri/src/pty/commands.rs`).
 const RECENT_OUTPUT_BYTES: usize = 4096;
 
@@ -183,7 +193,7 @@ pub(crate) async fn send_input(
             pty_manager,
             tab_id,
             bell_before,
-            Duration::from_secs(DEFAULT_WAIT_SECONDS),
+            Duration::from_secs(DONE_MARKER_WAIT_SECONDS),
         )
         .await;
 
@@ -214,7 +224,7 @@ pub(crate) async fn send_input(
 
     if request_done_marker && !instruction_sent {
         Ok(format!(
-            "sent to {tab_id} (task only — target did not become idle within {DEFAULT_WAIT_SECONDS}s, so the completion-marker instruction was not sent)"
+            "sent to {tab_id} (task only — target did not become idle within {DONE_MARKER_WAIT_SECONDS}s, so the completion-marker instruction was not sent)"
         ))
     } else {
         Ok(format!("sent to {tab_id}"))
@@ -226,7 +236,7 @@ pub(crate) async fn send_input(
 /// or `false` if `timeout` elapses first. Extracted as its own function
 /// (rather than inlined in `send_input`) so tests can pass a short
 /// `timeout` to exercise the "target never bells" path without waiting out
-/// the real production timeout (`DEFAULT_WAIT_SECONDS` = 300s).
+/// the real production timeout (`DONE_MARKER_WAIT_SECONDS` = 15s).
 async fn wait_for_new_bell(pty_manager: &PtyManager, tab_id: &str, baseline: u64, timeout: Duration) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
@@ -604,16 +614,13 @@ mod tests {
     }
 
     /// Same scenario as the test above, but no background bell is ever
-    /// injected. This would take DEFAULT_WAIT_SECONDS (300s) to time out
-    /// for real, which is far too slow to run on every `cargo test` — so
-    /// this is `#[ignore]`d (run manually/in a slow-test lane when
-    /// touching this code path, e.g. `cargo test --lib -- --ignored
-    /// send_input_with_request_done_marker_skips_the_instruction_when_the_target_never_bells`).
-    /// `wait_for_new_bell`'s own give-up behavior is already covered fast
-    /// by `wait_for_new_bell_times_out_when_the_target_never_bells` above;
-    /// this test additionally confirms `send_input`'s own wiring and
-    /// returned message wording end-to-end.
-    #[ignore]
+    /// injected — the target never signals it's idle, so send_input must
+    /// give up after DONE_MARKER_WAIT_SECONDS (15s) and skip the
+    /// instruction, returning normally (not hanging, not erroring) with a
+    /// message noting it was skipped. Runs for real at ~15s, well within
+    /// a normal `cargo test` — this used to be `#[ignore]`d back when this
+    /// path reused wait_for_idle's 300s DEFAULT_WAIT_SECONDS, which made a
+    /// real end-to-end run of this path impractical for the default suite.
     #[tokio::test]
     async fn send_input_with_request_done_marker_skips_the_instruction_when_the_target_never_bells() {
         let pty_manager = PtyManager::new();

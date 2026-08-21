@@ -116,7 +116,7 @@ pub struct SendInputArgs {
     /// it, this has no effect and idle detection falls back to the
     /// terminal bell exactly as if this were false.
     ///
-    /// Important: when true, this call blocks (up to 300 seconds) until the
+    /// Important: when true, this call blocks (up to 15 seconds) until the
     /// target becomes idle from `text` before returning — it is NOT instant
     /// like a plain send_input call. If the target never bells within that
     /// window, the follow-up message is simply not sent (noted in this
@@ -265,7 +265,7 @@ impl AiTermTools {
         to_call_result(coordination_ops::spawn_tab(app, &self.pty_manager, &self.coordination_registry, cwd, command).await)
     }
 
-    #[tool(description = "Send text (as if typed, followed by Enter) to a tab previously created by spawn_tab. Cannot target a tab the user opened by hand. If request_done_marker is true, this call blocks (up to 300s) waiting for the target to finish processing the text before sending a completion-marker request — it is not instant in that case. Disabled by default — must be enabled in Settings.")]
+    #[tool(description = "Send text (as if typed, followed by Enter) to a tab previously created by spawn_tab. Cannot target a tab the user opened by hand. If request_done_marker is true, this call blocks (up to 15s) waiting for the target to finish processing the text before sending a completion-marker request — it is not instant in that case. Disabled by default — must be enabled in Settings.")]
     async fn send_input(
         &self,
         Parameters(SendInputArgs { tab_id, text, request_done_marker }): Parameters<SendInputArgs>,
