@@ -39,7 +39,18 @@ const RECENT_OUTPUT_BYTES: usize = 4096;
 /// any other session talking to the same running server.
 #[derive(Default)]
 pub struct CoordinationRegistry {
-    tabs: Mutex<HashMap<String, u64>>,
+    tabs: Mutex<HashMap<String, Baseline>>,
+}
+
+/// The bell/marker counts a tab's `PtySession` reported as of the last
+/// `spawn_tab`/`send_input` call — the point every subsequent
+/// `get_tab_status`/`wait_for_idle` compares fresh counts against. Paired
+/// together (not two separate maps) because they're always read and
+/// written for the same `tab_id` at the same moment.
+#[derive(Clone, Copy, Default)]
+struct Baseline {
+    bell: u64,
+    marker: u64,
 }
 
 impl CoordinationRegistry {
@@ -51,11 +62,11 @@ impl CoordinationRegistry {
         self.tabs.lock().contains_key(tab_id)
     }
 
-    fn record_baseline(&self, tab_id: &str, baseline: u64) {
-        self.tabs.lock().insert(tab_id.to_string(), baseline);
+    fn record_baseline(&self, tab_id: &str, bell: u64, marker: u64) {
+        self.tabs.lock().insert(tab_id.to_string(), Baseline { bell, marker });
     }
 
-    fn baseline(&self, tab_id: &str) -> Option<u64> {
+    fn baseline(&self, tab_id: &str) -> Option<Baseline> {
         self.tabs.lock().get(tab_id).copied()
     }
 }
@@ -64,6 +75,10 @@ impl CoordinationRegistry {
 struct TabStatus {
     idle: bool,
     recent_output: String,
+    /// Which signal made `idle` true this time — `"bell"` or `"marker"`.
+    /// `None` while still not idle. Purely informational (debugging/tests);
+    /// callers that only care about `idle` can ignore it.
+    signal: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -71,6 +86,7 @@ struct WaitResult {
     idle: bool,
     recent_output: String,
     timed_out: bool,
+    signal: Option<&'static str>,
 }
 
 /// Payload for the `mcp-coordination-tab-spawned` Tauri event, telling the
@@ -94,10 +110,11 @@ pub(crate) async fn spawn_tab(
         .create_with_app(app.clone(), size, cwd_path, None)
         .map_err(|e| e.to_string())?;
 
-    // Fresh session: bell_count() is 0 right now. Recording that as the
-    // baseline means get_tab_status/wait_for_idle report "not idle" until the
-    // first bell — reasonable, since nothing has run yet either way.
-    registry.record_baseline(&tab_id, 0);
+    // Fresh session: bell_count()/marker_count() are 0 right now. Recording
+    // that as the baseline means get_tab_status/wait_for_idle report "not
+    // idle" until the first bell or marker — reasonable, since nothing has
+    // run yet either way.
+    registry.record_baseline(&tab_id, 0, 0);
 
     if let Some(cmd) = &command {
         if let Err(e) = pty_manager.write(&tab_id, format!("{cmd}\r").as_bytes()) {
@@ -121,6 +138,7 @@ pub(crate) fn send_input(
     registry: &CoordinationRegistry,
     tab_id: &str,
     text: &str,
+    request_done_marker: bool,
 ) -> Result<String, String> {
     if !registry.is_known(tab_id) {
         return Err(format!(
@@ -131,12 +149,44 @@ pub(crate) fn send_input(
         .write(tab_id, format!("{text}\r").as_bytes())
         .map_err(|e| e.to_string())?;
 
-    // Reset the baseline to the count *as of right now*, before any reply has
-    // had a chance to arrive — so idle only flips true again once a *new*
-    // bell (a reply to this specific input) is observed, not a stale one from
-    // before this send.
-    let current = pty_manager.bell_count(tab_id).unwrap_or(0);
-    registry.record_baseline(tab_id, current);
+    // Sent as a second, independently \r-terminated write (a separate
+    // message) rather than appended via an embedded '\n' — this file's own
+    // send_input_terminates_the_line_with_cr_not_lf regression test exists
+    // precisely because raw-mode TUIs (Claude Code's own included) have no
+    // guaranteed behavior for a bare LF byte, only for CR. See the design
+    // doc's "指示文字" section.
+    //
+    // The instruction text below deliberately never writes the complete,
+    // contiguous marker string (prefix + tab_id + suffix back-to-back) —
+    // each piece is separated by other text. If it did, canonical-mode
+    // terminal echo alone (no cooperating agent needed) would write that
+    // same contiguous byte sequence right back into this session's output
+    // stream as a pure side effect of writing this instruction, and
+    // marker_count would increment immediately — a false "done" signal
+    // before the target has done anything. Verified live against a real
+    // PTY during implementation: the original (buggy) wording, which did
+    // embed the marker contiguously, triggered marker_count=1 from echo
+    // alone, with no agent involved.
+    if request_done_marker {
+        let instruction = format!(
+            "（可選：完成後請在新的一行印出一個完成標記，格式為三段直接相連、中間不留任何字元：前綴 {} ，接著是你的識別碼 {} ，最後接上 {} 。這能讓協調端提早得知你已完成，不影響任何其他行為。）",
+            crate::pty::session::DONE_MARKER_PREFIX,
+            tab_id,
+            crate::pty::session::DONE_MARKER_SUFFIX
+        );
+        pty_manager
+            .write(tab_id, format!("{instruction}\r").as_bytes())
+            .map_err(|e| e.to_string())?;
+    }
+
+    // Reset the baseline to the counts *as of right now*, after both of this
+    // call's own writes — before any reply has had a chance to arrive — so
+    // idle only flips true again once a *new* bell or marker (a reply to
+    // this specific input) is observed, not a stale one from before this
+    // send.
+    let bell_current = pty_manager.bell_count(tab_id).unwrap_or(0);
+    let marker_current = pty_manager.marker_count(tab_id).unwrap_or(0);
+    registry.record_baseline(tab_id, bell_current, marker_current);
 
     Ok(format!("sent to {tab_id}"))
 }
@@ -147,14 +197,30 @@ fn status_for(pty_manager: &PtyManager, registry: &CoordinationRegistry, tab_id:
             "tab_id '{tab_id}' was not created by spawn_tab — this tool can only target tabs it spawned itself, never a tab the user opened by hand"
         ));
     }
-    let baseline = registry.baseline(tab_id).unwrap_or(0);
-    let current = pty_manager
+    let baseline = registry.baseline(tab_id).unwrap_or_default();
+    let bell_current = pty_manager
         .bell_count(tab_id)
         .ok_or_else(|| format!("tab_id '{tab_id}' is no longer running (it may have been closed)"))?;
+    let marker_current = pty_manager.marker_count(tab_id).unwrap_or(0);
     let recent_output = pty_manager
         .get_recent_output(tab_id, RECENT_OUTPUT_BYTES)
         .unwrap_or_default();
-    Ok(TabStatus { idle: current > baseline, recent_output })
+
+    // Marker checked first: it's the optional, cooperative-agent signal this
+    // feature adds, and when it fires it's always at least as fresh as bell.
+    // Which one "wins" on a tie has no behavioral consequence — idle is idle
+    // either way — this only affects the informational `signal` field.
+    let marker_idle = marker_current > baseline.marker;
+    let bell_idle = bell_current > baseline.bell;
+    let signal = if marker_idle {
+        Some("marker")
+    } else if bell_idle {
+        Some("bell")
+    } else {
+        None
+    };
+
+    Ok(TabStatus { idle: marker_idle || bell_idle, recent_output, signal })
 }
 
 pub(crate) fn get_tab_status(
@@ -182,11 +248,21 @@ pub(crate) async fn wait_for_idle(
     loop {
         let status = status_for(pty_manager, registry, tab_id)?;
         if status.idle {
-            let result = WaitResult { idle: true, recent_output: status.recent_output, timed_out: false };
+            let result = WaitResult {
+                idle: true,
+                recent_output: status.recent_output,
+                timed_out: false,
+                signal: status.signal,
+            };
             return serde_json::to_string_pretty(&result).map_err(|e| e.to_string());
         }
         if tokio::time::Instant::now() >= deadline {
-            let result = WaitResult { idle: false, recent_output: status.recent_output, timed_out: true };
+            let result = WaitResult {
+                idle: false,
+                recent_output: status.recent_output,
+                timed_out: true,
+                signal: status.signal,
+            };
             return serde_json::to_string_pretty(&result).map_err(|e| e.to_string());
         }
         tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
@@ -205,7 +281,7 @@ mod tests {
     async fn send_input_rejects_a_tab_id_not_in_the_registry() {
         let pty_manager = PtyManager::new();
         let registry = CoordinationRegistry::new();
-        let err = send_input(&pty_manager, &registry, "not-a-real-tab", "hello").unwrap_err();
+        let err = send_input(&pty_manager, &registry, "not-a-real-tab", "hello", false).unwrap_err();
         assert!(err.contains("was not created by spawn_tab"), "{err}");
     }
 
@@ -228,9 +304,9 @@ mod tests {
         // spawn_tab's AppHandle-dependent plumbing (covered separately by the
         // integration test in a later task).
         let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
-        registry.record_baseline(&tab_id, 0);
+        registry.record_baseline(&tab_id, 0, 0);
 
-        let sent = send_input(&pty_manager, &registry, &tab_id, "echo hi").unwrap();
+        let sent = send_input(&pty_manager, &registry, &tab_id, "echo hi", false).unwrap();
         assert_eq!(sent, format!("sent to {tab_id}"));
 
         let status_json = get_tab_status(&pty_manager, &registry, &tab_id).unwrap();
@@ -251,7 +327,7 @@ mod tests {
         // `contains_bare_bell` (see `pty/cd_parser.rs`), which recognizes
         // that terminator and excludes it, so this marker never counts as a
         // bell. Baseline at 0 immediately, same as `spawn_tab` does.
-        registry.record_baseline(&tab_id, 0);
+        registry.record_baseline(&tab_id, 0, 0);
 
         let result_json = wait_for_idle(&pty_manager, &registry, &tab_id, Some(1)).await.unwrap();
         assert!(result_json.contains("\"timed_out\": true"), "{result_json}");
@@ -263,7 +339,7 @@ mod tests {
         let pty_manager = PtyManager::new();
         let registry = CoordinationRegistry::new();
         let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
-        registry.record_baseline(&tab_id, 0);
+        registry.record_baseline(&tab_id, 0, 0);
 
         pty_manager.write(&tab_id, b"printf '\\007'\n").unwrap();
 
@@ -303,7 +379,7 @@ mod tests {
         let pty_manager = PtyManager::new();
         let registry = CoordinationRegistry::new();
         let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
-        registry.record_baseline(&tab_id, 0);
+        registry.record_baseline(&tab_id, 0, 0);
 
         // Sent while the pty is still in normal canonical+echo mode, so this
         // setup line's own line terminator is unrelated to the bug under
@@ -358,7 +434,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
         }
 
-        send_input(&pty_manager, &registry, &tab_id, "ab").unwrap();
+        send_input(&pty_manager, &registry, &tab_id, "ab", false).unwrap();
 
         // Poll for the setup line's 3-byte hex dump of exactly what
         // send_input wrote: "ab" (0x61 0x62) followed by whatever
@@ -390,5 +466,65 @@ mod tests {
              this app simulates pressing Enter (writePty(session, \"\\r\") in \
              TerminalView.tsx / useTerminalBlocks.ts) — got hex bytes: {hex_bytes:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn send_input_with_request_done_marker_sends_the_instruction_without_self_triggering() {
+        let pty_manager = PtyManager::new();
+        let registry = CoordinationRegistry::new();
+        let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
+        registry.record_baseline(&tab_id, 0, 0);
+
+        send_input(&pty_manager, &registry, &tab_id, "echo hi", true).unwrap();
+
+        // Wait for the echoed instruction to actually arrive (it mentions
+        // this tab's own id, proving the instruction was sent).
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let output = pty_manager.get_recent_output(&tab_id, RECENT_OUTPUT_BYTES).unwrap_or_default();
+            if output.contains(&tab_id) {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "expected the echoed input to mention the tab_id, got: {output}"
+            );
+            tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
+        }
+
+        // But the full, contiguous marker must NEVER appear anywhere in what
+        // was echoed — if it did, the instruction itself would have
+        // self-triggered a false completion signal via terminal echo alone,
+        // with no agent involved. This is a regression test for a real bug
+        // found during review: the original wording embedded the complete
+        // contiguous marker in the instruction, and canonical-mode echo
+        // alone incremented marker_count to 1 against a plain shell that
+        // did nothing.
+        let output = pty_manager.get_recent_output(&tab_id, RECENT_OUTPUT_BYTES).unwrap_or_default();
+        let full_marker = crate::pty::session::done_marker(&tab_id);
+        assert!(
+            !output.contains(&full_marker),
+            "the instruction text must never contain the complete contiguous marker — got: {output}"
+        );
+        assert_eq!(
+            pty_manager.marker_count(&tab_id),
+            Some(0),
+            "writing the instruction alone must not increment marker_count — self-echo false positive"
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_idle_returns_early_via_marker_signal_without_any_bell() {
+        let pty_manager = PtyManager::new();
+        let registry = CoordinationRegistry::new();
+        let tab_id = pty_manager.create_with_callback(pty_size(), |_| {}).unwrap();
+        registry.record_baseline(&tab_id, 0, 0);
+
+        let marker = crate::pty::session::done_marker(&tab_id);
+        pty_manager.write(&tab_id, format!("printf '%s\\n' '{marker}'\n").as_bytes()).unwrap();
+
+        let result_json = wait_for_idle(&pty_manager, &registry, &tab_id, Some(10)).await.unwrap();
+        assert!(result_json.contains("\"idle\": true"), "{result_json}");
+        assert!(result_json.contains("\"signal\": \"marker\""), "{result_json}");
     }
 }

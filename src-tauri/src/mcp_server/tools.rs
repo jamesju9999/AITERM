@@ -258,7 +258,7 @@ impl AiTermTools {
         if let Err(e) = self.require_coordination_enabled() {
             return to_call_result(Err(e));
         }
-        to_call_result(coordination_ops::send_input(&self.pty_manager, &self.coordination_registry, &tab_id, &text))
+        to_call_result(coordination_ops::send_input(&self.pty_manager, &self.coordination_registry, &tab_id, &text, false))
     }
 
     #[tool(description = "Check whether a spawn_tab-created tab is idle (a terminal bell was observed since the last send_input, meaning the agent inside replied and is waiting for more input) and get its recent output. Disabled by default — must be enabled in Settings.")]

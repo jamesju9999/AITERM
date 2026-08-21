@@ -42,8 +42,8 @@ fn home_dir() -> Option<PathBuf> {
 /// print to let the MCP coordination tools' `wait_for_idle` return faster
 /// than the mandatory bell fallback. See
 /// `docs/superpowers/specs/2026-08-21-coordination-done-marker-design.md`.
-const DONE_MARKER_PREFIX: &str = "<<AITERM_DONE:";
-const DONE_MARKER_SUFFIX: &str = ">>";
+pub const DONE_MARKER_PREFIX: &str = "<<AITERM_DONE:";
+pub const DONE_MARKER_SUFFIX: &str = ">>";
 
 /// Builds this session's own completion marker text. `tab_id` is always a
 /// UUID (see `Uuid::new_v4()` at the call site), so the marker is a fixed
