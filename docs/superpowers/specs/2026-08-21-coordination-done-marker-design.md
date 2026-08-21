@@ -65,13 +65,15 @@
 
 ### 指示文字
 
-固定措辭：
+**自我觸發風險與修正（實作階段發現，回頭修正設計）**：第一版措辭直接把完整標記 `<<AITERM_DONE:{tab_id}>>` 寫進指示文字本身。這是個真正會發生、不是理論上的缺陷——在真實 PTY 上直接驗證過：只把這段指示文字寫進去，即使目標端只是一個什麼都沒做的空 shell，`marker_count` 就已經被觸發成 1。原因是終端機的本地 echo（canonical mode 標準行為）會把寫進去的位元組原樣送回輸出流，而那正是讀取迴圈在逐位元組掃描找標記的同一條資料流——任何「要傳給對方、又要事後被逐位元組比對偵測」的完整字串，只要透過同一條會被 echo 的通道傳遞，就必然自我觸發，跟對方有沒有真的完成任何事無關。
+
+修法：把標記拆成三段描述，段落之間插入其他文字，讓完整的 52 位元組序列不會連續出現在指示文字本身裡——只有目標端真的把三段接起來印出時，才會構成連續比對命中。固定措辭：
 
 ```
-（可選：完成後請在新的一行印出 <<AITERM_DONE:{tab_id}>>，讓協調端提早得知你已完成，不影響任何其他行為。）
+（可選：完成後請在新的一行印出一個完成標記，格式為三段直接相連、中間不留任何字元：前綴 <<AITERM_DONE: ，接著是你的識別碼 {tab_id} ，最後接上 >> 。這能讓協調端提早得知你已完成，不影響任何其他行為。）
 ```
 
-`{tab_id}` 在寫入前用實際的 tab id 字串取代。這段文字就是最終版本，不再另外定案。
+`{tab_id}` 在寫入前用實際的 tab id 字串取代。這段文字就是最終版本，不再另外定案。三段（前綴、tab_id、後綴）之間都夾了其他文字（空格、中文說明），確保指示文字本身的位元組序列裡，任何連續 52 位元組都不等於完整標記——這是靠文字結構保證，不是靠時間差或機率，跟前面「跨 chunk 邊界」那種位元組層級的正確性要求同一個標準。
 
 `send_input` 在 `request_done_marker: true` 時，先照現有行為把 `text` 加 `\r` 寫入一次，緊接著把這段指示文字**再加一次獨立的 `\r`、分開寫入**（等同連續送出兩則訊息），而不是把兩段文字用 `\n` 接成一次寫入。理由：這份檔案自己既有的迴歸測試（`send_input_terminates_the_line_with_cr_not_lf`）就是在防「raw-mode 程式對 LF 位元組行為沒有保證，只有 `\r` 被驗證過能穩定觸發 Enter」這個問題——如果把指示文字用內嵌 `\n` 接在同一次寫入裡，等於在 Claude Code 這類 raw-mode TUI 面前送出未經驗證的位元組。拆成兩次各自 `\r` 結尾的寫入，完全重用已驗證安全的終止方式，不需要為這個選用功能承擔新的正確性風險。
 
@@ -96,6 +98,6 @@
 ## 測試
 
 - Rust 單元測試：比照現有 bell 測試——送標記位元組序列到讀取迴圈，確認 `marker_count()` 正確累加；確認一般輸出（含不含 tab_id 的相似文字）不會誤觸發，除非格式完全吻合；**專門測試標記被切在兩個 chunk 交界處的情境**（例如故意分兩次 `write` 各送標記字串的前半段與後半段），確認 `marker_tail` 機制仍能正確累加
-- `coordination_ops.rs` 單元測試：`request_done_marker: true` 時 `send_input` 寫入的文字有正確附加指示文字且含正確 tab_id；`status_for`/`get_tab_status`/`wait_for_idle` 在只有 marker 命中（bell 未命中）時仍正確回報 `idle: true` 且 `signal: "marker"`；`request_done_marker: false`（預設）時寫入文字不變、行為與既有測試完全一致
+- `coordination_ops.rs` 單元測試：`request_done_marker: true` 時 `send_input` 寫入的文字有正確附加指示文字且含正確 tab_id；`status_for`/`get_tab_status`/`wait_for_idle` 在只有 marker 命中（bell 未命中）時仍正確回報 `idle: true` 且 `signal: "marker"`；`request_done_marker: false`（預設）時寫入文字不變、行為與既有測試完全一致；**自我觸發回歸測試**——`send_input(..., request_done_marker: true)` 對一個只會原樣 echo（不主動印出標記）的目標送出後，短時間內 `marker_count`／`idle` 不能變成 true（這是實作階段發現且修正過的真實 bug，必須有測試鎖住，不能靠人工複查）
 - 整合測試：比照既有手法，跑一次 `spawn_tab` → `send_input(request_done_marker: true)`（送一個會印出標記的假指令）→ `wait_for_idle`，確認比純等 bell 提早返回且 `signal: "marker"`
 - 手動驗證：真的對一個跑 Claude Code 的分頁開啟這個選項，確認實際多輪協調流程中，加速訊號確實比 bell 更快浮現 idle，且沒開這個選項的既有流程完全不受影響
