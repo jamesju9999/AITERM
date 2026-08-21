@@ -111,6 +111,12 @@ impl PtyManager {
         self.sessions.lock().get(id).map(|s| s.bell_count())
     }
 
+    /// Marker-byte count for the given session, or `None` if the session
+    /// doesn't exist. See `PtySession::marker_count` for what this counts.
+    pub fn marker_count(&self, id: &str) -> Option<u64> {
+        self.sessions.lock().get(id).map(|s| s.marker_count())
+    }
+
     fn get(&self, id: &str) -> PtyResult<Arc<PtySession>> {
         self.sessions
             .lock()
@@ -162,5 +168,26 @@ mod tests {
         let manager = PtyManager::new();
         let err = manager.write("no-such-id", b"x").unwrap_err();
         assert!(matches!(err, PtyError::SessionNotFound(_)));
+    }
+
+    #[test]
+    fn manager_marker_count_returns_none_for_missing() {
+        let manager = PtyManager::new();
+        assert!(manager.marker_count("no-such-id").is_none());
+    }
+
+    #[test]
+    fn manager_marker_count_returns_zero_for_a_fresh_session() {
+        let manager = PtyManager::new();
+        let (tx, _rx) = mpsc::channel::<Vec<u8>>();
+        let id = manager
+            .create_with_callback(
+                PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+                move |chunk| {
+                    let _ = tx.send(chunk);
+                },
+            )
+            .expect("create session");
+        assert_eq!(manager.marker_count(&id), Some(0));
     }
 }
