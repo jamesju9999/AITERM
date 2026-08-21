@@ -77,6 +77,19 @@ fn marker_tail_after(chunk: &[u8], marker_len: usize) -> Vec<u8> {
     chunk[chunk.len() - keep..].to_vec()
 }
 
+/// Combines `tail` with `chunk`, checks for `marker`, and returns
+/// `(found, new_tail)` — the new tail is derived from the *combined*
+/// buffer, not `chunk` alone, so a marker split across 3+ reads (not
+/// just 2) is still detected incrementally as more chunks arrive.
+fn scan_for_marker(tail: &[u8], chunk: &[u8], marker: &[u8]) -> (bool, Vec<u8>) {
+    let mut combined = Vec::with_capacity(tail.len() + chunk.len());
+    combined.extend_from_slice(tail);
+    combined.extend_from_slice(chunk);
+    let found = contains_marker(&[], &combined, marker);
+    let new_tail = marker_tail_after(&combined, marker.len());
+    (found, new_tail)
+}
+
 pub struct PtySession {
     pub id: String,
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -108,6 +121,13 @@ pub struct PtySession {
     /// last checked" by comparing against a remembered baseline, without this
     /// field needing any consuming/resetting behavior of its own.
     bell_count: Arc<AtomicU64>,
+    /// Counts how many times this session's own completion marker
+    /// (`done_marker(&self.id)`) has been observed in output — an optional,
+    /// cooperative-agent-only signal that lets the MCP coordination tools'
+    /// `wait_for_idle` return faster than the mandatory bell fallback. Same
+    /// monotonic-counter reasoning as `bell_count`. See
+    /// `docs/superpowers/specs/2026-08-21-coordination-done-marker-design.md`.
+    marker_count: Arc<AtomicU64>,
 }
 
 /// Commits a resolved cd to `cwd`/`previous_cwd`. Free function (not a method)
@@ -314,6 +334,10 @@ impl PtySession {
         let pending_cds_for_thread = Arc::clone(&pending_cds);
         let bell_count: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
         let bell_count_for_thread = Arc::clone(&bell_count);
+        let marker_count: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+        let marker_count_for_thread = Arc::clone(&marker_count);
+        let marker_tail_for_thread: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let done_marker_bytes = done_marker(&id).into_bytes();
 
         let reader_thread = thread::Builder::new()
             .name(format!("pty-reader-{}", id))
@@ -353,6 +377,21 @@ impl PtySession {
                             if cd_parser::contains_bare_bell(&chunk) {
                                 bell_count_for_thread.fetch_add(1, Ordering::SeqCst);
                             }
+                            // Optional completion-marker detection (see design doc
+                            // 2026-08-21-coordination-done-marker-design.md). Uses a
+                            // small carried-over tail so a marker split across any
+                            // number of chunk boundaries is still found — unlike the
+                            // single-byte bell above, this marker is multiple bytes
+                            // long and PTY reads are arbitrary-sized.
+                            {
+                                let mut tail = marker_tail_for_thread.lock();
+                                let (found, new_tail) =
+                                    scan_for_marker(&tail, &chunk, &done_marker_bytes);
+                                if found {
+                                    marker_count_for_thread.fetch_add(1, Ordering::SeqCst);
+                                }
+                                *tail = new_tail;
+                            }
                             on_data(chunk);
                         }
                         Err(e) => {
@@ -378,6 +417,7 @@ impl PtySession {
             output_ring,
             pending_cds,
             bell_count,
+            marker_count,
         })
     }
 
@@ -449,6 +489,10 @@ impl PtySession {
         let pending_cds_for_thread = Arc::clone(&pending_cds);
         let bell_count: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
         let bell_count_for_thread = Arc::clone(&bell_count);
+        let marker_count: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+        let marker_count_for_thread = Arc::clone(&marker_count);
+        let marker_tail_for_thread: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let done_marker_bytes = done_marker(&id).into_bytes();
 
         let reader_thread = thread::Builder::new()
             .name(format!("pty-reader-{}", id))
@@ -488,6 +532,21 @@ impl PtySession {
                             if cd_parser::contains_bare_bell(&chunk) {
                                 bell_count_for_thread.fetch_add(1, Ordering::SeqCst);
                             }
+                            // Optional completion-marker detection (see design doc
+                            // 2026-08-21-coordination-done-marker-design.md). Uses a
+                            // small carried-over tail so a marker split across any
+                            // number of chunk boundaries is still found — unlike the
+                            // single-byte bell above, this marker is multiple bytes
+                            // long and PTY reads are arbitrary-sized.
+                            {
+                                let mut tail = marker_tail_for_thread.lock();
+                                let (found, new_tail) =
+                                    scan_for_marker(&tail, &chunk, &done_marker_bytes);
+                                if found {
+                                    marker_count_for_thread.fetch_add(1, Ordering::SeqCst);
+                                }
+                                *tail = new_tail;
+                            }
                             on_data(chunk);
                         }
                         Err(e) => {
@@ -513,6 +572,7 @@ impl PtySession {
             output_ring,
             pending_cds,
             bell_count,
+            marker_count,
         })
     }
 
@@ -671,6 +731,13 @@ impl PtySession {
     /// `bell_count` for why this is a counter, not a boolean.
     pub fn bell_count(&self) -> u64 {
         self.bell_count.load(Ordering::SeqCst)
+    }
+
+    /// Monotonic count of times this session's own completion marker has
+    /// been observed in output since it started. See the field doc comment
+    /// on `marker_count` for why this is a counter, not a boolean.
+    pub fn marker_count(&self) -> u64 {
+        self.marker_count.load(Ordering::SeqCst)
     }
 
     pub fn resize(&self, size: PtySize) -> PtyResult<()> {
@@ -1197,6 +1264,87 @@ mod tests {
     }
 
     #[test]
+    fn marker_count_starts_at_zero_for_a_fresh_session() {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+        assert_eq!(session.marker_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn marker_in_output_increments_marker_count() {
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            move |chunk| {
+                let _ = tx.send(chunk);
+            },
+        )
+        .expect("spawn pty");
+
+        assert_eq!(session.marker_count(), 0);
+
+        let marker = done_marker(&session.id);
+        #[cfg(windows)]
+        session.write(format!("echo {marker}\r\nexit\r\n").as_bytes()).unwrap();
+        #[cfg(not(windows))]
+        session.write(format!("printf '%s\\n' '{marker}'\n").as_bytes()).unwrap();
+
+        let mut seen = false;
+        for _ in 0..50 {
+            if session.marker_count() > 0 {
+                seen = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(
+            seen,
+            "expected marker_count() to increment after the session's own marker was written and echoed"
+        );
+
+        let _ = rx.try_recv();
+        drop(session);
+    }
+
+    #[tokio::test]
+    async fn a_marker_for_a_different_tab_id_does_not_count() {
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            move |chunk| {
+                let _ = tx.send(chunk);
+            },
+        )
+        .expect("spawn pty");
+
+        let other_marker = done_marker("not-this-session-id");
+        #[cfg(windows)]
+        session.write(format!("echo {other_marker}\r\nexit\r\n").as_bytes()).unwrap();
+        #[cfg(not(windows))]
+        session.write(format!("printf '%s\\n' '{other_marker}'\n").as_bytes()).unwrap();
+
+        // Give the reader thread time to process it, then confirm it never counted.
+        std::thread::sleep(Duration::from_millis(800));
+        assert_eq!(
+            session.marker_count(),
+            0,
+            "a marker addressed to a different tab_id must not count for this session"
+        );
+
+        let _ = rx.try_recv();
+        drop(session);
+    }
+
+    #[test]
     fn done_marker_embeds_the_tab_id_between_fixed_delimiters() {
         assert_eq!(done_marker("abc-123"), "<<AITERM_DONE:abc-123>>");
     }
@@ -1228,6 +1376,36 @@ mod tests {
 
         // Round 2: second half arrives — tail + this chunk together contain it.
         assert!(contains_marker(&tail, second, marker));
+    }
+
+    #[test]
+    fn scan_for_marker_finds_a_marker_split_across_three_chunks() {
+        // Regression coverage for a real bug: deriving the next tail from
+        // `chunk` alone (instead of from the combined `tail + chunk`
+        // buffer) silently drops a marker split across 3+ reads, because
+        // the middle chunk's contribution to the tail never survives past
+        // its own round. `scan_for_marker` must derive the next tail from
+        // the combined buffer so this still works no matter how many reads
+        // the marker is split across.
+        let marker = b"<<AITERM_DONE:abcdefgh>>"; // 24 bytes
+        let (first, rest) = marker.split_at(5);
+        let (second, third) = rest.split_at(2);
+
+        // Round 1: only 5 bytes have arrived.
+        let (found1, tail1) = scan_for_marker(b"", first, marker);
+        assert!(!found1);
+
+        // Round 2: 2 more bytes arrive (7 bytes total seen so far) — still
+        // not present. This is the exact round the naive `chunk`-only tail
+        // computation loses information: the buggy version's tail would be
+        // "second" (2 bytes) instead of "first + second" (7 bytes).
+        let (found2, tail2) = scan_for_marker(&tail1, second, marker);
+        assert!(!found2);
+        assert_eq!(tail2.len(), 7, "tail must carry forward everything seen so far, not just the latest chunk");
+
+        // Round 3: the remainder arrives — tail2 + third together contain it.
+        let (found3, _tail3) = scan_for_marker(&tail2, third, marker);
+        assert!(found3, "marker split across 3 chunks must still be found");
     }
 
     #[test]
