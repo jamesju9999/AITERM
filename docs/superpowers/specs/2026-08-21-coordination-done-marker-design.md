@@ -33,8 +33,8 @@
 - `PtySession` 新增 `marker_count: Arc<AtomicU64>` 與 `marker_tail: Mutex<Vec<u8>>`，讀取迴圈在掃 `contains_bare_bell` 的同一個位置，額外用「上一輪尾巴＋這次 chunk」掃描自己 `id` 專屬的完成標記字串（見下方「標記格式」與「跨 chunk 邊界的偵測正確性」），命中就 `fetch_add(1)`；曝露 `pub fn marker_count(&self) -> u64`，`spawn()`/`spawn_with_id()` 兩處都要加
 - `CoordinationRegistry` 的 baseline 從單一 `u64` 改成 `(bell: u64, marker: u64)` 一對；`record_baseline`/`baseline` 對應改成記兩個值
 - `status_for` 的 idle 判斷改成 `bell_count > bell_baseline || marker_count > marker_baseline`
-- `SpawnTabArgs`/`SendInputArgs` 各加一個 `request_done_marker: bool`（`#[serde(default)]`，預設 `false`）
-- 設為 `true` 時，`spawn_tab`/`send_input` 把要寫進 PTY 的文字，在原文字後面加上一段固定措辭、含 `tab_id` 的提示（見下方「指示文字」），一次寫入，呼叫端不必自己組措辭
+- `SendInputArgs` 加一個 `request_done_marker: bool`（`#[serde(default)]`，預設 `false`）
+- 設為 `true` 時，`send_input` 把要寫進 PTY 的文字，在原文字後面加上一段固定措辭、含 `tab_id` 的提示（見下方「指示文字」），一次寫入，呼叫端不必自己組措辭
 - `TabStatus`/`WaitResult` 加一個 `signal: Option<&'static str>` 欄位（`"bell"` 或 `"marker"`），標出這次 idle 是哪個訊號先觸發的
 
 **不含：**
@@ -73,7 +73,9 @@
 
 `{tab_id}` 在寫入前用實際的 tab id 字串取代。這段文字就是最終版本，不再另外定案。
 
-`spawn_tab`（當帶了 `command` 時）與 `send_input`，在 `request_done_marker: true` 時，各自把這段文字接在使用者要送出的原文字後面（中間留一個換行），一次性 `pty_manager.write(...)`。
+`send_input` 在 `request_done_marker: true` 時，把這段文字接在使用者要送出的原文字後面（中間留一個換行），一次性 `pty_manager.write(...)`。
+
+**只加在 `send_input`，不加在 `spawn_tab`：** 寫計畫時發現的修正。`spawn_tab` 的 `command` 語意上是「啟動一個程式」（例如打開 `claude` REPL），不是「交辦一項任務」——沒有一個具體任務讓標記去回報完成，加了也不知道要標記誰的完成。更關鍵的是正確性風險：如果把指示文字接在 `command` 後面一起寫入，等於在同一次 PTY 寫入裡塞進第二行文字，會在剛啟動的程式（例如 `claude` CLI）真正就緒、能讀取輸入之前就搶著送出去——這正是 `spawn_tab` 目前「寫入前不等 shell 就緒」這個既有行為底下的既有風險類別（見 2026-08-20 設計文件與後續冷啟動延遲討論），沒必要為了這個選用功能多開一個新的風險面。真正有意義的位置是 `send_input`：那才是協調端實際把任務內容送給一個「已經在跑、預期會讀取輸入」的 agent 的地方。
 
 ### Baseline／訊號比較的正確性
 
@@ -92,6 +94,6 @@
 ## 測試
 
 - Rust 單元測試：比照現有 bell 測試——送標記位元組序列到讀取迴圈，確認 `marker_count()` 正確累加；確認一般輸出（含不含 tab_id 的相似文字）不會誤觸發，除非格式完全吻合；**專門測試標記被切在兩個 chunk 交界處的情境**（例如故意分兩次 `write` 各送標記字串的前半段與後半段），確認 `marker_tail` 機制仍能正確累加
-- `coordination_ops.rs` 單元測試：`request_done_marker: true` 時 `send_input`/`spawn_tab` 寫入的文字有正確附加指示文字且含正確 tab_id；`status_for`/`get_tab_status`/`wait_for_idle` 在只有 marker 命中（bell 未命中）時仍正確回報 `idle: true` 且 `signal: "marker"`；`request_done_marker: false`（預設）時寫入文字不變、行為與既有測試完全一致
-- 整合測試：比照既有手法，跑一次 `spawn_tab(request_done_marker: true)` → `send_input`（送一個會印出標記的假指令）→ `wait_for_idle`，確認比純等 bell 提早返回且 `signal: "marker"`
+- `coordination_ops.rs` 單元測試：`request_done_marker: true` 時 `send_input` 寫入的文字有正確附加指示文字且含正確 tab_id；`status_for`/`get_tab_status`/`wait_for_idle` 在只有 marker 命中（bell 未命中）時仍正確回報 `idle: true` 且 `signal: "marker"`；`request_done_marker: false`（預設）時寫入文字不變、行為與既有測試完全一致
+- 整合測試：比照既有手法，跑一次 `spawn_tab` → `send_input(request_done_marker: true)`（送一個會印出標記的假指令）→ `wait_for_idle`，確認比純等 bell 提早返回且 `signal: "marker"`
 - 手動驗證：真的對一個跑 Claude Code 的分頁開啟這個選項，確認實際多輪協調流程中，加速訊號確實比 bell 更快浮現 idle，且沒開這個選項的既有流程完全不受影響
