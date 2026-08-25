@@ -574,11 +574,16 @@ import { LocaleProvider } from "../../contexts/LocaleContext";
 // register/unregister 在真實的 TerminalApp 裡是 useCallback([]) 的穩定引用。
 // 測試必須照樣給穩定引用，否則每次 rerender 都會讓 effect 重新註冊一輪，
 // 測到的就不是真實情境。
+//
+// 但 element 本身必須每次重新建立：React 對函式元件有 identity bailout，
+// 拿同一個 element 物件參照再 render 一次會直接略過重繪，ref 不會刷新，
+// 於是「過期狀態」那題會因為錯的理由失敗。所以回傳的是 renderUi() 工廠，
+// 而不是固定的 ui 物件——函式身分穩定、element 每次新建，兩者兼顧。
 function mountAndCaptureGuard() {
   let guard: (() => Promise<boolean>) | undefined;
   const register = (_id: string, g: () => Promise<boolean>) => { guard = g; };
   const unregister = vi.fn();
-  const ui = (
+  const renderUi = () => (
     <LocaleProvider>
       <CodeAssistantView
         isActive
@@ -588,9 +593,9 @@ function mountAndCaptureGuard() {
       />
     </LocaleProvider>
   );
-  const view = render(ui);
+  const view = render(renderUi());
   if (!guard) throw new Error("CodeAssistantView 沒有註冊 close guard");
-  return { guard, view, unregister, ui };
+  return { guard, view, unregister, renderUi };
 }
 
 beforeEach(() => {
@@ -651,12 +656,13 @@ describe("Agent 分頁 close guard", () => {
   // 這一題釘住整個功能最容易靜默失效的地方：guard 是在 messages 還是空的
   // 時候註冊的，如果它閉包捕捉了當時的 messages，之後談再多輪也會直接放行。
   it("註冊之後才產生的對話，guard 仍看得到（不可讀到過期狀態）", async () => {
-    const { guard, view, ui } = mountAndCaptureGuard();
+    const { guard, view, renderUi } = mountAndCaptureGuard();
 
     // 註冊當下 messages 是空的。模擬「註冊完 guard 之後，使用者才跟 AI 談話」，
     // 用同一組穩定 props 重繪，讓元件讀到新的 messages。
+    // 注意要傳 renderUi() 新建的 element，不能重用同一個物件參照（見上方說明）。
     fakeAssistant.messages = [{ role: "user", content: "後來才講的話" }];
-    view.rerender(ui);
+    view.rerender(renderUi());
 
     let settled: unknown = "pending";
     await act(async () => { void guard().then((v) => { settled = v; }); });
