@@ -633,6 +633,8 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   tabId={tab.id}
                   remoteOwner={remoteTabId}
                   onRemoteOwnerChange={setRemoteTabId}
+                  registerCloseGuard={registerCloseGuard}
+                  unregisterCloseGuard={unregisterCloseGuard}
                 />
               )}
             </div>
