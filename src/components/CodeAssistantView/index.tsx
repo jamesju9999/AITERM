@@ -9,6 +9,7 @@ import { useLocale } from "../../contexts/LocaleContext";
 import { ToolCallCard } from "./ToolCallCard";
 import { MarkdownText } from "../../lib/markdown";
 import { ModelPickerButton } from "../ModelPickerButton";
+import { CloseConfirmDialog } from "../CloseConfirmDialog";
 import "./styles.css";
 
 const STORAGE_KEY = "aiterm-code-assistant-root";
@@ -22,9 +23,17 @@ function saveRoot(path: string) {
 
 interface Props {
   isActive: boolean;
+  tabId?: string;
+  registerCloseGuard?: (tabId: string, guard: () => Promise<boolean>) => void;
+  unregisterCloseGuard?: (tabId: string) => void;
 }
 
-export function CodeAssistantView({ isActive }: Props) {
+export function CodeAssistantView({
+  isActive,
+  tabId,
+  registerCloseGuard,
+  unregisterCloseGuard,
+}: Props) {
   const { t } = useLocale();
   const [projectRoot, setProjectRoot] = useState(loadSavedRoot);
   const [pendingRoot, setPendingRoot] = useState<string | null>(null);
@@ -41,6 +50,38 @@ export function CodeAssistantView({ isActive }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const { messages, isStreaming, error, isFallbackMode, tokenCount, tokenLimit, send, clear } = useCodeAssistant();
+
+  // 關閉確認：ref 是必要的，不是風格選擇。guard 只在 tabId 變動時重新註冊，
+  // 若直接閉包捕捉 messages/isStreaming，之後談的每一輪它都看不到，
+  // 會在沒有任何錯誤訊號的情況下直接放行——功能等於靜默失效。
+  const hasMessagesRef = useRef(false);
+  hasMessagesRef.current = messages.length > 0;
+  const isStreamingRef = useRef(false);
+  isStreamingRef.current = isStreaming;
+
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const closeResolveRef = useRef<((canClose: boolean) => void) | null>(null);
+
+  const handleCloseConfirm = useCallback((canClose: boolean) => {
+    setShowCloseConfirm(false);
+    closeResolveRef.current?.(canClose);
+    closeResolveRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    if (!tabId || !registerCloseGuard) return;
+    registerCloseGuard(tabId, () => {
+      // 全新、沒談過話的分頁沒有東西可失去，不要打擾使用者。
+      if (!isStreamingRef.current && !hasMessagesRef.current) {
+        return Promise.resolve(true);
+      }
+      return new Promise<boolean>((resolve) => {
+        closeResolveRef.current = resolve;
+        setShowCloseConfirm(true);
+      });
+    });
+    return () => { unregisterCloseGuard?.(tabId); };
+  }, [tabId, registerCloseGuard, unregisterCloseGuard]);
 
   // Load providers once on mount
   useEffect(() => {
@@ -186,6 +227,16 @@ export function CodeAssistantView({ isActive }: Props) {
   if (!projectRoot) {
     return (
       <div className="ca-view">
+        {showCloseConfirm && (
+          <CloseConfirmDialog
+            title={isStreaming ? t.ca_close_title_streaming : t.ca_close_title_dirty}
+            body={isStreaming ? t.ca_close_body_streaming : t.ca_close_body_dirty}
+            confirmLabel={t.ca_close_discard}
+            cancelLabel={t.ca_close_cancel}
+            onConfirm={() => handleCloseConfirm(true)}
+            onCancel={() => handleCloseConfirm(false)}
+          />
+        )}
         <div className="ca-empty">
           <div className="ca-empty__icon">📂</div>
           <div className="ca-empty__title">{t.ca_empty_title}</div>
@@ -200,6 +251,16 @@ export function CodeAssistantView({ isActive }: Props) {
 
   return (
     <div className="ca-view">
+      {showCloseConfirm && (
+        <CloseConfirmDialog
+          title={isStreaming ? t.ca_close_title_streaming : t.ca_close_title_dirty}
+          body={isStreaming ? t.ca_close_body_streaming : t.ca_close_body_dirty}
+          confirmLabel={t.ca_close_discard}
+          cancelLabel={t.ca_close_cancel}
+          onConfirm={() => handleCloseConfirm(true)}
+          onCancel={() => handleCloseConfirm(false)}
+        />
+      )}
       {/* Messages area */}
       <div className="ca-messages" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
         {messages.length === 0 && (
