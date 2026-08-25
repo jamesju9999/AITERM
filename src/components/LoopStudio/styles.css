@@ -1048,51 +1048,6 @@
 
 .ls-clear-confirm-no:hover { border-color: #888; color: #fff; }
 
-/* Close-tab confirmation modal */
-.ls-close-overlay {
-  position: absolute;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.ls-close-dialog {
-  background: #1e1e1e;
-  border: 1px solid #444;
-  border-radius: 8px;
-  padding: 24px;
-  max-width: 360px;
-  width: 90%;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-}
-
-.ls-close-dialog-title {
-  font-size: 15px;
-  font-weight: 600;
-  margin: 0 0 10px;
-  color: #f59e0b;
-}
-
-.ls-close-dialog-body {
-  font-size: 13px;
-  color: #bbb;
-  margin: 0 0 20px;
-  line-height: 1.6;
-}
-
-.ls-close-dialog-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-}
-
-/* .ls-close-cancel-btn removed — replaced by aiterm-btn aiterm-btn--secondary */
-
-/* .ls-close-discard-btn removed — replaced by aiterm-btn aiterm-btn--danger-solid */
-
 .ls-fullauto-row {
   flex-direction: row;
   align-items: center;
