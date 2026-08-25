@@ -56,6 +56,7 @@ import { summarizeCommands } from "../lib/summarizeTab";
 import { reportAgentStep, type AgentStepInfo } from "../lib/agentStepReport";
 import { getGitBlockInfo } from "../ipc/vcs";
 import { isClaudeCommand } from "../lib/claudeCommand";
+import { CloseConfirmDialog } from "./CloseConfirmDialog";
 import "./TerminalView.css";
 
 interface PreviewState {
@@ -165,6 +166,8 @@ export interface TerminalViewProps {
    * remoteTabId（天然互斥：在這裡開會自動關掉原本開著的那個分頁）。
    */
   onRemoteOwnerChange?: (owner: string | null) => void;
+  registerCloseGuard?: (tabId: string, guard: () => Promise<boolean>) => void;
+  unregisterCloseGuard?: (tabId: string) => void;
 }
 
 // The live terminal pane's visible height shrinks to just the current content
@@ -189,7 +192,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, externalSessionId, onRunningChange, initialCwd, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, claudeBridge, tabId, remoteOwner = null, onRemoteOwnerChange }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, externalSessionId, onRunningChange, initialCwd, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, claudeBridge, tabId, remoteOwner = null, onRemoteOwnerChange, registerCloseGuard, unregisterCloseGuard }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -373,6 +376,38 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     const latest = blocks[blocks.length - 1];
     onRunningChange?.(latest?.status === "running");
   }, [blocks, onRunningChange]);
+
+  // 關閉確認：ref 是必要的，不是風格選擇。guard 只註冊一次，若閉包捕捉
+  // 當下的值，之後開始跑的指令它都看不到，會在沒有任何錯誤訊號的情況下
+  // 直接放行——功能等於靜默失效。
+  const isBusyRef = useRef(false);
+  isBusyRef.current = blocks[blocks.length - 1]?.status === "running";
+  const missionActiveRef = useRef(false);
+  missionActiveRef.current = agentMission?.active ?? false;
+
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const closeResolveRef = useRef<((canClose: boolean) => void) | null>(null);
+
+  const handleCloseConfirm = useCallback((canClose: boolean) => {
+    setShowCloseConfirm(false);
+    closeResolveRef.current?.(canClose);
+    closeResolveRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    if (!tabId || !registerCloseGuard) return;
+    registerCloseGuard(tabId, () => {
+      // 閒置的終端機沒有進行中的工作可失去，不要打擾使用者。
+      if (!isBusyRef.current && !missionActiveRef.current) {
+        return Promise.resolve(true);
+      }
+      return new Promise<boolean>((resolve) => {
+        closeResolveRef.current = resolve;
+        setShowCloseConfirm(true);
+      });
+    });
+    return () => { unregisterCloseGuard?.(tabId); };
+  }, [tabId, registerCloseGuard, unregisterCloseGuard]);
 
   /**
    * 應用程式自己在畫面上畫的游標（一格反白）。
@@ -1605,6 +1640,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         position: "relative",
       }}
     >
+      {showCloseConfirm && (
+        <CloseConfirmDialog
+          title={missionActiveRef.current ? t.term_close_title_mission : t.term_close_title_running}
+          body={missionActiveRef.current ? t.term_close_body_mission : t.term_close_body_running}
+          confirmLabel={t.term_close_discard}
+          cancelLabel={t.term_close_cancel}
+          onConfirm={() => handleCloseConfirm(true)}
+          onCancel={() => handleCloseConfirm(false)}
+        />
+      )}
       <div className="aiterm-status" data-tauri-drag-region>
         <span className="aiterm-status-left" data-tauri-drag-region style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           {onToggleSidebar && (
