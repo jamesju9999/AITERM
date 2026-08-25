@@ -166,7 +166,11 @@ git commit -m "i18n: add strings for the terminal tab close confirmation"
   const isBusyRef = useRef(false);
   isBusyRef.current = blocks[blocks.length - 1]?.status === "running";
   const missionActiveRef = useRef(false);
-  missionActiveRef.current = agentMission.active;
+  // agentMission 的型別是 `AgentMission | null` 且初值就是 null
+  // （useAgentMission.ts:17），所以一定要 optional chaining——直接寫
+  // `agentMission.active` 會讓每個閒置分頁在第一次 render 就丟例外。
+  // 檔案裡既有的用法（:1164、:1377、:1915）也都是這樣寫。
+  missionActiveRef.current = agentMission?.active ?? false;
 
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const closeResolveRef = useRef<((canClose: boolean) => void) | null>(null);
@@ -233,7 +237,11 @@ import { CloseConfirmDialog } from "./CloseConfirmDialog";
       if (blocks[blocks.length - 1]?.status !== "running" && !agentMission.active) {
 ```
 
+（同樣要記得 `agentMission?.active`，別在變異版裡又寫回會丟例外的形式。）
+
 執行測試。**「註冊之後才開始執行的指令」那題必須變紅。**若它仍是綠的，代表那題沒有真的驗到，必須先修測試。
+
+> ⚠️ **這裡的測試 mock 掉了 `useAgentMission`，所以 mock 回傳物件時不會重現 null 的情況。** 換句話說，上面那個 optional chaining 的錯誤**測試抓不到**，只有實機才會炸。Task 5 的實機驗證因此不是形式——它是這個特定風險唯一的防線。
 
 改完**務必還原**，並用 `git diff` 確認沒有殘留。
 
