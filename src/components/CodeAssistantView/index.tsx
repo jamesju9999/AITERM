@@ -224,19 +224,23 @@ export function CodeAssistantView({
     await writeTextFile(path, lines.join("\n"));
   }, [messages, projectRoot]);
 
+  // 兩個 return 分支都要掛同一個確認框（沒選專案目錄時一樣可能已經有對話），
+  // 所以算一次就好——分開寫兩份的話，日後改了其中一份會靜默地不同步。
+  const closeConfirmDialog = showCloseConfirm && (
+    <CloseConfirmDialog
+      title={isStreaming ? t.ca_close_title_streaming : t.ca_close_title_dirty}
+      body={isStreaming ? t.ca_close_body_streaming : t.ca_close_body_dirty}
+      confirmLabel={t.ca_close_discard}
+      cancelLabel={t.ca_close_cancel}
+      onConfirm={() => handleCloseConfirm(true)}
+      onCancel={() => handleCloseConfirm(false)}
+    />
+  );
+
   if (!projectRoot) {
     return (
       <div className="ca-view">
-        {showCloseConfirm && (
-          <CloseConfirmDialog
-            title={isStreaming ? t.ca_close_title_streaming : t.ca_close_title_dirty}
-            body={isStreaming ? t.ca_close_body_streaming : t.ca_close_body_dirty}
-            confirmLabel={t.ca_close_discard}
-            cancelLabel={t.ca_close_cancel}
-            onConfirm={() => handleCloseConfirm(true)}
-            onCancel={() => handleCloseConfirm(false)}
-          />
-        )}
+        {closeConfirmDialog}
         <div className="ca-empty">
           <div className="ca-empty__icon">📂</div>
           <div className="ca-empty__title">{t.ca_empty_title}</div>
@@ -251,16 +255,7 @@ export function CodeAssistantView({
 
   return (
     <div className="ca-view">
-      {showCloseConfirm && (
-        <CloseConfirmDialog
-          title={isStreaming ? t.ca_close_title_streaming : t.ca_close_title_dirty}
-          body={isStreaming ? t.ca_close_body_streaming : t.ca_close_body_dirty}
-          confirmLabel={t.ca_close_discard}
-          cancelLabel={t.ca_close_cancel}
-          onConfirm={() => handleCloseConfirm(true)}
-          onCancel={() => handleCloseConfirm(false)}
-        />
-      )}
+      {closeConfirmDialog}
       {/* Messages area */}
       <div className="ca-messages" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
         {messages.length === 0 && (
