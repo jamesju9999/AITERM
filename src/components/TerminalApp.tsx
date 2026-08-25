@@ -17,6 +17,7 @@ import { DocConverterView } from "./DocConverter/DocConverterView";
 import { ApiDocsView } from "./ApiDocsView";
 import { LoopStudioView } from "./LoopStudio";
 import { CodeAssistantView } from "./CodeAssistantView";
+import { runCloseGuard } from "../lib/closeTabGuard";
 import { KnowledgeBaseView } from "./KnowledgeBaseView";
 import { MailView } from "./MailView";
 import { HomeView } from "./HomeView";
@@ -298,12 +299,14 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     setRouteHint({ tabId, type: route.type, userText: route.userText });
   }, []);
 
-  const handleCloseTab = useCallback(async (id: string) => {
-    const guard = closeGuardsRef.current.get(id);
-    if (guard) {
-      const canClose = await guard();
-      if (!canClose) return;
-    }
+  const handleCloseTab = useCallback(async (id: string): Promise<boolean> => {
+    const canClose = await runCloseGuard(
+      id,
+      activeIdRef.current,
+      closeGuardsRef.current.get(id),
+      setActiveId,
+    );
+    if (!canClose) return false;
     // 關掉的剛好是目前的 remote 分頁：釋放這個位置，不留著一個指向已經不存在
     // 分頁的 id。
     setRemoteTabId((prev) => (prev === id ? null : prev));
@@ -335,20 +338,20 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       }
       return nextTabs;
     });
+    return true;
   }, []);
 
   // RouteHint 的「換成…」：關掉猜錯的那個分頁，用同一句 userText 重開成
   // 使用者選的類型，並把提示狀態指向新分頁。
-  const handleRouteHintPick = useCallback((type: TabType) => {
+  const handleRouteHintPick = useCallback(async (type: TabType) => {
     if (!routeHint) return;
     const { tabId: oldId, userText } = routeHint;
-    // 這裡刻意不 await：終端機分頁目前沒有註冊任何 close guard（只有 LoopStudio
-    // 有），所以 handleCloseTab 對它是同步跑完的。
-    //
-    // 但如果哪天有人幫 TerminalView 加上 close guard，這行就會變成真的非同步，
-    // 於是新分頁會在使用者還沒回答確認對話框時就先開出來。屆時要改成 await，
-    // 而且要處理「使用者取消關閉」的情況——那時不應該開新分頁。
-    void handleCloseTab(oldId);
+    // 終端機／程式庫協助／LoopStudio 分頁都可能註冊 close guard，所以這裡
+    // 一定要 await：否則確認框還開著，新分頁就先開出來搶走焦點，舊分頁會
+    // 帶著一個看不見的對話框卡住關不掉。
+    // 使用者取消關閉時也不該開新分頁——他要的是留在原地。
+    const closed = await handleCloseTab(oldId);
+    if (!closed) return;
     const opts: TabOpenOpts | undefined =
       type === "terminal" ? { initialMission: { goal: userText, maxSteps: 20 } } : undefined;
     const newId = handlePickerSelect(type, opts);
@@ -579,7 +582,12 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   unregisterCloseGuard={unregisterCloseGuard}
                 />
               ) : tab.type === "code-assistant" ? (
-                <CodeAssistantView isActive={isActive} />
+                <CodeAssistantView
+                  isActive={isActive}
+                  tabId={tab.id}
+                  registerCloseGuard={registerCloseGuard}
+                  unregisterCloseGuard={unregisterCloseGuard}
+                />
               ) : tab.type === "knowledge-base" ? (
                 <KnowledgeBaseView isActive={isActive} />
               ) : tab.type === "mail" ? (
@@ -625,6 +633,8 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   tabId={tab.id}
                   remoteOwner={remoteTabId}
                   onRemoteOwnerChange={setRemoteTabId}
+                  registerCloseGuard={registerCloseGuard}
+                  unregisterCloseGuard={unregisterCloseGuard}
                 />
               )}
             </div>

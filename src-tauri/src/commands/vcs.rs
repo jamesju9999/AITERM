@@ -450,13 +450,45 @@ pub async fn vcs_query(
     }
 }
 
+/// Strips a leading `<think>...</think>` reasoning block some local models
+/// (e.g. Qwen3-style thinking models) emit before their real answer. The
+/// real content is everything after the *last* `</think>` — matching how
+/// these models' own chat templates split `reasoning_content` from
+/// `content` (see e.g. Qwen3's chat_template.jinja: `content.split('</think>')[-1]`).
+/// If `<think>` appears with no closing tag, generation was truncated
+/// mid-thought and there is no real answer to recover — return empty so
+/// the caller fails cleanly instead of parsing reasoning scratch text.
+fn strip_thinking_block(s: &str) -> &str {
+    if let Some(idx) = s.rfind("</think>") {
+        return s[idx + "</think>".len()..].trim();
+    }
+    if s.contains("<think>") {
+        return "";
+    }
+    s
+}
+
 /// Parse AI response into a VcsAgentDecision (reuses strip_json_fences logic).
 /// If full parse fails (e.g. AI invented an unknown intent kind), attempt graceful recovery:
 /// treat the response as done=true using the summary as the final answer.
 fn parse_vcs_agent_decision(response: &str) -> Result<VcsAgentDecision, String> {
+    let response = strip_thinking_block(response);
     let cleaned = strip_json_fences(response);
-    if let Ok(decision) = serde_json::from_str::<VcsAgentDecision>(&cleaned) {
-        return Ok(decision);
+    match serde_json::from_str::<VcsAgentDecision>(&cleaned) {
+        Ok(decision) => return Ok(decision),
+        Err(e) => log::warn!("VcsAgentDecision strict parse failed: {e}. Raw: {cleaned}"),
+    }
+    // The model understood *what* to do next but emitted the intent alone,
+    // without the {done, intent, summary, final_answer} envelope — a
+    // complete, unambiguous VcsIntent is safe to recover as a real step
+    // rather than swallowed by the generic done=true fallback below.
+    if let Ok(intent) = serde_json::from_str::<VcsIntent>(&cleaned) {
+        return Ok(VcsAgentDecision {
+            done: false,
+            intent: Some(intent),
+            summary: "Executing the next VCS operation".to_string(),
+            final_answer: None,
+        });
     }
     // Graceful recovery: extract summary/final_answer from the raw JSON and
     // return done=true so the loop terminates cleanly instead of erroring.
@@ -471,7 +503,154 @@ fn parse_vcs_agent_decision(response: &str) -> Result<VcsAgentDecision, String> 
             final_answer,
         });
     }
+    // Some local models echo their own turn back as a sequence of message-
+    // or content-block-shaped objects — comma-separated
+    // {"role":...,"content":...} or {"type":"text","text":...} objects with
+    // no enclosing array — instead of emitting the decision JSON directly.
+    // The real decision is always the *last* block (reasoning first,
+    // answer last); wrap in brackets to make it valid JSON and dig it out.
+    if let Ok(serde_json::Value::Array(turns)) =
+        serde_json::from_str::<serde_json::Value>(&format!("[{cleaned}]"))
+    {
+        if let Some(text) = turns
+            .last()
+            .and_then(|t| t["content"].as_str().or_else(|| t["text"].as_str()))
+        {
+            let inner = strip_json_fences(text);
+            if let Ok(decision) = serde_json::from_str::<VcsAgentDecision>(&inner) {
+                return Ok(decision);
+            }
+        }
+    }
     Err(format!("Failed to parse VcsAgentDecision. Raw: {cleaned}"))
+}
+
+/// Every `intent.kind` the agent loop accepts. Also fed to the response
+/// schema so a server with logit-level enforcement cannot emit any other
+/// kind; `prompt_lists_every_intent_kind` guards against drift from the
+/// list spelled out in the system prompt.
+const VCS_INTENT_KINDS: [&str; 19] = [
+    "log_query", "diff_view", "blame", "branch_list", "pr_list", "issue_list",
+    "actions_list", "revert_commit", "cherry_pick", "create_pr", "merge_pr",
+    "create_issue", "trigger_workflow", "create_branch", "delete_branch",
+    "checkout_branch", "svn_commit", "svn_revert", "svn_update",
+];
+
+/// JSON schema for [`VcsAgentDecision`], sent as `response_format:
+/// json_schema`. Servers that enforce it at the logit level then make an
+/// off-shape response impossible — `json_object` alone only guarantees
+/// *some* valid JSON, which a weaker model can satisfy by echoing back
+/// unrelated data from its prompt.
+/// JSON schema for a bare [`VcsIntent`], used by the one-shot `vcs_query`
+/// path. Same reasoning as [`vcs_agent_decision_schema`]: `json_object` only
+/// guarantees valid JSON, so without a schema a weaker model can return a
+/// well-formed object with no `kind` — or a `kind` that is not a real
+/// operation — and the parse fails.
+fn vcs_intent_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "kind": { "type": "string", "enum": VCS_INTENT_KINDS },
+        },
+        "required": ["kind"],
+    })
+}
+
+fn vcs_agent_decision_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "done": { "type": "boolean" },
+            "intent": {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "kind": { "type": "string", "enum": VCS_INTENT_KINDS },
+                        },
+                        "required": ["kind"],
+                    },
+                    { "type": "null" },
+                ]
+            },
+            "summary": { "type": "string" },
+            "final_answer": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        },
+        "required": ["done", "intent", "summary", "final_answer"],
+    })
+}
+
+/// Builds the system prompt for one `vcs_agent_step` planning call.
+fn build_agent_system_prompt(goal: &str, history_text: &str, vcs_type: &str) -> String {
+    let history_context = if history_text.is_empty() {
+        "(no history yet — this is the first step)".to_string()
+    } else {
+        history_text.to_string()
+    };
+    format!(
+        r#"You are a VCS agent that plans step-by-step operations to achieve the user's goal.
+
+Goal: {goal}
+
+History so far:
+{history_context}
+
+Available VCS operations — intent.kind MUST be EXACTLY one of these values (never invent new kinds):
+  log_query        {{ path?, author?, since?, max_count (u32, default 20) }}
+  diff_view        {{ revision }}
+  blame            {{ path }}
+  branch_list      {{}}
+  pr_list          {{ state? ("open"|"closed"|"all") }}
+  issue_list       {{ state? ("open"|"closed"|"all") }}
+  actions_list     {{}}
+  revert_commit    {{ revision }}
+  cherry_pick      {{ revision }}
+  create_pr        {{ title, head, base, body? }}
+  merge_pr         {{ pr_number (u64) }}
+  create_issue     {{ title, body? }}
+  trigger_workflow {{ workflow_id, ref }}
+  create_branch    {{ name, from? }}
+  delete_branch    {{ name }}
+  checkout_branch  {{ name }}
+  svn_commit       {{ message, paths: [] }}
+  svn_revert       {{ paths: [] }}
+  svn_update       {{ path? }}
+
+Repo type: {vcs_type}
+
+RULES:
+1. intent.kind MUST be one of the listed values above. NEVER use "summarize", "analyze", "report", or any other kind not in the list.
+2. If you have enough information from the history to answer the goal — including when you want to summarize or synthesize what you found — return done=true with final_answer. Do NOT invent a fake intent to summarize.
+3. Only return done=false when you genuinely need to execute another VCS operation to gather more data.
+4. Never copy or continue the raw "Result (JSON)" data from History so far into your output. You already have that data — when done=true, describe it in your own words inside final_answer as plain text, not as re-emitted JSON.
+
+Example: if History contains a log_query Result (JSON) listing commits, the correct output is:
+{{
+  "done": true,
+  "intent": null,
+  "summary": "Summarized the recent commits",
+  "final_answer": "The most recent commits are: <plain-text list, not JSON>"
+}}
+NOT the commit objects themselves.
+
+Decide what to do next. Output ONLY a single JSON object with this schema — nothing else, and never the contents of History so far:
+{{
+  "done": false,
+  "intent": {{ "kind": "<one of the listed kinds>", ...fields }},
+  "summary": "one sentence describing what you're doing",
+  "final_answer": null
+}}
+
+OR if the goal is achieved (including when you want to summarize what you found):
+{{
+  "done": true,
+  "intent": null,
+  "summary": "one sentence summary",
+  "final_answer": "complete answer to the user's goal"
+}}
+
+Output ONLY the JSON object above. No prose, no markdown fences, no copied history data."#
+    )
 }
 
 #[tauri::command]
@@ -520,62 +699,10 @@ pub async fn vcs_agent_step(
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    let system_prompt = format!(
-        r#"You are a VCS agent that plans step-by-step operations to achieve the user's goal.
-
-Goal: {goal}
-
-History so far:
-{history_context}
-
-Available VCS operations — intent.kind MUST be EXACTLY one of these values (never invent new kinds):
-  log_query        {{ path?, author?, since?, max_count (u32, default 20) }}
-  diff_view        {{ revision }}
-  blame            {{ path }}
-  branch_list      {{}}
-  pr_list          {{ state? ("open"|"closed"|"all") }}
-  issue_list       {{ state? ("open"|"closed"|"all") }}
-  actions_list     {{}}
-  revert_commit    {{ revision }}
-  cherry_pick      {{ revision }}
-  create_pr        {{ title, head, base, body? }}
-  merge_pr         {{ pr_number (u64) }}
-  create_issue     {{ title, body? }}
-  trigger_workflow {{ workflow_id, ref }}
-  create_branch    {{ name, from? }}
-  delete_branch    {{ name }}
-  checkout_branch  {{ name }}
-  svn_commit       {{ message, paths: [] }}
-  svn_revert       {{ paths: [] }}
-  svn_update       {{ path? }}
-
-Repo type: {vcs_type}
-
-RULES:
-1. intent.kind MUST be one of the listed values above. NEVER use "summarize", "analyze", "report", or any other kind not in the list.
-2. If you have enough information from the history to answer the goal — including when you want to summarize or synthesize what you found — return done=true with final_answer. Do NOT invent a fake intent to summarize.
-3. Only return done=false when you genuinely need to execute another VCS operation to gather more data.
-
-Decide what to do next. Output ONLY a JSON object with this schema:
-{{
-  "done": false,
-  "intent": {{ "kind": "<one of the listed kinds>", ...fields }},
-  "summary": "one sentence describing what you're doing",
-  "final_answer": null
-}}
-
-OR if the goal is achieved (including when you want to summarize what you found):
-{{
-  "done": true,
-  "intent": null,
-  "summary": "one sentence summary",
-  "final_answer": "complete answer to the user's goal"
-}}
-
-Output ONLY the JSON object. No prose, no markdown fences."#,
-        goal = goal,
-        history_context = if history_text.is_empty() { "(no history yet — this is the first step)".to_string() } else { history_text },
-        vcs_type = format!("{:?}", repo_info.vcs_type).to_lowercase(),
+    let system_prompt = build_agent_system_prompt(
+        &goal,
+        &history_text,
+        &format!("{:?}", repo_info.vcs_type).to_lowercase(),
     );
 
     let req = GenerateRequest {
@@ -588,12 +715,17 @@ Output ONLY the JSON object. No prose, no markdown fences."#,
         }],
         context: crate::ai::EnvSnapshot::default(),
         mode: QueryMode::SingleCommand,
-        max_tokens: Some(1024),
+        // Thinking models (e.g. Qwen3-style local checkpoints) spend a chunk
+        // of this budget on a <think>...</think> reasoning block before the
+        // actual decision JSON — 1024 was tight enough that generation could
+        // get cut off mid-thought, before the real answer was ever emitted.
+        max_tokens: Some(4096),
     };
 
     let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
     let provider_clone = provider.clone();
-    let join = tokio::spawn(async move { provider_clone.generate(req, tx).await });
+    let schema = vcs_agent_decision_schema();
+    let join = tokio::spawn(async move { provider_clone.generate_json(req, schema, tx).await });
 
     step_registry
         .0
@@ -705,7 +837,8 @@ Example output: {"kind":"log_query","path":null,"author":null,"since":null,"max_
 
     let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
     let provider_clone = provider.clone();
-    let join = tokio::spawn(async move { provider_clone.generate(req, tx).await });
+    let schema = vcs_intent_schema();
+    let join = tokio::spawn(async move { provider_clone.generate_json(req, schema, tx).await });
 
     let mut buf = String::new();
     while let Some(chunk) = rx.recv().await {
@@ -1199,5 +1332,165 @@ mod unique_branch_suffix_tests {
             .expect("branch name should start with feature/{slug}-");
         assert!(!suffix_part.is_empty(), "expected a non-empty suffix after the slug");
         assert!(suffix_part.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+}
+
+#[cfg(test)]
+mod parse_vcs_agent_decision_tests {
+    use super::parse_vcs_agent_decision;
+    use crate::vcs::VcsIntent;
+
+    /// Qwen3-style thinking models (e.g. the Ornith MLX checkpoint) prepend a
+    /// `<think>...</think>` reasoning block before the real answer. The real
+    /// decision must still parse once the thinking block is stripped.
+    #[test]
+    fn decision_after_a_completed_thinking_block_parses() {
+        let raw = "先想一下使用者要什麼...\n</think>\n\n{\"done\":false,\"intent\":{\"kind\":\"branch_list\"},\"summary\":\"Checking branches\",\"final_answer\":null}";
+        let decision = parse_vcs_agent_decision(raw).unwrap();
+        assert!(!decision.done);
+        assert!(matches!(decision.intent, Some(VcsIntent::BranchList)));
+    }
+
+    /// If generation is cut off (max_tokens) while still inside the
+    /// `<think>` block, there is no real answer in the buffer at all —
+    /// this must fail cleanly, not parse reasoning scratch text as if it
+    /// were the decision.
+    #[test]
+    fn decision_truncated_mid_thinking_block_fails_cleanly() {
+        let raw = "<think>\n這是被截斷的推理過程，裡面甚至可能有 { 或 } 這種字元，但沒有真正的答案";
+        assert!(parse_vcs_agent_decision(raw).is_err());
+    }
+
+    /// Observed with the Ornith checkpoint even after a completed thinking
+    /// block: the model emits a bare intent object (no `done`/`summary`
+    /// envelope) — it understood *what* to do next but not the required
+    /// wrapper shape. This is unambiguous (a complete, valid VcsIntent) and
+    /// safe to recover as a done=false decision.
+    #[test]
+    fn bare_intent_object_without_envelope_is_recovered_as_a_step() {
+        let raw = r#"{"kind":"log_query","path":null,"author":null,"since":null,"max_count":20}"#;
+        let decision = parse_vcs_agent_decision(raw).unwrap();
+        assert!(!decision.done);
+        assert!(matches!(decision.intent, Some(VcsIntent::LogQuery { max_count: 20, .. })));
+    }
+
+    #[test]
+    fn plain_decision_json_parses_directly() {
+        let raw = r#"{"done":false,"intent":{"kind":"branch_list"},"summary":"Checking branches","final_answer":null}"#;
+        let decision = parse_vcs_agent_decision(raw).unwrap();
+        assert!(!decision.done);
+        assert!(matches!(decision.intent, Some(VcsIntent::BranchList)));
+    }
+
+    /// Some local models (observed with a quantized MLX checkpoint) echo the
+    /// whole prompt back as a simulated chat transcript — comma-separated
+    /// `{"role":...,"content":...}` objects with no enclosing array — instead
+    /// of emitting the decision JSON directly. The real decision ends up
+    /// escaped inside the last "assistant" turn's `content` field.
+    #[test]
+    fn decision_wrapped_in_echoed_chat_transcript_is_recovered() {
+        let raw = r#"{"role":"user","content":"Goal: recent commits"},{"role":"assistant","content":"{\"done\":false,\"intent\":{\"kind\":\"log_query\",\"max_count\":20},\"summary\":\"Retrieve recent commit log\",\"final_answer\":null}"}"#;
+        let decision = parse_vcs_agent_decision(raw).unwrap();
+        assert!(!decision.done);
+        assert!(matches!(decision.intent, Some(VcsIntent::LogQuery { .. })));
+        assert_eq!(decision.summary, "Retrieve recent commit log");
+    }
+
+    /// Observed with Ornith even without a <think> block: it emits its own
+    /// reasoning and its final answer as a sequence of Anthropic-style
+    /// content blocks (`{"type":"text","text":"..."}`), comma-separated with
+    /// no enclosing array and no "role" tag at all. The real decision is
+    /// always the last block.
+    #[test]
+    fn decision_wrapped_in_echoed_content_blocks_is_recovered() {
+        let raw = r#"{"type":"text","text":"The user is asking about recent changes. I should use log_query."}, {"type":"text","text":"{\"done\":false,\"intent\":{\"kind\":\"log_query\"},\"summary\":\"Query the git log\",\"final_answer\":null}"}"#;
+        let decision = parse_vcs_agent_decision(raw).unwrap();
+        assert!(!decision.done);
+        assert!(matches!(decision.intent, Some(VcsIntent::LogQuery { .. })));
+        assert_eq!(decision.summary, "Query the git log");
+    }
+}
+
+#[cfg(test)]
+mod vcs_agent_decision_schema_tests {
+    use super::{vcs_agent_decision_schema, VCS_INTENT_KINDS, build_agent_system_prompt};
+
+    #[test]
+    fn schema_requires_every_decision_envelope_field() {
+        let s = vcs_agent_decision_schema();
+        let required: Vec<&str> = s["required"]
+            .as_array()
+            .expect("schema must declare required fields")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        for field in ["done", "intent", "summary", "final_answer"] {
+            assert!(required.contains(&field), "{field} must be required, got {required:?}");
+        }
+        assert_eq!(s["properties"]["done"]["type"], "boolean");
+        assert_eq!(s["properties"]["summary"]["type"], "string");
+    }
+
+    #[test]
+    fn schema_constrains_intent_kind_to_the_known_kinds() {
+        let s = vcs_agent_decision_schema();
+        let json = serde_json::to_string(&s).unwrap();
+        for kind in VCS_INTENT_KINDS {
+            assert!(json.contains(kind), "schema must list intent kind {kind}");
+        }
+    }
+
+    /// Every kind the schema advertises must actually deserialize into a
+    /// `VcsIntent`. A kind listed here but unknown to serde would let the
+    /// model emit it and still fail to parse — the exact failure the schema
+    /// exists to prevent.
+    #[test]
+    fn every_advertised_intent_kind_deserializes() {
+        use crate::vcs::VcsIntent;
+        let s = super::vcs_intent_schema();
+        let kinds = s["properties"]["kind"]["enum"].as_array().expect("kind must be an enum");
+        assert_eq!(kinds.len(), VCS_INTENT_KINDS.len());
+        for k in kinds {
+            let name = k.as_str().unwrap();
+            // Supply every field any variant needs; serde ignores the extras
+            // for variants that do not declare them.
+            let raw = serde_json::json!({
+                "kind": name,
+                "revision": "r1", "path": "p", "name": "n", "message": "m",
+                "title": "t", "head": "h", "base": "b", "pr_number": 1,
+                "workflow_id": "w", "ref": "main", "paths": [],
+            });
+            serde_json::from_value::<VcsIntent>(raw)
+                .unwrap_or_else(|e| panic!("schema advertises kind {name} but it does not parse: {e}"));
+        }
+    }
+
+    /// The prompt spells the kinds out in prose while the schema uses the
+    /// const list; if one gains a kind the other must too.
+    #[test]
+    fn prompt_lists_every_intent_kind() {
+        let prompt = build_agent_system_prompt("goal", "history", "git");
+        for kind in VCS_INTENT_KINDS {
+            assert!(prompt.contains(kind), "prompt must document intent kind {kind}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod build_agent_system_prompt_tests {
+    use super::build_agent_system_prompt;
+
+    /// Weaker local models have been observed regurgitating a prior step's
+    /// raw `Result (JSON)` entry from the history verbatim instead of
+    /// producing a decision object — e.g. dumping the commit array from a
+    /// log_query result rather than summarizing it in `final_answer`. The
+    /// prompt must explicitly forbid this.
+    #[test]
+    fn warns_against_copying_history_json_verbatim() {
+        let prompt = build_agent_system_prompt("goal", "some history", "git");
+        assert!(
+            prompt.contains("Never copy") || prompt.contains("never copy"),
+            "expected an explicit instruction against copying history JSON verbatim, got:\n{prompt}"
+        );
     }
 }

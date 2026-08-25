@@ -1,0 +1,43 @@
+/* ── 分頁關閉確認框（共用） ──────────────────────────────────────
+   overlay 是 position:absolute，定位基準是 TerminalApp 那個
+   position:absolute 的分頁容器（.ls-root / .ca-view 皆未設 position），
+   因此正好覆蓋分頁區域而非整個視窗。不要改成 fixed。 */
+.aiterm-close-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.aiterm-close-dialog {
+  background: #1e1e1e;
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 24px;
+  max-width: 360px;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+
+.aiterm-close-dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 10px;
+  color: #f59e0b;
+}
+
+.aiterm-close-dialog-body {
+  font-size: 13px;
+  color: #bbb;
+  margin: 0 0 20px;
+  line-height: 1.6;
+}
+
+.aiterm-close-dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}

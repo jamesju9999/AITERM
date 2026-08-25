@@ -234,6 +234,20 @@ pub trait AiProvider: Send + Sync {
     /// Used by the Settings UI "Test Connection" button.
     async fn health_check(&self) -> Result<(), AiError>;
 
+    /// Generate a response constrained to `schema`. Providers whose backend
+    /// enforces a JSON schema at the logit level override this; the default
+    /// ignores the schema and generates normally, so callers must still
+    /// tolerate off-schema output.
+    async fn generate_json(
+        &self,
+        req: GenerateRequest,
+        schema: serde_json::Value,
+        tx: mpsc::Sender<GenerateChunk>,
+    ) -> Result<(), AiError> {
+        let _ = schema;
+        self.generate(req, tx).await
+    }
+
     /// Generate with tool definitions. Providers that support tool calling
     /// override this. Default impl returns `Unsupported`.
     async fn generate_with_tools(

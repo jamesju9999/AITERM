@@ -191,6 +191,32 @@ Rules:
     )
 }
 
+/// JSON schema for [`AiSingleCommand`], sent as `response_format:
+/// json_schema`. Servers that enforce it at the logit level then make an
+/// off-shape response impossible.
+///
+/// `json_object` alone only guarantees *some* valid JSON — a weaker model can
+/// satisfy it with a large, well-formed object carrying no `command` at all,
+/// which is exactly the "missing field `command`" failure this prevents.
+/// Providers whose backend cannot enforce a schema fall back to plain
+/// generation, so the parser must still tolerate off-shape output.
+fn ai_single_command_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "command": { "type": "string" },
+            "explanation": { "type": "string" },
+            // Must stay in step with RiskLevel's snake_case serde repr;
+            // `schema_risk_levels_all_deserialize` guards the pairing.
+            "risk_level": {
+                "type": "string",
+                "enum": ["safe", "needs_confirm", "dangerous", "blocked"],
+            },
+        },
+        "required": ["command", "explanation", "risk_level"],
+    })
+}
+
 #[tauri::command]
 pub async fn ai_query(
     query: String,
@@ -211,9 +237,11 @@ pub async fn ai_query(
         max_tokens: None,
     };
 
+
     let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
     let provider_for_spawn = provider.clone();
-    let join = tokio::spawn(async move { provider_for_spawn.generate(req, tx).await });
+    let schema = ai_single_command_schema();
+    let join = tokio::spawn(async move { provider_for_spawn.generate_json(req, schema, tx).await });
 
     let mut buf = String::new();
     while let Some(chunk) = rx.recv().await {
@@ -678,6 +706,47 @@ pub async fn agent_chat(
     }
 
     Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None })
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::ai_single_command_schema;
+    use crate::ai::AiSingleCommand;
+
+    /// `json_object` alone only guarantees *valid JSON*, not the right shape —
+    /// a weaker model can satisfy it with a large, well-formed object that has
+    /// no `command` at all, which then fails to deserialize. The schema is what
+    /// makes the shape enforceable at the logit level, so it must actually
+    /// require the field the parser requires.
+    #[test]
+    fn schema_requires_the_fields_the_parser_requires() {
+        let s = ai_single_command_schema();
+        let required: Vec<&str> = s["required"]
+            .as_array()
+            .expect("schema must declare required fields")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(required.contains(&"command"), "command must be required, got {required:?}");
+        assert_eq!(s["properties"]["command"]["type"], "string");
+    }
+
+    /// Guards against the schema drifting from `RiskLevel`'s serde
+    /// representation: an enum listing a variant serde cannot parse would let
+    /// the model emit a value that then fails deserialization anyway.
+    #[test]
+    fn schema_risk_levels_all_deserialize() {
+        let s = ai_single_command_schema();
+        let levels = s["properties"]["risk_level"]["enum"]
+            .as_array()
+            .expect("risk_level must be constrained to an enum");
+        assert!(!levels.is_empty());
+        for lv in levels {
+            let raw = format!(r#"{{"command":"ls","risk_level":{lv}}}"#);
+            serde_json::from_str::<AiSingleCommand>(&raw)
+                .unwrap_or_else(|e| panic!("schema lists risk_level {lv} but it does not parse: {e}"));
+        }
+    }
 }
 
 #[cfg(test)]

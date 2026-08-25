@@ -12,6 +12,7 @@ import { readFile, writeTextFile } from "../../ipc/fs";
 import { invokeAiChat } from "../../ipc/ai";
 import { useLocale } from '../../contexts/LocaleContext';
 import { ModelPickerButton } from "../ModelPickerButton";
+import { CloseConfirmDialog } from "../CloseConfirmDialog";
 import "./styles.css";
 
 const STORAGE_KEY = "aiterm-loop-studio-roster";
@@ -385,41 +386,23 @@ export function LoopStudioView({
   return (
     <div className="ls-root">
       {showCloseConfirm && (
-        <div className="ls-close-overlay">
-          <div className="ls-close-dialog">
-            <h3 className="ls-close-dialog-title">
-              {loop.isRunning ? t.ls_close_title_running : t.ls_close_title_dirty}
-            </h3>
-            <p className="ls-close-dialog-body">
-              {loop.isRunning ? (
-                <>{t.ls_close_body_running}</>
-              ) : (
-                <>
-                  {t.ls_close_body_dirty}<br />
-                  {currentProjectPath
-                    ? t.ls_close_body_modified
-                    : t.ls_close_body_unsaved}
-                </>
-              )}
-            </p>
-            <div className="ls-close-dialog-actions">
-              <button
-                type="button"
-                className="aiterm-btn aiterm-btn--secondary"
-                onClick={() => handleCloseConfirm(false)}
-              >
-                {t.ls_cancel_continue}
-              </button>
-              <button
-                type="button"
-                className="aiterm-btn aiterm-btn--danger-solid"
-                onClick={() => handleCloseConfirm(true)}
-              >
-                {t.ls_close_discard}
-              </button>
-            </div>
-          </div>
-        </div>
+        <CloseConfirmDialog
+          title={loop.isRunning ? t.ls_close_title_running : t.ls_close_title_dirty}
+          body={loop.isRunning ? (
+            <>{t.ls_close_body_running}</>
+          ) : (
+            <>
+              {t.ls_close_body_dirty}<br />
+              {currentProjectPath
+                ? t.ls_close_body_modified
+                : t.ls_close_body_unsaved}
+            </>
+          )}
+          confirmLabel={t.ls_close_discard}
+          cancelLabel={t.ls_cancel_continue}
+          onConfirm={() => handleCloseConfirm(true)}
+          onCancel={() => handleCloseConfirm(false)}
+        />
       )}
       <div className="ls-left" style={{ width: leftWidth, minWidth: leftWidth, maxWidth: leftWidth }}>
         <div className="ls-header">

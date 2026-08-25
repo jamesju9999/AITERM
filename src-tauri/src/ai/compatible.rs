@@ -61,20 +61,17 @@ impl OpenAiCompatibleClient {
         }
         builder
     }
-}
 
-#[async_trait]
-impl AiProvider for OpenAiCompatibleClient {
-    fn id(&self) -> &str { "compatible" }
-    fn display_name(&self) -> &str { "OpenAI-Compatible" }
-
-    async fn generate(
+    /// Shared body of `generate` / `generate_json`; `schema`, when present,
+    /// upgrades `response_format` from `json_object` to `json_schema`.
+    async fn generate_inner(
         &self,
         req: GenerateRequest,
+        schema: Option<serde_json::Value>,
         tx: mpsc::Sender<GenerateChunk>,
     ) -> Result<(), AiError> {
         let json_mode = self.supports_json_mode && req.mode == crate::ai::QueryMode::SingleCommand;
-        let body = build_request_body(&self.model, &req, json_mode);
+        let body = build_request_body(&self.model, &req, json_mode, schema.as_ref());
         let builder = self.apply_headers(self.client.post(self.completions_url()).json(&body));
 
         let resp = builder
@@ -86,12 +83,13 @@ impl AiProvider for OpenAiCompatibleClient {
 
         // ── Auto-retry without response_format on 400 ────────────────────────
         // Some models (e.g. Gemma in LM Studio) reject `response_format: json_object`
-        // with HTTP 400. Retry transparently without it.
+        // with HTTP 400. Servers that predate `json_schema` reject that too —
+        // in both cases fall back to an unconstrained request rather than fail.
         if status == reqwest::StatusCode::BAD_REQUEST && json_mode {
             let body_text = resp.text().await.unwrap_or_default();
             if body_text.contains("response_format") {
                 log::warn!("Provider rejected response_format, retrying without it: {body_text}");
-                let body_no_json = build_request_body(&self.model, &req, false);
+                let body_no_json = build_request_body(&self.model, &req, false, None);
                 let retry = self.apply_headers(self.client.post(self.completions_url()).json(&body_no_json));
                 let retry_resp = retry.send().await
                     .map_err(|e| AiError::Network { message: e.to_string() })?;
@@ -108,6 +106,31 @@ impl AiProvider for OpenAiCompatibleClient {
             return Err(map_http_error(status, resp).await);
         }
         consume_openai_sse(resp, tx).await
+    }
+}
+
+#[async_trait]
+impl AiProvider for OpenAiCompatibleClient {
+    fn id(&self) -> &str { "compatible" }
+    fn display_name(&self) -> &str { "OpenAI-Compatible" }
+
+    async fn generate(
+        &self,
+        req: GenerateRequest,
+        tx: mpsc::Sender<GenerateChunk>,
+    ) -> Result<(), AiError> {
+        self.generate_inner(req, None, tx).await
+    }
+
+    /// Sends the caller's schema as `response_format: json_schema`, which
+    /// servers that support it enforce at the logit level.
+    async fn generate_json(
+        &self,
+        req: GenerateRequest,
+        schema: serde_json::Value,
+        tx: mpsc::Sender<GenerateChunk>,
+    ) -> Result<(), AiError> {
+        self.generate_inner(req, Some(schema), tx).await
     }
 
 
@@ -196,7 +219,7 @@ impl AiProvider for OpenAiCompatibleClient {
             mode: QueryMode::SingleCommand,
             max_tokens: Some(1),
         };
-        let body = build_request_body(&self.model, &req, false);
+        let body = build_request_body(&self.model, &req, false, None);
         let builder = self.apply_headers(self.client.post(self.completions_url()).json(&body));
         let resp = builder
             .send()
@@ -235,12 +258,22 @@ struct CompatibleMessage {
 struct ResponseFormat {
     #[serde(rename = "type")]
     ty: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    json_schema: Option<JsonSchemaSpec>,
+}
+
+#[derive(Serialize)]
+struct JsonSchemaSpec {
+    name: &'static str,
+    schema: serde_json::Value,
+    strict: bool,
 }
 
 fn build_request_body(
     model: &str,
     req: &GenerateRequest,
     json_mode: bool,
+    schema: Option<&serde_json::Value>,
 ) -> CompatibleChatRequest {
     let mut messages: Vec<CompatibleMessage> = Vec::with_capacity(req.messages.len() + 1);
     messages.push(CompatibleMessage { role: "system".to_owned(), content: serde_json::Value::String(req.system_prompt.clone()) });
@@ -251,7 +284,22 @@ fn build_request_body(
         model: model.to_owned(),
         messages,
         stream: true,
-        response_format: if json_mode { Some(ResponseFormat { ty: "json_object" }) } else { None },
+        response_format: match (json_mode, schema) {
+            // A schema turns on logit-level enforcement: the server can only
+            // emit output matching this shape. `json_object` alone merely
+            // guarantees *some* valid JSON, which a model can satisfy by
+            // echoing unrelated data.
+            (true, Some(s)) => Some(ResponseFormat {
+                ty: "json_schema",
+                json_schema: Some(JsonSchemaSpec {
+                    name: "response",
+                    schema: s.clone(),
+                    strict: true,
+                }),
+            }),
+            (true, None) => Some(ResponseFormat { ty: "json_object", json_schema: None }),
+            (false, _) => None,
+        },
         max_tokens: req.max_tokens,
     }
 }
@@ -275,15 +323,35 @@ mod tests {
     #[test]
     fn with_json_mode_includes_response_format() {
         let req = sample_req();
-        let body = build_request_body("qwen2", &req, true);
+        let body = build_request_body("qwen2", &req, true, None);
         let json = serde_json::to_value(&body).unwrap();
         assert_eq!(json["response_format"]["type"], "json_object");
+    }
+
+    /// `json_object` only forces *valid JSON*, not the right shape — a model
+    /// can satisfy it by echoing an unrelated array. A schema switches the
+    /// server to logit-level enforcement so the shape is guaranteed.
+    #[test]
+    fn with_a_schema_requests_json_schema_enforcement() {
+        let req = sample_req();
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {"done": {"type": "boolean"}},
+            "required": ["done"],
+        });
+        let body = build_request_body("qwen2", &req, true, Some(&schema));
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["response_format"]["type"], "json_schema");
+        assert_eq!(
+            json["response_format"]["json_schema"]["schema"]["properties"]["done"]["type"],
+            "boolean"
+        );
     }
 
     #[test]
     fn without_json_mode_omits_response_format() {
         let req = sample_req();
-        let body = build_request_body("qwen2", &req, false);
+        let body = build_request_body("qwen2", &req, false, None);
         let json = serde_json::to_value(&body).unwrap();
         // response_format should be absent (serialized as null or missing)
         assert!(json.get("response_format").map_or(true, |v| v.is_null()));
