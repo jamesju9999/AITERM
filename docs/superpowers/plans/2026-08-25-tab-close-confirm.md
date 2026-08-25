@@ -518,7 +518,11 @@ git commit -m "refactor(loop-studio): use shared CloseConfirmDialog"
 
 執行：`npx tsc -b`
 
-預期：無輸出、exit code 0。（兩個語系的 key 若不對稱，這裡就會報錯。）
+預期：無輸出、exit code 0。
+
+> **更正（2026-08-25，執行時實測推翻原假設）：** 本步驟原本寫成「兩個語系的 key 若不對稱，這裡就會報錯」，**這是錯的**。`src/lib/i18n.ts:2458-2464` 的英文物件是 `{ ...zhTW, ...enRaw }`，且 `TranslationKey` 只從 `zh-TW` 推導——英文缺 key 會靜默 fallback 成中文字串，`tsc -b` 一律通過。實測方式：故意刪掉一個英文 key 後 `tsc -b` 仍 exit 0。
+>
+> 因此 `tsc -b` 只能確認物件結構合法，**不能**當作語系對稱的防線。兩個語系都要加 key，必須靠人工核對（例如 `grep -c` 該 key 應為 2）。
 
 - [ ] **Step 4: Commit**
 
