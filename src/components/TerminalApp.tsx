@@ -17,6 +17,7 @@ import { DocConverterView } from "./DocConverter/DocConverterView";
 import { ApiDocsView } from "./ApiDocsView";
 import { LoopStudioView } from "./LoopStudio";
 import { CodeAssistantView } from "./CodeAssistantView";
+import { runCloseGuard } from "../lib/closeTabGuard";
 import { KnowledgeBaseView } from "./KnowledgeBaseView";
 import { MailView } from "./MailView";
 import { HomeView } from "./HomeView";
@@ -299,11 +300,13 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   }, []);
 
   const handleCloseTab = useCallback(async (id: string) => {
-    const guard = closeGuardsRef.current.get(id);
-    if (guard) {
-      const canClose = await guard();
-      if (!canClose) return;
-    }
+    const canClose = await runCloseGuard(
+      id,
+      activeIdRef.current,
+      closeGuardsRef.current.get(id),
+      setActiveId,
+    );
+    if (!canClose) return;
     // 關掉的剛好是目前的 remote 分頁：釋放這個位置，不留著一個指向已經不存在
     // 分頁的 id。
     setRemoteTabId((prev) => (prev === id ? null : prev));
@@ -579,7 +582,12 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   unregisterCloseGuard={unregisterCloseGuard}
                 />
               ) : tab.type === "code-assistant" ? (
-                <CodeAssistantView isActive={isActive} />
+                <CodeAssistantView
+                  isActive={isActive}
+                  tabId={tab.id}
+                  registerCloseGuard={registerCloseGuard}
+                  unregisterCloseGuard={unregisterCloseGuard}
+                />
               ) : tab.type === "knowledge-base" ? (
                 <KnowledgeBaseView isActive={isActive} />
               ) : tab.type === "mail" ? (
