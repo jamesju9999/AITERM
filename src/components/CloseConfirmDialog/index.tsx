@@ -3,7 +3,7 @@ import "./styles.css";
 
 interface CloseConfirmDialogProps {
   title: string;
-  /** 確認框內文。 */
+  /** 內文，可用 <br /> 或 Fragment 做多行。 */
   body: ReactNode;
   confirmLabel: string;
   cancelLabel: string;
