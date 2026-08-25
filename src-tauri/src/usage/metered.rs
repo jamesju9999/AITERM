@@ -98,6 +98,18 @@ impl AiProvider for MeteredProvider {
         result
     }
 
+    async fn generate_json(
+        &self,
+        req: GenerateRequest,
+        schema: serde_json::Value,
+        tx: mpsc::Sender<GenerateChunk>,
+    ) -> Result<(), AiError> {
+        let (tx2, handle) = self.tap(tx);
+        let result = self.inner.generate_json(req, schema, tx2).await;
+        self.finish(handle).await;
+        result
+    }
+
     async fn health_check(&self) -> Result<(), AiError> {
         self.inner.health_check().await
     }
@@ -163,6 +175,58 @@ mod tests {
     async fn store() -> (Arc<UsageStore>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         (Arc::new(UsageStore::new_at(dir.path().join("u.db")).await), dir)
+    }
+
+    /// The decorator forwards each trait method explicitly, so a method it
+    /// forgets silently falls back to the trait default — here that would
+    /// drop the schema and disable logit-level enforcement with no error.
+    #[tokio::test]
+    async fn forwards_the_json_schema_to_the_inner_provider() {
+        use std::sync::Mutex;
+
+        struct SchemaSpy {
+            seen: Mutex<Option<serde_json::Value>>,
+        }
+
+        #[async_trait]
+        impl AiProvider for SchemaSpy {
+            fn id(&self) -> &str { "spy" }
+            fn display_name(&self) -> &str { "Spy" }
+            async fn generate(
+                &self,
+                _req: GenerateRequest,
+                tx: mpsc::Sender<GenerateChunk>,
+            ) -> Result<(), AiError> {
+                tx.send(GenerateChunk { delta: String::new(), done: true, usage: None }).await.ok();
+                Ok(())
+            }
+            async fn generate_json(
+                &self,
+                _req: GenerateRequest,
+                schema: serde_json::Value,
+                tx: mpsc::Sender<GenerateChunk>,
+            ) -> Result<(), AiError> {
+                *self.seen.lock().unwrap() = Some(schema);
+                tx.send(GenerateChunk { delta: String::new(), done: true, usage: None }).await.ok();
+                Ok(())
+            }
+            async fn health_check(&self) -> Result<(), AiError> { Ok(()) }
+        }
+
+        let (store, _d) = store().await;
+        let inner = Arc::new(SchemaSpy { seen: Mutex::new(None) });
+        let metered = MeteredProvider::new(inner.clone(), store, "p".into(), "m".into());
+
+        let schema = serde_json::json!({"type": "object"});
+        let (tx, mut rx) = mpsc::channel(16);
+        metered.generate_json(req(), schema.clone(), tx).await.expect("generate_json");
+        while rx.recv().await.is_some() {}
+
+        assert_eq!(
+            inner.seen.lock().unwrap().clone(),
+            Some(schema),
+            "MeteredProvider 必須把 schema 轉發下去，否則強制解碼會無聲失效"
+        );
     }
 
     #[tokio::test]
