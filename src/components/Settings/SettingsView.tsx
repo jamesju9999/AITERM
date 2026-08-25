@@ -36,9 +36,21 @@ export function SettingsView() {
 
   return (
     <div className="settings-view">
-      {/* Sidebar */}
-      <nav className="settings-sidebar">
-        <div className="settings-sidebar-title">{t.settings_title}</div>
+      {/*
+        Sidebar. Doubles as the window drag region: this view is an overlay on
+        top of TerminalApp, which is visibility:hidden while it shows — so the
+        TitleBar and TabBar that normally carry data-tauri-drag-region are not
+        reachable here. Without this the window cannot be moved at all until
+        the user goes back to the terminal.
+
+        Same placement as .aiterm-tabbar: the attribute sits on the container,
+        and the buttons inside still receive their own clicks because Tauri
+        only starts a drag when the event target itself is a drag region.
+        Deliberately NOT on .settings-content — that scrolls, and a drag
+        region there would fight with scrolling and text selection.
+      */}
+      <nav className="settings-sidebar" data-tauri-drag-region>
+        <div className="settings-sidebar-title" data-tauri-drag-region>{t.settings_title}</div>
 
         <button
           className={`sidebar-item ${tab === "general" ? "sidebar-item--active" : ""}`}
@@ -116,7 +128,12 @@ export function SettingsView() {
           <InfoIcon size={16} /> {t.about}
         </button>
 
-        <div className="sidebar-spacer" />
+        {/*
+          flex:1 — 這個 spacer 吃掉側邊欄所有剩餘的垂直空間，也就是畫面上那
+          一大片空白。拖曳屬性不會從 <nav> 繼承下來，少了這行就等於整片最好
+          抓的區域都不能拖。
+        */}
+        <div className="sidebar-spacer" data-tauri-drag-region />
 
         <button className="sidebar-back" onClick={() => navigate("/")}>
           {t.back_to_terminal}
