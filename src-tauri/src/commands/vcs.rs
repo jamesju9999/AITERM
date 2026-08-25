@@ -541,6 +541,21 @@ const VCS_INTENT_KINDS: [&str; 19] = [
 /// off-shape response impossible — `json_object` alone only guarantees
 /// *some* valid JSON, which a weaker model can satisfy by echoing back
 /// unrelated data from its prompt.
+/// JSON schema for a bare [`VcsIntent`], used by the one-shot `vcs_query`
+/// path. Same reasoning as [`vcs_agent_decision_schema`]: `json_object` only
+/// guarantees valid JSON, so without a schema a weaker model can return a
+/// well-formed object with no `kind` — or a `kind` that is not a real
+/// operation — and the parse fails.
+fn vcs_intent_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "kind": { "type": "string", "enum": VCS_INTENT_KINDS },
+        },
+        "required": ["kind"],
+    })
+}
+
 fn vcs_agent_decision_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
@@ -822,7 +837,8 @@ Example output: {"kind":"log_query","path":null,"author":null,"since":null,"max_
 
     let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
     let provider_clone = provider.clone();
-    let join = tokio::spawn(async move { provider_clone.generate(req, tx).await });
+    let schema = vcs_intent_schema();
+    let join = tokio::spawn(async move { provider_clone.generate_json(req, schema, tx).await });
 
     let mut buf = String::new();
     while let Some(chunk) = rx.recv().await {
@@ -1421,6 +1437,31 @@ mod vcs_agent_decision_schema_tests {
         let json = serde_json::to_string(&s).unwrap();
         for kind in VCS_INTENT_KINDS {
             assert!(json.contains(kind), "schema must list intent kind {kind}");
+        }
+    }
+
+    /// Every kind the schema advertises must actually deserialize into a
+    /// `VcsIntent`. A kind listed here but unknown to serde would let the
+    /// model emit it and still fail to parse — the exact failure the schema
+    /// exists to prevent.
+    #[test]
+    fn every_advertised_intent_kind_deserializes() {
+        use crate::vcs::VcsIntent;
+        let s = super::vcs_intent_schema();
+        let kinds = s["properties"]["kind"]["enum"].as_array().expect("kind must be an enum");
+        assert_eq!(kinds.len(), VCS_INTENT_KINDS.len());
+        for k in kinds {
+            let name = k.as_str().unwrap();
+            // Supply every field any variant needs; serde ignores the extras
+            // for variants that do not declare them.
+            let raw = serde_json::json!({
+                "kind": name,
+                "revision": "r1", "path": "p", "name": "n", "message": "m",
+                "title": "t", "head": "h", "base": "b", "pr_number": 1,
+                "workflow_id": "w", "ref": "main", "paths": [],
+            });
+            serde_json::from_value::<VcsIntent>(raw)
+                .unwrap_or_else(|e| panic!("schema advertises kind {name} but it does not parse: {e}"));
         }
     }
 
