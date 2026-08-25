@@ -3,7 +3,7 @@ import "./styles.css";
 
 interface CloseConfirmDialogProps {
   title: string;
-  /** 允許多行／`<br />`，沿用 LoopStudio 既有的內文寫法。 */
+  /** 確認框內文。 */
   body: ReactNode;
   confirmLabel: string;
   cancelLabel: string;
@@ -27,7 +27,7 @@ export function CloseConfirmDialog({
     <div className="aiterm-close-overlay">
       <div className="aiterm-close-dialog">
         <h3 className="aiterm-close-dialog-title">{title}</h3>
-        <p className="aiterm-close-dialog-body">{body}</p>
+        <div className="aiterm-close-dialog-body">{body}</div>
         <div className="aiterm-close-dialog-actions">
           <button
             type="button"
