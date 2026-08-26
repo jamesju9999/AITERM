@@ -336,6 +336,16 @@ git commit -m "feat(pty): add get_recent_raw and enlarge the output ring for sha
             "subscriber B missed the output"
         );
 
+        // 名字承諾的是「相同」，就要真的驗相同。兩個 receiver 訂閱的是同一個
+        // sender，reader thread 每個 chunk 只 send 一次，所以兩邊收到的 chunk
+        // 序列（順序、內容、邊界）完全一致；而 collect_until_marker 的停止
+        // 條件是「累積內容是否含 FANOUT」——一個純內容函數，不受即時時序
+        // 影響。因此兩邊會在收到相同數量的 chunk 後停止，這個斷言是確定性的。
+        assert_eq!(
+            got_a, got_b,
+            "subscribers received different bytes for the same broadcast"
+        );
+
         // The pre-existing on_data path must be untouched by fan-out.
         let mut via_callback = Vec::new();
         while let Ok(chunk) = rx.try_recv() {
@@ -348,7 +358,15 @@ git commit -m "feat(pty): add get_recent_raw and enlarge the output ring for sha
     }
 
     #[test]
-    fn no_subscribers_means_nothing_is_broadcast() {
+    fn subscriber_count_reflects_subscribe_and_drop() {
+        // 注意這個測試**不**保證 reader thread 裡的 `receiver_count() > 0`
+        // 守衛還在。那個守衛純粹是效能優化（省一次 chunk.clone()）——把它
+        // 拿掉之後 `send()` 自己會對 0 receiver 安全地回 `Err` 而呼叫端用
+        // `let _ =` 吞掉，功能完全不變，所以**沒有任何功能斷言抓得到它被
+        // 移除**。要抓只能量 heap 配置次數，那是效能測試不是這裡的事。
+        //
+        // 這個測試守的是 subscribe()/Drop 的計數邏輯本身。名字要誠實反映
+        // 它真正驗證的東西——掛一個假承諾的名字比沒有測試更糟。
         let session = PtySession::spawn(
             test_shell(),
             PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
@@ -356,8 +374,15 @@ git commit -m "feat(pty): add get_recent_raw and enlarge the output ring for sha
             |_| {},
         )
         .expect("spawn pty");
-        // Nobody has called subscribe(), so the reader thread must skip the
-        // clone entirely. This is the cost borne by users who never share.
+
+        assert_eq!(session.subscriber_count(), 0);
+        let a = session.subscribe();
+        assert_eq!(session.subscriber_count(), 1);
+        let b = session.subscribe();
+        assert_eq!(session.subscriber_count(), 2);
+        drop(a);
+        assert_eq!(session.subscriber_count(), 1);
+        drop(b);
         assert_eq!(session.subscriber_count(), 0);
     }
 ```
@@ -372,12 +397,19 @@ Expected: **編譯失敗**——`no method named subscribe`、`no method named s
 在 `session.rs` 模組層級、`OUTPUT_RING_CAP` 旁邊加入：
 
 ```rust
-/// How many output chunks the fan-out channel buffers per subscriber before
-/// the slowest one starts losing the oldest. A lagging viewer is not silently
-/// tolerated — it is told to resynchronise from the ring buffer (see
-/// `share::server`), because a terminal that misses bytes mid-escape-sequence
-/// renders wrong from then on and never recovers on its own.
-const OUTPUT_BROADCAST_CAP: usize = 1024;
+/// How many output chunks the fan-out channel buffers before the slowest
+/// subscriber starts losing the oldest. Each slot holds one `Vec<u8>` of up
+/// to 4096 bytes (the reader thread's read buffer size), and tokio allocates
+/// every slot up front — so this is a worst case of roughly 1 MB per shared
+/// tab, and it multiplies by the number of tabs being shared at once.
+///
+/// Deliberately not larger: a bigger buffer only delays `Lagged`, it cannot
+/// prevent it, and the resynchronise-from-the-ring-buffer path has to exist
+/// either way. A lagging viewer is never silently tolerated — it is told to
+/// resync (see `share::server`, built in a later task of this plan), because
+/// a terminal that misses bytes mid-escape-sequence renders wrong from then
+/// on and never recovers on its own.
+const OUTPUT_BROADCAST_CAP: usize = 256;
 ```
 
 在 `pub struct PtySession { ... }` 的欄位清單末端（`marker_count` 之後）加入：
@@ -403,8 +435,12 @@ const OUTPUT_BROADCAST_CAP: usize = 1024;
 
 ```rust
                             // Only pay for the clone when somebody is actually
-                            // watching. With no viewers this is one atomic
-                            // load — the entire cost to users who never share.
+                            // watching. With no viewers this costs one
+                            // uncontended lock of the broadcast channel's
+                            // internal tail mutex — cheap, but not literally
+                            // free: `receiver_count()` takes that lock rather
+                            // than doing an atomic load. Don't build a
+                            // performance assumption on it being lock-free.
                             if output_tx_for_thread.receiver_count() > 0 {
                                 let _ = output_tx_for_thread.send(chunk.clone());
                             }
@@ -458,6 +494,209 @@ git add src-tauri/src/pty/session.rs src-tauri/src/pty/manager.rs
 git commit -m "feat(pty): fan out raw output to screen-share subscribers
 
 既有的 on_data 路徑完全不動；沒有訂閱者時只付一次 receiver_count 的代價。"
+```
+
+---
+
+## Task 3b: 原子的「快照 ＋ 訂閱」
+
+**這個 task 是 Task 3 的品質審查發現後補上的，取代了原計畫「接受重複、避免缺漏」的取捨。**
+
+原本 Task 6 打算先 `subscribe()` 再 `get_recent_raw()`，理由是「重複比缺漏好」。但兩者用的是**兩把完全獨立的鎖**（`output_ring` 的 `Mutex` vs broadcast 內部的 tail lock），reader thread 也是先寫 ring、後 broadcast，中間沒有任何耦合。所以：
+
+- 先 `subscribe()` 再取快照 → 中間到達的 chunk **同時**在快照與串流裡 → 重複位元組
+- 先取快照再 `subscribe()` → 中間到達的 chunk **兩邊都沒有** → 缺漏，正是會截斷 ANSI 逃脫序列、畫面從此錯亂的那種災難
+
+**兩害相權不是唯一出路——可以兩個都不要。** 讓 reader thread 在**同一把 ring 鎖裡**完成「寫 ring」與「broadcast 送出」，再提供一個持有那把鎖的 `subscribe_with_history`。這樣任何 chunk 要嘛在我們取得鎖之前就已寫入 ring（在快照裡），要嘛必須等我們放開鎖才能廣播（而那時我們已經訂閱了）。既不重複也不漏。
+
+鎖順序在兩條路徑上一致（ring → broadcast tail），不會死鎖。代價只是 reader thread 多持有 ring 鎖跨一次**非阻塞**的 send。
+
+**Files:**
+- Modify: `src-tauri/src/pty/session.rs`
+- Modify: `src-tauri/src/pty/manager.rs`
+- Test: `src-tauri/src/pty/session.rs`
+
+- [ ] **Step 1: 寫會紅的測試**
+
+```rust
+    #[tokio::test]
+    async fn subscribe_with_history_loses_no_bytes_and_duplicates_none() {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+
+        // 先產生一段歷史，確認它會出現在快照裡。
+        #[cfg(windows)]
+        session.write(b"echo HIST\r\n").unwrap();
+        #[cfg(not(windows))]
+        session.write(b"printf 'HIST\\n'\n").unwrap();
+
+        let mut history = None;
+        for _ in 0..50 {
+            if let Some(bytes) = session.get_recent_raw(64 * 1024) {
+                if bytes.windows(4).any(|w| w == b"HIST") {
+                    history = Some(bytes);
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        history.expect("history should contain HIST before we subscribe");
+
+        // 原子地取快照＋訂閱。
+        let (snapshot, mut rx) = session.subscribe_with_history(64 * 1024);
+        let snapshot = snapshot.expect("snapshot should not be empty");
+        assert!(
+            snapshot.windows(4).any(|w| w == b"HIST"),
+            "the atomic snapshot lost the history that get_recent_raw could see"
+        );
+
+        // 訂閱之後才產生的東西只能來自串流，不能已經在快照裡。
+        #[cfg(windows)]
+        session.write(b"echo AFTER\r\n").unwrap();
+        #[cfg(not(windows))]
+        session.write(b"printf 'AFTER\\n'\n").unwrap();
+
+        assert!(
+            !snapshot.windows(5).any(|w| w == b"AFTER"),
+            "the snapshot somehow contains output produced after it was taken"
+        );
+
+        let mut streamed = Vec::new();
+        for _ in 0..50 {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(chunk)) => {
+                    streamed.extend_from_slice(&chunk);
+                    if streamed.windows(5).any(|w| w == b"AFTER") {
+                        break;
+                    }
+                }
+                Ok(Err(_)) => break,
+                Err(_) => continue,
+            }
+        }
+        assert!(
+            streamed.windows(5).any(|w| w == b"AFTER"),
+            "output produced after subscribing never arrived on the stream"
+        );
+    }
+```
+
+- [ ] **Step 2: 跑測試確認會紅**
+
+Run: `cd src-tauri && cargo test --lib pty::session::tests::subscribe_with_history_loses_no_bytes_and_duplicates_none`
+Expected: **編譯失敗**——`no method named subscribe_with_history`。
+
+- [ ] **Step 3: 把 broadcast 送出移進 ring 鎖範圍內**
+
+reader thread 裡目前是兩個分開的區塊。把寫 ring 的區塊與 broadcast 的區塊**合併成一個**，讓 broadcast 在 ring 鎖仍持有時發生：
+
+```rust
+                            {
+                                let mut ring = ring_for_thread.lock();
+                                for &b in &chunk {
+                                    if ring.len() >= OUTPUT_RING_CAP { ring.pop_front(); }
+                                    ring.push_back(b);
+                                }
+                                // Broadcast while still holding the ring lock.
+                                // This is what makes `subscribe_with_history`
+                                // atomic: a chunk is either already in the
+                                // snapshot a subscriber took, or it cannot be
+                                // broadcast until that subscriber has both its
+                                // snapshot and its receiver. Neither gap nor
+                                // duplicate is possible.
+                                //
+                                // `send` never blocks — it overwrites the
+                                // oldest slot and the slow reader gets
+                                // `Lagged` later — so holding the ring lock
+                                // across it cannot stall the reader thread.
+                                if output_tx_for_thread.receiver_count() > 0 {
+                                    let _ = output_tx_for_thread.send(chunk.clone());
+                                }
+                            }
+```
+
+並把原本位於 `on_data(chunk);` 上方的那個獨立 broadcast 區塊**整個刪掉**（現在已經移進上面了）。
+
+- [ ] **Step 4: 加上 `subscribe_with_history`**
+
+加在 `session.rs` 的 `subscribe` 正下方：
+
+```rust
+    /// Take a history snapshot and subscribe to future output as one atomic
+    /// step. Screen sharing must use this rather than calling `get_recent_raw`
+    /// and `subscribe` separately.
+    ///
+    /// Those two take different locks, and the reader thread writes the ring
+    /// before it broadcasts — so calling them in either order leaves a window:
+    /// subscribe-then-snapshot duplicates the bytes that land in between, and
+    /// snapshot-then-subscribe loses them entirely. Losing bytes can truncate
+    /// an ANSI escape sequence, and a terminal that renders a truncated escape
+    /// stays wrong forever.
+    ///
+    /// Holding the ring lock across both closes the window: a chunk is either
+    /// already in the snapshot, or the reader thread cannot broadcast it until
+    /// this method has returned with its receiver in hand.
+    pub fn subscribe_with_history(
+        &self,
+        max_bytes: usize,
+    ) -> (Option<Vec<u8>>, tokio::sync::broadcast::Receiver<Vec<u8>>) {
+        let ring = self.output_ring.lock();
+        let history = if ring.is_empty() {
+            None
+        } else {
+            let start = ring.len().saturating_sub(max_bytes);
+            Some(ring.iter().skip(start).copied().collect())
+        };
+        let rx = self.output_tx.subscribe();
+        drop(ring);
+        (history, rx)
+    }
+```
+
+- [ ] **Step 5: 在 `PtyManager` 轉發**
+
+加在 `manager.rs` 的 `subscribe` 正下方：
+
+```rust
+    /// Atomic snapshot-plus-subscribe for a session. See
+    /// `PtySession::subscribe_with_history` for why sharing must use this
+    /// instead of `get_recent_raw` followed by `subscribe`.
+    pub fn subscribe_with_history(
+        &self,
+        id: &str,
+        max_bytes: usize,
+    ) -> Option<(Option<Vec<u8>>, tokio::sync::broadcast::Receiver<Vec<u8>>)> {
+        self.sessions.lock().get(id).map(|s| s.subscribe_with_history(max_bytes))
+    }
+```
+
+- [ ] **Step 6: 跑測試確認轉綠**
+
+Run: `cd src-tauri && cargo test --lib pty::`
+Expected: PASS，比 Task 3 結束時多一個測試（118）。
+
+連跑 10 次新測試確認不 flaky：
+
+```bash
+cd src-tauri
+for i in $(seq 1 10); do
+  cargo test --lib pty::session::tests::subscribe_with_history_loses_no_bytes_and_duplicates_none -- --exact 2>&1 | grep -E "^test result" || echo "RUN $i FAILED"
+done
+```
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src-tauri/src/pty/session.rs src-tauri/src/pty/manager.rs
+git commit -m "feat(pty): make snapshot-plus-subscribe atomic for share viewers
+
+分開呼叫 get_recent_raw 與 subscribe 會依順序造成重複或缺漏；缺漏可能截斷
+ANSI 逃脫序列讓畫面永久錯亂。把 broadcast 移進 ring 鎖範圍即可兩者皆免。"
 ```
 
 ---
@@ -1531,19 +1770,18 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState) {
         return;
     }
 
-    // 順序很重要，而且直覺容易反過來：**先訂閱、再取快照**。
-    //
-    // 先訂閱的話，介於兩者之間產生的 chunk 會同時出現在快照和串流裡，觀看端
-    // 看到一小段重複的文字——難看，但無害。
-    // 反過來先取快照再訂閱的話，那段 chunk 會兩邊都沒有，變成缺漏——而缺漏
-    // 可能剛好截斷一段 ANSI 逃脫序列，畫面從此錯亂且不會自己好。
-    // 兩害相權，取重複。
-    let Some(mut rx) = state.pty.subscribe(&tab_id) else {
+    // **一定要用 `subscribe_with_history`，不要分開呼叫 `subscribe` 與
+    // `get_recent_raw`。** 那兩支用的是不同的鎖，不論哪個順序都會留下窗口：
+    // 先訂閱會讓中間的 chunk 重複，先取快照會讓它整段消失——而消失可能截斷
+    // 一段 ANSI 逃脫序列，畫面從此錯亂且不會自己好。見 Task 3b。
+    let Some((history, mut rx)) =
+        state.pty.subscribe_with_history(&tab_id, REPLAY_MAX_BYTES)
+    else {
         state.registry.remove_viewer(&tab_id, &viewer_id);
         return end_with(&mut ws, EndReason::SessionClosed).await;
     };
 
-    if let Some(history) = state.pty.get_recent_raw(&tab_id, REPLAY_MAX_BYTES) {
+    if let Some(history) = history {
         if ws.send(Message::Binary(history.into())).await.is_err() {
             state.registry.remove_viewer(&tab_id, &viewer_id);
             return;
@@ -1563,10 +1801,22 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState) {
                 Err(RecvError::Lagged(_)) => {
                     // 漏掉的位元組可能截斷 ANSI 逃脫序列——不能當沒事發生。
                     // 叫觀看端清空畫面，重新給他全量重播。
+                    //
+                    // 重新同步同樣要用 `subscribe_with_history`：這裡的窗口
+                    // 跟首次連線時一模一樣，用 `get_recent_raw` 補快照而讓
+                    // 舊的 rx 繼續收，中間的 chunk 一樣會重複或消失。取得
+                    // 新的 receiver 後直接換掉舊的。
                     if !send_control(&mut ws, &ServerMessage::Resync).await {
                         break;
                     }
-                    if let Some(history) = state.pty.get_recent_raw(&tab_id, REPLAY_MAX_BYTES) {
+                    let Some((history, fresh_rx)) =
+                        state.pty.subscribe_with_history(&tab_id, REPLAY_MAX_BYTES)
+                    else {
+                        end_with(&mut ws, EndReason::SessionClosed).await;
+                        break;
+                    };
+                    rx = fresh_rx;
+                    if let Some(history) = history {
                         if ws.send(Message::Binary(history.into())).await.is_err() {
                             break;
                         }
