@@ -2408,19 +2408,12 @@ cd src-tauri && cargo tree -i aws-lc-sys 2>&1 | head -5
 
 Expected: `error: package ID specification ... did not match any packages`（也就是根本沒這個套件）。若它出現在依賴樹裡，回頭檢查上面的 feature 設定。
 
-**另外**：rustls 0.23 需要一個行程層級的預設加密供應者，否則 `ClientConfig::builder()` / `ServerConfig::builder()` 會 panic。在 `share/mod.rs` 加入並在 `start_if_needed` 最前面呼叫：
-
-```rust
-/// rustls 0.23 要求行程層級的預設加密供應者。裝一次就好；重複呼叫會回
-/// `Err`，直接忽略——那代表別人已經裝過了，不是錯誤。
-fn ensure_crypto_provider() {
-    use std::sync::Once;
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    });
-}
-```
+**注意**：rustls 0.23 需要一個行程層級的預設加密供應者，否則
+`ClientConfig::builder()` / `ServerConfig::builder()` 會 panic。**但那段程式碼
+屬於 Task 8，不要在這個 task 加**——它的第一個呼叫端 `start_if_needed` 要到
+Task 8 才存在，提早加會變成沒有呼叫端的 private fn，在 `-D warnings` 下觸發
+dead-code lint，反而弄髒 `share/` 的 clippy。Task 7 的五個測試都不建立真的
+`ClientConfig`/`ServerConfig`（SAS 測試用的是純 closure），所以這裡不需要它。
 
 - [ ] **Step 2: 寫會紅的測試**
 
@@ -2809,7 +2802,24 @@ hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"] }
 tower-service = "0.3"
 ```
 
-在 `share/mod.rs` 加上（`start_if_needed` 上面已經呼叫它了）：
+在 `share/mod.rs` 加上（`start_if_needed` 上面已經呼叫它了）。
+
+**先加這個**——rustls 0.23 要求行程層級的預設加密供應者，沒有它
+`ServerConfig::builder()` 會 panic。Task 7 刻意沒加，因為當時還沒有呼叫端：
+
+```rust
+/// rustls 0.23 要求行程層級的預設加密供應者。裝一次就好；重複呼叫會回
+/// `Err`，直接忽略——那代表別人已經裝過了，不是錯誤。
+fn ensure_crypto_provider() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+```
+
+然後是 TLS accept 迴圈本身：
 
 ```rust
 use axum::Router;
