@@ -131,7 +131,12 @@ ring buffer 目前上限是寫死在 reader thread 裡的 `const RING_CAP: usize
         let mut raw = None;
         for _ in 0..50 {
             if let Some(bytes) = session.get_recent_raw(64 * 1024) {
-                if bytes.windows(7).any(|w| w == b"SHAREME") {
+                // 不能只找裸的 "SHAREME"：PTY 會回顯你打進去的那行指令，而
+                // 指令原文裡的 `\033` 是四個 ASCII 字元、不是真的 ESC byte，
+                // 卻同樣含有 "SHAREME"。搜尋含真 ESC 的完整序列才能保證只
+                // 匹配到 printf 真正執行後的著色輸出——否則這個測試大約每
+                // 20 次會 flake 一次（已實測重現）。
+                if bytes.windows(12).any(|w| w == b"\x1b[31mSHAREME") {
                     raw = Some(bytes);
                     break;
                 }
@@ -292,7 +297,14 @@ git commit -m "feat(pty): add get_recent_raw and enlarge the output ring for sha
         #[cfg(not(windows))]
         session.write(b"printf 'FANOUT\\n'\n").unwrap();
 
-        // Collect from each subscriber until the marker shows up.
+        // 這裡搜尋裸的 "FANOUT" 是**刻意的、也是正確的**，跟 Task 2 那個
+        // 測試不同：PTY 會回顯你打進去的指令，所以匹配可能命中回顯而不是
+        // printf 的輸出——但那無所謂，回顯同樣是走 PTY 輸出、同樣要經過
+        // fan-out，正是這個測試要驗的東西。Task 2 那裡不能這樣做，是因為
+        // 它斷言的是「位元組裡有真正的 ESC」，而回顯裡沒有。
+        //
+        // 換句話說：會不會被回顯提前命中，取決於你的斷言在乎什麼，不是
+        // 一律要避開。
         async fn collect_until_marker(
             r: &mut tokio::sync::broadcast::Receiver<Vec<u8>>,
         ) -> Vec<u8> {
