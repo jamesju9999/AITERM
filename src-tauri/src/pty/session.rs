@@ -153,6 +153,10 @@ pub struct PtySession {
     /// the `on_data` callback, which continues to serve the app's own
     /// terminal view. Subscribers appear only while a tab is being shared.
     output_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
+    /// Current terminal size, as last set by `resize` (or as spawned). Screen
+    /// sharing sends this to viewers so they build their own terminal at the
+    /// host's dimensions rather than their own window's.
+    size: Mutex<PtySize>,
 }
 
 /// Commits a resolved cd to `cwd`/`previous_cwd`. Free function (not a method)
@@ -477,6 +481,7 @@ impl PtySession {
             bell_count,
             marker_count,
             output_tx,
+            size: Mutex::new(size),
         })
     }
 
@@ -718,7 +723,17 @@ impl PtySession {
         let master = self.master.lock();
         master
             .resize(size)
-            .map_err(|e| PtyError::Internal(format!("resize: {e}")))
+            .map_err(|e| PtyError::Internal(format!("resize: {e}")))?;
+        *self.size.lock() = size;
+        Ok(())
+    }
+
+    /// Current terminal size, as last set by `resize` (or as spawned).
+    /// Screen sharing sends this to viewers so they build their own terminal
+    /// at the host's dimensions rather than their own window's.
+    pub fn size(&self) -> (u16, u16) {
+        let s = *self.size.lock();
+        (s.cols, s.rows)
     }
 
     pub fn kill(&self) -> PtyResult<()> {
@@ -866,6 +881,23 @@ mod tests {
             .expect("resize ok");
 
         drop(session);
+    }
+
+    #[test]
+    fn size_reports_what_the_session_was_spawned_with_and_tracks_resize() {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+        assert_eq!(session.size(), (80, 24));
+
+        session
+            .resize(PtySize { rows: 40, cols: 120, pixel_width: 0, pixel_height: 0 })
+            .expect("resize");
+        assert_eq!(session.size(), (120, 40));
     }
 
     fn fake_session(shell_variant: ShellVariant, initial: &str) -> PtySessionStubForCwd {

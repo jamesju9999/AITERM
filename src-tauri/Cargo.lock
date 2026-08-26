@@ -229,6 +229,7 @@ dependencies = [
  "tiberius",
  "tokio",
  "tokio-native-tls",
+ "tokio-tungstenite",
  "tokio-util",
  "toml 0.8.2",
  "tower",

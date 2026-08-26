@@ -128,6 +128,11 @@ impl PtyManager {
         self.sessions.lock().get(id).map(|s| s.subscribe_with_history(max_bytes))
     }
 
+    /// Current terminal size (cols, rows) for the given session.
+    pub fn size(&self, id: &str) -> Option<(u16, u16)> {
+        self.sessions.lock().get(id).map(|s| s.size())
+    }
+
     /// Bell-byte count for the given session, or `None` if the session
     /// doesn't exist. See `PtySession::bell_count` for what this counts.
     pub fn bell_count(&self, id: &str) -> Option<u64> {
