@@ -62,6 +62,8 @@ export interface AiPanelProps {
   onExecuteCommand: (cmd: string, onComplete?: (block: TerminalBlock) => void) => void;
   onOpenProviderPalette: () => void;
   sendRemoteResponse?: (text: string) => void;
+  /** 距離 PTY 最後一次有輸出過了多久（毫秒）。用來偵測指令是不是卡住了。 */
+  getIdleMs?: () => number;
 }
 
 /**
