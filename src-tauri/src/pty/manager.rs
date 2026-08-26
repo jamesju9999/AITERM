@@ -117,6 +117,17 @@ impl PtyManager {
         self.sessions.lock().get(id).map(|s| s.subscribe())
     }
 
+    /// Atomic snapshot-plus-subscribe for a session. See
+    /// `PtySession::subscribe_with_history` for why sharing must use this
+    /// instead of `get_recent_raw` followed by `subscribe`.
+    pub fn subscribe_with_history(
+        &self,
+        id: &str,
+        max_bytes: usize,
+    ) -> Option<(Option<Vec<u8>>, tokio::sync::broadcast::Receiver<Vec<u8>>)> {
+        self.sessions.lock().get(id).map(|s| s.subscribe_with_history(max_bytes))
+    }
+
     /// Bell-byte count for the given session, or `None` if the session
     /// doesn't exist. See `PtySession::bell_count` for what this counts.
     pub fn bell_count(&self, id: &str) -> Option<u64> {

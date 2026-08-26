@@ -398,6 +398,21 @@ impl PtySession {
                                     if ring.len() >= OUTPUT_RING_CAP { ring.pop_front(); }
                                     ring.push_back(b);
                                 }
+                                // Broadcast while still holding the ring lock.
+                                // This is what makes `subscribe_with_history`
+                                // atomic: a chunk is either already in the
+                                // snapshot a subscriber took, or it cannot be
+                                // broadcast until that subscriber has both its
+                                // snapshot and its receiver. Neither gap nor
+                                // duplicate is possible.
+                                //
+                                // `send` never blocks — it overwrites the
+                                // oldest slot and the slow reader gets
+                                // `Lagged` later — so holding the ring lock
+                                // across it cannot stall the reader thread.
+                                if output_tx_for_thread.receiver_count() > 0 {
+                                    let _ = output_tx_for_thread.send(chunk.clone());
+                                }
                             }
                             if matches!(shell_variant, ShellVariant::Bash | ShellVariant::Pwsh) {
                                 confirm_pending_cds_from_output(
@@ -434,16 +449,6 @@ impl PtySession {
                                     marker_count_for_thread.fetch_add(1, Ordering::SeqCst);
                                 }
                                 *tail = new_tail;
-                            }
-                            // Only pay for the clone when somebody is actually
-                            // watching. With no viewers this costs one
-                            // uncontended lock of the broadcast channel's
-                            // internal tail mutex — cheap, but not literally
-                            // free: `receiver_count()` takes that lock rather
-                            // than doing an atomic load. Don't build a
-                            // performance assumption on it being lock-free.
-                            if output_tx_for_thread.receiver_count() > 0 {
-                                let _ = output_tx_for_thread.send(chunk.clone());
                             }
                             on_data(chunk);
                         }
@@ -648,6 +653,36 @@ impl PtySession {
     /// `get_recent_raw`, not from this channel.
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
         self.output_tx.subscribe()
+    }
+
+    /// Take a history snapshot and subscribe to future output as one atomic
+    /// step. Screen sharing must use this rather than calling `get_recent_raw`
+    /// and `subscribe` separately.
+    ///
+    /// Those two take different locks, and the reader thread writes the ring
+    /// before it broadcasts — so calling them in either order leaves a window:
+    /// subscribe-then-snapshot duplicates the bytes that land in between, and
+    /// snapshot-then-subscribe loses them entirely. Losing bytes can truncate
+    /// an ANSI escape sequence, and a terminal that renders a truncated escape
+    /// stays wrong forever.
+    ///
+    /// Holding the ring lock across both closes the window: a chunk is either
+    /// already in the snapshot, or the reader thread cannot broadcast it until
+    /// this method has returned with its receiver in hand.
+    pub fn subscribe_with_history(
+        &self,
+        max_bytes: usize,
+    ) -> (Option<Vec<u8>>, tokio::sync::broadcast::Receiver<Vec<u8>>) {
+        let ring = self.output_ring.lock();
+        let history = if ring.is_empty() {
+            None
+        } else {
+            let start = ring.len().saturating_sub(max_bytes);
+            Some(ring.iter().skip(start).copied().collect())
+        };
+        let rx = self.output_tx.subscribe();
+        drop(ring);
+        (history, rx)
     }
 
     /// How many share viewers are currently attached to this session.
@@ -1564,6 +1599,72 @@ mod tests {
             session.bell_count(),
             0,
             "the shell's own boot-time OSC133 marker must not be counted as a bell"
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_with_history_loses_no_bytes_and_duplicates_none() {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+
+        // 先產生一段歷史，確認它會出現在快照裡。
+        #[cfg(windows)]
+        session.write(b"echo HIST\r\n").unwrap();
+        #[cfg(not(windows))]
+        session.write(b"printf 'HIST\\n'\n").unwrap();
+
+        let mut history = None;
+        for _ in 0..50 {
+            if let Some(bytes) = session.get_recent_raw(64 * 1024) {
+                if bytes.windows(4).any(|w| w == b"HIST") {
+                    history = Some(bytes);
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        history.expect("history should contain HIST before we subscribe");
+
+        // 原子地取快照＋訂閱。
+        let (snapshot, mut rx) = session.subscribe_with_history(64 * 1024);
+        let snapshot = snapshot.expect("snapshot should not be empty");
+        assert!(
+            snapshot.windows(4).any(|w| w == b"HIST"),
+            "the atomic snapshot lost the history that get_recent_raw could see"
+        );
+
+        // 訂閱之後才產生的東西只能來自串流，不能已經在快照裡。
+        #[cfg(windows)]
+        session.write(b"echo AFTER\r\n").unwrap();
+        #[cfg(not(windows))]
+        session.write(b"printf 'AFTER\\n'\n").unwrap();
+
+        assert!(
+            !snapshot.windows(5).any(|w| w == b"AFTER"),
+            "the snapshot somehow contains output produced after it was taken"
+        );
+
+        let mut streamed = Vec::new();
+        for _ in 0..50 {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(chunk)) => {
+                    streamed.extend_from_slice(&chunk);
+                    if streamed.windows(5).any(|w| w == b"AFTER") {
+                        break;
+                    }
+                }
+                Ok(Err(_)) => break,
+                Err(_) => continue,
+            }
+        }
+        assert!(
+            streamed.windows(5).any(|w| w == b"AFTER"),
+            "output produced after subscribing never arrived on the stream"
         );
     }
 }
