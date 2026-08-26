@@ -1169,7 +1169,11 @@ mod tests {
         let mut raw = None;
         for _ in 0..50 {
             if let Some(bytes) = session.get_recent_raw(64 * 1024) {
-                if bytes.windows(7).any(|w| w == b"SHAREME") {
+                // 不能只找裸的 "SHAREME"：PTY 會回顯你打進去的那行指令，而
+                // 指令原文裡的 `\033` 是四個 ASCII 字元、不是真的 ESC byte，
+                // 卻同樣含有 "SHAREME"。搜尋含真 ESC 的完整序列才能保證只
+                // 匹配到 printf 真正執行後的著色輸出。
+                if bytes.windows(12).any(|w| w == b"\x1b[31mSHAREME") {
                     raw = Some(bytes);
                     break;
                 }
