@@ -97,12 +97,19 @@ fn scan_for_marker(tail: &[u8], chunk: &[u8], marker: &[u8]) -> (bool, Vec<u8>) 
 /// the 8 KB this used to be. At 256 KB, twenty open tabs cost ~5 MB.
 const OUTPUT_RING_CAP: usize = 256 * 1024;
 
-/// How many output chunks the fan-out channel buffers per subscriber before
-/// the slowest one starts losing the oldest. A lagging viewer is not silently
-/// tolerated — it is told to resynchronise from the ring buffer (see
-/// `share::server`), because a terminal that misses bytes mid-escape-sequence
-/// renders wrong from then on and never recovers on its own.
-const OUTPUT_BROADCAST_CAP: usize = 1024;
+/// How many output chunks the fan-out channel buffers before the slowest
+/// subscriber starts losing the oldest. Each slot holds one `Vec<u8>` of up
+/// to 4096 bytes (the reader thread's read buffer size), and tokio allocates
+/// every slot up front — so this is a worst case of roughly 1 MB per shared
+/// tab, and it multiplies by the number of tabs being shared at once.
+///
+/// Deliberately not larger: a bigger buffer only delays `Lagged`, it cannot
+/// prevent it, and the resynchronise-from-the-ring-buffer path has to exist
+/// either way. A lagging viewer is never silently tolerated — it is told to
+/// resync (see `share::server`, built in a later task of this plan), because
+/// a terminal that misses bytes mid-escape-sequence renders wrong from then
+/// on and never recovers on its own.
+const OUTPUT_BROADCAST_CAP: usize = 256;
 
 pub struct PtySession {
     pub id: String,
@@ -429,8 +436,12 @@ impl PtySession {
                                 *tail = new_tail;
                             }
                             // Only pay for the clone when somebody is actually
-                            // watching. With no viewers this is one atomic
-                            // load — the entire cost to users who never share.
+                            // watching. With no viewers this costs one
+                            // uncontended lock of the broadcast channel's
+                            // internal tail mutex — cheap, but not literally
+                            // free: `receiver_count()` takes that lock rather
+                            // than doing an atomic load. Don't build a
+                            // performance assumption on it being lock-free.
                             if output_tx_for_thread.receiver_count() > 0 {
                                 let _ = output_tx_for_thread.send(chunk.clone());
                             }
@@ -1377,6 +1388,16 @@ mod tests {
             "subscriber B missed the output"
         );
 
+        // 名字承諾的是「相同」，就要真的驗相同。兩個 receiver 訂閱的是同一個
+        // sender，reader thread 每個 chunk 只 send 一次，所以兩邊收到的 chunk
+        // 序列（順序、內容、邊界）完全一致；而 collect_until_marker 的停止條件
+        // 是「累積內容是否含 FANOUT」——一個純內容函數，不受即時時序影響。
+        // 因此兩邊會在收到相同數量的 chunk 後停止，這個斷言是確定性的。
+        assert_eq!(
+            got_a, got_b,
+            "subscribers received different bytes for the same broadcast"
+        );
+
         // The pre-existing on_data path must be untouched by fan-out.
         let mut via_callback = Vec::new();
         while let Ok(chunk) = rx.try_recv() {
@@ -1389,7 +1410,14 @@ mod tests {
     }
 
     #[test]
-    fn no_subscribers_means_nothing_is_broadcast() {
+    fn subscriber_count_reflects_subscribe_and_drop() {
+        // 注意這個測試**不**保證 reader thread 裡的 `receiver_count() > 0`
+        // 守衛還在。那個守衛純粹是效能優化（省一次 chunk.clone()）——把它
+        // 拿掉之後 send() 自己會對 0 receiver 安全地回 Err 而呼叫端吞掉，
+        // 功能完全不變，所以沒有任何功能斷言抓得到它被移除。要抓只能量
+        // heap 配置次數，那是效能測試不是這裡的事。
+        //
+        // 這個測試守的是 subscribe()/Drop 的計數邏輯本身。
         let session = PtySession::spawn(
             test_shell(),
             PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
@@ -1397,8 +1425,15 @@ mod tests {
             |_| {},
         )
         .expect("spawn pty");
-        // Nobody has called subscribe(), so the reader thread must skip the
-        // clone entirely. This is the cost borne by users who never share.
+
+        assert_eq!(session.subscriber_count(), 0);
+        let a = session.subscribe();
+        assert_eq!(session.subscriber_count(), 1);
+        let b = session.subscribe();
+        assert_eq!(session.subscriber_count(), 2);
+        drop(a);
+        assert_eq!(session.subscriber_count(), 1);
+        drop(b);
         assert_eq!(session.subscriber_count(), 0);
     }
 
