@@ -2013,7 +2013,11 @@ async fn send_control(ws: &mut WebSocket, msg: &ServerMessage) -> bool {
 
 async fn end_with(ws: &mut WebSocket, reason: EndReason) {
     send_control(ws, &ServerMessage::Ended { reason }).await;
-    let _ = ws.close().await;
+    // axum 的 `WebSocket` 只有 `recv`/`send` 兩個 inherent method——**沒有
+    // `close()`**（已實測：寫 `ws.close()` 會得到 E0599）。要關閉就送一個
+    // Close frame。`Sink::close` 確實存在於 trait 上，但那需要額外 import
+    // `futures_util::SinkExt`，送 frame 更直接。
+    let _ = ws.send(Message::Close(None)).await;
 }
 
 async fn handle_share(mut ws: WebSocket, state: ShareAppState, sas: String) {
