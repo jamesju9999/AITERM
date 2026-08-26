@@ -25,6 +25,9 @@ export interface UseTerminalBlocksResult {
   setBlockGitInfo: (id: string, info: GitBlockInfo | null) => void;
   isAlternateBuffer: boolean;
   termInstance: Terminal | null;
+  /** 強制把一個 running 中的區塊結案（例如卡在 heredoc 的中斷）。
+   *  會呼叫該區塊等待中的 onComplete callback——見 finalizeBlock 內部實作。 */
+  finalizeBlock: (blockId: string, exitCode: number, opts?: { clearOnParsed?: boolean }) => void;
 }
 
 // `clear` is the Unix/PowerShell screen-clear command; `cls` is cmd.exe's (and
@@ -358,5 +361,6 @@ export function useTerminalBlocks(
     setBlockGitInfo,
     isAlternateBuffer,
     termInstance: term,
+    finalizeBlock,
   };
 }

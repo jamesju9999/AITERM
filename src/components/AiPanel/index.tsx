@@ -64,6 +64,8 @@ export interface AiPanelProps {
   sendRemoteResponse?: (text: string) => void;
   /** 距離 PTY 最後一次有輸出過了多久（毫秒）。用來偵測指令是不是卡住了。 */
   getIdleMs?: () => number;
+  /** 中斷目前這個卡住的指令：送 Ctrl+C 並強制結案。 */
+  onInterruptCommand?: () => void;
 }
 
 /**
