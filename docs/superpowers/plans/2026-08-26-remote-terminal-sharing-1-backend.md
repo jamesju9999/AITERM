@@ -952,6 +952,56 @@ mod tests {
         reg.stop_share("tab-1");
         assert!(!reg.any_active());
     }
+
+    #[test]
+    fn stopping_a_share_clears_its_pending_requests() {
+        let (reg, code) = registry_with_one_share();
+        let _req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        assert_eq!(reg.pending("tab-1").len(), 1);
+        reg.stop_share("tab-1");
+        assert_eq!(reg.pending("tab-1").len(), 0);
+    }
+
+    #[test]
+    fn a_pending_request_cannot_survive_into_a_later_share_of_the_same_tab() {
+        // tab_id 是穩定的前端分頁 ID，所以「停止分享 → 重新分享」是正常操作，
+        // 不是邊角案例。若 stop_share 沒清掉 pending，舊會話的待審請求會被
+        // 核准進新會話，繞過「短碼失效即安全」這個假設。
+        let (reg, code) = registry_with_one_share();
+        let req = reg.request_join(&code, "Eve".to_string()).unwrap();
+        reg.stop_share("tab-1");
+        let _new_code = reg.start_share("tab-1".to_string());
+
+        assert_eq!(
+            reg.pending("tab-1").len(),
+            0,
+            "a stopped share's pending request came back after re-sharing"
+        );
+        assert_eq!(
+            reg.approve(&req, AccessMode::Control),
+            None,
+            "a stopped share's request was approved into the new share"
+        );
+    }
+
+    #[test]
+    fn sharing_an_already_shared_tab_keeps_the_same_code_and_its_viewers() {
+        let (reg, code) = registry_with_one_share();
+        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let alice = reg.approve(&req, AccessMode::Control).unwrap();
+
+        let again = reg.start_share("tab-1".to_string());
+        assert_eq!(again, code, "a second start_share minted a new code");
+        assert_eq!(
+            reg.viewers("tab-1").len(),
+            1,
+            "a second start_share evicted the existing viewers"
+        );
+        assert!(
+            reg.may_send_input("tab-1", &alice),
+            "a second start_share silently released control"
+        );
+    }
 }
 ```
 
@@ -1025,10 +1075,17 @@ impl ShareRegistry {
         Self::default()
     }
 
-    /// 開始分享一個分頁，回傳新產生的 6 位短碼。同一個分頁重複呼叫會換一組
-    /// 新短碼（舊的立即失效）。
+    /// 開始分享一個分頁，回傳它的 6 位短碼。
+    ///
+    /// **冪等**：這個分頁若已在分享中，直接回傳既有短碼、什麼都不動。刻意
+    /// 不產生新短碼——覆蓋既有 entry 會無聲斷線所有觀看者並釋放控制權，對
+    /// 一個「雙擊分享鈕」就能觸發的操作來說，那是純粹的傷害。規格裡也沒有
+    /// 「重新產生短碼」這個功能。
     pub fn start_share(&self, tab_id: String) -> String {
         let mut tabs = self.tabs.lock();
+        if let Some(existing) = tabs.get(&tab_id) {
+            return existing.code.clone();
+        }
         let code = loop {
             let candidate = format!("{:06}", rand::rng().random_range(0..1_000_000u32));
             if !tabs.values().any(|t| t.code == candidate) {
@@ -1187,7 +1244,7 @@ impl ShareRegistry {
 - [ ] **Step 6: 跑測試確認轉綠**
 
 Run: `cd src-tauri && cargo test --lib share::registry`
-Expected: PASS，17 個測試全過。
+Expected: PASS，20 個測試全過。
 
 - [ ] **Step 7: Commit**
 
@@ -2557,7 +2614,11 @@ SAS 由雙方各自從自己的 TLS 連線導出，不從線上傳遞。"
 計畫①做完時，以下全部成立：
 
 - [ ] `cd src-tauri && cargo test` 全綠
-- [ ] `cd src-tauri && cargo clippy -- -D warnings` 無警告
+- [ ] `cd src-tauri && cargo clippy -- -D warnings` **沒有指向 `src/share/` 或 `src/pty/` 的新問題**
+
+  注意：這個 repo 在本計畫開始前，`cargo clippy --lib -- -D warnings` 就已經有約 42 個既有錯誤（散落在 `vcs`、`mcp`、`enterprise`、`pty/cd_parser` 等處）。那些**不是本計畫造成的、也不要順手修**（違反外科手術式改動原則）。判斷方式是 `cargo clippy --lib -- -D warnings 2>&1 | grep "src/share/"` 應該沒有輸出。
+
+  同理，`cargo test --lib` 在基準線上就有一個**既有的 flaky 測試**（未修改的 master 跑 4 次會失敗 1 次）。若看到單一測試偶發失敗，先確認它是否在你的改動範圍內，不要假設是自己弄壞的。
 - [ ] `npm run lint` 與 `npx tsc -b` 仍綠（本計畫不動前端，這是防迴歸）
 - [ ] `grep -c 'pty reader error' src/pty/session.rs` 回 `1`（reader thread 沒有再次分裂成兩份）
 - [ ] `lib.rs` 裡沒有任何 `start_if_needed` 呼叫——沒人按分享就沒有監聽
