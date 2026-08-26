@@ -459,3 +459,112 @@ async fn both_ends_derive_the_same_sas_from_the_committed_nonces() {
         "host and viewer derived different SASes from the same committed nonces"
     );
 }
+
+/// 測試用的客戶端憑證驗證器：接受任何憑證。
+///
+/// 這在這裡**不是偷懶**——正式的觀看端也必須這樣做。自簽憑證沒有任何憑證鏈
+/// 可以驗，身分保證完全來自 SAS 人工核對。把這件事寫成一個有名字的型別，是
+/// 為了讓它在程式碼審查時顯眼，而不是藏在一個 `danger` 呼叫裡。
+#[derive(Debug)]
+struct SasIsTheOnlyIdentityCheck;
+
+impl rustls::client::danger::ServerCertVerifier for SasIsTheOnlyIdentityCheck {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+#[tokio::test]
+async fn both_ends_of_a_real_tls_connection_derive_the_same_sas() {
+    // 這是防中間人設計的支點，必須用真的 TLS 握手驗證，不能只測折疊函式：
+    // 中間人的兩條連線導出不同的 material，兩邊數字對不起來——但那個保證
+    // 只有在「雙方各自從自己的連線導出」時才成立。
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let pty = Arc::new(PtyManager::new());
+    let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
+    let state = aiterm_lib::share::ShareServerState::new();
+    let code = state.registry.start_share(tab_id.clone());
+    let port = state
+        .start_if_needed(Arc::clone(&pty))
+        .await
+        .expect("start share server");
+
+    let tcp = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("tcp connect");
+
+    let mut cfg = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(SasIsTheOnlyIdentityCheck))
+        .with_no_client_auth();
+    cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+
+    let connector = tokio_rustls::TlsConnector::from(Arc::new(cfg));
+    let server_name = rustls::pki_types::ServerName::try_from("aiterm-share").unwrap();
+    let tls = connector.connect(server_name, tcp).await.expect("tls handshake");
+
+    // 握手完成後、把 stream 交給 tungstenite 之前，先取自己這端的 exporter
+    // material。SAS 要等承諾流程走完（拿到兩個 nonce）才算得出來。
+    let client_exporter = {
+        let (_io, conn) = tls.get_ref();
+        aiterm_lib::share::tls::exporter_material(conn).expect("client exporter material")
+    };
+
+    let (mut ws, _) = tokio_tungstenite::client_async("ws://aiterm-share/share", tls)
+        .await
+        .expect("ws handshake");
+
+    // 走完 SAS 承諾流程（Join → SasCommit → SasNonce → AwaitingApproval）。
+    // 這個 helper 已經在 Task 7b 的整合測試裡了，直接重用。
+    let (host_nonce, viewer_nonce) =
+        join_and_do_sas_handshake(&mut ws, &code, "Alice").await;
+
+    // 觀看端用自己的 exporter material ＋ 兩個 nonce 自己算一份，**不從線路
+    // 上接收任何 SAS**。主控端那一份存在 PendingRequest 裡給同意視窗顯示。
+    // 兩端算出來必須一致——這就是人工核對能抓到中間人的原因。
+    let client_sas = aiterm_lib::share::tls::sas_from_parts(
+        &host_nonce,
+        &viewer_nonce,
+        &client_exporter,
+    );
+
+    let pending = state.registry.pending(&tab_id);
+    assert_eq!(pending.len(), 1, "expected exactly one pending request");
+    assert_eq!(
+        pending[0].sas, client_sas,
+        "both ends of the same TLS connection must derive the same SAS"
+    );
+    assert_eq!(client_sas.len(), 4);
+}
