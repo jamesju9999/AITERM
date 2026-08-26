@@ -568,3 +568,66 @@ async fn both_ends_of_a_real_tls_connection_derive_the_same_sas() {
     );
     assert_eq!(client_sas.len(), 4);
 }
+
+/// 手動的區網連通性檢查。**平常不跑**（`#[ignore]`），因為它會把 server
+/// 撐開等人來連。
+///
+/// 這個測試存在的理由：計畫①的所有自動測試都跑在 `127.0.0.1`，證明了協定
+/// 本身是對的，但**完全沒有證明第二台機器連得進來**。綁 `0.0.0.0` 之後真正
+/// 的未知數有兩個，兩個都不是程式碼問題：
+///
+/// 1. **作業系統防火牆**——macOS 首次綁定非 loopback 位址時會跳「是否允許
+///    接受連入連線」。使用者按了拒絕（慌張時很常見），功能就靜默失效。
+/// 2. **網路層隔離**——公司／訪客 Wi-Fi 的 client isolation 讓同網段裝置
+///    互相看不到，這在辦公室並不罕見。
+///
+/// 跑法：
+/// ```text
+/// cd src-tauri
+/// cargo test --test share_end_to_end lan_reachability -- --ignored --nocapture
+/// ```
+/// 然後在**另一台機器**上照它印出來的指令試連。對方**不需要裝 Rust**——
+/// TLS 與 ws 握手已經被上面那些測試證明過了，這裡要驗的只是「TCP 到得了」。
+#[tokio::test]
+#[ignore = "manual: holds a LAN port open and waits for a human to try connecting"]
+async fn lan_reachability_probe() {
+    let pty = Arc::new(PtyManager::new());
+    let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
+    let state = aiterm_lib::share::ShareServerState::new();
+    let code = state.registry.start_share(tab_id.clone());
+    let port = state
+        .start_if_needed(Arc::clone(&pty))
+        .await
+        .expect("start share server");
+
+    // 盡力找出這台機器在區網上的位址。找不到不是錯誤——使用者自己知道 IP。
+    let ip = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}'")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "<這台機器的區網 IP>".to_string());
+
+    println!("\n========================================");
+    println!("  共享 server 已啟動並綁在 0.0.0.0:{port}");
+    println!("  短碼：{code}");
+    println!("========================================");
+    println!("\n如果 macOS 跳出防火牆詢問，請按「允許」——按拒絕就是這個檢查要抓的失敗情境之一。\n");
+    println!("在另一台機器上跑（擇一）：");
+    println!("  Windows PowerShell:  Test-NetConnection {ip} -Port {port}");
+    println!("  macOS / Linux:       nc -vz {ip} {port}");
+    println!("\n看到 TcpTestSucceeded: True（或 nc 的 succeeded）就代表區網連得到。");
+    println!("連不到的話，問題在防火牆或網路隔離，不在這份程式碼裡。\n");
+    println!("這個 server 會撐開 3 分鐘，然後自己關掉。\n");
+
+    tokio::time::sleep(Duration::from_secs(180)).await;
+
+    println!("時間到，關閉 server。");
+    // `stop_if_idle` 只在沒有任何分享時才真的關——先停掉這個分享。
+    state.registry.stop_share(&tab_id);
+    state.stop_if_idle();
+    assert!(state.port().is_none(), "server should have stopped");
+}
