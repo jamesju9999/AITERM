@@ -1328,6 +1328,16 @@ mod tests {
     }
 
     #[test]
+    fn awaiting_approval_carries_the_hosts_sas() {
+        let msg = ServerMessage::AwaitingApproval { sas: "4917".to_string() };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"awaiting_approval\""), "got {json}");
+        assert!(json.contains("\"sas\":\"4917\""), "got {json}");
+        let back: ServerMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, msg);
+    }
+
+    #[test]
     fn every_end_reason_survives_a_round_trip() {
         // 前端要靠 reason 決定顯示哪一句話，漏掉任何一個都會變成「未知錯誤」。
         for reason in [
@@ -1403,6 +1413,14 @@ pub enum EndReason {
     InvalidCode,
 }
 
+/// 一條連線導出的 4 位 SAS，透過 axum 的 request extension 交給 ws handler。
+///
+/// 每條 TLS 連線一組——這正是它能當身分保證的原因：中間人必須維持兩條獨立的
+/// TLS 連線，兩邊導出的值必然不同。Task 8 的 TLS accept 迴圈負責填入真值；
+/// Task 6 的明文 server 只在測試裡注入佔位值。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectionSas(pub String);
+
 /// 觀看端 → 主控端。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -1416,9 +1434,17 @@ pub enum ClientMessage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
-    /// 請求已送達，正在等主控端裁決。觀看端此時顯示「等待對方同意」與自己
-    /// 算出的 SAS。
-    AwaitingApproval,
+    /// 請求已送達，正在等主控端裁決。
+    ///
+    /// `sas` 是**主控端從自己這條 TLS 連線導出**的 4 位驗證碼，僅供主控端 UI
+    /// 顯示。觀看端必須算自己那一份、跟這個值口頭核對——**絕對不要**直接顯示
+    /// 這裡收到的值當作自己的 SAS：中間人只要原封轉發就能讓兩邊看起來一致，
+    /// 整個防冒充保證就沒了。見 `share::tls`。
+    ///
+    /// 型別在 Task 5 就定成帶欄位的形狀，即使 TLS 要到 Task 8 才接上——線上
+    /// 契約不該因為實作順序而中途變形。Task 6 的明文 server 送的是注入的
+    /// 佔位值。
+    AwaitingApproval { sas: String },
     /// 已獲准。`cols`/`rows` 是主控端的終端機尺寸——觀看端必須照這個建立
     /// xterm，不能用自己的視窗大小。緊接著會來一個二進位 frame 作為重播。
     Granted { mode: WireAccessMode, cols: u16, rows: u16 },
@@ -1444,7 +1470,7 @@ pub mod protocol;
 - [ ] **Step 5: 跑測試確認轉綠**
 
 Run: `cd src-tauri && cargo test --lib share::protocol`
-Expected: PASS，4 個測試全過。
+Expected: PASS，5 個測試全過。
 
 - [ ] **Step 6: Commit**
 
@@ -1501,13 +1527,22 @@ use tokio_tungstenite::tungstenite::Message;
 const SIZE: PtySize = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
 
 /// 起一個綁 127.0.0.1:0 的共享 server，回傳它的實際 port。
+///
+/// 這條路徑刻意**不走 TLS**——這幾個測試驗的是握手、授權與串流邏輯，TLS 與
+/// SAS 由 Task 8 的 `both_ends_of_a_real_tls_connection_derive_the_same_sas`
+/// 單獨驗。正式路徑的 `ConnectionSas` 由 TLS accept 迴圈注入，這裡手動補一個
+/// 佔位值；**不要**把 handler 的 extractor 改成 `Option`，那等於讓正式路徑
+/// 在 TLS 沒接上時無聲降級成沒有身分保證的連線。
 async fn start_test_server(
     pty: Arc<PtyManager>,
     registry: Arc<ShareRegistry>,
 ) -> u16 {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let app = aiterm_lib::share::server::router(pty, registry);
+    let app = aiterm_lib::share::server::router(pty, registry)
+        .layer(axum::Extension(aiterm_lib::share::protocol::ConnectionSas(
+            "0000".to_string(),
+        )));
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
@@ -1611,7 +1646,10 @@ async fn a_read_only_viewer_sees_output_but_cannot_type() {
     .await
     .unwrap();
 
-    assert_eq!(next_control(&mut ws).await, ServerMessage::AwaitingApproval);
+    assert!(matches!(
+        next_control(&mut ws).await,
+        ServerMessage::AwaitingApproval { .. }
+    ));
 
     // 模擬主控端按下「只能看」。
     let request_id = registry.pending(&tab_id)[0].request_id.clone();
@@ -1661,7 +1699,10 @@ async fn a_controlling_viewer_can_type_and_sees_the_result() {
     ))
     .await
     .unwrap();
-    assert_eq!(next_control(&mut ws).await, ServerMessage::AwaitingApproval);
+    assert!(matches!(
+        next_control(&mut ws).await,
+        ServerMessage::AwaitingApproval { .. }
+    ));
 
     let request_id = registry.pending(&tab_id)[0].request_id.clone();
     registry.approve(&request_id, AccessMode::Control).expect("approve");
@@ -1704,7 +1745,10 @@ async fn stopping_the_share_ends_the_connection_with_a_reason() {
     ))
     .await
     .unwrap();
-    assert_eq!(next_control(&mut ws).await, ServerMessage::AwaitingApproval);
+    assert!(matches!(
+        next_control(&mut ws).await,
+        ServerMessage::AwaitingApproval { .. }
+    ));
     let request_id = registry.pending(&tab_id)[0].request_id.clone();
     registry.approve(&request_id, AccessMode::ReadOnly).expect("approve");
     let _ = next_control(&mut ws).await; // Granted
@@ -1748,7 +1792,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::pty::manager::PtyManager;
 
-use super::protocol::{ClientMessage, EndReason, ServerMessage, WireAccessMode};
+use super::protocol::{ClientMessage, ConnectionSas, EndReason, ServerMessage, WireAccessMode};
 use super::registry::ShareRegistry;
 
 /// 重播給新連線觀看者的位元組上限。等於 PTY ring buffer 的容量——重播的意義
@@ -1772,8 +1816,15 @@ pub fn router(pty: Arc<PtyManager>, registry: Arc<ShareRegistry>) -> Router {
         .with_state(ShareAppState { pty, registry })
 }
 
-async fn share_upgrade(ws: WebSocketUpgrade, State(state): State<ShareAppState>) -> Response {
-    ws.on_upgrade(move |socket| handle_share(socket, state))
+/// SAS 由 request extension 帶進來——Task 8 的 TLS accept 迴圈填真值，測試裡
+/// 注入佔位值。**刻意用 `Extension<ConnectionSas>` 而不是 `Option<...>`**：
+/// 沒有 SAS 時應該直接 500 而不是無聲降級成「沒有身分保證的連線」。
+async fn share_upgrade(
+    ws: WebSocketUpgrade,
+    axum::Extension(sas): axum::Extension<ConnectionSas>,
+    State(state): State<ShareAppState>,
+) -> Response {
+    ws.on_upgrade(move |socket| handle_share(socket, state, sas.0))
 }
 
 async fn send_control(ws: &mut WebSocket, msg: &ServerMessage) -> bool {
@@ -1786,7 +1837,7 @@ async fn end_with(ws: &mut WebSocket, reason: EndReason) {
     let _ = ws.close().await;
 }
 
-async fn handle_share(mut ws: WebSocket, state: ShareAppState) {
+async fn handle_share(mut ws: WebSocket, state: ShareAppState, sas: String) {
     // 1. 第一則訊息必須是 Join。
     let join = match ws.recv().await {
         Some(Ok(Message::Text(t))) => match serde_json::from_str::<ClientMessage>(&t) {
@@ -1806,7 +1857,7 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState) {
         return end_with(&mut ws, EndReason::InvalidCode).await;
     };
 
-    if !send_control(&mut ws, &ServerMessage::AwaitingApproval).await {
+    if !send_control(&mut ws, &ServerMessage::AwaitingApproval { sas: sas.clone() }).await {
         state.registry.deny(&request_id);
         return;
     }
@@ -2357,7 +2408,7 @@ async fn both_ends_of_a_real_tls_connection_derive_the_same_sas() {
 - [ ] **Step 2: 跑測試確認會紅**
 
 Run: `cd src-tauri && cargo test --test share_end_to_end both_ends_of_a_real_tls_connection_derive_the_same_sas`
-Expected: **編譯失敗**——`ShareServerState` 尚未定義、`ServerMessage::AwaitingApproval` 還沒有 `sas` 欄位。
+Expected: **編譯失敗**——`ShareServerState` 尚未定義（`AwaitingApproval` 的 `sas` 欄位在 Task 5 就已經有了，這裡缺的只是 server 的啟停型別與 TLS 接線）。
 
 - [ ] **Step 3: 實作 TLS 接受迴圈與客戶端**
 
@@ -2456,11 +2507,6 @@ use hyper_util::server::conn::auto::Builder as HyperBuilder;
 use tokio_rustls::TlsAcceptor;
 use tower_service::Service;
 
-/// 一條 TLS 連線導出的 SAS，透過 request extension 交給 ws handler。
-/// 每條連線一組——這正是它能當身分保證的原因。
-#[derive(Clone, Debug)]
-pub struct ConnectionSas(pub String);
-
 /// TLS accept 迴圈。每條連線握手完成後先導出 SAS，塞進 request extension，
 /// 再交給 axum router。
 ///
@@ -2528,58 +2574,7 @@ async fn serve_tls(
 }
 ```
 
-在 `server.rs` 的 `share_upgrade` 取出 SAS 並傳給 handler：
-
-```rust
-async fn share_upgrade(
-    ws: WebSocketUpgrade,
-    axum::Extension(sas): axum::Extension<crate::share::ConnectionSas>,
-    State(state): State<ShareAppState>,
-) -> Response {
-    ws.on_upgrade(move |socket| handle_share(socket, state, sas.0))
-}
-```
-
-`handle_share` 的簽名加上 `sas: String`，並把送出 `AwaitingApproval` 那行改成：
-
-```rust
-    if !send_control(&mut ws, &ServerMessage::AwaitingApproval { sas: sas.clone() }).await {
-```
-
-**這一步會弄壞 Task 6 的三個明文整合測試**：它們的 `start_test_server` 直接用 `axum::serve` 起 router，沒有經過 TLS accept 迴圈，所以沒有 `ConnectionSas` extension，`share_upgrade` 會回 500。
-
-修法是讓測試 helper 自己注入一個假的，**不要**把 `share_upgrade` 的 extractor 改成 `Option`——那等於讓正式路徑在 TLS 沒接上時無聲降級成沒有 SAS，把身分保證變成裝飾。改 `tests/share_end_to_end.rs` 的 helper：
-
-```rust
-async fn start_test_server(
-    pty: Arc<PtyManager>,
-    registry: Arc<ShareRegistry>,
-) -> u16 {
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    // 這條路徑刻意不走 TLS——這三個測試驗的是握手/授權/串流邏輯，TLS 由
-    // both_ends_of_a_real_tls_connection_compute_the_same_sas 單獨驗。SAS
-    // extension 在正式路徑由 TLS accept 迴圈注入，這裡手動補一個假的。
-    let app = aiterm_lib::share::server::router(pty, registry)
-        .layer(axum::Extension(aiterm_lib::share::ConnectionSas("0000".to_string())));
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-    port
-}
-```
-
-這一步的 `ServerMessage::AwaitingApproval` 因此要加一個欄位：
-
-```rust
-    AwaitingApproval { sas: String },
-```
-
-並同步更新 `protocol.rs` 的測試與 Task 6 那三個整合測試裡的 `assert_eq!(..., ServerMessage::AwaitingApproval)`，改成用 pattern match 只檢查變體：
-
-```rust
-    assert!(matches!(next_control(&mut ws).await, ServerMessage::AwaitingApproval { .. }));
-```
+`server.rs` 這邊**不需要任何改動**：`share_upgrade` 的 `Extension<ConnectionSas>` extractor 與 `handle_share` 的 `sas` 參數在 Task 6 就已經定好了，Task 5 也已經把 `ConnectionSas` 與 `AwaitingApproval { sas }` 定成最終形狀。這一步只是把真實的 TLS 導出值接上去，取代 Task 6 測試裡注入的佔位值——**型別不變、測試不用回頭改**。
 
 觀看端的 SAS 由它自己那條 `ClientConnection` 算出，不從線上接收——**若 SAS 是伺服器送過來的，中間人只要原封轉發就能讓兩邊一致，整個保證就沒了**。線上那個 `sas` 欄位只給主控端 UI 顯示用。
 
