@@ -215,6 +215,32 @@
 - **前端**：`remote-terminal` 新分頁型別在所有既有分頁型別分支（含 close guard）都有被處理，不會掉進 `terminal` 的假設。
 - **手動驗證**（自動化測不到的）：兩台實體機器同區網，實測分享跑著 Claude Code CLI 的分頁、對方連入、接手打字、TUI 程式（vim）的重播表現、以及主控端關 app 時觀看端的行為。
 
+## 區網連通性實測（2026-08-26，計畫①合併後）
+
+在投入前端 UI 之前先做了跨機器實測，因為計畫①的所有自動測試都跑在
+`127.0.0.1`——那證明了協定，但沒證明第二台機器連得進來。用
+`tests/share_end_to_end.rs` 的 `lan_reachability_probe`（`#[ignore]`，固定
+port 47823）撐開 server，從另一台機器試連：
+
+| 項目 | 結果 |
+|---|---|
+| macOS 主機 192.168.1.33 ← Windows VM 192.168.1.34 | **`TcpTestSucceeded: True`** |
+| ICMP | `PingSucceeded: True`、RTT 0ms |
+| Client isolation | 無 |
+
+**兩個誠實的但書：**
+
+1. **防火牆情境尚未驗證。** 實測那台 Mac 的應用程式防火牆是**關閉的**
+   （`socketfilterfw --getglobalstate` 回報 State = 0），所以「首次綁非
+   loopback 位址時跳出詢問、使用者按拒絕」這條路徑完全沒被走到。同事的機器
+   上防火牆多半是開的，所以這仍是計畫②必須處理的一等公民（引導文案、偵測、
+   連不上時的診斷提示），不是事後補丁。
+
+2. 第一次測是**假陰性**——那時 server 沒開著（探測用浮動 port，跑起來要三
+   分鐘，在終端機裡被丟到背景而錯過輸出）。改成固定 port 才測到真的結果。
+   紀錄下來是因為「TCP failed」看起來像功能壞掉，實際上只是沒開；下次診斷
+   時先確認 `lsof -nP -iTCP:<port> -sTCP:LISTEN` 有東西。
+
 ## 已知限制
 
 誠實記錄，UI 文案要據實告知，不假裝做得到：
