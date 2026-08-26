@@ -2522,7 +2522,7 @@ impl ShareIdentity {
         let cert = rcgen::generate_simple_self_signed(vec!["aiterm-share".to_string()])?;
         Ok(Self {
             cert_der: CertificateDer::from(cert.cert.der().to_vec()),
-            key_der: PrivateKeyDer::try_from(cert.signing_key.serialize_der())
+            key_der: PrivateKeyDer::try_from(cert.key_pair.serialize_der())
                 .map_err(|e| anyhow::anyhow!("serialise share key: {e}"))?,
         })
     }
@@ -2564,7 +2564,13 @@ pub fn sas_for_connection(
 Run: `cd src-tauri && cargo test --lib share::tls`
 Expected: PASS，5 個測試全過。
 
-若 `rcgen 0.13` 的 API 名稱與上面不符（`cert.signing_key` 在不同小版本曾叫 `key_pair`），以 `cargo doc --open -p rcgen` 或 `~/.cargo/registry/src/.../rcgen-0.13.*/src/lib.rs` 的實際簽名為準修正，**不要憑記憶硬套**。
+上面的 API 已於 `rcgen 0.13.2` 原始碼實測查證，可直接照用：
+- `generate_simple_self_signed(subject_alt_names) -> Result<CertifiedKey, Error>`（`src/lib.rs:124`）
+- `CertifiedKey { pub cert: Certificate, pub key_pair: KeyPair }`（`src/lib.rs:87`）——欄位是 **`key_pair`**
+- `Certificate::der(&self) -> &CertificateDer<'static>`（`src/certificate.rs:47`）
+- `KeyPair::serialize_der(&self) -> Vec<u8>`（`src/key_pair.rs:476`）
+
+若編譯仍報型別不符，以實際簽名為準修正並回報，不要為了編過而改變行為。
 
 - [ ] **Step 6: Commit**
 
