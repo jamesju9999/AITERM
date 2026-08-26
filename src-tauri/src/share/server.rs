@@ -20,7 +20,8 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::pty::manager::PtyManager;
 
 use super::protocol::{
-    ClientMessage, ConnectionExporter, EndReason, ServerMessage, WireAccessMode, PROTOCOL_VERSION,
+    ClientMessage, ConnectionExporter, EndReason, PendingRequestEvent, ServerMessage,
+    WireAccessMode, PROTOCOL_VERSION,
 };
 use super::registry::ShareRegistry;
 use super::tls;
@@ -40,13 +41,20 @@ const DECISION_POLL: Duration = Duration::from_millis(200);
 pub struct ShareAppState {
     pub pty: Arc<PtyManager>,
     pub registry: Arc<ShareRegistry>,
+    /// 用來把「有人要連進來」推播給前端。整合測試不起 Tauri app，所以是
+    /// `Option`——`None` 時所有事件發送都是 no-op，其餘行為完全一樣。
+    pub app: Option<tauri::AppHandle>,
 }
 
-pub fn router(pty: Arc<PtyManager>, registry: Arc<ShareRegistry>) -> Router {
+pub fn router(
+    pty: Arc<PtyManager>,
+    registry: Arc<ShareRegistry>,
+    app: Option<tauri::AppHandle>,
+) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/share", any(share_upgrade))
-        .with_state(ShareAppState { pty, registry })
+        .with_state(ShareAppState { pty, registry, app })
 }
 
 /// TLS exporter material 由 request extension 帶進來——Task 8 的 TLS accept
@@ -134,6 +142,7 @@ async fn handle_share(
 
     // 2. 短碼換待審請求。短碼無效就到此為止——主控端不會看到任何東西，所以
     //    亂猜短碼連「打擾對方」都做不到。
+    let display_name_for_event = display_name.clone();
     let Some(request_id) = state.registry.request_join(&code, display_name, sas.clone()) else {
         return end_with(&mut ws, EndReason::InvalidCode).await;
     };
@@ -144,6 +153,19 @@ async fn handle_share(
         state.registry.deny(&request_id);
         return end_with(&mut ws, EndReason::InvalidCode).await;
     };
+
+    // 推播給前端，讓同意視窗跳出來。`None` 時（整合測試）是 no-op。
+    if let Some(app) = &state.app {
+        use tauri::Emitter;
+        let _ = app.emit(
+            "share://request-pending",
+            PendingRequestEvent {
+                request_id: request_id.clone(),
+                tab_id: tab_id.clone(),
+                display_name: display_name_for_event.clone(),
+            },
+        );
+    }
 
     if !send_control(
         &mut ws,
@@ -324,4 +346,11 @@ async fn handle_share(
     }
 
     state.registry.remove_viewer(&tab_id, &viewer_id);
+
+    // 觀看者清單變了，讓主控端的面板重新抓一次。這個事件不帶內容——前端
+    // 收到就去 `share_viewers` 重讀，避免兩份資料對不上。
+    if let Some(app) = &state.app {
+        use tauri::Emitter;
+        let _ = app.emit("share://viewers-changed", ());
+    }
 }

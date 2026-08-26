@@ -130,6 +130,20 @@ pub enum ServerMessage {
     Ended { reason: EndReason },
 }
 
+/// 「有人要連進來」推播給前端的內容。
+///
+/// **刻意沒有 `sas` 欄位。** 主控端的 4 位驗證碼永遠不離開 Rust——同意視窗
+/// 要使用者輸入對方唸的碼，比對在 `share_approve` 裡做。若這裡帶了 sas，
+/// 前端就有機會顯示它，而使用者會照抄而不問對方，核對變成自欺。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingRequestEvent {
+    pub request_id: String,
+    pub tab_id: String,
+    /// 對方自報的名字，**未經驗證**。前端文案不能讓它看起來像身分保證。
+    pub display_name: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +248,25 @@ mod tests {
         assert!(json.contains("\"type\":\"sas_nonce\""), "got {json}");
         let back: ClientMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(back, msg);
+    }
+
+    #[test]
+    fn the_pending_request_event_never_carries_a_sas() {
+        // 這是結構性的保證，不是 UI 慣例：前端拿不到主控端的驗證碼，所以
+        // 不可能顯示它。若哪天有人「順手」把 sas 加進這個結構，同意視窗就
+        // 能照抄而不問對方，整個人工核對變成自欺。
+        let ev = PendingRequestEvent {
+            request_id: "r1".to_string(),
+            tab_id: "t1".to_string(),
+            display_name: "Alice".to_string(),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("\"requestId\":\"r1\""), "got {json}");
+        assert!(json.contains("\"displayName\":\"Alice\""), "got {json}");
+        assert!(
+            !json.contains("sas"),
+            "the pending-request event must never carry a SAS; got {json}"
+        );
     }
 
     #[test]
