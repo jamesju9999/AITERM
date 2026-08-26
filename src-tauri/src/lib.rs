@@ -17,6 +17,7 @@ pub mod mcp_server;
 pub mod pty;
 pub mod python_env;
 pub mod secret;
+pub mod share;
 pub mod telegram;
 pub mod usage;
 pub mod vcs;

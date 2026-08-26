@@ -90,6 +90,27 @@ fn scan_for_marker(tail: &[u8], chunk: &[u8], marker: &[u8]) -> (bool, Vec<u8>) 
     (found, new_tail)
 }
 
+/// Raw PTY bytes retained per session. Serves two readers with different
+/// appetites: AI context (which asks for a few KB) and screen sharing (which
+/// replays this whole buffer to prime a newly connected viewer's terminal).
+/// The share case sets the floor — a full 80x24 colour redraw runs well past
+/// the 8 KB this used to be. At 256 KB, twenty open tabs cost ~5 MB.
+pub(crate) const OUTPUT_RING_CAP: usize = 256 * 1024;
+
+/// How many output chunks the fan-out channel buffers before the slowest
+/// subscriber starts losing the oldest. Each slot holds one `Vec<u8>` of up
+/// to 4096 bytes (the reader thread's read buffer size), and tokio allocates
+/// every slot up front — so this is a worst case of roughly 1 MB per shared
+/// tab, and it multiplies by the number of tabs being shared at once.
+///
+/// Deliberately not larger: a bigger buffer only delays `Lagged`, it cannot
+/// prevent it, and the resynchronise-from-the-ring-buffer path has to exist
+/// either way. A lagging viewer is never silently tolerated — it is told to
+/// resync (see `share::server`, built in a later task of this plan), because
+/// a terminal that misses bytes mid-escape-sequence renders wrong from then
+/// on and never recovers on its own.
+const OUTPUT_BROADCAST_CAP: usize = 256;
+
 pub struct PtySession {
     pub id: String,
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -128,6 +149,14 @@ pub struct PtySession {
     /// monotonic-counter reasoning as `bell_count`. See
     /// `docs/superpowers/specs/2026-08-21-coordination-done-marker-design.md`.
     marker_count: Arc<AtomicU64>,
+    /// Fan-out of raw output chunks to screen-share viewers. Independent of
+    /// the `on_data` callback, which continues to serve the app's own
+    /// terminal view. Subscribers appear only while a tab is being shared.
+    output_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
+    /// Current terminal size, as last set by `resize` (or as spawned). Screen
+    /// sharing sends this to viewers so they build their own terminal at the
+    /// host's dimensions rather than their own window's.
+    size: Mutex<PtySize>,
 }
 
 /// Commits a resolved cd to `cwd`/`previous_cwd`. Free function (not a method)
@@ -270,8 +299,25 @@ fn confirm_pending_cds_from_output(
 }
 
 impl PtySession {
-    /// Spawn a new shell. `on_data` receives every chunk read from the PTY on a background thread.
-    pub fn spawn<F>(shell: ShellSpec, size: PtySize, cwd: Option<PathBuf>, mut on_data: F) -> PtyResult<Self>
+    /// Spawn with a generated id. Thin wrapper over `spawn_with_id` — the two
+    /// were byte-identical copies until this was collapsed, which meant every
+    /// change to the reader thread had to be made twice.
+    pub fn spawn<F>(shell: ShellSpec, size: PtySize, cwd: Option<PathBuf>, on_data: F) -> PtyResult<Self>
+    where
+        F: FnMut(Vec<u8>) + Send + 'static,
+    {
+        Self::spawn_with_id(shell, size, Uuid::new_v4().to_string(), cwd, on_data)
+    }
+
+    /// Like `spawn`, but uses a caller-supplied id. Useful when the id must be
+    /// known before the `on_data` closure is constructed (e.g. Tauri event names).
+    pub fn spawn_with_id<F>(
+        shell: ShellSpec,
+        size: PtySize,
+        id: String,
+        cwd: Option<PathBuf>,
+        mut on_data: F,
+    ) -> PtyResult<Self>
     where
         F: FnMut(Vec<u8>) + Send + 'static,
     {
@@ -322,8 +368,6 @@ impl PtySession {
             .try_clone_reader()
             .map_err(|e| PtyError::Internal(format!("try_clone_reader: {e}")))?;
 
-        let id = Uuid::new_v4().to_string();
-
         let output_ring: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::new()));
         let ring_for_thread = Arc::clone(&output_ring);
         let cwd: Arc<Mutex<PathBuf>> = Arc::new(Mutex::new(initial_cwd));
@@ -338,6 +382,10 @@ impl PtySession {
         let marker_count_for_thread = Arc::clone(&marker_count);
         let marker_tail_for_thread: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let done_marker_bytes = done_marker(&id).into_bytes();
+
+        let (output_tx, _) =
+            tokio::sync::broadcast::channel::<Vec<u8>>(OUTPUT_BROADCAST_CAP);
+        let output_tx_for_thread = output_tx.clone();
 
         let reader_thread = thread::Builder::new()
             .name(format!("pty-reader-{}", id))
@@ -350,10 +398,24 @@ impl PtySession {
                             let chunk = buf[..n].to_vec();
                             {
                                 let mut ring = ring_for_thread.lock();
-                                const RING_CAP: usize = 8 * 1024;
                                 for &b in &chunk {
-                                    if ring.len() >= RING_CAP { ring.pop_front(); }
+                                    if ring.len() >= OUTPUT_RING_CAP { ring.pop_front(); }
                                     ring.push_back(b);
+                                }
+                                // Broadcast while still holding the ring lock.
+                                // This is what makes `subscribe_with_history`
+                                // atomic: a chunk is either already in the
+                                // snapshot a subscriber took, or it cannot be
+                                // broadcast until that subscriber has both its
+                                // snapshot and its receiver. Neither gap nor
+                                // duplicate is possible.
+                                //
+                                // `send` never blocks — it overwrites the
+                                // oldest slot and the slow reader gets
+                                // `Lagged` later — so holding the ring lock
+                                // across it cannot stall the reader thread.
+                                if output_tx_for_thread.receiver_count() > 0 {
+                                    let _ = output_tx_for_thread.send(chunk.clone());
                                 }
                             }
                             if matches!(shell_variant, ShellVariant::Bash | ShellVariant::Pwsh) {
@@ -418,161 +480,8 @@ impl PtySession {
             pending_cds,
             bell_count,
             marker_count,
-        })
-    }
-
-    /// Like `spawn`, but uses a caller-supplied id. Useful when the id must be
-    /// known before the `on_data` closure is constructed (e.g. Tauri event names).
-    pub fn spawn_with_id<F>(
-        shell: ShellSpec,
-        size: PtySize,
-        id: String,
-        cwd: Option<PathBuf>,
-        mut on_data: F,
-    ) -> PtyResult<Self>
-    where
-        F: FnMut(Vec<u8>) + Send + 'static,
-    {
-        let shell_variant = ShellVariant::from_program(&shell.program.to_string_lossy());
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(size)
-            .map_err(|e| PtyError::SpawnFailed(e.to_string()))?;
-
-        let mut cmd = CommandBuilder::new(shell.program);
-        for arg in shell.args {
-            cmd.arg(arg);
-        }
-        // Applied before the configured envs, so an explicit setting still
-        // wins. An AppImage's AppRun exports PYTHONHOME and LD_LIBRARY_PATH
-        // pointing into the AppDir, and a shell hands them to everything the
-        // user runs — `python3` in this terminal would fail to find its own
-        // standard library. No-op everywhere else.
-        for (key, value) in crate::appimage_env::appimage_env_fixes() {
-            match value {
-                Some(v) => cmd.env(key, v),
-                None => cmd.env_remove(key),
-            }
-        }
-        for (k, v) in shell.envs {
-            cmd.env(k, v);
-        }
-        // 順序必須在 envs 之後：兩份清單若不慎重疊，移除要贏。
-        for k in &shell.env_removals {
-            cmd.env_remove(k);
-        }
-        let initial_cwd = resolve_initial_cwd(cwd);
-        cmd.cwd(&initial_cwd);
-
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| PtyError::SpawnFailed(e.to_string()))?;
-        drop(pair.slave);
-
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| PtyError::Internal(format!("take_writer: {e}")))?;
-        let mut reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| PtyError::Internal(format!("try_clone_reader: {e}")))?;
-
-        let output_ring: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let ring_for_thread = Arc::clone(&output_ring);
-        let cwd: Arc<Mutex<PathBuf>> = Arc::new(Mutex::new(initial_cwd));
-        let cwd_for_thread = Arc::clone(&cwd);
-        let previous_cwd: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
-        let previous_cwd_for_thread = Arc::clone(&previous_cwd);
-        let pending_cds: Arc<Mutex<VecDeque<ParsedCd>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let pending_cds_for_thread = Arc::clone(&pending_cds);
-        let bell_count: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
-        let bell_count_for_thread = Arc::clone(&bell_count);
-        let marker_count: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
-        let marker_count_for_thread = Arc::clone(&marker_count);
-        let marker_tail_for_thread: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-        let done_marker_bytes = done_marker(&id).into_bytes();
-
-        let reader_thread = thread::Builder::new()
-            .name(format!("pty-reader-{}", id))
-            .spawn(move || {
-                let mut buf = [0u8; 4096];
-                loop {
-                    match reader.read(&mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            let chunk = buf[..n].to_vec();
-                            {
-                                let mut ring = ring_for_thread.lock();
-                                const RING_CAP: usize = 8 * 1024;
-                                for &b in &chunk {
-                                    if ring.len() >= RING_CAP { ring.pop_front(); }
-                                    ring.push_back(b);
-                                }
-                            }
-                            if matches!(shell_variant, ShellVariant::Bash | ShellVariant::Pwsh) {
-                                confirm_pending_cds_from_output(
-                                    &chunk,
-                                    &pending_cds_for_thread,
-                                    &cwd_for_thread,
-                                    &previous_cwd_for_thread,
-                                );
-                            }
-                            // Cheap to call unconditionally, same reasoning as the
-                            // OSC133 scan above: a chunk with no bell byte is the
-                            // overwhelmingly common case. One increment per chunk
-                            // containing at least one bell is enough — callers only
-                            // ever check "did the count change since my baseline",
-                            // never the exact number of bells. Uses
-                            // `contains_bare_bell` (not a naive `contains(&0x07)`)
-                            // because our own OSC133 shell-integration markers are
-                            // themselves BEL-terminated and must not be mistaken
-                            // for a genuine agent notification bell.
-                            if cd_parser::contains_bare_bell(&chunk) {
-                                bell_count_for_thread.fetch_add(1, Ordering::SeqCst);
-                            }
-                            // Optional completion-marker detection (see design doc
-                            // 2026-08-21-coordination-done-marker-design.md). Uses a
-                            // small carried-over tail so a marker split across any
-                            // number of chunk boundaries is still found — unlike the
-                            // single-byte bell above, this marker is multiple bytes
-                            // long and PTY reads are arbitrary-sized.
-                            {
-                                let mut tail = marker_tail_for_thread.lock();
-                                let (found, new_tail) =
-                                    scan_for_marker(&tail, &chunk, &done_marker_bytes);
-                                if found {
-                                    marker_count_for_thread.fetch_add(1, Ordering::SeqCst);
-                                }
-                                *tail = new_tail;
-                            }
-                            on_data(chunk);
-                        }
-                        Err(e) => {
-                            eprintln!("pty reader error: {e}");
-                            break;
-                        }
-                    }
-                }
-            })
-            .map_err(|e| PtyError::Internal(format!("spawn reader thread: {e}")))?;
-
-        Ok(Self {
-            id,
-            master: Mutex::new(pair.master),
-            writer: Mutex::new(writer),
-            child: Mutex::new(child),
-            reader_thread: Mutex::new(Some(reader_thread)),
-            shell_variant,
-            cwd,
-            previous_cwd,
-            line_buffer: Mutex::new(Vec::new()),
-            line_esc_state: Mutex::new(0),
-            output_ring,
-            pending_cds,
-            bell_count,
-            marker_count,
+            output_tx,
+            size: Mutex::new(size),
         })
     }
 
@@ -726,6 +635,76 @@ impl PtySession {
         if stripped.trim().is_empty() { None } else { Some(stripped) }
     }
 
+    /// Return the last `max_bytes` bytes of terminal output exactly as the PTY
+    /// produced them — ANSI escapes intact, unlike `get_recent_output`, whose
+    /// stripping would hand a viewer a colourless, cursor-less approximation.
+    ///
+    /// **Do not pair this with `subscribe()` to give a screen-share viewer
+    /// history plus live output.** The two take different locks, so whichever
+    /// order you call them in leaves a window — see `subscribe_with_history`,
+    /// which is the correct API for that combination. This method on its own
+    /// is fine for a pure snapshot with no live stream attached.
+    ///
+    /// Unlike `get_recent_output` this does not treat whitespace-only content
+    /// as "nothing" — a screen that genuinely holds only blank lines is still
+    /// the screen the viewer must be shown. `None` means nothing has been
+    /// captured at all.
+    pub fn get_recent_raw(&self, max_bytes: usize) -> Option<Vec<u8>> {
+        let ring = self.output_ring.lock();
+        if ring.is_empty() {
+            return None;
+        }
+        let start = ring.len().saturating_sub(max_bytes);
+        Some(ring.iter().skip(start).copied().collect())
+    }
+
+    /// Subscribe to this session's raw output. Every subscriber receives every
+    /// chunk produced after it subscribed.
+    ///
+    /// **This gives you no history, and pairing it with `get_recent_raw()` to
+    /// obtain some is racy** — the two take different locks, so bytes landing
+    /// in between are either duplicated or lost depending on the order. Use
+    /// `subscribe_with_history` when you need both. This method on its own is
+    /// fine when you only want output from now on.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
+        self.output_tx.subscribe()
+    }
+
+    /// Take a history snapshot and subscribe to future output as one atomic
+    /// step. Screen sharing must use this rather than calling `get_recent_raw`
+    /// and `subscribe` separately.
+    ///
+    /// Those two take different locks, and the reader thread writes the ring
+    /// before it broadcasts — so calling them in either order leaves a window:
+    /// subscribe-then-snapshot duplicates the bytes that land in between, and
+    /// snapshot-then-subscribe loses them entirely. Losing bytes can truncate
+    /// an ANSI escape sequence, and a terminal that renders a truncated escape
+    /// stays wrong forever.
+    ///
+    /// Holding the ring lock across both closes the window: a chunk is either
+    /// already in the snapshot, or the reader thread cannot broadcast it until
+    /// this method has returned with its receiver in hand.
+    pub fn subscribe_with_history(
+        &self,
+        max_bytes: usize,
+    ) -> (Option<Vec<u8>>, tokio::sync::broadcast::Receiver<Vec<u8>>) {
+        let ring = self.output_ring.lock();
+        let history = if ring.is_empty() {
+            None
+        } else {
+            let start = ring.len().saturating_sub(max_bytes);
+            Some(ring.iter().skip(start).copied().collect())
+        };
+        let rx = self.output_tx.subscribe();
+        drop(ring);
+        (history, rx)
+    }
+
+    /// How many share viewers are currently attached to this session.
+    pub fn subscriber_count(&self) -> usize {
+        self.output_tx.receiver_count()
+    }
+
     /// Monotonic count of output chunks that have contained at least one bell
     /// byte (`0x07`) since this session started. See the field doc comment on
     /// `bell_count` for why this is a counter, not a boolean.
@@ -744,7 +723,17 @@ impl PtySession {
         let master = self.master.lock();
         master
             .resize(size)
-            .map_err(|e| PtyError::Internal(format!("resize: {e}")))
+            .map_err(|e| PtyError::Internal(format!("resize: {e}")))?;
+        *self.size.lock() = size;
+        Ok(())
+    }
+
+    /// Current terminal size, as last set by `resize` (or as spawned).
+    /// Screen sharing sends this to viewers so they build their own terminal
+    /// at the host's dimensions rather than their own window's.
+    pub fn size(&self) -> (u16, u16) {
+        let s = *self.size.lock();
+        (s.cols, s.rows)
     }
 
     pub fn kill(&self) -> PtyResult<()> {
@@ -892,6 +881,23 @@ mod tests {
             .expect("resize ok");
 
         drop(session);
+    }
+
+    #[test]
+    fn size_reports_what_the_session_was_spawned_with_and_tracks_resize() {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+        assert_eq!(session.size(), (80, 24));
+
+        session
+            .resize(PtySize { rows: 40, cols: 120, pixel_width: 0, pixel_height: 0 })
+            .expect("resize");
+        assert_eq!(session.size(), (120, 40));
     }
 
     fn fake_session(shell_variant: ShellVariant, initial: &str) -> PtySessionStubForCwd {
@@ -1263,6 +1269,65 @@ mod tests {
         drop(session);
     }
 
+    #[tokio::test]
+    async fn get_recent_raw_keeps_ansi_escapes_that_get_recent_output_strips() {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+
+        // A red "SHAREME" followed by a reset. get_recent_output must not show
+        // the escapes; get_recent_raw must.
+        #[cfg(windows)]
+        session.write(b"echo \x1b[31mSHAREME\x1b[0m\r\n").unwrap();
+        #[cfg(not(windows))]
+        session.write(b"printf '\\033[31mSHAREME\\033[0m\\n'\n").unwrap();
+
+        // Real PTY I/O on a background thread — poll rather than sleep a fixed
+        // amount, same as the bell test above.
+        let mut raw = None;
+        for _ in 0..50 {
+            if let Some(bytes) = session.get_recent_raw(64 * 1024) {
+                // 不能只找裸的 "SHAREME"：PTY 會回顯你打進去的那行指令，而
+                // 指令原文裡的 `\033` 是四個 ASCII 字元、不是真的 ESC byte，
+                // 卻同樣含有 "SHAREME"。搜尋含真 ESC 的完整序列才能保證只
+                // 匹配到 printf 真正執行後的著色輸出。
+                if bytes.windows(12).any(|w| w == b"\x1b[31mSHAREME") {
+                    raw = Some(bytes);
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let raw = raw.expect("expected SHAREME to show up in the raw ring buffer");
+
+        assert!(
+            raw.contains(&0x1b),
+            "get_recent_raw must preserve ESC bytes; got {:?}",
+            String::from_utf8_lossy(&raw)
+        );
+        let stripped = session.get_recent_output(64 * 1024).expect("stripped output");
+        assert!(
+            !stripped.contains('\u{1b}'),
+            "get_recent_output must still strip ESC bytes; got {stripped:?}"
+        );
+    }
+
+    #[test]
+    fn output_ring_cap_is_large_enough_to_replay_a_screen() {
+        // A single full redraw of an 80x24 screen with colour runs well past
+        // 8 KB. A share viewer primed from a ring that small would see a
+        // fragment of a screen, so this floor is a real requirement, not a
+        // preference.
+        assert!(
+            OUTPUT_RING_CAP >= 128 * 1024,
+            "OUTPUT_RING_CAP too small to prime a share viewer: {OUTPUT_RING_CAP}"
+        );
+    }
+
     #[test]
     fn marker_count_starts_at_zero_for_a_fresh_session() {
         let session = PtySession::spawn(
@@ -1342,6 +1407,111 @@ mod tests {
 
         let _ = rx.try_recv();
         drop(session);
+    }
+
+    #[tokio::test]
+    async fn every_subscriber_receives_the_same_output_and_on_data_still_fires() {
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            move |chunk| {
+                let _ = tx.send(chunk);
+            },
+        )
+        .expect("spawn pty");
+
+        // Two independent viewers, subscribed before anything is written.
+        let mut a = session.subscribe();
+        let mut b = session.subscribe();
+
+        #[cfg(windows)]
+        session.write(b"echo FANOUT\r\n").unwrap();
+        #[cfg(not(windows))]
+        session.write(b"printf 'FANOUT\\n'\n").unwrap();
+
+        // 這裡搜尋裸的 "FANOUT" 是**刻意的、也是正確的**：PTY 會回顯你打進去
+        // 的指令，所以匹配可能命中回顯而不是 printf 的輸出——但那無所謂，回顯
+        // 同樣是走 PTY 輸出、同樣要經過 fan-out，正是這個測試要驗的東西。
+        async fn collect_until_marker(
+            r: &mut tokio::sync::broadcast::Receiver<Vec<u8>>,
+        ) -> Vec<u8> {
+            let mut acc = Vec::new();
+            for _ in 0..50 {
+                match tokio::time::timeout(Duration::from_millis(200), r.recv()).await {
+                    Ok(Ok(chunk)) => {
+                        acc.extend_from_slice(&chunk);
+                        if acc.windows(6).any(|w| w == b"FANOUT") {
+                            return acc;
+                        }
+                    }
+                    Ok(Err(_)) => break,
+                    Err(_) => continue,
+                }
+            }
+            acc
+        }
+
+        let got_a = collect_until_marker(&mut a).await;
+        let got_b = collect_until_marker(&mut b).await;
+
+        assert!(
+            got_a.windows(6).any(|w| w == b"FANOUT"),
+            "subscriber A missed the output"
+        );
+        assert!(
+            got_b.windows(6).any(|w| w == b"FANOUT"),
+            "subscriber B missed the output"
+        );
+
+        // 名字承諾的是「相同」，就要真的驗相同。兩個 receiver 訂閱的是同一個
+        // sender，reader thread 每個 chunk 只 send 一次，所以兩邊收到的 chunk
+        // 序列（順序、內容、邊界）完全一致；而 collect_until_marker 的停止條件
+        // 是「累積內容是否含 FANOUT」——一個純內容函數，不受即時時序影響。
+        // 因此兩邊會在收到相同數量的 chunk 後停止，這個斷言是確定性的。
+        assert_eq!(
+            got_a, got_b,
+            "subscribers received different bytes for the same broadcast"
+        );
+
+        // The pre-existing on_data path must be untouched by fan-out.
+        let mut via_callback = Vec::new();
+        while let Ok(chunk) = rx.try_recv() {
+            via_callback.extend_from_slice(&chunk);
+        }
+        assert!(
+            via_callback.windows(6).any(|w| w == b"FANOUT"),
+            "the original on_data callback stopped seeing output"
+        );
+    }
+
+    #[test]
+    fn subscriber_count_reflects_subscribe_and_drop() {
+        // 注意這個測試**不**保證 reader thread 裡的 `receiver_count() > 0`
+        // 守衛還在。那個守衛純粹是效能優化（省一次 chunk.clone()）——把它
+        // 拿掉之後 send() 自己會對 0 receiver 安全地回 Err 而呼叫端吞掉，
+        // 功能完全不變，所以沒有任何功能斷言抓得到它被移除。要抓只能量
+        // heap 配置次數，那是效能測試不是這裡的事。
+        //
+        // 這個測試守的是 subscribe()/Drop 的計數邏輯本身。
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+
+        assert_eq!(session.subscriber_count(), 0);
+        let a = session.subscribe();
+        assert_eq!(session.subscriber_count(), 1);
+        let b = session.subscribe();
+        assert_eq!(session.subscriber_count(), 2);
+        drop(a);
+        assert_eq!(session.subscriber_count(), 1);
+        drop(b);
+        assert_eq!(session.subscriber_count(), 0);
     }
 
     #[test]
@@ -1471,6 +1641,85 @@ mod tests {
             session.bell_count(),
             0,
             "the shell's own boot-time OSC133 marker must not be counted as a bell"
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_with_history_snapshot_excludes_bytes_the_stream_then_delivers() {
+        // 這個測試驗的是**時序正確性**，不是併發競態：訂閱前產生的內容要在
+        // 快照裡，訂閱後產生的內容要只從串流來。
+        //
+        // 它**抓不到**「有人把 broadcast 移回 ring 鎖外面」這個退化——已實測
+        // 確認（把 send 搬出鎖後這個測試跑 30 次全過）。因為測試在寫入與訂閱
+        // 之間輪詢等待，兩者從不重疊，而競態只存在於重疊的窗口裡。
+        //
+        // 真正的原子性保證來自不變量論證，不是來自這個測試：reader thread 把
+        // 「寫 ring」與「決定要不要 send」放在同一個臨界區，所以外界不可能觀察
+        // 到兩者之間的中間態。見 `subscribe_with_history` 的 doc comment。
+        //
+        // 要用確定性測試抓那個窗口，需要在生產程式碼裡插測試專用的 barrier，
+        // 那是為了可測試性侵入實作，不划算。
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+
+        // 先產生一段歷史，確認它會出現在快照裡。
+        #[cfg(windows)]
+        session.write(b"echo HIST\r\n").unwrap();
+        #[cfg(not(windows))]
+        session.write(b"printf 'HIST\\n'\n").unwrap();
+
+        let mut history = None;
+        for _ in 0..50 {
+            if let Some(bytes) = session.get_recent_raw(64 * 1024) {
+                if bytes.windows(4).any(|w| w == b"HIST") {
+                    history = Some(bytes);
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        history.expect("history should contain HIST before we subscribe");
+
+        // 原子地取快照＋訂閱。
+        let (snapshot, mut rx) = session.subscribe_with_history(64 * 1024);
+        let snapshot = snapshot.expect("snapshot should not be empty");
+        assert!(
+            snapshot.windows(4).any(|w| w == b"HIST"),
+            "the atomic snapshot lost the history that get_recent_raw could see"
+        );
+
+        // 訂閱之後才產生的東西只能來自串流，不能已經在快照裡。
+        #[cfg(windows)]
+        session.write(b"echo AFTER\r\n").unwrap();
+        #[cfg(not(windows))]
+        session.write(b"printf 'AFTER\\n'\n").unwrap();
+
+        assert!(
+            !snapshot.windows(5).any(|w| w == b"AFTER"),
+            "the snapshot somehow contains output produced after it was taken"
+        );
+
+        let mut streamed = Vec::new();
+        for _ in 0..50 {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(chunk)) => {
+                    streamed.extend_from_slice(&chunk);
+                    if streamed.windows(5).any(|w| w == b"AFTER") {
+                        break;
+                    }
+                }
+                Ok(Err(_)) => break,
+                Err(_) => continue,
+            }
+        }
+        assert!(
+            streamed.windows(5).any(|w| w == b"AFTER"),
+            "output produced after subscribing never arrived on the stream"
         );
     }
 }

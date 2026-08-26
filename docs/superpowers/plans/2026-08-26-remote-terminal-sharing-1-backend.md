@@ -131,7 +131,12 @@ ring buffer 目前上限是寫死在 reader thread 裡的 `const RING_CAP: usize
         let mut raw = None;
         for _ in 0..50 {
             if let Some(bytes) = session.get_recent_raw(64 * 1024) {
-                if bytes.windows(7).any(|w| w == b"SHAREME") {
+                // 不能只找裸的 "SHAREME"：PTY 會回顯你打進去的那行指令，而
+                // 指令原文裡的 `\033` 是四個 ASCII 字元、不是真的 ESC byte，
+                // 卻同樣含有 "SHAREME"。搜尋含真 ESC 的完整序列才能保證只
+                // 匹配到 printf 真正執行後的著色輸出——否則這個測試大約每
+                // 20 次會 flake 一次（已實測重現）。
+                if bytes.windows(12).any(|w| w == b"\x1b[31mSHAREME") {
                     raw = Some(bytes);
                     break;
                 }
@@ -172,7 +177,9 @@ Expected: **編譯失敗**——`no method named get_recent_raw`、`cannot find 
 
 - [ ] **Step 3: 把 RING_CAP 提到模組層級並加大**
 
-在 `session.rs` 裡 `pub struct PtySession` 定義的正上方加入：
+在 `session.rs` 裡 `pub struct PtySession` 定義的正上方加入（**`pub(crate)`
+而不是私有**：Task 6 的 `REPLAY_MAX_BYTES` 要直接引用它，避免兩邊各寫一份
+同樣的數字而遲早漂掉）：
 
 ```rust
 /// Raw PTY bytes retained per session. Serves two readers with different
@@ -180,7 +187,7 @@ Expected: **編譯失敗**——`no method named get_recent_raw`、`cannot find 
 /// replays this whole buffer to prime a newly connected viewer's terminal).
 /// The share case sets the floor — a full 80x24 colour redraw runs well past
 /// the 8 KB this used to be. At 256 KB, twenty open tabs cost ~5 MB.
-const OUTPUT_RING_CAP: usize = 256 * 1024;
+pub(crate) const OUTPUT_RING_CAP: usize = 256 * 1024;
 ```
 
 然後把 reader thread 裡的區塊（Task 1 合併後只剩一處）：
@@ -214,9 +221,14 @@ const OUTPUT_RING_CAP: usize = 256 * 1024;
 
 ```rust
     /// Return the last `max_bytes` bytes of terminal output exactly as the PTY
-    /// produced them — ANSI escapes intact. Screen sharing replays this to
-    /// prime a newly connected viewer; `get_recent_output`'s stripping would
-    /// hand them a colourless, cursor-less approximation instead.
+    /// produced them — ANSI escapes intact, unlike `get_recent_output`, whose
+    /// stripping would hand a viewer a colourless, cursor-less approximation.
+    ///
+    /// **Do not pair this with `subscribe()` to give a screen-share viewer
+    /// history plus live output.** The two take different locks, so whichever
+    /// order you call them in leaves a window — see `subscribe_with_history`
+    /// (Task 3b), which is the correct API for that combination. This method
+    /// on its own is fine for a pure snapshot with no live stream attached.
     ///
     /// Unlike `get_recent_output` this does not treat whitespace-only content
     /// as "nothing" — a screen that genuinely holds only blank lines is still
@@ -292,7 +304,14 @@ git commit -m "feat(pty): add get_recent_raw and enlarge the output ring for sha
         #[cfg(not(windows))]
         session.write(b"printf 'FANOUT\\n'\n").unwrap();
 
-        // Collect from each subscriber until the marker shows up.
+        // 這裡搜尋裸的 "FANOUT" 是**刻意的、也是正確的**，跟 Task 2 那個
+        // 測試不同：PTY 會回顯你打進去的指令，所以匹配可能命中回顯而不是
+        // printf 的輸出——但那無所謂，回顯同樣是走 PTY 輸出、同樣要經過
+        // fan-out，正是這個測試要驗的東西。Task 2 那裡不能這樣做，是因為
+        // 它斷言的是「位元組裡有真正的 ESC」，而回顯裡沒有。
+        //
+        // 換句話說：會不會被回顯提前命中，取決於你的斷言在乎什麼，不是
+        // 一律要避開。
         async fn collect_until_marker(
             r: &mut tokio::sync::broadcast::Receiver<Vec<u8>>,
         ) -> Vec<u8> {
@@ -324,6 +343,16 @@ git commit -m "feat(pty): add get_recent_raw and enlarge the output ring for sha
             "subscriber B missed the output"
         );
 
+        // 名字承諾的是「相同」，就要真的驗相同。兩個 receiver 訂閱的是同一個
+        // sender，reader thread 每個 chunk 只 send 一次，所以兩邊收到的 chunk
+        // 序列（順序、內容、邊界）完全一致；而 collect_until_marker 的停止
+        // 條件是「累積內容是否含 FANOUT」——一個純內容函數，不受即時時序
+        // 影響。因此兩邊會在收到相同數量的 chunk 後停止，這個斷言是確定性的。
+        assert_eq!(
+            got_a, got_b,
+            "subscribers received different bytes for the same broadcast"
+        );
+
         // The pre-existing on_data path must be untouched by fan-out.
         let mut via_callback = Vec::new();
         while let Ok(chunk) = rx.try_recv() {
@@ -336,7 +365,15 @@ git commit -m "feat(pty): add get_recent_raw and enlarge the output ring for sha
     }
 
     #[test]
-    fn no_subscribers_means_nothing_is_broadcast() {
+    fn subscriber_count_reflects_subscribe_and_drop() {
+        // 注意這個測試**不**保證 reader thread 裡的 `receiver_count() > 0`
+        // 守衛還在。那個守衛純粹是效能優化（省一次 chunk.clone()）——把它
+        // 拿掉之後 `send()` 自己會對 0 receiver 安全地回 `Err` 而呼叫端用
+        // `let _ =` 吞掉，功能完全不變，所以**沒有任何功能斷言抓得到它被
+        // 移除**。要抓只能量 heap 配置次數，那是效能測試不是這裡的事。
+        //
+        // 這個測試守的是 subscribe()/Drop 的計數邏輯本身。名字要誠實反映
+        // 它真正驗證的東西——掛一個假承諾的名字比沒有測試更糟。
         let session = PtySession::spawn(
             test_shell(),
             PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
@@ -344,8 +381,15 @@ git commit -m "feat(pty): add get_recent_raw and enlarge the output ring for sha
             |_| {},
         )
         .expect("spawn pty");
-        // Nobody has called subscribe(), so the reader thread must skip the
-        // clone entirely. This is the cost borne by users who never share.
+
+        assert_eq!(session.subscriber_count(), 0);
+        let a = session.subscribe();
+        assert_eq!(session.subscriber_count(), 1);
+        let b = session.subscribe();
+        assert_eq!(session.subscriber_count(), 2);
+        drop(a);
+        assert_eq!(session.subscriber_count(), 1);
+        drop(b);
         assert_eq!(session.subscriber_count(), 0);
     }
 ```
@@ -360,12 +404,19 @@ Expected: **編譯失敗**——`no method named subscribe`、`no method named s
 在 `session.rs` 模組層級、`OUTPUT_RING_CAP` 旁邊加入：
 
 ```rust
-/// How many output chunks the fan-out channel buffers per subscriber before
-/// the slowest one starts losing the oldest. A lagging viewer is not silently
-/// tolerated — it is told to resynchronise from the ring buffer (see
-/// `share::server`), because a terminal that misses bytes mid-escape-sequence
-/// renders wrong from then on and never recovers on its own.
-const OUTPUT_BROADCAST_CAP: usize = 1024;
+/// How many output chunks the fan-out channel buffers before the slowest
+/// subscriber starts losing the oldest. Each slot holds one `Vec<u8>` of up
+/// to 4096 bytes (the reader thread's read buffer size), and tokio allocates
+/// every slot up front — so this is a worst case of roughly 1 MB per shared
+/// tab, and it multiplies by the number of tabs being shared at once.
+///
+/// Deliberately not larger: a bigger buffer only delays `Lagged`, it cannot
+/// prevent it, and the resynchronise-from-the-ring-buffer path has to exist
+/// either way. A lagging viewer is never silently tolerated — it is told to
+/// resync (see `share::server`, built in a later task of this plan), because
+/// a terminal that misses bytes mid-escape-sequence renders wrong from then
+/// on and never recovers on its own.
+const OUTPUT_BROADCAST_CAP: usize = 256;
 ```
 
 在 `pub struct PtySession { ... }` 的欄位清單末端（`marker_count` 之後）加入：
@@ -391,8 +442,12 @@ const OUTPUT_BROADCAST_CAP: usize = 1024;
 
 ```rust
                             // Only pay for the clone when somebody is actually
-                            // watching. With no viewers this is one atomic
-                            // load — the entire cost to users who never share.
+                            // watching. With no viewers this costs one
+                            // uncontended lock of the broadcast channel's
+                            // internal tail mutex — cheap, but not literally
+                            // free: `receiver_count()` takes that lock rather
+                            // than doing an atomic load. Don't build a
+                            // performance assumption on it being lock-free.
                             if output_tx_for_thread.receiver_count() > 0 {
                                 let _ = output_tx_for_thread.send(chunk.clone());
                             }
@@ -410,8 +465,13 @@ const OUTPUT_BROADCAST_CAP: usize = 1024;
 
 ```rust
     /// Subscribe to this session's raw output. Every subscriber receives every
-    /// chunk produced after it subscribed; history comes from
-    /// `get_recent_raw`, not from this channel.
+    /// chunk produced after it subscribed.
+    ///
+    /// **This gives you no history, and pairing it with `get_recent_raw()` to
+    /// obtain some is racy** — the two take different locks, so bytes landing
+    /// in between are either duplicated or lost depending on the order. Use
+    /// `subscribe_with_history` (Task 3b) when you need both. This method on
+    /// its own is fine when you only want output from now on.
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
         self.output_tx.subscribe()
     }
@@ -446,6 +506,222 @@ git add src-tauri/src/pty/session.rs src-tauri/src/pty/manager.rs
 git commit -m "feat(pty): fan out raw output to screen-share subscribers
 
 既有的 on_data 路徑完全不動；沒有訂閱者時只付一次 receiver_count 的代價。"
+```
+
+---
+
+## Task 3b: 原子的「快照 ＋ 訂閱」
+
+**這個 task 是 Task 3 的品質審查發現後補上的，取代了原計畫「接受重複、避免缺漏」的取捨。**
+
+原本 Task 6 打算先 `subscribe()` 再 `get_recent_raw()`，理由是「重複比缺漏好」。但兩者用的是**兩把完全獨立的鎖**（`output_ring` 的 `Mutex` vs broadcast 內部的 tail lock），reader thread 也是先寫 ring、後 broadcast，中間沒有任何耦合。所以：
+
+- 先 `subscribe()` 再取快照 → 中間到達的 chunk **同時**在快照與串流裡 → 重複位元組
+- 先取快照再 `subscribe()` → 中間到達的 chunk **兩邊都沒有** → 缺漏，正是會截斷 ANSI 逃脫序列、畫面從此錯亂的那種災難
+
+**兩害相權不是唯一出路——可以兩個都不要。** 讓 reader thread 在**同一把 ring 鎖裡**完成「寫 ring」與「broadcast 送出」，再提供一個持有那把鎖的 `subscribe_with_history`。這樣任何 chunk 要嘛在我們取得鎖之前就已寫入 ring（在快照裡），要嘛必須等我們放開鎖才能廣播（而那時我們已經訂閱了）。既不重複也不漏。
+
+鎖順序在兩條路徑上一致（ring → broadcast tail），不會死鎖。代價只是 reader thread 多持有 ring 鎖跨一次**非阻塞**的 send。
+
+**Files:**
+- Modify: `src-tauri/src/pty/session.rs`
+- Modify: `src-tauri/src/pty/manager.rs`
+- Test: `src-tauri/src/pty/session.rs`
+
+- [ ] **Step 1: 寫會紅的測試**
+
+```rust
+    #[tokio::test]
+    async fn subscribe_with_history_snapshot_excludes_bytes_the_stream_then_delivers() {
+        // 這個測試驗的是**時序正確性**，不是併發競態：訂閱前產生的內容要在
+        // 快照裡，訂閱後產生的內容要只從串流來。
+        //
+        // 它**抓不到**「有人把 broadcast 移回 ring 鎖外面」這個退化——已實測
+        // 確認（把 send 搬出鎖後這個測試跑 30 次全過）。因為測試在寫入與訂閱
+        // 之間輪詢等待，兩者從不重疊，而競態只存在於重疊的窗口裡。
+        //
+        // 真正的原子性保證來自不變量論證，不是來自這個測試：reader thread 把
+        // 「寫 ring」與「決定要不要 send」放在同一個臨界區，所以外界不可能觀察
+        // 到兩者之間的中間態。見 `subscribe_with_history` 的 doc comment。
+        //
+        // 不要為此加壓力測試或其他機率性測試——誠實標註邊界就夠了，加一個抓
+        // 不穩的測試只會製造雜訊。
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+
+        // 先產生一段歷史，確認它會出現在快照裡。
+        #[cfg(windows)]
+        session.write(b"echo HIST\r\n").unwrap();
+        #[cfg(not(windows))]
+        session.write(b"printf 'HIST\\n'\n").unwrap();
+
+        let mut history = None;
+        for _ in 0..50 {
+            if let Some(bytes) = session.get_recent_raw(64 * 1024) {
+                if bytes.windows(4).any(|w| w == b"HIST") {
+                    history = Some(bytes);
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        history.expect("history should contain HIST before we subscribe");
+
+        // 原子地取快照＋訂閱。
+        let (snapshot, mut rx) = session.subscribe_with_history(64 * 1024);
+        let snapshot = snapshot.expect("snapshot should not be empty");
+        assert!(
+            snapshot.windows(4).any(|w| w == b"HIST"),
+            "the atomic snapshot lost the history that get_recent_raw could see"
+        );
+
+        // 訂閱之後才產生的東西只能來自串流，不能已經在快照裡。
+        #[cfg(windows)]
+        session.write(b"echo AFTER\r\n").unwrap();
+        #[cfg(not(windows))]
+        session.write(b"printf 'AFTER\\n'\n").unwrap();
+
+        assert!(
+            !snapshot.windows(5).any(|w| w == b"AFTER"),
+            "the snapshot somehow contains output produced after it was taken"
+        );
+
+        let mut streamed = Vec::new();
+        for _ in 0..50 {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(chunk)) => {
+                    streamed.extend_from_slice(&chunk);
+                    if streamed.windows(5).any(|w| w == b"AFTER") {
+                        break;
+                    }
+                }
+                Ok(Err(_)) => break,
+                Err(_) => continue,
+            }
+        }
+        assert!(
+            streamed.windows(5).any(|w| w == b"AFTER"),
+            "output produced after subscribing never arrived on the stream"
+        );
+    }
+```
+
+- [ ] **Step 2: 跑測試確認會紅**
+
+Run: `cd src-tauri && cargo test --lib pty::session::tests::subscribe_with_history_snapshot_excludes_bytes_the_stream_then_delivers`
+Expected: **編譯失敗**——`no method named subscribe_with_history`。
+
+- [ ] **Step 3: 把 broadcast 送出移進 ring 鎖範圍內**
+
+reader thread 裡目前是兩個分開的區塊。把寫 ring 的區塊與 broadcast 的區塊**合併成一個**，讓 broadcast 在 ring 鎖仍持有時發生：
+
+```rust
+                            {
+                                let mut ring = ring_for_thread.lock();
+                                for &b in &chunk {
+                                    if ring.len() >= OUTPUT_RING_CAP { ring.pop_front(); }
+                                    ring.push_back(b);
+                                }
+                                // Broadcast while still holding the ring lock.
+                                // This is what makes `subscribe_with_history`
+                                // atomic: a chunk is either already in the
+                                // snapshot a subscriber took, or it cannot be
+                                // broadcast until that subscriber has both its
+                                // snapshot and its receiver. Neither gap nor
+                                // duplicate is possible.
+                                //
+                                // `send` never blocks — it overwrites the
+                                // oldest slot and the slow reader gets
+                                // `Lagged` later — so holding the ring lock
+                                // across it cannot stall the reader thread.
+                                if output_tx_for_thread.receiver_count() > 0 {
+                                    let _ = output_tx_for_thread.send(chunk.clone());
+                                }
+                            }
+```
+
+並把原本位於 `on_data(chunk);` 上方的那個獨立 broadcast 區塊**整個刪掉**（現在已經移進上面了）。
+
+- [ ] **Step 4: 加上 `subscribe_with_history`**
+
+加在 `session.rs` 的 `subscribe` 正下方：
+
+```rust
+    /// Take a history snapshot and subscribe to future output as one atomic
+    /// step. Screen sharing must use this rather than calling `get_recent_raw`
+    /// and `subscribe` separately.
+    ///
+    /// Those two take different locks, and the reader thread writes the ring
+    /// before it broadcasts — so calling them in either order leaves a window:
+    /// subscribe-then-snapshot duplicates the bytes that land in between, and
+    /// snapshot-then-subscribe loses them entirely. Losing bytes can truncate
+    /// an ANSI escape sequence, and a terminal that renders a truncated escape
+    /// stays wrong forever.
+    ///
+    /// Holding the ring lock across both closes the window: a chunk is either
+    /// already in the snapshot, or the reader thread cannot broadcast it until
+    /// this method has returned with its receiver in hand.
+    pub fn subscribe_with_history(
+        &self,
+        max_bytes: usize,
+    ) -> (Option<Vec<u8>>, tokio::sync::broadcast::Receiver<Vec<u8>>) {
+        let ring = self.output_ring.lock();
+        let history = if ring.is_empty() {
+            None
+        } else {
+            let start = ring.len().saturating_sub(max_bytes);
+            Some(ring.iter().skip(start).copied().collect())
+        };
+        let rx = self.output_tx.subscribe();
+        drop(ring);
+        (history, rx)
+    }
+```
+
+- [ ] **Step 5: 在 `PtyManager` 轉發**
+
+加在 `manager.rs` 的 `subscribe` 正下方：
+
+```rust
+    /// Atomic snapshot-plus-subscribe for a session. See
+    /// `PtySession::subscribe_with_history` for why sharing must use this
+    /// instead of `get_recent_raw` followed by `subscribe`.
+    pub fn subscribe_with_history(
+        &self,
+        id: &str,
+        max_bytes: usize,
+    ) -> Option<(Option<Vec<u8>>, tokio::sync::broadcast::Receiver<Vec<u8>>)> {
+        self.sessions.lock().get(id).map(|s| s.subscribe_with_history(max_bytes))
+    }
+```
+
+- [ ] **Step 6: 跑測試確認轉綠**
+
+Run: `cd src-tauri && cargo test --lib pty::`
+Expected: PASS，比 Task 3 結束時多一個測試（118）。
+
+連跑 10 次新測試確認不 flaky：
+
+```bash
+cd src-tauri
+for i in $(seq 1 10); do
+  cargo test --lib pty::session::tests::subscribe_with_history_snapshot_excludes_bytes_the_stream_then_delivers -- --exact 2>&1 | grep -E "^test result" || echo "RUN $i FAILED"
+done
+```
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src-tauri/src/pty/session.rs src-tauri/src/pty/manager.rs
+git commit -m "feat(pty): make snapshot-plus-subscribe atomic for share viewers
+
+分開呼叫 get_recent_raw 與 subscribe 會依順序造成重複或缺漏；缺漏可能截斷
+ANSI 逃脫序列讓畫面永久錯亂。把 broadcast 移進 ring 鎖範圍即可兩者皆免。"
 ```
 
 ---
@@ -550,7 +826,7 @@ mod tests {
     #[test]
     fn a_pending_request_is_not_yet_a_viewer() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).expect("code is live");
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).expect("code is live");
         assert_eq!(reg.viewers("tab-1").len(), 0);
         assert_eq!(reg.pending("tab-1").len(), 1);
         assert_eq!(reg.pending("tab-1")[0].request_id, req);
@@ -560,13 +836,13 @@ mod tests {
     fn joining_with_a_dead_code_is_refused() {
         let (reg, code) = registry_with_one_share();
         reg.stop_share("tab-1");
-        assert!(reg.request_join(&code, "Alice".to_string()).is_none());
+        assert!(reg.request_join(&code, "Alice".to_string(), "0000".to_string()).is_none());
     }
 
     #[test]
     fn approving_read_only_adds_a_viewer_without_control() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let viewer = reg.approve(&req, AccessMode::ReadOnly).expect("approve");
         assert_eq!(reg.viewers("tab-1").len(), 1);
         assert_eq!(reg.pending("tab-1").len(), 0);
@@ -576,7 +852,7 @@ mod tests {
     #[test]
     fn approving_with_control_lets_that_viewer_send_input() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let viewer = reg.approve(&req, AccessMode::Control).expect("approve");
         assert!(reg.may_send_input("tab-1", &viewer));
     }
@@ -584,7 +860,7 @@ mod tests {
     #[test]
     fn denying_a_request_leaves_no_viewer_and_no_pending() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         reg.deny(&req);
         assert_eq!(reg.viewers("tab-1").len(), 0);
         assert_eq!(reg.pending("tab-1").len(), 0);
@@ -593,9 +869,9 @@ mod tests {
     #[test]
     fn control_is_a_single_microphone() {
         let (reg, code) = registry_with_one_share();
-        let r1 = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let r1 = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let alice = reg.approve(&r1, AccessMode::Control).unwrap();
-        let r2 = reg.request_join(&code, "Bob".to_string()).unwrap();
+        let r2 = reg.request_join(&code, "Bob".to_string(), "0000".to_string()).unwrap();
 
         // Bob cannot be approved with control while Alice holds it.
         assert_eq!(reg.approve(&r2, AccessMode::Control), None);
@@ -609,9 +885,9 @@ mod tests {
     #[test]
     fn control_must_be_revoked_before_it_can_be_granted_to_someone_else() {
         let (reg, code) = registry_with_one_share();
-        let r1 = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let r1 = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let alice = reg.approve(&r1, AccessMode::Control).unwrap();
-        let r2 = reg.request_join(&code, "Bob".to_string()).unwrap();
+        let r2 = reg.request_join(&code, "Bob".to_string(), "0000".to_string()).unwrap();
         let bob = reg.approve(&r2, AccessMode::ReadOnly).unwrap();
 
         assert!(!reg.grant_control("tab-1", &bob), "must refuse while Alice holds it");
@@ -624,13 +900,13 @@ mod tests {
     #[test]
     fn removing_the_controller_releases_control() {
         let (reg, code) = registry_with_one_share();
-        let r1 = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let r1 = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let alice = reg.approve(&r1, AccessMode::Control).unwrap();
         reg.remove_viewer("tab-1", &alice);
         assert_eq!(reg.viewers("tab-1").len(), 0);
 
         // Control is now free for the next viewer.
-        let r2 = reg.request_join(&code, "Bob".to_string()).unwrap();
+        let r2 = reg.request_join(&code, "Bob".to_string(), "0000".to_string()).unwrap();
         let bob = reg.approve(&r2, AccessMode::Control).expect("control should be free");
         assert!(reg.may_send_input("tab-1", &bob));
     }
@@ -638,7 +914,7 @@ mod tests {
     #[test]
     fn stopping_a_share_drops_every_viewer() {
         let (reg, code) = registry_with_one_share();
-        let r1 = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let r1 = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let alice = reg.approve(&r1, AccessMode::Control).unwrap();
         reg.stop_share("tab-1");
         assert_eq!(reg.viewers("tab-1").len(), 0);
@@ -656,7 +932,7 @@ mod tests {
         // ws handler 手上只有 request_id；approve 的回傳值是給主控端 UI 的。
         // 沒有這條對應，連線就不知道自己變成了哪一位觀看者。
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let viewer = reg.approve(&req, AccessMode::ReadOnly).unwrap();
         assert_eq!(reg.viewer_for_request("tab-1", &req), Some(viewer));
     }
@@ -664,7 +940,7 @@ mod tests {
     #[test]
     fn a_denied_request_maps_to_no_viewer() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         reg.deny(&req);
         assert_eq!(reg.viewer_for_request("tab-1", &req), None);
     }
@@ -677,6 +953,56 @@ mod tests {
         assert!(reg.any_active());
         reg.stop_share("tab-1");
         assert!(!reg.any_active());
+    }
+
+    #[test]
+    fn stopping_a_share_clears_its_pending_requests() {
+        let (reg, code) = registry_with_one_share();
+        let _req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
+        assert_eq!(reg.pending("tab-1").len(), 1);
+        reg.stop_share("tab-1");
+        assert_eq!(reg.pending("tab-1").len(), 0);
+    }
+
+    #[test]
+    fn a_pending_request_cannot_survive_into_a_later_share_of_the_same_tab() {
+        // tab_id 是穩定的前端分頁 ID，所以「停止分享 → 重新分享」是正常操作，
+        // 不是邊角案例。若 stop_share 沒清掉 pending，舊會話的待審請求會被
+        // 核准進新會話，繞過「短碼失效即安全」這個假設。
+        let (reg, code) = registry_with_one_share();
+        let req = reg.request_join(&code, "Eve".to_string(), "0000".to_string()).unwrap();
+        reg.stop_share("tab-1");
+        let _new_code = reg.start_share("tab-1".to_string());
+
+        assert_eq!(
+            reg.pending("tab-1").len(),
+            0,
+            "a stopped share's pending request came back after re-sharing"
+        );
+        assert_eq!(
+            reg.approve(&req, AccessMode::Control),
+            None,
+            "a stopped share's request was approved into the new share"
+        );
+    }
+
+    #[test]
+    fn sharing_an_already_shared_tab_keeps_the_same_code_and_its_viewers() {
+        let (reg, code) = registry_with_one_share();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
+        let alice = reg.approve(&req, AccessMode::Control).unwrap();
+
+        let again = reg.start_share("tab-1".to_string());
+        assert_eq!(again, code, "a second start_share minted a new code");
+        assert_eq!(
+            reg.viewers("tab-1").len(),
+            1,
+            "a second start_share evicted the existing viewers"
+        );
+        assert!(
+            reg.may_send_input("tab-1", &alice),
+            "a second start_share silently released control"
+        );
     }
 }
 ```
@@ -718,6 +1044,13 @@ pub struct PendingRequest {
     /// 請求方自報的名字。**未經驗證**，僅供主控端辨識用；真正的身分保證來自
     /// SAS 人工核對（見 `share::tls`）。
     pub display_name: String,
+    /// 主控端從**這一條**連線導出的 4 位驗證碼，給同意視窗顯示，讓使用者能
+    /// 口頭跟對方核對。
+    ///
+    /// 住在這裡而不是線上訊息裡，是刻意的：觀看端必須從自己那條 TLS 連線獨立
+    /// 算出自己那一份。如果它顯示的是主控端送過去的值，中間人只要原封轉發就
+    /// 能讓兩邊看起來一致，防冒充保證歸零。見 `protocol::ConnectionSas`。
+    pub sas: String,
 }
 
 /// 一位已獲准的觀看者。
@@ -751,10 +1084,17 @@ impl ShareRegistry {
         Self::default()
     }
 
-    /// 開始分享一個分頁，回傳新產生的 6 位短碼。同一個分頁重複呼叫會換一組
-    /// 新短碼（舊的立即失效）。
+    /// 開始分享一個分頁，回傳它的 6 位短碼。
+    ///
+    /// **冪等**：這個分頁若已在分享中，直接回傳既有短碼、什麼都不動。刻意
+    /// 不產生新短碼——覆蓋既有 entry 會無聲斷線所有觀看者並釋放控制權，對
+    /// 一個「雙擊分享鈕」就能觸發的操作來說，那是純粹的傷害。規格裡也沒有
+    /// 「重新產生短碼」這個功能。
     pub fn start_share(&self, tab_id: String) -> String {
         let mut tabs = self.tabs.lock();
+        if let Some(existing) = tabs.get(&tab_id) {
+            return existing.code.clone();
+        }
         let code = loop {
             let candidate = format!("{:06}", rand::rng().random_range(0..1_000_000u32));
             if !tabs.values().any(|t| t.code == candidate) {
@@ -790,12 +1130,15 @@ impl ShareRegistry {
 
     /// 用短碼發起一筆待審請求。回傳 `request_id`，或在短碼無效時回 `None`。
     /// **這一步不會讓對方看到任何東西**——要等主控端 `approve`。
-    pub fn request_join(&self, code: &str, display_name: String) -> Option<String> {
+    ///
+    /// `sas` 是這條連線導出的驗證碼，存起來給主控端的同意視窗顯示；它不會被
+    /// 送回給觀看端（見 `PendingRequest::sas`）。
+    pub fn request_join(&self, code: &str, display_name: String, sas: String) -> Option<String> {
         let tab_id = self.tab_for_code(code)?;
         let request_id = Uuid::new_v4().to_string();
         self.pending.lock().insert(
             request_id.clone(),
-            PendingRequest { request_id: request_id.clone(), tab_id, display_name },
+            PendingRequest { request_id: request_id.clone(), tab_id, display_name, sas },
         );
         Some(request_id)
     }
@@ -913,7 +1256,7 @@ impl ShareRegistry {
 - [ ] **Step 6: 跑測試確認轉綠**
 
 Run: `cd src-tauri && cargo test --lib share::registry`
-Expected: PASS，17 個測試全過。
+Expected: PASS，20 個測試全過。
 
 - [ ] **Step 7: Commit**
 
@@ -964,11 +1307,13 @@ mod tests {
     #[test]
     fn join_round_trips_through_json() {
         let msg = ClientMessage::Join {
+            protocol_version: PROTOCOL_VERSION,
             code: "384719".to_string(),
             display_name: "Alice".to_string(),
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"join\""), "got {json}");
+        assert!(json.contains("\"protocol_version\":1"), "got {json}");
         let back: ClientMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(back, msg);
     }
@@ -997,19 +1342,85 @@ mod tests {
     }
 
     #[test]
+    fn awaiting_approval_never_carries_a_sas() {
+        // 這則訊息是送給觀看端的，而觀看端絕不該從線上取得任何 SAS——它必須
+        // 從自己那條 TLS 連線獨立導出。若哪天有人「順手」把主控端的 sas 加
+        // 回這則訊息，中間人原封轉發就能讓兩邊看起來一致，防冒充保證歸零。
+        let msg = ServerMessage::AwaitingApproval;
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"awaiting_approval\""), "got {json}");
+        assert!(
+            !json.contains("sas"),
+            "AwaitingApproval must not carry a SAS onto the wire; got {json}"
+        );
+        let back: ServerMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, msg);
+    }
+
+    #[test]
+    fn an_unknown_server_message_fails_to_parse_rather_than_being_ignored() {
+        // 這不是我們想要的行為，是我們必須知道的行為：serde 對未知 tag 回
+        // `Err`，所以新版主控端送出舊版認不得的變體時，舊版觀看端會硬性解析
+        // 失敗。這正是 `PROTOCOL_VERSION` 與 `EndReason::VersionMismatch`
+        // 存在的理由——在握手第一步就擋掉，而不是讓它變成無法解釋的斷線。
+        let unknown = r#"{"type":"some_future_variant","payload":1}"#;
+        let parsed: Result<ServerMessage, _> = serde_json::from_str(unknown);
+        assert!(
+            parsed.is_err(),
+            "serde silently accepted an unknown variant; the version-guard \
+             reasoning in PROTOCOL_VERSION's doc comment is built on it erroring"
+        );
+    }
+
+    #[test]
+    fn wire_access_mode_does_not_invert_the_internal_one() {
+        // 對調這兩個分支不會被任何序列化測試抓到，但會讓 `Granted.mode` 回報
+        // 相反的存取層級：真正拿到控制權的人前端顯示唯讀而打不了字，唯讀的人
+        // 以為自己能控制、白打一堆字進黑洞。
+        assert_eq!(
+            WireAccessMode::from(AccessMode::ReadOnly),
+            WireAccessMode::ReadOnly
+        );
+        assert_eq!(
+            WireAccessMode::from(AccessMode::Control),
+            WireAccessMode::Control
+        );
+    }
+
+    #[test]
     fn every_end_reason_survives_a_round_trip() {
         // 前端要靠 reason 決定顯示哪一句話，漏掉任何一個都會變成「未知錯誤」。
-        for reason in [
+        //
+        // 用沒有 `_` 萬用分支的 match 而不是手寫陣列：陣列漏掉新變體時測試
+        // 照樣綠燈（實測確認過），而這個 match 會讓**編譯失敗**，強迫新增
+        // 變體的人回來這裡加一行。名字承諾了「every」，就要有東西撐住它。
+        fn round_trip(reason: EndReason) {
+            let msg = ServerMessage::Ended { reason };
+            let json = serde_json::to_string(&msg).unwrap();
+            let back: ServerMessage = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, msg, "round trip failed for {reason:?}");
+        }
+
+        let all = [
             EndReason::Denied,
             EndReason::HostStoppedSharing,
             EndReason::SessionClosed,
             EndReason::KickedByHost,
             EndReason::InvalidCode,
-        ] {
-            let msg = ServerMessage::Ended { reason };
-            let json = serde_json::to_string(&msg).unwrap();
-            let back: ServerMessage = serde_json::from_str(&json).unwrap();
-            assert_eq!(back, msg, "round trip failed for {reason:?}");
+            EndReason::VersionMismatch,
+        ];
+        for reason in all {
+            round_trip(reason);
+            // 這個 match 沒有 `_` 分支，所以新增 EndReason 變體時這裡會編譯
+            // 失敗——那是提醒你把它加進上面的 `all` 陣列。
+            match reason {
+                EndReason::Denied
+                | EndReason::HostStoppedSharing
+                | EndReason::SessionClosed
+                | EndReason::KickedByHost
+                | EndReason::InvalidCode
+                | EndReason::VersionMismatch => {}
+            }
         }
     }
 }
@@ -1070,7 +1481,38 @@ pub enum EndReason {
     KickedByHost,
     /// 短碼不存在或已作廢。
     InvalidCode,
+    /// 兩端的協定版本不相容。
+    ///
+    /// 同區網分享的真實情境就是「同事的 AITerm 跟你的版本不同」——其中一台
+    /// 還沒更新是常態，不是邊角案例。沒有這個變體的話，新版主控端送出舊版
+    /// 認不得的訊息時，舊版只會在 `serde_json::from_str` 硬性失敗（實測確認
+    /// serde 對未知 tag 回 `Err` 而非忽略），使用者看到的是無法解釋的斷線。
+    VersionMismatch,
 }
+
+/// 這份線上格式的版本。**新增或修改任何訊息的形狀時都要往上加。**
+///
+/// 之所以現在就加而不是等需要時再說：事後補版本欄位本身就是一次破壞相容性
+/// 的線上格式變更，而且補的時候舊版早就裝在別人機器上了。現在的成本是一個
+/// 欄位，之後的成本是沒有乾淨的升級路徑。
+pub const PROTOCOL_VERSION: u32 = 1;
+
+/// 一條連線導出的 4 位 SAS。**永遠不會出現在線上格式裡**，只透過 axum 的
+/// request extension 交給 ws handler，再存進 `PendingRequest` 給主控端 UI。
+///
+/// 每條 TLS 連線一組——這正是它能當身分保證的原因：中間人必須維持兩條獨立的
+/// TLS 連線，兩邊導出的值必然不同，所以口頭核對時對不起來。
+///
+/// **為什麼不送給觀看端**：觀看端必須從自己那條 TLS 連線獨立算出自己那一份。
+/// 如果它顯示的是主控端送來的值，中間人只要原封轉發就能讓兩邊看起來一致，
+/// 整個防冒充保證歸零。讓觀看端**拿不到**這個值，比讓它拿得到卻叮嚀不要用
+/// 安全得多。
+///
+/// 欄位是 `pub` 是為了讓 Task 6 的整合測試（住在獨立的 `tests/` crate，只碰
+/// 得到 `pub` API）能注入佔位值。正式路徑只由 Task 8 的 TLS accept 迴圈建構，
+/// 不要在業務邏輯裡自己 `ConnectionSas(...)` 生一個出來。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectionSas(pub String);
 
 /// 觀看端 → 主控端。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1078,15 +1520,22 @@ pub enum EndReason {
 pub enum ClientMessage {
     /// 連上 ws 後的第一則訊息。在收到 `Granted` 之前，觀看端不會收到任何
     /// PTY 位元組。
-    Join { code: String, display_name: String },
+    ///
+    /// `protocol_version` 讓主控端能在握手第一步就發現版本落差，送出乾淨的
+    /// `Ended { VersionMismatch }`，而不是讓後續訊息解析失敗變成無法解釋的
+    /// 斷線。
+    Join { protocol_version: u32, code: String, display_name: String },
 }
 
 /// 主控端 → 觀看端。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
-    /// 請求已送達，正在等主控端裁決。觀看端此時顯示「等待對方同意」與自己
-    /// 算出的 SAS。
+    /// 請求已送達，正在等主控端裁決。
+    ///
+    /// **刻意不帶任何 SAS。** 觀看端要顯示的 4 位驗證碼必須由它自己那條 TLS
+    /// 連線導出——見 `ConnectionSas` 的說明。主控端那一份存在 `PendingRequest`
+    /// 裡，走 Tauri 給主控端自己的 UI，不上線路。
     AwaitingApproval,
     /// 已獲准。`cols`/`rows` 是主控端的終端機尺寸——觀看端必須照這個建立
     /// xterm，不能用自己的視窗大小。緊接著會來一個二進位 frame 作為重播。
@@ -1094,6 +1543,11 @@ pub enum ServerMessage {
     /// 主控端 resize 了，觀看端重新 fit。
     Resize { cols: u16, rows: u16 },
     /// 控制權變動（被授予或被收回）。
+    ///
+    /// 由 Task 6 的 ws 迴圈在 `share_watch` 輪詢時偵測 mode 變化後送出——跟
+    /// `KickedByHost` 同一個機制。主控端呼叫 `ShareRegistry` 的
+    /// `grant_control`/`revoke_control` 之後，觀看端靠這則訊息才知道自己現在
+    /// 能不能打字。
     ControlChanged { mode: WireAccessMode },
     /// 觀看端落後太多，接下來的二進位 frame 是全量重播；收到這個要先清空
     /// 畫面再套用。漏掉的位元組可能截斷 ANSI 逃脫序列，帶著壞掉的畫面繼續
@@ -1113,7 +1567,7 @@ pub mod protocol;
 - [ ] **Step 5: 跑測試確認轉綠**
 
 Run: `cd src-tauri && cargo test --lib share::protocol`
-Expected: PASS，4 個測試全過。
+Expected: PASS，7 個測試全過。
 
 - [ ] **Step 6: Commit**
 
@@ -1142,9 +1596,22 @@ git commit -m "feat(share): define the share connection wire protocol
 
 ```toml
 # 整合測試用的 WebSocket 客戶端。僅 dev-dependency——正式程式碼只當 server。
-tokio-tungstenite = "0.24"
+#
+# 版本必須是 0.29：Task 5 打開 axum 的 `ws` feature 之後，axum 0.8.9 自己
+# 就帶進了 tokio-tungstenite 0.29。寫成別的主版本會讓相依樹裡多出第二份
+# 拷貝（兩份互不相容的型別，編譯期還可能給出很難懂的錯誤訊息）。
+# futures-util 0.3.32 同樣已在 Cargo.lock 裡。
+tokio-tungstenite = "0.29"
 futures-util = "0.3"
 ```
+
+加完後確認沒有拉進第二份：
+
+```bash
+cd src-tauri && grep -c '^name = "tokio-tungstenite"' Cargo.lock
+```
+
+Expected: `1`。若是 `2`，代表版本沒對齊，回頭檢查上面的版本號。
 
 - [ ] **Step 2: 寫會紅的整合測試**
 
@@ -1170,13 +1637,22 @@ use tokio_tungstenite::tungstenite::Message;
 const SIZE: PtySize = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
 
 /// 起一個綁 127.0.0.1:0 的共享 server，回傳它的實際 port。
+///
+/// 這條路徑刻意**不走 TLS**——這幾個測試驗的是握手、授權與串流邏輯，TLS 與
+/// SAS 由 Task 8 的 `both_ends_of_a_real_tls_connection_derive_the_same_sas`
+/// 單獨驗。正式路徑的 `ConnectionSas` 由 TLS accept 迴圈注入，這裡手動補一個
+/// 佔位值；**不要**把 handler 的 extractor 改成 `Option`，那等於讓正式路徑
+/// 在 TLS 沒接上時無聲降級成沒有身分保證的連線。
 async fn start_test_server(
     pty: Arc<PtyManager>,
     registry: Arc<ShareRegistry>,
 ) -> u16 {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let app = aiterm_lib::share::server::router(pty, registry);
+    let app = aiterm_lib::share::server::router(pty, registry)
+        .layer(axum::Extension(aiterm_lib::share::protocol::ConnectionSas(
+            "0000".to_string(),
+        )));
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
@@ -1236,6 +1712,7 @@ async fn an_unknown_code_is_refused_without_reaching_the_host() {
         .expect("connect");
     ws.send(Message::Text(
         serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
             code: "000000".to_string(),
             display_name: "Mallory".to_string(),
         })
@@ -1271,6 +1748,7 @@ async fn a_read_only_viewer_sees_output_but_cannot_type() {
         .expect("connect");
     ws.send(Message::Text(
         serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
             code: code.clone(),
             display_name: "Alice".to_string(),
         })
@@ -1322,6 +1800,7 @@ async fn a_controlling_viewer_can_type_and_sees_the_result() {
         .expect("connect");
     ws.send(Message::Text(
         serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
             code: code.clone(),
             display_name: "Alice".to_string(),
         })
@@ -1353,6 +1832,134 @@ async fn a_controlling_viewer_can_type_and_sees_the_result() {
 }
 
 #[tokio::test]
+async fn a_mismatched_protocol_version_is_refused_at_the_handshake() {
+    // 「同事的 AITerm 沒更新」在區網分享裡是常態。沒有這道檢查的話，症狀會是
+    // 後續某則訊息解析失敗、連線莫名其妙斷掉，使用者完全無從得知原因。
+    let pty = Arc::new(PtyManager::new());
+    let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
+    let registry = Arc::new(ShareRegistry::new());
+    let code = registry.start_share(tab_id.clone());
+    let port = start_test_server(Arc::clone(&pty), Arc::clone(&registry)).await;
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/share"))
+        .await
+        .expect("connect");
+    ws.send(Message::Text(
+        serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION + 1,
+            code: code.clone(),
+            display_name: "Alice".to_string(),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    assert_eq!(
+        next_control(&mut ws).await,
+        ServerMessage::Ended { reason: EndReason::VersionMismatch }
+    );
+    // 版本不符時不該留下待審請求打擾主控端。
+    assert_eq!(registry.pending(&tab_id).len(), 0);
+}
+
+#[tokio::test]
+async fn revoking_control_tells_the_viewer_it_can_no_longer_type() {
+    // 唯讀的人不知道自己被降級，就會白打一堆字進黑洞。
+    let pty = Arc::new(PtyManager::new());
+    let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
+    let registry = Arc::new(ShareRegistry::new());
+    let code = registry.start_share(tab_id.clone());
+    let port = start_test_server(Arc::clone(&pty), Arc::clone(&registry)).await;
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/share"))
+        .await
+        .expect("connect");
+    ws.send(Message::Text(
+        serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
+            code: code.clone(),
+            display_name: "Alice".to_string(),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(next_control(&mut ws).await, ServerMessage::AwaitingApproval);
+
+    let request_id = registry.pending(&tab_id)[0].request_id.clone();
+    let viewer_id = registry.approve(&request_id, AccessMode::Control).expect("approve");
+    assert_eq!(
+        next_control(&mut ws).await,
+        ServerMessage::Granted { mode: WireAccessMode::Control, cols: 80, rows: 24 }
+    );
+
+    // 主控端收回控制權——觀看端要在下一次輪詢時被告知。
+    registry.revoke_control(&tab_id);
+    assert_eq!(
+        next_control(&mut ws).await,
+        ServerMessage::ControlChanged { mode: WireAccessMode::ReadOnly }
+    );
+    assert!(!registry.may_send_input(&tab_id, &viewer_id));
+}
+
+#[tokio::test]
+async fn a_viewer_that_gives_up_waiting_stops_pestering_the_host() {
+    // 觀看端在等待同意期間關掉連線（等不下去了）。那筆待審請求必須跟著消失
+    // ——否則主控端的同意視窗上會掛著一個永遠不會有下文的「OOO 想連進來」，
+    // 而 server 這邊還有一個永遠空轉的 task。
+    //
+    // 這條路徑刻意**不**能靠逾時解決：逾時會讓「使用者只是走開了」變成自動
+    // 拒絕，那是 spec 明確排除的行為。要偵測的是連線本身斷了。
+    let pty = Arc::new(PtyManager::new());
+    let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
+    let registry = Arc::new(ShareRegistry::new());
+    let code = registry.start_share(tab_id.clone());
+    let port = start_test_server(Arc::clone(&pty), Arc::clone(&registry)).await;
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/share"))
+        .await
+        .expect("connect");
+    ws.send(Message::Text(
+        serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
+            code: code.clone(),
+            display_name: "Alice".to_string(),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(next_control(&mut ws).await, ServerMessage::AwaitingApproval);
+    assert_eq!(
+        registry.pending(&tab_id).len(),
+        1,
+        "the host should see the request while the viewer is still waiting"
+    );
+
+    // 觀看端放棄，直接關掉連線。
+    drop(ws);
+
+    // server 端要在幾個輪詢間隔內注意到並收掉那筆請求。
+    let mut cleared = false;
+    for _ in 0..50 {
+        if registry.pending(&tab_id).is_empty() {
+            cleared = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        cleared,
+        "a viewer that closed its connection left a pending request behind: {:?}",
+        registry.pending(&tab_id)
+    );
+}
+
+#[tokio::test]
 async fn stopping_the_share_ends_the_connection_with_a_reason() {
     let pty = Arc::new(PtyManager::new());
     let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
@@ -1365,6 +1972,7 @@ async fn stopping_the_share_ends_the_connection_with_a_reason() {
         .expect("connect");
     ws.send(Message::Text(
         serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
             code: code.clone(),
             display_name: "Alice".to_string(),
         })
@@ -1417,12 +2025,18 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::pty::manager::PtyManager;
 
-use super::protocol::{ClientMessage, EndReason, ServerMessage, WireAccessMode};
+use super::protocol::{
+    ClientMessage, ConnectionSas, EndReason, ServerMessage, WireAccessMode, PROTOCOL_VERSION,
+};
 use super::registry::ShareRegistry;
 
-/// 重播給新連線觀看者的位元組上限。等於 PTY ring buffer 的容量——重播的意義
-/// 就是「把 ring 裡有的全部給他」。
-const REPLAY_MAX_BYTES: usize = 256 * 1024;
+/// 重播給新連線觀看者的位元組上限。
+///
+/// 直接取 PTY ring buffer 的容量（`OUTPUT_RING_CAP` 要改成 `pub(crate)`），
+/// 不另外寫一個數字：重播的意義就是「把 ring 裡有的全部給他」，兩邊各寫一份
+/// `256 * 1024` 遲早會漂掉——改了 ring 卻忘了改這裡，症狀會是觀看端悄悄少拿
+/// 到一段歷史，而且沒有任何東西會報錯。
+const REPLAY_MAX_BYTES: usize = crate::pty::session::OUTPUT_RING_CAP;
 
 /// 輪詢主控端裁決與分享是否被停掉的間隔。裁決由人操作，秒級足夠；用輪詢而
 /// 不是再開一條通知管道，是因為狀態機刻意不依賴任何非同步執行期。
@@ -1441,8 +2055,15 @@ pub fn router(pty: Arc<PtyManager>, registry: Arc<ShareRegistry>) -> Router {
         .with_state(ShareAppState { pty, registry })
 }
 
-async fn share_upgrade(ws: WebSocketUpgrade, State(state): State<ShareAppState>) -> Response {
-    ws.on_upgrade(move |socket| handle_share(socket, state))
+/// SAS 由 request extension 帶進來——Task 8 的 TLS accept 迴圈填真值，測試裡
+/// 注入佔位值。**刻意用 `Extension<ConnectionSas>` 而不是 `Option<...>`**：
+/// 沒有 SAS 時應該直接 500 而不是無聲降級成「沒有身分保證的連線」。
+async fn share_upgrade(
+    ws: WebSocketUpgrade,
+    axum::Extension(sas): axum::Extension<ConnectionSas>,
+    State(state): State<ShareAppState>,
+) -> Response {
+    ws.on_upgrade(move |socket| handle_share(socket, state, sas.0))
 }
 
 async fn send_control(ws: &mut WebSocket, msg: &ServerMessage) -> bool {
@@ -1452,26 +2073,43 @@ async fn send_control(ws: &mut WebSocket, msg: &ServerMessage) -> bool {
 
 async fn end_with(ws: &mut WebSocket, reason: EndReason) {
     send_control(ws, &ServerMessage::Ended { reason }).await;
-    let _ = ws.close().await;
+    // axum 的 `WebSocket` 只有 `recv`/`send` 兩個 inherent method——**沒有
+    // `close()`**（已實測：寫 `ws.close()` 會得到 E0599）。要關閉就送一個
+    // Close frame。`Sink::close` 確實存在於 trait 上，但那需要額外 import
+    // `futures_util::SinkExt`，送 frame 更直接。
+    let _ = ws.send(Message::Close(None)).await;
 }
 
-async fn handle_share(mut ws: WebSocket, state: ShareAppState) {
+async fn handle_share(mut ws: WebSocket, state: ShareAppState, sas: String) {
     // 1. 第一則訊息必須是 Join。
     let join = match ws.recv().await {
         Some(Ok(Message::Text(t))) => match serde_json::from_str::<ClientMessage>(&t) {
-            Ok(ClientMessage::Join { code, display_name }) => (code, display_name),
+            Ok(ClientMessage::Join { protocol_version, code, display_name }) => {
+                (protocol_version, code, display_name)
+            }
             Err(_) => return end_with(&mut ws, EndReason::InvalidCode).await,
         },
         _ => return end_with(&mut ws, EndReason::InvalidCode).await,
     };
-    let (code, display_name) = join;
+    let (protocol_version, code, display_name) = join;
+
+    // 版本落差在握手第一步就擋掉。不這樣做的話，兩端版本不同時的症狀會是
+    // 後續某則訊息解析失敗、連線莫名其妙斷掉——而「同事的 AITerm 沒更新」
+    // 在區網分享裡是常態，不是邊角案例。
+    if protocol_version != PROTOCOL_VERSION {
+        return end_with(&mut ws, EndReason::VersionMismatch).await;
+    }
 
     // 2. 短碼換待審請求。短碼無效就到此為止——主控端不會看到任何東西，所以
     //    亂猜短碼連「打擾對方」都做不到。
-    let Some(request_id) = state.registry.request_join(&code, display_name) else {
+    let Some(request_id) = state.registry.request_join(&code, display_name, sas.clone()) else {
         return end_with(&mut ws, EndReason::InvalidCode).await;
     };
     let Some(tab_id) = state.registry.tab_for_code(&code) else {
+        // `request_join` 成功了，但短碼在這兩行之間失效（主控端剛好停止分享）。
+        // 必須把剛建立的待審請求收掉——`stop_share` 的清理早就跑過了，沒有人
+        // 會再來清它，留著就是一筆永遠掛在 registry 裡的孤兒。
+        state.registry.deny(&request_id);
         return end_with(&mut ws, EndReason::InvalidCode).await;
     };
 
@@ -1482,7 +2120,7 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState) {
 
     // 3. 等主控端裁決。刻意不設自動拒絕的逾時——使用者可能只是走開了，自動
     //    拒絕會讓他回來時毫無線索（見 spec 的錯誤處理）。觀看端要放棄的話
-    //    自己關掉連線即可，那會讓下面的迴圈偵測到 ws 已死。
+    //    自己關掉連線，下面的 select 會偵測到並收掉那筆待審請求。
     let viewer_id = loop {
         // 分享在裁決前被停掉。
         if state.registry.tab_for_code(&code).is_none() {
@@ -1501,7 +2139,31 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState) {
                 None => return end_with(&mut ws, EndReason::Denied).await,
             };
         }
-        tokio::time::sleep(DECISION_POLL).await;
+        // 等一個輪詢間隔，但同時盯著 ws——觀看端可能等不下去自己關掉了。
+        //
+        // 沒有這個 select 的話，放棄的連線會讓這個迴圈**永遠空轉**，而那筆
+        // 待審請求會一直掛在主控端的同意視窗上，因為沒有任何人會來清掉它。
+        // 刻意不設逾時是為了不讓「使用者走開」變成自動拒絕，不是為了對觀看端
+        // 已經離線這件事視而不見。
+        //
+        // `ws.recv()` 是 cancel-safe 的（底層 tokio-tungstenite 把未完成的
+        // frame 狀態存在 stream 裡而不是 future 裡），所以放進 select 不會
+        // 因為被取消而漏掉半個訊息。
+        tokio::select! {
+            _ = tokio::time::sleep(DECISION_POLL) => {}
+            incoming = ws.recv() => {
+                match incoming {
+                    // 串流結束、連線壞掉、或收到 Close frame——對方走了。
+                    None | Some(Err(_)) | Some(Ok(Message::Close(_))) => {
+                        state.registry.deny(&request_id);
+                        return;
+                    }
+                    // 協定規定觀看端在 `Granted` 之前不送任何東西。收到別的
+                    // 訊息就忽略，繼續等裁決。
+                    Some(Ok(_)) => {}
+                }
+            }
+        }
     };
 
     // 4. 已獲准：先送尺寸與模式，再送重播，最後接即時串流。
@@ -1514,24 +2176,26 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState) {
         .unwrap_or(WireAccessMode::ReadOnly);
     let (cols, rows) = state.pty.size(&tab_id).unwrap_or((80, 24));
 
+    // 記住最後一次告訴觀看端的存取層級，之後靠它偵測變化（見下方 watch tick）。
+    let mut announced_mode = mode;
+
     if !send_control(&mut ws, &ServerMessage::Granted { mode, cols, rows }).await {
         state.registry.remove_viewer(&tab_id, &viewer_id);
         return;
     }
 
-    // 順序很重要，而且直覺容易反過來：**先訂閱、再取快照**。
-    //
-    // 先訂閱的話，介於兩者之間產生的 chunk 會同時出現在快照和串流裡，觀看端
-    // 看到一小段重複的文字——難看，但無害。
-    // 反過來先取快照再訂閱的話，那段 chunk 會兩邊都沒有，變成缺漏——而缺漏
-    // 可能剛好截斷一段 ANSI 逃脫序列，畫面從此錯亂且不會自己好。
-    // 兩害相權，取重複。
-    let Some(mut rx) = state.pty.subscribe(&tab_id) else {
+    // **一定要用 `subscribe_with_history`，不要分開呼叫 `subscribe` 與
+    // `get_recent_raw`。** 那兩支用的是不同的鎖，不論哪個順序都會留下窗口：
+    // 先訂閱會讓中間的 chunk 重複，先取快照會讓它整段消失——而消失可能截斷
+    // 一段 ANSI 逃脫序列，畫面從此錯亂且不會自己好。見 Task 3b。
+    let Some((history, mut rx)) =
+        state.pty.subscribe_with_history(&tab_id, REPLAY_MAX_BYTES)
+    else {
         state.registry.remove_viewer(&tab_id, &viewer_id);
         return end_with(&mut ws, EndReason::SessionClosed).await;
     };
 
-    if let Some(history) = state.pty.get_recent_raw(&tab_id, REPLAY_MAX_BYTES) {
+    if let Some(history) = history {
         if ws.send(Message::Binary(history.into())).await.is_err() {
             state.registry.remove_viewer(&tab_id, &viewer_id);
             return;
@@ -1551,10 +2215,22 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState) {
                 Err(RecvError::Lagged(_)) => {
                     // 漏掉的位元組可能截斷 ANSI 逃脫序列——不能當沒事發生。
                     // 叫觀看端清空畫面，重新給他全量重播。
+                    //
+                    // 重新同步同樣要用 `subscribe_with_history`：這裡的窗口
+                    // 跟首次連線時一模一樣，用 `get_recent_raw` 補快照而讓
+                    // 舊的 rx 繼續收，中間的 chunk 一樣會重複或消失。取得
+                    // 新的 receiver 後直接換掉舊的。
                     if !send_control(&mut ws, &ServerMessage::Resync).await {
                         break;
                     }
-                    if let Some(history) = state.pty.get_recent_raw(&tab_id, REPLAY_MAX_BYTES) {
+                    let Some((history, fresh_rx)) =
+                        state.pty.subscribe_with_history(&tab_id, REPLAY_MAX_BYTES)
+                    else {
+                        end_with(&mut ws, EndReason::SessionClosed).await;
+                        break;
+                    };
+                    rx = fresh_rx;
+                    if let Some(history) = history {
                         if ws.send(Message::Binary(history.into())).await.is_err() {
                             break;
                         }
@@ -1581,14 +2257,30 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState) {
                     end_with(&mut ws, EndReason::HostStoppedSharing).await;
                     break;
                 }
-                let still_a_viewer = state
+                let me = state
                     .registry
                     .viewers(&tab_id)
-                    .iter()
-                    .any(|v| v.viewer_id == viewer_id);
-                if !still_a_viewer {
+                    .into_iter()
+                    .find(|v| v.viewer_id == viewer_id);
+                let Some(me) = me else {
                     end_with(&mut ws, EndReason::KickedByHost).await;
                     break;
+                };
+                // 主控端可能在這期間收回或授予了控制權（`revoke_control` /
+                // `grant_control`）。觀看端必須知道自己現在能不能打字——否則
+                // 唯讀的人會白打一堆字進黑洞，剛拿到控制權的人則不知道可以動。
+                // 用同一個輪詢偵測，跟上面的踢人偵測同一個機制。
+                let current: WireAccessMode = me.mode.into();
+                if current != announced_mode {
+                    announced_mode = current;
+                    if !send_control(
+                        &mut ws,
+                        &ServerMessage::ControlChanged { mode: current },
+                    )
+                    .await
+                    {
+                        break;
+                    }
                 }
             }
         }
@@ -1716,19 +2408,12 @@ cd src-tauri && cargo tree -i aws-lc-sys 2>&1 | head -5
 
 Expected: `error: package ID specification ... did not match any packages`（也就是根本沒這個套件）。若它出現在依賴樹裡，回頭檢查上面的 feature 設定。
 
-**另外**：rustls 0.23 需要一個行程層級的預設加密供應者，否則 `ClientConfig::builder()` / `ServerConfig::builder()` 會 panic。在 `share/mod.rs` 加入並在 `start_if_needed` 最前面呼叫：
-
-```rust
-/// rustls 0.23 要求行程層級的預設加密供應者。裝一次就好；重複呼叫會回
-/// `Err`，直接忽略——那代表別人已經裝過了，不是錯誤。
-fn ensure_crypto_provider() {
-    use std::sync::Once;
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    });
-}
-```
+**注意**：rustls 0.23 需要一個行程層級的預設加密供應者，否則
+`ClientConfig::builder()` / `ServerConfig::builder()` 會 panic。**但那段程式碼
+屬於 Task 8，不要在這個 task 加**——它的第一個呼叫端 `start_if_needed` 要到
+Task 8 才存在，提早加會變成沒有呼叫端的 private fn，在 `-D warnings` 下觸發
+dead-code lint，反而弄髒 `share/` 的 clippy。Task 7 的五個測試都不建立真的
+`ClientConfig`/`ServerConfig`（SAS 測試用的是純 closure），所以這裡不需要它。
 
 - [ ] **Step 2: 寫會紅的測試**
 
@@ -1830,7 +2515,7 @@ impl ShareIdentity {
         let cert = rcgen::generate_simple_self_signed(vec!["aiterm-share".to_string()])?;
         Ok(Self {
             cert_der: CertificateDer::from(cert.cert.der().to_vec()),
-            key_der: PrivateKeyDer::try_from(cert.signing_key.serialize_der())
+            key_der: PrivateKeyDer::try_from(cert.key_pair.serialize_der())
                 .map_err(|e| anyhow::anyhow!("serialise share key: {e}"))?,
         })
     }
@@ -1872,7 +2557,13 @@ pub fn sas_for_connection(
 Run: `cd src-tauri && cargo test --lib share::tls`
 Expected: PASS，5 個測試全過。
 
-若 `rcgen 0.13` 的 API 名稱與上面不符（`cert.signing_key` 在不同小版本曾叫 `key_pair`），以 `cargo doc --open -p rcgen` 或 `~/.cargo/registry/src/.../rcgen-0.13.*/src/lib.rs` 的實際簽名為準修正，**不要憑記憶硬套**。
+上面的 API 已於 `rcgen 0.13.2` 原始碼實測查證，可直接照用：
+- `generate_simple_self_signed(subject_alt_names) -> Result<CertifiedKey, Error>`（`src/lib.rs:124`）
+- `CertifiedKey { pub cert: Certificate, pub key_pair: KeyPair }`（`src/lib.rs:87`）——欄位是 **`key_pair`**
+- `Certificate::der(&self) -> &CertificateDer<'static>`（`src/certificate.rs:47`）
+- `KeyPair::serialize_der(&self) -> Vec<u8>`（`src/key_pair.rs:476`）
+
+若編譯仍報型別不符，以實際簽名為準修正並回報，不要為了編過而改變行為。
 
 - [ ] **Step 6: Commit**
 
@@ -1882,6 +2573,303 @@ git commit -m "feat(share): add ephemeral TLS identity and SAS derivation
 
 自簽臨時憑證負責加密，4 位 SAS 人工核對負責防中間人。"
 ```
+
+---
+
+## Task 7b: commit-then-reveal 的 SAS（安全審查發現後補上）
+
+**這個 task 是 Task 7 的安全審查發現後新增的，修的是設計層級的破口。**
+
+### 為什麼
+
+Task 7 做出的 SAS 是「把 RFC 5705 匯出的 material 折成 4 位數」，spec 原本主張「中間人的兩條連線導出的值必然不同」。**那個主張是錯的**：
+
+- TLS 1.3 裡 **server 是後手**——看到 ClientHello 的 key share 之後才選自己的。
+- 中間人對觀看端扮演 server。它先跟真的主控端跑完一條連線拿到 `target`，此時**還沒送出 ServerHello**，可以在本機反覆換 ephemeral key、推導候選 SAS，湊中 `target` 才真的送出去。
+- 搜尋空間只有 10⁴、每次試算幾百微秒，**整體約一秒內**。**換成 SHA-256 也無效**——輸出空間不變。
+
+修法是消掉後手優勢：TLS 握手之後、顯示驗證碼之前多一個往返，主控端先承諾自己的 nonce（ZRTP／RFC 6189 的結構）。
+
+### 新的握手序列
+
+| # | 方向 | 訊息 |
+|---|---|---|
+| 1 | 觀看端 → 主控端 | `Join { protocol_version, code, display_name }` |
+| 2 | 主控端 → 觀看端 | `SasCommit { commit }` — `hex(SHA256(host_nonce))` |
+| 3 | 觀看端 → 主控端 | `SasNonce { nonce }` — `hex(viewer_nonce)` |
+| 4 | 主控端 → 觀看端 | `AwaitingApproval { host_nonce }` — `hex(host_nonce)`，揭曉 |
+
+雙方各自算 `SAS = sas_from_parts(host_nonce, viewer_nonce, exporter)`；觀看端先驗 `SHA256(host_nonce)` 等於步驟 2 的承諾，對不上就中止。
+
+**為什麼擋得住**：中間人在步驟 2 必須先承諾自己的 nonce，那時不知道觀看端的 nonce；步驟 3 拿到時已被綁死。即使它先跟主控端跑完整條連線再處理觀看端（那樣能先知道主控端的 nonce），對觀看端承諾時仍不知道觀看端的 nonce，一樣搜不了。
+
+**`AwaitingApproval` 帶的是主控端的 nonce（協定公開值），不是 SAS 本身**——觀看端拿到的是計算材料，自己算自己那份。直接傳 SAS 的話中間人原封轉發就能讓兩邊一致。
+
+**Files:**
+- Modify: `src-tauri/src/share/tls.rs`
+- Modify: `src-tauri/src/share/protocol.rs`
+- Modify: `src-tauri/src/share/server.rs`
+- Modify: `src-tauri/tests/share_end_to_end.rs`
+
+- [ ] **Step 1: 把 SAS 改成吃三份材料，並換成 SHA-256**
+
+`tls.rs` 的 `sas_from_exporter` 換成：
+
+```rust
+/// 從承諾流程的三份材料算出 4 位驗證碼。
+///
+/// 用 SHA-256 而不是自製折疊：`sha2` 本來就在依賴樹裡（`Cargo.toml` 的
+/// `sha2 = "0.10"`），成本只有幾行。**但要清楚知道這不是安全性的來源**——
+/// 輸出空間就是 10⁴，換任何雜湊都一樣。真正擋住中間人的是 `host_nonce` 的
+/// 承諾流程（見這個 task 的說明），不是雜湊強度。
+pub fn sas_from_parts(host_nonce: &[u8], viewer_nonce: &[u8], exporter: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    // 長度前綴，避免 (a‖b) 與 (a'‖b') 在不同切分下碰撞。
+    for part in [host_nonce, viewer_nonce, exporter] {
+        h.update((part.len() as u32).to_be_bytes());
+        h.update(part);
+    }
+    let digest = h.finalize();
+    let n = u32::from_be_bytes(digest[..4].try_into().expect("sha256 has 32 bytes"));
+    format!("{:04}", n % 10_000)
+}
+
+/// 產生一組 32 byte 的 nonce。
+pub fn fresh_nonce() -> [u8; NONCE_LEN] {
+    use rand::RngCore;
+    let mut n = [0u8; NONCE_LEN];
+    rand::rng().fill_bytes(&mut n);
+    n
+}
+
+/// 主控端對自己 nonce 的承諾。
+pub fn commit_for(nonce: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let d = Sha256::digest(nonce);
+    d.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// nonce 的長度。32 byte 遠超過需要——重點是攻擊者猜不到，不是熵要剛好。
+pub const NONCE_LEN: usize = 32;
+```
+
+`sas_for_connection` 改成直接吃連線，杜絕「材料不是真的來自 TLS」的可能：
+
+```rust
+/// 從一條已完成握手的 TLS 連線匯出金鑰 material。
+///
+/// 吃 `&ConnectionCommon<Data>`（`ServerConnection`/`ClientConnection` 都 deref
+/// 到它）而不是吃 closure：closure 版在型別上允許呼叫端塞任何 `[u8; 32]` 進來，
+/// 包括接線時暫時放的假資料。label 與 context 也鎖死在這裡，呼叫端改不到。
+pub fn exporter_material<Data>(
+    conn: &rustls::ConnectionCommon<Data>,
+) -> anyhow::Result<[u8; SAS_MATERIAL_LEN]> {
+    let material = conn
+        .export_keying_material([0u8; SAS_MATERIAL_LEN], SAS_EXPORTER_LABEL, None)
+        .map_err(|e| anyhow::anyhow!("export keying material: {e}"))?;
+    Ok(material)
+}
+```
+
+label 照 RFC 5705 慣例加上 `EXPERIMENTAL` 前綴（該 RFC 允許此前綴不必註冊）：
+
+```rust
+pub const SAS_EXPORTER_LABEL: &[u8] = b"EXPERIMENTAL aiterm share sas v1";
+```
+
+`sas_from_exporter` 與舊的 closure 版 `sas_for_connection` 一併刪除——它們沒有其他呼叫端。
+
+- [ ] **Step 2: 補 Task 7 審查抓到的兩個測試漏洞**
+
+審查實測確認：把 `{:04}` 改成 `{}`（不補零）現有測試抓不到，因為固定測資折出來剛好 ≥1000；也沒有任何測試驗證「位元組順序改變會讓 SAS 改變」。
+
+```rust
+    #[test]
+    fn a_sas_below_a_thousand_is_still_four_digits() {
+        // 補零那條分支要真的被走到。用搜尋找一組會折出 <1000 的輸入，而不是
+        // 賭固定測資剛好落在那裡——原本的測試就是因為測資都 ≥1000，
+        // 把 `{:04}` 改成 `{}` 也照樣綠燈（已實測）。
+        let mut found = None;
+        for i in 0u32..100_000 {
+            let s = sas_from_parts(&i.to_be_bytes(), b"v", b"e");
+            if s.starts_with('0') {
+                found = Some(s);
+                break;
+            }
+        }
+        let s = found.expect("no input in 100k produced a SAS below 1000");
+        assert_eq!(s.len(), 4, "zero padding was dropped: {s}");
+    }
+
+    #[test]
+    fn swapping_the_two_nonces_changes_the_sas() {
+        // 承諾流程的兩個 nonce 角色不同，SAS 必須把它們分開。若哪天有人把
+        // 組合方式改成順序無關（例如 XOR），這個測試會抓到。
+        let a = [0xAAu8; NONCE_LEN];
+        let b = [0xBBu8; NONCE_LEN];
+        assert_ne!(
+            sas_from_parts(&a, &b, b"exporter"),
+            sas_from_parts(&b, &a, b"exporter")
+        );
+    }
+
+    #[test]
+    fn a_commit_matches_only_its_own_nonce() {
+        let n1 = fresh_nonce();
+        let n2 = fresh_nonce();
+        assert_eq!(commit_for(&n1), commit_for(&n1));
+        assert_ne!(commit_for(&n1), commit_for(&n2));
+        assert_eq!(commit_for(&n1).len(), 64, "hex of sha256 is 64 chars");
+    }
+```
+
+- [ ] **Step 3: 協定新增兩則訊息**
+
+`protocol.rs`：
+
+```rust
+    /// 主控端對自己 nonce 的承諾，`hex(SHA256(host_nonce))`。
+    ///
+    /// **必須在收到觀看端的 nonce 之前送出**——這正是消掉後手優勢的關鍵。
+    SasCommit { commit: String },
+```
+（加進 `ServerMessage`）
+
+```rust
+    /// 觀看端的 nonce，`hex`。收到 `SasCommit` 之後才送。
+    SasNonce { nonce: String },
+```
+（加進 `ClientMessage`）
+
+`AwaitingApproval` 從無欄位改成帶主控端揭曉的 nonce：
+
+```rust
+    /// 請求已送達，正在等主控端裁決，同時揭曉主控端的 nonce。
+    ///
+    /// **這是 nonce（協定公開值），不是 SAS。** 觀看端要先驗
+    /// `SHA256(host_nonce)` 等於先前收到的 `SasCommit`，再自己算 SAS。
+    /// 直接傳 SAS 的話中間人原封轉發就能讓兩邊看起來一致。
+    AwaitingApproval { host_nonce: String },
+```
+
+新增兩個 `EndReason`：
+
+```rust
+    /// 觀看端驗出主控端揭曉的 nonce 跟先前的承諾對不上——中間人的跡象。
+    SasCommitMismatch,
+    /// 觀看端在承諾流程中送了非預期的訊息或格式錯誤的 nonce。
+    SasHandshakeFailed,
+```
+
+記得把它們加進 `every_end_reason_survives_a_round_trip` 的 `all` 陣列與那個無萬用分支的 match（不加會**編譯失敗**，那正是它的用意）。
+
+`PROTOCOL_VERSION` 提升為 `2`——線上格式變了。
+
+- [ ] **Step 4: server 端實作承諾流程**
+
+`server.rs` 的 `handle_share`，在版本檢查與 `request_join` 之間插入：
+
+```rust
+    // SAS 承諾流程。必須在知道觀看端的 nonce 之前就把自己的承諾送出去——
+    // 這是整個防中間人保證的關鍵，順序不能調換。
+    let host_nonce = tls::fresh_nonce();
+    if !send_control(
+        &mut ws,
+        &ServerMessage::SasCommit { commit: tls::commit_for(&host_nonce) },
+    )
+    .await
+    {
+        return;
+    }
+
+    let viewer_nonce = match ws.recv().await {
+        Some(Ok(Message::Text(t))) => match serde_json::from_str::<ClientMessage>(&t) {
+            Ok(ClientMessage::SasNonce { nonce }) => match decode_hex(&nonce) {
+                Some(n) => n,
+                None => return end_with(&mut ws, EndReason::SasHandshakeFailed).await,
+            },
+            _ => return end_with(&mut ws, EndReason::SasHandshakeFailed).await,
+        },
+        _ => return end_with(&mut ws, EndReason::SasHandshakeFailed).await,
+    };
+
+    // 這條連線的 SAS。主控端把它存進 PendingRequest 給同意視窗顯示；
+    // 觀看端會用同樣三份材料自己算一份。
+    let sas = tls::sas_from_parts(&host_nonce, &viewer_nonce, exporter.as_slice());
+```
+
+`AwaitingApproval` 的送出改成帶 nonce：
+
+```rust
+    if !send_control(
+        &mut ws,
+        &ServerMessage::AwaitingApproval { host_nonce: hex_of(&host_nonce) },
+    )
+    .await
+    {
+        state.registry.deny(&request_id);
+        return;
+    }
+```
+
+`handle_share` 的 `sas: String` 參數改成 `exporter: [u8; SAS_MATERIAL_LEN]`——SAS 現在是這裡算的，不是外面傳進來的。`ConnectionSas` 對應改名為 `ConnectionExporter([u8; SAS_MATERIAL_LEN])`，Task 8 的 TLS accept 迴圈填入 `tls::exporter_material(conn)?` 的結果。
+
+hex 編解碼寫兩個小函式放在 `tls.rs`（不要為此加 crate）。
+
+- [ ] **Step 5: 整合測試**
+
+既有測試裡所有送 `Join` 的地方，之後都要多走一輪承諾。抽一個 helper：
+
+```rust
+/// 送出 Join 並走完 SAS 承諾流程，回傳 (host_nonce, viewer_nonce)。
+/// 呼叫端接著會收到 `AwaitingApproval`。
+async fn join_and_do_sas_handshake<S>(ws: &mut S, code: &str, name: &str) -> (Vec<u8>, Vec<u8>)
+```
+
+新增一個測試守住承諾的順序性——**這是整個修法的重點，必須有東西守著**：
+
+```rust
+#[tokio::test]
+async fn the_host_commits_before_it_can_see_the_viewer_nonce() {
+    // 主控端必須在收到觀看端 nonce **之前**送出承諾。順序反過來的話，
+    // 中間人就能在看到觀看端的貢獻後才挑自己的，搜出相同的 4 位數。
+    // 這個測試就是在守那個順序：連上、送 Join、然後**什麼都不送**，
+    // SasCommit 必須自己來。
+    ...
+    // 送完 Join 之後不送 nonce，直接等 —— SasCommit 應該主動抵達
+    match next_control(&mut ws).await {
+        ServerMessage::SasCommit { commit } => {
+            assert_eq!(commit.len(), 64, "commit should be hex sha256");
+        }
+        other => panic!("host must commit before receiving the viewer nonce, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn both_ends_derive_the_same_sas_from_the_committed_nonces() {
+    // 兩端用同樣三份材料各自算，結果必須一致——這是人工核對能成立的前提。
+    ...
+}
+```
+
+- [ ] **Step 6: 驗證與 commit**
+
+```bash
+cd src-tauri && cargo test --lib share:: && cargo test --test share_end_to_end
+```
+
+整合測試連跑 5 次確認不 flaky。`cargo clippy --lib --tests -- -D warnings 2>&1 | grep "src/share/"` 應為空。
+
+```bash
+git add src-tauri/src/share/ src-tauri/tests/share_end_to_end.rs
+git commit -m "feat(share): commit the host nonce before revealing it, so the SAS holds
+
+只靠 TLS 匯出金鑰的 4 位 SAS 擋不住中間人：TLS server 是後手，可以在送出
+ServerHello 前本機搜尋出相同的 4 位數（約一秒）。加一輪 commitment 消掉後手
+優勢，SAS 改由雙方各自從 host_nonce/viewer_nonce/exporter 三份材料算出。"
+```
+
 
 ---
 
@@ -1972,41 +2960,38 @@ async fn both_ends_of_a_real_tls_connection_derive_the_same_sas() {
     let server_name = rustls::pki_types::ServerName::try_from("aiterm-share").unwrap();
     let tls = connector.connect(server_name, tcp).await.expect("tls handshake");
 
-    // 握手完成後、把 stream 交給 tungstenite 之前，先算自己這端的 SAS。
-    let client_sas = {
+    // 握手完成後、把 stream 交給 tungstenite 之前，先取自己這端的 exporter
+    // material。SAS 要等承諾流程走完（拿到兩個 nonce）才算得出來。
+    let client_exporter = {
         let (_io, conn) = tls.get_ref();
-        aiterm_lib::share::tls::sas_for_connection(|buf, label, ctx| {
-            conn.export_keying_material(buf, label, ctx)
-        })
-        .expect("client SAS")
+        aiterm_lib::share::tls::exporter_material(conn).expect("client exporter material")
     };
 
     let (mut ws, _) = tokio_tungstenite::client_async("ws://aiterm-share/share", tls)
         .await
         .expect("ws handshake");
 
-    ws.send(Message::Text(
-        serde_json::to_string(&ClientMessage::Join {
-            code: code.clone(),
-            display_name: "Alice".to_string(),
-        })
-        .unwrap()
-        .into(),
-    ))
-    .await
-    .unwrap();
+    // 走完 SAS 承諾流程（Join → SasCommit → SasNonce → AwaitingApproval）。
+    // 這個 helper 已經在 Task 7b 的整合測試裡了，直接重用。
+    let (host_nonce, viewer_nonce) =
+        join_and_do_sas_handshake(&mut ws, &code, "Alice").await;
 
-    // server 把它自己那端導出的 SAS 放進 AwaitingApproval。兩端必須一致。
-    match next_control(&mut ws).await {
-        ServerMessage::AwaitingApproval { sas } => {
-            assert_eq!(
-                sas, client_sas,
-                "both ends of the same TLS connection must derive the same SAS"
-            );
-            assert_eq!(sas.len(), 4);
-        }
-        other => panic!("expected AwaitingApproval, got {other:?}"),
-    }
+    // 觀看端用自己的 exporter material ＋ 兩個 nonce 自己算一份，**不從線路
+    // 上接收任何 SAS**。主控端那一份存在 PendingRequest 裡給同意視窗顯示。
+    // 兩端算出來必須一致——這就是人工核對能抓到中間人的原因。
+    let client_sas = aiterm_lib::share::tls::sas_from_parts(
+        &host_nonce,
+        &viewer_nonce,
+        &client_exporter,
+    );
+
+    let pending = state.registry.pending(&tab_id);
+    assert_eq!(pending.len(), 1, "expected exactly one pending request");
+    assert_eq!(
+        pending[0].sas, client_sas,
+        "both ends of the same TLS connection must derive the same SAS"
+    );
+    assert_eq!(client_sas.len(), 4);
 }
 ```
 
@@ -2015,7 +3000,7 @@ async fn both_ends_of_a_real_tls_connection_derive_the_same_sas() {
 - [ ] **Step 2: 跑測試確認會紅**
 
 Run: `cd src-tauri && cargo test --test share_end_to_end both_ends_of_a_real_tls_connection_derive_the_same_sas`
-Expected: **編譯失敗**——`ShareServerState` 尚未定義、`ServerMessage::AwaitingApproval` 還沒有 `sas` 欄位。
+Expected: **編譯失敗**——`ShareServerState` 尚未定義。（`ConnectionExporter`、`PendingRequest::sas`、承諾流程的形狀在 Task 4–7b 就已經定好，這裡缺的只是 server 的啟停型別與 TLS 接線。）
 
 - [ ] **Step 3: 實作 TLS 接受迴圈與客戶端**
 
@@ -2104,7 +3089,24 @@ hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"] }
 tower-service = "0.3"
 ```
 
-在 `share/mod.rs` 加上（`start_if_needed` 上面已經呼叫它了）：
+在 `share/mod.rs` 加上（`start_if_needed` 上面已經呼叫它了）。
+
+**先加這個**——rustls 0.23 要求行程層級的預設加密供應者，沒有它
+`ServerConfig::builder()` 會 panic。Task 7 刻意沒加，因為當時還沒有呼叫端：
+
+```rust
+/// rustls 0.23 要求行程層級的預設加密供應者。裝一次就好；重複呼叫會回
+/// `Err`，直接忽略——那代表別人已經裝過了，不是錯誤。
+fn ensure_crypto_provider() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+```
+
+然後是 TLS accept 迴圈本身：
 
 ```rust
 use axum::Router;
@@ -2114,12 +3116,8 @@ use hyper_util::server::conn::auto::Builder as HyperBuilder;
 use tokio_rustls::TlsAcceptor;
 use tower_service::Service;
 
-/// 一條 TLS 連線導出的 SAS，透過 request extension 交給 ws handler。
-/// 每條連線一組——這正是它能當身分保證的原因。
-#[derive(Clone, Debug)]
-pub struct ConnectionSas(pub String);
-
-/// TLS accept 迴圈。每條連線握手完成後先導出 SAS，塞進 request extension，
+/// TLS accept 迴圈。每條連線握手完成後先導出金鑰 material，塞進 request
+/// extension（SAS 由 Task 7b 的承諾流程用它算出），
 /// 再交給 axum router。
 ///
 /// 用 `serve_connection_with_upgrades`（不是 `serve_connection`）——WebSocket
@@ -2163,17 +3161,24 @@ async fn serve_tls(
             };
 
             // 握手已完成，可以導出金鑰 material 了。握手前呼叫會失敗。
-            let sas = {
+            //
+            // 導不出來就**放掉這條連線**，不要用零值或預設值頂替：那等於讓
+            // 一條沒有身分保證的連線混進來，而使用者畫面上照樣會顯示一組看
+            // 起來正常的 4 位數。
+            let exporter = {
                 let (_io, conn) = tls_stream.get_ref();
-                tls::sas_for_connection(|buf, label, ctx| {
-                    conn.export_keying_material(buf, label, ctx)
-                })
-                .unwrap_or_default()
+                match tls::exporter_material(conn) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        log::warn!("共享連線導出金鑰 material 失敗，放棄這條連線：{e}");
+                        return;
+                    }
+                }
             };
 
             let io = TokioIo::new(tls_stream);
             let svc = hyper::service::service_fn(move |mut req: hyper::Request<Incoming>| {
-                req.extensions_mut().insert(ConnectionSas(sas.clone()));
+                req.extensions_mut().insert(ConnectionExporter(exporter));
                 let mut app = app.clone();
                 async move { app.call(req).await }
             });
@@ -2186,58 +3191,13 @@ async fn serve_tls(
 }
 ```
 
-在 `server.rs` 的 `share_upgrade` 取出 SAS 並傳給 handler：
+`server.rs` 這邊**不需要任何改動**：`share_upgrade` 的
+`Extension<ConnectionExporter>` extractor、`handle_share` 的 `exporter` 參數、
+以及 Task 7b 的承諾流程（用它算出 SAS 存進 `PendingRequest`），都已經定好了。
+這一步只是把真實的 TLS 導出值接上去，取代測試裡注入的全零佔位值——**型別
+不變、既有測試不用回頭改**。
 
-```rust
-async fn share_upgrade(
-    ws: WebSocketUpgrade,
-    axum::Extension(sas): axum::Extension<crate::share::ConnectionSas>,
-    State(state): State<ShareAppState>,
-) -> Response {
-    ws.on_upgrade(move |socket| handle_share(socket, state, sas.0))
-}
-```
-
-`handle_share` 的簽名加上 `sas: String`，並把送出 `AwaitingApproval` 那行改成：
-
-```rust
-    if !send_control(&mut ws, &ServerMessage::AwaitingApproval { sas: sas.clone() }).await {
-```
-
-**這一步會弄壞 Task 6 的三個明文整合測試**：它們的 `start_test_server` 直接用 `axum::serve` 起 router，沒有經過 TLS accept 迴圈，所以沒有 `ConnectionSas` extension，`share_upgrade` 會回 500。
-
-修法是讓測試 helper 自己注入一個假的，**不要**把 `share_upgrade` 的 extractor 改成 `Option`——那等於讓正式路徑在 TLS 沒接上時無聲降級成沒有 SAS，把身分保證變成裝飾。改 `tests/share_end_to_end.rs` 的 helper：
-
-```rust
-async fn start_test_server(
-    pty: Arc<PtyManager>,
-    registry: Arc<ShareRegistry>,
-) -> u16 {
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    // 這條路徑刻意不走 TLS——這三個測試驗的是握手/授權/串流邏輯，TLS 由
-    // both_ends_of_a_real_tls_connection_compute_the_same_sas 單獨驗。SAS
-    // extension 在正式路徑由 TLS accept 迴圈注入，這裡手動補一個假的。
-    let app = aiterm_lib::share::server::router(pty, registry)
-        .layer(axum::Extension(aiterm_lib::share::ConnectionSas("0000".to_string())));
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-    port
-}
-```
-
-這一步的 `ServerMessage::AwaitingApproval` 因此要加一個欄位：
-
-```rust
-    AwaitingApproval { sas: String },
-```
-
-並同步更新 `protocol.rs` 的測試與 Task 6 那三個整合測試裡的 `assert_eq!(..., ServerMessage::AwaitingApproval)`，改成用 pattern match 只檢查變體：
-
-```rust
-    assert!(matches!(next_control(&mut ws).await, ServerMessage::AwaitingApproval { .. }));
-```
+注意 SAS **從頭到尾不會出現在線上格式裡**：主控端那一份走 `PendingRequest` 給它自己的 UI，觀看端那一份由它自己那條 `ClientConnection` 算出。若哪天有人為了「方便」把它加進某則訊息，中間人只要原封轉發就能讓兩邊看起來一致，防冒充保證歸零——`awaiting_approval_never_carries_a_sas` 那個測試就是在守這件事。
 
 觀看端的 SAS 由它自己那條 `ClientConnection` 算出，不從線上接收——**若 SAS 是伺服器送過來的，中間人只要原封轉發就能讓兩邊一致，整個保證就沒了**。線上那個 `sas` 欄位只給主控端 UI 顯示用。
 
@@ -2271,11 +3231,17 @@ SAS 由雙方各自從自己的 TLS 連線導出，不從線上傳遞。"
 
 計畫①做完時，以下全部成立：
 
-- [ ] `cd src-tauri && cargo test` 全綠
-- [ ] `cd src-tauri && cargo clippy -- -D warnings` 無警告
-- [ ] `npm run lint` 與 `npx tsc -b` 仍綠（本計畫不動前端，這是防迴歸）
-- [ ] `grep -c 'pty reader error' src/pty/session.rs` 回 `1`（reader thread 沒有再次分裂成兩份）
-- [ ] `lib.rs` 裡沒有任何 `start_if_needed` 呼叫——沒人按分享就沒有監聽
-- [ ] 整合測試涵蓋：短碼無效被拒、唯讀端看得到但打不進去、控制端打得進去、停止分享送出正確的結束原因、TLS 兩端算出相同 SAS
+- [x] `cd src-tauri && cargo test` 全綠
+- [x] `cd src-tauri && cargo clippy -- -D warnings` **沒有指向 `src/share/` 或 `src/pty/` 的新問題**
+
+  注意：這個 repo 在本計畫開始前，`cargo clippy --lib -- -D warnings` 就已經有約 42 個既有錯誤（散落在 `vcs`、`mcp`、`enterprise`、`pty/cd_parser` 等處）。那些**不是本計畫造成的、也不要順手修**（違反外科手術式改動原則）。判斷方式是 `cargo clippy --lib -- -D warnings 2>&1 | grep "src/share/"` 應該沒有輸出。
+
+  同理，`cargo test --lib` 在基準線上就有一個**既有的 flaky 測試**（未修改的 master 跑 4 次會失敗 1 次）。若看到單一測試偶發失敗，先確認它是否在你的改動範圍內，不要假設是自己弄壞的。
+- [x] 前端零改動：`git diff master..HEAD -- src/` 沒有輸出，且 `npx tsc -b` 通過
+
+  注意：`npm run lint` 在 **master 上本來就不綠**（199 個問題／176 errors），這條標準原本寫成「仍綠」是我沒實測就下的判斷。正確的防迴歸判斷是「這個計畫有沒有動到前端」——沒動就不可能造成前端迴歸，用 `git diff` 直接證明比跑一個本來就紅的 lint 有意義。
+- [x] `grep -c 'pty reader error' src/pty/session.rs` 回 `1`（reader thread 沒有再次分裂成兩份）
+- [x] `lib.rs` 裡沒有任何 `start_if_needed` 呼叫——沒人按分享就沒有監聽
+- [x] 整合測試涵蓋：短碼無效被拒、唯讀端看得到但打不進去、控制端打得進去、停止分享送出正確的結束原因、TLS 兩端算出相同 SAS
 
 **尚未具備**（依序由後續計畫補上）：任何 UI（計畫②）、區網自動發現（計畫③）。計畫①結束時這套東西只能由測試驅動，使用者按不到。
