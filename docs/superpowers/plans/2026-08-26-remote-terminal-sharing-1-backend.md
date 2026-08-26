@@ -177,7 +177,9 @@ Expected: **編譯失敗**——`no method named get_recent_raw`、`cannot find 
 
 - [ ] **Step 3: 把 RING_CAP 提到模組層級並加大**
 
-在 `session.rs` 裡 `pub struct PtySession` 定義的正上方加入：
+在 `session.rs` 裡 `pub struct PtySession` 定義的正上方加入（**`pub(crate)`
+而不是私有**：Task 6 的 `REPLAY_MAX_BYTES` 要直接引用它，避免兩邊各寫一份
+同樣的數字而遲早漂掉）：
 
 ```rust
 /// Raw PTY bytes retained per session. Serves two readers with different
@@ -185,7 +187,7 @@ Expected: **編譯失敗**——`no method named get_recent_raw`、`cannot find 
 /// replays this whole buffer to prime a newly connected viewer's terminal).
 /// The share case sets the floor — a full 80x24 colour redraw runs well past
 /// the 8 KB this used to be. At 256 KB, twenty open tabs cost ~5 MB.
-const OUTPUT_RING_CAP: usize = 256 * 1024;
+pub(crate) const OUTPUT_RING_CAP: usize = 256 * 1024;
 ```
 
 然後把 reader thread 裡的區塊（Task 1 合併後只剩一處）：
@@ -1904,6 +1906,60 @@ async fn revoking_control_tells_the_viewer_it_can_no_longer_type() {
 }
 
 #[tokio::test]
+async fn a_viewer_that_gives_up_waiting_stops_pestering_the_host() {
+    // 觀看端在等待同意期間關掉連線（等不下去了）。那筆待審請求必須跟著消失
+    // ——否則主控端的同意視窗上會掛著一個永遠不會有下文的「OOO 想連進來」，
+    // 而 server 這邊還有一個永遠空轉的 task。
+    //
+    // 這條路徑刻意**不**能靠逾時解決：逾時會讓「使用者只是走開了」變成自動
+    // 拒絕，那是 spec 明確排除的行為。要偵測的是連線本身斷了。
+    let pty = Arc::new(PtyManager::new());
+    let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
+    let registry = Arc::new(ShareRegistry::new());
+    let code = registry.start_share(tab_id.clone());
+    let port = start_test_server(Arc::clone(&pty), Arc::clone(&registry)).await;
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/share"))
+        .await
+        .expect("connect");
+    ws.send(Message::Text(
+        serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
+            code: code.clone(),
+            display_name: "Alice".to_string(),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(next_control(&mut ws).await, ServerMessage::AwaitingApproval);
+    assert_eq!(
+        registry.pending(&tab_id).len(),
+        1,
+        "the host should see the request while the viewer is still waiting"
+    );
+
+    // 觀看端放棄，直接關掉連線。
+    drop(ws);
+
+    // server 端要在幾個輪詢間隔內注意到並收掉那筆請求。
+    let mut cleared = false;
+    for _ in 0..50 {
+        if registry.pending(&tab_id).is_empty() {
+            cleared = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        cleared,
+        "a viewer that closed its connection left a pending request behind: {:?}",
+        registry.pending(&tab_id)
+    );
+}
+
+#[tokio::test]
 async fn stopping_the_share_ends_the_connection_with_a_reason() {
     let pty = Arc::new(PtyManager::new());
     let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
@@ -1974,9 +2030,13 @@ use super::protocol::{
 };
 use super::registry::ShareRegistry;
 
-/// 重播給新連線觀看者的位元組上限。等於 PTY ring buffer 的容量——重播的意義
-/// 就是「把 ring 裡有的全部給他」。
-const REPLAY_MAX_BYTES: usize = 256 * 1024;
+/// 重播給新連線觀看者的位元組上限。
+///
+/// 直接取 PTY ring buffer 的容量（`OUTPUT_RING_CAP` 要改成 `pub(crate)`），
+/// 不另外寫一個數字：重播的意義就是「把 ring 裡有的全部給他」，兩邊各寫一份
+/// `256 * 1024` 遲早會漂掉——改了 ring 卻忘了改這裡，症狀會是觀看端悄悄少拿
+/// 到一段歷史，而且沒有任何東西會報錯。
+const REPLAY_MAX_BYTES: usize = crate::pty::session::OUTPUT_RING_CAP;
 
 /// 輪詢主控端裁決與分享是否被停掉的間隔。裁決由人操作，秒級足夠；用輪詢而
 /// 不是再開一條通知管道，是因為狀態機刻意不依賴任何非同步執行期。
@@ -2046,6 +2106,10 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState, sas: String) {
         return end_with(&mut ws, EndReason::InvalidCode).await;
     };
     let Some(tab_id) = state.registry.tab_for_code(&code) else {
+        // `request_join` 成功了，但短碼在這兩行之間失效（主控端剛好停止分享）。
+        // 必須把剛建立的待審請求收掉——`stop_share` 的清理早就跑過了，沒有人
+        // 會再來清它，留著就是一筆永遠掛在 registry 裡的孤兒。
+        state.registry.deny(&request_id);
         return end_with(&mut ws, EndReason::InvalidCode).await;
     };
 
@@ -2056,7 +2120,7 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState, sas: String) {
 
     // 3. 等主控端裁決。刻意不設自動拒絕的逾時——使用者可能只是走開了，自動
     //    拒絕會讓他回來時毫無線索（見 spec 的錯誤處理）。觀看端要放棄的話
-    //    自己關掉連線即可，那會讓下面的迴圈偵測到 ws 已死。
+    //    自己關掉連線，下面的 select 會偵測到並收掉那筆待審請求。
     let viewer_id = loop {
         // 分享在裁決前被停掉。
         if state.registry.tab_for_code(&code).is_none() {
@@ -2075,7 +2139,31 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState, sas: String) {
                 None => return end_with(&mut ws, EndReason::Denied).await,
             };
         }
-        tokio::time::sleep(DECISION_POLL).await;
+        // 等一個輪詢間隔，但同時盯著 ws——觀看端可能等不下去自己關掉了。
+        //
+        // 沒有這個 select 的話，放棄的連線會讓這個迴圈**永遠空轉**，而那筆
+        // 待審請求會一直掛在主控端的同意視窗上，因為沒有任何人會來清掉它。
+        // 刻意不設逾時是為了不讓「使用者走開」變成自動拒絕，不是為了對觀看端
+        // 已經離線這件事視而不見。
+        //
+        // `ws.recv()` 是 cancel-safe 的（底層 tokio-tungstenite 把未完成的
+        // frame 狀態存在 stream 裡而不是 future 裡），所以放進 select 不會
+        // 因為被取消而漏掉半個訊息。
+        tokio::select! {
+            _ = tokio::time::sleep(DECISION_POLL) => {}
+            incoming = ws.recv() => {
+                match incoming {
+                    // 串流結束、連線壞掉、或收到 Close frame——對方走了。
+                    None | Some(Err(_)) | Some(Ok(Message::Close(_))) => {
+                        state.registry.deny(&request_id);
+                        return;
+                    }
+                    // 協定規定觀看端在 `Granted` 之前不送任何東西。收到別的
+                    // 訊息就忽略，繼續等裁決。
+                    Some(Ok(_)) => {}
+                }
+            }
+        }
     };
 
     // 4. 已獲准：先送尺寸與模式，再送重播，最後接即時串流。
