@@ -109,6 +109,11 @@ impl ShareRegistry {
             .map(|(id, _)| id.clone())
     }
 
+    /// 某分頁目前的短碼；沒在分享時回 `None`。`tab_for_code` 的反向查詢。
+    pub fn code_for_tab(&self, tab_id: &str) -> Option<String> {
+        self.tabs.lock().get(tab_id).map(|t| t.code.clone())
+    }
+
     /// 用短碼發起一筆待審請求。回傳 `request_id`，或在短碼無效時回 `None`。
     /// **這一步不會讓對方看到任何東西**——要等主控端 `approve`。
     ///
@@ -127,6 +132,14 @@ impl ShareRegistry {
     /// 某分頁目前所有待審請求。
     pub fn pending(&self, tab_id: &str) -> Vec<PendingRequest> {
         self.pending.lock().values().filter(|p| p.tab_id == tab_id).cloned().collect()
+    }
+
+    /// 某筆待審請求存的 4 位驗證碼。
+    ///
+    /// **只給 `commands::share::decide` 用。** 這個值不會被序列化到任何送往
+    /// 前端的結構裡——主控端必須跟對方口頭核對，而不是照抄畫面上的數字。
+    pub fn sas_for_request(&self, request_id: &str) -> Option<String> {
+        self.pending.lock().get(request_id).map(|p| p.sas.clone())
     }
 
     /// 某分頁目前所有觀看者。
@@ -284,6 +297,15 @@ mod tests {
         assert_eq!(reg.tab_for_code(&code), Some("tab-1".to_string()));
         reg.stop_share("tab-1");
         assert_eq!(reg.tab_for_code(&code), None);
+    }
+
+    #[test]
+    fn code_for_tab_is_the_inverse_of_tab_for_code() {
+        let (reg, code) = registry_with_one_share();
+        assert_eq!(reg.code_for_tab("tab-1"), Some(code.clone()));
+        assert_eq!(reg.tab_for_code(&code), Some("tab-1".to_string()));
+        reg.stop_share("tab-1");
+        assert_eq!(reg.code_for_tab("tab-1"), None);
     }
 
     #[test]

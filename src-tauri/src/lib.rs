@@ -96,6 +96,10 @@ use commands::{
         AnthropicOAuthState,
     },
     secret::{delete_api_key, has_api_key},
+    share::{
+        share_approve, share_deny, share_kick, share_pending, share_revoke_control, share_start,
+        share_status, share_stop, share_viewers,
+    },
     shell::open_url,
     updater::updater_supported,
     web::{web_fetch, web_search, npm_mcp_search},
@@ -377,6 +381,16 @@ pub fn run() {
             mcp_tool_server_status,
             mcp_tool_server_apply,
             mcp_tool_server_set_config,
+            // Remote terminal sharing
+            share_start,
+            share_stop,
+            share_status,
+            share_pending,
+            share_approve,
+            share_deny,
+            share_viewers,
+            share_kick,
+            share_revoke_control,
             // Shell
             open_url,
             updater_supported,
