@@ -70,11 +70,23 @@ impl ShareServerState {
     /// bridge/mcp_server 不同，這裡沒有外部設定檔記著位址，所以浮動 port 不
     /// 會讓任何東西指向死地址。
     pub async fn start_if_needed(&self, pty: Arc<PtyManager>) -> anyhow::Result<u16> {
+        self.start_if_needed_on_port(pty, 0).await
+    }
+
+    /// 同 `start_if_needed`，但綁指定的 port。`0` 表示交給 OS 挑。
+    ///
+    /// 手動的區網連通性檢查需要固定 port：另一台機器必須**先知道**要連哪裡，
+    /// 而浮動 port 逼人先把 server 跑起來才看得到位址。
+    pub async fn start_if_needed_on_port(
+        &self,
+        pty: Arc<PtyManager>,
+        port: u16,
+    ) -> anyhow::Result<u16> {
         if let Some(p) = self.port() {
             return Ok(p);
         }
         ensure_crypto_provider();
-        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], 0))).await?;
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;
         let port = listener.local_addr()?.port();
         let app = server::router(pty, Arc::clone(&self.registry));
         let identity = tls::ShareIdentity::generate()?;

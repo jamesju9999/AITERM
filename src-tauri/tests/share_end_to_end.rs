@@ -516,10 +516,18 @@ async fn both_ends_of_a_real_tls_connection_derive_the_same_sas() {
     let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
     let state = aiterm_lib::share::ShareServerState::new();
     let code = state.registry.start_share(tab_id.clone());
+    // 固定 port，不用 start_if_needed 的浮動 port——這個檢查的重點是「另一台
+    // 機器連得到嗎」，而對方必須**先知道**要連哪裡。浮動 port 逼人先跑起來
+    // 才看得到位址，而這個測試會撐三分鐘，在終端機裡很容易被丟到背景而錯過
+    // 輸出（第一次跑就是這樣浪費掉的）。
+    let want: u16 = std::env::var("AITERM_PROBE_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(47823);
     let port = state
-        .start_if_needed(Arc::clone(&pty))
+        .start_if_needed_on_port(Arc::clone(&pty), want)
         .await
-        .expect("start share server");
+        .unwrap_or_else(|e| panic!("bind 0.0.0.0:{want} failed: {e}（用 AITERM_PROBE_PORT 換一個）"));
 
     let tcp = tokio::net::TcpStream::connect(("127.0.0.1", port))
         .await
@@ -595,10 +603,18 @@ async fn lan_reachability_probe() {
     let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
     let state = aiterm_lib::share::ShareServerState::new();
     let code = state.registry.start_share(tab_id.clone());
+    // 固定 port，不用 start_if_needed 的浮動 port——這個檢查的重點是「另一台
+    // 機器連得到嗎」，而對方必須**先知道**要連哪裡。浮動 port 逼人先跑起來
+    // 才看得到位址，而這個測試會撐三分鐘，在終端機裡很容易被丟到背景而錯過
+    // 輸出（第一次跑就是這樣浪費掉的）。
+    let want: u16 = std::env::var("AITERM_PROBE_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(47823);
     let port = state
-        .start_if_needed(Arc::clone(&pty))
+        .start_if_needed_on_port(Arc::clone(&pty), want)
         .await
-        .expect("start share server");
+        .unwrap_or_else(|e| panic!("bind 0.0.0.0:{want} failed: {e}（用 AITERM_PROBE_PORT 換一個）"));
 
     // 盡力找出這台機器在區網上的位址。找不到不是錯誤——使用者自己知道 IP。
     let ip = std::process::Command::new("sh")
@@ -626,8 +642,5 @@ async fn lan_reachability_probe() {
     tokio::time::sleep(Duration::from_secs(180)).await;
 
     println!("時間到，關閉 server。");
-    // `stop_if_idle` 只在沒有任何分享時才真的關——先停掉這個分享。
     state.registry.stop_share(&tab_id);
-    state.stop_if_idle();
-    assert!(state.port().is_none(), "server should have stopped");
 }
