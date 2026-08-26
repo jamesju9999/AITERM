@@ -28,6 +28,17 @@ const STORAGE_WIDTH_KEY = "aiterm-panel-width";
 const STORAGE_AGENT_MODE_KEY = "aiterm-agent-mode";
 const STORAGE_USE_MCP_KEY = "aiterm-use-mcp";
 
+/**
+ * 指令跑著卻完全沒有輸出多久，就當它可能卡住了。
+ *
+ * 用「安靜多久」而不是「跑多久」當判準：使用者會跑弱掃、建置這類長工作，
+ * 那些會持續吐輸出；真正卡住（heredoc 等收尾、互動程式等輸入）則是全然安靜。
+ * 這個值寧可寬鬆——誤判的代價是打擾使用者，而漏判只是回到原本要按停止鈕的狀態。
+ */
+const STUCK_IDLE_MS = 120_000;
+/** 多久檢查一次 getIdleMs()——不用太密，卡住偵測本來就是寬鬆判準。 */
+const STUCK_CHECK_INTERVAL_MS = 5_000;
+
 function loadSavedWidth(): number {
   try {
     const v = localStorage.getItem(STORAGE_WIDTH_KEY);
@@ -82,6 +93,8 @@ export function AiPanel({
   onExecuteCommand,
   onOpenProviderPalette,
   sendRemoteResponse,
+  getIdleMs,
+  onInterruptCommand,
 }: AiPanelProps) {
   /** 常駐配額徽章的代表窗；null 就不顯示。 */
   const quotaWindow = useProviderQuota(providerId);
@@ -174,6 +187,32 @@ export function AiPanel({
   const [agentPhase, setAgentPhase] = useState<"thinking" | "running">("thinking");
   const agentAbortRef = useRef(false);
   const [maxAgentSteps, setMaxAgentSteps] = useState<number>(5);
+
+  // ── 卡住偵測 ───────────────────────────────────────────────────────────────
+  const [stuckPromptVisible, setStuckPromptVisible] = useState(false);
+  const stuckIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // 使用者按過「繼續等待」之前不再提示——否則下一次檢查會立刻又跳出來。
+  const snoozeUntilRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      if (stuckIntervalRef.current !== null) {
+        clearInterval(stuckIntervalRef.current);
+        stuckIntervalRef.current = null;
+      }
+    };
+  }, []);
+
+  const handleStuckWait = useCallback(() => {
+    snoozeUntilRef.current = Date.now() + STUCK_IDLE_MS;
+    setStuckPromptVisible(false);
+  }, []);
+
+  const handleStuckInterrupt = useCallback(() => {
+    // 只送中斷，不自己 resolve 等待中的 Promise——強制結案會觸發既有的完成
+    // callback，Promise 自然 resolve，避免雙重 resolve 造成狀態不一致。
+    onInterruptCommand?.();
+  }, [onInterruptCommand]);
 
   // 每次開啟都重讀：面板是常駐不卸載的，只在掛載時讀一次的話，使用者在設定
   // 裡改了 max_agent_steps（或裝了新的 MCP server），要重開 app 才會反映。
@@ -307,11 +346,32 @@ Rules:
 
     const cmd = cmdMatch[1].trim();
     setAgentPhase("running");
+    setStuckPromptVisible(false);
+    snoozeUntilRef.current = 0;
 
     // Execute and wait for completion
     await new Promise<void>((resolve) => {
+      // 指令跑著卻完全沒有輸出多久，就提示使用者可能卡住了（見 STUCK_IDLE_MS
+      // 的說明）。這個 interval 只在等這個指令跑完的期間存在——resolve
+      // （指令完成）或元件卸載時務必清掉，見下面的 finish() 與掛載 effect。
+      if (getIdleMs) {
+        stuckIntervalRef.current = setInterval(() => {
+          if (Date.now() < snoozeUntilRef.current) return;
+          if (getIdleMs() >= STUCK_IDLE_MS) setStuckPromptVisible(true);
+        }, STUCK_CHECK_INTERVAL_MS);
+      }
+
+      const finish = () => {
+        if (stuckIntervalRef.current !== null) {
+          clearInterval(stuckIntervalRef.current);
+          stuckIntervalRef.current = null;
+        }
+        setStuckPromptVisible(false);
+        resolve();
+      };
+
       onExecuteCommand(cmd, async (block) => {
-        if (agentAbortRef.current) { setAgentRunning(false); resolve(); return; }
+        if (agentAbortRef.current) { setAgentRunning(false); finish(); return; }
 
         const rawOutput = await getPtyRecentOutput(sessionId).catch(() => null)
           ?? block.rawOutput
@@ -327,11 +387,11 @@ Rules:
           { role: "user" as const, content: resultContent },
         ];
 
-        resolve();
+        finish();
         void runAgentLoopRef.current(newHistory, systemPrompt, step + 1);
       });
     });
-  }, [chat, onExecuteCommand, sessionId, locale, sendRemoteResponse, maxAgentSteps]);
+  }, [chat, onExecuteCommand, sessionId, locale, sendRemoteResponse, maxAgentSteps, getIdleMs]);
 
   useEffect(() => {
     runAgentLoopRef.current = runAgentLoop;
@@ -610,6 +670,29 @@ Rules:
           >
             ■
           </button>
+        </div>
+      )}
+
+      {agentRunning && stuckPromptVisible && (
+        <div className="aiterm-stuck-prompt" role="alert">
+          <div className="aiterm-stuck-prompt__title">{t.agent_stuck_title}</div>
+          <div className="aiterm-stuck-prompt__body">{t.agent_stuck_body}</div>
+          <div className="aiterm-stuck-prompt__actions">
+            <button
+              type="button"
+              className="aiterm-stuck-prompt__wait"
+              onClick={handleStuckWait}
+            >
+              {t.agent_stuck_wait}
+            </button>
+            <button
+              type="button"
+              className="aiterm-stuck-prompt__interrupt"
+              onClick={handleStuckInterrupt}
+            >
+              {t.agent_stuck_interrupt}
+            </button>
+          </div>
         </div>
       )}
 

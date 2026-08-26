@@ -859,6 +859,10 @@ const zhTW = {
     ai_placeholder_agent_running: "Agent 執行中…",
     ai_agent_thinking: "Agent 思考中…",
     ai_agent_executing: "Agent 執行指令中…",
+    agent_stuck_title: "指令似乎沒有反應",
+    agent_stuck_body: "這個指令已經超過兩分鐘沒有任何輸出，可能正在等待輸入。中斷後 AI 會帶著目前的結果繼續。",
+    agent_stuck_wait: "繼續等待",
+    agent_stuck_interrupt: "中斷並繼續",
     // 模式說明列：兩顆開關表達不出「誰按下執行鍵」，這行把當下會發生什麼講白。
     mode_hint_suggest: "AI 只會建議指令，點 ▶ 才會執行",
     mode_hint_agent: (steps: string) =>
@@ -2036,6 +2040,10 @@ const enRaw = {
     ai_thinking: "Thinking…",
     ai_agent_thinking: "Agent thinking…",
     ai_agent_executing: "Agent running command…",
+    agent_stuck_title: "Command seems unresponsive",
+    agent_stuck_body: "This command has produced no output for over two minutes and may be waiting for input. Interrupting lets the AI continue from what it has so far.",
+    agent_stuck_wait: "Keep waiting",
+    agent_stuck_interrupt: "Interrupt and continue",
     mode_hint_suggest: "AI only suggests commands — click ▶ to run them",
     mode_hint_agent: (steps: string) =>
       `AI runs commands itself and iterates on the output, up to ${steps} steps (MCP tools are not used here)`,
