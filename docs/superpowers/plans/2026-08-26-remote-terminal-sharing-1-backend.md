@@ -2576,6 +2576,303 @@ git commit -m "feat(share): add ephemeral TLS identity and SAS derivation
 
 ---
 
+## Task 7b: commit-then-reveal 的 SAS（安全審查發現後補上）
+
+**這個 task 是 Task 7 的安全審查發現後新增的，修的是設計層級的破口。**
+
+### 為什麼
+
+Task 7 做出的 SAS 是「把 RFC 5705 匯出的 material 折成 4 位數」，spec 原本主張「中間人的兩條連線導出的值必然不同」。**那個主張是錯的**：
+
+- TLS 1.3 裡 **server 是後手**——看到 ClientHello 的 key share 之後才選自己的。
+- 中間人對觀看端扮演 server。它先跟真的主控端跑完一條連線拿到 `target`，此時**還沒送出 ServerHello**，可以在本機反覆換 ephemeral key、推導候選 SAS，湊中 `target` 才真的送出去。
+- 搜尋空間只有 10⁴、每次試算幾百微秒，**整體約一秒內**。**換成 SHA-256 也無效**——輸出空間不變。
+
+修法是消掉後手優勢：TLS 握手之後、顯示驗證碼之前多一個往返，主控端先承諾自己的 nonce（ZRTP／RFC 6189 的結構）。
+
+### 新的握手序列
+
+| # | 方向 | 訊息 |
+|---|---|---|
+| 1 | 觀看端 → 主控端 | `Join { protocol_version, code, display_name }` |
+| 2 | 主控端 → 觀看端 | `SasCommit { commit }` — `hex(SHA256(host_nonce))` |
+| 3 | 觀看端 → 主控端 | `SasNonce { nonce }` — `hex(viewer_nonce)` |
+| 4 | 主控端 → 觀看端 | `AwaitingApproval { host_nonce }` — `hex(host_nonce)`，揭曉 |
+
+雙方各自算 `SAS = sas_from_parts(host_nonce, viewer_nonce, exporter)`；觀看端先驗 `SHA256(host_nonce)` 等於步驟 2 的承諾，對不上就中止。
+
+**為什麼擋得住**：中間人在步驟 2 必須先承諾自己的 nonce，那時不知道觀看端的 nonce；步驟 3 拿到時已被綁死。即使它先跟主控端跑完整條連線再處理觀看端（那樣能先知道主控端的 nonce），對觀看端承諾時仍不知道觀看端的 nonce，一樣搜不了。
+
+**`AwaitingApproval` 帶的是主控端的 nonce（協定公開值），不是 SAS 本身**——觀看端拿到的是計算材料，自己算自己那份。直接傳 SAS 的話中間人原封轉發就能讓兩邊一致。
+
+**Files:**
+- Modify: `src-tauri/src/share/tls.rs`
+- Modify: `src-tauri/src/share/protocol.rs`
+- Modify: `src-tauri/src/share/server.rs`
+- Modify: `src-tauri/tests/share_end_to_end.rs`
+
+- [ ] **Step 1: 把 SAS 改成吃三份材料，並換成 SHA-256**
+
+`tls.rs` 的 `sas_from_exporter` 換成：
+
+```rust
+/// 從承諾流程的三份材料算出 4 位驗證碼。
+///
+/// 用 SHA-256 而不是自製折疊：`sha2` 本來就在依賴樹裡（`Cargo.toml` 的
+/// `sha2 = "0.10"`），成本只有幾行。**但要清楚知道這不是安全性的來源**——
+/// 輸出空間就是 10⁴，換任何雜湊都一樣。真正擋住中間人的是 `host_nonce` 的
+/// 承諾流程（見這個 task 的說明），不是雜湊強度。
+pub fn sas_from_parts(host_nonce: &[u8], viewer_nonce: &[u8], exporter: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    // 長度前綴，避免 (a‖b) 與 (a'‖b') 在不同切分下碰撞。
+    for part in [host_nonce, viewer_nonce, exporter] {
+        h.update((part.len() as u32).to_be_bytes());
+        h.update(part);
+    }
+    let digest = h.finalize();
+    let n = u32::from_be_bytes(digest[..4].try_into().expect("sha256 has 32 bytes"));
+    format!("{:04}", n % 10_000)
+}
+
+/// 產生一組 32 byte 的 nonce。
+pub fn fresh_nonce() -> [u8; NONCE_LEN] {
+    use rand::RngCore;
+    let mut n = [0u8; NONCE_LEN];
+    rand::rng().fill_bytes(&mut n);
+    n
+}
+
+/// 主控端對自己 nonce 的承諾。
+pub fn commit_for(nonce: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let d = Sha256::digest(nonce);
+    d.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// nonce 的長度。32 byte 遠超過需要——重點是攻擊者猜不到，不是熵要剛好。
+pub const NONCE_LEN: usize = 32;
+```
+
+`sas_for_connection` 改成直接吃連線，杜絕「材料不是真的來自 TLS」的可能：
+
+```rust
+/// 從一條已完成握手的 TLS 連線匯出金鑰 material。
+///
+/// 吃 `&ConnectionCommon<Data>`（`ServerConnection`/`ClientConnection` 都 deref
+/// 到它）而不是吃 closure：closure 版在型別上允許呼叫端塞任何 `[u8; 32]` 進來，
+/// 包括接線時暫時放的假資料。label 與 context 也鎖死在這裡，呼叫端改不到。
+pub fn exporter_material<Data>(
+    conn: &rustls::ConnectionCommon<Data>,
+) -> anyhow::Result<[u8; SAS_MATERIAL_LEN]> {
+    let material = conn
+        .export_keying_material([0u8; SAS_MATERIAL_LEN], SAS_EXPORTER_LABEL, None)
+        .map_err(|e| anyhow::anyhow!("export keying material: {e}"))?;
+    Ok(material)
+}
+```
+
+label 照 RFC 5705 慣例加上 `EXPERIMENTAL` 前綴（該 RFC 允許此前綴不必註冊）：
+
+```rust
+pub const SAS_EXPORTER_LABEL: &[u8] = b"EXPERIMENTAL aiterm share sas v1";
+```
+
+`sas_from_exporter` 與舊的 closure 版 `sas_for_connection` 一併刪除——它們沒有其他呼叫端。
+
+- [ ] **Step 2: 補 Task 7 審查抓到的兩個測試漏洞**
+
+審查實測確認：把 `{:04}` 改成 `{}`（不補零）現有測試抓不到，因為固定測資折出來剛好 ≥1000；也沒有任何測試驗證「位元組順序改變會讓 SAS 改變」。
+
+```rust
+    #[test]
+    fn a_sas_below_a_thousand_is_still_four_digits() {
+        // 補零那條分支要真的被走到。用搜尋找一組會折出 <1000 的輸入，而不是
+        // 賭固定測資剛好落在那裡——原本的測試就是因為測資都 ≥1000，
+        // 把 `{:04}` 改成 `{}` 也照樣綠燈（已實測）。
+        let mut found = None;
+        for i in 0u32..100_000 {
+            let s = sas_from_parts(&i.to_be_bytes(), b"v", b"e");
+            if s.starts_with('0') {
+                found = Some(s);
+                break;
+            }
+        }
+        let s = found.expect("no input in 100k produced a SAS below 1000");
+        assert_eq!(s.len(), 4, "zero padding was dropped: {s}");
+    }
+
+    #[test]
+    fn swapping_the_two_nonces_changes_the_sas() {
+        // 承諾流程的兩個 nonce 角色不同，SAS 必須把它們分開。若哪天有人把
+        // 組合方式改成順序無關（例如 XOR），這個測試會抓到。
+        let a = [0xAAu8; NONCE_LEN];
+        let b = [0xBBu8; NONCE_LEN];
+        assert_ne!(
+            sas_from_parts(&a, &b, b"exporter"),
+            sas_from_parts(&b, &a, b"exporter")
+        );
+    }
+
+    #[test]
+    fn a_commit_matches_only_its_own_nonce() {
+        let n1 = fresh_nonce();
+        let n2 = fresh_nonce();
+        assert_eq!(commit_for(&n1), commit_for(&n1));
+        assert_ne!(commit_for(&n1), commit_for(&n2));
+        assert_eq!(commit_for(&n1).len(), 64, "hex of sha256 is 64 chars");
+    }
+```
+
+- [ ] **Step 3: 協定新增兩則訊息**
+
+`protocol.rs`：
+
+```rust
+    /// 主控端對自己 nonce 的承諾，`hex(SHA256(host_nonce))`。
+    ///
+    /// **必須在收到觀看端的 nonce 之前送出**——這正是消掉後手優勢的關鍵。
+    SasCommit { commit: String },
+```
+（加進 `ServerMessage`）
+
+```rust
+    /// 觀看端的 nonce，`hex`。收到 `SasCommit` 之後才送。
+    SasNonce { nonce: String },
+```
+（加進 `ClientMessage`）
+
+`AwaitingApproval` 從無欄位改成帶主控端揭曉的 nonce：
+
+```rust
+    /// 請求已送達，正在等主控端裁決，同時揭曉主控端的 nonce。
+    ///
+    /// **這是 nonce（協定公開值），不是 SAS。** 觀看端要先驗
+    /// `SHA256(host_nonce)` 等於先前收到的 `SasCommit`，再自己算 SAS。
+    /// 直接傳 SAS 的話中間人原封轉發就能讓兩邊看起來一致。
+    AwaitingApproval { host_nonce: String },
+```
+
+新增兩個 `EndReason`：
+
+```rust
+    /// 觀看端驗出主控端揭曉的 nonce 跟先前的承諾對不上——中間人的跡象。
+    SasCommitMismatch,
+    /// 觀看端在承諾流程中送了非預期的訊息或格式錯誤的 nonce。
+    SasHandshakeFailed,
+```
+
+記得把它們加進 `every_end_reason_survives_a_round_trip` 的 `all` 陣列與那個無萬用分支的 match（不加會**編譯失敗**，那正是它的用意）。
+
+`PROTOCOL_VERSION` 提升為 `2`——線上格式變了。
+
+- [ ] **Step 4: server 端實作承諾流程**
+
+`server.rs` 的 `handle_share`，在版本檢查與 `request_join` 之間插入：
+
+```rust
+    // SAS 承諾流程。必須在知道觀看端的 nonce 之前就把自己的承諾送出去——
+    // 這是整個防中間人保證的關鍵，順序不能調換。
+    let host_nonce = tls::fresh_nonce();
+    if !send_control(
+        &mut ws,
+        &ServerMessage::SasCommit { commit: tls::commit_for(&host_nonce) },
+    )
+    .await
+    {
+        return;
+    }
+
+    let viewer_nonce = match ws.recv().await {
+        Some(Ok(Message::Text(t))) => match serde_json::from_str::<ClientMessage>(&t) {
+            Ok(ClientMessage::SasNonce { nonce }) => match decode_hex(&nonce) {
+                Some(n) => n,
+                None => return end_with(&mut ws, EndReason::SasHandshakeFailed).await,
+            },
+            _ => return end_with(&mut ws, EndReason::SasHandshakeFailed).await,
+        },
+        _ => return end_with(&mut ws, EndReason::SasHandshakeFailed).await,
+    };
+
+    // 這條連線的 SAS。主控端把它存進 PendingRequest 給同意視窗顯示；
+    // 觀看端會用同樣三份材料自己算一份。
+    let sas = tls::sas_from_parts(&host_nonce, &viewer_nonce, exporter.as_slice());
+```
+
+`AwaitingApproval` 的送出改成帶 nonce：
+
+```rust
+    if !send_control(
+        &mut ws,
+        &ServerMessage::AwaitingApproval { host_nonce: hex_of(&host_nonce) },
+    )
+    .await
+    {
+        state.registry.deny(&request_id);
+        return;
+    }
+```
+
+`handle_share` 的 `sas: String` 參數改成 `exporter: [u8; SAS_MATERIAL_LEN]`——SAS 現在是這裡算的，不是外面傳進來的。`ConnectionSas` 對應改名為 `ConnectionExporter([u8; SAS_MATERIAL_LEN])`，Task 8 的 TLS accept 迴圈填入 `tls::exporter_material(conn)?` 的結果。
+
+hex 編解碼寫兩個小函式放在 `tls.rs`（不要為此加 crate）。
+
+- [ ] **Step 5: 整合測試**
+
+既有測試裡所有送 `Join` 的地方，之後都要多走一輪承諾。抽一個 helper：
+
+```rust
+/// 送出 Join 並走完 SAS 承諾流程，回傳 (host_nonce, viewer_nonce)。
+/// 呼叫端接著會收到 `AwaitingApproval`。
+async fn join_and_do_sas_handshake<S>(ws: &mut S, code: &str, name: &str) -> (Vec<u8>, Vec<u8>)
+```
+
+新增一個測試守住承諾的順序性——**這是整個修法的重點，必須有東西守著**：
+
+```rust
+#[tokio::test]
+async fn the_host_commits_before_it_can_see_the_viewer_nonce() {
+    // 主控端必須在收到觀看端 nonce **之前**送出承諾。順序反過來的話，
+    // 中間人就能在看到觀看端的貢獻後才挑自己的，搜出相同的 4 位數。
+    // 這個測試就是在守那個順序：連上、送 Join、然後**什麼都不送**，
+    // SasCommit 必須自己來。
+    ...
+    // 送完 Join 之後不送 nonce，直接等 —— SasCommit 應該主動抵達
+    match next_control(&mut ws).await {
+        ServerMessage::SasCommit { commit } => {
+            assert_eq!(commit.len(), 64, "commit should be hex sha256");
+        }
+        other => panic!("host must commit before receiving the viewer nonce, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn both_ends_derive_the_same_sas_from_the_committed_nonces() {
+    // 兩端用同樣三份材料各自算，結果必須一致——這是人工核對能成立的前提。
+    ...
+}
+```
+
+- [ ] **Step 6: 驗證與 commit**
+
+```bash
+cd src-tauri && cargo test --lib share:: && cargo test --test share_end_to_end
+```
+
+整合測試連跑 5 次確認不 flaky。`cargo clippy --lib --tests -- -D warnings 2>&1 | grep "src/share/"` 應為空。
+
+```bash
+git add src-tauri/src/share/ src-tauri/tests/share_end_to_end.rs
+git commit -m "feat(share): commit the host nonce before revealing it, so the SAS holds
+
+只靠 TLS 匯出金鑰的 4 位 SAS 擋不住中間人：TLS server 是後手，可以在送出
+ServerHello 前本機搜尋出相同的 4 位數（約一秒）。加一輪 commitment 消掉後手
+優勢，SAS 改由雙方各自從 host_nonce/viewer_nonce/exporter 三份材料算出。"
+```
+
+
+---
+
 ## Task 8: 把 TLS 接上 server，並綁區網介面
 
 **Files:**
