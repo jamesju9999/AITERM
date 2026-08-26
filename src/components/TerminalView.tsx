@@ -271,6 +271,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const termRef = useRef<Terminal | null>(null);
   const [termState, setTermState] = useState<Terminal | null>(null);
   const sessionRef = useRef<string | null>(null);
+  // Agent 卡住偵測用：PTY 最後一次吐出東西的時間。卡在 heredoc>／等輸入的
+  // 互動程式是完全安靜的，而跑得好好的長指令會持續有輸出——用「安靜多久」
+  // 區分兩者，比固定逾時準得多，也不會誤殺跑很久但正常的工作。
+  const lastPtyOutputAtRef = useRef(Date.now());
   // Snapshot of the rendered line (prompt + anything already typed) taken the
   // moment a fresh input line starts — see the onData handler below for why.
   // null means "no line in progress, capture a fresh snapshot on next input".
@@ -363,7 +367,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     if (isClaudeCommand(cmd)) onClaudeDetectedRef.current?.();
   }, []);
 
-  const { blocks, isAlternateBuffer, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo } = useTerminalBlocks(
+  const { blocks, isAlternateBuffer, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo, finalizeBlock } = useTerminalBlocks(
     sessionId,
     termState,
     lastCwdRef,
@@ -1115,6 +1119,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         const isWindows = navigator.platform.toLowerCase().startsWith("win");
 
         const unlisten = await onPtyData(id, (bytes) => {
+          lastPtyOutputAtRef.current = Date.now();
           const text = decoder.decode(bytes, { stream: true });
           hasReceivedLiveChunk = true;
           if (isWindows) {
@@ -2013,6 +2018,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             setPaletteOpen(true);
           }}
           sendRemoteResponse={sendRemoteResponse}
+          getIdleMs={() => Date.now() - lastPtyOutputAtRef.current}
+          onInterruptCommand={() => {
+            // Ctrl+C：把 shell 從 heredoc／等輸入的狀態拉回提示字元。
+            if (sessionRef.current) writePty(sessionRef.current, "\x03").catch(console.error);
+            // 強制結案。finalizeBlock 會呼叫 agent 正在等的完成 callback
+            // （useTerminalBlocks.ts:131-136），agent 迴圈因此自然接手下去，
+            // 不需要另外通知它。
+            const latest = blocksRef.current[blocksRef.current.length - 1];
+            if (latest?.status === "running") finalizeBlock(latest.id, -1);
+          }}
         />
       )}
     </div>
