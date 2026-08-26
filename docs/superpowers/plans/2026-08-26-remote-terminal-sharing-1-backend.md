@@ -1499,9 +1499,22 @@ git commit -m "feat(share): define the share connection wire protocol
 
 ```toml
 # 整合測試用的 WebSocket 客戶端。僅 dev-dependency——正式程式碼只當 server。
-tokio-tungstenite = "0.24"
+#
+# 版本必須是 0.29：Task 5 打開 axum 的 `ws` feature 之後，axum 0.8.9 自己
+# 就帶進了 tokio-tungstenite 0.29。寫成別的主版本會讓相依樹裡多出第二份
+# 拷貝（兩份互不相容的型別，編譯期還可能給出很難懂的錯誤訊息）。
+# futures-util 0.3.32 同樣已在 Cargo.lock 裡。
+tokio-tungstenite = "0.29"
 futures-util = "0.3"
 ```
+
+加完後確認沒有拉進第二份：
+
+```bash
+cd src-tauri && grep -c '^name = "tokio-tungstenite"' Cargo.lock
+```
+
+Expected: `1`。若是 `2`，代表版本沒對齊，回頭檢查上面的版本號。
 
 - [ ] **Step 2: 寫會紅的整合測試**
 
