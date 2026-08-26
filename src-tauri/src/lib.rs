@@ -194,6 +194,7 @@ pub fn run() {
         .manage(AnthropicOAuthState::new())
         .manage(Arc::new(bridge::BridgeState::new()))
         .manage(Arc::new(mcp_server::McpToolServerState::new()))
+        .manage(Arc::new(share::ShareServerState::new()))
         .setup(|app| {
             telegram::init(app.handle());
             mail::poller::init(app.handle());

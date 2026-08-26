@@ -29,7 +29,7 @@ async fn start_test_server(
 ) -> u16 {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let app = aiterm_lib::share::server::router(pty, registry).layer(axum::Extension(
+    let app = aiterm_lib::share::server::router(pty, registry, None).layer(axum::Extension(
         aiterm_lib::share::protocol::ConnectionExporter(
             [0u8; aiterm_lib::share::tls::SAS_MATERIAL_LEN],
         ),
@@ -525,7 +525,7 @@ async fn both_ends_of_a_real_tls_connection_derive_the_same_sas() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(47823);
     let port = state
-        .start_if_needed_on_port(Arc::clone(&pty), want)
+        .start_if_needed_on_port(Arc::clone(&pty), want, None)
         .await
         .unwrap_or_else(|e| panic!("bind 0.0.0.0:{want} failed: {e}（用 AITERM_PROBE_PORT 換一個）"));
 
@@ -612,7 +612,7 @@ async fn lan_reachability_probe() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(47823);
     let port = state
-        .start_if_needed_on_port(Arc::clone(&pty), want)
+        .start_if_needed_on_port(Arc::clone(&pty), want, None)
         .await
         .unwrap_or_else(|e| panic!("bind 0.0.0.0:{want} failed: {e}（用 AITERM_PROBE_PORT 換一個）"));
 

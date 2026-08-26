@@ -40,13 +40,20 @@ const DECISION_POLL: Duration = Duration::from_millis(200);
 pub struct ShareAppState {
     pub pty: Arc<PtyManager>,
     pub registry: Arc<ShareRegistry>,
+    /// 用來把「有人要連進來」推播給前端。整合測試不起 Tauri app，所以是
+    /// `Option`——`None` 時所有事件發送都是 no-op，其餘行為完全一樣。
+    pub app: Option<tauri::AppHandle>,
 }
 
-pub fn router(pty: Arc<PtyManager>, registry: Arc<ShareRegistry>) -> Router {
+pub fn router(
+    pty: Arc<PtyManager>,
+    registry: Arc<ShareRegistry>,
+    app: Option<tauri::AppHandle>,
+) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/share", any(share_upgrade))
-        .with_state(ShareAppState { pty, registry })
+        .with_state(ShareAppState { pty, registry, app })
 }
 
 /// TLS exporter material 由 request extension 帶進來——Task 8 的 TLS accept
