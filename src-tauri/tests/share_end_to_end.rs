@@ -19,24 +19,84 @@ const SIZE: PtySize = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height
 /// 起一個綁 127.0.0.1:0 的共享 server，回傳它的實際 port。
 ///
 /// 這條路徑刻意**不走 TLS**——這幾個測試驗的是握手、授權與串流邏輯，TLS 與
-/// SAS 由 Task 8 的 `both_ends_of_a_real_tls_connection_derive_the_same_sas`
-/// 單獨驗。正式路徑的 `ConnectionSas` 由 TLS accept 迴圈注入，這裡手動補一個
-/// 佔位值；**不要**把 handler 的 extractor 改成 `Option`，那等於讓正式路徑
-/// 在 TLS 沒接上時無聲降級成沒有身分保證的連線。
+/// SAS 導出由 Task 8 的 `both_ends_of_a_real_tls_connection_derive_the_same_sas`
+/// 單獨驗。正式路徑的 `ConnectionExporter` 由 TLS accept 迴圈注入，這裡手動
+/// 補一個佔位值；**不要**把 handler 的 extractor 改成 `Option`，那等於讓正式
+/// 路徑在 TLS 沒接上時無聲降級成沒有身分保證的連線。
 async fn start_test_server(
     pty: Arc<PtyManager>,
     registry: Arc<ShareRegistry>,
 ) -> u16 {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let app = aiterm_lib::share::server::router(pty, registry)
-        .layer(axum::Extension(aiterm_lib::share::protocol::ConnectionSas(
-            "0000".to_string(),
-        )));
+    let app = aiterm_lib::share::server::router(pty, registry).layer(axum::Extension(
+        aiterm_lib::share::protocol::ConnectionExporter(
+            [0u8; aiterm_lib::share::tls::SAS_MATERIAL_LEN],
+        ),
+    ));
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
     port
+}
+
+/// 送出 `Join`，然後走完 SAS 承諾流程：收 `SasCommit`、回一個隨機
+/// `SasNonce`、等 `AwaitingApproval` 揭曉主控端的 nonce。
+///
+/// 回傳 `(host_nonce, viewer_nonce)`——呼叫端接下來會收到
+/// `AwaitingApproval`（已經在這裡被消費掉了），可以用這兩個 nonce 加上
+/// `start_test_server` 灌的全零 exporter 自己算一份 SAS 來核對。
+async fn join_and_do_sas_handshake<S>(ws: &mut S, code: &str, name: &str) -> (Vec<u8>, Vec<u8>)
+where
+    S: SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error>
+        + StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+        + Unpin,
+{
+    ws.send(Message::Text(
+        serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
+            code: code.to_string(),
+            display_name: name.to_string(),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    // 承諾必須先於揭曉——這個 helper 只消費它並檢查形狀；那個順序本身由
+    // `the_host_commits_before_it_can_see_the_viewer_nonce` 單獨守著。
+    match next_control(ws).await {
+        ServerMessage::SasCommit { commit } => {
+            assert_eq!(commit.len(), 64, "commit should be hex sha256");
+        }
+        other => panic!("expected SasCommit, got {other:?}"),
+    }
+
+    let viewer_nonce: [u8; 32] = {
+        use rand::RngCore;
+        let mut n = [0u8; 32];
+        rand::rng().fill_bytes(&mut n);
+        n
+    };
+    ws.send(Message::Text(
+        serde_json::to_string(&ClientMessage::SasNonce {
+            nonce: aiterm_lib::share::tls::hex_of(&viewer_nonce),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    let host_nonce = match next_control(ws).await {
+        ServerMessage::AwaitingApproval { host_nonce } => {
+            aiterm_lib::share::tls::decode_hex(&host_nonce).expect("host_nonce is valid hex")
+        }
+        other => panic!("expected AwaitingApproval, got {other:?}"),
+    };
+
+    (host_nonce, viewer_nonce.to_vec())
 }
 
 /// 讀到下一則 JSON 控制訊息，跳過中間的二進位 frame。
@@ -83,6 +143,9 @@ where
 
 #[tokio::test]
 async fn an_unknown_code_is_refused_without_reaching_the_host() {
+    // 短碼在 SAS 承諾流程*之後*才被查——commit/nonce 交換不需要知道短碼是否
+    // 有效，所以這裡不能用 `join_and_do_sas_handshake`（它假設一路走到
+    // `AwaitingApproval`）：無效短碼會在揭曉那一步之前就被 `Ended` 擋下。
     let pty = Arc::new(PtyManager::new());
     let registry = Arc::new(ShareRegistry::new());
     let port = start_test_server(pty, Arc::clone(&registry)).await;
@@ -95,6 +158,20 @@ async fn an_unknown_code_is_refused_without_reaching_the_host() {
             protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
             code: "000000".to_string(),
             display_name: "Mallory".to_string(),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    match next_control(&mut ws).await {
+        ServerMessage::SasCommit { .. } => {}
+        other => panic!("expected SasCommit even for an unknown code, got {other:?}"),
+    }
+    ws.send(Message::Text(
+        serde_json::to_string(&ClientMessage::SasNonce {
+            nonce: aiterm_lib::share::tls::hex_of(&[0u8; 32]),
         })
         .unwrap()
         .into(),
@@ -126,19 +203,7 @@ async fn a_read_only_viewer_sees_output_but_cannot_type() {
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/share"))
         .await
         .expect("connect");
-    ws.send(Message::Text(
-        serde_json::to_string(&ClientMessage::Join {
-            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
-            code: code.clone(),
-            display_name: "Alice".to_string(),
-        })
-        .unwrap()
-        .into(),
-    ))
-    .await
-    .unwrap();
-
-    assert_eq!(next_control(&mut ws).await, ServerMessage::AwaitingApproval);
+    join_and_do_sas_handshake(&mut ws, &code, "Alice").await;
 
     // 模擬主控端按下「只能看」。
     let request_id = registry.pending(&tab_id)[0].request_id.clone();
@@ -178,18 +243,7 @@ async fn a_controlling_viewer_can_type_and_sees_the_result() {
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/share"))
         .await
         .expect("connect");
-    ws.send(Message::Text(
-        serde_json::to_string(&ClientMessage::Join {
-            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
-            code: code.clone(),
-            display_name: "Alice".to_string(),
-        })
-        .unwrap()
-        .into(),
-    ))
-    .await
-    .unwrap();
-    assert_eq!(next_control(&mut ws).await, ServerMessage::AwaitingApproval);
+    join_and_do_sas_handshake(&mut ws, &code, "Alice").await;
 
     let request_id = registry.pending(&tab_id)[0].request_id.clone();
     registry.approve(&request_id, AccessMode::Control).expect("approve");
@@ -256,18 +310,7 @@ async fn revoking_control_tells_the_viewer_it_can_no_longer_type() {
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/share"))
         .await
         .expect("connect");
-    ws.send(Message::Text(
-        serde_json::to_string(&ClientMessage::Join {
-            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
-            code: code.clone(),
-            display_name: "Alice".to_string(),
-        })
-        .unwrap()
-        .into(),
-    ))
-    .await
-    .unwrap();
-    assert_eq!(next_control(&mut ws).await, ServerMessage::AwaitingApproval);
+    join_and_do_sas_handshake(&mut ws, &code, "Alice").await;
 
     let request_id = registry.pending(&tab_id)[0].request_id.clone();
     let viewer_id = registry.approve(&request_id, AccessMode::Control).expect("approve");
@@ -302,18 +345,7 @@ async fn a_viewer_that_gives_up_waiting_stops_pestering_the_host() {
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/share"))
         .await
         .expect("connect");
-    ws.send(Message::Text(
-        serde_json::to_string(&ClientMessage::Join {
-            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
-            code: code.clone(),
-            display_name: "Alice".to_string(),
-        })
-        .unwrap()
-        .into(),
-    ))
-    .await
-    .unwrap();
-    assert_eq!(next_control(&mut ws).await, ServerMessage::AwaitingApproval);
+    join_and_do_sas_handshake(&mut ws, &code, "Alice").await;
     assert_eq!(
         registry.pending(&tab_id).len(),
         1,
@@ -350,6 +382,34 @@ async fn stopping_the_share_ends_the_connection_with_a_reason() {
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/share"))
         .await
         .expect("connect");
+    join_and_do_sas_handshake(&mut ws, &code, "Alice").await;
+    let request_id = registry.pending(&tab_id)[0].request_id.clone();
+    registry.approve(&request_id, AccessMode::ReadOnly).expect("approve");
+    let _ = next_control(&mut ws).await; // Granted
+
+    registry.stop_share(&tab_id);
+
+    assert_eq!(
+        next_control(&mut ws).await,
+        ServerMessage::Ended { reason: EndReason::HostStoppedSharing }
+    );
+}
+
+#[tokio::test]
+async fn the_host_commits_before_it_can_see_the_viewer_nonce() {
+    // 主控端必須在收到觀看端 nonce **之前**送出承諾。順序反過來的話，
+    // 中間人就能在看到觀看端的貢獻後才挑自己的，搜出相同的 4 位數。
+    // 這個測試就是在守那個順序：連上、送 Join、然後**什麼都不送**，
+    // SasCommit 必須自己來。
+    let pty = Arc::new(PtyManager::new());
+    let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
+    let registry = Arc::new(ShareRegistry::new());
+    let code = registry.start_share(tab_id.clone());
+    let port = start_test_server(Arc::clone(&pty), Arc::clone(&registry)).await;
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/share"))
+        .await
+        .expect("connect");
     ws.send(Message::Text(
         serde_json::to_string(&ClientMessage::Join {
             protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
@@ -361,15 +421,41 @@ async fn stopping_the_share_ends_the_connection_with_a_reason() {
     ))
     .await
     .unwrap();
-    assert_eq!(next_control(&mut ws).await, ServerMessage::AwaitingApproval);
-    let request_id = registry.pending(&tab_id)[0].request_id.clone();
-    registry.approve(&request_id, AccessMode::ReadOnly).expect("approve");
-    let _ = next_control(&mut ws).await; // Granted
 
-    registry.stop_share(&tab_id);
+    // 送完 Join 之後不送 nonce，直接等 —— SasCommit 應該主動抵達
+    match next_control(&mut ws).await {
+        ServerMessage::SasCommit { commit } => {
+            assert_eq!(commit.len(), 64, "commit should be hex sha256");
+        }
+        other => panic!("host must commit before receiving the viewer nonce, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn both_ends_derive_the_same_sas_from_the_committed_nonces() {
+    // 兩端用同樣三份材料各自算，結果必須一致——這是人工核對能成立的前提。
+    // `start_test_server` 灌的 exporter material 固定是全零，所以觀看端這裡
+    // 能用同一份常數重算，跟主控端存進 `PendingRequest` 的那一份比對。
+    let pty = Arc::new(PtyManager::new());
+    let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
+    let registry = Arc::new(ShareRegistry::new());
+    let code = registry.start_share(tab_id.clone());
+    let port = start_test_server(Arc::clone(&pty), Arc::clone(&registry)).await;
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/share"))
+        .await
+        .expect("connect");
+    let (host_nonce, viewer_nonce) = join_and_do_sas_handshake(&mut ws, &code, "Alice").await;
+
+    let host_side_sas = registry.pending(&tab_id)[0].sas.clone();
+    let viewer_side_sas = aiterm_lib::share::tls::sas_from_parts(
+        &host_nonce,
+        &viewer_nonce,
+        &[0u8; aiterm_lib::share::tls::SAS_MATERIAL_LEN],
+    );
 
     assert_eq!(
-        next_control(&mut ws).await,
-        ServerMessage::Ended { reason: EndReason::HostStoppedSharing }
+        host_side_sas, viewer_side_sas,
+        "host and viewer derived different SASes from the same committed nonces"
     );
 }

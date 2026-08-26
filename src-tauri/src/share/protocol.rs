@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::registry::AccessMode;
+use super::tls::SAS_MATERIAL_LEN;
 
 /// `AccessMode` 的線上表示。刻意與內部型別分開：內部列舉改名不該悄悄變成
 /// 破壞相容性的線上格式變更。
@@ -50,6 +51,10 @@ pub enum EndReason {
     /// 認不得的訊息時，舊版只會在 `serde_json::from_str` 硬性失敗（實測確認
     /// serde 對未知 tag 回 `Err` 而非忽略），使用者看到的是無法解釋的斷線。
     VersionMismatch,
+    /// 觀看端驗出主控端揭曉的 nonce 跟先前的承諾對不上——中間人的跡象。
+    SasCommitMismatch,
+    /// 觀看端在承諾流程中送了非預期的訊息或格式錯誤的 nonce。
+    SasHandshakeFailed,
 }
 
 /// 這份線上格式的版本。**新增或修改任何訊息的形狀時都要往上加。**
@@ -57,24 +62,24 @@ pub enum EndReason {
 /// 之所以現在就加而不是等需要時再說：事後補版本欄位本身就是一次破壞相容性
 /// 的線上格式變更，而且補的時候舊版早就裝在別人機器上了。現在的成本是一個
 /// 欄位，之後的成本是沒有乾淨的升級路徑。
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// Task 7b 加入 SAS 承諾流程（`SasCommit`/`SasNonce`，`AwaitingApproval` 改
+/// 形狀）——線上格式變了，所以升到 2。
+pub const PROTOCOL_VERSION: u32 = 2;
 
-/// 一條連線導出的 4 位 SAS。**永遠不會出現在線上格式裡**，只透過 axum 的
-/// request extension 交給 ws handler，再存進 `PendingRequest` 給主控端 UI。
+/// 一條 TLS 連線匯出的金鑰 material。**永遠不會出現在線上格式裡**，只透過
+/// axum 的 request extension 交給 ws handler；ws handler 拿它跟 host/viewer
+/// 的 nonce 一起算出這條連線的 SAS（見 `share::tls::sas_from_parts`）。
 ///
-/// 每條 TLS 連線一組——這正是它能當身分保證的原因：中間人必須維持兩條獨立的
-/// TLS 連線，兩邊導出的值必然不同，所以口頭核對時對不起來。
+/// **為什麼不直接送 SAS 給觀看端**：觀看端必須用自己那條 TLS 連線導出的
+/// material、加上雙方各自的 nonce，獨立算出自己那一份。如果它顯示的是主控端
+/// 送來的值，中間人只要原封轉發就能讓兩邊看起來一致，整個防冒充保證歸零。
 ///
-/// **為什麼不送給觀看端**：觀看端必須從自己那條 TLS 連線獨立算出自己那一份。
-/// 如果它顯示的是主控端送來的值，中間人只要原封轉發就能讓兩邊看起來一致，
-/// 整個防冒充保證歸零。讓觀看端**拿不到**這個值，比讓它拿得到卻叮嚀不要用
-/// 安全得多。
-///
-/// 欄位是 `pub` 是為了讓 Task 6 的整合測試（住在獨立的 `tests/` crate，只碰
-/// 得到 `pub` API）能注入佔位值。正式路徑只由 Task 8 的 TLS accept 迴圈建構，
-/// 不要在業務邏輯裡自己 `ConnectionSas(...)` 生一個出來。
+/// 欄位是 `pub` 是為了讓整合測試（住在獨立的 `tests/` crate，只碰得到 `pub`
+/// API）能注入佔位值。正式路徑只由 Task 8 的 TLS accept 迴圈建構，不要在
+/// 業務邏輯裡自己 `ConnectionExporter(...)` 生一個出來。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConnectionSas(pub String);
+pub struct ConnectionExporter(pub [u8; SAS_MATERIAL_LEN]);
 
 /// 觀看端 → 主控端。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,18 +92,24 @@ pub enum ClientMessage {
     /// `Ended { VersionMismatch }`，而不是讓後續訊息解析失敗變成無法解釋的
     /// 斷線。
     Join { protocol_version: u32, code: String, display_name: String },
+    /// 觀看端的 nonce，`hex`。收到 `SasCommit` 之後才送。
+    SasNonce { nonce: String },
 }
 
 /// 主控端 → 觀看端。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
-    /// 請求已送達，正在等主控端裁決。
+    /// 主控端對自己 nonce 的承諾，`hex(SHA256(host_nonce))`。
     ///
-    /// **刻意不帶任何 SAS。** 觀看端要顯示的 4 位驗證碼必須由它自己那條 TLS
-    /// 連線導出——見 `ConnectionSas` 的說明。主控端那一份存在 `PendingRequest`
-    /// 裡，走 Tauri 給主控端自己的 UI，不上線路。
-    AwaitingApproval,
+    /// **必須在收到觀看端的 nonce 之前送出**——這正是消掉後手優勢的關鍵。
+    SasCommit { commit: String },
+    /// 請求已送達，正在等主控端裁決，同時揭曉主控端的 nonce。
+    ///
+    /// **這是 nonce（協定公開值），不是 SAS。** 觀看端要先驗
+    /// `SHA256(host_nonce)` 等於先前收到的 `SasCommit`，再自己算 SAS。
+    /// 直接傳 SAS 的話中間人原封轉發就能讓兩邊看起來一致。
+    AwaitingApproval { host_nonce: String },
     /// 已獲准。`cols`/`rows` 是主控端的終端機尺寸——觀看端必須照這個建立
     /// xterm，不能用自己的視窗大小。緊接著會來一個二進位 frame 作為重播。
     Granted { mode: WireAccessMode, cols: u16, rows: u16 },
@@ -132,7 +143,7 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"join\""), "got {json}");
-        assert!(json.contains("\"protocol_version\":1"), "got {json}");
+        assert!(json.contains(&format!("\"protocol_version\":{PROTOCOL_VERSION}")), "got {json}");
         let back: ClientMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(back, msg);
     }
@@ -191,18 +202,37 @@ mod tests {
     }
 
     #[test]
-    fn awaiting_approval_never_carries_a_sas() {
-        // 這則訊息是送給觀看端的，而觀看端絕不該從線上取得任何 SAS——它必須
-        // 從自己那條 TLS 連線獨立導出。若哪天有人「順手」把主控端的 sas 加
-        // 回這則訊息，中間人原封轉發就能讓兩邊看起來一致，防冒充保證歸零。
-        let msg = ServerMessage::AwaitingApproval;
+    fn awaiting_approval_carries_a_nonce_not_a_sas() {
+        // 這則訊息是送給觀看端的，而觀看端絕不該從線上取得計算好的 SAS——它
+        // 必須用這個 nonce（加上自己那條 TLS 連線的 exporter material 與自己
+        // 的 nonce）自己算。若哪天有人「順手」把算好的 SAS 加回這則訊息，
+        // 中間人原封轉發就能讓兩邊看起來一致，防冒充保證歸零。
+        let msg = ServerMessage::AwaitingApproval { host_nonce: "ab".repeat(32) };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"awaiting_approval\""), "got {json}");
         assert!(
-            !json.contains("sas"),
-            "AwaitingApproval must not carry a SAS onto the wire; got {json}"
+            !json.contains("\"sas\""),
+            "AwaitingApproval must not carry a computed SAS onto the wire; got {json}"
         );
         let back: ServerMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, msg);
+    }
+
+    #[test]
+    fn sas_commit_round_trips_through_json() {
+        let msg = ServerMessage::SasCommit { commit: "ff".repeat(32) };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"sas_commit\""), "got {json}");
+        let back: ServerMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, msg);
+    }
+
+    #[test]
+    fn sas_nonce_round_trips_through_json() {
+        let msg = ClientMessage::SasNonce { nonce: "12".repeat(32) };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"sas_nonce\""), "got {json}");
+        let back: ClientMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(back, msg);
     }
 
@@ -227,6 +257,8 @@ mod tests {
             EndReason::KickedByHost,
             EndReason::InvalidCode,
             EndReason::VersionMismatch,
+            EndReason::SasCommitMismatch,
+            EndReason::SasHandshakeFailed,
         ];
         for reason in all {
             round_trip(reason);
@@ -238,7 +270,9 @@ mod tests {
                 | EndReason::SessionClosed
                 | EndReason::KickedByHost
                 | EndReason::InvalidCode
-                | EndReason::VersionMismatch => {}
+                | EndReason::VersionMismatch
+                | EndReason::SasCommitMismatch
+                | EndReason::SasHandshakeFailed => {}
             }
         }
     }

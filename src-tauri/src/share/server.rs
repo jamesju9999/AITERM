@@ -1,8 +1,11 @@
 //! 共享連線的 axum router 與 ws handler。
 //!
 //! 每條 ws 連線對應一位觀看者。連線後的握手順序是固定的：
-//! `Join` → `AwaitingApproval` → （主控端裁決）→ `Granted` ＋ 重播 ＋ 串流，
-//! 或 `Ended`。在 `Granted` 之前，觀看端拿不到任何一個 PTY 位元組。
+//! `Join` → `SasCommit`（主控端先承諾自己的 nonce）→ `SasNonce`（觀看端送出
+//! 自己的 nonce）→ `AwaitingApproval`（主控端揭曉 nonce）→ （主控端裁決）→
+//! `Granted` ＋ 重播 ＋ 串流，或 `Ended`。承諾必須先於揭曉——這是防中間人
+//! 保證的關鍵（見 `share::tls` 的說明）。在 `Granted` 之前，觀看端拿不到任何
+//! 一個 PTY 位元組。
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,9 +20,10 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::pty::manager::PtyManager;
 
 use super::protocol::{
-    ClientMessage, ConnectionSas, EndReason, ServerMessage, WireAccessMode, PROTOCOL_VERSION,
+    ClientMessage, ConnectionExporter, EndReason, ServerMessage, WireAccessMode, PROTOCOL_VERSION,
 };
 use super::registry::ShareRegistry;
+use super::tls;
 
 /// 重播給新連線觀看者的位元組上限。
 ///
@@ -45,15 +49,16 @@ pub fn router(pty: Arc<PtyManager>, registry: Arc<ShareRegistry>) -> Router {
         .with_state(ShareAppState { pty, registry })
 }
 
-/// SAS 由 request extension 帶進來——Task 8 的 TLS accept 迴圈填真值，測試裡
-/// 注入佔位值。**刻意用 `Extension<ConnectionSas>` 而不是 `Option<...>`**：
-/// 沒有 SAS 時應該直接 500 而不是無聲降級成「沒有身分保證的連線」。
+/// TLS exporter material 由 request extension 帶進來——Task 8 的 TLS accept
+/// 迴圈填真值，測試裡注入佔位值。**刻意用 `Extension<ConnectionExporter>`
+/// 而不是 `Option<...>`**：沒有它時應該直接 500 而不是無聲降級成「沒有身分
+/// 保證的連線」。
 async fn share_upgrade(
     ws: WebSocketUpgrade,
-    axum::Extension(sas): axum::Extension<ConnectionSas>,
+    axum::Extension(exporter): axum::Extension<ConnectionExporter>,
     State(state): State<ShareAppState>,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_share(socket, state, sas.0))
+    ws.on_upgrade(move |socket| handle_share(socket, state, exporter.0))
 }
 
 async fn send_control(ws: &mut WebSocket, msg: &ServerMessage) -> bool {
@@ -69,14 +74,18 @@ async fn end_with(ws: &mut WebSocket, reason: EndReason) {
     let _ = ws.send(Message::Close(None)).await;
 }
 
-async fn handle_share(mut ws: WebSocket, state: ShareAppState, sas: String) {
+async fn handle_share(
+    mut ws: WebSocket,
+    state: ShareAppState,
+    exporter: [u8; tls::SAS_MATERIAL_LEN],
+) {
     // 1. 第一則訊息必須是 Join。
     let join = match ws.recv().await {
         Some(Ok(Message::Text(t))) => match serde_json::from_str::<ClientMessage>(&t) {
             Ok(ClientMessage::Join { protocol_version, code, display_name }) => {
                 (protocol_version, code, display_name)
             }
-            Err(_) => return end_with(&mut ws, EndReason::InvalidCode).await,
+            Ok(_) | Err(_) => return end_with(&mut ws, EndReason::InvalidCode).await,
         },
         _ => return end_with(&mut ws, EndReason::InvalidCode).await,
     };
@@ -88,6 +97,40 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState, sas: String) {
     if protocol_version != PROTOCOL_VERSION {
         return end_with(&mut ws, EndReason::VersionMismatch).await;
     }
+
+    // SAS 承諾流程。**這兩步的順序就是整個防中間人保證的全部價值，不可調換。**
+    //
+    // 主控端必須在知道觀看端的 nonce 之前就把自己的承諾送出去。否則中間人
+    // （對觀看端扮演 TLS server，而 TLS 1.3 的 server 是後手）可以在看到觀看端
+    // 的貢獻之後，才在本機反覆試算自己的 nonce，湊出跟另一條連線相同的 4 位數
+    // ——搜尋空間只有 10⁴，約一秒就完成。承諾把它的 nonce 提前鎖死，這條路就
+    // 斷了。結構取自 ZRTP／RFC 6189。
+    //
+    // 換更強的雜湊救不了這件事（輸出空間不變）；順序才是關鍵。
+    let host_nonce = tls::fresh_nonce();
+    if !send_control(
+        &mut ws,
+        &ServerMessage::SasCommit { commit: tls::commit_for(&host_nonce) },
+    )
+    .await
+    {
+        return;
+    }
+
+    let viewer_nonce = match ws.recv().await {
+        Some(Ok(Message::Text(t))) => match serde_json::from_str::<ClientMessage>(&t) {
+            Ok(ClientMessage::SasNonce { nonce }) => match tls::decode_hex(&nonce) {
+                Some(n) => n,
+                None => return end_with(&mut ws, EndReason::SasHandshakeFailed).await,
+            },
+            _ => return end_with(&mut ws, EndReason::SasHandshakeFailed).await,
+        },
+        _ => return end_with(&mut ws, EndReason::SasHandshakeFailed).await,
+    };
+
+    // 這條連線的 SAS。主控端把它存進 PendingRequest 給同意視窗顯示；
+    // 觀看端會用同樣三份材料自己算一份。
+    let sas = tls::sas_from_parts(&host_nonce, &viewer_nonce, exporter.as_slice());
 
     // 2. 短碼換待審請求。短碼無效就到此為止——主控端不會看到任何東西，所以
     //    亂猜短碼連「打擾對方」都做不到。
@@ -102,7 +145,12 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState, sas: String) {
         return end_with(&mut ws, EndReason::InvalidCode).await;
     };
 
-    if !send_control(&mut ws, &ServerMessage::AwaitingApproval).await {
+    if !send_control(
+        &mut ws,
+        &ServerMessage::AwaitingApproval { host_nonce: tls::hex_of(&host_nonce) },
+    )
+    .await
+    {
         state.registry.deny(&request_id);
         return;
     }
