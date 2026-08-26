@@ -34,6 +34,8 @@ anyhow = "1"
 thiserror = "1"
 parking_lot = "0.12"
 tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "process", "io-util", "net", "time"] }
+# 共享短碼的亂數來源。已透過其他相依進入 Cargo.lock，這裡只是提為直接依賴。
+rand = "0.9"
 once_cell = "1"
 base64 = "0.22"
 # 資料庫連線匯出檔的加密（passphrase → Argon2id → AES-256-GCM）
