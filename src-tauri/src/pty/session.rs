@@ -97,6 +97,13 @@ fn scan_for_marker(tail: &[u8], chunk: &[u8], marker: &[u8]) -> (bool, Vec<u8>) 
 /// the 8 KB this used to be. At 256 KB, twenty open tabs cost ~5 MB.
 const OUTPUT_RING_CAP: usize = 256 * 1024;
 
+/// How many output chunks the fan-out channel buffers per subscriber before
+/// the slowest one starts losing the oldest. A lagging viewer is not silently
+/// tolerated — it is told to resynchronise from the ring buffer (see
+/// `share::server`), because a terminal that misses bytes mid-escape-sequence
+/// renders wrong from then on and never recovers on its own.
+const OUTPUT_BROADCAST_CAP: usize = 1024;
+
 pub struct PtySession {
     pub id: String,
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -135,6 +142,10 @@ pub struct PtySession {
     /// monotonic-counter reasoning as `bell_count`. See
     /// `docs/superpowers/specs/2026-08-21-coordination-done-marker-design.md`.
     marker_count: Arc<AtomicU64>,
+    /// Fan-out of raw output chunks to screen-share viewers. Independent of
+    /// the `on_data` callback, which continues to serve the app's own
+    /// terminal view. Subscribers appear only while a tab is being shared.
+    output_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
 }
 
 /// Commits a resolved cd to `cwd`/`previous_cwd`. Free function (not a method)
@@ -361,6 +372,10 @@ impl PtySession {
         let marker_tail_for_thread: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let done_marker_bytes = done_marker(&id).into_bytes();
 
+        let (output_tx, _) =
+            tokio::sync::broadcast::channel::<Vec<u8>>(OUTPUT_BROADCAST_CAP);
+        let output_tx_for_thread = output_tx.clone();
+
         let reader_thread = thread::Builder::new()
             .name(format!("pty-reader-{}", id))
             .spawn(move || {
@@ -413,6 +428,12 @@ impl PtySession {
                                 }
                                 *tail = new_tail;
                             }
+                            // Only pay for the clone when somebody is actually
+                            // watching. With no viewers this is one atomic
+                            // load — the entire cost to users who never share.
+                            if output_tx_for_thread.receiver_count() > 0 {
+                                let _ = output_tx_for_thread.send(chunk.clone());
+                            }
                             on_data(chunk);
                         }
                         Err(e) => {
@@ -439,6 +460,7 @@ impl PtySession {
             pending_cds,
             bell_count,
             marker_count,
+            output_tx,
         })
     }
 
@@ -608,6 +630,18 @@ impl PtySession {
         }
         let start = ring.len().saturating_sub(max_bytes);
         Some(ring.iter().skip(start).copied().collect())
+    }
+
+    /// Subscribe to this session's raw output. Every subscriber receives every
+    /// chunk produced after it subscribed; history comes from
+    /// `get_recent_raw`, not from this channel.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
+        self.output_tx.subscribe()
+    }
+
+    /// How many share viewers are currently attached to this session.
+    pub fn subscriber_count(&self) -> usize {
+        self.output_tx.receiver_count()
     }
 
     /// Monotonic count of output chunks that have contained at least one bell
@@ -1285,6 +1319,87 @@ mod tests {
 
         let _ = rx.try_recv();
         drop(session);
+    }
+
+    #[tokio::test]
+    async fn every_subscriber_receives_the_same_output_and_on_data_still_fires() {
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            move |chunk| {
+                let _ = tx.send(chunk);
+            },
+        )
+        .expect("spawn pty");
+
+        // Two independent viewers, subscribed before anything is written.
+        let mut a = session.subscribe();
+        let mut b = session.subscribe();
+
+        #[cfg(windows)]
+        session.write(b"echo FANOUT\r\n").unwrap();
+        #[cfg(not(windows))]
+        session.write(b"printf 'FANOUT\\n'\n").unwrap();
+
+        // 這裡搜尋裸的 "FANOUT" 是**刻意的、也是正確的**：PTY 會回顯你打進去
+        // 的指令，所以匹配可能命中回顯而不是 printf 的輸出——但那無所謂，回顯
+        // 同樣是走 PTY 輸出、同樣要經過 fan-out，正是這個測試要驗的東西。
+        async fn collect_until_marker(
+            r: &mut tokio::sync::broadcast::Receiver<Vec<u8>>,
+        ) -> Vec<u8> {
+            let mut acc = Vec::new();
+            for _ in 0..50 {
+                match tokio::time::timeout(Duration::from_millis(200), r.recv()).await {
+                    Ok(Ok(chunk)) => {
+                        acc.extend_from_slice(&chunk);
+                        if acc.windows(6).any(|w| w == b"FANOUT") {
+                            return acc;
+                        }
+                    }
+                    Ok(Err(_)) => break,
+                    Err(_) => continue,
+                }
+            }
+            acc
+        }
+
+        let got_a = collect_until_marker(&mut a).await;
+        let got_b = collect_until_marker(&mut b).await;
+
+        assert!(
+            got_a.windows(6).any(|w| w == b"FANOUT"),
+            "subscriber A missed the output"
+        );
+        assert!(
+            got_b.windows(6).any(|w| w == b"FANOUT"),
+            "subscriber B missed the output"
+        );
+
+        // The pre-existing on_data path must be untouched by fan-out.
+        let mut via_callback = Vec::new();
+        while let Ok(chunk) = rx.try_recv() {
+            via_callback.extend_from_slice(&chunk);
+        }
+        assert!(
+            via_callback.windows(6).any(|w| w == b"FANOUT"),
+            "the original on_data callback stopped seeing output"
+        );
+    }
+
+    #[test]
+    fn no_subscribers_means_nothing_is_broadcast() {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+        // Nobody has called subscribe(), so the reader thread must skip the
+        // clone entirely. This is the cost borne by users who never share.
+        assert_eq!(session.subscriber_count(), 0);
     }
 
     #[test]

@@ -111,6 +111,12 @@ impl PtyManager {
         self.sessions.lock().get(id).and_then(|s| s.get_recent_raw(max_bytes))
     }
 
+    /// Subscribe to a session's raw output, or `None` if it doesn't exist.
+    /// See `PtySession::subscribe`.
+    pub fn subscribe(&self, id: &str) -> Option<tokio::sync::broadcast::Receiver<Vec<u8>>> {
+        self.sessions.lock().get(id).map(|s| s.subscribe())
+    }
+
     /// Bell-byte count for the given session, or `None` if the session
     /// doesn't exist. See `PtySession::bell_count` for what this counts.
     pub fn bell_count(&self, id: &str) -> Option<u64> {
