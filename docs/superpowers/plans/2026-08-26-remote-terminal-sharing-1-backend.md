@@ -3231,15 +3231,17 @@ SAS 由雙方各自從自己的 TLS 連線導出，不從線上傳遞。"
 
 計畫①做完時，以下全部成立：
 
-- [ ] `cd src-tauri && cargo test` 全綠
-- [ ] `cd src-tauri && cargo clippy -- -D warnings` **沒有指向 `src/share/` 或 `src/pty/` 的新問題**
+- [x] `cd src-tauri && cargo test` 全綠
+- [x] `cd src-tauri && cargo clippy -- -D warnings` **沒有指向 `src/share/` 或 `src/pty/` 的新問題**
 
   注意：這個 repo 在本計畫開始前，`cargo clippy --lib -- -D warnings` 就已經有約 42 個既有錯誤（散落在 `vcs`、`mcp`、`enterprise`、`pty/cd_parser` 等處）。那些**不是本計畫造成的、也不要順手修**（違反外科手術式改動原則）。判斷方式是 `cargo clippy --lib -- -D warnings 2>&1 | grep "src/share/"` 應該沒有輸出。
 
   同理，`cargo test --lib` 在基準線上就有一個**既有的 flaky 測試**（未修改的 master 跑 4 次會失敗 1 次）。若看到單一測試偶發失敗，先確認它是否在你的改動範圍內，不要假設是自己弄壞的。
-- [ ] `npm run lint` 與 `npx tsc -b` 仍綠（本計畫不動前端，這是防迴歸）
-- [ ] `grep -c 'pty reader error' src/pty/session.rs` 回 `1`（reader thread 沒有再次分裂成兩份）
-- [ ] `lib.rs` 裡沒有任何 `start_if_needed` 呼叫——沒人按分享就沒有監聽
-- [ ] 整合測試涵蓋：短碼無效被拒、唯讀端看得到但打不進去、控制端打得進去、停止分享送出正確的結束原因、TLS 兩端算出相同 SAS
+- [x] 前端零改動：`git diff master..HEAD -- src/` 沒有輸出，且 `npx tsc -b` 通過
+
+  注意：`npm run lint` 在 **master 上本來就不綠**（199 個問題／176 errors），這條標準原本寫成「仍綠」是我沒實測就下的判斷。正確的防迴歸判斷是「這個計畫有沒有動到前端」——沒動就不可能造成前端迴歸，用 `git diff` 直接證明比跑一個本來就紅的 lint 有意義。
+- [x] `grep -c 'pty reader error' src/pty/session.rs` 回 `1`（reader thread 沒有再次分裂成兩份）
+- [x] `lib.rs` 裡沒有任何 `start_if_needed` 呼叫——沒人按分享就沒有監聽
+- [x] 整合測試涵蓋：短碼無效被拒、唯讀端看得到但打不進去、控制端打得進去、停止分享送出正確的結束原因、TLS 兩端算出相同 SAS
 
 **尚未具備**（依序由後續計畫補上）：任何 UI（計畫②）、區網自動發現（計畫③）。計畫①結束時這套東西只能由測試驅動，使用者按不到。
