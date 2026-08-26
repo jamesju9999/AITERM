@@ -25,6 +25,13 @@ pub struct PendingRequest {
     /// 請求方自報的名字。**未經驗證**，僅供主控端辨識用；真正的身分保證來自
     /// SAS 人工核對（見 `share::tls`）。
     pub display_name: String,
+    /// 主控端從**這一條**連線導出的 4 位驗證碼，給同意視窗顯示，讓使用者能
+    /// 口頭跟對方核對。
+    ///
+    /// 住在這裡而不是線上訊息裡，是刻意的：觀看端必須從自己那條 TLS 連線獨立
+    /// 算出自己那一份。如果它顯示的是主控端送過去的值，中間人只要原封轉發就
+    /// 能讓兩邊看起來一致，防冒充保證歸零。見 `protocol::ConnectionSas`。
+    pub sas: String,
 }
 
 /// 一位已獲准的觀看者。
@@ -104,12 +111,15 @@ impl ShareRegistry {
 
     /// 用短碼發起一筆待審請求。回傳 `request_id`，或在短碼無效時回 `None`。
     /// **這一步不會讓對方看到任何東西**——要等主控端 `approve`。
-    pub fn request_join(&self, code: &str, display_name: String) -> Option<String> {
+    ///
+    /// `sas` 是這條連線導出的驗證碼，存起來給主控端的同意視窗顯示；它不會被
+    /// 送回給觀看端（見 `PendingRequest::sas`）。
+    pub fn request_join(&self, code: &str, display_name: String, sas: String) -> Option<String> {
         let tab_id = self.tab_for_code(code)?;
         let request_id = Uuid::new_v4().to_string();
         self.pending.lock().insert(
             request_id.clone(),
-            PendingRequest { request_id: request_id.clone(), tab_id, display_name },
+            PendingRequest { request_id: request_id.clone(), tab_id, display_name, sas },
         );
         Some(request_id)
     }
@@ -279,7 +289,7 @@ mod tests {
     #[test]
     fn a_pending_request_is_not_yet_a_viewer() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).expect("code is live");
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).expect("code is live");
         assert_eq!(reg.viewers("tab-1").len(), 0);
         assert_eq!(reg.pending("tab-1").len(), 1);
         assert_eq!(reg.pending("tab-1")[0].request_id, req);
@@ -289,13 +299,13 @@ mod tests {
     fn joining_with_a_dead_code_is_refused() {
         let (reg, code) = registry_with_one_share();
         reg.stop_share("tab-1");
-        assert!(reg.request_join(&code, "Alice".to_string()).is_none());
+        assert!(reg.request_join(&code, "Alice".to_string(), "0000".to_string()).is_none());
     }
 
     #[test]
     fn approving_read_only_adds_a_viewer_without_control() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let viewer = reg.approve(&req, AccessMode::ReadOnly).expect("approve");
         assert_eq!(reg.viewers("tab-1").len(), 1);
         assert_eq!(reg.pending("tab-1").len(), 0);
@@ -305,7 +315,7 @@ mod tests {
     #[test]
     fn approving_with_control_lets_that_viewer_send_input() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let viewer = reg.approve(&req, AccessMode::Control).expect("approve");
         assert!(reg.may_send_input("tab-1", &viewer));
     }
@@ -313,7 +323,7 @@ mod tests {
     #[test]
     fn denying_a_request_leaves_no_viewer_and_no_pending() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         reg.deny(&req);
         assert_eq!(reg.viewers("tab-1").len(), 0);
         assert_eq!(reg.pending("tab-1").len(), 0);
@@ -322,9 +332,9 @@ mod tests {
     #[test]
     fn control_is_a_single_microphone() {
         let (reg, code) = registry_with_one_share();
-        let r1 = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let r1 = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let alice = reg.approve(&r1, AccessMode::Control).unwrap();
-        let r2 = reg.request_join(&code, "Bob".to_string()).unwrap();
+        let r2 = reg.request_join(&code, "Bob".to_string(), "0000".to_string()).unwrap();
 
         // Bob cannot be approved with control while Alice holds it.
         assert_eq!(reg.approve(&r2, AccessMode::Control), None);
@@ -338,9 +348,9 @@ mod tests {
     #[test]
     fn control_must_be_revoked_before_it_can_be_granted_to_someone_else() {
         let (reg, code) = registry_with_one_share();
-        let r1 = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let r1 = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let alice = reg.approve(&r1, AccessMode::Control).unwrap();
-        let r2 = reg.request_join(&code, "Bob".to_string()).unwrap();
+        let r2 = reg.request_join(&code, "Bob".to_string(), "0000".to_string()).unwrap();
         let bob = reg.approve(&r2, AccessMode::ReadOnly).unwrap();
 
         assert!(!reg.grant_control("tab-1", &bob), "must refuse while Alice holds it");
@@ -353,13 +363,13 @@ mod tests {
     #[test]
     fn removing_the_controller_releases_control() {
         let (reg, code) = registry_with_one_share();
-        let r1 = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let r1 = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let alice = reg.approve(&r1, AccessMode::Control).unwrap();
         reg.remove_viewer("tab-1", &alice);
         assert_eq!(reg.viewers("tab-1").len(), 0);
 
         // Control is now free for the next viewer.
-        let r2 = reg.request_join(&code, "Bob".to_string()).unwrap();
+        let r2 = reg.request_join(&code, "Bob".to_string(), "0000".to_string()).unwrap();
         let bob = reg.approve(&r2, AccessMode::Control).expect("control should be free");
         assert!(reg.may_send_input("tab-1", &bob));
     }
@@ -367,7 +377,7 @@ mod tests {
     #[test]
     fn stopping_a_share_drops_every_viewer() {
         let (reg, code) = registry_with_one_share();
-        let r1 = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let r1 = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let alice = reg.approve(&r1, AccessMode::Control).unwrap();
         reg.stop_share("tab-1");
         assert_eq!(reg.viewers("tab-1").len(), 0);
@@ -385,7 +395,7 @@ mod tests {
         // ws handler 手上只有 request_id；approve 的回傳值是給主控端 UI 的。
         // 沒有這條對應，連線就不知道自己變成了哪一位觀看者。
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let viewer = reg.approve(&req, AccessMode::ReadOnly).unwrap();
         assert_eq!(reg.viewer_for_request("tab-1", &req), Some(viewer));
     }
@@ -393,7 +403,7 @@ mod tests {
     #[test]
     fn a_denied_request_maps_to_no_viewer() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         reg.deny(&req);
         assert_eq!(reg.viewer_for_request("tab-1", &req), None);
     }
@@ -411,7 +421,7 @@ mod tests {
     #[test]
     fn stopping_a_share_clears_its_pending_requests() {
         let (reg, code) = registry_with_one_share();
-        let _req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let _req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         assert_eq!(reg.pending("tab-1").len(), 1);
         reg.stop_share("tab-1");
         assert_eq!(reg.pending("tab-1").len(), 0);
@@ -423,7 +433,7 @@ mod tests {
         // 不是邊角案例。若 stop_share 沒清掉 pending，舊會話的待審請求會被
         // 核准進新會話，繞過「短碼失效即安全」這個假設。
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Eve".to_string()).unwrap();
+        let req = reg.request_join(&code, "Eve".to_string(), "0000".to_string()).unwrap();
         reg.stop_share("tab-1");
         let _new_code = reg.start_share("tab-1".to_string());
 
@@ -442,7 +452,7 @@ mod tests {
     #[test]
     fn sharing_an_already_shared_tab_keeps_the_same_code_and_its_viewers() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let alice = reg.approve(&req, AccessMode::Control).unwrap();
 
         let again = reg.start_share("tab-1".to_string());
