@@ -219,9 +219,14 @@ const OUTPUT_RING_CAP: usize = 256 * 1024;
 
 ```rust
     /// Return the last `max_bytes` bytes of terminal output exactly as the PTY
-    /// produced them — ANSI escapes intact. Screen sharing replays this to
-    /// prime a newly connected viewer; `get_recent_output`'s stripping would
-    /// hand them a colourless, cursor-less approximation instead.
+    /// produced them — ANSI escapes intact, unlike `get_recent_output`, whose
+    /// stripping would hand a viewer a colourless, cursor-less approximation.
+    ///
+    /// **Do not pair this with `subscribe()` to give a screen-share viewer
+    /// history plus live output.** The two take different locks, so whichever
+    /// order you call them in leaves a window — see `subscribe_with_history`
+    /// (Task 3b), which is the correct API for that combination. This method
+    /// on its own is fine for a pure snapshot with no live stream attached.
     ///
     /// Unlike `get_recent_output` this does not treat whitespace-only content
     /// as "nothing" — a screen that genuinely holds only blank lines is still
@@ -458,8 +463,13 @@ const OUTPUT_BROADCAST_CAP: usize = 256;
 
 ```rust
     /// Subscribe to this session's raw output. Every subscriber receives every
-    /// chunk produced after it subscribed; history comes from
-    /// `get_recent_raw`, not from this channel.
+    /// chunk produced after it subscribed.
+    ///
+    /// **This gives you no history, and pairing it with `get_recent_raw()` to
+    /// obtain some is racy** — the two take different locks, so bytes landing
+    /// in between are either duplicated or lost depending on the order. Use
+    /// `subscribe_with_history` (Task 3b) when you need both. This method on
+    /// its own is fine when you only want output from now on.
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
         self.output_tx.subscribe()
     }
@@ -520,7 +530,20 @@ git commit -m "feat(pty): fan out raw output to screen-share subscribers
 
 ```rust
     #[tokio::test]
-    async fn subscribe_with_history_loses_no_bytes_and_duplicates_none() {
+    async fn subscribe_with_history_snapshot_excludes_bytes_the_stream_then_delivers() {
+        // 這個測試驗的是**時序正確性**，不是併發競態：訂閱前產生的內容要在
+        // 快照裡，訂閱後產生的內容要只從串流來。
+        //
+        // 它**抓不到**「有人把 broadcast 移回 ring 鎖外面」這個退化——已實測
+        // 確認（把 send 搬出鎖後這個測試跑 30 次全過）。因為測試在寫入與訂閱
+        // 之間輪詢等待，兩者從不重疊，而競態只存在於重疊的窗口裡。
+        //
+        // 真正的原子性保證來自不變量論證，不是來自這個測試：reader thread 把
+        // 「寫 ring」與「決定要不要 send」放在同一個臨界區，所以外界不可能觀察
+        // 到兩者之間的中間態。見 `subscribe_with_history` 的 doc comment。
+        //
+        // 不要為此加壓力測試或其他機率性測試——誠實標註邊界就夠了，加一個抓
+        // 不穩的測試只會製造雜訊。
         let session = PtySession::spawn(
             test_shell(),
             PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
@@ -588,7 +611,7 @@ git commit -m "feat(pty): fan out raw output to screen-share subscribers
 
 - [ ] **Step 2: 跑測試確認會紅**
 
-Run: `cd src-tauri && cargo test --lib pty::session::tests::subscribe_with_history_loses_no_bytes_and_duplicates_none`
+Run: `cd src-tauri && cargo test --lib pty::session::tests::subscribe_with_history_snapshot_excludes_bytes_the_stream_then_delivers`
 Expected: **編譯失敗**——`no method named subscribe_with_history`。
 
 - [ ] **Step 3: 把 broadcast 送出移進 ring 鎖範圍內**
@@ -685,7 +708,7 @@ Expected: PASS，比 Task 3 結束時多一個測試（118）。
 ```bash
 cd src-tauri
 for i in $(seq 1 10); do
-  cargo test --lib pty::session::tests::subscribe_with_history_loses_no_bytes_and_duplicates_none -- --exact 2>&1 | grep -E "^test result" || echo "RUN $i FAILED"
+  cargo test --lib pty::session::tests::subscribe_with_history_snapshot_excludes_bytes_the_stream_then_delivers -- --exact 2>&1 | grep -E "^test result" || echo "RUN $i FAILED"
 done
 ```
 
