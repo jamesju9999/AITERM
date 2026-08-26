@@ -327,6 +327,7 @@ impl PtySession {
             .slave
             .spawn_command(cmd)
             .map_err(|e| PtyError::SpawnFailed(e.to_string()))?;
+        // Drop slave so that the child sees EOF on exit (avoid leaks on Windows).
         drop(pair.slave);
 
         let writer = pair
@@ -359,7 +360,7 @@ impl PtySession {
                 let mut buf = [0u8; 4096];
                 loop {
                     match reader.read(&mut buf) {
-                        Ok(0) => break,
+                        Ok(0) => break, // EOF: shell exited
                         Ok(n) => {
                             let chunk = buf[..n].to_vec();
                             {
