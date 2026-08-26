@@ -2960,41 +2960,31 @@ async fn both_ends_of_a_real_tls_connection_derive_the_same_sas() {
     let server_name = rustls::pki_types::ServerName::try_from("aiterm-share").unwrap();
     let tls = connector.connect(server_name, tcp).await.expect("tls handshake");
 
-    // 握手完成後、把 stream 交給 tungstenite 之前，先算自己這端的 SAS。
-    let client_sas = {
+    // 握手完成後、把 stream 交給 tungstenite 之前，先取自己這端的 exporter
+    // material。SAS 要等承諾流程走完（拿到兩個 nonce）才算得出來。
+    let client_exporter = {
         let (_io, conn) = tls.get_ref();
-        aiterm_lib::share::tls::sas_for_connection(|buf, label, ctx| {
-            conn.export_keying_material(buf, label, ctx)
-        })
-        .expect("client SAS")
+        aiterm_lib::share::tls::exporter_material(conn).expect("client exporter material")
     };
 
     let (mut ws, _) = tokio_tungstenite::client_async("ws://aiterm-share/share", tls)
         .await
         .expect("ws handshake");
 
-    ws.send(Message::Text(
-        serde_json::to_string(&ClientMessage::Join {
-            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
-            code: code.clone(),
-            display_name: "Alice".to_string(),
-        })
-        .unwrap()
-        .into(),
-    ))
-    .await
-    .unwrap();
+    // 走完 SAS 承諾流程（Join → SasCommit → SasNonce → AwaitingApproval）。
+    // 這個 helper 已經在 Task 7b 的整合測試裡了，直接重用。
+    let (host_nonce, viewer_nonce) =
+        join_and_do_sas_handshake(&mut ws, &code, "Alice").await;
 
-    // 觀看端只該收到「等待同意」，**不帶任何 SAS**——它必須用自己算的那份。
-    assert_eq!(
-        next_control(&mut ws).await,
-        ServerMessage::AwaitingApproval,
-        "AwaitingApproval must not carry a SAS: a man-in-the-middle could just \
-         relay the host's value and make both screens agree"
+    // 觀看端用自己的 exporter material ＋ 兩個 nonce 自己算一份，**不從線路
+    // 上接收任何 SAS**。主控端那一份存在 PendingRequest 裡給同意視窗顯示。
+    // 兩端算出來必須一致——這就是人工核對能抓到中間人的原因。
+    let client_sas = aiterm_lib::share::tls::sas_from_parts(
+        &host_nonce,
+        &viewer_nonce,
+        &client_exporter,
     );
 
-    // 主控端那一份存在 PendingRequest 裡（給它自己的同意視窗顯示），不上線路。
-    // 兩端各自導出的值必須一致——這就是人工核對能抓到中間人的原因。
     let pending = state.registry.pending(&tab_id);
     assert_eq!(pending.len(), 1, "expected exactly one pending request");
     assert_eq!(
@@ -3010,7 +3000,7 @@ async fn both_ends_of_a_real_tls_connection_derive_the_same_sas() {
 - [ ] **Step 2: 跑測試確認會紅**
 
 Run: `cd src-tauri && cargo test --test share_end_to_end both_ends_of_a_real_tls_connection_derive_the_same_sas`
-Expected: **編譯失敗**——`ShareServerState` 尚未定義。（`AwaitingApproval`、`ConnectionSas`、`PendingRequest::sas` 的形狀在 Task 4/5 就已經定好，這裡缺的只是 server 的啟停型別與 TLS 接線。）
+Expected: **編譯失敗**——`ShareServerState` 尚未定義。（`ConnectionExporter`、`PendingRequest::sas`、承諾流程的形狀在 Task 4–7b 就已經定好，這裡缺的只是 server 的啟停型別與 TLS 接線。）
 
 - [ ] **Step 3: 實作 TLS 接受迴圈與客戶端**
 
@@ -3126,7 +3116,8 @@ use hyper_util::server::conn::auto::Builder as HyperBuilder;
 use tokio_rustls::TlsAcceptor;
 use tower_service::Service;
 
-/// TLS accept 迴圈。每條連線握手完成後先導出 SAS，塞進 request extension，
+/// TLS accept 迴圈。每條連線握手完成後先導出金鑰 material，塞進 request
+/// extension（SAS 由 Task 7b 的承諾流程用它算出），
 /// 再交給 axum router。
 ///
 /// 用 `serve_connection_with_upgrades`（不是 `serve_connection`）——WebSocket
@@ -3170,17 +3161,24 @@ async fn serve_tls(
             };
 
             // 握手已完成，可以導出金鑰 material 了。握手前呼叫會失敗。
-            let sas = {
+            //
+            // 導不出來就**放掉這條連線**，不要用零值或預設值頂替：那等於讓
+            // 一條沒有身分保證的連線混進來，而使用者畫面上照樣會顯示一組看
+            // 起來正常的 4 位數。
+            let exporter = {
                 let (_io, conn) = tls_stream.get_ref();
-                tls::sas_for_connection(|buf, label, ctx| {
-                    conn.export_keying_material(buf, label, ctx)
-                })
-                .unwrap_or_default()
+                match tls::exporter_material(conn) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        log::warn!("共享連線導出金鑰 material 失敗，放棄這條連線：{e}");
+                        return;
+                    }
+                }
             };
 
             let io = TokioIo::new(tls_stream);
             let svc = hyper::service::service_fn(move |mut req: hyper::Request<Incoming>| {
-                req.extensions_mut().insert(ConnectionSas(sas.clone()));
+                req.extensions_mut().insert(ConnectionExporter(exporter));
                 let mut app = app.clone();
                 async move { app.call(req).await }
             });
@@ -3193,7 +3191,11 @@ async fn serve_tls(
 }
 ```
 
-`server.rs` 這邊**不需要任何改動**：`share_upgrade` 的 `Extension<ConnectionSas>` extractor、`handle_share` 的 `sas` 參數、以及把它交給 `request_join` 存進 `PendingRequest` 的那條路徑，在 Task 6 就已經定好了。這一步只是把真實的 TLS 導出值接上去，取代 Task 6 測試裡注入的佔位值——**型別不變、測試不用回頭改**。
+`server.rs` 這邊**不需要任何改動**：`share_upgrade` 的
+`Extension<ConnectionExporter>` extractor、`handle_share` 的 `exporter` 參數、
+以及 Task 7b 的承諾流程（用它算出 SAS 存進 `PendingRequest`），都已經定好了。
+這一步只是把真實的 TLS 導出值接上去，取代測試裡注入的全零佔位值——**型別
+不變、既有測試不用回頭改**。
 
 注意 SAS **從頭到尾不會出現在線上格式裡**：主控端那一份走 `PendingRequest` 給它自己的 UI，觀看端那一份由它自己那條 `ClientConnection` 算出。若哪天有人為了「方便」把它加進某則訊息，中間人只要原封轉發就能讓兩邊看起來一致，防冒充保證歸零——`awaiting_approval_never_carries_a_sas` 那個測試就是在守這件事。
 
