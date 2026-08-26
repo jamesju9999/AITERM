@@ -824,7 +824,7 @@ mod tests {
     #[test]
     fn a_pending_request_is_not_yet_a_viewer() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).expect("code is live");
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).expect("code is live");
         assert_eq!(reg.viewers("tab-1").len(), 0);
         assert_eq!(reg.pending("tab-1").len(), 1);
         assert_eq!(reg.pending("tab-1")[0].request_id, req);
@@ -834,13 +834,13 @@ mod tests {
     fn joining_with_a_dead_code_is_refused() {
         let (reg, code) = registry_with_one_share();
         reg.stop_share("tab-1");
-        assert!(reg.request_join(&code, "Alice".to_string()).is_none());
+        assert!(reg.request_join(&code, "Alice".to_string(), "0000".to_string()).is_none());
     }
 
     #[test]
     fn approving_read_only_adds_a_viewer_without_control() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let viewer = reg.approve(&req, AccessMode::ReadOnly).expect("approve");
         assert_eq!(reg.viewers("tab-1").len(), 1);
         assert_eq!(reg.pending("tab-1").len(), 0);
@@ -850,7 +850,7 @@ mod tests {
     #[test]
     fn approving_with_control_lets_that_viewer_send_input() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let viewer = reg.approve(&req, AccessMode::Control).expect("approve");
         assert!(reg.may_send_input("tab-1", &viewer));
     }
@@ -858,7 +858,7 @@ mod tests {
     #[test]
     fn denying_a_request_leaves_no_viewer_and_no_pending() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         reg.deny(&req);
         assert_eq!(reg.viewers("tab-1").len(), 0);
         assert_eq!(reg.pending("tab-1").len(), 0);
@@ -867,9 +867,9 @@ mod tests {
     #[test]
     fn control_is_a_single_microphone() {
         let (reg, code) = registry_with_one_share();
-        let r1 = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let r1 = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let alice = reg.approve(&r1, AccessMode::Control).unwrap();
-        let r2 = reg.request_join(&code, "Bob".to_string()).unwrap();
+        let r2 = reg.request_join(&code, "Bob".to_string(), "0000".to_string()).unwrap();
 
         // Bob cannot be approved with control while Alice holds it.
         assert_eq!(reg.approve(&r2, AccessMode::Control), None);
@@ -883,9 +883,9 @@ mod tests {
     #[test]
     fn control_must_be_revoked_before_it_can_be_granted_to_someone_else() {
         let (reg, code) = registry_with_one_share();
-        let r1 = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let r1 = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let alice = reg.approve(&r1, AccessMode::Control).unwrap();
-        let r2 = reg.request_join(&code, "Bob".to_string()).unwrap();
+        let r2 = reg.request_join(&code, "Bob".to_string(), "0000".to_string()).unwrap();
         let bob = reg.approve(&r2, AccessMode::ReadOnly).unwrap();
 
         assert!(!reg.grant_control("tab-1", &bob), "must refuse while Alice holds it");
@@ -898,13 +898,13 @@ mod tests {
     #[test]
     fn removing_the_controller_releases_control() {
         let (reg, code) = registry_with_one_share();
-        let r1 = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let r1 = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let alice = reg.approve(&r1, AccessMode::Control).unwrap();
         reg.remove_viewer("tab-1", &alice);
         assert_eq!(reg.viewers("tab-1").len(), 0);
 
         // Control is now free for the next viewer.
-        let r2 = reg.request_join(&code, "Bob".to_string()).unwrap();
+        let r2 = reg.request_join(&code, "Bob".to_string(), "0000".to_string()).unwrap();
         let bob = reg.approve(&r2, AccessMode::Control).expect("control should be free");
         assert!(reg.may_send_input("tab-1", &bob));
     }
@@ -912,7 +912,7 @@ mod tests {
     #[test]
     fn stopping_a_share_drops_every_viewer() {
         let (reg, code) = registry_with_one_share();
-        let r1 = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let r1 = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let alice = reg.approve(&r1, AccessMode::Control).unwrap();
         reg.stop_share("tab-1");
         assert_eq!(reg.viewers("tab-1").len(), 0);
@@ -930,7 +930,7 @@ mod tests {
         // ws handler 手上只有 request_id；approve 的回傳值是給主控端 UI 的。
         // 沒有這條對應，連線就不知道自己變成了哪一位觀看者。
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let viewer = reg.approve(&req, AccessMode::ReadOnly).unwrap();
         assert_eq!(reg.viewer_for_request("tab-1", &req), Some(viewer));
     }
@@ -938,7 +938,7 @@ mod tests {
     #[test]
     fn a_denied_request_maps_to_no_viewer() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         reg.deny(&req);
         assert_eq!(reg.viewer_for_request("tab-1", &req), None);
     }
@@ -956,7 +956,7 @@ mod tests {
     #[test]
     fn stopping_a_share_clears_its_pending_requests() {
         let (reg, code) = registry_with_one_share();
-        let _req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let _req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         assert_eq!(reg.pending("tab-1").len(), 1);
         reg.stop_share("tab-1");
         assert_eq!(reg.pending("tab-1").len(), 0);
@@ -968,7 +968,7 @@ mod tests {
         // 不是邊角案例。若 stop_share 沒清掉 pending，舊會話的待審請求會被
         // 核准進新會話，繞過「短碼失效即安全」這個假設。
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Eve".to_string()).unwrap();
+        let req = reg.request_join(&code, "Eve".to_string(), "0000".to_string()).unwrap();
         reg.stop_share("tab-1");
         let _new_code = reg.start_share("tab-1".to_string());
 
@@ -987,7 +987,7 @@ mod tests {
     #[test]
     fn sharing_an_already_shared_tab_keeps_the_same_code_and_its_viewers() {
         let (reg, code) = registry_with_one_share();
-        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let req = reg.request_join(&code, "Alice".to_string(), "0000".to_string()).unwrap();
         let alice = reg.approve(&req, AccessMode::Control).unwrap();
 
         let again = reg.start_share("tab-1".to_string());
@@ -1042,6 +1042,13 @@ pub struct PendingRequest {
     /// 請求方自報的名字。**未經驗證**，僅供主控端辨識用；真正的身分保證來自
     /// SAS 人工核對（見 `share::tls`）。
     pub display_name: String,
+    /// 主控端從**這一條**連線導出的 4 位驗證碼，給同意視窗顯示，讓使用者能
+    /// 口頭跟對方核對。
+    ///
+    /// 住在這裡而不是線上訊息裡，是刻意的：觀看端必須從自己那條 TLS 連線獨立
+    /// 算出自己那一份。如果它顯示的是主控端送過去的值，中間人只要原封轉發就
+    /// 能讓兩邊看起來一致，防冒充保證歸零。見 `protocol::ConnectionSas`。
+    pub sas: String,
 }
 
 /// 一位已獲准的觀看者。
@@ -1121,12 +1128,15 @@ impl ShareRegistry {
 
     /// 用短碼發起一筆待審請求。回傳 `request_id`，或在短碼無效時回 `None`。
     /// **這一步不會讓對方看到任何東西**——要等主控端 `approve`。
-    pub fn request_join(&self, code: &str, display_name: String) -> Option<String> {
+    ///
+    /// `sas` 是這條連線導出的驗證碼，存起來給主控端的同意視窗顯示；它不會被
+    /// 送回給觀看端（見 `PendingRequest::sas`）。
+    pub fn request_join(&self, code: &str, display_name: String, sas: String) -> Option<String> {
         let tab_id = self.tab_for_code(code)?;
         let request_id = Uuid::new_v4().to_string();
         self.pending.lock().insert(
             request_id.clone(),
-            PendingRequest { request_id: request_id.clone(), tab_id, display_name },
+            PendingRequest { request_id: request_id.clone(), tab_id, display_name, sas },
         );
         Some(request_id)
     }
@@ -1295,11 +1305,13 @@ mod tests {
     #[test]
     fn join_round_trips_through_json() {
         let msg = ClientMessage::Join {
+            protocol_version: PROTOCOL_VERSION,
             code: "384719".to_string(),
             display_name: "Alice".to_string(),
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"join\""), "got {json}");
+        assert!(json.contains("\"protocol_version\":1"), "got {json}");
         let back: ClientMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(back, msg);
     }
@@ -1328,29 +1340,85 @@ mod tests {
     }
 
     #[test]
-    fn awaiting_approval_carries_the_hosts_sas() {
-        let msg = ServerMessage::AwaitingApproval { sas: "4917".to_string() };
+    fn awaiting_approval_never_carries_a_sas() {
+        // 這則訊息是送給觀看端的，而觀看端絕不該從線上取得任何 SAS——它必須
+        // 從自己那條 TLS 連線獨立導出。若哪天有人「順手」把主控端的 sas 加
+        // 回這則訊息，中間人原封轉發就能讓兩邊看起來一致，防冒充保證歸零。
+        let msg = ServerMessage::AwaitingApproval;
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"awaiting_approval\""), "got {json}");
-        assert!(json.contains("\"sas\":\"4917\""), "got {json}");
+        assert!(
+            !json.contains("sas"),
+            "AwaitingApproval must not carry a SAS onto the wire; got {json}"
+        );
         let back: ServerMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(back, msg);
     }
 
     #[test]
+    fn an_unknown_server_message_fails_to_parse_rather_than_being_ignored() {
+        // 這不是我們想要的行為，是我們必須知道的行為：serde 對未知 tag 回
+        // `Err`，所以新版主控端送出舊版認不得的變體時，舊版觀看端會硬性解析
+        // 失敗。這正是 `PROTOCOL_VERSION` 與 `EndReason::VersionMismatch`
+        // 存在的理由——在握手第一步就擋掉，而不是讓它變成無法解釋的斷線。
+        let unknown = r#"{"type":"some_future_variant","payload":1}"#;
+        let parsed: Result<ServerMessage, _> = serde_json::from_str(unknown);
+        assert!(
+            parsed.is_err(),
+            "serde silently accepted an unknown variant; the version-guard \
+             reasoning in PROTOCOL_VERSION's doc comment is built on it erroring"
+        );
+    }
+
+    #[test]
+    fn wire_access_mode_does_not_invert_the_internal_one() {
+        // 對調這兩個分支不會被任何序列化測試抓到，但會讓 `Granted.mode` 回報
+        // 相反的存取層級：真正拿到控制權的人前端顯示唯讀而打不了字，唯讀的人
+        // 以為自己能控制、白打一堆字進黑洞。
+        assert_eq!(
+            WireAccessMode::from(AccessMode::ReadOnly),
+            WireAccessMode::ReadOnly
+        );
+        assert_eq!(
+            WireAccessMode::from(AccessMode::Control),
+            WireAccessMode::Control
+        );
+    }
+
+    #[test]
     fn every_end_reason_survives_a_round_trip() {
         // 前端要靠 reason 決定顯示哪一句話，漏掉任何一個都會變成「未知錯誤」。
-        for reason in [
+        //
+        // 用沒有 `_` 萬用分支的 match 而不是手寫陣列：陣列漏掉新變體時測試
+        // 照樣綠燈（實測確認過），而這個 match 會讓**編譯失敗**，強迫新增
+        // 變體的人回來這裡加一行。名字承諾了「every」，就要有東西撐住它。
+        fn round_trip(reason: EndReason) {
+            let msg = ServerMessage::Ended { reason };
+            let json = serde_json::to_string(&msg).unwrap();
+            let back: ServerMessage = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, msg, "round trip failed for {reason:?}");
+        }
+
+        let all = [
             EndReason::Denied,
             EndReason::HostStoppedSharing,
             EndReason::SessionClosed,
             EndReason::KickedByHost,
             EndReason::InvalidCode,
-        ] {
-            let msg = ServerMessage::Ended { reason };
-            let json = serde_json::to_string(&msg).unwrap();
-            let back: ServerMessage = serde_json::from_str(&json).unwrap();
-            assert_eq!(back, msg, "round trip failed for {reason:?}");
+            EndReason::VersionMismatch,
+        ];
+        for reason in all {
+            round_trip(reason);
+            // 這個 match 沒有 `_` 分支，所以新增 EndReason 變體時這裡會編譯
+            // 失敗——那是提醒你把它加進上面的 `all` 陣列。
+            match reason {
+                EndReason::Denied
+                | EndReason::HostStoppedSharing
+                | EndReason::SessionClosed
+                | EndReason::KickedByHost
+                | EndReason::InvalidCode
+                | EndReason::VersionMismatch => {}
+            }
         }
     }
 }
@@ -1411,13 +1479,36 @@ pub enum EndReason {
     KickedByHost,
     /// 短碼不存在或已作廢。
     InvalidCode,
+    /// 兩端的協定版本不相容。
+    ///
+    /// 同區網分享的真實情境就是「同事的 AITerm 跟你的版本不同」——其中一台
+    /// 還沒更新是常態，不是邊角案例。沒有這個變體的話，新版主控端送出舊版
+    /// 認不得的訊息時，舊版只會在 `serde_json::from_str` 硬性失敗（實測確認
+    /// serde 對未知 tag 回 `Err` 而非忽略），使用者看到的是無法解釋的斷線。
+    VersionMismatch,
 }
 
-/// 一條連線導出的 4 位 SAS，透過 axum 的 request extension 交給 ws handler。
+/// 這份線上格式的版本。**新增或修改任何訊息的形狀時都要往上加。**
+///
+/// 之所以現在就加而不是等需要時再說：事後補版本欄位本身就是一次破壞相容性
+/// 的線上格式變更，而且補的時候舊版早就裝在別人機器上了。現在的成本是一個
+/// 欄位，之後的成本是沒有乾淨的升級路徑。
+pub const PROTOCOL_VERSION: u32 = 1;
+
+/// 一條連線導出的 4 位 SAS。**永遠不會出現在線上格式裡**，只透過 axum 的
+/// request extension 交給 ws handler，再存進 `PendingRequest` 給主控端 UI。
 ///
 /// 每條 TLS 連線一組——這正是它能當身分保證的原因：中間人必須維持兩條獨立的
-/// TLS 連線，兩邊導出的值必然不同。Task 8 的 TLS accept 迴圈負責填入真值；
-/// Task 6 的明文 server 只在測試裡注入佔位值。
+/// TLS 連線，兩邊導出的值必然不同，所以口頭核對時對不起來。
+///
+/// **為什麼不送給觀看端**：觀看端必須從自己那條 TLS 連線獨立算出自己那一份。
+/// 如果它顯示的是主控端送來的值，中間人只要原封轉發就能讓兩邊看起來一致，
+/// 整個防冒充保證歸零。讓觀看端**拿不到**這個值，比讓它拿得到卻叮嚀不要用
+/// 安全得多。
+///
+/// 欄位是 `pub` 是為了讓 Task 6 的整合測試（住在獨立的 `tests/` crate，只碰
+/// 得到 `pub` API）能注入佔位值。正式路徑只由 Task 8 的 TLS accept 迴圈建構，
+/// 不要在業務邏輯裡自己 `ConnectionSas(...)` 生一個出來。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConnectionSas(pub String);
 
@@ -1427,7 +1518,11 @@ pub struct ConnectionSas(pub String);
 pub enum ClientMessage {
     /// 連上 ws 後的第一則訊息。在收到 `Granted` 之前，觀看端不會收到任何
     /// PTY 位元組。
-    Join { code: String, display_name: String },
+    ///
+    /// `protocol_version` 讓主控端能在握手第一步就發現版本落差，送出乾淨的
+    /// `Ended { VersionMismatch }`，而不是讓後續訊息解析失敗變成無法解釋的
+    /// 斷線。
+    Join { protocol_version: u32, code: String, display_name: String },
 }
 
 /// 主控端 → 觀看端。
@@ -1436,21 +1531,21 @@ pub enum ClientMessage {
 pub enum ServerMessage {
     /// 請求已送達，正在等主控端裁決。
     ///
-    /// `sas` 是**主控端從自己這條 TLS 連線導出**的 4 位驗證碼，僅供主控端 UI
-    /// 顯示。觀看端必須算自己那一份、跟這個值口頭核對——**絕對不要**直接顯示
-    /// 這裡收到的值當作自己的 SAS：中間人只要原封轉發就能讓兩邊看起來一致，
-    /// 整個防冒充保證就沒了。見 `share::tls`。
-    ///
-    /// 型別在 Task 5 就定成帶欄位的形狀，即使 TLS 要到 Task 8 才接上——線上
-    /// 契約不該因為實作順序而中途變形。Task 6 的明文 server 送的是注入的
-    /// 佔位值。
-    AwaitingApproval { sas: String },
+    /// **刻意不帶任何 SAS。** 觀看端要顯示的 4 位驗證碼必須由它自己那條 TLS
+    /// 連線導出——見 `ConnectionSas` 的說明。主控端那一份存在 `PendingRequest`
+    /// 裡，走 Tauri 給主控端自己的 UI，不上線路。
+    AwaitingApproval,
     /// 已獲准。`cols`/`rows` 是主控端的終端機尺寸——觀看端必須照這個建立
     /// xterm，不能用自己的視窗大小。緊接著會來一個二進位 frame 作為重播。
     Granted { mode: WireAccessMode, cols: u16, rows: u16 },
     /// 主控端 resize 了，觀看端重新 fit。
     Resize { cols: u16, rows: u16 },
     /// 控制權變動（被授予或被收回）。
+    ///
+    /// 由 Task 6 的 ws 迴圈在 `share_watch` 輪詢時偵測 mode 變化後送出——跟
+    /// `KickedByHost` 同一個機制。主控端呼叫 `ShareRegistry` 的
+    /// `grant_control`/`revoke_control` 之後，觀看端靠這則訊息才知道自己現在
+    /// 能不能打字。
     ControlChanged { mode: WireAccessMode },
     /// 觀看端落後太多，接下來的二進位 frame 是全量重播；收到這個要先清空
     /// 畫面再套用。漏掉的位元組可能截斷 ANSI 逃脫序列，帶著壞掉的畫面繼續
@@ -1470,7 +1565,7 @@ pub mod protocol;
 - [ ] **Step 5: 跑測試確認轉綠**
 
 Run: `cd src-tauri && cargo test --lib share::protocol`
-Expected: PASS，5 個測試全過。
+Expected: PASS，7 個測試全過。
 
 - [ ] **Step 6: Commit**
 
@@ -1615,6 +1710,7 @@ async fn an_unknown_code_is_refused_without_reaching_the_host() {
         .expect("connect");
     ws.send(Message::Text(
         serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
             code: "000000".to_string(),
             display_name: "Mallory".to_string(),
         })
@@ -1650,6 +1746,7 @@ async fn a_read_only_viewer_sees_output_but_cannot_type() {
         .expect("connect");
     ws.send(Message::Text(
         serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
             code: code.clone(),
             display_name: "Alice".to_string(),
         })
@@ -1659,10 +1756,7 @@ async fn a_read_only_viewer_sees_output_but_cannot_type() {
     .await
     .unwrap();
 
-    assert!(matches!(
-        next_control(&mut ws).await,
-        ServerMessage::AwaitingApproval { .. }
-    ));
+    assert_eq!(next_control(&mut ws).await, ServerMessage::AwaitingApproval);
 
     // 模擬主控端按下「只能看」。
     let request_id = registry.pending(&tab_id)[0].request_id.clone();
@@ -1704,6 +1798,7 @@ async fn a_controlling_viewer_can_type_and_sees_the_result() {
         .expect("connect");
     ws.send(Message::Text(
         serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
             code: code.clone(),
             display_name: "Alice".to_string(),
         })
@@ -1712,10 +1807,7 @@ async fn a_controlling_viewer_can_type_and_sees_the_result() {
     ))
     .await
     .unwrap();
-    assert!(matches!(
-        next_control(&mut ws).await,
-        ServerMessage::AwaitingApproval { .. }
-    ));
+    assert_eq!(next_control(&mut ws).await, ServerMessage::AwaitingApproval);
 
     let request_id = registry.pending(&tab_id)[0].request_id.clone();
     registry.approve(&request_id, AccessMode::Control).expect("approve");
@@ -1738,6 +1830,80 @@ async fn a_controlling_viewer_can_type_and_sees_the_result() {
 }
 
 #[tokio::test]
+async fn a_mismatched_protocol_version_is_refused_at_the_handshake() {
+    // 「同事的 AITerm 沒更新」在區網分享裡是常態。沒有這道檢查的話，症狀會是
+    // 後續某則訊息解析失敗、連線莫名其妙斷掉，使用者完全無從得知原因。
+    let pty = Arc::new(PtyManager::new());
+    let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
+    let registry = Arc::new(ShareRegistry::new());
+    let code = registry.start_share(tab_id.clone());
+    let port = start_test_server(Arc::clone(&pty), Arc::clone(&registry)).await;
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/share"))
+        .await
+        .expect("connect");
+    ws.send(Message::Text(
+        serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION + 1,
+            code: code.clone(),
+            display_name: "Alice".to_string(),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    assert_eq!(
+        next_control(&mut ws).await,
+        ServerMessage::Ended { reason: EndReason::VersionMismatch }
+    );
+    // 版本不符時不該留下待審請求打擾主控端。
+    assert_eq!(registry.pending(&tab_id).len(), 0);
+}
+
+#[tokio::test]
+async fn revoking_control_tells_the_viewer_it_can_no_longer_type() {
+    // 唯讀的人不知道自己被降級，就會白打一堆字進黑洞。
+    let pty = Arc::new(PtyManager::new());
+    let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
+    let registry = Arc::new(ShareRegistry::new());
+    let code = registry.start_share(tab_id.clone());
+    let port = start_test_server(Arc::clone(&pty), Arc::clone(&registry)).await;
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/share"))
+        .await
+        .expect("connect");
+    ws.send(Message::Text(
+        serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
+            code: code.clone(),
+            display_name: "Alice".to_string(),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(next_control(&mut ws).await, ServerMessage::AwaitingApproval);
+
+    let request_id = registry.pending(&tab_id)[0].request_id.clone();
+    let viewer_id = registry.approve(&request_id, AccessMode::Control).expect("approve");
+    assert_eq!(
+        next_control(&mut ws).await,
+        ServerMessage::Granted { mode: WireAccessMode::Control, cols: 80, rows: 24 }
+    );
+
+    // 主控端收回控制權——觀看端要在下一次輪詢時被告知。
+    registry.revoke_control(&tab_id);
+    assert_eq!(
+        next_control(&mut ws).await,
+        ServerMessage::ControlChanged { mode: WireAccessMode::ReadOnly }
+    );
+    assert!(!registry.may_send_input(&tab_id, &viewer_id));
+}
+
+#[tokio::test]
 async fn stopping_the_share_ends_the_connection_with_a_reason() {
     let pty = Arc::new(PtyManager::new());
     let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
@@ -1750,6 +1916,7 @@ async fn stopping_the_share_ends_the_connection_with_a_reason() {
         .expect("connect");
     ws.send(Message::Text(
         serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
             code: code.clone(),
             display_name: "Alice".to_string(),
         })
@@ -1758,10 +1925,7 @@ async fn stopping_the_share_ends_the_connection_with_a_reason() {
     ))
     .await
     .unwrap();
-    assert!(matches!(
-        next_control(&mut ws).await,
-        ServerMessage::AwaitingApproval { .. }
-    ));
+    assert_eq!(next_control(&mut ws).await, ServerMessage::AwaitingApproval);
     let request_id = registry.pending(&tab_id)[0].request_id.clone();
     registry.approve(&request_id, AccessMode::ReadOnly).expect("approve");
     let _ = next_control(&mut ws).await; // Granted
@@ -1805,7 +1969,9 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::pty::manager::PtyManager;
 
-use super::protocol::{ClientMessage, ConnectionSas, EndReason, ServerMessage, WireAccessMode};
+use super::protocol::{
+    ClientMessage, ConnectionSas, EndReason, ServerMessage, WireAccessMode, PROTOCOL_VERSION,
+};
 use super::registry::ShareRegistry;
 
 /// 重播給新連線觀看者的位元組上限。等於 PTY ring buffer 的容量——重播的意義
@@ -1854,23 +2020,32 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState, sas: String) {
     // 1. 第一則訊息必須是 Join。
     let join = match ws.recv().await {
         Some(Ok(Message::Text(t))) => match serde_json::from_str::<ClientMessage>(&t) {
-            Ok(ClientMessage::Join { code, display_name }) => (code, display_name),
+            Ok(ClientMessage::Join { protocol_version, code, display_name }) => {
+                (protocol_version, code, display_name)
+            }
             Err(_) => return end_with(&mut ws, EndReason::InvalidCode).await,
         },
         _ => return end_with(&mut ws, EndReason::InvalidCode).await,
     };
-    let (code, display_name) = join;
+    let (protocol_version, code, display_name) = join;
+
+    // 版本落差在握手第一步就擋掉。不這樣做的話，兩端版本不同時的症狀會是
+    // 後續某則訊息解析失敗、連線莫名其妙斷掉——而「同事的 AITerm 沒更新」
+    // 在區網分享裡是常態，不是邊角案例。
+    if protocol_version != PROTOCOL_VERSION {
+        return end_with(&mut ws, EndReason::VersionMismatch).await;
+    }
 
     // 2. 短碼換待審請求。短碼無效就到此為止——主控端不會看到任何東西，所以
     //    亂猜短碼連「打擾對方」都做不到。
-    let Some(request_id) = state.registry.request_join(&code, display_name) else {
+    let Some(request_id) = state.registry.request_join(&code, display_name, sas.clone()) else {
         return end_with(&mut ws, EndReason::InvalidCode).await;
     };
     let Some(tab_id) = state.registry.tab_for_code(&code) else {
         return end_with(&mut ws, EndReason::InvalidCode).await;
     };
 
-    if !send_control(&mut ws, &ServerMessage::AwaitingApproval { sas: sas.clone() }).await {
+    if !send_control(&mut ws, &ServerMessage::AwaitingApproval).await {
         state.registry.deny(&request_id);
         return;
     }
@@ -1908,6 +2083,9 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState, sas: String) {
         .map(|v| v.mode.into())
         .unwrap_or(WireAccessMode::ReadOnly);
     let (cols, rows) = state.pty.size(&tab_id).unwrap_or((80, 24));
+
+    // 記住最後一次告訴觀看端的存取層級，之後靠它偵測變化（見下方 watch tick）。
+    let mut announced_mode = mode;
 
     if !send_control(&mut ws, &ServerMessage::Granted { mode, cols, rows }).await {
         state.registry.remove_viewer(&tab_id, &viewer_id);
@@ -1987,14 +2165,30 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState, sas: String) {
                     end_with(&mut ws, EndReason::HostStoppedSharing).await;
                     break;
                 }
-                let still_a_viewer = state
+                let me = state
                     .registry
                     .viewers(&tab_id)
-                    .iter()
-                    .any(|v| v.viewer_id == viewer_id);
-                if !still_a_viewer {
+                    .into_iter()
+                    .find(|v| v.viewer_id == viewer_id);
+                let Some(me) = me else {
                     end_with(&mut ws, EndReason::KickedByHost).await;
                     break;
+                };
+                // 主控端可能在這期間收回或授予了控制權（`revoke_control` /
+                // `grant_control`）。觀看端必須知道自己現在能不能打字——否則
+                // 唯讀的人會白打一堆字進黑洞，剛拿到控制權的人則不知道可以動。
+                // 用同一個輪詢偵測，跟上面的踢人偵測同一個機制。
+                let current: WireAccessMode = me.mode.into();
+                if current != announced_mode {
+                    announced_mode = current;
+                    if !send_control(
+                        &mut ws,
+                        &ServerMessage::ControlChanged { mode: current },
+                    )
+                    .await
+                    {
+                        break;
+                    }
                 }
             }
         }
@@ -2393,6 +2587,7 @@ async fn both_ends_of_a_real_tls_connection_derive_the_same_sas() {
 
     ws.send(Message::Text(
         serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
             code: code.clone(),
             display_name: "Alice".to_string(),
         })
@@ -2402,17 +2597,23 @@ async fn both_ends_of_a_real_tls_connection_derive_the_same_sas() {
     .await
     .unwrap();
 
-    // server 把它自己那端導出的 SAS 放進 AwaitingApproval。兩端必須一致。
-    match next_control(&mut ws).await {
-        ServerMessage::AwaitingApproval { sas } => {
-            assert_eq!(
-                sas, client_sas,
-                "both ends of the same TLS connection must derive the same SAS"
-            );
-            assert_eq!(sas.len(), 4);
-        }
-        other => panic!("expected AwaitingApproval, got {other:?}"),
-    }
+    // 觀看端只該收到「等待同意」，**不帶任何 SAS**——它必須用自己算的那份。
+    assert_eq!(
+        next_control(&mut ws).await,
+        ServerMessage::AwaitingApproval,
+        "AwaitingApproval must not carry a SAS: a man-in-the-middle could just \
+         relay the host's value and make both screens agree"
+    );
+
+    // 主控端那一份存在 PendingRequest 裡（給它自己的同意視窗顯示），不上線路。
+    // 兩端各自導出的值必須一致——這就是人工核對能抓到中間人的原因。
+    let pending = state.registry.pending(&tab_id);
+    assert_eq!(pending.len(), 1, "expected exactly one pending request");
+    assert_eq!(
+        pending[0].sas, client_sas,
+        "both ends of the same TLS connection must derive the same SAS"
+    );
+    assert_eq!(client_sas.len(), 4);
 }
 ```
 
@@ -2421,7 +2622,7 @@ async fn both_ends_of_a_real_tls_connection_derive_the_same_sas() {
 - [ ] **Step 2: 跑測試確認會紅**
 
 Run: `cd src-tauri && cargo test --test share_end_to_end both_ends_of_a_real_tls_connection_derive_the_same_sas`
-Expected: **編譯失敗**——`ShareServerState` 尚未定義（`AwaitingApproval` 的 `sas` 欄位在 Task 5 就已經有了，這裡缺的只是 server 的啟停型別與 TLS 接線）。
+Expected: **編譯失敗**——`ShareServerState` 尚未定義。（`AwaitingApproval`、`ConnectionSas`、`PendingRequest::sas` 的形狀在 Task 4/5 就已經定好，這裡缺的只是 server 的啟停型別與 TLS 接線。）
 
 - [ ] **Step 3: 實作 TLS 接受迴圈與客戶端**
 
@@ -2587,7 +2788,9 @@ async fn serve_tls(
 }
 ```
 
-`server.rs` 這邊**不需要任何改動**：`share_upgrade` 的 `Extension<ConnectionSas>` extractor 與 `handle_share` 的 `sas` 參數在 Task 6 就已經定好了，Task 5 也已經把 `ConnectionSas` 與 `AwaitingApproval { sas }` 定成最終形狀。這一步只是把真實的 TLS 導出值接上去，取代 Task 6 測試裡注入的佔位值——**型別不變、測試不用回頭改**。
+`server.rs` 這邊**不需要任何改動**：`share_upgrade` 的 `Extension<ConnectionSas>` extractor、`handle_share` 的 `sas` 參數、以及把它交給 `request_join` 存進 `PendingRequest` 的那條路徑，在 Task 6 就已經定好了。這一步只是把真實的 TLS 導出值接上去，取代 Task 6 測試裡注入的佔位值——**型別不變、測試不用回頭改**。
+
+注意 SAS **從頭到尾不會出現在線上格式裡**：主控端那一份走 `PendingRequest` 給它自己的 UI，觀看端那一份由它自己那條 `ClientConnection` 算出。若哪天有人為了「方便」把它加進某則訊息，中間人只要原封轉發就能讓兩邊看起來一致，防冒充保證歸零——`awaiting_approval_never_carries_a_sas` 那個測試就是在守這件事。
 
 觀看端的 SAS 由它自己那條 `ClientConnection` 算出，不從線上接收——**若 SAS 是伺服器送過來的，中間人只要原封轉發就能讓兩邊一致，整個保證就沒了**。線上那個 `sas` 欄位只給主控端 UI 顯示用。
 
