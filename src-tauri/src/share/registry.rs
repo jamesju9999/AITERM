@@ -58,10 +58,17 @@ impl ShareRegistry {
         Self::default()
     }
 
-    /// 開始分享一個分頁，回傳新產生的 6 位短碼。同一個分頁重複呼叫會換一組
-    /// 新短碼（舊的立即失效）。
+    /// 開始分享一個分頁，回傳它的 6 位短碼。
+    ///
+    /// **冪等**：這個分頁若已在分享中，直接回傳既有短碼、什麼都不動。刻意
+    /// 不產生新短碼——覆蓋既有 entry 會無聲斷線所有觀看者並釋放控制權，對
+    /// 一個「雙擊分享鈕」就能觸發的操作來說，那是純粹的傷害。規格裡也沒有
+    /// 「重新產生短碼」這個功能。
     pub fn start_share(&self, tab_id: String) -> String {
         let mut tabs = self.tabs.lock();
+        if let Some(existing) = tabs.get(&tab_id) {
+            return existing.code.clone();
+        }
         let code = loop {
             let candidate = format!("{:06}", rand::rng().random_range(0..1_000_000u32));
             if !tabs.values().any(|t| t.code == candidate) {
@@ -121,13 +128,17 @@ impl ShareRegistry {
     ///
     /// 以 `AccessMode::Control` 核准時，若控制權已被別人持有則**整筆核准失敗**
     /// 並回 `None`——不靜默降級成唯讀，那會讓主控端以為自己給出了控制權。
+    ///
+    /// 注意：若分享在裁決前就被停掉，這裡也會回 `None`，而該筆請求兩個 map
+    /// 都不在。呼叫端若要區分「被拒絕」與「分享已停止」，必須自己先查
+    /// `tab_for_code`——這個順序是 ws handler 依賴的，換別的呼叫端時不要
+    /// 假設 `None` 一定代表拒絕。
     pub fn approve(&self, request_id: &str, mode: AccessMode) -> Option<String> {
         let request = self.pending.lock().remove(request_id)?;
         let mut tabs = self.tabs.lock();
-        let tab = match tabs.get_mut(&request.tab_id) {
-            Some(t) => t,
-            None => return None, // 分享在裁決前就被停掉了
-        };
+        // `?` 在這裡的意思是「分享在裁決前就被停掉了」——見上方 doc comment
+        // 對這條路徑的說明。
+        let tab = tabs.get_mut(&request.tab_id)?;
         if mode == AccessMode::Control && tab.controller.is_some() {
             // 放回待審，讓主控端能改用唯讀重新裁決。
             drop(tabs);
@@ -395,5 +406,55 @@ mod tests {
         assert!(reg.any_active());
         reg.stop_share("tab-1");
         assert!(!reg.any_active());
+    }
+
+    #[test]
+    fn stopping_a_share_clears_its_pending_requests() {
+        let (reg, code) = registry_with_one_share();
+        let _req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        assert_eq!(reg.pending("tab-1").len(), 1);
+        reg.stop_share("tab-1");
+        assert_eq!(reg.pending("tab-1").len(), 0);
+    }
+
+    #[test]
+    fn a_pending_request_cannot_survive_into_a_later_share_of_the_same_tab() {
+        // tab_id 是穩定的前端分頁 ID，所以「停止分享 → 重新分享」是正常操作，
+        // 不是邊角案例。若 stop_share 沒清掉 pending，舊會話的待審請求會被
+        // 核准進新會話，繞過「短碼失效即安全」這個假設。
+        let (reg, code) = registry_with_one_share();
+        let req = reg.request_join(&code, "Eve".to_string()).unwrap();
+        reg.stop_share("tab-1");
+        let _new_code = reg.start_share("tab-1".to_string());
+
+        assert_eq!(
+            reg.pending("tab-1").len(),
+            0,
+            "a stopped share's pending request came back after re-sharing"
+        );
+        assert_eq!(
+            reg.approve(&req, AccessMode::Control),
+            None,
+            "a stopped share's request was approved into the new share"
+        );
+    }
+
+    #[test]
+    fn sharing_an_already_shared_tab_keeps_the_same_code_and_its_viewers() {
+        let (reg, code) = registry_with_one_share();
+        let req = reg.request_join(&code, "Alice".to_string()).unwrap();
+        let alice = reg.approve(&req, AccessMode::Control).unwrap();
+
+        let again = reg.start_share("tab-1".to_string());
+        assert_eq!(again, code, "a second start_share minted a new code");
+        assert_eq!(
+            reg.viewers("tab-1").len(),
+            1,
+            "a second start_share evicted the existing viewers"
+        );
+        assert!(
+            reg.may_send_input("tab-1", &alice),
+            "a second start_share silently released control"
+        );
     }
 }
