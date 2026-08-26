@@ -90,6 +90,13 @@ fn scan_for_marker(tail: &[u8], chunk: &[u8], marker: &[u8]) -> (bool, Vec<u8>) 
     (found, new_tail)
 }
 
+/// Raw PTY bytes retained per session. Serves two readers with different
+/// appetites: AI context (which asks for a few KB) and screen sharing (which
+/// replays this whole buffer to prime a newly connected viewer's terminal).
+/// The share case sets the floor — a full 80x24 colour redraw runs well past
+/// the 8 KB this used to be. At 256 KB, twenty open tabs cost ~5 MB.
+const OUTPUT_RING_CAP: usize = 256 * 1024;
+
 pub struct PtySession {
     pub id: String,
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -365,9 +372,8 @@ impl PtySession {
                             let chunk = buf[..n].to_vec();
                             {
                                 let mut ring = ring_for_thread.lock();
-                                const RING_CAP: usize = 8 * 1024;
                                 for &b in &chunk {
-                                    if ring.len() >= RING_CAP { ring.pop_front(); }
+                                    if ring.len() >= OUTPUT_RING_CAP { ring.pop_front(); }
                                     ring.push_back(b);
                                 }
                             }
@@ -584,6 +590,24 @@ impl PtySession {
         let raw = String::from_utf8_lossy(&bytes).into_owned();
         let stripped = crate::pty::ansi::strip_ansi(&raw);
         if stripped.trim().is_empty() { None } else { Some(stripped) }
+    }
+
+    /// Return the last `max_bytes` bytes of terminal output exactly as the PTY
+    /// produced them — ANSI escapes intact. Screen sharing replays this to
+    /// prime a newly connected viewer; `get_recent_output`'s stripping would
+    /// hand them a colourless, cursor-less approximation instead.
+    ///
+    /// Unlike `get_recent_output` this does not treat whitespace-only content
+    /// as "nothing" — a screen that genuinely holds only blank lines is still
+    /// the screen the viewer must be shown. `None` means nothing has been
+    /// captured at all.
+    pub fn get_recent_raw(&self, max_bytes: usize) -> Option<Vec<u8>> {
+        let ring = self.output_ring.lock();
+        if ring.is_empty() {
+            return None;
+        }
+        let start = ring.len().saturating_sub(max_bytes);
+        Some(ring.iter().skip(start).copied().collect())
     }
 
     /// Monotonic count of output chunks that have contained at least one bell
@@ -1121,6 +1145,61 @@ mod tests {
 
         let _ = rx.try_recv(); // drain, avoid unused warning
         drop(session);
+    }
+
+    #[tokio::test]
+    async fn get_recent_raw_keeps_ansi_escapes_that_get_recent_output_strips() {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+
+        // A red "SHAREME" followed by a reset. get_recent_output must not show
+        // the escapes; get_recent_raw must.
+        #[cfg(windows)]
+        session.write(b"echo \x1b[31mSHAREME\x1b[0m\r\n").unwrap();
+        #[cfg(not(windows))]
+        session.write(b"printf '\\033[31mSHAREME\\033[0m\\n'\n").unwrap();
+
+        // Real PTY I/O on a background thread — poll rather than sleep a fixed
+        // amount, same as the bell test above.
+        let mut raw = None;
+        for _ in 0..50 {
+            if let Some(bytes) = session.get_recent_raw(64 * 1024) {
+                if bytes.windows(7).any(|w| w == b"SHAREME") {
+                    raw = Some(bytes);
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let raw = raw.expect("expected SHAREME to show up in the raw ring buffer");
+
+        assert!(
+            raw.contains(&0x1b),
+            "get_recent_raw must preserve ESC bytes; got {:?}",
+            String::from_utf8_lossy(&raw)
+        );
+        let stripped = session.get_recent_output(64 * 1024).expect("stripped output");
+        assert!(
+            !stripped.contains('\u{1b}'),
+            "get_recent_output must still strip ESC bytes; got {stripped:?}"
+        );
+    }
+
+    #[test]
+    fn output_ring_cap_is_large_enough_to_replay_a_screen() {
+        // A single full redraw of an 80x24 screen with colour runs well past
+        // 8 KB. A share viewer primed from a ring that small would see a
+        // fragment of a screen, so this floor is a real requirement, not a
+        // preference.
+        assert!(
+            OUTPUT_RING_CAP >= 128 * 1024,
+            "OUTPUT_RING_CAP too small to prime a share viewer: {OUTPUT_RING_CAP}"
+        );
     }
 
     #[test]

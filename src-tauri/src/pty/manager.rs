@@ -105,6 +105,12 @@ impl PtyManager {
         self.sessions.lock().get(id).and_then(|s| s.get_recent_output(max_bytes))
     }
 
+    /// Raw (not ANSI-stripped) recent output for the given session. See
+    /// `PtySession::get_recent_raw`.
+    pub fn get_recent_raw(&self, id: &str, max_bytes: usize) -> Option<Vec<u8>> {
+        self.sessions.lock().get(id).and_then(|s| s.get_recent_raw(max_bytes))
+    }
+
     /// Bell-byte count for the given session, or `None` if the session
     /// doesn't exist. See `PtySession::bell_count` for what this counts.
     pub fn bell_count(&self, id: &str) -> Option<u64> {
