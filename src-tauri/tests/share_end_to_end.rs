@@ -286,6 +286,60 @@ async fn revoking_control_tells_the_viewer_it_can_no_longer_type() {
 }
 
 #[tokio::test]
+async fn a_viewer_that_gives_up_waiting_stops_pestering_the_host() {
+    // 觀看端在等待同意期間關掉連線（等不下去了）。那筆待審請求必須跟著消失
+    // ——否則主控端的同意視窗上會掛著一個永遠不會有下文的「OOO 想連進來」，
+    // 而 server 這邊還有一個永遠空轉的 task。
+    //
+    // 這條路徑刻意**不**能靠逾時解決：逾時會讓「使用者只是走開了」變成自動
+    // 拒絕，那是 spec 明確排除的行為。要偵測的是連線本身斷了。
+    let pty = Arc::new(PtyManager::new());
+    let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
+    let registry = Arc::new(ShareRegistry::new());
+    let code = registry.start_share(tab_id.clone());
+    let port = start_test_server(Arc::clone(&pty), Arc::clone(&registry)).await;
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/share"))
+        .await
+        .expect("connect");
+    ws.send(Message::Text(
+        serde_json::to_string(&ClientMessage::Join {
+            protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
+            code: code.clone(),
+            display_name: "Alice".to_string(),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(next_control(&mut ws).await, ServerMessage::AwaitingApproval);
+    assert_eq!(
+        registry.pending(&tab_id).len(),
+        1,
+        "the host should see the request while the viewer is still waiting"
+    );
+
+    // 觀看端放棄，直接關掉連線。
+    drop(ws);
+
+    // server 端要在幾個輪詢間隔內注意到並收掉那筆請求。
+    let mut cleared = false;
+    for _ in 0..50 {
+        if registry.pending(&tab_id).is_empty() {
+            cleared = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        cleared,
+        "a viewer that closed its connection left a pending request behind: {:?}",
+        registry.pending(&tab_id)
+    );
+}
+
+#[tokio::test]
 async fn stopping_the_share_ends_the_connection_with_a_reason() {
     let pty = Arc::new(PtyManager::new());
     let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");

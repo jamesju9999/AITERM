@@ -21,9 +21,12 @@ use super::protocol::{
 };
 use super::registry::ShareRegistry;
 
-/// 重播給新連線觀看者的位元組上限。等於 PTY ring buffer 的容量——重播的意義
-/// 就是「把 ring 裡有的全部給他」。
-const REPLAY_MAX_BYTES: usize = 256 * 1024;
+/// 重播給新連線觀看者的位元組上限。
+///
+/// 直接取 PTY ring buffer 的容量，不另外寫一個數字：重播的意義就是「把 ring
+/// 裡有的全部給他」，兩邊各寫一份 `256 * 1024` 遲早會漂掉——改了 ring 卻忘了
+/// 改這裡，症狀會是觀看端悄悄少拿到一段歷史，而且沒有任何東西會報錯。
+const REPLAY_MAX_BYTES: usize = crate::pty::session::OUTPUT_RING_CAP;
 
 /// 輪詢主控端裁決與分享是否被停掉的間隔。裁決由人操作，秒級足夠；用輪詢而
 /// 不是再開一條通知管道，是因為狀態機刻意不依賴任何非同步執行期。
@@ -92,6 +95,10 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState, sas: String) {
         return end_with(&mut ws, EndReason::InvalidCode).await;
     };
     let Some(tab_id) = state.registry.tab_for_code(&code) else {
+        // `request_join` 成功了，但短碼在這兩行之間失效（主控端剛好停止分享）。
+        // 必須把剛建立的待審請求收掉——`stop_share` 的清理早就跑過了，沒有人
+        // 會再來清它，留著就是一筆永遠掛在 registry 裡的孤兒。
+        state.registry.deny(&request_id);
         return end_with(&mut ws, EndReason::InvalidCode).await;
     };
 
@@ -102,7 +109,7 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState, sas: String) {
 
     // 3. 等主控端裁決。刻意不設自動拒絕的逾時——使用者可能只是走開了，自動
     //    拒絕會讓他回來時毫無線索（見 spec 的錯誤處理）。觀看端要放棄的話
-    //    自己關掉連線即可，那會讓下面的迴圈偵測到 ws 已死。
+    //    自己關掉連線，下面的 select 會偵測到並收掉那筆待審請求。
     let viewer_id = loop {
         // 分享在裁決前被停掉。
         if state.registry.tab_for_code(&code).is_none() {
@@ -121,7 +128,31 @@ async fn handle_share(mut ws: WebSocket, state: ShareAppState, sas: String) {
                 None => return end_with(&mut ws, EndReason::Denied).await,
             };
         }
-        tokio::time::sleep(DECISION_POLL).await;
+        // 等一個輪詢間隔，但同時盯著 ws——觀看端可能等不下去自己關掉了。
+        //
+        // 沒有這個 select 的話（原本就沒有），放棄的連線會讓這個迴圈**永遠
+        // 空轉**，而那筆待審請求會一直掛在主控端的同意視窗上，因為沒有任何
+        // 人會來清掉它。刻意不設逾時是為了不讓「使用者走開」變成自動拒絕，
+        // 不是為了對觀看端已經離線這件事視而不見。
+        //
+        // `ws.recv()` 是 cancel-safe 的（底層 tokio-tungstenite 把未完成的
+        // frame 狀態存在 stream 裡而不是 future 裡），所以放進 select 不會
+        // 因為被取消而漏掉半個訊息。
+        tokio::select! {
+            _ = tokio::time::sleep(DECISION_POLL) => {}
+            incoming = ws.recv() => {
+                match incoming {
+                    // 串流結束、連線壞掉、或收到 Close frame——對方走了。
+                    None | Some(Err(_)) | Some(Ok(Message::Close(_))) => {
+                        state.registry.deny(&request_id);
+                        return;
+                    }
+                    // 協定規定觀看端在 `Granted` 之前不送任何東西。收到別的
+                    // 訊息就忽略，繼續等裁決。
+                    Some(Ok(_)) => {}
+                }
+            }
+        }
     };
 
     // 4. 已獲准：先送尺寸與模式，再送重播，最後接即時串流。

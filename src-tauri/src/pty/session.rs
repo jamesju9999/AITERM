@@ -95,7 +95,7 @@ fn scan_for_marker(tail: &[u8], chunk: &[u8], marker: &[u8]) -> (bool, Vec<u8>) 
 /// replays this whole buffer to prime a newly connected viewer's terminal).
 /// The share case sets the floor — a full 80x24 colour redraw runs well past
 /// the 8 KB this used to be. At 256 KB, twenty open tabs cost ~5 MB.
-const OUTPUT_RING_CAP: usize = 256 * 1024;
+pub(crate) const OUTPUT_RING_CAP: usize = 256 * 1024;
 
 /// How many output chunks the fan-out channel buffers before the slowest
 /// subscriber starts losing the oldest. Each slot holds one `Vec<u8>` of up
