@@ -625,8 +625,15 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // 見上面 untrackedCommandBoundaryRef 宣告處的說明——這裡才真的賦值，
   // 因為 setLiveRows 要到這裡才存在。跟這個檔案其他 ref 一樣直接在
   // render 當下賦值，不用額外包一層 effect。
+  //
+  // 只在 "start" 撐高，"end" 刻意不縮回：本機自己送出的指令結束後會被
+  // finalizeBlock 搬進卡片，縮回 MIN_LIVE_ROWS 不會丟資料；但遠端觀看者
+  // 送進來的指令從沒有對應的本機區塊，永遠不會變成卡片（見上面的中文
+  // 說明），這裡若跟著縮回，就是把已經畫在畫面上的輸出直接裁掉、且滑鼠
+  // 滾輪跟 liveRows 毫無關聯——內容會憑空消失且拿不回來。維持撐開，等到
+  // 下一個「本機自己」的指令完成、visibleBlockCount 變動時才會縮回。
   untrackedCommandBoundaryRef.current = (kind) => {
-    setLiveRows(kind === "start" ? MAX_LIVE_ROWS : MIN_LIVE_ROWS);
+    if (kind === "start") setLiveRows(MAX_LIVE_ROWS);
   };
 
   // Agent lifecycle status shown in the AgentStatusBar above the input, driven by
