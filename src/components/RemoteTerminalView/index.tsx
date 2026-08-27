@@ -7,7 +7,6 @@ import {
   onShareViewerEnded,
   onShareViewerGranted,
   onShareViewerResync,
-  onShareViewerSas,
   shareViewerDisconnect,
   shareViewerSend,
 } from "../../ipc/shareViewer";
@@ -19,6 +18,14 @@ interface Props {
   tabId: string;
   /** 2B-1 的觀看連線 id。所有 `share-viewer://*` 事件都掛在它上面。 */
   connId: string;
+  /**
+   * 這一端算出的 4 位驗證碼，**要顯示給使用者唸給對方聽**。
+   *
+   * 用 prop 而不是訂閱事件：它在連線建立的當下就已知（跟著
+   * `shareViewerConnect` 的回傳值一起來），而這個元件要等分頁開好才掛載
+   * ——用事件送必然遺失，因為發出的時候還沒有人在聽。
+   */
+  sas: string;
   isActive: boolean;
 }
 
@@ -27,11 +34,11 @@ type Phase =
   | { kind: "live"; mode: string }
   | { kind: "ended"; reason: string };
 
-export function RemoteTerminalView({ tabId, connId, isActive }: Props) {
+export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
   const { t } = useLocale();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
-  const [phase, setPhase] = useState<Phase>({ kind: "waiting", sas: null });
+  const [phase, setPhase] = useState<Phase>({ kind: "waiting", sas });
 
   // `phase` 要在事件 callback 裡讀到最新值，但那些 callback 只註冊一次——
   // 用 ref 避免 stale closure（這個 repo 在 Tauri 事件監聽上踩過這個坑）。
@@ -49,8 +56,6 @@ export function RemoteTerminalView({ tabId, connId, isActive }: Props) {
         else unlisteners.push(un);
       });
     };
-
-    track(onShareViewerSas(connId, (sas) => setPhase({ kind: "waiting", sas })));
 
     track(
       onShareViewerGranted(connId, ({ mode, cols, rows }) => {

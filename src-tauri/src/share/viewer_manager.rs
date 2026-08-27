@@ -14,10 +14,18 @@ use uuid::Uuid;
 
 use super::viewer::{connect_and_handshake, run_viewer_stream, ViewerEvent};
 
+/// `connect` 的回傳值。
+///
+/// **SAS 跟著回傳值走，不走事件**——見 `ViewerManager::connect` 的說明。
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct SasPayload {
-    sas: String,
+pub struct Connected {
+    pub conn_id: String,
+    /// 這一端算出的 4 位驗證碼，**要唸給對方聽**。
+    ///
+    /// 跟主控端相反：那邊的碼絕不送到前端（看得到就會照抄而不問對方）。
+    /// 兩邊不對稱是這個設計能成立的原因。
+    pub sas: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -60,10 +68,14 @@ impl ViewerManager {
         Self::default()
     }
 
-    /// 連線並開始串流。回傳連線 id，後續的事件都掛在這個 id 上。
+    /// 連線並開始串流。回傳連線 id 與**這一端算出的 4 位驗證碼**。
     ///
-    /// 握手完成（但對方尚未裁決）時就回傳——此時已經發出
-    /// `share-viewer://sas/{id}` 事件，前端可以顯示「請把這組數字唸給對方」。
+    /// 握手完成（但對方尚未裁決）時就回傳。
+    ///
+    /// **SAS 用回傳值而不是事件**：它在這裡就已經算出來了，而訂閱者要等
+    /// 前端拿到 id、開好分頁、元件掛載之後才存在——用事件送必然遺失，
+    /// 因為發出的時候還沒有人在聽。實機測試就是這樣抓到的（觀看端的
+    /// 驗證碼永遠是空的）。回傳值沒有這個時間差。
     pub async fn connect(
         &self,
         app: AppHandle,
@@ -71,16 +83,10 @@ impl ViewerManager {
         port: u16,
         code: String,
         display_name: String,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<Connected> {
         let handshake = connect_and_handshake(&host, port, &code, &display_name).await?;
         let id = Uuid::new_v4().to_string();
-
-        // 觀看端的 SAS **要**送給前端——那是要唸給對方聽的。跟主控端相反，
-        // 那邊的碼絕不送到前端。見 `viewer::ViewerHandshake::sas`。
-        let _ = app.emit(
-            &format!("share-viewer://sas/{id}"),
-            SasPayload { sas: handshake.sas },
-        );
+        let sas = handshake.sas;
 
         let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel::<ViewerEvent>();
         let (keys_tx, keys_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
@@ -126,7 +132,7 @@ impl ViewerManager {
             }
         });
 
-        Ok(id)
+        Ok(Connected { conn_id: id, sas })
     }
 
     /// 把按鍵送給對方。唯讀時上層就不該呼叫——伺服器端還有一道授權檢查。

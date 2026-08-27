@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, State};
 
-use crate::share::viewer_manager::ViewerManager;
+use crate::share::viewer_manager::{Connected, ViewerManager};
 
 #[tauri::command]
 pub async fn share_viewer_connect(
@@ -17,7 +17,7 @@ pub async fn share_viewer_connect(
     display_name: String,
     viewers: State<'_, Arc<ViewerManager>>,
     app: AppHandle,
-) -> Result<String, String> {
+) -> Result<Connected, String> {
     viewers
         .connect(app, host, port, code, display_name)
         .await

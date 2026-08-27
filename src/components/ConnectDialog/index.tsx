@@ -4,8 +4,10 @@ import { useLocale } from "../../contexts/LocaleContext";
 import "./index.css";
 
 interface Props {
-  /** 連上之後回報連線 id 與對方位址，讓上層開一個 `remote-terminal` 分頁。 */
-  onConnected: (connId: string, hostLabel: string) => void;
+  /** 連上之後回報連線 id、這一端算出的驗證碼、以及對方位址，讓上層開一個
+   *  `remote-terminal` 分頁。SAS 跟著連線回傳值走而不是事件——見
+   *  `shareViewerConnect` 的說明。 */
+  onConnected: (connId: string, sas: string, hostLabel: string) => void;
   onCancel: () => void;
 }
 
@@ -37,8 +39,13 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
     }
     setBusy(true);
     try {
-      const connId = await shareViewerConnect(parsed.host, parsed.port, code, name || "AITerm");
-      onConnected(connId, address);
+      const { connId, sas } = await shareViewerConnect(
+        parsed.host,
+        parsed.port,
+        code,
+        name || "AITerm",
+      );
+      onConnected(connId, sas, address);
     } catch (e) {
       // 連不上要說原因，不要靜默關閉——使用者才知道下一步該做什麼。
       setError(t.connect_failed.replace("{error}", String(e)));

@@ -18,7 +18,7 @@ const onConnected = vi.fn();
 const onCancel = vi.fn();
 
 beforeEach(() => {
-  connectMock.mockReset().mockResolvedValue("conn-1");
+  connectMock.mockReset().mockResolvedValue({ connId: "conn-1", sas: "4917" });
   onConnected.mockReset();
   onCancel.mockReset();
 });
@@ -47,7 +47,7 @@ describe("ConnectDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: /^連線$/ }));
 
     expect(connectMock).toHaveBeenCalledWith("192.168.1.33", 47823, "559207", "Bob");
-    expect(onConnected).toHaveBeenCalledWith("conn-1", "192.168.1.33:47823");
+    expect(onConnected).toHaveBeenCalledWith("conn-1", "4917", "192.168.1.33:47823");
   });
 
   it("rejects an address that is not host:port", async () => {

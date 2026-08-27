@@ -54,6 +54,9 @@ export interface Tab {
   remoteConnId?: string;
   /** 遠端終端機分頁：對方的顯示名稱，用來當分頁標題。**未經驗證**，是對方自報的。 */
   remoteHostLabel?: string;
+  /** 遠端終端機分頁：這一端算出的 4 位驗證碼，要唸給對方核對。
+   *  連線建立時就已知（跟著 `shareViewerConnect` 的回傳值來），不走事件。 */
+  remoteSas?: string;
   /** 非 active 的終端機分頁發生了值得注意的事：在側邊欄圖示上顯示一個彩色點。
    *  只存在記憶體，不進 localStorage——重開 app 後這些事件已經沒有意義。 */
   attention?: AttentionKind;

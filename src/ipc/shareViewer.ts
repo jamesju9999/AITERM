@@ -1,8 +1,23 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+export interface ViewerConnected {
+  /** 連線 id——後續所有事件都掛在它上面。 */
+  connId: string;
+  /**
+   * **這一端算出的 4 位驗證碼，要唸給對方聽。**
+   *
+   * 跟著回傳值走而不是用事件送：它在 Rust 那邊握手完成時就算出來了，而
+   * 訂閱者要等這個 Promise resolve、分頁開好、元件掛載之後才存在——用事件
+   * 必然遺失。實機測試就是這樣抓到的（觀看端的驗證碼永遠空白）。
+   *
+   * 跟主控端相反：那邊的碼絕不送到前端。兩邊不對稱是刻意的。
+   */
+  sas: string;
+}
+
 /**
- * 連進別台機器分享出來的終端機。回傳連線 id——後續所有事件都掛在它上面。
+ * 連進別台機器分享出來的終端機。
  *
  * 傳輸跑在 Rust，不在這裡：要連的是 TLS ＋ 自簽憑證，而 webview 的
  * `new WebSocket("wss://...")` 會拒絕自簽憑證且沒有程式化例外。
@@ -12,8 +27,8 @@ export function shareViewerConnect(
   port: number,
   code: string,
   displayName: string,
-): Promise<string> {
-  return invoke<string>("share_viewer_connect", { host, port, code, displayName });
+): Promise<ViewerConnected> {
+  return invoke<ViewerConnected>("share_viewer_connect", { host, port, code, displayName });
 }
 
 /** 把按鍵送給對方。唯讀時不該呼叫——伺服器端還有一道授權檢查。 */
@@ -23,19 +38,6 @@ export function shareViewerSend(connId: string, data: string): Promise<void> {
 
 export function shareViewerDisconnect(connId: string): Promise<void> {
   return invoke<void>("share_viewer_disconnect", { connId });
-}
-
-/**
- * **這一端算出的 4 位驗證碼，要唸給對方聽。**
- *
- * 跟主控端相反：主控端的碼絕不送到前端（看得到就會照抄而不問對方），
- * 觀看端的碼必須顯示，因為那正是要唸出來的東西。兩邊不對稱是刻意的。
- */
-export function onShareViewerSas(
-  connId: string,
-  cb: (sas: string) => void,
-): Promise<UnlistenFn> {
-  return listen<{ sas: string }>(`share-viewer://sas/${connId}`, (e) => cb(e.payload.sas));
 }
 
 export interface ViewerGranted {
