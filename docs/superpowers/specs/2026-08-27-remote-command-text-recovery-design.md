@@ -35,7 +35,13 @@
 是說，我們不需要攔截輸入本身——只要在對的時間點讀取「畫面上本來就看得到的內容」，就
 能反推出指令文字。
 
-## 架構：用 OSC 133 A/C 標記做畫面快照 diff
+## 架構：用 OSC 133 B/C 標記做「絕對位置」擷取
+
+**這一節是核准後修正過的版本。** 原版設計是收到 `A` 時把當下這一行內容存成快照、收到
+`C` 時跟快照比對前綴，但深入核對 `preexec`/`precmd`/`prompt` 的實際執行順序後發現：
+`A` 是從 hook 裡印出來的，而 hook **在提示字元文字被印出來之前**就執行完了——換句話說
+收到 `A` 事件的當下，提示字元文字根本還沒出現在畫面上，讀到的永遠是空行或前一行的
+殘留。這個地基是錯的，整段改用下面的方式。
 
 ### 現有 OSC 133 標記時序（`src-tauri/src/pty/shell.rs`）
 
@@ -43,73 +49,128 @@
   送出 `C`；此時 shell 的行編輯器（zle/readline）已經完成了 Enter 的換行回顯——也就
   是說遊標已經換到新的一行，**上一行仍完整保留著「提示字元 + 剛打完的指令文字」**。
   `precmd` hook 在下一個提示字元畫出來之前觸發，先送 `D`（若有指令剛結束），再送
-  `A`（新提示字元，畫面上還沒有任何輸入）。
+  `A`；`A` 送出之後 shell 才真正把提示字元文字印出來（`$PS1`/`PROMPT_COMMAND` 都是
+  「hook 先跑、提示字元文字後印」的順序）。
 - **PowerShell**：目前只有 `prompt` 函式覆寫，在下一個提示字元畫出來時送 `D`+`A`，
-  **完全沒有 `C`**（見下方「Windows 擴充」一節，這次要新增）。
+  **完全沒有 `C`**（見下方「Windows 擴充」一節，這次要新增）；提示字元文字是這個函式
+  的回傳值，一樣是「先送 `D`+`A`、函式回傳後才輪到提示字元文字被印出來」的順序。
 - **cmd.exe**：只有靠 `PROMPT` 環境變數送裸的 `D`+`A`，沒有 hook 機制，本次不處理。
 
-### 新增機制
+### 新增機制：`B` 標記
 
-1. **`A` 時做提示字元快照**：`useTerminalBlocks.ts` 的 OSC 133 handler 收到 `A` 時，
-   讀取當下游標所在行的內容（`term.buffer.active.getLine(cursorY + baseY)`），存進
-   一個 ref（例如 `lastPromptSnapshotRef`）。這一步不分本機/遠端，每次 `A` 都會更新，
-   成本很低（讀一行文字，不做任何額外運算）。
-2. **`C` 時嘗試還原文字**：收到 `C` 時，先檢查 `blocksRef.current` 有沒有一個
-   `status === "running"` 的區塊（跟現有邏輯一樣）：
-   - **有**：代表這是本機自己送出的指令（`submitCommand`/`beginTrackedBlock` 已經建
-     立了區塊），維持現有行為（no-op）。
+OSC 133 規格本來就定義了第三種標記 `B`（prompt 結束、即將開始輸入），這個專案目前完全
+沒用到。跟 `A`/`C`/`D` 不同，`B` 不是從 hook 印出來的，而是**直接接在提示字元文字的
+尾巴**（zsh 接在 `PS1` 尾端、bash 接在 `PS1` 尾端、PowerShell 接在 `prompt` 函式回傳
+字串的尾端）——這樣它一定是在提示字元文字真正畫出來**之後**才出現，順序保證正確。
+
+1. **`B` 時記錄絕對位置**：`useTerminalBlocks.ts` 的 OSC 133 handler 新增 `data === "B"`
+   分支，把當下的游標位置（絕對行號 `term.buffer.active.cursorY + term.buffer.active.baseY`
+   與欄位 `term.buffer.active.cursorX`）存進一個 ref（例如 `promptEndRef`）。因為 `B`
+   保證在提示字元文字之後才出現，這個位置就是「輸入從這裡開始」的精確座標——不需要
+   再讀取或比對任何文字內容，成本比原本的行文字快照更低。
+2. **`C` 時嘗試還原文字**：跟原設計一樣，先檢查 `blocksRef.current` 有沒有一個
+   `status === "running"` 的區塊：
+   - **有**：本機自己送出的指令，維持現有行為（no-op）。
    - **沒有**：呼叫新函式 `recoverUntrackedCommand()`（見下一節），嘗試從畫面內容還
      原指令文字。
      - **還原成功**：呼叫既有的 `beginTrackedBlock(還原出的文字)`。這一支函式本來就
-       只做「區塊記帳」、不會往 PTY 寫任何東西（見它現有的文件註解），語意上完全符合
-       「遠端指令的位元組早就經由 shell 回顯處理過了，這裡只是要幫它建檔」。之後
-       `D` 事件會自然把它 finalize——不需要新增任何 finalize 相關程式碼。
+       只做「區塊記帳」、不會往 PTY 寫任何東西，語意上完全符合「遠端指令的位元組早就
+       經由 shell 回顯處理過了，這裡只是要幫它建檔」。之後 `D` 事件會自然把它
+       finalize——不需要新增任何 finalize 相關程式碼。
      - **還原失敗**（見下方邊界情況）：退回現有的 `onUntrackedCommandBoundary("start")`
        安全網，維持目前的高度撐高行為，不建立卡片。
 
 這個設計最大的好處：一旦 `beginTrackedBlock` 被呼叫，遠端指令就完全匯入本機既有的
 資料流——卡片顯示、`visibleBlockCount` 觸發的即時窗格撐高/縮回、Bookmark/Copy，全部
-不需要新寫任何專門給「遠端」的 UI 分支。
+不需要新寫任何專門給「遠端」的 UI 分支。額外的好處：用絕對位置取代文字前綴比對後，
+連「提示字元本身跨好幾行」（例如某些主題的兩行式提示字元）都自然能正確處理，不需要
+額外設計。
+
+### zsh/bash：接在 `PS1` 尾端
+
+跟 PowerShell 的 `prompt` 函式不同，zsh/bash 的 `PS1` 可能是靜態字串（設一次就不變），
+也可能被 oh-my-zsh/starship 這類框架每次 `precmd` 都重新整段生成。若每次 `precmd`
+都無條件把 `B` 標記接到 `PS1` 尾端，靜態 `PS1` 的情況下標記會每次都疊加、無限增長，
+所以要先檢查是否已經存在同一份標記才接：
+
+**zsh**（`__aiterm_precmd`，接在既有的 `printf '\x1b]133;A\x07'` 之後）：
+
+```zsh
+printf '\x1b]133;A\x07'
+local b_marker=$'%{\e]133;B\a%}'
+if [[ "$PS1" != *"$b_marker"* ]]; then
+  PS1="${PS1}${b_marker}"
+fi
+```
+
+`%{...%}` 是 zsh 提示字元語法裡的「零寬度」標記，告訴 zsh 這段內容不佔實際欄位（跟
+色碼跳脫序列用同一種語法），避免游標定位/自動換行的欄位計算被這段不可見的位元組
+干擾。
+
+**bash**（`__aiterm_precmd`，同樣接在既有的 `printf '\x1b]133;A\x07'` 之後）：
+
+```bash
+printf '\x1b]133;A\x07'
+local b_marker=$'\[\e]133;B\a\]'
+if [[ "$PS1" != *"$b_marker"* ]]; then
+  PS1="${PS1}${b_marker}"
+fi
+```
+
+`\[...\]` 是 bash/readline 提示字元語法裡的等效寫法（既有的顏色控制碼在使用者自己的
+`PS1` 裡也是這樣包的）。
+
+兩者都是「先檢查、不存在才接」的寫法：框架每次重新生成 `PS1`（新字串裡不含標記）時，
+每次都會接一次，不會累積；靜態 `PS1` 只會在第一次接上，之後每次比對到已存在就跳過。
 
 ### `recoverUntrackedCommand()` 演算法
 
 ```
-輸入：term（Terminal 實例）、lastPromptSnapshotRef.current（字串或 null）
+輸入：term（Terminal 實例）、promptEndRef.current（{ row, col } 或 null）
 輸出：還原出的指令文字，或 null（代表還原失敗）
 
-1. 若 lastPromptSnapshotRef.current 為 null（這個 session 從沒收過一次 A），回傳 null。
-2. row = term.buffer.active.cursorY - 1（游標上一行，OSC C 觸發時遊標已換到新的一行）。
-3. lines = [term.buffer.active.getLine(row + baseY) 的純文字（translateToString(true)）]
-4. 只要 row 對應的那一行（往上一行）的 isWrapped 為 true，代表它是接續行：
-     row -= 1
-     把該行純文字接在 lines 前面
-   重複直到 isWrapped 為 false 或 row < 0。
-5. fullLine = lines 依序串接的結果。
-6. 若 fullLine 沒有以 lastPromptSnapshotRef.current 開頭，回傳 null（比對不出乾淨前綴，
-   可能是使用者在還沒收到新 A 之前就又送了一次輸入之類的異常情況）。
-7. 回傳 fullLine 去掉前綴、trim 過的字串。若結果是空字串，回傳 null（沒有實際指令內容，
-   例如使用者直接按了空白 Enter）。
+1. 若 promptEndRef.current 為 null（這個 session 從沒收過一次 B），回傳 null。
+2. { row: startRow, col: startCol } = promptEndRef.current。
+3. endRow = term.buffer.active.cursorY + term.buffer.active.baseY - 1
+   （OSC C 觸發時，遊標已經因為 Enter 換行到新的一行，所以往上一行才是輸入內容
+   實際結束的地方）。
+4. 若 endRow < startRow，回傳 null（游標比對照的起點還早，代表期間發生過 clear 之類
+   讓緩衝區位置對不上的事，安全起見不硬湊）。
+5. 依序取 startRow 到 endRow（含頭尾）每一行：
+     - 若 term.buffer.active.getLine(該行) 回傳 undefined（該行已被捲出緩衝區），
+       回傳 null。
+     - 第一行（startRow）只取 startCol 之後的部分：
+       getLine(startRow).translateToString(false, startCol)
+     - 其餘行取整行：getLine(該行).translateToString(false)
+   把這些片段依序接起來成 fullLine。
+6. 回傳 fullLine.trim()。若結果是空字串，回傳 null（沒有實際指令內容，例如使用者
+   直接按了空白 Enter）。
 ```
 
-`isWrapped` 是 xterm.js `IBufferLine` 內建欄位，標記這一行是不是上一行的自動換行延續，
-不需要額外實作換行偵測邏輯。
+`IBufferLine.translateToString(trimRight, startColumn, endColumn)` 是 xterm.js 內建
+API，直接支援「只取某欄位之後」的擷取，不需要自己手動切字串。
 
 ### 邊界情況
 
-- **這個 session 第一個指令剛好是遠端送的、還沒收過任何 `A`**：`recoverUntrackedCommand`
+- **這個 session 第一個指令剛好是遠端送的、還沒收過任何 `B`**：`recoverUntrackedCommand`
   回傳 null，退回 `onUntrackedCommandBoundary` 安全網。屬於少見的一次性情況（正常使用
-  下，連線建立後本機一定至少已經歷過一次 `A`）。
+  下，連線建立後本機一定至少已經歷過一次 `B`——只要顯示過一次提示字元就會有）。
+- **`endRow < startRow`（例如 `B` 之後、`C` 之前發生了 `clear` 讓緩衝區位置錯位）**：
+  視為還原失敗，走安全網。
+- **`startRow` 已被捲出緩衝區（scrollback 有限、期間輸出量極大）**：視為還原失敗，
+  走安全網。
 - **`clear`/`cls`**：`beginTrackedBlock` 內部已經會處理指令字串等於 `clear`/`cls` 的
   情況（清空整個卡片歷史、不建立區塊），還原出來的文字若剛好是這兩個字串，直接沿用
   現有邏輯，不需要額外處理。
 - **TUI / 全螢幕互動內容**（vim、htop 等）：這類內容走 `isAlternateBuffer` 判斷的另一
-  套高度邏輯，`recoverUntrackedCommand` 只在一般（非 alternate）緩衝區運作，不受影響。
-- **還原出的文字比對失敗或為空**：一律視為還原失敗，走安全網，不建立品質可疑的卡片。
+  套高度邏輯，shell 本來就不會在這類程式執行期間送出 OSC 133 標記，不受影響。
+- **還原出的文字為空**：視為還原失敗，走安全網，不建立品質可疑的卡片。
 
 ## Windows（PowerShell）擴充
 
-PowerShell 目前沒有等效的「即將執行」時間點，需要在 `inject_powershell_integration`
-新增一段 `Set-PSReadLineKeyHandler`：
+PowerShell 需要兩處新增：`C` 標記（目前完全沒有）、`B` 標記（接在提示字元文字尾端）。
+
+### `C`：`Set-PSReadLineKeyHandler` 覆寫 Enter 鍵
 
 ```powershell
 $global:__aiterm_orig_enter_handler = (Get-PSReadLineKeyHandler -Chord Enter -Bound `
@@ -131,7 +192,7 @@ Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {
   方式）**之後**才印，不是之前。`AcceptLine` 會讓 PSReadLine 完成這次輸入、回顯結尾
   的換行，之後游標才會真的換到新的一行——這跟 zsh/bash 的 `preexec`「換行回顯已經
   發生、上一行還留著提示字元+指令」時序一致，讓 `recoverUntrackedCommand()` 的
-  `cursorY - 1` 邏輯不需要為了 PowerShell 另外分支。若反過來先印 `C` 再呼叫
+  `endRow = cursorY - 1` 邏輯不需要為了 PowerShell 另外分支。若反過來先印 `C` 再呼叫
   `AcceptLine`，這時游標還停在原本那一行（換行回顯還沒發生），`cursorY - 1` 會讀到
   錯的一行。這個順序假設**必須在真的 Windows 機器上驗證**（見下方測試策略）。
 - 跟現有 `prompt` 函式覆寫「保留使用者原本設定、包一層再呼叫」是同一個模式。
@@ -140,15 +201,55 @@ Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {
 - `cmd.exe` 沒有 PSReadLine、沒有任何 hook 機制，維持現狀不處理——這是它現有整合本
   來就比 PowerShell/zsh/bash 弱的已知落差，不算本次功能倒退。
 
+### `B`：接在 `prompt` 函式回傳字串的尾端
+
+現有 `inject_powershell_integration` 的 `prompt` 函式覆寫（`shell.rs`）目前是呼叫
+使用者原本的 `prompt` 函式、讓它的輸出透過「未捕捉的管線輸出自動變成函式回傳值」這個
+PowerShell 慣例流出去。要在尾端接上 `B`，得先把這個輸出實際捕捉成變數，才能接字串：
+
+```powershell
+function global:prompt {
+    $wasSuccess = $?
+    $origExit = $global:LASTEXITCODE
+    $ec = if ($wasSuccess) { 0 } else { if ($origExit) { $origExit } else { 1 } }
+
+    [Console]::Write("$([char]27)]133;D;$ec$([char]7)")
+    [Console]::Write("$([char]27)]133;A$([char]7)")
+
+    $rendered = if ($global:__aiterm_orig_prompt) {
+        & $global:__aiterm_orig_prompt
+    } else {
+        "PS $($executionContext.SessionState.Path.CurrentLocation)$('>' * ($nestedPromptLevel + 1)) "
+    }
+
+    $global:LASTEXITCODE = $origExit
+    "$rendered$([char]27)]133;B$([char]7)"
+}
+```
+
+- 差異只在於原本 `& $global:__aiterm_orig_prompt` 是讓輸出直接流出去，現在改成存進
+  `$rendered`，最後一行組合成單一字串，讓它變成這個函式唯一的回傳值——`B` 標記因此
+  保證接在提示字元文字的最後一個字元之後，符合「`B` 一定在提示字元畫出來之後才出現」
+  的設計前提。
+- 若使用者原本的 `prompt` 函式是用 `Write-Host` 直接印字元、不回傳字串（少見但存在
+  的寫法），`$rendered` 會是空值，`B` 標記仍然會被印出來，只是接在空字串後面——這種
+  情況下 `recoverUntrackedCommand` 讀到的 `startCol` 會落在使用者自訂輸出結束的欄位，
+  沿用既有「原本 `prompt` 函式覆寫」機制早已有的同類限制，不是本次新增的落差。
+
 ## 對既有程式碼的影響
 
-- `useTerminalBlocks.ts`：新增 `lastPromptSnapshotRef`、`recoverUntrackedCommand()`；
-  `A` 分支新增快照邏輯；`C` 分支的「沒有本機追蹤區塊」情況改成先嘗試還原、失敗才呼叫
-  `onUntrackedCommandBoundary("start")`。
+- `useTerminalBlocks.ts`：新增 `promptEndRef`、`recoverUntrackedCommand()`；OSC 133
+  handler 新增 `data === "B"` 分支記錄絕對位置；`C` 分支的「沒有本機追蹤區塊」情況
+  改成先嘗試還原、失敗才呼叫 `onUntrackedCommandBoundary("start")`。
 - `TerminalView.tsx`：`onUntrackedCommandBoundary` 相關程式碼（`untrackedCommandBoundaryRef`
   與它在 `liveRows` 撐高/收回的邏輯）**保留、不刪除**，但註解要更新，說明它現在的定位
   是「文字還原失敗時的保底」而非主要機制。
-- `src-tauri/src/pty/shell.rs`：`inject_powershell_integration` 新增 Enter 鍵覆寫。
+- `src-tauri/src/pty/shell.rs`：
+  - `inject_shell_integration` 的 zsh/bash `precmd` 內容各新增一段「`PS1` 尾端接
+    `B` 標記」邏輯。
+  - `inject_powershell_integration` 新增 `Set-PSReadLineKeyHandler` 覆寫 Enter 鍵
+    （送 `C`），並把 `prompt` 函式改成先把提示字元文字存進變數、尾端接上 `B` 標記
+    再回傳。
 
 ## 測試策略
 
@@ -156,20 +257,33 @@ Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {
 
 沿用現有測試檔已經有的「組出真的 OSC 133 位元組序列餵給真的 xterm.js 實例」模式，新增：
 
-1. 沒有本機追蹤區塊時，手動把 `A` 對應的提示字元文字、`C` 前的指令文字依序 `write`
-   進 term，觸發 `C`，驗證 `beginTrackedBlock` 被呼叫、且傳入的文字跟實際打的一致。
-2. 換行情境：`write` 一個會自動換行成兩行以上的長指令，驗證能正確併回完整指令文字。
-3. 還原失敗情境（例如故意不送 `A`），驗證退回呼叫 `onUntrackedCommandBoundary("start")`
-   而不是硬湊一個錯誤的 `beginTrackedBlock` 呼叫。
-4. 本機自己有追蹤區塊時（`submitCommand` 已呼叫過），驗證 `recoverUntrackedCommand`
-   完全不會被觸發，不影響現有行為。
+1. **基本還原**：沒有本機追蹤區塊時，依序 `write` 提示字元文字、OSC `B`、指令文字、
+   換行（模擬 Enter 的回顯換行）、OSC `C`，驗證 `beginTrackedBlock` 被呼叫、且傳入的
+   文字跟實際打的一致。
+2. **多行指令**：`write` 一個長度超過 term 欄寬、會自動換行成兩行以上的指令文字，
+   驗證能正確用 `startRow`～`endRow` 的範圍併回完整指令文字。
+3. **多行提示字元**：`B` 標記出現在提示字元的第二行（模擬兩行式提示字元主題），驗證
+   `recoverUntrackedCommand` 依然能用 `promptEndRef` 記住的欄位正確截出指令文字，不
+   受提示字元本身佔幾行影響。
+4. **空指令**：`B` 之後直接送換行 + `C`（使用者只按了 Enter，沒打任何字），驗證回傳
+   null、退回 `onUntrackedCommandBoundary("start")`，不建立空白卡片。
+5. **還原失敗情境**：故意不送 `B` 就送 `C`，驗證退回呼叫
+   `onUntrackedCommandBoundary("start")` 而不是硬湊一個錯誤的 `beginTrackedBlock`
+   呼叫——這正是現有測試「signals onUntrackedCommandBoundary when OSC 133 C/D fire
+   with no locally-tracked block」（`useTerminalBlocks.test.ts` 第 521 行）已經涵蓋
+   的情境，實作後應該不需要修改這個既有測試就能繼續通過。
+6. **本機自己有追蹤區塊時**（`submitCommand` 已呼叫過），驗證 `recoverUntrackedCommand`
+   完全不會被觸發，不影響現有行為——對應既有測試「does not signal
+   onUntrackedCommandBoundary when a local block already covers the command」
+   （第 554 行），同樣應該不需要修改就能繼續通過。
 
 ### 無法只靠單元測試涵蓋的部分（需要真機驗證）
 
-- macOS zsh、bash 的實際 `preexec` 回顯時序是否真的如預期（上一行是否完整保留指令
-  文字）。
+- macOS zsh、bash 的實際 `preexec`/`precmd` 回顯時序是否真的如預期（`B` 標記是否真的
+  接在提示字元文字最後、`C` 觸發時上一行是否完整保留指令文字）。
 - Windows PowerShell 的 `Set-PSReadLineKeyHandler` 覆寫是否會跟常見的 PowerShell
-  設定檔（例如已經自訂 Enter 鍵、或裝了 PSReadLine 相關外掛）互相干擾。
+  設定檔（例如已經自訂 Enter 鍵、或裝了 PSReadLine 相關外掛）互相干擾；`prompt` 函式
+  尾端接 `B` 是否會跟自訂主題（oh-my-posh 等）的輸出格式衝突。
 - 兩台機器的完整流程：遠端觀看者取得控制權 → 送出指令 → 本機端出現文字正確、高度
   正確的卡片。
 
