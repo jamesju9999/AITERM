@@ -81,7 +81,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
   // 授權」——只有非空字串才更新，讓 hostPlatform 維持第一次拿到的值。
   const [hostPlatform, setHostPlatform] = useState<"windows" | "other">("other");
 
-  const { blocks, submitCommand, clearAllBlocks } = useTerminalBlocks(
+  const { blocks, submitCommand, appendOutput, clearAllBlocks } = useTerminalBlocks(
     connId,
     termState,
     undefined,
@@ -93,6 +93,10 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
   );
   const clearAllBlocksRef = useRef(clearAllBlocks);
   clearAllBlocksRef.current = clearAllBlocks;
+  // 同一顆橋接 ref、同一個理由：`onShareViewerData` 訂閱只依賴 [connId]，
+  // 不想為了這個值重新訂閱一次所有 share-viewer://* 事件。
+  const appendOutputRef = useRef(appendOutput);
+  appendOutputRef.current = appendOutput;
 
   const [aiUnsupported, setAiUnsupported] = useState(false);
 
@@ -143,6 +147,13 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
       });
     };
 
+    // 跟本機分頁（TerminalView.tsx）同一個理由：`{ stream: true }` 讓跨兩個
+    // PTY chunk 被截斷的多位元組 UTF-8 字元（例如中文檔名）正確併回同一個
+    // 字元，而不是各自解出替代字元亂碼。這顆 decoder 要跟這個 effect 活得
+    // 一樣久（同一個 connId 收到的每個 chunk 都要用同一個實例才有累積
+    // 效果），所以宣告在這裡，不是每個 chunk 各建一個。
+    const decoder = new TextDecoder("utf-8");
+
     track(
       onShareViewerGranted(connId, ({ mode, cols, rows, hostOs }) => {
         // 尺寸由主控端說了算——照它給的建立，不用自己的視窗大小。
@@ -164,6 +175,12 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
         const arr = new Uint8Array(bytes.length);
         for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
         termRef.current?.write(arr);
+        // 分段卡片的內容是從這批位元組解析出來的（跟畫面同一份資料）——
+        // 不接這行的話，卡片永遠只有指令文字跟耗時，看不到任何輸出內容。
+        // 用跟本機分頁一樣的 stream decoder，不要對 `bytes`（atob 的
+        // Latin1-per-byte 字串）直接呼叫 appendOutput：那樣多位元組 UTF-8
+        // 字元會被拆散成亂碼。
+        appendOutputRef.current(decoder.decode(arr, { stream: true }));
       }),
     );
 

@@ -27,6 +27,25 @@ vi.mock("../../ipc/shareViewer", () => ({
   shareViewerDisconnect: (...a: unknown[]) => disconnectMock(...a),
 }));
 
+// 只包一層 spy 在真正的 appendOutput 上，其餘完全用真的 hook——這個檔案
+// mock 掉整個 @xterm/xterm，導致 useTerminalBlocks 內部 finalizeBlock 用
+// 的無頭 headless Terminal 也一併被 mock，parseAnsiToRenderedLines 量不到
+// 真正的 buffer 內容，卡片本體永遠是空的。要驗證「PTY 位元組真的有餵給
+// appendOutput、而且解碼正確」，比起修那一層更深的 mock，直接在這個接點
+// 上釘一根探針最直接可靠。
+let appendOutputSpy: ReturnType<typeof vi.fn> | null = null;
+vi.mock("../../hooks/useTerminalBlocks", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../hooks/useTerminalBlocks")>();
+  return {
+    ...actual,
+    useTerminalBlocks: (...args: Parameters<typeof actual.useTerminalBlocks>) => {
+      const result = actual.useTerminalBlocks(...args);
+      appendOutputSpy = vi.fn(result.appendOutput);
+      return { ...result, appendOutput: appendOutputSpy };
+    },
+  };
+});
+
 // xterm 在 jsdom 下量不到尺寸，用假的。
 const writeMock = vi.fn((_data: unknown, callback?: () => void) => {
   // xterm's `write(data, callback)` invokes `callback` once the write is
@@ -77,6 +96,7 @@ import { RemoteTerminalView } from "./index";
 beforeEach(() => {
   for (const k of Object.keys(handlers)) delete handlers[k];
   capturedOscHandler = null;
+  appendOutputSpy = null;
   writeMock.mockClear();
   clearMock.mockReset();
   sendMock.mockReset();
@@ -192,6 +212,33 @@ describe("RemoteTerminalView", () => {
     await waitFor(() => {
       expect(screen.queryByText("echo hi")).not.toBeInTheDocument();
     });
+  });
+
+  it("decodes incoming PTY bytes as UTF-8 and feeds them into appendOutput, not just onto the xterm screen", async () => {
+    // 實機測試抓到的 bug：`onShareViewerData` 只把位元組寫進 xterm 畫面，
+    // 從沒呼叫 `appendOutput`——分段卡片的 rawOutput 永遠是空字串，卡片
+    // 因此只有指令文字跟耗時，完全看不到任何輸出內容（連 ls 的檔案清單
+    // 都不見）。這個測試釘住兩件事：appendOutput 真的有被呼叫；傳進去的
+    // 是正確解碼的 UTF-8 字串，不是 atob() 那種一 byte 一字元的 Latin1
+    // 亂碼——這個 repo 的實際檔名經常含中文，錯誤解碼會直接看得出來。
+    render(<RemoteTerminalView tabId="t1" connId="c11" sas="1234" isActive />);
+    await waitFor(() => expect(handlers["granted:c11"]).toBeDefined());
+    handlers["granted:c11"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+
+    await waitFor(() => expect(handlers["data:c11"]).toBeDefined());
+    const utf8Text = "20260818提供報告\r\n";
+    // 用瀏覽器原生 API 編碼——這個檔案的其他地方也是這樣處理 base64
+    // （見 onShareViewerData 本身用 atob 解碼），這裡刻意不用 Node 的
+    // Buffer：這個 repo 的 tsconfig「types」欄位限制過，不含 node，用了
+    // 會讓 `npx tsc -b` 報錯（見其他測試檔案踩過同一個坑的註解）。
+    const utf8Bytes = new TextEncoder().encode(utf8Text);
+    const base64 = btoa(String.fromCharCode(...utf8Bytes));
+    act(() => {
+      handlers["data:c11"](base64 as never);
+    });
+
+    await waitFor(() => expect(appendOutputSpy).not.toBeNull());
+    expect(appendOutputSpy).toHaveBeenCalledWith(utf8Text);
   });
 
   describe("disconnect timing (StrictMode dev-mode trap)", () => {
