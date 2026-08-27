@@ -517,4 +517,72 @@ describe("useTerminalBlocks", () => {
     expect(writeMock).toHaveBeenCalledWith("\x0c");
     expect(writePtyMock).not.toHaveBeenCalled();
   });
+
+  it("signals onUntrackedCommandBoundary when OSC 133 C/D fire with no locally-tracked block", async () => {
+    // 實機測試抓到的 bug：遠端觀看者拿到控制權時送進來的指令不會經過
+    // submitCommand/beginTrackedBlock（本機分頁能收到的只有 shell 回顯的
+    // 輸出，跟本機打字是兩條不同的路），但 shell 自己送出的 OSC 133 C/D
+    // 完全不知道指令是哪裡來的、照樣會發生。這個測試不呼叫 submitCommand，
+    // 直接把 OSC 序列寫進終端機，模擬「有指令在跑，但沒有本機區塊」。
+    const boundaryMock = vi.fn();
+    renderHook(() =>
+      useTerminalBlocks(
+        "session-1",
+        term,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        boundaryMock,
+      ),
+    );
+
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;C\x07");
+    });
+    expect(boundaryMock).toHaveBeenCalledWith("start");
+
+    boundaryMock.mockClear();
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;D;0\x07");
+    });
+    expect(boundaryMock).toHaveBeenCalledWith("end");
+  });
+
+  it("does not signal onUntrackedCommandBoundary when a local block already covers the command", async () => {
+    // 對照組：指令是透過 submitCommand 送出的（本機分頁的正常路徑），
+    // 已經有一個 running 中的區塊在追蹤——這種情況不該多送一次
+    // onUntrackedCommandBoundary，那個信號是給「完全沒有本機區塊」的
+    // 情境用的，兩套機制不該疊加。
+    const boundaryMock = vi.fn();
+    const { result } = renderHook(() =>
+      useTerminalBlocks(
+        "session-1",
+        term,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        boundaryMock,
+      ),
+    );
+
+    act(() => {
+      result.current.submitCommand("echo hi");
+    });
+
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;C\x07");
+    });
+    expect(boundaryMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;D;0\x07");
+    });
+    expect(boundaryMock).not.toHaveBeenCalled();
+  });
 });

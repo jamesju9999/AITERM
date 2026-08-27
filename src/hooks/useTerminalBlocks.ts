@@ -69,6 +69,28 @@ export function useTerminalBlocks(
    *  的 `host_os`。這是字串值，可以放心放進依賴陣列（不像 `write` 是函式
    *  參考，同樣的字串值不會觸發 React 重新執行 effect）。 */
   hostPlatform: "windows" | "other" = navigator.platform.toLowerCase().startsWith("win") ? "windows" : "other",
+  /** 偵測到 OSC 133 C/D 標記、但當下沒有任何本機追蹤到的區塊在跑時呼叫。
+   *
+   *  實機測試抓到的 bug：本機分頁不管指令是從 WarpInput 送出還是直接在
+   *  畫面上打字都會走 `submitCommand`/`beginTrackedBlock`，所以永遠有一個
+   *  區塊可以標記成「running」；但當指令是遠端觀看者透過分享連線寫進
+   *  PTY 時，這兩個函式都不會被呼叫——本機這端看到的只是 shell 回顯的
+   *  輸出位元組，OSC 133 C/D 照樣會發生（那是 shell 自己送的，跟輸入
+   *  來源無關），只是沒有對應的區塊可以標記。`TerminalView.tsx` 原本
+   *  「即時窗格自動撐高」的邏輯完全依賴「有沒有一個 running 中的區塊」
+   *  這個信號，於是遠端指令執行時窗格永遠撐不高。
+   *
+   *  這個 callback 讓呼叫端在不需要知道指令文字（那需要完整重建輸入
+   *  當下的畫面快照，複雜度跟遠端分頁要不要支援直接打字變卡片是同一類
+   *  問題，刻意不在這裡處理）的前提下，也能拿到「現在有東西在跑」這個
+   *  單純的訊號。C 只在**沒有**本機追蹤區塊時才視為「開始」；D 沿用既有
+   *  兩個提早 return 的分支（`prev.length === 0` / `latest.status !==
+   *  "running"`）——那兩個分支本來就是「沒有東西可以結案」的判斷，同一個
+   *  條件借來判斷「這次 D 沒有對應本機區塊」。
+   *
+   *  必須是穩定的參考（useCallback 空依賴或 ref 橋接），理由跟
+   *  `onCommandSettled`/`onCommandStarted` 一樣。 */
+  onUntrackedCommandBoundary?: (kind: "start" | "end") => void,
 ): UseTerminalBlocksResult {
   const [blocks, setBlocks] = useState<TerminalBlock[]>([]);
   const [isAlternateBuffer, setIsAlternateBuffer] = useState(false);
@@ -184,10 +206,20 @@ export function useTerminalBlocks(
 
     const disposeOsc = term.parser.registerOscHandler(133, (data) => {
       if (data === "C") {
-        // Command start — no-op. The block was already created synchronously,
-        // either by submitCommand (WarpInput) or by beginTrackedBlock (typed
-        // directly into the live terminal) — both run well before this async
-        // shell-emitted event round-trips back to the frontend.
+        // Command start — usually a no-op, since the block was already
+        // created synchronously by submitCommand (WarpInput) or
+        // beginTrackedBlock (typed directly into the live terminal), both of
+        // which run well before this async shell-emitted event round-trips
+        // back to the frontend. But if nothing is tracked as "running" at
+        // this point, the command didn't come through either of those two
+        // paths — it was written to the PTY some other way (e.g. a remote
+        // viewer with control access) — so tell the caller "something is
+        // running" via the lighter-weight boundary signal instead.
+        const prev = blocksRef.current;
+        const latest = prev[prev.length - 1];
+        if (!latest || latest.status !== "running") {
+          onUntrackedCommandBoundary?.("start");
+        }
         return true;
       } else if (data.startsWith("D")) {
         const parts = data.split(";");
@@ -198,9 +230,15 @@ export function useTerminalBlocks(
         const exitCode = hasExitCode ? parseInt(parts[1], 10) : 0;
 
         const prev = blocksRef.current;
-        if (prev.length === 0) return true;
+        if (prev.length === 0) {
+          onUntrackedCommandBoundary?.("end");
+          return true;
+        }
         const latest = prev[prev.length - 1];
-        if (latest.status !== "running") return true;
+        if (latest.status !== "running") {
+          onUntrackedCommandBoundary?.("end");
+          return true;
+        }
 
         // Windows-only: clear on the next tick instead of waiting for the async
         // headless-parse in finalizeBlock (avoids a race where a long/scrolled
@@ -262,7 +300,7 @@ export function useTerminalBlocks(
     // 的都是函式簽名裡那個預設值運算式產生的全新參考，放進依賴陣列會讓
     // 這個 effect 每次 render 都 dispose+重新註冊）。`hostPlatform` 是字串，
     // 沒有這個問題，放心加進來。
-  }, [term, finalizeBlock, onLiveClear, onCommandSettled, hostPlatform]);
+  }, [term, finalizeBlock, onLiveClear, onCommandSettled, hostPlatform, onUntrackedCommandBoundary]);
 
   const submitCommand = useCallback(
     (cmd: string, onComplete?: (block: TerminalBlock) => void) => {

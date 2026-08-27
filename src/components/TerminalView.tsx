@@ -368,6 +368,19 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     if (isClaudeCommand(cmd)) onClaudeDetectedRef.current?.();
   }, []);
 
+  // 實機測試抓到的 bug：遠端觀看者拿到控制權後送進來的指令，本機這端從
+  // 沒呼叫過 submitCommand/beginTrackedBlock（那兩支只在「這台機器自己
+  // 送出指令」的路徑上），導致下面 liveRows 賴以撐高的「有沒有一個
+  // running 中的區塊」這個信號永遠是 false，即時窗格因此撐不高、遠端
+  // 指令的輸出被擠在一小條裡。這個 ref 讓 useTerminalBlocks 在偵測到
+  // OSC 133 C/D 但沒有對應本機區塊時，也能撐高/縮回同一個 liveRows——
+  // 宣告在這裡是因為 useTerminalBlocks 呼叫點在 setLiveRows 宣告之前，
+  // 真正賦值要等 liveRows 宣告完才能做（見下方賦值處），先用 ref 佔位。
+  const untrackedCommandBoundaryRef = useRef<((kind: "start" | "end") => void) | null>(null);
+  const handleUntrackedCommandBoundary = useCallback((kind: "start" | "end") => {
+    untrackedCommandBoundaryRef.current?.(kind);
+  }, []);
+
   const { blocks, isAlternateBuffer, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo, finalizeBlock } = useTerminalBlocks(
     sessionId,
     termState,
@@ -375,6 +388,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     forceLiveRepaint,
     handleCommandSettled,
     handleCommandStarted,
+    undefined,
+    undefined,
+    handleUntrackedCommandBoundary,
   );
 
   useEffect(() => {
@@ -605,6 +621,13 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   useEffect(() => {
     setLiveRows(MIN_LIVE_ROWS);
   }, [visibleBlockCount]);
+
+  // 見上面 untrackedCommandBoundaryRef 宣告處的說明——這裡才真的賦值，
+  // 因為 setLiveRows 要到這裡才存在。跟這個檔案其他 ref 一樣直接在
+  // render 當下賦值，不用額外包一層 effect。
+  untrackedCommandBoundaryRef.current = (kind) => {
+    setLiveRows(kind === "start" ? MAX_LIVE_ROWS : MIN_LIVE_ROWS);
+  };
 
   // Agent lifecycle status shown in the AgentStatusBar above the input, driven by
   // runAgentLoop/handleAiQuery via the onPhase callback (see handleAgentPhase).
