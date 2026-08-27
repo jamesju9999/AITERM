@@ -140,8 +140,8 @@ fi
      - 若 term.buffer.active.getLine(該行) 回傳 undefined（該行已被捲出緩衝區），
        回傳 null。
      - 第一行（startRow）只取 startCol 之後的部分：
-       getLine(startRow).translateToString(false, startCol)
-     - 其餘行取整行：getLine(該行).translateToString(false)
+       getLine(startRow).translateToString(true, startCol)
+     - 其餘行取整行：getLine(該行).translateToString(true)
    把這些片段依序接起來成 fullLine。
 6. 回傳 fullLine.trim()。若結果是空字串，回傳 null（沒有實際指令內容，例如使用者
    直接按了空白 Enter）。
