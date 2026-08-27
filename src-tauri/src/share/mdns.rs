@@ -56,9 +56,11 @@ pub fn local_ipv4_for_mdns() -> Option<std::net::Ipv4Addr> {
     }
 }
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
+use std::time::Duration;
 
-use mdns_sd::{ServiceDaemon, ServiceInfo};
+use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 
 /// 主控端這一側：持有 mDNS daemon，記著「哪個分頁註冊成哪個 mDNS 服務全名」
 /// 好在停止分享時精準取消註冊。
@@ -136,6 +138,145 @@ impl MdnsAdvertiser {
     /// fire-and-forget——沒有人需要等它真的關完才能繼續。
     pub fn shutdown(&self) {
         let _ = self.daemon.shutdown();
+    }
+}
+
+/// `discover` 的分類結果。跟 `commands::share::DiscoverResult` 刻意分開
+/// （這支不依賴 Tauri/serde，能在不起 app 的情況下測試——比照
+/// `commands::share::decide`/`Decision` 的既有分工）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiscoverOutcome {
+    Found { host: String, port: u16 },
+    NotFound,
+    Ambiguous,
+}
+
+fn pick_ipv4(addresses: &HashSet<mdns_sd::ScopedIp>) -> Option<std::net::Ipv4Addr> {
+    addresses.iter().find_map(|a| match a.to_ip_addr() {
+        IpAddr::V4(v4) => Some(v4),
+        IpAddr::V6(_) => None,
+    })
+}
+
+/// 瀏覽 `SERVICE_TYPE`，在 `window` 時間內收集所有 TXT `code` 欄位等於
+/// `code` 的回應，依收集到幾個不同的 `(host, port)` 分類。
+///
+/// 用一個獨立的、只在這次呼叫存活的 daemon（不是主控端廣播用的那個）——
+/// 觀看端可能根本沒有在分享任何東西，`ShareServerState.running` 這時是
+/// `None`，沒有既有 daemon 可以借用；反過來，一台機器同時分享與查詢別人
+/// 也該是兩件互不相干的事。
+///
+/// **`window` 要留夠邊界**：`MdnsAdvertiser::register` 的服務要走完 RFC 6762
+/// §8.1 的三次探測（最壞情況 >750ms）才會真的開始廣播，`window` 太接近這個
+/// 邊界會讓「剛開始分享、朋友馬上就打短碼」這種情境誤判成 `NotFound`。
+pub async fn discover(code: &str, window: Duration) -> DiscoverOutcome {
+    let daemon = match ServiceDaemon::new() {
+        Ok(d) => d,
+        Err(e) => {
+            log::warn!("mDNS daemon 啟動失敗：{e}");
+            return DiscoverOutcome::NotFound;
+        }
+    };
+    let Ok(receiver) = daemon.browse(SERVICE_TYPE) else {
+        let _ = daemon.shutdown();
+        return DiscoverOutcome::NotFound;
+    };
+
+    let mut matches: HashMap<String, (String, u16)> = HashMap::new(); // fullname -> (host, port)
+    let deadline = tokio::time::Instant::now() + window;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, receiver.recv_async()).await {
+            Ok(Ok(ServiceEvent::ServiceResolved(resolved))) => {
+                if resolved.txt_properties.get_property_val_str("code") == Some(code) {
+                    if let Some(addr) = pick_ipv4(&resolved.addresses) {
+                        matches.insert(resolved.fullname.clone(), (addr.to_string(), resolved.port));
+                    }
+                }
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) => break, // channel 關了
+            Err(_) => break,     // 這次 recv 逾時，外層迴圈會發現 deadline 到了
+        }
+    }
+
+    let _ = daemon.stop_browse(SERVICE_TYPE);
+    let _ = daemon.shutdown();
+
+    let mut it = matches.into_values();
+    match (it.next(), it.next()) {
+        (None, _) => DiscoverOutcome::NotFound,
+        (Some((host, port)), None) => DiscoverOutcome::Found { host, port },
+        (Some(_), Some(_)) => DiscoverOutcome::Ambiguous,
+    }
+}
+
+#[cfg(test)]
+mod discover_tests {
+    use super::*;
+
+    // 三個情境都需要真的 multicast——見 Task 2 同樣的 ignore 理由。
+    //
+    // 800ms（plan 原始值）在本機實測下會 flaky：mdns-sd 0.21 的
+    // `ServiceInfo` 預設 `requires_probe = true`，`register()` 回傳後仍要
+    // 走完 RFC 6762 §8.1 的三次探測（每次間隔 250ms，最壞情況 >750ms）才
+    // 真正 announce，跟 800ms 的視窗幾乎打平，實測下大約一半機率會在
+    // 視窗結束前完全沒收到 ServiceResolved。拉長到 2500ms 讓探測+回應有
+    // 餘裕完成，反覆執行不再 flaky。
+    const TEST_WINDOW: Duration = Duration::from_millis(2500);
+
+    #[tokio::test]
+    #[ignore = "需要真的 multicast socket，CI 沙箱可能不允許"]
+    async fn finds_nothing_when_nobody_is_advertising() {
+        let outcome = discover("999999", TEST_WINDOW).await;
+        assert_eq!(outcome, DiscoverOutcome::NotFound);
+    }
+
+    #[tokio::test]
+    #[ignore = "需要真的 multicast socket，CI 沙箱可能不允許"]
+    async fn finds_the_one_host_advertising_that_code() {
+        let mut adv = MdnsAdvertiser::start().expect("daemon starts");
+        adv.register("tab-1", "111222", 5000);
+
+        let outcome = discover("111222", TEST_WINDOW).await;
+        match outcome {
+            DiscoverOutcome::Found { port, .. } => assert_eq!(port, 5000),
+            other => panic!("expected Found, got {other:?}"),
+        }
+        adv.shutdown();
+    }
+
+    #[tokio::test]
+    #[ignore = "需要真的 multicast socket，CI 沙箱可能不允許"]
+    async fn is_ambiguous_when_two_hosts_advertise_the_same_code() {
+        // 同一個 daemon 註冊兩筆不同 port、相同 code——模擬兩台不同機器剛好
+        // 選到同一組短碼的情境（觀看端看到的只是「兩個不同的 host:port
+        // 都回報這個 code」，不管它們是不是同一台機器發的）。
+        let mut adv = MdnsAdvertiser::start().expect("daemon starts");
+        adv.register("tab-1", "333444", 5001);
+        adv.register("tab-2", "333444", 5002);
+
+        let outcome = discover("333444", TEST_WINDOW).await;
+        assert_eq!(outcome, DiscoverOutcome::Ambiguous);
+        adv.shutdown();
+    }
+
+    #[tokio::test]
+    #[ignore = "需要真的 multicast socket，CI 沙箱可能不允許"]
+    async fn ignores_a_different_code_advertised_at_the_same_time() {
+        let mut adv = MdnsAdvertiser::start().expect("daemon starts");
+        adv.register("tab-1", "555666", 6001);
+        adv.register("tab-2", "777888", 6002);
+
+        let outcome = discover("555666", TEST_WINDOW).await;
+        match outcome {
+            DiscoverOutcome::Found { port, .. } => assert_eq!(port, 6001),
+            other => panic!("expected Found for the queried code, got {other:?}"),
+        }
+        adv.shutdown();
     }
 }
 
