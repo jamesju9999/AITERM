@@ -569,9 +569,12 @@ export function SharePanel({ tabId }: Props) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  // 位址由後端提供（見 Task 3 Step 5）。前端查不到區網 IP——`hostname()`
-  // 回的是主機名稱不是位址，而使用者要唸給同事的是 `192.168.1.33:47823`。
-  const address = lanAddress && port ? `${lanAddress}:${port}` : null;
+  // 位址由後端提供（見 Step 6）。前端查不到區網 IP——`hostname()` 回的是
+  // 主機名稱不是位址，而使用者要唸給同事的是 `192.168.1.33:47823`。
+  //
+  // 查不到 IP 時**退成只顯示 port**，不是整個藏起來：使用者通常知道自己的
+  // IP，看到 port 至少還能自己拼出來；欄位消失則什麼線索都沒有。
+  const address = port ? (lanAddress ? `${lanAddress}:${port}` : `${port}`) : null;
 
   async function onButtonClick() {
     if (!sharing) await start();

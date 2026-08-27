@@ -42,6 +42,7 @@ import { AgentStatusBar, type AgentPhase } from "./AgentStatusBar";
 import { AiPanel } from "./AiPanel";
 import { ProviderPalette } from "./ProviderPalette";
 import { QuotaBadge } from "./QuotaBadge";
+import { SharePanel } from "./SharePanel";
 import { useProviderQuota } from "../hooks/useProviderQuota";
 import { WarpInput } from "./WarpInput";
 import { FileExplorer } from "./FileExplorer/FileExplorer";
@@ -1692,6 +1693,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               <span>{t.ai_providers} ＋</span>
             </button>
           )}
+          <SharePanel tabId={tabId} />
           <button
             className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
             title={t.term_bookmark_tooltip}
