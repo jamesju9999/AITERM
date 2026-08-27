@@ -34,6 +34,7 @@ struct GrantedPayload {
     mode: String,
     cols: u16,
     rows: u16,
+    host_os: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -100,10 +101,10 @@ impl ViewerManager {
             while let Some(ev) = events_rx.recv().await {
                 let id = &id_for_pump;
                 match ev {
-                    ViewerEvent::Granted { mode, cols, rows } => {
+                    ViewerEvent::Granted { mode, cols, rows, host_os } => {
                         let _ = app.emit(
                             &format!("share-viewer://granted/{id}"),
-                            GrantedPayload { mode, cols, rows },
+                            GrantedPayload { mode, cols, rows, host_os },
                         );
                     }
                     ViewerEvent::Data(bytes) => {

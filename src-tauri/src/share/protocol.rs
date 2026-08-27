@@ -112,7 +112,12 @@ pub enum ServerMessage {
     AwaitingApproval { host_nonce: String },
     /// 已獲准。`cols`/`rows` 是主控端的終端機尺寸——觀看端必須照這個建立
     /// xterm，不能用自己的視窗大小。緊接著會來一個二進位 frame 作為重播。
-    Granted { mode: WireAccessMode, cols: u16, rows: u16 },
+    ///
+    /// `host_os` 是主控端的 `std::env::consts::OS`（`"windows"`/`"macos"`/
+    /// `"linux"`）。觀看端拿它取代 `navigator.platform` 判斷——這個值只有
+    /// 觀看端的平台，不是主控端的，跨平台分享時原本的判斷會誤判或失效
+    /// （見計畫③A 設計文件）。不含使用者名稱、路徑等敏感資訊。
+    Granted { mode: WireAccessMode, cols: u16, rows: u16, host_os: String },
     /// 主控端 resize 了，觀看端重新 fit。
     Resize { cols: u16, rows: u16 },
     /// 控制權變動（被授予或被收回）。
@@ -198,6 +203,7 @@ mod tests {
             mode: WireAccessMode::ReadOnly,
             cols: 120,
             rows: 40,
+            host_os: std::env::consts::OS.to_string(),
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"granted\""), "got {json}");

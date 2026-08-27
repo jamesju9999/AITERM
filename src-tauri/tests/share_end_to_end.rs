@@ -211,7 +211,12 @@ async fn a_read_only_viewer_sees_output_but_cannot_type() {
 
     assert_eq!(
         next_control(&mut ws).await,
-        ServerMessage::Granted { mode: WireAccessMode::ReadOnly, cols: 80, rows: 24 }
+        ServerMessage::Granted {
+            mode: WireAccessMode::ReadOnly,
+            cols: 80,
+            rows: 24,
+            host_os: std::env::consts::OS.to_string(),
+        }
     );
 
     // 重播必須包含分享前就存在的歷史。
@@ -249,7 +254,12 @@ async fn a_controlling_viewer_can_type_and_sees_the_result() {
     registry.approve(&request_id, AccessMode::Control).expect("approve");
     assert_eq!(
         next_control(&mut ws).await,
-        ServerMessage::Granted { mode: WireAccessMode::Control, cols: 80, rows: 24 }
+        ServerMessage::Granted {
+            mode: WireAccessMode::Control,
+            cols: 80,
+            rows: 24,
+            host_os: std::env::consts::OS.to_string(),
+        }
     );
 
     // 遠端打字，PTY 應該真的收到並回顯。
@@ -316,7 +326,12 @@ async fn revoking_control_tells_the_viewer_it_can_no_longer_type() {
     let viewer_id = registry.approve(&request_id, AccessMode::Control).expect("approve");
     assert_eq!(
         next_control(&mut ws).await,
-        ServerMessage::Granted { mode: WireAccessMode::Control, cols: 80, rows: 24 }
+        ServerMessage::Granted {
+            mode: WireAccessMode::Control,
+            cols: 80,
+            rows: 24,
+            host_os: std::env::consts::OS.to_string(),
+        }
     );
 
     // 主控端收回控制權——觀看端要在下一次輪詢時被告知。

@@ -238,7 +238,12 @@ async fn handle_share(
     // 記住最後一次告訴觀看端的存取層級，之後靠它偵測變化（見下方 watch tick）。
     let mut announced_mode = mode;
 
-    if !send_control(&mut ws, &ServerMessage::Granted { mode, cols, rows }).await {
+    if !send_control(
+        &mut ws,
+        &ServerMessage::Granted { mode, cols, rows, host_os: std::env::consts::OS.to_string() },
+    )
+    .await
+    {
         state.registry.remove_viewer(&tab_id, &viewer_id);
         return;
     }

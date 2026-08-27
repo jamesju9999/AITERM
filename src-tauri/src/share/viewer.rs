@@ -197,8 +197,10 @@ async fn recv_json(ws: &mut WebSocketStream<TlsStream<TcpStream>>) -> Result<Ser
 #[derive(Debug)]
 pub enum ViewerEvent {
     /// 對方同意了。`cols`/`rows` 是主控端的終端機尺寸，觀看端必須照這個
-    /// 建立 xterm，不能用自己的視窗大小。
-    Granted { mode: String, cols: u16, rows: u16 },
+    /// 建立 xterm，不能用自己的視窗大小。`host_os` 見
+    /// `protocol::ServerMessage::Granted` 的說明；`Resize`（見下方轉發處）
+    /// 沒有這個資訊，給空字串。
+    Granted { mode: String, cols: u16, rows: u16, host_os: String },
     /// 遠端 PTY 的原始位元組。
     Data(Vec<u8>),
     /// 落後太多，清空畫面，下一批 `Data` 是全量重播。
@@ -236,20 +238,24 @@ pub async fn run_viewer_stream(
                         break;
                     };
                     match msg {
-                        ServerMessage::Granted { mode, cols, rows } => {
+                        ServerMessage::Granted { mode, cols, rows, host_os } => {
                             let _ = events.send(ViewerEvent::Granted {
                                 mode: wire_mode_str(mode),
                                 cols,
                                 rows,
+                                host_os,
                             });
                         }
                         ServerMessage::Resize { cols, rows } => {
                             // 尺寸變更跟 Granted 用同一個事件——上層只要照著
-                            // 重新 fit 即可，不需要區分是初次還是後續。
+                            // 重新 fit 即可，不需要區分是初次還是後續。`mode`
+                            // 空字串代表非初次；`host_os` 同理，這個事件沒有
+                            // 這個資訊，上層看到空字串就不更新已經記住的值。
                             let _ = events.send(ViewerEvent::Granted {
                                 mode: String::new(),
                                 cols,
                                 rows,
+                                host_os: String::new(),
                             });
                         }
                         ServerMessage::Resync => {
