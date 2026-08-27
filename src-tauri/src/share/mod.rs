@@ -13,6 +13,7 @@ pub mod registry;
 pub mod server;
 pub mod tls;
 pub mod viewer;
+pub mod viewer_manager;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
