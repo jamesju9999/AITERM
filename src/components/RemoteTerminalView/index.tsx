@@ -127,9 +127,33 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
   }, [connId]);
 
   // 分頁關閉時斷線。
+  //
+  // **StrictMode 陷阱**：dev 模式下 React 會對每個 effect 模擬「掛載→卸載→
+  // 重新掛載」來抓沒清乾淨的副作用。但這條連線是在這個元件掛載**之前**就
+  // 建立好的（`ConnectDialog` 裡呼叫 `shareViewerConnect`——SAS 驗證碼要在
+  // 連線當下就先算出來，見該檔案的說明），所以模擬卸載時觸發的
+  // `shareViewerDisconnect` 沒有對應的「重新連線」可以復原：後端把這條
+  // 連線從 `ViewerManager` 移除後，`connId` 不變就不會重新連線，之後所有
+  // `shareViewerSend` 都會找不到連線，觀看端看起來像唯讀（即使 UI 顯示
+  // mode 是 control，畫面照樣正常，因為顯示走的是另一條事件監聽，跟這
+  // 條連線是否還「活著」無關）——這正是實機測試抓到的「控制模式打字沒
+  // 反應」的成因。
+  //
+  // 用 `setTimeout(0)` 把真正斷線延後一輪：StrictMode 的重新掛載會在
+  // 這個 timer 觸發前執行，把它取消掉；真正的卸載（分頁真的被關閉）
+  // 沒有後續掛載，timer 會如期觸發。
+  const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
+    if (disconnectTimerRef.current) {
+      clearTimeout(disconnectTimerRef.current);
+      disconnectTimerRef.current = null;
+    }
     return () => {
-      if (connId) void shareViewerDisconnect(connId);
+      if (!connId) return;
+      disconnectTimerRef.current = setTimeout(() => {
+        disconnectTimerRef.current = null;
+        void shareViewerDisconnect(connId);
+      }, 0);
     };
   }, [connId]);
 

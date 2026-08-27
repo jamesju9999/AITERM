@@ -1,4 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import React from "react";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 
 // 事件訂閱的假實作：測試自己保留 callback，之後手動觸發。
@@ -11,6 +12,7 @@ function captureHandler(name: string) {
 }
 
 const sendMock = vi.fn();
+const disconnectMock = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../../ipc/shareViewer", () => ({
   onShareViewerGranted: captureHandler("granted"),
@@ -19,7 +21,7 @@ vi.mock("../../ipc/shareViewer", () => ({
   onShareViewerControlChanged: captureHandler("control"),
   onShareViewerEnded: captureHandler("ended"),
   shareViewerSend: (...a: unknown[]) => sendMock(...a),
-  shareViewerDisconnect: vi.fn().mockResolvedValue(undefined),
+  shareViewerDisconnect: (...a: unknown[]) => disconnectMock(...a),
 }));
 
 // xterm 在 jsdom 下量不到尺寸，用假的。
@@ -44,6 +46,7 @@ beforeEach(() => {
   writeMock.mockReset();
   clearMock.mockReset();
   sendMock.mockReset();
+  disconnectMock.mockReset().mockResolvedValue(undefined);
 });
 
 describe("RemoteTerminalView", () => {
@@ -101,5 +104,43 @@ describe("RemoteTerminalView", () => {
     handlers["ended:c5"]("something_from_the_future" as never);
 
     expect(screen.queryByText("something_from_the_future")).not.toBeInTheDocument();
+  });
+
+  describe("disconnect timing (StrictMode dev-mode trap)", () => {
+    // 實機測試抓到的 bug：連線是在這個元件掛載**之前**建立的（見
+    // `shareViewerConnect` 的說明），所以 StrictMode 在 dev 模式下模擬
+    // 「掛載→卸載→重新掛載」時，模擬卸載觸發的 `shareViewerDisconnect`
+    // 沒有對應的「重新連線」可以復原——後端把連線刪掉後，`connId` 不變
+    // 就不會重連，之後打字全部送進一條死連線，控制模式看起來像唯讀。
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("does not disconnect when StrictMode's simulated unmount is followed by an immediate remount", () => {
+      vi.useFakeTimers();
+      render(
+        <React.StrictMode>
+          <RemoteTerminalView tabId="t1" connId="c6" sas="5555" isActive />
+        </React.StrictMode>,
+      );
+
+      // StrictMode 的模擬卸載已經在 render() 完成時跑過一輪；真正斷線的
+      // setTimeout 還沒被清空的話，代表重新掛載沒有把它取消掉。
+      vi.runAllTimers();
+
+      expect(disconnectMock).not.toHaveBeenCalled();
+    });
+
+    it("disconnects for real when the component actually unmounts with no remount", () => {
+      vi.useFakeTimers();
+      const { unmount } = render(
+        <RemoteTerminalView tabId="t1" connId="c7" sas="6666" isActive />,
+      );
+
+      unmount();
+      vi.runAllTimers();
+
+      expect(disconnectMock).toHaveBeenCalledWith("c7");
+    });
   });
 });
