@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { shareDiscover } from "../../ipc/share";
 import { shareViewerConnect } from "../../ipc/shareViewer";
 import { useLocale } from "../../contexts/LocaleContext";
 import "./index.css";
@@ -14,12 +15,12 @@ interface Props {
 /**
  * 觀看端的連線入口。
  *
- * **手動位址永遠是主路徑**（見 spec 的決策紀錄）：2C 會加上 mDNS 自動發現，
- * 但它在公司網路／跨 VLAN／訪客 Wi-Fi 常常失效，所以手動那條路必須一直
- * 走得通。這個階段 mDNS 還沒上線，所以手動是唯一的路。
+ * **手動位址永遠是主路徑**（見 spec 的決策紀錄）：mDNS 在公司網路／跨
+ * VLAN／訪客 Wi-Fi 常常失效，所以手動那條路必須一直走得通——`submit()`
+ * 一旦偵測到手動欄位有內容就完全跳過 mDNS，直接用它連。
  *
- * 平常把手動欄位收起來、需要時展開——spec 選的是「找不到時自動展開並說明
- * 原因」，2C 接上 mDNS 後會補上自動展開那段。
+ * 平常把手動欄位收起來，只有 mDNS 查無結果或結果有歧義（多台機器用了
+ * 同一組短碼）時才自動展開，並依情境顯示不同文案。
  */
 export function ConnectDialog({ onConnected, onCancel }: Props) {
   const { t } = useLocale();
@@ -29,27 +30,48 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
   const [address, setAddress] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [searching, setSearching] = useState(false);
 
-  async function submit() {
-    setError(null);
-    const parsed = parseAddress(address);
-    if (!parsed) {
-      setError(t.connect_bad_address);
-      return;
-    }
-    setBusy(true);
+  async function connectTo(host: string, port: number, addressLabel: string) {
     try {
-      const { connId, sas } = await shareViewerConnect(
-        parsed.host,
-        parsed.port,
-        code,
-        name || "AITerm",
-      );
-      onConnected(connId, sas, address);
+      const { connId, sas } = await shareViewerConnect(host, port, code, name || "AITerm");
+      onConnected(connId, sas, addressLabel);
     } catch (e) {
       // 連不上要說原因，不要靜默關閉——使用者才知道下一步該做什麼。
       setError(t.connect_failed.replace("{error}", String(e)));
+    }
+  }
+
+  async function submit() {
+    setError(null);
+
+    // 手動位址欄位已經展開且有填：永遠優先，完全不跑 mDNS 查找。使用者
+    // 已經知道要連哪裡，不該被搜尋卡住或蓋掉他輸入的內容。
+    if (manualOpen && address.trim()) {
+      const parsed = parseAddress(address);
+      if (!parsed) {
+        setError(t.connect_bad_address);
+        return;
+      }
+      setBusy(true);
+      await connectTo(parsed.host, parsed.port, address);
+      setBusy(false);
+      return;
+    }
+
+    setBusy(true);
+    setSearching(true);
+    try {
+      const result = await shareDiscover(code);
+      if (result.kind === "found") {
+        const label = `${result.host}:${result.port}`;
+        await connectTo(result.host, result.port, label);
+        return;
+      }
+      setManualOpen(true);
+      setError(result.kind === "ambiguous" ? t.connect_ambiguous : t.connect_not_found);
     } finally {
+      setSearching(false);
       setBusy(false);
     }
   }
@@ -105,6 +127,8 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
             />
           </>
         )}
+
+        {searching && <div className="aiterm-connect__searching">{t.connect_searching}</div>}
 
         {error && <div className="aiterm-connect__error">{error}</div>}
 
