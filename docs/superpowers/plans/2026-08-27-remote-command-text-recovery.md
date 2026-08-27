@@ -279,12 +279,34 @@ EOF
         let content = std::fs::read_to_string(&script_path).expect("script should have been written");
 
         assert!(
+            content.contains(r#"(Get-PSReadLineKeyHandler -Bound |"#),
+            "expected the correct Get-PSReadLineKeyHandler usage (-Bound, no -Chord — \
+             -Chord is only valid on Set-/Remove-PSReadLineKeyHandler, using it on Get- \
+             is a parameter-binding error that prints visibly on every new tab and isn't \
+             suppressed by -ErrorAction)"
+        );
+        assert!(
+            content.contains(r#"Where-Object { $_.Key -eq "Enter" }).Function"#),
+            "expected the Enter handler lookup to filter the bound-keys list down to Enter"
+        );
+        assert!(
             content.contains("Set-PSReadLineKeyHandler -Chord Enter"),
             "expected an Enter key handler override to emit the C marker"
         );
         assert!(
+            content.contains("    try {"),
+            "expected the dynamic method-name invocation to be guarded by try/catch — a \
+             custom Enter -ScriptBlock binding makes .Function return a non-method \
+             placeholder, and calling that without a catch crashes Enter handling entirely"
+        );
+        assert!(
             content.contains(r#"[Console]::Write("$([char]27)]133;C$([char]7)")"#),
             "expected the Enter override to emit the C marker after AcceptLine runs"
+        );
+        assert!(
+            content.contains(r#"$rendered = $renderedRaw -join "`n""#),
+            "expected renderedRaw to be joined with newlines rather than left for $OFS \
+             (default: a single space) to silently mangle a multi-line custom prompt"
         );
         assert!(
             content.contains(r#""$rendered$([char]27)]133;B$([char]7)""#),
@@ -350,11 +372,15 @@ function global:prompt {
     [Console]::Write("$([char]27)]133;D;$ec$([char]7)")
     [Console]::Write("$([char]27)]133;A$([char]7)")
 
-    $rendered = if ($global:__aiterm_orig_prompt) {
+    $renderedRaw = if ($global:__aiterm_orig_prompt) {
         & $global:__aiterm_orig_prompt
     } else {
         "PS $($executionContext.SessionState.Path.CurrentLocation)$('>' * ($nestedPromptLevel + 1)) "
     }
+    # 少見情況：使用者原本的 prompt 函式若回傳多筆管線輸出（沒有用分號/換行抑制的
+    # 多行輸出），直接字串插值會被 $OFS（預設一個空白）接起來，跟主控台原本逐行
+    # 印出的樣子不一樣。用換行接回去，貼近原本會呈現的樣子。
+    $rendered = $renderedRaw -join "`n"
 
     # Restore so user scripts are not affected by our prompt logic
     $global:LASTEXITCODE = $origExit
@@ -373,15 +399,32 @@ function global:prompt {
 # matches zsh/bash's ordering (preexec fires after the line editor's own
 # newline echo), which recoverUntrackedCommand's cursor-position math in
 # useTerminalBlocks.ts relies on being consistent across all three shells.
-$global:__aiterm_orig_enter_handler = (Get-PSReadLineKeyHandler -Chord Enter -Bound `
-    -ErrorAction SilentlyContinue).Function
+#
+# Get-PSReadLineKeyHandler only accepts -Bound/-Unbound — NOT -Chord (that's
+# only valid on Set-/Remove-PSReadLineKeyHandler). Passing -Chord here is a
+# parameter-binding error that -ErrorAction SilentlyContinue does NOT
+# suppress (it's a statement-level terminating error, not a cmdlet-internal
+# one), so it would print visibly on every new tab and leave
+# __aiterm_orig_enter_handler always $null, silently discarding any custom
+# Enter binding the user actually had.
+$global:__aiterm_orig_enter_handler = (Get-PSReadLineKeyHandler -Bound |
+    Where-Object { $_.Key -eq "Enter" }).Function
 
 Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {
     param($key, $arg)
-    if ($global:__aiterm_orig_enter_handler -and
-        $global:__aiterm_orig_enter_handler -ne "AcceptLine") {
-        [Microsoft.PowerShell.PSConsoleReadLine]::($global:__aiterm_orig_enter_handler)($key, $arg)
-    } else {
+    # .Function isn't guaranteed to be a real PSConsoleReadLine static method
+    # name — a user with a custom -ScriptBlock Enter binding gets a
+    # placeholder value back (typically "Unknown"), and invoking that
+    # dynamically throws. Fall back to AcceptLine if the dynamic call fails,
+    # so a custom binding degrades gracefully instead of crashing Enter.
+    try {
+        if ($global:__aiterm_orig_enter_handler -and
+            $global:__aiterm_orig_enter_handler -ne "AcceptLine") {
+            [Microsoft.PowerShell.PSConsoleReadLine]::($global:__aiterm_orig_enter_handler)($key, $arg)
+        } else {
+            [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine($key, $arg)
+        }
+    } catch {
         [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine($key, $arg)
     }
     [Console]::Write("$([char]27)]133;C$([char]7)")
@@ -408,6 +451,12 @@ PowerShell 原本只有 D+A，完全沒有等效 zsh/bash preexec 的「即將�
 時間點。用 Set-PSReadLineKeyHandler 覆寫 Enter 鍵補上 C（在呼叫原本
 Enter 處理邏輯之後才印，讓時序跟 zsh/bash 一致）；B 則接在 prompt
 函式實際回傳的提示字元文字尾端。
+
+Get-PSReadLineKeyHandler 用 -Bound + Where-Object 篩出 Enter，不是
+-Chord（那是 Set-/Remove- 才有的參數，用在 Get- 上是參數綁定失敗，
+每次開新分頁都會噴紅字錯誤）；動態呼叫方法名稱包 try/catch，避免
+使用者自訂 Enter 綁定時當機；$rendered 若是多筆管線輸出改用換行接
+回去，避免被 $OFS 用空白接壞。
 
 此 Task 的測試是 #[cfg(windows)]，無法在 macOS/Linux 開發機上實際
 執行紅燈/綠燈驗證，需要之後在 Windows 機器或 CI 上補驗證。
