@@ -66,6 +66,16 @@
   cursor: pointer;
 }
 
+.aiterm-connect__searching {
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--aiterm-surface-1, #0f172a);
+  color: var(--aiterm-text-muted, #94a3b8);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .aiterm-connect__error {
   margin-top: 12px;
   padding: 10px;
