@@ -25,6 +25,40 @@ pub struct ShareStatus {
     pub code: Option<String>,
     /// server 的 port。沒在分享時是 `None`。
     pub port: Option<u16>,
+    /// 這台機器在區網上的位址（不含 port），給對方手動輸入用。
+    ///
+    /// 查不到時是 `None`——那不是錯誤，面板會退成只顯示 port，使用者自己
+    /// 知道 IP。2C 的 mDNS 上線後多數情況也不需要手動輸入。
+    pub lan_address: Option<String>,
+}
+
+/// 盡力問出這台機器的區網位址。查不到回 `None`。
+///
+/// 用系統指令而不是列舉網路介面，是因為「哪一張介面才是使用者實際連著的
+/// 那張」在多網卡機器上很難判斷，而系統自己知道。查不到不影響功能——
+/// 面板會退成只顯示 port。
+fn lan_address() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    let cmd = "ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null";
+    #[cfg(target_os = "linux")]
+    let cmd = "hostname -I 2>/dev/null | awk '{print $1}'";
+    #[cfg(target_os = "windows")]
+    let cmd = "";
+
+    #[cfg(target_os = "windows")]
+    {
+        // Windows 沒有簡短的等價指令，而 PowerShell 啟動成本高。留給使用者
+        // 自己輸入——面板只顯示 port。
+        let _ = cmd;
+        return None;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let out = std::process::Command::new("sh").arg("-c").arg(cmd).output().ok()?;
+        let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
+        if s.is_empty() { None } else { Some(s) }
+    }
 }
 
 /// 待審請求，給同意視窗顯示。
@@ -123,7 +157,7 @@ pub async fn share_start(
         .await
         .map_err(|e| format!("啟動共享服務失敗：{e}"))?;
     let code = server.registry.start_share(tab_id);
-    Ok(ShareStatus { sharing: true, code: Some(code), port: Some(port) })
+    Ok(ShareStatus { sharing: true, code: Some(code), port: Some(port), lan_address: lan_address() })
 }
 
 #[tauri::command]
@@ -133,7 +167,7 @@ pub async fn share_stop(
 ) -> Result<ShareStatus, String> {
     server.registry.stop_share(&tab_id);
     server.stop_if_idle();
-    Ok(ShareStatus { sharing: false, code: None, port: None })
+    Ok(ShareStatus { sharing: false, code: None, port: None, lan_address: None })
 }
 
 #[tauri::command]
@@ -143,7 +177,7 @@ pub async fn share_status(
 ) -> Result<ShareStatus, String> {
     let code = server.registry.code_for_tab(&tab_id);
     let port = server.port();
-    Ok(ShareStatus { sharing: code.is_some(), code, port })
+    Ok(ShareStatus { sharing: code.is_some(), code, port, lan_address: lan_address() })
 }
 
 #[tauri::command]

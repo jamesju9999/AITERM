@@ -11,6 +11,8 @@ import { DatabaseView } from "./DatabaseView";
 import { DesignView } from "./DesignView/DesignView";
 import { NewTabPicker } from "./NewTabPicker";
 import type { TabOpenOpts } from "./NewTabPicker/tabCatalog";
+import { ConsentDialog } from "./ConsentDialog";
+import { ConnectDialog } from "./ConnectDialog";
 import { CrossDbView } from "./CrossDbView";
 import { VcsView } from "./VcsView/VcsView";
 import { DocConverterView } from "./DocConverter/DocConverterView";
@@ -20,6 +22,7 @@ import { CodeAssistantView } from "./CodeAssistantView";
 import { runCloseGuard } from "../lib/closeTabGuard";
 import { KnowledgeBaseView } from "./KnowledgeBaseView";
 import { MailView } from "./MailView";
+import { RemoteTerminalView } from "./RemoteTerminalView";
 import { HomeView } from "./HomeView";
 import { RouteHint } from "./RouteHint";
 import type { RouteResult } from "./HomeView/routeIntent";
@@ -65,6 +68,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   // 預設 true：開 app 先看到首頁，上次的分頁照常還原但不在前景。
   const [homeActive, setHomeActive] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [connectOpen, setConnectOpen] = useState(false);
   // 首頁 AI 路由猜對／猜錯的反悔提示：記住開出來的分頁 id、AI 選了什麼類型、
   // 使用者原句（換分頁類型時要用同一句重開）。null 代表沒有提示要顯示。
   const [routeHint, setRouteHint] = useState<{ tabId: string; type: TabType; userText: string } | null>(null);
@@ -256,6 +260,12 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   }, [refreshDefaultBridge]);
 
   const handlePickerSelect = useCallback((type: TabType, opts?: TabOpenOpts) => {
+    if (type === "remote-terminal") {
+      // 遠端分頁要先問短碼／位址才知道要連誰。連上之後才建分頁——
+      // 那時才有 connId 可以掛事件。
+      setConnectOpen(true);
+      return "";
+    }
     const newId = crypto.randomUUID();
     let title = t.terminal_tab;
     if (type === "database") title = t.database_tab;
@@ -518,6 +528,27 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
           <NewTabPicker onSelect={handlePickerSelect} onClose={() => setPickerOpen(false)} />
         </div>
       )}
+      <ConsentDialog tabs={tabs.map((x) => ({ id: x.id, title: x.title }))} />
+      {connectOpen && (
+        <ConnectDialog
+          onCancel={() => setConnectOpen(false)}
+          onConnected={(connId, hostLabel) => {
+            setConnectOpen(false);
+            const newId = crypto.randomUUID();
+            setTabs((prev) => [
+              ...prev,
+              {
+                id: newId,
+                title: `${t.remote_terminal_tab}：${hostLabel}`,
+                type: "remote-terminal",
+                remoteConnId: connId,
+                remoteHostLabel: hostLabel,
+              },
+            ]);
+            selectTab(newId);
+          }}
+        />
+      )}
       {/* Resizer divider disabled for layout [2] fixed 76px slim sidebar */}
       <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
         {/* 首頁蓋在同一塊內容區。分頁一律留在 DOM 裡（見下方 isActive 附近的
@@ -592,6 +623,12 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                 <KnowledgeBaseView isActive={isActive} />
               ) : tab.type === "mail" ? (
                 <MailView isActive={isActive} onMessageRead={refreshMailUnread} />
+              ) : tab.type === "remote-terminal" ? (
+                <RemoteTerminalView
+                  tabId={tab.id}
+                  connId={tab.remoteConnId ?? ""}
+                  isActive={isActive}
+                />
               ) : (
                 <TerminalView
                   isActive={isActive}

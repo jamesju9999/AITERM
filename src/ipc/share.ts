@@ -7,6 +7,8 @@ export interface ShareStatus {
   code: string | null;
   /** server 的 port。沒在分享時是 null。 */
   port: number | null;
+  /** 這台機器的區網位址（不含 port）。查不到時是 null，面板退成只顯示 port。 */
+  lanAddress: string | null;
 }
 
 /**
