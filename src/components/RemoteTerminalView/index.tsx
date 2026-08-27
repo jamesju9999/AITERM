@@ -91,9 +91,8 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
     write,
     hostPlatform,
   );
-  // `clearAllBlocks` 這個任務還用不到——下一個任務接上 Resync 才會用。
-  // `noUnusedLocals` 開著，先 `void` 掉滿足型別檢查。
-  void clearAllBlocks;
+  const clearAllBlocksRef = useRef(clearAllBlocks);
+  clearAllBlocksRef.current = clearAllBlocks;
 
   const [aiUnsupported, setAiUnsupported] = useState(false);
 
@@ -171,8 +170,11 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
     track(
       onShareViewerResync(connId, () => {
         // 清空再接全量重播。漏掉的位元組可能截斷 ANSI 逃脫序列，帶著壞掉
-        // 的畫面繼續是不會自己好的。
+        // 的畫面繼續是不會自己好的。分段卡片內容也是從同一批位元組解析
+        // 出來的，漏掉的部分同樣可能讓卡片內容跟畫面對不上——跟本機分頁
+        // 執行 clear/cls 時「畫面跟卡片一起清空」是同一個邏輯。
         termRef.current?.clear();
+        clearAllBlocksRef.current();
       }),
     );
 
