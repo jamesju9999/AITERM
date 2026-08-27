@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import {
   onShareViewerControlChanged,
@@ -49,6 +49,32 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
   // 那個 effect（先寫）能呼叫到它，即使賦值它的 effect（後寫）還沒跑。
   const recomputeFontSizeRef = useRef<(() => void) | null>(null);
 
+  // 主控端最後一次告知的尺寸——ResizeObserver 的 callback 要用到「當下」
+  // 的 cols/rows，但它是掛載時註冊一次的閉包，不會自動看到後續 Granted/
+  // Resize 事件更新的值，所以用 ref 橋接（這個 repo 在 Tauri 事件監聽上
+  // 踩過同一類坑）。
+  const sizeRef = useRef({ cols: 80, rows: 24 });
+
+  const recomputeFontSize = useCallback(() => {
+    const term = termRef.current;
+    const host = hostRef.current;
+    if (!term || !host) return;
+    const { cols, rows } = sizeRef.current;
+    const fitted = computeFittingFontSize(term, cols, rows, host.clientWidth, host.clientHeight);
+    if (fitted !== null) term.options.fontSize = fitted;
+  }, []);
+
+  useEffect(() => {
+    recomputeFontSizeRef.current = recomputeFontSize;
+  }, [recomputeFontSize]);
+
+  useEffect(() => {
+    if (!hostRef.current) return;
+    const ro = new ResizeObserver(() => recomputeFontSizeRef.current?.());
+    ro.observe(hostRef.current);
+    return () => ro.disconnect();
+  }, []);
+
   useEffect(() => {
     if (!connId) return;
     const unlisteners: Array<() => void> = [];
@@ -69,6 +95,8 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
         const term = termRef.current;
         if (term && cols > 0 && rows > 0) {
           term.resize?.(cols, rows);
+          sizeRef.current = { cols, rows };
+          recomputeFontSizeRef.current?.();
         }
       }),
     );
@@ -220,7 +248,9 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
         </div>
       )}
 
-      <div className="aiterm-remote-terminal__screen" ref={hostRef} />
+      <div className="aiterm-remote-terminal__screen">
+        <div className="aiterm-remote-terminal__scroll" ref={hostRef} />
+      </div>
     </div>
   );
 }
@@ -240,4 +270,46 @@ function endReasonText(t: Translations, reason: string): string {
   const key = `remote_terminal_ended_${reason}`;
   const table = t as unknown as Record<string, string>;
   return table[key] ?? t.remote_terminal_ended_session_closed;
+}
+
+/**
+ * 量測 `term` 目前字級下的字元格 CSS 像素尺寸，線性外推到「剛好能讓
+ * `cols`×`rows` 塞進 `containerWidth`×`containerHeight`」的字級。
+ *
+ * 用線性外推而不是二分搜尋反覆調字級再量測：等寬字型的字元格尺寸本來就
+ * 跟字級成正比（CSS `font-size` 的定義就是線性縮放），量一次目前字級的
+ * 尺寸就能直接算出答案，不需要迭代。
+ *
+ * 量測用的 `_core._renderService.dimensions.css.cell` 是 xterm.js 沒有
+ * 公開的內部欄位——這個 repo 已經有先例（`TerminalView.tsx` 算
+ * `liveHeightPx` 用的是同一條路徑），這裡沿用同樣的 escape hatch。量不到
+ * 時（例如字型還沒載入完成）回傳 `null`，呼叫端維持目前字級不做任何事。
+ *
+ * 回傳值夾在 [8, 32] 之間：8 是「還能看得清楚」的下限（spec 用語：最小
+ * 可讀字級），塞不下的話交給 CSS 捲軸，不繼續往下縮；32 純粹是防呆上限，
+ * 避免極端情況（例如容器剛好非常大、cols/rows 很小）算出離譜的字級。
+ *
+ * **已知限制**：這個公式假設字元格尺寸跟字級完全線性縮放。瀏覽器的字型
+ * hinting/像素對齊在小字級時可能讓量測值輕微偏離線性，理論上外推結果
+ * 可能有 1px 等級的誤差——實務上影響很小（沒有回饋迴圈去修正），先不處理。
+ */
+function computeFittingFontSize(
+  term: Terminal,
+  cols: number,
+  rows: number,
+  containerWidth: number,
+  containerHeight: number,
+): number | null {
+  const dims = (
+    term as unknown as {
+      _core?: { _renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } } };
+    }
+  )._core?._renderService?.dimensions?.css?.cell;
+  if (!dims?.width || !dims?.height || cols <= 0 || rows <= 0) return null;
+
+  const currentFontSize = term.options.fontSize ?? 14;
+  const maxByWidth = (containerWidth * currentFontSize) / (cols * dims.width);
+  const maxByHeight = (containerHeight * currentFontSize) / (rows * dims.height);
+  const fitted = Math.floor(Math.min(maxByWidth, maxByHeight));
+  return Math.max(8, Math.min(fitted, 32));
 }

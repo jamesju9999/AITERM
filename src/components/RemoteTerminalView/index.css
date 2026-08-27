@@ -42,4 +42,16 @@
   flex: 1;
   min-height: 0;
   overflow: clip;
+  display: flex;
+}
+
+/* 字級縮到最小（8px）仍塞不下 cols×rows 時，捲軸只開在這一層——外層
+   `.aiterm-remote-terminal`/`.aiterm-remote-terminal__screen` 維持
+   `overflow: clip`。整層改用 `overflow: auto` 會重現這個 repo 踩過的
+   「貼上內容被瀏覽器捲出視野變空白」那個坑（見 .aiterm-live-frame 的
+   同類註解）。 */
+.aiterm-remote-terminal__scroll {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
 }
