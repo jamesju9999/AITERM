@@ -532,7 +532,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       {connectOpen && (
         <ConnectDialog
           onCancel={() => setConnectOpen(false)}
-          onConnected={(connId, hostLabel) => {
+          onConnected={(connId, sas, hostLabel) => {
             setConnectOpen(false);
             const newId = crypto.randomUUID();
             setTabs((prev) => [
@@ -543,6 +543,9 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                 type: "remote-terminal",
                 remoteConnId: connId,
                 remoteHostLabel: hostLabel,
+                // 這一端算出的驗證碼，要唸給對方核對。跟著連線的回傳值走而
+                // 不是事件——事件會在這個分頁掛載之前就發出去。
+                remoteSas: sas,
               },
             ]);
             selectTab(newId);

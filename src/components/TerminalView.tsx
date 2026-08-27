@@ -1693,7 +1693,11 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               <span>{t.ai_providers} ＋</span>
             </button>
           )}
-          <SharePanel tabId={tabId} />
+          {/* **要傳 PTY session id，不是 React 的 tabId。** 後端的
+              `subscribe_with_history` 拿這個值去 PtyManager 查串流；傳 React
+              的分頁 id 會查不到，觀看端只會看到「那個終端機已經關閉」。
+              整套自動測試都沒抓到，因為測試裡直接把 PTY id 當成 tab_id 用。 */}
+          {sessionId && <SharePanel sessionId={sessionId} />}
           <button
             className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
             title={t.term_bookmark_tooltip}

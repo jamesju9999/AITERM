@@ -55,6 +55,13 @@ struct SharedTab {
 #[derive(Default)]
 pub struct ShareRegistry {
     /// tab_id → 該分頁的共享狀態。
+    ///
+    /// **這裡的 `tab_id` 實際上必須是 PTY session id。** `server.rs` 只拿它去
+    /// `PtyManager`（`size` / `write` / `subscribe_with_history`），傳 React 的
+    /// 分頁 id 會查不到，觀看端收到的是 `SessionClosed`。實機測試踩過一次。
+    ///
+    /// 本檔的測試抓不到這個混淆——測試裡是 `let tab_id = pty.create(...)`，
+    /// 兩個 id 是同一個值。守在前端呼叫點（見 `SharePanel/index.test.tsx`）。
     tabs: Mutex<HashMap<String, SharedTab>>,
     /// request_id → 待審請求。
     pending: Mutex<HashMap<String, PendingRequest>>,

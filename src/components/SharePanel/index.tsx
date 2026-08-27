@@ -5,7 +5,8 @@ import { LinkIcon } from "../Icons";
 import "./index.css";
 
 interface Props {
-  tabId: string;
+  /** **PTY session id，不是 React 的分頁 id。** 後端拿它去 PtyManager 查串流。 */
+  sessionId: string;
 }
 
 /**
@@ -18,10 +19,10 @@ interface Props {
  * （見 `src/ipc/share.ts` 的 `PendingRequest`）。面板上的 6 位短碼是
  * 另一回事——那是要給對方輸入的，本來就該顯示。
  */
-export function SharePanel({ tabId }: Props) {
+export function SharePanel({ sessionId }: Props) {
   const { t } = useLocale();
   const { sharing, code, port, lanAddress, viewers, start, stop, kick, revokeControl } =
-    useShareHost(tabId);
+    useShareHost(sessionId);
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
