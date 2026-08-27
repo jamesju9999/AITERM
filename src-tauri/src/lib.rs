@@ -97,8 +97,8 @@ use commands::{
     },
     secret::{delete_api_key, has_api_key},
     share::{
-        share_approve, share_deny, share_kick, share_pending, share_revoke_control, share_start,
-        share_status, share_stop, share_viewers,
+        share_approve, share_deny, share_discover, share_kick, share_pending,
+        share_revoke_control, share_start, share_status, share_stop, share_viewers,
     },
     share_viewer::{share_viewer_connect, share_viewer_disconnect, share_viewer_send},
     shell::open_url,
@@ -391,6 +391,7 @@ pub fn run() {
             share_approve,
             share_deny,
             share_viewers,
+            share_discover,
             share_kick,
             share_revoke_control,
             share_viewer_connect,
