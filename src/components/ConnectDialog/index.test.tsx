@@ -7,6 +7,11 @@ vi.mock("../../ipc/shareViewer", () => ({
   shareViewerConnect: (...a: unknown[]) => connectMock(...a),
 }));
 
+const discoverMock = vi.fn();
+vi.mock("../../ipc/share", () => ({
+  shareDiscover: (...a: unknown[]) => discoverMock(...a),
+}));
+
 vi.mock("../../contexts/LocaleContext", async () => {
   const { translations } = await import("../../lib/i18n");
   return { useLocale: () => ({ t: translations["zh-TW"], locale: "zh-TW", setLocale: () => {} }) };
@@ -19,6 +24,7 @@ const onCancel = vi.fn();
 
 beforeEach(() => {
   connectMock.mockReset().mockResolvedValue({ connId: "conn-1", sas: "4917" });
+  discoverMock.mockReset().mockResolvedValue({ kind: "notFound" });
   onConnected.mockReset();
   onCancel.mockReset();
 });
@@ -71,5 +77,49 @@ describe("ConnectDialog", () => {
 
     expect(await screen.findByText(/連不上/)).toBeInTheDocument();
     expect(onConnected).not.toHaveBeenCalled();
+  });
+
+  it("connects straight through when mDNS finds exactly one match", async () => {
+    discoverMock.mockResolvedValue({ kind: "found", host: "192.168.1.50", port: 9000 });
+    render(<ConnectDialog onConnected={onConnected} onCancel={onCancel} />);
+    await userEvent.type(screen.getByLabelText(/6 位數/), "632706");
+    await userEvent.click(screen.getByRole("button", { name: /^連線$/ }));
+
+    expect(discoverMock).toHaveBeenCalledWith("632706");
+    expect(connectMock).toHaveBeenCalledWith("192.168.1.50", 9000, "632706", "AITerm");
+    expect(onConnected).toHaveBeenCalledWith("conn-1", "4917", "192.168.1.50:9000");
+  });
+
+  it("falls back to the manual address field when mDNS finds nothing", async () => {
+    discoverMock.mockResolvedValue({ kind: "notFound" });
+    render(<ConnectDialog onConnected={onConnected} onCancel={onCancel} />);
+    await userEvent.type(screen.getByLabelText(/6 位數/), "632706");
+    await userEvent.click(screen.getByRole("button", { name: /^連線$/ }));
+
+    expect(await screen.findByText(/找不到這組編號/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/192\.168/)).toBeInTheDocument();
+    expect(connectMock).not.toHaveBeenCalled();
+  });
+
+  it("shows a distinct message when mDNS finds more than one match", async () => {
+    discoverMock.mockResolvedValue({ kind: "ambiguous" });
+    render(<ConnectDialog onConnected={onConnected} onCancel={onCancel} />);
+    await userEvent.type(screen.getByLabelText(/6 位數/), "632706");
+    await userEvent.click(screen.getByRole("button", { name: /^連線$/ }));
+
+    expect(await screen.findByText(/不只一台機器/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/192\.168/)).toBeInTheDocument();
+    expect(connectMock).not.toHaveBeenCalled();
+  });
+
+  it("skips mDNS entirely once the manual address field has something in it", async () => {
+    render(<ConnectDialog onConnected={onConnected} onCancel={onCancel} />);
+    await userEvent.click(screen.getByText(/直接輸入位址/));
+    await userEvent.type(screen.getByPlaceholderText(/192\.168/), "192.168.1.33:47823");
+    await userEvent.type(screen.getByLabelText(/6 位數/), "632706");
+    await userEvent.click(screen.getByRole("button", { name: /^連線$/ }));
+
+    expect(discoverMock).not.toHaveBeenCalled();
+    expect(connectMock).toHaveBeenCalledWith("192.168.1.33", 47823, "632706", "AITerm");
   });
 });

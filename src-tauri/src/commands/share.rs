@@ -156,7 +156,10 @@ pub async fn share_start(
         .start_if_needed(pty_manager.inner().clone(), Some(app))
         .await
         .map_err(|e| format!("啟動共享服務失敗：{e}"))?;
-    let code = server.registry.start_share(tab_id);
+    let code = server.registry.start_share(tab_id.clone());
+    // 冪等：`MdnsAdvertiser::register` 自己會擋掉重複註冊，這裡不用判斷
+    // 「這次是不是真的新短碼」。
+    server.mdns_register(&tab_id, &code);
     Ok(ShareStatus { sharing: true, code: Some(code), port: Some(port), lan_address: lan_address() })
 }
 
@@ -165,6 +168,7 @@ pub async fn share_stop(
     tab_id: String,
     server: State<'_, Arc<ShareServerState>>,
 ) -> Result<ShareStatus, String> {
+    server.mdns_unregister(&tab_id);
     server.registry.stop_share(&tab_id);
     server.stop_if_idle();
     Ok(ShareStatus { sharing: false, code: None, port: None, lan_address: None })
@@ -266,4 +270,37 @@ pub async fn share_revoke_control(
 ) -> Result<(), String> {
     server.registry.revoke_control(&tab_id);
     Ok(())
+}
+
+/// `share_discover` 的結果，給 `ConnectDialog` 分流用。
+///
+/// 跟 `mdns::DiscoverOutcome` 分開（這個帶 serde，那個不帶）——比照
+/// `decide`/`Decision` 既有的分工：內部邏輯不依賴 Tauri，command 層只是
+/// 薄薄一層轉接。
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum DiscoverResult {
+    Found { host: String, port: u16 },
+    NotFound,
+    Ambiguous,
+}
+
+impl From<crate::share::mdns::DiscoverOutcome> for DiscoverResult {
+    fn from(o: crate::share::mdns::DiscoverOutcome) -> Self {
+        match o {
+            crate::share::mdns::DiscoverOutcome::Found { host, port } => {
+                DiscoverResult::Found { host, port }
+            }
+            crate::share::mdns::DiscoverOutcome::NotFound => DiscoverResult::NotFound,
+            crate::share::mdns::DiscoverOutcome::Ambiguous => DiscoverResult::Ambiguous,
+        }
+    }
+}
+
+/// 用短碼在區網上找主控端。收集窗固定 3 秒——短到使用者不會覺得卡住，
+/// 長到足夠讓同網段的回應趕上（見設計文件的「觀看端查找流程」）。
+#[tauri::command]
+pub async fn share_discover(code: String) -> Result<DiscoverResult, String> {
+    let outcome = crate::share::mdns::discover(&code, std::time::Duration::from_millis(3000)).await;
+    Ok(outcome.into())
 }

@@ -45,6 +45,11 @@ export type Decision =
   /** 請求已經不在了（對方斷線或分享被停掉）。 */
   | { kind: "requestGone" };
 
+export type DiscoverResult =
+  | { kind: "found"; host: string; port: number }
+  | { kind: "notFound" }
+  | { kind: "ambiguous" };
+
 export function shareStart(tabId: string): Promise<ShareStatus> {
   return invoke<ShareStatus>("share_start", { tabId });
 }
@@ -101,4 +106,10 @@ export function onSharePendingRequest(
  */
 export function onShareViewersChanged(cb: () => void): Promise<UnlistenFn> {
   return listen<unknown>("share://viewers-changed", () => cb());
+}
+
+/** 用短碼在區網上找主控端。找到一個就回 `Found`；找不到或找到多個時前端
+ *  要退回手動位址輸入（分別對應「查無」與「有歧義」兩種不同文案）。 */
+export function shareDiscover(code: string): Promise<DiscoverResult> {
+  return invoke<DiscoverResult>("share_discover", { code });
 }

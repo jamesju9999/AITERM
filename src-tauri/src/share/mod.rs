@@ -8,6 +8,7 @@
 //!
 //! 設計文件：`docs/superpowers/specs/2026-08-26-remote-terminal-sharing-design.md`
 
+pub mod mdns;
 pub mod protocol;
 pub mod registry;
 pub mod server;
@@ -51,6 +52,10 @@ pub struct ShareServerState {
 struct Running {
     port: u16,
     shutdown: tokio::sync::oneshot::Sender<()>,
+    /// `None` 代表這台機器上 mDNS daemon 啟動失敗（例如環境不允許
+    /// multicast）——分享功能本身**不能**因為這樣就失敗，只是不會被自動
+    /// 發現，使用者退回手動位址一樣能連。
+    mdns: Option<mdns::MdnsAdvertiser>,
 }
 
 impl Default for ShareServerState {
@@ -100,7 +105,14 @@ impl ShareServerState {
         let (tx, rx) = tokio::sync::oneshot::channel();
         // 自己的 accept 迴圈而不是 axum::serve——見下方「TLS 的接線」。
         tokio::spawn(serve_tls(listener, app_router, identity, rx));
-        *self.running.lock() = Some(Running { port, shutdown: tx });
+        let mdns = match mdns::MdnsAdvertiser::start() {
+            Ok(a) => Some(a),
+            Err(e) => {
+                log::warn!("mDNS daemon 啟動失敗，這次分享不會被自動發現：{e}");
+                None
+            }
+        };
+        *self.running.lock() = Some(Running { port, shutdown: tx, mdns });
         Ok(port)
     }
 
@@ -110,7 +122,31 @@ impl ShareServerState {
             return;
         }
         if let Some(r) = self.running.lock().take() {
+            if let Some(mdns) = &r.mdns {
+                mdns.shutdown();
+            }
             let _ = r.shutdown.send(());
+        }
+    }
+
+    /// 幫某個分頁的短碼註冊 mDNS 廣播。server 還沒啟動（`running` 是
+    /// `None`）或這次啟動時 mDNS daemon 沒能起來時，安靜地什麼都不做——
+    /// 呼叫端（`commands::share::share_start`）不需要關心這兩種情況。
+    pub fn mdns_register(&self, tab_id: &str, code: &str) {
+        let mut running = self.running.lock();
+        let Some(r) = running.as_mut() else { return };
+        let port = r.port;
+        if let Some(mdns) = r.mdns.as_mut() {
+            mdns.register(tab_id, code, port);
+        }
+    }
+
+    /// 取消某個分頁的 mDNS 廣播。
+    pub fn mdns_unregister(&self, tab_id: &str) {
+        let mut running = self.running.lock();
+        let Some(r) = running.as_mut() else { return };
+        if let Some(mdns) = r.mdns.as_mut() {
+            mdns.unregister(tab_id);
         }
     }
 }

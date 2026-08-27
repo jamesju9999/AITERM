@@ -4,7 +4,8 @@
 //! 拿不到。所以這些測試直接驗**被 command 呼叫的那層邏輯**（`decide`），
 //! command 本身只是很薄的轉接。端到端由 `share_end_to_end.rs` 涵蓋。
 
-use aiterm_lib::commands::share::{decide, Decision};
+use aiterm_lib::commands::share::{decide, Decision, DiscoverResult};
+use aiterm_lib::share::mdns::DiscoverOutcome;
 use aiterm_lib::share::registry::{AccessMode, ShareRegistry};
 
 #[test]
@@ -76,4 +77,14 @@ fn a_request_that_vanished_is_reported_not_panicked() {
 
     let outcome = decide(&reg, &req, AccessMode::ReadOnly, "4917");
     assert!(matches!(outcome, Decision::RequestGone));
+}
+
+#[test]
+fn discover_result_mirrors_the_outcome_kind() {
+    assert!(matches!(
+        DiscoverResult::from(DiscoverOutcome::Found { host: "1.2.3.4".into(), port: 9 }),
+        DiscoverResult::Found { host, port } if host == "1.2.3.4" && port == 9
+    ));
+    assert!(matches!(DiscoverResult::from(DiscoverOutcome::NotFound), DiscoverResult::NotFound));
+    assert!(matches!(DiscoverResult::from(DiscoverOutcome::Ambiguous), DiscoverResult::Ambiguous));
 }
