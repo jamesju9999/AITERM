@@ -56,6 +56,130 @@ pub fn local_ipv4_for_mdns() -> Option<std::net::Ipv4Addr> {
     }
 }
 
+use std::collections::HashMap;
+
+use mdns_sd::{ServiceDaemon, ServiceInfo};
+
+/// 主控端這一側：持有 mDNS daemon，記著「哪個分頁註冊成哪個 mDNS 服務全名」
+/// 好在停止分享時精準取消註冊。
+///
+/// 跟 `ShareRegistry` 刻意分開（`ShareRegistry` 的文件講得很清楚：它不碰
+/// 網路）——這個結構才是真的碰 mDNS 網路呼叫的地方。
+///
+/// **同步合約**：此結構**不自行同步**，與 `ShareRegistry`/`ViewerManager` 不同。
+/// 呼叫端必須從外部序列化存取（例如在一個 Mutex 後面）。一個後續任務將把
+/// `MdnsAdvertiser` 放進 `ShareServerState` 既有的 `Mutex<Option<Running>>`，
+/// 那個外層鎖就會提供同步；內層額外的 Mutex 會造成冗餘的雙重鎖定。
+pub struct MdnsAdvertiser {
+    daemon: ServiceDaemon,
+    /// tab_id → 這個分頁註冊出去的 mDNS 服務全名（`ServiceInfo::get_fullname()`）。
+    registrations: HashMap<String, String>,
+}
+
+impl MdnsAdvertiser {
+    /// 啟動一個 mDNS daemon（背景執行緒）。失敗就回錯誤——呼叫端把它當成
+    /// 「這台機器上 mDNS 不能用」，不能讓分享功能本身也跟著失敗。
+    pub fn start() -> anyhow::Result<Self> {
+        let daemon = ServiceDaemon::new()?;
+        Ok(Self { daemon, registrations: HashMap::new() })
+    }
+
+    /// 幫一個分頁的短碼註冊一筆 mDNS 服務。
+    ///
+    /// **冪等**：這個分頁已經註冊過就直接回，不重新註冊。`share_start` 本身
+    /// 對「重複分享同一分頁」也是冪等的（回傳既有短碼），呼叫端因此可以每次
+    /// 都無腦呼叫這支，不用自己判斷「這次是不是真的新短碼」。
+    ///
+    /// 服務名稱刻意用隨機值而不是短碼本身——見 `mdns.rs` 模組文件開頭的
+    /// 背景說明：短碼撞名時 `ServiceDaemon` 會自動改名，觀看端永遠看不到
+    /// 「兩個回應」，所以短碼只能放 TXT，讓觀看端自己判斷有幾筆比對上。
+    pub fn register(&mut self, tab_id: &str, code: &str, port: u16) {
+        if self.registrations.contains_key(tab_id) {
+            return;
+        }
+        let Some(ip) = local_ipv4_for_mdns() else {
+            log::warn!("mDNS 註冊失敗：查不到本機區網位址，短碼 {code} 不會被自動發現");
+            return;
+        };
+        let host_name = format!("{ip}.local.");
+        let instance_name = uuid::Uuid::new_v4().to_string();
+        let mut props = HashMap::new();
+        props.insert("code".to_string(), code.to_string());
+
+        let info = match ServiceInfo::new(SERVICE_TYPE, &instance_name, &host_name, std::net::IpAddr::V4(ip), port, props)
+        {
+            Ok(i) => i,
+            Err(e) => {
+                log::warn!("mDNS ServiceInfo 建立失敗：{e}");
+                return;
+            }
+        };
+        let fullname = info.get_fullname().to_string();
+        match self.daemon.register(info) {
+            Ok(()) => {
+                self.registrations.insert(tab_id.to_string(), fullname);
+            }
+            Err(e) => log::warn!("mDNS 註冊失敗：{e}"),
+        }
+    }
+
+    /// 取消一個分頁的 mDNS 註冊。沒註冊過就是安全的空操作。
+    pub fn unregister(&mut self, tab_id: &str) {
+        if let Some(fullname) = self.registrations.remove(tab_id) {
+            if let Err(e) = self.daemon.unregister(&fullname) {
+                log::warn!("mDNS 取消註冊失敗：tab_id={}, fullname={}, error={}", tab_id, fullname, e);
+            }
+        }
+    }
+
+    /// 關掉整個 daemon。跟這個專案既有的 WS server 關閉方式一樣走
+    /// fire-and-forget——沒有人需要等它真的關完才能繼續。
+    pub fn shutdown(&self) {
+        let _ = self.daemon.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod advertiser_tests {
+    use super::*;
+
+    // 這兩個測試需要真的開 multicast socket，部分 CI 沙箱環境不允許（這個
+    // repo 的 `cargo test` 已經有 3 個因為同類原因被標 ignore 的既有測試）。
+    // 本機執行：`cargo test --lib share::mdns -- --ignored`
+
+    #[test]
+    #[ignore = "需要真的 multicast socket，CI 沙箱可能不允許"]
+    fn registering_twice_for_the_same_tab_is_a_no_op() {
+        let mut adv = MdnsAdvertiser::start().expect("daemon starts");
+        adv.register("tab-1", "123456", 4000);
+        let first = adv.registrations.get("tab-1").cloned();
+        adv.register("tab-1", "123456", 4000);
+        assert_eq!(adv.registrations.get("tab-1").cloned(), first, "re-registering minted a new entry");
+        adv.shutdown();
+    }
+
+    #[test]
+    #[ignore = "需要真的 multicast socket，CI 沙箱可能不允許"]
+    fn unregistering_an_unknown_tab_does_not_panic() {
+        let mut adv = MdnsAdvertiser::start().expect("daemon starts");
+        adv.unregister("no-such-tab");
+        adv.shutdown();
+    }
+
+    #[test]
+    #[ignore = "需要真的 multicast socket，CI 沙箱可能不允許"]
+    fn unregister_then_register_again_works() {
+        let mut adv = MdnsAdvertiser::start().expect("daemon starts");
+        adv.register("tab-1", "123456", 4000);
+        assert!(adv.registrations.contains_key("tab-1"), "tab-1 should be registered");
+        adv.unregister("tab-1");
+        assert!(!adv.registrations.contains_key("tab-1"), "tab-1 should be unregistered");
+        adv.register("tab-1", "654321", 4001);
+        assert!(adv.registrations.contains_key("tab-1"), "tab-1 should be registered again");
+        adv.shutdown();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
