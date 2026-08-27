@@ -65,6 +65,13 @@ function recoverUntrackedCommand(
   for (let row = startRow; row <= endRow; row++) {
     const line = term.buffer.active.getLine(row);
     if (!line) return null;
+    // A row after the first must be a genuine auto-wrap continuation of the
+    // previous row (isWrapped) — a real newline in between (e.g. a remote
+    // viewer's multi-line paste landing before the actual submitting Enter)
+    // means this isn't a single logical input line anymore, and gluing the
+    // rows together would silently fabricate wrong command text that LOOKS
+    // like a successful recovery. Bail out to the safe fallback instead.
+    if (row > startRow && !line.isWrapped) return null;
     fullLine += row === startRow ? line.translateToString(true, startCol) : line.translateToString(true);
   }
   const trimmed = fullLine.trim();

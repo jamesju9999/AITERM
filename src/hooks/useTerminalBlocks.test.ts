@@ -650,5 +650,31 @@ describe("useTerminalBlocks", () => {
       expect(result.current.blocks).toHaveLength(0);
       expect(boundaryMock).toHaveBeenCalledWith("start");
     });
+
+    it("does not glue together rows separated by a real newline (e.g. a multi-line paste), only genuine auto-wraps", async () => {
+      const boundaryMock = vi.fn();
+      const { result } = renderHook(() =>
+        useTerminalBlocks(
+          "session-1",
+          term,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          boundaryMock,
+        ),
+      );
+
+      // 兩行短短的內容，中間是真正的換行字元（不是欄寬自動換行）——模擬
+      // 遠端觀看者貼上多行內容後，才按下真正送出的 Enter。
+      await act(async () => {
+        await writeToTerm(term, "user@host:~$ \x1b]133;B\x07echo hi\r\necho bye\r\n\x1b]133;C\x07");
+      });
+
+      expect(result.current.blocks).toHaveLength(0);
+      expect(boundaryMock).toHaveBeenCalledWith("start");
+    });
   });
 });
