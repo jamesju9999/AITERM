@@ -157,6 +157,9 @@ zsh 不需要這種拆分：`add-zsh-hook precmd __aiterm_precmd` 是在使用�
 5. 依序取 startRow 到 endRow（含頭尾）每一行：
      - 若 term.buffer.active.getLine(該行) 回傳 undefined（該行已被捲出緩衝區），
        回傳 null。
+     - 除了第一行（startRow）以外，若該行的 isWrapped 為 false（代表這一行不是
+       欄寬自動換行接續上一行、而是中間出現了一次「真正的換行」），回傳 null——
+       見下方邊界情況「B/C 之間出現真正的換行」的說明。
      - 第一行（startRow）只取 startCol 之後的部分：
        getLine(startRow).translateToString(true, startCol)
      - 其餘行取整行：getLine(該行).translateToString(true)
@@ -166,7 +169,9 @@ zsh 不需要這種拆分：`add-zsh-hook precmd __aiterm_precmd` 是在使用�
 ```
 
 `IBufferLine.translateToString(trimRight, startColumn, endColumn)` 是 xterm.js 內建
-API，直接支援「只取某欄位之後」的擷取，不需要自己手動切字串。
+API，直接支援「只取某欄位之後」的擷取，不需要自己手動切字串。`isWrapped` 同樣是
+`IBufferLine` 內建欄位，xterm.js 只在「內容超出欄寬、被迫自動換到下一行」時才會把
+它設成 `true`；由實際輸入的 `\r`/`\n` 造成的換行，這個欄位是 `false`。
 
 ### 邊界情況
 
@@ -183,6 +188,14 @@ API，直接支援「只取某欄位之後」的擷取，不需要自己手動�
 - **TUI / 全螢幕互動內容**（vim、htop 等）：這類內容走 `isAlternateBuffer` 判斷的另一
   套高度邏輯，shell 本來就不會在這類程式執行期間送出 OSC 133 標記，不受影響。
 - **還原出的文字為空**：視為還原失敗，走安全網，不建立品質可疑的卡片。
+- **`B`/`C` 之間出現真正的換行**（例如遠端觀看者用貼上功能，一次貼進去的內容本身
+  含有換行、在真正按下送出的 Enter 之前就已經出現在畫面上；或是某些 shell 的續行
+  提示字元）：這種情況下，`startRow` 到 `endRow` 之間會有一行不是「欄寬自動換行」
+  接續上一行，而是由真正的換行字元造成的全新一行。若不分青紅皂白把這些行接在一起，
+  會把兩段語意無關的內容黏成一串看似合理、實則錯誤的指令文字——比直接還原失敗、
+  走安全網還要糟（安全網不會建立錯誤資料，硬接出來的錯字串卻會被當成「還原成功」
+  顯示給使用者）。用 `isWrapped` 欄位分辨：只要 `startRow` 之後的任何一行不是
+  自動換行接續（`isWrapped === false`），就視為還原失敗。
 
 ## Windows（PowerShell）擴充
 
