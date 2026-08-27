@@ -31,10 +31,13 @@ describe("remote terminal i18n", () => {
     });
   }
 
-  it("keeps the two locales in sync for remote terminal strings", () => {
+  it("keeps the two locales in sync for sharing strings", () => {
     // 語系漂移是這個 repo 記過的坑：只加一邊，另一邊會靜默 fallback 或空白。
-    const zh = Object.keys(translations["zh-TW"]).filter((k) => k.startsWith("remote_terminal_"));
-    const en = Object.keys(translations["en"]).filter((k) => k.startsWith("remote_terminal_"));
-    expect(zh.sort()).toEqual(en.sort());
+    const prefixes = ["remote_terminal_", "share_", "consent_", "connect_"];
+    const pick = (loc: "zh-TW" | "en") =>
+      Object.keys(translations[loc])
+        .filter((k) => prefixes.some((p) => k.startsWith(p)))
+        .sort();
+    expect(pick("zh-TW")).toEqual(pick("en"));
   });
 });
