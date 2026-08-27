@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
 import {
   onShareViewerControlChanged,
   onShareViewerData,
@@ -11,6 +10,7 @@ import {
   shareViewerSend,
 } from "../../ipc/shareViewer";
 import { useLocale } from "../../contexts/LocaleContext";
+import { getActiveTheme, type AppTheme } from "../../lib/themes";
 import type { Translations } from "../../lib/i18n";
 import "./index.css";
 
@@ -44,6 +44,10 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
   // 用 ref 避免 stale closure（這個 repo 在 Tauri 事件監聽上踩過這個坑）。
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
+
+  // 後續一個任務會賦值成真正的字級重算函式；這裡先放 ref 讓 xterm 建立
+  // 那個 effect（先寫）能呼叫到它，即使賦值它的 effect（後寫）還沒跑。
+  const recomputeFontSizeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!connId) return;
@@ -104,9 +108,21 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
   // 只依賴掛載，兩者的生命週期不同。
   useEffect(() => {
     if (!hostRef.current) return;
-    const term = new Terminal({ convertEol: false, cursorBlink: false });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
+
+    // 跟本機分頁（TerminalView.tsx）讀同一份設定來源，讓遠端分頁的外觀
+    // 一開始就對得上，不用等使用者去改設定才同步。
+    const initFontSize = parseInt(localStorage.getItem("aiterm-font-size") ?? "14", 10) || 14;
+    const initFontFamily = localStorage.getItem("aiterm-font-family") ?? '"Cascadia Mono", Consolas, monospace';
+    const initTheme = getActiveTheme();
+
+    const term = new Terminal({
+      fontFamily: initFontFamily,
+      fontSize: initFontSize,
+      lineHeight: 1.1,
+      cursorBlink: true,
+      theme: initTheme.xterm,
+      convertEol: false,
+    });
     term.open(hostRef.current);
     termRef.current = term;
 
@@ -119,7 +135,25 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
       }
     });
 
+    const onFontChanged = (e: Event) => {
+      const { fontSize, fontFamily } = (e as CustomEvent).detail as { fontSize: number; fontFamily: string };
+      term.options.fontSize = fontSize;
+      term.options.fontFamily = fontFamily;
+      // 字型/字級變了，同樣的 cols×rows 需要的容器空間也變了——Task 4
+      // 加的 recomputeFontSize 會在這個函式存在後接手這件事。
+      recomputeFontSizeRef.current?.();
+    };
+    window.addEventListener("aiterm:font-changed", onFontChanged);
+
+    const onThemeChanged = (e: Event) => {
+      const { theme } = (e as CustomEvent).detail as { theme: AppTheme };
+      term.options.theme = theme.xterm;
+    };
+    window.addEventListener("aiterm:theme-changed", onThemeChanged);
+
     return () => {
+      window.removeEventListener("aiterm:font-changed", onFontChanged);
+      window.removeEventListener("aiterm:theme-changed", onThemeChanged);
       onData?.dispose?.();
       term.dispose();
       termRef.current = null;
