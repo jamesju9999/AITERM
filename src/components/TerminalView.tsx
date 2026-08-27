@@ -626,14 +626,25 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // 因為 setLiveRows 要到這裡才存在。跟這個檔案其他 ref 一樣直接在
   // render 當下賦值，不用額外包一層 effect。
   //
-  // 只在 "start" 撐高，"end" 刻意不縮回：本機自己送出的指令結束後會被
-  // finalizeBlock 搬進卡片，縮回 MIN_LIVE_ROWS 不會丟資料；但遠端觀看者
-  // 送進來的指令從沒有對應的本機區塊，永遠不會變成卡片（見上面的中文
-  // 說明），這裡若跟著縮回，就是把已經畫在畫面上的輸出直接裁掉、且滑鼠
-  // 滾輪跟 liveRows 毫無關聯——內容會憑空消失且拿不回來。維持撐開，等到
-  // 下一個「本機自己」的指令完成、visibleBlockCount 變動時才會縮回。
+  // "start" 先撐到 MAX_LIVE_ROWS，避免指令執行途中输出被裁掉（滑鼠滾輪
+  // 跟 liveRows 毫無關聯，裁掉了就拿不回來）。"end" 則改成量測游標實際
+  // 停在第幾行，把 liveRows 收回剛好能放下這次輸出的高度，而不是繼續
+  // 卡在 MAX——本機自己的指令結束後内容會被 finalizeBlock 搬進卡片、
+  // 現場清空，收回 MIN_LIVE_ROWS 沒有問題；但遠端觀看者送進來的指令
+  // 永遠不會變成卡片、也永遠不會被清空，維持在 MAX 只會在輸出行數本來
+  // 就不多時，於實際內容下方留一大截用不到的空白，跟原本終端機的樣子
+  // 不一致（實機截圖證實）。這裡只在 "end" 當下讀一次游標位置，不是
+  // 持續追蹤——不會遇到上面那段中文註解講的、追蹤游標位置在互動式全螢幕
+  // 內容（TUI）上失準的問題，因為那類內容早就走 isAlternateBuffer 的
+  // 高度計算，不受這裡影響。
   untrackedCommandBoundaryRef.current = (kind) => {
-    if (kind === "start") setLiveRows(MAX_LIVE_ROWS);
+    if (kind === "start") {
+      setLiveRows(MAX_LIVE_ROWS);
+      return;
+    }
+    const term = termRef.current;
+    const usedRows = term ? term.buffer.active.cursorY + 1 : MIN_LIVE_ROWS;
+    setLiveRows(Math.min(MAX_LIVE_ROWS, Math.max(MIN_LIVE_ROWS, usedRows)));
   };
 
   // Agent lifecycle status shown in the AgentStatusBar above the input, driven by

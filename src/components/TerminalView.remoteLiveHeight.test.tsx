@@ -76,7 +76,7 @@ beforeEach(() => {
 });
 
 describe("TerminalView 遠端指令觸發的即時窗格高度", () => {
-  it("untracked 指令結束後不會縮回 MIN_LIVE_ROWS，避免已經畫出的輸出被裁切消失", async () => {
+  it("untracked 指令有多行輸出時，結束後高度剛好放得下這些行——不會被裁掉，也不會卡在 MAX 留一大截空白", async () => {
     const { container } = render(
       <LocaleProvider>
         <MemoryRouter>
@@ -85,10 +85,15 @@ describe("TerminalView 遠端指令觸發的即時窗格高度", () => {
       </LocaleProvider>,
     );
 
+    const lastCall = () => useTerminalBlocksCalls[useTerminalBlocksCalls.length - 1];
     await waitFor(() => expect(useTerminalBlocksCalls.length).toBeGreaterThan(0));
-    const onUntrackedCommandBoundary = useTerminalBlocksCalls[useTerminalBlocksCalls.length - 1][8] as (
-      kind: "start" | "end",
-    ) => void;
+    await waitFor(() => expect(lastCall()[1]).toBeTruthy());
+
+    const term = lastCall()[1] as {
+      write: (data: string, cb?: () => void) => void;
+      buffer: { active: { cursorY: number } };
+    };
+    const onUntrackedCommandBoundary = lastCall()[8] as (kind: "start" | "end") => void;
     expect(typeof onUntrackedCommandBoundary).toBe("function");
 
     const liveFrame = () => container.querySelector(".aiterm-live-frame") as HTMLElement;
@@ -98,12 +103,20 @@ describe("TerminalView 遠端指令觸發的即時窗格高度", () => {
     const expandedHeight = liveFrame().style.height;
     expect(expandedHeight).not.toBe(idleHeight);
 
+    // 5 行輸出，游標最後停在第 5 行（index 4）——遠比 MAX_LIVE_ROWS(16) 短，
+    // 也遠比 MIN_LIVE_ROWS(3) 長。
+    await act(async () => {
+      await new Promise<void>((resolve) => term.write("l1\r\nl2\r\nl3\r\nl4\r\nl5", resolve));
+    });
+
     act(() => onUntrackedCommandBoundary("end"));
-    // This is the bug: a remote-issued command never becomes a local block,
-    // so it never gets promoted into a card the way a locally-submitted
-    // command's output does. Shrinking back down here just clips already
-    // rendered output out of view with no way to scroll back to it — it
-    // must stay expanded.
-    expect(liveFrame().style.height).toBe(expandedHeight);
+    const settledHeight = liveFrame().style.height;
+    // 這是先前那版修復的 bug：只在 "start" 撐高、"end" 完全不處理，導致
+    // 窗格永遠卡在 MAX_LIVE_ROWS，在只有 5 行輸出時，畫面下方會留一大截
+    // 用不到的空白，跟原本終端機的樣子不一致（實機截圖證實）。
+    expect(settledHeight).not.toBe(expandedHeight);
+    // 也不能收回到閒置的 MIN_LIVE_ROWS——那樣就退回上一版的 bug：已經畫出
+    // 來的 5 行輸出被裁掉只剩最上面幾行。
+    expect(settledHeight).not.toBe(idleHeight);
   });
 });
