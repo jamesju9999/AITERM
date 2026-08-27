@@ -11,6 +11,7 @@ import { DatabaseView } from "./DatabaseView";
 import { DesignView } from "./DesignView/DesignView";
 import { NewTabPicker } from "./NewTabPicker";
 import type { TabOpenOpts } from "./NewTabPicker/tabCatalog";
+import { ConsentDialog } from "./ConsentDialog";
 import { CrossDbView } from "./CrossDbView";
 import { VcsView } from "./VcsView/VcsView";
 import { DocConverterView } from "./DocConverter/DocConverterView";
@@ -520,6 +521,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
           <NewTabPicker onSelect={handlePickerSelect} onClose={() => setPickerOpen(false)} />
         </div>
       )}
+      <ConsentDialog tabs={tabs.map((x) => ({ id: x.id, title: x.title }))} />
       {/* Resizer divider disabled for layout [2] fixed 76px slim sidebar */}
       <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
         {/* 首頁蓋在同一塊內容區。分頁一律留在 DOM 裡（見下方 isActive 附近的
