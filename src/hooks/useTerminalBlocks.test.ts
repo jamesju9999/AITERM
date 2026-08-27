@@ -410,4 +410,111 @@ describe("useTerminalBlocks", () => {
     expect(onCommandStarted).toHaveBeenCalledWith("clear");
     expect(result.current.blocks).toHaveLength(0);
   });
+
+  it("uses hostPlatform instead of navigator.platform for the Windows ConPTY resync", async () => {
+    // 模擬「觀看端自己在 Windows 上跑，但主控端是別的系統」——這正是
+    // hostPlatform 存在的理由：navigator.platform 量到的是觀看端的平台，
+    // 用它來判斷「要不要送 ConPTY 專屬的 Ctrl+L」在跨平台分享時會誤判。
+    const originalPlatform = navigator.platform;
+    Object.defineProperty(navigator, "platform", { value: "Win32", configurable: true });
+
+    try {
+      const { result } = renderHook(() =>
+        useTerminalBlocks(
+          "session-1",
+          term,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          "other",
+        ),
+      );
+
+      act(() => {
+        result.current.submitCommand("echo hi");
+      });
+      writePtyMock.mockClear();
+
+      await act(async () => {
+        await writeToTerm(term, "\x1b]133;D;0\x07");
+      });
+
+      await waitFor(() => {
+        expect(result.current.blocks[0].status).toBe("completed");
+      });
+
+      // hostPlatform 是 "other"，即使 navigator.platform 說是 Windows，
+      // 也不該送出 ConPTY 專屬的 Ctrl+L 同步位元組。
+      expect(writePtyMock).not.toHaveBeenCalledWith("session-1", "\x0c");
+    } finally {
+      Object.defineProperty(navigator, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it("routes writes through a custom write function instead of writePty", async () => {
+    // hostPlatform 明確傳 "other"（而不是留給預設值去讀 navigator.platform）
+    // ——這個測試只關心「write 有沒有接對」，不該讓斷言的期待值隨著執行測試
+    // 的機器 navigator.platform 是什麼而變動（"other" 時 submitCommand 會在
+    // 指令前面加 "\x15" 清行，"windows" 時不會，見 submitCommand 內部的
+    // clearSeq 邏輯）。
+    const writeMock = vi.fn();
+    const { result } = renderHook(() =>
+      useTerminalBlocks(
+        "session-1",
+        term,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        writeMock,
+        "other",
+      ),
+    );
+
+    act(() => {
+      result.current.submitCommand("echo hi");
+    });
+
+    expect(writeMock).toHaveBeenCalledWith("\x15echo hi\r");
+    // 忘記接新的 write、其實還是寫去本機 PTY 的話，這裡就會抓到。
+    expect(writePtyMock).not.toHaveBeenCalled();
+  });
+
+  it("routes the Windows ConPTY resync byte through a custom write function too", async () => {
+    // The two tests above check hostPlatform and write independently. This one
+    // checks the combination that actually matters for the remote-viewer use
+    // case: a Windows host's ConPTY resync byte (\x0c) must go through the
+    // injected write, not fall back to writePty.
+    const writeMock = vi.fn();
+    const { result } = renderHook(() =>
+      useTerminalBlocks(
+        "session-1",
+        term,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        writeMock,
+        "windows",
+      ),
+    );
+
+    act(() => {
+      result.current.submitCommand("echo hi");
+    });
+    writeMock.mockClear();
+
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;D;0\x07");
+    });
+
+    await waitFor(() => {
+      expect(result.current.blocks[0].status).toBe("completed");
+    });
+
+    expect(writeMock).toHaveBeenCalledWith("\x0c");
+    expect(writePtyMock).not.toHaveBeenCalled();
+  });
 });

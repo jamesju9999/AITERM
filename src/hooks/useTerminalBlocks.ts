@@ -28,6 +28,11 @@ export interface UseTerminalBlocksResult {
   /** 強制把一個 running 中的區塊結案（例如卡在 heredoc 的中斷）。
    *  會呼叫該區塊等待中的 onComplete callback——見 finalizeBlock 內部實作。 */
   finalizeBlock: (blockId: string, exitCode: number, opts?: { clearOnParsed?: boolean }) => void;
+  /** 清空整個分段卡片歷史。原本只在內部處理 `clear`/`cls` 指令時用；
+   *  遠端分頁在收到 `Resync`（漏位元組、全量重播）時也要呼叫這個——
+   *  漏掉的位元組可能連帶讓卡片內容跟畫面對不上，這跟本機分頁執行
+   *  `clear`/`cls` 時「畫面跟卡片一起清空」是同一個邏輯。 */
+  clearAllBlocks: () => void;
 }
 
 // `clear` is the Unix/PowerShell screen-clear command; `cls` is cmd.exe's (and
@@ -51,9 +56,25 @@ export function useTerminalBlocks(
    *  必須是穩定的參考（useCallback 空依賴或 ref 橋接）——它進了 submitCommand
    *  與 beginTrackedBlock 的依賴陣列，每次換身分都會讓兩者的識別跟著變。 */
   onCommandStarted?: (cmd: string) => void,
+  /** 指令怎麼寫出去。預設包一層 `writePty(sessionId, data)`，跟改動前的
+   *  行為完全一樣。遠端分頁傳 `(data) => shareViewerSend(connId, data)`。
+   *
+   *  **不要把這個參數本身放進任何 useEffect/useCallback 的依賴陣列**：
+   *  呼叫端沒有明確傳值時會落到這個預設值運算式，而預設參數是每次呼叫
+   *  都重新求值的——本機分頁因此每次 render 都會拿到一個全新的函式參考。
+   *  下面用 `writeRef` 橋接解決，內部一律呼叫 `writeRef.current(...)`。 */
+  write: (data: string) => void = (data) => writePty(sessionId, data),
+  /** 主控端平台，只影響 Windows ConPTY 的 Ctrl+L 清畫面同步邏輯。預設讀
+   *  `navigator.platform`，跟改動前行為一樣；遠端分頁傳 `Granted` 訊息裡
+   *  的 `host_os`。這是字串值，可以放心放進依賴陣列（不像 `write` 是函式
+   *  參考，同樣的字串值不會觸發 React 重新執行 effect）。 */
+  hostPlatform: "windows" | "other" = navigator.platform.toLowerCase().startsWith("win") ? "windows" : "other",
 ): UseTerminalBlocksResult {
   const [blocks, setBlocks] = useState<TerminalBlock[]>([]);
   const [isAlternateBuffer, setIsAlternateBuffer] = useState(false);
+
+  const writeRef = useRef(write);
+  writeRef.current = write;
 
   const blocksRef = useRef<TerminalBlock[]>([]);
   const completionCallbacksRef = useRef<Map<string, (block: TerminalBlock) => void>>(new Map());
@@ -191,7 +212,7 @@ export function useTerminalBlocks(
         // that forceLiveRepaint's fit() call was spuriously triggering (see
         // that function for the full mechanism) — fixed there, not here, but
         // this deferred-clear timing is still needed on its own merits.
-        const isWindows = navigator.platform.toLowerCase().startsWith("win");
+        const isWindows = hostPlatform === "windows";
         if (isWindows) {
           setTimeout(() => {
             term?.clear();
@@ -208,7 +229,7 @@ export function useTerminalBlocks(
             // the prompt to the top, so ConPTY's model and xterm's cleared
             // buffer agree again — and, as a bonus, a resize then replays only
             // the clean prompt instead of the stale duplicated output.
-            writePty(sessionId, "\x0c").catch(console.error);
+            writeRef.current("\x0c");
           }, 0);
           finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode);
         } else {
@@ -236,11 +257,12 @@ export function useTerminalBlocks(
       disposeBuffer.dispose();
       disposeOsc.dispose();
     };
-    // sessionId is in the deps because the Windows Ctrl+L resync in the D
-    // handler writes to it — the effect must re-register once the PTY session
-    // id lands (it's set async after `term`) so the handler's closure isn't
-    // holding the initial empty id.
-  }, [term, finalizeBlock, onLiveClear, sessionId, onCommandSettled]);
+    // `write` 故意不在這裡——它透過 writeRef 讀取，不需要讓這個 effect
+    // 跟著它的身分重新註冊（本機分頁沒傳 write 時，每次 render 呼叫端拿到
+    // 的都是函式簽名裡那個預設值運算式產生的全新參考，放進依賴陣列會讓
+    // 這個 effect 每次 render 都 dispose+重新註冊）。`hostPlatform` 是字串，
+    // 沒有這個問題，放心加進來。
+  }, [term, finalizeBlock, onLiveClear, onCommandSettled, hostPlatform]);
 
   const submitCommand = useCallback(
     (cmd: string, onComplete?: (block: TerminalBlock) => void) => {
@@ -253,7 +275,7 @@ export function useTerminalBlocks(
       // deletes a word, dropping the "d").  WarpInput owns all keyboard input so the
       // PTY line is always empty — no clear sequence needed on Windows.
       // On macOS/Linux, \x15 (Ctrl+U) clears bash/zsh input silently.
-      const isWindows = navigator.platform.toLowerCase().startsWith("win");
+      const isWindows = hostPlatform === "windows";
       const clearSeq = isWindows ? "" : "\x15";
 
       if (isClearCommand(cmd)) {
@@ -262,7 +284,7 @@ export function useTerminalBlocks(
         // to the shell (keeps shell-side history/state in sync) but don't track
         // a block for it — there's nothing meaningful to show in a card for it.
         clearAllBlocks();
-        writePty(sessionId, clearSeq + cmd + "\r").catch(console.error);
+        writeRef.current(clearSeq + cmd + "\r");
         return;
       }
 
@@ -299,9 +321,9 @@ export function useTerminalBlocks(
       setBlocks(updated);
 
       // Clear the current line before sending the command (see isWindows/clearSeq above).
-      writePty(sessionId, clearSeq + cmd + "\r").catch(console.error);
+      writeRef.current(clearSeq + cmd + "\r");
     },
-    [sessionId, term, cwdRef, finalizeBlock, clearAllBlocks, onCommandStarted],
+    [sessionId, term, cwdRef, finalizeBlock, clearAllBlocks, onCommandStarted, hostPlatform],
   );
 
   /**
@@ -362,5 +384,6 @@ export function useTerminalBlocks(
     isAlternateBuffer,
     termInstance: term,
     finalizeBlock,
+    clearAllBlocks,
   };
 }
