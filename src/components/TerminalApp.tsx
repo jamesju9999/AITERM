@@ -12,6 +12,7 @@ import { DesignView } from "./DesignView/DesignView";
 import { NewTabPicker } from "./NewTabPicker";
 import type { TabOpenOpts } from "./NewTabPicker/tabCatalog";
 import { ConsentDialog } from "./ConsentDialog";
+import { ConnectDialog } from "./ConnectDialog";
 import { CrossDbView } from "./CrossDbView";
 import { VcsView } from "./VcsView/VcsView";
 import { DocConverterView } from "./DocConverter/DocConverterView";
@@ -67,6 +68,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   // 預設 true：開 app 先看到首頁，上次的分頁照常還原但不在前景。
   const [homeActive, setHomeActive] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [connectOpen, setConnectOpen] = useState(false);
   // 首頁 AI 路由猜對／猜錯的反悔提示：記住開出來的分頁 id、AI 選了什麼類型、
   // 使用者原句（換分頁類型時要用同一句重開）。null 代表沒有提示要顯示。
   const [routeHint, setRouteHint] = useState<{ tabId: string; type: TabType; userText: string } | null>(null);
@@ -258,6 +260,12 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   }, [refreshDefaultBridge]);
 
   const handlePickerSelect = useCallback((type: TabType, opts?: TabOpenOpts) => {
+    if (type === "remote-terminal") {
+      // 遠端分頁要先問短碼／位址才知道要連誰。連上之後才建分頁——
+      // 那時才有 connId 可以掛事件。
+      setConnectOpen(true);
+      return "";
+    }
     const newId = crypto.randomUUID();
     let title = t.terminal_tab;
     if (type === "database") title = t.database_tab;
@@ -270,7 +278,6 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     if (type === "code-assistant") title = t.code_assistant_tab;
     if (type === "knowledge-base") title = t.knowledge_base_tab;
     if (type === "mail") title = t.mail_tab;
-    if (type === "remote-terminal") title = t.remote_terminal_tab;
     // 兩種來源要分得出來：選單挑「Claude Code」是使用者當下的意圖，換整顆圖示
     // 與標題才不會跟一般終端機混淆；設定的「新分頁預設啟用」則是背景行為，使用者
     // 點的是「終端機」，把它改名成 Claude Code 會讓人以為點錯了——那一種只在終端機
@@ -522,6 +529,26 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
         </div>
       )}
       <ConsentDialog tabs={tabs.map((x) => ({ id: x.id, title: x.title }))} />
+      {connectOpen && (
+        <ConnectDialog
+          onCancel={() => setConnectOpen(false)}
+          onConnected={(connId, hostLabel) => {
+            setConnectOpen(false);
+            const newId = crypto.randomUUID();
+            setTabs((prev) => [
+              ...prev,
+              {
+                id: newId,
+                title: `${t.remote_terminal_tab}：${hostLabel}`,
+                type: "remote-terminal",
+                remoteConnId: connId,
+                remoteHostLabel: hostLabel,
+              },
+            ]);
+            selectTab(newId);
+          }}
+        />
+      )}
       {/* Resizer divider disabled for layout [2] fixed 76px slim sidebar */}
       <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
         {/* 首頁蓋在同一塊內容區。分頁一律留在 DOM 裡（見下方 isActive 附近的

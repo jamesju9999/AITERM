@@ -82,10 +82,7 @@ const TAB_CATALOG_META: readonly TabCatalogMeta[] = [
   // in SettingsView, and re-adding the MailIcon import above. See the notes in
   // docs/superpowers/specs/2026-08-04-ai-mail-assistant-design.md.
   { id: "mail",           type: "mail",           icon: <MailIcon size={18} />,      labelKey: "mail_tab",           descKey: "new_mail_desc",           color: "#f87171", hidden: true },
-  // 2B-2a 只做遠端終端機的畫面，還沒有「連線到同事的終端機」那個入口
-  // （分享按鈕、同意視窗、連線對話框都是 2B-2b）——跟 mail、api-docs 同一種
-  // 狀況：分頁型別跟畫面都完整，只是還不對使用者開放，用 hidden 標記。
-  { id: "remote-terminal", type: "remote-terminal", icon: <EyeIcon size={18} />,      labelKey: "remote_terminal_tab", descKey: "new_remote_terminal_desc", color: "#2dd4bf", hidden: true },
+  { id: "remote-terminal", type: "remote-terminal", icon: <EyeIcon size={18} />,      labelKey: "remote_terminal_tab", descKey: "new_remote_terminal_desc", color: "#2dd4bf" },
   // Claude Code 不是獨立的 TabType，而是「終端機分頁 + claudeBridge 選項」，
   // 且需要橋接 server 正在跑才能用（見 requiresBridge）。放在陣列最後，
   // 跟它在新增分頁選單裡的位置一致。顏色刻意跟 vcs 的橙拉開，用 Anthropic 的

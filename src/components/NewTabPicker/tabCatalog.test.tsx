@@ -34,17 +34,18 @@ describe("getTabCatalog", () => {
     }
   });
 
-  // mail、api-docs、remote-terminal 的後端／畫面都是完整的，只是還沒對使用者
-  // 開放；用 hidden 旗標記錄這件事，比在兩個地方各註解掉一行可靠。api-docs 的
-  // 隱藏是 commit 3547799 刻意做的決定，不是遺漏；remote-terminal 則是因為
-  // 2B-2a 只做畫面，連線入口（分享按鈕、同意視窗、連線對話框）要到 2B-2b 才有。
-  it("mail、api-docs、remote-terminal 標成 hidden，其餘不是", () => {
+  // mail、api-docs 的後端／畫面都是完整的，只是還沒對使用者開放；用 hidden
+  // 旗標記錄這件事，比在兩個地方各註解掉一行可靠。api-docs 的隱藏是 commit
+  // 3547799 刻意做的決定，不是遺漏。remote-terminal 曾經也是 hidden（2B-2a
+  // 只做畫面，還沒有連線入口），2B-2b 把「連線到同事的終端機」的入口
+  // （分享按鈕、同意視窗、連線對話框）補上之後就拿掉了 hidden。
+  it("mail、api-docs 標成 hidden，remote-terminal 跟其餘不是", () => {
     const catalog = getTabCatalog(t);
     expect(catalog.find((e) => e.type === "mail")!.hidden).toBe(true);
     expect(catalog.find((e) => e.type === "api-docs")!.hidden).toBe(true);
-    expect(catalog.find((e) => e.type === "remote-terminal")!.hidden).toBe(true);
+    expect(catalog.find((e) => e.type === "remote-terminal")!.hidden).toBeFalsy();
     expect(catalog.filter((e) => e.hidden).map((e) => e.type).sort()).toEqual([
-      "api-docs", "mail", "remote-terminal",
+      "api-docs", "mail",
     ]);
   });
 

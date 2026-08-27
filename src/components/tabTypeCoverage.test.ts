@@ -30,10 +30,16 @@ describe("remote-terminal tab type coverage", () => {
     expect(iconFn).toContain("remote-terminal");
   });
 
-  it("gets a title when opened", () => {
-    // TerminalApp 有一串 `if (type === "...") title = ...`。漏掉的話標題會是
-    // 預設值或空字串。
-    expect(terminalAppSrc).toMatch(/type === "remote-terminal"\s*\)\s*title\s*=/);
+  it("gets a title when the connection succeeds", () => {
+    // **這個型別刻意不走 `handlePickerSelect` 的 title 鏈。** 遠端分頁在使用者
+    // 選單點選的當下還不能建立——那時還不知道要連誰，也沒有 connId 可以掛
+    // 事件。所以選單那條路只是把 ConnectDialog 打開，分頁是連線成功後在
+    // `onConnected` 裡建的，標題帶著對方的位址（`遠端終端機：192.168.1.33:47823`）。
+    //
+    // 這個測試原本抄了其他型別的形狀（掃 title 鏈），那個假設從一開始就不
+    // 適用於這個型別。改成守真正的接線點：onConnected 有把 title 填進去。
+    const onConnected = terminalAppSrc.slice(terminalAppSrc.indexOf("onConnected"));
+    expect(onConnected).toMatch(/title:\s*`\$\{t\.remote_terminal_tab\}/);
   });
 
   it("has a render branch", () => {
