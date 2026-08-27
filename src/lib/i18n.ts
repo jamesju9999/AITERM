@@ -804,6 +804,7 @@ const zhTW = {
     remote_terminal_ended_version_mismatch: "兩邊的 AITerm 版本不同，請更新",
     remote_terminal_ended_sas_commit_mismatch: "驗證失敗，可能有人在中間攔截",
     remote_terminal_ended_sas_handshake_failed: "連線交握失敗，請重試",
+    remote_terminal_ai_unsupported: "AI 指令目前不支援於遠端分頁。",
     // 遠端終端機共享——主控端
     share_button: "分享",
     share_button_tooltip: "把這個終端機分頁分享給同事",
@@ -2157,6 +2158,7 @@ const enRaw = {
     remote_terminal_ended_version_mismatch: "The two AITerm versions differ — please update",
     remote_terminal_ended_sas_commit_mismatch: "Verification failed — someone may be intercepting",
     remote_terminal_ended_sas_handshake_failed: "Connection handshake failed — please retry",
+    remote_terminal_ai_unsupported: "AI commands are not supported in remote tabs yet.",
     // Remote terminal sharing — host side
     share_button: "Share",
     share_button_tooltip: "Share this terminal tab with a colleague",

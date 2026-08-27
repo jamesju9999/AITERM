@@ -12,6 +12,10 @@ import {
 import { useLocale } from "../../contexts/LocaleContext";
 import { getActiveTheme, type AppTheme } from "../../lib/themes";
 import { useTerminalBlocks } from "../../hooks/useTerminalBlocks";
+import { WarpInput } from "../WarpInput";
+import { TerminalBlockCard } from "../TerminalBlockCard";
+import { addBookmark } from "../CommandBookmarks";
+import { parseAiPrefix, parseAgentPrefix } from "../parseAiPrefix";
 import type { Translations } from "../../lib/i18n";
 import "./index.css";
 
@@ -77,9 +81,6 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
   // 授權」——只有非空字串才更新，讓 hostPlatform 維持第一次拿到的值。
   const [hostPlatform, setHostPlatform] = useState<"windows" | "other">("other");
 
-  // 這一步只負責接上 useTerminalBlocks；把回傳值渲染成畫面留給後續任務。
-  // 在那之前先 `void` 掉，滿足 noUnusedLocals（跟 karpathy-guidelines 的
-  // 「不做投機性功能」一致：不在這裡先偷渲染 UI）。
   const { blocks, submitCommand, clearAllBlocks } = useTerminalBlocks(
     connId,
     termState,
@@ -90,9 +91,26 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
     write,
     hostPlatform,
   );
-  void blocks;
-  void submitCommand;
+  // `clearAllBlocks` 這個任務還用不到——下一個任務接上 Resync 才會用。
+  // `noUnusedLocals` 開著，先 `void` 掉滿足型別檢查。
   void clearAllBlocks;
+
+  const [aiUnsupported, setAiUnsupported] = useState(false);
+
+  // WarpInput 送出的整行文字先過一次 AI 前綴檢查——跟本機分頁用同一套
+  // parseAiPrefix.ts 規則，不重新猜字首。是 /ai 或 /agent 開頭就不送出、
+  // 顯示提示；否則走 submitCommand（會建立分段卡片並透過 write 送出）。
+  const handleWarpSubmit = useCallback(
+    (cmd: string) => {
+      if (parseAiPrefix(cmd) !== null || parseAgentPrefix(cmd) !== null) {
+        setAiUnsupported(true);
+        return;
+      }
+      setAiUnsupported(false);
+      submitCommand(cmd);
+    },
+    [submitCommand],
+  );
 
   const recomputeFontSize = useCallback(() => {
     const term = termRef.current;
@@ -291,9 +309,36 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
         </div>
       )}
 
+      {/* 分段卡片：跟本機分頁同一套過濾條件（只顯示已結束且已完成 ANSI
+          解析的），複用 TerminalBlockCard——不傳 onAskAi，Ask AI 按鈕本身
+          是 `{isFailed && onAskAi && (...)}` 條件渲染，不傳就不會出現；
+          block.gitInfo 永遠是 undefined（這裡從不呼叫 setBlockGitInfo），
+          git 徽章同理自然不出現。 */}
+      <div className="aiterm-remote-terminal__blocks">
+        {blocks
+          .filter((b) => b.status !== "running" && b.renderedLines)
+          .map((b) => (
+            <TerminalBlockCard
+              key={b.id}
+              block={b}
+              onBookmark={(command) => addBookmark(command)}
+              onCopy={(command) => navigator.clipboard.writeText(command).catch(console.error)}
+            />
+          ))}
+      </div>
+
       <div className="aiterm-remote-terminal__screen">
         <div className="aiterm-remote-terminal__scroll" ref={hostRef} />
       </div>
+
+      {aiUnsupported && (
+        <div className="aiterm-remote-terminal__ai-unsupported">{t.remote_terminal_ai_unsupported}</div>
+      )}
+
+      <WarpInput
+        onSubmit={handleWarpSubmit}
+        disabled={!(phase.kind === "live" && phase.mode === "control")}
+      />
     </div>
   );
 }
