@@ -11,6 +11,7 @@ import {
 } from "../../ipc/shareViewer";
 import { useLocale } from "../../contexts/LocaleContext";
 import { getActiveTheme, type AppTheme } from "../../lib/themes";
+import { useTerminalBlocks } from "../../hooks/useTerminalBlocks";
 import type { Translations } from "../../lib/i18n";
 import "./index.css";
 
@@ -38,12 +39,29 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
   const { t } = useLocale();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
+  const [termState, setTermState] = useState<Terminal | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "waiting", sas });
 
   // `phase` 要在事件 callback 裡讀到最新值，但那些 callback 只註冊一次——
   // 用 ref 避免 stale closure（這個 repo 在 Tauri 事件監聽上踩過這個坑）。
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
+
+  // 有控制權時才真的送出，唯讀時整個是 no-op——**唯讀時按鍵根本不送出**，
+  // 不是送了被伺服器拒絕（伺服器端還有 may_send_input 這道安全邊界，這
+  // 一層是給使用者的即時回饋）。用 phaseRef 讀最新值，身分只跟著 connId
+  // 變，這樣可以放心把它傳給 useTerminalBlocks（見該 hook 對 write 參數
+  // 的說明：它自己也用 ref 橋接，不會因為這裡身分穩定與否而有額外負擔，
+  // 但兩邊都求穩比較不容易出錯）。
+  const write = useCallback(
+    (data: string) => {
+      const p = phaseRef.current;
+      if (p.kind === "live" && p.mode === "control") {
+        void shareViewerSend(connId, data);
+      }
+    },
+    [connId],
+  );
 
   // 後續一個任務會賦值成真正的字級重算函式；這裡先放 ref 讓 xterm 建立
   // 那個 effect（先寫）能呼叫到它，即使賦值它的 effect（後寫）還沒跑。
@@ -54,6 +72,27 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
   // Resize 事件更新的值，所以用 ref 橋接（這個 repo 在 Tauri 事件監聽上
   // 踩過同一類坑）。
   const sizeRef = useRef({ cols: 80, rows: 24 });
+
+  // Granted 事件的 hostOs 空字串代表「這是後續 resize 通知，不是初次
+  // 授權」——只有非空字串才更新，讓 hostPlatform 維持第一次拿到的值。
+  const [hostPlatform, setHostPlatform] = useState<"windows" | "other">("other");
+
+  // 這一步只負責接上 useTerminalBlocks；把回傳值渲染成畫面留給後續任務。
+  // 在那之前先 `void` 掉，滿足 noUnusedLocals（跟 karpathy-guidelines 的
+  // 「不做投機性功能」一致：不在這裡先偷渲染 UI）。
+  const { blocks, submitCommand, clearAllBlocks } = useTerminalBlocks(
+    connId,
+    termState,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    write,
+    hostPlatform,
+  );
+  void blocks;
+  void submitCommand;
+  void clearAllBlocks;
 
   const recomputeFontSize = useCallback(() => {
     const term = termRef.current;
@@ -88,10 +127,11 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
     };
 
     track(
-      onShareViewerGranted(connId, ({ mode, cols, rows }) => {
+      onShareViewerGranted(connId, ({ mode, cols, rows, hostOs }) => {
         // 尺寸由主控端說了算——照它給的建立，不用自己的視窗大小。
         // `mode` 為空字串代表這是後續的 resize 通知，不是初次核准。
         if (mode) setPhase({ kind: "live", mode });
+        if (hostOs) setHostPlatform(hostOs === "windows" ? "windows" : "other");
         const term = termRef.current;
         if (term && cols > 0 && rows > 0) {
           term.resize?.(cols, rows);
@@ -153,14 +193,16 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
     });
     term.open(hostRef.current);
     termRef.current = term;
+    setTermState(term);
 
     const onData = term.onData((data: string) => {
-      // **唯讀時按鍵根本不送出**，不是送了被伺服器拒絕。伺服器端還有一道
-      // `may_send_input`，但那是安全邊界；這一層是給使用者的即時回饋。
-      const p = phaseRef.current;
-      if (p.kind === "live" && p.mode === "control") {
-        void shareViewerSend(connId, data);
-      }
+      // Drop focus-tracking events that xterm.js emits when it loses / gains
+      // focus（跟本機分頁 TerminalView.tsx 的 term.onData 同一條規則、同一個
+      // 理由：PSReadLine 開了 focus tracking，逐字轉送這兩個序列會讓
+      // PowerShell 把它們印成字面上的 "[O"/"[I"）。本機分頁另外還有一條
+      // 「AI 面板開著時不轉送」，遠端分頁沒有 AI 面板這個概念，不複製。
+      if (data === "\x1b[O" || data === "\x1b[I") return;
+      write(data);
     });
 
     const onFontChanged = (e: Event) => {
@@ -185,6 +227,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
       onData?.dispose?.();
       term.dispose();
       termRef.current = null;
+      setTermState(null);
     };
   }, [connId]);
 

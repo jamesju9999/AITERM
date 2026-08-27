@@ -46,6 +46,9 @@ export interface ViewerGranted {
   /** 主控端的終端機尺寸——xterm 必須照這個建，不能用自己的視窗大小。 */
   cols: number;
   rows: number;
+  /** 主控端的 `std::env::consts::OS`（`"windows"`/`"macos"`/`"linux"`）。
+   *  後續 resize 通知（`mode` 為空字串那種）這欄也是空字串，不用理它。 */
+  hostOs: string;
 }
 
 export function onShareViewerGranted(

@@ -35,6 +35,12 @@ vi.mock("@xterm/xterm", () => ({
     dispose = vi.fn();
     onData = vi.fn();
     loadAddon = vi.fn();
+    scrollToBottom = vi.fn();
+    resize = vi.fn();
+    cols = 80;
+    options: Record<string, unknown> = {};
+    parser = { registerOscHandler: vi.fn(() => ({ dispose: vi.fn() })) };
+    buffer = { onBufferChange: vi.fn(() => ({ dispose: vi.fn() })), active: { type: "normal" } };
   },
 }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit = vi.fn(); } }));
