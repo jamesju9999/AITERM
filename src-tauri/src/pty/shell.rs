@@ -211,6 +211,10 @@ __aiterm_precmd() {
     printf '\x1b]133;D;%s\x07' "$ec"
   fi
   printf '\x1b]133;A\x07'
+  local b_marker=$'%{\e]133;B\a%}'
+  if [[ "$PS1" != *"$b_marker"* ]]; then
+    PS1="${PS1}${b_marker}"
+  fi
 }
 
 add-zsh-hook preexec __aiterm_preexec
@@ -321,5 +325,32 @@ mod tests {
     #[test]
     fn which_on_path_finds_nothing_for_garbage_name() {
         assert!(which_on_path("definitely-not-a-real-binary-xyzzy").is_none());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn zsh_integration_appends_b_marker_to_ps1_in_precmd() {
+        let _ = inject_shell_integration(PathBuf::from("/bin/zsh"));
+        let content = std::fs::read_to_string(
+            std::env::temp_dir().join("aiterm_zsh").join(".zshrc"),
+        )
+        .expect("zshrc should have been written");
+
+        assert!(
+            content.contains(r#"printf '\x1b]133;A\x07'"#),
+            "expected the existing A marker printf to still be present"
+        );
+        assert!(
+            content.contains(r#"local b_marker=$'%{\e]133;B\a%}'"#),
+            "expected the precmd hook to compute a B marker to append to PS1"
+        );
+        assert!(
+            content.contains(r#"if [[ "$PS1" != *"$b_marker"* ]]; then"#),
+            "expected a guard against appending the B marker more than once"
+        );
+        assert!(
+            content.contains(r#"PS1="${PS1}${b_marker}""#),
+            "expected PS1 to be extended with the B marker"
+        );
     }
 }
