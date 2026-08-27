@@ -120,26 +120,98 @@ zsh 一樣「在 precmd 裡直接接 `B` 標記」的寫法，我們的 `B` 標�
 框架事後整段覆蓋 `PS1` 的動作會把我們剛接上去的 `B` 標記直接蓋掉。
 
 解法是把「接 `B` 標記」拆成一個獨立函式，**附加在 `PROMPT_COMMAND` 鏈的最後面**，
-保證不管框架怎麼重寫 `PS1`，都是在那之後才補上 `B`：
+保證不管框架怎麼重寫 `PS1`，都是在那之後才補上 `B`。完整的三支函式（含
+`__aiterm_in_precmd` guard，見下方說明）：
 
 ```bash
+__aiterm_cmd_running=0
+__aiterm_in_precmd=0
+
+__aiterm_preexec() {
+  if [[ $__aiterm_in_precmd -eq 1 ]]; then
+    return
+  fi
+  if [[ $__aiterm_cmd_running -eq 0 ]]; then
+    __aiterm_cmd_running=1
+    printf '\x1b]133;C\x07'
+  fi
+}
+trap '__aiterm_preexec' DEBUG
+
+__aiterm_precmd() {
+  local ec=$?
+  __aiterm_in_precmd=1
+  if [[ $__aiterm_cmd_running -eq 1 ]]; then
+    __aiterm_cmd_running=0
+    printf '\x1b]133;D;%s\x07' "$ec"
+  fi
+  printf '\x1b]133;A\x07'
+}
+
 __aiterm_append_b_marker() {
   local b_marker=$'\[\e]133;B\a\]'
   if [[ "$PS1" != *"$b_marker"* ]]; then
     PS1="${PS1}${b_marker}"
   fi
+  __aiterm_in_precmd=0
 }
 
 PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND};__aiterm_append_b_marker"
 ```
 
+`local ec=$?` 必須維持在 `__aiterm_precmd` 的第一行不變——`__aiterm_in_precmd=1`
+要放在它**之後**才能設，變數賦值雖然不會像呼叫外部指令那樣覆蓋 `$?`，但把設定
+guard 這件事放在擷取 exit code 之前純粹沒有必要冒任何風險，維持原本已經驗證過
+正確的順序。
+
 `\[...\]` 是 bash/readline 提示字元語法裡的零寬度標記等效寫法（既有的顏色控制碼在
 使用者自己的 `PS1` 裡也是這樣包的）。guard 邏輯（先檢查、不存在才接）跟 zsh 版一樣。
 
-zsh 不需要這種拆分：`add-zsh-hook precmd __aiterm_precmd` 是在使用者的 `.zshrc`
-（框架的 `add-zsh-hook precmd` 呼叫多半在裡面）被 `source` 進來**之後**才登記，
-而 `add-zsh-hook` 依登記順序執行，所以我們的 hook 保證排在框架的 hook 之後執行，
-`B` 標記接上去時 `PS1` 已經是框架處理過的最終版本，不需要額外拆分。
+**這裡曾經漏掉一個只有真的跑一次互動式 bash 才會現形的 bug，記錄下來**：bash 的
+`DEBUG` trap（`__aiterm_preexec` 掛在上面，用來送 `C`）會在 `PROMPT_COMMAND`
+裡**每一個**用分號隔開的項目執行前都各自觸發一次，不是只有使用者真正打的指令才會
+觸發。把「接 `B` 標記」拆成 `PROMPT_COMMAND` 裡第二個項目後，呼叫
+`__aiterm_append_b_marker` 這個動作本身也會讓 `DEBUG` trap 再觸發一次——而這時候
+`__aiterm_cmd_running` 才剛被 `__aiterm_precmd` 重設成 `0`（同一輪 `PROMPT_COMMAND`
+求值裡，`__aiterm_precmd` 就在它前面剛執行完），於是 `__aiterm_preexec` 原本那個
+`if [[ $__aiterm_cmd_running -eq 0 ]]` 的判斷會誤判成「有新指令要執行」，在 `B`
+標記都還沒送出、使用者也還沒打任何字之前，就先送出一個假的 `C`。前端
+`recoverUntrackedCommand` 會因此在使用者真正打字之前就已經被觸發、用當時（可能是
+還沒更新到這一輪、甚至完全是 `null`）的 `promptEndRef` 建出一個內容錯誤的區塊，
+而且因為這個假區塊處於 `running` 狀態，等使用者真正送出指令、真正的 `C` 觸發時，
+`useTerminalBlocks.ts` 的 OSC handler 會判斷「已經有本機追蹤區塊」而完全跳過還原
+——真正的指令反而永遠不會被還原，被那個假區塊卡住。
+
+這個 bug 在原本（Task 2 之前）的單一項目版本裡不會發生：`PROMPT_COMMAND` 只有
+`__aiterm_precmd` 一個項目時，沒有第二個「呼叫」的邊界可以讓 `DEBUG` trap 在
+`__aiterm_cmd_running` 已經被重設成 `0` 之後又再次觸發。是 Task 2 把它拆成兩個
+項目之後才讓這個既有機制的隱性缺陷變成每個 bash 使用者都會百分之百踩到的問題
+（原本只有裝了會在 `PROMPT_COMMAND` 裡放多個項目的框架的使用者才可能踩到）。
+
+修法是額外加一個 `__aiterm_in_precmd` 旗標：在 `__aiterm_precmd`（保證是
+`PROMPT_COMMAND` 的第一個項目）擷取完 `$?` 之後立刻設成 `1`，在
+`__aiterm_append_b_marker`（保證是最後一個項目）結尾設回 `0`；`__aiterm_preexec`
+只要看到這個旗標是 `1`，不管 `__aiterm_cmd_running` 是什麼值都直接跳過，等於把整段
+`PROMPT_COMMAND` 求值期間（包含中間任何框架自己的項目）都豁免於 `DEBUG` trap 之外
+——這同時也把上一段提到的「裝了多項目框架的使用者本來就可能踩到」的既有隱性缺陷
+一併修掉，不是額外多做的事，是同一個機制的自然延伸。
+
+**這個 bug 完全無法透過現有的字串比對單元測試發現**——測試檢查的是「產生出來的
+腳本內容長什麼樣子」，不是「這份腳本在真正的 shell 裡執行起來的時序」。發現方式是
+實際用 Python 的 `pty` 模組開一個真正的互動式 `bash -i --rcfile <產生出來的檔案>`、
+送一個指令進去、把原始位元組流連同所有 OSC 133 標記的出現順序印出來比對——跟
+`docs/superpowers/plans/2026-08-27-remote-command-text-recovery.md` Task 2 的
+程式碼品質審查當時建議「之後應該加一個真的執行產生出來的 rcfile 的整合測試」是
+同一個方向，只是這次是先用一次性腳本手動驗證，確認問題存在並且修法有效之後才記錄
+下來。
+
+zsh 不需要這種拆分/guard：`add-zsh-hook precmd __aiterm_precmd` 是在使用者的
+`.zshrc`（框架的 `add-zsh-hook precmd` 呼叫多半在裡面）被 `source` 進來**之後**
+才登記，而 `add-zsh-hook` 依登記順序執行，所以我們的 hook 保證排在框架的 hook
+之後執行，`B` 標記接上去時 `PS1` 已經是框架處理過的最終版本，不需要額外拆分；用
+同一支 Python 探測腳本實測 zsh 版，`B`/`C` 的順序與位置完全正確，沒有這個問題
+（zsh 的 `precmd_functions` 陣列式 hook 呼叫機制跟 bash 的 `PROMPT_COMMAND`
+字串式分號串接是不同的機制，不會觸發同一種 `DEBUG` trap 重入問題）。
 
 ### `recoverUntrackedCommand()` 演算法
 

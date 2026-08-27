@@ -286,8 +286,19 @@ fi
 
 # ── AITerm Shell Integration ──
 __aiterm_cmd_running=0
+# 實測發現的 bug（真的跑一次互動式 bash 才會現形，字串比對測試看不出來）：
+# DEBUG trap 會在 PROMPT_COMMAND 裡每一個用分號隔開的項目執行前都各自觸發一次，
+# 不是只有使用者真正打的指令才會觸發。__aiterm_append_b_marker 是 PROMPT_COMMAND
+# 的第二個項目，呼叫它本身也會讓 DEBUG trap 再次觸發——而這時候 __aiterm_cmd_running
+# 才剛被 __aiterm_precmd（同一輪求值裡排在它前面）重設成 0，會被誤判成「有新指令
+# 要執行」，在使用者還沒打任何字之前就先送出一個假的 C。這個旗標讓整段
+# PROMPT_COMMAND 求值期間（含中間任何框架自己的項目）都豁免於 DEBUG trap。
+__aiterm_in_precmd=0
 
 __aiterm_preexec() {
+  if [[ $__aiterm_in_precmd -eq 1 ]]; then
+    return
+  fi
   if [[ $__aiterm_cmd_running -eq 0 ]]; then
     __aiterm_cmd_running=1
     printf '\x1b]133;C\x07'
@@ -297,6 +308,7 @@ trap '__aiterm_preexec' DEBUG
 
 __aiterm_precmd() {
   local ec=$?
+  __aiterm_in_precmd=1
   if [[ $__aiterm_cmd_running -eq 1 ]]; then
     __aiterm_cmd_running=0
     printf '\x1b]133;D;%s\x07' "$ec"
@@ -309,6 +321,7 @@ __aiterm_append_b_marker() {
   if [[ "$PS1" != *"$b_marker"* ]]; then
     PS1="${PS1}${b_marker}"
   fi
+  __aiterm_in_precmd=0
 }
 
 PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND};__aiterm_append_b_marker"
@@ -498,6 +511,23 @@ mod tests {
              before, to capture $? correctly) have already finalized PS1 for this cycle, \
              so the B marker survives even if a framework fully reassigns PS1 rather than \
              appending to it"
+        );
+        assert!(
+            content.contains(r#"if [[ $__aiterm_in_precmd -eq 1 ]]; then"#),
+            "expected __aiterm_preexec to skip entirely while __aiterm_in_precmd is set — \
+             the DEBUG trap fires again for EACH semicolon-separated PROMPT_COMMAND entry \
+             (including calling __aiterm_append_b_marker itself), and without this guard a \
+             spurious C marker fires before B, before the user has typed anything, wrongly \
+             tracking a garbage block that then blocks the real command's recovery"
+        );
+        assert!(
+            content.contains("__aiterm_in_precmd=1"),
+            "expected __aiterm_precmd to set the guard flag (after capturing $?, not before)"
+        );
+        assert!(
+            content.contains("__aiterm_in_precmd=0"),
+            "expected __aiterm_append_b_marker to clear the guard flag at the end of the \
+             PROMPT_COMMAND chain"
         );
     }
 }
