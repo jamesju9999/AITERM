@@ -60,7 +60,7 @@ function global:prompt {
     [Console]::Write("$([char]27)]133;D;$ec$([char]7)")
     [Console]::Write("$([char]27)]133;A$([char]7)")
 
-    if ($global:__aiterm_orig_prompt) {
+    $rendered = if ($global:__aiterm_orig_prompt) {
         & $global:__aiterm_orig_prompt
     } else {
         "PS $($executionContext.SessionState.Path.CurrentLocation)$('>' * ($nestedPromptLevel + 1)) "
@@ -68,6 +68,33 @@ function global:prompt {
 
     # Restore so user scripts are not affected by our prompt logic
     $global:LASTEXITCODE = $origExit
+
+    # B marker: appended to the actual rendered prompt text, so it's
+    # guaranteed to arrive AFTER the visible prompt characters — unlike A
+    # (printed above), which fires before this function's return value is
+    # ever echoed to the screen.
+    "$rendered$([char]27)]133;B$([char]7)"
+}
+
+# C marker: PowerShell has no preexec-equivalent hook, so this overrides the
+# Enter key itself. AcceptLine (or the user's own Enter binding, preserved
+# below) runs FIRST — that's what produces the newline echo — and C is
+# printed AFTER it, once the cursor has actually moved to the new line. This
+# matches zsh/bash's ordering (preexec fires after the line editor's own
+# newline echo), which recoverUntrackedCommand's cursor-position math in
+# useTerminalBlocks.ts relies on being consistent across all three shells.
+$global:__aiterm_orig_enter_handler = (Get-PSReadLineKeyHandler -Chord Enter -Bound `
+    -ErrorAction SilentlyContinue).Function
+
+Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {
+    param($key, $arg)
+    if ($global:__aiterm_orig_enter_handler -and
+        $global:__aiterm_orig_enter_handler -ne "AcceptLine") {
+        [Microsoft.PowerShell.PSConsoleReadLine]::($global:__aiterm_orig_enter_handler)($key, $arg)
+    } else {
+        [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine($key, $arg)
+    }
+    [Console]::Write("$([char]27)]133;C$([char]7)")
 }
 "#;
     let _ = std::fs::write(&script_path, script);
@@ -328,6 +355,31 @@ mod tests {
             matches!(name, "pwsh.exe" | "powershell.exe" | "cmd.exe"),
             "unexpected shell chosen: {name}"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_integration_emits_c_via_enter_override_and_b_after_rendered_prompt() {
+        let spec = inject_powershell_integration(PathBuf::from("pwsh.exe"));
+        let script_path = std::env::temp_dir().join("aiterm_ps").join("shell_integration.ps1");
+        let content = std::fs::read_to_string(&script_path).expect("script should have been written");
+
+        assert!(
+            content.contains("Set-PSReadLineKeyHandler -Chord Enter"),
+            "expected an Enter key handler override to emit the C marker"
+        );
+        assert!(
+            content.contains(r#"[Console]::Write("$([char]27)]133;C$([char]7)")"#),
+            "expected the Enter override to emit the C marker after AcceptLine runs"
+        );
+        assert!(
+            content.contains(r#""$rendered$([char]27)]133;B$([char]7)""#),
+            "expected the prompt function to append a B marker after the rendered prompt text"
+        );
+
+        // spec.program 本身已經被既有的 windows_default_shell_returns_exe_path 測試涵蓋，
+        // 這裡只是避免 unused 警告。
+        assert_eq!(spec.program, PathBuf::from("pwsh.exe"));
     }
 
     #[test]
