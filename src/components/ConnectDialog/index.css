@@ -15,6 +15,7 @@
   background: var(--aiterm-surface-2, #1e293b);
   border: 1px solid var(--aiterm-border, #334155);
   box-shadow: 0 12px 40px #000c;
+  box-sizing: border-box;
 }
 
 .aiterm-connect__title {
@@ -31,6 +32,7 @@
 }
 
 .aiterm-connect__code {
+  box-sizing: border-box;
   width: 100%;
   padding: 10px;
   font-family: var(--aiterm-mono, monospace);
@@ -44,6 +46,7 @@
 }
 
 .aiterm-connect__text {
+  box-sizing: border-box;
   width: 100%;
   padding: 8px;
   border-radius: 6px;
