@@ -100,6 +100,7 @@ use commands::{
         share_approve, share_deny, share_kick, share_pending, share_revoke_control, share_start,
         share_status, share_stop, share_viewers,
     },
+    share_viewer::{share_viewer_connect, share_viewer_disconnect, share_viewer_send},
     shell::open_url,
     updater::updater_supported,
     web::{web_fetch, web_search, npm_mcp_search},
@@ -199,6 +200,7 @@ pub fn run() {
         .manage(Arc::new(bridge::BridgeState::new()))
         .manage(Arc::new(mcp_server::McpToolServerState::new()))
         .manage(Arc::new(share::ShareServerState::new()))
+        .manage(Arc::new(share::viewer_manager::ViewerManager::new()))
         .setup(|app| {
             telegram::init(app.handle());
             mail::poller::init(app.handle());
@@ -391,6 +393,9 @@ pub fn run() {
             share_viewers,
             share_kick,
             share_revoke_control,
+            share_viewer_connect,
+            share_viewer_send,
+            share_viewer_disconnect,
             // Shell
             open_url,
             updater_supported,

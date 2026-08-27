@@ -19,6 +19,7 @@ pub mod provider;
 pub mod python_env;
 pub mod secret;
 pub mod share;
+pub mod share_viewer;
 pub mod shell;
 pub mod updater;
 pub mod usage;

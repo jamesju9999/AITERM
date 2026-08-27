@@ -12,6 +12,8 @@ pub mod protocol;
 pub mod registry;
 pub mod server;
 pub mod tls;
+pub mod viewer;
+pub mod viewer_manager;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -30,7 +32,7 @@ use registry::ShareRegistry;
 
 /// rustls 0.23 要求行程層級的預設加密供應者。裝一次就好；重複呼叫會回
 /// `Err`，直接忽略——那代表別人已經裝過了，不是錯誤。
-fn ensure_crypto_provider() {
+pub(crate) fn ensure_crypto_provider() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
