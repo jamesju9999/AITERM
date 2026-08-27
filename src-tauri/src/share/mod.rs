@@ -8,6 +8,7 @@
 //!
 //! 設計文件：`docs/superpowers/specs/2026-08-26-remote-terminal-sharing-design.md`
 
+pub mod mdns;
 pub mod protocol;
 pub mod registry;
 pub mod server;
