@@ -368,12 +368,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     if (isClaudeCommand(cmd)) onClaudeDetectedRef.current?.();
   }, []);
 
-  // 實機測試抓到的 bug：遠端觀看者拿到控制權後送進來的指令，本機這端從
-  // 沒呼叫過 submitCommand/beginTrackedBlock（那兩支只在「這台機器自己
-  // 送出指令」的路徑上），導致下面 liveRows 賴以撐高的「有沒有一個
-  // running 中的區塊」這個信號永遠是 false，即時窗格因此撐不高、遠端
-  // 指令的輸出被擠在一小條裡。這個 ref 讓 useTerminalBlocks 在偵測到
-  // OSC 133 C/D 但沒有對應本機區塊時，也能撐高/縮回同一個 liveRows——
+  // 保底機制——正常情況下，遠端觀看者送進來的指令會被 useTerminalBlocks
+  // 內部的 recoverUntrackedCommand 從畫面內容還原出指令文字，直接變成
+  // 跟本機一樣的完整卡片（見 useTerminalBlocks.ts 的 recoverUntrackedCommand
+  // 與 docs/superpowers/specs/2026-08-27-remote-command-text-recovery-design.md），
+  // 走的是 beginTrackedBlock 那條正常路徑，不會用到這個 ref。這個 ref
+  // 只在還原失敗的少見情況下才會被呼叫（例如這個連線還沒收過任何 OSC 133
+  // B 標記），確保即使拿不到指令文字，即時窗格至少不會因為完全沒有信號而
+  // 裁切掉遠端指令的輸出。
   // 宣告在這裡是因為 useTerminalBlocks 呼叫點在 setLiveRows 宣告之前，
   // 真正賦值要等 liveRows 宣告完才能做（見下方賦值處），先用 ref 佔位。
   const untrackedCommandBoundaryRef = useRef<((kind: "start" | "end") => void) | null>(null);
@@ -624,9 +626,11 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
   // 見上面 untrackedCommandBoundaryRef 宣告處的說明——這裡才真的賦值，
   // 因為 setLiveRows 要到這裡才存在。跟這個檔案其他 ref 一樣直接在
-  // render 當下賦值，不用額外包一層 effect。
+  // render 當下賦值，不用額外包一層 effect。這整段只在指令文字還原失敗
+  // 的保底情況下才會被呼叫，正常情況下走 beginTrackedBlock 直接變成卡片，
+  // 不會執行到這裡。
   //
-  // "start" 先撐到 MAX_LIVE_ROWS，避免指令執行途中输出被裁掉（滑鼠滾輪
+  // "start" 先撐到 MAX_LIVE_ROWS，避免指令執行途中輸出被裁掉（滑鼠滾輪
   // 跟 liveRows 毫無關聯，裁掉了就拿不回來）。"end" 則改成量測游標實際
   // 停在第幾行，把 liveRows 收回剛好能放下這次輸出的高度，而不是繼續
   // 卡在 MAX——本機自己的指令結束後内容會被 finalizeBlock 搬進卡片、
