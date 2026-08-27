@@ -107,21 +107,39 @@ fi
 色碼跳脫序列用同一種語法），避免游標定位/自動換行的欄位計算被這段不可見的位元組
 干擾。
 
-**bash**（`__aiterm_precmd`，同樣接在既有的 `printf '\x1b]133;A\x07'` 之後）：
+**bash：獨立函式，接在 `PROMPT_COMMAND` 鏈的最後面（不是 `__aiterm_precmd` 裡）**
+
+跟 zsh 不同，bash 沒有「先跑完使用者/框架的 hook、我們的 hook 保證排最後」這種保證。
+現有的 `PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"` 是把
+`__aiterm_precmd` **插在最前面**——這是刻意的：`local ec=$?` 必須在任何其他指令執行
+之前讀走 exit code，晚一步 `$?` 就被覆蓋了，這個順序不能動。但這也代表如果沿用跟
+zsh 一樣「在 precmd 裡直接接 `B` 標記」的寫法，我們的 `B` 標記會在 `PROMPT_COMMAND`
+鏈**最前面**就被接上——如果使用者裝了 starship 這類每次都整段重新生成 `PS1` 的框架
+（它自己的 hook 排在我們的 `__aiterm_precmd` **之後**執行，因為它是在 `.bashrc` 被
+`source` 進來時登記的，我們的 `PROMPT_COMMAND` 賦值發生在那之後、把自己插在最前面），
+框架事後整段覆蓋 `PS1` 的動作會把我們剛接上去的 `B` 標記直接蓋掉。
+
+解法是把「接 `B` 標記」拆成一個獨立函式，**附加在 `PROMPT_COMMAND` 鏈的最後面**，
+保證不管框架怎麼重寫 `PS1`，都是在那之後才補上 `B`：
 
 ```bash
-printf '\x1b]133;A\x07'
-local b_marker=$'\[\e]133;B\a\]'
-if [[ "$PS1" != *"$b_marker"* ]]; then
-  PS1="${PS1}${b_marker}"
-fi
+__aiterm_append_b_marker() {
+  local b_marker=$'\[\e]133;B\a\]'
+  if [[ "$PS1" != *"$b_marker"* ]]; then
+    PS1="${PS1}${b_marker}"
+  fi
+}
+
+PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND};__aiterm_append_b_marker"
 ```
 
-`\[...\]` 是 bash/readline 提示字元語法裡的等效寫法（既有的顏色控制碼在使用者自己的
-`PS1` 裡也是這樣包的）。
+`\[...\]` 是 bash/readline 提示字元語法裡的零寬度標記等效寫法（既有的顏色控制碼在
+使用者自己的 `PS1` 裡也是這樣包的）。guard 邏輯（先檢查、不存在才接）跟 zsh 版一樣。
 
-兩者都是「先檢查、不存在才接」的寫法：框架每次重新生成 `PS1`（新字串裡不含標記）時，
-每次都會接一次，不會累積；靜態 `PS1` 只會在第一次接上，之後每次比對到已存在就跳過。
+zsh 不需要這種拆分：`add-zsh-hook precmd __aiterm_precmd` 是在使用者的 `.zshrc`
+（框架的 `add-zsh-hook precmd` 呼叫多半在裡面）被 `source` 進來**之後**才登記，
+而 `add-zsh-hook` 依登記順序執行，所以我們的 hook 保證排在框架的 hook 之後執行，
+`B` 標記接上去時 `PS1` 已經是框架處理過的最終版本，不需要額外拆分。
 
 ### `recoverUntrackedCommand()` 演算法
 
@@ -245,8 +263,12 @@ function global:prompt {
   與它在 `liveRows` 撐高/收回的邏輯）**保留、不刪除**，但註解要更新，說明它現在的定位
   是「文字還原失敗時的保底」而非主要機制。
 - `src-tauri/src/pty/shell.rs`：
-  - `inject_shell_integration` 的 zsh/bash `precmd` 內容各新增一段「`PS1` 尾端接
+  - `inject_shell_integration` 的 zsh 分支在 `precmd` 內容裡新增一段「`PS1` 尾端接
     `B` 標記」邏輯。
+  - `inject_shell_integration` 的 bash 分支新增一個獨立的 `__aiterm_append_b_marker`
+    函式（**不是**接在 `precmd` 裡），附加在 `PROMPT_COMMAND` 鏈的最後面——理由見
+    上面「zsh/bash：接在 PS1 尾端」一節，bash 沒有 zsh 那種「保證排在框架 hook 之後」
+    的機制，`B` 標記必須拆成獨立、附加在鏈尾的函式才不會被框架整段覆蓋 `PS1`。
   - `inject_powershell_integration` 新增 `Set-PSReadLineKeyHandler` 覆寫 Enter 鍵
     （送 `C`），並把 `prompt` 函式改成先把提示字元文字存進變數、尾端接上 `B` 標記
     再回傳。
