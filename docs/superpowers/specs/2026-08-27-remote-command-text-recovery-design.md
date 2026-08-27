@@ -159,10 +159,12 @@ __aiterm_append_b_marker() {
 PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND};__aiterm_append_b_marker"
 ```
 
-`local ec=$?` 必須維持在 `__aiterm_precmd` 的第一行不變——`__aiterm_in_precmd=1`
-要放在它**之後**才能設，變數賦值雖然不會像呼叫外部指令那樣覆蓋 `$?`，但把設定
-guard 這件事放在擷取 exit code 之前純粹沒有必要冒任何風險，維持原本已經驗證過
-正確的順序。
+`local ec=$?` 必須維持在 `__aiterm_precmd` 的第一行不變、`__aiterm_in_precmd=1`
+一定要放在它**之後**才能設——這裡不是保守起見，是硬性要求：**bash 的純變數賦值
+本身就會把 `$?` 重設成 0**（用 `bash -c 'false; echo "$?"; x=1; echo "$?"'` 可以
+直接驗證，輸出是 `1` 再 `0`），不是只有呼叫外部指令才會覆蓋它。若順序反過來，
+`ec` 會不分青紅皂白永遠是 `0`，每個指令的 `D` 標記都會誤報成功，這個錯誤此文件
+先前的版本寫反過，記錄下來避免以後又重蹈覆轍。
 
 `\[...\]` 是 bash/readline 提示字元語法裡的零寬度標記等效寫法（既有的顏色控制碼在
 使用者自己的 `PS1` 裡也是這樣包的）。guard 邏輯（先檢查、不存在才接）跟 zsh 版一樣。

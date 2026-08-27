@@ -529,5 +529,23 @@ mod tests {
             "expected __aiterm_append_b_marker to clear the guard flag at the end of the \
              PROMPT_COMMAND chain"
         );
+
+        // `local ec=$?` MUST stay the first statement in __aiterm_precmd — a bare bash
+        // assignment resets $? to 0 (confirmed empirically: `bash -c 'false; echo "$?";
+        // x=1; echo "$?"'` prints "1" then "0"), so if __aiterm_in_precmd=1 were ever
+        // reordered ahead of it, every command's exit code would be silently misreported
+        // as 0. This isn't a hypothetical — an earlier draft of this fix's design doc got
+        // this backwards (claimed a bare assignment was safe), caught only by a code
+        // review that actually tested the claim. Pin the ordering here so a future edit
+        // that swaps these two lines fails a test instead of shipping silently.
+        let ec_pos = content.find("local ec=$?").expect("local ec=$? should be present");
+        let flag_set_pos = content
+            .find("__aiterm_in_precmd=1")
+            .expect("__aiterm_in_precmd=1 should be present");
+        assert!(
+            ec_pos < flag_set_pos,
+            "local ec=$? must come before __aiterm_in_precmd=1 is set, or the exit code \
+             capture breaks for every command"
+        );
     }
 }
