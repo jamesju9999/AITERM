@@ -255,7 +255,15 @@ __aiterm_precmd() {
   fi
   printf '\x1b]133;A\x07'
 }
-PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+
+__aiterm_append_b_marker() {
+  local b_marker=$'\[\e]133;B\a\]'
+  if [[ "$PS1" != *"$b_marker"* ]]; then
+    PS1="${PS1}${b_marker}"
+  fi
+}
+
+PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND};__aiterm_append_b_marker"
 "#;
         let _ = std::fs::write(&rcfile, bashrc_content);
         args.push("--rcfile".into());
@@ -351,6 +359,50 @@ mod tests {
         assert!(
             content.contains(r#"PS1="${PS1}${b_marker}""#),
             "expected PS1 to be extended with the B marker"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn bash_integration_appends_b_marker_to_ps1_after_prompt_command_chain() {
+        let spec = inject_shell_integration(PathBuf::from("/bin/bash"));
+        let rcfile_idx = spec
+            .args
+            .iter()
+            .position(|a| a == "--rcfile")
+            .expect("bash spec should pass --rcfile");
+        let rcfile = PathBuf::from(&spec.args[rcfile_idx + 1]);
+        let content = std::fs::read_to_string(rcfile).expect("bashrc should have been written");
+
+        assert!(
+            content.contains(r#"printf '\x1b]133;A\x07'"#),
+            "expected the existing A marker printf to still be present"
+        );
+        assert!(
+            content.contains("__aiterm_append_b_marker() {"),
+            "expected a dedicated function for appending the B marker, kept separate from __aiterm_precmd"
+        );
+        assert!(
+            content.contains(r#"local b_marker=$'\[\e]133;B\a\]'"#),
+            "expected the B marker append function to compute a B marker"
+        );
+        assert!(
+            content.contains(r#"if [[ "$PS1" != *"$b_marker"* ]]; then"#),
+            "expected a guard against appending the B marker more than once"
+        );
+        assert!(
+            content.contains(r#"PS1="${PS1}${b_marker}""#),
+            "expected PS1 to be extended with the B marker"
+        );
+        assert!(
+            content.contains(
+                r#"PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND};__aiterm_append_b_marker""#
+            ),
+            "expected __aiterm_append_b_marker to run LAST in PROMPT_COMMAND — after any \
+             framework's own PROMPT_COMMAND entries (which __aiterm_precmd is prepended \
+             before, to capture $? correctly) have already finalized PS1 for this cycle, \
+             so the B marker survives even if a framework fully reassigns PS1 rather than \
+             appending to it"
         );
     }
 }
