@@ -117,6 +117,13 @@ EOF
 
 ### Task 2: bash 整合腳本新增 `B` 標記
 
+**這個 Task 的設計跟 zsh 版（Task 1）不同，請仔細看 Step 3 的說明再動手。** Task 1
+完成後的程式碼品質審查發現：bash 沒有 zsh `add-zsh-hook` 那種「保證排在框架自己的
+hook 之後執行」的機制——若沿用 zsh 版「直接在 `__aiterm_precmd` 裡接 `B` 標記」的
+寫法，starship 這類每次都整段重新生成 `PS1` 的框架會把我們剛接上去的 `B` 標記蓋掉。
+因此 bash 版要把「接 `B` 標記」拆成一個獨立函式，附加在 `PROMPT_COMMAND` 鏈的
+**最後面**，`__aiterm_precmd` 本身（`D`/`A` 標記、`$?` 擷取）維持在最前面、完全不動。
+
 **Files:**
 - Modify: `src-tauri/src/pty/shell.rs`（`inject_shell_integration` 裡 bash 分支的 `bashrc_content`，約第 229-259 行）
 - Test: `src-tauri/src/pty/shell.rs`
@@ -128,7 +135,7 @@ EOF
 ```rust
     #[cfg(not(windows))]
     #[test]
-    fn bash_integration_appends_b_marker_to_ps1_in_precmd() {
+    fn bash_integration_appends_b_marker_to_ps1_after_prompt_command_chain() {
         let spec = inject_shell_integration(PathBuf::from("/bin/bash"));
         let rcfile_idx = spec
             .args
@@ -143,8 +150,12 @@ EOF
             "expected the existing A marker printf to still be present"
         );
         assert!(
+            content.contains("__aiterm_append_b_marker() {"),
+            "expected a dedicated function for appending the B marker, kept separate from __aiterm_precmd"
+        );
+        assert!(
             content.contains(r#"local b_marker=$'\[\e]133;B\a\]'"#),
-            "expected the precmd hook to compute a B marker to append to PS1"
+            "expected the B marker append function to compute a B marker"
         );
         assert!(
             content.contains(r#"if [[ "$PS1" != *"$b_marker"* ]]; then"#),
@@ -154,15 +165,25 @@ EOF
             content.contains(r#"PS1="${PS1}${b_marker}""#),
             "expected PS1 to be extended with the B marker"
         );
+        assert!(
+            content.contains(
+                r#"PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND};__aiterm_append_b_marker""#
+            ),
+            "expected __aiterm_append_b_marker to run LAST in PROMPT_COMMAND — after any \
+             framework's own PROMPT_COMMAND entries (which __aiterm_precmd is prepended \
+             before, to capture $? correctly) have already finalized PS1 for this cycle, \
+             so the B marker survives even if a framework fully reassigns PS1 rather than \
+             appending to it"
+        );
     }
 ```
 
 - [ ] **Step 2: 執行測試，確認失敗**
 
-Run: `cd src-tauri && cargo test --lib bash_integration_appends_b_marker_to_ps1_in_precmd`
-Expected: FAIL — `b_marker` 相關斷言失敗。
+Run: `cd src-tauri && cargo test --lib bash_integration_appends_b_marker_to_ps1_after_prompt_command_chain`
+Expected: FAIL — `__aiterm_append_b_marker`/`b_marker` 相關斷言失敗（目前完全沒有這個函式）。
 
-- [ ] **Step 3: 在 bash 的 `__aiterm_precmd` 裡新增 `B` 標記邏輯**
+- [ ] **Step 3: 新增獨立的 `__aiterm_append_b_marker` 函式，附加在 `PROMPT_COMMAND` 鏈尾**
 
 找到 `src-tauri/src/pty/shell.rs` 裡 bash 分支的這段：
 
@@ -188,19 +209,29 @@ __aiterm_precmd() {
     printf '\x1b]133;D;%s\x07' "$ec"
   fi
   printf '\x1b]133;A\x07'
+}
+
+__aiterm_append_b_marker() {
   local b_marker=$'\[\e]133;B\a\]'
   if [[ "$PS1" != *"$b_marker"* ]]; then
     PS1="${PS1}${b_marker}"
   fi
 }
-PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+
+PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND};__aiterm_append_b_marker"
 ```
 
-（`\[...\]` 是 bash/readline 提示字元語法裡的零寬度標記寫法，既有的顏色控制碼在使用者自己的 `PS1` 裡也是這樣包的。同樣用「先檢查、不存在才接」避免無限疊加。）
+（**`__aiterm_precmd` 保持在最前面，這是刻意的、不能動**：`local ec=$?` 必須在任何
+其他指令執行之前讀走 exit code，晚一步 `$?` 就被覆蓋了。`\[...\]` 是 bash/readline
+提示字元語法裡的零寬度標記寫法，既有的顏色控制碼在使用者自己的 `PS1` 裡也是這樣包
+的。`__aiterm_append_b_marker` 附加在鏈的**最後面**——這一步的目的是要在框架自己的
+`PROMPT_COMMAND` 條目（如果有的話，此時已經跑完、`PS1` 已經是這次的最終版本）之後
+才接上 `B` 標記，不然框架整段覆蓋 `PS1` 會把標記蓋掉。同樣用「先檢查、不存在才接」
+避免無限疊加。）
 
 - [ ] **Step 4: 執行測試，確認通過**
 
-Run: `cd src-tauri && cargo test --lib bash_integration_appends_b_marker_to_ps1_in_precmd`
+Run: `cd src-tauri && cargo test --lib bash_integration_appends_b_marker_to_ps1_after_prompt_command_chain`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -211,8 +242,12 @@ git add src-tauri/src/pty/shell.rs
 git commit -m "$(cat <<'EOF'
 feat(shell): bash 整合腳本新增 OSC 133 B 標記
 
-跟 Task 1 的 zsh 版本同樣的理由與同樣的「先檢查、不存在才接」防疊加
-寫法，只是零寬度標記語法換成 bash/readline 的 \[...\]。
+跟 Task 1 的 zsh 版本不同，B 標記拆成獨立函式 __aiterm_append_b_marker，
+附加在 PROMPT_COMMAND 鏈的最後面，而不是直接寫進 __aiterm_precmd 裡：
+bash 沒有 zsh add-zsh-hook 那種「保證排在框架 hook 之後執行」的機制，
+現有 __aiterm_precmd 是刻意插在 PROMPT_COMMAND 最前面（要在任何東西
+動到 $? 之前先讀走它），若沿用 zsh 版寫法，starship 這類每次整段重新
+生成 PS1 的框架會把我們剛接上去的 B 標記蓋掉。
 
 Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
 EOF
