@@ -12,6 +12,7 @@ const t = translations["zh-TW"];
 const ALL_TYPES = [
   "terminal", "database", "design", "cross-db", "vcs", "doc-converter",
   "api-docs", "loop-studio", "code-assistant", "knowledge-base", "mail",
+  "remote-terminal",
 ] as const satisfies readonly TabType[];
 
 // 少列一種 TabType 時，這行會是型別錯誤（tsc -b 會擋）
@@ -33,14 +34,18 @@ describe("getTabCatalog", () => {
     }
   });
 
-  // mail 與 api-docs 的後端都是完整的，只是還沒對使用者開放；用 hidden 旗標記錄
-  // 這件事，比在兩個地方各註解掉一行可靠。api-docs 的隱藏是 commit 3547799 刻意
-  // 做的決定，不是遺漏。
-  it("mail 與 api-docs 標成 hidden，其餘不是", () => {
+  // mail、api-docs、remote-terminal 的後端／畫面都是完整的，只是還沒對使用者
+  // 開放；用 hidden 旗標記錄這件事，比在兩個地方各註解掉一行可靠。api-docs 的
+  // 隱藏是 commit 3547799 刻意做的決定，不是遺漏；remote-terminal 則是因為
+  // 2B-2a 只做畫面，連線入口（分享按鈕、同意視窗、連線對話框）要到 2B-2b 才有。
+  it("mail、api-docs、remote-terminal 標成 hidden，其餘不是", () => {
     const catalog = getTabCatalog(t);
     expect(catalog.find((e) => e.type === "mail")!.hidden).toBe(true);
     expect(catalog.find((e) => e.type === "api-docs")!.hidden).toBe(true);
-    expect(catalog.filter((e) => e.hidden).map((e) => e.type).sort()).toEqual(["api-docs", "mail"]);
+    expect(catalog.find((e) => e.type === "remote-terminal")!.hidden).toBe(true);
+    expect(catalog.filter((e) => e.hidden).map((e) => e.type).sort()).toEqual([
+      "api-docs", "mail", "remote-terminal",
+    ]);
   });
 
   it("visibleTabCatalog 濾掉 hidden 的項目", () => {

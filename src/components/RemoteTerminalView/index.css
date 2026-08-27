@@ -1,0 +1,45 @@
+.aiterm-remote-terminal {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  /* 跟 .aiterm-live-frame 同一個理由：overflow:hidden 會讓內容被瀏覽器
+     捲出視野而變空白，clip 不會。這個 repo 為此debug 過一輪。 */
+  overflow: clip;
+}
+
+.aiterm-remote-terminal__banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  font-size: 13px;
+  background: var(--aiterm-surface-2, #1e293b);
+  border-bottom: 1px solid var(--aiterm-border, #334155);
+}
+
+.aiterm-remote-terminal__sas {
+  font-family: var(--aiterm-mono, monospace);
+  font-size: 22px;
+  letter-spacing: 4px;
+  color: var(--aiterm-accent, #22d3ee);
+}
+
+.aiterm-remote-terminal__hint {
+  color: var(--aiterm-text-muted, #94a3b8);
+}
+
+.aiterm-remote-terminal__banner--readonly {
+  background: var(--aiterm-warn-bg, #78350f33);
+  color: var(--aiterm-warn-fg, #fbbf24);
+}
+
+.aiterm-remote-terminal__banner--ended {
+  background: var(--aiterm-error-bg, #7f1d1d33);
+  color: var(--aiterm-error-fg, #fca5a5);
+}
+
+.aiterm-remote-terminal__screen {
+  flex: 1;
+  min-height: 0;
+  overflow: clip;
+}
