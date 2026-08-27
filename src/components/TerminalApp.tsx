@@ -528,7 +528,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
           <NewTabPicker onSelect={handlePickerSelect} onClose={() => setPickerOpen(false)} />
         </div>
       )}
-      <ConsentDialog tabs={tabs.map((x) => ({ id: x.id, title: x.title }))} />
+      <ConsentDialog tabs={tabs.map((x) => ({ id: x.id, title: x.title, ptySessionId: x.ptySessionId }))} />
       {connectOpen && (
         <ConnectDialog
           onCancel={() => setConnectOpen(false)}

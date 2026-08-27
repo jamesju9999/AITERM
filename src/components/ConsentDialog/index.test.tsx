@@ -28,7 +28,12 @@ vi.mock("../../contexts/LocaleContext", async () => {
 
 import { ConsentDialog } from "./index";
 
-const TABS = [{ id: "t1", title: "Claude Code" }];
+// `id`（React 分頁 id）跟 `ptySessionId`（PTY session id）故意用不同字串
+// ——真實情況這兩個是不同的 UUID 命名空間。若測試不小心兩者用同一個值
+// （之前這裡就是這樣寫的），比對邏輯就算寫錯（比對到 `id` 而不是
+// `ptySessionId`）也會巧合地測過，抓不到「畫面上顯示一串醜 UUID」這個
+// 實機測試才發現的 bug。
+const TABS = [{ id: "react-tab-1", title: "Claude Code", ptySessionId: "pty-session-1" }];
 
 beforeEach(() => {
   approveMock.mockReset().mockResolvedValue({ kind: "approved", viewerId: "v1" });
@@ -39,7 +44,7 @@ beforeEach(() => {
 async function arrive() {
   await vi.waitFor(() => expect(pendingCb).toBeTruthy());
   await act(async () => {
-    pendingCb!({ requestId: "r1", tabId: "t1", displayName: "Alice" });
+    pendingCb!({ requestId: "r1", tabId: "pty-session-1", displayName: "Alice" });
   });
 }
 

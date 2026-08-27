@@ -4,8 +4,11 @@ import { useLocale } from "../../contexts/LocaleContext";
 import "./index.css";
 
 interface Props {
-  /** 分頁清單，用來把 `tabId` 換成使用者看得懂的標題。 */
-  tabs: Array<{ id: string; title: string }>;
+  /** 分頁清單，用來把 `tabId` 換成使用者看得懂的標題。
+   *  **`req.tabId` 是 PTY session id，不是這裡的 `id`（React 的分頁 id）**
+   *  ——兩者是不同的 UUID 命名空間，比對必須用 `ptySessionId`，否則永遠
+   *  找不到，退回顯示原始 UUID 給使用者看。 */
+  tabs: Array<{ id: string; title: string; ptySessionId?: string }>;
 }
 
 /**
@@ -48,7 +51,7 @@ export function ConsentDialog({ tabs }: Props) {
 
   if (!req) return null;
 
-  const tabTitle = tabs.find((x) => x.id === req.tabId)?.title ?? req.tabId;
+  const tabTitle = tabs.find((x) => x.ptySessionId === req.tabId)?.title ?? req.tabId;
   const title = t.consent_title.replace("{name}", req.displayName).replace("{tab}", tabTitle);
 
   async function decide(mode: "read_only" | "control") {
