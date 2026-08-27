@@ -71,6 +71,9 @@ bytes = "1"
 open = "5"
 async-trait = "0.1"
 futures-util = "0.3"
+# 觀看端的 WebSocket 客戶端。版本必須跟 axum 的 `ws` feature 帶進來的那份
+# 一致（0.29），否則相依樹會多出第二份互不相容的拷貝。
+tokio-tungstenite = "0.29"
 
 # Config + Secret store (M2)
 toml = "0.8"
@@ -102,14 +105,6 @@ wiremock = "0.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
-
-# 整合測試用的 WebSocket 客戶端。僅 dev-dependency——正式程式碼只當 server。
-#
-# 版本必須是 0.29：Task 5 打開 axum 的 `ws` feature 之後，axum 0.8.9 自己
-# 就帶進了 tokio-tungstenite 0.29。寫成別的主版本會讓相依樹裡多出第二份
-# 拷貝（兩份互不相容的型別，編譯期還可能給出很難懂的錯誤訊息）。
-# futures-util 0.3.32 同樣已在 Cargo.lock 裡。
-tokio-tungstenite = "0.29"
 futures-util = "0.3"
 
 # Windows-only: GetLogicalDrives for the file panel's drive switcher.
