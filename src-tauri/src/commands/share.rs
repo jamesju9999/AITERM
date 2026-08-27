@@ -203,13 +203,21 @@ pub async fn share_approve(
     mode: String,
     typed_code: String,
     server: State<'_, Arc<ShareServerState>>,
+    app: AppHandle,
 ) -> Result<Decision, String> {
     let mode = match mode.as_str() {
         "read_only" => AccessMode::ReadOnly,
         "control" => AccessMode::Control,
         other => return Err(format!("未知的存取模式：{other}")),
     };
-    Ok(decide(&server.registry, &request_id, mode, &typed_code))
+    let decision = decide(&server.registry, &request_id, mode, &typed_code);
+    // 核准當下就要推播，不能只靠觀看端斷線時的那次 `viewers-changed`——不然
+    // 面板要等到對方離開才第一次顯示他，使用者會以為連線沒生效。
+    if matches!(decision, Decision::Approved { .. }) {
+        use tauri::Emitter;
+        let _ = app.emit("share://viewers-changed", ());
+    }
+    Ok(decision)
 }
 
 #[tauri::command]
