@@ -191,21 +191,40 @@ PowerShell 需要兩處新增：`C` 標記（目前完全沒有）、`B` 標記�
 ### `C`：`Set-PSReadLineKeyHandler` 覆寫 Enter 鍵
 
 ```powershell
-$global:__aiterm_orig_enter_handler = (Get-PSReadLineKeyHandler -Chord Enter -Bound `
-    -ErrorAction SilentlyContinue).Function
+$global:__aiterm_orig_enter_handler = (Get-PSReadLineKeyHandler -Bound |
+    Where-Object { $_.Key -eq "Enter" }).Function
 
 Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {
     param($key, $arg)
-    if ($global:__aiterm_orig_enter_handler -and
-        $global:__aiterm_orig_enter_handler -ne "AcceptLine") {
-        [Microsoft.PowerShell.PSConsoleReadLine]::($global:__aiterm_orig_enter_handler)($key, $arg)
-    } else {
+    try {
+        if ($global:__aiterm_orig_enter_handler -and
+            $global:__aiterm_orig_enter_handler -ne "AcceptLine") {
+            [Microsoft.PowerShell.PSConsoleReadLine]::($global:__aiterm_orig_enter_handler)($key, $arg)
+        } else {
+            [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine($key, $arg)
+        }
+    } catch {
         [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine($key, $arg)
     }
     [Console]::Write("$([char]27)]133;C$([char]7)")
 }
 ```
 
+- **這裡曾經寫錯過一次，記錄下來避免重蹈覆轍**：第一版寫成
+  `Get-PSReadLineKeyHandler -Chord Enter -Bound`，但 `-Chord`（別名 `-Key`）只是
+  `Set-PSReadLineKeyHandler`/`Remove-PSReadLineKeyHandler` 的參數，`Get-PSReadLineKeyHandler`
+  只接受 `-Bound`/`-Unbound`，不接受 `-Chord`——這是「參數綁定失敗」，屬於敘述層級
+  的中止錯誤，不會被 `-ErrorAction SilentlyContinue` 吞掉，每次開新分頁都會在使用者
+  面前印出一個紅字錯誤，而且 `$global:__aiterm_orig_enter_handler` 會永遠是
+  `$null`，靜默丟棄使用者原本的 Enter 綁定（例如 vi 模式的 `ViAcceptLine`）。改成
+  `Get-PSReadLineKeyHandler -Bound | Where-Object { $_.Key -eq "Enter" }` 這個
+  標準寫法列出所有已綁定按鍵、篩出 Enter 那一筆。
+- **`.Function` 不保證永遠是真的靜態方法名稱**：使用者若把 Enter 綁定成自訂
+  `-ScriptBlock`（常見於 predictive completion/自訂 fzf 綁定等設定），
+  `.Function` 讀回來的值通常是 `"Unknown"` 這類佔位字串，不是
+  `PSConsoleReadLine` 上真的存在的方法——動態呼叫這種值會丟
+  `MethodNotFoundException`，讓使用者每按一次 Enter 就當機。用 `try`/`catch`
+  包住動態呼叫，抓不到就退回安全的 `AcceptLine`，避免這種情況直接把終端機弄壞。
 - **順序很重要，且跟直覺相反**：`C` 是在呼叫 `AcceptLine`（或使用者原本綁定的處理
   方式）**之後**才印，不是之前。`AcceptLine` 會讓 PSReadLine 完成這次輸入、回顯結尾
   的換行，之後游標才會真的換到新的一行——這跟 zsh/bash 的 `preexec`「換行回顯已經
@@ -234,11 +253,15 @@ function global:prompt {
     [Console]::Write("$([char]27)]133;D;$ec$([char]7)")
     [Console]::Write("$([char]27)]133;A$([char]7)")
 
-    $rendered = if ($global:__aiterm_orig_prompt) {
+    $renderedRaw = if ($global:__aiterm_orig_prompt) {
         & $global:__aiterm_orig_prompt
     } else {
         "PS $($executionContext.SessionState.Path.CurrentLocation)$('>' * ($nestedPromptLevel + 1)) "
     }
+    # 少見情況：使用者原本的 prompt 函式若不是單一字串、而是多筆管線輸出（例如沒有
+    # 用分號/換行抑制的多行輸出），直接字串插值會被 $OFS（預設一個空白）接起來，
+    # 跟主控台原本逐行印出的樣子不一樣。用換行接回去，貼近原本會呈現的樣子。
+    $rendered = $renderedRaw -join "`n"
 
     $global:LASTEXITCODE = $origExit
     "$rendered$([char]27)]133;B$([char]7)"
