@@ -43,6 +43,34 @@ function isClearCommand(cmd: string): boolean {
   return trimmed === "clear" || trimmed === "cls";
 }
 
+/**
+ * 從一個絕對緩衝區座標（OSC 133 B 標記記錄的「輸入從這裡開始」位置）到目前
+ * 遊標所在行，把畫面上的文字截出來當作還原出的指令文字。只在「沒有本機
+ * 追蹤區塊」時才會被呼叫——見設計文件
+ * docs/superpowers/specs/2026-08-27-remote-command-text-recovery-design.md
+ * 的「recoverUntrackedCommand() 演算法」一節。
+ */
+function recoverUntrackedCommand(
+  term: Terminal,
+  promptEnd: { row: number; col: number } | null,
+): string | null {
+  if (!promptEnd) return null;
+  const { row: startRow, col: startCol } = promptEnd;
+  // OSC C 觸發時，遊標已經因為 Enter 換行到新的一行，所以往上一行才是輸入
+  // 內容實際結束的地方。
+  const endRow = term.buffer.active.cursorY + term.buffer.active.baseY - 1;
+  if (endRow < startRow) return null;
+
+  let fullLine = "";
+  for (let row = startRow; row <= endRow; row++) {
+    const line = term.buffer.active.getLine(row);
+    if (!line) return null;
+    fullLine += row === startRow ? line.translateToString(true, startCol) : line.translateToString(true);
+  }
+  const trimmed = fullLine.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 export function useTerminalBlocks(
   sessionId: string,
   term: Terminal | null,
@@ -69,21 +97,20 @@ export function useTerminalBlocks(
    *  的 `host_os`。這是字串值，可以放心放進依賴陣列（不像 `write` 是函式
    *  參考，同樣的字串值不會觸發 React 重新執行 effect）。 */
   hostPlatform: "windows" | "other" = navigator.platform.toLowerCase().startsWith("win") ? "windows" : "other",
-  /** 偵測到 OSC 133 C/D 標記、但當下沒有任何本機追蹤到的區塊在跑時呼叫。
+  /** **保底機制**——只有在 `recoverUntrackedCommand`（見同檔案內的定義）
+   *  無法從畫面內容還原出指令文字時才會被呼叫，例如這個連線還沒收過任何
+   *  OSC 133 B 標記（見 `promptEndRef`）。正常情況下遠端指令會直接透過
+   *  `beginTrackedBlock` 變成完整的卡片，不會走到這裡。
    *
-   *  實機測試抓到的 bug：本機分頁不管指令是從 WarpInput 送出還是直接在
-   *  畫面上打字都會走 `submitCommand`/`beginTrackedBlock`，所以永遠有一個
-   *  區塊可以標記成「running」；但當指令是遠端觀看者透過分享連線寫進
-   *  PTY 時，這兩個函式都不會被呼叫——本機這端看到的只是 shell 回顯的
-   *  輸出位元組，OSC 133 C/D 照樣會發生（那是 shell 自己送的，跟輸入
-   *  來源無關），只是沒有對應的區塊可以標記。`TerminalView.tsx` 原本
-   *  「即時窗格自動撐高」的邏輯完全依賴「有沒有一個 running 中的區塊」
-   *  這個信號，於是遠端指令執行時窗格永遠撐不高。
+   *  實機測試抓到的原始 bug：遠端觀看者透過分享連線寫進 PTY 的指令，不會
+   *  經過 `submitCommand`/`beginTrackedBlock`，導致 `TerminalView.tsx`
+   *  「即時窗格自動撐高」邏輯賴以判斷的「有沒有一個 running 中的區塊」
+   *  信號永遠是 false。這個 callback 讓呼叫端在指令文字還原失敗的少見
+   *  情況下，仍能拿到「現在有東西在跑」這個單純的訊號、維持窗格至少不
+   *  裁切輸出——完整解法是 `recoverUntrackedCommand` 成功時直接呼叫
+   *  `beginTrackedBlock`，不需要這個訊號介入。
    *
-   *  這個 callback 讓呼叫端在不需要知道指令文字（那需要完整重建輸入
-   *  當下的畫面快照，複雜度跟遠端分頁要不要支援直接打字變卡片是同一類
-   *  問題，刻意不在這裡處理）的前提下，也能拿到「現在有東西在跑」這個
-   *  單純的訊號。C 只在**沒有**本機追蹤區塊時才視為「開始」；D 沿用既有
+   *  C 只在**沒有**本機追蹤區塊、且還原也失敗時才視為「開始」；D 沿用既有
    *  兩個提早 return 的分支（`prev.length === 0` / `latest.status !==
    *  "running"`）——那兩個分支本來就是「沒有東西可以結案」的判斷，同一個
    *  條件借來判斷「這次 D 沒有對應本機區塊」。
@@ -100,6 +127,9 @@ export function useTerminalBlocks(
 
   const blocksRef = useRef<TerminalBlock[]>([]);
   const completionCallbacksRef = useRef<Map<string, (block: TerminalBlock) => void>>(new Map());
+  // OSC 133 B 標記記錄的「輸入從這裡開始」絕對座標，給 recoverUntrackedCommand
+  // 用——只在遠端指令（沒有本機追蹤區塊）時才會被讀取，見該函式的文件註解。
+  const promptEndRef = useRef<{ row: number; col: number } | null>(null);
 
   const updateLatestBlock = useCallback((updater: (b: TerminalBlock) => TerminalBlock) => {
     const prev = blocksRef.current;
@@ -185,6 +215,60 @@ export function useTerminalBlocks(
     [term],
   );
 
+  /**
+   * Starts tracking a block for a command that was typed directly into the
+   * live terminal (bypassing WarpInput's submitCommand — WarpInput isn't the
+   * only way to type into a real terminal). Unlike submitCommand, this does
+   * NOT write anything to the PTY: the caller (TerminalView's onData handler,
+   * or the OSC 133 B/C recovery path below for remote-viewer-issued commands)
+   * has already streamed the keystrokes to the PTY, so writing here again
+   * would duplicate/corrupt input. This only does the block-bookkeeping half
+   * of submitCommand.
+   *
+   * 搬到這裡（原本在 submitCommand 之後、檔案偏下方）是因為下面的 OSC 133
+   * effect 需要直接呼叫它——effect 的 closure 抓的是變數本身，函式定義必須
+   * 出現在它前面。
+   */
+  const beginTrackedBlock = useCallback(
+    (cmd: string) => {
+      if (!sessionId) return;
+
+      onCommandStarted?.(cmd);
+
+      if (isClearCommand(cmd)) {
+        // Same reasoning as submitCommand's `clear`/`cls` handling — wipe the
+        // whole block history instead of tracking a card for it. The keystrokes
+        // (including the trailing Enter) are already streaming to the PTY via
+        // onData, so there's nothing to write here.
+        clearAllBlocks();
+        return;
+      }
+
+      const prevBlocks = blocksRef.current;
+      const prevLatest = prevBlocks[prevBlocks.length - 1];
+      if (prevLatest?.status === "running") {
+        // Already tracking a block — most likely this Enter press belongs to
+        // a submitCommand-initiated command whose OSC 133 D hasn't fired yet.
+        // Don't create a second, competing block.
+        return;
+      }
+
+      const newBlock: TerminalBlock = {
+        id: Math.random().toString(36).substring(2, 15) + Date.now().toString(36),
+        command: cmd,
+        status: "running",
+        startTime: Date.now(),
+        cwd: cwdRef?.current,
+        rawOutput: "",
+      };
+
+      const updated = [...blocksRef.current, newBlock];
+      blocksRef.current = updated;
+      setBlocks(updated);
+    },
+    [sessionId, cwdRef, clearAllBlocks, onCommandStarted],
+  );
+
   useEffect(() => {
     if (!term) return;
 
@@ -205,7 +289,19 @@ export function useTerminalBlocks(
     onBufferChange();
 
     const disposeOsc = term.parser.registerOscHandler(133, (data) => {
-      if (data === "C") {
+      if (data === "B") {
+        // Prompt text has just finished being drawn (this marker is embedded
+        // at the tail of the shell's PS1/prompt output itself — see
+        // src-tauri/src/pty/shell.rs — so it's guaranteed to arrive AFTER the
+        // visible prompt characters, unlike A which fires from a hook BEFORE
+        // the prompt is drawn). Record exactly where input begins so
+        // recoverUntrackedCommand can slice from here.
+        promptEndRef.current = {
+          row: term.buffer.active.cursorY + term.buffer.active.baseY,
+          col: term.buffer.active.cursorX,
+        };
+        return true;
+      } else if (data === "C") {
         // Command start — usually a no-op, since the block was already
         // created synchronously by submitCommand (WarpInput) or
         // beginTrackedBlock (typed directly into the live terminal), both of
@@ -213,12 +309,19 @@ export function useTerminalBlocks(
         // back to the frontend. But if nothing is tracked as "running" at
         // this point, the command didn't come through either of those two
         // paths — it was written to the PTY some other way (e.g. a remote
-        // viewer with control access) — so tell the caller "something is
-        // running" via the lighter-weight boundary signal instead.
+        // viewer with control access). Try to recover the actual typed text
+        // from the screen content between the last B marker and here; only
+        // fall back to the lighter-weight boundary signal if that fails (see
+        // recoverUntrackedCommand's doc comment for when/why it can fail).
         const prev = blocksRef.current;
         const latest = prev[prev.length - 1];
         if (!latest || latest.status !== "running") {
-          onUntrackedCommandBoundary?.("start");
+          const recovered = recoverUntrackedCommand(term, promptEndRef.current);
+          if (recovered !== null) {
+            beginTrackedBlock(recovered);
+          } else {
+            onUntrackedCommandBoundary?.("start");
+          }
         }
         return true;
       } else if (data.startsWith("D")) {
@@ -300,7 +403,7 @@ export function useTerminalBlocks(
     // 的都是函式簽名裡那個預設值運算式產生的全新參考，放進依賴陣列會讓
     // 這個 effect 每次 render 都 dispose+重新註冊）。`hostPlatform` 是字串，
     // 沒有這個問題，放心加進來。
-  }, [term, finalizeBlock, onLiveClear, onCommandSettled, hostPlatform, onUntrackedCommandBoundary]);
+  }, [term, finalizeBlock, beginTrackedBlock, onLiveClear, onCommandSettled, hostPlatform, onUntrackedCommandBoundary]);
 
   const submitCommand = useCallback(
     (cmd: string, onComplete?: (block: TerminalBlock) => void) => {
@@ -362,55 +465,6 @@ export function useTerminalBlocks(
       writeRef.current(clearSeq + cmd + "\r");
     },
     [sessionId, term, cwdRef, finalizeBlock, clearAllBlocks, onCommandStarted, hostPlatform],
-  );
-
-  /**
-   * Starts tracking a block for a command that was typed directly into the
-   * live terminal (bypassing WarpInput's submitCommand — WarpInput isn't the
-   * only way to type into a real terminal). Unlike submitCommand, this does
-   * NOT write anything to the PTY: the caller (TerminalView's onData handler)
-   * has already streamed the keystrokes to the PTY character-by-character as
-   * the user typed, so writing here again would duplicate/corrupt input.
-   * This only does the block-bookkeeping half of submitCommand.
-   */
-  const beginTrackedBlock = useCallback(
-    (cmd: string) => {
-      if (!sessionId) return;
-
-      onCommandStarted?.(cmd);
-
-      if (isClearCommand(cmd)) {
-        // Same reasoning as submitCommand's `clear`/`cls` handling — wipe the
-        // whole block history instead of tracking a card for it. The keystrokes
-        // (including the trailing Enter) are already streaming to the PTY via
-        // onData, so there's nothing to write here.
-        clearAllBlocks();
-        return;
-      }
-
-      const prevBlocks = blocksRef.current;
-      const prevLatest = prevBlocks[prevBlocks.length - 1];
-      if (prevLatest?.status === "running") {
-        // Already tracking a block — most likely this Enter press belongs to
-        // a submitCommand-initiated command whose OSC 133 D hasn't fired yet.
-        // Don't create a second, competing block.
-        return;
-      }
-
-      const newBlock: TerminalBlock = {
-        id: Math.random().toString(36).substring(2, 15) + Date.now().toString(36),
-        command: cmd,
-        status: "running",
-        startTime: Date.now(),
-        cwd: cwdRef?.current,
-        rawOutput: "",
-      };
-
-      const updated = [...blocksRef.current, newBlock];
-      blocksRef.current = updated;
-      setBlocks(updated);
-    },
-    [sessionId, cwdRef, clearAllBlocks, onCommandStarted],
   );
 
   return {

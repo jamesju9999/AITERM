@@ -585,4 +585,70 @@ describe("useTerminalBlocks", () => {
     });
     expect(boundaryMock).not.toHaveBeenCalled();
   });
+
+  describe("remote-viewer command text recovery (OSC 133 B/C)", () => {
+    it("recovers the typed command text and calls beginTrackedBlock when no local block is tracked", async () => {
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+
+      // 模擬 shell 實際回顯的位元組序列：提示字元文字 → B 標記（提示字元
+      // 結束、輸入開始）→ 使用者打的指令文字（遠端觀看者的按鍵，經由 shell
+      // 回顯出現在畫面上）→ Enter 的換行回顯 → C 標記。
+      await act(async () => {
+        await writeToTerm(term, "user@host:~$ \x1b]133;B\x07ls -la\r\n\x1b]133;C\x07");
+      });
+
+      expect(result.current.blocks).toHaveLength(1);
+      expect(result.current.blocks[0].command).toBe("ls -la");
+      expect(result.current.blocks[0].status).toBe("running");
+    });
+
+    it("recovers a command that auto-wraps across multiple rows", async () => {
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+      // term 是 80 欄；prompt「user@host:~$ 」佔 13 欄，所以這個 95 字元的
+      // 指令一定會自動換行到第二行。
+      const longCommand = "echo " + "a".repeat(90);
+
+      await act(async () => {
+        await writeToTerm(term, `user@host:~$ \x1b]133;B\x07${longCommand}\r\n\x1b]133;C\x07`);
+      });
+
+      expect(result.current.blocks).toHaveLength(1);
+      expect(result.current.blocks[0].command).toBe(longCommand);
+    });
+
+    it("recovers correctly when the prompt itself spans multiple rows before B fires", async () => {
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+
+      await act(async () => {
+        await writeToTerm(term, "== host ==\r\nprompt> \x1b]133;B\x07pwd\r\n\x1b]133;C\x07");
+      });
+
+      expect(result.current.blocks).toHaveLength(1);
+      expect(result.current.blocks[0].command).toBe("pwd");
+    });
+
+    it("does not create a block when the user pressed Enter with nothing typed", async () => {
+      const boundaryMock = vi.fn();
+      const { result } = renderHook(() =>
+        useTerminalBlocks(
+          "session-1",
+          term,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          boundaryMock,
+        ),
+      );
+
+      await act(async () => {
+        await writeToTerm(term, "user@host:~$ \x1b]133;B\x07\r\n\x1b]133;C\x07");
+      });
+
+      expect(result.current.blocks).toHaveLength(0);
+      expect(boundaryMock).toHaveBeenCalledWith("start");
+    });
+  });
 });
