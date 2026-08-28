@@ -45,6 +45,12 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* 跟 TerminalView.tsx 的 blockListRef 容器（overflowX: "clip"）同一個
+     理由：只設 overflow-y 會讓瀏覽器把沒設的另一軸算成 auto，這一層就會
+     變成可以被程式化橫向捲動（例如去顯示 xterm 取得焦點的 helper
+     textarea／IME 組字框），把整個即時畫面往左推、注音組字跟著跑到畫面
+     外。這個 repo 已經在本機分頁修過一次同一類坑。 */
+  overflow-x: clip;
   display: flex;
   flex-direction: column;
 }
