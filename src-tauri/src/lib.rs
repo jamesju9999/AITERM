@@ -32,7 +32,7 @@ use commands::{
         api_docs_fetch_tree, api_docs_login, api_docs_logout,
     },
     appimage::{appimage_integrate, appimage_integration_state, appimage_remove_integration},
-    ai::{agent_chat, ai_chat, ai_query, ai_query_ctx},
+    ai::{agent_chat, ai_chat, ai_chat_ctx, ai_query},
     bridge::{bridge_apply, bridge_set_config, bridge_status},
     mcp_server::{mcp_tool_server_apply, mcp_tool_server_set_config, mcp_tool_server_status},
     claude_notif::{claude_notif_enable_bell, claude_notif_needs_prompt},
@@ -301,7 +301,7 @@ pub fn run() {
             write_pasted_file,
             // AI query
             ai_query,
-            ai_query_ctx,
+            ai_chat_ctx,
             ai_chat,
             agent_chat,
             code_assistant_chat,

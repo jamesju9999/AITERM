@@ -95,6 +95,22 @@ export function invokeAiChat(
   return invoke<AiChatReply>("ai_chat", { messages, sessionId, providerId: providerId ?? null, useMcp, locale });
 }
 
+export function invokeAiChatCtx(
+  messages: ChatMessage[],
+  ctx: RemoteCtx,
+  connId: string,
+  providerId?: string,
+  locale: Locale = "zh-TW",
+): Promise<AiChatReply> {
+  return invoke<AiChatReply>("ai_chat_ctx", {
+    messages,
+    ctx: { os: ctx.os, shell: ctx.shell, cwd: ctx.cwd, recent_output: ctx.recentOutput },
+    connId,
+    providerId: providerId ?? null,
+    locale,
+  });
+}
+
 export const aiChat = (
   messages: ChatMessage[],
   sessionId: string,
@@ -135,26 +151,6 @@ export interface RemoteCtx {
   cwd: string | null;
   recentOutput: string | null;
 }
-
-export function invokeAiQueryCtx(
-  query: string,
-  ctx: RemoteCtx,
-  connId: string,
-  locale: Locale = "zh-TW",
-): Promise<AiCommandReady> {
-  return invoke<AiCommandReady>("ai_query_ctx", {
-    query,
-    ctx: {
-      os: ctx.os,
-      shell: ctx.shell,
-      cwd: ctx.cwd,
-      recent_output: ctx.recentOutput,
-    },
-    connId,
-    locale,
-  });
-}
-
 
 /**
  * True for a 429 whose body carries no real explanation — Anthropic returns

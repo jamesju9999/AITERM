@@ -228,10 +228,10 @@ fn ai_single_command_schema() -> serde_json::Value {
     })
 }
 
-/// `ai_query` 與 `ai_query_ctx` 共用的核心：拿一個已組好的 `EnvSnapshot`，
-/// 跑 provider、串流 `ai-stream` 事件、解析並用 `CommandGuard` 覆核，回傳
-/// `AiCommandReady`。`stream_id` 是 `ai-stream` 事件的 `session_id` 欄位值
-/// （`ai_query` 傳 PTY session id，`ai_query_ctx` 傳觀看連線 conn id）。
+/// `ai_query` 的核心：拿一個已組好的 `EnvSnapshot`，跑 provider、串流
+/// `ai-stream` 事件、解析並用 `CommandGuard` 覆核，回傳 `AiCommandReady`。
+/// `stream_id` 是 `ai-stream` 事件的 `session_id` 欄位值（`ai_query` 傳 PTY
+/// session id）。
 async fn run_single_command(
     snapshot: crate::ai::EnvSnapshot,
     query: String,
@@ -341,26 +341,6 @@ pub async fn ai_query(
 ) -> Result<AiCommandReady, AiError> {
     let snapshot = context::snapshot(&pty_manager, &session_id);
     run_single_command(snapshot, query, locale, &router, &app, session_id).await
-}
-
-/// `ai_query` 的觀看端版本：不吃 PTY session_id，改吃明確的 `RemoteCtx`。
-/// `conn_id` 當作 `ai-stream` 事件的識別（觀看端面板監聽這個值）。
-#[tauri::command]
-pub async fn ai_query_ctx(
-    query: String,
-    ctx: RemoteCtx,
-    locale: Locale,
-    conn_id: String,
-    app: AppHandle,
-    router: State<'_, AiRouter>,
-) -> Result<AiCommandReady, AiError> {
-    let snapshot = context::snapshot_from_remote_ctx(
-        &ctx.os,
-        ctx.shell.as_deref(),
-        ctx.cwd.as_deref(),
-        ctx.recent_output,
-    );
-    run_single_command(snapshot, query, locale, &router, &app, conn_id).await
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -579,6 +559,33 @@ pub async fn ai_chat(
     // ── End MCP path — fall through to normal streaming path ─────────────────
 
     run_chat(messages, snapshot, provider_id, locale, &router, &app, session_id).await
+}
+
+/// `ai_chat` 的觀看端版本：不吃 PTY session_id，改吃明確的 `RemoteCtx`。
+/// 無 MCP，所以不接受 `tool` 結尾的 history。`conn_id` 當 ai-stream 事件識別。
+#[tauri::command]
+pub async fn ai_chat_ctx(
+    messages: Vec<ChatMessage>,
+    ctx: RemoteCtx,
+    provider_id: Option<String>,
+    conn_id: String,
+    locale: Locale,
+    app: AppHandle,
+    router: State<'_, AiRouter>,
+) -> Result<AiChatReply, AiError> {
+    if messages.is_empty() {
+        return Err(AiError::InvalidInput { reason: "empty messages".into() });
+    }
+    if messages.last().map(|m| m.role.as_str()) != Some("user") {
+        return Err(AiError::InvalidInput { reason: "last message must be from user".into() });
+    }
+    let snapshot = context::snapshot_from_remote_ctx(
+        &ctx.os,
+        ctx.shell.as_deref(),
+        ctx.cwd.as_deref(),
+        ctx.recent_output,
+    );
+    run_chat(messages, snapshot, provider_id, locale, &router, &app, conn_id).await
 }
 
 /// Build the tool injection suffix for providers that don't support native tool calling.
