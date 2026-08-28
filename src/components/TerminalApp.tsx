@@ -632,6 +632,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   connId={tab.remoteConnId ?? ""}
                   sas={tab.remoteSas ?? ""}
                   isActive={isActive}
+                  hostLabel={tab.remoteHostLabel ?? ""}
                 />
               ) : (
                 <TerminalView

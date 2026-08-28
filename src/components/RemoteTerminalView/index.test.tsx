@@ -146,7 +146,10 @@ describe("RemoteTerminalView", () => {
 
     // 伺服器端還有一道 may_send_input 檢查，但前端這層是給使用者的回饋：
     // 唯讀時按鍵**根本不送出**，而不是送了被拒絕。
-    await waitFor(() => expect(screen.getByText(/唯讀|Read-only/)).toBeInTheDocument());
+    // 用 getAllByText：工具列的連線狀態文字（Task 1 新增）跟這個既有的
+    // 唯讀橫幅剛好都含有「唯讀」/「Read-only」字樣，兩處都出現才是預期
+    // 行為，不是誰取代誰。
+    await waitFor(() => expect(screen.getAllByText(/唯讀|Read-only/).length).toBeGreaterThan(0));
     expect(sendMock).not.toHaveBeenCalled();
   });
 
@@ -194,6 +197,87 @@ describe("RemoteTerminalView", () => {
       const textarea = screen.getByPlaceholderText(/輸入指令|Type a command/i);
       expect(textarea).toBeDisabled();
     });
+  });
+
+  it("工具列顯示位址與連線狀態文字，隨 phase 變化", async () => {
+    render(<RemoteTerminalView tabId="t1" connId="c17" sas="1717" isActive hostLabel="10.10.41.1:50281" />);
+
+    // 等待核准中：顯示位址與等待文字，不顯示任何連線時間或模式字樣。
+    // 用 getAllByText：工具列的連線狀態文字跟既有的等待橫幅剛好都含有
+    // 這句等待文字，兩處都出現才是預期行為，不是誰取代誰。
+    expect(await screen.findByText(/10\.10\.41\.1:50281/)).toBeInTheDocument();
+    expect(screen.getAllByText(/等待對方同意|Waiting for them to accept/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/已連線|Connected/)).not.toBeInTheDocument();
+
+    await waitFor(() => expect(handlers["granted:c17"]).toBeDefined());
+    act(() => {
+      handlers["granted:c17"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+    });
+
+    // 已連線：顯示模式文字。
+    await waitFor(() => {
+      expect(screen.getByText(/已連線.*控制模式|Connected.*Control mode/)).toBeInTheDocument();
+    });
+
+    // 唯讀模式文字沿用既有翻譯鍵，兩者用同一個 phase 走一次確認切得過去。
+    act(() => {
+      handlers["control:c17"]("read_only" as never);
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/已連線.*唯讀|Connected.*Read-only/)).toBeInTheDocument();
+    });
+
+    // 連線結束：顯示結束文字，不再顯示模式或連線時間。
+    await waitFor(() => expect(handlers["ended:c17"]).toBeDefined());
+    act(() => {
+      handlers["ended:c17"]("host_stopped_sharing" as never);
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/連線已結束|Connection ended/)).toBeInTheDocument();
+    });
+  });
+
+  it("已連線時間從進入 live 那一刻開始每秒遞增，控制權變更不會讓它歸零", async () => {
+    // 先在真實時鐘下把訂閱掛好、拿到 handler——mock 是靠 Promise.then()
+    // 交回 handler 的，需要至少一次微任務循環；`waitFor` 內部靠
+    // setInterval/setTimeout 重試，一旦提早換成假時鐘、又沒有明確
+    // advanceTimersByTime 推它一把，這個 waitFor 永遠不會被再檢查一次，
+    // 會一路掛到 vitest 的測試逾時，且 try/finally 的 useRealTimers()
+    // 因為外層 promise 從未真正 settle 也不會執行，殃及後面所有測試。
+    // 所以進假時鐘的時機延後到這裡：只在真的要控制「時間流逝」的段落
+    // （tick 累加）才切換，切換後全程改用 act() 同步斷言，不再用
+    // await waitFor()。
+    render(<RemoteTerminalView tabId="t1" connId="c18" sas="1818" isActive hostLabel="10.10.41.1:50281" />);
+    await waitFor(() => expect(handlers["granted:c18"]).toBeDefined());
+    await waitFor(() => expect(handlers["control:c18"]).toBeDefined());
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        handlers["granted:c18"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+      });
+
+      // 剛進 live：還沒經過任何一次 1 秒 tick，顯示 0s。
+      expect(screen.getByText(/已連線 0s|Connected 0s/)).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+      expect(screen.getByText(/已連線 3s|Connected 3s/)).toBeInTheDocument();
+
+      // 控制權變更（同樣是 phase.kind === "live"，只是 mode 換了）不該讓
+      // 已經走了的秒數歸零——這是 connectedAtRef 用 `=== null` 判斷、
+      // 只在第一次進 live 時寫入的用意所在。
+      act(() => {
+        handlers["control:c18"]("read_only" as never);
+      });
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(screen.getByText(/已連線 5s|Connected 5s/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows a hint and does not send /ai or /agent commands", async () => {

@@ -17,6 +17,7 @@ import { TerminalBlockCard } from "../TerminalBlockCard";
 import { addBookmark } from "../CommandBookmarks";
 import { parseAiPrefix, parseAgentPrefix } from "../parseAiPrefix";
 import type { Translations } from "../../lib/i18n";
+import "../TerminalView.css";
 import "./index.css";
 
 const MIN_LIVE_ROWS = 3;
@@ -35,6 +36,15 @@ interface Props {
    */
   sas: string;
   isActive: boolean;
+  /**
+   * 連線當下輸入的「host:port」字串，跟視窗標題「遠端終端機：10.10.41.1:
+   * 50281」同一份資料（`ConnectDialog.onConnected` 回傳的 `hostLabel`，
+   * 已經存在 `tab.remoteHostLabel`）。工具列的位址文字用它。
+   *
+   * 選填、預設空字串，不是必填：這個 prop 是這次新增的，選填可以讓既有
+   * 測試呼叫端不用全部跟著改。
+   */
+  hostLabel?: string;
 }
 
 type Phase =
@@ -42,7 +52,7 @@ type Phase =
   | { kind: "live"; mode: string }
   | { kind: "ended"; reason: string };
 
-export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
+export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "" }: Props) {
   const { t } = useLocale();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -105,6 +115,29 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
   useEffect(() => {
     blocksRef.current = blocks;
   }, [blocks]);
+
+  // 已連線時間從進入 live 的那一刻開始算，用 `=== null` 當 guard 只寫入
+  // 一次——`phase.kind` 進了 "live" 之後，後續的控制權變更
+  // （onShareViewerControlChanged）會用不同的 mode 再次呼叫
+  // setPhase({kind:"live", ...})，但 `phase.kind` 這個依賴值本身沒變，
+  // 這個 effect 不會重跑，connectedAtRef 因此不會被後續的 mode 變更
+  // 動到，不需要另外分辨「是第一次進 live 還是後續的 mode 變更」。
+  const connectedAtRef = useRef<number | null>(null);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  useEffect(() => {
+    if (phase.kind === "live" && connectedAtRef.current === null) {
+      connectedAtRef.current = Date.now();
+    }
+  }, [phase.kind]);
+  useEffect(() => {
+    if (phase.kind !== "live") return;
+    const interval = setInterval(() => {
+      if (connectedAtRef.current !== null) {
+        setElapsedMs(Date.now() - connectedAtRef.current);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [phase.kind]);
 
   const [aiUnsupported, setAiUnsupported] = useState(false);
 
@@ -333,6 +366,11 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
 
   return (
     <div className="aiterm-remote-terminal" data-tab-id={tabId} data-active={isActive}>
+      <div className="aiterm-status">
+        <span className="aiterm-status-left">
+          AITerm · {t.remote_terminal_tab} {hostLabel} · {connectionStatusText(t, phase, elapsedMs)}
+        </span>
+      </div>
       {phase.kind === "waiting" && (
         <div className="aiterm-remote-terminal__banner">
           <span>{t.remote_terminal_waiting_approval}</span>
@@ -464,4 +502,33 @@ function endReasonText(t: Translations, reason: string): string {
   const key = `remote_terminal_ended_${reason}`;
   const table = t as unknown as Record<string, string>;
   return table[key] ?? t.remote_terminal_ended_session_closed;
+}
+
+/**
+ * 工具列左側的連線狀態片語，依 `phase` 三態切換。`elapsedMs` 只在
+ * `phase.kind === "live"` 時才會被用到，其餘兩態忽略它。
+ */
+function connectionStatusText(t: Translations, phase: Phase, elapsedMs: number): string {
+  if (phase.kind === "waiting") return t.remote_terminal_waiting_approval;
+  if (phase.kind === "ended") return t.remote_terminal_toolbar_ended;
+  const modeLabel = phase.mode === "read_only" ? t.remote_terminal_read_only : t.remote_terminal_toolbar_control_mode;
+  return `${t.remote_terminal_toolbar_connected_prefix} ${formatElapsed(elapsedMs)} · ${modeLabel}`;
+}
+
+/**
+ * 把毫秒數轉成「12s」/「3m45s」/「1h05m」這種簡短格式。跟
+ * `TerminalBlockCard.tsx` 裡既有的 `formatDuration` 邏輯類似但獨立寫一份
+ * （不跨檔案匯出私有函式）：那邊是給單一指令的執行時間用，通常不會超過
+ * 一小時，這裡是連線總時間，可能開很久，需要多處理小時這一級，用途不同
+ * 分開寫更清楚。
+ */
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return `${minutes}m${seconds}s`;
+  const hours = Math.floor(minutes / 60);
+  const remMinutes = minutes % 60;
+  return `${hours}h${String(remMinutes).padStart(2, "0")}m`;
 }
