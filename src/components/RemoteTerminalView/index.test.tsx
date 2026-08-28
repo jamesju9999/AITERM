@@ -114,6 +114,7 @@ if (!window.HTMLElement.prototype.scrollTo) {
 }
 
 import { RemoteTerminalView, formatElapsed } from "./index";
+import { addBookmark } from "../CommandBookmarks";
 
 beforeEach(() => {
   for (const k of Object.keys(handlers)) delete handlers[k];
@@ -125,6 +126,10 @@ beforeEach(() => {
   clearMock.mockReset();
   sendMock.mockReset();
   disconnectMock.mockReset().mockResolvedValue(undefined);
+  // localStorage 在 jsdom 下跨測試持續存在——書籤資料若不清，會讓某一個
+  // 測試種下的種子書籤滲透到其他測試（例如「沒有書籤時仍然會渲染空清單」
+  // 這個假設被悄悄打破）。每個測試開始前都重置成乾淨狀態。
+  window.localStorage.removeItem("aiterm-command-bookmarks");
 });
 
 describe("RemoteTerminalView", () => {
@@ -287,22 +292,41 @@ describe("RemoteTerminalView", () => {
     const fillSpy = vi.fn();
     window.addEventListener("warp-fill-command", fillSpy);
     try {
+      // 種一筆書籤，讓選單裡真的有東西可以點——不種資料的話只能驗證
+      // 「選單開了」，驗證不到 onSelect 真的把指令文字送出去這件事（見
+      // RemoteTerminalView/index.tsx 的 onSelect：
+      // `window.dispatchEvent(new CustomEvent("warp-fill-command", { detail: { cmd } }))`）。
+      // name 刻意跟 command 不同字串：CommandBookmarksPicker 沒給 name 時
+      // 預設用 command 本身（見 CommandBookmarks.tsx 的 addBookmark），
+      // 會讓 .bookmarks-item-name 跟 .bookmarks-item-cmd 兩處文字重複，
+      // findByText 因「多個符合」直接丟例外——給不同的 name 讓指令文字
+      // 在畫面上只出現一次，才能用文字直接定位到要點的項目。
+      addBookmark("echo seeded", "Seeded Bookmark");
+
       render(<RemoteTerminalView tabId="t1" connId="c19" sas="1919" isActive hostLabel="10.10.41.1:50281" />);
 
       const bookmarkBtn = await screen.findByTitle(/儲存至書籤|Save to Bookmarks/i);
       await userEvent.click(bookmarkBtn);
 
-      // CommandBookmarksPicker 沒有書籤時仍然會渲染（空清單），這裡只
-      // 驗證按鈕確實開啟了選單本身，不驗證書籤內容——書籤資料的正確性
-      // 由 CommandBookmarks 自己的測試負責，不是這個元件的職責。
-      //
-      // 用 querySelector(".bookmarks-dialog") 而不是文字比對：工具列按鈕
-      // 本身跟選單標題用的是同一個翻譯鍵（跟 TerminalView.tsx 完全同一
-      // 個模式），純文字比對會同時命中按鈕跟選單標題兩處，findByText 因
-      // 「多個符合」直接丟例外——CommandBookmarks.tsx 上的 .bookmarks-dialog
-      // 是選單本體唯一的、不會跟按鈕混淆的標記。
+      // 用 querySelector(".bookmarks-dialog") 而不是文字比對確認選單開了：
+      // 工具列按鈕本身跟選單標題用的是同一個翻譯鍵（跟 TerminalView.tsx
+      // 完全同一個模式），純文字比對會同時命中按鈕跟選單標題兩處。
       await waitFor(() => {
         expect(document.querySelector(".bookmarks-dialog")).toBeInTheDocument();
+      });
+
+      const bookmarkItem = await screen.findByText("echo seeded");
+      await userEvent.click(bookmarkItem);
+
+      // 選擇後：真的送出了 warp-fill-command，且 detail.cmd 是選到的那
+      // 一筆指令文字——不是隨便什麼事件都算數。
+      await waitFor(() => expect(fillSpy).toHaveBeenCalled());
+      const event = fillSpy.mock.calls[0][0] as CustomEvent<{ cmd: string }>;
+      expect(event.detail).toEqual({ cmd: "echo seeded" });
+
+      // 選擇後選單應該關閉（onSelect 裡的 setBookmarksOpen(false)）。
+      await waitFor(() => {
+        expect(document.querySelector(".bookmarks-dialog")).not.toBeInTheDocument();
       });
     } finally {
       window.removeEventListener("warp-fill-command", fillSpy);
