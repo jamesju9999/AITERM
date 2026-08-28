@@ -24,27 +24,25 @@ describe("AgentPanel", () => {
   it("submits a typed goal via onSubmitGoal", async () => {
     const onSubmitGoal = vi.fn();
     render(<AgentPanel {...baseProps} onSubmitGoal={onSubmitGoal} />);
-    await userEvent.type(screen.getByRole("textbox"), "find big files");
-    await userEvent.keyboard("{Enter}");
+    await userEvent.type(screen.getByRole("textbox"), "find big files{Enter}");
     expect(onSubmitGoal).toHaveBeenCalledWith("find big files");
   });
 
-  it("renders one card per mission history step with exit-code badge", () => {
+  it("does not render a per-step transcript", () => {
     render(
       <AgentPanel
         {...baseProps}
         mission={{
           goal: "g", active: true, stepCount: 2, maxSteps: 5, tokensUsed: 0,
           history: [
-            { command: "pwd", exitCode: 0, output: "/home/u" },
-            { command: "false", exitCode: 1, output: "" },
+            { command: "pwd", exitCode: 0, output: "/x" },
+            { command: "ls", exitCode: 0, output: "" },
           ],
         }}
       />
     );
-    expect(screen.getByText("pwd")).toBeInTheDocument();
-    expect(screen.getByText("false")).toBeInTheDocument();
-    expect(screen.getByText("exit 1")).toBeInTheDocument();
+    expect(screen.queryByText("pwd")).toBeNull();
+    expect(screen.queryByText("ls")).toBeNull();
   });
 
   it("shows a Stop button while the mission is active and calls onStop", async () => {

@@ -9,11 +9,13 @@ export interface WarpInputProps {
   disabled?: boolean;
   shortcut?: SubmitShortcut;
   sessionId?: string;
+  /** Overrides the default shortcut-hint placeholder. */
+  placeholder?: string;
 }
 
 const STORAGE_KEY = "aiterm-command-history";
 
-export function WarpInput({ onSubmit, disabled, shortcut = "enter", sessionId }: WarpInputProps) {
+export function WarpInput({ onSubmit, disabled, shortcut = "enter", sessionId, placeholder }: WarpInputProps) {
   const { t } = useLocale();
   const [value, setValue] = useState("");
   const [history, setHistory] = useState<string[]>([]);
@@ -326,7 +328,7 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter", sessionId }:
         value={value}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
-        placeholder={t.input_placeholder(shortcut === "enter" ? "Enter" : shortcut === "shift-enter" ? "Shift+Enter" : "Ctrl+Enter")}
+        placeholder={placeholder ?? t.input_placeholder(shortcut === "enter" ? "Enter" : shortcut === "shift-enter" ? "Shift+Enter" : "Ctrl+Enter")}
         rows={1}
         disabled={disabled}
         autoCorrect="off"

@@ -24,7 +24,6 @@ import { runAgentLoop, INITIAL_PREVIEW, type PreviewState } from "../../lib/agen
 import { invokeAiQueryCtx, type RemoteCtx, type AiStreamEvent } from "../../ipc/ai";
 import { getConfig, type ExecutionMode } from "../../ipc/config";
 import type { AgentPhase } from "../AgentStatusBar";
-import { reportAgentStep } from "../../lib/agentStepReport";
 import { AgentPanel } from "./AgentPanel";
 import "../TerminalView.css";
 import "./index.css";
@@ -162,7 +161,8 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
 
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
 
-  const { agentMission, startMission, appendHistory, stopMission } = useAgentMission();
+  // history 不再由觀看端填——步驟以 TerminalBlockCard 顯示在主區；這裡只用 active 當「任務進行中」旗標
+  const { agentMission, startMission, stopMission } = useAgentMission();
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
   const [agentPhase, setAgentPhase] = useState<AgentPhase | null>(null);
   const [streamText, setStreamText] = useState("");
@@ -297,12 +297,8 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
         setAgentPhase({ phase: "failed", reason });
         stopMission();
       },
-      onStepComplete: (info) => {
-        appendHistory(info.command, info.exitCode, info.output);
-        reportAgentStep(info, {});
-      },
     });
-  }, [agentMission, t, locale, connId, buildRemoteCtx, startMission, stopMission, appendHistory]);
+  }, [agentMission, t, locale, connId, buildRemoteCtx, startMission, stopMission]);
 
   const stopAgentMission = useCallback(() => {
     abortRef.current = true;

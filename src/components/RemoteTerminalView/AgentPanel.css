@@ -35,16 +35,6 @@
   flex-direction: column;
   gap: 8px;
 }
-.aiterm-remote-agent-panel__cmd {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  font-family: "Cascadia Mono", Consolas, monospace;
-  font-size: 12px;
-}
-.aiterm-remote-agent-panel__exit.is-ok { color: #10b981; }
-.aiterm-remote-agent-panel__exit.is-fail { color: #f87171; }
-.aiterm-remote-agent-panel__out pre,
 .aiterm-remote-agent-panel__stream {
   white-space: pre-wrap;
   word-break: break-all;
