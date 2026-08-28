@@ -217,16 +217,18 @@ fn ai_single_command_schema() -> serde_json::Value {
     })
 }
 
-#[tauri::command]
-pub async fn ai_query(
+/// `ai_query` 與 `ai_query_ctx` 共用的核心：拿一個已組好的 `EnvSnapshot`，
+/// 跑 provider、串流 `ai-stream` 事件、解析並用 `CommandGuard` 覆核，回傳
+/// `AiCommandReady`。`stream_id` 是 `ai-stream` 事件的 `session_id` 欄位值
+/// （`ai_query` 傳 PTY session id，`ai_query_ctx` 傳觀看連線 conn id）。
+async fn run_single_command(
+    snapshot: crate::ai::EnvSnapshot,
     query: String,
-    session_id: String,
     locale: Locale,
-    app: AppHandle,
-    pty_manager: State<'_, std::sync::Arc<PtyManager>>,
-    router: State<'_, AiRouter>,
+    router: &AiRouter,
+    app: &AppHandle,
+    stream_id: String,
 ) -> Result<AiCommandReady, AiError> {
-    let snapshot = context::snapshot(&pty_manager, &session_id);
     let provider = router.resolve().await?;
     let prompt = build_single_command_prompt(&snapshot, locale);
     let req = GenerateRequest {
@@ -247,7 +249,7 @@ pub async fn ai_query(
     while let Some(chunk) = rx.recv().await {
         // Emit streaming event so the frontend can show live progress.
         let _ = app.emit("ai-stream", AiStreamEvent {
-            session_id: session_id.clone(),
+            session_id: stream_id.clone(),
             kind: AiStreamKind::Query,
             delta: chunk.delta.clone(),
             done: chunk.done,
@@ -315,6 +317,19 @@ pub async fn ai_query(
         explanation: final_explanation,
         risk_level: final_risk_level,
     })
+}
+
+#[tauri::command]
+pub async fn ai_query(
+    query: String,
+    session_id: String,
+    locale: Locale,
+    app: AppHandle,
+    pty_manager: State<'_, std::sync::Arc<PtyManager>>,
+    router: State<'_, AiRouter>,
+) -> Result<AiCommandReady, AiError> {
+    let snapshot = context::snapshot(&pty_manager, &session_id);
+    run_single_command(snapshot, query, locale, &router, &app, session_id).await
 }
 
 #[derive(Debug, Clone, Serialize)]
