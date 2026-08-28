@@ -87,6 +87,15 @@ Rules:
 5. Write all explanations in ${languageDirective(locale)}.`;
   }, [locale]);
 
+  // Component 卸載時把本地 abort 旗標設成 true——不能只靠 sharedAbortRef
+  // 由外部（RemoteTerminalView）在對的時機設定，這裡本來就該對自己的生命
+  // 週期負責，不該依賴尚未寫的呼叫端程式碼。
+  useEffect(() => {
+    return () => {
+      agentAbortRef.current = true;
+    };
+  }, []);
+
   const runAgentLoopRef = useRef<
     (history: AgentHistoryMsg[], systemPrompt: string, step: number) => Promise<void>
   >(async () => {});
