@@ -88,11 +88,3 @@
   border-radius: 8px;
   transition: height 0.12s ease-out;
 }
-
-.aiterm-remote-terminal__ai-unsupported {
-  padding: 6px 12px;
-  font-size: 12px;
-  color: var(--aiterm-warn-fg, #fbbf24);
-  background: var(--aiterm-warn-bg, #78350f33);
-  flex-shrink: 0;
-}

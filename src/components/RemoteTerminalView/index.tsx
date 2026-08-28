@@ -11,7 +11,7 @@ import {
 } from "../../ipc/shareViewer";
 import { useLocale } from "../../contexts/LocaleContext";
 import { getActiveTheme, type AppTheme } from "../../lib/themes";
-import { useTerminalBlocks } from "../../hooks/useTerminalBlocks";
+import { useTerminalBlocks, type TerminalBlock } from "../../hooks/useTerminalBlocks";
 import { WarpInput } from "../WarpInput";
 import { TerminalBlockCard } from "../TerminalBlockCard";
 import { CommandBookmarksPicker, addBookmark } from "../CommandBookmarks";
@@ -195,6 +195,18 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   const stopMissionRef = useRef(stopMission);
   useEffect(() => { stopMissionRef.current = stopMission; }, [stopMission]);
 
+  // 同步的「已經有一輪 runAgentLoop 在跑」旗標。startMission / agentMission
+  // 都是非同步 setState，兩次很快的送出（面板連按兩下 Enter、或面板的
+  // onSubmitGoal 跟 WarpInput 送出擦身而過）會同時通過那個讀 render 快照的
+  // active 檢查，導致兩個 runAgentLoop 共用同一組 abortRef/streamingRef，
+  // 交錯把指令送到遠端主機。這顆 ref 在同一個 tick 內就擋掉第二次。
+  const missionRunningRef = useRef(false);
+
+  // 分頁關閉時把正在跑的 Agent 迴圈中止：runAgentLoop 是命令式觸發的，
+  // 沒有東西在卸載時停它——留著會有孤兒遞迴、60 秒 setTimeout 對已 dispose
+  // 的 xterm 呼叫 term.write、以及卸載後 setState（這個檔案有前科）。
+  useEffect(() => () => { abortRef.current = true; }, []);
+
   // 卡片列表跟即時窗格共用同一個外層捲動容器，新卡片完成渲染時捲到底部
   // ——跟 TerminalView.tsx 的 blockListRef 同一個手法、同一個理由。
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
@@ -228,6 +240,9 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   // 不需要另外處理。
   const altBufferHeightPx = Math.round(hostRows * cellHeightPx);
 
+  // hostPlatform 對一條連線來說實質上不變：onShareViewerGranted 只在第一次
+  // 拿到非空 hostOs 時寫入，之後的 resize 通知帶空字串、不會再改它。所以把
+  // 當下的值一次性關進 mission 的 queryFn 閉包是安全的。
   const buildRemoteCtx = useCallback((): RemoteCtx => ({
     os: hostPlatform === "windows" ? "windows" : "linux",
     shell: null,
@@ -236,10 +251,13 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   }), [hostPlatform]);
 
   const startAgentMission = useCallback((goal: string, maxSteps: number) => {
+    if (missionRunningRef.current) return;
     if (agentMission?.active) return;
     if (!(phaseRef.current.kind === "live" && phaseRef.current.mode === "control")) return;
+    missionRunningRef.current = true;
     abortRef.current = false;
     setAgentPhase(null);
+    setStreamText("");
     setPreview(INITIAL_PREVIEW);
     setAgentPanelOpen(true);
     startMission(goal, maxSteps);
@@ -248,7 +266,13 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
       goal,
       queryFn: (q) => invokeAiQueryCtx(q, buildRemoteCtx(), connId, locale),
       term: termRef.current!,
-      getSubmitCommand: () => submitCommandRef.current,
+      // 迴圈的 .then 不會再檢查 abort——被 Stop 之後、queryFn 還在飛的那一步
+      // 仍然會呼叫這個 submit。包一層在中止後 no-op，遠端主機就不會在 Stop
+      // 之後又多收到一條指令（Stop 在遠端是安全控制）。
+      getSubmitCommand: () => (cmd: string, cb?: (b: TerminalBlock) => void) => {
+        if (abortRef.current) return;
+        submitCommandRef.current(cmd, cb);
+      },
       setPreview,
       setStreamText,
       streamingRef,
@@ -259,8 +283,13 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
       maxSteps,
       history: [],
       onPhase: setAgentPhase,
-      onComplete: () => { setAgentPhase({ phase: "done", steps: agentMissionRef.current?.stepCount ?? 0 }); stopMission(); },
+      onComplete: () => {
+        missionRunningRef.current = false;
+        setAgentPhase({ phase: "done", steps: agentMissionRef.current?.stepCount ?? 0 });
+        stopMission();
+      },
       onFail: (msg) => {
+        missionRunningRef.current = false;
         const reason = msg === t.term_agent_timeout_fail ? t.remote_agent_no_shell_integration : msg;
         setAgentPhase({ phase: "failed", reason });
         stopMission();
@@ -274,14 +303,17 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
 
   const stopAgentMission = useCallback(() => {
     abortRef.current = true;
+    missionRunningRef.current = false;
     stopMission();
+    setAgentPhase(null);
     setPreview(INITIAL_PREVIEW);
   }, [stopMission]);
 
   // WarpInput 送出的整行文字先過一次 AI 前綴檢查——跟本機分頁用同一套
   // parseAiPrefix.ts 規則，不重新猜字首。任務進行中再送一次＝停止；
-  // /agent 開頭跑多步 Agent 迴圈、/ai 開頭跑單步；其餘走 submitCommand
-  // （會建立分段卡片並透過 write 送出）。
+  // /agent 與 /ai 都跑 Agent 迴圈、用同一份步數預算（跟本機分頁
+  // TerminalView.tsx 對兩者一視同仁一致）；其餘走 submitCommand（會建立
+  // 分段卡片並透過 write 送出）。
   const handleWarpSubmit = useCallback(
     (cmd: string) => {
       if (agentMission?.active) {
@@ -291,7 +323,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
       const agentGoal = parseAgentPrefix(cmd);
       const aiGoal = parseAiPrefix(cmd);
       if (agentGoal !== null) { startAgentMission(agentGoal, maxAgentStepsRef.current); return; }
-      if (aiGoal !== null) { startAgentMission(aiGoal, 1); return; }
+      if (aiGoal !== null) { startAgentMission(aiGoal, maxAgentStepsRef.current); return; }
       submitCommand(cmd);
     },
     [submitCommand, startAgentMission, stopAgentMission, agentMission],
@@ -689,7 +721,19 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
           preview={preview}
           onSubmitGoal={(goal) => startAgentMission(goal, maxAgentStepsRef.current)}
           onStop={stopAgentMission}
-          onConfirmPreview={() => { const cmd = preview.command; setPreview(INITIAL_PREVIEW); submitCommandRef.current(cmd); }}
+          onConfirmPreview={() => {
+            // 危險指令的預覽分支從不呼叫 onPhase，agentPhase 還停在
+            // {phase:"asking"}，這一步也沒有完成 callback 可以接續。確認後
+            // 就地把 mission 收乾淨：先設 abortRef（順便讓 asking 階段那顆
+            // 60 秒 timeout 不會再誤觸 onFail），標記完成，再送指令。
+            const cmd = preview.command;
+            abortRef.current = true;
+            missionRunningRef.current = false;
+            setPreview(INITIAL_PREVIEW);
+            setAgentPhase({ phase: "done", steps: agentMissionRef.current?.stepCount ?? 0 });
+            stopMission();
+            submitCommandRef.current(cmd);
+          }}
           onCancelPreview={() => { setPreview(INITIAL_PREVIEW); stopAgentMission(); }}
           onClose={() => { if (agentMission?.active) stopAgentMission(); setAgentPanelOpen(false); }}
           disabled={!(phase.kind === "live" && phase.mode === "control")}

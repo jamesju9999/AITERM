@@ -686,7 +686,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                 // 保留舊實例只換 props。RemoteTerminalView 內部有十幾個
                 // 只在掛載當下初始化一次的 state（phase、connectedAtRef/
                 // elapsedMs、liveRows、hostRows、bookmarksOpen、
-                // aiUnsupported、hostPlatform，還有 useTerminalBlocks
+                // agentPanelOpen、hostPlatform，還有 useTerminalBlocks
                 // 自己的 blocks/isAlternateBuffer，以及 xterm 實例本身）
                 // ——connId prop 換了值不會讓它們自動歸零，用 key 換掉
                 // 整個實例才能保證乾淨的起始狀態，不需要在元件內部逐一

@@ -106,10 +106,22 @@ vi.mock("../../ipc/ai", async (importOriginal) => {
 });
 
 // `ai-stream` 事件監聽：jsdom 下沒有 Tauri，真的 listen 會 reject 成
-// unhandled rejection。回一個 no-op unlisten 就好。
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(() => Promise.resolve(() => {})),
-}));
+// unhandled rejection。這個假 listen 會把 "ai-stream" 的 callback 收下來，
+// 測試再手動觸發（跟上面 shareViewer 的 captureHandler 同一套手法）。
+const { mockListen, aiStreamListeners } = vi.hoisted(() => {
+  const aiStreamListeners: Array<(e: { payload: unknown }) => void> = [];
+  return {
+    aiStreamListeners,
+    mockListen: vi.fn((event: string, cb: (e: { payload: unknown }) => void) => {
+      if (event === "ai-stream") aiStreamListeners.push(cb);
+      return Promise.resolve(() => {});
+    }),
+  };
+});
+vi.mock("@tauri-apps/api/event", () => ({ listen: mockListen }));
+function emitAiStream(payload: Record<string, unknown>) {
+  for (const cb of aiStreamListeners) cb({ payload });
+}
 
 // getConfig 走 Tauri invoke，測試環境沒有——回一份預設設定，元件裡的
 // executionModeRef / maxAgentStepsRef 才有確定值。
@@ -140,7 +152,7 @@ if (!window.HTMLElement.prototype.scrollTo) {
   window.HTMLElement.prototype.scrollTo = () => {};
 }
 
-import { RemoteTerminalView, formatElapsed } from "./index";
+import { RemoteTerminalView, formatElapsed, readRecentOutput } from "./index";
 import { addBookmark } from "../CommandBookmarks";
 
 beforeEach(() => {
@@ -149,6 +161,9 @@ beforeEach(() => {
   capturedBufferChangeHandler = null;
   mockBufferActive.type = "normal";
   appendOutputSpy = null;
+  aiStreamListeners.length = 0;
+  mockListen.mockClear();
+  mockInvokeAiQueryCtx.mockClear();
   writeMock.mockClear();
   clearMock.mockReset();
   sendMock.mockReset();
@@ -408,6 +423,79 @@ describe("RemoteTerminalView", () => {
       await screen.findByRole("dialog", { name: /AI (代理|Agent)/i }),
     ).toBeInTheDocument();
     expect(mockInvokeAiQueryCtx).toHaveBeenCalled();
+  });
+
+  it("任務進行中失去控制權 → 中止並在面板顯示原因", async () => {
+    render(<RemoteTerminalView tabId="t1" connId="c30" sas="3030" isActive onConnectClick={vi.fn()} />);
+    await waitFor(() => expect(handlers["granted:c30"]).toBeDefined());
+    act(() => {
+      handlers["granted:c30"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+    });
+
+    const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
+    await waitFor(() => expect(textarea).not.toBeDisabled());
+    await userEvent.type(textarea, "/agent do something{Enter}");
+    await screen.findByRole("dialog", { name: /AI (代理|Agent)/i });
+
+    // 主控端把觀看端降成唯讀——進行中的 mission 要中止。
+    await waitFor(() => expect(handlers["control:c30"]).toBeDefined());
+    act(() => {
+      handlers["control:c30"]("read_only" as never);
+    });
+
+    expect(
+      await screen.findByText(/已失去控制權|Control permission lost/),
+    ).toBeInTheDocument();
+  });
+
+  it("任務進行中連線結束 → 中止並在面板顯示原因", async () => {
+    render(<RemoteTerminalView tabId="t1" connId="c31" sas="3131" isActive onConnectClick={vi.fn()} />);
+    await waitFor(() => expect(handlers["granted:c31"]).toBeDefined());
+    act(() => {
+      handlers["granted:c31"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+    });
+
+    const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
+    await waitFor(() => expect(textarea).not.toBeDisabled());
+    await userEvent.type(textarea, "/agent do something{Enter}");
+    await screen.findByRole("dialog", { name: /AI (代理|Agent)/i });
+
+    await waitFor(() => expect(handlers["ended:c31"]).toBeDefined());
+    act(() => {
+      handlers["ended:c31"]("host_stopped_sharing" as never);
+    });
+
+    expect(
+      await screen.findByText(/連線已結束，任務中止|Connection ended; mission aborted/),
+    ).toBeInTheDocument();
+  });
+
+  it("ai-stream 事件把 delta 餵進面板（詢問中），錯誤 session_id / kind 一律忽略", async () => {
+    render(<RemoteTerminalView tabId="t1" connId="c32" sas="3232" isActive onConnectClick={vi.fn()} />);
+    await waitFor(() => expect(handlers["granted:c32"]).toBeDefined());
+    act(() => {
+      handlers["granted:c32"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+    });
+
+    const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
+    await waitFor(() => expect(textarea).not.toBeDisabled());
+    await userEvent.type(textarea, "/agent do something{Enter}");
+    await screen.findByRole("dialog", { name: /AI (代理|Agent)/i });
+
+    // 這個連線、query 串流：應該顯示。
+    act(() => {
+      emitAiStream({ kind: "query", session_id: "c32", delta: "hello", done: false });
+    });
+    expect(await screen.findByText("hello")).toBeInTheDocument();
+
+    // 別條連線的串流 / chat 串流 / done 事件：一律不 append。
+    act(() => {
+      emitAiStream({ kind: "query", session_id: "someone-else", delta: "XXX", done: false });
+      emitAiStream({ kind: "chat", session_id: "c32", delta: "YYY", done: false });
+      emitAiStream({ kind: "query", session_id: "c32", delta: "ZZZ", done: true });
+    });
+    expect(screen.queryByText(/XXX|YYY|ZZZ/)).not.toBeInTheDocument();
+    expect(screen.getByText("hello")).toBeInTheDocument();
   });
 
   it("clears the block list on resync, not just the xterm buffer", async () => {
@@ -686,5 +774,41 @@ describe("formatElapsed", () => {
     expect(formatElapsed(3_599_000)).toBe("59m59s");
     expect(formatElapsed(3_600_000)).toBe("1h00m");
     expect(formatElapsed(3_665_000)).toBe("1h01m");
+  });
+});
+
+// 匯出的純函式，直接單元測試——元件間接只走「term 存在、有內容」一條路，
+// null term、全空 buffer、maxChars 截斷這幾條沒被蓋到。
+describe("readRecentOutput", () => {
+  function stubTerm(lines: string[], baseY = 0, cursorY = lines.length - 1) {
+    return {
+      buffer: {
+        active: {
+          baseY,
+          cursorY,
+          getLine: (i: number) =>
+            lines[i] === undefined ? undefined : { translateToString: () => lines[i] },
+        },
+      },
+    } as unknown as Parameters<typeof readRecentOutput>[0];
+  }
+
+  it("回傳游標往回的幾行，維持由上到下的順序", () => {
+    expect(readRecentOutput(stubTerm(["a", "b", "c"]))).toBe("a\nb\nc");
+  });
+
+  it("超過 maxChars 就從最底下往回截，只留末段", () => {
+    // 每行 "lineN" 共 6 個字元（含隱含換行）；maxChars=12 只容得下最後兩行。
+    expect(
+      readRecentOutput(stubTerm(["line0", "line1", "line2", "line3"]), 12),
+    ).toBe("line2\nline3");
+  });
+
+  it("term 為 null 回 null", () => {
+    expect(readRecentOutput(null)).toBeNull();
+  });
+
+  it("整個 buffer 都是空字串回 null", () => {
+    expect(readRecentOutput(stubTerm(["", "", ""]))).toBeNull();
   });
 });
