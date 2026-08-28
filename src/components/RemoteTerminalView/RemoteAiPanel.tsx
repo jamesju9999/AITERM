@@ -162,6 +162,13 @@ Rules:
 
       timeoutId = setTimeout(() => {
         if (settled) return;
+        if (isAborted()) {
+          // 使用者已經按過停止（或 sharedAbortRef 被外部設成 true）——
+          // 不是這條連線沒有 shell 整合，不該用那句話蓋過使用者自己的
+          // 停止動作。agentRunning 在 abort() 當下已經設成 false 了。
+          finish();
+          return;
+        }
         chat.addMessage({
           role: "assistant",
           content: t.remote_agent_no_shell_integration,
@@ -218,6 +225,7 @@ Rules:
 
   const abort = useCallback(() => {
     agentAbortRef.current = true;
+    setAgentRunning(false);
   }, []);
 
   useImperativeHandle(ref, () => ({ submitAgent, send, abort }), [submitAgent, send, abort]);

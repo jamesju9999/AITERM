@@ -210,6 +210,11 @@ describe("RemoteAiPanel", () => {
       ref.current!.abort();
     });
 
+    // 按下停止當下、指令都還沒完成，UI 就要立刻反映「不再跑了」——不能
+    // 等到 onComplete 或 60s 逾時才反映，否則使用者會以為停止鈕壞了。
+    expect(screen.queryByTitle("停止")).not.toBeInTheDocument();
+    expect(placeholder()).not.toMatch(/執行中/);
+
     await act(async () => {
       onComplete(fakeBlock("some output", 0));
       await flushMicrotasks();
@@ -217,6 +222,35 @@ describe("RemoteAiPanel", () => {
 
     expect(mockInvokeAiChatCtx).toHaveBeenCalledTimes(1);
     expect(submitCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("abort() while the 60s timer is pending stops the loop without the misleading timeout message", async () => {
+    vi.useFakeTimers();
+    mockInvokeAiChatCtx.mockResolvedValueOnce(aiReply("<cmd>ls -la</cmd>"));
+    const { ref, submitCommand } = renderPanel();
+
+    act(() => {
+      ref.current!.submitAgent("goal");
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(submitCommand).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      ref.current!.abort();
+    });
+    expect(placeholder()).not.toMatch(/執行中/);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    // 逾時的訊息不該出現——迴圈是被使用者主動停止的，不是連線沒有 shell
+    // 整合。
+    const addedContents = chatMock.addMessage.mock.calls.map((c) => c[0].content);
+    expect(addedContents).not.toContain(t.remote_agent_no_shell_integration);
+    expect(mockInvokeAiChatCtx).toHaveBeenCalledTimes(1);
   });
 
   it("isControl=false makes submitAgent and send no-ops", async () => {
