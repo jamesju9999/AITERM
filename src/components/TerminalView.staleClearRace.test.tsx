@@ -172,4 +172,11 @@ describe("finalizeBlock 的延遲 term.clear() 與下一輪 B 標記之間的 ra
     const ifconfigCard = cardsText.find((t) => t.includes("ifconfig"));
     expect(ifconfigCard).toBeDefined();
   });
+
+  // 「clear() 觸發當下游標已經不在 B 記錄的那一行」這個防呆條件的複合
+  // 情境測試（欄寬換行造成的接續行），需要精確控制欄寬與行號才能可靠
+  // 重現——見 src/hooks/useTerminalBlocks.staleClearWrap.test.ts，那裡
+  // 用直接 renderHook（而不是掛載整個 TerminalView）取得可控制的
+  // `cols: 80`，已經證明過先前的無條件搬遷版本會產生內容錯誤的假區塊、
+  // 修正後正確退回保底機制。
 });

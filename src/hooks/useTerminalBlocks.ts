@@ -156,14 +156,22 @@ export function useTerminalBlocks(
    * 變成 0——欄位（col）完全不受影響。這裡就是在 clear() 發生的同時，
    * 讓 promptEndRef 的行號跟著一起「搬家」，而不是讓它整個作廢。
    *
-   * 極端情況（clear() 延遲到已經跨過不只一輪指令週期才觸發）這裡沒辦法
-   * 完全處理——但退回的結果最差就是那個更晚的指令還原失敗、走既有的
-   * onUntrackedCommandBoundary 保底機制，跟這個修復之前的行為一樣，
-   * 不會比現在更糟。
+   * 「遊標還停在 promptEndRef 記錄的那一行」這個前提**必須先檢查、不能
+   * 假設一定成立**：如果使用者輸入的指令已經因為欄寬不夠而換行（游標
+   * 現在停在接續行，不是 B 當初記錄的那一行），clear() 保留下來的是
+   * 接續行的內容，跟 promptEndRef.col 對不上——這時候若還是無條件把
+   * row 搬成 0，recoverUntrackedCommand 會從錯誤的一行切出內容，得到
+   * 一個看似成功、實際上是錯的還原結果，比直接還原失敗、退回
+   * onUntrackedCommandBoundary 保底機制還糟（保底機制不會生出錯誤資料）。
+   * 所以要在呼叫 clear() 之前，先讀一次目前遊標的絕對行號，只有在它
+   * 剛好等於 promptEndRef 記錄的行號時，才代表這個前提成立、可以安心
+   * 搬遷；不成立就維持原樣，讓既有的 endRow < startRow 防呆邏輯自然
+   * 接手判斷失敗。
    */
   const clearAndRebasePromptEnd = useCallback((t: Terminal) => {
+    const cursorRowBeforeClear = t.buffer.active.cursorY + t.buffer.active.baseY;
     t.clear();
-    if (promptEndRef.current) {
+    if (promptEndRef.current && promptEndRef.current.row === cursorRowBeforeClear) {
       promptEndRef.current = { row: 0, col: promptEndRef.current.col };
     }
   }, []);
