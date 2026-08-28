@@ -23,6 +23,17 @@ pub struct AiCommandReady {
     pub risk_level: RiskLevel,
 }
 
+/// 觀看端（遠端終端機分頁）傳來的情境。沒有本機 PTY，全部欄位由觀看端
+/// 從已知資訊組出：`os` 來自 granted 事件的 hostOs，`recent_output` 來自
+/// 觀看端 xterm buffer 末段，`shell` / `cwd` 觀看端無從得知 → None。
+#[derive(Debug, Deserialize)]
+pub struct RemoteCtx {
+    pub os: String,
+    pub shell: Option<String>,
+    pub cwd: Option<String>,
+    pub recent_output: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AiStreamKind {
@@ -330,6 +341,26 @@ pub async fn ai_query(
 ) -> Result<AiCommandReady, AiError> {
     let snapshot = context::snapshot(&pty_manager, &session_id);
     run_single_command(snapshot, query, locale, &router, &app, session_id).await
+}
+
+/// `ai_query` 的觀看端版本：不吃 PTY session_id，改吃明確的 `RemoteCtx`。
+/// `conn_id` 當作 `ai-stream` 事件的識別（觀看端面板監聽這個值）。
+#[tauri::command]
+pub async fn ai_query_ctx(
+    query: String,
+    ctx: RemoteCtx,
+    locale: Locale,
+    conn_id: String,
+    app: AppHandle,
+    router: State<'_, AiRouter>,
+) -> Result<AiCommandReady, AiError> {
+    let snapshot = context::snapshot_from_remote_ctx(
+        &ctx.os,
+        ctx.shell.as_deref(),
+        ctx.cwd.as_deref(),
+        ctx.recent_output,
+    );
+    run_single_command(snapshot, query, locale, &router, &app, conn_id).await
 }
 
 #[derive(Debug, Clone, Serialize)]

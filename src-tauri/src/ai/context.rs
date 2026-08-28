@@ -49,6 +49,25 @@ pub fn snapshot_from_parts(os: &str, shell: &str, cwd: PathBuf) -> EnvSnapshot {
     }
 }
 
+/// 從觀看端傳來的明確情境組 snapshot（沒有本機 PTY 可查）。
+/// `shell` 未知時填空字串（prompt 的 `Shell:` 欄位就留白），`cwd` 未知時
+/// 填 `.`（`build_single_command_prompt` 只是把它 `display()` 進提示詞，
+/// 不會拿去存取檔案系統）。`dir_listing` 一律 None——無法列遠端目錄。
+pub fn snapshot_from_remote_ctx(
+    os: &str,
+    shell: Option<&str>,
+    cwd: Option<&str>,
+    recent_output: Option<String>,
+) -> EnvSnapshot {
+    EnvSnapshot {
+        os: os.to_string(),
+        shell: shell.unwrap_or("").to_string(),
+        cwd: cwd.map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")),
+        recent_output,
+        dir_listing: None,
+    }
+}
+
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 fn shell_variant_to_str(v: ShellVariant) -> &'static str {
@@ -113,6 +132,23 @@ mod tests {
         assert_eq!(s.cwd, PathBuf::from("/home/u"));
         assert!(s.recent_output.is_none());
         assert!(s.dir_listing.is_none());
+    }
+
+    #[test]
+    fn snapshot_from_remote_ctx_handles_missing_fields() {
+        let s = snapshot_from_remote_ctx("linux", None, None, None);
+        assert_eq!(s.os, "linux");
+        assert_eq!(s.shell, "");
+        assert_eq!(s.cwd, PathBuf::from("."));
+        assert!(s.recent_output.is_none());
+        assert!(s.dir_listing.is_none());
+
+        let s2 = snapshot_from_remote_ctx(
+            "windows", Some("pwsh"), Some("C:\\src"), Some("PS C:\\src>".into()),
+        );
+        assert_eq!(s2.shell, "pwsh");
+        assert_eq!(s2.cwd, PathBuf::from("C:\\src"));
+        assert_eq!(s2.recent_output.as_deref(), Some("PS C:\\src>"));
     }
 
     #[test]
