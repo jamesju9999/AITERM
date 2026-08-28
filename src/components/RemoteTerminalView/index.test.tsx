@@ -113,7 +113,7 @@ if (!window.HTMLElement.prototype.scrollTo) {
   window.HTMLElement.prototype.scrollTo = () => {};
 }
 
-import { RemoteTerminalView } from "./index";
+import { RemoteTerminalView, formatElapsed } from "./index";
 
 beforeEach(() => {
   for (const k of Object.keys(handlers)) delete handlers[k];
@@ -521,5 +521,20 @@ describe("RemoteTerminalView", () => {
 
       expect(disconnectMock).toHaveBeenCalledWith("c7");
     });
+  });
+});
+
+// 純函式，不需要 render 元件——間接透過 RemoteTerminalView 的測試只走到
+// <60s 的分支（0s/3s/5s），分鐘跟小時這兩段完全沒被蓋到，這裡直接測。
+describe("formatElapsed", () => {
+  it("秒數欄位補零到兩位，60s 進位到 1m 後個位數秒數不再讓字串長度突然變化", () => {
+    expect(formatElapsed(59_000)).toBe("59s");
+    expect(formatElapsed(60_000)).toBe("1m00s");
+  });
+
+  it("小時進位前後（59m59s → 1h00m）與非整點小時（1h01m）都正確", () => {
+    expect(formatElapsed(3_599_000)).toBe("59m59s");
+    expect(formatElapsed(3_600_000)).toBe("1h00m");
+    expect(formatElapsed(3_665_000)).toBe("1h01m");
   });
 });

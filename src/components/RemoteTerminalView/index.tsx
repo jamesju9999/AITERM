@@ -133,7 +133,9 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
     if (phase.kind !== "live") return;
     const interval = setInterval(() => {
       if (connectedAtRef.current !== null) {
-        setElapsedMs(Date.now() - connectedAtRef.current);
+        // 系統時鐘可能因為 NTP 校時、睡眠喚醒等原因往回跳——夾在 0 避免
+        // 負數穿透到 formatElapsed，顯示出詭異的負數秒數。
+        setElapsedMs(Math.max(0, Date.now() - connectedAtRef.current));
       }
     }, 1000);
     return () => clearInterval(interval);
@@ -366,8 +368,8 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
 
   return (
     <div className="aiterm-remote-terminal" data-tab-id={tabId} data-active={isActive}>
-      <div className="aiterm-status">
-        <span className="aiterm-status-left">
+      <div className="aiterm-status" data-tauri-drag-region>
+        <span className="aiterm-status-left" data-tauri-drag-region>
           AITerm · {t.remote_terminal_tab} {hostLabel} · {connectionStatusText(t, phase, elapsedMs)}
         </span>
       </div>
@@ -521,13 +523,24 @@ function connectionStatusText(t: Translations, phase: Phase, elapsedMs: number):
  * （不跨檔案匯出私有函式）：那邊是給單一指令的執行時間用，通常不會超過
  * 一小時，這裡是連線總時間，可能開很久，需要多處理小時這一級，用途不同
  * 分開寫更清楚。
+ *
+ * 秒數欄位一律補零到兩位（"3m05s" 不是 "3m5s"）——不補零的話，個位數的
+ * 秒數在 9s → 10s 那一格會讓字串長度突然變化，畫面上看起來像閃一下；
+ * 小時分支的 `remMinutes` 本來就有補零，這裡補齊讓兩個分支一致。
+ *
+ * export 出去給 `index.test.tsx` 直接單元測試：分鐘/小時這兩個分支只
+ * 靠元件間接測會被 <60s 的案例蓋過去，測不到。這會讓這個檔案同時匯出
+ * 元件跟一個純函式，Fast Refresh 的 lint 規則會抗議——這裡刻意接受這個
+ * 副作用（開發時這個檔案偶爾會整個重新載入，而不是熱替換），換取這個
+ * 純函式能被直接單元測試，不用另開一個檔案。
  */
-function formatElapsed(ms: number): string {
+// eslint-disable-next-line react-refresh/only-export-components -- 見上方註解：純函式匯出換取可直接單元測試，不影響正式建置。
+export function formatElapsed(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   if (totalSeconds < 60) return `${totalSeconds}s`;
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  if (minutes < 60) return `${minutes}m${seconds}s`;
+  if (minutes < 60) return `${minutes}m${String(seconds).padStart(2, "0")}s`;
   const hours = Math.floor(minutes / 60);
   const remMinutes = minutes % 60;
   return `${hours}h${String(remMinutes).padStart(2, "0")}m`;
