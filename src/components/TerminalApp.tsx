@@ -69,6 +69,10 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   const [homeActive, setHomeActive] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
+  // 記住這次開啟 ConnectDialog，是不是某個既有遠端終端機分頁的工具列
+  // 「連線」按鈕要求的——是的話，連線成功後要更新那個分頁，不是開新的。
+  // null 代表這次是走 ADD TAB 的正常「開新分頁」流程。
+  const [reconnectTabId, setReconnectTabId] = useState<string | null>(null);
   // 首頁 AI 路由猜對／猜錯的反悔提示：記住開出來的分頁 id、AI 選了什麼類型、
   // 使用者原句（換分頁類型時要用同一句重開）。null 代表沒有提示要顯示。
   const [routeHint, setRouteHint] = useState<{ tabId: string; type: TabType; userText: string } | null>(null);
@@ -531,9 +535,34 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       <ConsentDialog tabs={tabs.map((x) => ({ id: x.id, title: x.title, ptySessionId: x.ptySessionId }))} />
       {connectOpen && (
         <ConnectDialog
-          onCancel={() => setConnectOpen(false)}
+          onCancel={() => {
+            setConnectOpen(false);
+            // 沒清的話，使用者從工具列按了連線鈕、又按取消，下一次改從
+            // ADD TAB 開新分頁走正常流程，會被誤判成「這是剛才那個分頁
+            // 要求的重新連線」，錯誤地更新舊分頁而不是開新分頁。
+            setReconnectTabId(null);
+          }}
           onConnected={(connId, sas, hostLabel) => {
             setConnectOpen(false);
+            if (reconnectTabId) {
+              const targetId = reconnectTabId;
+              setReconnectTabId(null);
+              setTabs((prev) =>
+                prev.map((tab) =>
+                  tab.id === targetId
+                    ? {
+                        ...tab,
+                        title: `${t.remote_terminal_tab}：${hostLabel}`,
+                        remoteConnId: connId,
+                        remoteHostLabel: hostLabel,
+                        remoteSas: sas,
+                      }
+                    : tab,
+                ),
+              );
+              selectTab(targetId);
+              return;
+            }
             const newId = crypto.randomUUID();
             setTabs((prev) => [
               ...prev,
@@ -627,16 +656,29 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
               ) : tab.type === "mail" ? (
                 <MailView isActive={isActive} onMessageRead={refreshMailUnread} />
               ) : tab.type === "remote-terminal" ? (
+                // key={tab.remoteConnId}：連線切換時強制 React 把舊的
+                // RemoteTerminalView 整個卸載、掛一個全新的實例，而不是
+                // 保留舊實例只換 props。RemoteTerminalView 內部有十幾個
+                // 只在掛載當下初始化一次的 state（phase、connectedAtRef/
+                // elapsedMs、liveRows、hostRows、bookmarksOpen、
+                // aiUnsupported、hostPlatform，還有 useTerminalBlocks
+                // 自己的 blocks/isAlternateBuffer，以及 xterm 實例本身）
+                // ——connId prop 換了值不會讓它們自動歸零，用 key 換掉
+                // 整個實例才能保證乾淨的起始狀態，不需要在元件內部逐一
+                // 手動清空、也不會有漏清某個 state 的風險。舊實例卸載
+                // 時，既有的斷線 effect（disconnectTimerRef，[connId]
+                // 依賴）會照常觸發，正確斷掉舊連線，不需要另外處理。
                 <RemoteTerminalView
+                  key={tab.remoteConnId}
                   tabId={tab.id}
                   connId={tab.remoteConnId ?? ""}
                   sas={tab.remoteSas ?? ""}
                   isActive={isActive}
                   hostLabel={tab.remoteHostLabel ?? ""}
-                  // 佔位——onConnectClick 是必填 prop 但真正的「開對話框、
-                  // 就地重新連線」邏輯是下一個 task 的範圍，這裡先給
-                  // no-op 讓型別檢查通過，不提前實作行為。
-                  onConnectClick={() => {}}
+                  onConnectClick={() => {
+                    setReconnectTabId(tab.id);
+                    setConnectOpen(true);
+                  }}
                 />
               ) : (
                 <TerminalView
