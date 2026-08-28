@@ -1,0 +1,134 @@
+import { useState } from "react";
+import type { AgentMission } from "../../hooks/useAgentMission";
+import type { AgentPhase } from "../AgentStatusBar";
+import type { PreviewState } from "../../lib/agentLoop";
+import { CommandPreview } from "../CommandPreview";
+import type { Translations } from "../../lib/i18n";
+import "./AgentPanel.css";
+
+interface Props {
+  mission: AgentMission | null;
+  phase: AgentPhase | null;
+  streamText: string;
+  preview: PreviewState;
+  onSubmitGoal: (goal: string) => void;
+  onStop: () => void;
+  onConfirmPreview: () => void;
+  onCancelPreview: () => void;
+  onClose: () => void;
+  disabled: boolean;
+  t: Translations;
+}
+
+export function AgentPanel({
+  mission, phase, streamText, preview,
+  onSubmitGoal, onStop, onConfirmPreview, onCancelPreview, onClose, disabled, t,
+}: Props) {
+  const [draft, setDraft] = useState("");
+  const active = mission?.active ?? false;
+
+  const submit = () => {
+    const goal = draft.trim();
+    if (!goal || disabled || active) return;
+    setDraft("");
+    onSubmitGoal(goal);
+  };
+
+  return (
+    <div className="aiterm-remote-agent-panel" role="dialog" aria-label={t.remote_agent_panel_title}>
+      <div className="aiterm-remote-agent-panel__header">
+        <span className="aiterm-remote-agent-panel__title">{t.remote_agent_panel_title}</span>
+        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={onClose}>
+          ✕
+        </button>
+      </div>
+
+      <div className="aiterm-remote-agent-panel__body">
+        {mission?.history.map((h, i) => (
+          <div className="aiterm-remote-agent-panel__step" key={i}>
+            <div className="aiterm-remote-agent-panel__cmd">
+              <span>
+                <span aria-hidden="true">▶ </span>
+                <span>{h.command}</span>
+              </span>
+              <span
+                className={
+                  "aiterm-remote-agent-panel__exit" +
+                  (h.exitCode === 0 ? " is-ok" : " is-fail")
+                }
+              >
+                {h.exitCode === 0 ? "exit 0" : `exit ${h.exitCode}`}
+              </span>
+            </div>
+            {h.output && (
+              <details className="aiterm-remote-agent-panel__out">
+                <summary>{t.remote_agent_output}</summary>
+                <pre>{h.output}</pre>
+              </details>
+            )}
+          </div>
+        ))}
+
+        {phase?.phase === "asking" && (
+          <div className="aiterm-remote-agent-panel__status">◐ {t.term_agent_status_asking}</div>
+        )}
+        {phase?.phase === "running" && (
+          <div className="aiterm-remote-agent-panel__status">
+            ▶ {t.term_agent_status_running(phase.command)}
+          </div>
+        )}
+        {phase?.phase === "web" && (
+          <div className="aiterm-remote-agent-panel__status">
+            {phase.webKind === "search"
+              ? t.term_agent_status_web_search(phase.query)
+              : t.term_agent_status_web_fetch(phase.query)}
+          </div>
+        )}
+        {streamText && phase?.phase === "asking" && (
+          <pre className="aiterm-remote-agent-panel__stream">{streamText}</pre>
+        )}
+
+        {phase?.phase === "done" && (
+          <div className="aiterm-remote-agent-panel__done">✅ {t.remote_agent_done}</div>
+        )}
+        {phase?.phase === "failed" && (
+          <div className="aiterm-remote-agent-panel__failed">⚠ {phase.reason}</div>
+        )}
+      </div>
+
+      {preview.visible && (
+        <CommandPreview
+          command={preview.command}
+          explanation={preview.explanation}
+          riskLevel={preview.riskLevel}
+          onConfirm={onConfirmPreview}
+          onCancel={onCancelPreview}
+        />
+      )}
+
+      <div className="aiterm-remote-agent-panel__footer">
+        {active ? (
+          <button className="aiterm-btn aiterm-btn--danger" onClick={onStop}>
+            <span aria-hidden="true">■ </span>
+            {t.remote_agent_stop}
+          </button>
+        ) : (
+          <input
+            className="aiterm-input"
+            type="text"
+            value={draft}
+            disabled={disabled}
+            placeholder={disabled ? t.remote_agent_needs_control : t.remote_agent_goal_placeholder}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                submit();
+              }
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
