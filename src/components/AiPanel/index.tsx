@@ -1,11 +1,10 @@
 import {
   useEffect, useRef, useState, useCallback,
-  type KeyboardEvent, type PointerEvent,
 } from "react";
 import { readFileAsAttachment, contentToDisplayString } from "../../types/attachment";
 import type { Attachment } from "../../types/attachment";
 import { useMcpChat } from "../../hooks/useMcpChat";
-import { ModeHint, type PanelMode } from "./ModeHint";
+import type { PanelMode } from "./ModeHint";
 import { invokeAiChat, formatAiError, type AiError, type ChatMessage as AiChatMessage } from "../../ipc/ai";
 import { getSessionCwd, listDirectory } from "../../ipc/fs";
 import { getPtyRecentOutput, writePty } from "../../ipc/pty";
@@ -16,15 +15,11 @@ import { useLocale } from "../../contexts/LocaleContext";
 import { QuotaBadge } from "../QuotaBadge";
 import { useProviderQuota } from "../../hooks/useProviderQuota";
 import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
-import { MessageList } from "./MessageList";
-import { ZapIcon, WrenchIcon, MaximizeIcon, MinimizeIcon } from "../Icons";
-import "./styles.css";
+import { WrenchIcon } from "../Icons";
+import { ChatPanelShell } from "../ChatPanel/ChatPanelShell";
 
 const IS_WINDOWS = navigator.platform.toLowerCase().startsWith("win");
 
-const MIN_WIDTH = 280;
-const MAX_WIDTH_RATIO = 0.75;
-const STORAGE_WIDTH_KEY = "aiterm-panel-width";
 const STORAGE_AGENT_MODE_KEY = "aiterm-agent-mode";
 const STORAGE_USE_MCP_KEY = "aiterm-use-mcp";
 
@@ -38,14 +33,6 @@ const STORAGE_USE_MCP_KEY = "aiterm-use-mcp";
 const STUCK_IDLE_MS = 120_000;
 /** 多久檢查一次 getIdleMs()——不用太密，卡住偵測本來就是寬鬆判準。 */
 const STUCK_CHECK_INTERVAL_MS = 5_000;
-
-function loadSavedWidth(): number {
-  try {
-    const v = localStorage.getItem(STORAGE_WIDTH_KEY);
-    if (v) return Math.max(MIN_WIDTH, parseInt(v, 10));
-  } catch { /* ignore */ }
-  return 420;
-}
 
 function loadSavedAgentMode(): boolean {
   try {
@@ -100,17 +87,13 @@ export function AiPanel({
   const quotaWindow = useProviderQuota(providerId);
   const { t, locale } = useLocale();
   const chat = useMcpChat(sessionId);
-  const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [historyOpen, setHistoryOpen] = useState(false);
   const [mcpEnabled, setMcpEnabled] = useState(true);
   const [mcpToolCount, setMcpToolCount] = useState(0);
   const [useMcp, setUseMcp] = useState(loadSavedUseMcp);
   const [submitShortcut, setSubmitShortcut] = useState<SubmitShortcut>("enter");
-  const [expanded, setExpanded] = useState(false);
 
   const processFiles = useCallback(async (files: FileList | File[]) => {
     const arr = Array.from(files);
@@ -146,37 +129,6 @@ export function AiPanel({
       await processFiles(files);
     }
   }, [processFiles]);
-
-  // ── Resize ────────────────────────────────────────────────────────────────
-  const [panelWidth, setPanelWidth] = useState(loadSavedWidth);
-  const isDraggingRef = useRef(false);
-  const dragStartXRef = useRef(0);
-  const dragStartWidthRef = useRef(0);
-
-  const onResizePointerDown = (e: PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    isDraggingRef.current = true;
-    dragStartXRef.current = e.clientX;
-    dragStartWidthRef.current = panelWidth;
-    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-  };
-
-  const onResizePointerMove = (e: PointerEvent<HTMLDivElement>) => {
-    if (!isDraggingRef.current) return;
-    const delta = dragStartXRef.current - e.clientX; // drag left → wider
-    const maxWidth = Math.floor(window.innerWidth * MAX_WIDTH_RATIO);
-    const next = Math.max(MIN_WIDTH, Math.min(maxWidth, dragStartWidthRef.current + delta));
-    setPanelWidth(next);
-  };
-
-  const onResizePointerUp = () => {
-    if (!isDraggingRef.current) return;
-    isDraggingRef.current = false;
-    setPanelWidth((w) => {
-      try { localStorage.setItem(STORAGE_WIDTH_KEY, String(w)); } catch { /* ignore */ }
-      return w;
-    });
-  };
 
   // ── Agent mode ────────────────────────────────────────────────────────────
   const [agentMode, setAgentMode] = useState(loadSavedAgentMode);
@@ -423,21 +375,6 @@ Rules:
     await runAgentLoop(history, systemPrompt, 0);
   }, [chat, buildAgentSystemPrompt, runAgentLoop]);
 
-  // ── Standard chat ─────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (isOpen) textareaRef.current?.focus();
-  }, [isOpen]);
-
-  useEffect(() => {
-    const onPrefill = (e: Event) => {
-      const detail = (e as CustomEvent).detail as { text: string };
-      if (detail?.text) setInput(detail.text);
-    };
-    window.addEventListener("aiterm:prefill-chat", onPrefill);
-    return () => window.removeEventListener("aiterm:prefill-chat", onPrefill);
-  }, []);
-
   // Forward new assistant messages to Telegram
   const prevMessagesLength = useRef(chat.messages.length);
   useEffect(() => {
@@ -451,343 +388,152 @@ Rules:
     prevMessagesLength.current = chat.messages.length;
   }, [chat.messages, chat.isStreaming, sendRemoteResponse]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); onClose(); }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [isOpen, onClose]);
-
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter") {
-      const shouldSubmit =
-        (submitShortcut === "enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
-        (submitShortcut === "shift-enter" && e.shiftKey && !e.ctrlKey) ||
-        (submitShortcut === "ctrl-enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey);
-      if (shouldSubmit) { e.preventDefault(); handleSubmit(); }
-    }
-  };
-
   // MCP 是否真的會被用到。送出時與模式說明列共用同一個判斷——拆成兩份寫的話
   // 遲早會有一邊漏改，畫面就會說謊。
   const mcpActive = useMcp && mcpEnabled && mcpToolCount > 0;
   const mode: PanelMode = agentMode ? "agent" : mcpActive ? "mcp" : "suggest";
-
-  const handleSubmit = () => {
-    const text = input.trim();
-    if ((!text && attachments.length === 0) || chat.isStreaming || agentRunning) return;
-    setInput("");
-    const currentAttachments = attachments;
-    setAttachments([]);
-    if (agentMode) {
-      void submitAgent(text);
-    } else {
-      void chat.send(text, mcpActive, undefined, currentAttachments.length > 0 ? currentAttachments : undefined);
-    }
-  };
-
-  const panelClass = [
-    "aiterm-ai-panel",
-    isOpen ? "" : "aiterm-ai-panel-hidden",
-    // Windows can't blur the terminal behind the glass panel — see styles.css.
-    IS_WINDOWS ? "aiterm-ai-panel--solid" : "",
-    expanded ? "aiterm-ai-panel--expanded" : "",
-  ].filter(Boolean).join(" ");
   const isDisabled = chat.isStreaming || agentRunning;
 
   return (
-    <div
-      className={panelClass}
-      aria-hidden={!isOpen}
-      style={{ width: expanded ? "100%" : `${panelWidth}px` }}
+    <ChatPanelShell
+      isOpen={isOpen}
+      onClose={onClose}
+      messages={chat.messages}
+      streamBuf={chat.streamBuf}
+      isStreaming={chat.isStreaming || (agentRunning && agentPhase === "thinking")}
+      // **兩個階段都要有指示**：等 AI 想、以及等指令跑完——後者原本對話框
+      // 是全靜的，使用者只看到氣泡消失然後乾等，回報成「空檔很長」。
+      thinkingLabel={
+        agentRunning
+          ? agentPhase === "thinking"
+            ? t.ai_agent_thinking
+            : t.ai_agent_executing
+          : chat.isStreaming
+            ? t.ai_thinking
+            : null
+      }
+      error={chat.error}
+      onRetry={chat.resend}
+      onExecuteCommand={onExecuteCommand}
+      agentMode={agentMode}
+      onToggleAgentMode={() => setAgentMode((m) => !m)}
+      onSend={(text) => {
+        const currentAttachments = attachments;
+        setAttachments([]);
+        void chat.send(text, mcpActive, undefined, currentAttachments.length > 0 ? currentAttachments : undefined);
+      }}
+      onSubmitAgent={(text) => {
+        setAttachments([]);
+        void submitAgent(text);
+      }}
+      mode={mode}
+      maxAgentSteps={maxAgentSteps}
+      mcpToolCount={mcpToolCount}
+      agentRunning={agentRunning}
+      agentPhase={agentPhase}
+      agentStep={agentStep}
+      onAbortAgent={() => {
+        agentAbortRef.current = true;
+        // Send Ctrl+C to PTY so a stuck command (e.g. pipe dquote>) gets
+        // interrupted, the prompt reappears, and the onComplete callback
+        // can fire to actually unblock the agent loop.
+        writePty(sessionId, "\x03").catch(() => {});
+      }}
+      providerName={providerName}
+      onOpenProviderPalette={onOpenProviderPalette}
+      headerBadge={quotaWindow ? <QuotaBadge window={quotaWindow} /> : undefined}
+      sessions={chat.sessions}
+      onLoadSession={(s) => chat.loadMessages(s.messages, s.id)}
+      onNewChat={() => chat.clear()}
+      onDeleteSession={(id) => chat.deleteSession(id)}
+      toolFallbackReason={chat.toolFallbackReason}
+      submitShortcut={submitShortcut}
+      allowEmptySubmit={attachments.length > 0}
+      onPaste={handlePaste}
+      isWindows={IS_WINDOWS}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
-    >
-      {/* Resize handle on the left edge — 滿版時左邊沒有終端機可以讓，收起來。 */}
-      {!expanded && (
-        <div
-          className="aiterm-panel-resize-handle"
-          onPointerDown={onResizePointerDown}
-          onPointerMove={onResizePointerMove}
-          onPointerUp={onResizePointerUp}
-          title="拖曳調整寬度"
-        />
-      )}
-
-      <div className="aiterm-ai-panel-header">
-        <span className="aiterm-ai-panel-title" style={{ background: 'var(--accent-gradient)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '14px' }}>
-          ✨ AITerm AI Studio
-        </span>
+      inputPrefixControls={
         <button
           type="button"
-          className="aiterm-ai-panel-provider-badge"
-          onClick={onOpenProviderPalette}
-          title="切換 Provider"
+          className="aiterm-pill-paperclip-btn"
+          onClick={() => fileInputRef.current?.click()}
+          title="附加檔案"
+          disabled={isDisabled}
         >
-          {providerName || "(no provider)"}
-          {quotaWindow && <QuotaBadge window={quotaWindow} />}
+          📎
         </button>
-        <div style={{ display: "flex", gap: "8px" }}>
-          <button
-            type="button"
-            className={`aiterm-ai-panel-clear-btn aiterm-ai-panel-icon-btn${expanded ? " aiterm-ai-panel-clear-btn--active" : ""}`}
-            onClick={() => setExpanded((e) => !e)}
-            title={expanded ? "縮小面板" : "放大面板"}
-          >
-            {expanded ? <MinimizeIcon size={15} /> : <MaximizeIcon size={15} />}
-          </button>
-          <button
-            type="button"
-            className={`aiterm-ai-panel-clear-btn${historyOpen ? " aiterm-ai-panel-clear-btn--active" : ""}`}
-            onClick={() => setHistoryOpen((o) => !o)}
-            title="對話歷史"
-          >
-            📋
-          </button>
-          <button
-            type="button"
-            className="aiterm-ai-panel-clear-btn"
-            onClick={() => { chat.clear(); setHistoryOpen(false); }}
-            disabled={isDisabled}
-            title="清空當前對話"
-          >
-            🗑 New Chat
-          </button>
-          <button
-            type="button"
-            className="aiterm-ai-panel-clear-btn"
-            onClick={onClose}
-            title="關閉面板 (Esc)"
-          >
-            ✕
-          </button>
-        </div>
-      </div>
-
-      {/* History side panel */}
-      {historyOpen && (
-        <div className="aiterm-history-panel">
-          <div className="aiterm-history-panel__header">
-            <span className="aiterm-history-panel__title">對話歷史</span>
-          </div>
-          <div className="aiterm-history-panel__list">
-            {chat.sessions.length === 0 && (
-              <div className="aiterm-history-panel__empty">尚無歷史記錄</div>
-            )}
-            {[...chat.sessions].reverse().map((s) => (
-              <div
-                key={s.id}
-                className="aiterm-history-panel__item"
-                onClick={() => { chat.loadMessages(s.messages, s.id); setHistoryOpen(false); }}
-              >
-                <div className="aiterm-history-panel__item-content">
-                  <div className="aiterm-history-panel__item-title">{s.title}</div>
-                  <div className="aiterm-history-panel__item-date">
-                    {new Date(s.savedAt).toLocaleDateString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                  </div>
-                </div>
+      }
+      extraInputControls={mcpEnabled ? (
+        <button
+          type="button"
+          // Agent 迴圈是 use_mcp=false 寫死的（見 runAgentLoop），MCP 在
+          // Agent 模式下不會生效——按鈕就不該繼續亮著說自己開啟。
+          className={`aiterm-mcp-toggle${useMcp && mcpToolCount > 0 && !agentMode ? " aiterm-mcp-toggle--on" : ""}`}
+          title={
+            agentMode
+              ? "Agent 模式下不使用 MCP 工具（AI 只透過終端機指令操作）"
+              : mcpToolCount === 0
+                ? t.mcp_toggle_no_servers
+                : (useMcp ? "MCP 開啟" : "MCP 關閉")
+          }
+          disabled={agentMode || mcpToolCount === 0 || isDisabled}
+          onClick={() => setUseMcp((v) => !v)}
+        >
+          <WrenchIcon size={12} />
+          <span>{mcpToolCount > 0 ? `MCP (${mcpToolCount})` : "MCP OFF"}</span>
+        </button>
+      ) : null}
+      extraAboveInput={
+        <>
+          {agentRunning && stuckPromptVisible && (
+            <div className="aiterm-stuck-prompt" role="alert">
+              <div className="aiterm-stuck-prompt__title">{t.agent_stuck_title}</div>
+              <div className="aiterm-stuck-prompt__body">{t.agent_stuck_body}</div>
+              <div className="aiterm-stuck-prompt__actions">
                 <button
                   type="button"
-                  className="aiterm-history-panel__item-del"
-                  title="刪除此對話"
-                  onClick={(e) => { e.stopPropagation(); chat.deleteSession(s.id); }}
+                  className="aiterm-stuck-prompt__wait"
+                  onClick={handleStuckWait}
                 >
-                  ×
+                  {t.agent_stuck_wait}
+                </button>
+                <button
+                  type="button"
+                  className="aiterm-stuck-prompt__interrupt"
+                  onClick={handleStuckInterrupt}
+                >
+                  {t.agent_stuck_interrupt}
                 </button>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <MessageList
-        messages={chat.messages}
-        streamBuf={chat.streamBuf}
-        // Agent 迴圈不經過 chat.isStreaming（它自己呼叫 invokeAiChat），但它用
-        // 的是同一個 sessionId，所以 useMcpChat 的監聽一直有在收 delta——只是
-        // 沒人畫。不把思考階段算進來的話，Agent 模式就是「想很久然後整段一次
-        // 跳出來」。
-        isStreaming={chat.isStreaming || (agentRunning && agentPhase === "thinking")}
-        // **兩個階段都要有指示**：等 AI 想、以及等指令跑完——後者原本對話框
-        // 是全靜的，使用者只看到氣泡消失然後乾等，回報成「空檔很長」。
-        thinkingLabel={
-          agentRunning
-            ? agentPhase === "thinking"
-              ? t.ai_agent_thinking
-              : t.ai_agent_executing
-            : chat.isStreaming
-              ? t.ai_thinking
-              : null
-        }
-        error={chat.error}
-        onExecuteCommand={onExecuteCommand}
-        onRetry={chat.resend}
-      />
-
-      {/* 這個憑證無法使用原生工具呼叫時，後端會自動改用「工具描述注入系統提示」
-          的文字協定。工具照樣能跑，但切換方案不該靜默發生。 */}
-      {chat.toolFallbackReason && (
-        <div className="aiterm-mode-hint aiterm-mode-hint--degraded">
-          <span aria-hidden="true">⚠</span>
-          <span>
-            {chat.toolFallbackReason === "subscription_billing"
-              ? t.ai_tool_fallback_billing
-              : t.ai_tool_fallback_unsupported}
-          </span>
-        </div>
-      )}
-
-      {/* Agent 跑起來之後由狀態列接手（它有步驟數與中止鈕），兩條堆在一起是噪音。 */}
-      {!agentRunning && (
-        <ModeHint mode={mode} maxAgentSteps={maxAgentSteps} mcpToolCount={mcpToolCount} />
-      )}
-
-      {agentRunning && (
-        <div className="aiterm-agent-status">
-          <span
-            className={`aiterm-agent-status__spinner aiterm-agent-status__spinner--${agentPhase}`}
-            aria-hidden="true"
-          >
-            {agentPhase === "thinking" ? "⟳" : "▶"}
-          </span>
-          <span>
-            {agentPhase === "thinking" ? t.ai_agent_thinking : t.ai_agent_executing}
-            {" "}步驟 {agentStep}/{maxAgentSteps >= 9999 ? "∞" : maxAgentSteps}
-          </span>
-          <button
-            type="button"
-            className="aiterm-agent-status__stop"
-            onClick={() => {
-              agentAbortRef.current = true;
-              // Send Ctrl+C to PTY so a stuck command (e.g. pipe dquote>) gets
-              // interrupted, the prompt reappears, and the onComplete callback
-              // can fire to actually unblock the agent loop.
-              writePty(sessionId, "\x03").catch(() => {});
-            }}
-            title="停止"
-          >
-            ■
-          </button>
-        </div>
-      )}
-
-      {agentRunning && stuckPromptVisible && (
-        <div className="aiterm-stuck-prompt" role="alert">
-          <div className="aiterm-stuck-prompt__title">{t.agent_stuck_title}</div>
-          <div className="aiterm-stuck-prompt__body">{t.agent_stuck_body}</div>
-          <div className="aiterm-stuck-prompt__actions">
-            <button
-              type="button"
-              className="aiterm-stuck-prompt__wait"
-              onClick={handleStuckWait}
-            >
-              {t.agent_stuck_wait}
-            </button>
-            <button
-              type="button"
-              className="aiterm-stuck-prompt__interrupt"
-              onClick={handleStuckInterrupt}
-            >
-              {t.agent_stuck_interrupt}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {attachments.length > 0 && (
-        <div className="aiterm-attachment-pills">
-          {attachments.map((att) => (
-            <div key={att.id} className="aiterm-attachment-pill">
-              {att.previewUrl && (
-                <img src={att.previewUrl} alt={att.name} className="aiterm-pill-thumb" />
-              )}
-              <span className="aiterm-pill-name" title={att.name}>{att.name}</span>
-              <button
-                type="button"
-                className="aiterm-pill-remove"
-                onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
-              >×</button>
             </div>
-          ))}
-        </div>
-      )}
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        style={{ display: "none" }}
-        onChange={(e) => { if (e.target.files) void processFiles(e.target.files); }}
-      />
-      <div className="aiterm-ai-panel-input-area">
-        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-          <button
-            type="button"
-            className={`aiterm-agent-toggle${agentMode ? " aiterm-agent-toggle--on" : ""}`}
-            onClick={() => setAgentMode((m) => !m)}
-            title={agentMode ? "停用 Agent 模式" : "啟用 Agent 模式（AI 自動執行指令迭代）"}
-            disabled={isDisabled}
-          >
-            <ZapIcon size={14} isFilled={agentMode} />
-          </button>
-          {mcpEnabled && (
-            <button
-              type="button"
-              // Agent 迴圈是 use_mcp=false 寫死的（見 runAgentLoop），MCP 在
-              // Agent 模式下不會生效——按鈕就不該繼續亮著說自己開啟。
-              className={`aiterm-mcp-toggle${useMcp && mcpToolCount > 0 && !agentMode ? " aiterm-mcp-toggle--on" : ""}`}
-              title={
-                agentMode
-                  ? "Agent 模式下不使用 MCP 工具（AI 只透過終端機指令操作）"
-                  : mcpToolCount === 0
-                    ? t.mcp_toggle_no_servers
-                    : (useMcp ? "MCP 開啟" : "MCP 關閉")
-              }
-              disabled={agentMode || mcpToolCount === 0 || isDisabled}
-              onClick={() => setUseMcp((v) => !v)}
-            >
-              <WrenchIcon size={12} />
-              <span>{mcpToolCount > 0 ? `MCP (${mcpToolCount})` : "MCP OFF"}</span>
-            </button>
           )}
-        </div>
-        <div className="aiterm-input-pill-container">
-          <button
-            type="button"
-            className="aiterm-pill-paperclip-btn"
-            onClick={() => fileInputRef.current?.click()}
-            title="附加檔案"
-            disabled={isDisabled}
-          >
-            📎
-          </button>
-          <textarea
-            ref={textareaRef}
-            className="aiterm-ai-panel-input"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePaste}
-            placeholder={
-              agentRunning ? "Agent 執行中…" :
-              agentMode ? "目標... (Enter)" :
-              chat.isStreaming ? "等待 AI 回覆..." : "Ask AI anything..."
-            }
-            rows={1}
-            disabled={isDisabled}
+          {attachments.length > 0 && (
+            <div className="aiterm-attachment-pills">
+              {attachments.map((att) => (
+                <div key={att.id} className="aiterm-attachment-pill">
+                  {att.previewUrl && (
+                    <img src={att.previewUrl} alt={att.name} className="aiterm-pill-thumb" />
+                  )}
+                  <span className="aiterm-pill-name" title={att.name}>{att.name}</span>
+                  <button
+                    type="button"
+                    className="aiterm-pill-remove"
+                    onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
+                  >×</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            style={{ display: "none" }}
+            onChange={(e) => { if (e.target.files) void processFiles(e.target.files); }}
           />
-          <button
-            type="button"
-            className="aiterm-ai-panel-send-btn aiterm-btn aiterm-btn--primary aiterm-btn--icon"
-            onClick={handleSubmit}
-            disabled={isDisabled || input.trim() === ""}
-            title="送出"
-          >
-            ▲
-          </button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    />
   );
 }
