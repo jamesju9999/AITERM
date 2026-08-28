@@ -327,6 +327,15 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     // 同一個道理：ConnectDialog 開著、要求重新連線的正是這個分頁時，
     // Ctrl+W 把它關掉不能留著一個指向已經不存在分頁的 reconnectTabId——
     // 不然 ConnectDialog 完成連線流程時，會嘗試更新一個不存在的分頁。
+    //
+    // **不變量，下面 ConnectDialog.onConnected 依賴它**：這一行跟下面
+    // 緊接著移除分頁的 setTabs 呼叫，兩者之間沒有 await 打斷，屬於同一次
+    // React 批次更新——任何讀到其中一個新值的地方，一定也會同時讀到
+    // 另一個。ConnectDialog.onConnected 因此可以放心假設「reconnectTabId
+    // 讀到非 null，代表分頁必然還在」，不需要另外檢查一次（那邊的註解
+    // 有寫這個推論，這裡是反向的提醒）。如果以後在這兩個 setState 中間
+    // 插入 await，或是在別的地方新增第二個會移除分頁的路徑，這個不變量
+    // 就會被打破，要一併檢查 onConnected 那邊的假設還成不成立。
     setReconnectTabId((prev) => (prev === id ? null : prev));
     // 這裡不能直接呼叫 selectTab：它內部也會呼叫 setTabs，巢狀呼叫等於在
     // 同一個 state 的更新佇列還在處理時再次 dispatch 同一個 state。改成
