@@ -14,8 +14,9 @@ import { getActiveTheme, type AppTheme } from "../../lib/themes";
 import { useTerminalBlocks } from "../../hooks/useTerminalBlocks";
 import { WarpInput } from "../WarpInput";
 import { TerminalBlockCard } from "../TerminalBlockCard";
-import { addBookmark } from "../CommandBookmarks";
+import { CommandBookmarksPicker, addBookmark } from "../CommandBookmarks";
 import { parseAiPrefix, parseAgentPrefix } from "../parseAiPrefix";
+import { SparklesIcon } from "../Icons";
 import type { Translations } from "../../lib/i18n";
 import "../TerminalView.css";
 import "./index.css";
@@ -142,6 +143,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   }, [phase.kind]);
 
   const [aiUnsupported, setAiUnsupported] = useState(false);
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
 
   // 卡片列表跟即時窗格共用同一個外層捲動容器，新卡片完成渲染時捲到底部
   // ——跟 TerminalView.tsx 的 blockListRef 同一個手法、同一個理由。
@@ -372,7 +374,45 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
         <span className="aiterm-status-left" data-tauri-drag-region>
           AITerm · {t.remote_terminal_tab} {hostLabel} · {connectionStatusText(t, phase, elapsedMs)}
         </span>
+        <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <button
+            className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+            title={t.term_bookmark_tooltip}
+            onClick={(e) => {
+              e.stopPropagation();
+              setBookmarksOpen(true);
+            }}
+            style={{ display: "flex", alignItems: "center", gap: "6px" }}
+          >
+            <span>{t.bookmarks_title}</span>
+          </button>
+          {/* 視覺佔位，不是真的 AI 功能——遠端連線目前完全不支援 AI/Agent
+              指令（見下面 handleWarpSubmit 對 /ai、/agent 開頭的既有擋法），
+              點下去只是重用同一套拒絕邏輯顯示既有提示，不呼叫任何 API。
+              這次的目標純粹是視覺對齊本機分頁的工具列，不是新增 AI 能力。 */}
+          <button
+            className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
+            title={t.term_ai_helper_tooltip}
+            onClick={(e) => {
+              e.stopPropagation();
+              setAiUnsupported(true);
+            }}
+            style={{ display: "flex", alignItems: "center", gap: "6px" }}
+          >
+            <SparklesIcon size={14} />
+            <span>Ask AI</span>
+          </button>
+        </span>
       </div>
+      {bookmarksOpen && (
+        <CommandBookmarksPicker
+          onSelect={(cmd) => {
+            setBookmarksOpen(false);
+            window.dispatchEvent(new CustomEvent("warp-fill-command", { detail: { cmd } }));
+          }}
+          onClose={() => setBookmarksOpen(false)}
+        />
+      )}
       {phase.kind === "waiting" && (
         <div className="aiterm-remote-terminal__banner">
           <span>{t.remote_terminal_waiting_approval}</span>

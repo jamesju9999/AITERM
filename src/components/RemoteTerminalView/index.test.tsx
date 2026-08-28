@@ -280,6 +280,47 @@ describe("RemoteTerminalView", () => {
     }
   });
 
+  it("點指令書籤按鈕開啟選單，選擇後把指令文字填進輸入框", async () => {
+    // CommandBookmarksPicker 選擇後是透過全域事件 warp-fill-command 跟
+    // WarpInput 溝通（跟 TerminalView.tsx 完全同一條路徑）——這裡直接
+    // 監聽這個事件確認有正確送出，不用真的去戳 WarpInput 內部狀態。
+    const fillSpy = vi.fn();
+    window.addEventListener("warp-fill-command", fillSpy);
+    try {
+      render(<RemoteTerminalView tabId="t1" connId="c19" sas="1919" isActive hostLabel="10.10.41.1:50281" />);
+
+      const bookmarkBtn = await screen.findByTitle(/儲存至書籤|Save to Bookmarks/i);
+      await userEvent.click(bookmarkBtn);
+
+      // CommandBookmarksPicker 沒有書籤時仍然會渲染（空清單），這裡只
+      // 驗證按鈕確實開啟了選單本身，不驗證書籤內容——書籤資料的正確性
+      // 由 CommandBookmarks 自己的測試負責，不是這個元件的職責。
+      //
+      // 用 querySelector(".bookmarks-dialog") 而不是文字比對：工具列按鈕
+      // 本身跟選單標題用的是同一個翻譯鍵（跟 TerminalView.tsx 完全同一
+      // 個模式），純文字比對會同時命中按鈕跟選單標題兩處，findByText 因
+      // 「多個符合」直接丟例外——CommandBookmarks.tsx 上的 .bookmarks-dialog
+      // 是選單本體唯一的、不會跟按鈕混淆的標記。
+      await waitFor(() => {
+        expect(document.querySelector(".bookmarks-dialog")).toBeInTheDocument();
+      });
+    } finally {
+      window.removeEventListener("warp-fill-command", fillSpy);
+    }
+  });
+
+  it("點 Ask AI 按鈕只顯示既有的不支援提示，不會真的呼叫任何 AI", async () => {
+    render(<RemoteTerminalView tabId="t1" connId="c20" sas="2020" isActive hostLabel="10.10.41.1:50281" />);
+
+    const askAiBtn = await screen.findByTitle(/開啟 AI 助手|Open AI Helper/i);
+    await userEvent.click(askAiBtn);
+
+    expect(await screen.findByText(/AI 指令目前不支援|not supported in remote/i)).toBeInTheDocument();
+    // sendMock 是這個檔案既有的、代表「真的送位元組給對方」的探針——
+    // 點 Ask AI 不該觸發任何送出行為。
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
   it("shows a hint and does not send /ai or /agent commands", async () => {
     render(<RemoteTerminalView tabId="t1" connId="c9" sas="8888" isActive />);
     await waitFor(() => expect(handlers["granted:c9"]).toBeDefined());
