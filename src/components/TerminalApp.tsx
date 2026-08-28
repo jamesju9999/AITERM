@@ -23,7 +23,6 @@ import { runCloseGuard } from "../lib/closeTabGuard";
 import { KnowledgeBaseView } from "./KnowledgeBaseView";
 import { MailView } from "./MailView";
 import { RemoteTerminalView } from "./RemoteTerminalView";
-import { shareViewerDisconnect } from "../ipc/shareViewer";
 import { HomeView } from "./HomeView";
 import { RouteHint } from "./RouteHint";
 import type { RouteResult } from "./HomeView/routeIntent";
@@ -552,17 +551,20 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
             if (reconnectTabId) {
               const targetId = reconnectTabId;
               setReconnectTabId(null);
-              // 對話框開著的這段時間裡，targetId 指的分頁有可能已經被
-              // Ctrl+W 關掉了（handleCloseTab 已經有對應的 guard 清空
-              // reconnectTabId，這裡是多一層防線）——不能假設它還在：
-              // setTabs 的 map 找不到 id 只會靜靜地 no-op，selectTab
-              // (targetId) 卻會把 activeId 指向一個不存在的分頁，讓畫面
-              // 變空白。
-              let targetStillExists = false;
-              setTabs((prev) => {
-                targetStillExists = prev.some((tab) => tab.id === targetId);
-                if (!targetStillExists) return prev;
-                return prev.map((tab) =>
+              // 這裡不需要另外判斷 targetId 指的分頁還在不在（先前兩版
+              // 都在這裡加過一層「存不存在」檢查，一版用同步讀外部變數的
+              // 寫法在正常路徑也誤判、一版可能永遠讀不到真正的競態）——
+              // handleCloseTab（Ctrl+W 等關閉分頁的唯一入口，這個檔案裡
+              // 移除分頁只有那一處 setTabs(prev => prev.filter(...))）
+              // 在同一段沒有中斷的同步程式碼裡，把清空 reconnectTabId
+              // 跟真正移除分頁這兩個 setState 一起呼叫——React 會把它們
+              // 批次成同一次更新，任何讀到其中一個新值的地方，一定也會
+              // 同時讀到另一個。也就是說：只要這裡的 reconnectTabId 讀到
+              // 非 null，代表移除分頁那次更新根本還沒發生，targetId 指的
+              // 分頁在這個當下必然還在——不可能出現「reconnectTabId 還
+              // 沒清、但分頁已經不見」這種中間狀態，不需要再檢查一次。
+              setTabs((prev) =>
+                prev.map((tab) =>
                   tab.id === targetId
                     ? {
                         ...tab,
@@ -572,16 +574,9 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                         remoteSas: sas,
                       }
                     : tab,
-                );
-              });
-              if (targetStillExists) {
-                selectTab(targetId);
-              } else {
-                // 分頁已經不在了：這條剛從 ConnectDialog 建立好的連線
-                // 沒有任何 RemoteTerminalView 會掛上去接手，不能留著讓
-                // 後端逾時才清——明確斷開它。
-                void shareViewerDisconnect(connId);
-              }
+                ),
+              );
+              selectTab(targetId);
               return;
             }
             const newId = crypto.randomUUID();

@@ -3,15 +3,6 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
-// 跟 RemoteTerminalView/index.test.tsx 的 disconnectMock 同一套手法：這個
-// 檔案的 RemoteTerminalView 是 stub（見下面），不會呼叫真正的
-// shareViewerDisconnect；這裡測的是 TerminalApp.tsx 自己在「重新連線的
-// 分頁被 Ctrl+W 關掉」時，直接呼叫這支 IPC 斷開孤兒連線的那條防線。
-const disconnectMock = vi.fn().mockResolvedValue(undefined);
-vi.mock("../ipc/shareViewer", () => ({
-  shareViewerDisconnect: (...a: unknown[]) => disconnectMock(...a),
-}));
-
 // 跟既有的 TerminalApp.routeHintCloseGuard.test.tsx 同一套 mount probe
 // 結論：這幾個底層 Tauri 入口點涵蓋 TerminalApp 掛載所需的一切。
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => new Promise(() => {})) }));
@@ -84,7 +75,6 @@ import { LocaleProvider } from "../contexts/LocaleContext";
 import { SESSION_TABS_KEY } from "../lib/sessionTabs";
 
 beforeEach(() => {
-  disconnectMock.mockClear();
   localStorage.clear();
   // 起始狀態：一個既有的遠端終端機分頁。還原機制（sessionTabs.ts 的
   // SavedTab）本來就不存 remoteConnId/remoteSas/remoteHostLabel（那些是
@@ -175,7 +165,7 @@ describe("TerminalApp: 遠端終端機工具列的「連線」按鈕就地重新
     expect(texts).toEqual([":", "new-conn-id:10.0.0.9:9999"]);
   });
 
-  it("Ctrl+W 關掉正在重新連線的分頁後，完成對話框流程不會弄出幽靈分頁，會斷開孤兒連線", async () => {
+  it("Ctrl+W 關掉正在重新連線的分頁後，完成對話框流程不會弄出幽靈分頁或崩潰", async () => {
     // 這裡刻意用兩個既有的遠端終端機分頁，不是這個檔案 beforeEach 預設的
     // 一個：只有一個分頁時，Ctrl+W 關掉它會走 handleCloseTab「關掉最後一個
     // 分頁，自動補一個全新 Terminal」那條路，會掛載真正的 TerminalView
@@ -198,16 +188,18 @@ describe("TerminalApp: 遠端終端機工具列的「連線」按鈕就地重新
     // 刻意用 fireEvent（同步）而不是 userEvent（內部會 await），且兩個
     // 呼叫之間不插入任何 await：這樣 handleCloseTab 內 `await
     // runCloseGuard(...)` 之後那段清空 reconnectTabId／移除分頁的程式碼
-    // 還沒機會執行，onConnected 觸發時 reconnectTabId 依然指著這個分頁
-    // ——這就是 Ctrl+W 真正「跟對話框完成流程搶時間」的那個時間點，不是
-    // 兩個先後分開、各自流程都跑完的操作。經驗證：這個順序穩定重現得到
-    // 「連線完成當下，目標分頁其實已經不在了」這個情境，不是碰運氣的
-    // flaky 寫法（同一段同步程式碼的執行順序在 JS 裡是決定性的）。
+    // 還沒機會執行，onConnected 觸發時 reconnectTabId 依然指著這個分頁、
+    // 分頁本身也還在——這是 Ctrl+W 跟對話框完成流程搶時間的那個時間點。
+    // handleCloseTab 清空 reconnectTabId 跟真正移除分頁這兩個 setState
+    // 是在同一段沒有 await 打斷的程式碼裡一起呼叫的，React 會批次成
+    // 同一次更新，所以不會有「reconnectTabId 已經清空、但分頁還沒真的
+    // 移除」這種中間狀態——這裡驗證的是完整流程走完後最終畫面正確，
+    // 不是特定中間時序。
     fireEvent.keyDown(window, { key: "w", ctrlKey: true });
     fireEvent.click(fireConnected);
 
     // 讓 handleCloseTab 剩下的非同步尾段（清空 reconnectTabId、真正移除
-    // 分頁）跑完。
+    // 分頁、切到鄰居分頁）跑完。
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -215,14 +207,10 @@ describe("TerminalApp: 遠端終端機工具列的「連線」按鈕就地重新
     expect(screen.queryByText("fire-connected")).not.toBeInTheDocument();
 
     // 沒有幽靈分頁：畫面上只剩下沒被動過的「另一台」那個分頁，被關掉的
-    // 那個分頁、還有它原本要接手的新連線都不在畫面上。
+    // 那個分頁不在畫面上了（不管它有沒有先被 onConnected 更新過內容——
+    // handleCloseTab 移除分頁是用 id 找，跟內容無關）。
     const remoteViews = screen.getAllByTestId(/remote-conn-/);
     expect(remoteViews).toHaveLength(1);
     expect(remoteViews[0].textContent).toBe(":");
-
-    // 剛從 ConnectDialog 建立好、沒有任何分頁接手的連線，明確斷開了，
-    // 不留給後端逾時才清。
-    expect(disconnectMock).toHaveBeenCalledTimes(1);
-    expect(disconnectMock).toHaveBeenCalledWith("new-conn-id");
   });
 });
