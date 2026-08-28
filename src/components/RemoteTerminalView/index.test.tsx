@@ -94,6 +94,33 @@ vi.mock("@xterm/xterm", () => ({
 }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit = vi.fn(); } }));
 
+// Task 6：Ask AI 現在真的接上 Agent 迴圈。AI IPC 換成永不 resolve 的
+// promise，讓 mission 停在「詢問中」而不去戳真正的 Tauri invoke；其餘
+// 匯出（formatAiError 等）保持真的，agentLoop 的錯誤路徑才不會爆。
+const { mockInvokeAiQueryCtx } = vi.hoisted(() => ({
+  mockInvokeAiQueryCtx: vi.fn((): Promise<never> => new Promise(() => {})),
+}));
+vi.mock("../../ipc/ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../ipc/ai")>();
+  return { ...actual, invokeAiQueryCtx: mockInvokeAiQueryCtx };
+});
+
+// `ai-stream` 事件監聽：jsdom 下沒有 Tauri，真的 listen 會 reject 成
+// unhandled rejection。回一個 no-op unlisten 就好。
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
+// getConfig 走 Tauri invoke，測試環境沒有——回一份預設設定，元件裡的
+// executionModeRef / maxAgentStepsRef 才有確定值。
+vi.mock("../../ipc/config", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../ipc/config")>();
+  return {
+    ...actual,
+    getConfig: vi.fn().mockResolvedValue({ execution_mode: "graded", max_agent_steps: 5 }),
+  };
+});
+
 // jsdom doesn't implement ResizeObserver — kept as a no-op global shim in
 // case something else in the render tree still expects it to exist
 // (harmless if nothing does).
@@ -333,30 +360,54 @@ describe("RemoteTerminalView", () => {
     }
   });
 
-  it("點 Ask AI 按鈕只顯示既有的不支援提示，不會真的呼叫任何 AI", async () => {
+  it("控制模式下 Ask AI 按鈕可點，點了開啟 Agent 面板", async () => {
     render(<RemoteTerminalView tabId="t1" connId="c20" sas="2020" isActive hostLabel="10.10.41.1:50281" onConnectClick={vi.fn()} />);
+    await waitFor(() => expect(handlers["granted:c20"]).toBeDefined());
+    act(() => {
+      handlers["granted:c20"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+    });
 
-    const askAiBtn = await screen.findByTitle(/開啟 AI 助手|Open AI Helper/i);
+    const askAiBtn = await screen.findByRole("button", { name: /Ask AI/i });
+    expect(askAiBtn).not.toBeDisabled();
     await userEvent.click(askAiBtn);
 
-    expect(await screen.findByText(/AI 指令目前不支援|not supported in remote/i)).toBeInTheDocument();
-    // sendMock 是這個檔案既有的、代表「真的送位元組給對方」的探針——
-    // 點 Ask AI 不該觸發任何送出行為。
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(
+      await screen.findByRole("dialog", { name: /AI (代理|Agent)/i }),
+    ).toBeInTheDocument();
   });
 
-  it("shows a hint and does not send /ai or /agent commands", async () => {
+  it("唯讀模式下 Ask AI 按鈕停用", async () => {
+    render(<RemoteTerminalView tabId="t1" connId="c23" sas="2323" isActive onConnectClick={vi.fn()} />);
+    await waitFor(() => expect(handlers["granted:c23"]).toBeDefined());
+    act(() => {
+      handlers["granted:c23"]({ mode: "read_only", cols: 80, rows: 24, hostOs: "linux" } as never);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Ask AI/i })).toBeDisabled();
+    });
+  });
+
+  it("/agent 指令透過 WarpInput 送出時啟動 mission，不把字面指令送給對方", async () => {
     render(<RemoteTerminalView tabId="t1" connId="c9" sas="8888" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c9"]).toBeDefined());
-    handlers["granted:c9"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+    act(() => {
+      handlers["granted:c9"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+    });
 
     const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
     await waitFor(() => expect(textarea).not.toBeDisabled());
 
-    await userEvent.type(textarea, "/ai fix this{Enter}");
+    await userEvent.type(textarea, "/agent list files{Enter}");
 
-    expect(await screen.findByText(/AI 指令目前不支援|not supported in remote/i)).toBeInTheDocument();
-    expect(sendMock).not.toHaveBeenCalled();
+    // 若 /agent 被當成一般指令走 submitCommand，sendMock 會收到含這串字的
+    // 位元組——這裡要求它不會，代表確實走了 mission 分支。
+    expect(sendMock).not.toHaveBeenCalledWith("c9", expect.stringContaining("/agent list files"));
+    // 且 Agent 面板因此打開。
+    expect(
+      await screen.findByRole("dialog", { name: /AI (代理|Agent)/i }),
+    ).toBeInTheDocument();
+    expect(mockInvokeAiQueryCtx).toHaveBeenCalled();
   });
 
   it("clears the block list on resync, not just the xterm buffer", async () => {

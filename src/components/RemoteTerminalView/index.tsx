@@ -18,6 +18,14 @@ import { CommandBookmarksPicker, addBookmark } from "../CommandBookmarks";
 import { parseAiPrefix, parseAgentPrefix } from "../parseAiPrefix";
 import { LinkIcon, SparklesIcon } from "../Icons";
 import type { Translations } from "../../lib/i18n";
+import { listen } from "@tauri-apps/api/event";
+import { useAgentMission } from "../../hooks/useAgentMission";
+import { runAgentLoop, INITIAL_PREVIEW, type PreviewState } from "../../lib/agentLoop";
+import { invokeAiQueryCtx, type RemoteCtx, type AiStreamEvent } from "../../ipc/ai";
+import { getConfig, type ExecutionMode } from "../../ipc/config";
+import type { AgentPhase } from "../AgentStatusBar";
+import { reportAgentStep } from "../../lib/agentStepReport";
+import { AgentPanel } from "./AgentPanel";
 import "../TerminalView.css";
 import "./index.css";
 
@@ -64,7 +72,7 @@ type Phase =
   | { kind: "ended"; reason: string };
 
 export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "", onConnectClick }: Props) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const [termState, setTermState] = useState<Terminal | null>(null);
@@ -152,8 +160,40 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
     return () => clearInterval(interval);
   }, [phase.kind]);
 
-  const [aiUnsupported, setAiUnsupported] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
+
+  const { agentMission, startMission, appendHistory, stopMission } = useAgentMission();
+  const [agentPanelOpen, setAgentPanelOpen] = useState(false);
+  const [agentPhase, setAgentPhase] = useState<AgentPhase | null>(null);
+  const [streamText, setStreamText] = useState("");
+  const [preview, setPreview] = useState<PreviewState>(INITIAL_PREVIEW);
+  const streamingRef = useRef(false);
+  const abortRef = useRef(false);
+  const executionModeRef = useRef<ExecutionMode>("graded");
+  const maxAgentStepsRef = useRef(5);
+
+  useEffect(() => {
+    getConfig()
+      .then((cfg) => {
+        executionModeRef.current = cfg.execution_mode;
+        maxAgentStepsRef.current = cfg.max_agent_steps === 0 ? 9999 : (cfg.max_agent_steps ?? 5);
+      })
+      .catch(() => {});
+  }, []);
+
+  // 一次註冊的 share-viewer://* 事件 handler（下面那個只依賴 [connId] 的
+  // effect）需要讀到最新的 submitCommand / mission / 翻譯 / stopMission——
+  // 跟這個檔案既有的 blocksRef / appendOutputRef 同一套 ref 橋接（也跟
+  // TerminalView.tsx 的 submitCommandRef、agentMissionRef 完全同一個寫法），
+  // 不為了這些值重新訂閱一次所有事件。
+  const submitCommandRef = useRef(submitCommand);
+  useEffect(() => { submitCommandRef.current = submitCommand; }, [submitCommand]);
+  const agentMissionRef = useRef(agentMission);
+  useEffect(() => { agentMissionRef.current = agentMission; }, [agentMission]);
+  const tRef = useRef(t);
+  useEffect(() => { tRef.current = t; }, [t]);
+  const stopMissionRef = useRef(stopMission);
+  useEffect(() => { stopMissionRef.current = stopMission; }, [stopMission]);
 
   // 卡片列表跟即時窗格共用同一個外層捲動容器，新卡片完成渲染時捲到底部
   // ——跟 TerminalView.tsx 的 blockListRef 同一個手法、同一個理由。
@@ -188,19 +228,73 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   // 不需要另外處理。
   const altBufferHeightPx = Math.round(hostRows * cellHeightPx);
 
+  const buildRemoteCtx = useCallback((): RemoteCtx => ({
+    os: hostPlatform === "windows" ? "windows" : "linux",
+    shell: null,
+    cwd: null,
+    recentOutput: readRecentOutput(termRef.current),
+  }), [hostPlatform]);
+
+  const startAgentMission = useCallback((goal: string, maxSteps: number) => {
+    if (agentMission?.active) return;
+    if (!(phaseRef.current.kind === "live" && phaseRef.current.mode === "control")) return;
+    abortRef.current = false;
+    setAgentPhase(null);
+    setPreview(INITIAL_PREVIEW);
+    setAgentPanelOpen(true);
+    startMission(goal, maxSteps);
+    runAgentLoop({
+      t,
+      goal,
+      queryFn: (q) => invokeAiQueryCtx(q, buildRemoteCtx(), connId, locale),
+      term: termRef.current!,
+      getSubmitCommand: () => submitCommandRef.current,
+      setPreview,
+      setStreamText,
+      streamingRef,
+      executionModeRef,
+      writeRed: (m) => termRef.current?.write(`\r\n\x1b[31m${m}\x1b[0m\r\n`),
+      abortRef,
+      stepCount: 0,
+      maxSteps,
+      history: [],
+      onPhase: setAgentPhase,
+      onComplete: () => { setAgentPhase({ phase: "done", steps: agentMissionRef.current?.stepCount ?? 0 }); stopMission(); },
+      onFail: (msg) => {
+        const reason = msg === t.term_agent_timeout_fail ? t.remote_agent_no_shell_integration : msg;
+        setAgentPhase({ phase: "failed", reason });
+        stopMission();
+      },
+      onStepComplete: (info) => {
+        appendHistory(info.command, info.exitCode, info.output);
+        reportAgentStep(info, {});
+      },
+    });
+  }, [agentMission, t, locale, connId, buildRemoteCtx, startMission, stopMission, appendHistory]);
+
+  const stopAgentMission = useCallback(() => {
+    abortRef.current = true;
+    stopMission();
+    setPreview(INITIAL_PREVIEW);
+  }, [stopMission]);
+
   // WarpInput 送出的整行文字先過一次 AI 前綴檢查——跟本機分頁用同一套
-  // parseAiPrefix.ts 規則，不重新猜字首。是 /ai 或 /agent 開頭就不送出、
-  // 顯示提示；否則走 submitCommand（會建立分段卡片並透過 write 送出）。
+  // parseAiPrefix.ts 規則，不重新猜字首。任務進行中再送一次＝停止；
+  // /agent 開頭跑多步 Agent 迴圈、/ai 開頭跑單步；其餘走 submitCommand
+  // （會建立分段卡片並透過 write 送出）。
   const handleWarpSubmit = useCallback(
     (cmd: string) => {
-      if (parseAiPrefix(cmd) !== null || parseAgentPrefix(cmd) !== null) {
-        setAiUnsupported(true);
+      if (agentMission?.active) {
+        stopAgentMission();
         return;
       }
-      setAiUnsupported(false);
+      const agentGoal = parseAgentPrefix(cmd);
+      const aiGoal = parseAiPrefix(cmd);
+      if (agentGoal !== null) { startAgentMission(agentGoal, maxAgentStepsRef.current); return; }
+      if (aiGoal !== null) { startAgentMission(aiGoal, 1); return; }
       submitCommand(cmd);
     },
-    [submitCommand],
+    [submitCommand, startAgentMission, stopAgentMission, agentMission],
   );
 
   useEffect(() => {
@@ -274,16 +368,47 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
         // 執行 clear/cls 時「畫面跟卡片一起清空」是同一個邏輯。
         termRef.current?.clear();
         clearAllBlocksRef.current();
+        // 重新同步代表畫面與分段歷史都不再可信，正在跑的 Agent 迴圈接續
+        // 判斷會失準——直接中止。
+        if (agentMissionRef.current?.active) {
+          abortRef.current = true;
+          setAgentPhase({ phase: "failed", reason: tRef.current.remote_agent_aborted_resync });
+          stopMissionRef.current();
+        }
       }),
     );
 
     track(
       onShareViewerControlChanged(connId, (mode) => {
         setPhase({ kind: "live", mode });
+        // 失去控制權後 Agent 迴圈沒辦法再送指令，接續會卡住——中止並說明原因。
+        if (mode !== "control" && agentMissionRef.current?.active) {
+          abortRef.current = true;
+          setAgentPhase({ phase: "failed", reason: tRef.current.remote_agent_aborted_control_lost });
+          stopMissionRef.current();
+        }
       }),
     );
 
-    track(onShareViewerEnded(connId, (reason) => setPhase({ kind: "ended", reason })));
+    track(
+      onShareViewerEnded(connId, (reason) => {
+        setPhase({ kind: "ended", reason });
+        // 連線都結束了，正在跑的 Agent 迴圈沒有 PTY 可用——中止。
+        if (agentMissionRef.current?.active) {
+          abortRef.current = true;
+          setAgentPhase({ phase: "failed", reason: tRef.current.remote_agent_aborted_ended });
+          stopMissionRef.current();
+        }
+      }),
+    );
+
+    track(
+      listen<AiStreamEvent>("ai-stream", (event) => {
+        if (event.payload.kind !== "query") return;
+        if (event.payload.session_id !== connId) return;
+        if (!event.payload.done) setStreamText((s) => s + event.payload.delta);
+      }),
+    );
 
     return () => {
       disposed = true;
@@ -426,17 +551,11 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
           >
             <span>{t.bookmarks_title}</span>
           </button>
-          {/* 視覺佔位，不是真的 AI 功能——遠端連線目前完全不支援 AI/Agent
-              指令（見下面 handleWarpSubmit 對 /ai、/agent 開頭的既有擋法），
-              點下去只是重用同一套拒絕邏輯顯示既有提示，不呼叫任何 API。
-              這次的目標純粹是視覺對齊本機分頁的工具列，不是新增 AI 能力。 */}
           <button
             className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
-            title={t.term_ai_helper_tooltip}
-            onClick={(e) => {
-              e.stopPropagation();
-              setAiUnsupported(true);
-            }}
+            title={phase.kind === "live" && phase.mode === "control" ? t.term_ai_helper_tooltip : t.remote_agent_needs_control}
+            disabled={!(phase.kind === "live" && phase.mode === "control")}
+            onClick={(e) => { e.stopPropagation(); setAgentPanelOpen(true); }}
             style={{ display: "flex", alignItems: "center", gap: "6px" }}
           >
             <SparklesIcon size={14} />
@@ -552,10 +671,6 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
         </div>
       </div>
 
-      {aiUnsupported && (
-        <div className="aiterm-remote-terminal__ai-unsupported">{t.remote_terminal_ai_unsupported}</div>
-      )}
-
       {/* 全螢幕程式使用中隱藏——跟本機終端機同一個理由：這類程式的輸入
           直接打進上面的即時畫面，不透過這個獨立的指令輸入框，留著只會
           白白佔用本該讓給即時窗格的空間。 */}
@@ -565,8 +680,49 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
           disabled={!(phase.kind === "live" && phase.mode === "control")}
         />
       )}
+
+      {agentPanelOpen && (
+        <AgentPanel
+          mission={agentMission}
+          phase={agentPhase}
+          streamText={streamText}
+          preview={preview}
+          onSubmitGoal={(goal) => startAgentMission(goal, maxAgentStepsRef.current)}
+          onStop={stopAgentMission}
+          onConfirmPreview={() => { const cmd = preview.command; setPreview(INITIAL_PREVIEW); submitCommandRef.current(cmd); }}
+          onCancelPreview={() => { setPreview(INITIAL_PREVIEW); stopAgentMission(); }}
+          onClose={() => { if (agentMission?.active) stopAgentMission(); setAgentPanelOpen(false); }}
+          disabled={!(phase.kind === "live" && phase.mode === "control")}
+          t={t}
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * 讀 xterm buffer 末段當 AI 情境；term 未建立回 null。從游標所在列往回
+ * 掃到滿 `maxChars` 或掃到頂為止，維持原本的上到下順序回傳。
+ *
+ * export 出去（跟 `formatElapsed` 一樣）方便直接單元測試，Fast Refresh 的
+ * lint 規則會抗議多一個非元件的具名匯出——跟 `formatElapsed` 同一個取捨，
+ * 沿用同一條 disable。
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- 見上方註解：純函式匯出換取可直接單元測試，不影響正式建置。
+export function readRecentOutput(term: Terminal | null, maxChars = 4000): string | null {
+  if (!term) return null;
+  const buf = term.buffer.active;
+  const bottom = buf.baseY + buf.cursorY;
+  const lines: string[] = [];
+  let chars = 0;
+  for (let i = bottom; i >= 0 && chars < maxChars; i--) {
+    const s = buf.getLine(i)?.translateToString(true) ?? "";
+    lines.push(s);
+    chars += s.length + 1;
+  }
+  lines.reverse();
+  const joined = lines.join("\n").trimEnd();
+  return joined.length > 0 ? joined : null;
 }
 
 /**
