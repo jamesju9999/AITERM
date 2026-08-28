@@ -556,7 +556,9 @@ Expected: FAIL——三個測試都會失敗。前兩個測試（就地更新、
 
 - [ ] **Step 4: `<RemoteTerminalView>` 呼叫處加上 `key`／`onConnectClick`**
 
-找到：
+找到（Task 2 已經在這裡加過一個暫時的 no-op `onConnectClick` 佔位，附帶
+說明它是給這個 task 用的——若實際內容跟這裡不完全一樣，先讀檔案目前的
+真實內容，這個佔位的存在本身不影響下面的取代邏輯，整段一起換掉即可）：
 
 ```tsx
               ) : tab.type === "remote-terminal" ? (
@@ -566,6 +568,10 @@ Expected: FAIL——三個測試都會失敗。前兩個測試（就地更新、
                   sas={tab.remoteSas ?? ""}
                   isActive={isActive}
                   hostLabel={tab.remoteHostLabel ?? ""}
+                  // 佔位——onConnectClick 是必填 prop 但真正的「開對話框、
+                  // 就地重新連線」邏輯是下一個 task 的範圍，這裡先給
+                  // no-op 讓型別檢查通過，不提前實作行為。
+                  onConnectClick={() => {}}
                 />
               ) : (
 ```
