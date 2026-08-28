@@ -81,9 +81,9 @@ vi.mock("@xterm/xterm", () => ({
 }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit = vi.fn(); } }));
 
-// jsdom doesn't implement ResizeObserver; RemoteTerminalView's font-fitting
-// effect calls it unconditionally on mount (same pattern as TerminalView's
-// tests).
+// jsdom doesn't implement ResizeObserver — kept as a no-op global shim in
+// case something else in the render tree still expects it to exist
+// (harmless if nothing does).
 class FakeResizeObserver {
   observe() {}
   unobserve() {}
