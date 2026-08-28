@@ -13,8 +13,8 @@ const POLL_MS = 5 * 60 * 1000;
  * 抓取時機：掛載查一次、每 5 分鐘輪詢、視窗回到前景時補查。**只查傳入的這一個
  * provider**，不是全部 —— 一次打三個上游端點只在使用者主動展開清單時才划算。
  *
- * 這個 hook 有三個消費端（終端機標題列、Ask AI 面板、ModelPickerButton），
- * 抽出來是為了避免三份各自漂移的輪詢邏輯。
+ * 這個 hook 有多個消費端（終端機標題列、Ask AI 面板、ModelPickerButton、
+ * 遠端終端機工具列、RemoteAiPanel），抽出來是為了避免各自漂移的輪詢邏輯。
  */
 export function useProviderQuota(providerId: string | null | undefined): QuotaWindow | null {
   // 連同來源 id 一起存，這樣「換了 provider」與「沒有 provider」都能直接推導出

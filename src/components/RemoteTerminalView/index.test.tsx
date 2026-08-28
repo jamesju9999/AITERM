@@ -17,6 +17,16 @@ function captureHandler(name: string) {
 const sendMock = vi.fn();
 const disconnectMock = vi.fn().mockResolvedValue(undefined);
 
+// Task 7 新增了 useProviderQuota(activeProviderId) 這顆會直接呼叫
+// `@tauri-apps/api/core` 的 invoke("usage_quota", ...) 的 hook（不像
+// listProviders/getConfig 那樣被這個檔案整個 mock 掉）。jsdom 下沒有
+// Tauri，真的 invoke 會丟出同步例外，讓 React 在 effect 裡炸掉整棵樹——
+// 這個檔案本來沒有任何東西會用到 core 的 invoke，跟
+// TerminalView.closeGuard.test.tsx 等既有測試檔同一個做法：整個模組
+// mock 成一個永遠不會 resolve/reject 的 promise，讓沒特別接住的呼叫
+// 安靜掛著，不會意外把元件炸掉。
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => new Promise(() => {})) }));
+
 vi.mock("../../ipc/shareViewer", () => ({
   onShareViewerGranted: captureHandler("granted"),
   onShareViewerData: captureHandler("data"),
@@ -94,37 +104,44 @@ vi.mock("@xterm/xterm", () => ({
 }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit = vi.fn(); } }));
 
-// Task 6：Ask AI 現在真的接上 Agent 迴圈。AI IPC 換成永不 resolve 的
-// promise，讓 mission 停在「詢問中」而不去戳真正的 Tauri invoke；其餘
-// 匯出（formatAiError 等）保持真的，agentLoop 的錯誤路徑才不會爆。
-const { mockInvokeAiQueryCtx } = vi.hoisted(() => ({
-  mockInvokeAiQueryCtx: vi.fn((): Promise<never> => new Promise(() => {})),
+// Task 7：Agent 迴圈整個搬進 RemoteAiPanel 了——這個檔案只驗證
+// RemoteTerminalView 有沒有正確把 /agent、/ai、abort() 轉交給它，不需要
+// 再驅動真正的 chat-agent 迴圈（那是 RemoteAiPanel.test.tsx 的事）。用一個
+// 極簡的假元件取代：捕捉轉交進來的 ref，isOpen 時渲染一個可辨識的
+// placeholder。
+const { mockSubmitAgent, mockSend, mockAbort } = vi.hoisted(() => ({
+  mockSubmitAgent: vi.fn(),
+  mockSend: vi.fn(),
+  mockAbort: vi.fn(),
 }));
-vi.mock("../../ipc/ai", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../ipc/ai")>();
-  return { ...actual, invokeAiQueryCtx: mockInvokeAiQueryCtx };
-});
-
-// `ai-stream` 事件監聽：jsdom 下沒有 Tauri，真的 listen 會 reject 成
-// unhandled rejection。這個假 listen 會把 "ai-stream" 的 callback 收下來，
-// 測試再手動觸發（跟上面 shareViewer 的 captureHandler 同一套手法）。
-const { mockListen, aiStreamListeners } = vi.hoisted(() => {
-  const aiStreamListeners: Array<(e: { payload: unknown }) => void> = [];
+vi.mock("./RemoteAiPanel", async () => {
+  const React = await import("react");
   return {
-    aiStreamListeners,
-    mockListen: vi.fn((event: string, cb: (e: { payload: unknown }) => void) => {
-      if (event === "ai-stream") aiStreamListeners.push(cb);
-      return Promise.resolve(() => {});
+    RemoteAiPanel: React.forwardRef((props: { isOpen: boolean }, ref: React.Ref<unknown>) => {
+      React.useImperativeHandle(ref, () => ({
+        submitAgent: mockSubmitAgent,
+        send: mockSend,
+        abort: mockAbort,
+      }));
+      if (!props.isOpen) return null;
+      return <div data-testid="remote-ai-panel">mock remote ai panel</div>;
     }),
   };
 });
-vi.mock("@tauri-apps/api/event", () => ({ listen: mockListen }));
-function emitAiStream(payload: Record<string, unknown>) {
-  for (const cb of aiStreamListeners) cb({ payload });
-}
+
+// listProviders 走 Tauri invoke，測試環境沒有——回一份固定清單。
+vi.mock("../../ipc/provider", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../ipc/provider")>();
+  return {
+    ...actual,
+    listProviders: vi.fn().mockResolvedValue([
+      { id: "p1", display_name: "Test Provider", provider_type: "openai", is_default: true, model: "gpt-4o-mini" },
+    ]),
+  };
+});
 
 // getConfig 走 Tauri invoke，測試環境沒有——回一份預設設定，元件裡的
-// executionModeRef / maxAgentStepsRef 才有確定值。
+// maxAgentStepsRef 才有確定值。
 vi.mock("../../ipc/config", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../ipc/config")>();
   return {
@@ -161,9 +178,9 @@ beforeEach(() => {
   capturedBufferChangeHandler = null;
   mockBufferActive.type = "normal";
   appendOutputSpy = null;
-  aiStreamListeners.length = 0;
-  mockListen.mockClear();
-  mockInvokeAiQueryCtx.mockClear();
+  mockSubmitAgent.mockClear();
+  mockSend.mockClear();
+  mockAbort.mockClear();
   writeMock.mockClear();
   clearMock.mockReset();
   sendMock.mockReset();
@@ -375,7 +392,7 @@ describe("RemoteTerminalView", () => {
     }
   });
 
-  it("控制模式下 Ask AI 按鈕可點，點了開啟 Agent 面板", async () => {
+  it("控制模式下 Ask AI 按鈕可點，點了開啟 RemoteAiPanel", async () => {
     render(<RemoteTerminalView tabId="t1" connId="c20" sas="2020" isActive hostLabel="10.10.41.1:50281" onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c20"]).toBeDefined());
     act(() => {
@@ -386,9 +403,7 @@ describe("RemoteTerminalView", () => {
     expect(askAiBtn).not.toBeDisabled();
     await userEvent.click(askAiBtn);
 
-    expect(
-      await screen.findByRole("dialog", { name: /AI (代理|Agent)/i }),
-    ).toBeInTheDocument();
+    expect(await screen.findByTestId("remote-ai-panel")).toBeInTheDocument();
   });
 
   it("唯讀模式下 Ask AI 按鈕停用", async () => {
@@ -403,7 +418,7 @@ describe("RemoteTerminalView", () => {
     });
   });
 
-  it("/agent 指令透過 WarpInput 送出時啟動 mission，不把字面指令送給對方", async () => {
+  it("/agent 指令透過 WarpInput 送出時轉交給 RemoteAiPanel.submitAgent，不把字面指令送給對方", async () => {
     render(<RemoteTerminalView tabId="t1" connId="c9" sas="8888" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c9"]).toBeDefined());
     act(() => {
@@ -413,89 +428,77 @@ describe("RemoteTerminalView", () => {
     const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
     await waitFor(() => expect(textarea).not.toBeDisabled());
 
-    await userEvent.type(textarea, "/agent list files{Enter}");
+    await userEvent.type(textarea, "/agent tidy up{Enter}");
 
     // 若 /agent 被當成一般指令走 submitCommand，sendMock 會收到含這串字的
-    // 位元組——這裡要求它不會，代表確實走了 mission 分支。
-    expect(sendMock).not.toHaveBeenCalledWith("c9", expect.stringContaining("/agent list files"));
-    // 且 Agent 面板因此打開。
-    expect(
-      await screen.findByRole("dialog", { name: /AI (代理|Agent)/i }),
-    ).toBeInTheDocument();
-    expect(mockInvokeAiQueryCtx).toHaveBeenCalled();
+    // 位元組——這裡要求它不會，代表確實走了 RemoteAiPanel 分支。
+    expect(sendMock).not.toHaveBeenCalledWith("c9", expect.stringContaining("/agent tidy up"));
+    expect(await screen.findByTestId("remote-ai-panel")).toBeInTheDocument();
+    expect(mockSubmitAgent).toHaveBeenCalledWith("tidy up");
+    expect(mockSend).not.toHaveBeenCalled();
   });
 
-  it("任務進行中失去控制權 → 中止並在面板顯示原因", async () => {
+  it("/ai 指令透過 WarpInput 送出時轉交給 RemoteAiPanel.send", async () => {
+    render(<RemoteTerminalView tabId="t1" connId="c33" sas="3300" isActive onConnectClick={vi.fn()} />);
+    await waitFor(() => expect(handlers["granted:c33"]).toBeDefined());
+    act(() => {
+      handlers["granted:c33"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+    });
+
+    const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
+    await waitFor(() => expect(textarea).not.toBeDisabled());
+
+    await userEvent.type(textarea, "/ai what is this{Enter}");
+
+    expect(sendMock).not.toHaveBeenCalledWith("c33", expect.stringContaining("/ai what is this"));
+    expect(await screen.findByTestId("remote-ai-panel")).toBeInTheDocument();
+    expect(mockSend).toHaveBeenCalledWith("what is this");
+    expect(mockSubmitAgent).not.toHaveBeenCalled();
+  });
+
+  it("重新同步 → 呼叫 RemoteAiPanel.abort()", async () => {
     render(<RemoteTerminalView tabId="t1" connId="c30" sas="3030" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c30"]).toBeDefined());
     act(() => {
       handlers["granted:c30"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
     });
 
-    const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
-    await waitFor(() => expect(textarea).not.toBeDisabled());
-    await userEvent.type(textarea, "/agent do something{Enter}");
-    await screen.findByRole("dialog", { name: /AI (代理|Agent)/i });
-
-    // 主控端把觀看端降成唯讀——進行中的 mission 要中止。
-    await waitFor(() => expect(handlers["control:c30"]).toBeDefined());
+    await waitFor(() => expect(handlers["resync:c30"]).toBeDefined());
     act(() => {
-      handlers["control:c30"]("read_only" as never);
+      handlers["resync:c30"](undefined as never);
     });
 
-    expect(
-      await screen.findByText(/已失去控制權|Control permission lost/),
-    ).toBeInTheDocument();
+    expect(mockAbort).toHaveBeenCalled();
   });
 
-  it("任務進行中連線結束 → 中止並在面板顯示原因", async () => {
+  it("失去控制權（降為唯讀）→ 呼叫 RemoteAiPanel.abort()", async () => {
     render(<RemoteTerminalView tabId="t1" connId="c31" sas="3131" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c31"]).toBeDefined());
     act(() => {
       handlers["granted:c31"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
     });
 
-    const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
-    await waitFor(() => expect(textarea).not.toBeDisabled());
-    await userEvent.type(textarea, "/agent do something{Enter}");
-    await screen.findByRole("dialog", { name: /AI (代理|Agent)/i });
-
-    await waitFor(() => expect(handlers["ended:c31"]).toBeDefined());
+    await waitFor(() => expect(handlers["control:c31"]).toBeDefined());
     act(() => {
-      handlers["ended:c31"]("host_stopped_sharing" as never);
+      handlers["control:c31"]("read_only" as never);
     });
 
-    expect(
-      await screen.findByText(/連線已結束，任務中止|Connection ended; mission aborted/),
-    ).toBeInTheDocument();
+    expect(mockAbort).toHaveBeenCalled();
   });
 
-  it("ai-stream 事件把 delta 餵進面板（詢問中），錯誤 session_id / kind 一律忽略", async () => {
+  it("連線結束 → 呼叫 RemoteAiPanel.abort()", async () => {
     render(<RemoteTerminalView tabId="t1" connId="c32" sas="3232" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c32"]).toBeDefined());
     act(() => {
       handlers["granted:c32"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
     });
 
-    const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
-    await waitFor(() => expect(textarea).not.toBeDisabled());
-    await userEvent.type(textarea, "/agent do something{Enter}");
-    await screen.findByRole("dialog", { name: /AI (代理|Agent)/i });
-
-    // 這個連線、query 串流：應該顯示。
+    await waitFor(() => expect(handlers["ended:c32"]).toBeDefined());
     act(() => {
-      emitAiStream({ kind: "query", session_id: "c32", delta: "hello", done: false });
+      handlers["ended:c32"]("host_stopped_sharing" as never);
     });
-    expect(await screen.findByText("hello")).toBeInTheDocument();
 
-    // 別條連線的串流 / chat 串流 / done 事件：一律不 append。
-    act(() => {
-      emitAiStream({ kind: "query", session_id: "someone-else", delta: "XXX", done: false });
-      emitAiStream({ kind: "chat", session_id: "c32", delta: "YYY", done: false });
-      emitAiStream({ kind: "query", session_id: "c32", delta: "ZZZ", done: true });
-    });
-    expect(screen.queryByText(/XXX|YYY|ZZZ/)).not.toBeInTheDocument();
-    expect(screen.getByText("hello")).toBeInTheDocument();
+    expect(mockAbort).toHaveBeenCalled();
   });
 
   it("clears the block list on resync, not just the xterm buffer", async () => {
@@ -618,7 +621,7 @@ describe("RemoteTerminalView", () => {
     // MAX_LIVE_ROWS 並用 overflow:clip 硬裁（Task 2）疊加起來，會讓遠端
     // 觀看端看 vim/htop/tmux 這類全螢幕程式時，畫面被裁到只剩最後 16 行、
     // 其餘完全看不到也滑不到——跟本機終端機一樣，全螢幕程式使用中應該讓
-    // 即時窗格撐滿、不裁切、卡片列表與輸入框讓開空間。
+    // 即時窗格撐滿、不裁切，卡片列表與輸入框讓開空間。
     const { container } = render(<RemoteTerminalView tabId="t1" connId="c14" sas="1414" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c14"]).toBeDefined());
     handlers["granted:c14"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);

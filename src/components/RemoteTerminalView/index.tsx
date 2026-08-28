@@ -11,20 +11,20 @@ import {
 } from "../../ipc/shareViewer";
 import { useLocale } from "../../contexts/LocaleContext";
 import { getActiveTheme, type AppTheme } from "../../lib/themes";
-import { useTerminalBlocks, type TerminalBlock } from "../../hooks/useTerminalBlocks";
+import { useTerminalBlocks } from "../../hooks/useTerminalBlocks";
 import { WarpInput } from "../WarpInput";
 import { TerminalBlockCard } from "../TerminalBlockCard";
 import { CommandBookmarksPicker, addBookmark } from "../CommandBookmarks";
 import { parseAiPrefix, parseAgentPrefix } from "../parseAiPrefix";
 import { LinkIcon, SparklesIcon } from "../Icons";
 import type { Translations } from "../../lib/i18n";
-import { listen } from "@tauri-apps/api/event";
-import { useAgentMission } from "../../hooks/useAgentMission";
-import { runAgentLoop, INITIAL_PREVIEW, type PreviewState } from "../../lib/agentLoop";
-import { invokeAiQueryCtx, type RemoteCtx, type AiStreamEvent } from "../../ipc/ai";
-import { getConfig, type ExecutionMode } from "../../ipc/config";
-import type { AgentPhase } from "../AgentStatusBar";
-import { AgentPanel } from "./AgentPanel";
+import type { RemoteCtx } from "../../ipc/ai";
+import { getConfig } from "../../ipc/config";
+import { listProviders } from "../../ipc/provider";
+import { ProviderPalette } from "../ProviderPalette";
+import { QuotaBadge } from "../QuotaBadge";
+import { useProviderQuota } from "../../hooks/useProviderQuota";
+import { RemoteAiPanel, type RemoteAiPanelHandle } from "./RemoteAiPanel";
 import "../TerminalView.css";
 import "./index.css";
 
@@ -71,7 +71,7 @@ type Phase =
   | { kind: "ended"; reason: string };
 
 export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "", onConnectClick }: Props) {
-  const { t, locale } = useLocale();
+  const { t } = useLocale();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const [termState, setTermState] = useState<Terminal | null>(null);
@@ -161,50 +161,45 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
 
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
 
-  // history 不再由觀看端填——步驟以 TerminalBlockCard 顯示在主區；這裡只用 active 當「任務進行中」旗標
-  const { agentMission, startMission, stopMission } = useAgentMission();
-  const [agentPanelOpen, setAgentPanelOpen] = useState(false);
-  const [agentPhase, setAgentPhase] = useState<AgentPhase | null>(null);
-  const [streamText, setStreamText] = useState("");
-  const [preview, setPreview] = useState<PreviewState>(INITIAL_PREVIEW);
-  const streamingRef = useRef(false);
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const remoteAiPanelRef = useRef<RemoteAiPanelHandle>(null);
   const abortRef = useRef(false);
-  const executionModeRef = useRef<ExecutionMode>("graded");
-  const maxAgentStepsRef = useRef(5);
+  const [maxAgentSteps, setMaxAgentSteps] = useState(5);
 
   useEffect(() => {
     getConfig()
       .then((cfg) => {
-        executionModeRef.current = cfg.execution_mode;
-        maxAgentStepsRef.current = cfg.max_agent_steps === 0 ? 9999 : (cfg.max_agent_steps ?? 5);
+        setMaxAgentSteps(cfg.max_agent_steps === 0 ? 9999 : (cfg.max_agent_steps ?? 5));
+      })
+      .catch(() => {});
+  }, []);
+
+  // Provider 狀態跟 TerminalView.tsx 同一套模式：掛載時抓一次目前預設的
+  // provider，切換靠 ProviderPalette 的 onSwitch 回呼更新，不是靠重新拉取。
+  const [activeProvider, setActiveProvider] = useState("");
+  const [activeProviderId, setActiveProviderId] = useState("");
+  const quotaWindow = useProviderQuota(activeProviderId);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    listProviders()
+      .then((list) => {
+        const active = list.find((p) => p.is_default) ?? list[0];
+        setActiveProvider(active?.display_name ?? "");
+        setActiveProviderId(active?.id ?? "");
       })
       .catch(() => {});
   }, []);
 
   // 一次註冊的 share-viewer://* 事件 handler（下面那個只依賴 [connId] 的
-  // effect）需要讀到最新的 submitCommand / mission / 翻譯 / stopMission——
-  // 跟這個檔案既有的 blocksRef / appendOutputRef 同一套 ref 橋接（也跟
-  // TerminalView.tsx 的 submitCommandRef、agentMissionRef 完全同一個寫法），
-  // 不為了這些值重新訂閱一次所有事件。
+  // effect）需要讀到最新的 submitCommand——跟這個檔案既有的 blocksRef /
+  // appendOutputRef 同一套 ref 橋接（也跟 TerminalView.tsx 的
+  // submitCommandRef 完全同一個寫法），不為了這個值重新訂閱一次所有事件。
   const submitCommandRef = useRef(submitCommand);
   useEffect(() => { submitCommandRef.current = submitCommand; }, [submitCommand]);
-  const agentMissionRef = useRef(agentMission);
-  useEffect(() => { agentMissionRef.current = agentMission; }, [agentMission]);
-  const tRef = useRef(t);
-  useEffect(() => { tRef.current = t; }, [t]);
-  const stopMissionRef = useRef(stopMission);
-  useEffect(() => { stopMissionRef.current = stopMission; }, [stopMission]);
 
-  // 同步的「已經有一輪 runAgentLoop 在跑」旗標。startMission / agentMission
-  // 都是非同步 setState，兩次很快的送出（面板連按兩下 Enter、或面板的
-  // onSubmitGoal 跟 WarpInput 送出擦身而過）會同時通過那個讀 render 快照的
-  // active 檢查，導致兩個 runAgentLoop 共用同一組 abortRef/streamingRef，
-  // 交錯把指令送到遠端主機。這顆 ref 在同一個 tick 內就擋掉第二次。
-  const missionRunningRef = useRef(false);
-
-  // 分頁關閉時把正在跑的 Agent 迴圈中止：runAgentLoop 是命令式觸發的，
-  // 沒有東西在卸載時停它——留著會有孤兒遞迴、60 秒 setTimeout 對已 dispose
-  // 的 xterm 呼叫 term.write、以及卸載後 setState（這個檔案有前科）。
+  // 分頁關閉時把正在跑的 Agent 迴圈中止——這顆 abortRef 同時也是傳給
+  // RemoteAiPanel 的 sharedAbortRef（見下方 render），跟它自己內部的
+  // unmount-abort effect 各自獨立、互不衝突，兩邊都設是有意的雙重保險。
   useEffect(() => () => { abortRef.current = true; }, []);
 
   // 卡片列表跟即時窗格共用同一個外層捲動容器，新卡片完成渲染時捲到底部
@@ -242,7 +237,8 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
 
   // hostPlatform 對一條連線來說實質上不變：onShareViewerGranted 只在第一次
   // 拿到非空 hostOs 時寫入，之後的 resize 通知帶空字串、不會再改它。所以把
-  // 當下的值一次性關進 mission 的 queryFn 閉包是安全的。
+  // 當下的值一次性關進這個閉包（傳給 RemoteAiPanel 當 buildRemoteCtx prop）
+  // 是安全的。
   // hostPlatform 目前只分 windows / 其它，所以 macOS 主控端會被標成 "linux"，
   // AI 可能因此給出 GNU 而非 BSD 語法的指令（sed -i、readlink -f 等）。granted
   // 事件之後帶更細的 OS 再放寬（spec YAGNI）。
@@ -253,79 +249,20 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
     recentOutput: readRecentOutput(termRef.current),
   }), [hostPlatform]);
 
-  const startAgentMission = useCallback((goal: string, maxSteps: number) => {
-    if (missionRunningRef.current) return;
-    if (agentMission?.active) return;
-    if (!(phaseRef.current.kind === "live" && phaseRef.current.mode === "control")) return;
-    missionRunningRef.current = true;
-    abortRef.current = false;
-    setAgentPhase(null);
-    setStreamText("");
-    setPreview(INITIAL_PREVIEW);
-    setAgentPanelOpen(true);
-    startMission(goal, maxSteps);
-    runAgentLoop({
-      t,
-      goal,
-      queryFn: (q) => invokeAiQueryCtx(q, buildRemoteCtx(), connId, locale),
-      term: termRef.current!,
-      // 迴圈的 .then 不會再檢查 abort——被 Stop 之後、queryFn 還在飛的那一步
-      // 仍然會呼叫這個 submit。包一層在中止後 no-op，遠端主機就不會在 Stop
-      // 之後又多收到一條指令（Stop 在遠端是安全控制）。
-      getSubmitCommand: () => (cmd: string, cb?: (b: TerminalBlock) => void) => {
-        if (abortRef.current) return;
-        submitCommandRef.current(cmd, cb);
-      },
-      setPreview,
-      setStreamText,
-      streamingRef,
-      executionModeRef,
-      writeRed: (m) => termRef.current?.write(`\r\n\x1b[31m${m}\x1b[0m\r\n`),
-      abortRef,
-      stepCount: 0,
-      maxSteps,
-      history: [],
-      onPhase: setAgentPhase,
-      onComplete: () => {
-        missionRunningRef.current = false;
-        setAgentPhase({ phase: "done", steps: agentMissionRef.current?.stepCount ?? 0 });
-        stopMission();
-      },
-      onFail: (msg) => {
-        missionRunningRef.current = false;
-        const reason = msg === t.term_agent_timeout_fail ? t.remote_agent_no_shell_integration : msg;
-        setAgentPhase({ phase: "failed", reason });
-        stopMission();
-      },
-    });
-  }, [agentMission, t, locale, connId, buildRemoteCtx, startMission, stopMission]);
-
-  const stopAgentMission = useCallback(() => {
-    abortRef.current = true;
-    missionRunningRef.current = false;
-    stopMission();
-    setAgentPhase(null);
-    setPreview(INITIAL_PREVIEW);
-  }, [stopMission]);
-
   // WarpInput 送出的整行文字先過一次 AI 前綴檢查——跟本機分頁用同一套
-  // parseAiPrefix.ts 規則，不重新猜字首。任務進行中再送一次＝停止；
-  // /agent 與 /ai 都跑 Agent 迴圈、用同一份步數預算（跟本機分頁
-  // TerminalView.tsx 對兩者一視同仁一致）；其餘走 submitCommand（會建立
-  // 分段卡片並透過 write 送出）。
+  // parseAiPrefix.ts 規則，不重新猜字首。/agent 與 /ai 都轉交給
+  // RemoteAiPanel 自己的 agent 迴圈（透過 ref 呼叫，不在這裡重複狀態）；
+  // 其餘走 submitCommand（會建立分段卡片並透過 write 送出）。面板自己管
+  // 「是否正在跑」，這裡不用再判斷「任務進行中再送一次＝停止」。
   const handleWarpSubmit = useCallback(
     (cmd: string) => {
-      if (agentMission?.active) {
-        stopAgentMission();
-        return;
-      }
       const agentGoal = parseAgentPrefix(cmd);
       const aiGoal = parseAiPrefix(cmd);
-      if (agentGoal !== null) { startAgentMission(agentGoal, maxAgentStepsRef.current); return; }
-      if (aiGoal !== null) { startAgentMission(aiGoal, maxAgentStepsRef.current); return; }
+      if (agentGoal !== null) { setAiPanelOpen(true); remoteAiPanelRef.current?.submitAgent(agentGoal); return; }
+      if (aiGoal !== null) { setAiPanelOpen(true); remoteAiPanelRef.current?.send(aiGoal); return; }
       submitCommand(cmd);
     },
-    [submitCommand, startAgentMission, stopAgentMission, agentMission],
+    [submitCommand],
   );
 
   useEffect(() => {
@@ -401,22 +338,18 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
         clearAllBlocksRef.current();
         // 重新同步代表畫面與分段歷史都不再可信，正在跑的 Agent 迴圈接續
         // 判斷會失準——直接中止。
-        if (agentMissionRef.current?.active) {
-          abortRef.current = true;
-          setAgentPhase({ phase: "failed", reason: tRef.current.remote_agent_aborted_resync });
-          stopMissionRef.current();
-        }
+        abortRef.current = true;
+        remoteAiPanelRef.current?.abort();
       }),
     );
 
     track(
       onShareViewerControlChanged(connId, (mode) => {
         setPhase({ kind: "live", mode });
-        // 失去控制權後 Agent 迴圈沒辦法再送指令，接續會卡住——中止並說明原因。
-        if (mode !== "control" && agentMissionRef.current?.active) {
+        // 失去控制權後 Agent 迴圈沒辦法再送指令，接續會卡住——中止。
+        if (mode !== "control") {
           abortRef.current = true;
-          setAgentPhase({ phase: "failed", reason: tRef.current.remote_agent_aborted_control_lost });
-          stopMissionRef.current();
+          remoteAiPanelRef.current?.abort();
         }
       }),
     );
@@ -425,19 +358,8 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
       onShareViewerEnded(connId, (reason) => {
         setPhase({ kind: "ended", reason });
         // 連線都結束了，正在跑的 Agent 迴圈沒有 PTY 可用——中止。
-        if (agentMissionRef.current?.active) {
-          abortRef.current = true;
-          setAgentPhase({ phase: "failed", reason: tRef.current.remote_agent_aborted_ended });
-          stopMissionRef.current();
-        }
-      }),
-    );
-
-    track(
-      listen<AiStreamEvent>("ai-stream", (event) => {
-        if (event.payload.kind !== "query") return;
-        if (event.payload.session_id !== connId) return;
-        if (!event.payload.done) setStreamText((s) => s + event.payload.delta);
+        abortRef.current = true;
+        remoteAiPanelRef.current?.abort();
       }),
     );
 
@@ -586,11 +508,12 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
             className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
             title={phase.kind === "live" && phase.mode === "control" ? t.term_ai_helper_tooltip : t.remote_agent_needs_control}
             disabled={!(phase.kind === "live" && phase.mode === "control")}
-            onClick={(e) => { e.stopPropagation(); setAgentPanelOpen(true); }}
+            onClick={(e) => { e.stopPropagation(); setAiPanelOpen(true); }}
             style={{ display: "flex", alignItems: "center", gap: "6px" }}
           >
             <SparklesIcon size={14} />
             <span>Ask AI</span>
+            {quotaWindow && <QuotaBadge window={quotaWindow} />}
           </button>
         </span>
       </div>
@@ -712,31 +635,24 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
         />
       )}
 
-      {agentPanelOpen && (
-        <AgentPanel
-          mission={agentMission}
-          phase={agentPhase}
-          streamText={streamText}
-          preview={preview}
-          onSubmitGoal={(goal) => startAgentMission(goal, maxAgentStepsRef.current)}
-          onStop={stopAgentMission}
-          onConfirmPreview={() => {
-            // 危險指令的預覽分支從不呼叫 onPhase，agentPhase 還停在
-            // {phase:"asking"}，這一步也沒有完成 callback 可以接續。確認後
-            // 就地把 mission 收乾淨：先設 abortRef（順便讓 asking 階段那顆
-            // 60 秒 timeout 不會再誤觸 onFail），標記完成，再送指令。
-            const cmd = preview.command;
-            abortRef.current = true;
-            missionRunningRef.current = false;
-            setPreview(INITIAL_PREVIEW);
-            setAgentPhase({ phase: "done", steps: agentMissionRef.current?.stepCount ?? 0 });
-            stopMission();
-            submitCommandRef.current(cmd);
-          }}
-          onCancelPreview={() => { setPreview(INITIAL_PREVIEW); stopAgentMission(); }}
-          onClose={() => { if (agentMission?.active) stopAgentMission(); setAgentPanelOpen(false); }}
-          disabled={!(phase.kind === "live" && phase.mode === "control")}
-          t={t}
+      <RemoteAiPanel
+        ref={remoteAiPanelRef}
+        isOpen={aiPanelOpen}
+        onClose={() => setAiPanelOpen(false)}
+        connId={connId}
+        buildRemoteCtx={buildRemoteCtx}
+        submitCommand={(cmd, cb) => submitCommandRef.current(cmd, cb)}
+        isControl={phase.kind === "live" && phase.mode === "control"}
+        maxSteps={maxAgentSteps}
+        providerName={activeProvider}
+        providerId={activeProviderId}
+        onOpenProviderPalette={() => setPaletteOpen(true)}
+        sharedAbortRef={abortRef}
+      />
+      {paletteOpen && (
+        <ProviderPalette
+          onClose={() => setPaletteOpen(false)}
+          onSwitch={(p) => { setActiveProvider(p.display_name); setActiveProviderId(p.id); }}
         />
       )}
     </div>

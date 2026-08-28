@@ -4,8 +4,10 @@ import { contentToDisplayString } from "../../types/attachment";
 import { languageDirective } from "../../lib/i18n";
 import { useLocale } from "../../contexts/LocaleContext";
 import { useRemoteAiChat } from "../../hooks/useRemoteAiChat";
+import { useProviderQuota } from "../../hooks/useProviderQuota";
 import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
 import { ChatPanelShell } from "../ChatPanel/ChatPanelShell";
+import { QuotaBadge } from "../QuotaBadge";
 
 /** 單一步驟的逾時：等指令跑完（submitCommand 的 onComplete）不能等超過這麼久，
  *  否則就當作這條連線沒有 OSC 133 shell 整合、沒辦法自動接續（見
@@ -60,6 +62,7 @@ export const RemoteAiPanel = forwardRef<RemoteAiPanelHandle, Props>(function Rem
 }, ref) {
   const { t, locale } = useLocale();
   const chat = useRemoteAiChat(connId, buildRemoteCtx, providerId);
+  const quotaWindow = useProviderQuota(providerId);
 
   // 觀看端的預設用途是「自己驅動別人的機器」，自由對話是次要——跟 AiPanel
   // 預設關閉 agent 模式且存 localStorage 剛好相反，這裡刻意不做持久化。
@@ -270,6 +273,7 @@ Rules:
       onAbortAgent={abort}
       providerName={providerName}
       onOpenProviderPalette={onOpenProviderPalette}
+      headerBadge={quotaWindow ? <QuotaBadge window={quotaWindow} /> : undefined}
       sessions={chat.sessions}
       onLoadSession={(s) => chat.loadMessages(s.messages, s.id)}
       onNewChat={() => chat.clear()}
