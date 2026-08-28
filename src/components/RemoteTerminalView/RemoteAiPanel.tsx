@@ -218,6 +218,16 @@ Rules:
     setAgentRunning(true);
     setAgentStep(0);
     agentAbortRef.current = false;
+    // 一次過去的 resync/失去控制權會把 sharedAbortRef 釘死在 true，不會有
+    // 任何地方把它改回 false（那是 RemoteTerminalView 的責任範圍之外——它
+    // 只負責「設 true」，不負責重置）。不重置的話，一次連線小插曲就會讓
+    // 這個分頁之後每一次 /agent、/ai 都在 runAgentLoop 第一行被判定成
+    // 已中止，安靜地 no-op，不會有任何錯誤訊息。
+    // 這裡可以放心重置：isControl 是 RemoteTerminalView 當下的即時 phase
+    // 判斷（"live" 且 "control"），能走到這行代表連線現在確實在控制模式
+    // 下——不管 sharedAbortRef 是被哪一次過去的 resync 或失去控制權設成
+    // true，那次事件描述的狀態都已經不是現在了，重置是安全的。
+    sharedAbortRef.current = false;
 
     const priorHistory: AgentHistoryMsg[] = chat.messages
       .filter((m): m is typeof m & { role: "user" | "assistant" } => m.role === "user" || m.role === "assistant")
@@ -228,7 +238,7 @@ Rules:
     const systemPrompt = buildAgentSystemPrompt();
     const history: AgentHistoryMsg[] = [...priorHistory, { role: "user", content: text }];
     void runAgentLoop(history, systemPrompt, 0);
-  }, [isControl, chat, buildAgentSystemPrompt, runAgentLoop]);
+  }, [isControl, chat, buildAgentSystemPrompt, runAgentLoop, sharedAbortRef]);
 
   const send = useCallback((text: string) => {
     if (!isControl) return;

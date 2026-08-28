@@ -313,4 +313,42 @@ describe("RemoteAiPanel", () => {
     expect(mockInvokeAiChatCtx).toHaveBeenCalledTimes(1);
     expect(submitCommand).toHaveBeenCalledTimes(1);
   });
+
+  it("a fresh submitAgent call resets a stale sharedAbortRef left over from a past resync/control-handoff", async () => {
+    // 回歸測試：sharedAbortRef 只有 RemoteTerminalView 會設成 true
+    // （resync / 失去控制權 / 連線結束 / unmount），從來沒有人把它設回
+    // false——不重置的話，一次連線小插曲就會讓這個分頁之後每一次
+    // /agent、/ai 都在 runAgentLoop 第一行被判定成已中止，安靜地 no-op。
+    mockInvokeAiChatCtx.mockResolvedValueOnce(aiReply("<cmd>ls -la</cmd>"));
+    const sharedAbortRef = { current: false };
+    const { ref, submitCommand } = renderPanel({ sharedAbortRef });
+
+    await act(async () => {
+      ref.current!.submitAgent("goal");
+      await flushMicrotasks();
+    });
+
+    const onComplete = submitCommand.mock.calls[0][1]!;
+    sharedAbortRef.current = true;
+
+    await act(async () => {
+      onComplete(fakeBlock("some output", 0));
+      await flushMicrotasks();
+    });
+
+    // 前一次目標確實被那次外部設定的 sharedAbortRef 擋下了（跟上面那個
+    // 測試同一件事——這裡只是拿它當「已經卡死」的起點）。
+    expect(mockInvokeAiChatCtx).toHaveBeenCalledTimes(1);
+
+    // 新的一次 submitAgent（isControl 為 true，代表連線現在確實在控制
+    // 模式下）應該重設 sharedAbortRef，讓新目標真的送出去問 AI。
+    mockInvokeAiChatCtx.mockResolvedValueOnce(aiReply("still here"));
+    await act(async () => {
+      ref.current!.submitAgent("new goal");
+      await flushMicrotasks();
+    });
+
+    expect(mockInvokeAiChatCtx).toHaveBeenCalledTimes(2);
+    expect(sharedAbortRef.current).toBe(false);
+  });
 });
