@@ -237,6 +237,16 @@ async fn handle_share(
 
     // 記住最後一次告訴觀看端的存取層級，之後靠它偵測變化（見下方 watch tick）。
     let mut announced_mode = mode;
+    // 同一招用在尺寸上：`Granted` 只在剛核准的當下送一次 cols/rows，之後
+    // 主控端不管怎麼調整終端機視窗，觀看端原本完全不會被告知——
+    // `ServerMessage::Resize` 這個訊息型別本身早就宣告好了（甚至連前端
+    // 接收端 viewer.rs 都寫好了），但沒有任何地方真的建構並送出過它，是
+    // 個死路徑。全螢幕、用絕對游標定位重繪畫面的程式（例如 Claude Code
+    // CLI）一旦在觀看端連線之後遇到主控端 resize，接下來的重繪會依照
+    // 主控端「當下」的實際尺寸算絕對座標，但觀看端的 xterm 緩衝區尺寸還
+    // 停在連線當下的舊值——畫面卡在舊高度，且新內容的絕對座標對到觀看端
+    // 緩衝區裡不存在或錯位的列，疊到既有內容上變成文字重疊。
+    let mut announced_size = (cols, rows);
 
     if !send_control(
         &mut ws,
@@ -340,6 +350,25 @@ async fn handle_share(
                     if !send_control(
                         &mut ws,
                         &ServerMessage::ControlChanged { mode: current },
+                    )
+                    .await
+                    {
+                        break;
+                    }
+                }
+
+                // 同一個輪詢順便偵測尺寸變化——PTY 可能在這期間被主控端
+                // resize 過（拖曳視窗、切換全螢幕、字級改變造成的 reflow
+                // 等）。`unwrap_or(announced_size)` 而不是 `unwrap_or((80,
+                // 24))`：session 若剛好在這一輪 tick 消失，維持原值不觸發
+                // 誤報的 Resize，讓上面的 `tab_for_code` 檢查在下一輪迴圈
+                // 接手判斷連線是否該結束，這裡不重複處理。
+                let current_size = state.pty.size(&tab_id).unwrap_or(announced_size);
+                if current_size != announced_size {
+                    announced_size = current_size;
+                    if !send_control(
+                        &mut ws,
+                        &ServerMessage::Resize { cols: current_size.0, rows: current_size.1 },
                     )
                     .await
                     {

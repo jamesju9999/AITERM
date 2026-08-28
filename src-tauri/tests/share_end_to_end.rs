@@ -344,6 +344,55 @@ async fn revoking_control_tells_the_viewer_it_can_no_longer_type() {
 }
 
 #[tokio::test]
+async fn resizing_the_host_pty_after_a_viewer_connects_tells_the_viewer_the_new_size() {
+    // 實機回報的 bug：觀看端連線時只收到一次 `Granted` 裡帶的 cols/rows，
+    // 之後主控端不管怎麼調整終端機視窗大小，觀看端完全沒有機制得知——
+    // `ServerMessage::Resize` 這個協定訊息型別本身存在（見 protocol.rs 的
+    // 註解「主控端 resize 了，觀看端重新 fit」），前端也已經寫好接收邏輯
+    // （viewer.rs 的 ServerMessage::Resize 分支），但後端從頭到尾沒有任何
+    // 地方真的建構並送出過這個訊息——宣告了卻從未被觸發的死路徑。
+    //
+    // 症狀：像 Claude Code CLI 這種用絕對游標定位重繪畫面的全螢幕程式，
+    // 一旦主控端在觀看端連線「之後」才調整終端機大小，程式接下來的重繪
+    // 會依照主控端「當下」的實際尺寸算絕對座標，但觀看端的 xterm 緩衝區
+    // 尺寸還停在連線當下的舊值——畫面因此卡在舊高度，且新內容的絕對座標
+    // 對到觀看端緩衝區裡不存在（或錯位）的列，疊到既有內容上變成文字
+    // 重疊/錯位。
+    let pty = Arc::new(PtyManager::new());
+    let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
+    let registry = Arc::new(ShareRegistry::new());
+    let code = registry.start_share(tab_id.clone());
+    let port = start_test_server(Arc::clone(&pty), Arc::clone(&registry)).await;
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/share"))
+        .await
+        .expect("connect");
+    join_and_do_sas_handshake(&mut ws, &code, "Alice").await;
+
+    let request_id = registry.pending(&tab_id)[0].request_id.clone();
+    registry.approve(&request_id, AccessMode::Control).expect("approve");
+    assert_eq!(
+        next_control(&mut ws).await,
+        ServerMessage::Granted {
+            mode: WireAccessMode::Control,
+            cols: 80,
+            rows: 24,
+            host_os: std::env::consts::OS.to_string(),
+        }
+    );
+
+    // 主控端把終端機視窗調大——跟真實情境一樣，觀看端連上之後才發生。
+    pty.resize(&tab_id, PtySize { rows: 50, cols: 120, pixel_width: 0, pixel_height: 0 })
+        .expect("resize pty");
+
+    assert_eq!(
+        next_control(&mut ws).await,
+        ServerMessage::Resize { cols: 120, rows: 50 },
+        "already-connected viewer was never told the host's PTY was resized"
+    );
+}
+
+#[tokio::test]
 async fn a_viewer_that_gives_up_waiting_stops_pestering_the_host() {
     // 觀看端在等待同意期間關掉連線（等不下去了）。那筆待審請求必須跟著消失
     // ——否則主控端的同意視窗上會掛著一個永遠不會有下文的「OOO 想連進來」，
