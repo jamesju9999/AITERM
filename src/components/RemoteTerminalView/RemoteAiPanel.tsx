@@ -19,7 +19,13 @@ const STEP_TIMEOUT_MS = 60_000;
 export interface RemoteAiPanelHandle {
   submitAgent: (goal: string) => void;
   send: (text: string) => void;
-  abort: () => void;
+  /**
+   * `reason` 給的時候，且真的有 agent 迴圈在跑，會在對話裡補一則說明訊息
+   * 再停止——連線事件（resync/失去控制權/連線結束）強制中止時要用，讓
+   * 使用者知道「AI 剛剛不是自己停的」，不是靜默消失。使用者自己按 Stop
+   * 這一種不傳 reason，維持靜默（他自己知道為什麼）。
+   */
+  abort: (reason?: string) => void;
 }
 
 interface AgentHistoryMsg {
@@ -245,10 +251,18 @@ Rules:
     void chat.send(text);
   }, [isControl, chat]);
 
-  const abort = useCallback(() => {
+  const abort = useCallback((reason?: string) => {
     agentAbortRef.current = true;
+    // 只有「真的有迴圈在跑」時才補說明訊息——連線事件即使沒有 mission
+    // 在飛也一律呼叫 abort()，沒有這個檢查會對著空對話塞一則沒頭沒尾的
+    // 「AI 代理已停止」。讀 agentRunning 而不是等 setAgentRunning(false)
+    // 生效後再讀：這個 callback 本身就會在 agentRunning 改變時被
+    // useCallback 重新建立，這裡讀到的一定是呼叫當下最新的值。
+    if (reason && agentRunning) {
+      chat.addMessage({ role: "assistant", content: reason });
+    }
     setAgentRunning(false);
-  }, []);
+  }, [chat, agentRunning]);
 
   useImperativeHandle(ref, () => ({ submitAgent, send, abort }), [submitAgent, send, abort]);
 

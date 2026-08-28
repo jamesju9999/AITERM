@@ -224,6 +224,53 @@ describe("RemoteAiPanel", () => {
     expect(submitCommand).toHaveBeenCalledTimes(1);
   });
 
+  it("abort(reason) while the agent is running adds a chat message explaining why it stopped", async () => {
+    // 連線事件（resync/失去控制權/連線結束）強制中止時要傳 reason，讓
+    // 使用者知道「AI 剛剛不是自己停的」，不是靜默消失。
+    mockInvokeAiChatCtx.mockResolvedValueOnce(aiReply("<cmd>ls -la</cmd>"));
+    const { ref } = renderPanel();
+
+    await act(async () => {
+      ref.current!.submitAgent("goal");
+      await flushMicrotasks();
+    });
+
+    act(() => {
+      ref.current!.abort("connection resynced");
+    });
+
+    const lastCall = chatMock.addMessage.mock.calls[chatMock.addMessage.mock.calls.length - 1];
+    expect(lastCall[0]).toEqual({ role: "assistant", content: "connection resynced" });
+  });
+
+  it("abort() with no reason adds no chat message — the user-pressed-Stop case stays silent", async () => {
+    mockInvokeAiChatCtx.mockResolvedValueOnce(aiReply("<cmd>ls -la</cmd>"));
+    const { ref } = renderPanel();
+
+    await act(async () => {
+      ref.current!.submitAgent("goal");
+      await flushMicrotasks();
+    });
+
+    const callsBeforeAbort = chatMock.addMessage.mock.calls.length;
+    act(() => {
+      ref.current!.abort();
+    });
+
+    expect(chatMock.addMessage.mock.calls.length).toBe(callsBeforeAbort);
+  });
+
+  it("abort(reason) with no agent running adds no chat message — a stray connection event shouldn't spam the chat", async () => {
+    const { ref } = renderPanel();
+
+    const callsBeforeAbort = chatMock.addMessage.mock.calls.length;
+    act(() => {
+      ref.current!.abort("connection resynced");
+    });
+
+    expect(chatMock.addMessage.mock.calls.length).toBe(callsBeforeAbort);
+  });
+
   it("abort() while the 60s timer is pending stops the loop without the misleading timeout message", async () => {
     vi.useFakeTimers();
     mockInvokeAiChatCtx.mockResolvedValueOnce(aiReply("<cmd>ls -la</cmd>"));

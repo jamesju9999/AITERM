@@ -171,6 +171,11 @@ if (!window.HTMLElement.prototype.scrollTo) {
 
 import { RemoteTerminalView, formatElapsed, readRecentOutput } from "./index";
 import { addBookmark } from "../CommandBookmarks";
+import { translations } from "../../lib/i18n";
+
+// 沒有 LocaleProvider 包這個元件時，useLocale() 會退回讀 localStorage，
+// 每個測試開始前都被清空（見下面 beforeEach），所以固定落在 "zh-TW"。
+const t = translations["zh-TW"];
 
 beforeEach(() => {
   for (const k of Object.keys(handlers)) delete handlers[k];
@@ -468,7 +473,7 @@ describe("RemoteTerminalView", () => {
       handlers["resync:c30"](undefined as never);
     });
 
-    expect(mockAbort).toHaveBeenCalled();
+    expect(mockAbort).toHaveBeenCalledWith(t.remote_agent_stopped_resync);
   });
 
   it("失去控制權（降為唯讀）→ 呼叫 RemoteAiPanel.abort()", async () => {
@@ -483,7 +488,7 @@ describe("RemoteTerminalView", () => {
       handlers["control:c31"]("read_only" as never);
     });
 
-    expect(mockAbort).toHaveBeenCalled();
+    expect(mockAbort).toHaveBeenCalledWith(t.remote_agent_stopped_control_lost);
   });
 
   it("連線結束 → 呼叫 RemoteAiPanel.abort()", async () => {
@@ -498,7 +503,7 @@ describe("RemoteTerminalView", () => {
       handlers["ended:c32"]("host_stopped_sharing" as never);
     });
 
-    expect(mockAbort).toHaveBeenCalled();
+    expect(mockAbort).toHaveBeenCalledWith(t.remote_agent_stopped_ended);
   });
 
   it("clears the block list on resync, not just the xterm buffer", async () => {

@@ -163,6 +163,9 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
 
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const remoteAiPanelRef = useRef<RemoteAiPanelHandle>(null);
+  // 只負責設 true（unmount + 三個連線事件）；重設回 false 是 RemoteAiPanel
+  // 的 submitAgent 的責任（見該檔案的說明）——這裡別自己加重設，會跟那邊
+  // 打架。
   const abortRef = useRef(false);
   const [maxAgentSteps, setMaxAgentSteps] = useState(5);
 
@@ -196,6 +199,13 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   // submitCommandRef 完全同一個寫法），不為了這個值重新訂閱一次所有事件。
   const submitCommandRef = useRef(submitCommand);
   useEffect(() => { submitCommandRef.current = submitCommand; }, [submitCommand]);
+  // 同一個理由：那個 effect 裡的三個連線事件 handler 現在要組譯句字串給
+  // RemoteAiPanel.abort(reason) 顯示，若直接在 handler 裡閉包捕捉 `t`，
+  // 拿到的會是這個 effect 第一次跑（掛載當下）那份、之後切換語系也不會
+  // 跟著換——這個檔案原本就有這個坑（Task 7 之前的 tRef 就是為了它），
+  // 這裡重新加回來。
+  const tRef = useRef(t);
+  useEffect(() => { tRef.current = t; }, [t]);
 
   // 分頁關閉時把正在跑的 Agent 迴圈中止——這顆 abortRef 同時也是傳給
   // RemoteAiPanel 的 sharedAbortRef（見下方 render），跟它自己內部的
@@ -337,19 +347,20 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
         termRef.current?.clear();
         clearAllBlocksRef.current();
         // 重新同步代表畫面與分段歷史都不再可信，正在跑的 Agent 迴圈接續
-        // 判斷會失準——直接中止。
+        // 判斷會失準——直接中止，並在對話裡說明原因（不是使用者自己按
+        // 停止，靜默停止會讓人以為是 bug）。
         abortRef.current = true;
-        remoteAiPanelRef.current?.abort();
+        remoteAiPanelRef.current?.abort(tRef.current.remote_agent_stopped_resync);
       }),
     );
 
     track(
       onShareViewerControlChanged(connId, (mode) => {
         setPhase({ kind: "live", mode });
-        // 失去控制權後 Agent 迴圈沒辦法再送指令，接續會卡住——中止。
+        // 失去控制權後 Agent 迴圈沒辦法再送指令，接續會卡住——中止並說明原因。
         if (mode !== "control") {
           abortRef.current = true;
-          remoteAiPanelRef.current?.abort();
+          remoteAiPanelRef.current?.abort(tRef.current.remote_agent_stopped_control_lost);
         }
       }),
     );
@@ -357,9 +368,9 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
     track(
       onShareViewerEnded(connId, (reason) => {
         setPhase({ kind: "ended", reason });
-        // 連線都結束了，正在跑的 Agent 迴圈沒有 PTY 可用——中止。
+        // 連線都結束了，正在跑的 Agent 迴圈沒有 PTY 可用——中止並說明原因。
         abortRef.current = true;
-        remoteAiPanelRef.current?.abort();
+        remoteAiPanelRef.current?.abort(tRef.current.remote_agent_stopped_ended);
       }),
     );
 

@@ -810,6 +810,9 @@ const zhTW = {
     remote_terminal_toolbar_connect_button: "連線",
     remote_agent_needs_control: "需要控制權才能使用 AI 代理",
     remote_agent_no_shell_integration: "遠端 shell 未啟用指令追蹤，無法自動接續。",
+    remote_agent_stopped_resync: "連線重新同步，AI 代理已停止（之前的執行結果可能不完整）。",
+    remote_agent_stopped_control_lost: "已失去控制權，AI 代理已停止。",
+    remote_agent_stopped_ended: "連線已結束，AI 代理已停止。",
     // 遠端終端機共享——主控端
     share_button: "分享",
     share_button_tooltip: "把這個終端機分頁分享給同事",
@@ -2169,6 +2172,9 @@ const enRaw = {
     remote_terminal_toolbar_connect_button: "Connect",
     remote_agent_needs_control: "Control permission is required to use the AI agent",
     remote_agent_no_shell_integration: "The remote shell has no command tracking; cannot continue automatically.",
+    remote_agent_stopped_resync: "Connection resynced — the AI agent has stopped (its last result may be incomplete).",
+    remote_agent_stopped_control_lost: "Control permission lost — the AI agent has stopped.",
+    remote_agent_stopped_ended: "Connection ended — the AI agent has stopped.",
     // Remote terminal sharing — host side
     share_button: "Share",
     share_button_tooltip: "Share this terminal tab with a colleague",
