@@ -69,9 +69,16 @@ export interface ChatPanelShellProps {
   /** 輸入框前面的額外控制項（例如本機面板的附加檔案迴紋針按鈕）。 */
   inputPrefixControls?: ReactNode;
 
+  /** 貼在 agent-mode 開關旁那一排（輸入框上方）——AiPanel 把 MCP 開關放這裡。
+   *  跟 `inputPrefixControls`（貼在輸入框「裡面」，textarea 左側）是不同位置，別搞混。 */
   extraInputControls?: ReactNode;
+  /** 插在整個輸入區塊「之上」（ModeHint／agent 狀態列之後、輸入框之前）——
+   *  AiPanel 放附件 pills、隱藏的檔案 input、卡住提示。 */
   extraAboveInput?: ReactNode;
+  /** Windows 上背景毛玻璃看不清楚，要改成不透明樣式（見 styles.css）；預設 false。 */
   isWindows?: boolean;
+  /** 外部強制禁用輸入區（例如唯讀連線）；跟既有的 isStreaming/agentRunning
+   *  禁用邏輯是 OR 關係——三者任一為真就禁用，預設 false 不影響原本行為。 */
   inputDisabled?: boolean;
 
   onDragOver?: (e: React.DragEvent<HTMLDivElement>) => void;

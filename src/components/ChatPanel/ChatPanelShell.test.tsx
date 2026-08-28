@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ChatPanelShell, type ChatPanelShellProps } from "./ChatPanelShell";
 
@@ -76,5 +76,60 @@ describe("ChatPanelShell", () => {
     })} />);
     expect(screen.getByText("MCP-SLOT")).toBeInTheDocument();
     expect(screen.getByText("ABOVE-SLOT")).toBeInTheDocument();
+  });
+
+  it('submitShortcut="shift-enter": plain Enter does nothing, Shift+Enter submits', async () => {
+    const onSend = vi.fn();
+    render(<ChatPanelShell {...base({ onSend, submitShortcut: "shift-enter" })} />);
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(textbox, "hello");
+
+    fireEvent.keyDown(textbox, { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(textbox, { key: "Enter", shiftKey: true });
+    expect(onSend).toHaveBeenCalledWith("hello");
+  });
+
+  it('submitShortcut="ctrl-enter": plain Enter does nothing, Ctrl+Enter submits', async () => {
+    const onSend = vi.fn();
+    render(<ChatPanelShell {...base({ onSend, submitShortcut: "ctrl-enter" })} />);
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(textbox, "hello");
+
+    fireEvent.keyDown(textbox, { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(textbox, { key: "Enter", ctrlKey: true });
+    expect(onSend).toHaveBeenCalledWith("hello");
+  });
+
+  it("allowEmptySubmit lets Enter submit with empty text; default blocks it", () => {
+    const onSend = vi.fn();
+    const { rerender } = render(<ChatPanelShell {...base({ onSend })} />);
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+
+    // default (allowEmptySubmit=false): empty input, Enter does nothing.
+    fireEvent.keyDown(textbox, { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+
+    rerender(<ChatPanelShell {...base({ onSend, allowEmptySubmit: true })} />);
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(onSend).toHaveBeenCalledWith("");
+  });
+
+  it("inputPrefixControls renders inside the input pill container", () => {
+    render(<ChatPanelShell {...base({
+      inputPrefixControls: <button>PREFIX-SLOT</button>,
+    })} />);
+    expect(screen.getByText("PREFIX-SLOT")).toBeInTheDocument();
+  });
+
+  it("forwards paste events on the textarea to onPaste", () => {
+    const onPaste = vi.fn();
+    render(<ChatPanelShell {...base({ onPaste })} />);
+    const textbox = screen.getByRole("textbox");
+    fireEvent.paste(textbox, { clipboardData: { getData: () => "", files: [] } });
+    expect(onPaste).toHaveBeenCalled();
   });
 });
