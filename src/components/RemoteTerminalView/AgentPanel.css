@@ -49,22 +49,3 @@
   padding: 8px 12px;
   border-top: 1px solid var(--border-color, #2a2a2a);
 }
-.aiterm-remote-agent-panel__footer .aiterm-input { width: 100%; }
-
-/* 專案未定義 .aiterm-input，補一個深色可讀的最小樣式。 */
-.aiterm-input {
-  padding: 6px 10px;
-  font: inherit;
-  color: var(--text-color, #e5e5e5);
-  background: var(--input-bg, #111);
-  border: 1px solid var(--border-color, #2a2a2a);
-  border-radius: 6px;
-  outline: none;
-}
-.aiterm-input:focus {
-  border-color: var(--accent, #a855f7);
-}
-.aiterm-input:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
