@@ -1135,7 +1135,10 @@ export function readRecentOutput(term: Terminal | null, maxChars = 4000): string
         return;
       }
       if (aiGoal !== null) {
-        startAgentMission(aiGoal, 1);
+        // /ai 與 /agent 共用步數上限——比照本機 TerminalView.tsx 對兩個前綴
+        // 一視同仁；maxSteps=1 會在第一條指令跑完後撞上上限、顯示誤導性的
+        // 「已達最大迭代次數」失敗橫幅（Task 6 review 修正）。
+        startAgentMission(aiGoal, maxAgentStepsRef.current);
         return;
       }
       submitCommand(cmd);
@@ -1370,7 +1373,7 @@ git commit -m "fix(remote-terminal): 手動冒煙後的調整"
 | Spec 段落 | 對應 Task |
 |---|---|
 | 決策 1（觀看端跑 AI） | Task 3（`ai_query_ctx` 用觀看端 ctx）、Task 6（`queryFn` 走 `invokeAiQueryCtx`） |
-| 決策 2（Agent 迴圈 + `/ai`=maxSteps 1） | Task 6 Step 4（`handleWarpSubmit`） |
+| 決策 2（Agent 迴圈；`/ai` 與 `/agent` 同步數上限，見 spec 決策 2 實作修正） | Task 6 Step 4（`handleWarpSubmit`） |
 | 決策 3（cwd 靠 recent_output / `pwd`） | Task 3（`cwd: None`）、Task 6 Step 3（`buildRemoteCtx` 不填 cwd） |
 | 決策 4（安全模型比照本機） | Task 1 保留 `shouldAutoExecute`；Task 6 Step 8 危險指令走 `CommandPreview` |
 | 決策 5（抽共用 + 新 Rust 指令，不複製） | Task 1、Task 2、Task 3 |

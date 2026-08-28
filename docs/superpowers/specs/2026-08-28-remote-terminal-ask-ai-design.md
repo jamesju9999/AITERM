@@ -13,7 +13,12 @@
 ## 決策紀錄（brainstorm 過程中定案）
 
 1. **AI 在觀看端跑**，用觀看端自己的 provider 設定與金鑰。不是主控端跑再回傳。理由＝主控端 AI 可能不夠強，重點就是借用觀看端的 AI。
-2. **範圍＝Agent 自動迴圈**（不只單發 Ask AI）。`/ai` 單發一併解鎖，等於 `maxSteps = 1` 的迴圈。
+2. **範圍＝Agent 自動迴圈**（不只單發 Ask AI）。`/ai` 前綴一併解鎖。
+   ~~等於 `maxSteps = 1` 的迴圈。~~ **實作修正（2026-08-28，Task 6 review）**：`/ai`
+   與 `/agent` 共用同一個步數上限（`max_agent_steps` 設定），跟本機
+   `TerminalView.tsx` 對兩個前綴一視同仁的既有行為一致。`maxSteps = 1` 會讓
+   `runAgentLoop` 在第一條指令跑完後撞上 `stepCount >= maxSteps` 而顯示一個
+   誤導性的「已達最大迭代次數」失敗橫幅——所以不採用。
 3. **cwd 不透過新協定訊息取得**。靠 (a) `recent_output` 通常含 shell 提示字元、AI 像人一樣讀，(b) AI 需要確定時自己產生 `pwd` 當一步。
 4. **執行安全模型比照本機**：`CommandGuard` 判安全的自動跑、判危險的跳 `CommandPreview` 等觀看端使用者確認。
 5. **實作方向＝把迴圈移植進觀看端，新增吃明確情境的 Rust 指令**，且前端 `runAgentLoop` 從 `TerminalView.tsx` **抽成共用模組**，本機與遠端共用同一份。不複製。
@@ -190,7 +195,7 @@ interface Props {
 - Ask AI 鈕 `onClick` → `setAgentPanelOpen(true)`（不再 `setAiUnsupported(true)`）。唯讀時 `disabled` + tooltip `remote_agent_needs_control`「需要控制權才能使用 AI 代理」。
 - `handleWarpSubmit(cmd)`：
   - `parseAgentPrefix(cmd)` 命中 → `startAgentMission(goal, maxSteps=max_agent_steps)`。
-  - `parseAiPrefix(cmd)` 命中 → `startAgentMission(goal, maxSteps=1)`。
+  - `parseAiPrefix(cmd)` 命中 → `startAgentMission(goal, maxSteps=max_agent_steps)`（見決策 2 的實作修正，跟 `/agent` 同步數上限）。
   - 否則 → 現有的 `submitCommand(cmd)`。
 - 面板輸入框送出 → 同一個 `startAgentMission(goal, maxSteps=max_agent_steps)`，並確保 `agentPanelOpen`。
 - `startAgentMission(goal, maxSteps)`：
@@ -254,7 +259,7 @@ interface Props {
 - `RemoteTerminalView/index.test.tsx` 更新：
   - Ask AI 鈕在 `mode === "control"` 點了開面板；`read_only` 時 `disabled`。
   - `/agent xxx` 從 `WarpInput` 送出 → 啟動 mission、**不**呼叫 `submitCommand` 送原字串。
-  - `/ai xxx` → 啟動 `maxSteps = 1` 的 mission。
+  - `/ai xxx` → 啟動 mission（步數上限同 `/agent`，見決策 2 的實作修正）。
   - 移除舊的「Ask AI 顯示 `aiUnsupported` 且不觸發 IPC」測試（行為已改）。
   - resync / control-revoked / ended 事件在任務進行中 → mission 被中止（`onFail` 文案）。
 

@@ -243,6 +243,9 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   // hostPlatform 對一條連線來說實質上不變：onShareViewerGranted 只在第一次
   // 拿到非空 hostOs 時寫入，之後的 resize 通知帶空字串、不會再改它。所以把
   // 當下的值一次性關進 mission 的 queryFn 閉包是安全的。
+  // hostPlatform 目前只分 windows / 其它，所以 macOS 主控端會被標成 "linux"，
+  // AI 可能因此給出 GNU 而非 BSD 語法的指令（sed -i、readlink -f 等）。granted
+  // 事件之後帶更細的 OS 再放寬（spec YAGNI）。
   const buildRemoteCtx = useCallback((): RemoteCtx => ({
     os: hostPlatform === "windows" ? "windows" : "linux",
     shell: null,
