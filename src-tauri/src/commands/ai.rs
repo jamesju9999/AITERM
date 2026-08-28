@@ -381,6 +381,58 @@ pub struct AiChatReply {
     pub raw_tool_calls: Option<serde_json::Value>,
 }
 
+/// `ai_chat` 與 `ai_chat_ctx` 共用的「非 MCP 串流」核心：resolve provider →
+/// build_chat_prompt → provider.generate 串流 ai-stream(kind=Chat) → 回 AiChatReply。
+/// 呼叫端負責先做訊息驗證（空 / 末角色）。`stream_id` 是 ai-stream 事件的
+/// session_id 欄位（`ai_chat` 傳 PTY session id，`ai_chat_ctx` 傳 conn id）。
+async fn run_chat(
+    messages: Vec<ChatMessage>,
+    snapshot: crate::ai::EnvSnapshot,
+    provider_id: Option<String>,
+    locale: Locale,
+    router: &AiRouter,
+    app: &AppHandle,
+    stream_id: String,
+) -> Result<AiChatReply, AiError> {
+    let provider = match provider_id.as_deref() {
+        Some(id) => router.resolve_by_id(id).await?,
+        None => router.resolve().await?,
+    };
+    let prompt = build_chat_prompt(&snapshot, locale);
+    let req = GenerateRequest {
+        system_prompt: prompt,
+        messages,
+        context: snapshot,
+        mode: QueryMode::Chat,
+        max_tokens: None,
+    };
+
+    let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
+    let provider_for_spawn = provider.clone();
+    let join = tokio::spawn(async move { provider_for_spawn.generate(req, tx).await });
+
+    let mut buf = String::new();
+    while let Some(chunk) = rx.recv().await {
+        let _ = app.emit("ai-stream", AiStreamEvent {
+            session_id: stream_id.clone(),
+            kind: AiStreamKind::Chat,
+            delta: chunk.delta.clone(),
+            done: chunk.done,
+            tokens: chunk.usage.map(|u| u.prompt + u.completion),
+        });
+        buf.push_str(&chunk.delta);
+        if chunk.done { break; }
+    }
+
+    match join.await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(join_err) => return Err(AiError::Network { message: join_err.to_string() }),
+    }
+
+    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None })
+}
+
 #[tauri::command]
 pub async fn ai_chat(
     messages: Vec<ChatMessage>,
@@ -408,19 +460,6 @@ pub async fn ai_chat(
     }
 
     let snapshot = context::snapshot(&pty_manager, &session_id);
-    let provider = match provider_id.as_deref() {
-        Some(id) => router.resolve_by_id(id).await?,
-        None => router.resolve().await?,
-    };
-
-    let prompt = build_chat_prompt(&snapshot, locale);
-    let req = GenerateRequest {
-        system_prompt: prompt,
-        messages,
-        context: snapshot,
-        mode: QueryMode::Chat,
-        max_tokens: None,
-    };
 
     // ── MCP tool calling path ─────────────────────────────────────────────────
     let cfg = config.get();
@@ -435,6 +474,19 @@ pub async fn ai_chat(
         };
 
         if !tools.is_empty() {
+            let provider = match provider_id.as_deref() {
+                Some(id) => router.resolve_by_id(id).await?,
+                None => router.resolve().await?,
+            };
+            let prompt = build_chat_prompt(&snapshot, locale);
+            let req = GenerateRequest {
+                system_prompt: prompt,
+                messages,
+                context: snapshot,
+                mode: QueryMode::Chat,
+                max_tokens: None,
+            };
+
             let tools_for_fallback = tools.clone();
             let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
             let provider_clone = provider.clone();
@@ -526,30 +578,7 @@ pub async fn ai_chat(
     }
     // ── End MCP path — fall through to normal streaming path ─────────────────
 
-    let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
-    let provider_for_spawn = provider.clone();
-    let join = tokio::spawn(async move { provider_for_spawn.generate(req, tx).await });
-
-    let mut buf = String::new();
-    while let Some(chunk) = rx.recv().await {
-        let _ = app.emit("ai-stream", AiStreamEvent {
-            session_id: session_id.clone(),
-            kind: AiStreamKind::Chat,
-            delta: chunk.delta.clone(),
-            done: chunk.done,
-            tokens: chunk.usage.map(|u| u.prompt + u.completion),
-        });
-        buf.push_str(&chunk.delta);
-        if chunk.done { break; }
-    }
-
-    match join.await {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => return Err(e),
-        Err(join_err) => return Err(AiError::Network { message: join_err.to_string() }),
-    }
-
-    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None })
+    run_chat(messages, snapshot, provider_id, locale, &router, &app, session_id).await
 }
 
 /// Build the tool injection suffix for providers that don't support native tool calling.
