@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { formatAiError, type AiError } from "./ai";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const invokeMock = vi.fn();
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invokeMock(...a) }));
+
+import { formatAiError, invokeAiQueryCtx, type AiError } from "./ai";
 
 // ── shouldAutoExecute tests ───────────────────────────────────────────────────
 // Import the pure helper via a re-export shim below, or test via the module.
@@ -122,5 +126,26 @@ describe("formatAiError", () => {
       raw: "{oops}",
     });
     expect(msg).toContain("missing command");
+  });
+});
+
+// ── invokeAiQueryCtx tests ────────────────────────────────────────────────────
+
+describe("invokeAiQueryCtx", () => {
+  beforeEach(() => invokeMock.mockReset().mockResolvedValue({ command: "ls", explanation: "", risk_level: "safe" }));
+
+  it("passes query, ctx (snake_case recent_output), connId, locale to the ai_query_ctx command", async () => {
+    await invokeAiQueryCtx(
+      "list files",
+      { os: "linux", shell: null, cwd: null, recentOutput: "prompt$" },
+      "conn-123",
+      "en",
+    );
+    expect(invokeMock).toHaveBeenCalledWith("ai_query_ctx", {
+      query: "list files",
+      ctx: { os: "linux", shell: null, cwd: null, recent_output: "prompt$" },
+      connId: "conn-123",
+      locale: "en",
+    });
   });
 });

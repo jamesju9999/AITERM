@@ -129,6 +129,32 @@ export function invokeAiQuery(
   return invoke<AiCommandReady>("ai_query", { query, sessionId, locale });
 }
 
+export interface RemoteCtx {
+  os: string;
+  shell: string | null;
+  cwd: string | null;
+  recentOutput: string | null;
+}
+
+export function invokeAiQueryCtx(
+  query: string,
+  ctx: RemoteCtx,
+  connId: string,
+  locale: Locale = "zh-TW",
+): Promise<AiCommandReady> {
+  return invoke<AiCommandReady>("ai_query_ctx", {
+    query,
+    ctx: {
+      os: ctx.os,
+      shell: ctx.shell,
+      cwd: ctx.cwd,
+      recent_output: ctx.recentOutput,
+    },
+    connId,
+    locale,
+  });
+}
+
 
 /**
  * True for a 429 whose body carries no real explanation — Anthropic returns
