@@ -7,25 +7,11 @@ import type { ChatMessage } from "../ipc/ai";
 import { buildContentParts, contentToDisplayString } from "../types/attachment";
 import type { Attachment } from "../types/attachment";
 import { useLocale } from "../contexts/LocaleContext";
+import type { McpChatMessage, McpChatSession } from "../types/chat";
+export type { McpChatMessage, McpChatSession }; // re-export：既有 import { McpChatMessage } from "../hooks/useMcpChat" 不用改
 
 const MAX_TOOL_ITERATIONS = 10;
 const SESSIONS_STORAGE_KEY = "aiterm-mcp-chat-sessions";
-
-export interface McpChatMessage {
-  role: "user" | "assistant" | "tool_call" | "tool_result";
-  content: string | import("../ipc/ai").ContentPart[];
-  tool_name?: string;
-  tool_call_id?: string;
-  is_error?: boolean;
-  is_loading?: boolean;
-}
-
-export interface McpChatSession {
-  id: string;
-  title: string;
-  messages: McpChatMessage[];
-  savedAt: number;
-}
 
 function loadAllSessions(): McpChatSession[] {
   try {
