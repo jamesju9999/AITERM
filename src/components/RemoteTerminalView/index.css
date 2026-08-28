@@ -38,28 +38,49 @@
   color: var(--aiterm-error-fg, #fca5a5);
 }
 
-.aiterm-remote-terminal__screen {
+/* 卡片列表跟即時窗格共用的外層捲動容器——取代原本各自獨立、卡片區塊
+   還有 40% 高度上限的兩塊。跟 TerminalView.tsx 的 blockListRef 外層
+   容器同一個結構。 */
+.aiterm-remote-terminal__scroll-area {
   flex: 1;
   min-height: 0;
-  overflow: clip;
+  overflow-y: auto;
   display: flex;
-}
-
-/* 字級縮到最小（8px）仍塞不下 cols×rows 時，捲軸只開在這一層——外層
-   `.aiterm-remote-terminal`/`.aiterm-remote-terminal__screen` 維持
-   `overflow: clip`。整層改用 `overflow: auto` 會重現這個 repo 踩過的
-   「貼上內容被瀏覽器捲出視野變空白」那個坑（見 .aiterm-live-frame 的
-   同類註解）。 */
-.aiterm-remote-terminal__scroll {
-  flex: 1;
-  min-width: 0;
-  overflow: auto;
+  flex-direction: column;
 }
 
 .aiterm-remote-terminal__blocks {
-  overflow-y: auto;
-  flex-shrink: 0;
-  max-height: 40%;
+  flex: none;
+}
+
+/* 固定字體後，主控端的欄寬換算成實際像素可能比觀看端視窗窄或寬——這是
+   觀看端架構上無法避免的限制（PTY 的實際寬度由主控端決定，觀看端只能
+   選擇縮小字體去湊，或固定字體、寬度不夠就橫向捲動，這裡選後者）。
+   `overflow: auto`（不是 clip）維持原本這行既有的設定不動，這次沒有
+   改它。
+
+   **已知、這次沒有解決的風險**：`.aiterm-live-frame`／`.aiterm-terminal-root`
+   （本機終端機的即時窗格）刻意改用 `overflow: clip` 而不是 `hidden`／
+   `auto`，是因為實測過 `hidden` 仍會被瀏覽器捲動（例如貼上內容時捲去
+   顯示 xterm 內部取得焦點的組字輔助元素），導致畫面看起來空白／IME
+   組字被捲到別處。`.aiterm-remote-terminal__scroll` 這裡用 `auto`（維持
+   既有設定，不是這次新增的），理論上可能遇到同一類問題——但 `clip`
+   不建立捲動容器，會讓「固定字體、寬度不夠時橫向捲動看完整內容」這個
+   這次明確要達成的目標完全做不到（本機終端機不需要處理這個矛盾，因為
+   FitAddon 保證內容永遠剛好貼合視窗寬度，從來不需要水平捲動）。這個
+   衝突沒有簡單的兩全其美解法，這次維持現狀（`auto`），如果之後實機
+   測試真的踩到 IME／貼上內容被瀏覽器捲動跑掉的問題，需要另外開一輪
+   設計討論，不在這次範圍內。 */
+.aiterm-remote-terminal__scroll {
+  overflow: auto;
+}
+
+/* 跟 TerminalView.css 的 .aiterm-live-frame 完全相同：細邊框、圓角、
+   高度變化的平滑過場動畫。 */
+.aiterm-remote-terminal__live-frame {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  transition: height 0.12s ease-out;
 }
 
 .aiterm-remote-terminal__ai-unsupported {

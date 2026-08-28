@@ -91,6 +91,15 @@ class FakeResizeObserver {
 }
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = FakeResizeObserver;
 
+// jsdom doesn't implement Element.scrollTo either — same category as the
+// ResizeObserver shim above. Needed as a real (stubbable) no-op, not just an
+// optional-chained call site, because one of this file's tests spies on it
+// with `vi.spyOn(HTMLElement.prototype, "scrollTo")`, which requires the
+// property to already exist on the prototype.
+if (!window.HTMLElement.prototype.scrollTo) {
+  window.HTMLElement.prototype.scrollTo = () => {};
+}
+
 import { RemoteTerminalView } from "./index";
 
 beforeEach(() => {
@@ -239,6 +248,66 @@ describe("RemoteTerminalView", () => {
 
     await waitFor(() => expect(appendOutputSpy).not.toBeNull());
     expect(appendOutputSpy).toHaveBeenCalledWith(utf8Text);
+  });
+
+  it("即時窗格在指令執行中撐到最大高度、指令完成變成卡片後收回最小高度", async () => {
+    const { container } = render(<RemoteTerminalView tabId="t1" connId="c12" sas="1212" isActive />);
+    await waitFor(() => expect(handlers["granted:c12"]).toBeDefined());
+    handlers["granted:c12"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+
+    const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
+    await waitFor(() => expect(textarea).not.toBeDisabled());
+    await userEvent.type(textarea, "echo hi{Enter}");
+
+    // 指令送出後，模擬 shell 真的產生了一批輸出——即時窗格應該撐到最大
+    // 高度（測試環境量不到 xterm 真正的字元格尺寸，會落到 14*1.1 的
+    // fallback，MAX_LIVE_ROWS=16 對應 Math.round(16*14*1.1) = 246px）。
+    await waitFor(() => expect(handlers["data:c12"]).toBeDefined());
+    act(() => {
+      handlers["data:c12"](btoa("hi\r\n") as never);
+    });
+
+    const liveFrame = () => container.querySelector(".aiterm-remote-terminal__live-frame") as HTMLElement;
+    await waitFor(() => {
+      expect(liveFrame().style.height).toBe("246px");
+    });
+
+    // 指令執行完畢、變成卡片——即時窗格應該收回最小高度
+    // （MIN_LIVE_ROWS=3 對應 Math.round(3*14*1.1) = 46px）。
+    await waitFor(() => expect(capturedOscHandler).toBeTruthy());
+    act(() => {
+      capturedOscHandler!("D;0");
+    });
+    await waitFor(() => {
+      expect(liveFrame().style.height).toBe("46px");
+    });
+  });
+
+  it("新卡片出現時自動捲動到最底部", async () => {
+    const scrollToSpy = vi.spyOn(HTMLElement.prototype, "scrollTo").mockImplementation(() => {});
+    try {
+      render(<RemoteTerminalView tabId="t1" connId="c13" sas="1313" isActive />);
+      await waitFor(() => expect(handlers["granted:c13"]).toBeDefined());
+      handlers["granted:c13"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+
+      const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
+      await waitFor(() => expect(textarea).not.toBeDisabled());
+      await userEvent.type(textarea, "echo hi{Enter}");
+
+      // 只關心指令完成、卡片出現那一刻的呼叫，清掉掛載/送出指令過程中
+      // 可能發生的其他呼叫。
+      scrollToSpy.mockClear();
+
+      await waitFor(() => expect(capturedOscHandler).toBeTruthy());
+      act(() => {
+        capturedOscHandler!("D;0");
+      });
+
+      await waitFor(() => expect(screen.getByText("echo hi")).toBeInTheDocument());
+      expect(scrollToSpy).toHaveBeenCalled();
+    } finally {
+      scrollToSpy.mockRestore();
+    }
   });
 
   describe("disconnect timing (StrictMode dev-mode trap)", () => {

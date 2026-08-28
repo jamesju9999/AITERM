@@ -19,6 +19,9 @@ import { parseAiPrefix, parseAgentPrefix } from "../parseAiPrefix";
 import type { Translations } from "../../lib/i18n";
 import "./index.css";
 
+const MIN_LIVE_ROWS = 3;
+const MAX_LIVE_ROWS = 16;
+
 interface Props {
   tabId: string;
   /** 2B-1 的觀看連線 id。所有 `share-viewer://*` 事件都掛在它上面。 */
@@ -87,8 +90,41 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
   // 不想為了這個值重新訂閱一次所有 share-viewer://* 事件。
   const appendOutputRef = useRef(appendOutput);
   appendOutputRef.current = appendOutput;
+  // `onShareViewerData` 的 handler 同樣只依賴 [connId] 註冊一次，裡面要
+  // 判斷「現在有沒有指令在跑」需要讀到最新的 `blocks`，不橋接的話會是
+  // 掛載當下那份、永遠看不到後續指令建立的新區塊（跟上面兩顆 ref 同一個
+  // 理由，TerminalView.tsx 的 blocksRef 也是同樣的橋接）。
+  const blocksRef = useRef(blocks);
+  useEffect(() => {
+    blocksRef.current = blocks;
+  }, [blocks]);
 
   const [aiUnsupported, setAiUnsupported] = useState(false);
+
+  // 卡片列表跟即時窗格共用同一個外層捲動容器，新卡片完成渲染時捲到底部
+  // ——跟 TerminalView.tsx 的 blockListRef 同一個手法、同一個理由。
+  const scrollAreaRef = useRef<HTMLDivElement | null>(null);
+  const visibleBlockCount = blocks.filter((b) => b.status !== "running" && b.renderedLines).length;
+  useEffect(() => {
+    scrollAreaRef.current?.scrollTo({ top: scrollAreaRef.current.scrollHeight });
+  }, [visibleBlockCount]);
+
+  // 即時窗格閒置時縮到 MIN_LIVE_ROWS、有指令在跑時撐到 MAX_LIVE_ROWS——
+  // 跟 TerminalView.tsx 完全同一套機制、同一組數值：閒置時只顯示提示
+  // 字元不需要佔用大片空間，指令執行中撐開避免輸出被裁掉（滑鼠滾輪跟
+  // liveRows 毫無關聯，裁掉了就拿不回來），指令完成變成卡片
+  // （visibleBlockCount 改變）後收回最小高度。
+  const [liveRows, setLiveRows] = useState(MIN_LIVE_ROWS);
+  useEffect(() => {
+    setLiveRows(MIN_LIVE_ROWS);
+  }, [visibleBlockCount]);
+
+  // xterm.js 沒有公開 API 可以讀字元格高度——這裡讀的是跟 TerminalView.tsx
+  // 同一個內部欄位，同一個 escape hatch，這個 repo 已經有先例。
+  const cellHeightPx =
+    (termState as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } } } | null)
+      ?._core?._renderService?.dimensions?.css?.cell?.height || 14 * 1.1;
+  const liveHeightPx = Math.round(liveRows * cellHeightPx);
 
   // WarpInput 送出的整行文字先過一次 AI 前綴檢查——跟本機分頁用同一套
   // parseAiPrefix.ts 規則，不重新猜字首。是 /ai 或 /agent 開頭就不送出、
@@ -142,13 +178,28 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
         const bytes = atob(b64);
         const arr = new Uint8Array(bytes.length);
         for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-        termRef.current?.write(arr);
-        // 分段卡片的內容是從這批位元組解析出來的（跟畫面同一份資料）——
-        // 不接這行的話，卡片永遠只有指令文字跟耗時，看不到任何輸出內容。
-        // 用跟本機分頁一樣的 stream decoder，不要對 `bytes`（atob 的
-        // Latin1-per-byte 字串）直接呼叫 appendOutput：那樣多位元組 UTF-8
-        // 字元會被拆散成亂碼。
-        appendOutputRef.current(decoder.decode(arr, { stream: true }));
+        // 實機測試抓到的 bug（跟 TerminalView.tsx 那次 appendOutput race
+        // fix 是同一個根因）：xterm.js 的 write() 對不是緊跟著「使用者剛
+        // 輸入」的資料，一律用 setTimeout 排到下一輪事件迴圈才真正解析，
+        // 不是呼叫當下就同步跑完。appendOutput 若在 write() 呼叫之後就
+        // 同步執行，一次湧入多個 chunk 時內容會在對應的區塊還沒真正建立
+        // 好之前就被略過、永遠救不回來。改成搬進 write() 的完成 callback，
+        // 保證同一個 chunk 已經先被處理過。
+        termRef.current?.write(arr, () => {
+          // 分段卡片的內容是從這批位元組解析出來的（跟畫面同一份資料）
+          // ——不接這行的話，卡片永遠只有指令文字跟耗時，看不到任何輸出
+          // 內容。用跟本機分頁一樣的 stream decoder，不要對 `bytes`
+          // （atob 的 Latin1-per-byte 字串）直接呼叫 appendOutput：那樣
+          // 多位元組 UTF-8 字元會被拆散成亂碼。
+          appendOutputRef.current(decoder.decode(arr, { stream: true }));
+          // 跟 TerminalView.tsx 同一套機制：有一個追蹤中的區塊還在
+          // running，代表指令正在執行、正在產生輸出，即時窗格撐到最大
+          // 高度。
+          const latestBlock = blocksRef.current[blocksRef.current.length - 1];
+          if (latestBlock?.status === "running") {
+            setLiveRows(MAX_LIVE_ROWS);
+          }
+        });
       }),
     );
 
@@ -293,26 +344,49 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
         </div>
       )}
 
-      {/* 分段卡片：跟本機分頁同一套過濾條件（只顯示已結束且已完成 ANSI
-          解析的），複用 TerminalBlockCard——不傳 onAskAi，Ask AI 按鈕本身
-          是 `{isFailed && onAskAi && (...)}` 條件渲染，不傳就不會出現；
-          block.gitInfo 永遠是 undefined（這裡從不呼叫 setBlockGitInfo），
-          git 徽章同理自然不出現。 */}
-      <div className="aiterm-remote-terminal__blocks">
-        {blocks
-          .filter((b) => b.status !== "running" && b.renderedLines)
-          .map((b) => (
-            <TerminalBlockCard
-              key={b.id}
-              block={b}
-              onBookmark={(command) => addBookmark(command)}
-              onCopy={(command) => navigator.clipboard.writeText(command).catch(console.error)}
-            />
-          ))}
-      </div>
+      {/* 卡片列表跟即時窗格共用這個外層捲動容器（跟 TerminalView.tsx 的
+          blockListRef 同一個結構）——不再是各自獨立、各自有高度上限的
+          兩塊，卡片可以無限往下累積，捲動邊界只有這一層。 */}
+      <div className="aiterm-remote-terminal__scroll-area" ref={scrollAreaRef}>
+        {/* 分段卡片：跟本機分頁同一套過濾條件（只顯示已結束且已完成 ANSI
+            解析的），複用 TerminalBlockCard——不傳 onAskAi，Ask AI 按鈕
+            本身是 `{isFailed && onAskAi && (...)}` 條件渲染，不傳就不會
+            出現；block.gitInfo 永遠是 undefined（這裡從不呼叫
+            setBlockGitInfo），git 徽章同理自然不出現。 */}
+        <div className="aiterm-remote-terminal__blocks">
+          {blocks
+            .filter((b) => b.status !== "running" && b.renderedLines)
+            .map((b) => (
+              <TerminalBlockCard
+                key={b.id}
+                block={b}
+                onBookmark={(command) => addBookmark(command)}
+                onCopy={(command) => navigator.clipboard.writeText(command).catch(console.error)}
+              />
+            ))}
+        </div>
 
-      <div className="aiterm-remote-terminal__screen">
-        <div className="aiterm-remote-terminal__scroll" ref={hostRef} />
+        {/* 外層框住並裁切即時畫面；hostRef 本身內部永遠固定高度，
+            這樣它（以及 xterm 自己內部的尺寸監聽）永遠不會因為這一層
+            高度變化而看到容器尺寸改變——只有這一層的高度會變。跟
+            TerminalView.tsx 的 .aiterm-live-frame 完全同一套機制。 */}
+        <div
+          className="aiterm-remote-terminal__live-frame"
+          style={{
+            height: `${liveHeightPx}px`,
+            width: "calc(100% - 16px)",
+            margin: "6px 8px",
+            boxSizing: "border-box",
+            flexShrink: 0,
+            overflow: "clip",
+          }}
+        >
+          <div
+            className="aiterm-remote-terminal__scroll"
+            ref={hostRef}
+            style={{ height: "220px", width: "100%", boxSizing: "border-box" }}
+          />
+        </div>
       </div>
 
       {aiUnsupported && (
