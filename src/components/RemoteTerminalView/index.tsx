@@ -394,7 +394,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
           {/* 沿用 AiPanel/index.tsx 既有的漸層文字技巧（同一個
               var(--accent-gradient) CSS 變數、同一套 WebkitBackgroundClip
               /WebkitTextFillColor 組合），不重新設計一套新樣式。 */}
-          <span style={{ background: "var(--accent-gradient)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", fontWeight: 700, fontSize: "15px" }}>
+          <span style={{ background: "var(--accent-gradient)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", fontWeight: 700, fontSize: "20px" }}>
             ✨ AITerm
           </span>
           <span>
