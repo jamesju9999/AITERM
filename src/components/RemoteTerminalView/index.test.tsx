@@ -351,7 +351,10 @@ describe("RemoteTerminalView", () => {
     await waitFor(() => {
       expect(liveFrame().style.overflow).toBe("visible");
     });
-    expect(liveFrame().style.height).toBe("calc(100% - 12px)");
+    // 剛好塞下 granted 給的 24 列（測試環境量不到真正的字元格尺寸，會
+    // 落到 14*1.1 的 fallback：Math.round(24*14*1.1) = 370px）——不是無
+    // 條件撐滿容器的 100%，容器比內容需要的空間大時不該留下空白。
+    expect(liveFrame().style.height).toBe("370px");
     expect(container.querySelector(".aiterm-remote-terminal__blocks")).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/輸入指令|Type a command/i)).not.toBeInTheDocument();
 
@@ -365,6 +368,37 @@ describe("RemoteTerminalView", () => {
     });
     expect(container.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument();
+  });
+
+  it("全螢幕程式即時窗格的高度跟著主控端實際列數變化，不是無條件撐滿容器", async () => {
+    // 實機回報的問題：容器（觀看端視窗）可能比內容（主控端的實際列數）
+    // 需要的空間大，撐滿容器的話畫面下方會留一大片沒用到的空白。這裡
+    // 用兩種不同列數分別驗證算出來的高度確實跟著列數走、成比例，而不是
+    // 兩者都得到同一個「反正就是撐滿」的值——這樣才能真的證明高度是從
+    // 主控端給的列數算出來的，不是巧合對到某個固定數字。
+    const { container } = render(<RemoteTerminalView tabId="t1" connId="c16" sas="1616" isActive />);
+    await waitFor(() => expect(handlers["granted:c16"]).toBeDefined());
+    handlers["granted:c16"]({ mode: "control", cols: 80, rows: 10, hostOs: "linux" } as never);
+
+    const liveFrame = () => container.querySelector(".aiterm-remote-terminal__live-frame") as HTMLElement;
+
+    await waitFor(() => expect(capturedBufferChangeHandler).toBeTruthy());
+    mockBufferActive.type = "alternate";
+    act(() => {
+      capturedBufferChangeHandler!();
+    });
+
+    // Math.round(10*14*1.1) = 154px。
+    await waitFor(() => expect(liveFrame().style.height).toBe("154px"));
+
+    // 主控端的終端機變大（例如視窗拉高）——即時窗格的高度應該跟著長大，
+    // 不是維持原本那個值或直接跳去某個「撐滿」的固定值。
+    act(() => {
+      handlers["granted:c16"]({ mode: "", cols: 80, rows: 40 } as never);
+    });
+
+    // Math.round(40*14*1.1) = 616px。
+    await waitFor(() => expect(liveFrame().style.height).toBe("616px"));
   });
 
   describe("disconnect timing (StrictMode dev-mode trap)", () => {

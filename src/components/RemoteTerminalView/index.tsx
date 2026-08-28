@@ -74,6 +74,13 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
   // 授權」——只有非空字串才更新，讓 hostPlatform 維持第一次拿到的值。
   const [hostPlatform, setHostPlatform] = useState<"windows" | "other">("other");
 
+  // 主控端最後一次告知的實際列數——全螢幕程式（isAlternateBuffer）使用中
+  // 的即時窗格高度要靠它算，見下面 altBufferHeightPx 的說明。用 state
+  // 而不是直接讀 term.rows：單純的 resize（列數變了但 isAlternateBuffer
+  // 本身沒變、也沒有其他 state 跟著變）不會讓這個元件重新 render，
+  // term.rows 讀到的會是上一輪 render 當下的舊值，畫面因此不會跟著更新。
+  const [hostRows, setHostRows] = useState(MAX_LIVE_ROWS);
+
   const { blocks, isAlternateBuffer, submitCommand, appendOutput, clearAllBlocks } = useTerminalBlocks(
     connId,
     termState,
@@ -125,6 +132,14 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
     (termState as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } } } | null)
       ?._core?._renderService?.dimensions?.css?.cell?.height || 14 * 1.1;
   const liveHeightPx = Math.round(liveRows * cellHeightPx);
+  // 全螢幕程式使用中，即時窗格高度改成剛好塞下主控端目前的實際列數，不再
+  // 無條件撐滿容器——容器可能比內容需要的空間大（例如主控端終端機只有
+  // 24 列，但觀看端視窗開得比較高），撐滿的話畫面下方會留一大片沒用到
+  // 的空白。跟橫向（欄寬）不夠時讓外層捲動、而不是硬擠進去，是同一個
+  // 「照實際內容大小顯示，容器決定要不要捲動」的原則；容器真的比內容矮
+  // 時（列數比視窗能顯示的還多）一樣交給外層既有的 overflow-y:auto 捲動，
+  // 不需要另外處理。
+  const altBufferHeightPx = Math.round(hostRows * cellHeightPx);
 
   // WarpInput 送出的整行文字先過一次 AI 前綴檢查——跟本機分頁用同一套
   // parseAiPrefix.ts 規則，不重新猜字首。是 /ai 或 /agent 開頭就不送出、
@@ -169,6 +184,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
         const term = termRef.current;
         if (term && cols > 0 && rows > 0) {
           term.resize?.(cols, rows);
+          setHostRows(rows);
         }
       }),
     );
@@ -383,12 +399,16 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
         <div
           className="aiterm-remote-terminal__live-frame"
           style={{
-            // `100%` 單獨用會比容器高出這個外框自己的上下 margin（6px+6px
-            // = 12px）——跟 TerminalView.tsx 完全同一個既有教訓（見那邊
-            // 的診斷面板量測紀錄），減掉它讓 box + margin 剛好等於
-            // 100%，外層的 overflow-y:auto 容器才不會被迫多出這 12px
-            // 的捲動空間。
-            height: isAlternateBuffer ? "calc(100% - 12px)" : `${liveHeightPx}px`,
+            // 全螢幕程式使用中改用 altBufferHeightPx（主控端目前實際列數
+            // 換算出的像素高度），不是無條件撐滿容器的 100%——容器可能比
+            // 內容需要的空間大（例如主控端只有 24 列，但觀看端視窗開得
+            // 比較高），撐滿的話畫面下方會留一大片沒用到的空白（實機
+            // 回報過的問題）。跟本機終端機（TerminalView.tsx）不同：那邊
+            // 用 FitAddon 讓「終端機列數」永遠等於「容器裝得下的列數」，
+            // 兩者天生一致，撐滿容器不會有多餘空白；這裡的列數是主控端
+            // 說了算，觀看端的容器大小跟它無關，撐滿容器反而可能比內容
+            // 需要的還大。
+            height: isAlternateBuffer ? `${altBufferHeightPx}px` : `${liveHeightPx}px`,
             width: "calc(100% - 16px)",
             margin: "6px 8px",
             boxSizing: "border-box",
