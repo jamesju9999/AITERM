@@ -371,8 +371,18 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   return (
     <div className="aiterm-remote-terminal" data-tab-id={tabId} data-active={isActive}>
       <div className="aiterm-status" data-tauri-drag-region>
-        <span className="aiterm-status-left" data-tauri-drag-region>
-          AITerm · {t.remote_terminal_tab} {hostLabel} · {connectionStatusText(t, phase, elapsedMs)}
+        {/* whiteSpace: "normal" 只是把「這裡本來就允許換行、不要有人以後
+            幫 .aiterm-status-left 加 nowrap」這個意圖寫明白——瀏覽器對
+            這個 class 的預設值本來就是 normal，這行不是修正一個既有的
+            截斷問題。 */}
+        <span className="aiterm-status-left" data-tauri-drag-region style={{ whiteSpace: "normal" }}>
+          {/* 沿用 AiPanel/index.tsx 既有的漸層文字技巧（同一個
+              var(--accent-gradient) CSS 變數、同一套 WebkitBackgroundClip
+              /WebkitTextFillColor 組合），不重新設計一套新樣式。 */}
+          <span style={{ background: "var(--accent-gradient)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", fontWeight: 700 }}>
+            ✨ AITerm
+          </span>{" "}
+          · {t.remote_terminal_tab} {hostLabel} · {connectionStatusText(t, phase, elapsedMs)}
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <button

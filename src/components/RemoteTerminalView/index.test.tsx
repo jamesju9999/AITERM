@@ -550,6 +550,21 @@ describe("RemoteTerminalView", () => {
     await waitFor(() => expect(liveFrame().style.height).toBe("616px"));
   });
 
+  it("連線資訊文字的「AITerm」開頭套用漸層品牌樣式", async () => {
+    render(<RemoteTerminalView tabId="t1" connId="c21" sas="2121" isActive hostLabel="10.10.41.1:50281" />);
+
+    const brand = await screen.findByText("✨ AITerm");
+    expect(brand).toHaveStyle({
+      background: "var(--accent-gradient)",
+    });
+    // jsdom 的 getComputedStyle 會把 WebkitTextFillColor 的 "transparent"
+    // 正規化成 "rgba(0, 0, 0, 0)"，但 toHaveStyle() 拿去比對的「期望值」是
+    // 從未正規化的 div.style getter 讀出來的字面 "transparent"——兩邊
+    // 永遠對不上，跟這裡的實作對不對無關（純 jsdom/jest-dom 已知落差）。
+    // 改讀未經計算的 inline style，直接驗證這個屬性確實被設成 "transparent"。
+    expect(brand.style.webkitTextFillColor).toBe("transparent");
+  });
+
   describe("disconnect timing (StrictMode dev-mode trap)", () => {
     // 實機測試抓到的 bug：連線是在這個元件掛載**之前**建立的（見
     // `shareViewerConnect` 的說明），所以 StrictMode 在 dev 模式下模擬
