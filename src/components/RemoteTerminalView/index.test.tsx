@@ -58,6 +58,13 @@ const writeMock = vi.fn((_data: unknown, callback?: () => void) => {
   callback?.();
 });
 const clearMock = vi.fn();
+// 可變動的假 buffer 狀態，讓測試能模擬「全螢幕程式（vim/htop 等）進入/
+// 離開 alternate buffer」這個切換，並手動觸發 useTerminalBlocks 內部訂閱
+// 的 onBufferChange callback——`active` 物件跨測試共用同一個參照，
+// beforeEach 只重置它的欄位，不重新賦值，這樣即使元件重新掛載出新的
+// Terminal 實例，讀到的都是同一份、當下正確的狀態。
+const mockBufferActive: { type: "normal" | "alternate" } = { type: "normal" };
+let capturedBufferChangeHandler: (() => void) | null = null;
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     write = writeMock;
@@ -76,7 +83,13 @@ vi.mock("@xterm/xterm", () => ({
         return { dispose: vi.fn() };
       }),
     };
-    buffer = { onBufferChange: vi.fn(() => ({ dispose: vi.fn() })), active: { type: "normal" } };
+    buffer = {
+      onBufferChange: vi.fn((cb: () => void) => {
+        capturedBufferChangeHandler = cb;
+        return { dispose: vi.fn() };
+      }),
+      active: mockBufferActive,
+    };
   },
 }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit = vi.fn(); } }));
@@ -105,6 +118,8 @@ import { RemoteTerminalView } from "./index";
 beforeEach(() => {
   for (const k of Object.keys(handlers)) delete handlers[k];
   capturedOscHandler = null;
+  capturedBufferChangeHandler = null;
+  mockBufferActive.type = "normal";
   appendOutputSpy = null;
   writeMock.mockClear();
   clearMock.mockReset();
@@ -308,6 +323,48 @@ describe("RemoteTerminalView", () => {
     } finally {
       scrollToSpy.mockRestore();
     }
+  });
+
+  it("全螢幕程式（vim/htop 等）進入 alternate buffer 時，卡片列表與 WarpInput 隱藏、即時窗格撐滿；離開後恢復", async () => {
+    // 實機審查抓到的迴歸：拿掉自動縮放字體（Task 1）+ 即時窗格高度夾在
+    // MAX_LIVE_ROWS 並用 overflow:clip 硬裁（Task 2）疊加起來，會讓遠端
+    // 觀看端看 vim/htop/tmux 這類全螢幕程式時，畫面被裁到只剩最後 16 行、
+    // 其餘完全看不到也滑不到——跟本機終端機一樣，全螢幕程式使用中應該讓
+    // 即時窗格撐滿、不裁切、卡片列表與輸入框讓開空間。
+    const { container } = render(<RemoteTerminalView tabId="t1" connId="c14" sas="1414" isActive />);
+    await waitFor(() => expect(handlers["granted:c14"]).toBeDefined());
+    handlers["granted:c14"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+
+    const liveFrame = () => container.querySelector(".aiterm-remote-terminal__live-frame") as HTMLElement;
+
+    // 一般模式：卡片容器與輸入框都在，即時窗格會裁切。
+    await waitFor(() => expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument());
+    expect(container.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
+    expect(liveFrame().style.overflow).toBe("clip");
+
+    await waitFor(() => expect(capturedBufferChangeHandler).toBeTruthy());
+    mockBufferActive.type = "alternate";
+    act(() => {
+      capturedBufferChangeHandler!();
+    });
+
+    await waitFor(() => {
+      expect(liveFrame().style.overflow).toBe("visible");
+    });
+    expect(liveFrame().style.height).toBe("calc(100% - 12px)");
+    expect(container.querySelector(".aiterm-remote-terminal__blocks")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/輸入指令|Type a command/i)).not.toBeInTheDocument();
+
+    // 離開全螢幕程式後應該完全恢復原本行為。
+    mockBufferActive.type = "normal";
+    act(() => {
+      capturedBufferChangeHandler!();
+    });
+    await waitFor(() => {
+      expect(liveFrame().style.overflow).toBe("clip");
+    });
+    expect(container.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument();
   });
 
   describe("disconnect timing (StrictMode dev-mode trap)", () => {

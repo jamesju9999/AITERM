@@ -74,7 +74,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
   // 授權」——只有非空字串才更新，讓 hostPlatform 維持第一次拿到的值。
   const [hostPlatform, setHostPlatform] = useState<"windows" | "other">("other");
 
-  const { blocks, submitCommand, appendOutput, clearAllBlocks } = useTerminalBlocks(
+  const { blocks, isAlternateBuffer, submitCommand, appendOutput, clearAllBlocks } = useTerminalBlocks(
     connId,
     termState,
     undefined,
@@ -348,43 +348,66 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
           blockListRef 同一個結構）——不再是各自獨立、各自有高度上限的
           兩塊，卡片可以無限往下累積，捲動邊界只有這一層。 */}
       <div className="aiterm-remote-terminal__scroll-area" ref={scrollAreaRef}>
-        {/* 分段卡片：跟本機分頁同一套過濾條件（只顯示已結束且已完成 ANSI
-            解析的），複用 TerminalBlockCard——不傳 onAskAi，Ask AI 按鈕
-            本身是 `{isFailed && onAskAi && (...)}` 條件渲染，不傳就不會
-            出現；block.gitInfo 永遠是 undefined（這裡從不呼叫
-            setBlockGitInfo），git 徽章同理自然不出現。 */}
-        <div className="aiterm-remote-terminal__blocks">
-          {blocks
-            .filter((b) => b.status !== "running" && b.renderedLines)
-            .map((b) => (
-              <TerminalBlockCard
-                key={b.id}
-                block={b}
-                onBookmark={(command) => addBookmark(command)}
-                onCopy={(command) => navigator.clipboard.writeText(command).catch(console.error)}
-              />
-            ))}
-        </div>
+        {/* 卡片列表在全螢幕程式（vim/htop/tmux 等）使用中隱藏——跟
+            TerminalView.tsx 同一個理由：那類程式必須完整佔滿即時窗格，
+            不該被已完成指令的舊卡片跟它搶空間。 */}
+        {!isAlternateBuffer && (
+          <div className="aiterm-remote-terminal__blocks">
+            {/* 分段卡片：跟本機分頁同一套過濾條件（只顯示已結束且已完成
+                ANSI 解析的），複用 TerminalBlockCard——不傳 onAskAi，
+                Ask AI 按鈕本身是 `{isFailed && onAskAi && (...)}` 條件
+                渲染，不傳就不會出現；block.gitInfo 永遠是 undefined
+                （這裡從不呼叫 setBlockGitInfo），git 徽章同理自然不
+                出現。 */}
+            {blocks
+              .filter((b) => b.status !== "running" && b.renderedLines)
+              .map((b) => (
+                <TerminalBlockCard
+                  key={b.id}
+                  block={b}
+                  onBookmark={(command) => addBookmark(command)}
+                  onCopy={(command) => navigator.clipboard.writeText(command).catch(console.error)}
+                />
+              ))}
+          </div>
+        )}
 
         {/* 外層框住並裁切即時畫面；hostRef 本身內部永遠固定高度，
             這樣它（以及 xterm 自己內部的尺寸監聽）永遠不會因為這一層
             高度變化而看到容器尺寸改變——只有這一層的高度會變。跟
-            TerminalView.tsx 的 .aiterm-live-frame 完全同一套機制。 */}
+            TerminalView.tsx 的 .aiterm-live-frame 完全同一套機制，包含
+            全螢幕程式（vim/htop 等）使用中撐滿、不裁切這件事：拿掉自動
+            縮放字體後，若仍然把高度夾在 MAX_LIVE_ROWS 並用 overflow:clip
+            硬裁，全螢幕程式會被裁到只剩最後 16 行、其餘完全看不到也滑
+            不到——這是實機審查抓到的迴歸，不是刻意的設計。 */}
         <div
           className="aiterm-remote-terminal__live-frame"
           style={{
-            height: `${liveHeightPx}px`,
+            // `100%` 單獨用會比容器高出這個外框自己的上下 margin（6px+6px
+            // = 12px）——跟 TerminalView.tsx 完全同一個既有教訓（見那邊
+            // 的診斷面板量測紀錄），減掉它讓 box + margin 剛好等於
+            // 100%，外層的 overflow-y:auto 容器才不會被迫多出這 12px
+            // 的捲動空間。
+            height: isAlternateBuffer ? "calc(100% - 12px)" : `${liveHeightPx}px`,
             width: "calc(100% - 16px)",
             margin: "6px 8px",
             boxSizing: "border-box",
             flexShrink: 0,
-            overflow: "clip",
+            // 全螢幕程式使用中改成 visible：`clip` 會把內容硬裁在固定
+            // 220px 高的 hostRef 裡，不裁的話反而要讓 hostRef 自己撐滿
+            // 100%（見下面的 hostRef style），這裡的 overflow 只是配合
+            // 這個切換，不是又要開放捲動。
+            overflow: isAlternateBuffer ? "visible" : "clip",
           }}
         >
           <div
             className="aiterm-remote-terminal__scroll"
             ref={hostRef}
-            style={{ height: "220px", width: "100%", boxSizing: "border-box" }}
+            style={{
+              height: isAlternateBuffer ? "100%" : "220px",
+              width: "100%",
+              boxSizing: "border-box",
+            }}
           />
         </div>
       </div>
@@ -393,10 +416,15 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive }: Props) {
         <div className="aiterm-remote-terminal__ai-unsupported">{t.remote_terminal_ai_unsupported}</div>
       )}
 
-      <WarpInput
-        onSubmit={handleWarpSubmit}
-        disabled={!(phase.kind === "live" && phase.mode === "control")}
-      />
+      {/* 全螢幕程式使用中隱藏——跟本機終端機同一個理由：這類程式的輸入
+          直接打進上面的即時畫面，不透過這個獨立的指令輸入框，留著只會
+          白白佔用本該讓給即時窗格的空間。 */}
+      {!isAlternateBuffer && (
+        <WarpInput
+          onSubmit={handleWarpSubmit}
+          disabled={!(phase.kind === "live" && phase.mode === "control")}
+        />
+      )}
     </div>
   );
 }
