@@ -1168,6 +1168,46 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           lastPtyOutputAtRef.current = Date.now();
           const text = decoder.decode(bytes, { stream: true });
           hasReceivedLiveChunk = true;
+
+          // 實機測試抓到的 bug：appendOutput(text) 原本在 term.write(text)
+          // 呼叫「之後」就同步執行，隱含假設這個 chunk 已經被 xterm 解析
+          // 完畢——但 @xterm/xterm 的 WriteBuffer.write()（見
+          // node_modules/@xterm/xterm/src/common/input/WriteBuffer.ts）對
+          // 不是緊跟著「使用者剛輸入」的資料，一律用 setTimeout 排到下一輪
+          // 事件迴圈才真正解析，不是呼叫當下就同步跑完。單一小 chunk 通常
+          // 沒事；但像 ifconfig 這種一次湧入一大串 chunk 的情況，好幾個
+          // chunk 會搶在 xterm 排定的那次非同步解析之前，就把
+          // appendOutput 全部呼叫完——這時候 OSC 133 C 的 handler（掛在
+          // useTerminalBlocks.ts 的 recoverUntrackedCommand/
+          // beginTrackedBlock 上，用來讓遠端指令變成卡片）根本還沒被觸發、
+          // 區塊還不存在，appendOutput 找不到任何 running 中的區塊可以
+          // 附加內容，這些輸出就直接被略過、永遠救不回來；等 xterm 終於
+          // 追上、C 跟緊接在後的 D 幾乎同時處理完畢，畫面上就會看到一張
+          // 執行時間近乎 0ms、內容整個消失、只剩指令文字的空卡片。
+          // 改成把 appendOutput 以及依賴 blocksRef 的 liveRows 判斷都搬進
+          // term.write() 的完成 callback，保證同一個 chunk 的 OSC 標記
+          // 一定已經先被處理過。
+          const onWriteComplete = () => {
+            appendOutput(text);
+            // Snap the live pane straight to full height the moment a tracked
+            // command is actually running and producing output, rather than
+            // trying to precisely track how many rows are "needed" via cursor
+            // position — that broke for TUI-style content (interactive menus,
+            // prompts) that reposition the cursor non-sequentially to redraw
+            // specific lines, leaving liveRows stuck too small with no way to
+            // scroll into view (mouse-wheel scroll has no connection to
+            // liveRows at all). Gated on a block actually being "running" —
+            // not just "any PTY data arrived" — so the shell's own idle-prompt
+            // output (on connect, or after a command finishes) doesn't also
+            // trigger this: that data isn't part of any tracked block, so
+            // there'd be no `visibleBlockCount` change afterward to shrink it
+            // back down again, leaving the pane stuck at full height forever.
+            const latestBlock = blocksRef.current[blocksRef.current.length - 1];
+            if (latestBlock?.status === "running") {
+              setLiveRows(MAX_LIVE_ROWS);
+            }
+          };
+
           if (isWindows) {
             // Force a repaint once xterm has actually finished processing this
             // chunk (the write() completion callback, not just the write() call
@@ -1185,30 +1225,15 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             // 組字進行中一律走普通寫入——強制 refresh 會打斷 IME 合成，
             // 讓組字中的字串跑到畫面別處。compositionend 會補一次重繪。
             if (isComposingRef.current) {
-              term.write(text);
+              term.write(text, onWriteComplete);
             } else {
-              term.write(text, () => term.refresh(0, term.rows - 1));
+              term.write(text, () => {
+                term.refresh(0, term.rows - 1);
+                onWriteComplete();
+              });
             }
           } else {
-            term.write(text);
-          }
-          appendOutput(text);
-          // Snap the live pane straight to full height the moment a tracked
-          // command is actually running and producing output, rather than
-          // trying to precisely track how many rows are "needed" via cursor
-          // position — that broke for TUI-style content (interactive menus,
-          // prompts) that reposition the cursor non-sequentially to redraw
-          // specific lines, leaving liveRows stuck too small with no way to
-          // scroll into view (mouse-wheel scroll has no connection to
-          // liveRows at all). Gated on a block actually being "running" —
-          // not just "any PTY data arrived" — so the shell's own idle-prompt
-          // output (on connect, or after a command finishes) doesn't also
-          // trigger this: that data isn't part of any tracked block, so
-          // there'd be no `visibleBlockCount` change afterward to shrink it
-          // back down again, leaving the pane stuck at full height forever.
-          const latestBlock = blocksRef.current[blocksRef.current.length - 1];
-          if (latestBlock?.status === "running") {
-            setLiveRows(MAX_LIVE_ROWS);
+            term.write(text, onWriteComplete);
           }
 
           // Detect password prompts during agent mode
