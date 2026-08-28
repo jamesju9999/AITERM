@@ -74,6 +74,40 @@ async fn send_control(ws: &mut WebSocket, msg: &ServerMessage) -> bool {
     ws.send(Message::Text(json.into())).await.is_ok()
 }
 
+/// 尺寸若跟 `announced_size` 不同就更新它、送出 `Resize`，回傳是否成功
+/// 送出（`ws` 斷了就回傳 `false`，呼叫端應該 `break` 迴圈）；沒有變化時
+/// 什麼都不做，回傳 `true`。
+///
+/// **呼叫時機比「多久檢查一次」更重要**：這裡刻意讓兩個呼叫端都能用同一份
+/// 邏輯——一個掛在 `share_watch` 的定期輪詢上（涵蓋「resize 當下畫面沒有
+/// 任何輸出」這種輪詢才抓得到的情況，例如使用者在閒置的提示字元上調整
+/// 視窗大小），另一個掛在**每一批 PTY 輸出送給觀看端之前**（見主迴圈裡
+/// `rx.recv()` 那個分支）。後者才是修掉實機回報的文字重疊/錯位 bug 的
+/// 關鍵：全螢幕、用絕對游標定位重繪畫面的程式（例如 Claude Code CLI）
+/// 收到 SIGWINCH 後幾乎立刻就會用新尺寸重繪，那批輸出透過**即時、連續**
+/// 在跑的 PTY 廣播幾乎必然搶在只有 200ms 一次的輪詢之前送到觀看端——如果
+/// `Resize` 訊息只靠輪詢送，觀看端的 xterm 會用「舊」尺寸解讀一批「新」
+/// 尺寸畫出來的內容，絕對座標對不上，疊到既有內容上就是實機看到的重疊。
+/// 在轉發每一批輸出「之前」都重新檢查一次尺寸，才能保證 `Resize` 一定先
+/// 於任何反映新尺寸的內容送達。
+async fn send_resize_if_changed(
+    ws: &mut WebSocket,
+    pty: &PtyManager,
+    tab_id: &str,
+    announced_size: &mut (u16, u16),
+) -> bool {
+    // `unwrap_or(*announced_size)`，不是 `unwrap_or((80, 24))`：session 若
+    // 剛好在這個瞬間消失，維持原值不觸發誤報的 Resize，讓主迴圈其他分支
+    // （`tab_for_code`／`rx` 關閉等）接手判斷連線是否該結束，這裡不重複
+    // 處理。
+    let current = pty.size(tab_id).unwrap_or(*announced_size);
+    if current == *announced_size {
+        return true;
+    }
+    *announced_size = current;
+    send_control(ws, &ServerMessage::Resize { cols: current.0, rows: current.1 }).await
+}
+
 async fn end_with(ws: &mut WebSocket, reason: EndReason) {
     send_control(ws, &ServerMessage::Ended { reason }).await;
     // axum 的 `WebSocket` 只有 `recv`/`send`——沒有 `close()`。要關閉就送一個
@@ -282,6 +316,12 @@ async fn handle_share(
         tokio::select! {
             out = rx.recv() => match out {
                 Ok(chunk) => {
+                    // 送這批輸出之前一定要先確認尺寸沒有偷偷變過——見
+                    // `send_resize_if_changed` 的文件註解，這是修掉實機
+                    // 回報之全螢幕程式文字重疊/錯位 bug 的關鍵順序。
+                    if !send_resize_if_changed(&mut ws, &state.pty, &tab_id, &mut announced_size).await {
+                        break;
+                    }
                     if ws.send(Message::Binary(chunk.into())).await.is_err() {
                         break;
                     }
@@ -357,23 +397,14 @@ async fn handle_share(
                     }
                 }
 
-                // 同一個輪詢順便偵測尺寸變化——PTY 可能在這期間被主控端
-                // resize 過（拖曳視窗、切換全螢幕、字級改變造成的 reflow
-                // 等）。`unwrap_or(announced_size)` 而不是 `unwrap_or((80,
-                // 24))`：session 若剛好在這一輪 tick 消失，維持原值不觸發
-                // 誤報的 Resize，讓上面的 `tab_for_code` 檢查在下一輪迴圈
-                // 接手判斷連線是否該結束，這裡不重複處理。
-                let current_size = state.pty.size(&tab_id).unwrap_or(announced_size);
-                if current_size != announced_size {
-                    announced_size = current_size;
-                    if !send_control(
-                        &mut ws,
-                        &ServerMessage::Resize { cols: current_size.0, rows: current_size.1 },
-                    )
-                    .await
-                    {
-                        break;
-                    }
+                // 同一個輪詢順便偵測尺寸變化——這是給「resize 當下畫面
+                // 沒有任何輸出」這種輪詢才抓得到的情況兜底（例如使用者在
+                // 閒置的提示字元上調整視窗大小）。真正常見、且順序敏感的
+                // 情況（resize 後全螢幕程式立刻重繪）靠的是上面 `rx.recv()`
+                // 分支裡的同一份檢查，見 `send_resize_if_changed` 的文件
+                // 註解。
+                if !send_resize_if_changed(&mut ws, &state.pty, &tab_id, &mut announced_size).await {
+                    break;
                 }
             }
         }

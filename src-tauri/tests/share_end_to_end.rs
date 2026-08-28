@@ -393,6 +393,91 @@ async fn resizing_the_host_pty_after_a_viewer_connects_tells_the_viewer_the_new_
 }
 
 #[tokio::test]
+async fn a_resize_notification_arrives_before_any_output_drawn_at_the_new_size() {
+    // 光是「有辦法收到 Resize」還不夠——這才是實機回報之全螢幕程式（例如
+    // Claude Code CLI）文字重疊/錯位的真正成因：resize 只靠 200ms 一次的
+    // 輪詢送出的話，全螢幕程式收到 SIGWINCH 後幾乎立刻重繪的那批輸出，
+    // 會透過即時、連續在跑的 PTY 廣播搶先送到觀看端——觀看端的 xterm 這時
+    // 還在用「舊」尺寸解讀一批「新」尺寸畫出來的內容，用絕對游標定位寫進
+    // 去的文字因此對不上正確的列，疊到既有內容上面。這裡釘住的是送達的
+    // 「順序」本身，不只是「最終有沒有收到」——只驗證後者的話，前一個
+    // 測試（resizing_the_host_pty_after_a_viewer_connects...）在只有
+    // 輪詢、順序完全沒保證的舊版程式碼下也一樣會通過，沒有真的測到這個
+    // bug。
+    let pty = Arc::new(PtyManager::new());
+    let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
+    let registry = Arc::new(ShareRegistry::new());
+    let code = registry.start_share(tab_id.clone());
+    let port = start_test_server(Arc::clone(&pty), Arc::clone(&registry)).await;
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/share"))
+        .await
+        .expect("connect");
+    join_and_do_sas_handshake(&mut ws, &code, "Alice").await;
+
+    let request_id = registry.pending(&tab_id)[0].request_id.clone();
+    registry.approve(&request_id, AccessMode::Control).expect("approve");
+    assert_eq!(
+        next_control(&mut ws).await,
+        ServerMessage::Granted {
+            mode: WireAccessMode::Control,
+            cols: 80,
+            rows: 24,
+            host_os: std::env::consts::OS.to_string(),
+        }
+    );
+
+    // 主控端 resize，緊接著幾乎立刻就有輸出——模擬全螢幕程式收到 SIGWINCH
+    // 後立刻重繪。直接寫進 PTY（不透過觀看端按鍵）比較貼近「主控端自己的
+    // 畫面在動，不是觀看端造成的」這個真實情境。
+    pty.resize(&tab_id, PtySize { rows: 50, cols: 120, pixel_width: 0, pixel_height: 0 })
+        .expect("resize pty");
+    #[cfg(windows)]
+    pty.write(&tab_id, b"echo AFTERRESIZE\r\n").expect("write");
+    #[cfg(not(windows))]
+    pty.write(&tab_id, b"printf 'AFTERRESIZE\\n'\n").expect("write");
+
+    // 依序讀接下來的每一則訊息（不分文字/二進位），記下 Resize 跟
+    // AFTERRESIZE 字樣個別第一次出現的順位，斷言前者嚴格早於後者。
+    let mut saw_resize_at: Option<usize> = None;
+    let mut saw_output_at: Option<usize> = None;
+    for i in 0..200 {
+        if saw_resize_at.is_some() && saw_output_at.is_some() {
+            break;
+        }
+        match tokio::time::timeout(Duration::from_millis(200), ws.next()).await {
+            Ok(Some(Ok(Message::Text(t)))) => {
+                if saw_resize_at.is_none() {
+                    if let Ok(ServerMessage::Resize { cols: 120, rows: 50 }) =
+                        serde_json::from_str::<ServerMessage>(&t)
+                    {
+                        saw_resize_at = Some(i);
+                    }
+                }
+            }
+            Ok(Some(Ok(Message::Binary(b)))) => {
+                if saw_output_at.is_none() && b.windows(11).any(|w| w == b"AFTERRESIZE") {
+                    saw_output_at = Some(i);
+                }
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(e))) => panic!("ws error: {e}"),
+            Ok(None) => break,
+            Err(_) => continue,
+        }
+    }
+
+    let resize_at = saw_resize_at.expect("never received the Resize notification");
+    let output_at = saw_output_at.expect("never received the post-resize output");
+    assert!(
+        resize_at < output_at,
+        "Resize (received at position {resize_at}) must arrive strictly before the output drawn at \
+         the new size (received at position {output_at}) — otherwise the viewer's xterm decodes \
+         new-size content using the stale old size"
+    );
+}
+
+#[tokio::test]
 async fn a_viewer_that_gives_up_waiting_stops_pestering_the_host() {
     // 觀看端在等待同意期間關掉連線（等不下去了）。那筆待審請求必須跟著消失
     // ——否則主控端的同意視窗上會掛著一個永遠不會有下文的「OOO 想連進來」，
