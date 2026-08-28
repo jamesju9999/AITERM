@@ -139,12 +139,12 @@ describe("RemoteTerminalView", () => {
     //
     // SAS 走 prop 而不是事件：它在連線建立當下就已知，而這個元件要等分頁
     // 開好才掛載——用事件送必然遺失。實機測試就是這樣抓到的。
-    render(<RemoteTerminalView tabId="t1" connId="c1" sas="4917" isActive />);
+    render(<RemoteTerminalView tabId="t1" connId="c1" sas="4917" isActive onConnectClick={vi.fn()} />);
     expect(await screen.findByText("4917")).toBeInTheDocument();
   });
 
   it("does not send keystrokes while read-only", async () => {
-    render(<RemoteTerminalView tabId="t1" connId="c2" sas="1111" isActive />);
+    render(<RemoteTerminalView tabId="t1" connId="c2" sas="1111" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c2"]).toBeDefined());
 
     handlers["granted:c2"]({ mode: "read_only", cols: 80, rows: 24 } as never);
@@ -160,7 +160,7 @@ describe("RemoteTerminalView", () => {
 
   it("clears the screen before a resync replay", async () => {
     // 漏掉的位元組可能截斷 ANSI 逃脫序列——帶著壞掉的畫面繼續是不會自己好的。
-    render(<RemoteTerminalView tabId="t1" connId="c3" sas="2222" isActive />);
+    render(<RemoteTerminalView tabId="t1" connId="c3" sas="2222" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["resync:c3"]).toBeDefined());
 
     handlers["resync:c3"](undefined as never);
@@ -169,7 +169,7 @@ describe("RemoteTerminalView", () => {
   });
 
   it("keeps the last screen and explains why the connection ended", async () => {
-    render(<RemoteTerminalView tabId="t1" connId="c4" sas="3333" isActive />);
+    render(<RemoteTerminalView tabId="t1" connId="c4" sas="3333" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["ended:c4"]).toBeDefined());
 
     handlers["ended:c4"]("host_stopped_sharing" as never);
@@ -184,7 +184,7 @@ describe("RemoteTerminalView", () => {
   it("shows a human sentence for an unrecognised end reason", async () => {
     // spec 要求「不能有『未知錯誤』」。真的收到沒見過的 reason 時（例如
     // 對方是更新版），也要給一句人話而不是原始字串。
-    render(<RemoteTerminalView tabId="t1" connId="c5" sas="4444" isActive />);
+    render(<RemoteTerminalView tabId="t1" connId="c5" sas="4444" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["ended:c5"]).toBeDefined());
 
     handlers["ended:c5"]("something_from_the_future" as never);
@@ -193,7 +193,7 @@ describe("RemoteTerminalView", () => {
   });
 
   it("disables WarpInput while read-only", async () => {
-    render(<RemoteTerminalView tabId="t1" connId="c8" sas="7777" isActive />);
+    render(<RemoteTerminalView tabId="t1" connId="c8" sas="7777" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c8"]).toBeDefined());
 
     handlers["granted:c8"]({ mode: "read_only", cols: 80, rows: 24, hostOs: "linux" } as never);
@@ -205,7 +205,7 @@ describe("RemoteTerminalView", () => {
   });
 
   it("工具列顯示位址與連線狀態文字，隨 phase 變化", async () => {
-    render(<RemoteTerminalView tabId="t1" connId="c17" sas="1717" isActive hostLabel="10.10.41.1:50281" />);
+    render(<RemoteTerminalView tabId="t1" connId="c17" sas="1717" isActive hostLabel="10.10.41.1:50281" onConnectClick={vi.fn()} />);
 
     // 等待核准中：顯示位址與等待文字，不顯示任何連線時間或模式字樣。
     // 用 getAllByText：工具列的連線狀態文字跟既有的等待橫幅剛好都含有
@@ -252,7 +252,7 @@ describe("RemoteTerminalView", () => {
     // 所以進假時鐘的時機延後到這裡：只在真的要控制「時間流逝」的段落
     // （tick 累加）才切換，切換後全程改用 act() 同步斷言，不再用
     // await waitFor()。
-    render(<RemoteTerminalView tabId="t1" connId="c18" sas="1818" isActive hostLabel="10.10.41.1:50281" />);
+    render(<RemoteTerminalView tabId="t1" connId="c18" sas="1818" isActive hostLabel="10.10.41.1:50281" onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c18"]).toBeDefined());
     await waitFor(() => expect(handlers["control:c18"]).toBeDefined());
 
@@ -303,7 +303,7 @@ describe("RemoteTerminalView", () => {
       // 在畫面上只出現一次，才能用文字直接定位到要點的項目。
       addBookmark("echo seeded", "Seeded Bookmark");
 
-      render(<RemoteTerminalView tabId="t1" connId="c19" sas="1919" isActive hostLabel="10.10.41.1:50281" />);
+      render(<RemoteTerminalView tabId="t1" connId="c19" sas="1919" isActive hostLabel="10.10.41.1:50281" onConnectClick={vi.fn()} />);
 
       const bookmarkBtn = await screen.findByTitle(/儲存至書籤|Save to Bookmarks/i);
       await userEvent.click(bookmarkBtn);
@@ -334,7 +334,7 @@ describe("RemoteTerminalView", () => {
   });
 
   it("點 Ask AI 按鈕只顯示既有的不支援提示，不會真的呼叫任何 AI", async () => {
-    render(<RemoteTerminalView tabId="t1" connId="c20" sas="2020" isActive hostLabel="10.10.41.1:50281" />);
+    render(<RemoteTerminalView tabId="t1" connId="c20" sas="2020" isActive hostLabel="10.10.41.1:50281" onConnectClick={vi.fn()} />);
 
     const askAiBtn = await screen.findByTitle(/開啟 AI 助手|Open AI Helper/i);
     await userEvent.click(askAiBtn);
@@ -346,7 +346,7 @@ describe("RemoteTerminalView", () => {
   });
 
   it("shows a hint and does not send /ai or /agent commands", async () => {
-    render(<RemoteTerminalView tabId="t1" connId="c9" sas="8888" isActive />);
+    render(<RemoteTerminalView tabId="t1" connId="c9" sas="8888" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c9"]).toBeDefined());
     handlers["granted:c9"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
 
@@ -360,7 +360,7 @@ describe("RemoteTerminalView", () => {
   });
 
   it("clears the block list on resync, not just the xterm buffer", async () => {
-    render(<RemoteTerminalView tabId="t1" connId="c10" sas="9999" isActive />);
+    render(<RemoteTerminalView tabId="t1" connId="c10" sas="9999" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c10"]).toBeDefined());
     handlers["granted:c10"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
 
@@ -394,7 +394,7 @@ describe("RemoteTerminalView", () => {
     // 都不見）。這個測試釘住兩件事：appendOutput 真的有被呼叫；傳進去的
     // 是正確解碼的 UTF-8 字串，不是 atob() 那種一 byte 一字元的 Latin1
     // 亂碼——這個 repo 的實際檔名經常含中文，錯誤解碼會直接看得出來。
-    render(<RemoteTerminalView tabId="t1" connId="c11" sas="1234" isActive />);
+    render(<RemoteTerminalView tabId="t1" connId="c11" sas="1234" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c11"]).toBeDefined());
     handlers["granted:c11"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
 
@@ -415,7 +415,7 @@ describe("RemoteTerminalView", () => {
   });
 
   it("即時窗格在指令執行中撐到最大高度、指令完成變成卡片後收回最小高度", async () => {
-    const { container } = render(<RemoteTerminalView tabId="t1" connId="c12" sas="1212" isActive />);
+    const { container } = render(<RemoteTerminalView tabId="t1" connId="c12" sas="1212" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c12"]).toBeDefined());
     handlers["granted:c12"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
 
@@ -450,7 +450,7 @@ describe("RemoteTerminalView", () => {
   it("新卡片出現時自動捲動到最底部", async () => {
     const scrollToSpy = vi.spyOn(HTMLElement.prototype, "scrollTo").mockImplementation(() => {});
     try {
-      render(<RemoteTerminalView tabId="t1" connId="c13" sas="1313" isActive />);
+      render(<RemoteTerminalView tabId="t1" connId="c13" sas="1313" isActive onConnectClick={vi.fn()} />);
       await waitFor(() => expect(handlers["granted:c13"]).toBeDefined());
       handlers["granted:c13"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
 
@@ -480,7 +480,7 @@ describe("RemoteTerminalView", () => {
     // 觀看端看 vim/htop/tmux 這類全螢幕程式時，畫面被裁到只剩最後 16 行、
     // 其餘完全看不到也滑不到——跟本機終端機一樣，全螢幕程式使用中應該讓
     // 即時窗格撐滿、不裁切、卡片列表與輸入框讓開空間。
-    const { container } = render(<RemoteTerminalView tabId="t1" connId="c14" sas="1414" isActive />);
+    const { container } = render(<RemoteTerminalView tabId="t1" connId="c14" sas="1414" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c14"]).toBeDefined());
     handlers["granted:c14"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
 
@@ -525,7 +525,7 @@ describe("RemoteTerminalView", () => {
     // 用兩種不同列數分別驗證算出來的高度確實跟著列數走、成比例，而不是
     // 兩者都得到同一個「反正就是撐滿」的值——這樣才能真的證明高度是從
     // 主控端給的列數算出來的，不是巧合對到某個固定數字。
-    const { container } = render(<RemoteTerminalView tabId="t1" connId="c16" sas="1616" isActive />);
+    const { container } = render(<RemoteTerminalView tabId="t1" connId="c16" sas="1616" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c16"]).toBeDefined());
     handlers["granted:c16"]({ mode: "control", cols: 80, rows: 10, hostOs: "linux" } as never);
 
@@ -551,7 +551,7 @@ describe("RemoteTerminalView", () => {
   });
 
   it("連線資訊文字的「AITerm」開頭套用漸層品牌樣式", async () => {
-    render(<RemoteTerminalView tabId="t1" connId="c21" sas="2121" isActive hostLabel="10.10.41.1:50281" />);
+    render(<RemoteTerminalView tabId="t1" connId="c21" sas="2121" isActive hostLabel="10.10.41.1:50281" onConnectClick={vi.fn()} />);
 
     const brand = await screen.findByText("✨ AITerm");
     expect(brand).toHaveStyle({
@@ -563,6 +563,25 @@ describe("RemoteTerminalView", () => {
     // 永遠對不上，跟這裡的實作對不對無關（純 jsdom/jest-dom 已知落差）。
     // 改讀未經計算的 inline style，直接驗證這個屬性確實被設成 "transparent"。
     expect(brand.style.webkitTextFillColor).toBe("transparent");
+  });
+
+  it("點「連線」按鈕呼叫 onConnectClick", async () => {
+    const onConnectClick = vi.fn();
+    render(
+      <RemoteTerminalView
+        tabId="t1"
+        connId="c22"
+        sas="2222"
+        isActive
+        hostLabel="10.10.41.1:50281"
+        onConnectClick={onConnectClick}
+      />,
+    );
+
+    const connectBtn = await screen.findByTitle(/^連線$|^Connect$/);
+    await userEvent.click(connectBtn);
+
+    expect(onConnectClick).toHaveBeenCalledTimes(1);
   });
 
   describe("disconnect timing (StrictMode dev-mode trap)", () => {
@@ -579,7 +598,7 @@ describe("RemoteTerminalView", () => {
       vi.useFakeTimers();
       render(
         <React.StrictMode>
-          <RemoteTerminalView tabId="t1" connId="c6" sas="5555" isActive />
+          <RemoteTerminalView tabId="t1" connId="c6" sas="5555" isActive onConnectClick={vi.fn()} />
         </React.StrictMode>,
       );
 
@@ -593,7 +612,7 @@ describe("RemoteTerminalView", () => {
     it("disconnects for real when the component actually unmounts with no remount", () => {
       vi.useFakeTimers();
       const { unmount } = render(
-        <RemoteTerminalView tabId="t1" connId="c7" sas="6666" isActive />,
+        <RemoteTerminalView tabId="t1" connId="c7" sas="6666" isActive onConnectClick={vi.fn()} />,
       );
 
       unmount();

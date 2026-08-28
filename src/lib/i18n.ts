@@ -808,6 +808,7 @@ const zhTW = {
     remote_terminal_toolbar_connected_prefix: "已連線",
     remote_terminal_toolbar_control_mode: "控制模式",
     remote_terminal_toolbar_ended: "連線已結束",
+    remote_terminal_toolbar_connect_button: "連線",
     // 遠端終端機共享——主控端
     share_button: "分享",
     share_button_tooltip: "把這個終端機分頁分享給同事",
@@ -2165,6 +2166,7 @@ const enRaw = {
     remote_terminal_toolbar_connected_prefix: "Connected",
     remote_terminal_toolbar_control_mode: "Control mode",
     remote_terminal_toolbar_ended: "Connection ended",
+    remote_terminal_toolbar_connect_button: "Connect",
     // Remote terminal sharing — host side
     share_button: "Share",
     share_button_tooltip: "Share this terminal tab with a colleague",

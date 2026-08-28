@@ -633,6 +633,10 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   sas={tab.remoteSas ?? ""}
                   isActive={isActive}
                   hostLabel={tab.remoteHostLabel ?? ""}
+                  // 佔位——onConnectClick 是必填 prop 但真正的「開對話框、
+                  // 就地重新連線」邏輯是下一個 task 的範圍，這裡先給
+                  // no-op 讓型別檢查通過，不提前實作行為。
+                  onConnectClick={() => {}}
                 />
               ) : (
                 <TerminalView

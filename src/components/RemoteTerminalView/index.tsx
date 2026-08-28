@@ -16,7 +16,7 @@ import { WarpInput } from "../WarpInput";
 import { TerminalBlockCard } from "../TerminalBlockCard";
 import { CommandBookmarksPicker, addBookmark } from "../CommandBookmarks";
 import { parseAiPrefix, parseAgentPrefix } from "../parseAiPrefix";
-import { SparklesIcon } from "../Icons";
+import { LinkIcon, SparklesIcon } from "../Icons";
 import type { Translations } from "../../lib/i18n";
 import "../TerminalView.css";
 import "./index.css";
@@ -46,6 +46,16 @@ interface Props {
    * 測試呼叫端不用全部跟著改。
    */
   hostLabel?: string;
+  /**
+   * 使用者點了工具列的「連線」按鈕。由 `TerminalApp.tsx` 提供：開啟
+   * `ConnectDialog`，並記住是「這個分頁」要求重新連線——連線成功後
+   * `TerminalApp.tsx` 會更新這個分頁的 remoteConnId/remoteSas/
+   * remoteHostLabel，不會開新分頁（見 Task 3）。
+   *
+   * 必填、沒有預設值：這顆按鈕點了沒反應會很奇怪，沒有有意義的
+   * no-op 預設可以退回。
+   */
+  onConnectClick: () => void;
 }
 
 type Phase =
@@ -53,7 +63,7 @@ type Phase =
   | { kind: "live"; mode: string }
   | { kind: "ended"; reason: string };
 
-export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "" }: Props) {
+export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "", onConnectClick }: Props) {
   const { t } = useLocale();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -385,6 +395,18 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
           · {t.remote_terminal_tab} {hostLabel} · {connectionStatusText(t, phase, elapsedMs)}
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <button
+            className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+            title={t.remote_terminal_toolbar_connect_button}
+            onClick={(e) => {
+              e.stopPropagation();
+              onConnectClick();
+            }}
+            style={{ display: "flex", alignItems: "center", gap: "6px" }}
+          >
+            <LinkIcon size={14} />
+            <span>{t.remote_terminal_toolbar_connect_button}</span>
+          </button>
           <button
             className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
             title={t.term_bookmark_tooltip}
