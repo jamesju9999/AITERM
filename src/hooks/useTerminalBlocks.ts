@@ -138,6 +138,36 @@ export function useTerminalBlocks(
   // 用——只在遠端指令（沒有本機追蹤區塊）時才會被讀取，見該函式的文件註解。
   const promptEndRef = useRef<{ row: number; col: number } | null>(null);
 
+  /**
+   * 實機測試抓到的第二個 bug（跟 appendOutput 的 race 是不同根因）：
+   * finalizeBlock 的 term.clear() 要等非同步的 parseAnsiToRenderedLines
+   * 解析完才觸發（見下方 finalizeBlock 的文件註解，這是刻意的設計，避免
+   * 「畫面先變空白、卡片才出現」的閃爍）。如果這個延遲夠久，久到下一個
+   * 指令（可能是遠端觀看者送的）自己的 OSC 133 B 已經先被記錄進
+   * promptEndRef，這次延遲的 clear() 一旦真的執行，就會讓那個座標對不
+   * 上——但這裡不需要因此放棄「清畫面時機保持不變」這個對本機終端機
+   * 已經運作良好的設計。
+   *
+   * 讀 xterm.js 原始碼（node_modules/@xterm/xterm/src/browser/Terminal.ts
+   * 的 clear()）確認它實際上不是「整個清空重來」：它把「遊標目前所在的
+   * 那一行」搬去當新的第 0 行，其餘全部丟棄。只要 clear() 觸發的當下，
+   * 遊標還停在 promptEndRef 記錄的那一行（也就是使用者還沒按下 Enter、
+   * 那一行的內容還原封不動），這一行的內容就會被完整保留、只是行號
+   * 變成 0——欄位（col）完全不受影響。這裡就是在 clear() 發生的同時，
+   * 讓 promptEndRef 的行號跟著一起「搬家」，而不是讓它整個作廢。
+   *
+   * 極端情況（clear() 延遲到已經跨過不只一輪指令週期才觸發）這裡沒辦法
+   * 完全處理——但退回的結果最差就是那個更晚的指令還原失敗、走既有的
+   * onUntrackedCommandBoundary 保底機制，跟這個修復之前的行為一樣，
+   * 不會比現在更糟。
+   */
+  const clearAndRebasePromptEnd = useCallback((t: Terminal) => {
+    t.clear();
+    if (promptEndRef.current) {
+      promptEndRef.current = { row: 0, col: promptEndRef.current.col };
+    }
+  }, []);
+
   const updateLatestBlock = useCallback((updater: (b: TerminalBlock) => TerminalBlock) => {
     const prev = blocksRef.current;
     if (prev.length === 0) return;
@@ -209,7 +239,7 @@ export function useTerminalBlocks(
         blocksRef.current = withLines;
         setBlocks(withLines);
 
-        if (opts?.clearOnParsed) term?.clear();
+        if (opts?.clearOnParsed && term) clearAndRebasePromptEnd(term);
 
         const cb = completionCallbacksRef.current.get(blockId);
         if (cb) {
@@ -219,7 +249,7 @@ export function useTerminalBlocks(
         }
       });
     },
-    [term],
+    [term, clearAndRebasePromptEnd],
   );
 
   /**
@@ -363,7 +393,7 @@ export function useTerminalBlocks(
         const isWindows = hostPlatform === "windows";
         if (isWindows) {
           setTimeout(() => {
-            term?.clear();
+            clearAndRebasePromptEnd(term);
             term?.scrollToBottom();
             onLiveClear?.();
             // Re-sync ConPTY with xterm's now-cleared buffer. term.clear() only
@@ -410,7 +440,7 @@ export function useTerminalBlocks(
     // 的都是函式簽名裡那個預設值運算式產生的全新參考，放進依賴陣列會讓
     // 這個 effect 每次 render 都 dispose+重新註冊）。`hostPlatform` 是字串，
     // 沒有這個問題，放心加進來。
-  }, [term, finalizeBlock, beginTrackedBlock, onLiveClear, onCommandSettled, hostPlatform, onUntrackedCommandBoundary]);
+  }, [term, finalizeBlock, beginTrackedBlock, clearAndRebasePromptEnd, onLiveClear, onCommandSettled, hostPlatform, onUntrackedCommandBoundary]);
 
   const submitCommand = useCallback(
     (cmd: string, onComplete?: (block: TerminalBlock) => void) => {
