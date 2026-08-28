@@ -1,10 +1,10 @@
 import type React from "react";
 import type { Terminal } from "@xterm/xterm";
-import type { Locale } from "./i18n";
 import type { ExecutionMode } from "../ipc/config";
 import { formatAiError, type AiCommandReady, type AiError, type RiskLevel } from "../ipc/ai";
 import type { AgentPhase } from "../components/AgentStatusBar";
 import type { AgentStepInfo } from "./agentStepReport";
+import type { TerminalBlock } from "../hooks/useTerminalBlocks";
 import { webSearch, webFetch } from "../ipc/web";
 
 interface PreviewState {
@@ -46,7 +46,6 @@ function shouldAutoExecute(mode: ExecutionMode, risk: RiskLevel, agentActive = f
 function handleAiQuery(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   t: any,
-  locale: Locale,
   queryFn: (query: string) => Promise<AiCommandReady>,
   originalLine: string,
   query: string,
@@ -56,10 +55,10 @@ function handleAiQuery(
   streamingRef: React.MutableRefObject<boolean>,
   executionModeRef: React.MutableRefObject<ExecutionMode>,
   writeRed: (msg: string) => void,
-  submitCommand: (cmd: string, onComplete?: (block: import("../hooks/useTerminalBlocks").TerminalBlock) => void) => void,
+  submitCommand: (cmd: string, onComplete?: (block: TerminalBlock) => void) => void,
   onDone?: (explanation?: string) => void,
   agentActive = false,
-  onCommandComplete?: (block: import("../hooks/useTerminalBlocks").TerminalBlock) => void,
+  onCommandComplete?: (block: TerminalBlock) => void,
   onAiError?: (err: AiError) => void,
   onWebAction?: (type: "search" | "fetch", value: string) => void,
   onPhase?: (update: AgentPhase) => void,
@@ -67,7 +66,6 @@ function handleAiQuery(
   agentMaxSteps = 0,
 ) {
   void originalLine;
-  void locale;
   setStreamText("");
   streamingRef.current = true;
   setPreview({ loading: true, visible: false, command: "", explanation: "", riskLevel: "safe" });
@@ -156,10 +154,9 @@ interface AgentLoopParams {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   t: any;
   goal: string;
-  locale: Locale;
   queryFn: (query: string) => Promise<AiCommandReady>;
   term: Terminal;
-  getSubmitCommand: () => (cmd: string, onComplete?: (block: import("../hooks/useTerminalBlocks").TerminalBlock) => void) => void;
+  getSubmitCommand: () => (cmd: string, onComplete?: (block: TerminalBlock) => void) => void;
   setPreview: (p: PreviewState) => void;
   setStreamText: React.Dispatch<React.SetStateAction<string>>;
   streamingRef: React.MutableRefObject<boolean>;
@@ -171,7 +168,7 @@ interface AgentLoopParams {
   history: { command: string; exitCode: number; output: string }[];
   onComplete: (explanation?: string) => void;
   onFail: (msg: string) => void;
-  /** Fires after each shell command finishes; used to mirror progress to Telegram. */
+  /** Fires after each shell command finishes; lets the caller mirror progress (e.g. to Telegram). */
   onStepComplete?: (info: AgentStepInfo) => void;
   /** Pushes agent lifecycle status to the React status bar (replaces term.write status lines). */
   onPhase?: (update: AgentPhase) => void;
@@ -179,7 +176,7 @@ interface AgentLoopParams {
 
 function runAgentLoop(params: AgentLoopParams) {
   const {
-    t, goal, locale, queryFn, term, getSubmitCommand,
+    t, goal, queryFn, term, getSubmitCommand,
     setPreview, setStreamText, streamingRef, executionModeRef,
     writeRed, abortRef, stepCount, maxSteps, history,
     onComplete, onFail,
@@ -206,7 +203,7 @@ function runAgentLoop(params: AgentLoopParams) {
 
   // This callback fires when the command FINISHES executing in the PTY (via OSC 133;D)
   let stepResolved = false; // Set to true when either block completes OR AI returns DONE
-  const onBlockDone = (completedBlock: import("../hooks/useTerminalBlocks").TerminalBlock) => {
+  const onBlockDone = (completedBlock: TerminalBlock) => {
     stepResolved = true;
     if (abortRef.current) return;
 
@@ -216,7 +213,7 @@ function runAgentLoop(params: AgentLoopParams) {
 
     const exitCode = completedBlock.exitCode ?? 0;
 
-    // Mirror this step (command + output) to Telegram if the caller wired it up.
+    // Mirror this step (command + output) to the caller if it wired up onStepComplete.
     params.onStepComplete?.({
       stepIndex: stepCount + 1,
       maxSteps,
@@ -290,7 +287,6 @@ function runAgentLoop(params: AgentLoopParams) {
   // Call AI, auto-execute the returned command, wire up the completion callback
   handleAiQuery(
     t,
-    locale,
     queryFn,
     "",
     query,

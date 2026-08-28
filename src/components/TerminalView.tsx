@@ -767,7 +767,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           runAgentLoop({
             t,
             goal: finalQuery,
-            locale,
             queryFn: (q) => invokeAiQuery(q, sessionRef.current!, locale),
             term: termRef.current,
             getSubmitCommand: () => submitCommandRef.current,
@@ -912,7 +911,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       runAgentLoop({
         t,
         goal: initialMission.goal,
-        locale,
         queryFn: (q) => invokeAiQuery(q, session, locale),
         term,
         getSubmitCommand: () => submitCommandRef.current,
@@ -1448,7 +1446,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             runAgentLoop({
               t,
               goal: finalQuery,
-              locale,
               queryFn: (q) => invokeAiQuery(q, session, locale),
               term,
               getSubmitCommand: () => submitCommandRef.current,
@@ -1985,7 +1982,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                 runAgentLoop({
                   t,
                   goal: finalQuery,
-                  locale,
                   queryFn: (q) => invokeAiQuery(q, sessionId, locale),
                   term: termRef.current,
                   getSubmitCommand: () => submitCommandRef.current,
