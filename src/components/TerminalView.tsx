@@ -312,6 +312,22 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     term.refresh(0, term.rows - 1);
   }, []);
 
+  // Windows-only ConPTY resync nudge for useTerminalBlocks' D-marker handler
+  // — see that file's requestResyncResize doc comment for the full
+  // rationale (Ctrl+L was tried first and empirically falsified). Shrinks
+  // the column count by one then immediately restores it: only an actual
+  // size change makes ConPTY replay its current screen content (a same-size
+  // resize is a no-op), and the two forceLiveRepaint-adjacent comments above
+  // already document that replay as real, reproducible ConPTY behavior.
+  const requestResyncResize = useCallback(() => {
+    const term = termRef.current;
+    const session = sessionRef.current;
+    if (!term || !session || term.cols <= 1) return;
+    const { cols, rows } = term;
+    resizePty(session, { cols: cols - 1, rows }).catch(console.error);
+    resizePty(session, { cols, rows }).catch(console.error);
+  }, []);
+
   // TerminalApp 傳進來的是 inline arrow function，每次 render 都是新身分。
   // 直接把它放進 useTerminalBlocks 的依賴會讓 OSC handler 每次 render
   // 重新註冊。橋接成 ref，對外露出一個永久穩定的 emitAttention——
@@ -359,6 +375,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     undefined,
     undefined,
     handleUntrackedCommandBoundary,
+    requestResyncResize,
   );
 
   useEffect(() => {

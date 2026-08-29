@@ -417,6 +417,7 @@ describe("useTerminalBlocks", () => {
     // 用它來判斷「要不要送 ConPTY 專屬的 Ctrl+L」在跨平台分享時會誤判。
     const originalPlatform = navigator.platform;
     Object.defineProperty(navigator, "platform", { value: "Win32", configurable: true });
+    const resyncMock = vi.fn();
 
     try {
       const { result } = renderHook(() =>
@@ -429,6 +430,8 @@ describe("useTerminalBlocks", () => {
           undefined,
           undefined,
           "other",
+          undefined,
+          resyncMock,
         ),
       );
 
@@ -446,8 +449,8 @@ describe("useTerminalBlocks", () => {
       });
 
       // hostPlatform 是 "other"，即使 navigator.platform 說是 Windows，
-      // 也不該送出 ConPTY 專屬的 Ctrl+L 同步位元組。
-      expect(writePtyMock).not.toHaveBeenCalledWith("session-1", "\x0c");
+      // 也不該觸發 ConPTY 專屬的 resize 同步。
+      expect(resyncMock).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(navigator, "platform", { value: originalPlatform, configurable: true });
     }
@@ -482,12 +485,12 @@ describe("useTerminalBlocks", () => {
     expect(writePtyMock).not.toHaveBeenCalled();
   });
 
-  it("routes the Windows ConPTY resync byte through a custom write function too", async () => {
-    // The two tests above check hostPlatform and write independently. This one
-    // checks the combination that actually matters for the remote-viewer use
-    // case: a Windows host's ConPTY resync byte (\x0c) must go through the
-    // injected write, not fall back to writePty.
+  it("calls requestResyncResize on Windows after OSC 133 D, not through write", async () => {
+    // Resize-based resync doesn't flow through write() at all — it's a
+    // separate injected callback, since only the local terminal owns a
+    // resizable PTY session (see requestResyncResize's doc comment).
     const writeMock = vi.fn();
+    const resyncMock = vi.fn();
     const { result } = renderHook(() =>
       useTerminalBlocks(
         "session-1",
@@ -498,6 +501,8 @@ describe("useTerminalBlocks", () => {
         undefined,
         writeMock,
         "windows",
+        undefined,
+        resyncMock,
       ),
     );
 
@@ -514,16 +519,19 @@ describe("useTerminalBlocks", () => {
       expect(result.current.blocks[0].status).toBe("completed");
     });
 
-    expect(writeMock).toHaveBeenCalledWith("\x0c");
+    await waitFor(() => {
+      expect(resyncMock).toHaveBeenCalledTimes(1);
+    });
+    expect(writeMock).not.toHaveBeenCalledWith("\x0c");
     expect(writePtyMock).not.toHaveBeenCalled();
   });
 
-  it("retries the Windows ConPTY resync keystroke while the live pane's first line stays blank", async () => {
-    // 實機抓到的 bug：Ctrl+L 送得太早，對方的互動輸入模組還沒真的進到
-    // 「準備讀取按鍵」的狀態，落到更陽春的清畫面、沒有真的重印提示字元。
-    // 這個測試確保「送出後畫面第一行還是空的」時，會再送一次，不是只送
-    // 一次就假設成功了。
-    const writeMock = vi.fn();
+  it("requests exactly one resync resize per completed command on Windows, without retrying", async () => {
+    // 第一版修法（送出後檢查畫面第一行是不是還空著，空的話最多重送 3
+    // 次）已被實機證據推翻——見 requestResyncResize 的文件註解。改用
+    // resize 之後不再需要輪詢或重試：PTY resize 是 ConPTY 無條件會做的
+    // 事，不存在「送得太早」這回事，所以每次指令完成只該觸發一次。
+    const resyncMock = vi.fn();
     const { result } = renderHook(() =>
       useTerminalBlocks(
         "session-1",
@@ -532,33 +540,38 @@ describe("useTerminalBlocks", () => {
         undefined,
         undefined,
         undefined,
-        writeMock,
+        undefined,
         "windows",
+        undefined,
+        resyncMock,
       ),
     );
 
     act(() => {
       result.current.submitCommand("echo hi");
     });
-    writeMock.mockClear();
 
     await act(async () => {
       await writeToTerm(term, "\x1b]133;D;0\x07");
     });
 
-    // 第一行從頭到尾都不寫任何東西進去——模擬「Ctrl+L 沒讓對方重印提示
-    // 字元」的情況。等超過所有重試視窗，確認真的重送了不只一次。
-    await waitFor(
-      () => {
-        const ctrlLCalls = writeMock.mock.calls.filter((c) => c[0] === "\x0c");
-        expect(ctrlLCalls.length).toBeGreaterThan(1);
-      },
-      { timeout: 2000 },
-    );
+    await waitFor(() => {
+      expect(result.current.blocks[0].status).toBe("completed");
+    });
+
+    await waitFor(() => {
+      expect(resyncMock).toHaveBeenCalledTimes(1);
+    });
+
+    // 給一個（理論上不存在的）重試計時器足夠時間觸發，確認呼叫次數
+    // 真的沒有增加。
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(resyncMock).toHaveBeenCalledTimes(1);
   });
 
-  it("stops retrying the Windows resync keystroke once the live pane shows a fresh prompt", async () => {
-    const writeMock = vi.fn();
+  it("does not crash on Windows when no requestResyncResize callback is provided", async () => {
+    // 遠端觀看端的 hook 實體沒有可以 resize 的 PTY（見該參數的文件註解），
+    // 正常情況下就是傳 undefined。
     const { result } = renderHook(() =>
       useTerminalBlocks(
         "session-1",
@@ -567,7 +580,7 @@ describe("useTerminalBlocks", () => {
         undefined,
         undefined,
         undefined,
-        writeMock,
+        undefined,
         "windows",
       ),
     );
@@ -575,25 +588,14 @@ describe("useTerminalBlocks", () => {
     act(() => {
       result.current.submitCommand("echo hi");
     });
-    writeMock.mockClear();
 
     await act(async () => {
       await writeToTerm(term, "\x1b]133;D;0\x07");
     });
 
-    // 等到第一次 Ctrl+L 真的送出，再模擬對方老老實實把提示字元印回來——
-    // 這次不該被判定成「還是空的」而觸發重送。
     await waitFor(() => {
-      expect(writeMock).toHaveBeenCalledWith("\x0c");
+      expect(result.current.blocks[0].status).toBe("completed");
     });
-    await act(async () => {
-      await writeToTerm(term, "PS C:\\Users\\test> ");
-    });
-
-    // 等超過一次重試視窗，確認沒有再送 Ctrl+L。
-    await new Promise((resolve) => setTimeout(resolve, 350));
-    const ctrlLCalls = writeMock.mock.calls.filter((c) => c[0] === "\x0c");
-    expect(ctrlLCalls.length).toBe(1);
   });
 
   it("signals onUntrackedCommandBoundary when OSC 133 C/D fire with no locally-tracked block", async () => {

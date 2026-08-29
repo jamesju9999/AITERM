@@ -4,13 +4,6 @@ import { writePty } from "../ipc/pty";
 import { parseAnsiToRenderedLines, type RenderedLine } from "../lib/ansiBlockParser";
 import type { GitBlockInfo } from "../ipc/vcs";
 
-/** Windows Ctrl+L 重新同步失敗（送得太早，對方還沒真的重印提示字元）時，
- *  隔多久檢查一次、要不要重送——見下面 sendResyncKeystroke 的說明。 */
-const RESYNC_RETRY_DELAY_MS = 200;
-/** 最多重送幾次；用完還是空的就放棄，避免對方不是真的卡住（只是這次
- *  沒抓到訊號）時無限重試。 */
-const RESYNC_MAX_RETRIES = 3;
-
 export interface TerminalBlock {
   id: string;
   command: string;
@@ -132,12 +125,31 @@ export function useTerminalBlocks(
    *  必須是穩定的參考（useCallback 空依賴或 ref 橋接），理由跟
    *  `onCommandSettled`/`onCommandStarted` 一樣。 */
   onUntrackedCommandBoundary?: (kind: "start" | "end") => void,
+  /** Windows-only ConPTY 重新同步用。第一版修法（送 Ctrl+L 給 shell 自己
+   *  重畫）被實機證據推翻：即使等超過 700ms、重送 3 次，回應的位元組
+   *  完全一樣（只有清畫面跟游標定位，從未出現真正的提示字元文字）——
+   *  代表這不是時機問題，Ctrl+L 這個位元組在這個環境下本來就沒有觸發
+   *  PSReadLine 的智慧重畫。改用真正的 PTY resize：這是 ConPTY 本身
+   *  保證會做的事（本檔案 forceLiveRepaint 與 scrollbarGutter 註解記錄的
+   *  兩個歷史 bug，都是「resize 讓 ConPTY 重新傳送目前畫面內容」這個
+   *  行為造成的副作用），不依賴 shell 端有沒有進入某個特定狀態。
+   *
+   *  只有本機分頁能真的觸發 resize（呼叫端要用 sessionId 呼叫
+   *  resizePty，見 TerminalView.tsx 的 requestResyncResize）；遠端觀看端
+   *  不擁有那個 PTY，傳 undefined 即可——host 端自己的本機分頁用這個
+   *  修法同步好之後，觀看端收到的位元組自然也是對的。
+   *
+   *  必須是穩定的參考，理由跟 onCommandSettled 等其他 callback 一樣。 */
+  requestResyncResize?: () => void,
 ): UseTerminalBlocksResult {
   const [blocks, setBlocks] = useState<TerminalBlock[]>([]);
   const [isAlternateBuffer, setIsAlternateBuffer] = useState(false);
 
   const writeRef = useRef(write);
   writeRef.current = write;
+
+  const requestResyncResizeRef = useRef(requestResyncResize);
+  requestResyncResizeRef.current = requestResyncResize;
 
   const blocksRef = useRef<TerminalBlock[]>([]);
   const completionCallbacksRef = useRef<Map<string, (block: TerminalBlock) => void>>(new Map());
@@ -425,46 +437,29 @@ export function useTerminalBlocks(
             // model — landing every keystroke far below the visible row-0 prompt
             // (proven via byte-stream logging: first input used ESC[1;..H and
             // worked; the second, after a scrolled command, used ESC[24;..H and
-            // stuck at row 11). Ctrl+L makes the shell itself clear and re-home
-            // the prompt to the top, so ConPTY's model and xterm's cleared
-            // buffer agree again — and, as a bonus, a resize then replays only
-            // the clean prompt instead of the stale duplicated output.
+            // stuck at row 11).
             //
-            // **Ctrl+L 送得太早會被吞掉，只做最陽春的清畫面，不會重印提示
-            // 字元。** 實機抓到的證據（見 x86 平台回報）：D→A→B 標記幾乎是
-            // 同一瞬間送出，但那個當下 PowerShell 自己都還沒把提示字元的
-            // 文字內容印出來（很可能在跑一個較重的自訂 prompt，例如
-            // oh-my-posh，需要額外時間運算）。我們在收到 A/B 標記後幾毫秒
-            // 內就送出 Ctrl+L，可能搶在 PSReadLine 真正進入「準備讀取按鍵」
-            // 的狀態之前——這時候 Ctrl+L 落到更陽春的主控台層級清畫面
-            // （只有 \x1b[2J 跟游標定位，沒有真的重印文字），不是 PSReadLine
-            // 的 Clear-Host（會完整重畫提示字元）。使用者手動按 Ctrl+L 之所以
-            // 沒事，是因為人會等到畫面上真的看到提示字元才按，天然避開了
-            // 這個時間差。
+            // **第一版修法（送 Ctrl+L 給 shell 自己重畫，等畫面第一行出現
+            // 文字才罷休，最多重試 3 次）已被實機證據推翻**：即使跨越將近
+            // 700ms、送了 4 次，回應的位元組每次都一樣（`\x1b[2J` 清畫面＋
+            // 游標定位，從未出現真正的提示字元文字）。這代表問題不是「送得
+            // 太早」，而是這個環境下、透過 PTY 輸入流送進去的 `\x0c` 位元組
+            // 本身就沒有被判定成觸發 PSReadLine 智慧重畫（Clear-Host）的
+            // 那個按鍵事件——使用者手動按 Ctrl+L 沒事，是因為那是一次真正
+            // 的按鍵事件，走的是主控台鍵盤輸入而非位元組流。
             //
-            // 不猜一個固定延遲（多重的自訂 prompt 需要的時間不一樣，猜不準），
-            // 改成送出後檢查畫面第一行（提示字元該出現的位置，見上面
-            // clearAndRebasePromptEnd 把它的座標歸零那段）是不是真的印出
-            // 文字了；還是空的就再送一次，最多 RESYNC_MAX_RETRIES 次。
-            const sendResyncKeystroke = (attemptsLeft: number) => {
-              writeRef.current("\x0c");
-              console.log(
-                "[AITERM-DIAG] Ctrl+L sent", performance.now().toFixed(1),
-                "attemptsLeft:", attemptsLeft,
-              );
-              if (attemptsLeft <= 0) return;
-              setTimeout(() => {
-                const line0 = term?.buffer.active.getLine(0)?.translateToString(true).trim();
-                console.log(
-                  "[AITERM-DIAG] resync check", performance.now().toFixed(1),
-                  "line0:", JSON.stringify(line0),
-                );
-                if (!line0) {
-                  sendResyncKeystroke(attemptsLeft - 1);
-                }
-              }, RESYNC_RETRY_DELAY_MS);
-            };
-            sendResyncKeystroke(RESYNC_MAX_RETRIES);
+            // 改用真正的 PTY resize：這是 ConPTY 本身保證會做的事，不靠
+            // shell 端配合。本檔案外（TerminalView.tsx 的 forceLiveRepaint、
+            // 以及那個檔案裡 scrollbarGutter 旁的註解）已經記錄過兩個完全
+            // 獨立的歷史 bug，兩者的根因都是「resize 讓 ConPTY 重新傳送它
+            // 目前的畫面內容」——這個行為在那兩個 bug 裡是要避免的副作用，
+            // 這裡反過來拿來用：我們就是要它把目前真正的畫面內容（含提示
+            // 字元）重播一次。只有本機分頁能發起 resize（見
+            // requestResyncResize 參數的文件註解），遠端觀看端沒有這個
+            // callback，維持不動——host 端自己同步好之後，觀看端收到的
+            // 位元組自然也是對的。
+            console.log("[AITERM-DIAG] resize nudge requested", performance.now().toFixed(1));
+            requestResyncResizeRef.current?.();
           }, 0);
           finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode);
         } else {
