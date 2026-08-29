@@ -400,36 +400,10 @@ export function useTerminalBlocks(
         // this deferred-clear timing is still needed on its own merits.
         const isWindows = hostPlatform === "windows";
         if (isWindows) {
-          // TEMP DIAGNOSTIC — for the Windows x86-vs-ARM prompt-blank
-          // investigation. Remove once root-caused from a real console
-          // capture.
-          console.log("[AITERM-DIAG] D marker OSC fired", performance.now().toFixed(1), "exitCode:", exitCode);
           setTimeout(() => {
-            console.log("[AITERM-DIAG] deferred clear start", performance.now().toFixed(1));
             clearAndRebasePromptEnd(term);
             term?.scrollToBottom();
             onLiveClear?.();
-            console.log("[AITERM-DIAG] deferred clear done", performance.now().toFixed(1));
-
-            // ConPTY 這時候的畫面模型跟 xterm 剛清空的畫面不一致：
-            // term.clear() 只動了本機的 xterm，ConPTY 完全不知道。
-            //
-            // **前兩版修法都已被實機證據推翻**：Ctrl+L 重試（v1）跟真正的
-            // PTY resize（v2）送出後，回應的位元組都一樣——只有清畫面／
-            // 游標定位，從未出現真正的提示字元文字。用 resize 版本實機
-            // 截圖進一步證實：那個當下 ConPTY 自己的畫面模型裡根本還沒有
-            // 提示字元這個東西（shell 可能在跑一個較重的自訂 prompt，需要
-            // 額外時間才會真的印出來）——不是「送得太早」，是「當下要顯示
-            // 的東西根本還不存在」，送什麼都沒用。
-            //
-            // 那張截圖同時揪出另一個完全獨立、真正的根因：TerminalView.tsx
-            // 的即時窗格高度（liveRows）在區塊一變成 completed 就立刻收回
-            // MIN_LIVE_ROWS（只有 3 行），之後不管這裡再收到多少畫面內容
-            // （包含 shell 遲來的提示字元重畫），只要區塊不是 running 中，
-            // 窗格高度就不會再撐開——遲來的提示字元不是「不存在」，是「被
-            // 那個已經收縮的窗格裁掉了看不到」。真正的修法在 TerminalView.tsx
-            // 那邊調整 liveRows 的收縮時機，不需要（也不該再嘗試）在這裡
-            // 用任何 PTY 層級的把戲搶救。
           }, 0);
           finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode);
         } else {

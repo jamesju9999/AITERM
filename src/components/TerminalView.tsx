@@ -589,8 +589,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const [liveRows, setLiveRows] = useState(MIN_LIVE_ROWS);
   useEffect(() => {
     // Windows-only：跳過收縮，維持目前高度（通常是指令執行中撐開的
-    // MAX_LIVE_ROWS）。root-caused via 一次 [AITERM-DIAG] 截圖：Windows 的
-    // 提示字元「消失」不是 ConPTY 沒有把它印出來，是這個 effect 在區塊一
+    // MAX_LIVE_ROWS）。root-caused via 一次實機截圖：Windows 上某些自訂
+    // 提示字元「消失」的個案裡，不是 ConPTY 沒有把它印出來，是這個 effect 在區塊一
     // 變成 completed 就立刻把窗格收到只剩 MIN_LIVE_ROWS（3 行）——但自訂
     // prompt（例如 oh-my-posh）需要額外時間才會真的印出提示字元，等它終於
     // 抵達時，區塊早就不是 running 中了，下面 onWriteComplete 的
@@ -1145,22 +1145,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           lastPtyOutputAtRef.current = Date.now();
           const text = decoder.decode(bytes, { stream: true });
           hasReceivedLiveChunk = true;
-
-          // TEMP DIAGNOSTIC — for the Windows x86-vs-ARM prompt-blank
-          // investigation. Remove once root-caused from a real console
-          // capture. Mirrors the [AITERM-DIAG] pattern from the earlier
-          // Windows live-pane bug hunt (see git history on this file).
-          if (isWindows) {
-            const hasD = text.includes("\x1b]133;D");
-            const latestForLog = blocksRef.current[blocksRef.current.length - 1];
-            console.log(
-              "[AITERM-DIAG] chunk", performance.now().toFixed(1),
-              "len:", text.length,
-              "hasD:", hasD,
-              "lastBlockStatus:", latestForLog?.status,
-              "raw:", JSON.stringify(text),
-            );
-          }
 
           // 實機測試抓到的 bug：appendOutput(text) 原本在 term.write(text)
           // 呼叫「之後」就同步執行，隱含假設這個 chunk 已經被 xterm 解析
