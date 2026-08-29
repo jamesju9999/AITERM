@@ -1133,6 +1133,23 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           const text = decoder.decode(bytes, { stream: true });
           hasReceivedLiveChunk = true;
 
+          // TEMP DIAGNOSTIC — for the Windows x86-vs-ARM prompt-blank
+          // investigation. Remove once root-caused from a real console
+          // capture. Mirrors the [AITERM-DIAG] pattern from the earlier
+          // Windows live-pane bug hunt (see git history on this file).
+          if (isWindows) {
+            const hasD = text.includes("\x1b]133;D");
+            const latestForLog = blocksRef.current[blocksRef.current.length - 1];
+            // eslint-disable-next-line no-console
+            console.log(
+              "[AITERM-DIAG] chunk", performance.now().toFixed(1),
+              "len:", text.length,
+              "hasD:", hasD,
+              "lastBlockStatus:", latestForLog?.status,
+              "raw:", JSON.stringify(text),
+            );
+          }
+
           // 實機測試抓到的 bug：appendOutput(text) 原本在 term.write(text)
           // 呼叫「之後」就同步執行，隱含假設這個 chunk 已經被 xterm 解析
           // 完畢——但 @xterm/xterm 的 WriteBuffer.write()（見

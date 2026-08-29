@@ -400,10 +400,19 @@ export function useTerminalBlocks(
         // this deferred-clear timing is still needed on its own merits.
         const isWindows = hostPlatform === "windows";
         if (isWindows) {
+          // TEMP DIAGNOSTIC — for the Windows x86-vs-ARM prompt-blank
+          // investigation. Remove once root-caused from a real console
+          // capture.
+          // eslint-disable-next-line no-console
+          console.log("[AITERM-DIAG] D marker OSC fired", performance.now().toFixed(1), "exitCode:", exitCode);
           setTimeout(() => {
+            // eslint-disable-next-line no-console
+            console.log("[AITERM-DIAG] deferred clear start", performance.now().toFixed(1));
             clearAndRebasePromptEnd(term);
             term?.scrollToBottom();
             onLiveClear?.();
+            // eslint-disable-next-line no-console
+            console.log("[AITERM-DIAG] deferred clear done, sending Ctrl+L", performance.now().toFixed(1));
             // Re-sync ConPTY with xterm's now-cleared buffer. term.clear() only
             // reset xterm; ConPTY still models the prompt at whatever row it
             // scrolled to, and PowerShell/PSReadLine redraws the next input line
@@ -416,6 +425,8 @@ export function useTerminalBlocks(
             // buffer agree again — and, as a bonus, a resize then replays only
             // the clean prompt instead of the stale duplicated output.
             writeRef.current("\x0c");
+            // eslint-disable-next-line no-console
+            console.log("[AITERM-DIAG] Ctrl+L sent", performance.now().toFixed(1));
           }, 0);
           finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode);
         } else {
