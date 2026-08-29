@@ -34,24 +34,27 @@ pub struct ShareStatus {
 
 /// 盡力問出這台機器的區網位址。查不到回 `None`。
 ///
-/// 用系統指令而不是列舉網路介面，是因為「哪一張介面才是使用者實際連著的
-/// 那張」在多網卡機器上很難判斷，而系統自己知道。查不到不影響功能——
-/// 面板會退成只顯示 port。
+/// macOS/Linux 用系統指令而不是列舉網路介面，是因為「哪一張介面才是使用者
+/// 實際連著的那張」在多網卡機器上很難判斷，而系統自己知道。查不到不影響
+/// 功能——面板會退成只顯示 port。
+///
+/// Windows 原本直接回 `None`（沒有簡短的等價指令，PowerShell 啟動成本又
+/// 高）。改用 `local-ip-address` crate（不 shell out）：它在 Windows 上讀
+/// 系統的 IP 路由表，找出「有預設路由（gateway）」的那張網卡再取其位址——
+/// 跟 macOS/Linux 那兩行指令是同一個「讓系統自己選、不是自己猜哪張介面
+/// 才是真的在上網」的邏輯（原始碼：crates.io local-ip-address 0.6.13 的
+/// `windows.rs`，用 `GetIpForwardTable` 找預設路由對應的介面索引，再用
+/// `GetAdaptersAddresses` 撈那張介面的位址）。
 fn lan_address() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        local_ip_address::local_ip().ok().map(|ip| ip.to_string())
+    }
+
     #[cfg(target_os = "macos")]
     let cmd = "ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null";
     #[cfg(target_os = "linux")]
     let cmd = "hostname -I 2>/dev/null | awk '{print $1}'";
-    #[cfg(target_os = "windows")]
-    let cmd = "";
-
-    #[cfg(target_os = "windows")]
-    {
-        // Windows 沒有簡短的等價指令，而 PowerShell 啟動成本高。留給使用者
-        // 自己輸入——面板只顯示 port。
-        let _ = cmd;
-        return None;
-    }
 
     #[cfg(not(target_os = "windows"))]
     {

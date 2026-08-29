@@ -114,4 +114,5 @@ futures-util = "0.3"
 # Already present in Cargo.lock as a transitive dependency, so this adds no
 # meaningful build cost, and nothing is compiled on macOS or Linux.
 [target.'cfg(windows)'.dependencies]
+local-ip-address = "0.6.13"
 windows-sys = { version = "0.60", features = ["Win32_Storage_FileSystem", "Win32_System_WindowsProgramming"] }
