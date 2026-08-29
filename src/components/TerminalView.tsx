@@ -1140,7 +1140,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           if (isWindows) {
             const hasD = text.includes("\x1b]133;D");
             const latestForLog = blocksRef.current[blocksRef.current.length - 1];
-            // eslint-disable-next-line no-console
             console.log(
               "[AITERM-DIAG] chunk", performance.now().toFixed(1),
               "len:", text.length,

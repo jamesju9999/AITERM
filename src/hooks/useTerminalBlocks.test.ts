@@ -518,6 +518,84 @@ describe("useTerminalBlocks", () => {
     expect(writePtyMock).not.toHaveBeenCalled();
   });
 
+  it("retries the Windows ConPTY resync keystroke while the live pane's first line stays blank", async () => {
+    // 實機抓到的 bug：Ctrl+L 送得太早，對方的互動輸入模組還沒真的進到
+    // 「準備讀取按鍵」的狀態，落到更陽春的清畫面、沒有真的重印提示字元。
+    // 這個測試確保「送出後畫面第一行還是空的」時，會再送一次，不是只送
+    // 一次就假設成功了。
+    const writeMock = vi.fn();
+    const { result } = renderHook(() =>
+      useTerminalBlocks(
+        "session-1",
+        term,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        writeMock,
+        "windows",
+      ),
+    );
+
+    act(() => {
+      result.current.submitCommand("echo hi");
+    });
+    writeMock.mockClear();
+
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;D;0\x07");
+    });
+
+    // 第一行從頭到尾都不寫任何東西進去——模擬「Ctrl+L 沒讓對方重印提示
+    // 字元」的情況。等超過所有重試視窗，確認真的重送了不只一次。
+    await waitFor(
+      () => {
+        const ctrlLCalls = writeMock.mock.calls.filter((c) => c[0] === "\x0c");
+        expect(ctrlLCalls.length).toBeGreaterThan(1);
+      },
+      { timeout: 2000 },
+    );
+  });
+
+  it("stops retrying the Windows resync keystroke once the live pane shows a fresh prompt", async () => {
+    const writeMock = vi.fn();
+    const { result } = renderHook(() =>
+      useTerminalBlocks(
+        "session-1",
+        term,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        writeMock,
+        "windows",
+      ),
+    );
+
+    act(() => {
+      result.current.submitCommand("echo hi");
+    });
+    writeMock.mockClear();
+
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;D;0\x07");
+    });
+
+    // 等到第一次 Ctrl+L 真的送出，再模擬對方老老實實把提示字元印回來——
+    // 這次不該被判定成「還是空的」而觸發重送。
+    await waitFor(() => {
+      expect(writeMock).toHaveBeenCalledWith("\x0c");
+    });
+    await act(async () => {
+      await writeToTerm(term, "PS C:\\Users\\test> ");
+    });
+
+    // 等超過一次重試視窗，確認沒有再送 Ctrl+L。
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    const ctrlLCalls = writeMock.mock.calls.filter((c) => c[0] === "\x0c");
+    expect(ctrlLCalls.length).toBe(1);
+  });
+
   it("signals onUntrackedCommandBoundary when OSC 133 C/D fire with no locally-tracked block", async () => {
     // 實機測試抓到的 bug：遠端觀看者拿到控制權時送進來的指令不會經過
     // submitCommand/beginTrackedBlock（本機分頁能收到的只有 shell 回顯的
