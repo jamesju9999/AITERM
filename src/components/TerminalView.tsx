@@ -312,21 +312,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     term.refresh(0, term.rows - 1);
   }, []);
 
-  // Windows-only ConPTY resync nudge for useTerminalBlocks' D-marker handler
-  // — see that file's requestResyncResize doc comment for the full
-  // rationale (Ctrl+L was tried first and empirically falsified). Shrinks
-  // the column count by one then immediately restores it: only an actual
-  // size change makes ConPTY replay its current screen content (a same-size
-  // resize is a no-op), and the two forceLiveRepaint-adjacent comments above
-  // already document that replay as real, reproducible ConPTY behavior.
-  const requestResyncResize = useCallback(() => {
-    const term = termRef.current;
-    const session = sessionRef.current;
-    if (!term || !session || term.cols <= 1) return;
-    const { cols, rows } = term;
-    resizePty(session, { cols: cols - 1, rows }).catch(console.error);
-    resizePty(session, { cols, rows }).catch(console.error);
-  }, []);
 
   // TerminalApp 傳進來的是 inline arrow function，每次 render 都是新身分。
   // 直接把它放進 useTerminalBlocks 的依賴會讓 OSC handler 每次 render
@@ -375,7 +360,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     undefined,
     undefined,
     handleUntrackedCommandBoundary,
-    requestResyncResize,
   );
 
   useEffect(() => {
@@ -604,6 +588,18 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // either way the live pane is freshly empty at that point.
   const [liveRows, setLiveRows] = useState(MIN_LIVE_ROWS);
   useEffect(() => {
+    // Windows-only：跳過收縮，維持目前高度（通常是指令執行中撐開的
+    // MAX_LIVE_ROWS）。root-caused via 一次 [AITERM-DIAG] 截圖：Windows 的
+    // 提示字元「消失」不是 ConPTY 沒有把它印出來，是這個 effect 在區塊一
+    // 變成 completed 就立刻把窗格收到只剩 MIN_LIVE_ROWS（3 行）——但自訂
+    // prompt（例如 oh-my-posh）需要額外時間才會真的印出提示字元，等它終於
+    // 抵達時，區塊早就不是 running 中了，下面 onWriteComplete 的
+    // setLiveRows(MAX_LIVE_ROWS) 不會再觸發（那個分支的註解就是為了避免
+    // 窗格卡在 MAX 才特地排除非 running 情況），窗格因此永遠卡在 3 行，
+    // 遲來的提示字元是被裁掉看不到，不是不存在。代價是 Windows 上短指令
+    // 執行完窗格不會像其他平台一樣收窄回 3 行——可接受的外觀犧牲，換取
+    // 提示字元一定在視野內。
+    if (navigator.platform.toLowerCase().startsWith("win")) return;
     setLiveRows(MIN_LIVE_ROWS);
   }, [visibleBlockCount]);
 

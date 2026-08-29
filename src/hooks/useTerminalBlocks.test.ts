@@ -411,13 +411,13 @@ describe("useTerminalBlocks", () => {
     expect(result.current.blocks).toHaveLength(0);
   });
 
-  it("uses hostPlatform instead of navigator.platform for the Windows ConPTY resync", async () => {
+  it("uses hostPlatform instead of navigator.platform for the Windows-only immediate clear", async () => {
     // 模擬「觀看端自己在 Windows 上跑，但主控端是別的系統」——這正是
     // hostPlatform 存在的理由：navigator.platform 量到的是觀看端的平台，
-    // 用它來判斷「要不要送 ConPTY 專屬的 Ctrl+L」在跨平台分享時會誤判。
+    // 用它來判斷「要不要在 D 標記當下立刻清畫面」在跨平台分享時會誤判。
     const originalPlatform = navigator.platform;
     Object.defineProperty(navigator, "platform", { value: "Win32", configurable: true });
-    const resyncMock = vi.fn();
+    const onLiveClearMock = vi.fn();
 
     try {
       const { result } = renderHook(() =>
@@ -425,13 +425,11 @@ describe("useTerminalBlocks", () => {
           "session-1",
           term,
           undefined,
-          undefined,
+          onLiveClearMock,
           undefined,
           undefined,
           undefined,
           "other",
-          undefined,
-          resyncMock,
         ),
       );
 
@@ -449,8 +447,8 @@ describe("useTerminalBlocks", () => {
       });
 
       // hostPlatform 是 "other"，即使 navigator.platform 說是 Windows，
-      // 也不該觸發 ConPTY 專屬的 resize 同步。
-      expect(resyncMock).not.toHaveBeenCalled();
+      // 也不該走 Windows 專屬的立即清畫面分支。
+      expect(onLiveClearMock).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(navigator, "platform", { value: originalPlatform, configurable: true });
     }
@@ -485,24 +483,24 @@ describe("useTerminalBlocks", () => {
     expect(writePtyMock).not.toHaveBeenCalled();
   });
 
-  it("calls requestResyncResize on Windows after OSC 133 D, not through write", async () => {
-    // Resize-based resync doesn't flow through write() at all — it's a
-    // separate injected callback, since only the local terminal owns a
-    // resizable PTY session (see requestResyncResize's doc comment).
+  it("clears the live pane on Windows after OSC 133 D without sending any resync byte", async () => {
+    // 前兩版修法（Ctrl+L 重試、真正的 PTY resize）都已被實機證據推翻，
+    // 見 useTerminalBlocks.ts 該段落的註解——兩者都無法在提示字元根本
+    // 還沒被印出來的當下變出真正的文字。現在的行為只清畫面，不嘗試用
+    // 任何 PTY 層級的把戲搶救內容；真正的根因（TerminalView.tsx 的
+    // liveRows 收縮太早）在那邊修，不在這裡。
     const writeMock = vi.fn();
-    const resyncMock = vi.fn();
+    const onLiveClearMock = vi.fn();
     const { result } = renderHook(() =>
       useTerminalBlocks(
         "session-1",
         term,
         undefined,
-        undefined,
+        onLiveClearMock,
         undefined,
         undefined,
         writeMock,
         "windows",
-        undefined,
-        resyncMock,
       ),
     );
 
@@ -520,82 +518,10 @@ describe("useTerminalBlocks", () => {
     });
 
     await waitFor(() => {
-      expect(resyncMock).toHaveBeenCalledTimes(1);
+      expect(onLiveClearMock).toHaveBeenCalledTimes(1);
     });
     expect(writeMock).not.toHaveBeenCalledWith("\x0c");
     expect(writePtyMock).not.toHaveBeenCalled();
-  });
-
-  it("requests exactly one resync resize per completed command on Windows, without retrying", async () => {
-    // 第一版修法（送出後檢查畫面第一行是不是還空著，空的話最多重送 3
-    // 次）已被實機證據推翻——見 requestResyncResize 的文件註解。改用
-    // resize 之後不再需要輪詢或重試：PTY resize 是 ConPTY 無條件會做的
-    // 事，不存在「送得太早」這回事，所以每次指令完成只該觸發一次。
-    const resyncMock = vi.fn();
-    const { result } = renderHook(() =>
-      useTerminalBlocks(
-        "session-1",
-        term,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        "windows",
-        undefined,
-        resyncMock,
-      ),
-    );
-
-    act(() => {
-      result.current.submitCommand("echo hi");
-    });
-
-    await act(async () => {
-      await writeToTerm(term, "\x1b]133;D;0\x07");
-    });
-
-    await waitFor(() => {
-      expect(result.current.blocks[0].status).toBe("completed");
-    });
-
-    await waitFor(() => {
-      expect(resyncMock).toHaveBeenCalledTimes(1);
-    });
-
-    // 給一個（理論上不存在的）重試計時器足夠時間觸發，確認呼叫次數
-    // 真的沒有增加。
-    await new Promise((resolve) => setTimeout(resolve, 350));
-    expect(resyncMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not crash on Windows when no requestResyncResize callback is provided", async () => {
-    // 遠端觀看端的 hook 實體沒有可以 resize 的 PTY（見該參數的文件註解），
-    // 正常情況下就是傳 undefined。
-    const { result } = renderHook(() =>
-      useTerminalBlocks(
-        "session-1",
-        term,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        "windows",
-      ),
-    );
-
-    act(() => {
-      result.current.submitCommand("echo hi");
-    });
-
-    await act(async () => {
-      await writeToTerm(term, "\x1b]133;D;0\x07");
-    });
-
-    await waitFor(() => {
-      expect(result.current.blocks[0].status).toBe("completed");
-    });
   });
 
   it("signals onUntrackedCommandBoundary when OSC 133 C/D fire with no locally-tracked block", async () => {

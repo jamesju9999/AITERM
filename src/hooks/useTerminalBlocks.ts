@@ -125,31 +125,12 @@ export function useTerminalBlocks(
    *  必須是穩定的參考（useCallback 空依賴或 ref 橋接），理由跟
    *  `onCommandSettled`/`onCommandStarted` 一樣。 */
   onUntrackedCommandBoundary?: (kind: "start" | "end") => void,
-  /** Windows-only ConPTY 重新同步用。第一版修法（送 Ctrl+L 給 shell 自己
-   *  重畫）被實機證據推翻：即使等超過 700ms、重送 3 次，回應的位元組
-   *  完全一樣（只有清畫面跟游標定位，從未出現真正的提示字元文字）——
-   *  代表這不是時機問題，Ctrl+L 這個位元組在這個環境下本來就沒有觸發
-   *  PSReadLine 的智慧重畫。改用真正的 PTY resize：這是 ConPTY 本身
-   *  保證會做的事（本檔案 forceLiveRepaint 與 scrollbarGutter 註解記錄的
-   *  兩個歷史 bug，都是「resize 讓 ConPTY 重新傳送目前畫面內容」這個
-   *  行為造成的副作用），不依賴 shell 端有沒有進入某個特定狀態。
-   *
-   *  只有本機分頁能真的觸發 resize（呼叫端要用 sessionId 呼叫
-   *  resizePty，見 TerminalView.tsx 的 requestResyncResize）；遠端觀看端
-   *  不擁有那個 PTY，傳 undefined 即可——host 端自己的本機分頁用這個
-   *  修法同步好之後，觀看端收到的位元組自然也是對的。
-   *
-   *  必須是穩定的參考，理由跟 onCommandSettled 等其他 callback 一樣。 */
-  requestResyncResize?: () => void,
 ): UseTerminalBlocksResult {
   const [blocks, setBlocks] = useState<TerminalBlock[]>([]);
   const [isAlternateBuffer, setIsAlternateBuffer] = useState(false);
 
   const writeRef = useRef(write);
   writeRef.current = write;
-
-  const requestResyncResizeRef = useRef(requestResyncResize);
-  requestResyncResizeRef.current = requestResyncResize;
 
   const blocksRef = useRef<TerminalBlock[]>([]);
   const completionCallbacksRef = useRef<Map<string, (block: TerminalBlock) => void>>(new Map());
@@ -430,36 +411,25 @@ export function useTerminalBlocks(
             onLiveClear?.();
             console.log("[AITERM-DIAG] deferred clear done", performance.now().toFixed(1));
 
-            // Re-sync ConPTY with xterm's now-cleared buffer. term.clear() only
-            // reset xterm; ConPTY still models the prompt at whatever row it
-            // scrolled to, and PowerShell/PSReadLine redraws the next input line
-            // with ABSOLUTE cursor positioning (e.g. ESC[24;34H) from that stale
-            // model — landing every keystroke far below the visible row-0 prompt
-            // (proven via byte-stream logging: first input used ESC[1;..H and
-            // worked; the second, after a scrolled command, used ESC[24;..H and
-            // stuck at row 11).
+            // ConPTY 這時候的畫面模型跟 xterm 剛清空的畫面不一致：
+            // term.clear() 只動了本機的 xterm，ConPTY 完全不知道。
             //
-            // **第一版修法（送 Ctrl+L 給 shell 自己重畫，等畫面第一行出現
-            // 文字才罷休，最多重試 3 次）已被實機證據推翻**：即使跨越將近
-            // 700ms、送了 4 次，回應的位元組每次都一樣（`\x1b[2J` 清畫面＋
-            // 游標定位，從未出現真正的提示字元文字）。這代表問題不是「送得
-            // 太早」，而是這個環境下、透過 PTY 輸入流送進去的 `\x0c` 位元組
-            // 本身就沒有被判定成觸發 PSReadLine 智慧重畫（Clear-Host）的
-            // 那個按鍵事件——使用者手動按 Ctrl+L 沒事，是因為那是一次真正
-            // 的按鍵事件，走的是主控台鍵盤輸入而非位元組流。
+            // **前兩版修法都已被實機證據推翻**：Ctrl+L 重試（v1）跟真正的
+            // PTY resize（v2）送出後，回應的位元組都一樣——只有清畫面／
+            // 游標定位，從未出現真正的提示字元文字。用 resize 版本實機
+            // 截圖進一步證實：那個當下 ConPTY 自己的畫面模型裡根本還沒有
+            // 提示字元這個東西（shell 可能在跑一個較重的自訂 prompt，需要
+            // 額外時間才會真的印出來）——不是「送得太早」，是「當下要顯示
+            // 的東西根本還不存在」，送什麼都沒用。
             //
-            // 改用真正的 PTY resize：這是 ConPTY 本身保證會做的事，不靠
-            // shell 端配合。本檔案外（TerminalView.tsx 的 forceLiveRepaint、
-            // 以及那個檔案裡 scrollbarGutter 旁的註解）已經記錄過兩個完全
-            // 獨立的歷史 bug，兩者的根因都是「resize 讓 ConPTY 重新傳送它
-            // 目前的畫面內容」——這個行為在那兩個 bug 裡是要避免的副作用，
-            // 這裡反過來拿來用：我們就是要它把目前真正的畫面內容（含提示
-            // 字元）重播一次。只有本機分頁能發起 resize（見
-            // requestResyncResize 參數的文件註解），遠端觀看端沒有這個
-            // callback，維持不動——host 端自己同步好之後，觀看端收到的
-            // 位元組自然也是對的。
-            console.log("[AITERM-DIAG] resize nudge requested", performance.now().toFixed(1));
-            requestResyncResizeRef.current?.();
+            // 那張截圖同時揪出另一個完全獨立、真正的根因：TerminalView.tsx
+            // 的即時窗格高度（liveRows）在區塊一變成 completed 就立刻收回
+            // MIN_LIVE_ROWS（只有 3 行），之後不管這裡再收到多少畫面內容
+            // （包含 shell 遲來的提示字元重畫），只要區塊不是 running 中，
+            // 窗格高度就不會再撐開——遲來的提示字元不是「不存在」，是「被
+            // 那個已經收縮的窗格裁掉了看不到」。真正的修法在 TerminalView.tsx
+            // 那邊調整 liveRows 的收縮時機，不需要（也不該再嘗試）在這裡
+            // 用任何 PTY 層級的把戲搶救。
           }, 0);
           finalizeBlock(latest.id, isNaN(exitCode) ? 0 : exitCode);
         } else {
