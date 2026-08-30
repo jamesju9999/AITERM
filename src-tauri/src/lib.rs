@@ -138,33 +138,40 @@ pub fn run_headless() {
 pub fn run() {
     let config = Arc::new(ConfigStore::new());
     let secrets = Arc::new(SecretStore::new());
-    let usage_store = Arc::new(tauri::async_runtime::block_on(async {
-        let s = usage::UsageStore::new().await;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-        s.prune_expired(now).await;
-        s
-    }));
+
+    // 這 5 個資料庫彼此獨立、互不相依（各自開自己的連線、建自己的表）。
+    // 原本用 5 個分開的 block_on 依序執行，等於白白疊加 5 次的開連線／
+    // 建表延遲，而且整段都發生在 tauri::Builder 建立之前——app 連「開始
+    // 建立視窗」都還沒開始。改成同一個 block_on 裡用 tokio::join! 平行跑。
+    let (usage_store, design_db, loop_session_db, kb_db, mail_db) =
+        tauri::async_runtime::block_on(async {
+            tokio::join!(
+                async {
+                    let s = usage::UsageStore::new().await;
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+                    s.prune_expired(now).await;
+                    s
+                },
+                DesignDb::new(),
+                LoopSessionDb::new(),
+                db::knowledge_base::KnowledgeBaseDb::new(),
+                MailDb::new(),
+            )
+        });
+    let usage_store = Arc::new(usage_store);
+
     let router = AiRouter::new(config.clone(), secrets.clone(), usage_store.clone());
 
-    let design_db = tauri::async_runtime::block_on(async { DesignDb::new().await });
-    let loop_session_db = tauri::async_runtime::block_on(async { LoopSessionDb::new().await });
-    let kb_db = tauri::async_runtime::block_on(async { db::knowledge_base::KnowledgeBaseDb::new().await });
-    let mail_db = tauri::async_runtime::block_on(async { MailDb::new().await });
-
-    // Initialize McpManager and connect to enabled servers
-    let mcp_manager: McpManagerState = {
-        let mut manager = mcp::McpManager::new();
-        let cfg = config.get();
-        if cfg.mcp_enabled {
-            tauri::async_runtime::block_on(async {
-                manager.connect_all(&cfg.mcp_servers).await;
-            });
-        }
-        Arc::new(tokio::sync::Mutex::new(manager))
-    };
+    // McpManager 本身的建立不涉及 I/O（純記憶體），可以立刻建好、.manage()
+    // 進去；真正連線每個設定好的 MCP 伺服器（connect_all，常常要 spawn
+    // 子行程，可能很慢）挪到 .setup() 裡背景做——跟下面 bridge server／
+    // MCP tool server 同一個模式（失敗只記 log，不擋 app 啟動）。
+    // mcp_enabled 預設是 true，這一步原本是本函式最大宗的啟動延遲來源：
+    // 只要設定裡有任何 MCP 伺服器，視窗要等它們全部連完才會出現。
+    let mcp_manager: McpManagerState = Arc::new(tokio::sync::Mutex::new(mcp::McpManager::new()));
 
     let sidecar_path = db::resolve_db2_sidecar_path();
 
@@ -210,6 +217,23 @@ pub fn run() {
             // ChatGPT Web 供應商的傳輸層。這裡只是把 AppHandle 存起來——
             // webview 要到第一個請求進來時才建立。
             chatgpt_web::session::init(app.handle().clone());
+
+            // MCP 伺服器連線：見上面 mcp_manager 建立處的說明，原本同步
+            // connect_all 挪到這裡背景做，不擋視窗顯示。
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Manager;
+                    let config = handle.state::<Arc<ConfigStore>>().inner().clone();
+                    let cfg = config.get();
+                    if !cfg.mcp_enabled {
+                        return;
+                    }
+                    let manager = handle.state::<McpManagerState>().inner().clone();
+                    let mut manager = manager.lock().await;
+                    manager.connect_all(&cfg.mcp_servers).await;
+                });
+            }
 
             // 橋接 server：設定為 enabled 時隨 app 啟動。失敗只記 log 不擋啟動
             // ——埠被占用不該讓整個 app 起不來，設定頁會顯示錯誤。
