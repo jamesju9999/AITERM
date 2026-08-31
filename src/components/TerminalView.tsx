@@ -1111,6 +1111,33 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     };
     liveFrame?.addEventListener("scroll", pinLiveFrameScroll);
 
+    // The live pane shows "what's happening right now"; scrolling back
+    // through history is what the block cards above are for. Since the xterm
+    // buffer is no longer cleared on Windows (see useTerminalBlocks' OSC 133 D
+    // branch), the wheel would otherwise scroll into scrollback and re-reveal
+    // the very output that already has a card sitting above it.
+    //
+    // Not simply swallowed: a wheel gesture that does nothing at all reads as
+    // a frozen UI. preventDefault stops xterm's own viewport from scrolling,
+    // then the delta is forwarded to the real scroll container (the block
+    // list), so the wheel behaves the same over the live pane as it does over
+    // any card.
+    //
+    // Alternate buffer is deliberately exempt: full-screen programs (vim,
+    // htop, less) either consume the wheel themselves or have xterm translate
+    // it into key/mouse events for them, and they own the whole frame anyway
+    // — there is no card list to scroll instead.
+    const onLiveWheel = (e: WheelEvent) => {
+      if (isAlternateBufferRef.current) return;
+      e.preventDefault();
+      const scroller = blockListRef.current;
+      if (scroller) scroller.scrollTop += e.deltaY;
+    };
+    // Non-passive: a passive listener cannot preventDefault, and Chromium
+    // treats wheel listeners as passive by default.
+    hostRef.current.addEventListener("wheel", onLiveWheel, { passive: false });
+    const liveWheelHost = hostRef.current;
+
     // 注音/中文組字進行中就不要強制重繪（見下方寫入路徑的 isWindows 分支）。
     //
     // 那個強制 refresh 是 Windows/WebView2 專屬的補償，用來避免直接打進即時
@@ -1683,6 +1710,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       if (ro && hostRef.current) ro.unobserve(hostRef.current);
       dprMediaQuery?.removeEventListener("change", onDprChange);
       liveFrame?.removeEventListener("scroll", pinLiveFrameScroll);
+      liveWheelHost.removeEventListener("wheel", onLiveWheel);
       ta?.removeEventListener("compositionstart", onCompositionStart);
       ta?.removeEventListener("compositionend", onCompositionEnd);
       decSet.dispose();
@@ -1918,6 +1946,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         {/* Terminal */}
         <div
           ref={blockListRef}
+          // Identifies the container the live pane's locked wheel forwards to
+          // — see onLiveWheel.
+          data-aiterm-live-scroll-target="1"
           style={{
             display: viewTab === "terminal" ? "flex" : "none",
             flexDirection: "column",
