@@ -171,12 +171,6 @@ export function useTerminalBlocks(
   const clearAndRebasePromptEnd = useCallback((t: Terminal) => {
     const cursorRowBeforeClear = t.buffer.active.cursorY + t.buffer.active.baseY;
     t.clear();
-    // TEMP DIAG — this client-side clear is the suspected origin of the
-    // xterm-vs-ConPTY row divergence behind the stuck-input report; ConPTY is
-    // never told it happened. Pair this with [cursor-diag] in TerminalView.
-    console.log(
-      `[cursor-diag] term.clear() called — cursorY before=${cursorRowBeforeClear} after=${t.buffer.active.cursorY} baseY after=${t.buffer.active.baseY}`,
-    );
     if (promptEndRef.current && promptEndRef.current.row === cursorRowBeforeClear) {
       promptEndRef.current = { row: 0, col: promptEndRef.current.col };
     }
@@ -394,20 +388,29 @@ export function useTerminalBlocks(
           return true;
         }
 
-        // Windows-only: clear on the next tick instead of waiting for the async
-        // headless-parse in finalizeBlock (avoids a race where a long/scrolled
-        // command's completion and the shell's next prompt can arrive batched
-        // together — Windows/ConPTY specific, not seen on zsh/bash's separate
-        // precmd writes). Root-caused via DevTools diagnostic logging: the
-        // live pane going stale after long output was ConPTY re-transmitting
-        // its currently-visible screen content in response to a PTY resize
-        // that forceLiveRepaint's fit() call was spuriously triggering (see
-        // that function for the full mechanism) — fixed there, not here, but
-        // this deferred-clear timing is still needed on its own merits.
+        // Windows-only: deliberately does NOT clear the xterm buffer.
+        //
+        // Root-caused from real-machine [cursor-diag] logging: term.clear()
+        // moves the cursor's line to row 0 and discards the rest, so xterm
+        // then believes the prompt sits on row 1 — while ConPTY, never told
+        // any of this happened, still has it on row 12 of its own fixed-size
+        // screen. PSReadLine repaints the input line with ABSOLUTE cursor
+        // positioning (ESC[12;62H) on every keystroke, so once the two
+        // disagree, every repaint lands on a row the user isn't looking at
+        // and the visible prompt line freezes — reported as "typing a command
+        // a second time gets stuck after the first character". The same
+        // client-side-only illusion is why a later window resize could make
+        // ConPTY resurface old output: it genuinely still has it.
+        //
+        // zsh/bash repaint with relative moves (CR + backspace), so they are
+        // immune and keep the original clearing behavior below. On Windows
+        // the buffer now stays in lockstep with ConPTY and old output is
+        // hidden purely by the live pane's height clipping (TerminalView's
+        // liveRows + the bottom-anchored host), which needs no cooperation
+        // from ConPTY to stay correct.
         const isWindows = hostPlatform === "windows";
         if (isWindows) {
           setTimeout(() => {
-            clearAndRebasePromptEnd(term);
             term?.scrollToBottom();
             onLiveClear?.();
           }, 0);

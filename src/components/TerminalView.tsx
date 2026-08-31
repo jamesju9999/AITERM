@@ -524,12 +524,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   useEffect(() => { isAlternateBufferRef.current = isAlternateBuffer; }, [isAlternateBuffer]);
   const resizeRepaintGateRef = useRef<ResizeRepaintGate | null>(null);
   if (!resizeRepaintGateRef.current) resizeRepaintGateRef.current = new ResizeRepaintGate();
-  // TEMP DIAG — remove after confirming the real timing/content of the
-  // resize-repaint-duplicate bug. resizeRepaintGate's ARM_MS (300ms) turned
-  // out too short for a real-machine repro where the duplicate appeared
-  // ~1s after a maximize; this widens the observation window to 3s and logs
-  // full chunk content instead of a 200-char preview.
-  const lastResizeAtDiagRef = useRef<number>(-Infinity);
 
   // Generate a one-time identifying tab title from the first executed
   // command(s). Debounced so rapid successive commands are captured together;
@@ -603,18 +597,19 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // either way the live pane is freshly empty at that point.
   const [liveRows, setLiveRows] = useState(MIN_LIVE_ROWS);
   useEffect(() => {
-    // Windows-only：跳過收縮，維持目前高度（通常是指令執行中撐開的
-    // MAX_LIVE_ROWS）。root-caused via 一次實機截圖：Windows 上某些自訂
-    // 提示字元「消失」的個案裡，不是 ConPTY 沒有把它印出來，是這個 effect 在區塊一
-    // 變成 completed 就立刻把窗格收到只剩 MIN_LIVE_ROWS（3 行）——但自訂
-    // prompt（例如 oh-my-posh）需要額外時間才會真的印出提示字元，等它終於
-    // 抵達時，區塊早就不是 running 中了，下面 onWriteComplete 的
-    // setLiveRows(MAX_LIVE_ROWS) 不會再觸發（那個分支的註解就是為了避免
-    // 窗格卡在 MAX 才特地排除非 running 情況），窗格因此永遠卡在 3 行，
-    // 遲來的提示字元是被裁掉看不到，不是不存在。代價是 Windows 上短指令
-    // 執行完窗格不會像其他平台一樣收窄回 3 行——可接受的外觀犧牲，換取
-    // 提示字元一定在視野內。
-    if (navigator.platform.toLowerCase().startsWith("win")) return;
+    // Every platform shrinks here, Windows included.
+    //
+    // Windows used to skip this, to work around a real-machine bug where a
+    // slow custom prompt (oh-my-posh) printed its prompt text only after the
+    // block had already flipped to "completed" — too late for the
+    // MAX_LIVE_ROWS bump below, which is deliberately gated on a block being
+    // "running" — leaving the prompt clipped out of a pane already shrunk to
+    // 3 rows. That workaround is now both unnecessary and harmful: the pane
+    // clips from the BOTTOM on Windows (see bottomAnchorLive), so the last
+    // row — where the prompt always lands, however late — is always the one
+    // row guaranteed to be visible. And since Windows no longer clears the
+    // xterm buffer (see useTerminalBlocks' OSC 133 D branch), a pane left
+    // expanded would keep showing the old output that already has a card.
     setLiveRows(MIN_LIVE_ROWS);
   }, [visibleBlockCount]);
 
@@ -667,6 +662,13 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     (termState as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } } } | null)
       ?._core?._renderService?.dimensions?.css?.cell?.height || 14 * 1.1;
   const liveHeightPx = Math.round(liveRows * cellHeightPx);
+
+  // True when the live pane must show the BOTTOM rows of the xterm buffer
+  // rather than the top — see the host element's style comment in the JSX.
+  // Never while a full-screen TUI owns the alternate buffer: that draws its
+  // own complete screen into a full-height frame, with nothing to clip.
+  const bottomAnchorLive =
+    !isAlternateBuffer && navigator.platform.toLowerCase().startsWith("win");
 
   // Fetch git info (branch, insertions/deletions) for completed blocks, debounced 500ms.
   const gitFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1160,25 +1162,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           lastPtyOutputAtRef.current = Date.now();
           const text = decoder.decode(bytes, { stream: true });
           hasReceivedLiveChunk = true;
-          // TEMP DIAG — remove once the coordinate-divergence question is
-          // settled. PSReadLine repaints the input line with ABSOLUTE cursor
-          // positioning (ESC[<row>;<col>H). If ConPTY's idea of which row the
-          // prompt is on drifts from xterm's — which the app's own
-          // client-side term.clear() can cause, since ConPTY is never told
-          // about it — that repaint lands on a different row than the one the
-          // user is looking at, and the line appears frozen/uneditable
-          // (reported: typing `dir` a second time after a clear gets stuck
-          // after the first character). This logs ConPTY's claimed row next
-          // to xterm's own, so the exact moment they diverge is visible
-          // rather than inferred.
-          {
-            const buf = term.buffer.active;
-            const cup = /\x1b\[(\d*);(\d*)H/.exec(text);
-            const claimed = cup ? `conptyRow=${cup[1] || 1} conptyCol=${cup[2] || 1}` : "conptyRow=- conptyCol=-";
-            console.log(
-              `[cursor-diag] ${claimed} xtermCursorY=${buf.cursorY} xtermRow1Based=${buf.cursorY + 1} baseY=${buf.baseY} viewportY=${buf.viewportY} rows=${term.rows} len=${bytes.length} text=${JSON.stringify(text.slice(0, 160))}`,
-            );
-          }
 
           // 實機測試抓到的 bug：appendOutput(text) 原本在 term.write(text)
           // 呼叫「之後」就同步執行，隱含假設這個 chunk 已經被 xterm 解析
@@ -1570,10 +1553,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       if (navigator.platform.toLowerCase().startsWith("win")) {
         resizeRepaintGateRef.current!.noteResize();
       }
-      // TEMP DIAG — keep resize visible in the same stream, since a resize
-      // also perturbs both coordinate models.
-      lastResizeAtDiagRef.current = Date.now();
-      console.log(`[cursor-diag] term.onResize rows=${r} cols=${c}`);
       // Hold this back until it's safe to send — see hasUnsubmittedPasteRef.
       if (hasUnsubmittedPasteRef.current) {
         pendingResizeRef.current = { rows: r, cols: c };
@@ -2010,6 +1989,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             // (Chromium) and macOS WKWebView. The scroll-pin listener on mount
             // is a redundant safety net for the same failure mode.
             overflow: isAlternateBuffer ? "visible" : "clip",
+            // Anchors the host below so the clipped window shows the BOTTOM
+            // rows — see that element's comment.
+            position: bottomAnchorLive ? "relative" : undefined,
           }}
         >
           <div
@@ -2019,6 +2001,19 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               height: isAlternateBuffer ? "100%" : "220px",
               width: "100%",
               boxSizing: "border-box",
+              // Windows keeps the xterm buffer in lockstep with ConPTY
+              // (useTerminalBlocks no longer clears it — see the OSC 133 D
+              // branch there for why), so the whole ConPTY screen is present:
+              // old output on top, the fresh prompt on the very last row.
+              // Clipping from the top would therefore show the OLDEST rows
+              // and hide the prompt entirely; anchoring the host to the
+              // frame's bottom makes the visible window the last N rows,
+              // which is where the prompt and any new output actually are.
+              // Other platforms still clear the buffer, so their existing
+              // top-clipped layout is already correct and is left untouched.
+              ...(bottomAnchorLive
+                ? { position: "absolute" as const, bottom: 0, left: 0, right: 0, width: "auto" }
+                : null),
             }}
           />
         </div>

@@ -108,24 +108,32 @@ async function renderAndExpand(platform: string) {
   return { liveFrame, expandedHeight, originalPlatform };
 }
 
-describe("TerminalView Windows 上 liveRows 不隨區塊完成立刻收縮", () => {
+describe("TerminalView 區塊完成後的 liveRows 收縮", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("Windows：一個區塊變成 completed 後，即時窗格維持撐開的高度，不收回 MIN_LIVE_ROWS", async () => {
+  it("Windows：一個區塊變成 completed 後，即時窗格跟其他平台一樣收回 MIN_LIVE_ROWS", async () => {
     const { liveFrame, expandedHeight, originalPlatform } = await renderAndExpand("Win32");
     try {
-      // 實機截圖證實的 bug：這裡如果無條件收回 MIN_LIVE_ROWS，遲來的
-      // 自訂 prompt（例如 oh-my-posh）真正印出提示字元時，區塊早就不是
-      // running 中，窗格再也不會撐開，提示字元被裁掉看不到。
+      // 這裡原本斷言的是相反的行為（Windows 維持撐開、永不收縮），用來閃避
+      // 「遲來的自訂 prompt（例如 oh-my-posh）印出提示字元時已經不是 running
+      // 中，窗格不會再撐開，提示字元被裁掉」這個實機 bug。那個閃避已經不需要
+      // 了，而且有害：Windows 現在不清空 xterm 緩衝區（見 useTerminalBlocks
+      // 的 OSC 133 D 分支），整個 ConPTY 畫面都還在，窗格若維持撐開就會把
+      // 舊輸出跟卡片一起顯示、變成重複內容。
+      //
+      // 之所以可以安全收縮，是因為窗格改成錨定底部（見
+      // TerminalView.windowsBottomAnchor.test.tsx）：露出的永遠是畫面最下方
+      // 幾行，而提示字元一定在最後一行——不管它多晚才印出來，都必定在視野
+      // 內。當初那個 bug 的成因是從「頂端」裁切，現在的裁切方向相反。
       act(() => {
         pushBlocks!([
           { id: "1", status: "completed", renderedLines: [{ spans: [{ text: "l1" }] }] },
         ]);
       });
 
-      expect(liveFrame().style.height).toBe(expandedHeight);
+      expect(liveFrame().style.height).not.toBe(expandedHeight);
     } finally {
       Object.defineProperty(navigator, "platform", { value: originalPlatform, configurable: true });
     }

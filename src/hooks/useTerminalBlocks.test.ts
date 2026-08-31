@@ -483,6 +483,72 @@ describe("useTerminalBlocks", () => {
     expect(writePtyMock).not.toHaveBeenCalled();
   });
 
+  it("Windows：OSC 133 D 之後不清空 xterm 緩衝區——清了會讓 PSReadLine 的絕對定位對不上", async () => {
+    // 實機 [cursor-diag] log 證實的根因：term.clear() 把游標所在行搬成第 0
+    // 行、其餘丟棄，於是 xterm 認為提示字元在第 1 列；但 ConPTY 從來不知道
+    // 這件事發生過，仍然認為它在第 12 列。PSReadLine 每次按鍵都用絕對定位
+    // （ESC[12;62H）重繪輸入行，於是重繪全部落在 xterm 裡那塊空白的第 12
+    // 列，使用者眼前的提示字元行再也不更新——症狀是「輸入第一個字之後就
+    // 卡住、無法編輯」。zsh/bash 用相對移動重繪，不受影響，所以這是
+    // Windows 專屬的修正；舊輸出改由即時窗格的高度裁切隱藏，不動緩衝區。
+    const writeMock = vi.fn();
+    const onLiveClearMock = vi.fn();
+    const clearSpy = vi.spyOn(term, "clear");
+    const { result: winResult } = renderHook(() =>
+      useTerminalBlocks(
+        "session-1",
+        term,
+        undefined,
+        onLiveClearMock,
+        undefined,
+        undefined,
+        writeMock,
+        "windows",
+      ),
+    );
+
+    act(() => {
+      winResult.current.submitCommand("echo hi");
+    });
+
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;D;0\x07");
+    });
+
+    await waitFor(() => {
+      expect(winResult.current.blocks[0].status).toBe("completed");
+    });
+    await waitFor(() => {
+      expect(onLiveClearMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(clearSpy).not.toHaveBeenCalled();
+    clearSpy.mockRestore();
+  });
+
+  it("非 Windows：維持原本清空緩衝區的行為（zsh/bash 用相對移動重繪，不受影響）", async () => {
+    const clearSpy = vi.spyOn(term, "clear");
+    const { result: macResult } = renderHook(() =>
+      useTerminalBlocks("session-1", term, undefined, undefined, undefined, undefined, undefined, "other"),
+    );
+
+    act(() => {
+      macResult.current.submitCommand("echo hi");
+    });
+
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;D;0\x07");
+    });
+
+    await waitFor(() => {
+      expect(macResult.current.blocks[0].status).toBe("completed");
+    });
+    await waitFor(() => {
+      expect(clearSpy).toHaveBeenCalled();
+    });
+    clearSpy.mockRestore();
+  });
+
   it("clears the live pane on Windows after OSC 133 D without sending any resync byte", async () => {
     // 前兩版修法（Ctrl+L 重試、真正的 PTY resize）都已被實機證據推翻，
     // 見 useTerminalBlocks.ts 該段落的註解——兩者都無法在提示字元根本
