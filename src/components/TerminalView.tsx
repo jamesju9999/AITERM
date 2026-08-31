@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useLocale } from "../contexts/LocaleContext";
 import { findAppCaret } from "../lib/terminalCaret";
 import { collapseWholeStringRepeat } from "../lib/collapseWholeStringRepeat";
+import { ResizeRepaintGate } from "../lib/resizeRepaintGate";
 import { listen } from "@tauri-apps/api/event";
 import { homeDir } from "@tauri-apps/api/path";
 import { Terminal } from "@xterm/xterm";
@@ -516,6 +517,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const blocksRef = useRef(blocks);
   useEffect(() => { blocksRef.current = blocks; }, [blocks]);
 
+  // Same stale-closure bridge for the resize-repaint gate below — it lives
+  // inside the PTY-session effect, which doesn't re-run when alternate-buffer
+  // state flips.
+  const isAlternateBufferRef = useRef(isAlternateBuffer);
+  useEffect(() => { isAlternateBufferRef.current = isAlternateBuffer; }, [isAlternateBuffer]);
+  const resizeRepaintGateRef = useRef<ResizeRepaintGate | null>(null);
+  if (!resizeRepaintGateRef.current) resizeRepaintGateRef.current = new ResizeRepaintGate();
+
   // Generate a one-time identifying tab title from the first executed
   // command(s). Debounced so rapid successive commands are captured together;
   // the ref guard makes it fire at most once per terminal session (the view
@@ -652,8 +661,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     (termState as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } } } | null)
       ?._core?._renderService?.dimensions?.css?.cell?.height || 14 * 1.1;
   const liveHeightPx = Math.round(liveRows * cellHeightPx);
-  // TEMP DIAG — remove after root-causing the resize-duplicate-content bug.
-  console.log(`[resize-diag] liveRows=${liveRows} liveHeightPx=${liveHeightPx} at=${Date.now()}`);
 
   // Fetch git info (branch, insertions/deletions) for completed blocks, debounced 500ms.
   const gitFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1147,8 +1154,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           lastPtyOutputAtRef.current = Date.now();
           const text = decoder.decode(bytes, { stream: true });
           hasReceivedLiveChunk = true;
-          // TEMP DIAG — remove after root-causing the resize-duplicate-content bug.
-          console.log(`[resize-diag] pty-data len=${bytes.length} cursorY=${term.buffer.active.cursorY} text=${JSON.stringify(text.slice(0, 200))}`);
 
           // 實機測試抓到的 bug：appendOutput(text) 原本在 term.write(text)
           // 呼叫「之後」就同步執行，隱含假設這個 chunk 已經被 xterm 解析
@@ -1168,54 +1173,64 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           // 改成把 appendOutput 以及依賴 blocksRef 的 liveRows 判斷都搬進
           // term.write() 的完成 callback，保證同一個 chunk 的 OSC 標記
           // 一定已經先被處理過。
-          const onWriteComplete = () => {
-            appendOutput(text);
-            // Snap the live pane straight to full height the moment a tracked
-            // command is actually running and producing output, rather than
-            // trying to precisely track how many rows are "needed" via cursor
-            // position — that broke for TUI-style content (interactive menus,
-            // prompts) that reposition the cursor non-sequentially to redraw
-            // specific lines, leaving liveRows stuck too small with no way to
-            // scroll into view (mouse-wheel scroll has no connection to
-            // liveRows at all). Gated on a block actually being "running" —
-            // not just "any PTY data arrived" — so the shell's own idle-prompt
-            // output (on connect, or after a command finishes) doesn't also
-            // trigger this: that data isn't part of any tracked block, so
-            // there'd be no `visibleBlockCount` change afterward to shrink it
-            // back down again, leaving the pane stuck at full height forever.
-            const latestBlock = blocksRef.current[blocksRef.current.length - 1];
-            if (latestBlock?.status === "running") {
-              setLiveRows(MAX_LIVE_ROWS);
+          // Routed through resizeRepaintGateRef so a burst of ConPTY
+          // resize-triggered full-screen repaints (see resizeRepaintGate.ts)
+          // collapses to just the last one instead of flashing stale
+          // scrollback content — everything below operates on whatever
+          // chunk the gate actually decides to write, not necessarily the
+          // raw `text` that arrived.
+          const writeChunk = (chunkText: string) => {
+            const onWriteComplete = () => {
+              appendOutput(chunkText);
+              // Snap the live pane straight to full height the moment a tracked
+              // command is actually running and producing output, rather than
+              // trying to precisely track how many rows are "needed" via cursor
+              // position — that broke for TUI-style content (interactive menus,
+              // prompts) that reposition the cursor non-sequentially to redraw
+              // specific lines, leaving liveRows stuck too small with no way to
+              // scroll into view (mouse-wheel scroll has no connection to
+              // liveRows at all). Gated on a block actually being "running" —
+              // not just "any PTY data arrived" — so the shell's own idle-prompt
+              // output (on connect, or after a command finishes) doesn't also
+              // trigger this: that data isn't part of any tracked block, so
+              // there'd be no `visibleBlockCount` change afterward to shrink it
+              // back down again, leaving the pane stuck at full height forever.
+              const latestBlock = blocksRef.current[blocksRef.current.length - 1];
+              if (latestBlock?.status === "running") {
+                setLiveRows(MAX_LIVE_ROWS);
+              }
+            };
+
+            if (isWindows) {
+              // Force a repaint once xterm has actually finished processing this
+              // chunk (the write() completion callback, not just the write() call
+              // returning — writes are queued/async internally). Without this,
+              // characters typed directly into the live terminal (echoed back by
+              // the shell through the PTY, not rendered locally like WarpInput)
+              // can silently fail to paint on some Windows/WebView2 setups even
+              // though they were received and buffered correctly — the dropped
+              // keystrokes still reach the shell (confirmed by Enter submitting
+              // the right command), only the on-screen echo goes missing.
+              // Windows-only: forcing this on every chunk on macOS turned out to
+              // corrupt in-progress IME composition (e.g. Zhuyin/Bopomofo input)
+              // in the live pane, which never needed this — macOS renders every
+              // write reliably on its own.
+              // 組字進行中一律走普通寫入——強制 refresh 會打斷 IME 合成，
+              // 讓組字中的字串跑到畫面別處。compositionend 會補一次重繪。
+              if (isComposingRef.current) {
+                term.write(chunkText, onWriteComplete);
+              } else {
+                term.write(chunkText, () => {
+                  term.refresh(0, term.rows - 1);
+                  onWriteComplete();
+                });
+              }
+            } else {
+              term.write(chunkText, onWriteComplete);
             }
           };
 
-          if (isWindows) {
-            // Force a repaint once xterm has actually finished processing this
-            // chunk (the write() completion callback, not just the write() call
-            // returning — writes are queued/async internally). Without this,
-            // characters typed directly into the live terminal (echoed back by
-            // the shell through the PTY, not rendered locally like WarpInput)
-            // can silently fail to paint on some Windows/WebView2 setups even
-            // though they were received and buffered correctly — the dropped
-            // keystrokes still reach the shell (confirmed by Enter submitting
-            // the right command), only the on-screen echo goes missing.
-            // Windows-only: forcing this on every chunk on macOS turned out to
-            // corrupt in-progress IME composition (e.g. Zhuyin/Bopomofo input)
-            // in the live pane, which never needed this — macOS renders every
-            // write reliably on its own.
-            // 組字進行中一律走普通寫入——強制 refresh 會打斷 IME 合成，
-            // 讓組字中的字串跑到畫面別處。compositionend 會補一次重繪。
-            if (isComposingRef.current) {
-              term.write(text, onWriteComplete);
-            } else {
-              term.write(text, () => {
-                term.refresh(0, term.rows - 1);
-                onWriteComplete();
-              });
-            }
-          } else {
-            term.write(text, onWriteComplete);
-          }
+          resizeRepaintGateRef.current!.handleChunk(text, isAlternateBufferRef.current, writeChunk);
 
           // Detect password prompts during agent mode
           if (agentMissionRef.current?.active) {
@@ -1316,6 +1331,13 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       const pending = pendingResizeRef.current;
       pendingResizeRef.current = null;
       if (pending && sessionRef.current) {
+        // Re-arm here, not just at the original onResize firing — this can
+        // fire well past the gate's original arm window (held back until
+        // Enter/timeout), and it's this call, not the original resize event,
+        // that actually triggers ConPTY's repaint.
+        if (navigator.platform.toLowerCase().startsWith("win")) {
+          resizeRepaintGateRef.current!.noteResize();
+        }
         resizePty(sessionRef.current, pending).catch(console.error);
       }
     };
@@ -1517,15 +1539,18 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     });
 
     term.onResize(({ rows: r, cols: c }) => {
-      // TEMP DIAG — remove after root-causing the resize-duplicate-content bug.
-      console.log(`[resize-diag] term.onResize rows=${r} cols=${c} at=${Date.now()}`);
+      // Arms the gate that coalesces ConPTY's resize-repaint burst — see
+      // resizeRepaintGate.ts. Windows-only: no such repaint-on-resize
+      // behavior exists on Unix ptys.
+      if (navigator.platform.toLowerCase().startsWith("win")) {
+        resizeRepaintGateRef.current!.noteResize();
+      }
       // Hold this back until it's safe to send — see hasUnsubmittedPasteRef.
       if (hasUnsubmittedPasteRef.current) {
         pendingResizeRef.current = { rows: r, cols: c };
         return;
       }
       if (sessionRef.current) {
-        console.log(`[resize-diag] resizePty called rows=${r} cols=${c} at=${Date.now()}`);
         resizePty(sessionRef.current, { rows: r, cols: c }).catch(console.error);
       } else {
         // No session yet — createPty() is still in flight. Stash it; the
