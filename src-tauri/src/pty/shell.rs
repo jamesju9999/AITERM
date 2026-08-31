@@ -34,6 +34,25 @@ fn windows_default_shell() -> Option<ShellSpec> {
     None
 }
 
+/// Where the PowerShell integration script lives.
+///
+/// Deliberately NOT the temp dir: Windows Defender flagged the resulting
+/// spawn as `Trojan:Win32/Commando.A!ml` on a real machine — an ML false
+/// positive on the classic malware shape of dot-sourcing a PowerShell script
+/// out of `%TEMP%`. CreateProcessW then failed with "存取被拒 (os error 5)"
+/// and every tab stuck at "initializing…" with no fallback. The script is
+/// app-owned data rather than a scratch file anyway, so the app's own
+/// local-data directory is both the more correct and the less suspicious
+/// home for it. Falls back to the temp dir only if there's no data dir at
+/// all, which beats failing to start a shell entirely.
+#[cfg(windows)]
+fn powershell_integration_dir() -> PathBuf {
+    dirs::data_local_dir()
+        .map(|d| d.join("AITerm"))
+        .unwrap_or_else(std::env::temp_dir)
+        .join("shell_integration")
+}
+
 /// Inject OSC 133 shell integration into PowerShell (pwsh.exe / powershell.exe).
 ///
 /// Overrides the `prompt` function to emit D (command finished) and A (prompt start)
@@ -43,9 +62,9 @@ fn windows_default_shell() -> Option<ShellSpec> {
 /// our wrapper.
 #[cfg(windows)]
 pub(crate) fn inject_powershell_integration(program: PathBuf) -> ShellSpec {
-    let temp_dir = std::env::temp_dir().join("aiterm_ps");
-    let _ = std::fs::create_dir_all(&temp_dir);
-    let script_path = temp_dir.join("shell_integration.ps1");
+    let script_dir = powershell_integration_dir();
+    let _ = std::fs::create_dir_all(&script_dir);
+    let script_path = script_dir.join("shell_integration.ps1");
 
     let script = r#"
 # ── AITerm Shell Integration (PowerShell) ──
@@ -393,9 +412,35 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn powershell_integration_script_lives_outside_temp() {
+        // Windows Defender flagged the whole spawn as
+        // Trojan:Win32/Commando.A!ml on a real machine — an ML false
+        // positive triggered by the classic malware shape of dot-sourcing a
+        // PowerShell script out of %TEMP%. CreateProcessW then failed with
+        // "存取被拒 (os error 5)" and every tab stuck at "initializing…".
+        // The script is app-owned data, not a temp file, so it belongs in
+        // the app's own local-data directory, which is a far less
+        // suspicious location to launch from.
+        let spec = inject_powershell_integration(PathBuf::from("pwsh.exe"));
+        let launch_arg = spec.args.last().expect("script path is the -Command arg");
+        let temp = std::env::temp_dir();
+
+        assert!(
+            !launch_arg.contains(&temp.to_string_lossy().to_string()),
+            "shell integration must not be dot-sourced out of the temp dir \
+             (AV heuristics flag that shape), got: {launch_arg}"
+        );
+        assert!(
+            launch_arg.contains("shell_integration.ps1"),
+            "expected the integration script to still be the thing sourced, got: {launch_arg}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn powershell_integration_emits_c_via_enter_override_and_b_after_rendered_prompt() {
         let spec = inject_powershell_integration(PathBuf::from("pwsh.exe"));
-        let script_path = std::env::temp_dir().join("aiterm_ps").join("shell_integration.ps1");
+        let script_path = powershell_integration_dir().join("shell_integration.ps1");
         let content = std::fs::read_to_string(&script_path).expect("script should have been written");
 
         assert!(

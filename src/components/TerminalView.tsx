@@ -1160,15 +1160,24 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           lastPtyOutputAtRef.current = Date.now();
           const text = decoder.decode(bytes, { stream: true });
           hasReceivedLiveChunk = true;
-          // TEMP DIAG — remove after confirming real timing/content.
+          // TEMP DIAG — remove once the coordinate-divergence question is
+          // settled. PSReadLine repaints the input line with ABSOLUTE cursor
+          // positioning (ESC[<row>;<col>H). If ConPTY's idea of which row the
+          // prompt is on drifts from xterm's — which the app's own
+          // client-side term.clear() can cause, since ConPTY is never told
+          // about it — that repaint lands on a different row than the one the
+          // user is looking at, and the line appears frozen/uneditable
+          // (reported: typing `dir` a second time after a clear gets stuck
+          // after the first character). This logs ConPTY's claimed row next
+          // to xterm's own, so the exact moment they diverge is visible
+          // rather than inferred.
           {
-            const sinceResize = Date.now() - lastResizeAtDiagRef.current;
-            if (sinceResize <= 3000) {
-              const buf = term.buffer.active;
-              console.log(
-                `[resize-diag2] +${sinceResize}ms len=${bytes.length} rows=${term.rows} cols=${term.cols} cursorY=${buf.cursorY} baseY=${buf.baseY} viewportY=${buf.viewportY} text=${JSON.stringify(text)}`,
-              );
-            }
+            const buf = term.buffer.active;
+            const cup = /\x1b\[(\d*);(\d*)H/.exec(text);
+            const claimed = cup ? `conptyRow=${cup[1] || 1} conptyCol=${cup[2] || 1}` : "conptyRow=- conptyCol=-";
+            console.log(
+              `[cursor-diag] ${claimed} xtermCursorY=${buf.cursorY} xtermRow1Based=${buf.cursorY + 1} baseY=${buf.baseY} viewportY=${buf.viewportY} rows=${term.rows} len=${bytes.length} text=${JSON.stringify(text.slice(0, 160))}`,
+            );
           }
 
           // 實機測試抓到的 bug：appendOutput(text) 原本在 term.write(text)
@@ -1561,16 +1570,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       if (navigator.platform.toLowerCase().startsWith("win")) {
         resizeRepaintGateRef.current!.noteResize();
       }
-      // TEMP DIAG — remove after confirming real timing/content.
+      // TEMP DIAG — keep resize visible in the same stream, since a resize
+      // also perturbs both coordinate models.
       lastResizeAtDiagRef.current = Date.now();
-      console.log(`[resize-diag2] term.onResize rows=${r} cols=${c}`);
+      console.log(`[cursor-diag] term.onResize rows=${r} cols=${c}`);
       // Hold this back until it's safe to send — see hasUnsubmittedPasteRef.
       if (hasUnsubmittedPasteRef.current) {
         pendingResizeRef.current = { rows: r, cols: c };
         return;
       }
       if (sessionRef.current) {
-        console.log(`[resize-diag2] resizePty called rows=${r} cols=${c}`);
         resizePty(sessionRef.current, { rows: r, cols: c }).catch(console.error);
       } else {
         // No session yet — createPty() is still in flight. Stash it; the

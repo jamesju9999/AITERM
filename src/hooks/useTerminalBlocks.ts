@@ -171,6 +171,12 @@ export function useTerminalBlocks(
   const clearAndRebasePromptEnd = useCallback((t: Terminal) => {
     const cursorRowBeforeClear = t.buffer.active.cursorY + t.buffer.active.baseY;
     t.clear();
+    // TEMP DIAG — this client-side clear is the suspected origin of the
+    // xterm-vs-ConPTY row divergence behind the stuck-input report; ConPTY is
+    // never told it happened. Pair this with [cursor-diag] in TerminalView.
+    console.log(
+      `[cursor-diag] term.clear() called — cursorY before=${cursorRowBeforeClear} after=${t.buffer.active.cursorY} baseY after=${t.buffer.active.baseY}`,
+    );
     if (promptEndRef.current && promptEndRef.current.row === cursorRowBeforeClear) {
       promptEndRef.current = { row: 0, col: promptEndRef.current.col };
     }
