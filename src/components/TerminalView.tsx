@@ -652,6 +652,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     (termState as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } } } | null)
       ?._core?._renderService?.dimensions?.css?.cell?.height || 14 * 1.1;
   const liveHeightPx = Math.round(liveRows * cellHeightPx);
+  // TEMP DIAG — remove after root-causing the resize-duplicate-content bug.
+  console.log(`[resize-diag] liveRows=${liveRows} liveHeightPx=${liveHeightPx} at=${Date.now()}`);
 
   // Fetch git info (branch, insertions/deletions) for completed blocks, debounced 500ms.
   const gitFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1145,6 +1147,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           lastPtyOutputAtRef.current = Date.now();
           const text = decoder.decode(bytes, { stream: true });
           hasReceivedLiveChunk = true;
+          // TEMP DIAG — remove after root-causing the resize-duplicate-content bug.
+          console.log(`[resize-diag] pty-data len=${bytes.length} cursorY=${term.buffer.active.cursorY} text=${JSON.stringify(text.slice(0, 200))}`);
 
           // 實機測試抓到的 bug：appendOutput(text) 原本在 term.write(text)
           // 呼叫「之後」就同步執行，隱含假設這個 chunk 已經被 xterm 解析
@@ -1513,12 +1517,15 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     });
 
     term.onResize(({ rows: r, cols: c }) => {
+      // TEMP DIAG — remove after root-causing the resize-duplicate-content bug.
+      console.log(`[resize-diag] term.onResize rows=${r} cols=${c} at=${Date.now()}`);
       // Hold this back until it's safe to send — see hasUnsubmittedPasteRef.
       if (hasUnsubmittedPasteRef.current) {
         pendingResizeRef.current = { rows: r, cols: c };
         return;
       }
       if (sessionRef.current) {
+        console.log(`[resize-diag] resizePty called rows=${r} cols=${c} at=${Date.now()}`);
         resizePty(sessionRef.current, { rows: r, cols: c }).catch(console.error);
       } else {
         // No session yet — createPty() is still in flight. Stash it; the
