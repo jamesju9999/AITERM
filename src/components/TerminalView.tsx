@@ -4,6 +4,7 @@ import { useLocale } from "../contexts/LocaleContext";
 import { findAppCaret } from "../lib/terminalCaret";
 import { collapseWholeStringRepeat } from "../lib/collapseWholeStringRepeat";
 import { ResizeRepaintGate } from "../lib/resizeRepaintGate";
+import { IdleShrinkScheduler } from "../lib/idleShrinkScheduler";
 import { listen } from "@tauri-apps/api/event";
 import { homeDir } from "@tauri-apps/api/path";
 import { Terminal } from "@xterm/xterm";
@@ -524,12 +525,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   useEffect(() => { isAlternateBufferRef.current = isAlternateBuffer; }, [isAlternateBuffer]);
   const resizeRepaintGateRef = useRef<ResizeRepaintGate | null>(null);
   if (!resizeRepaintGateRef.current) resizeRepaintGateRef.current = new ResizeRepaintGate();
-  // TEMP DIAG — remove after confirming the real timing/content of the
-  // resize-repaint-duplicate bug. resizeRepaintGate's ARM_MS (300ms) turned
-  // out too short for a real-machine repro where the duplicate appeared
-  // ~1s after a maximize; this widens the observation window to 3s and logs
-  // full chunk content instead of a 200-char preview.
-  const lastResizeAtDiagRef = useRef<number>(-Infinity);
 
   // Generate a one-time identifying tab title from the first executed
   // command(s). Debounced so rapid successive commands are captured together;
@@ -602,19 +597,33 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // terminal (a real command finished) or wipes it (the `clear` command) —
   // either way the live pane is freshly empty at that point.
   const [liveRows, setLiveRows] = useState(MIN_LIVE_ROWS);
+  const idleShrinkSchedulerRef = useRef<IdleShrinkScheduler | null>(null);
+  if (!idleShrinkSchedulerRef.current) {
+    idleShrinkSchedulerRef.current = new IdleShrinkScheduler(
+      () => lastPtyOutputAtRef.current,
+      () => setLiveRows(MIN_LIVE_ROWS),
+    );
+  }
   useEffect(() => {
-    // Windows-only：跳過收縮，維持目前高度（通常是指令執行中撐開的
-    // MAX_LIVE_ROWS）。root-caused via 一次實機截圖：Windows 上某些自訂
-    // 提示字元「消失」的個案裡，不是 ConPTY 沒有把它印出來，是這個 effect 在區塊一
-    // 變成 completed 就立刻把窗格收到只剩 MIN_LIVE_ROWS（3 行）——但自訂
-    // prompt（例如 oh-my-posh）需要額外時間才會真的印出提示字元，等它終於
-    // 抵達時，區塊早就不是 running 中了，下面 onWriteComplete 的
-    // setLiveRows(MAX_LIVE_ROWS) 不會再觸發（那個分支的註解就是為了避免
-    // 窗格卡在 MAX 才特地排除非 running 情況），窗格因此永遠卡在 3 行，
-    // 遲來的提示字元是被裁掉看不到，不是不存在。代價是 Windows 上短指令
-    // 執行完窗格不會像其他平台一樣收窄回 3 行——可接受的外觀犧牲，換取
-    // 提示字元一定在視野內。
-    if (navigator.platform.toLowerCase().startsWith("win")) return;
+    // Windows-only: don't shrink the instant a block completes — wait for
+    // the PTY to actually go quiet first (idleShrinkScheduler.ts). Shrinking
+    // immediately clips a custom shell prompt (oh-my-posh etc.) that takes
+    // extra time to print after the block already flips to "completed" —
+    // root-caused via a real-machine screenshot of the previous version of
+    // this fix, which instead skipped shrinking on Windows entirely. That
+    // traded the clipped-prompt bug for a worse one: since the live pane
+    // stayed tall, and the "cleared" old output is a client-side-only
+    // xterm.js illusion that ConPTY's own screen buffer was never told
+    // about, a later window resize — which makes ConPTY re-transmit its
+    // real, never-cleared screen — could visibly resurface that old output
+    // (confirmed via real-machine video + diagnostic logging). Waiting for
+    // quiet gets both: the late prompt gets its chance, and by the time the
+    // user actually resizes, the pane is already back down to
+    // MIN_LIVE_ROWS, clipping anything ConPTY later replays.
+    if (navigator.platform.toLowerCase().startsWith("win")) {
+      idleShrinkSchedulerRef.current!.arm();
+      return () => idleShrinkSchedulerRef.current!.cancel();
+    }
     setLiveRows(MIN_LIVE_ROWS);
   }, [visibleBlockCount]);
 
@@ -1160,16 +1169,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           lastPtyOutputAtRef.current = Date.now();
           const text = decoder.decode(bytes, { stream: true });
           hasReceivedLiveChunk = true;
-          // TEMP DIAG — remove after confirming real timing/content.
-          {
-            const sinceResize = Date.now() - lastResizeAtDiagRef.current;
-            if (sinceResize <= 3000) {
-              const buf = term.buffer.active;
-              console.log(
-                `[resize-diag2] +${sinceResize}ms len=${bytes.length} rows=${term.rows} cols=${term.cols} cursorY=${buf.cursorY} baseY=${buf.baseY} viewportY=${buf.viewportY} text=${JSON.stringify(text)}`,
-              );
-            }
-          }
 
           // 實機測試抓到的 bug：appendOutput(text) 原本在 term.write(text)
           // 呼叫「之後」就同步執行，隱含假設這個 chunk 已經被 xterm 解析
@@ -1561,16 +1560,12 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       if (navigator.platform.toLowerCase().startsWith("win")) {
         resizeRepaintGateRef.current!.noteResize();
       }
-      // TEMP DIAG — remove after confirming real timing/content.
-      lastResizeAtDiagRef.current = Date.now();
-      console.log(`[resize-diag2] term.onResize rows=${r} cols=${c}`);
       // Hold this back until it's safe to send — see hasUnsubmittedPasteRef.
       if (hasUnsubmittedPasteRef.current) {
         pendingResizeRef.current = { rows: r, cols: c };
         return;
       }
       if (sessionRef.current) {
-        console.log(`[resize-diag2] resizePty called rows=${r} cols=${c}`);
         resizePty(sessionRef.current, { rows: r, cols: c }).catch(console.error);
       } else {
         // No session yet — createPty() is still in flight. Stash it; the
