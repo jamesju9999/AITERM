@@ -524,6 +524,12 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   useEffect(() => { isAlternateBufferRef.current = isAlternateBuffer; }, [isAlternateBuffer]);
   const resizeRepaintGateRef = useRef<ResizeRepaintGate | null>(null);
   if (!resizeRepaintGateRef.current) resizeRepaintGateRef.current = new ResizeRepaintGate();
+  // TEMP DIAG — remove after confirming the real timing/content of the
+  // resize-repaint-duplicate bug. resizeRepaintGate's ARM_MS (300ms) turned
+  // out too short for a real-machine repro where the duplicate appeared
+  // ~1s after a maximize; this widens the observation window to 3s and logs
+  // full chunk content instead of a 200-char preview.
+  const lastResizeAtDiagRef = useRef<number>(-Infinity);
 
   // Generate a one-time identifying tab title from the first executed
   // command(s). Debounced so rapid successive commands are captured together;
@@ -1154,6 +1160,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           lastPtyOutputAtRef.current = Date.now();
           const text = decoder.decode(bytes, { stream: true });
           hasReceivedLiveChunk = true;
+          // TEMP DIAG — remove after confirming real timing/content.
+          {
+            const sinceResize = Date.now() - lastResizeAtDiagRef.current;
+            if (sinceResize <= 3000) {
+              const buf = term.buffer.active;
+              console.log(
+                `[resize-diag2] +${sinceResize}ms len=${bytes.length} rows=${term.rows} cols=${term.cols} cursorY=${buf.cursorY} baseY=${buf.baseY} viewportY=${buf.viewportY} text=${JSON.stringify(text)}`,
+              );
+            }
+          }
 
           // 實機測試抓到的 bug：appendOutput(text) 原本在 term.write(text)
           // 呼叫「之後」就同步執行，隱含假設這個 chunk 已經被 xterm 解析
@@ -1545,12 +1561,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       if (navigator.platform.toLowerCase().startsWith("win")) {
         resizeRepaintGateRef.current!.noteResize();
       }
+      // TEMP DIAG — remove after confirming real timing/content.
+      lastResizeAtDiagRef.current = Date.now();
+      console.log(`[resize-diag2] term.onResize rows=${r} cols=${c}`);
       // Hold this back until it's safe to send — see hasUnsubmittedPasteRef.
       if (hasUnsubmittedPasteRef.current) {
         pendingResizeRef.current = { rows: r, cols: c };
         return;
       }
       if (sessionRef.current) {
+        console.log(`[resize-diag2] resizePty called rows=${r} cols=${c}`);
         resizePty(sessionRef.current, { rows: r, cols: c }).catch(console.error);
       } else {
         // No session yet — createPty() is still in flight. Stash it; the
