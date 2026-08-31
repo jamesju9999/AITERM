@@ -113,15 +113,12 @@ describe("TerminalView Windows 上 liveRows 不隨區塊完成立刻收縮", () 
     vi.restoreAllMocks();
   });
 
-  it("Windows：一個區塊變成 completed 的當下，即時窗格還維持撐開的高度，不會立刻收回 MIN_LIVE_ROWS", async () => {
+  it("Windows：一個區塊變成 completed 後，即時窗格維持撐開的高度，不收回 MIN_LIVE_ROWS", async () => {
     const { liveFrame, expandedHeight, originalPlatform } = await renderAndExpand("Win32");
     try {
-      // 實機截圖證實的 bug：這裡如果無條件立刻收回 MIN_LIVE_ROWS，遲來的
+      // 實機截圖證實的 bug：這裡如果無條件收回 MIN_LIVE_ROWS，遲來的
       // 自訂 prompt（例如 oh-my-posh）真正印出提示字元時，區塊早就不是
-      // running 中，窗格再也不會撐開，提示字元被裁掉看不到。現在改成透過
-      // IdleShrinkScheduler 等 PTY 安靜一段時間再收縮（見該檔案的測試），
-      // 而不是像先前那樣完全不收縮——這裡驗證的是「不會立刻收縮」那一半、
-      // 完成當下（尚未安靜滿一段時間）高度還是撐開的。
+      // running 中，窗格再也不會撐開，提示字元被裁掉看不到。
       act(() => {
         pushBlocks!([
           { id: "1", status: "completed", renderedLines: [{ spans: [{ text: "l1" }] }] },
