@@ -116,6 +116,22 @@ describe("即時窗格的滑鼠捲動鎖定", () => {
     expect(scroller.scrollTop).toBe(120);
   });
 
+  it("要在捕獲階段攔截並中止傳播——xterm 是在內層 .xterm-viewport 上自己處理滾輪的", async () => {
+    // 實機回報：鎖住之後往上捲仍然會看到舊輸出。原因是監聽掛在外層 host
+    // 的冒泡階段，等它執行時 xterm 內層的 handler 早就已經主動捲動過了，
+    // 這時候再 preventDefault 也救不回來（那是程式化捲動，不是瀏覽器的
+    // 預設行為）。必須在捕獲階段先攔下來，並且中止傳播讓內層根本收不到。
+    const { host } = await mount();
+    const inner = document.createElement("div");
+    host.appendChild(inner);
+    const innerSpy = vi.fn();
+    inner.addEventListener("wheel", innerSpy);
+
+    wheelOn(inner, 120);
+
+    expect(innerSpy).not.toHaveBeenCalled();
+  });
+
   it("全螢幕 TUI（alternate buffer）時放行——vim/htop 這類程式自己要用滾輪", async () => {
     mockIsAlternateBuffer = true;
     const { host } = await mount();

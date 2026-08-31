@@ -652,7 +652,13 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     const term = termRef.current;
     const promptAbsRow = promptAbsRowRef.current;
     if (!term || promptAbsRow === null) return;
-    const viewportRow = promptAbsRow - term.buffer.active.baseY;
+    // viewportY, NOT baseY: xterm renders buffer lines starting at viewportY
+    // (the current scroll position), while baseY is only where the viewport
+    // sits when scrolled fully to the bottom. The two are equal at the bottom
+    // and diverge the moment the buffer is scrolled up, at which point a
+    // baseY-derived offset points at old output instead of the prompt —
+    // exactly what a real-machine screenshot showed.
+    const viewportRow = promptAbsRow - term.buffer.active.viewportY;
     setLiveTopRows(Math.max(0, Math.min(term.rows - 1, viewportRow)));
   }, []);
   syncLiveTopRef.current = syncLiveTop;
@@ -1130,12 +1136,21 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     const onLiveWheel = (e: WheelEvent) => {
       if (isAlternateBufferRef.current) return;
       e.preventDefault();
+      // stopPropagation is the part that actually does the work: xterm
+      // handles the wheel on its own inner .xterm-viewport and scrolls
+      // itself programmatically. A bubble-phase listener out here runs only
+      // after that has already happened, and preventDefault cannot undo a
+      // programmatic scroll — the pane still scrolled into scrollback
+      // (reported from a real machine). Capturing and stopping propagation
+      // means xterm's handler never sees the event at all.
+      e.stopPropagation();
       const scroller = blockListRef.current;
       if (scroller) scroller.scrollTop += e.deltaY;
     };
-    // Non-passive: a passive listener cannot preventDefault, and Chromium
-    // treats wheel listeners as passive by default.
-    hostRef.current.addEventListener("wheel", onLiveWheel, { passive: false });
+    // capture: run before xterm's own inner handler (see stopPropagation
+    // above). Non-passive: a passive listener cannot preventDefault, and
+    // Chromium treats wheel listeners as passive by default.
+    hostRef.current.addEventListener("wheel", onLiveWheel, { passive: false, capture: true });
     const liveWheelHost = hostRef.current;
 
     // 注音/中文組字進行中就不要強制重繪（見下方寫入路徑的 isWindows 分支）。
@@ -1710,7 +1725,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       if (ro && hostRef.current) ro.unobserve(hostRef.current);
       dprMediaQuery?.removeEventListener("change", onDprChange);
       liveFrame?.removeEventListener("scroll", pinLiveFrameScroll);
-      liveWheelHost.removeEventListener("wheel", onLiveWheel);
+      liveWheelHost.removeEventListener("wheel", onLiveWheel, { capture: true });
       ta?.removeEventListener("compositionstart", onCompositionStart);
       ta?.removeEventListener("compositionend", onCompositionEnd);
       decSet.dispose();
