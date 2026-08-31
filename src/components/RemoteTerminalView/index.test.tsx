@@ -73,7 +73,13 @@ const clearMock = vi.fn();
 // 的 onBufferChange callback——`active` 物件跨測試共用同一個參照，
 // beforeEach 只重置它的欄位，不重新賦值，這樣即使元件重新掛載出新的
 // Terminal 實例，讀到的都是同一份、當下正確的狀態。
-const mockBufferActive: { type: "normal" | "alternate" } = { type: "normal" };
+const mockBufferActive: {
+  type: "normal" | "alternate";
+  cursorY: number;
+  cursorX: number;
+  baseY: number;
+  viewportY: number;
+} = { type: "normal", cursorY: 0, cursorX: 0, baseY: 0, viewportY: 0 };
 let capturedBufferChangeHandler: (() => void) | null = null;
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
@@ -86,6 +92,7 @@ vi.mock("@xterm/xterm", () => ({
     scrollToBottom = vi.fn();
     resize = vi.fn();
     cols = 80;
+    rows = 24;
     options: Record<string, unknown> = {};
     parser = {
       registerOscHandler: vi.fn((_code: number, handler: (data: string) => boolean) => {
@@ -182,6 +189,10 @@ beforeEach(() => {
   capturedOscHandler = null;
   capturedBufferChangeHandler = null;
   mockBufferActive.type = "normal";
+  mockBufferActive.cursorY = 0;
+  mockBufferActive.cursorX = 0;
+  mockBufferActive.baseY = 0;
+  mockBufferActive.viewportY = 0;
   appendOutputSpy = null;
   mockSubmitAgent.mockClear();
   mockSend.mockClear();
@@ -409,6 +420,54 @@ describe("RemoteTerminalView", () => {
     await userEvent.click(askAiBtn);
 
     expect(await screen.findByTestId("remote-ai-panel")).toBeInTheDocument();
+  });
+
+  it("Windows 主控端：即時窗格對齊到提示字元那一行，不從第 0 列開始顯示", async () => {
+    // 實機回報的不一致：Windows 主控端不再清空 xterm 緩衝區（見
+    // useTerminalBlocks 的 OSC 133 D 分支），整個 ConPTY 畫面都留著。本機
+    // 分頁靠 TerminalView 的提示字元對齊位移只顯示現在這一段，但觀看端
+    // 當初沒有補上同一套機制，於是即時窗格從第 0 列開始畫，把已經變成
+    // 卡片的舊輸出又顯示一次。
+    const { container } = render(
+      <RemoteTerminalView tabId="t1" connId="cwin" sas="9999" isActive onConnectClick={vi.fn()} />,
+    );
+    await waitFor(() => expect(handlers["granted:cwin"]).toBeDefined());
+    act(() => {
+      handlers["granted:cwin"]({ mode: "control", cols: 80, rows: 24, hostOs: "windows" } as never);
+    });
+    await waitFor(() => expect(capturedOscHandler).toBeTruthy());
+
+    // 提示字元畫在第 7 列（畫面已經被先前的輸出往下推）。
+    mockBufferActive.cursorY = 7;
+    mockBufferActive.baseY = 0;
+    mockBufferActive.viewportY = 0;
+    act(() => {
+      capturedOscHandler!("B");
+    });
+
+    const host = container.querySelector(".aiterm-remote-terminal__scroll") as HTMLElement;
+    await waitFor(() => {
+      expect(parseFloat(host.style.top)).toBeLessThan(0);
+    });
+  });
+
+  it("非 Windows 主控端：不位移（那邊仍然會清空緩衝區，提示字元本來就在第 0 列）", async () => {
+    const { container } = render(
+      <RemoteTerminalView tabId="t1" connId="cnix" sas="9998" isActive onConnectClick={vi.fn()} />,
+    );
+    await waitFor(() => expect(handlers["granted:cnix"]).toBeDefined());
+    act(() => {
+      handlers["granted:cnix"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+    });
+    await waitFor(() => expect(capturedOscHandler).toBeTruthy());
+
+    mockBufferActive.cursorY = 7;
+    act(() => {
+      capturedOscHandler!("B");
+    });
+
+    const host = container.querySelector(".aiterm-remote-terminal__scroll") as HTMLElement;
+    expect(host.style.top).toBe("");
   });
 
   it("唯讀模式下 Ask AI 按鈕停用", async () => {

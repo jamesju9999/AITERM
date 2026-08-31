@@ -109,6 +109,15 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   // term.rows 讀到的會是上一輪 render 當下的舊值，畫面因此不會跟著更新。
   const [hostRows, setHostRows] = useState(MAX_LIVE_ROWS);
 
+  // 見下方 liveTopRows 的說明——OSC 133 B 回報提示字元位置時要用到，但
+  // 真正的實作宣告在後面，所以跟本檔其他同類情況一樣先用 ref 佔位。
+  const syncLiveTopRef = useRef<(() => void) | null>(null);
+  const promptAbsRowRef = useRef<number | null>(null);
+  const handlePromptStart = useCallback((absoluteRow: number) => {
+    promptAbsRowRef.current = absoluteRow;
+    syncLiveTopRef.current?.();
+  }, []);
+
   const { blocks, isAlternateBuffer, submitCommand, appendOutput, clearAllBlocks } = useTerminalBlocks(
     connId,
     termState,
@@ -118,6 +127,8 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
     undefined,
     write,
     hostPlatform,
+    undefined,
+    handlePromptStart,
   );
   const clearAllBlocksRef = useRef(clearAllBlocks);
   clearAllBlocksRef.current = clearAllBlocks;
@@ -215,6 +226,10 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   // 卡片列表跟即時窗格共用同一個外層捲動容器，新卡片完成渲染時捲到底部
   // ——跟 TerminalView.tsx 的 blockListRef 同一個手法、同一個理由。
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
+  // 橋接給滾輪鎖定用——那個監聽器註冊在只依賴 [connId] 的 effect 裡，
+  // 不能靠閉包讀 isAlternateBuffer。
+  const isAlternateBufferRef = useRef(isAlternateBuffer);
+  isAlternateBufferRef.current = isAlternateBuffer;
   const visibleBlockCount = blocks.filter((b) => b.status !== "running" && b.renderedLines).length;
   useEffect(() => {
     scrollAreaRef.current?.scrollTo({ top: scrollAreaRef.current.scrollHeight });
@@ -230,12 +245,37 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
     setLiveRows(MIN_LIVE_ROWS);
   }, [visibleBlockCount]);
 
+  // 提示字元所在的列，讓即時窗格從那一列開始顯示——跟 TerminalView.tsx 的
+  // liveTopRows 同一套機制、同一個理由：Windows 主控端不再清空 xterm 緩衝區
+  // （見 useTerminalBlocks 的 OSC 133 D 分支），整個 ConPTY 畫面都還在，
+  // 從第 0 列開始畫就會把已經變成卡片的舊輸出再顯示一次（實機回報）。
+  // 觀看端跟本機分頁餵的是同一串位元組、共用同一個 useTerminalBlocks，
+  // 所以必須補上同一套對齊，否則兩邊體驗不一致。
+  //
+  // 用 viewportY 不是 baseY：xterm 實際是從 viewportY 開始渲染，兩者只在
+  // 捲到最底時相同。
+  const [liveTopRows, setLiveTopRows] = useState(0);
+  const syncLiveTop = useCallback(() => {
+    if (hostPlatform !== "windows") return;
+    const term = termRef.current;
+    const promptAbsRow = promptAbsRowRef.current;
+    if (!term || promptAbsRow === null) return;
+    const viewportRow = promptAbsRow - term.buffer.active.viewportY;
+    setLiveTopRows(Math.max(0, Math.min(term.rows - 1, viewportRow)));
+  }, [hostPlatform]);
+  syncLiveTopRef.current = syncLiveTop;
+
   // xterm.js 沒有公開 API 可以讀字元格高度——這裡讀的是跟 TerminalView.tsx
   // 同一個內部欄位，同一個 escape hatch，這個 repo 已經有先例。
   const cellHeightPx =
     (termState as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } } } | null)
       ?._core?._renderService?.dimensions?.css?.cell?.height || 14 * 1.1;
   const liveHeightPx = Math.round(liveRows * cellHeightPx);
+  // 全螢幕程式使用中一律不位移：那類程式自己畫滿整個畫面，沒有東西要裁。
+  // 這個 host（.aiterm-remote-terminal__scroll）沒有 padding，所以不需要
+  // TerminalView 那邊的 4px 補償。
+  const liveTopOffsetPx =
+    isAlternateBuffer || liveTopRows <= 0 ? 0 : Math.ceil(liveTopRows * cellHeightPx);
   // 全螢幕程式使用中，即時窗格高度改成剛好塞下主控端目前的實際列數，不再
   // 無條件撐滿容器——容器可能比內容需要的空間大（例如主控端終端機只有
   // 24 列，但觀看端視窗開得比較高），撐滿的話畫面下方會留一大片沒用到
@@ -426,7 +466,26 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
     };
     window.addEventListener("aiterm:theme-changed", onThemeChanged);
 
+    // 即時窗格的滾輪鎖定——跟本機分頁 TerminalView.tsx 完全同一套機制、
+    // 同一個理由：這個窗格顯示的是「現在這一段」，要看歷史請用上方的卡片。
+    // 緩衝區不再被清空之後，滾輪會捲進 scrollback、把已經有卡片的舊輸出
+    // 再露出來一次。捕獲階段 + stopPropagation 是關鍵：xterm 自己在內層
+    // .xterm-viewport 上處理滾輪並主動捲動，冒泡階段攔截來不及，
+    // preventDefault 也取消不了程式化捲動。
+    // 全螢幕程式放行：那類程式自己要用滾輪，而且它們佔滿整個框，沒有卡片
+    // 列表可以代為捲動。
+    const liveWheelHost = hostRef.current;
+    const onLiveWheel = (e: WheelEvent) => {
+      if (isAlternateBufferRef.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const scroller = scrollAreaRef.current;
+      if (scroller) scroller.scrollTop += e.deltaY;
+    };
+    liveWheelHost.addEventListener("wheel", onLiveWheel, { passive: false, capture: true });
+
     return () => {
+      liveWheelHost.removeEventListener("wheel", onLiveWheel, { capture: true });
       window.removeEventListener("aiterm:font-changed", onFontChanged);
       window.removeEventListener("aiterm:theme-changed", onThemeChanged);
       onData?.dispose?.();
@@ -622,6 +681,8 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
             // 100%（見下面的 hostRef style），這裡的 overflow 只是配合
             // 這個切換，不是又要開放捲動。
             overflow: isAlternateBuffer ? "visible" : "clip",
+            // 下面的 host 靠絕對定位往上位移對齊提示字元，這一層要當定位基準。
+            position: liveTopOffsetPx > 0 ? "relative" : undefined,
           }}
         >
           <div
@@ -631,6 +692,10 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
               height: isAlternateBuffer ? "100%" : "220px",
               width: "100%",
               boxSizing: "border-box",
+              // 見 liveTopRows：把提示字元那一列推到窗格頂端。
+              ...(liveTopOffsetPx > 0
+                ? { position: "absolute" as const, top: -liveTopOffsetPx, left: 0, right: 0, width: "auto" }
+                : null),
             }}
           />
         </div>
