@@ -123,6 +123,23 @@ describe("Windows 即時窗格對齊到提示字元那一行", () => {
     }
   });
 
+  it("位移量要把 host 自己的 4px padding 算進去，否則上一列的底部會露出一條", async () => {
+    // 實機截圖回報的殘留：.aiterm-terminal-root 有 padding: 4px（見
+    // TerminalView.css），所以第 N 列的文字實際上位在 host 內部的
+    // 4 + N*cellHeight。只位移 N*cellHeight 的話，第 N-1 列的底部剛好落在
+    // 窗格頂端那 4px 裡，看起來就是提示字元上方多出一條被切一半的舊輸出。
+    const { host, onPromptStart, originalPlatform } = await renderOn("Win32");
+    try {
+      act(() => onPromptStart(5));
+      // jsdom 沒有真的 renderer，cellHeight 走 14 * 1.1 的 fallback。
+      const cellHeight = 14 * 1.1;
+      const offset = Math.abs(parseFloat(host().style.top));
+      expect(offset).toBeGreaterThanOrEqual(5 * cellHeight + 4);
+    } finally {
+      Object.defineProperty(navigator, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
+
   it("非 Windows：緩衝區仍會被清空、提示字元本來就在第 0 列，完全不位移", async () => {
     const { host, onPromptStart, originalPlatform } = await renderOn("MacIntel");
     try {

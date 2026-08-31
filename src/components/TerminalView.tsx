@@ -146,6 +146,11 @@ export interface TerminalViewProps {
 const MIN_LIVE_ROWS = 3;
 const MAX_LIVE_ROWS = 16;
 
+/** Must stay in sync with `.aiterm-terminal-root`'s `padding` in
+ *  TerminalView.css — the prompt-row offset has to account for it, see
+ *  liveTopOffsetPx. */
+const TERMINAL_HOST_PADDING_PX = 4;
+
 const SEARCH_OPTS = {
   regex: false,
   caseSensitive: false,
@@ -706,7 +711,20 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // visible row — see liveTopRows and the host element's style comment. Always
   // 0 while a full-screen TUI owns the alternate buffer: that draws its own
   // complete screen into a full-height frame, with nothing to clip or offset.
-  const liveTopOffsetPx = isAlternateBuffer ? 0 : Math.round(liveTopRows * cellHeightPx);
+  //
+  // TERMINAL_HOST_PADDING_PX must be added on top of the row arithmetic:
+  // .aiterm-terminal-root carries `padding: 4px`, so row N's text actually
+  // starts at `4 + N * cellHeight` inside the host. Sliding by only
+  // `N * cellHeight` leaves row N-1's bottom 4px sitting in the frame's top
+  // 4px — visible as a thin half-cut strip of already-carded output above the
+  // prompt (confirmed from a real-machine screenshot). Rounded up rather than
+  // to nearest so a fractional cell height can only ever over-shift by a
+  // sub-pixel (imperceptibly trimming the prompt row's own top) instead of
+  // under-shifting back into that same sliver.
+  const liveTopOffsetPx =
+    isAlternateBuffer || liveTopRows <= 0
+      ? 0
+      : Math.ceil(liveTopRows * cellHeightPx) + TERMINAL_HOST_PADDING_PX;
 
   // Fetch git info (branch, insertions/deletions) for completed blocks, debounced 500ms.
   const gitFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
