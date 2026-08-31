@@ -351,6 +351,20 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     untrackedCommandBoundaryRef.current?.(kind);
   }, []);
 
+  // Same placeholder-ref pattern as untrackedCommandBoundaryRef above: the
+  // real implementation needs state declared further down, but the OSC 133 B
+  // callback that drives it is passed into useTerminalBlocks up here.
+  const syncLiveTopRef = useRef<(() => void) | null>(null);
+
+  // Absolute buffer row of the current prompt, from OSC 133 B. Only used on
+  // Windows, where the xterm buffer is never cleared and the live pane has to
+  // work out for itself which row to start showing from — see liveTopRows.
+  const promptAbsRowRef = useRef<number | null>(null);
+  const handlePromptStart = useCallback((absoluteRow: number) => {
+    promptAbsRowRef.current = absoluteRow;
+    syncLiveTopRef.current?.();
+  }, []);
+
   const { blocks, isAlternateBuffer, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo, finalizeBlock } = useTerminalBlocks(
     sessionId,
     termState,
@@ -361,6 +375,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     undefined,
     undefined,
     handleUntrackedCommandBoundary,
+    handlePromptStart,
   );
 
   useEffect(() => {
@@ -605,13 +620,37 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     // MAX_LIVE_ROWS bump below, which is deliberately gated on a block being
     // "running" — leaving the prompt clipped out of a pane already shrunk to
     // 3 rows. That workaround is now both unnecessary and harmful: the pane
-    // clips from the BOTTOM on Windows (see bottomAnchorLive), so the last
-    // row — where the prompt always lands, however late — is always the one
-    // row guaranteed to be visible. And since Windows no longer clears the
-    // xterm buffer (see useTerminalBlocks' OSC 133 D branch), a pane left
-    // expanded would keep showing the old output that already has a card.
+    // starts at the prompt's own row on Windows (see liveTopRows), so the
+    // prompt is always the first visible row however late it arrives. And
+    // since Windows no longer clears the xterm buffer (see useTerminalBlocks'
+    // OSC 133 D branch), a pane left expanded would keep showing the old
+    // output that already has a card.
     setLiveRows(MIN_LIVE_ROWS);
   }, [visibleBlockCount]);
+
+  // How many rows to scroll the xterm host up by, so the live pane's first
+  // visible row is the prompt's own row.
+  //
+  // Windows only, and only because the buffer is never cleared there (see
+  // useTerminalBlocks' OSC 133 D branch): the whole ConPTY screen is present,
+  // so "show from the top" would show the oldest rows. A fixed bottom
+  // anchor was tried first and is wrong in the opposite direction — it
+  // assumes the prompt is on the last row, which is only true once the
+  // screen has filled up. On a freshly-opened tab the prompt is on row 1
+  // with blank rows beneath it, and bottom-anchoring rendered an entirely
+  // blank pane (reported from a real machine). Tracking the prompt's actual
+  // row is the only thing correct in both states. Other platforms clear the
+  // buffer, so their prompt is always at row 0 and this stays 0.
+  const [liveTopRows, setLiveTopRows] = useState(0);
+  const syncLiveTop = useCallback(() => {
+    if (!navigator.platform.toLowerCase().startsWith("win")) return;
+    const term = termRef.current;
+    const promptAbsRow = promptAbsRowRef.current;
+    if (!term || promptAbsRow === null) return;
+    const viewportRow = promptAbsRow - term.buffer.active.baseY;
+    setLiveTopRows(Math.max(0, Math.min(term.rows - 1, viewportRow)));
+  }, []);
+  syncLiveTopRef.current = syncLiveTop;
 
   // 見上面 untrackedCommandBoundaryRef 宣告處的說明——這裡才真的賦值，
   // 因為 setLiveRows 要到這裡才存在。跟這個檔案其他 ref 一樣直接在
@@ -663,12 +702,11 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       ?._core?._renderService?.dimensions?.css?.cell?.height || 14 * 1.1;
   const liveHeightPx = Math.round(liveRows * cellHeightPx);
 
-  // True when the live pane must show the BOTTOM rows of the xterm buffer
-  // rather than the top — see the host element's style comment in the JSX.
-  // Never while a full-screen TUI owns the alternate buffer: that draws its
-  // own complete screen into a full-height frame, with nothing to clip.
-  const bottomAnchorLive =
-    !isAlternateBuffer && navigator.platform.toLowerCase().startsWith("win");
+  // How far to slide the xterm host up so the prompt is the live pane's first
+  // visible row — see liveTopRows and the host element's style comment. Always
+  // 0 while a full-screen TUI owns the alternate buffer: that draws its own
+  // complete screen into a full-height frame, with nothing to clip or offset.
+  const liveTopOffsetPx = isAlternateBuffer ? 0 : Math.round(liveTopRows * cellHeightPx);
 
   // Fetch git info (branch, insertions/deletions) for completed blocks, debounced 500ms.
   const gitFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1207,6 +1245,11 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               if (latestBlock?.status === "running") {
                 setLiveRows(MAX_LIVE_ROWS);
               }
+              // The prompt's viewport-relative row moves whenever output
+              // scrolls the buffer (baseY grows), so the offset has to be
+              // recomputed per chunk, not just when OSC 133 B fires. No-op
+              // off Windows.
+              syncLiveTop();
             };
 
             if (isWindows) {
@@ -1989,9 +2032,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             // (Chromium) and macOS WKWebView. The scroll-pin listener on mount
             // is a redundant safety net for the same failure mode.
             overflow: isAlternateBuffer ? "visible" : "clip",
-            // Anchors the host below so the clipped window shows the BOTTOM
-            // rows — see that element's comment.
-            position: bottomAnchorLive ? "relative" : undefined,
+            // Positioning context for the prompt-aligned host below.
+            position: liveTopOffsetPx > 0 ? "relative" : undefined,
           }}
         >
           <div
@@ -2003,16 +2045,15 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               boxSizing: "border-box",
               // Windows keeps the xterm buffer in lockstep with ConPTY
               // (useTerminalBlocks no longer clears it — see the OSC 133 D
-              // branch there for why), so the whole ConPTY screen is present:
-              // old output on top, the fresh prompt on the very last row.
-              // Clipping from the top would therefore show the OLDEST rows
-              // and hide the prompt entirely; anchoring the host to the
-              // frame's bottom makes the visible window the last N rows,
-              // which is where the prompt and any new output actually are.
-              // Other platforms still clear the buffer, so their existing
-              // top-clipped layout is already correct and is left untouched.
-              ...(bottomAnchorLive
-                ? { position: "absolute" as const, bottom: 0, left: 0, right: 0, width: "auto" }
+              // branch there for why), so the whole ConPTY screen is present
+              // and "start at row 0" would show the oldest rows rather than
+              // the prompt. Sliding the host up by the prompt's own
+              // viewport-relative row makes the prompt the first visible row
+              // wherever it currently sits — row 1 on a fresh tab, the last
+              // row once the screen has filled. Other platforms clear the
+              // buffer, so their prompt is already at row 0 and this is 0.
+              ...(liveTopOffsetPx > 0
+                ? { position: "absolute" as const, top: -liveTopOffsetPx, left: 0, right: 0, width: "auto" }
                 : null),
             }}
           />

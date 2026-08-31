@@ -125,6 +125,15 @@ export function useTerminalBlocks(
    *  必須是穩定的參考（useCallback 空依賴或 ref 橋接），理由跟
    *  `onCommandSettled`/`onCommandStarted` 一樣。 */
   onUntrackedCommandBoundary?: (kind: "start" | "end") => void,
+  /** 每次 shell 畫完提示字元（OSC 133 B）就回報它的絕對行號。
+   *
+   *  給 Windows 的即時窗格用：那邊不再清空 xterm 緩衝區（見下方 OSC 133 D
+   *  分支），整個 ConPTY 畫面都還在，所以窗格必須自己算出「要從哪一行開始
+   *  顯示」。提示字元的位置就是答案——剛開分頁時它在第 1 列、畫面填滿後
+   *  它在最後一列，只有實際追蹤才能兩種情況都對。
+   *
+   *  跟其他 callback 一樣必須是穩定的參考。 */
+  onPromptStart?: (absoluteRow: number) => void,
 ): UseTerminalBlocksResult {
   const [blocks, setBlocks] = useState<TerminalBlock[]>([]);
   const [isAlternateBuffer, setIsAlternateBuffer] = useState(false);
@@ -345,6 +354,7 @@ export function useTerminalBlocks(
           row: term.buffer.active.cursorY + term.buffer.active.baseY,
           col: term.buffer.active.cursorX,
         };
+        onPromptStart?.(promptEndRef.current.row);
         return true;
       } else if (data === "C") {
         // Command start — usually a no-op, since the block was already
@@ -445,7 +455,7 @@ export function useTerminalBlocks(
     // 的都是函式簽名裡那個預設值運算式產生的全新參考，放進依賴陣列會讓
     // 這個 effect 每次 render 都 dispose+重新註冊）。`hostPlatform` 是字串，
     // 沒有這個問題，放心加進來。
-  }, [term, finalizeBlock, beginTrackedBlock, clearAndRebasePromptEnd, onLiveClear, onCommandSettled, hostPlatform, onUntrackedCommandBoundary]);
+  }, [term, finalizeBlock, beginTrackedBlock, clearAndRebasePromptEnd, onLiveClear, onCommandSettled, hostPlatform, onUntrackedCommandBoundary, onPromptStart]);
 
   const submitCommand = useCallback(
     (cmd: string, onComplete?: (block: TerminalBlock) => void) => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { render, waitFor, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 // Same mocking setup as TerminalView.remoteLiveHeight.test.tsx (verified there
@@ -83,35 +83,52 @@ async function renderOn(platform: string) {
   );
   await waitFor(() => expect(useTerminalBlocksCalls.length).toBeGreaterThan(0));
 
-  const frame = container.querySelector(".aiterm-live-frame") as HTMLElement;
-  const host = container.querySelector(".aiterm-terminal-root") as HTMLElement;
-  return { frame, host, originalPlatform };
+  const lastCall = () => useTerminalBlocksCalls[useTerminalBlocksCalls.length - 1];
+  const host = () => container.querySelector(".aiterm-terminal-root") as HTMLElement;
+  // 10th positional arg — the OSC 133 B callback that reports the prompt's
+  // absolute buffer row.
+  const onPromptStart = lastCall()[9] as (absoluteRow: number) => void;
+  return { host, onPromptStart, originalPlatform };
 }
 
-describe("Windows 即時窗格置底對齊", () => {
+describe("Windows 即時窗格對齊到提示字元那一行", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("Windows：xterm host 錨定在窗格底部，露出的是畫面最下方幾行（提示字元所在處）", async () => {
-    // Windows 上不再清空 xterm 緩衝區（見 useTerminalBlocks 的 OSC 133 D
-    // 分支），所以 ConPTY 的整個畫面都還在：舊輸出在上、新提示字元在最
-    // 下面那一列。窗格預設從頂端裁切，那樣露出的會是最舊的幾行、看不到
-    // 提示字元；錨在底部才會露出提示字元與新輸出。
-    const { frame, host, originalPlatform } = await renderOn("Win32");
+  it("剛開分頁、提示字元在第 0 列時不位移——固定錨底會讓整個窗格是空白的", async () => {
+    // 實機回報的回歸：先前的置底對齊假設「提示字元永遠在最後一列」，但那
+    // 只有畫面填滿之後才成立。剛開啟的分頁提示字元在最上面、下方全是空行，
+    // 錨底於是露出一整片空白，使用者完全看不到提示字元。
+    const { host, onPromptStart, originalPlatform } = await renderOn("Win32");
     try {
-      expect(frame.style.position).toBe("relative");
-      expect(host.style.position).toBe("absolute");
-      expect(host.style.bottom).toBe("0px");
+      act(() => onPromptStart(0));
+      expect(host().style.position).not.toBe("absolute");
+      expect(host().style.top).toBe("");
     } finally {
       Object.defineProperty(navigator, "platform", { value: originalPlatform, configurable: true });
     }
   });
 
-  it("非 Windows：維持原本由頂端裁切的版面（緩衝區仍會被清空，不需要錨底）", async () => {
-    const { host, originalPlatform } = await renderOn("MacIntel");
+  it("畫面填滿、提示字元落在較下方時，host 往上位移讓那一行成為第一個可見列", async () => {
+    const { host, onPromptStart, originalPlatform } = await renderOn("Win32");
     try {
-      expect(host.style.position).not.toBe("absolute");
+      act(() => onPromptStart(5));
+      expect(host().style.position).toBe("absolute");
+      // 往上位移，不是往下——負的 top 才會把上面幾列推出裁切範圍。
+      const top = parseFloat(host().style.top);
+      expect(top).toBeLessThan(0);
+    } finally {
+      Object.defineProperty(navigator, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it("非 Windows：緩衝區仍會被清空、提示字元本來就在第 0 列，完全不位移", async () => {
+    const { host, onPromptStart, originalPlatform } = await renderOn("MacIntel");
+    try {
+      act(() => onPromptStart(5));
+      expect(host().style.position).not.toBe("absolute");
+      expect(host().style.top).toBe("");
     } finally {
       Object.defineProperty(navigator, "platform", { value: originalPlatform, configurable: true });
     }
