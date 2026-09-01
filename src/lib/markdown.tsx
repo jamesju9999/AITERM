@@ -96,10 +96,16 @@ export function unescapeNewlines(text: string): string {
 
 import { MermaidBlock } from "../components/MermaidBlock";
 import { ArtifactBlockCard } from "../components/ArtifactPanel/ArtifactBlockCard";
+import { useOptionalArtifactPanel } from "../contexts/ArtifactPanelContext";
 
 // ── Block markdown renderer ────────────────────────────────────────────────
 
 export function MarkdownText({ text, streaming }: { text: string; streaming?: boolean }): ReactNode {
+  // 沒有 ArtifactPanelProvider 的樹（DesignView、DatabaseAiChat 這個里程碑還
+  // 沒接上）不能渲染 artifact 卡片——那個元件會呼叫 useArtifactPanel()，在沒有
+  // provider 時拋例外、把整個畫面帶走。退回普通程式碼區塊，維持這個功能之前的
+  // 行為。
+  const canShowArtifacts = useOptionalArtifactPanel() !== null;
   // components 一定要 memo 住：react-markdown 把這個物件裡的每個函式當成該
   // 節點的 React element type。如果每次 render 都給一個新的物件字面量（原本
   // 的寫法），任何讓 MarkdownText 重新 render 的外部狀態變化（例如 artifact
@@ -113,10 +119,10 @@ export function MarkdownText({ text, streaming }: { text: string; streaming?: bo
       if (match && match[1].toLowerCase() === "mermaid") {
         return <MermaidBlock chart={String(children)} />;
       }
-      if (!streaming && match && match[1].toLowerCase() === "artifact-html") {
+      if (canShowArtifacts && !streaming && match && match[1].toLowerCase() === "artifact-html") {
         return <ArtifactBlockCard kind="html" content={String(children)} />;
       }
-      if (!streaming && match && match[1].toLowerCase() === "artifact-chart") {
+      if (canShowArtifacts && !streaming && match && match[1].toLowerCase() === "artifact-chart") {
         return <ArtifactBlockCard kind="chart" content={String(children)} />;
       }
 
@@ -145,7 +151,7 @@ export function MarkdownText({ text, streaming }: { text: string; streaming?: bo
       return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [streaming]);
+  }), [streaming, canShowArtifacts]);
 
   return (
     <div className="markdown-body">

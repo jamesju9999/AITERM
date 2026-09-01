@@ -37,6 +37,14 @@ export function ArtifactPanelProvider({ children }: { children: ReactNode }) {
   );
 }
 
+/** 給「沒有 provider 也要能正常運作」的呼叫端用：回傳 null 而不是拋例外。
+ *  MarkdownText 用它來判斷這棵樹底下能不能顯示 artifact——DesignView 與
+ *  DatabaseAiChat 這個里程碑還沒掛 provider，那裡的 artifact fence 應該退回
+ *  普通程式碼區塊，而不是讓整個畫面崩掉。 */
+export function useOptionalArtifactPanel(): ArtifactPanelState | null {
+  return useContext(ArtifactPanelContext);
+}
+
 export function useArtifactPanel(): ArtifactPanelState {
   const ctx = useContext(ArtifactPanelContext);
   if (!ctx) {

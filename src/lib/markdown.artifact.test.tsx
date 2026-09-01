@@ -110,3 +110,16 @@ describe("MarkdownText artifact fenced blocks", () => {
     expect(registrations).toHaveLength(1);
   });
 });
+
+// MarkdownText 也被 DesignView / DatabaseAiChat 使用，那兩個地方這個里程碑還
+// 沒有掛 ArtifactPanelProvider。在這個功能之前，那裡出現 artifact fence 只是
+// 渲染成普通程式碼區塊；如果現在改成直接拋例外，等於這個分支讓那兩個畫面整個
+// 崩掉——那是回歸，不是「尚未支援」。沒有 provider 時就退回原本的程式碼區塊。
+describe("MarkdownText without an ArtifactPanelProvider", () => {
+  it("falls back to a plain code block instead of throwing", () => {
+    const text = "```artifact-html\n<title>Brief</title>\n```";
+    const { container } = render(<MarkdownText text={text} />);
+    expect(container.querySelector("code.language-artifact-html")).not.toBeNull();
+    expect(container.querySelector(".aiterm-artifact-card")).toBeNull();
+  });
+});
