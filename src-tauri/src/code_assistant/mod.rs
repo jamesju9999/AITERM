@@ -145,6 +145,7 @@ fn tool_definitions() -> Vec<McpToolDefinition> {
 
 fn build_system_prompt(project_root: &str, locale: Locale) -> String {
     let language = crate::ai::language_name(locale);
+    let artifact_section = crate::ai::artifact_prompt::artifact_protocol_section();
     format!(
 r#"You are a code assistant helping the user understand and work with a software project.
 
@@ -205,7 +206,7 @@ Show a code block ONLY when ALL of the following are true:
 - search_in_files snippets are LEADS ONLY. A truncated 300-char line proves the text exists somewhere — it does NOT prove file structure, class layout, or surrounding logic.
 
 - Reminder: the entire reply, including all diagram labels, must be in {language}.
-- **Mermaid diagrams**: node IDs must be plain ASCII identifiers (e.g. `A`, `LoadConf`). Wrap every node label and edge label in double quotes, e.g. `A["使用者點擊「連線」按鈕"]` and `-->|"host, port, user"|`. NEVER put the characters `|`, `<`, `>`, or `"` inside a label — they collide with Mermaid syntax and break the diagram. Write `Bearer key` not `Bearer <key>`, and use a comma or space instead of `|`. Do not use `<br/>` inside labels — use a space instead. Prefer the theme's default node colors; if you must set a `fill`, keep it dark/muted so light text stays readable, and do not rely on custom colors to convey meaning."#
+- **Mermaid diagrams**: node IDs must be plain ASCII identifiers (e.g. `A`, `LoadConf`). Wrap every node label and edge label in double quotes, e.g. `A["使用者點擊「連線」按鈕"]` and `-->|"host, port, user"|`. NEVER put the characters `|`, `<`, `>`, or `"` inside a label — they collide with Mermaid syntax and break the diagram. Write `Bearer key` not `Bearer <key>`, and use a comma or space instead of `|`. Do not use `<br/>` inside labels — use a space instead. Prefer the theme's default node colors; if you must set a `fill`, keep it dark/muted so light text stays readable, and do not rely on custom colors to convey meaning.{artifact_section}"#
     )
 }
 
@@ -923,5 +924,18 @@ mod tests {
         let text = checkpoint.content.as_str().expect("checkpoint is plain text");
         assert!(!text.is_empty());
         assert_eq!(text, text.trim_end());
+    }
+}
+
+#[cfg(test)]
+mod artifact_prompt_tests {
+    use super::build_system_prompt;
+    use crate::ai::Locale;
+
+    #[test]
+    fn system_prompt_teaches_the_artifact_protocol() {
+        let p = build_system_prompt("/tmp/proj", Locale::ZhTw);
+        assert!(p.contains("artifact-html"));
+        assert!(p.contains("artifact-chart"));
     }
 }

@@ -93,6 +93,7 @@ async fn save_chat_turn(
 
 fn build_system_prompt(notebook_name: &str, locale: Locale) -> String {
     let language = crate::ai::language_name(locale);
+    let artifact_section = crate::ai::artifact_prompt::artifact_protocol_section();
     format!(
 r#"You are a research assistant answering questions strictly from the documents in the notebook "{notebook_name}".
 
@@ -124,7 +125,7 @@ Write your ENTIRE reply in {language}: every sentence, every citation label, and
 - Do NOT reuse a previous turn's search_documents/read_document results to answer a new question on a different topic. Even if a document is already visible earlier in this conversation, call the tools again for the current question — the right source for this question may be a different document entirely.
 
 - Reminder: the entire reply, including all diagram labels, must be in {language}.
-- **Mermaid diagrams**: node IDs must be plain ASCII identifiers. Wrap every node label and edge label in double quotes. NEVER put the characters `|`, `<`, `>`, or `"` inside a label — they collide with Mermaid syntax and break the diagram. Write `Bearer key` not `Bearer <key>`, and use a comma or space instead of `|`. Do not use `<br/>` inside labels — use a space instead. Prefer the theme's default node colors; if you must set a `fill`, keep it dark/muted so light text stays readable."#
+- **Mermaid diagrams**: node IDs must be plain ASCII identifiers. Wrap every node label and edge label in double quotes. NEVER put the characters `|`, `<`, `>`, or `"` inside a label — they collide with Mermaid syntax and break the diagram. Write `Bearer key` not `Bearer <key>`, and use a comma or space instead of `|`. Do not use `<br/>` inside labels — use a space instead. Prefer the theme's default node colors; if you must set a `fill`, keep it dark/muted so light text stays readable.{artifact_section}"#
     )
 }
 
@@ -762,5 +763,18 @@ mod tests {
         let text = checkpoint.content.as_str().expect("checkpoint is plain text");
         assert!(!text.is_empty());
         assert_eq!(text, text.trim_end());
+    }
+}
+
+#[cfg(test)]
+mod artifact_prompt_tests {
+    use super::build_system_prompt;
+    use crate::ai::Locale;
+
+    #[test]
+    fn system_prompt_teaches_the_artifact_protocol() {
+        let p = build_system_prompt("My Notebook", Locale::ZhTw);
+        assert!(p.contains("artifact-html"));
+        assert!(p.contains("artifact-chart"));
     }
 }
