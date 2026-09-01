@@ -101,10 +101,10 @@ import { useOptionalArtifactPanel } from "../contexts/ArtifactPanelContext";
 // ── Block markdown renderer ────────────────────────────────────────────────
 
 export function MarkdownText({ text, streaming }: { text: string; streaming?: boolean }): ReactNode {
-  // 沒有 ArtifactPanelProvider 的樹（DesignView、DatabaseAiChat 這個里程碑還
-  // 沒接上）不能渲染 artifact 卡片——那個元件會呼叫 useArtifactPanel()，在沒有
-  // provider 時拋例外、把整個畫面帶走。退回普通程式碼區塊，維持這個功能之前的
-  // 行為。
+  // 沒有 ArtifactPanelProvider 的樹（目前是 DesignView 的 SpecPreview，它刻意
+  // 不接——自己已經有右側預覽面板）不能渲染 artifact 卡片：那個元件會呼叫
+  // useArtifactPanel()，在沒有 provider 時拋例外、把整個畫面帶走。退回普通程式碼
+  // 區塊，維持這個功能之前的行為。
   const canShowArtifacts = useOptionalArtifactPanel() !== null;
   // components 一定要 memo 住：react-markdown 把這個物件裡的每個函式當成該
   // 節點的 React element type。如果每次 render 都給一個新的物件字面量（原本
