@@ -1,6 +1,6 @@
 import {
   useEffect, useRef, useState, useCallback,
-  type KeyboardEvent, type ReactNode, type PointerEvent, type MouseEvent,
+  type KeyboardEvent, type ReactNode, type PointerEvent,
 } from "react";
 import type { AiError, ToolFallbackReason } from "../../ipc/ai";
 import type { SubmitShortcut } from "../../ipc/config";
@@ -201,38 +201,41 @@ function ChatPanelShellInner({
   };
 
   // ── Resize（聊天欄 vs Artifact 面板的內部分割，有 artifact 時） ───────────────
-  // 做法比照 src/components/DesignView/DesignView.tsx 既有的手刻拖拉分割：
-  // 用容器的 getBoundingClientRect() 算出滑鼠絕對位置對應的左欄寬度，而不是
-  // 累加 delta——這樣邏輯簡單、也是這個 repo 既有分割版型的一致寫法。
+  // 位置用容器的 getBoundingClientRect() 直接算絕對值，不累加 delta。
+  //
+  // 事件走 pointer capture，跟上面那條外層分隔線同一套，不是 DesignView 那種
+  // 「mousedown 後掛 window mousemove」：右邊那一欄是 iframe，游標一進到它的範圍
+  // 內，mousemove 就變成 iframe 自己那份文件的事件，父視窗完全收不到，拖曳因此
+  // 一頓一頓的。捕捉之後瀏覽器會把該 pointer 的後續事件一律導回這個把手，滑過
+  // iframe 也不會斷。（圖表那種同文件內的 SVG 沒這個問題，所以只有 HTML 文件
+  // 會卡——這正是使用者回報的現象。）
   const [chatColumnWidth, setChatColumnWidth] = useState(320);
   const [isArtifactResizing, setIsArtifactResizing] = useState(false);
   const splitContainerRef = useRef<HTMLDivElement>(null);
+  const isArtifactDraggingRef = useRef(false);
 
-  useEffect(() => {
-    if (!isArtifactResizing) {
-      document.body.style.userSelect = "";
-      return;
-    }
-    document.body.style.userSelect = "none";
-    const onMouseMove = (e: globalThis.MouseEvent) => {
-      if (!splitContainerRef.current) return;
-      const rect = splitContainerRef.current.getBoundingClientRect();
-      const newWidth = e.clientX - rect.left;
-      const constrained = Math.max(
-        MIN_CHAT_COLUMN_WIDTH,
-        Math.min(newWidth, rect.width - MIN_ARTIFACT_COLUMN_WIDTH),
-      );
-      setChatColumnWidth(constrained);
-    };
-    const onMouseUp = () => setIsArtifactResizing(false);
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-      document.body.style.userSelect = "";
-    };
-  }, [isArtifactResizing]);
+  const onArtifactResizePointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    isArtifactDraggingRef.current = true;
+    setIsArtifactResizing(true);
+    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+  };
+
+  const onArtifactResizePointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (!isArtifactDraggingRef.current || !splitContainerRef.current) return;
+    const rect = splitContainerRef.current.getBoundingClientRect();
+    const constrained = Math.max(
+      MIN_CHAT_COLUMN_WIDTH,
+      Math.min(e.clientX - rect.left, rect.width - MIN_ARTIFACT_COLUMN_WIDTH),
+    );
+    setChatColumnWidth(constrained);
+  };
+
+  const onArtifactResizePointerUp = () => {
+    if (!isArtifactDraggingRef.current) return;
+    isArtifactDraggingRef.current = false;
+    setIsArtifactResizing(false);
+  };
 
   useEffect(() => {
     if (isOpen) textareaRef.current?.focus();
@@ -286,12 +289,8 @@ function ChatPanelShellInner({
     isWindows ? "aiterm-ai-panel--solid" : "",
     expanded ? "aiterm-ai-panel--expanded" : "",
     activeArtifact ? "aiterm-ai-panel--split" : "",
+    isArtifactResizing ? "aiterm-ai-panel--resizing" : "",
   ].filter(Boolean).join(" ");
-
-  const onArtifactResizeMouseDown = (e: MouseEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsArtifactResizing(true);
-  };
 
   return (
     <div
@@ -503,7 +502,9 @@ function ChatPanelShellInner({
         <>
           <div
             className="aiterm-artifact-resizer"
-            onMouseDown={onArtifactResizeMouseDown}
+            onPointerDown={onArtifactResizePointerDown}
+            onPointerMove={onArtifactResizePointerMove}
+            onPointerUp={onArtifactResizePointerUp}
             title="拖曳調整寬度"
           />
           <ArtifactPanel />

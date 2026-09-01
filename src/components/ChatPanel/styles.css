@@ -869,6 +869,18 @@
   flex-shrink: 0;
 }
 
-.aiterm-artifact-resizer:hover {
+.aiterm-artifact-resizer:hover,
+.aiterm-ai-panel--resizing .aiterm-artifact-resizer {
   background-color: var(--accent, #a855f7);
+}
+
+/* 拖曳中把 iframe 的指標事件關掉。pointer capture 已經讓事件不會被 iframe 攔走，
+   這條是第二層保險，順便避免游標在文件上變成 I 字或選到 iframe 裡的文字。 */
+.aiterm-ai-panel--resizing .aiterm-artifact-html-frame {
+  pointer-events: none;
+}
+
+.aiterm-ai-panel--resizing {
+  user-select: none;
+  cursor: col-resize;
 }
