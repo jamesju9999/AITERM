@@ -130,7 +130,7 @@ export function useMcpChat(sessionId: string) {
 
       while (iterations < MAX_TOOL_ITERATIONS) {
         iterations++;
-        const reply = await aiChat(iterHistory, sessionId, undefined, useMcp, locale);
+        const reply = await aiChat(iterHistory, sessionId, undefined, useMcp, locale, true);
 
         if (!mountedRef.current) break;
 

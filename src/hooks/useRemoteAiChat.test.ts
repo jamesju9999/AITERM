@@ -24,7 +24,7 @@ describe("useRemoteAiChat", () => {
     const { result } = renderHook(() => useRemoteAiChat("conn-1", () => CTX));
     await act(async () => { await result.current.send("hi"); });
     expect(invokeChatCtx).toHaveBeenCalledWith(
-      expect.arrayContaining([{ role: "user", content: "hi" }]), CTX, "conn-1", undefined, "en",
+      expect.arrayContaining([{ role: "user", content: "hi" }]), CTX, "conn-1", undefined, "en", true,
     );
     expect(result.current.messages.map(m => m.content)).toContain("answer");
   });
@@ -33,7 +33,7 @@ describe("useRemoteAiChat", () => {
     const { result } = renderHook(() => useRemoteAiChat("conn-1", () => CTX, "openai"));
     await act(async () => { await result.current.send("hi"); });
     expect(invokeChatCtx).toHaveBeenCalledWith(
-      expect.arrayContaining([{ role: "user", content: "hi" }]), CTX, "conn-1", "openai", "en",
+      expect.arrayContaining([{ role: "user", content: "hi" }]), CTX, "conn-1", "openai", "en", true,
     );
   });
 

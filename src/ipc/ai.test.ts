@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const invokeMock = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invokeMock(...a) }));
 
-import { formatAiError, invokeAiChatCtx, type AiError } from "./ai";
+import { aiChat, formatAiError, invokeAiChatCtx, type AiError } from "./ai";
 
 // ── shouldAutoExecute tests ───────────────────────────────────────────────────
 // Import the pure helper via a re-export shim below, or test via the module.
@@ -146,11 +146,47 @@ describe("invokeAiChatCtx", () => {
       connId: "conn-1",
       providerId: "prov-9",
       locale: "en",
+      supportsArtifacts: false,
     });
   });
 
   it("defaults providerId to null", async () => {
     await invokeAiChatCtx([{ role: "user", content: "x" }], { os: "linux", shell: null, cwd: null, recentOutput: null }, "c", undefined, "zh-TW");
     expect(invokeMock.mock.calls[0][1].providerId).toBeNull();
+  });
+
+  it("forwards supportsArtifacts, defaulting to false", async () => {
+    const ctx = { os: "linux", shell: null, cwd: null, recentOutput: null };
+    await invokeAiChatCtx([{ role: "user", content: "x" }], ctx, "c");
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "ai_chat_ctx",
+      expect.objectContaining({ supportsArtifacts: false }),
+    );
+
+    await invokeAiChatCtx([{ role: "user", content: "x" }], ctx, "c", undefined, "zh-TW", true);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "ai_chat_ctx",
+      expect.objectContaining({ supportsArtifacts: true }),
+    );
+  });
+});
+
+// ── aiChat tests ──────────────────────────────────────────────────────────────
+
+describe("aiChat", () => {
+  beforeEach(() => invokeMock.mockReset().mockResolvedValue({ content: "hi", tool_calls: [], tool_calling_unsupported: false }));
+
+  it("forwards supportsArtifacts, defaulting to false", async () => {
+    await aiChat([{ role: "user", content: "x" }], "s1");
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "ai_chat",
+      expect.objectContaining({ supportsArtifacts: false }),
+    );
+
+    await aiChat([{ role: "user", content: "x" }], "s1", undefined, false, "zh-TW", true);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "ai_chat",
+      expect.objectContaining({ supportsArtifacts: true }),
+    );
   });
 });

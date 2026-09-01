@@ -91,8 +91,9 @@ export function invokeAiChat(
   providerId?: string,
   useMcp = false,
   locale: Locale = "zh-TW",
+  supportsArtifacts = false,
 ): Promise<AiChatReply> {
-  return invoke<AiChatReply>("ai_chat", { messages, sessionId, providerId: providerId ?? null, useMcp, locale });
+  return invoke<AiChatReply>("ai_chat", { messages, sessionId, providerId: providerId ?? null, useMcp, locale, supportsArtifacts });
 }
 
 export function invokeAiChatCtx(
@@ -101,6 +102,7 @@ export function invokeAiChatCtx(
   connId: string,
   providerId?: string,
   locale: Locale = "zh-TW",
+  supportsArtifacts = false,
 ): Promise<AiChatReply> {
   return invoke<AiChatReply>("ai_chat_ctx", {
     messages,
@@ -108,6 +110,7 @@ export function invokeAiChatCtx(
     connId,
     providerId: providerId ?? null,
     locale,
+    supportsArtifacts,
   });
 }
 
@@ -117,6 +120,7 @@ export const aiChat = (
   providerId?: string,
   useMcp = false,
   locale: Locale = "zh-TW",
+  supportsArtifacts = false,
 ): Promise<AiChatReply> =>
   invoke("ai_chat", {
     messages,
@@ -124,6 +128,7 @@ export const aiChat = (
     providerId: providerId ?? null,
     useMcp,
     locale,
+    supportsArtifacts,
   });
 
 export type AiStreamKind = "query" | "chat";
