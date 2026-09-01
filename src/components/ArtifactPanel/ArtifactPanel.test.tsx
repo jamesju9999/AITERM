@@ -148,6 +148,54 @@ describe("ArtifactPanel", () => {
     expect(screen.getByText(/series/)).toBeInTheDocument();
   });
 
+  const oneChart = '{"type":"bar","data":[{"m":"Jan","v":1}],"xKey":"m","series":[{"key":"v","label":"V"}]}';
+
+  it("renders several charts when the spec carries a charts array", () => {
+    const multi = `{"title":"總覽","charts":[${oneChart},${oneChart},${oneChart}]}`;
+    const { container } = render(
+      <ArtifactPanelProvider>
+        <ShowOnMount artifact={{ id: "20", kind: "chart", title: "總覽", content: multi }} />
+        <ArtifactPanel />
+      </ArtifactPanelProvider>,
+    );
+    expect(container.querySelectorAll(".aiterm-artifact-chart")).toHaveLength(3);
+  });
+
+  // 單張的舊格式必須照舊能用——已經在對話紀錄裡的 artifact 不能因此壞掉。
+  it("still renders a single chart given the original shape", () => {
+    const { container } = render(
+      <ArtifactPanelProvider>
+        <ShowOnMount artifact={{ id: "21", kind: "chart", title: "One", content: oneChart }} />
+        <ArtifactPanel />
+      </ArtifactPanelProvider>,
+    );
+    expect(container.querySelectorAll(".aiterm-artifact-chart")).toHaveLength(1);
+  });
+
+  it("says which chart in the array is malformed", () => {
+    const multi = `{"charts":[${oneChart},{"type":"bar"}]}`;
+    render(
+      <ArtifactPanelProvider>
+        <ShowOnMount artifact={{ id: "22", kind: "chart", title: "Bad", content: multi }} />
+        <ArtifactPanel />
+      </ArtifactPanelProvider>,
+    );
+    expect(screen.getByText(/第 2 張/)).toBeInTheDocument();
+  });
+
+  it("shows each chart's own title when there are several", () => {
+    const a = '{"type":"bar","title":"甲","data":[{"m":"J","v":1}],"xKey":"m","series":[{"key":"v","label":"V"}]}';
+    const b = '{"type":"pie","title":"乙","data":[{"m":"J","v":1}],"xKey":"m","series":[{"key":"v","label":"V"}]}';
+    render(
+      <ArtifactPanelProvider>
+        <ShowOnMount artifact={{ id: "23", kind: "chart", title: "T", content: `{"charts":[${a},${b}]}` }} />
+        <ArtifactPanel />
+      </ArtifactPanelProvider>,
+    );
+    expect(screen.getByText("甲")).toBeInTheDocument();
+    expect(screen.getByText("乙")).toBeInTheDocument();
+  });
+
   it("clicking close clears the active artifact", () => {
     render(
       <ArtifactPanelProvider>

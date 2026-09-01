@@ -43,6 +43,18 @@ Write a chart like this, again as literal text in your reply:
 names the field used for the category axis; each series `key` names a numeric
 field on those rows.
 
+For several charts at once, wrap them — each keeps its own `title`:
+
+```artifact-chart
+{"title":"Overview","charts":[
+  {"type":"bar","title":"Revenue","data":[...],"xKey":"month","series":[...]},
+  {"type":"pie","title":"Share","data":[...],"xKey":"region","series":[...]}
+]}
+```
+
+Reach for that whenever two measures have different scales or units. Never try
+to put them on one chart with two y-axes — separate charts are the fix.
+
 Rules:
 - At most one artifact per reply; a later one replaces the earlier one.
 - Do NOT use an artifact for a short answer, a single command, or a couple of
@@ -87,6 +99,15 @@ mod tests {
     }
 
     /// 沒有這條，模型很容易把每個回答都包成 artifact。
+    /// 尺度不同的兩個量放同一張圖配雙 y 軸，是 dataviz 規範點名的頭號錯誤；
+    /// 正解是拆成多張。這條確保模型知道有多圖這個選項、也知道別用雙軸。
+    #[test]
+    fn teaches_multiple_charts_instead_of_a_second_axis() {
+        let s = artifact_protocol_section();
+        assert!(s.contains("\"charts\":["), "must show the multi-chart shape");
+        assert!(s.contains("two y-axes"), "must warn against a second axis");
+    }
+
     #[test]
     fn warns_against_using_artifacts_for_short_answers() {
         assert!(artifact_protocol_section().contains("Do NOT use an artifact for a short answer"));

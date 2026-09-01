@@ -84,3 +84,18 @@
   border: none;
   background: #fff;
 }
+
+/* 一組圖裡的每一張：至少 260px 高，多的空間平分。只有一張時就是撐滿。 */
+.aiterm-artifact-chart-slot {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 260px;
+}
+
+.aiterm-artifact-chart-slot__title {
+  padding: 12px 16px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary, #c3c2b7);
+}

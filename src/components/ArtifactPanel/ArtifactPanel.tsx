@@ -15,17 +15,11 @@ import "./ArtifactPanel.css";
  * 失敗時回傳「哪裡不對」而不只是 null——只說一句「格式錯誤」的話，使用者跟
  * 維護者都只能猜模型到底寫了什麼。
  */
-function parseChartSpec(raw: string): { spec: ChartSpec } | { problem: string } {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (e) {
-    return { problem: `JSON 解析失敗：${e instanceof Error ? e.message : String(e)}` };
+function validateOne(value: unknown): { spec: ChartSpec } | { problem: string } {
+  if (typeof value !== "object" || value === null) {
+    return { problem: "不是一個物件。" };
   }
-  if (typeof parsed !== "object" || parsed === null) {
-    return { problem: "最外層不是一個物件。" };
-  }
-  const s = parsed as Partial<ChartSpec>;
+  const s = value as Partial<ChartSpec>;
   const missing: string[] = [];
   if (s.type !== "bar" && s.type !== "line" && s.type !== "pie") {
     missing.push('type（必須是 "bar" / "line" / "pie"）');
@@ -40,8 +34,38 @@ function parseChartSpec(raw: string): { spec: ChartSpec } | { problem: string } 
     missing.push("series（必須是 [{ key, label }] 且不可為空）");
   }
   return missing.length === 0
-    ? { spec: parsed as ChartSpec }
+    ? { spec: value as ChartSpec }
     : { problem: `欄位不符：${missing.join("、")}` };
+}
+
+function parseChartSpec(raw: string): { specs: ChartSpec[] } | { problem: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return { problem: `JSON 解析失敗：${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return { problem: "最外層不是一個物件。" };
+  }
+
+  // { charts: [...] } 是多圖形式；沒有這個欄位就照舊當成單張圖，已經存在的
+  // 對話紀錄不會因此壞掉。
+  const maybeMulti = (parsed as { charts?: unknown }).charts;
+  if (Array.isArray(maybeMulti)) {
+    if (maybeMulti.length === 0) return { problem: "charts 是空陣列。" };
+    const specs: ChartSpec[] = [];
+    for (let i = 0; i < maybeMulti.length; i++) {
+      const r = validateOne(maybeMulti[i]);
+      // 指出是「第幾張」——不然一組圖裡壞了一張根本無從找起。
+      if ("problem" in r) return { problem: `第 ${i + 1} 張圖${r.problem}` };
+      specs.push(r.spec);
+    }
+    return { specs };
+  }
+
+  const single = validateOne(parsed);
+  return "problem" in single ? single : { specs: [single.spec] };
 }
 
 /** 標題直接來自模型寫的 <title>，可能含有路徑分隔字元等不能當檔名的東西。 */
@@ -73,8 +97,18 @@ export function ArtifactPanel() {
     body = <ArtifactHtmlFrame html={activeArtifact.content} title={activeArtifact.title} />;
   } else {
     const result = parseChartSpec(activeArtifact.content);
-    body = "spec" in result ? (
-      <ArtifactChart spec={result.spec} />
+    body = "specs" in result ? (
+      <>
+        {result.specs.map((spec, i) => (
+          <div className="aiterm-artifact-chart-slot" key={i}>
+            {/* 多張圖時每張都要有自己的標題，面板標題只說得出整組是什麼。 */}
+            {result.specs.length > 1 && spec.title && (
+              <div className="aiterm-artifact-chart-slot__title">{spec.title}</div>
+            )}
+            <ArtifactChart spec={spec} />
+          </div>
+        ))}
+      </>
     ) : (
       <div className="aiterm-artifact-panel__error">
         <p>圖表資料格式錯誤，無法解析。</p>
