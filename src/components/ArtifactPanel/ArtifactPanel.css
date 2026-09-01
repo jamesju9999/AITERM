@@ -30,6 +30,7 @@
   white-space: nowrap;
 }
 
+.aiterm-artifact-panel__action,
 .aiterm-artifact-panel__close {
   background: transparent;
   border: none;
@@ -37,6 +38,10 @@
   cursor: pointer;
   font-size: 13px;
   padding: 2px 6px;
+}
+
+.aiterm-artifact-panel__action:hover {
+  color: var(--accent, #a855f7);
 }
 
 .aiterm-artifact-panel__body {
