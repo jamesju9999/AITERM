@@ -157,7 +157,17 @@ Rules:
 /// Build the system prompt for Chat mode. Unlike `build_single_command_prompt`,
 /// this does NOT instruct JSON output — instead it explains the `<cmd>` tag
 /// protocol and invites free-form prose in the caller's locale.
-pub fn build_chat_prompt(snapshot: &crate::ai::EnvSnapshot, locale: Locale) -> String {
+pub fn build_chat_prompt(
+    snapshot: &crate::ai::EnvSnapshot,
+    locale: Locale,
+    supports_artifacts: bool,
+) -> String {
+    let artifact_section = if supports_artifacts {
+        crate::ai::artifact_prompt::artifact_protocol_section()
+    } else {
+        ""
+    };
+
     let recent_section = snapshot.recent_output.as_deref().map(|o| {
         let trimmed = if o.len() > 2000 {
             let start = o.len() - 2000;
@@ -194,7 +204,7 @@ Rules:
    executing.
 5. Free-form explanation outside <cmd> tags is encouraged.
 6. Never produce destructive operations against system roots unless the
-   user explicitly asks; if you do, mark it clearly in prose."#,
+   user explicitly asks; if you do, mark it clearly in prose.{artifact_section}"#,
         os = snapshot.os,
         shell = snapshot.shell,
         cwd = snapshot.cwd.display(),
@@ -370,6 +380,7 @@ async fn run_chat(
     snapshot: crate::ai::EnvSnapshot,
     provider_id: Option<String>,
     locale: Locale,
+    supports_artifacts: bool,
     router: &AiRouter,
     app: &AppHandle,
     stream_id: String,
@@ -378,7 +389,7 @@ async fn run_chat(
         Some(id) => router.resolve_by_id(id).await?,
         None => router.resolve().await?,
     };
-    let prompt = build_chat_prompt(&snapshot, locale);
+    let prompt = build_chat_prompt(&snapshot, locale, supports_artifacts);
     let req = GenerateRequest {
         system_prompt: prompt,
         messages,
@@ -420,6 +431,7 @@ pub async fn ai_chat(
     provider_id: Option<String>,
     use_mcp: bool,
     locale: Locale,
+    supports_artifacts: bool,
     app: AppHandle,
     pty_manager: State<'_, std::sync::Arc<PtyManager>>,
     router: State<'_, AiRouter>,
@@ -458,7 +470,7 @@ pub async fn ai_chat(
                 Some(id) => router.resolve_by_id(id).await?,
                 None => router.resolve().await?,
             };
-            let prompt = build_chat_prompt(&snapshot, locale);
+            let prompt = build_chat_prompt(&snapshot, locale, supports_artifacts);
             let req = GenerateRequest {
                 system_prompt: prompt,
                 messages,
@@ -558,7 +570,7 @@ pub async fn ai_chat(
     }
     // ── End MCP path — fall through to normal streaming path ─────────────────
 
-    run_chat(messages, snapshot, provider_id, locale, &router, &app, session_id).await
+    run_chat(messages, snapshot, provider_id, locale, supports_artifacts, &router, &app, session_id).await
 }
 
 /// `ai_chat` 的觀看端版本：不吃 PTY session_id，改吃明確的 `RemoteCtx`。
@@ -570,6 +582,7 @@ pub async fn ai_chat_ctx(
     provider_id: Option<String>,
     conn_id: String,
     locale: Locale,
+    supports_artifacts: bool,
     app: AppHandle,
     router: State<'_, AiRouter>,
 ) -> Result<AiChatReply, AiError> {
@@ -585,7 +598,7 @@ pub async fn ai_chat_ctx(
         ctx.cwd.as_deref(),
         ctx.recent_output,
     );
-    run_chat(messages, snapshot, provider_id, locale, &router, &app, conn_id).await
+    run_chat(messages, snapshot, provider_id, locale, supports_artifacts, &router, &app, conn_id).await
 }
 
 /// Build the tool injection suffix for providers that don't support native tool calling.
@@ -1000,7 +1013,7 @@ mod tests {
     #[test]
     fn chat_prompt_contains_environment_fields() {
         let snap = make_snap("windows", "pwsh", "C:\\Users\\a");
-        let prompt = build_chat_prompt(&snap, Locale::ZhTw);
+        let prompt = build_chat_prompt(&snap, Locale::ZhTw, false);
         assert!(prompt.contains("OS: windows"));
         assert!(prompt.contains("Shell: pwsh"));
         assert!(prompt.contains("C:\\Users\\a"));
@@ -1015,7 +1028,7 @@ mod tests {
             recent_output: Some("$ ls\nfoo  bar".into()),
             dir_listing: None,
         };
-        let prompt = build_chat_prompt(&snap, Locale::ZhTw);
+        let prompt = build_chat_prompt(&snap, Locale::ZhTw, false);
         assert!(prompt.contains("Recent terminal output"));
         assert!(prompt.contains("foo  bar"));
     }
@@ -1023,7 +1036,7 @@ mod tests {
     #[test]
     fn chat_prompt_instructs_cmd_tag_format() {
         let snap = make_snap("linux", "bash", "/");
-        let prompt = build_chat_prompt(&snap, Locale::ZhTw);
+        let prompt = build_chat_prompt(&snap, Locale::ZhTw, false);
         assert!(prompt.contains("<cmd>"), "prompt must mention <cmd> tag");
         assert!(prompt.contains("</cmd>"), "prompt must mention closing tag");
     }
@@ -1031,7 +1044,7 @@ mod tests {
     #[test]
     fn chat_prompt_omits_json_schema_rules() {
         let snap = make_snap("linux", "bash", "/");
-        let prompt = build_chat_prompt(&snap, Locale::ZhTw);
+        let prompt = build_chat_prompt(&snap, Locale::ZhTw, false);
         // Chat mode must NOT contain the single-command JSON schema instruction.
         assert!(
             !prompt.contains("Output ONLY a JSON object"),
@@ -1056,9 +1069,28 @@ mod tests {
             dir_listing: None,
         };
         // Must not panic.
-        let prompt = build_chat_prompt(&snap, Locale::ZhTw);
+        let prompt = build_chat_prompt(&snap, Locale::ZhTw, false);
         assert!(prompt.contains("Recent terminal output"));
         assert!(prompt.contains("中"));
+    }
+
+    #[test]
+    fn chat_prompt_teaches_artifacts_when_supported() {
+        let snap = make_snap("linux", "bash", "/");
+        let prompt = build_chat_prompt(&snap, Locale::ZhTw, true);
+        assert!(prompt.contains("artifact-html"));
+        assert!(prompt.contains("artifact-chart"));
+    }
+
+    /// `build_chat_prompt` 的呼叫端不只聊天介面——`ApiDocsView` 與
+    /// `DocConverterView` 也走 `ai_chat`，但它們是一次性的文件產生器、根本
+    /// 不渲染聊天 markdown。教了它們，fence 會變成產出文件裡的垃圾文字。
+    #[test]
+    fn chat_prompt_stays_silent_about_artifacts_when_unsupported() {
+        let snap = make_snap("linux", "bash", "/");
+        let prompt = build_chat_prompt(&snap, Locale::ZhTw, false);
+        assert!(!prompt.contains("artifact-html"));
+        assert!(!prompt.contains("artifact-chart"));
     }
 
     #[test]
