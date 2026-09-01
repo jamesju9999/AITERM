@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
@@ -8,7 +9,7 @@ vi.mock("../contexts/LocaleContext", async () => {
   };
 });
 
-import { ArtifactPanelProvider } from "../contexts/ArtifactPanelContext";
+import { ArtifactPanelProvider, useArtifactPanel } from "../contexts/ArtifactPanelContext";
 import { MarkdownText } from "./markdown";
 import { MessageBubble } from "../components/AiPanel/MessageBubble";
 
@@ -70,5 +71,42 @@ describe("MarkdownText artifact fenced blocks", () => {
       </ArtifactPanelProvider>,
     );
     expect(container.querySelector(".aiterm-artifact-card")).not.toBeNull();
+  });
+
+  // 這條守的是 markdown.tsx 裡 `components` 的 useMemo。react-markdown 會把
+  // components 物件裡的每個函式當成該節點的 React element type：物件若是每次
+  // render 都重新建立的字面量，任何祖先重新 render 都會讓 code 節點被卸載重掛，
+  // ArtifactBlockCard 的掛載 effect 因此再次呼叫 showArtifact，而那又讓訂閱
+  // context 的祖先重新 render——無窮迴圈。
+  //
+  // 這個迴圈實際發生過（整合 ChatPanelShell 時 vitest 直接卡死）。卡死是最難
+  // 診斷的失敗模式，所以這裡用「同一份內容在祖先重新 render 後不該重新註冊」
+  // 把它轉成一個會立刻失敗的斷言。
+  it("does not re-register the artifact when an ancestor re-renders with unchanged content", () => {
+    const text = "```artifact-html\n<title>Brief</title>\n```";
+    const registrations: unknown[] = [];
+
+    function RegistrationProbe() {
+      const { activeArtifact } = useArtifactPanel();
+      useEffect(() => {
+        if (activeArtifact) registrations.push(activeArtifact);
+      }, [activeArtifact]);
+      return null;
+    }
+
+    const tree = (tick: string) => (
+      <ArtifactPanelProvider>
+        <RegistrationProbe />
+        <MarkdownText text={text} />
+        <span>{tick}</span>
+      </ArtifactPanelProvider>
+    );
+
+    const { rerender } = render(tree("a"));
+    expect(registrations).toHaveLength(1);
+
+    // 只有無關的兄弟節點變了，markdown 內容一模一樣——不該有第二次註冊。
+    rerender(tree("b"));
+    expect(registrations).toHaveLength(1);
   });
 });
