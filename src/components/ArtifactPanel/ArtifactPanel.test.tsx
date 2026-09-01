@@ -125,6 +125,29 @@ describe("ArtifactPanel", () => {
     }
   });
 
+  // 「圖表資料格式錯誤」四個字對使用者跟對維護者都沒有用——看不到模型到底寫了
+  // 什麼，就只能猜。把原始內容一起顯示出來。
+  it("shows the offending content so the failure can be diagnosed", () => {
+    render(
+      <ArtifactPanelProvider>
+        <ShowOnMount artifact={{ id: "9", kind: "chart", title: "Bad", content: '{"type":"pie" oops' }} />
+        <ArtifactPanel />
+      </ArtifactPanelProvider>,
+    );
+    expect(screen.getByText(/圖表資料格式錯誤/)).toBeInTheDocument();
+    expect(screen.getByText(/"type":"pie" oops/)).toBeInTheDocument();
+  });
+
+  it("names the missing field when the JSON parses but is not a chart spec", () => {
+    render(
+      <ArtifactPanelProvider>
+        <ShowOnMount artifact={{ id: "10", kind: "chart", title: "Bad", content: '{"type":"bar","data":[],"xKey":"x"}' }} />
+        <ArtifactPanel />
+      </ArtifactPanelProvider>,
+    );
+    expect(screen.getByText(/series/)).toBeInTheDocument();
+  });
+
   it("clicking close clears the active artifact", () => {
     render(
       <ArtifactPanelProvider>

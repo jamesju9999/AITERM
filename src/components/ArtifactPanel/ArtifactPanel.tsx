@@ -10,25 +10,38 @@ import "./ArtifactPanel.css";
 /**
  * JSON.parse 只保證「是合法 JSON」，不保證「是 ChartSpec」。內容是模型寫的，
  * 少一個 series 或整個給 {} 都很常見，而 ArtifactChart 會直接在 spec.series.length
- * 上炸掉、把整個面板帶走。渲染前先驗形狀，不合格就當成解析失敗處理。
+ * 上炸掉、把整個面板帶走。渲染前先驗形狀。
+ *
+ * 失敗時回傳「哪裡不對」而不只是 null——只說一句「格式錯誤」的話，使用者跟
+ * 維護者都只能猜模型到底寫了什麼。
  */
-function parseChartSpec(raw: string): ChartSpec | null {
+function parseChartSpec(raw: string): { spec: ChartSpec } | { problem: string } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
-    return null;
+  } catch (e) {
+    return { problem: `JSON 解析失敗：${e instanceof Error ? e.message : String(e)}` };
   }
-  if (typeof parsed !== "object" || parsed === null) return null;
+  if (typeof parsed !== "object" || parsed === null) {
+    return { problem: "最外層不是一個物件。" };
+  }
   const s = parsed as Partial<ChartSpec>;
-  const typeOk = s.type === "bar" || s.type === "line" || s.type === "pie";
-  const dataOk = Array.isArray(s.data);
-  const xKeyOk = typeof s.xKey === "string" && s.xKey.length > 0;
-  const seriesOk =
-    Array.isArray(s.series) &&
-    s.series.length > 0 &&
-    s.series.every((e) => e && typeof e.key === "string" && typeof e.label === "string");
-  return typeOk && dataOk && xKeyOk && seriesOk ? (parsed as ChartSpec) : null;
+  const missing: string[] = [];
+  if (s.type !== "bar" && s.type !== "line" && s.type !== "pie") {
+    missing.push('type（必須是 "bar" / "line" / "pie"）');
+  }
+  if (!Array.isArray(s.data)) missing.push("data（必須是陣列）");
+  if (typeof s.xKey !== "string" || s.xKey.length === 0) missing.push("xKey（必須是非空字串）");
+  if (
+    !Array.isArray(s.series) ||
+    s.series.length === 0 ||
+    !s.series.every((e) => e && typeof e.key === "string" && typeof e.label === "string")
+  ) {
+    missing.push("series（必須是 [{ key, label }] 且不可為空）");
+  }
+  return missing.length === 0
+    ? { spec: parsed as ChartSpec }
+    : { problem: `欄位不符：${missing.join("、")}` };
 }
 
 /** 標題直接來自模型寫的 <title>，可能含有路徑分隔字元等不能當檔名的東西。 */
@@ -59,11 +72,15 @@ export function ArtifactPanel() {
   if (activeArtifact.kind === "html") {
     body = <ArtifactHtmlFrame html={activeArtifact.content} title={activeArtifact.title} />;
   } else {
-    const spec = parseChartSpec(activeArtifact.content);
-    body = spec ? (
-      <ArtifactChart spec={spec} />
+    const result = parseChartSpec(activeArtifact.content);
+    body = "spec" in result ? (
+      <ArtifactChart spec={result.spec} />
     ) : (
-      <div className="aiterm-artifact-panel__error">圖表資料格式錯誤，無法解析。</div>
+      <div className="aiterm-artifact-panel__error">
+        <p>圖表資料格式錯誤，無法解析。</p>
+        <p className="aiterm-artifact-panel__error-why">{result.problem}</p>
+        <pre className="aiterm-artifact-panel__error-raw">{activeArtifact.content}</pre>
+      </div>
     );
   }
 

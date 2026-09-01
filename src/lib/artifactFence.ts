@@ -31,8 +31,19 @@ export function splitArtifactFence(text: string): SplitArtifact {
   const afterFence = text.slice(m.index + m[0].length);
   // 去掉緊接在 fence 語言標記後面的那個換行。
   let content = afterFence.startsWith("\n") ? afterFence.slice(1) : afterFence;
-  // 只去掉「訊息最尾端」的收尾 fence——中間出現的一律視為文件內容。
-  content = content.replace(/\n?```[ \t]*\n?$/, "");
+
+  if (kind === "chart") {
+    // 圖表在第一個收尾 fence 就停。內容是 JSON，不會合法地含有「一整行 ```」，
+    // 而模型很常在 fence 後面再補一句說明——沿用 html 那套吃到結尾的規則，
+    // 那句話會被塞進 JSON 裡讓 parse 直接失敗，面板只會顯示「格式錯誤」。
+    const close = content.search(/^```[ \t]*$/m);
+    if (close >= 0) content = content.slice(0, close);
+    content = content.replace(/\n+$/, "");
+  } else {
+    // HTML 文件相反：它合法地可能含有 ```（模型在報告裡放程式碼範例），所以
+    // 只去掉「訊息最尾端」那個收尾 fence，中間出現的一律當文件內容。
+    content = content.replace(/\n?```[ \t]*\n?$/, "");
+  }
 
   return { prose, artifact: { kind, content } };
 }

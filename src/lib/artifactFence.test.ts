@@ -57,6 +57,22 @@ describe("splitArtifactFence", () => {
     expect(splitArtifactFence(text).artifact).toBeNull();
   });
 
+  // html 與 chart 的規則刻意不同：HTML 文件裡合法地可能出現 ```（原本的 bug
+  // 就是被它截斷），但 JSON 不會。對 chart 沿用「吃到訊息結尾」的話，模型只要
+  // 在 fence 後多寫一句話，那句話就會被塞進 JSON 裡讓 parse 失敗。
+  it("stops a chart at its closing fence so trailing prose cannot break the JSON", () => {
+    const text = '```artifact-chart\n{"type":"bar"}\n```\n以上是圖表。';
+    expect(splitArtifactFence(text).artifact).toEqual({
+      kind: "chart",
+      content: '{"type":"bar"}',
+    });
+  });
+
+  it("still lets an html document run past a closing fence", () => {
+    const text = "```artifact-html\n<h1>A</h1>\n```\n<h2>B</h2>";
+    expect(splitArtifactFence(text).artifact?.content).toContain("<h2>B</h2>");
+  });
+
   it("takes the first fence when the model emits more than one", () => {
     const text = "```artifact-html\n<h1>first</h1>\n```\n```artifact-html\n<h1>second</h1>\n```";
     const { artifact } = splitArtifactFence(text);
