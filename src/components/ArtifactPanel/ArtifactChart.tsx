@@ -92,7 +92,10 @@ export function ArtifactChart({ spec }: ArtifactChartProps) {
               data={spec.data}
               dataKey={seriesKey}
               nameKey={spec.xKey}
-              label
+              // 半徑留餘裕，否則外側的標籤會被容器裁掉（實機上就掉了一個，
+              // 只剩一條指向空白的指引線）。
+              outerRadius="65%"
+              label={{ fill: palette.textSecondary, fontSize: 11 }}
               // 扇形之間用 surface 色的 2px 縫隔開，而不是描邊——白留空是
               // 分隔的機制，描邊等於加上不是資料的墨水。
               stroke={palette.surface}
@@ -103,7 +106,10 @@ export function ArtifactChart({ spec }: ArtifactChartProps) {
               ))}
             </Pie>
             <Tooltip {...tooltipProps(palette)} />
-            {spec.series.length >= 2 && <Legend />}
+            {/* 圓餅圖一定要有圖例：扇形就是類別，顏色沒有對照表等於沒有意義。
+                這跟長條/折線「單一序列不放圖例」的規則不同——那裡的身分是序列，
+                標題已經講完了。 */}
+            <Legend wrapperStyle={{ fontSize: 12, color: palette.textSecondary }} />
           </PieChart>
         </ResponsiveContainer>
       </div>

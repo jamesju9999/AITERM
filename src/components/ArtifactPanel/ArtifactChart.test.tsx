@@ -53,6 +53,20 @@ describe("ArtifactChart", () => {
     expect(container.querySelector("svg")).not.toBeNull();
   });
 
+  // 圓餅圖的「扇形」本身就是類別維度——一個序列就有多個身分要區分。沒有圖例
+  // 又沒有名稱標籤的話，顏色等於沒有意義。這跟長條/折線「單一序列不需要圖例」
+  // 的規則不同，因為那裡的身分是序列、標題已經說完了。
+  it("always shows a legend for a pie, even with one series", () => {
+    const pieSpec: ChartSpec = {
+      type: "pie",
+      data: [{ k: "A", v: 4 }, { k: "B", v: 1 }, { k: "C", v: 2 }],
+      xKey: "k",
+      series: [{ key: "v", label: "數量" }],
+    };
+    const { container } = render(<ArtifactChart spec={pieSpec} />);
+    expect(container.querySelector(".recharts-legend-wrapper")).not.toBeNull();
+  });
+
   it("does not render a legend for a single series", () => {
     const { container } = render(<ArtifactChart spec={barSpec} />);
     expect(container.querySelector(".recharts-legend-wrapper")).toBeNull();
