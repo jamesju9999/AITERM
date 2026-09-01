@@ -3,8 +3,9 @@ import {
   ResponsiveContainer,
   BarChart,
   Bar,
-  LineChart,
+  ComposedChart,
   Line,
+  Area,
   PieChart,
   Pie,
   Cell,
@@ -133,8 +134,24 @@ export function ArtifactChart({ spec }: ArtifactChartProps) {
     return (
       <div className="aiterm-artifact-chart">
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={spec.data} margin={{ top: 12, right: 16, bottom: 4, left: 0 }}>
+          <ComposedChart data={spec.data} margin={{ top: 12, right: 16, bottom: 4, left: 0 }}>
             {commonAxes}
+            {/* 線下方鋪一層 ~10% 的同色淡影。規範允許的就是這種「wash」，不是
+                飽和色塊；這也是唯一不扭曲數值的加層次方式——立體陰影會讓讀者
+                不確定該讀資料端的前緣還是後緣。 */}
+            {spec.series.map((s, i) => (
+              <Area
+                key={`area-${s.key}`}
+                dataKey={s.key}
+                stroke="none"
+                fill={color(i)}
+                fillOpacity={0.1}
+                // 圖例與 tooltip 交給下面的 Line，這層只是底色。
+                legendType="none"
+                tooltipType="none"
+                isAnimationActive={false}
+              />
+            ))}
             {spec.series.map((s, i) => (
               <Line
                 key={s.key}
@@ -149,7 +166,7 @@ export function ArtifactChart({ spec }: ArtifactChartProps) {
                 activeDot={{ r: 5, fill: color(i), stroke: palette.surface, strokeWidth: 2 }}
               />
             ))}
-          </LineChart>
+          </ComposedChart>
         </ResponsiveContainer>
       </div>
     );

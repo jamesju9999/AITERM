@@ -33,6 +33,16 @@ describe("ArtifactChart", () => {
     expect(container.querySelector("svg")).not.toBeNull();
   });
 
+  // 規範允許折線圖下方鋪 ~10% 透明度的區域填色（"a wash, never a saturated
+  // block"）。這是唯一不扭曲數值的加層次方式——立體陰影會讓讀者不確定該讀
+  // 長條的前緣還是後緣。
+  it("washes the area under a line at low opacity", () => {
+    const { container } = render(<ArtifactChart spec={{ ...barSpec, type: "line" }} />);
+    const area = container.querySelector(".recharts-area-area");
+    expect(area).not.toBeNull();
+    expect(Number(area!.getAttribute("fill-opacity"))).toBeLessThanOrEqual(0.15);
+  });
+
   it("renders a line chart without throwing", () => {
     const lineSpec: ChartSpec = { ...barSpec, type: "line" };
     const { container } = render(<ArtifactChart spec={lineSpec} />);

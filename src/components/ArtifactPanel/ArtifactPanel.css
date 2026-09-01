@@ -91,6 +91,11 @@
   flex-direction: column;
   flex: 1;
   min-height: 260px;
+  padding: 0 12px 12px;
+}
+
+.aiterm-artifact-chart-slot:first-child {
+  padding-top: 12px;
 }
 
 .aiterm-artifact-chart-slot__title {
