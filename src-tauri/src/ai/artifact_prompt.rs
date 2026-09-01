@@ -50,7 +50,13 @@ Rules:
 - Always also write a line or two in the reply saying what you produced. The
   artifact supplements the answer, it is not a substitute for one.
 - Write the whole fence in one go, and only claim the document is ready after
-  you have actually written it — not before."#
+  you have actually written it — not before.
+- Never build a document by shelling out — no `cat > file.html <<EOF`, no
+  writing HTML through a terminal command. Write the fence in your reply
+  instead; the app renders and offers to save it.
+- If you are working through a multi-step task, keep going until the work is
+  done. The artifact is how you present the finished result, not a reason to
+  stop early."#
 }
 
 #[cfg(test)]
@@ -91,6 +97,16 @@ mod tests {
     /// tool call，掉進 knowledge_base/tools.rs 的 `Unknown tool` fallback——
     /// 使用者看到「報告已完成」卻什麼都沒出現。這條釘住那句否定，別讓它被
     /// 「精簡」掉。
+    /// 終端機 agent 模式實測：模型不知道有 artifact 時，會改用
+    /// `cat > x.html <<'EOF'` 把 HTML 寫進檔案，而那個多行 heredoc 會讓終端機
+    /// 卡在 heredoc> 永遠等不到結束標記。這條釘住那個禁令。
+    #[test]
+    fn forbids_writing_documents_through_the_shell() {
+        let s = artifact_protocol_section();
+        assert!(s.contains("Never build a document by shelling out"));
+        assert!(s.contains("cat > file.html"), "name the exact anti-pattern");
+    }
+
     #[test]
     fn states_plainly_that_these_are_not_tools() {
         let s = artifact_protocol_section();
