@@ -11,27 +11,46 @@ pub fn artifact_protocol_section() -> &'static str {
     r#"
 ## Rendering documents and charts
 
-Two fenced code blocks get special rendering in a panel beside this
-conversation. Reach for them when the answer is something to look at rather
-than a sentence to read.
+`artifact-html` and `artifact-chart` are NOT tools. Never call them as a tool
+and never put them in a tool call — there is no such tool and the call will
+fail. They are markdown code-fence languages that you type directly into the
+text of your reply, exactly like writing a ```json block. The app watches your
+reply text for these two fences and renders them in a panel beside the
+conversation.
 
-- ```artifact-html — the body is a complete HTML document, rendered in an
-  isolated sandbox. Use it for reports, formatted summaries, comparison
-  tables, or anything worth reading as its own document. Include a <title>;
-  it becomes the panel's title. <style> and <script> both work, but the page
-  cannot reach anything outside its own frame.
-- ```artifact-chart — the body is JSON describing a chart:
-  {"type":"bar"|"line"|"pie","title":"...","data":[{...}],"xKey":"...",
-   "series":[{"key":"...","label":"..."}]}
-  `data` is an array of row objects, `xKey` names the field used for the
-  category axis, and each series `key` names a numeric field on those rows.
+Write a document like this, as literal text in your reply:
+
+```artifact-html
+<!DOCTYPE html>
+<html><head><title>Quarterly Summary</title></head>
+<body><h1>Quarterly Summary</h1><p>…</p></body></html>
+```
+
+The HTML is rendered in an isolated sandbox. Use it for reports, formatted
+summaries, comparison tables, or anything worth reading as its own document.
+The <title> becomes the panel's title. <style> and <script> both work, but the
+page cannot reach anything outside its own frame.
+
+Write a chart like this, again as literal text in your reply:
+
+```artifact-chart
+{"type":"bar","title":"Sales by month",
+ "data":[{"month":"Jan","sales":120},{"month":"Feb","sales":150}],
+ "xKey":"month","series":[{"key":"sales","label":"Sales"}]}
+```
+
+`type` is "bar", "line" or "pie"; `data` is an array of row objects; `xKey`
+names the field used for the category axis; each series `key` names a numeric
+field on those rows.
 
 Rules:
 - At most one artifact per reply; a later one replaces the earlier one.
 - Do NOT use an artifact for a short answer, a single command, or a couple of
   sentences — those belong in the reply itself.
 - Always also write a line or two in the reply saying what you produced. The
-  artifact supplements the answer, it is not a substitute for one."#
+  artifact supplements the answer, it is not a substitute for one.
+- Write the whole fence in one go, and only claim the document is ready after
+  you have actually written it — not before."#
 }
 
 #[cfg(test)]
@@ -65,5 +84,17 @@ mod tests {
     #[test]
     fn warns_against_using_artifacts_for_short_answers() {
         assert!(artifact_protocol_section().contains("Do NOT use an artifact for a short answer"));
+    }
+
+    /// 知識庫與 Code Assistant 是 native tool-calling 的迴圈。實測發現模型會把
+    /// 這段散文描述的「能力」類推成又一個工具，直接發出名為 artifact-html 的
+    /// tool call，掉進 knowledge_base/tools.rs 的 `Unknown tool` fallback——
+    /// 使用者看到「報告已完成」卻什麼都沒出現。這條釘住那句否定，別讓它被
+    /// 「精簡」掉。
+    #[test]
+    fn states_plainly_that_these_are_not_tools() {
+        let s = artifact_protocol_section();
+        assert!(s.contains("NOT tools"), "must say they are not tools");
+        assert!(s.contains("Never call them as a tool"));
     }
 }
