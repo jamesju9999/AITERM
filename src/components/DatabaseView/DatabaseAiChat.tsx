@@ -7,6 +7,8 @@ import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/m
 import { parseSchemaDoc, buildSchemaSection } from "../../lib/schemaDoc";
 import { useLocale } from "../../contexts/LocaleContext";
 import { ModelPickerButton } from "../ModelPickerButton";
+import { ArtifactPanelProvider } from "../../contexts/ArtifactPanelContext";
+import { ArtifactSplit } from "../ArtifactPanel/ArtifactSplit";
 
 interface Props {
   connectionId: string;
@@ -128,7 +130,15 @@ function errorText(err: unknown): string {
   return formatAiError(normalizeAiError(err));
 }
 
-export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Props) {
+export function DatabaseAiChat(props: Props) {
+  return (
+    <ArtifactPanelProvider>
+      <DatabaseAiChatInner {...props} />
+    </ArtifactPanelProvider>
+  );
+}
+
+function DatabaseAiChatInner({ connectionId, schema, sendRemoteResponse }: Props) {
   const { t, locale } = useLocale();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -298,6 +308,7 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
           selectedProviderId || undefined,
           false,
           locale,
+          true,
         );
         const reply = aiResult.content ?? "";
 
@@ -354,6 +365,7 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
             selectedProviderId || undefined,
             false,
             locale,
+            true,
           );
           const summary = summaryResult.content ?? "";
           updateAndPersist((m) => ({
@@ -495,6 +507,7 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
       )}
 
       {/* Main chat area */}
+      <ArtifactSplit>
       <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
         <div ref={messagesContainerRef} style={{ flex: 1, overflowY: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
           {messages.length === 0 && (
@@ -626,6 +639,7 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
           </div>
         </div>
       </div>
+      </ArtifactSplit>
     </div>
   );
 }
