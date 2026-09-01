@@ -5,12 +5,22 @@
   min-height: 260px;
   padding: 16px 16px 12px;
   box-sizing: border-box;
-  /* 層次做在「外框」而不是資料上：一層極淡的底與細邊，讓圖讀起來像一張卡片。
-     陰影絕不能加在長條或折線本身——那會讓讀者不確定數值該讀到哪裡。 */
-  background: var(--bg-glass, rgba(255, 255, 255, 0.02));
+  /* 層次做在「外框」而不是資料上：半透明玻璃底加細邊，讓圖讀起來像一張卡片。
+     陰影絕不能加在長條或折線本身——那會讓讀者不確定數值該讀到哪裡。
+     沿用面板既有的毛玻璃語彙（見 ChatPanel/styles.css 的 .aiterm-ai-panel）。 */
+  background: rgba(255, 255, 255, 0.045);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--border-color, #2a2a2a);
   border-radius: 10px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+
+/* 淺色主題要反過來壓暗，白疊白等於看不見。分桶方式沿用 AgentStatusBar.css：
+   只有明確的 light 主題算淺色，其餘（dark/nord/dracula）一律走上面那組。 */
+:root[data-theme="light"] .aiterm-artifact-chart {
+  background: rgba(0, 0, 0, 0.028);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 /* 刻度是數字欄位，用等寬數字才不會跳動。字型沿用系統 sans（規範：連數字都不
