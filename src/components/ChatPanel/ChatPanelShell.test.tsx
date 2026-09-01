@@ -135,6 +135,25 @@ describe("ChatPanelShell", () => {
     expect(document.querySelector(".aiterm-artifact-panel")).toBeNull();
   });
 
+  // 有 artifact 時面板會自動撐寬，但「縮小面板」必須真的能縮——先前的寫法是
+  // effectiveExpanded = expanded || !!activeArtifact，按鈕只切換 expanded，
+  // 於是 artifact 開著時不管怎麼點，effectiveExpanded 都是 true：一顆按了沒
+  // 反應的死按鈕。使用者想把終端機要回來時無路可走。
+  it("minimize actually narrows the panel while an artifact is open", () => {
+    const messages = [
+      { role: "assistant" as const, content: "```artifact-html\n<title>Brief</title>\n```" },
+    ];
+    render(<ChatPanelShell {...base({ messages })} />);
+
+    const panel = document.querySelector(".aiterm-ai-panel")!;
+    expect(panel.className).toContain("aiterm-ai-panel--expanded");
+
+    fireEvent.click(screen.getByTitle("縮小面板"));
+    expect(panel.className).not.toContain("aiterm-ai-panel--expanded");
+    // 文件仍然開著——縮小的是面板寬度，不是把文件關掉。
+    expect(document.querySelector(".aiterm-artifact-panel")).not.toBeNull();
+  });
+
   it("closing the artifact panel collapses back to a single column", () => {
     const messages = [
       { role: "assistant" as const, content: "```artifact-html\n<title>Brief</title>\n```" },

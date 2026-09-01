@@ -854,6 +854,13 @@
   overflow: hidden;
 }
 
+/* 聊天欄的寬度是像素值（拖拉分割用），面板整體卻可能被縮回 ~420px——固定像素
+   寬會把文件欄擠到只剩幾十像素。上限用百分比，讓文件欄在窄面板下仍有一半空間；
+   拖拉時的下限另外由 MIN_CHAT_COLUMN_WIDTH 顧。 */
+.aiterm-ai-panel--split .aiterm-ai-panel-chat-column {
+  max-width: 55%;
+}
+
 .aiterm-artifact-resizer {
   width: 6px;
   cursor: col-resize;

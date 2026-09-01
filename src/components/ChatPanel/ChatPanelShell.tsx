@@ -148,10 +148,14 @@ function ChatPanelShellInner({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
-  // 有 artifact 顯示時，視覺上一律當成「已展開」——不是把 expanded 這個
-  // state 本身改掉（使用者手動按過的展開偏好要保留），只是讓寬度/樣式判斷
-  // 多一個 OR 條件。artifact 收掉後會自動回到使用者原本手動設定的展開狀態。
-  const effectiveExpanded = expanded || !!activeArtifact;
+  // 文件/圖表出現時把面板撐開，讓它有地方顯示。這裡刻意是「觸發一次」而不是
+  // 讓展開狀態恆等於 expanded || !!activeArtifact——後者會讓右上角那顆縮小鈕
+  // 在文件開著時按了完全沒反應（它只切換 expanded，但 OR 的另一邊永遠是
+  // true），使用者想把終端機要回來時無路可走。改成觸發式之後，撐開照舊，而
+  // 使用者仍然隨時可以縮小面板、文件也不會因此被關掉。
+  useEffect(() => {
+    if (activeArtifact) setExpanded(true);
+  }, [activeArtifact]);
 
   // ── Resize（面板整體寬度，收合時） ─────────────────────────────────────────
   const [panelWidth, setPanelWidth] = useState(loadSavedWidth);
@@ -268,7 +272,7 @@ function ChatPanelShellInner({
     isOpen ? "" : "aiterm-ai-panel-hidden",
     // Windows can't blur the terminal behind the glass panel — see styles.css.
     isWindows ? "aiterm-ai-panel--solid" : "",
-    effectiveExpanded ? "aiterm-ai-panel--expanded" : "",
+    expanded ? "aiterm-ai-panel--expanded" : "",
     activeArtifact ? "aiterm-ai-panel--split" : "",
   ].filter(Boolean).join(" ");
 
@@ -281,13 +285,13 @@ function ChatPanelShellInner({
     <div
       className={panelClass}
       aria-hidden={!isOpen}
-      style={{ width: effectiveExpanded ? "100%" : `${panelWidth}px` }}
+      style={{ width: expanded ? "100%" : `${panelWidth}px` }}
       onDragOver={onDragOver}
       onDrop={onDrop}
       ref={splitContainerRef}
     >
       {/* Resize handle on the left edge — 滿版時左邊沒有終端機可以讓，收起來。 */}
-      {!effectiveExpanded && (
+      {!expanded && (
         <div
           className="aiterm-panel-resize-handle"
           onPointerDown={onResizePointerDown}
@@ -317,11 +321,11 @@ function ChatPanelShellInner({
           <div style={{ display: "flex", gap: "8px" }}>
             <button
               type="button"
-              className={`aiterm-ai-panel-clear-btn aiterm-ai-panel-icon-btn${effectiveExpanded ? " aiterm-ai-panel-clear-btn--active" : ""}`}
+              className={`aiterm-ai-panel-clear-btn aiterm-ai-panel-icon-btn${expanded ? " aiterm-ai-panel-clear-btn--active" : ""}`}
               onClick={() => setExpanded((e) => !e)}
-              title={effectiveExpanded ? "縮小面板" : "放大面板"}
+              title={expanded ? "縮小面板" : "放大面板"}
             >
-              {effectiveExpanded ? <MinimizeIcon size={15} /> : <MaximizeIcon size={15} />}
+              {expanded ? <MinimizeIcon size={15} /> : <MaximizeIcon size={15} />}
             </button>
             <button
               type="button"
