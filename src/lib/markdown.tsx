@@ -95,10 +95,11 @@ export function unescapeNewlines(text: string): string {
 }
 
 import { MermaidBlock } from "../components/MermaidBlock";
+import { ArtifactBlockCard } from "../components/ArtifactPanel/ArtifactBlockCard";
 
 // ── Block markdown renderer ────────────────────────────────────────────────
 
-export function MarkdownText({ text }: { text: string }): ReactNode {
+export function MarkdownText({ text, streaming }: { text: string; streaming?: boolean }): ReactNode {
   return (
     <div className="markdown-body">
       <ReactMarkdown
@@ -106,10 +107,16 @@ export function MarkdownText({ text }: { text: string }): ReactNode {
         rehypePlugins={[rehypeKatex]}
         components={{
           code({ node, className, children, ...props }) {
-            const match = /language-(\w+)/.exec(className || "");
-            
+            const match = /language-([\w-]+)/.exec(className || "");
+
             if (match && match[1].toLowerCase() === "mermaid") {
               return <MermaidBlock chart={String(children)} />;
+            }
+            if (!streaming && match && match[1].toLowerCase() === "artifact-html") {
+              return <ArtifactBlockCard kind="html" content={String(children)} />;
+            }
+            if (!streaming && match && match[1].toLowerCase() === "artifact-chart") {
+              return <ArtifactBlockCard kind="chart" content={String(children)} />;
             }
 
             const isInline = !match && !String(children).includes("\n");

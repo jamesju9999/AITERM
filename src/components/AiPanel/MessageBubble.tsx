@@ -79,7 +79,7 @@ export function MessageBubble({
       >
         {parts.map((p, i) =>
           p.type === "text" ? (
-            <MarkdownText key={i} text={p.content} />
+            <MarkdownText key={i} text={p.content} streaming={streaming} />
           ) : (
             <CmdTag
               key={i}
