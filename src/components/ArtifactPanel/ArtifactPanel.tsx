@@ -1,10 +1,11 @@
-import { useCallback, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
-import { FileTextIcon, ChartIcon, DownloadIcon } from "../Icons";
+import { FileTextIcon, ChartIcon, DownloadIcon, TableIcon } from "../Icons";
 import { writeTextFile } from "../../ipc/fs";
 import { useArtifactPanel } from "../../contexts/ArtifactPanelContext";
 import { ArtifactHtmlFrame } from "./ArtifactHtmlFrame";
 import { ArtifactChart, type ChartSpec } from "./ArtifactChart";
+import { ArtifactChartTable } from "./ArtifactChartTable";
 import "./ArtifactPanel.css";
 
 /**
@@ -76,6 +77,7 @@ function toFileName(title: string): string {
 
 export function ArtifactPanel() {
   const { activeArtifact, clearArtifact } = useArtifactPanel();
+  const [asTable, setAsTable] = useState(false);
 
   const isHtml = activeArtifact?.kind === "html";
   const html = activeArtifact?.content ?? "";
@@ -98,6 +100,9 @@ export function ArtifactPanel() {
   } else {
     const result = parseChartSpec(activeArtifact.content);
     body = "specs" in result ? (
+      asTable ? (
+        <ArtifactChartTable specs={result.specs} />
+      ) : (
       <>
         {result.specs.map((spec, i) => (
           <div className="aiterm-artifact-chart-slot" key={i}>
@@ -109,6 +114,7 @@ export function ArtifactPanel() {
           </div>
         ))}
       </>
+      )
     ) : (
       <div className="aiterm-artifact-panel__error">
         <p>圖表資料格式錯誤，無法解析。</p>
@@ -123,6 +129,16 @@ export function ArtifactPanel() {
       <div className="aiterm-artifact-panel__header">
         {activeArtifact.kind === "html" ? <FileTextIcon size={15} /> : <ChartIcon size={15} />}
         <span className="aiterm-artifact-panel__title">{activeArtifact.title}</span>
+        {!isHtml && (
+          <button
+            type="button"
+            className={`aiterm-artifact-panel__action${asTable ? " aiterm-artifact-panel__action--on" : ""}`}
+            onClick={() => setAsTable((v) => !v)}
+            title={asTable ? "切換圖表檢視" : "切換表格檢視"}
+          >
+            {asTable ? <ChartIcon size={14} /> : <TableIcon size={14} />}
+          </button>
+        )}
         {isHtml && (
           <button
             type="button"

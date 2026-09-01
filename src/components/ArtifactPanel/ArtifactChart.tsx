@@ -40,6 +40,10 @@ function isDarkSurface(): boolean {
   return document.documentElement.getAttribute("data-theme") !== "light";
 }
 
+/** 單一序列且長條不多時，數值直接標在頂端。規範同時要求「不可以每個點都標」
+ *  ——多序列或資料點一多就會變成噪音，那時交給座標軸、tooltip 與表格檢視。 */
+const MAX_LABELLED_BARS = 12;
+
 /** 千分位。刻度承載了沒有被直接標註的數值，讀得順比省空間重要。 */
 const formatTick = (v: unknown) =>
   typeof v === "number" ? v.toLocaleString() : String(v ?? "");
@@ -64,7 +68,10 @@ function tooltipProps(palette: ThemeColors) {
       fontSize: 12,
       boxShadow: "0 6px 20px rgba(0,0,0,0.28)",
     },
-    labelStyle: { color: palette.textSecondary, marginBottom: 4 },
+    // 規範：tooltip 裡「數值是主角、序列名是配角」——讀者已經知道是哪個序列，
+    // 他要的是數字。這跟圖例的階層剛好相反。
+    labelStyle: { color: palette.textSecondary, marginBottom: 4, fontSize: 11 },
+    itemStyle: { color: palette.textPrimary, fontWeight: 600 },
     // 預設的 hover 遮罩太重，會蓋過資料本身。
     cursor: { fill: palette.gridline, fillOpacity: 0.35 },
   };
@@ -73,6 +80,7 @@ function tooltipProps(palette: ThemeColors) {
 export function ArtifactChart({ spec }: ArtifactChartProps) {
   const palette = useMemo(() => (isDarkSurface() ? CHART_PALETTE_DARK : CHART_PALETTE_LIGHT), []);
   const color = (i: number) => palette.categorical[i % palette.categorical.length];
+  const labelBars = spec.series.length === 1 && spec.data.length <= MAX_LABELLED_BARS;
 
   if (spec.type === "pie") {
     const seriesKey = spec.series[0]?.key ?? "value";
@@ -160,6 +168,12 @@ export function ArtifactChart({ spec }: ArtifactChartProps) {
               // 貼著基線那端維持方角。
               maxBarSize={24}
               radius={[4, 4, 0, 0]}
+              // 規範：滑過的那根要有反應，讀者才知道自己指到了什麼。
+              activeBar={{ fill: color(i), fillOpacity: 0.82 }}
+              // 標籤穿的是文字色，不是資料色——淺色的分類色當文字會看不清楚。
+              label={labelBars
+                ? { position: "top", formatter: formatTick, fill: palette.textSecondary, fontSize: 11 }
+                : undefined}
             />
           ))}
         </BarChart>

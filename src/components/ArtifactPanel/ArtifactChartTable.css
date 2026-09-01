@@ -1,0 +1,35 @@
+.aiterm-artifact-table {
+  padding: 12px 16px 16px;
+  overflow: auto;
+  font-size: 12px;
+}
+
+.aiterm-artifact-table__title {
+  margin: 12px 0 6px;
+  font-weight: 600;
+  color: var(--text-secondary, #c3c2b7);
+}
+
+.aiterm-artifact-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.aiterm-artifact-table th,
+.aiterm-artifact-table td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color, #2a2a2a);
+}
+
+.aiterm-artifact-table th {
+  color: var(--text-secondary, #c3c2b7);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 數字靠右並用等寬數字，位數才對得齊——這正是規範說「欄位裡才用 tabular」的情況。 */
+.aiterm-artifact-table__num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

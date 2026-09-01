@@ -646,3 +646,24 @@ export function DownloadIcon({ size = 16, ...props }: IconProps) {
     </svg>
   );
 }
+
+// 37. Table Icon（Artifact 面板：圖表的表格孿生）
+export function TableIcon({ size = 16, ...props }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 10h18" />
+      <path d="M9 10v10" />
+    </svg>
+  );
+}

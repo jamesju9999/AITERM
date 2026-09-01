@@ -99,3 +99,7 @@
   font-weight: 600;
   color: var(--text-secondary, #c3c2b7);
 }
+
+.aiterm-artifact-panel__action--on {
+  color: var(--accent, #a855f7);
+}

@@ -196,6 +196,46 @@ describe("ArtifactPanel", () => {
     expect(screen.getByText("乙")).toBeInTheDocument();
   });
 
+  // 規範：tooltip 只能「加強」不能「把關」——每個數值都必須有不用 hover 也拿得到
+  // 的途徑。表格檢視就是每張圖的無障礙孿生。
+  it("can switch a chart to a table of its exact values", () => {
+    render(
+      <ArtifactPanelProvider>
+        <ShowOnMount artifact={{ id: "30", kind: "chart", title: "One", content: oneChart }} />
+        <ArtifactPanel />
+      </ArtifactPanelProvider>,
+    );
+    fireEvent.click(screen.getByTitle("切換表格檢視"));
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "m" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "V" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "Jan" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "1" })).toBeInTheDocument();
+  });
+
+  it("switches back to the chart", () => {
+    const { container } = render(
+      <ArtifactPanelProvider>
+        <ShowOnMount artifact={{ id: "31", kind: "chart", title: "One", content: oneChart }} />
+        <ArtifactPanel />
+      </ArtifactPanelProvider>,
+    );
+    fireEvent.click(screen.getByTitle("切換表格檢視"));
+    fireEvent.click(screen.getByTitle("切換圖表檢視"));
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(container.querySelector(".aiterm-artifact-chart")).not.toBeNull();
+  });
+
+  it("does not offer a table view for an html document", () => {
+    render(
+      <ArtifactPanelProvider>
+        <ShowOnMount artifact={{ id: "32", kind: "html", title: "Doc", content: "<p>hi</p>" }} />
+        <ArtifactPanel />
+      </ArtifactPanelProvider>,
+    );
+    expect(screen.queryByTitle("切換表格檢視")).toBeNull();
+  });
+
   it("clicking close clears the active artifact", () => {
     render(
       <ArtifactPanelProvider>
