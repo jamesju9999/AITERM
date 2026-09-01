@@ -10,6 +10,8 @@ import { ToolCallCard } from "./ToolCallCard";
 import { MarkdownText } from "../../lib/markdown";
 import { ModelPickerButton } from "../ModelPickerButton";
 import { CloseConfirmDialog } from "../CloseConfirmDialog";
+import { ArtifactPanelProvider } from "../../contexts/ArtifactPanelContext";
+import { ArtifactSplit } from "../ArtifactPanel/ArtifactSplit";
 import "./styles.css";
 
 const STORAGE_KEY = "aiterm-code-assistant-root";
@@ -28,7 +30,15 @@ interface Props {
   unregisterCloseGuard?: (tabId: string) => void;
 }
 
-export function CodeAssistantView({
+export function CodeAssistantView(props: Props) {
+  return (
+    <ArtifactPanelProvider>
+      <CodeAssistantViewInner {...props} />
+    </ArtifactPanelProvider>
+  );
+}
+
+function CodeAssistantViewInner({
   isActive,
   tabId,
   registerCloseGuard,
@@ -256,6 +266,7 @@ export function CodeAssistantView({
   return (
     <div className="ca-view">
       {closeConfirmDialog}
+      <ArtifactSplit>
       {/* Messages area */}
       <div className="ca-messages" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
         {messages.length === 0 && (
@@ -451,6 +462,7 @@ export function CodeAssistantView({
           </button>
         </div>
       </div>
+      </ArtifactSplit>
     </div>
   );
 }
