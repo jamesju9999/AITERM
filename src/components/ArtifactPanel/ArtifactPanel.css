@@ -90,7 +90,9 @@
   display: flex;
   flex-direction: column;
   flex: 1;
-  min-height: 260px;
+  /* 標題 + 圖表的最小高度都算在這裡（圖表本身 min-height 為 0，會自己縮）。
+     只寫圖表的最小高度而漏掉標題，卡片就會溢出去蓋到下一張圖的標題。 */
+  min-height: 300px;
   padding: 0 12px 12px;
 }
 
