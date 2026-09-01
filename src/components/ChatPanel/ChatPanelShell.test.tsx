@@ -118,6 +118,32 @@ describe("ChatPanelShell", () => {
     expect(onSend).toHaveBeenCalledWith("");
   });
 
+  it("renders a two-column split with the artifact panel when a message contains an artifact-html block", () => {
+    const messages = [
+      { role: "assistant" as const, content: "```artifact-html\n<title>Brief</title><p>hi</p>\n```" },
+    ];
+    render(<ChatPanelShell {...base({ messages })} />);
+    // "Brief" 合理地出現兩處：聊天泡泡裡的 artifact 卡片、以及文件面板的標題列。
+    expect(screen.getAllByText("Brief").length).toBeGreaterThanOrEqual(1);
+    expect(document.querySelector(".aiterm-ai-panel--split")).not.toBeNull();
+    expect(document.querySelector("iframe")).not.toBeNull();
+  });
+
+  it("does not render the split layout when no message has an artifact block", () => {
+    render(<ChatPanelShell {...base()} />);
+    expect(document.querySelector(".aiterm-ai-panel--split")).toBeNull();
+    expect(document.querySelector(".aiterm-artifact-panel")).toBeNull();
+  });
+
+  it("closing the artifact panel collapses back to a single column", () => {
+    const messages = [
+      { role: "assistant" as const, content: "```artifact-html\n<title>Brief</title>\n```" },
+    ];
+    render(<ChatPanelShell {...base({ messages })} />);
+    fireEvent.click(screen.getByTitle("關閉文件面板"));
+    expect(document.querySelector(".aiterm-ai-panel--split")).toBeNull();
+  });
+
   it("inputPrefixControls renders inside the input pill container", () => {
     render(<ChatPanelShell {...base({
       inputPrefixControls: <button>PREFIX-SLOT</button>,

@@ -840,3 +840,28 @@
   border-left-color: var(--warning, #f59e0b);
   color: var(--warning, #f59e0b);
 }
+
+/* ── Artifact Panel split（有 AI 生成的文件/圖表時，面板內部裂成兩欄） ────── */
+.aiterm-ai-panel--split {
+  flex-direction: row;
+}
+
+.aiterm-ai-panel-chat-column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.aiterm-artifact-resizer {
+  width: 6px;
+  cursor: col-resize;
+  background-color: transparent;
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+}
+
+.aiterm-artifact-resizer:hover {
+  background-color: var(--accent, #a855f7);
+}

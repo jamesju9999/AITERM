@@ -1,6 +1,6 @@
 import {
   useEffect, useRef, useState, useCallback,
-  type KeyboardEvent, type ReactNode, type PointerEvent,
+  type KeyboardEvent, type ReactNode, type PointerEvent, type MouseEvent,
 } from "react";
 import type { AiError, ToolFallbackReason } from "../../ipc/ai";
 import type { SubmitShortcut } from "../../ipc/config";
@@ -9,11 +9,15 @@ import { useLocale } from "../../contexts/LocaleContext";
 import { MessageList } from "../AiPanel/MessageList";
 import { ModeHint, type PanelMode } from "../AiPanel/ModeHint";
 import { MaximizeIcon, MinimizeIcon, ZapIcon } from "../Icons";
+import { ArtifactPanelProvider, useArtifactPanel } from "../../contexts/ArtifactPanelContext";
+import { ArtifactPanel } from "../ArtifactPanel/ArtifactPanel";
 import "./styles.css";
 
 const MIN_WIDTH = 280;
 const MAX_WIDTH_RATIO = 0.75;
 const STORAGE_WIDTH_KEY = "aiterm-panel-width";
+const MIN_CHAT_COLUMN_WIDTH = 220;
+const MIN_ARTIFACT_COLUMN_WIDTH = 260;
 
 function loadSavedWidth(): number {
   try {
@@ -85,7 +89,19 @@ export interface ChatPanelShellProps {
   onDrop?: (e: React.DragEvent<HTMLDivElement>) => void;
 }
 
-export function ChatPanelShell({
+/** 對外仍然只有一個 ChatPanelShell——ArtifactPanelProvider 包在這一層，讓每個
+ *  分頁各自的 ChatPanelShell 實例都有自己獨立的 artifact 狀態（見
+ *  docs/superpowers/specs/2026-09-01-artifact-panel-design.md「per-tab」段落）。
+ *  Provider 一定要包在「消費它的元件」外面，所以實際內容拆到 Inner 元件。 */
+export function ChatPanelShell(props: ChatPanelShellProps) {
+  return (
+    <ArtifactPanelProvider>
+      <ChatPanelShellInner {...props} />
+    </ArtifactPanelProvider>
+  );
+}
+
+function ChatPanelShellInner({
   isOpen,
   onClose,
   messages,
@@ -126,12 +142,18 @@ export function ChatPanelShell({
   onDrop,
 }: ChatPanelShellProps) {
   const { t } = useLocale();
+  const { activeArtifact } = useArtifactPanel();
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
-  // ── Resize ────────────────────────────────────────────────────────────────
+  // 有 artifact 顯示時，視覺上一律當成「已展開」——不是把 expanded 這個
+  // state 本身改掉（使用者手動按過的展開偏好要保留），只是讓寬度/樣式判斷
+  // 多一個 OR 條件。artifact 收掉後會自動回到使用者原本手動設定的展開狀態。
+  const effectiveExpanded = expanded || !!activeArtifact;
+
+  // ── Resize（面板整體寬度，收合時） ─────────────────────────────────────────
   const [panelWidth, setPanelWidth] = useState(loadSavedWidth);
   const isDraggingRef = useRef(false);
   const dragStartXRef = useRef(0);
@@ -161,6 +183,40 @@ export function ChatPanelShell({
       return w;
     });
   };
+
+  // ── Resize（聊天欄 vs Artifact 面板的內部分割，有 artifact 時） ───────────────
+  // 做法比照 src/components/DesignView/DesignView.tsx 既有的手刻拖拉分割：
+  // 用容器的 getBoundingClientRect() 算出滑鼠絕對位置對應的左欄寬度，而不是
+  // 累加 delta——這樣邏輯簡單、也是這個 repo 既有分割版型的一致寫法。
+  const [chatColumnWidth, setChatColumnWidth] = useState(320);
+  const [isArtifactResizing, setIsArtifactResizing] = useState(false);
+  const splitContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isArtifactResizing) {
+      document.body.style.userSelect = "";
+      return;
+    }
+    document.body.style.userSelect = "none";
+    const onMouseMove = (e: globalThis.MouseEvent) => {
+      if (!splitContainerRef.current) return;
+      const rect = splitContainerRef.current.getBoundingClientRect();
+      const newWidth = e.clientX - rect.left;
+      const constrained = Math.max(
+        MIN_CHAT_COLUMN_WIDTH,
+        Math.min(newWidth, rect.width - MIN_ARTIFACT_COLUMN_WIDTH),
+      );
+      setChatColumnWidth(constrained);
+    };
+    const onMouseUp = () => setIsArtifactResizing(false);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      document.body.style.userSelect = "";
+    };
+  }, [isArtifactResizing]);
 
   useEffect(() => {
     if (isOpen) textareaRef.current?.focus();
@@ -212,19 +268,26 @@ export function ChatPanelShell({
     isOpen ? "" : "aiterm-ai-panel-hidden",
     // Windows can't blur the terminal behind the glass panel — see styles.css.
     isWindows ? "aiterm-ai-panel--solid" : "",
-    expanded ? "aiterm-ai-panel--expanded" : "",
+    effectiveExpanded ? "aiterm-ai-panel--expanded" : "",
+    activeArtifact ? "aiterm-ai-panel--split" : "",
   ].filter(Boolean).join(" ");
+
+  const onArtifactResizeMouseDown = (e: MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsArtifactResizing(true);
+  };
 
   return (
     <div
       className={panelClass}
       aria-hidden={!isOpen}
-      style={{ width: expanded ? "100%" : `${panelWidth}px` }}
+      style={{ width: effectiveExpanded ? "100%" : `${panelWidth}px` }}
       onDragOver={onDragOver}
       onDrop={onDrop}
+      ref={splitContainerRef}
     >
       {/* Resize handle on the left edge — 滿版時左邊沒有終端機可以讓，收起來。 */}
-      {!expanded && (
+      {!effectiveExpanded && (
         <div
           className="aiterm-panel-resize-handle"
           onPointerDown={onResizePointerDown}
@@ -234,186 +297,202 @@ export function ChatPanelShell({
         />
       )}
 
-      <div className="aiterm-ai-panel-header">
-        <span className="aiterm-ai-panel-title" style={{ background: 'var(--accent-gradient)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '14px' }}>
-          ✨ AITerm AI Studio
-        </span>
-        <button
-          type="button"
-          className="aiterm-ai-panel-provider-badge"
-          onClick={onOpenProviderPalette}
-          title="切換 Provider"
-        >
-          {providerName || "(no provider)"}
-          {headerBadge}
-        </button>
-        <div style={{ display: "flex", gap: "8px" }}>
+      <div
+        className="aiterm-ai-panel-chat-column"
+        style={activeArtifact ? { width: `${chatColumnWidth}px`, flexShrink: 0, flexGrow: 0 } : { flex: 1 }}
+      >
+        <div className="aiterm-ai-panel-header">
+          <span className="aiterm-ai-panel-title" style={{ background: 'var(--accent-gradient)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '14px' }}>
+            ✨ AITerm AI Studio
+          </span>
           <button
             type="button"
-            className={`aiterm-ai-panel-clear-btn aiterm-ai-panel-icon-btn${expanded ? " aiterm-ai-panel-clear-btn--active" : ""}`}
-            onClick={() => setExpanded((e) => !e)}
-            title={expanded ? "縮小面板" : "放大面板"}
+            className="aiterm-ai-panel-provider-badge"
+            onClick={onOpenProviderPalette}
+            title="切換 Provider"
           >
-            {expanded ? <MinimizeIcon size={15} /> : <MaximizeIcon size={15} />}
+            {providerName || "(no provider)"}
+            {headerBadge}
           </button>
-          <button
-            type="button"
-            className={`aiterm-ai-panel-clear-btn${historyOpen ? " aiterm-ai-panel-clear-btn--active" : ""}`}
-            onClick={() => setHistoryOpen((o) => !o)}
-            title="對話歷史"
-          >
-            📋
-          </button>
-          <button
-            type="button"
-            className="aiterm-ai-panel-clear-btn"
-            onClick={() => { onNewChat(); setHistoryOpen(false); }}
-            disabled={isDisabled}
-            title="清空當前對話"
-          >
-            🗑 New Chat
-          </button>
-          <button
-            type="button"
-            className="aiterm-ai-panel-clear-btn"
-            onClick={onClose}
-            title="關閉面板 (Esc)"
-          >
-            ✕
-          </button>
-        </div>
-      </div>
-
-      {/* History side panel */}
-      {historyOpen && (
-        <div className="aiterm-history-panel">
-          <div className="aiterm-history-panel__header">
-            <span className="aiterm-history-panel__title">對話歷史</span>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button
+              type="button"
+              className={`aiterm-ai-panel-clear-btn aiterm-ai-panel-icon-btn${effectiveExpanded ? " aiterm-ai-panel-clear-btn--active" : ""}`}
+              onClick={() => setExpanded((e) => !e)}
+              title={effectiveExpanded ? "縮小面板" : "放大面板"}
+            >
+              {effectiveExpanded ? <MinimizeIcon size={15} /> : <MaximizeIcon size={15} />}
+            </button>
+            <button
+              type="button"
+              className={`aiterm-ai-panel-clear-btn${historyOpen ? " aiterm-ai-panel-clear-btn--active" : ""}`}
+              onClick={() => setHistoryOpen((o) => !o)}
+              title="對話歷史"
+            >
+              📋
+            </button>
+            <button
+              type="button"
+              className="aiterm-ai-panel-clear-btn"
+              onClick={() => { onNewChat(); setHistoryOpen(false); }}
+              disabled={isDisabled}
+              title="清空當前對話"
+            >
+              🗑 New Chat
+            </button>
+            <button
+              type="button"
+              className="aiterm-ai-panel-clear-btn"
+              onClick={onClose}
+              title="關閉面板 (Esc)"
+            >
+              ✕
+            </button>
           </div>
-          <div className="aiterm-history-panel__list">
-            {sessions.length === 0 && (
-              <div className="aiterm-history-panel__empty">尚無歷史記錄</div>
-            )}
-            {[...sessions].reverse().map((s) => (
-              <div
-                key={s.id}
-                className="aiterm-history-panel__item"
-                onClick={() => { onLoadSession(s); setHistoryOpen(false); }}
-              >
-                <div className="aiterm-history-panel__item-content">
-                  <div className="aiterm-history-panel__item-title">{s.title}</div>
-                  <div className="aiterm-history-panel__item-date">
-                    {new Date(s.savedAt).toLocaleDateString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="aiterm-history-panel__item-del"
-                  title="刪除此對話"
-                  onClick={(e) => { e.stopPropagation(); onDeleteSession(s.id); }}
+        </div>
+
+        {/* History side panel */}
+        {historyOpen && (
+          <div className="aiterm-history-panel">
+            <div className="aiterm-history-panel__header">
+              <span className="aiterm-history-panel__title">對話歷史</span>
+            </div>
+            <div className="aiterm-history-panel__list">
+              {sessions.length === 0 && (
+                <div className="aiterm-history-panel__empty">尚無歷史記錄</div>
+              )}
+              {[...sessions].reverse().map((s) => (
+                <div
+                  key={s.id}
+                  className="aiterm-history-panel__item"
+                  onClick={() => { onLoadSession(s); setHistoryOpen(false); }}
                 >
-                  ×
-                </button>
-              </div>
-            ))}
+                  <div className="aiterm-history-panel__item-content">
+                    <div className="aiterm-history-panel__item-title">{s.title}</div>
+                    <div className="aiterm-history-panel__item-date">
+                      {new Date(s.savedAt).toLocaleDateString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="aiterm-history-panel__item-del"
+                    title="刪除此對話"
+                    onClick={(e) => { e.stopPropagation(); onDeleteSession(s.id); }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <MessageList
+          messages={messages}
+          streamBuf={streamBuf}
+          isStreaming={isStreaming}
+          thinkingLabel={thinkingLabel}
+          error={error}
+          onExecuteCommand={onExecuteCommand}
+          onRetry={onRetry}
+        />
+
+        {/* 這個憑證無法使用原生工具呼叫時，後端會自動改用「工具描述注入系統提示」
+            的文字協定。工具照樣能跑，但切換方案不該靜默發生。 */}
+        {toolFallbackReason && (
+          <div className="aiterm-mode-hint aiterm-mode-hint--degraded">
+            <span aria-hidden="true">⚠</span>
+            <span>
+              {toolFallbackReason === "subscription_billing"
+                ? t.ai_tool_fallback_billing
+                : t.ai_tool_fallback_unsupported}
+            </span>
+          </div>
+        )}
+
+        {/* Agent 跑起來之後由狀態列接手（它有步驟數與中止鈕），兩條堆在一起是噪音。 */}
+        {!agentRunning && (
+          <ModeHint mode={mode} maxAgentSteps={maxAgentSteps} mcpToolCount={mcpToolCount} />
+        )}
+
+        {agentRunning && (
+          <div className="aiterm-agent-status">
+            <span
+              className={`aiterm-agent-status__spinner aiterm-agent-status__spinner--${agentPhase}`}
+              aria-hidden="true"
+            >
+              {agentPhase === "thinking" ? "⟳" : "▶"}
+            </span>
+            <span>
+              {agentPhase === "thinking" ? t.ai_agent_thinking : t.ai_agent_executing}
+              {" "}步驟 {agentStep}/{maxAgentSteps >= 9999 ? "∞" : maxAgentSteps}
+            </span>
+            <button
+              type="button"
+              className="aiterm-agent-status__stop"
+              onClick={onAbortAgent}
+              title="停止"
+            >
+              ■
+            </button>
+          </div>
+        )}
+
+        {extraAboveInput}
+
+        <div className="aiterm-ai-panel-input-area">
+          <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+            <button
+              type="button"
+              className={`aiterm-agent-toggle${agentMode ? " aiterm-agent-toggle--on" : ""}`}
+              onClick={onToggleAgentMode}
+              title={agentMode ? "停用 Agent 模式" : "啟用 Agent 模式（AI 自動執行指令迭代）"}
+              disabled={isDisabled}
+            >
+              <ZapIcon size={14} isFilled={agentMode} />
+            </button>
+            {extraInputControls}
+          </div>
+          <div className="aiterm-input-pill-container">
+            {inputPrefixControls}
+            <textarea
+              ref={textareaRef}
+              className="aiterm-ai-panel-input"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onPaste={onPaste}
+              placeholder={
+                agentRunning ? "Agent 執行中…" :
+                agentMode ? "目標... (Enter)" :
+                isStreaming ? "等待 AI 回覆..." : "Ask AI anything..."
+              }
+              rows={1}
+              disabled={isDisabled}
+            />
+            <button
+              type="button"
+              className="aiterm-ai-panel-send-btn aiterm-btn aiterm-btn--primary aiterm-btn--icon"
+              onClick={submit}
+              disabled={isDisabled || input.trim() === ""}
+              title="送出"
+            >
+              ▲
+            </button>
           </div>
         </div>
-      )}
-
-      <MessageList
-        messages={messages}
-        streamBuf={streamBuf}
-        isStreaming={isStreaming}
-        thinkingLabel={thinkingLabel}
-        error={error}
-        onExecuteCommand={onExecuteCommand}
-        onRetry={onRetry}
-      />
-
-      {/* 這個憑證無法使用原生工具呼叫時，後端會自動改用「工具描述注入系統提示」
-          的文字協定。工具照樣能跑，但切換方案不該靜默發生。 */}
-      {toolFallbackReason && (
-        <div className="aiterm-mode-hint aiterm-mode-hint--degraded">
-          <span aria-hidden="true">⚠</span>
-          <span>
-            {toolFallbackReason === "subscription_billing"
-              ? t.ai_tool_fallback_billing
-              : t.ai_tool_fallback_unsupported}
-          </span>
-        </div>
-      )}
-
-      {/* Agent 跑起來之後由狀態列接手（它有步驟數與中止鈕），兩條堆在一起是噪音。 */}
-      {!agentRunning && (
-        <ModeHint mode={mode} maxAgentSteps={maxAgentSteps} mcpToolCount={mcpToolCount} />
-      )}
-
-      {agentRunning && (
-        <div className="aiterm-agent-status">
-          <span
-            className={`aiterm-agent-status__spinner aiterm-agent-status__spinner--${agentPhase}`}
-            aria-hidden="true"
-          >
-            {agentPhase === "thinking" ? "⟳" : "▶"}
-          </span>
-          <span>
-            {agentPhase === "thinking" ? t.ai_agent_thinking : t.ai_agent_executing}
-            {" "}步驟 {agentStep}/{maxAgentSteps >= 9999 ? "∞" : maxAgentSteps}
-          </span>
-          <button
-            type="button"
-            className="aiterm-agent-status__stop"
-            onClick={onAbortAgent}
-            title="停止"
-          >
-            ■
-          </button>
-        </div>
-      )}
-
-      {extraAboveInput}
-
-      <div className="aiterm-ai-panel-input-area">
-        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-          <button
-            type="button"
-            className={`aiterm-agent-toggle${agentMode ? " aiterm-agent-toggle--on" : ""}`}
-            onClick={onToggleAgentMode}
-            title={agentMode ? "停用 Agent 模式" : "啟用 Agent 模式（AI 自動執行指令迭代）"}
-            disabled={isDisabled}
-          >
-            <ZapIcon size={14} isFilled={agentMode} />
-          </button>
-          {extraInputControls}
-        </div>
-        <div className="aiterm-input-pill-container">
-          {inputPrefixControls}
-          <textarea
-            ref={textareaRef}
-            className="aiterm-ai-panel-input"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onPaste={onPaste}
-            placeholder={
-              agentRunning ? "Agent 執行中…" :
-              agentMode ? "目標... (Enter)" :
-              isStreaming ? "等待 AI 回覆..." : "Ask AI anything..."
-            }
-            rows={1}
-            disabled={isDisabled}
-          />
-          <button
-            type="button"
-            className="aiterm-ai-panel-send-btn aiterm-btn aiterm-btn--primary aiterm-btn--icon"
-            onClick={submit}
-            disabled={isDisabled || input.trim() === ""}
-            title="送出"
-          >
-            ▲
-          </button>
-        </div>
       </div>
+
+      {activeArtifact && (
+        <>
+          <div
+            className="aiterm-artifact-resizer"
+            onMouseDown={onArtifactResizeMouseDown}
+            title="拖曳調整寬度"
+          />
+          <ArtifactPanel />
+        </>
+      )}
     </div>
   );
 }

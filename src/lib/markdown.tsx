@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import ReactMarkdown from "react-markdown";
+import { useMemo, type ReactNode } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -100,50 +100,59 @@ import { ArtifactBlockCard } from "../components/ArtifactPanel/ArtifactBlockCard
 // ── Block markdown renderer ────────────────────────────────────────────────
 
 export function MarkdownText({ text, streaming }: { text: string; streaming?: boolean }): ReactNode {
+  // components 一定要 memo 住：react-markdown 把這個物件裡的每個函式當成該
+  // 節點的 React element type。如果每次 render 都給一個新的物件字面量（原本
+  // 的寫法），任何讓 MarkdownText 重新 render 的外部狀態變化（例如 artifact
+  // context 更新）都會讓 react-markdown 以為 code 節點的元件型別變了，導致
+  // 該節點被整個卸載再重新掛載——ArtifactBlockCard 的掛載 effect 因此重跑，
+  // 又觸發一次同樣的狀態變化，形成無窮迴圈（實測會讓 vitest 卡死，不是理論）。
+  const components: Components = useMemo(() => ({
+    code({ node, className, children, ...props }) {
+      const match = /language-([\w-]+)/.exec(className || "");
+
+      if (match && match[1].toLowerCase() === "mermaid") {
+        return <MermaidBlock chart={String(children)} />;
+      }
+      if (!streaming && match && match[1].toLowerCase() === "artifact-html") {
+        return <ArtifactBlockCard kind="html" content={String(children)} />;
+      }
+      if (!streaming && match && match[1].toLowerCase() === "artifact-chart") {
+        return <ArtifactBlockCard kind="chart" content={String(children)} />;
+      }
+
+      const isInline = !match && !String(children).includes("\n");
+      return isInline ? (
+        <code className="md-code" {...props}>
+          {children}
+        </code>
+      ) : (
+        <pre className="md-pre">
+          <code className={className} {...props}>
+            {children}
+          </code>
+        </pre>
+      );
+    },
+    p({ children }) {
+      return <p className="md-p">{children}</p>;
+    },
+    h1({ children }) { return <h1 className="md-h1">{children}</h1>; },
+    h2({ children }) { return <h2 className="md-h2">{children}</h2>; },
+    h3({ children }) { return <h3 className="md-h3">{children}</h3>; },
+    ul({ children }) { return <ul className="md-list">{children}</ul>; },
+    ol({ children }) { return <ol className="md-list">{children}</ol>; },
+    a({ children, href }) {
+      return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [streaming]);
+
   return (
     <div className="markdown-body">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
-        components={{
-          code({ node, className, children, ...props }) {
-            const match = /language-([\w-]+)/.exec(className || "");
-
-            if (match && match[1].toLowerCase() === "mermaid") {
-              return <MermaidBlock chart={String(children)} />;
-            }
-            if (!streaming && match && match[1].toLowerCase() === "artifact-html") {
-              return <ArtifactBlockCard kind="html" content={String(children)} />;
-            }
-            if (!streaming && match && match[1].toLowerCase() === "artifact-chart") {
-              return <ArtifactBlockCard kind="chart" content={String(children)} />;
-            }
-
-            const isInline = !match && !String(children).includes("\n");
-            return isInline ? (
-              <code className="md-code" {...props}>
-                {children}
-              </code>
-            ) : (
-              <pre className="md-pre">
-                <code className={className} {...props}>
-                  {children}
-                </code>
-              </pre>
-            );
-          },
-          p({ children }) {
-            return <p className="md-p">{children}</p>;
-          },
-          h1({ children }) { return <h1 className="md-h1">{children}</h1>; },
-          h2({ children }) { return <h2 className="md-h2">{children}</h2>; },
-          h3({ children }) { return <h3 className="md-h3">{children}</h3>; },
-          ul({ children }) { return <ul className="md-list">{children}</ul>; },
-          ol({ children }) { return <ol className="md-list">{children}</ol>; },
-          a({ children, href }) { 
-            return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>; 
-          }
-        }}
+        components={components}
       >
         {text}
       </ReactMarkdown>
