@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ChatPanelShell, type ChatPanelShellProps } from "./ChatPanelShell";
 
@@ -152,6 +152,41 @@ describe("ChatPanelShell", () => {
     expect(panel.className).not.toContain("aiterm-ai-panel--expanded");
     // 文件仍然開著——縮小的是面板寬度，不是把文件關掉。
     expect(document.querySelector(".aiterm-artifact-panel")).not.toBeNull();
+  });
+
+  // 關掉文件之後面板必須把寬度還回去，否則終端機一直被蓋住——使用者得多按一次
+  // 縮小鈕才拿得回來，等於把原本那顆死按鈕的問題換個地方重現。
+  it("closing the artifact restores the width the user had before it opened", () => {
+    const messages = [
+      { role: "assistant" as const, content: "```artifact-html\n<title>Brief</title>\n```" },
+    ];
+    render(<ChatPanelShell {...base({ messages })} />);
+    const panel = document.querySelector(".aiterm-ai-panel")!;
+    expect(panel.className).toContain("aiterm-ai-panel--expanded");
+
+    fireEvent.click(screen.getByTitle("關閉文件面板"));
+    expect(panel.className).not.toContain("aiterm-ai-panel--expanded");
+  });
+
+  // 反過來：使用者原本就自己放大了面板，文件關掉不該把他的偏好一起收掉。
+  it("closing the artifact keeps the panel expanded if the user had expanded it themselves", () => {
+    const messages = [
+      { role: "assistant" as const, content: "```artifact-html\n<title>Brief</title>\n```" },
+    ];
+    render(<ChatPanelShell {...base()} />);
+    const panel = document.querySelector(".aiterm-ai-panel")!;
+
+    fireEvent.click(screen.getByTitle("放大面板"));
+    expect(panel.className).toContain("aiterm-ai-panel--expanded");
+
+    cleanup();
+    render(<ChatPanelShell {...base({ messages })} />);
+    // 這次重新掛載後使用者再自己放大，然後開文件、關文件。
+    const panel2 = document.querySelector(".aiterm-ai-panel")!;
+    fireEvent.click(screen.getByTitle("縮小面板"));
+    fireEvent.click(screen.getByTitle("放大面板"));
+    fireEvent.click(screen.getByTitle("關閉文件面板"));
+    expect(panel2.className).toContain("aiterm-ai-panel--expanded");
   });
 
   it("closing the artifact panel collapses back to a single column", () => {

@@ -148,13 +148,25 @@ function ChatPanelShellInner({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
-  // 文件/圖表出現時把面板撐開，讓它有地方顯示。這裡刻意是「觸發一次」而不是
-  // 讓展開狀態恆等於 expanded || !!activeArtifact——後者會讓右上角那顆縮小鈕
-  // 在文件開著時按了完全沒反應（它只切換 expanded，但 OR 的另一邊永遠是
-  // true），使用者想把終端機要回來時無路可走。改成觸發式之後，撐開照舊，而
-  // 使用者仍然隨時可以縮小面板、文件也不會因此被關掉。
+  // 使用者自己按出來的展開偏好。文件造成的展開不記在這裡，這樣文件關掉時才
+  // 知道該回到哪個狀態：本來就是自己放大的就維持放大，本來是窄的就還原成窄的。
+  const userExpandedRef = useRef(false);
+
+  const toggleExpanded = () => {
+    const next = !expanded;
+    userExpandedRef.current = next;
+    setExpanded(next);
+  };
+
+  // 文件/圖表出現時撐開面板讓它有地方顯示，收掉時還原。
+  //
+  // 這裡刻意不是 expanded || !!activeArtifact 那種衍生值：那樣寫的話右上角那顆
+  // 縮小鈕在文件開著時按了完全沒反應（它只切換 expanded，而 OR 的另一邊永遠是
+  // true），使用者想把終端機要回來時無路可走。但也不能只在文件出現時撐開、關掉
+  // 時什麼都不做——那會讓面板在文件關掉後繼續全寬蓋住終端機，等於把同一個問題
+  // 換到「關文件」這個更常用的動作上。兩邊都要顧，所以才需要 userExpandedRef。
   useEffect(() => {
-    if (activeArtifact) setExpanded(true);
+    setExpanded(activeArtifact ? true : userExpandedRef.current);
   }, [activeArtifact]);
 
   // ── Resize（面板整體寬度，收合時） ─────────────────────────────────────────
@@ -322,7 +334,7 @@ function ChatPanelShellInner({
             <button
               type="button"
               className={`aiterm-ai-panel-clear-btn aiterm-ai-panel-icon-btn${expanded ? " aiterm-ai-panel-clear-btn--active" : ""}`}
-              onClick={() => setExpanded((e) => !e)}
+              onClick={toggleExpanded}
               title={expanded ? "縮小面板" : "放大面板"}
             >
               {expanded ? <MinimizeIcon size={15} /> : <MaximizeIcon size={15} />}

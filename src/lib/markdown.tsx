@@ -150,7 +150,6 @@ export function MarkdownText({ text, streaming }: { text: string; streaming?: bo
     a({ children, href }) {
       return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [streaming, canShowArtifacts]);
 
   return (
