@@ -159,6 +159,9 @@
 
 .crossdb-chat__messages {
   flex: 1;
+  /* 沒有這行，flex item 預設的 min-height: auto 會讓它不肯縮到比內容矮，訊息一長
+     就把下面的輸入框往外推。同 .ca-messages 與 .aiterm-messages 的既有寫法。 */
+  min-height: 0;
   overflow-y: auto;
   padding: 16px;
 }

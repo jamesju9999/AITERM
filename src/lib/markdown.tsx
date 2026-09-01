@@ -96,6 +96,7 @@ export function unescapeNewlines(text: string): string {
 
 import { MermaidBlock } from "../components/MermaidBlock";
 import { ArtifactBlockCard } from "../components/ArtifactPanel/ArtifactBlockCard";
+import { ArtifactPending } from "../components/ArtifactPanel/ArtifactPending";
 import { useOptionalArtifactPanel } from "../contexts/ArtifactPanelContext";
 
 // ── Block markdown renderer ────────────────────────────────────────────────
@@ -119,11 +120,17 @@ export function MarkdownText({ text, streaming }: { text: string; streaming?: bo
       if (match && match[1].toLowerCase() === "mermaid") {
         return <MermaidBlock chart={String(children)} />;
       }
-      if (canShowArtifacts && !streaming && match && match[1].toLowerCase() === "artifact-html") {
-        return <ArtifactBlockCard kind="html" content={String(children)} />;
-      }
-      if (canShowArtifacts && !streaming && match && match[1].toLowerCase() === "artifact-chart") {
-        return <ArtifactBlockCard kind="chart" content={String(children)} />;
+      const artifactKind = match && canShowArtifacts
+        ? ({ "artifact-html": "html", "artifact-chart": "chart" } as const)[
+            match[1].toLowerCase() as "artifact-html" | "artifact-chart"
+          ]
+        : undefined;
+      if (artifactKind) {
+        // 串流中先擺「產生中」的卡：內容還沒收完，登記進面板只會顯示半成品，
+        // 而退回原始碼區塊等於把好幾千個 token 的 HTML 倒進聊天泡泡。
+        return streaming
+          ? <ArtifactPending kind={artifactKind} />
+          : <ArtifactBlockCard kind={artifactKind} content={String(children)} />;
       }
 
       const isInline = !match && !String(children).includes("\n");

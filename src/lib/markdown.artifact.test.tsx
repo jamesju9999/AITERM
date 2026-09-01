@@ -47,7 +47,35 @@ describe("MarkdownText artifact fenced blocks", () => {
       </ArtifactPanelProvider>,
     );
     expect(container.querySelector(".aiterm-artifact-card")).toBeNull();
-    expect(container.querySelector("code.language-artifact-html")).not.toBeNull();
+    // 早期版本在這裡退回原始碼區塊，後來改成「產生中」的卡（見下一條測試）；
+    // 這條守的是重點：串流中不可以登記進面板。
+    expect(container.querySelector("code.language-artifact-html")).toBeNull();
+  });
+
+  // 串流中不渲染卡片是對的（半成品不該進面板），但原本會退回把半成品的原始
+  // HTML 直接倒進泡泡——一份報告好幾千個 token，畫面上就是一大坨原始碼，或者
+  // 看起來像卡住了。改成顯示一張「產生中」的卡。
+  it("shows a pending card instead of raw source while an artifact streams", () => {
+    const text = "```artifact-html\n<title>Brief</title><p>hi</p>";
+    const { container } = render(
+      <ArtifactPanelProvider>
+        <MarkdownText text={text} streaming />
+      </ArtifactPanelProvider>,
+    );
+    expect(container.querySelector(".aiterm-artifact-pending")).not.toBeNull();
+    expect(container.querySelector("code.language-artifact-html")).toBeNull();
+    // 仍然不可以登記進面板——那是完成後的事。
+    expect(container.querySelector(".aiterm-artifact-card")).toBeNull();
+  });
+
+  it("shows a pending card for a streaming chart too", () => {
+    const text = '```artifact-chart\n{"title":"Sales"';
+    const { container } = render(
+      <ArtifactPanelProvider>
+        <MarkdownText text={text} streaming />
+      </ArtifactPanelProvider>,
+    );
+    expect(container.querySelector(".aiterm-artifact-pending")).not.toBeNull();
   });
 
   it("a plain mermaid block still renders inline as before (regression check)", () => {

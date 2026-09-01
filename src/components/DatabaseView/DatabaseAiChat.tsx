@@ -508,7 +508,12 @@ function DatabaseAiChatInner({ connectionId, schema, sendRemoteResponse }: Props
 
       {/* Main chat area */}
       <ArtifactSplit>
-      <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
+      {/* minHeight: 0 不能省。這個 div 原本是最外層那個 flex row 的直接子元素，
+          靠 align-items: stretch 拿到確定高度；包進 ArtifactSplit（flex column）
+          之後它變成 column 的 flex item，而 flex item 預設 min-height: auto ——
+          不會縮到比內容矮。訊息一長它就往下撐，工具列和輸入框被推出可視範圍再被
+          上層 overflow 切掉。jsdom 不跑版面，單元測試看不到這件事。 */}
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, minHeight: 0 }}>
         <div ref={messagesContainerRef} style={{ flex: 1, overflowY: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
           {messages.length === 0 && (
             <div style={{ color: "#555", fontSize: 13, padding: "20px 0" }}>
