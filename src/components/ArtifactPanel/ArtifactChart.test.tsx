@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll } from "vitest";
 import { render } from "@testing-library/react";
-import { ArtifactChart, type ChartSpec } from "./ArtifactChart";
+import { ArtifactChart, FILL_OPACITY, type ChartSpec } from "./ArtifactChart";
 
 // recharts 的 ResponsiveContainer 需要 ResizeObserver、且容器要有非零尺寸才會
 // 畫出 SVG 子元素——jsdom 兩者都沒有內建，這個 repo 也沒有全域 polyfill（見
@@ -125,6 +125,19 @@ describe("ArtifactChart", () => {
     };
     const { container } = render(<ArtifactChart spec={bigSpec} />);
     expect(container.textContent).toContain("12,000");
+  });
+
+  // 填色透明度：只釘住「數值在驗證過的範圍內」，不釘渲染結果——jsdom 不會把
+  // recharts 的長條圖形畫出來（.recharts-bar-rectangle 在 jsdom 裡是空的 <g>），
+  // 斷言 fill-opacity 屬性只是在測 jsdom。
+  //
+  // 為什麼有範圍：透明度會改變顏色與背景合成後的實際值，而「對比度 ≥3:1」是
+  // 色票驗證器強制的檢查之一。把各透明度合成後的顏色餵回 validate_palette.js
+  // 實測，深色模式在 0.75 仍全數通過、0.70 有兩項失敗（綠色掉出亮度帶、aqua
+  // 彩度低到讀起來變灰）。要調低於 0.75 之前請先重跑那個驗證。
+  it("keeps the fill opacity inside the validated range", () => {
+    expect(FILL_OPACITY).toBeGreaterThanOrEqual(0.75);
+    expect(FILL_OPACITY).toBeLessThan(1);
   });
 
   it("bar chart really renders the grid, both axes and one rect per data point", () => {

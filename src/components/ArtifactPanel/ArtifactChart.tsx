@@ -45,6 +45,20 @@ function isDarkSurface(): boolean {
  *  ——多序列或資料點一多就會變成噪音，那時交給座標軸、tooltip 與表格檢視。 */
 const MAX_LABELLED_BARS = 12;
 
+/**
+ * 填色的不透明度。
+ *
+ * 不是隨手挑的：色票的「對比度 ≥ 3:1」是驗證器強制的五項檢查之一，而透明度會
+ * 直接改變顏色與背景合成後的實際值。做法是把每個顏色在各種透明度下先與背景
+ * 合成，再拿合成後的顏色去跑 skill 的 validate_palette.js——深色模式在 0.75
+ * 仍全數通過，到 0.70 就有兩項失敗（綠色掉出亮度帶、aqua 的彩度低到讀起來
+ * 變灰）。取 0.8 留一點餘裕，不要貼著懸崖邊。
+ *
+ * 線條維持不透明：2px 的細線再打折會明顯變弱，而驗證器量的是「顏色對背景」，
+ * 量不到細線因為太細而難讀這件事。
+ */
+export const FILL_OPACITY = 0.8;
+
 /** 千分位。刻度承載了沒有被直接標註的數值，讀得順比省空間重要。 */
 const formatTick = (v: unknown) =>
   typeof v === "number" ? v.toLocaleString() : String(v ?? "");
@@ -104,7 +118,7 @@ export function ArtifactChart({ spec }: ArtifactChartProps) {
               strokeWidth={2}
             >
               {spec.data.map((_, i) => (
-                <Cell key={i} fill={color(i)} />
+                <Cell key={i} fill={color(i)} fillOpacity={FILL_OPACITY} />
               ))}
             </Pie>
             <Tooltip {...tooltipProps(palette)} />
@@ -192,8 +206,10 @@ export function ArtifactChart({ spec }: ArtifactChartProps) {
               // 貼著基線那端維持方角。
               maxBarSize={24}
               radius={[4, 4, 0, 0]}
+              fillOpacity={FILL_OPACITY}
               // 規範：滑過的那根要有反應，讀者才知道自己指到了什麼。
-              activeBar={{ fill: color(i), fillOpacity: 0.82 }}
+              // hover 時反而變得更實，變化才看得出來。
+              activeBar={{ fill: color(i), fillOpacity: 1 }}
               // 標籤穿的是文字色，不是資料色——淺色的分類色當文字會看不清楚。
               label={labelBars
                 ? { position: "top", formatter: formatTick, fill: palette.textSecondary, fontSize: 11 }
