@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ChatPanelShell, type ChatPanelShellProps } from "./ChatPanelShell";
 
@@ -116,6 +116,86 @@ describe("ChatPanelShell", () => {
     rerender(<ChatPanelShell {...base({ onSend, allowEmptySubmit: true })} />);
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
     expect(onSend).toHaveBeenCalledWith("");
+  });
+
+  it("renders a two-column split with the artifact panel when a message contains an artifact-html block", () => {
+    const messages = [
+      { role: "assistant" as const, content: "```artifact-html\n<title>Brief</title><p>hi</p>\n```" },
+    ];
+    render(<ChatPanelShell {...base({ messages })} />);
+    // "Brief" 合理地出現兩處：聊天泡泡裡的 artifact 卡片、以及文件面板的標題列。
+    expect(screen.getAllByText("Brief").length).toBeGreaterThanOrEqual(1);
+    expect(document.querySelector(".aiterm-ai-panel--split")).not.toBeNull();
+    expect(document.querySelector("iframe")).not.toBeNull();
+  });
+
+  it("does not render the split layout when no message has an artifact block", () => {
+    render(<ChatPanelShell {...base()} />);
+    expect(document.querySelector(".aiterm-ai-panel--split")).toBeNull();
+    expect(document.querySelector(".aiterm-artifact-panel")).toBeNull();
+  });
+
+  // 有 artifact 時面板會自動撐寬，但「縮小面板」必須真的能縮——先前的寫法是
+  // effectiveExpanded = expanded || !!activeArtifact，按鈕只切換 expanded，
+  // 於是 artifact 開著時不管怎麼點，effectiveExpanded 都是 true：一顆按了沒
+  // 反應的死按鈕。使用者想把終端機要回來時無路可走。
+  it("minimize actually narrows the panel while an artifact is open", () => {
+    const messages = [
+      { role: "assistant" as const, content: "```artifact-html\n<title>Brief</title>\n```" },
+    ];
+    render(<ChatPanelShell {...base({ messages })} />);
+
+    const panel = document.querySelector(".aiterm-ai-panel")!;
+    expect(panel.className).toContain("aiterm-ai-panel--expanded");
+
+    fireEvent.click(screen.getByTitle("縮小面板"));
+    expect(panel.className).not.toContain("aiterm-ai-panel--expanded");
+    // 文件仍然開著——縮小的是面板寬度，不是把文件關掉。
+    expect(document.querySelector(".aiterm-artifact-panel")).not.toBeNull();
+  });
+
+  // 關掉文件之後面板必須把寬度還回去，否則終端機一直被蓋住——使用者得多按一次
+  // 縮小鈕才拿得回來，等於把原本那顆死按鈕的問題換個地方重現。
+  it("closing the artifact restores the width the user had before it opened", () => {
+    const messages = [
+      { role: "assistant" as const, content: "```artifact-html\n<title>Brief</title>\n```" },
+    ];
+    render(<ChatPanelShell {...base({ messages })} />);
+    const panel = document.querySelector(".aiterm-ai-panel")!;
+    expect(panel.className).toContain("aiterm-ai-panel--expanded");
+
+    fireEvent.click(screen.getByTitle("關閉文件面板"));
+    expect(panel.className).not.toContain("aiterm-ai-panel--expanded");
+  });
+
+  // 反過來：使用者原本就自己放大了面板，文件關掉不該把他的偏好一起收掉。
+  it("closing the artifact keeps the panel expanded if the user had expanded it themselves", () => {
+    const messages = [
+      { role: "assistant" as const, content: "```artifact-html\n<title>Brief</title>\n```" },
+    ];
+    render(<ChatPanelShell {...base()} />);
+    const panel = document.querySelector(".aiterm-ai-panel")!;
+
+    fireEvent.click(screen.getByTitle("放大面板"));
+    expect(panel.className).toContain("aiterm-ai-panel--expanded");
+
+    cleanup();
+    render(<ChatPanelShell {...base({ messages })} />);
+    // 這次重新掛載後使用者再自己放大，然後開文件、關文件。
+    const panel2 = document.querySelector(".aiterm-ai-panel")!;
+    fireEvent.click(screen.getByTitle("縮小面板"));
+    fireEvent.click(screen.getByTitle("放大面板"));
+    fireEvent.click(screen.getByTitle("關閉文件面板"));
+    expect(panel2.className).toContain("aiterm-ai-panel--expanded");
+  });
+
+  it("closing the artifact panel collapses back to a single column", () => {
+    const messages = [
+      { role: "assistant" as const, content: "```artifact-html\n<title>Brief</title>\n```" },
+    ];
+    render(<ChatPanelShell {...base({ messages })} />);
+    fireEvent.click(screen.getByTitle("關閉文件面板"));
+    expect(document.querySelector(".aiterm-ai-panel--split")).toBeNull();
   });
 
   it("inputPrefixControls renders inside the input pill container", () => {
