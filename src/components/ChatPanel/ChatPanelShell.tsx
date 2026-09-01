@@ -10,14 +10,12 @@ import { MessageList } from "../AiPanel/MessageList";
 import { ModeHint, type PanelMode } from "../AiPanel/ModeHint";
 import { MaximizeIcon, MinimizeIcon, ZapIcon } from "../Icons";
 import { ArtifactPanelProvider, useArtifactPanel } from "../../contexts/ArtifactPanelContext";
-import { ArtifactPanel } from "../ArtifactPanel/ArtifactPanel";
+import { ArtifactSplit } from "../ArtifactPanel/ArtifactSplit";
 import "./styles.css";
 
 const MIN_WIDTH = 280;
 const MAX_WIDTH_RATIO = 0.75;
 const STORAGE_WIDTH_KEY = "aiterm-panel-width";
-const MIN_CHAT_COLUMN_WIDTH = 220;
-const MIN_ARTIFACT_COLUMN_WIDTH = 260;
 
 function loadSavedWidth(): number {
   try {
@@ -200,43 +198,6 @@ function ChatPanelShellInner({
     });
   };
 
-  // ── Resize（聊天欄 vs Artifact 面板的內部分割，有 artifact 時） ───────────────
-  // 位置用容器的 getBoundingClientRect() 直接算絕對值，不累加 delta。
-  //
-  // 事件走 pointer capture，跟上面那條外層分隔線同一套，不是 DesignView 那種
-  // 「mousedown 後掛 window mousemove」：右邊那一欄是 iframe，游標一進到它的範圍
-  // 內，mousemove 就變成 iframe 自己那份文件的事件，父視窗完全收不到，拖曳因此
-  // 一頓一頓的。捕捉之後瀏覽器會把該 pointer 的後續事件一律導回這個把手，滑過
-  // iframe 也不會斷。（圖表那種同文件內的 SVG 沒這個問題，所以只有 HTML 文件
-  // 會卡——這正是使用者回報的現象。）
-  const [chatColumnWidth, setChatColumnWidth] = useState(320);
-  const [isArtifactResizing, setIsArtifactResizing] = useState(false);
-  const splitContainerRef = useRef<HTMLDivElement>(null);
-  const isArtifactDraggingRef = useRef(false);
-
-  const onArtifactResizePointerDown = (e: PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    isArtifactDraggingRef.current = true;
-    setIsArtifactResizing(true);
-    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-  };
-
-  const onArtifactResizePointerMove = (e: PointerEvent<HTMLDivElement>) => {
-    if (!isArtifactDraggingRef.current || !splitContainerRef.current) return;
-    const rect = splitContainerRef.current.getBoundingClientRect();
-    const constrained = Math.max(
-      MIN_CHAT_COLUMN_WIDTH,
-      Math.min(e.clientX - rect.left, rect.width - MIN_ARTIFACT_COLUMN_WIDTH),
-    );
-    setChatColumnWidth(constrained);
-  };
-
-  const onArtifactResizePointerUp = () => {
-    if (!isArtifactDraggingRef.current) return;
-    isArtifactDraggingRef.current = false;
-    setIsArtifactResizing(false);
-  };
-
   useEffect(() => {
     if (isOpen) textareaRef.current?.focus();
   }, [isOpen]);
@@ -288,8 +249,6 @@ function ChatPanelShellInner({
     // Windows can't blur the terminal behind the glass panel — see styles.css.
     isWindows ? "aiterm-ai-panel--solid" : "",
     expanded ? "aiterm-ai-panel--expanded" : "",
-    activeArtifact ? "aiterm-ai-panel--split" : "",
-    isArtifactResizing ? "aiterm-ai-panel--resizing" : "",
   ].filter(Boolean).join(" ");
 
   return (
@@ -299,7 +258,6 @@ function ChatPanelShellInner({
       style={{ width: expanded ? "100%" : `${panelWidth}px` }}
       onDragOver={onDragOver}
       onDrop={onDrop}
-      ref={splitContainerRef}
     >
       {/* Resize handle on the left edge — 滿版時左邊沒有終端機可以讓，收起來。 */}
       {!expanded && (
@@ -312,10 +270,7 @@ function ChatPanelShellInner({
         />
       )}
 
-      <div
-        className="aiterm-ai-panel-chat-column"
-        style={activeArtifact ? { width: `${chatColumnWidth}px`, flexShrink: 0, flexGrow: 0 } : { flex: 1 }}
-      >
+      <ArtifactSplit>
         <div className="aiterm-ai-panel-header">
           <span className="aiterm-ai-panel-title" style={{ background: 'var(--accent-gradient)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '14px' }}>
             ✨ AITerm AI Studio
@@ -496,20 +451,7 @@ function ChatPanelShellInner({
             </button>
           </div>
         </div>
-      </div>
-
-      {activeArtifact && (
-        <>
-          <div
-            className="aiterm-artifact-resizer"
-            onPointerDown={onArtifactResizePointerDown}
-            onPointerMove={onArtifactResizePointerMove}
-            onPointerUp={onArtifactResizePointerUp}
-            title="拖曳調整寬度"
-          />
-          <ArtifactPanel />
-        </>
-      )}
+      </ArtifactSplit>
     </div>
   );
 }
