@@ -93,10 +93,11 @@ export function ArtifactChart({ spec }: ArtifactChartProps) {
               data={spec.data}
               dataKey={seriesKey}
               nameKey={spec.xKey}
-              // 半徑留餘裕，否則外側的標籤會被容器裁掉（實機上就掉了一個，
-              // 只剩一條指向空白的指引線）。
-              outerRadius="65%"
-              label={{ fill: palette.textSecondary, fontSize: 11 }}
+              outerRadius="70%"
+              // 不畫外側數值標籤。實機上它們會跟正下方的圖例打架，總有一個扇形
+              // 只剩一條指向空白的引線。圖例已經給了身分，數值則由 tooltip 與
+              // 表格檢視承接——規範本來就是「選擇性標註，其餘交給圖例與表格」。
+              label={false}
               // 扇形之間用 surface 色的 2px 縫隔開，而不是描邊——白留空是
               // 分隔的機制，描邊等於加上不是資料的墨水。
               stroke={palette.surface}
