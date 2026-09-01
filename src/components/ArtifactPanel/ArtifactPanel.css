@@ -48,6 +48,9 @@
   flex: 1;
   overflow: auto;
   min-height: 0;
+  /* 讓圖表這種「想要撐滿」的內容拿得到高度；文件 iframe 本來就是 100%。 */
+  display: flex;
+  flex-direction: column;
 }
 
 .aiterm-artifact-panel__error {

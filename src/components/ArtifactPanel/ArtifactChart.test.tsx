@@ -75,6 +75,34 @@ describe("ArtifactChart", () => {
   // children 找出格線/座標軸/圖例的，實作把這些共用元件放進一個 <>...</>
   // fragment 裡重用，如果 recharts 不會攤平 fragment，格線與座標軸會安靜地
   // 消失，但 <svg> 還在、測試照樣全綠。這兩個測試就是釘住這件事。
+  // 以下幾條釘住 dataviz 規範裡「可驗證」的 mark 規格，避免日後被順手改回去。
+  // 規範：格線是 hairline 實線、絕不用虛線；bar chart 只留水平格線。
+  it("draws solid horizontal-only gridlines, never dashed", () => {
+    const { container } = render(<ArtifactChart spec={barSpec} />);
+    const grid = container.querySelector(".recharts-cartesian-grid")!;
+    for (const line of Array.from(grid.querySelectorAll("line"))) {
+      expect(line.getAttribute("stroke-dasharray")).toBeNull();
+    }
+    expect(grid.querySelector(".recharts-cartesian-grid-vertical")).toBeNull();
+  });
+
+  // 規範：座標軸要 recessive——軸線與刻度線都不畫，只留文字。
+  it("keeps the axes recessive: no axis lines, no tick lines", () => {
+    const { container } = render(<ArtifactChart spec={barSpec} />);
+    expect(container.querySelector(".recharts-cartesian-axis-line")).toBeNull();
+    expect(container.querySelector(".recharts-cartesian-axis-tick-line")).toBeNull();
+  });
+
+  // 規範：Y 軸刻度要 thousands-comma'd——它承載了沒有被直接標註的數值。
+  it("formats y-axis ticks with thousand separators", () => {
+    const bigSpec: ChartSpec = {
+      ...barSpec,
+      data: [{ month: "Jan", sales: 12000 }, { month: "Feb", sales: 4000 }],
+    };
+    const { container } = render(<ArtifactChart spec={bigSpec} />);
+    expect(container.textContent).toContain("12,000");
+  });
+
   it("bar chart really renders the grid, both axes and one rect per data point", () => {
     const { container } = render(<ArtifactChart spec={barSpec} />);
     expect(container.querySelector(".recharts-cartesian-grid")).not.toBeNull();

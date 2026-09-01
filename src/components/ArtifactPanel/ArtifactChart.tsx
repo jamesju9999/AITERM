@@ -14,7 +14,8 @@ import {
   Tooltip,
   Legend,
 } from "recharts";
-import { CHART_PALETTE_LIGHT, CHART_PALETTE_DARK } from "../../lib/chartPalette";
+import { CHART_PALETTE_LIGHT, CHART_PALETTE_DARK, type ThemeColors } from "../../lib/chartPalette";
+import "./ArtifactChart.css";
 
 export interface ChartSeriesSpec {
   key: string;
@@ -39,73 +40,130 @@ function isDarkSurface(): boolean {
   return document.documentElement.getAttribute("data-theme") !== "light";
 }
 
+/** 千分位。刻度承載了沒有被直接標註的數值，讀得順比省空間重要。 */
+const formatTick = (v: unknown) =>
+  typeof v === "number" ? v.toLocaleString() : String(v ?? "");
+
+/** 座標軸要 recessive：不畫軸線、不畫刻度線，只留文字。 */
+function axisProps(palette: ThemeColors) {
+  return {
+    stroke: palette.muted,
+    axisLine: false as const,
+    tickLine: false as const,
+    tick: { fill: palette.muted, fontSize: 11 },
+  };
+}
+
+function tooltipProps(palette: ThemeColors) {
+  return {
+    contentStyle: {
+      background: palette.surface,
+      border: `1px solid ${palette.baseline}`,
+      borderRadius: 8,
+      color: palette.textPrimary,
+      fontSize: 12,
+      boxShadow: "0 6px 20px rgba(0,0,0,0.28)",
+    },
+    labelStyle: { color: palette.textSecondary, marginBottom: 4 },
+    // 預設的 hover 遮罩太重，會蓋過資料本身。
+    cursor: { fill: palette.gridline, fillOpacity: 0.35 },
+  };
+}
+
 export function ArtifactChart({ spec }: ArtifactChartProps) {
   const palette = useMemo(() => (isDarkSurface() ? CHART_PALETTE_DARK : CHART_PALETTE_LIGHT), []);
+  const color = (i: number) => palette.categorical[i % palette.categorical.length];
 
   if (spec.type === "pie") {
     const seriesKey = spec.series[0]?.key ?? "value";
     return (
-      <ResponsiveContainer width="100%" height={320}>
-        <PieChart>
-          <Pie data={spec.data} dataKey={seriesKey} nameKey={spec.xKey} label>
-            {spec.data.map((_, i) => (
-              <Cell key={i} fill={palette.categorical[i % palette.categorical.length]} />
-            ))}
-          </Pie>
-          <Tooltip />
-          {spec.series.length >= 2 && <Legend />}
-        </PieChart>
-      </ResponsiveContainer>
+      <div className="aiterm-artifact-chart">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={spec.data}
+              dataKey={seriesKey}
+              nameKey={spec.xKey}
+              label
+              // 扇形之間用 surface 色的 2px 縫隔開，而不是描邊——白留空是
+              // 分隔的機制，描邊等於加上不是資料的墨水。
+              stroke={palette.surface}
+              strokeWidth={2}
+            >
+              {spec.data.map((_, i) => (
+                <Cell key={i} fill={color(i)} />
+              ))}
+            </Pie>
+            <Tooltip {...tooltipProps(palette)} />
+            {spec.series.length >= 2 && <Legend />}
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
     );
   }
 
   const commonAxes = (
     <>
-      <CartesianGrid stroke={palette.gridline} strokeDasharray="3 3" />
-      <XAxis dataKey={spec.xKey} stroke={palette.muted} />
-      <YAxis stroke={palette.muted} />
-      <Tooltip
-        contentStyle={{
-          background: palette.surface,
-          border: `1px solid ${palette.baseline}`,
-          color: palette.textPrimary,
-        }}
-      />
-      {spec.series.length >= 2 && <Legend />}
+      {/* hairline 實線、只留水平線：直線對長條圖只是噪音。 */}
+      <CartesianGrid stroke={palette.gridline} vertical={false} />
+      <XAxis dataKey={spec.xKey} {...axisProps(palette)} />
+      <YAxis {...axisProps(palette)} tickFormatter={formatTick} width={56} />
+      <Tooltip {...tooltipProps(palette)} />
+      {spec.series.length >= 2 && (
+        <Legend wrapperStyle={{ fontSize: 12, color: palette.textSecondary }} />
+      )}
     </>
   );
 
   if (spec.type === "line") {
     return (
-      <ResponsiveContainer width="100%" height={320}>
-        <LineChart data={spec.data}>
-          {commonAxes}
-          {spec.series.map((s, i) => (
-            <Line
-              key={s.key}
-              dataKey={s.key}
-              name={s.label}
-              stroke={palette.categorical[i % palette.categorical.length]}
-            />
-          ))}
-        </LineChart>
-      </ResponsiveContainer>
+      <div className="aiterm-artifact-chart">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={spec.data} margin={{ top: 12, right: 16, bottom: 4, left: 0 }}>
+            {commonAxes}
+            {spec.series.map((s, i) => (
+              <Line
+                key={s.key}
+                dataKey={s.key}
+                name={s.label}
+                stroke={color(i)}
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                // 標記至少 8px（r>=4），外面帶一圈 surface 色的環，交疊時才讀得出來。
+                dot={{ r: 4, fill: color(i), stroke: palette.surface, strokeWidth: 2 }}
+                activeDot={{ r: 5, fill: color(i), stroke: palette.surface, strokeWidth: 2 }}
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
     );
   }
 
   return (
-    <ResponsiveContainer width="100%" height={320}>
-      <BarChart data={spec.data}>
-        {commonAxes}
-        {spec.series.map((s, i) => (
-          <Bar
-            key={s.key}
-            dataKey={s.key}
-            name={s.label}
-            fill={palette.categorical[i % palette.categorical.length]}
-          />
-        ))}
-      </BarChart>
-    </ResponsiveContainer>
+    <div className="aiterm-artifact-chart">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart
+          data={spec.data}
+          margin={{ top: 12, right: 16, bottom: 4, left: 0 }}
+          barGap={2}
+        >
+          {commonAxes}
+          {spec.series.map((s, i) => (
+            <Bar
+              key={s.key}
+              dataKey={s.key}
+              name={s.label}
+              fill={color(i)}
+              // 不要填滿整個欄位——留白是版面的一部分；資料端 4px 圓角、
+              // 貼著基線那端維持方角。
+              maxBarSize={24}
+              radius={[4, 4, 0, 0]}
+            />
+          ))}
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
   );
 }
