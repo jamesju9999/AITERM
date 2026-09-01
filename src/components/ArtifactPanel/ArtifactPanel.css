@@ -99,10 +99,13 @@
 }
 
 .aiterm-artifact-chart-slot__title {
-  padding: 12px 16px 0;
+  /* 卡片自己有邊框，標題是它上方的說明，兩者之間要留出可見的間隙——貼在一起
+     會讓人分不出標題屬於上一張還是下一張圖。 */
+  padding: 4px 4px 8px;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary, #c3c2b7);
+  flex-shrink: 0;
 }
 
 .aiterm-artifact-panel__action--on {

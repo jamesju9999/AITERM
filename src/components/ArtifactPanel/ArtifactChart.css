@@ -1,7 +1,10 @@
 /* 圖表撐滿面板：原本固定 320px 高，面板一高就在下面留一大片空白。 */
 .aiterm-artifact-chart {
   width: 100%;
-  height: 100%;
+  /* flex:1 而不是 height:100%。標題是同一個 flex column 裡的兄弟節點，
+     height:100% 會解析成「整個 slot 的高度」、無視標題也佔了空間，卡片因此
+     溢出去疊到標題上。要的是「拿剩下的空間」。 */
+  flex: 1;
   min-height: 260px;
   padding: 16px 16px 12px;
   box-sizing: border-box;
