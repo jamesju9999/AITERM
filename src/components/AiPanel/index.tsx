@@ -7,6 +7,7 @@ import { useMcpChat } from "../../hooks/useMcpChat";
 import type { PanelMode } from "./ModeHint";
 import { invokeAiChat, formatAiError, type AiError, type ChatMessage as AiChatMessage } from "../../ipc/ai";
 import { getSessionCwd, listDirectory } from "../../ipc/fs";
+import { repairUnterminatedHeredocs } from "../../lib/heredocGuard";
 import { getPtyRecentOutput, writePty } from "../../ipc/pty";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { getMcpTools } from "../../ipc/mcp";
@@ -300,7 +301,9 @@ Rules:
       return;
     }
 
-    const cmd = cmdMatch[1].trim();
+    // 見 heredocGuard.ts：缺結束標記的 heredoc 會讓 shell 停在 heredoc>，
+    // 指令永遠不結束，這個迴圈就一直等 onExecuteCommand 的完成回呼。
+    const cmd = repairUnterminatedHeredocs(cmdMatch[1].trim());
     setAgentPhase("running");
     setStuckPromptVisible(false);
     snoozeUntilRef.current = 0;
