@@ -78,6 +78,30 @@ describe("MarkdownText artifact fenced blocks", () => {
     expect(container.querySelector(".aiterm-artifact-pending")).not.toBeNull();
   });
 
+  // 實機回報的症狀：模型寫了一份含 ``` 的長 HTML 報告，後半段整坨原始 HTML
+  // 溢出到聊天泡泡裡。這條守的是「泡泡裡不可以有文件內容」。
+  //
+  // 注意這條「抓不到」文件被截斷那半個 bug——改成在第一個收尾 fence 截斷，它
+  // 一樣會綠（實測過）。文件完整性由 artifactFence.test.ts 的
+  // 「keeps going past a fence that appears inside the document」守，那條在
+  // 截斷版本下會確實變紅。
+  it("does not leak the document into the bubble when it contains a fence", () => {
+    const text = [
+      "報告如下：",
+      "```artifact-html",
+      "<title>Report</title>",
+      "<h1>前半</h1>",
+      "```",
+      "<h2>SPILLED</h2>",
+      "```",
+    ].join("\n");
+    const { container } = renderWithProvider(text);
+    expect(container.querySelector(".aiterm-artifact-card")).not.toBeNull();
+    // 泡泡裡不該看得到文件內容——它屬於面板。
+    expect(container.textContent).not.toContain("SPILLED");
+    expect(container.textContent).not.toContain("<h2>");
+  });
+
   it("a plain mermaid block still renders inline as before (regression check)", () => {
     const text = '```mermaid\npie title x\n"a" : 1\n```';
     const { container } = renderWithProvider(text);
