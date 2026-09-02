@@ -22,6 +22,11 @@ const FENCE = /^```artifact-(html|chart)[ \t]*$/m;
  * `parseCmdTags` 是同一個模式。
  */
 export function splitArtifactFence(text: string): SplitArtifact {
+  // 模型輸出在 Windows 上可能帶 CRLF。FENCE 以及底下的收尾正則都用 \n 當行界，
+  // 殘留的 \r 會卡在 `[ \t]*$` 前面，讓 ```artifact-html 那一行比對不到——結果
+  // 整個 artifact 沒被辨識出來，右側面板完全不會開。先把行尾正規化成 \n。
+  text = text.replace(/\r\n/g, "\n");
+
   const m = FENCE.exec(text);
   if (!m || m.index === undefined) return { prose: text, artifact: null };
 

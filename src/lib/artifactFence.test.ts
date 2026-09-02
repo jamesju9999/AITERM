@@ -73,6 +73,14 @@ describe("splitArtifactFence", () => {
     expect(splitArtifactFence(text).artifact?.content).toContain("<h2>B</h2>");
   });
 
+  it("recognises the fence even when the model emits CRLF line endings", () => {
+    const text = "這是報告：\r\n\r\n```artifact-html\r\n<title>T</title>\r\n```\r\n";
+    expect(splitArtifactFence(text)).toEqual({
+      prose: "這是報告：",
+      artifact: { kind: "html", content: "<title>T</title>" },
+    });
+  });
+
   it("takes the first fence when the model emits more than one", () => {
     const text = "```artifact-html\n<h1>first</h1>\n```\n```artifact-html\n<h1>second</h1>\n```";
     const { artifact } = splitArtifactFence(text);
