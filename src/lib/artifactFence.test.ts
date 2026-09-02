@@ -88,4 +88,57 @@ describe("splitArtifactFence", () => {
     // 第二份被吸收進同一份內容——prompt 明說一則訊息最多一個 artifact。
     expect(artifact?.content).toContain("second");
   });
+
+  // ── 沒包 fence 的裸 HTML 文件保底 ──────────────────────────────────────────
+  // 較弱的模型（實測 KB 問答 + 本地模型，尤其剛安裝後第一次）會不照協定包
+  // ```artifact-html，直接把整份 HTML 當內文吐出來。前端因此只看到裸標籤、
+  // 面板也不開。這批 case 釘住保底行為與它刻意的邊界。
+
+  it("extracts a bare HTML document that opens the reply, keeping the trailing note as prose", () => {
+    const text =
+      "<!DOCTYPE html>\n<html><head><title>Report</title></head><body><h1>R</h1></body></html>\n\n" +
+      "已為您產生一份報告文件，包含執行摘要與測試結果表格。";
+    expect(splitArtifactFence(text)).toEqual({
+      prose: "已為您產生一份報告文件，包含執行摘要與測試結果表格。",
+      artifact: {
+        kind: "html",
+        content:
+          "<!DOCTYPE html>\n<html><head><title>Report</title></head><body><h1>R</h1></body></html>",
+      },
+    });
+  });
+
+  it("extracts a bare <html> document even without a doctype", () => {
+    const text = "<html><body><p>hi</p></body></html>";
+    expect(splitArtifactFence(text).artifact).toEqual({
+      kind: "html",
+      content: "<html><body><p>hi</p></body></html>",
+    });
+  });
+
+  it("treats a bare document that has not finished streaming as an in-progress artifact", () => {
+    const text = "<!DOCTYPE html>\n<html><body><h1>half";
+    expect(splitArtifactFence(text)).toEqual({
+      prose: "",
+      artifact: { kind: "html", content: "<!DOCTYPE html>\n<html><body><h1>half" },
+    });
+  });
+
+  it("does NOT touch a reply that explains HTML in a code block", () => {
+    const text = "這是一個基本頁面：\n\n```html\n<!DOCTYPE html>\n<html></html>\n```\n把它存成 .html 就能打開。";
+    expect(splitArtifactFence(text).artifact).toBeNull();
+  });
+
+  it("does NOT extract a bare document that appears after some prose (start-only rule)", () => {
+    const text = "報告如下：\n<!DOCTYPE html>\n<html><body>x</body></html>";
+    expect(splitArtifactFence(text).artifact).toBeNull();
+  });
+
+  it("still prefers a real artifact fence over the bare-HTML fallback", () => {
+    const text = "說明在前。\n\n```artifact-html\n<html><body>doc</body></html>\n```";
+    expect(splitArtifactFence(text)).toEqual({
+      prose: "說明在前。",
+      artifact: { kind: "html", content: "<html><body>doc</body></html>" },
+    });
+  });
 });

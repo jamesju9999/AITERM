@@ -28,7 +28,7 @@ export function splitArtifactFence(text: string): SplitArtifact {
   text = text.replace(/\r\n/g, "\n");
 
   const m = FENCE.exec(text);
-  if (!m || m.index === undefined) return { prose: text, artifact: null };
+  if (!m || m.index === undefined) return splitBareHtmlDocument(text);
 
   const kind = m[1] === "chart" ? "chart" : "html";
   const prose = text.slice(0, m.index).trimEnd();
@@ -51,4 +51,34 @@ export function splitArtifactFence(text: string): SplitArtifact {
   }
 
   return { prose, artifact: { kind, content } };
+}
+
+/** 文件開頭的形狀：`<!DOCTYPE html …>` 或 `<html …>`（`<htmlfoo` 不算）。 */
+const BARE_HTML_START = /^\s*(?:<!doctype\s+html|<html[\s>])/i;
+
+/**
+ * 保底：模型沒照協定包 ```artifact-html，直接把一份完整 HTML 文件當回覆內文
+ * 吐出來時，仍然把它抽成 html artifact。實測較弱的模型（KB 問答 + 本地模型，
+ * 尤其剛安裝後第一次冷啟動）會這樣，前端否則只顯示一堆裸標籤、面板也不開。
+ *
+ * 邊界刻意收得很緊——只認「整則回覆一開頭就是文件」：
+ *  - 「回答裡在教 HTML」一定是先講一句話、再放 ``` code fence，開頭不會是裸
+ *    doctype，所以那種回覆不受影響（FENCE 之外，這裡的開頭比對也擋掉）。
+ *  - 文件之後模型常補一句「文件已產生…」，那段留作 prose。
+ *  - 串流中 </html> 還沒到時，比照 fence 的做法：doctype/<html> 一出現就先
+ *    當 in-progress artifact（markdown.tsx 會顯示「產生中」卡片）。
+ */
+function splitBareHtmlDocument(text: string): SplitArtifact {
+  if (!BARE_HTML_START.test(text)) return { prose: text, artifact: null };
+
+  const startIdx = text.search(/<!doctype\s+html|<html[\s>]/i);
+  const closeMatch = /<\/html\s*>/i.exec(text.slice(startIdx));
+  const endIdx = closeMatch
+    ? startIdx + closeMatch.index + closeMatch[0].length
+    : text.length;
+
+  const content = text.slice(startIdx, endIdx).trim();
+  const prose = (text.slice(0, startIdx) + text.slice(endIdx)).trim();
+
+  return { prose, artifact: { kind: "html", content } };
 }
