@@ -8,7 +8,7 @@ import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/m
 import { parseSchemaDoc, buildSchemaSection } from "../../lib/schemaDoc";
 import { useLocale } from "../../contexts/LocaleContext";
 import { ModelPickerButton } from "../ModelPickerButton";
-import { ArtifactPanelProvider } from "../../contexts/ArtifactPanelContext";
+import { ArtifactPanelProvider, useArtifactPanel } from "../../contexts/ArtifactPanelContext";
 import { ArtifactSplit } from "../ArtifactPanel/ArtifactSplit";
 
 interface Props {
@@ -141,6 +141,7 @@ export function DatabaseAiChat(props: Props) {
 
 function DatabaseAiChatInner({ connectionId, schema, sendRemoteResponse }: Props) {
   const { t, locale } = useLocale();
+  const { clearArtifact } = useArtifactPanel();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -412,6 +413,9 @@ function DatabaseAiChatInner({ connectionId, schema, sendRemoteResponse }: Props
   const stop = () => { stoppedRef.current = true; };
 
   const loadSession = (session: SavedSession) => {
+    // 先關掉上一段對話留下的文件/圖表面板；載入的這段若自己含 artifact，
+    // 訊息掛載時會再把面板叫回來。
+    clearArtifact();
     setMessages(session.messages);
     currentSessionIdRef.current = session.id;
     setHistoryOpen(false);
@@ -431,6 +435,7 @@ function DatabaseAiChatInner({ connectionId, schema, sendRemoteResponse }: Props
   };
 
   const newChat = () => {
+    clearArtifact();
     setMessages([]);
     currentSessionIdRef.current = null;
     setHistoryOpen(false);
