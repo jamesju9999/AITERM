@@ -7,6 +7,8 @@ import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/m
 import { useLocale } from "../../contexts/LocaleContext";
 import { ModelPickerButton } from "../ModelPickerButton";
 import type { ConnectedDb } from "./index";
+import { ArtifactPanelProvider } from "../../contexts/ArtifactPanelContext";
+import { ArtifactSplit } from "../ArtifactPanel/ArtifactSplit";
 
 interface Props {
   databases: ConnectedDb[];
@@ -124,7 +126,15 @@ function normalizeAiError(err: unknown): AiError {
   return { kind: "network", message: String(err) };
 }
 
-export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
+export function CrossDbAiChat(props: Props) {
+  return (
+    <ArtifactPanelProvider>
+      <CrossDbAiChatInner {...props} />
+    </ArtifactPanelProvider>
+  );
+}
+
+function CrossDbAiChatInner({ databases, sendRemoteResponse }: Props) {
   const { t, locale } = useLocale();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -273,6 +283,7 @@ export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
           selectedProviderId || undefined,
           false,
           locale,
+          true,
         );
         const reply = aiResult.content ?? "";
 
@@ -306,6 +317,7 @@ export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
             selectedProviderId || undefined,
             false,
             locale,
+            true,
           );
           const summary = summaryResult1.content ?? "";
           updateLastMsg((m) => ({
@@ -385,6 +397,7 @@ export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
             selectedProviderId || undefined,
             false,
             locale,
+            true,
           );
           const summary = summaryResult2.content ?? "";
           updateAndPersistCross((m) => ({
@@ -496,6 +509,7 @@ export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
         </div>
       )}
       <div className="crossdb-chat__main">
+      <ArtifactSplit>
       <div ref={messagesContainerRef} className="crossdb-chat__messages">
         {messages.length === 0 && (
           <div className="crossdb-chat__welcome">
@@ -629,6 +643,7 @@ export function CrossDbAiChat({ databases, sendRemoteResponse }: Props) {
           )}
         </div>
       </div>
+      </ArtifactSplit>
       </div>
     </div>
   );

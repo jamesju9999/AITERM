@@ -1,0 +1,50 @@
+.aiterm-artifact-split {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.aiterm-artifact-split--active {
+  flex-direction: row;
+}
+
+.aiterm-artifact-split__chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 聊天欄的寬度是像素值（拖拉分割用），容器整體卻可能很窄——固定像素寬會把文件欄
+   擠到只剩幾十像素。上限用百分比，讓文件欄在窄容器下仍有一半空間；拖拉時的下限
+   另外由 MIN_CHAT_COLUMN_WIDTH 顧。 */
+.aiterm-artifact-split--active .aiterm-artifact-split__chat {
+  max-width: 55%;
+}
+
+.aiterm-artifact-resizer {
+  width: 6px;
+  cursor: col-resize;
+  background-color: transparent;
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+}
+
+.aiterm-artifact-resizer:hover,
+.aiterm-artifact-split--resizing .aiterm-artifact-resizer {
+  background-color: var(--accent, #a855f7);
+}
+
+/* 拖曳中把 iframe 的指標事件關掉。pointer capture 已經讓事件不會被 iframe 攔走，
+   這條是第二層保險，順便避免游標在文件上變成 I 字或選到 iframe 裡的文字。 */
+.aiterm-artifact-split--resizing .aiterm-artifact-html-frame {
+  pointer-events: none;
+}
+
+.aiterm-artifact-split--resizing {
+  user-select: none;
+  cursor: col-resize;
+}

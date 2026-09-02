@@ -7,6 +7,7 @@ import { useMcpChat } from "../../hooks/useMcpChat";
 import type { PanelMode } from "./ModeHint";
 import { invokeAiChat, formatAiError, type AiError, type ChatMessage as AiChatMessage } from "../../ipc/ai";
 import { getSessionCwd, listDirectory } from "../../ipc/fs";
+import { repairUnterminatedHeredocs } from "../../lib/heredocGuard";
 import { getPtyRecentOutput, writePty } from "../../ipc/pty";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { getMcpTools } from "../../ipc/mcp";
@@ -265,7 +266,11 @@ Rules:
         { role: "system", content: systemPrompt },
         ...history,
       ];
-      const replyObj = await invokeAiChat(agentMessages, sessionId, undefined, false, locale);
+      // supportsArtifacts=true：被要求「產生一份文件」時，模型若不知道有 artifact
+      // 這條路，就會改用 shell 去寫檔案（cat > x.html <<'EOF' …），那個多行
+      // heredoc 會讓終端機卡在 heredoc> 等不到結束標記。沒有 <cmd> 本來就代表
+      // agent 完成，所以「吐出文件然後結束」正好是這個迴圈想要的收尾。
+      const replyObj = await invokeAiChat(agentMessages, sessionId, undefined, false, locale, true);
       reply = replyObj.content ?? "";
     } catch (e) {
       // e may be an AiError object from Tauri IPC — use formatAiError to
@@ -296,7 +301,9 @@ Rules:
       return;
     }
 
-    const cmd = cmdMatch[1].trim();
+    // 見 heredocGuard.ts：缺結束標記的 heredoc 會讓 shell 停在 heredoc>，
+    // 指令永遠不結束，這個迴圈就一直等 onExecuteCommand 的完成回呼。
+    const cmd = repairUnterminatedHeredocs(cmdMatch[1].trim());
     setAgentPhase("running");
     setStuckPromptVisible(false);
     snoozeUntilRef.current = 0;

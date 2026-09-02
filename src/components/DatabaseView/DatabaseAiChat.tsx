@@ -7,6 +7,8 @@ import { extractResponseText, unescapeNewlines, MarkdownText } from "../../lib/m
 import { parseSchemaDoc, buildSchemaSection } from "../../lib/schemaDoc";
 import { useLocale } from "../../contexts/LocaleContext";
 import { ModelPickerButton } from "../ModelPickerButton";
+import { ArtifactPanelProvider } from "../../contexts/ArtifactPanelContext";
+import { ArtifactSplit } from "../ArtifactPanel/ArtifactSplit";
 
 interface Props {
   connectionId: string;
@@ -128,7 +130,15 @@ function errorText(err: unknown): string {
   return formatAiError(normalizeAiError(err));
 }
 
-export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Props) {
+export function DatabaseAiChat(props: Props) {
+  return (
+    <ArtifactPanelProvider>
+      <DatabaseAiChatInner {...props} />
+    </ArtifactPanelProvider>
+  );
+}
+
+function DatabaseAiChatInner({ connectionId, schema, sendRemoteResponse }: Props) {
   const { t, locale } = useLocale();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -298,6 +308,7 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
           selectedProviderId || undefined,
           false,
           locale,
+          true,
         );
         const reply = aiResult.content ?? "";
 
@@ -354,6 +365,7 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
             selectedProviderId || undefined,
             false,
             locale,
+            true,
           );
           const summary = summaryResult.content ?? "";
           updateAndPersist((m) => ({
@@ -495,7 +507,13 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
       )}
 
       {/* Main chat area */}
-      <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
+      <ArtifactSplit>
+      {/* minHeight: 0 不能省。這個 div 原本是最外層那個 flex row 的直接子元素，
+          靠 align-items: stretch 拿到確定高度；包進 ArtifactSplit（flex column）
+          之後它變成 column 的 flex item，而 flex item 預設 min-height: auto ——
+          不會縮到比內容矮。訊息一長它就往下撐，工具列和輸入框被推出可視範圍再被
+          上層 overflow 切掉。jsdom 不跑版面，單元測試看不到這件事。 */}
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, minHeight: 0 }}>
         <div ref={messagesContainerRef} style={{ flex: 1, overflowY: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
           {messages.length === 0 && (
             <div style={{ color: "#555", fontSize: 13, padding: "20px 0" }}>
@@ -626,6 +644,7 @@ export function DatabaseAiChat({ connectionId, schema, sendRemoteResponse }: Pro
           </div>
         </div>
       </div>
+      </ArtifactSplit>
     </div>
   );
 }

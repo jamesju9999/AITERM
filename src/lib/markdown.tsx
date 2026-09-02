@@ -96,16 +96,25 @@ export function unescapeNewlines(text: string): string {
 
 import { MermaidBlock } from "../components/MermaidBlock";
 import { ArtifactBlockCard } from "../components/ArtifactPanel/ArtifactBlockCard";
+import { ArtifactPending } from "../components/ArtifactPanel/ArtifactPending";
 import { useOptionalArtifactPanel } from "../contexts/ArtifactPanelContext";
+import { splitArtifactFence } from "./artifactFence";
 
 // ── Block markdown renderer ────────────────────────────────────────────────
 
 export function MarkdownText({ text, streaming }: { text: string; streaming?: boolean }): ReactNode {
-  // 沒有 ArtifactPanelProvider 的樹（DesignView、DatabaseAiChat 這個里程碑還
-  // 沒接上）不能渲染 artifact 卡片——那個元件會呼叫 useArtifactPanel()，在沒有
-  // provider 時拋例外、把整個畫面帶走。退回普通程式碼區塊，維持這個功能之前的
-  // 行為。
+  // 沒有 ArtifactPanelProvider 的樹（目前是 DesignView 的 SpecPreview，它刻意
+  // 不接——自己已經有右側預覽面板）不能渲染 artifact 卡片：那個元件會呼叫
+  // useArtifactPanel()，在沒有 provider 時拋例外、把整個畫面帶走。退回普通程式碼
+  // 區塊，維持這個功能之前的行為。
   const canShowArtifacts = useOptionalArtifactPanel() !== null;
+
+  // artifact 在 markdown 解析「之前」就抽走，理由見 artifactFence.ts：交給
+  // fenced code block 規則的話，文件內容裡只要出現 ``` 就會提前收尾，後半段
+  // 溢出成聊天泡泡裡的原始 HTML。做法比照既有的 parseCmdTags。
+  const { prose, artifact } = canShowArtifacts
+    ? splitArtifactFence(text)
+    : { prose: text, artifact: null };
   // components 一定要 memo 住：react-markdown 把這個物件裡的每個函式當成該
   // 節點的 React element type。如果每次 render 都給一個新的物件字面量（原本
   // 的寫法），任何讓 MarkdownText 重新 render 的外部狀態變化（例如 artifact
@@ -119,13 +128,6 @@ export function MarkdownText({ text, streaming }: { text: string; streaming?: bo
       if (match && match[1].toLowerCase() === "mermaid") {
         return <MermaidBlock chart={String(children)} />;
       }
-      if (canShowArtifacts && !streaming && match && match[1].toLowerCase() === "artifact-html") {
-        return <ArtifactBlockCard kind="html" content={String(children)} />;
-      }
-      if (canShowArtifacts && !streaming && match && match[1].toLowerCase() === "artifact-chart") {
-        return <ArtifactBlockCard kind="chart" content={String(children)} />;
-      }
-
       const isInline = !match && !String(children).includes("\n");
       return isInline ? (
         <code className="md-code" {...props}>
@@ -150,7 +152,7 @@ export function MarkdownText({ text, streaming }: { text: string; streaming?: bo
     a({ children, href }) {
       return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
     }
-  }), [streaming, canShowArtifacts]);
+  }), []);
 
   return (
     <div className="markdown-body">
@@ -159,8 +161,12 @@ export function MarkdownText({ text, streaming }: { text: string; streaming?: bo
         rehypePlugins={[rehypeKatex]}
         components={components}
       >
-        {text}
+        {prose}
       </ReactMarkdown>
+      {artifact && (streaming
+        // 串流中只擺「產生中」：內容還沒收完，登記進面板只會顯示半成品。
+        ? <ArtifactPending kind={artifact.kind} />
+        : <ArtifactBlockCard kind={artifact.kind} content={artifact.content} />)}
     </div>
   );
 }

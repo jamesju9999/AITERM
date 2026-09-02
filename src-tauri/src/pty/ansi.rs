@@ -18,6 +18,21 @@ pub fn strip_ansi(input: &str) -> String {
     let mut i = 0;
 
     while i < len {
+        // 迴圈不變式：i 必須落在字元邊界，否則下面 `input[i..]` 會 panic。
+        //
+        // 下面每個 ESC 分支都是以原始位元組數推進的（例如 catch-all 的
+        // `ESC <byte>` 固定跳兩個位元組），所以遇到「ESC 後面緊接一個多位元組
+        // 字元」時，會把那個字元的首位元組當成 escape 的一部分吃掉，讓 i 停在
+        // 接續位元組上。二進位內容經 String::from_utf8_lossy 轉換後滿是 U+FFFD
+        // （EF BF BD），撞上的機率很高——實機上 agent 讀到一個 .msg 檔就讓整個
+        // app abort 了。
+        //
+        // 首位元組已經被吞掉的那個字元本來就殘缺，剩下的接續位元組是垃圾，
+        // 跳過即可。
+        if !input.is_char_boundary(i) {
+            i += 1;
+            continue;
+        }
         match bytes[i] {
             // ESC — start of an escape sequence
             0x1b => {
@@ -165,6 +180,33 @@ mod tests {
         // Should not panic on truncated escape at end of input
         let result = strip_ansi("text\x1b");
         assert_eq!(result, "text");
+    }
+
+    /// 實機當掉過：agent 讀到二進位檔（Outlook .msg），輸出灌進 PTY 後這裡
+    /// panic「byte index N is not a char boundary」，整個 app 直接 abort。
+    ///
+    /// 成因：所有 ESC 分支都以原始位元組數推進，完全不看字元邊界。catch-all
+    /// 的 `ESC <byte>` 會把後面那個多位元組字元的「首位元組」當成 escape 的第二
+    /// 個字元吃掉，i 就落在字元中間，下一圈 input[i..] 直接炸。二進位資料經
+    /// lossy UTF-8 轉換後滿是 U+FFFD（EF BF BD），撞上的機率很高。
+    #[test]
+    fn does_not_panic_when_esc_is_followed_by_a_multibyte_char() {
+        // ESC 之後緊接 U+FFFD：catch-all 分支吃掉 0xEF，i 落在 0xBF 上。
+        assert_eq!(strip_ansi("\x1b\u{FFFD}tail"), "tail");
+        // 同樣的形狀，換成一般的中文字元。
+        assert_eq!(strip_ansi("\x1b中text"), "text");
+        // 固定寬度的另外兩個分支也有同樣的問題。
+        assert_eq!(strip_ansi("\x1bO\u{FFFD}x"), "x");
+        assert_eq!(strip_ansi("\x1b(\u{FFFD}y"), "y");
+    }
+
+    /// 這是上面那個 panic 的真實來源形狀：二進位內容經 lossy 轉換後，散落的
+    /// U+FFFD 與控制位元組混在一起。不要求輸出內容，只要求「不准 panic」。
+    #[test]
+    fn survives_lossy_converted_binary_garbage() {
+        let raw: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
+        let lossy = String::from_utf8_lossy(&raw).into_owned();
+        let _ = strip_ansi(&lossy); // must not panic
     }
 
     #[test]

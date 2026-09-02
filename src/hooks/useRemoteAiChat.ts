@@ -115,7 +115,7 @@ export function useRemoteAiChat(connId: string, buildCtx: () => RemoteCtx, provi
     ];
 
     try {
-      const reply = await invokeAiChatCtx(history, buildCtx(), connId, providerId, locale);
+      const reply = await invokeAiChatCtx(history, buildCtx(), connId, providerId, locale, true);
       if (!mountedRef.current) return;
       setMessages(prev => [...prev, { role: "assistant", content: reply.content ?? streamBufRef.current }]);
     } catch (e) {

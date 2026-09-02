@@ -14,6 +14,8 @@ import { NotebookCreateDialog } from "./NotebookCreateDialog";
 import { ChatHistorySidebar } from "./ChatHistorySidebar";
 import { usePythonEnvGate } from "../PythonEnv/usePythonEnvGate";
 import { PythonEnvGate } from "../PythonEnv/PythonEnvGate";
+import { ArtifactPanelProvider } from "../../contexts/ArtifactPanelContext";
+import { ArtifactSplit } from "../ArtifactPanel/ArtifactSplit";
 // 重用 Code Assistant 的聊天氣泡/工具卡片樣式（ca-msg、ca-hint-*、ca-toolbar 等）。
 // 這裡明確 import，不依賴「CodeAssistantView 剛好也被載入過」這種隱性順序。
 import "../CodeAssistantView/styles.css";
@@ -92,7 +94,15 @@ interface Props {
   isActive: boolean;
 }
 
-export function KnowledgeBaseView({ isActive }: Props) {
+export function KnowledgeBaseView(props: Props) {
+  return (
+    <ArtifactPanelProvider>
+      <KnowledgeBaseViewInner {...props} />
+    </ArtifactPanelProvider>
+  );
+}
+
+function KnowledgeBaseViewInner({ isActive }: Props) {
   const { t } = useLocale();
   const navigate = useNavigate();
   const { notebooks, loading, syncingIds, syncProgressById, create, remove, sync } = useNotebooks();
@@ -278,7 +288,7 @@ export function KnowledgeBaseView({ isActive }: Props) {
             </button>
           </div>
         ) : (
-          <>
+          <ArtifactSplit>
             {activeNotebook.last_synced_at === null && !syncingIds.has(activeNotebook.id) && (
               <div className="kb-unsynced-banner">
                 <span>{t.kb_unsynced_prompt(activeNotebook.name)}</span>
@@ -415,7 +425,7 @@ export function KnowledgeBaseView({ isActive }: Props) {
                 </button>
               </div>
             </div>
-          </>
+          </ArtifactSplit>
         )}
       </div>
 

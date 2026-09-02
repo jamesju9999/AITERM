@@ -47,7 +47,59 @@ describe("MarkdownText artifact fenced blocks", () => {
       </ArtifactPanelProvider>,
     );
     expect(container.querySelector(".aiterm-artifact-card")).toBeNull();
-    expect(container.querySelector("code.language-artifact-html")).not.toBeNull();
+    // 早期版本在這裡退回原始碼區塊，後來改成「產生中」的卡（見下一條測試）；
+    // 這條守的是重點：串流中不可以登記進面板。
+    expect(container.querySelector("code.language-artifact-html")).toBeNull();
+  });
+
+  // 串流中不渲染卡片是對的（半成品不該進面板），但原本會退回把半成品的原始
+  // HTML 直接倒進泡泡——一份報告好幾千個 token，畫面上就是一大坨原始碼，或者
+  // 看起來像卡住了。改成顯示一張「產生中」的卡。
+  it("shows a pending card instead of raw source while an artifact streams", () => {
+    const text = "```artifact-html\n<title>Brief</title><p>hi</p>";
+    const { container } = render(
+      <ArtifactPanelProvider>
+        <MarkdownText text={text} streaming />
+      </ArtifactPanelProvider>,
+    );
+    expect(container.querySelector(".aiterm-artifact-pending")).not.toBeNull();
+    expect(container.querySelector("code.language-artifact-html")).toBeNull();
+    // 仍然不可以登記進面板——那是完成後的事。
+    expect(container.querySelector(".aiterm-artifact-card")).toBeNull();
+  });
+
+  it("shows a pending card for a streaming chart too", () => {
+    const text = '```artifact-chart\n{"title":"Sales"';
+    const { container } = render(
+      <ArtifactPanelProvider>
+        <MarkdownText text={text} streaming />
+      </ArtifactPanelProvider>,
+    );
+    expect(container.querySelector(".aiterm-artifact-pending")).not.toBeNull();
+  });
+
+  // 實機回報的症狀：模型寫了一份含 ``` 的長 HTML 報告，後半段整坨原始 HTML
+  // 溢出到聊天泡泡裡。這條守的是「泡泡裡不可以有文件內容」。
+  //
+  // 注意這條「抓不到」文件被截斷那半個 bug——改成在第一個收尾 fence 截斷，它
+  // 一樣會綠（實測過）。文件完整性由 artifactFence.test.ts 的
+  // 「keeps going past a fence that appears inside the document」守，那條在
+  // 截斷版本下會確實變紅。
+  it("does not leak the document into the bubble when it contains a fence", () => {
+    const text = [
+      "報告如下：",
+      "```artifact-html",
+      "<title>Report</title>",
+      "<h1>前半</h1>",
+      "```",
+      "<h2>SPILLED</h2>",
+      "```",
+    ].join("\n");
+    const { container } = renderWithProvider(text);
+    expect(container.querySelector(".aiterm-artifact-card")).not.toBeNull();
+    // 泡泡裡不該看得到文件內容——它屬於面板。
+    expect(container.textContent).not.toContain("SPILLED");
+    expect(container.textContent).not.toContain("<h2>");
   });
 
   it("a plain mermaid block still renders inline as before (regression check)", () => {

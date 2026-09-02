@@ -3,8 +3,9 @@ import {
   ResponsiveContainer,
   BarChart,
   Bar,
-  LineChart,
+  ComposedChart,
   Line,
+  Area,
   PieChart,
   Pie,
   Cell,
@@ -14,7 +15,8 @@ import {
   Tooltip,
   Legend,
 } from "recharts";
-import { CHART_PALETTE_LIGHT, CHART_PALETTE_DARK } from "../../lib/chartPalette";
+import { CHART_PALETTE_LIGHT, CHART_PALETTE_DARK, type ThemeColors } from "../../lib/chartPalette";
+import "./ArtifactChart.css";
 
 export interface ChartSeriesSpec {
   key: string;
@@ -39,73 +41,183 @@ function isDarkSurface(): boolean {
   return document.documentElement.getAttribute("data-theme") !== "light";
 }
 
+/** 單一序列且長條不多時，數值直接標在頂端。規範同時要求「不可以每個點都標」
+ *  ——多序列或資料點一多就會變成噪音，那時交給座標軸、tooltip 與表格檢視。 */
+const MAX_LABELLED_BARS = 12;
+
+/**
+ * 填色的不透明度。
+ *
+ * 不是隨手挑的：色票的「對比度 ≥ 3:1」是驗證器強制的五項檢查之一，而透明度會
+ * 直接改變顏色與背景合成後的實際值。做法是把每個顏色在各種透明度下先與背景
+ * 合成，再拿合成後的顏色去跑 skill 的 validate_palette.js——深色模式在 0.75
+ * 仍全數通過，到 0.70 就有兩項失敗（綠色掉出亮度帶、aqua 的彩度低到讀起來
+ * 變灰）。取 0.8 留一點餘裕，不要貼著懸崖邊。
+ *
+ * 線條維持不透明：2px 的細線再打折會明顯變弱，而驗證器量的是「顏色對背景」，
+ * 量不到細線因為太細而難讀這件事。
+ */
+export const FILL_OPACITY = 0.8;
+
+/** 千分位。刻度承載了沒有被直接標註的數值，讀得順比省空間重要。 */
+const formatTick = (v: unknown) =>
+  typeof v === "number" ? v.toLocaleString() : String(v ?? "");
+
+/** 座標軸要 recessive：不畫軸線、不畫刻度線，只留文字。 */
+function axisProps(palette: ThemeColors) {
+  return {
+    stroke: palette.muted,
+    axisLine: false as const,
+    tickLine: false as const,
+    tick: { fill: palette.muted, fontSize: 11 },
+  };
+}
+
+function tooltipProps(palette: ThemeColors) {
+  return {
+    contentStyle: {
+      background: palette.surface,
+      border: `1px solid ${palette.baseline}`,
+      borderRadius: 8,
+      color: palette.textPrimary,
+      fontSize: 12,
+      boxShadow: "0 6px 20px rgba(0,0,0,0.28)",
+    },
+    // 規範：tooltip 裡「數值是主角、序列名是配角」——讀者已經知道是哪個序列，
+    // 他要的是數字。這跟圖例的階層剛好相反。
+    labelStyle: { color: palette.textSecondary, marginBottom: 4, fontSize: 11 },
+    itemStyle: { color: palette.textPrimary, fontWeight: 600 },
+    // 預設的 hover 遮罩太重，會蓋過資料本身。
+    cursor: { fill: palette.gridline, fillOpacity: 0.35 },
+  };
+}
+
 export function ArtifactChart({ spec }: ArtifactChartProps) {
   const palette = useMemo(() => (isDarkSurface() ? CHART_PALETTE_DARK : CHART_PALETTE_LIGHT), []);
+  const color = (i: number) => palette.categorical[i % palette.categorical.length];
+  const labelBars = spec.series.length === 1 && spec.data.length <= MAX_LABELLED_BARS;
 
   if (spec.type === "pie") {
     const seriesKey = spec.series[0]?.key ?? "value";
     return (
-      <ResponsiveContainer width="100%" height={320}>
-        <PieChart>
-          <Pie data={spec.data} dataKey={seriesKey} nameKey={spec.xKey} label>
-            {spec.data.map((_, i) => (
-              <Cell key={i} fill={palette.categorical[i % palette.categorical.length]} />
-            ))}
-          </Pie>
-          <Tooltip />
-          {spec.series.length >= 2 && <Legend />}
-        </PieChart>
-      </ResponsiveContainer>
+      <div className="aiterm-artifact-chart">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={spec.data}
+              dataKey={seriesKey}
+              nameKey={spec.xKey}
+              outerRadius="70%"
+              // 不畫外側數值標籤。實機上它們會跟正下方的圖例打架，總有一個扇形
+              // 只剩一條指向空白的引線。圖例已經給了身分，數值則由 tooltip 與
+              // 表格檢視承接——規範本來就是「選擇性標註，其餘交給圖例與表格」。
+              label={false}
+              // 扇形之間用 surface 色的 2px 縫隔開，而不是描邊——白留空是
+              // 分隔的機制，描邊等於加上不是資料的墨水。
+              stroke={palette.surface}
+              strokeWidth={2}
+            >
+              {spec.data.map((_, i) => (
+                <Cell key={i} fill={color(i)} fillOpacity={FILL_OPACITY} />
+              ))}
+            </Pie>
+            <Tooltip {...tooltipProps(palette)} />
+            {/* 圓餅圖一定要有圖例：扇形就是類別，顏色沒有對照表等於沒有意義。
+                這跟長條/折線「單一序列不放圖例」的規則不同——那裡的身分是序列，
+                標題已經講完了。 */}
+            <Legend wrapperStyle={{ fontSize: 12, color: palette.textSecondary }} />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
     );
   }
 
   const commonAxes = (
     <>
-      <CartesianGrid stroke={palette.gridline} strokeDasharray="3 3" />
-      <XAxis dataKey={spec.xKey} stroke={palette.muted} />
-      <YAxis stroke={palette.muted} />
-      <Tooltip
-        contentStyle={{
-          background: palette.surface,
-          border: `1px solid ${palette.baseline}`,
-          color: palette.textPrimary,
-        }}
-      />
-      {spec.series.length >= 2 && <Legend />}
+      {/* hairline 實線、只留水平線：直線對長條圖只是噪音。 */}
+      <CartesianGrid stroke={palette.gridline} vertical={false} />
+      <XAxis dataKey={spec.xKey} {...axisProps(palette)} />
+      <YAxis {...axisProps(palette)} tickFormatter={formatTick} width={56} />
+      <Tooltip {...tooltipProps(palette)} />
+      {spec.series.length >= 2 && (
+        <Legend wrapperStyle={{ fontSize: 12, color: palette.textSecondary }} />
+      )}
     </>
   );
 
   if (spec.type === "line") {
     return (
-      <ResponsiveContainer width="100%" height={320}>
-        <LineChart data={spec.data}>
-          {commonAxes}
-          {spec.series.map((s, i) => (
-            <Line
-              key={s.key}
-              dataKey={s.key}
-              name={s.label}
-              stroke={palette.categorical[i % palette.categorical.length]}
-            />
-          ))}
-        </LineChart>
-      </ResponsiveContainer>
+      <div className="aiterm-artifact-chart">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={spec.data} margin={{ top: 12, right: 16, bottom: 4, left: 0 }}>
+            {commonAxes}
+            {/* 線下方鋪一層 ~10% 的同色淡影。規範允許的就是這種「wash」，不是
+                飽和色塊；這也是唯一不扭曲數值的加層次方式——立體陰影會讓讀者
+                不確定該讀資料端的前緣還是後緣。 */}
+            {spec.series.map((s, i) => (
+              <Area
+                key={`area-${s.key}`}
+                dataKey={s.key}
+                stroke="none"
+                fill={color(i)}
+                fillOpacity={0.1}
+                // 圖例與 tooltip 交給下面的 Line，這層只是底色。
+                legendType="none"
+                tooltipType="none"
+                isAnimationActive={false}
+              />
+            ))}
+            {spec.series.map((s, i) => (
+              <Line
+                key={s.key}
+                dataKey={s.key}
+                name={s.label}
+                stroke={color(i)}
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                // 標記至少 8px（r>=4），外面帶一圈 surface 色的環，交疊時才讀得出來。
+                dot={{ r: 4, fill: color(i), stroke: palette.surface, strokeWidth: 2 }}
+                activeDot={{ r: 5, fill: color(i), stroke: palette.surface, strokeWidth: 2 }}
+              />
+            ))}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
     );
   }
 
   return (
-    <ResponsiveContainer width="100%" height={320}>
-      <BarChart data={spec.data}>
-        {commonAxes}
-        {spec.series.map((s, i) => (
-          <Bar
-            key={s.key}
-            dataKey={s.key}
-            name={s.label}
-            fill={palette.categorical[i % palette.categorical.length]}
-          />
-        ))}
-      </BarChart>
-    </ResponsiveContainer>
+    <div className="aiterm-artifact-chart">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart
+          data={spec.data}
+          margin={{ top: 12, right: 16, bottom: 4, left: 0 }}
+          barGap={2}
+        >
+          {commonAxes}
+          {spec.series.map((s, i) => (
+            <Bar
+              key={s.key}
+              dataKey={s.key}
+              name={s.label}
+              fill={color(i)}
+              // 不要填滿整個欄位——留白是版面的一部分；資料端 4px 圓角、
+              // 貼著基線那端維持方角。
+              maxBarSize={24}
+              radius={[4, 4, 0, 0]}
+              fillOpacity={FILL_OPACITY}
+              // 規範：滑過的那根要有反應，讀者才知道自己指到了什麼。
+              // hover 時反而變得更實，變化才看得出來。
+              activeBar={{ fill: color(i), fillOpacity: 1 }}
+              // 標籤穿的是文字色，不是資料色——淺色的分類色當文字會看不清楚。
+              label={labelBars
+                ? { position: "top", formatter: formatTick, fill: palette.textSecondary, fontSize: 11 }
+                : undefined}
+            />
+          ))}
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
   );
 }

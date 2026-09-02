@@ -125,13 +125,13 @@ describe("ChatPanelShell", () => {
     render(<ChatPanelShell {...base({ messages })} />);
     // "Brief" 合理地出現兩處：聊天泡泡裡的 artifact 卡片、以及文件面板的標題列。
     expect(screen.getAllByText("Brief").length).toBeGreaterThanOrEqual(1);
-    expect(document.querySelector(".aiterm-ai-panel--split")).not.toBeNull();
+    expect(document.querySelector(".aiterm-artifact-split--active")).not.toBeNull();
     expect(document.querySelector("iframe")).not.toBeNull();
   });
 
   it("does not render the split layout when no message has an artifact block", () => {
     render(<ChatPanelShell {...base()} />);
-    expect(document.querySelector(".aiterm-ai-panel--split")).toBeNull();
+    expect(document.querySelector(".aiterm-artifact-split--active")).toBeNull();
     expect(document.querySelector(".aiterm-artifact-panel")).toBeNull();
   });
 
@@ -195,7 +195,7 @@ describe("ChatPanelShell", () => {
     ];
     render(<ChatPanelShell {...base({ messages })} />);
     fireEvent.click(screen.getByTitle("關閉文件面板"));
-    expect(document.querySelector(".aiterm-ai-panel--split")).toBeNull();
+    expect(document.querySelector(".aiterm-artifact-split--active")).toBeNull();
   });
 
   it("inputPrefixControls renders inside the input pill container", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll } from "vitest";
 import { render } from "@testing-library/react";
-import { ArtifactChart, type ChartSpec } from "./ArtifactChart";
+import { ArtifactChart, FILL_OPACITY, type ChartSpec } from "./ArtifactChart";
 
 // recharts 的 ResponsiveContainer 需要 ResizeObserver、且容器要有非零尺寸才會
 // 畫出 SVG 子元素——jsdom 兩者都沒有內建，這個 repo 也沒有全域 polyfill（見
@@ -33,6 +33,16 @@ describe("ArtifactChart", () => {
     expect(container.querySelector("svg")).not.toBeNull();
   });
 
+  // 規範允許折線圖下方鋪 ~10% 透明度的區域填色（"a wash, never a saturated
+  // block"）。這是唯一不扭曲數值的加層次方式——立體陰影會讓讀者不確定該讀
+  // 長條的前緣還是後緣。
+  it("washes the area under a line at low opacity", () => {
+    const { container } = render(<ArtifactChart spec={{ ...barSpec, type: "line" }} />);
+    const area = container.querySelector(".recharts-area-area");
+    expect(area).not.toBeNull();
+    expect(Number(area!.getAttribute("fill-opacity"))).toBeLessThanOrEqual(0.15);
+  });
+
   it("renders a line chart without throwing", () => {
     const lineSpec: ChartSpec = { ...barSpec, type: "line" };
     const { container } = render(<ArtifactChart spec={lineSpec} />);
@@ -51,6 +61,20 @@ describe("ArtifactChart", () => {
     };
     const { container } = render(<ArtifactChart spec={pieSpec} />);
     expect(container.querySelector("svg")).not.toBeNull();
+  });
+
+  // 圓餅圖的「扇形」本身就是類別維度——一個序列就有多個身分要區分。沒有圖例
+  // 又沒有名稱標籤的話，顏色等於沒有意義。這跟長條/折線「單一序列不需要圖例」
+  // 的規則不同，因為那裡的身分是序列、標題已經說完了。
+  it("always shows a legend for a pie, even with one series", () => {
+    const pieSpec: ChartSpec = {
+      type: "pie",
+      data: [{ k: "A", v: 4 }, { k: "B", v: 1 }, { k: "C", v: 2 }],
+      xKey: "k",
+      series: [{ key: "v", label: "數量" }],
+    };
+    const { container } = render(<ArtifactChart spec={pieSpec} />);
+    expect(container.querySelector(".recharts-legend-wrapper")).not.toBeNull();
   });
 
   it("does not render a legend for a single series", () => {
@@ -75,6 +99,47 @@ describe("ArtifactChart", () => {
   // children 找出格線/座標軸/圖例的，實作把這些共用元件放進一個 <>...</>
   // fragment 裡重用，如果 recharts 不會攤平 fragment，格線與座標軸會安靜地
   // 消失，但 <svg> 還在、測試照樣全綠。這兩個測試就是釘住這件事。
+  // 以下幾條釘住 dataviz 規範裡「可驗證」的 mark 規格，避免日後被順手改回去。
+  // 規範：格線是 hairline 實線、絕不用虛線；bar chart 只留水平格線。
+  it("draws solid horizontal-only gridlines, never dashed", () => {
+    const { container } = render(<ArtifactChart spec={barSpec} />);
+    const grid = container.querySelector(".recharts-cartesian-grid")!;
+    for (const line of Array.from(grid.querySelectorAll("line"))) {
+      expect(line.getAttribute("stroke-dasharray")).toBeNull();
+    }
+    expect(grid.querySelector(".recharts-cartesian-grid-vertical")).toBeNull();
+  });
+
+  // 規範：座標軸要 recessive——軸線與刻度線都不畫，只留文字。
+  it("keeps the axes recessive: no axis lines, no tick lines", () => {
+    const { container } = render(<ArtifactChart spec={barSpec} />);
+    expect(container.querySelector(".recharts-cartesian-axis-line")).toBeNull();
+    expect(container.querySelector(".recharts-cartesian-axis-tick-line")).toBeNull();
+  });
+
+  // 規範：Y 軸刻度要 thousands-comma'd——它承載了沒有被直接標註的數值。
+  it("formats y-axis ticks with thousand separators", () => {
+    const bigSpec: ChartSpec = {
+      ...barSpec,
+      data: [{ month: "Jan", sales: 12000 }, { month: "Feb", sales: 4000 }],
+    };
+    const { container } = render(<ArtifactChart spec={bigSpec} />);
+    expect(container.textContent).toContain("12,000");
+  });
+
+  // 填色透明度：只釘住「數值在驗證過的範圍內」，不釘渲染結果——jsdom 不會把
+  // recharts 的長條圖形畫出來（.recharts-bar-rectangle 在 jsdom 裡是空的 <g>），
+  // 斷言 fill-opacity 屬性只是在測 jsdom。
+  //
+  // 為什麼有範圍：透明度會改變顏色與背景合成後的實際值，而「對比度 ≥3:1」是
+  // 色票驗證器強制的檢查之一。把各透明度合成後的顏色餵回 validate_palette.js
+  // 實測，深色模式在 0.75 仍全數通過、0.70 有兩項失敗（綠色掉出亮度帶、aqua
+  // 彩度低到讀起來變灰）。要調低於 0.75 之前請先重跑那個驗證。
+  it("keeps the fill opacity inside the validated range", () => {
+    expect(FILL_OPACITY).toBeGreaterThanOrEqual(0.75);
+    expect(FILL_OPACITY).toBeLessThan(1);
+  });
+
   it("bar chart really renders the grid, both axes and one rect per data point", () => {
     const { container } = render(<ArtifactChart spec={barSpec} />);
     expect(container.querySelector(".recharts-cartesian-grid")).not.toBeNull();

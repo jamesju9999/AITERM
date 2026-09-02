@@ -159,3 +159,27 @@ describe("KnowledgeBaseView pick-interpreter escape hatch", () => {
     expect(screen.getByText("SETTINGS_STUB")).toBeInTheDocument();
   });
 });
+
+describe("KnowledgeBaseView artifact wiring", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pythonEnvEnsure.mockResolvedValue(undefined);
+    pythonEnvStatusMock.mockResolvedValue({
+      uvAvailable: true,
+      pythonVersion: "3.12.13",
+      installed: ["doc_core"],
+      venvPath: "/data/python-env",
+      userInterpreter: null,
+    });
+  });
+
+  it("mounts inside an ArtifactSplit once a notebook is selected", async () => {
+    let container: HTMLElement;
+    await act(async () => {
+      ({ container } = renderView());
+    });
+    // 沒有 artifact 時分割是「不啟用」狀態，但容器必須在——這就是接線本身。
+    expect(container!.querySelector(".aiterm-artifact-split")).not.toBeNull();
+    expect(container!.querySelector(".aiterm-artifact-panel")).toBeNull();
+  });
+});

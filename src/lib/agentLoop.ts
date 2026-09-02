@@ -6,6 +6,7 @@ import type { AgentPhase } from "../components/AgentStatusBar";
 import type { AgentStepInfo } from "./agentStepReport";
 import type { TerminalBlock } from "../hooks/useTerminalBlocks";
 import { webSearch, webFetch } from "../ipc/web";
+import { repairUnterminatedHeredocs } from "./heredocGuard";
 
 interface PreviewState {
   loading: boolean;
@@ -98,12 +99,17 @@ function handleAiQuery(
       const risk = resp.risk_level;
 
       if (shouldAutoExecute(mode, risk, agentActive)) {
+        // 沒人盯著的自動執行才補 heredoc 結束標記——缺了它 shell 會停在
+        // heredoc> 等一個不會來的標記，指令永遠不結束、OSC 133 D 不發出，
+        // 這個迴圈就在下面 onCommandComplete 那裡等到天荒地老。理由詳見
+        // heredocGuard.ts。顯示的也是修補後的版本：畫面要跟實際跑的一致。
+        const command = repairUnterminatedHeredocs(resp.command);
         // Auto-execute: write a subtle confirmation line then submit.
         const riskColor = risk === "safe" ? "\x1b[32m" : "\x1b[33m";
-        term.write(`\r\n${riskColor}▶ ${resp.command}\x1b[0m\r\n`);
-        onPhase?.({ phase: "running", step: agentStep, maxSteps: agentMaxSteps, command: resp.command });
+        term.write(`\r\n${riskColor}▶ ${command}\x1b[0m\r\n`);
+        onPhase?.({ phase: "running", step: agentStep, maxSteps: agentMaxSteps, command });
         // Pass onCommandComplete so the block hook calls it when OSC 133;D fires
-        submitCommand(resp.command, onCommandComplete);
+        submitCommand(command, onCommandComplete);
         setPreview(INITIAL_PREVIEW);
       } else {
         // Show preview with risk badge.
