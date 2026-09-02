@@ -86,13 +86,15 @@ describe("NotebookCreateDialog model list", () => {
 
     const { container } = renderDialog();
 
-    await waitFor(() => {
-      expect(vi.mocked(kbListEmbeddingModels)).toHaveBeenCalled();
-    });
-
-    const input = screen.getByPlaceholderText("例如：nomic-embed-text");
+    // The model field renders a disabled "loading…" input while the list is in
+    // flight; only once the (rejected) fetch settles does it fall back to the
+    // editable input. Poll for that input rather than assuming the rejection's
+    // .catch/.finally microtasks have flushed by the next line — on a loaded CI
+    // runner they sometimes have not (this test flaked there).
+    const input = await screen.findByPlaceholderText("例如：nomic-embed-text");
     expect(input).not.toBeDisabled();
     expect(container.querySelectorAll("datalist option").length).toBe(0);
+    expect(vi.mocked(kbListEmbeddingModels)).toHaveBeenCalled();
   });
 
   it("reloads the list when the provider changes", async () => {
