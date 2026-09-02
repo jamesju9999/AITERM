@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "1.17.3"
+version = "1.18.0"
 description = "AI TERM Studio"
 authors = ["you"]
 license = ""
