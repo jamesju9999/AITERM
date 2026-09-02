@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { LocaleProvider } from "../contexts/LocaleContext";
 
@@ -108,5 +108,27 @@ describe("WarpInput — directory picker", () => {
       </LocaleProvider>,
     );
     expect(screen.getByTitle("切換目錄")).toBeDisabled();
+  });
+});
+
+describe("WarpInput — IME 組字", () => {
+  it("組字中按 Enter（確認候選字）不送出指令", () => {
+    const onSubmit = renderInput();
+    const textarea = screen.getByRole("textbox");
+
+    fireEvent.change(textarea, { target: { value: "中文" } });
+    fireEvent.keyDown(textarea, { key: "Enter", isComposing: true });
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("組字結束後按 Enter 正常送出", () => {
+    const onSubmit = renderInput();
+    const textarea = screen.getByRole("textbox");
+
+    fireEvent.change(textarea, { target: { value: "中文" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(onSubmit).toHaveBeenCalledWith("中文");
   });
 });

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { isImeComposing } from "../lib/imeComposing";
 import { useLocale } from "../contexts/LocaleContext";
 import "./CommandBookmarks.css";
 
@@ -80,6 +81,7 @@ export function CommandBookmarksPicker({ onSelect, onClose }: CommandBookmarksPr
   }, [activeIdx]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (isImeComposing(e)) return;
     if (e.key === "Escape") { e.preventDefault(); onClose(); return; }
     if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx((i) => Math.min(i + 1, filtered.length - 1)); return; }
     if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx((i) => Math.max(0, i - 1)); return; }

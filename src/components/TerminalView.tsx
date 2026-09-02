@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLocale } from "../contexts/LocaleContext";
 import { findAppCaret } from "../lib/terminalCaret";
+import { isImeComposing } from "../lib/imeComposing";
 import { collapseWholeStringRepeat } from "../lib/collapseWholeStringRepeat";
 import { ResizeRepaintGate } from "../lib/resizeRepaintGate";
 import { listen } from "@tauri-apps/api/event";
@@ -2024,6 +2025,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
+                if (isImeComposing(e)) return;
                 if (e.key === 'Escape') { e.preventDefault(); closeSearch(); }
                 if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSearch(searchQuery, 'next'); }
                 if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); doSearch(searchQuery, 'prev'); }

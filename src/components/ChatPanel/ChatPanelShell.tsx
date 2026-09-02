@@ -2,6 +2,7 @@ import {
   useEffect, useRef, useState, useCallback,
   type KeyboardEvent, type ReactNode, type PointerEvent,
 } from "react";
+import { isImeComposing } from "../../lib/imeComposing";
 import type { AiError, ToolFallbackReason } from "../../ipc/ai";
 import type { SubmitShortcut } from "../../ipc/config";
 import type { McpChatMessage, McpChatSession } from "../../types/chat";
@@ -234,6 +235,7 @@ function ChatPanelShellInner({
   }, [input, allowEmptySubmit, isDisabled, agentMode, onSubmitAgent, onSend]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (isImeComposing(e)) return;
     if (e.key === "Enter") {
       const shouldSubmit =
         (submitShortcut === "enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||

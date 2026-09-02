@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { isImeComposing } from "../lib/imeComposing";
 import type { SubmitShortcut } from "../ipc/config";
 import { useLocale } from "../contexts/LocaleContext";
 import { listDirectory, type DirEntry } from "../ipc/fs";
@@ -168,6 +169,9 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter", sessionId, p
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // 輸入法組字中（例如中文輸入法按 Enter 確認候選字）不觸發送出或歷史導覽
+    if (isImeComposing(e)) return;
+
     let shouldSubmit = false;
 
     if (e.key === "Enter") {

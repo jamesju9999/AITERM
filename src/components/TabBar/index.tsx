@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { isImeComposing } from "../../lib/imeComposing";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { AttentionKind } from "../../lib/terminalAttention";
 import type { Translations } from "../../lib/i18n";
@@ -405,6 +406,7 @@ export function TabBar({
                     setEditingId(null);
                   }}
                   onKeyDown={(e) => {
+                    if (isImeComposing(e)) return;
                     if (e.key === "Enter") {
                       const val = e.currentTarget.value.trim();
                       if (val && onRename) onRename(tab.id, val);

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import { isImeComposing } from "../../lib/imeComposing";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { kbOpenDocument } from "../../ipc/knowledgeBase";
@@ -213,6 +214,7 @@ function KnowledgeBaseViewInner({ isActive }: Props) {
   const shortcutLabel = submitShortcut === "shift-enter" ? "Shift+Enter" : submitShortcut === "ctrl-enter" ? "Ctrl+Enter" : "Enter";
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (isImeComposing(e)) return;
     if (e.key !== "Enter") return;
     const sc = submitShortcutRef.current;
     const ok = (sc === "enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||

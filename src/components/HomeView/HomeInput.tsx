@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { isImeComposing } from "../../lib/imeComposing";
 import { useLocale } from "../../contexts/LocaleContext";
 import { visibleTabCatalog } from "../NewTabPicker/tabCatalog";
 import { invokeAiChat } from "../../ipc/ai";
@@ -66,6 +67,7 @@ export function HomeInput({ onRoute }: Props) {
         placeholder={t.home_input_placeholder}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
+          if (isImeComposing(e)) return;
           if (e.key === "Enter") submit();
         }}
       />

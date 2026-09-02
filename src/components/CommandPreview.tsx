@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { isImeComposing } from "../lib/imeComposing";
 import type { RiskLevel } from "../ipc/ai";
 import { unescapeNewlines } from "../lib/markdown";
 import "./CommandPreview.css";
@@ -27,6 +28,7 @@ export function CommandPreview({
 }: CommandPreviewProps) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (isImeComposing(e)) return;
       if (e.key === "Enter" && riskLevel !== "blocked") {
         e.preventDefault();
         e.stopPropagation();

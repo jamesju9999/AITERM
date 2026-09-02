@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { isImeComposing } from "../lib/imeComposing";
 import { listProviders, setDefaultProvider, type ProviderInfo } from "../ipc/provider";
 import { PROVIDER_TYPE_LABELS } from "../ipc/provider";
 import { useLocale } from '../contexts/LocaleContext';
@@ -25,6 +26,7 @@ export function ProviderPalette({ onClose, onSwitch }: ProviderPaletteProps) {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (isImeComposing(e)) return;
       if (e.key === "Escape") {
         e.preventDefault();
         onClose();

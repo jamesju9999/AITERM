@@ -1,6 +1,7 @@
 // src/components/ApiDocsView/ApiDocsView.tsx
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { isImeComposing } from "../../lib/imeComposing";
 import { useLocale } from "../../contexts/LocaleContext";
 import {
   apiDocsDetect,
@@ -467,7 +468,7 @@ Reformat the following raw API documentation page into clean Markdown.
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder={t.api_docs_url_placeholder}
-          onKeyDown={(e) => e.key === "Enter" && handleLoadTree()}
+          onKeyDown={(e) => !isImeComposing(e) && e.key === "Enter" && handleLoadTree()}
         />
         <button
           className="api-docs-view__load-btn"

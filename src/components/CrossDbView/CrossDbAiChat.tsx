@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { isImeComposing } from "../../lib/imeComposing";
 import { dbExecuteQuery, type QueryResult } from "../../ipc/db";
 import { aiChat, formatAiError, type AiError } from "../../ipc/ai";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
@@ -617,6 +618,7 @@ function CrossDbAiChatInner({ databases, sendRemoteResponse }: Props) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
+              if (isImeComposing(e)) return;
               if (e.key === "Enter") {
                 const ok = (submitShortcut === "enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
                            (submitShortcut === "shift-enter" && e.shiftKey && !e.ctrlKey) ||

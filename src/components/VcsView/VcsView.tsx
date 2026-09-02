@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import { isImeComposing } from "../../lib/imeComposing";
 import { useVcsCwd } from "../../hooks/useVcsCwd";
 import { useVcsAgentLoop } from "../../hooks/useVcsAgentLoop";
 import { useTeamFeatures } from "../../hooks/useTeamFeatures";
@@ -96,11 +97,13 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
   };
 
   const handlePathKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (isImeComposing(e)) return;
     if (e.key === "Enter") { e.preventDefault(); confirmPath(pathInput); }
     if (e.key === "Escape") { e.preventDefault(); setIsEditingPath(false); }
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (isImeComposing(e)) return;
     if (e.key === "Enter") {
       const ok = (submitShortcut === "enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
                  (submitShortcut === "shift-enter" && e.shiftKey && !e.ctrlKey) ||

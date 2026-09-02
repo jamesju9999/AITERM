@@ -1,5 +1,6 @@
 // src/components/DesignView/DesignView.tsx
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { isImeComposing } from '../../lib/imeComposing';
 import { RobotIcon } from '../Icons';
 import { QuotaBadge } from "../QuotaBadge";
 import { useProviderQuota } from "../../hooks/useProviderQuota";
@@ -587,6 +588,7 @@ export function DesignView({ isActive, tabId, remoteOwner, onRemoteOwnerChange }
                 className="design-chat-input" placeholder={t.design_input_placeholder}
                 value={inputValue} onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={(e) => {
+                  if (isImeComposing(e)) return;
                   if (e.key === 'Enter') {
                     const shouldSubmit =
                       (submitShortcut === 'enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
