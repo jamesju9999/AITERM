@@ -11,10 +11,13 @@
 
 A powerful, cross-platform AI-enhanced terminal built with **Tauri 2**, **React 19**, and **Rust**. AITerm seamlessly integrates the traditional command-line experience with advanced AI capabilities, autonomous agents, and project requirement management.
 
+Beyond cloud providers, AITerm connects to **local models** (Ollama, LM Studio, oMLX, and other OpenAI-compatible endpoints) so inference runs on your own machine — **no API cost and nothing sent off-box** — which pays off for high-volume automation. It can also **bridge the Claude Code CLI to any provider** you have configured, so you run Claude Code on your OpenAI, Gemini, or local models.
+
 ## ✨ Key Features
 
 - **Integrated AI Providers**: Out-of-the-box support for multiple LLM providers including OpenAI, Anthropic, Google, Ollama (local inference), and OpenAI-compatible endpoints. You can also sign in with a subscription account — Claude, ChatGPT, Gemini, or GitHub Copilot — with no API key to obtain.
 - **AI Command Flow (`/ai`)**: Type `/ai <query>` directly in the terminal to generate and preview commands with risk-level assessment before execution.
+- **Local Models · Save on Tokens**: Connect to Ollama, LM Studio, oMLX, and other local / OpenAI-compatible endpoints — inference runs on your own machine with no API cost and nothing sent off-box. Or use the Claude Code Bridge to run the Claude Code CLI on any provider you have configured.
 - **Structured Command Blocks**: Every command and its output render as a distinct card instead of raw scrollback. The live terminal pane auto-expands only while a command is running and shrinks back down when idle, keeping the screen uncluttered.
 - **Autonomous Agent Loop (`/agent`)**: Multi-step, goal-driven agentic execution for complex tasks, with built-in guardrails and fallback to manual confirmation for dangerous operations.
 - **LoopStudio (Loop Engineering)**: A visual multi-agent orchestration workbench — an orchestrator breaks a goal down and dispatches sub-agents to work in parallel, with safety gates and a live execution trace, running autonomously until the goal is verified done instead of requiring back-and-forth confirmation.
@@ -84,10 +87,13 @@ docs/            # Specs and implementation plans
 
 一個強大且跨平台的 AI 智慧終端機，基於 **Tauri 2**、**React 19** 和 **Rust** 打造。AITerm 將傳統的命令列體驗與先進的 AI 能力、自主代理（Agent）以及專案需求管理完美結合。
 
+除了雲端供應商，AITerm 也能串接**本地端模型**（Ollama、LM Studio、oMLX 及其他 OpenAI 相容端點），推論在自己機器上跑——**不花 API 費用、資料不外送**——量大的自動化任務尤其划算。也可以用 **Claude Code 橋接**，讓 Claude Code CLI 跑在你已設定的任何供應商上（OpenAI、Gemini 或本地模型皆可）。
+
 ## ✨ 核心功能
 
 - **多重 AI 供應商整合**：開箱即支援 OpenAI、Anthropic、Google、Ollama（本地端推論）以及 OpenAI 相容端點等多種語言模型。也可以直接用訂閱帳號登入——Claude、ChatGPT、Gemini、GitHub Copilot 皆可，不必另外申請 API Key。
 - **AI 指令工作流 (`/ai`)**：直接在終端機輸入 `/ai <查詢>` 即可生成指令，並在執行前提供風險等級評估與預覽。
+- **本地模型・省 token 費用**：接 Ollama、LM Studio、oMLX 這類本地 / OpenAI 相容端點——推論在自己機器上跑，不花 API 費用、資料不外送。或用 Claude Code 橋接，讓 Claude Code CLI 跑在你手邊任何一個供應商上。
 - **結構化指令區塊**：每個指令與其輸出都會渲染成獨立卡片，而非傳統終端機的原始捲動畫面；即時終端機視窗只在指令執行中才自動展開，閒置時自動收合，畫面保持乾淨。
 - **自主代理循環 (`/agent`)**：針對複雜任務提供多步驟、目標導向的代理執行能力，內建安全防護機制，並在遇到危險操作時自動退回手動確認模式。
 - **LoopStudio（循環工程）**：可視化的多代理協同工作台——主控代理拆解任務並分派子代理平行執行，搭配安全閘門與即時執行追蹤，自主循環直到目標驗證完成，不需要一問一答反覆確認。
