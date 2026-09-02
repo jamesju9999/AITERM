@@ -91,7 +91,7 @@ async fn run_chat_loop(
         "bash",
         std::path::PathBuf::from("/"),
     );
-    let prompt = build_chat_prompt(&snapshot, locale);
+    let prompt = build_chat_prompt(&snapshot, locale, false);
     let req = GenerateRequest {
         system_prompt: prompt,
         messages,

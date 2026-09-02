@@ -15,7 +15,7 @@ fn remote_ctx_fields_land_in_chat_prompt() {
         None,
         Some("user@host:~/proj$ ls\nCargo.toml  src/".into()),
     );
-    let prompt = build_chat_prompt(&snap, Locale::En);
+    let prompt = build_chat_prompt(&snap, Locale::En, false);
     assert!(prompt.contains("OS: linux"), "{prompt}");
     assert!(prompt.contains("~/proj$ ls"), "recent_output must reach the prompt: {prompt}");
     assert!(prompt.contains("Cwd: ."), "missing cwd degrades to \".\": {prompt}");
@@ -26,7 +26,7 @@ fn remote_ctx_fields_land_in_chat_prompt() {
 fn known_fields_land_in_chat_prompt() {
     let snap = snapshot_from_remote_ctx("windows", Some("pwsh"), Some("C:\\src"), None);
     assert_eq!(snap.cwd, PathBuf::from("C:\\src"));
-    let prompt = build_chat_prompt(&snap, Locale::ZhTw);
+    let prompt = build_chat_prompt(&snap, Locale::ZhTw, false);
     assert!(prompt.contains("Shell: pwsh"));
     assert!(prompt.contains("C:\\src"));
 }
