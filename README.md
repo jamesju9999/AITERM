@@ -2,6 +2,10 @@
 
 # AITerm
 
+[![Latest Release](https://img.shields.io/github/v/release/jamesju9999/AITERM)](https://github.com/jamesju9999/AITERM/releases/latest)
+[![License](https://img.shields.io/badge/license-Apache_2.0-blue)](LICENSE)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy_Me_a_Coffee-support-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/jameschu)
+
 **[🌐 Official Website](https://aiterm.win/)** | [English](#english) | [繁體中文](#繁體中文) | ☕ [Buy Me a Coffee](https://buymeacoffee.com/jameschu)
 
 ---
