@@ -20,11 +20,13 @@ A powerful, cross-platform AI-enhanced terminal built with **Tauri 2**, **React 
 - **LoopStudio (Loop Engineering)**: A visual multi-agent orchestration workbench — an orchestrator breaks a goal down and dispatches sub-agents to work in parallel, with safety gates and a live execution trace, running autonomously until the goal is verified done instead of requiring back-and-forth confirmation.
 - **Code Assistant**: A dedicated tab where the AI answers questions about any project directory — it scans the file tree, searches and reads source files on its own, can render Mermaid diagrams, and lets you export the conversation to Markdown.
 - **Multi-turn Chat Sidebar**: Persistent, context-aware AI chat directly beside your terminal for troubleshooting, code generation, and brainstorming.
+- **AI Document & Chart Panel**: Reports, comparison tables, and charts the AI produces open in a formatted panel beside the conversation instead of raw markup — bar/line/pie charts render directly, switch to a table view for exact numbers, and export to an HTML file in one click. Available across the terminal and remote AI panels, Code Assistant, Knowledge Base, and database / cross-database Q&A.
 - **Knowledge Base**: Create a notebook pointed at a folder and AITerm chunks, embeds, and indexes every document inside it, so you can ask natural-language questions with answers that cite the source documents. Works with Ollama or any OpenAI-compatible embedding provider.
 - **Multi-Database Connections**: Native support for PostgreSQL, MySQL, SQLite, and ODBC. DB2 works on both macOS and Windows via a built-in Java JDBC sidecar — no driver installation required.
 - **File Explorer**: A built-in sidebar file browser kept in two-way sync with the terminal's working directory — navigate in the terminal and the explorer follows, or click the "cd" button (or the folder picker built into the command input) to jump the terminal to any folder instantly.
 - **Command Search & Bookmarks**: `Ctrl+F` searches across the entire block history with live scroll-to-match; `Ctrl+Shift+R` opens a bookmarks picker to save and re-fill frequently used commands.
 - **Multilingual UI**: Full support for English and Traditional Chinese, switchable at runtime with no restart required.
+- **Remote Terminal AI Panel**: When connected to a colleague's shared terminal, Ask AI is the same full chat panel as local — free-form Q&A, provider switching, and browsing or continuing past conversations, all through your own configured provider so the other machine needs no AI setup; `/agent` works in a remote tab too.
 - **Telegram Remote Control**: Send commands to your terminal from your phone via a Telegram bot, with results streamed back to the same chat.
 - **Requirement Management System**: AI-assisted discussion for feature planning, automatically generating and saving specifications (SDD) into structured, project-managed directories.
 - **Robust Terminal Engine**: Powered by `xterm.js` and `portable-pty` for a fast, native-feeling shell experience across Windows, macOS, and Linux.
@@ -89,11 +91,13 @@ docs/            # Specs and implementation plans
 - **LoopStudio（循環工程）**：可視化的多代理協同工作台——主控代理拆解任務並分派子代理平行執行，搭配安全閘門與即時執行追蹤，自主循環直到目標驗證完成，不需要一問一答反覆確認。
 - **程式庫協助**：獨立分頁，讓 AI 針對任意專案目錄回答問題——自動掃描檔案樹、搜尋並讀取原始碼，可繪製 Mermaid 圖表，對話還能匯出成 Markdown。
 - **多輪對話側邊欄**：終端機旁內建具備上下文記憶的 AI 對話視窗，方便進行問題排解、程式碼生成與靈感發想。
+- **AI 文件與圖表面板**：AI 產生的報告、比較表格與圖表會在對話右側開一個排版好的面板，而不是塞成原始碼——長條圖、折線圖、圓餅圖直接畫出來，可切換成表格檢視看確切數字，也能一鍵存成 HTML 檔；終端機與遠端 AI 面板、程式庫協助、知識庫、資料庫與跨資料庫問答皆適用。
 - **知識庫**：建立筆記本並指定一個資料夾，AITerm 會自動切割、嵌入（Embedding）並索引其中的所有文件，之後即可用自然語言提問，回答附上原始文件引用來源；支援 Ollama 與任何 OpenAI 相容的 Embedding 供應商。
 - **多資料庫連線**：原生支援 PostgreSQL、MySQL、SQLite、ODBC。DB2 透過內建 Java JDBC Sidecar 在 macOS 與 Windows 均可使用，無需安裝驅動程式。
 - **檔案總管**：內建側邊欄檔案瀏覽器，與終端機工作目錄雙向同步——終端機切換路徑會即時反映在檔案總管，點擊「cd」按鈕或輸入框內建的資料夾選單也能立即把終端機切換到該目錄。
 - **指令搜尋與書籤**：`Ctrl+F` 可跨所有區塊歷史搜尋指令並即時捲動至符合項目；`Ctrl+Shift+R` 開啟書籤選單，收藏常用指令並一鍵帶入輸入框。
 - **多語言介面**：完整支援英文與繁體中文，可於執行時即時切換，不需重啟。
+- **遠端終端機 AI 面板**：連進同事分享的終端機後，Ask AI 是跟本機一樣的完整對話面板——自由問答、切換 AI 供應商、瀏覽並接續歷史對話，全部走觀看端自己設定的供應商，對方那台不需要有 AI；遠端分頁也能用 `/agent`。
 - **Telegram 遠端控制**：透過 Telegram Bot 從手機傳送指令至終端機，執行結果即時回傳至同一對話。
 - **需求管理系統**：提供 AI 輔助的系統功能討論，可自動生成規格文件 (SDD) 並將其儲存到專案管理的結構化目錄中。
 - **強大的終端機引擎**：基於 `xterm.js` 與 `portable-pty`，在 Windows、macOS 與 Linux 上提供快速、原生的 Shell 體驗。
