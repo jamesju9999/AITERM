@@ -448,7 +448,7 @@ function KnowledgeBaseViewInner({ isActive }: Props) {
             isStreaming={isStreaming}
             collapsed={historyCollapsed}
             onNew={() => { if (!isStreaming) { clear(); clearArtifact(); } }}
-            onSelect={loadSession}
+            onSelect={(id) => { if (!isStreaming) { clearArtifact(); loadSession(id); } }}
             onDelete={deleteSession}
             onToggleCollapse={() => setHistoryCollapsed((c) => !c)}
           />

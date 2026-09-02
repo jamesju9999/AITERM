@@ -9,9 +9,18 @@ const sync = vi.fn();
 const pythonEnvEnsure = vi.fn();
 const pythonEnvStatusMock = vi.fn();
 let chatMessages: unknown[] = [];
-// 真的 clear 會把訊息清空——mock 也照做，否則清掉 artifact 後那則含 fence 的
-// 訊息會重新掛載、又把面板叫回來。
+let chatSessions: unknown[] = [];
+let nextLoadedMessages: unknown[] = [];
+// 真的 clear / loadSession 會換掉訊息——mock 也照做，否則清掉 artifact 後那則
+// 含 fence 的訊息會重新掛載、又把面板叫回來。
 const clearChat = vi.fn(() => { chatMessages = []; });
+const loadSessionMock = vi.fn(async () => { chatMessages = nextLoadedMessages; });
+
+const ARTIFACT_MSG = {
+  role: "assistant",
+  content:
+    "報告如下：\n\n```artifact-html\n<!DOCTYPE html><html><head><title>Doc</title></head><body>x</body></html>\n```",
+};
 
 const testNotebook: Notebook = {
   id: "nb1",
@@ -46,11 +55,11 @@ vi.mock("../../hooks/useKnowledgeBaseChat", () => ({
     isFallbackMode: false,
     tokenCount: 0,
     tokenLimit: 8000,
-    sessions: [],
+    sessions: chatSessions,
     activeChatSessionId: null,
     send: vi.fn(),
     clear: clearChat,
-    loadSession: vi.fn(),
+    loadSession: loadSessionMock,
     deleteSession: vi.fn(),
   }),
 }));
@@ -87,6 +96,8 @@ describe("KnowledgeBaseView python env gate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     chatMessages = [];
+    chatSessions = [];
+    nextLoadedMessages = [];
     pythonEnvEnsure.mockResolvedValue(undefined);
     pythonEnvStatusMock.mockResolvedValue({
       uvAvailable: true,
@@ -133,6 +144,8 @@ describe("KnowledgeBaseView pick-interpreter escape hatch", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     chatMessages = [];
+    chatSessions = [];
+    nextLoadedMessages = [];
     pythonEnvEnsure.mockRejectedValue("無法取得 Python：network unreachable");
     pythonEnvStatusMock.mockResolvedValue({
       uvAvailable: true,
@@ -170,6 +183,8 @@ describe("KnowledgeBaseView artifact wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     chatMessages = [];
+    chatSessions = [];
+    nextLoadedMessages = [];
     pythonEnvEnsure.mockResolvedValue(undefined);
     pythonEnvStatusMock.mockResolvedValue({
       uvAvailable: true,
@@ -191,11 +206,7 @@ describe("KnowledgeBaseView artifact wiring", () => {
   });
 
   it("closes the open document panel when a new conversation is started", async () => {
-    chatMessages = [{
-      role: "assistant",
-      content:
-        "報告如下：\n\n```artifact-html\n<!DOCTYPE html><html><head><title>Doc</title></head><body>x</body></html>\n```",
-    }];
+    chatMessages = [ARTIFACT_MSG];
     let container: HTMLElement;
     await act(async () => {
       ({ container } = renderView());
@@ -207,6 +218,28 @@ describe("KnowledgeBaseView artifact wiring", () => {
     });
 
     expect(clearChat).toHaveBeenCalled();
+    expect(container!.querySelector(".aiterm-artifact-panel")).toBeNull();
+  });
+
+  it("closes the document panel when switching to an older conversation that has none", async () => {
+    chatMessages = [ARTIFACT_MSG];
+    chatSessions = [
+      { id: "s1", title: "有文件的對話", updated_at: "2026-09-02 00:00:00" },
+      { id: "s2", title: "純文字對話", updated_at: "2026-09-02 01:00:00" },
+    ];
+    nextLoadedMessages = [{ role: "assistant", content: "這裡只有純文字，沒有文件。" }];
+
+    let container: HTMLElement;
+    await act(async () => {
+      ({ container } = renderView());
+    });
+    expect(container!.querySelector(".aiterm-artifact-panel")).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /純文字對話/ }));
+    });
+
+    expect(loadSessionMock).toHaveBeenCalledWith("s2");
     expect(container!.querySelector(".aiterm-artifact-panel")).toBeNull();
   });
 });
