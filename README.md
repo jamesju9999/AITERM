@@ -13,7 +13,7 @@ A powerful, cross-platform AI-enhanced terminal built with **Tauri 2**, **React 
 
 ## ✨ Key Features
 
-- **Integrated AI Providers**: Out-of-the-box support for multiple LLM providers including OpenAI, Anthropic, Ollama (local inference), and OpenAI-compatible endpoints.
+- **Integrated AI Providers**: Out-of-the-box support for multiple LLM providers including OpenAI, Anthropic, Google, Ollama (local inference), and OpenAI-compatible endpoints. You can also sign in with a subscription account — Claude, ChatGPT, Gemini, or GitHub Copilot — with no API key to obtain.
 - **AI Command Flow (`/ai`)**: Type `/ai <query>` directly in the terminal to generate and preview commands with risk-level assessment before execution.
 - **Structured Command Blocks**: Every command and its output render as a distinct card instead of raw scrollback. The live terminal pane auto-expands only while a command is running and shrinks back down when idle, keeping the screen uncluttered.
 - **Autonomous Agent Loop (`/agent`)**: Multi-step, goal-driven agentic execution for complex tasks, with built-in guardrails and fallback to manual confirmation for dangerous operations.
@@ -29,6 +29,8 @@ A powerful, cross-platform AI-enhanced terminal built with **Tauri 2**, **React 
 - **Remote Terminal AI Panel**: When connected to a colleague's shared terminal, Ask AI is the same full chat panel as local — free-form Q&A, provider switching, and browsing or continuing past conversations, all through your own configured provider so the other machine needs no AI setup; `/agent` works in a remote tab too.
 - **Telegram Remote Control**: Send commands to your terminal from your phone via a Telegram bot, with results streamed back to the same chat.
 - **Requirement Management System**: AI-assisted discussion for feature planning, automatically generating and saving specifications (SDD) into structured, project-managed directories.
+- **MCP Tools**: Connect any MCP (Model Context Protocol) server and the AI can read and write files, query data, and call external services directly — no terminal command in between. Every tool call and its result stays visible and expandable.
+- **Claude Code Bridge**: Point the Claude Code CLI at any provider you have configured in AITerm — run Claude Code on your OpenAI, Gemini, or local models, and switch between them at any time.
 - **Robust Terminal Engine**: Powered by `xterm.js` and `portable-pty` for a fast, native-feeling shell experience across Windows, macOS, and Linux.
 
 ## 🏗️ Architecture
@@ -84,7 +86,7 @@ docs/            # Specs and implementation plans
 
 ## ✨ 核心功能
 
-- **多重 AI 供應商整合**：開箱即支援 OpenAI、Anthropic、Ollama（本地端推論）以及 OpenAI 相容端點等多種語言模型。
+- **多重 AI 供應商整合**：開箱即支援 OpenAI、Anthropic、Google、Ollama（本地端推論）以及 OpenAI 相容端點等多種語言模型。也可以直接用訂閱帳號登入——Claude、ChatGPT、Gemini、GitHub Copilot 皆可，不必另外申請 API Key。
 - **AI 指令工作流 (`/ai`)**：直接在終端機輸入 `/ai <查詢>` 即可生成指令，並在執行前提供風險等級評估與預覽。
 - **結構化指令區塊**：每個指令與其輸出都會渲染成獨立卡片，而非傳統終端機的原始捲動畫面；即時終端機視窗只在指令執行中才自動展開，閒置時自動收合，畫面保持乾淨。
 - **自主代理循環 (`/agent`)**：針對複雜任務提供多步驟、目標導向的代理執行能力，內建安全防護機制，並在遇到危險操作時自動退回手動確認模式。
@@ -100,6 +102,8 @@ docs/            # Specs and implementation plans
 - **遠端終端機 AI 面板**：連進同事分享的終端機後，Ask AI 是跟本機一樣的完整對話面板——自由問答、切換 AI 供應商、瀏覽並接續歷史對話，全部走觀看端自己設定的供應商，對方那台不需要有 AI；遠端分頁也能用 `/agent`。
 - **Telegram 遠端控制**：透過 Telegram Bot 從手機傳送指令至終端機，執行結果即時回傳至同一對話。
 - **需求管理系統**：提供 AI 輔助的系統功能討論，可自動生成規格文件 (SDD) 並將其儲存到專案管理的結構化目錄中。
+- **MCP 工具**：接上任何 MCP（Model Context Protocol）伺服器，AI 就能直接讀寫檔案、查詢資料、呼叫外部服務，不必經過終端機指令；工具的每一次呼叫與回傳都看得到、展得開。
+- **Claude Code 橋接**：把 Claude Code CLI 接到 AITerm 已設定的任何供應商——用你手邊的 OpenAI、Gemini 或本地模型跑 Claude Code，模型可隨時切換。
 - **強大的終端機引擎**：基於 `xterm.js` 與 `portable-pty`，在 Windows、macOS 與 Linux 上提供快速、原生的 Shell 體驗。
 
 ## 🏗️ 系統架構
