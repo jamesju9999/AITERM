@@ -129,6 +129,21 @@ Write your ENTIRE reply in {language}: every sentence, every citation label, and
     )
 }
 
+/// 兩段式模式（provider 不支援原生工具調用時走 `run_fallback`）答題階段的 prompt。
+/// 必須跟 `build_system_prompt` 一樣帶上 artifact 協定——否則這條路徑的模型永遠
+/// 不知道有 artifact-html / artifact-chart 可用。說明擺在文件片段「之前」，免得被
+/// 一大段引文推到模型的注意力之外。
+fn build_fallback_prompt(language: &str, search_result: &str) -> String {
+    let artifact_section = crate::ai::artifact_prompt::artifact_protocol_section();
+    format!(
+        "You are a research assistant. Answer the user's question using ONLY the document \
+         excerpts below. Always cite the source file and location for each claim. If the \
+         excerpts don't answer the question, say so explicitly. Respond in {language}.\n\
+         {artifact_section}\n\n\
+         ## Document excerpts\n{search_result}"
+    )
+}
+
 fn estimate_tokens(s: &str) -> usize {
     s.len() / 4
 }
@@ -566,12 +581,7 @@ async fn run_fallback(
     ).await;
 
     let language = crate::ai::language_name(locale);
-    let phase_prompt = format!(
-        "You are a research assistant. Answer the user's question using ONLY the document \
-         excerpts below. Always cite the source file and location for each claim. If the \
-         excerpts don't answer the question, say so explicitly. Respond in {language}.\n\n\
-         ## Document excerpts\n{search_result}"
-    );
+    let phase_prompt = build_fallback_prompt(language, &search_result);
 
     let req = GenerateRequest {
         system_prompt: phase_prompt,
@@ -768,7 +778,7 @@ mod tests {
 
 #[cfg(test)]
 mod artifact_prompt_tests {
-    use super::build_system_prompt;
+    use super::{build_fallback_prompt, build_system_prompt};
     use crate::ai::Locale;
 
     #[test]
@@ -776,5 +786,19 @@ mod artifact_prompt_tests {
         let p = build_system_prompt("My Notebook", Locale::ZhTw);
         assert!(p.contains("artifact-html"));
         assert!(p.contains("artifact-chart"));
+    }
+
+    /// 兩段式模式（provider 不支援工具調用）的答題 prompt 也必須帶 artifact 協定，
+    /// 否則走這條路徑的雲端模型永遠不會產生 artifact-html。
+    #[test]
+    fn fallback_prompt_also_teaches_the_artifact_protocol() {
+        let p = build_fallback_prompt(
+            crate::ai::language_name(Locale::ZhTw),
+            "(some excerpts)",
+        );
+        assert!(p.contains("artifact-html"));
+        assert!(p.contains("artifact-chart"));
+        // 說明要在文件片段之前，不能被引文淹掉。
+        assert!(p.find("artifact-html").unwrap() < p.find("## Document excerpts").unwrap());
     }
 }
