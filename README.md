@@ -2,7 +2,7 @@
 
 # AITerm
 
-**[🌐 Official Website](https://aiterm.win/)** | [English](#english) | [繁體中文](#繁體中文)
+**[🌐 Official Website](https://aiterm.win/)** | [English](#english) | [繁體中文](#繁體中文) | ☕ [Buy Me a Coffee](https://buymeacoffee.com/jameschu)
 
 ---
 
