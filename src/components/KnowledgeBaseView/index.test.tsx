@@ -8,6 +8,10 @@ import type { Notebook } from "../../ipc/knowledgeBase";
 const sync = vi.fn();
 const pythonEnvEnsure = vi.fn();
 const pythonEnvStatusMock = vi.fn();
+let chatMessages: unknown[] = [];
+// 真的 clear 會把訊息清空——mock 也照做，否則清掉 artifact 後那則含 fence 的
+// 訊息會重新掛載、又把面板叫回來。
+const clearChat = vi.fn(() => { chatMessages = []; });
 
 const testNotebook: Notebook = {
   id: "nb1",
@@ -36,7 +40,7 @@ vi.mock("../../hooks/useNotebooks", () => ({
 
 vi.mock("../../hooks/useKnowledgeBaseChat", () => ({
   useKnowledgeBaseChat: () => ({
-    messages: [],
+    messages: chatMessages,
     isStreaming: false,
     error: null,
     isFallbackMode: false,
@@ -45,7 +49,7 @@ vi.mock("../../hooks/useKnowledgeBaseChat", () => ({
     sessions: [],
     activeChatSessionId: null,
     send: vi.fn(),
-    clear: vi.fn(),
+    clear: clearChat,
     loadSession: vi.fn(),
     deleteSession: vi.fn(),
   }),
@@ -82,6 +86,7 @@ function renderView() {
 describe("KnowledgeBaseView python env gate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    chatMessages = [];
     pythonEnvEnsure.mockResolvedValue(undefined);
     pythonEnvStatusMock.mockResolvedValue({
       uvAvailable: true,
@@ -127,6 +132,7 @@ describe("KnowledgeBaseView python env gate", () => {
 describe("KnowledgeBaseView pick-interpreter escape hatch", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    chatMessages = [];
     pythonEnvEnsure.mockRejectedValue("無法取得 Python：network unreachable");
     pythonEnvStatusMock.mockResolvedValue({
       uvAvailable: true,
@@ -163,6 +169,7 @@ describe("KnowledgeBaseView pick-interpreter escape hatch", () => {
 describe("KnowledgeBaseView artifact wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    chatMessages = [];
     pythonEnvEnsure.mockResolvedValue(undefined);
     pythonEnvStatusMock.mockResolvedValue({
       uvAvailable: true,
@@ -180,6 +187,26 @@ describe("KnowledgeBaseView artifact wiring", () => {
     });
     // 沒有 artifact 時分割是「不啟用」狀態，但容器必須在——這就是接線本身。
     expect(container!.querySelector(".aiterm-artifact-split")).not.toBeNull();
+    expect(container!.querySelector(".aiterm-artifact-panel")).toBeNull();
+  });
+
+  it("closes the open document panel when a new conversation is started", async () => {
+    chatMessages = [{
+      role: "assistant",
+      content:
+        "報告如下：\n\n```artifact-html\n<!DOCTYPE html><html><head><title>Doc</title></head><body>x</body></html>\n```",
+    }];
+    let container: HTMLElement;
+    await act(async () => {
+      ({ container } = renderView());
+    });
+    expect(container!.querySelector(".aiterm-artifact-panel")).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /新對話/ }));
+    });
+
+    expect(clearChat).toHaveBeenCalled();
     expect(container!.querySelector(".aiterm-artifact-panel")).toBeNull();
   });
 });
