@@ -85,7 +85,7 @@ async fn wait_done(db: &TasksDb, id: &str) -> TaskRow {
 async fn queued_card_dispatched_and_completed_via_marker() {
     let db = mem_db().await;
     let pty = Arc::new(PtyManager::new());
-    let id = store::create_task(&db.pool, "print marker", "", "/", true).await.unwrap();
+    let id = store::create_task(&db.pool, "print marker", "", "/", true, false).await.unwrap();
     store::move_task(&db.pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
 
     let dispatcher = RealPtyDispatcher {
@@ -103,7 +103,7 @@ async fn queued_card_dispatched_and_completed_via_marker() {
 async fn card_that_exits_nonzero_is_marked_failed() {
     let db = mem_db().await;
     let pty = Arc::new(PtyManager::new());
-    let id = store::create_task(&db.pool, "boom", "", "/", true).await.unwrap();
+    let id = store::create_task(&db.pool, "boom", "", "/", true, false).await.unwrap();
     store::move_task(&db.pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
 
     let dispatcher = RealPtyDispatcher { pty, script: "sh -c 'exit 2'".to_string() };
@@ -117,7 +117,7 @@ async fn card_that_exits_nonzero_is_marked_failed() {
 #[tokio::test]
 async fn tasks_save_transcript_overwrites_the_existing_file() {
     let db = mem_db().await;
-    let id = store::create_task(&db.pool, "t", "", "/r", true).await.unwrap();
+    let id = store::create_task(&db.pool, "t", "", "/r", true, false).await.unwrap();
     store::move_task(&db.pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
     store::mark_dispatched(&db.pool, &id, "tab-x").await.unwrap();
 

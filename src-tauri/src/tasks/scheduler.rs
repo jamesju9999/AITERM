@@ -244,6 +244,7 @@ mod tests {
             project_dir: "/r".into(),
             status: "queued".into(),
             parallel_ok,
+            interactive: false,
             sort_order,
             outcome: None,
             tab_id: None,
@@ -330,7 +331,7 @@ mod loop_tests {
     async fn drain_once_promotes_the_whole_queue_when_the_fake_dispatcher_finishes_instantly() {
         let db = mem_db().await;
         for (t, par, ord) in [("a", true, 1.0), ("b", true, 2.0), ("solo", false, 3.0), ("c", true, 4.0)] {
-            let id = store::create_task(&db.pool, t, "", "/r", par).await.unwrap();
+            let id = store::create_task(&db.pool, t, "", "/r", par, false).await.unwrap();
             store::move_task(&db.pool, &id, store::STATUS_QUEUED, ord).await.unwrap();
         }
         drain_once(&db, &FakeDispatcher, 2).await;
@@ -352,7 +353,7 @@ mod loop_tests {
             }
         }
         for (t, par, ord) in [("p1", true, 1.0), ("solo", false, 2.0), ("p2", true, 3.0)] {
-            let id = store::create_task(&db.pool, t, "", "/r", par).await.unwrap();
+            let id = store::create_task(&db.pool, t, "", "/r", par, false).await.unwrap();
             store::move_task(&db.pool, &id, store::STATUS_QUEUED, ord).await.unwrap();
         }
         drain_once(&db, &StuckDispatcher, 5).await;

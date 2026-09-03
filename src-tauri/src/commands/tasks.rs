@@ -61,6 +61,7 @@ pub async fn tasks_create(
         &args.body,
         &args.project_dir,
         args.parallel_ok,
+        false,
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -339,7 +340,7 @@ mod save_transcript_tests {
     #[tokio::test]
     async fn overwrites_the_file_at_transcript_path() {
         let pool = mem_pool().await;
-        let id = store::create_task(&pool, "t", "", "/r", true).await.unwrap();
+        let id = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
         store::move_task(&pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
         store::mark_dispatched(&pool, &id, "tab-x").await.unwrap();
 
@@ -362,7 +363,7 @@ mod save_transcript_tests {
     #[tokio::test]
     async fn errors_instead_of_panicking_when_transcript_path_is_unset() {
         let pool = mem_pool().await;
-        let id = store::create_task(&pool, "t", "", "/r", true).await.unwrap();
+        let id = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
         // Never moved past planning — transcript_path is None.
         let row = store::get_task(&pool, &id).await.unwrap().unwrap();
         assert!(row.transcript_path.is_none());
