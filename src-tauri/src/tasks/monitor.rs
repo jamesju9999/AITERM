@@ -5,6 +5,7 @@
 //!   3. OSC133 non-zero exit code          → Failed("claude 以 exit code N 結束")
 //!   4. OSC133 exit code 0                 → Success (claude exited cleanly)
 //!   5. no output for `quiet_stuck_ms`     → Failed("疑似卡住（120 秒無輸出）")
+//!
 //! Reuses `PtyManager`'s existing per-session counters — no new protocol.
 
 use std::time::Duration;
@@ -71,6 +72,7 @@ pub async fn watch(
     thresholds: Thresholds,
 ) -> TaskOutcome {
     let start = tokio::time::Instant::now();
+    let exit_baseline = pty.last_exit_code(tab_id);
     loop {
         // 1. cancel
         match cancel.try_recv() {
@@ -90,12 +92,17 @@ pub async fn watch(
             return TaskOutcome::Success;
         }
 
-        // 3/4. process exited
-        if let Some(code) = pty.last_exit_code(tab_id) {
-            if code != 0 {
-                return TaskOutcome::Failed(format!("claude 以 exit code {code} 結束"));
+        // 3/4. process exited *since we started watching* (a pre-existing exit
+        // code — e.g. Windows' injected prompt emits OSC133 D;0 on the very
+        // first draw — must not count as this task finishing).
+        let current_exit = pty.last_exit_code(tab_id);
+        if current_exit != exit_baseline {
+            if let Some(code) = current_exit {
+                if code != 0 {
+                    return TaskOutcome::Failed(format!("claude 以 exit code {code} 結束"));
+                }
+                return TaskOutcome::Success;
             }
-            return TaskOutcome::Success;
         }
 
         // 5. stuck
@@ -172,6 +179,33 @@ mod tests {
         match outcome {
             TaskOutcome::Failed(msg) => assert!(msg.contains("卡住"), "{msg}"),
             other => panic!("expected Failed(stuck), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn a_stale_exit_code_from_before_watch_does_not_count_as_completion() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(size(), |_| {}).unwrap();
+        // Make the session carry Some(0) BEFORE watch starts. Generous
+        // deadline: this only bounds shell cold-start + rc sourcing, which is
+        // slow when the whole `tasks::` suite spawns real shells in parallel
+        // (a 5s bound flaked ~1-in-5 under load). A regression in Fix 2 fails
+        // fast at the `panic!` below regardless of this value.
+        pty.write(&tab, b"true\n").unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            if pty.last_exit_code(&tab) == Some(0) { break; }
+            assert!(tokio::time::Instant::now() < deadline, "shell never emitted D;0");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let (_tx, rx) = tokio::sync::oneshot::channel();
+        // No new signal after this point → must fall through to stuck, NOT Success.
+        let thresholds = Thresholds { quiet_stuck_ms: 300, poll_ms: 50, min_run_ms: 200 };
+        let outcome = watch(&pty, &tab, rx, Baselines::default(), thresholds).await;
+        match outcome {
+            TaskOutcome::Failed(msg) => assert!(msg.contains("卡住"), "{msg}"),
+            other => panic!("stale Some(0) must not yield {other:?}"),
         }
     }
 
