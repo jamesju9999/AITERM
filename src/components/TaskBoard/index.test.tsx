@@ -3,6 +3,8 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn().mockResolvedValue("/repo") }));
+
 vi.mock("../../ipc/tasks", () => ({
   listTasks: vi.fn(),
   onTasksUpdated: vi.fn().mockResolvedValue(() => {}),
@@ -109,5 +111,37 @@ describe("TaskBoardView", () => {
     await screen.findByText("Redo me");
     await user.click(screen.getByRole("button", { name: /重新派工|Re-dispatch/ }));
     expect(cloneTask).toHaveBeenCalledWith("d");
+  });
+
+  it("new-card dialog creates a task with the typed fields", async () => {
+    const { createTask } = await import("../../ipc/tasks");
+    vi.mocked(createTask).mockResolvedValue("id-new");
+    view();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /新增工作|New task/ }));
+    await user.type(screen.getByLabelText(/標題|Title/), "Ship it");
+    await user.type(screen.getByLabelText(/工作內容|Task detail/), "do the thing");
+    await user.type(screen.getByLabelText(/專案資料夾|Project folder/), "/repo");
+    await user.click(screen.getByRole("button", { name: /^儲存$|^Save$/ }));
+    await waitFor(() =>
+      expect(createTask).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Ship it", body: "do the thing", project_dir: "/repo", parallel_ok: true }),
+      ),
+    );
+  });
+
+  it("editing an existing planning card calls updateTask", async () => {
+    const { updateTask } = await import("../../ipc/tasks");
+    vi.mocked(listTasks).mockResolvedValue([card({ id: "p", title: "Old", status: "planning", project_dir: "/r" })]);
+    view();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /編輯工作|Edit task/ }));
+    const title = screen.getByLabelText(/標題|Title/);
+    await user.clear(title);
+    await user.type(title, "New title");
+    await user.click(screen.getByRole("button", { name: /^儲存$|^Save$/ }));
+    await waitFor(() =>
+      expect(updateTask).toHaveBeenCalledWith(expect.objectContaining({ id: "p", title: "New title" })),
+    );
   });
 });
