@@ -1,27 +1,24 @@
-import type { DragEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 
 export function TaskColumn({
   status,
   title,
   count,
-  onDropCard,
+  highlighted = false,
   children,
 }: {
   status: string;
   title: string;
   count: number;
-  onDropCard: () => void;
+  /** True while a card is being dragged over this column (see index.tsx's
+   * mouse-event-based drag — there is no native dragover to key off). */
+  highlighted?: boolean;
   children: ReactNode;
 }) {
   return (
     <div
-      className="task-column"
+      className={`task-column${highlighted ? " task-column--drop-target" : ""}`}
       data-testid={`column-${status}`}
-      onDragOver={(e: DragEvent) => e.preventDefault()}
-      onDrop={(e: DragEvent) => {
-        e.preventDefault();
-        onDropCard();
-      }}
     >
       <div className="task-column-head">
         <span className="task-column-title">{title}</span>

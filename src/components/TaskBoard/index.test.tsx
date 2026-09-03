@@ -72,16 +72,37 @@ describe("TaskBoardView", () => {
     expect(await screen.findByText("Appeared")).toBeInTheDocument();
   });
 
+  // Regression test for a real bug: Tauri's window-level `dragDropEnabled`
+  // (default true, not overridden in tauri.conf.json — see DocConverterView's
+  // reliance on the native `tauri://drag-drop` event, and TabBar's own
+  // deliberate avoidance of HTML5 DnD for its tab-reorder drag) intercepts
+  // any native OS drag session before the DOM's dragstart/dragover/drop ever
+  // fire. A `fireEvent.dragStart`/`fireEvent.drop` test — which never invokes
+  // a real OS drag session — could pass forever while the feature is
+  // completely broken in the real app. This test drives the same mouse-event
+  // mechanism (mousedown → mousemove past a threshold → mouseup) that
+  // TabBar's proven-working tab reorder uses, with `document.elementFromPoint`
+  // stubbed (jsdom doesn't implement layout/hit-testing) to report the queued
+  // column under the release point.
   it("dropping a planning card on the queued column calls moveTask", async () => {
     vi.mocked(listTasks).mockResolvedValue([card({ id: "p", title: "Draggable", status: "planning" })]);
     view();
     const cardEl = await screen.findByText("Draggable");
     const queuedCol = screen.getByTestId("column-queued");
-    const draggable = cardEl.closest("[draggable]") as HTMLElement;
-    const { fireEvent } = await import("@testing-library/react");
-    fireEvent.dragStart(draggable);
-    fireEvent.drop(queuedCol);
-    await waitFor(() => expect(moveTask).toHaveBeenCalledWith("p", "queued", expect.any(Number)));
+    const dragWrap = cardEl.closest("[data-task-drag-id]") as HTMLElement;
+    expect(dragWrap).toBeTruthy();
+
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn().mockReturnValue(queuedCol);
+    try {
+      const { fireEvent } = await import("@testing-library/react");
+      fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
+      fireEvent.mouseMove(window, { clientX: 100, clientY: 120 }); // past the drag threshold
+      fireEvent.mouseUp(window, { clientX: 100, clientY: 120 });
+      await waitFor(() => expect(moveTask).toHaveBeenCalledWith("p", "queued", expect.any(Number)));
+    } finally {
+      document.elementFromPoint = originalElementFromPoint;
+    }
   });
 
   it("running card shows Stop, and Stop calls stopTask", async () => {

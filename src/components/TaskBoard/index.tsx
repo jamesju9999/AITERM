@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import {
@@ -16,13 +16,28 @@ import "./index.css";
 
 const COLUMNS: TaskStatus[] = ["planning", "queued", "running", "done"];
 
+/** Below this many pixels of movement, a mousedown+mouseup is a click, not a
+ * drag — same threshold TabBar's own (proven-working) drag uses. */
+const DRAG_THRESHOLD_PX = 4;
+
+interface DragState {
+  id: string;
+  startX: number;
+  startY: number;
+  started: boolean;
+}
+
 export function TaskBoardView() {
   const { t } = useLocale();
   const [tasks, setTasks] = useState<TaskWithAttachments[]>([]);
   const [editing, setEditing] = useState<TaskWithAttachments | "new" | null>(null);
   const [transcriptFor, setTranscriptFor] = useState<string | null>(null);
   const mounted = useRef(true);
-  const draggingId = useRef<string | null>(null);
+  const dragRef = useRef<DragState | null>(null);
+  /** Which column's `data-testid` the cursor is currently over while
+   * dragging, for the drop-target highlight. Not the drop decision itself
+   * (that's read fresh from `elementFromPoint` on mouseup). */
+  const [dragOverStatus, setDragOverStatus] = useState<TaskStatus | null>(null);
 
   const refresh = useCallback(async () => {
     const rows = await listTasks();
@@ -51,10 +66,7 @@ export function TaskBoardView() {
     tasks.filter((x) => x.status === s).sort((a, b) => a.sort_order - b.sort_order);
 
   const handleDrop = useCallback(
-    async (to: TaskStatus) => {
-      const id = draggingId.current;
-      draggingId.current = null;
-      if (!id) return;
+    async (id: string, to: TaskStatus) => {
       const cardRow = tasks.find((x) => x.id === id);
       if (!cardRow || cardRow.status === to) return;
       const legal =
@@ -73,6 +85,55 @@ export function TaskBoardView() {
     [tasks],
   );
 
+  // Card drag-to-move: deliberately NOT native HTML5 drag-and-drop
+  // (draggable/dragstart/dragover/drop). Tauri's window-level
+  // `dragDropEnabled` (default true, not overridden in tauri.conf.json)
+  // intercepts any native OS drag session before those DOM events ever
+  // fire — the same reason TabBar's own tab-reorder drag uses plain mouse
+  // events instead. Mirrors that exact mechanism: mousedown arms a pending
+  // drag, mousemove past a small threshold "starts" it and tracks which
+  // column is under the cursor via `elementFromPoint` (there is no native
+  // dragover to listen to), mouseup reads the column under the release
+  // point and commits the move.
+  const statusUnderPoint = useCallback((x: number, y: number): TaskStatus | null => {
+    const el = document.elementFromPoint(x, y);
+    const testId = el?.closest("[data-testid^='column-']")?.getAttribute("data-testid");
+    const status = testId?.replace("column-", "");
+    return status && (COLUMNS as string[]).includes(status) ? (status as TaskStatus) : null;
+  }, []);
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const st = dragRef.current;
+      if (!st) return;
+      if (!st.started) {
+        if (Math.hypot(e.clientX - st.startX, e.clientY - st.startY) < DRAG_THRESHOLD_PX) return;
+        st.started = true;
+      }
+      setDragOverStatus(statusUnderPoint(e.clientX, e.clientY));
+    };
+    const onUp = (e: MouseEvent) => {
+      const st = dragRef.current;
+      dragRef.current = null;
+      setDragOverStatus(null);
+      if (!st?.started) return;
+      const to = statusUnderPoint(e.clientX, e.clientY);
+      if (to) void handleDrop(st.id, to);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [handleDrop, statusUnderPoint]);
+
+  const handleCardMouseDown = (e: ReactMouseEvent<HTMLDivElement>, cardRow: TaskWithAttachments) => {
+    if (e.button !== 0) return;
+    if (cardRow.status !== "planning" && cardRow.status !== "queued") return;
+    dragRef.current = { id: cardRow.id, startX: e.clientX, startY: e.clientY, started: false };
+  };
+
   return (
     <div className="task-board">
       <div className="task-board-toolbar">
@@ -82,32 +143,25 @@ export function TaskBoardView() {
       </div>
       <div className="task-board-columns">
         {COLUMNS.map((s) => (
-          <TaskColumn
-            key={s}
-            status={s}
-            title={colTitle(s)}
-            count={byStatus(s).length}
-            onDropCard={() => void handleDrop(s)}
-          >
-            {byStatus(s).map((cardRow) => (
-              <div
-                key={cardRow.id}
-                draggable={cardRow.status === "planning" || cardRow.status === "queued"}
-                onDragStart={() => {
-                  draggingId.current = cardRow.id;
-                }}
-                onDragEnd={() => {
-                  draggingId.current = null;
-                }}
-              >
-                <TaskCard
-                  card={cardRow}
-                  onEdit={() => setEditing(cardRow)}
-                  onViewTranscript={() => setTranscriptFor(cardRow.id)}
-                  onChanged={() => void refresh()}
-                />
-              </div>
-            ))}
+          <TaskColumn key={s} status={s} title={colTitle(s)} count={byStatus(s).length} highlighted={dragOverStatus === s}>
+            {byStatus(s).map((cardRow) => {
+              const draggableCard = cardRow.status === "planning" || cardRow.status === "queued";
+              return (
+                <div
+                  key={cardRow.id}
+                  data-task-drag-id={cardRow.id}
+                  className={`task-card-drag-wrap${draggableCard ? " task-card-drag-wrap--draggable" : ""}`}
+                  onMouseDown={(e) => handleCardMouseDown(e, cardRow)}
+                >
+                  <TaskCard
+                    card={cardRow}
+                    onEdit={() => setEditing(cardRow)}
+                    onViewTranscript={() => setTranscriptFor(cardRow.id)}
+                    onChanged={() => void refresh()}
+                  />
+                </div>
+              );
+            })}
           </TaskColumn>
         ))}
       </div>
