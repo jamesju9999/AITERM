@@ -1,9 +1,10 @@
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
@@ -149,6 +150,20 @@ pub struct PtySession {
     /// monotonic-counter reasoning as `bell_count`. See
     /// `docs/superpowers/specs/2026-08-21-coordination-done-marker-design.md`.
     marker_count: Arc<AtomicU64>,
+    /// Last exit code observed in an OSC 133 `D;<code>` marker in this
+    /// session's output, or `None` if none seen yet. The reader thread
+    /// already extracts these codes for cd confirmation
+    /// (`confirm_pending_cds_from_output`); this stores the most recent one
+    /// so the task-board monitor can tell "the foreground command exited
+    /// non-zero" (e.g. `claude` not installed → shell prints 127) from a
+    /// still-running task. `i64` with `-1` sentinel for "unset" so it fits
+    /// one `AtomicI64` (same lock-free pattern as `bell_count`).
+    last_exit_code: Arc<AtomicI64>,
+    /// Wall-clock `Instant` of the last non-empty output chunk. Read as
+    /// `ms_since_output()`; used by the monitor's "no output for 120s ⇒
+    /// stuck" check. Spawn time counts as the first "output" so a session
+    /// that never prints anything still ages.
+    last_output_at: Arc<Mutex<Instant>>,
     /// Fan-out of raw output chunks to screen-share viewers. Independent of
     /// the `on_data` callback, which continues to serve the app's own
     /// terminal view. Subscribers appear only while a tab is being shared.
@@ -380,6 +395,10 @@ impl PtySession {
         let bell_count_for_thread = Arc::clone(&bell_count);
         let marker_count: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
         let marker_count_for_thread = Arc::clone(&marker_count);
+        let last_exit_code: Arc<AtomicI64> = Arc::new(AtomicI64::new(-1));
+        let last_exit_code_for_thread = Arc::clone(&last_exit_code);
+        let last_output_at: Arc<Mutex<Instant>> = Arc::new(Mutex::new(Instant::now()));
+        let last_output_at_for_thread = Arc::clone(&last_output_at);
         let marker_tail_for_thread: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let done_marker_bytes = done_marker(&id).into_bytes();
 
@@ -417,6 +436,10 @@ impl PtySession {
                                 if output_tx_for_thread.receiver_count() > 0 {
                                     let _ = output_tx_for_thread.send(chunk.clone());
                                 }
+                            }
+                            *last_output_at_for_thread.lock() = Instant::now();
+                            for code in cd_parser::find_exit_codes(&chunk) {
+                                last_exit_code_for_thread.store(code as i64, Ordering::SeqCst);
                             }
                             if matches!(shell_variant, ShellVariant::Bash | ShellVariant::Pwsh) {
                                 confirm_pending_cds_from_output(
@@ -480,6 +503,8 @@ impl PtySession {
             pending_cds,
             bell_count,
             marker_count,
+            last_exit_code,
+            last_output_at,
             output_tx,
             size: Mutex::new(size),
         })
@@ -717,6 +742,21 @@ impl PtySession {
     /// on `marker_count` for why this is a counter, not a boolean.
     pub fn marker_count(&self) -> u64 {
         self.marker_count.load(Ordering::SeqCst)
+    }
+
+    /// See the `last_exit_code` field. `None` until an OSC 133 `D;<code>`
+    /// marker has been seen in output.
+    pub fn last_exit_code(&self) -> Option<i32> {
+        match self.last_exit_code.load(Ordering::SeqCst) {
+            -1 => None,
+            n => Some(n as i32),
+        }
+    }
+
+    /// Milliseconds since the last non-empty output chunk (spawn time counts
+    /// as output zero). See the `last_output_at` field.
+    pub fn ms_since_output(&self) -> u64 {
+        self.last_output_at.lock().elapsed().as_millis() as u64
     }
 
     pub fn resize(&self, size: PtySize) -> PtyResult<()> {
@@ -1224,6 +1264,69 @@ mod tests {
         )
         .expect("spawn pty");
         assert_eq!(session.bell_count(), 0);
+    }
+
+    #[test]
+    fn last_exit_code_is_none_for_a_fresh_session() {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+        assert_eq!(session.last_exit_code(), None);
+    }
+
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn last_exit_code_captures_a_nonzero_osc133_exit() {
+        // Plain `test_shell()` (/bin/sh) never emits OSC 133 `D` markers — only
+        // the real injected shell integration does. Mirror
+        // `shells_own_osc133_prompt_markers_do_not_count_as_bells` and drive a
+        // bash/zsh (or PowerShell) through the production injection functions.
+        #[cfg(windows)]
+        let shell = super::super::shell::inject_powershell_integration("powershell.exe".into());
+        #[cfg(not(windows))]
+        let shell = {
+            let program = if std::path::Path::new("/bin/bash").exists() {
+                PathBuf::from("/bin/bash")
+            } else {
+                PathBuf::from("/bin/zsh")
+            };
+            super::super::shell::inject_shell_integration(program)
+        };
+
+        let session = PtySession::spawn(
+            shell,
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+        // AITerm's shell-integration hook emits OSC133 D;<code> after each command.
+        session.write(b"false\n").unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if session.last_exit_code() == Some(1) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "never saw exit code 1, got {:?}", session.last_exit_code());
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn ms_since_output_grows_while_the_session_is_quiet() {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert!(session.ms_since_output() >= 200, "expected quiet time to accumulate, got {}", session.ms_since_output());
     }
 
     #[tokio::test]

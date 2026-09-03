@@ -145,6 +145,19 @@ impl PtyManager {
         self.sessions.lock().get(id).map(|s| s.marker_count())
     }
 
+    /// Last OSC 133 exit code seen for the given session, or `None` if the
+    /// session doesn't exist or no marker has been seen yet. See
+    /// `PtySession::last_exit_code`.
+    pub fn last_exit_code(&self, id: &str) -> Option<i32> {
+        self.sessions.lock().get(id).and_then(|s| s.last_exit_code())
+    }
+
+    /// Milliseconds since the given session last produced output, or `None`
+    /// if the session doesn't exist. See `PtySession::ms_since_output`.
+    pub fn ms_since_output(&self, id: &str) -> Option<u64> {
+        self.sessions.lock().get(id).map(|s| s.ms_since_output())
+    }
+
     fn get(&self, id: &str) -> PtyResult<Arc<PtySession>> {
         self.sessions
             .lock()
