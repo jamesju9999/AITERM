@@ -47,6 +47,7 @@ pub struct CreateArgs {
     pub body: String,
     pub project_dir: String,
     pub parallel_ok: bool,
+    pub interactive: bool,
 }
 
 #[tauri::command]
@@ -61,7 +62,7 @@ pub async fn tasks_create(
         &args.body,
         &args.project_dir,
         args.parallel_ok,
-        false,
+        args.interactive,
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -76,6 +77,7 @@ pub struct UpdateArgs {
     pub body: String,
     pub project_dir: String,
     pub parallel_ok: bool,
+    pub interactive: bool,
 }
 
 #[tauri::command]
@@ -89,6 +91,9 @@ pub async fn tasks_update(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "task not found".to_string())?;
     store::set_parallel_ok(&db.pool, &args.id, args.parallel_ok)
+        .await
+        .map_err(|e| e.to_string())?;
+    store::set_interactive(&db.pool, &args.id, args.interactive)
         .await
         .map_err(|e| e.to_string())?;
     if edit_allowed(&row.status) {
@@ -150,6 +155,33 @@ pub async fn tasks_stop(
     }
     if !scheduler.cancel(&id) {
         store::finish_task(&db.pool, &id, "cancelled", Some("使用者停止"), None)
+            .await
+            .map_err(|e| e.to_string())?;
+        emit_updated(&app);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn tasks_mark_done(
+    id: String,
+    db: State<'_, TasksDb>,
+    app: AppHandle,
+    scheduler: State<'_, SchedulerHandle>,
+) -> Result<(), String> {
+    let row = store::get_task(&db.pool, &id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "task not found".to_string())?;
+    if row.status != store::STATUS_RUNNING || !row.interactive {
+        return Err("only a running interactive task can be marked done".to_string());
+    }
+    if !scheduler.mark_done(&id) {
+        // No active watch to signal — e.g. it just finished on its own via
+        // an exit-code signal in the moment between the frontend rendering
+        // the button and the click landing. Finish it directly, mirroring
+        // tasks_stop's own fallback for the equivalent race.
+        store::finish_task(&db.pool, &id, "success", None, row.transcript_path.as_deref())
             .await
             .map_err(|e| e.to_string())?;
         emit_updated(&app);
@@ -367,5 +399,89 @@ mod save_transcript_tests {
         // Never moved past planning — transcript_path is None.
         let row = store::get_task(&pool, &id).await.unwrap().unwrap();
         assert!(row.transcript_path.is_none());
+    }
+}
+
+#[cfg(test)]
+mod mark_done_tests {
+    use super::*;
+    use crate::tasks::monitor::WatchControl;
+    use crate::tasks::scheduler::SchedulerHandle;
+    use sqlx::sqlite::SqlitePoolOptions;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::sync::{oneshot, Notify};
+
+    async fn mem_pool() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        pool
+    }
+
+    fn empty_scheduler() -> SchedulerHandle {
+        SchedulerHandle {
+            wake: Arc::new(Notify::new()),
+            cancels: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+        }
+    }
+
+    // Exercises the exact same logic tasks_mark_done's body runs — get_task,
+    // the status/interactive guard, then scheduler.mark_done() — without
+    // needing a Tauri State<'_, TasksDb>/AppHandle extractor (same
+    // limitation save_transcript_tests documents above tasks_mark_done).
+    #[tokio::test]
+    async fn signals_the_active_watch_for_a_running_interactive_task() {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", "/r", true, true).await.unwrap();
+        store::move_task(&pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
+        store::mark_dispatched(&pool, &id, "tab-x").await.unwrap();
+
+        let scheduler = empty_scheduler();
+        let (tx, mut rx) = oneshot::channel::<WatchControl>();
+        scheduler.cancels.lock().insert(id.clone(), tx);
+
+        let row = store::get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!(row.status, store::STATUS_RUNNING);
+        assert!(row.interactive);
+        assert!(scheduler.mark_done(&id));
+        assert!(matches!(rx.try_recv().unwrap(), WatchControl::MarkDone));
+    }
+
+    #[tokio::test]
+    async fn a_non_running_task_fails_the_guard_tasks_mark_done_checks() {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", "/r", true, true).await.unwrap();
+        // Still planning — never dispatched.
+        let row = store::get_task(&pool, &id).await.unwrap().unwrap();
+        assert_ne!(row.status, store::STATUS_RUNNING);
+    }
+
+    #[tokio::test]
+    async fn a_non_interactive_task_fails_the_guard_tasks_mark_done_checks() {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        store::move_task(&pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
+        store::mark_dispatched(&pool, &id, "tab-x").await.unwrap();
+        let row = store::get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!(row.status, store::STATUS_RUNNING);
+        assert!(!row.interactive);
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_finishing_directly_when_there_is_no_active_watch() {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", "/r", true, true).await.unwrap();
+        store::move_task(&pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
+        store::mark_dispatched(&pool, &id, "tab-x").await.unwrap();
+
+        let scheduler = empty_scheduler(); // no cancels entry registered
+        assert!(!scheduler.mark_done(&id));
+
+        // tasks_mark_done's fallback path when mark_done() returns false —
+        // mirrors tasks_stop's own fallback (finish it directly).
+        store::finish_task(&pool, &id, "success", None, None).await.unwrap();
+        let row = store::get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!(row.status, "done");
+        assert_eq!(row.outcome.as_deref(), Some("success"));
     }
 }

@@ -150,3 +150,13 @@ async fn tasks_save_transcript_overwrites_the_existing_file() {
     let saved = std::fs::read_to_string(&transcript_path).unwrap();
     assert_eq!(saved, "clean version");
 }
+
+#[tokio::test]
+async fn interactive_task_created_via_create_task_round_trips_through_list() {
+    let db = mem_db().await;
+    let id = store::create_task(&db.pool, "chat with claude", "", "/r", true, true)
+        .await
+        .unwrap();
+    let row = store::get_task(&db.pool, &id).await.unwrap().unwrap();
+    assert!(row.interactive);
+}
