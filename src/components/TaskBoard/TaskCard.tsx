@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { confirm } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import { cloneTask, deleteTask, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
@@ -27,9 +28,13 @@ export function TaskCard({
     }
   };
 
-  const remove = () => {
-    if (!window.confirm(t.board_delete_confirm)) return;
-    const closeTab = card.tab_id ? window.confirm(t.board_delete_close_tab) : false;
+  // Not window.confirm: Tauri's webview has no real implementation of it
+  // (see NotebookSidebar.tsx's own comment on the same pitfall) — must use
+  // @tauri-apps/plugin-dialog's async confirm() instead, a real native
+  // dialog.
+  const remove = async () => {
+    if (!(await confirm(t.board_delete_confirm))) return;
+    const closeTab = card.tab_id ? await confirm(t.board_delete_close_tab) : false;
     void run(() => deleteTask(card.id, closeTab));
   };
 
@@ -66,7 +71,7 @@ export function TaskCard({
         {card.status === "planning" && (
           <>
             <button disabled={busy} onClick={onEdit}>{t.board_edit_card}</button>
-            <button disabled={busy} onClick={remove}>{t.board_delete}</button>
+            <button disabled={busy} onClick={() => void remove()}>{t.board_delete}</button>
           </>
         )}
         {card.status === "running" && (
@@ -85,7 +90,7 @@ export function TaskCard({
             <button disabled={busy} onClick={() => void run(() => cloneTask(card.id))}>
               {t.board_action_requeue}
             </button>
-            <button disabled={busy} onClick={remove}>{t.board_delete}</button>
+            <button disabled={busy} onClick={() => void remove()}>{t.board_delete}</button>
           </>
         )}
       </div>

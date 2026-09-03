@@ -3,7 +3,10 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn().mockResolvedValue("/repo") }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn().mockResolvedValue("/repo"),
+  confirm: vi.fn().mockResolvedValue(true),
+}));
 
 vi.mock("../../ipc/tasks", () => ({
   listTasks: vi.fn(),
@@ -179,6 +182,27 @@ describe("TaskBoardView", () => {
     await screen.findByText("Runner");
     await user.click(screen.getByRole("button", { name: /停止|Stop/ }));
     expect(stopTask).toHaveBeenCalledWith("r");
+  });
+
+  // Regression test for a real bug: window.confirm() has no real
+  // implementation in Tauri's webview (see NotebookSidebar.tsx's own
+  // comment about the exact same pitfall — it returns without ever
+  // showing anything, so a "delete" gated behind it either silently never
+  // fires or silently always fires, neither of which is a real
+  // confirmation). Must use @tauri-apps/plugin-dialog's async confirm()
+  // instead, same as that established call site.
+  it("deleting a done card confirms via the native dialog plugin, not window.confirm", async () => {
+    const { deleteTask } = await import("../../ipc/tasks");
+    const { confirm } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "Done one", status: "done", outcome: "success" }),
+    ]);
+    view();
+    const user = userEvent.setup();
+    await screen.findByText("Done one");
+    await user.click(screen.getByRole("button", { name: /^刪除$|^Delete$/ }));
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    await waitFor(() => expect(deleteTask).toHaveBeenCalledWith("d", false));
   });
 
   it("done+failed card shows the failed badge and its error message", async () => {
