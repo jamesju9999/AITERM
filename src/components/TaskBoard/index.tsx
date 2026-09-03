@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { createPortal } from "react-dom";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import {
@@ -43,11 +44,13 @@ export function TaskBoardView() {
    * crossed). Without this the interaction gave no feedback at all, which
    * made it look broken even once the drag mechanism itself worked. */
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
-  /** Cursor delta from the drag's start point, applied as a translate() on
-   * the dragged card so it visibly leaves its column and follows the mouse
-   * — a static fade-in-place wasn't legible feedback that anything was
-   * happening. */
-  const [dragOffset, setDragOffset] = useState<{ dx: number; dy: number } | null>(null);
+  /** Live cursor position while dragging, in viewport coordinates. Drives a
+   * "ghost" card rendered via a portal into document.body (see the render
+   * below) — NOT a transform on the card's own wrapper. Every column has
+   * `overflow: hidden`, so a translated-in-place card got clipped the
+   * instant it crossed its own column's edge into a neighbor; a portal
+   * sibling of every column has no such ancestor to be clipped by. */
+  const [dragPointer, setDragPointer] = useState<{ x: number; y: number } | null>(null);
   // DEBUG-TEMP: on-screen diagnostic overlay while root-causing a real drag
   // bug live in the running app (no way to script a real OS mouse drag from
   // this environment to self-verify). Remove once the drag is confirmed
@@ -134,7 +137,7 @@ export function TaskBoardView() {
         setDraggingCardId(st.id);
         pushDebug(`threshold crossed after ${moveEventCount} move events (dist=${dist.toFixed(0)}px) → started=true`);
       }
-      setDragOffset({ dx: e.clientX - st.startX, dy: e.clientY - st.startY });
+      setDragPointer({ x: e.clientX, y: e.clientY });
       const over = statusUnderPoint(e.clientX, e.clientY);
       if (over !== lastLoggedStatus) {
         lastLoggedStatus = over;
@@ -148,7 +151,7 @@ export function TaskBoardView() {
       dragRef.current = null;
       setDragOverStatus(null);
       setDraggingCardId(null);
-      setDragOffset(null);
+      setDragPointer(null);
       if (!st?.started) {
         pushDebug(`mouseup: drag never started (armed=${!!st}, moveEvents=${moveEventCount})`);
         return;
@@ -198,11 +201,6 @@ export function TaskBoardView() {
                   data-task-drag-id={cardRow.id}
                   className={classes.join(" ")}
                   onMouseDown={(e) => handleCardMouseDown(e, cardRow)}
-                  style={
-                    isDragging && dragOffset
-                      ? { transform: `translate(${dragOffset.dx}px, ${dragOffset.dy}px)` }
-                      : undefined
-                  }
                 >
                   <TaskCard
                     card={cardRow}
@@ -230,6 +228,24 @@ export function TaskBoardView() {
       {transcriptFor && (
         <TranscriptDialog taskId={transcriptFor} onClose={() => setTranscriptFor(null)} />
       )}
+
+      {draggingCardId &&
+        dragPointer &&
+        (() => {
+          const draggedCard = tasks.find((x) => x.id === draggingCardId);
+          if (!draggedCard) return null;
+          return createPortal(
+            <div
+              className="task-card-ghost"
+              data-testid="task-drag-ghost"
+              style={{ left: `${dragPointer.x}px`, top: `${dragPointer.y}px` }}
+            >
+              <div className="task-card-title">{draggedCard.title}</div>
+              <div className="task-card-meta">{draggedCard.project_dir}</div>
+            </div>,
+            document.body,
+          );
+        })()}
 
       {/* DEBUG-TEMP: remove once the drag bug is confirmed fixed live. */}
       <div

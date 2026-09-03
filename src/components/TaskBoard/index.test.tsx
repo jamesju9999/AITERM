@@ -133,9 +133,16 @@ describe("TaskBoardView", () => {
   });
 
   // User-requested behavior: the card should visibly "leave" its column and
-  // follow the cursor while dragging (not just sit in place with a fade),
-  // and settle back to (0,0) offset once released.
-  it("the dragged card visually follows the cursor via a translate transform", async () => {
+  // follow the cursor while dragging. Regression test for a real bug found
+  // manually right after the first attempt at this (an in-place `transform`
+  // on the card's own wrapper): every column has `overflow: hidden`, so a
+  // card translated past its own column's edge got visually clipped the
+  // instant it crossed into a neighboring column — exactly the "being
+  // squashed underneath" the user reported. The fix renders a separate
+  // "ghost" element via a portal into `document.body`, positioned with
+  // `position: fixed` at the live cursor coordinates — a sibling of every
+  // column, not a clipped descendant of one.
+  it("the dragged card renders a cursor-following ghost outside any column's clipping", async () => {
     vi.mocked(listTasks).mockResolvedValue([card({ id: "p", title: "Draggable", status: "planning" })]);
     view();
     const cardEl = await screen.findByText("Draggable");
@@ -146,11 +153,19 @@ describe("TaskBoardView", () => {
     try {
       const { fireEvent } = await import("@testing-library/react");
       fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
-      expect(dragWrap.style.transform).toBe("");
-      fireEvent.mouseMove(window, { clientX: 130, clientY: 150 }); // past threshold: dx=30 dy=50
-      expect(dragWrap.style.transform).toBe("translate(30px, 50px)");
+      expect(screen.queryByTestId("task-drag-ghost")).not.toBeInTheDocument();
+
+      fireEvent.mouseMove(window, { clientX: 130, clientY: 150 }); // past the drag threshold
+      const ghost = await screen.findByTestId("task-drag-ghost");
+      // Rendered by a portal — not nested inside the source column (or any
+      // column), so no ancestor's overflow:hidden can clip it.
+      expect(ghost.closest(".task-column")).toBeNull();
+      expect(ghost.style.left).toBe("130px");
+      expect(ghost.style.top).toBe("150px");
+      expect(within(ghost).getByText("Draggable")).toBeInTheDocument();
+
       fireEvent.mouseUp(window, { clientX: 130, clientY: 150 });
-      expect(dragWrap.style.transform).toBe("");
+      expect(screen.queryByTestId("task-drag-ghost")).not.toBeInTheDocument();
     } finally {
       document.elementFromPoint = originalElementFromPoint;
     }

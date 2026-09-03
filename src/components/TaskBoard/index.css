@@ -7,18 +7,32 @@
 .task-column--drop-target { border-color: var(--accent, #a855f7); background: var(--accent-dim, rgba(168, 85, 247, 0.08)); }
 .task-card-drag-wrap--draggable { cursor: grab; }
 .task-card-drag-wrap--draggable:active { cursor: grabbing; }
-/* The card itself follows the cursor (see index.tsx's dragOffset transform)
-   so it visibly "leaves" its column instead of just sitting there faded.
-   pointer-events:none is required, not cosmetic: elementFromPoint() at the
-   cursor position would otherwise hit this floating element — which is
-   still a DOM child of the SOURCE column — and statusUnderPoint's
-   closest('[data-testid^="column-"]') would resolve to the source column
-   forever, no matter which column is actually underneath visually. */
+/* Marks the source card while it's being dragged — stays in its original
+   column slot (just faded/inert), the actual cursor-following visual is
+   .task-card-ghost below, portaled to document.body. An earlier version
+   applied a translate() directly to this element instead: every .task-column
+   has overflow:hidden, so the card got visually clipped the instant it
+   crossed its own column's edge into a neighbor — a portal sibling of every
+   column has no such ancestor to be clipped by. */
 .task-card-drag-wrap--dragging {
-  position: relative;
-  z-index: 100;
+  opacity: 0.35;
   pointer-events: none;
-  cursor: grabbing;
+}
+/* Cursor-following drag visual, portaled to document.body (see index.tsx) —
+   a sibling of every column, never a clipped descendant of one. left/top are
+   set inline per-frame from the live cursor position; pointer-events:none so
+   elementFromPoint() at the cursor sees the real column underneath, not this
+   element sitting on top of it. */
+.task-card-ghost {
+  position: fixed;
+  transform: translate(-50%, -16px);
+  pointer-events: none;
+  z-index: 1000;
+  width: 220px;
+  background: var(--card, #242424);
+  border: 1px solid var(--accent, #a855f7);
+  border-radius: 6px;
+  padding: 10px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 .task-column-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; font-weight: 600; border-bottom: 1px solid var(--border, #2a2a2a); flex-shrink: 0; }
