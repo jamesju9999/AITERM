@@ -44,8 +44,15 @@ impl Dispatcher for RealPtyDispatcher {
         let task_id = task.id.clone();
         tokio::spawn(async move {
             let (_tx, rx) = tokio::sync::oneshot::channel();
-            let outcome =
-                aiterm_lib::tasks::monitor::watch(&pty, &tab_id, rx, baselines, thresholds).await;
+            let outcome = aiterm_lib::tasks::monitor::watch(
+                &pty,
+                &tab_id,
+                rx,
+                baselines,
+                thresholds,
+                aiterm_lib::tasks::monitor::WatchMode::Auto,
+            )
+            .await;
             let _ = store::finish_task(
                 &pool,
                 &task_id,

@@ -58,7 +58,7 @@ pub struct RealDispatcher {
     pub config: Arc<ConfigStore>,
     pub wake: Arc<Notify>,
     /// task_id → cancel sender, so `tasks_stop` can abort a running watch.
-    pub cancels: Arc<parking_lot::Mutex<HashMap<String, oneshot::Sender<()>>>>,
+    pub cancels: Arc<parking_lot::Mutex<HashMap<String, oneshot::Sender<monitor::WatchControl>>>>,
 }
 
 #[async_trait::async_trait]
@@ -87,7 +87,7 @@ impl Dispatcher for RealDispatcher {
             .map_err(|e| e.to_string())?;
         let _ = self.app.emit("tasks-updated", ());
 
-        let (cancel_tx, cancel_rx) = oneshot::channel();
+        let (cancel_tx, cancel_rx) = oneshot::channel::<monitor::WatchControl>();
         self.cancels.lock().insert(task.id.clone(), cancel_tx);
 
         let pool = db.pool.clone();
@@ -97,18 +97,15 @@ impl Dispatcher for RealDispatcher {
         let cancels = self.cancels.clone();
         let task_id = task.id.clone();
         let baselines = monitor::Baselines { bell: disp.bell_baseline, marker: disp.marker_baseline };
+        let watch_mode = if task.interactive { monitor::WatchMode::Interactive } else { monitor::WatchMode::Auto };
         tauri::async_runtime::spawn(async move {
-            let outcome =
-                monitor::watch(&pty, &tab_id, cancel_rx, baselines, monitor::Thresholds::default()).await;
+            let outcome = monitor::watch(
+                &pty, &tab_id, cancel_rx, baselines, monitor::Thresholds::default(), watch_mode,
+            ).await;
             let transcript = write_transcript(&pty, &task_id, &tab_id);
             let _ = store::finish_task(
-                &pool,
-                &task_id,
-                outcome.as_str(),
-                outcome.error_message(),
-                transcript.as_deref(),
-            )
-            .await;
+                &pool, &task_id, outcome.as_str(), outcome.error_message(), transcript.as_deref(),
+            ).await;
             cancels.lock().remove(&task_id);
             let _ = app.emit("tasks-updated", ());
             wake.notify_one();
@@ -171,18 +168,27 @@ pub async fn drain_once(db: &TasksDb, dispatcher: &dyn Dispatcher, max_concurren
 #[derive(Clone)]
 pub struct SchedulerHandle {
     pub wake: Arc<Notify>,
-    pub cancels: Arc<parking_lot::Mutex<HashMap<String, oneshot::Sender<()>>>>,
+    pub cancels: Arc<parking_lot::Mutex<HashMap<String, oneshot::Sender<monitor::WatchControl>>>>,
 }
 
 impl SchedulerHandle {
     pub fn poke(&self) {
         self.wake.notify_one();
     }
-    /// Fire the cancel channel for a running task, if present. Returns true
+    /// Fire the cancel signal for a running task, if present. Returns true
     /// if a watch was signalled.
     pub fn cancel(&self, task_id: &str) -> bool {
+        self.send(task_id, monitor::WatchControl::Cancel)
+    }
+    /// Fire the manual-completion signal for a running task, if present.
+    /// Returns true if a watch was signalled — see `commands::tasks::tasks_mark_done`
+    /// for the fallback when this returns false (no active watch to signal).
+    pub fn mark_done(&self, task_id: &str) -> bool {
+        self.send(task_id, monitor::WatchControl::MarkDone)
+    }
+    fn send(&self, task_id: &str, msg: monitor::WatchControl) -> bool {
         if let Some(tx) = self.cancels.lock().remove(task_id) {
-            let _ = tx.send(());
+            let _ = tx.send(msg);
             true
         } else {
             false
@@ -303,6 +309,25 @@ mod tests {
     fn empty_queue_picks_nothing() {
         let running: Vec<TaskRow> = vec![];
         assert!(pick_next(&running, &[], 4).is_none());
+    }
+
+    #[test]
+    fn mark_done_sends_the_control_signal_and_returns_true_when_a_watch_is_registered() {
+        let cancels = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let handle = SchedulerHandle { wake: Arc::new(Notify::new()), cancels: cancels.clone() };
+        let (tx, mut rx) = oneshot::channel::<monitor::WatchControl>();
+        cancels.lock().insert("t1".to_string(), tx);
+        assert!(handle.mark_done("t1"));
+        assert!(matches!(rx.try_recv().unwrap(), monitor::WatchControl::MarkDone));
+    }
+
+    #[test]
+    fn mark_done_returns_false_when_nothing_is_registered() {
+        let handle = SchedulerHandle {
+            wake: Arc::new(Notify::new()),
+            cancels: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+        };
+        assert!(!handle.mark_done("nope"));
     }
 }
 
