@@ -32,6 +32,11 @@ const POLL_MS: u64 = 250;
 /// `claude` to ring a fresh bell (signalling it finished reading the prompt)
 /// before sending the optional done-marker instruction.
 const DONE_MARKER_WAIT_SECONDS: u64 = 15;
+/// Gap between writing the prompt body and writing the standalone `\r` that
+/// submits it (see `run_on_session`). Long enough that the two writes don't
+/// land in the same PTY read() burst on the target's side; short enough not
+/// to add noticeable dispatch latency.
+const SUBMIT_DELAY_MS: u64 = 120;
 
 /// bell/marker counts captured right after the prompt (and optional
 /// instruction) were written — the baseline the monitor compares fresh
@@ -65,17 +70,30 @@ async fn wait_until_settled(pty: &PtyManager, tab_id: &str) {
 }
 
 /// Type `prompt` into an already-running session (a `claude` REPL, normally).
-/// Mirrors `coordination_ops::send_input`: CR-terminated write; then, if
-/// `request_done_marker`, wait for a fresh bell and send
-/// `done_marker_instruction` as a second independent CR-terminated write.
-/// Returns the post-write bell/marker baselines.
+/// The prompt body and the submitting `\r` are deliberately two separate
+/// writes, not one `format!("{prompt}\r")` burst: a multi-line prompt (a
+/// task's `body` is a free-form textarea, and `build_prompt` itself inserts
+/// a blank line before the attachment note whenever there are attachments)
+/// contains embedded `\n` bytes, and a raw-mode TUI receiving a burst that
+/// contains embedded newlines commonly treats the whole thing as a paste —
+/// which fills the input box but does NOT auto-submit even if that same
+/// burst happens to end in `\r` (confirmed live: an attachment-bearing task
+/// sat typed-but-unsubmitted in Claude Code's input until the 120s-stuck
+/// timeout failed it). A short delay before the standalone `\r` write keeps
+/// the two writes from being coalesced back into one read() on the far end.
+/// Then, if `request_done_marker`, wait for a fresh bell and send
+/// `done_marker_instruction` as a further, independent CR-terminated write
+/// (same reasoning `coordination_ops::send_input` already documents for that
+/// step). Returns the post-write bell/marker baselines.
 pub async fn run_on_session(
     pty: &PtyManager,
     tab_id: &str,
     prompt: &str,
     request_done_marker: bool,
 ) -> Result<DispatchResult, String> {
-    pty.write(tab_id, format!("{prompt}\r").as_bytes()).map_err(|e| e.to_string())?;
+    pty.write(tab_id, prompt.as_bytes()).map_err(|e| e.to_string())?;
+    tokio::time::sleep(Duration::from_millis(SUBMIT_DELAY_MS)).await;
+    pty.write(tab_id, b"\r").map_err(|e| e.to_string())?;
 
     if request_done_marker {
         let bell_before = pty.bell_count(tab_id).unwrap_or(0);
@@ -185,5 +203,85 @@ mod tests {
             assert!(tokio::time::Instant::now() < deadline, "prompt never echoed: {out}");
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
+    }
+
+    /// Regression test for a real bug: a multi-line prompt (e.g. `build_prompt`
+    /// with attachments, or just a multi-line task body) sat typed-but-never-
+    /// submitted in Claude Code's input box, because the old code sent the
+    /// whole thing — embedded newlines and the submitting `\r` — as one single
+    /// `pty.write`. Mirrors `coordination_ops::send_input_terminates_the_line_
+    /// with_cr_not_lf`'s technique: put the pty in raw mode and dump the exact
+    /// bytes that arrive, rather than trusting a canonical-mode shell's
+    /// tolerance for either terminator. This proves our own write pipeline
+    /// delivers the multi-line body byte-for-byte (embedded LF preserved, not
+    /// converted or dropped) followed by a real standalone CR — it cannot
+    /// prove Claude Code's specific TUI then submits on it (that needs a live
+    /// check against the real binary), but it locks in the one thing this
+    /// commit actually controls: two real, distinct writes with the right
+    /// bytes, not one burst that smuggled the `\r` inside embedded-newline
+    /// content.
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn run_on_session_sends_a_multiline_prompt_verbatim_then_a_standalone_cr() {
+        let pty = PtyManager::new();
+        let tab_id = pty
+            .create_with_callback(
+                portable_pty::PtySize { rows: 24, cols: 300, pixel_width: 0, pixel_height: 0 },
+                |_| {},
+            )
+            .unwrap();
+
+        // Same setup as the coordination_ops.rs test this mirrors: flip the
+        // pty into raw mode, print a marker (built via concatenation so the
+        // *echoed* setup command itself never contains the contiguous
+        // marker), then block reading exactly N raw bytes and dump them as
+        // hex. N = len("line one\nline two") + 1 (the trailing CR).
+        let prompt = "line one\nline two";
+        let expect_len = prompt.len() + 1;
+        #[cfg(not(windows))]
+        pty.write(
+            &tab_id,
+            format!("stty raw -echo; printf 'MARK''READY'; od -An -tx1 -N {expect_len}\n").as_bytes(),
+        )
+        .unwrap();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let output = pty.get_recent_output(&tab_id, 8192).unwrap_or_default();
+            if output.contains("MARKREADY") {
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "byte-dump setup never completed: {output}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        run_on_session(&pty, &tab_id, prompt, false).await.unwrap();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let hex_bytes: Vec<String> = loop {
+            let output = pty.get_recent_output(&tab_id, 8192).unwrap_or_default();
+            let after_marker = output.split("MARKREADY").nth(1).unwrap_or("").to_string();
+            let hex_bytes: Vec<String> = after_marker
+                .split_whitespace()
+                .filter(|tok| tok.len() == 2 && tok.chars().all(|c| c.is_ascii_hexdigit()))
+                .map(str::to_string)
+                .collect();
+            if hex_bytes.len() >= expect_len {
+                break hex_bytes;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "{expect_len}-byte hex dump never appeared: {output}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+
+        let expected: Vec<String> = prompt
+            .bytes()
+            .chain(std::iter::once(b'\r'))
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            &hex_bytes[..expect_len],
+            expected.as_slice(),
+            "expected the multi-line prompt's exact bytes (embedded 0a preserved) followed by a standalone 0d — got: {hex_bytes:?}"
+        );
     }
 }
