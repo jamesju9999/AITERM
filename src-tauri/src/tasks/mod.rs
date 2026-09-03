@@ -7,6 +7,7 @@
 //! - `scheduler` — pick the next runnable card; the long-lived dispatch loop
 
 pub mod store;
+pub mod dispatch;
 
 use std::fs;
 use std::path::PathBuf;
