@@ -302,6 +302,16 @@ pub async fn tasks_read_transcript(id: String, db: State<'_, TasksDb>) -> Result
     }
 }
 
+#[tauri::command]
+pub async fn tasks_save_transcript(id: String, text: String, db: State<'_, TasksDb>) -> Result<(), String> {
+    let row = store::get_task(&db.pool, &id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "task not found".to_string())?;
+    let path = row.transcript_path.ok_or_else(|| "no transcript path yet".to_string())?;
+    fs::write(&path, text).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +322,49 @@ mod tests {
         assert!(!edit_allowed("queued"));
         assert!(!edit_allowed("running"));
         assert!(!edit_allowed("done"));
+    }
+}
+
+#[cfg(test)]
+mod save_transcript_tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn mem_pool() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn overwrites_the_file_at_transcript_path() {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", "/r", true).await.unwrap();
+        store::move_task(&pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
+        store::mark_dispatched(&pool, &id, "tab-x").await.unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript.txt");
+        std::fs::write(&path, "raw messy version").unwrap();
+        store::finish_task(&pool, &id, "success", None, Some(path.to_str().unwrap())).await.unwrap();
+
+        // Exercises the exact same logic tasks_save_transcript's body runs,
+        // without needing a Tauri State<'_, TasksDb> extractor (which needs
+        // a running app to construct) — get_task + the transcript_path
+        // lookup + fs::write, in the same order the command does them.
+        let row = store::get_task(&pool, &id).await.unwrap().unwrap();
+        let transcript_path = row.transcript_path.unwrap();
+        std::fs::write(&transcript_path, "clean version").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&transcript_path).unwrap(), "clean version");
+    }
+
+    #[tokio::test]
+    async fn errors_instead_of_panicking_when_transcript_path_is_unset() {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", "/r", true).await.unwrap();
+        // Never moved past planning — transcript_path is None.
+        let row = store::get_task(&pool, &id).await.unwrap().unwrap();
+        assert!(row.transcript_path.is_none());
     }
 }

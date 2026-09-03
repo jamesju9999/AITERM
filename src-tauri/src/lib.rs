@@ -107,6 +107,7 @@ use commands::{
     tasks::{
         tasks_list, tasks_create, tasks_update, tasks_move, tasks_stop, tasks_delete,
         tasks_add_attachment, tasks_remove_attachment, tasks_clone, tasks_read_transcript,
+        tasks_save_transcript,
     },
     updater::updater_supported,
     web::{web_fetch, web_search, npm_mcp_search},
@@ -556,6 +557,7 @@ pub fn run() {
             tasks_remove_attachment,
             tasks_clone,
             tasks_read_transcript,
+            tasks_save_transcript,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
