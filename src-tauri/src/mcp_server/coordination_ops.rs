@@ -237,7 +237,7 @@ pub(crate) async fn send_input(
 /// (rather than inlined in `send_input`) so tests can pass a short
 /// `timeout` to exercise the "target never bells" path without waiting out
 /// the real production timeout (`DONE_MARKER_WAIT_SECONDS` = 15s).
-async fn wait_for_new_bell(pty_manager: &PtyManager, tab_id: &str, baseline: u64, timeout: Duration) -> bool {
+pub(crate) async fn wait_for_new_bell(pty_manager: &PtyManager, tab_id: &str, baseline: u64, timeout: Duration) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         if pty_manager.bell_count(tab_id).unwrap_or(baseline) > baseline {

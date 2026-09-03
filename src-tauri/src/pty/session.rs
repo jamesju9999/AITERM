@@ -54,6 +54,20 @@ pub fn done_marker(tab_id: &str) -> String {
     format!("{DONE_MARKER_PREFIX}{tab_id}{DONE_MARKER_SUFFIX}")
 }
 
+/// The fixed wording appended (as its own CR-terminated write) after a task
+/// prompt, asking a cooperating agent to print `done_marker(tab_id)` on its
+/// own line when finished — an optional fast-path completion signal on top
+/// of the bell fallback. The three pieces (prefix, id, suffix) are named
+/// separately with other text between them so this string never itself
+/// contains the contiguous 52-byte marker: terminal echo of this
+/// instruction would otherwise increment `marker_count` with no agent
+/// involved (verified live during the coordination feature's development).
+pub fn done_marker_instruction(tab_id: &str) -> String {
+    format!(
+        "（可選：完成後請在新的一行印出一個完成標記，格式為三段直接相連、中間不留任何字元：前綴 {DONE_MARKER_PREFIX} ，接著是你的識別碼 {tab_id} ，最後接上 {DONE_MARKER_SUFFIX} 。這能讓協調端提早得知你已完成，不影響任何其他行為。）"
+    )
+}
+
 /// Scans `tail` immediately followed by `chunk` for `marker`. `tail` should
 /// be the previous chunk's own trailing `marker.len() - 1` bytes (or empty
 /// for the very first chunk), so a marker split across a chunk boundary is
@@ -1626,6 +1640,19 @@ mod tests {
     #[test]
     fn done_marker_embeds_the_tab_id_between_fixed_delimiters() {
         assert_eq!(done_marker("abc-123"), "<<AITERM_DONE:abc-123>>");
+    }
+
+    #[test]
+    fn done_marker_instruction_never_contains_the_contiguous_marker() {
+        let tab = "abc-123-def";
+        let instr = done_marker_instruction(tab);
+        // The whole point: canonical-mode echo of this text must not itself
+        // form the marker byte sequence, or it self-triggers marker_count.
+        assert!(!instr.contains(&done_marker(tab)), "instruction must not contain the full contiguous marker: {instr}");
+        // But it must mention each piece so a cooperating agent can assemble it.
+        assert!(instr.contains(DONE_MARKER_PREFIX));
+        assert!(instr.contains(tab));
+        assert!(instr.contains(DONE_MARKER_SUFFIX));
     }
 
     #[test]
