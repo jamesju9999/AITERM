@@ -144,4 +144,16 @@ describe("TaskBoardView", () => {
       expect(updateTask).toHaveBeenCalledWith(expect.objectContaining({ id: "p", title: "New title" })),
     );
   });
+
+  it("transcript dialog shows the backend transcript text", async () => {
+    const { readTranscript } = await import("../../ipc/tasks");
+    vi.mocked(readTranscript).mockResolvedValue("line A\nline B");
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "Done one", status: "done", outcome: "success", transcript_path: "/p/t.txt" }),
+    ]);
+    view();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /查看逆紀錄|View transcript/ }));
+    expect(await screen.findByText(/line A/)).toBeInTheDocument();
+  });
 });
