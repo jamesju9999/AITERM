@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { useLocale } from "../../contexts/LocaleContext";
 import {
   listTasks,
+  markTaskDone,
   moveTask,
   onTasksUpdated,
   type TaskStatus,
@@ -100,6 +101,13 @@ export function TaskBoardView() {
     async (id: string, to: TaskStatus) => {
       const cardRow = tasks.find((x) => x.id === id);
       if (!cardRow || cardRow.status === to) return;
+
+      if (cardRow.status === "running" && to === "done" && cardRow.interactive) {
+        await markTaskDone(id);
+        return; // finish flow (incl. the outcome badge) arrives via the
+                 // existing tasks-updated listener, same as auto-completion.
+      }
+
       const legal =
         (cardRow.status === "planning" && to === "queued") ||
         (cardRow.status === "queued" && to === "planning");
@@ -165,7 +173,11 @@ export function TaskBoardView() {
 
   const handleCardMouseDown = (e: ReactMouseEvent<HTMLDivElement>, cardRow: TaskWithAttachments) => {
     if (e.button !== 0) return;
-    if (cardRow.status !== "planning" && cardRow.status !== "queued") return;
+    const draggable =
+      cardRow.status === "planning" ||
+      cardRow.status === "queued" ||
+      (cardRow.status === "running" && cardRow.interactive);
+    if (!draggable) return;
     dragRef.current = { id: cardRow.id, startX: e.clientX, startY: e.clientY, started: false };
   };
 
@@ -180,7 +192,10 @@ export function TaskBoardView() {
         {COLUMNS.map((s) => (
           <TaskColumn key={s} status={s} title={colTitle(s)} count={byStatus(s).length} highlighted={dragOverStatus === s}>
             {byStatus(s).map((cardRow) => {
-              const draggableCard = cardRow.status === "planning" || cardRow.status === "queued";
+              const draggableCard =
+                cardRow.status === "planning" ||
+                cardRow.status === "queued" ||
+                (cardRow.status === "running" && cardRow.interactive);
               const isDragging = draggingCardId === cardRow.id;
               const classes = ["task-card-drag-wrap"];
               if (draggableCard) classes.push("task-card-drag-wrap--draggable");

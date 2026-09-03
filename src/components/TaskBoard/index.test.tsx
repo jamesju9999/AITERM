@@ -116,6 +116,58 @@ describe("TaskBoardView", () => {
     }
   });
 
+  it("dropping a running interactive card on the done column calls markTaskDone, not moveTask", async () => {
+    const { markTaskDone } = await import("../../ipc/tasks");
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r", title: "Chatting", status: "running", tab_id: "tab-1", interactive: true }),
+    ]);
+    view();
+    const cardEl = await screen.findByText("Chatting");
+    const doneCol = screen.getByTestId("column-done");
+    const dragWrap = cardEl.closest("[data-task-drag-id]") as HTMLElement;
+    expect(dragWrap).toBeTruthy();
+
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn().mockReturnValue(doneCol);
+    try {
+      const { fireEvent } = await import("@testing-library/react");
+      fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
+      fireEvent.mouseMove(window, { clientX: 100, clientY: 120 });
+      fireEvent.mouseUp(window, { clientX: 100, clientY: 120 });
+      await waitFor(() => expect(markTaskDone).toHaveBeenCalledWith("r"));
+      expect(moveTask).not.toHaveBeenCalled();
+    } finally {
+      document.elementFromPoint = originalElementFromPoint;
+    }
+  });
+
+  it("dropping a running NON-interactive card on the done column does nothing", async () => {
+    const { markTaskDone } = await import("../../ipc/tasks");
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r", title: "Auto running", status: "running", tab_id: "tab-1", interactive: false }),
+    ]);
+    view();
+    const cardEl = await screen.findByText("Auto running");
+    const doneCol = screen.getByTestId("column-done");
+    const dragWrap = cardEl.closest("[data-task-drag-id]") as HTMLElement;
+
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn().mockReturnValue(doneCol);
+    try {
+      const { fireEvent } = await import("@testing-library/react");
+      fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
+      fireEvent.mouseMove(window, { clientX: 100, clientY: 120 });
+      fireEvent.mouseUp(window, { clientX: 100, clientY: 120 });
+      // Not draggable at all — mousedown shouldn't even arm a drag for a
+      // non-interactive running card, so neither call should ever fire.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(markTaskDone).not.toHaveBeenCalled();
+      expect(moveTask).not.toHaveBeenCalled();
+    } finally {
+      document.elementFromPoint = originalElementFromPoint;
+    }
+  });
+
   // Regression test for a real UX bug found manually after the fix above:
   // dragging gave zero visual feedback (no cursor-following ghost, no fade on
   // the source card), which made the interaction feel broken even once the
