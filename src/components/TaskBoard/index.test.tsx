@@ -20,10 +20,16 @@ vi.mock("../../ipc/tasks", () => ({
   cloneTask: vi.fn().mockResolvedValue("new-id"),
   addAttachment: vi.fn(),
   removeAttachment: vi.fn(),
+  saveTranscript: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../../lib/terminalInstanceRegistry", () => ({
+  serializeTerminal: vi.fn(),
 }));
 
 import { listTasks, onTasksUpdated, moveTask } from "../../ipc/tasks";
 import type { TaskWithAttachments } from "../../ipc/tasks";
+import { serializeTerminal } from "../../lib/terminalInstanceRegistry";
 import { TaskBoardView } from "./index";
 
 const card = (over: Partial<TaskWithAttachments>): TaskWithAttachments => ({
@@ -330,5 +336,62 @@ describe("TaskBoardView", () => {
     expect(raw.textContent).toContain("start");
     expect(raw.textContent).toContain("done");
     expect(raw.textContent).not.toContain("spinner\nspinner");
+  });
+
+  // Regression coverage for the new "just finished → try to upgrade the
+  // saved transcript" behavior. Uses a controllable listTasks mock (like the
+  // existing "re-fetches when tasks-updated fires" test) to drive a real
+  // status transition through refresh().
+  it("upgrades the transcript once when a card transitions into done, with a live tab", async () => {
+    const { saveTranscript } = await import("../../ipc/tasks");
+    vi.mocked(serializeTerminal).mockReturnValue("clean serialized text");
+    let fire: () => void = () => {};
+    vi.mocked(onTasksUpdated).mockImplementation(async (cb) => { fire = cb; return () => {}; });
+
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "Running", status: "running", tab_id: "tab-1" }),
+    ]);
+    view();
+    await screen.findByText("Running");
+    expect(saveTranscript).not.toHaveBeenCalled();
+
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "Running", status: "done", outcome: "success", tab_id: "tab-1", transcript_path: "/p/t.txt" }),
+    ]);
+    fire();
+
+    await waitFor(() => expect(saveTranscript).toHaveBeenCalledWith("d", "clean serialized text"));
+  });
+
+  it("does not upgrade on first load even if a card is already done", async () => {
+    const { saveTranscript } = await import("../../ipc/tasks");
+    vi.mocked(serializeTerminal).mockReturnValue("clean serialized text");
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "AlreadyDone", status: "done", outcome: "success", tab_id: "tab-1" }),
+    ]);
+    view();
+    await screen.findByText("AlreadyDone");
+    expect(saveTranscript).not.toHaveBeenCalled();
+  });
+
+  it("does not upgrade when the tab is not live (serializeTerminal returns null)", async () => {
+    const { saveTranscript } = await import("../../ipc/tasks");
+    vi.mocked(serializeTerminal).mockReturnValue(null);
+    let fire: () => void = () => {};
+    vi.mocked(onTasksUpdated).mockImplementation(async (cb) => { fire = cb; return () => {}; });
+
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "Running", status: "running", tab_id: "tab-1" }),
+    ]);
+    view();
+    await screen.findByText("Running");
+
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "Running", status: "done", outcome: "success", tab_id: "tab-1" }),
+    ]);
+    fire();
+
+    await waitFor(() => expect(listTasks).toHaveBeenCalledTimes(2));
+    expect(saveTranscript).not.toHaveBeenCalled();
   });
 });

@@ -13,6 +13,7 @@ import { TaskCard } from "./TaskCard";
 import { TaskColumn } from "./TaskColumn";
 import { TaskEditorDialog } from "./TaskEditorDialog";
 import { TranscriptDialog } from "./TranscriptDialog";
+import { tryUpgradeTranscript } from "./transcriptUpgrade";
 import "./index.css";
 
 const COLUMNS: TaskStatus[] = ["planning", "queued", "running", "done"];
@@ -34,6 +35,11 @@ export function TaskBoardView() {
   const [editing, setEditing] = useState<TaskWithAttachments | "new" | null>(null);
   const [transcriptFor, setTranscriptFor] = useState<string | null>(null);
   const mounted = useRef(true);
+  /** Previous fetch's id→status snapshot, so refresh() can tell a genuine
+   * "just transitioned into done" apart from "was already done on a
+   * previous fetch" (including the very first load — an already-done task
+   * from a prior session must NOT be treated as freshly completed). */
+  const lastStatusRef = useRef<Map<string, TaskStatus>>(new Map());
   const dragRef = useRef<DragState | null>(null);
   /** Which column's `data-testid` the cursor is currently over while
    * dragging, for the drop-target highlight. Not the drop decision itself
@@ -54,7 +60,19 @@ export function TaskBoardView() {
 
   const refresh = useCallback(async () => {
     const rows = await listTasks();
-    if (mounted.current) setTasks(rows);
+    if (!mounted.current) return;
+    const previous = lastStatusRef.current;
+    const next = new Map<string, TaskStatus>();
+    for (const row of rows) {
+      next.set(row.id, row.status);
+      const wasDone = previous.get(row.id) === "done";
+      const justFinished = previous.has(row.id) && !wasDone && row.status === "done";
+      if (justFinished) {
+        void tryUpgradeTranscript(row.id, row.tab_id);
+      }
+    }
+    lastStatusRef.current = next;
+    setTasks(rows);
   }, []);
 
   useEffect(() => {
