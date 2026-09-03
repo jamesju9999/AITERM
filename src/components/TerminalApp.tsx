@@ -643,7 +643,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
         )}
         {boardActive && <TaskBoardView />}
         {/* AI 路由猜錯分頁類型的反悔提示：只在猜出來的那個分頁正在前景時顯示。 */}
-        {!homeActive && routeHint && routeHint.tabId === activeId && (
+        {!homeActive && !boardActive && routeHint && routeHint.tabId === activeId && (
           <RouteHint
             pickedType={routeHint.type}
             onPick={handleRouteHintPick}
