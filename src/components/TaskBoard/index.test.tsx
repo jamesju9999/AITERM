@@ -192,6 +192,28 @@ describe("TaskBoardView", () => {
     expect(stopTask).toHaveBeenCalledWith("r");
   });
 
+  it("interactive running card shows the interactive badge and a Mark Done button that calls markTaskDone", async () => {
+    const { markTaskDone } = await import("../../ipc/tasks");
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r", title: "Chatting", status: "running", tab_id: "tab-1", interactive: true }),
+    ]);
+    view();
+    const user = userEvent.setup();
+    await screen.findByText("Chatting");
+    expect(screen.getByText(/互動|Interactive/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /標記完成|Mark Done/ }));
+    expect(markTaskDone).toHaveBeenCalledWith("r");
+  });
+
+  it("non-interactive running card has no Mark Done button", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r", title: "Auto running", status: "running", tab_id: "tab-1", interactive: false }),
+    ]);
+    view();
+    await screen.findByText("Auto running");
+    expect(screen.queryByRole("button", { name: /標記完成|Mark Done/ })).not.toBeInTheDocument();
+  });
+
   // Regression test for a real bug: window.confirm() has no real
   // implementation in Tauri's webview (see NotebookSidebar.tsx's own
   // comment about the exact same pitfall — it returns without ever

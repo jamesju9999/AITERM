@@ -46,6 +46,7 @@
 .task-badge--success { background: #1f4023; color: #b6f0c2; }
 .task-badge--failed { background: #4a1f1f; color: #f0b6b6; }
 .task-badge--cancelled { background: #3a3a1f; color: #efe7b0; }
+.task-badge--interactive { background: #1f2a3a; color: #b6d4f0; }
 .task-dialog-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 50; }
 .task-dialog {
   background: var(--bg-secondary, #111);

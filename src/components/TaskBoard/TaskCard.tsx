@@ -2,7 +2,7 @@ import { useState } from "react";
 import { confirm } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import { cloneTask, deleteTask, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
+import { cloneTask, deleteTask, markTaskDone, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
 
 export function TaskCard({
   card,
@@ -57,6 +57,9 @@ export function TaskCard({
       <div className="task-card-title">{card.title}</div>
       <div className="task-card-meta">{card.project_dir}</div>
       {!card.parallel_ok && <div className="task-card-meta">⚑ {t.board_card_solo_hint}</div>}
+      {card.interactive && (
+        <div className="task-badge task-badge--interactive">👤 {t.board_badge_interactive}</div>
+      )}
 
       {card.status === "running" && <div className="task-card-meta">{t.board_running_hint}</div>}
 
@@ -79,6 +82,11 @@ export function TaskCard({
             <button disabled={busy} onClick={() => void run(() => stopTask(card.id))}>
               {t.board_action_stop}
             </button>
+            {card.interactive && (
+              <button disabled={busy} onClick={() => void run(() => markTaskDone(card.id))}>
+                {t.board_action_mark_done}
+              </button>
+            )}
             {card.tab_id && <button onClick={openTab}>{t.board_action_open_tab}</button>}
           </>
         )}
