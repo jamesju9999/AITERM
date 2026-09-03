@@ -24,6 +24,7 @@ import { KnowledgeBaseView } from "./KnowledgeBaseView";
 import { MailView } from "./MailView";
 import { RemoteTerminalView } from "./RemoteTerminalView";
 import { HomeView } from "./HomeView";
+import { TaskBoardView } from "./TaskBoard";
 import { RouteHint } from "./RouteHint";
 import type { RouteResult } from "./HomeView/routeIntent";
 import { useLocale } from "../contexts/LocaleContext";
@@ -67,6 +68,9 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   // 首頁不是分頁，所以它不在 tabs 裡，而是一個「都不 active」的狀態。
   // 預設 true：開 app 先看到首頁，上次的分頁照常還原但不在前景。
   const [homeActive, setHomeActive] = useState(true);
+  // 工作看板跟首頁一樣不是分頁，是另一個「都不 active」的覆蓋畫面，與首頁互斥。
+  const [boardActive, setBoardActive] = useState(false);
+  const boardActiveRef = useRef(boardActive);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   // 記住這次開啟 ConnectDialog，是不是某個既有遠端終端機分頁的工具列
@@ -145,6 +149,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     activeIdRef.current = activeId;
     isSidebarOpenRef.current = isSidebarOpen;
     homeActiveRef.current = homeActive;
+    boardActiveRef.current = boardActive;
     // When switching to a terminal tab that already has a PTY, update the tracked ID.
     const activeTab = tabs.find((t) => t.id === activeId);
     if (activeTab?.type === "terminal" && activeTab.ptySessionId) {
@@ -152,7 +157,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     }
     // Persist tab layout for session restoration
     saveSessionTabs(tabs);
-  }, [tabs, activeId, isSidebarOpen, homeActive]);
+  }, [tabs, activeId, isSidebarOpen, homeActive, boardActive]);
 
   // 切到某個分頁就把它的提示點清掉——使用者選定的規則是「切過去就算讀過」。
   // 這裡而不是用一個以 activeId 為依賴的 effect：清除在語意上是「選取分頁」
@@ -160,12 +165,33 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   const selectTab = useCallback((id: string) => {
     setActiveId(id);
     setHomeActive(false);
+    setBoardActive(false);
     setTabs((prev) =>
       prev.some((t) => t.id === id && t.attention)
         ? prev.map((t) => (t.id === id ? { ...t, attention: undefined } : t))
         : prev
     );
   }, []);
+
+  // 首頁與工作看板是兩個互斥的覆蓋畫面：顯示一個就關掉另一個。
+  const showBoard = useCallback(() => { setBoardActive(true); setHomeActive(false); }, []);
+  const showHome = useCallback(() => { setHomeActive(true); setBoardActive(false); }, []);
+
+  // TaskCard 的「開啟分頁」按鈕會 dispatch 一個 aiterm:focus-tab 視窗事件，
+  // detail.tabId 是那張卡片對應的 PTY session id。把覆蓋畫面收起來、切到該分頁。
+  useEffect(() => {
+    const onFocusTab = (e: Event) => {
+      const id = (e as CustomEvent<{ tabId?: string }>).detail?.tabId;
+      if (!id) return;
+      const tab = tabs.find((tb) => tb.ptySessionId === id) ?? tabs.find((tb) => tb.id === id);
+      if (!tab) return;
+      setHomeActive(false);
+      setBoardActive(false);
+      selectTab(tab.id);
+    };
+    window.addEventListener("aiterm:focus-tab", onFocusTab);
+    return () => window.removeEventListener("aiterm:focus-tab", onFocusTab);
+  }, [tabs, selectTab]);
 
   // Enterprise: pending task notification + skill toast
   const [pendingTask, setPendingTask] = useState<TaskPacket | null>(null);
@@ -446,8 +472,8 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
         handleAddTab();
       } else if (e.key === "w" || e.key === "W") {
         e.preventDefault();
-        // 首頁沒有可關的分頁——不擋掉會靜默關掉背景那個看不見的分頁。
-        if (homeActiveRef.current) return;
+        // 首頁／工作看板沒有可關的分頁——不擋掉會靜默關掉背景那個看不見的分頁。
+        if (homeActiveRef.current || boardActiveRef.current) return;
         handleCloseTab(activeIdRef.current);
       } else if (e.key === "Tab") {
         e.preventDefault();
@@ -469,7 +495,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
         // Windows/Linux 的 webview 用 Ctrl+0 重設縮放，一定要擋掉。
         // macOS 的重設縮放是 Cmd+0，不衝突。
         e.preventDefault();
-        setHomeActive(true);
+        showHome();
       } else if (e.key >= "1" && e.key <= "9") {
         // Go to specific tab (1-indexed)
         const i = parseInt(e.key, 10) - 1;
@@ -484,7 +510,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     // Use capture phase to intercept before xterm.js potentially swallows them
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [handleAddTab, handleCloseTab, selectTab]);
+  }, [handleAddTab, handleCloseTab, selectTab, showHome]);
 
   useEffect(() => {
     if (!isDragging) return;
@@ -508,7 +534,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
 
   // 首頁不是分頁，標題列要退回 TitleBar 的預設值（"AITerm"），不能沿用
   // 背景分頁的標題／AI 摘要。
-  const activeTabForTitle = homeActive ? undefined : tabs.find((t) => t.id === activeId);
+  const activeTabForTitle = homeActive || boardActive ? undefined : tabs.find((t) => t.id === activeId);
   const titleBarText = activeTabForTitle
     ? (activeTabForTitle.type === "terminal" && activeTabForTitle.aiSummary
         ? `${activeTabForTitle.title} - ${activeTabForTitle.aiSummary}`
@@ -534,8 +560,10 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
           hasUpdate={hasUpdate}
           mailUnreadCount={mailUnreadCount}
           mailFailedAccountCount={mailFailedAccountCount}
-          onHome={() => setHomeActive(true)}
+          onHome={showHome}
           homeActive={homeActive}
+          onBoard={showBoard}
+          boardActive={boardActive}
           remoteTabId={remoteTabId}
         />
       </div>
@@ -613,6 +641,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
         {homeActive && (
           <HomeView onOpenTab={handlePickerSelect} tabs={tabs} onSelectTab={selectTab} onAiRouted={handleAiRouted} />
         )}
+        {boardActive && <TaskBoardView />}
         {/* AI 路由猜錯分頁類型的反悔提示：只在猜出來的那個分頁正在前景時顯示。 */}
         {!homeActive && routeHint && routeHint.tabId === activeId && (
           <RouteHint
@@ -622,7 +651,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
           />
         )}
         {tabs.map((tab) => {
-          const isActive = tab.id === activeId && !homeActive;
+          const isActive = tab.id === activeId && !homeActive && !boardActive;
           return (
             <div
               key={tab.id}
@@ -761,7 +790,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
         // 首頁的 RunningTasks 已經涵蓋「顯示進行中任務」的職責且更完整
         // （不受 enterpriseTask / activeId 過濾限制），停在首頁時這個浮動
         // 面板不渲染，避免兩者重複出現、且較不完整的這個漏掉 activeId 那筆。
-        if (homeActive) return null;
+        if (homeActive || boardActive) return null;
         const bgTasks = tabs.filter(
           (t) => t.type === "terminal" && t.enterpriseTask && t.agentProgress && t.id !== activeId
         );
