@@ -96,18 +96,31 @@ pub async fn run_on_session(
     pty.write(tab_id, b"\r").map_err(|e| e.to_string())?;
 
     if request_done_marker {
+        // Wait for a bell as a best-effort signal that `claude` finished
+        // reading the prompt and is ready for more input — but send the
+        // instruction regardless of whether one actually arrived. A real
+        // `claude` CLI in this environment has been observed to complete a
+        // whole task without ever ringing a single bell (see the
+        // coordination-done-marker design doc). Gating the instruction send
+        // on `became_idle`, as an earlier version of this function did,
+        // meant a `claude` session that simply doesn't bell was NEVER even
+        // asked to print the completion marker — confirmed live: a task
+        // that actually finished (visible in its own tab) still landed on
+        // the monitor's 120s-stuck path and got marked failed, because
+        // neither signal it's waiting for ever fired. The wait still has
+        // value (gives `claude` time to become idle before we write more,
+        // same reasoning `coordination_ops::send_input` documents), it's
+        // just not treated as a gate on whether to bother at all.
         let bell_before = pty.bell_count(tab_id).unwrap_or(0);
-        let became_idle = crate::mcp_server::coordination_ops::wait_for_new_bell(
+        crate::mcp_server::coordination_ops::wait_for_new_bell(
             pty,
             tab_id,
             bell_before,
             Duration::from_secs(DONE_MARKER_WAIT_SECONDS),
         )
         .await;
-        if became_idle {
-            let instr = done_marker_instruction(tab_id);
-            pty.write(tab_id, format!("{instr}\r").as_bytes()).map_err(|e| e.to_string())?;
-        }
+        let instr = done_marker_instruction(tab_id);
+        pty.write(tab_id, format!("{instr}\r").as_bytes()).map_err(|e| e.to_string())?;
     }
 
     Ok(DispatchResult {
@@ -283,5 +296,38 @@ mod tests {
             expected.as_slice(),
             "expected the multi-line prompt's exact bytes (embedded 0a preserved) followed by a standalone 0d — got: {hex_bytes:?}"
         );
+    }
+
+    /// Regression test for a real bug found live: a task that genuinely
+    /// finished (visible completing in its own tab) still got marked failed
+    /// by the monitor's 120s-stuck path, because the done-marker instruction
+    /// was never sent — the old code only sent it after observing a fresh
+    /// bell, and a real `claude` CLI has been observed to complete a whole
+    /// turn without ever ringing one. No bell is injected here at all;
+    /// the instruction (which mentions the tab_id) must still be sent once
+    /// the wait elapses. Runs for real at ~DONE_MARKER_WAIT_SECONDS (15s),
+    /// same as the sibling test this mirrors in coordination_ops.rs.
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn run_on_session_sends_the_done_marker_instruction_even_when_the_target_never_bells() {
+        let pty = PtyManager::new();
+        let tab_id = pty
+            .create_with_callback(
+                portable_pty::PtySize { rows: 24, cols: 300, pixel_width: 0, pixel_height: 0 },
+                |_| {},
+            )
+            .unwrap();
+
+        run_on_session(&pty, &tab_id, "echo hi", true).await.unwrap();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let output = pty.get_recent_output(&tab_id, 8192).unwrap_or_default();
+            if output.contains(&tab_id) {
+                break; // the instruction mentions its own tab_id
+            }
+            assert!(tokio::time::Instant::now() < deadline, "done-marker instruction was never sent: {output}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 }
