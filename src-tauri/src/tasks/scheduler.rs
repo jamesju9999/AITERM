@@ -136,16 +136,39 @@ fn write_transcript(pty: &PtyManager, task_id: &str, tab_id: &str) -> Option<Str
 /// Promote as many queued cards as the rules allow, right now. Shared by the
 /// loop and by tests.
 pub async fn drain_once(db: &TasksDb, dispatcher: &dyn Dispatcher, max_concurrent: u32) {
+    // Interactive cards bypass the concurrency cap and the solo-blocking
+    // rule entirely — dispatch every queued one, unconditionally, first.
+    loop {
+        let queued = match store::list_by_status(&db.pool, store::STATUS_QUEUED).await {
+            Ok(q) => q,
+            Err(e) => {
+                eprintln!("scheduler list queued (interactive pass): {e}");
+                return;
+            }
+        };
+        let Some(next) = queued.into_iter().find(|t| t.interactive) else {
+            break;
+        };
+        if let Err(e) = dispatcher.dispatch(db, &next).await {
+            eprintln!("dispatch {} failed: {e}", next.id);
+            let _ = store::mark_dispatched(&db.pool, &next.id, "").await;
+            let _ = store::finish_task(&db.pool, &next.id, "failed", Some(&e), None).await;
+        }
+    }
+
+    // Existing logic, unchanged — but `running`/`queued` here only ever see
+    // non-interactive cards, so they neither count against max_concurrent
+    // nor get blocked by (or block) anything in the interactive lane above.
     loop {
         let running = match store::list_by_status(&db.pool, store::STATUS_RUNNING).await {
-            Ok(r) => r,
+            Ok(r) => r.into_iter().filter(|t| !t.interactive).collect::<Vec<_>>(),
             Err(e) => {
                 eprintln!("scheduler list running: {e}");
                 return;
             }
         };
         let queued = match store::list_by_status(&db.pool, store::STATUS_QUEUED).await {
-            Ok(q) => q,
+            Ok(q) => q.into_iter().filter(|t| !t.interactive).collect::<Vec<_>>(),
             Err(e) => {
                 eprintln!("scheduler list queued: {e}");
                 return;
@@ -395,5 +418,75 @@ mod loop_tests {
         // p1 promoted; solo is the head and something's running → stop; p2 not skipped.
         assert_eq!(by("running", &all), vec!["p1"]);
         assert_eq!(by("queued", &all), vec!["solo", "p2"]);
+    }
+
+    #[tokio::test]
+    async fn drain_once_dispatches_interactive_cards_even_when_the_auto_lane_is_full() {
+        let db = mem_db().await;
+        // Seed one auto card already running — fills a cap of 1.
+        let running_id = store::create_task(&db.pool, "already-running", "", "/r", true, false).await.unwrap();
+        store::move_task(&db.pool, &running_id, store::STATUS_QUEUED, 1.0).await.unwrap();
+        store::mark_dispatched(&db.pool, &running_id, "tab-already").await.unwrap();
+
+        // A second auto card, queued — cap=1 means this must stay queued.
+        let blocked_id = store::create_task(&db.pool, "blocked-auto", "", "/r", true, false).await.unwrap();
+        store::move_task(&db.pool, &blocked_id, store::STATUS_QUEUED, 2.0).await.unwrap();
+
+        // An interactive card, queued — must dispatch anyway, cap or no cap.
+        let interactive_id = store::create_task(&db.pool, "chat", "", "/r", true, true).await.unwrap();
+        store::move_task(&db.pool, &interactive_id, store::STATUS_QUEUED, 3.0).await.unwrap();
+
+        struct RecordingDispatcher {
+            dispatched: std::sync::Mutex<Vec<String>>,
+        }
+        #[async_trait::async_trait]
+        impl Dispatcher for RecordingDispatcher {
+            async fn dispatch(&self, db: &TasksDb, task: &TaskRow) -> Result<(), String> {
+                self.dispatched.lock().unwrap().push(task.title.clone());
+                store::mark_dispatched(&db.pool, &task.id, &format!("fake-{}", task.id))
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+        }
+        let dispatcher = RecordingDispatcher { dispatched: std::sync::Mutex::new(vec![]) };
+        drain_once(&db, &dispatcher, 1).await;
+
+        assert_eq!(*dispatcher.dispatched.lock().unwrap(), vec!["chat".to_string()]);
+
+        let all = store::list_tasks(&db.pool).await.unwrap();
+        let status_of = |t: &str| all.iter().find(|r| r.title == t).unwrap().status.clone();
+        assert_eq!(status_of("already-running"), "running");
+        assert_eq!(status_of("blocked-auto"), "queued"); // cap=1 respected for the auto lane
+        assert_eq!(status_of("chat"), "running"); // interactive bypassed the cap entirely
+    }
+
+    #[tokio::test]
+    async fn drain_once_does_not_let_a_running_interactive_card_count_against_the_auto_cap() {
+        let db = mem_db().await;
+        // An interactive card already running should NOT occupy the auto
+        // lane's capacity slot — an auto card queued behind it must still
+        // start immediately even at cap=1.
+        let chat_id = store::create_task(&db.pool, "chat", "", "/r", true, true).await.unwrap();
+        store::move_task(&db.pool, &chat_id, store::STATUS_QUEUED, 1.0).await.unwrap();
+        store::mark_dispatched(&db.pool, &chat_id, "tab-chat").await.unwrap();
+
+        let auto_id = store::create_task(&db.pool, "auto", "", "/r", true, false).await.unwrap();
+        store::move_task(&db.pool, &auto_id, store::STATUS_QUEUED, 2.0).await.unwrap();
+
+        struct FakeDispatcher;
+        #[async_trait::async_trait]
+        impl Dispatcher for FakeDispatcher {
+            async fn dispatch(&self, db: &TasksDb, task: &TaskRow) -> Result<(), String> {
+                store::mark_dispatched(&db.pool, &task.id, &format!("fake-{}", task.id))
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+        }
+        drain_once(&db, &FakeDispatcher, 1).await;
+
+        let all = store::list_tasks(&db.pool).await.unwrap();
+        let status_of = |t: &str| all.iter().find(|r| r.title == t).unwrap().status.clone();
+        assert_eq!(status_of("chat"), "running");
+        assert_eq!(status_of("auto"), "running"); // not blocked by the already-running interactive card
     }
 }
