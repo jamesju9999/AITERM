@@ -239,6 +239,14 @@ pub async fn tasks_remove_attachment(
         .await
         .map_err(|e| e.to_string())?
     {
+        if let Some(row) = store::get_task(&db.pool, &att.task_id)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            if !edit_allowed(&row.status) {
+                return Err("attachments can only be changed while the card is in 計畫中".into());
+            }
+        }
         let _ = fs::remove_file(&att.stored_path);
     }
     store::remove_attachment(&db.pool, &attachment_id)
@@ -246,6 +254,40 @@ pub async fn tasks_remove_attachment(
         .map_err(|e| e.to_string())?;
     emit_updated(&app);
     Ok(())
+}
+
+#[tauri::command]
+pub async fn tasks_clone(id: String, db: State<'_, TasksDb>, app: AppHandle) -> Result<String, String> {
+    let src = store::get_task(&db.pool, &id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "task not found".to_string())?;
+    let new_id = store::clone_task_fields(&db.pool, &src.id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Copy each attachment file into the new card's dir; skip any whose
+    // source file is gone (best effort — a missing file must not fail the clone).
+    let dir = task_dir(&new_id).join("attachments");
+    for att in store::list_attachments(&db.pool, &id)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        if !std::path::Path::new(&att.stored_path).exists() {
+            continue;
+        }
+        if let Err(e) = fs::create_dir_all(&dir) {
+            eprintln!("tasks_clone: mkdir {dir:?}: {e}");
+            break;
+        }
+        let dest = dir.join(&att.filename);
+        if fs::copy(&att.stored_path, &dest).is_err() {
+            continue;
+        }
+        let _ = store::add_attachment(&db.pool, &new_id, &att.filename, &dest.to_string_lossy()).await;
+    }
+    emit_updated(&app);
+    Ok(new_id)
 }
 
 #[tauri::command]

@@ -50,6 +50,8 @@ export const createTask = (args: {
   parallel_ok: boolean;
 }): Promise<string> => invoke("tasks_create", { args });
 
+export const cloneTask = (id: string): Promise<string> => invoke("tasks_clone", { id });
+
 export const updateTask = (args: {
   id: string;
   title: string;

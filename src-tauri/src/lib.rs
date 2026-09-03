@@ -106,7 +106,7 @@ use commands::{
     task_board_config::{task_board_get_config, task_board_set_config},
     tasks::{
         tasks_list, tasks_create, tasks_update, tasks_move, tasks_stop, tasks_delete,
-        tasks_add_attachment, tasks_remove_attachment, tasks_read_transcript,
+        tasks_add_attachment, tasks_remove_attachment, tasks_clone, tasks_read_transcript,
     },
     updater::updater_supported,
     web::{web_fetch, web_search, npm_mcp_search},
@@ -554,6 +554,7 @@ pub fn run() {
             tasks_delete,
             tasks_add_attachment,
             tasks_remove_attachment,
+            tasks_clone,
             tasks_read_transcript,
         ])
         .build(tauri::generate_context!())

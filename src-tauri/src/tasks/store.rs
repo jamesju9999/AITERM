@@ -79,6 +79,14 @@ pub async fn create_task(
     Ok(id)
 }
 
+/// Create a fresh `planning` card copying `src`'s title/body/project_dir/
+/// parallel_ok. Does NOT copy attachments (the command layer does the file
+/// copy). Returns the new id. Err if `src_id` doesn't exist.
+pub async fn clone_task_fields(pool: &SqlitePool, src_id: &str) -> Result<String, sqlx::Error> {
+    let src = get_task(pool, src_id).await?.ok_or(sqlx::Error::RowNotFound)?;
+    create_task(pool, &src.title, &src.body, &src.project_dir, src.parallel_ok).await
+}
+
 pub async fn list_tasks(pool: &SqlitePool) -> Result<Vec<TaskRow>, sqlx::Error> {
     sqlx::query_as::<_, TaskRow>("SELECT * FROM tasks ORDER BY status, sort_order")
         .fetch_all(pool)
@@ -414,6 +422,32 @@ mod tests {
         assert_eq!(list_attachments(&pool, &id).await.unwrap().len(), 1);
         remove_attachment(&pool, &aid).await.unwrap();
         assert_eq!(list_attachments(&pool, &id).await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn clone_task_fields_copies_the_core_fields_into_a_new_planning_card() {
+        let pool = mem_pool().await;
+        let src = create_task(&pool, "Ship it", "the body", "/repo/x", false)
+            .await
+            .unwrap();
+        move_task(&pool, &src, STATUS_QUEUED, 1.0).await.unwrap();
+        finish_task(&pool, &src, "success", None, None).await.unwrap();
+
+        let new_id = clone_task_fields(&pool, &src).await.unwrap();
+        assert_ne!(new_id, src);
+        let row = get_task(&pool, &new_id).await.unwrap().unwrap();
+        assert_eq!(row.status, STATUS_PLANNING);
+        assert_eq!(row.title, "Ship it");
+        assert_eq!(row.body, "the body");
+        assert_eq!(row.project_dir, "/repo/x");
+        assert!(!row.parallel_ok);
+        assert!(row.outcome.is_none());
+    }
+
+    #[tokio::test]
+    async fn clone_task_fields_errors_when_source_is_missing() {
+        let pool = mem_pool().await;
+        assert!(clone_task_fields(&pool, "nope").await.is_err());
     }
 
     #[tokio::test]
