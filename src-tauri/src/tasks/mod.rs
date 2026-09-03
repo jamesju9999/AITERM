@@ -8,6 +8,7 @@
 
 pub mod store;
 pub mod dispatch;
+pub mod monitor;
 
 use std::fs;
 use std::path::PathBuf;
