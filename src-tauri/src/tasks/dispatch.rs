@@ -146,6 +146,7 @@ pub async fn spawn_and_run(
     project_dir: &str,
     claude_command: &str,
     prompt: &str,
+    request_done_marker: bool,
 ) -> Result<(String, DispatchResult), String> {
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
     let tab_id = pty
@@ -164,7 +165,7 @@ pub async fn spawn_and_run(
     }
 
     wait_until_settled(pty, &tab_id).await;
-    let result = run_on_session(pty, &tab_id, prompt, true).await?;
+    let result = run_on_session(pty, &tab_id, prompt, request_done_marker).await?;
     Ok((tab_id, result))
 }
 
@@ -315,6 +316,40 @@ mod tests {
     /// the instruction (which mentions the tab_id) must still be sent once
     /// the wait elapses. Runs for real at ~DONE_MARKER_WAIT_SECONDS (15s),
     /// same as the sibling test this mirrors in coordination_ops.rs.
+    /// `tauri::test::{mock_builder, mock_context, noop_assets}` (which would
+    /// let this test drive `spawn_and_run` directly, the thing that actually
+    /// gains a new parameter in this change) needs the `tauri` crate's `test`
+    /// feature, which isn't enabled on this project's `tauri` dependency
+    /// (`features = []` in Cargo.toml) — confirmed via a real compile
+    /// attempt (`error[E0432]: ... the item is gated here`, pointing at
+    /// `#[cfg_attr(docsrs, doc(cfg(feature = "test")))] pub mod test;`).
+    /// Enabling it would mean an extra Cargo.toml dependency-feature change
+    /// beyond this task's two listed files, so this exercises the same
+    /// underlying mechanism one level down, against `run_on_session`
+    /// (unchanged by this task, already parameterized) instead — it pairs
+    /// with `run_on_session_sends_the_done_marker_instruction_even_when_the_
+    /// target_never_bells` above, which covers the `true` side of the same
+    /// parameter. `spawn_and_run` forwarding its own new parameter straight
+    /// into `run_on_session` is a one-line, easily eyeballed change in the
+    /// implementation below.
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn run_on_session_does_not_send_the_done_marker_instruction_when_not_requested() {
+        let pty = PtyManager::new();
+        let tab_id = pty
+            .create_with_callback(
+                portable_pty::PtySize { rows: 24, cols: 300, pixel_width: 0, pixel_height: 0 },
+                |_| {},
+            )
+            .unwrap();
+
+        run_on_session(&pty, &tab_id, "echo hi", false).await.unwrap();
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let out = pty.get_recent_output(&tab_id, 8192).unwrap_or_default();
+        assert!(!out.contains(&tab_id), "done-marker instruction was sent despite request_done_marker=false: {out}");
+    }
+
     #[tokio::test]
     #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
     async fn run_on_session_sends_the_done_marker_instruction_even_when_the_target_never_bells() {

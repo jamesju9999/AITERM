@@ -73,8 +73,15 @@ impl Dispatcher for RealDispatcher {
         let prompt = dispatch::build_prompt(&task.body, &attachments);
         let claude_cmd = self.config.get().task_board.claude_command;
 
-        let (tab_id, disp) =
-            dispatch::spawn_and_run(&self.app, &self.pty, &task.project_dir, &claude_cmd, &prompt).await?;
+        let (tab_id, disp) = dispatch::spawn_and_run(
+            &self.app,
+            &self.pty,
+            &task.project_dir,
+            &claude_cmd,
+            &prompt,
+            !task.interactive,
+        )
+        .await?;
         store::mark_dispatched(&db.pool, &task.id, &tab_id)
             .await
             .map_err(|e| e.to_string())?;
