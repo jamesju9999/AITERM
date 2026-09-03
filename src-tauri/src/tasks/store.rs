@@ -39,7 +39,6 @@ pub struct AttachmentRow {
     pub stored_path: String,
 }
 
-#[allow(dead_code)] // consumed by dispatch/monitor in later tasks
 fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -105,6 +104,225 @@ pub async fn get_task(pool: &SqlitePool, id: &str) -> Result<Option<TaskRow>, sq
         .await
 }
 
+/// Whether `from → to` is a legal user-driven column move. The scheduler and
+/// monitor use `mark_dispatched`/`finish_task` for `queued→running` and
+/// `→done`; the only moves a user makes by hand are among
+/// planning/queued (either direction).
+fn transition_ok(from: &str, to: &str) -> bool {
+    matches!(
+        (from, to),
+        (STATUS_PLANNING, STATUS_QUEUED)
+            | (STATUS_QUEUED, STATUS_PLANNING)
+            | (STATUS_PLANNING, STATUS_PLANNING)
+            | (STATUS_QUEUED, STATUS_QUEUED)
+    )
+}
+
+/// Move a card to `to_status` at `sort_order`. Rejects illegal transitions.
+/// `queued→running` / `→done` are NOT done through here — use
+/// `mark_dispatched` / `finish_task`.
+pub async fn move_task(
+    pool: &SqlitePool,
+    id: &str,
+    to_status: &str,
+    sort_order: f64,
+) -> Result<(), sqlx::Error> {
+    let current: Option<String> = sqlx::query_scalar("SELECT status FROM tasks WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    let from = current.ok_or(sqlx::Error::RowNotFound)?;
+    if !transition_ok(&from, to_status) {
+        return Err(sqlx::Error::Protocol(format!(
+            "illegal transition {from} → {to_status}"
+        )));
+    }
+    sqlx::query("UPDATE tasks SET status = ?, sort_order = ? WHERE id = ?")
+        .bind(to_status)
+        .bind(sort_order)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// The `sort_order` value that drops a card between `before` and `after`
+/// (either may be `None` = top/bottom of the column).
+pub async fn midpoint_between(
+    pool: &SqlitePool,
+    status: &str,
+    before_id: Option<&str>,
+    after_id: Option<&str>,
+) -> Result<f64, sqlx::Error> {
+    async fn order_of(pool: &SqlitePool, id: &str) -> Result<f64, sqlx::Error> {
+        sqlx::query_scalar("SELECT CAST(sort_order AS REAL) FROM tasks WHERE id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+    }
+    let lo = match before_id {
+        Some(id) => order_of(pool, id).await?,
+        None => {
+            let min: Option<f64> = sqlx::query_scalar(
+                "SELECT CAST(MIN(sort_order) AS REAL) FROM tasks WHERE status = ?",
+            )
+            .bind(status)
+            .fetch_one(pool)
+            .await?;
+            min.unwrap_or(1.0) - 1.0
+        }
+    };
+    let hi = match after_id {
+        Some(id) => order_of(pool, id).await?,
+        None => {
+            let max: Option<f64> = sqlx::query_scalar(
+                "SELECT CAST(MAX(sort_order) AS REAL) FROM tasks WHERE status = ?",
+            )
+            .bind(status)
+            .fetch_one(pool)
+            .await?;
+            max.unwrap_or(0.0) + 2.0
+        }
+    };
+    Ok((lo + hi) / 2.0)
+}
+
+pub async fn set_parallel_ok(
+    pool: &SqlitePool,
+    id: &str,
+    parallel_ok: bool,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET parallel_ok = ? WHERE id = ?")
+        .bind(parallel_ok as i64)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Edit title/body/project_dir. Caller (command layer) restricts this to `planning` cards.
+pub async fn update_task_fields(
+    pool: &SqlitePool,
+    id: &str,
+    title: &str,
+    body: &str,
+    project_dir: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET title = ?, body = ?, project_dir = ? WHERE id = ?")
+        .bind(title)
+        .bind(body)
+        .bind(project_dir)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// `queued → running`: record the spawned tab and dispatch time.
+pub async fn mark_dispatched(pool: &SqlitePool, id: &str, tab_id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE tasks SET status = 'running', tab_id = ?, dispatched_at = ? WHERE id = ? AND status = 'queued'",
+    )
+    .bind(tab_id)
+    .bind(now_secs())
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// `running → done` with an outcome. `outcome` ∈ success | failed | cancelled.
+pub async fn finish_task(
+    pool: &SqlitePool,
+    id: &str,
+    outcome: &str,
+    error_message: Option<&str>,
+    transcript_path: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE tasks SET status = 'done', outcome = ?, error_message = ?, transcript_path = ?, finished_at = ? WHERE id = ?",
+    )
+    .bind(outcome)
+    .bind(error_message)
+    .bind(transcript_path)
+    .bind(now_secs())
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Startup recovery: any card still `running` was orphaned when the app last
+/// exited (its PTY died with the process). Returns how many were recovered.
+pub async fn recover_orphaned_running(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query(
+        "UPDATE tasks SET status = 'done', outcome = 'cancelled',
+             error_message = 'app 重啟，工作已中斷', finished_at = ?
+         WHERE status = 'running'",
+    )
+    .bind(now_secs())
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+pub async fn add_attachment(
+    pool: &SqlitePool,
+    task_id: &str,
+    filename: &str,
+    stored_path: &str,
+) -> Result<String, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO task_attachments (id, task_id, filename, stored_path) VALUES (?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(task_id)
+    .bind(filename)
+    .bind(stored_path)
+    .execute(pool)
+    .await?;
+    Ok(id)
+}
+
+pub async fn remove_attachment(pool: &SqlitePool, attachment_id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM task_attachments WHERE id = ?")
+        .bind(attachment_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_attachment(
+    pool: &SqlitePool,
+    attachment_id: &str,
+) -> Result<Option<AttachmentRow>, sqlx::Error> {
+    sqlx::query_as::<_, AttachmentRow>("SELECT * FROM task_attachments WHERE id = ?")
+        .bind(attachment_id)
+        .fetch_optional(pool)
+        .await
+}
+
+pub async fn delete_task(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM task_attachments WHERE task_id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    sqlx::query("DELETE FROM tasks WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Rows the scheduler needs: everything of one status, oldest first.
+pub async fn list_by_status(pool: &SqlitePool, status: &str) -> Result<Vec<TaskRow>, sqlx::Error> {
+    sqlx::query_as::<_, TaskRow>("SELECT * FROM tasks WHERE status = ? ORDER BY sort_order")
+        .bind(status)
+        .fetch_all(pool)
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +347,82 @@ mod tests {
         assert_eq!(all[0].status, "planning");
         assert_eq!(all[0].parallel_ok, true);
         assert!(all[0].outcome.is_none());
+    }
+
+    #[tokio::test]
+    async fn move_planning_to_queued_is_allowed_but_done_to_running_is_not() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "t", "", "/r", true).await.unwrap();
+        move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
+        assert_eq!(get_task(&pool, &id).await.unwrap().unwrap().status, "queued");
+
+        finish_task(&pool, &id, "success", None, None).await.unwrap();
+        let err = move_task(&pool, &id, STATUS_RUNNING, 1.0).await.unwrap_err();
+        assert!(err.to_string().contains("illegal transition"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn midpoint_sort_order_between_two_cards() {
+        let pool = mem_pool().await;
+        let a = create_task(&pool, "a", "", "/r", true).await.unwrap();
+        let b = create_task(&pool, "b", "", "/r", true).await.unwrap();
+        move_task(&pool, &a, STATUS_QUEUED, 1.0).await.unwrap();
+        move_task(&pool, &b, STATUS_QUEUED, 2.0).await.unwrap();
+        let c = create_task(&pool, "c", "", "/r", true).await.unwrap();
+        let mid = midpoint_between(&pool, STATUS_QUEUED, Some(&a), Some(&b)).await.unwrap();
+        assert!((mid - 1.5).abs() < 1e-9, "got {mid}");
+        move_task(&pool, &c, STATUS_QUEUED, mid).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn mark_dispatched_and_finish_set_the_right_columns() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "t", "", "/r", true).await.unwrap();
+        move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
+        mark_dispatched(&pool, &id, "tab-xyz").await.unwrap();
+        let row = get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!(row.status, "running");
+        assert_eq!(row.tab_id.as_deref(), Some("tab-xyz"));
+        assert!(row.dispatched_at.is_some());
+
+        finish_task(&pool, &id, "failed", Some("boom"), Some("/p/transcript.txt")).await.unwrap();
+        let row = get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!(row.status, "done");
+        assert_eq!(row.outcome.as_deref(), Some("failed"));
+        assert_eq!(row.error_message.as_deref(), Some("boom"));
+        assert!(row.finished_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn recover_orphaned_running_marks_them_cancelled() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "t", "", "/r", true).await.unwrap();
+        move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
+        mark_dispatched(&pool, &id, "tab-1").await.unwrap();
+        let n = recover_orphaned_running(&pool).await.unwrap();
+        assert_eq!(n, 1);
+        let row = get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!(row.status, "done");
+        assert_eq!(row.outcome.as_deref(), Some("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn add_and_remove_attachment_rows() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "t", "", "/r", true).await.unwrap();
+        let aid = add_attachment(&pool, &id, "spec.md", "/p/spec.md").await.unwrap();
+        assert_eq!(list_attachments(&pool, &id).await.unwrap().len(), 1);
+        remove_attachment(&pool, &aid).await.unwrap();
+        assert_eq!(list_attachments(&pool, &id).await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn delete_task_also_deletes_its_attachment_rows() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "t", "", "/r", true).await.unwrap();
+        add_attachment(&pool, &id, "a", "/p/a").await.unwrap();
+        delete_task(&pool, &id).await.unwrap();
+        assert!(get_task(&pool, &id).await.unwrap().is_none());
+        assert_eq!(list_attachments(&pool, &id).await.unwrap().len(), 0);
     }
 }
