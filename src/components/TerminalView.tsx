@@ -10,6 +10,7 @@ import { homeDir } from "@tauri-apps/api/path";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import "@xterm/xterm/css/xterm.css";
 
 import {
@@ -55,6 +56,7 @@ import { reportAgentStep, type AgentStepInfo } from "../lib/agentStepReport";
 import { runAgentLoop, INITIAL_PREVIEW, type PreviewState } from "../lib/agentLoop";
 import { getGitBlockInfo } from "../ipc/vcs";
 import { isClaudeCommand } from "../lib/claudeCommand";
+import { registerTerminal, unregisterTerminal } from "../lib/terminalInstanceRegistry";
 import { CloseConfirmDialog } from "./CloseConfirmDialog";
 import "./TerminalView.css";
 
@@ -299,6 +301,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const [cursorHidden, setCursorHidden] = useState(false);
 
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const serializeAddonRef = useRef<SerializeAddon | null>(null);
 
   // Deliberately does NOT call fitAddon.fit() here (unlike the Files-tab ->
   // Terminal-tab repaint fix below, where fit() is genuinely needed to
@@ -1054,6 +1057,18 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     }, 1500);
   }, [sessionId, initialMission, startMission, stopMission, enterpriseTask, initialCwd]);
 
+  // Registers this tab's live xterm Terminal (+ its SerializeAddon) into a
+  // small cross-component registry once the PTY session exists, so the task
+  // board can serialize this tab's current screen — collapsing every
+  // redraw/cursor-movement into the same final text a human sees — the
+  // moment a dispatched task finishes, while this tab is still open. See
+  // docs/superpowers/specs/2026-09-03-clean-task-transcript-design.md.
+  useEffect(() => {
+    if (!sessionId || !termRef.current || !serializeAddonRef.current) return;
+    registerTerminal(sessionId, termRef.current, serializeAddonRef.current);
+    return () => unregisterTerminal(sessionId);
+  }, [sessionId]);
+
   useEffect(() => {
     if (!hostRef.current) return;
 
@@ -1094,6 +1109,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     const searchAddon = new SearchAddon();
     term.loadAddon(searchAddon);
     searchAddonRef.current = searchAddon;
+    const serializeAddon = new SerializeAddon();
+    term.loadAddon(serializeAddon);
+    serializeAddonRef.current = serializeAddon;
     term.open(hostRef.current);
     requestAnimationFrame(() => fit.fit());
 
