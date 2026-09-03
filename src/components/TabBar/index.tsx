@@ -21,7 +21,8 @@ import {
   MailIcon,
   RobotIcon,
   HomeIcon,
-  EyeIcon
+  EyeIcon,
+  ClipboardListIcon
 } from "../Icons";
 import "./index.css";
 
@@ -86,6 +87,10 @@ export interface TabBarProps {
   onHome?: () => void;
   /** 目前顯示的是不是首頁。 */
   homeActive?: boolean;
+  /** 使用者按了工作看板。沒給就不顯示工作看板按鈕。 */
+  onBoard?: () => void;
+  /** 目前顯示的是不是工作看板。 */
+  boardActive?: boolean;
   /** 使用者把第 `from` 個分頁拖到第 `to` 個位置。沒給就不能拖曳。 */
   onReorder?: (from: number, to: number) => void;
   isSidebarOpen: boolean;
@@ -168,6 +173,8 @@ export function TabBar({
   onReorder,
   onHome,
   homeActive = false,
+  onBoard,
+  boardActive = false,
   isSidebarOpen,
   onToggle,
   width,
@@ -333,6 +340,18 @@ export function TabBar({
         >
           <span className="aiterm-tab-icon"><HomeIcon size={18} /></span>
           {isSidebarOpen && <span className="aiterm-tab-title">{t.home_tab}</span>}
+        </button>
+      )}
+
+      {onBoard && (
+        <button
+          className={`aiterm-tab aiterm-home-button ${boardActive ? "active" : ""}`}
+          onClick={onBoard}
+          aria-current={boardActive ? "page" : undefined}
+          title={t.board_tab}
+        >
+          <span className="aiterm-tab-icon"><ClipboardListIcon size={18} /></span>
+          {isSidebarOpen && <span className="aiterm-tab-title">{t.board_tab}</span>}
         </button>
       )}
 
