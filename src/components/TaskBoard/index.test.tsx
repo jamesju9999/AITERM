@@ -217,6 +217,39 @@ describe("TaskBoardView", () => {
     );
   });
 
+  // Regression test for a real complaint: a brand-new card has no id yet
+  // (attachments hang off an existing task id), so the create dialog had no
+  // attachment UI at all — you had to save first, then reopen via Edit. This
+  // buffers picked files client-side and uploads them right after the new
+  // id comes back from createTask, so it's one continuous flow.
+  it("new-card dialog buffers picked files and uploads them once the card is created", async () => {
+    const { createTask, addAttachment } = await import("../../ipc/tasks");
+    vi.mocked(createTask).mockResolvedValue("id-new");
+    vi.mocked(addAttachment).mockResolvedValue({
+      id: "a1",
+      task_id: "id-new",
+      filename: "spec.md",
+      stored_path: "/x/spec.md",
+    });
+    view();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /新增工作|New task/ }));
+    await user.type(screen.getByLabelText(/標題|Title/), "Ship it");
+    await user.type(screen.getByLabelText(/專案資料夾|Project folder/), "/repo");
+
+    const file = new File(["hello"], "spec.md", { type: "text/plain" });
+    const fileInput = screen.getByLabelText(/加入附件|Add attachment/);
+    await user.upload(fileInput, file);
+    expect(screen.getByText("spec.md")).toBeInTheDocument();
+    // Not uploaded yet — there's no card id to attach it to until Save.
+    expect(addAttachment).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /^儲存$|^Save$/ }));
+    await waitFor(() =>
+      expect(addAttachment).toHaveBeenCalledWith("id-new", "spec.md", expect.any(Uint8Array)),
+    );
+  });
+
   it("editing an existing planning card calls updateTask", async () => {
     const { updateTask } = await import("../../ipc/tasks");
     vi.mocked(listTasks).mockResolvedValue([card({ id: "p", title: "Old", status: "planning", project_dir: "/r" })]);

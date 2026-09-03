@@ -51,14 +51,6 @@ export function TaskBoardView() {
    * instant it crossed its own column's edge into a neighbor; a portal
    * sibling of every column has no such ancestor to be clipped by. */
   const [dragPointer, setDragPointer] = useState<{ x: number; y: number } | null>(null);
-  // DEBUG-TEMP: on-screen diagnostic overlay while root-causing a real drag
-  // bug live in the running app (no way to script a real OS mouse drag from
-  // this environment to self-verify). Remove once the drag is confirmed
-  // working.
-  const [debugLog, setDebugLog] = useState<string[]>([]);
-  const pushDebug = useCallback((msg: string) => {
-    setDebugLog((prev) => [...prev.slice(-9), `${new Date().toISOString().slice(11, 23)} ${msg}`]);
-  }, []);
 
   const refresh = useCallback(async () => {
     const rows = await listTasks();
@@ -124,27 +116,16 @@ export function TaskBoardView() {
   }, []);
 
   useEffect(() => {
-    let moveEventCount = 0;
-    let lastLoggedStatus: TaskStatus | null | "unset" = "unset";
     const onMove = (e: MouseEvent) => {
       const st = dragRef.current;
       if (!st) return;
-      moveEventCount++;
       if (!st.started) {
-        const dist = Math.hypot(e.clientX - st.startX, e.clientY - st.startY);
-        if (dist < DRAG_THRESHOLD_PX) return;
+        if (Math.hypot(e.clientX - st.startX, e.clientY - st.startY) < DRAG_THRESHOLD_PX) return;
         st.started = true;
         setDraggingCardId(st.id);
-        pushDebug(`threshold crossed after ${moveEventCount} move events (dist=${dist.toFixed(0)}px) → started=true`);
       }
       setDragPointer({ x: e.clientX, y: e.clientY });
-      const over = statusUnderPoint(e.clientX, e.clientY);
-      if (over !== lastLoggedStatus) {
-        lastLoggedStatus = over;
-        const el = document.elementFromPoint(e.clientX, e.clientY);
-        pushDebug(`over changed → ${over ?? "null"} (elementFromPoint tag=${el?.tagName ?? "null"}.${(el as HTMLElement | null)?.className ?? ""})`);
-      }
-      setDragOverStatus(over);
+      setDragOverStatus(statusUnderPoint(e.clientX, e.clientY));
     };
     const onUp = (e: MouseEvent) => {
       const st = dragRef.current;
@@ -152,12 +133,8 @@ export function TaskBoardView() {
       setDragOverStatus(null);
       setDraggingCardId(null);
       setDragPointer(null);
-      if (!st?.started) {
-        pushDebug(`mouseup: drag never started (armed=${!!st}, moveEvents=${moveEventCount})`);
-        return;
-      }
+      if (!st?.started) return;
       const to = statusUnderPoint(e.clientX, e.clientY);
-      pushDebug(`mouseup at (${e.clientX},${e.clientY}) → resolved status=${to ?? "null"}${to ? " → calling moveTask" : " → NOT calling moveTask"}`);
       if (to) void handleDrop(st.id, to);
     };
     window.addEventListener("mousemove", onMove);
@@ -166,17 +143,12 @@ export function TaskBoardView() {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [handleDrop, statusUnderPoint, pushDebug]);
+  }, [handleDrop, statusUnderPoint]);
 
   const handleCardMouseDown = (e: ReactMouseEvent<HTMLDivElement>, cardRow: TaskWithAttachments) => {
-    pushDebug(`mousedown id=${cardRow.id} status=${cardRow.status} button=${e.button}`);
     if (e.button !== 0) return;
-    if (cardRow.status !== "planning" && cardRow.status !== "queued") {
-      pushDebug(`mousedown ignored: status ${cardRow.status} not draggable`);
-      return;
-    }
+    if (cardRow.status !== "planning" && cardRow.status !== "queued") return;
     dragRef.current = { id: cardRow.id, startX: e.clientX, startY: e.clientY, started: false };
-    pushDebug(`armed drag for ${cardRow.id} at (${e.clientX},${e.clientY})`);
   };
 
   return (
@@ -255,30 +227,6 @@ export function TaskBoardView() {
             document.body,
           );
         })()}
-
-      {/* DEBUG-TEMP: remove once the drag bug is confirmed fixed live. */}
-      <div
-        style={{
-          position: "fixed",
-          right: 8,
-          bottom: 8,
-          width: 480,
-          maxHeight: 220,
-          overflowY: "auto",
-          background: "rgba(0,0,0,0.85)",
-          color: "#0f0",
-          fontFamily: "monospace",
-          fontSize: 11,
-          padding: 8,
-          borderRadius: 6,
-          zIndex: 999,
-          whiteSpace: "pre-wrap",
-          pointerEvents: "none",
-        }}
-      >
-        <div style={{ color: "#fff", marginBottom: 4 }}>DEBUG (temporary) — drag event log:</div>
-        {debugLog.length === 0 ? "(no events yet — try dragging a card)" : debugLog.join("\n")}
-      </div>
     </div>
   );
 }

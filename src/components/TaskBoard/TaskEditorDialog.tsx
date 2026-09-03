@@ -28,7 +28,12 @@ export function TaskEditorDialog({
   const [body, setBody] = useState(card?.body ?? "");
   const [dir, setDir] = useState(card?.project_dir ?? localStorage.getItem(LAST_DIR_KEY) ?? "");
   const [parallelOk, setParallelOk] = useState(card?.parallel_ok ?? true);
+  // Edit mode: already-uploaded rows, hanging off the existing card id.
   const [attachments, setAttachments] = useState<AttachmentRow[]>(card?.attachments ?? []);
+  // Create mode: a brand-new card has no id yet, so picked files can't be
+  // uploaded until `createTask` returns one — buffered here and uploaded in
+  // `save()` right after that id comes back.
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
 
   const pickDir = async () => {
@@ -39,11 +44,15 @@ export function TaskEditorDialog({
   };
 
   const onFiles = async (files: FileList | null) => {
-    if (!files || !card) return;
-    for (const f of Array.from(files)) {
-      const bytes = new Uint8Array(await f.arrayBuffer());
-      const row = await addAttachment(card.id, f.name, bytes);
-      setAttachments((a) => [...a, row]);
+    if (!files) return;
+    if (isEdit) {
+      for (const f of Array.from(files)) {
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        const row = await addAttachment(card.id, f.name, bytes);
+        setAttachments((a) => [...a, row]);
+      }
+    } else {
+      setPendingFiles((prev) => [...prev, ...Array.from(files)]);
     }
   };
 
@@ -54,11 +63,27 @@ export function TaskEditorDialog({
       if (isEdit) {
         await updateTask({ id: card.id, title, body, project_dir: dir, parallel_ok: parallelOk });
       } else {
-        await createTask({ title, body, project_dir: dir, parallel_ok: parallelOk });
+        const newId = await createTask({ title, body, project_dir: dir, parallel_ok: parallelOk });
+        for (const f of pendingFiles) {
+          const bytes = new Uint8Array(await f.arrayBuffer());
+          await addAttachment(newId, f.name, bytes);
+        }
       }
       onSaved();
     } finally {
       setBusy(false);
+    }
+  };
+
+  const attachmentNames = isEdit
+    ? attachments.map((a) => ({ key: a.id, name: a.filename }))
+    : pendingFiles.map((f, i) => ({ key: `${i}-${f.name}`, name: f.name }));
+
+  const removeAttachmentAt = (key: string) => {
+    if (isEdit) {
+      void removeAttachment(key).then(() => setAttachments((list) => list.filter((x) => x.id !== key)));
+    } else {
+      setPendingFiles((prev) => prev.filter((f, i) => `${i}-${f.name}` !== key));
     }
   };
 
@@ -103,43 +128,37 @@ export function TaskEditorDialog({
         </label>
         <p className="task-field-hint">{t.board_card_solo_hint}</p>
 
-        {isEdit && (
-          <div className="task-field">
-            <span className="task-field-label">{t.board_card_attachments}</span>
-            <p className="task-field-hint">{t.board_card_attachments_hint}</p>
-            {attachments.length > 0 && (
-              <ul className="task-attachment-list">
-                {attachments.map((a) => (
-                  <li key={a.id} className="task-attachment-row">
-                    <span className="task-attachment-name">{a.filename}</span>
-                    <button
-                      type="button"
-                      className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
-                      aria-label={`${t.board_delete} ${a.filename}`}
-                      onClick={() =>
-                        void removeAttachment(a.id).then(() =>
-                          setAttachments((list) => list.filter((x) => x.id !== a.id)),
-                        )
-                      }
-                    >
-                      ✕
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <label className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm task-attachment-add">
-              + {t.board_add_attachment}
-              <input
-                type="file"
-                multiple
-                className="task-attachment-file-input"
-                aria-label={t.board_add_attachment}
-                onChange={(e) => void onFiles(e.target.files)}
-              />
-            </label>
-          </div>
-        )}
+        <div className="task-field">
+          <span className="task-field-label">{t.board_card_attachments}</span>
+          <p className="task-field-hint">{t.board_card_attachments_hint}</p>
+          {attachmentNames.length > 0 && (
+            <ul className="task-attachment-list">
+              {attachmentNames.map((a) => (
+                <li key={a.key} className="task-attachment-row">
+                  <span className="task-attachment-name">{a.name}</span>
+                  <button
+                    type="button"
+                    className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+                    aria-label={`${t.board_delete} ${a.name}`}
+                    onClick={() => removeAttachmentAt(a.key)}
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <label className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm task-attachment-add">
+            + {t.board_add_attachment}
+            <input
+              type="file"
+              multiple
+              className="task-attachment-file-input"
+              aria-label={t.board_add_attachment}
+              onChange={(e) => void onFiles(e.target.files)}
+            />
+          </label>
+        </div>
 
         <div className="task-dialog-actions">
           <button className="aiterm-btn aiterm-btn--secondary" disabled={busy} onClick={onClose}>
