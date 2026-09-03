@@ -345,7 +345,7 @@ mod tests {
         assert_eq!(all[0].id, id);
         assert_eq!(all[0].title, "Fix the flaky test");
         assert_eq!(all[0].status, "planning");
-        assert_eq!(all[0].parallel_ok, true);
+        assert!(all[0].parallel_ok);
         assert!(all[0].outcome.is_none());
     }
 
