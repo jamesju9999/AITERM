@@ -9,6 +9,7 @@
 pub mod store;
 pub mod dispatch;
 pub mod monitor;
+pub mod scheduler;
 
 use std::fs;
 use std::path::PathBuf;
