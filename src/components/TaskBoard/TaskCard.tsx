@@ -1,10 +1,94 @@
-import type { TaskWithAttachments } from "../../ipc/tasks";
+import { useState } from "react";
 
-export function TaskCard({ card }: {
+import { useLocale } from "../../contexts/LocaleContext";
+import { cloneTask, deleteTask, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
+
+export function TaskCard({
+  card,
+  onEdit,
+  onViewTranscript,
+  onChanged,
+}: {
   card: TaskWithAttachments;
   onEdit: () => void;
   onViewTranscript: () => void;
   onChanged: () => void;
 }) {
-  return <div className="task-card" data-testid={`card-${card.id}`}>{card.title}</div>;
+  const { t } = useLocale();
+  const [busy, setBusy] = useState(false);
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await fn();
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = () => {
+    if (!window.confirm(t.board_delete_confirm)) return;
+    const closeTab = card.tab_id ? window.confirm(t.board_delete_close_tab) : false;
+    void run(() => deleteTask(card.id, closeTab));
+  };
+
+  const openTab = () => {
+    if (!card.tab_id) return;
+    window.dispatchEvent(new CustomEvent("aiterm:focus-tab", { detail: { tabId: card.tab_id } }));
+  };
+
+  const outcomeLabel =
+    card.outcome === "success"
+      ? t.board_outcome_success
+      : card.outcome === "failed"
+        ? t.board_outcome_failed
+        : card.outcome === "cancelled"
+          ? t.board_outcome_cancelled
+          : null;
+
+  return (
+    <div className="task-card">
+      <div className="task-card-title">{card.title}</div>
+      <div className="task-card-meta">{card.project_dir}</div>
+      {!card.parallel_ok && <div className="task-card-meta">⚑ {t.board_card_solo_hint}</div>}
+
+      {card.status === "running" && <div className="task-card-meta">{t.board_running_hint}</div>}
+
+      {card.status === "done" && card.outcome && (
+        <div className={`task-badge task-badge--${card.outcome}`}>{outcomeLabel}</div>
+      )}
+      {card.status === "done" && card.error_message && (
+        <div className="task-card-meta">{card.error_message}</div>
+      )}
+
+      <div className="task-card-actions">
+        {card.status === "planning" && (
+          <>
+            <button disabled={busy} onClick={onEdit}>{t.board_edit_card}</button>
+            <button disabled={busy} onClick={remove}>{t.board_delete}</button>
+          </>
+        )}
+        {card.status === "running" && (
+          <>
+            <button disabled={busy} onClick={() => void run(() => stopTask(card.id))}>
+              {t.board_action_stop}
+            </button>
+            {card.tab_id && <button onClick={openTab}>{t.board_action_open_tab}</button>}
+          </>
+        )}
+        {card.status === "done" && (
+          <>
+            {card.transcript_path && (
+              <button onClick={onViewTranscript}>{t.board_action_transcript}</button>
+            )}
+            <button disabled={busy} onClick={() => void run(() => cloneTask(card.id))}>
+              {t.board_action_requeue}
+            </button>
+            <button disabled={busy} onClick={remove}>{t.board_delete}</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
