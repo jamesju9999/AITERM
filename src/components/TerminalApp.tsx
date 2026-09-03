@@ -259,6 +259,13 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       const newId = crypto.randomUUID();
       const activeTab = tabsRef.current.find((tb) => tb.id === activeIdRef.current);
       const activeIsBusy = activeTab?.type === "terminal" && tabRunningRef.current.get(activeTab.id) === true;
+      // Home/Board are separate overlays layered on top of `activeId` (see
+      // their own state) — the busy check above only knows about the
+      // background terminal tab, so on its own it doesn't stop a spawn from
+      // yanking the user off Home or the Task Board the instant a card gets
+      // dispatched. (Real bug found live: dragging a card to 待執行 dispatches
+      // it, which spawns this event, which switched the user off the board.)
+      const viewingOverlay = homeActiveRef.current || boardActiveRef.current;
       setTabs((prev) => [...prev, {
         id: newId,
         title: payload.command ? `Agent: ${payload.command}` : t.terminal_tab,
@@ -266,7 +273,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
         ptySessionId: payload.session_id,
         spawnedByAgent: true,
       }]);
-      if (!activeIsBusy) {
+      if (!activeIsBusy && !viewingOverlay) {
         selectTab(newId);
       }
     }).then((fn) => {

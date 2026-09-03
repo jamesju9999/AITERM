@@ -117,6 +117,21 @@ vi.mock("./HomeView", () => ({
   ),
 }));
 
+// Captures the callback TerminalApp registers for a coordination-spawned tab
+// (the scheduler dispatching a queued task-board card spawns one of these),
+// so a test can fire it directly instead of routing a real Tauri event
+// through the generic `listen` mock above (which many other listeners in
+// this file also share, making it impractical to isolate just this one).
+let capturedCoordinationSpawn:
+  | ((payload: { session_id: string; command: string | null }) => void)
+  | null = null;
+vi.mock("../ipc/mcpToolServer", () => ({
+  onCoordinationTabSpawned: vi.fn((cb: (payload: { session_id: string; command: string | null }) => void) => {
+    capturedCoordinationSpawn = cb;
+    return Promise.resolve(() => {});
+  }),
+}));
+
 // TaskBoardView's own ipc — mocked so the board mounts cleanly (no real invoke).
 vi.mock("../ipc/tasks", () => ({
   listTasks: vi.fn().mockResolvedValue([]),
@@ -160,5 +175,25 @@ describe("TerminalApp: Task Board view slot (Task 4)", () => {
     expect(await screen.findByText(/計畫中|Planned/)).toBeInTheDocument();
     // HomeView (stubbed) unmounts once homeActive flips false.
     expect(screen.queryByText("select-first-tab")).not.toBeInTheDocument();
+  });
+
+  // Regression test for a real bug: dragging a card to 待執行 dispatches it
+  // (the scheduler spawns a `claude` session and TerminalApp adopts it as a
+  // new tab via this same event), and the pre-existing "switch focus to a
+  // newly agent-spawned tab" heuristic only checked whether the
+  // *background* terminal tab was busy — it had no idea the user might be
+  // looking at the Task Board overlay, and yanked them away from it the
+  // instant a card got dispatched.
+  it("does not switch away from the task board when a coordination tab spawns", async () => {
+    renderApp();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /工作看板|Task Board/ }));
+    expect(await screen.findByText(/計畫中|Planned/)).toBeInTheDocument();
+
+    expect(capturedCoordinationSpawn).not.toBeNull();
+    capturedCoordinationSpawn!({ session_id: "spawned-session", command: "claude" });
+
+    // Still on the board — not yanked to the newly spawned terminal tab.
+    expect(await screen.findByText(/計畫中|Planned/)).toBeInTheDocument();
   });
 });
