@@ -38,6 +38,11 @@ export function TaskBoardView() {
    * dragging, for the drop-target highlight. Not the drop decision itself
    * (that's read fresh from `elementFromPoint` on mouseup). */
   const [dragOverStatus, setDragOverStatus] = useState<TaskStatus | null>(null);
+  /** id of the card currently being dragged, purely for the fade-out visual
+   * (mousedown alone isn't "dragging" yet — only once the threshold is
+   * crossed). Without this the interaction gave no feedback at all, which
+   * made it look broken even once the drag mechanism itself worked. */
+  const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const rows = await listTasks();
@@ -109,6 +114,7 @@ export function TaskBoardView() {
       if (!st.started) {
         if (Math.hypot(e.clientX - st.startX, e.clientY - st.startY) < DRAG_THRESHOLD_PX) return;
         st.started = true;
+        setDraggingCardId(st.id);
       }
       setDragOverStatus(statusUnderPoint(e.clientX, e.clientY));
     };
@@ -116,6 +122,7 @@ export function TaskBoardView() {
       const st = dragRef.current;
       dragRef.current = null;
       setDragOverStatus(null);
+      setDraggingCardId(null);
       if (!st?.started) return;
       const to = statusUnderPoint(e.clientX, e.clientY);
       if (to) void handleDrop(st.id, to);
@@ -146,11 +153,14 @@ export function TaskBoardView() {
           <TaskColumn key={s} status={s} title={colTitle(s)} count={byStatus(s).length} highlighted={dragOverStatus === s}>
             {byStatus(s).map((cardRow) => {
               const draggableCard = cardRow.status === "planning" || cardRow.status === "queued";
+              const classes = ["task-card-drag-wrap"];
+              if (draggableCard) classes.push("task-card-drag-wrap--draggable");
+              if (draggingCardId === cardRow.id) classes.push("task-card-drag-wrap--dragging");
               return (
                 <div
                   key={cardRow.id}
                   data-task-drag-id={cardRow.id}
-                  className={`task-card-drag-wrap${draggableCard ? " task-card-drag-wrap--draggable" : ""}`}
+                  className={classes.join(" ")}
                   onMouseDown={(e) => handleCardMouseDown(e, cardRow)}
                 >
                   <TaskCard

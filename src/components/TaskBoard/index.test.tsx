@@ -105,6 +105,33 @@ describe("TaskBoardView", () => {
     }
   });
 
+  // Regression test for a real UX bug found manually after the fix above:
+  // dragging gave zero visual feedback (no cursor-following ghost, no fade on
+  // the source card), which made the interaction feel broken even once the
+  // underlying mechanism worked — the user couldn't tell a drag was in
+  // progress. This asserts the dragged card's wrapper gets a visible
+  // "dragging" marker once the threshold is crossed, and loses it on release.
+  it("marks the dragged card's wrapper while a drag is in progress", async () => {
+    vi.mocked(listTasks).mockResolvedValue([card({ id: "p", title: "Draggable", status: "planning" })]);
+    view();
+    const cardEl = await screen.findByText("Draggable");
+    const dragWrap = cardEl.closest("[data-task-drag-id]") as HTMLElement;
+
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn().mockReturnValue(null);
+    try {
+      const { fireEvent } = await import("@testing-library/react");
+      fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
+      expect(dragWrap.className).not.toContain("task-card-drag-wrap--dragging");
+      fireEvent.mouseMove(window, { clientX: 100, clientY: 120 }); // past the drag threshold
+      expect(dragWrap.className).toContain("task-card-drag-wrap--dragging");
+      fireEvent.mouseUp(window, { clientX: 100, clientY: 120 });
+      expect(dragWrap.className).not.toContain("task-card-drag-wrap--dragging");
+    } finally {
+      document.elementFromPoint = originalElementFromPoint;
+    }
+  });
+
   it("running card shows Stop, and Stop calls stopTask", async () => {
     const { stopTask } = await import("../../ipc/tasks");
     vi.mocked(listTasks).mockResolvedValue([card({ id: "r", title: "Runner", status: "running", tab_id: "tab-1" })]);
