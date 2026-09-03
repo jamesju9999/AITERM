@@ -1,0 +1,274 @@
+//! Tauri commands for the task board. Thin delegates to `tasks::store`, plus
+//! attachment file I/O and a `tasks-updated` emit after every mutation so the
+//! board view (a passive renderer) refreshes. Same shape as
+//! `commands/loop_session.rs`.
+
+use std::fs;
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, State};
+
+use crate::tasks::scheduler::SchedulerHandle;
+use crate::tasks::store::{self, AttachmentRow, TaskRow};
+use crate::tasks::{task_dir, TasksDb};
+
+pub(crate) fn edit_allowed(status: &str) -> bool {
+    status == store::STATUS_PLANNING
+}
+
+fn emit_updated(app: &AppHandle) {
+    let _ = app.emit("tasks-updated", ());
+}
+
+#[derive(Serialize)]
+pub struct TaskWithAttachments {
+    #[serde(flatten)]
+    pub task: TaskRow,
+    pub attachments: Vec<AttachmentRow>,
+}
+
+#[tauri::command]
+pub async fn tasks_list(db: State<'_, TasksDb>) -> Result<Vec<TaskWithAttachments>, String> {
+    let tasks = store::list_tasks(&db.pool).await.map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(tasks.len());
+    for task in tasks {
+        let attachments = store::list_attachments(&db.pool, &task.id)
+            .await
+            .map_err(|e| e.to_string())?;
+        out.push(TaskWithAttachments { task, attachments });
+    }
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+pub struct CreateArgs {
+    pub title: String,
+    pub body: String,
+    pub project_dir: String,
+    pub parallel_ok: bool,
+}
+
+#[tauri::command]
+pub async fn tasks_create(
+    args: CreateArgs,
+    db: State<'_, TasksDb>,
+    app: AppHandle,
+) -> Result<String, String> {
+    let id = store::create_task(
+        &db.pool,
+        &args.title,
+        &args.body,
+        &args.project_dir,
+        args.parallel_ok,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    Ok(id)
+}
+
+#[derive(Deserialize)]
+pub struct UpdateArgs {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    pub project_dir: String,
+    pub parallel_ok: bool,
+}
+
+#[tauri::command]
+pub async fn tasks_update(
+    args: UpdateArgs,
+    db: State<'_, TasksDb>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let row = store::get_task(&db.pool, &args.id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "task not found".to_string())?;
+    store::set_parallel_ok(&db.pool, &args.id, args.parallel_ok)
+        .await
+        .map_err(|e| e.to_string())?;
+    if edit_allowed(&row.status) {
+        store::update_task_fields(
+            &db.pool,
+            &args.id,
+            &args.title,
+            &args.body,
+            &args.project_dir,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    emit_updated(&app);
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct MoveArgs {
+    pub id: String,
+    pub to_status: String,
+    pub sort_order: f64,
+}
+
+#[tauri::command]
+pub async fn tasks_move(
+    args: MoveArgs,
+    db: State<'_, TasksDb>,
+    app: AppHandle,
+    scheduler: State<'_, SchedulerHandle>,
+) -> Result<(), String> {
+    store::move_task(&db.pool, &args.id, &args.to_status, args.sort_order)
+        .await
+        .map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    if args.to_status == store::STATUS_QUEUED {
+        scheduler.poke();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn tasks_stop(
+    id: String,
+    db: State<'_, TasksDb>,
+    app: AppHandle,
+    scheduler: State<'_, SchedulerHandle>,
+    pty: State<'_, Arc<crate::pty::manager::PtyManager>>,
+) -> Result<(), String> {
+    let row = store::get_task(&db.pool, &id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "task not found".to_string())?;
+    if row.status != store::STATUS_RUNNING {
+        return Err("task is not running".into());
+    }
+    if let Some(tab_id) = &row.tab_id {
+        let _ = pty.write(tab_id, b"\x03"); // Ctrl+C
+    }
+    if !scheduler.cancel(&id) {
+        store::finish_task(&db.pool, &id, "cancelled", Some("使用者停止"), None)
+            .await
+            .map_err(|e| e.to_string())?;
+        emit_updated(&app);
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct DeleteArgs {
+    pub id: String,
+    pub close_tab: bool,
+}
+
+#[tauri::command]
+pub async fn tasks_delete(
+    args: DeleteArgs,
+    db: State<'_, TasksDb>,
+    app: AppHandle,
+    scheduler: State<'_, SchedulerHandle>,
+    pty: State<'_, Arc<crate::pty::manager::PtyManager>>,
+) -> Result<(), String> {
+    if let Some(row) = store::get_task(&db.pool, &args.id)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        scheduler.cancel(&args.id);
+        if args.close_tab {
+            if let Some(tab_id) = &row.tab_id {
+                let _ = pty.close(tab_id);
+            }
+        }
+    }
+    store::delete_task(&db.pool, &args.id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = fs::remove_dir_all(task_dir(&args.id));
+    emit_updated(&app);
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct AddAttachmentArgs {
+    pub id: String,
+    pub filename: String,
+    pub bytes: Vec<u8>,
+}
+
+#[tauri::command]
+pub async fn tasks_add_attachment(
+    args: AddAttachmentArgs,
+    db: State<'_, TasksDb>,
+    app: AppHandle,
+) -> Result<AttachmentRow, String> {
+    let row = store::get_task(&db.pool, &args.id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "task not found".to_string())?;
+    if !edit_allowed(&row.status) {
+        return Err("attachments can only be changed while the card is in 計畫中".into());
+    }
+    let dir = task_dir(&args.id).join("attachments");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let safe = std::path::Path::new(&args.filename)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "attachment".to_string());
+    let stored = dir.join(&safe);
+    fs::write(&stored, &args.bytes).map_err(|e| e.to_string())?;
+    let att_id = store::add_attachment(&db.pool, &args.id, &safe, &stored.to_string_lossy())
+        .await
+        .map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    Ok(AttachmentRow {
+        id: att_id,
+        task_id: args.id,
+        filename: safe,
+        stored_path: stored.to_string_lossy().into_owned(),
+    })
+}
+
+#[tauri::command]
+pub async fn tasks_remove_attachment(
+    attachment_id: String,
+    db: State<'_, TasksDb>,
+    app: AppHandle,
+) -> Result<(), String> {
+    if let Some(att) = store::get_attachment(&db.pool, &attachment_id)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        let _ = fs::remove_file(&att.stored_path);
+    }
+    store::remove_attachment(&db.pool, &attachment_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn tasks_read_transcript(id: String, db: State<'_, TasksDb>) -> Result<String, String> {
+    let row = store::get_task(&db.pool, &id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "task not found".to_string())?;
+    match row.transcript_path {
+        Some(p) => fs::read_to_string(&p).map_err(|e| e.to_string()),
+        None => Ok(String::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_planning_cards_accept_edits() {
+        assert!(edit_allowed("planning"));
+        assert!(!edit_allowed("queued"));
+        assert!(!edit_allowed("running"));
+        assert!(!edit_allowed("done"));
+    }
+}

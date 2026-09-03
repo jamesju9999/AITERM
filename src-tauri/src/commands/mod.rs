@@ -22,6 +22,7 @@ pub mod share;
 pub mod share_viewer;
 pub mod shell;
 pub mod task_board_config;
+pub mod tasks;
 pub mod updater;
 pub mod usage;
 pub mod vcs;
