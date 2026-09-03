@@ -2,10 +2,9 @@ import type { Terminal } from "@xterm/xterm";
 
 /** Structural subset of @xterm/addon-serialize's SerializeAddon — avoids a
  * dependency on that package from this module (it's wired in by
- * TerminalView in a later task; this registry only needs the one method it
- * calls). */
+ * TerminalView; this registry only needs the one method it calls). */
 interface SerializeLike {
-  serialize(): string;
+  serialize(options?: { scrollback?: number }): string;
 }
 
 interface RegistryEntry {
@@ -33,9 +32,18 @@ export function unregisterTerminal(id: string): void {
 /** Returns the current serialized screen-buffer text for a tab/session id,
  * or null if that tab isn't live (never registered, or already
  * unregistered — e.g. the tab was closed). Callers use null to mean "fall
- * back to the raw transcript already on disk", not an error. */
+ * back to the raw transcript already on disk", not an error.
+ *
+ * Passes `scrollback: 0` deliberately: with no options, serialize() dumps
+ * the entire scrollback buffer, not just what's currently on screen. A TUI
+ * app like Claude Code redraws by scrolling through many intermediate
+ * frames (spinner animation, in-progress table drafts, repeated prompts) —
+ * without this, all of that history comes back concatenated together,
+ * which is just as unreadable as the raw capture this was meant to
+ * replace. `scrollback: 0` limits it to the current viewport, i.e. exactly
+ * what a human looking at the terminal right now would see. */
 export function serializeTerminal(id: string): string | null {
   const entry = registry.get(id);
   if (!entry) return null;
-  return entry.serializeAddon.serialize();
+  return entry.serializeAddon.serialize({ scrollback: 0 });
 }
