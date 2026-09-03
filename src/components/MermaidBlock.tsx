@@ -2,12 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import mermaid from "mermaid";
 import { useLocale } from '../contexts/LocaleContext';
 import { sanitizeMermaid, aggressiveSanitize } from "../lib/mermaidSanitize";
+import { MERMAID_INIT } from "../lib/mermaidTheme";
 
-mermaid.initialize({
-  startOnLoad: false,
-  theme: "dark",
-  securityLevel: "loose", // needed for some interactive diagram features or styling
-});
+mermaid.initialize(MERMAID_INIT);
 
 interface MermaidBlockProps {
   chart: string;

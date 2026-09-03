@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import mermaid from "mermaid";
 import { sanitizeMermaid } from "./mermaidSanitize";
+import { MERMAID_INIT } from "./mermaidTheme";
 
-mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose" });
+mermaid.initialize(MERMAID_INIT);
 
 // The diagram reported failing from the Knowledge Base — a rectangle label
 // containing `{id}` was corrupted into `{"id"}` by the diamond-label pass,
