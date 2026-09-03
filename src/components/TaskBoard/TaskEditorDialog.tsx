@@ -65,72 +65,92 @@ export function TaskEditorDialog({
   return (
     <div className="task-dialog-backdrop" onClick={onClose}>
       <div className="task-dialog" onClick={(e) => e.stopPropagation()}>
-        <h3>{isEdit ? t.board_edit_card : t.board_new_card}</h3>
+        <h3 className="task-dialog-title">{isEdit ? t.board_edit_card : t.board_new_card}</h3>
 
-        <label>
-          {t.board_card_title}
-          <input value={title} onChange={(e) => setTitle(e.target.value)} />
+        <label className="task-field">
+          <span className="task-field-label">{t.board_card_title}</span>
+          <input className="task-field-input" value={title} onChange={(e) => setTitle(e.target.value)} />
         </label>
 
-        <label>
-          {t.board_card_body}
-          <textarea rows={6} value={body} onChange={(e) => setBody(e.target.value)} />
+        <label className="task-field">
+          <span className="task-field-label">{t.board_card_body}</span>
+          <textarea
+            className="task-field-input task-field-textarea"
+            rows={5}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+          />
         </label>
 
-        <label>
-          {t.board_card_folder}
-          <input value={dir} onChange={(e) => setDir(e.target.value)} />
+        <label className="task-field">
+          <span className="task-field-label">{t.board_card_folder}</span>
+          <div className="task-field-row">
+            <input className="task-field-input" value={dir} onChange={(e) => setDir(e.target.value)} />
+            <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void pickDir()}>
+              {t.board_card_folder_pick}
+            </button>
+          </div>
         </label>
-        <button type="button" onClick={() => void pickDir()}>
-          {t.board_card_folder_pick}
-        </button>
 
-        <label>
+        <label className="task-field task-field--checkbox">
           <input
             type="checkbox"
+            className="task-checkbox"
             checked={parallelOk}
             onChange={(e) => setParallelOk(e.target.checked)}
           />
-          {t.board_card_parallel}
+          <span>{t.board_card_parallel}</span>
         </label>
-        <p className="task-card-meta">{t.board_card_solo_hint}</p>
+        <p className="task-field-hint">{t.board_card_solo_hint}</p>
 
         {isEdit && (
-          <div>
-            <div>{t.board_card_attachments}</div>
-            <p className="task-card-meta">{t.board_card_attachments_hint}</p>
-            <ul>
-              {attachments.map((a) => (
-                <li key={a.id}>
-                  {a.filename}{" "}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void removeAttachment(a.id).then(() =>
-                        setAttachments((list) => list.filter((x) => x.id !== a.id)),
-                      )
-                    }
-                  >
-                    ✕
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <input
-              type="file"
-              multiple
-              aria-label={t.board_add_attachment}
-              onChange={(e) => void onFiles(e.target.files)}
-            />
+          <div className="task-field">
+            <span className="task-field-label">{t.board_card_attachments}</span>
+            <p className="task-field-hint">{t.board_card_attachments_hint}</p>
+            {attachments.length > 0 && (
+              <ul className="task-attachment-list">
+                {attachments.map((a) => (
+                  <li key={a.id} className="task-attachment-row">
+                    <span className="task-attachment-name">{a.filename}</span>
+                    <button
+                      type="button"
+                      className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+                      aria-label={`${t.board_delete} ${a.filename}`}
+                      onClick={() =>
+                        void removeAttachment(a.id).then(() =>
+                          setAttachments((list) => list.filter((x) => x.id !== a.id)),
+                        )
+                      }
+                    >
+                      ✕
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <label className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm task-attachment-add">
+              + {t.board_add_attachment}
+              <input
+                type="file"
+                multiple
+                className="task-attachment-file-input"
+                aria-label={t.board_add_attachment}
+                onChange={(e) => void onFiles(e.target.files)}
+              />
+            </label>
           </div>
         )}
 
-        <div className="task-card-actions">
-          <button disabled={busy || !title.trim() || !dir.trim()} onClick={() => void save()}>
-            {t.board_save}
-          </button>
-          <button disabled={busy} onClick={onClose}>
+        <div className="task-dialog-actions">
+          <button className="aiterm-btn aiterm-btn--secondary" disabled={busy} onClick={onClose}>
             {t.board_cancel}
+          </button>
+          <button
+            className="aiterm-btn aiterm-btn--primary"
+            disabled={busy || !title.trim() || !dir.trim()}
+            onClick={() => void save()}
+          >
+            {t.board_save}
           </button>
         </div>
       </div>

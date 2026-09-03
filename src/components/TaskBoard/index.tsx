@@ -225,9 +225,18 @@ export function TaskBoardView() {
           }}
         />
       )}
-      {transcriptFor && (
-        <TranscriptDialog taskId={transcriptFor} onClose={() => setTranscriptFor(null)} />
-      )}
+      {transcriptFor &&
+        (() => {
+          const transcriptCard = tasks.find((x) => x.id === transcriptFor);
+          if (!transcriptCard) return null;
+          return (
+            <TranscriptDialog
+              taskId={transcriptFor}
+              body={transcriptCard.body}
+              onClose={() => setTranscriptFor(null)}
+            />
+          );
+        })()}
 
       {draggingCardId &&
         dragPointer &&

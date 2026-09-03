@@ -232,15 +232,46 @@ describe("TaskBoardView", () => {
     );
   });
 
-  it("transcript dialog shows the backend transcript text", async () => {
+  it("conversation dialog shows the task's own instructions and the raw terminal output", async () => {
     const { readTranscript } = await import("../../ipc/tasks");
     vi.mocked(readTranscript).mockResolvedValue("line A\nline B");
     vi.mocked(listTasks).mockResolvedValue([
-      card({ id: "d", title: "Done one", status: "done", outcome: "success", transcript_path: "/p/t.txt" }),
+      card({
+        id: "d",
+        title: "Done one",
+        status: "done",
+        outcome: "success",
+        transcript_path: "/p/t.txt",
+        body: "查詢目錄資訊",
+      }),
     ]);
     view();
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: /查看逆紀錄|View transcript/ }));
+    await user.click(await screen.findByRole("button", { name: /對話記錄|Conversation/ }));
+    expect(await screen.findByText("查詢目錄資訊")).toBeInTheDocument();
     expect(await screen.findByText(/line A/)).toBeInTheDocument();
+  });
+
+  // Regression test for a real complaint: the raw transcript is a literal
+  // dump of every terminal redraw (Claude Code's TUI repaints the same
+  // spinner/status line many times per second), so long runs of consecutive
+  // duplicate lines are the single biggest source of noise. Collapsing them
+  // is a generic, low-risk cleanup — not a heuristic tied to any specific
+  // spinner glyph — that meaningfully thins the output without pretending to
+  // reconstruct a clean chat transcript (which would need a real terminal
+  // screen-state emulator, out of scope here).
+  it("collapses consecutive duplicate lines in the raw terminal output", async () => {
+    const { readTranscript } = await import("../../ipc/tasks");
+    vi.mocked(readTranscript).mockResolvedValue("start\nspinner\nspinner\nspinner\nspinner\ndone");
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "Done one", status: "done", outcome: "success", transcript_path: "/p/t.txt", body: "b" }),
+    ]);
+    view();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /對話記錄|Conversation/ }));
+    const raw = await screen.findByTestId("task-transcript-raw");
+    expect(raw.textContent).toContain("start");
+    expect(raw.textContent).toContain("done");
+    expect(raw.textContent).not.toContain("spinner\nspinner");
   });
 });
