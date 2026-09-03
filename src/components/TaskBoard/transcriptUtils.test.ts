@@ -21,6 +21,17 @@ describe("stripAnsiCodes", () => {
   it("leaves an empty string untouched", () => {
     expect(stripAnsiCodes("")).toBe("");
   });
+
+  // Regression test: real TUI output (Claude Code, via xterm.js's
+  // SerializeAddon) includes DEC private-mode CSI sequences — e.g.
+  // \x1b[?1049h to enter the alternate screen buffer, \x1b[?2004h for
+  // bracketed paste, \x1b[?1004h for focus reporting. These have a `?`
+  // between `ESC [` and the digits, which the plain [0-9;]* character class
+  // doesn't match, so they leaked through into saved transcripts.
+  it("removes DEC private-mode CSI sequences (the '?' variant)", () => {
+    const input = "before\x1b[?1049h\x1b[?2004h\x1b[?1004hafter";
+    expect(stripAnsiCodes(input)).toBe("beforeafter");
+  });
 });
 
 describe("collapseConsecutiveDuplicateLines (existing, unchanged)", () => {

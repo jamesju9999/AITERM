@@ -16,16 +16,21 @@ export function collapseConsecutiveDuplicateLines(text: string): string {
 }
 
 /** Strips ANSI escape sequences (color/style SGR codes, cursor-movement CSI
- * sequences, etc.) from text that has already had its terminal-screen state
+ * sequences, DEC private-mode sequences like the alternate-screen-buffer
+ * toggle, etc.) from text that has already had its terminal-screen state
  * correctly reconstructed — i.e. output from xterm.js's SerializeAddon, not
  * raw unprocessed PTY bytes. That distinction matters: `serialize()` still
- * emits real ANSI codes to preserve colors/styling, and this only strips
- * those for a plain-text display, it does NOT interpret cursor movement or
- * redraws (xterm.js already did that). A simple regex is sufficient here —
- * unlike the backend's `strip_ansi` (src-tauri/src/pty/ansi.rs), which has
- * to defend against genuinely arbitrary/malformed raw PTY bytes, this only
- * ever receives xterm.js's own well-formed serialized output. */
+ * emits real ANSI codes to preserve colors/styling/modes, and this only
+ * strips those for a plain-text display, it does NOT interpret cursor
+ * movement or redraws (xterm.js already did that). A simple regex is
+ * sufficient here — unlike the backend's `strip_ansi`
+ * (src-tauri/src/pty/ansi.rs), which has to defend against genuinely
+ * arbitrary/malformed raw PTY bytes, this only ever receives xterm.js's own
+ * well-formed serialized output. The `\??` makes the DEC private-mode
+ * marker (e.g. `\x1b[?1049h` to enter the alt screen buffer, `\x1b[?2004h`
+ * for bracketed paste) optional, since those are otherwise identical CSI
+ * sequences and TUI apps like Claude Code use them constantly. */
 export function stripAnsiCodes(text: string): string {
   // eslint-disable-next-line no-control-regex -- matching real ESC bytes is the point
-  return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+  return text.replace(/\x1b\[\??[0-9;]*[a-zA-Z]/g, "");
 }
