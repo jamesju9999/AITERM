@@ -106,6 +106,10 @@ pub struct AppConfig {
     /// MCP tool server 設定。舊的 config.toml 沒有這個區塊，靠 `default` 補齊。
     #[serde(default)]
     pub mcp_tool_server: McpToolServerConfig,
+
+    /// Task board settings. Absent from older config.toml — `default` fills in.
+    #[serde(default)]
+    pub task_board: TaskBoardConfig,
 }
 
 fn default_max_agent_steps() -> u32 { 5 }
@@ -181,6 +185,33 @@ impl Default for McpToolServerConfig {
     }
 }
 
+pub fn default_task_board_max_concurrent() -> u32 { 2 }
+pub fn default_claude_command() -> String { "claude".to_string() }
+
+/// Settings for the task board (see
+/// `docs/superpowers/specs/2026-09-03-task-board-agent-dispatch-design.md`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskBoardConfig {
+    /// Global cap on tasks in the `running` column at once. A per-card
+    /// `parallel_ok = false` flag further restricts (a solo card waits for
+    /// an empty running set and blocks others while it runs).
+    #[serde(default = "default_task_board_max_concurrent")]
+    pub max_concurrent: u32,
+    /// The CLI launched in each dispatched tab. `claude` by default; a user
+    /// could point this at another agent, but that's not a supported feature.
+    #[serde(default = "default_claude_command")]
+    pub claude_command: String,
+}
+
+impl Default for TaskBoardConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent: default_task_board_max_concurrent(),
+            claude_command: default_claude_command(),
+        }
+    }
+}
+
 /// 一個 Claude Code 模型層級要打到哪個供應商的哪個模型。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TierMapping {
@@ -243,6 +274,7 @@ impl Default for AppConfig {
             python_index_url: None,
             claude_bridge: ClaudeBridgeConfig::default(),
             mcp_tool_server: McpToolServerConfig::default(),
+            task_board: TaskBoardConfig::default(),
         }
     }
 }
@@ -844,6 +876,26 @@ mod tests {
         let cfg: AppConfig =
             toml::from_str("python_index_url = \"https://pypi.mycompany.com/simple\"").unwrap();
         assert_eq!(cfg.python_index_url.as_deref(), Some("https://pypi.mycompany.com/simple"));
+    }
+
+    #[test]
+    fn task_board_config_has_sane_defaults() {
+        let c = TaskBoardConfig::default();
+        assert_eq!(c.max_concurrent, 2);
+        assert_eq!(c.claude_command, "claude");
+    }
+
+    #[test]
+    fn app_config_default_includes_task_board() {
+        let c = AppConfig::default();
+        assert_eq!(c.task_board.max_concurrent, 2);
+    }
+
+    #[test]
+    fn task_board_config_deserialises_from_empty_table() {
+        // Old config with no [task_board] section must still parse.
+        let c: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(c.task_board.max_concurrent, 2);
     }
 }
 
