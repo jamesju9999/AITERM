@@ -69,31 +69,39 @@ async fn wait_until_settled(pty: &PtyManager, tab_id: &str) {
     }
 }
 
-/// Type `prompt` into an already-running session (a `claude` REPL, normally).
-/// The prompt body and the submitting `\r` are deliberately two separate
-/// writes, not one `format!("{prompt}\r")` burst: a multi-line prompt (a
-/// task's `body` is a free-form textarea, and `build_prompt` itself inserts
-/// a blank line before the attachment note whenever there are attachments)
-/// contains embedded `\n` bytes, and a raw-mode TUI receiving a burst that
-/// contains embedded newlines commonly treats the whole thing as a paste —
-/// which fills the input box but does NOT auto-submit even if that same
-/// burst happens to end in `\r` (confirmed live: an attachment-bearing task
-/// sat typed-but-unsubmitted in Claude Code's input until the 120s-stuck
-/// timeout failed it). A short delay before the standalone `\r` write keeps
-/// the two writes from being coalesced back into one read() on the far end.
-/// Then, if `request_done_marker`, wait for a fresh bell and send
-/// `done_marker_instruction` as a further, independent CR-terminated write
-/// (same reasoning `coordination_ops::send_input` already documents for that
-/// step). Returns the post-write bell/marker baselines.
+/// Writes `text` then, after `SUBMIT_DELAY_MS`, a standalone `\r` — never
+/// `format!("{text}\r")` as one burst. A raw-mode TUI receiving a burst that
+/// either contains embedded newlines OR is simply long commonly treats the
+/// whole thing as a paste, which fills the input box but does NOT
+/// auto-submit even if that same burst happens to end in `\r`. Confirmed
+/// live twice: an attachment-bearing task's multi-line prompt (embedded
+/// `\n`, from `build_prompt`'s blank line before the attachment note, or
+/// just a multi-line task body) sat typed-but-unsubmitted until the
+/// 120s-stuck timeout failed it; separately, the done-marker instruction —
+/// a single long line with no embedded `\n` at all — sat typed-but-
+/// unsubmitted the same way, so burst *size* alone is enough to trigger it,
+/// not just embedded newlines. A short delay before the standalone `\r`
+/// write keeps the two writes from being coalesced back into one read() on
+/// the far end.
+async fn write_then_submit(pty: &PtyManager, tab_id: &str, text: &str) -> Result<(), String> {
+    pty.write(tab_id, text.as_bytes()).map_err(|e| e.to_string())?;
+    tokio::time::sleep(Duration::from_millis(SUBMIT_DELAY_MS)).await;
+    pty.write(tab_id, b"\r").map_err(|e| e.to_string())
+}
+
+/// Type `prompt` into an already-running session (a `claude` REPL, normally)
+/// via `write_then_submit`. Then, if `request_done_marker`, wait for a fresh
+/// bell and send `done_marker_instruction` as a further call to
+/// `write_then_submit` (same two-writes-not-one reasoning applies to it too
+/// — see that function's doc comment). Returns the post-write bell/marker
+/// baselines.
 pub async fn run_on_session(
     pty: &PtyManager,
     tab_id: &str,
     prompt: &str,
     request_done_marker: bool,
 ) -> Result<DispatchResult, String> {
-    pty.write(tab_id, prompt.as_bytes()).map_err(|e| e.to_string())?;
-    tokio::time::sleep(Duration::from_millis(SUBMIT_DELAY_MS)).await;
-    pty.write(tab_id, b"\r").map_err(|e| e.to_string())?;
+    write_then_submit(pty, tab_id, prompt).await?;
 
     if request_done_marker {
         // Wait for a bell as a best-effort signal that `claude` finished
@@ -120,7 +128,7 @@ pub async fn run_on_session(
         )
         .await;
         let instr = done_marker_instruction(tab_id);
-        pty.write(tab_id, format!("{instr}\r").as_bytes()).map_err(|e| e.to_string())?;
+        write_then_submit(pty, tab_id, &instr).await?;
     }
 
     Ok(DispatchResult {
