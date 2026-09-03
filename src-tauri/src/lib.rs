@@ -103,6 +103,11 @@ use commands::{
     },
     share_viewer::{share_viewer_connect, share_viewer_disconnect, share_viewer_send},
     shell::open_url,
+    task_board_config::{task_board_get_config, task_board_set_config},
+    tasks::{
+        tasks_list, tasks_create, tasks_update, tasks_move, tasks_stop, tasks_delete,
+        tasks_add_attachment, tasks_remove_attachment, tasks_read_transcript,
+    },
     updater::updater_supported,
     web::{web_fetch, web_search, npm_mcp_search},
     vcs::{
@@ -144,7 +149,7 @@ pub fn run() {
     // 原本用 5 個分開的 block_on 依序執行，等於白白疊加 5 次的開連線／
     // 建表延遲，而且整段都發生在 tauri::Builder 建立之前——app 連「開始
     // 建立視窗」都還沒開始。改成同一個 block_on 裡用 tokio::join! 平行跑。
-    let (usage_store, design_db, loop_session_db, kb_db, mail_db) =
+    let (usage_store, design_db, loop_session_db, kb_db, mail_db, tasks_db) =
         tauri::async_runtime::block_on(async {
             tokio::join!(
                 async {
@@ -160,6 +165,7 @@ pub fn run() {
                 LoopSessionDb::new(),
                 db::knowledge_base::KnowledgeBaseDb::new(),
                 MailDb::new(),
+                crate::tasks::TasksDb::new(),
             )
         });
     let usage_store = Arc::new(usage_store);
@@ -197,6 +203,7 @@ pub fn run() {
         .manage(loop_session_db)
         .manage(kb_db)
         .manage(mail_db)
+        .manage(tasks_db)
         .manage(tokio::sync::Mutex::new(MailState::new()))
         .manage(Db2SidecarState::new(sidecar_path))
         .manage(Arc::new(Mutex::new(VcsCredentialManager::new())))
@@ -295,6 +302,17 @@ pub fn run() {
                         log::error!("mcp tool server 啟動失敗：{e}");
                     }
                 });
+            }
+
+            // Task board scheduler: long-lived, dispatches queued cards to
+            // `claude`; also runs a one-time recovery scan on start. The
+            // returned handle is managed so tasks_move / tasks_stop can poke
+            // it and abort running watches.
+            {
+                use tauri::Manager;
+                let handle = app.handle().clone();
+                let sched = tasks::scheduler::spawn(handle);
+                app.manage(sched);
             }
 
             Ok(())
@@ -525,6 +543,18 @@ pub fn run() {
             api_docs_login,
             api_docs_logout,
             api_docs_auth_status,
+            // Task board
+            task_board_get_config,
+            task_board_set_config,
+            tasks_list,
+            tasks_create,
+            tasks_update,
+            tasks_move,
+            tasks_stop,
+            tasks_delete,
+            tasks_add_attachment,
+            tasks_remove_attachment,
+            tasks_read_transcript,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
