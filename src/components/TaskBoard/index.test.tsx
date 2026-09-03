@@ -132,6 +132,30 @@ describe("TaskBoardView", () => {
     }
   });
 
+  // User-requested behavior: the card should visibly "leave" its column and
+  // follow the cursor while dragging (not just sit in place with a fade),
+  // and settle back to (0,0) offset once released.
+  it("the dragged card visually follows the cursor via a translate transform", async () => {
+    vi.mocked(listTasks).mockResolvedValue([card({ id: "p", title: "Draggable", status: "planning" })]);
+    view();
+    const cardEl = await screen.findByText("Draggable");
+    const dragWrap = cardEl.closest("[data-task-drag-id]") as HTMLElement;
+
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn().mockReturnValue(null);
+    try {
+      const { fireEvent } = await import("@testing-library/react");
+      fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
+      expect(dragWrap.style.transform).toBe("");
+      fireEvent.mouseMove(window, { clientX: 130, clientY: 150 }); // past threshold: dx=30 dy=50
+      expect(dragWrap.style.transform).toBe("translate(30px, 50px)");
+      fireEvent.mouseUp(window, { clientX: 130, clientY: 150 });
+      expect(dragWrap.style.transform).toBe("");
+    } finally {
+      document.elementFromPoint = originalElementFromPoint;
+    }
+  });
+
   it("running card shows Stop, and Stop calls stopTask", async () => {
     const { stopTask } = await import("../../ipc/tasks");
     vi.mocked(listTasks).mockResolvedValue([card({ id: "r", title: "Runner", status: "running", tab_id: "tab-1" })]);

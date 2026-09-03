@@ -43,6 +43,19 @@ export function TaskBoardView() {
    * crossed). Without this the interaction gave no feedback at all, which
    * made it look broken even once the drag mechanism itself worked. */
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
+  /** Cursor delta from the drag's start point, applied as a translate() on
+   * the dragged card so it visibly leaves its column and follows the mouse
+   * — a static fade-in-place wasn't legible feedback that anything was
+   * happening. */
+  const [dragOffset, setDragOffset] = useState<{ dx: number; dy: number } | null>(null);
+  // DEBUG-TEMP: on-screen diagnostic overlay while root-causing a real drag
+  // bug live in the running app (no way to script a real OS mouse drag from
+  // this environment to self-verify). Remove once the drag is confirmed
+  // working.
+  const [debugLog, setDebugLog] = useState<string[]>([]);
+  const pushDebug = useCallback((msg: string) => {
+    setDebugLog((prev) => [...prev.slice(-9), `${new Date().toISOString().slice(11, 23)} ${msg}`]);
+  }, []);
 
   const refresh = useCallback(async () => {
     const rows = await listTasks();
@@ -108,23 +121,40 @@ export function TaskBoardView() {
   }, []);
 
   useEffect(() => {
+    let moveEventCount = 0;
+    let lastLoggedStatus: TaskStatus | null | "unset" = "unset";
     const onMove = (e: MouseEvent) => {
       const st = dragRef.current;
       if (!st) return;
+      moveEventCount++;
       if (!st.started) {
-        if (Math.hypot(e.clientX - st.startX, e.clientY - st.startY) < DRAG_THRESHOLD_PX) return;
+        const dist = Math.hypot(e.clientX - st.startX, e.clientY - st.startY);
+        if (dist < DRAG_THRESHOLD_PX) return;
         st.started = true;
         setDraggingCardId(st.id);
+        pushDebug(`threshold crossed after ${moveEventCount} move events (dist=${dist.toFixed(0)}px) → started=true`);
       }
-      setDragOverStatus(statusUnderPoint(e.clientX, e.clientY));
+      setDragOffset({ dx: e.clientX - st.startX, dy: e.clientY - st.startY });
+      const over = statusUnderPoint(e.clientX, e.clientY);
+      if (over !== lastLoggedStatus) {
+        lastLoggedStatus = over;
+        const el = document.elementFromPoint(e.clientX, e.clientY);
+        pushDebug(`over changed → ${over ?? "null"} (elementFromPoint tag=${el?.tagName ?? "null"}.${(el as HTMLElement | null)?.className ?? ""})`);
+      }
+      setDragOverStatus(over);
     };
     const onUp = (e: MouseEvent) => {
       const st = dragRef.current;
       dragRef.current = null;
       setDragOverStatus(null);
       setDraggingCardId(null);
-      if (!st?.started) return;
+      setDragOffset(null);
+      if (!st?.started) {
+        pushDebug(`mouseup: drag never started (armed=${!!st}, moveEvents=${moveEventCount})`);
+        return;
+      }
       const to = statusUnderPoint(e.clientX, e.clientY);
+      pushDebug(`mouseup at (${e.clientX},${e.clientY}) → resolved status=${to ?? "null"}${to ? " → calling moveTask" : " → NOT calling moveTask"}`);
       if (to) void handleDrop(st.id, to);
     };
     window.addEventListener("mousemove", onMove);
@@ -133,12 +163,17 @@ export function TaskBoardView() {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [handleDrop, statusUnderPoint]);
+  }, [handleDrop, statusUnderPoint, pushDebug]);
 
   const handleCardMouseDown = (e: ReactMouseEvent<HTMLDivElement>, cardRow: TaskWithAttachments) => {
+    pushDebug(`mousedown id=${cardRow.id} status=${cardRow.status} button=${e.button}`);
     if (e.button !== 0) return;
-    if (cardRow.status !== "planning" && cardRow.status !== "queued") return;
+    if (cardRow.status !== "planning" && cardRow.status !== "queued") {
+      pushDebug(`mousedown ignored: status ${cardRow.status} not draggable`);
+      return;
+    }
     dragRef.current = { id: cardRow.id, startX: e.clientX, startY: e.clientY, started: false };
+    pushDebug(`armed drag for ${cardRow.id} at (${e.clientX},${e.clientY})`);
   };
 
   return (
@@ -153,15 +188,21 @@ export function TaskBoardView() {
           <TaskColumn key={s} status={s} title={colTitle(s)} count={byStatus(s).length} highlighted={dragOverStatus === s}>
             {byStatus(s).map((cardRow) => {
               const draggableCard = cardRow.status === "planning" || cardRow.status === "queued";
+              const isDragging = draggingCardId === cardRow.id;
               const classes = ["task-card-drag-wrap"];
               if (draggableCard) classes.push("task-card-drag-wrap--draggable");
-              if (draggingCardId === cardRow.id) classes.push("task-card-drag-wrap--dragging");
+              if (isDragging) classes.push("task-card-drag-wrap--dragging");
               return (
                 <div
                   key={cardRow.id}
                   data-task-drag-id={cardRow.id}
                   className={classes.join(" ")}
                   onMouseDown={(e) => handleCardMouseDown(e, cardRow)}
+                  style={
+                    isDragging && dragOffset
+                      ? { transform: `translate(${dragOffset.dx}px, ${dragOffset.dy}px)` }
+                      : undefined
+                  }
                 >
                   <TaskCard
                     card={cardRow}
@@ -189,6 +230,30 @@ export function TaskBoardView() {
       {transcriptFor && (
         <TranscriptDialog taskId={transcriptFor} onClose={() => setTranscriptFor(null)} />
       )}
+
+      {/* DEBUG-TEMP: remove once the drag bug is confirmed fixed live. */}
+      <div
+        style={{
+          position: "fixed",
+          right: 8,
+          bottom: 8,
+          width: 480,
+          maxHeight: 220,
+          overflowY: "auto",
+          background: "rgba(0,0,0,0.85)",
+          color: "#0f0",
+          fontFamily: "monospace",
+          fontSize: 11,
+          padding: 8,
+          borderRadius: 6,
+          zIndex: 999,
+          whiteSpace: "pre-wrap",
+          pointerEvents: "none",
+        }}
+      >
+        <div style={{ color: "#fff", marginBottom: 4 }}>DEBUG (temporary) — drag event log:</div>
+        {debugLog.length === 0 ? "(no events yet — try dragging a card)" : debugLog.join("\n")}
+      </div>
     </div>
   );
 }

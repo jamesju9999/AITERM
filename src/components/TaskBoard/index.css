@@ -7,7 +7,20 @@
 .task-column--drop-target { border-color: var(--accent, #a855f7); background: var(--accent-dim, rgba(168, 85, 247, 0.08)); }
 .task-card-drag-wrap--draggable { cursor: grab; }
 .task-card-drag-wrap--draggable:active { cursor: grabbing; }
-.task-card-drag-wrap--dragging { opacity: 0.4; }
+/* The card itself follows the cursor (see index.tsx's dragOffset transform)
+   so it visibly "leaves" its column instead of just sitting there faded.
+   pointer-events:none is required, not cosmetic: elementFromPoint() at the
+   cursor position would otherwise hit this floating element — which is
+   still a DOM child of the SOURCE column — and statusUnderPoint's
+   closest('[data-testid^="column-"]') would resolve to the source column
+   forever, no matter which column is actually underneath visually. */
+.task-card-drag-wrap--dragging {
+  position: relative;
+  z-index: 100;
+  pointer-events: none;
+  cursor: grabbing;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
 .task-column-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; font-weight: 600; border-bottom: 1px solid var(--border, #2a2a2a); flex-shrink: 0; }
 .task-column-count { opacity: 0.6; font-weight: 400; }
 .task-column-body { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
