@@ -4,7 +4,15 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { listTasks, createTask, moveTask, stopTask, onTasksUpdated, saveTranscript } from "./tasks";
+import {
+  listTasks,
+  createTask,
+  moveTask,
+  stopTask,
+  onTasksUpdated,
+  saveTranscript,
+  markTaskDone,
+} from "./tasks";
 
 beforeEach(() => vi.mocked(invoke).mockReset());
 
@@ -17,10 +25,16 @@ describe("ipc/tasks", () => {
 
   it("createTask forwards fields under an args key", async () => {
     vi.mocked(invoke).mockResolvedValue("new-id");
-    const id = await createTask({ title: "t", body: "b", project_dir: "/r", parallel_ok: true });
+    const id = await createTask({
+      title: "t",
+      body: "b",
+      project_dir: "/r",
+      parallel_ok: true,
+      interactive: true,
+    });
     expect(id).toBe("new-id");
     expect(invoke).toHaveBeenCalledWith("tasks_create", {
-      args: { title: "t", body: "b", project_dir: "/r", parallel_ok: true },
+      args: { title: "t", body: "b", project_dir: "/r", parallel_ok: true, interactive: true },
     });
   });
 
@@ -48,5 +62,11 @@ describe("ipc/tasks", () => {
     vi.mocked(invoke).mockResolvedValue(undefined);
     await saveTranscript("id1", "clean text");
     expect(invoke).toHaveBeenCalledWith("tasks_save_transcript", { id: "id1", text: "clean text" });
+  });
+
+  it("markTaskDone forwards the id as a bare param", async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    await markTaskDone("id1");
+    expect(invoke).toHaveBeenCalledWith("tasks_mark_done", { id: "id1" });
   });
 });

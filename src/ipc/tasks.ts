@@ -20,6 +20,7 @@ export interface TaskRow {
   project_dir: string;
   status: TaskStatus;
   parallel_ok: boolean;
+  interactive: boolean;
   sort_order: number;
   outcome: TaskOutcome | null;
   tab_id: string | null;
@@ -48,6 +49,7 @@ export const createTask = (args: {
   body: string;
   project_dir: string;
   parallel_ok: boolean;
+  interactive: boolean;
 }): Promise<string> => invoke("tasks_create", { args });
 
 export const cloneTask = (id: string): Promise<string> => invoke("tasks_clone", { id });
@@ -58,12 +60,15 @@ export const updateTask = (args: {
   body: string;
   project_dir: string;
   parallel_ok: boolean;
+  interactive: boolean;
 }): Promise<void> => invoke("tasks_update", { args });
 
 export const moveTask = (id: string, to_status: TaskStatus, sort_order: number): Promise<void> =>
   invoke("tasks_move", { args: { id, to_status, sort_order } });
 
 export const stopTask = (id: string): Promise<void> => invoke("tasks_stop", { id });
+
+export const markTaskDone = (id: string): Promise<void> => invoke("tasks_mark_done", { id });
 
 export const deleteTask = (id: string, close_tab: boolean): Promise<void> =>
   invoke("tasks_delete", { args: { id, close_tab } });
