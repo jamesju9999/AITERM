@@ -4,7 +4,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { listTasks, createTask, moveTask, stopTask, onTasksUpdated } from "./tasks";
+import { listTasks, createTask, moveTask, stopTask, onTasksUpdated, saveTranscript } from "./tasks";
 
 beforeEach(() => vi.mocked(invoke).mockReset());
 
@@ -42,5 +42,11 @@ describe("ipc/tasks", () => {
     const { listen } = await import("@tauri-apps/api/event");
     await onTasksUpdated(() => {});
     expect(listen).toHaveBeenCalledWith("tasks-updated", expect.any(Function));
+  });
+
+  it("saveTranscript forwards id and text as bare params", async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    await saveTranscript("id1", "clean text");
+    expect(invoke).toHaveBeenCalledWith("tasks_save_transcript", { id: "id1", text: "clean text" });
   });
 });

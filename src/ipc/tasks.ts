@@ -81,6 +81,9 @@ export const removeAttachment = (attachmentId: string): Promise<void> =>
 export const readTranscript = (id: string): Promise<string> =>
   invoke("tasks_read_transcript", { id });
 
+export const saveTranscript = (id: string, text: string): Promise<void> =>
+  invoke("tasks_save_transcript", { id, text });
+
 export const getTaskBoardConfig = (): Promise<TaskBoardConfig> => invoke("task_board_get_config");
 
 export const setTaskBoardConfig = (value: TaskBoardConfig): Promise<void> =>
