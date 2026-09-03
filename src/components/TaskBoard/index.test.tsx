@@ -21,6 +21,7 @@ vi.mock("../../ipc/tasks", () => ({
   addAttachment: vi.fn(),
   removeAttachment: vi.fn(),
   saveTranscript: vi.fn().mockResolvedValue(undefined),
+  markTaskDone: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../lib/terminalInstanceRegistry", () => ({
@@ -34,8 +35,9 @@ import { TaskBoardView } from "./index";
 
 const card = (over: Partial<TaskWithAttachments>): TaskWithAttachments => ({
   id: "c1", title: "Card one", body: "", project_dir: "/r", status: "planning",
-  parallel_ok: true, sort_order: 1, outcome: null, tab_id: null, transcript_path: null,
-  error_message: null, created_at: "", dispatched_at: null, finished_at: null, attachments: [],
+  parallel_ok: true, interactive: false, sort_order: 1, outcome: null, tab_id: null,
+  transcript_path: null, error_message: null, created_at: "", dispatched_at: null,
+  finished_at: null, attachments: [],
   ...over,
 });
 
@@ -244,6 +246,41 @@ describe("TaskBoardView", () => {
       expect(createTask).toHaveBeenCalledWith(
         expect.objectContaining({ title: "Ship it", body: "do the thing", project_dir: "/repo", parallel_ok: true }),
       ),
+    );
+  });
+
+  it("new-card dialog: checking interactive mode hides the parallel toggle and is sent to createTask", async () => {
+    const { createTask } = await import("../../ipc/tasks");
+    vi.mocked(createTask).mockResolvedValue("id-new");
+    view();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /新增工作|New task/ }));
+    await user.type(screen.getByLabelText(/標題|Title/), "Chat task");
+    await user.type(screen.getByLabelText(/專案資料夾|Project folder/), "/repo");
+
+    expect(screen.getByText(/可與其他任務並行|Can run alongside other tasks/)).toBeInTheDocument();
+    await user.click(screen.getByLabelText(/互動模式|Interactive mode/));
+    expect(screen.queryByText(/可與其他任務並行|Can run alongside other tasks/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^儲存$|^Save$/ }));
+    await waitFor(() =>
+      expect(createTask).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Chat task", project_dir: "/repo", interactive: true }),
+      ),
+    );
+  });
+
+  it("new-card dialog defaults interactive to false when left unchecked", async () => {
+    const { createTask } = await import("../../ipc/tasks");
+    vi.mocked(createTask).mockResolvedValue("id-new");
+    view();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /新增工作|New task/ }));
+    await user.type(screen.getByLabelText(/標題|Title/), "Auto task");
+    await user.type(screen.getByLabelText(/專案資料夾|Project folder/), "/repo");
+    await user.click(screen.getByRole("button", { name: /^儲存$|^Save$/ }));
+    await waitFor(() =>
+      expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ interactive: false })),
     );
   });
 

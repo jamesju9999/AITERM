@@ -28,6 +28,7 @@ export function TaskEditorDialog({
   const [body, setBody] = useState(card?.body ?? "");
   const [dir, setDir] = useState(card?.project_dir ?? localStorage.getItem(LAST_DIR_KEY) ?? "");
   const [parallelOk, setParallelOk] = useState(card?.parallel_ok ?? true);
+  const [interactive, setInteractive] = useState(card?.interactive ?? false);
   // Edit mode: already-uploaded rows, hanging off the existing card id.
   const [attachments, setAttachments] = useState<AttachmentRow[]>(card?.attachments ?? []);
   // Create mode: a brand-new card has no id yet, so picked files can't be
@@ -61,9 +62,9 @@ export function TaskEditorDialog({
     try {
       if (dir) localStorage.setItem(LAST_DIR_KEY, dir);
       if (isEdit) {
-        await updateTask({ id: card.id, title, body, project_dir: dir, parallel_ok: parallelOk });
+        await updateTask({ id: card.id, title, body, project_dir: dir, parallel_ok: parallelOk, interactive });
       } else {
-        const newId = await createTask({ title, body, project_dir: dir, parallel_ok: parallelOk });
+        const newId = await createTask({ title, body, project_dir: dir, parallel_ok: parallelOk, interactive });
         for (const f of pendingFiles) {
           const bytes = new Uint8Array(await f.arrayBuffer());
           await addAttachment(newId, f.name, bytes);
@@ -121,12 +122,27 @@ export function TaskEditorDialog({
           <input
             type="checkbox"
             className="task-checkbox"
-            checked={parallelOk}
-            onChange={(e) => setParallelOk(e.target.checked)}
+            checked={interactive}
+            onChange={(e) => setInteractive(e.target.checked)}
           />
-          <span>{t.board_card_parallel}</span>
+          <span>{t.board_card_interactive}</span>
         </label>
-        <p className="task-field-hint">{t.board_card_solo_hint}</p>
+        <p className="task-field-hint">{t.board_card_interactive_hint}</p>
+
+        {!interactive && (
+          <>
+            <label className="task-field task-field--checkbox">
+              <input
+                type="checkbox"
+                className="task-checkbox"
+                checked={parallelOk}
+                onChange={(e) => setParallelOk(e.target.checked)}
+              />
+              <span>{t.board_card_parallel}</span>
+            </label>
+            <p className="task-field-hint">{t.board_card_solo_hint}</p>
+          </>
+        )}
 
         <div className="task-field">
           <span className="task-field-label">{t.board_card_attachments}</span>
