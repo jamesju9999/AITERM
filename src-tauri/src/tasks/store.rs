@@ -349,6 +349,61 @@ pub async fn list_by_status(pool: &SqlitePool, status: &str) -> Result<Vec<TaskR
         .await
 }
 
+/// 某個 status 目前有幾張卡片。供 `projects_list` 產生專案總覽的計數。
+pub async fn count_by_status(pool: &SqlitePool, status: &str) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE status = ?")
+        .bind(status)
+        .fetch_one(pool)
+        .await
+}
+
+/// 全部卡片數，不分 status。搬遷時用來判斷舊資料庫是否值得搬。
+pub async fn count_all(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM tasks").fetch_one(pool).await
+}
+
+/// 這個專案的卡片用過的工作目錄，去重後依字母排序。
+/// 供新增工作時的目錄快捷選項——專案不綁資料夾，工作可散布在多個 repo，
+/// 沒有這個的話使用者每次都得重新瀏覽選取。
+pub async fn distinct_project_dirs(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT project_dir FROM tasks WHERE project_dir <> '' ORDER BY project_dir",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// 把 `transcript_path` 與附件的 `stored_path` 中的 `old_prefix` 換成
+/// `new_prefix`。搬遷舊資料時用——那些欄位存的是絕對路徑，複製資料夾
+/// 之後若不改寫，新的專案資料夾就不是自成一體的（複製到別台機器會
+/// 掉附件）。只換開頭相符的，其他路徑不動。
+pub async fn rewrite_stored_paths(
+    pool: &SqlitePool,
+    old_prefix: &str,
+    new_prefix: &str,
+) -> Result<(), sqlx::Error> {
+    let like = format!("{old_prefix}%");
+    sqlx::query(
+        "UPDATE tasks SET transcript_path = ? || SUBSTR(transcript_path, ?)
+         WHERE transcript_path LIKE ?",
+    )
+    .bind(new_prefix)
+    .bind(old_prefix.len() as i64 + 1)
+    .bind(&like)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE task_attachments SET stored_path = ? || SUBSTR(stored_path, ?)
+         WHERE stored_path LIKE ?",
+    )
+    .bind(new_prefix)
+    .bind(old_prefix.len() as i64 + 1)
+    .bind(&like)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -494,5 +549,82 @@ mod tests {
         let src = create_task(&pool, "chat one", "", "/r", true, true).await.unwrap();
         let new_id = clone_task_fields(&pool, &src).await.unwrap();
         assert!(get_task(&pool, &new_id).await.unwrap().unwrap().interactive);
+    }
+}
+
+#[cfg(test)]
+mod project_query_tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn mem_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn count_by_status_counts_only_that_status() {
+        let pool = mem_pool().await;
+        let a = create_task(&pool, "a", "", "/r", true, false).await.unwrap();
+        create_task(&pool, "b", "", "/r", true, false).await.unwrap();
+        move_task(&pool, &a, STATUS_QUEUED, 1.0).await.unwrap();
+
+        assert_eq!(count_by_status(&pool, STATUS_PLANNING).await.unwrap(), 1);
+        assert_eq!(count_by_status(&pool, STATUS_QUEUED).await.unwrap(), 1);
+        assert_eq!(count_by_status(&pool, STATUS_RUNNING).await.unwrap(), 0);
+        assert_eq!(count_by_status(&pool, STATUS_DONE).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn distinct_project_dirs_dedupes_and_sorts() {
+        let pool = mem_pool().await;
+        create_task(&pool, "a", "", "/b/api", true, false).await.unwrap();
+        create_task(&pool, "b", "", "/a/web", true, false).await.unwrap();
+        create_task(&pool, "c", "", "/b/api", true, false).await.unwrap();
+
+        let dirs = distinct_project_dirs(&pool).await.unwrap();
+        assert_eq!(dirs, vec!["/a/web".to_string(), "/b/api".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn distinct_project_dirs_skips_empty_strings() {
+        let pool = mem_pool().await;
+        create_task(&pool, "a", "", "", true, false).await.unwrap();
+        create_task(&pool, "b", "", "/real", true, false).await.unwrap();
+        assert_eq!(distinct_project_dirs(&pool).await.unwrap(), vec!["/real".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn rewrite_stored_paths_repoints_attachments_and_transcripts() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "a", "", "/r", true, false).await.unwrap();
+        move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
+        mark_dispatched(&pool, &id, "tab").await.unwrap();
+        finish_task(&pool, &id, "success", None, Some("/old/home/tasks/x/transcript.txt"))
+            .await
+            .unwrap();
+        add_attachment(&pool, &id, "f.png", "/old/home/tasks/x/attachments/f.png")
+            .await
+            .unwrap();
+
+        rewrite_stored_paths(&pool, "/old/home", "/new/home").await.unwrap();
+
+        let row = get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!(row.transcript_path.as_deref(), Some("/new/home/tasks/x/transcript.txt"));
+        let atts = list_attachments(&pool, &id).await.unwrap();
+        assert_eq!(atts[0].stored_path, "/new/home/tasks/x/attachments/f.png");
+    }
+
+    #[tokio::test]
+    async fn rewrite_stored_paths_leaves_unrelated_paths_alone() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "a", "", "/r", true, false).await.unwrap();
+        add_attachment(&pool, &id, "f.png", "/somewhere/else/f.png").await.unwrap();
+
+        rewrite_stored_paths(&pool, "/old/home", "/new/home").await.unwrap();
+
+        let atts = list_attachments(&pool, &id).await.unwrap();
+        assert_eq!(atts[0].stored_path, "/somewhere/else/f.png");
     }
 }
