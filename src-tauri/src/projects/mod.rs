@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub mod naming;
+
 /// 本程式認得的 `.aitprj` 格式版本。讀到比這個大的版本一律拒絕，
 /// 不猜測、不嘗試向前相容。
 pub const SCHEMA_VERSION: u32 = 1;
