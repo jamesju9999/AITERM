@@ -21,21 +21,28 @@ vi.mock("../../ipc/tasks", () => ({
   addAttachment: vi.fn(),
   removeAttachment: vi.fn(),
   saveTranscript: vi.fn().mockResolvedValue(undefined),
+  markTaskDone: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../lib/terminalInstanceRegistry", () => ({
   serializeTerminal: vi.fn(),
 }));
 
+vi.mock("../../lib/runningTaskTabRegistry", () => ({
+  setRunningTaskTabs: vi.fn(),
+}));
+
 import { listTasks, onTasksUpdated, moveTask } from "../../ipc/tasks";
 import type { TaskWithAttachments } from "../../ipc/tasks";
 import { serializeTerminal } from "../../lib/terminalInstanceRegistry";
+import { setRunningTaskTabs } from "../../lib/runningTaskTabRegistry";
 import { TaskBoardView } from "./index";
 
 const card = (over: Partial<TaskWithAttachments>): TaskWithAttachments => ({
   id: "c1", title: "Card one", body: "", project_dir: "/r", status: "planning",
-  parallel_ok: true, sort_order: 1, outcome: null, tab_id: null, transcript_path: null,
-  error_message: null, created_at: "", dispatched_at: null, finished_at: null, attachments: [],
+  parallel_ok: true, interactive: false, sort_order: 1, outcome: null, tab_id: null,
+  transcript_path: null, error_message: null, created_at: "", dispatched_at: null,
+  finished_at: null, attachments: [],
   ...over,
 });
 
@@ -114,6 +121,58 @@ describe("TaskBoardView", () => {
     }
   });
 
+  it("dropping a running interactive card on the done column calls markTaskDone, not moveTask", async () => {
+    const { markTaskDone } = await import("../../ipc/tasks");
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r", title: "Chatting", status: "running", tab_id: "tab-1", interactive: true }),
+    ]);
+    view();
+    const cardEl = await screen.findByText("Chatting");
+    const doneCol = screen.getByTestId("column-done");
+    const dragWrap = cardEl.closest("[data-task-drag-id]") as HTMLElement;
+    expect(dragWrap).toBeTruthy();
+
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn().mockReturnValue(doneCol);
+    try {
+      const { fireEvent } = await import("@testing-library/react");
+      fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
+      fireEvent.mouseMove(window, { clientX: 100, clientY: 120 });
+      fireEvent.mouseUp(window, { clientX: 100, clientY: 120 });
+      await waitFor(() => expect(markTaskDone).toHaveBeenCalledWith("r"));
+      expect(moveTask).not.toHaveBeenCalled();
+    } finally {
+      document.elementFromPoint = originalElementFromPoint;
+    }
+  });
+
+  it("dropping a running NON-interactive card on the done column does nothing", async () => {
+    const { markTaskDone } = await import("../../ipc/tasks");
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r", title: "Auto running", status: "running", tab_id: "tab-1", interactive: false }),
+    ]);
+    view();
+    const cardEl = await screen.findByText("Auto running");
+    const doneCol = screen.getByTestId("column-done");
+    const dragWrap = cardEl.closest("[data-task-drag-id]") as HTMLElement;
+
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn().mockReturnValue(doneCol);
+    try {
+      const { fireEvent } = await import("@testing-library/react");
+      fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
+      fireEvent.mouseMove(window, { clientX: 100, clientY: 120 });
+      fireEvent.mouseUp(window, { clientX: 100, clientY: 120 });
+      // Not draggable at all — mousedown shouldn't even arm a drag for a
+      // non-interactive running card, so neither call should ever fire.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(markTaskDone).not.toHaveBeenCalled();
+      expect(moveTask).not.toHaveBeenCalled();
+    } finally {
+      document.elementFromPoint = originalElementFromPoint;
+    }
+  });
+
   // Regression test for a real UX bug found manually after the fix above:
   // dragging gave zero visual feedback (no cursor-following ghost, no fade on
   // the source card), which made the interaction feel broken even once the
@@ -180,6 +239,57 @@ describe("TaskBoardView", () => {
     }
   });
 
+  // The column header's status color line is driven off data-column-status
+  // (see index.css). Deliberately a separate attribute from the data-testid
+  // the drag code keys off, so renaming one can't silently restyle the
+  // other — this asserts the styling hook exists on every column.
+  it("each column carries its own status attribute for the header color line", async () => {
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    for (const status of ["planning", "queued", "running", "done"]) {
+      const col = await screen.findByTestId(`column-${status}`);
+      expect(col.getAttribute("data-column-status")).toBe(status);
+    }
+  });
+
+  // User-requested: the ghost used to be a hand-rolled subset (title + path
+  // only), so it looked nothing like the card it came from. It now renders
+  // the real TaskCard, which also means the two can't drift apart as the
+  // card evolves. Asserting on the structural pieces the old version was
+  // missing — status bar, badges, action buttons — rather than just the
+  // title, which the old version already had.
+  it("the drag ghost renders the same full card content as the resting card", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "p", title: "Draggable", status: "planning", interactive: true }),
+    ]);
+    view();
+    const cardEl = await screen.findByText("Draggable");
+    const dragWrap = cardEl.closest("[data-task-drag-id]") as HTMLElement;
+
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn().mockReturnValue(null);
+    try {
+      const { fireEvent } = await import("@testing-library/react");
+      fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
+      fireEvent.mouseMove(window, { clientX: 130, clientY: 150 });
+
+      const ghost = await screen.findByTestId("task-drag-ghost");
+      const ghostCard = ghost.querySelector(".task-card") as HTMLElement;
+      expect(ghostCard).not.toBeNull();
+      // Same status drives the same left color bar as the resting card.
+      expect(ghostCard.getAttribute("data-task-status")).toBe("planning");
+      // Interactive avatar chip and the planning-state action buttons —
+      // none of which the old simplified ghost rendered at all.
+      expect(ghostCard.querySelector(".task-card-avatar")).not.toBeNull();
+      expect(within(ghostCard).getByText(/編輯工作|Edit/)).toBeInTheDocument();
+      expect(within(ghostCard).getByText(/刪除|Delete/)).toBeInTheDocument();
+
+      fireEvent.mouseUp(window, { clientX: 130, clientY: 150 });
+    } finally {
+      document.elementFromPoint = originalElementFromPoint;
+    }
+  });
+
   it("running card shows Stop, and Stop calls stopTask", async () => {
     const { stopTask } = await import("../../ipc/tasks");
     vi.mocked(listTasks).mockResolvedValue([card({ id: "r", title: "Runner", status: "running", tab_id: "tab-1" })]);
@@ -188,6 +298,58 @@ describe("TaskBoardView", () => {
     await screen.findByText("Runner");
     await user.click(screen.getByRole("button", { name: /停止|Stop/ }));
     expect(stopTask).toHaveBeenCalledWith("r");
+  });
+
+  it("interactive running card shows the interactive badge and a Mark Done button that calls markTaskDone", async () => {
+    const { markTaskDone } = await import("../../ipc/tasks");
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r", title: "Chatting", status: "running", tab_id: "tab-1", interactive: true }),
+    ]);
+    view();
+    const user = userEvent.setup();
+    await screen.findByText("Chatting");
+    expect(screen.getByText(/互動|Interactive/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /標記完成|Mark Done/ }));
+    expect(markTaskDone).toHaveBeenCalledWith("r");
+  });
+
+  it("running card carries a data-task-status attribute matching its status, for the CSS left-accent-bar", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r", title: "Running one", status: "running", tab_id: "tab-1" }),
+    ]);
+    view();
+    const cardEl = await screen.findByText("Running one");
+    const cardRoot = cardEl.closest(".task-card") as HTMLElement;
+    expect(cardRoot.dataset.taskStatus).toBe("running");
+  });
+
+  it("done+success card's data-task-status reflects the outcome, not just the status", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "Done one", status: "done", outcome: "success" }),
+    ]);
+    view();
+    const cardEl = await screen.findByText("Done one");
+    const cardRoot = cardEl.closest(".task-card") as HTMLElement;
+    expect(cardRoot.dataset.taskStatus).toBe("success");
+  });
+
+  it("interactive running card's Mark Done button uses the primary button style, Stop uses ghost", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r", title: "Chatting", status: "running", tab_id: "tab-1", interactive: true }),
+    ]);
+    view();
+    await screen.findByText("Chatting");
+    expect(screen.getByRole("button", { name: /標記完成|Mark Done/ }).className).toContain("tb-btn--primary");
+    expect(screen.getByRole("button", { name: /停止|Stop/ }).className).toContain("tb-btn--ghost");
+  });
+
+  it("non-interactive running card has no Mark Done button", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r", title: "Auto running", status: "running", tab_id: "tab-1", interactive: false }),
+    ]);
+    view();
+    await screen.findByText("Auto running");
+    expect(screen.queryByRole("button", { name: /標記完成|Mark Done/ })).not.toBeInTheDocument();
   });
 
   // Regression test for a real bug: window.confirm() has no real
@@ -244,6 +406,41 @@ describe("TaskBoardView", () => {
       expect(createTask).toHaveBeenCalledWith(
         expect.objectContaining({ title: "Ship it", body: "do the thing", project_dir: "/repo", parallel_ok: true }),
       ),
+    );
+  });
+
+  it("new-card dialog: checking interactive mode hides the parallel toggle and is sent to createTask", async () => {
+    const { createTask } = await import("../../ipc/tasks");
+    vi.mocked(createTask).mockResolvedValue("id-new");
+    view();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /新增工作|New task/ }));
+    await user.type(screen.getByLabelText(/標題|Title/), "Chat task");
+    await user.type(screen.getByLabelText(/專案資料夾|Project folder/), "/repo");
+
+    expect(screen.getByText(/可與其他任務並行|Can run alongside other tasks/)).toBeInTheDocument();
+    await user.click(screen.getByLabelText(/互動模式|Interactive mode/));
+    expect(screen.queryByText(/可與其他任務並行|Can run alongside other tasks/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^儲存$|^Save$/ }));
+    await waitFor(() =>
+      expect(createTask).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Chat task", project_dir: "/repo", interactive: true }),
+      ),
+    );
+  });
+
+  it("new-card dialog defaults interactive to false when left unchecked", async () => {
+    const { createTask } = await import("../../ipc/tasks");
+    vi.mocked(createTask).mockResolvedValue("id-new");
+    view();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /新增工作|New task/ }));
+    await user.type(screen.getByLabelText(/標題|Title/), "Auto task");
+    await user.type(screen.getByLabelText(/專案資料夾|Project folder/), "/repo");
+    await user.click(screen.getByRole("button", { name: /^儲存$|^Save$/ }));
+    await waitFor(() =>
+      expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ interactive: false })),
     );
   });
 
@@ -338,6 +535,40 @@ describe("TaskBoardView", () => {
     expect(raw.textContent).not.toContain("spinner\nspinner");
   });
 
+  // The transcript dialog is drag-resizable (CSS `resize: both`), and the
+  // browser records a dragged size as an INLINE width/height on the element.
+  // Inline styles outrank the maximized class's own sizing, so maximizing
+  // must clear them and restoring must write them back — otherwise the
+  // button silently does nothing once the user has dragged even once.
+  it("maximize clears a dragged inline size, restore puts it back", async () => {
+    const { readTranscript } = await import("../../ipc/tasks");
+    vi.mocked(readTranscript).mockResolvedValue("output");
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "Done one", status: "done", outcome: "success", transcript_path: "/p/t.txt", body: "b" }),
+    ]);
+    view();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /對話記錄|Conversation/ }));
+
+    const dialog = (await screen.findByTestId("task-transcript-raw")).closest(
+      ".task-transcript-dialog",
+    ) as HTMLElement;
+    // Simulate the user having dragged the corner.
+    dialog.style.width = "700px";
+    dialog.style.height = "500px";
+
+    const maxBtn = screen.getByRole("button", { name: /放到最大|Maximize/ });
+    await user.click(maxBtn);
+    expect(dialog.classList.contains("task-transcript-dialog--max")).toBe(true);
+    expect(dialog.style.width).toBe("");
+    expect(dialog.style.height).toBe("");
+
+    await user.click(screen.getByRole("button", { name: /還原大小|Restore size/ }));
+    expect(dialog.classList.contains("task-transcript-dialog--max")).toBe(false);
+    expect(dialog.style.width).toBe("700px");
+    expect(dialog.style.height).toBe("500px");
+  });
+
   // Regression coverage for the new "just finished → try to upgrade the
   // saved transcript" behavior. Uses a controllable listTasks mock (like the
   // existing "re-fetches when tasks-updated fires" test) to drive a real
@@ -393,5 +624,128 @@ describe("TaskBoardView", () => {
 
     await waitFor(() => expect(listTasks).toHaveBeenCalledTimes(2));
     expect(saveTranscript).not.toHaveBeenCalled();
+  });
+
+  // Regression coverage for a real bug: closing a tab whose Task Board task
+  // was still `running` gave no warning at all — TerminalView's own close
+  // guard only knew about shell-command-busy/agent-mission state, nothing
+  // about the Task Board. Fixed by having TaskBoardView keep a shared
+  // registry (runningTaskTabRegistry) in sync with which tab ids currently
+  // belong to a running task, which TerminalView's guard also consults.
+  it("keeps the running-task-tab registry in sync with the task list", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r1", title: "Running one", status: "running", tab_id: "tab-1" }),
+      card({ id: "r2", title: "Running two", status: "running", tab_id: "tab-2" }),
+      card({ id: "p1", title: "Planned", status: "planning", tab_id: null }),
+    ]);
+    view();
+    await screen.findByText("Running one");
+    await waitFor(() =>
+      expect(setRunningTaskTabs).toHaveBeenCalledWith(expect.arrayContaining(["tab-1", "tab-2"])),
+    );
+    const lastCallArg = vi.mocked(setRunningTaskTabs).mock.calls.at(-1)?.[0];
+    expect(Array.from(lastCallArg ?? [])).toHaveLength(2);
+  });
+
+  it("drops a tab from the running-task-tab registry once its task finishes", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r1", title: "Running one", status: "running", tab_id: "tab-1" }),
+    ]);
+    let fire: () => void = () => {};
+    vi.mocked(onTasksUpdated).mockImplementation(async (cb) => { fire = cb; return () => {}; });
+    view();
+    await screen.findByText("Running one");
+    await waitFor(() =>
+      expect(setRunningTaskTabs).toHaveBeenLastCalledWith(expect.arrayContaining(["tab-1"])),
+    );
+
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r1", title: "Running one", status: "done", outcome: "success", tab_id: "tab-1" }),
+    ]);
+    fire();
+
+    await waitFor(() => expect(setRunningTaskTabs).toHaveBeenLastCalledWith([]));
+  });
+
+  // Regression test for a real bug: deleting a "done" card and confirming
+  // "close the tab too" killed the PTY session on the backend but never
+  // told the frontend's own tab list to remove it — the tab visually stayed
+  // open (now attached to a dead session). TerminalApp's aiterm:close-tab
+  // listener is the fix; this only proves TaskCard actually dispatches it.
+  it("dispatches aiterm:close-tab when deleting a done card and confirming to close its tab", async () => {
+    const { deleteTask } = await import("../../ipc/tasks");
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "Done one", status: "done", outcome: "success", tab_id: "tab-9" }),
+    ]);
+    view();
+    const user = userEvent.setup();
+    await screen.findByText("Done one");
+
+    const events: CustomEvent<{ tabId?: string }>[] = [];
+    const onCloseTab = (e: Event) => events.push(e as CustomEvent<{ tabId?: string }>);
+    window.addEventListener("aiterm:close-tab", onCloseTab);
+    try {
+      await user.click(screen.getByRole("button", { name: /^刪除$|^Delete$/ }));
+      await waitFor(() => expect(deleteTask).toHaveBeenCalledWith("d", true));
+      await waitFor(() => expect(events).toHaveLength(1));
+      expect(events[0].detail.tabId).toBe("tab-9");
+    } finally {
+      window.removeEventListener("aiterm:close-tab", onCloseTab);
+    }
+  });
+
+  // Regression coverage for a real UX gap: a running+interactive card can
+  // only legally be dropped on "done" (via markTaskDone) — dropping it on
+  // planning/queued was already silently ignored by handleDrop, but the
+  // column it was hovering over still lit up as if the drop would work,
+  // which is misleading. The column should only highlight when the drop
+  // would actually succeed for the card currently being dragged.
+  it("does not highlight an illegal drop target while dragging a running interactive card", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r", title: "Chatting", status: "running", tab_id: "tab-1", interactive: true }),
+    ]);
+    view();
+    const cardEl = await screen.findByText("Chatting");
+    const planningCol = screen.getByTestId("column-planning");
+    const doneCol = screen.getByTestId("column-done");
+    const dragWrap = cardEl.closest("[data-task-drag-id]") as HTMLElement;
+
+    const originalElementFromPoint = document.elementFromPoint;
+    try {
+      const { fireEvent } = await import("@testing-library/react");
+      fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
+
+      document.elementFromPoint = vi.fn().mockReturnValue(planningCol);
+      fireEvent.mouseMove(window, { clientX: 100, clientY: 120 }); // past the drag threshold, over an illegal target
+      expect(planningCol.className).not.toContain("task-column--drop-target");
+
+      document.elementFromPoint = vi.fn().mockReturnValue(doneCol);
+      fireEvent.mouseMove(window, { clientX: 100, clientY: 140 }); // now over the one legal target
+      expect(doneCol.className).toContain("task-column--drop-target");
+
+      fireEvent.mouseUp(window, { clientX: 100, clientY: 140 });
+    } finally {
+      document.elementFromPoint = originalElementFromPoint;
+    }
+  });
+
+  it("still highlights the legal target when dragging a planning card over the queued column", async () => {
+    vi.mocked(listTasks).mockResolvedValue([card({ id: "p", title: "Draggable", status: "planning" })]);
+    view();
+    const cardEl = await screen.findByText("Draggable");
+    const queuedCol = screen.getByTestId("column-queued");
+    const dragWrap = cardEl.closest("[data-task-drag-id]") as HTMLElement;
+
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn().mockReturnValue(queuedCol);
+    try {
+      const { fireEvent } = await import("@testing-library/react");
+      fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
+      fireEvent.mouseMove(window, { clientX: 100, clientY: 120 });
+      expect(queuedCol.className).toContain("task-column--drop-target");
+      fireEvent.mouseUp(window, { clientX: 100, clientY: 120 });
+    } finally {
+      document.elementFromPoint = originalElementFromPoint;
+    }
   });
 });

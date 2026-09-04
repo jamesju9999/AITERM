@@ -1,12 +1,14 @@
 //! Watches one dispatched task's PTY session until it reaches a terminal
 //! outcome. Signals, in priority order:
-//!   1. cancel channel fired               → Cancelled
-//!   2. fresh bell or done-marker observed → Success
+//!   1. control channel fires Cancel or MarkDone → Cancelled / Success
+//!   2. fresh bell or done-marker observed (Auto mode only) → Success
 //!   3. OSC133 non-zero exit code          → Failed("claude 以 exit code N 結束")
 //!   4. OSC133 exit code 0                 → Success (claude exited cleanly)
-//!   5. no output for `quiet_stuck_ms`     → Failed("疑似卡住（120 秒無輸出）")
+//!   5. no output for `quiet_stuck_ms` (Auto mode only) → Failed("疑似卡住（120 秒無輸出）")
 //!
-//! Reuses `PtyManager`'s existing per-session counters — no new protocol.
+//! Interactive mode (`WatchMode::Interactive`) skips signals ②⑤ — see that
+//! variant's doc comment for why. Reuses `PtyManager`'s existing per-session
+//! counters — no new protocol.
 
 use std::time::Duration;
 
@@ -38,6 +40,31 @@ impl TaskOutcome {
     }
 }
 
+/// External control signal for a running `watch()`. Sent through the same
+/// oneshot channel that used to only carry cancellation — `SchedulerHandle`
+/// exposes `cancel()`/`mark_done()` as two thin wrappers over one `send`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchControl {
+    Cancel,
+    MarkDone,
+}
+
+/// Which soft completion signals `watch()` trusts. Both modes still trust
+/// the hard signal — the Claude Code process actually exiting (③④) — since
+/// that can't be a false positive from mid-conversation chatter the way
+/// bell/marker/silence can.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchMode {
+    /// bell/marker → success, 120s silence → stuck-failed. Current
+    /// behavior for tasks dispatched to run unattended.
+    Auto,
+    /// A human is expected to be chatting in this tab — bell fires on
+    /// every reply, and thinking for well over 120s is normal, so both of
+    /// those signals would misfire constantly. Completion is signalled
+    /// externally instead (`WatchControl::MarkDone`).
+    Interactive,
+}
+
 /// bell/marker counts as of the moment the prompt was sent (from
 /// `dispatch::DispatchResult`). `Default` = all zero, for tests that don't
 /// prime the session first.
@@ -67,16 +94,18 @@ impl Default for Thresholds {
 pub async fn watch(
     pty: &PtyManager,
     tab_id: &str,
-    mut cancel: oneshot::Receiver<()>,
+    mut control: oneshot::Receiver<WatchControl>,
     baselines: Baselines,
     thresholds: Thresholds,
+    mode: WatchMode,
 ) -> TaskOutcome {
     let start = tokio::time::Instant::now();
     let exit_baseline = pty.last_exit_code(tab_id);
     loop {
-        // 1. cancel
-        match cancel.try_recv() {
-            Ok(()) => return TaskOutcome::Cancelled,
+        // 1. external control signal
+        match control.try_recv() {
+            Ok(WatchControl::Cancel) => return TaskOutcome::Cancelled,
+            Ok(WatchControl::MarkDone) => return TaskOutcome::Success,
             Err(oneshot::error::TryRecvError::Closed) => return TaskOutcome::Cancelled,
             Err(oneshot::error::TryRecvError::Empty) => {}
         }
@@ -87,14 +116,15 @@ pub async fn watch(
         };
         let marker = pty.marker_count(tab_id).unwrap_or(0);
 
-        // 2. reply signal
-        if marker > baselines.marker || bell > baselines.bell {
+        // 2. reply signal — Auto mode only (see WatchMode::Interactive's doc).
+        if mode == WatchMode::Auto && (marker > baselines.marker || bell > baselines.bell) {
             return TaskOutcome::Success;
         }
 
         // 3/4. process exited *since we started watching* (a pre-existing exit
         // code — e.g. Windows' injected prompt emits OSC133 D;0 on the very
-        // first draw — must not count as this task finishing).
+        // first draw — must not count as this task finishing). Both modes,
+        // this is a hard signal either way.
         let current_exit = pty.last_exit_code(tab_id);
         if current_exit != exit_baseline {
             if let Some(code) = current_exit {
@@ -105,10 +135,10 @@ pub async fn watch(
             }
         }
 
-        // 5. stuck
+        // 5. stuck — Auto mode only.
         let ran_ms = start.elapsed().as_millis() as u64;
         let quiet_ms = pty.ms_since_output(tab_id).unwrap_or(0);
-        if ran_ms >= thresholds.min_run_ms && quiet_ms >= thresholds.quiet_stuck_ms {
+        if mode == WatchMode::Auto && ran_ms >= thresholds.min_run_ms && quiet_ms >= thresholds.quiet_stuck_ms {
             return TaskOutcome::Failed("疑似卡住（120 秒無輸出）".to_string());
         }
 
@@ -137,11 +167,11 @@ mod tests {
     async fn marker_in_output_yields_success() {
         let pty = PtyManager::new();
         let tab = pty.create_with_callback(size(), |_| {}).unwrap();
-        let (_tx, rx) = tokio::sync::oneshot::channel();
+        let (_tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
         let marker = done_marker(&tab);
         pty.write(&tab, format!("printf '%s\\n' '{marker}'\n").as_bytes()).unwrap();
 
-        let outcome = watch(&pty, &tab, rx, Baselines::default(), test_thresholds()).await;
+        let outcome = watch(&pty, &tab, rx, Baselines::default(), test_thresholds(), WatchMode::Auto).await;
         assert!(matches!(outcome, TaskOutcome::Success), "{outcome:?}");
     }
 
@@ -150,10 +180,10 @@ mod tests {
     async fn nonzero_exit_yields_failed() {
         let pty = PtyManager::new();
         let tab = pty.create_with_callback(size(), |_| {}).unwrap();
-        let (_tx, rx) = tokio::sync::oneshot::channel();
+        let (_tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
         pty.write(&tab, b"sh -c 'exit 3'\n").unwrap();
 
-        let outcome = watch(&pty, &tab, rx, Baselines::default(), test_thresholds()).await;
+        let outcome = watch(&pty, &tab, rx, Baselines::default(), test_thresholds(), WatchMode::Auto).await;
         match outcome {
             TaskOutcome::Failed(msg) => assert!(msg.contains('3'), "{msg}"),
             other => panic!("expected Failed, got {other:?}"),
@@ -172,10 +202,9 @@ mod tests {
     async fn silence_past_the_threshold_yields_failed_stuck() {
         let pty = PtyManager::new();
         let tab = pty.create_with_callback(size(), |_| {}).unwrap();
-        let (_tx, rx) = tokio::sync::oneshot::channel();
-        // Never write anything: session is quiet from the start.
+        let (_tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
         let thresholds = Thresholds { quiet_stuck_ms: 300, poll_ms: 50, min_run_ms: 200 };
-        let outcome = watch(&pty, &tab, rx, Baselines::default(), thresholds).await;
+        let outcome = watch(&pty, &tab, rx, Baselines::default(), thresholds, WatchMode::Auto).await;
         match outcome {
             TaskOutcome::Failed(msg) => assert!(msg.contains("卡住"), "{msg}"),
             other => panic!("expected Failed(stuck), got {other:?}"),
@@ -187,11 +216,6 @@ mod tests {
     async fn a_stale_exit_code_from_before_watch_does_not_count_as_completion() {
         let pty = PtyManager::new();
         let tab = pty.create_with_callback(size(), |_| {}).unwrap();
-        // Make the session carry Some(0) BEFORE watch starts. Generous
-        // deadline: this only bounds shell cold-start + rc sourcing, which is
-        // slow when the whole `tasks::` suite spawns real shells in parallel
-        // (a 5s bound flaked ~1-in-5 under load). A regression in Fix 2 fails
-        // fast at the `panic!` below regardless of this value.
         pty.write(&tab, b"true\n").unwrap();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
@@ -199,10 +223,9 @@ mod tests {
             assert!(tokio::time::Instant::now() < deadline, "shell never emitted D;0");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        let (_tx, rx) = tokio::sync::oneshot::channel();
-        // No new signal after this point → must fall through to stuck, NOT Success.
+        let (_tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
         let thresholds = Thresholds { quiet_stuck_ms: 300, poll_ms: 50, min_run_ms: 200 };
-        let outcome = watch(&pty, &tab, rx, Baselines::default(), thresholds).await;
+        let outcome = watch(&pty, &tab, rx, Baselines::default(), thresholds, WatchMode::Auto).await;
         match outcome {
             TaskOutcome::Failed(msg) => assert!(msg.contains("卡住"), "{msg}"),
             other => panic!("stale Some(0) must not yield {other:?}"),
@@ -213,9 +236,88 @@ mod tests {
     async fn cancel_signal_yields_cancelled() {
         let pty = PtyManager::new();
         let tab = pty.create_with_callback(size(), |_| {}).unwrap();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        tx.send(()).unwrap();
-        let outcome = watch(&pty, &tab, rx, Baselines::default(), test_thresholds()).await;
+        let (tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
+        tx.send(WatchControl::Cancel).unwrap();
+        let outcome = watch(&pty, &tab, rx, Baselines::default(), test_thresholds(), WatchMode::Auto).await;
+        assert!(matches!(outcome, TaskOutcome::Cancelled), "{outcome:?}");
+    }
+
+    #[tokio::test]
+    async fn mark_done_control_signal_yields_success() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(size(), |_| {}).unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
+        tx.send(WatchControl::MarkDone).unwrap();
+        let outcome = watch(&pty, &tab, rx, Baselines::default(), test_thresholds(), WatchMode::Auto).await;
+        assert!(matches!(outcome, TaskOutcome::Success), "{outcome:?}");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn interactive_mode_still_fails_on_nonzero_exit() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(size(), |_| {}).unwrap();
+        let (_tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
+        pty.write(&tab, b"sh -c 'exit 3'\n").unwrap();
+        let outcome = watch(&pty, &tab, rx, Baselines::default(), test_thresholds(), WatchMode::Interactive).await;
+        match outcome {
+            TaskOutcome::Failed(msg) => assert!(msg.contains('3'), "{msg}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    // Proves the marker/bell signal is genuinely ignored in Interactive
+    // mode — not by waiting a fixed duration and assuming (a coincidence-
+    // based test would pass just as well against broken code that merely
+    // runs slowly), but by racing watch() against a real timeout: if it's
+    // STILL RUNNING after a window well past what Auto mode would need to
+    // return, that's a real, observed fact about the future's state, not a
+    // guess. Then proves the loop is genuinely alive (not just slow) by
+    // cancelling it and checking it reacts.
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn interactive_mode_does_not_treat_a_marker_as_completion() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(size(), |_| {}).unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
+        let marker = done_marker(&tab);
+        // `&& sleep 2` keeps the shell mid-command (so OSC133 D — the hard
+        // exit signal, intentionally still active in Interactive mode —
+        // does not fire within this test's observation window and get
+        // confused for what's actually being tested here: that the marker
+        // itself is ignored). The Cancel sent below aborts watch() long
+        // before the sleep would complete.
+        pty.write(&tab, format!("printf '%s\\n' '{marker}' && sleep 2\n").as_bytes()).unwrap();
+
+        let watch_fut = watch(&pty, &tab, rx, Baselines::default(), test_thresholds(), WatchMode::Interactive);
+        tokio::pin!(watch_fut);
+
+        let still_running = tokio::time::timeout(Duration::from_millis(500), &mut watch_fut).await.is_err();
+        assert!(still_running, "watch() returned early in Interactive mode — marker signal was not ignored");
+
+        tx.send(WatchControl::Cancel).unwrap();
+        let outcome = watch_fut.await;
+        assert!(matches!(outcome, TaskOutcome::Cancelled), "{outcome:?}");
+    }
+
+    // Same non-coincidental-timeout technique as the marker test above, for
+    // the 120s-stuck signal.
+    #[tokio::test]
+    async fn interactive_mode_does_not_time_out_on_silence() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(size(), |_| {}).unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
+        // Never write anything — session silent from the start.
+        let thresholds = Thresholds { quiet_stuck_ms: 200, poll_ms: 50, min_run_ms: 100 };
+
+        let watch_fut = watch(&pty, &tab, rx, Baselines::default(), thresholds, WatchMode::Interactive);
+        tokio::pin!(watch_fut);
+
+        let still_running = tokio::time::timeout(Duration::from_millis(600), &mut watch_fut).await.is_err();
+        assert!(still_running, "watch() returned early in Interactive mode — stuck-timeout signal was not ignored");
+
+        tx.send(WatchControl::Cancel).unwrap();
+        let outcome = watch_fut.await;
         assert!(matches!(outcome, TaskOutcome::Cancelled), "{outcome:?}");
     }
 }

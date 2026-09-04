@@ -62,6 +62,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             project_dir     TEXT NOT NULL,
             status          TEXT NOT NULL DEFAULT 'planning',
             parallel_ok     INTEGER NOT NULL DEFAULT 1,
+            interactive     INTEGER NOT NULL DEFAULT 0,
             sort_order      REAL NOT NULL DEFAULT 0,
             outcome         TEXT,
             tab_id          TEXT,
@@ -74,6 +75,10 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+    // Migration: existing databases created before `interactive` existed.
+    let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN interactive INTEGER NOT NULL DEFAULT 0")
+        .execute(pool)
+        .await;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, sort_order)")
         .execute(pool)
         .await?;

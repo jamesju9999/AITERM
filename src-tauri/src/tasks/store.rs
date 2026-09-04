@@ -21,6 +21,9 @@ pub struct TaskRow {
     // INTEGER column mapped straight to `bool` — the sqlite driver's native
     // Decode<bool> reads 0/1. Same pattern as `db/mail.rs` (`is_important` etc.).
     pub parallel_ok: bool,
+    // Set at creation time, editable only while `planning` (same rule as
+    // `parallel_ok`) — see docs/superpowers/specs/2026-09-03-task-board-interactive-mode-design.md.
+    pub interactive: bool,
     pub sort_order: f64,
     pub outcome: Option<String>,
     pub tab_id: Option<String>,
@@ -54,6 +57,7 @@ pub async fn create_task(
     body: &str,
     project_dir: &str,
     parallel_ok: bool,
+    interactive: bool,
 ) -> Result<String, sqlx::Error> {
     let id = uuid::Uuid::new_v4().to_string();
     // CAST to REAL: with an empty table the expression is otherwise typed
@@ -65,14 +69,15 @@ pub async fn create_task(
     .fetch_one(pool)
     .await?;
     sqlx::query(
-        "INSERT INTO tasks (id, title, body, project_dir, status, parallel_ok, sort_order)
-         VALUES (?, ?, ?, ?, 'planning', ?, ?)",
+        "INSERT INTO tasks (id, title, body, project_dir, status, parallel_ok, interactive, sort_order)
+         VALUES (?, ?, ?, ?, 'planning', ?, ?, ?)",
     )
     .bind(&id)
     .bind(title)
     .bind(body)
     .bind(project_dir)
     .bind(parallel_ok as i64)
+    .bind(interactive as i64)
     .bind(next_order)
     .execute(pool)
     .await?;
@@ -80,11 +85,11 @@ pub async fn create_task(
 }
 
 /// Create a fresh `planning` card copying `src`'s title/body/project_dir/
-/// parallel_ok. Does NOT copy attachments (the command layer does the file
-/// copy). Returns the new id. Err if `src_id` doesn't exist.
+/// parallel_ok/interactive. Does NOT copy attachments (the command layer
+/// does the file copy). Returns the new id. Err if `src_id` doesn't exist.
 pub async fn clone_task_fields(pool: &SqlitePool, src_id: &str) -> Result<String, sqlx::Error> {
     let src = get_task(pool, src_id).await?.ok_or(sqlx::Error::RowNotFound)?;
-    create_task(pool, &src.title, &src.body, &src.project_dir, src.parallel_ok).await
+    create_task(pool, &src.title, &src.body, &src.project_dir, src.parallel_ok, src.interactive).await
 }
 
 pub async fn list_tasks(pool: &SqlitePool) -> Result<Vec<TaskRow>, sqlx::Error> {
@@ -202,6 +207,19 @@ pub async fn set_parallel_ok(
 ) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE tasks SET parallel_ok = ? WHERE id = ?")
         .bind(parallel_ok as i64)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_interactive(
+    pool: &SqlitePool,
+    id: &str,
+    interactive: bool,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET interactive = ? WHERE id = ?")
+        .bind(interactive as i64)
         .bind(id)
         .execute(pool)
         .await?;
@@ -345,9 +363,10 @@ mod tests {
     #[tokio::test]
     async fn create_then_list_roundtrips_a_planning_card() {
         let pool = mem_pool().await;
-        let id = create_task(&pool, "Fix the flaky test", "make it deterministic", "/repo", true)
-            .await
-            .unwrap();
+        let id =
+            create_task(&pool, "Fix the flaky test", "make it deterministic", "/repo", true, false)
+                .await
+                .unwrap();
         let all = list_tasks(&pool).await.unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].id, id);
@@ -360,7 +379,7 @@ mod tests {
     #[tokio::test]
     async fn move_planning_to_queued_is_allowed_but_done_to_running_is_not() {
         let pool = mem_pool().await;
-        let id = create_task(&pool, "t", "", "/r", true).await.unwrap();
+        let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
         move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
         assert_eq!(get_task(&pool, &id).await.unwrap().unwrap().status, "queued");
 
@@ -372,11 +391,11 @@ mod tests {
     #[tokio::test]
     async fn midpoint_sort_order_between_two_cards() {
         let pool = mem_pool().await;
-        let a = create_task(&pool, "a", "", "/r", true).await.unwrap();
-        let b = create_task(&pool, "b", "", "/r", true).await.unwrap();
+        let a = create_task(&pool, "a", "", "/r", true, false).await.unwrap();
+        let b = create_task(&pool, "b", "", "/r", true, false).await.unwrap();
         move_task(&pool, &a, STATUS_QUEUED, 1.0).await.unwrap();
         move_task(&pool, &b, STATUS_QUEUED, 2.0).await.unwrap();
-        let c = create_task(&pool, "c", "", "/r", true).await.unwrap();
+        let c = create_task(&pool, "c", "", "/r", true, false).await.unwrap();
         let mid = midpoint_between(&pool, STATUS_QUEUED, Some(&a), Some(&b)).await.unwrap();
         assert!((mid - 1.5).abs() < 1e-9, "got {mid}");
         move_task(&pool, &c, STATUS_QUEUED, mid).await.unwrap();
@@ -385,7 +404,7 @@ mod tests {
     #[tokio::test]
     async fn mark_dispatched_and_finish_set_the_right_columns() {
         let pool = mem_pool().await;
-        let id = create_task(&pool, "t", "", "/r", true).await.unwrap();
+        let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
         move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
         mark_dispatched(&pool, &id, "tab-xyz").await.unwrap();
         let row = get_task(&pool, &id).await.unwrap().unwrap();
@@ -404,7 +423,7 @@ mod tests {
     #[tokio::test]
     async fn recover_orphaned_running_marks_them_cancelled() {
         let pool = mem_pool().await;
-        let id = create_task(&pool, "t", "", "/r", true).await.unwrap();
+        let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
         move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
         mark_dispatched(&pool, &id, "tab-1").await.unwrap();
         let n = recover_orphaned_running(&pool).await.unwrap();
@@ -417,7 +436,7 @@ mod tests {
     #[tokio::test]
     async fn add_and_remove_attachment_rows() {
         let pool = mem_pool().await;
-        let id = create_task(&pool, "t", "", "/r", true).await.unwrap();
+        let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
         let aid = add_attachment(&pool, &id, "spec.md", "/p/spec.md").await.unwrap();
         assert_eq!(list_attachments(&pool, &id).await.unwrap().len(), 1);
         remove_attachment(&pool, &aid).await.unwrap();
@@ -427,7 +446,7 @@ mod tests {
     #[tokio::test]
     async fn clone_task_fields_copies_the_core_fields_into_a_new_planning_card() {
         let pool = mem_pool().await;
-        let src = create_task(&pool, "Ship it", "the body", "/repo/x", false)
+        let src = create_task(&pool, "Ship it", "the body", "/repo/x", false, false)
             .await
             .unwrap();
         move_task(&pool, &src, STATUS_QUEUED, 1.0).await.unwrap();
@@ -453,10 +472,27 @@ mod tests {
     #[tokio::test]
     async fn delete_task_also_deletes_its_attachment_rows() {
         let pool = mem_pool().await;
-        let id = create_task(&pool, "t", "", "/r", true).await.unwrap();
+        let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
         add_attachment(&pool, &id, "a", "/p/a").await.unwrap();
         delete_task(&pool, &id).await.unwrap();
         assert!(get_task(&pool, &id).await.unwrap().is_none());
         assert_eq!(list_attachments(&pool, &id).await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn interactive_flag_defaults_false_and_is_persisted_when_true() {
+        let pool = mem_pool().await;
+        let auto_id = create_task(&pool, "auto one", "", "/r", true, false).await.unwrap();
+        let chat_id = create_task(&pool, "chat one", "", "/r", true, true).await.unwrap();
+        assert!(!get_task(&pool, &auto_id).await.unwrap().unwrap().interactive);
+        assert!(get_task(&pool, &chat_id).await.unwrap().unwrap().interactive);
+    }
+
+    #[tokio::test]
+    async fn clone_task_fields_copies_the_interactive_flag() {
+        let pool = mem_pool().await;
+        let src = create_task(&pool, "chat one", "", "/r", true, true).await.unwrap();
+        let new_id = clone_task_fields(&pool, &src).await.unwrap();
+        assert!(get_task(&pool, &new_id).await.unwrap().unwrap().interactive);
     }
 }

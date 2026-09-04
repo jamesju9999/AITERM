@@ -4,11 +4,13 @@ import { createPortal } from "react-dom";
 import { useLocale } from "../../contexts/LocaleContext";
 import {
   listTasks,
+  markTaskDone,
   moveTask,
   onTasksUpdated,
   type TaskStatus,
   type TaskWithAttachments,
 } from "../../ipc/tasks";
+import { setRunningTaskTabs } from "../../lib/runningTaskTabRegistry";
 import { TaskCard } from "./TaskCard";
 import { TaskColumn } from "./TaskColumn";
 import { TaskEditorDialog } from "./TaskEditorDialog";
@@ -85,6 +87,17 @@ export function TaskBoardView() {
     };
   }, [refresh]);
 
+  // Keeps TerminalView's close guard aware of which tabs currently belong
+  // to a `running` task — see runningTaskTabRegistry.ts for why this lives
+  // in a shared module instead of TaskBoard registering its own close
+  // guard directly (a tab can only have ONE registered guard; this tab
+  // already has TerminalView's own busy/mission guard on it).
+  useEffect(() => {
+    setRunningTaskTabs(
+      tasks.filter((x) => x.status === "running" && x.tab_id).map((x) => x.tab_id as string),
+    );
+  }, [tasks]);
+
   const colTitle = (s: TaskStatus) =>
     ({
       planning: t.board_col_planning,
@@ -96,14 +109,31 @@ export function TaskBoardView() {
   const byStatus = (s: TaskStatus) =>
     tasks.filter((x) => x.status === s).sort((a, b) => a.sort_order - b.sort_order);
 
+  // Single source of truth for "can this card legally be dropped on this
+  // column", shared by handleDrop (what actually happens on release) and
+  // the drag-over highlight below (what visually invites a drop while
+  // hovering) — so a column can never light up as a valid target and then
+  // silently reject the drop, which was the actual bug this fixed.
+  const isLegalDropTarget = useCallback((cardRow: TaskWithAttachments, to: TaskStatus): boolean => {
+    if (cardRow.status === to) return false;
+    if (cardRow.status === "running" && to === "done" && cardRow.interactive) return true;
+    return (
+      (cardRow.status === "planning" && to === "queued") ||
+      (cardRow.status === "queued" && to === "planning")
+    );
+  }, []);
+
   const handleDrop = useCallback(
     async (id: string, to: TaskStatus) => {
       const cardRow = tasks.find((x) => x.id === id);
-      if (!cardRow || cardRow.status === to) return;
-      const legal =
-        (cardRow.status === "planning" && to === "queued") ||
-        (cardRow.status === "queued" && to === "planning");
-      if (!legal) return;
+      if (!cardRow || !isLegalDropTarget(cardRow, to)) return;
+
+      if (cardRow.status === "running" && to === "done" && cardRow.interactive) {
+        await markTaskDone(id);
+        return; // finish flow (incl. the outcome badge) arrives via the
+                 // existing tasks-updated listener, same as auto-completion.
+      }
+
       const dest = tasks
         .filter((x) => x.status === to)
         .sort((a, b) => a.sort_order - b.sort_order);
@@ -113,7 +143,7 @@ export function TaskBoardView() {
         prev.map((x) => (x.id === id ? { ...x, status: to, sort_order: sortOrder } : x)),
       );
     },
-    [tasks],
+    [tasks, isLegalDropTarget],
   );
 
   // Card drag-to-move: deliberately NOT native HTML5 drag-and-drop
@@ -143,7 +173,9 @@ export function TaskBoardView() {
         setDraggingCardId(st.id);
       }
       setDragPointer({ x: e.clientX, y: e.clientY });
-      setDragOverStatus(statusUnderPoint(e.clientX, e.clientY));
+      const hovered = statusUnderPoint(e.clientX, e.clientY);
+      const draggedCard = tasks.find((x) => x.id === st.id);
+      setDragOverStatus(hovered && draggedCard && isLegalDropTarget(draggedCard, hovered) ? hovered : null);
     };
     const onUp = (e: MouseEvent) => {
       const st = dragRef.current;
@@ -161,11 +193,15 @@ export function TaskBoardView() {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [handleDrop, statusUnderPoint]);
+  }, [handleDrop, statusUnderPoint, tasks, isLegalDropTarget]);
 
   const handleCardMouseDown = (e: ReactMouseEvent<HTMLDivElement>, cardRow: TaskWithAttachments) => {
     if (e.button !== 0) return;
-    if (cardRow.status !== "planning" && cardRow.status !== "queued") return;
+    const draggable =
+      cardRow.status === "planning" ||
+      cardRow.status === "queued" ||
+      (cardRow.status === "running" && cardRow.interactive);
+    if (!draggable) return;
     dragRef.current = { id: cardRow.id, startX: e.clientX, startY: e.clientY, started: false };
   };
 
@@ -180,7 +216,10 @@ export function TaskBoardView() {
         {COLUMNS.map((s) => (
           <TaskColumn key={s} status={s} title={colTitle(s)} count={byStatus(s).length} highlighted={dragOverStatus === s}>
             {byStatus(s).map((cardRow) => {
-              const draggableCard = cardRow.status === "planning" || cardRow.status === "queued";
+              const draggableCard =
+                cardRow.status === "planning" ||
+                cardRow.status === "queued" ||
+                (cardRow.status === "running" && cardRow.interactive);
               const isDragging = draggingCardId === cardRow.id;
               const classes = ["task-card-drag-wrap"];
               if (draggableCard) classes.push("task-card-drag-wrap--draggable");
@@ -239,8 +278,16 @@ export function TaskBoardView() {
               data-testid="task-drag-ghost"
               style={{ left: `${dragPointer.x}px`, top: `${dragPointer.y}px` }}
             >
-              <div className="task-card-title">{draggedCard.title}</div>
-              <div className="task-card-meta">{draggedCard.project_dir}</div>
+              {/* 渲染真的 TaskCard，不是另外手刻一份簡化版——這樣拖曳中看到的
+                  內容（徽章/狀態色條/頭像/按鈕）永遠跟靜止的卡片一致，日後
+                  改卡片也不會漏改這裡。回呼給 no-op：.task-card-ghost 是
+                  pointer-events: none，這些按鈕點不到。 */}
+              <TaskCard
+                card={draggedCard}
+                onEdit={() => {}}
+                onViewTranscript={() => {}}
+                onChanged={() => {}}
+              />
             </div>,
             document.body,
           );

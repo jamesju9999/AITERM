@@ -58,7 +58,7 @@ pub struct RealDispatcher {
     pub config: Arc<ConfigStore>,
     pub wake: Arc<Notify>,
     /// task_id → cancel sender, so `tasks_stop` can abort a running watch.
-    pub cancels: Arc<parking_lot::Mutex<HashMap<String, oneshot::Sender<()>>>>,
+    pub cancels: Arc<parking_lot::Mutex<HashMap<String, oneshot::Sender<monitor::WatchControl>>>>,
 }
 
 #[async_trait::async_trait]
@@ -73,14 +73,21 @@ impl Dispatcher for RealDispatcher {
         let prompt = dispatch::build_prompt(&task.body, &attachments);
         let claude_cmd = self.config.get().task_board.claude_command;
 
-        let (tab_id, disp) =
-            dispatch::spawn_and_run(&self.app, &self.pty, &task.project_dir, &claude_cmd, &prompt).await?;
+        let (tab_id, disp) = dispatch::spawn_and_run(
+            &self.app,
+            &self.pty,
+            &task.project_dir,
+            &claude_cmd,
+            &prompt,
+            !task.interactive,
+        )
+        .await?;
         store::mark_dispatched(&db.pool, &task.id, &tab_id)
             .await
             .map_err(|e| e.to_string())?;
         let _ = self.app.emit("tasks-updated", ());
 
-        let (cancel_tx, cancel_rx) = oneshot::channel();
+        let (cancel_tx, cancel_rx) = oneshot::channel::<monitor::WatchControl>();
         self.cancels.lock().insert(task.id.clone(), cancel_tx);
 
         let pool = db.pool.clone();
@@ -90,18 +97,15 @@ impl Dispatcher for RealDispatcher {
         let cancels = self.cancels.clone();
         let task_id = task.id.clone();
         let baselines = monitor::Baselines { bell: disp.bell_baseline, marker: disp.marker_baseline };
+        let watch_mode = if task.interactive { monitor::WatchMode::Interactive } else { monitor::WatchMode::Auto };
         tauri::async_runtime::spawn(async move {
-            let outcome =
-                monitor::watch(&pty, &tab_id, cancel_rx, baselines, monitor::Thresholds::default()).await;
+            let outcome = monitor::watch(
+                &pty, &tab_id, cancel_rx, baselines, monitor::Thresholds::default(), watch_mode,
+            ).await;
             let transcript = write_transcript(&pty, &task_id, &tab_id);
             let _ = store::finish_task(
-                &pool,
-                &task_id,
-                outcome.as_str(),
-                outcome.error_message(),
-                transcript.as_deref(),
-            )
-            .await;
+                &pool, &task_id, outcome.as_str(), outcome.error_message(), transcript.as_deref(),
+            ).await;
             cancels.lock().remove(&task_id);
             let _ = app.emit("tasks-updated", ());
             wake.notify_one();
@@ -132,16 +136,39 @@ fn write_transcript(pty: &PtyManager, task_id: &str, tab_id: &str) -> Option<Str
 /// Promote as many queued cards as the rules allow, right now. Shared by the
 /// loop and by tests.
 pub async fn drain_once(db: &TasksDb, dispatcher: &dyn Dispatcher, max_concurrent: u32) {
+    // Interactive cards bypass the concurrency cap and the solo-blocking
+    // rule entirely — dispatch every queued one, unconditionally, first.
+    loop {
+        let queued = match store::list_by_status(&db.pool, store::STATUS_QUEUED).await {
+            Ok(q) => q,
+            Err(e) => {
+                eprintln!("scheduler list queued (interactive pass): {e}");
+                return;
+            }
+        };
+        let Some(next) = queued.into_iter().find(|t| t.interactive) else {
+            break;
+        };
+        if let Err(e) = dispatcher.dispatch(db, &next).await {
+            eprintln!("dispatch {} failed: {e}", next.id);
+            let _ = store::mark_dispatched(&db.pool, &next.id, "").await;
+            let _ = store::finish_task(&db.pool, &next.id, "failed", Some(&e), None).await;
+        }
+    }
+
+    // Existing logic, unchanged — but `running`/`queued` here only ever see
+    // non-interactive cards, so they neither count against max_concurrent
+    // nor get blocked by (or block) anything in the interactive lane above.
     loop {
         let running = match store::list_by_status(&db.pool, store::STATUS_RUNNING).await {
-            Ok(r) => r,
+            Ok(r) => r.into_iter().filter(|t| !t.interactive).collect::<Vec<_>>(),
             Err(e) => {
                 eprintln!("scheduler list running: {e}");
                 return;
             }
         };
         let queued = match store::list_by_status(&db.pool, store::STATUS_QUEUED).await {
-            Ok(q) => q,
+            Ok(q) => q.into_iter().filter(|t| !t.interactive).collect::<Vec<_>>(),
             Err(e) => {
                 eprintln!("scheduler list queued: {e}");
                 return;
@@ -164,18 +191,27 @@ pub async fn drain_once(db: &TasksDb, dispatcher: &dyn Dispatcher, max_concurren
 #[derive(Clone)]
 pub struct SchedulerHandle {
     pub wake: Arc<Notify>,
-    pub cancels: Arc<parking_lot::Mutex<HashMap<String, oneshot::Sender<()>>>>,
+    pub cancels: Arc<parking_lot::Mutex<HashMap<String, oneshot::Sender<monitor::WatchControl>>>>,
 }
 
 impl SchedulerHandle {
     pub fn poke(&self) {
         self.wake.notify_one();
     }
-    /// Fire the cancel channel for a running task, if present. Returns true
+    /// Fire the cancel signal for a running task, if present. Returns true
     /// if a watch was signalled.
     pub fn cancel(&self, task_id: &str) -> bool {
+        self.send(task_id, monitor::WatchControl::Cancel)
+    }
+    /// Fire the manual-completion signal for a running task, if present.
+    /// Returns true if a watch was signalled — see `commands::tasks::tasks_mark_done`
+    /// for the fallback when this returns false (no active watch to signal).
+    pub fn mark_done(&self, task_id: &str) -> bool {
+        self.send(task_id, monitor::WatchControl::MarkDone)
+    }
+    fn send(&self, task_id: &str, msg: monitor::WatchControl) -> bool {
         if let Some(tx) = self.cancels.lock().remove(task_id) {
-            let _ = tx.send(());
+            let _ = tx.send(msg);
             true
         } else {
             false
@@ -244,6 +280,7 @@ mod tests {
             project_dir: "/r".into(),
             status: "queued".into(),
             parallel_ok,
+            interactive: false,
             sort_order,
             outcome: None,
             tab_id: None,
@@ -296,6 +333,25 @@ mod tests {
         let running: Vec<TaskRow> = vec![];
         assert!(pick_next(&running, &[], 4).is_none());
     }
+
+    #[test]
+    fn mark_done_sends_the_control_signal_and_returns_true_when_a_watch_is_registered() {
+        let cancels = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let handle = SchedulerHandle { wake: Arc::new(Notify::new()), cancels: cancels.clone() };
+        let (tx, mut rx) = oneshot::channel::<monitor::WatchControl>();
+        cancels.lock().insert("t1".to_string(), tx);
+        assert!(handle.mark_done("t1"));
+        assert!(matches!(rx.try_recv().unwrap(), monitor::WatchControl::MarkDone));
+    }
+
+    #[test]
+    fn mark_done_returns_false_when_nothing_is_registered() {
+        let handle = SchedulerHandle {
+            wake: Arc::new(Notify::new()),
+            cancels: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+        };
+        assert!(!handle.mark_done("nope"));
+    }
 }
 
 #[cfg(test)]
@@ -330,7 +386,7 @@ mod loop_tests {
     async fn drain_once_promotes_the_whole_queue_when_the_fake_dispatcher_finishes_instantly() {
         let db = mem_db().await;
         for (t, par, ord) in [("a", true, 1.0), ("b", true, 2.0), ("solo", false, 3.0), ("c", true, 4.0)] {
-            let id = store::create_task(&db.pool, t, "", "/r", par).await.unwrap();
+            let id = store::create_task(&db.pool, t, "", "/r", par, false).await.unwrap();
             store::move_task(&db.pool, &id, store::STATUS_QUEUED, ord).await.unwrap();
         }
         drain_once(&db, &FakeDispatcher, 2).await;
@@ -352,7 +408,7 @@ mod loop_tests {
             }
         }
         for (t, par, ord) in [("p1", true, 1.0), ("solo", false, 2.0), ("p2", true, 3.0)] {
-            let id = store::create_task(&db.pool, t, "", "/r", par).await.unwrap();
+            let id = store::create_task(&db.pool, t, "", "/r", par, false).await.unwrap();
             store::move_task(&db.pool, &id, store::STATUS_QUEUED, ord).await.unwrap();
         }
         drain_once(&db, &StuckDispatcher, 5).await;
@@ -362,5 +418,75 @@ mod loop_tests {
         // p1 promoted; solo is the head and something's running → stop; p2 not skipped.
         assert_eq!(by("running", &all), vec!["p1"]);
         assert_eq!(by("queued", &all), vec!["solo", "p2"]);
+    }
+
+    #[tokio::test]
+    async fn drain_once_dispatches_interactive_cards_even_when_the_auto_lane_is_full() {
+        let db = mem_db().await;
+        // Seed one auto card already running — fills a cap of 1.
+        let running_id = store::create_task(&db.pool, "already-running", "", "/r", true, false).await.unwrap();
+        store::move_task(&db.pool, &running_id, store::STATUS_QUEUED, 1.0).await.unwrap();
+        store::mark_dispatched(&db.pool, &running_id, "tab-already").await.unwrap();
+
+        // A second auto card, queued — cap=1 means this must stay queued.
+        let blocked_id = store::create_task(&db.pool, "blocked-auto", "", "/r", true, false).await.unwrap();
+        store::move_task(&db.pool, &blocked_id, store::STATUS_QUEUED, 2.0).await.unwrap();
+
+        // An interactive card, queued — must dispatch anyway, cap or no cap.
+        let interactive_id = store::create_task(&db.pool, "chat", "", "/r", true, true).await.unwrap();
+        store::move_task(&db.pool, &interactive_id, store::STATUS_QUEUED, 3.0).await.unwrap();
+
+        struct RecordingDispatcher {
+            dispatched: std::sync::Mutex<Vec<String>>,
+        }
+        #[async_trait::async_trait]
+        impl Dispatcher for RecordingDispatcher {
+            async fn dispatch(&self, db: &TasksDb, task: &TaskRow) -> Result<(), String> {
+                self.dispatched.lock().unwrap().push(task.title.clone());
+                store::mark_dispatched(&db.pool, &task.id, &format!("fake-{}", task.id))
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+        }
+        let dispatcher = RecordingDispatcher { dispatched: std::sync::Mutex::new(vec![]) };
+        drain_once(&db, &dispatcher, 1).await;
+
+        assert_eq!(*dispatcher.dispatched.lock().unwrap(), vec!["chat".to_string()]);
+
+        let all = store::list_tasks(&db.pool).await.unwrap();
+        let status_of = |t: &str| all.iter().find(|r| r.title == t).unwrap().status.clone();
+        assert_eq!(status_of("already-running"), "running");
+        assert_eq!(status_of("blocked-auto"), "queued"); // cap=1 respected for the auto lane
+        assert_eq!(status_of("chat"), "running"); // interactive bypassed the cap entirely
+    }
+
+    #[tokio::test]
+    async fn drain_once_does_not_let_a_running_interactive_card_count_against_the_auto_cap() {
+        let db = mem_db().await;
+        // An interactive card already running should NOT occupy the auto
+        // lane's capacity slot — an auto card queued behind it must still
+        // start immediately even at cap=1.
+        let chat_id = store::create_task(&db.pool, "chat", "", "/r", true, true).await.unwrap();
+        store::move_task(&db.pool, &chat_id, store::STATUS_QUEUED, 1.0).await.unwrap();
+        store::mark_dispatched(&db.pool, &chat_id, "tab-chat").await.unwrap();
+
+        let auto_id = store::create_task(&db.pool, "auto", "", "/r", true, false).await.unwrap();
+        store::move_task(&db.pool, &auto_id, store::STATUS_QUEUED, 2.0).await.unwrap();
+
+        struct FakeDispatcher;
+        #[async_trait::async_trait]
+        impl Dispatcher for FakeDispatcher {
+            async fn dispatch(&self, db: &TasksDb, task: &TaskRow) -> Result<(), String> {
+                store::mark_dispatched(&db.pool, &task.id, &format!("fake-{}", task.id))
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+        }
+        drain_once(&db, &FakeDispatcher, 1).await;
+
+        let all = store::list_tasks(&db.pool).await.unwrap();
+        let status_of = |t: &str| all.iter().find(|r| r.title == t).unwrap().status.clone();
+        assert_eq!(status_of("chat"), "running");
+        assert_eq!(status_of("auto"), "running"); // not blocked by the already-running interactive card
     }
 }

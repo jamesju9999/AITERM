@@ -57,6 +57,7 @@ import { runAgentLoop, INITIAL_PREVIEW, type PreviewState } from "../lib/agentLo
 import { getGitBlockInfo } from "../ipc/vcs";
 import { isClaudeCommand } from "../lib/claudeCommand";
 import { registerTerminal, unregisterTerminal } from "../lib/terminalInstanceRegistry";
+import { isRunningTaskTab } from "../lib/runningTaskTabRegistry";
 import { CloseConfirmDialog } from "./CloseConfirmDialog";
 import "./TerminalView.css";
 
@@ -399,6 +400,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   isBusyRef.current = blocks[blocks.length - 1]?.status === "running";
   const missionActiveRef = useRef(false);
   missionActiveRef.current = agentMission?.active ?? false;
+  // 同一個理由：guard 閉包只註冊一次（依賴陣列是 [tabId, ...]，不含
+  // sessionId），若直接在裡面讀 sessionId 這個 state，閉包會永遠卡在建立
+  // 當下的值（掛載時通常還是空字串）。用 ref 才能讀到「現在」真正的值。
+  // 這個 ref 存的是 PTY session id（跟 SharePanel 用的那個一樣），**不是**
+  // 上面 `tabId` 這個 prop——工作看板的 task.tab_id 存的也是 PTY session
+  // id，isRunningTaskTab 要跟它同一個識別碼空間比對才查得到。
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
 
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const closeResolveRef = useRef<((canClose: boolean) => void) | null>(null);
@@ -412,8 +421,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   useEffect(() => {
     if (!tabId || !registerCloseGuard) return;
     registerCloseGuard(tabId, () => {
-      // 閒置的終端機沒有進行中的工作可失去，不要打擾使用者。
-      if (!isBusyRef.current && !missionActiveRef.current) {
+      // 閒置的終端機沒有進行中的工作可失去，不要打擾使用者。「工作看板
+      // 任務還在跑」是第三個獨立訊號——不能靠 isBusyRef（shell 層級的
+      // OSC133 忙碌偵測），有些情境（互動任務使用者還沒打字、claude 冷
+      // 開機還沒吐出東西）shell 本身還沒進入忙碌狀態，但任務已經算
+      // running 了。見 runningTaskTabRegistry.ts。查的是 sessionIdRef（PTY
+      // session id），不是 tabId 這個 prop（React 分頁 id）——task.tab_id
+      // 存的是前者，兩個搞混會讓這個查詢永遠查不到。
+      if (!isBusyRef.current && !missionActiveRef.current && !isRunningTaskTab(sessionIdRef.current)) {
         return Promise.resolve(true);
       }
       return new Promise<boolean>((resolve) => {
@@ -1857,8 +1872,20 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     >
       {showCloseConfirm && (
         <CloseConfirmDialog
-          title={missionActiveRef.current ? t.term_close_title_mission : t.term_close_title_running}
-          body={missionActiveRef.current ? t.term_close_body_mission : t.term_close_body_running}
+          title={
+            missionActiveRef.current
+              ? t.term_close_title_mission
+              : isRunningTaskTab(sessionIdRef.current)
+                ? t.term_close_title_task
+                : t.term_close_title_running
+          }
+          body={
+            missionActiveRef.current
+              ? t.term_close_body_mission
+              : isRunningTaskTab(sessionIdRef.current)
+                ? t.term_close_body_task
+                : t.term_close_body_running
+          }
           confirmLabel={t.term_close_discard}
           cancelLabel={t.term_close_cancel}
           onConfirm={() => handleCloseConfirm(true)}
