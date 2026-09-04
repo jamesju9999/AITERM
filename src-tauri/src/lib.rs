@@ -15,6 +15,7 @@ pub mod mail;
 pub mod mcp;
 pub mod mcp_server;
 pub mod pty;
+pub mod projects;
 pub mod python_env;
 pub mod secret;
 pub mod share;
