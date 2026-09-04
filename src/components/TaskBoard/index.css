@@ -98,34 +98,30 @@
   user-select: none;
   -webkit-user-select: none;
   -webkit-user-drag: none;
-  /* No overflow:hidden here (deliberately removed) — WKWebView (Tauri's
-     macOS webview) was observed dropping the ::before left status bar
-     below entirely when overflow:hidden and border-radius were combined
-     on this same element (confirmed: identical CSS renders the bar
-     correctly in Chrome, so this is a WebKit-specific painting bug, not a
-     logic error). Nothing else here overflows the card's rounded corners,
-     so overflow:hidden was only ever clipping that bar's own corners —
-     an imperceptible 3px-wide sliver — and isn't needed. */
+  /* No overflow:hidden here — nothing on the card overflows its rounded
+     corners, so it wasn't load-bearing either way. Left off rather than
+     re-added on principle: fewer properties to reason about. */
 }
-/* 左側狀態色條——用卡片外層的 data-task-status 屬性驅動，見 TaskCard.tsx（Task 2）。
-   顏色刻意寫死十六進位，不吃 --tb-*/--accent 變數：實測發現 WKWebView 對
-   ::before 偽元素解析 CSS 變數會跳過鄰近祖先（.task-board 的本地覆寫），
-   直接落到最外層 :root 主題的值——同一份 CSS 在 Chrome 裡用變數完全正常
-   （已用最小重現頁面對照驗證過），只有 WKWebView 的 ::before 這條路徑有
-   這個落差。直接寫死數值繞開這個機制，不是在猜著修。數值來源跟
-   .task-board 區塊裡的 --tb-*/--accent 完全一致，之後如果要換色要兩邊
-   一起改。 */
-.task-card::before {
-  content: "";
+/* 左側狀態色條——不是 ::before 偽元素，是 TaskCard.tsx 裡真的 DOM 節點
+   （.task-card-status-bar，第一個子元素），用 data-task-status 屬性驅動顏色。
+   刻意不用 ::before：試過三輪（translateZ(0) 提升合成層、拿掉
+   overflow:hidden、顏色改寫死十六進位不吃 CSS 變數），::before 在這個
+   app 實際跑起來的 WKWebView 裡都畫不出東西來——同一份 CSS 在 Chrome 裡
+   完全正常，用最小重現頁面對照驗證過，問題不是邏輯錯誤，是這個 WKWebView
+   環境下 ::before 偽元素本身不可靠。換成真的元素徹底繞開，不是猜第四種
+   CSS 屬性組合。顏色寫死十六進位（不吃 --tb-*/--accent 變數）沿用上一輪
+   已驗證過的理由：對應 .task-board 區塊裡的 --tb-*/--accent，之後要換色
+   要兩邊一起改。 */
+.task-card-status-bar {
   position: absolute;
   left: 0; top: 0; bottom: 0;
   width: 3px;
   background: #3a4556; /* --tb-neutral */
 }
-.task-card[data-task-status="running"]::before { background: #2f6fed; box-shadow: 0 0 8px #2f6fed; } /* --accent */
-.task-card[data-task-status="success"]::before { background: #22c55e; } /* --tb-success */
-.task-card[data-task-status="failed"]::before { background: #ef4444; } /* --tb-failed */
-.task-card[data-task-status="cancelled"]::before { background: #eab308; } /* --tb-cancelled */
+.task-card[data-task-status="running"] .task-card-status-bar { background: #2f6fed; box-shadow: 0 0 8px #2f6fed; } /* --accent */
+.task-card[data-task-status="success"] .task-card-status-bar { background: #22c55e; } /* --tb-success */
+.task-card[data-task-status="failed"] .task-card-status-bar { background: #ef4444; } /* --tb-failed */
+.task-card[data-task-status="cancelled"] .task-card-status-bar { background: #eab308; } /* --tb-cancelled */
 
 .task-card-title {
   font-weight: 700;
