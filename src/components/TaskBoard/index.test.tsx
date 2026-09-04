@@ -262,6 +262,36 @@ describe("TaskBoardView", () => {
     expect(markTaskDone).toHaveBeenCalledWith("r");
   });
 
+  it("running card carries a data-task-status attribute matching its status, for the CSS left-accent-bar", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r", title: "Running one", status: "running", tab_id: "tab-1" }),
+    ]);
+    view();
+    const cardEl = await screen.findByText("Running one");
+    const cardRoot = cardEl.closest(".task-card") as HTMLElement;
+    expect(cardRoot.dataset.taskStatus).toBe("running");
+  });
+
+  it("done+success card's data-task-status reflects the outcome, not just the status", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "Done one", status: "done", outcome: "success" }),
+    ]);
+    view();
+    const cardEl = await screen.findByText("Done one");
+    const cardRoot = cardEl.closest(".task-card") as HTMLElement;
+    expect(cardRoot.dataset.taskStatus).toBe("success");
+  });
+
+  it("interactive running card's Mark Done button uses the primary button style, Stop uses ghost", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r", title: "Chatting", status: "running", tab_id: "tab-1", interactive: true }),
+    ]);
+    view();
+    await screen.findByText("Chatting");
+    expect(screen.getByRole("button", { name: /標記完成|Mark Done/ }).className).toContain("tb-btn--primary");
+    expect(screen.getByRole("button", { name: /停止|Stop/ }).className).toContain("tb-btn--ghost");
+  });
+
   it("non-interactive running card has no Mark Done button", async () => {
     vi.mocked(listTasks).mockResolvedValue([
       card({ id: "r", title: "Auto running", status: "running", tab_id: "tab-1", interactive: false }),
