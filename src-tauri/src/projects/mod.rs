@@ -121,6 +121,117 @@ pub fn find_aitprj(folder: &Path) -> Result<PathBuf, ProjectError> {
     found.into_iter().next().ok_or(ProjectError::Missing)
 }
 
+use std::collections::HashMap;
+
+use parking_lot::RwLock;
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::SqlitePool;
+
+/// 一個已開啟的專案。`pool` 與 `path` 都便宜可複製，
+/// 所以這個型別直接 `Clone` 出去給呼叫端持有，
+/// 不需要在每個使用點回頭查 registry。
+#[derive(Debug, Clone)]
+pub struct ProjectHandle {
+    pub id: String,
+    pub name: String,
+    pub path: PathBuf,
+    pub pool: SqlitePool,
+}
+
+/// 目前開啟中的專案。由 Tauri `.manage()` 持有，取代舊的 `TasksDb` 單例。
+#[derive(Default)]
+pub struct ProjectRegistry {
+    open: RwLock<HashMap<String, ProjectHandle>>,
+}
+
+impl ProjectRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get(&self, id: &str) -> Option<ProjectHandle> {
+        self.open.read().get(id).cloned()
+    }
+
+    pub fn all(&self) -> Vec<ProjectHandle> {
+        self.open.read().values().cloned().collect()
+    }
+
+    /// 從 registry 移除。**不刪磁碟上的任何東西。**
+    pub fn close(&self, id: &str) {
+        self.open.write().remove(id);
+    }
+
+    /// 建立新專案資料夾並開啟。`parent` 必須已存在。
+    pub async fn create(
+        &self,
+        parent: &Path,
+        name: &str,
+        description: &str,
+    ) -> Result<ProjectHandle, ProjectError> {
+        let folder_name = naming::safe_folder_name(name);
+        let folder = parent.join(&folder_name);
+
+        // 已存在且非空 → 拒絕。空資料夾則可以直接用（使用者可能先建好了）。
+        if folder.exists() {
+            let empty = std::fs::read_dir(&folder)
+                .map_err(|e| ProjectError::Io(e.to_string()))?
+                .next()
+                .is_none();
+            if !empty {
+                return Err(ProjectError::Io(format!("資料夾已存在且不是空的：{}", folder.display())));
+            }
+        }
+        std::fs::create_dir_all(&folder).map_err(|e| ProjectError::Io(e.to_string()))?;
+
+        let meta = ProjectMeta::new(name, description);
+        write_meta(&folder.join(format!("{folder_name}.aitprj")), &meta)?;
+
+        let pool = open_pool(&folder).await?;
+        let handle = ProjectHandle { id: meta.id.clone(), name: meta.name, path: folder, pool };
+        self.open.write().insert(handle.id.clone(), handle.clone());
+        Ok(handle)
+    }
+
+    /// 開啟既有專案資料夾。已開啟時直接回傳現有的 handle。
+    pub async fn open_folder(&self, folder: &Path) -> Result<ProjectHandle, ProjectError> {
+        let meta_path = find_aitprj(folder)?;
+        let meta = read_meta(&meta_path)?;
+
+        if let Some(existing) = self.get(&meta.id) {
+            return Ok(existing);
+        }
+
+        let pool = open_pool(folder).await?;
+        let handle = ProjectHandle {
+            id: meta.id.clone(),
+            name: meta.name,
+            path: folder.to_path_buf(),
+            pool,
+        };
+        self.open.write().insert(handle.id.clone(), handle.clone());
+        Ok(handle)
+    }
+}
+
+/// 開啟（必要時建立）專案資料夾裡的 `tasks.db` 並確保 schema 存在。
+///
+/// 刻意**不**沿用舊 `TasksDb::new()` 那個「開啟失敗就換成
+/// `sqlite::memory:`」的回退——那會靜默吃掉使用者的卡片。
+/// 這裡失敗就是失敗，交給呼叫端顯示錯誤。
+async fn open_pool(folder: &Path) -> Result<SqlitePool, ProjectError> {
+    let options = SqliteConnectOptions::new()
+        .filename(folder.join("tasks.db"))
+        .create_if_missing(true);
+    let pool = SqlitePool::connect_with(options)
+        .await
+        .map_err(|e| ProjectError::Db(e.to_string()))?;
+    crate::tasks::init_schema(&pool)
+        .await
+        .map_err(|e| ProjectError::Db(e.to_string()))?;
+    Ok(pool)
+}
+
 #[cfg(test)]
 mod meta_tests {
     use super::*;
@@ -181,5 +292,98 @@ mod meta_tests {
         let dir = tempfile::tempdir().unwrap();
         let err = find_aitprj(dir.path()).unwrap_err();
         assert!(matches!(err, ProjectError::Missing), "{err:?}");
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn create_then_get_returns_the_same_project() {
+        let parent = tempfile::tempdir().unwrap();
+        let reg = ProjectRegistry::new();
+
+        let handle = reg.create(parent.path(), "makemoney", "賺錢").await.unwrap();
+        assert_eq!(handle.name, "makemoney");
+        assert!(handle.path.join("makemoney.aitprj").is_file());
+        assert!(handle.path.join("tasks.db").is_file());
+
+        let again = reg.get(&handle.id).unwrap();
+        assert_eq!(again.id, handle.id);
+        assert_eq!(again.path, handle.path);
+    }
+
+    #[tokio::test]
+    async fn the_new_projects_db_has_the_tasks_schema() {
+        let parent = tempfile::tempdir().unwrap();
+        let reg = ProjectRegistry::new();
+        let handle = reg.create(parent.path(), "p", "").await.unwrap();
+
+        // 能建立卡片就證明 init_schema 跑過了
+        let id = crate::tasks::store::create_task(&handle.pool, "t", "b", "/r", true, false)
+            .await
+            .unwrap();
+        let rows = crate::tasks::store::list_tasks(&handle.pool).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, id);
+    }
+
+    #[tokio::test]
+    async fn creating_into_an_existing_non_empty_folder_is_rejected() {
+        let parent = tempfile::tempdir().unwrap();
+        std::fs::create_dir(parent.path().join("taken")).unwrap();
+        std::fs::write(parent.path().join("taken").join("something.txt"), "x").unwrap();
+
+        let reg = ProjectRegistry::new();
+        let err = reg.create(parent.path(), "taken", "").await.unwrap_err();
+        assert!(matches!(err, ProjectError::Io(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn open_folder_loads_an_existing_project() {
+        let parent = tempfile::tempdir().unwrap();
+        let created = {
+            let reg = ProjectRegistry::new();
+            reg.create(parent.path(), "reopen", "").await.unwrap()
+        };
+
+        // 全新的 registry（模擬重新啟動）
+        let reg2 = ProjectRegistry::new();
+        let opened = reg2.open_folder(&created.path).await.unwrap();
+        assert_eq!(opened.id, created.id);
+        assert_eq!(opened.name, "reopen");
+    }
+
+    #[tokio::test]
+    async fn open_folder_on_a_missing_folder_is_missing() {
+        let reg = ProjectRegistry::new();
+        let err = reg
+            .open_folder(std::path::Path::new("/definitely/not/here"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProjectError::Missing), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn close_removes_it_from_the_registry_but_leaves_the_folder() {
+        let parent = tempfile::tempdir().unwrap();
+        let reg = ProjectRegistry::new();
+        let handle = reg.create(parent.path(), "keepme", "").await.unwrap();
+
+        reg.close(&handle.id);
+        assert!(reg.get(&handle.id).is_none());
+        assert!(handle.path.join("keepme.aitprj").is_file(), "關閉不可刪檔");
+    }
+
+    #[tokio::test]
+    async fn all_lists_every_open_project() {
+        let parent = tempfile::tempdir().unwrap();
+        let reg = ProjectRegistry::new();
+        reg.create(parent.path(), "a", "").await.unwrap();
+        reg.create(parent.path(), "b", "").await.unwrap();
+        let mut names: Vec<String> = reg.all().into_iter().map(|h| h.name).collect();
+        names.sort();
+        assert_eq!(names, vec!["a".to_string(), "b".to_string()]);
     }
 }
