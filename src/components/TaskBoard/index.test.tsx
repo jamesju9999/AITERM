@@ -484,6 +484,40 @@ describe("TaskBoardView", () => {
     expect(raw.textContent).not.toContain("spinner\nspinner");
   });
 
+  // The transcript dialog is drag-resizable (CSS `resize: both`), and the
+  // browser records a dragged size as an INLINE width/height on the element.
+  // Inline styles outrank the maximized class's own sizing, so maximizing
+  // must clear them and restoring must write them back — otherwise the
+  // button silently does nothing once the user has dragged even once.
+  it("maximize clears a dragged inline size, restore puts it back", async () => {
+    const { readTranscript } = await import("../../ipc/tasks");
+    vi.mocked(readTranscript).mockResolvedValue("output");
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "Done one", status: "done", outcome: "success", transcript_path: "/p/t.txt", body: "b" }),
+    ]);
+    view();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /對話記錄|Conversation/ }));
+
+    const dialog = (await screen.findByTestId("task-transcript-raw")).closest(
+      ".task-transcript-dialog",
+    ) as HTMLElement;
+    // Simulate the user having dragged the corner.
+    dialog.style.width = "700px";
+    dialog.style.height = "500px";
+
+    const maxBtn = screen.getByRole("button", { name: /放到最大|Maximize/ });
+    await user.click(maxBtn);
+    expect(dialog.classList.contains("task-transcript-dialog--max")).toBe(true);
+    expect(dialog.style.width).toBe("");
+    expect(dialog.style.height).toBe("");
+
+    await user.click(screen.getByRole("button", { name: /還原大小|Restore size/ }));
+    expect(dialog.classList.contains("task-transcript-dialog--max")).toBe(false);
+    expect(dialog.style.width).toBe("700px");
+    expect(dialog.style.height).toBe("500px");
+  });
+
   // Regression coverage for the new "just finished → try to upgrade the
   // saved transcript" behavior. Uses a controllable listTasks mock (like the
   // existing "re-fetches when tasks-updated fires" test) to drive a real

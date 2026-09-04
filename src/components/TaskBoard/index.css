@@ -252,7 +252,26 @@
    to the lighter --bg-tertiary restores visible separation. */
 .task-board .aiterm-btn--secondary { background: var(--bg-tertiary); }
 
-.task-transcript-dialog { width: min(640px, 90vw); }
+/* 對話記錄框可自由縮放（拖右下角）＋ 可一鍵放到最大。
+   resize 需要 overflow 不是 visible 才會生效——.task-dialog 本身已經是
+   overflow-y: auto，所以這裡不用再動。拖曳後的尺寸會被瀏覽器寫成 inline
+   style，優先度高於 class，所以最大化那段是在 TranscriptDialog.tsx 裡先
+   清掉 inline 值再套 class，還原時再寫回去。 */
+.task-transcript-dialog {
+  width: min(640px, 90vw);
+  height: min(560px, 85vh);
+  resize: both;
+  min-width: 380px;
+  min-height: 280px;
+  max-width: 96vw;
+  max-height: 92vh;
+}
+.task-transcript-dialog--max { width: 96vw; height: 92vh; }
+.task-transcript-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+/* 讓終端機輸出區吃掉對話框剩下的高度，對話框拉多高它就跟著多高。
+   min-height: 0 不能省：flex 項目預設 min-height 是 auto，會拒絕縮到比
+   內容還矮，捲軸就會長在對話框而不是這一區。 */
+.task-field--grow { flex: 1; min-height: 0; }
 .task-transcript-prompt {
   margin: 0;
   padding: 10px 12px;
@@ -271,7 +290,10 @@
   font-family: var(--mono, monospace);
   font-size: 12px;
   white-space: pre-wrap;
-  max-height: 45vh;
+  /* 高度交給 .task-field--grow 的 flex 分配，不再寫死 45vh——寫死的話
+     對話框拉大時這一區不會跟著長。 */
+  flex: 1;
+  min-height: 120px;
   overflow-y: auto;
   color: var(--text-secondary, #aaa);
 }
