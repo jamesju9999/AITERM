@@ -401,6 +401,23 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     return true;
   }, []);
 
+  // TaskCard 的刪除流程，使用者確認「連分頁一起關閉」後會 dispatch 一個
+  // aiterm:close-tab 視窗事件（detail.tabId 是 PTY session id）。後端
+  // tasks_delete 的 close_tab 只會關掉背後的 PTY session，不會動到這個
+  // 元件自己的 tabs 陣列——這個檔案唯一會移除分頁的地方是 handleCloseTab，
+  // 所以要靠這個事件把兩邊接起來，分頁才會真的從畫面上消失。
+  useEffect(() => {
+    const onCloseTab = (e: Event) => {
+      const id = (e as CustomEvent<{ tabId?: string }>).detail?.tabId;
+      if (!id) return;
+      const tab = tabs.find((tb) => tb.ptySessionId === id) ?? tabs.find((tb) => tb.id === id);
+      if (!tab) return;
+      void handleCloseTab(tab.id);
+    };
+    window.addEventListener("aiterm:close-tab", onCloseTab);
+    return () => window.removeEventListener("aiterm:close-tab", onCloseTab);
+  }, [tabs, handleCloseTab]);
+
   // RouteHint 的「換成…」：關掉猜錯的那個分頁，用同一句 userText 重開成
   // 使用者選的類型，並把提示狀態指向新分頁。
   const handleRouteHintPick = useCallback(async (type: TabType) => {

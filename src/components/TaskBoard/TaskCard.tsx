@@ -35,7 +35,15 @@ export function TaskCard({
   const remove = async () => {
     if (!(await confirm(t.board_delete_confirm))) return;
     const closeTab = card.tab_id ? await confirm(t.board_delete_close_tab) : false;
-    void run(() => deleteTask(card.id, closeTab));
+    await run(() => deleteTask(card.id, closeTab));
+    // deleteTask's close_tab flag only kills the PTY session on the
+    // backend — TerminalApp is the only place that removes a tab from its
+    // own tab list (see its aiterm:close-tab listener), so without this
+    // dispatch the tab visually stays open (now attached to a dead
+    // session) even though the user explicitly confirmed closing it.
+    if (closeTab && card.tab_id) {
+      window.dispatchEvent(new CustomEvent("aiterm:close-tab", { detail: { tabId: card.tab_id } }));
+    }
   };
 
   const openTab = () => {

@@ -28,9 +28,14 @@ vi.mock("../../lib/terminalInstanceRegistry", () => ({
   serializeTerminal: vi.fn(),
 }));
 
+vi.mock("../../lib/runningTaskTabRegistry", () => ({
+  setRunningTaskTabs: vi.fn(),
+}));
+
 import { listTasks, onTasksUpdated, moveTask } from "../../ipc/tasks";
 import type { TaskWithAttachments } from "../../ipc/tasks";
 import { serializeTerminal } from "../../lib/terminalInstanceRegistry";
+import { setRunningTaskTabs } from "../../lib/runningTaskTabRegistry";
 import { TaskBoardView } from "./index";
 
 const card = (over: Partial<TaskWithAttachments>): TaskWithAttachments => ({
@@ -504,5 +509,73 @@ describe("TaskBoardView", () => {
 
     await waitFor(() => expect(listTasks).toHaveBeenCalledTimes(2));
     expect(saveTranscript).not.toHaveBeenCalled();
+  });
+
+  // Regression coverage for a real bug: closing a tab whose Task Board task
+  // was still `running` gave no warning at all — TerminalView's own close
+  // guard only knew about shell-command-busy/agent-mission state, nothing
+  // about the Task Board. Fixed by having TaskBoardView keep a shared
+  // registry (runningTaskTabRegistry) in sync with which tab ids currently
+  // belong to a running task, which TerminalView's guard also consults.
+  it("keeps the running-task-tab registry in sync with the task list", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r1", title: "Running one", status: "running", tab_id: "tab-1" }),
+      card({ id: "r2", title: "Running two", status: "running", tab_id: "tab-2" }),
+      card({ id: "p1", title: "Planned", status: "planning", tab_id: null }),
+    ]);
+    view();
+    await screen.findByText("Running one");
+    await waitFor(() =>
+      expect(setRunningTaskTabs).toHaveBeenCalledWith(expect.arrayContaining(["tab-1", "tab-2"])),
+    );
+    const lastCallArg = vi.mocked(setRunningTaskTabs).mock.calls.at(-1)?.[0];
+    expect(Array.from(lastCallArg ?? [])).toHaveLength(2);
+  });
+
+  it("drops a tab from the running-task-tab registry once its task finishes", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r1", title: "Running one", status: "running", tab_id: "tab-1" }),
+    ]);
+    let fire: () => void = () => {};
+    vi.mocked(onTasksUpdated).mockImplementation(async (cb) => { fire = cb; return () => {}; });
+    view();
+    await screen.findByText("Running one");
+    await waitFor(() =>
+      expect(setRunningTaskTabs).toHaveBeenLastCalledWith(expect.arrayContaining(["tab-1"])),
+    );
+
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r1", title: "Running one", status: "done", outcome: "success", tab_id: "tab-1" }),
+    ]);
+    fire();
+
+    await waitFor(() => expect(setRunningTaskTabs).toHaveBeenLastCalledWith([]));
+  });
+
+  // Regression test for a real bug: deleting a "done" card and confirming
+  // "close the tab too" killed the PTY session on the backend but never
+  // told the frontend's own tab list to remove it — the tab visually stayed
+  // open (now attached to a dead session). TerminalApp's aiterm:close-tab
+  // listener is the fix; this only proves TaskCard actually dispatches it.
+  it("dispatches aiterm:close-tab when deleting a done card and confirming to close its tab", async () => {
+    const { deleteTask } = await import("../../ipc/tasks");
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "Done one", status: "done", outcome: "success", tab_id: "tab-9" }),
+    ]);
+    view();
+    const user = userEvent.setup();
+    await screen.findByText("Done one");
+
+    const events: CustomEvent<{ tabId?: string }>[] = [];
+    const onCloseTab = (e: Event) => events.push(e as CustomEvent<{ tabId?: string }>);
+    window.addEventListener("aiterm:close-tab", onCloseTab);
+    try {
+      await user.click(screen.getByRole("button", { name: /^刪除$|^Delete$/ }));
+      await waitFor(() => expect(deleteTask).toHaveBeenCalledWith("d", true));
+      await waitFor(() => expect(events).toHaveLength(1));
+      expect(events[0].detail.tabId).toBe("tab-9");
+    } finally {
+      window.removeEventListener("aiterm:close-tab", onCloseTab);
+    }
   });
 });

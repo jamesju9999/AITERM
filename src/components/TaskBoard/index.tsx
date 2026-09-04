@@ -10,6 +10,7 @@ import {
   type TaskStatus,
   type TaskWithAttachments,
 } from "../../ipc/tasks";
+import { setRunningTaskTabs } from "../../lib/runningTaskTabRegistry";
 import { TaskCard } from "./TaskCard";
 import { TaskColumn } from "./TaskColumn";
 import { TaskEditorDialog } from "./TaskEditorDialog";
@@ -85,6 +86,17 @@ export function TaskBoardView() {
       void un.then((f) => f());
     };
   }, [refresh]);
+
+  // Keeps TerminalView's close guard aware of which tabs currently belong
+  // to a `running` task — see runningTaskTabRegistry.ts for why this lives
+  // in a shared module instead of TaskBoard registering its own close
+  // guard directly (a tab can only have ONE registered guard; this tab
+  // already has TerminalView's own busy/mission guard on it).
+  useEffect(() => {
+    setRunningTaskTabs(
+      tasks.filter((x) => x.status === "running" && x.tab_id).map((x) => x.tab_id as string),
+    );
+  }, [tasks]);
 
   const colTitle = (s: TaskStatus) =>
     ({
