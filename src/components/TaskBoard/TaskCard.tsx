@@ -65,7 +65,6 @@ export function TaskCard({
 
   return (
     <div className="task-card" data-task-status={cardStatus}>
-      <div className="task-card-status-bar" />
       <div className="task-card-top-row">
         <div className="task-card-info">
           <div className="task-card-title">{card.title}</div>

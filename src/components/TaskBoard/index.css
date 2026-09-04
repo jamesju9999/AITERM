@@ -1,7 +1,10 @@
 .task-board { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 /* 工作看板專屬的深藍配色——不管使用者在設定頁選了 app 哪個主題，這個區塊
    內看到的都是同一種深藍。做法是局部覆寫這個容器範圍內的全域主題變數
-   （--accent/--bg-*/--border* 等），讓 TaskEditorDialog/TranscriptDialog
+   （--accent、--bg-、--border 等系列），讓 TaskEditorDialog/TranscriptDialog
+   注意：這個檔案的註解裡絕對不能出現星號接斜線的組合（例如想寫
+   「--bg-」加萬用字元再接斜線），那會提前關閉註解，後面的中文會洩漏成
+   CSS 垃圾並把緊接著的整條規則吃掉——底下那塊變數覆寫就曾經因此整組失效。
    既有的 .aiterm-btn/.task-dialog/.task-field-input 規則透過 CSS 變數
    繼承自動跟著換色，完全不用改那兩個檔案的程式碼。
    --border 跟 --border-color 兩個都覆寫：buttons.css 的 .aiterm-btn--secondary
@@ -98,30 +101,20 @@
   user-select: none;
   -webkit-user-select: none;
   -webkit-user-drag: none;
-  /* No overflow:hidden here — nothing on the card overflows its rounded
-     corners, so it wasn't load-bearing either way. Left off rather than
-     re-added on principle: fewer properties to reason about. */
+  overflow: hidden;
 }
-/* 左側狀態色條——不是 ::before 偽元素，是 TaskCard.tsx 裡真的 DOM 節點
-   （.task-card-status-bar，第一個子元素），用 data-task-status 屬性驅動顏色。
-   刻意不用 ::before：試過三輪（translateZ(0) 提升合成層、拿掉
-   overflow:hidden、顏色改寫死十六進位不吃 CSS 變數），::before 在這個
-   app 實際跑起來的 WKWebView 裡都畫不出東西來——同一份 CSS 在 Chrome 裡
-   完全正常，用最小重現頁面對照驗證過，問題不是邏輯錯誤，是這個 WKWebView
-   環境下 ::before 偽元素本身不可靠。換成真的元素徹底繞開，不是猜第四種
-   CSS 屬性組合。顏色寫死十六進位（不吃 --tb-*/--accent 變數）沿用上一輪
-   已驗證過的理由：對應 .task-board 區塊裡的 --tb-*/--accent，之後要換色
-   要兩邊一起改。 */
-.task-card-status-bar {
+/* 左側狀態色條——用卡片外層的 data-task-status 屬性驅動，見 TaskCard.tsx。 */
+.task-card::before {
+  content: "";
   position: absolute;
   left: 0; top: 0; bottom: 0;
   width: 3px;
-  background: #3a4556; /* --tb-neutral */
+  background: var(--tb-neutral);
 }
-.task-card[data-task-status="running"] .task-card-status-bar { background: #2f6fed; box-shadow: 0 0 8px #2f6fed; } /* --accent */
-.task-card[data-task-status="success"] .task-card-status-bar { background: #22c55e; } /* --tb-success */
-.task-card[data-task-status="failed"] .task-card-status-bar { background: #ef4444; } /* --tb-failed */
-.task-card[data-task-status="cancelled"] .task-card-status-bar { background: #eab308; } /* --tb-cancelled */
+.task-card[data-task-status="running"]::before { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.task-card[data-task-status="success"]::before { background: var(--tb-success); }
+.task-card[data-task-status="failed"]::before { background: var(--tb-failed); }
+.task-card[data-task-status="cancelled"]::before { background: var(--tb-cancelled); }
 
 .task-card-title {
   font-weight: 700;
