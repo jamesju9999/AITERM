@@ -112,6 +112,13 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   // 見下方 liveTopRows 的說明——OSC 133 B 回報提示字元位置時要用到，但
   // 真正的實作宣告在後面，所以跟本檔其他同類情況一樣先用 ref 佔位。
   const syncLiveTopRef = useRef<(() => void) | null>(null);
+
+  // 「有指令在跑，但不是這一端發起的」的保底訊號——同一顆佔位 ref 手法，
+  // 真正的實作要等 setLiveRows 宣告完才能賦值（見下方賦值處）。
+  const untrackedCommandBoundaryRef = useRef<((kind: "start" | "end") => void) | null>(null);
+  const handleUntrackedCommandBoundary = useCallback((kind: "start" | "end") => {
+    untrackedCommandBoundaryRef.current?.(kind);
+  }, []);
   const promptAbsRowRef = useRef<number | null>(null);
   const handlePromptStart = useCallback((absoluteRow: number) => {
     promptAbsRowRef.current = absoluteRow;
@@ -127,7 +134,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
     undefined,
     write,
     hostPlatform,
-    undefined,
+    handleUntrackedCommandBoundary,
     handlePromptStart,
   );
   const clearAllBlocksRef = useRef(clearAllBlocks);
@@ -264,6 +271,26 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
     setLiveTopRows(Math.max(0, Math.min(term.rows - 1, viewportRow)));
   }, [hostPlatform]);
   syncLiveTopRef.current = syncLiveTop;
+
+  // 見上面 untrackedCommandBoundaryRef 宣告處——這裡才真的賦值，因為
+  // setLiveRows 要到這裡才存在。跟 TerminalView.tsx 的同名實作完全一樣，
+  // 而且對觀看端來說這條路徑比本機更重要：主控端自己在跑的東西（例如連線
+  // 之前就開著的 Claude Code CLI）永遠不會經過這一端的 submitCommand，
+  // 「有沒有一個 running 中的區塊」這個撐高訊號因此永遠是 false，窗格會
+  // 卡在 MIN_LIVE_ROWS 只有三列高（實機回報）。
+  //
+  // "start" 先撐到 MAX_LIVE_ROWS 避免輸出被裁掉；"end" 量一次游標實際停在
+  // 第幾行，收回剛好放得下的高度——遠端指令的輸出不會變成卡片、也不會被
+  // 清空，維持在 MAX 只會在下面留一大截用不到的空白。
+  untrackedCommandBoundaryRef.current = (kind) => {
+    if (kind === "start") {
+      setLiveRows(MAX_LIVE_ROWS);
+      return;
+    }
+    const term = termRef.current;
+    const usedRows = term ? term.buffer.active.cursorY + 1 : MIN_LIVE_ROWS;
+    setLiveRows(Math.min(MAX_LIVE_ROWS, Math.max(MIN_LIVE_ROWS, usedRows)));
+  };
 
   // xterm.js 沒有公開 API 可以讀字元格高度——這裡讀的是跟 TerminalView.tsx
   // 同一個內部欄位，同一個 escape hatch，這個 repo 已經有先例。

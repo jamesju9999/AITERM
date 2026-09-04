@@ -653,6 +653,37 @@ describe("RemoteTerminalView", () => {
     });
   });
 
+  it("主控端自己在跑的指令（觀看端沒發起）也要撐開即時窗格，結束後收到剛好放得下輸出的高度", async () => {
+    // 實機 bug：遠端主控端已經在跑東西時才連進去，觀看端的 `blocks` 是空的，
+    // 「有沒有一個 running 中的區塊」這個撐高訊號永遠是 false，即時窗格就卡在
+    // MIN_LIVE_ROWS(3) ≈ 46px——三列高。本機分頁早就有
+    // `onUntrackedCommandBoundary` 這條保底路徑（見 TerminalView.tsx 與
+    // TerminalView.remoteLiveHeight.test.tsx），觀看端當初傳的是 undefined。
+    const { container } = render(<RemoteTerminalView tabId="t1" connId="c12b" sas="1213" isActive onConnectClick={vi.fn()} />);
+    await waitFor(() => expect(handlers["granted:c12b"]).toBeDefined());
+    handlers["granted:c12b"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+
+    const liveFrame = () => container.querySelector(".aiterm-remote-terminal__live-frame") as HTMLElement;
+    await waitFor(() => expect(liveFrame().style.height).toBe("46px"));
+
+    // OSC 133 C，且沒有任何本機追蹤區塊、也沒收過 B（還原不出指令文字）
+    // ——正是主控端自己在跑指令的情況。
+    await waitFor(() => expect(capturedOscHandler).toBeTruthy());
+    act(() => {
+      capturedOscHandler!("C");
+    });
+    await waitFor(() => expect(liveFrame().style.height).toBe("246px"));
+
+    // 指令結束：收回到剛好放得下已經畫出來的那幾行（游標停在 index 4 = 5 行
+    // → Math.round(5 * 14 * 1.1) = 77px），不是繼續卡在 MAX 留一大截空白，
+    // 也不是收回 MIN 把已經畫出來的輸出裁掉。
+    mockBufferActive.cursorY = 4;
+    act(() => {
+      capturedOscHandler!("D;0");
+    });
+    await waitFor(() => expect(liveFrame().style.height).toBe("77px"));
+  });
+
   it("新卡片出現時自動捲動到最底部", async () => {
     const scrollToSpy = vi.spyOn(HTMLElement.prototype, "scrollTo").mockImplementation(() => {});
     try {
