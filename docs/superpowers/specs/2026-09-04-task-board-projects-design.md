@@ -23,7 +23,7 @@
 | D1 | 專案**不綁定**工作目錄 | 一個專案的工作可能橫跨多個 repo（前端 repo + 後端 repo） |
 | D2 | 專案是磁碟資料夾，含 `.aitprj` 清單檔與**自己的 `tasks.db`** | 讓「匯出／匯入」與「專案資料夾」變成同一個功能，不必實作兩次 |
 | D3 | 資料夾位置由使用者在建立時指定 | 使用者可放進 iCloud／Dropbox／git repo，直接分享給另一台 AITerm |
-| D4 | 可同時開啟多個專案 | 排程器跨所有專案派工 |
+| D4 | 可同時開啟多個專案。執行期上**所有**已知專案的卡片都會被派工；UI 上以看板頂端的**專案分頁列**呈現目前開著的專案 | 排程器跨所有專案派工；分頁列讓「開多個」在畫面上成立，並提供跨專案的執行中提示 |
 | D5 | 並行上限維持**全域**，預設值 2 → 5，設定中仍可調整（clamp 1..16 不變） | 使用者確認：要可調 |
 | D6 | `parallel_ok = false`（獨佔工作）維持**全域**生效 | 專案是純標籤，不同專案可能指向同一個 repo；跨專案同時改同一份程式碼比互相等待更糟 |
 | D7 | 不做「暫停專案」開關 | 欄位已是控制點：卡片留在「規劃」欄就不派工。第二個控制點只會製造「拖到待執行卻沒動靜」的困惑 |
@@ -143,20 +143,47 @@ pub struct TaskBoardConfig {
 `src/components/TaskBoard/index.tsx` 從「看板」變成「路由器」：
 
 ```
-沒選專案 → <ProjectList />
-選了專案 → <ProjectBoard projectId={...} />
+沒有開著的專案 → <ProjectList />
+有開著的專案   → <ProjectTabBar /> + <ProjectBoard projectId={活躍專案} />
 ```
 
 | 檔案 | 職責 |
 |---|---|
-| `TaskBoard/index.tsx` | 只保留兩層之間的切換狀態 |
+| `TaskBoard/index.tsx` | 導覽狀態：開啟中的專案清單、目前活躍的專案、是否顯示總覽 |
 | `TaskBoard/ProjectList.tsx` | 專案總覽：卡片列出名稱、描述、工作數、執行中數；「+ 新專案」「開啟現有專案」；空狀態 |
 | `TaskBoard/ProjectCreateDialog.tsx` | 名稱 + 描述 + 父目錄選擇 |
-| `TaskBoard/ProjectBoard.tsx` | 現行 `index.tsx` 的四欄看板本體原封不動搬入，加上返回鍵與專案名標題 |
+| `TaskBoard/ProjectTabBar.tsx` | 開啟中專案的分頁列（見 §5.2） |
+| `TaskBoard/ProjectBoard.tsx` | 現行 `index.tsx` 的四欄看板本體原封不動搬入 |
 
 `TerminalApp.tsx` **不需要任何修改**——它只掛一個 `<TaskBoardView />`（`TerminalApp.tsx:668`），兩層導覽全在其內部。
 
-### 5.2 建立專案流程
+### 5.2 專案分頁列
+
+```
+┌────────────────────────────────────────┐
+│ ≡ 專案 │ makemoney ×│ ● sideproj ×│ + │
+├────────────────────────────────────────┤
+│ + 新工作                                │
+├───────┬───────┬───────┬────────────────┤
+│ 規劃  │ 待執行│ 執行中│ 完成           │
+└───────┴───────┴───────┴────────────────┘
+```
+
+- **`≡ 專案`** 回到專案總覽（`ProjectList`）。總覽是一個狀態，不是分頁。
+- **點分頁**切換活躍專案，單次點擊即可，不需先返回總覽。
+- **`×` 關閉分頁**：僅從分頁列移除，**不移除專案、不刪檔案、不影響派工**。該專案的卡片照常被排程器派工（D7：沒有暫停機制）。這個語意差異必須在 UI 上清楚——關閉鍵的 tooltip 明說「從分頁列關閉（不影響專案）」。
+- **`●` 執行中指示點**：該專案有 `running` 卡片時顯示。這是使用者人在專案 A 時得知專案 B 正在跑的唯一管道。
+- **`+`** 開啟一個尚未開啟的專案（下拉列出未開啟的已知專案，末項為「開啟現有專案…」）。
+- **溢出處理**：分頁過多時水平捲動，沿用 `TabBar` 既有的處理方式。
+- **失效專案**：分頁列上的專案若變成 `missing` / `invalid`，分頁標示錯誤且看板區顯示錯誤說明，仍可關閉。
+
+**狀態持久化**：開啟中的專案 id 清單與活躍專案 id 存在 `localStorage`（沿用本專案「component-local `useState` + `localStorage`」的既有模式），下次啟動還原。還原時過濾掉已不存在於 `projects_list` 的 id。
+
+**只掛載活躍專案的 `ProjectBoard`**，非活躍的直接卸載。這裡不適用 `TerminalView` 的「隱藏而非卸載」規則——那條規則的原因是 xterm.js 在無尺寸的元素上 resize 會崩潰，看板沒有 xterm。代價是切換分頁時該專案未關閉的對話框狀態會消失，可接受。
+
+**執行中指示點的資料來源**：`projects_list` 回傳的 `counts.running`。既有的 `tasks-updated` 事件在任何卡片變動或排程轉換後都會觸發，分頁列訂閱該事件重新取用 `projects_list` 即可保持即時。
+
+### 5.3 建立專案流程
 
 輸入名稱 + 挑父目錄 → 產生 `<父目錄>/<名稱>/<名稱>.aitprj`。
 
@@ -164,7 +191,7 @@ pub struct TaskBoardConfig {
 - 名稱含有檔案系統非法字元時，資料夾名做安全轉換，`.aitprj` 內的 `name` 保留原字串。
 - 目標資料夾已存在且非空時拒絕建立並說明。
 
-### 5.3 移除專案（D8）
+### 5.4 移除專案（D8）
 
 沿用 `TaskCard.tsx` 既有的兩段式原生對話框模式：
 
@@ -174,11 +201,11 @@ pub struct TaskBoardConfig {
 
 **必須使用 `@tauri-apps/plugin-dialog` 的非同步 `confirm()`，不可使用 `window.confirm`** — Tauri 的 webview 沒有真正實作 `window.confirm`（見 `TaskCard.tsx:31` 的註解）。同時，這些對話框位於點擊處理器中，不可放進掛載 effect（StrictMode 會雙重呼叫）。
 
-### 5.4 新增工作時的工作目錄快捷選項
+### 5.5 新增工作時的工作目錄快捷選項
 
 `TaskEditorDialog` 的目錄選擇器，除了「瀏覽…」外，額外列出 `projects_used_dirs` 回傳的目錄清單。這解決 D1（工作橫跨多個目錄）帶來的重複挑選摩擦。
 
-### 5.5 IPC 層
+### 5.6 IPC 層
 
 - 新增 `src/ipc/projects.ts`，型別鏡射 Rust 端。
 - `src/ipc/tasks.ts` 的每個函式增加 `projectId` 參數。
@@ -221,6 +248,8 @@ pub struct TaskBoardConfig {
 
 - `ProjectList`：空狀態、專案清單渲染、進入看板的導覽、遺失專案的呈現
 - `ProjectCreateDialog`：名稱驗證、父目錄選擇
+- `ProjectTabBar`：切換活躍專案、關閉分頁**不會**呼叫 `projects_remove`（這是最容易寫錯的地方，必須有測試釘住）、執行中指示點依 `counts.running` 顯示、`tasks-updated` 事件後指示點更新
+- 分頁列狀態還原：`localStorage` 中已不存在於 `projects_list` 的 id 會被過濾掉
 - 移除專案的兩段式對話框：三種路徑（取消／只移除／連同資料夾刪除）各驗證一次
 - 既有 `TaskBoard/index.test.tsx`（751 行）需加上專案層；`TerminalApp.taskBoard.test.tsx` 的 mock 需更新
 
