@@ -578,4 +578,59 @@ describe("TaskBoardView", () => {
       window.removeEventListener("aiterm:close-tab", onCloseTab);
     }
   });
+
+  // Regression coverage for a real UX gap: a running+interactive card can
+  // only legally be dropped on "done" (via markTaskDone) — dropping it on
+  // planning/queued was already silently ignored by handleDrop, but the
+  // column it was hovering over still lit up as if the drop would work,
+  // which is misleading. The column should only highlight when the drop
+  // would actually succeed for the card currently being dragged.
+  it("does not highlight an illegal drop target while dragging a running interactive card", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r", title: "Chatting", status: "running", tab_id: "tab-1", interactive: true }),
+    ]);
+    view();
+    const cardEl = await screen.findByText("Chatting");
+    const planningCol = screen.getByTestId("column-planning");
+    const doneCol = screen.getByTestId("column-done");
+    const dragWrap = cardEl.closest("[data-task-drag-id]") as HTMLElement;
+
+    const originalElementFromPoint = document.elementFromPoint;
+    try {
+      const { fireEvent } = await import("@testing-library/react");
+      fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
+
+      document.elementFromPoint = vi.fn().mockReturnValue(planningCol);
+      fireEvent.mouseMove(window, { clientX: 100, clientY: 120 }); // past the drag threshold, over an illegal target
+      expect(planningCol.className).not.toContain("task-column--drop-target");
+
+      document.elementFromPoint = vi.fn().mockReturnValue(doneCol);
+      fireEvent.mouseMove(window, { clientX: 100, clientY: 140 }); // now over the one legal target
+      expect(doneCol.className).toContain("task-column--drop-target");
+
+      fireEvent.mouseUp(window, { clientX: 100, clientY: 140 });
+    } finally {
+      document.elementFromPoint = originalElementFromPoint;
+    }
+  });
+
+  it("still highlights the legal target when dragging a planning card over the queued column", async () => {
+    vi.mocked(listTasks).mockResolvedValue([card({ id: "p", title: "Draggable", status: "planning" })]);
+    view();
+    const cardEl = await screen.findByText("Draggable");
+    const queuedCol = screen.getByTestId("column-queued");
+    const dragWrap = cardEl.closest("[data-task-drag-id]") as HTMLElement;
+
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn().mockReturnValue(queuedCol);
+    try {
+      const { fireEvent } = await import("@testing-library/react");
+      fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
+      fireEvent.mouseMove(window, { clientX: 100, clientY: 120 });
+      expect(queuedCol.className).toContain("task-column--drop-target");
+      fireEvent.mouseUp(window, { clientX: 100, clientY: 120 });
+    } finally {
+      document.elementFromPoint = originalElementFromPoint;
+    }
+  });
 });

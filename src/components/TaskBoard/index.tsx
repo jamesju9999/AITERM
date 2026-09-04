@@ -109,10 +109,24 @@ export function TaskBoardView() {
   const byStatus = (s: TaskStatus) =>
     tasks.filter((x) => x.status === s).sort((a, b) => a.sort_order - b.sort_order);
 
+  // Single source of truth for "can this card legally be dropped on this
+  // column", shared by handleDrop (what actually happens on release) and
+  // the drag-over highlight below (what visually invites a drop while
+  // hovering) — so a column can never light up as a valid target and then
+  // silently reject the drop, which was the actual bug this fixed.
+  const isLegalDropTarget = useCallback((cardRow: TaskWithAttachments, to: TaskStatus): boolean => {
+    if (cardRow.status === to) return false;
+    if (cardRow.status === "running" && to === "done" && cardRow.interactive) return true;
+    return (
+      (cardRow.status === "planning" && to === "queued") ||
+      (cardRow.status === "queued" && to === "planning")
+    );
+  }, []);
+
   const handleDrop = useCallback(
     async (id: string, to: TaskStatus) => {
       const cardRow = tasks.find((x) => x.id === id);
-      if (!cardRow || cardRow.status === to) return;
+      if (!cardRow || !isLegalDropTarget(cardRow, to)) return;
 
       if (cardRow.status === "running" && to === "done" && cardRow.interactive) {
         await markTaskDone(id);
@@ -120,10 +134,6 @@ export function TaskBoardView() {
                  // existing tasks-updated listener, same as auto-completion.
       }
 
-      const legal =
-        (cardRow.status === "planning" && to === "queued") ||
-        (cardRow.status === "queued" && to === "planning");
-      if (!legal) return;
       const dest = tasks
         .filter((x) => x.status === to)
         .sort((a, b) => a.sort_order - b.sort_order);
@@ -133,7 +143,7 @@ export function TaskBoardView() {
         prev.map((x) => (x.id === id ? { ...x, status: to, sort_order: sortOrder } : x)),
       );
     },
-    [tasks],
+    [tasks, isLegalDropTarget],
   );
 
   // Card drag-to-move: deliberately NOT native HTML5 drag-and-drop
@@ -163,7 +173,9 @@ export function TaskBoardView() {
         setDraggingCardId(st.id);
       }
       setDragPointer({ x: e.clientX, y: e.clientY });
-      setDragOverStatus(statusUnderPoint(e.clientX, e.clientY));
+      const hovered = statusUnderPoint(e.clientX, e.clientY);
+      const draggedCard = tasks.find((x) => x.id === st.id);
+      setDragOverStatus(hovered && draggedCard && isLegalDropTarget(draggedCard, hovered) ? hovered : null);
     };
     const onUp = (e: MouseEvent) => {
       const st = dragRef.current;
@@ -181,7 +193,7 @@ export function TaskBoardView() {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [handleDrop, statusUnderPoint]);
+  }, [handleDrop, statusUnderPoint, tasks, isLegalDropTarget]);
 
   const handleCardMouseDown = (e: ReactMouseEvent<HTMLDivElement>, cardRow: TaskWithAttachments) => {
     if (e.button !== 0) return;
