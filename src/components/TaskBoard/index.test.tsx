@@ -239,6 +239,19 @@ describe("TaskBoardView", () => {
     }
   });
 
+  // The column header's status color line is driven off data-column-status
+  // (see index.css). Deliberately a separate attribute from the data-testid
+  // the drag code keys off, so renaming one can't silently restyle the
+  // other — this asserts the styling hook exists on every column.
+  it("each column carries its own status attribute for the header color line", async () => {
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    for (const status of ["planning", "queued", "running", "done"]) {
+      const col = await screen.findByTestId(`column-${status}`);
+      expect(col.getAttribute("data-column-status")).toBe(status);
+    }
+  });
+
   // User-requested: the ghost used to be a hand-rolled subset (title + path
   // only), so it looked nothing like the card it came from. It now renders
   // the real TaskCard, which also means the two can't drift apart as the
