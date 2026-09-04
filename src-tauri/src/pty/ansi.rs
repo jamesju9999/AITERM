@@ -119,6 +119,134 @@ pub fn strip_ansi(input: &str) -> String {
     out
 }
 
+/// Tracks the DEC private modes (`CSI ? Ps h` / `CSI ? Ps l`) a PTY stream has
+/// switched on or off, so a replay that starts mid-stream can restore them.
+///
+/// **Why this exists.** Screen sharing primes a new viewer from
+/// `PtySession::subscribe_with_history`, which replays the tail of a fixed-size
+/// ring of raw bytes. Mode switches are *sticky state expressed once*: a
+/// full-screen program emits `\x1b[?1049h` at startup and never again. Measured
+/// against the real Claude Code CLI, that byte lands at offset 855 of the
+/// session and one full 45x160 redraw costs ~2.2 KB — so after roughly a
+/// hundred redraws it has been evicted from the ring and the viewer, having
+/// never seen it, renders the alternate-screen content into its normal buffer.
+/// The visible symptom was the remote tab's live pane staying three rows tall
+/// instead of going full height. A bigger ring only moves the threshold; this
+/// tracker is never evicted.
+///
+/// Every DEC private mode is tracked, not an allowlist: the value recorded is
+/// exactly "what the host's own terminal was last told", which is precisely
+/// what the viewer needs, and there is no list to keep in sync as programs
+/// start using new modes.
+#[derive(Default)]
+pub struct DecModeTracker {
+    /// Last value seen per mode number. `BTreeMap` for a deterministic
+    /// prefix — the same state must always produce the same bytes.
+    modes: std::collections::BTreeMap<u16, bool>,
+    /// Parser state carried across chunk boundaries. The reader thread hands
+    /// us 4 KB reads, which cut escape sequences in half regularly.
+    state: DecParseState,
+    /// Digits of the parameter currently being accumulated.
+    digits: String,
+    /// Parameters already collected from the current sequence (`?1000;1002;1006h`).
+    params: Vec<u16>,
+}
+
+#[derive(Default)]
+enum DecParseState {
+    /// Not inside an escape sequence.
+    #[default]
+    Ground,
+    /// Saw ESC.
+    Esc,
+    /// Saw `ESC [`, still deciding whether a `?` follows.
+    Csi,
+    /// Saw `ESC [ ?` — collecting parameters until the final byte.
+    DecParams,
+    /// Inside a CSI that is not a DEC private mode; skip to its final byte.
+    CsiIgnore,
+}
+
+impl DecModeTracker {
+    /// Feed one raw output chunk. Safe to split anywhere.
+    pub fn feed(&mut self, chunk: &[u8]) {
+        for &b in chunk {
+            match self.state {
+                DecParseState::Ground => {
+                    if b == 0x1b {
+                        self.state = DecParseState::Esc;
+                    }
+                }
+                DecParseState::Esc => {
+                    self.state = if b == b'[' { DecParseState::Csi } else { DecParseState::Ground };
+                }
+                DecParseState::Csi => {
+                    if b == b'?' {
+                        self.digits.clear();
+                        self.params.clear();
+                        self.state = DecParseState::DecParams;
+                    } else if (0x40..=0x7e).contains(&b) {
+                        // A complete CSI with no parameters at all.
+                        self.state = DecParseState::Ground;
+                    } else {
+                        self.state = DecParseState::CsiIgnore;
+                    }
+                }
+                DecParseState::CsiIgnore => {
+                    if (0x40..=0x7e).contains(&b) {
+                        self.state = DecParseState::Ground;
+                    }
+                }
+                DecParseState::DecParams => {
+                    if b.is_ascii_digit() {
+                        self.digits.push(b as char);
+                    } else if b == b';' {
+                        self.push_param();
+                    } else if b == b'h' || b == b'l' {
+                        self.push_param();
+                        let on = b == b'h';
+                        for m in self.params.drain(..) {
+                            self.modes.insert(m, on);
+                        }
+                        self.state = DecParseState::Ground;
+                    } else {
+                        // Some other DEC private sequence (`?25$p`, `?1;2r`,
+                        // ...) — not a mode set/reset, drop it.
+                        if (0x40..=0x7e).contains(&b) {
+                            self.state = DecParseState::Ground;
+                        }
+                        self.digits.clear();
+                        self.params.clear();
+                    }
+                }
+            }
+        }
+    }
+
+    fn push_param(&mut self) {
+        // An empty or absurd parameter is not a mode; ignore it rather than
+        // recording a bogus number.
+        if let Ok(n) = self.digits.parse::<u16>() {
+            self.params.push(n);
+        }
+        self.digits.clear();
+    }
+
+    /// The escape sequences that reproduce the tracked state on a fresh
+    /// terminal. Empty when nothing has been seen.
+    ///
+    /// Modes that were explicitly reset are emitted too: several DEC modes
+    /// (autowrap, cursor visibility) default to *on*, so "not emitted" is not
+    /// the same as "off".
+    pub fn prefix(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (mode, on) in &self.modes {
+            out.extend_from_slice(format!("\x1b[?{mode}{}", if *on { 'h' } else { 'l' }).as_bytes());
+        }
+        out
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -219,5 +347,80 @@ mod tests {
     fn strips_charset_designation() {
         // ESC ( B = US ASCII charset
         assert_eq!(strip_ansi("\x1b(Btext"), "text");
+    }
+
+    // ── DecModeTracker ────────────────────────────────────────────────────
+
+    fn tracked(chunks: &[&[u8]]) -> Vec<u8> {
+        let mut t = DecModeTracker::default();
+        for c in chunks {
+            t.feed(c);
+        }
+        t.prefix()
+    }
+
+    #[test]
+    fn dec_tracker_starts_empty() {
+        assert_eq!(tracked(&[b"plain output\r\n"]), b"");
+    }
+
+    #[test]
+    fn dec_tracker_records_alt_screen_entry() {
+        assert_eq!(tracked(&[b"\x1b[?1049h"]), b"\x1b[?1049h");
+    }
+
+    /// The reader thread reads in 4 KB chunks, so a sequence split across two
+    /// reads is routine, not a corner case.
+    #[test]
+    fn dec_tracker_survives_split_across_chunks() {
+        assert_eq!(tracked(&[b"\x1b[?10", b"49h"]), b"\x1b[?1049h");
+        assert_eq!(tracked(&[b"\x1b", b"[", b"?", b"1", b"0", b"4", b"9", b"h"]), b"\x1b[?1049h");
+    }
+
+    #[test]
+    fn dec_tracker_keeps_the_last_value_for_a_mode() {
+        assert_eq!(tracked(&[b"\x1b[?1049h", b"\x1b[?1049l"]), b"\x1b[?1049l");
+        assert_eq!(tracked(&[b"\x1b[?1049l", b"\x1b[?1049h"]), b"\x1b[?1049h");
+    }
+
+    #[test]
+    fn dec_tracker_splits_multi_parameter_sequences() {
+        assert_eq!(
+            tracked(&[b"\x1b[?1000;1002;1006h"]),
+            b"\x1b[?1000h\x1b[?1002h\x1b[?1006h",
+        );
+    }
+
+    /// Ordered by mode number so the same state always yields the same bytes.
+    #[test]
+    fn dec_tracker_prefix_is_deterministic() {
+        assert_eq!(
+            tracked(&[b"\x1b[?2004h\x1b[?25l\x1b[?1049h"]),
+            b"\x1b[?25l\x1b[?1049h\x1b[?2004h",
+        );
+    }
+
+    /// Non-DEC CSI sequences (SGR colour, erase, cursor moves) must not leak
+    /// into the tracked state — Claude Code's output is mostly these.
+    #[test]
+    fn dec_tracker_ignores_ordinary_csi() {
+        assert_eq!(tracked(&[b"\x1b[31mred\x1b[0m\x1b[2J\x1b[1;1H\x1b[38;2;255;193;7m"]), b"");
+    }
+
+    /// `CSI ? Ps $ p` (DECRQM) asks about a mode, it does not set one.
+    #[test]
+    fn dec_tracker_ignores_mode_queries() {
+        assert_eq!(tracked(&[b"\x1b[?1049$p"]), b"");
+    }
+
+    /// The real thing: the bytes Claude Code CLI actually emits at startup,
+    /// captured from a pty run.
+    #[test]
+    fn dec_tracker_captures_claude_code_startup_modes() {
+        let prefix = tracked(&[b"\x1b[?25h\x1b[?25l\x1b[?2004h\x1b[?2031h\x1b[?1004h\x1b[?1049h\x1b[?1007h"]);
+        let s = String::from_utf8(prefix).unwrap();
+        assert!(s.contains("\x1b[?1049h"), "alt screen must be restored: {s:?}");
+        assert!(s.contains("\x1b[?2004h"), "bracketed paste must be restored: {s:?}");
+        assert!(s.contains("\x1b[?25l"), "hidden cursor must stay hidden: {s:?}");
     }
 }

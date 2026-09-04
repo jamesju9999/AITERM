@@ -142,6 +142,11 @@ pub struct PtySession {
     line_esc_state: Mutex<u8>,
     /// Ring buffer capturing raw PTY output for AI context. Shared with the reader thread.
     output_ring: Arc<Mutex<VecDeque<u8>>>,
+    /// DEC private modes this session's output has switched on or off, so a
+    /// share replay taken from the middle of the stream can restore them.
+    /// Unlike `output_ring` this is never evicted — see `ansi::DecModeTracker`
+    /// for the bug that made it necessary. Shared with the reader thread.
+    dec_modes: Arc<Mutex<super::ansi::DecModeTracker>>,
     /// cd attempts staged by `apply_cd_if_any` (write path) for Bash/Pwsh
     /// sessions, each removed by the reader thread once it sees the matching
     /// OSC 133 D marker — committed to cwd/previous_cwd only if that marker
@@ -399,6 +404,8 @@ impl PtySession {
 
         let output_ring: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::new()));
         let ring_for_thread = Arc::clone(&output_ring);
+        let dec_modes: Arc<Mutex<super::ansi::DecModeTracker>> = Arc::new(Mutex::new(Default::default()));
+        let dec_modes_for_thread = Arc::clone(&dec_modes);
         let cwd: Arc<Mutex<PathBuf>> = Arc::new(Mutex::new(initial_cwd));
         let cwd_for_thread = Arc::clone(&cwd);
         let previous_cwd: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
@@ -435,6 +442,11 @@ impl PtySession {
                                     if ring.len() >= OUTPUT_RING_CAP { ring.pop_front(); }
                                     ring.push_back(b);
                                 }
+                                // Inside the ring's critical section, and
+                                // always in this order (ring then modes), so a
+                                // snapshot can never see bytes whose mode
+                                // switches have not been recorded yet.
+                                dec_modes_for_thread.lock().feed(&chunk);
                                 // Broadcast while still holding the ring lock.
                                 // This is what makes `subscribe_with_history`
                                 // atomic: a chunk is either already in the
@@ -514,6 +526,7 @@ impl PtySession {
             line_buffer: Mutex::new(Vec::new()),
             line_esc_state: Mutex::new(0),
             output_ring,
+            dec_modes,
             pending_cds,
             bell_count,
             marker_count,
@@ -732,7 +745,20 @@ impl PtySession {
             None
         } else {
             let start = ring.len().saturating_sub(max_bytes);
-            Some(ring.iter().skip(start).copied().collect())
+            // The mode prefix goes first: a replay that starts mid-stream has
+            // lost every `CSI ? Ps h` the ring has since evicted, and those are
+            // sticky state a program emits once and never repeats. Without it a
+            // viewer joining a host that is already running a full-screen
+            // program (Claude Code CLI, vim, htop) renders alternate-screen
+            // content into its normal buffer. See `ansi::DecModeTracker`.
+            //
+            // Replaying a mode the ring still happens to contain is harmless:
+            // the duplicate inside the replay simply re-applies it, landing on
+            // the same state. `max_bytes` is a bound on the ring slice, not on
+            // this prefix, which is tens of bytes.
+            let mut out = self.dec_modes.lock().prefix();
+            out.extend(ring.iter().skip(start).copied());
+            Some(out)
         };
         let rx = self.output_tx.subscribe();
         drop(ring);
@@ -1856,6 +1882,81 @@ mod tests {
         assert!(
             streamed.windows(5).any(|w| w == b"AFTER"),
             "output produced after subscribing never arrived on the stream"
+        );
+    }
+
+    /// 觀看端重播必須帶回已經被環形緩衝區淘汰掉的終端機模式。
+    ///
+    /// 這是實機 bug 的迴歸測試：遠端主控端已經在跑 Claude Code CLI 時才連進去，
+    /// 觀看端的即時窗格只有三列高、不會滿版。根因是 `\x1b[?1049h`（切進
+    /// alternate screen）在程式啟動當下只送出一次——實測 Claude Code 是在整條
+    /// session 的第 855 個位元組，而一次 45x160 全螢幕重繪約 2.2 KB，用過一輪
+    /// 之後它早就被擠出這個 256 KB 的環，觀看端從頭到尾沒看過它，於是把
+    /// alternate screen 的內容畫進 normal buffer，`isAlternateBuffer` 永遠是
+    /// false，前端的滿版開關（RemoteTerminalView 的 altBufferHeightPx）因此
+    /// 永遠不會生效。
+    ///
+    /// 只跑在非 Windows：要塞爆 256 KB 需要一句 POSIX shell 迴圈，cmd.exe 沒有
+    /// 對等寫法。被測的邏輯本身跨平台，`DecModeTracker` 的單元測試三個平台都跑。
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn subscribe_with_history_restores_modes_evicted_from_the_ring() {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+
+        // 先切進 alternate screen，再吐出遠超過環容量的填充內容把它擠掉。
+        session.write(b"printf '\\033[?1049h'\n").unwrap();
+        session
+            .write(b"i=0; while [ $i -lt 320 ]; do printf '%01000d' 0; i=$((i+1)); done; printf 'FILLDONE\\n'\n")
+            .unwrap();
+
+        // 等到填充跑完、而且 `?1049h` 真的已經不在環裡——不確認這件事的話，
+        // 測試可能在還沒淘汰時就通過，等於什麼都沒驗到。
+        let mut evicted = false;
+        for _ in 0..100 {
+            if let Some(bytes) = session.get_recent_raw(OUTPUT_RING_CAP) {
+                let done = bytes.windows(8).any(|w| w == b"FILLDONE");
+                let still_there = bytes.windows(8).any(|w| w == b"\x1b[?1049h");
+                if done && !still_there {
+                    evicted = true;
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(evicted, "填充沒有把 ?1049h 擠出環——這個測試沒有測到它要測的東西");
+
+        let (history, _rx) = session.subscribe_with_history(OUTPUT_RING_CAP);
+        let history = history.expect("ring 有東西，快照不該是空的");
+        // 重播必須以「還原模式」的前綴開頭，而且那段前綴要包含切進 alternate
+        // screen 這一句。不寫死成 `starts_with(b"\x1b[?1049h")`：前綴是照模式
+        // 編號排序的，shell 自己設的 ?1034（readline 的 meta key）之類編號較小
+        // 的模式會排在前面，那不是錯誤。這裡吃掉開頭連續的
+        // `ESC [ ? <digits> h|l`，再檢查裡面有沒有 ?1049h。
+        let mut i = 0;
+        let mut prefix_seqs: Vec<&[u8]> = Vec::new();
+        while history[i..].starts_with(b"\x1b[?") {
+            let start = i;
+            i += 3;
+            while i < history.len() && history[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i >= history.len() || (history[i] != b'h' && history[i] != b'l') {
+                i = start;
+                break;
+            }
+            i += 1;
+            prefix_seqs.push(&history[start..i]);
+        }
+        assert!(
+            prefix_seqs.iter().any(|seq| *seq == b"\x1b[?1049h"),
+            "重播開頭的模式前綴沒有帶回 ?1049h，觀看端不會進 alternate screen；實際前綴：{:?}",
+            prefix_seqs.iter().map(|s| String::from_utf8_lossy(s).into_owned()).collect::<Vec<_>>(),
         );
     }
 }
