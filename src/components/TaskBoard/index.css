@@ -10,7 +10,12 @@
    --border 跟 --border-color 兩個都覆寫：buttons.css 的 .aiterm-btn--secondary
    讀的是 --border，主題系統實際設的是 --border-color，這是既有的落差，
    這裡只是覆寫兩邊繞過去，不是在修那個落差（不在這次範圍內）。 */
-.task-board {
+/* .task-card-ghost 一起列進來：它是 createPortal 到 document.body 的，
+   在 .task-board 的範圍外，只掛 .task-board 的話它拿不到這組變數，會落回
+   全域主題色（實測邊框會變成主題的青綠而不是這裡的藍）。變數只定義這一
+   份，兩邊共用。 */
+.task-board,
+.task-card-ghost {
   --bg-primary: #0a0e14;
   --bg-secondary: #10151d;
   --bg-tertiary: #141a24;
@@ -64,23 +69,25 @@
    set inline per-frame from the live cursor position; pointer-events:none so
    elementFromPoint() at the cursor sees the real column underneath, not this
    element sitting on top of it. */
+/* 純粹是定位/傾斜的外殼，視覺長相全部交給裡面那張真的 .task-card——
+   幽靈卡渲染的就是同一個 TaskCard 元件（見 index.tsx），所以不會有
+   「兩份 markup 各自漂移」的問題。這裡不要再自己畫底色/邊框/內距，
+   否則會跟裡面那張卡疊成兩層框。 */
 .task-card-ghost {
   position: fixed;
   transform: translate(-50%, -16px) rotate(-8deg) scale(1.04);
   pointer-events: none;
   z-index: 1000;
-  width: 220px;
-  background: linear-gradient(180deg, #141a24 0%, #10151d 100%);
-  border: 1px solid var(--accent);
-  border-radius: 12px;
-  padding: 14px;
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(47, 111, 237, 0.2);
+  width: 240px;
+  filter: drop-shadow(0 12px 28px rgba(0, 0, 0, 0.55));
   /* Portaled to document.body — a sibling of .task-board-columns, not a
      descendant — so it does NOT inherit that container's user-select:none.
      Without this of its own, dragging visibly selects the ghost's text. */
   user-select: none;
   -webkit-user-select: none;
 }
+/* 只有這一點跟靜止的卡片不同：用主色邊框標示「這張正在被拖曳」。 */
+.task-card-ghost .task-card { border-color: var(--accent); }
 .task-column-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
 .task-column-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); }
 .task-column-count { opacity: 0.6; font-weight: 400; }

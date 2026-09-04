@@ -239,6 +239,44 @@ describe("TaskBoardView", () => {
     }
   });
 
+  // User-requested: the ghost used to be a hand-rolled subset (title + path
+  // only), so it looked nothing like the card it came from. It now renders
+  // the real TaskCard, which also means the two can't drift apart as the
+  // card evolves. Asserting on the structural pieces the old version was
+  // missing — status bar, badges, action buttons — rather than just the
+  // title, which the old version already had.
+  it("the drag ghost renders the same full card content as the resting card", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "p", title: "Draggable", status: "planning", interactive: true }),
+    ]);
+    view();
+    const cardEl = await screen.findByText("Draggable");
+    const dragWrap = cardEl.closest("[data-task-drag-id]") as HTMLElement;
+
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn().mockReturnValue(null);
+    try {
+      const { fireEvent } = await import("@testing-library/react");
+      fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
+      fireEvent.mouseMove(window, { clientX: 130, clientY: 150 });
+
+      const ghost = await screen.findByTestId("task-drag-ghost");
+      const ghostCard = ghost.querySelector(".task-card") as HTMLElement;
+      expect(ghostCard).not.toBeNull();
+      // Same status drives the same left color bar as the resting card.
+      expect(ghostCard.getAttribute("data-task-status")).toBe("planning");
+      // Interactive avatar chip and the planning-state action buttons —
+      // none of which the old simplified ghost rendered at all.
+      expect(ghostCard.querySelector(".task-card-avatar")).not.toBeNull();
+      expect(within(ghostCard).getByText(/編輯工作|Edit/)).toBeInTheDocument();
+      expect(within(ghostCard).getByText(/刪除|Delete/)).toBeInTheDocument();
+
+      fireEvent.mouseUp(window, { clientX: 130, clientY: 150 });
+    } finally {
+      document.elementFromPoint = originalElementFromPoint;
+    }
+  });
+
   it("running card shows Stop, and Stop calls stopTask", async () => {
     const { stopTask } = await import("../../ipc/tasks");
     vi.mocked(listTasks).mockResolvedValue([card({ id: "r", title: "Runner", status: "running", tab_id: "tab-1" })]);

@@ -278,8 +278,16 @@ export function TaskBoardView() {
               data-testid="task-drag-ghost"
               style={{ left: `${dragPointer.x}px`, top: `${dragPointer.y}px` }}
             >
-              <div className="task-card-title">{draggedCard.title}</div>
-              <div className="task-card-meta">{draggedCard.project_dir}</div>
+              {/* 渲染真的 TaskCard，不是另外手刻一份簡化版——這樣拖曳中看到的
+                  內容（徽章/狀態色條/頭像/按鈕）永遠跟靜止的卡片一致，日後
+                  改卡片也不會漏改這裡。回呼給 no-op：.task-card-ghost 是
+                  pointer-events: none，這些按鈕點不到。 */}
+              <TaskCard
+                card={draggedCard}
+                onEdit={() => {}}
+                onViewTranscript={() => {}}
+                onChanged={() => {}}
+              />
             </div>,
             document.body,
           );
