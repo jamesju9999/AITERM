@@ -95,17 +95,17 @@
   padding: 14px 14px 12px 16px;
   cursor: grab;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-  overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
   -webkit-user-drag: none;
-  /* WKWebView (Tauri's macOS webview) has been observed clipping an
-     absolutely-positioned ::before child out of view entirely when its
-     parent combines overflow:hidden with border-radius, unless the parent
-     is promoted to its own compositing layer first. translateZ(0) is the
-     standard, side-effect-free way to force that promotion — see the left
-     status bar below, which this fixes. */
-  transform: translateZ(0);
+  /* No overflow:hidden here (deliberately removed) — WKWebView (Tauri's
+     macOS webview) was observed dropping the ::before left status bar
+     below entirely when overflow:hidden and border-radius were combined
+     on this same element (confirmed: identical CSS renders the bar
+     correctly in Chrome, so this is a WebKit-specific painting bug, not a
+     logic error). Nothing else here overflows the card's rounded corners,
+     so overflow:hidden was only ever clipping that bar's own corners —
+     an imperceptible 3px-wide sliver — and isn't needed. */
 }
 /* 左側狀態色條——用卡片外層的 data-task-status 屬性驅動，見 TaskCard.tsx（Task 2）。 */
 .task-card::before {
