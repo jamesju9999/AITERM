@@ -66,7 +66,7 @@ export function TaskCard({
   return (
     <div className="task-card" data-task-status={cardStatus}>
       <div className="task-card-top-row">
-        <div>
+        <div className="task-card-info">
           <div className="task-card-title">{card.title}</div>
           <div className="task-card-meta">📁 {card.project_dir}</div>
           {!card.parallel_ok && <div className="task-card-meta">⚑ {t.board_card_solo_hint}</div>}

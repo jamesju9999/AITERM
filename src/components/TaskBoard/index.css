@@ -99,6 +99,13 @@
   user-select: none;
   -webkit-user-select: none;
   -webkit-user-drag: none;
+  /* WKWebView (Tauri's macOS webview) has been observed clipping an
+     absolutely-positioned ::before child out of view entirely when its
+     parent combines overflow:hidden with border-radius, unless the parent
+     is promoted to its own compositing layer first. translateZ(0) is the
+     standard, side-effect-free way to force that promotion — see the left
+     status bar below, which this fixes. */
+  transform: translateZ(0);
 }
 /* 左側狀態色條——用卡片外層的 data-task-status 屬性驅動，見 TaskCard.tsx（Task 2）。 */
 .task-card::before {
@@ -113,7 +120,21 @@
 .task-card[data-task-status="failed"]::before { background: var(--tb-failed); }
 .task-card[data-task-status="cancelled"]::before { background: var(--tb-cancelled); }
 
-.task-card-title { font-weight: 700; font-size: 14.5px; color: var(--text-primary); line-height: 1.35; }
+.task-card-title {
+  font-weight: 700;
+  font-size: 14.5px;
+  color: var(--text-primary);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* flex:1 + min-width:0 — without min-width:0 a flex item's default
+   min-width is auto, meaning it refuses to shrink below the title text's
+   natural width. On a narrow column that pushed .task-card-avatar right
+   out past the card's edge, where overflow:hidden on .task-card clipped
+   it — the avatar visibly "disappeared" on window resize. */
+.task-card-info { flex: 1; min-width: 0; }
 .task-card-meta {
   display: flex;
   align-items: center;
@@ -226,6 +247,14 @@
 }
 
 .task-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+/* .task-dialog's own background AND .aiterm-btn--secondary's background
+   (in src/styles/buttons.css) both read the same --bg-secondary variable —
+   Task 1's override gave that one variable a single value, so the "取消"
+   button rendered the identical color as the dialog behind it: styled,
+   just invisible for lack of contrast. Overriding just the button's own
+   background here (not touching buttons.css, which is shared app-wide)
+   to the lighter --bg-tertiary restores visible separation. */
+.task-board .aiterm-btn--secondary { background: var(--bg-tertiary); }
 
 .task-transcript-dialog { width: min(640px, 90vw); }
 .task-transcript-prompt {
