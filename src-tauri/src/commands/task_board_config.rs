@@ -26,6 +26,7 @@ pub fn task_board_set_config(
             let c = value.claude_command.trim();
             if c.is_empty() { "claude".to_string() } else { c.to_string() }
         },
+        project_paths: value.project_paths,
     };
     config.update(|c| c.task_board = clamped).map_err(|e| e.to_string())
 }
