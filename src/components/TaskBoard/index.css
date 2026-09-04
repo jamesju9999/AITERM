@@ -1,14 +1,48 @@
 .task-board { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+/* 工作看板專屬的深藍配色——不管使用者在設定頁選了 app 哪個主題，這個區塊
+   內看到的都是同一種深藍。做法是局部覆寫這個容器範圍內的全域主題變數
+   （--accent/--bg-*/--border* 等），讓 TaskEditorDialog/TranscriptDialog
+   既有的 .aiterm-btn/.task-dialog/.task-field-input 規則透過 CSS 變數
+   繼承自動跟著換色，完全不用改那兩個檔案的程式碼。
+   --border 跟 --border-color 兩個都覆寫：buttons.css 的 .aiterm-btn--secondary
+   讀的是 --border，主題系統實際設的是 --border-color，這是既有的落差，
+   這裡只是覆寫兩邊繞過去，不是在修那個落差（不在這次範圍內）。 */
+.task-board {
+  --bg-primary: #0a0e14;
+  --bg-secondary: #10151d;
+  --bg-tertiary: #141a24;
+  --bg-surface: #141a24;
+  --bg-hover: #1a2230;
+  --border: #1f2733;
+  --border-color: #1f2733;
+  --border-subtle: #1f2733;
+  --text-primary: #eef2f7;
+  --text-secondary: #a8b6c8;
+  --text-muted: #6b7a8f;
+  --accent: #2f6fed;
+  --accent-dim: rgba(47, 111, 237, 0.14);
+  --accent-glow: rgba(47, 111, 237, 0.35);
+  --panel: #141a24;
+  --card: #141a24;
+  /* 這個功能區自己額外需要、主題系統裡沒有對應概念的顏色（成功/失敗/中性/
+     深藍主色的加深版，給漸層跟 hover 用）。 */
+  --tb-accent-dark: #1e4fc7;
+  --tb-success: #22c55e;
+  --tb-success-dim: rgba(34, 197, 94, 0.14);
+  --tb-failed: #ef4444;
+  --tb-failed-dim: rgba(239, 68, 68, 0.14);
+  --tb-cancelled: #eab308;
+  --tb-cancelled-dim: rgba(234, 179, 8, 0.14);
+  --tb-neutral: #3a4556;
+}
 .task-board-toolbar { padding: 12px 16px; border-bottom: 1px solid var(--border, #2a2a2a); flex-shrink: 0; }
 /* 沒有這行，滑鼠在卡片文字上按下拖曳時會跟瀏覽器原生的文字選取/拖曳手勢互搶，
    導致自訂的滑鼠拖曳邏輯卡住、視覺上像沒反應（比照 TabBar/index.css 同樣的作法）。
    -webkit-user-select 另外補上：Tauri macOS 用的是系統 WKWebView，只寫標準的
    user-select 在部分情境下攔不住原生選字手勢，兩個都寫才可靠。*/
 .task-board-columns { flex: 1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px; overflow: hidden; min-height: 0; user-select: none; -webkit-user-select: none; }
-.task-column { display: flex; flex-direction: column; background: var(--panel, #1b1b1b); border-radius: 8px; overflow: hidden; min-height: 0; border: 1px solid transparent; }
-.task-column--drop-target { border-color: var(--accent, #a855f7); background: var(--accent-dim, rgba(168, 85, 247, 0.08)); }
-.task-card-drag-wrap--draggable { cursor: grab; }
-.task-card-drag-wrap--draggable:active { cursor: grabbing; }
+.task-column { display: flex; flex-direction: column; background: var(--panel); border-radius: 10px; overflow: hidden; min-height: 0; border: 1px solid transparent; }
+.task-column--drop-target { border-color: var(--accent); background: var(--accent-dim); }
 /* Marks the source card while it's being dragged — stays in its original
    column slot (just faded/inert), the actual cursor-following visual is
    .task-card-ghost below, portaled to document.body. An earlier version
@@ -16,6 +50,8 @@
    has overflow:hidden, so the card got visually clipped the instant it
    crossed its own column's edge into a neighbor — a portal sibling of every
    column has no such ancestor to be clipped by. */
+.task-card-drag-wrap--draggable { cursor: grab; }
+.task-card-drag-wrap--draggable:active { cursor: grabbing; }
 .task-card-drag-wrap--dragging {
   opacity: 0.35;
   pointer-events: none;
@@ -27,22 +63,23 @@
    element sitting on top of it. */
 .task-card-ghost {
   position: fixed;
-  transform: translate(-50%, -16px);
+  transform: translate(-50%, -16px) rotate(-8deg) scale(1.04);
   pointer-events: none;
   z-index: 1000;
   width: 220px;
-  background: var(--card, #242424);
-  border: 1px solid var(--accent, #a855f7);
-  border-radius: 6px;
-  padding: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  background: linear-gradient(180deg, #141a24 0%, #10151d 100%);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(47, 111, 237, 0.2);
   /* Portaled to document.body — a sibling of .task-board-columns, not a
      descendant — so it does NOT inherit that container's user-select:none.
      Without this of its own, dragging visibly selects the ghost's text. */
   user-select: none;
   -webkit-user-select: none;
 }
-.task-column-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; font-weight: 600; border-bottom: 1px solid var(--border, #2a2a2a); flex-shrink: 0; }
+.task-column-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
+.task-column-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); }
 .task-column-count { opacity: 0.6; font-weight: 400; }
 .task-column-body { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
 /* Explicit, not just inherited from .task-board-columns — a card that has
@@ -50,15 +87,87 @@
    DOM node each time, and inheritance alone has already proven unreliable
    for a sibling case (.task-card-ghost, portaled out of this ancestor
    entirely). Belt and suspenders. */
-.task-card { background: var(--card, #242424); border: 1px solid var(--border, #2f2f2f); border-radius: 6px; padding: 10px; cursor: grab; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; }
-.task-card-title { font-weight: 600; margin-bottom: 4px; }
-.task-card-meta { font-size: 12px; opacity: 0.65; margin-top: 2px; }
-.task-card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.task-badge { font-size: 11px; padding: 1px 6px; border-radius: 4px; display: inline-block; margin-top: 4px; }
-.task-badge--success { background: #1f4023; color: #b6f0c2; }
-.task-badge--failed { background: #4a1f1f; color: #f0b6b6; }
-.task-badge--cancelled { background: #3a3a1f; color: #efe7b0; }
-.task-badge--interactive { background: #1f2a3a; color: #b6d4f0; }
+.task-card {
+  position: relative;
+  background: linear-gradient(180deg, #141a24 0%, #10151d 100%);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 14px 14px 12px 16px;
+  cursor: grab;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+}
+/* 左側狀態色條——用卡片外層的 data-task-status 屬性驅動，見 TaskCard.tsx（Task 2）。 */
+.task-card::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--tb-neutral);
+}
+.task-card[data-task-status="running"]::before { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.task-card[data-task-status="success"]::before { background: var(--tb-success); }
+.task-card[data-task-status="failed"]::before { background: var(--tb-failed); }
+.task-card[data-task-status="cancelled"]::before { background: var(--tb-cancelled); }
+
+.task-card-title { font-weight: 700; font-size: 14.5px; color: var(--text-primary); line-height: 1.35; }
+.task-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 5px;
+  font-family: var(--mono, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-card-avatar {
+  width: 24px; height: 24px; border-radius: 7px;
+  background: linear-gradient(135deg, var(--accent), var(--tb-accent-dark));
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.task-card-top-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+
+.task-card-badges { display: flex; gap: 6px; margin-top: 11px; flex-wrap: wrap; }
+.task-badge { font-size: 10px; padding: 3px 8px 3px 6px; border-radius: 20px; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; letter-spacing: 0.01em; }
+.task-badge--success { background: var(--tb-success-dim); color: var(--tb-success); }
+.task-badge--failed { background: var(--tb-failed-dim); color: var(--tb-failed); }
+.task-badge--cancelled { background: var(--tb-cancelled-dim); color: var(--tb-cancelled); }
+.task-badge--interactive { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(47, 111, 237, 0.3); }
+.task-badge--running { background: var(--accent-dim); color: var(--accent); }
+.task-badge-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: task-badge-pulse 1.6s ease-in-out infinite; }
+@keyframes task-badge-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+.task-card-divider { height: 1px; background: linear-gradient(90deg, var(--border-color), transparent); margin: 11px 0 9px; }
+
+.task-card-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.tb-btn {
+  cursor: pointer;
+  font-family: inherit;
+  border-radius: 7px;
+  padding: 5px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+.tb-btn:disabled { opacity: 0.4; cursor: default; }
+.tb-btn--ghost { background: transparent; border: 1px solid var(--border-color); color: var(--text-secondary); }
+.tb-btn--ghost:hover:not(:disabled) { background: var(--bg-hover); }
+.tb-btn--primary { background: linear-gradient(135deg, var(--accent), var(--tb-accent-dark)); border: none; color: #fff; box-shadow: 0 2px 8px var(--accent-glow); }
+.tb-btn--primary:hover:not(:disabled) { transform: translateY(-1px); }
+.tb-btn--danger-ghost { background: transparent; border: 1px solid rgba(239, 68, 68, 0.35); color: #e8929a; }
+.tb-btn--danger-ghost:hover:not(:disabled) { background: rgba(239, 68, 68, 0.1); }
 .task-dialog-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 50; }
 .task-dialog {
   background: var(--bg-secondary, #111);
