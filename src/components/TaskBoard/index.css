@@ -107,18 +107,25 @@
      so overflow:hidden was only ever clipping that bar's own corners —
      an imperceptible 3px-wide sliver — and isn't needed. */
 }
-/* 左側狀態色條——用卡片外層的 data-task-status 屬性驅動，見 TaskCard.tsx（Task 2）。 */
+/* 左側狀態色條——用卡片外層的 data-task-status 屬性驅動，見 TaskCard.tsx（Task 2）。
+   顏色刻意寫死十六進位，不吃 --tb-*/--accent 變數：實測發現 WKWebView 對
+   ::before 偽元素解析 CSS 變數會跳過鄰近祖先（.task-board 的本地覆寫），
+   直接落到最外層 :root 主題的值——同一份 CSS 在 Chrome 裡用變數完全正常
+   （已用最小重現頁面對照驗證過），只有 WKWebView 的 ::before 這條路徑有
+   這個落差。直接寫死數值繞開這個機制，不是在猜著修。數值來源跟
+   .task-board 區塊裡的 --tb-*/--accent 完全一致，之後如果要換色要兩邊
+   一起改。 */
 .task-card::before {
   content: "";
   position: absolute;
   left: 0; top: 0; bottom: 0;
   width: 3px;
-  background: var(--tb-neutral);
+  background: #3a4556; /* --tb-neutral */
 }
-.task-card[data-task-status="running"]::before { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
-.task-card[data-task-status="success"]::before { background: var(--tb-success); }
-.task-card[data-task-status="failed"]::before { background: var(--tb-failed); }
-.task-card[data-task-status="cancelled"]::before { background: var(--tb-cancelled); }
+.task-card[data-task-status="running"]::before { background: #2f6fed; box-shadow: 0 0 8px #2f6fed; } /* --accent */
+.task-card[data-task-status="success"]::before { background: #22c55e; } /* --tb-success */
+.task-card[data-task-status="failed"]::before { background: #ef4444; } /* --tb-failed */
+.task-card[data-task-status="cancelled"]::before { background: #eab308; } /* --tb-cancelled */
 
 .task-card-title {
   font-weight: 700;
