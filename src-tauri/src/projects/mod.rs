@@ -163,6 +163,20 @@ impl ProjectRegistry {
         self.open.write().remove(id);
     }
 
+    /// 移除所有指向 `folder` 的專案，回傳被移除的 handle（呼叫端負責
+    /// 關掉它們的連線池）。
+    ///
+    /// 資料夾在 App 執行中被外部刪掉/搬走時用。這時 `.aitprj` 已經讀不到、
+    /// 拿不到 id，所以只能用路徑比對——`open_folder` 存進來的 path 就是
+    /// 設定裡那個字串轉成的 `PathBuf`，而檢查的人走的是同一份設定，
+    /// 兩邊一致。
+    pub fn close_by_path(&self, folder: &Path) -> Vec<ProjectHandle> {
+        let mut open = self.open.write();
+        let ids: Vec<String> =
+            open.values().filter(|h| h.path == folder).map(|h| h.id.clone()).collect();
+        ids.iter().filter_map(|id| open.remove(id)).collect()
+    }
+
     /// 建立新專案資料夾並開啟。`parent` 必須已存在。
     pub async fn create(
         &self,
@@ -386,5 +400,33 @@ mod registry_tests {
         let mut names: Vec<String> = reg.all().into_iter().map(|h| h.name).collect();
         names.sort();
         assert_eq!(names, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    /// 資料夾在 App 執行中被 Finder 刪掉時，`.aitprj` 已經讀不到，
+    /// 拿不到 id——只能用路徑比對把 registry 裡那個 handle 清掉。
+    #[tokio::test]
+    async fn close_by_path_evicts_only_the_matching_project() {
+        let parent = tempfile::tempdir().unwrap();
+        let reg = ProjectRegistry::new();
+        let gone = reg.create(parent.path(), "gone", "").await.unwrap();
+        let kept = reg.create(parent.path(), "kept", "").await.unwrap();
+
+        std::fs::remove_dir_all(&gone.path).unwrap();
+        let evicted = reg.close_by_path(&gone.path);
+
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(evicted[0].id, gone.id);
+        assert!(reg.get(&gone.id).is_none(), "消失的專案必須被驅逐");
+        assert!(reg.get(&kept.id).is_some(), "其他專案不可受影響");
+    }
+
+    #[tokio::test]
+    async fn close_by_path_on_an_unknown_path_is_a_no_op() {
+        let parent = tempfile::tempdir().unwrap();
+        let reg = ProjectRegistry::new();
+        let kept = reg.create(parent.path(), "kept", "").await.unwrap();
+
+        assert!(reg.close_by_path(std::path::Path::new("/nope")).is_empty());
+        assert!(reg.get(&kept.id).is_some());
     }
 }

@@ -179,7 +179,26 @@ fn write_transcript(
 /// Promote as many queued cards as the rules allow, right now. Shared by the
 /// loop and by tests. 跨所有已開啟的專案運作。
 pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_concurrent: u32) {
-    let projects = reg.all();
+    // 資料夾被外部刪掉/搬走（或外接磁碟還沒掛上）的專案，這一輪整個跳過。
+    //
+    // 驅逐 registry 裡的 handle 是 `projects_list` 在做的，但那只有看板開著
+    // 時才會跑，所以這裡不能假設 `reg.all()` 裡的每一個都還健在。而且下面
+    // 收集 running 的迴圈遇到查詢失敗是 `return`——不先濾掉的話，**一個讀
+    // 不到的專案會讓整個排程器停擺，連好的專案都不派工**。
+    //
+    // 這裡刻意只跳過、不驅逐：暫時讀不到（磁碟還沒掛上）之後回來時，
+    // 下一輪就自動恢復。真正的驅逐留給 `projects_list`。
+    let projects: Vec<ProjectHandle> = reg
+        .all()
+        .into_iter()
+        .filter(|p| {
+            let alive = p.path.is_dir();
+            if !alive {
+                eprintln!("scheduler: 專案資料夾不存在，這一輪跳過：{}", p.path.display());
+            }
+            alive
+        })
+        .collect();
 
     // Interactive cards bypass the concurrency cap and the solo-blocking
     // rule entirely — dispatch every queued one, unconditionally, first.
@@ -688,5 +707,57 @@ mod loop_tests {
         let status_of = |t: &str| all.iter().find(|r| r.title == t).unwrap().status.clone();
         assert_eq!(status_of("chat"), "running");
         assert_eq!(status_of("auto"), "running"); // not blocked by the already-running interactive card
+    }
+
+    /// 資料夾被 Finder 刪掉之後，registry 裡的 handle 不一定已經被驅逐
+    /// （驅逐發生在 `projects_list`，而那只有看板開著時才會跑）。排程器
+    /// 必須自己擋下來：在 Unix 上，已開啟的 SQLite 檔案被 unlink 之後
+    /// inode 還在，查詢會照常「成功」——於是會派工給一個使用者已經刪掉
+    /// 的專案，寫入還進到一個誰也看不到的檔案。
+    #[tokio::test]
+    async fn drain_once_skips_a_project_whose_folder_is_gone() {
+        let parent = tempfile::tempdir().unwrap();
+        let reg = ProjectRegistry::new();
+        let gone = reg.create(parent.path(), "gone", "").await.unwrap();
+        let alive = reg.create(parent.path(), "alive", "").await.unwrap();
+
+        let ghost = store::create_task(&gone.pool, "ghost", "", "/r", true, false).await.unwrap();
+        store::move_task(&gone.pool, &ghost, store::STATUS_QUEUED, 1.0).await.unwrap();
+        let real = store::create_task(&alive.pool, "real", "", "/r", true, false).await.unwrap();
+        store::move_task(&alive.pool, &real, store::STATUS_QUEUED, 1.0).await.unwrap();
+
+        std::fs::remove_dir_all(&gone.path).unwrap();
+        drain_once(&reg, &FakeDispatcher, 5).await;
+
+        assert_eq!(
+            store::get_task(&gone.pool, &ghost).await.unwrap().unwrap().status,
+            store::STATUS_QUEUED,
+            "資料夾已經不在的專案不該被派工"
+        );
+        assert_eq!(
+            store::get_task(&alive.pool, &real).await.unwrap().unwrap().status,
+            "done",
+            "其他專案必須照常運作"
+        );
+    }
+
+    /// 互動卡片走的是另一條完全不受並行上限管制的通道，同樣要擋。
+    #[tokio::test]
+    async fn drain_once_skips_a_vanished_project_in_the_interactive_lane_too() {
+        let parent = tempfile::tempdir().unwrap();
+        let reg = ProjectRegistry::new();
+        let gone = reg.create(parent.path(), "gone", "").await.unwrap();
+
+        let ghost = store::create_task(&gone.pool, "ghost", "", "/r", true, true).await.unwrap();
+        store::move_task(&gone.pool, &ghost, store::STATUS_QUEUED, 1.0).await.unwrap();
+
+        std::fs::remove_dir_all(&gone.path).unwrap();
+        drain_once(&reg, &FakeDispatcher, 5).await;
+
+        assert_eq!(
+            store::get_task(&gone.pool, &ghost).await.unwrap().unwrap().status,
+            store::STATUS_QUEUED,
+            "互動卡片也不該從已消失的專案派出去"
+        );
     }
 }

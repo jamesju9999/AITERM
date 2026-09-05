@@ -94,6 +94,13 @@ pub async fn projects_list(
                 });
             }
             Err(e) => {
+                // 這個專案先前可能是開著的（資料夾剛剛才被 Finder 刪掉/
+                // 搬走）。registry 裡那個 handle 必須跟著拿掉，否則排程器
+                // 每輪都還會看到它。`.aitprj` 已經讀不到、拿不到 id，
+                // 所以只能用路徑比對。
+                for stale in reg.close_by_path(&folder) {
+                    stale.pool.close().await;
+                }
                 let name = folder
                     .file_name()
                     .map(|s| s.to_string_lossy().into_owned())
