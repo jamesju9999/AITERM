@@ -81,12 +81,16 @@
 
 .project-card {
   display: flex;
-  align-items: stretch;
-  gap: 6px;
+  flex-direction: column;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--bg-secondary);
-  padding: 6px;
+  overflow: hidden;
+  transition: border-color 0.12s ease;
+}
+
+.project-card:hover {
+  border-color: var(--accent);
 }
 
 .project-card--broken {
@@ -94,6 +98,13 @@
   opacity: 0.75;
 }
 
+.project-card--broken:hover {
+  border-color: var(--tb-failed);
+}
+
+/* 整張卡的上半部都是可點的區域，不只名稱那一行。動作列留在這個
+   按鈕外面（見 ProjectList.tsx 的註解）——包進來的話點「移除」會
+   冒泡成「進入專案」。 */
 .project-card-main {
   flex: 1;
   min-width: 0;
@@ -102,8 +113,7 @@
   border: 0;
   color: inherit;
   cursor: pointer;
-  padding: 8px 10px;
-  border-radius: 8px;
+  padding: 16px 16px 12px;
 }
 
 .project-card-main:disabled {
@@ -112,6 +122,7 @@
 
 .project-card-name {
   font-weight: 600;
+  font-size: 15px;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -119,24 +130,79 @@
 }
 
 .project-card-desc,
-.project-card-meta,
 .project-card-error {
   font-size: 12px;
   color: var(--text-secondary);
   margin-top: 4px;
-}
-
-.project-card-meta {
-  display: flex;
-  gap: 10px;
-}
-
-.project-card-running {
-  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .project-card-error {
   color: var(--tb-failed);
+}
+
+.project-card-counts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.project-count {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 8px 4px;
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+
+/* 有東西在跑的時候整格亮起來——這是總覽頁唯一會變動的狀態，
+   值得比其他三格更顯眼。 */
+.project-count--active {
+  background: var(--accent-dim);
+}
+
+.project-count-n {
+  font-size: 17px;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.project-count--active .project-count-n {
+  color: var(--accent);
+}
+
+.project-count-label {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.project-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0 12px 12px;
+}
+
+/* 破壞性動作平常低調、滑上去才轉紅。跟「報告」一樣顯眼的話，
+   最該小心的那個反而最搶眼。 */
+.project-card-remove {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.project-card-remove:hover {
+  color: var(--tb-failed);
+  border-color: var(--tb-failed);
 }
 
 .project-empty {

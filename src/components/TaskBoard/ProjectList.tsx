@@ -86,14 +86,22 @@ export function ProjectList({
       ) : (
         <div className="project-grid">
           {projects.map((p) => {
-            const total = p.counts.planning + p.counts.queued + p.counts.running + p.counts.done;
             const broken = p.status !== "ok";
+            const cells = [
+              ["planning", p.counts.planning, t.report_col_planning],
+              ["queued", p.counts.queued, t.report_col_queued],
+              ["running", p.counts.running, t.report_col_running],
+              ["done", p.counts.done, t.report_col_done],
+            ] as const;
             return (
               <div
                 key={p.id}
                 className={`project-card${broken ? " project-card--broken" : ""}`}
                 data-testid={`project-card-${p.id}`}
               >
+                {/* 卡片主體是一個大按鈕：整張卡都可以點進去，不只名稱那一行。
+                    底下的動作列刻意留在按鈕外面，否則點「移除」會冒泡成
+                    「進入專案」——那個回歸有測試釘著。 */}
                 <button
                   className="project-card-main"
                   disabled={broken}
@@ -106,36 +114,41 @@ export function ProjectList({
                       {p.error ?? statusLabel(p)}
                     </div>
                   ) : (
-                    <div className="project-card-meta">
-                      <span data-testid={`project-total-${p.id}`}>
-                        {total} {t.proj_tasks_count}
-                      </span>
-                      {p.counts.running > 0 && (
-                        <span
-                          className="project-card-running"
-                          data-testid={`project-running-${p.id}`}
+                    <div className="project-card-counts">
+                      {cells.map(([key, n, label]) => (
+                        <div
+                          key={key}
+                          className={`project-count${
+                            key === "running" && n > 0 ? " project-count--active" : ""
+                          }`}
+                          data-testid={`project-count-${p.id}-${key}`}
                         >
-                          ● {p.counts.running} {t.proj_running}
-                        </span>
-                      )}
+                          <span className="project-count-n">{n}</span>
+                          <span className="project-count-label">{label}</span>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </button>
-                <button
-                  className="tb-btn tb-btn--ghost"
-                  data-testid={`project-report-${p.id}`}
-                  disabled={broken}
-                  onClick={() => onReport(p.id)}
-                >
-                  {t.report_short}
-                </button>
-                <button
-                  className="tb-btn tb-btn--danger-ghost"
-                  data-testid={`project-remove-${p.id}`}
-                  onClick={() => void remove(p)}
-                >
-                  {t.proj_remove}
-                </button>
+                <div className="project-card-actions">
+                  <button
+                    className="tb-btn tb-btn--ghost tb-btn--tiny"
+                    data-testid={`project-report-${p.id}`}
+                    disabled={broken}
+                    onClick={() => onReport(p.id)}
+                  >
+                    {t.report_short}
+                  </button>
+                  {/* 破壞性動作刻意低調：平常是灰的，滑鼠移上去才轉紅。
+                      跟「報告」一樣顯眼的話，最該小心的那個反而最搶眼。 */}
+                  <button
+                    className="project-card-remove"
+                    data-testid={`project-remove-${p.id}`}
+                    onClick={() => void remove(p)}
+                  >
+                    {t.proj_remove}
+                  </button>
+                </div>
               </div>
             );
           })}

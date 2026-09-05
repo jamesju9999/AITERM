@@ -49,23 +49,21 @@ describe("ProjectList", () => {
     removeProject.mockResolvedValue(undefined);
   });
 
+  // 重排版後總數改成四欄各自列出（project-count-*），意圖不變：
+  // 從卡片上看得出這個專案有多少工作、分佈如何。
   it("列出專案與它的工作數", async () => {
     mount();
     expect(await screen.findByText("makemoney")).toBeInTheDocument();
-    // 2 + 1 + 1 + 3 = 7
-    expect(screen.getByTestId("project-total-p1")).toHaveTextContent("7");
+    const cells = screen.getAllByTestId(/^project-count-p1-/);
+    const total = cells.reduce((sum, c) => sum + Number(c.textContent?.match(/\d+/)?.[0] ?? 0), 0);
+    expect(total).toBe(7); // 2 + 1 + 1 + 3
   });
 
+  // 同上：指示點改成「執行中」那一格的標示樣式，意圖不變。
   it("有執行中工作時顯示指示點", async () => {
     mount();
     await screen.findByText("makemoney");
-    expect(screen.getByTestId("project-running-p1")).toBeInTheDocument();
-  });
-
-  it("沒有執行中工作時不顯示指示點", async () => {
-    mount([project({ counts: { planning: 1, queued: 0, running: 0, done: 0 } })]);
-    await screen.findByText("makemoney");
-    expect(screen.queryByTestId("project-running-p1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("project-count-p1-running").className).toContain("--active");
   });
 
   it("完全沒有專案時顯示空狀態", async () => {
@@ -156,6 +154,29 @@ describe("ProjectList", () => {
   });
 
   // 報告按鈕在卡片主體上，很容易不小心讓點擊冒泡上去而連帶進入看板。
+  // 重排版之後仍要看得出專案現況——這份資料本來就抓得到，
+  // 報告視窗也已經在用，總覽卻只顯示一個總數。
+  it("卡片上列出四欄各自的數量", async () => {
+    mount([project({ counts: { planning: 3, queued: 2, running: 1, done: 5 } })]);
+    await screen.findByText("makemoney");
+    const cells = screen.getAllByTestId(/^project-count-p1-/);
+    expect(cells).toHaveLength(4);
+    const text = cells.map((c) => c.textContent).join("|");
+    for (const n of ["3", "2", "1", "5"]) expect(text).toContain(n);
+  });
+
+  it("有工作執行中時那一格會標示出來", async () => {
+    mount([project({ counts: { planning: 0, queued: 0, running: 2, done: 0 } })]);
+    await screen.findByText("makemoney");
+    expect(screen.getByTestId("project-count-p1-running").className).toContain("--active");
+  });
+
+  it("沒有工作執行中時不標示", async () => {
+    mount([project({ counts: { planning: 1, queued: 0, running: 0, done: 0 } })]);
+    await screen.findByText("makemoney");
+    expect(screen.getByTestId("project-count-p1-running").className).not.toContain("--active");
+  });
+
   it("點報告按鈕不會連帶進入該專案的看板", async () => {
     const onOpen = vi.fn();
     mount([project({ counts: { planning: 1, queued: 0, running: 0, done: 2 } })], onOpen);
