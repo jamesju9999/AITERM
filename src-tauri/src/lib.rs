@@ -107,11 +107,12 @@ use commands::{
     projects::{
         projects_create, projects_list, projects_open, projects_remove, projects_rename,
     },
+    reports::{reports_list, reports_read, reports_save},
     task_board_config::{task_board_get_config, task_board_set_config},
     tasks::{
         tasks_list, tasks_create, tasks_update, tasks_move, tasks_stop, tasks_delete,
         tasks_add_attachment, tasks_remove_attachment, tasks_clone, tasks_read_transcript,
-        tasks_save_transcript, tasks_mark_done, tasks_used_dirs,
+        tasks_save_transcript, tasks_mark_done, tasks_used_dirs, tasks_set_summary,
     },
     updater::updater_supported,
     web::{web_fetch, web_search, npm_mcp_search},
@@ -593,12 +594,17 @@ pub fn run() {
             tasks_read_transcript,
             tasks_save_transcript,
             tasks_used_dirs,
+            tasks_set_summary,
             // 專案
             projects_list,
             projects_create,
             projects_open,
             projects_remove,
             projects_rename,
+            // 工作報告
+            reports_save,
+            reports_list,
+            reports_read,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
