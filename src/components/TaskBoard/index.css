@@ -45,6 +45,17 @@
   /* 「待執行」欄位專用。目前數值跟 --tb-cancelled 相同，但語意不同
      （等待中 vs 已中斷），各自命名才不會在改其中一個時誤傷另一個。 */
   --tb-queued: #eab308;
+  /* 四欄標題列專用的低彩度版本。刻意跟上面那組語意色分開命名：那組
+     被卡片的徽章與左側色條用著，直接調暗會讓「成功」「互動」那些徽章
+     一起失色。這裡要的是「狀態的註解」而不是強調，所以彩度壓得很低。 */
+  --tb-col-planning: #55637a;
+  --tb-col-queued: #8a6d1f;
+  --tb-col-running: #3558a8;
+  --tb-col-done: #2f7d52;
+  --tb-col-planning-tint: rgba(85, 99, 122, 0.10);
+  --tb-col-queued-tint: rgba(138, 109, 31, 0.10);
+  --tb-col-running-tint: rgba(53, 88, 168, 0.13);
+  --tb-col-done-tint: rgba(47, 125, 82, 0.10);
 }
 
 /* ── 專案總覽 ─────────────────────────────────────────────── */
@@ -385,10 +396,22 @@
    （.task-column--drop-target）用掉了，兩者共用同一個屬性會互相蓋掉。
    .task-column 的 overflow:hidden + border-radius 會順便把這條線的兩端
    裁成跟欄位一樣的圓角。 */
-.task-column-head { border-top: 2px solid var(--tb-neutral); }
-.task-column[data-column-status="queued"] .task-column-head { border-top-color: var(--tb-queued); }
-.task-column[data-column-status="running"] .task-column-head { border-top-color: var(--accent); }
-.task-column[data-column-status="done"] .task-column-head { border-top-color: var(--tb-success); }
+.task-column-head {
+  border-top: 2px solid var(--tb-col-planning);
+  background: var(--tb-col-planning-tint);
+}
+.task-column[data-column-status="queued"] .task-column-head {
+  border-top-color: var(--tb-col-queued);
+  background: var(--tb-col-queued-tint);
+}
+.task-column[data-column-status="running"] .task-column-head {
+  border-top-color: var(--tb-col-running);
+  background: var(--tb-col-running-tint);
+}
+.task-column[data-column-status="done"] .task-column-head {
+  border-top-color: var(--tb-col-done);
+  background: var(--tb-col-done-tint);
+}
 .task-column-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); }
 .task-column-count { opacity: 0.6; font-weight: 400; }
 .task-column-body { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
