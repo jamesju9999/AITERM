@@ -11,13 +11,17 @@ import { stripAnsiCodes } from "./transcriptUtils";
  * nothing: the original raw transcript captured at completion time is still
  * there, so there's nothing broken to recover from — see
  * docs/superpowers/specs/2026-09-03-clean-task-transcript-design.md. */
-export async function tryUpgradeTranscript(taskId: string, tabId: string | null): Promise<void> {
+export async function tryUpgradeTranscript(
+  projectId: string,
+  taskId: string,
+  tabId: string | null,
+): Promise<void> {
   if (!tabId) return;
   const raw = serializeTerminal(tabId);
   if (raw === null) return;
   const clean = stripAnsiCodes(raw);
   try {
-    await saveTranscript(taskId, clean);
+    await saveTranscript(projectId, taskId, clean);
   } catch {
     // Best effort — see doc comment above.
   }

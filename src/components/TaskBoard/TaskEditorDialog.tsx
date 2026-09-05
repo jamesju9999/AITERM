@@ -14,10 +14,12 @@ import {
 const LAST_DIR_KEY = "aiterm_last_task_dir";
 
 export function TaskEditorDialog({
+  projectId,
   card,
   onClose,
   onSaved,
 }: {
+  projectId: string;
   card: TaskWithAttachments | null;
   onClose: () => void;
   onSaved: () => void;
@@ -49,7 +51,7 @@ export function TaskEditorDialog({
     if (isEdit) {
       for (const f of Array.from(files)) {
         const bytes = new Uint8Array(await f.arrayBuffer());
-        const row = await addAttachment(card.id, f.name, bytes);
+        const row = await addAttachment(projectId, card.id, f.name, bytes);
         setAttachments((a) => [...a, row]);
       }
     } else {
@@ -62,12 +64,25 @@ export function TaskEditorDialog({
     try {
       if (dir) localStorage.setItem(LAST_DIR_KEY, dir);
       if (isEdit) {
-        await updateTask({ id: card.id, title, body, project_dir: dir, parallel_ok: parallelOk, interactive });
+        await updateTask(projectId, {
+          id: card.id,
+          title,
+          body,
+          project_dir: dir,
+          parallel_ok: parallelOk,
+          interactive,
+        });
       } else {
-        const newId = await createTask({ title, body, project_dir: dir, parallel_ok: parallelOk, interactive });
+        const newId = await createTask(projectId, {
+          title,
+          body,
+          project_dir: dir,
+          parallel_ok: parallelOk,
+          interactive,
+        });
         for (const f of pendingFiles) {
           const bytes = new Uint8Array(await f.arrayBuffer());
-          await addAttachment(newId, f.name, bytes);
+          await addAttachment(projectId, newId, f.name, bytes);
         }
       }
       onSaved();
@@ -82,7 +97,9 @@ export function TaskEditorDialog({
 
   const removeAttachmentAt = (key: string) => {
     if (isEdit) {
-      void removeAttachment(key).then(() => setAttachments((list) => list.filter((x) => x.id !== key)));
+      void removeAttachment(projectId, key).then(() =>
+        setAttachments((list) => list.filter((x) => x.id !== key)),
+      );
     } else {
       setPendingFiles((prev) => prev.filter((f, i) => `${i}-${f.name}` !== key));
     }

@@ -5,10 +5,12 @@ import { readTranscript } from "../../ipc/tasks";
 import { collapseConsecutiveDuplicateLines } from "./transcriptUtils";
 
 export function TranscriptDialog({
+  projectId,
   taskId,
   body,
   onClose,
 }: {
+  projectId: string;
   taskId: string;
   body: string;
   onClose: () => void;
@@ -38,13 +40,13 @@ export function TranscriptDialog({
 
   useEffect(() => {
     let alive = true;
-    void readTranscript(taskId).then((s) => {
+    void readTranscript(projectId, taskId).then((s) => {
       if (alive) setText(s);
     });
     return () => {
       alive = false;
     };
-  }, [taskId]);
+  }, [projectId, taskId]);
 
   const raw = text === null ? null : collapseConsecutiveDuplicateLines(text);
 

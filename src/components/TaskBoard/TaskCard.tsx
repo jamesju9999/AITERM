@@ -5,11 +5,13 @@ import { useLocale } from "../../contexts/LocaleContext";
 import { cloneTask, deleteTask, markTaskDone, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
 
 export function TaskCard({
+  projectId,
   card,
   onEdit,
   onViewTranscript,
   onChanged,
 }: {
+  projectId: string;
   card: TaskWithAttachments;
   onEdit: () => void;
   onViewTranscript: () => void;
@@ -35,7 +37,7 @@ export function TaskCard({
   const remove = async () => {
     if (!(await confirm(t.board_delete_confirm))) return;
     const closeTab = card.tab_id ? await confirm(t.board_delete_close_tab) : false;
-    await run(() => deleteTask(card.id, closeTab));
+    await run(() => deleteTask(projectId, card.id, closeTab));
     // deleteTask's close_tab flag only kills the PTY session on the
     // backend — TerminalApp is the only place that removes a tab from its
     // own tab list (see its aiterm:close-tab listener), so without this
@@ -104,11 +106,11 @@ export function TaskCard({
         )}
         {card.status === "running" && (
           <>
-            <button className="tb-btn tb-btn--ghost" disabled={busy} onClick={() => void run(() => stopTask(card.id))}>
+            <button className="tb-btn tb-btn--ghost" disabled={busy} onClick={() => void run(() => stopTask(projectId, card.id))}>
               {t.board_action_stop}
             </button>
             {card.interactive && (
-              <button className="tb-btn tb-btn--primary" disabled={busy} onClick={() => void run(() => markTaskDone(card.id))}>
+              <button className="tb-btn tb-btn--primary" disabled={busy} onClick={() => void run(() => markTaskDone(projectId, card.id))}>
                 {t.board_action_mark_done}
               </button>
             )}
@@ -120,7 +122,7 @@ export function TaskCard({
             {card.transcript_path && (
               <button className="tb-btn tb-btn--ghost" onClick={onViewTranscript}>{t.board_action_transcript}</button>
             )}
-            <button className="tb-btn tb-btn--ghost" disabled={busy} onClick={() => void run(() => cloneTask(card.id))}>
+            <button className="tb-btn tb-btn--ghost" disabled={busy} onClick={() => void run(() => cloneTask(projectId, card.id))}>
               {t.board_action_requeue}
             </button>
             <button className="tb-btn tb-btn--danger-ghost" disabled={busy} onClick={() => void remove()}>{t.board_delete}</button>
