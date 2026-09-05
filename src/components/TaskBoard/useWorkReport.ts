@@ -72,7 +72,7 @@ export function useWorkReport(projectId: string, projectName: string) {
   }, []);
 
   const generate = useCallback(
-    async (style: ReportStyle) => {
+    async (style: ReportStyle, providerId?: string) => {
       setBusy(true);
       setError(null);
       setHtml(null);
@@ -101,6 +101,7 @@ export function useWorkReport(projectId: string, projectName: string) {
             const reply = await invokeAiChat(
               [{ role: "user", content: buildSummaryPrompt(c, transcript || null) }],
               `report-summary-${c.id}`,
+              providerId,
             );
             const text = (reply.content ?? "").trim();
             if (text) {
@@ -128,7 +129,7 @@ export function useWorkReport(projectId: string, projectName: string) {
         const reply = await invokeAiChat(
           [{ role: "user", content: buildReportPrompt(enriched, style, projectName) }],
           `report-${projectId}`,
-          undefined,
+          providerId,
           false,
           "zh-TW",
           true, // supportsArtifacts — 後端才會接上 artifact 協定的說明
