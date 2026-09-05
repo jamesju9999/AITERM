@@ -1649,9 +1649,23 @@ mod tests {
         );
 
         // The pre-existing on_data path must be untouched by fan-out.
+        //
+        // 這裡要輪詢、不能只 try_recv 抽一次：callback 走的是另一條
+        // mpsc 通道，跟上面兩個 broadcast 訂閱者是各自獨立的傳遞路徑，
+        // 兩邊沒有先後保證。抽乾當下 FANOUT 還沒送達的話，單次抽乾就會
+        // 誤判成「callback 壞了」——Linux CI 上就是這樣紅的。
         let mut via_callback = Vec::new();
-        while let Ok(chunk) = rx.try_recv() {
-            via_callback.extend_from_slice(&chunk);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            while let Ok(chunk) = rx.try_recv() {
+                via_callback.extend_from_slice(&chunk);
+            }
+            if via_callback.windows(6).any(|w| w == b"FANOUT")
+                || std::time::Instant::now() >= deadline
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
         }
         assert!(
             via_callback.windows(6).any(|w| w == b"FANOUT"),

@@ -411,6 +411,9 @@ mod registry_tests {
         let gone = reg.create(parent.path(), "gone", "").await.unwrap();
         let kept = reg.create(parent.path(), "kept", "").await.unwrap();
 
+        // 先關池子再刪：Windows 不允許刪除還有檔案被開著的目錄，
+        // 而 `tasks.db` 正被這個池子開著。
+        gone.pool.close().await;
         std::fs::remove_dir_all(&gone.path).unwrap();
         let evicted = reg.close_by_path(&gone.path);
 

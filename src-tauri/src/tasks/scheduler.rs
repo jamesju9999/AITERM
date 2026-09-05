@@ -525,6 +525,43 @@ mod loop_tests {
         (reg, handle, parent)
     }
 
+    /// 讓一個專案的資料夾「消失」。
+    ///
+    /// 必須先關掉連線池再刪資料夾：Windows 不允許刪除還有檔案被開著的
+    /// 目錄，而 `tasks.db` 正被這個池子開著——直接 `remove_dir_all` 在
+    /// Windows CI 上會失敗（實際踩過）。關掉池子不影響這幾個測試要驗的
+    /// 東西：`drain_once` 是先看資料夾在不在，根本還沒碰到池子。
+    async fn vanish(project: &ProjectHandle) {
+        project.pool.close().await;
+        std::fs::remove_dir_all(&project.path).unwrap();
+    }
+
+    /// 只記錄「誰被派工了」，不碰資料庫。資料夾已經被刪掉的專案沒辦法
+    /// 事後查它的資料庫，所以這幾個測試改看派工紀錄。
+    #[derive(Default)]
+    struct RecordingDispatcher {
+        dispatched: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingDispatcher {
+        fn ids(&self) -> Vec<String> {
+            self.dispatched.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Dispatcher for RecordingDispatcher {
+        async fn dispatch(&self, project: &ProjectHandle, task: &TaskRow) -> Result<(), String> {
+            self.dispatched.lock().unwrap().push(task.id.clone());
+            store::mark_dispatched(&project.pool, &task.id, &format!("fake-{}", task.id))
+                .await
+                .map_err(|e| e.to_string())?;
+            store::finish_task(&project.pool, &task.id, "success", None, None)
+                .await
+                .map_err(|e| e.to_string())
+        }
+    }
+
     /// A `Dispatcher` that never really spawns a PTY — it immediately marks
     /// the card running with a fake tab id and finishes it `success`, so we
     /// can assert the loop's promotion behaviour.
@@ -726,22 +763,28 @@ mod loop_tests {
         let real = store::create_task(&alive.pool, "real", "", "/r", true, false).await.unwrap();
         store::move_task(&alive.pool, &real, store::STATUS_QUEUED, 1.0).await.unwrap();
 
-        std::fs::remove_dir_all(&gone.path).unwrap();
-        drain_once(&reg, &FakeDispatcher, 5).await;
+        vanish(&gone).await;
+        let dispatcher = RecordingDispatcher::default();
+        drain_once(&reg, &dispatcher, 5).await;
 
-        assert_eq!(
-            store::get_task(&gone.pool, &ghost).await.unwrap().unwrap().status,
-            store::STATUS_QUEUED,
-            "資料夾已經不在的專案不該被派工"
-        );
-        assert_eq!(
-            store::get_task(&alive.pool, &real).await.unwrap().unwrap().status,
-            "done",
-            "其他專案必須照常運作"
-        );
+        // 用派工紀錄判斷，不回頭查 gone 的資料庫——資料夾都刪了，那個
+        // 連線池也已經關閉（Windows 上不關就刪不掉），查不動。
+        let dispatched = dispatcher.ids();
+        assert!(!dispatched.contains(&ghost), "資料夾已經不在的專案不該被派工");
+        assert!(dispatched.contains(&real), "其他專案必須照常運作");
     }
 
-    /// 互動卡片走的是另一條完全不受並行上限管制的通道，同樣要擋。
+    /// 互動卡片走的是另一條完全不受並行上限管制的通道，同樣不該從已消失
+    /// 的專案派工。
+    ///
+    /// **這是行為描述，不是迴歸偵測器**——實際做過突變驗證：把上面
+    /// `drain_once` 開頭的資料夾存在檢查整個拿掉，這個測試照樣是綠的。
+    /// 因為互動通道的錯誤處理本來就是每個專案各自 `break`，一個讀不到的
+    /// 專案只會讓它自己那圈結束，不會波及別人；真正會因為缺少檢查而全面
+    /// 停擺的是下面那條一般通道（`return`），那個由
+    /// `drain_once_skips_a_project_whose_folder_is_gone` 守著，而它會紅。
+    /// 留著這個測試是為了釘住「互動通道也不會派工給消失的專案」這件事，
+    /// 別誤以為它在保護那個過濾器。
     #[tokio::test]
     async fn drain_once_skips_a_vanished_project_in_the_interactive_lane_too() {
         let parent = tempfile::tempdir().unwrap();
@@ -751,12 +794,12 @@ mod loop_tests {
         let ghost = store::create_task(&gone.pool, "ghost", "", "/r", true, true).await.unwrap();
         store::move_task(&gone.pool, &ghost, store::STATUS_QUEUED, 1.0).await.unwrap();
 
-        std::fs::remove_dir_all(&gone.path).unwrap();
-        drain_once(&reg, &FakeDispatcher, 5).await;
+        vanish(&gone).await;
+        let dispatcher = RecordingDispatcher::default();
+        drain_once(&reg, &dispatcher, 5).await;
 
-        assert_eq!(
-            store::get_task(&gone.pool, &ghost).await.unwrap().unwrap().status,
-            store::STATUS_QUEUED,
+        assert!(
+            !dispatcher.ids().contains(&ghost),
             "互動卡片也不該從已消失的專案派出去"
         );
     }
