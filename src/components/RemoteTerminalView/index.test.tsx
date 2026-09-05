@@ -705,7 +705,12 @@ describe("RemoteTerminalView", () => {
       });
 
       await waitFor(() => expect(screen.getByText("echo hi")).toBeInTheDocument());
-      expect(scrollToSpy).toHaveBeenCalled();
+      // 捲動的 effect 依賴 visibleBlockCount，而那個計數要求卡片同時
+      // 有 `status !== "running"` 和 `renderedLines`。指令文字先進 DOM、
+      // renderedLines 稍後才設好時，這是兩次 render——機器夠快時兩者同
+      // 一批發生，CI 負載高時會分開，於是同步檢查會落在 effect 還沒跑
+      // 的那一幀。用 waitFor 讓它重試（條件本身沒放寬，仍要求真的捲了）。
+      await waitFor(() => expect(scrollToSpy).toHaveBeenCalled());
     } finally {
       scrollToSpy.mockRestore();
     }
