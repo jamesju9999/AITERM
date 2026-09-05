@@ -210,4 +210,26 @@ mod tests {
     fn title_from_html_is_none_when_there_is_no_title() {
         assert_eq!(title_from_html("<html><body>hi</body></html>"), None);
     }
+
+    /// 模型寫出來的 HTML 標籤大小寫不受我們控制。
+    #[test]
+    fn title_from_html_is_case_insensitive_about_the_tag() {
+        assert_eq!(
+            title_from_html("<HTML><HEAD><TITLE>大寫標籤</TITLE></HEAD></HTML>"),
+            Some("大寫標籤".to_string())
+        );
+    }
+
+    /// `find_ci` 之所以在**原字串**上比對，而不是先 `to_lowercase()` 再
+    /// 拿位移去切原字串，就是為了這種內容：土耳其文的 İ 小寫化之後位元組
+    /// 長度會變，位移就對不上，輕則取到錯的範圍、重則從非字元邊界切下去
+    /// 直接 panic。
+    ///
+    /// 已實際驗證這個測試會咬：把實作換回「先 to_lowercase 再取位移」，
+    /// 這一條會失敗。
+    #[test]
+    fn title_from_html_survives_content_whose_lowercase_form_is_longer() {
+        let html = "<html><title>İstanbul 專案</title></html>";
+        assert_eq!(title_from_html(html), Some("İstanbul 專案".to_string()));
+    }
 }
