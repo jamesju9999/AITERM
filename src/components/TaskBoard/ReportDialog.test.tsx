@@ -9,25 +9,38 @@ const cancel = vi.fn();
 const listProviders = vi.fn();
 const listTasks = vi.fn();
 let hookState: Record<string, unknown> = {};
+/** 讓測試拿到 hook 內部的 setHtml，用來模擬「產生完成」。 */
+let captureSetHtml: ((fn: (v: string) => void) => void) | null = null;
 
 vi.mock("../../ipc/reports", () => ({
   listReports: (...a: unknown[]) => listReports(...a),
   readReport: (...a: unknown[]) => readReport(...a),
   saveReport: vi.fn(),
 }));
-vi.mock("./useWorkReport", () => ({
-  useWorkReport: () => ({
-    generate,
-    cancel,
-    busy: false,
-    progress: null,
-    html: null,
-    error: null,
-    rawReply: null,
-    setHtml: vi.fn(),
-    ...hookState,
-  }),
-}));
+// `html` 用真的 useState 而不是靜態值：元件會呼叫 `setHtml(null)` 回到
+// 風格選擇頁、也會用它載入歷史報告，裸的 vi.fn() 模擬不出「setHtml 之後
+// html 真的變了」這件事，那些行為就測不到。初始值從 hookState 帶進來，
+// 讓各測試還是能指定一開始有沒有報告在看。
+vi.mock("./useWorkReport", async () => {
+  const { useState } = await import("react");
+  return {
+    useWorkReport: () => {
+      const [html, setHtml] = useState<string | null>((hookState.html as string | undefined) ?? null);
+      captureSetHtml?.(setHtml as (v: string) => void);
+      return {
+        generate,
+        cancel,
+        busy: false,
+        progress: null,
+        error: null,
+        rawReply: null,
+        ...hookState,
+        html,
+        setHtml,
+      };
+    },
+  };
+});
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn() }));
 vi.mock("../../ipc/fs", () => ({ writeTextFile: vi.fn() }));
 vi.mock("../../ipc/provider", () => ({
@@ -71,6 +84,8 @@ describe("ReportDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hookState = {};
+    captureSetHtml = null;
+    generate.mockReset();
     listReports.mockResolvedValue([]);
     readReport.mockResolvedValue("<html><title>舊報告</title></html>");
     listProviders.mockResolvedValue(PROVIDERS);
@@ -229,6 +244,49 @@ describe("ReportDialog", () => {
     mount();
     await screen.findByTestId("report-scope");
     expect(screen.queryByTestId("report-scope-pending")).not.toBeInTheDocument();
+  });
+
+  // 實機回報：點了歷史報告之後，風格選擇區就永遠隱藏了（條件是
+  // !started && !html），只能關掉視窗重開才回得去。
+  it("看完報告後可以回去產生新的一份", async () => {
+    hookState = { html: "<html><title>舊報告</title></html>" };
+    mount();
+
+    // 有報告在看的時候，風格選擇區是收起來的
+    expect(screen.queryByTestId("report-style-review")).not.toBeInTheDocument();
+
+    await userEvent.click(await screen.findByTestId("report-new"));
+    expect(await screen.findByTestId("report-style-review")).toBeInTheDocument();
+  });
+
+  // 上面那條只涵蓋「從歷史點開報告」（started 仍是 false）。自己產生完
+  // 之後 started 是 true，只清 html 不清 started 一樣回不去——實測過
+  // 這個突變不會被上面那條抓到，所以要分開測。
+  it("自己產生完報告後也能回去再產一份", async () => {
+    // 模擬「按了風格 → 產生完成」：generate 一被呼叫就讓 hook 交出 html。
+    // 這樣元件的 started 是 true（自己按的），html 也有值——只清 html
+    // 不清 started 的話，風格選擇區的 `!started && !html` 依然不成立。
+    let setHtmlFromHook: ((v: string) => void) | null = null;
+    generate.mockImplementation(() => {
+      setHtmlFromHook?.("<html><title>剛產的</title></html>");
+    });
+    captureSetHtml = (fn) => {
+      setHtmlFromHook = fn;
+    };
+
+    mount();
+    await screen.findByText("Provider B");
+    await userEvent.click(await screen.findByTestId("report-style-review"));
+    await screen.findByTestId("report-new"); // 報告出來了
+
+    await userEvent.click(screen.getByTestId("report-new"));
+    expect(await screen.findByTestId("report-style-review")).toBeInTheDocument();
+  });
+
+  it("沒有報告在看的時候不顯示「產生新報告」", async () => {
+    mount();
+    await screen.findByTestId("report-style-review");
+    expect(screen.queryByTestId("report-new")).not.toBeInTheDocument();
   });
 
   it("有原始回覆時顯示出來", async () => {

@@ -189,6 +189,21 @@ export function ReportDialog({
     void Promise.resolve(generate(style, selectedProviderId || undefined)).then(refreshHistory);
   };
 
+  /**
+   * 回到風格選擇頁。
+   *
+   * 風格選擇區的顯示條件是 `!started && !html`，所以只要看過任何一份
+   * 報告（自己產的或從歷史點開的），它就會一直隱藏著——實機回報過只能
+   * 關掉視窗重開才回得去。這裡把三個狀態一起清掉：`html` 讓選擇區回來、
+   * `started` 讓它不會被上一次的產生記錄擋住、`picked` 讓歷史清單的
+   * 選中標記消失。
+   */
+  const backToPicker = () => {
+    setHtml(null);
+    setStarted(false);
+    setPicked(null);
+  };
+
   const onCancel = () => {
     // cancel() 不會中斷正在飛的那次 AI 呼叫（invokeAiChat 沒有 abort
     // 機制），所以取消後最久還要等一次呼叫回來。要讓使用者知道這件事，
@@ -223,6 +238,15 @@ export function ReportDialog({
         <div className="report-head">
           <h3>{t.report_title} — {projectName}</h3>
           <div className="report-head-actions">
+            {html && (
+              <button
+                className="tb-btn tb-btn--ghost"
+                data-testid="report-new"
+                onClick={backToPicker}
+              >
+                {t.report_new}
+              </button>
+            )}
             {html && (
               <button className="tb-btn tb-btn--ghost" onClick={() => void saveAs()}>
                 {t.report_save_as}
