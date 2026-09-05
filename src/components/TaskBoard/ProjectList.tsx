@@ -1,30 +1,26 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import {
-  listProjects,
-  openProject,
-  removeProject,
-  type ProjectInfo,
-} from "../../ipc/projects";
-import { onTasksUpdated } from "../../ipc/tasks";
+import { openProject, removeProject, type ProjectInfo } from "../../ipc/projects";
 import { ProjectCreateDialog } from "./ProjectCreateDialog";
 
-export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void }) {
+/**
+ * 純呈現：專案清單與它的重新載入都由 TaskBoardView 擁有（分頁列也要用同
+ * 一份），這裡不再自己抓一次、也不再自己訂閱 tasks-updated——那會是同一
+ * 份資料的第二個來源，兩邊還可能不同步。
+ */
+export function ProjectList({
+  projects,
+  onRefresh,
+  onOpen,
+}: {
+  projects: ProjectInfo[];
+  onRefresh: () => Promise<void>;
+  onOpen: (projectId: string) => void;
+}) {
   const { t } = useLocale();
-  const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [creating, setCreating] = useState(false);
-
-  const refresh = useCallback(async () => {
-    setProjects(await listProjects());
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-    const un = onTasksUpdated(() => void refresh());
-    return () => void un.then((f) => f());
-  }, [refresh]);
 
   const statusLabel = (p: ProjectInfo) =>
     ({
@@ -41,14 +37,14 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
     if (!(await confirm(t.proj_remove_confirm))) return;
     const deleteFolder = await confirm(t.proj_remove_folder_confirm);
     await removeProject(p.id, deleteFolder);
-    await refresh();
+    await onRefresh();
   };
 
   const pickExisting = async () => {
     const picked = await open({ filters: [{ name: "AITerm 專案", extensions: ["aitprj"] }] });
     if (typeof picked !== "string") return;
     await openProject(picked);
-    await refresh();
+    await onRefresh();
   };
 
   return (
@@ -126,8 +122,10 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
           onClose={() => setCreating(false)}
           onCreated={(id) => {
             setCreating(false);
-            void refresh();
-            onOpen(id);
+            // 先等清單重新載入再開——新專案的分頁要顯示得先存在於
+            // projects 裡（TaskBoardView 是照 projects 過濾分頁列的），
+            // 不等的話會閃一下專案總覽才進去。
+            void onRefresh().then(() => onOpen(id));
           }}
         />
       )}

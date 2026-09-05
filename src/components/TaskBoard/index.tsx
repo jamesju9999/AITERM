@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 
 import { listProjects, openProject, type ProjectInfo } from "../../ipc/projects";
@@ -35,40 +35,31 @@ export function TaskBoardView() {
   );
   const [showList, setShowList] = useState(false);
 
+  // 這個元件是覆蓋畫面（TerminalApp 的 `boardActive && <TaskBoardView />`），
+  // 使用者一離開就整個卸載，而 refresh() 會被每一次 tasks-updated 觸發——
+  // 所以抓完之後要先確認自己還活著才 setState。同 ProjectBoard 的作法。
+  const mounted = useRef(true);
+
   const refresh = useCallback(async () => {
-    setProjects(await listProjects());
+    const rows = await listProjects();
+    if (!mounted.current) return;
+    setProjects(rows);
   }, []);
 
   useEffect(() => {
+    mounted.current = true;
     void refresh();
     const un = onTasksUpdated(() => void refresh());
-    return () => void un.then((f) => f());
+    return () => {
+      mounted.current = false;
+      void un.then((f) => f());
+    };
   }, [refresh]);
 
-  // 還原時過濾掉已不存在的專案——資料夾可能在上次關閉之後被刪掉了。
-  // 等 projects 真的載進來才做，否則第一次 render（projects 還是空陣列）
-  // 會把所有分頁都當成不存在而清光。
-  useEffect(() => {
-    if (projects.length === 0) return;
-    const known = new Set(projects.map((p) => p.id));
-    setOpenIds((prev) => {
-      const next = prev.filter((id) => known.has(id));
-      return next.length === prev.length ? prev : next;
-    });
-  }, [projects]);
-
-  // 讓 activeId 永遠是 openIds 的合法成員之一。這一個 effect 同時處理
-  // 兩種情況：(a) 上面那個 effect 把已消失的專案篩掉之後，被還原的
-  // activeId 可能已經不在清單裡；(b) 分頁被關閉之後需要選出下一個
-  // 活躍分頁——落到剩下的最後一個。兩者共用同一段邏輯，不需要
-  // closeTab 自己算一次「剩下的最後一個」。
-  useEffect(() => {
-    setActiveId((current) => {
-      if (current !== null && openIds.includes(current)) return current;
-      return openIds.length > 0 ? openIds[openIds.length - 1] : null;
-    });
-  }, [openIds]);
-
+  // 存的是使用者的意圖（未過濾的 openIds/activeId），不是底下算出來的顯示
+  // 結果：projects 還沒載進來時 visibleOpenIds 必定是空的，存它等於在每次
+  // 啟動的前一瞬間把使用者的分頁清單洗掉。反過來，暫時讀不到的專案（外接
+  // 磁碟還沒掛上之類）之後回來時，分頁也就跟著回來。
   useEffect(() => {
     localStorage.setItem(OPEN_KEY, JSON.stringify(openIds));
   }, [openIds]);
@@ -85,9 +76,8 @@ export function TaskBoardView() {
   }, []);
 
   /** 只把分頁從列上拿掉。不移除專案、不刪檔案、不影響派工。
-   * activeId 的修正交給上面那個同步 effect 處理——不在這裡直接
-   * setActiveId，避免兩個 setState 對 openIds 的認知在同一次事件
-   * 處理中不一致。 */
+   * 不在這裡挑「下一個活躍分頁」——底下的 `active` 是從 openIds 推導
+   * 出來的，關掉目前這個就自動落到剩下的最後一個。 */
   const closeTab = useCallback((id: string) => {
     setOpenIds((prev) => prev.filter((x) => x !== id));
   }, []);
@@ -102,16 +92,22 @@ export function TaskBoardView() {
     activate(id);
   }, [activate, refresh]);
 
+  // 分頁列與目前分頁都是**衍生**狀態，在 render 當下算出來，不用 effect
+  // ＋ setState 去同步：資料夾可能在上次關閉之後被刪掉，還原回來的 id 不一
+  // 定還存在；分頁被關掉之後也要自動落到剩下的最後一個。用 effect 同步會多
+  // 跑一次 render，而且中間那一幀畫的是還沒修正的錯誤畫面。
   const visibleOpenIds = openIds.filter((id) => projects.some((p) => p.id === id));
   // 先算出一個確定是 string 的 active，再用它做分支——寫成
   // `active !== null` 的布林旗標的話，TypeScript 不會據此收窄
   // 底下 JSX 中 active 的型別，projectId={active} 會是型別錯誤。
-  const active = visibleOpenIds.includes(activeId ?? "") ? activeId : null;
+  const active: string | null = visibleOpenIds.includes(activeId ?? "")
+    ? activeId
+    : (visibleOpenIds[visibleOpenIds.length - 1] ?? null);
 
   if (showList || active === null) {
     return (
       <div className="task-board">
-        <ProjectList onOpen={activate} />
+        <ProjectList projects={projects} onRefresh={refresh} onOpen={activate} />
       </div>
     );
   }

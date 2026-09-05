@@ -137,9 +137,11 @@ vi.mock("../ipc/tasks", () => ({
   listTasks: vi.fn().mockResolvedValue([]),
   onTasksUpdated: vi.fn().mockResolvedValue(() => {}),
   moveTask: vi.fn(),
+  markTaskDone: vi.fn(),
   stopTask: vi.fn(),
   deleteTask: vi.fn(),
   readTranscript: vi.fn().mockResolvedValue(""),
+  saveTranscript: vi.fn(),
   createTask: vi.fn(),
   updateTask: vi.fn(),
   cloneTask: vi.fn(),
@@ -147,6 +149,28 @@ vi.mock("../ipc/tasks", () => ({
   removeAttachment: vi.fn(),
   getTaskBoardConfig: vi.fn().mockResolvedValue({ max_concurrent: 2, claude_command: "claude" }),
   setTaskBoardConfig: vi.fn(),
+}));
+
+// The board is per-project now: TaskBoardView opens on the project overview and
+// only renders the four columns once a project is opened. One project here, so
+// each test below can click into it — without this the overview would hit the
+// real `invoke` (the global mock never resolves, so the list would hang empty).
+vi.mock("../ipc/projects", () => ({
+  listProjects: vi.fn().mockResolvedValue([
+    {
+      id: "p1",
+      name: "demo-project",
+      description: "",
+      path: "/p/demo",
+      status: "ok",
+      counts: { planning: 0, queued: 0, running: 0, done: 0 },
+      error: null,
+    },
+  ]),
+  removeProject: vi.fn(),
+  openProject: vi.fn(),
+  createProject: vi.fn(),
+  usedDirs: vi.fn().mockResolvedValue([]),
 }));
 
 import { TerminalApp } from "./TerminalApp";
@@ -167,12 +191,20 @@ function renderApp() {
   );
 }
 
+/** Opens the Task Board view slot and drills into the one mocked project, so
+ * the four columns are on screen — the board itself, not just the project
+ * overview the slot now opens on. */
+async function openBoard(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: /工作看板|Task Board/ }));
+  await user.click(await screen.findByText("demo-project"));
+  expect(await screen.findByText(/計畫中|Planned/)).toBeInTheDocument();
+}
+
 describe("TerminalApp: Task Board view slot (Task 4)", () => {
   it("clicking the sidebar 工作看板 button shows the board and hides Home", async () => {
     renderApp();
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: /工作看板|Task Board/ }));
-    expect(await screen.findByText(/計畫中|Planned/)).toBeInTheDocument();
+    await openBoard(user);
     // HomeView (stubbed) unmounts once homeActive flips false.
     expect(screen.queryByText("select-first-tab")).not.toBeInTheDocument();
   });
@@ -187,8 +219,7 @@ describe("TerminalApp: Task Board view slot (Task 4)", () => {
   it("does not switch away from the task board when a coordination tab spawns", async () => {
     renderApp();
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: /工作看板|Task Board/ }));
-    expect(await screen.findByText(/計畫中|Planned/)).toBeInTheDocument();
+    await openBoard(user);
 
     expect(capturedCoordinationSpawn).not.toBeNull();
     capturedCoordinationSpawn!({ session_id: "spawned-session", command: "claude" });

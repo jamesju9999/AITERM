@@ -3,15 +3,21 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const listProjects = vi.fn();
+// Which project the mounted board actually fetches for is the only observable
+// proof of *which* project is active — the tab bar filters unknown ids on its
+// own, so a tab-level assertion alone can't tell a correct active project from
+// a stale one.
+const listTasks = vi.fn();
 
 vi.mock("../../ipc/projects", () => ({
   listProjects: (...a: unknown[]) => listProjects(...a),
   removeProject: vi.fn(),
   openProject: vi.fn(),
   createProject: vi.fn(),
+  usedDirs: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("../../ipc/tasks", () => ({
-  listTasks: vi.fn().mockResolvedValue([]),
+  listTasks: (...a: unknown[]) => listTasks(...a),
   onTasksUpdated: vi.fn().mockResolvedValue(() => {}),
   moveTask: vi.fn(),
   markTaskDone: vi.fn(),
@@ -55,6 +61,7 @@ describe("TaskBoardView 路由", () => {
     vi.clearAllMocks();
     localStorage.clear();
     listProjects.mockResolvedValue([proj("alpha"), proj("beta")]);
+    listTasks.mockResolvedValue([]);
   });
 
   it("一開始顯示專案總覽，不顯示看板", async () => {
@@ -96,5 +103,36 @@ describe("TaskBoardView 路由", () => {
     mount();
     expect(await screen.findByTestId("project-tab-alpha")).toBeInTheDocument();
     expect(screen.queryByTestId("project-tab-gone")).not.toBeInTheDocument();
+  });
+
+  // 上面那個測試單靠分頁列是抓不到 bug 的：ProjectTabBar 自己就會把
+  // projects 裡查不到的 id 濾掉，所以就算 TaskBoardView 完全不過濾、
+  // 還把 active 留在已消失的 "gone" 上，分頁列看起來仍然正確——底下
+  // 卻掛著一個指向不存在專案的看板。改用「看板實際去抓誰的工作」來釘。
+  it("還原時的活躍專案已不存在，看板要落到還在的專案而不是已消失的那個", async () => {
+    localStorage.setItem("aiterm_board_open_projects", JSON.stringify(["gone", "alpha"]));
+    localStorage.setItem("aiterm_board_active_project", "gone");
+    mount();
+    await screen.findByTestId("column-planning");
+    await waitFor(() => expect(listTasks).toHaveBeenCalledWith("alpha"));
+    expect(listTasks).not.toHaveBeenCalledWith("gone");
+  });
+
+  // 關掉「目前這個」分頁時，還有別的分頁開著就該接手，不該退回專案總覽。
+  it("關閉活躍分頁後接手剩下的分頁，而不是回到專案總覽", async () => {
+    mount();
+    await userEvent.click(await screen.findByText("alpha"));
+    await screen.findByTestId("column-planning");
+    await userEvent.click(screen.getByTestId("project-tab-back"));
+    await userEvent.click(await screen.findByText("beta"));
+    await waitFor(() => expect(listTasks).toHaveBeenCalledWith("beta"));
+
+    listTasks.mockClear();
+    await userEvent.click(screen.getByTestId("project-tab-close-beta"));
+
+    expect(await screen.findByTestId("project-tab-alpha")).toBeInTheDocument();
+    expect(screen.queryByTestId("project-tab-beta")).not.toBeInTheDocument();
+    await waitFor(() => expect(listTasks).toHaveBeenCalledWith("alpha"));
+    expect(screen.getByTestId("column-planning")).toBeInTheDocument();
   });
 });

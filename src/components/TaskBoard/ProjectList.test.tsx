@@ -2,30 +2,24 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const listProjects = vi.fn();
 const removeProject = vi.fn();
 const confirmDialog = vi.fn();
 
 vi.mock("../../ipc/projects", () => ({
-  listProjects: (...a: unknown[]) => listProjects(...a),
   removeProject: (...a: unknown[]) => removeProject(...a),
   openProject: vi.fn(),
+  createProject: vi.fn(),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   confirm: (...a: unknown[]) => confirmDialog(...a),
   open: vi.fn(),
 }));
-// onTasksUpdated calls the real @tauri-apps/api/event listen() under the
-// hood, which throws outside a real Tauri webview — same reason
-// index.test.tsx mocks the whole module (see its onTasksUpdated mock).
-vi.mock("../../ipc/tasks", () => ({
-  onTasksUpdated: vi.fn().mockResolvedValue(() => {}),
-}));
 
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import { ProjectList } from "./ProjectList";
+import type { ProjectInfo } from "../../ipc/projects";
 
-const project = (over: Record<string, unknown> = {}) => ({
+const project = (over: Partial<ProjectInfo> = {}): ProjectInfo => ({
   id: "p1",
   name: "makemoney",
   description: "賺錢",
@@ -36,17 +30,20 @@ const project = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const mount = (onOpen = vi.fn()) =>
+// 清單本身是 props 進來的（TaskBoardView 擁有那份資料），所以測試直接給。
+const onRefresh = vi.fn<() => Promise<void>>();
+
+const mount = (projects: ProjectInfo[] = [project()], onOpen = vi.fn()) =>
   render(
     <LocaleProvider>
-      <ProjectList onOpen={onOpen} />
+      <ProjectList projects={projects} onRefresh={onRefresh} onOpen={onOpen} />
     </LocaleProvider>,
   );
 
 describe("ProjectList", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    listProjects.mockResolvedValue([project()]);
+    onRefresh.mockResolvedValue(undefined);
     removeProject.mockResolvedValue(undefined);
   });
 
@@ -64,32 +61,31 @@ describe("ProjectList", () => {
   });
 
   it("沒有執行中工作時不顯示指示點", async () => {
-    listProjects.mockResolvedValue([
-      project({ counts: { planning: 1, queued: 0, running: 0, done: 0 } }),
-    ]);
-    mount();
+    mount([project({ counts: { planning: 1, queued: 0, running: 0, done: 0 } })]);
     await screen.findByText("makemoney");
     expect(screen.queryByTestId("project-running-p1")).not.toBeInTheDocument();
   });
 
   it("完全沒有專案時顯示空狀態", async () => {
-    listProjects.mockResolvedValue([]);
-    mount();
+    mount([]);
     expect(await screen.findByTestId("project-empty-state")).toBeInTheDocument();
   });
 
   it("點專案卡片會呼叫 onOpen", async () => {
     const onOpen = vi.fn();
-    mount(onOpen);
+    mount([project()], onOpen);
     await userEvent.click(await screen.findByText("makemoney"));
     expect(onOpen).toHaveBeenCalledWith("p1");
   });
 
   it("遺失的專案顯示錯誤而非當機", async () => {
-    listProjects.mockResolvedValue([
-      project({ status: "missing", error: "專案資料夾或專案檔不存在", counts: { planning: 0, queued: 0, running: 0, done: 0 } }),
+    mount([
+      project({
+        status: "missing",
+        error: "專案資料夾或專案檔不存在",
+        counts: { planning: 0, queued: 0, running: 0, done: 0 },
+      }),
     ]);
-    mount();
     expect(await screen.findByTestId("project-error-p1")).toHaveTextContent("不存在");
   });
 
@@ -100,6 +96,9 @@ describe("ProjectList", () => {
     await userEvent.click(screen.getByTestId("project-remove-p1"));
     await waitFor(() => expect(removeProject).toHaveBeenCalledWith("p1", false));
     expect(confirmDialog).toHaveBeenCalledTimes(2);
+    // 清單改由擁有者（TaskBoardView）持有，所以移除之後一定要請它重抓，
+    // 否則被刪掉的卡片會繼續留在畫面上。
+    await waitFor(() => expect(onRefresh).toHaveBeenCalled());
   });
 
   it("移除專案：第二段答是才刪資料夾", async () => {
@@ -117,5 +116,6 @@ describe("ProjectList", () => {
     await userEvent.click(screen.getByTestId("project-remove-p1"));
     await waitFor(() => expect(confirmDialog).toHaveBeenCalledTimes(1));
     expect(removeProject).not.toHaveBeenCalled();
+    expect(onRefresh).not.toHaveBeenCalled();
   });
 });
