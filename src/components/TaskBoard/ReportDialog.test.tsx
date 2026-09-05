@@ -128,6 +128,21 @@ describe("ReportDialog", () => {
     expect(await screen.findByText("第三季進度")).toBeInTheDocument();
   });
 
+  // 實機回報：同一個專案的報告標題幾乎都一樣（AI 會用專案名當標題），
+  // 只列標題根本分不出哪份是哪份。產生時間才是實際用來辨識的資訊。
+  it("每份歷史報告都顯示產生時間", async () => {
+    listReports.mockResolvedValue([
+      { filename: "2026-09-05-1430.html", saved_at: 1788600000, title: "TEST-1 工作報告" },
+      { filename: "2026-09-05-1445.html", saved_at: 1788600900, title: "TEST-1 工作報告" },
+    ]);
+    mount();
+    await screen.findAllByText("TEST-1 工作報告");
+    const stamps = screen.getAllByTestId(/^report-history-time-/);
+    expect(stamps).toHaveLength(2);
+    // 兩份標題相同，時間必須不同才分得出來——這正是這個功能存在的理由。
+    expect(stamps[0].textContent).not.toBe(stamps[1].textContent);
+  });
+
   it("沒有標題的報告顯示檔名", async () => {
     listReports.mockResolvedValue([
       { filename: "2026-09-05-1430.html", saved_at: 1788600000, title: null },

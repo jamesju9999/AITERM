@@ -20,6 +20,26 @@ const PROVIDER_KEY = "aiterm_report_provider";
  * 刻意不給 `allow-same-origin`，所以報告裡的 script 碰不到主視窗，
  * 更碰不到 Tauri 的 IPC。不要為了任何理由改那個設定。
  */
+/**
+ * 歷史清單上的產生時間。
+ *
+ * 同一個專案的報告標題幾乎都一樣（AI 傾向拿專案名當標題），所以只列
+ * 標題根本分不出哪份是哪份——時間才是實際用來辨識的資訊。
+ *
+ * `saved_at` 是後端給的 Unix 秒（檔案的修改時間）。用 `toLocaleString`
+ * 而不是自己格式化：使用者的日期慣例交給平台決定就好。
+ */
+function formatSavedAt(savedAt: number): string {
+  if (!savedAt) return "";
+  return new Date(savedAt * 1000).toLocaleString(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function ReportDialog({
   projectId,
   projectName,
@@ -149,7 +169,13 @@ export function ReportDialog({
                   className={`report-history-item${picked === h.filename ? " report-history-item--active" : ""}`}
                   onClick={() => void openHistory(h)}
                 >
-                  {h.title ?? h.filename}
+                  <span className="report-history-item-title">{h.title ?? h.filename}</span>
+                  <span
+                    className="report-history-item-time"
+                    data-testid={`report-history-time-${h.filename}`}
+                  >
+                    {formatSavedAt(h.saved_at)}
+                  </span>
                 </button>
               ))
             )}
