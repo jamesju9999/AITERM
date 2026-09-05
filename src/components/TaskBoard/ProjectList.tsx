@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { confirm, open } from "@tauri-apps/plugin-dialog";
+import { confirm, message, open } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import { openProject, removeProject, type ProjectInfo } from "../../ipc/projects";
@@ -34,9 +34,24 @@ export function ProjectList({
   // 必須用 @tauri-apps/plugin-dialog 的非同步 confirm，不可用
   // window.confirm——Tauri 的 webview 沒有真正實作它（見 TaskCard.tsx:33 的註解）。
   const remove = async (p: ProjectInfo) => {
+    // 後端一定會拒絕移除還有工作在跑的專案，所以在問任何問題之前就擋下來。
+    // 不擋的話使用者會被一路帶到「要連同磁碟上的資料夾一起刪除嗎？此動作
+    // 無法復原」——整個流程最危險的一問，卻問在一個注定失敗的操作上。
+    if (p.counts.running > 0) {
+      await message(t.proj_remove_running_blocked, { title: p.name, kind: "warning" });
+      return;
+    }
     if (!(await confirm(t.proj_remove_confirm))) return;
     const deleteFolder = await confirm(t.proj_remove_folder_confirm);
-    await removeProject(p.id, deleteFolder);
+    try {
+      await removeProject(p.id, deleteFolder);
+    } catch (e) {
+      // counts 只是上一次 projects_list 的快照，可能在按下去之前就過期
+      // （工作剛開始跑）。後端的拒絕要講出來，不能靜靜失敗——那會讓
+      // 使用者以為自己按錯了。
+      await message(`${t.proj_remove_failed}${String(e)}`, { title: p.name, kind: "error" });
+      return;
+    }
     await onRefresh();
   };
 
