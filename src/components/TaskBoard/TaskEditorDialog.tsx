@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
+import { usedDirs } from "../../ipc/projects";
 import {
   addAttachment,
   createTask,
@@ -38,6 +39,19 @@ export function TaskEditorDialog({
   // `save()` right after that id comes back.
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
+
+  // 專案不綁資料夾（工作可散布在多個 repo），所以列出這個專案已經
+  // 用過的目錄讓使用者一鍵選取，不必每次重新瀏覽。
+  const [dirChoices, setDirChoices] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void usedDirs(projectId).then((dirs) => {
+      if (alive) setDirChoices(dirs);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [projectId]);
 
   const pickDir = async () => {
     const picked = await open({ directory: true, defaultPath: dir || undefined });
@@ -128,11 +142,31 @@ export function TaskEditorDialog({
         <label className="task-field">
           <span className="task-field-label">{t.board_card_folder}</span>
           <div className="task-field-row">
-            <input className="task-field-input" value={dir} onChange={(e) => setDir(e.target.value)} />
+            <input
+              className="task-field-input"
+              data-testid="task-dir-input"
+              value={dir}
+              onChange={(e) => setDir(e.target.value)}
+            />
             <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void pickDir()}>
               {t.board_card_folder_pick}
             </button>
           </div>
+          {dirChoices.length > 0 && (
+            <div className="task-used-dirs" data-testid="used-dirs-row">
+              {dirChoices.map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  className="tb-btn tb-btn--ghost tb-btn--tiny"
+                  data-testid={`used-dir-${d}`}
+                  onClick={() => setDir(d)}
+                >
+                  📁 {d}
+                </button>
+              ))}
+            </div>
+          )}
         </label>
 
         <label className="task-field task-field--checkbox">
