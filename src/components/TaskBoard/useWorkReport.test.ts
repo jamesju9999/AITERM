@@ -146,6 +146,23 @@ describe("useWorkReport", () => {
     expect(invokeAiChat.mock.calls[0][5]).toBe(true);
   });
 
+  it("把選中的 providerId 傳給兩階段的 invokeAiChat", async () => {
+    listTasks.mockResolvedValue([card({ id: "a", status: "done" })]);
+    invokeAiChat
+      .mockResolvedValueOnce({ content: "摘要 A", tool_calls: [] })
+      .mockResolvedValueOnce({ content: ARTIFACT, tool_calls: [] });
+
+    const { result } = renderHook(() => useWorkReport("p1", "我的專案"));
+    await act(async () => { await result.current.generate("review", "provider-x"); });
+
+    expect(invokeAiChat).toHaveBeenCalledTimes(2);
+    // 第一階段：第三個參數
+    expect(invokeAiChat.mock.calls[0][2]).toBe("provider-x");
+    // 第二階段：第三個參數，且不能動到 supportsArtifacts（第六個參數）
+    expect(invokeAiChat.mock.calls[1][2]).toBe("provider-x");
+    expect(invokeAiChat.mock.calls[1][5]).toBe(true);
+  });
+
   it("存檔失敗時報告仍然顯示，並說明沒存成功", async () => {
     listTasks.mockResolvedValue([card({ ai_summary: "有了" })]);
     invokeAiChat.mockResolvedValue({ content: ARTIFACT, tool_calls: [] });

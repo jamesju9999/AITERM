@@ -621,6 +621,17 @@
   overflow-y: auto;
 }
 
+.report-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.report-model-row-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 .report-style-picker {
   display: flex;
   gap: 12px;

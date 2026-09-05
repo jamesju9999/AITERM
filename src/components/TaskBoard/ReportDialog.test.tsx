@@ -6,6 +6,7 @@ const listReports = vi.fn();
 const readReport = vi.fn();
 const generate = vi.fn();
 const cancel = vi.fn();
+const listProviders = vi.fn();
 let hookState: Record<string, unknown> = {};
 
 vi.mock("../../ipc/reports", () => ({
@@ -28,9 +29,34 @@ vi.mock("./useWorkReport", () => ({
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn() }));
 vi.mock("../../ipc/fs", () => ({ writeTextFile: vi.fn() }));
+vi.mock("../../ipc/provider", () => ({
+  listProviders: (...a: unknown[]) => listProviders(...a),
+}));
+// ModelPickerButton 會拉 useProviderQuota / usageQuotaAll，兩者都打真的 IPC。
+// 一旦選中的 provider id 是真的字串（本檔的情境幾乎都是），這裡就會被呼叫，
+// 不 mock 掉的話會打到不存在的 Tauri invoke。
+vi.mock("../../ipc/usage", () => ({
+  usageQuota: vi.fn().mockResolvedValue({ status: "not_applicable", provider_id: "x" }),
+  usageQuotaAll: vi.fn().mockResolvedValue([]),
+  primaryWindow: () => null,
+}));
 
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import { ReportDialog } from "./ReportDialog";
+import type { ProviderInfo } from "../../ipc/provider";
+
+const PROVIDERS: ProviderInfo[] = [
+  {
+    id: "p-a", display_name: "Provider A", provider_type: "anthropic",
+    base_url: null, oauth_client_id: null, model: "claude-x",
+    supports_json_mode: true, has_api_key: true, is_default: false, auth_method: null,
+  },
+  {
+    id: "p-b", display_name: "Provider B", provider_type: "openai",
+    base_url: null, oauth_client_id: null, model: "gpt-x",
+    supports_json_mode: true, has_api_key: true, is_default: true, auth_method: null,
+  },
+];
 
 const mount = () =>
   render(
@@ -45,6 +71,7 @@ describe("ReportDialog", () => {
     hookState = {};
     listReports.mockResolvedValue([]);
     readReport.mockResolvedValue("<html><title>舊報告</title></html>");
+    listProviders.mockResolvedValue(PROVIDERS);
   });
 
   it("開啟時先讓使用者選風格", async () => {
@@ -53,16 +80,44 @@ describe("ReportDialog", () => {
     expect(screen.getByTestId("report-style-formal")).toBeInTheDocument();
   });
 
-  it("選了風格才開始產生", async () => {
+  it("選了風格才開始產生，並把選中的模型記住", async () => {
     mount();
+    await screen.findByText("Provider B"); // 等預設供應商選好
     await userEvent.click(await screen.findByTestId("report-style-review"));
-    expect(generate).toHaveBeenCalledWith("review");
+    expect(generate).toHaveBeenCalledWith("review", "p-b");
+    expect(localStorage.getItem("aiterm_report_provider")).toBe("p-b");
   });
 
   it("另一種風格傳的是 formal", async () => {
     mount();
+    await screen.findByText("Provider B");
     await userEvent.click(await screen.findByTestId("report-style-formal"));
-    expect(generate).toHaveBeenCalledWith("formal");
+    expect(generate).toHaveBeenCalledWith("formal", "p-b");
+  });
+
+  it("列出可選的模型，預設選中預設供應商", async () => {
+    mount();
+    expect(await screen.findByText("Provider B")).toBeInTheDocument();
+  });
+
+  it("記住上次選的模型", async () => {
+    localStorage.setItem("aiterm_report_provider", "p-a");
+    mount();
+    expect(await screen.findByText("Provider A")).toBeInTheDocument();
+  });
+
+  it("記住的模型已經不存在時退回預設", async () => {
+    localStorage.setItem("aiterm_report_provider", "does-not-exist");
+    mount();
+    expect(await screen.findByText("Provider B")).toBeInTheDocument();
+  });
+
+  it("產生時把選中的模型傳給 generate", async () => {
+    localStorage.setItem("aiterm_report_provider", "p-a");
+    mount();
+    await screen.findByText("Provider A");
+    await userEvent.click(await screen.findByTestId("report-style-review"));
+    expect(generate).toHaveBeenCalledWith("review", "p-a");
   });
 
   it("列出歷史報告", async () => {

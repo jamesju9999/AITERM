@@ -3,10 +3,15 @@ import { save } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import { ArtifactHtmlFrame } from "../ArtifactPanel/ArtifactHtmlFrame";
+import { ModelPickerButton } from "../ModelPickerButton";
 import { writeTextFile } from "../../ipc/fs";
+import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { listReports, readReport, type ReportInfo } from "../../ipc/reports";
 import { useWorkReport } from "./useWorkReport";
 import type { ReportStyle } from "./reportPrompts";
+
+/** 記住上次選的模型，key 沿用這個 repo「記住偏好」的慣例。 */
+const PROVIDER_KEY = "aiterm_report_provider";
 
 /**
  * 工作報告視窗：先選風格 → 產生 → 呈現，側邊可切換這個專案的歷史報告。
@@ -33,6 +38,8 @@ export function ReportDialog({
   const [picked, setPicked] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [selectedProviderId, setSelectedProviderId] = useState("");
 
   const refreshHistory = useCallback(async () => {
     setHistory(await listReports(projectId));
@@ -56,13 +63,33 @@ export function ReportDialog({
     };
   }, [projectId]);
 
+  // 載入可選的模型清單，並決定預設選中哪一個：上次記住的 → is_default →
+  // 清單第一個。記住的 id 若已經不在清單裡（provider 被刪掉了），不能卡住
+  // 選不到任何東西，一樣要退回預設。
+  useEffect(() => {
+    let alive = true;
+    void listProviders().then((list) => {
+      if (!alive) return;
+      setProviders(list);
+      const remembered = localStorage.getItem(PROVIDER_KEY);
+      const fallback = list.find((p) => p.is_default)?.id ?? list[0]?.id ?? "";
+      setSelectedProviderId(
+        remembered && list.some((p) => p.id === remembered) ? remembered : fallback,
+      );
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const start = (style: ReportStyle) => {
     setStarted(true);
     setPicked(null);
     setCancelling(false);
+    if (selectedProviderId) localStorage.setItem(PROVIDER_KEY, selectedProviderId);
     // `generate` 的回傳型別是 Promise<void>，但測試裡的 mock 版本是
     // `vi.fn()`（回傳 undefined）——包一層 Promise.resolve 讓兩邊都安全。
-    void Promise.resolve(generate(style)).then(refreshHistory);
+    void Promise.resolve(generate(style, selectedProviderId || undefined)).then(refreshHistory);
   };
 
   const onCancel = () => {
@@ -130,24 +157,34 @@ export function ReportDialog({
 
           <main className="report-main">
             {!started && !html && (
-              <div className="report-style-picker">
-                <button
-                  className="report-style"
-                  data-testid="report-style-review"
-                  onClick={() => start("review")}
-                >
-                  <strong>{t.report_style_review}</strong>
-                  <span>{t.report_style_review_hint}</span>
-                </button>
-                <button
-                  className="report-style"
-                  data-testid="report-style-formal"
-                  onClick={() => start("formal")}
-                >
-                  <strong>{t.report_style_formal}</strong>
-                  <span>{t.report_style_formal_hint}</span>
-                </button>
-              </div>
+              <>
+                <div className="report-model-row">
+                  <span className="report-model-row-label">{t.report_model}</span>
+                  <ModelPickerButton
+                    providers={providers}
+                    selectedId={selectedProviderId}
+                    onChange={setSelectedProviderId}
+                  />
+                </div>
+                <div className="report-style-picker">
+                  <button
+                    className="report-style"
+                    data-testid="report-style-review"
+                    onClick={() => start("review")}
+                  >
+                    <strong>{t.report_style_review}</strong>
+                    <span>{t.report_style_review_hint}</span>
+                  </button>
+                  <button
+                    className="report-style"
+                    data-testid="report-style-formal"
+                    onClick={() => start("formal")}
+                  >
+                    <strong>{t.report_style_formal}</strong>
+                    <span>{t.report_style_formal_hint}</span>
+                  </button>
+                </div>
+              </>
             )}
 
             {busy && (
