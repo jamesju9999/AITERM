@@ -14,10 +14,12 @@ export function ProjectList({
   projects,
   onRefresh,
   onOpen,
+  onReport,
 }: {
   projects: ProjectInfo[];
   onRefresh: () => Promise<void>;
   onOpen: (projectId: string) => void;
+  onReport: (projectId: string) => void;
 }) {
   const { t } = useLocale();
   const [creating, setCreating] = useState(false);
@@ -118,6 +120,14 @@ export function ProjectList({
                       )}
                     </div>
                   )}
+                </button>
+                <button
+                  className="tb-btn tb-btn--ghost"
+                  data-testid={`project-report-${p.id}`}
+                  disabled={broken}
+                  onClick={() => onReport(p.id)}
+                >
+                  {t.report_short}
                 </button>
                 <button
                   className="tb-btn tb-btn--danger-ghost"

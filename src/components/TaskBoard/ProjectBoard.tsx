@@ -30,7 +30,13 @@ interface DragState {
   started: boolean;
 }
 
-export function ProjectBoard({ projectId }: { projectId: string }) {
+export function ProjectBoard({
+  projectId,
+  onReport,
+}: {
+  projectId: string;
+  onReport: () => void;
+}) {
   const { t } = useLocale();
   const [tasks, setTasks] = useState<TaskWithAttachments[]>([]);
   const [editing, setEditing] = useState<TaskWithAttachments | "new" | null>(null);
@@ -194,6 +200,9 @@ export function ProjectBoard({ projectId }: { projectId: string }) {
       <div className="task-board-toolbar">
         <button className="task-board-new" onClick={() => setEditing("new")}>
           + {t.board_new_card}
+        </button>
+        <button className="tb-btn tb-btn--ghost" onClick={onReport}>
+          {t.report_generate}
         </button>
       </div>
       <div className="task-board-columns">

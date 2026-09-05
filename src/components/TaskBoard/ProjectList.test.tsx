@@ -35,10 +35,10 @@ const project = (over: Partial<ProjectInfo> = {}): ProjectInfo => ({
 // 清單本身是 props 進來的（TaskBoardView 擁有那份資料），所以測試直接給。
 const onRefresh = vi.fn<() => Promise<void>>();
 
-const mount = (projects: ProjectInfo[] = [project()], onOpen = vi.fn()) =>
+const mount = (projects: ProjectInfo[] = [project()], onOpen = vi.fn(), onReport = vi.fn()) =>
   render(
     <LocaleProvider>
-      <ProjectList projects={projects} onRefresh={onRefresh} onOpen={onOpen} />
+      <ProjectList projects={projects} onRefresh={onRefresh} onOpen={onOpen} onReport={onReport} />
     </LocaleProvider>,
   );
 
@@ -147,5 +147,20 @@ describe("ProjectList", () => {
     await waitFor(() => expect(messageDialog).toHaveBeenCalled());
     expect(String(messageDialog.mock.calls[0][0])).toContain("執行中");
     expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it("每張專案卡片都有產生報告的入口", async () => {
+    mount([project({ counts: { planning: 1, queued: 0, running: 0, done: 2 } })]);
+    await screen.findByText("makemoney");
+    expect(screen.getByTestId("project-report-p1")).toBeInTheDocument();
+  });
+
+  // 報告按鈕在卡片主體上，很容易不小心讓點擊冒泡上去而連帶進入看板。
+  it("點報告按鈕不會連帶進入該專案的看板", async () => {
+    const onOpen = vi.fn();
+    mount([project({ counts: { planning: 1, queued: 0, running: 0, done: 2 } })], onOpen);
+    await screen.findByText("makemoney");
+    await userEvent.click(screen.getByTestId("project-report-p1"));
+    expect(onOpen).not.toHaveBeenCalled();
   });
 });

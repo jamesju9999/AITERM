@@ -7,6 +7,7 @@ import { unlistenOnCleanup } from "../../lib/eventSubscription";
 import { ProjectBoard } from "./ProjectBoard";
 import { ProjectList } from "./ProjectList";
 import { ProjectTabBar } from "./ProjectTabBar";
+import { ReportDialog } from "./ReportDialog";
 import "./index.css";
 
 const OPEN_KEY = "aiterm_board_open_projects";
@@ -35,6 +36,8 @@ export function TaskBoardView() {
     () => localStorage.getItem(ACTIVE_KEY),
   );
   const [showList, setShowList] = useState(false);
+  /** 開著報告視窗的專案 id；null 代表沒開。 */
+  const [reportFor, setReportFor] = useState<string | null>(null);
 
   // 這個元件是覆蓋畫面（TerminalApp 的 `boardActive && <TaskBoardView />`），
   // 使用者一離開就整個卸載，而 refresh() 會被每一次 tasks-updated 觸發——
@@ -109,7 +112,14 @@ export function TaskBoardView() {
   if (showList || active === null) {
     return (
       <div className="task-board">
-        <ProjectList projects={projects} onRefresh={refresh} onOpen={activate} />
+        <ProjectList projects={projects} onRefresh={refresh} onOpen={activate} onReport={setReportFor} />
+        {reportFor && (
+          <ReportDialog
+            projectId={reportFor}
+            projectName={projects.find((p) => p.id === reportFor)?.name ?? ""}
+            onClose={() => setReportFor(null)}
+          />
+        )}
       </div>
     );
   }
@@ -129,7 +139,14 @@ export function TaskBoardView() {
           這裡刻意「卸載而非隱藏」——TerminalView 那條「隱藏而非卸載」
           的規則是為了 xterm.js 在無尺寸元素上 resize 會崩潰，
           看板沒有 xterm，不適用。 */}
-      <ProjectBoard key={active} projectId={active} />
+      <ProjectBoard key={active} projectId={active} onReport={() => setReportFor(active)} />
+      {reportFor && (
+        <ReportDialog
+          projectId={reportFor}
+          projectName={projects.find((p) => p.id === reportFor)?.name ?? ""}
+          onClose={() => setReportFor(null)}
+        />
+      )}
     </div>
   );
 }

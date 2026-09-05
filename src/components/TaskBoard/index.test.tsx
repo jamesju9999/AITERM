@@ -59,7 +59,7 @@ const card = (over: Partial<TaskWithAttachments>): TaskWithAttachments => ({
 });
 
 const view = () =>
-  render(<LocaleProvider><ProjectBoard projectId={PROJECT_ID} /></LocaleProvider>);
+  render(<LocaleProvider><ProjectBoard projectId={PROJECT_ID} onReport={() => {}} /></LocaleProvider>);
 
 beforeEach(() => {
   // Repo vitest config does not set `clearMocks`, so call counts would leak

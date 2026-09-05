@@ -533,3 +533,144 @@
 }
 
 .task-board-new { padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+
+/* ── 工作報告視窗 ─────────────────────────────────────────── */
+
+.report-dialog {
+  width: min(1100px, 94vw);
+  height: min(760px, 88vh);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.report-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.report-head h3 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+.report-head-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.report-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.report-history {
+  width: 220px;
+  flex: 0 0 auto;
+  border-right: 1px solid var(--border);
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.report-history-title {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.report-history-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 8px 0;
+}
+
+.report-history-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.report-history-item--active {
+  background: var(--bg-secondary);
+}
+
+.report-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.report-style-picker {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.report-style {
+  flex: 1 1 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.report-style span {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.report-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.report-error {
+  color: var(--tb-failed);
+  font-size: 13px;
+}
+
+.report-raw pre {
+  max-height: 260px;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.report-main .aiterm-artifact-html-frame {
+  flex: 1;
+  min-height: 400px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
