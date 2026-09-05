@@ -350,7 +350,24 @@
    -webkit-user-select 另外補上：Tauri macOS 用的是系統 WKWebView，只寫標準的
    user-select 在部分情境下攔不住原生選字手勢，兩個都寫才可靠。*/
 .task-board-columns { flex: 1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px; overflow: hidden; min-height: 0; user-select: none; -webkit-user-select: none; }
-.task-column { display: flex; flex-direction: column; background: var(--panel); border-radius: 10px; overflow: hidden; min-height: 0; border: 1px solid transparent; }
+/* 欄位底色是半透明的狀態色，讓看板底色透出來。
+   用變數轉一手而不是直接寫 background：底下的 .task-column--drop-target
+   要能整片蓋掉這個底色，兩者都直接宣告 background 的話，後面若再加
+   狀態規則就會反過來壓掉拖放高亮。狀態規則只設變數、不設 background，
+   結構上就不可能打架。 */
+.task-column {
+  display: flex;
+  flex-direction: column;
+  background: var(--tb-col-bg, rgba(20, 26, 36, 0.55));
+  border-radius: 10px;
+  overflow: hidden;
+  min-height: 0;
+  border: 1px solid transparent;
+}
+.task-column[data-column-status="planning"] { --tb-col-bg: var(--tb-col-planning-tint); }
+.task-column[data-column-status="queued"] { --tb-col-bg: var(--tb-col-queued-tint); }
+.task-column[data-column-status="running"] { --tb-col-bg: var(--tb-col-running-tint); }
+.task-column[data-column-status="done"] { --tb-col-bg: var(--tb-col-done-tint); }
 .task-column--drop-target { border-color: var(--accent); background: var(--accent-dim); }
 /* Marks the source card while it's being dragged — stays in its original
    column slot (just faded/inert), the actual cursor-following visual is
