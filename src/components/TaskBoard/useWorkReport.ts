@@ -1,5 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 
+import { useLocale } from "../../contexts/LocaleContext";
+
 import { invokeAiChat, type AiError } from "../../ipc/ai";
 import { saveReport } from "../../ipc/reports";
 import {
@@ -53,6 +55,10 @@ export interface ReportProgress {
  * 快取——第二次產報告時只有新完成的卡片需要重跑。
  */
 export function useWorkReport(projectId: string, projectName: string) {
+  // useLocale 在沒有 provider 時會自己從 localStorage 兜底，所以這裡
+  // 直接用是安全的（見 LocaleContext.tsx）。錯誤訊息走 i18n，不然
+  // en 語系的使用者會看到寫死的中文。
+  const { t } = useLocale();
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<ReportProgress | null>(null);
   const [html, setHtml] = useState<string | null>(null);
@@ -76,7 +82,7 @@ export function useWorkReport(projectId: string, projectName: string) {
       try {
         const cards = await listTasks(projectId);
         if (cards.length === 0) {
-          setError("這個專案還沒有任何工作項目，無法產生報告。");
+          setError(t.report_err_no_cards);
           return;
         }
 
@@ -105,7 +111,7 @@ export function useWorkReport(projectId: string, projectName: string) {
             // AI 根本沒設定的話，後面每一張都會失敗——直接中止比讓
             // 使用者等一輪無意義的重試有意義。
             if (isNotConfigured(e)) {
-              setError("尚未設定 AI 供應商，請先到設定裡完成設定。");
+              setError(t.report_err_not_configured);
               return;
             }
             // 其他錯誤：略過這張，繼續下一張。一張失敗不該讓整份報告白跑。
@@ -133,7 +139,7 @@ export function useWorkReport(projectId: string, projectName: string) {
         const { artifact } = splitArtifactFence(text);
         if (!artifact || artifact.kind !== "html") {
           setRawReply(text);
-          setError("AI 沒有產生報告文件。下面是它的原始回覆。");
+          setError(t.report_err_no_artifact);
           return;
         }
 
@@ -142,7 +148,7 @@ export function useWorkReport(projectId: string, projectName: string) {
           await saveReport(projectId, artifact.content);
         } catch (e) {
           // 報告本身已經產生了，存檔失敗不該讓它消失——顯示出來並說明。
-          setError(`報告已產生，但存檔失敗：${String(e)}`);
+          setError(`${t.report_err_save_failed}${String(e)}`);
         }
       } catch (e) {
         setError(String(e));
@@ -151,7 +157,7 @@ export function useWorkReport(projectId: string, projectName: string) {
         setProgress(null);
       }
     },
-    [projectId, projectName],
+    [projectId, projectName, t],
   );
 
   return { generate, cancel, busy, progress, html, error, rawReply, setHtml };
