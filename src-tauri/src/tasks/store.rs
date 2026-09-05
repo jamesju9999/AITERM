@@ -32,6 +32,10 @@ pub struct TaskRow {
     pub created_at: String,
     pub dispatched_at: Option<i64>,
     pub finished_at: Option<i64>,
+    /// 這張卡片的 AI 履行摘要（工作報告用）。只有 `done` 的卡片會有，
+    /// 由前端在產生報告時補上。已完成的卡片不可變，所以這是永久快取；
+    /// 重新派工時 `mark_dispatched` 會清掉它。
+    pub ai_summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -226,6 +230,16 @@ pub async fn set_interactive(
     Ok(())
 }
 
+/// 寫入這張卡片的 AI 履行摘要（工作報告的第一階段產物）。
+pub async fn set_summary(pool: &SqlitePool, id: &str, summary: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET ai_summary = ? WHERE id = ?")
+        .bind(summary)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Edit title/body/project_dir. Caller (command layer) restricts this to `planning` cards.
 pub async fn update_task_fields(
     pool: &SqlitePool,
@@ -246,8 +260,11 @@ pub async fn update_task_fields(
 
 /// `queued → running`: record the spawned tab and dispatch time.
 pub async fn mark_dispatched(pool: &SqlitePool, id: &str, tab_id: &str) -> Result<(), sqlx::Error> {
+    // 一併清掉 ai_summary：這張卡要重跑了，舊摘要描述的是上一次的執行，
+    // 留著會讓工作報告講錯。
     sqlx::query(
-        "UPDATE tasks SET status = 'running', tab_id = ?, dispatched_at = ? WHERE id = ? AND status = 'queued'",
+        "UPDATE tasks SET status = 'running', tab_id = ?, dispatched_at = ?, ai_summary = NULL
+         WHERE id = ? AND status = 'queued'",
     )
     .bind(tab_id)
     .bind(now_secs())
@@ -626,5 +643,67 @@ mod project_query_tests {
 
         let atts = list_attachments(&pool, &id).await.unwrap();
         assert_eq!(atts[0].stored_path, "/somewhere/else/f.png");
+    }
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn mem_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn a_new_task_has_no_summary() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        assert_eq!(get_task(&pool, &id).await.unwrap().unwrap().ai_summary, None);
+    }
+
+    #[tokio::test]
+    async fn set_summary_round_trips() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        set_summary(&pool, &id, "做了 A 和 B，結果成功").await.unwrap();
+        assert_eq!(
+            get_task(&pool, &id).await.unwrap().unwrap().ai_summary.as_deref(),
+            Some("做了 A 和 B，結果成功")
+        );
+    }
+
+    #[tokio::test]
+    async fn re_dispatching_clears_a_stale_summary() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
+        mark_dispatched(&pool, &id, "tab-1").await.unwrap();
+        finish_task(&pool, &id, "success", None, None).await.unwrap();
+        set_summary(&pool, &id, "第一次執行的摘要").await.unwrap();
+
+        sqlx::query("UPDATE tasks SET status = 'queued' WHERE id = ?")
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        mark_dispatched(&pool, &id, "tab-2").await.unwrap();
+
+        assert_eq!(
+            get_task(&pool, &id).await.unwrap().unwrap().ai_summary,
+            None,
+            "重新派工後不可留著上一次執行的摘要"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cloned_task_does_not_inherit_the_summary() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        set_summary(&pool, &id, "原卡片的摘要").await.unwrap();
+        let clone_id = clone_task_fields(&pool, &id).await.unwrap();
+        assert_eq!(get_task(&pool, &clone_id).await.unwrap().unwrap().ai_summary, None);
     }
 }

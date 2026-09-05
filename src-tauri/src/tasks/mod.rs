@@ -47,13 +47,20 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             error_message   TEXT,
             created_at      TEXT NOT NULL DEFAULT (datetime('now')),
             dispatched_at   INTEGER,
-            finished_at     INTEGER
+            finished_at     INTEGER,
+            ai_summary      TEXT
         )",
     )
     .execute(pool)
     .await?;
     // Migration: existing databases created before `interactive` existed.
     let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN interactive INTEGER NOT NULL DEFAULT 0")
+        .execute(pool)
+        .await;
+    // Migration: existing databases created before `ai_summary` existed.
+    // 跟上面的 `interactive` 同一個寫法——欄位已存在時 ALTER TABLE 會
+    // 失敗，那是正常的，所以刻意丟掉錯誤。
+    let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN ai_summary TEXT")
         .execute(pool)
         .await;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, sort_order)")

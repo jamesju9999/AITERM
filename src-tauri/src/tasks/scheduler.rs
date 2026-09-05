@@ -381,6 +381,7 @@ mod tests {
             created_at: String::new(),
             dispatched_at: None,
             finished_at: None,
+            ai_summary: None,
         }
     }
 
@@ -462,6 +463,7 @@ mod tests {
             created_at: created_at.to_string(),
             dispatched_at: None,
             finished_at: None,
+            ai_summary: None,
         }
     }
 
