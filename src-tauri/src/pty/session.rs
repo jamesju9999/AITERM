@@ -880,6 +880,28 @@ mod tests {
         let _ = std::fs::remove_file(&file);
     }
 
+    /// 等 shell 真的起來（吐出提示字元、然後安靜下來）再往裡面寫。
+    ///
+    /// PTY 剛 spawn 完到 shell 開始讀 stdin 之間有一段空窗，這段時間寫進去
+    /// 的內容會被吞掉。平常的測試靠事後長時間輪詢掩蓋過去，但只要那一次寫入
+    /// 本身遺失，再怎麼輪詢也等不到——本機實測，
+    /// `subscribe_with_history_restores_modes_evicted_from_the_ring` 與
+    /// `every_subscriber_receives_the_same_output_and_on_data_still_fires`
+    /// 在整個模組平行執行時大約每 10 次紅 4 次，CI 上也長期紅。
+    async fn wait_for_shell_ready(session: &PtySession) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            let produced =
+                session.get_recent_raw(4096).map(|b| !b.is_empty()).unwrap_or(false);
+            if (produced && session.ms_since_output() >= 250)
+                || tokio::time::Instant::now() >= deadline
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
     fn test_shell() -> ShellSpec {
         #[cfg(windows)]
         {
@@ -1571,6 +1593,8 @@ mod tests {
         )
         .expect("spawn pty");
 
+        wait_for_shell_ready(&session).await;
+
         // Two independent viewers, subscribed before anything is written.
         let mut a = session.subscribe();
         let mut b = session.subscribe();
@@ -1908,6 +1932,8 @@ mod tests {
             |_| {},
         )
         .expect("spawn pty");
+
+        wait_for_shell_ready(&session).await;
 
         // 先切進 alternate screen，再吐出遠超過環容量的填充內容把它擠掉。
         session.write(b"printf '\\033[?1049h'\n").unwrap();
