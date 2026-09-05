@@ -29,6 +29,8 @@ export interface TaskRow {
   created_at: string;
   dispatched_at: number | null;
   finished_at: number | null;
+  /** AI 履行摘要（工作報告用）。只有跑過的卡片會有。 */
+  ai_summary: string | null;
 }
 
 export interface TaskWithAttachments extends TaskRow {
@@ -109,6 +111,9 @@ export const readTranscript = (projectId: string, id: string): Promise<string> =
 
 export const saveTranscript = (projectId: string, id: string, text: string): Promise<void> =>
   invoke("tasks_save_transcript", { projectId, id, text });
+
+export const setSummary = (projectId: string, id: string, summary: string): Promise<void> =>
+  invoke("tasks_set_summary", { projectId, taskId: id, summary });
 
 export const getTaskBoardConfig = (): Promise<TaskBoardConfig> => invoke("task_board_get_config");
 

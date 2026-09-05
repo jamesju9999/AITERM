@@ -54,7 +54,7 @@ const card = (over: Partial<TaskWithAttachments>): TaskWithAttachments => ({
   id: "c1", title: "Card one", body: "", project_dir: "/r", status: "planning",
   parallel_ok: true, interactive: false, sort_order: 1, outcome: null, tab_id: null,
   transcript_path: null, error_message: null, created_at: "", dispatched_at: null,
-  finished_at: null, attachments: [],
+  finished_at: null, ai_summary: null, attachments: [],
   ...over,
 });
 
