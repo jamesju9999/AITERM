@@ -42,52 +42,73 @@ export interface TaskBoardConfig {
 
 // ── Commands ────────────────────────────────────────────────────────────────
 
-export const listTasks = (): Promise<TaskWithAttachments[]> => invoke("tasks_list");
+export const listTasks = (projectId: string): Promise<TaskWithAttachments[]> =>
+  invoke("tasks_list", { projectId });
 
-export const createTask = (args: {
-  title: string;
-  body: string;
-  project_dir: string;
-  parallel_ok: boolean;
-  interactive: boolean;
-}): Promise<string> => invoke("tasks_create", { args });
+export const createTask = (
+  projectId: string,
+  args: {
+    title: string;
+    body: string;
+    project_dir: string;
+    parallel_ok: boolean;
+    interactive: boolean;
+  },
+): Promise<string> => invoke("tasks_create", { projectId, args });
 
-export const cloneTask = (id: string): Promise<string> => invoke("tasks_clone", { id });
+export const cloneTask = (projectId: string, id: string): Promise<string> =>
+  invoke("tasks_clone", { projectId, id });
 
-export const updateTask = (args: {
-  id: string;
-  title: string;
-  body: string;
-  project_dir: string;
-  parallel_ok: boolean;
-  interactive: boolean;
-}): Promise<void> => invoke("tasks_update", { args });
+export const updateTask = (
+  projectId: string,
+  args: {
+    id: string;
+    title: string;
+    body: string;
+    project_dir: string;
+    parallel_ok: boolean;
+    interactive: boolean;
+  },
+): Promise<void> => invoke("tasks_update", { projectId, args });
 
-export const moveTask = (id: string, to_status: TaskStatus, sort_order: number): Promise<void> =>
-  invoke("tasks_move", { args: { id, to_status, sort_order } });
+export const moveTask = (
+  projectId: string,
+  id: string,
+  to_status: TaskStatus,
+  sort_order: number,
+): Promise<void> => invoke("tasks_move", { projectId, args: { id, to_status, sort_order } });
 
-export const stopTask = (id: string): Promise<void> => invoke("tasks_stop", { id });
+export const stopTask = (projectId: string, id: string): Promise<void> =>
+  invoke("tasks_stop", { projectId, id });
 
-export const markTaskDone = (id: string): Promise<void> => invoke("tasks_mark_done", { id });
+export const markTaskDone = (projectId: string, id: string): Promise<void> =>
+  invoke("tasks_mark_done", { projectId, id });
 
-export const deleteTask = (id: string, close_tab: boolean): Promise<void> =>
-  invoke("tasks_delete", { args: { id, close_tab } });
+export const deleteTask = (
+  projectId: string,
+  id: string,
+  close_tab: boolean,
+): Promise<void> => invoke("tasks_delete", { projectId, args: { id, close_tab } });
 
 export const addAttachment = (
+  projectId: string,
   id: string,
   filename: string,
   bytes: Uint8Array,
 ): Promise<AttachmentRow> =>
-  invoke("tasks_add_attachment", { args: { id, filename, bytes: Array.from(bytes) } });
+  invoke("tasks_add_attachment", {
+    projectId,
+    args: { id, filename, bytes: Array.from(bytes) },
+  });
 
-export const removeAttachment = (attachmentId: string): Promise<void> =>
-  invoke("tasks_remove_attachment", { attachmentId });
+export const removeAttachment = (projectId: string, attachmentId: string): Promise<void> =>
+  invoke("tasks_remove_attachment", { projectId, attachmentId });
 
-export const readTranscript = (id: string): Promise<string> =>
-  invoke("tasks_read_transcript", { id });
+export const readTranscript = (projectId: string, id: string): Promise<string> =>
+  invoke("tasks_read_transcript", { projectId, id });
 
-export const saveTranscript = (id: string, text: string): Promise<void> =>
-  invoke("tasks_save_transcript", { id, text });
+export const saveTranscript = (projectId: string, id: string, text: string): Promise<void> =>
+  invoke("tasks_save_transcript", { projectId, id, text });
 
 export const getTaskBoardConfig = (): Promise<TaskBoardConfig> => invoke("task_board_get_config");
 
