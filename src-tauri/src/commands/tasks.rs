@@ -443,7 +443,7 @@ mod save_transcript_tests {
         let pool = mem_pool().await;
         let id = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
         store::move_task(&pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
-        store::mark_dispatched(&pool, &id, "tab-x").await.unwrap();
+        store::dispatch_for_test(&pool, &id, "tab-x").await;
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("transcript.txt");
@@ -503,7 +503,7 @@ mod mark_done_tests {
         let pool = mem_pool().await;
         let id = store::create_task(&pool, "t", "", "/r", true, true).await.unwrap();
         store::move_task(&pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
-        store::mark_dispatched(&pool, &id, "tab-x").await.unwrap();
+        store::dispatch_for_test(&pool, &id, "tab-x").await;
 
         let scheduler = empty_scheduler();
         let (tx, mut rx) = oneshot::channel::<WatchControl>();
@@ -530,7 +530,7 @@ mod mark_done_tests {
         let pool = mem_pool().await;
         let id = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
         store::move_task(&pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
-        store::mark_dispatched(&pool, &id, "tab-x").await.unwrap();
+        store::dispatch_for_test(&pool, &id, "tab-x").await;
         let row = store::get_task(&pool, &id).await.unwrap().unwrap();
         assert_eq!(row.status, store::STATUS_RUNNING);
         assert!(!row.interactive);
@@ -541,7 +541,7 @@ mod mark_done_tests {
         let pool = mem_pool().await;
         let id = store::create_task(&pool, "t", "", "/r", true, true).await.unwrap();
         store::move_task(&pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
-        store::mark_dispatched(&pool, &id, "tab-x").await.unwrap();
+        store::dispatch_for_test(&pool, &id, "tab-x").await;
 
         let scheduler = empty_scheduler(); // no cancels entry registered
         assert!(!scheduler.mark_done(&id));

@@ -34,7 +34,7 @@ pub struct TaskRow {
     pub finished_at: Option<i64>,
     /// 這張卡片的 AI 履行摘要（工作報告用）。只有 `done` 的卡片會有，
     /// 由前端在產生報告時補上。已完成的卡片不可變，所以這是永久快取；
-    /// 重新派工時 `mark_dispatched` 會清掉它。
+    /// 重新派工時 `claim_for_dispatch` 會清掉它。
     pub ai_summary: Option<String>,
 }
 
@@ -122,7 +122,7 @@ pub async fn get_task(pool: &SqlitePool, id: &str) -> Result<Option<TaskRow>, sq
 }
 
 /// Whether `from → to` is a legal user-driven column move. The scheduler and
-/// monitor use `mark_dispatched`/`finish_task` for `queued→running` and
+/// monitor use `claim_for_dispatch`/`finish_task` for `queued→running` and
 /// `→done`; the only moves a user makes by hand are among
 /// planning/queued (either direction).
 fn transition_ok(from: &str, to: &str) -> bool {
@@ -137,7 +137,7 @@ fn transition_ok(from: &str, to: &str) -> bool {
 
 /// Move a card to `to_status` at `sort_order`. Rejects illegal transitions.
 /// `queued→running` / `→done` are NOT done through here — use
-/// `mark_dispatched` / `finish_task`.
+/// `claim_for_dispatch` / `finish_task`.
 pub async fn move_task(
     pool: &SqlitePool,
     id: &str,
@@ -259,19 +259,48 @@ pub async fn update_task_fields(
 }
 
 /// `queued → running`: record the spawned tab and dispatch time.
-pub async fn mark_dispatched(pool: &SqlitePool, id: &str, tab_id: &str) -> Result<(), sqlx::Error> {
-    // 一併清掉 ai_summary：這張卡要重跑了，舊摘要描述的是上一次的執行，
-    // 留著會讓工作報告講錯。
-    sqlx::query(
-        "UPDATE tasks SET status = 'running', tab_id = ?, dispatched_at = ?, ai_summary = NULL
+/// 原子地把一張 `queued` 卡片認領下來準備派工：標成 `running`、記下
+/// 派工時間、清掉上一次執行留下的摘要。回傳是否真的認領到。
+///
+/// **必須在真正去 spawn 之前呼叫。** `dispatch::spawn_and_run` 要等
+/// `claude` 的 TUI 起來，最久 30 秒；如果等到那之後才標記，卡片在整段
+/// 期間都還是 `queued`，任何第二次派工掃描都會再派一次同一張卡——實機
+/// 出現過同一張卡開出兩個 claude 行程。
+///
+/// `WHERE status = 'queued'` 讓這件事由資料庫保證：第二次呼叫影響 0 列，
+/// 回傳 false。
+pub async fn claim_for_dispatch(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+    let res = sqlx::query(
+        "UPDATE tasks SET status = 'running', dispatched_at = ?, ai_summary = NULL
          WHERE id = ? AND status = 'queued'",
     )
-    .bind(tab_id)
     .bind(now_secs())
     .bind(id)
     .execute(pool)
     .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// 記下這張卡片跑在哪個分頁。`claim_for_dispatch` 之後、PTY 開起來才知道
+/// 分頁 id，所以分兩步。
+pub async fn set_tab_id(pool: &SqlitePool, id: &str, tab_id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET tab_id = ? WHERE id = ?")
+        .bind(tab_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(())
+}
+
+/// 測試專用：把 production 分成兩步的派工（先 `claim_for_dispatch`，
+/// spawn 完再 `set_tab_id`）合成一步，讓不關心競態的測試好寫。
+///
+/// production **沒有**這樣的單一函式是刻意的：認領一定要發生在 spawn
+/// 之前，兩者中間隔著最久 30 秒的等待。
+#[cfg(test)]
+pub(crate) async fn dispatch_for_test(pool: &SqlitePool, id: &str, tab_id: &str) {
+    assert!(claim_for_dispatch(pool, id).await.unwrap(), "認領失敗：{id}");
+    set_tab_id(pool, id, tab_id).await.unwrap();
 }
 
 /// `running → done` with an outcome. `outcome` ∈ success | failed | cancelled.
@@ -474,11 +503,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mark_dispatched_and_finish_set_the_right_columns() {
+    async fn dispatching_and_finishing_set_the_right_columns() {
         let pool = mem_pool().await;
         let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
         move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
-        mark_dispatched(&pool, &id, "tab-xyz").await.unwrap();
+        dispatch_for_test(&pool, &id, "tab-xyz").await;
         let row = get_task(&pool, &id).await.unwrap().unwrap();
         assert_eq!(row.status, "running");
         assert_eq!(row.tab_id.as_deref(), Some("tab-xyz"));
@@ -497,7 +526,7 @@ mod tests {
         let pool = mem_pool().await;
         let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
         move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
-        mark_dispatched(&pool, &id, "tab-1").await.unwrap();
+        dispatch_for_test(&pool, &id, "tab-1").await;
         let n = recover_orphaned_running(&pool).await.unwrap();
         assert_eq!(n, 1);
         let row = get_task(&pool, &id).await.unwrap().unwrap();
@@ -617,7 +646,7 @@ mod project_query_tests {
         let pool = mem_pool().await;
         let id = create_task(&pool, "a", "", "/r", true, false).await.unwrap();
         move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
-        mark_dispatched(&pool, &id, "tab").await.unwrap();
+        dispatch_for_test(&pool, &id, "tab").await;
         finish_task(&pool, &id, "success", None, Some("/old/home/tasks/x/transcript.txt"))
             .await
             .unwrap();
@@ -643,6 +672,76 @@ mod project_query_tests {
 
         let atts = list_attachments(&pool, &id).await.unwrap();
         assert_eq!(atts[0].stored_path, "/somewhere/else/f.png");
+    }
+}
+
+#[cfg(test)]
+mod claim_tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn mem_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        pool
+    }
+
+    async fn queued_card(pool: &SqlitePool) -> String {
+        let id = create_task(pool, "t", "", "/r", true, false).await.unwrap();
+        move_task(pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
+        id
+    }
+
+    #[tokio::test]
+    async fn claiming_a_queued_card_marks_it_running() {
+        let pool = mem_pool().await;
+        let id = queued_card(&pool).await;
+        assert!(claim_for_dispatch(&pool, &id).await.unwrap());
+
+        let row = get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!(row.status, STATUS_RUNNING);
+        assert!(row.dispatched_at.is_some());
+    }
+
+    /// 這是整個修正的重點：派工要等 claude 的 TUI 起來，最久 30 秒。
+    /// 在那之前卡片若還留在 queued，第二次掃描就會再派一次同一張卡——
+    /// 實機出現過同一張卡開出兩個 claude 行程。先原子地認領就不可能。
+    #[tokio::test]
+    async fn a_card_can_only_be_claimed_once() {
+        let pool = mem_pool().await;
+        let id = queued_card(&pool).await;
+        assert!(claim_for_dispatch(&pool, &id).await.unwrap());
+        assert!(
+            !claim_for_dispatch(&pool, &id).await.unwrap(),
+            "已經被認領的卡片不可以再被認領一次"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_card_that_is_not_queued_cannot_be_claimed() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        // 還在 planning
+        assert!(!claim_for_dispatch(&pool, &id).await.unwrap());
+    }
+
+    /// 認領時就清掉上一次執行的摘要：舊摘要描述的是上一次的執行。
+    #[tokio::test]
+    async fn claiming_clears_a_stale_summary() {
+        let pool = mem_pool().await;
+        let id = queued_card(&pool).await;
+        set_summary(&pool, &id, "上一次執行的摘要").await.unwrap();
+        assert!(claim_for_dispatch(&pool, &id).await.unwrap());
+        assert_eq!(get_task(&pool, &id).await.unwrap().unwrap().ai_summary, None);
+    }
+
+    #[tokio::test]
+    async fn set_tab_id_records_which_tab_the_card_is_running_in() {
+        let pool = mem_pool().await;
+        let id = queued_card(&pool).await;
+        claim_for_dispatch(&pool, &id).await.unwrap();
+        set_tab_id(&pool, &id, "tab-9").await.unwrap();
+        assert_eq!(get_task(&pool, &id).await.unwrap().unwrap().tab_id.as_deref(), Some("tab-9"));
     }
 }
 
@@ -680,7 +779,7 @@ mod summary_tests {
         let pool = mem_pool().await;
         let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
         move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
-        mark_dispatched(&pool, &id, "tab-1").await.unwrap();
+        dispatch_for_test(&pool, &id, "tab-1").await;
         finish_task(&pool, &id, "success", None, None).await.unwrap();
         set_summary(&pool, &id, "第一次執行的摘要").await.unwrap();
 
@@ -689,7 +788,7 @@ mod summary_tests {
             .execute(&pool)
             .await
             .unwrap();
-        mark_dispatched(&pool, &id, "tab-2").await.unwrap();
+        dispatch_for_test(&pool, &id, "tab-2").await;
 
         assert_eq!(
             get_task(&pool, &id).await.unwrap().unwrap().ai_summary,

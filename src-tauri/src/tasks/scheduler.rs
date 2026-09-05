@@ -104,7 +104,11 @@ impl Dispatcher for RealDispatcher {
             !task.interactive,
         )
         .await?;
-        store::mark_dispatched(&project.pool, &task.id, &tab_id)
+        // 卡片在進到這裡之前就已經被 `claim_for_dispatch` 標成 running 了
+        // （見 drain_once）——這裡只補上分頁 id。順序不能倒過來：spawn 要
+        // 等 claude 的 TUI 起來、最久 30 秒，那段期間卡片若還是 queued，
+        // 下一次掃描就會再派一次同一張。
+        store::set_tab_id(&project.pool, &task.id, &tab_id)
             .await
             .map_err(|e| e.to_string())?;
         let _ = self.app.emit("tasks-updated", ());
@@ -215,9 +219,18 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
             let Some(next) = queued.into_iter().find(|t| t.interactive) else {
                 break;
             };
+            // 先原子地認領再去 spawn——理由見 store::claim_for_dispatch。
+            // 認領不到代表別人先拿走了，直接重掃。
+            match store::claim_for_dispatch(&project.pool, &next.id).await {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(e) => {
+                    eprintln!("claim {} failed ({}): {e}", next.id, project.name);
+                    break;
+                }
+            }
             if let Err(e) = dispatcher.dispatch(project, &next).await {
                 eprintln!("dispatch {} failed: {e}", next.id);
-                let _ = store::mark_dispatched(&project.pool, &next.id, "").await;
                 let _ = store::finish_task(&project.pool, &next.id, "failed", Some(&e), None).await;
             }
         }
@@ -261,9 +274,17 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
             let Some(project) = reg.get(&project_id) else {
                 continue; // 專案在這一輪之間被關閉了
             };
+            // 先原子地認領再去 spawn——理由見 store::claim_for_dispatch。
+            match store::claim_for_dispatch(&project.pool, &head.id).await {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(e) => {
+                    eprintln!("claim {} failed ({}): {e}", head.id, project.name);
+                    return;
+                }
+            }
             if let Err(e) = dispatcher.dispatch(&project, &head).await {
                 eprintln!("dispatch {} failed: {e}", head.id);
-                let _ = store::mark_dispatched(&project.pool, &head.id, "").await;
                 let _ = store::finish_task(&project.pool, &head.id, "failed", Some(&e), None).await;
             }
             dispatched = true;
@@ -555,7 +576,7 @@ mod loop_tests {
     impl Dispatcher for RecordingDispatcher {
         async fn dispatch(&self, project: &ProjectHandle, task: &TaskRow) -> Result<(), String> {
             self.dispatched.lock().unwrap().push(task.id.clone());
-            store::mark_dispatched(&project.pool, &task.id, &format!("fake-{}", task.id))
+            store::set_tab_id(&project.pool, &task.id, &format!("fake-{}", task.id))
                 .await
                 .map_err(|e| e.to_string())?;
             store::finish_task(&project.pool, &task.id, "success", None, None)
@@ -571,7 +592,7 @@ mod loop_tests {
     #[async_trait::async_trait]
     impl Dispatcher for FakeDispatcher {
         async fn dispatch(&self, project: &ProjectHandle, task: &TaskRow) -> Result<(), String> {
-            store::mark_dispatched(&project.pool, &task.id, &format!("fake-{}", task.id))
+            store::set_tab_id(&project.pool, &task.id, &format!("fake-{}", task.id))
                 .await
                 .map_err(|e| e.to_string())?;
             store::finish_task(&project.pool, &task.id, "success", None, None)
@@ -601,7 +622,7 @@ mod loop_tests {
         #[async_trait::async_trait]
         impl Dispatcher for StuckDispatcher {
             async fn dispatch(&self, project: &ProjectHandle, task: &TaskRow) -> Result<(), String> {
-                store::mark_dispatched(&project.pool, &task.id, &format!("fake-{}", task.id))
+                store::set_tab_id(&project.pool, &task.id, &format!("fake-{}", task.id))
                     .await.map_err(|e| e.to_string())
             }
         }
@@ -624,7 +645,7 @@ mod loop_tests {
         // Seed one auto card already running — fills a cap of 1.
         let running_id = store::create_task(&project.pool, "already-running", "", "/r", true, false).await.unwrap();
         store::move_task(&project.pool, &running_id, store::STATUS_QUEUED, 1.0).await.unwrap();
-        store::mark_dispatched(&project.pool, &running_id, "tab-already").await.unwrap();
+        store::dispatch_for_test(&project.pool, &running_id, "tab-already").await;
 
         // A second auto card, queued — cap=1 means this must stay queued.
         let blocked_id = store::create_task(&project.pool, "blocked-auto", "", "/r", true, false).await.unwrap();
@@ -641,7 +662,7 @@ mod loop_tests {
         impl Dispatcher for RecordingDispatcher {
             async fn dispatch(&self, project: &ProjectHandle, task: &TaskRow) -> Result<(), String> {
                 self.dispatched.lock().unwrap().push(task.title.clone());
-                store::mark_dispatched(&project.pool, &task.id, &format!("fake-{}", task.id))
+                store::set_tab_id(&project.pool, &task.id, &format!("fake-{}", task.id))
                     .await
                     .map_err(|e| e.to_string())
             }
@@ -673,7 +694,7 @@ mod loop_tests {
         // Something already running, so a solo head is blocked.
         let busy = store::create_task(&alpha.pool, "busy", "", "/r", true, false).await.unwrap();
         store::move_task(&alpha.pool, &busy, store::STATUS_QUEUED, 1.0).await.unwrap();
-        store::mark_dispatched(&alpha.pool, &busy, "tab-busy").await.unwrap();
+        store::dispatch_for_test(&alpha.pool, &busy, "tab-busy").await;
 
         let solo = store::create_task(&alpha.pool, "solo", "", "/r", false, false).await.unwrap();
         store::move_task(&alpha.pool, &solo, store::STATUS_QUEUED, 2.0).await.unwrap();
@@ -690,7 +711,7 @@ mod loop_tests {
         #[async_trait::async_trait]
         impl Dispatcher for StuckDispatcher {
             async fn dispatch(&self, project: &ProjectHandle, task: &TaskRow) -> Result<(), String> {
-                store::mark_dispatched(&project.pool, &task.id, &format!("fake-{}", task.id))
+                store::set_tab_id(&project.pool, &task.id, &format!("fake-{}", task.id))
                     .await
                     .map_err(|e| e.to_string())
             }
@@ -726,7 +747,7 @@ mod loop_tests {
         // start immediately even at cap=1.
         let chat_id = store::create_task(&project.pool, "chat", "", "/r", true, true).await.unwrap();
         store::move_task(&project.pool, &chat_id, store::STATUS_QUEUED, 1.0).await.unwrap();
-        store::mark_dispatched(&project.pool, &chat_id, "tab-chat").await.unwrap();
+        store::dispatch_for_test(&project.pool, &chat_id, "tab-chat").await;
 
         let auto_id = store::create_task(&project.pool, "auto", "", "/r", true, false).await.unwrap();
         store::move_task(&project.pool, &auto_id, store::STATUS_QUEUED, 2.0).await.unwrap();
@@ -735,7 +756,7 @@ mod loop_tests {
         #[async_trait::async_trait]
         impl Dispatcher for FakeDispatcher {
             async fn dispatch(&self, project: &ProjectHandle, task: &TaskRow) -> Result<(), String> {
-                store::mark_dispatched(&project.pool, &task.id, &format!("fake-{}", task.id))
+                store::set_tab_id(&project.pool, &task.id, &format!("fake-{}", task.id))
                     .await
                     .map_err(|e| e.to_string())
             }
@@ -746,6 +767,49 @@ mod loop_tests {
         let status_of = |t: &str| all.iter().find(|r| r.title == t).unwrap().status.clone();
         assert_eq!(status_of("chat"), "running");
         assert_eq!(status_of("auto"), "running"); // not blocked by the already-running interactive card
+    }
+
+    /// 派工要等 `claude` 的 TUI 起來，最久 30 秒。如果卡片在那之前還留在
+    /// `queued`，第二次掃描就會再派一次同一張——實機出現過同一張卡開出
+    /// 兩個 claude 行程（同一個 App、同一個工作目錄、相隔 32 秒，而卡片的
+    /// `dispatched_at` 從頭到尾是空的，證明 spawn 還沒回來）。
+    ///
+    /// 這裡用一個「永遠不回來」的 dispatcher 模擬那 30 秒，然後再掃一次：
+    /// 同一張卡不可以被派第二次。
+    #[tokio::test]
+    async fn a_card_being_dispatched_is_not_dispatched_again_by_the_next_sweep() {
+        let (reg, project, _parent) = one_project_registry().await;
+        let id = store::create_task(&project.pool, "slow", "", "/r", true, false).await.unwrap();
+        store::move_task(&project.pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
+
+        /// 只記錄、完全不碰資料庫——模擬 spawn_and_run 還卡在等 TUI。
+        #[derive(Default)]
+        struct NeverFinishes {
+            seen: std::sync::Mutex<Vec<String>>,
+        }
+        #[async_trait::async_trait]
+        impl Dispatcher for NeverFinishes {
+            async fn dispatch(&self, _p: &ProjectHandle, task: &TaskRow) -> Result<(), String> {
+                self.seen.lock().unwrap().push(task.id.clone());
+                Ok(())
+            }
+        }
+
+        // 包 timeout 而不是直接 await：這個 bug 退化回去的話，drain_once 的
+        // 一般通道會**無限迴圈**（派工成功 → 重掃 → 卡片還是 queued → 再派），
+        // 直接 await 會讓 CI 卡到整場逾時才死，看不出是誰壞的。
+        let d = NeverFinishes::default();
+        for _ in 0..2 {
+            tokio::time::timeout(std::time::Duration::from_secs(5), drain_once(&reg, &d, 5))
+                .await
+                .expect("drain_once 沒有結束——卡片派工後仍留在 queued，掃描迴圈停不下來");
+        }
+
+        assert_eq!(
+            d.seen.lock().unwrap().len(),
+            1,
+            "同一張卡被派了兩次——第二次掃描時它還留在 queued"
+        );
     }
 
     /// 資料夾被 Finder 刪掉之後，registry 裡的 handle 不一定已經被驅逐

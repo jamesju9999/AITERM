@@ -30,7 +30,7 @@ impl Dispatcher for RealPtyDispatcher {
                 |_| {},
             )
             .map_err(|e| e.to_string())?;
-        store::mark_dispatched(&project.pool, &task.id, &tab_id).await.map_err(|e| e.to_string())?;
+        store::set_tab_id(&project.pool, &task.id, &tab_id).await.map_err(|e| e.to_string())?;
 
         let script = self.script.replace("{marker}", &done_marker(&tab_id));
         self.pty
@@ -81,7 +81,7 @@ struct RecordingDispatcher {
 impl Dispatcher for RecordingDispatcher {
     async fn dispatch(&self, project: &ProjectHandle, task: &TaskRow) -> Result<(), String> {
         self.dispatched.lock().unwrap().push(task.id.clone());
-        store::mark_dispatched(&project.pool, &task.id, "fake-tab")
+        store::set_tab_id(&project.pool, &task.id, "fake-tab")
             .await
             .map_err(|e| e.to_string())
     }
@@ -147,7 +147,8 @@ async fn tasks_save_transcript_overwrites_the_existing_file() {
     let (_reg, project, _parent) = one_project_registry().await;
     let id = store::create_task(&project.pool, "t", "", "/r", true, false).await.unwrap();
     store::move_task(&project.pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
-    store::mark_dispatched(&project.pool, &id, "tab-x").await.unwrap();
+    assert!(store::claim_for_dispatch(&project.pool, &id).await.unwrap());
+    store::set_tab_id(&project.pool, &id, "tab-x").await.unwrap();
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("transcript.txt");

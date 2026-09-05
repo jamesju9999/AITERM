@@ -124,7 +124,7 @@ mod tests {
         store::add_attachment(&pool, &id, "f.txt", att.to_str().unwrap()).await.unwrap();
 
         store::move_task(&pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
-        store::mark_dispatched(&pool, &id, "tab").await.unwrap();
+        store::dispatch_for_test(&pool, &id, "tab").await;
         let transcript = task_dir.join("transcript.txt");
         std::fs::write(&transcript, "transcript content").unwrap();
         store::finish_task(&pool, &id, "success", None, transcript.to_str().unwrap().into())
