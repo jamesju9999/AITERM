@@ -7,6 +7,7 @@ const readReport = vi.fn();
 const generate = vi.fn();
 const cancel = vi.fn();
 const listProviders = vi.fn();
+const listTasks = vi.fn();
 let hookState: Record<string, unknown> = {};
 
 vi.mock("../../ipc/reports", () => ({
@@ -32,6 +33,7 @@ vi.mock("../../ipc/fs", () => ({ writeTextFile: vi.fn() }));
 vi.mock("../../ipc/provider", () => ({
   listProviders: (...a: unknown[]) => listProviders(...a),
 }));
+vi.mock("../../ipc/tasks", () => ({ listTasks: (...a: unknown[]) => listTasks(...a) }));
 // ModelPickerButton 會拉 useProviderQuota / usageQuotaAll，兩者都打真的 IPC。
 // 一旦選中的 provider id 是真的字串（本檔的情境幾乎都是），這裡就會被呼叫，
 // 不 mock 掉的話會打到不存在的 Tauri invoke。
@@ -72,6 +74,15 @@ describe("ReportDialog", () => {
     listReports.mockResolvedValue([]);
     readReport.mockResolvedValue("<html><title>舊報告</title></html>");
     listProviders.mockResolvedValue(PROVIDERS);
+    listTasks.mockResolvedValue([]);
+  });
+
+  const taskCard = (over: Record<string, unknown> = {}) => ({
+    id: "t1", title: "卡片", body: "", project_dir: "/r", status: "done",
+    parallel_ok: true, interactive: false, sort_order: 1, outcome: "success",
+    tab_id: null, transcript_path: null, error_message: null,
+    created_at: "2026-09-05T10:00:00Z", dispatched_at: null, finished_at: null,
+    ai_summary: null, attachments: [], ...over,
   });
 
   it("開啟時先讓使用者選風格", async () => {
@@ -182,6 +193,44 @@ describe("ReportDialog", () => {
 
   // AI 沒吐出 artifact 時要讓使用者看到它到底回了什麼，
   // 不然只會看到一句「失敗」卻不知道發生什麼事。
+  // 風格選擇頁原本只有兩張卡片、底下一大片空白，而且沒有回答使用者
+  // 真正關心的問題：這次要跑多久。第一階段是 N 次 AI 呼叫，N 就是
+  // 「需要重新整理」的張數。
+  it("選風格前先說明這次會包含哪些工作項目", async () => {
+    listTasks.mockResolvedValue([
+      taskCard({ id: "a", status: "done" }),
+      taskCard({ id: "b", status: "done" }),
+      taskCard({ id: "c", status: "planning", outcome: null }),
+      taskCard({ id: "d", status: "running", outcome: null }),
+    ]);
+    mount();
+    const scope = await screen.findByTestId("report-scope");
+    expect(scope.textContent).toContain("4");
+  });
+
+  // 這是整個摘要面板存在的主要理由：它預告了要跑多久。
+  it("標出有幾張需要重新整理對話記錄", async () => {
+    listTasks.mockResolvedValue([
+      taskCard({ id: "a", status: "done", ai_summary: "已經整理過" }),
+      taskCard({ id: "b", status: "done", ai_summary: null }),
+      taskCard({ id: "c", status: "done", ai_summary: null }),
+    ]);
+    mount();
+    const need = await screen.findByTestId("report-scope-pending");
+    expect(need.textContent).toContain("2");
+  });
+
+  // 全部都有快取時，第二階段只要一次呼叫，會很快——要讓使用者知道，
+  // 不然他會以為又要等剛才那麼久。
+  it("全部都有快取時明說不需要重新整理", async () => {
+    listTasks.mockResolvedValue([
+      taskCard({ id: "a", status: "done", ai_summary: "有了" }),
+    ]);
+    mount();
+    await screen.findByTestId("report-scope");
+    expect(screen.queryByTestId("report-scope-pending")).not.toBeInTheDocument();
+  });
+
   it("有原始回覆時顯示出來", async () => {
     hookState = { error: "AI 沒有產生報告文件", rawReply: "我不會做這個" };
     mount();

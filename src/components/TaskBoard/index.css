@@ -686,6 +686,61 @@
   color: var(--text-secondary);
 }
 
+.report-scope {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  padding: 16px 18px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.report-scope-title {
+  color: var(--text-primary);
+  margin-bottom: 14px;
+}
+
+.report-scope-title strong {
+  font-size: 18px;
+  margin: 0 2px;
+}
+
+.report-scope-cols {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.report-scope-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 6px;
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+
+.report-scope-col-count {
+  font-size: 20px;
+  color: var(--text-primary);
+}
+
+.report-scope-col-label {
+  font-size: 11px;
+}
+
+.report-scope-pending strong {
+  color: var(--tb-queued);
+  font-size: 15px;
+  margin-right: 2px;
+}
+
+.report-scope-cached {
+  color: var(--tb-success);
+}
+
 .report-error {
   color: var(--tb-failed);
   font-size: 13px;

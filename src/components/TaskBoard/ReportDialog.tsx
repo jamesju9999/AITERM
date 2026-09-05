@@ -7,6 +7,7 @@ import { ModelPickerButton } from "../ModelPickerButton";
 import { writeTextFile } from "../../ipc/fs";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { listReports, readReport, type ReportInfo } from "../../ipc/reports";
+import { listTasks, type TaskWithAttachments } from "../../ipc/tasks";
 import { useWorkReport } from "./useWorkReport";
 import type { ReportStyle } from "./reportPrompts";
 
@@ -40,6 +41,63 @@ function formatSavedAt(savedAt: number): string {
   });
 }
 
+/**
+ * 「這次會包含什麼」的摘要。
+ *
+ * 除了讓風格選擇頁不要空一大片，它主要回答使用者在按下去之前真正想知道
+ * 的事：**這次要跑多久**。第一階段是每張「已完成但還沒有摘要」的卡片各
+ * 打一次 AI，那個張數就是耗時的主因；全部都有快取時只剩第二階段一次呼叫，
+ * 會很快——這件事不講的話，使用者會以為每次都要等一樣久。
+ */
+function ReportScope({
+  cards,
+  t,
+}: {
+  cards: TaskWithAttachments[];
+  t: ReturnType<typeof useLocale>["t"];
+}) {
+  if (cards.length === 0) {
+    return (
+      <div className="report-scope" data-testid="report-scope">
+        {t.report_scope_empty}
+      </div>
+    );
+  }
+
+  const byStatus = (s: string) => cards.filter((c) => c.status === s).length;
+  const pending = cards.filter((c) => c.status === "done" && !c.ai_summary).length;
+
+  return (
+    <div className="report-scope" data-testid="report-scope">
+      <div className="report-scope-title">
+        {t.report_scope_title} <strong>{cards.length}</strong> {t.report_scope_total}
+      </div>
+      <div className="report-scope-cols">
+        {(
+          [
+            ["planning", t.report_col_planning],
+            ["queued", t.report_col_queued],
+            ["running", t.report_col_running],
+            ["done", t.report_col_done],
+          ] as const
+        ).map(([status, label]) => (
+          <div key={status} className="report-scope-col">
+            <span className="report-scope-col-count">{byStatus(status)}</span>
+            <span className="report-scope-col-label">{label}</span>
+          </div>
+        ))}
+      </div>
+      {pending > 0 ? (
+        <div className="report-scope-pending" data-testid="report-scope-pending">
+          <strong>{pending}</strong> {t.report_scope_pending}
+        </div>
+      ) : (
+        <div className="report-scope-cached">{t.report_scope_cached}</div>
+      )}
+    </div>
+  );
+}
+
 export function ReportDialog({
   projectId,
   projectName,
@@ -58,6 +116,8 @@ export function ReportDialog({
   const [picked, setPicked] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  /** 這個專案的卡片，只用來算「這次會包含什麼」的統計。 */
+  const [cards, setCards] = useState<TaskWithAttachments[] | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState("");
 
@@ -101,6 +161,23 @@ export function ReportDialog({
       alive = false;
     };
   }, []);
+
+  // 卡片統計：讓使用者在按下去之前知道這次會包含什麼、大概要跑多久。
+  // 「需要重新整理」的張數就是第一階段的 AI 呼叫次數，那是耗時的主因。
+  useEffect(() => {
+    let alive = true;
+    void listTasks(projectId)
+      .then((rows) => {
+        if (alive) setCards(rows);
+      })
+      .catch(() => {
+        // 統計只是輔助資訊，抓不到就不顯示，不該擋住產生報告這件事。
+        if (alive) setCards([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [projectId]);
 
   const start = (style: ReportStyle) => {
     setStarted(true);
@@ -210,6 +287,7 @@ export function ReportDialog({
                     <span>{t.report_style_formal_hint}</span>
                   </button>
                 </div>
+                {cards && <ReportScope cards={cards} t={t} />}
               </>
             )}
 
