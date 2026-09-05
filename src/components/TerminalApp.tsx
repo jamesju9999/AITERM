@@ -25,6 +25,7 @@ import { MailView } from "./MailView";
 import { RemoteTerminalView } from "./RemoteTerminalView";
 import { HomeView } from "./HomeView";
 import { TaskBoardView } from "./TaskBoard";
+import { useTranscriptUpgrader } from "./TaskBoard/useTranscriptUpgrader";
 import { RouteHint } from "./RouteHint";
 import type { RouteResult } from "./HomeView/routeIntent";
 import { useLocale } from "../contexts/LocaleContext";
@@ -71,6 +72,9 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   // 工作看板跟首頁一樣不是分頁，是另一個「都不 active」的覆蓋畫面，與首頁互斥。
   const [boardActive, setBoardActive] = useState(false);
   const boardActiveRef = useRef(boardActive);
+  // 對話記錄乾淨化：掛在這裡而不是看板裡面，因為看板只有在該專案是當前
+  // 分頁時才掛載——見這個 hook 自己的註解。
+  useTranscriptUpgrader();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   // 記住這次開啟 ConnectDialog，是不是某個既有遠端終端機分頁的工具列

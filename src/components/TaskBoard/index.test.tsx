@@ -41,7 +41,6 @@ vi.mock("../../lib/runningTaskTabRegistry", () => ({
 
 import { listTasks, onTasksUpdated, moveTask } from "../../ipc/tasks";
 import type { TaskWithAttachments } from "../../ipc/tasks";
-import { serializeTerminal } from "../../lib/terminalInstanceRegistry";
 import { setRunningTaskTabs } from "../../lib/runningTaskTabRegistry";
 import { ProjectBoard } from "./ProjectBoard";
 
@@ -600,65 +599,12 @@ describe("ProjectBoard", () => {
     expect(dialog.style.width).toBe("700px");
     expect(dialog.style.height).toBe("500px");
   });
-
-  // Regression coverage for the new "just finished → try to upgrade the
-  // saved transcript" behavior. Uses a controllable listTasks mock (like the
-  // existing "re-fetches when tasks-updated fires" test) to drive a real
-  // status transition through refresh().
-  it("upgrades the transcript once when a card transitions into done, with a live tab", async () => {
-    const { saveTranscript } = await import("../../ipc/tasks");
-    vi.mocked(serializeTerminal).mockReturnValue("clean serialized text");
-    let fire: () => void = () => {};
-    vi.mocked(onTasksUpdated).mockImplementation(async (cb) => { fire = cb; return () => {}; });
-
-    vi.mocked(listTasks).mockResolvedValue([
-      card({ id: "d", title: "Running", status: "running", tab_id: "tab-1" }),
-    ]);
-    view();
-    await screen.findByText("Running");
-    expect(saveTranscript).not.toHaveBeenCalled();
-
-    vi.mocked(listTasks).mockResolvedValue([
-      card({ id: "d", title: "Running", status: "done", outcome: "success", tab_id: "tab-1", transcript_path: "/p/t.txt" }),
-    ]);
-    fire();
-
-    await waitFor(() =>
-      expect(saveTranscript).toHaveBeenCalledWith(PROJECT_ID, "d", "clean serialized text"),
-    );
-  });
-
-  it("does not upgrade on first load even if a card is already done", async () => {
-    const { saveTranscript } = await import("../../ipc/tasks");
-    vi.mocked(serializeTerminal).mockReturnValue("clean serialized text");
-    vi.mocked(listTasks).mockResolvedValue([
-      card({ id: "d", title: "AlreadyDone", status: "done", outcome: "success", tab_id: "tab-1" }),
-    ]);
-    view();
-    await screen.findByText("AlreadyDone");
-    expect(saveTranscript).not.toHaveBeenCalled();
-  });
-
-  it("does not upgrade when the tab is not live (serializeTerminal returns null)", async () => {
-    const { saveTranscript } = await import("../../ipc/tasks");
-    vi.mocked(serializeTerminal).mockReturnValue(null);
-    let fire: () => void = () => {};
-    vi.mocked(onTasksUpdated).mockImplementation(async (cb) => { fire = cb; return () => {}; });
-
-    vi.mocked(listTasks).mockResolvedValue([
-      card({ id: "d", title: "Running", status: "running", tab_id: "tab-1" }),
-    ]);
-    view();
-    await screen.findByText("Running");
-
-    vi.mocked(listTasks).mockResolvedValue([
-      card({ id: "d", title: "Running", status: "done", outcome: "success", tab_id: "tab-1" }),
-    ]);
-    fire();
-
-    await waitFor(() => expect(listTasks).toHaveBeenCalledTimes(2));
-    expect(saveTranscript).not.toHaveBeenCalled();
-  });
+  // 對話記錄乾淨化的觸發已經搬到後端的 `task-finished` 事件 ＋
+  // TerminalApp 的 useTranscriptUpgrader（永遠掛載）——因為看板只有在
+  // 該專案是當前分頁時才掛載，別的專案完成時沒人在聽。原本掛在這裡的
+  // 三個測試測的是舊的「看板比對前後狀態」觸發方式，已經沒有對應的
+  // 程式碼；涵蓋範圍移到 useTranscriptUpgrader.test.tsx（觸發）與
+  // transcriptUpgrade.test.ts（分頁不在／序列化失敗時的行為）。
 
   // Regression coverage for a real bug: closing a tab whose Task Board task
   // was still `running` gave no warning at all — TerminalView's own close

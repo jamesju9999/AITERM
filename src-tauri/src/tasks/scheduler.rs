@@ -54,6 +54,16 @@ pub fn order_heads(mut heads: Vec<(String, TaskRow)>) -> Vec<(String, TaskRow)> 
     heads
 }
 
+/// `task-finished` 的酬載：明確指出剛到達終局的是哪個專案的哪張卡片、
+/// 用的是哪個分頁。前端靠它把對話記錄換成 xterm 序列化出來的乾淨版本
+/// （那需要活著的 xterm 實例，只有前端有）。
+#[derive(Clone, serde::Serialize)]
+struct TaskFinishedEvent {
+    project_id: String,
+    task_id: String,
+    tab_id: String,
+}
+
 /// Abstracts "actually run this card" so the loop is testable without an
 /// `AppHandle`. Production impl is `RealDispatcher`.
 #[async_trait::async_trait]
@@ -106,6 +116,7 @@ impl Dispatcher for RealDispatcher {
         // watch 結束後的寫回完全不需要回頭查 registry。
         let pool = project.pool.clone();
         let project_path = project.path.clone();
+        let project_id = project.id.clone();
         let pty = self.pty.clone();
         let app = self.app.clone();
         let wake = self.wake.clone();
@@ -123,6 +134,18 @@ impl Dispatcher for RealDispatcher {
             ).await;
             cancels.lock().remove(&task_id);
             let _ = app.emit("tasks-updated", ());
+            // 帶資料的完成事件，給對話記錄乾淨化用。不能只靠 tasks-updated：
+            // 那個沒有酬載，接收端得自己比對前後狀態才知道「哪一張剛完成」，
+            // 而唯一在做這件事的地方是該專案的看板——但看板只有在該專案是
+            // 當前分頁時才掛載，別的專案完成時根本沒人在聽。
+            let _ = app.emit(
+                "task-finished",
+                TaskFinishedEvent {
+                    project_id: project_id.clone(),
+                    task_id: task_id.clone(),
+                    tab_id: tab_id.clone(),
+                },
+            );
             wake.notify_one();
         });
         Ok(())
