@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 
+import { unlistenOnCleanup } from "../../lib/eventSubscription";
 import { tryUpgradeTranscript } from "./transcriptUpgrade";
 
 interface TaskFinishedPayload {
@@ -25,6 +26,6 @@ export function useTranscriptUpgrader(): void {
       const { project_id, task_id, tab_id } = e.payload;
       void tryUpgradeTranscript(project_id, task_id, tab_id);
     });
-    return () => void un.then((f) => f());
+    return unlistenOnCleanup(un, "task-finished");
   }, []);
 }

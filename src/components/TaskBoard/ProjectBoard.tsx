@@ -11,6 +11,7 @@ import {
   type TaskWithAttachments,
 } from "../../ipc/tasks";
 import { setRunningTaskTabs } from "../../lib/runningTaskTabRegistry";
+import { unlistenOnCleanup } from "../../lib/eventSubscription";
 import { TaskCard } from "./TaskCard";
 import { TaskColumn } from "./TaskColumn";
 import { TaskEditorDialog } from "./TaskEditorDialog";
@@ -63,9 +64,10 @@ export function ProjectBoard({ projectId }: { projectId: string }) {
     mounted.current = true;
     void refresh();
     const un = onTasksUpdated(() => void refresh());
+    const unlisten = unlistenOnCleanup(un, "tasks-updated");
     return () => {
       mounted.current = false;
-      void un.then((f) => f());
+      unlisten();
     };
   }, [refresh]);
 

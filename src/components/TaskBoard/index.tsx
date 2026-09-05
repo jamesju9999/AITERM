@@ -3,6 +3,7 @@ import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 
 import { listProjects, openProject, type ProjectInfo } from "../../ipc/projects";
 import { onTasksUpdated } from "../../ipc/tasks";
+import { unlistenOnCleanup } from "../../lib/eventSubscription";
 import { ProjectBoard } from "./ProjectBoard";
 import { ProjectList } from "./ProjectList";
 import { ProjectTabBar } from "./ProjectTabBar";
@@ -50,9 +51,10 @@ export function TaskBoardView() {
     mounted.current = true;
     void refresh();
     const un = onTasksUpdated(() => void refresh());
+    const unlisten = unlistenOnCleanup(un, "tasks-updated");
     return () => {
       mounted.current = false;
-      void un.then((f) => f());
+      unlisten();
     };
   }, [refresh]);
 
