@@ -24,6 +24,13 @@ vi.mock("../../ipc/tasks", () => ({
   markTaskDone: vi.fn().mockResolvedValue(undefined),
 }));
 
+// TaskEditorDialog reads the project's already-used folders from ipc/projects
+// on mount; unmocked that goes to the real `invoke` and throws outside a Tauri
+// webview.
+vi.mock("../../ipc/projects", () => ({
+  usedDirs: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock("../../lib/terminalInstanceRegistry", () => ({
   serializeTerminal: vi.fn(),
 }));
@@ -34,9 +41,14 @@ vi.mock("../../lib/runningTaskTabRegistry", () => ({
 
 import { listTasks, onTasksUpdated, moveTask } from "../../ipc/tasks";
 import type { TaskWithAttachments } from "../../ipc/tasks";
-import { serializeTerminal } from "../../lib/terminalInstanceRegistry";
 import { setRunningTaskTabs } from "../../lib/runningTaskTabRegistry";
-import { TaskBoardView } from "./index";
+import { ProjectBoard } from "./ProjectBoard";
+
+/** Every IPC assertion below pins this exact value as the first argument.
+ * The board is now per-project and every `tasks_*` command is scoped by it,
+ * so a dropped or wrong projectId is the single most likely regression of
+ * the projects refactor — asserting on it is the point, never `expect.anything()`. */
+const PROJECT_ID = "p1";
 
 const card = (over: Partial<TaskWithAttachments>): TaskWithAttachments => ({
   id: "c1", title: "Card one", body: "", project_dir: "/r", status: "planning",
@@ -46,7 +58,8 @@ const card = (over: Partial<TaskWithAttachments>): TaskWithAttachments => ({
   ...over,
 });
 
-const view = () => render(<LocaleProvider><TaskBoardView /></LocaleProvider>);
+const view = () =>
+  render(<LocaleProvider><ProjectBoard projectId={PROJECT_ID} /></LocaleProvider>);
 
 beforeEach(() => {
   // Repo vitest config does not set `clearMocks`, so call counts would leak
@@ -56,10 +69,12 @@ beforeEach(() => {
   vi.mocked(onTasksUpdated).mockResolvedValue(() => {});
 });
 
-describe("TaskBoardView", () => {
+describe("ProjectBoard", () => {
   it("renders four columns", async () => {
     view();
     await waitFor(() => expect(screen.getByText(/計畫中|Planned/)).toBeInTheDocument());
+    // The board fetches only its own project's tasks.
+    expect(listTasks).toHaveBeenCalledWith(PROJECT_ID);
     expect(screen.getByText(/待執行|Queued/)).toBeInTheDocument();
     expect(screen.getByText(/執行中|Running/)).toBeInTheDocument();
     expect(screen.getByText(/已完成|Done/)).toBeInTheDocument();
@@ -115,7 +130,9 @@ describe("TaskBoardView", () => {
       fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
       fireEvent.mouseMove(window, { clientX: 100, clientY: 120 }); // past the drag threshold
       fireEvent.mouseUp(window, { clientX: 100, clientY: 120 });
-      await waitFor(() => expect(moveTask).toHaveBeenCalledWith("p", "queued", expect.any(Number)));
+      await waitFor(() =>
+        expect(moveTask).toHaveBeenCalledWith(PROJECT_ID, "p", "queued", expect.any(Number)),
+      );
     } finally {
       document.elementFromPoint = originalElementFromPoint;
     }
@@ -139,7 +156,7 @@ describe("TaskBoardView", () => {
       fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
       fireEvent.mouseMove(window, { clientX: 100, clientY: 120 });
       fireEvent.mouseUp(window, { clientX: 100, clientY: 120 });
-      await waitFor(() => expect(markTaskDone).toHaveBeenCalledWith("r"));
+      await waitFor(() => expect(markTaskDone).toHaveBeenCalledWith(PROJECT_ID, "r"));
       expect(moveTask).not.toHaveBeenCalled();
     } finally {
       document.elementFromPoint = originalElementFromPoint;
@@ -297,7 +314,7 @@ describe("TaskBoardView", () => {
     const user = userEvent.setup();
     await screen.findByText("Runner");
     await user.click(screen.getByRole("button", { name: /停止|Stop/ }));
-    expect(stopTask).toHaveBeenCalledWith("r");
+    expect(stopTask).toHaveBeenCalledWith(PROJECT_ID, "r");
   });
 
   it("interactive running card shows the interactive badge and a Mark Done button that calls markTaskDone", async () => {
@@ -310,7 +327,7 @@ describe("TaskBoardView", () => {
     await screen.findByText("Chatting");
     expect(screen.getByText(/互動|Interactive/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /標記完成|Mark Done/ }));
-    expect(markTaskDone).toHaveBeenCalledWith("r");
+    expect(markTaskDone).toHaveBeenCalledWith(PROJECT_ID, "r");
   });
 
   it("running card carries a data-task-status attribute matching its status, for the CSS left-accent-bar", async () => {
@@ -370,7 +387,7 @@ describe("TaskBoardView", () => {
     await screen.findByText("Done one");
     await user.click(screen.getByRole("button", { name: /^刪除$|^Delete$/ }));
     await waitFor(() => expect(confirm).toHaveBeenCalled());
-    await waitFor(() => expect(deleteTask).toHaveBeenCalledWith("d", false));
+    await waitFor(() => expect(deleteTask).toHaveBeenCalledWith(PROJECT_ID, "d", false));
   });
 
   it("done+failed card shows the failed badge and its error message", async () => {
@@ -389,7 +406,7 @@ describe("TaskBoardView", () => {
     const user = userEvent.setup();
     await screen.findByText("Redo me");
     await user.click(screen.getByRole("button", { name: /重新派工|Re-dispatch/ }));
-    expect(cloneTask).toHaveBeenCalledWith("d");
+    expect(cloneTask).toHaveBeenCalledWith(PROJECT_ID, "d");
   });
 
   it("new-card dialog creates a task with the typed fields", async () => {
@@ -404,6 +421,7 @@ describe("TaskBoardView", () => {
     await user.click(screen.getByRole("button", { name: /^儲存$|^Save$/ }));
     await waitFor(() =>
       expect(createTask).toHaveBeenCalledWith(
+        PROJECT_ID,
         expect.objectContaining({ title: "Ship it", body: "do the thing", project_dir: "/repo", parallel_ok: true }),
       ),
     );
@@ -425,6 +443,7 @@ describe("TaskBoardView", () => {
     await user.click(screen.getByRole("button", { name: /^儲存$|^Save$/ }));
     await waitFor(() =>
       expect(createTask).toHaveBeenCalledWith(
+        PROJECT_ID,
         expect.objectContaining({ title: "Chat task", project_dir: "/repo", interactive: true }),
       ),
     );
@@ -440,7 +459,10 @@ describe("TaskBoardView", () => {
     await user.type(screen.getByLabelText(/專案資料夾|Project folder/), "/repo");
     await user.click(screen.getByRole("button", { name: /^儲存$|^Save$/ }));
     await waitFor(() =>
-      expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ interactive: false })),
+      expect(createTask).toHaveBeenCalledWith(
+        PROJECT_ID,
+        expect.objectContaining({ interactive: false }),
+      ),
     );
   });
 
@@ -473,7 +495,12 @@ describe("TaskBoardView", () => {
 
     await user.click(screen.getByRole("button", { name: /^儲存$|^Save$/ }));
     await waitFor(() =>
-      expect(addAttachment).toHaveBeenCalledWith("id-new", "spec.md", expect.any(Uint8Array)),
+      expect(addAttachment).toHaveBeenCalledWith(
+        PROJECT_ID,
+        "id-new",
+        "spec.md",
+        expect.any(Uint8Array),
+      ),
     );
   });
 
@@ -488,7 +515,10 @@ describe("TaskBoardView", () => {
     await user.type(title, "New title");
     await user.click(screen.getByRole("button", { name: /^儲存$|^Save$/ }));
     await waitFor(() =>
-      expect(updateTask).toHaveBeenCalledWith(expect.objectContaining({ id: "p", title: "New title" })),
+      expect(updateTask).toHaveBeenCalledWith(
+        PROJECT_ID,
+        expect.objectContaining({ id: "p", title: "New title" }),
+      ),
     );
   });
 
@@ -510,6 +540,7 @@ describe("TaskBoardView", () => {
     await user.click(await screen.findByRole("button", { name: /對話記錄|Conversation/ }));
     expect(await screen.findByText("查詢目錄資訊")).toBeInTheDocument();
     expect(await screen.findByText(/line A/)).toBeInTheDocument();
+    expect(readTranscript).toHaveBeenCalledWith(PROJECT_ID, "d");
   });
 
   // Regression test for a real complaint: the raw transcript is a literal
@@ -568,63 +599,12 @@ describe("TaskBoardView", () => {
     expect(dialog.style.width).toBe("700px");
     expect(dialog.style.height).toBe("500px");
   });
-
-  // Regression coverage for the new "just finished → try to upgrade the
-  // saved transcript" behavior. Uses a controllable listTasks mock (like the
-  // existing "re-fetches when tasks-updated fires" test) to drive a real
-  // status transition through refresh().
-  it("upgrades the transcript once when a card transitions into done, with a live tab", async () => {
-    const { saveTranscript } = await import("../../ipc/tasks");
-    vi.mocked(serializeTerminal).mockReturnValue("clean serialized text");
-    let fire: () => void = () => {};
-    vi.mocked(onTasksUpdated).mockImplementation(async (cb) => { fire = cb; return () => {}; });
-
-    vi.mocked(listTasks).mockResolvedValue([
-      card({ id: "d", title: "Running", status: "running", tab_id: "tab-1" }),
-    ]);
-    view();
-    await screen.findByText("Running");
-    expect(saveTranscript).not.toHaveBeenCalled();
-
-    vi.mocked(listTasks).mockResolvedValue([
-      card({ id: "d", title: "Running", status: "done", outcome: "success", tab_id: "tab-1", transcript_path: "/p/t.txt" }),
-    ]);
-    fire();
-
-    await waitFor(() => expect(saveTranscript).toHaveBeenCalledWith("d", "clean serialized text"));
-  });
-
-  it("does not upgrade on first load even if a card is already done", async () => {
-    const { saveTranscript } = await import("../../ipc/tasks");
-    vi.mocked(serializeTerminal).mockReturnValue("clean serialized text");
-    vi.mocked(listTasks).mockResolvedValue([
-      card({ id: "d", title: "AlreadyDone", status: "done", outcome: "success", tab_id: "tab-1" }),
-    ]);
-    view();
-    await screen.findByText("AlreadyDone");
-    expect(saveTranscript).not.toHaveBeenCalled();
-  });
-
-  it("does not upgrade when the tab is not live (serializeTerminal returns null)", async () => {
-    const { saveTranscript } = await import("../../ipc/tasks");
-    vi.mocked(serializeTerminal).mockReturnValue(null);
-    let fire: () => void = () => {};
-    vi.mocked(onTasksUpdated).mockImplementation(async (cb) => { fire = cb; return () => {}; });
-
-    vi.mocked(listTasks).mockResolvedValue([
-      card({ id: "d", title: "Running", status: "running", tab_id: "tab-1" }),
-    ]);
-    view();
-    await screen.findByText("Running");
-
-    vi.mocked(listTasks).mockResolvedValue([
-      card({ id: "d", title: "Running", status: "done", outcome: "success", tab_id: "tab-1" }),
-    ]);
-    fire();
-
-    await waitFor(() => expect(listTasks).toHaveBeenCalledTimes(2));
-    expect(saveTranscript).not.toHaveBeenCalled();
-  });
+  // 對話記錄乾淨化的觸發已經搬到後端的 `task-finished` 事件 ＋
+  // TerminalApp 的 useTranscriptUpgrader（永遠掛載）——因為看板只有在
+  // 該專案是當前分頁時才掛載，別的專案完成時沒人在聽。原本掛在這裡的
+  // 三個測試測的是舊的「看板比對前後狀態」觸發方式，已經沒有對應的
+  // 程式碼；涵蓋範圍移到 useTranscriptUpgrader.test.tsx（觸發）與
+  // transcriptUpgrade.test.ts（分頁不在／序列化失敗時的行為）。
 
   // Regression coverage for a real bug: closing a tab whose Task Board task
   // was still `running` gave no warning at all — TerminalView's own close
@@ -686,7 +666,7 @@ describe("TaskBoardView", () => {
     window.addEventListener("aiterm:close-tab", onCloseTab);
     try {
       await user.click(screen.getByRole("button", { name: /^刪除$|^Delete$/ }));
-      await waitFor(() => expect(deleteTask).toHaveBeenCalledWith("d", true));
+      await waitFor(() => expect(deleteTask).toHaveBeenCalledWith(PROJECT_ID, "d", true));
       await waitFor(() => expect(events).toHaveLength(1));
       expect(events[0].detail.tabId).toBe("tab-9");
     } finally {

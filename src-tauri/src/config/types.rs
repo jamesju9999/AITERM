@@ -185,7 +185,7 @@ impl Default for McpToolServerConfig {
     }
 }
 
-pub fn default_task_board_max_concurrent() -> u32 { 2 }
+pub fn default_task_board_max_concurrent() -> u32 { 5 }
 pub fn default_claude_command() -> String { "claude".to_string() }
 
 /// Settings for the task board (see
@@ -201,6 +201,11 @@ pub struct TaskBoardConfig {
     /// could point this at another agent, but that's not a supported feature.
     #[serde(default = "default_claude_command")]
     pub claude_command: String,
+    /// 已知專案資料夾的絕對路徑。只存路徑——名稱與 id 每次啟動時
+    /// 從各自的 `.aitprj` 讀取，這樣使用者在 Finder 裡改了專案檔，
+    /// App 下次啟動就會看到。
+    #[serde(default)]
+    pub project_paths: Vec<String>,
 }
 
 impl Default for TaskBoardConfig {
@@ -208,6 +213,7 @@ impl Default for TaskBoardConfig {
         Self {
             max_concurrent: default_task_board_max_concurrent(),
             claude_command: default_claude_command(),
+            project_paths: Vec::new(),
         }
     }
 }
@@ -881,21 +887,42 @@ mod tests {
     #[test]
     fn task_board_config_has_sane_defaults() {
         let c = TaskBoardConfig::default();
-        assert_eq!(c.max_concurrent, 2);
+        assert_eq!(c.max_concurrent, 5);
         assert_eq!(c.claude_command, "claude");
     }
 
     #[test]
     fn app_config_default_includes_task_board() {
         let c = AppConfig::default();
-        assert_eq!(c.task_board.max_concurrent, 2);
+        assert_eq!(c.task_board.max_concurrent, 5);
     }
 
     #[test]
     fn task_board_config_deserialises_from_empty_table() {
         // Old config with no [task_board] section must still parse.
         let c: AppConfig = toml::from_str("").unwrap();
-        assert_eq!(c.task_board.max_concurrent, 2);
+        assert_eq!(c.task_board.max_concurrent, 5);
+    }
+
+    #[test]
+    fn task_board_defaults_to_five_concurrent() {
+        let c = TaskBoardConfig::default();
+        assert_eq!(c.max_concurrent, 5);
+    }
+
+    #[test]
+    fn task_board_project_paths_defaults_to_empty() {
+        let c = TaskBoardConfig::default();
+        assert!(c.project_paths.is_empty());
+    }
+
+    #[test]
+    fn a_config_written_before_project_paths_existed_still_parses() {
+        // 舊設定檔沒有 project_paths 欄位——必須不報錯，補成空陣列
+        let json = r#"{"max_concurrent":3,"claude_command":"claude"}"#;
+        let c: TaskBoardConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(c.max_concurrent, 3);
+        assert!(c.project_paths.is_empty());
     }
 }
 

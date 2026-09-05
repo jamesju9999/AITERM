@@ -1,297 +1,135 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 
-import { useLocale } from "../../contexts/LocaleContext";
-import {
-  listTasks,
-  markTaskDone,
-  moveTask,
-  onTasksUpdated,
-  type TaskStatus,
-  type TaskWithAttachments,
-} from "../../ipc/tasks";
-import { setRunningTaskTabs } from "../../lib/runningTaskTabRegistry";
-import { TaskCard } from "./TaskCard";
-import { TaskColumn } from "./TaskColumn";
-import { TaskEditorDialog } from "./TaskEditorDialog";
-import { TranscriptDialog } from "./TranscriptDialog";
-import { tryUpgradeTranscript } from "./transcriptUpgrade";
+import { listProjects, openProject, type ProjectInfo } from "../../ipc/projects";
+import { onTasksUpdated } from "../../ipc/tasks";
+import { unlistenOnCleanup } from "../../lib/eventSubscription";
+import { ProjectBoard } from "./ProjectBoard";
+import { ProjectList } from "./ProjectList";
+import { ProjectTabBar } from "./ProjectTabBar";
 import "./index.css";
 
-const COLUMNS: TaskStatus[] = ["planning", "queued", "running", "done"];
+const OPEN_KEY = "aiterm_board_open_projects";
+const ACTIVE_KEY = "aiterm_board_active_project";
 
-/** Below this many pixels of movement, a mousedown+mouseup is a click, not a
- * drag — same threshold TabBar's own (proven-working) drag uses. */
-const DRAG_THRESHOLD_PX = 4;
-
-interface DragState {
-  id: string;
-  startX: number;
-  startY: number;
-  started: boolean;
+function readOpenIds(): string[] {
+  try {
+    const raw = localStorage.getItem(OPEN_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
+/**
+ * 兩層導覽的路由器。
+ *
+ * 「開啟中」在這裡純粹是 UI 概念——排程器會派工給**所有**已知專案，
+ * 跟分頁列上有沒有它無關（spec D4/D7）。
+ */
 export function TaskBoardView() {
-  const { t } = useLocale();
-  const [tasks, setTasks] = useState<TaskWithAttachments[]>([]);
-  const [editing, setEditing] = useState<TaskWithAttachments | "new" | null>(null);
-  const [transcriptFor, setTranscriptFor] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectInfo[]>([]);
+  const [openIds, setOpenIds] = useState<string[]>(readOpenIds);
+  const [activeId, setActiveId] = useState<string | null>(
+    () => localStorage.getItem(ACTIVE_KEY),
+  );
+  const [showList, setShowList] = useState(false);
+
+  // 這個元件是覆蓋畫面（TerminalApp 的 `boardActive && <TaskBoardView />`），
+  // 使用者一離開就整個卸載，而 refresh() 會被每一次 tasks-updated 觸發——
+  // 所以抓完之後要先確認自己還活著才 setState。同 ProjectBoard 的作法。
   const mounted = useRef(true);
-  /** Previous fetch's id→status snapshot, so refresh() can tell a genuine
-   * "just transitioned into done" apart from "was already done on a
-   * previous fetch" (including the very first load — an already-done task
-   * from a prior session must NOT be treated as freshly completed). */
-  const lastStatusRef = useRef<Map<string, TaskStatus>>(new Map());
-  const dragRef = useRef<DragState | null>(null);
-  /** Which column's `data-testid` the cursor is currently over while
-   * dragging, for the drop-target highlight. Not the drop decision itself
-   * (that's read fresh from `elementFromPoint` on mouseup). */
-  const [dragOverStatus, setDragOverStatus] = useState<TaskStatus | null>(null);
-  /** id of the card currently being dragged, purely for the fade-out visual
-   * (mousedown alone isn't "dragging" yet — only once the threshold is
-   * crossed). Without this the interaction gave no feedback at all, which
-   * made it look broken even once the drag mechanism itself worked. */
-  const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
-  /** Live cursor position while dragging, in viewport coordinates. Drives a
-   * "ghost" card rendered via a portal into document.body (see the render
-   * below) — NOT a transform on the card's own wrapper. Every column has
-   * `overflow: hidden`, so a translated-in-place card got clipped the
-   * instant it crossed its own column's edge into a neighbor; a portal
-   * sibling of every column has no such ancestor to be clipped by. */
-  const [dragPointer, setDragPointer] = useState<{ x: number; y: number } | null>(null);
 
   const refresh = useCallback(async () => {
-    const rows = await listTasks();
+    const rows = await listProjects();
     if (!mounted.current) return;
-    const previous = lastStatusRef.current;
-    const next = new Map<string, TaskStatus>();
-    for (const row of rows) {
-      next.set(row.id, row.status);
-      const wasDone = previous.get(row.id) === "done";
-      const justFinished = previous.has(row.id) && !wasDone && row.status === "done";
-      if (justFinished) {
-        void tryUpgradeTranscript(row.id, row.tab_id);
-      }
-    }
-    lastStatusRef.current = next;
-    setTasks(rows);
+    setProjects(rows);
   }, []);
 
   useEffect(() => {
     mounted.current = true;
     void refresh();
     const un = onTasksUpdated(() => void refresh());
+    const unlisten = unlistenOnCleanup(un, "tasks-updated");
     return () => {
       mounted.current = false;
-      void un.then((f) => f());
+      unlisten();
     };
   }, [refresh]);
 
-  // Keeps TerminalView's close guard aware of which tabs currently belong
-  // to a `running` task — see runningTaskTabRegistry.ts for why this lives
-  // in a shared module instead of TaskBoard registering its own close
-  // guard directly (a tab can only have ONE registered guard; this tab
-  // already has TerminalView's own busy/mission guard on it).
+  // 存的是使用者的意圖（未過濾的 openIds/activeId），不是底下算出來的顯示
+  // 結果：projects 還沒載進來時 visibleOpenIds 必定是空的，存它等於在每次
+  // 啟動的前一瞬間把使用者的分頁清單洗掉。反過來，暫時讀不到的專案（外接
+  // 磁碟還沒掛上之類）之後回來時，分頁也就跟著回來。
   useEffect(() => {
-    setRunningTaskTabs(
-      tasks.filter((x) => x.status === "running" && x.tab_id).map((x) => x.tab_id as string),
-    );
-  }, [tasks]);
+    localStorage.setItem(OPEN_KEY, JSON.stringify(openIds));
+  }, [openIds]);
 
-  const colTitle = (s: TaskStatus) =>
-    ({
-      planning: t.board_col_planning,
-      queued: t.board_col_queued,
-      running: t.board_col_running,
-      done: t.board_col_done,
-    })[s];
+  useEffect(() => {
+    if (activeId) localStorage.setItem(ACTIVE_KEY, activeId);
+    else localStorage.removeItem(ACTIVE_KEY);
+  }, [activeId]);
 
-  const byStatus = (s: TaskStatus) =>
-    tasks.filter((x) => x.status === s).sort((a, b) => a.sort_order - b.sort_order);
+  const activate = useCallback((id: string) => {
+    setOpenIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    setActiveId(id);
+    setShowList(false);
+  }, []);
 
-  // Single source of truth for "can this card legally be dropped on this
-  // column", shared by handleDrop (what actually happens on release) and
-  // the drag-over highlight below (what visually invites a drop while
-  // hovering) — so a column can never light up as a valid target and then
-  // silently reject the drop, which was the actual bug this fixed.
-  const isLegalDropTarget = useCallback((cardRow: TaskWithAttachments, to: TaskStatus): boolean => {
-    if (cardRow.status === to) return false;
-    if (cardRow.status === "running" && to === "done" && cardRow.interactive) return true;
+  /** 只把分頁從列上拿掉。不移除專案、不刪檔案、不影響派工。
+   * 不在這裡挑「下一個活躍分頁」——底下的 `active` 是從 openIds 推導
+   * 出來的，關掉目前這個就自動落到剩下的最後一個。 */
+  const closeTab = useCallback((id: string) => {
+    setOpenIds((prev) => prev.filter((x) => x !== id));
+  }, []);
+
+  const openOther = useCallback(async () => {
+    const picked = await openFileDialog({
+      filters: [{ name: "AITerm 專案", extensions: ["aitprj"] }],
+    });
+    if (typeof picked !== "string") return;
+    const id = await openProject(picked);
+    await refresh();
+    activate(id);
+  }, [activate, refresh]);
+
+  // 分頁列與目前分頁都是**衍生**狀態，在 render 當下算出來，不用 effect
+  // ＋ setState 去同步：資料夾可能在上次關閉之後被刪掉，還原回來的 id 不一
+  // 定還存在；分頁被關掉之後也要自動落到剩下的最後一個。用 effect 同步會多
+  // 跑一次 render，而且中間那一幀畫的是還沒修正的錯誤畫面。
+  const visibleOpenIds = openIds.filter((id) => projects.some((p) => p.id === id));
+  // 先算出一個確定是 string 的 active，再用它做分支——寫成
+  // `active !== null` 的布林旗標的話，TypeScript 不會據此收窄
+  // 底下 JSX 中 active 的型別，projectId={active} 會是型別錯誤。
+  const active: string | null = visibleOpenIds.includes(activeId ?? "")
+    ? activeId
+    : (visibleOpenIds[visibleOpenIds.length - 1] ?? null);
+
+  if (showList || active === null) {
     return (
-      (cardRow.status === "planning" && to === "queued") ||
-      (cardRow.status === "queued" && to === "planning")
+      <div className="task-board">
+        <ProjectList projects={projects} onRefresh={refresh} onOpen={activate} />
+      </div>
     );
-  }, []);
-
-  const handleDrop = useCallback(
-    async (id: string, to: TaskStatus) => {
-      const cardRow = tasks.find((x) => x.id === id);
-      if (!cardRow || !isLegalDropTarget(cardRow, to)) return;
-
-      if (cardRow.status === "running" && to === "done" && cardRow.interactive) {
-        await markTaskDone(id);
-        return; // finish flow (incl. the outcome badge) arrives via the
-                 // existing tasks-updated listener, same as auto-completion.
-      }
-
-      const dest = tasks
-        .filter((x) => x.status === to)
-        .sort((a, b) => a.sort_order - b.sort_order);
-      const sortOrder = dest.length ? dest[dest.length - 1].sort_order + 1 : 1;
-      await moveTask(id, to, sortOrder);
-      setTasks((prev) =>
-        prev.map((x) => (x.id === id ? { ...x, status: to, sort_order: sortOrder } : x)),
-      );
-    },
-    [tasks, isLegalDropTarget],
-  );
-
-  // Card drag-to-move: deliberately NOT native HTML5 drag-and-drop
-  // (draggable/dragstart/dragover/drop). Tauri's window-level
-  // `dragDropEnabled` (default true, not overridden in tauri.conf.json)
-  // intercepts any native OS drag session before those DOM events ever
-  // fire — the same reason TabBar's own tab-reorder drag uses plain mouse
-  // events instead. Mirrors that exact mechanism: mousedown arms a pending
-  // drag, mousemove past a small threshold "starts" it and tracks which
-  // column is under the cursor via `elementFromPoint` (there is no native
-  // dragover to listen to), mouseup reads the column under the release
-  // point and commits the move.
-  const statusUnderPoint = useCallback((x: number, y: number): TaskStatus | null => {
-    const el = document.elementFromPoint(x, y);
-    const testId = el?.closest("[data-testid^='column-']")?.getAttribute("data-testid");
-    const status = testId?.replace("column-", "");
-    return status && (COLUMNS as string[]).includes(status) ? (status as TaskStatus) : null;
-  }, []);
-
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      const st = dragRef.current;
-      if (!st) return;
-      if (!st.started) {
-        if (Math.hypot(e.clientX - st.startX, e.clientY - st.startY) < DRAG_THRESHOLD_PX) return;
-        st.started = true;
-        setDraggingCardId(st.id);
-      }
-      setDragPointer({ x: e.clientX, y: e.clientY });
-      const hovered = statusUnderPoint(e.clientX, e.clientY);
-      const draggedCard = tasks.find((x) => x.id === st.id);
-      setDragOverStatus(hovered && draggedCard && isLegalDropTarget(draggedCard, hovered) ? hovered : null);
-    };
-    const onUp = (e: MouseEvent) => {
-      const st = dragRef.current;
-      dragRef.current = null;
-      setDragOverStatus(null);
-      setDraggingCardId(null);
-      setDragPointer(null);
-      if (!st?.started) return;
-      const to = statusUnderPoint(e.clientX, e.clientY);
-      if (to) void handleDrop(st.id, to);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, [handleDrop, statusUnderPoint, tasks, isLegalDropTarget]);
-
-  const handleCardMouseDown = (e: ReactMouseEvent<HTMLDivElement>, cardRow: TaskWithAttachments) => {
-    if (e.button !== 0) return;
-    const draggable =
-      cardRow.status === "planning" ||
-      cardRow.status === "queued" ||
-      (cardRow.status === "running" && cardRow.interactive);
-    if (!draggable) return;
-    dragRef.current = { id: cardRow.id, startX: e.clientX, startY: e.clientY, started: false };
-  };
+  }
 
   return (
     <div className="task-board">
-      <div className="task-board-toolbar">
-        <button className="task-board-new" onClick={() => setEditing("new")}>
-          + {t.board_new_card}
-        </button>
-      </div>
-      <div className="task-board-columns">
-        {COLUMNS.map((s) => (
-          <TaskColumn key={s} status={s} title={colTitle(s)} count={byStatus(s).length} highlighted={dragOverStatus === s}>
-            {byStatus(s).map((cardRow) => {
-              const draggableCard =
-                cardRow.status === "planning" ||
-                cardRow.status === "queued" ||
-                (cardRow.status === "running" && cardRow.interactive);
-              const isDragging = draggingCardId === cardRow.id;
-              const classes = ["task-card-drag-wrap"];
-              if (draggableCard) classes.push("task-card-drag-wrap--draggable");
-              if (isDragging) classes.push("task-card-drag-wrap--dragging");
-              return (
-                <div
-                  key={cardRow.id}
-                  data-task-drag-id={cardRow.id}
-                  className={classes.join(" ")}
-                  onMouseDown={(e) => handleCardMouseDown(e, cardRow)}
-                >
-                  <TaskCard
-                    card={cardRow}
-                    onEdit={() => setEditing(cardRow)}
-                    onViewTranscript={() => setTranscriptFor(cardRow.id)}
-                    onChanged={() => void refresh()}
-                  />
-                </div>
-              );
-            })}
-          </TaskColumn>
-        ))}
-      </div>
-
-      {editing && (
-        <TaskEditorDialog
-          card={editing === "new" ? null : editing}
-          onClose={() => setEditing(null)}
-          onSaved={() => {
-            setEditing(null);
-            void refresh();
-          }}
-        />
-      )}
-      {transcriptFor &&
-        (() => {
-          const transcriptCard = tasks.find((x) => x.id === transcriptFor);
-          if (!transcriptCard) return null;
-          return (
-            <TranscriptDialog
-              taskId={transcriptFor}
-              body={transcriptCard.body}
-              onClose={() => setTranscriptFor(null)}
-            />
-          );
-        })()}
-
-      {draggingCardId &&
-        dragPointer &&
-        (() => {
-          const draggedCard = tasks.find((x) => x.id === draggingCardId);
-          if (!draggedCard) return null;
-          return createPortal(
-            <div
-              className="task-card-ghost"
-              data-testid="task-drag-ghost"
-              style={{ left: `${dragPointer.x}px`, top: `${dragPointer.y}px` }}
-            >
-              {/* 渲染真的 TaskCard，不是另外手刻一份簡化版——這樣拖曳中看到的
-                  內容（徽章/狀態色條/頭像/按鈕）永遠跟靜止的卡片一致，日後
-                  改卡片也不會漏改這裡。回呼給 no-op：.task-card-ghost 是
-                  pointer-events: none，這些按鈕點不到。 */}
-              <TaskCard
-                card={draggedCard}
-                onEdit={() => {}}
-                onViewTranscript={() => {}}
-                onChanged={() => {}}
-              />
-            </div>,
-            document.body,
-          );
-        })()}
+      <ProjectTabBar
+        projects={projects}
+        openIds={visibleOpenIds}
+        activeId={active}
+        onActivate={activate}
+        onClose={closeTab}
+        onOpenOther={() => void openOther()}
+        onBackToList={() => setShowList(true)}
+      />
+      {/* key 讓切換專案時整個 ProjectBoard 重新掛載，狀態不會殘留。
+          這裡刻意「卸載而非隱藏」——TerminalView 那條「隱藏而非卸載」
+          的規則是為了 xterm.js 在無尺寸元素上 resize 會崩潰，
+          看板沒有 xterm，不適用。 */}
+      <ProjectBoard key={active} projectId={active} />
     </div>
   );
 }

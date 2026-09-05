@@ -15,6 +15,7 @@ pub mod mail;
 pub mod mcp;
 pub mod mcp_server;
 pub mod pty;
+pub mod projects;
 pub mod python_env;
 pub mod secret;
 pub mod share;
@@ -103,11 +104,14 @@ use commands::{
     },
     share_viewer::{share_viewer_connect, share_viewer_disconnect, share_viewer_send},
     shell::open_url,
+    projects::{
+        projects_create, projects_list, projects_open, projects_remove, projects_rename,
+    },
     task_board_config::{task_board_get_config, task_board_set_config},
     tasks::{
         tasks_list, tasks_create, tasks_update, tasks_move, tasks_stop, tasks_delete,
         tasks_add_attachment, tasks_remove_attachment, tasks_clone, tasks_read_transcript,
-        tasks_save_transcript, tasks_mark_done,
+        tasks_save_transcript, tasks_mark_done, tasks_used_dirs,
     },
     updater::updater_supported,
     web::{web_fetch, web_search, npm_mcp_search},
@@ -141,6 +145,34 @@ pub fn run_headless() {
     rt.block_on(enterprise::headless::run_headless(config, secrets));
 }
 
+/// 工作看板的專案：先做一次性的舊資料搬遷，再把設定裡記錄的每個專案
+/// 資料夾開起來。某個專案開不起來不擋住其他專案——`projects_list` 會把
+/// 它的狀態回報給前端。
+async fn load_projects(config: Arc<ConfigStore>) -> projects::ProjectRegistry {
+    let reg = projects::ProjectRegistry::new();
+
+    // 舊資料搬遷：只在第一次執行，複製而非搬移。
+    match projects::migrate::migrate_legacy(&tasks::app_data_dir()).await {
+        Ok(Some(dest)) => {
+            let p = dest.to_string_lossy().into_owned();
+            let _ = config.update(|cfg| {
+                if !cfg.task_board.project_paths.contains(&p) {
+                    cfg.task_board.project_paths.push(p);
+                }
+            });
+        }
+        Ok(None) => {}
+        Err(e) => log::error!("legacy task migration failed: {e}"),
+    }
+
+    for path in config.get().task_board.project_paths {
+        if let Err(e) = reg.open_folder(std::path::Path::new(&path)).await {
+            log::warn!("open project {path}: {e}");
+        }
+    }
+    reg
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let config = Arc::new(ConfigStore::new());
@@ -150,7 +182,8 @@ pub fn run() {
     // 原本用 5 個分開的 block_on 依序執行，等於白白疊加 5 次的開連線／
     // 建表延遲，而且整段都發生在 tauri::Builder 建立之前——app 連「開始
     // 建立視窗」都還沒開始。改成同一個 block_on 裡用 tokio::join! 平行跑。
-    let (usage_store, design_db, loop_session_db, kb_db, mail_db, tasks_db) =
+    // 工作看板的專案（搬遷＋開啟每個專案的 tasks.db）也一起併進來。
+    let (usage_store, design_db, loop_session_db, kb_db, mail_db, project_registry) =
         tauri::async_runtime::block_on(async {
             tokio::join!(
                 async {
@@ -166,7 +199,7 @@ pub fn run() {
                 LoopSessionDb::new(),
                 db::knowledge_base::KnowledgeBaseDb::new(),
                 MailDb::new(),
-                crate::tasks::TasksDb::new(),
+                load_projects(config.clone()),
             )
         });
     let usage_store = Arc::new(usage_store);
@@ -204,7 +237,7 @@ pub fn run() {
         .manage(loop_session_db)
         .manage(kb_db)
         .manage(mail_db)
-        .manage(tasks_db)
+        .manage(project_registry)
         .manage(tokio::sync::Mutex::new(MailState::new()))
         .manage(Db2SidecarState::new(sidecar_path))
         .manage(Arc::new(Mutex::new(VcsCredentialManager::new())))
@@ -559,6 +592,13 @@ pub fn run() {
             tasks_clone,
             tasks_read_transcript,
             tasks_save_transcript,
+            tasks_used_dirs,
+            // 專案
+            projects_list,
+            projects_create,
+            projects_open,
+            projects_remove,
+            projects_rename,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

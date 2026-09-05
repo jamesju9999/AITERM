@@ -27,6 +27,11 @@ pub fn build_prompt(body: &str, attachment_paths: &[String]) -> String {
 const SETTLE_TIMEOUT_MS: u64 = 30_000;
 /// The session is "settled" once it has produced no output for this long.
 const SETTLE_QUIET_MS: u64 = 800;
+/// Fallback for a configured command that never enters the alternate screen
+/// (i.e. isn't a full-screen TUI at all). Quiet for this much longer counts
+/// as settled on its own, so a non-TUI `claude_command` still dispatches
+/// instead of waiting out `SETTLE_TIMEOUT_MS`.
+const NO_TUI_QUIET_MS: u64 = 5_000;
 const POLL_MS: u64 = 250;
 /// Same as `coordination_ops::DONE_MARKER_WAIT_SECONDS` — how long to wait for
 /// `claude` to ring a fresh bell (signalling it finished reading the prompt)
@@ -56,13 +61,45 @@ struct TabSpawnedEvent {
     command: Option<String>,
 }
 
-/// Wait until `tab_id` has produced no output for `SETTLE_QUIET_MS`, or
-/// `SETTLE_TIMEOUT_MS` elapses. Lets `claude` finish booting before we type.
+/// Entering the alternate screen buffer. Claude Code emits this at the very
+/// start of the session, as any full-screen TUI does — the codebase already
+/// relies on that empirically (see the mode-restore test in
+/// `pty/session.rs`). Seeing it is proof the TUI actually launched, which
+/// plain quiet is not.
+const ALT_SCREEN_ENTER: &[u8] = b"\x1b[?1049h";
+
+/// Wait until `claude` has actually started and then gone quiet, so the
+/// prompt is typed into a live REPL rather than into a process that hasn't
+/// taken over the terminal yet.
+///
+/// Quiet alone is NOT a readiness signal: `PtySession::last_output_at` is
+/// seeded at spawn time (see that field's doc), so "hasn't printed anything
+/// yet" and "printed everything and went idle" are indistinguishable to
+/// `ms_since_output`. With a single `claude` cold-starting, its banner
+/// usually lands inside `SETTLE_QUIET_MS` and keeps resetting the window
+/// until it really is up — but with two of them booting at once (two task
+/// board projects dispatching together) the gap exceeds it, we declare
+/// "settled" early, and the typed prompt is swallowed. Observed live.
+///
+/// So: require the alternate-screen sequence *and* quiet. Commands that
+/// never enter it (a `claude_command` that isn't a TUI) fall back to the
+/// longer `NO_TUI_QUIET_MS` window rather than waiting out the deadline.
 async fn wait_until_settled(pty: &PtyManager, tab_id: &str) {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(SETTLE_TIMEOUT_MS);
+    let mut tui_started = false;
     loop {
+        // Latch it: the raw ring is bounded, and a chatty TUI can push the
+        // sequence out of the window it was found in.
+        if !tui_started {
+            tui_started = pty
+                .get_recent_raw(tab_id, 256 * 1024)
+                .is_some_and(|b| {
+                    b.windows(ALT_SCREEN_ENTER.len()).any(|w| w == ALT_SCREEN_ENTER)
+                });
+        }
         let quiet = pty.ms_since_output(tab_id).unwrap_or(u64::MAX);
-        if quiet >= SETTLE_QUIET_MS || tokio::time::Instant::now() >= deadline {
+        let settled = if tui_started { quiet >= SETTLE_QUIET_MS } else { quiet >= NO_TUI_QUIET_MS };
+        if settled || tokio::time::Instant::now() >= deadline {
             return;
         }
         tokio::time::sleep(Duration::from_millis(POLL_MS)).await;
@@ -198,6 +235,79 @@ mod tests {
     }
 
     use crate::pty::manager::PtyManager;
+
+    fn settle_size() -> PtySize {
+        PtySize { rows: 24, cols: 200, pixel_width: 0, pixel_height: 0 }
+    }
+
+    /// A session that has printed its shell prompt and then gone quiet is
+    /// exactly what a slow `claude` cold start looks like from the outside —
+    /// and `ms_since_output` cannot tell it apart from "printed everything
+    /// and is now idle", because `last_output_at` is seeded at spawn time
+    /// (see that field's doc in pty/session.rs). The old implementation
+    /// settled on quiet alone and typed the prompt into a REPL that wasn't
+    /// up yet, so the input was swallowed.
+    ///
+    /// Observed live: with two `claude` processes cold-starting at once
+    /// (two task-board projects dispatching together), the gap before the
+    /// banner appears exceeds SETTLE_QUIET_MS and the prompt is lost.
+    ///
+    /// Proves it by racing against a timeout well past SETTLE_QUIET_MS —
+    /// "still running after 2s" is an observed fact, not a guess about
+    /// timing.
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn does_not_settle_while_the_tui_has_not_started_yet() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(settle_size(), |_| {}).unwrap();
+        // Let the shell draw its prompt and fall quiet — no TUI ever starts.
+        tokio::time::sleep(Duration::from_millis(SETTLE_QUIET_MS + 400)).await;
+
+        let fut = wait_until_settled(&pty, &tab);
+        tokio::pin!(fut);
+        let still_waiting = tokio::time::timeout(Duration::from_millis(2_000), &mut fut)
+            .await
+            .is_err();
+        assert!(
+            still_waiting,
+            "settled while nothing had started — the prompt would be typed into a REPL that isn't up"
+        );
+    }
+
+    /// The other half: once the TUI has actually entered the alternate
+    /// screen and gone quiet, we must proceed promptly — waiting the full
+    /// SETTLE_TIMEOUT_MS would add 30s to every dispatch.
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn settles_once_the_tui_is_up_and_quiet() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(settle_size(), |_| {}).unwrap();
+        pty.write(&tab, b"printf '\\033[?1049h'\n").unwrap();
+
+        let settled = tokio::time::timeout(
+            Duration::from_millis(NO_TUI_QUIET_MS),
+            wait_until_settled(&pty, &tab),
+        )
+        .await;
+        assert!(settled.is_ok(), "did not settle even though the TUI was up and quiet");
+    }
+
+    /// A configured `claude_command` that is not a full-screen TUI never
+    /// emits the alternate-screen sequence. It must still dispatch — after
+    /// the longer no-TUI quiet window, not after the 30s hard deadline.
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn a_non_tui_command_still_settles_on_the_longer_quiet_window() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(settle_size(), |_| {}).unwrap();
+
+        let settled = tokio::time::timeout(
+            Duration::from_millis(NO_TUI_QUIET_MS + 2_000),
+            wait_until_settled(&pty, &tab),
+        )
+        .await;
+        assert!(settled.is_ok(), "a non-TUI command never settled");
+    }
 
     #[tokio::test]
     #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]

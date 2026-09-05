@@ -9,9 +9,10 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
+use crate::projects::{ProjectHandle, ProjectRegistry};
 use crate::tasks::scheduler::SchedulerHandle;
 use crate::tasks::store::{self, AttachmentRow, TaskRow};
-use crate::tasks::{task_dir, TasksDb};
+use crate::tasks::task_dir;
 
 pub(crate) fn edit_allowed(status: &str) -> bool {
     status == store::STATUS_PLANNING
@@ -19,6 +20,13 @@ pub(crate) fn edit_allowed(status: &str) -> bool {
 
 fn emit_updated(app: &AppHandle) {
     let _ = app.emit("tasks-updated", ());
+}
+
+/// 從 registry 取出專案。找不到時回傳給前端的錯誤訊息——
+/// 這在正常使用下不會發生（前端只會送出 `projects_list` 給過的 id），
+/// 會發生代表專案在操作進行中被移除了。
+fn project(reg: &ProjectRegistry, id: &str) -> Result<ProjectHandle, String> {
+    reg.get(id).ok_or_else(|| format!("專案不存在或已關閉：{id}"))
 }
 
 #[derive(Serialize)]
@@ -29,11 +37,15 @@ pub struct TaskWithAttachments {
 }
 
 #[tauri::command]
-pub async fn tasks_list(db: State<'_, TasksDb>) -> Result<Vec<TaskWithAttachments>, String> {
-    let tasks = store::list_tasks(&db.pool).await.map_err(|e| e.to_string())?;
+pub async fn tasks_list(
+    project_id: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<Vec<TaskWithAttachments>, String> {
+    let p = project(&reg, &project_id)?;
+    let tasks = store::list_tasks(&p.pool).await.map_err(|e| e.to_string())?;
     let mut out = Vec::with_capacity(tasks.len());
     for task in tasks {
-        let attachments = store::list_attachments(&db.pool, &task.id)
+        let attachments = store::list_attachments(&p.pool, &task.id)
             .await
             .map_err(|e| e.to_string())?;
         out.push(TaskWithAttachments { task, attachments });
@@ -52,12 +64,14 @@ pub struct CreateArgs {
 
 #[tauri::command]
 pub async fn tasks_create(
+    project_id: String,
     args: CreateArgs,
-    db: State<'_, TasksDb>,
+    reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<String, String> {
+    let p = project(&reg, &project_id)?;
     let id = store::create_task(
-        &db.pool,
+        &p.pool,
         &args.title,
         &args.body,
         &args.project_dir,
@@ -82,23 +96,25 @@ pub struct UpdateArgs {
 
 #[tauri::command]
 pub async fn tasks_update(
+    project_id: String,
     args: UpdateArgs,
-    db: State<'_, TasksDb>,
+    reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<(), String> {
-    let row = store::get_task(&db.pool, &args.id)
+    let p = project(&reg, &project_id)?;
+    let row = store::get_task(&p.pool, &args.id)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "task not found".to_string())?;
-    store::set_parallel_ok(&db.pool, &args.id, args.parallel_ok)
+    store::set_parallel_ok(&p.pool, &args.id, args.parallel_ok)
         .await
         .map_err(|e| e.to_string())?;
-    store::set_interactive(&db.pool, &args.id, args.interactive)
+    store::set_interactive(&p.pool, &args.id, args.interactive)
         .await
         .map_err(|e| e.to_string())?;
     if edit_allowed(&row.status) {
         store::update_task_fields(
-            &db.pool,
+            &p.pool,
             &args.id,
             &args.title,
             &args.body,
@@ -120,12 +136,14 @@ pub struct MoveArgs {
 
 #[tauri::command]
 pub async fn tasks_move(
+    project_id: String,
     args: MoveArgs,
-    db: State<'_, TasksDb>,
+    reg: State<'_, ProjectRegistry>,
     app: AppHandle,
     scheduler: State<'_, SchedulerHandle>,
 ) -> Result<(), String> {
-    store::move_task(&db.pool, &args.id, &args.to_status, args.sort_order)
+    let p = project(&reg, &project_id)?;
+    store::move_task(&p.pool, &args.id, &args.to_status, args.sort_order)
         .await
         .map_err(|e| e.to_string())?;
     emit_updated(&app);
@@ -137,13 +155,15 @@ pub async fn tasks_move(
 
 #[tauri::command]
 pub async fn tasks_stop(
+    project_id: String,
     id: String,
-    db: State<'_, TasksDb>,
+    reg: State<'_, ProjectRegistry>,
     app: AppHandle,
     scheduler: State<'_, SchedulerHandle>,
     pty: State<'_, Arc<crate::pty::manager::PtyManager>>,
 ) -> Result<(), String> {
-    let row = store::get_task(&db.pool, &id)
+    let p = project(&reg, &project_id)?;
+    let row = store::get_task(&p.pool, &id)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "task not found".to_string())?;
@@ -154,7 +174,7 @@ pub async fn tasks_stop(
         let _ = pty.write(tab_id, b"\x03"); // Ctrl+C
     }
     if !scheduler.cancel(&id) {
-        store::finish_task(&db.pool, &id, "cancelled", Some("使用者停止"), None)
+        store::finish_task(&p.pool, &id, "cancelled", Some("使用者停止"), None)
             .await
             .map_err(|e| e.to_string())?;
         emit_updated(&app);
@@ -164,12 +184,14 @@ pub async fn tasks_stop(
 
 #[tauri::command]
 pub async fn tasks_mark_done(
+    project_id: String,
     id: String,
-    db: State<'_, TasksDb>,
+    reg: State<'_, ProjectRegistry>,
     app: AppHandle,
     scheduler: State<'_, SchedulerHandle>,
 ) -> Result<(), String> {
-    let row = store::get_task(&db.pool, &id)
+    let p = project(&reg, &project_id)?;
+    let row = store::get_task(&p.pool, &id)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "task not found".to_string())?;
@@ -181,7 +203,7 @@ pub async fn tasks_mark_done(
         // an exit-code signal in the moment between the frontend rendering
         // the button and the click landing. Finish it directly, mirroring
         // tasks_stop's own fallback for the equivalent race.
-        store::finish_task(&db.pool, &id, "success", None, row.transcript_path.as_deref())
+        store::finish_task(&p.pool, &id, "success", None, row.transcript_path.as_deref())
             .await
             .map_err(|e| e.to_string())?;
         emit_updated(&app);
@@ -197,13 +219,15 @@ pub struct DeleteArgs {
 
 #[tauri::command]
 pub async fn tasks_delete(
+    project_id: String,
     args: DeleteArgs,
-    db: State<'_, TasksDb>,
+    reg: State<'_, ProjectRegistry>,
     app: AppHandle,
     scheduler: State<'_, SchedulerHandle>,
     pty: State<'_, Arc<crate::pty::manager::PtyManager>>,
 ) -> Result<(), String> {
-    if let Some(row) = store::get_task(&db.pool, &args.id)
+    let p = project(&reg, &project_id)?;
+    if let Some(row) = store::get_task(&p.pool, &args.id)
         .await
         .map_err(|e| e.to_string())?
     {
@@ -214,10 +238,10 @@ pub async fn tasks_delete(
             }
         }
     }
-    store::delete_task(&db.pool, &args.id)
+    store::delete_task(&p.pool, &args.id)
         .await
         .map_err(|e| e.to_string())?;
-    let _ = fs::remove_dir_all(task_dir(&args.id));
+    let _ = fs::remove_dir_all(task_dir(&p.path, &args.id));
     emit_updated(&app);
     Ok(())
 }
@@ -231,18 +255,20 @@ pub struct AddAttachmentArgs {
 
 #[tauri::command]
 pub async fn tasks_add_attachment(
+    project_id: String,
     args: AddAttachmentArgs,
-    db: State<'_, TasksDb>,
+    reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<AttachmentRow, String> {
-    let row = store::get_task(&db.pool, &args.id)
+    let p = project(&reg, &project_id)?;
+    let row = store::get_task(&p.pool, &args.id)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "task not found".to_string())?;
     if !edit_allowed(&row.status) {
         return Err("attachments can only be changed while the card is in 計畫中".into());
     }
-    let dir = task_dir(&args.id).join("attachments");
+    let dir = task_dir(&p.path, &args.id).join("attachments");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let safe = std::path::Path::new(&args.filename)
         .file_name()
@@ -250,7 +276,7 @@ pub async fn tasks_add_attachment(
         .unwrap_or_else(|| "attachment".to_string());
     let stored = dir.join(&safe);
     fs::write(&stored, &args.bytes).map_err(|e| e.to_string())?;
-    let att_id = store::add_attachment(&db.pool, &args.id, &safe, &stored.to_string_lossy())
+    let att_id = store::add_attachment(&p.pool, &args.id, &safe, &stored.to_string_lossy())
         .await
         .map_err(|e| e.to_string())?;
     emit_updated(&app);
@@ -264,15 +290,17 @@ pub async fn tasks_add_attachment(
 
 #[tauri::command]
 pub async fn tasks_remove_attachment(
+    project_id: String,
     attachment_id: String,
-    db: State<'_, TasksDb>,
+    reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<(), String> {
-    if let Some(att) = store::get_attachment(&db.pool, &attachment_id)
+    let p = project(&reg, &project_id)?;
+    if let Some(att) = store::get_attachment(&p.pool, &attachment_id)
         .await
         .map_err(|e| e.to_string())?
     {
-        if let Some(row) = store::get_task(&db.pool, &att.task_id)
+        if let Some(row) = store::get_task(&p.pool, &att.task_id)
             .await
             .map_err(|e| e.to_string())?
         {
@@ -282,7 +310,7 @@ pub async fn tasks_remove_attachment(
         }
         let _ = fs::remove_file(&att.stored_path);
     }
-    store::remove_attachment(&db.pool, &attachment_id)
+    store::remove_attachment(&p.pool, &attachment_id)
         .await
         .map_err(|e| e.to_string())?;
     emit_updated(&app);
@@ -290,19 +318,25 @@ pub async fn tasks_remove_attachment(
 }
 
 #[tauri::command]
-pub async fn tasks_clone(id: String, db: State<'_, TasksDb>, app: AppHandle) -> Result<String, String> {
-    let src = store::get_task(&db.pool, &id)
+pub async fn tasks_clone(
+    project_id: String,
+    id: String,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+) -> Result<String, String> {
+    let p = project(&reg, &project_id)?;
+    let src = store::get_task(&p.pool, &id)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "task not found".to_string())?;
-    let new_id = store::clone_task_fields(&db.pool, &src.id)
+    let new_id = store::clone_task_fields(&p.pool, &src.id)
         .await
         .map_err(|e| e.to_string())?;
 
     // Copy each attachment file into the new card's dir; skip any whose
     // source file is gone (best effort — a missing file must not fail the clone).
-    let dir = task_dir(&new_id).join("attachments");
-    for att in store::list_attachments(&db.pool, &id)
+    let dir = task_dir(&p.path, &new_id).join("attachments");
+    for att in store::list_attachments(&p.pool, &id)
         .await
         .map_err(|e| e.to_string())?
     {
@@ -317,32 +351,54 @@ pub async fn tasks_clone(id: String, db: State<'_, TasksDb>, app: AppHandle) -> 
         if fs::copy(&att.stored_path, &dest).is_err() {
             continue;
         }
-        let _ = store::add_attachment(&db.pool, &new_id, &att.filename, &dest.to_string_lossy()).await;
+        let _ = store::add_attachment(&p.pool, &new_id, &att.filename, &dest.to_string_lossy()).await;
     }
     emit_updated(&app);
     Ok(new_id)
 }
 
 #[tauri::command]
-pub async fn tasks_read_transcript(id: String, db: State<'_, TasksDb>) -> Result<String, String> {
-    let row = store::get_task(&db.pool, &id)
+pub async fn tasks_read_transcript(
+    project_id: String,
+    id: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<String, String> {
+    let p = project(&reg, &project_id)?;
+    let row = store::get_task(&p.pool, &id)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "task not found".to_string())?;
     match row.transcript_path {
-        Some(p) => fs::read_to_string(&p).map_err(|e| e.to_string()),
+        Some(path) => fs::read_to_string(&path).map_err(|e| e.to_string()),
         None => Ok(String::new()),
     }
 }
 
 #[tauri::command]
-pub async fn tasks_save_transcript(id: String, text: String, db: State<'_, TasksDb>) -> Result<(), String> {
-    let row = store::get_task(&db.pool, &id)
+pub async fn tasks_save_transcript(
+    project_id: String,
+    id: String,
+    text: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    let row = store::get_task(&p.pool, &id)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "task not found".to_string())?;
     let path = row.transcript_path.ok_or_else(|| "no transcript path yet".to_string())?;
     fs::write(&path, text).map_err(|e| e.to_string())
+}
+
+/// 這個專案的卡片用過的工作目錄。專案不綁資料夾（工作可散布在多個
+/// repo），這個清單讓新增工作時不必每次重新瀏覽選取。
+#[tauri::command]
+pub async fn tasks_used_dirs(
+    project_id: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<Vec<String>, String> {
+    let p = project(&reg, &project_id)?;
+    store::distinct_project_dirs(&p.pool).await.map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -382,7 +438,7 @@ mod save_transcript_tests {
         store::finish_task(&pool, &id, "success", None, Some(path.to_str().unwrap())).await.unwrap();
 
         // Exercises the exact same logic tasks_save_transcript's body runs,
-        // without needing a Tauri State<'_, TasksDb> extractor (which needs
+        // without needing a Tauri State<'_, ProjectRegistry> extractor (which needs
         // a running app to construct) — get_task + the transcript_path
         // lookup + fs::write, in the same order the command does them.
         let row = store::get_task(&pool, &id).await.unwrap().unwrap();
@@ -427,7 +483,7 @@ mod mark_done_tests {
 
     // Exercises the exact same logic tasks_mark_done's body runs — get_task,
     // the status/interactive guard, then scheduler.mark_done() — without
-    // needing a Tauri State<'_, TasksDb>/AppHandle extractor (same
+    // needing a Tauri State<'_, ProjectRegistry>/AppHandle extractor (same
     // limitation save_transcript_tests documents above tasks_mark_done).
     #[tokio::test]
     async fn signals_the_active_watch_for_a_running_interactive_task() {

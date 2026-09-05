@@ -583,22 +583,15 @@ use sqlx::SqlitePool;
 /// 一個已開啟的專案。`pool` 與 `path` 都便宜可複製，
 /// 所以這個型別直接 `Clone` 出去給呼叫端持有，
 /// 不需要在每個使用點回頭查 registry。
-#[derive(Clone)]
+// 實作時已確認 sqlx 0.8.6 的 Pool<DB> 本身就有 Debug
+// （sqlx-core-0.8.6/src/pool/mod.rs:579），所以直接 derive 即可，
+// 不需要手寫 impl。
+#[derive(Debug, Clone)]
 pub struct ProjectHandle {
     pub id: String,
     pub name: String,
     pub path: PathBuf,
     pub pool: SqlitePool,
-}
-
-impl fmt::Debug for ProjectHandle {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ProjectHandle")
-            .field("id", &self.id)
-            .field("name", &self.name)
-            .field("path", &self.path)
-            .finish_non_exhaustive()
-    }
 }
 
 /// 目前開啟中的專案。由 Tauri `.manage()` 持有，取代舊的 `TasksDb` 單例。

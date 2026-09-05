@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
+import { usedDirs } from "../../ipc/projects";
 import {
   addAttachment,
   createTask,
@@ -14,10 +15,12 @@ import {
 const LAST_DIR_KEY = "aiterm_last_task_dir";
 
 export function TaskEditorDialog({
+  projectId,
   card,
   onClose,
   onSaved,
 }: {
+  projectId: string;
   card: TaskWithAttachments | null;
   onClose: () => void;
   onSaved: () => void;
@@ -37,6 +40,19 @@ export function TaskEditorDialog({
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
 
+  // 專案不綁資料夾（工作可散布在多個 repo），所以列出這個專案已經
+  // 用過的目錄讓使用者一鍵選取，不必每次重新瀏覽。
+  const [dirChoices, setDirChoices] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void usedDirs(projectId).then((dirs) => {
+      if (alive) setDirChoices(dirs);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [projectId]);
+
   const pickDir = async () => {
     const picked = await open({ directory: true, defaultPath: dir || undefined });
     if (typeof picked === "string") {
@@ -49,7 +65,7 @@ export function TaskEditorDialog({
     if (isEdit) {
       for (const f of Array.from(files)) {
         const bytes = new Uint8Array(await f.arrayBuffer());
-        const row = await addAttachment(card.id, f.name, bytes);
+        const row = await addAttachment(projectId, card.id, f.name, bytes);
         setAttachments((a) => [...a, row]);
       }
     } else {
@@ -62,12 +78,25 @@ export function TaskEditorDialog({
     try {
       if (dir) localStorage.setItem(LAST_DIR_KEY, dir);
       if (isEdit) {
-        await updateTask({ id: card.id, title, body, project_dir: dir, parallel_ok: parallelOk, interactive });
+        await updateTask(projectId, {
+          id: card.id,
+          title,
+          body,
+          project_dir: dir,
+          parallel_ok: parallelOk,
+          interactive,
+        });
       } else {
-        const newId = await createTask({ title, body, project_dir: dir, parallel_ok: parallelOk, interactive });
+        const newId = await createTask(projectId, {
+          title,
+          body,
+          project_dir: dir,
+          parallel_ok: parallelOk,
+          interactive,
+        });
         for (const f of pendingFiles) {
           const bytes = new Uint8Array(await f.arrayBuffer());
-          await addAttachment(newId, f.name, bytes);
+          await addAttachment(projectId, newId, f.name, bytes);
         }
       }
       onSaved();
@@ -82,7 +111,9 @@ export function TaskEditorDialog({
 
   const removeAttachmentAt = (key: string) => {
     if (isEdit) {
-      void removeAttachment(key).then(() => setAttachments((list) => list.filter((x) => x.id !== key)));
+      void removeAttachment(projectId, key).then(() =>
+        setAttachments((list) => list.filter((x) => x.id !== key)),
+      );
     } else {
       setPendingFiles((prev) => prev.filter((f, i) => `${i}-${f.name}` !== key));
     }
@@ -111,11 +142,31 @@ export function TaskEditorDialog({
         <label className="task-field">
           <span className="task-field-label">{t.board_card_folder}</span>
           <div className="task-field-row">
-            <input className="task-field-input" value={dir} onChange={(e) => setDir(e.target.value)} />
+            <input
+              className="task-field-input"
+              data-testid="task-dir-input"
+              value={dir}
+              onChange={(e) => setDir(e.target.value)}
+            />
             <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void pickDir()}>
               {t.board_card_folder_pick}
             </button>
           </div>
+          {dirChoices.length > 0 && (
+            <div className="task-used-dirs" data-testid="used-dirs-row">
+              {dirChoices.map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  className="tb-btn tb-btn--ghost tb-btn--tiny"
+                  data-testid={`used-dir-${d}`}
+                  onClick={() => setDir(d)}
+                >
+                  📁 {d}
+                </button>
+              ))}
+            </div>
+          )}
         </label>
 
         <label className="task-field task-field--checkbox">

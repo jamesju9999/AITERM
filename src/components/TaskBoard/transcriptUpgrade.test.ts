@@ -19,26 +19,26 @@ beforeEach(() => {
 
 describe("tryUpgradeTranscript", () => {
   it("does nothing when tabId is null", async () => {
-    await tryUpgradeTranscript("task-1", null);
+    await tryUpgradeTranscript("proj-1", "task-1", null);
     expect(serializeTerminal).not.toHaveBeenCalled();
     expect(saveTranscript).not.toHaveBeenCalled();
   });
 
   it("does nothing when the tab is not registered (serializeTerminal returns null)", async () => {
     vi.mocked(serializeTerminal).mockReturnValue(null);
-    await tryUpgradeTranscript("task-1", "tab-1");
+    await tryUpgradeTranscript("proj-1", "task-1", "tab-1");
     expect(saveTranscript).not.toHaveBeenCalled();
   });
 
   it("strips ANSI codes and saves when the tab is live", async () => {
     vi.mocked(serializeTerminal).mockReturnValue("\x1b[32mhello\x1b[0m world");
-    await tryUpgradeTranscript("task-1", "tab-1");
-    expect(saveTranscript).toHaveBeenCalledWith("task-1", "hello world");
+    await tryUpgradeTranscript("proj-1", "task-1", "tab-1");
+    expect(saveTranscript).toHaveBeenCalledWith("proj-1", "task-1", "hello world");
   });
 
   it("swallows a saveTranscript failure instead of throwing", async () => {
     vi.mocked(serializeTerminal).mockReturnValue("clean");
     vi.mocked(saveTranscript).mockRejectedValue(new Error("disk full"));
-    await expect(tryUpgradeTranscript("task-1", "tab-1")).resolves.toBeUndefined();
+    await expect(tryUpgradeTranscript("proj-1", "task-1", "tab-1")).resolves.toBeUndefined();
   });
 });

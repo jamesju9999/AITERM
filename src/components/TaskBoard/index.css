@@ -46,6 +46,220 @@
      （等待中 vs 已中斷），各自命名才不會在改其中一個時誤傷另一個。 */
   --tb-queued: #eab308;
 }
+
+/* ── 專案總覽 ─────────────────────────────────────────────── */
+
+.project-list {
+  padding: 20px 24px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.project-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.project-list-head h2 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--text-primary);
+}
+
+.project-list-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.project-card {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  padding: 6px;
+}
+
+.project-card--broken {
+  border-color: var(--tb-failed);
+  opacity: 0.75;
+}
+
+.project-card-main {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.project-card-main:disabled {
+  cursor: default;
+}
+
+.project-card-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-card-desc,
+.project-card-meta,
+.project-card-error {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.project-card-meta {
+  display: flex;
+  gap: 10px;
+}
+
+.project-card-running {
+  color: var(--accent);
+}
+
+.project-card-error {
+  color: var(--tb-failed);
+}
+
+.project-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-secondary);
+}
+
+.project-empty-title {
+  font-size: 16px;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.project-empty-hint {
+  max-width: 420px;
+  margin: 0 auto;
+  line-height: 1.6;
+}
+
+/* ── 專案分頁列 ───────────────────────────────────────────── */
+
+.project-tabbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  /* 分頁很多時水平捲動，與 TabBar 相同的處理 */
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 0 0 auto;
+}
+
+.project-tabbar-back,
+.project-tabbar-add {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.project-tabbar-tabs {
+  display: flex;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.project-tab {
+  display: flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  flex: 0 0 auto;
+}
+
+.project-tab--active {
+  border-color: var(--accent);
+}
+
+.project-tab--broken {
+  border-color: var(--tb-failed);
+}
+
+.project-tab-label {
+  background: none;
+  border: 0;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 4px 4px 4px 10px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.project-tab-running {
+  color: var(--accent);
+  font-size: 9px;
+}
+
+.project-tab-close {
+  background: none;
+  border: 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px 8px 4px 4px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.project-tab-close:hover {
+  color: var(--tb-failed);
+}
+
+/* 分頁列存在時，看板本體吃掉剩下的高度 */
+.task-board-inner {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── 工作目錄快捷選項 ─────────────────────────────────────── */
+
+.task-used-dirs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.tb-btn--tiny {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
 .task-board-toolbar { padding: 12px 16px; border-bottom: 1px solid var(--border, #2a2a2a); flex-shrink: 0; }
 /* 沒有這行，滑鼠在卡片文字上按下拖曳時會跟瀏覽器原生的文字選取/拖曳手勢互搶，
    導致自訂的滑鼠拖曳邏輯卡住、視覺上像沒反應（比照 TabBar/index.css 同樣的作法）。
