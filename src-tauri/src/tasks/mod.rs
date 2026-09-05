@@ -11,17 +11,9 @@ pub mod dispatch;
 pub mod monitor;
 pub mod scheduler;
 
-use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::SqlitePool;
-
-/// Holds the connection pool for `tasks.db`. Managed by Tauri; free
-/// functions in `store` take `&db.pool`. Same shape as `db::loop_sessions::LoopSessionDb`.
-pub struct TasksDb {
-    pub pool: SqlitePool,
-}
 
 /// `<data-dir>/AITERM` — the same app data directory every other
 /// dedicated-SQLite module in this codebase uses.
@@ -29,28 +21,13 @@ pub fn app_data_dir() -> PathBuf {
     dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("AITERM")
 }
 
-/// `<data-dir>/AITERM/tasks/<task_id>` — per-task scratch dir holding
-/// `attachments/` and `transcript.txt`. Created lazily by dispatch/store.
-pub fn task_dir(task_id: &str) -> PathBuf {
-    app_data_dir().join("tasks").join(task_id)
-}
-
-impl TasksDb {
-    pub async fn new() -> Self {
-        let dir = app_data_dir();
-        fs::create_dir_all(&dir).ok();
-        let db_path = dir.join("tasks.db");
-        // sqlx defaults create_if_missing to false; without this the open
-        // fails and the fallback silently swaps in an in-memory DB that
-        // loses every card on restart. See db/loop_sessions.rs.
-        let options = SqliteConnectOptions::new().filename(&db_path).create_if_missing(true);
-        let pool = SqlitePool::connect_with(options)
-            .await
-            .unwrap_or_else(|_| SqlitePool::connect_lazy("sqlite::memory:").unwrap());
-        let db = Self { pool };
-        init_schema(&db.pool).await.ok();
-        db
-    }
+/// `<project-folder>/tasks/<task_id>` — 這張卡片的附件與對話記錄。
+/// 由 dispatch/store 在需要時建立。
+///
+/// 根目錄是**專案資料夾**而非全域資料區——專案資料夾必須自成一體，
+/// 這樣複製走就等於匯出。
+pub fn task_dir(project_path: &Path, task_id: &str) -> PathBuf {
+    project_path.join("tasks").join(task_id)
 }
 
 pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
@@ -96,4 +73,15 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod task_dir_tests {
+    use super::*;
+
+    #[test]
+    fn is_rooted_at_the_project_folder() {
+        let project = std::path::Path::new("/projects/makemoney");
+        assert_eq!(task_dir(project, "abc"), project.join("tasks").join("abc"));
+    }
 }

@@ -15,6 +15,7 @@ pub mod loop_session;
 pub mod mail;
 pub mod mcp;
 pub mod mcp_server;
+pub mod projects;
 pub mod provider;
 pub mod python_env;
 pub mod secret;
