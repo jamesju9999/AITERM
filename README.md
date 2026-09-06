@@ -1,4 +1,4 @@
-<img width="1536" height="1024" alt="ChatGPT Image 2026年5月14日 下午08_28_16" src="https://github.com/user-attachments/assets/aa7f6739-ecfa-4cd4-9683-aafa2e4607e9" />
+<img alt="AITerm — However good AI gets, the work still needs organizing" src="assets/banner-en.png" />
 
 # AITerm
 
@@ -93,6 +93,8 @@ docs/            # Specs and implementation plans
 ---
 
 <a id="繁體中文"></a>
+<img alt="AITerm — AI 再厲害，工作還是得有人安排" src="assets/banner-zh.png" />
+
 # AITerm (繁體中文)
 
 一個強大且跨平台的 AI 智慧終端機，基於 **Tauri 2**、**React 19** 和 **Rust** 打造。AITerm 將傳統的命令列體驗與先進的 AI 能力、自主代理（Agent）、可自動把工作派給 Claude Code 執行的工作看板，以及專案需求管理完美結合。
