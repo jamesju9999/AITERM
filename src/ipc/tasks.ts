@@ -129,9 +129,25 @@ export const unarchiveTask = (projectId: string, taskId: string): Promise<void> 
 export const archiveDoneTasks = (projectId: string): Promise<number> =>
   invoke("tasks_archive_done", { projectId });
 
-/** 封存的卡片，新封存的在前。 */
-export const listArchivedTasks = (projectId: string): Promise<TaskWithAttachments[]> =>
-  invoke("tasks_list_archived", { projectId });
+/** 鏡射 Rust 的 `commands::tasks::ArchivePage`。 */
+export interface ArchivePage {
+  rows: TaskRow[];
+  /** 符合搜尋條件的總數，分頁靠它算頁數。 */
+  total: number;
+}
+
+/**
+ * 封存清單的一頁，新封存的在前。`query` 空字串代表不過濾。
+ *
+ * 過濾與分頁都在 SQL 做——封存清單是唯一被設計成會無限成長的地方。
+ */
+export const listArchivedTasks = (
+  projectId: string,
+  query: string,
+  limit: number,
+  offset: number,
+): Promise<ArchivePage> =>
+  invoke("tasks_list_archived", { projectId, query, limit, offset });
 
 export const getTaskBoardConfig = (): Promise<TaskBoardConfig> => invoke("task_board_get_config");
 

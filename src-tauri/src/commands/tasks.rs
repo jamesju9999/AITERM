@@ -464,15 +464,32 @@ pub async fn tasks_archive_done(
     Ok(n)
 }
 
-/// 封存的卡片，新封存的在前。附件一併帶上，跟 `tasks_list` 的形狀一致。
+/// 一頁封存的卡片，加上符合條件的總數（分頁要靠它算頁數）。
+#[derive(Serialize)]
+pub struct ArchivePage {
+    pub rows: Vec<TaskRow>,
+    pub total: i64,
+}
+
+/// 封存清單的一頁，新封存的在前。`query` 空字串代表不過濾。
+///
+/// 刻意**不**附上 attachments：封存清單只顯示標題、目錄、封存時間與
+/// 對話記錄按鈕，一列一次的附件查詢是純粹的浪費——一千張封存卡片就是
+/// 打開視窗時一千零一次查詢。
 #[tauri::command]
 pub async fn tasks_list_archived(
     project_id: String,
+    query: String,
+    limit: i64,
+    offset: i64,
     reg: State<'_, ProjectRegistry>,
-) -> Result<Vec<TaskWithAttachments>, String> {
+) -> Result<ArchivePage, String> {
     let p = project(&reg, &project_id)?;
-    let rows = store::list_archived(&p.pool).await.map_err(|e| e.to_string())?;
-    with_attachments(&p.pool, rows).await
+    let rows = store::search_archived(&p.pool, &query, limit, offset)
+        .await
+        .map_err(|e| e.to_string())?;
+    let total = store::count_archived(&p.pool, &query).await.map_err(|e| e.to_string())?;
+    Ok(ArchivePage { rows, total })
 }
 
 #[cfg(test)]

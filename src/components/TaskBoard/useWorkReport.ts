@@ -9,10 +9,10 @@ import {
   listTasks,
   readTranscript,
   setSummary,
-  type TaskWithAttachments,
+  type TaskRow,
 } from "../../ipc/tasks";
 import { splitArtifactFence } from "../../lib/artifactFence";
-import { buildReportPrompt, buildSummaryPrompt, type ReportStyle } from "./reportPrompts";
+import { buildReportPrompt, buildSummaryPrompt, MAX_CARDS, type ReportStyle } from "./reportPrompts";
 
 /**
  * 這個錯誤是不是「AI 還沒設定」。
@@ -81,11 +81,16 @@ export function useWorkReport(projectId: string, projectName: string) {
       cancelled.current = false;
 
       try {
-        // 封存的卡片預設不進報告：封存的語意就是「這一段落幕了」，而且
-        // 第二階段的提示詞會把每一張卡都放進去，全都算的話遲早撐爆
-        // context window。要回顧全部時才由使用者明確勾選。
+        // 封存的卡片預設不進報告：封存的語意就是「這一段落幕了」，報告
+        // 該聚焦在當前的工作。要回顧全部時才由使用者明確勾選。
+        //
+        // 取 MAX_CARDS 筆就夠——第二階段本來就只會帶那麼多張，多撈的
+        // 部分一定會被丟掉，只是白花一次查詢。
         const cards = includeArchived
-          ? [...(await listTasks(projectId)), ...(await listArchivedTasks(projectId))]
+          ? [
+              ...(await listTasks(projectId)),
+              ...(await listArchivedTasks(projectId, "", MAX_CARDS, 0)).rows,
+            ]
           : await listTasks(projectId);
         if (cards.length === 0) {
           setError(t.report_err_no_cards);
@@ -128,7 +133,7 @@ export function useWorkReport(projectId: string, projectName: string) {
         if (cancelled.current) return;
 
         // ── 第二階段：合成 ──
-        const enriched = cards.map((c): TaskWithAttachments => {
+        const enriched = cards.map((c): TaskRow => {
           const fresh = summaries.get(c.id);
           return fresh ? { ...c, ai_summary: fresh } : c;
         });

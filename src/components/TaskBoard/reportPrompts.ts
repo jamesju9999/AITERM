@@ -1,4 +1,4 @@
-import type { TaskOutcome, TaskStatus, TaskWithAttachments } from "../../ipc/tasks";
+import type { TaskOutcome, TaskStatus, TaskRow } from "../../ipc/tasks";
 
 /** 報告風格。`review` 給自己看，`formal` 給上司／客戶看。 */
 export type ReportStyle = "review" | "formal";
@@ -32,7 +32,7 @@ const OUTCOME_LABEL: Record<TaskOutcome, string> = {
  * 這不是錯誤——照樣用欄位資料產生摘要，只是內容會比較粗略。
  */
 export function buildSummaryPrompt(
-  card: TaskWithAttachments,
+  card: TaskRow,
   transcript: string | null,
 ): string {
   const lines = [
@@ -58,7 +58,7 @@ export function buildSummaryPrompt(
   return lines.join("\n");
 }
 
-function cardLine(card: TaskWithAttachments): string {
+function cardLine(card: TaskRow): string {
   const status = STATUS_LABEL[card.status];
   const outcome = card.outcome ? `／${OUTCOME_LABEL[card.outcome]}` : "";
   const parts = [`- 【${status}${outcome}】${card.title}`];
@@ -93,7 +93,7 @@ const STYLE_INSTRUCTIONS: Record<ReportStyle, string> = {
  * 模型會把「最近 100 張」當成專案的全部，報告的結論會失真。
  */
 export function buildReportPrompt(
-  cards: TaskWithAttachments[],
+  cards: TaskRow[],
   style: ReportStyle,
   projectName: string,
 ): string {

@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import { listArchivedTasks, unarchiveTask, type TaskWithAttachments } from "../../ipc/tasks";
+import { listArchivedTasks, unarchiveTask, type TaskRow } from "../../ipc/tasks";
 import { TranscriptDialog } from "./TranscriptDialog";
+
+/** 一頁幾筆。 */
+const PAGE_SIZE = 20;
+
+/** 打字停下多久才真的去查。每個按鍵都打一次 IPC 是浪費，也會讓結果亂跳。 */
+const SEARCH_DEBOUNCE_MS = 250;
 
 /** 封存時間。跟報告歷史清單一樣交給平台決定日期慣例。 */
 function formatArchivedAt(at: number | null): string {
@@ -33,7 +39,12 @@ export function ArchiveDialog({
   onRestored: () => void;
 }) {
   const { t } = useLocale();
-  const [rows, setRows] = useState<TaskWithAttachments[]>([]);
+  const [rows, setRows] = useState<TaskRow[]>([]);
+  const [total, setTotal] = useState(0);
+  /** 輸入框當下的字。送去查詢的是下面 debounce 過的 `query`。 */
+  const [term, setTerm] = useState("");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(0);
   const [busy, setBusy] = useState(false);
   /**
    * 正在看對話記錄的那張封存卡片。
@@ -42,24 +53,41 @@ export function ArchiveDialog({
    * 那邊是從 `tasks` 裡找卡片，而 `tasks` 只有未封存的，封存的永遠找不到，
    * 結果是封存視窗關掉、對話記錄也沒出來。實機回報過。
    */
-  const [transcriptFor, setTranscriptFor] = useState<TaskWithAttachments | null>(null);
+  const [transcriptFor, setTranscriptFor] = useState<TaskRow | null>(null);
 
   const refresh = useCallback(async () => {
-    setRows(await listArchivedTasks(projectId));
-  }, [projectId]);
+    const p = await listArchivedTasks(projectId, query, PAGE_SIZE, page * PAGE_SIZE);
+    setRows(p.rows);
+    setTotal(p.total);
+  }, [projectId, query, page]);
 
-  // 掛載時抓一次。用帶 cleanup 的 inline 寫法而不是 `void refresh()`：
-  // 後者會被 react-hooks/set-state-in-effect 判定為「effect 唯一的內容
-  // 就是呼叫一個以 setState 結尾的函式」而報錯（同 ReportDialog）。
+  // 打字先進 term，安靜下來才變成 query 去查。換關鍵字一定要回到第一頁：
+  // 停在第 3 頁搜一個只有 5 筆結果的字，會得到一個空白的視窗。
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setQuery(term);
+      setPage(0);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [term]);
+
+  // 關鍵字或頁碼一變就重查。用帶 cleanup 的 inline 寫法而不是
+  // `void refresh()`：後者會被 react-hooks/set-state-in-effect 判定為
+  // 「effect 唯一的內容就是呼叫一個以 setState 結尾的函式」而報錯
+  // （同 ReportDialog）。
   useEffect(() => {
     let alive = true;
-    void listArchivedTasks(projectId).then((list) => {
-      if (alive) setRows(list);
+    void listArchivedTasks(projectId, query, PAGE_SIZE, page * PAGE_SIZE).then((p) => {
+      if (!alive) return;
+      setRows(p.rows);
+      setTotal(p.total);
     });
     return () => {
       alive = false;
     };
-  }, [projectId]);
+  }, [projectId, query, page]);
+
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const restore = async (id: string) => {
     setBusy(true);
@@ -79,18 +107,26 @@ export function ArchiveDialog({
         <div className="report-head">
           <h3>
             {t.board_archive_title}
-            {rows.length > 0 && (
-              <span className="archive-count">{t.board_archive_count(rows.length)}</span>
-            )}
+            {total > 0 && <span className="archive-count">{t.board_archive_count(total)}</span>}
           </h3>
           <button className="tb-btn tb-btn--ghost" onClick={onClose}>
             {t.report_close}
           </button>
         </div>
 
+        <div className="archive-search-row">
+          <input
+            className="task-field-input"
+            data-testid="archive-search"
+            placeholder={t.board_archive_search}
+            value={term}
+            onChange={(e) => setTerm(e.target.value)}
+          />
+        </div>
+
         {rows.length === 0 ? (
           <div className="archive-empty" data-testid="archive-empty">
-            {t.board_archive_empty}
+            {query ? t.board_archive_no_match : t.board_archive_empty}
           </div>
         ) : (
           <ul className="archive-list">
@@ -128,6 +164,28 @@ export function ArchiveDialog({
               </li>
             ))}
           </ul>
+        )}
+
+        {pageCount > 1 && (
+          <div className="archive-pager">
+            <button
+              className="tb-btn tb-btn--ghost"
+              data-testid="archive-prev"
+              disabled={page === 0}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+            >
+              {t.board_archive_prev}
+            </button>
+            <span className="archive-pager-label">{t.board_archive_page(page + 1, pageCount)}</span>
+            <button
+              className="tb-btn tb-btn--ghost"
+              data-testid="archive-next"
+              disabled={page + 1 >= pageCount}
+              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+            >
+              {t.board_archive_next}
+            </button>
+          </div>
         )}
       </div>
 

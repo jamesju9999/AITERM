@@ -289,13 +289,53 @@ pub async fn archive_all_done(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
     Ok(res.rows_affected())
 }
 
-/// 封存的卡片，新封存的在前。
-pub async fn list_archived(pool: &SqlitePool) -> Result<Vec<TaskRow>, sqlx::Error> {
-    sqlx::query_as::<_, TaskRow>(
-        "SELECT * FROM tasks WHERE archived_at IS NOT NULL ORDER BY archived_at DESC",
-    )
+/// 封存清單的關鍵字條件。空字串代表不過濾。
+///
+/// `%` 和 `_` 是 LIKE 的萬用字元，使用者打「50%」時要找的是字面上的
+/// 「50%」而不是「以 50 開頭的任何東西」，所以連同跳脫字元本身一起跳脫，
+/// 再用 `ESCAPE '\'` 告訴 SQLite 怎麼讀。
+const ARCHIVED_WHERE: &str = "archived_at IS NOT NULL AND (
+        ?1 = ''
+        OR title       LIKE ?2 ESCAPE '\\'
+        OR body        LIKE ?2 ESCAPE '\\'
+        OR project_dir LIKE ?2 ESCAPE '\\'
+    )";
+
+fn like_pattern(query: &str) -> String {
+    let escaped = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    format!("%{escaped}%")
+}
+
+/// 封存的卡片，新封存的在前。`query` 空字串代表不過濾。
+///
+/// 分頁在 SQL 做而不是全部撈回來再切：封存清單是唯一被設計成會無限成長
+/// 的地方，一次撈全部遲早會變成打開視窗就卡住。
+pub async fn search_archived(
+    pool: &SqlitePool,
+    query: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<TaskRow>, sqlx::Error> {
+    sqlx::query_as::<_, TaskRow>(&format!(
+        "SELECT * FROM tasks WHERE {ARCHIVED_WHERE}
+         ORDER BY archived_at DESC LIMIT ?3 OFFSET ?4"
+    ))
+    .bind(query)
+    .bind(like_pattern(query))
+    .bind(limit)
+    .bind(offset)
     .fetch_all(pool)
     .await
+}
+
+/// 符合搜尋條件的封存卡片總數。跟 `search_archived` 共用同一個 WHERE，
+/// 兩邊的條件不可以各寫一份——分頁會算出不存在的頁數。
+pub async fn count_archived(pool: &SqlitePool, query: &str) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(&format!("SELECT COUNT(*) FROM tasks WHERE {ARCHIVED_WHERE}"))
+        .bind(query)
+        .bind(like_pattern(query))
+        .fetch_one(pool)
+        .await
 }
 
 pub async fn set_summary(pool: &SqlitePool, id: &str, summary: &str) -> Result<(), sqlx::Error> {
@@ -627,12 +667,104 @@ mod archive_tests {
         }
 
         let titles: Vec<String> =
-            list_archived(&pool).await.unwrap().into_iter().map(|t| t.title).collect();
+            search_archived(&pool, "", 50, 0).await.unwrap().into_iter().map(|t| t.title).collect();
         assert_eq!(titles, vec!["晚", "中", "早"]);
     }
 
     /// 排程器絕不能撿到封存的卡片。它查的是 `list_by_status`，跟看板用的
     /// 不是同一個查詢，所以要各自釘住。
+    #[tokio::test]
+    async fn search_matches_title_body_or_folder() {
+        let pool = mem_pool().await;
+        for (title, body, dir) in [
+            ("整理打卡 API", "產出 OpenAPI 規格", "/repo/hcp"),
+            ("修 CI", "Windows 上的編譯錯誤", "/repo/aiterm"),
+        ] {
+            let id = create_task(&pool, title, body, dir, true, false).await.unwrap();
+            move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
+            dispatch_for_test(&pool, &id, "tab").await;
+            finish_task(&pool, &id, "success", None, None).await.unwrap();
+            archive_task(&pool, &id).await.unwrap();
+        }
+
+        let titles = |rows: Vec<TaskRow>| -> Vec<String> {
+            rows.into_iter().map(|r| r.title).collect()
+        };
+        assert_eq!(titles(search_archived(&pool, "打卡", 50, 0).await.unwrap()), vec!["整理打卡 API"]);
+        assert_eq!(titles(search_archived(&pool, "Windows", 50, 0).await.unwrap()), vec!["修 CI"]);
+        assert_eq!(titles(search_archived(&pool, "hcp", 50, 0).await.unwrap()), vec!["整理打卡 API"]);
+        assert_eq!(search_archived(&pool, "", 50, 0).await.unwrap().len(), 2, "空字串代表不過濾");
+        assert!(search_archived(&pool, "不存在的字", 50, 0).await.unwrap().is_empty());
+    }
+
+    /// `%` 和 `_` 是 LIKE 的萬用字元。使用者打「50%」時要找的是字面上的
+    /// 「50%」，不是「以 50 開頭的任何東西」。
+    #[tokio::test]
+    async fn search_treats_like_wildcards_as_literal_text() {
+        let pool = mem_pool().await;
+        // 「折扣 50 元」是關鍵：不跳脫時 "50%" 會變成 LIKE '%50%%'，
+        // 也就是「包含 50」，這一筆就會被誤中。少了它，跳脫與否的結果
+        // 一模一樣，這個測試就白寫了。
+        for title in ["折扣 50% 的頁面", "折扣 50 元", "完全無關的工作"] {
+            let id = create_task(&pool, title, "", "/r", true, false).await.unwrap();
+            move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
+            dispatch_for_test(&pool, &id, "tab").await;
+            finish_task(&pool, &id, "success", None, None).await.unwrap();
+            archive_task(&pool, &id).await.unwrap();
+        }
+
+        let hits = search_archived(&pool, "50%", 50, 0).await.unwrap();
+        assert_eq!(hits.len(), 1, "萬用字元被當成字面字元的話只該中一筆");
+        assert_eq!(hits[0].title, "折扣 50% 的頁面");
+    }
+
+    #[tokio::test]
+    async fn search_pages_through_the_results() {
+        let pool = mem_pool().await;
+        for i in 0..5 {
+            let id = create_task(&pool, &format!("卡片 {i}"), "", "/r", true, false).await.unwrap();
+            move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
+            dispatch_for_test(&pool, &id, "tab").await;
+            finish_task(&pool, &id, "success", None, None).await.unwrap();
+            archive_task(&pool, &id).await.unwrap();
+            sqlx::query("UPDATE tasks SET archived_at = ? WHERE id = ?")
+                .bind(100 - i as i64) // 新到舊 = 卡片 0、1、2…
+                .bind(&id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let page1: Vec<String> =
+            search_archived(&pool, "", 2, 0).await.unwrap().into_iter().map(|r| r.title).collect();
+        let page2: Vec<String> =
+            search_archived(&pool, "", 2, 2).await.unwrap().into_iter().map(|r| r.title).collect();
+        assert_eq!(page1, vec!["卡片 0", "卡片 1"]);
+        assert_eq!(page2, vec!["卡片 2", "卡片 3"]);
+        assert_eq!(search_archived(&pool, "", 2, 4).await.unwrap().len(), 1, "最後一頁只剩一筆");
+    }
+
+    /// 總數必須跟著搜尋條件走，不然分頁會算出根本不存在的頁數。
+    #[tokio::test]
+    async fn count_archived_follows_the_search_filter() {
+        let pool = mem_pool().await;
+        for title in ["找得到我", "找不到我"] {
+            let id = create_task(&pool, title, "", "/r", true, false).await.unwrap();
+            move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
+            dispatch_for_test(&pool, &id, "tab").await;
+            finish_task(&pool, &id, "success", None, None).await.unwrap();
+            archive_task(&pool, &id).await.unwrap();
+        }
+        // 一張沒有封存的，永遠不該被算進去。
+        let live = create_task(&pool, "找得到我但沒封存", "", "/r", true, false).await.unwrap();
+        move_task(&pool, &live, STATUS_QUEUED, 1.0).await.unwrap();
+        dispatch_for_test(&pool, &live, "tab").await;
+        finish_task(&pool, &live, "success", None, None).await.unwrap();
+
+        assert_eq!(count_archived(&pool, "").await.unwrap(), 2);
+        assert_eq!(count_archived(&pool, "找得到我").await.unwrap(), 1);
+    }
+
     #[tokio::test]
     async fn list_by_status_ignores_archived_cards() {
         let pool = mem_pool().await;

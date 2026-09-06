@@ -25,7 +25,7 @@ vi.mock("../../ipc/tasks", () => ({
   archiveTask: vi.fn().mockResolvedValue(undefined),
   unarchiveTask: vi.fn().mockResolvedValue(undefined),
   archiveDoneTasks: vi.fn().mockResolvedValue(2),
-  listArchivedTasks: vi.fn().mockResolvedValue([]),
+  listArchivedTasks: vi.fn().mockResolvedValue({ rows: [], total: 0 }),
 }));
 
 // TaskEditorDialog reads the project's already-used folders from ipc/projects
@@ -225,12 +225,15 @@ describe("ProjectBoard", () => {
     // 只有未封存的——封存的卡片永遠找不到，於是什麼都沒渲染。
     it("在封存視窗看對話記錄時，封存清單要留著", async () => {
       vi.mocked(listTasks).mockResolvedValue([]);
-      vi.mocked(listArchivedTasks).mockResolvedValue([
-        card({
-          id: "a1", title: "去年的工作", status: "done", outcome: "success",
-          archived_at: 1000, transcript_path: "/p/transcript.txt",
-        }),
-      ]);
+      vi.mocked(listArchivedTasks).mockResolvedValue({
+        rows: [
+          card({
+            id: "a1", title: "去年的工作", status: "done", outcome: "success",
+            archived_at: 1000, transcript_path: "/p/transcript.txt",
+          }),
+        ],
+        total: 1,
+      });
       view();
 
       await userEvent.click(await screen.findByTestId("open-archive"));
@@ -240,11 +243,59 @@ describe("ProjectBoard", () => {
       expect(screen.getByText("去年的工作")).toBeInTheDocument();
     });
 
+    // 封存清單是唯一會無限成長的地方，搜尋與分頁都必須在後端做——
+    // 全部撈回來再前端過濾，遲早變成打開視窗就卡住。
+    it("打字會把關鍵字送到後端", async () => {
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      await userEvent.click(await screen.findByTestId("open-archive"));
+      await screen.findByTestId("archive-search");
+
+      await userEvent.type(screen.getByTestId("archive-search"), "打卡");
+
+      await waitFor(() =>
+        expect(listArchivedTasks).toHaveBeenLastCalledWith(PROJECT_ID, "打卡", 20, 0),
+      );
+    });
+
+    it("換頁時送出的是下一頁的 offset", async () => {
+      vi.mocked(listTasks).mockResolvedValue([]);
+      vi.mocked(listArchivedTasks).mockResolvedValue({
+        rows: [card({ id: "a1", title: "第一頁的卡", status: "done", archived_at: 1 })],
+        total: 45,
+      });
+      view();
+      await userEvent.click(await screen.findByTestId("open-archive"));
+
+      await userEvent.click(await screen.findByTestId("archive-next"));
+
+      await waitFor(() =>
+        expect(listArchivedTasks).toHaveBeenLastCalledWith(PROJECT_ID, "", 20, 20),
+      );
+    });
+
+    // 只有一頁時翻頁控制項只會佔位置，還會讓人以為後面有東西。
+    it("只有一頁時不顯示翻頁控制項", async () => {
+      vi.mocked(listTasks).mockResolvedValue([]);
+      vi.mocked(listArchivedTasks).mockResolvedValue({
+        rows: [card({ id: "a1", title: "唯一一張", status: "done", archived_at: 1 })],
+        total: 1,
+      });
+      view();
+      await userEvent.click(await screen.findByTestId("open-archive"));
+      await screen.findByText("唯一一張");
+
+      expect(screen.queryByTestId("archive-next")).not.toBeInTheDocument();
+    });
+
     it("封存清單列出封存的卡片並且可以放回看板", async () => {
       vi.mocked(listTasks).mockResolvedValue([]);
-      vi.mocked(listArchivedTasks).mockResolvedValue([
-        card({ id: "a1", title: "去年的工作", status: "done", outcome: "success", archived_at: 1000 }),
-      ]);
+      vi.mocked(listArchivedTasks).mockResolvedValue({
+        rows: [
+          card({ id: "a1", title: "去年的工作", status: "done", outcome: "success", archived_at: 1000 }),
+        ],
+        total: 1,
+      });
       view();
 
       await userEvent.click(await screen.findByTestId("open-archive"));
