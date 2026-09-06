@@ -31,6 +31,8 @@ export interface TaskRow {
   finished_at: number | null;
   /** AI 履行摘要（工作報告用）。只有跑過的卡片會有。 */
   ai_summary: string | null;
+  /** 封存時間（Unix 秒）。有值代表已經從看板上收起來，資料仍完整保留。 */
+  archived_at: number | null;
 }
 
 export interface TaskWithAttachments extends TaskRow {
@@ -114,6 +116,22 @@ export const saveTranscript = (projectId: string, id: string, text: string): Pro
 
 export const setSummary = (projectId: string, id: string, summary: string): Promise<void> =>
   invoke("tasks_set_summary", { projectId, taskId: id, summary });
+
+/** 把一張已完成的卡片從看板上收起來。 */
+export const archiveTask = (projectId: string, taskId: string): Promise<void> =>
+  invoke("tasks_archive", { projectId, taskId });
+
+/** 把封存的卡片放回「已完成」欄。 */
+export const unarchiveTask = (projectId: string, taskId: string): Promise<void> =>
+  invoke("tasks_unarchive", { projectId, taskId });
+
+/** 一次收走整個「已完成」欄，回傳實際封存了幾張。 */
+export const archiveDoneTasks = (projectId: string): Promise<number> =>
+  invoke("tasks_archive_done", { projectId });
+
+/** 封存的卡片，新封存的在前。 */
+export const listArchivedTasks = (projectId: string): Promise<TaskWithAttachments[]> =>
+  invoke("tasks_list_archived", { projectId });
 
 export const getTaskBoardConfig = (): Promise<TaskBoardConfig> => invoke("task_board_get_config");
 

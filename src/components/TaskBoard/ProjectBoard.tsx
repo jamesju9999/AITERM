@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
+import { confirm } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import {
+  archiveDoneTasks,
   listTasks,
   markTaskDone,
   moveTask,
@@ -12,6 +14,7 @@ import {
 } from "../../ipc/tasks";
 import { setRunningTaskTabs } from "../../lib/runningTaskTabRegistry";
 import { unlistenOnCleanup } from "../../lib/eventSubscription";
+import { ArchiveDialog } from "./ArchiveDialog";
 import { TaskCard } from "./TaskCard";
 import { TaskColumn } from "./TaskColumn";
 import { TaskEditorDialog } from "./TaskEditorDialog";
@@ -41,6 +44,7 @@ export function ProjectBoard({
   const [tasks, setTasks] = useState<TaskWithAttachments[]>([]);
   const [editing, setEditing] = useState<TaskWithAttachments | "new" | null>(null);
   const [transcriptFor, setTranscriptFor] = useState<string | null>(null);
+  const [showArchive, setShowArchive] = useState(false);
   const mounted = useRef(true);
   const dragRef = useRef<DragState | null>(null);
   /** Which column's `data-testid` the cursor is currently over while
@@ -209,6 +213,21 @@ export function ProjectBoard({
     dragRef.current = { id: cardRow.id, startX: e.clientX, startY: e.clientY, started: false };
   };
 
+  /**
+   * 一次收走整個「已完成」欄。
+   *
+   * 單張封存不問過（可復原、成本低），整欄是個大動作，所以攔一次並把
+   * 張數講出來。用 plugin-dialog 的 confirm 而不是 window.confirm：
+   * Tauri 的 webview 沒有實作後者。
+   */
+  const archiveColumn = async () => {
+    const n = byStatus("done").length;
+    if (n === 0) return;
+    if (!(await confirm(t.board_archive_column_confirm(n)))) return;
+    await archiveDoneTasks(projectId);
+    await refresh();
+  };
+
   return (
     <div className="task-board-inner">
       <div className="task-board-toolbar">
@@ -218,10 +237,34 @@ export function ProjectBoard({
         <button className="tb-btn tb-btn--ghost" onClick={onReport}>
           {t.report_generate}
         </button>
+        <button
+          className="tb-btn tb-btn--ghost"
+          data-testid="open-archive"
+          onClick={() => setShowArchive(true)}
+        >
+          {t.board_archive_open}
+        </button>
       </div>
       <div className="task-board-columns">
         {COLUMNS.map((s) => (
-          <TaskColumn key={s} status={s} title={colTitle(s)} count={byStatus(s).length} highlighted={dragOverStatus === s}>
+          <TaskColumn
+            key={s}
+            status={s}
+            title={colTitle(s)}
+            count={byStatus(s).length}
+            highlighted={dragOverStatus === s}
+            headerAction={
+              s === "done" ? (
+                <button
+                  className="tb-btn tb-btn--ghost tb-btn--tiny"
+                  data-testid="archive-column"
+                  onClick={() => void archiveColumn()}
+                >
+                  {t.board_archive_column}
+                </button>
+              ) : undefined
+            }
+          >
             {byStatus(s).map((cardRow) => {
               const draggableCard =
                 cardRow.status === "planning" ||
@@ -251,6 +294,18 @@ export function ProjectBoard({
           </TaskColumn>
         ))}
       </div>
+
+      {showArchive && (
+        <ArchiveDialog
+          projectId={projectId}
+          onClose={() => setShowArchive(false)}
+          onRestored={() => void refresh()}
+          onViewTranscript={(id) => {
+            setShowArchive(false);
+            setTranscriptFor(id);
+          }}
+        />
+      )}
 
       {editing && (
         <TaskEditorDialog

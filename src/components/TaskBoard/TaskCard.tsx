@@ -2,7 +2,7 @@ import { useState } from "react";
 import { confirm } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import { cloneTask, deleteTask, markTaskDone, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
+import { archiveTask, cloneTask, deleteTask, markTaskDone, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
 
 export function TaskCard({
   projectId,
@@ -127,6 +127,11 @@ export function TaskCard({
             )}
             <button className="tb-btn tb-btn--ghost" disabled={busy} onClick={() => void run(() => cloneTask(projectId, card.id))}>
               {t.board_action_requeue}
+            </button>
+            {/* 封存不問過就直接做：資料完全保留，隨時能從封存清單放回來，
+                所以它是可復原的動作，不該跟刪除一樣攔一次。 */}
+            <button className="tb-btn tb-btn--ghost" disabled={busy} onClick={() => void run(() => archiveTask(projectId, card.id))}>
+              {t.board_action_archive}
             </button>
             <button className="tb-btn tb-btn--danger-ghost" disabled={busy} onClick={() => void remove()}>{t.board_delete}</button>
           </>

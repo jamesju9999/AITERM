@@ -22,6 +22,10 @@ vi.mock("../../ipc/tasks", () => ({
   removeAttachment: vi.fn(),
   saveTranscript: vi.fn().mockResolvedValue(undefined),
   markTaskDone: vi.fn().mockResolvedValue(undefined),
+  archiveTask: vi.fn().mockResolvedValue(undefined),
+  unarchiveTask: vi.fn().mockResolvedValue(undefined),
+  archiveDoneTasks: vi.fn().mockResolvedValue(2),
+  listArchivedTasks: vi.fn().mockResolvedValue([]),
 }));
 
 // TaskEditorDialog reads the project's already-used folders from ipc/projects
@@ -39,7 +43,7 @@ vi.mock("../../lib/runningTaskTabRegistry", () => ({
   setRunningTaskTabs: vi.fn(),
 }));
 
-import { listTasks, onTasksUpdated, moveTask } from "../../ipc/tasks";
+import { listTasks, onTasksUpdated, moveTask, archiveTask, archiveDoneTasks, listArchivedTasks, unarchiveTask } from "../../ipc/tasks";
 import type { TaskWithAttachments } from "../../ipc/tasks";
 import { setRunningTaskTabs } from "../../lib/runningTaskTabRegistry";
 import { ProjectBoard } from "./ProjectBoard";
@@ -54,7 +58,7 @@ const card = (over: Partial<TaskWithAttachments>): TaskWithAttachments => ({
   id: "c1", title: "Card one", body: "", project_dir: "/r", status: "planning",
   parallel_ok: true, interactive: false, sort_order: 1, outcome: null, tab_id: null,
   transcript_path: null, error_message: null, created_at: "", dispatched_at: null,
-  finished_at: null, ai_summary: null, attachments: [],
+  finished_at: null, ai_summary: null, archived_at: null, attachments: [],
   ...over,
 });
 
@@ -155,6 +159,80 @@ describe("ProjectBoard", () => {
       screen.getByTestId("column-done").querySelectorAll(".task-card-title"),
     ).map((el) => el.textContent);
     expect(titles).toEqual(["最晚完成", "中間完成", "最早完成"]);
+  });
+
+  describe("封存", () => {
+    const doneCard = (over: Partial<TaskWithAttachments> = {}) =>
+      card({ id: "d", title: "收工了", status: "done", outcome: "success", finished_at: 1, ...over });
+
+    it("已完成的卡片才有封存按鈕", async () => {
+      vi.mocked(listTasks).mockResolvedValue([
+        doneCard(),
+        card({ id: "p", title: "還在想", status: "planning" }),
+      ]);
+      view();
+      await screen.findByText("收工了");
+
+      const done = within(screen.getByTestId("column-done"));
+      expect(done.getByRole("button", { name: /^(封存|Archive)$/ })).toBeInTheDocument();
+      const planning = within(screen.getByTestId("column-planning"));
+      expect(planning.queryByRole("button", { name: /^(封存|Archive)$/ })).not.toBeInTheDocument();
+    });
+
+    it("封存單張卡片", async () => {
+      vi.mocked(listTasks).mockResolvedValue([doneCard()]);
+      view();
+      await screen.findByText("收工了");
+
+      const done = within(screen.getByTestId("column-done"));
+      await userEvent.click(done.getByRole("button", { name: /^(封存|Archive)$/ }));
+
+      await waitFor(() => expect(archiveTask).toHaveBeenCalledWith(PROJECT_ID, "d"));
+    });
+
+    it("整欄封存會先問過再送出", async () => {
+      const { confirm } = await import("@tauri-apps/plugin-dialog");
+      vi.mocked(listTasks).mockResolvedValue([doneCard(), doneCard({ id: "d2", title: "也收工" })]);
+      view();
+      await screen.findByText("收工了");
+
+      await userEvent.click(screen.getByTestId("archive-column"));
+
+      await waitFor(() => expect(confirm).toHaveBeenCalled());
+      await waitFor(() => expect(archiveDoneTasks).toHaveBeenCalledWith(PROJECT_ID));
+    });
+
+    // 刪除不可復原、封存可以，但一次收走整欄仍然是個大動作，取消一定要
+    // 真的不送出。
+    it("整欄封存取消就不送出", async () => {
+      const { confirm } = await import("@tauri-apps/plugin-dialog");
+      // Once 而不是 mockResolvedValue：這個檔案的 beforeEach 只呼叫
+      // vi.clearAllMocks()，那會清掉呼叫記錄但**留著實作**，所以用
+      // mockResolvedValue 設成 false 會一路污染到後面的刪除測試。
+      vi.mocked(confirm).mockResolvedValueOnce(false);
+      vi.mocked(listTasks).mockResolvedValue([doneCard()]);
+      view();
+      await screen.findByText("收工了");
+
+      await userEvent.click(screen.getByTestId("archive-column"));
+
+      await waitFor(() => expect(confirm).toHaveBeenCalled());
+      expect(archiveDoneTasks).not.toHaveBeenCalled();
+    });
+
+    it("封存清單列出封存的卡片並且可以放回看板", async () => {
+      vi.mocked(listTasks).mockResolvedValue([]);
+      vi.mocked(listArchivedTasks).mockResolvedValue([
+        card({ id: "a1", title: "去年的工作", status: "done", outcome: "success", archived_at: 1000 }),
+      ]);
+      view();
+
+      await userEvent.click(await screen.findByTestId("open-archive"));
+      await screen.findByText("去年的工作");
+
+      await userEvent.click(screen.getByTestId("archive-restore-a1"));
+      await waitFor(() => expect(unarchiveTask).toHaveBeenCalledWith(PROJECT_ID, "a1"));
+    });
   });
 
   it("dropping a running interactive card on the done column calls markTaskDone, not moveTask", async () => {

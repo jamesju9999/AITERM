@@ -105,7 +105,7 @@ describe("ReportDialog", () => {
     parallel_ok: true, interactive: false, sort_order: 1, outcome: "success",
     tab_id: null, transcript_path: null, error_message: null,
     created_at: "2026-09-05T10:00:00Z", dispatched_at: null, finished_at: null,
-    ai_summary: null, attachments: [], ...over,
+    ai_summary: null, archived_at: null, attachments: [], ...over,
   });
 
   it("開啟時先讓使用者選風格", async () => {
@@ -118,7 +118,7 @@ describe("ReportDialog", () => {
     mount();
     await screen.findByText("Provider B"); // 等預設供應商選好
     await userEvent.click(await screen.findByTestId("report-style-review"));
-    expect(generate).toHaveBeenCalledWith("review", "p-b");
+    expect(generate).toHaveBeenCalledWith("review", "p-b", false);
     expect(localStorage.getItem("aiterm_report_provider")).toBe("p-b");
   });
 
@@ -126,7 +126,7 @@ describe("ReportDialog", () => {
     mount();
     await screen.findByText("Provider B");
     await userEvent.click(await screen.findByTestId("report-style-formal"));
-    expect(generate).toHaveBeenCalledWith("formal", "p-b");
+    expect(generate).toHaveBeenCalledWith("formal", "p-b", false);
   });
 
   it("列出可選的模型，預設選中預設供應商", async () => {
@@ -151,7 +151,7 @@ describe("ReportDialog", () => {
     mount();
     await screen.findByText("Provider A");
     await userEvent.click(await screen.findByTestId("report-style-review"));
-    expect(generate).toHaveBeenCalledWith("review", "p-a");
+    expect(generate).toHaveBeenCalledWith("review", "p-a", false);
   });
 
   it("列出歷史報告", async () => {
@@ -373,6 +373,23 @@ describe("ReportDialog", () => {
 
       expect(await screen.findByTestId("report-style-review")).toBeInTheDocument();
     });
+  });
+
+  // 封存的卡片預設不進報告：第二階段的提示詞會把每一張卡都放進去，
+  // 全都算的話遲早撐爆 context window。要回顧全部時才明確勾選。
+  it("預設不包含已封存", async () => {
+    mount();
+    await screen.findByText("Provider B");
+    await userEvent.click(screen.getByTestId("report-style-review"));
+    expect(generate).toHaveBeenLastCalledWith("review", "p-b", false);
+  });
+
+  it("勾選之後才把已封存算進去", async () => {
+    mount();
+    await screen.findByText("Provider B");
+    await userEvent.click(screen.getByTestId("report-include-archived"));
+    await userEvent.click(screen.getByTestId("report-style-review"));
+    expect(generate).toHaveBeenLastCalledWith("review", "p-b", true);
   });
 
   it("有原始回覆時顯示出來", async () => {

@@ -120,6 +120,8 @@ export function ReportDialog({
   const [cards, setCards] = useState<TaskWithAttachments[] | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState("");
+  /** 預設不含封存——見 useWorkReport 裡的說明。 */
+  const [includeArchived, setIncludeArchived] = useState(false);
 
   const refreshHistory = useCallback(async () => {
     setHistory(await listReports(projectId));
@@ -200,7 +202,9 @@ export function ReportDialog({
     if (selectedProviderId) localStorage.setItem(PROVIDER_KEY, selectedProviderId);
     // `generate` 的回傳型別是 Promise<void>，但測試裡的 mock 版本是
     // `vi.fn()`（回傳 undefined）——包一層 Promise.resolve 讓兩邊都安全。
-    void Promise.resolve(generate(style, selectedProviderId || undefined)).then(() =>
+    void Promise.resolve(
+      generate(style, selectedProviderId || undefined, includeArchived),
+    ).then(() =>
       Promise.all([refreshHistory(), refreshCards()]),
     );
   };
@@ -355,6 +359,16 @@ export function ReportDialog({
                     <span>{t.report_style_formal_hint}</span>
                   </button>
                 </div>
+                <label className="report-include-archived">
+                  <input
+                    type="checkbox"
+                    className="task-checkbox"
+                    data-testid="report-include-archived"
+                    checked={includeArchived}
+                    onChange={(e) => setIncludeArchived(e.target.checked)}
+                  />
+                  <span>{t.report_include_archived}</span>
+                </label>
                 {cards && <ReportScope cards={cards} t={t} />}
               </>
             )}

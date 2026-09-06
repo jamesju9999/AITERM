@@ -403,6 +403,7 @@ mod tests {
             dispatched_at: None,
             finished_at: None,
             ai_summary: None,
+            archived_at: None,
         }
     }
 
@@ -485,6 +486,7 @@ mod tests {
             dispatched_at: None,
             finished_at: None,
             ai_summary: None,
+            archived_at: None,
         }
     }
 

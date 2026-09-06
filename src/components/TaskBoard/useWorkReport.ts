@@ -5,6 +5,7 @@ import { useLocale } from "../../contexts/LocaleContext";
 import { invokeAiChat, type AiError } from "../../ipc/ai";
 import { saveReport } from "../../ipc/reports";
 import {
+  listArchivedTasks,
   listTasks,
   readTranscript,
   setSummary,
@@ -72,7 +73,7 @@ export function useWorkReport(projectId: string, projectName: string) {
   }, []);
 
   const generate = useCallback(
-    async (style: ReportStyle, providerId?: string) => {
+    async (style: ReportStyle, providerId?: string, includeArchived = false) => {
       setBusy(true);
       setError(null);
       setHtml(null);
@@ -80,7 +81,12 @@ export function useWorkReport(projectId: string, projectName: string) {
       cancelled.current = false;
 
       try {
-        const cards = await listTasks(projectId);
+        // 封存的卡片預設不進報告：封存的語意就是「這一段落幕了」，而且
+        // 第二階段的提示詞會把每一張卡都放進去，全都算的話遲早撐爆
+        // context window。要回顧全部時才由使用者明確勾選。
+        const cards = includeArchived
+          ? [...(await listTasks(projectId)), ...(await listArchivedTasks(projectId))]
+          : await listTasks(projectId);
         if (cards.length === 0) {
           setError(t.report_err_no_cards);
           return;

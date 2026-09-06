@@ -36,6 +36,21 @@ pub struct TaskWithAttachments {
     pub attachments: Vec<AttachmentRow>,
 }
 
+/// 幫每一列補上它的附件。看板與封存清單共用，兩邊回傳的形狀因此一致。
+async fn with_attachments(
+    pool: &sqlx::SqlitePool,
+    tasks: Vec<TaskRow>,
+) -> Result<Vec<TaskWithAttachments>, String> {
+    let mut out = Vec::with_capacity(tasks.len());
+    for task in tasks {
+        let attachments = store::list_attachments(pool, &task.id)
+            .await
+            .map_err(|e| e.to_string())?;
+        out.push(TaskWithAttachments { task, attachments });
+    }
+    Ok(out)
+}
+
 #[tauri::command]
 pub async fn tasks_list(
     project_id: String,
@@ -43,14 +58,7 @@ pub async fn tasks_list(
 ) -> Result<Vec<TaskWithAttachments>, String> {
     let p = project(&reg, &project_id)?;
     let tasks = store::list_tasks(&p.pool).await.map_err(|e| e.to_string())?;
-    let mut out = Vec::with_capacity(tasks.len());
-    for task in tasks {
-        let attachments = store::list_attachments(&p.pool, &task.id)
-            .await
-            .map_err(|e| e.to_string())?;
-        out.push(TaskWithAttachments { task, attachments });
-    }
-    Ok(out)
+    with_attachments(&p.pool, tasks).await
 }
 
 #[derive(Deserialize)]
@@ -412,6 +420,59 @@ pub async fn tasks_set_summary(
 ) -> Result<(), String> {
     let p = project(&reg, &project_id)?;
     store::set_summary(&p.pool, &task_id, &summary).await.map_err(|e| e.to_string())
+}
+
+/// 把一張已完成的卡片從看板上收起來。資料完全保留，只是不再顯示、也
+/// 不會被排程器或工作報告撿到。
+#[tauri::command]
+pub async fn tasks_archive(
+    project_id: String,
+    task_id: String,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    store::archive_task(&p.pool, &task_id).await.map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    Ok(())
+}
+
+/// 把封存的卡片放回看板（回到「已完成」欄）。
+#[tauri::command]
+pub async fn tasks_unarchive(
+    project_id: String,
+    task_id: String,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    store::unarchive_task(&p.pool, &task_id).await.map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    Ok(())
+}
+
+/// 一次收走整個「已完成」欄，回傳實際封存了幾張。
+#[tauri::command]
+pub async fn tasks_archive_done(
+    project_id: String,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+) -> Result<u64, String> {
+    let p = project(&reg, &project_id)?;
+    let n = store::archive_all_done(&p.pool).await.map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    Ok(n)
+}
+
+/// 封存的卡片，新封存的在前。附件一併帶上，跟 `tasks_list` 的形狀一致。
+#[tauri::command]
+pub async fn tasks_list_archived(
+    project_id: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<Vec<TaskWithAttachments>, String> {
+    let p = project(&reg, &project_id)?;
+    let rows = store::list_archived(&p.pool).await.map_err(|e| e.to_string())?;
+    with_attachments(&p.pool, rows).await
 }
 
 #[cfg(test)]

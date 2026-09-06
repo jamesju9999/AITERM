@@ -20,6 +20,7 @@ const card = (over: Partial<TaskWithAttachments> = {}): TaskWithAttachments => (
   dispatched_at: null,
   finished_at: null,
   ai_summary: null,
+  archived_at: null,
   attachments: [],
   ...over,
 });

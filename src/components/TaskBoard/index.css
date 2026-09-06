@@ -473,6 +473,9 @@
   border-top-color: var(--tb-col-done);
   background: var(--tb-col-done-tint);
 }
+/* 計數與欄位動作放在標題列右側。 */
+.task-column-head-right { display: flex; align-items: center; gap: 6px; }
+
 .task-column-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
 /* 計數做成小膠囊：它是一個數值，不是標題的一部分，給它自己的容器就不必
    靠 opacity 去弱化。底色比欄位畫布亮一階，所以會浮在標題列上。 */
@@ -632,6 +635,77 @@
 .tb-btn--danger-ghost { background: transparent; border: 1px solid var(--border-color); color: var(--text-muted); }
 .tb-btn--danger-ghost:hover:not(:disabled),
 .tb-btn--danger-ghost:focus-visible { background: var(--bg-hover); color: var(--tb-failed); }
+/* 封存清單。跟報告視窗同一個底板，但不需要側邊欄，所以窄一些。 */
+.archive-dialog {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  width: min(680px, 92vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: var(--shadow-premium, 0 10px 30px rgba(0, 0, 0, 0.5));
+}
+
+.archive-count {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.archive-empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.archive-list {
+  list-style: none;
+  margin: 0;
+  padding: 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.archive-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.archive-row-info { min-width: 0; flex: 1; }
+.archive-row-title { font-size: 13.5px; font-weight: 600; color: var(--text-primary); }
+.archive-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 3px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  overflow: hidden;
+}
+.archive-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+.report-include-archived {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
 .task-dialog-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 50; }
 .task-dialog {
   background: var(--bg-secondary, #111);

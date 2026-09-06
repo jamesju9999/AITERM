@@ -113,6 +113,7 @@ use commands::{
         tasks_list, tasks_create, tasks_update, tasks_move, tasks_stop, tasks_delete,
         tasks_add_attachment, tasks_remove_attachment, tasks_clone, tasks_read_transcript,
         tasks_save_transcript, tasks_mark_done, tasks_used_dirs, tasks_set_summary,
+        tasks_archive, tasks_unarchive, tasks_archive_done, tasks_list_archived,
     },
     updater::updater_supported,
     web::{web_fetch, web_search, npm_mcp_search},
@@ -595,6 +596,10 @@ pub fn run() {
             tasks_save_transcript,
             tasks_used_dirs,
             tasks_set_summary,
+            tasks_archive,
+            tasks_unarchive,
+            tasks_archive_done,
+            tasks_list_archived,
             // 專案
             projects_list,
             projects_create,

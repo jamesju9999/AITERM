@@ -5,6 +5,7 @@ export function TaskColumn({
   title,
   count,
   highlighted = false,
+  headerAction,
   children,
 }: {
   status: string;
@@ -13,6 +14,8 @@ export function TaskColumn({
   /** True while a card is being dragged over this column (see index.tsx's
    * mouse-event-based drag — there is no native dragover to key off). */
   highlighted?: boolean;
+  /** 放在計數右邊的欄位層級動作（目前只有「已完成」欄的封存全部）。 */
+  headerAction?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -26,7 +29,10 @@ export function TaskColumn({
     >
       <div className="task-column-head">
         <span className="task-column-title">{title}</span>
-        <span className="task-column-count">{count}</span>
+        <div className="task-column-head-right">
+          <span className="task-column-count">{count}</span>
+          {headerAction}
+        </div>
       </div>
       <div className="task-column-body">{children}</div>
     </div>

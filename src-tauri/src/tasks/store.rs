@@ -36,6 +36,9 @@ pub struct TaskRow {
     /// 由前端在產生報告時補上。已完成的卡片不可變，所以這是永久快取；
     /// 重新派工時 `claim_for_dispatch` 會清掉它。
     pub ai_summary: Option<String>,
+    /// 封存時間（Unix 秒）。有值代表這張卡已經從看板上收起來——資料完整
+    /// 保留，只是不再出現在四欄裡，也不會被排程器或工作報告撿到。
+    pub archived_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -106,7 +109,8 @@ pub async fn clone_task_fields(pool: &SqlitePool, src_id: &str) -> Result<String
 /// 第二個排序鍵上全部同分、順序仍然由使用者拖出來的 `sort_order` 決定。
 pub async fn list_tasks(pool: &SqlitePool) -> Result<Vec<TaskRow>, sqlx::Error> {
     sqlx::query_as::<_, TaskRow>(
-        "SELECT * FROM tasks ORDER BY status, COALESCE(finished_at, 0) DESC, sort_order",
+        "SELECT * FROM tasks WHERE archived_at IS NULL
+         ORDER BY status, COALESCE(finished_at, 0) DESC, sort_order",
     )
         .fetch_all(pool)
         .await
@@ -241,6 +245,59 @@ pub async fn set_interactive(
 }
 
 /// 寫入這張卡片的 AI 履行摘要（工作報告的第一階段產物）。
+/// `done → 已封存`。只有已完成的卡片能封存：把計畫中或執行中的卡片
+/// 藏起來等於讓工作憑空消失，而執行中的那張背後還有一個真的在跑的
+/// Agent。`WHERE status = 'done'` 就是那道守門，沒有更新到任何列時
+/// 回報錯誤而不是默默成功。
+pub async fn archive_task(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    let res = sqlx::query(
+        "UPDATE tasks SET archived_at = ? WHERE id = ? AND status = 'done' AND archived_at IS NULL",
+    )
+    .bind(now_secs())
+    .bind(id)
+    .execute(pool)
+    .await?;
+    if res.rows_affected() == 0 {
+        return Err(sqlx::Error::Protocol(format!(
+            "只有已完成且尚未封存的卡片可以封存：{id}"
+        )));
+    }
+    Ok(())
+}
+
+/// 把封存的卡片放回看板。它回到 `done` 欄——狀態從來沒有變過，封存只是
+/// 一層可見性。
+pub async fn unarchive_task(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET archived_at = NULL WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// 一次收走整個「已完成」欄，回傳實際封存了幾張。
+///
+/// `archived_at IS NULL` 讓已經封存的不被重複計數，封存時間也不會被刷成
+/// 新的——那會打亂封存清單的排序。
+pub async fn archive_all_done(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query(
+        "UPDATE tasks SET archived_at = ? WHERE status = 'done' AND archived_at IS NULL",
+    )
+    .bind(now_secs())
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+/// 封存的卡片，新封存的在前。
+pub async fn list_archived(pool: &SqlitePool) -> Result<Vec<TaskRow>, sqlx::Error> {
+    sqlx::query_as::<_, TaskRow>(
+        "SELECT * FROM tasks WHERE archived_at IS NOT NULL ORDER BY archived_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn set_summary(pool: &SqlitePool, id: &str, summary: &str) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE tasks SET ai_summary = ? WHERE id = ?")
         .bind(summary)
@@ -398,8 +455,12 @@ pub async fn delete_task(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error>
 }
 
 /// Rows the scheduler needs: everything of one status, oldest first.
+/// 排程器用的查詢。跟看板的 `list_tasks` 一樣要排除封存的卡片——兩者是
+/// 不同的查詢，各自都得擋。
 pub async fn list_by_status(pool: &SqlitePool, status: &str) -> Result<Vec<TaskRow>, sqlx::Error> {
-    sqlx::query_as::<_, TaskRow>("SELECT * FROM tasks WHERE status = ? ORDER BY sort_order")
+    sqlx::query_as::<_, TaskRow>(
+        "SELECT * FROM tasks WHERE status = ? AND archived_at IS NULL ORDER BY sort_order",
+    )
         .bind(status)
         .fetch_all(pool)
         .await
@@ -407,7 +468,8 @@ pub async fn list_by_status(pool: &SqlitePool, status: &str) -> Result<Vec<TaskR
 
 /// 某個 status 目前有幾張卡片。供 `projects_list` 產生專案總覽的計數。
 pub async fn count_by_status(pool: &SqlitePool, status: &str) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE status = ?")
+    // 排除封存：專案總覽的計數要跟看板上看得到的張數一致。
+    sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE status = ? AND archived_at IS NULL")
         .bind(status)
         .fetch_one(pool)
         .await
@@ -458,6 +520,132 @@ pub async fn rewrite_stored_paths(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn mem_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        pool
+    }
+
+    async fn finished(pool: &SqlitePool, title: &str) -> String {
+        let id = create_task(pool, title, "", "/r", true, false).await.unwrap();
+        move_task(pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
+        dispatch_for_test(pool, &id, "tab").await;
+        finish_task(pool, &id, "success", None, None).await.unwrap();
+        id
+    }
+
+    #[tokio::test]
+    async fn archiving_hides_a_card_from_the_board_but_keeps_the_row() {
+        let pool = mem_pool().await;
+        let id = finished(&pool, "收工").await;
+
+        archive_task(&pool, &id).await.unwrap();
+
+        assert!(list_tasks(&pool).await.unwrap().is_empty(), "封存的卡片不該還在看板上");
+        let row = get_task(&pool, &id).await.unwrap().unwrap();
+        assert!(row.archived_at.is_some());
+        assert_eq!(row.title, "收工", "資料必須原封不動地留著");
+    }
+
+    /// 只有已完成的卡片能封存。把計畫中或執行中的卡片藏起來，等於讓工作
+    /// 憑空消失——而執行中的那張背後還有一個真的在跑的 Agent。
+    #[tokio::test]
+    async fn only_done_cards_can_be_archived() {
+        let pool = mem_pool().await;
+        let planning = create_task(&pool, "還在想", "", "/r", true, false).await.unwrap();
+        assert!(archive_task(&pool, &planning).await.is_err());
+
+        let running = create_task(&pool, "跑著", "", "/r", true, false).await.unwrap();
+        move_task(&pool, &running, STATUS_QUEUED, 1.0).await.unwrap();
+        dispatch_for_test(&pool, &running, "tab").await;
+        assert!(archive_task(&pool, &running).await.is_err());
+
+        assert_eq!(list_tasks(&pool).await.unwrap().len(), 2, "兩張都該還在看板上");
+    }
+
+    #[tokio::test]
+    async fn unarchiving_puts_the_card_back_on_the_board() {
+        let pool = mem_pool().await;
+        let id = finished(&pool, "回來").await;
+        archive_task(&pool, &id).await.unwrap();
+
+        unarchive_task(&pool, &id).await.unwrap();
+
+        assert_eq!(list_tasks(&pool).await.unwrap().len(), 1);
+        assert!(get_task(&pool, &id).await.unwrap().unwrap().archived_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn archive_all_done_takes_the_whole_column_and_reports_how_many() {
+        let pool = mem_pool().await;
+        finished(&pool, "一").await;
+        finished(&pool, "二").await;
+        let planning = create_task(&pool, "留下", "", "/r", true, false).await.unwrap();
+
+        let n = archive_all_done(&pool).await.unwrap();
+
+        assert_eq!(n, 2);
+        let left: Vec<String> =
+            list_tasks(&pool).await.unwrap().into_iter().map(|t| t.title).collect();
+        assert_eq!(left, vec!["留下"], "只有已完成的那一欄該被收走");
+        assert!(get_task(&pool, &planning).await.unwrap().unwrap().archived_at.is_none());
+    }
+
+    /// 已經封存的不該被重複計數，也不該把封存時間刷成新的——那會打亂
+    /// 封存清單的排序。
+    #[tokio::test]
+    async fn archive_all_done_skips_cards_that_are_already_archived() {
+        let pool = mem_pool().await;
+        let first = finished(&pool, "早就收了").await;
+        archive_task(&pool, &first).await.unwrap();
+        let stamp = get_task(&pool, &first).await.unwrap().unwrap().archived_at;
+        finished(&pool, "剛完成").await;
+
+        assert_eq!(archive_all_done(&pool).await.unwrap(), 1);
+        assert_eq!(get_task(&pool, &first).await.unwrap().unwrap().archived_at, stamp);
+    }
+
+    #[tokio::test]
+    async fn archived_cards_are_listed_newest_archived_first() {
+        let pool = mem_pool().await;
+        for (title, stamp) in [("早", 1_000_i64), ("晚", 3_000), ("中", 2_000)] {
+            let id = finished(&pool, title).await;
+            archive_task(&pool, &id).await.unwrap();
+            sqlx::query("UPDATE tasks SET archived_at = ? WHERE id = ?")
+                .bind(stamp)
+                .bind(&id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let titles: Vec<String> =
+            list_archived(&pool).await.unwrap().into_iter().map(|t| t.title).collect();
+        assert_eq!(titles, vec!["晚", "中", "早"]);
+    }
+
+    /// 排程器絕不能撿到封存的卡片。它查的是 `list_by_status`，跟看板用的
+    /// 不是同一個查詢，所以要各自釘住。
+    #[tokio::test]
+    async fn list_by_status_ignores_archived_cards() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "封存的佇列卡", "", "/r", true, false).await.unwrap();
+        move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
+        sqlx::query("UPDATE tasks SET archived_at = 1 WHERE id = ?")
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert!(list_by_status(&pool, STATUS_QUEUED).await.unwrap().is_empty());
+    }
 }
 
 #[cfg(test)]
