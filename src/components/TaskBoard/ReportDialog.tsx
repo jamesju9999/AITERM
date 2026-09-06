@@ -125,6 +125,20 @@ export function ReportDialog({
     setHistory(await listReports(projectId));
   }, [projectId]);
 
+  /**
+   * 重抓卡片統計。產生報告的第一階段會把摘要寫回 `ai_summary`，所以跑完
+   * 之後「需要重新整理」的張數就變了——不重抓的話，使用者按「重新產生」
+   * 回到這一頁會看到跟上次一模一樣的數字，看起來就像快取根本沒生效。
+   * 實機回報過。
+   */
+  const refreshCards = useCallback(async () => {
+    try {
+      setCards(await listTasks(projectId));
+    } catch {
+      // 統計只是輔助資訊，抓不到就維持原樣，不該擋住任何事。
+    }
+  }, [projectId]);
+
   // 初次掛載抓一次歷史清單。之後歷史只在「產生完成」時需要重抓，
   // 由 start() 在 generate() 完成後明確呼叫 refreshHistory()——不用
   // effect 盯著 html 變化，避免點歷史報告 (setHtml) 誤觸發多餘的重抓。
@@ -186,7 +200,9 @@ export function ReportDialog({
     if (selectedProviderId) localStorage.setItem(PROVIDER_KEY, selectedProviderId);
     // `generate` 的回傳型別是 Promise<void>，但測試裡的 mock 版本是
     // `vi.fn()`（回傳 undefined）——包一層 Promise.resolve 讓兩邊都安全。
-    void Promise.resolve(generate(style, selectedProviderId || undefined)).then(refreshHistory);
+    void Promise.resolve(generate(style, selectedProviderId || undefined)).then(() =>
+      Promise.all([refreshHistory(), refreshCards()]),
+    );
   };
 
   /**

@@ -289,6 +289,39 @@ describe("ReportDialog", () => {
     expect(screen.queryByTestId("report-new")).not.toBeInTheDocument();
   });
 
+  // 實機回報「感覺快取都沒生效」的根因。統計只在掛載時抓一次，所以產生
+  // 報告之後按「重新產生」回到選擇頁，它還顯示上一次那個「N 張需要重新
+  // 整理」——摘要明明已經寫進 ai_summary 了，畫面卻說沒有。
+  it("產生報告之後重新抓一次卡片統計", async () => {
+    listTasks.mockResolvedValue([
+      taskCard({ id: "a", status: "done", ai_summary: null }),
+      taskCard({ id: "b", status: "done", ai_summary: null }),
+    ]);
+
+    let setHtmlFromHook: ((v: string) => void) | null = null;
+    generate.mockImplementation(() => {
+      // 第一階段已經把兩張的摘要寫回快取了，之後再讀就都有。
+      listTasks.mockResolvedValue([
+        taskCard({ id: "a", status: "done", ai_summary: "剛整理好" }),
+        taskCard({ id: "b", status: "done", ai_summary: "剛整理好" }),
+      ]);
+      setHtmlFromHook?.("<html><title>剛產的</title></html>");
+    });
+    captureSetHtml = (fn) => {
+      setHtmlFromHook = fn;
+    };
+
+    mount();
+    await screen.findByText("Provider B");
+    expect((await screen.findByTestId("report-scope-pending")).textContent).toContain("2");
+
+    await userEvent.click(await screen.findByTestId("report-style-review"));
+    await userEvent.click(await screen.findByTestId("report-new"));
+
+    await screen.findByTestId("report-scope");
+    expect(screen.queryByTestId("report-scope-pending")).not.toBeInTheDocument();
+  });
+
   it("有原始回覆時顯示出來", async () => {
     hookState = { error: "AI 沒有產生報告文件", rawReply: "我不會做這個" };
     mount();
