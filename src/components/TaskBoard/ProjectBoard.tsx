@@ -96,8 +96,22 @@ export function ProjectBoard({
       done: t.board_col_done,
     })[s];
 
-  const byStatus = (s: TaskStatus) =>
-    tasks.filter((x) => x.status === s).sort((a, b) => a.sort_order - b.sort_order);
+  /**
+   * 一欄的卡片，依該欄的排序規則排好。
+   *
+   * 已完成的用完成時間由新到舊，其餘三欄用使用者拖出來的 `sort_order`。
+   * 完成的卡片留著的是它還在佇列時的 sort_order（`finish_task` 不碰那一
+   * 欄），實機上那些值常常一模一樣，照 sort_order 排等於沒有排序。
+   *
+   * 後端的 `list_tasks` 已經用同一個規則排過，這裡是第二道——但不能只
+   * 靠後端：這個 sort 會把回傳的順序整個重排掉。
+   */
+  const byStatus = (s: TaskStatus) => {
+    const rows = tasks.filter((x) => x.status === s);
+    return s === "done"
+      ? rows.sort((a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0))
+      : rows.sort((a, b) => a.sort_order - b.sort_order);
+  };
 
   // Single source of truth for "can this card legally be dropped on this
   // column", shared by handleDrop (what actually happens on release) and

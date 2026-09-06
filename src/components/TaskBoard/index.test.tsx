@@ -138,6 +138,25 @@ describe("ProjectBoard", () => {
     }
   });
 
+  // 已完成的卡片留著的是它還在佇列時的 sort_order（finish 不碰那一欄），
+  // 實機上那些值常常一模一樣，於是這一欄的順序等於未定義。後端已經改成
+  // 依 finished_at 由新到舊回傳，但這裡如果還照 sort_order 重排一次，
+  // 後端那個修正在畫面上完全看不出來。
+  it("已完成欄依完成時間由新到舊排列", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "a", title: "最早完成", status: "done", outcome: "success", sort_order: 1, finished_at: 1000 }),
+      card({ id: "c", title: "最晚完成", status: "done", outcome: "success", sort_order: 1, finished_at: 3000 }),
+      card({ id: "b", title: "中間完成", status: "done", outcome: "success", sort_order: 1, finished_at: 2000 }),
+    ]);
+    view();
+    await screen.findByText("最早完成");
+
+    const titles = Array.from(
+      screen.getByTestId("column-done").querySelectorAll(".task-card-title"),
+    ).map((el) => el.textContent);
+    expect(titles).toEqual(["最晚完成", "中間完成", "最早完成"]);
+  });
+
   it("dropping a running interactive card on the done column calls markTaskDone, not moveTask", async () => {
     const { markTaskDone } = await import("../../ipc/tasks");
     vi.mocked(listTasks).mockResolvedValue([

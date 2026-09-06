@@ -96,8 +96,18 @@ pub async fn clone_task_fields(pool: &SqlitePool, src_id: &str) -> Result<String
     create_task(pool, &src.title, &src.body, &src.project_dir, src.parallel_ok, src.interactive).await
 }
 
+/// 所有卡片，依欄位分組後排序。
+///
+/// 已完成的卡片依 `finished_at` 由新到舊——`finish_task` 不碰 `sort_order`，
+/// 所以完成的卡片留著的是它還在佇列時的值，實機上那些值常常一模一樣，
+/// 「已完成」欄的順序等於未定義。
+///
+/// 沒完成的卡片 `finished_at` 是 NULL，`COALESCE` 一律給 0，所以它們在
+/// 第二個排序鍵上全部同分、順序仍然由使用者拖出來的 `sort_order` 決定。
 pub async fn list_tasks(pool: &SqlitePool) -> Result<Vec<TaskRow>, sqlx::Error> {
-    sqlx::query_as::<_, TaskRow>("SELECT * FROM tasks ORDER BY status, sort_order")
+    sqlx::query_as::<_, TaskRow>(
+        "SELECT * FROM tasks ORDER BY status, COALESCE(finished_at, 0) DESC, sort_order",
+    )
         .fetch_all(pool)
         .await
 }
@@ -453,6 +463,61 @@ pub async fn rewrite_stored_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 已完成的卡片要新的排在前面。
+    ///
+    /// 原本的排序是 `ORDER BY status, sort_order`，而 `finish_task` 從來
+    /// 不碰 `sort_order`——完成的卡片保留的是它還在佇列時的值。實機上那些
+    /// 值常常一模一樣（各自曾是所屬狀態裡的第一張），於是「已完成」欄的
+    /// 順序完全由 SQLite 的內部順序決定，既不是完成順序也不是反序。
+    #[tokio::test]
+    async fn done_cards_are_listed_newest_finished_first() {
+        let pool = mem_pool().await;
+        // 三張卡的 sort_order 刻意都設成 1.0，重現實機的狀況。
+        let mut ids = Vec::new();
+        for (name, finished) in [("早", 1_000_i64), ("晚", 3_000), ("中", 2_000)] {
+            let id = create_task(&pool, name, "", "/r", true, false).await.unwrap();
+            move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
+            dispatch_for_test(&pool, &id, "tab").await;
+            finish_task(&pool, &id, "success", None, None).await.unwrap();
+            sqlx::query("UPDATE tasks SET finished_at = ?, sort_order = 1.0 WHERE id = ?")
+                .bind(finished)
+                .bind(&id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            ids.push(id);
+        }
+
+        let titles: Vec<String> = list_tasks(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.status == "done")
+            .map(|t| t.title)
+            .collect();
+        assert_eq!(titles, vec!["晚", "中", "早"], "已完成欄沒有依完成時間新到舊排列");
+    }
+
+    /// 還沒完成的卡片 `finished_at` 是 NULL，不可以因為新的排序規則就被
+    /// 打亂——那幾欄的順序是使用者自己拖出來的。
+    #[tokio::test]
+    async fn unfinished_cards_still_follow_their_drag_order() {
+        let pool = mem_pool().await;
+        for (name, ord) in [("第三", 3.0_f64), ("第一", 1.0), ("第二", 2.0)] {
+            let id = create_task(&pool, name, "", "/r", true, false).await.unwrap();
+            move_task(&pool, &id, STATUS_QUEUED, ord).await.unwrap();
+        }
+
+        let titles: Vec<String> = list_tasks(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.status == STATUS_QUEUED)
+            .map(|t| t.title)
+            .collect();
+        assert_eq!(titles, vec!["第一", "第二", "第三"]);
+    }
     use sqlx::sqlite::SqlitePoolOptions;
 
     async fn mem_pool() -> sqlx::SqlitePool {
