@@ -300,10 +300,6 @@ export function ProjectBoard({
           projectId={projectId}
           onClose={() => setShowArchive(false)}
           onRestored={() => void refresh()}
-          onViewTranscript={(id) => {
-            setShowArchive(false);
-            setTranscriptFor(id);
-          }}
         />
       )}
 

@@ -220,6 +220,26 @@ describe("ProjectBoard", () => {
       expect(archiveDoneTasks).not.toHaveBeenCalled();
     });
 
+    // 實機回報：在封存視窗點對話記錄，視窗直接關掉、對話記錄也沒出來。
+    // 原因是它把 taskId 交給 ProjectBoard 去 `tasks` 裡找卡片，而 `tasks`
+    // 只有未封存的——封存的卡片永遠找不到，於是什麼都沒渲染。
+    it("在封存視窗看對話記錄時，封存清單要留著", async () => {
+      vi.mocked(listTasks).mockResolvedValue([]);
+      vi.mocked(listArchivedTasks).mockResolvedValue([
+        card({
+          id: "a1", title: "去年的工作", status: "done", outcome: "success",
+          archived_at: 1000, transcript_path: "/p/transcript.txt",
+        }),
+      ]);
+      view();
+
+      await userEvent.click(await screen.findByTestId("open-archive"));
+      await userEvent.click(await screen.findByTestId("archive-transcript-a1"));
+
+      expect(await screen.findByTestId("task-transcript-raw")).toBeInTheDocument();
+      expect(screen.getByText("去年的工作")).toBeInTheDocument();
+    });
+
     it("封存清單列出封存的卡片並且可以放回看板", async () => {
       vi.mocked(listTasks).mockResolvedValue([]);
       vi.mocked(listArchivedTasks).mockResolvedValue([

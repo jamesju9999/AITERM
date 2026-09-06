@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import { listArchivedTasks, unarchiveTask, type TaskWithAttachments } from "../../ipc/tasks";
+import { TranscriptDialog } from "./TranscriptDialog";
 
 /** 封存時間。跟報告歷史清單一樣交給平台決定日期慣例。 */
 function formatArchivedAt(at: number | null): string {
@@ -26,16 +27,22 @@ export function ArchiveDialog({
   projectId,
   onClose,
   onRestored,
-  onViewTranscript,
 }: {
   projectId: string;
   onClose: () => void;
   onRestored: () => void;
-  onViewTranscript: (taskId: string) => void;
 }) {
   const { t } = useLocale();
   const [rows, setRows] = useState<TaskWithAttachments[]>([]);
   const [busy, setBusy] = useState(false);
+  /**
+   * 正在看對話記錄的那張封存卡片。
+   *
+   * 這個視窗自己渲染 TranscriptDialog，不把 id 交給 ProjectBoard——
+   * 那邊是從 `tasks` 裡找卡片，而 `tasks` 只有未封存的，封存的永遠找不到，
+   * 結果是封存視窗關掉、對話記錄也沒出來。實機回報過。
+   */
+  const [transcriptFor, setTranscriptFor] = useState<TaskWithAttachments | null>(null);
 
   const refresh = useCallback(async () => {
     setRows(await listArchivedTasks(projectId));
@@ -103,7 +110,8 @@ export function ArchiveDialog({
                   {r.transcript_path && (
                     <button
                       className="tb-btn tb-btn--ghost"
-                      onClick={() => onViewTranscript(r.id)}
+                      data-testid={`archive-transcript-${r.id}`}
+                      onClick={() => setTranscriptFor(r)}
                     >
                       {t.board_action_transcript}
                     </button>
@@ -122,6 +130,19 @@ export function ArchiveDialog({
           </ul>
         )}
       </div>
+
+      {/* 疊在封存清單上面。包一層 stopPropagation：TranscriptDialog 自己
+          的底板點擊會冒泡到外層這個底板，那會把封存視窗一起關掉。 */}
+      {transcriptFor && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <TranscriptDialog
+            projectId={projectId}
+            taskId={transcriptFor.id}
+            body={transcriptFor.body}
+            onClose={() => setTranscriptFor(null)}
+          />
+        </div>
+      )}
     </div>
   );
 }
