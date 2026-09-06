@@ -152,6 +152,32 @@ pub async fn reports_read(
     std::fs::read_to_string(reports_dir(&p).join(safe)).map_err(|e| e.to_string())
 }
 
+/// 刪掉一份歷史報告。報告是可以重新產生的產物，所以真的刪檔、不做垃圾桶；
+/// 確認的動作留在前端（原生確認框）。
+///
+/// 檔案已經不在時視為成功：使用者要的結果是「這份報告不在了」，而重複
+/// 點兩下或兩個視窗同時刪同一份都會走到這裡，報錯只會造成困惑。
+#[tauri::command]
+pub async fn reports_delete(
+    project_id: String,
+    filename: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    let safe = safe_report_name(&filename)?;
+    delete_report_file(&reports_dir(&p), safe)
+}
+
+/// `reports_delete` 的檔案操作。抽出來是為了可測——指令本身綁著
+/// `State<ProjectRegistry>`，沒有真的 Tauri app 起不來。
+fn delete_report_file(dir: &PathBuf, safe: &str) -> Result<(), String> {
+    match std::fs::remove_file(dir.join(safe)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +222,25 @@ mod tests {
             "2026-09-05-1430-2.html".to_string(),
         ];
         assert_eq!(report_filename(&existing, "2026-09-05-1430"), "2026-09-05-1430-3.html");
+    }
+
+    #[test]
+    fn delete_report_file_removes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("2026-09-06-0757.html");
+        std::fs::write(&path, "<html></html>").unwrap();
+
+        delete_report_file(&dir.path().to_path_buf(), "2026-09-06-0757.html").unwrap();
+        assert!(!path.exists());
+    }
+
+    /// 重複點兩下、或兩個視窗同時刪同一份，都會走到「檔案已經不在」。
+    /// 使用者要的結果是「這份報告不在了」，那個結果已經成立，報錯只會
+    /// 造成困惑。
+    #[test]
+    fn delete_report_file_treats_a_missing_file_as_success() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(delete_report_file(&dir.path().to_path_buf(), "never-existed.html").is_ok());
     }
 
     #[test]

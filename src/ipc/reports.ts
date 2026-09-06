@@ -19,3 +19,7 @@ export const listReports = (projectId: string): Promise<ReportInfo[]> =>
 
 export const readReport = (projectId: string, filename: string): Promise<string> =>
   invoke("reports_read", { projectId, filename });
+
+/** 刪掉一份歷史報告。檔案已經不在時後端也回成功。 */
+export const deleteReport = (projectId: string, filename: string): Promise<void> =>
+  invoke("reports_delete", { projectId, filename });

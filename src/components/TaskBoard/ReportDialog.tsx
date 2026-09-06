@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { save } from "@tauri-apps/plugin-dialog";
+import { confirm, save } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import { ArtifactHtmlFrame } from "../ArtifactPanel/ArtifactHtmlFrame";
 import { ModelPickerButton } from "../ModelPickerButton";
 import { writeTextFile } from "../../ipc/fs";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
-import { listReports, readReport, type ReportInfo } from "../../ipc/reports";
+import { deleteReport, listReports, readReport, type ReportInfo } from "../../ipc/reports";
 import { listTasks, type TaskWithAttachments } from "../../ipc/tasks";
 import { useWorkReport } from "./useWorkReport";
 import type { ReportStyle } from "./reportPrompts";
@@ -233,6 +233,22 @@ export function ReportDialog({
     setHtml(await readReport(projectId, info.filename));
   };
 
+  /**
+   * 刪掉一份歷史報告。
+   *
+   * 用 `@tauri-apps/plugin-dialog` 的 `confirm` 而不是 `window.confirm`：
+   * Tauri 的 webview 沒有實作後者（同 TaskCard.tsx 的註解）。
+   *
+   * 刪掉的若正好是畫面上正在看的那一份，要一併回到風格選擇頁——不然
+   * 使用者會盯著一份已經不存在的報告。
+   */
+  const removeHistory = async (info: ReportInfo) => {
+    if (!(await confirm(t.report_history_delete_confirm))) return;
+    await deleteReport(projectId, info.filename);
+    if (picked === info.filename) backToPicker();
+    await refreshHistory();
+  };
+
   const saveAs = async () => {
     if (!html) return;
     const path = await save({
@@ -281,19 +297,31 @@ export function ReportDialog({
               </div>
             ) : (
               history.map((h) => (
-                <button
+                // 刪除鈕放在開啟鈕**外面**：巢狀的 button 不是合法 HTML，
+                // 而且點刪除會連帶觸發開啟。同 ProjectList 的作法。
+                <div
                   key={h.filename}
                   className={`report-history-item${picked === h.filename ? " report-history-item--active" : ""}`}
-                  onClick={() => void openHistory(h)}
                 >
-                  <span className="report-history-item-title">{h.title ?? h.filename}</span>
-                  <span
-                    className="report-history-item-time"
-                    data-testid={`report-history-time-${h.filename}`}
+                  <button className="report-history-open" onClick={() => void openHistory(h)}>
+                    <span className="report-history-item-title">{h.title ?? h.filename}</span>
+                    <span
+                      className="report-history-item-time"
+                      data-testid={`report-history-time-${h.filename}`}
+                    >
+                      {formatSavedAt(h.saved_at)}
+                    </span>
+                  </button>
+                  <button
+                    className="report-history-delete"
+                    data-testid={`report-history-delete-${h.filename}`}
+                    title={t.report_history_delete}
+                    aria-label={t.report_history_delete}
+                    onClick={() => void removeHistory(h)}
                   >
-                    {formatSavedAt(h.saved_at)}
-                  </span>
-                </button>
+                    ×
+                  </button>
+                </div>
               ))
             )}
           </aside>

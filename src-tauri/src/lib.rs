@@ -107,7 +107,7 @@ use commands::{
     projects::{
         projects_create, projects_list, projects_open, projects_remove, projects_rename,
     },
-    reports::{reports_list, reports_read, reports_save},
+    reports::{reports_delete, reports_list, reports_read, reports_save},
     task_board_config::{task_board_get_config, task_board_set_config},
     tasks::{
         tasks_list, tasks_create, tasks_update, tasks_move, tasks_stop, tasks_delete,
@@ -605,6 +605,7 @@ pub fn run() {
             reports_save,
             reports_list,
             reports_read,
+            reports_delete,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

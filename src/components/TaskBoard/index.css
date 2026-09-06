@@ -708,8 +708,15 @@
 }
 
 .report-history-item {
-  display: block;
+  display: flex;
+  align-items: center;
   width: 100%;
+  border-radius: 6px;
+}
+
+.report-history-open {
+  flex: 1;
+  min-width: 0;
   text-align: left;
   background: none;
   border: 0;
@@ -718,6 +725,31 @@
   cursor: pointer;
   padding: 6px 8px;
   font-size: 12px;
+}
+
+/* 刪除不可復原，所以平常不搶眼——滑到那一列才浮出來。鍵盤 focus 也要
+   顯示，不然只有滑鼠使用者找得到它。 */
+.report-history-delete {
+  flex: 0 0 auto;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+
+.report-history-item:hover .report-history-delete,
+.report-history-delete:focus-visible {
+  opacity: 1;
+}
+
+.report-history-delete:hover {
+  color: var(--tb-failed);
 }
 
 .report-history-item--active {

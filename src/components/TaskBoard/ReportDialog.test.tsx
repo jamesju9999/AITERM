@@ -7,6 +7,8 @@ const readReport = vi.fn();
 const generate = vi.fn();
 const cancel = vi.fn();
 const listProviders = vi.fn();
+const deleteReport = vi.fn();
+const confirmDialog = vi.fn();
 const listTasks = vi.fn();
 let hookState: Record<string, unknown> = {};
 /** 讓測試拿到 hook 內部的 setHtml，用來模擬「產生完成」。 */
@@ -15,6 +17,7 @@ let captureSetHtml: ((fn: (v: string) => void) => void) | null = null;
 vi.mock("../../ipc/reports", () => ({
   listReports: (...a: unknown[]) => listReports(...a),
   readReport: (...a: unknown[]) => readReport(...a),
+  deleteReport: (...a: unknown[]) => deleteReport(...a),
   saveReport: vi.fn(),
 }));
 // `html` 用真的 useState 而不是靜態值：元件會呼叫 `setHtml(null)` 回到
@@ -41,7 +44,10 @@ vi.mock("./useWorkReport", async () => {
     },
   };
 });
-vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  save: vi.fn(),
+  confirm: (...a: unknown[]) => confirmDialog(...a),
+}));
 vi.mock("../../ipc/fs", () => ({ writeTextFile: vi.fn() }));
 vi.mock("../../ipc/provider", () => ({
   listProviders: (...a: unknown[]) => listProviders(...a),
@@ -90,6 +96,8 @@ describe("ReportDialog", () => {
     readReport.mockResolvedValue("<html><title>舊報告</title></html>");
     listProviders.mockResolvedValue(PROVIDERS);
     listTasks.mockResolvedValue([]);
+    deleteReport.mockResolvedValue(undefined);
+    confirmDialog.mockResolvedValue(true);
   });
 
   const taskCard = (over: Record<string, unknown> = {}) => ({
@@ -320,6 +328,51 @@ describe("ReportDialog", () => {
 
     await screen.findByTestId("report-scope");
     expect(screen.queryByTestId("report-scope-pending")).not.toBeInTheDocument();
+  });
+
+  describe("刪除歷史報告", () => {
+    const TWO = [
+      { filename: "a.html", saved_at: 1_788_600_000, title: "第一份" },
+      { filename: "b.html", saved_at: 1_788_610_000, title: "第二份" },
+    ];
+
+    it("確認之後刪掉檔案並重抓清單", async () => {
+      listReports.mockResolvedValue(TWO);
+      mount();
+      await screen.findByText("第一份");
+
+      listReports.mockResolvedValue([TWO[1]]);
+      await userEvent.click(screen.getByTestId("report-history-delete-a.html"));
+
+      await waitFor(() => expect(deleteReport).toHaveBeenCalledWith("p1", "a.html"));
+      await waitFor(() => expect(screen.queryByText("第一份")).not.toBeInTheDocument());
+      expect(screen.getByText("第二份")).toBeInTheDocument();
+    });
+
+    // 刪除不可復原，按錯的代價是一份報告消失——取消一定要真的不刪。
+    it("取消確認就不刪", async () => {
+      listReports.mockResolvedValue(TWO);
+      confirmDialog.mockResolvedValue(false);
+      mount();
+      await screen.findByText("第一份");
+
+      await userEvent.click(screen.getByTestId("report-history-delete-a.html"));
+      expect(deleteReport).not.toHaveBeenCalled();
+      expect(screen.getByText("第一份")).toBeInTheDocument();
+    });
+
+    // 刪掉正在看的那一份之後，畫面不能繼續顯示一份已經不存在的報告。
+    it("刪掉正在看的那一份會回到風格選擇頁", async () => {
+      listReports.mockResolvedValue(TWO);
+      mount();
+      await userEvent.click(await screen.findByText("第一份"));
+      await screen.findByTestId("report-new"); // 正在看報告
+
+      listReports.mockResolvedValue([TWO[1]]);
+      await userEvent.click(screen.getByTestId("report-history-delete-a.html"));
+
+      expect(await screen.findByTestId("report-style-review")).toBeInTheDocument();
+    });
   });
 
   it("有原始回覆時顯示出來", async () => {
