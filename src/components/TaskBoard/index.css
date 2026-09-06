@@ -550,6 +550,29 @@
 
 .task-field { display: flex; flex-direction: column; gap: 6px; }
 .task-field-label { font-size: 12px; font-weight: 600; color: var(--text-secondary, #aaa); }
+
+/* 標籤與 AI 潤飾的控制項同一行。潤飾是輔助動作，靠右擺才不會跟欄位
+   標籤搶注意力。 */
+.task-field-labelrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.task-refine-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.task-field-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--tb-failed);
+}
 .task-field-input {
   box-sizing: border-box;
   width: 100%;
