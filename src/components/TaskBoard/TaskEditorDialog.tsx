@@ -157,6 +157,18 @@ export function TaskEditorDialog({
     }
   };
 
+  /**
+   * 儲存鈕停用時，說明還缺什麼。
+   *
+   * 原本只是把按鈕變半透明，使用者看不出是缺標題還是缺目錄——尤其標題
+   * 在最上面、目錄在中間，捲動之後兩個都不在視線內。
+   */
+  const missingField = !title.trim()
+    ? t.board_save_needs_title
+    : !dir.trim()
+      ? t.board_save_needs_dir
+      : null;
+
   const attachmentNames = isEdit
     ? attachments.map((a) => ({ key: a.id, name: a.filename }))
     : pendingFiles.map((f, i) => ({ key: `${i}-${f.name}`, name: f.name }));
@@ -176,6 +188,7 @@ export function TaskEditorDialog({
       <div className="task-dialog" onClick={(e) => e.stopPropagation()}>
         <h3 className="task-dialog-title">{isEdit ? t.board_edit_card : t.board_new_card}</h3>
 
+        <div className="task-dialog-group">
         <label className="task-field">
           <span className="task-field-label">{t.board_card_title}</span>
           <input
@@ -238,16 +251,22 @@ export function TaskEditorDialog({
           )}
         </div>
 
+        </div>
+
+        <div className="task-dialog-group">
         <label className="task-field">
           <span className="task-field-label">{t.board_card_folder}</span>
           <div className="task-field-row">
             <input
-              className="task-field-input"
+              className="task-field-input task-field-input--mono"
               data-testid="task-dir-input"
               value={dir}
               onChange={(e) => setDir(e.target.value)}
             />
-            <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void pickDir()}>
+            {/* 跟下面那排已用過的目錄同一套按鈕系統。原本這裡是
+                aiterm-btn--secondary，緊鄰的 chip 是 tb-btn--ghost，
+                同一區塊出現兩種按鈕語彙。 */}
+            <button type="button" className="tb-btn tb-btn--ghost" onClick={() => void pickDir()}>
               {t.board_card_folder_pick}
             </button>
           </div>
@@ -257,7 +276,7 @@ export function TaskEditorDialog({
                 <button
                   key={d}
                   type="button"
-                  className="tb-btn tb-btn--ghost tb-btn--tiny"
+                  className="tb-btn tb-btn--ghost tb-btn--tiny task-field-input--mono"
                   data-testid={`used-dir-${d}`}
                   onClick={() => setDir(d)}
                 >
@@ -268,6 +287,9 @@ export function TaskEditorDialog({
           )}
         </label>
 
+        </div>
+
+        <div className="task-dialog-group">
         <label className="task-field task-field--checkbox">
           <input
             type="checkbox"
@@ -294,6 +316,9 @@ export function TaskEditorDialog({
           </>
         )}
 
+        </div>
+
+        <div className="task-dialog-group">
         <div className="task-field">
           <span className="task-field-label">{t.board_card_attachments}</span>
           <p className="task-field-hint">{t.board_card_attachments_hint}</p>
@@ -314,7 +339,7 @@ export function TaskEditorDialog({
               ))}
             </ul>
           )}
-          <label className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm task-attachment-add">
+          <label className="tb-btn tb-btn--ghost task-attachment-add">
             + {t.board_add_attachment}
             <input
               type="file"
@@ -326,7 +351,14 @@ export function TaskEditorDialog({
           </label>
         </div>
 
+        </div>
+
         <div className="task-dialog-actions">
+          {missingField && (
+            <span className="task-dialog-missing" data-testid="task-save-missing">
+              {missingField}
+            </span>
+          )}
           <button className="aiterm-btn aiterm-btn--secondary" disabled={busy} onClick={onClose}>
             {t.board_cancel}
           </button>

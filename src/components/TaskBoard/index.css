@@ -30,6 +30,8 @@
   --accent: #2f6fed;
   --accent-dim: rgba(47, 111, 237, 0.14);
   --accent-glow: rgba(47, 111, 237, 0.35);
+  /* 徽章邊框用。原本寫死在 .task-badge--interactive 裡，改色時會被漏掉。 */
+  --accent-line: rgba(47, 111, 237, 0.3);
   --panel: #141a24;
   --card: #141a24;
   /* 這個功能區自己額外需要、主題系統裡沒有對應概念的顏色（成功/失敗/中性/
@@ -504,7 +506,7 @@
 .task-badge--success { background: var(--tb-success-dim); color: var(--tb-success); }
 .task-badge--failed { background: var(--tb-failed-dim); color: var(--tb-failed); }
 .task-badge--cancelled { background: var(--tb-cancelled-dim); color: var(--tb-cancelled); }
-.task-badge--interactive { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(47, 111, 237, 0.3); }
+.task-badge--interactive { background: var(--accent-dim); color: var(--accent); border: 1px solid var(--accent-line); }
 .task-badge--running { background: var(--accent-dim); color: var(--accent); }
 .task-badge-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: task-badge-pulse 1.6s ease-in-out infinite; }
 @keyframes task-badge-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
@@ -526,6 +528,15 @@
   transition: all 0.15s ease;
 }
 .tb-btn:disabled { opacity: 0.4; cursor: default; }
+/* 主要按鈕停用時不要用 opacity 疊在漸層上——那會變成一坨半透明青綠，
+   看起來像壞掉而不是「還不能按」。改成中性平色。 */
+.tb-btn--primary:disabled,
+.aiterm-btn--primary:disabled {
+  background: var(--tb-neutral);
+  box-shadow: none;
+  opacity: 1;
+  color: var(--text-muted);
+}
 .tb-btn--ghost { background: transparent; border: 1px solid var(--border-color); color: var(--text-secondary); }
 .tb-btn--ghost:hover:not(:disabled) { background: var(--bg-hover); }
 .tb-btn--primary { background: linear-gradient(135deg, var(--accent), var(--tb-accent-dark)); border: none; color: #fff; box-shadow: 0 2px 8px var(--accent-glow); }
@@ -547,6 +558,20 @@
   box-shadow: var(--shadow-premium, 0 10px 30px rgba(0, 0, 0, 0.5));
 }
 .task-dialog-title { font-size: 17px; font-weight: 700; margin: 0; }
+
+/* 對話框原本用單一 gap 把七個區塊等距排開，四種不同性質的內容（要做
+   什麼／在哪做／怎麼跑／附加）視覺權重一模一樣，掃視時沒有落點。分組
+   之後組內距小於組間距，加一條髮絲線當分界。 */
+.task-dialog-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.task-dialog-group + .task-dialog-group {
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+}
 
 .task-field { display: flex; flex-direction: column; gap: 6px; }
 .task-field-label { font-size: 12px; font-weight: 600; color: var(--text-secondary, #aaa); }
@@ -584,12 +609,37 @@
   font-family: inherit;
   font-size: 13px;
 }
+
+/* 焦點狀態。原本完全沒有定義，所以焦點框是瀏覽器預設的系統藍——跟這個
+   區塊的 accent 不同調，是「業餘感」最主要的來源。用 --accent 讓它跟著
+   主色走，色相之後怎麼改都不必回來動這裡。 */
+.task-field-input:focus-visible,
+.task-field-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+/* 路徑用等寬字體：長路徑靠字寬對齊好掃很多，而且是最便宜的「這是工程
+   工具」訊號。 */
+.task-field-input--mono {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}
+
 .task-field-textarea { resize: vertical; min-height: 90px; }
 .task-field-row { display: flex; gap: 8px; align-items: center; }
 .task-field-row .task-field-input { flex: 1; }
 .task-field--checkbox { flex-direction: row; align-items: center; gap: 8px; font-size: 13px; }
 .task-checkbox { accent-color: var(--accent, #a855f7); width: 15px; height: 15px; margin: 0; }
-.task-field-hint { font-size: 12px; color: var(--text-muted, #666); margin: -4px 0 0; }
+/* 提示原本是 12px，跟欄位標籤同級，只差顏色——兩行說明佔的視覺重量
+   跟主要控制項相當。壓小並收緊行高，讓它退回註解的位置。 */
+.task-field-hint {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted, #666);
+  margin: -2px 0 0;
+}
 
 .task-attachment-list { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .task-attachment-row {
@@ -612,7 +662,14 @@
   width: 100%;
 }
 
-.task-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+/* 停用原因靠左，按鈕靠右。 */
+.task-dialog-missing {
+  margin-right: auto;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.task-dialog-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 /* .task-dialog's own background AND .aiterm-btn--secondary's background
    (in src/styles/buttons.css) both read the same --bg-secondary variable —
    Task 1's override gave that one variable a single value, so the "取消"
