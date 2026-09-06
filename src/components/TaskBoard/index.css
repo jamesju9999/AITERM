@@ -16,34 +16,38 @@
    份，兩邊共用。 */
 .task-board,
 .task-card-ghost {
-  --bg-primary: #0a0e14;
-  --bg-secondary: #10151d;
-  --bg-tertiary: #141a24;
-  --bg-surface: #141a24;
-  --bg-hover: #1a2230;
-  --border: #1f2733;
-  --border-color: #1f2733;
-  --border-subtle: #1f2733;
-  --text-primary: #eef2f7;
-  --text-secondary: #a8b6c8;
-  --text-muted: #6b7a8f;
-  --accent: #2f6fed;
-  --accent-dim: rgba(47, 111, 237, 0.14);
-  --accent-glow: rgba(47, 111, 237, 0.35);
+  /* 畫布 → 欄位 → 卡片 三層表面，刻意不用純黑。 */
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --bg-surface: #21262d;
+  --bg-hover: #30363d;
+  --border: #30363d;
+  --border-color: #30363d;
+  --border-subtle: #30363d;
+  /* 三級文字：標題 / 一般 / 次要。欄位標題、路徑、按鈕預設都用最淡的那級。 */
+  --text-primary: #f0f6fc;
+  --text-secondary: #c9d1d9;
+  --text-muted: #8b949e;
+  --accent: #38bdf8;
+  --accent-dim: rgba(56, 189, 248, 0.15);
+  --accent-glow: rgba(56, 189, 248, 0.25);
   /* 徽章邊框用。原本寫死在 .task-badge--interactive 裡，改色時會被漏掉。 */
-  --accent-line: rgba(47, 111, 237, 0.3);
-  --panel: #141a24;
-  --card: #141a24;
+  --accent-line: rgba(56, 189, 248, 0.3);
+  --panel: #161b22;
+  --card: #21262d;
   /* 這個功能區自己額外需要、主題系統裡沒有對應概念的顏色（成功/失敗/中性/
      深藍主色的加深版，給漸層跟 hover 用）。 */
-  --tb-accent-dark: #1e4fc7;
-  --tb-success: #22c55e;
-  --tb-success-dim: rgba(34, 197, 94, 0.14);
-  --tb-failed: #ef4444;
-  --tb-failed-dim: rgba(239, 68, 68, 0.14);
-  --tb-cancelled: #eab308;
-  --tb-cancelled-dim: rgba(234, 179, 8, 0.14);
-  --tb-neutral: #3a4556;
+  --tb-accent-dark: #1f6feb;
+  /* 徽章一律「低飽和半透明底 + 亮色文字」。文字取亮階、底色取暗階的
+     15% 透明，所以同一個語意在深色表面上永遠夠亮又不會變成色塊。 */
+  --tb-success: #34d399;
+  --tb-success-dim: rgba(16, 185, 129, 0.15);
+  --tb-failed: #f87171;
+  --tb-failed-dim: rgba(239, 68, 68, 0.15);
+  --tb-cancelled: #fbbf24;
+  --tb-cancelled-dim: rgba(245, 158, 11, 0.15);
+  --tb-neutral: #30363d;
   /* 「待執行」欄位專用。目前數值跟 --tb-cancelled 相同，但語意不同
      （等待中 vs 已中斷），各自命名才不會在改其中一個時誤傷另一個。 */
   --tb-queued: #eab308;
@@ -70,10 +74,10 @@
   --tb-ghost-border: rgba(238, 242, 247, 0.55);
   /* 卡片邊框的狀態色。濃度只到「四種狀態分得出來」為止，比欄位的
      --tb-col-* 更淡——那組是整欄的標示，這組是單張卡片的輪廓。 */
-  --tb-card-running-edge: rgba(53, 88, 168, 0.55);
-  --tb-card-success-edge: rgba(47, 125, 82, 0.45);
-  --tb-card-failed-edge: rgba(239, 68, 68, 0.45);
-  --tb-card-cancelled-edge: rgba(138, 109, 31, 0.5);
+  --tb-card-running-edge: rgba(56, 189, 248, 0.45);
+  --tb-card-success-edge: rgba(52, 211, 153, 0.4);
+  --tb-card-failed-edge: rgba(248, 113, 113, 0.4);
+  --tb-card-cancelled-edge: rgba(251, 191, 36, 0.4);
 }
 
 /* ── 專案總覽 ─────────────────────────────────────────────── */
@@ -380,8 +384,8 @@
 .task-column {
   display: flex;
   flex-direction: column;
-  background: transparent;
-  border-radius: 10px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
   overflow: hidden;
   min-height: 0;
   border: 1px solid transparent;
@@ -469,8 +473,18 @@
   border-top-color: var(--tb-col-done);
   background: var(--tb-col-done-tint);
 }
-.task-column-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); }
-.task-column-count { opacity: 0.6; font-weight: 400; }
+.task-column-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+/* 計數做成小膠囊：它是一個數值，不是標題的一部分，給它自己的容器就不必
+   靠 opacity 去弱化。底色比欄位畫布亮一階，所以會浮在標題列上。 */
+.task-column-count {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+}
 .task-column-body { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
 /* Explicit, not just inherited from .task-board-columns — a card that has
    already been dragged once and re-rendered into a new column is a fresh
@@ -479,15 +493,14 @@
    entirely). Belt and suspenders. */
 .task-card {
   position: relative;
-  background: linear-gradient(180deg, #141a24 0%, #10151d 100%);
+  background: var(--card);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: 8px;
   padding: 14px 14px 12px 16px;
   cursor: grab;
-  /* 原本是 0 4px 16px / 0.4，疊在圓角跟漸層底上共三層裝飾，深色背景下會
-     讀成「浮起來的物件」而不是面板。改成淺陰影，另用一道 1px 的內側亮線
-     把邊界交代清楚——這是深色介面裡描述表面的標準手法。 */
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  /* 極微弱的邊緣陰影。原本是 0 4px 16px / 0.4，在深色背景上會讀成「浮
+     起來的物件」而不是面板；表面的層次交給底色與邊框，不靠投影。 */
+  box-shadow: 0 1px 0 rgba(1, 4, 9, 0.3);
   user-select: none;
   -webkit-user-select: none;
   -webkit-user-drag: none;
@@ -514,7 +527,7 @@
 .task-card[data-task-status="cancelled"]::before { background: var(--tb-cancelled); }
 
 .task-card-title {
-  font-weight: 700;
+  font-weight: 600;
   font-size: 14.5px;
   color: var(--text-primary);
   line-height: 1.35;
@@ -532,16 +545,35 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--text-muted);
   margin-top: 5px;
-  font-family: var(--mono, monospace);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   overflow: hidden;
+  gap: 5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 /* 「這是互動卡片」由底下的徽章負責講。這個圖示原本是飽和主色漸層，
    等於把同一件事用卡片上最響的顏色再說一次。改成低調的表面色。 */
+/* emoji 吃不到 CSS 的 color，所以「圖示跟文字同色」只能用去飽和逼近：
+   拿掉色相之後它就跟著這一行的灰階走，不會在一片 #8b949e 裡跳出一塊橘。 */
+/* 路徑要自己是一個 flex item 才吃得到 text-overflow：省略號作用在有
+   overflow 的那個盒子上，容器是 flex 的話，裡面的匿名文字項目拿不到，
+   長路徑只會被硬裁掉、看不出後面還有東西。 */
+.task-card-meta-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-card-meta-icon {
+  filter: grayscale(1) brightness(1.4);
+  opacity: 0.75;
+  flex-shrink: 0;
+}
+
 .task-card-avatar {
   width: 24px; height: 24px; border-radius: 7px;
   background: var(--bg-hover);
@@ -556,14 +588,9 @@
 .task-badge--success { background: var(--tb-success-dim); color: var(--tb-success); }
 .task-badge--failed { background: var(--tb-failed-dim); color: var(--tb-failed); }
 .task-badge--cancelled { background: var(--tb-cancelled-dim); color: var(--tb-cancelled); }
-/* 「互動」是模式（卡片的固定屬性），「成功/失敗/中斷」是結果（這次執行
-   的產出）。兩種語意不該長得一樣——模式用不填底的素色描邊藥丸，結果保留
-   實心語意色，並排時一眼分得出哪個在講什麼。 */
-.task-badge--interactive {
-  background: transparent;
-  color: var(--text-secondary);
-  border: 1px solid var(--border-color);
-}
+/* 「互動」走資訊藍。四種徽章統一是「低飽和半透明底 + 亮色文字」，
+   彼此只差色相，所以並排時仍然分得出語意，又不會有人變成深色色塊。 */
+.task-badge--interactive { background: var(--accent-dim); color: var(--accent); }
 .task-badge--running { background: var(--accent-dim); color: var(--accent); }
 .task-badge-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: task-badge-pulse 1.6s ease-in-out infinite; }
 @keyframes task-badge-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
@@ -575,8 +602,8 @@
 .tb-btn {
   cursor: pointer;
   font-family: inherit;
-  border-radius: 7px;
-  padding: 5px 10px;
+  border-radius: 4px;
+  padding: 4px 8px;
   font-size: 11.5px;
   font-weight: 600;
   display: inline-flex;
@@ -594,20 +621,17 @@
   opacity: 1;
   color: var(--text-muted);
 }
-.tb-btn--ghost { background: transparent; border: 1px solid var(--border-color); color: var(--text-secondary); }
-.tb-btn--ghost:hover:not(:disabled) { background: var(--bg-hover); }
-.tb-btn--primary { background: linear-gradient(135deg, var(--accent), var(--tb-accent-dark)); border: none; color: #fff; box-shadow: 0 2px 8px var(--accent-glow); }
+.tb-btn--ghost { background: transparent; border: 1px solid var(--border-color); color: var(--text-muted); }
+.tb-btn--ghost:hover:not(:disabled),
+.tb-btn--ghost:focus-visible { background: var(--bg-hover); color: var(--text-secondary); }
+.tb-btn--primary { background: var(--tb-accent-dark); border: 1px solid rgba(240, 246, 252, 0.1); color: #fff; box-shadow: none; }
 .tb-btn--primary:hover:not(:disabled) { transform: translateY(-1px); }
 /* 刪除在靜止狀態不上紅：一欄四張卡片就是四顆紅按鈕往下排，紅色被稀釋
    成裝飾，真正危險的時候反而不醒目。改成平時跟其他按鈕同級，滑上去或
    取得鍵盤焦點時才轉紅——同 report-history-delete 的作法。 */
-.tb-btn--danger-ghost { background: transparent; border: 1px solid var(--border-color); color: var(--text-secondary); }
+.tb-btn--danger-ghost { background: transparent; border: 1px solid var(--border-color); color: var(--text-muted); }
 .tb-btn--danger-ghost:hover:not(:disabled),
-.tb-btn--danger-ghost:focus-visible {
-  background: var(--tb-failed-dim);
-  border-color: rgba(239, 68, 68, 0.45);
-  color: #e8929a;
-}
+.tb-btn--danger-ghost:focus-visible { background: var(--bg-hover); color: var(--tb-failed); }
 .task-dialog-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 50; }
 .task-dialog {
   background: var(--bg-secondary, #111);

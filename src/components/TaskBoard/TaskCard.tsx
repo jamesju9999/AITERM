@@ -70,8 +70,11 @@ export function TaskCard({
       <div className="task-card-top-row">
         <div className="task-card-info">
           <div className="task-card-title">{card.title}</div>
-          <div className="task-card-meta">📁 {card.project_dir}</div>
-          {!card.parallel_ok && <div className="task-card-meta">⚑ {t.board_card_solo_hint}</div>}
+          <div className="task-card-meta">
+            <span className="task-card-meta-icon">📁</span>
+            <span className="task-card-meta-text">{card.project_dir}</span>
+          </div>
+          {!card.parallel_ok && <div className="task-card-meta"><span className="task-card-meta-icon">⚑</span>{t.board_card_solo_hint}</div>}
           {card.status === "running" && <div className="task-card-meta">{t.board_running_hint}</div>}
           {card.status === "done" && card.error_message && (
             <div className="task-card-meta">{card.error_message}</div>
