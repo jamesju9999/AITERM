@@ -161,6 +161,94 @@ describe("ProjectBoard", () => {
     expect(titles).toEqual(["最晚完成", "中間完成", "最早完成"]);
   });
 
+  describe("看板搜尋", () => {
+    const three = () =>
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "1", title: "整理打卡 API", body: "產出規格", project_dir: "/repo/hcp", status: "planning" }),
+        card({ id: "2", title: "修 CI", body: "Windows 編譯錯誤", project_dir: "/repo/aiterm", status: "queued" }),
+        card({ id: "3", title: "寫文件", body: "", project_dir: "/repo/hcp", status: "done", outcome: "success", finished_at: 1 }),
+      ]);
+
+    const search = async (text: string) => {
+      await userEvent.type(await screen.findByTestId("board-search"), text);
+    };
+
+    it("跨欄過濾，只留下符合的卡片", async () => {
+      three();
+      view();
+      await screen.findByText("整理打卡 API");
+
+      await search("打卡");
+
+      expect(screen.getByText("整理打卡 API")).toBeInTheDocument();
+      expect(screen.queryByText("修 CI")).not.toBeInTheDocument();
+      expect(screen.queryByText("寫文件")).not.toBeInTheDocument();
+    });
+
+    it("也比對工作內容與工作目錄", async () => {
+      three();
+      view();
+      await screen.findByText("修 CI");
+
+      await search("Windows");
+      expect(screen.getByText("修 CI")).toBeInTheDocument();
+      expect(screen.queryByText("整理打卡 API")).not.toBeInTheDocument();
+
+      await userEvent.clear(screen.getByTestId("board-search"));
+      await search("aiterm");
+      expect(screen.getByText("修 CI")).toBeInTheDocument();
+      expect(screen.queryByText("寫文件")).not.toBeInTheDocument();
+    });
+
+    it("欄位計數跟著過濾後的張數走", async () => {
+      three();
+      view();
+      await screen.findByText("整理打卡 API");
+
+      await search("hcp"); // 命中「計畫中」與「已完成」各一張
+
+      const count = (status: string) =>
+        within(screen.getByTestId(`column-${status}`)).getByText(
+          (_, el) => el?.className === "task-column-count",
+        ).textContent;
+      expect(count("planning")).toBe("1");
+      expect(count("queued")).toBe("0");
+      expect(count("done")).toBe("1");
+    });
+
+    it("清掉關鍵字之後卡片全部回來", async () => {
+      three();
+      view();
+      await search("打卡");
+      expect(screen.queryByText("修 CI")).not.toBeInTheDocument();
+
+      await userEvent.clear(screen.getByTestId("board-search"));
+
+      expect(await screen.findByText("修 CI")).toBeInTheDocument();
+    });
+
+    // 「封存全部」送到後端的是 archive_all_done，它收走的是整欄、不管
+    // 畫面上正在過濾什麼。詢問的張數若跟著過濾走，使用者會以為只收 1 張、
+    // 實際上收走 12 張。
+    it("搜尋中「封存全部」仍然以整欄的實際張數詢問", async () => {
+      const { confirm } = await import("@tauri-apps/plugin-dialog");
+      vi.mocked(listTasks).mockResolvedValue([
+        // 兩個標題不可以互為子字串——「沒命中的」含有「命中的」的話兩張
+        // 都會被搜到，過濾前後的張數一樣，這個測試就白寫了。
+        card({ id: "d1", title: "甲工作", status: "done", outcome: "success", finished_at: 2 }),
+        card({ id: "d2", title: "乙工作", status: "done", outcome: "success", finished_at: 1 }),
+      ]);
+      view();
+      await screen.findByText("甲工作");
+
+      await search("甲");
+      await userEvent.click(screen.getByTestId("archive-column"));
+
+      await waitFor(() => expect(confirm).toHaveBeenCalled());
+      expect(vi.mocked(confirm).mock.calls[0][0]).toContain("2");
+    });
+  });
+
   describe("封存", () => {
     const doneCard = (over: Partial<TaskWithAttachments> = {}) =>
       card({ id: "d", title: "收工了", status: "done", outcome: "success", finished_at: 1, ...over });

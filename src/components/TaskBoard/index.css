@@ -662,6 +662,16 @@
   font-size: 13px;
 }
 
+/* 工具列的搜尋框。靠右推開，跟左邊的動作按鈕分群。 */
+.board-search {
+  width: auto;
+  min-width: 200px;
+  max-width: 280px;
+  margin-left: auto;
+  padding: 5px 10px;
+  font-size: 12.5px;
+}
+
 .archive-search-row { padding: 12px 12px 0; }
 .archive-search-row .task-field-input { font-size: 12.5px; }
 

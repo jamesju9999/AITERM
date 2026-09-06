@@ -45,6 +45,9 @@ export function ProjectBoard({
   const [editing, setEditing] = useState<TaskWithAttachments | "new" | null>(null);
   const [transcriptFor, setTranscriptFor] = useState<string | null>(null);
   const [showArchive, setShowArchive] = useState(false);
+  /** 看板的即時過濾關鍵字。看板的資料本來就全部載入（而且封存功能讓它
+   *  有界），所以在前端過濾就好，不必多打一次 IPC。 */
+  const [search, setSearch] = useState("");
   const mounted = useRef(true);
   const dragRef = useRef<DragState | null>(null);
   /** Which column's `data-testid` the cursor is currently over while
@@ -115,6 +118,22 @@ export function ProjectBoard({
     return s === "done"
       ? rows.sort((a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0))
       : rows.sort((a, b) => a.sort_order - b.sort_order);
+  };
+
+  /**
+   * 過濾後的那一欄。比對標題、工作內容、工作目錄——跟封存清單的搜尋
+   * 同一組欄位，兩邊的行為才一致。
+   *
+   * 只有**顯示**走這個。任何算「這一欄實際有幾張」的地方（例如封存全部）
+   * 都必須用 `byStatus`：後端的 archive_all_done 收的是整欄，不管畫面
+   * 上正在過濾什麼，張數跟著過濾走的話會問錯數字。
+   */
+  const visibleIn = (s: TaskStatus) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return byStatus(s);
+    return byStatus(s).filter((c) =>
+      [c.title, c.body, c.project_dir].some((f) => f.toLowerCase().includes(q)),
+    );
   };
 
   // Single source of truth for "can this card legally be dropped on this
@@ -237,6 +256,13 @@ export function ProjectBoard({
         <button className="tb-btn tb-btn--ghost" onClick={onReport}>
           {t.report_generate}
         </button>
+        <input
+          className="task-field-input board-search"
+          data-testid="board-search"
+          placeholder={t.board_search}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
         <button
           className="tb-btn tb-btn--ghost"
           data-testid="open-archive"
@@ -251,7 +277,7 @@ export function ProjectBoard({
             key={s}
             status={s}
             title={colTitle(s)}
-            count={byStatus(s).length}
+            count={visibleIn(s).length}
             highlighted={dragOverStatus === s}
             headerAction={
               s === "done" ? (
@@ -265,7 +291,7 @@ export function ProjectBoard({
               ) : undefined
             }
           >
-            {byStatus(s).map((cardRow) => {
+            {visibleIn(s).map((cardRow) => {
               const draggableCard =
                 cardRow.status === "planning" ||
                 cardRow.status === "queued" ||
