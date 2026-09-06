@@ -58,6 +58,16 @@
   --tb-col-queued-tint: rgba(138, 109, 31, 0.10);
   --tb-col-running-tint: rgba(53, 88, 168, 0.13);
   --tb-col-done-tint: rgba(47, 125, 82, 0.10);
+  /* 拖放落點專用的底色。刻意跟上面的 -tint 分開命名：那組是欄位標題列
+     「靜止時」的淡淡註解，這組要在拖曳中被一眼認出來，濃度本來就該不同，
+     共用一個值會讓其中一邊永遠不對。 */
+  --tb-col-planning-drop: rgba(85, 99, 122, 0.22);
+  --tb-col-queued-drop: rgba(138, 109, 31, 0.22);
+  --tb-col-running-drop: rgba(53, 88, 168, 0.24);
+  --tb-col-done-drop: rgba(47, 125, 82, 0.22);
+  /* 拖曳中的卡片會飛越四個欄位，用任何一欄的顏色都會跟飛過去的地方
+     打架，所以它用不帶色相的中性白。 */
+  --tb-ghost-border: rgba(238, 242, 247, 0.55);
 }
 
 /* ── 專案總覽 ─────────────────────────────────────────────── */
@@ -370,7 +380,25 @@
   min-height: 0;
   border: 1px solid transparent;
 }
-.task-column--drop-target { border-color: var(--accent); background: var(--accent-dim); }
+/* 拖放落點用「那一欄自己的狀態色」而不是主色：主色是飽和藍，蓋在四個
+   不同底色的欄位上會顯得突兀，而且顏色本身沒有告訴使用者任何事。改用
+   已經調過的低彩度 --tb-col-* 之後，落點的顏色就等於「你要放進哪一欄」。 */
+.task-column--drop-target {
+  border-color: var(--tb-col-planning);
+  background: var(--tb-col-planning-drop);
+}
+.task-column--drop-target[data-column-status="queued"] {
+  border-color: var(--tb-col-queued);
+  background: var(--tb-col-queued-drop);
+}
+.task-column--drop-target[data-column-status="running"] {
+  border-color: var(--tb-col-running);
+  background: var(--tb-col-running-drop);
+}
+.task-column--drop-target[data-column-status="done"] {
+  border-color: var(--tb-col-done);
+  background: var(--tb-col-done-drop);
+}
 /* Marks the source card while it's being dragged — stays in its original
    column slot (just faded/inert), the actual cursor-following visual is
    .task-card-ghost below, portaled to document.body. An earlier version
@@ -407,7 +435,7 @@
   -webkit-user-select: none;
 }
 /* 只有這一點跟靜止的卡片不同：用主色邊框標示「這張正在被拖曳」。 */
-.task-card-ghost .task-card { border-color: var(--accent); }
+.task-card-ghost .task-card { border-color: var(--tb-ghost-border); }
 .task-column-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
 /* 欄位頂端的狀態色線——跟卡片左側色條同一套語意色，讓四欄一眼分得出來，
    同時標題文字維持灰色、不跟卡片標題搶注意力。畫在 .task-column-head 的
