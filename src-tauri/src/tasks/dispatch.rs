@@ -22,6 +22,101 @@ pub fn build_prompt(body: &str, attachment_paths: &[String]) -> String {
     format!("{body}\n\n（相關附件：{list}）")
 }
 
+/// 這個設定值看起來是不是 Claude Code 本身。
+///
+/// `claude_command` 是使用者可改的設定，而這個檔案的 `NO_TUI_QUIET_MS`
+/// 路徑是刻意為「設定成不是全螢幕 TUI 的指令」留的。`--session-id` 是
+/// claude 專屬旗標，接到別的指令上會讓它直接啟動失敗——所以只在第一個
+/// token 的檔名確實是 `claude` / `claude.exe` 時才給 session id。
+///
+/// 認錯的代價是不對稱的：漏認只是這張卡片退回舊的 transcript.txt，誤認
+/// 是整個派工壞掉。所以比對用相等而不是包含（`claude-code` 必須是 false）。
+///
+/// 分隔符自己切，不用 `Path::file_name()`：那個是平台相依的，在 macOS 上
+/// `Path::new(r"C:\claude.exe").file_name()` 會回傳整串（`\` 不是 Unix 的
+/// 分隔符），Windows 路徑因此在 mac 的 CI 上永遠對不上。同一個理由讓
+/// `session_log::encode_project_dir` 也自己處理 `/` 與 `\`。
+///
+/// **已知限制**：路徑含空格時（例如 `C:\Program Files\claude.exe`）
+/// `split_whitespace` 會在空格處切斷，拿到 `C:\Program`，於是回傳 false。
+/// 加引號也沒用——這裡沒有引號感知。刻意不處理：要正確處理得引進一個
+/// shell 語法的 tokenizer，而這個情況的失敗方向是安全的（那張卡片退回
+/// transcript.txt，派工照樣跑），不值得為它擴大範圍。
+///
+/// 比對前轉小寫是為了 Windows（`CLAUDE.EXE` 跟 `claude.exe` 是同一個檔案）。
+/// Unix 的檔名大小寫敏感，所以嚴格說這在 Unix 上偏寬——真的有人把不相干的
+/// 執行檔命名為 `Claude` 的話會被誤認。實務上碰不到，刻意接受，記在這裡是
+/// 為了讓讀的人知道這是權衡過的，不是漏看的。
+pub fn looks_like_claude(command: &str) -> bool {
+    let Some(first) = command.split_whitespace().next() else {
+        return false;
+    };
+    let name = first
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(first)
+        .to_lowercase();
+    name == "claude" || name == "claude.exe"
+}
+
+/// 真正要送進終端機的那一行。有 session id 就接上 `--session-id <uuid>`，
+/// 沒有就是指令原樣。
+///
+/// 呼叫端負責先用 `looks_like_claude` 決定要不要給 session id——這裡不再
+/// 判斷一次，免得兩處規則漂移。
+pub fn launch_command(command: &str, session_id: Option<&str>) -> String {
+    match session_id {
+        Some(sid) => format!("{command} --session-id {sid}"),
+        None => command.to_string(),
+    }
+}
+
+/// 信任畫面上「我信任這個資料夾」那一個選項的文字，**已去掉所有空白**。
+/// Claude Code 的 TUI 用游標移動排版，PTY 輸出裡一個空白位元組都沒有
+/// （實測），所以比對只能在去空白之後做。
+const TRUST_YES_OPTION: &str = "Yes,Itrustthisfolder";
+/// 目前選中的那一行的游標符號。
+const TRUST_CURSOR: char = '❯';
+
+/// 這個畫面停在資料夾信任提示上時，回傳「把選擇移到『我信任這個資料夾』
+/// 並確認」要送的按鍵；不是那個畫面、或定位不到就回 `None`。
+///
+/// `screen` 是 `PtyManager::get_recent_output` 的輸出（ANSI 已剝除）。
+///
+/// 為什麼不寫死「往下一次再 Enter」：預設選中的是 `No, exit`，而選項順序
+/// 隨時可能被 Claude Code 改掉或對調。寫死方向的實作在那一天會反過來按到
+/// `No, exit`，把使用者的派工直接殺掉。改成在畫面上同時定位游標行與 Yes
+/// 那一行、算相對位移，任何一個找不到就回 `None`——什麼都不送，退回現行
+/// 行為（卡住偵測收掉）。風險因此從「可能誤殺派工」降到「可能不生效」。
+pub fn trust_prompt_keys(screen: &str) -> Option<Vec<u8>> {
+    // 去掉所有空白之後才比對；空行整行丟掉，這樣「游標行」與「Yes 行」
+    // 的距離就是實際的按鍵次數，不會被排版用的空行灌水。
+    let lines: Vec<String> = screen
+        .lines()
+        .map(|l| l.chars().filter(|c| !c.is_whitespace()).collect::<String>())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    // 選項那一行就只有選項本身（可能前面帶游標符號），不是夾在句子裡的
+    // 一段話——後者代表有人剛好提到這句話，不是信任畫面。
+    let yes = lines.iter().position(|l| {
+        l.trim_start_matches(TRUST_CURSOR) == TRUST_YES_OPTION
+    })?;
+    let cursor = lines.iter().position(|l| l.starts_with(TRUST_CURSOR))?;
+
+    let mut keys = Vec::new();
+    let (step, times) = if yes >= cursor {
+        (&b"\x1b[B"[..], yes - cursor)
+    } else {
+        (&b"\x1b[A"[..], cursor - yes)
+    };
+    for _ in 0..times {
+        keys.extend_from_slice(step);
+    }
+    keys.extend_from_slice(b"\r");
+    Some(keys)
+}
+
 /// Max wait for `claude` to finish its cold start (spec measured ~3.7s) before
 /// we type the prompt. If it's still noisy at this point we send anyway.
 const SETTLE_TIMEOUT_MS: u64 = 30_000;
@@ -84,9 +179,17 @@ const ALT_SCREEN_ENTER: &[u8] = b"\x1b[?1049h";
 /// So: require the alternate-screen sequence *and* quiet. Commands that
 /// never enter it (a `claude_command` that isn't a TUI) fall back to the
 /// longer `NO_TUI_QUIET_MS` window rather than waiting out the deadline.
+///
+/// 另外在同一個迴圈裡順便處理資料夾信任提示。沒信任過的目錄會讓 `claude`
+/// 停在「Quick safety check」畫面上，而那時替代畫面序列早就送過、畫面也
+/// 安靜了——兩個條件都成立，所以不特別處理的話提示詞會被打進對話框裡，
+/// 卡片看起來在執行、實際上什麼都沒發生。見 `trust_prompt_keys`。
 async fn wait_until_settled(pty: &PtyManager, tab_id: &str) {
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(SETTLE_TIMEOUT_MS);
+    let mut deadline = tokio::time::Instant::now() + Duration::from_millis(SETTLE_TIMEOUT_MS);
     let mut tui_started = false;
+    // 只送一次。信任畫面的位元組會留在輸出環裡，接受之後再比對還是會命中，
+    // 不 latch 就會一直重送按鍵。
+    let mut trust_handled = false;
     loop {
         // Latch it: the raw ring is bounded, and a chatty TUI can push the
         // sequence out of the window it was found in.
@@ -97,6 +200,23 @@ async fn wait_until_settled(pty: &PtyManager, tab_id: &str) {
                     b.windows(ALT_SCREEN_ENTER.len()).any(|w| w == ALT_SCREEN_ENTER)
                 });
         }
+
+        // 信任提示的檢查一定要排在 settled 判斷之前：那個畫面出現時 TUI
+        // 已經啟動、畫面也已經安靜，兩個條件都成立，先判 settled 就會把
+        // 提示詞打進信任對話框裡。
+        if !trust_handled {
+            if let Some(keys) =
+                pty.get_recent_output(tab_id, 16 * 1024).as_deref().and_then(trust_prompt_keys)
+            {
+                let _ = pty.write(tab_id, &keys);
+                trust_handled = true;
+                // 接受之後 claude 才真正開始啟動，重新給它完整的等待預算。
+                deadline = tokio::time::Instant::now() + Duration::from_millis(SETTLE_TIMEOUT_MS);
+                tokio::time::sleep(Duration::from_millis(POLL_MS)).await;
+                continue;
+            }
+        }
+
         let quiet = pty.ms_since_output(tab_id).unwrap_or(u64::MAX);
         let settled = if tui_started { quiet >= SETTLE_QUIET_MS } else { quiet >= NO_TUI_QUIET_MS };
         if settled || tokio::time::Instant::now() >= deadline {
@@ -182,6 +302,7 @@ pub async fn spawn_and_run(
     pty: &PtyManager,
     project_dir: &str,
     claude_command: &str,
+    session_id: Option<&str>,
     prompt: &str,
     request_done_marker: bool,
 ) -> Result<(String, DispatchResult), String> {
@@ -190,7 +311,11 @@ pub async fn spawn_and_run(
         .create_with_app(app.clone(), size, Some(std::path::PathBuf::from(project_dir)), None)
         .map_err(|e| e.to_string())?;
 
-    if let Err(e) = pty.write(&tab_id, format!("{claude_command}\r").as_bytes()) {
+    // 送進終端機的是接好旗標的版本；下面的事件送的是原本的指令——分頁
+    // 標題是 `Agent: <command>`（TerminalApp.tsx），把 UUID 塞進去會讓
+    // 每個派工分頁的標題都拖著一串亂碼。
+    let launch = launch_command(claude_command, session_id);
+    if let Err(e) = pty.write(&tab_id, format!("{launch}\r").as_bytes()) {
         let _ = pty.close(&tab_id);
         return Err(e.to_string());
     }
@@ -232,6 +357,179 @@ mod tests {
     fn blank_body_still_produces_the_attachment_note() {
         let p = build_prompt("", &["/a/b.txt".into()]);
         assert!(p.contains("/a/b.txt"));
+    }
+
+    #[test]
+    fn a_plain_claude_command_gets_a_session_id() {
+        assert!(looks_like_claude("claude"));
+    }
+
+    /// 帶旗標的指令也算——使用者常設成 `claude --dangerously-skip-permissions`。
+    #[test]
+    fn a_claude_command_with_flags_still_counts() {
+        assert!(looks_like_claude("claude --dangerously-skip-permissions"));
+    }
+
+    /// 絕對路徑與 Windows 的 `.exe` 都算。
+    ///
+    /// Windows 那一條在 mac 上也必須綠——分隔符是自己切的，不靠平台相依的
+    /// `Path::file_name()`（見 `looks_like_claude` 的註解）。這個斷言就是
+    /// 那個決定的守門員：改回 `file_name()` 的話它會在 mac 上紅。
+    #[test]
+    fn an_absolute_path_to_claude_counts() {
+        assert!(looks_like_claude("/opt/homebrew/bin/claude"));
+        assert!(looks_like_claude(r"C:\tools\claude.exe --verbose"));
+    }
+
+    /// 已知限制，寫成測試而不是留在註解裡：路徑含空格時會被
+    /// `split_whitespace` 切斷，於是認不出來。
+    ///
+    /// 這是**刻意**接受的——失敗方向是安全的（那張卡片退回 transcript.txt，
+    /// 派工照樣跑），而正確處理要引進 shell 語法的 tokenizer。把它釘成測試
+    /// 是為了讓日後有人真的去修時，是主動改掉一條紅線，而不是意外碰到一個
+    /// 沒人知道存在的行為。
+    #[test]
+    fn a_path_with_spaces_is_not_recognised_and_that_is_accepted() {
+        assert!(!looks_like_claude(r"C:\Program Files\claude.exe"));
+        assert!(!looks_like_claude(r#""C:\Program Files\claude.exe""#));
+    }
+
+    /// 這是這個函式存在的理由：非 claude 的指令不能被接上旗標，否則直接
+    /// 啟動失敗。名字相近的必須是 false——前綴碰撞（`claude-code`）與
+    /// 後綴碰撞（`notclaude`）各要一個案例：
+    ///
+    /// - 只用 `contains("claude")` 的實作會在 `claude-code` 上壞掉
+    /// - 不切分隔符、改用 `ends_with("claude")` 的實作會在 `notclaude`
+    ///   上壞掉，而且那個實作能讓其餘每一條斷言都通過（實測過）
+    #[test]
+    fn a_non_claude_command_does_not_get_one() {
+        assert!(!looks_like_claude("codex"));
+        assert!(!looks_like_claude("bash -lc 'echo hi'"));
+        assert!(!looks_like_claude("claude-code"));
+        assert!(!looks_like_claude("notclaude"));
+        assert!(!looks_like_claude(r"/usr/local/bin/notclaude"));
+        assert!(!looks_like_claude(""));
+    }
+
+    #[test]
+    fn launch_command_appends_the_flag_when_a_session_id_is_given() {
+        assert_eq!(
+            launch_command("claude --verbose", Some("3f2a")),
+            "claude --verbose --session-id 3f2a"
+        );
+    }
+
+    #[test]
+    fn launch_command_is_the_command_verbatim_without_a_session_id() {
+        assert_eq!(launch_command("codex", None), "codex");
+    }
+
+    /// 真實抓下來的信任畫面：實跑 `claude` 進一個未信任的資料夾、擷取原始
+    /// PTY bytes、過 `strip_ansi` 之後的結果。
+    ///
+    /// 字與字之間真的沒有空白——Claude Code 的 TUI 用游標移動排版，整份
+    /// 輸出裡一個 0x20 都沒有（實測）。所以 `contains("Yes, I trust this
+    /// folder")` 這種帶空白的比對永遠不會命中。
+    const REAL_TRUST_SCREEN: &str = "\
+────────────────────────────────────────────────────────────────────────────────
+Accessingworkspace:
+
+/private/tmp/probe/trustprobe-23565
+
+Quicksafetycheck:Isthisaprojectyoucreatedoroneyoutrust?(Likeyour
+owncode,awell-knownopensourceproject,orworkfromyourteam).Ifnot,
+takeamomenttoreviewwhat'sinthisfolderfirst.
+
+ClaudeCode'llbeabletoread,edit,andexecutefileshere.
+
+Securityguide
+
+❯No,exit
+Yes,Itrustthisfolder
+
+Entertoconfirm·Esctocancel
+";
+
+    const DOWN: &[u8] = b"\x1b[B";
+    const UP: &[u8] = b"\x1b[A";
+
+    /// 真實畫面：游標在 No 上、Yes 在下一行 → 往下一次再 Enter。
+    #[test]
+    fn moves_down_to_reach_yes_on_the_real_screen() {
+        assert_eq!(
+            trust_prompt_keys(REAL_TRUST_SCREEN),
+            Some([DOWN, b"\r"].concat())
+        );
+    }
+
+    /// 選項對調（Yes 在上、游標停在下面的 No）→ 必須往**上**。
+    /// 寫死「往下一次」的實作會在這裡按到 No, exit，把派工直接殺掉——
+    /// 這個測試就是為了擋那件事而存在的。
+    #[test]
+    fn moves_up_when_the_options_are_swapped() {
+        let swapped = REAL_TRUST_SCREEN
+            .replace("❯No,exit\nYes,Itrustthisfolder", "Yes,Itrustthisfolder\n❯No,exit");
+        assert_eq!(trust_prompt_keys(&swapped), Some([UP, b"\r"].concat()));
+    }
+
+    /// 游標已經停在 Yes 上 → 只送 Enter，一次都不要動。
+    #[test]
+    fn just_confirms_when_the_cursor_is_already_on_yes() {
+        let already = REAL_TRUST_SCREEN
+            .replace("❯No,exit\nYes,Itrustthisfolder", "No,exit\n❯Yes,Itrustthisfolder");
+        assert_eq!(trust_prompt_keys(&already), Some(b"\r".to_vec()));
+    }
+
+    /// 不是信任畫面就什麼都不送。
+    #[test]
+    fn sends_nothing_on_an_ordinary_screen() {
+        assert_eq!(trust_prompt_keys("$ ls\nsrc  target\n"), None);
+        assert_eq!(trust_prompt_keys(""), None);
+    }
+
+    /// 認得出 Yes 那一行、卻找不到游標（UI 改版換掉了 `❯`）→ 什麼都不送。
+    /// 猜一個方向亂按有可能按到 No, exit；不送最壞只是退回現行行為
+    /// （卡住偵測收掉），永遠不會弄壞東西。
+    #[test]
+    fn sends_nothing_when_the_cursor_cannot_be_located() {
+        let no_cursor = REAL_TRUST_SCREEN.replace('❯', " ");
+        assert_eq!(trust_prompt_keys(&no_cursor), None);
+    }
+
+    /// 只是有人在聊天裡提到這句話，不該被當成信任畫面——畫面上必須同時
+    /// 有游標與那一整行選項。
+    #[test]
+    fn does_not_fire_on_a_mention_of_the_phrase_in_prose() {
+        let prose = "❯somethingelse\nItoldyouYes,Itrustthisfolderisthewording\n";
+        assert_eq!(trust_prompt_keys(prose), None);
+    }
+
+    /// 去空白這一步是**防禦性**的，而上面每個 fixture 都忠實反映「今天的
+    /// Claude Code 一個空白都不送」——所以把 filter 整段拿掉，那些測試
+    /// 照樣全綠（實測過）。這條就是補那個洞。
+    ///
+    /// 為什麼值得補：拿掉 filter 是個很合理的未來修改。後人看到程式碼裡
+    /// 的 filter 配上「這個畫面沒有空白」的註解，很自然會想「那還 filter
+    /// 幹嘛」而順手刪掉——然後哪天 Claude Code 的 TUI 改成用空白排版，
+    /// 信任畫面就再也認不出來，而且是安靜地失效。
+    ///
+    /// 這裡刻意用一份**帶空白**的畫面：它不是實測到的樣子，而是「萬一
+    /// 上游改了排版方式」的樣子。認得出來才是正確行為。
+    #[test]
+    fn still_recognises_the_screen_if_claude_code_ever_renders_with_spaces() {
+        let with_spaces = "\
+Quick safety check: Is this a project you created or one you trust?
+
+❯ No, exit
+  Yes, I trust this folder
+
+Enter to confirm · Esc to cancel
+";
+        assert_eq!(
+            trust_prompt_keys(with_spaces),
+            Some([DOWN, b"\r"].concat()),
+            "排版改用空白之後就認不出來了——去空白那一步是不是被拿掉了？"
+        );
     }
 
     use crate::pty::manager::PtyManager;
@@ -307,6 +605,77 @@ mod tests {
         )
         .await;
         assert!(settled.is_ok(), "a non-TUI command never settled");
+    }
+
+    /// 停在信任畫面時不可以判定 settled——那樣會把提示詞打進信任對話框裡。
+    ///
+    /// 手法照抄同檔案的 `run_on_session_sends_a_multiline_prompt_verbatim_
+    /// then_a_standalone_cr`：把 pty 切進 raw 模式關掉回音，再 `od` 讀出
+    /// 我們實際寫進去的位元組。不看「回音」是因為 canonical 模式的終端機會
+    /// 把 ESC 顯示成 `^[`，那樣斷言驗到的是終端機的顯示規則，不是我們寫了
+    /// 什麼——見 feedback「沒有失敗訊號不等於正確」。
+    ///
+    /// 畫面先印替代畫面序列讓 `tui_started` latch 起來（模擬 claude 已經
+    /// 啟動），再印真實信任畫面的三行。
+    ///
+    /// `❯` 直接寫字面的 UTF-8 字元、用 `%s` 印，**不要**寫成 `\342\235\257`
+    /// 配 `%b`：`printf %b` 的八進位解碼是殼相依的。zsh 的內建 printf
+    /// 不解碼（實測 `zsh -c "printf '%b\n' '\342\235\257X'"` 吐出的是字面
+    /// 的 `\342\235\257X`），而 `pty/shell.rs` 的 `unix_default_shell()`
+    /// 讀的是 `$SHELL`——macOS 從 Catalina 起預設就是 zsh。所以那個寫法會
+    /// 讓游標行永遠定位不到，測試在多數 mac 上恆紅，而且是「因為畫面根本
+    /// 沒印對」而紅，不是因為實作有問題。字面字元三種殼都會原樣輸出。
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn accepts_the_trust_prompt_before_declaring_the_session_settled() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(settle_size(), |_| {}).unwrap();
+
+        // `'MARK''READY'` 用串接寫，這樣被回音出來的指令本身不含連續的
+        // marker（同上，照抄那個測試的手法）。N = 4：`\x1b[B` 加 `\r`。
+        #[cfg(not(windows))]
+        pty.write(
+            &tab,
+            b"stty raw -echo; printf '\\033[?1049h'; \
+              printf '%s\\n' 'Quicksafetycheck:' '\xe2\x9d\xafNo,exit' 'Yes,Itrustthisfolder'; \
+              printf 'MARK''READY'; od -An -tx1 -N 4\n",
+        )
+        .unwrap();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let out = pty.get_recent_output(&tab, 16 * 1024).unwrap_or_default();
+            if out.contains("MARKREADY") {
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "信任畫面沒有印出來：{out}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        let _ = tokio::time::timeout(
+            Duration::from_millis(NO_TUI_QUIET_MS + 2_000),
+            wait_until_settled(&pty, &tab),
+        )
+        .await;
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let hex: Vec<String> = loop {
+            let out = pty.get_recent_output(&tab, 16 * 1024).unwrap_or_default();
+            let after = out.split("MARKREADY").nth(1).unwrap_or("").to_string();
+            let hex: Vec<String> = after
+                .split_whitespace()
+                .filter(|t| t.len() == 2 && t.chars().all(|c| c.is_ascii_hexdigit()))
+                .map(str::to_string)
+                .collect();
+            if hex.len() >= 4 {
+                break hex;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "沒有送出任何按鍵：{out}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+
+        // ESC [ B CR — 往下一格（Yes 在 No 下面）再確認。
+        assert_eq!(&hex[..4], ["1b", "5b", "42", "0d"], "送出的按鍵不對：{hex:?}");
     }
 
     #[tokio::test]

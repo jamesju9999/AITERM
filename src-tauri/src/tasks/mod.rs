@@ -2,11 +2,13 @@
 //! See `docs/superpowers/specs/2026-09-03-task-board-agent-dispatch-design.md`.
 //!
 //! - `store`     — `tasks.db` schema + CRUD (sqlx free functions over a pool)
+//! - `session_log` — Claude Code 自己寫的 session JSONL：定位、複製、渲染
 //! - `dispatch`  — compose the prompt, spawn a visible PTY tab, type it in
 //! - `monitor`   — watch one running task's session to a terminal outcome
 //! - `scheduler` — pick the next runnable card; the long-lived dispatch loop
 
 pub mod store;
+pub mod session_log;
 pub mod dispatch;
 pub mod monitor;
 pub mod scheduler;
@@ -49,7 +51,9 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             dispatched_at   INTEGER,
             finished_at     INTEGER,
             ai_summary      TEXT,
-            archived_at     INTEGER
+            archived_at     INTEGER,
+            session_id      TEXT,
+            session_path    TEXT
         )",
     )
     .execute(pool)
@@ -66,6 +70,15 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .await;
     // Migration: existing databases created before `archived_at` existed.
     let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN archived_at INTEGER")
+        .execute(pool)
+        .await;
+    // Migration: existing databases created before the session-log columns
+    // existed. 跟上面幾個同一個寫法——欄位已存在時 ALTER TABLE 會失敗，
+    // 那是正常的，所以刻意丟掉錯誤。
+    let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN session_id TEXT")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN session_path TEXT")
         .execute(pool)
         .await;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, sort_order)")

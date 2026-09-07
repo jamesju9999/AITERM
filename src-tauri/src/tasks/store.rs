@@ -39,6 +39,12 @@ pub struct TaskRow {
     /// 封存時間（Unix 秒）。有值代表這張卡已經從看板上收起來——資料完整
     /// 保留，只是不再出現在四欄裡，也不會被排程器或工作報告撿到。
     pub archived_at: Option<i64>,
+    /// 這次派工給 `claude --session-id` 的 UUID。只有指令看起來是 claude
+    /// 時才會有（見 `dispatch::looks_like_claude`）。
+    pub session_id: Option<String>,
+    /// 複製進卡片資料夾的 `session.jsonl` 路徑。有值代表這張卡片有完整的
+    /// 逐輪記錄；沒有就退回 `transcript_path`。
+    pub session_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -367,7 +373,8 @@ pub async fn update_task_fields(
 
 /// `queued → running`: record the spawned tab and dispatch time.
 /// 原子地把一張 `queued` 卡片認領下來準備派工：標成 `running`、記下
-/// 派工時間、清掉上一次執行留下的摘要。回傳是否真的認領到。
+/// 派工時間、清掉上一次執行留下的摘要與 session 記錄路徑。回傳是否真的
+/// 認領到。
 ///
 /// **必須在真正去 spawn 之前呼叫。** `dispatch::spawn_and_run` 要等
 /// `claude` 的 TUI 起來，最久 30 秒；如果等到那之後才標記，卡片在整段
@@ -378,7 +385,8 @@ pub async fn update_task_fields(
 /// 回傳 false。
 pub async fn claim_for_dispatch(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
     let res = sqlx::query(
-        "UPDATE tasks SET status = 'running', dispatched_at = ?, ai_summary = NULL
+        "UPDATE tasks SET status = 'running', dispatched_at = ?, ai_summary = NULL,
+             session_path = NULL
          WHERE id = ? AND status = 'queued'",
     )
     .bind(now_secs())
@@ -393,6 +401,28 @@ pub async fn claim_for_dispatch(pool: &SqlitePool, id: &str) -> Result<bool, sql
 pub async fn set_tab_id(pool: &SqlitePool, id: &str, tab_id: &str) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE tasks SET tab_id = ? WHERE id = ?")
         .bind(tab_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// 記下這次派工用的 `--session-id`。在 `spawn_and_run` 之後、與
+/// `set_tab_id` 同一個時機呼叫。
+pub async fn set_session_id(pool: &SqlitePool, id: &str, session_id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET session_id = ? WHERE id = ?")
+        .bind(session_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// 記下複製進卡片資料夾的 session.jsonl 路徑。在 `finish_task` 之前呼叫，
+/// 這樣 `tasks-updated` 送出時該列已經是完整的。
+pub async fn set_session_path(pool: &SqlitePool, id: &str, path: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET session_path = ? WHERE id = ?")
+        .bind(path)
         .bind(id)
         .execute(pool)
         .await?;
@@ -531,10 +561,11 @@ pub async fn distinct_project_dirs(pool: &SqlitePool) -> Result<Vec<String>, sql
     .await
 }
 
-/// 把 `transcript_path` 與附件的 `stored_path` 中的 `old_prefix` 換成
-/// `new_prefix`。搬遷舊資料時用——那些欄位存的是絕對路徑，複製資料夾
-/// 之後若不改寫，新的專案資料夾就不是自成一體的（複製到別台機器會
-/// 掉附件）。只換開頭相符的，其他路徑不動。
+/// 把 `transcript_path`、`session_path` 與附件的 `stored_path` 中的
+/// `old_prefix` 換成 `new_prefix`。搬遷舊資料時用——那些欄位存的是絕對
+/// 路徑，複製資料夾之後若不改寫，新的專案資料夾就不是自成一體的（複製
+/// 到別台機器會掉附件，或是讀到指向舊路徑的 session 記錄）。只換開頭
+/// 相符的，其他路徑不動。
 pub async fn rewrite_stored_paths(
     pool: &SqlitePool,
     old_prefix: &str,
@@ -544,6 +575,15 @@ pub async fn rewrite_stored_paths(
     sqlx::query(
         "UPDATE tasks SET transcript_path = ? || SUBSTR(transcript_path, ?)
          WHERE transcript_path LIKE ?",
+    )
+    .bind(new_prefix)
+    .bind(old_prefix.len() as i64 + 1)
+    .bind(&like)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE tasks SET session_path = ? || SUBSTR(session_path, ?)
+         WHERE session_path LIKE ?",
     )
     .bind(new_prefix)
     .bind(old_prefix.len() as i64 + 1)
@@ -1038,11 +1078,13 @@ mod project_query_tests {
         add_attachment(&pool, &id, "f.png", "/old/home/tasks/x/attachments/f.png")
             .await
             .unwrap();
+        set_session_path(&pool, &id, "/old/home/tasks/x/session.jsonl").await.unwrap();
 
         rewrite_stored_paths(&pool, "/old/home", "/new/home").await.unwrap();
 
         let row = get_task(&pool, &id).await.unwrap().unwrap();
         assert_eq!(row.transcript_path.as_deref(), Some("/new/home/tasks/x/transcript.txt"));
+        assert_eq!(row.session_path.as_deref(), Some("/new/home/tasks/x/session.jsonl"));
         let atts = list_attachments(&pool, &id).await.unwrap();
         assert_eq!(atts[0].stored_path, "/new/home/tasks/x/attachments/f.png");
     }
@@ -1057,6 +1099,141 @@ mod project_query_tests {
 
         let atts = list_attachments(&pool, &id).await.unwrap();
         assert_eq!(atts[0].stored_path, "/somewhere/else/f.png");
+    }
+}
+
+#[cfg(test)]
+mod session_column_tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn mem_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        pool
+    }
+
+    async fn a_task(pool: &SqlitePool) -> String {
+        create_task(pool, "t", "b", "/work/repo", true, false).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_new_card_has_neither_session_id_nor_session_path() {
+        let pool = mem_pool().await;
+        let id = a_task(&pool).await;
+        let row = get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!(row.session_id, None);
+        assert_eq!(row.session_path, None);
+    }
+
+    #[tokio::test]
+    async fn set_session_id_round_trips() {
+        let pool = mem_pool().await;
+        let id = a_task(&pool).await;
+        // 先放一個值進另一欄，這樣「只動這一欄」才驗得出來——不先設的話
+        // session_path 本來就是 None，正確與錯誤的實作結果相同。
+        set_session_path(&pool, &id, "/keep/me.jsonl").await.unwrap();
+
+        set_session_id(&pool, &id, "3f2a-uuid").await.unwrap();
+
+        let row = get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!(row.session_id.as_deref(), Some("3f2a-uuid"));
+        assert_eq!(row.session_path.as_deref(), Some("/keep/me.jsonl"), "動到了不該動的欄位");
+    }
+
+    #[tokio::test]
+    async fn set_session_path_round_trips() {
+        let pool = mem_pool().await;
+        let id = a_task(&pool).await;
+        set_session_path(&pool, &id, "/proj/tasks/x/session.jsonl").await.unwrap();
+        let row = get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!(row.session_path.as_deref(), Some("/proj/tasks/x/session.jsonl"));
+    }
+
+    /// 重新派工會產生新的 UUID 與新的 session 檔，session.jsonl 直接覆蓋——
+    /// 舊的 `session_path` 不可以殘留下來讓 tasks_read_transcript 讀到上一次
+    /// 執行的記錄。
+    ///
+    /// 但 `session_id` **要留著**：下一步的 `set_session_id` 本來就會覆寫它，
+    /// 而清掉它在「Task 6 的順序日後被改動」或「某條派工路徑忘了呼叫
+    /// set_session_id」時會讓完成的卡片永遠找不到自己的記錄——症狀正是這個
+    /// 功能要消滅的那個「莫名其妙退回 transcript.txt」。這個不對稱是刻意的，
+    /// 所以兩邊都要斷言，不是只驗被清掉的那一半。
+    #[tokio::test]
+    async fn claiming_for_dispatch_clears_the_previous_run_s_session_path() {
+        let pool = mem_pool().await;
+        let id = a_task(&pool).await;
+        move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
+        set_session_path(&pool, &id, "/old/session.jsonl").await.unwrap();
+        set_session_id(&pool, &id, "old-uuid").await.unwrap();
+
+        assert!(claim_for_dispatch(&pool, &id).await.unwrap());
+
+        let row = get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!(row.session_path, None, "上一次執行的 session_path 殘留了");
+        assert_eq!(
+            row.session_id.as_deref(),
+            Some("old-uuid"),
+            "session_id 被清掉了——下一步的 set_session_id 會覆寫它，清它只會在派工路徑漏呼叫時害卡片找不到記錄"
+        );
+    }
+
+    /// 現有使用者的 `tasks.db` 走的是 `ALTER TABLE` 那條路，不是
+    /// `CREATE TABLE`——而其他測試全都建全新的記憶體資料庫，永遠只走後者。
+    ///
+    /// 這條路的錯誤是被 `let _ =` 刻意吞掉的，所以語句寫錯不會有任何訊號：
+    /// 欄位沒加上去，`SELECT *` 配 `FromRow` 就找不到欄位，`get_task` 直接
+    /// 失敗，看板對**每一個現有使用者**壞掉，而全部測試照樣綠。
+    #[tokio::test]
+    async fn init_schema_migrates_a_database_that_predates_the_session_columns() {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+
+        // 舊 schema：完全沒有 session_id / session_path。
+        sqlx::query(
+            "CREATE TABLE tasks (
+                id              TEXT PRIMARY KEY NOT NULL,
+                title           TEXT NOT NULL,
+                body            TEXT NOT NULL DEFAULT '',
+                project_dir     TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'planning',
+                parallel_ok     INTEGER NOT NULL DEFAULT 1,
+                interactive     INTEGER NOT NULL DEFAULT 0,
+                sort_order      REAL NOT NULL DEFAULT 0,
+                outcome         TEXT,
+                tab_id          TEXT,
+                transcript_path TEXT,
+                error_message   TEXT,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                dispatched_at   INTEGER,
+                finished_at     INTEGER,
+                ai_summary      TEXT,
+                archived_at     INTEGER
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO tasks (id, title, body, project_dir) VALUES ('old1', 't', 'b', '/work/repo')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // 這一步必須把兩個新欄位補上去。
+        crate::tasks::init_schema(&pool).await.unwrap();
+
+        // 讀得回來就證明欄位真的加上去了——`SELECT *` 配 `FromRow` 在欄位
+        // 缺席時會直接失敗，所以這個 unwrap 就是斷言本身。
+        let row = get_task(&pool, "old1").await.unwrap().unwrap();
+        assert_eq!(row.session_id, None);
+        assert_eq!(row.session_path, None);
+        assert_eq!(row.title, "t", "舊資料不該在遷移中掉失");
+
+        // 遷移之後 setter 也要真的能寫。
+        set_session_path(&pool, "old1", "/p/session.jsonl").await.unwrap();
+        assert_eq!(
+            get_task(&pool, "old1").await.unwrap().unwrap().session_path.as_deref(),
+            Some("/p/session.jsonl")
+        );
     }
 }
 

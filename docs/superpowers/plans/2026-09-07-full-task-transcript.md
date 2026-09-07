@@ -58,6 +58,23 @@ Entertoconfirm·Esctocancel
 
 ---
 
+## 每個測試都要做突變驗證（全域規則）
+
+**「跑起來是綠的」不是測試有效的證據。** 綠燈也可能來自「這個 fixture 讓正確與錯誤的實作產出相同結果」——那樣的測試是空的，卻會讓人以為有防護網。
+
+所以每寫一個關鍵測試，都要**實際把實作改壞、確認那個測試會紅**，再改回來。改壞的方式要挑「最可能真的寫錯的那一種」，不是隨便亂改。
+
+這份計畫在寫成之後、Task 2 的審查中真的抓到兩個空測試，兩個都是計畫作者自己寫錯的：
+
+| 空測試 | 為什麼是空的 | 突變驗證會抓到 |
+|---|---|---|
+| 工具參數用書寫序而非字典序 | fixture 用 `Bash` 的 `{command, description}`，兩種順序**剛好一樣**（c < d） | 把 `first_arg_summary` 改成取字典序第一個 → 測試仍綠 |
+| 壞行不中止整份渲染 | 壞行放在 fixture **最尾端**，後面沒有可渲染的記錄 | 把 `continue` 改成 `break` → 測試仍綠 |
+
+兩個都在 Task 2 修掉了。教訓：寫 fixture 時先問「如果實作用了那個錯誤做法，這筆資料會產出不一樣的結果嗎？」答案是「不會」就換資料。
+
+---
+
 ## File Structure
 
 | 檔案 | 動作 | 責任 |
@@ -159,7 +176,7 @@ mod encode_tests {
 - [ ] **Step 3: 跑測試，確認它紅**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::session_log 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::session_log 2>&1 | tail -20
 ```
 
 Expected: 編譯失敗，`cannot find function `encode_project_dir` in this scope`。
@@ -187,7 +204,7 @@ pub fn encode_project_dir(dir: &Path) -> String {
 - [ ] **Step 5: 跑測試，確認它綠**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::session_log 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::session_log 2>&1 | tail -20
 ```
 
 Expected: `test result: ok. 3 passed`。
@@ -198,8 +215,7 @@ Expected: `test result: ok. 3 passed`。
 git add src-tauri/src/tasks/session_log.rs src-tauri/src/tasks/mod.rs
 git commit -m "feat(tasks): encode a project dir into Claude Code's session-log folder name
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -240,10 +256,24 @@ mod render_tests {
 {"type": "mode", "uuid": "x"}
 {"type": "attachment", "uuid": "ca05c03c-7993-4ec6-baf4-c4e3b71e64e3"}
 {"type": "file-history-snapshot", "uuid": "x"}
-{this is not valid json
 
 "#;
 }
+```
+
+**壞掉的那行放在哪裡是有講究的**：必須夾在可渲染的記錄**中間**（下面的成品放在 `tool_use` 之後、`tool_result` 之前），後面還要有東西。放在檔尾的話，`break`（整份中止）與 `continue`（只跳這行）產出完全一樣，`a_broken_line_does_not_abort_the_whole_render` 就變成空測試了。所以上面的 fixture 還缺一行——正確的完整版是：
+
+```
+1. user / 字串 content 「請繼續」
+2. assistant / thinking
+3. assistant / tool_use（Bash git status）
+4. {this is not valid json      ← 夾在中間，不是檔尾
+5. user / tool_result
+6. assistant / text 「工作目錄乾淨…」
+7. {"type": "mode", "uuid": "x"}
+8. {"type": "attachment", ...}
+9. {"type": "file-history-snapshot", "uuid": "x"}
+10. （空行）
 ```
 
 - [ ] **Step 2: 寫會紅的測試**
@@ -274,7 +304,12 @@ mod render_tests {
         assert!(!out.contains("No matching deferred tools found"), "工具回傳沒有被丟掉：{out}");
     }
 
-    /// 一行壞掉不該讓整份記錄消失——壞掉的那行前後的內容都必須還在。
+    /// 一行壞掉不該讓整份記錄消失。
+    ///
+    /// 壞掉那行的**位置**是這個測試的全部價值所在：它必須夾在可渲染的
+    /// 記錄中間，後面還有東西。放在檔尾的話，`break`（整份中止）與
+    /// `continue`（只跳這行）產出完全一樣，測試就抓不到前者了——而
+    /// `break` 正是最可能寫錯的那一種。
     #[test]
     fn a_broken_line_does_not_abort_the_whole_render() {
         let out = render_session_log(REAL_FIXTURE);
@@ -292,14 +327,20 @@ mod render_tests {
     }
 
     /// 工具摘要取的是「第一個參數」——serde_json 開了 preserve_order，
-    /// 所以那是 JSONL 裡的書寫順序。這個 fixture 刻意讓書寫順序（`command`）
-    /// 與字典順序（`description`）不同，否則測不出兩者的差別。
+    /// 所以那是 JSONL 裡的書寫順序。
+    ///
+    /// fixture 用 `Write` 而不是 `Bash`：`Bash` 的 `{command, description}`
+    /// 兩種順序**剛好一樣**（c < d），拿它當 fixture 的話，就算 serde_json
+    /// 改成照字典序排也照樣會綠——那是一個空測試。`Write` 的
+    /// `{file_path, content}` 才會分岔：書寫序是 `file_path`，字典序是
+    /// `content`。兩個都是實機 session 檔裡真實出現過的形狀（掃過八份檔案，
+    /// 會分岔的還有 Edit / Skill / ToolSearch / SendUserFile）。
     #[test]
     fn tool_summary_uses_the_first_written_argument_not_the_alphabetical_one() {
-        let jsonl = r#"{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "Bash", "input": {"command": "ls -la", "description": "aaa list files"}}]}}"#;
+        let jsonl = r#"{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "Write", "input": {"file_path": "/repo/src/lib.rs", "content": "aaa file body"}}]}}"#;
         let out = render_session_log(jsonl);
-        assert!(out.contains("ls -la"), "沒有用書寫順序的第一個參數：{out}");
-        assert!(!out.contains("aaa list files"), "用到了字典序第一個參數：{out}");
+        assert!(out.contains("/repo/src/lib.rs"), "沒有用書寫順序的第一個參數：{out}");
+        assert!(!out.contains("aaa file body"), "用到了字典序第一個參數：{out}");
     }
 
     /// 摘要要短、要單行——工具參數常常是好幾 KB 的檔案內容，整段塞進
@@ -328,7 +369,7 @@ mod render_tests {
 - [ ] **Step 3: 跑測試，確認它紅**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::session_log 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::session_log 2>&1 | tail -20
 ```
 
 Expected: 編譯失敗，`cannot find function `render_session_log` in this scope`。
@@ -421,7 +462,7 @@ fn first_arg_summary(input: Option<&serde_json::Value>) -> String {
 - [ ] **Step 5: 跑測試，確認它綠**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::session_log 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::session_log 2>&1 | tail -20
 ```
 
 Expected: `test result: ok. 10 passed`（Task 1 的 3 個 + 這裡的 7 個）。
@@ -432,8 +473,7 @@ Expected: `test result: ok. 10 passed`（Task 1 的 3 個 + 這裡的 7 個）�
 git add src-tauri/src/tasks/session_log.rs
 git commit -m "feat(tasks): render a Claude Code session log into a turn-by-turn transcript
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -470,7 +510,7 @@ mod copy_tests {
         let work = Path::new("/work/repo");
         let (projects, project) = fake_tree(work, "SID", "{\"type\":\"user\"}\n");
 
-        let dest = copy_session_log(projects.path(), project.path(), "card1", work, "SID").unwrap();
+        let dest = copy_session_log(projects.path(), work, "SID", project.path(), "card1").unwrap();
 
         assert!(dest.ends_with("session.jsonl"), "存錯檔名：{dest}");
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "{\"type\":\"user\"}\n");
@@ -488,7 +528,7 @@ mod copy_tests {
         let projects = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
         assert!(
-            copy_session_log(projects.path(), project.path(), "card1", Path::new("/work/repo"), "SID")
+            copy_session_log(projects.path(), Path::new("/work/repo"), "SID", project.path(), "card1")
                 .is_none()
         );
     }
@@ -512,7 +552,7 @@ mod copy_tests {
         std::fs::write(dir.join("SID.jsonl"), "x").unwrap();
 
         let project = tempfile::tempdir().unwrap();
-        let dest = copy_session_log(projects.path(), project.path(), "card1", real.path(), "SID");
+        let dest = copy_session_log(projects.path(), real.path(), "SID", project.path(), "card1");
         assert!(dest.is_some(), "沒有試 canonicalize 後的路徑候選");
     }
 }
@@ -521,7 +561,7 @@ mod copy_tests {
 - [ ] **Step 2: 跑測試，確認它紅**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::session_log 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::session_log 2>&1 | tail -20
 ```
 
 Expected: 編譯失敗，`cannot find function `copy_session_log` in this scope`。
@@ -559,17 +599,28 @@ fn dir_candidates(work_dir: &Path) -> Vec<String> {
 ///
 /// 找不到來源、或複製失敗（權限、磁碟），都安靜回 `None` 並寫進 stderr——
 /// 原本的 `transcript.txt` 還在，沒有東西壞掉，不值得打斷使用者。
+/// 參數刻意分成兩組：前三個決定**去哪裡找**，後兩個決定**放到哪裡**。
+/// `work_dir` 與 `project_path` 都是 `&Path` 而且意義完全不同，交換了會
+/// 編譯通過但靜默出錯（找不到來源＋寫錯資料夾），所以不要把它們排在一起。
 pub fn copy_session_log(
     projects_root: &Path,
-    project_path: &Path,
-    task_id: &str,
     work_dir: &Path,
     session_id: &str,
+    project_path: &Path,
+    task_id: &str,
 ) -> Option<String> {
-    let src = dir_candidates(work_dir)
+    let candidates: Vec<PathBuf> = dir_candidates(work_dir)
         .into_iter()
         .map(|d| projects_root.join(d).join(format!("{session_id}.jsonl")))
-        .find(|p| p.is_file())?;
+        .collect();
+    let Some(src) = candidates.iter().find(|p| p.is_file()) else {
+        // 最常發生的失敗就是這一條（claude_command 不是 claude、旗標沒生效、
+        // 或編出來的資料夾名不對），而它原本靜悄悄地回 None。診斷訊息要把
+        // 試過的路徑印出來——只說「找不到」的話，事後看 log 的人無從判斷是
+        // session id 錯了還是資料夾名編錯了。
+        eprintln!("session log not found for {session_id}, tried {candidates:?}");
+        return None;
+    };
 
     let dir = crate::tasks::task_dir(project_path, task_id);
     if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -598,7 +649,7 @@ Expected: 在 `[dev-dependencies]` 底下看到 `tempfile`。若沒有，加上 
 - [ ] **Step 5: 跑測試，確認它綠**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::session_log 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::session_log 2>&1 | tail -20
 ```
 
 Expected: `test result: ok. 13 passed`。
@@ -609,8 +660,7 @@ Expected: `test result: ok. 13 passed`。
 git add src-tauri/src/tasks/session_log.rs src-tauri/Cargo.toml
 git commit -m "feat(tasks): copy a finished card's session log into its task dir
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -692,7 +742,7 @@ mod session_column_tests {
 - [ ] **Step 2: 跑測試，確認它紅**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::store::session_column 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::store::session_column 2>&1 | tail -20
 ```
 
 Expected: 編譯失敗，`no field `session_id` on type `TaskRow``。
@@ -785,7 +835,7 @@ pub async fn set_session_path(pool: &SqlitePool, id: &str, path: &str) -> Result
 - [ ] **Step 6: 跑測試，確認它綠**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks:: 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks:: 2>&1 | tail -20
 ```
 
 Expected: 全綠。`SELECT *` 搭配 `FromRow` 會自動帶上新欄位，其他查詢不必改。
@@ -796,8 +846,7 @@ Expected: 全綠。`SELECT *` 搭配 `FromRow` 會自動帶上新欄位，其他
 git add src-tauri/src/tasks/mod.rs src-tauri/src/tasks/store.rs
 git commit -m "feat(tasks): add session_id and session_path columns
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -827,21 +876,44 @@ Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
         assert!(looks_like_claude("claude --dangerously-skip-permissions"));
     }
 
-    /// 絕對路徑與 Windows 的 .exe 都算。
+    /// 絕對路徑與 Windows 的 `.exe` 都算。
+    ///
+    /// Windows 那一條在 mac 上也必須綠——分隔符是自己切的，不靠平台相依的
+    /// `Path::file_name()`（見 `looks_like_claude` 的註解）。這個斷言就是
+    /// 那個決定的守門員：改回 `file_name()` 的話它會在 mac 上紅。
     #[test]
     fn an_absolute_path_to_claude_counts() {
         assert!(looks_like_claude("/opt/homebrew/bin/claude"));
-        assert!(looks_like_claude(r"C:\Program Files\claude.exe --verbose"));
+        assert!(looks_like_claude(r"C:\tools\claude.exe --verbose"));
+    }
+
+    /// 已知限制，寫成測試而不是留在註解裡：路徑含空格時會被
+    /// `split_whitespace` 切斷，於是認不出來。
+    ///
+    /// 這是**刻意**接受的——失敗方向是安全的（那張卡片退回 transcript.txt，
+    /// 派工照樣跑），而正確處理要引進 shell 語法的 tokenizer。把它釘成測試
+    /// 是為了讓日後有人真的去修時，是主動改掉一條紅線，而不是意外碰到一個
+    /// 沒人知道存在的行為。
+    #[test]
+    fn a_path_with_spaces_is_not_recognised_and_that_is_accepted() {
+        assert!(!looks_like_claude(r"C:\Program Files\claude.exe"));
+        assert!(!looks_like_claude(r#""C:\Program Files\claude.exe""#));
     }
 
     /// 這是這個函式存在的理由：非 claude 的指令不能被接上旗標，否則直接
-    /// 啟動失敗。`claude-code` 這種名字相近但不同的指令也必須是 false——
-    /// 只用 `contains("claude")` 的實作會在這裡壞掉。
+    /// 啟動失敗。名字相近的必須是 false——前綴碰撞（`claude-code`）與
+    /// 後綴碰撞（`notclaude`）各要一個案例：
+    ///
+    /// - 只用 `contains("claude")` 的實作會在 `claude-code` 上壞掉
+    /// - 不切分隔符、改用 `ends_with("claude")` 的實作會在 `notclaude`
+    ///   上壞掉，而且那個實作能讓其餘每一條斷言都通過（實測過）
     #[test]
     fn a_non_claude_command_does_not_get_one() {
         assert!(!looks_like_claude("codex"));
         assert!(!looks_like_claude("bash -lc 'echo hi'"));
         assert!(!looks_like_claude("claude-code"));
+        assert!(!looks_like_claude("notclaude"));
+        assert!(!looks_like_claude(r"/usr/local/bin/notclaude"));
         assert!(!looks_like_claude(""));
     }
 
@@ -862,7 +934,7 @@ Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
 - [ ] **Step 2: 跑測試，確認它紅**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::dispatch 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::dispatch 2>&1 | tail -20
 ```
 
 Expected: 編譯失敗，`cannot find function `looks_like_claude``。
@@ -881,14 +953,26 @@ Expected: 編譯失敗，`cannot find function `looks_like_claude``。
 ///
 /// 認錯的代價是不對稱的：漏認只是這張卡片退回舊的 transcript.txt，誤認
 /// 是整個派工壞掉。所以比對用相等而不是包含（`claude-code` 必須是 false）。
+///
+/// 分隔符自己切，不用 `Path::file_name()`：那個是平台相依的，在 macOS 上
+/// `Path::new(r"C:\claude.exe").file_name()` 會回傳整串（`\` 不是 Unix 的
+/// 分隔符），Windows 路徑因此在 mac 的 CI 上永遠對不上。同一個理由讓
+/// `session_log::encode_project_dir` 也自己處理 `/` 與 `\`。
+///
+/// **已知限制**：路徑含空格時（例如 `C:\Program Files\claude.exe`）
+/// `split_whitespace` 會在空格處切斷，拿到 `C:\Program`，於是回傳 false。
+/// 加引號也沒用——這裡沒有引號感知。刻意不處理：要正確處理得引進一個
+/// shell 語法的 tokenizer，而這個情況的失敗方向是安全的（那張卡片退回
+/// transcript.txt，派工照樣跑），不值得為它擴大範圍。
 pub fn looks_like_claude(command: &str) -> bool {
     let Some(first) = command.split_whitespace().next() else {
         return false;
     };
-    let name = std::path::Path::new(first)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
+    let name = first
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(first)
+        .to_lowercase();
     name == "claude" || name == "claude.exe"
 }
 
@@ -908,12 +992,29 @@ pub fn launch_command(command: &str, session_id: Option<&str>) -> String {
 - [ ] **Step 4: 跑測試，確認它綠**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::dispatch 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::dispatch 2>&1 | tail -20
 ```
 
 Expected: 上面六個新測試全綠。
 
-- [ ] **Step 5: `spawn_and_run` 多收一個 session_id**
+- [ ] **Step 5: Commit**
+
+```bash
+git add src-tauri/src/tasks/dispatch.rs
+git commit -m "feat(tasks): decide when a dispatch gets its own claude session id
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+```
+
+兩個純函式獨立就能編譯，所以這裡收一次。`spawn_and_run` 的簽章變更會弄壞
+`scheduler.rs` 的呼叫端，那屬於 Task 6 的「接線」——放在一起才是一個完整
+可編譯的 commit。
+
+---
+
+## Task 6: `dispatch.rs` + `scheduler.rs` — 接線
+
+- [ ] **Step 1: `spawn_and_run` 多收一個 session_id**
 
 分頁標題是 `Agent: <command>`（見 `src/components/TerminalApp.tsx:275`）。如果把接好旗標的指令當成 `claude_command` 傳進來，標題就會變成 `Agent: claude --session-id 3f2a-...`。所以旗標要在 `spawn_and_run` 裡面接，事件仍然送原本的指令。
 
@@ -946,26 +1047,19 @@ pub async fn spawn_and_run(
 
 底下 `app.emit("mcp-coordination-tab-spawned", ...)` 那段**不動**（它已經用的是 `claude_command`）。
 
-- [ ] **Step 6: 編譯，確認唯一的呼叫端壞掉**
+- [ ] **Step 2: 編譯，確認唯一的呼叫端壞掉**
 
 ```bash
 cd src-tauri && cargo check 2>&1 | tail -20
 ```
 
-Expected: `scheduler.rs` 報 `this function takes 7 arguments but 6 arguments were supplied`。那是 Task 6 要修的地方。
+Expected: `scheduler.rs` 報 `this function takes 7 arguments but 6 arguments were supplied`。下一步就是修它。
 
-- [ ] **Step 7: Commit（連同 Task 6 一起，因為現在編不過）**
-
-先不 commit，直接進 Task 6。
-
----
-
-## Task 6: `scheduler.rs` — 接線
-
-**Files:**
+**Files（Task 6 全部）:**
+- Modify: `src-tauri/src/tasks/dispatch.rs`
 - Modify: `src-tauri/src/tasks/scheduler.rs`
 
-- [ ] **Step 1: 派工時產生 UUID 並寫回**
+- [ ] **Step 3: 派工時產生 UUID 並寫回**
 
 在 `RealDispatcher::dispatch` 裡，把取設定與 spawn 的那段改成：
 
@@ -999,7 +1093,7 @@ Expected: `scheduler.rs` 報 `this function takes 7 arguments but 6 arguments we
         }
 ```
 
-- [ ] **Step 2: 把需要的東西捕獲進 watch 的 async block**
+- [ ] **Step 4: 把需要的東西捕獲進 watch 的 async block**
 
 在既有的 `let task_id = task.id.clone();` 附近加兩行：
 
@@ -1008,7 +1102,7 @@ Expected: `scheduler.rs` 報 `this function takes 7 arguments but 6 arguments we
         let session_id_for_watch = session_id.clone();
 ```
 
-- [ ] **Step 3: 完成時複製 session 記錄**
+- [ ] **Step 5: 完成時複製 session 記錄**
 
 在 async block 裡，`let transcript = write_transcript(...);` 那一行**之後**、`store::finish_task(...)` 之前插入：
 
@@ -1018,8 +1112,13 @@ Expected: `scheduler.rs` 報 `this function takes 7 arguments but 6 arguments we
             if let (Some(sid), Some(root)) =
                 (session_id_for_watch.as_deref(), crate::tasks::session_log::claude_projects_root())
             {
+                // 參數分成兩組：前三個決定「去哪裡找」，後兩個決定
+                // 「放到哪裡」。`work_dir` 與 `project_path` 都是 `&Path`
+                // 而且意義完全不同（前者是被施工的 repo，後者是卡片所屬的
+                // 專案資料夾），交換了會編譯通過但靜默出錯——所以這裡照著
+                // 分組寫，不要重排。
                 if let Some(path) = crate::tasks::session_log::copy_session_log(
-                    &root, &project_path, &task_id, &work_dir, sid,
+                    &root, &work_dir, sid, &project_path, &task_id,
                 ) {
                     let _ = store::set_session_path(&pool, &task_id, &path).await;
                 }
@@ -1028,7 +1127,7 @@ Expected: `scheduler.rs` 報 `this function takes 7 arguments but 6 arguments we
 
 順序要在 `finish_task` 之前：`finish_task` 之後緊接著 `app.emit("tasks-updated", ())`，前端收到時該列就應該已經是完整的。
 
-- [ ] **Step 4: 編譯並跑全部後端測試**
+- [ ] **Step 6: 編譯並跑全部後端測試**
 
 ```bash
 cd src-tauri && cargo test 2>&1 | tail -30
@@ -1036,14 +1135,13 @@ cd src-tauri && cargo test 2>&1 | tail -30
 
 Expected: 全綠。注意這裡跑的是 `cargo test` 而不是 `cargo test --lib`——`--lib` 不會編譯 `tests/` 底下的整合測試（`task_board.rs` 就在那裡），漏掉會在 CI 上才炸。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src-tauri/src/tasks/dispatch.rs src-tauri/src/tasks/scheduler.rs
 git commit -m "feat(tasks): give each dispatch its own claude session id and keep its log
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1191,8 +1289,7 @@ Expected: `test result: ok. 5 passed`。
 git add src-tauri/src/commands/tasks.rs src-tauri/tests/task_transcript_source.rs
 git commit -m "feat(tasks): read the full session log when a card has one
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1267,8 +1364,7 @@ git add src/ipc/tasks.ts src/components/TaskBoard/ReportDialog.test.tsx \
         src/components/TaskBoard/index.test.tsx src/components/TaskBoard/reportPrompts.test.ts
 git commit -m "feat(tasks): mirror the session-log columns in the frontend TaskRow
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1376,7 +1472,7 @@ Entertoconfirm·Esctocancel
 - [ ] **Step 2: 跑測試，確認它紅**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::dispatch::tests::trust 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::dispatch::tests::trust 2>&1 | tail -20
 ```
 
 Expected: 編譯失敗，`cannot find function `trust_prompt_keys``。
@@ -1436,7 +1532,7 @@ pub fn trust_prompt_keys(screen: &str) -> Option<Vec<u8>> {
 - [ ] **Step 4: 跑測試，確認它綠**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::dispatch 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::dispatch 2>&1 | tail -20
 ```
 
 Expected: 六個新測試全綠。
@@ -1447,8 +1543,7 @@ Expected: 六個新測試全綠。
 git add src-tauri/src/tasks/dispatch.rs
 git commit -m "feat(tasks): work out which keys accept Claude Code's folder-trust prompt
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1534,7 +1629,7 @@ Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
 - [ ] **Step 2: 跑測試，確認它紅**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::dispatch::tests::accepts_the_trust 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::dispatch::tests::accepts_the_trust 2>&1 | tail -20
 ```
 
 Expected: 斷言失敗，`沒有送出移動到 Yes 的按鍵`。
@@ -1599,7 +1694,7 @@ async fn wait_until_settled(pty: &PtyManager, tab_id: &str) {
 - [ ] **Step 4: 跑測試，確認它綠，而且既有的三個 settle 測試沒被弄壞**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::dispatch 2>&1 | tail -25
+cd src-tauri && cargo test --lib tasks::dispatch 2>&1 | tail -25
 ```
 
 Expected: 全綠，特別確認 `does_not_settle_while_the_tui_has_not_started_yet`、`settles_once_the_tui_is_up_and_quiet`、`a_non_tui_command_still_settles_on_the_longer_quiet_window` 三個都還在。
@@ -1610,8 +1705,7 @@ Expected: 全綠，特別確認 `does_not_settle_while_the_tui_has_not_started_y
 git add src-tauri/src/tasks/dispatch.rs
 git commit -m "fix(tasks): accept the folder-trust prompt instead of typing into it
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1693,8 +1787,7 @@ git status --short
 git add CHANGELOG.md
 git commit -m "docs: spec、實作計畫與 CHANGELOG
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 **不要自己打 tag。** 推 `vX.Y.Z` tag 會觸發三平台的 release build，一定要先問過使用者。
