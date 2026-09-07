@@ -139,17 +139,29 @@ fn dir_candidates(work_dir: &Path) -> Vec<String> {
 ///
 /// 找不到來源、或複製失敗（權限、磁碟），都安靜回 `None` 並寫進 stderr——
 /// 原本的 `transcript.txt` 還在，沒有東西壞掉，不值得打斷使用者。
+///
+/// 參數刻意分成兩組：前三個決定**去哪裡找**，後兩個決定**放到哪裡**。
+/// `work_dir` 與 `project_path` 都是 `&Path` 而且意義完全不同，交換了會
+/// 編譯通過但靜默出錯（找不到來源＋寫錯資料夾），所以不要把它們排在一起。
 pub fn copy_session_log(
     projects_root: &Path,
-    project_path: &Path,
-    task_id: &str,
     work_dir: &Path,
     session_id: &str,
+    project_path: &Path,
+    task_id: &str,
 ) -> Option<String> {
-    let src = dir_candidates(work_dir)
+    let candidates: Vec<PathBuf> = dir_candidates(work_dir)
         .into_iter()
         .map(|d| projects_root.join(d).join(format!("{session_id}.jsonl")))
-        .find(|p| p.is_file())?;
+        .collect();
+    let Some(src) = candidates.iter().find(|p| p.is_file()) else {
+        // 最常發生的失敗就是這一條（claude_command 不是 claude、旗標沒生效、
+        // 或編出來的資料夾名不對），而它原本靜悄悄地回 None。診斷訊息要把
+        // 試過的路徑印出來——只說「找不到」的話，事後看 log 的人無從判斷是
+        // session id 錯了還是資料夾名編錯了。
+        eprintln!("session log not found for {session_id}, tried {candidates:?}");
+        return None;
+    };
 
     let dir = crate::tasks::task_dir(project_path, task_id);
     if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -343,7 +355,7 @@ mod copy_tests {
         let work = Path::new("/work/repo");
         let (projects, project) = fake_tree(work, "SID", "{\"type\":\"user\"}\n");
 
-        let dest = copy_session_log(projects.path(), project.path(), "card1", work, "SID").unwrap();
+        let dest = copy_session_log(projects.path(), work, "SID", project.path(), "card1").unwrap();
 
         assert!(dest.ends_with("session.jsonl"), "存錯檔名：{dest}");
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "{\"type\":\"user\"}\n");
@@ -361,7 +373,7 @@ mod copy_tests {
         let projects = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
         assert!(
-            copy_session_log(projects.path(), project.path(), "card1", Path::new("/work/repo"), "SID")
+            copy_session_log(projects.path(), Path::new("/work/repo"), "SID", project.path(), "card1")
                 .is_none()
         );
     }
@@ -385,7 +397,7 @@ mod copy_tests {
         std::fs::write(dir.join("SID.jsonl"), "x").unwrap();
 
         let project = tempfile::tempdir().unwrap();
-        let dest = copy_session_log(projects.path(), project.path(), "card1", real.path(), "SID");
+        let dest = copy_session_log(projects.path(), real.path(), "SID", project.path(), "card1");
         assert!(dest.is_some(), "沒有試 canonicalize 後的路徑候選");
     }
 
@@ -400,13 +412,13 @@ mod copy_tests {
     fn a_second_dispatch_overwrites_the_previous_session_log() {
         let work = Path::new("/work/repo");
         let (projects, project) = fake_tree(work, "OLD", "第一次執行\n");
-        let first = copy_session_log(projects.path(), project.path(), "card1", work, "OLD").unwrap();
+        let first = copy_session_log(projects.path(), work, "OLD", project.path(), "card1").unwrap();
         assert_eq!(std::fs::read_to_string(&first).unwrap(), "第一次執行\n");
 
         // 第二次派工：新的 session id、新的內容，同一張卡片。
         let dir = projects.path().join(encode_project_dir(work));
         std::fs::write(dir.join("NEW.jsonl"), "第二次執行\n").unwrap();
-        let second = copy_session_log(projects.path(), project.path(), "card1", work, "NEW").unwrap();
+        let second = copy_session_log(projects.path(), work, "NEW", project.path(), "card1").unwrap();
 
         assert_eq!(second, first, "第二次應該寫到同一個 session.jsonl");
         assert_eq!(
