@@ -140,15 +140,19 @@ mod render_tests {
 
     /// 真實 session 檔抽出來的五種記錄（長字串已截短，結構未動），外加
     /// 三種必須被跳過的雜訊記錄、一行壞掉的 JSON 與一行空行。
+    ///
+    /// 壞掉那行刻意放在 tool_use 與 tool_result 之間，而不是檔尾：後面
+    /// 還有一筆會被渲染的 `text` 記錄，這樣「整份中止」與「只跳這行」
+    /// 才會產出不同結果，見 `a_broken_line_does_not_abort_the_whole_render`。
     const REAL_FIXTURE: &str = r#"{"type": "user", "message": {"role": "user", "content": "請繼續"}}
 {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "先看 repo 狀態", "signature": "SIG"}]}, "isSidechain": false}
 {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01RZV1vshph15jPaL7ozx2an", "name": "Bash", "input": {"command": "git status --short | head -30", "description": "Check repo state"}}]}, "isSidechain": false}
+{this is not valid json
 {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01N7g4oADgBWEqZaM4GUcHtA", "content": "No matching deferred tools found"}]}}
 {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "工作目錄乾淨，沒有未推的 commit。"}]}, "isSidechain": false}
 {"type": "mode", "uuid": "x"}
 {"type": "attachment", "uuid": "ca05c03c-7993-4ec6-baf4-c4e3b71e64e3"}
 {"type": "file-history-snapshot", "uuid": "x"}
-{this is not valid json
 
 "#;
 
@@ -175,7 +179,11 @@ mod render_tests {
         assert!(!out.contains("No matching deferred tools found"), "工具回傳沒有被丟掉：{out}");
     }
 
-    /// 一行壞掉不該讓整份記錄消失——壞掉的那行前後的內容都必須還在。
+    /// 一行壞掉不該讓整份記錄消失。
+    ///
+    /// 壞掉那行的**位置**是這個測試的全部價值所在：它必須夾在可渲染的
+    /// 記錄中間，後面還有東西。放在檔尾的話，`break`（整份中止）與
+    /// `continue`（只跳這行）產出完全一樣，測試就抓不到前者了。
     #[test]
     fn a_broken_line_does_not_abort_the_whole_render() {
         let out = render_session_log(REAL_FIXTURE);
@@ -193,14 +201,19 @@ mod render_tests {
     }
 
     /// 工具摘要取的是「第一個參數」——serde_json 開了 preserve_order，
-    /// 所以那是 JSONL 裡的書寫順序。這個 fixture 刻意讓書寫順序（`command`）
-    /// 與字典順序（`description`）不同，否則測不出兩者的差別。
+    /// 所以那是 JSONL 裡的書寫順序。
+    ///
+    /// fixture 用 `Write` 而不是 `Bash`：`Bash` 的 `{command, description}`
+    /// 兩種順序**剛好一樣**（c < d），拿它當 fixture 的話，就算 serde_json
+    /// 改成照字典序排也照樣會綠——那是一個空測試。`Write` 的
+    /// `{file_path, content}` 才會分岔：書寫序是 `file_path`，字典序是
+    /// `content`。兩個都是實機 session 檔裡真實出現過的形狀。
     #[test]
     fn tool_summary_uses_the_first_written_argument_not_the_alphabetical_one() {
-        let jsonl = r#"{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "Bash", "input": {"command": "ls -la", "description": "aaa list files"}}]}}"#;
+        let jsonl = r#"{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "Write", "input": {"file_path": "/repo/src/lib.rs", "content": "aaa file body"}}]}}"#;
         let out = render_session_log(jsonl);
-        assert!(out.contains("ls -la"), "沒有用書寫順序的第一個參數：{out}");
-        assert!(!out.contains("aaa list files"), "用到了字典序第一個參數：{out}");
+        assert!(out.contains("/repo/src/lib.rs"), "沒有用書寫順序的第一個參數：{out}");
+        assert!(!out.contains("aaa file body"), "用到了字典序第一個參數：{out}");
     }
 
     /// 摘要要短、要單行——工具參數常常是好幾 KB 的檔案內容，整段塞進
