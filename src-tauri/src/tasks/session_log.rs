@@ -9,7 +9,7 @@
 //!
 //! 見 docs/superpowers/specs/2026-09-07-full-task-transcript-design.md。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// 把絕對路徑編成 Claude Code 用的資料夾名：每一個路徑分隔符換成 `-`。
 ///
@@ -102,6 +102,68 @@ fn first_arg_summary(input: Option<&serde_json::Value>) -> String {
     }
     let cut: String = one_line.chars().take(TOOL_ARG_MAX_CHARS).collect();
     format!("{cut}…")
+}
+
+/// `~/.claude/projects` — Claude Code 放 session 記錄的地方。
+/// 家目錄取不到時回 `None`，呼叫端安靜退回 transcript.txt。
+pub fn claude_projects_root() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".claude").join("projects"))
+}
+
+/// 這個工作目錄可能對應到的 session 資料夾名（原樣路徑、canonicalize 後的
+/// 路徑）。macOS 上 `/tmp` 是 `/private/tmp` 的符號連結，兩者編出來的名字
+/// 不同，而 Claude Code 用哪一個我們無法確定，所以兩個都試。
+///
+/// 已知侷限（刻意不修）：Windows 上 `canonicalize` 回傳帶 `\\?\` 前綴的
+/// verbatim 路徑（如 `\\?\C:\Users\j\repo`），編碼後會是
+/// `--?-C--Users-j-repo`，幾乎可以確定不是 Claude Code 實際寫的資料夾名。
+/// 因為原樣路徑候選排在第一個，Windows 常見情況仍然找得到；要不要剝掉
+/// `\\?\` 前綴要等實測 Claude Code 在 Windows 上到底寫哪個名字才能決定，
+/// 這裡不先猜。
+fn dir_candidates(work_dir: &Path) -> Vec<String> {
+    let mut out = vec![encode_project_dir(work_dir)];
+    if let Ok(canonical) = std::fs::canonicalize(work_dir) {
+        let encoded = encode_project_dir(&canonical);
+        if !out.contains(&encoded) {
+            out.push(encoded);
+        }
+    }
+    out
+}
+
+/// 把 `<projects_root>/<編碼後的 work_dir>/<session_id>.jsonl` **原封不動**
+/// 複製成 `<project_path>/tasks/<task_id>/session.jsonl`，回傳目的地路徑。
+///
+/// 不精簡是刻意的：一次派工只有幾十 KB 到數 MB，磁碟成本遠低於提早丟資料
+/// 的風險。要精簡永遠來得及，丟掉的救不回來。
+///
+/// 找不到來源、或複製失敗（權限、磁碟），都安靜回 `None` 並寫進 stderr——
+/// 原本的 `transcript.txt` 還在，沒有東西壞掉，不值得打斷使用者。
+pub fn copy_session_log(
+    projects_root: &Path,
+    project_path: &Path,
+    task_id: &str,
+    work_dir: &Path,
+    session_id: &str,
+) -> Option<String> {
+    let src = dir_candidates(work_dir)
+        .into_iter()
+        .map(|d| projects_root.join(d).join(format!("{session_id}.jsonl")))
+        .find(|p| p.is_file())?;
+
+    let dir = crate::tasks::task_dir(project_path, task_id);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("session log dir {dir:?}: {e}");
+        return None;
+    }
+    let dest = dir.join("session.jsonl");
+    match std::fs::copy(&src, &dest) {
+        Ok(_) => Some(dest.to_string_lossy().into_owned()),
+        Err(e) => {
+            eprintln!("copy session log {src:?} → {dest:?}: {e}");
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -260,5 +322,70 @@ mod render_tests {
     fn an_empty_or_contentless_log_renders_to_nothing() {
         assert_eq!(render_session_log(""), "");
         assert_eq!(render_session_log("{\"type\": \"mode\"}\n"), "");
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+
+    /// 建一棵假的 `~/.claude/projects` 樹，回傳 (projects_root, 卡片專案資料夾)。
+    fn fake_tree(work_dir: &Path, session_id: &str, body: &str) -> (tempfile::TempDir, tempfile::TempDir) {
+        let projects = tempfile::tempdir().unwrap();
+        let dir = projects.path().join(encode_project_dir(work_dir));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{session_id}.jsonl")), body).unwrap();
+        (projects, tempfile::tempdir().unwrap())
+    }
+
+    #[test]
+    fn copies_the_session_file_verbatim_into_the_task_dir() {
+        let work = Path::new("/work/repo");
+        let (projects, project) = fake_tree(work, "SID", "{\"type\":\"user\"}\n");
+
+        let dest = copy_session_log(projects.path(), project.path(), "card1", work, "SID").unwrap();
+
+        assert!(dest.ends_with("session.jsonl"), "存錯檔名：{dest}");
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "{\"type\":\"user\"}\n");
+        assert_eq!(
+            std::path::Path::new(&dest).parent().unwrap(),
+            crate::tasks::task_dir(project.path(), "card1"),
+            "沒有存進卡片資料夾"
+        );
+    }
+
+    /// claude 根本沒啟動、或使用者把 claude_command 設成別的東西時，
+    /// 來源檔不存在。必須安靜回 None，讓呼叫端退回 transcript.txt。
+    #[test]
+    fn returns_none_when_the_session_file_does_not_exist() {
+        let projects = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        assert!(
+            copy_session_log(projects.path(), project.path(), "card1", Path::new("/work/repo"), "SID")
+                .is_none()
+        );
+    }
+
+    /// macOS 上 /tmp 是 /private/tmp 的符號連結，兩者編出來的資料夾名不同。
+    /// Claude Code 用哪一個我們無法確定，所以兩個候選都要試。這個測試把
+    /// 檔案只放在 canonicalize 後的那個資料夾裡——只試原樣路徑的實作會找不到。
+    #[test]
+    fn falls_back_to_the_canonicalised_form_of_the_work_dir() {
+        let real = tempfile::tempdir().unwrap();
+        let canonical = std::fs::canonicalize(real.path()).unwrap();
+        // 這個測試只有在 tempdir 真的會被 canonicalize 改寫時才有鑑別力
+        // （macOS 的 /var → /private/var）。否則兩個候選相同，測不出差別。
+        if canonical == real.path() {
+            eprintln!("跳過：這個平台的 tempdir 路徑已經是 canonical 形式");
+            return;
+        }
+        let projects = tempfile::tempdir().unwrap();
+        let dir = projects.path().join(encode_project_dir(&canonical));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SID.jsonl"), "x").unwrap();
+
+        let project = tempfile::tempdir().unwrap();
+        let dest = copy_session_log(projects.path(), project.path(), "card1", real.path(), "SID");
+        assert!(dest.is_some(), "沒有試 canonicalize 後的路徑候選");
     }
 }
