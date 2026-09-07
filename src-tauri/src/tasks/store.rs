@@ -1151,18 +1151,31 @@ mod session_column_tests {
     }
 
     /// 重新派工會產生新的 UUID 與新的 session 檔，session.jsonl 直接覆蓋——
-    /// 舊值不可以殘留下來讓 tasks_read_transcript 讀到上一次執行的記錄。
+    /// 舊的 `session_path` 不可以殘留下來讓 tasks_read_transcript 讀到上一次
+    /// 執行的記錄。
+    ///
+    /// 但 `session_id` **要留著**：下一步的 `set_session_id` 本來就會覆寫它，
+    /// 而清掉它在「Task 6 的順序日後被改動」或「某條派工路徑忘了呼叫
+    /// set_session_id」時會讓完成的卡片永遠找不到自己的記錄——症狀正是這個
+    /// 功能要消滅的那個「莫名其妙退回 transcript.txt」。這個不對稱是刻意的，
+    /// 所以兩邊都要斷言，不是只驗被清掉的那一半。
     #[tokio::test]
     async fn claiming_for_dispatch_clears_the_previous_run_s_session_path() {
         let pool = mem_pool().await;
         let id = a_task(&pool).await;
         move_task(&pool, &id, STATUS_QUEUED, 1.0).await.unwrap();
         set_session_path(&pool, &id, "/old/session.jsonl").await.unwrap();
+        set_session_id(&pool, &id, "old-uuid").await.unwrap();
 
         assert!(claim_for_dispatch(&pool, &id).await.unwrap());
 
         let row = get_task(&pool, &id).await.unwrap().unwrap();
         assert_eq!(row.session_path, None, "上一次執行的 session_path 殘留了");
+        assert_eq!(
+            row.session_id.as_deref(),
+            Some("old-uuid"),
+            "session_id 被清掉了——下一步的 set_session_id 會覆寫它，清它只會在派工路徑漏呼叫時害卡片找不到記錄"
+        );
     }
 
     /// 現有使用者的 `tasks.db` 走的是 `ALTER TABLE` 那條路，不是
