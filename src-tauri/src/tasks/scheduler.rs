@@ -94,12 +94,17 @@ impl Dispatcher for RealDispatcher {
             .collect::<Vec<_>>();
         let prompt = dispatch::build_prompt(&task.body, &attachments);
         let claude_cmd = self.config.get().task_board.claude_command;
+        // 只有指令確實是 claude 時才給 session id——別的指令接上這個旗標
+        // 會直接啟動失敗（見 dispatch::looks_like_claude）。
+        let session_id = dispatch::looks_like_claude(&claude_cmd)
+            .then(|| uuid::Uuid::new_v4().to_string());
 
         let (tab_id, disp) = dispatch::spawn_and_run(
             &self.app,
             &self.pty,
             &task.project_dir,
             &claude_cmd,
+            session_id.as_deref(),
             &prompt,
             !task.interactive,
         )
@@ -111,6 +116,12 @@ impl Dispatcher for RealDispatcher {
         store::set_tab_id(&project.pool, &task.id, &tab_id)
             .await
             .map_err(|e| e.to_string())?;
+        if let Some(sid) = session_id.as_deref() {
+            if let Err(e) = store::set_session_id(&project.pool, &task.id, sid).await {
+                // 記不起來只代表這張卡片拿不到完整記錄，不值得讓派工失敗。
+                eprintln!("set_session_id {}: {e}", task.id);
+            }
+        }
         let _ = self.app.emit("tasks-updated", ());
 
         let (cancel_tx, cancel_rx) = oneshot::channel::<monitor::WatchControl>();
@@ -126,6 +137,8 @@ impl Dispatcher for RealDispatcher {
         let wake = self.wake.clone();
         let cancels = self.cancels.clone();
         let task_id = task.id.clone();
+        let work_dir = std::path::PathBuf::from(&task.project_dir);
+        let session_id_for_watch = session_id.clone();
         let baselines = monitor::Baselines { bell: disp.bell_baseline, marker: disp.marker_baseline };
         let watch_mode = if task.interactive { monitor::WatchMode::Interactive } else { monitor::WatchMode::Auto };
         tauri::async_runtime::spawn(async move {
@@ -133,6 +146,22 @@ impl Dispatcher for RealDispatcher {
                 &pty, &tab_id, cancel_rx, baselines, monitor::Thresholds::default(), watch_mode,
             ).await;
             let transcript = write_transcript(&pty, &project_path, &task_id, &tab_id);
+            // 完整的逐輪記錄。找不到就什麼都不做——上面剛寫好的
+            // transcript.txt 還在，沒有東西壞掉。
+            if let (Some(sid), Some(root)) =
+                (session_id_for_watch.as_deref(), crate::tasks::session_log::claude_projects_root())
+            {
+                // 參數分成兩組：前三個決定「去哪裡找」，後兩個決定
+                // 「放到哪裡」。`work_dir` 與 `project_path` 都是 `&Path`
+                // 而且意義完全不同（前者是被施工的 repo，後者是卡片所屬的
+                // 專案資料夾），交換了會編譯通過但靜默出錯——所以這裡照著
+                // 分組寫，不要重排。
+                if let Some(path) = crate::tasks::session_log::copy_session_log(
+                    &root, &work_dir, sid, &project_path, &task_id,
+                ) {
+                    let _ = store::set_session_path(&pool, &task_id, &path).await;
+                }
+            }
             let _ = store::finish_task(
                 &pool, &task_id, outcome.as_str(), outcome.error_message(), transcript.as_deref(),
             ).await;

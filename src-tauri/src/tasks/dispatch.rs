@@ -231,6 +231,7 @@ pub async fn spawn_and_run(
     pty: &PtyManager,
     project_dir: &str,
     claude_command: &str,
+    session_id: Option<&str>,
     prompt: &str,
     request_done_marker: bool,
 ) -> Result<(String, DispatchResult), String> {
@@ -239,7 +240,11 @@ pub async fn spawn_and_run(
         .create_with_app(app.clone(), size, Some(std::path::PathBuf::from(project_dir)), None)
         .map_err(|e| e.to_string())?;
 
-    if let Err(e) = pty.write(&tab_id, format!("{claude_command}\r").as_bytes()) {
+    // 送進終端機的是接好旗標的版本；下面的事件送的是原本的指令——分頁
+    // 標題是 `Agent: <command>`（TerminalApp.tsx），把 UUID 塞進去會讓
+    // 每個派工分頁的標題都拖著一串亂碼。
+    let launch = launch_command(claude_command, session_id);
+    if let Err(e) = pty.write(&tab_id, format!("{launch}\r").as_bytes()) {
         let _ = pty.close(&tab_id);
         return Err(e.to_string());
     }
