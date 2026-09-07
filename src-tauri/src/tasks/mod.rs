@@ -2,11 +2,13 @@
 //! See `docs/superpowers/specs/2026-09-03-task-board-agent-dispatch-design.md`.
 //!
 //! - `store`     — `tasks.db` schema + CRUD (sqlx free functions over a pool)
+//! - `session_log` — Claude Code 自己寫的 session JSONL：定位、複製、渲染
 //! - `dispatch`  — compose the prompt, spawn a visible PTY tab, type it in
 //! - `monitor`   — watch one running task's session to a terminal outcome
 //! - `scheduler` — pick the next runnable card; the long-lived dispatch loop
 
 pub mod store;
+pub mod session_log;
 pub mod dispatch;
 pub mod monitor;
 pub mod scheduler;
