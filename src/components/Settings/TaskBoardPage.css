@@ -55,7 +55,25 @@
 
 .task-board-actions {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 24px;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.task-board-actions button {
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  color: #e6e6e6;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 8px 16px;
+}
+
+.task-board-actions button:hover:not(:disabled) {
+  border-color: #2d5aab;
+}
+
+.task-board-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
