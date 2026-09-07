@@ -55,3 +55,17 @@ fn falls_back_when_the_session_log_renders_to_nothing() {
 fn returns_empty_when_there_is_nothing_at_all() {
     assert_eq!(resolve_transcript(None, None), "");
 }
+
+/// 兩個路徑都有值、但兩個檔案都讀不到（卡片資料夾被刪掉、專案搬家而
+/// 路徑沒改寫）。必須安靜回空字串，不能 panic。
+///
+/// 這一條補的是「兩者皆 None」測不到的洞：把最後那段 fallback 寫成
+/// `.map(|p| fs::read_to_string(p).unwrap())` 的話會在這裡炸掉，而其餘
+/// 每個測試都照樣綠。
+#[test]
+fn returns_empty_when_both_paths_point_at_missing_files() {
+    let d = tempfile::tempdir().unwrap();
+    let no_session = d.path().join("gone.jsonl").to_string_lossy().into_owned();
+    let no_transcript = d.path().join("gone.txt").to_string_lossy().into_owned();
+    assert_eq!(resolve_transcript(Some(&no_session), Some(&no_transcript)), "");
+}

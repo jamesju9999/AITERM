@@ -370,18 +370,35 @@ pub async fn tasks_clone(
 /// 有 `session_path` 且讀得出對話 → 渲染完整的逐輪記錄；否則退回
 /// `transcript_path`（現行行為）。兩者都沒有就是空字串。
 ///
-/// 退回是安靜的、不報錯：claude 根本沒啟動、卡在信任提示、或使用者把
-/// `claude_command` 設成別的東西時，JSONL 不存在，而終端機畫面是唯一的
-/// 診斷線索。原本的東西還在，沒有東西壞掉，不值得打斷使用者。
+/// 退回對**使用者**是安靜的、不報錯：claude 根本沒啟動、卡在信任提示、
+/// 或使用者把 `claude_command` 設成別的東西時，JSONL 不存在，而終端機
+/// 畫面是唯一的診斷線索。原本的東西還在，沒有東西壞掉，不值得打斷
+/// 使用者。但對 log 不是——見下面兩個 `eprintln!`。
 pub fn resolve_transcript(session_path: Option<&str>, transcript_path: Option<&str>) -> String {
     if let Some(p) = session_path {
-        if let Ok(raw) = fs::read_to_string(p) {
-            let rendered = crate::tasks::session_log::render_session_log(&raw);
-            if !rendered.trim().is_empty() {
-                return rendered;
+        match fs::read_to_string(p) {
+            Ok(raw) => {
+                let rendered = crate::tasks::session_log::render_session_log(&raw);
+                if !rendered.trim().is_empty() {
+                    return rendered;
+                }
+                // 檔案在、讀得到，但一句對話都渲染不出來。多半是 claude 在
+                // 寫出任何 user/assistant 記錄之前就結束了（卡在信任提示、
+                // 立刻被停掉），或是 JSONL 格式變了。跟「檔案不見」是完全
+                // 不同的病因，所以分開記。
+                eprintln!(
+                    "session log at {p} rendered to nothing, falling back to the terminal capture"
+                );
+            }
+            // 路徑有值卻讀不到：檔案被刪了、專案資料夾搬走而 rewrite_stored_paths
+            // 沒跟上、或權限問題。
+            Err(e) => {
+                eprintln!("session log {p} unreadable ({e}), falling back to the terminal capture")
             }
         }
     }
+    // session_path 為 None 時刻意不記——那是舊卡片與非 claude 指令的正常
+    // 狀態，記了就是雜訊，而雜訊會讓上面兩行真正有用的訊息被忽略。
     transcript_path
         .and_then(|p| fs::read_to_string(p).ok())
         .unwrap_or_default()
