@@ -58,6 +58,23 @@ Entertoconfirm·Esctocancel
 
 ---
 
+## 每個測試都要做突變驗證（全域規則）
+
+**「跑起來是綠的」不是測試有效的證據。** 綠燈也可能來自「這個 fixture 讓正確與錯誤的實作產出相同結果」——那樣的測試是空的，卻會讓人以為有防護網。
+
+所以每寫一個關鍵測試，都要**實際把實作改壞、確認那個測試會紅**，再改回來。改壞的方式要挑「最可能真的寫錯的那一種」，不是隨便亂改。
+
+這份計畫在寫成之後、Task 2 的審查中真的抓到兩個空測試，兩個都是計畫作者自己寫錯的：
+
+| 空測試 | 為什麼是空的 | 突變驗證會抓到 |
+|---|---|---|
+| 工具參數用書寫序而非字典序 | fixture 用 `Bash` 的 `{command, description}`，兩種順序**剛好一樣**（c < d） | 把 `first_arg_summary` 改成取字典序第一個 → 測試仍綠 |
+| 壞行不中止整份渲染 | 壞行放在 fixture **最尾端**，後面沒有可渲染的記錄 | 把 `continue` 改成 `break` → 測試仍綠 |
+
+兩個都在 Task 2 修掉了。教訓：寫 fixture 時先問「如果實作用了那個錯誤做法，這筆資料會產出不一樣的結果嗎？」答案是「不會」就換資料。
+
+---
+
 ## File Structure
 
 | 檔案 | 動作 | 責任 |
@@ -240,10 +257,24 @@ mod render_tests {
 {"type": "mode", "uuid": "x"}
 {"type": "attachment", "uuid": "ca05c03c-7993-4ec6-baf4-c4e3b71e64e3"}
 {"type": "file-history-snapshot", "uuid": "x"}
-{this is not valid json
 
 "#;
 }
+```
+
+**壞掉的那行放在哪裡是有講究的**：必須夾在可渲染的記錄**中間**（下面的成品放在 `tool_use` 之後、`tool_result` 之前），後面還要有東西。放在檔尾的話，`break`（整份中止）與 `continue`（只跳這行）產出完全一樣，`a_broken_line_does_not_abort_the_whole_render` 就變成空測試了。所以上面的 fixture 還缺一行——正確的完整版是：
+
+```
+1. user / 字串 content 「請繼續」
+2. assistant / thinking
+3. assistant / tool_use（Bash git status）
+4. {this is not valid json      ← 夾在中間，不是檔尾
+5. user / tool_result
+6. assistant / text 「工作目錄乾淨…」
+7. {"type": "mode", "uuid": "x"}
+8. {"type": "attachment", ...}
+9. {"type": "file-history-snapshot", "uuid": "x"}
+10. （空行）
 ```
 
 - [ ] **Step 2: 寫會紅的測試**
@@ -274,7 +305,12 @@ mod render_tests {
         assert!(!out.contains("No matching deferred tools found"), "工具回傳沒有被丟掉：{out}");
     }
 
-    /// 一行壞掉不該讓整份記錄消失——壞掉的那行前後的內容都必須還在。
+    /// 一行壞掉不該讓整份記錄消失。
+    ///
+    /// 壞掉那行的**位置**是這個測試的全部價值所在：它必須夾在可渲染的
+    /// 記錄中間，後面還有東西。放在檔尾的話，`break`（整份中止）與
+    /// `continue`（只跳這行）產出完全一樣，測試就抓不到前者了——而
+    /// `break` 正是最可能寫錯的那一種。
     #[test]
     fn a_broken_line_does_not_abort_the_whole_render() {
         let out = render_session_log(REAL_FIXTURE);
@@ -292,14 +328,20 @@ mod render_tests {
     }
 
     /// 工具摘要取的是「第一個參數」——serde_json 開了 preserve_order，
-    /// 所以那是 JSONL 裡的書寫順序。這個 fixture 刻意讓書寫順序（`command`）
-    /// 與字典順序（`description`）不同，否則測不出兩者的差別。
+    /// 所以那是 JSONL 裡的書寫順序。
+    ///
+    /// fixture 用 `Write` 而不是 `Bash`：`Bash` 的 `{command, description}`
+    /// 兩種順序**剛好一樣**（c < d），拿它當 fixture 的話，就算 serde_json
+    /// 改成照字典序排也照樣會綠——那是一個空測試。`Write` 的
+    /// `{file_path, content}` 才會分岔：書寫序是 `file_path`，字典序是
+    /// `content`。兩個都是實機 session 檔裡真實出現過的形狀（掃過八份檔案，
+    /// 會分岔的還有 Edit / Skill / ToolSearch / SendUserFile）。
     #[test]
     fn tool_summary_uses_the_first_written_argument_not_the_alphabetical_one() {
-        let jsonl = r#"{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "Bash", "input": {"command": "ls -la", "description": "aaa list files"}}]}}"#;
+        let jsonl = r#"{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "Write", "input": {"file_path": "/repo/src/lib.rs", "content": "aaa file body"}}]}}"#;
         let out = render_session_log(jsonl);
-        assert!(out.contains("ls -la"), "沒有用書寫順序的第一個參數：{out}");
-        assert!(!out.contains("aaa list files"), "用到了字典序第一個參數：{out}");
+        assert!(out.contains("/repo/src/lib.rs"), "沒有用書寫順序的第一個參數：{out}");
+        assert!(!out.contains("aaa file body"), "用到了字典序第一個參數：{out}");
     }
 
     /// 摘要要短、要單行——工具參數常常是好幾 KB 的檔案內容，整段塞進
