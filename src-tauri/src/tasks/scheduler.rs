@@ -404,6 +404,8 @@ mod tests {
             finished_at: None,
             ai_summary: None,
             archived_at: None,
+            session_id: None,
+            session_path: None,
         }
     }
 
@@ -487,6 +489,8 @@ mod tests {
             finished_at: None,
             ai_summary: None,
             archived_at: None,
+            session_id: None,
+            session_path: None,
         }
     }
 

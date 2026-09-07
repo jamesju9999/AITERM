@@ -51,7 +51,9 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             dispatched_at   INTEGER,
             finished_at     INTEGER,
             ai_summary      TEXT,
-            archived_at     INTEGER
+            archived_at     INTEGER,
+            session_id      TEXT,
+            session_path    TEXT
         )",
     )
     .execute(pool)
@@ -68,6 +70,15 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .await;
     // Migration: existing databases created before `archived_at` existed.
     let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN archived_at INTEGER")
+        .execute(pool)
+        .await;
+    // Migration: existing databases created before the session-log columns
+    // existed. 跟上面幾個同一個寫法——欄位已存在時 ALTER TABLE 會失敗，
+    // 那是正常的，所以刻意丟掉錯誤。
+    let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN session_id TEXT")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN session_path TEXT")
         .execute(pool)
         .await;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, sort_order)")
