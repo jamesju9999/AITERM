@@ -512,7 +512,7 @@ mod copy_tests {
         let work = Path::new("/work/repo");
         let (projects, project) = fake_tree(work, "SID", "{\"type\":\"user\"}\n");
 
-        let dest = copy_session_log(projects.path(), project.path(), "card1", work, "SID").unwrap();
+        let dest = copy_session_log(projects.path(), work, "SID", project.path(), "card1").unwrap();
 
         assert!(dest.ends_with("session.jsonl"), "存錯檔名：{dest}");
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "{\"type\":\"user\"}\n");
@@ -530,7 +530,7 @@ mod copy_tests {
         let projects = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
         assert!(
-            copy_session_log(projects.path(), project.path(), "card1", Path::new("/work/repo"), "SID")
+            copy_session_log(projects.path(), Path::new("/work/repo"), "SID", project.path(), "card1")
                 .is_none()
         );
     }
@@ -554,7 +554,7 @@ mod copy_tests {
         std::fs::write(dir.join("SID.jsonl"), "x").unwrap();
 
         let project = tempfile::tempdir().unwrap();
-        let dest = copy_session_log(projects.path(), project.path(), "card1", real.path(), "SID");
+        let dest = copy_session_log(projects.path(), real.path(), "SID", project.path(), "card1");
         assert!(dest.is_some(), "沒有試 canonicalize 後的路徑候選");
     }
 }
@@ -601,17 +601,28 @@ fn dir_candidates(work_dir: &Path) -> Vec<String> {
 ///
 /// 找不到來源、或複製失敗（權限、磁碟），都安靜回 `None` 並寫進 stderr——
 /// 原本的 `transcript.txt` 還在，沒有東西壞掉，不值得打斷使用者。
+/// 參數刻意分成兩組：前三個決定**去哪裡找**，後兩個決定**放到哪裡**。
+/// `work_dir` 與 `project_path` 都是 `&Path` 而且意義完全不同，交換了會
+/// 編譯通過但靜默出錯（找不到來源＋寫錯資料夾），所以不要把它們排在一起。
 pub fn copy_session_log(
     projects_root: &Path,
-    project_path: &Path,
-    task_id: &str,
     work_dir: &Path,
     session_id: &str,
+    project_path: &Path,
+    task_id: &str,
 ) -> Option<String> {
-    let src = dir_candidates(work_dir)
+    let candidates: Vec<PathBuf> = dir_candidates(work_dir)
         .into_iter()
         .map(|d| projects_root.join(d).join(format!("{session_id}.jsonl")))
-        .find(|p| p.is_file())?;
+        .collect();
+    let Some(src) = candidates.iter().find(|p| p.is_file()) else {
+        // 最常發生的失敗就是這一條（claude_command 不是 claude、旗標沒生效、
+        // 或編出來的資料夾名不對），而它原本靜悄悄地回 None。診斷訊息要把
+        // 試過的路徑印出來——只說「找不到」的話，事後看 log 的人無從判斷是
+        // session id 錯了還是資料夾名編錯了。
+        eprintln!("session log not found for {session_id}, tried {candidates:?}");
+        return None;
+    };
 
     let dir = crate::tasks::task_dir(project_path, task_id);
     if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -1060,8 +1071,13 @@ Expected: `scheduler.rs` 報 `this function takes 7 arguments but 6 arguments we
             if let (Some(sid), Some(root)) =
                 (session_id_for_watch.as_deref(), crate::tasks::session_log::claude_projects_root())
             {
+                // 參數分成兩組：前三個決定「去哪裡找」，後兩個決定
+                // 「放到哪裡」。`work_dir` 與 `project_path` 都是 `&Path`
+                // 而且意義完全不同（前者是被施工的 repo，後者是卡片所屬的
+                // 專案資料夾），交換了會編譯通過但靜默出錯——所以這裡照著
+                // 分組寫，不要重排。
                 if let Some(path) = crate::tasks::session_log::copy_session_log(
-                    &root, &project_path, &task_id, &work_dir, sid,
+                    &root, &work_dir, sid, &project_path, &task_id,
                 ) {
                     let _ = store::set_session_path(&pool, &task_id, &path).await;
                 }
