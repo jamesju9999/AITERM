@@ -365,6 +365,38 @@ pub async fn tasks_clone(
     Ok(new_id)
 }
 
+/// 決定要把哪一份記錄交給前端。
+///
+/// 有 `session_path` 且讀得出對話 → 渲染完整的逐輪記錄；否則退回
+/// `transcript_path`（現行行為）。兩者都沒有就是空字串。
+///
+/// 退回是安靜的、不報錯：claude 根本沒啟動、卡在信任提示、或使用者把
+/// `claude_command` 設成別的東西時，JSONL 不存在，而終端機畫面是唯一的
+/// 診斷線索。原本的東西還在，沒有東西壞掉，不值得打斷使用者。
+pub fn resolve_transcript(session_path: Option<&str>, transcript_path: Option<&str>) -> String {
+    if let Some(p) = session_path {
+        if let Ok(raw) = fs::read_to_string(p) {
+            let rendered = crate::tasks::session_log::render_session_log(&raw);
+            if !rendered.trim().is_empty() {
+                return rendered;
+            }
+        }
+    }
+    transcript_path
+        .and_then(|p| fs::read_to_string(p).ok())
+        .unwrap_or_default()
+}
+
+/// `resolve_transcript`'s two params are both `Option<&str>` — same type,
+/// so a transposed call site (`transcript_path` then `session_path`) still
+/// compiles. Routing the field access through one named function, tested
+/// below against a real `TaskRow`, is what actually pins which column goes
+/// where; `resolve_transcript`'s own tests can't, since they call it with
+/// already-correctly-labelled arguments and never touch a `TaskRow`.
+fn transcript_for_row(row: &TaskRow) -> String {
+    resolve_transcript(row.session_path.as_deref(), row.transcript_path.as_deref())
+}
+
 #[tauri::command]
 pub async fn tasks_read_transcript(
     project_id: String,
@@ -376,10 +408,7 @@ pub async fn tasks_read_transcript(
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "task not found".to_string())?;
-    match row.transcript_path {
-        Some(path) => fs::read_to_string(&path).map_err(|e| e.to_string()),
-        None => Ok(String::new()),
-    }
+    Ok(transcript_for_row(&row))
 }
 
 #[tauri::command]
@@ -547,6 +576,52 @@ mod save_transcript_tests {
         let row = store::get_task(&pool, &id).await.unwrap().unwrap();
         assert!(row.transcript_path.is_none());
     }
+}
+
+#[cfg(test)]
+mod transcript_for_row_tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn mem_pool() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        pool
+    }
+
+    /// Pins which `TaskRow` column feeds which `resolve_transcript` param.
+    /// `session_path` and `transcript_path` are both `Option<String>` on
+    /// `TaskRow`, so a transposed call site
+    /// (`resolve_transcript(row.transcript_path.as_deref(),
+    /// row.session_path.as_deref())`) would compile silently — this test
+    /// builds a real row via the store (not hand-assembled args) with
+    /// content distinguishable per source, so a transposition fails it.
+    #[tokio::test]
+    async fn wires_session_path_not_transcript_path_into_the_rendered_source() {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        store::move_task(&pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
+        store::dispatch_for_test(&pool, &id, "tab-x").await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let session_path = dir.path().join("session.jsonl");
+        std::fs::write(&session_path, ONE_TURN_FOR_TEST).unwrap();
+        let transcript_path = dir.path().join("transcript.txt");
+        std::fs::write(&transcript_path, "只有最後一屏").unwrap();
+
+        store::set_session_path(&pool, &id, session_path.to_str().unwrap()).await.unwrap();
+        store::finish_task(&pool, &id, "success", None, Some(transcript_path.to_str().unwrap()))
+            .await
+            .unwrap();
+
+        let row = store::get_task(&pool, &id).await.unwrap().unwrap();
+        let out = transcript_for_row(&row);
+        assert!(out.contains("使用者：做這件事"), "沒有用 session 記錄：{out}");
+        assert!(!out.contains("只有最後一屏"), "把兩個欄位接反了：{out}");
+    }
+
+    const ONE_TURN_FOR_TEST: &str =
+        r#"{"type":"user","message":{"role":"user","content":"做這件事"}}"#;
 }
 
 #[cfg(test)]
