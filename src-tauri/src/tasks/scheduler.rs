@@ -146,24 +146,15 @@ impl Dispatcher for RealDispatcher {
                 &pty, &tab_id, cancel_rx, baselines, monitor::Thresholds::default(), watch_mode,
             ).await;
             let transcript = write_transcript(&pty, &project_path, &task_id, &tab_id);
-            // 完整的逐輪記錄。找不到就什麼都不做——上面剛寫好的
-            // transcript.txt 還在，沒有東西壞掉。
-            if let (Some(sid), Some(root)) =
-                (session_id_for_watch.as_deref(), crate::tasks::session_log::claude_projects_root())
-            {
-                // 參數分成兩組：前三個決定「去哪裡找」，後兩個決定
-                // 「放到哪裡」。`work_dir` 與 `project_path` 都是 `&Path`
-                // 而且意義完全不同（前者是被施工的 repo，後者是卡片所屬的
-                // 專案資料夾），交換了會編譯通過但靜默出錯——所以這裡照著
-                // 分組寫，不要重排。
-                if let Some(path) = crate::tasks::session_log::copy_session_log(
-                    &root, &work_dir, sid, &project_path, &task_id,
-                ) {
-                    let _ = store::set_session_path(&pool, &task_id, &path).await;
-                }
-            }
-            let _ = store::finish_task(
-                &pool, &task_id, outcome.as_str(), outcome.error_message(), transcript.as_deref(),
+            persist_outcome(
+                &pool,
+                crate::tasks::session_log::claude_projects_root().as_deref(),
+                &work_dir,
+                session_id_for_watch.as_deref(),
+                &project_path,
+                &task_id,
+                transcript.as_deref(),
+                &outcome,
             ).await;
             cancels.lock().remove(&task_id);
             let _ = app.emit("tasks-updated", ());
@@ -207,6 +198,51 @@ fn write_transcript(
             None
         }
     }
+}
+
+/// 把一次執行的結果落地：完整的 session 記錄、然後結案。
+///
+/// 從 `RealDispatcher::dispatch` 的 watch closure 裡抽出來，因為那個 closure
+/// 需要 `AppHandle`（`tauri` 依賴沒開 `test` feature，見 dispatch.rs 測試模組
+/// 裡關於 `mock_builder` 的註解），而這一段不需要——抽出來就測得到。
+///
+/// 值得測的是參數的對應關係：`work_dir`（被施工的 repo）決定去
+/// `~/.claude/projects` 的哪個資料夾找，`project_path`（卡片所屬的專案資料夾）
+/// 決定複製到哪裡。兩個都是 `&Path`，交換了會編譯通過但靜默出錯——來源找不到
+/// 看起來就像「沒有 session 檔」，目的地寫錯則沒有任何訊號。
+///
+/// `projects_root` 收 `Option<&Path>` 而不是自己呼叫 `claude_projects_root()`，
+/// 純粹是為了讓測試能注入一棵假的樹。production 傳的就是那個函式的結果。
+///
+/// 順序是有意義的：`session_path` 必須在 `finish_task` 之前寫進去，因為
+/// 呼叫端在 `finish_task` 之後緊接著發 `tasks-updated`，前端重載時該列
+/// 必須已經是完整的。
+async fn persist_outcome(
+    pool: &sqlx::SqlitePool,
+    projects_root: Option<&std::path::Path>,
+    work_dir: &std::path::Path,
+    session_id: Option<&str>,
+    project_path: &std::path::Path,
+    task_id: &str,
+    transcript: Option<&str>,
+    outcome: &monitor::TaskOutcome,
+) {
+    // 完整的逐輪記錄。找不到就什麼都不做——上面剛寫好的 transcript.txt
+    // 還在，沒有東西壞掉。
+    if let (Some(sid), Some(root)) = (session_id, projects_root) {
+        // 參數分成兩組：前三個決定「去哪裡找」，後兩個決定「放到哪裡」。
+        // `work_dir` 與 `project_path` 都是 `&Path` 而且意義完全不同
+        // （前者是被施工的 repo，後者是卡片所屬的專案資料夾），交換了會
+        // 編譯通過但靜默出錯——所以這裡照著分組寫，不要重排。
+        if let Some(path) = crate::tasks::session_log::copy_session_log(
+            root, work_dir, sid, project_path, task_id,
+        ) {
+            let _ = store::set_session_path(pool, task_id, &path).await;
+        }
+    }
+    let _ = store::finish_task(
+        pool, task_id, outcome.as_str(), outcome.error_message(), transcript,
+    ).await;
 }
 
 /// Promote as many queued cards as the rules allow, right now. Shared by the
@@ -903,5 +939,139 @@ mod loop_tests {
             !dispatcher.ids().contains(&ghost),
             "互動卡片也不該從已消失的專案派出去"
         );
+    }
+}
+
+/// `persist_outcome` 從 watch closure 抽出來就是為了讓這裡測得到——不需要
+/// `AppHandle`、不需要 `PtyManager`，只需要一個真的 `SqlitePool` 與一棵
+/// 假的 `~/.claude/projects` 樹。
+#[cfg(test)]
+mod persist_tests {
+    use super::*;
+    use crate::tasks::session_log::encode_project_dir;
+
+    /// 獨立的記憶體 pool，帶完整 schema——比照 `store.rs` 測試模組裡
+    /// `mem_pool` 的寫法（那邊是私有的，這裡自己開一份）。
+    async fn mem_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        pool
+    }
+
+    /// 建一棵假的 `~/.claude/projects` 樹：`<root>/<encode(work_dir)>/<sid>.jsonl`。
+    fn fake_projects_root(work_dir: &std::path::Path, session_id: &str, body: &str) -> tempfile::TempDir {
+        let projects = tempfile::tempdir().unwrap();
+        let dir = projects.path().join(encode_project_dir(work_dir));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{session_id}.jsonl")), body).unwrap();
+        projects
+    }
+
+    async fn queued_and_claimed(pool: &sqlx::SqlitePool) -> String {
+        let id = store::create_task(pool, "t", "", "/r", true, false).await.unwrap();
+        store::move_task(pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
+        assert!(store::claim_for_dispatch(pool, &id).await.unwrap());
+        id
+    }
+
+    /// 抓「參數對調」的測試。`work_dir`（決定去哪裡找）與 `project_path`
+    /// （決定放到哪裡）刻意選成完全不同的路徑——`work_dir` 是一個不存在的
+    /// 假路徑，`project_path` 是真的暫存資料夾。`persist_outcome` 內部若把
+    /// 兩者對調傳給 `copy_session_log`，來源會在錯的資料夾名下找不到 session
+    /// 檔，複製安靜失敗，`session_path` 留空——這裡斷言的正是「兩者都對」，
+    /// 對調了一定紅（已用 mutation 手動驗證，見下面 mutation-verify 的說明）。
+    #[tokio::test]
+    async fn happy_path_copies_the_session_log_and_records_its_path() {
+        let pool = mem_pool().await;
+        let task_id = queued_and_claimed(&pool).await;
+
+        let work_dir = std::path::Path::new("/fake/work/dir");
+        let project = tempfile::tempdir().unwrap();
+        let projects_root = fake_projects_root(work_dir, "SID", "{\"type\":\"user\"}\n");
+
+        persist_outcome(
+            &pool,
+            Some(projects_root.path()),
+            work_dir,
+            Some("SID"),
+            project.path(),
+            &task_id,
+            Some("raw transcript"),
+            &monitor::TaskOutcome::Success,
+        )
+        .await;
+
+        let row = store::get_task(&pool, &task_id).await.unwrap().unwrap();
+        assert_eq!(row.status, "done");
+        assert_eq!(row.outcome.as_deref(), Some("success"));
+        let session_path = row.session_path.expect("session_path 沒被寫入——參數順序可能對調了");
+        assert!(session_path.ends_with("session.jsonl"), "{session_path}");
+        assert_eq!(
+            std::path::Path::new(&session_path).parent().unwrap(),
+            crate::tasks::task_dir(project.path(), &task_id),
+            "沒有存進卡片資料夾——work_dir/project_path 疑似對調了"
+        );
+        assert_eq!(std::fs::read_to_string(&session_path).unwrap(), "{\"type\":\"user\"}\n");
+    }
+
+    /// 沒有 session id（`claude_command` 不是 claude，或使用者沒設定）：
+    /// 不複製，但卡片照樣結案，帶著原本的 transcript／錯誤訊息。
+    #[tokio::test]
+    async fn no_session_id_skips_the_copy_but_still_finishes() {
+        let pool = mem_pool().await;
+        let task_id = queued_and_claimed(&pool).await;
+        let projects_root = tempfile::tempdir().unwrap(); // 有根，但沒有 session id 就不會被碰
+        let project = tempfile::tempdir().unwrap();
+
+        persist_outcome(
+            &pool,
+            Some(projects_root.path()),
+            std::path::Path::new("/fake/work/dir"),
+            None,
+            project.path(),
+            &task_id,
+            Some("raw transcript"),
+            &monitor::TaskOutcome::Failed("boom".to_string()),
+        )
+        .await;
+
+        let row = store::get_task(&pool, &task_id).await.unwrap().unwrap();
+        assert_eq!(row.status, "done");
+        assert_eq!(row.outcome.as_deref(), Some("failed"));
+        assert_eq!(row.error_message.as_deref(), Some("boom"));
+        assert_eq!(row.transcript_path.as_deref(), Some("raw transcript"));
+        assert!(row.session_path.is_none(), "沒有 session id 卻還是複製了");
+    }
+
+    /// 只能觀察最終狀態：`session_path` 與結案欄位都必須被寫入。**這條不
+    /// 證明複製先於結案發生**——那個順序是靠 `persist_outcome` 裡的敘述
+    /// 順序保證的，不是這個測試。如果有人把 `finish_task` 搬到複製區塊
+    /// 之前，這條測試不會注意到（兩個寫入的最終狀態不變，順序本身沒有
+    /// 可觀察的副作用）。
+    #[tokio::test]
+    async fn both_the_session_path_and_the_finish_fields_end_up_persisted() {
+        let pool = mem_pool().await;
+        let task_id = queued_and_claimed(&pool).await;
+
+        let work_dir = std::path::Path::new("/fake/work/dir2");
+        let project = tempfile::tempdir().unwrap();
+        let projects_root = fake_projects_root(work_dir, "SID2", "{}\n");
+
+        persist_outcome(
+            &pool,
+            Some(projects_root.path()),
+            work_dir,
+            Some("SID2"),
+            project.path(),
+            &task_id,
+            None,
+            &monitor::TaskOutcome::Cancelled,
+        )
+        .await;
+
+        let row = store::get_task(&pool, &task_id).await.unwrap().unwrap();
+        assert_eq!(row.status, "done");
+        assert_eq!(row.outcome.as_deref(), Some("cancelled"));
+        assert!(row.session_path.is_some(), "session_path 沒被寫入");
     }
 }
