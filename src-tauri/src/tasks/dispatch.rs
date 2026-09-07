@@ -42,6 +42,11 @@ pub fn build_prompt(body: &str, attachment_paths: &[String]) -> String {
 /// 加引號也沒用——這裡沒有引號感知。刻意不處理：要正確處理得引進一個
 /// shell 語法的 tokenizer，而這個情況的失敗方向是安全的（那張卡片退回
 /// transcript.txt，派工照樣跑），不值得為它擴大範圍。
+///
+/// 比對前轉小寫是為了 Windows（`CLAUDE.EXE` 跟 `claude.exe` 是同一個檔案）。
+/// Unix 的檔名大小寫敏感，所以嚴格說這在 Unix 上偏寬——真的有人把不相干的
+/// 執行檔命名為 `Claude` 的話會被誤認。實務上碰不到，刻意接受，記在這裡是
+/// 為了讓讀的人知道這是權衡過的，不是漏看的。
 pub fn looks_like_claude(command: &str) -> bool {
     let Some(first) = command.split_whitespace().next() else {
         return false;
@@ -314,13 +319,19 @@ mod tests {
     }
 
     /// 這是這個函式存在的理由：非 claude 的指令不能被接上旗標，否則直接
-    /// 啟動失敗。`claude-code` 這種名字相近但不同的指令也必須是 false——
-    /// 只用 `contains("claude")` 的實作會在這裡壞掉。
+    /// 啟動失敗。名字相近的必須是 false——前綴碰撞（`claude-code`）與
+    /// 後綴碰撞（`notclaude`）各要一個案例：
+    ///
+    /// - 只用 `contains("claude")` 的實作會在 `claude-code` 上壞掉
+    /// - 不切分隔符、改用 `ends_with("claude")` 的實作會在 `notclaude`
+    ///   上壞掉，而且那個實作能讓其餘每一條斷言都通過（實測過）
     #[test]
     fn a_non_claude_command_does_not_get_one() {
         assert!(!looks_like_claude("codex"));
         assert!(!looks_like_claude("bash -lc 'echo hi'"));
         assert!(!looks_like_claude("claude-code"));
+        assert!(!looks_like_claude("notclaude"));
+        assert!(!looks_like_claude(r"/usr/local/bin/notclaude"));
         assert!(!looks_like_claude(""));
     }
 
