@@ -71,6 +71,52 @@ pub fn launch_command(command: &str, session_id: Option<&str>) -> String {
     }
 }
 
+/// 信任畫面上「我信任這個資料夾」那一個選項的文字，**已去掉所有空白**。
+/// Claude Code 的 TUI 用游標移動排版，PTY 輸出裡一個空白位元組都沒有
+/// （實測），所以比對只能在去空白之後做。
+const TRUST_YES_OPTION: &str = "Yes,Itrustthisfolder";
+/// 目前選中的那一行的游標符號。
+const TRUST_CURSOR: char = '❯';
+
+/// 這個畫面停在資料夾信任提示上時，回傳「把選擇移到『我信任這個資料夾』
+/// 並確認」要送的按鍵；不是那個畫面、或定位不到就回 `None`。
+///
+/// `screen` 是 `PtyManager::get_recent_output` 的輸出（ANSI 已剝除）。
+///
+/// 為什麼不寫死「往下一次再 Enter」：預設選中的是 `No, exit`，而選項順序
+/// 隨時可能被 Claude Code 改掉或對調。寫死方向的實作在那一天會反過來按到
+/// `No, exit`，把使用者的派工直接殺掉。改成在畫面上同時定位游標行與 Yes
+/// 那一行、算相對位移，任何一個找不到就回 `None`——什麼都不送，退回現行
+/// 行為（卡住偵測收掉）。風險因此從「可能誤殺派工」降到「可能不生效」。
+pub fn trust_prompt_keys(screen: &str) -> Option<Vec<u8>> {
+    // 去掉所有空白之後才比對；空行整行丟掉，這樣「游標行」與「Yes 行」
+    // 的距離就是實際的按鍵次數，不會被排版用的空行灌水。
+    let lines: Vec<String> = screen
+        .lines()
+        .map(|l| l.chars().filter(|c| !c.is_whitespace()).collect::<String>())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    // 選項那一行就只有選項本身（可能前面帶游標符號），不是夾在句子裡的
+    // 一段話——後者代表有人剛好提到這句話，不是信任畫面。
+    let yes = lines.iter().position(|l| {
+        l.trim_start_matches(TRUST_CURSOR) == TRUST_YES_OPTION
+    })?;
+    let cursor = lines.iter().position(|l| l.starts_with(TRUST_CURSOR))?;
+
+    let mut keys = Vec::new();
+    let (step, times) = if yes >= cursor {
+        (&b"\x1b[B"[..], yes - cursor)
+    } else {
+        (&b"\x1b[A"[..], cursor - yes)
+    };
+    for _ in 0..times {
+        keys.extend_from_slice(step);
+    }
+    keys.extend_from_slice(b"\r");
+    Some(keys)
+}
+
 /// Max wait for `claude` to finish its cold start (spec measured ~3.7s) before
 /// we type the prompt. If it's still noisy at this point we send anyway.
 const SETTLE_TIMEOUT_MS: u64 = 30_000;
@@ -351,6 +397,86 @@ mod tests {
     #[test]
     fn launch_command_is_the_command_verbatim_without_a_session_id() {
         assert_eq!(launch_command("codex", None), "codex");
+    }
+
+    /// 真實抓下來的信任畫面：實跑 `claude` 進一個未信任的資料夾、擷取原始
+    /// PTY bytes、過 `strip_ansi` 之後的結果。
+    ///
+    /// 字與字之間真的沒有空白——Claude Code 的 TUI 用游標移動排版，整份
+    /// 輸出裡一個 0x20 都沒有（實測）。所以 `contains("Yes, I trust this
+    /// folder")` 這種帶空白的比對永遠不會命中。
+    const REAL_TRUST_SCREEN: &str = "\
+────────────────────────────────────────────────────────────────────────────────
+Accessingworkspace:
+
+/private/tmp/probe/trustprobe-23565
+
+Quicksafetycheck:Isthisaprojectyoucreatedoroneyoutrust?(Likeyour
+owncode,awell-knownopensourceproject,orworkfromyourteam).Ifnot,
+takeamomenttoreviewwhat'sinthisfolderfirst.
+
+ClaudeCode'llbeabletoread,edit,andexecutefileshere.
+
+Securityguide
+
+❯No,exit
+Yes,Itrustthisfolder
+
+Entertoconfirm·Esctocancel
+";
+
+    const DOWN: &[u8] = b"\x1b[B";
+    const UP: &[u8] = b"\x1b[A";
+
+    /// 真實畫面：游標在 No 上、Yes 在下一行 → 往下一次再 Enter。
+    #[test]
+    fn moves_down_to_reach_yes_on_the_real_screen() {
+        assert_eq!(
+            trust_prompt_keys(REAL_TRUST_SCREEN),
+            Some([DOWN, b"\r"].concat())
+        );
+    }
+
+    /// 選項對調（Yes 在上、游標停在下面的 No）→ 必須往**上**。
+    /// 寫死「往下一次」的實作會在這裡按到 No, exit，把派工直接殺掉——
+    /// 這個測試就是為了擋那件事而存在的。
+    #[test]
+    fn moves_up_when_the_options_are_swapped() {
+        let swapped = REAL_TRUST_SCREEN
+            .replace("❯No,exit\nYes,Itrustthisfolder", "Yes,Itrustthisfolder\n❯No,exit");
+        assert_eq!(trust_prompt_keys(&swapped), Some([UP, b"\r"].concat()));
+    }
+
+    /// 游標已經停在 Yes 上 → 只送 Enter，一次都不要動。
+    #[test]
+    fn just_confirms_when_the_cursor_is_already_on_yes() {
+        let already = REAL_TRUST_SCREEN
+            .replace("❯No,exit\nYes,Itrustthisfolder", "No,exit\n❯Yes,Itrustthisfolder");
+        assert_eq!(trust_prompt_keys(&already), Some(b"\r".to_vec()));
+    }
+
+    /// 不是信任畫面就什麼都不送。
+    #[test]
+    fn sends_nothing_on_an_ordinary_screen() {
+        assert_eq!(trust_prompt_keys("$ ls\nsrc  target\n"), None);
+        assert_eq!(trust_prompt_keys(""), None);
+    }
+
+    /// 認得出 Yes 那一行、卻找不到游標（UI 改版換掉了 `❯`）→ 什麼都不送。
+    /// 猜一個方向亂按有可能按到 No, exit；不送最壞只是退回現行行為
+    /// （卡住偵測收掉），永遠不會弄壞東西。
+    #[test]
+    fn sends_nothing_when_the_cursor_cannot_be_located() {
+        let no_cursor = REAL_TRUST_SCREEN.replace('❯', " ");
+        assert_eq!(trust_prompt_keys(&no_cursor), None);
+    }
+
+    /// 只是有人在聊天裡提到這句話，不該被當成信任畫面——畫面上必須同時
+    /// 有游標與那一整行選項。
+    #[test]
+    fn does_not_fire_on_a_mention_of_the_phrase_in_prose() {
+        let prose = "❯somethingelse\nItoldyouYes,Itrustthisfolderisthewording\n";
+        assert_eq!(trust_prompt_keys(prose), None);
     }
 
     use crate::pty::manager::PtyManager;
