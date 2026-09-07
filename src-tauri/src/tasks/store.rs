@@ -1130,11 +1130,15 @@ mod session_column_tests {
     async fn set_session_id_round_trips() {
         let pool = mem_pool().await;
         let id = a_task(&pool).await;
+        // 先放一個值進另一欄，這樣「只動這一欄」才驗得出來——不先設的話
+        // session_path 本來就是 None，正確與錯誤的實作結果相同。
+        set_session_path(&pool, &id, "/keep/me.jsonl").await.unwrap();
+
         set_session_id(&pool, &id, "3f2a-uuid").await.unwrap();
+
         let row = get_task(&pool, &id).await.unwrap().unwrap();
         assert_eq!(row.session_id.as_deref(), Some("3f2a-uuid"));
-        // 只動這一欄，別的欄位不受影響。
-        assert_eq!(row.session_path, None);
+        assert_eq!(row.session_path.as_deref(), Some("/keep/me.jsonl"), "動到了不該動的欄位");
     }
 
     #[tokio::test]
@@ -1159,6 +1163,64 @@ mod session_column_tests {
 
         let row = get_task(&pool, &id).await.unwrap().unwrap();
         assert_eq!(row.session_path, None, "上一次執行的 session_path 殘留了");
+    }
+
+    /// 現有使用者的 `tasks.db` 走的是 `ALTER TABLE` 那條路，不是
+    /// `CREATE TABLE`——而其他測試全都建全新的記憶體資料庫，永遠只走後者。
+    ///
+    /// 這條路的錯誤是被 `let _ =` 刻意吞掉的，所以語句寫錯不會有任何訊號：
+    /// 欄位沒加上去，`SELECT *` 配 `FromRow` 就找不到欄位，`get_task` 直接
+    /// 失敗，看板對**每一個現有使用者**壞掉，而全部測試照樣綠。
+    #[tokio::test]
+    async fn init_schema_migrates_a_database_that_predates_the_session_columns() {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+
+        // 舊 schema：完全沒有 session_id / session_path。
+        sqlx::query(
+            "CREATE TABLE tasks (
+                id              TEXT PRIMARY KEY NOT NULL,
+                title           TEXT NOT NULL,
+                body            TEXT NOT NULL DEFAULT '',
+                project_dir     TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'planning',
+                parallel_ok     INTEGER NOT NULL DEFAULT 1,
+                interactive     INTEGER NOT NULL DEFAULT 0,
+                sort_order      REAL NOT NULL DEFAULT 0,
+                outcome         TEXT,
+                tab_id          TEXT,
+                transcript_path TEXT,
+                error_message   TEXT,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                dispatched_at   INTEGER,
+                finished_at     INTEGER,
+                ai_summary      TEXT,
+                archived_at     INTEGER
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO tasks (id, title, body, project_dir) VALUES ('old1', 't', 'b', '/work/repo')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // 這一步必須把兩個新欄位補上去。
+        crate::tasks::init_schema(&pool).await.unwrap();
+
+        // 讀得回來就證明欄位真的加上去了——`SELECT *` 配 `FromRow` 在欄位
+        // 缺席時會直接失敗，所以這個 unwrap 就是斷言本身。
+        let row = get_task(&pool, "old1").await.unwrap().unwrap();
+        assert_eq!(row.session_id, None);
+        assert_eq!(row.session_path, None);
+        assert_eq!(row.title, "t", "舊資料不該在遷移中掉失");
+
+        // 遷移之後 setter 也要真的能寫。
+        set_session_path(&pool, "old1", "/p/session.jsonl").await.unwrap();
+        assert_eq!(
+            get_task(&pool, "old1").await.unwrap().unwrap().session_path.as_deref(),
+            Some("/p/session.jsonl")
+        );
     }
 }
 
