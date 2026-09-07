@@ -388,4 +388,31 @@ mod copy_tests {
         let dest = copy_session_log(projects.path(), project.path(), "card1", real.path(), "SID");
         assert!(dest.is_some(), "沒有試 canonicalize 後的路徑候選");
     }
+
+    /// 重新派工會產生新的 UUID 與新的 session 檔，`session.jsonl` **直接覆蓋**
+    /// （見設計規格第 8 節）。
+    ///
+    /// 這條靠的是 `std::fs::copy` 覆蓋目的檔的保證，但我們的程式碼沒有把這個
+    /// 依賴寫下來——日後有人好心加上「目的檔已存在就不覆蓋」的護欄，重新派工
+    /// 的卡片就會顯示**上一次執行**的記錄。那比退回 transcript.txt 更糟：
+    /// 看起來有內容，內容卻是錯的。所以要有測試把這個要求釘住。
+    #[test]
+    fn a_second_dispatch_overwrites_the_previous_session_log() {
+        let work = Path::new("/work/repo");
+        let (projects, project) = fake_tree(work, "OLD", "第一次執行\n");
+        let first = copy_session_log(projects.path(), project.path(), "card1", work, "OLD").unwrap();
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "第一次執行\n");
+
+        // 第二次派工：新的 session id、新的內容，同一張卡片。
+        let dir = projects.path().join(encode_project_dir(work));
+        std::fs::write(dir.join("NEW.jsonl"), "第二次執行\n").unwrap();
+        let second = copy_session_log(projects.path(), project.path(), "card1", work, "NEW").unwrap();
+
+        assert_eq!(second, first, "第二次應該寫到同一個 session.jsonl");
+        assert_eq!(
+            std::fs::read_to_string(&second).unwrap(),
+            "第二次執行\n",
+            "舊的內容沒有被覆蓋掉"
+        );
+    }
 }
