@@ -876,11 +876,28 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
         assert!(looks_like_claude("claude --dangerously-skip-permissions"));
     }
 
-    /// 絕對路徑與 Windows 的 .exe 都算。
+    /// 絕對路徑與 Windows 的 `.exe` 都算。
+    ///
+    /// Windows 那一條在 mac 上也必須綠——分隔符是自己切的，不靠平台相依的
+    /// `Path::file_name()`（見 `looks_like_claude` 的註解）。這個斷言就是
+    /// 那個決定的守門員：改回 `file_name()` 的話它會在 mac 上紅。
     #[test]
     fn an_absolute_path_to_claude_counts() {
         assert!(looks_like_claude("/opt/homebrew/bin/claude"));
-        assert!(looks_like_claude(r"C:\Program Files\claude.exe --verbose"));
+        assert!(looks_like_claude(r"C:\tools\claude.exe --verbose"));
+    }
+
+    /// 已知限制，寫成測試而不是留在註解裡：路徑含空格時會被
+    /// `split_whitespace` 切斷，於是認不出來。
+    ///
+    /// 這是**刻意**接受的——失敗方向是安全的（那張卡片退回 transcript.txt，
+    /// 派工照樣跑），而正確處理要引進 shell 語法的 tokenizer。把它釘成測試
+    /// 是為了讓日後有人真的去修時，是主動改掉一條紅線，而不是意外碰到一個
+    /// 沒人知道存在的行為。
+    #[test]
+    fn a_path_with_spaces_is_not_recognised_and_that_is_accepted() {
+        assert!(!looks_like_claude(r"C:\Program Files\claude.exe"));
+        assert!(!looks_like_claude(r#""C:\Program Files\claude.exe""#));
     }
 
     /// 這是這個函式存在的理由：非 claude 的指令不能被接上旗標，否則直接
@@ -930,14 +947,26 @@ Expected: 編譯失敗，`cannot find function `looks_like_claude``。
 ///
 /// 認錯的代價是不對稱的：漏認只是這張卡片退回舊的 transcript.txt，誤認
 /// 是整個派工壞掉。所以比對用相等而不是包含（`claude-code` 必須是 false）。
+///
+/// 分隔符自己切，不用 `Path::file_name()`：那個是平台相依的，在 macOS 上
+/// `Path::new(r"C:\claude.exe").file_name()` 會回傳整串（`\` 不是 Unix 的
+/// 分隔符），Windows 路徑因此在 mac 的 CI 上永遠對不上。同一個理由讓
+/// `session_log::encode_project_dir` 也自己處理 `/` 與 `\`。
+///
+/// **已知限制**：路徑含空格時（例如 `C:\Program Files\claude.exe`）
+/// `split_whitespace` 會在空格處切斷，拿到 `C:\Program`，於是回傳 false。
+/// 加引號也沒用——這裡沒有引號感知。刻意不處理：要正確處理得引進一個
+/// shell 語法的 tokenizer，而這個情況的失敗方向是安全的（那張卡片退回
+/// transcript.txt，派工照樣跑），不值得為它擴大範圍。
 pub fn looks_like_claude(command: &str) -> bool {
     let Some(first) = command.split_whitespace().next() else {
         return false;
     };
-    let name = std::path::Path::new(first)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
+    let name = first
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(first)
+        .to_lowercase();
     name == "claude" || name == "claude.exe"
 }
 
