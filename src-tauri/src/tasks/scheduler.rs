@@ -138,7 +138,9 @@ impl Dispatcher for RealDispatcher {
         let cancels = self.cancels.clone();
         let task_id = task.id.clone();
         let work_dir = std::path::PathBuf::from(&task.project_dir);
-        let session_id_for_watch = session_id.clone();
+        // move 而不是 clone——上面兩處用的都是 `as_deref()`，`session_id`
+        // 之後不再被碰。
+        let session_id_for_watch = session_id;
         let baselines = monitor::Baselines { bell: disp.bell_baseline, marker: disp.marker_baseline };
         let watch_mode = if task.interactive { monitor::WatchMode::Interactive } else { monitor::WatchMode::Auto };
         tauri::async_runtime::spawn(async move {
@@ -237,7 +239,14 @@ async fn persist_outcome(
         if let Some(path) = crate::tasks::session_log::copy_session_log(
             root, work_dir, sid, project_path, task_id,
         ) {
-            let _ = store::set_session_path(pool, task_id, &path).await;
+            // 這一條比 `set_session_id` 的失敗嚴重得多，所以同樣要留下
+            // 線索：檔案此刻已經躺在卡片資料夾裡了，路徑寫不進去的話它
+            // 就變成沒有任何東西指向的孤兒，而使用者只會看到記錄莫名其妙
+            // 退回終端機擷取。`set_session_id` 失敗則無害——watch closure
+            // 手上本來就有自己的複本。
+            if let Err(e) = store::set_session_path(pool, task_id, &path).await {
+                eprintln!("set_session_path {task_id}: {e}");
+            }
         }
     }
     let _ = store::finish_task(
