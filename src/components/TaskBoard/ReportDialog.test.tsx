@@ -65,6 +65,8 @@ vi.mock("../../ipc/usage", () => ({
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import { ReportDialog } from "./ReportDialog";
 import type { ProviderInfo } from "../../ipc/provider";
+// 純型別 import，編譯時就被抹掉，不會跟上面對 ipc/tasks 的 vi.mock 打架。
+import type { TaskWithAttachments } from "../../ipc/tasks";
 
 const PROVIDERS: ProviderInfo[] = [
   {
@@ -100,7 +102,11 @@ describe("ReportDialog", () => {
     confirmDialog.mockResolvedValue(true);
   });
 
-  const taskCard = (over: Record<string, unknown> = {}) => ({
+  // 標上型別（跟 index.test.tsx / reportPrompts.test.ts 一致）——原本是
+  // `Record<string, unknown>`，等於這個 fixture 從來沒被拿去對照 TaskRow
+  // 檢查過。加 session_id / session_path 兩欄時 tsc 只在另外兩個檔案報錯，
+  // 這裡靜悄悄地漏掉了，日後 TaskRow 再多必要欄位也一樣不會有紅燈。
+  const taskCard = (over: Partial<TaskWithAttachments> = {}): TaskWithAttachments => ({
     id: "t1", title: "卡片", body: "", project_dir: "/r", status: "done",
     parallel_ok: true, interactive: false, sort_order: 1, outcome: "success",
     tab_id: null, transcript_path: null, error_message: null,
