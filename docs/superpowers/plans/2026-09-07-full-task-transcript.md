@@ -159,7 +159,7 @@ mod encode_tests {
 - [ ] **Step 3: 跑測試，確認它紅**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::session_log 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::session_log 2>&1 | tail -20
 ```
 
 Expected: 編譯失敗，`cannot find function `encode_project_dir` in this scope`。
@@ -187,7 +187,7 @@ pub fn encode_project_dir(dir: &Path) -> String {
 - [ ] **Step 5: 跑測試，確認它綠**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::session_log 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::session_log 2>&1 | tail -20
 ```
 
 Expected: `test result: ok. 3 passed`。
@@ -328,7 +328,7 @@ mod render_tests {
 - [ ] **Step 3: 跑測試，確認它紅**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::session_log 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::session_log 2>&1 | tail -20
 ```
 
 Expected: 編譯失敗，`cannot find function `render_session_log` in this scope`。
@@ -421,7 +421,7 @@ fn first_arg_summary(input: Option<&serde_json::Value>) -> String {
 - [ ] **Step 5: 跑測試，確認它綠**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::session_log 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::session_log 2>&1 | tail -20
 ```
 
 Expected: `test result: ok. 10 passed`（Task 1 的 3 個 + 這裡的 7 個）。
@@ -521,7 +521,7 @@ mod copy_tests {
 - [ ] **Step 2: 跑測試，確認它紅**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::session_log 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::session_log 2>&1 | tail -20
 ```
 
 Expected: 編譯失敗，`cannot find function `copy_session_log` in this scope`。
@@ -598,7 +598,7 @@ Expected: 在 `[dev-dependencies]` 底下看到 `tempfile`。若沒有，加上 
 - [ ] **Step 5: 跑測試，確認它綠**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::session_log 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::session_log 2>&1 | tail -20
 ```
 
 Expected: `test result: ok. 13 passed`。
@@ -692,7 +692,7 @@ mod session_column_tests {
 - [ ] **Step 2: 跑測試，確認它紅**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::store::session_column 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::store::session_column 2>&1 | tail -20
 ```
 
 Expected: 編譯失敗，`no field `session_id` on type `TaskRow``。
@@ -785,7 +785,7 @@ pub async fn set_session_path(pool: &SqlitePool, id: &str, path: &str) -> Result
 - [ ] **Step 6: 跑測試，確認它綠**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks:: 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks:: 2>&1 | tail -20
 ```
 
 Expected: 全綠。`SELECT *` 搭配 `FromRow` 會自動帶上新欄位，其他查詢不必改。
@@ -862,7 +862,7 @@ Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
 - [ ] **Step 2: 跑測試，確認它紅**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::dispatch 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::dispatch 2>&1 | tail -20
 ```
 
 Expected: 編譯失敗，`cannot find function `looks_like_claude``。
@@ -908,7 +908,7 @@ pub fn launch_command(command: &str, session_id: Option<&str>) -> String {
 - [ ] **Step 4: 跑測試，確認它綠**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::dispatch 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::dispatch 2>&1 | tail -20
 ```
 
 Expected: 上面六個新測試全綠。
@@ -1376,7 +1376,7 @@ Entertoconfirm·Esctocancel
 - [ ] **Step 2: 跑測試，確認它紅**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::dispatch::tests::trust 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::dispatch::tests::trust 2>&1 | tail -20
 ```
 
 Expected: 編譯失敗，`cannot find function `trust_prompt_keys``。
@@ -1436,7 +1436,7 @@ pub fn trust_prompt_keys(screen: &str) -> Option<Vec<u8>> {
 - [ ] **Step 4: 跑測試，確認它綠**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::dispatch 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::dispatch 2>&1 | tail -20
 ```
 
 Expected: 六個新測試全綠。
@@ -1534,7 +1534,7 @@ Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
 - [ ] **Step 2: 跑測試，確認它紅**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::dispatch::tests::accepts_the_trust 2>&1 | tail -20
+cd src-tauri && cargo test --lib tasks::dispatch::tests::accepts_the_trust 2>&1 | tail -20
 ```
 
 Expected: 斷言失敗，`沒有送出移動到 Yes 的按鍵`。
@@ -1599,7 +1599,7 @@ async fn wait_until_settled(pty: &PtyManager, tab_id: &str) {
 - [ ] **Step 4: 跑測試，確認它綠，而且既有的三個 settle 測試沒被弄壞**
 
 ```bash
-cd src-tauri && cargo test --package aiterm --lib tasks::dispatch 2>&1 | tail -25
+cd src-tauri && cargo test --lib tasks::dispatch 2>&1 | tail -25
 ```
 
 Expected: 全綠，特別確認 `does_not_settle_while_the_tui_has_not_started_yet`、`settles_once_the_tui_is_up_and_quiet`、`a_non_tui_command_still_settles_on_the_longer_quiet_window` 三個都還在。
