@@ -901,13 +901,19 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
     }
 
     /// 這是這個函式存在的理由：非 claude 的指令不能被接上旗標，否則直接
-    /// 啟動失敗。`claude-code` 這種名字相近但不同的指令也必須是 false——
-    /// 只用 `contains("claude")` 的實作會在這裡壞掉。
+    /// 啟動失敗。名字相近的必須是 false——前綴碰撞（`claude-code`）與
+    /// 後綴碰撞（`notclaude`）各要一個案例：
+    ///
+    /// - 只用 `contains("claude")` 的實作會在 `claude-code` 上壞掉
+    /// - 不切分隔符、改用 `ends_with("claude")` 的實作會在 `notclaude`
+    ///   上壞掉，而且那個實作能讓其餘每一條斷言都通過（實測過）
     #[test]
     fn a_non_claude_command_does_not_get_one() {
         assert!(!looks_like_claude("codex"));
         assert!(!looks_like_claude("bash -lc 'echo hi'"));
         assert!(!looks_like_claude("claude-code"));
+        assert!(!looks_like_claude("notclaude"));
+        assert!(!looks_like_claude(r"/usr/local/bin/notclaude"));
         assert!(!looks_like_claude(""));
     }
 
