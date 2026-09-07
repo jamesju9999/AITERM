@@ -33,6 +33,10 @@ export interface TaskRow {
   ai_summary: string | null;
   /** 封存時間（Unix 秒）。有值代表已經從看板上收起來，資料仍完整保留。 */
   archived_at: number | null;
+  /** 這次派工給 `claude --session-id` 的 UUID。指令不是 claude 時是 null。 */
+  session_id: string | null;
+  /** 複製進卡片資料夾的 session.jsonl 路徑。有值代表有完整的逐輪記錄。 */
+  session_path: string | null;
 }
 
 export interface TaskWithAttachments extends TaskRow {
