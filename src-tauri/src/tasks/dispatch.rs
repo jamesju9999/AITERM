@@ -179,9 +179,17 @@ const ALT_SCREEN_ENTER: &[u8] = b"\x1b[?1049h";
 /// So: require the alternate-screen sequence *and* quiet. Commands that
 /// never enter it (a `claude_command` that isn't a TUI) fall back to the
 /// longer `NO_TUI_QUIET_MS` window rather than waiting out the deadline.
+///
+/// 另外在同一個迴圈裡順便處理資料夾信任提示。沒信任過的目錄會讓 `claude`
+/// 停在「Quick safety check」畫面上，而那時替代畫面序列早就送過、畫面也
+/// 安靜了——兩個條件都成立，所以不特別處理的話提示詞會被打進對話框裡，
+/// 卡片看起來在執行、實際上什麼都沒發生。見 `trust_prompt_keys`。
 async fn wait_until_settled(pty: &PtyManager, tab_id: &str) {
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(SETTLE_TIMEOUT_MS);
+    let mut deadline = tokio::time::Instant::now() + Duration::from_millis(SETTLE_TIMEOUT_MS);
     let mut tui_started = false;
+    // 只送一次。信任畫面的位元組會留在輸出環裡，接受之後再比對還是會命中，
+    // 不 latch 就會一直重送按鍵。
+    let mut trust_handled = false;
     loop {
         // Latch it: the raw ring is bounded, and a chatty TUI can push the
         // sequence out of the window it was found in.
@@ -192,6 +200,23 @@ async fn wait_until_settled(pty: &PtyManager, tab_id: &str) {
                     b.windows(ALT_SCREEN_ENTER.len()).any(|w| w == ALT_SCREEN_ENTER)
                 });
         }
+
+        // 信任提示的檢查一定要排在 settled 判斷之前：那個畫面出現時 TUI
+        // 已經啟動、畫面也已經安靜，兩個條件都成立，先判 settled 就會把
+        // 提示詞打進信任對話框裡。
+        if !trust_handled {
+            if let Some(keys) =
+                pty.get_recent_output(tab_id, 16 * 1024).as_deref().and_then(trust_prompt_keys)
+            {
+                let _ = pty.write(tab_id, &keys);
+                trust_handled = true;
+                // 接受之後 claude 才真正開始啟動，重新給它完整的等待預算。
+                deadline = tokio::time::Instant::now() + Duration::from_millis(SETTLE_TIMEOUT_MS);
+                tokio::time::sleep(Duration::from_millis(POLL_MS)).await;
+                continue;
+            }
+        }
+
         let quiet = pty.ms_since_output(tab_id).unwrap_or(u64::MAX);
         let settled = if tui_started { quiet >= SETTLE_QUIET_MS } else { quiet >= NO_TUI_QUIET_MS };
         if settled || tokio::time::Instant::now() >= deadline {
@@ -580,6 +605,77 @@ Enter to confirm · Esc to cancel
         )
         .await;
         assert!(settled.is_ok(), "a non-TUI command never settled");
+    }
+
+    /// 停在信任畫面時不可以判定 settled——那樣會把提示詞打進信任對話框裡。
+    ///
+    /// 手法照抄同檔案的 `run_on_session_sends_a_multiline_prompt_verbatim_
+    /// then_a_standalone_cr`：把 pty 切進 raw 模式關掉回音，再 `od` 讀出
+    /// 我們實際寫進去的位元組。不看「回音」是因為 canonical 模式的終端機會
+    /// 把 ESC 顯示成 `^[`，那樣斷言驗到的是終端機的顯示規則，不是我們寫了
+    /// 什麼——見 feedback「沒有失敗訊號不等於正確」。
+    ///
+    /// 畫面先印替代畫面序列讓 `tui_started` latch 起來（模擬 claude 已經
+    /// 啟動），再印真實信任畫面的三行。
+    ///
+    /// `❯` 直接寫字面的 UTF-8 字元、用 `%s` 印，**不要**寫成 `\342\235\257`
+    /// 配 `%b`：`printf %b` 的八進位解碼是殼相依的。zsh 的內建 printf
+    /// 不解碼（實測 `zsh -c "printf '%b\n' '\342\235\257X'"` 吐出的是字面
+    /// 的 `\342\235\257X`），而 `pty/shell.rs` 的 `unix_default_shell()`
+    /// 讀的是 `$SHELL`——macOS 從 Catalina 起預設就是 zsh。所以那個寫法會
+    /// 讓游標行永遠定位不到，測試在多數 mac 上恆紅，而且是「因為畫面根本
+    /// 沒印對」而紅，不是因為實作有問題。字面字元三種殼都會原樣輸出。
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn accepts_the_trust_prompt_before_declaring_the_session_settled() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(settle_size(), |_| {}).unwrap();
+
+        // `'MARK''READY'` 用串接寫，這樣被回音出來的指令本身不含連續的
+        // marker（同上，照抄那個測試的手法）。N = 4：`\x1b[B` 加 `\r`。
+        #[cfg(not(windows))]
+        pty.write(
+            &tab,
+            b"stty raw -echo; printf '\\033[?1049h'; \
+              printf '%s\\n' 'Quicksafetycheck:' '\xe2\x9d\xafNo,exit' 'Yes,Itrustthisfolder'; \
+              printf 'MARK''READY'; od -An -tx1 -N 4\n",
+        )
+        .unwrap();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let out = pty.get_recent_output(&tab, 16 * 1024).unwrap_or_default();
+            if out.contains("MARKREADY") {
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "信任畫面沒有印出來：{out}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        let _ = tokio::time::timeout(
+            Duration::from_millis(NO_TUI_QUIET_MS + 2_000),
+            wait_until_settled(&pty, &tab),
+        )
+        .await;
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let hex: Vec<String> = loop {
+            let out = pty.get_recent_output(&tab, 16 * 1024).unwrap_or_default();
+            let after = out.split("MARKREADY").nth(1).unwrap_or("").to_string();
+            let hex: Vec<String> = after
+                .split_whitespace()
+                .filter(|t| t.len() == 2 && t.chars().all(|c| c.is_ascii_hexdigit()))
+                .map(str::to_string)
+                .collect();
+            if hex.len() >= 4 {
+                break hex;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "沒有送出任何按鍵：{out}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+
+        // ESC [ B CR — 往下一格（Yes 在 No 下面）再確認。
+        assert_eq!(&hex[..4], ["1b", "5b", "42", "0d"], "送出的按鍵不對：{hex:?}");
     }
 
     #[tokio::test]
