@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import { getTaskBoardConfig, setTaskBoardConfig, type TaskBoardConfig } from "../../ipc/tasks";
+import "./TaskBoardPage.css";
 
 export function TaskBoardPage() {
   const { t } = useLocale();
@@ -30,34 +31,39 @@ export function TaskBoardPage() {
   return (
     <div className="task-board-page">
       <h2>{t.board_settings_title}</h2>
-      <p>{t.board_settings_desc}</p>
+      <p className="task-board-desc">{t.board_settings_desc}</p>
 
-      <label>
-        {t.board_settings_max_concurrent}
-        <input
-          type="number"
-          min={1}
-          max={16}
-          value={Number.isNaN(cfg.max_concurrent) ? "" : cfg.max_concurrent}
-          onChange={(e) => {
-            setSaved(false);
-            setCfg({ ...cfg, max_concurrent: e.target.valueAsNumber });
-          }}
-        />
-      </label>
+      <section className="task-board-section">
+        <label className="task-board-field">
+          <span>{t.board_settings_max_concurrent}</span>
+          <input
+            type="number"
+            min={1}
+            max={16}
+            value={Number.isNaN(cfg.max_concurrent) ? "" : cfg.max_concurrent}
+            onChange={(e) => {
+              setSaved(false);
+              setCfg({ ...cfg, max_concurrent: e.target.valueAsNumber });
+            }}
+          />
+          <span className="task-board-hint">{t.board_settings_max_concurrent_hint}</span>
+        </label>
 
-      <label>
-        {t.board_settings_claude_command}
-        <input
-          value={cfg.claude_command}
-          onChange={(e) => {
-            setSaved(false);
-            setCfg({ ...cfg, claude_command: e.target.value });
-          }}
-        />
-      </label>
+        <label className="task-board-field">
+          <span>{t.board_settings_claude_command}</span>
+          <input
+            type="text"
+            value={cfg.claude_command}
+            onChange={(e) => {
+              setSaved(false);
+              setCfg({ ...cfg, claude_command: e.target.value });
+            }}
+          />
+          <span className="task-board-hint">{t.board_settings_claude_command_hint}</span>
+        </label>
+      </section>
 
-      <div>
+      <div className="task-board-actions">
         <button onClick={() => void save()} disabled={saving}>
           {saved ? `${t.board_settings_saved} ✓` : t.board_save}
         </button>

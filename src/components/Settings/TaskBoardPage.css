@@ -1,0 +1,61 @@
+/* 這一頁原本完全沒有樣式表，靠瀏覽器預設值渲染——標籤與輸入框擠在同一
+   行、按鈕是系統原生樣子，跟其他設定頁完全不一致。類別命名與數值刻意
+   照 McpToolServerPage.css，兩頁並排看不出差別才算對齊。 */
+
+.task-board-page {
+  padding: 24px;
+  max-width: 640px;
+}
+
+.task-board-desc {
+  color: var(--text-secondary, #888);
+  margin-bottom: 16px;
+}
+
+.task-board-section {
+  margin: 20px 0;
+}
+
+/* 每個欄位自成一列：標籤在上、輸入框在下。原本標籤與輸入框是行內排列，
+   兩個欄位會黏成一長串（「同時執行上限 5 Claude Code 啟動指令 claude」），
+   讀不出哪個標籤對應哪個輸入框。 */
+.task-board-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.task-board-field > span {
+  font-size: 13px;
+  color: var(--text-primary, #e6e6e6);
+}
+
+.task-board-field input {
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  color: #e6e6e6;
+  font-size: 13px;
+  padding: 6px 10px;
+}
+
+.task-board-field input:focus {
+  border-color: #2d5aab;
+  outline: none;
+}
+
+.task-board-field input[type="number"] { width: 100px; }
+.task-board-field input[type="text"] { width: 100%; max-width: 320px; }
+
+.task-board-hint {
+  font-size: 12px;
+  color: var(--text-muted, #666);
+}
+
+.task-board-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 24px;
+}

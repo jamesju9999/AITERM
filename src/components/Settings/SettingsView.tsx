@@ -22,7 +22,8 @@ import {
   InfoIcon,
   LinkIcon,
   ZapIcon,
-  SparklesIcon
+  SparklesIcon,
+  ClipboardListIcon
 } from "../Icons";
 import "./SettingsView.css";
 
@@ -115,7 +116,7 @@ export function SettingsView() {
           className={`sidebar-item ${tab === "taskBoard" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("taskBoard")}
         >
-          {t.settings_tab_taskBoard}
+          <ClipboardListIcon size={16} /> {t.settings_tab_taskBoard}
         </button>
         <button
           className={`sidebar-item ${tab === "usage" ? "sidebar-item--active" : ""}`}
