@@ -215,8 +215,7 @@ Expected: `test result: ok. 3 passed`。
 git add src-tauri/src/tasks/session_log.rs src-tauri/src/tasks/mod.rs
 git commit -m "feat(tasks): encode a project dir into Claude Code's session-log folder name
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -474,8 +473,7 @@ Expected: `test result: ok. 10 passed`（Task 1 的 3 個 + 這裡的 7 個）�
 git add src-tauri/src/tasks/session_log.rs
 git commit -m "feat(tasks): render a Claude Code session log into a turn-by-turn transcript
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -662,8 +660,7 @@ Expected: `test result: ok. 13 passed`。
 git add src-tauri/src/tasks/session_log.rs src-tauri/Cargo.toml
 git commit -m "feat(tasks): copy a finished card's session log into its task dir
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -849,8 +846,7 @@ Expected: 全綠。`SELECT *` 搭配 `FromRow` 會自動帶上新欄位，其他
 git add src-tauri/src/tasks/mod.rs src-tauri/src/tasks/store.rs
 git commit -m "feat(tasks): add session_id and session_path columns
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -966,7 +962,24 @@ cd src-tauri && cargo test --lib tasks::dispatch 2>&1 | tail -20
 
 Expected: 上面六個新測試全綠。
 
-- [ ] **Step 5: `spawn_and_run` 多收一個 session_id**
+- [ ] **Step 5: Commit**
+
+```bash
+git add src-tauri/src/tasks/dispatch.rs
+git commit -m "feat(tasks): decide when a dispatch gets its own claude session id
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+```
+
+兩個純函式獨立就能編譯，所以這裡收一次。`spawn_and_run` 的簽章變更會弄壞
+`scheduler.rs` 的呼叫端，那屬於 Task 6 的「接線」——放在一起才是一個完整
+可編譯的 commit。
+
+---
+
+## Task 6: `dispatch.rs` + `scheduler.rs` — 接線
+
+- [ ] **Step 1: `spawn_and_run` 多收一個 session_id**
 
 分頁標題是 `Agent: <command>`（見 `src/components/TerminalApp.tsx:275`）。如果把接好旗標的指令當成 `claude_command` 傳進來，標題就會變成 `Agent: claude --session-id 3f2a-...`。所以旗標要在 `spawn_and_run` 裡面接，事件仍然送原本的指令。
 
@@ -999,26 +1012,19 @@ pub async fn spawn_and_run(
 
 底下 `app.emit("mcp-coordination-tab-spawned", ...)` 那段**不動**（它已經用的是 `claude_command`）。
 
-- [ ] **Step 6: 編譯，確認唯一的呼叫端壞掉**
+- [ ] **Step 2: 編譯，確認唯一的呼叫端壞掉**
 
 ```bash
 cd src-tauri && cargo check 2>&1 | tail -20
 ```
 
-Expected: `scheduler.rs` 報 `this function takes 7 arguments but 6 arguments were supplied`。那是 Task 6 要修的地方。
+Expected: `scheduler.rs` 報 `this function takes 7 arguments but 6 arguments were supplied`。下一步就是修它。
 
-- [ ] **Step 7: Commit（連同 Task 6 一起，因為現在編不過）**
-
-先不 commit，直接進 Task 6。
-
----
-
-## Task 6: `scheduler.rs` — 接線
-
-**Files:**
+**Files（Task 6 全部）:**
+- Modify: `src-tauri/src/tasks/dispatch.rs`
 - Modify: `src-tauri/src/tasks/scheduler.rs`
 
-- [ ] **Step 1: 派工時產生 UUID 並寫回**
+- [ ] **Step 3: 派工時產生 UUID 並寫回**
 
 在 `RealDispatcher::dispatch` 裡，把取設定與 spawn 的那段改成：
 
@@ -1052,7 +1058,7 @@ Expected: `scheduler.rs` 報 `this function takes 7 arguments but 6 arguments we
         }
 ```
 
-- [ ] **Step 2: 把需要的東西捕獲進 watch 的 async block**
+- [ ] **Step 4: 把需要的東西捕獲進 watch 的 async block**
 
 在既有的 `let task_id = task.id.clone();` 附近加兩行：
 
@@ -1061,7 +1067,7 @@ Expected: `scheduler.rs` 報 `this function takes 7 arguments but 6 arguments we
         let session_id_for_watch = session_id.clone();
 ```
 
-- [ ] **Step 3: 完成時複製 session 記錄**
+- [ ] **Step 5: 完成時複製 session 記錄**
 
 在 async block 裡，`let transcript = write_transcript(...);` 那一行**之後**、`store::finish_task(...)` 之前插入：
 
@@ -1086,7 +1092,7 @@ Expected: `scheduler.rs` 報 `this function takes 7 arguments but 6 arguments we
 
 順序要在 `finish_task` 之前：`finish_task` 之後緊接著 `app.emit("tasks-updated", ())`，前端收到時該列就應該已經是完整的。
 
-- [ ] **Step 4: 編譯並跑全部後端測試**
+- [ ] **Step 6: 編譯並跑全部後端測試**
 
 ```bash
 cd src-tauri && cargo test 2>&1 | tail -30
@@ -1094,14 +1100,13 @@ cd src-tauri && cargo test 2>&1 | tail -30
 
 Expected: 全綠。注意這裡跑的是 `cargo test` 而不是 `cargo test --lib`——`--lib` 不會編譯 `tests/` 底下的整合測試（`task_board.rs` 就在那裡），漏掉會在 CI 上才炸。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src-tauri/src/tasks/dispatch.rs src-tauri/src/tasks/scheduler.rs
 git commit -m "feat(tasks): give each dispatch its own claude session id and keep its log
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1249,8 +1254,7 @@ Expected: `test result: ok. 5 passed`。
 git add src-tauri/src/commands/tasks.rs src-tauri/tests/task_transcript_source.rs
 git commit -m "feat(tasks): read the full session log when a card has one
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1325,8 +1329,7 @@ git add src/ipc/tasks.ts src/components/TaskBoard/ReportDialog.test.tsx \
         src/components/TaskBoard/index.test.tsx src/components/TaskBoard/reportPrompts.test.ts
 git commit -m "feat(tasks): mirror the session-log columns in the frontend TaskRow
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1505,8 +1508,7 @@ Expected: 六個新測試全綠。
 git add src-tauri/src/tasks/dispatch.rs
 git commit -m "feat(tasks): work out which keys accept Claude Code's folder-trust prompt
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1668,8 +1670,7 @@ Expected: 全綠，特別確認 `does_not_settle_while_the_tui_has_not_started_y
 git add src-tauri/src/tasks/dispatch.rs
 git commit -m "fix(tasks): accept the folder-trust prompt instead of typing into it
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1751,8 +1752,7 @@ git status --short
 git add CHANGELOG.md
 git commit -m "docs: spec、實作計畫與 CHANGELOG
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017K4djFzy16JuJyNZNGMmSo"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 **不要自己打 tag。** 推 `vX.Y.Z` tag 會觸發三平台的 release build，一定要先問過使用者。
