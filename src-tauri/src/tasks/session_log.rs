@@ -192,12 +192,14 @@ mod render_tests {
     }
 
     /// 實測：`user` 記錄的 content 陣列有 2 個、3 個 block 的情況（本機六份
-    /// 真實 session 檔裡共 60 筆）。只讀第一個 block 的實作會漏掉後面的，
-    /// 所以這個 fixture 的第二個 block 才是唯一該被輸出的那個。
+    /// 真實 session 檔裡共 60 筆，其中 3 筆是 3 個 block）。可渲染的 block
+    /// 刻意放在中間（前後各夾一個該被跳過的 `tool_result`）：如果放在最後，
+    /// 「只讀第一個 block」與「只讀最後一個 block」這兩種錯誤實作都會
+    /// 意外通過，測不出「走完整個陣列」這個要求。
     #[test]
     fn walks_every_block_in_a_multi_block_record() {
-        let jsonl = r#"{"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ignored"}, {"type": "text", "text": "第二個 block"}]}}"#;
-        assert_eq!(render_session_log(jsonl).trim(), "使用者：第二個 block");
+        let jsonl = r#"{"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ignored"}, {"type": "text", "text": "中間的 block"}, {"type": "tool_result", "tool_use_id": "t2", "content": "also ignored"}]}}"#;
+        assert_eq!(render_session_log(jsonl).trim(), "使用者：中間的 block");
     }
 
     /// 工具摘要取的是「第一個參數」——serde_json 開了 preserve_order，
@@ -228,6 +230,28 @@ mod render_tests {
         assert_eq!(out.lines().count(), 1, "摘要跨了多行：{out}");
         assert!(out.chars().count() <= 140, "摘要沒有被截短（{} 個字）：{out}", out.chars().count());
         assert!(out.contains('…'), "截短後沒有省略號：{out}");
+    }
+
+    /// 截短要按**字元**算，不是位元組。
+    ///
+    /// 工具參數常常整段是中文，而每個中文字是 3 個 UTF-8 位元組——用
+    /// `&s[..100]` 這種位元組切法會切在字元中間直接 panic。這個 repo 已經
+    /// 被同一類錯誤咬過一次（見 `pty/ansi.rs` 的 `is_char_boundary` 護欄，
+    /// 註解記著實機上讓整個 app abort 的那次），所以這裡要有測試撐著
+    /// `first_arg_summary` 那句「字元數，不是位元組」的宣稱。
+    #[test]
+    fn truncation_counts_characters_not_bytes() {
+        let long = "把這段中文重複很多次".repeat(30); // 300 個字元、900 位元組
+        let jsonl = format!(
+            r#"{{"type": "assistant", "message": {{"role": "assistant", "content": [{{"type": "tool_use", "id": "t", "name": "Write", "input": {{"content": "{long}"}}}}]}}}}"#
+        );
+        let out = render_session_log(&jsonl);
+        // 沒 panic 就已經是一半的價值了。另一半：截出來的必須是 100 個
+        // 字元（而不是 100 個位元組 ≈ 33 個字），所以位元組長度遠大於 100。
+        let arg = out.trim().strip_prefix("〔工具〕Write ").expect("格式不對：{out}");
+        let arg = arg.strip_suffix('…').expect("沒有截短：{arg}");
+        assert_eq!(arg.chars().count(), 100, "沒有按字元截短");
+        assert!(arg.len() > 100, "看起來是按位元組截的：{} 位元組", arg.len());
     }
 
     /// 空輸入不能 panic，也不該生出空白內容——呼叫端靠「渲染結果是空的」
