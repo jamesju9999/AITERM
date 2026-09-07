@@ -479,6 +479,34 @@ Entertoconfirm·Esctocancel
         assert_eq!(trust_prompt_keys(prose), None);
     }
 
+    /// 去空白這一步是**防禦性**的，而上面每個 fixture 都忠實反映「今天的
+    /// Claude Code 一個空白都不送」——所以把 filter 整段拿掉，那些測試
+    /// 照樣全綠（實測過）。這條就是補那個洞。
+    ///
+    /// 為什麼值得補：拿掉 filter 是個很合理的未來修改。後人看到程式碼裡
+    /// 的 filter 配上「這個畫面沒有空白」的註解，很自然會想「那還 filter
+    /// 幹嘛」而順手刪掉——然後哪天 Claude Code 的 TUI 改成用空白排版，
+    /// 信任畫面就再也認不出來，而且是安靜地失效。
+    ///
+    /// 這裡刻意用一份**帶空白**的畫面：它不是實測到的樣子，而是「萬一
+    /// 上游改了排版方式」的樣子。認得出來才是正確行為。
+    #[test]
+    fn still_recognises_the_screen_if_claude_code_ever_renders_with_spaces() {
+        let with_spaces = "\
+Quick safety check: Is this a project you created or one you trust?
+
+❯ No, exit
+  Yes, I trust this folder
+
+Enter to confirm · Esc to cancel
+";
+        assert_eq!(
+            trust_prompt_keys(with_spaces),
+            Some([DOWN, b"\r"].concat()),
+            "排版改用空白之後就認不出來了——去空白那一步是不是被拿掉了？"
+        );
+    }
+
     use crate::pty::manager::PtyManager;
 
     fn settle_size() -> PtySize {
