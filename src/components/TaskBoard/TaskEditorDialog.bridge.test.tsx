@@ -66,7 +66,7 @@ describe("TaskEditorDialog 派工方式", () => {
     usedDirs.mockResolvedValue([]);
   });
 
-  it("預設是「直連 Anthropic」，選單列出已存的帳號組合", async () => {
+  it("預設是「不走橋接」，選單列出已存的帳號組合", async () => {
     saveBridgeProfiles([PROFILE]);
     mount();
     const select = await screen.findByTestId("task-bridge-select");
