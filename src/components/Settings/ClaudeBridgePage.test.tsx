@@ -10,8 +10,10 @@ vi.mock("../../ipc/bridge", () => ({
 }));
 vi.mock("../../ipc/config", () => ({ getConfig: vi.fn() }));
 vi.mock("../../ipc/provider", () => ({ listProviders: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ confirm: vi.fn() }));
 
 import { bridgeStatus, bridgeSetConfig } from "../../ipc/bridge";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import type { ClaudeBridgeConfig } from "../../ipc/bridge";
 import { getConfig } from "../../ipc/config";
 import type { AppConfig } from "../../ipc/config";
@@ -102,6 +104,7 @@ beforeEach(() => {
   vi.mocked(bridgeSetConfig).mockImplementation((value: ClaudeBridgeConfig) =>
     Promise.resolve({ running: true, port: value.port, token: "tok", error: null }),
   );
+  vi.mocked(confirm).mockResolvedValue(true);
 });
 
 describe("ClaudeBridgePage", () => {
@@ -281,6 +284,60 @@ describe("ClaudeBridgePage", () => {
       expect(bridgeSetConfig).not.toHaveBeenCalled();
       const stored = JSON.parse(localStorage.getItem("aiterm.bridgeProfiles") ?? "[]");
       expect(stored[0].opus.provider_id).toBe("cdx");
+    });
+
+    it("重新命名組合", async () => {
+      const user = userEvent.setup();
+      render(<ClaudeBridgePage />);
+
+      await user.selectOptions(await screen.findByRole("combobox", { name: /Opus/ }), "qwen");
+      await user.type(await screen.findByPlaceholderText(/組合名稱|Profile name/), "個人帳號");
+      await user.click(
+        screen.getByRole("button", { name: /另存目前設定為新組合|Save current as new profile/ }),
+      );
+
+      await user.click(screen.getByRole("button", { name: t.bridge_profile_rename }));
+      const renameInput = await screen.findByPlaceholderText(/新名稱|New name/);
+      await user.clear(renameInput);
+      await user.type(renameInput, "公司帳號{Enter}");
+
+      expect(await screen.findByText("公司帳號")).toBeInTheDocument();
+      expect(screen.queryByText("個人帳號")).not.toBeInTheDocument();
+    });
+
+    it("刪除組合前會跳確認框，確認後才真的刪除", async () => {
+      const user = userEvent.setup();
+      render(<ClaudeBridgePage />);
+
+      await user.selectOptions(await screen.findByRole("combobox", { name: /Opus/ }), "qwen");
+      await user.type(await screen.findByPlaceholderText(/組合名稱|Profile name/), "個人帳號");
+      await user.click(
+        screen.getByRole("button", { name: /另存目前設定為新組合|Save current as new profile/ }),
+      );
+
+      await user.click(screen.getByRole("button", { name: t.bridge_profile_delete }));
+
+      await waitFor(() =>
+        expect(confirm).toHaveBeenCalledWith(t.bridge_profile_delete_confirm("個人帳號"), expect.anything()),
+      );
+      await waitFor(() => expect(screen.queryByText("個人帳號")).not.toBeInTheDocument());
+    });
+
+    it("取消刪除確認框時保留組合", async () => {
+      vi.mocked(confirm).mockResolvedValue(false);
+      const user = userEvent.setup();
+      render(<ClaudeBridgePage />);
+
+      await user.selectOptions(await screen.findByRole("combobox", { name: /Opus/ }), "qwen");
+      await user.type(await screen.findByPlaceholderText(/組合名稱|Profile name/), "個人帳號");
+      await user.click(
+        screen.getByRole("button", { name: /另存目前設定為新組合|Save current as new profile/ }),
+      );
+
+      await user.click(screen.getByRole("button", { name: t.bridge_profile_delete }));
+
+      await waitFor(() => expect(confirm).toHaveBeenCalled());
+      expect(screen.getByText("個人帳號")).toBeInTheDocument();
     });
   });
 });

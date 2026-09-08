@@ -1,5 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 
+import { confirm } from "@tauri-apps/plugin-dialog";
+
 import { useLocale } from "../../contexts/LocaleContext";
 import type { Translations } from "../../lib/i18n";
 import { getConfig } from "../../ipc/config";
@@ -187,6 +189,36 @@ export function ClaudeBridgePage() {
     [cfg, profiles, persistProfiles],
   );
 
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+
+  const startRename = useCallback((profile: BridgeProfile) => {
+    setRenamingId(profile.id);
+    setRenameDraft(profile.name);
+  }, []);
+
+  const commitRename = useCallback(() => {
+    if (!renamingId) return;
+    const trimmed = renameDraft.trim();
+    if (trimmed) {
+      persistProfiles(profiles.map((p) => (p.id === renamingId ? { ...p, name: trimmed } : p)));
+    }
+    setRenamingId(null);
+  }, [renamingId, renameDraft, profiles, persistProfiles]);
+
+  const deleteProfile = useCallback(
+    async (profile: BridgeProfile) => {
+      const ok = await confirm(t.bridge_profile_delete_confirm(profile.name), {
+        kind: "warning",
+        okLabel: t.common_delete,
+        cancelLabel: t.common_cancel,
+      });
+      if (!ok) return;
+      persistProfiles(profiles.filter((p) => p.id !== profile.id));
+    },
+    [profiles, persistProfiles, t],
+  );
+
   const save = useCallback(async () => {
     if (!cfg) return;
     setSaving(true);
@@ -292,7 +324,22 @@ export function ClaudeBridgePage() {
               const isActive = cfg ? tiersEqual(cfg, p) : false;
               return (
                 <li key={p.id} className="bridge-profile-row">
-                  <span className="bridge-profile-name">{p.name}</span>
+                  {renamingId === p.id ? (
+                    <input
+                      className="bridge-profile-rename-input"
+                      value={renameDraft}
+                      autoFocus
+                      placeholder={t.bridge_profile_rename_placeholder}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitRename();
+                        if (e.key === "Escape") setRenamingId(null);
+                      }}
+                      onBlur={commitRename}
+                    />
+                  ) : (
+                    <span className="bridge-profile-name">{p.name}</span>
+                  )}
                   {isActive && <span className="bridge-profile-badge">{t.bridge_profile_active}</span>}
                   <div className="bridge-profile-actions">
                     <button type="button" onClick={() => void applyProfile(p)}>
@@ -301,8 +348,12 @@ export function ClaudeBridgePage() {
                     <button type="button" onClick={() => updateProfile(p)}>
                       {t.bridge_profile_update}
                     </button>
-                    <button type="button">{t.bridge_profile_rename}</button>
-                    <button type="button">{t.bridge_profile_delete}</button>
+                    <button type="button" onClick={() => startRename(p)}>
+                      {t.bridge_profile_rename}
+                    </button>
+                    <button type="button" onClick={() => void deleteProfile(p)}>
+                      {t.bridge_profile_delete}
+                    </button>
                   </div>
                 </li>
               );
