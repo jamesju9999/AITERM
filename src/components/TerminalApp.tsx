@@ -352,13 +352,18 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     setRouteHint({ tabId, type: route.type, userText: route.userText });
   }, []);
 
-  const handleCloseTab = useCallback(async (id: string): Promise<boolean> => {
-    const canClose = await runCloseGuard(
-      id,
-      activeIdRef.current,
-      closeGuardsRef.current.get(id),
-      setActiveId,
-    );
+  const handleCloseTab = useCallback(async (
+    id: string,
+    options?: { skipGuard?: boolean },
+  ): Promise<boolean> => {
+    // skipGuard：自動關閉（useAutoCloseFinishedTabs）用的逃生門——這是
+    // 背景動作，沒有人在看著會去按 runCloseGuard 可能跳出的確認框，硬跑
+    // 那條路徑只會讓分頁卡住關不掉，還會把使用者正在看的分頁搶走去顯示
+    // 那個永遠沒人會點的框。手動關閉（Ctrl+W、分頁 ✕、TaskCard 刪除）都
+    // 不帶這個旗標，行為完全不變。
+    const canClose = options?.skipGuard
+      ? true
+      : await runCloseGuard(id, activeIdRef.current, closeGuardsRef.current.get(id), setActiveId);
     if (!canClose) return false;
     // 關掉的剛好是目前的 remote 分頁：釋放這個位置，不留著一個指向已經不存在
     // 分頁的 id。
@@ -414,11 +419,12 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   // 所以要靠這個事件把兩邊接起來，分頁才會真的從畫面上消失。
   useEffect(() => {
     const onCloseTab = (e: Event) => {
-      const id = (e as CustomEvent<{ tabId?: string }>).detail?.tabId;
+      const detail = (e as CustomEvent<{ tabId?: string; skipGuard?: boolean }>).detail;
+      const id = detail?.tabId;
       if (!id) return;
       const tab = tabs.find((tb) => tb.ptySessionId === id) ?? tabs.find((tb) => tb.id === id);
       if (!tab) return;
-      void handleCloseTab(tab.id);
+      void handleCloseTab(tab.id, { skipGuard: detail?.skipGuard });
     };
     window.addEventListener("aiterm:close-tab", onCloseTab);
     return () => window.removeEventListener("aiterm:close-tab", onCloseTab);
