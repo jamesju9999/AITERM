@@ -43,4 +43,19 @@ describe("TaskBoardPage", () => {
       ),
     );
   });
+
+  it("toggling the checkbox sends the new value", async () => {
+    const user = userEvent.setup();
+    view();
+    await waitFor(() => screen.getByDisplayValue("2"));
+    const checkbox = screen.getByRole("checkbox");
+    expect(checkbox).toBeChecked();
+    await user.click(checkbox);
+    await user.click(screen.getByRole("button", { name: /儲存|Save/ }));
+    await waitFor(() =>
+      expect(setTaskBoardConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ auto_close_finished_tabs: false }),
+      ),
+    );
+  });
 });

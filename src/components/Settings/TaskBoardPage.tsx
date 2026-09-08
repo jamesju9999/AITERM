@@ -61,6 +61,20 @@ export function TaskBoardPage() {
           />
           <span className="task-board-hint">{t.board_settings_claude_command_hint}</span>
         </label>
+
+        <label className="task-board-field task-board-field--checkbox">
+          <input
+            type="checkbox"
+            className="task-board-checkbox"
+            checked={cfg.auto_close_finished_tabs}
+            onChange={(e) => {
+              setSaved(false);
+              setCfg({ ...cfg, auto_close_finished_tabs: e.target.checked });
+            }}
+          />
+          <span>{t.board_settings_auto_close}</span>
+          <span className="task-board-hint">{t.board_settings_auto_close_hint}</span>
+        </label>
       </section>
 
       <div className="task-board-actions">
