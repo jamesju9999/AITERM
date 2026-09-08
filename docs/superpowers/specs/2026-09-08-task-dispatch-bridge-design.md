@@ -78,13 +78,13 @@ pub secrets: Arc<crate::secret::SecretStore>,
 
 在 `scheduler.rs::spawn`（唯一的生產環境建構點，`scheduler.rs:433`）比照 `config`/`pty` 的既有寫法，從 `app.state()` 取得後放進 `RealDispatcher { ... }`。
 
-`RealDispatcher::dispatch`（`scheduler.rs:88`）在呼叫 `dispatch::spawn_and_run` **之前**新增：
+**決策邏輯抽成一個獨立的純函式**（而不是直接寫在 `RealDispatcher::dispatch` 裡）：`dispatch::resolve_bridge_env(config: &ConfigStore, task: &TaskRow, bridge_port: Option<u16>, bridge_token: Option<String>) -> Option<(u16, String)>`。吃純值而不是 `Arc<BridgeState>`/`Arc<SecretStore>`，呼叫端自己把 `bridge.port()`、`secrets.get(...)` 解析好再傳進來——這樣這個函式完全不需要真的橋接 server、OS keychain 或 `AppHandle` 就能單元測試（原因見下方「測試」一節）。
 
 ```rust
 if task.use_bridge {
     if let Some(json) = &task.bridge_tiers {
         if let Ok(snap) = serde_json::from_str::<BridgeTierSnapshot>(json) {
-            self.config.update(|c| {
+            let _ = config.update(|c| {
                 c.claude_bridge.opus = snap.opus;
                 c.claude_bridge.sonnet = snap.sonnet;
                 c.claude_bridge.haiku = snap.haiku;
@@ -94,17 +94,15 @@ if task.use_bridge {
         // 沿用當下設定──跟 bridge_tiers 是 NULL 時的行為一致，不讓派工失敗。
     }
 }
-let bridge_env = match (task.use_bridge, self.bridge.port()) {
-    (true, Some(port)) => self.secrets
-        .get(crate::bridge::auth::BRIDGE_TOKEN_KEY)
-        .ok()
-        .flatten()
-        .map(|t| (port, t)),
+match (task.use_bridge, bridge_port) {
+    (true, Some(port)) => bridge_token.map(|t| (port, t)),
     _ => None,
-};
+}
 ```
 
 其中 `BridgeTierSnapshot { opus: Option<TierMapping>, sonnet: Option<TierMapping>, haiku: Option<TierMapping> }` 是新增的最小結構（複用既有的 `crate::config::types::TierMapping`），只在這個模組內部使用。
+
+`RealDispatcher::dispatch`（`scheduler.rs:88`）在呼叫 `dispatch::spawn_and_run` **之前**呼叫 `resolve_bridge_env(&self.config, task, self.bridge.port(), self.secrets.get(crate::bridge::auth::BRIDGE_TOKEN_KEY).ok().flatten())`，把結果傳給 `spawn_and_run` 新增的參數。
 
 `dispatch::spawn_and_run`（`dispatch.rs:300`）簽名新增 `bridge_env: Option<(u16, String)>` 參數，原本寫死的 `create_with_app(app.clone(), size, Some(...), None)` 改成把這個參數原樣傳入第 4 格。
 
@@ -133,5 +131,6 @@ let bridge_env = match (task.use_bridge, self.bridge.port()) {
 
 ## 測試
 
-- **Rust**：`dispatch::spawn_and_run` 新參數的既有呼叫端（`scheduler.rs` 裡的呼叫、`mcp_server/coordination_ops.rs:120` 那個第三方呼叫者）都要顯式傳 `None`，維持現有行為不變——這兩處都不是「使用者透過工作看板派工」的路徑，不該意外被牽動。補一個 `RealDispatcher::dispatch` 的整合測試：`use_bridge=true` + 有 `bridge_tiers` 時，斷言 `self.config.get().claude_bridge` 的三個 tier 值確實被覆寫成快照值；`bridge_tiers=null` 時斷言設定沒被動到；`use_bridge=false` 時斷言 `bridge_env` 傳的是 `None`（可以在 `bridge.port()` 回傳 `Some` 的情況下斷言，證明是 `use_bridge` 本身擋下來的，不是因為 server 沒在跑）。
+- **Rust（寫計畫時修正）**：原本設想直接對 `RealDispatcher::dispatch` 補整合測試，但寫實作計畫時發現這個專案的 `tauri` 依賴沒開 `test` feature（`Cargo.toml` 的 `features = []`；`dispatch.rs` 既有測試模組裡已經有一段註解記錄過真的嘗試編譯、確認 `tauri::test::{mock_builder, mock_context, noop_assets}` 用不了的過程）。凡是需要真的 `&AppHandle` 的函式（`spawn_and_run` 本身、`RealDispatcher::dispatch`）都無法直接單元測試——這是既有的專案限制。因此改成：把「要不要注入橋接環境變數、要不要覆寫全域 tier 設定」這個決策抽成一個不需要 `AppHandle` 的純函式（吃 `&ConfigStore` + `&TaskRow` + 橋接 server 的 port/token 純值），對這個純函式完整測試四種情境（`use_bridge=false`／server 沒在跑／正常回傳 port+token／快照覆寫設定／`bridge_tiers=null` 時設定不被動到）。`RealDispatcher::dispatch` 呼叫這個已測過的純函式，屬於「一行、肉眼可核對」的改動，用 `cargo build` 確認能編譯即可，不強求自動化測試覆蓋這一層轉發。
+- 另外一併修正：`mcp_server/coordination_ops.rs:120` 呼叫的是 `create_with_app`（`pty/manager.rs`）本身，不是 `spawn_and_run`——這個模組不經過 `dispatch::spawn_and_run`，所以 `spawn_and_run` 新增參數完全不會影響到它，不需要特別處理或驗證這條路徑。
 - **前端**：`TaskEditorDialog.test.tsx` 新增：下拉選單依 `loadBridgeProfiles()` 動態列出選項；選某個 profile 存檔時，`createTask`/`updateTask` 收到的 `bridge_tiers` 是該 profile 的 JSON 序列化值；重新打開一張 `bridge_tiers` 剛好匹配某個 profile 的卡片，下拉正確預選該 profile；`bridge_tiers` 內容跟任何現存 profile 都對不上時，顯示「此卡自訂組合」而不是報錯或清空。
