@@ -13,7 +13,11 @@ import { TaskBoardPage } from "./TaskBoardPage";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(getTaskBoardConfig).mockResolvedValue({ max_concurrent: 2, claude_command: "claude" });
+  vi.mocked(getTaskBoardConfig).mockResolvedValue({
+    max_concurrent: 2,
+    claude_command: "claude",
+    auto_close_finished_tabs: true,
+  });
 });
 
 const view = () => render(<LocaleProvider><TaskBoardPage /></LocaleProvider>);

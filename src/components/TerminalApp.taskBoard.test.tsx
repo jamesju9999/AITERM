@@ -147,7 +147,11 @@ vi.mock("../ipc/tasks", () => ({
   cloneTask: vi.fn(),
   addAttachment: vi.fn(),
   removeAttachment: vi.fn(),
-  getTaskBoardConfig: vi.fn().mockResolvedValue({ max_concurrent: 2, claude_command: "claude" }),
+  getTaskBoardConfig: vi.fn().mockResolvedValue({
+    max_concurrent: 2,
+    claude_command: "claude",
+    auto_close_finished_tabs: true,
+  }),
   setTaskBoardConfig: vi.fn(),
 }));
 

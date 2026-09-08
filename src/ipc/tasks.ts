@@ -54,6 +54,7 @@ export interface TaskWithAttachments extends TaskRow {
 export interface TaskBoardConfig {
   max_concurrent: number;
   claude_command: string;
+  auto_close_finished_tabs: boolean;
 }
 
 // ── Commands ────────────────────────────────────────────────────────────────
