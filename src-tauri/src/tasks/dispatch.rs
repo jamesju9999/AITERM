@@ -9,8 +9,10 @@ use portable_pty::PtySize;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
+use crate::config::{ConfigStore, TierMapping};
 use crate::pty::manager::PtyManager;
 use crate::pty::session::done_marker_instruction;
+use crate::tasks::store::TaskRow;
 
 /// Body text plus, if any attachments, one trailing line pointing `claude` at
 /// their on-disk paths (they've already been copied into the task dir).
@@ -20,6 +22,47 @@ pub fn build_prompt(body: &str, attachment_paths: &[String]) -> String {
     }
     let list = attachment_paths.join("、");
     format!("{body}\n\n（相關附件：{list}）")
+}
+
+/// 派工前要不要注入 Claude Bridge 的環境變數，以及要不要先把這張卡指定
+/// 的帳號組合快照套用成全域橋接設定。
+///
+/// 吃純值（`bridge_port`/`bridge_token`）而不是 `Arc<BridgeState>`/
+/// `Arc<SecretStore>`——呼叫端自己解析好再傳進來，這個函式才不需要真的
+/// 橋接 server 或 OS keychain 就能完整測試。降級邏輯跟 `pty_create`
+/// command（`pty/commands.rs`）現有邏輯逐字一致：server 沒在跑就不注入。
+#[derive(serde::Deserialize)]
+struct BridgeTierSnapshot {
+    opus: Option<TierMapping>,
+    sonnet: Option<TierMapping>,
+    haiku: Option<TierMapping>,
+}
+
+pub fn resolve_bridge_env(
+    config: &ConfigStore,
+    task: &TaskRow,
+    bridge_port: Option<u16>,
+    bridge_token: Option<String>,
+) -> Option<(u16, String)> {
+    if task.use_bridge {
+        if let Some(json) = &task.bridge_tiers {
+            if let Ok(snap) = serde_json::from_str::<BridgeTierSnapshot>(json) {
+                // `update` 就算磁碟寫入失敗，記憶體內的設定仍然會被改到
+                // （`ConfigStore::update` 的實作先套用閉包、才存檔）——這裡
+                // 在乎的是「這次派工當下」讀到的即時設定，忽略持久化失敗
+                // 比讓整個派工失敗更合理。
+                let _ = config.update(|c| {
+                    c.claude_bridge.opus = snap.opus;
+                    c.claude_bridge.sonnet = snap.sonnet;
+                    c.claude_bridge.haiku = snap.haiku;
+                });
+            }
+        }
+    }
+    match (task.use_bridge, bridge_port) {
+        (true, Some(port)) => bridge_token.map(|t| (port, t)),
+        _ => None,
+    }
 }
 
 /// 這個設定值看起來是不是 Claude Code 本身。
@@ -334,6 +377,107 @@ pub async fn spawn_and_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod bridge_env_tests {
+        // `ConfigStore`/`TierMapping`/`TaskRow` 已經透過 `use super::*` 從外層
+        // （`dispatch.rs` 本體在 Step 3 加的 imports）帶進來，這裡不用重複 import。
+        use super::*;
+        use crate::tasks::store;
+        use sqlx::sqlite::SqlitePoolOptions;
+
+        async fn mem_pool() -> sqlx::SqlitePool {
+            let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+            crate::tasks::init_schema(&pool).await.unwrap();
+            pool
+        }
+
+        async fn task_with_bridge(
+            pool: &sqlx::SqlitePool,
+            use_bridge: bool,
+            tiers: Option<&str>,
+        ) -> store::TaskRow {
+            let id = store::create_task(pool, "t", "", "/r", true, false).await.unwrap();
+            store::set_bridge_config(pool, &id, use_bridge, tiers.map(|s| s.to_string()))
+                .await
+                .unwrap();
+            store::get_task(pool, &id).await.unwrap().unwrap()
+        }
+
+        fn temp_config() -> (tempfile::TempDir, ConfigStore) {
+            let dir = tempfile::tempdir().unwrap();
+            let config = ConfigStore::new_at(dir.path().join("config.toml"));
+            (dir, config)
+        }
+
+        #[tokio::test]
+        async fn no_env_when_task_does_not_want_bridge() {
+            let pool = mem_pool().await;
+            let task = task_with_bridge(&pool, false, None).await;
+            let (_dir, config) = temp_config();
+
+            let env = resolve_bridge_env(&config, &task, Some(8317), Some("tok".to_string()));
+            assert_eq!(env, None);
+        }
+
+        #[tokio::test]
+        async fn no_env_when_bridge_server_not_running() {
+            let pool = mem_pool().await;
+            let task = task_with_bridge(&pool, true, None).await;
+            let (_dir, config) = temp_config();
+
+            let env = resolve_bridge_env(&config, &task, None, None);
+            assert_eq!(env, None, "server 沒在跑就不該注入，跟 pty_create 現有行為一致");
+        }
+
+        #[tokio::test]
+        async fn returns_port_and_token_when_wanted_and_server_running() {
+            let pool = mem_pool().await;
+            let task = task_with_bridge(&pool, true, None).await;
+            let (_dir, config) = temp_config();
+
+            let env = resolve_bridge_env(&config, &task, Some(8317), Some("tok".to_string()));
+            assert_eq!(env, Some((8317, "tok".to_string())));
+        }
+
+        #[tokio::test]
+        async fn snapshot_overwrites_global_tier_config_before_dispatch() {
+            let pool = mem_pool().await;
+            let snapshot =
+                r#"{"opus":{"provider_id":"acct-b","model":"m-b"},"sonnet":null,"haiku":null}"#;
+            let task = task_with_bridge(&pool, true, Some(snapshot)).await;
+            let (_dir, config) = temp_config();
+            config
+                .update(|c| {
+                    c.claude_bridge.opus =
+                        Some(TierMapping { provider_id: "acct-a".into(), model: "m-a".into() });
+                })
+                .unwrap();
+
+            resolve_bridge_env(&config, &task, Some(8317), Some("tok".to_string()));
+
+            let opus = config.get().claude_bridge.opus.unwrap();
+            assert_eq!(opus.provider_id, "acct-b");
+            assert_eq!(opus.model, "m-b");
+        }
+
+        #[tokio::test]
+        async fn null_snapshot_leaves_global_tier_config_untouched() {
+            let pool = mem_pool().await;
+            let task = task_with_bridge(&pool, true, None).await;
+            let (_dir, config) = temp_config();
+            config
+                .update(|c| {
+                    c.claude_bridge.opus =
+                        Some(TierMapping { provider_id: "acct-a".into(), model: "m-a".into() });
+                })
+                .unwrap();
+
+            resolve_bridge_env(&config, &task, Some(8317), Some("tok".to_string()));
+
+            let opus = config.get().claude_bridge.opus.unwrap();
+            assert_eq!(opus.provider_id, "acct-a", "bridge_tiers 是 None 時不該覆寫既有設定");
+        }
+    }
 
     #[test]
     fn prompt_is_just_the_body_when_there_are_no_attachments() {
