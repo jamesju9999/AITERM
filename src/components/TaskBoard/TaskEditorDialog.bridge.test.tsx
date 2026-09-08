@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const usedDirs = vi.fn();
 const createTask = vi.fn();
 const updateTask = vi.fn();
+const bridgeStatus = vi.fn();
 vi.mock("../../ipc/projects", () => ({ usedDirs: (...a: unknown[]) => usedDirs(...a) }));
 vi.mock("../../ipc/tasks", () => ({
   createTask: (...a: unknown[]) => createTask(...a),
@@ -12,6 +13,7 @@ vi.mock("../../ipc/tasks", () => ({
   addAttachment: vi.fn(),
   removeAttachment: vi.fn(),
 }));
+vi.mock("../../ipc/bridge", () => ({ bridgeStatus: (...a: unknown[]) => bridgeStatus(...a) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 import { LocaleProvider } from "../../contexts/LocaleContext";
@@ -64,6 +66,7 @@ describe("TaskEditorDialog 派工方式", () => {
     vi.clearAllMocks();
     localStorage.clear();
     usedDirs.mockResolvedValue([]);
+    bridgeStatus.mockResolvedValue({ running: true, port: 8317, token: "tok", error: null });
   });
 
   it("預設是「不走橋接」，選單列出已存的帳號組合", async () => {
@@ -80,7 +83,7 @@ describe("TaskEditorDialog 派工方式", () => {
     mount();
     await user.type(await screen.findByTestId("task-title-input"), "t");
     await user.type(screen.getByTestId("task-dir-input"), "/repo");
-    await user.selectOptions(screen.getByTestId("task-bridge-select"), "p1");
+    await user.selectOptions(await screen.findByTestId("task-bridge-select"), "p1");
 
     await user.click(screen.getByRole("button", { name: /儲存|Save/ }));
 
@@ -99,7 +102,7 @@ describe("TaskEditorDialog 派工方式", () => {
     mount();
     await user.type(await screen.findByTestId("task-title-input"), "t");
     await user.type(screen.getByTestId("task-dir-input"), "/repo");
-    await user.selectOptions(screen.getByTestId("task-bridge-select"), "current");
+    await user.selectOptions(await screen.findByTestId("task-bridge-select"), "current");
 
     await user.click(screen.getByRole("button", { name: /儲存|Save/ }));
 
@@ -136,5 +139,36 @@ describe("TaskEditorDialog 派工方式", () => {
     expect(
       screen.getByRole("option", { name: /此卡自訂組合|custom for this card/ }),
     ).toBeInTheDocument();
+  });
+
+  it("橋接 server 沒在跑時不顯示派工方式選單", async () => {
+    bridgeStatus.mockResolvedValue({ running: false, port: null, token: null, error: null });
+    mount();
+    await screen.findByTestId("task-title-input");
+    // 沒有明確的「已載入完成」信號可等，等一輪 microtask 讓 bridgeStatus()
+    // 的 .then() 有機會跑完，再斷言選單真的沒被加進去。
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByTestId("task-bridge-select")).not.toBeInTheDocument();
+  });
+
+  it("編輯舊卡片時，就算 server 沒在跑，存檔仍保留原本的橋接設定", async () => {
+    bridgeStatus.mockResolvedValue({ running: false, port: null, token: null, error: null });
+    const card = {
+      ...BASE_CARD,
+      use_bridge: true,
+      bridge_tiers: JSON.stringify({ opus: { provider_id: "acct-a", model: "m-a" }, sonnet: null, haiku: null }),
+    };
+    const user = userEvent.setup();
+    mount(card);
+    await screen.findByTestId("task-title-input");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByTestId("task-bridge-select")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /儲存|Save/ }));
+
+    expect(updateTask).toHaveBeenCalledTimes(1);
+    const args = updateTask.mock.calls[0][1];
+    expect(args.use_bridge).toBe(true);
+    expect(args.bridge_tiers).toBe(card.bridge_tiers);
   });
 });

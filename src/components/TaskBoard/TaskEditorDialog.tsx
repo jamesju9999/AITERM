@@ -19,6 +19,7 @@ import {
   tiersEqual,
   type BridgeProfile,
 } from "../Settings/bridgeProfiles";
+import { bridgeStatus } from "../../ipc/bridge";
 import type { TierMapping } from "../../ipc/bridge";
 
 const LAST_DIR_KEY = "aiterm_last_task_dir";
@@ -44,6 +45,19 @@ export function TaskEditorDialog({
   const [parallelOk, setParallelOk] = useState(card?.parallel_ok ?? true);
   const [interactive, setInteractive] = useState(card?.interactive ?? false);
   const [profiles] = useState<BridgeProfile[]>(() => loadBridgeProfiles());
+  // 只有 server 真的在跑，選了才會生效——沒在跑時不提供選項，避免使用者
+  // 選了一個實際上會被 resolve_bridge_env 靜默忽略的東西。舊卡片已經存的
+  // use_bridge/bridge_tiers 不受影響：欄位只是不顯示，存檔時原樣送出。
+  const [bridgeRunning, setBridgeRunning] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void bridgeStatus().then((s) => {
+      if (alive) setBridgeRunning(s.running);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
   const [bridgeChoice, setBridgeChoice] = useState<string>(() => {
     if (!card?.use_bridge) return "direct";
     if (!card.bridge_tiers) return "current";
@@ -359,28 +373,30 @@ export function TaskEditorDialog({
 
         </div>
 
-        <div className="task-dialog-group">
-        <label className="task-field">
-          <span className="task-field-label">{t.task_bridge_label}</span>
-          <select
-            className="task-field-input"
-            data-testid="task-bridge-select"
-            value={bridgeChoice}
-            onChange={(e) => setBridgeChoice(e.target.value)}
-          >
-            <option value="direct">{t.task_bridge_direct}</option>
-            <option value="current">{t.task_bridge_current}</option>
-            {profiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {t.task_bridge_profile_option(p.name)}
-              </option>
-            ))}
-            {bridgeChoice === "custom" && (
-              <option value="custom">{t.task_bridge_custom}</option>
-            )}
-          </select>
-        </label>
-        </div>
+        {bridgeRunning && (
+          <div className="task-dialog-group">
+          <label className="task-field">
+            <span className="task-field-label">{t.task_bridge_label}</span>
+            <select
+              className="task-field-input"
+              data-testid="task-bridge-select"
+              value={bridgeChoice}
+              onChange={(e) => setBridgeChoice(e.target.value)}
+            >
+              <option value="direct">{t.task_bridge_direct}</option>
+              <option value="current">{t.task_bridge_current}</option>
+              {profiles.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {t.task_bridge_profile_option(p.name)}
+                </option>
+              ))}
+              {bridgeChoice === "custom" && (
+                <option value="custom">{t.task_bridge_custom}</option>
+              )}
+            </select>
+          </label>
+          </div>
+        )}
 
         <div className="task-dialog-group">
         <div className="task-field">
