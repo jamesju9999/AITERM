@@ -68,6 +68,8 @@ pub struct CreateArgs {
     pub project_dir: String,
     pub parallel_ok: bool,
     pub interactive: bool,
+    pub use_bridge: bool,
+    pub bridge_tiers: Option<String>,
 }
 
 #[tauri::command]
@@ -88,6 +90,9 @@ pub async fn tasks_create(
     )
     .await
     .map_err(|e| e.to_string())?;
+    store::set_bridge_config(&p.pool, &id, args.use_bridge, args.bridge_tiers)
+        .await
+        .map_err(|e| e.to_string())?;
     emit_updated(&app);
     Ok(id)
 }
@@ -100,6 +105,8 @@ pub struct UpdateArgs {
     pub project_dir: String,
     pub parallel_ok: bool,
     pub interactive: bool,
+    pub use_bridge: bool,
+    pub bridge_tiers: Option<String>,
 }
 
 #[tauri::command]
@@ -118,6 +125,9 @@ pub async fn tasks_update(
         .await
         .map_err(|e| e.to_string())?;
     store::set_interactive(&p.pool, &args.id, args.interactive)
+        .await
+        .map_err(|e| e.to_string())?;
+    store::set_bridge_config(&p.pool, &args.id, args.use_bridge, args.bridge_tiers)
         .await
         .map_err(|e| e.to_string())?;
     if edit_allowed(&row.status) {
