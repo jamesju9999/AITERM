@@ -348,10 +348,16 @@ pub async fn spawn_and_run(
     session_id: Option<&str>,
     prompt: &str,
     request_done_marker: bool,
+    bridge_env: Option<(u16, String)>,
 ) -> Result<(String, DispatchResult), String> {
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
     let tab_id = pty
-        .create_with_app(app.clone(), size, Some(std::path::PathBuf::from(project_dir)), None)
+        .create_with_app(
+            app.clone(),
+            size,
+            Some(std::path::PathBuf::from(project_dir)),
+            bridge_env,
+        )
         .map_err(|e| e.to_string())?;
 
     // 送進終端機的是接好旗標的版本；下面的事件送的是原本的指令——分頁

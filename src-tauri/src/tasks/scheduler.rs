@@ -78,6 +78,8 @@ pub struct RealDispatcher {
     pub app: AppHandle,
     pub pty: Arc<PtyManager>,
     pub config: Arc<ConfigStore>,
+    pub bridge: Arc<crate::bridge::BridgeState>,
+    pub secrets: Arc<crate::secret::SecretStore>,
     pub wake: Arc<Notify>,
     /// task_id → cancel sender, so `tasks_stop` can abort a running watch.
     pub cancels: Arc<parking_lot::Mutex<HashMap<String, oneshot::Sender<monitor::WatchControl>>>>,
@@ -99,6 +101,12 @@ impl Dispatcher for RealDispatcher {
         let session_id = dispatch::looks_like_claude(&claude_cmd)
             .then(|| uuid::Uuid::new_v4().to_string());
 
+        let bridge_env = dispatch::resolve_bridge_env(
+            &self.config,
+            task,
+            self.bridge.port(),
+            self.secrets.get(crate::bridge::auth::BRIDGE_TOKEN_KEY).ok().flatten(),
+        );
         let (tab_id, disp) = dispatch::spawn_and_run(
             &self.app,
             &self.pty,
@@ -107,6 +115,7 @@ impl Dispatcher for RealDispatcher {
             session_id.as_deref(),
             &prompt,
             !task.interactive,
+            bridge_env,
         )
         .await?;
         // 卡片在進到這裡之前就已經被 `claim_for_dispatch` 標成 running 了
@@ -412,6 +421,8 @@ pub fn spawn(app: AppHandle) -> SchedulerHandle {
     tauri::async_runtime::spawn(async move {
         let config = app.state::<Arc<ConfigStore>>().inner().clone();
         let pty = app.state::<Arc<PtyManager>>().inner().clone();
+        let bridge = app.state::<Arc<crate::bridge::BridgeState>>().inner().clone();
+        let secrets = app.state::<Arc<crate::secret::SecretStore>>().inner().clone();
 
         // Startup recovery: clear orphaned `running` cards (their PTY died
         // with the previous process). 每個已開啟的專案各掃一次。
@@ -434,6 +445,8 @@ pub fn spawn(app: AppHandle) -> SchedulerHandle {
             app: app.clone(),
             pty,
             config: config.clone(),
+            bridge,
+            secrets,
             wake: wake.clone(),
             cancels,
         };
