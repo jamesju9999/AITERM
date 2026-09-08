@@ -62,6 +62,7 @@ struct TaskFinishedEvent {
     project_id: String,
     task_id: String,
     tab_id: String,
+    outcome: String,
 }
 
 /// Abstracts "actually run this card" so the loop is testable without an
@@ -179,6 +180,7 @@ impl Dispatcher for RealDispatcher {
                     project_id: project_id.clone(),
                     task_id: task_id.clone(),
                     tab_id: tab_id.clone(),
+                    outcome: outcome.as_str().to_string(),
                 },
             );
             wake.notify_one();

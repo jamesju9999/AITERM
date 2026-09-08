@@ -34,6 +34,7 @@ pub(crate) fn apply_editable_task_board_fields(
             if c.is_empty() { "claude".to_string() } else { c.to_string() }
         },
         project_paths: current.project_paths.clone(),
+        auto_close_finished_tabs: incoming.auto_close_finished_tabs,
     }
 }
 
@@ -59,6 +60,7 @@ mod tests {
             max_concurrent: 5,
             claude_command: "claude".to_string(),
             project_paths: vec!["/projects/a".to_string(), "/projects/b".to_string()],
+            auto_close_finished_tabs: true,
         }
     }
 
@@ -71,6 +73,7 @@ mod tests {
             max_concurrent: 3,
             claude_command: "claude".to_string(),
             project_paths: Vec::new(),
+            auto_close_finished_tabs: true,
         };
         let merged = apply_editable_task_board_fields(&current(), incoming);
         assert_eq!(merged.max_concurrent, 3);
@@ -88,6 +91,7 @@ mod tests {
             max_concurrent: 5,
             claude_command: "claude".to_string(),
             project_paths: vec!["/injected".to_string()],
+            auto_close_finished_tabs: true,
         };
         let merged = apply_editable_task_board_fields(&current(), incoming);
         assert_eq!(
@@ -102,6 +106,7 @@ mod tests {
             max_concurrent: n,
             claude_command: "claude".to_string(),
             project_paths: Vec::new(),
+            auto_close_finished_tabs: true,
         };
         assert_eq!(apply_editable_task_board_fields(&current(), mk(0)).max_concurrent, 1);
         assert_eq!(apply_editable_task_board_fields(&current(), mk(99)).max_concurrent, 16);
@@ -114,10 +119,18 @@ mod tests {
             max_concurrent: 5,
             claude_command: "   ".to_string(),
             project_paths: Vec::new(),
+            auto_close_finished_tabs: true,
         };
         assert_eq!(
             apply_editable_task_board_fields(&current(), incoming).claude_command,
             "claude"
         );
+    }
+
+    #[test]
+    fn auto_close_finished_tabs_is_taken_from_incoming() {
+        let mut incoming = current();
+        incoming.auto_close_finished_tabs = false;
+        assert!(!apply_editable_task_board_fields(&current(), incoming).auto_close_finished_tabs);
     }
 }

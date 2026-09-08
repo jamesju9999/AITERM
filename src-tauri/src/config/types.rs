@@ -206,6 +206,11 @@ pub struct TaskBoardConfig {
     /// App 下次啟動就會看到。
     #[serde(default)]
     pub project_paths: Vec<String>,
+    /// 派工卡片跑完（成功／取消）後，是否自動關閉它的終端機分頁（連帶
+    /// 砍掉背後的 PTY/claude 行程）。失敗的卡片一律保留分頁，不受這個
+    /// 設定影響。使用者目前正在看的分頁也不會被自動關閉。
+    #[serde(default = "default_true")]
+    pub auto_close_finished_tabs: bool,
 }
 
 impl Default for TaskBoardConfig {
@@ -214,6 +219,7 @@ impl Default for TaskBoardConfig {
             max_concurrent: default_task_board_max_concurrent(),
             claude_command: default_claude_command(),
             project_paths: Vec::new(),
+            auto_close_finished_tabs: true,
         }
     }
 }
