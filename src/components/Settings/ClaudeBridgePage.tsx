@@ -12,6 +12,12 @@ import {
   type ClaudeBridgeConfig,
   type TierMapping,
 } from "../../ipc/bridge";
+import {
+  loadBridgeProfiles,
+  saveBridgeProfiles,
+  tiersEqual,
+  type BridgeProfile,
+} from "./bridgeProfiles";
 import "./ClaudeBridgePage.css";
 
 /** 與 `useTerminalBlocks.ts` 的判斷方式一致，避免兩處用不同的偵測。 */
@@ -84,6 +90,8 @@ export function ClaudeBridgePage() {
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [profiles, setProfiles] = useState<BridgeProfile[]>(() => loadBridgeProfiles());
+  const [newProfileName, setNewProfileName] = useState("");
 
   useEffect(() => {
     void (async () => {
@@ -125,6 +133,26 @@ export function ClaudeBridgePage() {
       return { ...prev, [tier]: { ...current, model } };
     });
   }, [updateCfg]);
+
+  const persistProfiles = useCallback((next: BridgeProfile[]) => {
+    setProfiles(next);
+    saveBridgeProfiles(next);
+  }, []);
+
+  const createProfile = useCallback(() => {
+    if (!cfg) return;
+    const name = newProfileName.trim();
+    if (!name) return;
+    const profile: BridgeProfile = {
+      id: crypto.randomUUID(),
+      name,
+      opus: cfg.opus,
+      sonnet: cfg.sonnet,
+      haiku: cfg.haiku,
+    };
+    persistProfiles([...profiles, profile]);
+    setNewProfileName("");
+  }, [cfg, newProfileName, profiles, persistProfiles]);
 
   const save = useCallback(async () => {
     if (!cfg) return;
@@ -217,6 +245,44 @@ export function ClaudeBridgePage() {
           />
           {t.bridge_default_on_new_tab}
         </label>
+      </section>
+
+      <section className="bridge-section">
+        <h3>{t.bridge_section_profiles}</h3>
+        <p className="bridge-section-desc">{t.bridge_section_profiles_desc}</p>
+
+        {profiles.length === 0 ? (
+          <p className="bridge-profile-empty">{t.bridge_profile_empty}</p>
+        ) : (
+          <ul className="bridge-profile-list">
+            {profiles.map((p) => {
+              const isActive = cfg ? tiersEqual(cfg, p) : false;
+              return (
+                <li key={p.id} className="bridge-profile-row">
+                  <span className="bridge-profile-name">{p.name}</span>
+                  {isActive && <span className="bridge-profile-badge">{t.bridge_profile_active}</span>}
+                  <div className="bridge-profile-actions">
+                    <button type="button">{t.bridge_profile_apply}</button>
+                    <button type="button">{t.bridge_profile_update}</button>
+                    <button type="button">{t.bridge_profile_rename}</button>
+                    <button type="button">{t.bridge_profile_delete}</button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        <div className="bridge-profile-new-row">
+          <input
+            value={newProfileName}
+            onChange={(e) => setNewProfileName(e.target.value)}
+            placeholder={t.bridge_profile_new_placeholder}
+          />
+          <button type="button" onClick={createProfile} disabled={!newProfileName.trim()}>
+            {t.bridge_profile_new}
+          </button>
+        </div>
       </section>
 
       <section className="bridge-section">

@@ -174,4 +174,52 @@ describe("ClaudeBridgePage", () => {
     render(<ClaudeBridgePage />);
     expect(await screen.findByText(/無法綁定/)).toBeInTheDocument();
   });
+
+  describe("帳號組合", () => {
+    beforeEach(() => {
+      localStorage.clear();
+    });
+
+    it("沒有任何組合時顯示空狀態提示", async () => {
+      render(<ClaudeBridgePage />);
+      expect(await screen.findByText(/還沒有存過任何組合|No profiles saved yet/)).toBeInTheDocument();
+    });
+
+    it("另存目前設定為新組合後出現在清單裡，且標示使用中", async () => {
+      const user = userEvent.setup();
+      render(<ClaudeBridgePage />);
+
+      // 用 role: combobox 而不是 findByLabelText(/Opus/)：一旦這個 tier 有值，
+      // 它的模型輸入框 aria-label 也會含「Opus」（見 tierModel aria-label 組法），
+      // 兩個元素都會命中純文字比對造成「找到多個元素」。role 篩到 <select> 才不會撞。
+      await user.selectOptions(await screen.findByRole("combobox", { name: /Opus/ }), "qwen");
+
+      const nameInput = await screen.findByPlaceholderText(/組合名稱|Profile name/);
+      await user.type(nameInput, "個人帳號");
+      await user.click(
+        screen.getByRole("button", { name: /另存目前設定為新組合|Save current as new profile/ }),
+      );
+
+      expect(await screen.findByText("個人帳號")).toBeInTheDocument();
+      expect(screen.getByText(/使用中|Active/)).toBeInTheDocument();
+    });
+
+    it("改動表格之後，原本標示使用中的組合就不再標示", async () => {
+      const user = userEvent.setup();
+      render(<ClaudeBridgePage />);
+
+      await user.selectOptions(await screen.findByRole("combobox", { name: /Opus/ }), "qwen");
+      await user.type(await screen.findByPlaceholderText(/組合名稱|Profile name/), "個人帳號");
+      await user.click(
+        screen.getByRole("button", { name: /另存目前設定為新組合|Save current as new profile/ }),
+      );
+      await screen.findByText(/使用中|Active/);
+
+      await user.selectOptions(screen.getByRole("combobox", { name: /Opus/ }), "cdx");
+
+      await waitFor(() => {
+        expect(screen.queryByText(/使用中|Active/)).not.toBeInTheDocument();
+      });
+    });
+  });
 });
