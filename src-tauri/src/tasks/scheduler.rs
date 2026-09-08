@@ -480,6 +480,8 @@ mod tests {
             archived_at: None,
             session_id: None,
             session_path: None,
+            use_bridge: false,
+            bridge_tiers: None,
         }
     }
 
@@ -565,6 +567,8 @@ mod tests {
             archived_at: None,
             session_id: None,
             session_path: None,
+            use_bridge: false,
+            bridge_tiers: None,
         }
     }
 

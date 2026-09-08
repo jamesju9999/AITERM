@@ -45,6 +45,12 @@ pub struct TaskRow {
     /// 複製進卡片資料夾的 `session.jsonl` 路徑。有值代表這張卡片有完整的
     /// 逐輪記錄；沒有就退回 `transcript_path`。
     pub session_path: Option<String>,
+    /// 這張卡派工時要不要走 Claude Bridge。預設 `false`＝直連 Anthropic。
+    pub use_bridge: bool,
+    /// 選了帳號組合時，存檔當下解析出的 `{opus,sonnet,haiku}` JSON 快照
+    /// （形狀對齊 `ClaudeBridgeConfig` 的 tier 子集）。`None` 且
+    /// `use_bridge=true` 代表「沿用當下的全域橋接設定」，不覆寫任何 tier。
+    pub bridge_tiers: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -244,6 +250,23 @@ pub async fn set_interactive(
 ) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE tasks SET interactive = ? WHERE id = ?")
         .bind(interactive as i64)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// 派工方式：要不要走橋接，以及（可選的）凍結的帳號組合快照。跟
+/// `parallel_ok`/`interactive` 一樣隨時可改，不受 `edit_allowed` 限制。
+pub async fn set_bridge_config(
+    pool: &SqlitePool,
+    id: &str,
+    use_bridge: bool,
+    bridge_tiers: Option<String>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET use_bridge = ?, bridge_tiers = ? WHERE id = ?")
+        .bind(use_bridge as i64)
+        .bind(bridge_tiers)
         .bind(id)
         .execute(pool)
         .await?;
@@ -900,6 +923,42 @@ mod tests {
         assert_eq!(all[0].status, "planning");
         assert!(all[0].parallel_ok);
         assert!(all[0].outcome.is_none());
+    }
+
+    #[tokio::test]
+    async fn new_card_defaults_to_no_bridge() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        let row = get_task(&pool, &id).await.unwrap().unwrap();
+        assert!(!row.use_bridge);
+        assert!(row.bridge_tiers.is_none());
+    }
+
+    #[tokio::test]
+    async fn set_bridge_config_stores_use_bridge_and_snapshot() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+
+        set_bridge_config(&pool, &id, true, Some(r#"{"opus":null,"sonnet":null,"haiku":null}"#.to_string()))
+            .await
+            .unwrap();
+
+        let row = get_task(&pool, &id).await.unwrap().unwrap();
+        assert!(row.use_bridge);
+        assert_eq!(row.bridge_tiers.as_deref(), Some(r#"{"opus":null,"sonnet":null,"haiku":null}"#));
+    }
+
+    #[tokio::test]
+    async fn set_bridge_config_can_clear_back_to_direct() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        set_bridge_config(&pool, &id, true, None).await.unwrap();
+
+        set_bridge_config(&pool, &id, false, None).await.unwrap();
+
+        let row = get_task(&pool, &id).await.unwrap().unwrap();
+        assert!(!row.use_bridge);
+        assert!(row.bridge_tiers.is_none());
     }
 
     #[tokio::test]

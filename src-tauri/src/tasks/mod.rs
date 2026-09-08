@@ -53,7 +53,9 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             ai_summary      TEXT,
             archived_at     INTEGER,
             session_id      TEXT,
-            session_path    TEXT
+            session_path    TEXT,
+            use_bridge      INTEGER NOT NULL DEFAULT 0,
+            bridge_tiers    TEXT
         )",
     )
     .execute(pool)
@@ -79,6 +81,14 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await;
     let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN session_path TEXT")
+        .execute(pool)
+        .await;
+    // Migration: existing databases created before `use_bridge`/`bridge_tiers`
+    // existed.
+    let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN use_bridge INTEGER NOT NULL DEFAULT 0")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN bridge_tiers TEXT")
         .execute(pool)
         .await;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, sort_order)")
