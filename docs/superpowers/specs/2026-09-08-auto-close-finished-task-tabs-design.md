@@ -29,6 +29,8 @@
 
 **不新增任何後端關閉分頁/砍行程的邏輯**——`aiterm:close-tab` → `handleCloseTab` → `TerminalView` 卸載 → `closePty()` 這條路徑已經存在且已被 `TaskCard` 刪除流程驗證過。這次只需要在正確的時機、正確的條件下觸發同一個事件。
 
+**實測後修正**：`aiterm:close-tab` 的既有路徑會先經過 `runCloseGuard`（`src/lib/closeTabGuard.ts`）——`TerminalView` 註冊的 guard 依賴三個前端自己追蹤的訊號（shell OSC133 忙碌狀態、agent mission 狀態、`runningTaskTabRegistry`），這三者都跟後端的 `task-finished` 事件是**互相獨立、非同步**的訊號來源（`isRunningTaskTab` 尤其依賴 `TaskBoardView` 自己的 `tasks-updated` 刷新，那個刷新不保證比 `task-finished` 早到）。實機測試發現：只要有一個還沒跟上，`runCloseGuard` 就會先把使用者正在看的分頁**搶走**去顯示一個確認框，而自動關閉是背景動作、沒有人在看著會去按那個框，分頁因此卡住關不掉。修法：`aiterm:close-tab` 的 `detail` 多帶一個 `skipGuard?: boolean`，`useAutoCloseFinishedTabs` 一律帶 `true`（此時已經確認 outcome ≠ failed，後端的判斷本來就比這三個前端訊號權威）；`handleCloseTab` 收到就直接跳過 `runCloseGuard`。手動關閉（Ctrl+W、分頁 ✕、`TaskCard` 刪除）都不帶這個旗標，行為完全不變。
+
 ### 後端改動
 
 **`TaskFinishedEvent`**（`scheduler.rs:57-65`）新增一個欄位：
