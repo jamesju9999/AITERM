@@ -23,6 +23,8 @@ const card = (over: Partial<TaskWithAttachments> = {}): TaskWithAttachments => (
   archived_at: null,
   session_id: null,
   session_path: null,
+  use_bridge: false,
+  bridge_tiers: null,
   attachments: [],
   ...over,
 });

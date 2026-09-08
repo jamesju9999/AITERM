@@ -31,11 +31,21 @@ describe("ipc/tasks", () => {
       project_dir: "/r",
       parallel_ok: true,
       interactive: true,
+      use_bridge: false,
+      bridge_tiers: null,
     });
     expect(id).toBe("new-id");
     expect(invoke).toHaveBeenCalledWith("tasks_create", {
       projectId: "proj1",
-      args: { title: "t", body: "b", project_dir: "/r", parallel_ok: true, interactive: true },
+      args: {
+        title: "t",
+        body: "b",
+        project_dir: "/r",
+        parallel_ok: true,
+        interactive: true,
+        use_bridge: false,
+        bridge_tiers: null,
+      },
     });
   });
 

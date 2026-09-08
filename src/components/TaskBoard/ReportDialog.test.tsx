@@ -112,6 +112,7 @@ describe("ReportDialog", () => {
     tab_id: null, transcript_path: null, error_message: null,
     created_at: "2026-09-05T10:00:00Z", dispatched_at: null, finished_at: null,
     ai_summary: null, archived_at: null, session_id: null, session_path: null,
+    use_bridge: false, bridge_tiers: null,
     attachments: [], ...over,
   });
 

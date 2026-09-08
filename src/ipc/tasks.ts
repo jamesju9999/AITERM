@@ -37,6 +37,14 @@ export interface TaskRow {
   session_id: string | null;
   /** 複製進卡片資料夾的 session.jsonl 路徑。有值代表有完整的逐輪記錄。 */
   session_path: string | null;
+  /** 派工時要不要走 Claude Bridge。 */
+  use_bridge: boolean;
+  /**
+   * 選了帳號組合時凍結的 `{opus,sonnet,haiku}` JSON 快照字串；`null` 代表
+   * 「沿用當下的全域橋接設定」（`use_bridge=true` 時）或不適用
+   * （`use_bridge=false` 時）。
+   */
+  bridge_tiers: string | null;
 }
 
 export interface TaskWithAttachments extends TaskRow {
@@ -61,6 +69,8 @@ export const createTask = (
     project_dir: string;
     parallel_ok: boolean;
     interactive: boolean;
+    use_bridge: boolean;
+    bridge_tiers: string | null;
   },
 ): Promise<string> => invoke("tasks_create", { projectId, args });
 
@@ -76,6 +86,8 @@ export const updateTask = (
     project_dir: string;
     parallel_ok: boolean;
     interactive: boolean;
+    use_bridge: boolean;
+    bridge_tiers: string | null;
   },
 ): Promise<void> => invoke("tasks_update", { projectId, args });
 
