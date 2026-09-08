@@ -14,6 +14,12 @@ import {
   type TaskWithAttachments,
 } from "../../ipc/tasks";
 import { useRefineTask } from "./useRefineTask";
+import {
+  loadBridgeProfiles,
+  tiersEqual,
+  type BridgeProfile,
+} from "../Settings/bridgeProfiles";
+import type { TierMapping } from "../../ipc/bridge";
 
 const LAST_DIR_KEY = "aiterm_last_task_dir";
 /** 潤飾用的模型偏好，跟工作報告分開記——兩者的合適模型不一定一樣。 */
@@ -37,6 +43,22 @@ export function TaskEditorDialog({
   const [dir, setDir] = useState(card?.project_dir ?? localStorage.getItem(LAST_DIR_KEY) ?? "");
   const [parallelOk, setParallelOk] = useState(card?.parallel_ok ?? true);
   const [interactive, setInteractive] = useState(card?.interactive ?? false);
+  const [profiles] = useState<BridgeProfile[]>(() => loadBridgeProfiles());
+  const [bridgeChoice, setBridgeChoice] = useState<string>(() => {
+    if (!card?.use_bridge) return "direct";
+    if (!card.bridge_tiers) return "current";
+    try {
+      const snap = JSON.parse(card.bridge_tiers) as {
+        opus: TierMapping | null;
+        sonnet: TierMapping | null;
+        haiku: TierMapping | null;
+      };
+      const match = profiles.find((p) => tiersEqual(snap, p));
+      return match ? match.id : "custom";
+    } catch {
+      return "custom";
+    }
+  });
   // Edit mode: already-uploaded rows, hanging off the existing card id.
   const [attachments, setAttachments] = useState<AttachmentRow[]>(card?.attachments ?? []);
   // Create mode: a brand-new card has no id yet, so picked files can't be
@@ -129,6 +151,23 @@ export function TaskEditorDialog({
     setBusy(true);
     try {
       if (dir) localStorage.setItem(LAST_DIR_KEY, dir);
+      const bridgeArgs = (() => {
+        if (bridgeChoice === "direct") return { use_bridge: false, bridge_tiers: null };
+        if (bridgeChoice === "current") return { use_bridge: true, bridge_tiers: null };
+        if (bridgeChoice === "custom") {
+          return { use_bridge: true, bridge_tiers: card?.bridge_tiers ?? null };
+        }
+        const profile = profiles.find((p) => p.id === bridgeChoice);
+        if (!profile) return { use_bridge: true, bridge_tiers: null };
+        return {
+          use_bridge: true,
+          bridge_tiers: JSON.stringify({
+            opus: profile.opus,
+            sonnet: profile.sonnet,
+            haiku: profile.haiku,
+          }),
+        };
+      })();
       if (isEdit) {
         await updateTask(projectId, {
           id: card.id,
@@ -137,6 +176,7 @@ export function TaskEditorDialog({
           project_dir: dir,
           parallel_ok: parallelOk,
           interactive,
+          ...bridgeArgs,
         });
       } else {
         const newId = await createTask(projectId, {
@@ -145,6 +185,7 @@ export function TaskEditorDialog({
           project_dir: dir,
           parallel_ok: parallelOk,
           interactive,
+          ...bridgeArgs,
         });
         for (const f of pendingFiles) {
           const bytes = new Uint8Array(await f.arrayBuffer());
@@ -316,6 +357,29 @@ export function TaskEditorDialog({
           </>
         )}
 
+        </div>
+
+        <div className="task-dialog-group">
+        <label className="task-field">
+          <span className="task-field-label">{t.task_bridge_label}</span>
+          <select
+            className="task-field-input"
+            data-testid="task-bridge-select"
+            value={bridgeChoice}
+            onChange={(e) => setBridgeChoice(e.target.value)}
+          >
+            <option value="direct">{t.task_bridge_direct}</option>
+            <option value="current">{t.task_bridge_current}</option>
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {t.task_bridge_profile_option(p.name)}
+              </option>
+            ))}
+            {bridgeChoice === "custom" && (
+              <option value="custom">{t.task_bridge_custom}</option>
+            )}
+          </select>
+        </label>
         </div>
 
         <div className="task-dialog-group">
