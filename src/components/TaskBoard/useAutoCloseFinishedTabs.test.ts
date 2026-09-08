@@ -38,13 +38,18 @@ describe("useAutoCloseFinishedTabs", () => {
     renderHook(() => useAutoCloseFinishedTabs(activeRef("other-tab")));
     expect(taskFinishedHandler).not.toBeNull();
 
-    const events: CustomEvent<{ tabId?: string }>[] = [];
-    const onClose = (e: Event) => events.push(e as CustomEvent<{ tabId?: string }>);
+    const events: CustomEvent<{ tabId?: string; skipGuard?: boolean }>[] = [];
+    const onClose = (e: Event) => events.push(e as CustomEvent<{ tabId?: string; skipGuard?: boolean }>);
     window.addEventListener("aiterm:close-tab", onClose);
     try {
       taskFinishedHandler!({ payload: PAYLOAD });
       await waitFor(() => expect(events).toHaveLength(1));
       expect(events[0].detail.tabId).toBe("tab-9");
+      // 自動關閉不能重複走「使用者手動關分頁」那條會跳確認框的路徑——
+      // 沒人會去按那個框，guard 只要還沒跟上（isBusyRef/isRunningTaskTab
+      // 都是跟 task-finished 完全獨立的非同步訊號，天生就可能還沒更新），
+      // 分頁就會卡住關不掉，還會把使用者正在看的分頁搶走去顯示那個框。
+      expect(events[0].detail.skipGuard).toBe(true);
     } finally {
       window.removeEventListener("aiterm:close-tab", onClose);
     }
