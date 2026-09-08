@@ -17,6 +17,9 @@ import { getConfig } from "../../ipc/config";
 import type { AppConfig } from "../../ipc/config";
 import { listProviders } from "../../ipc/provider";
 import type { ProviderInfo } from "../../ipc/provider";
+import { translations } from "../../lib/i18n";
+
+const t = translations["zh-TW"];
 
 // getConfig() 的 claude_bridge 以外欄位在這個元件裡完全不會被讀取，但
 // AppConfig 是既有的完整型別，用完整假資料湊齊比亂寫斷言型別安全。
@@ -220,6 +223,64 @@ describe("ClaudeBridgePage", () => {
       await waitFor(() => {
         expect(screen.queryByText(/使用中|Active/)).not.toBeInTheDocument();
       });
+    });
+
+    it("套用組合時立即呼叫 bridgeSetConfig，帶入該組合的三個 tier", async () => {
+      const user = userEvent.setup();
+      render(<ClaudeBridgePage />);
+
+      await user.selectOptions(await screen.findByRole("combobox", { name: /Opus/ }), "qwen");
+      await user.type(await screen.findByPlaceholderText(/組合名稱|Profile name/), "個人帳號");
+      await user.click(
+        screen.getByRole("button", { name: /另存目前設定為新組合|Save current as new profile/ }),
+      );
+
+      await user.selectOptions(screen.getByRole("combobox", { name: /Opus/ }), "cdx");
+      vi.mocked(bridgeSetConfig).mockClear();
+
+      await user.click(screen.getByRole("button", { name: t.bridge_profile_apply }));
+
+      await waitFor(() => expect(bridgeSetConfig).toHaveBeenCalledTimes(1));
+      const payload = vi.mocked(bridgeSetConfig).mock.calls[0][0];
+      expect(payload.opus?.provider_id).toBe("qwen");
+    });
+
+    it("套用組合後畫面上的 tier 表格也跟著換", async () => {
+      const user = userEvent.setup();
+      render(<ClaudeBridgePage />);
+
+      await user.selectOptions(await screen.findByRole("combobox", { name: /Opus/ }), "qwen");
+      await user.type(await screen.findByPlaceholderText(/組合名稱|Profile name/), "個人帳號");
+      await user.click(
+        screen.getByRole("button", { name: /另存目前設定為新組合|Save current as new profile/ }),
+      );
+
+      await user.selectOptions(screen.getByRole("combobox", { name: /Opus/ }), "cdx");
+      await user.click(screen.getByRole("button", { name: t.bridge_profile_apply }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("combobox", { name: /Opus/ })).toHaveValue("qwen");
+      });
+    });
+
+    it("更新組合只覆蓋 localStorage，不呼叫 bridgeSetConfig", async () => {
+      const user = userEvent.setup();
+      render(<ClaudeBridgePage />);
+
+      await user.selectOptions(await screen.findByRole("combobox", { name: /Opus/ }), "qwen");
+      await user.type(await screen.findByPlaceholderText(/組合名稱|Profile name/), "個人帳號");
+      await user.click(
+        screen.getByRole("button", { name: /另存目前設定為新組合|Save current as new profile/ }),
+      );
+
+      await user.selectOptions(screen.getByRole("combobox", { name: /Opus/ }), "cdx");
+      vi.mocked(bridgeSetConfig).mockClear();
+
+      await user.click(screen.getByRole("button", { name: t.bridge_profile_update }));
+
+      expect(bridgeSetConfig).not.toHaveBeenCalled();
+      const stored = JSON.parse(localStorage.getItem("aiterm.bridgeProfiles") ?? "[]");
+      expect(stored[0].opus.provider_id).toBe("cdx");
     });
   });
 });

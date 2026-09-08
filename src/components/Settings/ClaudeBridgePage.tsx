@@ -154,6 +154,39 @@ export function ClaudeBridgePage() {
     setNewProfileName("");
   }, [cfg, newProfileName, profiles, persistProfiles]);
 
+  const applyProfile = useCallback(
+    async (profile: BridgeProfile) => {
+      if (!cfg) return;
+      const next: ClaudeBridgeConfig = {
+        ...cfg,
+        opus: profile.opus,
+        sonnet: profile.sonnet,
+        haiku: profile.haiku,
+      };
+      setCfg(next);
+      setSaving(true);
+      try {
+        setStatus(await bridgeSetConfig(next));
+        setSaved(true);
+      } finally {
+        setSaving(false);
+      }
+    },
+    [cfg],
+  );
+
+  const updateProfile = useCallback(
+    (profile: BridgeProfile) => {
+      if (!cfg) return;
+      persistProfiles(
+        profiles.map((p) =>
+          p.id === profile.id ? { ...p, opus: cfg.opus, sonnet: cfg.sonnet, haiku: cfg.haiku } : p,
+        ),
+      );
+    },
+    [cfg, profiles, persistProfiles],
+  );
+
   const save = useCallback(async () => {
     if (!cfg) return;
     setSaving(true);
@@ -262,8 +295,12 @@ export function ClaudeBridgePage() {
                   <span className="bridge-profile-name">{p.name}</span>
                   {isActive && <span className="bridge-profile-badge">{t.bridge_profile_active}</span>}
                   <div className="bridge-profile-actions">
-                    <button type="button">{t.bridge_profile_apply}</button>
-                    <button type="button">{t.bridge_profile_update}</button>
+                    <button type="button" onClick={() => void applyProfile(p)}>
+                      {t.bridge_profile_apply}
+                    </button>
+                    <button type="button" onClick={() => updateProfile(p)}>
+                      {t.bridge_profile_update}
+                    </button>
                     <button type="button">{t.bridge_profile_rename}</button>
                     <button type="button">{t.bridge_profile_delete}</button>
                   </div>
