@@ -15,9 +15,11 @@ import {
 import { setRunningTaskTabs } from "../../lib/runningTaskTabRegistry";
 import { unlistenOnCleanup } from "../../lib/eventSubscription";
 import { ArchiveDialog } from "./ArchiveDialog";
+import { groupByLabel } from "./groupByLabel";
 import { TaskCard } from "./TaskCard";
 import { TaskColumn } from "./TaskColumn";
 import { TaskEditorDialog } from "./TaskEditorDialog";
+import { TaskLabelGroup } from "./TaskLabelGroup";
 import { TranscriptDialog } from "./TranscriptDialog";
 
 const COLUMNS: TaskStatus[] = ["planning", "queued", "running", "done"];
@@ -132,7 +134,7 @@ export function ProjectBoard({
     const q = search.trim().toLowerCase();
     if (!q) return byStatus(s);
     return byStatus(s).filter((c) =>
-      [c.title, c.body, c.project_dir].some((f) => f.toLowerCase().includes(q)),
+      [c.title, c.body, c.project_dir, c.label ?? ""].some((f) => f.toLowerCase().includes(q)),
     );
   };
 
@@ -291,32 +293,45 @@ export function ProjectBoard({
               ) : undefined
             }
           >
-            {visibleIn(s).map((cardRow) => {
-              const draggableCard =
-                cardRow.status === "planning" ||
-                cardRow.status === "queued" ||
-                (cardRow.status === "running" && cardRow.interactive);
-              const isDragging = draggingCardId === cardRow.id;
-              const classes = ["task-card-drag-wrap"];
-              if (draggableCard) classes.push("task-card-drag-wrap--draggable");
-              if (isDragging) classes.push("task-card-drag-wrap--dragging");
+            {(() => {
+              const renderCard = (cardRow: TaskWithAttachments) => {
+                const draggableCard =
+                  cardRow.status === "planning" ||
+                  cardRow.status === "queued" ||
+                  (cardRow.status === "running" && cardRow.interactive);
+                const isDragging = draggingCardId === cardRow.id;
+                const classes = ["task-card-drag-wrap"];
+                if (draggableCard) classes.push("task-card-drag-wrap--draggable");
+                if (isDragging) classes.push("task-card-drag-wrap--dragging");
+                return (
+                  <div
+                    key={cardRow.id}
+                    data-task-drag-id={cardRow.id}
+                    className={classes.join(" ")}
+                    onMouseDown={(e) => handleCardMouseDown(e, cardRow)}
+                  >
+                    <TaskCard
+                      projectId={projectId}
+                      card={cardRow}
+                      onEdit={() => setEditing(cardRow)}
+                      onViewTranscript={() => setTranscriptFor(cardRow.id)}
+                      onChanged={() => void refresh()}
+                    />
+                  </div>
+                );
+              };
+              const { ungrouped, groups } = groupByLabel(visibleIn(s));
               return (
-                <div
-                  key={cardRow.id}
-                  data-task-drag-id={cardRow.id}
-                  className={classes.join(" ")}
-                  onMouseDown={(e) => handleCardMouseDown(e, cardRow)}
-                >
-                  <TaskCard
-                    projectId={projectId}
-                    card={cardRow}
-                    onEdit={() => setEditing(cardRow)}
-                    onViewTranscript={() => setTranscriptFor(cardRow.id)}
-                    onChanged={() => void refresh()}
-                  />
-                </div>
+                <>
+                  {ungrouped.map(renderCard)}
+                  {groups.map((g) => (
+                    <TaskLabelGroup key={g.label} label={g.label} count={g.cards.length}>
+                      {g.cards.map(renderCard)}
+                    </TaskLabelGroup>
+                  ))}
+                </>
               );
-            })}
+            })()}
           </TaskColumn>
         ))}
       </div>

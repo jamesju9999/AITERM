@@ -992,7 +992,9 @@ describe("ProjectBoard", () => {
     it("有 label 的卡片顯示徽章", async () => {
       vi.mocked(listTasks).mockResolvedValue([card({ id: "1", label: "緊急" })]);
       view();
-      expect(await screen.findByText("緊急")).toBeInTheDocument();
+      // 單張有 label 的卡片會落在該 label 的群組裡，"緊急" 因此出現兩次：
+      // 群組標頭一次，卡片自己的徽章一次。
+      await waitFor(() => expect(screen.getAllByText("緊急")).toHaveLength(2));
     });
 
     it("沒有 label 的卡片不顯示徽章", async () => {
@@ -1000,6 +1002,38 @@ describe("ProjectBoard", () => {
       view();
       await screen.findByText("Card one");
       expect(screen.queryByText("緊急")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Label 分組", () => {
+    it("同一個 Label 的卡片收進同一個可摺疊群組，未分類卡片留在最上面", async () => {
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "1", title: "沒分類", label: null, sort_order: 1 }),
+        card({ id: "2", title: "緊急一", label: "緊急", sort_order: 2, created_at: "2026-01-01 00:00:00" }),
+        card({ id: "3", title: "緊急二", label: "緊急", sort_order: 3, created_at: "2026-01-02 00:00:00" }),
+      ]);
+      view();
+
+      await screen.findByText("沒分類");
+      // "緊急" 文字會出現三次：群組標頭一次，兩張卡片各自的徽章各一次
+      // （TaskCard 一律顯示自己的 label 徽章，不因為分組而省略）。
+      expect(screen.getAllByText("緊急")).toHaveLength(3);
+      expect(screen.getByText("(2)")).toBeInTheDocument();
+      expect(screen.getByText("緊急一")).toBeInTheDocument();
+      expect(screen.getByText("緊急二")).toBeInTheDocument();
+    });
+
+    it("搜尋關鍵字能比對 label", async () => {
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "1", title: "不相干的卡", label: null }),
+        card({ id: "2", title: "有分類的卡", label: "緊急" }),
+      ]);
+      view();
+      await screen.findByText("不相干的卡");
+
+      await userEvent.type(screen.getByTestId("board-search"), "緊急");
+      expect(screen.getByText("有分類的卡")).toBeInTheDocument();
+      expect(screen.queryByText("不相干的卡")).not.toBeInTheDocument();
     });
   });
 });
