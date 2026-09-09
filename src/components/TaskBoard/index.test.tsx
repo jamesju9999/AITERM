@@ -33,6 +33,7 @@ vi.mock("../../ipc/tasks", () => ({
 // webview.
 vi.mock("../../ipc/projects", () => ({
   usedDirs: vi.fn().mockResolvedValue([]),
+  usedLabels: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("../../lib/terminalInstanceRegistry", () => ({
@@ -59,7 +60,8 @@ const card = (over: Partial<TaskWithAttachments>): TaskWithAttachments => ({
   parallel_ok: true, interactive: false, sort_order: 1, outcome: null, tab_id: null,
   transcript_path: null, error_message: null, created_at: "", dispatched_at: null,
   finished_at: null, ai_summary: null, archived_at: null,
-  session_id: null, session_path: null, use_bridge: false, bridge_tiers: null, attachments: [],
+  session_id: null, session_path: null, use_bridge: false, bridge_tiers: null,
+  label: null, attachments: [],
   ...over,
 });
 
