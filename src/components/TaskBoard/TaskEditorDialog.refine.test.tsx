@@ -6,7 +6,10 @@ const invokeAiChat = vi.fn();
 const listProviders = vi.fn();
 
 vi.mock("../../ipc/ai", () => ({ invokeAiChat: (...a: unknown[]) => invokeAiChat(...a) }));
-vi.mock("../../ipc/projects", () => ({ usedDirs: vi.fn().mockResolvedValue([]) }));
+vi.mock("../../ipc/projects", () => ({
+  usedDirs: vi.fn().mockResolvedValue([]),
+  usedLabels: vi.fn().mockResolvedValue([]),
+}));
 vi.mock("../../ipc/tasks", () => ({
   createTask: vi.fn(),
   updateTask: vi.fn(),

@@ -3,7 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const usedDirs = vi.fn();
-vi.mock("../../ipc/projects", () => ({ usedDirs: (...a: unknown[]) => usedDirs(...a) }));
+vi.mock("../../ipc/projects", () => ({
+  usedDirs: (...a: unknown[]) => usedDirs(...a),
+  usedLabels: vi.fn().mockResolvedValue([]),
+}));
 vi.mock("../../ipc/tasks", () => ({
   createTask: vi.fn(),
   updateTask: vi.fn(),

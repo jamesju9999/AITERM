@@ -3,7 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import { ModelPickerButton } from "../ModelPickerButton";
-import { usedDirs } from "../../ipc/projects";
+import { usedDirs, usedLabels } from "../../ipc/projects";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import {
   addAttachment,
@@ -42,6 +42,7 @@ export function TaskEditorDialog({
   const [title, setTitle] = useState(card?.title ?? "");
   const [body, setBody] = useState(card?.body ?? "");
   const [dir, setDir] = useState(card?.project_dir ?? localStorage.getItem(LAST_DIR_KEY) ?? "");
+  const [label, setLabel] = useState(card?.label ?? "");
   const [parallelOk, setParallelOk] = useState(card?.parallel_ok ?? true);
   const [interactive, setInteractive] = useState(card?.interactive ?? false);
   const [profiles] = useState<BridgeProfile[]>(() => loadBridgeProfiles());
@@ -88,6 +89,18 @@ export function TaskEditorDialog({
     let alive = true;
     void usedDirs(projectId).then((dirs) => {
       if (alive) setDirChoices(dirs);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [projectId]);
+
+  // 這個專案的卡片用過的 Label，供快捷選取——跟 dirChoices 同一個理由。
+  const [labelChoices, setLabelChoices] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void usedLabels(projectId).then((labels) => {
+      if (alive) setLabelChoices(labels);
     });
     return () => {
       alive = false;
@@ -182,6 +195,7 @@ export function TaskEditorDialog({
           }),
         };
       })();
+      const labelArg = label.trim() || null;
       if (isEdit) {
         await updateTask(projectId, {
           id: card.id,
@@ -190,6 +204,7 @@ export function TaskEditorDialog({
           project_dir: dir,
           parallel_ok: parallelOk,
           interactive,
+          label: labelArg,
           ...bridgeArgs,
         });
       } else {
@@ -199,6 +214,7 @@ export function TaskEditorDialog({
           project_dir: dir,
           parallel_ok: parallelOk,
           interactive,
+          label: labelArg,
           ...bridgeArgs,
         });
         for (const f of pendingFiles) {
@@ -342,6 +358,34 @@ export function TaskEditorDialog({
           )}
         </label>
 
+        </div>
+
+        <div className="task-dialog-group">
+        <label className="task-field">
+          <span className="task-field-label">{t.board_card_label}</span>
+          <input
+            className="task-field-input"
+            data-testid="task-label-input"
+            placeholder={t.board_card_label_placeholder}
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+          />
+          {labelChoices.length > 0 && (
+            <div className="task-used-dirs" data-testid="used-labels-row">
+              {labelChoices.map((l) => (
+                <button
+                  key={l}
+                  type="button"
+                  className="tb-btn tb-btn--ghost tb-btn--tiny"
+                  data-testid={`used-label-${l}`}
+                  onClick={() => setLabel(l)}
+                >
+                  🏷 {l}
+                </button>
+              ))}
+            </div>
+          )}
+        </label>
         </div>
 
         <div className="task-dialog-group">

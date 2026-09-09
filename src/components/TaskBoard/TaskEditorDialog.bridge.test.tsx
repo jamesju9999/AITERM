@@ -6,7 +6,10 @@ const usedDirs = vi.fn();
 const createTask = vi.fn();
 const updateTask = vi.fn();
 const bridgeStatus = vi.fn();
-vi.mock("../../ipc/projects", () => ({ usedDirs: (...a: unknown[]) => usedDirs(...a) }));
+vi.mock("../../ipc/projects", () => ({
+  usedDirs: (...a: unknown[]) => usedDirs(...a),
+  usedLabels: vi.fn().mockResolvedValue([]),
+}));
 vi.mock("../../ipc/tasks", () => ({
   createTask: (...a: unknown[]) => createTask(...a),
   updateTask: (...a: unknown[]) => updateTask(...a),
