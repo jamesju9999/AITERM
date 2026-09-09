@@ -47,6 +47,10 @@ export interface TaskRow {
    * （`use_bridge=false` 時）。
    */
   bridge_tiers: string | null;
+  /** 這張卡片專屬 git worktree 的路徑；`null` 代表沒有隔離或已經合併清理過。 */
+  worktree_path: string | null;
+  /** 上面那個 worktree 所在的分支名稱，跟 `worktree_path` 同進退。 */
+  worktree_branch: string | null;
 }
 
 export interface TaskWithAttachments extends TaskRow {
@@ -110,6 +114,9 @@ export const stopTask = (projectId: string, id: string): Promise<void> =>
 
 export const markTaskDone = (projectId: string, id: string): Promise<void> =>
   invoke("tasks_mark_done", { projectId, id });
+
+export const mergeTaskWorktree = (projectId: string, id: string): Promise<void> =>
+  invoke("tasks_merge_worktree", { projectId, id });
 
 export const deleteTask = (
   projectId: string,
