@@ -35,6 +35,8 @@ pub(crate) fn apply_editable_task_board_fields(
         },
         project_paths: current.project_paths.clone(),
         auto_close_finished_tabs: incoming.auto_close_finished_tabs,
+        notify_desktop_on_finish: incoming.notify_desktop_on_finish,
+        notify_telegram_on_finish: incoming.notify_telegram_on_finish,
     }
 }
 
@@ -61,6 +63,8 @@ mod tests {
             claude_command: "claude".to_string(),
             project_paths: vec!["/projects/a".to_string(), "/projects/b".to_string()],
             auto_close_finished_tabs: true,
+            notify_desktop_on_finish: true,
+            notify_telegram_on_finish: true,
         }
     }
 
@@ -74,6 +78,8 @@ mod tests {
             claude_command: "claude".to_string(),
             project_paths: Vec::new(),
             auto_close_finished_tabs: true,
+            notify_desktop_on_finish: true,
+            notify_telegram_on_finish: true,
         };
         let merged = apply_editable_task_board_fields(&current(), incoming);
         assert_eq!(merged.max_concurrent, 3);
@@ -92,6 +98,8 @@ mod tests {
             claude_command: "claude".to_string(),
             project_paths: vec!["/injected".to_string()],
             auto_close_finished_tabs: true,
+            notify_desktop_on_finish: true,
+            notify_telegram_on_finish: true,
         };
         let merged = apply_editable_task_board_fields(&current(), incoming);
         assert_eq!(
@@ -107,6 +115,8 @@ mod tests {
             claude_command: "claude".to_string(),
             project_paths: Vec::new(),
             auto_close_finished_tabs: true,
+            notify_desktop_on_finish: true,
+            notify_telegram_on_finish: true,
         };
         assert_eq!(apply_editable_task_board_fields(&current(), mk(0)).max_concurrent, 1);
         assert_eq!(apply_editable_task_board_fields(&current(), mk(99)).max_concurrent, 16);
@@ -120,6 +130,8 @@ mod tests {
             claude_command: "   ".to_string(),
             project_paths: Vec::new(),
             auto_close_finished_tabs: true,
+            notify_desktop_on_finish: true,
+            notify_telegram_on_finish: true,
         };
         assert_eq!(
             apply_editable_task_board_fields(&current(), incoming).claude_command,
@@ -132,5 +144,15 @@ mod tests {
         let mut incoming = current();
         incoming.auto_close_finished_tabs = false;
         assert!(!apply_editable_task_board_fields(&current(), incoming).auto_close_finished_tabs);
+    }
+
+    #[test]
+    fn notify_flags_are_taken_from_incoming() {
+        let mut incoming = current();
+        incoming.notify_desktop_on_finish = false;
+        incoming.notify_telegram_on_finish = false;
+        let merged = apply_editable_task_board_fields(&current(), incoming);
+        assert!(!merged.notify_desktop_on_finish);
+        assert!(!merged.notify_telegram_on_finish);
     }
 }
