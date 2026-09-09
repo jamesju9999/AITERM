@@ -288,3 +288,87 @@ export function TaskLabelGroup({
 - `hashLabelHue`：同字串永遠同色相；回傳值落在 0–359
 - `ProjectBoard` 搜尋測試延伸：關鍵字比對 `label` 能篩出卡片
 - `TaskEditorDialog`：`usedLabels` 回傳的清單正確渲染成可點的 chip；點擊後填入輸入框；儲存時 `label` 正確帶進 `createTask`/`updateTask` 的呼叫參數
+
+## 追加範圍（第一輪實作完成、真機測試後使用者提出）
+
+第一輪做完、在真機（`tauri:dev`）上驗證分組畫面時，使用者發現一個沒被涵蓋到的情境：**同一狀態欄裡的卡片要怎麼換到別的 Label 群組？** 原設計裡這件事只能透過「編輯工作」改 Label 文字達成，而編輯工作只對 `planning` 卡片開放（跟 `title`/`body`/`project_dir` 共用 `edit_allowed` 閘門）——所以 queued/running/done 的卡片完全無法再改 Label，也就無法換組。使用者確認要補兩件事：
+
+1. **同一欄內拖曳卡片到另一個群組，直接完成換組**（比手動改文字直覺）。
+2. **queued/running/done 的卡片也能事後補改/更改 Label**（目前只有 planning 卡片能編輯任何欄位）。
+
+### 設計：不動既有的 `update_task_fields`/`edit_allowed` 閘門
+
+`title`/`body`/`project_dir` 維持原樣——只有 `planning` 能編輯，這條線沒有理由跟著鬆綁。Label 從語意上就跟這三個不一樣（純分類標記，沒有「派工後改了會有風險」的顧慮），所以拆成獨立路徑：
+
+- 後端新增一個不受 `edit_allowed`限制的指令 `tasks_set_label`，直接包 `store::set_label`（已存在，Task 1 就做了，本來就沒有狀態限制）：
+
+  ```rust
+  /// 直接設定卡片的 Label，不受 `edit_allowed` 限制——跟
+  /// `set_parallel_ok`/`set_interactive`/`set_bridge_config` 同一個「隨時可改」
+  /// 類別。給拖曳換組跟「已派工/已完成卡片事後補改 Label」這兩個情境用，
+  /// 這兩者都不該連帶開放 title/body/project_dir 的編輯。
+  #[tauri::command]
+  pub async fn tasks_set_label(
+      project_id: String,
+      task_id: String,
+      label: Option<String>,
+      reg: State<'_, ProjectRegistry>,
+      app: AppHandle,
+  ) -> Result<(), String> {
+      let p = project(&reg, &project_id)?;
+      store::set_label(&p.pool, &task_id, label.as_deref()).await.map_err(|e| e.to_string())?;
+      emit_updated(&app);
+      Ok(())
+  }
+  ```
+
+  跟 `tasks_create`/`tasks_update`/`tasks_move` 等使用者觸發的指令一致，呼叫 `emit_updated`（`tasks_set_summary` 沒有 emit，但那個是完成後系統內部呼叫、不是使用者直接動作，這裡不比照那個例外）。
+
+- 前端 `setTaskLabel`（`src/ipc/tasks.ts`），完全比照 `setSummary` 的呼叫慣例（`invoke("tasks_set_summary", { projectId, taskId: id, summary })`）：
+
+  ```ts
+  export const setTaskLabel = (projectId: string, id: string, label: string | null): Promise<void> =>
+    invoke("tasks_set_label", { projectId, taskId: id, label });
+  ```
+
+`update_task_fields`/`tasks_update`/現有的 `TaskEditorDialog` 完全不改——`planning` 卡片一樣透過完整編輯視窗改 Label，跟今天沒有兩樣。新路徑只服務「非 planning 狀態」跟「拖曳」這兩個新情境，兩條路徑並存、互不干擾（都是寫同一個 `label` 欄位，語意一致，只是觸發方式跟允許的狀態不同）。
+
+### 功能 B：queued/running/done 卡片的「編輯 Label」小視窗
+
+新元件 `TaskLabelDialog.tsx`（跟 `ArchiveDialog.tsx`/`TranscriptDialog.tsx` 同一種「獨立小對話框」慣例）：只有一個 Label 輸入框 + 用過的 Label 快捷 chip（重用跟 `TaskEditorDialog` 一樣的 UI pattern，但不牽涉 `usedDirs`/title/body 等其他欄位），儲存呼叫 `setTaskLabel`，不呼叫 `updateTask`——不會、也不需要動到 title/body/project_dir。
+
+`TaskCard.tsx` 新增一個 prop `onEditLabel: () => void`，在 `queued`（目前這個狀態完全沒有任何操作按鈕）、`running`、`done` 三種狀態的動作列各加一顆小按鈕（新 i18n 鍵 `board_action_edit_label`）觸發它。`planning` 不加——那個狀態已經有「編輯工作」可以改 Label，再加一顆功能重複的按鈕沒有意義。
+
+`ProjectBoard.tsx` 新增 `labelEditingFor: string | null` state，決定要不要渲染 `TaskLabelDialog`，存檔完呼叫 `refresh()`（跟其他小動作一致）。
+
+### 功能 A：同一狀態欄內拖曳卡片到另一個 Label 群組
+
+延伸既有的滑鼠拖曳機制（`ProjectBoard.tsx` 的 `onMove`/`onUp`，見 `statusUnderPoint`/`isLegalDropTarget`）。核心觀察：現有邏輯只認「欄位邊界」——`isLegalDropTarget` 在 `cardRow.status === to`（同欄）時一律回傳 `false`，所以同欄內拖放今天完全没有任何效果。新增一條平行路徑，只在「同欄」這個今天被當作『非法』的情況下觸發：
+
+- `TaskLabelGroup` 的外層 `<div>` 加 `data-task-label-group={label}`，讓拖放時能用 `elementFromPoint(...).closest("[data-task-label-group]")` 認出「這是哪個群組」。
+- 新函式 `labelUnderPoint(x, y): string | undefined`——`undefined` 代表「這個位置解析不出目標群組，不要做任何事」（例如根本沒拖到同一欄裡）；空字串 `""` 代表「未分類」；非空字串代表某個 Label：
+  1. 先找 `[data-task-label-group]`：命中就回傳它的 label。
+  2. 再找 `[data-task-drag-id]`（任何卡片，含被拖曳的那張以外的其他卡）：命中就回傳那張卡目前的 `label ?? ""`。
+  3. 再找 `[data-testid^='column-']`：命中（代表滑鼠還在某個欄位範圍內，但沒有壓在任何卡片或群組上）就回傳 `""`（拖到空白區域＝拖去「未分類」）。
+  4. 都沒中：回傳 `undefined`。
+- `onMove`：當滑鼠所在欄位（`hovered`）等於被拖卡片自己的 `status`（也就是同欄內移動）時，額外算出 `labelUnderPoint` 結果存進新 state `dragOverGroupLabel`，驅動 `TaskLabelGroup` 的高亮（新 prop `highlighted`，比照欄位高亮那套 class 命名）。不是同欄時這個 state 清成 `null`，跟原本的 `dragOverStatus` 邏輯彼此獨立、互不影響（`dragOverStatus` 本來就已經在同欄時維持 `null`，因為 `isLegalDropTarget` 同欄回傳 `false`）。
+- `onUp`：
+  ```ts
+  const to = statusUnderPoint(e.clientX, e.clientY);
+  const draggedCard = tasks.find((x) => x.id === st.id);
+  if (to && draggedCard && to === draggedCard.status) {
+    const targetLabel = labelUnderPoint(e.clientX, e.clientY);
+    if (targetLabel !== undefined && targetLabel !== (draggedCard.label ?? "")) {
+      void handleRelabel(st.id, targetLabel || null);
+    }
+  } else if (to) {
+    void handleDrop(st.id, to);
+  }
+  ```
+  `handleRelabel` 呼叫 `setTaskLabel` 後直接用 `setTasks` 樂觀更新本地那一筆的 `label`（跟 `handleDrop` 對 `status`/`sort_order` 的樂觀更新同一個寫法），不必等下一輪 `tasks-updated` 事件才刷新畫面。
+
+### 明確不做（這輪追加也排除）
+
+- 不做「拖去空白處＝清空 Label」以外更細緻的視覺回饋（例如空白區域也高亮）——功能上仍然正確（放開就會變未分類），只是沒有額外提示，先接受這個簡化。
+- `planning` 狀態不加「編輯 Label」小按鈕——已經有完整編輯視窗涵蓋，不重複。
+- 不做「跨欄同時拖曳換狀態又換組」的複合手勢——一次拖曳只認一種結果：同欄比對群組、跨欄比對欄位，兩者互斥（`to === draggedCard.status` 已經是互斥判斷式本身）。
