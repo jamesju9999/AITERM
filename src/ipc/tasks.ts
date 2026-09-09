@@ -138,6 +138,14 @@ export const saveTranscript = (projectId: string, id: string, text: string): Pro
 export const setSummary = (projectId: string, id: string, summary: string): Promise<void> =>
   invoke("tasks_set_summary", { projectId, taskId: id, summary });
 
+/**
+ * 直接設定 Label，不受「只有 planning 能編輯」限制——拖曳換組跟
+ * queued/running/done 卡片的 Label 快速編輯都走這裡，跟 `updateTask`
+ * 完全分開，不會連帶動到 title/body/project_dir。
+ */
+export const setTaskLabel = (projectId: string, id: string, label: string | null): Promise<void> =>
+  invoke("tasks_set_label", { projectId, taskId: id, label });
+
 /** 把一張已完成的卡片從看板上收起來。 */
 export const archiveTask = (projectId: string, taskId: string): Promise<void> =>
   invoke("tasks_archive", { projectId, taskId });
