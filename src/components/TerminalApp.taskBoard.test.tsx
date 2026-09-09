@@ -151,6 +151,8 @@ vi.mock("../ipc/tasks", () => ({
     max_concurrent: 2,
     claude_command: "claude",
     auto_close_finished_tabs: true,
+    notify_desktop_on_finish: true,
+    notify_telegram_on_finish: true,
   }),
   setTaskBoardConfig: vi.fn(),
 }));

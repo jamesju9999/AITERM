@@ -30,6 +30,8 @@ beforeEach(() => {
     max_concurrent: 1,
     claude_command: "claude",
     auto_close_finished_tabs: true,
+    notify_desktop_on_finish: true,
+    notify_telegram_on_finish: true,
   });
 });
 
@@ -103,6 +105,8 @@ describe("useAutoCloseFinishedTabs", () => {
       max_concurrent: 1,
       claude_command: "claude",
       auto_close_finished_tabs: false,
+      notify_desktop_on_finish: true,
+      notify_telegram_on_finish: true,
     });
     renderHook(() => useAutoCloseFinishedTabs(activeRef("other-tab")));
     const events: CustomEvent[] = [];
