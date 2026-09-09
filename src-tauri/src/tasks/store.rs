@@ -51,6 +51,9 @@ pub struct TaskRow {
     /// （形狀對齊 `ClaudeBridgeConfig` 的 tier 子集）。`None` 且
     /// `use_bridge=true` 代表「沿用當下的全域橋接設定」，不覆寫任何 tier。
     pub bridge_tiers: Option<String>,
+    /// 使用者自由輸入的分類文字，用來在同一狀態欄內把卡片分組顯示。
+    /// `None` 代表未分類。
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -250,6 +253,19 @@ pub async fn set_interactive(
 ) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE tasks SET interactive = ? WHERE id = ?")
         .bind(interactive as i64)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// 設定卡片的 Label（分類用自由文字，`None` 代表清空）。跟
+/// `set_parallel_ok`/`set_interactive`/`set_bridge_config` 同一種「建立後
+/// 另外設定的欄位」模式，不擠進 `create_task` 的必要參數清單——`create_task`
+/// 有六十幾個呼叫點，加必填參數會波及跟 Label 完全無關的檔案。
+pub async fn set_label(pool: &SqlitePool, id: &str, label: Option<&str>) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET label = ? WHERE id = ?")
+        .bind(label)
         .bind(id)
         .execute(pool)
         .await?;
@@ -1293,6 +1309,57 @@ mod session_column_tests {
             get_task(&pool, "old1").await.unwrap().unwrap().session_path.as_deref(),
             Some("/p/session.jsonl")
         );
+    }
+
+    /// 舊資料庫（沒有 `label` 欄位）跑過 `init_schema` 之後必須能補上這個
+    /// 欄位並正常讀寫——跟上面的 session 欄位遷移測試同一個理由：
+    /// `ALTER TABLE` 失敗會被 `let _ =` 刻意吞掉，錯字不會有任何訊號。
+    #[tokio::test]
+    async fn init_schema_migrates_a_database_that_predates_the_label_column() {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+
+        // 完整但沒有 label 欄位的舊 schema。
+        sqlx::query(
+            "CREATE TABLE tasks (
+                id              TEXT PRIMARY KEY NOT NULL,
+                title           TEXT NOT NULL,
+                body            TEXT NOT NULL DEFAULT '',
+                project_dir     TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'planning',
+                parallel_ok     INTEGER NOT NULL DEFAULT 1,
+                interactive     INTEGER NOT NULL DEFAULT 0,
+                sort_order      REAL NOT NULL DEFAULT 0,
+                outcome         TEXT,
+                tab_id          TEXT,
+                transcript_path TEXT,
+                error_message   TEXT,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                dispatched_at   INTEGER,
+                finished_at     INTEGER,
+                ai_summary      TEXT,
+                archived_at     INTEGER,
+                session_id      TEXT,
+                session_path    TEXT,
+                use_bridge      INTEGER NOT NULL DEFAULT 0,
+                bridge_tiers    TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query("INSERT INTO tasks (id, title, body, project_dir) VALUES ('old1', 't', 'b', '/work/repo')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        crate::tasks::init_schema(&pool).await.unwrap();
+
+        let row = get_task(&pool, "old1").await.unwrap().unwrap();
+        assert_eq!(row.label, None, "舊資料遷移後 label 應該是 NULL，不是欄位缺席");
+
+        set_label(&pool, "old1", Some("緊急")).await.unwrap();
+        assert_eq!(get_task(&pool, "old1").await.unwrap().unwrap().label.as_deref(), Some("緊急"));
     }
 }
 

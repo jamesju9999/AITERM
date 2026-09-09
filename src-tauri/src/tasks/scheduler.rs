@@ -497,6 +497,7 @@ mod tests {
             session_path: None,
             use_bridge: false,
             bridge_tiers: None,
+            label: None,
         }
     }
 
@@ -584,6 +585,7 @@ mod tests {
             session_path: None,
             use_bridge: false,
             bridge_tiers: None,
+            label: None,
         }
     }
 
