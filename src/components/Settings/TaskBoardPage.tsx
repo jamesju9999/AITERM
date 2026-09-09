@@ -2,16 +2,21 @@ import { useCallback, useEffect, useState } from "react";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import { getTaskBoardConfig, setTaskBoardConfig, type TaskBoardConfig } from "../../ipc/tasks";
+import { getTelegramConfig } from "../../ipc/telegram";
 import "./TaskBoardPage.css";
 
 export function TaskBoardPage() {
   const { t } = useLocale();
   const [cfg, setCfg] = useState<TaskBoardConfig | null>(null);
+  const [telegramConfigured, setTelegramConfigured] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     void getTaskBoardConfig().then(setCfg);
+    void getTelegramConfig().then((tc) =>
+      setTelegramConfigured(Boolean(tc.bot_token) && Boolean(tc.chat_id)),
+    );
   }, []);
 
   const save = useCallback(async () => {
@@ -75,6 +80,36 @@ export function TaskBoardPage() {
           <span>{t.board_settings_auto_close}</span>
           <span className="task-board-hint">{t.board_settings_auto_close_hint}</span>
         </label>
+
+        <label className="task-board-field task-board-field--checkbox">
+          <input
+            type="checkbox"
+            className="task-board-checkbox"
+            checked={cfg.notify_desktop_on_finish}
+            onChange={(e) => {
+              setSaved(false);
+              setCfg({ ...cfg, notify_desktop_on_finish: e.target.checked });
+            }}
+          />
+          <span>{t.board_settings_notify_desktop}</span>
+          <span className="task-board-hint">{t.board_settings_notify_desktop_hint}</span>
+        </label>
+
+        {telegramConfigured && (
+          <label className="task-board-field task-board-field--checkbox">
+            <input
+              type="checkbox"
+              className="task-board-checkbox"
+              checked={cfg.notify_telegram_on_finish}
+              onChange={(e) => {
+                setSaved(false);
+                setCfg({ ...cfg, notify_telegram_on_finish: e.target.checked });
+              }}
+            />
+            <span>{t.board_settings_notify_telegram}</span>
+            <span className="task-board-hint">{t.board_settings_notify_telegram_hint}</span>
+          </label>
+        )}
       </section>
 
       <div className="task-board-actions">

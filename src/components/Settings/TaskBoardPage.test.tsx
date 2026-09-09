@@ -8,7 +8,12 @@ vi.mock("../../ipc/tasks", () => ({
   setTaskBoardConfig: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../../ipc/telegram", () => ({
+  getTelegramConfig: vi.fn(),
+}));
+
 import { getTaskBoardConfig, setTaskBoardConfig } from "../../ipc/tasks";
+import { getTelegramConfig } from "../../ipc/telegram";
 import { TaskBoardPage } from "./TaskBoardPage";
 
 beforeEach(() => {
@@ -20,6 +25,7 @@ beforeEach(() => {
     notify_desktop_on_finish: true,
     notify_telegram_on_finish: true,
   });
+  vi.mocked(getTelegramConfig).mockResolvedValue({ bot_token: null, chat_id: null });
 });
 
 const view = () => render(<LocaleProvider><TaskBoardPage /></LocaleProvider>);
@@ -46,11 +52,11 @@ describe("TaskBoardPage", () => {
     );
   });
 
-  it("toggling the checkbox sends the new value", async () => {
+  it("toggling the auto-close checkbox sends the new value", async () => {
     const user = userEvent.setup();
     view();
     await waitFor(() => screen.getByDisplayValue("2"));
-    const checkbox = screen.getByRole("checkbox");
+    const checkbox = screen.getByRole("checkbox", { name: /自動關閉分頁|Auto-close tabs/ });
     expect(checkbox).toBeChecked();
     await user.click(checkbox);
     await user.click(screen.getByRole("button", { name: /儲存|Save/ }));
@@ -58,6 +64,30 @@ describe("TaskBoardPage", () => {
       expect(setTaskBoardConfig).toHaveBeenCalledWith(
         expect.objectContaining({ auto_close_finished_tabs: false }),
       ),
+    );
+  });
+
+  it("預設顯示桌面通知 checkbox，已勾選", async () => {
+    view();
+    await waitFor(() => screen.getByDisplayValue("2"));
+    expect(
+      screen.getByRole("checkbox", { name: /完成時發桌面通知|Desktop notification/ }),
+    ).toBeChecked();
+  });
+
+  it("Telegram 未設定時不顯示 Telegram checkbox", async () => {
+    view();
+    await waitFor(() => screen.getByDisplayValue("2"));
+    expect(
+      screen.queryByRole("checkbox", { name: /Telegram/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("Telegram 已設定時顯示 checkbox，已勾選", async () => {
+    vi.mocked(getTelegramConfig).mockResolvedValue({ bot_token: "abc", chat_id: "123" });
+    view();
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: /Telegram/ })).toBeChecked(),
     );
   });
 });
