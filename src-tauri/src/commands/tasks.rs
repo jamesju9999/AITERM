@@ -70,6 +70,7 @@ pub struct CreateArgs {
     pub interactive: bool,
     pub use_bridge: bool,
     pub bridge_tiers: Option<String>,
+    pub label: Option<String>,
 }
 
 #[tauri::command]
@@ -93,6 +94,9 @@ pub async fn tasks_create(
     store::set_bridge_config(&p.pool, &id, args.use_bridge, args.bridge_tiers)
         .await
         .map_err(|e| e.to_string())?;
+    store::set_label(&p.pool, &id, args.label.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
     emit_updated(&app);
     Ok(id)
 }
@@ -107,6 +111,7 @@ pub struct UpdateArgs {
     pub interactive: bool,
     pub use_bridge: bool,
     pub bridge_tiers: Option<String>,
+    pub label: Option<String>,
 }
 
 #[tauri::command]
@@ -137,6 +142,7 @@ pub async fn tasks_update(
             &args.title,
             &args.body,
             &args.project_dir,
+            args.label.as_deref(),
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -463,6 +469,17 @@ pub async fn tasks_used_dirs(
 ) -> Result<Vec<String>, String> {
     let p = project(&reg, &project_id)?;
     store::distinct_project_dirs(&p.pool).await.map_err(|e| e.to_string())
+}
+
+/// 這個專案的卡片用過的 Label。跟 `tasks_used_dirs` 同一個用途——新增/
+/// 編輯卡片時給一鍵選取，不必每次重新手打。
+#[tauri::command]
+pub async fn tasks_used_labels(
+    project_id: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<Vec<String>, String> {
+    let p = project(&reg, &project_id)?;
+    store::distinct_labels(&p.pool).await.map_err(|e| e.to_string())
 }
 
 /// 寫入這張卡片的 AI 履行摘要。工作報告的第一階段產物——已完成的卡片
