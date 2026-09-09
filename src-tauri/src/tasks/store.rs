@@ -111,7 +111,11 @@ pub async fn create_task(
 /// does the file copy). Returns the new id. Err if `src_id` doesn't exist.
 pub async fn clone_task_fields(pool: &SqlitePool, src_id: &str) -> Result<String, sqlx::Error> {
     let src = get_task(pool, src_id).await?.ok_or(sqlx::Error::RowNotFound)?;
-    create_task(pool, &src.title, &src.body, &src.project_dir, src.parallel_ok, src.interactive).await
+    let new_id =
+        create_task(pool, &src.title, &src.body, &src.project_dir, src.parallel_ok, src.interactive)
+            .await?;
+    set_label(pool, &new_id, src.label.as_deref()).await?;
+    Ok(new_id)
 }
 
 /// 所有卡片，依欄位分組後排序。
@@ -1062,6 +1066,19 @@ mod tests {
         assert_eq!(row.project_dir, "/repo/x");
         assert!(!row.parallel_ok);
         assert!(row.outcome.is_none());
+    }
+
+    #[tokio::test]
+    async fn clone_task_fields_carries_the_label_over() {
+        let pool = mem_pool().await;
+        let src = create_task(&pool, "Ship it", "the body", "/repo/x", false, false)
+            .await
+            .unwrap();
+        set_label(&pool, &src, Some("緊急")).await.unwrap();
+
+        let new_id = clone_task_fields(&pool, &src).await.unwrap();
+
+        assert_eq!(get_task(&pool, &new_id).await.unwrap().unwrap().label.as_deref(), Some("緊急"));
     }
 
     #[tokio::test]
