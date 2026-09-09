@@ -187,6 +187,11 @@ impl Default for McpToolServerConfig {
 
 pub fn default_task_board_max_concurrent() -> u32 { 5 }
 pub fn default_claude_command() -> String { "claude".to_string() }
+/// 非互動卡片連續多久沒有任何終端機輸出就判定「疑似卡住」。原本寫死
+/// 120 秒，但 Claude Code 自己派 subagent 在背景工作時，等待期間終端機
+/// 常常整段安靜超過 2 分鐘、卻不是真的卡住——20 分鐘是更保守的預設值，
+/// 使用者可以在設定裡自己調。
+pub fn default_stuck_timeout_secs() -> u32 { 1200 }
 
 /// Settings for the task board (see
 /// `docs/superpowers/specs/2026-09-03-task-board-agent-dispatch-design.md`).
@@ -221,6 +226,10 @@ pub struct TaskBoardConfig {
     /// 的意義。
     #[serde(default = "default_true")]
     pub notify_telegram_on_finish: bool,
+    /// 非互動卡片連續多久沒有任何終端機輸出就判定「疑似卡住」而標記失敗
+    /// （單位：秒）。見 `default_stuck_timeout_secs` 的說明。
+    #[serde(default = "default_stuck_timeout_secs")]
+    pub stuck_timeout_secs: u32,
 }
 
 impl Default for TaskBoardConfig {
@@ -232,6 +241,7 @@ impl Default for TaskBoardConfig {
             auto_close_finished_tabs: true,
             notify_desktop_on_finish: true,
             notify_telegram_on_finish: true,
+            stuck_timeout_secs: default_stuck_timeout_secs(),
         }
     }
 }
@@ -923,6 +933,21 @@ mod tests {
         let c: TaskBoardConfig = serde_json::from_str(json).unwrap();
         assert!(c.notify_desktop_on_finish);
         assert!(c.notify_telegram_on_finish);
+    }
+
+    #[test]
+    fn task_board_config_stuck_timeout_defaults_to_1200_seconds() {
+        let c = TaskBoardConfig::default();
+        assert_eq!(c.stuck_timeout_secs, 1200);
+    }
+
+    #[test]
+    fn a_config_written_before_stuck_timeout_secs_existed_still_parses() {
+        // 舊設定檔沒有這個欄位——必須不報錯，補成新的預設值（20 分鐘），
+        // 不是舊行為的 120 秒，因為 120 秒本身就是這個欄位存在的理由。
+        let json = r#"{"max_concurrent":3,"claude_command":"claude"}"#;
+        let c: TaskBoardConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(c.stuck_timeout_secs, 1200);
     }
 
     #[test]

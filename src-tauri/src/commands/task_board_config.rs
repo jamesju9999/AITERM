@@ -37,6 +37,7 @@ pub(crate) fn apply_editable_task_board_fields(
         auto_close_finished_tabs: incoming.auto_close_finished_tabs,
         notify_desktop_on_finish: incoming.notify_desktop_on_finish,
         notify_telegram_on_finish: incoming.notify_telegram_on_finish,
+        stuck_timeout_secs: incoming.stuck_timeout_secs.clamp(60, 21_600),
     }
 }
 
@@ -65,6 +66,7 @@ mod tests {
             auto_close_finished_tabs: true,
             notify_desktop_on_finish: true,
             notify_telegram_on_finish: true,
+            stuck_timeout_secs: 1200,
         }
     }
 
@@ -80,6 +82,7 @@ mod tests {
             auto_close_finished_tabs: true,
             notify_desktop_on_finish: true,
             notify_telegram_on_finish: true,
+            stuck_timeout_secs: 1200,
         };
         let merged = apply_editable_task_board_fields(&current(), incoming);
         assert_eq!(merged.max_concurrent, 3);
@@ -100,6 +103,7 @@ mod tests {
             auto_close_finished_tabs: true,
             notify_desktop_on_finish: true,
             notify_telegram_on_finish: true,
+            stuck_timeout_secs: 1200,
         };
         let merged = apply_editable_task_board_fields(&current(), incoming);
         assert_eq!(
@@ -117,6 +121,7 @@ mod tests {
             auto_close_finished_tabs: true,
             notify_desktop_on_finish: true,
             notify_telegram_on_finish: true,
+            stuck_timeout_secs: 1200,
         };
         assert_eq!(apply_editable_task_board_fields(&current(), mk(0)).max_concurrent, 1);
         assert_eq!(apply_editable_task_board_fields(&current(), mk(99)).max_concurrent, 16);
@@ -132,6 +137,7 @@ mod tests {
             auto_close_finished_tabs: true,
             notify_desktop_on_finish: true,
             notify_telegram_on_finish: true,
+            stuck_timeout_secs: 1200,
         };
         assert_eq!(
             apply_editable_task_board_fields(&current(), incoming).claude_command,
@@ -154,5 +160,23 @@ mod tests {
         let merged = apply_editable_task_board_fields(&current(), incoming);
         assert!(!merged.notify_desktop_on_finish);
         assert!(!merged.notify_telegram_on_finish);
+    }
+
+    #[test]
+    fn stuck_timeout_secs_is_taken_from_incoming() {
+        let mut incoming = current();
+        incoming.stuck_timeout_secs = 300;
+        assert_eq!(apply_editable_task_board_fields(&current(), incoming).stuck_timeout_secs, 300);
+    }
+
+    #[test]
+    fn stuck_timeout_secs_is_clamped_to_60_21600() {
+        let mut incoming = current();
+        incoming.stuck_timeout_secs = 0;
+        assert_eq!(apply_editable_task_board_fields(&current(), incoming).stuck_timeout_secs, 60);
+
+        let mut incoming = current();
+        incoming.stuck_timeout_secs = 999_999;
+        assert_eq!(apply_editable_task_board_fields(&current(), incoming).stuck_timeout_secs, 21_600);
     }
 }

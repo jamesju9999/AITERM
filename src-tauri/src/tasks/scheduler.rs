@@ -208,9 +208,18 @@ impl Dispatcher for RealDispatcher {
         let session_id_for_watch = session_id;
         let baselines = monitor::Baselines { bell: disp.bell_baseline, marker: disp.marker_baseline };
         let watch_mode = if task.interactive { monitor::WatchMode::Interactive } else { monitor::WatchMode::Auto };
+        // 非互動卡片連續多久沒輸出才判定「疑似卡住」，來自使用者可調的
+        // 設定——見 monitor.rs 對這個誤判成因的說明（Claude Code 自己派
+        // subagent 在背景工作時，終端機常常安靜超過原本寫死的 120 秒）。
+        let stuck_timeout_ms = (self.config.get().task_board.stuck_timeout_secs as u64) * 1000;
+        let thresholds = monitor::Thresholds {
+            quiet_stuck_ms: stuck_timeout_ms,
+            min_run_ms: stuck_timeout_ms,
+            ..monitor::Thresholds::default()
+        };
         tauri::async_runtime::spawn(async move {
             let outcome = monitor::watch(
-                &pty, &tab_id, cancel_rx, baselines, monitor::Thresholds::default(), watch_mode,
+                &pty, &tab_id, cancel_rx, baselines, thresholds, watch_mode,
             ).await;
             let transcript = write_transcript(&pty, &project_path, &task_id, &tab_id);
             persist_outcome(
