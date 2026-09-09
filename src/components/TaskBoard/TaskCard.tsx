@@ -10,12 +10,14 @@ export function TaskCard({
   card,
   onEdit,
   onViewTranscript,
+  onEditLabel,
   onChanged,
 }: {
   projectId: string;
   card: TaskWithAttachments;
   onEdit: () => void;
   onViewTranscript: () => void;
+  onEditLabel: () => void;
   onChanged: () => void;
 }) {
   const { t } = useLocale();
@@ -116,6 +118,9 @@ export function TaskCard({
             <button className="tb-btn tb-btn--danger-ghost" disabled={busy} onClick={() => void remove()}>{t.board_delete}</button>
           </>
         )}
+        {card.status === "queued" && (
+          <button className="tb-btn tb-btn--ghost" onClick={onEditLabel}>{t.board_action_edit_label}</button>
+        )}
         {card.status === "running" && (
           <>
             <button className="tb-btn tb-btn--ghost" disabled={busy} onClick={() => void run(() => stopTask(projectId, card.id))}>
@@ -127,6 +132,7 @@ export function TaskCard({
               </button>
             )}
             {card.tab_id && <button className="tb-btn tb-btn--ghost" onClick={openTab}>{t.board_action_open_tab}</button>}
+            <button className="tb-btn tb-btn--ghost" onClick={onEditLabel}>{t.board_action_edit_label}</button>
           </>
         )}
         {card.status === "done" && (
@@ -142,6 +148,7 @@ export function TaskCard({
             <button className="tb-btn tb-btn--ghost" disabled={busy} onClick={() => void run(() => archiveTask(projectId, card.id))}>
               {t.board_action_archive}
             </button>
+            <button className="tb-btn tb-btn--ghost" onClick={onEditLabel}>{t.board_action_edit_label}</button>
             <button className="tb-btn tb-btn--danger-ghost" disabled={busy} onClick={() => void remove()}>{t.board_delete}</button>
           </>
         )}

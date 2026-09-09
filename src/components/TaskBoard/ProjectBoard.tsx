@@ -19,6 +19,7 @@ import { groupByLabel } from "./groupByLabel";
 import { TaskCard } from "./TaskCard";
 import { TaskColumn } from "./TaskColumn";
 import { TaskEditorDialog } from "./TaskEditorDialog";
+import { TaskLabelDialog } from "./TaskLabelDialog";
 import { TaskLabelGroup } from "./TaskLabelGroup";
 import { TranscriptDialog } from "./TranscriptDialog";
 
@@ -46,6 +47,10 @@ export function ProjectBoard({
   const [tasks, setTasks] = useState<TaskWithAttachments[]>([]);
   const [editing, setEditing] = useState<TaskWithAttachments | "new" | null>(null);
   const [transcriptFor, setTranscriptFor] = useState<string | null>(null);
+  /** id of the card whose Label quick-edit dialog is open — the
+   * queued/running/done counterpart to `editing`, which only covers the
+   * full edit dialog (planning cards). */
+  const [labelEditingFor, setLabelEditingFor] = useState<string | null>(null);
   const [showArchive, setShowArchive] = useState(false);
   /** 看板的即時過濾關鍵字。看板的資料本來就全部載入（而且封存功能讓它
    *  有界），所以在前端過濾就好，不必多打一次 IPC。 */
@@ -315,6 +320,7 @@ export function ProjectBoard({
                       card={cardRow}
                       onEdit={() => setEditing(cardRow)}
                       onViewTranscript={() => setTranscriptFor(cardRow.id)}
+                      onEditLabel={() => setLabelEditingFor(cardRow.id)}
                       onChanged={() => void refresh()}
                     />
                   </div>
@@ -368,6 +374,23 @@ export function ProjectBoard({
             />
           );
         })()}
+      {labelEditingFor &&
+        (() => {
+          const labelCard = tasks.find((x) => x.id === labelEditingFor);
+          if (!labelCard) return null;
+          return (
+            <TaskLabelDialog
+              projectId={projectId}
+              taskId={labelEditingFor}
+              label={labelCard.label}
+              onClose={() => setLabelEditingFor(null)}
+              onSaved={() => {
+                setLabelEditingFor(null);
+                void refresh();
+              }}
+            />
+          );
+        })()}
 
       {draggingCardId &&
         dragPointer &&
@@ -389,6 +412,7 @@ export function ProjectBoard({
                 card={draggedCard}
                 onEdit={() => {}}
                 onViewTranscript={() => {}}
+                onEditLabel={() => {}}
                 onChanged={() => {}}
               />
             </div>,
