@@ -1039,13 +1039,13 @@ describe("ProjectBoard", () => {
   });
 
   describe("非 planning 卡片的 Label 快速編輯", () => {
-    it("已完成的卡片有「編輯 Label」按鈕，點了會開啟編輯視窗", async () => {
+    it("已完成的卡片有「更改群組」按鈕，點了會開啟編輯視窗", async () => {
       vi.mocked(listTasks).mockResolvedValue([
         card({ id: "1", title: "跑完的工作", status: "done", outcome: "success", label: "緊急" }),
       ]);
       view();
       await screen.findByText("跑完的工作");
-      await userEvent.click(screen.getByRole("button", { name: /編輯 Label|Edit label/ }));
+      await userEvent.click(screen.getByRole("button", { name: /更改群組|Change group/ }));
       expect(await screen.findByTestId("task-label-quick-input")).toHaveValue("緊急");
     });
 
@@ -1055,20 +1055,20 @@ describe("ProjectBoard", () => {
       ]);
       view();
       await screen.findByText("跑完的工作");
-      await userEvent.click(screen.getByRole("button", { name: /編輯 Label|Edit label/ }));
+      await userEvent.click(screen.getByRole("button", { name: /更改群組|Change group/ }));
       await userEvent.type(await screen.findByTestId("task-label-quick-input"), "文件");
       await userEvent.click(screen.getByRole("button", { name: /儲存|Save/ }));
       expect(setTaskLabel).toHaveBeenCalledWith(PROJECT_ID, "1", "文件");
       expect(listTasks).toHaveBeenCalledTimes(2); // 初次載入 + 存檔後 refresh()
     });
 
-    it("計畫中的卡片不顯示「編輯 Label」按鈕（已經有完整編輯視窗）", async () => {
+    it("計畫中的卡片不顯示「更改群組」按鈕（已經有完整編輯視窗）", async () => {
       vi.mocked(listTasks).mockResolvedValue([
         card({ id: "1", title: "還在想", status: "planning" }),
       ]);
       view();
       await screen.findByText("還在想");
-      expect(screen.queryByRole("button", { name: /編輯 Label|Edit label/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /更改群組|Change group/ })).not.toBeInTheDocument();
     });
   });
 
