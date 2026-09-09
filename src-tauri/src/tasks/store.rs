@@ -348,6 +348,7 @@ const ARCHIVED_WHERE: &str = "archived_at IS NOT NULL AND (
         OR title       LIKE ?2 ESCAPE '\\'
         OR body        LIKE ?2 ESCAPE '\\'
         OR project_dir LIKE ?2 ESCAPE '\\'
+        OR label       LIKE ?2 ESCAPE '\\'
     )";
 
 fn like_pattern(query: &str) -> String {
@@ -790,6 +791,28 @@ mod archive_tests {
         assert_eq!(titles(search_archived(&pool, "hcp", 50, 0).await.unwrap()), vec!["整理打卡 API"]);
         assert_eq!(search_archived(&pool, "", 50, 0).await.unwrap().len(), 2, "空字串代表不過濾");
         assert!(search_archived(&pool, "不存在的字", 50, 0).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_matches_label() {
+        let pool = mem_pool().await;
+        let labeled = create_task(&pool, "修登入 bug", "", "/r", true, false).await.unwrap();
+        set_label(&pool, &labeled, Some("緊急")).await.unwrap();
+        move_task(&pool, &labeled, STATUS_QUEUED, 1.0).await.unwrap();
+        dispatch_for_test(&pool, &labeled, "tab").await;
+        finish_task(&pool, &labeled, "success", None, None).await.unwrap();
+        archive_task(&pool, &labeled).await.unwrap();
+
+        let unlabeled = create_task(&pool, "沒有分類的卡", "", "/r", true, false).await.unwrap();
+        move_task(&pool, &unlabeled, STATUS_QUEUED, 1.0).await.unwrap();
+        dispatch_for_test(&pool, &unlabeled, "tab").await;
+        finish_task(&pool, &unlabeled, "success", None, None).await.unwrap();
+        archive_task(&pool, &unlabeled).await.unwrap();
+
+        let titles = |rows: Vec<TaskRow>| -> Vec<String> { rows.into_iter().map(|r| r.title).collect() };
+        assert_eq!(titles(search_archived(&pool, "緊急", 50, 0).await.unwrap()), vec!["修登入 bug"]);
+        // NULL label 不該被任何關鍵字誤配到。
+        assert!(!titles(search_archived(&pool, "緊急", 50, 0).await.unwrap()).contains(&"沒有分類的卡".to_string()));
     }
 
     /// `%` 和 `_` 是 LIKE 的萬用字元。使用者打「50%」時要找的是字面上的
