@@ -396,18 +396,20 @@ pub async fn set_summary(pool: &SqlitePool, id: &str, summary: &str) -> Result<(
     Ok(())
 }
 
-/// Edit title/body/project_dir. Caller (command layer) restricts this to `planning` cards.
+/// Edit title/body/project_dir/label. Caller (command layer) restricts this to `planning` cards.
 pub async fn update_task_fields(
     pool: &SqlitePool,
     id: &str,
     title: &str,
     body: &str,
     project_dir: &str,
+    label: Option<&str>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE tasks SET title = ?, body = ?, project_dir = ? WHERE id = ?")
+    sqlx::query("UPDATE tasks SET title = ?, body = ?, project_dir = ?, label = ? WHERE id = ?")
         .bind(title)
         .bind(body)
         .bind(project_dir)
+        .bind(label)
         .bind(id)
         .execute(pool)
         .await?;
@@ -1046,6 +1048,18 @@ mod tests {
         assert_eq!(list_attachments(&pool, &id).await.unwrap().len(), 1);
         remove_attachment(&pool, &aid).await.unwrap();
         assert_eq!(list_attachments(&pool, &id).await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn update_task_fields_writes_the_label() {
+        let pool = mem_pool().await;
+        let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+
+        update_task_fields(&pool, &id, "t", "", "/r", Some("文件")).await.unwrap();
+        assert_eq!(get_task(&pool, &id).await.unwrap().unwrap().label.as_deref(), Some("文件"));
+
+        update_task_fields(&pool, &id, "t", "", "/r", None).await.unwrap();
+        assert_eq!(get_task(&pool, &id).await.unwrap().unwrap().label, None, "傳 None 要能清空既有的 label");
     }
 
     #[tokio::test]
