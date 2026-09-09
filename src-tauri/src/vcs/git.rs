@@ -263,6 +263,64 @@ impl GitClient {
         })
     }
 
+    /// `git worktree add -b <branch> <path>`——從目前 HEAD 分支出一個新
+    /// 分支，同時建立一個獨立的 working directory。不 fetch，完全本地
+    /// 操作，不需要遠端或 token。
+    pub async fn create_worktree(&self, path: &str, branch_name: &str) -> Result<VcsResult, String> {
+        self.git(&[
+            "worktree".to_string(), "add".to_string(),
+            "-b".to_string(), branch_name.to_string(),
+            path.to_string(),
+        ])?;
+        Ok(VcsResult::WriteSuccess {
+            operation: "create_worktree".to_string(),
+            detail: format!("Created worktree at '{path}' on branch '{branch_name}'"),
+        })
+    }
+
+    /// `git worktree remove <path>`——只有在該 worktree 乾淨（沒有未提交
+    /// 變更）時才會成功；呼叫端應該在確定所有變更都已經 commit 之後才
+    /// 呼叫這個方法。
+    pub async fn remove_worktree(&self, path: &str) -> Result<VcsResult, String> {
+        self.git(&["worktree".to_string(), "remove".to_string(), path.to_string()])?;
+        Ok(VcsResult::WriteSuccess {
+            operation: "remove_worktree".to_string(),
+            detail: format!("Removed worktree at '{path}'"),
+        })
+    }
+
+    /// `git status --porcelain` 是否非空。跟 `quick_block_info` 用的
+    /// `diff --shortstat` 不同——這裡也會抓到新增的未追蹤檔案，判斷
+    /// 「這個 worktree 有沒有東西需要 commit」才會準。
+    pub async fn has_uncommitted_changes(&self) -> Result<bool, String> {
+        let out = self.git(&["status".to_string(), "--porcelain".to_string()])?;
+        Ok(!out.trim().is_empty())
+    }
+
+    /// `git add -A && git commit -m <message>`——呼叫前應該先用
+    /// `has_uncommitted_changes` 確認真的有東西要 commit，避免產生空
+    /// commit 噪音（跟 `commit_empty` 刻意允許空 commit 的語意不同，
+    /// 這裡不允許——沒有變更時 `git commit` 本身就會失敗，直接回傳 Err）。
+    pub async fn commit_all(&self, message: &str) -> Result<VcsResult, String> {
+        self.git(&["add".to_string(), "-A".to_string()])?;
+        self.git(&["commit".to_string(), "-m".to_string(), message.to_string()])?;
+        Ok(VcsResult::WriteSuccess {
+            operation: "commit_all".to_string(),
+            detail: format!("Committed all changes: {message}"),
+        })
+    }
+
+    /// `git merge <branch>`——在 `self.repo_root` 執行（呼叫端應該傳原本
+    /// 的 `project_dir`，不是 worktree 路徑）。衝突或該路徑本身有未提交
+    /// 變更擋著都會讓這裡回傳 Err，錯誤訊息直接是 git 自己的輸出。
+    pub async fn merge_branch(&self, branch_name: &str) -> Result<VcsResult, String> {
+        self.git(&["merge".to_string(), branch_name.to_string()])?;
+        Ok(VcsResult::WriteSuccess {
+            operation: "merge_branch".to_string(),
+            detail: format!("Merged branch '{branch_name}'"),
+        })
+    }
+
     // ── GitHub API operations ────────────────────────────────────────────────
 
     pub async fn pr_list(&self, state: Option<&str>) -> Result<VcsResult, String> {
@@ -1063,5 +1121,121 @@ mod block_info_tests {
         let dir = tempfile::tempdir().unwrap();
         let client = GitClient::new(dir.path().to_string_lossy().to_string(), None);
         assert!(client.quick_block_info().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn create_worktree_checks_out_a_new_branch_at_the_given_path() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        fs::write(dir.path().join("a.txt"), "hello\n").unwrap();
+        StdCommand::new("git").args(["add", "."]).current_dir(dir.path()).status().unwrap();
+        StdCommand::new("git").args(["commit", "-q", "-m", "init"]).current_dir(dir.path()).status().unwrap();
+
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt_path = wt_dir.path().join("worktree");
+        let client = GitClient::new(dir.path().to_string_lossy().to_string(), None);
+        client.create_worktree(&wt_path.to_string_lossy(), "aiterm-task/t1").await.unwrap();
+
+        assert!(wt_path.join("a.txt").exists(), "worktree 應該看得到來源分支的檔案");
+        let wt_client = GitClient::new(wt_path.to_string_lossy().to_string(), None);
+        assert_eq!(wt_client.current_branch().await.unwrap(), "aiterm-task/t1");
+    }
+
+    #[tokio::test]
+    async fn remove_worktree_removes_a_clean_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        fs::write(dir.path().join("a.txt"), "hello\n").unwrap();
+        StdCommand::new("git").args(["add", "."]).current_dir(dir.path()).status().unwrap();
+        StdCommand::new("git").args(["commit", "-q", "-m", "init"]).current_dir(dir.path()).status().unwrap();
+
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt_path = wt_dir.path().join("worktree");
+        let client = GitClient::new(dir.path().to_string_lossy().to_string(), None);
+        client.create_worktree(&wt_path.to_string_lossy(), "aiterm-task/t2").await.unwrap();
+
+        client.remove_worktree(&wt_path.to_string_lossy()).await.unwrap();
+        assert!(!wt_path.exists());
+    }
+
+    #[tokio::test]
+    async fn has_uncommitted_changes_detects_new_untracked_files() {
+        // `quick_block_info` 用的 `diff --shortstat` 抓不到這個——這條測試
+        // 就是要證明新方法用的是 `status --porcelain`，兩者不是同一套邏輯。
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        fs::write(dir.path().join("a.txt"), "hello\n").unwrap();
+        StdCommand::new("git").args(["add", "."]).current_dir(dir.path()).status().unwrap();
+        StdCommand::new("git").args(["commit", "-q", "-m", "init"]).current_dir(dir.path()).status().unwrap();
+
+        let client = GitClient::new(dir.path().to_string_lossy().to_string(), None);
+        assert!(!client.has_uncommitted_changes().await.unwrap());
+
+        fs::write(dir.path().join("new-untracked.txt"), "new\n").unwrap();
+        assert!(client.has_uncommitted_changes().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn commit_all_stages_and_commits_untracked_and_modified_files() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        fs::write(dir.path().join("a.txt"), "hello\n").unwrap();
+        StdCommand::new("git").args(["add", "."]).current_dir(dir.path()).status().unwrap();
+        StdCommand::new("git").args(["commit", "-q", "-m", "init"]).current_dir(dir.path()).status().unwrap();
+
+        fs::write(dir.path().join("a.txt"), "changed\n").unwrap();
+        fs::write(dir.path().join("b.txt"), "new file\n").unwrap();
+
+        let client = GitClient::new(dir.path().to_string_lossy().to_string(), None);
+        client.commit_all("Task: do something").await.unwrap();
+
+        assert!(!client.has_uncommitted_changes().await.unwrap());
+        let log = StdCommand::new("git").args(["log", "-1", "--format=%s"]).current_dir(dir.path()).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "Task: do something");
+    }
+
+    #[tokio::test]
+    async fn merge_branch_brings_in_the_other_branchs_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        fs::write(dir.path().join("a.txt"), "hello\n").unwrap();
+        StdCommand::new("git").args(["add", "."]).current_dir(dir.path()).status().unwrap();
+        StdCommand::new("git").args(["commit", "-q", "-m", "init"]).current_dir(dir.path()).status().unwrap();
+
+        let client = GitClient::new(dir.path().to_string_lossy().to_string(), None);
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt_path = wt_dir.path().join("worktree");
+        client.create_worktree(&wt_path.to_string_lossy(), "aiterm-task/t3").await.unwrap();
+        fs::write(wt_path.join("b.txt"), "from worktree\n").unwrap();
+        let wt_client = GitClient::new(wt_path.to_string_lossy().to_string(), None);
+        wt_client.commit_all("add b.txt").await.unwrap();
+
+        client.merge_branch("aiterm-task/t3").await.unwrap();
+        assert!(dir.path().join("b.txt").exists(), "合併後原分支應該拿到 worktree 分支的檔案");
+    }
+
+    #[tokio::test]
+    async fn merge_branch_returns_err_on_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        fs::write(dir.path().join("a.txt"), "line1\n").unwrap();
+        StdCommand::new("git").args(["add", "."]).current_dir(dir.path()).status().unwrap();
+        StdCommand::new("git").args(["commit", "-q", "-m", "init"]).current_dir(dir.path()).status().unwrap();
+
+        let client = GitClient::new(dir.path().to_string_lossy().to_string(), None);
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt_path = wt_dir.path().join("worktree");
+        client.create_worktree(&wt_path.to_string_lossy(), "aiterm-task/t4").await.unwrap();
+
+        // 兩邊都改同一行，製造衝突。
+        fs::write(wt_path.join("a.txt"), "line1-from-worktree\n").unwrap();
+        let wt_client = GitClient::new(wt_path.to_string_lossy().to_string(), None);
+        wt_client.commit_all("conflicting change").await.unwrap();
+        fs::write(dir.path().join("a.txt"), "line1-from-base\n").unwrap();
+        StdCommand::new("git").args(["commit", "-aqm", "base change"]).current_dir(dir.path()).status().unwrap();
+
+        // 不驗證清理（那是 Task 4 tasks_merge_worktree 的責任，衝突時刻意
+        // 不清理 worktree，讓使用者自己處理）——這裡只驗證呼叫端拿到 Err。
+        assert!(client.merge_branch("aiterm-task/t4").await.is_err());
     }
 }
