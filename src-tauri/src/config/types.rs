@@ -211,6 +211,16 @@ pub struct TaskBoardConfig {
     /// 設定影響。使用者目前正在看的分頁也不會被自動關閉。
     #[serde(default = "default_true")]
     pub auto_close_finished_tabs: bool,
+    /// 派工卡片跑完（成功／失敗／取消）時，是否彈出桌面系統通知。若完成
+    /// 的分頁正是使用者目前正在看的分頁則不彈——由前端 hook 判斷，這裡
+    /// 只是總開關。
+    #[serde(default = "default_true")]
+    pub notify_desktop_on_finish: bool,
+    /// 派工卡片跑完時，是否發送 Telegram 訊息。跟上面那個開關互相獨立，
+    /// 且不看「目前在看哪個分頁」——人不在電腦前才是 Telegram 推播存在
+    /// 的意義。
+    #[serde(default = "default_true")]
+    pub notify_telegram_on_finish: bool,
 }
 
 impl Default for TaskBoardConfig {
@@ -220,6 +230,8 @@ impl Default for TaskBoardConfig {
             claude_command: default_claude_command(),
             project_paths: Vec::new(),
             auto_close_finished_tabs: true,
+            notify_desktop_on_finish: true,
+            notify_telegram_on_finish: true,
         }
     }
 }
@@ -895,6 +907,22 @@ mod tests {
         let c = TaskBoardConfig::default();
         assert_eq!(c.max_concurrent, 5);
         assert_eq!(c.claude_command, "claude");
+    }
+
+    #[test]
+    fn task_board_config_notify_flags_default_to_true() {
+        let c = TaskBoardConfig::default();
+        assert!(c.notify_desktop_on_finish);
+        assert!(c.notify_telegram_on_finish);
+    }
+
+    #[test]
+    fn a_config_written_before_notify_flags_existed_still_parses() {
+        // 舊設定檔沒有這兩個欄位——必須不報錯，補成 true（維持原本「有通知」的行為）。
+        let json = r#"{"max_concurrent":3,"claude_command":"claude"}"#;
+        let c: TaskBoardConfig = serde_json::from_str(json).unwrap();
+        assert!(c.notify_desktop_on_finish);
+        assert!(c.notify_telegram_on_finish);
     }
 
     #[test]
