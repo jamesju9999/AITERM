@@ -1144,5 +1144,68 @@ describe("ProjectBoard", () => {
       }
       expect(setTaskLabel).not.toHaveBeenCalled();
     });
+
+    // 真機回報的 bug：不同狀態欄剛好用了同一個 label 名字時，拖曳只會
+    // 影響同一欄，但另一欄同名的群組視覺上也一起亮了——因為高亮判斷
+    // 當時只比對 label 文字，沒有連同欄位一起比對。
+    it("兩個不同狀態欄剛好有同名群組時，拖曳只高亮自己那一欄的群組", async () => {
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "p1", title: "P1", status: "planning", label: "測試" }),
+        card({ id: "p2", title: "P2", status: "planning", label: null }),
+        card({ id: "d1", title: "D1", status: "done", outcome: "success", label: "測試" }),
+      ]);
+      view();
+      const cardP1El = await screen.findByText("P1");
+      const cardP2El = screen.getByText("P2");
+      const dragWrapP2 = cardP2El.closest("[data-task-drag-id]") as HTMLElement;
+      const dragTargetP1 = cardP1El.closest("[data-task-drag-id]") as HTMLElement;
+
+      const originalElementFromPoint = document.elementFromPoint;
+      document.elementFromPoint = vi.fn().mockReturnValue(dragTargetP1);
+      try {
+        const { fireEvent } = await import("@testing-library/react");
+        fireEvent.mouseDown(dragWrapP2, { clientX: 100, clientY: 100, button: 0 });
+        fireEvent.mouseMove(window, { clientX: 100, clientY: 120 });
+        const planningHighlighted = screen
+          .getByTestId("column-planning")
+          .querySelector(".task-label-group--drop-target");
+        const doneHighlighted = screen
+          .getByTestId("column-done")
+          .querySelector(".task-label-group--drop-target");
+        expect(planningHighlighted).toBeTruthy();
+        expect(doneHighlighted).toBeNull();
+        fireEvent.mouseUp(window, { clientX: 100, clientY: 120 });
+      } finally {
+        document.elementFromPoint = originalElementFromPoint;
+      }
+    });
+
+    // 真機回報的另一個 bug：已完成的卡片完全無法拖曳（連 mousedown 都
+    // 不會武裝拖曳狀態），導致這欄的卡片沒辦法用拖曳換組，只能靠
+    // 「更改群組」小視窗，體驗跟其他三欄不一致。
+    it("已完成的卡片也能拖曳換組", async () => {
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "d1", title: "D1", status: "done", outcome: "success", label: null }),
+        card({ id: "d2", title: "D2", status: "done", outcome: "success", label: "測試" }),
+      ]);
+      view();
+      const cardD1El = await screen.findByText("D1");
+      const cardD2El = screen.getByText("D2");
+      const dragWrapD1 = cardD1El.closest("[data-task-drag-id]") as HTMLElement;
+      const dragTargetD2 = cardD2El.closest("[data-task-drag-id]") as HTMLElement;
+      expect(dragWrapD1.className).toContain("task-card-drag-wrap--draggable");
+
+      const originalElementFromPoint = document.elementFromPoint;
+      document.elementFromPoint = vi.fn().mockReturnValue(dragTargetD2);
+      try {
+        const { fireEvent } = await import("@testing-library/react");
+        fireEvent.mouseDown(dragWrapD1, { clientX: 100, clientY: 100, button: 0 });
+        fireEvent.mouseMove(window, { clientX: 100, clientY: 120 });
+        fireEvent.mouseUp(window, { clientX: 100, clientY: 120 });
+        await waitFor(() => expect(setTaskLabel).toHaveBeenCalledWith(PROJECT_ID, "d1", "測試"));
+      } finally {
+        document.elementFromPoint = originalElementFromPoint;
+      }
+    });
   });
 });

@@ -62,12 +62,15 @@ export function ProjectBoard({
    * dragging, for the drop-target highlight. Not the drop decision itself
    * (that's read fresh from `elementFromPoint` on mouseup). */
   const [dragOverStatus, setDragOverStatus] = useState<TaskStatus | null>(null);
-  /** Which Label group (by label text; `""` = ungrouped) the cursor is
-   * currently over, while dragging a card within its own status column —
-   * the same-column counterpart to `dragOverStatus`. `null` means "not
-   * hovering a same-column regroup target" (including: not dragging, or
-   * hovering a different column entirely). */
-  const [dragOverGroupLabel, setDragOverGroupLabel] = useState<string | null>(null);
+  /** Which Label group (`label`: `""` = ungrouped) in which column the
+   * cursor is currently over, while dragging a card within its own status
+   * column — the same-column counterpart to `dragOverStatus`. `status` is
+   * carried alongside the label (not just the label alone) because two
+   * different columns can legitimately have same-named groups — comparing
+   * label text alone would light up both. `null` means "not hovering a
+   * same-column regroup target" (including: not dragging, or hovering a
+   * different column entirely). */
+  const [dragOverGroupLabel, setDragOverGroupLabel] = useState<{ status: TaskStatus; label: string } | null>(null);
   /** id of the card currently being dragged, purely for the fade-out visual
    * (mousedown alone isn't "dragging" yet — only once the threshold is
    * crossed). Without this the interaction gave no feedback at all, which
@@ -255,11 +258,12 @@ export function ProjectBoard({
       const hovered = statusUnderPoint(e.clientX, e.clientY);
       const draggedCard = tasks.find((x) => x.id === st.id);
       setDragOverStatus(hovered && draggedCard && isLegalDropTarget(draggedCard, hovered) ? hovered : null);
-      setDragOverGroupLabel(
-        hovered && draggedCard && hovered === draggedCard.status
-          ? (labelUnderPoint(e.clientX, e.clientY) ?? null)
-          : null,
-      );
+      if (hovered && draggedCard && hovered === draggedCard.status) {
+        const targetLabel = labelUnderPoint(e.clientX, e.clientY);
+        setDragOverGroupLabel(targetLabel !== undefined ? { status: hovered, label: targetLabel } : null);
+      } else {
+        setDragOverGroupLabel(null);
+      }
     };
     const onUp = (e: MouseEvent) => {
       const st = dragRef.current;
@@ -288,13 +292,16 @@ export function ProjectBoard({
     };
   }, [handleDrop, handleRelabel, statusUnderPoint, labelUnderPoint, tasks, isLegalDropTarget]);
 
+  // Every card is draggable now, regardless of status — dragging serves two
+  // purposes: a cross-column status move (still gated by `isLegalDropTarget`,
+  // unchanged: only planning<->queued and running(interactive)->done) and a
+  // same-column Label regroup (allowed for any status). Before the regroup
+  // gesture existed, this used to reject running(non-interactive)/done cards
+  // outright, since neither could legally change status — but that also
+  // silently blocked regrouping a done card, which has no other drag-based
+  // path to change its group.
   const handleCardMouseDown = (e: ReactMouseEvent<HTMLDivElement>, cardRow: TaskWithAttachments) => {
     if (e.button !== 0) return;
-    const draggable =
-      cardRow.status === "planning" ||
-      cardRow.status === "queued" ||
-      (cardRow.status === "running" && cardRow.interactive);
-    if (!draggable) return;
     dragRef.current = { id: cardRow.id, startX: e.clientX, startY: e.clientY, started: false };
   };
 
@@ -359,13 +366,10 @@ export function ProjectBoard({
           >
             {(() => {
               const renderCard = (cardRow: TaskWithAttachments) => {
-                const draggableCard =
-                  cardRow.status === "planning" ||
-                  cardRow.status === "queued" ||
-                  (cardRow.status === "running" && cardRow.interactive);
+                // Every card is draggable now — see the comment on
+                // `handleCardMouseDown` for why this no longer varies by status.
                 const isDragging = draggingCardId === cardRow.id;
-                const classes = ["task-card-drag-wrap"];
-                if (draggableCard) classes.push("task-card-drag-wrap--draggable");
+                const classes = ["task-card-drag-wrap", "task-card-drag-wrap--draggable"];
                 if (isDragging) classes.push("task-card-drag-wrap--dragging");
                 return (
                   <div
@@ -394,7 +398,7 @@ export function ProjectBoard({
                       key={g.label}
                       label={g.label}
                       count={g.cards.length}
-                      highlighted={dragOverGroupLabel === g.label}
+                      highlighted={dragOverGroupLabel?.status === s && dragOverGroupLabel.label === g.label}
                     >
                       {g.cards.map(renderCard)}
                     </TaskLabelGroup>
