@@ -482,6 +482,24 @@ pub async fn tasks_used_labels(
     store::distinct_labels(&p.pool).await.map_err(|e| e.to_string())
 }
 
+/// 直接設定卡片的 Label，不受 `edit_allowed` 限制——跟
+/// `set_parallel_ok`/`set_interactive`/`set_bridge_config` 同一個「隨時可改」
+/// 類別。給拖曳換組跟「已派工/已完成卡片事後補改 Label」這兩個情境用，
+/// 這兩者都不該連帶開放 title/body/project_dir 的編輯。
+#[tauri::command]
+pub async fn tasks_set_label(
+    project_id: String,
+    task_id: String,
+    label: Option<String>,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    store::set_label(&p.pool, &task_id, label.as_deref()).await.map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    Ok(())
+}
+
 /// 寫入這張卡片的 AI 履行摘要。工作報告的第一階段產物——已完成的卡片
 /// 不可變，所以這是永久快取，下次產報告時就不必重跑這張。
 #[tauri::command]
