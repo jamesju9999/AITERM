@@ -9,12 +9,14 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{oneshot, Notify};
 
+use crate::config::types::VcsType;
 use crate::config::ConfigStore;
 use crate::pty::manager::PtyManager;
 use crate::tasks::store::{self};
 use crate::tasks::store::TaskRow;
 use crate::projects::{ProjectHandle, ProjectRegistry};
 use crate::tasks::{dispatch, monitor};
+use crate::vcs::VcsManager;
 
 /// Choose the next `queued` card to promote to `running`, or `None` if
 /// nothing should start right now. `queued` MUST be sorted by `sort_order`
@@ -52,6 +54,44 @@ pub fn pick_next<'a>(
 pub fn order_heads(mut heads: Vec<(String, TaskRow)>) -> Vec<(String, TaskRow)> {
     heads.sort_by(|a, b| a.1.created_at.cmp(&b.1.created_at).then(a.1.id.cmp(&b.1.id)));
     heads
+}
+
+/// 決定這張卡片實際要用哪個工作目錄，以及要不要建立隔離用的 worktree。
+///
+/// `project_dir` 是 git repo 就在 `<project_storage_path>/tasks/<task_id>/worktree`
+/// 建一個新 worktree + 分支（`aiterm-task/<task_id>`），從目前 HEAD 分支
+/// 出去，不 fetch、不需要遠端。回傳的第二個值非 `None` 時，呼叫端要把
+/// 這組 (path, branch) 寫進 `store::set_worktree`。
+///
+/// 不是 git repo（`VcsManager::detect_repo` 回 Err，或偵測到是 SVN——
+/// `detect_repo` 對 SVN repo 回傳 `Ok`，不是 Err，所以要額外檢查
+/// `vcs_type`），或 `git worktree add` 本身失敗（磁碟空間不足、舊版 git
+/// 沒有 worktree 支援等），一律退回直接用 `project_dir`，不擋派工。
+async fn prepare_worktree(
+    project_storage_path: &std::path::Path,
+    task_id: &str,
+    task_project_dir: &str,
+) -> (std::path::PathBuf, Option<(String, String)>) {
+    let fallback = std::path::PathBuf::from(task_project_dir);
+
+    match VcsManager::detect_repo(task_project_dir).await {
+        Ok(info) if info.vcs_type == VcsType::Git => {}
+        _ => return (fallback, None),
+    }
+
+    let worktree_path = crate::tasks::task_dir(project_storage_path, task_id).join("worktree");
+    let branch_name = format!("aiterm-task/{task_id}");
+    let client = crate::vcs::git::GitClient::new(task_project_dir.to_string(), None);
+    match client.create_worktree(&worktree_path.to_string_lossy(), &branch_name).await {
+        Ok(_) => {
+            let path_str = worktree_path.to_string_lossy().into_owned();
+            (worktree_path, Some((path_str, branch_name)))
+        }
+        Err(e) => {
+            eprintln!("worktree create failed for task {task_id}: {e}");
+            (fallback, None)
+        }
+    }
 }
 
 /// `task-finished` 的酬載：明確指出剛到達終局的是哪個專案的哪張卡片、
@@ -111,10 +151,13 @@ impl Dispatcher for RealDispatcher {
             self.bridge.port(),
             self.secrets.get(crate::bridge::auth::BRIDGE_TOKEN_KEY).ok().flatten(),
         );
+        let (effective_dir, worktree_info) =
+            prepare_worktree(&project.path, &task.id, &task.project_dir).await;
+        let effective_dir_str = effective_dir.to_string_lossy().into_owned();
         let (tab_id, disp) = dispatch::spawn_and_run(
             &self.app,
             &self.pty,
-            &task.project_dir,
+            &effective_dir_str,
             &claude_cmd,
             session_id.as_deref(),
             &prompt,
@@ -135,6 +178,13 @@ impl Dispatcher for RealDispatcher {
                 eprintln!("set_session_id {}: {e}", task.id);
             }
         }
+        if let Some((wt_path, wt_branch)) = &worktree_info {
+            if let Err(e) = store::set_worktree(&project.pool, &task.id, wt_path, wt_branch).await {
+                // 記不起來只代表「合併回原分支」按鈕不會出現，worktree
+                // 本身已經建好、Claude Code 照樣在裡面跑——不值得讓派工失敗。
+                eprintln!("set_worktree {}: {e}", task.id);
+            }
+        }
         let _ = self.app.emit("tasks-updated", ());
 
         let (cancel_tx, cancel_rx) = oneshot::channel::<monitor::WatchControl>();
@@ -152,7 +202,7 @@ impl Dispatcher for RealDispatcher {
         let task_id = task.id.clone();
         let task_title = task.title.clone();
         let project_name = project.name.clone();
-        let work_dir = std::path::PathBuf::from(&task.project_dir);
+        let work_dir = effective_dir;
         // move 而不是 clone——上面兩處用的都是 `as_deref()`，`session_id`
         // 之後不再被碰。
         let session_id_for_watch = session_id;
@@ -1115,5 +1165,55 @@ mod persist_tests {
         assert_eq!(row.status, "done");
         assert_eq!(row.outcome.as_deref(), Some("cancelled"));
         assert!(row.session_path.is_some(), "session_path 沒被寫入");
+    }
+}
+
+#[cfg(test)]
+mod prepare_worktree_tests {
+    use super::*;
+    use std::fs;
+    use std::process::Command as StdCommand;
+
+    fn init_repo(dir: &std::path::Path) {
+        StdCommand::new("git").args(["init", "-q"]).current_dir(dir).status().unwrap();
+        StdCommand::new("git").args(["config", "user.email", "test@test.com"]).current_dir(dir).status().unwrap();
+        StdCommand::new("git").args(["config", "user.name", "Test"]).current_dir(dir).status().unwrap();
+        fs::write(dir.join("a.txt"), "hello\n").unwrap();
+        StdCommand::new("git").args(["add", "."]).current_dir(dir).status().unwrap();
+        StdCommand::new("git").args(["commit", "-q", "-m", "init"]).current_dir(dir).status().unwrap();
+    }
+
+    #[tokio::test]
+    async fn non_git_project_dir_is_not_isolated() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let storage_dir = tempfile::tempdir().unwrap();
+
+        let (effective_dir, info) = prepare_worktree(
+            storage_dir.path(),
+            "t1",
+            &project_dir.path().to_string_lossy(),
+        ).await;
+
+        assert_eq!(effective_dir, project_dir.path());
+        assert!(info.is_none());
+    }
+
+    #[tokio::test]
+    async fn git_project_dir_gets_an_isolated_worktree() {
+        let project_dir = tempfile::tempdir().unwrap();
+        init_repo(project_dir.path());
+        let storage_dir = tempfile::tempdir().unwrap();
+
+        let (effective_dir, info) = prepare_worktree(
+            storage_dir.path(),
+            "t2",
+            &project_dir.path().to_string_lossy(),
+        ).await;
+
+        let (wt_path, wt_branch) = info.expect("git repo 應該要被隔離");
+        assert_eq!(effective_dir.to_string_lossy(), wt_path);
+        assert_eq!(wt_branch, "aiterm-task/t2");
+        assert!(effective_dir.join("a.txt").exists());
+        assert_ne!(effective_dir, project_dir.path(), "隔離後不該還是原本的資料夾");
     }
 }
