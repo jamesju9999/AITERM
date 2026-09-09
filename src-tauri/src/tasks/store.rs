@@ -606,6 +606,16 @@ pub async fn distinct_project_dirs(pool: &SqlitePool) -> Result<Vec<String>, sql
     .await
 }
 
+/// 這個專案的卡片用過的 Label，去重複＋排序。跟 `distinct_project_dirs`
+/// 同一個用途——新增/編輯卡片時給一鍵選取，不必每次重新手打。
+pub async fn distinct_labels(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT label FROM tasks WHERE label IS NOT NULL AND label <> '' ORDER BY label",
+    )
+    .fetch_all(pool)
+    .await
+}
+
 /// 把 `transcript_path`、`session_path` 與附件的 `stored_path` 中的
 /// `old_prefix` 換成 `new_prefix`。搬遷舊資料時用——那些欄位存的是絕對
 /// 路徑，複製資料夾之後若不改寫，新的專案資料夾就不是自成一體的（複製
@@ -1170,6 +1180,32 @@ mod project_query_tests {
         create_task(&pool, "a", "", "", true, false).await.unwrap();
         create_task(&pool, "b", "", "/real", true, false).await.unwrap();
         assert_eq!(distinct_project_dirs(&pool).await.unwrap(), vec!["/real".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn distinct_labels_dedupes_and_sorts() {
+        let pool = mem_pool().await;
+        let a = create_task(&pool, "a", "", "/r", true, false).await.unwrap();
+        let b = create_task(&pool, "b", "", "/r", true, false).await.unwrap();
+        let c = create_task(&pool, "c", "", "/r", true, false).await.unwrap();
+        set_label(&pool, &a, Some("緊急")).await.unwrap();
+        set_label(&pool, &b, Some("文件")).await.unwrap();
+        set_label(&pool, &c, Some("緊急")).await.unwrap();
+
+        assert_eq!(distinct_labels(&pool).await.unwrap(), vec!["文件".to_string(), "緊急".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn distinct_labels_skips_null_and_empty() {
+        let pool = mem_pool().await;
+        let a = create_task(&pool, "a", "", "/r", true, false).await.unwrap();
+        let b = create_task(&pool, "b", "", "/r", true, false).await.unwrap();
+        set_label(&pool, &a, Some("")).await.unwrap();
+        set_label(&pool, &b, Some("真的有分類")).await.unwrap();
+        // 第三張卡從不呼叫 set_label，label 維持 NULL。
+        create_task(&pool, "c", "", "/r", true, false).await.unwrap();
+
+        assert_eq!(distinct_labels(&pool).await.unwrap(), vec!["真的有分類".to_string()]);
     }
 
     #[tokio::test]
