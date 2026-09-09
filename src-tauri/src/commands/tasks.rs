@@ -13,6 +13,7 @@ use crate::projects::{ProjectHandle, ProjectRegistry};
 use crate::tasks::scheduler::SchedulerHandle;
 use crate::tasks::store::{self, AttachmentRow, TaskRow};
 use crate::tasks::task_dir;
+use crate::vcs::git::GitClient;
 
 pub(crate) fn edit_allowed(status: &str) -> bool {
     status == store::STATUS_PLANNING
@@ -232,6 +233,37 @@ pub async fn tasks_mark_done(
             .map_err(|e| e.to_string())?;
         emit_updated(&app);
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn tasks_merge_worktree(
+    project_id: String,
+    id: String,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    let row = store::get_task(&p.pool, &id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "task not found".to_string())?;
+    let worktree_path = row.worktree_path.ok_or_else(|| "this card has no worktree to merge".to_string())?;
+    let worktree_branch = row.worktree_branch.ok_or_else(|| "this card has no worktree to merge".to_string())?;
+
+    let worktree_client = GitClient::new(worktree_path.clone(), None);
+    if worktree_client.has_uncommitted_changes().await? {
+        worktree_client.commit_all(&format!("Task: {}", row.title)).await?;
+    }
+
+    let base_client = GitClient::new(row.project_dir.clone(), None);
+    base_client.merge_branch(&worktree_branch).await?;
+
+    // 合併成功才清理——失敗的話（通常是衝突）worktree/分支原樣保留，
+    // 讓使用者自己進那個分頁處理再重按一次。
+    base_client.remove_worktree(&worktree_path).await?;
+    store::clear_worktree(&p.pool, &id).await.map_err(|e| e.to_string())?;
+    emit_updated(&app);
     Ok(())
 }
 
@@ -767,5 +799,112 @@ mod mark_done_tests {
         let row = store::get_task(&pool, &id).await.unwrap().unwrap();
         assert_eq!(row.status, "done");
         assert_eq!(row.outcome.as_deref(), Some("success"));
+    }
+}
+
+#[cfg(test)]
+mod merge_worktree_tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+    use std::fs;
+    use std::process::Command as StdCommand;
+
+    async fn mem_pool() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        pool
+    }
+
+    fn init_repo(dir: &std::path::Path) {
+        StdCommand::new("git").args(["init", "-q"]).current_dir(dir).status().unwrap();
+        StdCommand::new("git").args(["config", "user.email", "test@test.com"]).current_dir(dir).status().unwrap();
+        StdCommand::new("git").args(["config", "user.name", "Test"]).current_dir(dir).status().unwrap();
+        fs::write(dir.join("a.txt"), "hello\n").unwrap();
+        StdCommand::new("git").args(["add", "."]).current_dir(dir).status().unwrap();
+        StdCommand::new("git").args(["commit", "-q", "-m", "init"]).current_dir(dir).status().unwrap();
+    }
+
+    /// 一張從沒被隔離過的卡片，`worktree_path`/`worktree_branch` 都是
+    /// `None`——`tasks_merge_worktree` body 裡的
+    /// `row.worktree_path.ok_or_else(...)` 對這種列一定會短路回 Err，
+    /// 這裡驗證的是這個前提本身成立，不是重新實作 `Option::ok_or_else`。
+    #[tokio::test]
+    async fn a_card_that_was_never_isolated_has_no_worktree_fields() {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        let row = store::get_task(&pool, &id).await.unwrap().unwrap();
+        assert!(row.worktree_path.is_none());
+        assert!(row.worktree_branch.is_none());
+    }
+
+    /// Exercises the exact same sequence `tasks_merge_worktree`'s body
+    /// runs（commit-if-dirty → merge → remove worktree → clear DB
+    /// fields），without needing a Tauri `State<'_, ProjectRegistry>`
+    /// extractor — same workaround `save_transcript_tests` above already
+    /// uses for the same reason.
+    #[tokio::test]
+    async fn merges_committed_worktree_changes_back_and_cleans_up() {
+        let project_dir = tempfile::tempdir().unwrap();
+        init_repo(project_dir.path());
+        let storage_dir = tempfile::tempdir().unwrap();
+
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", &project_dir.path().to_string_lossy(), true, false)
+            .await
+            .unwrap();
+
+        let wt_path = crate::tasks::task_dir(storage_dir.path(), &id).join("worktree");
+        let branch = format!("aiterm-task/{id}");
+        let base_client = GitClient::new(project_dir.path().to_string_lossy().to_string(), None);
+        base_client.create_worktree(&wt_path.to_string_lossy(), &branch).await.unwrap();
+        store::set_worktree(&pool, &id, &wt_path.to_string_lossy(), &branch).await.unwrap();
+
+        fs::write(wt_path.join("b.txt"), "from task\n").unwrap();
+
+        // 以下照抄 tasks_merge_worktree 的 body：
+        let row = store::get_task(&pool, &id).await.unwrap().unwrap();
+        let worktree_path = row.worktree_path.unwrap();
+        let worktree_branch = row.worktree_branch.unwrap();
+        let worktree_client = GitClient::new(worktree_path.clone(), None);
+        if worktree_client.has_uncommitted_changes().await.unwrap() {
+            worktree_client.commit_all(&format!("Task: {}", row.title)).await.unwrap();
+        }
+        base_client.merge_branch(&worktree_branch).await.unwrap();
+        base_client.remove_worktree(&worktree_path).await.unwrap();
+        store::clear_worktree(&pool, &id).await.unwrap();
+
+        assert!(project_dir.path().join("b.txt").exists(), "合併後原分支應該拿到新檔案");
+        assert!(!wt_path.exists(), "worktree 應該被移除");
+        let row = store::get_task(&pool, &id).await.unwrap().unwrap();
+        assert!(row.worktree_path.is_none());
+        assert!(row.worktree_branch.is_none());
+    }
+
+    /// worktree 完全沒有變更時（Claude Code 這次沒動任何檔案），不該
+    /// 呼叫 `commit_all` 產生空 commit——`has_uncommitted_changes` 回
+    /// `false` 就跳過那一步，直接合併（分支本身在 `create_worktree` 時
+    /// 就已經跟 base 同一個 commit，`merge_branch` 是 no-op 但不會出錯）。
+    #[tokio::test]
+    async fn skips_commit_when_worktree_has_no_changes() {
+        let project_dir = tempfile::tempdir().unwrap();
+        init_repo(project_dir.path());
+        let storage_dir = tempfile::tempdir().unwrap();
+
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", &project_dir.path().to_string_lossy(), true, false)
+            .await
+            .unwrap();
+
+        let wt_path = crate::tasks::task_dir(storage_dir.path(), &id).join("worktree");
+        let branch = format!("aiterm-task/{id}");
+        let base_client = GitClient::new(project_dir.path().to_string_lossy().to_string(), None);
+        base_client.create_worktree(&wt_path.to_string_lossy(), &branch).await.unwrap();
+
+        let worktree_client = GitClient::new(wt_path.to_string_lossy().to_string(), None);
+        assert!(!worktree_client.has_uncommitted_changes().await.unwrap());
+
+        base_client.merge_branch(&branch).await.unwrap();
+        base_client.remove_worktree(&wt_path.to_string_lossy()).await.unwrap();
+        assert!(!wt_path.exists());
     }
 }
