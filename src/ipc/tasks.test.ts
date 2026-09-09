@@ -33,6 +33,7 @@ describe("ipc/tasks", () => {
       interactive: true,
       use_bridge: false,
       bridge_tiers: null,
+      label: null,
     });
     expect(id).toBe("new-id");
     expect(invoke).toHaveBeenCalledWith("tasks_create", {
@@ -45,6 +46,7 @@ describe("ipc/tasks", () => {
         interactive: true,
         use_bridge: false,
         bridge_tiers: null,
+        label: null,
       },
     });
   });

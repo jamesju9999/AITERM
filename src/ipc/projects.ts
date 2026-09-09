@@ -49,3 +49,7 @@ export const renameProject = (id: string, name: string, description: string): Pr
 /** 這個專案的卡片用過的工作目錄，供新增工作時快捷選取。 */
 export const usedDirs = (projectId: string): Promise<string[]> =>
   invoke("tasks_used_dirs", { projectId });
+
+/** 這個專案的卡片用過的 Label，供新增/編輯工作時快捷選取。 */
+export const usedLabels = (projectId: string): Promise<string[]> =>
+  invoke("tasks_used_labels", { projectId });

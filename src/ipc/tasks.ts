@@ -18,6 +18,8 @@ export interface TaskRow {
   title: string;
   body: string;
   project_dir: string;
+  /** 使用者自由輸入的分類文字，用來在同一狀態欄內把卡片分組顯示。 */
+  label: string | null;
   status: TaskStatus;
   parallel_ok: boolean;
   interactive: boolean;
@@ -72,6 +74,7 @@ export const createTask = (
     interactive: boolean;
     use_bridge: boolean;
     bridge_tiers: string | null;
+    label: string | null;
   },
 ): Promise<string> => invoke("tasks_create", { projectId, args });
 
@@ -89,6 +92,7 @@ export const updateTask = (
     interactive: boolean;
     use_bridge: boolean;
     bridge_tiers: string | null;
+    label: string | null;
   },
 ): Promise<void> => invoke("tasks_update", { projectId, args });
 
