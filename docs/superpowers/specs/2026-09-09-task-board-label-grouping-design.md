@@ -37,9 +37,27 @@ pub label: Option<String>,
 
 ## 後端改動
 
-**`store::create_task`**（`store.rs:73`）簽章加 `label: Option<&str>`，`INSERT` 語句加上 `label` 欄位與對應 bind；`clone_task_fields`（`store.rs:109`）也要把來源卡片的 `label` 一併複製過去，跟現有複製 `project_dir`/`parallel_ok`/`interactive` 同一個邏輯。
+**不改 `store::create_task` 的簽章。** 這個函式在 `src-tauri/src/tasks/`、`commands/tasks.rs`、`projects/`底下有六十幾個呼叫點（`dispatch.rs`/`scheduler.rs`/`migrate.rs`/`projects/mod.rs` 的測試都直接呼叫它），加一個必填參數等於逼所有跟 Label 完全無關的檔案跟著改，不是這次改動該碰的範圍。改用現有的「先 create 再另外 set」模式——`use_bridge`/`bridge_tiers` 就是這樣做的（`commands/tasks.rs:83-95`：`create_task` 之後另外呼叫 `store::set_bridge_config`）：
 
-**`store::update_task_fields`**（`store.rs:380`）簽章加 `label: Option<&str>`，`UPDATE` 語句加上 `label = ?`——跟 `title`/`body`/`project_dir` 綁在同一個函式、同一個 `edit_allowed` 閘門（`commands/tasks.rs:17`，只有 `status == planning` 時可編輯），Label 是同等級的「可編輯詮釋欄位」。
+新函式 `store::set_label`（放在 `set_parallel_ok`/`set_interactive` 旁邊）：
+
+```rust
+/// 設定卡片的 Label（分類用自由文字，`None` 代表清空）。跟
+/// `set_parallel_ok`/`set_interactive`/`set_bridge_config` 同一種「建立後
+/// 另外設定的欄位」模式，不擠進 `create_task` 的必要參數清單。
+pub async fn set_label(pool: &SqlitePool, id: &str, label: Option<&str>) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET label = ? WHERE id = ?")
+        .bind(label)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+```
+
+`clone_task_fields`（`store.rs:109`）在既有的 `create_task(...)` 呼叫之後，多一步 `set_label(pool, &new_id, src.label.as_deref())`——重新排隊時保留原本的分類；跟 `use_bridge`/`bridge_tiers` 目前**不會**被複製剛好相反，因為 Label 純粹是分類標記、沒有帳號/費用面的顧慮，複製過去沒有風險。
+
+**`store::update_task_fields`**（`store.rs:380`）簽章加 `label: Option<&str>`，`UPDATE` 語句加上 `label = ?`。這個函式目前只有 `commands/tasks.rs:134` 一個呼叫點、沒有任何既有測試直接呼叫它，改簽章不會波及其他檔案。Label 跟 `title`/`body`/`project_dir` 綁在同一個函式、同一個 `edit_allowed` 閘門（`commands/tasks.rs:17`，只有 `status == planning` 時可編輯），是同等級的「可編輯詮釋欄位」。
 
 **新函式 `store::distinct_labels`**，完全鏡射現有的 `distinct_project_dirs`（`store.rs:579`）：
 
@@ -55,7 +73,7 @@ pub async fn distinct_labels(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Err
 }
 ```
 
-**`commands/tasks.rs`**：`CreateArgs`/`UpdateArgs`（分別在 `:64`、`:100`）加 `pub label: Option<String>`；`tasks_create`/`tasks_update` 呼叫 `create_task`/`update_task_fields` 時多傳這個參數。新增指令 `tasks_used_labels`，鏡射 `tasks_used_dirs`（`commands/tasks.rs:460`）：
+**`commands/tasks.rs`**：`CreateArgs`/`UpdateArgs`（分別在 `:64`、`:100`）加 `pub label: Option<String>`。`tasks_create`（`:76-98`）在既有的 `store::set_bridge_config(...)` 呼叫旁邊多一行 `store::set_label(&p.pool, &id, args.label.as_deref())`。`tasks_update`（`:112-146`）呼叫 `update_task_fields` 時多傳 `args.label.as_deref()`。新增指令 `tasks_used_labels`，鏡射 `tasks_used_dirs`（`commands/tasks.rs:460`）：
 
 ```rust
 #[tauri::command]
@@ -103,7 +121,9 @@ export const usedLabels = (projectId: string): Promise<string[]> =>
 
 比照現有的 `dir`/`dirChoices` 那一套（`:44`、`:86-95`、`:311-343`）：新增 `label` state（`card?.label ?? ""`）、`labelChoices` state 由 `usedLabels(projectId)` 填入、一個文字輸入框 + 下面一排「用過的 Label」chip 按鈕（點了就把值填進輸入框）。跟 `dir` 不同的地方：**不**用 `localStorage` 記上次輸入值——Label 是分類用途，沒有「預設延續上一張卡」的理由，每張新卡預設空白。UI 位置放在 `dir` 欄位那個 `task-dialog-group`（`:311-343`）之後、`parallel_ok`/`interactive` checkbox 之前，跟 `dir` 一樣獨立一個 `task-field` 區塊。
 
-### 色相雜湊（新檔案 `src/lib/labelColor.ts`）
+### 色相雜湊（新檔案 `src/components/TaskBoard/labelColor.ts`）
+
+跟 `refinePrompts.ts`/`reportPrompts.ts` 同一種「獨立純函式檔案＋同目錄同名測試」慣例，放在 `TaskBoard/` 目錄下而非全域 `src/lib/`——目前只有這個目錄底下的元件會用到。
 
 ```ts
 /** 把任意字串雜湊成一個穩定的 0–359 色相值，同一個字串永遠同色。 */
@@ -133,12 +153,14 @@ export function hashLabelHue(label: string): number {
 
 ### 看板分組（`ProjectBoard.tsx`）
 
-新增一個純函式（放在元件內或獨立 util 皆可，因為只依賴傳入的卡片陣列）：
+新增一個純函式，放進獨立檔案 `src/components/TaskBoard/groupByLabel.ts`（跟 `refinePrompts.ts` 同一種慣例：純邏輯不掛在元件裡，方便直接單元測試，不用透過 React Testing Library 掛整個 `ProjectBoard`）：
 
 ```ts
-interface LabelGroup { label: string; cards: TaskWithAttachments[] }
+import type { TaskWithAttachments } from "../../ipc/tasks";
 
-function groupByLabel(cards: TaskWithAttachments[]): {
+export interface LabelGroup { label: string; cards: TaskWithAttachments[] }
+
+export function groupByLabel(cards: TaskWithAttachments[]): {
   ungrouped: TaskWithAttachments[];
   groups: LabelGroup[];
 } {
@@ -249,8 +271,10 @@ export function TaskLabelGroup({
 **Rust**（`src-tauri/src/tasks/store.rs` 既有的 `#[cfg(test)]` 區塊）：
 
 - `distinct_labels`：去重複＋排序（比照 `distinct_project_dirs_dedupes_and_sorts`）、跳過 `NULL`/空字串（比照 `distinct_project_dirs_skips_empty_strings`）
-- `create_task`/`clone_task_fields` 帶 `label` 時正確寫入/複製
+- `set_label`：寫入後 `get_task` 讀得到；傳 `None` 能清空既有值
+- `clone_task_fields`：來源卡片有 `label` 時，複製出來的新卡片也有同樣的 `label`
 - `update_task_fields` 帶 `label` 時正確更新
+- 舊資料庫遷移（沒有 `label` 欄位的既有 DB 跑 `init_schema` 之後）：欄位補上、預設 `NULL`、`set_label` 事後可正常寫入——比照既有的 `init_schema_migrates_a_database_that_predates_the_session_columns`
 - `search_archived`：關鍵字比對得到 `label` 相符的封存卡片；`label` 為 `NULL` 的卡片不會被任何關鍵字誤配到
 
 **前端**：
