@@ -116,26 +116,16 @@ export function hashLabelHue(label: string): number {
 }
 ```
 
-配色透過 CSS 自訂屬性 `--label-hue` 傳進樣式，樣式本身用 `hsl(var(--label-hue) ...)`。淺色/深色各自定義飽和度與亮度，沿用 repo 現有的雙軌寫法（`:root[data-theme="dark"]` 覆寫 + `@media (prefers-color-scheme: dark)` 搭配 `:root:not([data-theme="light"])`，例如 `AgentStatusBar.css` 已經在用的那個模式）：
+配色透過 CSS 自訂屬性 `--label-hue` 傳進樣式，樣式本身用 `hsl(var(--label-hue) ...)`。**不需要淺色/深色雙軌寫法**：`src/components/TaskBoard/index.css:1-18` 開頭的註解已經講清楚——整個 `.task-board`（含 portal 出去的 `.task-card-ghost`）刻意寫死一組深藍配色變數，不管使用者在設定頁選了 app 哪個主題都固定顯示同一套，跟全域的 light/dark 主題系統無關。所以 Label 徽章只要比照同檔案既有的 `.task-badge--success` 等規則（`:591-593`，直接用固定變數、沒有 media query），用同一種「單一深色配色」寫法即可：
 
 ```css
 .task-label-chip {
-  background: hsl(var(--label-hue) 70% 88%);
-  color: hsl(var(--label-hue) 65% 30%);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .task-label-chip {
-    background: hsl(var(--label-hue) 35% 22%);
-    color: hsl(var(--label-hue) 70% 80%);
-  }
-}
-:root[data-theme="dark"] .task-label-chip {
-  background: hsl(var(--label-hue) 35% 22%);
-  color: hsl(var(--label-hue) 70% 80%);
+  background: hsl(var(--label-hue) 45% 22%);
+  color: hsl(var(--label-hue) 70% 78%);
 }
 ```
 
-這個色票只用色相變化、固定飽和度/亮度，兩個主題下對比度都固定住，不會因為使用者輸入的文字剛好雜湊到某個色相而在某個主題下看不清楚。
+固定飽和度/亮度、只變化色相，確保任何雜湊出來的色相在這組深色底下都維持足夠對比度。
 
 ### 卡片本身（`TaskCard.tsx`）
 
