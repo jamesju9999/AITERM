@@ -56,7 +56,9 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             session_path    TEXT,
             use_bridge      INTEGER NOT NULL DEFAULT 0,
             bridge_tiers    TEXT,
-            label           TEXT
+            label           TEXT,
+            worktree_path   TEXT,
+            worktree_branch TEXT
         )",
     )
     .execute(pool)
@@ -94,6 +96,14 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .await;
     // Migration: existing databases created before `label` existed.
     let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN label TEXT")
+        .execute(pool)
+        .await;
+    // Migration: existing databases created before `worktree_path`/
+    // `worktree_branch` existed.
+    let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN worktree_path TEXT")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN worktree_branch TEXT")
         .execute(pool)
         .await;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, sort_order)")

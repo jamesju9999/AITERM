@@ -54,6 +54,14 @@ pub struct TaskRow {
     /// 使用者自由輸入的分類文字，用來在同一狀態欄內把卡片分組顯示。
     /// `None` 代表未分類。
     pub label: Option<String>,
+    /// 這張卡片專屬 git worktree 的路徑。有值代表派工時偵測到
+    /// `project_dir` 是 git repo，Claude Code 實際是在這個路徑跑的，
+    /// 不是 `project_dir` 本身。`None` 代表沒有隔離（非 git 專案，或
+    /// worktree 建立失敗退回原本行為），或已經合併回原分支並清理過。
+    pub worktree_path: Option<String>,
+    /// 上面那個 worktree 所在的分支名稱（`aiterm-task/<task_id>`）。
+    /// 跟 `worktree_path` 同進退——一個有值另一個必然也有值。
+    pub worktree_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -469,6 +477,28 @@ pub async fn set_session_id(pool: &SqlitePool, id: &str, session_id: &str) -> Re
 pub async fn set_session_path(pool: &SqlitePool, id: &str, path: &str) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE tasks SET session_path = ? WHERE id = ?")
         .bind(path)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// 記下派工時建立的 worktree 路徑與分支。在 `spawn_and_run` 之後、
+/// 與 `set_tab_id` 同一個時機呼叫，只有偵測到隔離成功時才呼叫。
+pub async fn set_worktree(pool: &SqlitePool, id: &str, path: &str, branch: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET worktree_path = ?, worktree_branch = ? WHERE id = ?")
+        .bind(path)
+        .bind(branch)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// 合併成功、worktree 已經被 `git worktree remove` 之後呼叫，把這兩個
+/// 欄位清空，讓「合併回原分支」按鈕在前端自然消失。
+pub async fn clear_worktree(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET worktree_path = NULL, worktree_branch = NULL WHERE id = ?")
         .bind(id)
         .execute(pool)
         .await?;
@@ -1399,6 +1429,65 @@ mod session_column_tests {
             get_task(&pool, "old1").await.unwrap().unwrap().session_path.as_deref(),
             Some("/p/session.jsonl")
         );
+    }
+
+    /// 舊資料庫沒有 worktree_path/worktree_branch 時，`init_schema` 要能
+    /// 補上這兩個欄位而不報錯，且既有資料的這兩欄應該是 NULL。
+    #[tokio::test]
+    async fn init_schema_migrates_a_database_that_predates_the_worktree_columns() {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+
+        // 完整但沒有 worktree_path/worktree_branch 欄位的舊 schema。
+        sqlx::query(
+            "CREATE TABLE tasks (
+                id              TEXT PRIMARY KEY NOT NULL,
+                title           TEXT NOT NULL,
+                body            TEXT NOT NULL DEFAULT '',
+                project_dir     TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'planning',
+                parallel_ok     INTEGER NOT NULL DEFAULT 1,
+                interactive     INTEGER NOT NULL DEFAULT 0,
+                sort_order      REAL NOT NULL DEFAULT 0,
+                outcome         TEXT,
+                tab_id          TEXT,
+                transcript_path TEXT,
+                error_message   TEXT,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                dispatched_at   INTEGER,
+                finished_at     INTEGER,
+                ai_summary      TEXT,
+                archived_at     INTEGER,
+                session_id      TEXT,
+                session_path    TEXT,
+                use_bridge      INTEGER NOT NULL DEFAULT 0,
+                bridge_tiers    TEXT,
+                label           TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query("INSERT INTO tasks (id, title, body, project_dir) VALUES ('old1', 't', 'b', '/work/repo')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        crate::tasks::init_schema(&pool).await.unwrap();
+
+        let row = get_task(&pool, "old1").await.unwrap().unwrap();
+        assert_eq!(row.worktree_path, None, "舊資料遷移後應該是 NULL，不是欄位缺席");
+        assert_eq!(row.worktree_branch, None);
+
+        set_worktree(&pool, "old1", "/tmp/wt", "aiterm-task/old1").await.unwrap();
+        let row = get_task(&pool, "old1").await.unwrap().unwrap();
+        assert_eq!(row.worktree_path.as_deref(), Some("/tmp/wt"));
+        assert_eq!(row.worktree_branch.as_deref(), Some("aiterm-task/old1"));
+
+        clear_worktree(&pool, "old1").await.unwrap();
+        let row = get_task(&pool, "old1").await.unwrap().unwrap();
+        assert_eq!(row.worktree_path, None);
+        assert_eq!(row.worktree_branch, None);
     }
 
     /// 舊資料庫（沒有 `label` 欄位）跑過 `init_schema` 之後必須能補上這個

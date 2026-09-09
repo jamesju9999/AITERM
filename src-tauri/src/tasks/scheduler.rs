@@ -506,6 +506,8 @@ mod tests {
             use_bridge: false,
             bridge_tiers: None,
             label: None,
+            worktree_path: None,
+            worktree_branch: None,
         }
     }
 
@@ -594,6 +596,8 @@ mod tests {
             use_bridge: false,
             bridge_tiers: None,
             label: None,
+            worktree_path: None,
+            worktree_branch: None,
         }
     }
 
