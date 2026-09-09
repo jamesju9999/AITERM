@@ -987,4 +987,19 @@ describe("ProjectBoard", () => {
       document.elementFromPoint = originalElementFromPoint;
     }
   });
+
+  describe("Label 徽章", () => {
+    it("有 label 的卡片顯示徽章", async () => {
+      vi.mocked(listTasks).mockResolvedValue([card({ id: "1", label: "緊急" })]);
+      view();
+      expect(await screen.findByText("緊急")).toBeInTheDocument();
+    });
+
+    it("沒有 label 的卡片不顯示徽章", async () => {
+      vi.mocked(listTasks).mockResolvedValue([card({ id: "1", label: null })]);
+      view();
+      await screen.findByText("Card one");
+      expect(screen.queryByText("緊急")).not.toBeInTheDocument();
+    });
+  });
 });

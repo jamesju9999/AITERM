@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { confirm } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import { archiveTask, cloneTask, deleteTask, markTaskDone, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
+import { hashLabelHue } from "./labelColor";
 
 export function TaskCard({
   projectId,
@@ -95,6 +96,14 @@ export function TaskCard({
         )}
         {card.status === "done" && card.outcome && (
           <span className={`task-badge task-badge--${card.outcome}`}>{outcomeLabel}</span>
+        )}
+        {card.label && (
+          <span
+            className="task-label-chip"
+            style={{ "--label-hue": hashLabelHue(card.label) } as CSSProperties}
+          >
+            {card.label}
+          </span>
         )}
       </div>
 
