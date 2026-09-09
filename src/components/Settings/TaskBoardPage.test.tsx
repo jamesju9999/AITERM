@@ -24,6 +24,7 @@ beforeEach(() => {
     auto_close_finished_tabs: true,
     notify_desktop_on_finish: true,
     notify_telegram_on_finish: true,
+    stuck_timeout_secs: 1200,
   });
   vi.mocked(getTelegramConfig).mockResolvedValue({ bot_token: null, chat_id: null });
 });
@@ -88,6 +89,26 @@ describe("TaskBoardPage", () => {
     view();
     await waitFor(() =>
       expect(screen.getByRole("checkbox", { name: /Telegram/ })).toBeChecked(),
+    );
+  });
+
+  it("顯示疑似卡住判定時間，換算成分鐘（1200 秒 → 20）", async () => {
+    view();
+    await waitFor(() => expect(screen.getByDisplayValue("20")).toBeInTheDocument());
+  });
+
+  it("修改疑似卡住判定時間後儲存，換算回秒數送出", async () => {
+    const user = userEvent.setup();
+    view();
+    await waitFor(() => screen.getByDisplayValue("2"));
+    const n = screen.getByDisplayValue("20");
+    await user.clear(n);
+    await user.type(n, "5");
+    await user.click(screen.getByRole("button", { name: /儲存|Save/ }));
+    await waitFor(() =>
+      expect(setTaskBoardConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ stuck_timeout_secs: 300 }),
+      ),
     );
   });
 });

@@ -67,6 +67,21 @@ export function TaskBoardPage() {
           <span className="task-board-hint">{t.board_settings_claude_command_hint}</span>
         </label>
 
+        <label className="task-board-field">
+          <span>{t.board_settings_stuck_timeout}</span>
+          <input
+            type="number"
+            min={1}
+            max={360}
+            value={Number.isNaN(cfg.stuck_timeout_secs) ? "" : Math.round(cfg.stuck_timeout_secs / 60)}
+            onChange={(e) => {
+              setSaved(false);
+              setCfg({ ...cfg, stuck_timeout_secs: Math.round(e.target.valueAsNumber * 60) });
+            }}
+          />
+          <span className="task-board-hint">{t.board_settings_stuck_timeout_hint}</span>
+        </label>
+
         <label className="task-board-field task-board-field--checkbox">
           <input
             type="checkbox"

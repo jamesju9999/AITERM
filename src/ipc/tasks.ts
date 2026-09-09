@@ -63,6 +63,8 @@ export interface TaskBoardConfig {
   auto_close_finished_tabs: boolean;
   notify_desktop_on_finish: boolean;
   notify_telegram_on_finish: boolean;
+  /** 非互動卡片連續多久沒有終端機輸出就判定「疑似卡住」而標記失敗（單位：秒）。 */
+  stuck_timeout_secs: number;
 }
 
 // ── Commands ────────────────────────────────────────────────────────────────

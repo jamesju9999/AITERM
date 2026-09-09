@@ -32,6 +32,7 @@ beforeEach(() => {
     auto_close_finished_tabs: true,
     notify_desktop_on_finish: true,
     notify_telegram_on_finish: true,
+    stuck_timeout_secs: 1200,
   });
 });
 
@@ -107,6 +108,7 @@ describe("useAutoCloseFinishedTabs", () => {
       auto_close_finished_tabs: false,
       notify_desktop_on_finish: true,
       notify_telegram_on_finish: true,
+      stuck_timeout_secs: 1200,
     });
     renderHook(() => useAutoCloseFinishedTabs(activeRef("other-tab")));
     const events: CustomEvent[] = [];
