@@ -63,6 +63,9 @@ struct TaskFinishedEvent {
     task_id: String,
     tab_id: String,
     outcome: String,
+    title: String,
+    project_name: String,
+    error_message: Option<String>,
 }
 
 /// Abstracts "actually run this card" so the loop is testable without an
@@ -147,6 +150,8 @@ impl Dispatcher for RealDispatcher {
         let wake = self.wake.clone();
         let cancels = self.cancels.clone();
         let task_id = task.id.clone();
+        let task_title = task.title.clone();
+        let project_name = project.name.clone();
         let work_dir = std::path::PathBuf::from(&task.project_dir);
         // move 而不是 clone——上面兩處用的都是 `as_deref()`，`session_id`
         // 之後不再被碰。
@@ -181,6 +186,9 @@ impl Dispatcher for RealDispatcher {
                     task_id: task_id.clone(),
                     tab_id: tab_id.clone(),
                     outcome: outcome.as_str().to_string(),
+                    title: task_title.clone(),
+                    project_name: project_name.clone(),
+                    error_message: outcome.error_message().map(str::to_string),
                 },
             );
             wake.notify_one();
