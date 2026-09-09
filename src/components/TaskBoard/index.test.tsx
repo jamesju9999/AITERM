@@ -1071,4 +1071,78 @@ describe("ProjectBoard", () => {
       expect(screen.queryByRole("button", { name: /編輯 Label|Edit label/ })).not.toBeInTheDocument();
     });
   });
+
+  describe("同一狀態欄內拖曳換組", () => {
+    it("拖到另一個 Label 群組上，呼叫 setTaskLabel 換成那個群組的 label", async () => {
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "a", title: "Card A", status: "planning", label: null }),
+        card({ id: "b", title: "Card B", status: "planning", label: "緊急" }),
+      ]);
+      view();
+      const cardAEl = await screen.findByText("Card A");
+      const cardBEl = screen.getByText("Card B");
+      const dragWrapA = cardAEl.closest("[data-task-drag-id]") as HTMLElement;
+      const dragTargetB = cardBEl.closest("[data-task-drag-id]") as HTMLElement;
+
+      const originalElementFromPoint = document.elementFromPoint;
+      document.elementFromPoint = vi.fn().mockReturnValue(dragTargetB);
+      try {
+        const { fireEvent } = await import("@testing-library/react");
+        fireEvent.mouseDown(dragWrapA, { clientX: 100, clientY: 100, button: 0 });
+        fireEvent.mouseMove(window, { clientX: 100, clientY: 120 });
+        fireEvent.mouseUp(window, { clientX: 100, clientY: 120 });
+        await waitFor(() => expect(setTaskLabel).toHaveBeenCalledWith(PROJECT_ID, "a", "緊急"));
+      } finally {
+        document.elementFromPoint = originalElementFromPoint;
+      }
+      // moveTask 不該被叫到——這是同欄換組，不是換狀態欄。
+      expect(moveTask).not.toHaveBeenCalled();
+    });
+
+    it("拖到欄位空白處（不在任何卡片或群組上），清空 label", async () => {
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "a", title: "Card A", status: "planning", label: "緊急" }),
+      ]);
+      view();
+      const cardAEl = await screen.findByText("Card A");
+      const dragWrapA = cardAEl.closest("[data-task-drag-id]") as HTMLElement;
+      const planningCol = screen.getByTestId("column-planning");
+
+      const originalElementFromPoint = document.elementFromPoint;
+      document.elementFromPoint = vi.fn().mockReturnValue(planningCol);
+      try {
+        const { fireEvent } = await import("@testing-library/react");
+        fireEvent.mouseDown(dragWrapA, { clientX: 100, clientY: 100, button: 0 });
+        fireEvent.mouseMove(window, { clientX: 100, clientY: 120 });
+        fireEvent.mouseUp(window, { clientX: 100, clientY: 120 });
+        await waitFor(() => expect(setTaskLabel).toHaveBeenCalledWith(PROJECT_ID, "a", null));
+      } finally {
+        document.elementFromPoint = originalElementFromPoint;
+      }
+    });
+
+    it("拖到自己原本所在的群組上（label 沒變），不呼叫 setTaskLabel", async () => {
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "a", title: "Card A", status: "planning", label: "緊急" }),
+        card({ id: "b", title: "Card B", status: "planning", label: "緊急" }),
+      ]);
+      view();
+      const cardAEl = await screen.findByText("Card A");
+      const cardBEl = screen.getByText("Card B");
+      const dragWrapA = cardAEl.closest("[data-task-drag-id]") as HTMLElement;
+      const dragTargetB = cardBEl.closest("[data-task-drag-id]") as HTMLElement;
+
+      const originalElementFromPoint = document.elementFromPoint;
+      document.elementFromPoint = vi.fn().mockReturnValue(dragTargetB);
+      try {
+        const { fireEvent } = await import("@testing-library/react");
+        fireEvent.mouseDown(dragWrapA, { clientX: 100, clientY: 100, button: 0 });
+        fireEvent.mouseMove(window, { clientX: 100, clientY: 120 });
+        fireEvent.mouseUp(window, { clientX: 100, clientY: 120 });
+      } finally {
+        document.elementFromPoint = originalElementFromPoint;
+      }
+      expect(setTaskLabel).not.toHaveBeenCalled();
+    });
+  });
 });

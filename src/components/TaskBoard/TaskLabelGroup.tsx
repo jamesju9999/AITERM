@@ -21,11 +21,11 @@ export function TaskLabelGroup({
     <div
       className={`task-label-group${highlighted ? " task-label-group--drop-target" : ""}`}
       data-task-label-group={label}
+      style={{ "--label-hue": hashLabelHue(label) } as CSSProperties}
     >
       <button
         type="button"
         className="task-label-group-header"
-        style={{ "--label-hue": hashLabelHue(label) } as CSSProperties}
         onClick={() => setCollapsed((c) => !c)}
       >
         <span className="task-label-group-caret">{collapsed ? "▸" : "▾"}</span>

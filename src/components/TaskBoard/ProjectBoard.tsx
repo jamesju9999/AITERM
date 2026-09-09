@@ -9,6 +9,7 @@ import {
   markTaskDone,
   moveTask,
   onTasksUpdated,
+  setTaskLabel,
   type TaskStatus,
   type TaskWithAttachments,
 } from "../../ipc/tasks";
@@ -61,6 +62,12 @@ export function ProjectBoard({
    * dragging, for the drop-target highlight. Not the drop decision itself
    * (that's read fresh from `elementFromPoint` on mouseup). */
   const [dragOverStatus, setDragOverStatus] = useState<TaskStatus | null>(null);
+  /** Which Label group (by label text; `""` = ungrouped) the cursor is
+   * currently over, while dragging a card within its own status column —
+   * the same-column counterpart to `dragOverStatus`. `null` means "not
+   * hovering a same-column regroup target" (including: not dragging, or
+   * hovering a different column entirely). */
+  const [dragOverGroupLabel, setDragOverGroupLabel] = useState<string | null>(null);
   /** id of the card currently being dragged, purely for the fade-out visual
    * (mousedown alone isn't "dragging" yet — only once the threshold is
    * crossed). Without this the interaction gave no feedback at all, which
@@ -180,6 +187,19 @@ export function ProjectBoard({
     [tasks, isLegalDropTarget, projectId],
   );
 
+  // Same-column drag-to-regroup: dropping a card onto another Label group
+  // (or onto blank column space, for "ungrouped") within its OWN status
+  // column re-labels it instead of moving it — `isLegalDropTarget` above
+  // always rejects a same-status drop, so this is a deliberately separate,
+  // parallel path, not a variant of `handleDrop`.
+  const handleRelabel = useCallback(
+    async (id: string, label: string | null) => {
+      await setTaskLabel(projectId, id, label);
+      setTasks((prev) => prev.map((x) => (x.id === id ? { ...x, label } : x)));
+    },
+    [projectId],
+  );
+
   // Card drag-to-move: deliberately NOT native HTML5 drag-and-drop
   // (draggable/dragstart/dragover/drop). Tauri's window-level
   // `dragDropEnabled` (default true, not overridden in tauri.conf.json)
@@ -197,6 +217,31 @@ export function ProjectBoard({
     return status && (COLUMNS as string[]).includes(status) ? (status as TaskStatus) : null;
   }, []);
 
+  // Which Label group a point resolves to, for the same-column regroup
+  // path. `undefined` = "can't resolve a regroup target here" (caller
+  // should do nothing); `""` = the ungrouped zone; anything else = that
+  // group's label. Checked in this order: a group wrapper (its header or
+  // body — covers hovering directly over another card too, since cards
+  // render inside `.task-label-group-body`), then any other card
+  // (ungrouped cards aren't inside a group wrapper), then the column body
+  // itself (blank space = ungrouped).
+  const labelUnderPoint = useCallback(
+    (x: number, y: number): string | undefined => {
+      const el = document.elementFromPoint(x, y);
+      const groupEl = el?.closest("[data-task-label-group]");
+      if (groupEl) return groupEl.getAttribute("data-task-label-group") ?? "";
+      const cardEl = el?.closest("[data-task-drag-id]");
+      if (cardEl) {
+        const id = cardEl.getAttribute("data-task-drag-id");
+        const match = tasks.find((t) => t.id === id);
+        return match ? (match.label ?? "") : undefined;
+      }
+      if (el?.closest("[data-testid^='column-']")) return "";
+      return undefined;
+    },
+    [tasks],
+  );
+
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       const st = dragRef.current;
@@ -210,16 +255,30 @@ export function ProjectBoard({
       const hovered = statusUnderPoint(e.clientX, e.clientY);
       const draggedCard = tasks.find((x) => x.id === st.id);
       setDragOverStatus(hovered && draggedCard && isLegalDropTarget(draggedCard, hovered) ? hovered : null);
+      setDragOverGroupLabel(
+        hovered && draggedCard && hovered === draggedCard.status
+          ? (labelUnderPoint(e.clientX, e.clientY) ?? null)
+          : null,
+      );
     };
     const onUp = (e: MouseEvent) => {
       const st = dragRef.current;
       dragRef.current = null;
       setDragOverStatus(null);
+      setDragOverGroupLabel(null);
       setDraggingCardId(null);
       setDragPointer(null);
       if (!st?.started) return;
       const to = statusUnderPoint(e.clientX, e.clientY);
-      if (to) void handleDrop(st.id, to);
+      const draggedCard = tasks.find((x) => x.id === st.id);
+      if (to && draggedCard && to === draggedCard.status) {
+        const targetLabel = labelUnderPoint(e.clientX, e.clientY);
+        if (targetLabel !== undefined && targetLabel !== (draggedCard.label ?? "")) {
+          void handleRelabel(st.id, targetLabel || null);
+        }
+      } else if (to) {
+        void handleDrop(st.id, to);
+      }
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -227,7 +286,7 @@ export function ProjectBoard({
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [handleDrop, statusUnderPoint, tasks, isLegalDropTarget]);
+  }, [handleDrop, handleRelabel, statusUnderPoint, labelUnderPoint, tasks, isLegalDropTarget]);
 
   const handleCardMouseDown = (e: ReactMouseEvent<HTMLDivElement>, cardRow: TaskWithAttachments) => {
     if (e.button !== 0) return;
@@ -331,7 +390,12 @@ export function ProjectBoard({
                 <>
                   {ungrouped.map(renderCard)}
                   {groups.map((g) => (
-                    <TaskLabelGroup key={g.label} label={g.label} count={g.cards.length}>
+                    <TaskLabelGroup
+                      key={g.label}
+                      label={g.label}
+                      count={g.cards.length}
+                      highlighted={dragOverGroupLabel === g.label}
+                    >
                       {g.cards.map(renderCard)}
                     </TaskLabelGroup>
                   ))}
