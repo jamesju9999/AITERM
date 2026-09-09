@@ -598,6 +598,32 @@
 .task-badge-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: task-badge-pulse 1.6s ease-in-out infinite; }
 @keyframes task-badge-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
+/* Label 分組 — 卡片可依使用者自訂的自由文字分類。這個看板整區是固定
+   深色（見檔案開頭的說明），所以色相雜湊配色只需要一套，不用淺色/
+   深色雙軌寫法。 */
+.task-label-chip {
+  background: hsl(var(--label-hue) 45% 22%);
+  color: hsl(var(--label-hue) 70% 78%);
+  border-radius: 20px;
+  padding: 2px 9px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.task-label-group { display: flex; flex-direction: column; gap: 8px; }
+.task-label-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.task-label-group-caret { font-size: 10px; width: 10px; }
+.task-label-group-count { font-size: 11px; color: var(--text-muted); }
+.task-label-group-body { display: flex; flex-direction: column; gap: 8px; }
+
 .task-card-divider { height: 1px; background: linear-gradient(90deg, var(--border-color), transparent); margin: 11px 0 9px; }
 
 .task-card-actions { display: flex; flex-wrap: wrap; gap: 6px; }
