@@ -27,4 +27,32 @@ describe("TaskLabelGroup", () => {
     await userEvent.click(header);
     expect(screen.getByTestId("child")).toBeInTheDocument();
   });
+
+  it("根元素帶 data-task-label-group，給拖曳判斷用", () => {
+    const { container } = render(
+      <TaskLabelGroup label="緊急" count={1}>
+        <div>卡片</div>
+      </TaskLabelGroup>,
+    );
+    expect(container.querySelector("[data-task-label-group='緊急']")).toBeInTheDocument();
+  });
+
+  it("highlighted 為 true 時加上拖放目標的樣式 class", () => {
+    const { container, rerender } = render(
+      <TaskLabelGroup label="緊急" count={1}>
+        <div>卡片</div>
+      </TaskLabelGroup>,
+    );
+    expect(container.querySelector(".task-label-group")?.className).not.toContain(
+      "task-label-group--drop-target",
+    );
+    rerender(
+      <TaskLabelGroup label="緊急" count={1} highlighted>
+        <div>卡片</div>
+      </TaskLabelGroup>,
+    );
+    expect(container.querySelector(".task-label-group")?.className).toContain(
+      "task-label-group--drop-target",
+    );
+  });
 });
