@@ -22,6 +22,7 @@ vi.mock("../../ipc/tasks", () => ({
   removeAttachment: vi.fn(),
   saveTranscript: vi.fn().mockResolvedValue(undefined),
   markTaskDone: vi.fn().mockResolvedValue(undefined),
+  mergeTaskWorktree: vi.fn().mockResolvedValue(undefined),
   archiveTask: vi.fn().mockResolvedValue(undefined),
   unarchiveTask: vi.fn().mockResolvedValue(undefined),
   archiveDoneTasks: vi.fn().mockResolvedValue(2),
@@ -45,7 +46,7 @@ vi.mock("../../lib/runningTaskTabRegistry", () => ({
   setRunningTaskTabs: vi.fn(),
 }));
 
-import { listTasks, onTasksUpdated, moveTask, archiveTask, archiveDoneTasks, listArchivedTasks, unarchiveTask, setTaskLabel } from "../../ipc/tasks";
+import { listTasks, onTasksUpdated, moveTask, archiveTask, archiveDoneTasks, listArchivedTasks, unarchiveTask, setTaskLabel, mergeTaskWorktree } from "../../ipc/tasks";
 import type { TaskWithAttachments } from "../../ipc/tasks";
 import { setRunningTaskTabs } from "../../lib/runningTaskTabRegistry";
 import { ProjectBoard } from "./ProjectBoard";
@@ -62,7 +63,7 @@ const card = (over: Partial<TaskWithAttachments>): TaskWithAttachments => ({
   transcript_path: null, error_message: null, created_at: "", dispatched_at: null,
   finished_at: null, ai_summary: null, archived_at: null,
   session_id: null, session_path: null, use_bridge: false, bridge_tiers: null,
-  label: null, attachments: [],
+  label: null, worktree_path: null, worktree_branch: null, attachments: [],
   ...over,
 });
 
@@ -667,6 +668,34 @@ describe("ProjectBoard", () => {
     await screen.findByText("Redo me");
     await user.click(screen.getByRole("button", { name: /重新派工|Re-dispatch/ }));
     expect(cloneTask).toHaveBeenCalledWith(PROJECT_ID, "d");
+  });
+
+  it("done card with a worktree shows a merge button", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "DoneCard", status: "done", outcome: "success", worktree_branch: "aiterm-task/d" }),
+    ]);
+    view();
+    const done = await screen.findByTestId("column-done");
+    expect(within(done).getByText(/合併回原分支|Merge back/)).toBeInTheDocument();
+  });
+
+  it("done card without a worktree does not show a merge button", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "DoneCard", status: "done", outcome: "success", worktree_branch: null }),
+    ]);
+    view();
+    const done = await screen.findByTestId("column-done");
+    expect(within(done).queryByText(/合併回原分支|Merge back/)).not.toBeInTheDocument();
+  });
+
+  it("clicking the merge button calls mergeTaskWorktree", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "d", title: "DoneCard", status: "done", outcome: "success", worktree_branch: "aiterm-task/d" }),
+    ]);
+    view();
+    const done = await screen.findByTestId("column-done");
+    await userEvent.click(within(done).getByText(/合併回原分支|Merge back/));
+    await waitFor(() => expect(mergeTaskWorktree).toHaveBeenCalledWith(PROJECT_ID, "d"));
   });
 
   it("new-card dialog creates a task with the typed fields", async () => {

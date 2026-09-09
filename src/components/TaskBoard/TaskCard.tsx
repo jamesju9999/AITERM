@@ -2,7 +2,7 @@ import { useState, type CSSProperties } from "react";
 import { confirm } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import { archiveTask, cloneTask, deleteTask, markTaskDone, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
+import { archiveTask, cloneTask, deleteTask, markTaskDone, mergeTaskWorktree, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
 import { hashLabelHue } from "./labelColor";
 
 export function TaskCard({
@@ -143,6 +143,11 @@ export function TaskCard({
             <button className="tb-btn tb-btn--ghost" disabled={busy} onClick={() => void run(() => cloneTask(projectId, card.id))}>
               {t.board_action_requeue}
             </button>
+            {card.worktree_branch && (
+              <button className="tb-btn tb-btn--primary" disabled={busy} onClick={() => void run(() => mergeTaskWorktree(projectId, card.id))}>
+                {t.board_action_merge_worktree}
+              </button>
+            )}
             {/* 封存不問過就直接做：資料完全保留，隨時能從封存清單放回來，
                 所以它是可復原的動作，不該跟刪除一樣攔一次。 */}
             <button className="tb-btn tb-btn--ghost" disabled={busy} onClick={() => void run(() => archiveTask(projectId, card.id))}>
