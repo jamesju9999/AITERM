@@ -56,6 +56,11 @@ export function TaskCard({
     window.dispatchEvent(new CustomEvent("aiterm:focus-tab", { detail: { tabId: card.tab_id } }));
   };
 
+  const markDone = async () => {
+    if (!(await confirm(t.board_mark_done_confirm))) return;
+    await run(() => markTaskDone(projectId, card.id));
+  };
+
   const outcomeLabel =
     card.outcome === "success"
       ? t.board_outcome_success
@@ -127,7 +132,7 @@ export function TaskCard({
               {t.board_action_stop}
             </button>
             {card.interactive && (
-              <button className="tb-btn tb-btn--primary" disabled={busy} onClick={() => void run(() => markTaskDone(projectId, card.id))}>
+              <button className="tb-btn tb-btn--primary" disabled={busy} onClick={() => void markDone()}>
                 {t.board_action_mark_done}
               </button>
             )}

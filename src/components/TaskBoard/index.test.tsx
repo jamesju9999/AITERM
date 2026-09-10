@@ -596,7 +596,22 @@ describe("ProjectBoard", () => {
     await screen.findByText("Chatting");
     expect(screen.getByText(/互動|Interactive/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /標記完成|Mark Done/ }));
-    expect(markTaskDone).toHaveBeenCalledWith(PROJECT_ID, "r");
+    await waitFor(() => expect(markTaskDone).toHaveBeenCalledWith(PROJECT_ID, "r"));
+  });
+
+  it("clicking Mark Done confirms via the native dialog plugin and skips markTaskDone when declined", async () => {
+    const { markTaskDone } = await import("../../ipc/tasks");
+    const { confirm } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(confirm).mockResolvedValueOnce(false);
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "r", title: "Chatting", status: "running", tab_id: "tab-1", interactive: true }),
+    ]);
+    view();
+    const user = userEvent.setup();
+    await screen.findByText("Chatting");
+    await user.click(screen.getByRole("button", { name: /標記完成|Mark Done/ }));
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    expect(markTaskDone).not.toHaveBeenCalled();
   });
 
   it("running card carries a data-task-status attribute matching its status, for the CSS left-accent-bar", async () => {
