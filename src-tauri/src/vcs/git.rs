@@ -324,8 +324,7 @@ impl GitClient {
     // ── GitHub API operations ────────────────────────────────────────────────
 
     pub async fn pr_list(&self, state: Option<&str>) -> Result<VcsResult, String> {
-        let token = self.require_token(2)?;
-        let (owner, repo) = self.parse_remote()?;
+        let (token, owner, repo) = self.require_github(2)?;
         let state_val = state.unwrap_or("open");
         let url = format!(
             "https://api.github.com/repos/{owner}/{repo}/pulls?state={state_val}&per_page=30"
@@ -354,8 +353,7 @@ impl GitClient {
     }
 
     pub async fn issue_list(&self, state: Option<&str>) -> Result<VcsResult, String> {
-        let token = self.require_token(2)?;
-        let (owner, repo) = self.parse_remote()?;
+        let (token, owner, repo) = self.require_github(2)?;
         let state_val = state.unwrap_or("open");
         let url = format!(
             "https://api.github.com/repos/{owner}/{repo}/issues?state={state_val}&per_page=30"
@@ -386,8 +384,7 @@ impl GitClient {
     }
 
     pub async fn actions_list(&self) -> Result<VcsResult, String> {
-        let token = self.require_token(2)?;
-        let (owner, repo) = self.parse_remote()?;
+        let (token, owner, repo) = self.require_github(2)?;
         let url = format!(
             "https://api.github.com/repos/{owner}/{repo}/actions/runs?per_page=20"
         );
@@ -428,8 +425,7 @@ impl GitClient {
         body: Option<&str>,
         draft: bool,
     ) -> Result<(u64, String), String> {
-        let token = self.require_token(3)?;
-        let (owner, repo) = self.parse_remote()?;
+        let (token, owner, repo) = self.require_github(3)?;
         let url = format!("{}/repos/{owner}/{repo}/pulls", self.github_api_base);
 
         let payload = serde_json::json!({
@@ -452,8 +448,7 @@ impl GitClient {
     /// 列出目前 repo 所有進行中的功能（open PR，含 draft），每個都附上
     /// 目前實際改動的檔案清單。團隊可見度面板與重疊偵測共用這支方法。
     pub async fn list_active_features(&self) -> Result<Vec<ActiveFeature>, String> {
-        let token = self.require_token(2)?;
-        let (owner, repo) = self.parse_remote()?;
+        let (token, owner, repo) = self.require_github(2)?;
         let url = format!("{}/repos/{owner}/{repo}/pulls?state=open&per_page=30", self.github_api_base);
 
         let prs: Vec<GhPrWithHead> = self
@@ -505,8 +500,7 @@ impl GitClient {
     /// any repo (including this one) whose default branch is named
     /// something else, e.g. "master".
     pub async fn get_default_branch(&self) -> Result<String, String> {
-        let token = self.require_token(2)?;
-        let (owner, repo) = self.parse_remote()?;
+        let (token, owner, repo) = self.require_github(2)?;
         let url = format!("{}/repos/{owner}/{repo}", self.github_api_base);
         let json: serde_json::Value = self
             .gh_get(&token, &url)
@@ -523,8 +517,7 @@ impl GitClient {
     /// 把一個 draft PR 轉成 ready for review。GitHub REST 沒有對應端點，
     /// 只能先用 REST 拿 node_id，再打 GraphQL mutation。
     pub async fn mark_pr_ready(&self, pr_number: u64) -> Result<VcsResult, String> {
-        let token = self.require_token(3)?;
-        let (owner, repo) = self.parse_remote()?;
+        let (token, owner, repo) = self.require_github(3)?;
 
         let detail_url = format!("{}/repos/{owner}/{repo}/pulls/{pr_number}", self.github_api_base);
         let detail: serde_json::Value = self
@@ -571,8 +564,7 @@ impl GitClient {
     /// 用 GitHub compare 端點，Accept 要求 diff 格式而非 JSON，
     /// 所以不透過 gh_get（它固定要求 application/vnd.github+json）。
     pub async fn pr_diff(&self, base: &str, head: &str) -> Result<VcsResult, String> {
-        let token = self.require_token(2)?;
-        let (owner, repo) = self.parse_remote()?;
+        let (token, owner, repo) = self.require_github(2)?;
         let url = format!("{}/repos/{owner}/{repo}/compare/{base}...{head}", self.github_api_base);
 
         let client = reqwest::Client::new();
@@ -595,8 +587,7 @@ impl GitClient {
     }
 
     pub async fn merge_pr(&self, pr_number: u64) -> Result<VcsResult, String> {
-        let token = self.require_token(3)?;
-        let (owner, repo) = self.parse_remote()?;
+        let (token, owner, repo) = self.require_github(3)?;
         let url = format!(
             "{}/repos/{owner}/{repo}/pulls/{pr_number}/merge",
             self.github_api_base
@@ -615,8 +606,7 @@ impl GitClient {
         title: &str,
         body: Option<&str>,
     ) -> Result<VcsResult, String> {
-        let token = self.require_token(3)?;
-        let (owner, repo) = self.parse_remote()?;
+        let (token, owner, repo) = self.require_github(3)?;
         let url = format!("https://api.github.com/repos/{owner}/{repo}/issues");
 
         let payload = serde_json::json!({
@@ -640,8 +630,7 @@ impl GitClient {
         workflow_id: &str,
         ref_name: &str,
     ) -> Result<VcsResult, String> {
-        let token = self.require_token(3)?;
-        let (owner, repo) = self.parse_remote()?;
+        let (token, owner, repo) = self.require_github(3)?;
         let url = format!(
             "https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches"
         );
@@ -744,6 +733,19 @@ impl GitClient {
         self.token
             .clone()
             .ok_or_else(|| format!("no_token:{level}"))
+    }
+
+    /// Shared precondition for every GitHub API call: confirm the local
+    /// repo actually has a GitHub remote to talk to **before** demanding a
+    /// token for it. A purely local repo (no `origin`, or an `origin` that
+    /// isn't GitHub) can never be fixed by adding a token, so it must not
+    /// be reported as "missing token" — that sends the user to add a token
+    /// that will never help, since `parse_remote` would still fail right
+    /// after. Checking the remote first surfaces the real blocker.
+    fn require_github(&self, level: u8) -> Result<(String, String, String), String> {
+        let (owner, repo) = self.parse_remote()?;
+        let token = self.require_token(level)?;
+        Ok((token, owner, repo))
     }
 
     fn gh_headers(&self, token: &str) -> HeaderMap {
@@ -849,8 +851,7 @@ impl GitClient {
     }
 
     pub async fn delete_remote_branch(&self, branch_name: &str) -> Result<VcsResult, String> {
-        let token = self.require_token(3)?;
-        let (owner, repo) = self.parse_remote()?;
+        let (token, owner, repo) = self.require_github(3)?;
         let encoded_branch = encode_ref_path_segment(branch_name);
         let url = format!("{}/repos/{owner}/{repo}/git/refs/heads/{encoded_branch}", self.github_api_base);
         self.gh_delete(&token, &url).await?;

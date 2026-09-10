@@ -758,3 +758,40 @@ async fn checkout_branch_from_creates_and_switches_to_a_branch_with_no_prior_loc
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "main");
 }
+
+/// A purely local repo (no `origin` remote at all, no token) must surface
+/// the real blocker — no GitHub remote configured — not "you're missing a
+/// token". Before this fix, `require_token` ran before `parse_remote`, so
+/// this case always reported `no_token:N` even though adding a token would
+/// never have helped: `parse_remote` would still fail right after with no
+/// remote to derive an owner/repo from.
+#[tokio::test]
+async fn a_repo_with_no_origin_remote_reports_the_missing_remote_not_a_missing_token() {
+    let dir = tempfile::tempdir().unwrap();
+    std::process::Command::new("git")
+        .args(["init", "-q"]).current_dir(dir.path()).status().unwrap();
+
+    let client = GitClient::new(dir.path().to_string_lossy().to_string(), None);
+    let err = client.pr_list(None).await.expect_err("no remote and no token — must fail");
+
+    assert!(err.contains("remote"), "expected a remote-related error, got: {err}");
+    assert!(!err.starts_with("no_token"), "should not blame a missing token when there's no remote to use one against: {err}");
+}
+
+/// A repo that DOES have a real GitHub remote but no token must still get
+/// the existing "missing token" sentinel — this fix only reorders the two
+/// checks, it doesn't change behavior for the case the sentinel exists for.
+#[tokio::test]
+async fn a_repo_with_a_github_remote_but_no_token_still_reports_no_token() {
+    let dir = tempfile::tempdir().unwrap();
+    std::process::Command::new("git")
+        .args(["init", "-q"]).current_dir(dir.path()).status().unwrap();
+    std::process::Command::new("git")
+        .args(["remote", "add", "origin", "https://github.com/acme/widget.git"])
+        .current_dir(dir.path()).status().unwrap();
+
+    let client = GitClient::new(dir.path().to_string_lossy().to_string(), None);
+    let err = client.pr_list(None).await.expect_err("no token — must fail");
+
+    assert!(err.starts_with("no_token"), "expected the no_token sentinel, got: {err}");
+}
