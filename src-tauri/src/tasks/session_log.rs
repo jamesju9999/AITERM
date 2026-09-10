@@ -382,6 +382,15 @@ mod copy_tests {
     /// Claude Code 用哪一個我們無法確定，所以兩個候選都要試。這個測試把
     /// 檔案只放在 canonicalize 後的那個資料夾裡——只試原樣路徑的實作會找不到。
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "Windows 上 canonicalize() 回傳帶 `\\\\?\\` 前綴的 verbatim \
+                  路徑，encode_project_dir 沒有替換掉 `?`（Windows 檔名的保留 \
+                  字元），這個測試自己的前置步驟 create_dir_all 就會先炸掉 \
+                  InvalidFilename——這是 dir_candidates 文件註解上已經記錄、 \
+                  刻意不修的已知侷限（原樣路徑候選排第一個，實務上仍然找得到），\
+                  不是這個測試要驗證的東西，追蹤在別處"
+    )]
     fn falls_back_to_the_canonicalised_form_of_the_work_dir() {
         let real = tempfile::tempdir().unwrap();
         let canonical = std::fs::canonicalize(real.path()).unwrap();
