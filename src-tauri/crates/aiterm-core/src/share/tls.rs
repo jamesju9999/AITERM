@@ -231,4 +231,18 @@ mod tests {
         assert_eq!(decode_hex("abc"), None, "odd length must be rejected");
         assert_eq!(decode_hex("zz"), None, "non-hex chars must be rejected");
     }
+
+    #[test]
+    fn the_two_exporter_labels_are_distinct() {
+        // 兩個 label 相同的話，SAS 用的 material 跟 CLI host 金鑰互證用的
+        // material 就是同一份秘密——而這兩者的暴露程度完全不同：SAS 那份會
+        // 以 4 位數的形式呈現在人眼前，這份則直接決定要不要放行一條連線。
+        //
+        // 這個屬性沒有任何其他東西在守：兩者相同時，握手照樣成功、所有測試
+        // 照樣綠、功能看起來完全正常。唯一的徵兆就是這條測試。
+        assert_ne!(
+            SAS_EXPORTER_LABEL, AUTH_EXPORTER_LABEL,
+            "the SAS and CLI-host-auth exporters must not share one secret"
+        );
+    }
 }
