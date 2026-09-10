@@ -49,7 +49,7 @@ export function TaskLabelDialog({
   };
 
   return (
-    <div className="task-dialog-backdrop" onClick={onClose}>
+    <div className="task-dialog-backdrop">
       <div className="task-dialog" onClick={(e) => e.stopPropagation()}>
         <h3 className="task-dialog-title">{t.board_action_edit_label}</h3>
 

@@ -51,7 +51,7 @@ export function TranscriptDialog({
   const raw = text === null ? null : collapseConsecutiveDuplicateLines(text);
 
   return (
-    <div className="task-dialog-backdrop" onClick={onClose}>
+    <div className="task-dialog-backdrop">
       <div
         ref={dialogRef}
         className={`task-dialog task-transcript-dialog${maximized ? " task-transcript-dialog--max" : ""}`}

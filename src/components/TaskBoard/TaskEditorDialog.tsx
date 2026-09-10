@@ -255,7 +255,7 @@ export function TaskEditorDialog({
   };
 
   return (
-    <div className="task-dialog-backdrop" onClick={onClose}>
+    <div className="task-dialog-backdrop">
       <div className="task-dialog" onClick={(e) => e.stopPropagation()}>
         <h3 className="task-dialog-title">{isEdit ? t.board_edit_card : t.board_new_card}</h3>
 

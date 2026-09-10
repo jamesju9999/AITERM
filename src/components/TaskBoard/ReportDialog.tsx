@@ -269,7 +269,7 @@ export function ReportDialog({
     : t.report_generating;
 
   return (
-    <div className="task-dialog-backdrop" onClick={onClose}>
+    <div className="task-dialog-backdrop">
       <div className="report-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="report-head">
           <h3>{t.report_title} — {projectName}</h3>

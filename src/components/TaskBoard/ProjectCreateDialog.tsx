@@ -43,7 +43,7 @@ export function ProjectCreateDialog({
   const ready = name.trim().length > 0 && parent.length > 0 && !busy;
 
   return (
-    <div className="task-dialog-backdrop" onClick={onClose}>
+    <div className="task-dialog-backdrop">
       <div className="task-dialog" onClick={(e) => e.stopPropagation()}>
         <h3 className="task-dialog-title">{t.proj_new}</h3>
 
