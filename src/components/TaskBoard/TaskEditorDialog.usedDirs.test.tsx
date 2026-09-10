@@ -14,6 +14,15 @@ vi.mock("../../ipc/tasks", () => ({
   removeAttachment: vi.fn(),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+// TaskEditorDialog 掛載時的 useEffect 會呼叫這兩個——沒 mock 的話會落到真正的
+// `invoke()`，在 jsdom 裡（沒有 Tauri runtime）丟出 unhandled rejection，讓整個
+// 測試檔案的結果變成失敗，即使每一個具名測試自己都通過（CI 因此紅、本機用
+// `npm run test` 的摘要文字卻看不出來，因為摘要只列具名測試，不代表 process
+// 真正的 exit code）。
+vi.mock("../../ipc/provider", () => ({ listProviders: vi.fn().mockResolvedValue([]) }));
+vi.mock("../../ipc/bridge", () => ({
+  bridgeStatus: vi.fn().mockResolvedValue({ running: false, port: null, token: null, error: null }),
+}));
 
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import { TaskEditorDialog } from "./TaskEditorDialog";

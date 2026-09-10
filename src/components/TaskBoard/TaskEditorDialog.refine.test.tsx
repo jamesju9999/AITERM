@@ -18,6 +18,12 @@ vi.mock("../../ipc/tasks", () => ({
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("../../ipc/provider", () => ({ listProviders: (...a: unknown[]) => listProviders(...a) }));
+// TaskEditorDialog 掛載時的 useEffect 也會呼叫這個——沒 mock 的話會落到真正的
+// `invoke()`，在 jsdom 裡丟出 unhandled rejection，讓整個測試檔案的結果變成
+// 失敗，即使每一個具名測試自己都通過。
+vi.mock("../../ipc/bridge", () => ({
+  bridgeStatus: vi.fn().mockResolvedValue({ running: false, port: null, token: null, error: null }),
+}));
 // ModelPickerButton 會拉配額資訊，兩個都打真的 IPC。
 vi.mock("../../ipc/usage", () => ({
   usageQuota: vi.fn().mockResolvedValue({ status: "not_applicable", provider_id: "x" }),

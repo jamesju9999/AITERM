@@ -38,6 +38,14 @@ vi.mock("../../ipc/projects", () => ({
   usedLabels: vi.fn().mockResolvedValue([]),
 }));
 
+// TaskEditorDialog 掛載時的 useEffect 也會呼叫這兩個——沒 mock 的話會落到真正
+// 的 `invoke()`，在 jsdom 裡丟出 unhandled rejection，讓整個測試檔案的結果變
+// 成失敗，即使每一個具名測試自己都通過。
+vi.mock("../../ipc/provider", () => ({ listProviders: vi.fn().mockResolvedValue([]) }));
+vi.mock("../../ipc/bridge", () => ({
+  bridgeStatus: vi.fn().mockResolvedValue({ running: false, port: null, token: null, error: null }),
+}));
+
 vi.mock("../../lib/terminalInstanceRegistry", () => ({
   serializeTerminal: vi.fn(),
 }));

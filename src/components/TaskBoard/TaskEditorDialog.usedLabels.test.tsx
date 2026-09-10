@@ -17,6 +17,13 @@ vi.mock("../../ipc/tasks", () => ({
   removeAttachment: vi.fn(),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+// TaskEditorDialog 掛載時的 useEffect 會呼叫這兩個——沒 mock 的話會落到真正的
+// `invoke()`，在 jsdom 裡丟出 unhandled rejection，讓整個測試檔案的結果變成
+// 失敗，即使每一個具名測試自己都通過。
+vi.mock("../../ipc/provider", () => ({ listProviders: vi.fn().mockResolvedValue([]) }));
+vi.mock("../../ipc/bridge", () => ({
+  bridgeStatus: vi.fn().mockResolvedValue({ running: false, port: null, token: null, error: null }),
+}));
 
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import { TaskEditorDialog } from "./TaskEditorDialog";
