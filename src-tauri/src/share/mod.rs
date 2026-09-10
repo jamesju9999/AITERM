@@ -8,13 +8,11 @@
 //!
 //! 設計文件：`docs/superpowers/specs/2026-08-26-remote-terminal-sharing-design.md`
 
-pub mod mdns;
-pub mod protocol;
-pub mod registry;
 pub mod server;
-pub mod tls;
 pub mod viewer;
 pub mod viewer_manager;
+
+pub use aiterm_core::share::{ensure_crypto_provider, mdns, protocol, registry, tls};
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -30,16 +28,6 @@ use tower_service::Service;
 use crate::pty::PtyManager;
 use protocol::ConnectionExporter;
 use registry::ShareRegistry;
-
-/// rustls 0.23 要求行程層級的預設加密供應者。裝一次就好；重複呼叫會回
-/// `Err`，直接忽略——那代表別人已經裝過了，不是錯誤。
-pub(crate) fn ensure_crypto_provider() {
-    use std::sync::Once;
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    });
-}
 
 /// Server 生命週期。鏡像 `mcp_server::McpToolServerState`，但有兩個關鍵差異：
 /// 綁的是 `0.0.0.0`（區網可達）而不是 `127.0.0.1`，而且**只在有分頁正在分享

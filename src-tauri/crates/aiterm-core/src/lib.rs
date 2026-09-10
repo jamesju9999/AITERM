@@ -6,3 +6,4 @@
 
 pub mod appimage_env;
 pub mod pty;
+pub mod share;

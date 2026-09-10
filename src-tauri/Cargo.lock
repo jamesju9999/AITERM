@@ -68,14 +68,21 @@ name = "aiterm-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "dirs",
  "log",
+ "mdns-sd",
  "parking_lot",
  "portable-pty",
+ "rand 0.9.2",
+ "rcgen",
+ "rustls",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-rustls",
  "uuid",
 ]
 
