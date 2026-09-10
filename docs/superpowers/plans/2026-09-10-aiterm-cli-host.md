@@ -3008,6 +3008,12 @@ cd src-tauri && cargo test
 
 **`cargo test` 不加 `--lib`**——`--lib` 不編譯 `tests/` 底下的整合測試，而這次改動最集中的地方正是那裡。
 
+**已知的既有 flaky 測試**：`aiterm_core::pty::session::tests::last_exit_code_is_none_for_a_fresh_session`
+在整套並行跑時約每 12 次紅 1 次；單獨跑 25 次全過。`session.rs` 與 master 逐位元組
+相同，所以**不是本分支造成的**，成因看起來是並行 spawn 大量 PTY 的資源競爭，不是
+測試邏輯。這個里程碑不修它（不相干），但驗收時看到它紅要先重跑一次確認，不要當成
+本次改動的回歸——反過來也一樣，不要因為「反正它會偶爾紅」就忽略真的回歸。
+
 - [ ] **Step 1b: clippy——比對基線，不是要求零**
 
 **不要跑 `cargo clippy -- -D warnings`。** 這個 repo 有既有的 clippy 警告基線（實測：`app` 45 條、`aiterm-core` 3 條，後者是搬移過去的既有程式碼帶過去的，master 上的 app crate 一樣會叫，兩個 crate 都沒有 crate 層級的 `allow`）。要求全域零警告會變成假性失敗，然後下一個人就會去「修」一堆跟這個里程碑無關的東西。
