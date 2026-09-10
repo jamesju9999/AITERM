@@ -35,7 +35,7 @@ use tower_service::Service;
 
 use crate::pty::PtyManager;
 use events::ShareEvents;
-use protocol::ConnectionExporter;
+use protocol::{AuthExporter, ConnectionExporter};
 use registry::ShareRegistry;
 
 /// Server 生命週期。鏡像 `mcp_server::McpToolServerState`，但有兩個關鍵差異：
@@ -118,7 +118,7 @@ impl ShareServerState {
         ensure_crypto_provider();
         let listener = tokio::net::TcpListener::bind(SocketAddr::from((addr, port))).await?;
         let bound = listener.local_addr()?;
-        let app_router = server::router(pty, Arc::clone(&self.registry), events);
+        let app_router = server::router(pty, Arc::clone(&self.registry), events, None);
         let identity = tls::ShareIdentity::generate()?;
         let (tx, rx) = tokio::sync::oneshot::channel();
         // 自己的 accept 迴圈而不是 axum::serve——見下方「TLS 的接線」。
@@ -218,20 +218,33 @@ async fn serve_tls(
             // 導不出來就**放掉這條連線**，不要用零值或預設值頂替：那等於讓
             // 一條沒有身分保證的連線混進來，而使用者畫面上照樣會顯示一組看
             // 起來正常的 4 位數。
-            let exporter = {
+            // 同一次握手導出兩份獨立的 material：一份給 SAS（人工核對用），
+            // 一份給 CLI host 的金鑰互證用（`tls::AUTH_EXPORTER_LABEL`）——
+            // 兩者用途的暴露程度不同，不能共用同一份秘密，見該常數的說明。
+            let (exporter, auth_exporter) = {
                 let (_io, conn) = tls_stream.get_ref();
-                match tls::exporter_material(conn) {
+                let exporter = match tls::exporter_material(conn) {
                     Ok(m) => m,
                     Err(e) => {
                         log::warn!("共享連線導出金鑰 material 失敗，放棄這條連線：{e}");
                         return;
                     }
-                }
+                };
+                let auth_exporter =
+                    match tls::exporter_material_with_label(conn, tls::AUTH_EXPORTER_LABEL) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            log::warn!("共享連線導出認證用 material 失敗，放棄這條連線：{e}");
+                            return;
+                        }
+                    };
+                (exporter, auth_exporter)
             };
 
             let io = TokioIo::new(tls_stream);
             let svc = hyper::service::service_fn(move |mut req: hyper::Request<Incoming>| {
                 req.extensions_mut().insert(ConnectionExporter(exporter));
+                req.extensions_mut().insert(AuthExporter(auth_exporter));
                 let mut app = app.clone();
                 async move { app.call(req).await }
             });

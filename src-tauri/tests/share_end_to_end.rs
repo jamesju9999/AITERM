@@ -33,9 +33,15 @@ async fn start_test_server(
         pty,
         registry,
         Arc::new(aiterm_lib::share::events::SilentEvents),
+        None,
     )
     .layer(axum::Extension(
         aiterm_lib::share::protocol::ConnectionExporter(
+            [0u8; aiterm_lib::share::tls::SAS_MATERIAL_LEN],
+        ),
+    ))
+    .layer(axum::Extension(
+        aiterm_lib::share::protocol::AuthExporter(
             [0u8; aiterm_lib::share::tls::SAS_MATERIAL_LEN],
         ),
     ));

@@ -81,6 +81,14 @@ pub const PROTOCOL_VERSION: u32 = 2;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConnectionExporter(pub [u8; SAS_MATERIAL_LEN]);
 
+/// 同一條 TLS 連線、用 `tls::AUTH_EXPORTER_LABEL` 另外導出的一份 material，
+/// 專供 CLI host 的金鑰互證使用。**刻意跟 `ConnectionExporter` 分開的型別**
+/// （而不是重用它、多塞一個 label 參數）：兩者的用途暴露程度不同（見
+/// `tls::AUTH_EXPORTER_LABEL` 的說明），型別分開能讓呼叫端不可能把 SAS 用的
+/// material 誤傳進金鑰驗證，反之亦然——編譯期就擋掉。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthExporter(pub [u8; SAS_MATERIAL_LEN]);
+
 /// 觀看端 → 主控端。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
