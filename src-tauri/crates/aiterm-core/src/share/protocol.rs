@@ -424,13 +424,19 @@ mod tests {
     #[test]
     fn an_unknown_field_on_join_is_ignored_rather_than_rejected() {
         // 整個「不升 PROTOCOL_VERSION、改用可選附加欄位」的相容性策略建立在
-        // 這個行為上：舊版主控端收到新版觀看端多帶的 `auth` 欄位時，必須忽略
-        // 它並照常走短碼流程，而不是硬性解析失敗變成無法解釋的斷線。
+        // 這個行為上：舊版主控端收到新版觀看端多帶的欄位時，必須忽略它並照常
+        // 走短碼流程，而不是硬性解析失敗變成無法解釋的斷線。
         //
         // 這跟 `an_unknown_server_message_fails_to_parse_rather_than_being_ignored`
         // 證明的是不同機制：那個講的是未知的 enum **tag**，這個講的是已知
         // variant 裡的未知**欄位**。兩者的 serde 預設行為不同，不能互相推論。
-        let with_extra = r#"{"type":"join","protocol_version":2,"code":"384719","display_name":"Alice","auth":"deadbeef"}"#;
+        //
+        // **欄位名刻意選一個永遠不會被實作的。** 這條測試原本用 `auth`，而
+        // `auth` 在加進 `Join` 之後就變成已知欄位——測試照樣綠，但它從那一刻
+        // 起測的是「已知的可選欄位會 round-trip」，跟名字承諾的完全是兩回事，
+        // 而真正的保證變成沒有任何東西在守。下次要加新欄位時，不要拿這裡的
+        // 欄位名去用。
+        let with_extra = r#"{"type":"join","protocol_version":2,"code":"384719","display_name":"Alice","field_from_a_future_version":"whatever"}"#;
         let parsed: Result<ClientMessage, _> = serde_json::from_str(with_extra);
         let msg = parsed.expect(
             "serde rejected an unknown field on Join; the whole \
@@ -443,7 +449,8 @@ mod tests {
                 protocol_version: 2,
                 code: "384719".to_string(),
                 display_name: "Alice".to_string(),
-                auth: Some("deadbeef".to_string()),
+                // 未知欄位被丟掉，不是被塞進某個地方。
+                auth: None,
             }
         );
     }
