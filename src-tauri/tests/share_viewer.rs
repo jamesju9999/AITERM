@@ -21,7 +21,7 @@ async fn start_host() -> (Arc<ShareServerState>, String, String, u16) {
     let state = Arc::new(ShareServerState::new());
     let code = state.registry.start_share(tab_id.clone());
     let port = state
-        .start_if_needed(Arc::clone(&pty), None)
+        .start_if_needed(Arc::clone(&pty), Arc::new(aiterm_lib::share::events::SilentEvents))
         .await
         .expect("start share server");
     (state, tab_id, code, port)
@@ -95,7 +95,7 @@ async fn an_approved_viewer_receives_the_hosts_screen() {
     let state = Arc::new(ShareServerState::new());
     let code = state.registry.start_share(tab_id.clone());
     let port = state
-        .start_if_needed(Arc::clone(&pty), None)
+        .start_if_needed(Arc::clone(&pty), Arc::new(aiterm_lib::share::events::SilentEvents))
         .await
         .expect("start share server");
 
@@ -158,7 +158,7 @@ async fn the_viewer_is_told_why_the_connection_ended() {
     let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
     let state = Arc::new(ShareServerState::new());
     let code = state.registry.start_share(tab_id.clone());
-    let port = state.start_if_needed(Arc::clone(&pty), None).await.expect("start");
+    let port = state.start_if_needed(Arc::clone(&pty), Arc::new(aiterm_lib::share::events::SilentEvents)).await.expect("start");
 
     let handshake = connect_and_handshake("127.0.0.1", port, &code, "Alice")
         .await

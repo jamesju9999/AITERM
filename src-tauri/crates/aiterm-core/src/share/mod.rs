@@ -3,6 +3,7 @@
 //! server 端（`server`）與觀看端（`viewer`）之後也會搬進來；把事件推播給 GUI
 //! 的那一層留在 `app` crate 的 `share::viewer_manager`。
 
+pub mod events;
 pub mod mdns;
 pub mod protocol;
 pub mod registry;

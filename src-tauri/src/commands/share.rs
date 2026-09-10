@@ -13,6 +13,7 @@ use tauri::{AppHandle, State};
 
 use crate::pty::PtyManager;
 use crate::share::registry::{AccessMode, ShareRegistry};
+use crate::share::tauri_events::TauriShareEvents;
 use crate::share::ShareServerState;
 
 /// 某個分頁的分享狀態，給分享面板顯示。
@@ -156,7 +157,7 @@ pub async fn share_start(
     app: AppHandle,
 ) -> Result<ShareStatus, String> {
     let port = server
-        .start_if_needed(pty_manager.inner().clone(), Some(app))
+        .start_if_needed(pty_manager.inner().clone(), Arc::new(TauriShareEvents { app }))
         .await
         .map_err(|e| format!("啟動共享服務失敗：{e}"))?;
     let code = server.registry.start_share(tab_id.clone());

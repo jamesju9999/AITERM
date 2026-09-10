@@ -19,6 +19,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::pty::PtyManager;
 
+use super::events::ShareEvents;
 use super::protocol::{
     ClientMessage, ConnectionExporter, EndReason, PendingRequestEvent, ServerMessage,
     WireAccessMode, PROTOCOL_VERSION,
@@ -41,20 +42,20 @@ const DECISION_POLL: Duration = Duration::from_millis(200);
 pub struct ShareAppState {
     pub pty: Arc<PtyManager>,
     pub registry: Arc<ShareRegistry>,
-    /// 用來把「有人要連進來」推播給前端。整合測試不起 Tauri app，所以是
-    /// `Option`——`None` 時所有事件發送都是 no-op，其餘行為完全一樣。
-    pub app: Option<tauri::AppHandle>,
+    /// 用來把「有人要連進來」推播給上層。整合測試與 headless 的 CLI host
+    /// 傳 `SilentEvents`——所有事件發送都是 no-op，其餘行為完全一樣。
+    pub events: Arc<dyn ShareEvents>,
 }
 
 pub fn router(
     pty: Arc<PtyManager>,
     registry: Arc<ShareRegistry>,
-    app: Option<tauri::AppHandle>,
+    events: Arc<dyn ShareEvents>,
 ) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/share", any(share_upgrade))
-        .with_state(ShareAppState { pty, registry, app })
+        .with_state(ShareAppState { pty, registry, events })
 }
 
 /// TLS exporter material 由 request extension 帶進來——Task 8 的 TLS accept
@@ -188,18 +189,12 @@ async fn handle_share(
         return end_with(&mut ws, EndReason::InvalidCode).await;
     };
 
-    // 推播給前端，讓同意視窗跳出來。`None` 時（整合測試）是 no-op。
-    if let Some(app) = &state.app {
-        use tauri::Emitter;
-        let _ = app.emit(
-            "share://request-pending",
-            PendingRequestEvent {
-                request_id: request_id.clone(),
-                tab_id: tab_id.clone(),
-                display_name: display_name_for_event.clone(),
-            },
-        );
-    }
+    // 推播給上層，讓同意視窗跳出來。`SilentEvents` 時是 no-op。
+    state.events.pending_request(&PendingRequestEvent {
+        request_id: request_id.clone(),
+        tab_id: tab_id.clone(),
+        display_name: display_name_for_event.clone(),
+    });
 
     if !send_control(
         &mut ws,
@@ -414,8 +409,5 @@ async fn handle_share(
 
     // 觀看者清單變了，讓主控端的面板重新抓一次。這個事件不帶內容——前端
     // 收到就去 `share_viewers` 重讀，避免兩份資料對不上。
-    if let Some(app) = &state.app {
-        use tauri::Emitter;
-        let _ = app.emit("share://viewers-changed", ());
-    }
+    state.events.viewers_changed();
 }

@@ -9,10 +9,11 @@
 //! 設計文件：`docs/superpowers/specs/2026-08-26-remote-terminal-sharing-design.md`
 
 pub mod server;
+pub mod tauri_events;
 pub mod viewer;
 pub mod viewer_manager;
 
-pub use aiterm_core::share::{ensure_crypto_provider, mdns, protocol, registry, tls};
+pub use aiterm_core::share::{ensure_crypto_provider, events, mdns, protocol, registry, tls};
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -67,9 +68,9 @@ impl ShareServerState {
     pub async fn start_if_needed(
         &self,
         pty: Arc<PtyManager>,
-        app: Option<tauri::AppHandle>,
+        events: Arc<dyn events::ShareEvents>,
     ) -> anyhow::Result<u16> {
-        self.start_if_needed_on_port(pty, 0, app).await
+        self.start_if_needed_on_port(pty, 0, events).await
     }
 
     /// 同 `start_if_needed`，但綁指定的 port。`0` 表示交給 OS 挑。
@@ -80,7 +81,7 @@ impl ShareServerState {
         &self,
         pty: Arc<PtyManager>,
         port: u16,
-        app: Option<tauri::AppHandle>,
+        events: Arc<dyn events::ShareEvents>,
     ) -> anyhow::Result<u16> {
         if let Some(p) = self.port() {
             return Ok(p);
@@ -88,7 +89,7 @@ impl ShareServerState {
         ensure_crypto_provider();
         let listener = tokio::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;
         let port = listener.local_addr()?.port();
-        let app_router = server::router(pty, Arc::clone(&self.registry), app);
+        let app_router = server::router(pty, Arc::clone(&self.registry), events);
         let identity = tls::ShareIdentity::generate()?;
         let (tx, rx) = tokio::sync::oneshot::channel();
         // 自己的 accept 迴圈而不是 axum::serve——見下方「TLS 的接線」。
