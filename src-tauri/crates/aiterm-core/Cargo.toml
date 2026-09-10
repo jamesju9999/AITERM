@@ -18,6 +18,7 @@ dirs = "6"
 rand = "0.9"
 base64 = "0.22"
 sha2 = "0.10"
+hmac = "0.12"
 rcgen = "0.13"
 mdns-sd = "0.21"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }

@@ -3,6 +3,7 @@
 //!
 //! 把事件推播給 GUI 的那一層留在 `app` crate 的 `share::viewer_manager`。
 
+pub mod auth;
 pub mod events;
 pub mod mdns;
 pub mod protocol;

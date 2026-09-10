@@ -28,6 +28,13 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 /// `EXPERIMENTAL` 前綴照 RFC 5705 慣例：該 RFC 允許此前綴不必註冊。
 pub const SAS_EXPORTER_LABEL: &[u8] = b"EXPERIMENTAL aiterm share sas v1";
 
+/// CLI host 金鑰互證專用的 exporter label。
+///
+/// **刻意不重用 `SAS_EXPORTER_LABEL`。** 同一份秘密同時餵給兩個不同用途的
+/// 建構是跨協定攻擊的標準溫床：SAS 那份會以 4 位數的形式呈現在人眼前，
+/// 這份則直接決定要不要放行一條連線，兩者的暴露程度完全不同。
+pub const AUTH_EXPORTER_LABEL: &[u8] = b"EXPERIMENTAL aiterm cli-host auth v1";
+
 /// 從匯出的金鑰 material 取幾個位元組來算 SAS。
 pub const SAS_MATERIAL_LEN: usize = 32;
 
@@ -96,8 +103,18 @@ pub fn commit_for(nonce: &[u8]) -> String {
 pub fn exporter_material<Data>(
     conn: &rustls::ConnectionCommon<Data>,
 ) -> anyhow::Result<[u8; SAS_MATERIAL_LEN]> {
+    exporter_material_with_label(conn, SAS_EXPORTER_LABEL)
+}
+
+/// 同 `exporter_material`，但 label 由呼叫端指定。給不同用途（SAS 顯示 vs.
+/// CLI host 金鑰互證）各自導出獨立的 material，避免同一份秘密被兩種不同暴露
+/// 程度的用途共用。
+pub fn exporter_material_with_label<Data>(
+    conn: &rustls::ConnectionCommon<Data>,
+    label: &[u8],
+) -> anyhow::Result<[u8; SAS_MATERIAL_LEN]> {
     let material = conn
-        .export_keying_material([0u8; SAS_MATERIAL_LEN], SAS_EXPORTER_LABEL, None)
+        .export_keying_material([0u8; SAS_MATERIAL_LEN], label, None)
         .map_err(|e| anyhow::anyhow!("export keying material: {e}"))?;
     Ok(material)
 }
