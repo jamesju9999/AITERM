@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use portable_pty::PtySize;
 
-use aiterm_lib::pty::manager::PtyManager;
+use aiterm_lib::pty::PtyManager;
 
 #[test]
 fn full_lifecycle_create_write_read_close() {

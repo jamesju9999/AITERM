@@ -17,7 +17,7 @@ use axum::routing::{any, get};
 use axum::Router;
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::pty::manager::PtyManager;
+use crate::pty::PtyManager;
 
 use super::protocol::{
     ClientMessage, ConnectionExporter, EndReason, PendingRequestEvent, ServerMessage,

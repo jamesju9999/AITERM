@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aiterm_lib::projects::{ProjectHandle, ProjectRegistry};
-use aiterm_lib::pty::manager::PtyManager;
+use aiterm_lib::pty::PtyManager;
 use aiterm_lib::pty::session::done_marker;
 use aiterm_lib::tasks::monitor::{Baselines, Thresholds};
 use aiterm_lib::tasks::scheduler::{drain_once, Dispatcher};

@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use aiterm_lib::pty::manager::PtyManager;
+use aiterm_lib::pty::PtyManager;
 use aiterm_lib::share::registry::{AccessMode, ShareRegistry};
 use aiterm_lib::share::protocol::{ClientMessage, EndReason, ServerMessage, WireAccessMode};
 use futures_util::{SinkExt, StreamExt};

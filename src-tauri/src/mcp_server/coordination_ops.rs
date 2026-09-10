@@ -17,7 +17,7 @@ use portable_pty::PtySize;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::pty::manager::PtyManager;
+use crate::pty::PtyManager;
 
 const DEFAULT_WAIT_SECONDS: u64 = 300;
 const MAX_WAIT_SECONDS: u64 = 1800;
@@ -116,8 +116,7 @@ pub(crate) async fn spawn_tab(
 ) -> Result<String, String> {
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
     let cwd_path = cwd.map(std::path::PathBuf::from);
-    let tab_id = pty_manager
-        .create_with_app(app.clone(), size, cwd_path, None)
+    let tab_id = crate::pty::create_with_app(pty_manager, app.clone(), size, cwd_path, None)
         .map_err(|e| e.to_string())?;
 
     // Fresh session: bell_count()/marker_count() are 0 right now. Recording

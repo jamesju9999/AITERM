@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use aiterm_lib::pty::manager::PtyManager;
+use aiterm_lib::pty::PtyManager;
 use aiterm_lib::share::registry::AccessMode;
 use aiterm_lib::share::viewer::{connect_and_handshake, ViewerHandshake};
 use aiterm_lib::share::ShareServerState;

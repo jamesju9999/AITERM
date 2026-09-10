@@ -27,7 +27,7 @@ use parking_lot::Mutex;
 use tokio_rustls::TlsAcceptor;
 use tower_service::Service;
 
-use crate::pty::manager::PtyManager;
+use crate::pty::PtyManager;
 use protocol::ConnectionExporter;
 use registry::ShareRegistry;
 

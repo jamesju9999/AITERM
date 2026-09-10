@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use tokio::sync::oneshot;
 
-use crate::pty::manager::PtyManager;
+use crate::pty::PtyManager;
 
 #[derive(Debug, Clone)]
 pub enum TaskOutcome {
@@ -149,7 +149,7 @@ pub async fn watch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pty::manager::PtyManager;
+    use crate::pty::PtyManager;
     use crate::pty::session::done_marker;
     use portable_pty::PtySize;
     use std::time::Duration;
