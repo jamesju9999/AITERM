@@ -66,6 +66,18 @@ dependencies = [
 [[package]]
 name = "aiterm-core"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "log",
+ "parking_lot",
+ "portable-pty",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "alloc-no-stdlib"
@@ -192,6 +204,7 @@ name = "app"
 version = "1.23.1"
 dependencies = [
  "aes-gcm",
+ "aiterm-core",
  "anydoc",
  "anyhow",
  "argon2",

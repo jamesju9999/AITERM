@@ -1,5 +1,5 @@
 pub mod ai;
-pub mod appimage_env;
+pub use aiterm_core::appimage_env;
 pub mod bridge;
 pub mod chatgpt_web;
 pub mod code_assistant;
