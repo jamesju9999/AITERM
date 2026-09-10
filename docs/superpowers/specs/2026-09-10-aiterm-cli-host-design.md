@@ -150,10 +150,12 @@ GUI 端實作成 `emit`；CLI 端實作成明確的 no-op 型別（`struct Silen
 
 ### 綁定位址要可指定
 
-`share/mod.rs` 的 `start_if_needed` 目前寫死綁 `0.0.0.0:0`（隨機埠）——原始碼註解說
-明理由是「沒有外部設定檔記著位址，所以浮動埠不會讓任何東西指向死地址」。CLI host
-把這個前提推翻了：GUI 裡存的那筆連線就是外部記著的位址。所以要把綁定位址提升成參數，
-GUI 呼叫端傳 `0.0.0.0:0` 維持現行行為，CLI 傳 `--bind`/`--port`。
+**埠已經可以指定了**——`share/mod.rs` 早就有 `start_if_needed_on_port(pty, port, app)`，
+為了手動的區網連通性檢查而加。`start_if_needed` 只是 `port = 0` 的包裝。所以 CLI 的
+`--port` 直接用既有的那支就好。
+
+真正寫死的是**位址**：`SocketAddr::from(([0, 0, 0, 0], port))`。要支援 `--bind` 就把
+它提升成參數，GUI 呼叫端傳 `0.0.0.0` 維持現行行為。
 
 ### 一個合成的 tab_id
 
