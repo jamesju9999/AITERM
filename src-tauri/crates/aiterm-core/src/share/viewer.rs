@@ -129,6 +129,7 @@ pub async fn connect_and_handshake(
             protocol_version: PROTOCOL_VERSION,
             code: code.to_string(),
             display_name: display_name.to_string(),
+            auth: None,
         },
     )
     .await?;
@@ -238,7 +239,7 @@ pub async fn run_viewer_stream(
                         break;
                     };
                     match msg {
-                        ServerMessage::Granted { mode, cols, rows, host_os } => {
+                        ServerMessage::Granted { mode, cols, rows, host_os, host_auth: _ } => {
                             let _ = events.send(ViewerEvent::Granted {
                                 mode: wire_mode_str(mode),
                                 cols,

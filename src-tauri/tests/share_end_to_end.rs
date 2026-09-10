@@ -62,6 +62,7 @@ where
             protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
             code: code.to_string(),
             display_name: name.to_string(),
+            auth: None,
         })
         .unwrap()
         .into(),
@@ -163,6 +164,7 @@ async fn an_unknown_code_is_refused_without_reaching_the_host() {
             protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
             code: "000000".to_string(),
             display_name: "Mallory".to_string(),
+            auth: None,
         })
         .unwrap()
         .into(),
@@ -221,6 +223,7 @@ async fn a_read_only_viewer_sees_output_but_cannot_type() {
             cols: 80,
             rows: 24,
             host_os: std::env::consts::OS.to_string(),
+            host_auth: None,
         }
     );
 
@@ -264,6 +267,7 @@ async fn a_controlling_viewer_can_type_and_sees_the_result() {
             cols: 80,
             rows: 24,
             host_os: std::env::consts::OS.to_string(),
+            host_auth: None,
         }
     );
 
@@ -298,6 +302,7 @@ async fn a_mismatched_protocol_version_is_refused_at_the_handshake() {
             protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION + 1,
             code: code.clone(),
             display_name: "Alice".to_string(),
+            auth: None,
         })
         .unwrap()
         .into(),
@@ -336,6 +341,7 @@ async fn revoking_control_tells_the_viewer_it_can_no_longer_type() {
             cols: 80,
             rows: 24,
             host_os: std::env::consts::OS.to_string(),
+            host_auth: None,
         }
     );
 
@@ -383,6 +389,7 @@ async fn resizing_the_host_pty_after_a_viewer_connects_tells_the_viewer_the_new_
             cols: 80,
             rows: 24,
             host_os: std::env::consts::OS.to_string(),
+            host_auth: None,
         }
     );
 
@@ -429,6 +436,7 @@ async fn a_resize_notification_arrives_before_any_output_drawn_at_the_new_size()
             cols: 80,
             rows: 24,
             host_os: std::env::consts::OS.to_string(),
+            host_auth: None,
         }
     );
 
@@ -569,6 +577,7 @@ async fn the_host_commits_before_it_can_see_the_viewer_nonce() {
             protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
             code: code.clone(),
             display_name: "Alice".to_string(),
+            auth: None,
         })
         .unwrap()
         .into(),

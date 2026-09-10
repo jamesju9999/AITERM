@@ -125,7 +125,7 @@ async fn handle_share(
     // 1. 第一則訊息必須是 Join。
     let join = match ws.recv().await {
         Some(Ok(Message::Text(t))) => match serde_json::from_str::<ClientMessage>(&t) {
-            Ok(ClientMessage::Join { protocol_version, code, display_name }) => {
+            Ok(ClientMessage::Join { protocol_version, code, display_name, auth: _ }) => {
                 (protocol_version, code, display_name)
             }
             Ok(_) | Err(_) => return end_with(&mut ws, EndReason::InvalidCode).await,
@@ -279,7 +279,13 @@ async fn handle_share(
 
     if !send_control(
         &mut ws,
-        &ServerMessage::Granted { mode, cols, rows, host_os: std::env::consts::OS.to_string() },
+        &ServerMessage::Granted {
+            mode,
+            cols,
+            rows,
+            host_os: std::env::consts::OS.to_string(),
+            host_auth: None,
+        },
     )
     .await
     {
