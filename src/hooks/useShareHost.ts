@@ -9,6 +9,7 @@ import {
   shareViewers,
   type Viewer,
 } from "../ipc/share";
+import { unlistenOnCleanup } from "../lib/eventSubscription";
 
 /**
  * 一個終端機分頁的分享狀態。
@@ -56,18 +57,10 @@ export function useShareHost(sessionId: string) {
 
   // 觀看者變動的推播。事件不帶內容，收到就重讀。
   useEffect(() => {
-    let un: (() => void) | null = null;
-    let disposed = false;
-    void onShareViewersChanged(() => {
-      void refreshViewers();
-    }).then((f) => {
-      if (disposed) f();
-      else un = f;
-    });
-    return () => {
-      disposed = true;
-      un?.();
-    };
+    return unlistenOnCleanup(
+      onShareViewersChanged(() => { void refreshViewers(); }),
+      "share://viewers-changed",
+    );
   }, [refreshViewers]);
 
   const start = useCallback(async () => {

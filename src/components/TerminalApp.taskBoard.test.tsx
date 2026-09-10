@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -125,11 +125,29 @@ vi.mock("./HomeView", () => ({
 let capturedCoordinationSpawn:
   | ((payload: { session_id: string; command: string | null }) => void)
   | null = null;
+// Set by a test that wants cleanup's unlisten to blow up the way Tauri's
+// really does (see `unlistenOnCleanup`); reset in beforeEach.
+let coordinationUnlisten: () => void = () => {};
+
 vi.mock("../ipc/mcpToolServer", () => ({
   onCoordinationTabSpawned: vi.fn((cb: (payload: { session_id: string; command: string | null }) => void) => {
     capturedCoordinationSpawn = cb;
+    return Promise.resolve(() => coordinationUnlisten());
+  }),
+}));
+
+// Same capture trick for the enterprise events — they share the generic
+// `listen` mock above otherwise, which several other listeners also use.
+let capturedTaskReady: ((payload: TaskReadyPayload) => void) | null = null;
+vi.mock("../ipc/enterprise", () => ({
+  onEnterpriseTaskReceived: vi.fn(() => Promise.resolve(() => {})),
+  onEnterpriseTaskReady: vi.fn((cb: (payload: TaskReadyPayload) => void) => {
+    capturedTaskReady = cb;
     return Promise.resolve(() => {});
   }),
+  onEnterpriseSkillInstalled: vi.fn(() => Promise.resolve(() => {})),
+  enterpriseAcceptTask: vi.fn(),
+  enterpriseRejectTask: vi.fn(),
 }));
 
 // TaskBoardView's own ipc — mocked so the board mounts cleanly (no real invoke).
@@ -182,11 +200,36 @@ vi.mock("../ipc/projects", () => ({
 
 import { TerminalApp } from "./TerminalApp";
 import { LocaleProvider } from "../contexts/LocaleContext";
+import type { TaskReadyPayload } from "../ipc/enterprise";
 
 beforeEach(() => {
   fakeLoop.isRunning = false;
   localStorage.clear();
+  coordinationUnlisten = () => {};
 });
+
+/** Counts *tabs* with this title, not every node that happens to contain the
+ *  text — the active tab echoes its title elsewhere in the shell, so a plain
+ *  getAllByText over-counts and would pass even with the bug present. */
+function tabTitles(title: string): Element[] {
+  return Array.from(document.querySelectorAll(".aiterm-tab-title")).filter(
+    (el) => el.textContent === title
+  );
+}
+
+function taskReady(overrides: Partial<TaskReadyPayload> = {}): TaskReadyPayload {
+  return {
+    task_id: "task-1",
+    title: "Ship it",
+    description: "do the thing",
+    spec_content: "",
+    repo_dir: "/repo",
+    work_branch: "work",
+    max_steps: 5,
+    on_complete: "pr",
+    ...overrides,
+  } as TaskReadyPayload;
+}
 
 function renderApp() {
   return render(
@@ -233,5 +276,60 @@ describe("TerminalApp: Task Board view slot (Task 4)", () => {
 
     // Still on the board — not yanked to the newly spawned terminal tab.
     expect(await screen.findByText(/計畫中|Planned/)).toBeInTheDocument();
+  });
+
+  // Regression test for a real bug caught on video: dispatching ONE card put
+  // TWO identical "Agent: ..." tabs in the sidebar. The backend had spawned a
+  // single session (one worktree, one `claude`), so both tabs were views of
+  // the *same* PTY session — the handler had simply run twice, because a
+  // stale listener survived a failed `unlisten()` (Tauri's unlisten rejects
+  // with "listeners[eventId].handlerId is undefined" and the old listener
+  // stays registered; the dev log had 17 of those).
+  //
+  // One PTY session is one tab, no matter how many listeners fire.
+  it("adopts a session only once even if the spawn event is handled twice", async () => {
+    renderApp();
+    const user = userEvent.setup();
+    await openBoard(user);
+
+    expect(capturedCoordinationSpawn).not.toBeNull();
+    capturedCoordinationSpawn!({ session_id: "dup-session", command: "claude" });
+    capturedCoordinationSpawn!({ session_id: "dup-session", command: "claude" });
+
+    await waitFor(() => expect(screen.getAllByText("Agent: claude")).toHaveLength(1));
+  });
+
+  // Same duplicate-listener exposure as the coordination spawn above: this
+  // handler also creates a tab, so a doubled listener means two tabs for one
+  // enterprise task.
+  it("adopts an enterprise task only once even if the ready event is handled twice", async () => {
+    renderApp();
+    const user = userEvent.setup();
+    await openBoard(user);
+
+    expect(capturedTaskReady).not.toBeNull();
+    capturedTaskReady!(taskReady());
+    capturedTaskReady!(taskReady());
+
+    await waitFor(() => expect(tabTitles("⚙ Ship it")).toHaveLength(1));
+  });
+
+  // Tauri's `_unlisten` calls the webview's `unregisterListener` FIRST and
+  // only then invokes the backend, so when that throws (it does — the dev log
+  // had 17 of them) the rejection escaped as an unhandled promise rejection
+  // with no clue which event it came from. `unlistenOnCleanup` exists for
+  // exactly this; TerminalApp just wasn't using it.
+  it("does not leak an unhandled rejection when cleanup's unlisten throws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    coordinationUnlisten = () => { throw new TypeError("listeners[eventId] is undefined"); };
+
+    const { unmount } = renderApp();
+    await screen.findByText("select-first-tab");
+    unmount();
+
+    await waitFor(() =>
+      expect(warn.mock.calls.some((c) => String(c[0]).includes("mcp-coordination-tab-spawned"))).toBe(true)
+    );
+    warn.mockRestore();
   });
 });

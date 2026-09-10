@@ -38,6 +38,7 @@ import { useMailSync } from "../hooks/useMailSync";
 import { getConfig } from "../ipc/config";
 import { bridgeStatus } from "../ipc/bridge";
 import { onCoordinationTabSpawned } from "../ipc/mcpToolServer";
+import { unlistenOnCleanup } from "../lib/eventSubscription";
 import {
   onEnterpriseTaskReceived,
   onEnterpriseTaskReady,
@@ -210,91 +211,90 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   // focus to a newly agent-spawned tab would interrupt the user.
   const tabRunningRef = useRef<Map<string, boolean>>(new Map());
 
+  // Sessions already adopted as a tab. A backend spawn emits its event once,
+  // but the handler can still run twice: Tauri's `unlisten()` rejects
+  // ("listeners[eventId].handlerId is undefined") often enough that a stale
+  // listener survives cleanup and stays subscribed alongside the new one.
+  // Two handlers, one event, two tabs on the *same* ptySessionId — which is
+  // why the duplicates looked identical rather than like a second agent.
+  // Checked here rather than inside the setTabs updater so `selectTab` below
+  // never targets a tab we decided not to add, and so duplicates arriving in
+  // the same tick (before tabs re-render) are still caught.
+  const adoptedSessionsRef = useRef<Set<string>>(new Set());
+
+  // Same guard, same reason, for the other handler in this effect that opens
+  // a tab — a doubled listener would otherwise give one enterprise task two.
+  const adoptedTasksRef = useRef<Set<string>>(new Set());
+
   // Listen for enterprise events
   useEffect(() => {
-    let unlistenTaskReceived: (() => void) | null = null;
-    let unlistenTaskReady: (() => void) | null = null;
-    let unlistenSkill: (() => void) | null = null;
-    let unlistenCoordination: (() => void) | null = null;
-    let cancelled = false;
+    const cleanups = [
+      unlistenOnCleanup(onEnterpriseTaskReceived((packet) => {
+        setPendingTask(packet);
+      }), "enterprise:task-received"),
 
-    onEnterpriseTaskReceived((packet) => {
-      setPendingTask(packet);
-    }).then((fn) => {
-      if (cancelled) { fn(); return; }
-      unlistenTaskReceived = fn;
-    });
+      unlistenOnCleanup(onEnterpriseTaskReady((payload: TaskReadyPayload) => {
+        if (adoptedTasksRef.current.has(payload.task_id)) return;
+        adoptedTasksRef.current.add(payload.task_id);
+        // Create a new terminal tab that auto-starts the agent loop in the cloned repo.
+        const newId = crypto.randomUUID();
+        const goal = [
+          payload.title,
+          payload.description,
+          payload.spec_content ? `\n\nSpec:\n${payload.spec_content}` : "",
+        ].filter(Boolean).join("\n\n");
 
-    onEnterpriseTaskReady((payload: TaskReadyPayload) => {
-      // Create a new terminal tab that auto-starts the agent loop in the cloned repo.
-      const newId = crypto.randomUUID();
-      const goal = [
-        payload.title,
-        payload.description,
-        payload.spec_content ? `\n\nSpec:\n${payload.spec_content}` : "",
-      ].filter(Boolean).join("\n\n");
-
-      setTabs((prev) => [
-        ...prev,
-        {
-          id: newId,
-          title: `⚙ ${payload.title.slice(0, 30)}`,
-          type: "terminal" as const,
-          initialCwd: payload.repo_dir,
-          initialMission: { goal, maxSteps: payload.max_steps },
-          enterpriseTask: {
-            taskId: payload.task_id,
-            workBranch: payload.work_branch,
-            onComplete: payload.on_complete,
+        setTabs((prev) => [
+          ...prev,
+          {
+            id: newId,
+            title: `⚙ ${payload.title.slice(0, 30)}`,
+            type: "terminal" as const,
+            initialCwd: payload.repo_dir,
+            initialMission: { goal, maxSteps: payload.max_steps },
+            enterpriseTask: {
+              taskId: payload.task_id,
+              workBranch: payload.work_branch,
+              onComplete: payload.on_complete,
+            },
           },
-        },
-      ]);
-      selectTab(newId);
-    }).then((fn) => {
-      if (cancelled) { fn(); return; }
-      unlistenTaskReady = fn;
-    });
-
-    onEnterpriseSkillInstalled((payload) => {
-      setSkillToast(payload);
-      setTimeout(() => setSkillToast(null), 8000);
-    }).then((fn) => {
-      if (cancelled) { fn(); return; }
-      unlistenSkill = fn;
-    });
-
-    onCoordinationTabSpawned((payload) => {
-      const newId = crypto.randomUUID();
-      const activeTab = tabsRef.current.find((tb) => tb.id === activeIdRef.current);
-      const activeIsBusy = activeTab?.type === "terminal" && tabRunningRef.current.get(activeTab.id) === true;
-      // Home/Board are separate overlays layered on top of `activeId` (see
-      // their own state) — the busy check above only knows about the
-      // background terminal tab, so on its own it doesn't stop a spawn from
-      // yanking the user off Home or the Task Board the instant a card gets
-      // dispatched. (Real bug found live: dragging a card to 待執行 dispatches
-      // it, which spawns this event, which switched the user off the board.)
-      const viewingOverlay = homeActiveRef.current || boardActiveRef.current;
-      setTabs((prev) => [...prev, {
-        id: newId,
-        title: payload.command ? `Agent: ${payload.command}` : t.terminal_tab,
-        type: "terminal",
-        ptySessionId: payload.session_id,
-        spawnedByAgent: true,
-      }]);
-      if (!activeIsBusy && !viewingOverlay) {
+        ]);
         selectTab(newId);
-      }
-    }).then((fn) => {
-      if (cancelled) { fn(); return; }
-      unlistenCoordination = fn;
-    });
+      }), "enterprise:task-ready"),
+
+      unlistenOnCleanup(onEnterpriseSkillInstalled((payload) => {
+        setSkillToast(payload);
+        setTimeout(() => setSkillToast(null), 8000);
+      }), "enterprise:skill-installed"),
+
+      unlistenOnCleanup(onCoordinationTabSpawned((payload) => {
+        if (adoptedSessionsRef.current.has(payload.session_id)) return;
+        adoptedSessionsRef.current.add(payload.session_id);
+        const newId = crypto.randomUUID();
+        const activeTab = tabsRef.current.find((tb) => tb.id === activeIdRef.current);
+        const activeIsBusy = activeTab?.type === "terminal" && tabRunningRef.current.get(activeTab.id) === true;
+        // Home/Board are separate overlays layered on top of `activeId` (see
+        // their own state) — the busy check above only knows about the
+        // background terminal tab, so on its own it doesn't stop a spawn from
+        // yanking the user off Home or the Task Board the instant a card gets
+        // dispatched. (Real bug found live: dragging a card to 待執行 dispatches
+        // it, which spawns this event, which switched the user off the board.)
+        const viewingOverlay = homeActiveRef.current || boardActiveRef.current;
+        setTabs((prev) => [...prev, {
+          id: newId,
+          title: payload.command ? `Agent: ${payload.command}` : t.terminal_tab,
+          type: "terminal",
+          ptySessionId: payload.session_id,
+          spawnedByAgent: true,
+        }]);
+        if (!activeIsBusy && !viewingOverlay) {
+          selectTab(newId);
+        }
+      }), "mcp-coordination-tab-spawned"),
+    ];
 
     return () => {
-      cancelled = true;
-      unlistenTaskReceived?.();
-      unlistenTaskReady?.();
-      unlistenSkill?.();
-      unlistenCoordination?.();
+      for (const cleanup of cleanups) cleanup();
     };
   }, [selectTab, t.terminal_tab]);
 
