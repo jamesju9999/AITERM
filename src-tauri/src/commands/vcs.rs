@@ -444,6 +444,13 @@ pub async fn vcs_query(
                 let r = VcsResult::NoToken { required_level: lvl };
                 return serde_json::to_value(&r).map_err(|e| e.to_string());
             }
+            // Strip the no_remote: sentinel's prefix before showing it in
+            // chat — the prefix exists for other callers (the team panel)
+            // to detect this case, not to be read literally by the user.
+            if let Some(detail) = msg.strip_prefix("no_remote:") {
+                let r = VcsResult::Error { message: detail.to_string() };
+                return serde_json::to_value(&r).map_err(|e| e.to_string());
+            }
             let r = VcsResult::Error { message: msg };
             serde_json::to_value(&r).map_err(|e| e.to_string())
         }

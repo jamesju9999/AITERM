@@ -774,7 +774,7 @@ async fn a_repo_with_no_origin_remote_reports_the_missing_remote_not_a_missing_t
     let client = GitClient::new(dir.path().to_string_lossy().to_string(), None);
     let err = client.pr_list(None).await.expect_err("no remote and no token — must fail");
 
-    assert!(err.contains("remote"), "expected a remote-related error, got: {err}");
+    assert!(err.starts_with("no_remote"), "expected the no_remote sentinel, got: {err}");
     assert!(!err.starts_with("no_token"), "should not blame a missing token when there's no remote to use one against: {err}");
 }
 

@@ -242,7 +242,11 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
           )}
           {featuresError && (
             <div style={{ padding: "4px 16px", fontSize: 11, color: "#f87171" }}>
-              {featuresError.startsWith("no_token") ? t.vcs_no_token : featuresError}
+              {featuresError.startsWith("no_token")
+                ? t.vcs_no_token
+                : featuresError.startsWith("no_remote")
+                  ? t.vcs_no_remote
+                  : featuresError}
             </div>
           )}
         </>

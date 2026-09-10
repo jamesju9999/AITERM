@@ -719,14 +719,20 @@ impl GitClient {
     ///   https://github.com/owner/repo
     ///   https://github.com/owner/repo.git
     ///   git@github.com:owner/repo.git
+    /// Error is prefixed `no_remote:` (mirroring `require_token`'s
+    /// `no_token:{level}` sentinel) so callers — the frontend's team panel,
+    /// the chat agent's error translation — can detect this specific case
+    /// and show a proper localized message instead of this raw English
+    /// detail. See `commands::vcs`'s `no_remote:` handling and
+    /// `VcsView.tsx`'s `featuresError` check.
     fn parse_remote(&self) -> Result<(String, String), String> {
         let url = self
             .git(&["remote".to_string(), "get-url".to_string(), "origin".to_string()])
             .map(|s| s.trim().to_string())
-            .map_err(|_| "No git remote 'origin' configured".to_string())?;
+            .map_err(|_| "no_remote:No git remote 'origin' configured".to_string())?;
 
         parse_github_url(&url)
-            .ok_or_else(|| format!("Cannot parse GitHub owner/repo from remote URL: {url}"))
+            .ok_or_else(|| format!("no_remote:Cannot parse GitHub owner/repo from remote URL: {url}"))
     }
 
     fn require_token(&self, level: u8) -> Result<String, String> {
