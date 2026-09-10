@@ -3000,14 +3000,26 @@ git commit -m "feat(remote): let the viewer connect to a CLI host with a pre-sha
 - [ ] **Step 1: 全套自動化驗證**
 
 ```bash
-cd /Users/jamesju/Documents/GitHub/AITERM
 npx tsc -b
 npm run test
 npm run lint
-cd src-tauri && cargo test && cargo clippy --workspace -- -D warnings
+cd src-tauri && cargo test
 ```
 
 **`cargo test` 不加 `--lib`**——`--lib` 不編譯 `tests/` 底下的整合測試，而這次改動最集中的地方正是那裡。
+
+- [ ] **Step 1b: clippy——比對基線，不是要求零**
+
+**不要跑 `cargo clippy -- -D warnings`。** 這個 repo 有既有的 clippy 警告基線（實測：`app` 45 條、`aiterm-core` 3 條，後者是搬移過去的既有程式碼帶過去的，master 上的 app crate 一樣會叫，兩個 crate 都沒有 crate 層級的 `allow`）。要求全域零警告會變成假性失敗，然後下一個人就會去「修」一堆跟這個里程碑無關的東西。
+
+真正該守的是**這個分支碰過的檔案不准新增警告**：
+
+```bash
+cd src-tauri && cargo clippy -p app -p aiterm-core -p aiterm-host 2>&1 \
+  | grep -E "^\s+--> (crates/aiterm-host|crates/aiterm-core/src/share|src/share)/"
+```
+
+預期：**沒有任何輸出**。有輸出就是這次真的新增的，要修掉。
 
 - [ ] **Step 2: 起 CLI host**
 
