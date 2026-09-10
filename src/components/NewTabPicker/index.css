@@ -8,6 +8,13 @@
   border-radius: 10px;
   padding: 6px;
   min-width: 260px;
+  /* 觸發它的按鈕（ADD TAB）用 `bottom` 定位、貼著側邊欄底部，這層選單
+     本身沒有 top，所以是往上長出來的。視窗矮到裝不下全部項目時，
+     沒有這個限制它會直接往上長出視窗外——最上面幾個項目會整個跑到
+     看不到、也點不到的地方，捲軸也救不了，因為外層根本沒有捲動容器。
+     扣掉的 80px = 觸發按鈕的 60px 底部間距 + 20px 頂部呼吸空間。 */
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255,255,255,0.04);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
