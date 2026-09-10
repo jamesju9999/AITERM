@@ -22,3 +22,9 @@ rcgen = "0.13"
 mdns-sd = "0.21"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+axum = { version = "0.8", features = ["ws"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"] }
+tower-service = "0.3"
+futures-util = "0.3"
+tokio-tungstenite = "0.29"

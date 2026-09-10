@@ -68,8 +68,12 @@ name = "aiterm-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "base64 0.22.1",
  "dirs",
+ "futures-util",
+ "hyper",
+ "hyper-util",
  "log",
  "mdns-sd",
  "parking_lot",
@@ -83,6 +87,8 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-rustls",
+ "tokio-tungstenite",
+ "tower-service",
  "uuid",
 ]
 
