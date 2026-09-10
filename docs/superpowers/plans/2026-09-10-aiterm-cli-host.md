@@ -890,6 +890,26 @@ cd src-tauri && cargo test -p aiterm-core share::tests::binding_to_loopback_does
 
 預期：PASS。
 
+- [ ] **Step 4b: 把 `OUTPUT_RING_CAP` 收回 `pub(crate)`**
+
+Task 3 為了讓還留在 app crate 的 `share/server.rs:34` 讀得到
+`crate::pty::session::OUTPUT_RING_CAP`，把它從 `pub(crate)` 放寬成 `pub`。
+`server.rs` 這一步搬進 core 之後，那個理由就消失了。
+
+```bash
+cd src-tauri && grep -rn "OUTPUT_RING_CAP" src/ crates/
+```
+
+確認 app crate 底下**沒有**任何命中之後，把
+`crates/aiterm-core/src/pty/session.rs:113` 改回：
+
+```rust
+pub(crate) const OUTPUT_RING_CAP: usize = 256 * 1024;
+```
+
+這種「為了過渡期而放寬、之後沒人收回去」的可見度是會永久留下的——沒有任何
+測試會因為它太寬而變紅，所以不在這裡收，就再也不會收了。
+
 - [ ] **Step 5: 全面驗證**
 
 ```bash

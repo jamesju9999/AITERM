@@ -121,6 +121,7 @@ src-tauri/
 | 模組 | 改動 |
 |------|------|
 | `pty::{session, shell, ansi, cd_parser, error, events}` | 原封搬移，零行為改動 |
+| `appimage_env` | 原封搬移。實作時才發現的相依：`pty::session` 在 spawn 子行程時呼叫 `crate::appimage_env::appimage_env_fixes()`。它本身零 Tauri 參照，而且「修正 PTY 子行程的環境變數」正是 core 的職責；不搬的話就得改 `session.rs` 裡的路徑，那會破壞純搬移 |
 | `pty::manager` | 搬移；`create_with_app` 留在 app crate |
 | `share::{protocol, registry, tls, mdns}` | 原封搬移 |
 | `share::server`、`share::mod` | 搬移 + 事件抽象 |
