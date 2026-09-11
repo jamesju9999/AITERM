@@ -36,7 +36,16 @@ export function useShellIdentity(term: Terminal | null): ShellIdentity | null {
     if (!term) return;
     const disposable = term.parser.registerOscHandler(7000, (data) => {
       const parsed = parse(data);
-      if (parsed) setIdentity(parsed);
+      if (parsed) {
+        // 腳本每次畫提示字元都重送一份（見 shell.rs：那是為了避開「處理器
+        // 還沒註冊、身分就已經送出」的 race）。內容沒變就回傳原本那個物件，
+        // React 會直接跳過重繪——否則每跑一個指令都會讓整個分頁重繪一次。
+        setIdentity((prev) =>
+          prev && prev.shell === parsed.shell && prev.edition === parsed.edition && prev.version === parsed.version
+            ? prev
+            : parsed,
+        );
+      }
       // true＝這個序列已經被處理掉，不要再往下傳。
       return true;
     });

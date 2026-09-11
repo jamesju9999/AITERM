@@ -70,6 +70,11 @@ function global:prompt {
 
     [Console]::Write("$([char]27)]133;D;$ec$([char]7)")
     [Console]::Write("$([char]27)]133;A$([char]7)")
+    # Shell 身分。**每次提示字元都重送一次，不是載入時送一次**：前端的
+    # OSC 處理器是在 setTermState 觸發的重新渲染之後才註冊的，只送一次的話
+    # 只要註冊晚於 shell 啟動，這個事件就永遠遺失、徽章再也不會出現，而且
+    # 是無聲失敗。每次重送讓它自動補上，順序誰先誰後都無所謂。
+    [Console]::Write("$([char]27)]7000;shell=PowerShell;edition=$($PSVersionTable.PSEdition);version=$($PSVersionTable.PSVersion)$([char]7)")
 
     $renderedRaw = if ($global:__aiterm_orig_prompt) {
         & $global:__aiterm_orig_prompt
@@ -128,12 +133,6 @@ Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {
     }
     [Console]::Write("$([char]27)]133;C$([char]7)")
 }
-
-# Shell 身分：載入時送一次。AITerm 用它判斷這個分頁跑的是不是 Windows
-# PowerShell 5.1（PSEdition 為 Desktop）——5.1 算全形字寬度有誤，dir 這類
-# 表格輸出的每一列都會溢出換行。沒有註冊這個序列處理器的終端機會直接把它
-# 吞掉，不會印出任何東西。
-[Console]::Write("$([char]27)]7000;shell=PowerShell;edition=$($PSVersionTable.PSEdition);version=$($PSVersionTable.PSVersion)$([char]7)")
 "#;
 
 /// Inject OSC 133 shell integration into PowerShell (pwsh.exe / powershell.exe).
@@ -524,8 +523,38 @@ mod tests {
             POWERSHELL_INTEGRATION_SCRIPT.contains(
                 r#"]7000;shell=PowerShell;edition=$($PSVersionTable.PSEdition);version=$($PSVersionTable.PSVersion)"#
             ),
-            "expected the script to report its own edition/version once at load time — \
+            "expected the script to report its own edition/version — \
              前端靠這個分辨 Windows PowerShell 5.1（Desktop）與 PowerShell 7（Core）"
+        );
+    }
+
+    #[test]
+    fn shell_identity_is_resent_on_every_prompt_not_once_at_load() {
+        // 這條測試存在的理由是一個這個 repo 踩過兩次的 race：前端的 OSC
+        // 處理器要等 setTermState 觸發重新渲染之後才註冊，只在腳本載入時送
+        // 一次的話，只要註冊晚於 shell 啟動，身分就永遠遺失、徽章再也不會
+        // 出現，而且沒有任何錯誤訊息。綁在 prompt 函式裡每次重送才是自癒的。
+        //
+        // 用「緊接在 A 標記之後」來釘住位置：A 標記本身就在 prompt 函式內，
+        // 所以只要這兩行相鄰，身分回報就一定也在 prompt 函式內。
+        let a_marker = r#"[Console]::Write("$([char]27)]133;A$([char]7)")"#;
+        let identity = r#"[Console]::Write("$([char]27)]7000;shell=PowerShell"#;
+        let after_a = POWERSHELL_INTEGRATION_SCRIPT
+            .split_once(a_marker)
+            .expect("A marker should be in the script")
+            .1;
+
+        assert!(
+            after_a.trim_start().starts_with("# Shell 身分")
+                || after_a.trim_start().starts_with(identity),
+            "身分回報必須緊接在 A 標記之後（也就是在 prompt 函式內），才會每次\
+             提示字元都重送。搬到函式外＝只送一次＝會遇到註冊時序 race。\
+             實際接在 A 之後的是：{:?}",
+            &after_a.trim_start()[..80.min(after_a.trim_start().len())]
+        );
+        assert!(
+            after_a.contains(identity),
+            "expected the identity write to follow the A marker inside prompt"
         );
     }
 
