@@ -321,6 +321,52 @@ impl GitClient {
         })
     }
 
+    /// 這個倉庫是不是停在「合併進行中」（`MERGE_HEAD` 還在）。
+    ///
+    /// `git merge` 遇到衝突會把倉庫留在這個狀態直到有人收尾。在這種狀態上
+    /// 再跑一次 merge 只會得到 "You have not concluded your merge" 這種跟
+    /// 真正問題無關的錯誤，所以呼叫端要先擋下來。
+    pub async fn is_merge_in_progress(&self) -> bool {
+        self.git(&[
+            "rev-parse".to_string(),
+            "--verify".to_string(),
+            "--quiet".to_string(),
+            "MERGE_HEAD".to_string(),
+        ])
+        .is_ok()
+    }
+
+    /// 目前處於未解衝突狀態的檔案。
+    pub async fn conflicted_files(&self) -> Result<Vec<String>, String> {
+        let out = self.git(&[
+            "diff".to_string(),
+            "--name-only".to_string(),
+            "--diff-filter=U".to_string(),
+        ])?;
+        Ok(out.lines().filter(|l| !l.is_empty()).map(str::to_string).collect())
+    }
+
+    /// `git merge --abort`——把倉庫還原到嘗試合併之前的樣子。
+    pub async fn merge_abort(&self) -> Result<VcsResult, String> {
+        self.git(&["merge".to_string(), "--abort".to_string()])?;
+        Ok(VcsResult::WriteSuccess {
+            operation: "merge_abort".to_string(),
+            detail: "Aborted the in-progress merge".to_string(),
+        })
+    }
+
+    /// `git status --porcelain` 列出的檔案名（含未追蹤檔案），給「原分支
+    /// 不乾淨、先處理這些」的提示用。前兩欄是狀態碼、第三欄是空白，所以
+    /// 從第 4 個字元起才是路徑。
+    pub async fn dirty_files(&self) -> Result<Vec<String>, String> {
+        let out = self.git(&["status".to_string(), "--porcelain".to_string()])?;
+        Ok(out
+            .lines()
+            .filter_map(|l| l.get(3..).map(str::trim).map(str::to_string))
+            .filter(|s| !s.is_empty())
+            .collect())
+    }
+
     // ── GitHub API operations ────────────────────────────────────────────────
 
     pub async fn pr_list(&self, state: Option<&str>) -> Result<VcsResult, String> {
@@ -1244,5 +1290,77 @@ mod block_info_tests {
         // 不驗證清理（那是 Task 4 tasks_merge_worktree 的責任，衝突時刻意
         // 不清理 worktree，讓使用者自己處理）——這裡只驗證呼叫端拿到 Err。
         assert!(client.merge_branch("aiterm-task/t4").await.is_err());
+    }
+}
+
+#[cfg(test)]
+mod merge_state_tests {
+    use super::*;
+    use std::process::Command as StdCommand;
+
+    fn run(dir: &std::path::Path, args: &[&str]) {
+        StdCommand::new("git").args(args).current_dir(dir).status().unwrap();
+    }
+
+    /// 造一個必定衝突的情境：兩個分支改同一個檔案的同一行。
+    fn repo_with_conflict() -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path();
+        run(p, &["init", "-q", "-b", "main"]);
+        run(p, &["config", "user.email", "t@t.com"]);
+        run(p, &["config", "user.name", "T"]);
+        std::fs::write(p.join("a.txt"), "base\n").unwrap();
+        run(p, &["add", "."]);
+        run(p, &["commit", "-q", "-m", "init"]);
+
+        run(p, &["checkout", "-q", "-b", "side"]);
+        std::fs::write(p.join("a.txt"), "side\n").unwrap();
+        run(p, &["commit", "-qam", "side"]);
+
+        run(p, &["checkout", "-q", "main"]);
+        std::fs::write(p.join("a.txt"), "main\n").unwrap();
+        run(p, &["commit", "-qam", "main"]);
+        d
+    }
+
+    #[tokio::test]
+    async fn reports_merge_state_and_conflicted_files_then_aborts() {
+        let d = repo_with_conflict();
+        let c = GitClient::new(d.path().to_string_lossy().to_string(), None);
+
+        assert!(!c.is_merge_in_progress().await, "合併前不該說正在合併中");
+        assert!(c.conflicted_files().await.unwrap().is_empty());
+
+        assert!(c.merge_branch("side").await.is_err(), "同一行的兩邊修改必須衝突");
+
+        // 這正是目前沒人處理、使用者也看不到的狀態。
+        assert!(c.is_merge_in_progress().await, "衝突後應該偵測得到 MERGE_HEAD");
+        assert_eq!(c.conflicted_files().await.unwrap(), vec!["a.txt".to_string()]);
+
+        c.merge_abort().await.unwrap();
+        assert!(!c.is_merge_in_progress().await, "abort 之後不該還在合併中");
+        assert!(c.conflicted_files().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn dirty_files_lists_both_modified_and_untracked() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path();
+        run(p, &["init", "-q", "-b", "main"]);
+        run(p, &["config", "user.email", "t@t.com"]);
+        run(p, &["config", "user.name", "T"]);
+        std::fs::write(p.join("tracked.txt"), "a\n").unwrap();
+        run(p, &["add", "."]);
+        run(p, &["commit", "-q", "-m", "init"]);
+
+        let c = GitClient::new(p.to_string_lossy().to_string(), None);
+        assert!(c.dirty_files().await.unwrap().is_empty(), "乾淨的倉庫不該列出任何檔案");
+
+        std::fs::write(p.join("tracked.txt"), "changed\n").unwrap();
+        std::fs::write(p.join("brand_new.txt"), "x\n").unwrap();
+
+        let mut files = c.dirty_files().await.unwrap();
+        files.sort();
+        assert_eq!(files, vec!["brand_new.txt".to_string(), "tracked.txt".to_string()]);
     }
 }
