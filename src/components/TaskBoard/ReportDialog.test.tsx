@@ -113,7 +113,7 @@ describe("ReportDialog", () => {
     created_at: "2026-09-05T10:00:00Z", dispatched_at: null, finished_at: null,
     ai_summary: null, archived_at: null, session_id: null, session_path: null,
     use_bridge: false, bridge_tiers: null, label: null,
-    worktree_path: null, worktree_branch: null,
+    worktree_path: null, worktree_branch: null, isolate_worktree: null,
     attachments: [], ...over,
   });
 

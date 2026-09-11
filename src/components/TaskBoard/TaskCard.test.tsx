@@ -65,6 +65,7 @@ const card = (over: Partial<TaskWithAttachments> = {}): TaskWithAttachments => (
   bridge_tiers: null,
   worktree_path: "C:\\store\\t1\\worktree",
   worktree_branch: "aiterm-task/t1",
+  isolate_worktree: null,
   attachments: [],
   ...over,
 });

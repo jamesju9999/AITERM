@@ -25,6 +25,7 @@ beforeEach(() => {
     notify_desktop_on_finish: true,
     notify_telegram_on_finish: true,
     stuck_timeout_secs: 1200,
+    isolate_with_worktree: true,
   });
   vi.mocked(getTelegramConfig).mockResolvedValue({ bot_token: null, chat_id: null });
 });
@@ -51,6 +52,50 @@ describe("TaskBoardPage", () => {
         expect.objectContaining({ max_concurrent: 3, claude_command: "claude" }),
       ),
     );
+  });
+
+  it("可以關掉 worktree 隔離並存檔", async () => {
+    const user = userEvent.setup();
+    view();
+    await waitFor(() => screen.getByDisplayValue("2"));
+    const checkbox = screen.getByRole("checkbox", { name: /建立獨立的 git worktree|isolated git worktree/ });
+    expect(checkbox).toBeChecked();
+    await user.click(checkbox);
+    await user.click(screen.getByRole("button", { name: /儲存|Save/ }));
+    await waitFor(() =>
+      expect(setTaskBoardConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ isolate_with_worktree: false }),
+      ),
+    );
+  });
+
+  it("關掉隔離且同時執行數大於 1 時顯示互相覆蓋的提醒", async () => {
+    vi.mocked(getTaskBoardConfig).mockResolvedValue({
+      max_concurrent: 3,
+      claude_command: "claude",
+      auto_close_finished_tabs: true,
+      notify_desktop_on_finish: true,
+      notify_telegram_on_finish: true,
+      stuck_timeout_secs: 1200,
+      isolate_with_worktree: false,
+    });
+    view();
+    expect(await screen.findByText(/互相覆蓋|overwrite each other/)).toBeInTheDocument();
+  });
+
+  it("隔離開著時不顯示那個提醒", async () => {
+    vi.mocked(getTaskBoardConfig).mockResolvedValue({
+      max_concurrent: 3,
+      claude_command: "claude",
+      auto_close_finished_tabs: true,
+      notify_desktop_on_finish: true,
+      notify_telegram_on_finish: true,
+      stuck_timeout_secs: 1200,
+      isolate_with_worktree: true,
+    });
+    view();
+    await waitFor(() => screen.getByDisplayValue("3"));
+    expect(screen.queryByText(/互相覆蓋|overwrite each other/)).not.toBeInTheDocument();
   });
 
   it("toggling the auto-close checkbox sends the new value", async () => {

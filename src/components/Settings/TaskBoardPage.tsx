@@ -110,6 +110,27 @@ export function TaskBoardPage() {
           <span className="task-board-hint">{t.board_settings_notify_desktop_hint}</span>
         </label>
 
+        <label className="task-board-field task-board-field--checkbox">
+          <input
+            type="checkbox"
+            className="task-board-checkbox"
+            checked={cfg.isolate_with_worktree}
+            onChange={(e) => {
+              setSaved(false);
+              setCfg({ ...cfg, isolate_with_worktree: e.target.checked });
+            }}
+          />
+          <span>{t.board_settings_isolate}</span>
+          <span className="task-board-hint">{t.board_settings_isolate_hint}</span>
+        </label>
+
+        {/* 關掉隔離之後，多張卡片會在同一個工作目錄互相覆蓋——Agent 會自己
+            管 git，不代表兩個 Agent 同時改同一份檔案不會打架。只提醒，不代
+            使用者改 max_concurrent。 */}
+        {!cfg.isolate_with_worktree && cfg.max_concurrent > 1 && (
+          <p className="task-board-hint">{t.board_settings_isolate_concurrent_warning}</p>
+        )}
+
         {telegramConfigured && (
           <label className="task-board-field task-board-field--checkbox">
             <input

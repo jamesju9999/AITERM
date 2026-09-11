@@ -68,6 +68,7 @@ const BASE_CARD: TaskWithAttachments = {
   label: null,
   worktree_path: null,
   worktree_branch: null,
+  isolate_worktree: null,
   attachments: [],
 };
 

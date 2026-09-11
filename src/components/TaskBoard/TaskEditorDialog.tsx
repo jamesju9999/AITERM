@@ -45,6 +45,12 @@ export function TaskEditorDialog({
   const [label, setLabel] = useState(card?.label ?? "");
   const [parallelOk, setParallelOk] = useState(card?.parallel_ok ?? true);
   const [interactive, setInteractive] = useState(card?.interactive ?? false);
+  // 三態：沿用全域 / 一定隔離 / 一定不隔離。null 是「沿用」，跟 false 不同義。
+  const [isolateChoice, setIsolateChoice] = useState<"inherit" | "on" | "off">(() => {
+    if (card?.isolate_worktree === true) return "on";
+    if (card?.isolate_worktree === false) return "off";
+    return "inherit";
+  });
   const [profiles] = useState<BridgeProfile[]>(() => loadBridgeProfiles());
   // 只有 server 真的在跑，選了才會生效——沒在跑時不提供選項，避免使用者
   // 選了一個實際上會被 resolve_bridge_env 靜默忽略的東西。舊卡片已經存的
@@ -205,6 +211,7 @@ export function TaskEditorDialog({
           parallel_ok: parallelOk,
           interactive,
           label: labelArg,
+          isolate_worktree: isolateChoice === "inherit" ? null : isolateChoice === "on",
           ...bridgeArgs,
         });
       } else {
@@ -215,6 +222,7 @@ export function TaskEditorDialog({
           parallel_ok: parallelOk,
           interactive,
           label: labelArg,
+          isolate_worktree: isolateChoice === "inherit" ? null : isolateChoice === "on",
           ...bridgeArgs,
         });
         for (const f of pendingFiles) {
@@ -414,6 +422,19 @@ export function TaskEditorDialog({
             <p className="task-field-hint">{t.board_card_solo_hint}</p>
           </>
         )}
+
+        <label className="task-field">
+          <span className="task-field-label">{t.board_card_isolate}</span>
+          <select
+            data-testid="task-isolate-select"
+            value={isolateChoice}
+            onChange={(e) => setIsolateChoice(e.target.value as "inherit" | "on" | "off")}
+          >
+            <option value="inherit">{t.board_card_isolate_inherit}</option>
+            <option value="on">{t.board_card_isolate_on}</option>
+            <option value="off">{t.board_card_isolate_off}</option>
+          </select>
+        </label>
 
         </div>
 

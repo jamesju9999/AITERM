@@ -51,6 +51,8 @@ export interface TaskRow {
   worktree_path: string | null;
   /** 上面那個 worktree 所在的分支名稱，跟 `worktree_path` 同進退。 */
   worktree_branch: string | null;
+  /** `null` 代表沿用全域的 isolate_with_worktree 設定。 */
+  isolate_worktree: boolean | null;
 }
 
 export interface TaskWithAttachments extends TaskRow {
@@ -59,6 +61,8 @@ export interface TaskWithAttachments extends TaskRow {
 
 export interface TaskBoardConfig {
   max_concurrent: number;
+  /** 派工時是否為每張卡片建立獨立的 git worktree。 */
+  isolate_with_worktree: boolean;
   claude_command: string;
   auto_close_finished_tabs: boolean;
   notify_desktop_on_finish: boolean;
@@ -83,6 +87,7 @@ export const createTask = (
     use_bridge: boolean;
     bridge_tiers: string | null;
     label: string | null;
+    isolate_worktree: boolean | null;
   },
 ): Promise<string> => invoke("tasks_create", { projectId, args });
 
@@ -101,6 +106,7 @@ export const updateTask = (
     use_bridge: boolean;
     bridge_tiers: string | null;
     label: string | null;
+    isolate_worktree: boolean | null;
   },
 ): Promise<void> => invoke("tasks_update", { projectId, args });
 

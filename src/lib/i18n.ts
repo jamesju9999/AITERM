@@ -1527,6 +1527,17 @@ const zhTW = {
     python_env_index_url_placeholder: "https://pypi.mycompany.com/simple",
     python_env_audio_prompt: "這個音訊檔需要語音轉文字支援，需要額外下載約 33 MB。要現在安裝嗎？",
 
+    // worktree 隔離
+    board_settings_isolate: "派工時建立獨立的 git worktree",
+    board_settings_isolate_hint:
+      "開啟時，每張卡片會在自己的 worktree 與 aiterm-task/<id> 分支上執行，完成後用「合併回原分支」合併。關閉時 Agent 直接在專案目錄工作——適合讓 Agent 自己操作 git 版控。",
+    board_settings_isolate_concurrent_warning:
+      "⚠️ 同時執行數大於 1：關閉隔離後，多張卡片會在同一個工作目錄互相覆蓋。",
+    board_card_isolate: "git worktree 隔離",
+    board_card_isolate_inherit: "沿用全域設定",
+    board_card_isolate_on: "建立獨立的 worktree",
+    board_card_isolate_off: "直接在專案目錄執行",
+
     // 合併回原分支
     board_merge_running: "合併中…",
     board_merge_step_checking: "合併中：檢查原分支…",
@@ -2967,6 +2978,17 @@ const enRaw = {
     python_env_index_url_desc: "If your corporate network blocks PyPI, set an internal package mirror address here. Leave blank to use the default PyPI.",
     python_env_index_url_placeholder: "https://pypi.mycompany.com/simple",
     python_env_audio_prompt: "This audio file needs speech-to-text support, which requires downloading about 33 MB more. Install it now?",
+
+    // Worktree isolation
+    board_settings_isolate: "Create an isolated git worktree for each task",
+    board_settings_isolate_hint:
+      "When on, each card runs in its own worktree on an aiterm-task/<id> branch and is merged back with \"Merge into base branch\". When off, the agent works directly in the project directory — suitable if you let the agent manage git itself.",
+    board_settings_isolate_concurrent_warning:
+      "⚠️ Concurrency is above 1: with isolation off, multiple cards will overwrite each other in the same working directory.",
+    board_card_isolate: "Git worktree isolation",
+    board_card_isolate_inherit: "Use the global setting",
+    board_card_isolate_on: "Create an isolated worktree",
+    board_card_isolate_off: "Work directly in the project directory",
 
     // Merge worktree back into the base branch
     board_merge_running: "Merging…",
