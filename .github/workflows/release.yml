@@ -732,8 +732,18 @@ jobs:
     needs: cli-build
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # **一定要 `contents: write`，`read` 不夠。** 這個 job 要從 draft release 抓
+    # 執行檔，而 draft release 只有具寫入權限的 token 看得到——`contents: read`
+    # 的 token 查 draft 會拿到 404，`gh` 把它回報成 "release not found"。
+    #
+    # 這是 v1.25.0-dist1 演練時實際撞到的：同一條 `gh release download` 在
+    # cli-checksums（繼承 workflow 層級的 contents: write）成功、在這裡
+    # （當時寫 contents: read）失敗。本機測試抓不到，因為本機用的是自己建出來
+    # 的執行檔，根本不會去讀 draft。
+    #
+    # 不需要 `packages: write`——這個 job 不推映像，推送在 cli-container-push。
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
