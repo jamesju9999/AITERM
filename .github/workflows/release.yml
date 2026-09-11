@@ -550,12 +550,147 @@ jobs:
           includeUpdaterJson: false
           args: --target aarch64-unknown-linux-gnu --bundles deb
 
+  # CLI host 的執行檔。刻意跟 app 的 `build` job 分開，而不是塞進它的矩陣：
+  #
+  #   1. 目標不一樣。這裡有兩個 musl（靜態，給 alpine/distroless/老 glibc）和
+  #      x86_64-apple-darwin（Intel Mac），app 的矩陣三個都沒有。
+  #   2. 這個 job **不需要** uv／db2 sidecar。實測確認：把 src-tauri/binaries
+  #      移走後 `cargo check -p aiterm-host` 照樣過，而 `cargo check -p app` 會
+  #      失敗於 "resource path 'binaries/uv-...' doesn't exist"。跑 setup 腳本
+  #      只是白白多好幾分鐘。
+  #   3. 分開之後，CLI 這邊壞掉不會拖垮 app 的發版。
+  cli-build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            archive: tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: cli-${{ matrix.target }}
+
+      - name: Install musl toolchain
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Sync version from tag
+        shell: node {0}
+        run: |
+          const fs = require('fs');
+          const version = process.env.GITHUB_REF_NAME.replace(/^v/, '');
+          const p = 'src-tauri/crates/aiterm-host/Cargo.toml';
+          let s = fs.readFileSync(p, 'utf8');
+          s = s.replace(/^version = ".*"/m, `version = "${version}"`);
+          fs.writeFileSync(p, s);
+          console.log(`aiterm-host version synced to ${version}`);
+
+      - name: Build
+        working-directory: src-tauri
+        run: cargo build -p aiterm-host --release --target ${{ matrix.target }}
+
+      - name: 真的執行一次
+        # 編得過不代表跑得動——musl 上 ring 的連結問題有時候要到執行才爆。
+        # 五個目標裡只有 x86_64-apple-darwin 是交叉編譯（runner 是 arm mac），
+        # 跳過它。
+        if: matrix.target != 'x86_64-apple-darwin'
+        working-directory: src-tauri
+        shell: bash
+        run: ./target/${{ matrix.target }}/release/aiterm-host${{ matrix.os == 'windows-latest' && '.exe' || '' }} --print-connection
+
+      - name: Package
+        working-directory: src-tauri
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          NAME="aiterm-host-${VERSION}-${{ matrix.target }}"
+          BIN="aiterm-host${{ matrix.os == 'windows-latest' && '.exe' || '' }}"
+          mkdir -p "dist/$NAME"
+          cp "target/${{ matrix.target }}/release/$BIN" "dist/$NAME/"
+          cp ../README.md "dist/$NAME/" 2>/dev/null || true
+          cd dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "$NAME.zip" "$NAME" >/dev/null
+          else
+            tar czf "$NAME.tar.gz" "$NAME"
+          fi
+          ls -la
+
+      - name: Upload to the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          NAME="aiterm-host-${VERSION}-${{ matrix.target }}"
+          cd src-tauri/dist
+          gh release upload "$TAG" "$NAME.${{ matrix.archive }}" --clobber
+
+  # 所有執行檔上傳完之後，統一產一份 SHA256SUMS。
+  #
+  # 刻意獨立一個 job 而不是在每個平台各產一份：五份各自的 .sha256 檔案沒辦法讓
+  # 使用者一次驗完，而安裝腳本要的是「一份清單、一次下載、比對其中一行」。
+  cli-checksums:
+    needs: cli-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download every CLI asset and checksum them
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          mkdir sums && cd sums
+          gh release download "$TAG" --pattern "aiterm-host-${VERSION}-*" --dir .
+          # **把 SHA256SUMS 自己排除掉。** 這個 job 重跑時（例如某個平台
+          # 重試）release 上已經有一份舊的 SHA256SUMS，而它也符合上面的
+          # pattern——不排除的話會把自己的雜湊算進新的清單裡，安裝腳本用
+          # grep 找檔名時就會撈到兩行，`sha256sum -c` 直接失敗。
+          rm -f "aiterm-host-${VERSION}-SHA256SUMS"
+          # 排序讓輸出穩定，方便人工比對兩次發版的差異。
+          sha256sum aiterm-host-* | sort -k2 > "aiterm-host-${VERSION}-SHA256SUMS"
+          cat "aiterm-host-${VERSION}-SHA256SUMS"
+          gh release upload "$TAG" "aiterm-host-${VERSION}-SHA256SUMS" --clobber
+
   # Six parallel build jobs cannot each write latest.json — the later writer would
   # drop the earlier writer's platform entries. This job is the single writer: it
   # runs only after every build finishes, composes the full manifest, then flips
   # the release out of draft so users never see a half-populated manifest.
   finalize:
-    needs: build
+    needs: [build, cli-build, cli-checksums]
     runs-on: ubuntu-latest
     # Pauses here until a required reviewer approves, which is the window in
     # which the changelog block in the draft release body gets rewritten by hand.
