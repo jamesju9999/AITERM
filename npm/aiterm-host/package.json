@@ -1,0 +1,17 @@
+{
+  "name": "aiterm-host",
+  "version": "0.0.0",
+  "description": "Headless host that shares a shell to AITerm for AI-driven remote control",
+  "type": "module",
+  "bin": { "aiterm-host": "bin/aiterm-host.js" },
+  "files": ["bin", "lib"],
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git+https://github.com/jamesju9999/AITERM.git" },
+  "optionalDependencies": {
+    "aiterm-host-darwin-arm64": "0.0.0",
+    "aiterm-host-darwin-x64": "0.0.0",
+    "aiterm-host-linux-x64": "0.0.0",
+    "aiterm-host-linux-arm64": "0.0.0",
+    "aiterm-host-win32-x64": "0.0.0"
+  }
+}

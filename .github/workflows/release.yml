@@ -35,11 +35,22 @@ jobs:
         with:
           fetch-depth: 0
 
+      # ubuntu-latest ships a Node.js, but which LTS is on PATH by default can
+      # drift with the runner image. Pin it explicitly rather than assume.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       # These tests have no other CI gate — this repo has no PR-level workflow.
       # Running them here means a broken release_notes.py stops the release
       # before it can write a malformed body, rather than after.
       - name: Test the release-notes helpers
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
+      # npm 入口套件的平台解析。放在 create-release 而不是 cli-npm：這樣它壞掉會
+      # 在發版一開始就擋下來，而不是等到五個平台都建完、人都審核完才發現。
+      - name: Test the npm launcher
+        run: node --test npm/aiterm-host/test/
 
       # 更新項目優先取 CHANGELOG.md 裡對應版本的段落——那份文字隨程式碼一起
       # review，不必每次發版在 GitHub 網頁編輯器裡重打。沒有對應段落時退回
@@ -950,3 +961,81 @@ jobs:
           git diff --cached --quiet && { echo "formula 沒有變化"; exit 0; }
           git commit -m "aiterm-host ${TAG#v}"
           git push
+
+  # npm。
+  #
+  # **`needs: finalize`，理由跟 Homebrew 同一個，而且這裡更嚴重**：npm 的
+  # unpublish 有嚴格限制（超過 72 小時基本上收不回來），所以絕對不能在人還沒
+  # 核准這一版之前就把它推出去。
+  #
+  # 跟 Homebrew 一樣 continue-on-error：這是額外的便利管道，壞掉不該讓整個
+  # release 失敗。
+  cli-npm:
+    needs: finalize
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      # 這個 repo 用 vX.Y.Z-<主題><n>（例如 v1.25.0-dist1）彩排整條 release
+      # 流程。npm 把 1.25.0-dist1 當成合法的 semver prerelease，而
+      # `npm publish` 不加 --tag 的話會把 latest dist-tag 指過去——彩排一跑，
+      # 所有 `npx aiterm-host` 使用者就會拿到彩排版。跟 cli-homebrew 一樣，
+      # 標籤裡只要出現 `-` 就直接跳過，不發佈。
+      - name: Guard against pre-release tags
+        id: guard
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$TAG" == *-* ]]; then
+            echo "標籤 $TAG 含有 '-'，判定為 pre-release／彩排標籤，跳過 npm 發佈。"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download and unpack every CLI artifact
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          mkdir -p artifacts && cd artifacts
+          gh release download "$TAG" --pattern "aiterm-host-${VERSION}-*" --dir .
+          for f in *.tar.gz; do tar xzf "$f"; done
+          for f in *.zip; do unzip -q "$f"; done
+          ls -la
+
+      - name: Build the packages
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: node npm/build-packages.mjs "${TAG#v}" artifacts npm-dist
+
+      - name: Publish
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "沒有設定 NPM_TOKEN，跳過發佈。"
+            echo "（secret 若設在 environment 而不是 repo 層，這裡會展開成空字串——"
+            echo "  用 gh secret list 確認它在 repo 層。）"
+            exit 0
+          fi
+          # **子套件一定要先發。** 入口套件的 optionalDependencies 指向它們，
+          # 順序反過來的話，入口套件發出去的瞬間指向的是還不存在的版本。
+          for p in npm-dist/aiterm-host-*; do
+            (cd "$p" && npm publish --access public)
+          done
+          (cd npm-dist/aiterm-host && npm publish --access public)
