@@ -102,7 +102,9 @@ use commands::{
         share_approve, share_deny, share_discover, share_kick, share_pending,
         share_revoke_control, share_start, share_status, share_stop, share_viewers,
     },
-    share_viewer::{share_viewer_connect, share_viewer_disconnect, share_viewer_send},
+    share_viewer::{
+        share_viewer_connect, share_viewer_disconnect, share_viewer_ready, share_viewer_send,
+    },
     shell::open_url,
     projects::{
         projects_create, projects_list, projects_open, projects_remove, projects_rename,
@@ -478,6 +480,7 @@ pub fn run() {
             share_viewer_connect,
             share_viewer_send,
             share_viewer_disconnect,
+            share_viewer_ready,
             // Shell
             open_url,
             updater_supported,

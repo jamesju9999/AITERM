@@ -57,6 +57,10 @@ struct EndedPayload {
 
 struct Connection {
     keys: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    /// 前端訂閱好之後用這個放行事件 pump。見 `connect` 裡的說明。
+    ///
+    /// `Option` 是因為只能放行一次：`mark_ready` 取走它，重複呼叫是 no-op。
+    ready: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 #[derive(Default)]
@@ -101,7 +105,11 @@ impl ViewerManager {
         let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel::<ViewerEvent>();
         let (keys_tx, keys_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
-        self.connections.lock().insert(id.clone(), Connection { keys: keys_tx });
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
+
+        self.connections
+            .lock()
+            .insert(id.clone(), Connection { keys: keys_tx, ready: Some(ready_tx) });
 
         tokio::spawn(run_viewer_stream(
             handshake.ws,
@@ -113,6 +121,25 @@ impl ViewerManager {
 
         let id_for_pump = id.clone();
         tokio::spawn(async move {
+            // **等前端說「我在聽了」才開始送事件。**
+            //
+            // 這不是保險，是修一個實機抓到的 bug：金鑰模式（CLI host）的核准
+            // 是瞬間的，所以 `Granted` 連同它後面那批畫面重播，會在前端拿到
+            // conn_id、開好分頁、元件掛載並訂閱**之前**就發出去。Tauri 事件
+            // 不重播，那些事件直接消失，畫面永遠停在「等待對方同意」。
+            //
+            // 短碼模式踩不到只是因為人要花好幾秒才按同意——同一個 race 一直
+            // 都在，只是被人類的反應時間蓋住了。這個檔案開頭關於 SAS 為什麼
+            // 走回傳值而不走事件的註解，講的就是同一件事。
+            //
+            // 事件不會因為等待而遺失：`events_rx` 是 unbounded channel，
+            // 在這裡等的期間它會把東西排好。
+            //
+            // `Err` 代表 sender 被丟掉了——連線在前端還沒準備好之前就結束。
+            // 那就什麼都不用送了。
+            if ready_rx.await.is_err() {
+                return;
+            }
             while let Some(ev) = events_rx.recv().await {
                 let id = &id_for_pump;
                 match ev {
@@ -149,6 +176,18 @@ impl ViewerManager {
         });
 
         Ok(Connected { conn_id: id, sas })
+    }
+
+    /// 前端已經訂閱好所有事件，可以開始送了。
+    ///
+    /// 找不到這條連線、或已經放行過，都是安靜的 no-op——前端重複呼叫（例如
+    /// effect 重跑）不該變成錯誤。
+    pub fn mark_ready(&self, id: &str) {
+        let mut conns = self.connections.lock();
+        let Some(conn) = conns.get_mut(id) else { return };
+        if let Some(tx) = conn.ready.take() {
+            let _ = tx.send(());
+        }
     }
 
     /// 把按鍵送給對方。唯讀時上層就不該呼叫——伺服器端還有一道授權檢查。
