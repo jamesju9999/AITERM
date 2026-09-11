@@ -128,6 +128,12 @@ Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {
     }
     [Console]::Write("$([char]27)]133;C$([char]7)")
 }
+
+# Shell 身分：載入時送一次。AITerm 用它判斷這個分頁跑的是不是 Windows
+# PowerShell 5.1（PSEdition 為 Desktop）——5.1 算全形字寬度有誤，dir 這類
+# 表格輸出的每一列都會溢出換行。沒有註冊這個序列處理器的終端機會直接把它
+# 吞掉，不會印出任何東西。
+[Console]::Write("$([char]27)]7000;shell=PowerShell;edition=$($PSVersionTable.PSEdition);version=$($PSVersionTable.PSVersion)$([char]7)")
 "#;
 
 /// Inject OSC 133 shell integration into PowerShell (pwsh.exe / powershell.exe).
@@ -439,6 +445,17 @@ mod tests {
         assert!(
             launch_arg.contains("shell_integration.ps1"),
             "expected the integration script to still be the thing sourced, got: {launch_arg}"
+        );
+    }
+
+    #[test]
+    fn powershell_integration_reports_shell_identity_via_osc_7000() {
+        assert!(
+            POWERSHELL_INTEGRATION_SCRIPT.contains(
+                r#"]7000;shell=PowerShell;edition=$($PSVersionTable.PSEdition);version=$($PSVersionTable.PSVersion)"#
+            ),
+            "expected the script to report its own edition/version once at load time — \
+             前端靠這個分辨 Windows PowerShell 5.1（Desktop）與 PowerShell 7（Core）"
         );
     }
 
