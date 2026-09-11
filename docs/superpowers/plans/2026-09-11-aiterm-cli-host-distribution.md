@@ -1548,10 +1548,19 @@ cd src-tauri && cargo test --workspace
 `cargo test` **一定要加 `--workspace`**：`src-tauri/Cargo.toml` 同時是 package 與
 workspace root，bare `cargo test` 只會跑 `app`。
 
-已知的既有 flaky：Rust 的
-`pty::session::tests::last_exit_code_is_none_for_a_fresh_session`、前端的
-`MailView > refetch on tab reactivation > falls back to the first account when the
-selected one was removed`。兩者都跟這份計畫無關，遇到重跑一次確認即可。
+**已知的既有 flaky（兩邊各一類，都跟這份計畫無關）：**
+
+- **Rust：PTY 資源耗盡。** 不是單一測試，是一整類——實測看過
+  `pty::session::tests::last_exit_code_is_none_for_a_fresh_session` 與
+  `pty::session::tests::marker_count_starts_at_zero_for_a_fresh_session`，後者的
+  錯誤是 `openpty: Os { code: -6 }`。成因是整套並行跑時同時 spawn 大量 PTY 撞到
+  系統上限，**不是測試邏輯問題**（單獨跑 25 次全過，而且這些檔案與 master 逐位元組
+  相同）。頻率約每 12 次一次。
+- **前端：** `MailView > refetch on tab reactivation > falls back to the first
+  account when the selected one was removed`。
+
+遇到就重跑一次確認。**但不要因為「反正它會偶爾紅」就忽略真的回歸**——只有出現在
+上面這份清單裡的名字才算既有 flaky，其他任何紅燈都要當真。
 
 - [ ] **Step 3: Commit**
 
