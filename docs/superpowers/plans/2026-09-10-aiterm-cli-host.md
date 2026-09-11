@@ -3055,6 +3055,11 @@ export function shareViewerConnect(args: ShareViewerConnectArgs): Promise<Viewer
 
 `endReasonText` 對認不得的 reason 有 fallback（:793 的註解說 spec 要求不能出現「未知錯誤」），所以漏掉這一筆不會爆炸——它會**安靜地退化成一句通用訊息**。這正是這一步唯一的失效模式，也是為什麼下面要有一條測試釘住它。
 
+**只有「主控端證明不過」這一種走 `Ended` 事件。** 觀看端自己金鑰錯或沒帶金鑰時，
+`decide_join` 在 `SasCommit` 之前就拒絕，`connect_and_handshake` 直接回 `Err`，
+走的是連線對話框既有的錯誤顯示（跟今天打錯 6 位短碼完全同一條路）。**那一條不用
+做任何事**——不要為它加 `Ended` 對應，加了也永遠不會觸發。
+
 - [ ] **Step 5c: 釘住 reason 對照**
 
 `src/components/RemoteTerminalView/index.test.tsx` 加：

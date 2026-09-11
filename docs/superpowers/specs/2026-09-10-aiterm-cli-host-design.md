@@ -308,7 +308,7 @@ aiterm-host [OPTIONS]
 | 找不到可用 shell | 明確訊息（對應 `PtyError::NoShellAvailable`） |
 | 認證失敗 | host 記 log（來源 IP + 自報名稱），對該來源 IP 做指數退避 |
 | 觀看端驗 `host_auth` 失敗 | 立刻斷線，前端顯示「主機金鑰不符」，**不渲染任何收到的位元組** |
-| 觀看端連 CLI host 卻沒帶金鑰 | 收到 `Ended { Denied }`，前端沿用既有的「主控端拒絕」文案 |
+| 觀看端連 CLI host 卻沒帶金鑰／金鑰錯 | **走連線失敗，不是 `Ended` 事件**（實作時才確認的）。`decide_join` 在 `SasCommit` 之前就回 `Ended { Denied }`，所以 `connect_and_handshake` 直接回 `Err("連線被拒：Denied")`，由 Tauri 指令的錯誤路徑呈現——跟今天打錯 6 位短碼走的是同一條路。這條訊息是寫死在 `viewer.rs:164` 的中文字串、不經過 i18n，但那是**既有行為**（短碼模式一樣），本里程碑不改 |
 
 退避不是為了防爆破（256-bit 金鑰爆破不現實），是為了擋 log flooding 與握手階段的
 資源耗用——這個埠會被丟在公開網路上。
