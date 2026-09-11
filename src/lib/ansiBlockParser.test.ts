@@ -35,4 +35,18 @@ describe("parseAnsiToRenderedLines", () => {
     const totalText = lines[0].spans.map((s) => s.text).join("");
     expect(totalText).toBe("你好world");
   });
+
+  it("drops an auto-wrapped continuation row that holds only padding", async () => {
+    // Windows PowerShell 5.1 pads table rows to width-1 *characters*, but
+    // counts 下午 as 2 cells instead of 4, so the row spills 1 cell of padding
+    // onto the next line (real machine: width 135, every dir row 134 chars).
+    const row = "d 下午 x".padEnd(19, " ");
+    const lines = await parseAnsiToRenderedLines(`${row}\r\nnext\r\n`, 20);
+    expect(lines.map((l) => l.spans.map((s) => s.text).join(""))).toEqual(["d 下午 x", "next"]);
+  });
+
+  it("keeps real blank lines and wrapped continuations that carry content", async () => {
+    const lines = await parseAnsiToRenderedLines(`a\r\n\r\n${"x".repeat(25)}\r\n`, 20);
+    expect(lines.map((l) => l.spans.map((s) => s.text).join(""))).toEqual(["a", "", "x".repeat(20), "x".repeat(5)]);
+  });
 });

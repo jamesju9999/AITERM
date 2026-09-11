@@ -109,6 +109,10 @@ export function readRenderedLines(buffer: IBuffer, startRow: number, endRow: num
       }
     }
 
+    // Padding that spilled past the right edge (e.g. PowerShell 5.1 under-counting
+    // CJK width) — not a line the program actually printed.
+    if (line.isWrapped && lastContentX === -1) continue;
+
     const spans: RenderedSpan[] = [];
     let current: RenderedSpan | null = null;
 
