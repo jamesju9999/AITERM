@@ -29,3 +29,6 @@ hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"] }
 tower-service = "0.3"
 futures-util = "0.3"
 tokio-tungstenite = "0.29"
+
+[dev-dependencies]
+tempfile = "3"

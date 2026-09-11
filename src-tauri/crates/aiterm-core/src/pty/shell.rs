@@ -385,6 +385,51 @@ PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND};__aiterm_appe
 }
 
 #[allow(dead_code)]
+/// 回傳第一個確實存在、而且是檔案的候選路徑。
+///
+/// 從 `find_powershell7` 拆出來是為了可測性：組出候選清單的那一層讀的是
+/// Windows 專屬環境變數，在別的平台一個路徑都產不出來，測不到東西。
+fn first_existing(candidates: &[PathBuf]) -> Option<PathBuf> {
+    candidates.iter().find(|p| p.is_file()).cloned()
+}
+
+/// PowerShell 7 的常見安裝位置——**刻意不看 PATH**。
+///
+/// 這個函式存在的理由就是「PATH 裡找不到」：AITerm 行程的 PATH 在啟動那一
+/// 刻就固定了，使用者裝完 PowerShell 7 之後若沒重開 AITerm，`which_on_path`
+/// 永遠找不到它，於是退回 Windows PowerShell 5.1。實機上真的發生過，而且
+/// 因為畫面上沒有任何地方顯示實際跑的是哪個 shell，查了很久才發現。
+#[cfg(windows)]
+fn powershell7_candidates() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(|d| PathBuf::from(d).join("PowerShell").join("7").join("pwsh.exe"))
+        .collect();
+    if let Some(d) = std::env::var_os("LOCALAPPDATA") {
+        // Microsoft Store 版裝在這裡。
+        out.push(
+            PathBuf::from(d)
+                .join("Microsoft")
+                .join("WindowsApps")
+                .join("pwsh.exe"),
+        );
+    }
+    out
+}
+
+/// 已安裝、但這個行程的 PATH 找不到的 PowerShell 7。非 Windows 一律 `None`。
+pub fn find_powershell7() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        first_existing(&powershell7_candidates())
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 fn which_on_path(program: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
@@ -446,6 +491,31 @@ mod tests {
             launch_arg.contains("shell_integration.ps1"),
             "expected the integration script to still be the thing sourced, got: {launch_arg}"
         );
+    }
+
+    #[test]
+    fn first_existing_picks_the_first_candidate_that_is_a_real_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("nope").join("pwsh.exe");
+        let present = dir.path().join("pwsh.exe");
+        std::fs::write(&present, b"x").expect("write");
+
+        // 順序很重要：不存在的排前面，才能分辨「往下找」與「回傳最後一個」。
+        assert_eq!(
+            first_existing(&[missing.clone(), present.clone()]),
+            Some(present)
+        );
+        assert_eq!(first_existing(&[missing]), None);
+        assert_eq!(first_existing(&[]), None);
+    }
+
+    #[test]
+    fn first_existing_ignores_a_directory_with_the_right_name() {
+        // pwsh.exe 若剛好是個同名資料夾，不該被當成找到了執行檔。
+        let dir = tempfile::tempdir().expect("tempdir");
+        let as_dir = dir.path().join("pwsh.exe");
+        std::fs::create_dir(&as_dir).expect("mkdir");
+        assert_eq!(first_existing(&[as_dir]), None);
     }
 
     #[test]
