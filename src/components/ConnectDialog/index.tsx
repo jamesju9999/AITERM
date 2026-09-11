@@ -33,6 +33,15 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
   const [busy, setBusy] = useState(false);
   const [searching, setSearching] = useState(false);
 
+  // 金鑰模式：位址與金鑰都填了。這種連線**沒有短碼**——身分完全由金鑰決定，
+  // 觀看端連送出去的 `code` 都是空字串（見 `share::viewer` 的 `Join`）。所以
+  // 送出鈕不能再要求短碼滿 6 位，否則金鑰填好了按鈕還是灰的，整條 CLI host
+  // 的路走不通。
+  //
+  // 反過來也要守住：沒填金鑰時，短碼仍然是必填——放寬成「有位址就能按」會讓
+  // 短碼模式在碼還沒打完時就送出去。
+  const keyMode = manualOpen && address.trim() !== "" && key.trim() !== "";
+
   async function connectTo(host: string, port: number, addressLabel: string) {
     try {
       const { connId, sas } = await shareViewerConnect({
@@ -162,7 +171,7 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
           </button>
           <button
             className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
-            disabled={busy || code.length !== 6}
+            disabled={busy || (!keyMode && code.length !== 6)}
             onClick={() => void submit()}
           >
             {t.connect_submit}
