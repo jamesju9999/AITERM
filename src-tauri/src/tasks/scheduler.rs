@@ -71,8 +71,16 @@ async fn prepare_worktree(
     project_storage_path: &std::path::Path,
     task_id: &str,
     task_project_dir: &str,
+    isolate: bool,
 ) -> (std::path::PathBuf, Option<(String, String)>) {
     let fallback = std::path::PathBuf::from(task_project_dir);
+
+    // 關掉隔離時直接走跟「這個目錄不是 git repo」完全一樣的回傳值——那條
+    // 路徑本來就存在而且驗證過，不需要新的邏輯。回傳 None 也讓卡片不會有
+    // worktree_branch，前端的「合併回原分支」按鈕自然不會出現。
+    if !isolate {
+        return (fallback, None);
+    }
 
     match VcsManager::detect_repo(task_project_dir).await {
         Ok(info) if info.vcs_type == VcsType::Git => {}
@@ -151,8 +159,13 @@ impl Dispatcher for RealDispatcher {
             self.bridge.port(),
             self.secrets.get(crate::bridge::auth::BRIDGE_TOKEN_KEY).ok().flatten(),
         );
+        // 卡片有明確覆寫就用它，否則沿用全域設定。刻意在派工當下才解析，
+        // 這樣調整全域設定會影響所有還在等待、又沒有個別覆寫的卡片。
+        let isolate = task
+            .isolate_worktree
+            .unwrap_or(self.config.get().task_board.isolate_with_worktree);
         let (effective_dir, worktree_info) =
-            prepare_worktree(&project.path, &task.id, &task.project_dir).await;
+            prepare_worktree(&project.path, &task.id, &task.project_dir, isolate).await;
         let effective_dir_str = effective_dir.to_string_lossy().into_owned();
         let (tab_id, disp) = dispatch::spawn_and_run(
             &self.app,
@@ -1195,6 +1208,28 @@ mod prepare_worktree_tests {
     }
 
     #[tokio::test]
+    async fn isolation_turned_off_runs_directly_in_the_project_dir() {
+        // 即使是 git repo，關掉隔離就該走跟「非 git repo」完全同一條路徑。
+        let project_dir = tempfile::tempdir().unwrap();
+        init_repo(project_dir.path());
+        let storage_dir = tempfile::tempdir().unwrap();
+
+        let (effective_dir, info) = prepare_worktree(
+            storage_dir.path(),
+            "t3",
+            &project_dir.path().to_string_lossy(),
+            false,
+        ).await;
+
+        assert_eq!(effective_dir, project_dir.path(), "關掉隔離就該直接在專案目錄跑");
+        assert!(info.is_none(), "沒有 worktree 就不該回報 path/branch，否則合併按鈕會冒出來");
+        assert!(
+            !storage_dir.path().join("t3").join("worktree").exists(),
+            "不該留下任何 worktree 目錄"
+        );
+    }
+
+    #[tokio::test]
     async fn non_git_project_dir_is_not_isolated() {
         let project_dir = tempfile::tempdir().unwrap();
         let storage_dir = tempfile::tempdir().unwrap();
@@ -1203,6 +1238,7 @@ mod prepare_worktree_tests {
             storage_dir.path(),
             "t1",
             &project_dir.path().to_string_lossy(),
+            true,
         ).await;
 
         assert_eq!(effective_dir, project_dir.path());
@@ -1219,6 +1255,7 @@ mod prepare_worktree_tests {
             storage_dir.path(),
             "t2",
             &project_dir.path().to_string_lossy(),
+            true,
         ).await;
 
         let (wt_path, wt_branch) = info.expect("git repo 應該要被隔離");
