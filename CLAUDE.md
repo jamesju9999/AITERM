@@ -21,7 +21,11 @@ npm run lint               # ESLint
 
 # Tests
 npm run test               # Frontend Vitest suite
-cd src-tauri && cargo test # Rust unit + integration tests
+cd src-tauri && cargo test --workspace   # Rust unit + integration tests
+                           # 一定要加 --workspace：src-tauri/Cargo.toml 同時是
+                           # package 與 workspace root，bare `cargo test` 只會跑
+                           # `app`，aiterm-core 與 aiterm-host 會被整批跳過而且
+                           # 不會有任何徵兆（1347 條 vs 1582 條）。
 npx tsc -b                 # Type check (what `npm run build` runs)
                            # NOT `tsc --noEmit`: the root tsconfig.json is a
                            # solution file ("files": []), so it checks nothing
