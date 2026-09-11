@@ -703,12 +703,84 @@ jobs:
           cat "aiterm-host-${VERSION}-SHA256SUMS"
           gh release upload "$TAG" "aiterm-host-${VERSION}-SHA256SUMS" --clobber
 
+  # 容器映像。吃 cli-build 已經上傳的 musl 靜態執行檔。
+  cli-container:
+    needs: cli-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the musl binaries from the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          mkdir -p dist
+          for pair in "x86_64-unknown-linux-musl:amd64" "aarch64-unknown-linux-musl:arm64"; do
+            triple="${pair%%:*}"; arch="${pair##*:}"
+            gh release download "$TAG" --pattern "aiterm-host-${VERSION}-${triple}.tar.gz" --dir .
+            tar xzf "aiterm-host-${VERSION}-${triple}.tar.gz"
+            cp "aiterm-host-${VERSION}-${triple}/aiterm-host" "dist/aiterm-host-${arch}"
+          done
+          ls -la dist
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and load for smoke testing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.host
+          platforms: linux/amd64
+          load: true
+          tags: aiterm-host:smoke
+
+      - name: 煙霧測試——**OSC 133 一定要出現**
+        run: |
+          set -euo pipefail
+          docker run --rm aiterm-host:smoke --print-connection
+          # 沒有這兩條的話，做出一個「連得上但 AI 每步卡 60 秒」的映像完全
+          # 不會被發現。
+          docker run --rm --entrypoint bash aiterm-host:smoke -c 'echo $SHELL' | grep -qx '/bin/bash' \
+            || { echo "SHELL 沒有指向 bash——OSC 133 不會被注入"; exit 1; }
+          docker run --rm --entrypoint sh aiterm-host:smoke -c 'test -x /bin/bash' \
+            || { echo "映像裡沒有 bash"; exit 1; }
+          # 沒給金鑰時要能自己產生一組並印出來，不能因為 Dockerfile 裡
+          # `ENV AITERM_HOST_KEY=""` 這個空字串預設值而啟動失敗。
+          docker run --rm aiterm-host:smoke --print-connection 2>&1 | grep -q "金鑰：" \
+            || { echo "沒給金鑰時應該退回產生一組，而不是啟動失敗"; exit 1; }
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.host
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/aiterm-host:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/aiterm-host:latest
+
   # Six parallel build jobs cannot each write latest.json — the later writer would
   # drop the earlier writer's platform entries. This job is the single writer: it
   # runs only after every build finishes, composes the full manifest, then flips
   # the release out of draft so users never see a half-populated manifest.
   finalize:
-    needs: [build, cli-build, cli-checksums]
+    needs: [build, cli-build, cli-checksums, cli-container]
     runs-on: ubuntu-latest
     # Pauses here until a required reviewer approves, which is the window in
     # which the changelog block in the draft release body gets rewritten by hand.
