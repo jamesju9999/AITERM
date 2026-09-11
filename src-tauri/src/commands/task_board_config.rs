@@ -38,6 +38,7 @@ pub(crate) fn apply_editable_task_board_fields(
         notify_desktop_on_finish: incoming.notify_desktop_on_finish,
         notify_telegram_on_finish: incoming.notify_telegram_on_finish,
         stuck_timeout_secs: incoming.stuck_timeout_secs.clamp(60, 21_600),
+        isolate_with_worktree: incoming.isolate_with_worktree,
     }
 }
 
@@ -67,6 +68,7 @@ mod tests {
             notify_desktop_on_finish: true,
             notify_telegram_on_finish: true,
             stuck_timeout_secs: 1200,
+            isolate_with_worktree: true,
         }
     }
 
@@ -83,6 +85,7 @@ mod tests {
             notify_desktop_on_finish: true,
             notify_telegram_on_finish: true,
             stuck_timeout_secs: 1200,
+            isolate_with_worktree: true,
         };
         let merged = apply_editable_task_board_fields(&current(), incoming);
         assert_eq!(merged.max_concurrent, 3);
@@ -104,6 +107,7 @@ mod tests {
             notify_desktop_on_finish: true,
             notify_telegram_on_finish: true,
             stuck_timeout_secs: 1200,
+            isolate_with_worktree: true,
         };
         let merged = apply_editable_task_board_fields(&current(), incoming);
         assert_eq!(
@@ -122,6 +126,7 @@ mod tests {
             notify_desktop_on_finish: true,
             notify_telegram_on_finish: true,
             stuck_timeout_secs: 1200,
+            isolate_with_worktree: true,
         };
         assert_eq!(apply_editable_task_board_fields(&current(), mk(0)).max_concurrent, 1);
         assert_eq!(apply_editable_task_board_fields(&current(), mk(99)).max_concurrent, 16);
@@ -138,6 +143,7 @@ mod tests {
             notify_desktop_on_finish: true,
             notify_telegram_on_finish: true,
             stuck_timeout_secs: 1200,
+            isolate_with_worktree: true,
         };
         assert_eq!(
             apply_editable_task_board_fields(&current(), incoming).claude_command,
@@ -160,6 +166,20 @@ mod tests {
         let merged = apply_editable_task_board_fields(&current(), incoming);
         assert!(!merged.notify_desktop_on_finish);
         assert!(!merged.notify_telegram_on_finish);
+    }
+
+    /// `apply_editable_task_board_fields` 是使用者可編輯欄位的白名單——
+    /// 新欄位若忘了列進去，前端存檔會是靜靜的 no-op：設定頁看起來有變、
+    /// 重開就打回原形，而且不會有任何錯誤。
+    #[test]
+    fn isolate_with_worktree_is_taken_from_incoming() {
+        let mut incoming = current();
+        incoming.isolate_with_worktree = false;
+        assert!(!apply_editable_task_board_fields(&current(), incoming).isolate_with_worktree);
+
+        let mut incoming = current();
+        incoming.isolate_with_worktree = true;
+        assert!(apply_editable_task_board_fields(&current(), incoming).isolate_with_worktree);
     }
 
     #[test]

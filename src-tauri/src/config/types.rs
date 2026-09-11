@@ -230,6 +230,11 @@ pub struct TaskBoardConfig {
     /// （單位：秒）。見 `default_stuck_timeout_secs` 的說明。
     #[serde(default = "default_stuck_timeout_secs")]
     pub stuck_timeout_secs: u32,
+    /// 派工時是否為每張卡片建立獨立的 git worktree。關掉的話 Agent 直接在
+    /// 專案目錄工作——適合信任 Agent 自己操作 git 版控的使用者。單張卡片
+    /// 可以用 `TaskRow::isolate_worktree` 覆寫這個預設值。
+    #[serde(default = "default_true")]
+    pub isolate_with_worktree: bool,
 }
 
 impl Default for TaskBoardConfig {
@@ -242,6 +247,7 @@ impl Default for TaskBoardConfig {
             notify_desktop_on_finish: true,
             notify_telegram_on_finish: true,
             stuck_timeout_secs: default_stuck_timeout_secs(),
+            isolate_with_worktree: true,
         }
     }
 }
@@ -933,6 +939,17 @@ mod tests {
         let c: TaskBoardConfig = serde_json::from_str(json).unwrap();
         assert!(c.notify_desktop_on_finish);
         assert!(c.notify_telegram_on_finish);
+    }
+
+    #[test]
+    fn worktree_isolation_defaults_to_on_and_survives_old_config_files() {
+        // 預設必須是 true——這個功能只是多一個選項，不是改變既有行為。
+        assert!(TaskBoardConfig::default().isolate_with_worktree);
+
+        // 舊的 config.json 沒有這個欄位，反序列化後也要是 true，否則升級 App
+        // 會讓所有既有使用者突然失去隔離。
+        let c: TaskBoardConfig = serde_json::from_str(r#"{"max_concurrent":3}"#).unwrap();
+        assert!(c.isolate_with_worktree, "舊設定檔缺欄位時必須落到 true");
     }
 
     #[test]
