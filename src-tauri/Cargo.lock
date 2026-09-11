@@ -102,10 +102,15 @@ dependencies = [
  "clap",
  "dirs",
  "env_logger",
+ "futures-util",
  "log",
  "portable-pty",
+ "rustls",
+ "serde_json",
  "tempfile",
  "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
 ]
 
 [[package]]
