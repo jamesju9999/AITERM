@@ -20,7 +20,11 @@ use aiterm_core::share::server::HostAuth;
 use aiterm_core::share::ShareServerState;
 
 #[derive(Parser, Debug)]
-#[command(name = "aiterm-host", about = "把一個 shell 開放給 AITerm 遠端連線與 AI 操作")]
+#[command(
+    name = "aiterm-host",
+    version,
+    about = "把一個 shell 開放給 AITerm 遠端連線與 AI 操作"
+)]
 struct Args {
     /// 監聽埠。刻意是固定的預設值而不是隨機——GUI 裡存的連線記著它。
     #[arg(long, default_value_t = 8022)]
@@ -86,20 +90,28 @@ fn apply_shell_override(args: &Args) {
 /// 金鑰的來源。環境變數優先於檔案——容器情境常常只能給環境變數，而在那種
 /// 情況下檔案往往是不存在或唯讀的。
 fn resolve_key(args: &Args) -> Result<(Vec<u8>, String)> {
+    // 空字串視同沒設。容器情境常見的模式是 `ENV AITERM_HOST_KEY=""` 當預設值，
+    // 使用者沒覆寫時這個變數是「有設但是空」而不是「沒設」——如果這裡把空字串
+    // 當成使用者真的給了金鑰，會去 decode_hex("") 拿到 0 bytes，然後在長度檢查
+    // 炸掉，導致容器每次啟動都失敗，跟原本想要的「沒給金鑰就自動產生一組」的
+    // 後備行為完全相反。
     if let Ok(hex) = std::env::var("AITERM_HOST_KEY") {
-        let key = aiterm_core::share::tls::decode_hex(hex.trim())
-            .context("AITERM_HOST_KEY 不是合法的 hex")?;
-        if key.len() != aiterm_core::share::auth::KEY_LEN {
-            anyhow::bail!(
-                "AITERM_HOST_KEY 是 {} bytes，應該是 {}",
-                key.len(),
-                aiterm_core::share::auth::KEY_LEN
-            );
+        let hex = hex.trim();
+        if !hex.is_empty() {
+            let key = aiterm_core::share::tls::decode_hex(hex)
+                .context("AITERM_HOST_KEY 不是合法的 hex")?;
+            if key.len() != aiterm_core::share::auth::KEY_LEN {
+                anyhow::bail!(
+                    "AITERM_HOST_KEY 是 {} bytes，應該是 {}",
+                    key.len(),
+                    aiterm_core::share::auth::KEY_LEN
+                );
+            }
+            if args.key_file.is_some() {
+                eprintln!("警告：同時給了 --key-file 與 AITERM_HOST_KEY，採用環境變數。");
+            }
+            return Ok((key, "AITERM_HOST_KEY".to_string()));
         }
-        if args.key_file.is_some() {
-            eprintln!("警告：同時給了 --key-file 與 AITERM_HOST_KEY，採用環境變數。");
-        }
-        return Ok((key, "AITERM_HOST_KEY".to_string()));
     }
     let path = args.key_path()?;
     let (key, created) = keyfile::load_or_create(&path)?;
@@ -280,5 +292,47 @@ mod tests {
     fn bind_accepts_loopback() {
         let args = Args::parse_from(["aiterm-host", "--bind", "127.0.0.1"]);
         assert_eq!(args.bind, std::net::Ipv4Addr::LOCALHOST);
+    }
+
+    #[test]
+    fn an_empty_but_set_key_env_var_falls_back_to_the_key_file() {
+        // 容器情境常見的模式是 `ENV AITERM_HOST_KEY=""` 當預設值——變數是
+        // 「有設但是空」，不是「沒設」。resolve_key 曾經把空字串當成使用者
+        // 真的給了金鑰去 decode_hex("")，拿到 0 bytes 後在長度檢查炸掉，
+        // 導致使用者忘記覆寫這個變數時容器每次啟動都失敗，而不是照預期
+        // 退回去產生一把新金鑰。這支測試直接證明「有設但是空」跟「沒設」
+        // 走的是同一條路徑。
+        //
+        // 用 --key-file 指到 tempdir，避免碰到使用者真正的金鑰檔位置，
+        // 並確保這支測試不會跟其他測試搶同一個檔案。
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("key");
+
+        std::env::set_var("AITERM_HOST_KEY", "");
+        let args = Args::parse_from([
+            "aiterm-host",
+            "--key-file",
+            key_path.to_str().unwrap(),
+        ]);
+        let result = resolve_key(&args);
+        std::env::remove_var("AITERM_HOST_KEY");
+
+        let (key, source) = result.expect("空字串應該退回金鑰檔，不是報錯");
+        assert_eq!(key.len(), aiterm_core::share::auth::KEY_LEN);
+        assert_eq!(source, key_path.display().to_string());
+        assert!(key_path.exists(), "退回的路徑應該真的產生了金鑰檔");
+    }
+
+    #[test]
+    fn the_version_flag_reports_the_crate_version() {
+        // 發版時 CI 會把 tag 的版本寫進這個 crate 的 Cargo.toml。使用者回報問題時
+        // 第一件要問的就是「你跑的是哪一版」，所以這支一定要有，而且要跟 release
+        // 的 tag 對得起來。
+        let err = Args::try_parse_from(["aiterm-host", "--version"]).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains(env!("CARGO_PKG_VERSION")),
+            "--version 要印出 crate 版本，got: {text}"
+        );
     }
 }

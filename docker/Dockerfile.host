@@ -1,0 +1,32 @@
+# AITerm CLI Host。
+#
+# 吃 CI 已經建好的 musl 靜態執行檔，不在容器裡編——編的話要拉整個 Rust 工具鏈，
+# 而那份執行檔本來就已經是這個 release 的產物了。
+FROM alpine:3.20
+
+# **bash 不是可選的。** AITerm 的 shell integration（送出 OSC 133 標記，讓遠端
+# AI 判斷每一步跑完沒）**只對路徑結尾是 bash 或 zsh 的 shell 注入**——見
+# aiterm-core 的 pty/shell.rs。alpine 預設只有 busybox 的 /bin/sh，用它的話
+# AI agent 迴圈的每一步都會退回 60 秒逾時，而且不會有任何錯誤訊息。
+#
+# 實測：在 alpine 裡用 busybox sh 跑 OSC 133 端到端測試（cli_host.rs 的
+# a_command_run_through_the_viewer_produces_an_osc_133_d_marker）會等 15 秒後
+# FAILED；同一支測試把 $SHELL 指到 bash 就 PASS（2026-09-11）。
+RUN apk add --no-cache bash ca-certificates
+ENV SHELL=/bin/bash
+
+ARG TARGETARCH
+COPY dist/aiterm-host-${TARGETARCH} /usr/local/bin/aiterm-host
+RUN chmod +x /usr/local/bin/aiterm-host
+
+# 金鑰用環境變數給——容器裡的檔案系統通常是唯讀或用完即丟的。
+# 不給的話 aiterm-host 會在 ~/.config 產生一組新的，而那組會隨容器消失。
+#
+# 這裡故意留空字串當預設值：resolve_key()（main.rs）把「有設但是空」跟
+# 「沒設」視為同一種情況，兩者都會退回去產生/讀取金鑰檔，所以聲明這個
+# ENV 只是把可用的變數名稱寫進 `docker inspect`，不會讓沒帶 -e 的啟動失敗。
+ENV AITERM_HOST_KEY=""
+
+EXPOSE 8022
+ENTRYPOINT ["/usr/local/bin/aiterm-host"]
+CMD ["--bind", "0.0.0.0", "--port", "8022"]

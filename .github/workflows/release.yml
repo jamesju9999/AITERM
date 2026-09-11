@@ -35,11 +35,26 @@ jobs:
         with:
           fetch-depth: 0
 
+      # ubuntu-latest ships a Node.js, but which LTS is on PATH by default can
+      # drift with the runner image. Pin it explicitly rather than assume.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       # These tests have no other CI gate — this repo has no PR-level workflow.
       # Running them here means a broken release_notes.py stops the release
       # before it can write a malformed body, rather than after.
       - name: Test the release-notes helpers
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
+      # npm 入口套件的平台解析。放在 create-release 而不是 cli-npm：這樣它壞掉會
+      # 在發版一開始就擋下來，而不是等到五個平台都建完、人都審核完才發現。
+      - name: Test the npm launcher
+        # 用 glob 讓 shell 展開，而不是把目錄丟給 node：`node --test <目錄>` 在
+        # Node 22 之後會把目錄當成模組路徑、直接 MODULE_NOT_FOUND（實測 v25 如此），
+        # 只有 Node 20 還會自己去目錄裡找測試。之後有人把這裡升到 22 LTS 時，
+        # 目錄形式會安靜地壞掉。
+        run: node --test npm/aiterm-host/test/*.test.mjs
 
       # 更新項目優先取 CHANGELOG.md 裡對應版本的段落——那份文字隨程式碼一起
       # review，不必每次發版在 GitHub 網頁編輯器裡重打。沒有對應段落時退回
@@ -331,6 +346,16 @@ jobs:
           cargo = cargo.replace(/^version = ".*"/m, `version = "${version}"`);
           fs.writeFileSync('src-tauri/Cargo.toml', cargo);
 
+          // aiterm-host 是獨立 crate，有自己的版本號。不同步的話發出去的執行檔
+          // `--version` 會回報 0.1.0，跟 release 的 tag 對不起來。
+          // 用 `^version = ` 搭配 m 旗標、不加 g：只換第一個 match，也就是
+          // [package] 區塊那一行，不會誤傷任何相依項。
+          const hostManifest = 'src-tauri/crates/aiterm-host/Cargo.toml';
+          let host = fs.readFileSync(hostManifest, 'utf8');
+          host = host.replace(/^version = ".*"/m, `version = "${version}"`);
+          fs.writeFileSync(hostManifest, host);
+          console.log(`aiterm-host version synced to ${version}`);
+
           console.log(`Version synced to ${version}`);
 
       - name: Install frontend dependencies
@@ -540,12 +565,238 @@ jobs:
           includeUpdaterJson: false
           args: --target aarch64-unknown-linux-gnu --bundles deb
 
+  # CLI host 的執行檔。刻意跟 app 的 `build` job 分開，而不是塞進它的矩陣：
+  #
+  #   1. 目標不一樣。這裡有兩個 musl（靜態，給 alpine/distroless/老 glibc）和
+  #      x86_64-apple-darwin（Intel Mac），app 的矩陣三個都沒有。
+  #   2. 這個 job **不需要** uv／db2 sidecar。實測確認：把 src-tauri/binaries
+  #      移走後 `cargo check -p aiterm-host` 照樣過，而 `cargo check -p app` 會
+  #      失敗於 "resource path 'binaries/uv-...' doesn't exist"。跑 setup 腳本
+  #      只是白白多好幾分鐘。
+  #   3. 分開之後，CLI 這邊壞掉不會拖垮 app 的發版。
+  cli-build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            archive: tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: cli-${{ matrix.target }}
+
+      - name: Install musl toolchain
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Sync version from tag
+        shell: node {0}
+        run: |
+          const fs = require('fs');
+          const version = process.env.GITHUB_REF_NAME.replace(/^v/, '');
+          const p = 'src-tauri/crates/aiterm-host/Cargo.toml';
+          let s = fs.readFileSync(p, 'utf8');
+          s = s.replace(/^version = ".*"/m, `version = "${version}"`);
+          fs.writeFileSync(p, s);
+          console.log(`aiterm-host version synced to ${version}`);
+
+      - name: Build
+        working-directory: src-tauri
+        run: cargo build -p aiterm-host --release --target ${{ matrix.target }}
+
+      - name: 真的執行一次
+        # 編得過不代表跑得動——musl 上 ring 的連結問題有時候要到執行才爆。
+        # 五個目標裡只有 x86_64-apple-darwin 是交叉編譯（runner 是 arm mac），
+        # 跳過它。
+        if: matrix.target != 'x86_64-apple-darwin'
+        working-directory: src-tauri
+        shell: bash
+        run: ./target/${{ matrix.target }}/release/aiterm-host${{ matrix.os == 'windows-latest' && '.exe' || '' }} --print-connection
+
+      - name: install.ps1 至少要解析得過
+        # install.ps1 是給 Windows 使用者 `irm ... | iex` 的，但寫它的機器上沒有
+        # pwsh，它從來沒被任何東西解析過。這一格剛好跑在有 pwsh 的 runner 上，
+        # 只做語法解析、不執行（執行會去抓 releases/latest，那時這一版還是 draft）。
+        # 語法錯誤會讓每個 Windows 使用者的第一步就失敗，而且錯誤訊息是一段
+        # PowerShell parser 的 stack，跟「安裝」完全扯不上關係。
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD\scripts\install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.ToString() }
+            exit 1
+          }
+          Write-Host "install.ps1 parses cleanly"
+
+      - name: Package
+        working-directory: src-tauri
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          NAME="aiterm-host-${VERSION}-${{ matrix.target }}"
+          BIN="aiterm-host${{ matrix.os == 'windows-latest' && '.exe' || '' }}"
+          mkdir -p "dist/$NAME"
+          cp "target/${{ matrix.target }}/release/$BIN" "dist/$NAME/"
+          cp ../README.md "dist/$NAME/" 2>/dev/null || true
+          cd dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "$NAME.zip" "$NAME" >/dev/null
+          else
+            tar czf "$NAME.tar.gz" "$NAME"
+          fi
+          ls -la
+
+      - name: Upload to the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          NAME="aiterm-host-${VERSION}-${{ matrix.target }}"
+          cd src-tauri/dist
+          gh release upload "$TAG" "$NAME.${{ matrix.archive }}" --clobber
+
+  # 所有執行檔上傳完之後，統一產一份 SHA256SUMS。
+  #
+  # 刻意獨立一個 job 而不是在每個平台各產一份：五份各自的 .sha256 檔案沒辦法讓
+  # 使用者一次驗完，而安裝腳本要的是「一份清單、一次下載、比對其中一行」。
+  cli-checksums:
+    needs: cli-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download every CLI asset and checksum them
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          mkdir sums && cd sums
+          gh release download "$TAG" --pattern "aiterm-host-${VERSION}-*" --dir .
+          # **把 SHA256SUMS 自己排除掉。** 這個 job 重跑時（例如某個平台
+          # 重試）release 上已經有一份舊的 SHA256SUMS，而它也符合上面的
+          # pattern——不排除的話會把自己的雜湊算進新的清單裡，安裝腳本用
+          # grep 找檔名時就會撈到兩行，`sha256sum -c` 直接失敗。
+          rm -f "aiterm-host-${VERSION}-SHA256SUMS"
+          # 排序讓輸出穩定，方便人工比對兩次發版的差異。
+          sha256sum aiterm-host-* | sort -k2 > "aiterm-host-${VERSION}-SHA256SUMS"
+          cat "aiterm-host-${VERSION}-SHA256SUMS"
+          gh release upload "$TAG" "aiterm-host-${VERSION}-SHA256SUMS" --clobber
+
+  # 容器映像——**只建置與煙霧測試，不推**。
+  #
+  # 刻意拆成兩個 job：這一個在人核准之前跑、finalize 要等它，所以映像壞掉會
+  # 擋住發版；真正推到 ghcr 的是 `cli-container-push`，掛在 finalize 之後。
+  #
+  # 原本這裡直接 build+push，而且無條件推 `:latest`。這個 repo 的演練慣例是
+  # 推 vX.Y.Z-<主題><n> 然後**不核准 finalize**，讓 release 維持 draft——
+  # 照那個慣例 npm 與 Homebrew 都不會跑，但這個 job 在 finalize 之前，所以
+  # 一次演練就會把公開的 `:latest` 蓋成演練版。就算是正式版，也是在人核准
+  # 之前就對外發佈了，跟 npm／Homebrew 的原則自相矛盾。
+  cli-container:
+    needs: cli-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # **一定要 `contents: write`，`read` 不夠。** 這個 job 要從 draft release 抓
+    # 執行檔，而 draft release 只有具寫入權限的 token 看得到——`contents: read`
+    # 的 token 查 draft 會拿到 404，`gh` 把它回報成 "release not found"。
+    #
+    # 這是 v1.25.0-dist1 演練時實際撞到的：同一條 `gh release download` 在
+    # cli-checksums（繼承 workflow 層級的 contents: write）成功、在這裡
+    # （當時寫 contents: read）失敗。本機測試抓不到，因為本機用的是自己建出來
+    # 的執行檔，根本不會去讀 draft。
+    #
+    # 不需要 `packages: write`——這個 job 不推映像，推送在 cli-container-push。
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the musl binaries from the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          mkdir -p dist
+          for pair in "x86_64-unknown-linux-musl:amd64" "aarch64-unknown-linux-musl:arm64"; do
+            triple="${pair%%:*}"; arch="${pair##*:}"
+            gh release download "$TAG" --pattern "aiterm-host-${VERSION}-${triple}.tar.gz" --dir .
+            tar xzf "aiterm-host-${VERSION}-${triple}.tar.gz"
+            cp "aiterm-host-${VERSION}-${triple}/aiterm-host" "dist/aiterm-host-${arch}"
+          done
+          ls -la dist
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and load for smoke testing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.host
+          platforms: linux/amd64
+          load: true
+          tags: aiterm-host:smoke
+
+      - name: 煙霧測試——**OSC 133 一定要出現**
+        run: |
+          set -euo pipefail
+          docker run --rm aiterm-host:smoke --print-connection
+          # 沒有這兩條的話，做出一個「連得上但 AI 每步卡 60 秒」的映像完全
+          # 不會被發現。
+          docker run --rm --entrypoint bash aiterm-host:smoke -c 'echo $SHELL' | grep -qx '/bin/bash' \
+            || { echo "SHELL 沒有指向 bash——OSC 133 不會被注入"; exit 1; }
+          docker run --rm --entrypoint sh aiterm-host:smoke -c 'test -x /bin/bash' \
+            || { echo "映像裡沒有 bash"; exit 1; }
+          # 沒給金鑰時要能自己產生一組並印出來，不能因為 Dockerfile 裡
+          # `ENV AITERM_HOST_KEY=""` 這個空字串預設值而啟動失敗。
+          docker run --rm aiterm-host:smoke --print-connection 2>&1 | grep -q "金鑰：" \
+            || { echo "沒給金鑰時應該退回產生一組，而不是啟動失敗"; exit 1; }
+
+
   # Six parallel build jobs cannot each write latest.json — the later writer would
   # drop the earlier writer's platform entries. This job is the single writer: it
   # runs only after every build finishes, composes the full manifest, then flips
   # the release out of draft so users never see a half-populated manifest.
   finalize:
-    needs: build
+    needs: [build, cli-build, cli-checksums, cli-container]
     runs-on: ubuntu-latest
     # Pauses here until a required reviewer approves, which is the window in
     # which the changelog block in the draft release body gets rewritten by hand.
@@ -644,3 +895,222 @@ jobs:
         run: |
           gh release upload "$TAG" latest.json --clobber
           gh release edit "$TAG" --draft=false --latest
+
+  # 把容器映像推到 ghcr。**`needs: finalize`**，理由跟 npm／Homebrew 同一個：
+  # 對外發佈要等人核准這一版之後。建置與煙霧測試已經在 `cli-container` 做過了。
+  cli-container-push:
+    needs: finalize
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # 跟 cli-homebrew、cli-npm 用同一套判斷：標籤裡有 `-` 就是演練版，
+      # 不推。三條對外管道的規則必須一致——改一邊忘了另一邊，就會有一條
+      # 管道把演練版發出去。
+      - name: Guard against pre-release tags
+        id: guard
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$TAG" == *-* ]]; then
+            echo "標籤 $TAG 含有 '-'，判定為 pre-release／彩排標籤，不推容器映像。"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.guard.outputs.skip != 'true'
+
+      - name: Fetch the musl binaries from the release
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          mkdir -p dist
+          for pair in "x86_64-unknown-linux-musl:amd64" "aarch64-unknown-linux-musl:arm64"; do
+            triple="${pair%%:*}"; arch="${pair##*:}"
+            gh release download "$TAG" --pattern "aiterm-host-${VERSION}-${triple}.tar.gz" --dir .
+            tar xzf "aiterm-host-${VERSION}-${triple}.tar.gz"
+            cp "aiterm-host-${VERSION}-${triple}/aiterm-host" "dist/aiterm-host-${arch}"
+          done
+
+      - uses: docker/setup-qemu-action@v3
+        if: steps.guard.outputs.skip != 'true'
+      - uses: docker/setup-buildx-action@v3
+        if: steps.guard.outputs.skip != 'true'
+
+      - uses: docker/login-action@v3
+        if: steps.guard.outputs.skip != 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        if: steps.guard.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.host
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/aiterm-host:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/aiterm-host:latest
+
+  # 更新 Homebrew tap。
+  #
+  # **`needs: finalize` 不是 `cli-checksums`。** `finalize` 掛著
+  # `environment: release-approval`，會停下來等人審核——那正是「這一版到底要不要
+  # 發出去」的決定點。對外發佈是不可逆的（Homebrew 使用者一 `brew update` 就會
+  # 拿到），所以必須等在人點頭之後，不能跟審核並行。
+  #
+  # 這個 job 失敗不該擋住 release：tap 是額外的便利管道，而 release 本身
+  # （含 Releases 的執行檔與安裝腳本）已經是完整可用的。
+  cli-homebrew:
+    needs: finalize
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      # 這個 repo 用 vX.Y.Z-<主題><n>（例如 v1.25.0-dist1）彩排整條 release
+      # 流程。彩排版不是要給所有 Homebrew 使用者的正式版——標籤裡只要出現
+      # `-` 就代表這是 pre-release/彩排，直接跳過，不動 tap。
+      - name: Guard against pre-release tags
+        id: guard
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$TAG" == *-* ]]; then
+            echo "標籤 $TAG 含有 '-'，判定為 pre-release／彩排標籤，跳過 tap 更新。"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Render the formula
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          gh release download "$TAG" --pattern "aiterm-host-${VERSION}-SHA256SUMS" --dir .
+          python3 scripts/bump_homebrew_formula.py \
+            "$VERSION" "aiterm-host-${VERSION}-SHA256SUMS" "${{ github.repository }}" \
+            > aiterm-host.rb
+          cat aiterm-host.rb
+
+      - name: Push to the tap
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "沒有設定 HOMEBREW_TAP_TOKEN，跳過 tap 更新。"
+            echo "（secret 若設在 environment 而不是 repo 層，這裡會展開成空字串——"
+            echo "  用 gh secret list 確認它在 repo 層。）"
+            exit 0
+          fi
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/jamesju9999/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp aiterm-host.rb tap/Formula/aiterm-host.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/aiterm-host.rb
+          git diff --cached --quiet && { echo "formula 沒有變化"; exit 0; }
+          git commit -m "aiterm-host ${TAG#v}"
+          git push
+
+  # npm。
+  #
+  # **`needs: finalize`，理由跟 Homebrew 同一個，而且這裡更嚴重**：npm 的
+  # unpublish 有嚴格限制（超過 72 小時基本上收不回來），所以絕對不能在人還沒
+  # 核准這一版之前就把它推出去。
+  #
+  # 跟 Homebrew 一樣 continue-on-error：這是額外的便利管道，壞掉不該讓整個
+  # release 失敗。
+  cli-npm:
+    needs: finalize
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      # 這個 repo 用 vX.Y.Z-<主題><n>（例如 v1.25.0-dist1）彩排整條 release
+      # 流程。npm 把 1.25.0-dist1 當成合法的 semver prerelease，而
+      # `npm publish` 不加 --tag 的話會把 latest dist-tag 指過去——彩排一跑，
+      # 所有 `npx aiterm-host` 使用者就會拿到彩排版。跟 cli-homebrew 一樣，
+      # 標籤裡只要出現 `-` 就直接跳過，不發佈。
+      - name: Guard against pre-release tags
+        id: guard
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$TAG" == *-* ]]; then
+            echo "標籤 $TAG 含有 '-'，判定為 pre-release／彩排標籤，跳過 npm 發佈。"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download and unpack every CLI artifact
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          mkdir -p artifacts && cd artifacts
+          gh release download "$TAG" --pattern "aiterm-host-${VERSION}-*" --dir .
+          for f in *.tar.gz; do tar xzf "$f"; done
+          for f in *.zip; do unzip -q "$f"; done
+          ls -la
+
+      - name: Build the packages
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: node npm/build-packages.mjs "${TAG#v}" artifacts npm-dist
+
+      - name: Publish
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "沒有設定 NPM_TOKEN，跳過發佈。"
+            echo "（secret 若設在 environment 而不是 repo 層，這裡會展開成空字串——"
+            echo "  用 gh secret list 確認它在 repo 層。）"
+            exit 0
+          fi
+          # **子套件一定要先發。** 入口套件的 optionalDependencies 指向它們，
+          # 順序反過來的話，入口套件發出去的瞬間指向的是還不存在的版本。
+          for p in npm-dist/aiterm-host-*; do
+            (cd "$p" && npm publish --access public)
+          done
+          (cd npm-dist/aiterm-host && npm publish --access public)

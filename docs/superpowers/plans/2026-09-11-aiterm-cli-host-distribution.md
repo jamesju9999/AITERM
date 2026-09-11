@@ -1025,7 +1025,7 @@ class AitermHost < Formula
   desc "Headless host that shares a shell to AITerm for AI-driven remote control"
   homepage "https://github.com/{repo}"
   version "{version}"
-  license "MIT"
+  license "Apache-2.0"
 
   on_macos do
     on_arm do
@@ -1160,6 +1160,11 @@ git commit -m "feat(dist): 發版時自動更新 Homebrew tap 的 formula"
 ## Task 7: npm 套件
 
 套件名是 **`aiterm-host`**（`aiterm` 已被別人佔用，實測 `aiterm-host` 可用）。
+
+**授權是 `Apache-2.0`，不是 MIT。** repo 根目錄的 `LICENSE` 是 Apache License 2.0
+（`src-tauri/Cargo.toml` 的 `license` 是空字串、`package.json` 沒有這個欄位，但那不代表
+沒有授權——`LICENSE` 檔才是作者實際選擇的）。這份計畫的初版寫成 MIT，Task 6 實作時
+才發現。宣稱一個作者沒選過的授權是實質問題，不是字面問題。
 走 esbuild 那套：一個入口套件用 `optionalDependencies` 指向五個分平台子套件，
 npm 只會裝符合當前平台的那一個。
 
@@ -1182,7 +1187,7 @@ secret `NPM_TOKEN`。沒有的話這個 job 會安靜跳過（跟 Homebrew 同�
 // 平台解析的測試。用 node 內建的 test runner，不拉任何相依——這個套件
 // 本身要盡量輕，它只是一個下載器的殼。
 //
-// 執行：node --test npm/aiterm-host/test/
+// 執行：node --test npm/aiterm-host/test/*.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { packageForPlatform, binaryName } from "../lib/resolve.mjs";
@@ -1227,7 +1232,7 @@ test("Windows 上的執行檔名要帶 .exe", () => {
 - [ ] **Step 2: 跑測試確認會紅**
 
 ```bash
-node --test npm/aiterm-host/test/
+node --test npm/aiterm-host/test/*.test.mjs
 ```
 
 預期：FAIL（`lib/resolve.mjs` 不存在）。
@@ -1306,7 +1311,7 @@ process.exit(result.status ?? 1);
   "type": "module",
   "bin": { "aiterm-host": "bin/aiterm-host.js" },
   "files": ["bin", "lib"],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": { "type": "git", "url": "git+https://github.com/jamesju9999/AITERM.git" },
   "optionalDependencies": {
     "aiterm-host-darwin-arm64": "0.0.0",
@@ -1324,7 +1329,7 @@ process.exit(result.status ?? 1);
 - [ ] **Step 4: 跑測試**
 
 ```bash
-node --test npm/aiterm-host/test/
+node --test npm/aiterm-host/test/*.test.mjs
 ```
 
 預期：七條全 PASS。
@@ -1393,7 +1398,7 @@ for (const t of TARGETS) {
         os: [t.os],
         cpu: [t.cpu],
         files: ["bin"],
-        license: "MIT",
+        license: "Apache-2.0",
         repository: { type: "git", url: "git+https://github.com/jamesju9999/AITERM.git" },
       },
       null,
@@ -1539,7 +1544,7 @@ aiterm-host --bind 0.0.0.0 --port 8022
 
 ```bash
 python3 -m unittest discover -s scripts -p 'test_*.py' -v
-node --test npm/aiterm-host/test/
+node --test npm/aiterm-host/test/*.test.mjs
 npx tsc -b
 npm run test
 cd src-tauri && cargo test --workspace
@@ -1548,10 +1553,19 @@ cd src-tauri && cargo test --workspace
 `cargo test` **一定要加 `--workspace`**：`src-tauri/Cargo.toml` 同時是 package 與
 workspace root，bare `cargo test` 只會跑 `app`。
 
-已知的既有 flaky：Rust 的
-`pty::session::tests::last_exit_code_is_none_for_a_fresh_session`、前端的
-`MailView > refetch on tab reactivation > falls back to the first account when the
-selected one was removed`。兩者都跟這份計畫無關，遇到重跑一次確認即可。
+**已知的既有 flaky（兩邊各一類，都跟這份計畫無關）：**
+
+- **Rust：PTY 資源耗盡。** 不是單一測試，是一整類——實測看過
+  `pty::session::tests::last_exit_code_is_none_for_a_fresh_session` 與
+  `pty::session::tests::marker_count_starts_at_zero_for_a_fresh_session`，後者的
+  錯誤是 `openpty: Os { code: -6 }`。成因是整套並行跑時同時 spawn 大量 PTY 撞到
+  系統上限，**不是測試邏輯問題**（單獨跑 25 次全過，而且這些檔案與 master 逐位元組
+  相同）。頻率約每 12 次一次。
+- **前端：** `MailView > refetch on tab reactivation > falls back to the first
+  account when the selected one was removed`。
+
+遇到就重跑一次確認。**但不要因為「反正它會偶爾紅」就忽略真的回歸**——只有出現在
+上面這份清單裡的名字才算既有 flaky，其他任何紅燈都要當真。
 
 - [ ] **Step 3: Commit**
 
@@ -1611,9 +1625,24 @@ aiterm-host --print-connection
 
 - [ ] **Step 5: 驗容器**
 
+**演練不會推映像到 ghcr，這是刻意的。** 容器被拆成兩個 job：`cli-container`
+（審核前、只建置與煙霧測試、不推）與 `cli-container-push`（`needs: finalize`，
+而且演練 tag 會被 guard 跳過）。所以演練時要看的是 `cli-container` 的煙霧測試
+有沒有過：
+
 ```bash
-docker run --rm ghcr.io/jamesju9999/aiterm-host:v1.25.0-dist1 --print-connection
-docker run --rm --entrypoint sh ghcr.io/jamesju9999/aiterm-host:v1.25.0-dist1 -c 'test -x /bin/bash && echo bash ok'
+gh run list --workflow=release.yml --limit 1
+gh run view <run-id> --log --job <cli-container 的 job id> | grep -E "OSC 133|bash|金鑰"
+```
+
+預期看到三條煙霧測試全部通過，且**沒有任何 push 相關的輸出**。
+
+ghcr 的實際推送要到第一次正式發版（不含 `-` 的 tag，且核准了 finalize）才會
+發生，那時再驗：
+
+```bash
+docker run --rm ghcr.io/jamesju9999/aiterm-host:latest --print-connection
+docker run --rm --entrypoint sh ghcr.io/jamesju9999/aiterm-host:latest -c 'test -x /bin/bash && echo bash ok'
 ```
 
 - [ ] **Step 6: 清掉演練用的 tag 與 release**
@@ -1624,7 +1653,7 @@ git push --delete origin v1.25.0-dist1
 git tag -d v1.25.0-dist1
 ```
 
-ghcr 上那個 tag 也要刪（在 GitHub 的 Packages 頁面，或 `gh api` 刪 package version）。
+（演練不會推容器映像，所以 ghcr 上沒有東西要清。）
 
 ---
 
