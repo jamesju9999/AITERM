@@ -2294,6 +2294,9 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // 必須在建立任何 PTY 之前——`default_shell()` 讀的是這個行程的環境。
+    apply_shell_override(&args);
+
     let pty = Arc::new(PtyManager::new());
     let session_id = "cli".to_string();
     let (cols, rows) = (120u16, 40u16);
@@ -2304,7 +2307,7 @@ async fn main() -> Result<()> {
         PtySize { rows, cols, pixel_width: 0, pixel_height: 0 },
         session_id.clone(),
         args.cwd.clone(),
-        shell_override_envs(&args),
+        Vec::new(),
         Vec::new(),
         |_chunk| {},
     )
@@ -2343,16 +2346,20 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// `--shell` 的實作：`pty::shell` 的偵測是看 `SHELL`／`COMSPEC` 這些環境
-/// 變數的，所以覆寫的方式就是覆寫那個變數，而不是另外開一條 spawn 路徑。
-fn shell_override_envs(args: &Args) -> Vec<(String, String)> {
-    match &args.shell {
-        #[cfg(unix)]
-        Some(p) => vec![("SHELL".to_string(), p.display().to_string())],
-        #[cfg(windows)]
-        Some(p) => vec![("COMSPEC".to_string(), p.display().to_string())],
-        None => Vec::new(),
-    }
+/// `--shell` 的實作：覆寫**這個行程自己**的 `SHELL`／`COMSPEC`。
+///
+/// **不能用 `ShellSpec.envs` 做這件事**（我第一版計畫就是這樣寫的，是錯的）：
+/// 那些是給子行程的環境變數，而 `pty::shell::unix_default_shell()` 讀的是
+/// `std::env::var("SHELL")`——呼叫端行程自己的環境，而且它在 `envs` 被套用
+/// **之前**就已經執行完了。用 envs 的話 `--shell` 會完全無效，且零錯誤訊息。
+///
+/// 改自己的行程環境在這裡是安全的：`aiterm-host` 是單一用途的 CLI，沒有其他
+/// 執行緒在讀這個變數，而且子行程繼承到被覆寫的 `SHELL` 正是我們要的。
+/// **必須在建立任何 PTY 之前呼叫。**
+fn apply_shell_override(args: &Args) {
+    let Some(p) = &args.shell else { return };
+    let key = if cfg!(windows) { "COMSPEC" } else { "SHELL" };
+    std::env::set_var(key, p);
 }
 
 fn print_connection(args: &Args, key_hex: &str, key_source: &str) {
