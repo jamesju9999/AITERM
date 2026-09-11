@@ -85,6 +85,15 @@ pub fn pty_get_shell_type(
     })
 }
 
+/// 已安裝但不在 AITerm 行程 PATH 上的 PowerShell 7 路徑。
+///
+/// 前端只在確認這個分頁跑的是 Windows PowerShell 5.1 之後才呼叫，所以正常
+/// 情況（7.x、或非 Windows）完全不會執行到這裡。
+#[tauri::command]
+pub fn detect_powershell7() -> Option<String> {
+    aiterm_core::pty::shell::find_powershell7().map(|p| p.to_string_lossy().into_owned())
+}
+
 /// Normalize a path to use forward slashes on all platforms.
 fn norm(p: impl AsRef<std::path::Path>) -> String {
     p.as_ref().to_string_lossy().replace('\\', "/")

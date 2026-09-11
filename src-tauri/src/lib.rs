@@ -134,6 +134,7 @@ use enterprise::agent::EnterpriseTaskState;
 use enterprise::task_runner::VcsCredentialManager;
 use mail::manager::MailState;
 use pty::commands::{
+    detect_powershell7,
     pty_close, pty_create, pty_get_cwd, pty_get_recent_output, pty_get_shell_type,
     pty_list_dir, pty_read_file, pty_resize, pty_write, read_file_as_bytes, write_text_file,
     write_pasted_file, list_drives,
@@ -368,6 +369,7 @@ pub fn run() {
             chatgpt_web::session::chatgpt_web_login,
             chatgpt_web::session::chatgpt_web_models,
             // PTY
+            detect_powershell7,
             pty_create,
             pty_write,
             pty_resize,
