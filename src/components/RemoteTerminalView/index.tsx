@@ -5,6 +5,7 @@ import {
   onShareViewerData,
   onShareViewerEnded,
   onShareViewerGranted,
+  shareViewerReady,
   onShareViewerResync,
   shareViewerDisconnect,
   shareViewerSend,
@@ -440,6 +441,14 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
         remoteAiPanelRef.current?.abort(tRef.current.remote_agent_stopped_ended);
       }),
     );
+
+    // 每一個 listener 都註冊完了，才告訴後端可以開始送。
+    //
+    // **順序是這裡唯一重要的事。** 主控端瞬間核准時（CLI host 的金鑰模式），
+    // `Granted` 跟它後面那批畫面重播會在這個元件掛載之前就備妥；Tauri 事件
+    // 不重播，所以只要後端早一步開始送，那些事件就永遠消失，畫面停在
+    // 「等待對方同意」不動。短碼模式踩不到，只是因為人要花好幾秒按同意。
+    void shareViewerReady(connId);
 
     return () => {
       disposed = true;

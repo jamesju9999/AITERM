@@ -20,7 +20,7 @@ use crate::config::ConfigStore;
 use crate::db::{resolve_db2_sidecar_path, Db2SidecarState};
 use crate::db::knowledge_base::KnowledgeBaseDb;
 use crate::db::manager::DbManager;
-use crate::pty::manager::PtyManager;
+use crate::pty::PtyManager;
 use crate::secret::SecretStore;
 
 use coordination_ops::CoordinationRegistry;

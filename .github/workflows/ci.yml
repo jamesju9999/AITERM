@@ -155,6 +155,12 @@ jobs:
             patchelf \
             libssl-dev
 
+      # `--workspace`, not a bare `cargo test`: `src-tauri/Cargo.toml` is both a
+      # package and the workspace root, so a bare `cargo test` there runs ONLY
+      # the `app` package — `aiterm-core`（協定、PTY、認證）與 `aiterm-host`
+      # （CLI 執行檔）的測試會被安靜地整批跳過。實測過：bare 是 1347 條，
+      # --workspace 是 1582 條。沒有任何東西會因此變紅，所以只能靠這行註解。
+      #
       # Full `cargo test`, not `--lib`: the tests/ integration suite (wiremock
       # HTTP mocks against a local server, in-memory sqlite, real-but-local
       # PTY/shell processes) has no network or OS-keychain dependency, so it
@@ -189,7 +195,7 @@ jobs:
         working-directory: src-tauri
         shell: pwsh
         run: |
-          cargo test --target ${{ matrix.target }} --no-run
+          cargo test --workspace --target ${{ matrix.target }} --no-run
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # 放給全部測試執行檔，不要試圖挑「只有需要的那些」：曾經縮成只給
           # lib 的單元測試 exe，結果 bridge_end_to_end 立刻以 0xC0000139 死掉
@@ -201,12 +207,12 @@ jobs:
             Copy-Item windows-tests.manifest "$($e.FullName).manifest" -Force
           }
           Write-Host "已為 $($exes.Count) 個測試執行檔放置 side-by-side manifest"
-          cargo test --target ${{ matrix.target }}
+          cargo test --workspace --target ${{ matrix.target }}
 
       - name: Rust tests
         if: matrix.os != 'windows-latest'
         working-directory: src-tauri
-        run: cargo test --target ${{ matrix.target }}
+        run: cargo test --workspace --target ${{ matrix.target }}
 
   # Produces the caches that release.yml restores. Every field below is aligned
   # with release.yml's build matrix on purpose: swatinem/rust-cache derives its

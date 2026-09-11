@@ -28,13 +28,32 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
   const [name, setName] = useState("");
   const [manualOpen, setManualOpen] = useState(false);
   const [address, setAddress] = useState("");
+  const [key, setKey] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [searching, setSearching] = useState(false);
 
+  // 金鑰模式：位址與金鑰都填了。這種連線**沒有短碼**——身分完全由金鑰決定，
+  // 觀看端連送出去的 `code` 都是空字串（見 `share::viewer` 的 `Join`）。所以
+  // 送出鈕不能再要求短碼滿 6 位，否則金鑰填好了按鈕還是灰的，整條 CLI host
+  // 的路走不通。
+  //
+  // 反過來也要守住：沒填金鑰時，短碼仍然是必填——放寬成「有位址就能按」會讓
+  // 短碼模式在碼還沒打完時就送出去。
+  const keyMode = manualOpen && address.trim() !== "" && key.trim() !== "";
+
   async function connectTo(host: string, port: number, addressLabel: string) {
     try {
-      const { connId, sas } = await shareViewerConnect(host, port, code, name || "AITerm");
+      const { connId, sas } = await shareViewerConnect({
+        host,
+        port,
+        code,
+        displayName: name || "AITerm",
+        // 空字串要送 undefined，不能送 ""。後端把 Some("") 當成「有金鑰但是空的」，
+        // 握手會失敗，而錯誤訊息會指向金鑰不符——對一個根本沒填金鑰的使用者來說
+        // 完全誤導。
+        key: key.trim() === "" ? undefined : key.trim(),
+      });
       onConnected(connId, sas, addressLabel);
     } catch (e) {
       // 連不上要說原因，不要靜默關閉——使用者才知道下一步該做什麼。
@@ -125,6 +144,20 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
               value={address}
               onChange={(e) => setAddress(e.target.value)}
             />
+
+            <label className="aiterm-connect__label" htmlFor="aiterm-connect-key">
+              {t.connect_key_label}
+            </label>
+            <input
+              id="aiterm-connect-key"
+              className="aiterm-connect__text"
+              type="text"
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <p className="aiterm-connect__hint">{t.connect_key_hint}</p>
           </>
         )}
 
@@ -138,7 +171,7 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
           </button>
           <button
             className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
-            disabled={busy || code.length !== 6}
+            disabled={busy || (!keyMode && code.length !== 6)}
             onClick={() => void submit()}
           >
             {t.connect_submit}

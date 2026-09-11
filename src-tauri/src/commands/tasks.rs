@@ -185,7 +185,7 @@ pub async fn tasks_stop(
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
     scheduler: State<'_, SchedulerHandle>,
-    pty: State<'_, Arc<crate::pty::manager::PtyManager>>,
+    pty: State<'_, Arc<crate::pty::PtyManager>>,
 ) -> Result<(), String> {
     let p = project(&reg, &project_id)?;
     let row = store::get_task(&p.pool, &id)
@@ -280,7 +280,7 @@ pub async fn tasks_delete(
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
     scheduler: State<'_, SchedulerHandle>,
-    pty: State<'_, Arc<crate::pty::manager::PtyManager>>,
+    pty: State<'_, Arc<crate::pty::PtyManager>>,
 ) -> Result<(), String> {
     let p = project(&reg, &project_id)?;
     if let Some(row) = store::get_task(&p.pool, &args.id)

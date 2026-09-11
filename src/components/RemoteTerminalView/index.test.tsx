@@ -16,6 +16,7 @@ function captureHandler(name: string) {
 
 const sendMock = vi.fn();
 const disconnectMock = vi.fn().mockResolvedValue(undefined);
+const readyMock = vi.fn().mockResolvedValue(undefined);
 
 // Task 7 新增了 useProviderQuota(activeProviderId) 這顆會直接呼叫
 // `@tauri-apps/api/core` 的 invoke("usage_quota", ...) 的 hook（不像
@@ -35,6 +36,7 @@ vi.mock("../../ipc/shareViewer", () => ({
   onShareViewerEnded: captureHandler("ended"),
   shareViewerSend: (...a: unknown[]) => sendMock(...a),
   shareViewerDisconnect: (...a: unknown[]) => disconnectMock(...a),
+  shareViewerReady: (...a: unknown[]) => readyMock(...a),
 }));
 
 // 只包一層 spy 在真正的 appendOutput 上，其餘完全用真的 hook——這個檔案
@@ -218,6 +220,35 @@ describe("RemoteTerminalView", () => {
     expect(await screen.findByText("4917")).toBeInTheDocument();
   });
 
+  it("tells the backend it is listening, and only after every listener is registered", async () => {
+    // 實機抓到的 bug：金鑰模式下主控端是**瞬間**核准的，所以 `Granted` 在這個
+    // 元件掛載並訂閱之前就發出去了。Tauri 事件不重播，畫面因此永遠停在
+    // 「等待對方同意」。短碼模式踩不到，只因為人要花好幾秒才按同意。
+    //
+    // 修法是後端先不送、等前端說「我在聽了」。所以這裡要驗的不只是「有呼叫
+    // ready」，而是**呼叫的時機在所有 listener 都註冊完之後**——先呼叫再訂閱
+    // 的話 race 原封不動地還在，而且一樣不會有任何測試變紅。
+    // **要在 ready 被呼叫的當下拍快照**，不能等 waitFor 解決之後再檢查
+    // handlers——那時候 effect 早就整個跑完，所有 listener 當然都在，這個
+    // 斷言會恆真而分辨不出順序。
+    let registeredWhenReady: string[] = [];
+    readyMock.mockImplementation((id: string) => {
+      registeredWhenReady = Object.keys(handlers).filter((k) => k.endsWith(`:${id}`));
+      return Promise.resolve();
+    });
+
+    render(<RemoteTerminalView tabId="t1" connId="c9" sas="4917" isActive onConnectClick={vi.fn()} />);
+
+    await waitFor(() => expect(readyMock).toHaveBeenCalledWith("c9"));
+
+    for (const kind of ["granted", "data", "resync", "control", "ended"]) {
+      expect(
+        registeredWhenReady,
+        `ready 在 ${kind} 的 listener 註冊之前就被呼叫了——race 原封不動`,
+      ).toContain(`${kind}:c9`);
+    }
+  });
+
   it("does not send keystrokes while read-only", async () => {
     render(<RemoteTerminalView tabId="t1" connId="c2" sas="1111" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c2"]).toBeDefined());
@@ -254,6 +285,21 @@ describe("RemoteTerminalView", () => {
     expect(
       await screen.findByText(/對方停止分享了|They stopped sharing/),
     ).toBeInTheDocument();
+  });
+
+  it("explains a CLI host key mismatch instead of the generic fallback", async () => {
+    // `endReasonText` 的 fallback 會讓漏掉 i18n 項目這件事完全不會有測試
+    // 變紅——只會退化成通用句子。這裡釘住 host_auth_failed 一定要對到專屬
+    // 文案，而不是「那個終端機已經關閉」這種通用 fallback。
+    render(<RemoteTerminalView tabId="t1" connId="c19" sas="1919" isActive onConnectClick={vi.fn()} />);
+    await waitFor(() => expect(handlers["ended:c19"]).toBeDefined());
+
+    handlers["ended:c19"]("host_auth_failed" as never);
+
+    expect(
+      await screen.findByText(/主機金鑰不符|host's key does not match/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/那個終端機已經關閉|That terminal has closed/)).not.toBeInTheDocument();
   });
 
   it("shows a human sentence for an unrecognised end reason", async () => {

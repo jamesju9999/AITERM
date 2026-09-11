@@ -64,6 +64,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "aiterm-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "dirs",
+ "futures-util",
+ "hmac",
+ "hyper",
+ "hyper-util",
+ "log",
+ "mdns-sd",
+ "parking_lot",
+ "portable-pty",
+ "rand 0.9.2",
+ "rcgen",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+ "tower-service",
+ "uuid",
+]
+
+[[package]]
+name = "aiterm-host"
+version = "0.1.0"
+dependencies = [
+ "aiterm-core",
+ "anyhow",
+ "clap",
+ "dirs",
+ "env_logger",
+ "futures-util",
+ "log",
+ "portable-pty",
+ "rustls",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+]
+
+[[package]]
 name = "alloc-no-stdlib"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -188,6 +238,7 @@ name = "app"
 version = "1.23.1"
 dependencies = [
  "aes-gcm",
+ "aiterm-core",
  "anydoc",
  "anyhow",
  "argon2",
@@ -1048,6 +1099,46 @@ dependencies = [
  "crypto-common",
  "inout",
 ]
+
+[[package]]
+name = "clap"
+version = "4.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "473c7e07f409a8d772161724aa8db6a765a2532a70f9667eeb7b49d3d02fbdca"
+dependencies = [
+ "clap_builder",
+ "clap_derive",
+]
+
+[[package]]
+name = "clap_builder"
+version = "4.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b48fea5a88e9ae728a2dcbedbfc0e730f7d60da42e1cb049a83c9fb8b789889"
+dependencies = [
+ "anstream",
+ "anstyle",
+ "clap_lex",
+ "strsim",
+]
+
+[[package]]
+name = "clap_derive"
+version = "4.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d012d2b9d65aca7f18f4d9878a045bc17899bba951561ba5ec3c2ba1eed9a061"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
+name = "clap_lex"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "codepage"

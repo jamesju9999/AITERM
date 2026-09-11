@@ -25,7 +25,7 @@ use crate::bridge::auth as bridge_auth;
 use crate::config::ConfigStore;
 use crate::db::db2_sidecar::Db2SidecarState;
 use crate::db::manager::DbManager;
-use crate::pty::manager::PtyManager;
+use crate::pty::PtyManager;
 use crate::secret::SecretStore;
 
 use super::coordination_ops::CoordinationRegistry;

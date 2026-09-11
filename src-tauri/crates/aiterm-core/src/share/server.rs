@@ -17,13 +17,15 @@ use axum::routing::{any, get};
 use axum::Router;
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::pty::manager::PtyManager;
+use crate::pty::PtyManager;
 
+use super::backoff::AuthBackoff;
+use super::events::ShareEvents;
 use super::protocol::{
-    ClientMessage, ConnectionExporter, EndReason, PendingRequestEvent, ServerMessage,
-    WireAccessMode, PROTOCOL_VERSION,
+    AuthExporter, ClientMessage, ConnectionExporter, EndReason, PeerAddr, PendingRequestEvent,
+    ServerMessage, WireAccessMode, PROTOCOL_VERSION,
 };
-use super::registry::ShareRegistry;
+use super::registry::{AccessMode, ShareRegistry};
 use super::tls;
 
 /// 重播給新連線觀看者的位元組上限。
@@ -37,24 +39,85 @@ const REPLAY_MAX_BYTES: usize = crate::pty::session::OUTPUT_RING_CAP;
 /// 不是再開一條通知管道，是因為狀態機刻意不依賴任何非同步執行期。
 const DECISION_POLL: Duration = Duration::from_millis(200);
 
+/// CLI host 模式的認證設定。`ShareAppState::auth` 是 `None` 時走既有的短碼 +
+/// 人工 SAS 核對，一行行為都不變。
+pub struct HostAuth {
+    /// 預共享金鑰。
+    pub key: Vec<u8>,
+    /// 這台 CLI host 的合成短碼——由 `ShareRegistry::start_share` 產生，
+    /// **不印給使用者、不由觀看端提供**。存在的理由純粹是 registry 以短碼
+    /// 為索引；認證通過後拿它去 `request_join`，registry 的觀看者與控制權
+    /// 邏輯就完全不用改。
+    pub code: String,
+    /// 認證通過後自動核准的存取層級（`--read-only` 決定）。
+    pub mode: AccessMode,
+}
+
 #[derive(Clone)]
 pub struct ShareAppState {
     pub pty: Arc<PtyManager>,
     pub registry: Arc<ShareRegistry>,
-    /// 用來把「有人要連進來」推播給前端。整合測試不起 Tauri app，所以是
-    /// `Option`——`None` 時所有事件發送都是 no-op，其餘行為完全一樣。
-    pub app: Option<tauri::AppHandle>,
+    /// 用來把「有人要連進來」推播給上層。整合測試與 headless 的 CLI host
+    /// 傳 `SilentEvents`——所有事件發送都是 no-op，其餘行為完全一樣。
+    pub events: Arc<dyn ShareEvents>,
+    /// `Some` 時走 CLI host 的金鑰認證路徑；`None`（GUI 主控端）時行為跟
+    /// 這個欄位存在之前完全一樣。
+    pub auth: Option<Arc<HostAuth>>,
+    /// 認證失敗的逐來源退避。GUI 路徑（`auth` 為 `None`）永遠不會走到
+    /// `JoinDecision::Reject`（`decide_join` 在那條路上一律回
+    /// `UseCode`），所以這個欄位對 GUI 主控端完全是死代碼。
+    pub backoff: Arc<AuthBackoff>,
 }
 
 pub fn router(
     pty: Arc<PtyManager>,
     registry: Arc<ShareRegistry>,
-    app: Option<tauri::AppHandle>,
+    events: Arc<dyn ShareEvents>,
+    auth: Option<Arc<HostAuth>>,
 ) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/share", any(share_upgrade))
-        .with_state(ShareAppState { pty, registry, app })
+        .with_state(ShareAppState {
+            pty,
+            registry,
+            events,
+            auth,
+            backoff: Arc::new(AuthBackoff::new()),
+        })
+}
+
+/// 一則 `Join` 該怎麼處理。
+///
+/// 抽成自由函式（而不是寫在 `handle_share` 裡）是為了能在不起 TLS、不起
+/// server 的情況下測試每一條分支——這裡是整個 CLI host 唯一改變核准語意的
+/// 地方，值得被單獨釘住。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JoinDecision {
+    /// 走既有的短碼 + 人工核准流程。
+    UseCode { code: String },
+    /// 金鑰驗過了：用這個短碼加入，並立刻以這個層級自動核准。
+    AutoApprove { code: String, mode: AccessMode },
+    /// 拒絕。
+    Reject,
+}
+
+pub fn decide_join(
+    host_auth: Option<&HostAuth>,
+    proof: Option<&str>,
+    client_code: &str,
+    exporter: &[u8],
+) -> JoinDecision {
+    let Some(ha) = host_auth else {
+        // GUI 主控端：一律走短碼。觀看端多送的 auth 欄位直接忽略。
+        return JoinDecision::UseCode { code: client_code.to_string() };
+    };
+    match proof {
+        Some(p) if crate::share::auth::verify_viewer_proof(&ha.key, exporter, p) => {
+            JoinDecision::AutoApprove { code: ha.code.clone(), mode: ha.mode }
+        }
+        _ => JoinDecision::Reject,
+    }
 }
 
 /// TLS exporter material 由 request extension 帶進來——Task 8 的 TLS accept
@@ -64,9 +127,13 @@ pub fn router(
 async fn share_upgrade(
     ws: WebSocketUpgrade,
     axum::Extension(exporter): axum::Extension<ConnectionExporter>,
+    axum::Extension(auth_exporter): axum::Extension<AuthExporter>,
+    axum::Extension(peer): axum::Extension<PeerAddr>,
     State(state): State<ShareAppState>,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_share(socket, state, exporter.0))
+    ws.on_upgrade(move |socket| {
+        handle_share(socket, state, exporter.0, auth_exporter.0, peer.0)
+    })
 }
 
 async fn send_control(ws: &mut WebSocket, msg: &ServerMessage) -> bool {
@@ -120,18 +187,20 @@ async fn handle_share(
     mut ws: WebSocket,
     state: ShareAppState,
     exporter: [u8; tls::SAS_MATERIAL_LEN],
+    auth_exporter: [u8; tls::SAS_MATERIAL_LEN],
+    peer: std::net::SocketAddr,
 ) {
     // 1. 第一則訊息必須是 Join。
     let join = match ws.recv().await {
         Some(Ok(Message::Text(t))) => match serde_json::from_str::<ClientMessage>(&t) {
-            Ok(ClientMessage::Join { protocol_version, code, display_name }) => {
-                (protocol_version, code, display_name)
+            Ok(ClientMessage::Join { protocol_version, code, display_name, auth }) => {
+                (protocol_version, code, display_name, auth)
             }
             Ok(_) | Err(_) => return end_with(&mut ws, EndReason::InvalidCode).await,
         },
         _ => return end_with(&mut ws, EndReason::InvalidCode).await,
     };
-    let (protocol_version, code, display_name) = join;
+    let (protocol_version, code, display_name, auth) = join;
 
     // 版本落差在握手第一步就擋掉。不這樣做的話，兩端版本不同時的症狀會是
     // 後續某則訊息解析失敗、連線莫名其妙斷掉——而「同事的 AITerm 沒更新」
@@ -139,6 +208,33 @@ async fn handle_share(
     if protocol_version != PROTOCOL_VERSION {
         return end_with(&mut ws, EndReason::VersionMismatch).await;
     }
+
+    // CLI host 模式：金鑰驗過就自動核准，不需要人在旁邊唸碼。SAS 承諾流程
+    // 照樣走完（訊息序列刻意一個字都不變），只是觀看端不會顯示那 4 位數。
+    //
+    // 用 `AUTH_EXPORTER_LABEL` 導出的 material，不是給 SAS 用的那份——兩者
+    // 刻意分開導出（見 `tls::AUTH_EXPORTER_LABEL`）。
+    let decision = decide_join(state.auth.as_deref(), auth.as_deref(), &code, &auth_exporter);
+    let peer_ip = peer.ip();
+    let (effective_code, auto_approve) = match decision {
+        JoinDecision::UseCode { code } => (code, None),
+        JoinDecision::AutoApprove { code, mode } => {
+            state.backoff.record_success(peer_ip);
+            (code, Some(mode))
+        }
+        // 刻意用既有的 `Denied` 而不是新增 EndReason 變體：新變體會讓舊版
+        // 觀看端在 `serde_json::from_str` 硬性失敗，變成無法解釋的斷線。
+        JoinDecision::Reject => {
+            let now = std::time::Instant::now();
+            let delay = state.backoff.delay_for(peer_ip, now);
+            state.backoff.record_failure(peer_ip, now);
+            log::warn!("認證失敗：來源 {peer_ip}，自報名稱 {display_name:?}");
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            return end_with(&mut ws, EndReason::Denied).await;
+        }
+    };
 
     // SAS 承諾流程。**這兩步的順序就是整個防中間人保證的全部價值，不可調換。**
     //
@@ -177,10 +273,12 @@ async fn handle_share(
     // 2. 短碼換待審請求。短碼無效就到此為止——主控端不會看到任何東西，所以
     //    亂猜短碼連「打擾對方」都做不到。
     let display_name_for_event = display_name.clone();
-    let Some(request_id) = state.registry.request_join(&code, display_name, sas.clone()) else {
+    let Some(request_id) =
+        state.registry.request_join(&effective_code, display_name, sas.clone())
+    else {
         return end_with(&mut ws, EndReason::InvalidCode).await;
     };
-    let Some(tab_id) = state.registry.tab_for_code(&code) else {
+    let Some(tab_id) = state.registry.tab_for_code(&effective_code) else {
         // `request_join` 成功了，但短碼在這兩行之間失效（主控端剛好停止分享）。
         // 必須把剛建立的待審請求收掉——`stop_share` 的清理早就跑過了，沒有人
         // 會再來清它，留著就是一筆永遠掛在 registry 裡的孤兒。
@@ -188,17 +286,16 @@ async fn handle_share(
         return end_with(&mut ws, EndReason::InvalidCode).await;
     };
 
-    // 推播給前端，讓同意視窗跳出來。`None` 時（整合測試）是 no-op。
-    if let Some(app) = &state.app {
-        use tauri::Emitter;
-        let _ = app.emit(
-            "share://request-pending",
-            PendingRequestEvent {
-                request_id: request_id.clone(),
-                tab_id: tab_id.clone(),
-                display_name: display_name_for_event.clone(),
-            },
-        );
+    // 推播給上層，讓同意視窗跳出來。`SilentEvents` 時是 no-op。
+    state.events.pending_request(&PendingRequestEvent {
+        request_id: request_id.clone(),
+        tab_id: tab_id.clone(),
+        display_name: display_name_for_event.clone(),
+    });
+
+    // 金鑰模式：立刻核准，等待迴圈下一輪就會看到 viewer 已建立。
+    if let Some(mode) = auto_approve {
+        state.registry.approve(&request_id, mode);
     }
 
     if !send_control(
@@ -216,7 +313,7 @@ async fn handle_share(
     //    自己關掉連線，下面的 select 會偵測到並收掉那筆待審請求。
     let viewer_id = loop {
         // 分享在裁決前被停掉。
-        if state.registry.tab_for_code(&code).is_none() {
+        if state.registry.tab_for_code(&effective_code).is_none() {
             state.registry.deny(&request_id);
             return end_with(&mut ws, EndReason::HostStoppedSharing).await;
         }
@@ -284,7 +381,16 @@ async fn handle_share(
 
     if !send_control(
         &mut ws,
-        &ServerMessage::Granted { mode, cols, rows, host_os: std::env::consts::OS.to_string() },
+        &ServerMessage::Granted {
+            mode,
+            cols,
+            rows,
+            host_os: std::env::consts::OS.to_string(),
+            host_auth: state
+                .auth
+                .as_ref()
+                .map(|a| crate::share::auth::host_proof(&a.key, &auth_exporter)),
+        },
     )
     .await
     {
@@ -367,7 +473,7 @@ async fn handle_share(
                 Some(Err(_)) | None => break,
             },
             _ = share_watch.tick() => {
-                if state.registry.tab_for_code(&code).is_none() {
+                if state.registry.tab_for_code(&effective_code).is_none() {
                     end_with(&mut ws, EndReason::HostStoppedSharing).await;
                     break;
                 }
@@ -414,8 +520,64 @@ async fn handle_share(
 
     // 觀看者清單變了，讓主控端的面板重新抓一次。這個事件不帶內容——前端
     // 收到就去 `share_viewers` 重讀，避免兩份資料對不上。
-    if let Some(app) = &state.app {
-        use tauri::Emitter;
-        let _ = app.emit("share://viewers-changed", ());
+    state.events.viewers_changed();
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+    use crate::share::auth;
+
+    fn host_auth(key: &[u8], code: &str) -> Arc<HostAuth> {
+        Arc::new(HostAuth {
+            key: key.to_vec(),
+            code: code.to_string(),
+            mode: AccessMode::Control,
+        })
+    }
+
+    #[test]
+    fn a_valid_proof_resolves_to_the_hosts_own_code() {
+        let key = auth::generate_key();
+        let exporter = [7u8; tls::SAS_MATERIAL_LEN];
+        let ha = host_auth(&key, "999999");
+        let proof = auth::viewer_proof(&key, &exporter);
+
+        let decision = decide_join(Some(&ha), Some(proof.as_str()), "", &exporter);
+        // 觀看端送的 code 是空字串，但實際使用的必須是 host 自己的短碼。
+        assert_eq!(decision, JoinDecision::AutoApprove { code: "999999".to_string(), mode: AccessMode::Control });
+    }
+
+    #[test]
+    fn a_missing_proof_is_rejected_in_key_mode() {
+        // 舊版觀看端（或短碼模式的觀看端）連上 CLI host 的情況。
+        let key = auth::generate_key();
+        let exporter = [7u8; tls::SAS_MATERIAL_LEN];
+        let ha = host_auth(&key, "999999");
+        assert_eq!(decide_join(Some(&ha), None, "384719", &exporter), JoinDecision::Reject);
+    }
+
+    #[test]
+    fn a_wrong_proof_is_rejected_in_key_mode() {
+        let key = auth::generate_key();
+        let other = auth::generate_key();
+        let exporter = [7u8; tls::SAS_MATERIAL_LEN];
+        let ha = host_auth(&key, "999999");
+        let proof = auth::viewer_proof(&other, &exporter);
+        assert_eq!(decide_join(Some(&ha), Some(proof.as_str()), "", &exporter), JoinDecision::Reject);
+    }
+
+    #[test]
+    fn without_host_auth_a_join_always_takes_the_code_path() {
+        // GUI 主控端：即使觀看端多送了 auth 欄位也一律忽略，走短碼 + SAS。
+        let exporter = [7u8; tls::SAS_MATERIAL_LEN];
+        assert_eq!(
+            decide_join(None, Some("deadbeef"), "384719", &exporter),
+            JoinDecision::UseCode { code: "384719".to_string() }
+        );
+        assert_eq!(
+            decide_join(None, None, "384719", &exporter),
+            JoinDecision::UseCode { code: "384719".to_string() }
+        );
     }
 }

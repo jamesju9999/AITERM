@@ -11,7 +11,7 @@ use tokio::sync::{oneshot, Notify};
 
 use crate::config::types::VcsType;
 use crate::config::ConfigStore;
-use crate::pty::manager::PtyManager;
+use crate::pty::PtyManager;
 use crate::tasks::store::{self};
 use crate::tasks::store::TaskRow;
 use crate::projects::{ProjectHandle, ProjectRegistry};

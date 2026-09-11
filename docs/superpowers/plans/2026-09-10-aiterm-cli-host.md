@@ -890,6 +890,26 @@ cd src-tauri && cargo test -p aiterm-core share::tests::binding_to_loopback_does
 
 預期：PASS。
 
+- [ ] **Step 4b: 把 `OUTPUT_RING_CAP` 收回 `pub(crate)`**
+
+Task 3 為了讓還留在 app crate 的 `share/server.rs:34` 讀得到
+`crate::pty::session::OUTPUT_RING_CAP`，把它從 `pub(crate)` 放寬成 `pub`。
+`server.rs` 這一步搬進 core 之後，那個理由就消失了。
+
+```bash
+cd src-tauri && grep -rn "OUTPUT_RING_CAP" src/ crates/
+```
+
+確認 app crate 底下**沒有**任何命中之後，把
+`crates/aiterm-core/src/pty/session.rs:113` 改回：
+
+```rust
+pub(crate) const OUTPUT_RING_CAP: usize = 256 * 1024;
+```
+
+這種「為了過渡期而放寬、之後沒人收回去」的可見度是會永久留下的——沒有任何
+測試會因為它太寬而變紅，所以不在這裡收，就再也不會收了。
+
 - [ ] **Step 5: 全面驗證**
 
 ```bash
@@ -2274,6 +2294,9 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // 必須在建立任何 PTY 之前——`default_shell()` 讀的是這個行程的環境。
+    apply_shell_override(&args);
+
     let pty = Arc::new(PtyManager::new());
     let session_id = "cli".to_string();
     let (cols, rows) = (120u16, 40u16);
@@ -2284,7 +2307,7 @@ async fn main() -> Result<()> {
         PtySize { rows, cols, pixel_width: 0, pixel_height: 0 },
         session_id.clone(),
         args.cwd.clone(),
-        shell_override_envs(&args),
+        Vec::new(),
         Vec::new(),
         |_chunk| {},
     )
@@ -2323,16 +2346,20 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// `--shell` 的實作：`pty::shell` 的偵測是看 `SHELL`／`COMSPEC` 這些環境
-/// 變數的，所以覆寫的方式就是覆寫那個變數，而不是另外開一條 spawn 路徑。
-fn shell_override_envs(args: &Args) -> Vec<(String, String)> {
-    match &args.shell {
-        #[cfg(unix)]
-        Some(p) => vec![("SHELL".to_string(), p.display().to_string())],
-        #[cfg(windows)]
-        Some(p) => vec![("COMSPEC".to_string(), p.display().to_string())],
-        None => Vec::new(),
-    }
+/// `--shell` 的實作：覆寫**這個行程自己**的 `SHELL`／`COMSPEC`。
+///
+/// **不能用 `ShellSpec.envs` 做這件事**（我第一版計畫就是這樣寫的，是錯的）：
+/// 那些是給子行程的環境變數，而 `pty::shell::unix_default_shell()` 讀的是
+/// `std::env::var("SHELL")`——呼叫端行程自己的環境，而且它在 `envs` 被套用
+/// **之前**就已經執行完了。用 envs 的話 `--shell` 會完全無效，且零錯誤訊息。
+///
+/// 改自己的行程環境在這裡是安全的：`aiterm-host` 是單一用途的 CLI，沒有其他
+/// 執行緒在讀這個變數，而且子行程繼承到被覆寫的 `SHELL` 正是我們要的。
+/// **必須在建立任何 PTY 之前呼叫。**
+fn apply_shell_override(args: &Args) {
+    let Some(p) = &args.shell else { return };
+    let key = if cfg!(windows) { "COMSPEC" } else { "SHELL" };
+    std::env::set_var(key, p);
 }
 
 fn print_connection(args: &Args, key_hex: &str, key_source: &str) {
@@ -2693,6 +2720,47 @@ async fn a_viewer_with_no_key_is_denied() {
 }
 
 #[tokio::test]
+async fn a_host_that_cannot_prove_the_key_never_gets_to_stream() {
+    // **這是金鑰模式下唯一擋得住中間人的地方，而且目前零覆蓋。**
+    //
+    // Task 11 的突變測試證實了缺口：把 `run_viewer_stream` 裡驗證失敗後的
+    // `break` 拿掉，整個測試套件（1564 條）沒有任何一條變紅。原因是既有測試
+    // 全部跑在短碼模式（`key = None`），而 `host_proof_acceptable` 只有在
+    // `key` 是 `Some` 時才可能回 false——那條分支從來沒被任何測試走過。
+    //
+    // 攻擊情境：中間人終止 TLS，自己扮演主控端。它偽造不出觀看端的證明，
+    // 但它**不需要**——它可以直接回 `Granted`、餵假畫面、收走使用者打的
+    // 每一個鍵。觀看端不驗憑證（`SasIsTheOnlyIdentityCheck`），金鑰模式又
+    // 沒有 SAS，所以驗 `host_auth` 是唯一的防線。
+    //
+    // 沒辦法用真的 CLI host 測這個：真 host 握有正確金鑰，證明一定對。所以
+    // 這裡要起一個**假主控端**——走完 SasCommit / AwaitingApproval 的訊息
+    // 序列，但 `Granted` 帶一個用別把金鑰算出來的 `host_auth`。
+    let fake = start_fake_host_with_wrong_key().await;
+    let viewer_key = auth::generate_key().to_vec();
+    let (mut events, _keys) = connect(fake.port, Some(&viewer_key)).await;
+
+    let ev = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("no event within 5s")
+        .expect("channel open");
+
+    match ev {
+        ViewerEvent::Ended { reason } => assert_eq!(reason, "host_auth_failed"),
+        other => panic!("a viewer must refuse a host that cannot prove the key; got {other:?}"),
+    }
+
+    // 而且**不能**有任何畫面位元組流出來——收下假畫面本身就是損害。
+    assert!(
+        matches!(
+            tokio::time::timeout(Duration::from_millis(500), events.recv()).await,
+            Err(_) | Ok(None)
+        ),
+        "nothing may stream after a failed host proof"
+    );
+}
+
+#[tokio::test]
 async fn read_only_mode_is_reported_to_the_viewer() {
     let h = start_host(AccessMode::ReadOnly).await;
     let (mut events, _keys) = connect(h.port, Some(&h.key)).await;
@@ -2751,13 +2819,64 @@ async fn a_command_run_through_the_viewer_produces_an_osc_133_d_marker() {
 }
 ```
 
+- [ ] **Step 1b: 寫 `start_fake_host_with_wrong_key`**
+
+上面那條測試需要一個假主控端。它不能重用 `ShareServerState`——真 server 握有
+正確金鑰，證明一定算得對。要的是一個最小的 TLS + WebSocket 端點，走完既有的
+訊息序列但在 `Granted` 帶錯的 `host_auth`：
+
+```rust
+/// 起一個假主控端：訊息序列合法，但 `Granted` 的 `host_auth` 是用另一把
+/// 金鑰算的。模擬中間人終止 TLS 後自己扮演主控端。
+async fn start_fake_host_with_wrong_key() -> FakeHost {
+    let identity = aiterm_core::share::tls::ShareIdentity::generate().expect("identity");
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let wrong_key = auth::generate_key().to_vec();
+
+    tokio::spawn(async move {
+        let Ok((stream, _)) = listener.accept().await else { return };
+        // TLS accept 用與 `share::mod` 的 accept 迴圈相同的方式建構
+        // acceptor（見那裡的 `serve_tls`），然後：
+        //   1. 導出 AUTH_EXPORTER_LABEL 的 material
+        //   2. 升級成 WebSocket
+        //   3. 送 SasCommit（nonce 隨便一個，觀看端在金鑰模式不看 SAS）
+        //   4. 收 Join（忽略它的 auth——假主控端驗不了也不在乎）
+        //   5. 收 SasNonce
+        //   6. 送 AwaitingApproval
+        //   7. 送 Granted，host_auth 用 `wrong_key` 算
+        // 實作時照抄 `share::server::handle_share` 的前半段訊息順序即可，
+        // 但不要呼叫 registry——這個假主控端沒有 PTY 也沒有分頁。
+        let _ = (stream, &identity, &wrong_key);
+    });
+
+    FakeHost { port }
+}
+
+struct FakeHost {
+    port: u16,
+}
+```
+
+**這段是整個測試檔裡最需要小心的部分**：如果假主控端寫錯導致連線在 `Granted`
+之前就斷掉，測試會因為收到別的 `Ended` 而失敗——看起來像通過了「觀看端拒絕」
+的意思，其實是假主控端自己壞了。所以斷言要比對 `reason == "host_auth_failed"`
+這個**精確字串**，不能只斷言「收到 Ended」。
+
 - [ ] **Step 2: 跑測試**
 
 ```bash
 cd src-tauri && cargo test -p aiterm-host --test cli_host
 ```
 
-預期：五條全 PASS。
+預期：六條全 PASS。
+
+跑完之後對 `a_host_that_cannot_prove_the_key_never_gets_to_stream` 做突變驗證：
+把 `run_viewer_stream` 的 `Granted` 分支裡那個 `break;` 拿掉，這條**必須**變紅。
+Task 11 已證實在它存在之前，拿掉 `break` 全套 1564 條測試沒有任何一條變紅——
+所以這條測試如果也抓不到，它就沒有補上任何東西，要當場說出來。
 
 若 `a_command_run_through_the_viewer_produces_an_osc_133_d_marker` 失敗，**不要放寬斷言**——那代表 CLI host 起的 shell 沒有拿到 shell integration，遠端 AI 功能在 CLI host 上是壞的。先查 `pty::shell` 的注入在這條路徑上有沒有被繞過。
 
@@ -2936,6 +3055,11 @@ export function shareViewerConnect(args: ShareViewerConnectArgs): Promise<Viewer
 
 `endReasonText` 對認不得的 reason 有 fallback（:793 的註解說 spec 要求不能出現「未知錯誤」），所以漏掉這一筆不會爆炸——它會**安靜地退化成一句通用訊息**。這正是這一步唯一的失效模式，也是為什麼下面要有一條測試釘住它。
 
+**只有「主控端證明不過」這一種走 `Ended` 事件。** 觀看端自己金鑰錯或沒帶金鑰時，
+`decide_join` 在 `SasCommit` 之前就拒絕，`connect_and_handshake` 直接回 `Err`，
+走的是連線對話框既有的錯誤顯示（跟今天打錯 6 位短碼完全同一條路）。**那一條不用
+做任何事**——不要為它加 `Ended` 對應，加了也永遠不會觸發。
+
 - [ ] **Step 5c: 釘住 reason 對照**
 
 `src/components/RemoteTerminalView/index.test.tsx` 加：
@@ -2980,14 +3104,32 @@ git commit -m "feat(remote): let the viewer connect to a CLI host with a pre-sha
 - [ ] **Step 1: 全套自動化驗證**
 
 ```bash
-cd /Users/jamesju/Documents/GitHub/AITERM
 npx tsc -b
 npm run test
 npm run lint
-cd src-tauri && cargo test && cargo clippy --workspace -- -D warnings
+cd src-tauri && cargo test
 ```
 
 **`cargo test` 不加 `--lib`**——`--lib` 不編譯 `tests/` 底下的整合測試，而這次改動最集中的地方正是那裡。
+
+**已知的既有 flaky 測試**：`aiterm_core::pty::session::tests::last_exit_code_is_none_for_a_fresh_session`
+在整套並行跑時約每 12 次紅 1 次；單獨跑 25 次全過。`session.rs` 與 master 逐位元組
+相同，所以**不是本分支造成的**，成因看起來是並行 spawn 大量 PTY 的資源競爭，不是
+測試邏輯。這個里程碑不修它（不相干），但驗收時看到它紅要先重跑一次確認，不要當成
+本次改動的回歸——反過來也一樣，不要因為「反正它會偶爾紅」就忽略真的回歸。
+
+- [ ] **Step 1b: clippy——比對基線，不是要求零**
+
+**不要跑 `cargo clippy -- -D warnings`。** 這個 repo 有既有的 clippy 警告基線（實測：`app` 45 條、`aiterm-core` 3 條，後者是搬移過去的既有程式碼帶過去的，master 上的 app crate 一樣會叫，兩個 crate 都沒有 crate 層級的 `allow`）。要求全域零警告會變成假性失敗，然後下一個人就會去「修」一堆跟這個里程碑無關的東西。
+
+真正該守的是**這個分支碰過的檔案不准新增警告**：
+
+```bash
+cd src-tauri && cargo clippy -p app -p aiterm-core -p aiterm-host 2>&1 \
+  | grep -E "^\s+--> (crates/aiterm-host|crates/aiterm-core/src/share|src/share)/"
+```
+
+預期：**沒有任何輸出**。有輸出就是這次真的新增的，要修掉。
 
 - [ ] **Step 2: 起 CLI host**
 

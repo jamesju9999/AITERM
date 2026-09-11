@@ -9,7 +9,7 @@ use aiterm_lib::config::ConfigStore;
 use aiterm_lib::db::db2_sidecar::Db2SidecarState;
 use aiterm_lib::db::manager::DbManager;
 use aiterm_lib::mcp_server::coordination_ops::CoordinationRegistry;
-use aiterm_lib::pty::manager::PtyManager;
+use aiterm_lib::pty::PtyManager;
 use aiterm_lib::secret::SecretStore;
 
 use axum::body::Body;

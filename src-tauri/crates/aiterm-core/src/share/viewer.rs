@@ -75,6 +75,23 @@ pub struct ViewerHandshake {
     pub sas: String,
     /// 已完成握手的 ws，交給串流迴圈用（Task 2）。
     pub ws: WebSocketStream<TlsStream<TcpStream>>,
+    /// 這條連線用 `AUTH_EXPORTER_LABEL` 導出的 material，留給串流階段驗主控端
+    /// 的證明用。**不是 SAS 那份**——兩者刻意分開導出。
+    pub auth_exporter: [u8; tls::SAS_MATERIAL_LEN],
+    /// 金鑰模式的金鑰；短碼模式是 `None`。
+    pub key: Option<Vec<u8>>,
+}
+
+/// 主控端送來的證明可不可以接受。
+///
+/// `key` 是 `None`（短碼模式）時永遠回 `true`——身分保證來自人工 SAS 核對，
+/// 這個欄位在那個模式下本來就不會出現。
+pub fn host_proof_acceptable(key: Option<&[u8]>, exporter: &[u8], candidate: Option<&str>) -> bool {
+    let Some(key) = key else { return true };
+    match candidate {
+        Some(p) => crate::share::auth::verify_host_proof(key, exporter, p),
+        None => false,
+    }
 }
 
 /// 主控端揭曉的 nonce 跟先前的承諾對不對得上。
@@ -92,6 +109,7 @@ pub async fn connect_and_handshake(
     port: u16,
     code: &str,
     display_name: &str,
+    key: Option<&[u8]>,
 ) -> Result<ViewerHandshake> {
     super::ensure_crypto_provider();
 
@@ -113,9 +131,12 @@ pub async fn connect_and_handshake(
 
     // 握手完成後、交給 tungstenite 之前先取 exporter material。SAS 要等
     // 承諾流程走完（拿到兩個 nonce）才算得出來。
-    let exporter = {
+    let (exporter, auth_exporter) = {
         let (_io, conn) = tls.get_ref();
-        tls::exporter_material(conn).context("導出金鑰 material 失敗")?
+        let sas_material = tls::exporter_material(conn).context("導出金鑰 material 失敗")?;
+        let auth_material = tls::exporter_material_with_label(conn, tls::AUTH_EXPORTER_LABEL)
+            .context("導出驗證用 material 失敗")?;
+        (sas_material, auth_material)
     };
 
     let (mut ws, _) = tokio_tungstenite::client_async("ws://aiterm-share/share", tls)
@@ -127,8 +148,12 @@ pub async fn connect_and_handshake(
         &mut ws,
         &ClientMessage::Join {
             protocol_version: PROTOCOL_VERSION,
-            code: code.to_string(),
+            // 金鑰模式沒有短碼——身分完全由金鑰決定。送空字串的副作用是好的：
+            // 拿金鑰模式的連線去指一台 GUI 主控端，會在 `tab_for_code("")`
+            // 乾淨地失敗成 `InvalidCode`。
+            code: if key.is_some() { String::new() } else { code.to_string() },
             display_name: display_name.to_string(),
+            auth: key.map(|k| crate::share::auth::viewer_proof(k, &auth_exporter)),
         },
     )
     .await?;
@@ -161,7 +186,7 @@ pub async fn connect_and_handshake(
     }
 
     let sas = tls::sas_from_parts(&host_nonce, &viewer_nonce, &exporter);
-    Ok(ViewerHandshake { sas, ws })
+    Ok(ViewerHandshake { sas, ws, auth_exporter, key: key.map(|k| k.to_vec()) })
 }
 
 async fn send_json(
@@ -219,6 +244,8 @@ pub async fn run_viewer_stream(
     mut ws: WebSocketStream<TlsStream<TcpStream>>,
     events: tokio::sync::mpsc::UnboundedSender<ViewerEvent>,
     mut keys: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    key: Option<Vec<u8>>,
+    auth_exporter: [u8; tls::SAS_MATERIAL_LEN],
 ) {
     loop {
         tokio::select! {
@@ -238,7 +265,15 @@ pub async fn run_viewer_stream(
                         break;
                     };
                     match msg {
-                        ServerMessage::Granted { mode, cols, rows, host_os } => {
+                        ServerMessage::Granted { mode, cols, rows, host_os, host_auth } => {
+                            if !host_proof_acceptable(key.as_deref(), &auth_exporter, host_auth.as_deref()) {
+                                // 不送 Granted，也不再讀任何 Data——中間人扮演
+                                // 主控端時，這裡是唯一擋得住的地方。
+                                let _ = events.send(ViewerEvent::Ended {
+                                    reason: "host_auth_failed".to_string(),
+                                });
+                                break;
+                            }
                             let _ = events.send(ViewerEvent::Granted {
                                 mode: wire_mode_str(mode),
                                 cols,
@@ -296,6 +331,51 @@ pub async fn run_viewer_stream(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod host_auth_tests {
+    use super::*;
+    use crate::share::auth;
+
+    #[test]
+    fn in_key_mode_a_missing_host_proof_is_refused() {
+        // 中間人扮演主控端最省事的作法就是根本不送這個欄位。若這裡放行，
+        // 它就能餵假畫面並收走每一個按鍵，而使用者看不出任何異狀。
+        let key = auth::generate_key();
+        let exporter = [3u8; crate::share::tls::SAS_MATERIAL_LEN];
+        assert!(!host_proof_acceptable(Some(&key), &exporter, None));
+    }
+
+    #[test]
+    fn in_key_mode_a_wrong_host_proof_is_refused() {
+        let key = auth::generate_key();
+        let other = auth::generate_key();
+        let exporter = [3u8; crate::share::tls::SAS_MATERIAL_LEN];
+        let p = auth::host_proof(&other, &exporter);
+        assert!(!host_proof_acceptable(Some(&key), &exporter, Some(&p)));
+    }
+
+    #[test]
+    fn in_key_mode_a_correct_host_proof_is_accepted() {
+        let key = auth::generate_key();
+        let exporter = [3u8; crate::share::tls::SAS_MATERIAL_LEN];
+        let p = auth::host_proof(&key, &exporter);
+        assert!(host_proof_acceptable(Some(&key), &exporter, Some(&p)));
+    }
+
+    #[test]
+    fn in_code_mode_the_absence_of_a_host_proof_is_fine() {
+        // 短碼模式：GUI 主控端不會送這個欄位，身分保證來自人工 SAS 核對。
+        let exporter = [3u8; crate::share::tls::SAS_MATERIAL_LEN];
+        assert!(host_proof_acceptable(None, &exporter, None));
+    }
+
+    #[test]
+    fn in_code_mode_an_unexpected_host_proof_is_ignored() {
+        let exporter = [3u8; crate::share::tls::SAS_MATERIAL_LEN];
+        assert!(host_proof_acceptable(None, &exporter, Some("deadbeef")));
     }
 }
 

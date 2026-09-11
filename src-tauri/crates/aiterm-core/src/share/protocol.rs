@@ -81,6 +81,20 @@ pub const PROTOCOL_VERSION: u32 = 2;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConnectionExporter(pub [u8; SAS_MATERIAL_LEN]);
 
+/// 同一條 TLS 連線、用 `tls::AUTH_EXPORTER_LABEL` 另外導出的一份 material，
+/// 專供 CLI host 的金鑰互證使用。**刻意跟 `ConnectionExporter` 分開的型別**
+/// （而不是重用它、多塞一個 label 參數）：兩者的用途暴露程度不同（見
+/// `tls::AUTH_EXPORTER_LABEL` 的說明），型別分開能讓呼叫端不可能把 SAS 用的
+/// material 誤傳進金鑰驗證，反之亦然——編譯期就擋掉。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthExporter(pub [u8; SAS_MATERIAL_LEN]);
+
+/// 這條連線的來源位址，由 TLS accept 迴圈塞進 request extension——跟
+/// `ConnectionExporter`／`AuthExporter` 同一招。用來對認證失敗做逐來源退避
+/// （見 `share::backoff`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PeerAddr(pub std::net::SocketAddr);
+
 /// 觀看端 → 主控端。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -91,7 +105,19 @@ pub enum ClientMessage {
     /// `protocol_version` 讓主控端能在握手第一步就發現版本落差，送出乾淨的
     /// `Ended { VersionMismatch }`，而不是讓後續訊息解析失敗變成無法解釋的
     /// 斷線。
-    Join { protocol_version: u32, code: String, display_name: String },
+    Join {
+        protocol_version: u32,
+        code: String,
+        display_name: String,
+        /// CLI host 的預共享金鑰證明（見 `share::auth`）。
+        ///
+        /// **可選的附加欄位，`PROTOCOL_VERSION` 刻意不動。** 升版本會讓
+        /// `server.rs` 的嚴格相等檢查把所有跨版本的 GUI 分享一起擋掉，而
+        /// 那在區網裡是常態情境。舊版主控端收到這個欄位會忽略它，照常走
+        /// 短碼流程。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth: Option<String>,
+    },
     /// 觀看端的 nonce，`hex`。收到 `SasCommit` 之後才送。
     SasNonce { nonce: String },
 }
@@ -117,7 +143,19 @@ pub enum ServerMessage {
     /// `"linux"`）。觀看端拿它取代 `navigator.platform` 判斷——這個值只有
     /// 觀看端的平台，不是主控端的，跨平台分享時原本的判斷會誤判或失效
     /// （見計畫③A 設計文件）。不含使用者名稱、路徑等敏感資訊。
-    Granted { mode: WireAccessMode, cols: u16, rows: u16, host_os: String },
+    Granted {
+        mode: WireAccessMode,
+        cols: u16,
+        rows: u16,
+        host_os: String,
+        /// CLI host 對觀看端的證明（見 `share::auth`）。
+        ///
+        /// 觀看端在金鑰模式下**必須驗過這個才渲染畫面、才送出按鍵**。沒有它
+        /// 的話中間人可以直接扮演主控端：它偽造不出觀看端的證明，但它不需要
+        /// ——它可以自己回 `Granted`、餵假畫面、收走每一個按鍵。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host_auth: Option<String>,
+    },
     /// 主控端 resize 了，觀看端重新 fit。
     Resize { cols: u16, rows: u16 },
     /// 控制權變動（被授予或被收回）。
@@ -159,6 +197,7 @@ mod tests {
             protocol_version: PROTOCOL_VERSION,
             code: "384719".to_string(),
             display_name: "Alice".to_string(),
+            auth: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"join\""), "got {json}");
@@ -204,6 +243,7 @@ mod tests {
             cols: 120,
             rows: 40,
             host_os: std::env::consts::OS.to_string(),
+            host_auth: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"granted\""), "got {json}");
@@ -314,5 +354,118 @@ mod tests {
                 | EndReason::SasHandshakeFailed => {}
             }
         }
+    }
+
+    #[test]
+    fn a_join_without_auth_serializes_exactly_as_before() {
+        // 短碼模式送出的 JSON 必須跟加這個欄位之前逐位元組相同，否則舊版
+        // 主控端收到的東西就變了——而它們早就裝在別人機器上。
+        let msg = ClientMessage::Join {
+            protocol_version: PROTOCOL_VERSION,
+            code: "384719".to_string(),
+            display_name: "Alice".to_string(),
+            auth: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(!json.contains("auth"), "auth must be omitted when None; got {json}");
+    }
+
+    #[test]
+    fn a_join_with_auth_round_trips() {
+        let msg = ClientMessage::Join {
+            protocol_version: PROTOCOL_VERSION,
+            code: String::new(),
+            display_name: "Alice".to_string(),
+            auth: Some("ab".repeat(32)),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"auth\":"), "got {json}");
+        let back: ClientMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, msg);
+    }
+
+    #[test]
+    fn a_v2_join_without_the_auth_field_still_parses() {
+        // 舊版觀看端送來的東西。`#[serde(default)]` 讓它落在 None。
+        let old = r#"{"type":"join","protocol_version":2,"code":"384719","display_name":"Alice"}"#;
+        let back: ClientMessage = serde_json::from_str(old).unwrap();
+        assert_eq!(
+            back,
+            ClientMessage::Join {
+                protocol_version: 2,
+                code: "384719".to_string(),
+                display_name: "Alice".to_string(),
+                auth: None,
+            }
+        );
+    }
+
+    #[test]
+    fn granted_omits_host_auth_when_absent() {
+        let msg = ServerMessage::Granted {
+            mode: WireAccessMode::Control,
+            cols: 120,
+            rows: 40,
+            host_os: "linux".to_string(),
+            host_auth: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(!json.contains("host_auth"), "got {json}");
+    }
+
+    #[test]
+    fn granted_round_trips_with_host_auth() {
+        let msg = ServerMessage::Granted {
+            mode: WireAccessMode::Control,
+            cols: 120,
+            rows: 40,
+            host_os: "linux".to_string(),
+            host_auth: Some("cd".repeat(32)),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let back: ServerMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, msg);
+    }
+
+    #[test]
+    fn the_protocol_version_stays_at_two() {
+        // 升版本會讓 v1.24 的使用者連不上 v1.25 的同事——`server.rs` 的檢查
+        // 是嚴格相等，而原始碼註解明講版本落差在區網分享裡是常態。CLI host
+        // 的認證刻意設計成可選的附加欄位就是為了不動這個數字。
+        assert_eq!(PROTOCOL_VERSION, 2);
+    }
+
+    #[test]
+    fn an_unknown_field_on_join_is_ignored_rather_than_rejected() {
+        // 整個「不升 PROTOCOL_VERSION、改用可選附加欄位」的相容性策略建立在
+        // 這個行為上：舊版主控端收到新版觀看端多帶的欄位時，必須忽略它並照常
+        // 走短碼流程，而不是硬性解析失敗變成無法解釋的斷線。
+        //
+        // 這跟 `an_unknown_server_message_fails_to_parse_rather_than_being_ignored`
+        // 證明的是不同機制：那個講的是未知的 enum **tag**，這個講的是已知
+        // variant 裡的未知**欄位**。兩者的 serde 預設行為不同，不能互相推論。
+        //
+        // **欄位名刻意選一個永遠不會被實作的。** 這條測試原本用 `auth`，而
+        // `auth` 在加進 `Join` 之後就變成已知欄位——測試照樣綠，但它從那一刻
+        // 起測的是「已知的可選欄位會 round-trip」，跟名字承諾的完全是兩回事，
+        // 而真正的保證變成沒有任何東西在守。下次要加新欄位時，不要拿這裡的
+        // 欄位名去用。
+        let with_extra = r#"{"type":"join","protocol_version":2,"code":"384719","display_name":"Alice","field_from_a_future_version":"whatever"}"#;
+        let parsed: Result<ClientMessage, _> = serde_json::from_str(with_extra);
+        let msg = parsed.expect(
+            "serde rejected an unknown field on Join; the whole \
+             additive-optional-field compatibility strategy in the CLI host \
+             spec depends on it being ignored — STOP and report this",
+        );
+        assert_eq!(
+            msg,
+            ClientMessage::Join {
+                protocol_version: 2,
+                code: "384719".to_string(),
+                display_name: "Alice".to_string(),
+                // 未知欄位被丟掉，不是被塞進某個地方。
+                auth: None,
+            }
+        );
     }
 }

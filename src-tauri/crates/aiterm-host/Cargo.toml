@@ -1,0 +1,31 @@
+[package]
+name = "aiterm-host"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+
+[[bin]]
+name = "aiterm-host"
+path = "src/main.rs"
+
+[dependencies]
+aiterm-core = { path = "../aiterm-core" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+portable-pty = "0.8"
+log = "0.4"
+env_logger = "0.11"
+
+[dev-dependencies]
+tempfile = "3"
+# 端到端測試（tests/cli_host.rs）需要自己組一條 TLS + WebSocket 連線來扮演
+# 假的主控端（man-in-the-middle 測試）。版本與 feature flags 對齊
+# aiterm-core 的 Cargo.toml，避免同一個 crate 在圖裡被兩種不同的 feature
+# 組合各編一份。
+serde_json = { version = "1.0", features = ["preserve_order"] }
+futures-util = "0.3"
+tokio-tungstenite = "0.29"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }

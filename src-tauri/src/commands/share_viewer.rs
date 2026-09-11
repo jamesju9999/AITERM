@@ -15,11 +15,12 @@ pub async fn share_viewer_connect(
     port: u16,
     code: String,
     display_name: String,
+    key: Option<String>,
     viewers: State<'_, Arc<ViewerManager>>,
     app: AppHandle,
 ) -> Result<Connected, String> {
     viewers
-        .connect(app, host, port, code, display_name)
+        .connect(app, host, port, code, display_name, key)
         .await
         .map_err(|e| format!("{e}"))
 }
@@ -41,5 +42,19 @@ pub async fn share_viewer_disconnect(
     viewers: State<'_, Arc<ViewerManager>>,
 ) -> Result<(), String> {
     viewers.disconnect(&conn_id);
+    Ok(())
+}
+
+/// 前端訂閱好所有事件了，放行事件 pump。
+///
+/// **這不是可有可無的最佳化。** 沒有它的話，主控端瞬間核准（CLI host 的金鑰
+/// 模式就是這樣）時，`Granted` 與它後面那批畫面重播會在前端掛載訂閱之前就
+/// 送出去，而 Tauri 事件不重播——畫面會永遠停在「等待對方同意」。
+#[tauri::command]
+pub async fn share_viewer_ready(
+    conn_id: String,
+    viewers: State<'_, Arc<ViewerManager>>,
+) -> Result<(), String> {
+    viewers.mark_ready(&conn_id);
     Ok(())
 }

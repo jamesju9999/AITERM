@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use aiterm_lib::pty::manager::PtyManager;
+use aiterm_lib::pty::PtyManager;
 use aiterm_lib::share::registry::{AccessMode, ShareRegistry};
 use aiterm_lib::share::protocol::{ClientMessage, EndReason, ServerMessage, WireAccessMode};
 use futures_util::{SinkExt, StreamExt};
@@ -29,9 +29,25 @@ async fn start_test_server(
 ) -> u16 {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let app = aiterm_lib::share::server::router(pty, registry, None).layer(axum::Extension(
+    let app = aiterm_lib::share::server::router(
+        pty,
+        registry,
+        Arc::new(aiterm_lib::share::events::SilentEvents),
+        None,
+    )
+    .layer(axum::Extension(
         aiterm_lib::share::protocol::ConnectionExporter(
             [0u8; aiterm_lib::share::tls::SAS_MATERIAL_LEN],
+        ),
+    ))
+    .layer(axum::Extension(
+        aiterm_lib::share::protocol::AuthExporter(
+            [0u8; aiterm_lib::share::tls::SAS_MATERIAL_LEN],
+        ),
+    ))
+    .layer(axum::Extension(
+        aiterm_lib::share::protocol::PeerAddr(
+            std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
         ),
     ));
     tokio::spawn(async move {
@@ -57,6 +73,7 @@ where
             protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
             code: code.to_string(),
             display_name: name.to_string(),
+            auth: None,
         })
         .unwrap()
         .into(),
@@ -158,6 +175,7 @@ async fn an_unknown_code_is_refused_without_reaching_the_host() {
             protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
             code: "000000".to_string(),
             display_name: "Mallory".to_string(),
+            auth: None,
         })
         .unwrap()
         .into(),
@@ -216,6 +234,7 @@ async fn a_read_only_viewer_sees_output_but_cannot_type() {
             cols: 80,
             rows: 24,
             host_os: std::env::consts::OS.to_string(),
+            host_auth: None,
         }
     );
 
@@ -259,6 +278,7 @@ async fn a_controlling_viewer_can_type_and_sees_the_result() {
             cols: 80,
             rows: 24,
             host_os: std::env::consts::OS.to_string(),
+            host_auth: None,
         }
     );
 
@@ -293,6 +313,7 @@ async fn a_mismatched_protocol_version_is_refused_at_the_handshake() {
             protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION + 1,
             code: code.clone(),
             display_name: "Alice".to_string(),
+            auth: None,
         })
         .unwrap()
         .into(),
@@ -331,6 +352,7 @@ async fn revoking_control_tells_the_viewer_it_can_no_longer_type() {
             cols: 80,
             rows: 24,
             host_os: std::env::consts::OS.to_string(),
+            host_auth: None,
         }
     );
 
@@ -378,6 +400,7 @@ async fn resizing_the_host_pty_after_a_viewer_connects_tells_the_viewer_the_new_
             cols: 80,
             rows: 24,
             host_os: std::env::consts::OS.to_string(),
+            host_auth: None,
         }
     );
 
@@ -424,6 +447,7 @@ async fn a_resize_notification_arrives_before_any_output_drawn_at_the_new_size()
             cols: 80,
             rows: 24,
             host_os: std::env::consts::OS.to_string(),
+            host_auth: None,
         }
     );
 
@@ -564,6 +588,7 @@ async fn the_host_commits_before_it_can_see_the_viewer_nonce() {
             protocol_version: aiterm_lib::share::protocol::PROTOCOL_VERSION,
             code: code.clone(),
             display_name: "Alice".to_string(),
+            auth: None,
         })
         .unwrap()
         .into(),
@@ -674,7 +699,11 @@ async fn both_ends_of_a_real_tls_connection_derive_the_same_sas() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(47823);
     let port = state
-        .start_if_needed_on_port(Arc::clone(&pty), want, None)
+        .start_if_needed_on_port(
+            Arc::clone(&pty),
+            want,
+            Arc::new(aiterm_lib::share::events::SilentEvents),
+        )
         .await
         .unwrap_or_else(|e| panic!("bind 0.0.0.0:{want} failed: {e}（用 AITERM_PROBE_PORT 換一個）"));
 
@@ -761,7 +790,11 @@ async fn lan_reachability_probe() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(47823);
     let port = state
-        .start_if_needed_on_port(Arc::clone(&pty), want, None)
+        .start_if_needed_on_port(
+            Arc::clone(&pty),
+            want,
+            Arc::new(aiterm_lib::share::events::SilentEvents),
+        )
         .await
         .unwrap_or_else(|e| panic!("bind 0.0.0.0:{want} failed: {e}（用 AITERM_PROBE_PORT 換一個）"));
 

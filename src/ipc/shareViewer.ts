@@ -16,19 +16,41 @@ export interface ViewerConnected {
   sas: string;
 }
 
+export interface ShareViewerConnectArgs {
+  host: string;
+  port: number;
+  code: string;
+  displayName: string;
+  /** CLI host 的預共享金鑰（hex）。短碼模式留空。 */
+  key?: string;
+}
+
 /**
  * 連進別台機器分享出來的終端機。
  *
  * 傳輸跑在 Rust，不在這裡：要連的是 TLS ＋ 自簽憑證，而 webview 的
  * `new WebSocket("wss://...")` 會拒絕自簽憑證且沒有程式化例外。
  */
-export function shareViewerConnect(
-  host: string,
-  port: number,
-  code: string,
-  displayName: string,
-): Promise<ViewerConnected> {
-  return invoke<ViewerConnected>("share_viewer_connect", { host, port, code, displayName });
+export function shareViewerConnect(args: ShareViewerConnectArgs): Promise<ViewerConnected> {
+  return invoke<ViewerConnected>("share_viewer_connect", {
+    host: args.host,
+    port: args.port,
+    code: args.code,
+    displayName: args.displayName,
+    key: args.key,
+  });
+}
+
+/**
+ * 告訴後端「所有事件都訂閱好了，可以開始送」。
+ *
+ * **一定要在註冊完每一個 listener 之後才呼叫。** 主控端瞬間核准時（CLI host
+ * 的金鑰模式），`Granted` 與它後面那批畫面重播會在這個元件掛載之前就送出，
+ * 而 Tauri 事件不重播——早一步呼叫這支，那些事件就直接消失，畫面永遠停在
+ * 「等待對方同意」。
+ */
+export function shareViewerReady(connId: string): Promise<void> {
+  return invoke<void>("share_viewer_ready", { connId });
 }
 
 /** 把按鍵送給對方。唯讀時不該呼叫——伺服器端還有一道授權檢查。 */

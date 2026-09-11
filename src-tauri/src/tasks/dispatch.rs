@@ -10,7 +10,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::config::{ConfigStore, TierMapping};
-use crate::pty::manager::PtyManager;
+use crate::pty::PtyManager;
 use crate::pty::session::done_marker_instruction;
 use crate::tasks::store::TaskRow;
 
@@ -351,14 +351,14 @@ pub async fn spawn_and_run(
     bridge_env: Option<(u16, String)>,
 ) -> Result<(String, DispatchResult), String> {
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
-    let tab_id = pty
-        .create_with_app(
-            app.clone(),
-            size,
-            Some(std::path::PathBuf::from(project_dir)),
-            bridge_env,
-        )
-        .map_err(|e| e.to_string())?;
+    let tab_id = crate::pty::create_with_app(
+        pty,
+        app.clone(),
+        size,
+        Some(std::path::PathBuf::from(project_dir)),
+        bridge_env,
+    )
+    .map_err(|e| e.to_string())?;
 
     // 送進終端機的是接好旗標的版本；下面的事件送的是原本的指令——分頁
     // 標題是 `Agent: <command>`（TerminalApp.tsx），把 UUID 塞進去會讓
@@ -682,7 +682,7 @@ Enter to confirm · Esc to cancel
         );
     }
 
-    use crate::pty::manager::PtyManager;
+    use crate::pty::PtyManager;
 
     fn settle_size() -> PtySize {
         PtySize { rows: 24, cols: 200, pixel_width: 0, pixel_height: 0 }

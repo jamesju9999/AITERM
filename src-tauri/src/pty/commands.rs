@@ -3,7 +3,7 @@ use serde::Deserialize;
 use tauri::{AppHandle, State};
 
 use super::error::PtyError;
-use super::manager::PtyManager;
+use super::PtyManager;
 
 #[derive(Debug, Deserialize)]
 pub struct PtySizeArg {
@@ -42,7 +42,7 @@ pub fn pty_create(
             .map(|t| (port, t)),
         _ => None,
     };
-    manager.create_with_app(app, size.into(), cwd, bridge_env)
+    crate::pty::create_with_app(&manager, app, size.into(), cwd, bridge_env)
 }
 
 #[tauri::command]

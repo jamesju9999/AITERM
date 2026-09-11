@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use aiterm_lib::pty::manager::PtyManager;
+use aiterm_lib::pty::PtyManager;
 use aiterm_lib::share::registry::AccessMode;
 use aiterm_lib::share::viewer::{connect_and_handshake, ViewerHandshake};
 use aiterm_lib::share::ShareServerState;
@@ -21,7 +21,7 @@ async fn start_host() -> (Arc<ShareServerState>, String, String, u16) {
     let state = Arc::new(ShareServerState::new());
     let code = state.registry.start_share(tab_id.clone());
     let port = state
-        .start_if_needed(Arc::clone(&pty), None)
+        .start_if_needed(Arc::clone(&pty), Arc::new(aiterm_lib::share::events::SilentEvents))
         .await
         .expect("start share server");
     (state, tab_id, code, port)
@@ -33,7 +33,7 @@ async fn the_viewer_derives_the_same_sas_as_the_host() {
     let (state, tab_id, code, port) = start_host().await;
 
     let ViewerHandshake { sas, .. } =
-        connect_and_handshake("127.0.0.1", port, &code, "Alice")
+        connect_and_handshake("127.0.0.1", port, &code, "Alice", None)
             .await
             .expect("handshake should succeed");
 
@@ -58,7 +58,7 @@ async fn an_unknown_code_is_refused_before_any_handshake_completes() {
         .collect();
     assert_ne!(bogus, code);
 
-    let result = connect_and_handshake("127.0.0.1", port, &bogus, "Mallory").await;
+    let result = connect_and_handshake("127.0.0.1", port, &bogus, "Mallory", None).await;
     assert!(result.is_err(), "an unknown code must not produce a usable connection");
 }
 
@@ -95,7 +95,7 @@ async fn an_approved_viewer_receives_the_hosts_screen() {
     let state = Arc::new(ShareServerState::new());
     let code = state.registry.start_share(tab_id.clone());
     let port = state
-        .start_if_needed(Arc::clone(&pty), None)
+        .start_if_needed(Arc::clone(&pty), Arc::new(aiterm_lib::share::events::SilentEvents))
         .await
         .expect("start share server");
 
@@ -106,7 +106,7 @@ async fn an_approved_viewer_receives_the_hosts_screen() {
     pty.write(&tab_id, b"printf 'VIEWED\\n'\n").unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let handshake = connect_and_handshake("127.0.0.1", port, &code, "Alice")
+    let handshake = connect_and_handshake("127.0.0.1", port, &code, "Alice", None)
         .await
         .expect("handshake");
 
@@ -120,7 +120,13 @@ async fn an_approved_viewer_receives_the_hosts_screen() {
     // 串流迴圈把事件送進 channel，測試在這裡收。
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ViewerEvent>();
     let (_keys_tx, keys_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-    tokio::spawn(run_viewer_stream(handshake.ws, tx, keys_rx));
+    tokio::spawn(run_viewer_stream(
+        handshake.ws,
+        tx,
+        keys_rx,
+        handshake.key,
+        handshake.auth_exporter,
+    ));
 
     // 先收到 Granted，然後是重播。
     let mut granted = false;
@@ -158,9 +164,9 @@ async fn the_viewer_is_told_why_the_connection_ended() {
     let tab_id = pty.create_with_callback(SIZE, |_| {}).expect("spawn pty");
     let state = Arc::new(ShareServerState::new());
     let code = state.registry.start_share(tab_id.clone());
-    let port = state.start_if_needed(Arc::clone(&pty), None).await.expect("start");
+    let port = state.start_if_needed(Arc::clone(&pty), Arc::new(aiterm_lib::share::events::SilentEvents)).await.expect("start");
 
-    let handshake = connect_and_handshake("127.0.0.1", port, &code, "Alice")
+    let handshake = connect_and_handshake("127.0.0.1", port, &code, "Alice", None)
         .await
         .expect("handshake");
     let request_id = state.registry.pending(&tab_id)[0].request_id.clone();
@@ -168,7 +174,13 @@ async fn the_viewer_is_told_why_the_connection_ended() {
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ViewerEvent>();
     let (_keys_tx, keys_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-    tokio::spawn(run_viewer_stream(handshake.ws, tx, keys_rx));
+    tokio::spawn(run_viewer_stream(
+        handshake.ws,
+        tx,
+        keys_rx,
+        handshake.key,
+        handshake.auth_exporter,
+    ));
 
     // 主控端停止分享——觀看端要收到有意義的原因，不是無聲斷線。
     tokio::time::sleep(Duration::from_millis(300)).await;
