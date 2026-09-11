@@ -236,13 +236,37 @@ pub async fn tasks_mark_done(
     Ok(())
 }
 
+/// 「合併回原分支」的結果。
+///
+/// 衝突不是錯誤，而是一種**需要使用者決定**的狀態，所以用結構化結果回傳，
+/// 而不是塞進 Err 字串讓前端去比對文字。
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum MergeOutcome {
+    /// 合併完成，worktree 已清理。
+    Merged,
+    /// 有衝突。原專案目錄停在合併進行中，worktree 與分支原樣保留。
+    Conflict { files: Vec<String> },
+    /// 還沒開始動手就擋下來了。
+    Blocked { reason: BlockedReason, files: Vec<String> },
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockedReason {
+    /// 原專案目錄有未提交的變更。
+    DirtyBase,
+    /// 原專案目錄還停在上一次沒收尾的合併。
+    MergeInProgress,
+}
+
 #[tauri::command]
 pub async fn tasks_merge_worktree(
     project_id: String,
     id: String,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
-) -> Result<(), String> {
+) -> Result<MergeOutcome, String> {
     let p = project(&reg, &project_id)?;
     let row = store::get_task(&p.pool, &id)
         .await
@@ -251,19 +275,65 @@ pub async fn tasks_merge_worktree(
     let worktree_path = row.worktree_path.ok_or_else(|| "this card has no worktree to merge".to_string())?;
     let worktree_branch = row.worktree_branch.ok_or_else(|| "this card has no worktree to merge".to_string())?;
 
+    let base_client = GitClient::new(row.project_dir.clone(), None);
+
+    // 兩個前置檢查都在動任何東西**之前**做完。一旦開始 commit/merge 就很難
+    // 乾淨地退回去，而這兩種狀況都是使用者自己就能處理的——與其讓 git 在
+    // 半路拒絕、丟一段沒頭沒尾的 stderr，不如一開始就講清楚。
+    if base_client.is_merge_in_progress().await {
+        return Ok(MergeOutcome::Blocked {
+            reason: BlockedReason::MergeInProgress,
+            files: base_client.conflicted_files().await.unwrap_or_default(),
+        });
+    }
+    if base_client.has_uncommitted_changes().await? {
+        return Ok(MergeOutcome::Blocked {
+            reason: BlockedReason::DirtyBase,
+            files: base_client.dirty_files().await.unwrap_or_default(),
+        });
+    }
+
     let worktree_client = GitClient::new(worktree_path.clone(), None);
     if worktree_client.has_uncommitted_changes().await? {
         worktree_client.commit_all(&format!("Task: {}", row.title)).await?;
     }
 
-    let base_client = GitClient::new(row.project_dir.clone(), None);
-    base_client.merge_branch(&worktree_branch).await?;
+    // 合併失敗時 worktree/分支一律原樣保留——成果在上一步就已經 commit 到
+    // 那個分支上了，保留住使用者才有機會解衝突或改天再試。
+    if let Err(merge_err) = base_client.merge_branch(&worktree_branch).await {
+        let files = base_client.conflicted_files().await.unwrap_or_default();
+        if !files.is_empty() {
+            // 真的是衝突：決定權交還給使用者（前端跳視窗問要自己解還是還原）。
+            return Ok(MergeOutcome::Conflict { files });
+        }
+        // 不是衝突的其他失敗。倉庫仍可能被留在半合併狀態，先還原再把 git
+        // 自己的錯誤往上丟——這種情況使用者無從決定，留著只會礙事。
+        if base_client.is_merge_in_progress().await {
+            let _ = base_client.merge_abort().await;
+        }
+        return Err(merge_err);
+    }
 
-    // 合併成功才清理——失敗的話（通常是衝突）worktree/分支原樣保留，
-    // 讓使用者自己進那個分頁處理再重按一次。
     base_client.remove_worktree(&worktree_path).await?;
     store::clear_worktree(&p.pool, &id).await.map_err(|e| e.to_string())?;
     emit_updated(&app);
+    Ok(MergeOutcome::Merged)
+}
+
+/// 還原一次沒收尾的合併（`git merge --abort`）。前端在衝突視窗上選「還原」
+/// 時呼叫。**worktree 與分支不動**——成果都在那個分支上，隨時能再試。
+#[tauri::command]
+pub async fn tasks_abort_merge(
+    project_id: String,
+    id: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    let row = store::get_task(&p.pool, &id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "task not found".to_string())?;
+    GitClient::new(row.project_dir, None).merge_abort().await?;
     Ok(())
 }
 
@@ -906,5 +976,75 @@ mod merge_worktree_tests {
         base_client.merge_branch(&branch).await.unwrap();
         base_client.remove_worktree(&wt_path.to_string_lossy()).await.unwrap();
         assert!(!wt_path.exists());
+    }
+
+    /// 造一張已經建好 worktree 的卡片，回傳 (pool, id, base_client, wt_path, branch)。
+    async fn card_with_worktree(
+        project_dir: &std::path::Path,
+        storage_dir: &std::path::Path,
+    ) -> (sqlx::SqlitePool, String, GitClient, std::path::PathBuf, String) {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", &project_dir.to_string_lossy(), true, false)
+            .await
+            .unwrap();
+        let wt_path = crate::tasks::task_dir(storage_dir, &id).join("worktree");
+        let branch = format!("aiterm-task/{id}");
+        let base_client = GitClient::new(project_dir.to_string_lossy().to_string(), None);
+        base_client.create_worktree(&wt_path.to_string_lossy(), &branch).await.unwrap();
+        store::set_worktree(&pool, &id, &wt_path.to_string_lossy(), &branch).await.unwrap();
+        (pool, id, base_client, wt_path, branch)
+    }
+
+    /// 原分支有未提交變更時，必須在動任何東西**之前**就擋下來。讓 git 自己
+    /// 拒絕的話，使用者只會拿到一段沒頭沒尾的 stderr，而且中途可能已經在
+    /// worktree 產生了 commit。
+    #[tokio::test]
+    async fn detects_a_dirty_base_before_touching_anything() {
+        let project_dir = tempfile::tempdir().unwrap();
+        init_repo(project_dir.path());
+        let storage_dir = tempfile::tempdir().unwrap();
+        let (_pool, _id, base_client, _wt, _branch) =
+            card_with_worktree(project_dir.path(), storage_dir.path()).await;
+
+        assert!(base_client.dirty_files().await.unwrap().is_empty());
+
+        fs::write(project_dir.path().join("a.txt"), "使用者改到一半\n").unwrap();
+
+        assert!(base_client.has_uncommitted_changes().await.unwrap());
+        assert_eq!(base_client.dirty_files().await.unwrap(), vec!["a.txt".to_string()]);
+        assert!(!base_client.is_merge_in_progress().await, "還沒合併就不該是合併中");
+    }
+
+    /// 衝突時：倉庫停在半合併、worktree 與 DB 欄位都要原樣保留——成果都
+    /// commit 在那個分支上，保留住使用者才有機會解衝突或改天再試。
+    #[tokio::test]
+    async fn conflict_keeps_the_worktree_and_leaves_merge_in_progress() {
+        let project_dir = tempfile::tempdir().unwrap();
+        init_repo(project_dir.path());
+        let storage_dir = tempfile::tempdir().unwrap();
+        let (pool, id, base_client, wt_path, branch) =
+            card_with_worktree(project_dir.path(), storage_dir.path()).await;
+
+        // 兩邊改同一個檔案的同一行 → 必定衝突。
+        fs::write(wt_path.join("a.txt"), "worktree 版本\n").unwrap();
+        GitClient::new(wt_path.to_string_lossy().to_string(), None)
+            .commit_all("Task")
+            .await
+            .unwrap();
+        fs::write(project_dir.path().join("a.txt"), "原分支版本\n").unwrap();
+        base_client.commit_all("base moved on").await.unwrap();
+
+        assert!(base_client.merge_branch(&branch).await.is_err());
+        assert!(base_client.is_merge_in_progress().await, "衝突後倉庫應該停在合併進行中");
+        assert_eq!(base_client.conflicted_files().await.unwrap(), vec!["a.txt".to_string()]);
+        assert!(wt_path.exists(), "衝突時 worktree 必須原樣保留");
+
+        let row = store::get_task(&pool, &id).await.unwrap().unwrap();
+        assert!(row.worktree_path.is_some(), "衝突時不可以清掉 DB 欄位，否則按鈕會消失");
+
+        // 還原之後倉庫乾淨，而且成果仍在那個分支上，可以再試。
+        base_client.merge_abort().await.unwrap();
+        assert!(!base_client.is_merge_in_progress().await);
+        assert!(base_client.dirty_files().await.unwrap().is_empty());
     }
 }
