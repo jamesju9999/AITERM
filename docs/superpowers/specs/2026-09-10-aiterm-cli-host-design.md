@@ -296,7 +296,13 @@ aiterm-host [OPTIONS]
 - `share::viewer` 的握手：`key` 是 `Some` 時計算並帶上 `auth`、驗 `host_auth`、
   **不顯示 SAS 也不等使用者**；`None` 時走現有的短碼 + SAS 流程，一行都不變。
 - 連線對話框加一個「金鑰」欄位。填了走金鑰模式，留空走短碼模式。
-- 金鑰存進既有的 `SecretStore`（OS keyring），**不進 localStorage**。
+- 金鑰**本里程碑不持久化**，只留在對話框的記憶體狀態裡，每次連線自己貼。
+  原本這裡寫「存進既有的 `SecretStore`（OS keyring）」，實作時發現**那個能力
+  不存在**：`commands/secret.rs` 只有 `has_api_key` / `delete_api_key`，而且有
+  註解明講 secret 的寫入一律走 `add_provider`／`update_provider`、刻意不對 IPC
+  暴露 raw 的 set。要做出來等於反轉一個有文件記載的安全決策，還牽涉到沒決定的
+  產品問題（什麼時候存？怎麼預填？），所以留給下一輪。
+  **明確排除 localStorage**——這是能拿到 shell 的憑證，不放明文落地。
 - `RemoteTerminalView` / `RemoteAiPanel` 不動。
 
 ## 錯誤處理
