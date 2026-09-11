@@ -80,6 +80,21 @@
 
 ## Task 1: 驗證 musl 真的編得出來也跑得動（**gating**）
 
+> **✅ 已於 2026-09-11 在本機 docker 驗證通過，這個任務不用再做一次。**
+>
+> | 目標 | 編譯 | 執行 | `file` 的判定 |
+> |------|------|------|--------------|
+> | `aarch64-unknown-linux-musl` | ✅ 51.7s | ✅ `--print-connection` 正常 | `statically linked` |
+> | `x86_64-unknown-linux-musl` | ✅ 103s（QEMU 模擬） | ✅ | `static-pie linked` |
+>
+> 兩者都在 `rust:alpine` 裡以 `apk add musl-dev` + `cargo build -p aiterm-host
+> --release` 完成。`ring`（rustls 的加密後端）在 musl 上沒有問題。
+>
+> **結論：發布矩陣的兩格 musl 成立，容器基底可以用 alpine，不需要退回 gnu 或
+> debian-slim。** 下面的步驟保留下來，是給「日後升級相依、懷疑 musl 壞掉時」
+> 重跑用的。
+
+
 整份計畫的五個目標裡有兩個是 musl。**這個任務失敗的話，發布矩陣要改成 gnu 動態連結、
 容器基底要從 `alpine` 換成 `debian-slim`**——那是範圍變更，要回報使用者，不是自己決定。
 
