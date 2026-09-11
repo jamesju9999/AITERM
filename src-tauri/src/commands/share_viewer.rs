@@ -15,11 +15,12 @@ pub async fn share_viewer_connect(
     port: u16,
     code: String,
     display_name: String,
+    key: Option<String>,
     viewers: State<'_, Arc<ViewerManager>>,
     app: AppHandle,
 ) -> Result<Connected, String> {
     viewers
-        .connect(app, host, port, code, display_name)
+        .connect(app, host, port, code, display_name, key)
         .await
         .map_err(|e| format!("{e}"))
 }

@@ -84,8 +84,17 @@ impl ViewerManager {
         port: u16,
         code: String,
         display_name: String,
+        key: Option<String>,
     ) -> anyhow::Result<Connected> {
-        let handshake = connect_and_handshake(&host, port, &code, &display_name).await?;
+        let key_bytes = match key {
+            Some(k) => Some(
+                aiterm_core::share::tls::decode_hex(&k)
+                    .ok_or_else(|| anyhow::anyhow!("金鑰不是合法的 hex"))?,
+            ),
+            None => None,
+        };
+        let handshake =
+            connect_and_handshake(&host, port, &code, &display_name, key_bytes.as_deref()).await?;
         let id = Uuid::new_v4().to_string();
         let sas = handshake.sas;
 
@@ -94,7 +103,13 @@ impl ViewerManager {
 
         self.connections.lock().insert(id.clone(), Connection { keys: keys_tx });
 
-        tokio::spawn(run_viewer_stream(handshake.ws, events_tx, keys_rx));
+        tokio::spawn(run_viewer_stream(
+            handshake.ws,
+            events_tx,
+            keys_rx,
+            handshake.key,
+            handshake.auth_exporter,
+        ));
 
         let id_for_pump = id.clone();
         tokio::spawn(async move {
