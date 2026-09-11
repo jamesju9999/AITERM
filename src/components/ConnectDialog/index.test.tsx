@@ -52,7 +52,13 @@ describe("ConnectDialog", () => {
     await userEvent.type(screen.getByLabelText(/6 位數/), "559207");
     await userEvent.click(screen.getByRole("button", { name: /^連線$/ }));
 
-    expect(connectMock).toHaveBeenCalledWith("192.168.1.33", 47823, "559207", "Bob");
+    expect(connectMock).toHaveBeenCalledWith({
+      host: "192.168.1.33",
+      port: 47823,
+      code: "559207",
+      displayName: "Bob",
+      key: undefined,
+    });
     expect(onConnected).toHaveBeenCalledWith("conn-1", "4917", "192.168.1.33:47823");
   });
 
@@ -86,7 +92,13 @@ describe("ConnectDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: /^連線$/ }));
 
     expect(discoverMock).toHaveBeenCalledWith("632706");
-    expect(connectMock).toHaveBeenCalledWith("192.168.1.50", 9000, "632706", "AITerm");
+    expect(connectMock).toHaveBeenCalledWith({
+      host: "192.168.1.50",
+      port: 9000,
+      code: "632706",
+      displayName: "AITerm",
+      key: undefined,
+    });
     expect(onConnected).toHaveBeenCalledWith("conn-1", "4917", "192.168.1.50:9000");
   });
 
@@ -120,6 +132,12 @@ describe("ConnectDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: /^連線$/ }));
 
     expect(discoverMock).not.toHaveBeenCalled();
-    expect(connectMock).toHaveBeenCalledWith("192.168.1.33", 47823, "632706", "AITerm");
+    expect(connectMock).toHaveBeenCalledWith({
+      host: "192.168.1.33",
+      port: 47823,
+      code: "632706",
+      displayName: "AITerm",
+      key: undefined,
+    });
   });
 });

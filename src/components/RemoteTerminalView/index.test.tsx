@@ -256,6 +256,21 @@ describe("RemoteTerminalView", () => {
     ).toBeInTheDocument();
   });
 
+  it("explains a CLI host key mismatch instead of the generic fallback", async () => {
+    // `endReasonText` 的 fallback 會讓漏掉 i18n 項目這件事完全不會有測試
+    // 變紅——只會退化成通用句子。這裡釘住 host_auth_failed 一定要對到專屬
+    // 文案，而不是「那個終端機已經關閉」這種通用 fallback。
+    render(<RemoteTerminalView tabId="t1" connId="c19" sas="1919" isActive onConnectClick={vi.fn()} />);
+    await waitFor(() => expect(handlers["ended:c19"]).toBeDefined());
+
+    handlers["ended:c19"]("host_auth_failed" as never);
+
+    expect(
+      await screen.findByText(/主機金鑰不符|host's key does not match/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/那個終端機已經關閉|That terminal has closed/)).not.toBeInTheDocument();
+  });
+
   it("shows a human sentence for an unrecognised end reason", async () => {
     // spec 要求「不能有『未知錯誤』」。真的收到沒見過的 reason 時（例如
     // 對方是更新版），也要給一句人話而不是原始字串。
