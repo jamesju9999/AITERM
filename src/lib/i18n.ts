@@ -1527,6 +1527,19 @@ const zhTW = {
     python_env_index_url_placeholder: "https://pypi.mycompany.com/simple",
     python_env_audio_prompt: "這個音訊檔需要語音轉文字支援，需要額外下載約 33 MB。要現在安裝嗎？",
 
+    // 合併回原分支
+    board_merge_running: "合併中…",
+    board_merge_conflict_title: "合併有衝突",
+    board_merge_conflict_body: (files: string) =>
+      `以下檔案有衝突，尚未合併進原分支：\n\n${files}\n\n原專案目錄目前停在「合併進行中」。\n\n「我自己解」會保持這個狀態。您可以直接在原專案目錄解衝突後 git commit，再回來按一次合併。\n\n「還原」會執行 git merge --abort，把原專案目錄回復乾淨。工作成果仍然完整保留在這張卡片的分支上，隨時可以再試。`,
+    board_merge_conflict_keep: "我自己解",
+    board_merge_conflict_abort: "還原",
+    board_merge_blocked_title: "還不能合併",
+    board_merge_blocked_dirty: (files: string) =>
+      `原專案目錄有未提交的變更，git 不會讓合併進行。請先提交或 stash 這些檔案：\n\n${files}`,
+    board_merge_blocked_in_progress: (files: string) =>
+      `原專案目錄還停在上一次沒有收尾的合併。請先在原專案目錄把它處理完（解衝突後 git commit，或 git merge --abort），再回來合併。\n\n未解的檔案：\n${files}`,
+
     // Shell 身分徽章（只在偵測到 Windows PowerShell 5.1 時出現）
     shell_badge_legacy_powershell: "PowerShell 5.1",
     shell_badge_title: "這個分頁跑的是 Windows PowerShell 5.1",
@@ -2949,6 +2962,19 @@ const enRaw = {
     python_env_index_url_desc: "If your corporate network blocks PyPI, set an internal package mirror address here. Leave blank to use the default PyPI.",
     python_env_index_url_placeholder: "https://pypi.mycompany.com/simple",
     python_env_audio_prompt: "This audio file needs speech-to-text support, which requires downloading about 33 MB more. Install it now?",
+
+    // Merge worktree back into the base branch
+    board_merge_running: "Merging…",
+    board_merge_conflict_title: "Merge conflict",
+    board_merge_conflict_body: (files: string) =>
+      `These files conflict and were not merged into the base branch:\n\n${files}\n\nThe project directory is now mid-merge.\n\n"Let me resolve it" keeps that state. Resolve the conflicts in the project directory, git commit, then press merge again.\n\n"Undo" runs git merge --abort and restores the project directory. Your work stays committed on this card's branch and can be merged later.`,
+    board_merge_conflict_keep: "Let me resolve it",
+    board_merge_conflict_abort: "Undo",
+    board_merge_blocked_title: "Cannot merge yet",
+    board_merge_blocked_dirty: (files: string) =>
+      `The project directory has uncommitted changes, so git will not merge. Commit or stash these first:\n\n${files}`,
+    board_merge_blocked_in_progress: (files: string) =>
+      `The project directory is still mid-merge from a previous attempt. Finish it there (resolve and git commit, or git merge --abort), then merge again.\n\nUnresolved files:\n${files}`,
 
     // Shell identity badge (only shown when Windows PowerShell 5.1 is detected)
     shell_badge_legacy_powershell: "PowerShell 5.1",
