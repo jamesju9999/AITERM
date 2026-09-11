@@ -1187,7 +1187,7 @@ secret `NPM_TOKEN`。沒有的話這個 job 會安靜跳過（跟 Homebrew 同�
 // 平台解析的測試。用 node 內建的 test runner，不拉任何相依——這個套件
 // 本身要盡量輕，它只是一個下載器的殼。
 //
-// 執行：node --test npm/aiterm-host/test/
+// 執行：node --test npm/aiterm-host/test/*.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { packageForPlatform, binaryName } from "../lib/resolve.mjs";
@@ -1232,7 +1232,7 @@ test("Windows 上的執行檔名要帶 .exe", () => {
 - [ ] **Step 2: 跑測試確認會紅**
 
 ```bash
-node --test npm/aiterm-host/test/
+node --test npm/aiterm-host/test/*.test.mjs
 ```
 
 預期：FAIL（`lib/resolve.mjs` 不存在）。
@@ -1329,7 +1329,7 @@ process.exit(result.status ?? 1);
 - [ ] **Step 4: 跑測試**
 
 ```bash
-node --test npm/aiterm-host/test/
+node --test npm/aiterm-host/test/*.test.mjs
 ```
 
 預期：七條全 PASS。
@@ -1544,7 +1544,7 @@ aiterm-host --bind 0.0.0.0 --port 8022
 
 ```bash
 python3 -m unittest discover -s scripts -p 'test_*.py' -v
-node --test npm/aiterm-host/test/
+node --test npm/aiterm-host/test/*.test.mjs
 npx tsc -b
 npm run test
 cd src-tauri && cargo test --workspace

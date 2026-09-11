@@ -50,7 +50,11 @@ jobs:
       # npm 入口套件的平台解析。放在 create-release 而不是 cli-npm：這樣它壞掉會
       # 在發版一開始就擋下來，而不是等到五個平台都建完、人都審核完才發現。
       - name: Test the npm launcher
-        run: node --test npm/aiterm-host/test/
+        # 用 glob 讓 shell 展開，而不是把目錄丟給 node：`node --test <目錄>` 在
+        # Node 22 之後會把目錄當成模組路徑、直接 MODULE_NOT_FOUND（實測 v25 如此），
+        # 只有 Node 20 還會自己去目錄裡找測試。之後有人把這裡升到 22 LTS 時，
+        # 目錄形式會安靜地壞掉。
+        run: node --test npm/aiterm-host/test/*.test.mjs
 
       # 更新項目優先取 CHANGELOG.md 裡對應版本的段落——那份文字隨程式碼一起
       # review，不必每次發版在 GitHub 網頁編輯器裡重打。沒有對應段落時退回

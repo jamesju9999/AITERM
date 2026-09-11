@@ -1,7 +1,7 @@
 // 平台解析的測試。用 node 內建的 test runner，不拉任何相依——這個套件
 // 本身要盡量輕，它只是一個下載器的殼。
 //
-// 執行：node --test npm/aiterm-host/test/
+// 執行：node --test npm/aiterm-host/test/*.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { packageForPlatform, binaryName } from "../lib/resolve.mjs";
