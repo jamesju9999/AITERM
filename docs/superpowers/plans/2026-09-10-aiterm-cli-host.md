@@ -2713,6 +2713,47 @@ async fn a_viewer_with_no_key_is_denied() {
 }
 
 #[tokio::test]
+async fn a_host_that_cannot_prove_the_key_never_gets_to_stream() {
+    // **這是金鑰模式下唯一擋得住中間人的地方，而且目前零覆蓋。**
+    //
+    // Task 11 的突變測試證實了缺口：把 `run_viewer_stream` 裡驗證失敗後的
+    // `break` 拿掉，整個測試套件（1564 條）沒有任何一條變紅。原因是既有測試
+    // 全部跑在短碼模式（`key = None`），而 `host_proof_acceptable` 只有在
+    // `key` 是 `Some` 時才可能回 false——那條分支從來沒被任何測試走過。
+    //
+    // 攻擊情境：中間人終止 TLS，自己扮演主控端。它偽造不出觀看端的證明，
+    // 但它**不需要**——它可以直接回 `Granted`、餵假畫面、收走使用者打的
+    // 每一個鍵。觀看端不驗憑證（`SasIsTheOnlyIdentityCheck`），金鑰模式又
+    // 沒有 SAS，所以驗 `host_auth` 是唯一的防線。
+    //
+    // 沒辦法用真的 CLI host 測這個：真 host 握有正確金鑰，證明一定對。所以
+    // 這裡要起一個**假主控端**——走完 SasCommit / AwaitingApproval 的訊息
+    // 序列，但 `Granted` 帶一個用別把金鑰算出來的 `host_auth`。
+    let fake = start_fake_host_with_wrong_key().await;
+    let viewer_key = auth::generate_key().to_vec();
+    let (mut events, _keys) = connect(fake.port, Some(&viewer_key)).await;
+
+    let ev = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("no event within 5s")
+        .expect("channel open");
+
+    match ev {
+        ViewerEvent::Ended { reason } => assert_eq!(reason, "host_auth_failed"),
+        other => panic!("a viewer must refuse a host that cannot prove the key; got {other:?}"),
+    }
+
+    // 而且**不能**有任何畫面位元組流出來——收下假畫面本身就是損害。
+    assert!(
+        matches!(
+            tokio::time::timeout(Duration::from_millis(500), events.recv()).await,
+            Err(_) | Ok(None)
+        ),
+        "nothing may stream after a failed host proof"
+    );
+}
+
+#[tokio::test]
 async fn read_only_mode_is_reported_to_the_viewer() {
     let h = start_host(AccessMode::ReadOnly).await;
     let (mut events, _keys) = connect(h.port, Some(&h.key)).await;
@@ -2771,13 +2812,64 @@ async fn a_command_run_through_the_viewer_produces_an_osc_133_d_marker() {
 }
 ```
 
+- [ ] **Step 1b: 寫 `start_fake_host_with_wrong_key`**
+
+上面那條測試需要一個假主控端。它不能重用 `ShareServerState`——真 server 握有
+正確金鑰，證明一定算得對。要的是一個最小的 TLS + WebSocket 端點，走完既有的
+訊息序列但在 `Granted` 帶錯的 `host_auth`：
+
+```rust
+/// 起一個假主控端：訊息序列合法，但 `Granted` 的 `host_auth` 是用另一把
+/// 金鑰算的。模擬中間人終止 TLS 後自己扮演主控端。
+async fn start_fake_host_with_wrong_key() -> FakeHost {
+    let identity = aiterm_core::share::tls::ShareIdentity::generate().expect("identity");
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let wrong_key = auth::generate_key().to_vec();
+
+    tokio::spawn(async move {
+        let Ok((stream, _)) = listener.accept().await else { return };
+        // TLS accept 用與 `share::mod` 的 accept 迴圈相同的方式建構
+        // acceptor（見那裡的 `serve_tls`），然後：
+        //   1. 導出 AUTH_EXPORTER_LABEL 的 material
+        //   2. 升級成 WebSocket
+        //   3. 送 SasCommit（nonce 隨便一個，觀看端在金鑰模式不看 SAS）
+        //   4. 收 Join（忽略它的 auth——假主控端驗不了也不在乎）
+        //   5. 收 SasNonce
+        //   6. 送 AwaitingApproval
+        //   7. 送 Granted，host_auth 用 `wrong_key` 算
+        // 實作時照抄 `share::server::handle_share` 的前半段訊息順序即可，
+        // 但不要呼叫 registry——這個假主控端沒有 PTY 也沒有分頁。
+        let _ = (stream, &identity, &wrong_key);
+    });
+
+    FakeHost { port }
+}
+
+struct FakeHost {
+    port: u16,
+}
+```
+
+**這段是整個測試檔裡最需要小心的部分**：如果假主控端寫錯導致連線在 `Granted`
+之前就斷掉，測試會因為收到別的 `Ended` 而失敗——看起來像通過了「觀看端拒絕」
+的意思，其實是假主控端自己壞了。所以斷言要比對 `reason == "host_auth_failed"`
+這個**精確字串**，不能只斷言「收到 Ended」。
+
 - [ ] **Step 2: 跑測試**
 
 ```bash
 cd src-tauri && cargo test -p aiterm-host --test cli_host
 ```
 
-預期：五條全 PASS。
+預期：六條全 PASS。
+
+跑完之後對 `a_host_that_cannot_prove_the_key_never_gets_to_stream` 做突變驗證：
+把 `run_viewer_stream` 的 `Granted` 分支裡那個 `break;` 拿掉，這條**必須**變紅。
+Task 11 已證實在它存在之前，拿掉 `break` 全套 1564 條測試沒有任何一條變紅——
+所以這條測試如果也抓不到，它就沒有補上任何東西，要當場說出來。
 
 若 `a_command_run_through_the_viewer_produces_an_osc_133_d_marker` 失敗，**不要放寬斷言**——那代表 CLI host 起的 shell 沒有拿到 shell integration，遠端 AI 功能在 CLI host 上是壞的。先查 `pty::shell` 的注入在這條路徑上有沒有被繞過。
 
