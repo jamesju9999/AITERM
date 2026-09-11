@@ -53,20 +53,12 @@ fn powershell_integration_dir() -> PathBuf {
         .join("shell_integration")
 }
 
-/// Inject OSC 133 shell integration into PowerShell (pwsh.exe / powershell.exe).
+/// PowerShell 的 OSC 133 整合腳本內容。
 ///
-/// Overrides the `prompt` function to emit D (command finished) and A (prompt start)
-/// markers. The prompt runs after every command — including those sent programmatically
-/// via PTY — so no preexec hook is needed. The exit code is captured from `$?` and
-/// `$LASTEXITCODE`. The user's original prompt function is preserved and called inside
-/// our wrapper.
-#[cfg(windows)]
-pub(crate) fn inject_powershell_integration(program: PathBuf) -> ShellSpec {
-    let script_dir = powershell_integration_dir();
-    let _ = std::fs::create_dir_all(&script_dir);
-    let script_path = script_dir.join("shell_integration.ps1");
-
-    let script = r#"
+/// 刻意放在 `#[cfg(windows)]` 外面：這段腳本原本連同它的測試都只有 Windows
+/// 才編譯得到，於是在 macOS 開發機上改壞了不會有任何徵兆。常數化之後，
+/// 內容本身在任何平台都測得到。
+pub(crate) const POWERSHELL_INTEGRATION_SCRIPT: &str = r#"
 # ── AITerm Shell Integration (PowerShell) ──
 $global:__aiterm_orig_prompt = if (Test-Path Function:\prompt) { ${function:prompt} } else { $null }
 
@@ -137,7 +129,21 @@ Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {
     [Console]::Write("$([char]27)]133;C$([char]7)")
 }
 "#;
-    let _ = std::fs::write(&script_path, script);
+
+/// Inject OSC 133 shell integration into PowerShell (pwsh.exe / powershell.exe).
+///
+/// Overrides the `prompt` function to emit D (command finished) and A (prompt start)
+/// markers. The prompt runs after every command — including those sent programmatically
+/// via PTY — so no preexec hook is needed. The exit code is captured from `$?` and
+/// `$LASTEXITCODE`. The user's original prompt function is preserved and called inside
+/// our wrapper.
+#[cfg(windows)]
+pub(crate) fn inject_powershell_integration(program: PathBuf) -> ShellSpec {
+    let script_dir = powershell_integration_dir();
+    let _ = std::fs::create_dir_all(&script_dir);
+    let script_path = script_dir.join("shell_integration.ps1");
+
+    let _ = std::fs::write(&script_path, POWERSHELL_INTEGRATION_SCRIPT);
 
     ShellSpec {
         program,
@@ -436,12 +442,9 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
     #[test]
     fn powershell_integration_emits_c_via_enter_override_and_b_after_rendered_prompt() {
-        let spec = inject_powershell_integration(PathBuf::from("pwsh.exe"));
-        let script_path = powershell_integration_dir().join("shell_integration.ps1");
-        let content = std::fs::read_to_string(&script_path).expect("script should have been written");
+        let content = POWERSHELL_INTEGRATION_SCRIPT;
 
         assert!(
             content.contains(r#"(Get-PSReadLineKeyHandler -Bound |"#),
@@ -477,10 +480,6 @@ mod tests {
             content.contains(r#""$rendered$([char]27)]133;B$([char]7)""#),
             "expected the prompt function to append a B marker after the rendered prompt text"
         );
-
-        // spec.program 本身已經被既有的 windows_default_shell_returns_exe_path 測試涵蓋，
-        // 這裡只是避免 unused 警告。
-        assert_eq!(spec.program, PathBuf::from("pwsh.exe"));
     }
 
     #[test]
