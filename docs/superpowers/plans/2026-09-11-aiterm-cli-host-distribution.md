@@ -1025,7 +1025,7 @@ class AitermHost < Formula
   desc "Headless host that shares a shell to AITerm for AI-driven remote control"
   homepage "https://github.com/{repo}"
   version "{version}"
-  license "MIT"
+  license "Apache-2.0"
 
   on_macos do
     on_arm do
@@ -1160,6 +1160,11 @@ git commit -m "feat(dist): 發版時自動更新 Homebrew tap 的 formula"
 ## Task 7: npm 套件
 
 套件名是 **`aiterm-host`**（`aiterm` 已被別人佔用，實測 `aiterm-host` 可用）。
+
+**授權是 `Apache-2.0`，不是 MIT。** repo 根目錄的 `LICENSE` 是 Apache License 2.0
+（`src-tauri/Cargo.toml` 的 `license` 是空字串、`package.json` 沒有這個欄位，但那不代表
+沒有授權——`LICENSE` 檔才是作者實際選擇的）。這份計畫的初版寫成 MIT，Task 6 實作時
+才發現。宣稱一個作者沒選過的授權是實質問題，不是字面問題。
 走 esbuild 那套：一個入口套件用 `optionalDependencies` 指向五個分平台子套件，
 npm 只會裝符合當前平台的那一個。
 
@@ -1306,7 +1311,7 @@ process.exit(result.status ?? 1);
   "type": "module",
   "bin": { "aiterm-host": "bin/aiterm-host.js" },
   "files": ["bin", "lib"],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": { "type": "git", "url": "git+https://github.com/jamesju9999/AITERM.git" },
   "optionalDependencies": {
     "aiterm-host-darwin-arm64": "0.0.0",
@@ -1393,7 +1398,7 @@ for (const t of TARGETS) {
         os: [t.os],
         cpu: [t.cpu],
         files: ["bin"],
-        license: "MIT",
+        license: "Apache-2.0",
         repository: { type: "git", url: "git+https://github.com/jamesju9999/AITERM.git" },
       },
       null,
