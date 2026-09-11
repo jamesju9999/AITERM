@@ -1,0 +1,54 @@
+.aiterm-shellwarn {
+  position: relative;
+  display: inline-flex;
+}
+
+.aiterm-shellwarn__btn {
+  border-color: #f59e0b;
+  color: #f59e0b;
+}
+
+.aiterm-shellwarn__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  width: 340px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--aiterm-surface-2, #1e293b);
+  border: 1px solid var(--aiterm-border, #334155);
+  box-shadow: 0 8px 24px #0008;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: normal;
+}
+
+.aiterm-shellwarn__title {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.aiterm-shellwarn__why {
+  color: var(--aiterm-text-muted, #94a3b8);
+  margin-bottom: 10px;
+}
+
+.aiterm-shellwarn__action {
+  margin-top: 6px;
+  font-weight: 600;
+}
+
+.aiterm-shellwarn__cmdrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.aiterm-shellwarn__cmd {
+  flex: 1;
+  font-family: var(--aiterm-mono, monospace);
+  font-size: 12px;
+  word-break: break-all;
+}
