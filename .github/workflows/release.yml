@@ -879,3 +879,74 @@ jobs:
         run: |
           gh release upload "$TAG" latest.json --clobber
           gh release edit "$TAG" --draft=false --latest
+
+  # 更新 Homebrew tap。
+  #
+  # **`needs: finalize` 不是 `cli-checksums`。** `finalize` 掛著
+  # `environment: release-approval`，會停下來等人審核——那正是「這一版到底要不要
+  # 發出去」的決定點。對外發佈是不可逆的（Homebrew 使用者一 `brew update` 就會
+  # 拿到），所以必須等在人點頭之後，不能跟審核並行。
+  #
+  # 這個 job 失敗不該擋住 release：tap 是額外的便利管道，而 release 本身
+  # （含 Releases 的執行檔與安裝腳本）已經是完整可用的。
+  cli-homebrew:
+    needs: finalize
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      # 這個 repo 用 vX.Y.Z-<主題><n>（例如 v1.25.0-dist1）彩排整條 release
+      # 流程。彩排版不是要給所有 Homebrew 使用者的正式版——標籤裡只要出現
+      # `-` 就代表這是 pre-release/彩排，直接跳過，不動 tap。
+      - name: Guard against pre-release tags
+        id: guard
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$TAG" == *-* ]]; then
+            echo "標籤 $TAG 含有 '-'，判定為 pre-release／彩排標籤，跳過 tap 更新。"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Render the formula
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          gh release download "$TAG" --pattern "aiterm-host-${VERSION}-SHA256SUMS" --dir .
+          python3 scripts/bump_homebrew_formula.py \
+            "$VERSION" "aiterm-host-${VERSION}-SHA256SUMS" "${{ github.repository }}" \
+            > aiterm-host.rb
+          cat aiterm-host.rb
+
+      - name: Push to the tap
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "沒有設定 HOMEBREW_TAP_TOKEN，跳過 tap 更新。"
+            echo "（secret 若設在 environment 而不是 repo 層，這裡會展開成空字串——"
+            echo "  用 gh secret list 確認它在 repo 層。）"
+            exit 0
+          fi
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/jamesju9999/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp aiterm-host.rb tap/Formula/aiterm-host.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/aiterm-host.rb
+          git diff --cached --quiet && { echo "formula 沒有變化"; exit 0; }
+          git commit -m "aiterm-host ${TAG#v}"
+          git push
