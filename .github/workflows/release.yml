@@ -622,6 +622,24 @@ jobs:
         shell: bash
         run: ./target/${{ matrix.target }}/release/aiterm-host${{ matrix.os == 'windows-latest' && '.exe' || '' }} --print-connection
 
+      - name: install.ps1 至少要解析得過
+        # install.ps1 是給 Windows 使用者 `irm ... | iex` 的，但寫它的機器上沒有
+        # pwsh，它從來沒被任何東西解析過。這一格剛好跑在有 pwsh 的 runner 上，
+        # 只做語法解析、不執行（執行會去抓 releases/latest，那時這一版還是 draft）。
+        # 語法錯誤會讓每個 Windows 使用者的第一步就失敗，而且錯誤訊息是一段
+        # PowerShell parser 的 stack，跟「安裝」完全扯不上關係。
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD\scripts\install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.ToString() }
+            exit 1
+          }
+          Write-Host "install.ps1 parses cleanly"
+
       - name: Package
         working-directory: src-tauri
         shell: bash
