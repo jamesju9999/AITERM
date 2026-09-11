@@ -185,6 +185,57 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// 等到該收工為止：shell 自己結束，或收到終止訊號。
+///
+/// shell 結束的訊號取自 PTY 的 broadcast channel 被關閉——reader thread 在
+/// PTY EOF 時結束、sender 被 drop，接收端就會拿到 `Closed`。這比輪詢輸出
+/// 可靠：一個閒置的 shell 跟一個結束的 shell 一樣安靜。
+async fn wait_for_shutdown(pty: &PtyManager, session_id: &str) {
+    let mut rx = match pty.subscribe(session_id) {
+        Some(rx) => rx,
+        None => return,
+    };
+
+    let shell_ended = async {
+        loop {
+            match rx.recv().await {
+                Ok(_) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+
+    tokio::select! {
+        _ = shell_ended => {
+            println!("shell 結束，收工。");
+        }
+        _ = terminate_signal() => {
+            println!("收到終止訊號，關閉連線並收工。");
+        }
+    }
+
+    // 收掉 PTY。觀看端會因為 `subscribe_with_history` 的 channel 關閉而收到
+    // `SessionClosed`，這是既有行為，不需要另外送訊息。
+    let _ = pty.close(session_id);
+}
+
+#[cfg(unix)]
+async fn terminate_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
+    let mut int = signal(SignalKind::interrupt()).expect("SIGINT handler");
+    tokio::select! {
+        _ = term.recv() => {}
+        _ = int.recv() => {}
+    }
+}
+
+#[cfg(windows)]
+async fn terminate_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
