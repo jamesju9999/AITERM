@@ -70,13 +70,61 @@ npm run tauri:dev
 npm run test
 
 # Rust unit & integration tests
-cd src-tauri && cargo test
+# --workspace is required: src-tauri/Cargo.toml is both a package and the
+# workspace root, so a bare `cargo test` runs only the `app` package and
+# silently skips aiterm-core and aiterm-host.
+cd src-tauri && cargo test --workspace
 
 # Type checking
 # NOT `tsc --noEmit`: the root tsconfig.json is a solution file ("files": []),
 # so it checks nothing and always exits 0.
 npx tsc -b
 ```
+
+## 🖥️ aiterm-host (remote host)
+
+Run a shell on a machine with no desktop — a cloud VM, a container, a NAS —
+and connect to it from AITerm to drive it with AI. The AI runs on **your**
+desktop, so the host needs no AI configuration or API keys.
+
+### Install
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/jamesju9999/AITERM/master/scripts/install.sh | sh
+
+# Homebrew
+brew install jamesju9999/tap/aiterm-host
+
+# npm (or run without installing via npx)
+npx aiterm-host --print-connection
+
+# Container
+docker run -it --rm -p 8022:8022 -e AITERM_HOST_KEY=<your-key> \
+  ghcr.io/jamesju9999/aiterm-host:latest
+```
+
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/jamesju9999/AITERM/master/scripts/install.ps1 | iex
+```
+
+The install scripts verify every download against the release's `SHA256SUMS`
+and **abort on a mismatch** — there is no "install anyway" option.
+
+### Use
+
+```bash
+aiterm-host --bind 0.0.0.0 --port 8022
+```
+
+It prints an address, a port and a key. In AITerm, open *Connect to a remote
+terminal*, expand the manual-address section, and enter the address, port and
+key (leave the 6-digit code blank).
+
+The key lives in `~/.config/aiterm-host/key` and survives restarts, so a saved
+connection keeps working. Across networks, use an address the viewer can reach
+(Tailscale, a VPN, or an SSH tunnel with `--bind 127.0.0.1`).
 
 ## 📂 Project Layout
 ```
@@ -154,13 +202,58 @@ npm run tauri:dev
 npm run test
 
 # Rust 單元測試與整合測試
-cd src-tauri && cargo test
+# 一定要加 --workspace：src-tauri/Cargo.toml 同時是 package 與 workspace root，
+# bare `cargo test` 只會跑 `app`，aiterm-core 與 aiterm-host 會被整批跳過。
+cd src-tauri && cargo test --workspace
 
 # 型別檢查
 # 不可用 `tsc --noEmit`：根目錄的 tsconfig.json 是 solution file（"files": []），
 # 那樣什麼都不會檢查，而且永遠回傳 0。
 npx tsc -b
 ```
+
+## 🖥️ aiterm-host（遠端主機端）
+
+在一台沒有桌面環境的機器上——雲端主機、容器、NAS——開一個 shell，讓 AITerm
+連進去用 AI 操作它。AI 跑在**你自己的**桌面上，主機端不需要任何 AI 設定或 API key。
+
+### 安裝
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/jamesju9999/AITERM/master/scripts/install.sh | sh
+
+# Homebrew
+brew install jamesju9999/tap/aiterm-host
+
+# npm（不想安裝的話直接用 npx）
+npx aiterm-host --print-connection
+
+# 容器
+docker run -it --rm -p 8022:8022 -e AITERM_HOST_KEY=<你的金鑰> \
+  ghcr.io/jamesju9999/aiterm-host:latest
+```
+
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/jamesju9999/AITERM/master/scripts/install.ps1 | iex
+```
+
+安裝腳本會用 release 的 `SHA256SUMS` 驗證每一個下載，**不符就中止安裝**，
+沒有「照樣安裝」的選項。
+
+### 使用
+
+```bash
+aiterm-host --bind 0.0.0.0 --port 8022
+```
+
+會印出位址、埠與一組金鑰。在 AITerm 開「連線到遠端終端機」，展開手動位址那一區，
+填入位址、埠與金鑰（6 位短碼留空）即可。
+
+金鑰存在 `~/.config/aiterm-host/key`，重啟不變，所以存下來的連線會一直有效。
+跨網段時請填觀看端連得到的位址（Tailscale、VPN，或配合 `--bind 127.0.0.1`
+走 SSH tunnel）。
 
 ## 📂 專案結構
 ```

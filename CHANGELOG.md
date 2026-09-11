@@ -8,6 +8,26 @@
 時，workflow 會退回用 commit 標題產生草稿（那份草稿長得像開發者日誌，通常需要
 手動改寫）。
 
+## v1.25.0
+
+**新功能：用 AITerm 的 AI 操作一台沒有桌面的機器**
+以前「遠端終端機」的另一端必須是一台開著 AITerm 視窗的電腦。現在多了一個獨立的小程式 `aiterm-host`，丟到雲端主機、容器或 NAS 上跑起來，就能從你的 AITerm 連進去，用你自己設定好的 AI 一步一步操作它。主機那一端不需要任何 AI 設定、也不需要 API key——AI 全部跑在你的桌面上。
+
+**連線方式：一組固定的金鑰，不用每次唸驗證碼**
+`aiterm-host` 啟動時會印出位址、埠和一組金鑰。在 AITerm 的「連線到遠端終端機」展開手動位址，填入這三樣（6 位短碼留空）就能直接連上，不會跳出同意視窗。金鑰會保存下來，主機重開機之後同一組還是有效。
+連線的兩端會互相確認對方真的握有這組金鑰，所以就算有人在中間攔截，也沒辦法假冒成你的主機或偷看你打的字。
+
+**安裝方式**
+- macOS / Linux：`curl -fsSL https://raw.githubusercontent.com/jamesju9999/AITERM/master/scripts/install.sh | sh`
+- Windows：`irm https://raw.githubusercontent.com/jamesju9999/AITERM/master/scripts/install.ps1 | iex`
+- Homebrew：`brew install jamesju9999/tap/aiterm-host`
+- npm：`npx aiterm-host`
+- 容器：`ghcr.io/jamesju9999/aiterm-host`
+
+安裝腳本會先核對下載的檔案，內容對不上就直接中止，不會裝進一個可能被竄改過的版本。Linux 版本是完全靜態的單一執行檔，Alpine、精簡容器或系統比較舊的伺服器都能直接跑。
+
+目前還不會記住你輸入過的金鑰，每次連線需要重新貼上——之後會改進。
+
 ## v1.24.2
 
 **修正：工作看板派工一張卡，側邊欄卻跳出兩個一模一樣的 Agent 分頁**
