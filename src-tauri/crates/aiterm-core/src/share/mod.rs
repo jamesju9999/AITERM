@@ -113,13 +113,29 @@ impl ShareServerState {
         port: u16,
         events: Arc<dyn ShareEvents>,
     ) -> anyhow::Result<u16> {
+        self.start_if_needed_on_with_auth(pty, addr, port, events, None).await
+    }
+
+    /// 同 `start_if_needed_on`，但可以帶一份 CLI host 的金鑰認證設定。
+    ///
+    /// 這是唯一的啟動實作——`start_if_needed_on` 只是傳 `None` 的薄包裝。
+    /// 兩條近乎相同的啟動路徑會漂：一邊改了另一邊忘了改，而沒被測試釘住的
+    /// 那一邊（通常是 GUI 這條）就是會漂走的那個。
+    pub async fn start_if_needed_on_with_auth(
+        &self,
+        pty: Arc<PtyManager>,
+        addr: std::net::Ipv4Addr,
+        port: u16,
+        events: Arc<dyn ShareEvents>,
+        auth: Option<Arc<server::HostAuth>>,
+    ) -> anyhow::Result<u16> {
         if let Some(p) = self.port() {
             return Ok(p);
         }
         ensure_crypto_provider();
         let listener = tokio::net::TcpListener::bind(SocketAddr::from((addr, port))).await?;
         let bound = listener.local_addr()?;
-        let app_router = server::router(pty, Arc::clone(&self.registry), events, None);
+        let app_router = server::router(pty, Arc::clone(&self.registry), events, auth);
         let identity = tls::ShareIdentity::generate()?;
         let (tx, rx) = tokio::sync::oneshot::channel();
         // 自己的 accept 迴圈而不是 axum::serve——見下方「TLS 的接線」。
