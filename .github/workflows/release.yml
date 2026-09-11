@@ -331,6 +331,16 @@ jobs:
           cargo = cargo.replace(/^version = ".*"/m, `version = "${version}"`);
           fs.writeFileSync('src-tauri/Cargo.toml', cargo);
 
+          // aiterm-host 是獨立 crate，有自己的版本號。不同步的話發出去的執行檔
+          // `--version` 會回報 0.1.0，跟 release 的 tag 對不起來。
+          // 用 `^version = ` 搭配 m 旗標、不加 g：只換第一個 match，也就是
+          // [package] 區塊那一行，不會誤傷任何相依項。
+          const hostManifest = 'src-tauri/crates/aiterm-host/Cargo.toml';
+          let host = fs.readFileSync(hostManifest, 'utf8');
+          host = host.replace(/^version = ".*"/m, `version = "${version}"`);
+          fs.writeFileSync(hostManifest, host);
+          console.log(`aiterm-host version synced to ${version}`);
+
           console.log(`Version synced to ${version}`);
 
       - name: Install frontend dependencies

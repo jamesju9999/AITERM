@@ -20,7 +20,11 @@ use aiterm_core::share::server::HostAuth;
 use aiterm_core::share::ShareServerState;
 
 #[derive(Parser, Debug)]
-#[command(name = "aiterm-host", about = "把一個 shell 開放給 AITerm 遠端連線與 AI 操作")]
+#[command(
+    name = "aiterm-host",
+    version,
+    about = "把一個 shell 開放給 AITerm 遠端連線與 AI 操作"
+)]
 struct Args {
     /// 監聽埠。刻意是固定的預設值而不是隨機——GUI 裡存的連線記著它。
     #[arg(long, default_value_t = 8022)]
@@ -280,5 +284,18 @@ mod tests {
     fn bind_accepts_loopback() {
         let args = Args::parse_from(["aiterm-host", "--bind", "127.0.0.1"]);
         assert_eq!(args.bind, std::net::Ipv4Addr::LOCALHOST);
+    }
+
+    #[test]
+    fn the_version_flag_reports_the_crate_version() {
+        // 發版時 CI 會把 tag 的版本寫進這個 crate 的 Cargo.toml。使用者回報問題時
+        // 第一件要問的就是「你跑的是哪一版」，所以這支一定要有，而且要跟 release
+        // 的 tag 對得起來。
+        let err = Args::try_parse_from(["aiterm-host", "--version"]).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains(env!("CARGO_PKG_VERSION")),
+            "--version 要印出 crate 版本，got: {text}"
+        );
     }
 }
