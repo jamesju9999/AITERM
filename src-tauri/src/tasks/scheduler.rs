@@ -67,6 +67,18 @@ pub fn order_heads(mut heads: Vec<(String, TaskRow)>) -> Vec<(String, TaskRow)> 
 /// `detect_repo` 對 SVN repo 回傳 `Ok`，不是 Err，所以要額外檢查
 /// `vcs_type`），或 `git worktree add` 本身失敗（磁碟空間不足、舊版 git
 /// 沒有 worktree 支援等），一律退回直接用 `project_dir`，不擋派工。
+/// 這張卡片這次派工到底要不要隔離。
+///
+/// 卡片有明確覆寫就用它，否則沿用全域設定。**刻意在派工當下才解析**（而不
+/// 是建立卡片時就固定下來），這樣調整全域設定會影響所有還在等待、又沒有
+/// 個別覆寫的卡片——那才是「預設值」該有的語意。
+///
+/// 拆成獨立函式是為了能單獨測優先順序：`dispatch()` 需要 `AppHandle`，
+/// 在測試裡建不出來。
+fn resolve_isolation(card: Option<bool>, global: bool) -> bool {
+    card.unwrap_or(global)
+}
+
 async fn prepare_worktree(
     project_storage_path: &std::path::Path,
     task_id: &str,
@@ -159,11 +171,10 @@ impl Dispatcher for RealDispatcher {
             self.bridge.port(),
             self.secrets.get(crate::bridge::auth::BRIDGE_TOKEN_KEY).ok().flatten(),
         );
-        // 卡片有明確覆寫就用它，否則沿用全域設定。刻意在派工當下才解析，
-        // 這樣調整全域設定會影響所有還在等待、又沒有個別覆寫的卡片。
-        let isolate = task
-            .isolate_worktree
-            .unwrap_or(self.config.get().task_board.isolate_with_worktree);
+        let isolate = resolve_isolation(
+            task.isolate_worktree,
+            self.config.get().task_board.isolate_with_worktree,
+        );
         let (effective_dir, worktree_info) =
             prepare_worktree(&project.path, &task.id, &task.project_dir, isolate).await;
         let effective_dir_str = effective_dir.to_string_lossy().into_owned();
@@ -1205,6 +1216,18 @@ mod prepare_worktree_tests {
         fs::write(dir.join("a.txt"), "hello\n").unwrap();
         StdCommand::new("git").args(["add", "."]).current_dir(dir).status().unwrap();
         StdCommand::new("git").args(["commit", "-q", "-m", "init"]).current_dir(dir).status().unwrap();
+    }
+
+    #[test]
+    fn card_override_beats_the_global_setting_in_both_directions() {
+        // 沒有覆寫：兩個方向都要跟著全域走。
+        assert!(resolve_isolation(None, true), "沒覆寫時應該沿用全域的 true");
+        assert!(!resolve_isolation(None, false), "沒覆寫時應該沿用全域的 false");
+
+        // 有覆寫：兩個方向都要勝過全域。只測一個方向的話，把實作寫成
+        // 「全域關就一律關」也會通過。
+        assert!(resolve_isolation(Some(true), false), "卡片說要隔離就該隔離，即使全域關著");
+        assert!(!resolve_isolation(Some(false), true), "卡片說不要隔離就該不隔離，即使全域開著");
     }
 
     #[tokio::test]
