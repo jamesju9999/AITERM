@@ -1,9 +1,20 @@
 import { useState, type CSSProperties } from "react";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm, message } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import { archiveTask, cloneTask, deleteTask, markTaskDone, mergeTaskWorktree, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
 import { hashLabelHue } from "./labelColor";
+
+/**
+ * Tauri `invoke()` reject 丟回來的不一定是字串——Rust 端序列化的錯誤物件用
+ * `String(e)` 只會印出 `[object Object]`，這個 repo 踩過。這裡把三種形狀都
+ * 攤成看得懂的文字。
+ */
+function errorText(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message;
+  return JSON.stringify(e);
+}
 
 export function TaskCard({
   projectId,
@@ -28,6 +39,12 @@ export function TaskCard({
     try {
       await fn();
       onChanged();
+    } catch (e) {
+      // 後端的拒絕一定要講出來。呼叫端全部是 `void run(...)`，讓錯誤逃出去
+      // 等於整個被丟掉，使用者看到的就是「按了完全沒反應」——實機上就是這樣
+      // 回報「合併回原分支按了沒用」的，而後端其實有回 git 的 stderr（見
+      // vcs/git.rs 的 git()）。同樣的原則 ProjectList.tsx 早就寫過了。
+      await message(errorText(e), { title: card.title, kind: "error" });
     } finally {
       setBusy(false);
     }
