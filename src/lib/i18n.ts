@@ -1526,6 +1526,18 @@ const zhTW = {
     python_env_index_url_desc: "公司網路封鎖 PyPI 時，在這裡指定內部套件鏡像的位址；留空則使用預設的 PyPI。",
     python_env_index_url_placeholder: "https://pypi.mycompany.com/simple",
     python_env_audio_prompt: "這個音訊檔需要語音轉文字支援，需要額外下載約 33 MB。要現在安裝嗎？",
+
+    // Shell 身分徽章（只在偵測到 Windows PowerShell 5.1 時出現）
+    shell_badge_legacy_powershell: "PowerShell 5.1",
+    shell_badge_title: "這個分頁跑的是 Windows PowerShell 5.1",
+    shell_badge_why: "5.1 計算中文字寬度有誤，dir 這類表格輸出的欄位會對不齊、每列之間多一行空白。",
+    shell_badge_found_intro: (path: string) =>
+      `您的電腦上已經裝了 PowerShell 7（${path}），但 AITerm 啟動時的 PATH 找不到它。`,
+    shell_badge_found_action: "請完全關閉 AITerm 再重新開啟。",
+    shell_badge_missing_intro: "建議改用 PowerShell 7。",
+    shell_badge_install_command: "winget install --id Microsoft.PowerShell",
+    shell_badge_copy: "複製",
+    shell_badge_copied: "已複製",
 } as const;
 
 const enRaw = {
@@ -2937,6 +2949,18 @@ const enRaw = {
     python_env_index_url_desc: "If your corporate network blocks PyPI, set an internal package mirror address here. Leave blank to use the default PyPI.",
     python_env_index_url_placeholder: "https://pypi.mycompany.com/simple",
     python_env_audio_prompt: "This audio file needs speech-to-text support, which requires downloading about 33 MB more. Install it now?",
+
+    // Shell identity badge (only shown when Windows PowerShell 5.1 is detected)
+    shell_badge_legacy_powershell: "PowerShell 5.1",
+    shell_badge_title: "This tab is running Windows PowerShell 5.1",
+    shell_badge_why: "5.1 miscalculates the display width of CJK characters, so table output like dir has misaligned columns and a blank line between every row.",
+    shell_badge_found_intro: (path: string) =>
+      `PowerShell 7 is already installed (${path}), but it was not on AITerm's PATH at startup.`,
+    shell_badge_found_action: "Quit AITerm completely and reopen it.",
+    shell_badge_missing_intro: "Switching to PowerShell 7 is recommended.",
+    shell_badge_install_command: "winget install --id Microsoft.PowerShell",
+    shell_badge_copy: "Copy",
+    shell_badge_copied: "Copied",
 } as const;
 
 export const translations = {
