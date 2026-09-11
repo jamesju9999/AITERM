@@ -1529,6 +1529,11 @@ const zhTW = {
 
     // 合併回原分支
     board_merge_running: "合併中…",
+    board_merge_step_checking: "合併中：檢查原分支…",
+    board_merge_step_committing: "合併中：提交工作成果…",
+    board_merge_step_merging: "合併中：合併分支…",
+    // 這一步最慢，要逐一刪掉 worktree 裡的每個檔案。
+    board_merge_step_cleaning: "合併中：移除 worktree…",
     board_merge_conflict_title: "合併有衝突",
     board_merge_conflict_body: (files: string) =>
       `以下檔案有衝突，尚未合併進原分支：\n\n${files}\n\n原專案目錄目前停在「合併進行中」。\n\n「我自己解」會保持這個狀態。您可以直接在原專案目錄解衝突後 git commit，再回來按一次合併。\n\n「還原」會執行 git merge --abort，把原專案目錄回復乾淨。工作成果仍然完整保留在這張卡片的分支上，隨時可以再試。`,
@@ -2965,6 +2970,10 @@ const enRaw = {
 
     // Merge worktree back into the base branch
     board_merge_running: "Merging…",
+    board_merge_step_checking: "Merging: checking base branch…",
+    board_merge_step_committing: "Merging: committing work…",
+    board_merge_step_merging: "Merging: merging branch…",
+    board_merge_step_cleaning: "Merging: removing worktree…",
     board_merge_conflict_title: "Merge conflict",
     board_merge_conflict_body: (files: string) =>
       `These files conflict and were not merged into the base branch:\n\n${files}\n\nThe project directory is now mid-merge.\n\n"Let me resolve it" keeps that state. Resolve the conflicts in the project directory, git commit, then press merge again.\n\n"Undo" runs git merge --abort and restores the project directory. Your work stays committed on this card's branch and can be merged later.`,

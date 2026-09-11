@@ -23,6 +23,24 @@ fn emit_updated(app: &AppHandle) {
     let _ = app.emit("tasks-updated", ());
 }
 
+/// 合併進度的酬載。大型 worktree 的合併會跑好幾分鐘，而且慢的幾乎都是最後
+/// 的 `worktree remove`（逐檔刪除，Windows 上還要過防毒掃描）——沒有分階段
+/// 回報的話，畫面上只有一句「合併中…」，使用者分不出是正常進行還是卡死。
+#[derive(Clone, serde::Serialize)]
+struct MergeProgress {
+    task_id: String,
+    /// 見 `src/components/TaskBoard/TaskCard.tsx` 的 `MERGE_STEP_LABEL`，
+    /// 兩邊的字串必須一致。
+    step: &'static str,
+}
+
+fn emit_merge_step(app: &AppHandle, task_id: &str, step: &'static str) {
+    let _ = app.emit(
+        "task-merge-progress",
+        MergeProgress { task_id: task_id.to_string(), step },
+    );
+}
+
 /// 從 registry 取出專案。找不到時回傳給前端的錯誤訊息——
 /// 這在正常使用下不會發生（前端只會送出 `projects_list` 給過的 id），
 /// 會發生代表專案在操作進行中被移除了。
@@ -280,6 +298,7 @@ pub async fn tasks_merge_worktree(
     // 兩個前置檢查都在動任何東西**之前**做完。一旦開始 commit/merge 就很難
     // 乾淨地退回去，而這兩種狀況都是使用者自己就能處理的——與其讓 git 在
     // 半路拒絕、丟一段沒頭沒尾的 stderr，不如一開始就講清楚。
+    emit_merge_step(&app, &id, "checking");
     if base_client.is_merge_in_progress().await {
         return Ok(MergeOutcome::Blocked {
             reason: BlockedReason::MergeInProgress,
@@ -295,8 +314,11 @@ pub async fn tasks_merge_worktree(
 
     let worktree_client = GitClient::new(worktree_path.clone(), None);
     if worktree_client.has_uncommitted_changes().await? {
+        emit_merge_step(&app, &id, "committing");
         worktree_client.commit_all(&format!("Task: {}", row.title)).await?;
     }
+
+    emit_merge_step(&app, &id, "merging");
 
     // 合併失敗時 worktree/分支一律原樣保留——成果在上一步就已經 commit 到
     // 那個分支上了，保留住使用者才有機會解衝突或改天再試。
@@ -314,6 +336,8 @@ pub async fn tasks_merge_worktree(
         return Err(merge_err);
     }
 
+    // 這一步通常是最慢的：它要逐一刪掉 worktree 裡的每個檔案。
+    emit_merge_step(&app, &id, "cleaning");
     base_client.remove_worktree(&worktree_path).await?;
     store::clear_worktree(&p.pool, &id).await.map_err(|e| e.to_string())?;
     emit_updated(&app);

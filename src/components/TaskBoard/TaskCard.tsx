@@ -1,6 +1,9 @@
-import { useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { confirm, message } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 
+import { unlistenOnCleanup } from "../../lib/eventSubscription";
+import type { Translations } from "../../lib/i18n";
 import { useLocale } from "../../contexts/LocaleContext";
 import { abortMerge, archiveTask, cloneTask, deleteTask, markTaskDone, mergeTaskWorktree, stopTask, type MergeOutcome, type TaskWithAttachments } from "../../ipc/tasks";
 import { hashLabelHue } from "./labelColor";
@@ -14,6 +17,23 @@ function errorText(e: unknown): string {
   if (typeof e === "string") return e;
   if (e instanceof Error) return e.message;
   return JSON.stringify(e);
+}
+
+/**
+ * 後端回報的步驟名 → 按鈕文字。字串必須跟 `commands/tasks.rs` 的
+ * `emit_merge_step` 呼叫端一致。認不得的步驟（例如後端之後新增了一步、
+ * 但前端還沒更新）退回通用的「合併中…」，不會讓按鈕變空白。
+ */
+const MERGE_STEP_LABEL: Record<string, keyof Translations> = {
+  checking: "board_merge_step_checking",
+  committing: "board_merge_step_committing",
+  merging: "board_merge_step_merging",
+  cleaning: "board_merge_step_cleaning",
+};
+
+interface MergeProgressPayload {
+  task_id: string;
+  step: string;
 }
 
 export function TaskCard({
@@ -35,6 +55,24 @@ export function TaskCard({
   const [busy, setBusy] = useState(false);
   // 大型 worktree 的合併動輒數十秒，只把按鈕變灰看起來就像沒反應。
   const [merging, setMerging] = useState(false);
+  const [mergeStep, setMergeStep] = useState<string | null>(null);
+
+  // **掛載當下就訂閱，不是按下按鈕才訂閱。** listen() 是非同步的，等按下去
+  // 才訂閱的話，第一個步驟事件幾乎一定跑在訂閱完成之前而永遠遺失——這個
+  // race 這個 repo 已經踩過兩次。卡片本來就一直掛著，提早訂閱沒有成本。
+  useEffect(() => {
+    const pending = listen<MergeProgressPayload>("task-merge-progress", (e) => {
+      if (e.payload.task_id !== card.id) return;
+      setMergeStep(e.payload.step);
+    });
+    return unlistenOnCleanup(pending, "task-merge-progress");
+  }, [card.id]);
+
+  const mergeLabel = (() => {
+    if (!merging) return t.board_action_merge_worktree;
+    const key = mergeStep ? MERGE_STEP_LABEL[mergeStep] : undefined;
+    return key ? (t[key] as string) : t.board_merge_running;
+  })();
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -81,6 +119,7 @@ export function TaskCard({
    */
   const mergeWorktree = async () => {
     setMerging(true);
+    setMergeStep(null);
     setBusy(true);
     try {
       const outcome: MergeOutcome = await mergeTaskWorktree(projectId, card.id);
@@ -208,7 +247,7 @@ export function TaskCard({
             </button>
             {card.worktree_branch && (
               <button className="tb-btn tb-btn--primary" disabled={busy} onClick={() => void mergeWorktree()}>
-                {merging ? t.board_merge_running : t.board_action_merge_worktree}
+                {mergeLabel}
               </button>
             )}
             {/* 封存不問過就直接做：資料完全保留，隨時能從封存清單放回來，

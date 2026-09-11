@@ -22,6 +22,20 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   message: (...a: unknown[]) => messageDialog(...a),
 }));
 
+// 收集實際註冊的監聽器，讓測試能模擬後端送事件。
+const listeners = new Map<string, (e: { payload: unknown }) => void>();
+const unlistenSpy = vi.fn();
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (name: string, cb: (e: { payload: unknown }) => void) => {
+    listeners.set(name, cb);
+    return Promise.resolve(unlistenSpy);
+  },
+}));
+
+function emitProgress(payload: { task_id: string; step: string }) {
+  listeners.get("task-merge-progress")?.({ payload });
+}
+
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import { TaskCard } from "./TaskCard";
 import type { TaskWithAttachments } from "../../ipc/tasks";
@@ -73,6 +87,7 @@ function mount(onChanged = vi.fn()) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  listeners.clear();
 });
 
 describe("TaskCard 的動作失敗時", () => {
@@ -167,6 +182,58 @@ describe("TaskCard 的動作失敗時", () => {
 
     await waitFor(() => expect(messageDialog).toHaveBeenCalled());
     expect(String(messageDialog.mock.calls[0][0])).toContain("上一次沒有收尾的合併");
+  });
+
+  it("進度監聽器在按下按鈕之前就已經掛好", async () => {
+    // 這個 repo 踩過兩次同一個 race：事件在前端訂閱之前送出就永遠遺失。
+    // listen() 是非同步的，若等按下去才訂閱，第一個步驟事件（checking）
+    // 幾乎一定跑在前面。掛載當下就訂閱才沒有這個問題。
+    mount();
+    expect(listeners.has("task-merge-progress")).toBe(true);
+  });
+
+  it("依後端回報的步驟顯示不同文字", async () => {
+    let release: (v: unknown) => void = () => {};
+    mergeTaskWorktree.mockReturnValue(new Promise((r) => { release = r; }));
+    mount();
+
+    await userEvent.click(screen.getByText("合併回原分支"));
+
+    emitProgress({ task_id: "t1", step: "checking" });
+    await screen.findByText("合併中：檢查原分支…");
+
+    emitProgress({ task_id: "t1", step: "cleaning" });
+    await screen.findByText("合併中：移除 worktree…");
+
+    release({ status: "merged" });
+    await waitFor(() => expect(screen.queryByText(/合併中/)).toBeNull());
+  });
+
+  it("別張卡片的進度事件不會影響這張卡", async () => {
+    let release: (v: unknown) => void = () => {};
+    mergeTaskWorktree.mockReturnValue(new Promise((r) => { release = r; }));
+    mount();
+
+    await userEvent.click(screen.getByText("合併回原分支"));
+    await screen.findByText("合併中…");
+
+    emitProgress({ task_id: "另一張卡", step: "cleaning" });
+
+    // 仍然是沒有步驟的通用文字，不該被別張卡的事件改掉。
+    expect(screen.getByText("合併中…")).toBeTruthy();
+    release({ status: "merged" });
+  });
+
+  it("認不得的步驟名退回通用文字，不顯示空白按鈕", async () => {
+    let release: (v: unknown) => void = () => {};
+    mergeTaskWorktree.mockReturnValue(new Promise((r) => { release = r; }));
+    mount();
+
+    await userEvent.click(screen.getByText("合併回原分支"));
+    emitProgress({ task_id: "t1", step: "後端之後新增的步驟" });
+
+    expect(screen.getByText("合併中…")).toBeTruthy();
+    release({ status: "merged" });
   });
 
   it("合併期間按鈕顯示進度文字", async () => {
