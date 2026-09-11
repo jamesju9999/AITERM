@@ -56,7 +56,7 @@ impl GitClient {
             args.push(p.to_string());
         }
 
-        let out = self.git(&args)?;
+        let out = self.git(&args).await?;
         let mut commits = Vec::new();
         for line in out.lines().filter(|l| !l.is_empty()) {
             let parts: Vec<&str> = line.splitn(4, '|').collect();
@@ -64,7 +64,7 @@ impl GitClient {
                 continue;
             }
             let sha = parts[0].to_string();
-            let files = self.diff_tree_files(&sha).unwrap_or_default();
+            let files = self.diff_tree_files(&sha).await.unwrap_or_default();
             commits.push(CommitEntry {
                 revision: sha,
                 author: parts[1].to_string(),
@@ -78,7 +78,7 @@ impl GitClient {
     }
 
     pub async fn show(&self, revision: &str) -> Result<VcsResult, String> {
-        let out = self.git(&["show".to_string(), revision.to_string()])?;
+        let out = self.git(&["show".to_string(), revision.to_string()]).await?;
         Ok(VcsResult::Diff {
             content: out,
             revision: revision.to_string(),
@@ -90,7 +90,7 @@ impl GitClient {
             "blame".to_string(),
             "--porcelain".to_string(),
             path.to_string(),
-        ])?;
+        ]).await?;
         let lines = parse_blame_porcelain(&out);
         Ok(VcsResult::Blame { lines })
     }
@@ -100,7 +100,7 @@ impl GitClient {
             "branch".to_string(),
             "-a".to_string(),
             "--format=%(refname:short)|%(HEAD)".to_string(),
-        ])?;
+        ]).await?;
         let mut branches = Vec::new();
         for line in out.lines().filter(|l| !l.is_empty()) {
             let parts: Vec<&str> = line.splitn(2, '|').collect();
@@ -124,7 +124,7 @@ impl GitClient {
             "revert".to_string(),
             "--no-edit".to_string(),
             revision.to_string(),
-        ])?;
+        ]).await?;
         Ok(VcsResult::WriteSuccess {
             operation: "revert".to_string(),
             detail: format!("Reverted commit {revision}"),
@@ -132,7 +132,7 @@ impl GitClient {
     }
 
     pub async fn cherry_pick(&self, revision: &str) -> Result<VcsResult, String> {
-        self.git(&["cherry-pick".to_string(), revision.to_string()])?;
+        self.git(&["cherry-pick".to_string(), revision.to_string()]).await?;
         Ok(VcsResult::WriteSuccess {
             operation: "cherry_pick".to_string(),
             detail: format!("Cherry-picked commit {revision}"),
@@ -144,7 +144,7 @@ impl GitClient {
     /// remote state, not whatever a possibly-missing or stale local branch
     /// of the same name happens to point at.
     pub async fn fetch_ref(&self, ref_name: &str) -> Result<VcsResult, String> {
-        self.git(&["fetch".to_string(), "origin".to_string(), ref_name.to_string()])?;
+        self.git(&["fetch".to_string(), "origin".to_string(), ref_name.to_string()]).await?;
         Ok(VcsResult::WriteSuccess {
             operation: "fetch_ref".to_string(),
             detail: format!("Fetched '{ref_name}' from origin"),
@@ -156,7 +156,7 @@ impl GitClient {
         if let Some(f) = from {
             args.push(f.to_string());
         }
-        self.git(&args)?;
+        self.git(&args).await?;
         Ok(VcsResult::WriteSuccess {
             operation: "create_branch".to_string(),
             detail: format!("Created and checked out branch '{name}'"),
@@ -164,7 +164,7 @@ impl GitClient {
     }
 
     pub async fn delete_branch(&self, name: &str) -> Result<VcsResult, String> {
-        self.git(&["branch".to_string(), "-d".to_string(), name.to_string()])?;
+        self.git(&["branch".to_string(), "-d".to_string(), name.to_string()]).await?;
         Ok(VcsResult::WriteSuccess {
             operation: "delete_branch".to_string(),
             detail: format!("Deleted branch '{name}'"),
@@ -176,7 +176,7 @@ impl GitClient {
     /// freshly-created feature branch that has an unpushed empty commit,
     /// which plain `delete_branch` (`-d`) would refuse to remove.
     pub async fn delete_branch_force(&self, name: &str) -> Result<VcsResult, String> {
-        self.git(&["branch".to_string(), "-D".to_string(), name.to_string()])?;
+        self.git(&["branch".to_string(), "-D".to_string(), name.to_string()]).await?;
         Ok(VcsResult::WriteSuccess {
             operation: "delete_branch_force".to_string(),
             detail: format!("Force-deleted branch '{name}'"),
@@ -188,7 +188,7 @@ impl GitClient {
     /// before switching branches, so a rollback can restore their exact
     /// starting point rather than resetting some other branch.
     pub async fn current_branch(&self) -> Result<String, String> {
-        let out = self.git(&["rev-parse".to_string(), "--abbrev-ref".to_string(), "HEAD".to_string()])?;
+        let out = self.git(&["rev-parse".to_string(), "--abbrev-ref".to_string(), "HEAD".to_string()]).await?;
         let branch = out.trim().to_string();
         if branch.is_empty() || branch == "HEAD" {
             return Err("無法判斷目前所在的分支（可能處於 detached HEAD 狀態）".to_string());
@@ -197,7 +197,7 @@ impl GitClient {
     }
 
     pub async fn checkout_branch(&self, name: &str) -> Result<VcsResult, String> {
-        self.git(&["checkout".to_string(), name.to_string()])?;
+        self.git(&["checkout".to_string(), name.to_string()]).await?;
         Ok(VcsResult::WriteSuccess {
             operation: "checkout_branch".to_string(),
             detail: format!("Checked out branch '{name}'"),
@@ -215,7 +215,7 @@ impl GitClient {
             "-B".to_string(),
             name.to_string(),
             start_point.to_string(),
-        ])?;
+        ]).await?;
         Ok(VcsResult::WriteSuccess {
             operation: "checkout_branch_from".to_string(),
             detail: format!("Checked out '{name}' from '{start_point}'"),
@@ -239,7 +239,7 @@ impl GitClient {
             "--only".to_string(),
             "-m".to_string(),
             message.to_string(),
-        ])?;
+        ]).await?;
         Ok(VcsResult::WriteSuccess {
             operation: "commit_empty".to_string(),
             detail: format!("Created empty commit: {message}"),
@@ -256,7 +256,7 @@ impl GitClient {
             "--set-upstream".to_string(),
             "origin".to_string(),
             branch_name.to_string(),
-        ])?;
+        ]).await?;
         Ok(VcsResult::WriteSuccess {
             operation: "push_branch".to_string(),
             detail: format!("Pushed branch '{branch_name}' to origin"),
@@ -271,7 +271,7 @@ impl GitClient {
             "worktree".to_string(), "add".to_string(),
             "-b".to_string(), branch_name.to_string(),
             path.to_string(),
-        ])?;
+        ]).await?;
         Ok(VcsResult::WriteSuccess {
             operation: "create_worktree".to_string(),
             detail: format!("Created worktree at '{path}' on branch '{branch_name}'"),
@@ -282,7 +282,7 @@ impl GitClient {
     /// 變更）時才會成功；呼叫端應該在確定所有變更都已經 commit 之後才
     /// 呼叫這個方法。
     pub async fn remove_worktree(&self, path: &str) -> Result<VcsResult, String> {
-        self.git(&["worktree".to_string(), "remove".to_string(), path.to_string()])?;
+        self.git(&["worktree".to_string(), "remove".to_string(), path.to_string()]).await?;
         Ok(VcsResult::WriteSuccess {
             operation: "remove_worktree".to_string(),
             detail: format!("Removed worktree at '{path}'"),
@@ -293,7 +293,7 @@ impl GitClient {
     /// `diff --shortstat` 不同——這裡也會抓到新增的未追蹤檔案，判斷
     /// 「這個 worktree 有沒有東西需要 commit」才會準。
     pub async fn has_uncommitted_changes(&self) -> Result<bool, String> {
-        let out = self.git(&["status".to_string(), "--porcelain".to_string()])?;
+        let out = self.git(&["status".to_string(), "--porcelain".to_string()]).await?;
         Ok(!out.trim().is_empty())
     }
 
@@ -302,8 +302,8 @@ impl GitClient {
     /// commit 噪音（跟 `commit_empty` 刻意允許空 commit 的語意不同，
     /// 這裡不允許——沒有變更時 `git commit` 本身就會失敗，直接回傳 Err）。
     pub async fn commit_all(&self, message: &str) -> Result<VcsResult, String> {
-        self.git(&["add".to_string(), "-A".to_string()])?;
-        self.git(&["commit".to_string(), "-m".to_string(), message.to_string()])?;
+        self.git(&["add".to_string(), "-A".to_string()]).await?;
+        self.git(&["commit".to_string(), "-m".to_string(), message.to_string()]).await?;
         Ok(VcsResult::WriteSuccess {
             operation: "commit_all".to_string(),
             detail: format!("Committed all changes: {message}"),
@@ -314,7 +314,7 @@ impl GitClient {
     /// 的 `project_dir`，不是 worktree 路徑）。衝突或該路徑本身有未提交
     /// 變更擋著都會讓這裡回傳 Err，錯誤訊息直接是 git 自己的輸出。
     pub async fn merge_branch(&self, branch_name: &str) -> Result<VcsResult, String> {
-        self.git(&["merge".to_string(), branch_name.to_string()])?;
+        self.git(&["merge".to_string(), branch_name.to_string()]).await?;
         Ok(VcsResult::WriteSuccess {
             operation: "merge_branch".to_string(),
             detail: format!("Merged branch '{branch_name}'"),
@@ -332,7 +332,7 @@ impl GitClient {
             "--verify".to_string(),
             "--quiet".to_string(),
             "MERGE_HEAD".to_string(),
-        ])
+        ]).await
         .is_ok()
     }
 
@@ -342,13 +342,13 @@ impl GitClient {
             "diff".to_string(),
             "--name-only".to_string(),
             "--diff-filter=U".to_string(),
-        ])?;
+        ]).await?;
         Ok(out.lines().filter(|l| !l.is_empty()).map(str::to_string).collect())
     }
 
     /// `git merge --abort`——把倉庫還原到嘗試合併之前的樣子。
     pub async fn merge_abort(&self) -> Result<VcsResult, String> {
-        self.git(&["merge".to_string(), "--abort".to_string()])?;
+        self.git(&["merge".to_string(), "--abort".to_string()]).await?;
         Ok(VcsResult::WriteSuccess {
             operation: "merge_abort".to_string(),
             detail: "Aborted the in-progress merge".to_string(),
@@ -359,7 +359,7 @@ impl GitClient {
     /// 不乾淨、先處理這些」的提示用。前兩欄是狀態碼、第三欄是空白，所以
     /// 從第 4 個字元起才是路徑。
     pub async fn dirty_files(&self) -> Result<Vec<String>, String> {
-        let out = self.git(&["status".to_string(), "--porcelain".to_string()])?;
+        let out = self.git(&["status".to_string(), "--porcelain".to_string()]).await?;
         Ok(out
             .lines()
             .filter_map(|l| l.get(3..).map(str::trim).map(str::to_string))
@@ -370,7 +370,7 @@ impl GitClient {
     // ── GitHub API operations ────────────────────────────────────────────────
 
     pub async fn pr_list(&self, state: Option<&str>) -> Result<VcsResult, String> {
-        let (token, owner, repo) = self.require_github(2)?;
+        let (token, owner, repo) = self.require_github(2).await?;
         let state_val = state.unwrap_or("open");
         let url = format!(
             "https://api.github.com/repos/{owner}/{repo}/pulls?state={state_val}&per_page=30"
@@ -399,7 +399,7 @@ impl GitClient {
     }
 
     pub async fn issue_list(&self, state: Option<&str>) -> Result<VcsResult, String> {
-        let (token, owner, repo) = self.require_github(2)?;
+        let (token, owner, repo) = self.require_github(2).await?;
         let state_val = state.unwrap_or("open");
         let url = format!(
             "https://api.github.com/repos/{owner}/{repo}/issues?state={state_val}&per_page=30"
@@ -430,7 +430,7 @@ impl GitClient {
     }
 
     pub async fn actions_list(&self) -> Result<VcsResult, String> {
-        let (token, owner, repo) = self.require_github(2)?;
+        let (token, owner, repo) = self.require_github(2).await?;
         let url = format!(
             "https://api.github.com/repos/{owner}/{repo}/actions/runs?per_page=20"
         );
@@ -471,7 +471,7 @@ impl GitClient {
         body: Option<&str>,
         draft: bool,
     ) -> Result<(u64, String), String> {
-        let (token, owner, repo) = self.require_github(3)?;
+        let (token, owner, repo) = self.require_github(3).await?;
         let url = format!("{}/repos/{owner}/{repo}/pulls", self.github_api_base);
 
         let payload = serde_json::json!({
@@ -494,7 +494,7 @@ impl GitClient {
     /// 列出目前 repo 所有進行中的功能（open PR，含 draft），每個都附上
     /// 目前實際改動的檔案清單。團隊可見度面板與重疊偵測共用這支方法。
     pub async fn list_active_features(&self) -> Result<Vec<ActiveFeature>, String> {
-        let (token, owner, repo) = self.require_github(2)?;
+        let (token, owner, repo) = self.require_github(2).await?;
         let url = format!("{}/repos/{owner}/{repo}/pulls?state=open&per_page=30", self.github_api_base);
 
         let prs: Vec<GhPrWithHead> = self
@@ -546,7 +546,7 @@ impl GitClient {
     /// any repo (including this one) whose default branch is named
     /// something else, e.g. "master".
     pub async fn get_default_branch(&self) -> Result<String, String> {
-        let (token, owner, repo) = self.require_github(2)?;
+        let (token, owner, repo) = self.require_github(2).await?;
         let url = format!("{}/repos/{owner}/{repo}", self.github_api_base);
         let json: serde_json::Value = self
             .gh_get(&token, &url)
@@ -563,7 +563,7 @@ impl GitClient {
     /// 把一個 draft PR 轉成 ready for review。GitHub REST 沒有對應端點，
     /// 只能先用 REST 拿 node_id，再打 GraphQL mutation。
     pub async fn mark_pr_ready(&self, pr_number: u64) -> Result<VcsResult, String> {
-        let (token, owner, repo) = self.require_github(3)?;
+        let (token, owner, repo) = self.require_github(3).await?;
 
         let detail_url = format!("{}/repos/{owner}/{repo}/pulls/{pr_number}", self.github_api_base);
         let detail: serde_json::Value = self
@@ -610,7 +610,7 @@ impl GitClient {
     /// 用 GitHub compare 端點，Accept 要求 diff 格式而非 JSON，
     /// 所以不透過 gh_get（它固定要求 application/vnd.github+json）。
     pub async fn pr_diff(&self, base: &str, head: &str) -> Result<VcsResult, String> {
-        let (token, owner, repo) = self.require_github(2)?;
+        let (token, owner, repo) = self.require_github(2).await?;
         let url = format!("{}/repos/{owner}/{repo}/compare/{base}...{head}", self.github_api_base);
 
         let client = reqwest::Client::new();
@@ -633,7 +633,7 @@ impl GitClient {
     }
 
     pub async fn merge_pr(&self, pr_number: u64) -> Result<VcsResult, String> {
-        let (token, owner, repo) = self.require_github(3)?;
+        let (token, owner, repo) = self.require_github(3).await?;
         let url = format!(
             "{}/repos/{owner}/{repo}/pulls/{pr_number}/merge",
             self.github_api_base
@@ -652,7 +652,7 @@ impl GitClient {
         title: &str,
         body: Option<&str>,
     ) -> Result<VcsResult, String> {
-        let (token, owner, repo) = self.require_github(3)?;
+        let (token, owner, repo) = self.require_github(3).await?;
         let url = format!("https://api.github.com/repos/{owner}/{repo}/issues");
 
         let payload = serde_json::json!({
@@ -676,7 +676,7 @@ impl GitClient {
         workflow_id: &str,
         ref_name: &str,
     ) -> Result<VcsResult, String> {
-        let (token, owner, repo) = self.require_github(3)?;
+        let (token, owner, repo) = self.require_github(3).await?;
         let url = format!(
             "https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches"
         );
@@ -695,6 +695,7 @@ impl GitClient {
     pub async fn quick_block_info(&self) -> Option<GitBlockInfo> {
         let branch_out = self
             .git(&["rev-parse".to_string(), "--abbrev-ref".to_string(), "HEAD".to_string()])
+            .await
             .ok()?;
         let branch = branch_out.trim().to_string();
         if branch.is_empty() {
@@ -703,6 +704,7 @@ impl GitClient {
 
         let shortstat = self
             .git(&["diff".to_string(), "--shortstat".to_string()])
+            .await
             .unwrap_or_default();
         let (insertions, deletions) = Self::parse_shortstat(&shortstat);
 
@@ -727,32 +729,44 @@ impl GitClient {
         (insertions, deletions)
     }
 
-    fn git(&self, args: &[String]) -> Result<String, String> {
-        let mut cmd = Command::new("git");
-        cmd.args(args).current_dir(&self.repo_root);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-        let out = cmd.output()
-            .map_err(|e| format!("git exec error: {e}"))?;
+    /// 跑一個 git 指令。
+    ///
+    /// **在 `spawn_blocking` 裡跑**：`std::process::Command::output()` 是阻塞
+    /// 的，而這個型別的方法全部從 async 的 Tauri 指令裡呼叫。直接阻塞會佔住
+    /// 一條 tokio 工作執行緒直到 git 跑完——大型 worktree 的
+    /// `status` / `add -A` / `worktree remove` 動輒數十秒（Windows 上因為防毒
+    /// 逐檔掃描更久），期間背景排程等工作都會被一起拖住。
+    async fn git(&self, args: &[String]) -> Result<String, String> {
+        let args = args.to_vec();
+        let repo_root = self.repo_root.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut cmd = Command::new("git");
+            cmd.args(&args).current_dir(&repo_root);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            }
+            let out = cmd.output().map_err(|e| format!("git exec error: {e}"))?;
 
-        if out.status.success() {
-            Ok(String::from_utf8_lossy(&out.stdout).to_string())
-        } else {
-            Err(String::from_utf8_lossy(&out.stderr).to_string())
-        }
+            if out.status.success() {
+                Ok(String::from_utf8_lossy(&out.stdout).to_string())
+            } else {
+                Err(String::from_utf8_lossy(&out.stderr).to_string())
+            }
+        })
+        .await
+        .map_err(|e| format!("git task join error: {e}"))?
     }
 
-    fn diff_tree_files(&self, sha: &str) -> Result<Vec<String>, String> {
+    async fn diff_tree_files(&self, sha: &str) -> Result<Vec<String>, String> {
         let out = self.git(&[
             "diff-tree".to_string(),
             "--no-commit-id".to_string(),
             "-r".to_string(),
             "--name-only".to_string(),
             sha.to_string(),
-        ])?;
+        ]).await?;
         Ok(out
             .lines()
             .filter(|l| !l.is_empty())
@@ -771,9 +785,10 @@ impl GitClient {
     /// and show a proper localized message instead of this raw English
     /// detail. See `commands::vcs`'s `no_remote:` handling and
     /// `VcsView.tsx`'s `featuresError` check.
-    fn parse_remote(&self) -> Result<(String, String), String> {
+    async fn parse_remote(&self) -> Result<(String, String), String> {
         let url = self
             .git(&["remote".to_string(), "get-url".to_string(), "origin".to_string()])
+            .await
             .map(|s| s.trim().to_string())
             .map_err(|_| "no_remote:No git remote 'origin' configured".to_string())?;
 
@@ -794,8 +809,8 @@ impl GitClient {
     /// be reported as "missing token" — that sends the user to add a token
     /// that will never help, since `parse_remote` would still fail right
     /// after. Checking the remote first surfaces the real blocker.
-    fn require_github(&self, level: u8) -> Result<(String, String, String), String> {
-        let (owner, repo) = self.parse_remote()?;
+    async fn require_github(&self, level: u8) -> Result<(String, String, String), String> {
+        let (owner, repo) = self.parse_remote().await?;
         let token = self.require_token(level)?;
         Ok((token, owner, repo))
     }
@@ -903,7 +918,7 @@ impl GitClient {
     }
 
     pub async fn delete_remote_branch(&self, branch_name: &str) -> Result<VcsResult, String> {
-        let (token, owner, repo) = self.require_github(3)?;
+        let (token, owner, repo) = self.require_github(3).await?;
         let encoded_branch = encode_ref_path_segment(branch_name);
         let url = format!("{}/repos/{owner}/{repo}/git/refs/heads/{encoded_branch}", self.github_api_base);
         self.gh_delete(&token, &url).await?;
