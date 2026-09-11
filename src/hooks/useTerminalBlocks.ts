@@ -15,6 +15,8 @@ export interface TerminalBlock {
   rawOutput: string;
   renderedLines?: RenderedLine[];
   gitInfo?: GitBlockInfo | null;
+  /** 診斷用（diag/dir-spacing 分支，不進 master）：ConPTY 原始位元組 + 畫面各列的換行旗標。 */
+  debugDump?: string;
 }
 
 export interface UseTerminalBlocksResult {
@@ -246,28 +248,37 @@ export function useTerminalBlocks(
       const frozenOutput = target.rawOutput;
       const cols = term?.cols ?? 80;
 
+      // 標記被 scrollback 修剪掉時 line 會是 -1——代表輸出比 scrollback 還長，
+      // 剩下的每一列都屬於這個指令，從第 0 列讀起。
+      const start = outputStartRef.current;
+      let liveLines: RenderedLine[] | null = null;
+      let debugDump = `cols=${cols} liveRead=no\n--- raw ---\n${JSON.stringify(frozenOutput)}`;
+      if (start?.blockId === blockId && term) {
+        const buf = term.buffer.active;
+        const cursorRow = buf.baseY + buf.cursorY;
+        const endRow = buf.cursorX > 0 ? cursorRow + 1 : cursorRow;
+        const from = Math.max(0, start.marker.line);
+        liveLines = readRenderedLines(buf, from, endRow, cols);
+        const rows: string[] = [];
+        for (let y = from; y < endRow; y++) {
+          const l = buf.getLine(y);
+          if (l) rows.push(`${y} wrapped=${l.isWrapped} ${JSON.stringify(l.translateToString(false))}`);
+        }
+        debugDump = `cols=${cols} termRows=${term.rows}\n--- raw ---\n${JSON.stringify(frozenOutput)}\n--- buffer ---\n${rows.join("\n")}`;
+        start.marker.dispose();
+        outputStartRef.current = null;
+      }
+
       const finalized: TerminalBlock = {
         ...target,
         status: exitCode === 0 ? "completed" : "failed",
         exitCode,
         endTime,
+        debugDump,
       };
       const updated = prev.map((b) => (b.id === blockId ? finalized : b));
       blocksRef.current = updated;
       setBlocks(updated);
-
-      // 標記被 scrollback 修剪掉時 line 會是 -1——代表輸出比 scrollback 還長，
-      // 剩下的每一列都屬於這個指令，從第 0 列讀起。
-      const start = outputStartRef.current;
-      let liveLines: RenderedLine[] | null = null;
-      if (start?.blockId === blockId && term) {
-        const buf = term.buffer.active;
-        const cursorRow = buf.baseY + buf.cursorY;
-        const endRow = buf.cursorX > 0 ? cursorRow + 1 : cursorRow;
-        liveLines = readRenderedLines(buf, Math.max(0, start.marker.line), endRow, cols);
-        start.marker.dispose();
-        outputStartRef.current = null;
-      }
 
       (liveLines ? Promise.resolve(liveLines) : parseAnsiToRenderedLines(frozenOutput, cols)).then((renderedLines) => {
         const withLines = blocksRef.current.map((b) =>

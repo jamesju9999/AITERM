@@ -86,6 +86,11 @@ function TerminalBlockCardImpl({ block, highlightQuery, onAskAi, onBookmark, onC
               Bookmark
             </button>
           )}
+          {block.debugDump && (
+            <button className="aiterm-block-btn aiterm-btn aiterm-btn--secondary" onClick={() => navigator.clipboard.writeText(block.debugDump!)}>
+              Raw
+            </button>
+          )}
           {onCopy && (
             <button className="aiterm-block-btn aiterm-btn aiterm-btn--secondary" onClick={() => onCopy(block.command)}>
               Copy
