@@ -567,6 +567,7 @@ mod tests {
             label: None,
             worktree_path: None,
             worktree_branch: None,
+            isolate_worktree: None,
         }
     }
 
@@ -657,6 +658,7 @@ mod tests {
             label: None,
             worktree_path: None,
             worktree_branch: None,
+            isolate_worktree: None,
         }
     }
 

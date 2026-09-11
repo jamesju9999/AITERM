@@ -58,7 +58,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             bridge_tiers    TEXT,
             label           TEXT,
             worktree_path   TEXT,
-            worktree_branch TEXT
+            worktree_branch TEXT,
+            isolate_worktree INTEGER
         )",
     )
     .execute(pool)
@@ -104,6 +105,11 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await;
     let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN worktree_branch TEXT")
+        .execute(pool)
+        .await;
+    // Migration: existing databases created before `isolate_worktree` existed.
+    // 刻意不給 DEFAULT——NULL 代表「沿用全域設定」，跟 false 是不同的意思。
+    let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN isolate_worktree INTEGER")
         .execute(pool)
         .await;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, sort_order)")

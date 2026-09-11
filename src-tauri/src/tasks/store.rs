@@ -60,6 +60,10 @@ pub struct TaskRow {
     /// worktree 建立失敗退回原本行為），或已經合併回原分支並清理過。
     pub worktree_path: Option<String>,
     /// 上面那個 worktree 所在的分支名稱（`aiterm-task/<task_id>`）。
+    /// 這張卡片要不要用獨立的 git worktree。`None` 代表沿用
+    /// `TaskBoardConfig::isolate_with_worktree`；**派工當下才解析**，所以
+    /// 調整全域設定會影響所有還在等待、又沒有個別覆寫的卡片。
+    pub isolate_worktree: Option<bool>,
     /// 跟 `worktree_path` 同進退——一個有值另一個必然也有值。
     pub worktree_branch: Option<String>,
 }
@@ -489,6 +493,20 @@ pub async fn set_worktree(pool: &SqlitePool, id: &str, path: &str, branch: &str)
     sqlx::query("UPDATE tasks SET worktree_path = ?, worktree_branch = ? WHERE id = ?")
         .bind(path)
         .bind(branch)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// 設定單張卡片的 worktree 隔離覆寫值。`None` 寫回 NULL＝沿用全域設定。
+pub async fn set_isolate_worktree(
+    pool: &SqlitePool,
+    id: &str,
+    value: Option<bool>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET isolate_worktree = ? WHERE id = ?")
+        .bind(value)
         .bind(id)
         .execute(pool)
         .await?;
@@ -1429,6 +1447,75 @@ mod session_column_tests {
             get_task(&pool, "old1").await.unwrap().unwrap().session_path.as_deref(),
             Some("/p/session.jsonl")
         );
+    }
+
+    /// 舊資料庫沒有 `isolate_worktree` 欄位時，`init_schema` 要能補上，而且
+    /// 舊資料要讀成 `None`（＝沿用全域）。`ALTER TABLE` 失敗會被 `let _ =`
+    /// 刻意吞掉，所以欄位名稱打錯不會有任何訊號，只能靠這種測試抓。
+    #[tokio::test]
+    async fn init_schema_migrates_a_database_that_predates_isolate_worktree() {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+
+        // 只缺 isolate_worktree 的舊 schema。其餘欄位一定要齊全——
+        // `init_schema` 的 CREATE TABLE 帶 IF NOT EXISTS，表已存在時整段跳過，
+        // 只有明確寫了 ALTER TABLE 的欄位才會被補上。
+        sqlx::query(
+            "CREATE TABLE tasks (
+                id              TEXT PRIMARY KEY NOT NULL,
+                title           TEXT NOT NULL,
+                body            TEXT NOT NULL DEFAULT '',
+                project_dir     TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'planning',
+                parallel_ok     INTEGER NOT NULL DEFAULT 1,
+                interactive     INTEGER NOT NULL DEFAULT 0,
+                sort_order      REAL NOT NULL DEFAULT 0,
+                outcome         TEXT,
+                tab_id          TEXT,
+                transcript_path TEXT,
+                error_message   TEXT,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                dispatched_at   INTEGER,
+                finished_at     INTEGER,
+                ai_summary      TEXT,
+                archived_at     INTEGER,
+                session_id      TEXT,
+                session_path    TEXT,
+                use_bridge      INTEGER NOT NULL DEFAULT 0,
+                bridge_tiers    TEXT,
+                label           TEXT,
+                worktree_path   TEXT,
+                worktree_branch TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO tasks (id, title, body, project_dir) VALUES ('old1', 't', 'b', '/work/repo')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        crate::tasks::init_schema(&pool).await.unwrap();
+
+        let row = get_task(&pool, "old1").await.unwrap().unwrap();
+        assert_eq!(row.isolate_worktree, None, "舊卡片應該是沿用全域，不是被寫死成某個值");
+
+        let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        assert_eq!(
+            get_task(&pool, &id).await.unwrap().unwrap().isolate_worktree,
+            None,
+            "新卡片預設也是沿用全域"
+        );
+
+        set_isolate_worktree(&pool, &id, Some(false)).await.unwrap();
+        assert_eq!(get_task(&pool, &id).await.unwrap().unwrap().isolate_worktree, Some(false));
+
+        set_isolate_worktree(&pool, &id, Some(true)).await.unwrap();
+        assert_eq!(get_task(&pool, &id).await.unwrap().unwrap().isolate_worktree, Some(true));
+
+        // 回到「沿用全域」也要存得回去，不能只能單向設定。
+        set_isolate_worktree(&pool, &id, None).await.unwrap();
+        assert_eq!(get_task(&pool, &id).await.unwrap().unwrap().isolate_worktree, None);
     }
 
     /// 舊資料庫沒有 worktree_path/worktree_branch 時，`init_schema` 要能
