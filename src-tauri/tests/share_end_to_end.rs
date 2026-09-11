@@ -44,6 +44,11 @@ async fn start_test_server(
         aiterm_lib::share::protocol::AuthExporter(
             [0u8; aiterm_lib::share::tls::SAS_MATERIAL_LEN],
         ),
+    ))
+    .layer(axum::Extension(
+        aiterm_lib::share::protocol::PeerAddr(
+            std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+        ),
     ));
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();

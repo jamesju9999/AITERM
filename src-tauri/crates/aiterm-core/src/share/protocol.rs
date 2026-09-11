@@ -89,6 +89,12 @@ pub struct ConnectionExporter(pub [u8; SAS_MATERIAL_LEN]);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthExporter(pub [u8; SAS_MATERIAL_LEN]);
 
+/// 這條連線的來源位址，由 TLS accept 迴圈塞進 request extension——跟
+/// `ConnectionExporter`／`AuthExporter` 同一招。用來對認證失敗做逐來源退避
+/// （見 `share::backoff`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PeerAddr(pub std::net::SocketAddr);
+
 /// 觀看端 → 主控端。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

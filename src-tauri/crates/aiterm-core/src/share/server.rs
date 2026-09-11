@@ -19,9 +19,10 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::pty::PtyManager;
 
+use super::backoff::AuthBackoff;
 use super::events::ShareEvents;
 use super::protocol::{
-    AuthExporter, ClientMessage, ConnectionExporter, EndReason, PendingRequestEvent,
+    AuthExporter, ClientMessage, ConnectionExporter, EndReason, PeerAddr, PendingRequestEvent,
     ServerMessage, WireAccessMode, PROTOCOL_VERSION,
 };
 use super::registry::{AccessMode, ShareRegistry};
@@ -62,6 +63,10 @@ pub struct ShareAppState {
     /// `Some` 時走 CLI host 的金鑰認證路徑；`None`（GUI 主控端）時行為跟
     /// 這個欄位存在之前完全一樣。
     pub auth: Option<Arc<HostAuth>>,
+    /// 認證失敗的逐來源退避。GUI 路徑（`auth` 為 `None`）永遠不會走到
+    /// `JoinDecision::Reject`（`decide_join` 在那條路上一律回
+    /// `UseCode`），所以這個欄位對 GUI 主控端完全是死代碼。
+    pub backoff: Arc<AuthBackoff>,
 }
 
 pub fn router(
@@ -73,7 +78,13 @@ pub fn router(
     Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/share", any(share_upgrade))
-        .with_state(ShareAppState { pty, registry, events, auth })
+        .with_state(ShareAppState {
+            pty,
+            registry,
+            events,
+            auth,
+            backoff: Arc::new(AuthBackoff::new()),
+        })
 }
 
 /// 一則 `Join` 該怎麼處理。
@@ -117,9 +128,12 @@ async fn share_upgrade(
     ws: WebSocketUpgrade,
     axum::Extension(exporter): axum::Extension<ConnectionExporter>,
     axum::Extension(auth_exporter): axum::Extension<AuthExporter>,
+    axum::Extension(peer): axum::Extension<PeerAddr>,
     State(state): State<ShareAppState>,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_share(socket, state, exporter.0, auth_exporter.0))
+    ws.on_upgrade(move |socket| {
+        handle_share(socket, state, exporter.0, auth_exporter.0, peer.0)
+    })
 }
 
 async fn send_control(ws: &mut WebSocket, msg: &ServerMessage) -> bool {
@@ -174,6 +188,7 @@ async fn handle_share(
     state: ShareAppState,
     exporter: [u8; tls::SAS_MATERIAL_LEN],
     auth_exporter: [u8; tls::SAS_MATERIAL_LEN],
+    peer: std::net::SocketAddr,
 ) {
     // 1. 第一則訊息必須是 Join。
     let join = match ws.recv().await {
@@ -200,12 +215,25 @@ async fn handle_share(
     // 用 `AUTH_EXPORTER_LABEL` 導出的 material，不是給 SAS 用的那份——兩者
     // 刻意分開導出（見 `tls::AUTH_EXPORTER_LABEL`）。
     let decision = decide_join(state.auth.as_deref(), auth.as_deref(), &code, &auth_exporter);
+    let peer_ip = peer.ip();
     let (effective_code, auto_approve) = match decision {
         JoinDecision::UseCode { code } => (code, None),
-        JoinDecision::AutoApprove { code, mode } => (code, Some(mode)),
+        JoinDecision::AutoApprove { code, mode } => {
+            state.backoff.record_success(peer_ip);
+            (code, Some(mode))
+        }
         // 刻意用既有的 `Denied` 而不是新增 EndReason 變體：新變體會讓舊版
         // 觀看端在 `serde_json::from_str` 硬性失敗，變成無法解釋的斷線。
-        JoinDecision::Reject => return end_with(&mut ws, EndReason::Denied).await,
+        JoinDecision::Reject => {
+            let now = std::time::Instant::now();
+            let delay = state.backoff.delay_for(peer_ip, now);
+            state.backoff.record_failure(peer_ip, now);
+            log::warn!("認證失敗：來源 {peer_ip}，自報名稱 {display_name:?}");
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            return end_with(&mut ws, EndReason::Denied).await;
+        }
     };
 
     // SAS 承諾流程。**這兩步的順序就是整個防中間人保證的全部價值，不可調換。**

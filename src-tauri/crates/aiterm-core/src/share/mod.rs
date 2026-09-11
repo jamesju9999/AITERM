@@ -4,6 +4,7 @@
 //! 把事件推播給 GUI 的那一層留在 `app` crate 的 `share::viewer_manager`。
 
 pub mod auth;
+pub mod backoff;
 pub mod events;
 pub mod mdns;
 pub mod protocol;
@@ -35,7 +36,7 @@ use tower_service::Service;
 
 use crate::pty::PtyManager;
 use events::ShareEvents;
-use protocol::{AuthExporter, ConnectionExporter};
+use protocol::{AuthExporter, ConnectionExporter, PeerAddr};
 use registry::ShareRegistry;
 
 /// Server 生命週期。鏡像 `mcp_server::McpToolServerState`，但有兩個關鍵差異：
@@ -194,9 +195,9 @@ async fn serve_tls(
     let acceptor = TlsAcceptor::from(Arc::new(server_config));
 
     loop {
-        let stream = tokio::select! {
+        let (stream, peer) = tokio::select! {
             accepted = listener.accept() => match accepted {
-                Ok((s, _peer)) => s,
+                Ok((s, peer)) => (s, peer),
                 Err(e) => {
                     log::error!("共享 server accept 失敗：{e}");
                     continue;
@@ -245,6 +246,7 @@ async fn serve_tls(
             let svc = hyper::service::service_fn(move |mut req: hyper::Request<Incoming>| {
                 req.extensions_mut().insert(ConnectionExporter(exporter));
                 req.extensions_mut().insert(AuthExporter(auth_exporter));
+                req.extensions_mut().insert(PeerAddr(peer));
                 let mut app = app.clone();
                 async move { app.call(req).await }
             });
