@@ -718,14 +718,22 @@ jobs:
           cat "aiterm-host-${VERSION}-SHA256SUMS"
           gh release upload "$TAG" "aiterm-host-${VERSION}-SHA256SUMS" --clobber
 
-  # 容器映像。吃 cli-build 已經上傳的 musl 靜態執行檔。
+  # 容器映像——**只建置與煙霧測試，不推**。
+  #
+  # 刻意拆成兩個 job：這一個在人核准之前跑、finalize 要等它，所以映像壞掉會
+  # 擋住發版；真正推到 ghcr 的是 `cli-container-push`，掛在 finalize 之後。
+  #
+  # 原本這裡直接 build+push，而且無條件推 `:latest`。這個 repo 的演練慣例是
+  # 推 vX.Y.Z-<主題><n> 然後**不核准 finalize**，讓 release 維持 draft——
+  # 照那個慣例 npm 與 Homebrew 都不會跑，但這個 job 在 finalize 之前，所以
+  # 一次演練就會把公開的 `:latest` 蓋成演練版。就算是正式版，也是在人核准
+  # 之前就對外發佈了，跟 npm／Homebrew 的原則自相矛盾。
   cli-container:
     needs: cli-build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
-      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -746,14 +754,7 @@ jobs:
           done
           ls -la dist
 
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and load for smoke testing
         uses: docker/build-push-action@v6
@@ -779,16 +780,6 @@ jobs:
           docker run --rm aiterm-host:smoke --print-connection 2>&1 | grep -q "金鑰：" \
             || { echo "沒給金鑰時應該退回產生一組，而不是啟動失敗"; exit 1; }
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile.host
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/aiterm-host:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/aiterm-host:latest
 
   # Six parallel build jobs cannot each write latest.json — the later writer would
   # drop the earlier writer's platform entries. This job is the single writer: it
@@ -894,6 +885,76 @@ jobs:
         run: |
           gh release upload "$TAG" latest.json --clobber
           gh release edit "$TAG" --draft=false --latest
+
+  # 把容器映像推到 ghcr。**`needs: finalize`**，理由跟 npm／Homebrew 同一個：
+  # 對外發佈要等人核准這一版之後。建置與煙霧測試已經在 `cli-container` 做過了。
+  cli-container-push:
+    needs: finalize
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # 跟 cli-homebrew、cli-npm 用同一套判斷：標籤裡有 `-` 就是演練版，
+      # 不推。三條對外管道的規則必須一致——改一邊忘了另一邊，就會有一條
+      # 管道把演練版發出去。
+      - name: Guard against pre-release tags
+        id: guard
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$TAG" == *-* ]]; then
+            echo "標籤 $TAG 含有 '-'，判定為 pre-release／彩排標籤，不推容器映像。"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.guard.outputs.skip != 'true'
+
+      - name: Fetch the musl binaries from the release
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          mkdir -p dist
+          for pair in "x86_64-unknown-linux-musl:amd64" "aarch64-unknown-linux-musl:arm64"; do
+            triple="${pair%%:*}"; arch="${pair##*:}"
+            gh release download "$TAG" --pattern "aiterm-host-${VERSION}-${triple}.tar.gz" --dir .
+            tar xzf "aiterm-host-${VERSION}-${triple}.tar.gz"
+            cp "aiterm-host-${VERSION}-${triple}/aiterm-host" "dist/aiterm-host-${arch}"
+          done
+
+      - uses: docker/setup-qemu-action@v3
+        if: steps.guard.outputs.skip != 'true'
+      - uses: docker/setup-buildx-action@v3
+        if: steps.guard.outputs.skip != 'true'
+
+      - uses: docker/login-action@v3
+        if: steps.guard.outputs.skip != 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        if: steps.guard.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.host
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/aiterm-host:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/aiterm-host:latest
 
   # 更新 Homebrew tap。
   #

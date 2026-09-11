@@ -1625,9 +1625,24 @@ aiterm-host --print-connection
 
 - [ ] **Step 5: 驗容器**
 
+**演練不會推映像到 ghcr，這是刻意的。** 容器被拆成兩個 job：`cli-container`
+（審核前、只建置與煙霧測試、不推）與 `cli-container-push`（`needs: finalize`，
+而且演練 tag 會被 guard 跳過）。所以演練時要看的是 `cli-container` 的煙霧測試
+有沒有過：
+
 ```bash
-docker run --rm ghcr.io/jamesju9999/aiterm-host:v1.25.0-dist1 --print-connection
-docker run --rm --entrypoint sh ghcr.io/jamesju9999/aiterm-host:v1.25.0-dist1 -c 'test -x /bin/bash && echo bash ok'
+gh run list --workflow=release.yml --limit 1
+gh run view <run-id> --log --job <cli-container 的 job id> | grep -E "OSC 133|bash|金鑰"
+```
+
+預期看到三條煙霧測試全部通過，且**沒有任何 push 相關的輸出**。
+
+ghcr 的實際推送要到第一次正式發版（不含 `-` 的 tag，且核准了 finalize）才會
+發生，那時再驗：
+
+```bash
+docker run --rm ghcr.io/jamesju9999/aiterm-host:latest --print-connection
+docker run --rm --entrypoint sh ghcr.io/jamesju9999/aiterm-host:latest -c 'test -x /bin/bash && echo bash ok'
 ```
 
 - [ ] **Step 6: 清掉演練用的 tag 與 release**
@@ -1638,7 +1653,7 @@ git push --delete origin v1.25.0-dist1
 git tag -d v1.25.0-dist1
 ```
 
-ghcr 上那個 tag 也要刪（在 GitHub 的 Packages 頁面，或 `gh api` 刪 package version）。
+（演練不會推容器映像，所以 ghcr 上沒有東西要清。）
 
 ---
 
