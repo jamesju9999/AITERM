@@ -30,6 +30,7 @@ import { getConfig, type ExecutionMode, type SubmitShortcut } from "../ipc/confi
 import { getSessionCwd } from "../ipc/fs";
 import { enterpriseCompleteTask, enterpriseOnComplete } from "../ipc/enterprise";
 import { useTerminalBlocks } from "../hooks/useTerminalBlocks";
+import { useShellIdentity } from "../hooks/useShellIdentity";
 import { useAgentMission } from "../hooks/useAgentMission";
 import { useTelegramRemoteControl } from "../hooks/useTelegramRemoteControl";
 import { listProviders } from "../ipc/provider";
@@ -41,6 +42,7 @@ import { AiPanel } from "./AiPanel";
 import { ProviderPalette } from "./ProviderPalette";
 import { QuotaBadge } from "./QuotaBadge";
 import { SharePanel } from "./SharePanel";
+import { ShellWarningBadge } from "./ShellWarningBadge";
 import { useProviderQuota } from "../hooks/useProviderQuota";
 import { WarpInput } from "./WarpInput";
 import { FileExplorer } from "./FileExplorer/FileExplorer";
@@ -731,6 +733,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     (termState as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } } } | null)
       ?._core?._renderService?.dimensions?.css?.cell?.height || 14 * 1.1;
   const liveHeightPx = Math.round(liveRows * cellHeightPx);
+
+  // shell 自己回報的身分（OSC 7000）。只有 Windows PowerShell 5.1 會讓
+  // ShellWarningBadge 真的顯示出東西，其餘情況它回傳 null。
+  const shellIdentity = useShellIdentity(termState);
 
   // How far to slide the xterm host up so the prompt is the live pane's first
   // visible row — see liveTopRows and the host element's style comment. Always
@@ -1933,6 +1939,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               `subscribe_with_history` 拿這個值去 PtyManager 查串流；傳 React
               的分頁 id 會查不到，觀看端只會看到「那個終端機已經關閉」。
               整套自動測試都沒抓到，因為測試裡直接把 PTY id 當成 tab_id 用。 */}
+          <ShellWarningBadge identity={shellIdentity} />
           {sessionId && <SharePanel sessionId={sessionId} />}
           <button
             className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
