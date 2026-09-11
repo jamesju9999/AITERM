@@ -90,6 +90,8 @@ pub struct CreateArgs {
     pub use_bridge: bool,
     pub bridge_tiers: Option<String>,
     pub label: Option<String>,
+    /// `None` = 沿用全域設定，見 `TaskRow::isolate_worktree`。
+    pub isolate_worktree: Option<bool>,
 }
 
 #[tauri::command]
@@ -116,6 +118,9 @@ pub async fn tasks_create(
     store::set_label(&p.pool, &id, args.label.as_deref())
         .await
         .map_err(|e| e.to_string())?;
+    store::set_isolate_worktree(&p.pool, &id, args.isolate_worktree)
+        .await
+        .map_err(|e| e.to_string())?;
     emit_updated(&app);
     Ok(id)
 }
@@ -131,6 +136,8 @@ pub struct UpdateArgs {
     pub use_bridge: bool,
     pub bridge_tiers: Option<String>,
     pub label: Option<String>,
+    /// `None` = 沿用全域設定，見 `TaskRow::isolate_worktree`。
+    pub isolate_worktree: Option<bool>,
 }
 
 #[tauri::command]
@@ -152,6 +159,9 @@ pub async fn tasks_update(
         .await
         .map_err(|e| e.to_string())?;
     store::set_bridge_config(&p.pool, &args.id, args.use_bridge, args.bridge_tiers)
+        .await
+        .map_err(|e| e.to_string())?;
+    store::set_isolate_worktree(&p.pool, &args.id, args.isolate_worktree)
         .await
         .map_err(|e| e.to_string())?;
     if edit_allowed(&row.status) {
