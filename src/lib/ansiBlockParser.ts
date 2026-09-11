@@ -1,4 +1,4 @@
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type IBuffer } from "@xterm/xterm";
 
 export interface RenderedSpan {
   text: string;
@@ -78,10 +78,16 @@ export async function parseAnsiToRenderedLines(raw: string, cols: number, rows =
 
   await new Promise<void>((resolve) => term.write(raw, resolve));
 
-  const buffer = term.buffer.active;
+  const lines = readRenderedLines(term.buffer.active, 0, term.buffer.active.length, cols);
+  term.dispose();
+  return lines;
+}
+
+/** Reads buffer rows [startRow, endRow) as styled lines, dropping trailing empty rows. */
+export function readRenderedLines(buffer: IBuffer, startRow: number, endRow: number, cols: number): RenderedLine[] {
   const lines: RenderedLine[] = [];
 
-  for (let y = 0; y < buffer.length; y++) {
+  for (let y = startRow; y < endRow; y++) {
     const line = buffer.getLine(y);
     if (!line) continue;
 
@@ -128,6 +134,5 @@ export async function parseAnsiToRenderedLines(raw: string, cols: number, rows =
     lines.pop();
   }
 
-  term.dispose();
   return lines;
 }

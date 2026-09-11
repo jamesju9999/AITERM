@@ -526,6 +526,68 @@ describe("useTerminalBlocks", () => {
     clearSpy.mockRestore();
   });
 
+  it("Windows：卡片內容取自畫面上的 xterm，不重播 ConPTY 的絕對座標輸出", async () => {
+    // ConPTY 用絕對座標畫在自己固定大小的畫面上：畫面填滿後，每一行都是先
+    // \r\n 捲動、再 ESC[16;1H 畫到最後一列。畫面上的 xterm 跟 ConPTY 同樣
+    // 16 列、游標也在同一列，所以顯示正確；拿同樣的位元組到另一個終端機
+    // 從左上角重播，全部都會疊在同一列，只剩最後一行（實機截圖：dir 的
+    // 清單中間整段消失）。
+    const liveTerm = new Terminal({ cols: 80, rows: 16 });
+    const { result } = renderHook(() =>
+      useTerminalBlocks("session-1", liveTerm, undefined, undefined, undefined, undefined, vi.fn(), "windows"),
+    );
+    const feed = async (data: string) => {
+      await act(async () => {
+        await writeToTerm(liveTerm, data);
+      });
+      act(() => {
+        result.current.appendOutput(data);
+      });
+    };
+
+    for (let i = 1; i <= 15; i++) await writeToTerm(liveTerm, `old ${i}\r\n`);
+    await writeToTerm(liveTerm, "PS C:\\> \x1b]133;B\x07");
+
+    act(() => {
+      result.current.submitCommand("dir");
+    });
+    await feed("dir\r\n\x1b]133;C\x07");
+
+    const files = Array.from({ length: 25 }, (_, i) => `file-${String(i + 1).padStart(2, "0")}`);
+    let conptyPaint = "\x1b[16;1H" + files[0] + "\x1b[K";
+    for (const f of files.slice(1)) conptyPaint += "\r\n\x1b[16;1H" + f + "\x1b[K";
+    await feed(conptyPaint);
+    await feed("\r\n\x1b]133;D;0\x07");
+
+    await waitFor(() => {
+      expect(result.current.blocks[0].renderedLines).toBeDefined();
+    });
+    const text = result.current.blocks[0].renderedLines!.map((l) => l.spans.map((s) => s.text).join("").trimEnd());
+    expect(text).toEqual(files);
+    liveTerm.dispose();
+  });
+
+  it("Windows 沒有 C 標記（cmd.exe 的 PROMPT 只送 D/A）時，退回重播原始輸出", async () => {
+    const { result } = renderHook(() =>
+      useTerminalBlocks("session-1", term, undefined, undefined, undefined, undefined, vi.fn(), "windows"),
+    );
+
+    act(() => {
+      result.current.submitCommand("echo hi");
+    });
+    act(() => {
+      result.current.appendOutput("hi\r\n");
+    });
+    await act(async () => {
+      await writeToTerm(term, "\x1b]133;D;0\x07");
+    });
+
+    await waitFor(() => {
+      expect(result.current.blocks[0].renderedLines).toBeDefined();
+    });
+    expect(result.current.blocks[0].renderedLines!.map((l) => l.spans.map((s) => s.text).join(""))).toEqual(["hi"]);
+  });
+
   it("非 Windows：維持原本清空緩衝區的行為（zsh/bash 用相對移動重繪，不受影響）", async () => {
     const clearSpy = vi.spyOn(term, "clear");
     const { result: macResult } = renderHook(() =>

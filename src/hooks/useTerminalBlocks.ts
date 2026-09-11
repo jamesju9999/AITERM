@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type IMarker } from "@xterm/xterm";
 import { writePty } from "../ipc/pty";
-import { parseAnsiToRenderedLines, type RenderedLine } from "../lib/ansiBlockParser";
+import { parseAnsiToRenderedLines, readRenderedLines, type RenderedLine } from "../lib/ansiBlockParser";
 import type { GitBlockInfo } from "../ipc/vcs";
 
 export interface TerminalBlock {
@@ -146,6 +146,11 @@ export function useTerminalBlocks(
   // OSC 133 B 標記記錄的「輸入從這裡開始」絕對座標，給 recoverUntrackedCommand
   // 用——只在遠端指令（沒有本機追蹤區塊）時才會被讀取，見該函式的文件註解。
   const promptEndRef = useRef<{ row: number; col: number } | null>(null);
+  // Windows 專用：OSC 133 C 當下游標所在行＝這個指令輸出的第一行。
+  // ConPTY 用絕對座標畫在自己固定大小的畫面上，那段位元組只有在跟它同步的
+  // 畫面 xterm 裡才解讀得正確，拿去另一個終端機從左上角重播會整段互相覆蓋，
+  // 所以卡片內容改從這一行起直接讀畫面緩衝區。
+  const outputStartRef = useRef<{ blockId: string; marker: IMarker } | null>(null);
 
   /**
    * 實機測試抓到的第二個 bug（跟 appendOutput 的 race 是不同根因）：
@@ -213,6 +218,8 @@ export function useTerminalBlocks(
   const clearAllBlocks = useCallback(() => {
     blocksRef.current = [];
     setBlocks([]);
+    outputStartRef.current?.marker.dispose();
+    outputStartRef.current = null;
   }, []);
 
   /**
@@ -249,7 +256,20 @@ export function useTerminalBlocks(
       blocksRef.current = updated;
       setBlocks(updated);
 
-      parseAnsiToRenderedLines(frozenOutput, cols).then((renderedLines) => {
+      // 標記被 scrollback 修剪掉時 line 會是 -1——代表輸出比 scrollback 還長，
+      // 剩下的每一列都屬於這個指令，從第 0 列讀起。
+      const start = outputStartRef.current;
+      let liveLines: RenderedLine[] | null = null;
+      if (start?.blockId === blockId && term) {
+        const buf = term.buffer.active;
+        const cursorRow = buf.baseY + buf.cursorY;
+        const endRow = buf.cursorX > 0 ? cursorRow + 1 : cursorRow;
+        liveLines = readRenderedLines(buf, Math.max(0, start.marker.line), endRow, cols);
+        start.marker.dispose();
+        outputStartRef.current = null;
+      }
+
+      (liveLines ? Promise.resolve(liveLines) : parseAnsiToRenderedLines(frozenOutput, cols)).then((renderedLines) => {
         const withLines = blocksRef.current.map((b) =>
           b.id === blockId ? { ...b, renderedLines } : b,
         );
@@ -376,6 +396,14 @@ export function useTerminalBlocks(
             beginTrackedBlock(recovered);
           } else {
             onUntrackedCommandBoundary?.("start");
+          }
+        }
+        const running = blocksRef.current[blocksRef.current.length - 1];
+        if (hostPlatform === "windows" && running?.status === "running" && outputStartRef.current?.blockId !== running.id) {
+          const marker = term.registerMarker(0);
+          if (marker) {
+            outputStartRef.current?.marker.dispose();
+            outputStartRef.current = { blockId: running.id, marker };
           }
         }
         return true;
