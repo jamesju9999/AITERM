@@ -2,7 +2,7 @@ import { useState, type CSSProperties } from "react";
 import { confirm, message } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import { archiveTask, cloneTask, deleteTask, markTaskDone, mergeTaskWorktree, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
+import { abortMerge, archiveTask, cloneTask, deleteTask, markTaskDone, mergeTaskWorktree, stopTask, type MergeOutcome, type TaskWithAttachments } from "../../ipc/tasks";
 import { hashLabelHue } from "./labelColor";
 
 /**
@@ -33,6 +33,8 @@ export function TaskCard({
 }) {
   const { t } = useLocale();
   const [busy, setBusy] = useState(false);
+  // 大型 worktree 的合併動輒數十秒，只把按鈕變灰看起來就像沒反應。
+  const [merging, setMerging] = useState(false);
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -71,6 +73,45 @@ export function TaskCard({
   const openTab = () => {
     if (!card.tab_id) return;
     window.dispatchEvent(new CustomEvent("aiterm:focus-tab", { detail: { tabId: card.tab_id } }));
+  };
+
+  /**
+   * 合併不走通用的 `run()`：它有三種結果要分別處理，而且衝突時要把決定權
+   * 交還給使用者，不是單純的成功／失敗。
+   */
+  const mergeWorktree = async () => {
+    setMerging(true);
+    setBusy(true);
+    try {
+      const outcome: MergeOutcome = await mergeTaskWorktree(projectId, card.id);
+      if (outcome.status === "merged") {
+        onChanged();
+        return;
+      }
+      if (outcome.status === "blocked") {
+        // 這兩種都還沒動到任何東西，所以不需要 onChanged()。
+        const body =
+          outcome.reason === "dirty_base"
+            ? t.board_merge_blocked_dirty(outcome.files.join("\n"))
+            : t.board_merge_blocked_in_progress(outcome.files.join("\n"));
+        await message(body, { title: t.board_merge_blocked_title, kind: "warning" });
+        return;
+      }
+      // 衝突：原專案目錄現在停在合併進行中。取消（含直接關掉視窗）＝維持
+      // 現狀，跟「什麼都不做」一致，所以把「還原」放在 ok 那一側。
+      const undo = await confirm(t.board_merge_conflict_body(outcome.files.join("\n")), {
+        title: t.board_merge_conflict_title,
+        kind: "warning",
+        okLabel: t.board_merge_conflict_abort,
+        cancelLabel: t.board_merge_conflict_keep,
+      });
+      if (undo) await abortMerge(projectId, card.id);
+    } catch (e) {
+      await message(errorText(e), { title: card.title, kind: "error" });
+    } finally {
+      setMerging(false);
+      setBusy(false);
+    }
   };
 
   const markDone = async () => {
@@ -166,8 +207,8 @@ export function TaskCard({
               {t.board_action_requeue}
             </button>
             {card.worktree_branch && (
-              <button className="tb-btn tb-btn--primary" disabled={busy} onClick={() => void run(() => mergeTaskWorktree(projectId, card.id))}>
-                {t.board_action_merge_worktree}
+              <button className="tb-btn tb-btn--primary" disabled={busy} onClick={() => void mergeWorktree()}>
+                {merging ? t.board_merge_running : t.board_action_merge_worktree}
               </button>
             )}
             {/* 封存不問過就直接做：資料完全保留，隨時能從封存清單放回來，

@@ -117,7 +117,21 @@ export const stopTask = (projectId: string, id: string): Promise<void> =>
 export const markTaskDone = (projectId: string, id: string): Promise<void> =>
   invoke("tasks_mark_done", { projectId, id });
 
-export const mergeTaskWorktree = (projectId: string, id: string): Promise<void> =>
+/**
+ * 「合併回原分支」的結果。衝突不是錯誤，而是需要使用者當下決定要就地解還是
+ * 還原，所以後端用結構化結果回傳（見 commands/tasks.rs 的 MergeOutcome），
+ * 前端不必去比對 git 的錯誤字串。
+ */
+export type MergeOutcome =
+  | { status: "merged" }
+  | { status: "conflict"; files: string[] }
+  | { status: "blocked"; reason: "dirty_base" | "merge_in_progress"; files: string[] };
+
+/** `git merge --abort`。worktree 與分支不動，成果仍在那個分支上。 */
+export const abortMerge = (projectId: string, id: string): Promise<void> =>
+  invoke("tasks_abort_merge", { projectId, id });
+
+export const mergeTaskWorktree = (projectId: string, id: string): Promise<MergeOutcome> =>
   invoke("tasks_merge_worktree", { projectId, id });
 
 export const deleteTask = (

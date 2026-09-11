@@ -3,11 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mergeTaskWorktree = vi.fn();
+const abortMerge = vi.fn();
 const archiveTask = vi.fn();
 const messageDialog = vi.fn();
+const confirmDialog = vi.fn();
 
 vi.mock("../../ipc/tasks", () => ({
   mergeTaskWorktree: (...a: unknown[]) => mergeTaskWorktree(...a),
+  abortMerge: (...a: unknown[]) => abortMerge(...a),
   archiveTask: (...a: unknown[]) => archiveTask(...a),
   cloneTask: vi.fn(),
   deleteTask: vi.fn(),
@@ -15,7 +18,7 @@ vi.mock("../../ipc/tasks", () => ({
   stopTask: vi.fn(),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
-  confirm: vi.fn(),
+  confirm: (...a: unknown[]) => confirmDialog(...a),
   message: (...a: unknown[]) => messageDialog(...a),
 }));
 
@@ -104,13 +107,80 @@ describe("TaskCard 的動作失敗時", () => {
   });
 
   it("成功時不跳錯誤視窗，而且會通知重新整理", async () => {
-    mergeTaskWorktree.mockResolvedValue(undefined);
+    mergeTaskWorktree.mockResolvedValue({ status: "merged" });
     const onChanged = mount();
 
     await userEvent.click(screen.getByText("合併回原分支"));
 
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(messageDialog).not.toHaveBeenCalled();
+  });
+
+  it("衝突時問使用者，選「還原」才呼叫 abort", async () => {
+    mergeTaskWorktree.mockResolvedValue({ status: "conflict", files: ["a.txt", "b.txt"] });
+    confirmDialog.mockResolvedValue(true); // true = okLabel = 還原
+    mount();
+
+    await userEvent.click(screen.getByText("合併回原分支"));
+
+    await waitFor(() => expect(abortMerge).toHaveBeenCalledWith("p1", "t1"));
+    expect(String(confirmDialog.mock.calls[0][0])).toContain("a.txt");
+    expect(String(confirmDialog.mock.calls[0][0])).toContain("b.txt");
+  });
+
+  it("衝突時選「我自己解」就不還原，保持半合併狀態", async () => {
+    mergeTaskWorktree.mockResolvedValue({ status: "conflict", files: ["a.txt"] });
+    confirmDialog.mockResolvedValue(false);
+    mount();
+
+    await userEvent.click(screen.getByText("合併回原分支"));
+
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalled());
+    expect(abortMerge).not.toHaveBeenCalled();
+  });
+
+  it("原分支不乾淨時只提示，不會動到任何東西", async () => {
+    mergeTaskWorktree.mockResolvedValue({
+      status: "blocked",
+      reason: "dirty_base",
+      files: ["config.yml"],
+    });
+    const onChanged = mount();
+
+    await userEvent.click(screen.getByText("合併回原分支"));
+
+    await waitFor(() => expect(messageDialog).toHaveBeenCalled());
+    expect(String(messageDialog.mock.calls[0][0])).toContain("config.yml");
+    expect(abortMerge).not.toHaveBeenCalled();
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it("原目錄還停在上一次合併時，提示的是不同的訊息", async () => {
+    mergeTaskWorktree.mockResolvedValue({
+      status: "blocked",
+      reason: "merge_in_progress",
+      files: ["a.txt"],
+    });
+    mount();
+
+    await userEvent.click(screen.getByText("合併回原分支"));
+
+    await waitFor(() => expect(messageDialog).toHaveBeenCalled());
+    expect(String(messageDialog.mock.calls[0][0])).toContain("上一次沒有收尾的合併");
+  });
+
+  it("合併期間按鈕顯示進度文字", async () => {
+    // worktree 大的時候 git status/add/worktree remove 動輒數十秒，按鈕只是
+    // 變灰看起來就像沒反應——這正是使用者實機回報的觀感。
+    let release: (v: unknown) => void = () => {};
+    mergeTaskWorktree.mockReturnValue(new Promise((r) => { release = r; }));
+    mount();
+
+    await userEvent.click(screen.getByText("合併回原分支"));
+    await screen.findByText("合併中…");
+
+    release({ status: "merged" });
+    await waitFor(() => expect(screen.queryByText("合併中…")).toBeNull());
   });
 
   it("同一個 run() 包住的其他動作也一樣會顯示錯誤", async () => {
