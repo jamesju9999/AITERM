@@ -1108,9 +1108,29 @@ jobs:
             echo "  用 gh secret list 確認它在 repo 層。）"
             exit 0
           fi
+          # 已經發過的版本就跳過，讓這一步可以安全重跑。
+          #
+          # 實際遇過的狀況：v1.25.0 發佈時五個子套件發到第五個才被 npm 的
+          # 名稱防濫用機制擋下（`403 Package name triggered spam detection`，
+          # 短時間連續建立多個相似名稱會觸發），前四個已經上架、入口套件卻
+          # 還沒發。沒有這個判斷的話，重跑會在第一個已存在的版本就失敗，
+          # 永遠走不到真正需要重試的那一個。npm 的版本是不可變的，所以
+          # 「已存在就跳過」不會掩蓋任何問題。
+          publish_if_new() {
+            local dir="$1"
+            local name version
+            name=$(node -p "require('./$dir/package.json').name")
+            version=$(node -p "require('./$dir/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version 已經在 registry 上，跳過。"
+              return 0
+            fi
+            (cd "$dir" && npm publish --access public)
+          }
+
           # **子套件一定要先發。** 入口套件的 optionalDependencies 指向它們，
           # 順序反過來的話，入口套件發出去的瞬間指向的是還不存在的版本。
           for p in npm-dist/aiterm-host-*; do
-            (cd "$p" && npm publish --access public)
+            publish_if_new "$p"
           done
-          (cd npm-dist/aiterm-host && npm publish --access public)
+          publish_if_new npm-dist/aiterm-host
