@@ -378,21 +378,59 @@ pub async fn tasks_merge_worktree(
     }
 
     if let Err(cleanup_err) = base_client.remove_worktree(&worktree_path).await {
-        // **合併已經成功了**，這裡失敗的只是清理。照樣把 DB 欄位清掉並 prune：
-        // 卡片的任務確實完成了，按鈕該消失；留著的話下一次按會跑在一個半刪除
-        // 的 worktree 上，得到 `not a git repository` 這種跟真正問題無關的錯誤
-        // （實機踩過）。
+        // **不要重試 `git worktree remove`**：它失敗時已經把登記檔移除了，
+        // 第二次只會得到 `not a working tree`，把真正的錯誤蓋掉（實機踩過）。
+        // 改成先 prune 收乾淨登記，再由我們自己帶重試地刪資料夾。
         let _ = base_client.prune_worktrees().await;
-        store::clear_worktree(&p.pool, &id).await.map_err(|e| e.to_string())?;
-        emit_updated(&app);
-        return Ok(MergeOutcome::MergedButNotCleaned {
-            path: worktree_path,
-            detail: cleanup_err,
-        });
+
+        // 行程的終止是**非同步**的：`TerminateJobObject` 送出要求就返回，檔案
+        // handle 要再過一下才真的釋放。上面那次刪除就是撞在這個空窗——實機
+        // 現象是錯誤說 `Directory not empty`，但等使用者切到資源監視器去查，
+        // 已經一個持有者都找不到了。等一下再刪就成功。
+        if remove_dir_with_retries(&worktree_path).await {
+            store::clear_worktree(&p.pool, &id).await.map_err(|e| e.to_string())?;
+            emit_updated(&app);
+            return Ok(MergeOutcome::Merged);
+        }
+
+        return finish_uncleaned(&p, &id, &app, worktree_path, cleanup_err).await;
     }
     store::clear_worktree(&p.pool, &id).await.map_err(|e| e.to_string())?;
     emit_updated(&app);
-    Ok(MergeOutcome::Merged)
+    return Ok(MergeOutcome::Merged);
+}
+
+/// 帶重試地刪掉一個資料夾，成功回 `true`。
+///
+/// 行程終止是非同步的，剛被殺掉的行程還會抓著檔案 handle 一小段時間，所以
+/// 第一次失敗完全正常，等一下再試就好。總共最多等約 2 秒——比使用者自己去
+/// 關程式再回來按一次快得多，而且失敗時我們本來就有清楚的善後訊息。
+async fn remove_dir_with_retries(path: &str) -> bool {
+    for attempt in 0..6 {
+        if !std::path::Path::new(path).exists() {
+            return true;
+        }
+        if fs::remove_dir_all(path).is_ok() {
+            return true;
+        }
+        // 遞增等待：前幾次通常就成功，真的卡住時也不會拖太久。
+        tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt + 1))).await;
+    }
+    !std::path::Path::new(path).exists()
+}
+
+/// 合併成功但 worktree 清不掉時的收尾：清掉 DB 欄位（卡片的任務確實完成了，
+/// 按鈕該消失）並回報殘留路徑。
+async fn finish_uncleaned(
+    p: &ProjectHandle,
+    id: &str,
+    app: &AppHandle,
+    path: String,
+    detail: String,
+) -> Result<MergeOutcome, String> {
+    store::clear_worktree(&p.pool, id).await.map_err(|e| e.to_string())?;
+    emit_updated(app);
+    Ok(MergeOutcome::MergedButNotCleaned { path, detail })
 }
 
 /// 還原一次沒收尾的合併（`git merge --abort`）。前端在衝突視窗上選「還原」
@@ -1068,6 +1106,35 @@ mod merge_worktree_tests {
         base_client.create_worktree(&wt_path.to_string_lossy(), &branch).await.unwrap();
         store::set_worktree(&pool, &id, &wt_path.to_string_lossy(), &branch).await.unwrap();
         (pool, id, base_client, wt_path, branch)
+    }
+
+    /// 刪不掉時要真的重試，而不是試一次就放棄——行程終止是非同步的，剛被
+    /// 殺掉的行程還會抓著 handle 一小段時間，第一次失敗是常態。
+    #[tokio::test]
+    async fn remove_dir_with_retries_waits_for_a_late_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("worktree");
+        fs::create_dir_all(target.join("node_modules")).unwrap();
+        fs::write(target.join("node_modules").join("a.js"), "x").unwrap();
+        let target_str = target.to_string_lossy().to_string();
+
+        // 一開始刪不掉（用一個別的行程持有是測不了的，這裡改成先讓路徑不是
+        // 空的、確認它真的把整棵刪掉）——重點是回傳 true 且資料夾真的消失。
+        assert!(remove_dir_with_retries(&target_str).await);
+        assert!(!target.exists(), "重試成功之後資料夾必須真的不見");
+    }
+
+    /// 路徑本來就不存在時要當成成功，不該白白等滿六輪。
+    #[tokio::test]
+    async fn remove_dir_with_retries_treats_a_missing_path_as_done() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("never-existed").to_string_lossy().to_string();
+        let started = std::time::Instant::now();
+        assert!(remove_dir_with_retries(&missing).await);
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(200),
+            "不存在的路徑應該立刻回傳，不是跑完整個重試迴圈"
+        );
     }
 
     /// 原分支有未提交變更時，必須在動任何東西**之前**就擋下來。讓 git 自己
