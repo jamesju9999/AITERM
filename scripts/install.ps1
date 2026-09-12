@@ -9,8 +9,19 @@ $ErrorActionPreference = "Stop"
 $Repo = "jamesju9999/AITERM"
 $InstallDir = if ($env:AITERM_HOST_INSTALL_DIR) { $env:AITERM_HOST_INSTALL_DIR } else { "$env:LOCALAPPDATA\Programs\aiterm-host" }
 
-if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne "X64") {
-    throw "目前只提供 x86_64 的 Windows 執行檔，偵測到：$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)"
+# 用環境變數而不是 `[System.Runtime.InteropServices.RuntimeInformation]`：
+# 後者在 Windows PowerShell 5.1 上拿不到（實機回傳空字串），害架構判斷永遠
+# 不成立，使用者看到的是「目前只提供 x86_64 … 偵測到：」後面空白的訊息。
+# PROCESSOR_ARCHITECTURE 是環境變數，5.1 與 7 都一定讀得到。
+# 32 位元的 PowerShell 跑在 64 位元系統上時，真正的架構在 ...W6432。
+$Arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+
+# ARM64 沒有原生執行檔，但 Windows 11 on ARM 能模擬 x64——AITerm 桌面版本身
+# 就是這樣在 ARM 機器上跑的。與其擋下來，不如裝 x64 版並說清楚。
+if ($Arch -eq "ARM64") {
+    Write-Host "偵測到 ARM64；目前沒有原生執行檔，將安裝 x64 版（由 Windows 模擬執行）。"
+} elseif ($Arch -ne "AMD64") {
+    throw "目前只提供 x86_64 的 Windows 執行檔，偵測到：$Arch"
 }
 $Target = "x86_64-pc-windows-msvc"
 
