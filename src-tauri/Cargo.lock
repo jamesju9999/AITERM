@@ -92,6 +92,7 @@ dependencies = [
  "tokio-tungstenite",
  "tower-service",
  "uuid",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

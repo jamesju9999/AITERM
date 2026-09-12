@@ -131,6 +131,11 @@ pub struct PtySession {
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
     child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
+    /// 這個 session 的行程 Job。`PtySession` 被丟棄時一併關閉，Job 裡所有還
+    /// 活著的行程（含 Agent 在背景啟動、已經脫離的開發伺服器）就會被終止。
+    /// 見 `KillOnCloseJob` 的說明。
+    #[cfg(windows)]
+    job: Option<KillOnCloseJob>,
     reader_thread: Mutex<Option<JoinHandle<()>>>,
     shell_variant: ShellVariant,
     /// Shared with the reader thread, which commits a pending cd (see
@@ -514,11 +519,18 @@ impl PtySession {
             })
             .map_err(|e| PtyError::Internal(format!("spawn reader thread: {e}")))?;
 
+        // 在建構 session 之前就把 shell 綁進 Job：晚一點綁的話，它已經生出來
+        // 的子行程不會回溯加入（Job 成員身分是建立當下繼承的）。
+        #[cfg(windows)]
+        let job = child.process_id().and_then(assign_to_kill_on_close_job);
+
         Ok(Self {
             id,
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
             child: Mutex::new(child),
+            #[cfg(windows)]
+            job,
             reader_thread: Mutex::new(Some(reader_thread)),
             shell_variant,
             cwd,
@@ -818,10 +830,103 @@ impl PtySession {
 
     pub fn kill(&self) -> PtyResult<()> {
         let mut child = self.child.lock();
+        // Job 先來：它是唯一收得到「已經脫離的背景行程」的機制。taskkill /T
+        // 留著當 Job 建立失敗時的退路。
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            job.terminate();
+        }
         kill_tree_first(child.as_ref());
         child
             .kill()
             .map_err(|e| PtyError::Internal(format!("kill: {e}")))
+    }
+}
+
+/// Windows Job Object，設成「最後一個 handle 關掉時，成員全部終止」。
+///
+/// **為什麼 `taskkill /T` 不夠**：`/T` 走的是執行當下的行程樹。Agent 在背景
+/// 啟動的開發伺服器（實機用資源監視器看到的是 `node.exe` + `esbuild.exe`，
+/// 另有數個 `bash.exe`／`cmd.exe`）多半已經脫離、或父行程先結束而被重新掛走，
+/// 根本不在那棵樹上——而它們會一直佔住卡片的 worktree 目錄，讓「合併回原
+/// 分支」最後的 `git worktree remove` 以 `Permission denied` 失敗。
+///
+/// Job 的成員身分是**繼承**的：子行程自動屬於父行程所在的 Job，即使之後改了
+/// 父行程也還在 Job 裡（除非明確用 `CREATE_BREAKAWAY_FROM_JOB` 脫離，那需要
+/// Job 本身允許，我們沒開）。這是 Windows 上唯一收得乾淨的做法。
+#[cfg(windows)]
+struct KillOnCloseJob(windows_sys::Win32::Foundation::HANDLE);
+
+// HANDLE 是裸指標所以預設不是 Send/Sync。Job handle 只在建立時寫入、之後只被
+// Drop 讀一次，跨執行緒傳遞是安全的。
+#[cfg(windows)]
+unsafe impl Send for KillOnCloseJob {}
+#[cfg(windows)]
+unsafe impl Sync for KillOnCloseJob {}
+
+#[cfg(windows)]
+impl KillOnCloseJob {
+    /// 立刻終止 Job 裡的所有行程，不等 handle 被關閉。
+    ///
+    /// `manager.close()` 走的是 `kill()` 這條路，而 `PtySession` 是包在 `Arc`
+    /// 裡的——只要還有任何一份 clone 活著，`Drop`（連帶關閉 Job 的那一步）就
+    /// 不會執行。明確終止一次，行為才不依賴引用計數。
+    fn terminate(&self) {
+        unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0, 1) };
+    }
+}
+
+#[cfg(windows)]
+impl Drop for KillOnCloseJob {
+    fn drop(&mut self) {
+        // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE：關掉最後一個 handle 就會終止
+        // Job 裡還活著的所有行程，不需要另外呼叫 TerminateJobObject。
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
+/// 把 `pid` 指派進一個「關閉即終止」的 Job。失敗回 `None`——拿不到 Job 只是
+/// 少了這層保障，不該讓整個分頁開不起來。
+#[cfg(windows)]
+fn assign_to_kill_on_close_job(pid: u32) -> Option<KillOnCloseJob> {
+    use std::mem::{size_of, zeroed};
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return None;
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const core::ffi::c_void,
+            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        ) == 0
+        {
+            CloseHandle(job);
+            return None;
+        }
+        let proc = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
+        if proc.is_null() {
+            CloseHandle(job);
+            return None;
+        }
+        let assigned = AssignProcessToJobObject(job, proc);
+        CloseHandle(proc);
+        if assigned == 0 {
+            CloseHandle(job);
+            return None;
+        }
+        Some(KillOnCloseJob(job))
     }
 }
 
@@ -867,6 +972,10 @@ impl Drop for PtySession {
     fn drop(&mut self) {
         // Best-effort: kill child so the reader thread eventually sees EOF/error.
         let mut child = self.child.lock();
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            job.terminate();
+        }
         kill_tree_first(child.as_ref());
         let _ = child.kill();
         drop(child);

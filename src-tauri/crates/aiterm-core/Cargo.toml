@@ -30,5 +30,17 @@ tower-service = "0.3"
 futures-util = "0.3"
 tokio-tungstenite = "0.29"
 
+[target.'cfg(windows)'.dependencies]
+# Job Object：把派工分頁的 shell 連同它所有後代綁進同一個 Job，關閉 Job 時
+# 一起結束。這是 Windows 上唯一能收掉「刻意脫離的背景行程」的機制——
+# `taskkill /T` 走的是當下的行程樹，抓不到已經被重新掛走的行程（例如 Agent
+# 啟動的開發伺服器），而那些行程會一直佔住卡片的 worktree 目錄。
+windows-sys = { version = "0.60", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 tempfile = "3"
