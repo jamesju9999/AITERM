@@ -127,6 +127,16 @@ export function TaskCard({
         onChanged();
         return;
       }
+      if (outcome.status === "merged_but_not_cleaned") {
+        // 合併確實成功了，所以用 warning 而不是 error——講成失敗會害使用者
+        // 以為成果沒進去而重做一次。後端已經清掉 DB 欄位，這裡要重新整理。
+        onChanged();
+        await message(t.board_merge_not_cleaned_body(outcome.path, outcome.detail), {
+          title: t.board_merge_not_cleaned_title,
+          kind: "warning",
+        });
+        return;
+      }
       if (outcome.status === "blocked") {
         // 這兩種都還沒動到任何東西，所以不需要 onChanged()。
         const body =

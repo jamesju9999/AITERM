@@ -275,6 +275,13 @@ pub enum MergeOutcome {
     Merged,
     /// 有衝突。原專案目錄停在合併進行中，worktree 與分支原樣保留。
     Conflict { files: Vec<String> },
+    /// **合併已經成功**，但 worktree 目錄刪不掉。
+    ///
+    /// 這不是合併失敗，硬要講成失敗反而會害使用者以為成果沒進去。Windows 上
+    /// 的常見成因是還有行程的工作目錄在那個資料夾裡（見 aiterm-core 的
+    /// `kill_tree_first`）。DB 欄位照樣清掉——卡片的任務確實完成了，按鈕該
+    /// 消失；留著只會讓下一次按在半刪除的目錄上失敗。
+    MergedButNotCleaned { path: String, detail: String },
     /// 還沒開始動手就擋下來了。
     Blocked { reason: BlockedReason, files: Vec<String> },
 }
@@ -322,9 +329,11 @@ pub async fn tasks_merge_worktree(
         });
     }
 
+    // 這一步檢查的是 worktree，不是原分支——標籤要在檢查**之前**就換掉，
+    // 否則失敗時畫面上停在「檢查原分支」，會把人指向錯的地方（實機踩過）。
+    emit_merge_step(&app, &id, "committing");
     let worktree_client = GitClient::new(worktree_path.clone(), None);
     if worktree_client.has_uncommitted_changes().await? {
-        emit_merge_step(&app, &id, "committing");
         worktree_client.commit_all(&format!("Task: {}", row.title)).await?;
     }
 
@@ -348,7 +357,19 @@ pub async fn tasks_merge_worktree(
 
     // 這一步通常是最慢的：它要逐一刪掉 worktree 裡的每個檔案。
     emit_merge_step(&app, &id, "cleaning");
-    base_client.remove_worktree(&worktree_path).await?;
+    if let Err(cleanup_err) = base_client.remove_worktree(&worktree_path).await {
+        // **合併已經成功了**，這裡失敗的只是清理。照樣把 DB 欄位清掉並 prune：
+        // 卡片的任務確實完成了，按鈕該消失；留著的話下一次按會跑在一個半刪除
+        // 的 worktree 上，得到 `not a git repository` 這種跟真正問題無關的錯誤
+        // （實機踩過）。
+        let _ = base_client.prune_worktrees().await;
+        store::clear_worktree(&p.pool, &id).await.map_err(|e| e.to_string())?;
+        emit_updated(&app);
+        return Ok(MergeOutcome::MergedButNotCleaned {
+            path: worktree_path,
+            detail: cleanup_err,
+        });
+    }
     store::clear_worktree(&p.pool, &id).await.map_err(|e| e.to_string())?;
     emit_updated(&app);
     Ok(MergeOutcome::Merged)

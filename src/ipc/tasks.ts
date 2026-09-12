@@ -130,6 +130,8 @@ export const markTaskDone = (projectId: string, id: string): Promise<void> =>
  */
 export type MergeOutcome =
   | { status: "merged" }
+  /** 合併成功，但 worktree 目錄刪不掉。不是失敗——成果已經在原分支上了。 */
+  | { status: "merged_but_not_cleaned"; path: string; detail: string }
   | { status: "conflict"; files: string[] }
   | { status: "blocked"; reason: "dirty_base" | "merge_in_progress"; files: string[] };
 

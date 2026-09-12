@@ -818,16 +818,58 @@ impl PtySession {
 
     pub fn kill(&self) -> PtyResult<()> {
         let mut child = self.child.lock();
+        kill_tree_first(child.as_ref());
         child
             .kill()
             .map_err(|e| PtyError::Internal(format!("kill: {e}")))
     }
 }
 
+/// `taskkill` 的參數：連同子孫一起強制結束。
+///
+/// **`/T` 是這整段的重點**，拿掉它就退回只殺直屬行程的舊行為，也就會重新製造
+/// 下面 `kill_tree_first` 註解描述的那個 bug。
+fn kill_tree_args(pid: u32) -> Vec<String> {
+    vec!["/T".into(), "/F".into(), "/PID".into(), pid.to_string()]
+}
+
+/// Windows 專用：在殺掉直屬行程**之前**，先把整棵行程樹結束掉。
+///
+/// `child.kill()` 只終止 ConPTY 直屬的那個行程（shell）。派工分頁真正在做事的
+/// `claude.exe` 是 shell 的子行程，殺不到——它會變成孤兒，而且**工作目錄還留在
+/// 那張卡片的 worktree 裡**。Windows 不允許刪除任何行程正在使用的目錄，於是
+/// 「合併回原分支」最後的 `git worktree remove` 就會失敗，實機錯誤是
+/// `failed to delete '...': Directory not empty`。孤兒要等 AITerm 整個結束、
+/// 作業系統回收 ConPTY handle 才會死，所以使用者看到的現象是「關掉 AITerm 就
+/// 刪得掉」。
+///
+/// **順序不能顛倒**：`child.kill()` 一旦先跑，shell 死掉、子孫就被重新掛到別的
+/// 父行程底下，`taskkill /T` 再也走不到那棵樹。
+///
+/// Unix 不需要這個——那裡刪目錄不受「有行程的 CWD 在裡面」影響。
+#[allow(unused_variables)]
+fn kill_tree_first(child: &(dyn portable_pty::Child + Send + Sync)) {
+    #[cfg(windows)]
+    {
+        if let Some(pid) = child.process_id() {
+            use std::os::windows::process::CommandExt;
+            let mut cmd = std::process::Command::new("taskkill");
+            cmd.args(kill_tree_args(pid));
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            // best-effort：行程可能已經自己結束了，那 taskkill 會回非零，
+            // 不是需要處理的錯誤。
+            let _ = cmd.output();
+        }
+    }
+}
+
 impl Drop for PtySession {
     fn drop(&mut self) {
         // Best-effort: kill child so the reader thread eventually sees EOF/error.
-        let _ = self.child.lock().kill();
+        let mut child = self.child.lock();
+        kill_tree_first(child.as_ref());
+        let _ = child.kill();
+        drop(child);
         // Do NOT join the reader thread here: on Windows conpty the reader can
         // block indefinitely even after the child exits.  The thread is
         // detached and will exit on its own once the OS cleans up the handle.
@@ -1998,5 +2040,25 @@ mod tests {
             "重播開頭的模式前綴沒有帶回 ?1049h，觀看端不會進 alternate screen；實際前綴：{:?}",
             prefix_seqs.iter().map(|s| String::from_utf8_lossy(s).into_owned()).collect::<Vec<_>>(),
         );
+    }
+}
+
+#[cfg(test)]
+mod kill_tree_tests {
+    use super::*;
+
+    /// `/T` 是「連同子孫一起結束」的旗標。拿掉它，`claude.exe` 就會變成孤兒、
+    /// 工作目錄留在卡片的 worktree 裡，Windows 上那個目錄就刪不掉——
+    /// 「合併回原分支」最後會以 `Directory not empty` 失敗。這條測試存在的
+    /// 唯一目的就是擋住那個退化。
+    #[test]
+    fn kill_tree_args_include_the_tree_flag_and_the_pid() {
+        let args = kill_tree_args(4321);
+        assert!(
+            args.iter().any(|a| a == "/T"),
+            "少了 /T 就只殺直屬行程，會重新製造孤兒 claude.exe 佔住 worktree 的 bug，實際參數：{args:?}"
+        );
+        assert!(args.iter().any(|a| a == "/F"), "需要 /F 才能強制結束，實際參數：{args:?}");
+        assert_eq!(args.last().map(String::as_str), Some("4321"), "PID 必須是最後一個參數");
     }
 }

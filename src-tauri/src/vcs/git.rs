@@ -289,6 +289,18 @@ impl GitClient {
         })
     }
 
+    /// `git worktree prune`——清掉指向已經不存在（或已被部分刪除）的 worktree
+    /// 的登記檔。`remove_worktree` 失敗時要跑這個，否則那筆登記會一直留著，
+    /// 而且下一次操作會在一個半刪除的目錄上跑，得到 `not a working tree` 這種
+    /// 跟真正問題無關的錯誤。
+    pub async fn prune_worktrees(&self) -> Result<VcsResult, String> {
+        self.git(&["worktree".to_string(), "prune".to_string()]).await?;
+        Ok(VcsResult::WriteSuccess {
+            operation: "prune_worktrees".to_string(),
+            detail: "Pruned stale worktree registrations".to_string(),
+        })
+    }
+
     /// `git status --porcelain` 是否非空。跟 `quick_block_info` 用的
     /// `diff --shortstat` 不同——這裡也會抓到新增的未追蹤檔案，判斷
     /// 「這個 worktree 有沒有東西需要 commit」才會準。

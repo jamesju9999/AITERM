@@ -1545,6 +1545,9 @@ const zhTW = {
     board_merge_step_merging: "合併中：合併分支…",
     // 這一步最慢，要逐一刪掉 worktree 裡的每個檔案。
     board_merge_step_cleaning: "合併中：移除 worktree…",
+    board_merge_not_cleaned_title: "合併完成，但 worktree 沒清掉",
+    board_merge_not_cleaned_body: (path: string, detail: string) =>
+      `您的變更已經成功合併回原分支，工作成果不會遺失。\n\n但這個資料夾刪不掉，需要您手動處理：\n${path}\n\n常見原因是還有行程的工作目錄在裡面（Windows 不允許刪除使用中的目錄）。關掉相關的分頁或程式之後，直接刪掉那個資料夾即可。\n\ngit 的原始訊息：\n${detail}`,
     board_merge_conflict_title: "合併有衝突",
     board_merge_conflict_body: (files: string) =>
       `以下檔案有衝突，尚未合併進原分支：\n\n${files}\n\n原專案目錄目前停在「合併進行中」。\n\n「我自己解」會保持這個狀態。您可以直接在原專案目錄解衝突後 git commit，再回來按一次合併。\n\n「還原」會執行 git merge --abort，把原專案目錄回復乾淨。工作成果仍然完整保留在這張卡片的分支上，隨時可以再試。`,
@@ -2996,6 +2999,9 @@ const enRaw = {
     board_merge_step_committing: "Merging: committing work…",
     board_merge_step_merging: "Merging: merging branch…",
     board_merge_step_cleaning: "Merging: removing worktree…",
+    board_merge_not_cleaned_title: "Merged, but the worktree was not removed",
+    board_merge_not_cleaned_body: (path: string, detail: string) =>
+      `Your changes were merged into the base branch successfully — no work is lost.\n\nThis folder could not be deleted and needs to be removed by hand:\n${path}\n\nUsually something still has its working directory inside it (Windows will not delete a directory that is in use). Close the related tab or program, then delete the folder.\n\nGit's original message:\n${detail}`,
     board_merge_conflict_title: "Merge conflict",
     board_merge_conflict_body: (files: string) =>
       `These files conflict and were not merged into the base branch:\n\n${files}\n\nThe project directory is now mid-merge.\n\n"Let me resolve it" keeps that state. Resolve the conflicts in the project directory, git commit, then press merge again.\n\n"Undo" runs git merge --abort and restores the project directory. Your work stays committed on this card's branch and can be merged later.`,

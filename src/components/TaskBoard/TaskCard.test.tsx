@@ -132,6 +132,42 @@ describe("TaskCard 的動作失敗時", () => {
     expect(messageDialog).not.toHaveBeenCalled();
   });
 
+  it("合併成功但 worktree 清不掉時，要講清楚合併已完成、不是失敗", async () => {
+    // 實機踩過：合併其實成功了，但最後的 git worktree remove 因為還有行程的
+    // 工作目錄在裡面而失敗，畫面上卻只丟出一個看起來像「整個失敗」的錯誤。
+    mergeTaskWorktree.mockResolvedValue({
+      status: "merged_but_not_cleaned",
+      path: "C:\\proj\\tasks\\abc\\worktree",
+      detail: "error: failed to delete ...: Directory not empty",
+    });
+    const onChanged = mount();
+
+    await userEvent.click(screen.getByText("合併回原分支"));
+
+    await waitFor(() => expect(messageDialog).toHaveBeenCalled());
+    const shown = String(messageDialog.mock.calls[0][0]);
+    expect(shown).toContain("已經成功合併");
+    expect(shown).toContain("C:\\proj\\tasks\\abc\\worktree");
+    expect(shown).toContain("Directory not empty");
+    // 後端已經清掉 DB 欄位，前端一定要重新整理，否則按鈕還留在畫面上，
+    // 再按一次就會跑在半刪除的 worktree 上。
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("清不掉時用的是警告而不是錯誤——合併確實成功了", async () => {
+    mergeTaskWorktree.mockResolvedValue({
+      status: "merged_but_not_cleaned",
+      path: "/p/worktree",
+      detail: "d",
+    });
+    mount();
+
+    await userEvent.click(screen.getByText("合併回原分支"));
+
+    await waitFor(() => expect(messageDialog).toHaveBeenCalled());
+    expect(messageDialog.mock.calls[0][1]).toMatchObject({ kind: "warning" });
+  });
+
   it("衝突時問使用者，選「還原」才呼叫 abort", async () => {
     mergeTaskWorktree.mockResolvedValue({ status: "conflict", files: ["a.txt", "b.txt"] });
     confirmDialog.mockResolvedValue(true); // true = okLabel = 還原
