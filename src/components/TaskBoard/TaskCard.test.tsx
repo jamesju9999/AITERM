@@ -132,6 +132,46 @@ describe("TaskCard 的動作失敗時", () => {
     expect(messageDialog).not.toHaveBeenCalled();
   });
 
+  it("合併前先把這張卡還開著的分頁從畫面上移除", async () => {
+    // 後端會在清理 worktree 之前關掉這張卡的 PTY（Windows 上不關就刪不掉那個
+    // 目錄）。分頁若留在畫面上，就變成一個連線已死的空分頁。
+    const closed: unknown[] = [];
+    const onClose = (e: Event) => closed.push((e as CustomEvent).detail);
+    window.addEventListener("aiterm:close-tab", onClose);
+    mergeTaskWorktree.mockResolvedValue({ status: "merged" });
+
+    render(
+      <LocaleProvider>
+        <TaskCard
+          projectId="p1"
+          card={card({ tab_id: "tab-9" })}
+          onEdit={vi.fn()}
+          onViewTranscript={vi.fn()}
+          onEditLabel={vi.fn()}
+          onChanged={vi.fn()}
+        />
+      </LocaleProvider>,
+    );
+    await userEvent.click(screen.getByText("合併回原分支"));
+
+    await waitFor(() => expect(closed).toEqual([{ tabId: "tab-9", skipGuard: true }]));
+    window.removeEventListener("aiterm:close-tab", onClose);
+  });
+
+  it("沒有分頁的卡片不會送出關閉事件", async () => {
+    const closed: unknown[] = [];
+    const onClose = (e: Event) => closed.push((e as CustomEvent).detail);
+    window.addEventListener("aiterm:close-tab", onClose);
+    mergeTaskWorktree.mockResolvedValue({ status: "merged" });
+    mount();
+
+    await userEvent.click(screen.getByText("合併回原分支"));
+
+    await waitFor(() => expect(mergeTaskWorktree).toHaveBeenCalled());
+    expect(closed).toEqual([]);
+    window.removeEventListener("aiterm:close-tab", onClose);
+  });
+
   it("合併成功但 worktree 清不掉時，要講清楚合併已完成、不是失敗", async () => {
     // 實機踩過：合併其實成功了，但最後的 git worktree remove 因為還有行程的
     // 工作目錄在裡面而失敗，畫面上卻只丟出一個看起來像「整個失敗」的錯誤。

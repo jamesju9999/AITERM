@@ -121,6 +121,14 @@ export function TaskCard({
     setMerging(true);
     setMergeStep(null);
     setBusy(true);
+    // 後端會在清理 worktree 之前關掉這張卡的 PTY——Windows 上不關就刪不掉那個
+    // 目錄（見 commands/tasks.rs 的註解）。分頁若還開著，這裡一併把它從畫面上
+    // 移除，免得留下一個連線已死的空分頁。
+    if (card.tab_id) {
+      window.dispatchEvent(
+        new CustomEvent("aiterm:close-tab", { detail: { tabId: card.tab_id, skipGuard: true } }),
+      );
+    }
     try {
       const outcome: MergeOutcome = await mergeTaskWorktree(projectId, card.id);
       if (outcome.status === "merged") {

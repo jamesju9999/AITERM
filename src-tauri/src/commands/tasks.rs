@@ -301,6 +301,7 @@ pub async fn tasks_merge_worktree(
     id: String,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
+    pty: State<'_, Arc<crate::pty::PtyManager>>,
 ) -> Result<MergeOutcome, String> {
     let p = project(&reg, &project_id)?;
     let row = store::get_task(&p.pool, &id)
@@ -357,6 +358,25 @@ pub async fn tasks_merge_worktree(
 
     // 這一步通常是最慢的：它要逐一刪掉 worktree 裡的每個檔案。
     emit_merge_step(&app, &id, "cleaning");
+
+    // **先把這張卡片的 PTY 關掉，否則 Windows 上刪不掉那個目錄。**
+    //
+    // 派工分頁走的是「被領養的 session」：後端先建好 PTY，前端再接管。
+    // `TerminalView` 的卸載清理刻意不關這種 session（見該檔
+    // `if (id && !externalSessionId)` 那段註解），所以分頁關掉之後 `pwsh.exe`
+    // 與它底下的 `claude.exe` 仍然活著，工作目錄還在這個 worktree 裡。Windows
+    // 不允許刪除使用中的目錄，`git worktree remove` 因此以
+    // `failed to delete ...: Directory not empty` 失敗——實機用資源監視器查到
+    // 持有 handle 的正是這兩個行程。
+    //
+    // 我們正要刪掉這個 worktree，那個 shell 本來就該結束，所以這裡主動關。
+    // `PtySession::kill` 會連同整棵行程樹一起殺（見 aiterm-core 的
+    // `kill_tree_first`），claude.exe 才不會變成孤兒繼續佔著目錄。
+    if let Some(tab_id) = &row.tab_id {
+        // 已經關掉的 session 會回 SessionNotFound，那是正常情況不是錯誤。
+        let _ = pty.close(tab_id);
+    }
+
     if let Err(cleanup_err) = base_client.remove_worktree(&worktree_path).await {
         // **合併已經成功了**，這裡失敗的只是清理。照樣把 DB 欄位清掉並 prune：
         // 卡片的任務確實完成了，按鈕該消失；留著的話下一次按會跑在一個半刪除
