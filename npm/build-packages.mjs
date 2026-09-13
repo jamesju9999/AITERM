@@ -14,17 +14,27 @@ if (!version || !artifactDir || !outDir) {
 }
 
 const TARGETS = [
-  { pkg: "aiterm-host-darwin-arm64", triple: "aarch64-apple-darwin", os: "darwin", cpu: "arm64", bin: "aiterm-host" },
-  { pkg: "aiterm-host-darwin-x64", triple: "x86_64-apple-darwin", os: "darwin", cpu: "x64", bin: "aiterm-host" },
-  { pkg: "aiterm-host-linux-x64", triple: "x86_64-unknown-linux-musl", os: "linux", cpu: "x64", bin: "aiterm-host" },
-  { pkg: "aiterm-host-linux-arm64", triple: "aarch64-unknown-linux-musl", os: "linux", cpu: "arm64", bin: "aiterm-host" },
-  { pkg: "aiterm-host-win32-x64", triple: "x86_64-pc-windows-msvc", os: "win32", cpu: "x64", bin: "aiterm-host.exe" },
+  { dir: "aiterm-host-darwin-arm64", triple: "aarch64-apple-darwin", os: "darwin", cpu: "arm64", bin: "aiterm-host" },
+  { dir: "aiterm-host-darwin-x64", triple: "x86_64-apple-darwin", os: "darwin", cpu: "x64", bin: "aiterm-host" },
+  { dir: "aiterm-host-linux-x64", triple: "x86_64-unknown-linux-musl", os: "linux", cpu: "x64", bin: "aiterm-host" },
+  { dir: "aiterm-host-linux-arm64", triple: "aarch64-unknown-linux-musl", os: "linux", cpu: "arm64", bin: "aiterm-host" },
+  { dir: "aiterm-host-win32-x64", triple: "x86_64-pc-windows-msvc", os: "win32", cpu: "x64", bin: "aiterm-host.exe" },
 ];
 
 fs.mkdirSync(outDir, { recursive: true });
 
+// 平台套件一律帶範圍。不帶範圍的 `aiterm-host-win32-x64` 被 npm 的名稱防濫用
+// 機制擋下（`403 Package name triggered spam detection`），隔天、不同的 run
+// 重試仍然一樣——不是速率限制，是名稱本身被判定有問題。帶範圍的名稱在自己的
+// 命名空間裡不會觸發。
+//
+// **目錄名刻意維持不帶範圍**：CI 的發佈迴圈用 `npm-dist/aiterm-host-*` 這個
+// glob 找目錄，改成巢狀的 `@scope/...` 會讓它一個都找不到。
+const SCOPE = "@jamesju9999";
+const npmName = (t) => `${SCOPE}/${t.dir}`;
+
 for (const t of TARGETS) {
-  const dir = path.join(outDir, t.pkg);
+  const dir = path.join(outDir, t.dir);
   fs.mkdirSync(path.join(dir, "bin"), { recursive: true });
 
   const src = path.join(artifactDir, `aiterm-host-${version}-${t.triple}`, t.bin);
@@ -41,7 +51,7 @@ for (const t of TARGETS) {
     path.join(dir, "package.json"),
     JSON.stringify(
       {
-        name: t.pkg,
+        name: npmName(t),
         version,
         description: `aiterm-host binary for ${t.os} ${t.cpu}`,
         os: [t.os],
@@ -54,7 +64,7 @@ for (const t of TARGETS) {
       2,
     ) + "\n",
   );
-  console.log(`已組好 ${t.pkg}`);
+  console.log(`已組好 ${npmName(t)}`);
 }
 
 // 入口套件：改寫版本，以及五個 optionalDependencies 的版本。
@@ -63,6 +73,7 @@ fs.cpSync("npm/aiterm-host", entry, { recursive: true });
 const pkgPath = path.join(entry, "package.json");
 const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 pkg.version = version;
-for (const t of TARGETS) pkg.optionalDependencies[t.pkg] = version;
+pkg.optionalDependencies = {};
+for (const t of TARGETS) pkg.optionalDependencies[npmName(t)] = version;
 fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
 console.log(`已組好入口套件 aiterm-host@${version}`);
