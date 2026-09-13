@@ -121,16 +121,52 @@ fn resolve_key(args: &Args) -> Result<(Vec<u8>, String)> {
     Ok((key, path.display().to_string()))
 }
 
+/// 要顯示給使用者抄進 AITerm 的位址。
+///
+/// `--bind` 預設是 `0.0.0.0`，那是「監聽所有介面」的意思，**不是**一個連得到
+/// 的位址；照著抄進 AITerm 會連不上（實機回報過）。所以綁定萬用位址時改顯示
+/// 這台機器實際的區網位址。查不到就維持原樣——寧可顯示一個技術上正確、使用者
+/// 需要自己換掉的值，也不要憑空捏造。使用者明確綁到某個介面時一律不動。
+fn display_address(bind: Ipv4Addr, lan: Option<String>) -> String {
+    match (bind.is_unspecified(), lan) {
+        (true, Some(ip)) => ip,
+        _ => bind.to_string(),
+    }
+}
+
+/// 這台機器對外的主要介面位址。
+///
+/// 用「連」一個外部位址的 UDP socket 反查本機端點——UDP 的 connect 不會送出
+/// 任何封包，只是讓作業系統挑一條路由，所以不需要網路真的通、也不需要任何
+/// 額外相依套件，三個平台行為一致。
+fn lan_address() -> Option<String> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("198.51.100.1:80").ok()?; // TEST-NET-2，保證不會真的有人在聽
+    let ip = sock.local_addr().ok()?.ip();
+    if ip.is_loopback() || ip.is_unspecified() {
+        return None;
+    }
+    Some(ip.to_string())
+}
+
 fn print_connection(args: &Args, key_hex: &str, key_source: &str) {
+    // 標籤中英並列：這是給伺服器用的 CLI，而伺服器主控台常常沒有中文字型，
+    // 純中文標籤會整排變成方塊（實機在 Ubuntu Server 主控台看到過）。
+    let addr = display_address(args.bind, lan_address());
     println!("AITerm CLI Host");
-    println!("  位址：{}", args.bind);
-    println!("  埠　：{}", args.port);
-    println!("  金鑰：{key_hex}");
-    println!("  來源：{key_source}");
-    println!("  存取：{}", if args.read_only { "唯讀" } else { "可控制" });
+    println!("  位址 Address : {addr}");
+    println!("  埠   Port    : {}", args.port);
+    println!("  金鑰 Key     : {key_hex}");
+    println!("  來源 Source  : {key_source}");
+    println!(
+        "  存取 Access  : {}",
+        if args.read_only { "唯讀 read-only" } else { "可控制 control" }
+    );
     println!();
     println!("在 AITerm 的「連線到遠端終端機」裡填入上面的位址、埠與金鑰。");
-    println!("跨網段時位址請填這台機器對觀看端可達的位址（Tailscale / VPN / SSH tunnel）。");
+    println!("Enter the address, port and key above in AITerm's remote terminal dialog.");
+    println!("跨網段時請改填這台機器對觀看端可達的位址（Tailscale / VPN / SSH tunnel）。");
+    println!("Across networks, use an address the viewer can actually reach instead.");
 }
 
 #[tokio::main]
@@ -252,6 +288,34 @@ async fn terminate_signal() {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    /// `0.0.0.0` 是綁定位址（「監聽所有介面」），**不是**能填進 AITerm 的位址。
+    /// 照著印出來的值填會連不上——實機回報過。查得到區網位址時要改印那個。
+    #[test]
+    fn a_wildcard_bind_is_replaced_by_the_real_lan_address() {
+        assert_eq!(
+            display_address(Ipv4Addr::UNSPECIFIED, Some("192.168.1.139".into())),
+            "192.168.1.139",
+            "綁定萬用位址時要顯示實際可連的位址"
+        );
+    }
+
+    /// 查不到就維持原樣——寧可顯示一個技術上正確、使用者需要自己換掉的值，
+    /// 也不要憑空捏造一個位址。
+    #[test]
+    fn an_unknown_lan_address_leaves_the_bind_value_alone() {
+        assert_eq!(display_address(Ipv4Addr::UNSPECIFIED, None), "0.0.0.0");
+    }
+
+    /// 使用者明確綁到某個介面時，那就是他要的位址，不可以擅自換掉。
+    #[test]
+    fn an_explicit_bind_is_never_overridden() {
+        assert_eq!(
+            display_address("10.0.0.5".parse().unwrap(), Some("192.168.1.139".into())),
+            "10.0.0.5",
+            "明確指定的綁定位址不該被區網查詢結果蓋掉"
+        );
+    }
 
     #[test]
     fn the_default_port_is_fixed_not_random() {
