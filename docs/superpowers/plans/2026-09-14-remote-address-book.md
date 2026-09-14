@@ -1314,6 +1314,14 @@ mDNS 那條路徑維持原呼叫（不傳 `opts`）。
     await refresh();
   }
 
+> **編輯一筆已經不存在的條目會留下孤兒金鑰。** `ConfigStore::update_remote_host`
+> 找不到 id 時是靜默 no-op（`config/mod.rs` 的註解明講），所以
+> `remote_hosts_update` 對一個已被刪掉的 id 呼叫會回 `Ok`，設定檔沒變，
+> 但金鑰照樣被寫進 keychain，留下永遠不會被用到的條目。這是從 `vcs.rs` 原封
+> 不動抄來的既有行為，不是地址簿引入的。前端要避免踩到：**編輯前先
+> `remoteHostsList()` 重抓一次**，找不到該 id 就重整清單並提示，不要拿畫面上
+> 可能已經過期的那一筆直接送出。
+
   function editHost(h: RemoteHostInfo) {
     // 編輯＝把這一筆帶進手動欄位，金鑰留空（前端拿不到已存的金鑰）。
     // 使用者只改別名時送空 secret，後端會當成「不改金鑰」。
