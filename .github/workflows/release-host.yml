@@ -333,16 +333,37 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm aiterm-host:smoke --print-connection
+
+          # **先把輸出接到變數再比對，不要 `docker run ... | grep -q`。**
+          # grep -q 一匹配就立刻結束，docker 還在寫的話會吃到 SIGPIPE 回 141，
+          # 而 `set -o pipefail` 讓整條 pipeline 跟著回 141——測試明明通過卻
+          # 報失敗。實測這個輸出量十次會踩中一次（v1.25.1 僥倖過關，
+          # host-v0.2.0-dist1 就中了，而且錯誤訊息指向完全無關的方向）。
+          # 接到變數還有第二個好處：`| grep -q` 會把 docker 自己的錯誤訊息
+          # 一起吞掉，失敗時什麼都看不到。
+          #
           # 沒有這兩條的話，做出一個「連得上但 AI 每步卡 60 秒」的映像完全
           # 不會被發現。
-          docker run --rm --entrypoint bash aiterm-host:smoke -c 'echo $SHELL' | grep -qx '/bin/bash' \
-            || { echo "SHELL 沒有指向 bash——OSC 133 不會被注入"; exit 1; }
+          shell_path=$(docker run --rm --entrypoint bash aiterm-host:smoke -c 'echo $SHELL')
+          [ "$shell_path" = "/bin/bash" ] \
+            || { echo "SHELL 是 '$shell_path'，不是 /bin/bash——OSC 133 不會被注入"; exit 1; }
           docker run --rm --entrypoint sh aiterm-host:smoke -c 'test -x /bin/bash' \
             || { echo "映像裡沒有 bash"; exit 1; }
+
           # 沒給金鑰時要能自己產生一組並印出來，不能因為 Dockerfile 裡
           # `ENV AITERM_HOST_KEY=""` 這個空字串預設值而啟動失敗。
-          docker run --rm aiterm-host:smoke --print-connection 2>&1 | grep -q "金鑰：" \
-            || { echo "沒給金鑰時應該退回產生一組，而不是啟動失敗"; exit 1; }
+          # 兩個訊號都要在：`已產生新金鑰` 證明真的產生了（stderr），
+          # `金鑰 Key` 證明連線資訊印得出來。只驗其中一個的話，另一半壞掉
+          # 不會被發現。
+          conn=$(docker run --rm aiterm-host:smoke --print-connection 2>&1)
+          case "$conn" in
+            *已產生新金鑰*) ;;
+            *) echo "沒給金鑰時應該自己產生一組。實際輸出："; echo "$conn"; exit 1 ;;
+          esac
+          case "$conn" in
+            *"金鑰 Key"*) ;;
+            *) echo "連線資訊裡沒有金鑰欄位。實際輸出："; echo "$conn"; exit 1 ;;
+          esac
 
   finalize:
     needs: [create-release, cli-build, cli-checksums, cli-container]
