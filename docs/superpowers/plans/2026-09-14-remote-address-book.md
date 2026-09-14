@@ -306,7 +306,8 @@ mod tests {
 }
 ```
 
-在 `src-tauri/src/commands/mod.rs` 的 `pub mod mail;` 附近（維持字母序）加入：
+在 `src-tauri/src/commands/mod.rs` 加入下面這行。位置照字母序——實際的槽位在
+`pub mod python_env;` 與 `pub mod reports;` 之間：
 
 ```rust
 pub mod remote_hosts;
@@ -314,7 +315,13 @@ pub mod remote_hosts;
 
 - [ ] **Step 2: 跑測試確認它紅**
 
-Run: `cd src-tauri && cargo test --workspace resolve_connect_key 2>&1 | tail -20`
+Run: `cd src-tauri && cargo test --workspace commands::remote_hosts 2>&1 | tail -20`
+
+> **過濾字串要用測試的路徑，不是函式名。** `cargo test <filter>` 比對的是
+> 「模組路徑::測試名」，而沒有任何一條測試的名字含有 `resolve_connect_key`。
+> 用函式名當過濾字串會匹配到 **0 條測試，而 cargo 對 0 條測試回報 `ok`**——
+> 看起來全綠，其實什麼都沒跑。用過濾字串之後一定要看 `running N tests` 的 N。
+
 Expected: 六條測試中，凡是呼叫 `resolve_connect_key` 的都因為 `todo!()` panic 而 FAIL
 （`the_secret_key_is_namespaced` 會過——它不碰那支函式）
 
@@ -334,8 +341,8 @@ Expected: 六條測試中，凡是呼叫 `resolve_connect_key` 的都因為 `tod
 
 - [ ] **Step 4: 跑測試確認它綠**
 
-Run: `cd src-tauri && cargo test --workspace resolve_connect_key 2>&1 | tail -6`
-Expected: `test result: ok. 6 passed`
+Run: `cd src-tauri && cargo test --workspace commands::remote_hosts 2>&1 | tail -6`
+Expected: `running 6 tests` 然後 `test result: ok. 6 passed`
 
 - [ ] **Step 5: 證明第三條測試真的會分勝負**
 
