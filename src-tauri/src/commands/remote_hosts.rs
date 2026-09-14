@@ -84,23 +84,35 @@ pub struct RemoteHostInfo {
 
 /// 寫入設定檔（不碰 keychain），回傳這一筆的 id。
 ///
+/// `id` 為 `None` 是新增、`Some` 是更新——所以是 upsert 不是 insert。
+/// 欄位走 `RemoteHostInput` 而不是三個位置參數：`name` 與 `host` 都是 String
+/// 且相鄰，位置參數被對調時型別、編譯器、測試都不會叫。
+///
 /// 跟兩個 command 共用，也讓設定檔那半邊在沒有 keychain 的環境測得到。
-fn insert_host(
+fn upsert_host(
     config: &ConfigStore,
     id: Option<String>,
-    name: String,
-    host: String,
-    port: u16,
+    input: &RemoteHostInput,
 ) -> Result<String, String> {
     match id {
         Some(id) => {
-            let record = RemoteHost { id: id.clone(), name, host, port };
+            let record = RemoteHost {
+                id: id.clone(),
+                name: input.name.clone(),
+                host: input.host.clone(),
+                port: input.port,
+            };
             config.update_remote_host(record).map_err(|e| e.to_string())?;
             Ok(id)
         }
         None => {
             let id = uuid::Uuid::new_v4().to_string();
-            let record = RemoteHost { id: id.clone(), name, host, port };
+            let record = RemoteHost {
+                id: id.clone(),
+                name: input.name.clone(),
+                host: input.host.clone(),
+                port: input.port,
+            };
             config.add_remote_host(record).map_err(|e| e.to_string())?;
             Ok(id)
         }
@@ -159,7 +171,7 @@ pub async fn remote_hosts_add(
     config: State<'_, Arc<ConfigStore>>,
     secrets: State<'_, Arc<SecretStore>>,
 ) -> Result<String, String> {
-    let id = insert_host(&config, None, input.name, input.host, input.port)?;
+    let id = upsert_host(&config, None, &input)?;
     set_secret_if_present(&secrets, &id, &input.secret)?;
     Ok(id)
 }
@@ -171,7 +183,7 @@ pub async fn remote_hosts_update(
     secrets: State<'_, Arc<SecretStore>>,
 ) -> Result<(), String> {
     let id = input.id.clone().ok_or("missing id")?;
-    insert_host(&config, Some(id.clone()), input.name, input.host, input.port)?;
+    upsert_host(&config, Some(id.clone()), &input)?;
     set_secret_if_present(&secrets, &id, &input.secret)?;
     Ok(())
 }
@@ -262,11 +274,24 @@ mod tests {
     use crate::config::ConfigStore;
     use tempfile::tempdir;
 
+    /// 測試用的最小 `RemoteHostInput`；`secret` 固定 `None`——這三條只測設定檔
+    /// 那半邊，金鑰那半邊已經有專門的（`#[ignore]`）keychain 測試覆蓋。
+    fn host_input(id: Option<&str>, name: &str, host: &str, port: u16) -> RemoteHostInput {
+        RemoteHostInput {
+            id: id.map(str::to_string),
+            name: name.to_string(),
+            host: host.to_string(),
+            port,
+            secret: None,
+        }
+    }
+
     #[test]
     fn adding_a_host_puts_it_in_the_config() {
         let dir = tempdir().unwrap();
         let config = ConfigStore::new_at(dir.path().join("config.toml"));
-        let id = insert_host(&config, None, "辦公室".into(), "192.168.1.50".into(), 8022).unwrap();
+        let input = host_input(None, "辦公室", "192.168.1.50", 8022);
+        let id = upsert_host(&config, None, &input).unwrap();
         let hosts = config.get().remote_hosts;
         assert_eq!(hosts.len(), 1);
         assert_eq!(hosts[0].id, id);
@@ -278,8 +303,10 @@ mod tests {
     fn updating_a_host_keeps_its_id_and_does_not_add_a_second_row() {
         let dir = tempdir().unwrap();
         let config = ConfigStore::new_at(dir.path().join("config.toml"));
-        let id = insert_host(&config, None, "舊名".into(), "1.2.3.4".into(), 8022).unwrap();
-        insert_host(&config, Some(id.clone()), "新名".into(), "1.2.3.4".into(), 9000).unwrap();
+        let first = host_input(None, "舊名", "1.2.3.4", 8022);
+        let id = upsert_host(&config, None, &first).unwrap();
+        let second = host_input(Some(&id), "新名", "1.2.3.4", 9000);
+        upsert_host(&config, Some(id.clone()), &second).unwrap();
         let hosts = config.get().remote_hosts;
         assert_eq!(hosts.len(), 1, "更新不該再新增一列");
         assert_eq!(hosts[0].id, id, "更新不該換掉 id——keychain 的金鑰是綁 id 的");
@@ -291,8 +318,10 @@ mod tests {
     fn removing_a_host_takes_it_out_of_the_config() {
         let dir = tempdir().unwrap();
         let config = ConfigStore::new_at(dir.path().join("config.toml"));
-        let id = insert_host(&config, None, "要刪的".into(), "1.2.3.4".into(), 8022).unwrap();
-        let keep = insert_host(&config, None, "留著".into(), "5.6.7.8".into(), 8022).unwrap();
+        let to_delete = host_input(None, "要刪的", "1.2.3.4", 8022);
+        let id = upsert_host(&config, None, &to_delete).unwrap();
+        let to_keep = host_input(None, "留著", "5.6.7.8", 8022);
+        let keep = upsert_host(&config, None, &to_keep).unwrap();
         config.remove_remote_host(&id).unwrap();
         let hosts = config.get().remote_hosts;
         assert_eq!(hosts.len(), 1, "只該刪掉指定的那一列");
@@ -348,7 +377,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let config = ConfigStore::new_at(dir.path().join("config.toml"));
         let secrets = SecretStore::new();
-        let id = insert_host(&config, None, "要刪的".into(), "1.2.3.4".into(), 8022).unwrap();
+        let input = host_input(None, "要刪的", "1.2.3.4", 8022);
+        let id = upsert_host(&config, None, &input).unwrap();
         let key = remote_host_secret_key(&id);
         secrets.set(&key, "deadbeef").unwrap();
         assert!(secrets.has(&key), "前置條件：金鑰要先真的存進去");
