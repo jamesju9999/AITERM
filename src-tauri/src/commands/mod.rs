@@ -18,6 +18,7 @@ pub mod mcp_server;
 pub mod projects;
 pub mod provider;
 pub mod python_env;
+pub mod remote_hosts;
 pub mod reports;
 pub mod secret;
 pub mod share;
