@@ -694,7 +694,11 @@ pub async fn share_viewer_connect(
     // 讀不到」。壓成同一個 None 的話，keychain 鎖住會顯示成「金鑰不在這台電腦
     // 上，請重新輸入」，使用者就會去重貼一把其實好好的金鑰。
     let key = resolve_connect_key(saved_host_id.as_deref(), key, |k| {
-        secrets.get(k).map_err(|e| e.to_string())
+        // 用 `{e:#}` 而不是 `.to_string()`：SecretStore 內部用 anyhow 的
+        // with_context 包了一層，`.to_string()` 只會拿到最外層那句
+        // 「opening keychain entry for ...」，真正的原因被吃掉。
+        // （write_entry 已經為寫入路徑修過同一個問題，讀取路徑沒有。）
+        secrets.get(k).map_err(|e| format!("{e:#}"))
     })?;
     viewers
         .connect(app, host, port, code, display_name, key)
