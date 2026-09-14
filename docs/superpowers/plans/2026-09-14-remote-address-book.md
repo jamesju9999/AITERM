@@ -689,8 +689,12 @@ pub async fn share_viewer_connect(
     secrets: State<'_, Arc<SecretStore>>,
     app: AppHandle,
 ) -> Result<Connected, String> {
+    // **不要寫成 `secrets.get(k).ok().flatten()`。** SecretStore::get 回的是
+    // Result<Option<String>>：Ok(None) 是「這台沒有這把金鑰」，Err 是「keychain
+    // 讀不到」。壓成同一個 None 的話，keychain 鎖住會顯示成「金鑰不在這台電腦
+    // 上，請重新輸入」，使用者就會去重貼一把其實好好的金鑰。
     let key = resolve_connect_key(saved_host_id.as_deref(), key, |k| {
-        secrets.get(k).ok().flatten()
+        secrets.get(k).map_err(|e| e.to_string())
     })?;
     viewers
         .connect(app, host, port, code, display_name, key)
