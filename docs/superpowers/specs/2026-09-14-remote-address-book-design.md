@@ -47,7 +47,8 @@ host: String, port: u16, code: String, display_name: String, key: Option<String>
 ### 1. 資料模型
 
 `AppConfig` 新增一個欄位，跟 `vcs_connections` 完全同一個姿勢
-（`#[serde(default)]`，舊設定檔載入時是空陣列，不需要遷移程式碼）：
+（`#[serde(default)]`，舊設定檔載入時是空陣列，不需要遷移程式碼）。
+設定檔是 **TOML**（`config/mod.rs:184` 的 `config.toml`），不是 JSON：
 
 ```rust
 /// Saved remote terminal hosts (keys stored separately in Keychain).
@@ -158,7 +159,7 @@ effect 裡被 StrictMode 呼叫兩次的坑，而且在 dialog 上疊 dialog 本
 - `share_viewer_connect` 帶 `saved_host_id` 時，真的從 keyring 取到金鑰
   （用一個存了金鑰的假 id 與一個沒存的假 id 做對照，證明測試會分勝負）
 - `saved_host_id` 指向不存在的金鑰時回可辨識的錯誤，**不是**靜默退回 `None`
-- `AppConfig` 少了 `remote_hosts` 欄位的舊 JSON 仍能載入（`#[serde(default)]`）
+- `AppConfig` 少了 `remote_hosts` 欄位的舊設定檔仍能載入（`#[serde(default)]`）
 
 **前端**
 
