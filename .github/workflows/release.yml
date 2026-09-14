@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      release_id: ${{ steps.create.outputs.result }}
+      release_id: ${{ steps.create.outputs.release_id }}
     steps:
       # git log needs the full history and every tag to resolve the previous
       # release. The default shallow checkout has neither.
@@ -79,10 +79,12 @@ jobs:
 
       - name: Create or reuse the draft release
         id: create
-        uses: actions/github-script@v7
-        env:
-          TAG: ${{ github.ref_name }}
-          RELEASE_BODY: |
+        uses: ./.github/actions/create-draft-release
+        with:
+          tag: ${{ github.ref_name }}
+          name: AITerm ${{ github.ref_name }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          body: |
             ## AITerm ${{ github.ref_name }}
 
             ### 更新項目
@@ -107,43 +109,6 @@ jobs:
             > ```
             > chmod +x AITerm_*.AppImage && ./AITerm_*.AppImage
             > ```
-        with:
-          result-encoding: string
-          script: |
-            const tag = process.env.TAG;
-            // A draft has no tag ref, so getReleaseByTag cannot see it — scan
-            // instead. This also makes a re-run reuse the previous attempt's
-            // draft rather than adding a second one.
-            const releases = await github.paginate(github.rest.repos.listReleases, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              per_page: 100,
-            });
-            const matches = releases.filter((r) => r.tag_name === tag);
-            // Prefer a published release: `gh` resolves a tag via
-            // /releases/tags/{tag}, which returns the published one, so picking a
-            // leftover draft here would have the builds upload to one release
-            // while finalize reads another. This repo already carries such
-            // duplicates from before releaseId was used (v0.1.77, v0.1.94).
-            const existing = matches.find((r) => !r.draft) ?? matches[0];
-            if (existing) {
-              core.info(`Reusing release ${existing.id} (draft=${existing.draft})`);
-              return String(existing.id);
-            }
-            const { data } = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: tag,
-              // Parity with tauri-action's create-release, which passed
-              // `commitish || context.sha`. Ignored when the tag already exists.
-              target_commitish: context.sha,
-              name: `AITerm ${tag}`,
-              body: process.env.RELEASE_BODY,
-              draft: true,
-              prerelease: false,
-            });
-            core.info(`Created draft release ${data.id}`);
-            return String(data.id);
 
   build:
     needs: create-release
