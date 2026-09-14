@@ -481,10 +481,16 @@ jobs:
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # **分支名寫死 main，不要靠 clone 落在哪。** tap 第一次被寫入時是一個
+          # 零 commit 的空 repo，這種情況下本地 HEAD 指向哪個分支取決於 git 版本
+          # 認不認得遠端的 unborn HEAD 通告；認不得的話會落在 master，push 出去
+          # 就是一個不是預設分支的 branch——Homebrew 讀不到 formula，而這一步
+          # 本身是成功的（continue-on-error 還會讓它更安靜）。
+          git checkout -B main
           git add Formula/aiterm-host.rb
           git diff --cached --quiet && { echo "formula 沒有變化"; exit 0; }
           git commit -m "aiterm-host ${VERSION}"
-          git push
+          git push -u origin main
 
   cli-npm:
     needs: [create-release, finalize]
