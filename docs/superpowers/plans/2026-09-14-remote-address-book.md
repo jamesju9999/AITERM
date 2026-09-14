@@ -837,7 +837,7 @@ export interface ShareViewerConnectArgs {
 Run: `npx tsc -b 2>&1 | tail -5`
 Expected: 沒有輸出（通過）
 
-> 注意：不要用 `tsc --noEmit`。根目錄的 `tsconfig.toml` 是 solution file
+> 注意：不要用 `tsc --noEmit`。根目錄的 `tsconfig.json` 是 solution file
 > （`"files": []`），那樣跑什麼都不會檢查而且永遠 exit 0（見 CLAUDE.md）。
 
 - [ ] **Step 4: Commit**
