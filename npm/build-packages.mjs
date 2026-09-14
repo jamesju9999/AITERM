@@ -30,7 +30,7 @@ fs.mkdirSync(outDir, { recursive: true });
 //
 // **目錄名刻意維持不帶範圍**：CI 的發佈迴圈用 `npm-dist/aiterm-host-*` 這個
 // glob 找目錄，改成巢狀的 `@scope/...` 會讓它一個都找不到。
-const SCOPE = "@jamesju9999";
+const SCOPE = "@jamesju";
 const npmName = (t) => `${SCOPE}/${t.dir}`;
 
 for (const t of TARGETS) {

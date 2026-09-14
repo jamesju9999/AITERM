@@ -7,23 +7,23 @@ import assert from "node:assert/strict";
 import { packageForPlatform, binaryName } from "../lib/resolve.mjs";
 
 test("Apple Silicon", () => {
-  assert.equal(packageForPlatform("darwin", "arm64"), "@jamesju9999/aiterm-host-darwin-arm64");
+  assert.equal(packageForPlatform("darwin", "arm64"), "@jamesju/aiterm-host-darwin-arm64");
 });
 
 test("Intel Mac", () => {
-  assert.equal(packageForPlatform("darwin", "x64"), "@jamesju9999/aiterm-host-darwin-x64");
+  assert.equal(packageForPlatform("darwin", "x64"), "@jamesju/aiterm-host-darwin-x64");
 });
 
 test("Linux x64", () => {
-  assert.equal(packageForPlatform("linux", "x64"), "@jamesju9999/aiterm-host-linux-x64");
+  assert.equal(packageForPlatform("linux", "x64"), "@jamesju/aiterm-host-linux-x64");
 });
 
 test("Linux arm64", () => {
-  assert.equal(packageForPlatform("linux", "arm64"), "@jamesju9999/aiterm-host-linux-arm64");
+  assert.equal(packageForPlatform("linux", "arm64"), "@jamesju/aiterm-host-linux-arm64");
 });
 
 test("Windows x64", () => {
-  assert.equal(packageForPlatform("win32", "x64"), "@jamesju9999/aiterm-host-win32-x64");
+  assert.equal(packageForPlatform("win32", "x64"), "@jamesju/aiterm-host-win32-x64");
 });
 
 test("不支援的平台要丟出可讀的錯誤，不是回 undefined", () => {
@@ -53,7 +53,7 @@ test("平台套件一律用帶範圍的名稱", () => {
   ]) {
     assert.match(
       packageForPlatform(platform, arch),
-      /^@jamesju9999\//,
+      /^@jamesju\//,
       `${platform} ${arch} 的套件名必須帶範圍`,
     );
   }
