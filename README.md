@@ -93,7 +93,8 @@ desktop, so the host needs no AI configuration or API keys.
 # macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/jamesju9999/AITERM/master/scripts/install.sh | sh
 
-# Homebrew
+# Homebrew (trust the tap first — see below)
+brew trust jamesju9999/tap
 brew install jamesju9999/tap/aiterm-host
 
 # npm (or run without installing via npx)
@@ -109,8 +110,18 @@ docker run -it --rm -p 8022:8022 -e AITERM_HOST_KEY=<your-key> \
 irm https://raw.githubusercontent.com/jamesju9999/AITERM/master/scripts/install.ps1 | iex
 ```
 
+> **Homebrew: `invalid syntax in tap!` is not a syntax error.** Recent Homebrew
+> refuses to tap a third-party repository you have not trusted, and the message
+> it prints — `Cannot tap jamesju9999/tap: invalid syntax in tap!` — points at
+> the formula rather than at the trust check. Run `brew trust jamesju9999/tap`
+> once and the install proceeds.
+
 The install scripts verify every download against the release's `SHA256SUMS`
 and **abort on a mismatch** — there is no "install anyway" option.
+
+`aiterm-host` has its own version numbers and release notes
+([`CHANGELOG-host.md`](CHANGELOG-host.md)), published from `host-v*` tags
+independently of the desktop app.
 
 ### Use
 
@@ -223,7 +234,8 @@ npx tsc -b
 # macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/jamesju9999/AITERM/master/scripts/install.sh | sh
 
-# Homebrew
+# Homebrew（要先信任這個 tap，見下方說明）
+brew trust jamesju9999/tap
 brew install jamesju9999/tap/aiterm-host
 
 # npm（不想安裝的話直接用 npx）
@@ -239,8 +251,16 @@ docker run -it --rm -p 8022:8022 -e AITERM_HOST_KEY=<你的金鑰> \
 irm https://raw.githubusercontent.com/jamesju9999/AITERM/master/scripts/install.ps1 | iex
 ```
 
+> **Homebrew 的 `invalid syntax in tap!` 不是語法錯誤。** 新版 Homebrew 會擋下
+> 你還沒信任過的第三方 tap，但它印出來的訊息
+> `Cannot tap jamesju9999/tap: invalid syntax in tap!` 指向 formula，
+> 而不是指向信任檢查。執行一次 `brew trust jamesju9999/tap` 就能繼續安裝。
+
 安裝腳本會用 release 的 `SHA256SUMS` 驗證每一個下載，**不符就中止安裝**，
 沒有「照樣安裝」的選項。
+
+`aiterm-host` 有自己的版本號與更新記錄（[`CHANGELOG-host.md`](CHANGELOG-host.md)），
+從 `host-v*` tag 發佈，跟桌面版各走各的。
 
 ### 使用
 
