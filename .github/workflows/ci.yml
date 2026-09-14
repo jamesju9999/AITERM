@@ -57,6 +57,13 @@ jobs:
           pip install --quiet pyyaml
           python3 scripts/check_ci_matrix.py
 
+      # `yaml.safe_load` 通過不代表 Actions 收得下這個檔案。一個有 name、有 env
+      # 卻沒有 run 的步驟是完全合法的 YAML，但 Actions 會拒絕整份檔案，回報只有
+      # 「This run likely failed because of a workflow file issue」——沒有檔名、
+      # 沒有行號、沒有鍵名。拆 release.yml 時實際發生過。
+      - name: Check the workflow files are structurally valid
+        run: python3 scripts/check_workflows.py
+
   # Runs `cargo test` for the Rust backend. Before this job existed, the only
   # Rust step in CI was warm-cache's `cargo build --release`, which never runs
   # `cargo test` and is skipped on pull_request entirely — so a PR that broke
