@@ -64,7 +64,7 @@ pub struct AppConfig {
     pub vcs_connections: Vec<VcsConnection>,
 
     /// Saved remote terminal hosts (keys stored separately in Keychain).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub remote_hosts: Vec<RemoteHost>,
 
     /// Saved mail accounts (passwords stored separately in Keychain).
@@ -868,14 +868,19 @@ mod tests {
         // 舊版設定檔沒有這個欄位。少了 #[serde(default)] 的話整份設定會解析
         // 失敗，使用者的所有設定一次全部消失——症狀跟「地址簿」完全無關。
         //
-        // 用「序列化一份預設設定再讀回來」而不是手寫 TOML：手寫的字串很容易
-        // 因為漏掉某個沒有預設值的欄位而變成在測別的東西。
+        // toml 會把空的 Vec 寫成 `remote_hosts = []`（vcs_connections 也一樣），
+        // 所以要先把那一行拿掉，才是真正「舊設定檔」的樣子。
         let serialized = toml::to_string_pretty(&AppConfig::default()).unwrap();
+        let without: String = serialized
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("remote_hosts"))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
-            !serialized.contains("remote_hosts"),
-            "空的 remote_hosts 不該被寫進設定檔，否則這個測試證明不了任何事"
+            !without.contains("remote_hosts"),
+            "沒把欄位拿乾淨的話，這個測試證明不了任何事"
         );
-        let cfg: AppConfig = toml::from_str(&serialized).expect("舊設定檔應該仍然載入得了");
+        let cfg: AppConfig = toml::from_str(&without).expect("舊設定檔應該仍然載入得了");
         assert!(cfg.remote_hosts.is_empty());
     }
 
