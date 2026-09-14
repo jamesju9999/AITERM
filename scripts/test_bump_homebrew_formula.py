@@ -24,6 +24,15 @@ class RenderFormula(unittest.TestCase):
     def test_version_appears(self):
         self.assertIn('version "1.25.0"', self.out)
 
+    def test_urls_point_at_the_host_tag(self):
+        # tag 是 host-v1.25.0，不是 v1.25.0。少了前綴的話每個 url 都 404，
+        # 而 brew 的錯誤訊息只會說下載失敗，不會指向 formula。
+        self.assertIn(
+            "https://github.com/jamesju9999/AITERM/releases/download/host-v1.25.0/",
+            self.out,
+        )
+        self.assertNotIn("/releases/download/v1.25.0/", self.out)
+
     def test_each_platform_gets_its_own_sha(self):
         # 四個 sha 必須各就各位。貼錯位置的話 brew 會在下載後才驗出不符，
         # 錯誤訊息完全不會指向 formula。
