@@ -24,10 +24,13 @@
 `aiterm-host` 的檔案，安裝就會失敗。現在腳本會明確去找最新的 `aiterm-host`
 版本，桌面版怎麼發都不影響安裝。
 
-**用 npm 或 Homebrew 安裝的人要注意**
-`npx aiterm-host` 會自動拿到 0.2.0。如果你之前用 `npm install -g aiterm-host`
-裝了 1.25.x，`npm update` 不會幫你換成版號比較小的 0.2.0，要手動
-`npm install -g aiterm-host@latest`。
+**修正：`npx aiterm-host` 一直是「找不到套件」**
+1.25.0 公告過可以用 `npx aiterm-host`，但那次發佈只成功了一半——實際被安裝的
+幾個子套件上架了，你真正會輸入的那個名稱卻被 npm 擋下來，所以照著做只會拿到
+404。這一版改用另一組套件名稱重新發佈，`npx aiterm-host` 現在真的可以用了。
+
+**Homebrew 也是這一版才真的能用**
+1.25.x 公告的 `brew install jamesju9999/tap/aiterm-host` 同樣沒有真正上架過。
 
 ## 更早的版本
 
