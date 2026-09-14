@@ -36,7 +36,8 @@ def render_formula(version: str, sums_text: str, repo: str) -> str:
         # 那個平台的使用者會拿到一個裝不起來的 formula。
         return sums[key]
 
-    base = f"https://github.com/{repo}/releases/download/v{version}"
+    # tag 前綴是 host-v：aiterm-host 與桌面版 AITerm 各有自己的 tag 系列。
+    base = f"https://github.com/{repo}/releases/download/host-v{version}"
 
     def block(triple: str) -> str:
         return (

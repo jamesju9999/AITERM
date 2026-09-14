@@ -38,20 +38,39 @@ detect_target() {
   esac
 }
 
+# 從 /repos/{repo}/releases 的 JSON 裡挑出最新的正式 aiterm-host 版本號。
+#
+# 不能用 releases/latest：一個 repo 只有一個 latest，而它屬於桌面版 AITerm
+# （桌面版的自動更新端點就指向 releases/latest/download/latest.json）。桌面版
+# 發一次版，latest 就是一則沒有任何 aiterm-host 資產的 release，照著抓只會 404。
+#
+# 不解析 draft／prerelease 欄位，改用 tag 的形狀判斷：未登入的 API 本來就
+# 看不到 draft，而這個 repo 的彩排 tag 一律是 host-v<版本>-<主題><n>，
+# 所以「版本號只有數字和點」就等於「正式版」。grep 的樣式把結尾的引號一起
+# 吃進去，host-v0.2.0-dist1 因此不會 match——在 sh 裡手刻 JSON 解析比這脆弱得多。
+#
+# API 回傳的順序是新到舊，所以第一個符合的就是最新的正式版。
+pick_host_version() {
+  grep -o '"tag_name"[[:space:]]*:[[:space:]]*"host-v[0-9][0-9.]*"' \
+    | head -1 \
+    | sed 's/.*"host-v\([0-9][0-9.]*\)"$/\1/'
+}
+
 main() {
   target="$(detect_target "$(uname -s)" "$(uname -m)")"
 
   echo "正在查最新版本…"
-  version="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-    | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)"
+  version="$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=30" \
+    | pick_host_version)"
   if [ -z "$version" ]; then
-    echo "查不到最新版本。GitHub API 可能限流了，或這個 repo 還沒有 release。" >&2
+    echo "查不到 aiterm-host 的版本。GitHub API 可能限流了，或還沒有任何" >&2
+    echo "host-v* 的正式 release。" >&2
     exit 1
   fi
   echo "最新版本：$version"
 
   name="aiterm-host-${version}-${target}"
-  base="https://github.com/$REPO/releases/download/v${version}"
+  base="https://github.com/$REPO/releases/download/host-v${version}"
 
   tmp="$(mktemp -d)"
   # 中途失敗也要清乾淨，不要在 /tmp 留一堆半殘的下載。

@@ -25,13 +25,24 @@ if ($Arch -eq "ARM64") {
 }
 $Target = "x86_64-pc-windows-msvc"
 
+# 不能用 releases/latest：一個 repo 只有一個 latest，而它屬於桌面版 AITerm
+# （桌面版的自動更新端點就指向 releases/latest/download/latest.json）。桌面版
+# 發一次版，latest 就是一則沒有任何 aiterm-host 資產的 release。
+# 這裡列出 releases（API 回傳新到舊），挑第一個正式的 host-v 版本。
+# 正規表示式把結尾釘死（$），所以彩排版 host-v0.2.0-dist1 不會被選中。
 Write-Host "正在查最新版本…"
-$release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
-$version = $release.tag_name -replace '^v', ''
+$releases = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases?per_page=30"
+$hostRelease = $releases |
+    Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -match '^host-v[0-9][0-9.]*$' } |
+    Select-Object -First 1
+if (-not $hostRelease) {
+    throw "查不到 aiterm-host 的版本。GitHub API 可能限流了，或還沒有任何 host-v* 的正式 release。"
+}
+$version = $hostRelease.tag_name -replace '^host-v', ''
 Write-Host "最新版本：$version"
 
 $name = "aiterm-host-$version-$Target"
-$base = "https://github.com/$Repo/releases/download/v$version"
+$base = "https://github.com/$Repo/releases/download/host-v$version"
 $tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ([System.Guid]::NewGuid()))
 
 try {
