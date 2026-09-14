@@ -534,9 +534,7 @@ pub struct VcsConnection {
 
 /// A saved remote terminal host. The pre-shared key lives in the OS keychain
 /// under `remote:{id}`, never in this file.
-//
-// 不加 rename_all：這個檔案裡的設定型別（VcsConnection 等）一律維持 snake_case。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteHost {
     pub id: String,
     /// 使用者取的別名，顯示在清單上。
@@ -886,7 +884,8 @@ mod tests {
 
     #[test]
     fn remote_host_roundtrips_toml() {
-        // 旁邊就有 vcs_connection_roundtrips_toml（types.rs:814），形狀照它。
+        // 走完整的 AppConfig 而不是包一層 struct：真正會壞的是 AppConfig 裡
+        // 好幾個 Vec<Struct> 相鄰時的 array-of-tables 排序，那只有這樣才測得到。
         let mut cfg = AppConfig::default();
         cfg.remote_hosts.push(RemoteHost {
             id: "abc".into(),
