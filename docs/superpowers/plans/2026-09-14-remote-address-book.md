@@ -751,8 +751,21 @@ import { invoke } from "@tauri-apps/api/core";
 /**
  * 「這台的金鑰不在這台電腦上」。跟 Rust 的
  * `commands::remote_hosts::ERR_SAVED_KEY_MISSING` 必須一字不差。
+ *
+ * 這是手抄關係，沒有任何編譯期檢查（repo 既有的 `no_remote:` 與 AiError 的
+ * kind 標籤也一樣）。
  */
 export const ERR_SAVED_KEY_MISSING = "remote_host_key_missing";
+
+/**
+ * 「keychain 本身讀不到」——鎖住、權限被拒、資料損毀。
+ *
+ * **比對一定要用 `startsWith`，不能用 `===`。** 後端送出來的形狀是
+ * `remote_host_keychain_unavailable: <底層原因>`，用精確比對的話這條分支
+ * 永遠不會成立，keychain 故障就會退回顯示一串原始錯誤字串——而把這兩種
+ * 錯誤分開的整個用意就沒了。
+ */
+export const ERR_KEYCHAIN_UNAVAILABLE = "remote_host_keychain_unavailable";
 
 /** 地址簿的一筆，**永遠不含金鑰**。 */
 export interface RemoteHostInfo {
@@ -854,6 +867,7 @@ git commit -m "feat(remote): 地址簿的前端 IPC 包裝"
     connect_saved_delete: "刪除",
     connect_saved_delete_confirm: "確定要從地址簿刪除「{name}」嗎？金鑰也會一併刪除。",
     connect_saved_no_key: "這台的金鑰不在這台電腦上，請重新輸入。",
+    connect_keychain_unavailable: "讀不到系統金鑰圈，可能是被鎖住或權限不足。解鎖後再試一次，不需要重新輸入金鑰。",
     connect_save_prompt: "已連上。要把這台存進地址簿嗎？",
     connect_save_name_label: "別名",
     connect_save_confirm: "儲存",
@@ -872,6 +886,8 @@ git commit -m "feat(remote): 地址簿的前端 IPC 包裝"
     connect_saved_delete_confirm:
       "Remove \"{name}\" from the address book? Its key will be deleted too.",
     connect_saved_no_key: "This host's key is not on this computer. Enter it again.",
+    connect_keychain_unavailable:
+      "Could not read the system keychain — it may be locked or permission was denied. Unlock it and try again; you do not need to re-enter the key.",
     connect_save_prompt: "Connected. Save this host to the address book?",
     connect_save_name_label: "Name",
     connect_save_confirm: "Save",
@@ -1218,6 +1234,7 @@ Expected: 新的 describe 全部 FAIL（找不到「辦公室」、找不到「�
 import { useEffect } from "react";
 import { RemoteHostList } from "./RemoteHostList";
 import {
+  ERR_KEYCHAIN_UNAVAILABLE,
   ERR_SAVED_KEY_MISSING,
   remoteHostsAdd,
   remoteHostsList,
@@ -1277,6 +1294,14 @@ import {
       onConnected(connId, sas, addressLabel);
     } catch (e) {
       const msg = String(e);
+      // **keychain 讀不到要先判，而且用 startsWith。** 後端送的是
+      // `remote_host_keychain_unavailable: <底層原因>`。這種情況重貼金鑰沒有
+      // 任何用處——金鑰其實好好的，是金鑰圈打不開，所以不要展開手動欄位叫
+      // 使用者重輸入。
+      if (msg.includes(ERR_KEYCHAIN_UNAVAILABLE)) {
+        setError(t.connect_keychain_unavailable);
+        return;
+      }
       if (msg.includes(ERR_SAVED_KEY_MISSING)) {
         // 金鑰不在這台電腦上：把位址帶進手動欄位，使用者只要重貼金鑰。
         // 絕對不能靜默改用短碼模式重試——那會得到一個指向短碼的錯誤訊息。
