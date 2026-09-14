@@ -391,14 +391,32 @@ jobs:
           gh release view "$TAG" --json body -q .body > body.md
           # 區塊缺漏或沒改寫時 exit 1，這個 job 就失敗、release 留在 draft。
           python3 scripts/release_notes.py extract < body.md > /dev/null
-          # **不加 --latest。** 一個 repo 只有一個 releases/latest，它屬於桌面版
-          # AITerm：src-tauri/tauri.conf.json 的更新器端點直接指向
-          # releases/latest/download/latest.json。host 搶走它的話，每一個桌面
-          # 使用者的自動更新都會去讀一則沒有 latest.json 的 release。
+          # **一定要明確寫 `--latest=false`，不能只是「不加 --latest」。**
+          # 一個 repo 只有一個 releases/latest，它屬於桌面版 AITerm：
+          # src-tauri/tauri.conf.json 的更新器端點直接指向
+          # releases/latest/download/latest.json。
+          #
+          # 省略 --latest 不等於「不要當 latest」——GitHub 的 make_latest 預設
+          # 就是 true，任何一則新發佈的非 prerelease 都會自動接管 latest。
+          # host-v0.2.0-dist2 彩排時實測撞到：finalize 跑完之後
+          # releases/latest 變成那一則 host release，桌面版的
+          # releases/latest/download/latest.json 當場 404——每一個桌面使用者的
+          # 自動更新都會安靜地失效，而這個 job 是綠的。
+          #
           # host 的安裝腳本不靠 latest，它自己去找最新的 host-v* release
           # （scripts/install.sh 的 pick_host_version）。
-          gh release edit "$TAG" --draft=false
-          echo "已發佈 $TAG（未指派 latest，latest 保留給桌面版）"
+          gh release edit "$TAG" --draft=false --latest=false
+          echo "已發佈 $TAG（latest 保留給桌面版）"
+
+          # 證明上面那一行真的生效。少了這個檢查，make_latest 的預設值哪天再
+          # 變一次，症狀依然是「桌面版更新安靜失效、release job 全綠」。
+          LATEST=$(gh release view --json tagName -q .tagName)
+          if [ "$LATEST" = "$TAG" ]; then
+            echo "::error::$TAG 搶走了 releases/latest。桌面版的更新端點會 404。"
+            echo "::error::用 gh release edit <桌面版 tag> --latest 改回去。"
+            exit 1
+          fi
+          echo "releases/latest 仍是 $LATEST"
 
   # 以下三個對外管道都 needs: finalize——對外發佈是不可逆的（Homebrew 使用者
   # 一 brew update 就會拿到；npm 超過 72 小時基本上收不回來），必須等在人核准
