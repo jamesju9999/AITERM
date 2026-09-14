@@ -299,10 +299,10 @@ mod tests {
         assert_eq!(hosts[0].id, keep);
     }
 
-    /// 這兩條碰真實 OS keychain，照 secret/mod.rs 的慣例標 #[ignore]。
+    /// 這三條碰真實 OS keychain，照 secret/mod.rs 的慣例標 #[ignore]。
     /// 手動跑：`cargo test --workspace remote_hosts_keychain -- --ignored`
     ///
-    /// 兩條都直接呼叫 production 用的自由函式（`set_secret_if_present` /
+    /// 都直接呼叫 production 用的自由函式（`set_secret_if_present` /
     /// `delete_secret_best_effort`），不是在測試裡另外抄一份同樣的邏輯——
     /// `#[tauri::command]` 本身因為簽章要吃 `State<'_, Arc<...>>`，在這個
     /// repo（`tauri` 依賴沒開 `test` feature，見 `tasks/dispatch.rs` 測試模組
@@ -319,6 +319,24 @@ mod tests {
         // 模擬 remote_hosts_update 收到 secret: None（使用者只改了別名）——
         // 呼叫的是真正的 production 函式，不是複製它的邏輯。
         set_secret_if_present(&secrets, &id, &None).unwrap();
+
+        assert_eq!(secrets.get(&key).unwrap(), Some("original".into()));
+        secrets.delete(&key).unwrap();
+    }
+
+    /// **這條比 None 那條重要。** 前端拿不到已存的金鑰（刻意的設計），所以
+    /// 使用者只改別名時，金鑰欄位是空的，送出來的是空字串而不是 None。
+    /// 空字串若被當成「清空金鑰」，改個名字就會把金鑰弄丟，而且要等下一次
+    /// 連線才會發現。
+    #[test]
+    #[ignore]
+    fn remote_hosts_keychain_update_with_an_empty_secret_keeps_the_existing_key() {
+        let secrets = SecretStore::new();
+        let id = format!("test-{}", uuid::Uuid::new_v4());
+        let key = remote_host_secret_key(&id);
+        secrets.set(&key, "original").unwrap();
+
+        set_secret_if_present(&secrets, &id, &Some(String::new())).unwrap();
 
         assert_eq!(secrets.get(&key).unwrap(), Some("original".into()));
         secrets.delete(&key).unwrap();
