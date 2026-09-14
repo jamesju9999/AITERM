@@ -682,8 +682,9 @@ pub async fn share_viewer_connect(
     code: String,
     display_name: String,
     key: Option<String>,
-    /// 地址簿的條目 id。帶了它就由後端自己去 keychain 取金鑰，`key` 不採用——
-    /// 已存的金鑰因此從頭到尾不跨 IPC。
+    // 地址簿的條目 id。帶了它就由後端自己去 keychain 取金鑰，`key` 不採用——
+    // 已存的金鑰因此從頭到尾不跨 IPC。
+    //（用 `//` 不是 `///`：Rust 不允許在函式參數上放文件註解。）
     saved_host_id: Option<String>,
     viewers: State<'_, Arc<ViewerManager>>,
     secrets: State<'_, Arc<SecretStore>>,
@@ -1480,9 +1481,17 @@ Expected: 沒有錯誤
 
 - [ ] **Step 4: Rust 全套**
 
-Run: `cd src-tauri && cargo test --workspace 2>&1 | tail -10`
-Expected: 全綠。**一定要有 `--workspace`**——沒有的話只會跑 `app`，
-`aiterm-core` 與 `aiterm-host` 整批被跳過而且沒有任何徵兆。
+Run: `cd src-tauri && cargo test --workspace --no-fail-fast 2>&1 | grep "test result:"`
+Expected: 每一行都是 `ok`。
+
+**兩個都要加，理由不同：**
+- 少了 `--workspace` 只會跑 `app`，`aiterm-core` 與 `aiterm-host` 整批被跳過
+  而且沒有任何徵兆。
+- 少了 `--no-fail-fast`，第一個失敗的測試二進位會讓整個指令停下來，後面的
+  crate 一條都不會跑。實際發生過：`aiterm-core` 的 pty 測試因為環境性的
+  openpty 競爭而失敗，結果 `app` 的測試完全沒執行。
+- 而且要看**每一行** `test result:`，不是 `tail` 最後一行——`--workspace`
+  會產生好幾個測試二進位，各有各的結果行。
 
 - [ ] **Step 5: 真機驗收（照 `run` skill）**
 

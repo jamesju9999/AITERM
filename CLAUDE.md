@@ -18,11 +18,16 @@ npm run lint               # ESLint
 
 # Tests
 npm run test               # Frontend Vitest suite
-cd src-tauri && cargo test --workspace   # Rust unit + integration tests
+cd src-tauri && cargo test --workspace --no-fail-fast   # Rust unit + integration tests
                            # 一定要加 --workspace：src-tauri/Cargo.toml 同時是
                            # package 與 workspace root，bare `cargo test` 只會跑
                            # `app`，aiterm-core 與 aiterm-host 會被整批跳過而且
                            # 不會有任何徵兆（1347 條 vs 1582 條）。
+                           # --no-fail-fast 也要加：少了它，第一個失敗的測試
+                           # 二進位會讓整個指令停住，後面的 crate 一條都不跑。
+                           # 實際踩過——aiterm-core 的 pty 測試因環境性的
+                           # openpty 競爭失敗，app 的測試整批沒執行卻沒人發現。
+                           # 看結果要看每一行 test result:，不是 tail 最後一行。
 npx tsc -b                 # Type check (what `npm run build` runs)
                            # NOT `tsc --noEmit`: the root tsconfig.json is a
                            # solution file ("files": []), so it checks nothing
