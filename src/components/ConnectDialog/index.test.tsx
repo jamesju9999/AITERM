@@ -444,6 +444,107 @@ describe("ConnectDialog 地址簿", () => {
     expect(remoteHostsUpdate).not.toHaveBeenCalled();
   });
 
+  it("Door 3：編輯 A、改連金鑰遺失的 B、重貼金鑰存檔——不會覆蓋 A", async () => {
+    // 這是「不用」跟「改點另一筆」兩個洩漏測試都沒蓋到的第三個門：
+    // ERR_SAVED_KEY_MISSING 那個錯誤分支只會展開手動欄位、帶入 B 的位址，
+    // 從來沒有清掉 editingId（它還是 "a"）。舊設計會讓後面的存檔誤呼叫
+    // remoteHostsUpdate({ id: "a", host: B 的位址, ... })，把 A 覆蓋掉。
+    // confirmSave 改成驗證「editingId 那筆的『目前』位址是不是就是這次連上
+    // 的位址」之後，這裡就算 editingId 沒清乾淨也不會誤傷 A——因為 A 存的
+    // 位址（192.168.1.50:8022）跟這次連上的位址（B 的 10.0.0.9:9000）對不
+    // 起來。
+    vi.mocked(remoteHostsList).mockResolvedValue([
+      { id: "a", name: "辦公室", host: "192.168.1.50", port: 8022, has_key: true },
+      { id: "b", name: "雲端", host: "10.0.0.9", port: 9000, has_key: false },
+    ]);
+    vi.mocked(shareViewerConnect).mockRejectedValueOnce(new Error("remote_host_key_missing"));
+    render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+
+    // 編輯 A，但不送出。
+    const rows = await screen.findAllByRole("listitem");
+    await userEvent.click(within(rows[0]).getByRole("button", { name: /^編輯$/ }));
+
+    // 改點 B——B 本機沒有金鑰，連線失敗會展開手動欄位並帶入 B 的位址。
+    await userEvent.click(screen.getByText("雲端"));
+    expect(await screen.findByDisplayValue("10.0.0.9:9000")).toBeInTheDocument();
+
+    // 重貼 B 的金鑰並送出。
+    await userEvent.type(screen.getByLabelText(/金鑰|Key/), "cafebabe");
+    await userEvent.click(screen.getByRole("button", { name: /^連線$/ }));
+    await screen.findByText(/存進地址簿/);
+    await userEvent.click(screen.getByRole("button", { name: /^儲存$/ }));
+
+    expect(remoteHostsAdd).toHaveBeenCalledWith({
+      name: "10.0.0.9:9000",
+      host: "10.0.0.9",
+      port: 9000,
+      secret: "cafebabe",
+    });
+    expect(remoteHostsUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ id: "a" }));
+  });
+
+  it("Door 4：編輯 A 後刪除 A，改用全新位址存檔——會新增而不是靜默的 no-op 更新", async () => {
+    // 第四個門：刪除鈕在編輯中並未停用（也不需要——這正是驗證式設計要接住
+    // 的情況）。編輯 A、把它從地址簿刪掉、再用全新的位址存檔：舊設計會拿著
+    // 殘留的 editingId="a" 直接呼叫 remoteHostsUpdate，而後端對不存在的 id
+    // 是靜默 no-op——使用者的存檔動作全部消失，畫面上卻沒有任何錯誤。
+    render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(await screen.findByRole("button", { name: /^編輯$/ }));
+
+    await userEvent.click(screen.getByRole("button", { name: /^刪除$/ }));
+    await screen.findByText(/確定要從地址簿刪除/);
+    // 模擬 A 真的被刪掉了：往後重抓清單都回傳空陣列。
+    vi.mocked(remoteHostsList).mockResolvedValue([]);
+    const deleteButtons = screen.getAllByRole("button", { name: /^刪除$/ });
+    await userEvent.click(deleteButtons[deleteButtons.length - 1]);
+    await waitFor(() => expect(remoteHostsRemove).toHaveBeenCalledWith("a"));
+
+    // 手動欄位裡還留著 A 的舊位址（跟殘留的 editingId="a"）；換成全新位址
+    // 跟金鑰送出。
+    const addressField = screen.getByLabelText(/位址|Address/);
+    await userEvent.clear(addressField);
+    await userEvent.type(addressField, "7.7.7.7:1234");
+    await userEvent.type(screen.getByLabelText(/金鑰|Key/), "feedface");
+    await userEvent.click(screen.getByRole("button", { name: /^連線$/ }));
+    await screen.findByText(/存進地址簿/);
+    await userEvent.click(screen.getByRole("button", { name: /^儲存$/ }));
+
+    expect(remoteHostsAdd).toHaveBeenCalledWith({
+      name: "7.7.7.7:1234",
+      host: "7.7.7.7",
+      port: 1234,
+      secret: "feedface",
+    });
+    expect(remoteHostsUpdate).not.toHaveBeenCalled();
+  });
+
+  it("Door 2（併發）：連線中時整個地址簿清單會停用", async () => {
+    // connectSavedHost 原本沒有包 setBusy(true)/setBusy(false)——手動送出鈕
+    // 跟 mDNS 那兩條路都有。沒包住的話，使用者可以在一次已存主機的連線還
+    // 沒回來時再點另一筆，兩個 shareViewerConnect 同時飛出去。
+    let resolveConnect: (v: { connId: string; sas: string }) => void = () => {};
+    vi.mocked(shareViewerConnect).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveConnect = resolve;
+        }),
+    );
+    render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(await screen.findByText("辦公室"));
+
+    const row = screen.getByRole("listitem");
+    for (const button of within(row).getAllByRole("button")) {
+      await waitFor(() => expect(button).toBeDisabled());
+    }
+
+    resolveConnect({ connId: "c1", sas: "1234" });
+    await waitFor(() => {
+      for (const button of within(row).getAllByRole("button")) {
+        expect(button).not.toBeDisabled();
+      }
+    });
+  });
+
   it("編輯一筆在別台裝置已經被刪掉的條目：重整清單並提示，不會直接送出", async () => {
     render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
     await screen.findByRole("button", { name: /^編輯$/ });

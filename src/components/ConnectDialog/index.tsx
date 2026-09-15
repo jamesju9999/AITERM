@@ -194,6 +194,23 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
     setHosts(await remoteHostsList());
   }
 
+  /**
+   * 點地址簿裡一筆已存主機時的連線入口。
+   *
+   * **`busy` 一定要包住這裡。** 手動送出跟 mDNS 那兩條路都有
+   * `setBusy(true)/setBusy(false)`，這條路原本沒有——使用者可以在手動連線
+   * 送出、結果還沒回來的空檔，再點一筆已存主機，兩個 `shareViewerConnect`
+   * 同時飛出去。`RemoteHostList` 的 `disabled` 就是靠這個 `busy` 狀態擋的。
+   */
+  async function connectSavedHost(h: RemoteHostInfo) {
+    setBusy(true);
+    try {
+      await connectTo(h.host, h.port, `${h.host}:${h.port}`, { savedHostId: h.id });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function removeHost(h: RemoteHostInfo) {
     await remoteHostsRemove(h.id);
     setConfirmDelete(null);
@@ -222,20 +239,47 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
 
   async function confirmSave() {
     if (!pendingSave) return;
+    const p = pendingSave;
+
+    // **不要直接相信 editingId。** 它的正確性原本依賴「每一條會結束或放棄
+    // 這次操作的路徑都記得把它清掉」——這個假設已經從三個不同的出口被戳破
+    // 過（連線成功直接跳過存檔、點清單裡的另一筆、金鑰遺失的錯誤分支），
+    // 每補一個洞就冒出下一個，因為「所有路徑都要記得清狀態」本來就沒辦法
+    // 靠寫程式的紀律保證。改成在真正要用到它的這一刻驗證：只有當那個 id
+    // 指的條目現在確實還在、而且它的位址就是這次連上的位址時，才當成「更新
+    // 這一筆」；其他情況一律當新增，這樣就算 editingId 是殘留的舊值，最多
+    // 只是多存一筆，不會覆蓋掉不相干的既有條目。
+    let target: RemoteHostInfo | undefined;
     if (editingId) {
+      let latest: RemoteHostInfo[];
+      try {
+        latest = await remoteHostsList();
+      } catch (e) {
+        // 查不到清單就不能用「當成新增」打賭——那正是這次重新設計想避免的
+        // 「不確定的時候安靜生出一筆重複條目」，只是換了個方向出現。留著
+        // pendingSave，使用者可以再按一次「儲存」重試；「不用」仍然可以
+        // 跳過並開分頁（連線本身已經是成立的，不受這裡影響）。
+        console.error(e);
+        setError(t.connect_save_verify_failed);
+        return;
+      }
+      target = latest.find((h) => h.id === editingId && h.host === p.host && h.port === p.port);
+    }
+
+    if (target) {
       await remoteHostsUpdate({
-        id: editingId,
-        name: saveName || pendingSave.label,
-        host: pendingSave.host,
-        port: pendingSave.port,
-        secret: pendingSave.secret,
+        id: target.id,
+        name: saveName || p.label,
+        host: p.host,
+        port: p.port,
+        secret: p.secret,
       });
     } else {
       await remoteHostsAdd({
-        name: saveName || pendingSave.label,
-        host: pendingSave.host,
-        port: pendingSave.port,
-        secret: pendingSave.secret,
+        name: saveName || p.label,
+        host: p.host,
+        port: p.port,
+        secret: p.secret,
       });
     }
     await refresh();
@@ -259,9 +303,7 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
         <RemoteHostList
           hosts={hosts}
           disabled={busy}
-          onConnect={(h) =>
-            void connectTo(h.host, h.port, `${h.host}:${h.port}`, { savedHostId: h.id })
-          }
+          onConnect={(h) => void connectSavedHost(h)}
           onEdit={editHost}
           onDelete={setConfirmDelete}
         />
