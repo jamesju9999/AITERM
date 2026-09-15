@@ -153,3 +153,9 @@
   border: 1px solid rgba(127, 127, 127, 0.3);
   border-radius: 4px;
 }
+/* 編輯模式的別名標籤跟「取消編輯」放同一行。 */
+.aiterm-connect__edit-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}

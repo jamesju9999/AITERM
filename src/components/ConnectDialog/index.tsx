@@ -58,6 +58,8 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
     label: string;
   } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  /** 編輯模式下別名欄位的內容。進入編輯時預填那一筆目前的名字。 */
+  const [editName, setEditName] = useState("");
 
   useEffect(() => {
     // 地址簿只是連線對話框的一個輔助入口，不是使用者非用不可的路徑——手動
@@ -83,6 +85,16 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
   // no-op）——所以編輯必須光靠位址就能送出，不能死守 keyMode 那套「一定要
   // 打金鑰」的規則，否則使用者連改個別名都做不到：送出鈕會永遠停在灰色。
   const editMode = manualOpen && editingId !== null && address.trim() !== "";
+  /** 正在編輯的那一筆（以清單的目前內容為準）。只給畫面用；真正決定新增或
+   *  更新的 `confirmSave` 會自己重抓清單驗證，不相信這裡。 */
+  const editingHost = editingId ? hosts.find((h) => h.id === editingId) : undefined;
+  // 只改別名：位址沒動、也沒填新金鑰。這種情況可以不連線直接存——
+  // 「只存驗證過的連線資料」這條原則只對別名放寬，因為別名錯了頂多看起來怪，
+  // 位址或金鑰錯了下次點下去就連不上。
+  const aliasOnly =
+    editingHost !== undefined &&
+    address.trim() === `${editingHost.host}:${editingHost.port}` &&
+    key.trim() === "";
 
   async function connectTo(
     host: string,
@@ -201,6 +213,10 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
    * 同時飛出去。`RemoteHostList` 的 `disabled` 就是靠這個 `busy` 狀態擋的。
    */
   async function connectSavedHost(h: RemoteHostInfo) {
+    // 點了清單裡的一筆＝放棄進行中的編輯。不清的話標題會一直寫著「編輯「A」」，
+    // 而表單裡可能已經是另一台的位址（金鑰遺失的錯誤分支會把它帶進來）。
+    // 這裡清的是畫面；資料正確性仍由 confirmSave 的使用當下驗證守住。
+    exitEdit();
     setBusy(true);
     try {
       await connectTo(h.host, h.port, `${h.host}:${h.port}`, { savedHostId: h.id });
@@ -212,7 +228,54 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
   /** 使用者已經在 `RemoteHostList` 的確認列按過確認才會走到這裡。 */
   async function removeHost(h: RemoteHostInfo) {
     await remoteHostsRemove(h.id);
+    // 刪掉的正是正在編輯的那一筆：編輯畫面沒有對象了，一併收掉。
+    if (h.id === editingId) exitEdit();
     await refresh();
+  }
+
+  /** 離開編輯模式，把手動欄位清回空白。 */
+  function exitEdit() {
+    setEditingId(null);
+    setEditName("");
+    setAddress("");
+    setKey("");
+  }
+
+  /**
+   * 只改別名時的直接儲存，不經過連線。
+   *
+   * 送出前重抓一次清單：`update_remote_host` 對不存在的 id 是靜默 no-op，
+   * 那筆若已在別處被刪掉，不重抓的話會回 Ok 卻什麼都沒存。位址與埠用重抓到
+   * 的值而不是表單內容——`aliasOnly` 已經保證兩者相同，這裡再用權威來源一次。
+   */
+  async function saveEditOnly() {
+    if (!editingId) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const latest = await remoteHostsList();
+      setHosts(latest);
+      const current = latest.find((x) => x.id === editingId);
+      if (!current) {
+        setError(t.connect_saved_missing);
+        exitEdit();
+        return;
+      }
+      await remoteHostsUpdate({
+        id: current.id,
+        name: editName.trim() || current.name,
+        host: current.host,
+        port: current.port,
+        // 空字串＝不改金鑰（後端的既有語意）。前端拿不到已存的金鑰。
+        secret: "",
+      });
+      await refresh();
+      exitEdit();
+    } catch (e) {
+      setError(t.connect_failed.replace("{error}", String(e)));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function editHost(h: RemoteHostInfo) {
@@ -233,6 +296,7 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
     setAddress(`${current.host}:${current.port}`);
     setKey("");
     setEditingId(current.id);
+    setEditName(current.name);
   }
 
   /** `typedName` 是 `SaveHostPrompt` 輸入框的原始內容，空字串時退回位址。 */
@@ -291,13 +355,18 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
     const p = pendingSave;
     setPendingSave(null);
     setEditingId(null);
+    setEditName("");
     onConnected(p.connId, p.sas, p.label);
   }
 
   return (
     <div className="aiterm-connect__backdrop">
       <div className="aiterm-connect" role="dialog" aria-modal="true">
-        <div className="aiterm-connect__title">{t.connect_title}</div>
+        <div className="aiterm-connect__title">
+          {editingId
+            ? t.connect_edit_title.replace("{name}", editingHost?.name ?? editName)
+            : t.connect_title}
+        </div>
 
         <RemoteHostList
           hosts={hosts}
@@ -340,6 +409,30 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
 
         {manualOpen && (
           <>
+            {/* 編輯時的別名欄位。**不是上面那個「你的名字」**——那是連線時送給
+                對方看的顯示名稱，跟地址簿裡這一筆叫什麼完全無關。原本編輯畫面
+                沒有這一欄，使用者自然會把「你的名字」當成別名。
+                存檔提示出現時先收起來，免得畫面上同時有兩個「別名」。 */}
+            {editingId && !pendingSave && (
+              <>
+                <div className="aiterm-connect__edit-head">
+                  <label className="aiterm-connect__label" htmlFor="aiterm-connect-editname">
+                    {t.connect_save_name_label}
+                  </label>
+                  <button type="button" className="aiterm-connect__toggle" onClick={exitEdit}>
+                    {t.connect_edit_cancel}
+                  </button>
+                </div>
+                <input
+                  id="aiterm-connect-editname"
+                  className="aiterm-connect__text"
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                />
+              </>
+            )}
+
             <label className="aiterm-connect__label" htmlFor="aiterm-connect-addr">
               {t.connect_manual_label}
             </label>
@@ -364,7 +457,11 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
               autoComplete="off"
               spellCheck={false}
             />
-            <p className="aiterm-connect__hint">{t.connect_key_hint}</p>
+            {/* 編輯時留空的意思不一樣：不是「改用短碼」，而是「沿用已存的金鑰」
+                （後端把空字串當成不改）。沿用一般模式的提示會讓人以為得重貼。 */}
+            <p className="aiterm-connect__hint">
+              {editingId ? t.connect_key_hint_edit : t.connect_key_hint}
+            </p>
           </>
         )}
 
@@ -373,13 +470,36 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
         {error && <div className="aiterm-connect__error">{error}</div>}
 
         {pendingSave && (
-          <SaveHostPrompt onSave={(n) => void confirmSave(n)} onSkip={finishPending} />
+          <SaveHostPrompt
+            // 編輯中連上的是同一台時，預填那一筆的別名。不預填的話空白會退回成
+            // 位址——使用者只是想換金鑰，「辦公室」卻被靜默改名成它的 IP。
+            // 用位址比對而不是只看 editingId：editingId 殘留時不能把舊別名
+            // 套到另一台主機上（跟 confirmSave 的驗證同一個判準）。
+            initialName={
+              editingHost &&
+              pendingSave.host === editingHost.host &&
+              pendingSave.port === editingHost.port
+                ? editName || editingHost.name
+                : ""
+            }
+            onSave={(n) => void confirmSave(n)}
+            onSkip={finishPending}
+          />
         )}
 
         <div className="aiterm-connect__actions">
           <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={onCancel}>
             {t.connect_cancel}
           </button>
+          {aliasOnly && !pendingSave && (
+            <button
+              className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+              disabled={busy}
+              onClick={() => void saveEditOnly()}
+            >
+              {t.connect_edit_save}
+            </button>
+          )}
           <button
             className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
             disabled={busy || (!keyMode && !editMode && code.length !== 6)}
