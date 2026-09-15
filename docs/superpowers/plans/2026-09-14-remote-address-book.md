@@ -306,7 +306,8 @@ mod tests {
 }
 ```
 
-在 `src-tauri/src/commands/mod.rs` 的 `pub mod mail;` 附近（維持字母序）加入：
+在 `src-tauri/src/commands/mod.rs` 加入下面這行。位置照字母序——實際的槽位在
+`pub mod python_env;` 與 `pub mod reports;` 之間：
 
 ```rust
 pub mod remote_hosts;
@@ -314,7 +315,13 @@ pub mod remote_hosts;
 
 - [ ] **Step 2: 跑測試確認它紅**
 
-Run: `cd src-tauri && cargo test --workspace resolve_connect_key 2>&1 | tail -20`
+Run: `cd src-tauri && cargo test --workspace commands::remote_hosts 2>&1 | tail -20`
+
+> **過濾字串要用測試的路徑，不是函式名。** `cargo test <filter>` 比對的是
+> 「模組路徑::測試名」，而沒有任何一條測試的名字含有 `resolve_connect_key`。
+> 用函式名當過濾字串會匹配到 **0 條測試，而 cargo 對 0 條測試回報 `ok`**——
+> 看起來全綠，其實什麼都沒跑。用過濾字串之後一定要看 `running N tests` 的 N。
+
 Expected: 六條測試中，凡是呼叫 `resolve_connect_key` 的都因為 `todo!()` panic 而 FAIL
 （`the_secret_key_is_namespaced` 會過——它不碰那支函式）
 
@@ -334,8 +341,8 @@ Expected: 六條測試中，凡是呼叫 `resolve_connect_key` 的都因為 `tod
 
 - [ ] **Step 4: 跑測試確認它綠**
 
-Run: `cd src-tauri && cargo test --workspace resolve_connect_key 2>&1 | tail -6`
-Expected: `test result: ok. 6 passed`
+Run: `cd src-tauri && cargo test --workspace commands::remote_hosts 2>&1 | tail -6`
+Expected: `running 6 tests` 然後 `test result: ok. 6 passed`
 
 - [ ] **Step 5: 證明第三條測試真的會分勝負**
 
@@ -675,15 +682,24 @@ pub async fn share_viewer_connect(
     code: String,
     display_name: String,
     key: Option<String>,
-    /// 地址簿的條目 id。帶了它就由後端自己去 keychain 取金鑰，`key` 不採用——
-    /// 已存的金鑰因此從頭到尾不跨 IPC。
+    // 地址簿的條目 id。帶了它就由後端自己去 keychain 取金鑰，`key` 不採用——
+    // 已存的金鑰因此從頭到尾不跨 IPC。
+    //（用 `//` 不是 `///`：Rust 不允許在函式參數上放文件註解。）
     saved_host_id: Option<String>,
     viewers: State<'_, Arc<ViewerManager>>,
     secrets: State<'_, Arc<SecretStore>>,
     app: AppHandle,
 ) -> Result<Connected, String> {
+    // **不要寫成 `secrets.get(k).ok().flatten()`。** SecretStore::get 回的是
+    // Result<Option<String>>：Ok(None) 是「這台沒有這把金鑰」，Err 是「keychain
+    // 讀不到」。壓成同一個 None 的話，keychain 鎖住會顯示成「金鑰不在這台電腦
+    // 上，請重新輸入」，使用者就會去重貼一把其實好好的金鑰。
     let key = resolve_connect_key(saved_host_id.as_deref(), key, |k| {
-        secrets.get(k).ok().flatten()
+        // 用 `{e:#}` 而不是 `.to_string()`：SecretStore 內部用 anyhow 的
+        // with_context 包了一層，`.to_string()` 只會拿到最外層那句
+        // 「opening keychain entry for ...」，真正的原因被吃掉。
+        // （write_entry 已經為寫入路徑修過同一個問題，讀取路徑沒有。）
+        secrets.get(k).map_err(|e| format!("{e:#}"))
     })?;
     viewers
         .connect(app, host, port, code, display_name, key)
@@ -735,8 +751,21 @@ import { invoke } from "@tauri-apps/api/core";
 /**
  * 「這台的金鑰不在這台電腦上」。跟 Rust 的
  * `commands::remote_hosts::ERR_SAVED_KEY_MISSING` 必須一字不差。
+ *
+ * 這是手抄關係，沒有任何編譯期檢查（repo 既有的 `no_remote:` 與 AiError 的
+ * kind 標籤也一樣）。
  */
 export const ERR_SAVED_KEY_MISSING = "remote_host_key_missing";
+
+/**
+ * 「keychain 本身讀不到」——鎖住、權限被拒、資料損毀。
+ *
+ * **比對一定要用 `startsWith`，不能用 `===`。** 後端送出來的形狀是
+ * `remote_host_keychain_unavailable: <底層原因>`，用精確比對的話這條分支
+ * 永遠不會成立，keychain 故障就會退回顯示一串原始錯誤字串——而把這兩種
+ * 錯誤分開的整個用意就沒了。
+ */
+export const ERR_KEYCHAIN_UNAVAILABLE = "remote_host_keychain_unavailable";
 
 /** 地址簿的一筆，**永遠不含金鑰**。 */
 export interface RemoteHostInfo {
@@ -808,7 +837,7 @@ export interface ShareViewerConnectArgs {
 Run: `npx tsc -b 2>&1 | tail -5`
 Expected: 沒有輸出（通過）
 
-> 注意：不要用 `tsc --noEmit`。根目錄的 `tsconfig.toml` 是 solution file
+> 注意：不要用 `tsc --noEmit`。根目錄的 `tsconfig.json` 是 solution file
 > （`"files": []`），那樣跑什麼都不會檢查而且永遠 exit 0（見 CLAUDE.md）。
 
 - [ ] **Step 4: Commit**
@@ -838,6 +867,7 @@ git commit -m "feat(remote): 地址簿的前端 IPC 包裝"
     connect_saved_delete: "刪除",
     connect_saved_delete_confirm: "確定要從地址簿刪除「{name}」嗎？金鑰也會一併刪除。",
     connect_saved_no_key: "這台的金鑰不在這台電腦上，請重新輸入。",
+    connect_keychain_unavailable: "讀不到系統金鑰圈，可能是被鎖住或權限不足。解鎖後再試一次，不需要重新輸入金鑰。",
     connect_save_prompt: "已連上。要把這台存進地址簿嗎？",
     connect_save_name_label: "別名",
     connect_save_confirm: "儲存",
@@ -856,6 +886,8 @@ git commit -m "feat(remote): 地址簿的前端 IPC 包裝"
     connect_saved_delete_confirm:
       "Remove \"{name}\" from the address book? Its key will be deleted too.",
     connect_saved_no_key: "This host's key is not on this computer. Enter it again.",
+    connect_keychain_unavailable:
+      "Could not read the system keychain — it may be locked or permission was denied. Unlock it and try again; you do not need to re-enter the key.",
     connect_save_prompt: "Connected. Save this host to the address book?",
     connect_save_name_label: "Name",
     connect_save_confirm: "Save",
@@ -1090,7 +1122,11 @@ git commit -m "feat(remote): 地址簿清單元件"
 
 ```tsx
 vi.mock("../../ipc/remoteHosts", () => ({
+  // **兩個常數都要列。** vi.mock 的 factory 會整個取代模組，漏掉的那個在測試裡
+  // 會是 undefined，`msg.includes(undefined)` 永遠不成立——那條錯誤分支在測試
+  // 環境裡等於不存在，而且不會有任何錯誤訊息。
   ERR_SAVED_KEY_MISSING: "remote_host_key_missing",
+  ERR_KEYCHAIN_UNAVAILABLE: "remote_host_keychain_unavailable",
   remoteHostsList: vi.fn(async () => []),
   remoteHostsAdd: vi.fn(async () => "new-id"),
   remoteHostsUpdate: vi.fn(async () => undefined),
@@ -1158,6 +1194,33 @@ describe("ConnectDialog 地址簿", () => {
     expect(onConnected).toHaveBeenCalledWith("c1", "1234", "10.0.0.9:9000");
   });
 
+  it("金鑰不在這台電腦上時，展開手動欄位並帶入位址讓使用者重貼", async () => {
+    // 這條路徑存在的理由：不處理的話後端的錯誤會原樣顯示，而且使用者不知道
+    // 要做什麼。帶入位址是為了讓他只需要貼金鑰那一欄。
+    vi.mocked(shareViewerConnect).mockRejectedValueOnce(
+      new Error("remote_host_key_missing"),
+    );
+    render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(await screen.findByText("辦公室"));
+    expect(await screen.findByDisplayValue("192.168.1.50:8022")).toBeInTheDocument();
+    expect(screen.getByText(/金鑰不在這台電腦上|not on this computer/)).toBeInTheDocument();
+  });
+
+  it("keychain 讀不到時不叫使用者重貼金鑰", async () => {
+    // **跟上一條的處置相反。** 金鑰是好的，是金鑰圈打不開，重貼幾次都沒用，
+    // 所以不該展開手動欄位。後端送的形狀是 `<常數>: <底層原因>`，所以比對
+    // 必須是 includes/startsWith 而不是相等。
+    vi.mocked(shareViewerConnect).mockRejectedValueOnce(
+      new Error("remote_host_keychain_unavailable: keychain locked"),
+    );
+    render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(await screen.findByText("辦公室"));
+    expect(
+      await screen.findByText(/讀不到系統金鑰圈|Could not read the system keychain/),
+    ).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("192.168.1.50:8022")).toBeNull();
+  });
+
   it("刪除要先確認，按確認才真的刪", async () => {
     // 刪除會連 keychain 的金鑰一起刪掉，一按就生效太危險。
     render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
@@ -1202,6 +1265,7 @@ Expected: 新的 describe 全部 FAIL（找不到「辦公室」、找不到「�
 import { useEffect } from "react";
 import { RemoteHostList } from "./RemoteHostList";
 import {
+  ERR_KEYCHAIN_UNAVAILABLE,
   ERR_SAVED_KEY_MISSING,
   remoteHostsAdd,
   remoteHostsList,
@@ -1261,6 +1325,14 @@ import {
       onConnected(connId, sas, addressLabel);
     } catch (e) {
       const msg = String(e);
+      // **keychain 讀不到要先判，而且用 startsWith。** 後端送的是
+      // `remote_host_keychain_unavailable: <底層原因>`。這種情況重貼金鑰沒有
+      // 任何用處——金鑰其實好好的，是金鑰圈打不開，所以不要展開手動欄位叫
+      // 使用者重輸入。
+      if (msg.includes(ERR_KEYCHAIN_UNAVAILABLE)) {
+        setError(t.connect_keychain_unavailable);
+        return;
+      }
       if (msg.includes(ERR_SAVED_KEY_MISSING)) {
         // 金鑰不在這台電腦上：把位址帶進手動欄位，使用者只要重貼金鑰。
         // 絕對不能靜默改用短碼模式重試——那會得到一個指向短碼的錯誤訊息。
@@ -1298,6 +1370,14 @@ mDNS 那條路徑維持原呼叫（不傳 `opts`）。
     setConfirmDelete(null);
     await refresh();
   }
+
+> **編輯一筆已經不存在的條目會留下孤兒金鑰。** `ConfigStore::update_remote_host`
+> 找不到 id 時是靜默 no-op（`config/mod.rs` 的註解明講），所以
+> `remote_hosts_update` 對一個已被刪掉的 id 呼叫會回 `Ok`，設定檔沒變，
+> 但金鑰照樣被寫進 keychain，留下永遠不會被用到的條目。這是從 `vcs.rs` 原封
+> 不動抄來的既有行為，不是地址簿引入的。前端要避免踩到：**編輯前先
+> `remoteHostsList()` 重抓一次**，找不到該 id 就重整清單並提示，不要拿畫面上
+> 可能已經過期的那一筆直接送出。
 
   function editHost(h: RemoteHostInfo) {
     // 編輯＝把這一筆帶進手動欄位，金鑰留空（前端拿不到已存的金鑰）。
@@ -1457,9 +1537,17 @@ Expected: 沒有錯誤
 
 - [ ] **Step 4: Rust 全套**
 
-Run: `cd src-tauri && cargo test --workspace 2>&1 | tail -10`
-Expected: 全綠。**一定要有 `--workspace`**——沒有的話只會跑 `app`，
-`aiterm-core` 與 `aiterm-host` 整批被跳過而且沒有任何徵兆。
+Run: `cd src-tauri && cargo test --workspace --no-fail-fast 2>&1 | grep "test result:"`
+Expected: 每一行都是 `ok`。
+
+**兩個都要加，理由不同：**
+- 少了 `--workspace` 只會跑 `app`，`aiterm-core` 與 `aiterm-host` 整批被跳過
+  而且沒有任何徵兆。
+- 少了 `--no-fail-fast`，第一個失敗的測試二進位會讓整個指令停下來，後面的
+  crate 一條都不會跑。實際發生過：`aiterm-core` 的 pty 測試因為環境性的
+  openpty 競爭而失敗，結果 `app` 的測試完全沒執行。
+- 而且要看**每一行** `test result:`，不是 `tail` 最後一行——`--workspace`
+  會產生好幾個測試二進位，各有各的結果行。
 
 - [ ] **Step 5: 真機驗收（照 `run` skill）**
 

@@ -109,6 +109,9 @@ use commands::{
     projects::{
         projects_create, projects_list, projects_open, projects_remove, projects_rename,
     },
+    remote_hosts::{
+        remote_hosts_add, remote_hosts_list, remote_hosts_remove, remote_hosts_update,
+    },
     reports::{reports_delete, reports_list, reports_read, reports_save},
     task_board_config::{task_board_get_config, task_board_set_config},
     tasks::{
@@ -483,6 +486,10 @@ pub fn run() {
             share_viewer_send,
             share_viewer_disconnect,
             share_viewer_ready,
+            remote_hosts_list,
+            remote_hosts_add,
+            remote_hosts_update,
+            remote_hosts_remove,
             // Shell
             open_url,
             updater_supported,

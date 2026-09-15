@@ -1,6 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { shareDiscover } from "../../ipc/share";
 import { shareViewerConnect } from "../../ipc/shareViewer";
+import {
+  ERR_KEYCHAIN_UNAVAILABLE,
+  ERR_SAVED_KEY_MISSING,
+  remoteHostsAdd,
+  remoteHostsList,
+  remoteHostsRemove,
+  remoteHostsUpdate,
+  type RemoteHostInfo,
+} from "../../ipc/remoteHosts";
+import { RemoteHostList } from "./RemoteHostList";
 import { useLocale } from "../../contexts/LocaleContext";
 import "./index.css";
 
@@ -21,6 +31,9 @@ interface Props {
  *
  * 平常把手動欄位收起來，只有 mDNS 查無結果或結果有歧義（多台機器用了
  * 同一組短碼）時才自動展開，並依情境顯示不同文案。
+ *
+ * 地址簿（`RemoteHostList`）讓使用者不必每次都重貼金鑰：點一筆已存的條目
+ * 只送 `savedHostId`，金鑰由後端自己去 keychain 取，前端從頭到尾拿不到它。
  */
 export function ConnectDialog({ onConnected, onCancel }: Props) {
   const { t } = useLocale();
@@ -33,6 +46,33 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
   const [busy, setBusy] = useState(false);
   const [searching, setSearching] = useState(false);
 
+  const [hosts, setHosts] = useState<RemoteHostInfo[]>([]);
+  /** 連上之後、還沒決定要不要存的那筆。null 代表沒有待決定的。 */
+  const [pendingSave, setPendingSave] = useState<{
+    host: string;
+    port: number;
+    secret: string;
+    connId: string;
+    sas: string;
+    label: string;
+  } | null>(null);
+  const [saveName, setSaveName] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  /** 等待確認刪除的那一筆。刪除會連 keychain 的金鑰一起刪掉，不能一按就生效。 */
+  const [confirmDelete, setConfirmDelete] = useState<RemoteHostInfo | null>(null);
+
+  useEffect(() => {
+    // 地址簿只是連線對話框的一個輔助入口，不是使用者非用不可的路徑——手動
+    // 輸入永遠走得通。抓不到清單就安靜顯示空清單即可，不值得為了這件事跳出
+    // 一個會擋住整個對話框的錯誤（跟 VcsConnectionsPage 的既有慣例一致）。
+    void remoteHostsList()
+      .then(setHosts)
+      .catch((e) => {
+        console.error(e);
+        setHosts([]);
+      });
+  }, []);
+
   // 金鑰模式：位址與金鑰都填了。這種連線**沒有短碼**——身分完全由金鑰決定，
   // 觀看端連送出去的 `code` 都是空字串（見 `share::viewer` 的 `Join`）。所以
   // 送出鈕不能再要求短碼滿 6 位，否則金鑰填好了按鈕還是灰的，整條 CLI host
@@ -41,8 +81,17 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
   // 反過來也要守住：沒填金鑰時，短碼仍然是必填——放寬成「有位址就能按」會讓
   // 短碼模式在碼還沒打完時就送出去。
   const keyMode = manualOpen && address.trim() !== "" && key.trim() !== "";
+  // 編輯一筆已存的條目時，金鑰留空代表「不改金鑰」（後端把空字串當成
+  // no-op）——所以編輯必須光靠位址就能送出，不能死守 keyMode 那套「一定要
+  // 打金鑰」的規則，否則使用者連改個別名都做不到：送出鈕會永遠停在灰色。
+  const editMode = manualOpen && editingId !== null && address.trim() !== "";
 
-  async function connectTo(host: string, port: number, addressLabel: string) {
+  async function connectTo(
+    host: string,
+    port: number,
+    addressLabel: string,
+    opts: { savedHostId?: string; typedKey?: string } = {},
+  ) {
     try {
       const { connId, sas } = await shareViewerConnect({
         host,
@@ -52,12 +101,56 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
         // 空字串要送 undefined，不能送 ""。後端把 Some("") 當成「有金鑰但是空的」，
         // 握手會失敗，而錯誤訊息會指向金鑰不符——對一個根本沒填金鑰的使用者來說
         // 完全誤導。
-        key: key.trim() === "" ? undefined : key.trim(),
+        key: opts.savedHostId ? undefined : opts.typedKey,
+        savedHostId: opts.savedHostId,
       });
+      // 只有「手動輸入的金鑰模式」或「正在編輯一筆已存條目」才問要不要存：
+      // 短碼沒有固定金鑰可存，從地址簿來的本來就存過了。
+      //
+      // **`|| editingId` 不能省。** 若只看 `opts.typedKey`，編輯時只要使用者
+      // 沒有重新輸入金鑰（正常做法——只是改個別名或位址），這裡就會直接跳到
+      // `onConnected`：使用者的修改被靜默丟棄，而且 `editingId` 永遠不會被
+      // `finishPending` 清掉，留到下一次真的新增時把它誤當成更新，覆蓋掉
+      // 不相干的舊條目。
+      if (!opts.savedHostId && (opts.typedKey || editingId)) {
+        setPendingSave({
+          host,
+          port,
+          secret: opts.typedKey ?? "",
+          connId,
+          sas,
+          label: addressLabel,
+        });
+        return;
+      }
+      // **不能省略。** 這條是 `finishPending` 以外唯一一個會走到
+      // `onConnected` 的出口（短碼模式、或點地址簿裡的另一筆）。如果使用者
+      // 先按了「編輯」（`editingId` 被設成某筆的 id），還沒送出手動表單就
+      // 改點清單裡別的已存主機連線，這裡如果不清掉，`editingId` 會一路
+      // 殘留到下一次完全無關的手動新增，把它誤當成更新，覆蓋掉那一筆。
+      setEditingId(null);
       onConnected(connId, sas, addressLabel);
     } catch (e) {
+      const msg = String(e);
+      // **keychain 讀不到要先判，而且用 includes。** 後端送的是
+      // `remote_host_keychain_unavailable: <底層原因>`。這種情況重貼金鑰沒有
+      // 任何用處——金鑰其實好好的，是金鑰圈打不開，所以不要展開手動欄位叫
+      // 使用者重輸入。
+      if (msg.includes(ERR_KEYCHAIN_UNAVAILABLE)) {
+        setError(t.connect_keychain_unavailable);
+        return;
+      }
+      if (msg.includes(ERR_SAVED_KEY_MISSING)) {
+        // 金鑰不在這台電腦上：把位址帶進手動欄位，使用者只要重貼金鑰。
+        // 絕對不能靜默改用短碼模式重試——那會得到一個指向短碼的錯誤訊息。
+        setManualOpen(true);
+        setAddress(addressLabel);
+        setKey("");
+        setError(t.connect_saved_no_key);
+        return;
+      }
       // 連不上要說原因，不要靜默關閉——使用者才知道下一步該做什麼。
-      setError(t.connect_failed.replace("{error}", String(e)));
+      setError(t.connect_failed.replace("{error}", msg));
     }
   }
 
@@ -73,7 +166,9 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
         return;
       }
       setBusy(true);
-      await connectTo(parsed.host, parsed.port, address);
+      await connectTo(parsed.host, parsed.port, address, {
+        typedKey: key.trim() === "" ? undefined : key.trim(),
+      });
       setBusy(false);
       return;
     }
@@ -95,10 +190,143 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
     }
   }
 
+  async function refresh() {
+    setHosts(await remoteHostsList());
+  }
+
+  /**
+   * 點地址簿裡一筆已存主機時的連線入口。
+   *
+   * **`busy` 一定要包住這裡。** 手動送出跟 mDNS 那兩條路都有
+   * `setBusy(true)/setBusy(false)`，這條路原本沒有——使用者可以在手動連線
+   * 送出、結果還沒回來的空檔，再點一筆已存主機，兩個 `shareViewerConnect`
+   * 同時飛出去。`RemoteHostList` 的 `disabled` 就是靠這個 `busy` 狀態擋的。
+   */
+  async function connectSavedHost(h: RemoteHostInfo) {
+    setBusy(true);
+    try {
+      await connectTo(h.host, h.port, `${h.host}:${h.port}`, { savedHostId: h.id });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeHost(h: RemoteHostInfo) {
+    await remoteHostsRemove(h.id);
+    setConfirmDelete(null);
+    await refresh();
+  }
+
+  async function editHost(h: RemoteHostInfo) {
+    // 編輯前先重抓一次。`ConfigStore::update_remote_host` 對已經不存在的 id
+    // 是靜默 no-op（跟 vcs.rs 原本的行為一樣）——如果直接拿畫面上可能已經在
+    // 別台裝置被刪掉的那一筆送出，`remote_hosts_update` 會回 Ok 但設定檔完全
+    // 沒變，金鑰卻已經被寫進 keychain，留下一個永遠用不到的孤兒條目。
+    const latest = await remoteHostsList();
+    setHosts(latest);
+    const current = latest.find((x) => x.id === h.id);
+    if (!current) {
+      setError(t.connect_saved_missing);
+      return;
+    }
+    // 編輯＝把這一筆帶進手動欄位，金鑰留空（前端拿不到已存的金鑰）。
+    // 使用者只改別名時送空 secret，後端會當成「不改金鑰」。
+    setManualOpen(true);
+    setAddress(`${current.host}:${current.port}`);
+    setKey("");
+    setEditingId(current.id);
+  }
+
+  async function confirmSave() {
+    if (!pendingSave) return;
+    const p = pendingSave;
+
+    // **不要直接相信 editingId。** 它的正確性原本依賴「每一條會結束或放棄
+    // 這次操作的路徑都記得把它清掉」——這個假設已經從三個不同的出口被戳破
+    // 過（連線成功直接跳過存檔、點清單裡的另一筆、金鑰遺失的錯誤分支），
+    // 每補一個洞就冒出下一個，因為「所有路徑都要記得清狀態」本來就沒辦法
+    // 靠寫程式的紀律保證。改成在真正要用到它的這一刻驗證：只有當那個 id
+    // 指的條目現在確實還在、而且它的位址就是這次連上的位址時，才當成「更新
+    // 這一筆」；其他情況一律當新增，這樣就算 editingId 是殘留的舊值，最多
+    // 只是多存一筆，不會覆蓋掉不相干的既有條目。
+    let target: RemoteHostInfo | undefined;
+    if (editingId) {
+      let latest: RemoteHostInfo[];
+      try {
+        latest = await remoteHostsList();
+      } catch (e) {
+        // 查不到清單就不能用「當成新增」打賭——那正是這次重新設計想避免的
+        // 「不確定的時候安靜生出一筆重複條目」，只是換了個方向出現。留著
+        // pendingSave，使用者可以再按一次「儲存」重試；「不用」仍然可以
+        // 跳過並開分頁（連線本身已經是成立的，不受這裡影響）。
+        console.error(e);
+        setError(t.connect_save_verify_failed);
+        return;
+      }
+      target = latest.find((h) => h.id === editingId && h.host === p.host && h.port === p.port);
+    }
+
+    if (target) {
+      await remoteHostsUpdate({
+        id: target.id,
+        name: saveName || p.label,
+        host: p.host,
+        port: p.port,
+        secret: p.secret,
+      });
+    } else {
+      await remoteHostsAdd({
+        name: saveName || p.label,
+        host: p.host,
+        port: p.port,
+        secret: p.secret,
+      });
+    }
+    await refresh();
+    finishPending();
+  }
+
+  function finishPending() {
+    if (!pendingSave) return;
+    const p = pendingSave;
+    setPendingSave(null);
+    setSaveName("");
+    setEditingId(null);
+    onConnected(p.connId, p.sas, p.label);
+  }
+
   return (
     <div className="aiterm-connect__backdrop">
       <div className="aiterm-connect" role="dialog" aria-modal="true">
         <div className="aiterm-connect__title">{t.connect_title}</div>
+
+        <RemoteHostList
+          hosts={hosts}
+          disabled={busy}
+          onConnect={(h) => void connectSavedHost(h)}
+          onEdit={editHost}
+          onDelete={setConfirmDelete}
+        />
+
+        {confirmDelete && (
+          <div className="aiterm-connect__confirm">
+            <div>{t.connect_saved_delete_confirm.replace("{name}", confirmDelete.name)}</div>
+            <div className="aiterm-connect__actions">
+              <button
+                className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                onClick={() => setConfirmDelete(null)}
+              >
+                {t.connect_cancel}
+              </button>
+              <button
+                className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
+                onClick={() => void removeHost(confirmDelete)}
+              >
+                {t.connect_saved_delete}
+              </button>
+            </div>
+          </div>
+        )}
 
         <label className="aiterm-connect__label" htmlFor="aiterm-connect-code">
           {t.connect_code_label}
@@ -165,13 +393,43 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
 
         {error && <div className="aiterm-connect__error">{error}</div>}
 
+        {pendingSave && (
+          <div className="aiterm-connect__save">
+            <div>{t.connect_save_prompt}</div>
+            <label className="aiterm-connect__label" htmlFor="aiterm-connect-savename">
+              {t.connect_save_name_label}
+            </label>
+            <input
+              id="aiterm-connect-savename"
+              className="aiterm-connect__text"
+              type="text"
+              value={saveName}
+              onChange={(e) => setSaveName(e.target.value)}
+            />
+            <div className="aiterm-connect__actions">
+              <button
+                className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                onClick={finishPending}
+              >
+                {t.connect_save_skip}
+              </button>
+              <button
+                className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
+                onClick={() => void confirmSave()}
+              >
+                {t.connect_save_confirm}
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="aiterm-connect__actions">
           <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={onCancel}>
             {t.connect_cancel}
           </button>
           <button
             className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
-            disabled={busy || (!keyMode && code.length !== 6)}
+            disabled={busy || (!keyMode && !editMode && code.length !== 6)}
             onClick={() => void submit()}
           >
             {t.connect_submit}

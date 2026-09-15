@@ -63,6 +63,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub vcs_connections: Vec<VcsConnection>,
 
+    /// Saved remote terminal hosts (keys stored separately in Keychain).
+    #[serde(default)]
+    pub remote_hosts: Vec<RemoteHost>,
+
     /// Saved mail accounts (passwords stored separately in Keychain).
     #[serde(default)]
     pub mail_accounts: Vec<MailAccountConfig>,
@@ -304,6 +308,7 @@ impl Default for AppConfig {
             default_tab: DefaultTab::default(),
             telegram_chat_id: None,
             vcs_connections: vec![],
+            remote_hosts: vec![],
             mail_accounts: vec![],
             enterprise_server_url: None,
             enterprise_device_id: None,
@@ -527,6 +532,17 @@ pub struct VcsConnection {
     pub write_mode: VcsWriteMode,
 }
 
+/// A saved remote terminal host. The pre-shared key lives in the OS keychain
+/// under `remote:{id}`, never in this file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteHost {
+    pub id: String,
+    /// 使用者取的別名，顯示在清單上。
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+}
+
 /// A saved mail account (IMAP/SMTP). Password lives in Keychain under "mail:{id}".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MailAccountConfig {
@@ -707,6 +723,7 @@ mod tests {
             default_tab: DefaultTab::default(),
             telegram_chat_id: None,
             vcs_connections: vec![],
+            remote_hosts: vec![],
             ..AppConfig::default()
         };
         let toml_str = toml::to_string_pretty(&cfg).unwrap();
@@ -836,6 +853,51 @@ mod tests {
     fn app_config_has_vcs_connections_default() {
         let cfg = AppConfig::default();
         assert!(cfg.vcs_connections.is_empty());
+    }
+
+    #[test]
+    fn app_config_has_remote_hosts_default() {
+        let cfg = AppConfig::default();
+        assert!(cfg.remote_hosts.is_empty());
+    }
+
+    #[test]
+    fn a_config_without_remote_hosts_still_loads() {
+        // 舊版設定檔沒有這個欄位。少了 #[serde(default)] 的話整份設定會解析
+        // 失敗，使用者的所有設定一次全部消失——症狀跟「地址簿」完全無關。
+        //
+        // toml 會把空的 Vec 寫成 `remote_hosts = []`（vcs_connections 也一樣），
+        // 所以要先把那一行拿掉，才是真正「舊設定檔」的樣子。
+        let serialized = toml::to_string_pretty(&AppConfig::default()).unwrap();
+        let without: String = serialized
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("remote_hosts"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !without.contains("remote_hosts"),
+            "沒把欄位拿乾淨的話，這個測試證明不了任何事"
+        );
+        let cfg: AppConfig = toml::from_str(&without).expect("舊設定檔應該仍然載入得了");
+        assert!(cfg.remote_hosts.is_empty());
+    }
+
+    #[test]
+    fn remote_host_roundtrips_toml() {
+        // 走完整的 AppConfig 而不是包一層 struct：真正會壞的是 AppConfig 裡
+        // 好幾個 Vec<Struct> 相鄰時的 array-of-tables 排序，那只有這樣才測得到。
+        let mut cfg = AppConfig::default();
+        cfg.remote_hosts.push(RemoteHost {
+            id: "abc".into(),
+            name: "辦公室 NAS".into(),
+            host: "192.168.1.50".into(),
+            port: 8022,
+        });
+        let s = toml::to_string_pretty(&cfg).unwrap();
+        let back: AppConfig = toml::from_str(&s).unwrap();
+        assert_eq!(back.remote_hosts.len(), 1);
+        assert_eq!(back.remote_hosts[0].name, "辦公室 NAS");
+        assert_eq!(back.remote_hosts[0].port, 8022);
     }
 
     #[test]

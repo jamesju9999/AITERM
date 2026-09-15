@@ -96,6 +96,29 @@ impl ConfigStore {
         })
     }
 
+    /// Add a new remote terminal host.
+    pub fn add_remote_host(&self, host: RemoteHost) -> anyhow::Result<()> {
+        self.update(|cfg| {
+            cfg.remote_hosts.push(host);
+        })
+    }
+
+    /// Update an existing remote host by id. Silently no-ops if not found.
+    pub fn update_remote_host(&self, host: RemoteHost) -> anyhow::Result<()> {
+        self.update(|cfg| {
+            if let Some(existing) = cfg.remote_hosts.iter_mut().find(|h| h.id == host.id) {
+                *existing = host;
+            }
+        })
+    }
+
+    /// Remove a remote host by id.
+    pub fn remove_remote_host(&self, id: &str) -> anyhow::Result<()> {
+        self.update(|cfg| {
+            cfg.remote_hosts.retain(|h| h.id != id);
+        })
+    }
+
     /// Add a new mail account config.
     pub fn add_mail_account(&self, account: MailAccountConfig) -> anyhow::Result<()> {
         self.update(|cfg| {
