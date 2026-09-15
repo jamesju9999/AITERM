@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RemoteHostList } from "./RemoteHostList";
 import { LocaleProvider } from "../../contexts/LocaleContext";
@@ -17,6 +17,7 @@ function renderList(props: Partial<Parameters<typeof RemoteHostList>[0]> = {}) {
         onConnect={props.onConnect ?? vi.fn()}
         onEdit={props.onEdit ?? vi.fn()}
         onDelete={props.onDelete ?? vi.fn()}
+        disabled={props.disabled}
       />
     </LocaleProvider>,
   );
@@ -64,6 +65,25 @@ describe("RemoteHostList", () => {
     await userEvent.click(editButton);
     expect(onEdit).toHaveBeenCalledTimes(1);
     expect(onEdit.mock.calls[0][0].id).toBe("a");
+    expect(onConnect).not.toHaveBeenCalled();
+  });
+
+  it("disabled 時整排都不能按，點了也不會觸發 onConnect", async () => {
+    // 手動連線送出後、結果還沒回來之前，使用者理論上可以再點一筆已存主機，
+    // 兩個 shareViewerConnect 同時飛出去——跟 ConnectDialog 送出鈕的
+    // disabled={busy || ...} 是同一條規則，這裡也要守住。
+    const onConnect = vi.fn();
+    renderList({ onConnect, disabled: true });
+    const rows = screen.getAllByRole("listitem");
+    for (const row of rows) {
+      for (const button of within(row).getAllByRole("button")) {
+        expect(button).toBeDisabled();
+      }
+    }
+    // 用 fireEvent 而不是 userEvent.click：userEvent 會自己檢查
+    // pointer-events/disabled 而直接跳過，測不出「就算真的送出點擊事件，
+    // React 也不會呼叫 handler」這件事。
+    fireEvent.click(screen.getByText("辦公室"));
     expect(onConnect).not.toHaveBeenCalled();
   });
 });

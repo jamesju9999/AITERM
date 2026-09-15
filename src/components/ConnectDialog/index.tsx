@@ -123,6 +123,12 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
         });
         return;
       }
+      // **不能省略。** 這條是 `finishPending` 以外唯一一個會走到
+      // `onConnected` 的出口（短碼模式、或點地址簿裡的另一筆）。如果使用者
+      // 先按了「編輯」（`editingId` 被設成某筆的 id），還沒送出手動表單就
+      // 改點清單裡別的已存主機連線，這裡如果不清掉，`editingId` 會一路
+      // 殘留到下一次完全無關的手動新增，把它誤當成更新，覆蓋掉那一筆。
+      setEditingId(null);
       onConnected(connId, sas, addressLabel);
     } catch (e) {
       const msg = String(e);
@@ -252,6 +258,7 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
 
         <RemoteHostList
           hosts={hosts}
+          disabled={busy}
           onConnect={(h) =>
             void connectTo(h.host, h.port, `${h.host}:${h.port}`, { savedHostId: h.id })
           }

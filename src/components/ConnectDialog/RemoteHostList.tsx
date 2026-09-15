@@ -6,6 +6,10 @@ interface Props {
   onConnect: (host: RemoteHostInfo) => void;
   onEdit: (host: RemoteHostInfo) => void;
   onDelete: (host: RemoteHostInfo) => void;
+  /** 有連線正在進行中時整排都要停用——不然使用者可以在手動連線送出後、
+   *  結果還沒回來之前，再點一筆已存主機，兩個 `shareViewerConnect` 同時飛
+   *  出去。跟 `ConnectDialog` 送出鈕的 `disabled={busy || ...}` 是同一條規則。 */
+  disabled?: boolean;
 }
 
 /**
@@ -16,7 +20,7 @@ interface Props {
  *
  * 沒有任何條目時整塊不渲染——空清單的標題對沒用過這個功能的人只是雜訊。
  */
-export function RemoteHostList({ hosts, onConnect, onEdit, onDelete }: Props) {
+export function RemoteHostList({ hosts, onConnect, onEdit, onDelete, disabled = false }: Props) {
   const { t } = useLocale();
   if (hosts.length === 0) return null;
   return (
@@ -30,6 +34,7 @@ export function RemoteHostList({ hosts, onConnect, onEdit, onDelete }: Props) {
               className="aiterm-connect__saved-main"
               onClick={() => onConnect(h)}
               title={t.connect_saved_connect}
+              disabled={disabled}
             >
               <span className="aiterm-connect__saved-name">{h.name}</span>
               <span className="aiterm-connect__saved-addr">{`${h.host}:${h.port}`}</span>
@@ -44,6 +49,7 @@ export function RemoteHostList({ hosts, onConnect, onEdit, onDelete }: Props) {
               type="button"
               className="aiterm-connect__saved-action"
               onClick={() => onEdit(h)}
+              disabled={disabled}
             >
               {t.connect_saved_edit}
             </button>
@@ -51,6 +57,7 @@ export function RemoteHostList({ hosts, onConnect, onEdit, onDelete }: Props) {
               type="button"
               className="aiterm-connect__saved-action"
               onClick={() => onDelete(h)}
+              disabled={disabled}
             >
               {t.connect_saved_delete}
             </button>

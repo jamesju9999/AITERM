@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../ipc/shareViewer", () => ({
@@ -297,6 +297,66 @@ describe("ConnectDialog 地址簿", () => {
     const buttons = screen.getAllByRole("button", { name: /^刪除$|^Delete$/ });
     await userEvent.click(buttons[buttons.length - 1]);
     expect(remoteHostsRemove).toHaveBeenCalledWith("a");
+  });
+
+  it("刪除確認列按「取消」不會刪除，確認列也會消失", async () => {
+    // 有「按確認才真的刪」的測試，沒有反面（後悔、按取消）的測試——補上。
+    render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(await screen.findByRole("button", { name: /^刪除$|^Delete$/ }));
+    await screen.findByText(/確定要從地址簿刪除/);
+    // 「取消」這個字同時出現在確認列跟對話框最底下的取消鈕——確認列的那顆
+    // 在 DOM 裡先出現（JSX 順序：地址簿清單／確認列 在上，主要 actions 列
+    // 在最下面），所以取第一個。
+    const cancelButtons = screen.getAllByRole("button", { name: /^取消$|^Cancel$/ });
+    await userEvent.click(cancelButtons[0]);
+    expect(remoteHostsRemove).not.toHaveBeenCalled();
+    expect(screen.queryByText(/確定要從地址簿刪除/)).toBeNull();
+  });
+
+  it("編輯 A 但還沒送出時改點清單裡的另一筆 B：editingId 不會殘留到下一次新增", async () => {
+    // 這是「不用」洩漏測試沒蓋到的第二個門。`connectTo` 只有兩個出口會回到
+    // `onConnected`：`finishPending`（已經會清 editingId）跟「沒有走
+    // pendingSave 那條、直接呼叫 onConnected」那條（點地址簿裡任何一筆、或
+    // 短碼模式）。後者原本沒有清 editingId——按了「編輯」進入 A 的編輯模式、
+    // 還沒送出手動表單，改點清單裡完全不相干的 B 並連線成功，B 這條路根本
+    // 不理會 editingId，卻也沒有把它歸零，於是它會一路殘留到下一次全新的
+    // 手動新增，把新增誤當成對 A 的更新。
+    vi.mocked(remoteHostsList).mockResolvedValue([
+      { id: "a", name: "辦公室", host: "192.168.1.50", port: 8022, has_key: true },
+      { id: "b", name: "雲端", host: "10.0.0.9", port: 9000, has_key: true },
+    ]);
+    render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+
+    // 第一段：按「編輯」進入 A 的編輯模式，但不送出手動表單。
+    const rows = await screen.findAllByRole("listitem");
+    await userEvent.click(within(rows[0]).getByRole("button", { name: /^編輯$/ }));
+    expect(screen.getByLabelText(/位址|Address/)).toHaveDisplayValue("192.168.1.50:8022");
+
+    // 第二段：改點清單裡完全不同的 B——這一列全程可互動，直接連線成功，
+    // 不經過 pendingSave/finishPending。
+    await userEvent.click(screen.getByText("雲端"));
+    expect(shareViewerConnect).toHaveBeenLastCalledWith(
+      expect.objectContaining({ savedHostId: "b" }),
+    );
+
+    // 第三段：跟前兩段完全無關的全新手動連線並存檔。
+    const addressField = screen.getByLabelText(/位址|Address/);
+    await userEvent.clear(addressField);
+    await userEvent.type(addressField, "1.2.3.4:5000");
+    const keyField = screen.getByLabelText(/金鑰|Key/);
+    await userEvent.clear(keyField);
+    await userEvent.type(keyField, "cafebabe");
+    await userEvent.click(screen.getByRole("button", { name: /^連線$/ }));
+    await screen.findByText(/存進地址簿/);
+    await userEvent.click(screen.getByRole("button", { name: /^儲存$/ }));
+
+    expect(remoteHostsAdd).toHaveBeenCalledWith({
+      name: "1.2.3.4:5000",
+      host: "1.2.3.4",
+      port: 5000,
+      secret: "cafebabe",
+    });
+    expect(remoteHostsUpdate).not.toHaveBeenCalled();
   });
 
   it("短碼模式連上之後不問儲存", async () => {
