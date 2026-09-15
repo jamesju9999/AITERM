@@ -11,6 +11,7 @@ import {
   type RemoteHostInfo,
 } from "../../ipc/remoteHosts";
 import { RemoteHostList } from "./RemoteHostList";
+import { SaveHostPrompt } from "./SaveHostPrompt";
 import { useLocale } from "../../contexts/LocaleContext";
 import "./index.css";
 
@@ -56,7 +57,6 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
     sas: string;
     label: string;
   } | null>(null);
-  const [saveName, setSaveName] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -235,9 +235,11 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
     setEditingId(current.id);
   }
 
-  async function confirmSave() {
+  /** `typedName` 是 `SaveHostPrompt` 輸入框的原始內容，空字串時退回位址。 */
+  async function confirmSave(typedName: string) {
     if (!pendingSave) return;
     const p = pendingSave;
+    const saveName = typedName || p.label;
 
     // **不要直接相信 editingId。** 它的正確性原本依賴「每一條會結束或放棄
     // 這次操作的路徑都記得把它清掉」——這個假設已經從三個不同的出口被戳破
@@ -267,14 +269,14 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
     if (target) {
       await remoteHostsUpdate({
         id: target.id,
-        name: saveName || p.label,
+        name: saveName,
         host: p.host,
         port: p.port,
         secret: p.secret,
       });
     } else {
       await remoteHostsAdd({
-        name: saveName || p.label,
+        name: saveName,
         host: p.host,
         port: p.port,
         secret: p.secret,
@@ -288,7 +290,6 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
     if (!pendingSave) return;
     const p = pendingSave;
     setPendingSave(null);
-    setSaveName("");
     setEditingId(null);
     onConnected(p.connId, p.sas, p.label);
   }
@@ -372,33 +373,7 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
         {error && <div className="aiterm-connect__error">{error}</div>}
 
         {pendingSave && (
-          <div className="aiterm-connect__save">
-            <div>{t.connect_save_prompt}</div>
-            <label className="aiterm-connect__label" htmlFor="aiterm-connect-savename">
-              {t.connect_save_name_label}
-            </label>
-            <input
-              id="aiterm-connect-savename"
-              className="aiterm-connect__text"
-              type="text"
-              value={saveName}
-              onChange={(e) => setSaveName(e.target.value)}
-            />
-            <div className="aiterm-connect__actions">
-              <button
-                className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
-                onClick={finishPending}
-              >
-                {t.connect_save_skip}
-              </button>
-              <button
-                className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
-                onClick={() => void confirmSave()}
-              >
-                {t.connect_save_confirm}
-              </button>
-            </div>
-          </div>
+          <SaveHostPrompt onSave={(n) => void confirmSave(n)} onSkip={finishPending} />
         )}
 
         <div className="aiterm-connect__actions">
