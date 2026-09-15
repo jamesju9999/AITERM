@@ -2669,6 +2669,103 @@ const enRaw = {
     loop_timing_compact_desc: "Only major blocks show timing (Iteration, Agent start/done, Verifier)",
     loop_timing_full_label: "Full",
     loop_timing_full_desc: "Every row shows a start timestamp, including tool calls",
+    // AiPanel
+    ai_resize_tip: "Drag to resize",
+    ai_panel_title: "AI Chat",
+    ai_panel_provider_tip: "Switch Provider",
+    ai_panel_no_provider: "(no provider)",
+    ai_history_btn_tip: "Chat History",
+    ai_clear_chat_tip: "Clear current chat",
+    ai_new_chat_btn: "🗑 New Chat",
+    ai_close_panel_tip: "Close Panel (Esc)",
+    ai_history_panel_title: "Chat History",
+    ai_history_empty: "No history yet",
+    ai_delete_session_tip: "Delete this chat",
+    ai_agent_step_label: (step: number, max: string) => `Agent running… Step ${step}${max}`,
+    ai_stop_btn: "■ Stop",
+    ai_agent_toggle_off: "Disable Agent mode",
+    ai_agent_toggle_on: "Enable Agent mode (AI runs commands automatically and iterates)",
+    ai_mcp_on: "MCP On",
+    ai_mcp_off: "MCP Off",
+    ai_placeholder_agent_running: "Agent running…",
+    ai_placeholder_agent_goal: "Enter a goal, Agent will run commands automatically… (Enter)",
+    ai_placeholder_waiting: "Waiting for AI response...",
+    ai_placeholder_default: "Type a message, Enter to send...",
+    ai_send_btn: "Send",
+    ai_agent_max_steps_msg: (steps: number) => `(Agent reached the maximum of ${steps} steps and stopped)`,
+    ai_cmd_done_msg: (cmd: string, exitCode: number) => `Command \`${cmd}\` finished (exit code ${exitCode}).\nOutput:\n`,
+    // TerminalView
+    terminal_status_init: "Initializing…",
+    terminal_status_connected: (id: string) => `Connected (${id}…)`,
+    terminal_toggle_sidebar_tip: "Toggle Sidebar (Ctrl+B)",
+    terminal_switch_provider_tip: "Switch Provider (Ctrl+Shift+P)",
+    terminal_add_provider_tip: "Go to Settings to add an AI provider",
+    terminal_remote_btn: "📱 Remote",
+    terminal_ask_ai_btn: "✨ Ask AI",
+    terminal_search_placeholder: "Search...",
+    terminal_search_prev: "Previous",
+    terminal_search_next: "Next",
+    terminal_search_close: "Close",
+    terminal_bookmark_tip: (shortcut: string) => `Save to Bookmarks (open with ${shortcut})`,
+    terminal_bookmark_btn: "⭐ Bookmark",
+    terminal_bookmark_saved: "⭐ Saved",
+    terminal_copy_btn: "📋 Copy",
+    terminal_copy_done: "📋 Copied",
+    // EnterprisePage
+    enterprise_title: "Enterprise",
+    enterprise_desc: "Connect this device to an enterprise management server to receive tasks and policy updates.",
+    enterprise_registered: "✓ Registered",
+    enterprise_server_label: "Server:",
+    enterprise_device_id_label: "Device ID:",
+    enterprise_policy_version_label: "Policy Version:",
+    enterprise_execution_label: "Execution Mode:",
+    enterprise_managed: "(Set by administrator)",
+    enterprise_server_url_label: "Management Server URL",
+    enterprise_device_name_label: "Device Name",
+    enterprise_device_type_label: "Device Type",
+    enterprise_device_interactive: "Interactive",
+    enterprise_device_headless: "Headless Worker",
+    enterprise_role_label: "Role",
+    enterprise_role_dev: "Developer",
+    enterprise_role_dba: "DBA",
+    enterprise_role_ops: "Ops",
+    enterprise_role_qa: "QA",
+    enterprise_registering: "Registering…",
+    enterprise_reregister: "Re-register",
+    enterprise_register: "Register Device",
+    enterprise_register_success: (id: string) => `✓ Device registered successfully. Device ID: ${id}`,
+    enterprise_service_title: "System Service",
+    enterprise_service_desc: "Install AITerm as a background system service so it auto-starts on boot.",
+    enterprise_preview_config: "Preview Config",
+    enterprise_installing: "Installing…",
+    enterprise_install_service: "Install Service",
+    enterprise_install_success: "✓ Service installed successfully",
+    // VcsConnectionsPage
+    vcs_write_readonly: "Read Only",
+    vcs_write_guarded: "Guarded",
+    vcs_write_fullauto: "Full Auto",
+    vcs_page_title: "VCS Connections",
+    vcs_add_conn: "+ Add Connection",
+    vcs_empty_state: "No VCS connections yet. Click \"+ Add Connection\" to get started.",
+    vcs_token_set: "· 🔑 Token set",
+    vcs_edit_btn: "Edit",
+    vcs_delete_confirm_btn: "Delete?",
+    vcs_delete_btn: "Delete",
+    vcs_form_title_edit: "Edit Connection",
+    vcs_form_title_add: "Add Connection",
+    vcs_form_name: "Name",
+    vcs_form_type: "Type",
+    vcs_form_username: "Username",
+    vcs_form_password_hint: "Leave blank to keep unchanged",
+    vcs_form_write_mode: "Write Mode",
+    vcs_form_testing: "Testing...",
+    vcs_form_test: "Test Connection",
+    vcs_form_saving: "Saving...",
+    vcs_form_save: "Save",
+    vcs_github_url_label: "GitHub Repo URL",
+    vcs_svn_url_label: "SVN Repo URL",
+    vcs_github_token_label: "GitHub Token",
+    vcs_svn_password_label: "Password",
 
     // Onboarding
     ob_welcome_title: "Welcome to AITerm",
@@ -3059,9 +3156,25 @@ const enRaw = {
 export const translations = {
   "zh-TW": zhTW,
   "en": {
+    // **這個 fallback 會讓缺字串變成「英文介面顯示中文」而不是報錯。**
+    // 它讓新增字串時不必兩邊同時到位，代價是漏掉的那一邊完全沒有訊號——
+    // 曾經累積到 93 個。守門的是 i18n.test.ts 的 key 對齊測試，不是型別系統。
     ...zhTW,
     ...enRaw,
   },
+} as const;
+
+/**
+ * 兩個語系的**原始**字典，只給測試比對 key 用。
+ *
+ * **絕對不要拿 `translations.en` 來比對 key。** 它是 `{...zhTW, ...enRaw}`，
+ * key 集合永遠等於 `zhTW`，所以任何「兩邊 key 一致嗎」的斷言都必然通過。
+ * `i18n.remoteTerminal.test.ts` 以前就是那樣寫的——那條測試從落地那天起
+ * 就不可能失敗，而它的註解還寫著「語系漂移是這個 repo 記過的坑」。
+ */
+export const localeSources = {
+  "zh-TW": zhTW,
+  en: enRaw,
 } as const;
 
 export type TranslationKey = keyof typeof translations["zh-TW"];
