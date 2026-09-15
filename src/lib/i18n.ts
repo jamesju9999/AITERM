@@ -1027,6 +1027,7 @@ const zhTW = {
     connect_saved_delete: "刪除",
     connect_saved_delete_confirm: "確定要從地址簿刪除「{name}」嗎？金鑰也會一併刪除。",
     connect_saved_no_key: "這台的金鑰不在這台電腦上，請重新輸入。",
+    connect_saved_missing: "這一筆在地址簿裡已經被移除，清單已更新。",
     connect_keychain_unavailable: "讀不到系統金鑰圈，可能是被鎖住或權限不足。解鎖後再試一次，不需要重新輸入金鑰。",
     connect_save_prompt: "已連上。要把這台存進地址簿嗎？",
     connect_save_name_label: "別名",
@@ -2611,6 +2612,8 @@ const enRaw = {
     connect_saved_delete_confirm:
       "Remove \"{name}\" from the address book? Its key will be deleted too.",
     connect_saved_no_key: "This host's key is not on this computer. Enter it again.",
+    connect_saved_missing:
+      "This entry was already removed from the address book. The list has been refreshed.",
     connect_keychain_unavailable:
       "Could not read the system keychain — it may be locked or permission was denied. Unlock it and try again; you do not need to re-enter the key.",
     connect_save_prompt: "Connected. Save this host to the address book?",
