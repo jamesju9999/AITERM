@@ -1122,7 +1122,11 @@ git commit -m "feat(remote): 地址簿清單元件"
 
 ```tsx
 vi.mock("../../ipc/remoteHosts", () => ({
+  // **兩個常數都要列。** vi.mock 的 factory 會整個取代模組，漏掉的那個在測試裡
+  // 會是 undefined，`msg.includes(undefined)` 永遠不成立——那條錯誤分支在測試
+  // 環境裡等於不存在，而且不會有任何錯誤訊息。
   ERR_SAVED_KEY_MISSING: "remote_host_key_missing",
+  ERR_KEYCHAIN_UNAVAILABLE: "remote_host_keychain_unavailable",
   remoteHostsList: vi.fn(async () => []),
   remoteHostsAdd: vi.fn(async () => "new-id"),
   remoteHostsUpdate: vi.fn(async () => undefined),
@@ -1188,6 +1192,33 @@ describe("ConnectDialog 地址簿", () => {
     await userEvent.click(await screen.findByRole("button", { name: /^不用$|Not now/ }));
     expect(remoteHostsAdd).not.toHaveBeenCalled();
     expect(onConnected).toHaveBeenCalledWith("c1", "1234", "10.0.0.9:9000");
+  });
+
+  it("金鑰不在這台電腦上時，展開手動欄位並帶入位址讓使用者重貼", async () => {
+    // 這條路徑存在的理由：不處理的話後端的錯誤會原樣顯示，而且使用者不知道
+    // 要做什麼。帶入位址是為了讓他只需要貼金鑰那一欄。
+    vi.mocked(shareViewerConnect).mockRejectedValueOnce(
+      new Error("remote_host_key_missing"),
+    );
+    render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(await screen.findByText("辦公室"));
+    expect(await screen.findByDisplayValue("192.168.1.50:8022")).toBeInTheDocument();
+    expect(screen.getByText(/金鑰不在這台電腦上|not on this computer/)).toBeInTheDocument();
+  });
+
+  it("keychain 讀不到時不叫使用者重貼金鑰", async () => {
+    // **跟上一條的處置相反。** 金鑰是好的，是金鑰圈打不開，重貼幾次都沒用，
+    // 所以不該展開手動欄位。後端送的形狀是 `<常數>: <底層原因>`，所以比對
+    // 必須是 includes/startsWith 而不是相等。
+    vi.mocked(shareViewerConnect).mockRejectedValueOnce(
+      new Error("remote_host_keychain_unavailable: keychain locked"),
+    );
+    render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(await screen.findByText("辦公室"));
+    expect(
+      await screen.findByText(/讀不到系統金鑰圈|Could not read the system keychain/),
+    ).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("192.168.1.50:8022")).toBeNull();
   });
 
   it("刪除要先確認，按確認才真的刪", async () => {
