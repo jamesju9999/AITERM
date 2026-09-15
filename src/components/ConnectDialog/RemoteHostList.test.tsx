@@ -86,4 +86,48 @@ describe("RemoteHostList", () => {
     fireEvent.click(screen.getByText("辦公室"));
     expect(onConnect).not.toHaveBeenCalled();
   });
+
+  // 刪除確認是這個元件自己的契約，不再是父元件的責任——ConnectDialog 那邊的
+  // 整合測試照樣涵蓋接線，這裡鎖的是「onDelete 只在確認後才會被呼叫」本身。
+  describe("刪除確認", () => {
+    it("按刪除不會立刻呼叫 onDelete，要按確認列的刪除才會", async () => {
+      const onDelete = vi.fn();
+      renderList({ onDelete });
+      const rows = screen.getAllByRole("listitem");
+      await userEvent.click(within(rows[0]).getByRole("button", { name: /^刪除$/ }));
+      expect(onDelete).not.toHaveBeenCalled();
+
+      const confirm = screen.getByText(/確定要從地址簿刪除「辦公室」/).parentElement!;
+      await userEvent.click(within(confirm).getByRole("button", { name: /^刪除$/ }));
+      expect(onDelete).toHaveBeenCalledTimes(1);
+      expect(onDelete.mock.calls[0][0].id).toBe("a");
+    });
+
+    it("按取消收起確認列，而且不呼叫 onDelete", async () => {
+      const onDelete = vi.fn();
+      renderList({ onDelete });
+      const rows = screen.getAllByRole("listitem");
+      await userEvent.click(within(rows[1]).getByRole("button", { name: /^刪除$/ }));
+      const confirm = screen.getByText(/確定要從地址簿刪除「雲端」/).parentElement!;
+      await userEvent.click(within(confirm).getByRole("button", { name: /^取消$/ }));
+      expect(onDelete).not.toHaveBeenCalled();
+      expect(screen.queryByText(/確定要從地址簿刪除/)).toBeNull();
+    });
+
+    it("onDelete 完成之後才收起確認列", async () => {
+      // 搬進來之前父元件是 `await remoteHostsRemove(); setConfirmDelete(null)`，
+      // 這裡保持同一個時序：刪除還在進行時確認列仍在，不會提早消失讓人以為
+      // 已經刪好了。
+      let finish!: () => void;
+      const onDelete = vi.fn(() => new Promise<void>((r) => { finish = r; }));
+      renderList({ onDelete });
+      await userEvent.click(within(screen.getAllByRole("listitem")[0]).getByRole("button", { name: /^刪除$/ }));
+      const confirm = screen.getByText(/確定要從地址簿刪除/).parentElement!;
+      await userEvent.click(within(confirm).getByRole("button", { name: /^刪除$/ }));
+      expect(screen.queryByText(/確定要從地址簿刪除/)).not.toBeNull();
+      finish();
+      await screen.findByText("辦公室"); // 讓 promise 的後續更新落地
+      await vi.waitFor(() => expect(screen.queryByText(/確定要從地址簿刪除/)).toBeNull());
+    });
+  });
 });
