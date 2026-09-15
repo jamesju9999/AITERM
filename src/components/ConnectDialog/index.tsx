@@ -58,8 +58,6 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
   } | null>(null);
   const [saveName, setSaveName] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
-  /** 等待確認刪除的那一筆。刪除會連 keychain 的金鑰一起刪掉，不能一按就生效。 */
-  const [confirmDelete, setConfirmDelete] = useState<RemoteHostInfo | null>(null);
 
   useEffect(() => {
     // 地址簿只是連線對話框的一個輔助入口，不是使用者非用不可的路徑——手動
@@ -211,9 +209,9 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
     }
   }
 
+  /** 使用者已經在 `RemoteHostList` 的確認列按過確認才會走到這裡。 */
   async function removeHost(h: RemoteHostInfo) {
     await remoteHostsRemove(h.id);
-    setConfirmDelete(null);
     await refresh();
   }
 
@@ -305,28 +303,8 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
           disabled={busy}
           onConnect={(h) => void connectSavedHost(h)}
           onEdit={editHost}
-          onDelete={setConfirmDelete}
+          onDelete={removeHost}
         />
-
-        {confirmDelete && (
-          <div className="aiterm-connect__confirm">
-            <div>{t.connect_saved_delete_confirm.replace("{name}", confirmDelete.name)}</div>
-            <div className="aiterm-connect__actions">
-              <button
-                className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
-                onClick={() => setConfirmDelete(null)}
-              >
-                {t.connect_cancel}
-              </button>
-              <button
-                className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
-                onClick={() => void removeHost(confirmDelete)}
-              >
-                {t.connect_saved_delete}
-              </button>
-            </div>
-          </div>
-        )}
 
         <label className="aiterm-connect__label" htmlFor="aiterm-connect-code">
           {t.connect_code_label}
