@@ -16,6 +16,14 @@
   border: 1px solid var(--aiterm-border, #334155);
   box-shadow: 0 12px 40px #000c;
   box-sizing: border-box;
+  /* **沒有這兩行，地址簿條目一多就會把「連線／取消」推出畫面外。**
+     backdrop 是 position: fixed + align-items: center，所以內容超過視窗高度時
+     會上下兩端一起溢出，而 fixed 容器沒有捲軸——那兩顆按鈕會變成看得不到也
+     點不到，使用者只能按 Esc。
+     這個 repo 已經踩過同一個坑一次：v1.24.1 的「ADD TAB 選單被擠出畫面」，
+     成因與修法都一樣（限制在視窗範圍內 + 內部捲動）。 */
+  max-height: 85vh;
+  overflow-y: auto;
 }
 
 .aiterm-connect__title {
@@ -101,7 +109,16 @@
 }
 
 .aiterm-connect__saved { margin-bottom: 12px; }
-.aiterm-connect__saved-list { list-style: none; margin: 0; padding: 0; }
+/* 清單自己先限高，不要讓它把對話框整個撐到需要捲。這樣短碼欄位與送出鈕
+   永遠留在視野裡，只有清單在捲——對話框層級的 max-height 是第二道保險，
+   不是主要手段。約 30vh 在一般視窗高度下大概看得到 4～5 筆。 */
+.aiterm-connect__saved-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 30vh;
+  overflow-y: auto;
+}
 .aiterm-connect__saved-row { display: flex; align-items: center; gap: 6px; }
 .aiterm-connect__saved-main {
   flex: 1;
