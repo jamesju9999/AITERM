@@ -294,8 +294,16 @@ async fn handle_share(
     });
 
     // 金鑰模式：立刻核准，等待迴圈下一輪就會看到 viewer 已建立。
+    //
+    // **一定要看 `approve` 的回傳值。** 以控制權核准而控制權已被別人持有時，
+    // `approve` 會把請求放回待審，讓主控端「改用唯讀重新裁決」——那是給 GUI
+    // 主控端的人按的。金鑰模式的主控端（aiterm-host）旁邊沒有人，不接住的話
+    // 那筆請求就永遠掛著，觀看端永遠停在「等待對方同意」加 4 位數。
+    // 自動做那個人本來會做的事：退一步以唯讀核准。
     if let Some(mode) = auto_approve {
-        state.registry.approve(&request_id, mode);
+        if state.registry.approve(&request_id, mode).is_none() && mode == AccessMode::Control {
+            state.registry.approve(&request_id, AccessMode::ReadOnly);
+        }
     }
 
     if !send_control(

@@ -325,8 +325,22 @@ pub async fn run_viewer_stream(
                     break;
                 }
             },
-            Some(data) = keys.recv() => {
-                if ws.send(Message::Binary(data.into())).await.is_err() {
+            // **`None` 要自己接住，不能寫成 `Some(data) = keys.recv()`。**
+            // 那個寫法在 channel 關閉時只會讓這個分支停用，select 繼續等
+            // WebSocket——socket 永遠不會關。而 channel 關閉正是上層
+            // 「斷線」的唯一方式（`viewer_manager::disconnect` 就是把 sender
+            // 丟掉），所以使用者關掉遠端分頁之後，主控端一直以為這個觀看者
+            // 還在、還握著控制權；之後每一個用金鑰連進來的都被卡在待審，畫面
+            // 停在「等待對方同意」加 4 位數。只有整個 AITerm 結束（行程收掉
+            // 所有 socket）後的第一次連線會成功。
+            maybe = keys.recv() => match maybe {
+                Some(data) => {
+                    if ws.send(Message::Binary(data.into())).await.is_err() {
+                        break;
+                    }
+                }
+                None => {
+                    let _ = ws.close(None).await;
                     break;
                 }
             }

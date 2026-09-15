@@ -373,3 +373,61 @@ async fn a_host_that_cannot_prove_the_key_never_gets_to_stream() {
         ),
     }
 }
+
+/// 等第一個 Granted（略過中間可能夾雜的 Data），逾時或連線先結束就回 None。
+async fn first_granted(
+    events_rx: &mut tokio::sync::mpsc::UnboundedReceiver<ViewerEvent>,
+) -> Option<String> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match tokio::time::timeout_at(deadline, events_rx.recv()).await {
+            Ok(Some(ViewerEvent::Granted { mode, .. })) if !mode.is_empty() => return Some(mode),
+            Ok(Some(ViewerEvent::Ended { .. })) | Ok(None) | Err(_) => return None,
+            Ok(Some(_)) => continue,
+        }
+    }
+}
+
+#[tokio::test]
+async fn closing_a_viewer_releases_control_for_the_next_one() {
+    // 使用者實際撞到的序列：從地址簿連上、關掉分頁、再連一次——第二次永遠
+    // 停在「等待對方同意」並顯示 4 位數。只有重開 AITerm 後的第一次會成功。
+    //
+    // 觀看端關分頁時 `viewer_manager::disconnect` 只是丟掉送鍵盤的 channel，
+    // 而 `run_viewer_stream` 的 `Some(data) = keys.recv()` 在 channel 關閉時
+    // 只會讓那個 select 分支停用、繼續等 WebSocket——socket 從來沒關，主控端
+    // 一直以為第一個觀看者還握著控制權。
+    let (_pty, _state, _tab_id, port, key) = start_host(AccessMode::Control).await;
+
+    let (keys_tx, mut events_rx) = connect(port, Some(&key)).await;
+    assert_eq!(first_granted(&mut events_rx).await.as_deref(), Some("control"));
+
+    // 關分頁：跟 viewer_manager::disconnect 一樣，把 channel 丟掉。
+    drop(keys_tx);
+    drop(events_rx);
+
+    let (_keys_tx2, mut events_rx2) = connect(port, Some(&key)).await;
+    assert_eq!(
+        first_granted(&mut events_rx2).await.as_deref(),
+        Some("control"),
+        "關掉第一個觀看者之後，第二個應該拿到控制權——沒拿到代表第一條連線沒真的斷",
+    );
+}
+
+#[tokio::test]
+async fn a_second_viewer_while_control_is_held_is_granted_read_only_instead_of_hanging() {
+    // 控制權真的被佔用時（兩台桌面同時連同一台 host），registry.approve 會
+    // 把請求放回待審，「讓主控端改用唯讀重新裁決」——但 aiterm-host 沒有人
+    // 在旁邊裁決，那筆請求就永遠掛著，觀看端永遠停在等待畫面。
+    let (_pty, _state, _tab_id, port, key) = start_host(AccessMode::Control).await;
+
+    let (_keys_tx, mut events_rx) = connect(port, Some(&key)).await;
+    assert_eq!(first_granted(&mut events_rx).await.as_deref(), Some("control"));
+
+    let (_keys_tx2, mut events_rx2) = connect(port, Some(&key)).await;
+    assert_eq!(
+        first_granted(&mut events_rx2).await.as_deref(),
+        Some("read_only"),
+        "控制權被佔用時，第二個觀看者應該以唯讀進來，而不是無限期等待裁決",
+    );
+}
