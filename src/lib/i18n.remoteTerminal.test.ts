@@ -31,13 +31,15 @@ describe("remote terminal i18n", () => {
     });
   }
 
-  it("keeps the two locales in sync for sharing strings", () => {
-    // 語系漂移是這個 repo 記過的坑：只加一邊，另一邊會靜默 fallback 或空白。
-    const prefixes = ["remote_terminal_", "share_", "consent_", "connect_"];
-    const pick = (loc: "zh-TW" | "en") =>
-      Object.keys(translations[loc])
-        .filter((k) => prefixes.some((p) => k.startsWith(p)))
-        .sort();
-    expect(pick("zh-TW")).toEqual(pick("en"));
-  });
+  // 這裡原本有一條 "keeps the two locales in sync for sharing strings"，比對
+  // `Object.keys(translations["zh-TW"])` 與 `Object.keys(translations.en)`。
+  //
+  // **那條測試從落地那天起就不可能失敗。** `translations.en` 是
+  // `{...zhTW, ...enRaw}`，所以它的 key 集合永遠等於 `zhTW`，兩邊必然相等。
+  // 它的註解寫著「語系漂移是這個 repo 記過的坑」——為了那件事而寫，卻完全
+  // 防不到它：發現的當下英文字典實際上已經缺了 93 個 key。
+  //
+  // 取代它的是 `i18n.test.ts` 的「兩個語系的字典要對齊」，那條比對的是
+  // **原始**字典（`localeSources`）而不是合併後的結果，而且涵蓋全部 key
+  // 而不只這四個前綴。
 });
