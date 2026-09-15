@@ -316,12 +316,15 @@ describe("ConnectDialog 地址簿", () => {
     expect(screen.queryByText(/存進地址簿/)).toBeNull();
   });
 
-  it("編輯一筆時就算沒有重新輸入金鑰，連線成功仍會走存檔流程並清掉 editingId", async () => {
+  it("編輯一筆時就算沒有重新輸入金鑰，送出鈕仍會啟用並呼叫 remoteHostsUpdate", async () => {
+    // 這條測試只驗證「別名/位址修改可以送出並更新」這件事本身——不驗證
+    // editingId 有沒有被清掉。清掉與否是另一條測試
+    // （「不用」之後 editingId 不會殘留到下一次全新連線）的職責；混在同一條
+    // 測試裡會讓名字承諾了測試沒有真的檢查的東西。
+    //
     // 這是計畫本身沒蓋到的洞：editHost 只設定 editingId，不強迫使用者重打
-    // 金鑰（後端把空字串當成「不改金鑰」）。如果送出鈕的啟用條件、以及
-    // pendingSave 的觸發條件都只看「有沒有打金鑰」，這種「只改別名/位址」
-    // 的編輯連線成功後會直接開分頁：改動被整個丟掉，而且 editingId 沒被
-    // 清掉，會汙染下一次真正的新增。
+    // 金鑰（後端把空字串當成「不改金鑰」）。如果送出鈕的啟用條件只看
+    // 「有沒有打金鑰」，這種「只改別名/位址」的編輯會永遠停在灰色送不出去。
     render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
     await userEvent.click(await screen.findByRole("button", { name: /^編輯$/ }));
     const submit = screen.getByRole("button", { name: /^連線$/ });
@@ -336,6 +339,49 @@ describe("ConnectDialog 地址簿", () => {
       port: 8022,
       secret: "",
     });
+  });
+
+  it("「不用」之後 editingId 不會殘留到下一次全新的手動連線", async () => {
+    // 這是「編輯一筆時就算沒有重新輸入金鑰…」那條測試沒有蓋到的洞：那條只
+    // 斷言 remoteHostsUpdate 被呼叫，從來沒有做任何後續動作去暴露
+    // editingId 有沒有真的被清掉——把 finishPending 裡的 setEditingId(null)
+    // 拿掉，那條測試依然全線通過。
+    //
+    // 真正會分勝負的動作序列是：先走一次編輯＋連線＋「不用」（跳過存檔，
+    // 最容易忘記清狀態的路徑），**同一個對話框元件不重新掛載**，接著做一次
+    // 完全獨立的手動連線並存檔。如果 editingId 殘留，第二次存檔會誤走
+    // remoteHostsUpdate（帶著舊的 id "a"）而不是 remoteHostsAdd——這正是
+    // 會覆蓋別人條目的那種資料損毀。
+    //
+    // 目前唯一擋住這件事的是 TerminalApp.tsx 在每次 onConnected 之後把
+    // ConnectDialog 整個卸載重掛，屬於呼叫端的行為，不是這個元件自己的
+    // 保證——所以這裡刻意不卸載，直接測元件本身夠不夠格自己守住這條規則。
+    render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+
+    // 第一段：編輯「辦公室」、金鑰留空、連線、按「不用」跳過存檔。
+    await userEvent.click(await screen.findByRole("button", { name: /^編輯$/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^連線$/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^不用$/ }));
+    expect(remoteHostsUpdate).not.toHaveBeenCalled();
+
+    // 第二段：跟第一段完全無關的全新手動連線——換掉位址與金鑰再送出。
+    const addressField = screen.getByLabelText(/位址|Address/);
+    await userEvent.clear(addressField);
+    await userEvent.type(addressField, "10.0.0.9:9000");
+    const keyField = screen.getByLabelText(/金鑰|Key/);
+    await userEvent.clear(keyField);
+    await userEvent.type(keyField, "deadbeef");
+    await userEvent.click(screen.getByRole("button", { name: /^連線$/ }));
+    await screen.findByText(/存進地址簿/);
+    await userEvent.click(screen.getByRole("button", { name: /^儲存$/ }));
+
+    expect(remoteHostsAdd).toHaveBeenCalledWith({
+      name: "10.0.0.9:9000",
+      host: "10.0.0.9",
+      port: 9000,
+      secret: "deadbeef",
+    });
+    expect(remoteHostsUpdate).not.toHaveBeenCalled();
   });
 
   it("編輯一筆在別台裝置已經被刪掉的條目：重整清單並提示，不會直接送出", async () => {
