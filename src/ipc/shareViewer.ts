@@ -21,8 +21,13 @@ export interface ShareViewerConnectArgs {
   port: number;
   code: string;
   displayName: string;
-  /** CLI host 的預共享金鑰（hex）。短碼模式留空。 */
+  /** CLI host 的預共享金鑰（hex）。短碼模式與地址簿模式都留空。 */
   key?: string;
+  /**
+   * 地址簿的條目 id。帶了它就由**後端**去 keychain 取金鑰——已存的金鑰
+   * 不跨 IPC，前端從頭到尾拿不到它。帶了這個就不要再帶 `key`。
+   */
+  savedHostId?: string;
 }
 
 /**
@@ -38,6 +43,7 @@ export function shareViewerConnect(args: ShareViewerConnectArgs): Promise<Viewer
     code: args.code,
     displayName: args.displayName,
     key: args.key,
+    savedHostId: args.savedHostId,
   });
 }
 
