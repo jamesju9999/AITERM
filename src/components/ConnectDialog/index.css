@@ -159,3 +159,11 @@
   align-items: baseline;
   justify-content: space-between;
 }
+/* 存檔提示與刪除確認框裡的那一句話。沒有這個 class 時是裸 <div>，吃到頁面
+   預設的 14px 純白，比周圍 12px 的欄位標籤大一號也亮一截，看起來像貼錯地方。
+   字級對齊標籤；顏色用一般文字色而非標籤的淡色——這是要使用者做決定的那一句。 */
+.aiterm-connect__panel-text {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--aiterm-text, #e2e8f0);
+}

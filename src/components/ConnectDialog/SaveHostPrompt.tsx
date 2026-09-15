@@ -30,7 +30,7 @@ export function SaveHostPrompt({ initialName = "", onSave, onSkip }: Props) {
   const [name, setName] = useState(initialName);
   return (
     <div className="aiterm-connect__save">
-      <div>{t.connect_save_prompt}</div>
+      <div className="aiterm-connect__panel-text">{t.connect_save_prompt}</div>
       <label className="aiterm-connect__label" htmlFor="aiterm-connect-savename">
         {t.connect_save_name_label}
       </label>

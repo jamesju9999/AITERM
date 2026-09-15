@@ -84,7 +84,9 @@ export function RemoteHostList({ hosts, onConnect, onEdit, onDelete, disabled = 
           區裡可能被捲出視野。 */}
       {confirming && (
         <div className="aiterm-connect__confirm">
-          <div>{t.connect_saved_delete_confirm.replace("{name}", confirming.name)}</div>
+          <div className="aiterm-connect__panel-text">
+            {t.connect_saved_delete_confirm.replace("{name}", confirming.name)}
+          </div>
           <div className="aiterm-connect__actions">
             <button
               className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
