@@ -12,7 +12,14 @@ let syncListener: ((event: { payload: unknown }) => void) | null = null;
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((_eventName: string, cb: (event: { payload: unknown }) => void) => {
     syncListener = cb;
-    return Promise.resolve(() => { syncListener = null; });
+    // **只清掉自己那一次註冊。** 真實 Tauri 的 unlisten 是「取消我這一次訂閱」，
+    // 不是「清掉目前的訂閱」。無條件 `syncListener = null` 的話，舊註冊那個
+    // 非同步才拿到的 unlisten 一旦晚於新註冊落地，就會把還活著的 listener
+    // 清掉——MailView 每次換帳號都會重新註冊，所以這條路徑是走得到的
+    // （見 MailView.tsx 的 effect：listen().then() 裡若 !active 會補呼叫 unlisten）。
+    return Promise.resolve(() => {
+      if (syncListener === cb) syncListener = null;
+    });
   }),
 }));
 
