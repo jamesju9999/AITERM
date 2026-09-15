@@ -385,16 +385,22 @@ describe("ConnectDialog 地址簿", () => {
     // 這是計畫本身沒蓋到的洞：editHost 只設定 editingId，不強迫使用者重打
     // 金鑰（後端把空字串當成「不改金鑰」）。如果送出鈕的啟用條件只看
     // 「有沒有打金鑰」，這種「只改別名/位址」的編輯會永遠停在灰色送不出去。
+    //
+    // **這條測試以前把一個 bug 釘成了預期行為。** 它原本斷言存進去的名字是
+    // "192.168.1.50:8022"：編輯時畫面上沒有別名欄位、存檔提示又是空的，
+    // 按下儲存就退回成位址——使用者只是想更新金鑰，「辦公室」卻被靜默改名
+    // 成它的 IP。現在存檔提示會預填正在編輯那一筆的別名。
     render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
     await userEvent.click(await screen.findByRole("button", { name: /^編輯$/ }));
     const submit = screen.getByRole("button", { name: /^連線$/ });
     expect(submit).toBeEnabled();
     await userEvent.click(submit);
     await screen.findByText(/存進地址簿/);
+    expect(screen.getByLabelText("別名", { selector: "#aiterm-connect-savename" })).toHaveValue("辦公室");
     await userEvent.click(screen.getByRole("button", { name: /^儲存$/ }));
     expect(remoteHostsUpdate).toHaveBeenCalledWith({
       id: "a",
-      name: "192.168.1.50:8022",
+      name: "辦公室",
       host: "192.168.1.50",
       port: 8022,
       secret: "",
@@ -554,5 +560,130 @@ describe("ConnectDialog 地址簿", () => {
     expect(await screen.findByText(/已經被移除/)).toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/192\.168/)).not.toBeInTheDocument();
     expect(screen.queryByText("辦公室")).toBeNull();
+  });
+
+  // 編輯模式的畫面。原本按「編輯」只會把位址帶進手動欄位，畫面上沒有別名欄位
+  // ——想改別名得先真的連一次線，而且金鑰欄的提示還寫著「留空則使用 6 位短碼」，
+  // 在編輯時是錯的（留空其實是沿用已存的金鑰）。使用者自然會把「你的名字」
+  // 那一欄當成別名，但那是送給對方的顯示名稱，完全是另一回事。
+  describe("編輯模式", () => {
+    const editAlias = () => screen.getByLabelText("別名", { selector: "#aiterm-connect-editname" });
+
+    it("標題說明正在編輯哪一筆，並顯示預填目前名字的別名欄位", async () => {
+      render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: /^編輯$/ }));
+      expect(await screen.findByText("編輯「辦公室」")).toBeInTheDocument();
+      expect(editAlias()).toHaveValue("辦公室");
+    });
+
+    it("金鑰欄的提示改成「留空保留原本的金鑰」，不再說會改用短碼", async () => {
+      render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: /^編輯$/ }));
+      expect(await screen.findByText(/留空則保留原本的金鑰/)).toBeInTheDocument();
+      expect(screen.queryByText(/留空則使用 6 位短碼/)).toBeNull();
+    });
+
+    it("只改別名時可以直接儲存，不必連線", async () => {
+      render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: /^編輯$/ }));
+      await userEvent.clear(editAlias());
+      await userEvent.type(editAlias(), "新名字");
+      await userEvent.click(screen.getByRole("button", { name: "儲存變更" }));
+      await waitFor(() =>
+        expect(remoteHostsUpdate).toHaveBeenCalledWith({
+          id: "a",
+          name: "新名字",
+          host: "192.168.1.50",
+          port: 8022,
+          // 空字串＝不改金鑰。前端拿不到已存的金鑰，所以這裡只能是空的。
+          secret: "",
+        }),
+      );
+      expect(shareViewerConnect).not.toHaveBeenCalled();
+    });
+
+    it("改了位址就不能直接儲存——要連上驗證過才存", async () => {
+      // 「只存驗證過的連線資料」這條原則只對別名放寬：別名錯了頂多看起來怪，
+      // 位址錯了下次點下去就連不上。
+      render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: /^編輯$/ }));
+      expect(screen.getByRole("button", { name: "儲存變更" })).toBeInTheDocument();
+      const addr = screen.getByLabelText(/位址|Address/);
+      await userEvent.clear(addr);
+      await userEvent.type(addr, "192.168.1.51:8022");
+      expect(screen.queryByRole("button", { name: "儲存變更" })).toBeNull();
+    });
+
+    it("填了新金鑰也不能直接儲存", async () => {
+      render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: /^編輯$/ }));
+      // 先證明按鈕原本在——少了這行，「按鈕根本沒實作」也會讓下面那句通過。
+      expect(screen.getByRole("button", { name: "儲存變更" })).toBeInTheDocument();
+      await userEvent.type(screen.getByLabelText(/金鑰|Key/), "deadbeef");
+      expect(screen.queryByRole("button", { name: "儲存變更" })).toBeNull();
+    });
+
+    it("直接儲存時那筆已經在別處被刪掉：提示而不是靜默的 no-op 更新", async () => {
+      // update_remote_host 對不存在的 id 是靜默 no-op，會回 Ok 但什麼都沒存。
+      render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: /^編輯$/ }));
+      vi.mocked(remoteHostsList).mockResolvedValueOnce([]);
+      await userEvent.click(screen.getByRole("button", { name: "儲存變更" }));
+      expect(await screen.findByText(/已經被移除/)).toBeInTheDocument();
+      expect(remoteHostsUpdate).not.toHaveBeenCalled();
+    });
+
+    it("編輯中把位址改成別台再連線：存檔提示不預填舊別名", async () => {
+      // 位址改了＝連上的是另一台，confirmSave 會把它當新增。這時若預填「辦公室」，
+      // 新主機就會被存成「辦公室」——兩筆同名、指向不同機器。
+      render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: /^編輯$/ }));
+      const addr = screen.getByLabelText(/位址|Address/);
+      await userEvent.clear(addr);
+      await userEvent.type(addr, "10.0.0.9:9000");
+      await userEvent.type(screen.getByLabelText(/金鑰|Key/), "deadbeef");
+      await userEvent.click(screen.getByRole("button", { name: /^連線$/ }));
+      await screen.findByText(/存進地址簿/);
+      expect(screen.getByLabelText("別名", { selector: "#aiterm-connect-savename" })).toHaveValue("");
+    });
+
+    it("取消編輯會離開編輯模式", async () => {
+      render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: /^編輯$/ }));
+      await userEvent.click(screen.getByRole("button", { name: "取消編輯" }));
+      expect(screen.queryByText("編輯「辦公室」")).toBeNull();
+      expect(screen.queryByLabelText("別名", { selector: "#aiterm-connect-editname" })).toBeNull();
+      expect(screen.getByText("連線到遠端電腦")).toBeInTheDocument();
+    });
+
+    it("編輯中改點清單裡的另一筆，編輯畫面不會繼續掛著舊的名字", async () => {
+      // 點了另一筆＝放棄這次編輯。不清的話標題會一直寫「編輯「辦公室」」，
+      // 而表單裡其實是另一台主機的位址（金鑰遺失的錯誤分支會把它帶進來）。
+      vi.mocked(remoteHostsList).mockResolvedValue([
+        { id: "a", name: "辦公室", host: "192.168.1.50", port: 8022, has_key: true },
+        { id: "b", name: "雲端", host: "10.0.0.9", port: 9000, has_key: false },
+      ]);
+      vi.mocked(shareViewerConnect).mockRejectedValueOnce(new Error("remote_host_key_missing"));
+      render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+      const editButtons = await screen.findAllByRole("button", { name: /^編輯$/ });
+      await userEvent.click(editButtons[0]);
+      await screen.findByText("編輯「辦公室」");
+      await userEvent.click(screen.getByText("雲端"));
+      // 限定錯誤區塊：「雲端」那筆 has_key 是 false，清單列上也會顯示同一句話。
+      await screen.findByText(/金鑰不在這台電腦上/, { selector: ".aiterm-connect__error" });
+      expect(screen.queryByText("編輯「辦公室」")).toBeNull();
+    });
+
+    it("刪掉正在編輯的那一筆，會一併離開編輯模式", async () => {
+      render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: /^編輯$/ }));
+      await screen.findByText("編輯「辦公室」");
+      vi.mocked(remoteHostsList).mockResolvedValue([]);
+      await userEvent.click(screen.getByRole("button", { name: /^刪除$/ }));
+      const del = screen.getAllByRole("button", { name: /^刪除$/ });
+      await userEvent.click(del[del.length - 1]);
+      await waitFor(() => expect(remoteHostsRemove).toHaveBeenCalledWith("a"));
+      await waitFor(() => expect(screen.queryByText("編輯「辦公室」")).toBeNull());
+    });
   });
 });

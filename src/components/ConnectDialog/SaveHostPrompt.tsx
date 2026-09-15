@@ -2,6 +2,9 @@ import { useState } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
 
 interface Props {
+  /** 輸入框的初始內容。編輯既有條目時由呼叫端帶入那一筆的別名；只在這一列
+   *  出現的當下讀一次，之後由使用者掌控。 */
+  initialName?: string;
   /** 使用者按「儲存」。`name` 是輸入框的原始內容，**可能是空字串**——要不要
    *  退回預設別名由呼叫端決定。 */
   onSave: (name: string) => void;
@@ -22,9 +25,9 @@ interface Props {
  * 收起來，輸入的內容就該跟著消失；存檔驗證失敗而這一列還留著時，內容也該
  * 留著讓使用者直接重按。
  */
-export function SaveHostPrompt({ onSave, onSkip }: Props) {
+export function SaveHostPrompt({ initialName = "", onSave, onSkip }: Props) {
   const { t } = useLocale();
-  const [name, setName] = useState("");
+  const [name, setName] = useState(initialName);
   return (
     <div className="aiterm-connect__save">
       <div>{t.connect_save_prompt}</div>
