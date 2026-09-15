@@ -348,11 +348,15 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
     const unlisteners: Array<() => void> = [];
     let disposed = false;
 
+    // 每個 listen 的 promise 都收起來，下面要等它們**全部完成**才放行後端。
+    const registrations: Array<Promise<unknown>> = [];
     const track = (p: Promise<() => void>) => {
-      p.then((un) => {
-        if (disposed) un();
-        else unlisteners.push(un);
-      });
+      registrations.push(
+        p.then((un) => {
+          if (disposed) un();
+          else unlisteners.push(un);
+        }),
+      );
     };
 
     // 跟本機分頁（TerminalView.tsx）同一個理由：`{ stream: true }` 讓跨兩個
@@ -448,7 +452,20 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
     // `Granted` 跟它後面那批畫面重播會在這個元件掛載之前就備妥；Tauri 事件
     // 不重播，所以只要後端早一步開始送，那些事件就永遠消失，畫面停在
     // 「等待對方同意」不動。短碼模式踩不到，只是因為人要花好幾秒按同意。
-    void shareViewerReady(connId);
+    //
+    // **一定要等 promise 完成，不能只是「呼叫過 listen」。** 以前這裡在發出
+    // 五個 listen 之後就同步呼叫 ready——註解寫著「都註冊完了」，實際上它們只是
+    // 被**要求**註冊。`listen()` 要跑一趟 IPC、後端處理完 listener 才存在，
+    // 而 ready 也是一趟 IPC，兩者在後端可能以任意順序完成。ready 先到的話
+    // `Granted` 就在 listener 掛上之前送出去了。時序決定成敗，所以時好時壞：
+    // 從地址簿連線兩次卡在 4 位數畫面，第一次還被誤判成環境問題。
+    //
+    // 用 allSettled 不用 all：某個 listen 失敗時 all 會直接 reject，ready 就
+    // 永遠不會被呼叫，連已經掛好的那幾個 listener 也什麼都收不到——從「偶爾
+    // 漏事件」惡化成「必定卡死」。
+    void Promise.allSettled(registrations).then(() => {
+      if (!disposed) void shareViewerReady(connId);
+    });
 
     return () => {
       disposed = true;

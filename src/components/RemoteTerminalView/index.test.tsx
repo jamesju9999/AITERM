@@ -7,9 +7,20 @@ import userEvent from "@testing-library/user-event";
 // 事件訂閱的假實作：測試自己保留 callback，之後手動觸發。
 const handlers: Record<string, (v: never) => void> = {};
 let capturedOscHandler: ((data: string) => boolean) | null = null;
+// 設成陣列時，listen 回傳的 promise 會先卡住，直到測試手動放行——模擬真實
+// Tauri：`listen()` 要跑一趟 IPC，後端處理完那一刻 listener 才真的存在。
+// 呼叫 `listen()` 只代表「請求發出去了」，**不代表已經註冊好**。
+let holdListens: Array<() => void> | null = null;
+// 設成某個事件名時，那一個 listen 會失敗（reject）。
+let failListen: string | null = null;
 function captureHandler(name: string) {
   return (connId: string, cb: (v: never) => void) => {
     handlers[`${name}:${connId}`] = cb;
+    if (failListen === name) return Promise.reject(new Error(`listen ${name} failed`));
+    if (holdListens) {
+      const pending = holdListens;
+      return new Promise<() => void>((resolve) => pending.push(() => resolve(() => {})));
+    }
     return Promise.resolve(() => {});
   };
 }
@@ -188,6 +199,8 @@ const t = translations["zh-TW"];
 
 beforeEach(() => {
   for (const k of Object.keys(handlers)) delete handlers[k];
+  holdListens = null;
+  failListen = null;
   capturedOscHandler = null;
   capturedBufferChangeHandler = null;
   mockBufferActive.type = "normal";
@@ -220,6 +233,46 @@ describe("RemoteTerminalView", () => {
     expect(await screen.findByText("4917")).toBeInTheDocument();
   });
 
+  it("ready 要等每個 listener 在後端真的註冊完成才呼叫，不是請求一發出就呼叫", async () => {
+    // **下面那條舊測試抓不到這個 bug。** 它在 `onShareViewerGranted(...)` 被
+    // 呼叫的當下就記錄 handler，而 mock 回傳的 promise 早就 resolve 了——所以
+    // 它驗的是「listen 被要求了沒」，不是「listen 註冊完成了沒」，而那正是
+    // bug 本身的錯誤。
+    //
+    // 真實 Tauri 的 `listen()` 要跑一趟 IPC，後端處理完那一刻 listener 才存在；
+    // `shareViewerReady` 也是一趟 IPC。兩者在後端可能以任意順序完成：ready 先到
+    // 的話，pump 就在 listener 掛上之前送出 `Granted`，事件消失，畫面卡在
+    // 「等待對方同意」並顯示 4 位數——使用者兩次從地址簿連線都撞到。
+    // 時序決定成敗，所以時好時壞。
+    holdListens = [];
+    render(<RemoteTerminalView tabId="t1" connId="c10" sas="4917" isActive onConnectClick={vi.fn()} />);
+
+    // 五個 listen 請求都發出去了，但一個都還沒註冊完成。
+    await waitFor(() => expect(holdListens!.length).toBe(5));
+    await act(async () => {});
+    expect(readyMock).not.toHaveBeenCalledWith("c10");
+
+    const release = holdListens!;
+    holdListens = null;
+    await act(async () => {
+      for (const r of release) r();
+    });
+    await waitFor(() => expect(readyMock).toHaveBeenCalledWith("c10"));
+  });
+
+  it("有一個 listen 失敗時仍然放行後端，不會整條連線卡死", async () => {
+    // 用 Promise.all 的話，任何一個 listen reject 就讓 ready 永遠不被呼叫——
+    // 連已經掛好的 granted/data 都收不到任何東西，畫面必定卡在等待同意。
+    failListen = "resync";
+    render(<RemoteTerminalView tabId="t1" connId="c11" sas="4917" isActive onConnectClick={vi.fn()} />);
+    await waitFor(() => expect(readyMock).toHaveBeenCalledWith("c11"));
+  });
+
+  // **這條只驗到「listen 在 ready 之前被要求了」，驗不到「註冊完成」。**
+  // 它在 `onShareViewer*()` 被呼叫的當下就記錄 handler，而 mock 回傳的 promise
+  // 早已 resolve——把元件改回「發出 listen 就同步呼叫 ready」（真實的 bug），
+  // 這條照樣是綠的。真正會分勝負的是上面那條「ready 要等每個 listener 在後端
+  // 真的註冊完成」。這條留著，因為它仍擋得住「先 ready 才發 listen」這種更粗的錯。
   it("tells the backend it is listening, and only after every listener is registered", async () => {
     // 實機抓到的 bug：金鑰模式下主控端是**瞬間**核准的，所以 `Granted` 在這個
     // 元件掛載並訂閱之前就發出去了。Tauri 事件不重播，畫面因此永遠停在
