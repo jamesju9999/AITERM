@@ -811,4 +811,96 @@ describe("useTerminalBlocks", () => {
       expect(boundaryMock).toHaveBeenCalledWith("start");
     });
   });
+
+  describe("isRawKeyboardModeActive（Kitty keyboard protocol push/pop）", () => {
+    it("收到 CSI > u（push）後變 true", async () => {
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+      expect(result.current.isRawKeyboardModeActive).toBe(false);
+
+      await act(async () => {
+        await writeToTerm(term, "\x1b[>5u");
+      });
+
+      expect(result.current.isRawKeyboardModeActive).toBe(true);
+    });
+
+    it("push 後收到 CSI < u（pop）變回 false", async () => {
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+
+      await act(async () => {
+        await writeToTerm(term, "\x1b[>5u");
+      });
+      expect(result.current.isRawKeyboardModeActive).toBe(true);
+
+      await act(async () => {
+        await writeToTerm(term, "\x1b[<u");
+      });
+      expect(result.current.isRawKeyboardModeActive).toBe(false);
+    });
+
+    it("連續兩次 push 只 pop 一次，仍然是 true（深度計數器，不是布林開關）", async () => {
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+
+      await act(async () => {
+        await writeToTerm(term, "\x1b[>5u\x1b[>5u");
+      });
+      expect(result.current.isRawKeyboardModeActive).toBe(true);
+
+      await act(async () => {
+        await writeToTerm(term, "\x1b[<u");
+      });
+      expect(result.current.isRawKeyboardModeActive).toBe(true);
+
+      await act(async () => {
+        await writeToTerm(term, "\x1b[<u");
+      });
+      expect(result.current.isRawKeyboardModeActive).toBe(false);
+    });
+
+    it("同一次 write 裡先 pop 再 push（Ink 類程式每次重繪的實際模式），最終狀態仍是 true", async () => {
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+
+      await act(async () => {
+        await writeToTerm(term, "\x1b[>5u");
+      });
+      expect(result.current.isRawKeyboardModeActive).toBe(true);
+
+      await act(async () => {
+        await writeToTerm(term, "\x1b[<u\x1b[>5u");
+      });
+      expect(result.current.isRawKeyboardModeActive).toBe(true);
+    });
+
+    it("clearAllBlocks() 會把卡在 push 狀態的旗標強制歸零", async () => {
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+
+      await act(async () => {
+        await writeToTerm(term, "\x1b[>5u");
+      });
+      expect(result.current.isRawKeyboardModeActive).toBe(true);
+
+      act(() => {
+        result.current.clearAllBlocks();
+      });
+      expect(result.current.isRawKeyboardModeActive).toBe(false);
+    });
+
+    it("finalizeBlock 強制結案時（例如卡住偵測介入）會把卡在 push 狀態的旗標強制歸零", async () => {
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+
+      act(() => {
+        result.current.submitCommand("claude");
+      });
+      await act(async () => {
+        await writeToTerm(term, "\x1b[>5u");
+      });
+      expect(result.current.isRawKeyboardModeActive).toBe(true);
+
+      const blockId = result.current.blocks[0].id;
+      act(() => {
+        result.current.finalizeBlock(blockId, -1);
+      });
+      expect(result.current.isRawKeyboardModeActive).toBe(false);
+    });
+  });
 });

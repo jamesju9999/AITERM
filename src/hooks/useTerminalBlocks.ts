@@ -24,6 +24,11 @@ export interface UseTerminalBlocksResult {
   appendOutput: (chunk: string) => void;
   setBlockGitInfo: (id: string, info: GitBlockInfo | null) => void;
   isAlternateBuffer: boolean;
+  /** true 代表遠端目前處於「要逐鍵收原始按鍵」的協定模式（Kitty keyboard
+   *  protocol 的 push/pop，`ESC[>Ps u` / `ESC[<u`）——不是所有互動選單都會
+   *  切 alternate screen buffer，這個訊號補上那個縫。見設計文件
+   *  docs/superpowers/specs/2026-09-16-interactive-prompt-live-expand-design.md。 */
+  isRawKeyboardModeActive: boolean;
   termInstance: Terminal | null;
   /** 強制把一個 running 中的區塊結案（例如卡在 heredoc 的中斷）。
    *  會呼叫該區塊等待中的 onComplete callback——見 finalizeBlock 內部實作。 */
@@ -137,6 +142,10 @@ export function useTerminalBlocks(
 ): UseTerminalBlocksResult {
   const [blocks, setBlocks] = useState<TerminalBlock[]>([]);
   const [isAlternateBuffer, setIsAlternateBuffer] = useState(false);
+  const [isRawKeyboardModeActive, setIsRawKeyboardModeActive] = useState(false);
+  // Kitty keyboard protocol 的 push/pop 是可疊加的堆疊語意，用深度計數器
+  // 而不是布林值，理由見上面 interface 欄位的註解連結的設計文件。
+  const rawKeyboardDepthRef = useRef(0);
 
   const writeRef = useRef(write);
   writeRef.current = write;
@@ -220,6 +229,8 @@ export function useTerminalBlocks(
     setBlocks([]);
     outputStartRef.current?.marker.dispose();
     outputStartRef.current = null;
+    rawKeyboardDepthRef.current = 0;
+    setIsRawKeyboardModeActive(false);
   }, []);
 
   /**
@@ -241,6 +252,14 @@ export function useTerminalBlocks(
       const prev = blocksRef.current;
       const target = prev.find((b) => b.id === blockId);
       if (!target || target.status !== "running") return;
+
+      // 安全網：isAlternateBuffer 是每次讀 xterm 當下的 buffer type 算出來的，
+      // 天生自我校正；這裡的深度計數器是我們自己維護的狀態，如果指令被強制
+      // 結案（斷線、卡住偵測介入）導致最後一個 pop 沒送到，深度會卡在 >0、
+      // 即時窗格永遠展開收不回去。任何一個 running 區塊要結案，都代表這個
+      // 區塊不再需要原始鍵盤模式了，在這裡強制歸零。
+      rawKeyboardDepthRef.current = 0;
+      setIsRawKeyboardModeActive(false);
 
       const endTime = Date.now();
       const frozenOutput = target.rawOutput;
@@ -362,6 +381,22 @@ export function useTerminalBlocks(
     // 冪等：setState 同值不會觸發重繪。
     onBufferChange();
 
+    // Kitty keyboard protocol push/pop——見 interface 欄位註解連結的設計
+    // 文件。prefix 用 `>`/`<`（合法範圍是 xterm.js IFunctionIdentifier 文件
+    // 裡的 \x3c-\x3f），final 都是 `u`。跟下面的 OSC 133 handler 用同一個
+    // xterm.js parser hook 機制，不用手動掃描原始字串——xterm 自己處理好
+    // 一個逃逸序列被拆成兩次 term.write() 呼叫的邊界情況。
+    const disposeRawKbPush = term.parser.registerCsiHandler({ prefix: ">", final: "u" }, () => {
+      rawKeyboardDepthRef.current += 1;
+      setIsRawKeyboardModeActive(true);
+      return true;
+    });
+    const disposeRawKbPop = term.parser.registerCsiHandler({ prefix: "<", final: "u" }, () => {
+      rawKeyboardDepthRef.current = Math.max(0, rawKeyboardDepthRef.current - 1);
+      setIsRawKeyboardModeActive(rawKeyboardDepthRef.current > 0);
+      return true;
+    });
+
     const disposeOsc = term.parser.registerOscHandler(133, (data) => {
       if (data === "B") {
         // Prompt text has just finished being drawn (this marker is embedded
@@ -477,6 +512,8 @@ export function useTerminalBlocks(
     return () => {
       disposeBuffer.dispose();
       disposeOsc.dispose();
+      disposeRawKbPush.dispose();
+      disposeRawKbPop.dispose();
     };
     // `write` 故意不在這裡——它透過 writeRef 讀取，不需要讓這個 effect
     // 跟著它的身分重新註冊（本機分頁沒傳 write 時，每次 render 呼叫端拿到
@@ -554,6 +591,7 @@ export function useTerminalBlocks(
     appendOutput,
     setBlockGitInfo,
     isAlternateBuffer,
+    isRawKeyboardModeActive,
     termInstance: term,
     finalizeBlock,
     clearAllBlocks,
