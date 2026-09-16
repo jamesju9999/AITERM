@@ -918,6 +918,29 @@ describe("RemoteTerminalView", () => {
     expect(focusMock).toHaveBeenCalled();
   });
 
+  it("非全螢幕程式、非 raw-keyboard-mode 時，點卡片列表空白處聚焦 WarpInput，不是隱形的終端機", async () => {
+    // 實機抓到的 bug：這裡原本無條件 focus() 終端機本身——這是這次重寫
+    // 之前的舊行為，那時候終端機是唯一看得到的輸入介面。現在非全螢幕/非
+    // raw-keyboard-mode 時終端機是移到畫面外的隱藏實例，點空白處卻把
+    // 焦點給了它，使用者接著打字會被吃掉、畫面上完全沒有任何回饋。
+    const { container } = render(<RemoteTerminalView tabId="t1" connId="c43" sas="4343" isActive onConnectClick={vi.fn()} />);
+    await waitFor(() => expect(handlers["granted:c43"]).toBeDefined());
+    handlers["granted:c43"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+
+    const textarea = await waitFor(() => {
+      const el = container.querySelector(".warp-input-textarea") as HTMLTextAreaElement | null;
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    focusMock.mockClear();
+
+    const scrollArea = container.querySelector(".aiterm-remote-terminal__scroll-area") as HTMLElement;
+    fireEvent.mouseDown(scrollArea);
+
+    expect(focusMock).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(textarea);
+  });
+
   it("全螢幕程式即時窗格的高度跟著主控端實際列數變化，不是無條件撐滿容器", async () => {
     // 實機回報的問題：容器（觀看端視窗）可能比內容（主控端的實際列數）
     // 需要的空間大，撐滿容器的話畫面下方會留一大片沒用到的空白。這裡

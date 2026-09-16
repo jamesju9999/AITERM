@@ -1940,11 +1940,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             scrollbarGutter: "stable",
           }}
           onMouseDown={(e) => {
-            // Clicking the empty terminal area returns keyboard focus to the
-            // live terminal so the user can type at the prompt, matching
-            // standard terminal behavior. Skip clicks on cards, controls, and
-            // the xterm host itself (xterm handles its own focus) so we don't
-            // hijack text-selection or button clicks.
+            // Clicking the empty area of the block list returns keyboard
+            // focus so the user can immediately start typing. Skip clicks on
+            // cards, controls, and the xterm host itself (xterm handles its
+            // own focus) so we don't hijack text-selection or button clicks.
             const target = e.target as HTMLElement;
             if (target.closest('button, a, input, textarea, [id^="aiterm-block-"], .aiterm-terminal-root')) return;
             // preventDefault is essential: a mousedown on a non-focusable
@@ -1953,7 +1952,23 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             // immediately undo the focus() below and the caret would never
             // return to the prompt (the reported bug).
             e.preventDefault();
-            termRef.current?.focus();
+            // WarpInput is the actual typing surface outside alt-buffer/raw-
+            // keyboard-mode now (see design doc 2026-09-16-live-block-
+            // rendering-design.md) — the terminal itself is off-screen and
+            // invisible in that case. Focusing it directly here (leftover
+            // from before that redesign) sent the user's keystrokes into the
+            // PTY with no visible feedback, AND — because it's a real
+            // `<textarea>` — made the window-level "start typing jumps to
+            // WarpInput" fallback back off too, thinking something else was
+            // already legitimately holding focus. Only alt-buffer/raw-
+            // keyboard-mode still want the real terminal focused, matching
+            // the effect above that auto-focuses it when raw-keyboard-mode
+            // turns on.
+            if (isAlternateBuffer || isRawKeyboardModeActive) {
+              termRef.current?.focus();
+            } else {
+              warpInputRef.current?.focus();
+            }
           }}
         >
         {/* Find in Buffer search bar */}

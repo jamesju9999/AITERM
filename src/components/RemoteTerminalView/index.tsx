@@ -656,7 +656,19 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
           // 讓目前聚焦的元素 blur，且這個預設行為在這個 handler 執行「之後」
           // 才跑——不擋掉的話，下面的 focus() 會被瀏覽器自己的 blur 立刻蓋掉。
           e.preventDefault();
-          termRef.current?.focus();
+          // 實機抓到的 bug：這裡原本無條件 focus() 終端機本身——但非全螢幕
+          // 程式、非 raw-keyboard-mode 時，真正的輸入介面是 WarpInput，
+          // 終端機是移到畫面外看不到的隱藏實例。點這裡卻把焦點給了終端機，
+          // 使用者接著打字會被吃掉且畫面上完全沒有任何回饋；而且因為它是
+          // 真正的 `<textarea>`，還會讓「隨處打字自動跳回 WarpInput」那個
+          // window 層級的補救機制誤判成「已經有別的東西合法持有焦點」而
+          // 不出手。只有全螢幕程式／raw-keyboard-mode 才需要焦點真的在
+          // 終端機上，跟上面那個自動 focus() 的 effect 保持一致。
+          if (isAlternateBuffer || isRawKeyboardModeActive) {
+            termRef.current?.focus();
+          } else {
+            warpInputRef.current?.focus();
+          }
         }}
       >
         {/* 卡片列表在全螢幕程式（vim/htop/tmux 等）使用中隱藏——跟
