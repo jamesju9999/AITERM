@@ -652,74 +652,6 @@ describe("useTerminalBlocks", () => {
     expect(writePtyMock).not.toHaveBeenCalled();
   });
 
-  it("signals onUntrackedCommandBoundary when OSC 133 C/D fire with no locally-tracked block", async () => {
-    // 實機測試抓到的 bug：遠端觀看者拿到控制權時送進來的指令不會經過
-    // submitCommand/beginTrackedBlock（本機分頁能收到的只有 shell 回顯的
-    // 輸出，跟本機打字是兩條不同的路），但 shell 自己送出的 OSC 133 C/D
-    // 完全不知道指令是哪裡來的、照樣會發生。這個測試不呼叫 submitCommand，
-    // 直接把 OSC 序列寫進終端機，模擬「有指令在跑，但沒有本機區塊」。
-    const boundaryMock = vi.fn();
-    renderHook(() =>
-      useTerminalBlocks(
-        "session-1",
-        term,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        boundaryMock,
-      ),
-    );
-
-    await act(async () => {
-      await writeToTerm(term, "\x1b]133;C\x07");
-    });
-    expect(boundaryMock).toHaveBeenCalledWith("start");
-
-    boundaryMock.mockClear();
-    await act(async () => {
-      await writeToTerm(term, "\x1b]133;D;0\x07");
-    });
-    expect(boundaryMock).toHaveBeenCalledWith("end");
-  });
-
-  it("does not signal onUntrackedCommandBoundary when a local block already covers the command", async () => {
-    // 對照組：指令是透過 submitCommand 送出的（本機分頁的正常路徑），
-    // 已經有一個 running 中的區塊在追蹤——這種情況不該多送一次
-    // onUntrackedCommandBoundary，那個信號是給「完全沒有本機區塊」的
-    // 情境用的，兩套機制不該疊加。
-    const boundaryMock = vi.fn();
-    const { result } = renderHook(() =>
-      useTerminalBlocks(
-        "session-1",
-        term,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        boundaryMock,
-      ),
-    );
-
-    act(() => {
-      result.current.submitCommand("echo hi");
-    });
-
-    await act(async () => {
-      await writeToTerm(term, "\x1b]133;C\x07");
-    });
-    expect(boundaryMock).not.toHaveBeenCalled();
-
-    await act(async () => {
-      await writeToTerm(term, "\x1b]133;D;0\x07");
-    });
-    expect(boundaryMock).not.toHaveBeenCalled();
-  });
-
   describe("remote-viewer command text recovery (OSC 133 B/C)", () => {
     it("recovers the typed command text and calls beginTrackedBlock when no local block is tracked", async () => {
       const { result } = renderHook(() => useTerminalBlocks("session-1", term));
@@ -762,44 +694,17 @@ describe("useTerminalBlocks", () => {
     });
 
     it("does not create a block when the user pressed Enter with nothing typed", async () => {
-      const boundaryMock = vi.fn();
-      const { result } = renderHook(() =>
-        useTerminalBlocks(
-          "session-1",
-          term,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          boundaryMock,
-        ),
-      );
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term));
 
       await act(async () => {
         await writeToTerm(term, "user@host:~$ \x1b]133;B\x07\r\n\x1b]133;C\x07");
       });
 
       expect(result.current.blocks).toHaveLength(0);
-      expect(boundaryMock).toHaveBeenCalledWith("start");
     });
 
     it("does not glue together rows separated by a real newline (e.g. a multi-line paste), only genuine auto-wraps", async () => {
-      const boundaryMock = vi.fn();
-      const { result } = renderHook(() =>
-        useTerminalBlocks(
-          "session-1",
-          term,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          boundaryMock,
-        ),
-      );
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term));
 
       // 兩行短短的內容，中間是真正的換行字元（不是欄寬自動換行）——模擬
       // 遠端觀看者貼上多行內容後，才按下真正送出的 Enter。
@@ -808,7 +713,6 @@ describe("useTerminalBlocks", () => {
       });
 
       expect(result.current.blocks).toHaveLength(0);
-      expect(boundaryMock).toHaveBeenCalledWith("start");
     });
   });
 
@@ -901,6 +805,110 @@ describe("useTerminalBlocks", () => {
         result.current.finalizeBlock(blockId, -1);
       });
       expect(result.current.isRawKeyboardModeActive).toBe(false);
+    });
+  });
+
+  describe("執行中的區塊持續更新 renderedLines（跟已完成卡片同一套渲染）", () => {
+    it("running 中收到輸出時，renderedLines 就已經是最新解析結果，不用等指令結束", async () => {
+      // 見設計文件 docs/superpowers/specs/2026-09-16-live-block-rendering-design.md：
+      // 不再是「執行中完全不解析、結束時才解析一次」，而是每個 chunk 都
+      // 持續更新，讓執行中的內容能跟已完成卡片用同一套渲染顯示。
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+
+      act(() => {
+        result.current.submitCommand("echo hi");
+      });
+      // OSC 133 C：登記 marker，這個指令輸出的第一行就是現在游標所在行。
+      await act(async () => {
+        await writeToTerm(term, "\x1b]133;C\x07");
+      });
+      // 真正把位元組寫進畫面（跟 appendOutput 一樣，模擬呼叫端兩者一起做）。
+      await act(async () => {
+        await writeToTerm(term, "hi\r\n");
+      });
+      act(() => {
+        result.current.appendOutput("hi\r\n");
+      });
+
+      await waitFor(() => {
+        expect(result.current.blocks[0].renderedLines).toBeDefined();
+      });
+      // 還在 running，還沒送 D。
+      expect(result.current.blocks[0].status).toBe("running");
+      expect(result.current.blocks[0].renderedLines?.[0].spans.map((s) => s.text).join("")).toBe("hi");
+    });
+
+    it("不限 Windows：任何平台 running 中都能拿到即時 renderedLines（marker 登記已經通用化）", async () => {
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term, undefined, undefined, undefined, undefined, undefined, "other"));
+
+      act(() => {
+        result.current.submitCommand("echo hi");
+      });
+      await act(async () => {
+        await writeToTerm(term, "\x1b]133;C\x07");
+      });
+      await act(async () => {
+        await writeToTerm(term, "hi\r\n");
+      });
+      act(() => {
+        result.current.appendOutput("hi\r\n");
+      });
+
+      await waitFor(() => {
+        expect(result.current.blocks[0].renderedLines).toBeDefined();
+      });
+    });
+
+    it("同一個畫面更新週期內連續多次 appendOutput，只在最後一次真正重新掃描緩衝區", async () => {
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+
+      act(() => {
+        result.current.submitCommand("echo hi");
+      });
+      await act(async () => {
+        await writeToTerm(term, "\x1b]133;C\x07");
+      });
+
+      const rafSpy = vi.spyOn(globalThis, "requestAnimationFrame");
+      await act(async () => {
+        await writeToTerm(term, "a\r\n");
+        result.current.appendOutput("a\r\n");
+        await writeToTerm(term, "b\r\n");
+        result.current.appendOutput("b\r\n");
+        await writeToTerm(term, "c\r\n");
+        result.current.appendOutput("c\r\n");
+      });
+      // 三次 appendOutput 只排一次 rAF——第二、三次呼叫時已經有一個排定中
+      // 的，直接被擋掉（見 scheduleLiveRender 的 `if (liveRenderRafRef.current
+      // !== null) return;`）。
+      expect(rafSpy).toHaveBeenCalledTimes(1);
+      rafSpy.mockRestore();
+
+      await waitFor(() => {
+        expect(result.current.blocks[0].renderedLines?.length).toBe(3);
+      });
+    });
+
+    it("clearAllBlocks() 會取消排程中的 rAF，不會在區塊已經不存在之後還嘗試寫入", async () => {
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+
+      act(() => {
+        result.current.submitCommand("echo hi");
+      });
+      await act(async () => {
+        await writeToTerm(term, "\x1b]133;C\x07");
+      });
+      await act(async () => {
+        await writeToTerm(term, "hi\r\n");
+      });
+      act(() => {
+        result.current.appendOutput("hi\r\n");
+        result.current.clearAllBlocks();
+      });
+
+      // 等超過一個動畫影格的時間，確認沒有任何東西悄悄把 blocks 填回來。
+      await new Promise((r) => setTimeout(r, 50));
+      expect(result.current.blocks).toHaveLength(0);
     });
   });
 });

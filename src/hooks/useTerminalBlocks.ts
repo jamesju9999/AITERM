@@ -109,36 +109,6 @@ export function useTerminalBlocks(
    *  的 `host_os`。這是字串值，可以放心放進依賴陣列（不像 `write` 是函式
    *  參考，同樣的字串值不會觸發 React 重新執行 effect）。 */
   hostPlatform: "windows" | "other" = navigator.platform.toLowerCase().startsWith("win") ? "windows" : "other",
-  /** **保底機制**——只有在 `recoverUntrackedCommand`（見同檔案內的定義）
-   *  無法從畫面內容還原出指令文字時才會被呼叫，例如這個連線還沒收過任何
-   *  OSC 133 B 標記（見 `promptEndRef`）。正常情況下遠端指令會直接透過
-   *  `beginTrackedBlock` 變成完整的卡片，不會走到這裡。
-   *
-   *  實機測試抓到的原始 bug：遠端觀看者透過分享連線寫進 PTY 的指令，不會
-   *  經過 `submitCommand`/`beginTrackedBlock`，導致 `TerminalView.tsx`
-   *  「即時窗格自動撐高」邏輯賴以判斷的「有沒有一個 running 中的區塊」
-   *  信號永遠是 false。這個 callback 讓呼叫端在指令文字還原失敗的少見
-   *  情況下，仍能拿到「現在有東西在跑」這個單純的訊號、維持窗格至少不
-   *  裁切輸出——完整解法是 `recoverUntrackedCommand` 成功時直接呼叫
-   *  `beginTrackedBlock`，不需要這個訊號介入。
-   *
-   *  C 只在**沒有**本機追蹤區塊、且還原也失敗時才視為「開始」；D 沿用既有
-   *  兩個提早 return 的分支（`prev.length === 0` / `latest.status !==
-   *  "running"`）——那兩個分支本來就是「沒有東西可以結案」的判斷，同一個
-   *  條件借來判斷「這次 D 沒有對應本機區塊」。
-   *
-   *  必須是穩定的參考（useCallback 空依賴或 ref 橋接），理由跟
-   *  `onCommandSettled`/`onCommandStarted` 一樣。 */
-  onUntrackedCommandBoundary?: (kind: "start" | "end") => void,
-  /** 每次 shell 畫完提示字元（OSC 133 B）就回報它的絕對行號。
-   *
-   *  給 Windows 的即時窗格用：那邊不再清空 xterm 緩衝區（見下方 OSC 133 D
-   *  分支），整個 ConPTY 畫面都還在，所以窗格必須自己算出「要從哪一行開始
-   *  顯示」。提示字元的位置就是答案——剛開分頁時它在第 1 列、畫面填滿後
-   *  它在最後一列，只有實際追蹤才能兩種情況都對。
-   *
-   *  跟其他 callback 一樣必須是穩定的參考。 */
-  onPromptStart?: (absoluteRow: number) => void,
 ): UseTerminalBlocksResult {
   const [blocks, setBlocks] = useState<TerminalBlock[]>([]);
   const [isAlternateBuffer, setIsAlternateBuffer] = useState(false);
@@ -155,11 +125,19 @@ export function useTerminalBlocks(
   // OSC 133 B 標記記錄的「輸入從這裡開始」絕對座標，給 recoverUntrackedCommand
   // 用——只在遠端指令（沒有本機追蹤區塊）時才會被讀取，見該函式的文件註解。
   const promptEndRef = useRef<{ row: number; col: number } | null>(null);
-  // Windows 專用：OSC 133 C 當下游標所在行＝這個指令輸出的第一行。
-  // ConPTY 用絕對座標畫在自己固定大小的畫面上，那段位元組只有在跟它同步的
-  // 畫面 xterm 裡才解讀得正確，拿去另一個終端機從左上角重播會整段互相覆蓋，
-  // 所以卡片內容改從這一行起直接讀畫面緩衝區。
+  // 一個 running 中區塊開始時（OSC 133 C 當下、或 submitCommand/
+  // beginTrackedBlock 建立區塊當下）游標所在行＝這個指令輸出的第一行。
+  // 原本只有 Windows 才登記（ConPTY 用絕對座標畫在自己固定大小的畫面上，
+  // 拿去另一個終端機從左上角重播會整段互相覆蓋，卡片內容因此要從這一行
+  // 起直接讀畫面緩衝區），現在所有平台都登記——見設計文件
+  // docs/superpowers/specs/2026-09-16-live-block-rendering-design.md：
+  // running 中的區塊現在也要持續讀取畫面緩衝區更新 renderedLines
+  // （見下面的 scheduleLiveRender），不是只有結束時讀一次。
   const outputStartRef = useRef<{ blockId: string; marker: IMarker } | null>(null);
+  // scheduleLiveRender 用 requestAnimationFrame 節流：同一個畫面更新週期
+  // 內收到多個 chunk，只在最後一次真正重新掃描緩衝區算 renderedLines，
+  // 不會累積成「chunk 數 × 目前已輸出列數」的計算量。
+  const liveRenderRafRef = useRef<number | null>(null);
 
   /**
    * 實機測試抓到的第二個 bug（跟 appendOutput 的 race 是不同根因）：
@@ -184,8 +162,8 @@ export function useTerminalBlocks(
    * 現在停在接續行，不是 B 當初記錄的那一行），clear() 保留下來的是
    * 接續行的內容，跟 promptEndRef.col 對不上——這時候若還是無條件把
    * row 搬成 0，recoverUntrackedCommand 會從錯誤的一行切出內容，得到
-   * 一個看似成功、實際上是錯的還原結果，比直接還原失敗、退回
-   * onUntrackedCommandBoundary 保底機制還糟（保底機制不會生出錯誤資料）。
+   * 一個看似成功、實際上是錯的還原結果，比直接還原失敗（不建立區塊）
+   * 還糟（還原失敗不會生出錯誤資料）。
    * 所以要在呼叫 clear() 之前，先讀一次目前遊標的絕對行號，只有在它
    * 剛好等於 promptEndRef 記錄的行號時，才代表這個前提成立、可以安心
    * 搬遷；不成立就維持原樣，讓既有的 endRow < startRow 防呆邏輯自然
@@ -208,9 +186,50 @@ export function useTerminalBlocks(
     setBlocks(updated);
   }, []);
 
-  const appendOutput = useCallback((chunk: string) => {
-    updateLatestBlock((b) => (b.status === "running" ? { ...b, rawOutput: b.rawOutput + chunk } : b));
-  }, [updateLatestBlock]);
+  /**
+   * 執行中的區塊現在跟已完成的卡片用同一套 `readRenderedLines` 顯示（見
+   * 設計文件 2026-09-16-live-block-rendering-design.md），不再用另一個
+   * 固定大小、需要對齊的即時窗格——這個函式負責把「目前畫面緩衝區算出來
+   * 的最終視覺狀態」持續寫回這個 block 的 `renderedLines`。
+   *
+   * 用 requestAnimationFrame 節流：`readRenderedLines` 是線性掃描（從
+   * marker 那一行掃到目前游標所在列），不是遞增式的，狂送輸出的指令
+   * 若每個 chunk 都重新掃一次，成本會隨輸出量變差。同一個畫面更新週期
+   * 內收到多個 chunk，只在最後一次真正掃描一次。
+   */
+  const scheduleLiveRender = useCallback(
+    (blockId: string) => {
+      if (liveRenderRafRef.current !== null) return;
+      liveRenderRafRef.current = requestAnimationFrame(() => {
+        liveRenderRafRef.current = null;
+        const start = outputStartRef.current;
+        if (!term || !start || start.blockId !== blockId) return;
+        const latest = blocksRef.current[blocksRef.current.length - 1];
+        if (!latest || latest.id !== blockId || latest.status !== "running") return;
+
+        const buf = term.buffer.active;
+        const cursorRow = buf.baseY + buf.cursorY;
+        // 標記被 scrollback 修剪掉時 line 會是 -1——代表輸出比 scrollback
+        // 還長，剩下的每一列都屬於這個指令，從第 0 列讀起。
+        const endRow = buf.cursorX > 0 ? cursorRow + 1 : cursorRow;
+        const renderedLines = readRenderedLines(buf, Math.max(0, start.marker.line), endRow, term.cols);
+
+        const withLines = blocksRef.current.map((b) => (b.id === blockId ? { ...b, renderedLines } : b));
+        blocksRef.current = withLines;
+        setBlocks(withLines);
+      });
+    },
+    [term],
+  );
+
+  const appendOutput = useCallback(
+    (chunk: string) => {
+      updateLatestBlock((b) => (b.status === "running" ? { ...b, rawOutput: b.rawOutput + chunk } : b));
+      const latest = blocksRef.current[blocksRef.current.length - 1];
+      if (latest?.status === "running") scheduleLiveRender(latest.id);
+    },
+    [updateLatestBlock, scheduleLiveRender],
+  );
 
   const setBlockGitInfo = useCallback((id: string, info: GitBlockInfo | null) => {
     const prev = blocksRef.current;
@@ -229,23 +248,35 @@ export function useTerminalBlocks(
     setBlocks([]);
     outputStartRef.current?.marker.dispose();
     outputStartRef.current = null;
+    if (liveRenderRafRef.current !== null) {
+      cancelAnimationFrame(liveRenderRafRef.current);
+      liveRenderRafRef.current = null;
+    }
     rawKeyboardDepthRef.current = 0;
     setIsRawKeyboardModeActive(false);
   }, []);
 
   /**
    * Marks a still-running block as completed/failed, freezes its rawOutput,
-   * and kicks off headless ANSI parsing that fires+clears its onComplete
-   * callback once parsing resolves. Shared by the normal OSC 133 D path and
+   * and does one final synchronous re-render of its `renderedLines` before
+   * firing its onComplete callback. Shared by the normal OSC 133 D path and
    * the defensive "orphaned block" path in submitCommand below, so a block
    * can never be finalized more than once and its callback can never be left
    * dangling regardless of which path finalizes it.
    *
-   * `opts.clearOnParsed` clears the live terminal once the card is ready to
-   * take over (the original, Mac/Linux behavior — avoids a blank-screen flash
-   * between "raw output disappears" and "card appears"). The OSC 133 D path
-   * skips this on Windows, where it instead clears synchronously-deferred and
-   * force-repaints — see the registerOscHandler callback below for why.
+   * `renderedLines` has already been kept live-updated by scheduleLiveRender
+   * as output streamed in (see its doc comment), but that update is
+   * rAF-throttled — there could be a chunk that arrived just before OSC 133 D
+   * whose scheduled update hasn't fired yet. This does one last synchronous
+   * read (not scheduled) so the final card never misses trailing output, and
+   * cancels the now-redundant pending rAF.
+   *
+   * `opts.clearOnParsed` clears the live terminal now that the card has this
+   * command's final content (the original, Mac/Linux behavior — avoids a
+   * blank-screen flash between "raw output disappears" and "card appears").
+   * The OSC 133 D path skips this on Windows, where it instead clears
+   * synchronously-deferred and force-repaints — see the registerOscHandler
+   * callback below for why.
    */
   const finalizeBlock = useCallback(
     (blockId: string, exitCode: number, opts?: { clearOnParsed?: boolean }) => {
@@ -261,49 +292,60 @@ export function useTerminalBlocks(
       rawKeyboardDepthRef.current = 0;
       setIsRawKeyboardModeActive(false);
 
+      if (liveRenderRafRef.current !== null) {
+        cancelAnimationFrame(liveRenderRafRef.current);
+        liveRenderRafRef.current = null;
+      }
+
       const endTime = Date.now();
       const frozenOutput = target.rawOutput;
       const cols = term?.cols ?? 80;
+
+      // 標記被 scrollback 修剪掉時 line 會是 -1——代表輸出比 scrollback 還長，
+      // 剩下的每一列都屬於這個指令，從第 0 列讀起。沒有登記過 marker（理論上
+      // 不會發生，除非區塊建立當下 term 是 null）才退回重新解析凍結文字。
+      const start = outputStartRef.current;
+      let renderedLines: RenderedLine[] | null = null;
+      if (start?.blockId === blockId && term) {
+        const buf = term.buffer.active;
+        const cursorRow = buf.baseY + buf.cursorY;
+        const endRow = buf.cursorX > 0 ? cursorRow + 1 : cursorRow;
+        renderedLines = readRenderedLines(buf, Math.max(0, start.marker.line), endRow, cols);
+        start.marker.dispose();
+        outputStartRef.current = null;
+      }
 
       const finalized: TerminalBlock = {
         ...target,
         status: exitCode === 0 ? "completed" : "failed",
         exitCode,
         endTime,
+        ...(renderedLines ? { renderedLines } : null),
       };
       const updated = prev.map((b) => (b.id === blockId ? finalized : b));
       blocksRef.current = updated;
       setBlocks(updated);
 
-      // 標記被 scrollback 修剪掉時 line 會是 -1——代表輸出比 scrollback 還長，
-      // 剩下的每一列都屬於這個指令，從第 0 列讀起。
-      const start = outputStartRef.current;
-      let liveLines: RenderedLine[] | null = null;
-      if (start?.blockId === blockId && term) {
-        const buf = term.buffer.active;
-        const cursorRow = buf.baseY + buf.cursorY;
-        const endRow = buf.cursorX > 0 ? cursorRow + 1 : cursorRow;
-        liveLines = readRenderedLines(buf, Math.max(0, start.marker.line), endRow, cols);
-        start.marker.dispose();
-        outputStartRef.current = null;
-      }
+      if (opts?.clearOnParsed && term) clearAndRebasePromptEnd(term);
 
-      (liveLines ? Promise.resolve(liveLines) : parseAnsiToRenderedLines(frozenOutput, cols)).then((renderedLines) => {
-        const withLines = blocksRef.current.map((b) =>
-          b.id === blockId ? { ...b, renderedLines } : b,
-        );
-        blocksRef.current = withLines;
-        setBlocks(withLines);
-
-        if (opts?.clearOnParsed && term) clearAndRebasePromptEnd(term);
-
+      const settle = (finalBlock: TerminalBlock) => {
         const cb = completionCallbacksRef.current.get(blockId);
         if (cb) {
           completionCallbacksRef.current.delete(blockId);
-          const finalBlock = withLines.find((b) => b.id === blockId)!;
           setTimeout(() => cb(finalBlock), 50);
         }
-      });
+      };
+
+      if (renderedLines) {
+        settle(finalized);
+      } else {
+        parseAnsiToRenderedLines(frozenOutput, cols).then((lines) => {
+          const withLines = blocksRef.current.map((b) => (b.id === blockId ? { ...b, renderedLines: lines } : b));
+          blocksRef.current = withLines;
+          setBlocks(withLines);
+          settle(withLines.find((b) => b.id === blockId)!);
+        });
+      }
     },
     [term, clearAndRebasePromptEnd],
   );
@@ -374,9 +416,8 @@ export function useTerminalBlocks(
     // 這個 effect 的 deps 含三個 callback（finalizeBlock / onLiveClear /
     // onCommandSettled），任一個識別性改變就會重跑：舊監聽 dispose、新監聽
     // 註冊——中間沒有人重讀「現在是不是 alternate」。於是若程式已經切進
-    // alt-screen 之後才發生重跑，狀態會永遠停在 false，即時窗格縮回
-    // MAX_LIVE_ROWS。實際症狀是 Claude Code 時而滿版、時而只有 16 列；
-    // vim 較少遇到只是因為開啟時比較不會剛好觸發那幾個 callback 重建。
+    // alt-screen 之後才發生重跑，狀態會永遠停在 false，畫面顯示會跟著算錯
+    // （isAlternateBuffer 消費端依賴這個狀態決定要不要撐滿可用高度）。
     //
     // 冪等：setState 同值不會觸發重繪。
     onBufferChange();
@@ -409,7 +450,6 @@ export function useTerminalBlocks(
           row: term.buffer.active.cursorY + term.buffer.active.baseY,
           col: term.buffer.active.cursorX,
         };
-        onPromptStart?.(promptEndRef.current.row);
         return true;
       } else if (data === "C") {
         // Command start — usually a no-op, since the block was already
@@ -427,14 +467,14 @@ export function useTerminalBlocks(
         const latest = prev[prev.length - 1];
         if (!latest || latest.status !== "running") {
           const recovered = recoverUntrackedCommand(term, promptEndRef.current);
-          if (recovered !== null) {
-            beginTrackedBlock(recovered);
-          } else {
-            onUntrackedCommandBoundary?.("start");
-          }
+          if (recovered !== null) beginTrackedBlock(recovered);
         }
+        // 這個指令輸出的第一行＝現在游標所在行——所有平台都要登記（原本
+        // 只有 Windows，見 outputStartRef 宣告處的說明）：running 中的
+        // 區塊現在要靠這個 marker 持續讀取畫面緩衝區更新 renderedLines，
+        // 不是只有結束時讀一次。
         const running = blocksRef.current[blocksRef.current.length - 1];
-        if (hostPlatform === "windows" && running?.status === "running" && outputStartRef.current?.blockId !== running.id) {
+        if (running?.status === "running" && outputStartRef.current?.blockId !== running.id) {
           const marker = term.registerMarker(0);
           if (marker) {
             outputStartRef.current?.marker.dispose();
@@ -451,15 +491,9 @@ export function useTerminalBlocks(
         const exitCode = hasExitCode ? parseInt(parts[1], 10) : 0;
 
         const prev = blocksRef.current;
-        if (prev.length === 0) {
-          onUntrackedCommandBoundary?.("end");
-          return true;
-        }
+        if (prev.length === 0) return true;
         const latest = prev[prev.length - 1];
-        if (latest.status !== "running") {
-          onUntrackedCommandBoundary?.("end");
-          return true;
-        }
+        if (latest.status !== "running") return true;
 
         // Windows-only: deliberately does NOT clear the xterm buffer.
         //
@@ -477,10 +511,10 @@ export function useTerminalBlocks(
         //
         // zsh/bash repaint with relative moves (CR + backspace), so they are
         // immune and keep the original clearing behavior below. On Windows
-        // the buffer now stays in lockstep with ConPTY and old output is
-        // hidden purely by the live pane's height clipping (TerminalView's
-        // liveRows + the bottom-anchored host), which needs no cooperation
-        // from ConPTY to stay correct.
+        // the buffer now stays in lockstep with ConPTY; old output never gets
+        // shown twice because each card's `renderedLines` is scoped to its
+        // own marker-to-cursor range (see scheduleLiveRender/finalizeBlock),
+        // not the whole buffer — no cooperation from ConPTY needed.
         const isWindows = hostPlatform === "windows";
         if (isWindows) {
           setTimeout(() => {
@@ -520,7 +554,7 @@ export function useTerminalBlocks(
     // 的都是函式簽名裡那個預設值運算式產生的全新參考，放進依賴陣列會讓
     // 這個 effect 每次 render 都 dispose+重新註冊）。`hostPlatform` 是字串，
     // 沒有這個問題，放心加進來。
-  }, [term, finalizeBlock, beginTrackedBlock, clearAndRebasePromptEnd, onLiveClear, onCommandSettled, hostPlatform, onUntrackedCommandBoundary, onPromptStart]);
+  }, [term, finalizeBlock, beginTrackedBlock, clearAndRebasePromptEnd, onLiveClear, onCommandSettled, hostPlatform]);
 
   const submitCommand = useCallback(
     (cmd: string, onComplete?: (block: TerminalBlock) => void) => {
