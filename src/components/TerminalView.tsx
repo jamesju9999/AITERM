@@ -572,10 +572,19 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // `renderedLines`, not a separate live pane). Summing line counts, not just
   // counting blocks, is what makes this re-fire as a single running block's
   // content keeps growing rather than only when the block count itself changes.
+  // `visibleBlockCount` — how many blocks currently have a `renderedLines`
+  // array at all (even an empty one) — is also a dependency: a block that
+  // finalizes with zero output lines (e.g. `cd`, `export`) goes from
+  // `renderedLines: undefined` to `renderedLines: []`, which doesn't change
+  // `totalRenderedLineCount` at all, yet the new card (header + command text
+  // is always rendered, even with an empty body) still needs to be scrolled
+  // into view — it's the moment the block enters the filtered `.filter((b) =>
+  // b.renderedLines)` list this component actually renders.
+  const visibleBlockCount = blocks.filter((b) => b.renderedLines).length;
   const totalRenderedLineCount = blocks.reduce((sum, b) => sum + (b.renderedLines?.length ?? 0), 0);
   useEffect(() => {
     blockListRef.current?.scrollTo({ top: blockListRef.current.scrollHeight });
-  }, [totalRenderedLineCount]);
+  }, [visibleBlockCount, totalRenderedLineCount]);
 
   // The terminal wrapper is `display:none` while viewTab === "files" (see the
   // JSX below). xterm.js can receive writes (e.g. the shell's own prompt

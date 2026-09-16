@@ -123,13 +123,10 @@ vi.mock("@xterm/xterm", () => ({
     onData = vi.fn();
     loadAddon = vi.fn();
     scrollToBottom = vi.fn();
-    // 模擬真正 xterm.js 的行為：捲到某一行之後，viewportY 就是那一行
-    // （見 RemoteTerminalView/index.tsx 的 recomputeLiveGeometry，改用
-    // scrollToLine 取代手動算位移量之後的新設計）。無頭 Terminal（沒有
-    // .open() 掛到真正的 DOM）不會真的更新 viewportY，這裡用假的模擬。
-    scrollToLine = vi.fn((line: number) => {
-      mockBufferActive.viewportY = line;
-    });
+    // isRawKeyboardModeActive 從 false 變 true 時，RemoteTerminalView 會
+    // 主動呼叫 term.focus()（見 index.tsx 的對應 useEffect），把鍵盤焦點
+    // 轉給 xterm 實例本身——這個假 Terminal 也要有這個方法才不會炸掉。
+    focus = vi.fn();
     resize = vi.fn();
     cols = 80;
     rows = 24;
@@ -556,138 +553,6 @@ describe("RemoteTerminalView", () => {
     expect(await screen.findByTestId("remote-ai-panel")).toBeInTheDocument();
   });
 
-  it("Windows 主控端：提示字元一畫出來就把 viewport 捲到那一行", async () => {
-    // 第三版（動態夾法）在長連線、scrollback 夠深時還是不夠：算「現在捲到
-    // 哪」跟「提示字元在哪」的差距，假設指令會持續吐出新內容讓差距自然
-    // 收斂到 0，但 claude CLI 的信任提示印一次就停下來等按鍵，差距永遠收斂
-    // 不了，窗格被夾到只剩一兩列（實機錄影證實：連線開 20 分鐘後，畫面
-    // 幾乎全黑）。改用 term.scrollToLine() 直接指定 viewport 位置，不用再
-        // 算差距——不管 scrollback 多深，捲完位移量恆為 0。
-    const { container } = render(
-      <RemoteTerminalView tabId="t1" connId="cwin" sas="9999" isActive onConnectClick={vi.fn()} />,
-    );
-    await waitFor(() => expect(handlers["granted:cwin"]).toBeDefined());
-    act(() => {
-      handlers["granted:cwin"]({ mode: "control", cols: 80, rows: 24, hostOs: "windows" } as never);
-    });
-    await waitFor(() => expect(capturedOscHandler).toBeTruthy());
-
-    // 提示字元畫在絕對第 300 列（連線累積了很深的 scrollback）。
-    mockBufferActive.cursorY = 300;
-    mockBufferActive.baseY = 0;
-    mockBufferActive.viewportY = 0;
-    act(() => {
-      capturedOscHandler!("B");
-    });
-
-    // viewport 被直接捲到提示字元那一行（mock 的 scrollToLine 會把
-    // viewportY 設成傳入的值，模擬真正 xterm.js 的行為）。
-    await waitFor(() => {
-      expect(mockBufferActive.viewportY).toBe(300);
-    });
-    // 不再靠 CSS 位移對齊，host 永遠不設 top。
-    const host = container.querySelector(".aiterm-remote-terminal__scroll") as HTMLElement;
-    expect(host.style.top).toBe("");
-  });
-
-  it("Windows 主控端：後續 chunk 抵達時（沒有新的 OSC 133 B，例如非 shell 的前景程式持續輸出）也要重新捲到提示字元那一行，不能任由 viewport 漂走", async () => {
-    // claude CLI 這類前景程式不是 shell，執行期間完全不會再送 OSC 133 B。
-    // 如果只在 B 觸發時捲一次，程式自己的輸出（或任何其他因素）把
-    // viewport 推走之後就再也不會拉回來。TerminalView.tsx（本機分頁）
-    // 已經在每個 chunk 都重新呼叫 recomputeLiveGeometry，這裡要補同一套
-    // 機制。
-    const { container } = render(
-      <RemoteTerminalView tabId="t1" connId="cwin2" sas="9997" isActive onConnectClick={vi.fn()} />,
-    );
-    await waitFor(() => expect(handlers["granted:cwin2"]).toBeDefined());
-    act(() => {
-      handlers["granted:cwin2"]({ mode: "control", cols: 80, rows: 24, hostOs: "windows" } as never);
-    });
-    await waitFor(() => expect(capturedOscHandler).toBeTruthy());
-
-    mockBufferActive.cursorY = 7;
-    mockBufferActive.baseY = 0;
-    mockBufferActive.viewportY = 0;
-    act(() => {
-      capturedOscHandler!("B");
-    });
-    await waitFor(() => expect(mockBufferActive.viewportY).toBe(7));
-
-    // 模擬 viewport 被別的東西推走（不會再送 OSC 133 B）。
-    mockBufferActive.viewportY = 50;
-    await waitFor(() => expect(handlers["data:cwin2"]).toBeDefined());
-    act(() => {
-      handlers["data:cwin2"](btoa("some interactive output\r\n") as never);
-    });
-
-    // 下一個 chunk 抵達時應該把它重新拉回提示字元那一行。
-    await waitFor(() => {
-      expect(mockBufferActive.viewportY).toBe(7);
-    });
-    const host = () => container.querySelector(".aiterm-remote-terminal__scroll") as HTMLElement;
-    expect(host().style.top).toBe("");
-  });
-
-  it("Windows 主控端：不管 scrollback 多深，指令執行中都能撐到 MAX_LIVE_ROWS，不會被位移量夾小", async () => {
-    // 第三版動態夾法的核心問題：scrollback 越深，位移量收斂到 0 要等的
-    // 新內容就越多，claude CLI 這種印一次就停的程式永遠等不到。改用
-    // scrollToLine 之後位移量恆為 0，liveRows 只需要被 term.rows 本身
-    // 夾住，不用再扣掉位移量吃掉的空間——不管提示字元在多深的絕對列
-    // （這裡故意設成 5000，模擬非常長的連線），窗格都能撐好撐滿。
-    const { container } = render(
-      <RemoteTerminalView tabId="t1" connId="cwin3" sas="9996" isActive onConnectClick={vi.fn()} />,
-    );
-    await waitFor(() => expect(handlers["granted:cwin3"]).toBeDefined());
-    act(() => {
-      handlers["granted:cwin3"]({ mode: "control", cols: 80, rows: 24, hostOs: "windows" } as never);
-    });
-    await waitFor(() => expect(capturedOscHandler).toBeTruthy());
-
-    mockBufferActive.cursorY = 5000;
-    mockBufferActive.baseY = 0;
-    mockBufferActive.viewportY = 0;
-    act(() => {
-      capturedOscHandler!("B");
-    });
-    await waitFor(() => expect(mockBufferActive.viewportY).toBe(5000));
-
-    const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
-    await waitFor(() => expect(textarea).not.toBeDisabled());
-    await userEvent.type(textarea, "claude{Enter}");
-
-    await waitFor(() => expect(handlers["data:cwin3"]).toBeDefined());
-    act(() => {
-      handlers["data:cwin3"](btoa("some interactive output\r\n") as never);
-    });
-
-    // 撐到完整的 MAX_LIVE_ROWS(16)：round(16 * 15.4) = 246px。
-    const liveFrame = () => container.querySelector(".aiterm-remote-terminal__live-frame") as HTMLElement;
-    await waitFor(() => {
-      expect(liveFrame().style.height).toBe("246px");
-    });
-    const host = () => container.querySelector(".aiterm-remote-terminal__scroll") as HTMLElement;
-    expect(host().style.top).toBe("");
-  });
-
-  it("非 Windows 主控端：不位移（那邊仍然會清空緩衝區，提示字元本來就在第 0 列）", async () => {
-    const { container } = render(
-      <RemoteTerminalView tabId="t1" connId="cnix" sas="9998" isActive onConnectClick={vi.fn()} />,
-    );
-    await waitFor(() => expect(handlers["granted:cnix"]).toBeDefined());
-    act(() => {
-      handlers["granted:cnix"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
-    });
-    await waitFor(() => expect(capturedOscHandler).toBeTruthy());
-
-    mockBufferActive.cursorY = 7;
-    act(() => {
-      capturedOscHandler!("B");
-    });
-
-    const host = container.querySelector(".aiterm-remote-terminal__scroll") as HTMLElement;
-    expect(host.style.top).toBe("");
-  });
-
   it("唯讀模式下 Ask AI 按鈕停用", async () => {
     render(<RemoteTerminalView tabId="t1" connId="c23" sas="2323" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c23"]).toBeDefined());
@@ -838,8 +703,16 @@ describe("RemoteTerminalView", () => {
     expect(appendOutputSpy).toHaveBeenCalledWith(utf8Text);
   });
 
-  it("即時窗格在指令執行中撐到最大高度、指令完成變成卡片後收回最小高度", async () => {
-    const { container } = render(<RemoteTerminalView tabId="t1" connId="c12" sas="1212" isActive onConnectClick={vi.fn()} />);
+  it("指令完成後（renderedLines 就緒）進入卡片列表，且不會因為狀態切換而消失", async () => {
+    // 跟 liveRows 那套即時窗格夾高機制不同：現在不論是不是還在
+    // running，只要有 renderedLines 就會進卡片列表（見 JSX 的
+    // `.filter((b) => b.renderedLines)`）。這個測試沒有透過 OSC 133 C
+    // 走 marker 路徑（WarpInput 送出的指令不會自己模擬 shell 回應），
+    // 所以 renderedLines 要等 D 觸發 finalizeBlock 的 fallback 解析才會
+    // 被設定——這是這個 mock 環境的既有限制，不是「running 中永遠看不到
+    // 卡片」的斷言（真正的 shell 回應會觸發 C，讓 running 中也能透過
+    // scheduleLiveRender 持續更新 renderedLines）。
+    render(<RemoteTerminalView tabId="t1" connId="c12" sas="1212" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c12"]).toBeDefined());
     handlers["granted:c12"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
 
@@ -847,59 +720,57 @@ describe("RemoteTerminalView", () => {
     await waitFor(() => expect(textarea).not.toBeDisabled());
     await userEvent.type(textarea, "echo hi{Enter}");
 
-    // 指令送出後，模擬 shell 真的產生了一批輸出——即時窗格應該撐到最大
-    // 高度（測試環境量不到 xterm 真正的字元格尺寸，會落到 14*1.1 的
-    // fallback，MAX_LIVE_ROWS=16 對應 Math.round(16*14*1.1) = 246px）。
+    // 還沒有 renderedLines，卡片列表裡還看不到這個區塊。
+    expect(screen.queryByText("echo hi")).not.toBeInTheDocument();
+
     await waitFor(() => expect(handlers["data:c12"]).toBeDefined());
     act(() => {
       handlers["data:c12"](btoa("hi\r\n") as never);
     });
 
-    const liveFrame = () => container.querySelector(".aiterm-remote-terminal__live-frame") as HTMLElement;
-    await waitFor(() => {
-      expect(liveFrame().style.height).toBe("246px");
-    });
-
-    // 指令執行完畢、變成卡片——即時窗格應該收回最小高度
-    // （MIN_LIVE_ROWS=3 對應 Math.round(3*14*1.1) = 46px）。
     await waitFor(() => expect(capturedOscHandler).toBeTruthy());
     act(() => {
       capturedOscHandler!("D;0");
     });
-    await waitFor(() => {
-      expect(liveFrame().style.height).toBe("46px");
-    });
+
+    // D 觸發 finalizeBlock 之後才進卡片列表，且維持顯示。
+    expect(await screen.findByText("echo hi")).toBeInTheDocument();
   });
 
-  it("主控端自己在跑的指令（觀看端沒發起）也要撐開即時窗格，結束後收到剛好放得下輸出的高度", async () => {
-    // 實機 bug：遠端主控端已經在跑東西時才連進去，觀看端的 `blocks` 是空的，
-    // 「有沒有一個 running 中的區塊」這個撐高訊號永遠是 false，即時窗格就卡在
-    // MIN_LIVE_ROWS(3) ≈ 46px——三列高。本機分頁早就有
-    // `onUntrackedCommandBoundary` 這條保底路徑（見 TerminalView.tsx 與
-    // TerminalView.remoteLiveHeight.test.tsx），觀看端當初傳的是 undefined。
-    const { container } = render(<RemoteTerminalView tabId="t1" connId="c12b" sas="1213" isActive onConnectClick={vi.fn()} />);
+  it("主控端自己在跑的指令（觀看端沒發起、也沒收過 B）不會讓後續正常追蹤的指令跟著壞掉", async () => {
+    // 實機抓到的原始 bug 是「即時窗格卡在最小高度看不到內容」——那個
+    // 保底機制（onUntrackedCommandBoundary）已經隨著整個 liveRows 架構
+    // 一起拆除（見設計文件 2026-09-16-live-block-rendering-design.md）：
+    // 沒有 B 就還原不出指令文字，這種完全沒有座標線索的片段現在確實
+    // 無法變成卡片，跟本機分頁（TerminalView.tsx）共用同一套邏輯、同一個
+    // 限制。這裡改驗證更重要的事：這種「連線當下主控端已經在跑東西」的
+        // 情況不會讓 hook 卡死或後續指令追蹤跟著壞掉——下一輪正常的 B/C/D
+        // 週期仍然能正確建立卡片。
+    render(<RemoteTerminalView tabId="t1" connId="c12b" sas="1213" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c12b"]).toBeDefined());
     handlers["granted:c12b"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
 
-    const liveFrame = () => container.querySelector(".aiterm-remote-terminal__live-frame") as HTMLElement;
-    await waitFor(() => expect(liveFrame().style.height).toBe("46px"));
-
     // OSC 133 C，且沒有任何本機追蹤區塊、也沒收過 B（還原不出指令文字）
-    // ——正是主控端自己在跑指令的情況。
+    // ——正是主控端自己在跑指令的情況。這裡不該拋出例外或讓 hook 卡死。
     await waitFor(() => expect(capturedOscHandler).toBeTruthy());
     act(() => {
       capturedOscHandler!("C");
     });
-    await waitFor(() => expect(liveFrame().style.height).toBe("246px"));
-
-    // 指令結束：收回到剛好放得下已經畫出來的那幾行（游標停在 index 4 = 5 行
-    // → Math.round(5 * 14 * 1.1) = 77px），不是繼續卡在 MAX 留一大截空白，
-    // 也不是收回 MIN 把已經畫出來的輸出裁掉。
-    mockBufferActive.cursorY = 4;
     act(() => {
       capturedOscHandler!("D;0");
     });
-    await waitFor(() => expect(liveFrame().style.height).toBe("77px"));
+    expect(document.querySelectorAll(".aiterm-block-card").length).toBe(0);
+
+    // 接下來一個由觀看端自己發起、正常經過 submitCommand 追蹤的指令，
+    // 應該完全不受剛剛那段無法還原的片段影響，照常變成卡片。
+    const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
+    await waitFor(() => expect(textarea).not.toBeDisabled());
+    await userEvent.type(textarea, "echo hi{Enter}");
+    act(() => {
+      capturedOscHandler!("D;0");
+    });
+
+    expect(await screen.findByText("echo hi")).toBeInTheDocument();
   });
 
   it("新卡片出現時自動捲動到最底部", async () => {
@@ -935,21 +806,21 @@ describe("RemoteTerminalView", () => {
   });
 
   it("全螢幕程式（vim/htop 等）進入 alternate buffer 時，卡片列表與 WarpInput 隱藏、即時窗格撐滿；離開後恢復", async () => {
-    // 實機審查抓到的迴歸：拿掉自動縮放字體（Task 1）+ 即時窗格高度夾在
-    // MAX_LIVE_ROWS 並用 overflow:clip 硬裁（Task 2）疊加起來，會讓遠端
-    // 觀看端看 vim/htop/tmux 這類全螢幕程式時，畫面被裁到只剩最後 16 行、
-    // 其餘完全看不到也滑不到——跟本機終端機一樣，全螢幕程式使用中應該讓
-    // 即時窗格撐滿、不裁切，卡片列表與輸入框讓開空間。
+    // 跟這次重寫之前不同：一般模式下即時窗格不再用 overflow:clip 裁切
+    // 固定高度的畫面——它整個被移到畫面外（見 RemoteTerminalView/index.tsx
+    // 的 JSX：非 alt-buffer 時 style 是 `{ position: "absolute", left:
+    // "-99999px", top: 0 }`），畫面上看到的內容改由卡片列表負責。全螢幕
+    // 程式使用中才會把它移回可見位置、撐滿、不裁切。
     const { container } = render(<RemoteTerminalView tabId="t1" connId="c14" sas="1414" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c14"]).toBeDefined());
     handlers["granted:c14"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
 
     const liveFrame = () => container.querySelector(".aiterm-remote-terminal__live-frame") as HTMLElement;
 
-    // 一般模式：卡片容器與輸入框都在，即時窗格會裁切。
+    // 一般模式：卡片容器與輸入框都在，即時窗格移到畫面外。
     await waitFor(() => expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument());
     expect(container.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
-    expect(liveFrame().style.overflow).toBe("clip");
+    expect(liveFrame().style.left).toBe("-99999px");
 
     await waitFor(() => expect(capturedBufferChangeHandler).toBeTruthy());
     mockBufferActive.type = "alternate";
@@ -964,6 +835,7 @@ describe("RemoteTerminalView", () => {
     // 落到 14*1.1 的 fallback：Math.round(24*14*1.1) = 370px）——不是無
     // 條件撐滿容器的 100%，容器比內容需要的空間大時不該留下空白。
     expect(liveFrame().style.height).toBe("370px");
+    expect(liveFrame().style.left).toBe("");
     expect(container.querySelector(".aiterm-remote-terminal__blocks")).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/輸入指令|Type a command/i)).not.toBeInTheDocument();
 
@@ -973,36 +845,37 @@ describe("RemoteTerminalView", () => {
       capturedBufferChangeHandler!();
     });
     await waitFor(() => {
-      expect(liveFrame().style.overflow).toBe("clip");
+      expect(liveFrame().style.left).toBe("-99999px");
     });
     expect(container.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument();
   });
 
-  it("偵測到 Kitty keyboard protocol push（沒有切 alternate screen buffer 的互動提示，例如 claude CLI 信任提示）時，卡片列表與 WarpInput 隱藏、即時窗格撐高；pop 後恢復", async () => {
+  it("偵測到 Kitty keyboard protocol push（沒有切 alternate screen buffer 的互動提示，例如 claude CLI 信任提示）時，卡片列表繼續顯示、WarpInput 隱藏；pop 後恢復", async () => {
     // 設計文件 docs/superpowers/specs/2026-09-16-interactive-prompt-live-expand-design.md：
     // 實測 `claude` CLI 的信任提示不會切 alternate screen buffer，純粹用
-    // 游標定位在原地重繪，靠這個訊號補上 isAlternateBuffer 沒覆蓋到的縫。
-    const { container } = render(<RemoteTerminalView tabId="t1" connId="c41" sas="4141" isActive onConnectClick={vi.fn()} />);
+    // 游標定位在原地重繪。跟這次重寫之前不同：卡片列表現在**不會**因為
+    // isRawKeyboardModeActive 而隱藏（見設計文件
+    // 2026-09-16-live-block-rendering-design.md）——執行中指令的內容
+    // （例如信任提示本身）現在就是透過持續更新的 renderedLines 畫在卡片
+    // 列表裡，不是獨立的即時窗格，藏起來會連使用者需要看到、需要互動的
+    // 內容一起藏掉。只有 WarpInput（獨立的指令輸入框）會讓開，把鍵盤
+    // 焦點交給真正的 xterm 實例。
+    render(<RemoteTerminalView tabId="t1" connId="c41" sas="4141" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c41"]).toBeDefined());
     handlers["granted:c41"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
 
-    const liveFrame = () => container.querySelector(".aiterm-remote-terminal__live-frame") as HTMLElement;
-
     await waitFor(() => expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument());
-    const idleHeight = liveFrame().style.height;
-    expect(liveFrame().style.overflow).toBe("clip");
+    expect(document.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
 
     await waitFor(() => expect(capturedRawKbPushHandler).toBeTruthy());
     act(() => {
       capturedRawKbPushHandler!();
     });
 
-    expect(container.querySelector(".aiterm-remote-terminal__blocks")).not.toBeInTheDocument();
+    // 卡片列表繼續顯示；只有 WarpInput 讓開。
+    expect(document.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/輸入指令|Type a command/i)).not.toBeInTheDocument();
-    // 維持 overflow: clip——跟 alt-screen 展開不一樣，不新增捲動容器。
-    expect(liveFrame().style.overflow).toBe("clip");
-    expect(liveFrame().style.height).not.toBe(idleHeight);
 
     expect(capturedRawKbPopHandler).toBeTruthy();
     act(() => {
@@ -1012,8 +885,7 @@ describe("RemoteTerminalView", () => {
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument();
     });
-    expect(container.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
-    expect(liveFrame().style.height).toBe(idleHeight);
+    expect(document.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
   });
 
   it("全螢幕程式即時窗格的高度跟著主控端實際列數變化，不是無條件撐滿容器", async () => {

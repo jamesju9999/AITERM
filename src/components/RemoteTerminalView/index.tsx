@@ -29,12 +29,6 @@ import { RemoteAiPanel, type RemoteAiPanelHandle } from "./RemoteAiPanel";
 import "../TerminalView.css";
 import "./index.css";
 
-const MIN_LIVE_ROWS = 3;
-const MAX_LIVE_ROWS = 16;
-// 同 TerminalView.tsx 的 EXPANDED_LIVE_ROWS，理由一樣：見設計文件
-// docs/superpowers/specs/2026-09-16-interactive-prompt-live-expand-design.md。
-const EXPANDED_LIVE_ROWS = 24;
-
 interface Props {
   tabId: string;
   /** 2B-1 的觀看連線 id。所有 `share-viewer://*` 事件都掛在它上面。 */
@@ -111,23 +105,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   // 而不是直接讀 term.rows：單純的 resize（列數變了但 isAlternateBuffer
   // 本身沒變、也沒有其他 state 跟著變）不會讓這個元件重新 render，
   // term.rows 讀到的會是上一輪 render 當下的舊值，畫面因此不會跟著更新。
-  const [hostRows, setHostRows] = useState(MAX_LIVE_ROWS);
-
-  // 見下方 liveTopRows 的說明——OSC 133 B 回報提示字元位置時要用到，但
-  // 真正的實作宣告在後面，所以跟本檔其他同類情況一樣先用 ref 佔位。
-  const syncLiveTopRef = useRef<(() => void) | null>(null);
-
-  // 「有指令在跑，但不是這一端發起的」的保底訊號——同一顆佔位 ref 手法，
-  // 真正的實作要等 setLiveRows 宣告完才能賦值（見下方賦值處）。
-  const untrackedCommandBoundaryRef = useRef<((kind: "start" | "end") => void) | null>(null);
-  const handleUntrackedCommandBoundary = useCallback((kind: "start" | "end") => {
-    untrackedCommandBoundaryRef.current?.(kind);
-  }, []);
-  const promptAbsRowRef = useRef<number | null>(null);
-  const handlePromptStart = useCallback((absoluteRow: number) => {
-    promptAbsRowRef.current = absoluteRow;
-    syncLiveTopRef.current?.();
-  }, []);
+  const [hostRows, setHostRows] = useState(24);
 
   const { blocks, isAlternateBuffer, isRawKeyboardModeActive, submitCommand, appendOutput, clearAllBlocks } = useTerminalBlocks(
     connId,
@@ -138,8 +116,6 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
     undefined,
     write,
     hostPlatform,
-    handleUntrackedCommandBoundary,
-    handlePromptStart,
   );
   const clearAllBlocksRef = useRef(clearAllBlocks);
   clearAllBlocksRef.current = clearAllBlocks;
@@ -241,108 +217,35 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   // 不能靠閉包讀 isAlternateBuffer。
   const isAlternateBufferRef = useRef(isAlternateBuffer);
   isAlternateBufferRef.current = isAlternateBuffer;
-  const visibleBlockCount = blocks.filter((b) => b.status !== "running" && b.renderedLines).length;
+  // 卡片列表跟即時窗格共用同一個外層捲動容器，累積的渲染行數（而不是
+  // 「已完成的卡片數」）變動就捲到底——跟 TerminalView.tsx 的
+  // totalRenderedLineCount 同一套機制、同一個理由：running 中的區塊現在
+  // 也會持續更新 renderedLines（見 useTerminalBlocks 的 scheduleLiveRender），
+  // 只看「完成卡片數」的話，執行中指令吐出大量輸出時畫面不會跟著捲動。
+  // `visibleBlockCount`（有幾個區塊已經拿到 renderedLines 陣列——就算是
+  // 空陣列也算）也是依賴：一個結束時完全沒有輸出的區塊（`cd`、`export`
+  // 之類）會從 `renderedLines: undefined` 變成 `renderedLines: []`，這件
+  // 事完全不會讓 totalRenderedLineCount 變動，但卡片本身（表頭與指令
+  // 文字一律會畫，就算內容是空的）仍然需要被捲進視野——這正是這個區塊
+  // 進入下面 `.filter((b) => b.renderedLines)` 實際渲染清單的那一刻。
+  const visibleBlockCount = blocks.filter((b) => b.renderedLines).length;
+  const totalRenderedLineCount = blocks.reduce((sum, b) => sum + (b.renderedLines?.length ?? 0), 0);
   useEffect(() => {
     scrollAreaRef.current?.scrollTo({ top: scrollAreaRef.current.scrollHeight });
-  }, [visibleBlockCount]);
+  }, [visibleBlockCount, totalRenderedLineCount]);
 
-  // 即時窗格閒置時縮到 MIN_LIVE_ROWS、有指令在跑時撐到 MAX_LIVE_ROWS——
-  // 跟 TerminalView.tsx 完全同一套機制、同一組數值：閒置時只顯示提示
-  // 字元不需要佔用大片空間，指令執行中撐開避免輸出被裁掉（滑鼠滾輪跟
-  // liveRows 毫無關聯，裁掉了就拿不回來），指令完成變成卡片
-  // （visibleBlockCount 改變）後收回最小高度。
-  const [liveRows, setLiveRows] = useState(MIN_LIVE_ROWS);
-  // 提示字元所在的列，讓即時窗格從那一列開始顯示——跟 TerminalView.tsx 的
-  // liveTopRows 同一套機制、同一個理由：Windows 主控端不再清空 xterm 緩衝區
-  // （見 useTerminalBlocks 的 OSC 133 D 分支），整個 ConPTY 畫面都還在，
-  // 從第 0 列開始畫就會把已經變成卡片的舊輸出再顯示一次（實機回報）。
-  // 觀看端跟本機分頁餵的是同一串位元組、共用同一個 useTerminalBlocks，
-  // 所以必須補上同一套對齊，否則兩邊體驗不一致。
-  const [liveTopRows, setLiveTopRows] = useState(0);
-
-  // 「想要」的窗格列數——`liveRows` state 本身不再直接賦值，而是這個值
-  // 夾住 term.rows 之後的結果（見下面 recomputeLiveGeometry）。拆成獨立
-  // 的 ref 而不是直接改 liveRows state，理由跟原本一樣：「想要多高」是
-  // 一回事，「實際能撐多高」要在同一次計算裡跟其他限制合併，不能各自
-  // setState、互相踩掉對方剛設定的值。
-  const desiredLiveRowsRef = useRef(MIN_LIVE_ROWS);
-
-  // 第三版嘗試過「算出位移量、用位移量夾住 liveRows」的動態夾法（見設計
-  // 文件 2026-09-16-interactive-prompt-live-expand-design.md 的第二次
-  // 更新），還是不夠：那個算法假設「執行中的指令會持續吐出新內容，位移
-  // 量自然會降到 0」，但 `claude` CLI 的信任提示印一次就停下來等按鍵，
-  // 連線開得夠久（scrollback 夠深）時位移量永遠收斂不到 0，窗格會被夾到
-  // 只剩一兩列——實機錄影證實：連線開 20 分鐘後，`claude` 的內容明明已經
-  // 完整進到 DOM，畫面卻幾乎全黑。
-  //
-  // 改用 `term.scrollToLine()` 直接把 viewport 捲到提示字元那一行，不用
-  // 再算「現在捲到哪」跟「提示字元在哪」的差距——不管 scrollback 多深，
-  // 捲完之後位移量恆為 0，`liveRows` 因此只需要被 term.rows 本身夾住，
-  // 不需要再扣掉位移量吃掉的空間。
-  const recomputeLiveGeometry = useCallback(() => {
-    const term = termRef.current;
-    if (!term) return;
-    if (hostPlatform === "windows") {
-      const promptAbsRow = promptAbsRowRef.current;
-      if (promptAbsRow !== null) term.scrollToLine(promptAbsRow);
-    }
-    setLiveTopRows(0);
-    setLiveRows(Math.max(MIN_LIVE_ROWS, Math.min(desiredLiveRowsRef.current, term.rows)));
-  }, [hostPlatform]);
-  // 沿用既有的 syncLiveTopRef 橋接（onPromptStart 等只依賴 [connId] 註冊
-  // 的 effect 用這個讀最新版本，理由跟其他同名 ref 一樣）。
-  syncLiveTopRef.current = recomputeLiveGeometry;
-
-  const requestLiveRows = useCallback(
-    (desired: number) => {
-      desiredLiveRowsRef.current = desired;
-      recomputeLiveGeometry();
-    },
-    [recomputeLiveGeometry],
-  );
-
+  // isRawKeyboardModeActive 從 false 變 true 的那一刻，WarpInput 會被卸載
+  // （見下面 JSX），焦點需要主動轉給那個現在移到畫面外、但仍然是唯一真正
+  // 接收鍵盤輸入的 xterm 實例——跟 TerminalView.tsx 同一套機制、同一個理由。
   useEffect(() => {
-    requestLiveRows(MIN_LIVE_ROWS);
-  }, [visibleBlockCount, requestLiveRows]);
-
-  // 跟 TerminalView.tsx 同一套邏輯與理由：isAlternateBuffer 為 true 時
-  // liveRows 不影響顯示高度（見下面 JSX 的 height 三元判斷式用的是
-  // altBufferHeightPx），這裡不需要額外判斷 isAlternateBuffer。
-  useEffect(() => {
-    requestLiveRows(isRawKeyboardModeActive ? EXPANDED_LIVE_ROWS : MIN_LIVE_ROWS);
-  }, [isRawKeyboardModeActive, requestLiveRows]);
-
-  // 見上面 untrackedCommandBoundaryRef 宣告處——這裡才真的賦值，因為
-  // requestLiveRows 要到這裡才存在。跟 TerminalView.tsx 的同名實作完全
-  // 一樣，而且對觀看端來說這條路徑比本機更重要：主控端自己在跑的東西
-  // （例如連線之前就開著的 Claude Code CLI）永遠不會經過這一端的
-  // submitCommand，「有沒有一個 running 中的區塊」這個撐高訊號因此永遠
-  // 是 false，窗格會卡在 MIN_LIVE_ROWS 只有三列高（實機回報）。
-  //
-  // "start" 先撐到 MAX_LIVE_ROWS 避免輸出被裁掉；"end" 量一次游標實際停在
-  // 第幾行，收回剛好放得下的高度——遠端指令的輸出不會變成卡片、也不會被
-  // 清空，維持在 MAX 只會在下面留一大截用不到的空白。
-  untrackedCommandBoundaryRef.current = (kind) => {
-    if (kind === "start") {
-      requestLiveRows(MAX_LIVE_ROWS);
-      return;
-    }
-    const term = termRef.current;
-    const usedRows = term ? term.buffer.active.cursorY + 1 : MIN_LIVE_ROWS;
-    requestLiveRows(Math.min(MAX_LIVE_ROWS, Math.max(MIN_LIVE_ROWS, usedRows)));
-  };
+    if (isRawKeyboardModeActive) termRef.current?.focus();
+  }, [isRawKeyboardModeActive]);
 
   // xterm.js 沒有公開 API 可以讀字元格高度——這裡讀的是跟 TerminalView.tsx
   // 同一個內部欄位，同一個 escape hatch，這個 repo 已經有先例。
   const cellHeightPx =
     (termState as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } } } | null)
       ?._core?._renderService?.dimensions?.css?.cell?.height || 14 * 1.1;
-  const liveHeightPx = Math.round(liveRows * cellHeightPx);
-  // 全螢幕程式使用中一律不位移：那類程式自己畫滿整個畫面，沒有東西要裁。
-  // 這個 host（.aiterm-remote-terminal__scroll）沒有 padding，所以不需要
-  // TerminalView 那邊的 4px 補償。
-  const liveTopOffsetPx =
-    isAlternateBuffer || liveTopRows <= 0 ? 0 : Math.ceil(liveTopRows * cellHeightPx);
   // 全螢幕程式使用中，即時窗格高度改成剛好塞下主控端目前的實際列數，不再
   // 無條件撐滿容器——容器可能比內容需要的空間大（例如主控端終端機只有
   // 24 列，但觀看端視窗開得比較高），撐滿的話畫面下方會留一大片沒用到
@@ -436,25 +339,11 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
           // ——不接這行的話，卡片永遠只有指令文字跟耗時，看不到任何輸出
           // 內容。用跟本機分頁一樣的 stream decoder，不要對 `bytes`
           // （atob 的 Latin1-per-byte 字串）直接呼叫 appendOutput：那樣
-          // 多位元組 UTF-8 字元會被拆散成亂碼。
+          // 多位元組 UTF-8 字元會被拆散成亂碼。appendOutput 內部會自己
+          // 排 rAF 重算 running 區塊的 renderedLines（見 useTerminalBlocks
+          // 的 scheduleLiveRender），這裡不需要再額外撐高度或搬視窗位置
+          // ——執行中內容跟已完成卡片走同一套渲染，畫面自然會跟著長高。
           appendOutputRef.current(decoder.decode(arr, { stream: true }));
-          // 跟 TerminalView.tsx 同一套機制：有一個追蹤中的區塊還在
-          // running，代表指令正在執行、正在產生輸出，即時窗格想撐到最大
-          // 高度（實際能撐多高由 recomputeLiveGeometry 依當下位移量夾住
-          // ——見 desiredLiveRowsRef 宣告處的說明）。
-          const latestBlock = blocksRef.current[blocksRef.current.length - 1];
-          if (latestBlock?.status === "running") {
-            desiredLiveRowsRef.current = MAX_LIVE_ROWS;
-          }
-          // 提示字元的 viewport-relative 列數會隨著輸出捲動緩衝區
-          // （baseY 增加）而改變，所以要每個 chunk 都重新計算，不能只靠
-          // OSC 133 B 觸發——跟 TerminalView.tsx 同一套機制、同一個理由
-          // （見該檔案 onPtyData 內的呼叫）。無條件呼叫、不看
-          // latestBlock 是否 running：Windows 觀看端的「主控端自己在跑
-          // 的東西」本來就不會經過這一端的 submitCommand，不能用區塊
-          // 狀態當門檻；`liveRows` 也要在這裡跟著位移量一起重新夾一次
-          // （見 recomputeLiveGeometry），不能只更新位移量。
-          syncLiveTopRef.current?.();
         });
       }),
     );
@@ -731,17 +620,23 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
       <div className="aiterm-remote-terminal__scroll-area" ref={scrollAreaRef}>
         {/* 卡片列表在全螢幕程式（vim/htop/tmux 等）使用中隱藏——跟
             TerminalView.tsx 同一個理由：那類程式必須完整佔滿即時窗格，
-            不該被已完成指令的舊卡片跟它搶空間。 */}
-        {!(isAlternateBuffer || isRawKeyboardModeActive) && (
+            不該被已完成指令的舊卡片跟它搶空間。isRawKeyboardModeActive
+            現在**不會**隱藏這個列表（跟這次重寫之前不同）：執行中指令
+            （例如 claude CLI 的信任提示）的內容現在也透過持續更新的
+            renderedLines 畫在這個列表裡（見設計文件
+            2026-09-16-live-block-rendering-design.md），不是獨立的即時
+            窗格——把列表藏起來會連使用者需要看到、需要互動的內容一起
+            藏掉。 */}
+        {!isAlternateBuffer && (
           <div className="aiterm-remote-terminal__blocks">
-            {/* 分段卡片：跟本機分頁同一套過濾條件（只顯示已結束且已完成
-                ANSI 解析的），複用 TerminalBlockCard——不傳 onAskAi，
-                Ask AI 按鈕本身是 `{isFailed && onAskAi && (...)}` 條件
-                渲染，不傳就不會出現；block.gitInfo 永遠是 undefined
-                （這裡從不呼叫 setBlockGitInfo），git 徽章同理自然不
-                出現。 */}
+            {/* 分段卡片：跟本機分頁同一套過濾條件（只要有 renderedLines
+                就顯示，包含還在 running 的），複用 TerminalBlockCard——
+                不傳 onAskAi，Ask AI 按鈕本身是
+                `{isFailed && onAskAi && (...)}` 條件渲染，不傳就不會
+                出現；block.gitInfo 永遠是 undefined（這裡從不呼叫
+                setBlockGitInfo），git 徽章同理自然不出現。 */}
             {blocks
-              .filter((b) => b.status !== "running" && b.renderedLines)
+              .filter((b) => b.renderedLines)
               .map((b) => (
                 <TerminalBlockCard
                   key={b.id}
@@ -753,39 +648,39 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
           </div>
         )}
 
-        {/* 外層框住並裁切即時畫面；hostRef 本身內部永遠固定高度，
-            這樣它（以及 xterm 自己內部的尺寸監聽）永遠不會因為這一層
-            高度變化而看到容器尺寸改變——只有這一層的高度會變。跟
-            TerminalView.tsx 的 .aiterm-live-frame 完全同一套機制，包含
-            全螢幕程式（vim/htop 等）使用中撐滿、不裁切這件事：拿掉自動
-            縮放字體後，若仍然把高度夾在 MAX_LIVE_ROWS 並用 overflow:clip
-            硬裁，全螢幕程式會被裁到只剩最後 16 行、其餘完全看不到也滑
-            不到——這是實機審查抓到的迴歸，不是刻意的設計。 */}
+        {/* 真正的 xterm.js 實例——鍵盤輸入、游標/ANSI 狀態、OSC/CSI 解析
+            仍然全部靠它，但它自己畫出來的東西不再是使用者在全螢幕程式
+            以外看到的內容（見上面的卡片列表）：執行中指令的畫面內容
+            現在來自上面的卡片列表，不是這裡。移到畫面外而不是
+            `display:none`——xterm 需要真實、可量測的尺寸才能正確算出
+            字元格尺寸並回報 cols/rows 給主控端；移到畫面外可以維持這點
+            同時什麼都不顯示。全螢幕程式（vim/htop 等）是唯一還需要看到
+            真正終端機、而且要滿版顯示的情況，因為那類程式自己畫滿整個
+            畫面，沒有其他東西可以顯示。 */}
         <div
           className="aiterm-remote-terminal__live-frame"
-          style={{
-            // 全螢幕程式使用中改用 altBufferHeightPx（主控端目前實際列數
-            // 換算出的像素高度），不是無條件撐滿容器的 100%——容器可能比
-            // 內容需要的空間大（例如主控端只有 24 列，但觀看端視窗開得
-            // 比較高），撐滿的話畫面下方會留一大片沒用到的空白（實機
-            // 回報過的問題）。跟本機終端機（TerminalView.tsx）不同：那邊
-            // 用 FitAddon 讓「終端機列數」永遠等於「容器裝得下的列數」，
-            // 兩者天生一致，撐滿容器不會有多餘空白；這裡的列數是主控端
-            // 說了算，觀看端的容器大小跟它無關，撐滿容器反而可能比內容
-            // 需要的還大。
-            height: isAlternateBuffer ? `${altBufferHeightPx}px` : `${liveHeightPx}px`,
-            width: "calc(100% - 16px)",
-            margin: "6px 8px",
-            boxSizing: "border-box",
-            flexShrink: 0,
-            // 全螢幕程式使用中改成 visible：`clip` 會把內容硬裁在固定
-            // 220px 高的 hostRef 裡，不裁的話反而要讓 hostRef 自己撐滿
-            // 100%（見下面的 hostRef style），這裡的 overflow 只是配合
-            // 這個切換，不是又要開放捲動。
-            overflow: isAlternateBuffer ? "visible" : "clip",
-            // 下面的 host 靠絕對定位往上位移對齊提示字元，這一層要當定位基準。
-            position: liveTopOffsetPx > 0 ? "relative" : undefined,
-          }}
+          style={
+            isAlternateBuffer
+              ? {
+                  // 全螢幕程式使用中改用 altBufferHeightPx（主控端目前
+                  // 實際列數換算出的像素高度），不是無條件撐滿容器的
+                  // 100%——容器可能比內容需要的空間大（例如主控端只有
+                  // 24 列，但觀看端視窗開得比較高），撐滿的話畫面下方
+                  // 會留一大片沒用到的空白（實機回報過的問題）。跟本機
+                  // 終端機（TerminalView.tsx）不同：那邊用 FitAddon 讓
+                  // 「終端機列數」永遠等於「容器裝得下的列數」，兩者天生
+                  // 一致，撐滿容器不會有多餘空白；這裡的列數是主控端說了
+                  // 算，觀看端的容器大小跟它無關，撐滿容器反而可能比
+                  // 內容需要的還大。
+                  height: `${altBufferHeightPx}px`,
+                  width: "calc(100% - 16px)",
+                  margin: "6px 8px",
+                  boxSizing: "border-box",
+                  flexShrink: 0,
+                  overflow: "visible",
+                }
+              : { position: "absolute", left: "-99999px", top: 0 }
+          }
         >
           <div
             className="aiterm-remote-terminal__scroll"
@@ -794,10 +689,6 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
               height: isAlternateBuffer ? "100%" : "220px",
               width: "100%",
               boxSizing: "border-box",
-              // 見 liveTopRows：把提示字元那一列推到窗格頂端。
-              ...(liveTopOffsetPx > 0
-                ? { position: "absolute" as const, top: -liveTopOffsetPx, left: 0, right: 0, width: "auto" }
-                : null),
             }}
           />
         </div>
