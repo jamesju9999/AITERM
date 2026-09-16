@@ -160,3 +160,37 @@ mock `useTerminalBlocks` 回傳固定值的模式）：
 - **`EXPANDED_LIVE_ROWS = 24` 是拍板值**，沒有從實際各類互動提示的行數
   統計出來。如果之後出現常態性超過 24 行又需要逐鍵輸入的提示，使用者
   只能靠滑鼠滾輪往回看，體驗會打折但不會無法使用。
+
+## 更新（2026-09-16）：即時窗格對齊機制從 CSS 位移改成 `scrollToLine`
+
+出貨後真機測試在**長連線（20 分鐘以上，累積大量 scrollback）**下踩到新
+問題：原本的對齊機制（`liveTopRows`，位在 Windows 遠端／本機分頁）算
+「提示字元的絕對列數」跟「目前捲動到哪」的差距，再用 CSS `top` 把 host
+往上位移那個差距。這個算法假設「執行中的指令會持續吐出新內容，讓差距
+自然收斂到 0」。`claude` CLI 的信任提示印一次就停下來等按鍵，不會持續
+吐內容——連線開得越久（scrollback 越深），這個差距就卡得越住，即時窗格
+被夾到只剩一兩列高，畫面幾乎全黑（但內容其實已經完整進到 xterm 的 DOM
+裡，用 devtools 展開 `.xterm-rows` 可以看到，只是被裁到視野外——這點靠
+真機錄影拆幀 + devtools 檢查證實過，排除是資料沒收到的可能）。
+
+中間試過「指令執行中直接把位移歸零」，結果讓窗格瞬間跳去顯示「目前捲動
+位置」最上面幾列——Windows 不清緩衝區，那個位置可能還停在上一個已經變
+成卡片的指令輸出，於是重複顯示了一次舊內容（另一次真機錄影證實）。
+
+**最終做法**：改用 xterm.js 公開的 `term.scrollToLine(line)`，直接把
+viewport 捲到提示字元那個絕對列，不用再算差距、也不用等它自然收斂——
+不管 scrollback 多深，捲完之後位移量恆為 0。`liveTopRows` 因此永遠是
+`0`，`liveRows` 只需要被 `term.rows` 本身夾住（`Math.min(desired,
+term.rows)`），不用再算「扣掉位移量後還剩多少空間」。原本的 CSS
+`position: absolute; top: -Npx` 那條路徑仍然保留在程式碼裡（`liveTopRows
+> 0` 才會走到），但實際上永遠不會被觸發——沒有一併刪除，因為拿掉會擴大
+這次修改的範圍，风险與效益不成比例。
+
+**已知限制**：這個 repo 目前所有測試（hook 測試用的無頭 `Terminal`、
+元件測試用的假 `Terminal` 類別）都沒有真的呼叫 `.open()` 掛到 DOM 上，
+而 `scrollToLine` 需要真正的 renderer 才會實際改變 `viewportY`——直接
+拿無頭 Terminal 驗證過，`scrollToLine`／`scrollToTop`／`scrollToBottom`
+在這個環境下全部是 no-op。這代表這次的自動化測試只能驗證「有沒有正確
+呼叫 `scrollToLine`」，沒辦法像前面幾版一樣證明畫面真的會捲到對的位置，
+最終正確性是靠使用者在真機（真正的遠端 Windows 連線）上重新測試確認的，
+不是靠這次新增的測試。

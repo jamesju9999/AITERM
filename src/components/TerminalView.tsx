@@ -658,50 +658,40 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // buffer, so their prompt is always at row 0 and this stays 0.
   const [liveTopRows, setLiveTopRows] = useState(0);
 
-  // "Wanted" pane height — `liveRows` itself is no longer assigned directly;
-  // it's derived by clamping this against however much room the current
-  // offset leaves (see recomputeLiveGeometry below). Kept as a separate ref
-  // rather than folded straight into liveRows because "how tall do we want
-  // to be" and "how much room does the current offset use up" are two
-  // different things that must be combined in one calculation — updating
-  // them as two separate setState calls lets one clobber the other's
-  // just-applied value.
-  //
-  // Background (see the update to design doc
-  // 2026-09-16-interactive-prompt-live-expand-design.md): `liveTopRows +
-  // liveRows` must never exceed `term.rows` — whatever's beyond that is
-  // outside xterm's actual rendered content, showing either blank space
-  // (past the bottom of the content) or old output (offset forced to 0,
-  // colliding with output that's already become a card — a second
-  // real-machine report). `claude` CLI's trust prompt barely advances any
-  // new lines (it redraws in place via absolute cursor positioning), so the
-  // offset is still nearly a full screen's worth right when it starts; if
-  // the pane were also snapped straight to EXPANDED_LIVE_ROWS, the sum would
-  // overflow. This dynamic clamp instead starts the pane small and lets it
-  // grow as the offset shrinks, keeping the sum within term.rows at all
-  // times.
+  // "Wanted" pane height — `liveRows` itself is no longer assigned
+  // directly; it's derived by clamping this against `term.rows` (see
+  // recomputeLiveGeometry below). Kept as a separate ref rather than folded
+  // straight into liveRows because "how tall do we want to be" has to be
+  // combined with that clamp in one calculation, not applied via a separate
+  // setState that could clobber it.
   const desiredLiveRowsRef = useRef(MIN_LIVE_ROWS);
 
+  // A third attempt at this lived here (see the second update to design doc
+  // 2026-09-16-interactive-prompt-live-expand-design.md): compute how far
+  // off the prompt row is from the current scroll position, and clamp
+  // liveRows by whatever room that leaves. Still not enough: that assumed a
+  // running command keeps producing new lines fast enough for the offset to
+  // decay toward 0, but `claude` CLI's trust prompt prints once and then
+  // sits idle waiting for a keypress — on a long-lived tab (deep
+  // scrollback), the offset never decays, so the pane stays clamped to a
+  // sliver forever (real-machine recording: 20-minute-old connection, the
+  // trust prompt's content was fully in the DOM, but the live pane was
+  // still nearly all black).
+  //
+  // Switched to `term.scrollToLine()`, which scrolls the viewport straight
+  // to the prompt row instead of computing the gap to it — however deep the
+  // scrollback is, the offset is 0 right after scrolling, so liveRows only
+  // needs to be bounded by term.rows itself, not by however much room the
+  // offset leaves.
   const recomputeLiveGeometry = useCallback(() => {
     const term = termRef.current;
     if (!term) return;
-    let newLiveTopRows = 0;
     if (navigator.platform.toLowerCase().startsWith("win")) {
       const promptAbsRow = promptAbsRowRef.current;
-      if (promptAbsRow !== null) {
-        // viewportY, NOT baseY: xterm renders buffer lines starting at
-        // viewportY (the current scroll position), while baseY is only
-        // where the viewport sits when scrolled fully to the bottom. The
-        // two are equal at the bottom and diverge the moment the buffer is
-        // scrolled up, at which point a baseY-derived offset points at old
-        // output instead of the prompt — exactly what a real-machine
-        // screenshot showed.
-        const viewportRow = promptAbsRow - term.buffer.active.viewportY;
-        newLiveTopRows = Math.max(0, Math.min(term.rows - 1, viewportRow));
-      }
+      if (promptAbsRow !== null) term.scrollToLine(promptAbsRow);
     }
-    setLiveTopRows(newLiveTopRows);
-    setLiveRows(Math.max(MIN_LIVE_ROWS, Math.min(desiredLiveRowsRef.current, term.rows - newLiveTopRows)));
+    setLiveTopRows(0);
+    setLiveRows(Math.max(MIN_LIVE_ROWS, Math.min(desiredLiveRowsRef.current, term.rows)));
   }, []);
   syncLiveTopRef.current = recomputeLiveGeometry;
 

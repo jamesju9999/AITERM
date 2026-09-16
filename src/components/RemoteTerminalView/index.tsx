@@ -261,36 +261,33 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   const [liveTopRows, setLiveTopRows] = useState(0);
 
   // 「想要」的窗格列數——`liveRows` state 本身不再直接賦值，而是這個值
-  // 夾住當下位移剩餘空間後的衍生結果（見下面 recomputeLiveGeometry）。
-  // 拆成獨立的 ref 而不是直接改 liveRows state，是因為「想要多高」跟
-  // 「位移用掉多少空間」是兩件事，要在同一次計算裡合併，不能各自
+  // 夾住 term.rows 之後的結果（見下面 recomputeLiveGeometry）。拆成獨立
+  // 的 ref 而不是直接改 liveRows state，理由跟原本一樣：「想要多高」是
+  // 一回事，「實際能撐多高」要在同一次計算裡跟其他限制合併，不能各自
   // setState、互相踩掉對方剛設定的值。
-  //
-  // 背景（見設計文件 2026-09-16-interactive-prompt-live-expand-design.md
-  // 的更新）：`liveTopRows + liveRows` 不能超過 `term.rows`，超過的部分
-  // 窗格看到的就是 xterm 實際內容範圍以外——不是空白（超過內容底部）就是
-  // 舊內容（位移被迫歸零，跟已經變成卡片的輸出重疊，實機回報）。
-  // `claude` CLI 的信任提示幾乎不推進新的一行（用游標定位原地重畫），
-  // 所以剛跳出提示字元時位移量幾乎是一整個畫面，若窗格同時撐到
-  // EXPANDED_LIVE_ROWS 這麼大就會超過——用這個動態夾法讓窗格從很小開始、
-  // 隨著位移量降下來逐步長高，兩個數字的和永遠不超過 term.rows。
   const desiredLiveRowsRef = useRef(MIN_LIVE_ROWS);
 
-  // 用 viewportY 不是 baseY：xterm 實際是從 viewportY 開始渲染，兩者只在
-  // 捲到最底時相同。
+  // 第三版嘗試過「算出位移量、用位移量夾住 liveRows」的動態夾法（見設計
+  // 文件 2026-09-16-interactive-prompt-live-expand-design.md 的第二次
+  // 更新），還是不夠：那個算法假設「執行中的指令會持續吐出新內容，位移
+  // 量自然會降到 0」，但 `claude` CLI 的信任提示印一次就停下來等按鍵，
+  // 連線開得夠久（scrollback 夠深）時位移量永遠收斂不到 0，窗格會被夾到
+  // 只剩一兩列——實機錄影證實：連線開 20 分鐘後，`claude` 的內容明明已經
+  // 完整進到 DOM，畫面卻幾乎全黑。
+  //
+  // 改用 `term.scrollToLine()` 直接把 viewport 捲到提示字元那一行，不用
+  // 再算「現在捲到哪」跟「提示字元在哪」的差距——不管 scrollback 多深，
+  // 捲完之後位移量恆為 0，`liveRows` 因此只需要被 term.rows 本身夾住，
+  // 不需要再扣掉位移量吃掉的空間。
   const recomputeLiveGeometry = useCallback(() => {
     const term = termRef.current;
     if (!term) return;
-    let newLiveTopRows = 0;
     if (hostPlatform === "windows") {
       const promptAbsRow = promptAbsRowRef.current;
-      if (promptAbsRow !== null) {
-        const viewportRow = promptAbsRow - term.buffer.active.viewportY;
-        newLiveTopRows = Math.max(0, Math.min(term.rows - 1, viewportRow));
-      }
+      if (promptAbsRow !== null) term.scrollToLine(promptAbsRow);
     }
-    setLiveTopRows(newLiveTopRows);
-    setLiveRows(Math.max(MIN_LIVE_ROWS, Math.min(desiredLiveRowsRef.current, term.rows - newLiveTopRows)));
+    setLiveTopRows(0);
+    setLiveRows(Math.max(MIN_LIVE_ROWS, Math.min(desiredLiveRowsRef.current, term.rows)));
   }, [hostPlatform]);
   // 沿用既有的 syncLiveTopRef 橋接（onPromptStart 等只依賴 [connId] 註冊
   // 的 effect 用這個讀最新版本，理由跟其他同名 ref 一樣）。

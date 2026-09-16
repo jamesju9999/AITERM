@@ -123,6 +123,13 @@ vi.mock("@xterm/xterm", () => ({
     onData = vi.fn();
     loadAddon = vi.fn();
     scrollToBottom = vi.fn();
+    // 模擬真正 xterm.js 的行為：捲到某一行之後，viewportY 就是那一行
+    // （見 RemoteTerminalView/index.tsx 的 recomputeLiveGeometry，改用
+    // scrollToLine 取代手動算位移量之後的新設計）。無頭 Terminal（沒有
+    // .open() 掛到真正的 DOM）不會真的更新 viewportY，這裡用假的模擬。
+    scrollToLine = vi.fn((line: number) => {
+      mockBufferActive.viewportY = line;
+    });
     resize = vi.fn();
     cols = 80;
     rows = 24;
@@ -549,12 +556,13 @@ describe("RemoteTerminalView", () => {
     expect(await screen.findByTestId("remote-ai-panel")).toBeInTheDocument();
   });
 
-  it("Windows 主控端：即時窗格對齊到提示字元那一行，不從第 0 列開始顯示", async () => {
-    // 實機回報的不一致：Windows 主控端不再清空 xterm 緩衝區（見
-    // useTerminalBlocks 的 OSC 133 D 分支），整個 ConPTY 畫面都留著。本機
-    // 分頁靠 TerminalView 的提示字元對齊位移只顯示現在這一段，但觀看端
-    // 當初沒有補上同一套機制，於是即時窗格從第 0 列開始畫，把已經變成
-    // 卡片的舊輸出又顯示一次。
+  it("Windows 主控端：提示字元一畫出來就把 viewport 捲到那一行", async () => {
+    // 第三版（動態夾法）在長連線、scrollback 夠深時還是不夠：算「現在捲到
+    // 哪」跟「提示字元在哪」的差距，假設指令會持續吐出新內容讓差距自然
+    // 收斂到 0，但 claude CLI 的信任提示印一次就停下來等按鍵，差距永遠收斂
+    // 不了，窗格被夾到只剩一兩列（實機錄影證實：連線開 20 分鐘後，畫面
+    // 幾乎全黑）。改用 term.scrollToLine() 直接指定 viewport 位置，不用再
+        // 算差距——不管 scrollback 多深，捲完位移量恆為 0。
     const { container } = render(
       <RemoteTerminalView tabId="t1" connId="cwin" sas="9999" isActive onConnectClick={vi.fn()} />,
     );
@@ -564,28 +572,30 @@ describe("RemoteTerminalView", () => {
     });
     await waitFor(() => expect(capturedOscHandler).toBeTruthy());
 
-    // 提示字元畫在第 7 列（畫面已經被先前的輸出往下推）。
-    mockBufferActive.cursorY = 7;
+    // 提示字元畫在絕對第 300 列（連線累積了很深的 scrollback）。
+    mockBufferActive.cursorY = 300;
     mockBufferActive.baseY = 0;
     mockBufferActive.viewportY = 0;
     act(() => {
       capturedOscHandler!("B");
     });
 
-    const host = container.querySelector(".aiterm-remote-terminal__scroll") as HTMLElement;
+    // viewport 被直接捲到提示字元那一行（mock 的 scrollToLine 會把
+    // viewportY 設成傳入的值，模擬真正 xterm.js 的行為）。
     await waitFor(() => {
-      expect(parseFloat(host.style.top)).toBeLessThan(0);
+      expect(mockBufferActive.viewportY).toBe(300);
     });
+    // 不再靠 CSS 位移對齊，host 永遠不設 top。
+    const host = container.querySelector(".aiterm-remote-terminal__scroll") as HTMLElement;
+    expect(host.style.top).toBe("");
   });
 
-  it("Windows 主控端：後續 chunk 抵達時（沒有新的 OSC 133 B，例如非 shell 的前景程式持續輸出）也要重新計算位移，不能凍結在上一次提示字元的位置", async () => {
-    // 實機回報的 bug：`claude` CLI 這類前景程式不是 shell，執行期間完全
-    // 不會再送 OSC 133 B，liveTopOffsetPx 因此凍結在「執行它之前、上一次
-    // shell 提示字元」算出來的舊值。程式持續大量重繪把 viewportY 往下推
-    // 很多之後，這個凍結的位移量會把可視窗格整個推到 xterm 實際內容範圍
-    // 之外——畫面看起來完全空白。TerminalView.tsx（本機分頁）已經在每個
-    // chunk 都重新呼叫 syncLiveTop()（見該檔案 onPtyData 內），這裡要補
-    // 同一套機制。
+  it("Windows 主控端：後續 chunk 抵達時（沒有新的 OSC 133 B，例如非 shell 的前景程式持續輸出）也要重新捲到提示字元那一行，不能任由 viewport 漂走", async () => {
+    // claude CLI 這類前景程式不是 shell，執行期間完全不會再送 OSC 133 B。
+    // 如果只在 B 觸發時捲一次，程式自己的輸出（或任何其他因素）把
+    // viewport 推走之後就再也不會拉回來。TerminalView.tsx（本機分頁）
+    // 已經在每個 chunk 都重新呼叫 recomputeLiveGeometry，這裡要補同一套
+    // 機制。
     const { container } = render(
       <RemoteTerminalView tabId="t1" connId="cwin2" sas="9997" isActive onConnectClick={vi.fn()} />,
     );
@@ -595,45 +605,35 @@ describe("RemoteTerminalView", () => {
     });
     await waitFor(() => expect(capturedOscHandler).toBeTruthy());
 
-    // 提示字元畫在第 7 列，此時 viewportY 是 0。
     mockBufferActive.cursorY = 7;
     mockBufferActive.baseY = 0;
     mockBufferActive.viewportY = 0;
     act(() => {
       capturedOscHandler!("B");
     });
+    await waitFor(() => expect(mockBufferActive.viewportY).toBe(7));
 
-    const host = () => container.querySelector(".aiterm-remote-terminal__scroll") as HTMLElement;
-    const firstOffset = parseFloat(host().style.top);
-    expect(firstOffset).toBeLessThan(0);
-
-    // 模擬前景程式狂送資料、把畫面往下推很多（不會再送 OSC 133 B）。
+    // 模擬 viewport 被別的東西推走（不會再送 OSC 133 B）。
     mockBufferActive.viewportY = 50;
     await waitFor(() => expect(handlers["data:cwin2"]).toBeDefined());
     act(() => {
       handlers["data:cwin2"](btoa("some interactive output\r\n") as never);
     });
 
+    // 下一個 chunk 抵達時應該把它重新拉回提示字元那一行。
     await waitFor(() => {
-      expect(parseFloat(host().style.top)).not.toBe(firstOffset);
+      expect(mockBufferActive.viewportY).toBe(7);
     });
+    const host = () => container.querySelector(".aiterm-remote-terminal__scroll") as HTMLElement;
+    expect(host().style.top).toBe("");
   });
 
-  it("Windows 主控端：指令執行中窗格能撐多高由當下位移量動態夾住，位移+高度永遠不超過主控端實際列數", async () => {
-    // 光是每個 chunk 都重新計算位移量（前一個測試修的那個 bug）還不夠：如果
-    // 上一次 shell 提示字元畫在很深的絕對列（連線夠久、之前跑過大量
-    // dir/ipconfig 之類的輸出），而目前執行的前景程式（例如 claude CLI）自己
-    // 只產生少量輸出，viewportY 追不上 promptAbsRow 的速度跟連線累積了多少
-    // scrollback 完全無關——位移量會維持很大，若窗格同時無條件撐到
-    // MAX_LIVE_ROWS/EXPANDED_LIVE_ROWS，兩者相加就會超過主控端實際的列數，
-        // 窗格看到的是 xterm 實際內容範圍以外，畫面全黑（實機回報）。
-    //
-    // 曾經試過「指令執行中直接把位移歸零」，但那樣會讓窗格瞬間跳去顯示
-    // 「目前捲動位置」最上面那幾列——如果那個位置剛好還停在上一個已經變成
-    // 卡片的指令輸出（Windows 不清緩衝區），窗格會把舊輸出重複顯示一次
-    // （另一次實機回報）。正確做法是動態夾住「窗格想要的高度」，讓它隨著
-    // 位移量降下來逐步長高，兩個數字的和永遠不超過主控端的列數
-    // （`granted` 事件給的 rows）。
+  it("Windows 主控端：不管 scrollback 多深，指令執行中都能撐到 MAX_LIVE_ROWS，不會被位移量夾小", async () => {
+    // 第三版動態夾法的核心問題：scrollback 越深，位移量收斂到 0 要等的
+    // 新內容就越多，claude CLI 這種印一次就停的程式永遠等不到。改用
+    // scrollToLine 之後位移量恆為 0，liveRows 只需要被 term.rows 本身
+    // 夾住，不用再扣掉位移量吃掉的空間——不管提示字元在多深的絕對列
+    // （這裡故意設成 5000，模擬非常長的連線），窗格都能撐好撐滿。
     const { container } = render(
       <RemoteTerminalView tabId="t1" connId="cwin3" sas="9996" isActive onConnectClick={vi.fn()} />,
     );
@@ -643,50 +643,30 @@ describe("RemoteTerminalView", () => {
     });
     await waitFor(() => expect(capturedOscHandler).toBeTruthy());
 
-    // 模擬深層 scrollback：上一次提示字元畫在很下面的絕對列（323）。
-    mockBufferActive.cursorY = 23;
-    mockBufferActive.baseY = 300;
-    mockBufferActive.viewportY = 300;
+    mockBufferActive.cursorY = 5000;
+    mockBufferActive.baseY = 0;
+    mockBufferActive.viewportY = 0;
     act(() => {
       capturedOscHandler!("B");
     });
-
-    const host = () => container.querySelector(".aiterm-remote-terminal__scroll") as HTMLElement;
-    // 閒置狀態確實會位移——這是既有、正確的行為，不能被這次的修改動到。
-    expect(parseFloat(host().style.top)).toBeLessThan(0);
+    await waitFor(() => expect(mockBufferActive.viewportY).toBe(5000));
 
     const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
     await waitFor(() => expect(textarea).not.toBeDisabled());
-    const idleTop = host().style.top;
     await userEvent.type(textarea, "claude{Enter}");
 
-    // 指令剛送出、還沒有任何輸出回來這一刻，位移量不該被提早歸零或重算
-    // ——這正是「指令執行中直接歸零位移」那個修法造成重複顯示舊內容的
-    // 那一刻：舊內容還在畫面上，位移量被錯誤地丟掉，暴露出 Windows 從不
-    // 清空緩衝區留下的、已經變成卡片的輸出。維持跟閒置時一樣的位移，
-    // 才不會在這個瞬間露出舊內容。
-    expect(host().style.top).toBe(idleTop);
-
-    // 前景程式輸出，只把 viewportY 往前推進一點點（遠小於 baseY 累積的
-    // 深度——claude CLI 自己的畫面內容量跟連線累積了多少 scrollback 無關）。
-    mockBufferActive.viewportY = 310;
     await waitFor(() => expect(handlers["data:cwin3"]).toBeDefined());
     act(() => {
       handlers["data:cwin3"](btoa("some interactive output\r\n") as never);
     });
 
-    // 位移量：promptAbsRow(323) - viewportY(310) = 13 列，換算成 px
-    // （jsdom 沒有真正的字元格尺寸，走 14*1.1 的 fallback）：
-    // Math.ceil(13 * 15.4) = 201px——不是舊測試預期的「歸零」，而是照
-    // 目前的真實捲動位置重新算出來的值。
+    // 撐到完整的 MAX_LIVE_ROWS(16)：round(16 * 15.4) = 246px。
     const liveFrame = () => container.querySelector(".aiterm-remote-terminal__live-frame") as HTMLElement;
     await waitFor(() => {
-      expect(host().style.top).toBe("-201px");
+      expect(liveFrame().style.height).toBe("246px");
     });
-    // 窗格「想要」撐到 MAX_LIVE_ROWS(16)，但只剩 24-13=11 列的空間，夾出來
-    // 應該是 11 列（Math.round(11 * 15.4) = 169px），不是撐好撐滿的 16 列
-    // （Math.round(16 * 15.4) = 246px，會跟位移量加起來超過 24 列）。
-    expect(liveFrame().style.height).toBe("169px");
+    const host = () => container.querySelector(".aiterm-remote-terminal__scroll") as HTMLElement;
+    expect(host().style.top).toBe("");
   });
 
   it("非 Windows 主控端：不位移（那邊仍然會清空緩衝區，提示字元本來就在第 0 列）", async () => {
