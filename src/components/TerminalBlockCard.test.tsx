@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalBlockCard } from "./TerminalBlockCard";
 import type { TerminalBlock } from "../hooks/useTerminalBlocks";
 
@@ -56,5 +56,31 @@ describe("TerminalBlockCard", () => {
     render(<TerminalBlockCard block={makeBlock({ status: "failed", exitCode: 1 })} onAskAi={onAskAi} />);
     fireEvent.click(screen.getByText(/Ask AI/));
     expect(onAskAi).toHaveBeenCalledWith("echo hi", 1);
+  });
+
+  describe("running 中的卡片：持續更新的耗時，不顯示 exit code", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1000);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("耗時會隨時間跳動，不用等指令結束才顯示", () => {
+      render(
+        <TerminalBlockCard
+          block={makeBlock({ status: "running", exitCode: undefined, endTime: undefined, startTime: 1000 })}
+        />,
+      );
+      expect(screen.getByText(/0ms/)).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(2300);
+      });
+      expect(screen.getByText(/2\.3s/)).toBeInTheDocument();
+      // running 中不顯示失敗標記（exitCode 是 undefined，不是真的失敗）。
+      expect(screen.queryByText(/^exit /)).not.toBeInTheDocument();
+    });
   });
 });

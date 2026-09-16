@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import type { TerminalBlock } from "../hooks/useTerminalBlocks";
 import "./TerminalBlockCard.css";
 
@@ -43,13 +43,27 @@ function highlightText(text: string, query?: string): React.ReactNode {
 function TerminalBlockCardImpl({ block, highlightQuery, onAskAi, onBookmark, onCopy }: TerminalBlockCardProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  // running 中的卡片跟 Warp 一樣顯示持續跳動的耗時（見設計文件
+  // 2026-09-16-live-block-rendering-design.md）——running 中沒有
+  // `endTime`，靠這個 tick 強制重新渲染讓 `formatDuration(Date.now() -
+  // startTime)` 讀到新值，不需要真的把耗時存進 state。
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (block.status !== "running") return;
+    const interval = setInterval(() => forceTick((t) => t + 1), 200);
+    return () => clearInterval(interval);
+  }, [block.status]);
 
   const lines = block.renderedLines ?? [];
   const isTruncated = !expanded && lines.length > MAX_VISIBLE_LINES;
   const visibleLines = isTruncated ? lines.slice(0, MAX_VISIBLE_LINES) : lines;
   const hiddenCount = lines.length - MAX_VISIBLE_LINES;
 
-  const duration = block.endTime ? formatDuration(block.endTime - block.startTime) : undefined;
+  const duration = block.endTime
+    ? formatDuration(block.endTime - block.startTime)
+    : block.status === "running"
+      ? formatDuration(Date.now() - block.startTime)
+      : undefined;
   // NOTE: deliberately keyed off `status` rather than `exitCode !== 0` — a running
   // block has `exitCode === undefined`, and `undefined !== 0` is true, which would
   // otherwise mislabel in-flight blocks as failed (red styling, "exit undefined"
