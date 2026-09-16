@@ -91,8 +91,8 @@ beforeEach(() => {
   mockBlocks = [];
 });
 
-describe("Windows 本機分頁：指令執行中歸零提示字元位移", () => {
-  it("指令執行中收到 PTY 輸出時，不管上一次提示字元位移多大都歸零，不追著舊位置跑到畫面外", async () => {
+describe("Windows 本機分頁：指令執行中窗格能撐多高由當下位移量動態夾住", () => {
+  it("位移量遠大於主控端列數時，窗格想撐到 MAX_LIVE_ROWS 也會被夾到剩下的空間，不會超過列數", async () => {
     const originalPlatform = navigator.platform;
     Object.defineProperty(navigator, "platform", { value: "Win32", configurable: true });
     try {
@@ -129,8 +129,8 @@ describe("Windows 本機分頁：指令執行中歸零提示字元位移", () =>
       await waitFor(() => {
         expect(host().style.position).toBe("absolute");
       });
-      const idleTop = parseFloat(host().style.top);
-      expect(idleTop).toBeLessThan(0);
+      const idleTopStyle = host().style.top;
+      expect(parseFloat(idleTopStyle)).toBeLessThan(0);
 
       // 使用者送出 `claude`，建立一個 running 中的區塊。單純改
       // mockBlocks 這個模組層級變數不會自動觸發重新渲染——mock 的回傳值
@@ -150,14 +150,32 @@ describe("Windows 本機分頁：指令執行中歸零提示字元位移", () =>
         rerender(buildTree());
       });
 
-      // 前景程式輸出，只把畫面再往前推進一點點（遠小於先前累積的深度）。
+      // 區塊剛變成 running、還沒有任何輸出回來這一刻，位移量不該被提早
+      // 歸零或重算——這正是「指令執行中直接歸零位移」那個修法造成重複
+      // 顯示舊內容的那一刻：舊內容還在畫面上，位移量被錯誤地丟掉，暴露
+      // 出 Windows 從不清空緩衝區留下的、已經變成卡片的輸出。
+      expect(host().style.top).toBe(idleTopStyle);
+
+      // 前景程式輸出，只把畫面再往前推進一點點（遠小於先前累積的深度—— 一
+      // 行還不夠讓 24 列的畫面往下捲動，viewportY 實際上仍是 0）。
       act(() => {
         handlers.forEach((h) => h({ payload: { base64: btoa("some interactive output\r\n") } }));
       });
 
+      const liveFrame = () => container.querySelector(".aiterm-live-frame") as HTMLElement;
       await waitFor(() => {
-        expect(host().style.top).toBe("");
+        // 位移量沒有真的縮小（promptAbsRow=500 遠大於任何一行輸出能推進的
+        // 量），所以維持跟閒置時一樣：不會像「直接歸零」那個舊修法一樣
+        // 瞬間跳去顯示目前捲動位置最上面幾列，那樣會把已經變成卡片的上一
+        // 個指令輸出重複顯示一次（另一次實機回報）。
+        expect(host().style.top).toBe(idleTopStyle);
       });
+      // 窗格「想要」撐到 MAX_LIVE_ROWS(16)，但 term.rows(24) 扣掉位移量
+      // (23) 只剩 1 列空間，夾到 MIN_LIVE_ROWS(3) 的下限——不是撐好撐滿的
+      // 16 列（round(16 * 14 * 1.1) = 246px，加上位移會遠遠超過 24 列）。
+      // jsdom 沒有真正的字元格尺寸，走 14*1.1 的 fallback，跟
+      // TerminalView.windowsPromptAlign.test.tsx 同一個假設。
+      expect(liveFrame().style.height).toBe(`${Math.round(3 * 14 * 1.1)}px`);
     } finally {
       Object.defineProperty(navigator, "platform", { value: originalPlatform, configurable: true });
     }

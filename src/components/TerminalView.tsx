@@ -643,35 +643,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // terminal (a real command finished) or wipes it (the `clear` command) —
   // either way the live pane is freshly empty at that point.
   const [liveRows, setLiveRows] = useState(MIN_LIVE_ROWS);
-  useEffect(() => {
-    // Every platform shrinks here, Windows included.
-    //
-    // Windows used to skip this, to work around a real-machine bug where a
-    // slow custom prompt (oh-my-posh) printed its prompt text only after the
-    // block had already flipped to "completed" — too late for the
-    // MAX_LIVE_ROWS bump below, which is deliberately gated on a block being
-    // "running" — leaving the prompt clipped out of a pane already shrunk to
-    // 3 rows. That workaround is now both unnecessary and harmful: the pane
-    // starts at the prompt's own row on Windows (see liveTopRows), so the
-    // prompt is always the first visible row however late it arrives. And
-    // since Windows no longer clears the xterm buffer (see useTerminalBlocks'
-    // OSC 133 D branch), a pane left expanded would keep showing the old
-    // output that already has a card.
-    setLiveRows(MIN_LIVE_ROWS);
-  }, [visibleBlockCount]);
-
-  // isRawKeyboardModeActive 從 false 變 true：撐到 EXPANDED_LIVE_ROWS，隱藏
-  // WarpInput（下面 JSX 會把它跟 isAlternateBuffer OR 在一起判斷）。變回
-  // false：收回 MIN_LIVE_ROWS——如果指令其實還在跑且持續有輸出，上面既有
-  // 的「running 中的區塊有新輸出就撐到 MAX_LIVE_ROWS」邏輯（onPtyData 內）
-  // 會在下一個 chunk 自然把它撐回 MAX_LIVE_ROWS，不需要在這裡特別處理
-  // 「使用者回應後指令還沒結束」的情況。isAlternateBuffer 為 true 時
-  // liveRows 根本不影響顯示高度（見下面 JSX 的 height 三元判斷式），所以
-  // 這裡不需要額外判斷 isAlternateBuffer。
-  useEffect(() => {
-    setLiveRows(isRawKeyboardModeActive ? EXPANDED_LIVE_ROWS : MIN_LIVE_ROWS);
-  }, [isRawKeyboardModeActive]);
-
   // How many rows to scroll the xterm host up by, so the live pane's first
   // visible row is the prompt's own row.
   //
@@ -686,29 +657,99 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // row is the only thing correct in both states. Other platforms clear the
   // buffer, so their prompt is always at row 0 and this stays 0.
   const [liveTopRows, setLiveTopRows] = useState(0);
-  const syncLiveTop = useCallback(() => {
-    if (!navigator.platform.toLowerCase().startsWith("win")) return;
+
+  // "Wanted" pane height — `liveRows` itself is no longer assigned directly;
+  // it's derived by clamping this against however much room the current
+  // offset leaves (see recomputeLiveGeometry below). Kept as a separate ref
+  // rather than folded straight into liveRows because "how tall do we want
+  // to be" and "how much room does the current offset use up" are two
+  // different things that must be combined in one calculation — updating
+  // them as two separate setState calls lets one clobber the other's
+  // just-applied value.
+  //
+  // Background (see the update to design doc
+  // 2026-09-16-interactive-prompt-live-expand-design.md): `liveTopRows +
+  // liveRows` must never exceed `term.rows` — whatever's beyond that is
+  // outside xterm's actual rendered content, showing either blank space
+  // (past the bottom of the content) or old output (offset forced to 0,
+  // colliding with output that's already become a card — a second
+  // real-machine report). `claude` CLI's trust prompt barely advances any
+  // new lines (it redraws in place via absolute cursor positioning), so the
+  // offset is still nearly a full screen's worth right when it starts; if
+  // the pane were also snapped straight to EXPANDED_LIVE_ROWS, the sum would
+  // overflow. This dynamic clamp instead starts the pane small and lets it
+  // grow as the offset shrinks, keeping the sum within term.rows at all
+  // times.
+  const desiredLiveRowsRef = useRef(MIN_LIVE_ROWS);
+
+  const recomputeLiveGeometry = useCallback(() => {
     const term = termRef.current;
-    const promptAbsRow = promptAbsRowRef.current;
-    if (!term || promptAbsRow === null) return;
-    // viewportY, NOT baseY: xterm renders buffer lines starting at viewportY
-    // (the current scroll position), while baseY is only where the viewport
-    // sits when scrolled fully to the bottom. The two are equal at the bottom
-    // and diverge the moment the buffer is scrolled up, at which point a
-    // baseY-derived offset points at old output instead of the prompt —
-    // exactly what a real-machine screenshot showed.
-    const viewportRow = promptAbsRow - term.buffer.active.viewportY;
-    setLiveTopRows(Math.max(0, Math.min(term.rows - 1, viewportRow)));
+    if (!term) return;
+    let newLiveTopRows = 0;
+    if (navigator.platform.toLowerCase().startsWith("win")) {
+      const promptAbsRow = promptAbsRowRef.current;
+      if (promptAbsRow !== null) {
+        // viewportY, NOT baseY: xterm renders buffer lines starting at
+        // viewportY (the current scroll position), while baseY is only
+        // where the viewport sits when scrolled fully to the bottom. The
+        // two are equal at the bottom and diverge the moment the buffer is
+        // scrolled up, at which point a baseY-derived offset points at old
+        // output instead of the prompt — exactly what a real-machine
+        // screenshot showed.
+        const viewportRow = promptAbsRow - term.buffer.active.viewportY;
+        newLiveTopRows = Math.max(0, Math.min(term.rows - 1, viewportRow));
+      }
+    }
+    setLiveTopRows(newLiveTopRows);
+    setLiveRows(Math.max(MIN_LIVE_ROWS, Math.min(desiredLiveRowsRef.current, term.rows - newLiveTopRows)));
   }, []);
-  syncLiveTopRef.current = syncLiveTop;
+  syncLiveTopRef.current = recomputeLiveGeometry;
+
+  const requestLiveRows = useCallback(
+    (desired: number) => {
+      desiredLiveRowsRef.current = desired;
+      recomputeLiveGeometry();
+    },
+    [recomputeLiveGeometry],
+  );
+
+  useEffect(() => {
+    // Every platform shrinks here, Windows included.
+    //
+    // Windows used to skip this, to work around a real-machine bug where a
+    // slow custom prompt (oh-my-posh) printed its prompt text only after the
+    // block had already flipped to "completed" — too late for the
+    // MAX_LIVE_ROWS bump below, which is deliberately gated on a block being
+    // "running" — leaving the prompt clipped out of a pane already shrunk to
+    // 3 rows. That workaround is now both unnecessary and harmful: the pane
+    // starts at the prompt's own row on Windows (see liveTopRows), so the
+    // prompt is always the first visible row however late it arrives. And
+    // since Windows no longer clears the xterm buffer (see useTerminalBlocks'
+    // OSC 133 D branch), a pane left expanded would keep showing the old
+    // output that already has a card.
+    requestLiveRows(MIN_LIVE_ROWS);
+  }, [visibleBlockCount, requestLiveRows]);
+
+  // isRawKeyboardModeActive 從 false 變 true：想撐到 EXPANDED_LIVE_ROWS
+  // （實際能撐多高由 recomputeLiveGeometry 依當下位移量夾住），隱藏
+  // WarpInput（下面 JSX 會把它跟 isAlternateBuffer OR 在一起判斷）。變回
+  // false：想收回 MIN_LIVE_ROWS——如果指令其實還在跑且持續有輸出，上面
+  // 既有的「running 中的區塊有新輸出就撐到 MAX_LIVE_ROWS」邏輯（onPtyData
+  // 內）會在下一個 chunk 自然把它撐回 MAX_LIVE_ROWS，不需要在這裡特別
+  // 處理「使用者回應後指令還沒結束」的情況。isAlternateBuffer 為 true 時
+  // liveRows 根本不影響顯示高度（見下面 JSX 的 height 三元判斷式），所以
+  // 這裡不需要額外判斷 isAlternateBuffer。
+  useEffect(() => {
+    requestLiveRows(isRawKeyboardModeActive ? EXPANDED_LIVE_ROWS : MIN_LIVE_ROWS);
+  }, [isRawKeyboardModeActive, requestLiveRows]);
 
   // 見上面 untrackedCommandBoundaryRef 宣告處的說明——這裡才真的賦值，
-  // 因為 setLiveRows 要到這裡才存在。跟這個檔案其他 ref 一樣直接在
+  // 因為 requestLiveRows 要到這裡才存在。跟這個檔案其他 ref 一樣直接在
   // render 當下賦值，不用額外包一層 effect。這整段只在指令文字還原失敗
   // 的保底情況下才會被呼叫，正常情況下走 beginTrackedBlock 直接變成卡片，
   // 不會執行到這裡。
   //
-  // "start" 先撐到 MAX_LIVE_ROWS，避免指令執行途中輸出被裁掉（滑鼠滾輪
+  // "start" 先想撐到 MAX_LIVE_ROWS，避免指令執行途中輸出被裁掉（滑鼠滾輪
   // 跟 liveRows 毫無關聯，裁掉了就拿不回來）。"end" 則改成量測游標實際
   // 停在第幾行，把 liveRows 收回剛好能放下這次輸出的高度，而不是繼續
   // 卡在 MAX——本機自己的指令結束後内容會被 finalizeBlock 搬進卡片、
@@ -721,12 +762,12 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // 高度計算，不受這裡影響。
   untrackedCommandBoundaryRef.current = (kind) => {
     if (kind === "start") {
-      setLiveRows(MAX_LIVE_ROWS);
+      requestLiveRows(MAX_LIVE_ROWS);
       return;
     }
     const term = termRef.current;
     const usedRows = term ? term.buffer.active.cursorY + 1 : MIN_LIVE_ROWS;
-    setLiveRows(Math.min(MAX_LIVE_ROWS, Math.max(MIN_LIVE_ROWS, usedRows)));
+    requestLiveRows(Math.min(MAX_LIVE_ROWS, Math.max(MIN_LIVE_ROWS, usedRows)));
   };
 
   // Agent lifecycle status shown in the AgentStatusBar above the input, driven by
@@ -1361,30 +1402,25 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               // back down again, leaving the pane stuck at full height forever.
               const latestBlock = blocksRef.current[blocksRef.current.length - 1];
               if (latestBlock?.status === "running") {
-                setLiveRows(MAX_LIVE_ROWS);
-                // Stop chasing the last shell prompt's row once a command is
-                // actually running: if the session has accumulated a lot of
-                // scrollback (long-lived tab, lots of prior output) and the
-                // running foreground program isn't the shell itself (e.g. an
-                // interactive CLI prompt) and only produces modest output of
-                // its own, viewportY can never catch up to the frozen
-                // promptAbsRow — the offset stays positive and pushes the
-                // live pane's visible window entirely past xterm's actual
-                // rendered content, leaving it blank (real-machine repro:
-                // remote Windows session, `claude` CLI's trust prompt, after
-                // a long-lived connection). Reset to 0 instead — same as
-                // non-Windows platforms' default — and let onPromptStart's
-                // syncLiveTop() re-align once the shell draws its next
-                // prompt (see the `else` branch below and that callback).
-                setLiveTopRows(0);
-              } else {
-                // The prompt's viewport-relative row moves whenever output
-                // scrolls the buffer (baseY grows), so the offset has to be
-                // recomputed per chunk, not just when OSC 133 B fires. No-op
-                // off Windows. Only while nothing is running — see the `if`
-                // branch above for why.
-                syncLiveTop();
+                desiredLiveRowsRef.current = MAX_LIVE_ROWS;
               }
+              // The prompt's viewport-relative row moves whenever output
+              // scrolls the buffer (baseY grows), so the offset has to be
+              // recomputed per chunk, not just when OSC 133 B fires. No-op
+              // off Windows. Unconditional, not gated on "running": a
+              // command that never goes through the tracked-block path
+              // (e.g. beginTrackedBlock's untracked fallback) still needs
+              // this. `liveRows` also gets re-clamped here alongside the
+              // offset (see recomputeLiveGeometry) — it can't be updated on
+              // its own, since how much room is left depends on the offset
+              // computed in the very same pass. Simply resetting the offset
+              // to 0 the instant a command starts running (an earlier,
+              // simpler attempt at this fix) caused a different regression:
+              // it snaps the pane to show whatever's currently at the top of
+              // the scrolled-to position, which — since Windows never clears
+              // the xterm buffer — can still be the previous command's
+              // output that's already become a card, showing it twice.
+              recomputeLiveGeometry();
             };
 
             if (isWindows) {

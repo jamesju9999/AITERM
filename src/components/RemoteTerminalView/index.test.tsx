@@ -57,13 +57,25 @@ vi.mock("../../ipc/shareViewer", () => ({
 // appendOutput、而且解碼正確」，比起修那一層更深的 mock，直接在這個接點
 // 上釘一根探針最直接可靠。
 let appendOutputSpy: ReturnType<typeof vi.fn> | null = null;
+// 只在底層的 appendOutput 參考真的變了才重新包一層 spy——`useTerminalBlocks`
+// 真正回傳的 appendOutput 是穩定的 useCallback，參考不會變。RemoteTerminalView
+// 內部用 `appendOutputRef` 橋接它，那個 ref 的同步 effect 依賴
+// `[appendOutput]`，只有在參考真的變了才會重新賦值。如果這裡每次呼叫都無
+// 條件包一個新的 vi.fn()，元件多轉譯一次（跟這次改動即時窗格夾法有關的
+// 額外 useEffect 觸發，屬於正常、非預期外的重繪）就會讓 appendOutputSpy
+// 指到一個全新物件，跟 appendOutputRef.current 實際指到的（第一次那個）
+// 對不上，測試斷言永遠抓不到呼叫——不是元件真的沒呼叫 appendOutput。
+let wrappedAppendOutput: unknown = null;
 vi.mock("../../hooks/useTerminalBlocks", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../hooks/useTerminalBlocks")>();
   return {
     ...actual,
     useTerminalBlocks: (...args: Parameters<typeof actual.useTerminalBlocks>) => {
       const result = actual.useTerminalBlocks(...args);
-      appendOutputSpy = vi.fn(result.appendOutput);
+      if (result.appendOutput !== wrappedAppendOutput) {
+        wrappedAppendOutput = result.appendOutput;
+        appendOutputSpy = vi.fn(result.appendOutput);
+      }
       return { ...result, appendOutput: appendOutputSpy };
     },
   };
@@ -224,6 +236,7 @@ beforeEach(() => {
   mockBufferActive.baseY = 0;
   mockBufferActive.viewportY = 0;
   appendOutputSpy = null;
+  wrappedAppendOutput = null;
   mockSubmitAgent.mockClear();
   mockSend.mockClear();
   mockAbort.mockClear();
@@ -606,15 +619,21 @@ describe("RemoteTerminalView", () => {
     });
   });
 
-  it("Windows 主控端：指令執行中一律歸零位移，不追著上一次提示字元的舊位置跑到畫面外", async () => {
-    // 光是每個 chunk 都重新計算（前一個測試修的那個 bug）還不夠：如果上一次
-    // shell 提示字元畫在很深的絕對列（連線夠久、之前跑過大量 dir/ipconfig
-    // 之類的輸出），而目前執行的前景程式（例如 claude CLI）自己只產生少量
-    // 輸出，viewportY 永遠追不上 promptAbsRow，位移量會一直是正的、把窗格
-    // 推到 xterm 實際渲染範圍之外——即時窗格整個空白（實機回報：長時間連線
-    // 後執行 claude CLI 整個畫面全黑）。指令執行中就不該再嘗試對齊「上一次
-    // 提示字元」的位置，直接歸零、跟非 Windows 平台原本的行為一致，等指令
-    // 結束、shell 畫出下一個提示字元時才重新對齊。
+  it("Windows 主控端：指令執行中窗格能撐多高由當下位移量動態夾住，位移+高度永遠不超過主控端實際列數", async () => {
+    // 光是每個 chunk 都重新計算位移量（前一個測試修的那個 bug）還不夠：如果
+    // 上一次 shell 提示字元畫在很深的絕對列（連線夠久、之前跑過大量
+    // dir/ipconfig 之類的輸出），而目前執行的前景程式（例如 claude CLI）自己
+    // 只產生少量輸出，viewportY 追不上 promptAbsRow 的速度跟連線累積了多少
+    // scrollback 完全無關——位移量會維持很大，若窗格同時無條件撐到
+    // MAX_LIVE_ROWS/EXPANDED_LIVE_ROWS，兩者相加就會超過主控端實際的列數，
+        // 窗格看到的是 xterm 實際內容範圍以外，畫面全黑（實機回報）。
+    //
+    // 曾經試過「指令執行中直接把位移歸零」，但那樣會讓窗格瞬間跳去顯示
+    // 「目前捲動位置」最上面那幾列——如果那個位置剛好還停在上一個已經變成
+    // 卡片的指令輸出（Windows 不清緩衝區），窗格會把舊輸出重複顯示一次
+    // （另一次實機回報）。正確做法是動態夾住「窗格想要的高度」，讓它隨著
+    // 位移量降下來逐步長高，兩個數字的和永遠不超過主控端的列數
+    // （`granted` 事件給的 rows）。
     const { container } = render(
       <RemoteTerminalView tabId="t1" connId="cwin3" sas="9996" isActive onConnectClick={vi.fn()} />,
     );
@@ -624,7 +643,7 @@ describe("RemoteTerminalView", () => {
     });
     await waitFor(() => expect(capturedOscHandler).toBeTruthy());
 
-    // 模擬深層 scrollback：上一次提示字元畫在很下面的絕對列。
+    // 模擬深層 scrollback：上一次提示字元畫在很下面的絕對列（323）。
     mockBufferActive.cursorY = 23;
     mockBufferActive.baseY = 300;
     mockBufferActive.viewportY = 300;
@@ -638,7 +657,15 @@ describe("RemoteTerminalView", () => {
 
     const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
     await waitFor(() => expect(textarea).not.toBeDisabled());
+    const idleTop = host().style.top;
     await userEvent.type(textarea, "claude{Enter}");
+
+    // 指令剛送出、還沒有任何輸出回來這一刻，位移量不該被提早歸零或重算
+    // ——這正是「指令執行中直接歸零位移」那個修法造成重複顯示舊內容的
+    // 那一刻：舊內容還在畫面上，位移量被錯誤地丟掉，暴露出 Windows 從不
+    // 清空緩衝區留下的、已經變成卡片的輸出。維持跟閒置時一樣的位移，
+    // 才不會在這個瞬間露出舊內容。
+    expect(host().style.top).toBe(idleTop);
 
     // 前景程式輸出，只把 viewportY 往前推進一點點（遠小於 baseY 累積的
     // 深度——claude CLI 自己的畫面內容量跟連線累積了多少 scrollback 無關）。
@@ -648,9 +675,18 @@ describe("RemoteTerminalView", () => {
       handlers["data:cwin3"](btoa("some interactive output\r\n") as never);
     });
 
+    // 位移量：promptAbsRow(323) - viewportY(310) = 13 列，換算成 px
+    // （jsdom 沒有真正的字元格尺寸，走 14*1.1 的 fallback）：
+    // Math.ceil(13 * 15.4) = 201px——不是舊測試預期的「歸零」，而是照
+    // 目前的真實捲動位置重新算出來的值。
+    const liveFrame = () => container.querySelector(".aiterm-remote-terminal__live-frame") as HTMLElement;
     await waitFor(() => {
-      expect(host().style.top).toBe("");
+      expect(host().style.top).toBe("-201px");
     });
+    // 窗格「想要」撐到 MAX_LIVE_ROWS(16)，但只剩 24-13=11 列的空間，夾出來
+    // 應該是 11 列（Math.round(11 * 15.4) = 169px），不是撐好撐滿的 16 列
+    // （Math.round(16 * 15.4) = 246px，會跟位移量加起來超過 24 列）。
+    expect(liveFrame().style.height).toBe("169px");
   });
 
   it("非 Windows 主控端：不位移（那邊仍然會清空緩衝區，提示字元本來就在第 0 列）", async () => {

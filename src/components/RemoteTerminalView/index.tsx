@@ -252,55 +252,87 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   // liveRows 毫無關聯，裁掉了就拿不回來），指令完成變成卡片
   // （visibleBlockCount 改變）後收回最小高度。
   const [liveRows, setLiveRows] = useState(MIN_LIVE_ROWS);
-  useEffect(() => {
-    setLiveRows(MIN_LIVE_ROWS);
-  }, [visibleBlockCount]);
-
-  // 跟 TerminalView.tsx 同一套邏輯與理由：isAlternateBuffer 為 true 時
-  // liveRows 不影響顯示高度（見下面 JSX 的 height 三元判斷式用的是
-  // altBufferHeightPx），這裡不需要額外判斷 isAlternateBuffer。
-  useEffect(() => {
-    setLiveRows(isRawKeyboardModeActive ? EXPANDED_LIVE_ROWS : MIN_LIVE_ROWS);
-  }, [isRawKeyboardModeActive]);
-
   // 提示字元所在的列，讓即時窗格從那一列開始顯示——跟 TerminalView.tsx 的
   // liveTopRows 同一套機制、同一個理由：Windows 主控端不再清空 xterm 緩衝區
   // （見 useTerminalBlocks 的 OSC 133 D 分支），整個 ConPTY 畫面都還在，
   // 從第 0 列開始畫就會把已經變成卡片的舊輸出再顯示一次（實機回報）。
   // 觀看端跟本機分頁餵的是同一串位元組、共用同一個 useTerminalBlocks，
   // 所以必須補上同一套對齊，否則兩邊體驗不一致。
+  const [liveTopRows, setLiveTopRows] = useState(0);
+
+  // 「想要」的窗格列數——`liveRows` state 本身不再直接賦值，而是這個值
+  // 夾住當下位移剩餘空間後的衍生結果（見下面 recomputeLiveGeometry）。
+  // 拆成獨立的 ref 而不是直接改 liveRows state，是因為「想要多高」跟
+  // 「位移用掉多少空間」是兩件事，要在同一次計算裡合併，不能各自
+  // setState、互相踩掉對方剛設定的值。
   //
+  // 背景（見設計文件 2026-09-16-interactive-prompt-live-expand-design.md
+  // 的更新）：`liveTopRows + liveRows` 不能超過 `term.rows`，超過的部分
+  // 窗格看到的就是 xterm 實際內容範圍以外——不是空白（超過內容底部）就是
+  // 舊內容（位移被迫歸零，跟已經變成卡片的輸出重疊，實機回報）。
+  // `claude` CLI 的信任提示幾乎不推進新的一行（用游標定位原地重畫），
+  // 所以剛跳出提示字元時位移量幾乎是一整個畫面，若窗格同時撐到
+  // EXPANDED_LIVE_ROWS 這麼大就會超過——用這個動態夾法讓窗格從很小開始、
+  // 隨著位移量降下來逐步長高，兩個數字的和永遠不超過 term.rows。
+  const desiredLiveRowsRef = useRef(MIN_LIVE_ROWS);
+
   // 用 viewportY 不是 baseY：xterm 實際是從 viewportY 開始渲染，兩者只在
   // 捲到最底時相同。
-  const [liveTopRows, setLiveTopRows] = useState(0);
-  const syncLiveTop = useCallback(() => {
-    if (hostPlatform !== "windows") return;
+  const recomputeLiveGeometry = useCallback(() => {
     const term = termRef.current;
-    const promptAbsRow = promptAbsRowRef.current;
-    if (!term || promptAbsRow === null) return;
-    const viewportRow = promptAbsRow - term.buffer.active.viewportY;
-    setLiveTopRows(Math.max(0, Math.min(term.rows - 1, viewportRow)));
+    if (!term) return;
+    let newLiveTopRows = 0;
+    if (hostPlatform === "windows") {
+      const promptAbsRow = promptAbsRowRef.current;
+      if (promptAbsRow !== null) {
+        const viewportRow = promptAbsRow - term.buffer.active.viewportY;
+        newLiveTopRows = Math.max(0, Math.min(term.rows - 1, viewportRow));
+      }
+    }
+    setLiveTopRows(newLiveTopRows);
+    setLiveRows(Math.max(MIN_LIVE_ROWS, Math.min(desiredLiveRowsRef.current, term.rows - newLiveTopRows)));
   }, [hostPlatform]);
-  syncLiveTopRef.current = syncLiveTop;
+  // 沿用既有的 syncLiveTopRef 橋接（onPromptStart 等只依賴 [connId] 註冊
+  // 的 effect 用這個讀最新版本，理由跟其他同名 ref 一樣）。
+  syncLiveTopRef.current = recomputeLiveGeometry;
+
+  const requestLiveRows = useCallback(
+    (desired: number) => {
+      desiredLiveRowsRef.current = desired;
+      recomputeLiveGeometry();
+    },
+    [recomputeLiveGeometry],
+  );
+
+  useEffect(() => {
+    requestLiveRows(MIN_LIVE_ROWS);
+  }, [visibleBlockCount, requestLiveRows]);
+
+  // 跟 TerminalView.tsx 同一套邏輯與理由：isAlternateBuffer 為 true 時
+  // liveRows 不影響顯示高度（見下面 JSX 的 height 三元判斷式用的是
+  // altBufferHeightPx），這裡不需要額外判斷 isAlternateBuffer。
+  useEffect(() => {
+    requestLiveRows(isRawKeyboardModeActive ? EXPANDED_LIVE_ROWS : MIN_LIVE_ROWS);
+  }, [isRawKeyboardModeActive, requestLiveRows]);
 
   // 見上面 untrackedCommandBoundaryRef 宣告處——這裡才真的賦值，因為
-  // setLiveRows 要到這裡才存在。跟 TerminalView.tsx 的同名實作完全一樣，
-  // 而且對觀看端來說這條路徑比本機更重要：主控端自己在跑的東西（例如連線
-  // 之前就開著的 Claude Code CLI）永遠不會經過這一端的 submitCommand，
-  // 「有沒有一個 running 中的區塊」這個撐高訊號因此永遠是 false，窗格會
-  // 卡在 MIN_LIVE_ROWS 只有三列高（實機回報）。
+  // requestLiveRows 要到這裡才存在。跟 TerminalView.tsx 的同名實作完全
+  // 一樣，而且對觀看端來說這條路徑比本機更重要：主控端自己在跑的東西
+  // （例如連線之前就開著的 Claude Code CLI）永遠不會經過這一端的
+  // submitCommand，「有沒有一個 running 中的區塊」這個撐高訊號因此永遠
+  // 是 false，窗格會卡在 MIN_LIVE_ROWS 只有三列高（實機回報）。
   //
   // "start" 先撐到 MAX_LIVE_ROWS 避免輸出被裁掉；"end" 量一次游標實際停在
   // 第幾行，收回剛好放得下的高度——遠端指令的輸出不會變成卡片、也不會被
   // 清空，維持在 MAX 只會在下面留一大截用不到的空白。
   untrackedCommandBoundaryRef.current = (kind) => {
     if (kind === "start") {
-      setLiveRows(MAX_LIVE_ROWS);
+      requestLiveRows(MAX_LIVE_ROWS);
       return;
     }
     const term = termRef.current;
     const usedRows = term ? term.buffer.active.cursorY + 1 : MIN_LIVE_ROWS;
-    setLiveRows(Math.min(MAX_LIVE_ROWS, Math.max(MIN_LIVE_ROWS, usedRows)));
+    requestLiveRows(Math.min(MAX_LIVE_ROWS, Math.max(MIN_LIVE_ROWS, usedRows)));
   };
 
   // xterm.js 沒有公開 API 可以讀字元格高度——這裡讀的是跟 TerminalView.tsx
@@ -410,31 +442,22 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
           // 多位元組 UTF-8 字元會被拆散成亂碼。
           appendOutputRef.current(decoder.decode(arr, { stream: true }));
           // 跟 TerminalView.tsx 同一套機制：有一個追蹤中的區塊還在
-          // running，代表指令正在執行、正在產生輸出，即時窗格撐到最大
-          // 高度。
+          // running，代表指令正在執行、正在產生輸出，即時窗格想撐到最大
+          // 高度（實際能撐多高由 recomputeLiveGeometry 依當下位移量夾住
+          // ——見 desiredLiveRowsRef 宣告處的說明）。
           const latestBlock = blocksRef.current[blocksRef.current.length - 1];
           if (latestBlock?.status === "running") {
-            setLiveRows(MAX_LIVE_ROWS);
-            // 指令執行中就不要再嘗試對齊「上一次 shell 提示字元」的位置
-            // ——那個位置一旦連線累積的 scrollback 夠深（例如先跑過大量
-            // dir/ipconfig），而目前執行的前景程式不是 shell 本身、自己
-            // 只產生少量輸出（例如 claude CLI 的互動選單），viewportY
-            // 永遠追不上凍結住的舊 promptAbsRow，位移量會一直是正的、把
-            // 可視窗格整個推到 xterm 實際渲染範圍之外——畫面看起來完全
-            // 空白（實機回報：長時間連線後執行 claude CLI 整個畫面全
-            // 黑）。直接歸零，改成跟非 Windows 平台原本就有的行為一致：
-            // 單純顯示 xterm 目前捲動到的位置。指令結束、shell 畫出下一
-            // 個提示字元時，onPromptStart 觸發的 syncLiveTop() 會重新
-            // 對齊（見下面 else 分支與該 callback）。
-            setLiveTopRows(0);
-          } else {
-            // 提示字元的 viewport-relative 列數會隨著輸出捲動緩衝區
-            // （baseY 增加）而改變，所以要每個 chunk 都重新計算，不能只
-            // 靠 OSC 133 B 觸發——跟 TerminalView.tsx 同一套機制、同一個
-            // 理由（見該檔案 onPtyData 內的 syncLiveTop() 呼叫）。只在
-            // 沒有 running 中區塊時才做：上面已經處理了執行中的情況。
-            syncLiveTopRef.current?.();
+            desiredLiveRowsRef.current = MAX_LIVE_ROWS;
           }
+          // 提示字元的 viewport-relative 列數會隨著輸出捲動緩衝區
+          // （baseY 增加）而改變，所以要每個 chunk 都重新計算，不能只靠
+          // OSC 133 B 觸發——跟 TerminalView.tsx 同一套機制、同一個理由
+          // （見該檔案 onPtyData 內的呼叫）。無條件呼叫、不看
+          // latestBlock 是否 running：Windows 觀看端的「主控端自己在跑
+          // 的東西」本來就不會經過這一端的 submitCommand，不能用區塊
+          // 狀態當門檻；`liveRows` 也要在這裡跟著位移量一起重新夾一次
+          // （見 recomputeLiveGeometry），不能只更新位移量。
+          syncLiveTopRef.current?.();
         });
       }),
     );
