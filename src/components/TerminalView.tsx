@@ -2004,11 +2004,25 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             2026-09-16-live-block-rendering-design.md), not a separate live pane — hiding
             this list would hide the very content (e.g. claude CLI's trust prompt) the user
             needs to see and interact with. */}
-        {!isAlternateBuffer && (
-          <div className="aiterm-block-list">
-            {blocks
-              .filter((b) => b.renderedLines)
-              .map((b) => (
+        {!isAlternateBuffer && (() => {
+          const visibleBlocks = blocks.filter((b) => b.renderedLines);
+          if (visibleBlocks.length === 0) {
+            // 使用者反映：終端機剛開好、還沒跑過任何指令時，整塊卡片列表
+            // 就是一片空黑，看起來像沒東西可用（見設計文件
+            // 2026-09-16-live-block-rendering-design.md 的後續調整）。加一組
+            // 淡色的快捷提示，不是強制的操作教學——跑過任何一個指令、這個
+            // 分支就再也不會顯示。
+            return (
+              <div className="aiterm-block-list-empty" data-testid="block-list-empty">
+                <div className="aiterm-block-list-empty-hint">{t.empty_terminal_hint_start}</div>
+                <div className="aiterm-block-list-empty-hint">{t.empty_terminal_hint_ai}</div>
+                <div className="aiterm-block-list-empty-hint">{t.empty_terminal_hint_search}</div>
+              </div>
+            );
+          }
+          return (
+            <div className="aiterm-block-list">
+              {visibleBlocks.map((b) => (
                 <div id={`aiterm-block-${b.id}`} key={b.id}>
                   <TerminalBlockCard
                     block={b}
@@ -2021,8 +2035,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                   />
                 </div>
               ))}
-          </div>
-        )}
+            </div>
+          );
+        })()}
         {/* The real xterm.js instance — still the sole source of truth for keyboard
             input, cursor/ANSI state, and OSC/CSI parsing, but its own rendering is no
             longer what the user looks at outside alt-screen (see design doc

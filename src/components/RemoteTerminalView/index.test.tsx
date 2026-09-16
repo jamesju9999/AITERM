@@ -825,7 +825,7 @@ describe("RemoteTerminalView", () => {
     // 一般模式：卡片容器與輸入框都在，即時窗格用 opacity:0 疊在同一個
     // 可視區域上，維持可以被 focus() 的真實尺寸。
     await waitFor(() => expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument());
-    expect(container.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
+    expect(container.querySelector(".aiterm-block-list-empty")).toBeInTheDocument();
     expect(liveFrame().style.opacity).toBe("0");
     expect(liveFrame().style.pointerEvents).toBe("none");
 
@@ -843,7 +843,7 @@ describe("RemoteTerminalView", () => {
     // 條件撐滿容器的 100%，容器比內容需要的空間大時不該留下空白。
     expect(liveFrame().style.height).toBe("370px");
     expect(liveFrame().style.opacity).toBe("");
-    expect(container.querySelector(".aiterm-remote-terminal__blocks")).not.toBeInTheDocument();
+    expect(container.querySelector(".aiterm-block-list-empty")).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/輸入指令|Type a command/i)).not.toBeInTheDocument();
 
     // 離開全螢幕程式後應該完全恢復原本行為。
@@ -854,7 +854,7 @@ describe("RemoteTerminalView", () => {
     await waitFor(() => {
       expect(liveFrame().style.opacity).toBe("0");
     });
-    expect(container.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
+    expect(container.querySelector(".aiterm-block-list-empty")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument();
   });
 
@@ -873,7 +873,7 @@ describe("RemoteTerminalView", () => {
     handlers["granted:c41"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
 
     await waitFor(() => expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument());
-    expect(document.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
+    expect(document.querySelector(".aiterm-block-list-empty")).toBeInTheDocument();
 
     await waitFor(() => expect(capturedRawKbPushHandler).toBeTruthy());
     act(() => {
@@ -881,7 +881,7 @@ describe("RemoteTerminalView", () => {
     });
 
     // 卡片列表繼續顯示；只有 WarpInput 讓開。
-    expect(document.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
+    expect(document.querySelector(".aiterm-block-list-empty")).toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/輸入指令|Type a command/i)).not.toBeInTheDocument();
 
     expect(capturedRawKbPopHandler).toBeTruthy();
@@ -892,7 +892,7 @@ describe("RemoteTerminalView", () => {
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument();
     });
-    expect(document.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
+    expect(document.querySelector(".aiterm-block-list-empty")).toBeInTheDocument();
   });
 
   it("Kitty raw keyboard mode 中，焦點跑掉時可以點卡片列表的空白處拿回焦點", async () => {
@@ -939,6 +939,31 @@ describe("RemoteTerminalView", () => {
 
     expect(focusMock).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(textarea);
+  });
+
+  it("連上還沒跑過任何指令時顯示快捷提示的空狀態；跑完第一個指令、卡片出現後就消失", async () => {
+    const { container } = render(<RemoteTerminalView tabId="t1" connId="c44" sas="4444" isActive onConnectClick={vi.fn()} />);
+    await waitFor(() => expect(handlers["granted:c44"]).toBeDefined());
+    handlers["granted:c44"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="block-list-empty"]')).toBeInTheDocument();
+    });
+    expect(container.querySelector(".aiterm-remote-terminal__blocks")).not.toBeInTheDocument();
+
+    const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
+    await waitFor(() => expect(textarea).not.toBeDisabled());
+    await userEvent.type(textarea, "echo hi{Enter}");
+
+    await waitFor(() => expect(capturedOscHandler).toBeTruthy());
+    act(() => {
+      capturedOscHandler!("D;0");
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
+    });
+    expect(container.querySelector('[data-testid="block-list-empty"]')).not.toBeInTheDocument();
   });
 
   it("全螢幕程式即時窗格的高度跟著主控端實際列數變化，不是無條件撐滿容器", async () => {

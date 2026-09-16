@@ -2,6 +2,26 @@
   flex: none;
 }
 
+/* 終端機剛開好、還沒跑過任何指令時的空狀態提示——淡色、置中、不搶眼，
+   跑過第一個指令之後就再也不會出現。見 TerminalView.tsx 對應的說明。 */
+.aiterm-block-list-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 200px;
+  padding: 24px;
+  color: var(--aiterm-text-muted, #64748b);
+  font-size: 13px;
+  user-select: none;
+}
+
+.aiterm-block-list-empty-hint {
+  opacity: 0.7;
+}
+
 .aiterm-live-frame {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;

@@ -680,17 +680,29 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
             2026-09-16-live-block-rendering-design.md），不是獨立的即時
             窗格——把列表藏起來會連使用者需要看到、需要互動的內容一起
             藏掉。 */}
-        {!isAlternateBuffer && (
-          <div className="aiterm-remote-terminal__blocks">
-            {/* 分段卡片：跟本機分頁同一套過濾條件（只要有 renderedLines
-                就顯示，包含還在 running 的），複用 TerminalBlockCard——
-                不傳 onAskAi，Ask AI 按鈕本身是
-                `{isFailed && onAskAi && (...)}` 條件渲染，不傳就不會
-                出現；block.gitInfo 永遠是 undefined（這裡從不呼叫
-                setBlockGitInfo），git 徽章同理自然不出現。 */}
-            {blocks
-              .filter((b) => b.renderedLines)
-              .map((b) => (
+        {!isAlternateBuffer && (() => {
+          const visibleBlocks = blocks.filter((b) => b.renderedLines);
+          if (visibleBlocks.length === 0) {
+            // 跟 TerminalView.tsx 同一個理由：剛連上、還沒跑過任何指令時
+            // 整塊列表是一片空黑，加一組淡色快捷提示。遠端分頁沒有 ⌘F
+            // 找指令這個功能，第三條換成指令書籤。
+            return (
+              <div className="aiterm-block-list-empty" data-testid="block-list-empty">
+                <div className="aiterm-block-list-empty-hint">{t.empty_terminal_hint_start}</div>
+                <div className="aiterm-block-list-empty-hint">{t.empty_terminal_hint_ai}</div>
+                <div className="aiterm-block-list-empty-hint">{t.empty_terminal_hint_bookmark}</div>
+              </div>
+            );
+          }
+          return (
+            <div className="aiterm-remote-terminal__blocks">
+              {/* 分段卡片：跟本機分頁同一套過濾條件（只要有 renderedLines
+                  就顯示，包含還在 running 的），複用 TerminalBlockCard——
+                  不傳 onAskAi，Ask AI 按鈕本身是
+                  `{isFailed && onAskAi && (...)}` 條件渲染，不傳就不會
+                  出現；block.gitInfo 永遠是 undefined（這裡從不呼叫
+                  setBlockGitInfo），git 徽章同理自然不出現。 */}
+              {visibleBlocks.map((b) => (
                 <TerminalBlockCard
                   key={b.id}
                   block={b}
@@ -698,8 +710,9 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
                   onCopy={(command) => navigator.clipboard.writeText(command).catch(console.error)}
                 />
               ))}
-          </div>
-        )}
+            </div>
+          );
+        })()}
 
         {/* 真正的 xterm.js 實例——鍵盤輸入、游標/ANSI 狀態、OSC/CSI 解析
             仍然全部靠它，但它自己畫出來的東西不再是使用者在全螢幕程式
