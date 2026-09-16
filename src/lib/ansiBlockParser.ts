@@ -83,6 +83,39 @@ export async function parseAnsiToRenderedLines(raw: string, cols: number, rows =
   return lines;
 }
 
+/** True if row `y` has no non-space, unstyled content (an unwritten/cleared row). */
+function isRowBlank(buffer: IBuffer, y: number, cols: number): boolean {
+  const line = buffer.getLine(y);
+  if (!line) return true;
+  for (let x = 0; x < cols; x++) {
+    const cell = line.getCell(x);
+    if (!cell) continue;
+    const info = readCell(cell);
+    if (!info) continue;
+    if (info.chars.trim() !== "" || info.hasStyle) return false;
+  }
+  return true;
+}
+
+/**
+ * Finds how far real content actually extends below `cursorRow`, for callers
+ * that can't trust the cursor's resting row as the true end of a command's
+ * output (interactive menus redraw a full frame, then move the cursor back
+ * up into it — see scheduleLiveRender's endRow comment). Extends row-by-row
+ * while content stays contiguous, stopping at the first blank row so it
+ * can't run past a real gap into unrelated leftover content still sitting
+ * further down in the never-cleared buffer (e.g. the tail of an earlier,
+ * unrelated command) — capped at `hardCapRow` as a last-resort safety bound.
+ */
+export function findContentEndRow(buffer: IBuffer, cursorRow: number, hardCapRow: number, cols: number): number {
+  let endRow = cursorRow + 1;
+  for (let y = cursorRow + 1; y < hardCapRow; y++) {
+    if (isRowBlank(buffer, y, cols)) break;
+    endRow = y + 1;
+  }
+  return endRow;
+}
+
 /** Reads buffer rows [startRow, endRow) as styled lines, dropping trailing empty rows. */
 export function readRenderedLines(buffer: IBuffer, startRow: number, endRow: number, cols: number): RenderedLine[] {
   const lines: RenderedLine[] = [];

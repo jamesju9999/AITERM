@@ -888,6 +888,43 @@ describe("useTerminalBlocks", () => {
       });
     });
 
+    it("指令輸出很短、游標停在空白列之後，renderedLines 不可混進緩衝區更下面、隔著空白的殘留內容", async () => {
+      // 實機抓到的 bug：這個分頁更早跑過一個長指令（例如 ifconfig），它的
+      // 輸出從未被清空過，還留在緩衝區更下面的列。目前這個指令（例如
+      // ls -la）輸出很短，游標停在自己輸出後面那個空白列，中間隔著一大段
+      // 空白才會碰到那段殘留文字。無條件往下多讀一整個 term.rows 的舊算法
+      // 會把它也讀進來——`readRenderedLines` 的「捨棄結尾空白列」只砍得掉
+      // 殘留內容「後面」的空白，砍不掉殘留內容「前面」那段空白缺口，殘留
+      // 內容本身因此被誤判成這個指令自己的輸出。
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+
+      act(() => {
+        result.current.submitCommand("ls -la");
+      });
+      await act(async () => {
+        await writeToTerm(term, "\x1b]133;C\x07");
+      });
+      // 真正的輸出只有兩行，游標自然停在第 3 列（空白）。
+      await act(async () => {
+        await writeToTerm(term, "file1\r\nfile2\r\n");
+      });
+      // 模擬緩衝區更下面（隔著好幾列空白）躺著更早一個指令留下的殘留
+      // 內容：游標往下跳過空白列，寫一行不相關的文字，再跳回目前指令
+      // 真正輸出結束的位置——絕不是這個指令自己畫出來的。
+      await act(async () => {
+        await writeToTerm(term, "\x1b[8B" + "media: none" + "\x1b[8A\r");
+      });
+      act(() => {
+        result.current.appendOutput("file1\r\nfile2\r\n");
+      });
+
+      await waitFor(() => {
+        expect(result.current.blocks[0].renderedLines).toBeDefined();
+      });
+      const texts = result.current.blocks[0].renderedLines?.map((l) => l.spans.map((s) => s.text).join(""));
+      expect(texts).toEqual(["file1", "file2"]);
+    });
+
     it("不限 Windows：任何平台 running 中都能拿到即時 renderedLines（marker 登記已經通用化）", async () => {
       const { result } = renderHook(() => useTerminalBlocks("session-1", term, undefined, undefined, undefined, undefined, undefined, "other"));
 

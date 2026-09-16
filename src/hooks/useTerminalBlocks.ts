@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal, type IMarker } from "@xterm/xterm";
 import { writePty } from "../ipc/pty";
-import { parseAnsiToRenderedLines, readRenderedLines, type RenderedLine } from "../lib/ansiBlockParser";
+import { parseAnsiToRenderedLines, readRenderedLines, findContentEndRow, type RenderedLine } from "../lib/ansiBlockParser";
 import type { GitBlockInfo } from "../ipc/vcs";
 
 export interface TerminalBlock {
@@ -223,11 +223,16 @@ export function useTerminalBlocks(
         // （試過用一顆 ref 記住「曾經到過的最深列」，這裡是它 across
         // 多個節流週期才有用，但實機測試證實這個情境整批內容在單一週期
         // 內就處理完了，那個 ref 永遠只看得到搬回去之後的狀態，完全沒
-        // 機會累積到那個峰值）。改成無條件往下多讀一整個螢幕高度（互動
-        // 選單很少會比一個畫面還高），交給 `readRenderedLines` 自己的
-        // 「捨棄結尾全空白列」邏輯去掉多讀的部分——不管遊標實際停在哪、
-        // 不管內容是一次寫完還是分批寫完，都讀得到完整內容。
-        const endRow = Math.max(buf.baseY + buf.cursorY + 1, start.marker.line + term.rows);
+        // 機會累積到那個峰值）。改成從游標往下逐列掃描（findContentEndRow），
+        // 只要還連續有內容就往下擴張，一遇到空白列就停手，上限是一整個
+        // 螢幕高度（互動選單很少會比一個畫面還高）——這樣游標之後「同一批
+        // 一次畫完」的內容不會被切掉，但也不會像先前無條件多讀一整個
+        // term.rows 那樣，隔著一段空白硬讀到緩衝區更下面、屬於這個分頁
+        // 更早一個指令、從未被清空過的殘留內容（實機抓到的 bug：`ls -la`
+        // 卡片尾端混進同一個分頁更早跑過的 `ifconfig` 殘留行，中間隔著
+        // 一大段空白）。
+        const cursorRow = buf.baseY + buf.cursorY;
+        const endRow = findContentEndRow(buf, cursorRow, start.marker.line + term.rows, term.cols);
         const renderedLines = readRenderedLines(buf, Math.max(0, start.marker.line), endRow, term.cols);
 
         const withLines = blocksRef.current.map((b) => (b.id === blockId ? { ...b, renderedLines } : b));
@@ -326,7 +331,8 @@ export function useTerminalBlocks(
         const buf = term.buffer.active;
         // 跟 scheduleLiveRender 同一個理由、同一套算法（見該處的說明）：
         // 結案當下游標可能還停在互動選單中段，不是內容實際畫到的最深列。
-        const endRow = Math.max(buf.baseY + buf.cursorY + 1, start.marker.line + term.rows);
+        const cursorRow = buf.baseY + buf.cursorY;
+        const endRow = findContentEndRow(buf, cursorRow, start.marker.line + term.rows, term.cols);
         renderedLines = readRenderedLines(buf, Math.max(0, start.marker.line), endRow, cols);
         start.marker.dispose();
         outputStartRef.current = null;
