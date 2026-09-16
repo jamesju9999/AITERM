@@ -13,7 +13,7 @@ import {
 import { useLocale } from "../../contexts/LocaleContext";
 import { getActiveTheme, type AppTheme } from "../../lib/themes";
 import { useTerminalBlocks } from "../../hooks/useTerminalBlocks";
-import { WarpInput } from "../WarpInput";
+import { WarpInput, type WarpInputHandle } from "../WarpInput";
 import { TerminalBlockCard } from "../TerminalBlockCard";
 import { CommandBookmarksPicker, addBookmark } from "../CommandBookmarks";
 import { parseAiPrefix, parseAgentPrefix } from "../parseAiPrefix";
@@ -71,6 +71,7 @@ type Phase =
 export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "", onConnectClick }: Props) {
   const { t } = useLocale();
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const warpInputRef = useRef<WarpInputHandle>(null);
   const termRef = useRef<Terminal | null>(null);
   const [termState, setTermState] = useState<Terminal | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "waiting", sas });
@@ -240,6 +241,26 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   useEffect(() => {
     if (isRawKeyboardModeActive) termRef.current?.focus();
   }, [isRawKeyboardModeActive]);
+
+  // 跟 TerminalView.tsx 同一套機制、同一個理由：使用者點卡片列表裡的文字
+  // 選取/複製之後，焦點通常會掉回 document.body（普通 div 沒有 tabIndex，
+  // 選取文字不會移動焦點），這時候直接開始打字想輸入下一個指令會完全沒
+  // 地方接住。偵測到「看起來像要開始打指令」的按鍵、且沒有其他輸入框/
+  // 按鈕/彈出視窗持有焦點時，主動把焦點轉給 WarpInput。唯讀模式下
+  // WarpInput 本身是 disabled，focus() 對停用的元素是安全的 no-op，不需要
+  // 另外判斷 phase.mode。
+  useEffect(() => {
+    if (isAlternateBuffer || isRawKeyboardModeActive) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
+      const activeTag = document.activeElement?.tagName;
+      if (activeTag === "INPUT" || activeTag === "TEXTAREA" || activeTag === "BUTTON" || activeTag === "SELECT") return;
+      if (bookmarksOpen || aiPanelOpen || paletteOpen) return;
+      warpInputRef.current?.focus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isAlternateBuffer, isRawKeyboardModeActive, bookmarksOpen, aiPanelOpen, paletteOpen]);
 
   // xterm.js 沒有公開 API 可以讀字元格高度——這裡讀的是跟 TerminalView.tsx
   // 同一個內部欄位，同一個 escape hatch，這個 repo 已經有先例。
@@ -737,6 +758,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
           白白佔用本該讓給即時窗格的空間。 */}
       {!(isAlternateBuffer || isRawKeyboardModeActive) && (
         <WarpInput
+          ref={warpInputRef}
           onSubmit={handleWarpSubmit}
           disabled={!(phase.kind === "live" && phase.mode === "control")}
           isCommandRunning={blocks[blocks.length - 1]?.status === "running"}

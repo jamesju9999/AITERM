@@ -44,7 +44,7 @@ import { QuotaBadge } from "./QuotaBadge";
 import { SharePanel } from "./SharePanel";
 import { ShellWarningBadge } from "./ShellWarningBadge";
 import { useProviderQuota } from "../hooks/useProviderQuota";
-import { WarpInput } from "./WarpInput";
+import { WarpInput, type WarpInputHandle } from "./WarpInput";
 import { FileExplorer } from "./FileExplorer/FileExplorer";
 import { CommandBookmarksPicker, addBookmark } from "./CommandBookmarks";
 import { getActiveTheme, type AppTheme } from "../lib/themes";
@@ -165,6 +165,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const { t, locale } = useLocale();
   const hostRef = useRef<HTMLDivElement>(null);
   const blockListRef = useRef<HTMLDivElement>(null);
+  const warpInputRef = useRef<WarpInputHandle>(null);
   const [status, setStatus] = useState<string>("initializing…");
   const [preview, setPreview] = useState<PreviewState>(INITIAL_PREVIEW);
   const previewRef = useRef<PreviewState>(INITIAL_PREVIEW);
@@ -541,6 +542,33 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   useEffect(() => {
     if (isRawKeyboardModeActive) termRef.current?.focus();
   }, [isRawKeyboardModeActive]);
+
+  // 使用者點選卡片列表裡的文字來選取/複製（例如複製指令輸出的一段內容）
+  // 之後，焦點通常會落在 document.body（一般的 div 沒有 tabIndex，選取
+  // 文字不會移動焦點到任何元素上）——這時候如果直接開始打字想輸入下一個
+  // 指令，按鍵會完全沒有地方接住。跟 Gmail／Slack 等「隨處打字自動跳到
+  // 搜尋框」是同一個手法：偵測到一個「看起來像要開始打指令」的按鍵，
+  // 且目前沒有任何輸入框、按鈕或彈出視窗持有焦點時，主動把焦點轉給
+  // WarpInput，讓這個按鍵接著正常輸入進去，不用使用者自己點一下輸入框。
+  useEffect(() => {
+    if (isAlternateBuffer || isRawKeyboardModeActive) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      // 只處理「打字」——單一可列印字元、沒有 Ctrl/Cmd/Alt 修飾鍵（那些是
+      // 快捷鍵，例如 Cmd+C 複製、Cmd+F 找文字，不該被這裡攔截）。
+      if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
+      // 已經有別的東西持有焦點（輸入框、按鈕、搜尋列……）就交給它自己處理，
+      // 不要搶——這裡只補「選完文字、焦點掉回 body」這個縫。
+      const activeTag = document.activeElement?.tagName;
+      if (activeTag === "INPUT" || activeTag === "TEXTAREA" || activeTag === "BUTTON" || activeTag === "SELECT") return;
+      // 找上面這些彈出視窗開著時，這個按鍵多半是要給它們用的（例如在指令
+      // 預覽對話框按 y/n），不要搶走。
+      if (searchOpen || bookmarksOpen || panelOpen || paletteOpen || preview.visible) return;
+      warpInputRef.current?.focus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isAlternateBuffer, isRawKeyboardModeActive, searchOpen, bookmarksOpen, panelOpen, paletteOpen, preview.visible]);
+
   const resizeRepaintGateRef = useRef<ResizeRepaintGate | null>(null);
   if (!resizeRepaintGateRef.current) resizeRepaintGateRef.current = new ResizeRepaintGate();
 
@@ -2072,6 +2100,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           <StreamingIndicator visible text={streamText} />
         ) : (
         <WarpInput
+          ref={warpInputRef}
           sessionId={sessionId}
           isCommandRunning={blocks[blocks.length - 1]?.status === "running"}
           onRawKey={(data) => { if (sessionId) writePty(sessionId, data).catch(console.error); }}

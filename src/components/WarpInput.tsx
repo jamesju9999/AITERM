@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent } from "react";
 import { isImeComposing } from "../lib/imeComposing";
 import type { SubmitShortcut } from "../ipc/config";
 import { useLocale } from "../contexts/LocaleContext";
@@ -36,6 +36,13 @@ export interface WarpInputProps {
   onRawKey?: (data: string) => void;
 }
 
+/** Imperative handle exposed via `ref` — lets a parent (e.g. "start typing
+ *  anywhere jumps focus here", see TerminalView.tsx/RemoteTerminalView) move
+ *  keyboard focus into this box without reaching into its internal DOM. */
+export interface WarpInputHandle {
+  focus: () => void;
+}
+
 const STORAGE_KEY = "aiterm-command-history";
 
 const RAW_KEY_SEQUENCES: Record<string, string> = {
@@ -47,7 +54,10 @@ const RAW_KEY_SEQUENCES: Record<string, string> = {
   Escape: "\x1b",
 };
 
-export function WarpInput({ onSubmit, disabled, shortcut = "enter", sessionId, placeholder, isCommandRunning, onRawKey }: WarpInputProps) {
+export const WarpInput = forwardRef<WarpInputHandle, WarpInputProps>(function WarpInput(
+  { onSubmit, disabled, shortcut = "enter", sessionId, placeholder, isCommandRunning, onRawKey },
+  ref,
+) {
   const { t } = useLocale();
   const [value, setValue] = useState("");
   const [history, setHistory] = useState<string[]>([]);
@@ -60,6 +70,10 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter", sessionId, p
   const itemsRef = useRef<HTMLDivElement>(null);
   // Saves the input draft before the user starts navigating history
   const draftValueRef = useRef("");
+
+  useImperativeHandle(ref, () => ({
+    focus: () => textareaRef.current?.focus(),
+  }));
 
   useEffect(() => {
     try {
@@ -396,4 +410,4 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter", sessionId, p
       </button>
     </div>
   );
-}
+});
