@@ -94,6 +94,14 @@ const mockBufferActive: {
   viewportY: number;
 } = { type: "normal", cursorY: 0, cursorX: 0, baseY: 0, viewportY: 0 };
 let capturedBufferChangeHandler: (() => void) | null = null;
+// useTerminalBlocks 現在還會掛兩個 CSI handler（Kitty keyboard protocol
+// push/pop，見 useTerminalBlocks.ts 的 isRawKeyboardModeActive）。跟
+// capturedOscHandler 同一個手法：測試自己保留 callback，之後手動觸發，
+// 模擬遠端送出 `ESC[>Ps u` / `ESC[<u`。一定要幫這個假 Terminal 補上
+// registerCsiHandler，否則 useTerminalBlocks 內部呼叫它會直接炸掉
+// TypeError，讓這個檔案裡所有會掛載 RemoteTerminalView 的測試全部失敗。
+let capturedRawKbPushHandler: (() => boolean) | null = null;
+let capturedRawKbPopHandler: (() => boolean) | null = null;
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     write = writeMock;
@@ -110,6 +118,11 @@ vi.mock("@xterm/xterm", () => ({
     parser = {
       registerOscHandler: vi.fn((_code: number, handler: (data: string) => boolean) => {
         capturedOscHandler = handler;
+        return { dispose: vi.fn() };
+      }),
+      registerCsiHandler: vi.fn((id: { prefix?: string; final: string }, handler: () => boolean) => {
+        if (id.prefix === ">") capturedRawKbPushHandler = handler;
+        if (id.prefix === "<") capturedRawKbPopHandler = handler;
         return { dispose: vi.fn() };
       }),
     };
@@ -203,6 +216,8 @@ beforeEach(() => {
   failListen = null;
   capturedOscHandler = null;
   capturedBufferChangeHandler = null;
+  capturedRawKbPushHandler = null;
+  capturedRawKbPopHandler = null;
   mockBufferActive.type = "normal";
   mockBufferActive.cursorY = 0;
   mockBufferActive.cursorX = 0;
@@ -858,6 +873,43 @@ describe("RemoteTerminalView", () => {
     });
     expect(container.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument();
+  });
+
+  it("偵測到 Kitty keyboard protocol push（沒有切 alternate screen buffer 的互動提示，例如 claude CLI 信任提示）時，卡片列表與 WarpInput 隱藏、即時窗格撐高；pop 後恢復", async () => {
+    // 設計文件 docs/superpowers/specs/2026-09-16-interactive-prompt-live-expand-design.md：
+    // 實測 `claude` CLI 的信任提示不會切 alternate screen buffer，純粹用
+    // 游標定位在原地重繪，靠這個訊號補上 isAlternateBuffer 沒覆蓋到的縫。
+    const { container } = render(<RemoteTerminalView tabId="t1" connId="c41" sas="4141" isActive onConnectClick={vi.fn()} />);
+    await waitFor(() => expect(handlers["granted:c41"]).toBeDefined());
+    handlers["granted:c41"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+
+    const liveFrame = () => container.querySelector(".aiterm-remote-terminal__live-frame") as HTMLElement;
+
+    await waitFor(() => expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument());
+    const idleHeight = liveFrame().style.height;
+    expect(liveFrame().style.overflow).toBe("clip");
+
+    await waitFor(() => expect(capturedRawKbPushHandler).toBeTruthy());
+    act(() => {
+      capturedRawKbPushHandler!();
+    });
+
+    expect(container.querySelector(".aiterm-remote-terminal__blocks")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/輸入指令|Type a command/i)).not.toBeInTheDocument();
+    // 維持 overflow: clip——跟 alt-screen 展開不一樣，不新增捲動容器。
+    expect(liveFrame().style.overflow).toBe("clip");
+    expect(liveFrame().style.height).not.toBe(idleHeight);
+
+    expect(capturedRawKbPopHandler).toBeTruthy();
+    act(() => {
+      capturedRawKbPopHandler!();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument();
+    });
+    expect(container.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
+    expect(liveFrame().style.height).toBe(idleHeight);
   });
 
   it("全螢幕程式即時窗格的高度跟著主控端實際列數變化，不是無條件撐滿容器", async () => {

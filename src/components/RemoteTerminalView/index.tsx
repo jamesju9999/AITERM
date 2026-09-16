@@ -31,6 +31,9 @@ import "./index.css";
 
 const MIN_LIVE_ROWS = 3;
 const MAX_LIVE_ROWS = 16;
+// 同 TerminalView.tsx 的 EXPANDED_LIVE_ROWS，理由一樣：見設計文件
+// docs/superpowers/specs/2026-09-16-interactive-prompt-live-expand-design.md。
+const EXPANDED_LIVE_ROWS = 24;
 
 interface Props {
   tabId: string;
@@ -126,7 +129,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
     syncLiveTopRef.current?.();
   }, []);
 
-  const { blocks, isAlternateBuffer, submitCommand, appendOutput, clearAllBlocks } = useTerminalBlocks(
+  const { blocks, isAlternateBuffer, isRawKeyboardModeActive, submitCommand, appendOutput, clearAllBlocks } = useTerminalBlocks(
     connId,
     termState,
     undefined,
@@ -252,6 +255,13 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   useEffect(() => {
     setLiveRows(MIN_LIVE_ROWS);
   }, [visibleBlockCount]);
+
+  // 跟 TerminalView.tsx 同一套邏輯與理由：isAlternateBuffer 為 true 時
+  // liveRows 不影響顯示高度（見下面 JSX 的 height 三元判斷式用的是
+  // altBufferHeightPx），這裡不需要額外判斷 isAlternateBuffer。
+  useEffect(() => {
+    setLiveRows(isRawKeyboardModeActive ? EXPANDED_LIVE_ROWS : MIN_LIVE_ROWS);
+  }, [isRawKeyboardModeActive]);
 
   // 提示字元所在的列，讓即時窗格從那一列開始顯示——跟 TerminalView.tsx 的
   // liveTopRows 同一套機制、同一個理由：Windows 主控端不再清空 xterm 緩衝區
@@ -683,7 +693,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
         {/* 卡片列表在全螢幕程式（vim/htop/tmux 等）使用中隱藏——跟
             TerminalView.tsx 同一個理由：那類程式必須完整佔滿即時窗格，
             不該被已完成指令的舊卡片跟它搶空間。 */}
-        {!isAlternateBuffer && (
+        {!(isAlternateBuffer || isRawKeyboardModeActive) && (
           <div className="aiterm-remote-terminal__blocks">
             {/* 分段卡片：跟本機分頁同一套過濾條件（只顯示已結束且已完成
                 ANSI 解析的），複用 TerminalBlockCard——不傳 onAskAi，
@@ -757,7 +767,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
       {/* 全螢幕程式使用中隱藏——跟本機終端機同一個理由：這類程式的輸入
           直接打進上面的即時畫面，不透過這個獨立的指令輸入框，留著只會
           白白佔用本該讓給即時窗格的空間。 */}
-      {!isAlternateBuffer && (
+      {!(isAlternateBuffer || isRawKeyboardModeActive) && (
         <WarpInput
           onSubmit={handleWarpSubmit}
           disabled={!(phase.kind === "live" && phase.mode === "control")}
