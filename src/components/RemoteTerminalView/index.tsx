@@ -415,19 +415,26 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
           const latestBlock = blocksRef.current[blocksRef.current.length - 1];
           if (latestBlock?.status === "running") {
             setLiveRows(MAX_LIVE_ROWS);
+            // 指令執行中就不要再嘗試對齊「上一次 shell 提示字元」的位置
+            // ——那個位置一旦連線累積的 scrollback 夠深（例如先跑過大量
+            // dir/ipconfig），而目前執行的前景程式不是 shell 本身、自己
+            // 只產生少量輸出（例如 claude CLI 的互動選單），viewportY
+            // 永遠追不上凍結住的舊 promptAbsRow，位移量會一直是正的、把
+            // 可視窗格整個推到 xterm 實際渲染範圍之外——畫面看起來完全
+            // 空白（實機回報：長時間連線後執行 claude CLI 整個畫面全
+            // 黑）。直接歸零，改成跟非 Windows 平台原本就有的行為一致：
+            // 單純顯示 xterm 目前捲動到的位置。指令結束、shell 畫出下一
+            // 個提示字元時，onPromptStart 觸發的 syncLiveTop() 會重新
+            // 對齊（見下面 else 分支與該 callback）。
+            setLiveTopRows(0);
+          } else {
+            // 提示字元的 viewport-relative 列數會隨著輸出捲動緩衝區
+            // （baseY 增加）而改變，所以要每個 chunk 都重新計算，不能只
+            // 靠 OSC 133 B 觸發——跟 TerminalView.tsx 同一套機制、同一個
+            // 理由（見該檔案 onPtyData 內的 syncLiveTop() 呼叫）。只在
+            // 沒有 running 中區塊時才做：上面已經處理了執行中的情況。
+            syncLiveTopRef.current?.();
           }
-          // 提示字元的 viewport-relative 列數會隨著輸出捲動緩衝區
-          // （baseY 增加）而改變，所以要每個 chunk 都重新計算，不能只靠
-          // OSC 133 B 觸發——跟 TerminalView.tsx 同一套機制、同一個理由
-          // （見該檔案 onPtyData 內的 syncLiveTop() 呼叫）：主控端執行
-          // 的前景程式如果不是 shell 本身（例如 claude CLI），完全不會
-          // 再送 OSC 133 B，liveTopOffsetPx 會凍結在上一次 shell 提示
-          // 字元的位置；程式持續大量輸出把畫面往下推得夠遠後，這個凍結
-          // 的位移量會把可視窗格整個推到 xterm 實際內容範圍之外，畫面
-          // 看起來完全空白（實機回報）。無條件呼叫、不看 latestBlock 是
-          // 否 running：Windows 觀看端的「主控端自己在跑的東西」本來就
-          // 不會經過這一端的 submitCommand，不能用區塊狀態當門檻。
-          syncLiveTopRef.current?.();
         });
       }),
     );

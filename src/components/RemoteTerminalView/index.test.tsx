@@ -606,6 +606,53 @@ describe("RemoteTerminalView", () => {
     });
   });
 
+  it("Windows 主控端：指令執行中一律歸零位移，不追著上一次提示字元的舊位置跑到畫面外", async () => {
+    // 光是每個 chunk 都重新計算（前一個測試修的那個 bug）還不夠：如果上一次
+    // shell 提示字元畫在很深的絕對列（連線夠久、之前跑過大量 dir/ipconfig
+    // 之類的輸出），而目前執行的前景程式（例如 claude CLI）自己只產生少量
+    // 輸出，viewportY 永遠追不上 promptAbsRow，位移量會一直是正的、把窗格
+    // 推到 xterm 實際渲染範圍之外——即時窗格整個空白（實機回報：長時間連線
+    // 後執行 claude CLI 整個畫面全黑）。指令執行中就不該再嘗試對齊「上一次
+    // 提示字元」的位置，直接歸零、跟非 Windows 平台原本的行為一致，等指令
+    // 結束、shell 畫出下一個提示字元時才重新對齊。
+    const { container } = render(
+      <RemoteTerminalView tabId="t1" connId="cwin3" sas="9996" isActive onConnectClick={vi.fn()} />,
+    );
+    await waitFor(() => expect(handlers["granted:cwin3"]).toBeDefined());
+    act(() => {
+      handlers["granted:cwin3"]({ mode: "control", cols: 80, rows: 24, hostOs: "windows" } as never);
+    });
+    await waitFor(() => expect(capturedOscHandler).toBeTruthy());
+
+    // 模擬深層 scrollback：上一次提示字元畫在很下面的絕對列。
+    mockBufferActive.cursorY = 23;
+    mockBufferActive.baseY = 300;
+    mockBufferActive.viewportY = 300;
+    act(() => {
+      capturedOscHandler!("B");
+    });
+
+    const host = () => container.querySelector(".aiterm-remote-terminal__scroll") as HTMLElement;
+    // 閒置狀態確實會位移——這是既有、正確的行為，不能被這次的修改動到。
+    expect(parseFloat(host().style.top)).toBeLessThan(0);
+
+    const textarea = await screen.findByPlaceholderText(/輸入指令|Type a command/i);
+    await waitFor(() => expect(textarea).not.toBeDisabled());
+    await userEvent.type(textarea, "claude{Enter}");
+
+    // 前景程式輸出，只把 viewportY 往前推進一點點（遠小於 baseY 累積的
+    // 深度——claude CLI 自己的畫面內容量跟連線累積了多少 scrollback 無關）。
+    mockBufferActive.viewportY = 310;
+    await waitFor(() => expect(handlers["data:cwin3"]).toBeDefined());
+    act(() => {
+      handlers["data:cwin3"](btoa("some interactive output\r\n") as never);
+    });
+
+    await waitFor(() => {
+      expect(host().style.top).toBe("");
+    });
+  });
+
   it("非 Windows 主控端：不位移（那邊仍然會清空緩衝區，提示字元本來就在第 0 列）", async () => {
     const { container } = render(
       <RemoteTerminalView tabId="t1" connId="cnix" sas="9998" isActive onConnectClick={vi.fn()} />,

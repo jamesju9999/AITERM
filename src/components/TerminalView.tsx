@@ -1362,12 +1362,29 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               const latestBlock = blocksRef.current[blocksRef.current.length - 1];
               if (latestBlock?.status === "running") {
                 setLiveRows(MAX_LIVE_ROWS);
+                // Stop chasing the last shell prompt's row once a command is
+                // actually running: if the session has accumulated a lot of
+                // scrollback (long-lived tab, lots of prior output) and the
+                // running foreground program isn't the shell itself (e.g. an
+                // interactive CLI prompt) and only produces modest output of
+                // its own, viewportY can never catch up to the frozen
+                // promptAbsRow — the offset stays positive and pushes the
+                // live pane's visible window entirely past xterm's actual
+                // rendered content, leaving it blank (real-machine repro:
+                // remote Windows session, `claude` CLI's trust prompt, after
+                // a long-lived connection). Reset to 0 instead — same as
+                // non-Windows platforms' default — and let onPromptStart's
+                // syncLiveTop() re-align once the shell draws its next
+                // prompt (see the `else` branch below and that callback).
+                setLiveTopRows(0);
+              } else {
+                // The prompt's viewport-relative row moves whenever output
+                // scrolls the buffer (baseY grows), so the offset has to be
+                // recomputed per chunk, not just when OSC 133 B fires. No-op
+                // off Windows. Only while nothing is running — see the `if`
+                // branch above for why.
+                syncLiveTop();
               }
-              // The prompt's viewport-relative row moves whenever output
-              // scrolls the buffer (baseY grows), so the offset has to be
-              // recomputed per chunk, not just when OSC 133 B fires. No-op
-              // off Windows.
-              syncLiveTop();
             };
 
             if (isWindows) {
