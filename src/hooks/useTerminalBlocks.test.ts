@@ -838,6 +838,56 @@ describe("useTerminalBlocks", () => {
       expect(result.current.blocks[0].renderedLines?.[0].spans.map((s) => s.text).join("")).toBe("hi");
     });
 
+    it("互動選單畫完整個框之後把游標移回選到的那一項，renderedLines 仍要包含游標之後已經畫出來的行", async () => {
+      // 實機抓到的 bug：claude CLI 的信任提示這類互動選單，會先把整個框
+      // （含最下面的提示文字）畫完，再用 CSI 游標定位把游標搬回目前選到
+      // 的那一項（顯示反白），游標因此停在框的中段，不是最下面。原本
+      // `endRow` 只看「游標目前所在列」，會把游標之後、已經畫出來但游標
+      // 沒有停留的內容切掉——見 scheduleLiveRender 內 endRow 那段的說明
+      // （改成無條件往下多讀一整個螢幕高度，交給 readRenderedLines 自己
+      // 捨棄結尾空白列，不再嘗試用游標位置精準判斷內容畫到哪）。
+      const { result } = renderHook(() => useTerminalBlocks("session-1", term));
+
+      act(() => {
+        result.current.submitCommand("claude");
+      });
+      await act(async () => {
+        await writeToTerm(term, "\x1b]133;C\x07");
+      });
+      // 畫出四行框內容，游標自然落在第 4 行（最後一行）。
+      await act(async () => {
+        await writeToTerm(term, "line1\r\nline2\r\nline3\r\nline4\r\n");
+      });
+      act(() => {
+        result.current.appendOutput("line1\r\nline2\r\nline3\r\nline4\r\n");
+      });
+      await waitFor(() => {
+        expect(result.current.blocks[0].renderedLines?.length).toBe(4);
+      });
+
+      // 選單接著把游標搬回「line2」那一行（CSI cursor up 3 行，從 line4 那一行往上數）並且原地
+      // 重繪成不同的文字（模擬套用反白樣式表示選取）——這正是互動選單的
+      // 典型畫法。刻意換成一段跟原本「line2」不同的文字（不是原地重繪
+      // 一模一樣的內容、也不是空字串）：這個字串只可能來自「第二輪真的
+      // 重新掃描過緩衝區」的結果，逼 waitFor 一定要等到第二輪 setTimeout
+      // 真正觸發、讀到新內容為止——如果只斷言「四行都還在」，會被第一輪
+      // 就已經成立的殘留值矇混過去，等不到第二輪真正執行就通過，驗不出
+      // 這裡要測的東西（這個地雷已經在本檔踩過一次）。
+      await act(async () => {
+        await writeToTerm(term, "\x1b[3A\rLINE2-SELECTED");
+      });
+      act(() => {
+        result.current.appendOutput("\rLINE2-SELECTED");
+      });
+
+      // 第二輪重新掃描後，line2 變成新文字，且 line3/line4 仍然要在——
+      // 不能因為游標搬回中段就把它們切掉。
+      await waitFor(() => {
+        const lines = result.current.blocks[0].renderedLines;
+        expect(lines?.map((l) => l.spans.map((s) => s.text).join(""))).toEqual(["line1", "LINE2-SELECTED", "line3", "line4"]);
+      });
+    });
+
     it("不限 Windows：任何平台 running 中都能拿到即時 renderedLines（marker 登記已經通用化）", async () => {
       const { result } = renderHook(() => useTerminalBlocks("session-1", term, undefined, undefined, undefined, undefined, undefined, "other"));
 
@@ -869,7 +919,7 @@ describe("useTerminalBlocks", () => {
         await writeToTerm(term, "\x1b]133;C\x07");
       });
 
-      const rafSpy = vi.spyOn(globalThis, "requestAnimationFrame");
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
       await act(async () => {
         await writeToTerm(term, "a\r\n");
         result.current.appendOutput("a\r\n");
@@ -878,11 +928,15 @@ describe("useTerminalBlocks", () => {
         await writeToTerm(term, "c\r\n");
         result.current.appendOutput("c\r\n");
       });
-      // 三次 appendOutput 只排一次 rAF——第二、三次呼叫時已經有一個排定中
-      // 的，直接被擋掉（見 scheduleLiveRender 的 `if (liveRenderRafRef.current
-      // !== null) return;`）。
-      expect(rafSpy).toHaveBeenCalledTimes(1);
-      rafSpy.mockRestore();
+      // 三次 appendOutput 只排一次節流計時器——第二、三次呼叫時已經有一個
+      // 排定中的，直接被擋掉（見 scheduleLiveRender 的
+      // `if (liveRenderRafRef.current !== null) return;`）。只算帶
+      // scheduleLiveRender 那個節流延遲（16ms）的呼叫——xterm.js 自己的
+      // write() 內部也會排 setTimeout，spy 在 globalThis 上連那些一起量
+      // 得到，不能直接比總呼叫次數。
+      const throttleCalls = timeoutSpy.mock.calls.filter(([, delay]) => delay === 16);
+      expect(throttleCalls).toHaveLength(1);
+      timeoutSpy.mockRestore();
 
       await waitFor(() => {
         expect(result.current.blocks[0].renderedLines?.length).toBe(3);

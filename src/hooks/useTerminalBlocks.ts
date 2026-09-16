@@ -134,10 +134,12 @@ export function useTerminalBlocks(
   // running 中的區塊現在也要持續讀取畫面緩衝區更新 renderedLines
   // （見下面的 scheduleLiveRender），不是只有結束時讀一次。
   const outputStartRef = useRef<{ blockId: string; marker: IMarker } | null>(null);
-  // scheduleLiveRender 用 requestAnimationFrame 節流：同一個畫面更新週期
-  // 內收到多個 chunk，只在最後一次真正重新掃描緩衝區算 renderedLines，
-  // 不會累積成「chunk 數 × 目前已輸出列數」的計算量。
-  const liveRenderRafRef = useRef<number | null>(null);
+  // scheduleLiveRender 節流：同一個節流週期內收到多個 chunk，只在最後一次
+  // 真正重新掃描緩衝區算 renderedLines，不會累積成「chunk 數 × 目前已輸出
+  // 列數」的計算量。用 setTimeout 不用 requestAnimationFrame：這裡只是
+  // 節流一段純資料處理（沒有東西要畫），沒有理由跟瀏覽器的畫面更新週期
+  // 綁在一起，setTimeout 語意更直接。
+  const liveRenderRafRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /**
    * 實機測試抓到的第二個 bug（跟 appendOutput 的 race 是不同根因）：
@@ -192,15 +194,16 @@ export function useTerminalBlocks(
    * 固定大小、需要對齊的即時窗格——這個函式負責把「目前畫面緩衝區算出來
    * 的最終視覺狀態」持續寫回這個 block 的 `renderedLines`。
    *
-   * 用 requestAnimationFrame 節流：`readRenderedLines` 是線性掃描（從
-   * marker 那一行掃到目前游標所在列），不是遞增式的，狂送輸出的指令
-   * 若每個 chunk 都重新掃一次，成本會隨輸出量變差。同一個畫面更新週期
-   * 內收到多個 chunk，只在最後一次真正掃描一次。
+   * 用 setTimeout 節流（不用 requestAnimationFrame——見 liveRenderRafRef
+   * 宣告處的說明）：`readRenderedLines` 是線性掃描（從 marker 那一行掃到
+   * 目前游標所在列），不是遞增式的，狂送輸出的指令若每個 chunk 都重新掃
+   * 一次，成本會隨輸出量變差。同一個節流週期內收到多個 chunk，只在最後
+   * 一次真正掃描一次。
    */
   const scheduleLiveRender = useCallback(
     (blockId: string) => {
       if (liveRenderRafRef.current !== null) return;
-      liveRenderRafRef.current = requestAnimationFrame(() => {
+      liveRenderRafRef.current = setTimeout(() => {
         liveRenderRafRef.current = null;
         const start = outputStartRef.current;
         if (!term || !start || start.blockId !== blockId) return;
@@ -208,16 +211,29 @@ export function useTerminalBlocks(
         if (!latest || latest.id !== blockId || latest.status !== "running") return;
 
         const buf = term.buffer.active;
-        const cursorRow = buf.baseY + buf.cursorY;
         // 標記被 scrollback 修剪掉時 line 會是 -1——代表輸出比 scrollback
         // 還長，剩下的每一列都屬於這個指令，從第 0 列讀起。
-        const endRow = buf.cursorX > 0 ? cursorRow + 1 : cursorRow;
+        //
+        // 不用游標目前所在列當 endRow：互動式選單常見的畫法是整個選單
+        // （含裝飾用的提示文字，例如 claude CLI 信任提示最下面那行
+        // 「Press Ctrl-C again to exit」）先一次寫完，再把游標移回選單中
+        // 「目前選到的那一項」顯示反白——這些位元組通常在同一批 PTY
+        // chunk、同一個節流週期內一起處理完，我們只讀得到「已經移回去」
+        // 之後的最終游標位置，沒有機會在游標抵達最深列的當下拍一張快照
+        // （試過用一顆 ref 記住「曾經到過的最深列」，這裡是它 across
+        // 多個節流週期才有用，但實機測試證實這個情境整批內容在單一週期
+        // 內就處理完了，那個 ref 永遠只看得到搬回去之後的狀態，完全沒
+        // 機會累積到那個峰值）。改成無條件往下多讀一整個螢幕高度（互動
+        // 選單很少會比一個畫面還高），交給 `readRenderedLines` 自己的
+        // 「捨棄結尾全空白列」邏輯去掉多讀的部分——不管遊標實際停在哪、
+        // 不管內容是一次寫完還是分批寫完，都讀得到完整內容。
+        const endRow = Math.max(buf.baseY + buf.cursorY + 1, start.marker.line + term.rows);
         const renderedLines = readRenderedLines(buf, Math.max(0, start.marker.line), endRow, term.cols);
 
         const withLines = blocksRef.current.map((b) => (b.id === blockId ? { ...b, renderedLines } : b));
         blocksRef.current = withLines;
         setBlocks(withLines);
-      });
+      }, 16);
     },
     [term],
   );
@@ -249,7 +265,7 @@ export function useTerminalBlocks(
     outputStartRef.current?.marker.dispose();
     outputStartRef.current = null;
     if (liveRenderRafRef.current !== null) {
-      cancelAnimationFrame(liveRenderRafRef.current);
+      clearTimeout(liveRenderRafRef.current);
       liveRenderRafRef.current = null;
     }
     rawKeyboardDepthRef.current = 0;
@@ -293,7 +309,7 @@ export function useTerminalBlocks(
       setIsRawKeyboardModeActive(false);
 
       if (liveRenderRafRef.current !== null) {
-        cancelAnimationFrame(liveRenderRafRef.current);
+        clearTimeout(liveRenderRafRef.current);
         liveRenderRafRef.current = null;
       }
 
@@ -308,8 +324,9 @@ export function useTerminalBlocks(
       let renderedLines: RenderedLine[] | null = null;
       if (start?.blockId === blockId && term) {
         const buf = term.buffer.active;
-        const cursorRow = buf.baseY + buf.cursorY;
-        const endRow = buf.cursorX > 0 ? cursorRow + 1 : cursorRow;
+        // 跟 scheduleLiveRender 同一個理由、同一套算法（見該處的說明）：
+        // 結案當下游標可能還停在互動選單中段，不是內容實際畫到的最深列。
+        const endRow = Math.max(buf.baseY + buf.cursorY + 1, start.marker.line + term.rows);
         renderedLines = readRenderedLines(buf, Math.max(0, start.marker.line), endRow, cols);
         start.marker.dispose();
         outputStartRef.current = null;

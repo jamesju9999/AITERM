@@ -503,6 +503,22 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const beginTrackedBlockRef = useRef(beginTrackedBlock);
   useEffect(() => { beginTrackedBlockRef.current = beginTrackedBlock; }, [beginTrackedBlock]);
 
+  // Bridge appendOutput into a ref for the same reason, and it's the one that
+  // actually matters here: onPtyData's listener is registered inside the
+  // mount-once PTY-session effect below. If it called appendOutput directly
+  // (not through this ref) it would permanently close over whichever
+  // appendOutput identity existed at that effect's first run — almost
+  // certainly before termState had settled to the real Terminal instance.
+  // appendOutput's own identity changes whenever scheduleLiveRender's does,
+  // which changes whenever `term` does (see useTerminalBlocks.ts), so a
+  // stale capture here means every live-render attempt for the entire tab's
+  // lifetime silently no-ops on `!term` — real-machine testing caught this
+  // as claude CLI's trust prompt staying blank indefinitely (not just slow)
+  // while genuinely running, since nothing ever forced a fresh closure to
+  // replace the frozen one.
+  const appendOutputRef = useRef(appendOutput);
+  useEffect(() => { appendOutputRef.current = appendOutput; }, [appendOutput]);
+
   // Abort signal for agent loop — set to true to stop the loop
   const agentAbortRef = useRef(false);
   const agentMissionRef = useRef(agentMission);
@@ -1193,7 +1209,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               // 需不需要重新算 renderedLines，這裡不用再額外處理高度或
               // 位移——running 中的內容現在跟卡片走同一套渲染，自然撐開
               // 高度，見設計文件 2026-09-16-live-block-rendering-design.md。
-              appendOutput(chunkText);
+              appendOutputRef.current(chunkText);
             };
 
             if (isWindows) {
