@@ -807,20 +807,24 @@ describe("RemoteTerminalView", () => {
 
   it("全螢幕程式（vim/htop 等）進入 alternate buffer 時，卡片列表與 WarpInput 隱藏、即時窗格撐滿；離開後恢復", async () => {
     // 跟這次重寫之前不同：一般模式下即時窗格不再用 overflow:clip 裁切
-    // 固定高度的畫面——它整個被移到畫面外（見 RemoteTerminalView/index.tsx
-    // 的 JSX：非 alt-buffer 時 style 是 `{ position: "absolute", left:
-    // "-99999px", top: 0 }`），畫面上看到的內容改由卡片列表負責。全螢幕
-    // 程式使用中才會把它移回可見位置、撐滿、不裁切。
+    // 固定高度的畫面——它改用 opacity:0 疊在卡片列表的可視區域上（見
+    // RemoteTerminalView/index.tsx 的 JSX：非 alt-buffer 時 style 是
+    // `{ position: "absolute", inset: 0, opacity: 0, pointerEvents: "none" }`，
+    // 保持跟真的可見時一樣的尺寸，讓 xterm 的隱藏 textarea 維持可以被
+    // focus()，也讓 cols/rows 的量測不會失真），畫面上看到的內容改由卡片
+    // 列表負責。全螢幕程式使用中才會把它切換成真的可見、撐滿、不裁切。
     const { container } = render(<RemoteTerminalView tabId="t1" connId="c14" sas="1414" isActive onConnectClick={vi.fn()} />);
     await waitFor(() => expect(handlers["granted:c14"]).toBeDefined());
     handlers["granted:c14"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
 
     const liveFrame = () => container.querySelector(".aiterm-remote-terminal__live-frame") as HTMLElement;
 
-    // 一般模式：卡片容器與輸入框都在，即時窗格移到畫面外。
+    // 一般模式：卡片容器與輸入框都在，即時窗格用 opacity:0 疊在同一個
+    // 可視區域上，維持可以被 focus() 的真實尺寸。
     await waitFor(() => expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument());
     expect(container.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
-    expect(liveFrame().style.left).toBe("-99999px");
+    expect(liveFrame().style.opacity).toBe("0");
+    expect(liveFrame().style.pointerEvents).toBe("none");
 
     await waitFor(() => expect(capturedBufferChangeHandler).toBeTruthy());
     mockBufferActive.type = "alternate";
@@ -835,7 +839,7 @@ describe("RemoteTerminalView", () => {
     // 落到 14*1.1 的 fallback：Math.round(24*14*1.1) = 370px）——不是無
     // 條件撐滿容器的 100%，容器比內容需要的空間大時不該留下空白。
     expect(liveFrame().style.height).toBe("370px");
-    expect(liveFrame().style.left).toBe("");
+    expect(liveFrame().style.opacity).toBe("");
     expect(container.querySelector(".aiterm-remote-terminal__blocks")).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/輸入指令|Type a command/i)).not.toBeInTheDocument();
 
@@ -845,7 +849,7 @@ describe("RemoteTerminalView", () => {
       capturedBufferChangeHandler!();
     });
     await waitFor(() => {
-      expect(liveFrame().style.left).toBe("-99999px");
+      expect(liveFrame().style.opacity).toBe("0");
     });
     expect(container.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument();

@@ -1994,14 +1994,47 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                   flexShrink: 0,
                   overflow: "visible",
                 }
-              : { position: "absolute", left: "-99999px", top: 0 }
+              : // `opacity: 0` + `pointerEvents: none`, NOT moved off-canvas
+                // (no `left: -99999px`) and NOT `width`/`height` 0 or fixed.
+                // `inset: 0` against blockListRef (`position: relative`,
+                // `height: 100%` — see its JSX below) makes this element
+                // exactly the size of the real, visible card-list viewport
+                // at all times, same as xterm would be if it were actually
+                // shown there. That's load-bearing for two independent
+                // reasons, both caught via real-machine testing:
+                //  1. A previous version moved this off-canvas with no
+                //     explicit size, so `width: 100%` on the child below had
+                //     no real basis to resolve against — WebKit (this app's
+                //     Tauri webview) collapsed it to 0, which in turn
+                //     collapsed xterm.js's internal hidden textarea (the
+                //     thing that actually receives keystrokes) to 0×0,
+                //     silently breaking focus()/keyboard routing (arrow keys
+                //     doing nothing at claude CLI's trust prompt).
+                //  2. Even a fixed *arbitrary* off-canvas size (e.g. a flat
+                //     800×400) is wrong: the ResizeObserver below reacts to
+                //     ANY size change by calling fit(), which recomputes
+                //     term.cols/rows from whatever box it measures and (via
+                //     term.onResize → resizePty) forwards that to the real
+                //     PTY. An arbitrary size would desync term's own buffer
+                //     width from what the actual remote/local shell still
+                //     believes the terminal is, and briefly tell that shell
+                //     the terminal is some made-up size — reproduced as
+                //     `ls`/`pwd` output wrapping to a single character per
+                //     line right after toggling alternate-buffer mode.
+                //     Keeping this exactly viewport-sized at all times means
+                //     fit() always computes the *same* real cols/rows this
+                //     panel already legitimately tracks (see the
+                //     scrollbarGutter comment on blockListRef below for why
+                //     that tracking has to keep working even outside
+                //     alternate-buffer mode).
+                { position: "absolute", inset: 0, opacity: 0, pointerEvents: "none" }
           }
         >
           <div
             ref={hostRef}
             className={parkIme ? "aiterm-terminal-root aiterm-terminal-root--ime-park" : "aiterm-terminal-root"}
             style={{
-              height: isAlternateBuffer ? "100%" : "220px",
+              height: "100%",
               width: "100%",
               boxSizing: "border-box",
             }}

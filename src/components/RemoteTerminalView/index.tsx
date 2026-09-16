@@ -679,14 +679,32 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
                   flexShrink: 0,
                   overflow: "visible",
                 }
-              : { position: "absolute", left: "-99999px", top: 0 }
+              : // `opacity: 0` + `pointerEvents: none`, NOT moved off-canvas.
+                // `inset: 0` against `.aiterm-remote-terminal__scroll-area`
+                // (`position: relative` in index.css) makes this exactly the
+                // size of the real, visible card-list viewport at all times.
+                // A previous version moved this off-canvas with no explicit
+                // size, so the child's `width: 100%` below had no real basis
+                // to resolve against — WebKit (this app's Tauri webview)
+                // collapsed it to 0, which collapsed xterm.js's internal
+                // hidden textarea (the thing that actually receives
+                // keystrokes) to 0×0, silently breaking focus()/keyboard
+                // routing: real-machine testing found arrow keys doing
+                // nothing at claude CLI's trust prompt over a remote
+                // session. See TerminalView.tsx's identical fix for the
+                // fuller writeup (that file has a second reason — PTY-size
+                // corruption via a local FitAddon/ResizeObserver — that
+                // doesn't apply here, since this view never drives a local
+                // resize; the remote host dictates cols/rows entirely via
+                // the `granted` event above).
+                { position: "absolute", inset: 0, opacity: 0, pointerEvents: "none" }
           }
         >
           <div
             className="aiterm-remote-terminal__scroll"
             ref={hostRef}
             style={{
-              height: isAlternateBuffer ? "100%" : "220px",
+              height: "100%",
               width: "100%",
               boxSizing: "border-box",
             }}

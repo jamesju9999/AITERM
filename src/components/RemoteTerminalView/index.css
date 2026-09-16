@@ -44,6 +44,11 @@
 .aiterm-remote-terminal__scroll-area {
   flex: 1;
   min-height: 0;
+  /* 讓 .aiterm-remote-terminal__live-frame 在非全螢幕程式時能用
+     `position: absolute; inset: 0` 疊在這一層自己的可視區域上（見
+     index.tsx 該處註解）——沒有這個，inset:0 會往上找到更外層、大小不對
+     的祖先去定位。 */
+  position: relative;
   overflow-y: auto;
   /* 跟 TerminalView.tsx 的 blockListRef 容器（overflowX: "clip"）同一個
      理由：只設 overflow-y 會讓瀏覽器把沒設的另一軸算成 auto，這一層就會
