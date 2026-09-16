@@ -1906,13 +1906,55 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           </div>
         )}
         {/* Terminal */}
+        {/* Wraps the scrolling block list so the search bar (below) can be
+            positioned against a container that never scrolls. It used to be
+            a child of blockListRef itself — `position: absolute` positions
+            against the nearest positioned ancestor, which was blockListRef,
+            and blockListRef is also the thing that scrolls (new cards
+            auto-scroll it to the bottom), so the search bar visually
+            scrolled away with the content instead of staying pinned
+            (reported: floating search box got pushed off after jumping to
+            the next match, once a new card had appeared below it). */}
+        <div
+          style={{
+            display: viewTab === "terminal" ? "flex" : "none",
+            flexDirection: "column",
+            height: "100%",
+            position: "relative",
+          }}
+        >
+        {/* Find in Buffer search bar */}
+        {searchOpen && (
+          <div className="terminal-search-bar">
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (isImeComposing(e)) return;
+                if (e.key === 'Escape') { e.preventDefault(); closeSearch(); }
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSearch(searchQuery, 'next'); }
+                if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); doSearch(searchQuery, 'prev'); }
+                if (e.key === 'F3' && !e.shiftKey) { e.preventDefault(); doSearch(searchQuery, 'next'); }
+                if (e.key === 'F3' && e.shiftKey) { e.preventDefault(); doSearch(searchQuery, 'prev'); }
+              }}
+              placeholder={t.term_search_placeholder}
+              className="terminal-search-input"
+            />
+            {searchMatchInfo && <span className="terminal-search-match-info">{searchMatchInfo}</span>}
+            <button onClick={() => doSearch(searchQuery, 'prev')} title={t.term_search_prev} className="terminal-search-btn aiterm-btn aiterm-btn--secondary aiterm-btn--sm">↑</button>
+            <button onClick={() => doSearch(searchQuery, 'next')} title={t.term_search_next} className="terminal-search-btn aiterm-btn aiterm-btn--secondary aiterm-btn--sm">↓</button>
+            <button onClick={closeSearch} title={t.term_search_close} className="terminal-search-btn terminal-search-close aiterm-btn aiterm-btn--secondary aiterm-btn--sm">✕</button>
+          </div>
+        )}
         <div
           ref={blockListRef}
           // Identifies the container the live pane's locked wheel forwards to
           // — see onLiveWheel.
           data-aiterm-live-scroll-target="1"
           style={{
-            display: viewTab === "terminal" ? "flex" : "none",
+            display: "flex",
             flexDirection: "column",
             height: "100%",
             position: "relative",
@@ -1977,31 +2019,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             }
           }}
         >
-        {/* Find in Buffer search bar */}
-        {searchOpen && (
-          <div className="terminal-search-bar">
-            <input
-              ref={searchInputRef}
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (isImeComposing(e)) return;
-                if (e.key === 'Escape') { e.preventDefault(); closeSearch(); }
-                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSearch(searchQuery, 'next'); }
-                if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); doSearch(searchQuery, 'prev'); }
-                if (e.key === 'F3' && !e.shiftKey) { e.preventDefault(); doSearch(searchQuery, 'next'); }
-                if (e.key === 'F3' && e.shiftKey) { e.preventDefault(); doSearch(searchQuery, 'prev'); }
-              }}
-              placeholder={t.term_search_placeholder}
-              className="terminal-search-input"
-            />
-            {searchMatchInfo && <span className="terminal-search-match-info">{searchMatchInfo}</span>}
-            <button onClick={() => doSearch(searchQuery, 'prev')} title={t.term_search_prev} className="terminal-search-btn aiterm-btn aiterm-btn--secondary aiterm-btn--sm">↑</button>
-            <button onClick={() => doSearch(searchQuery, 'next')} title={t.term_search_next} className="terminal-search-btn aiterm-btn aiterm-btn--secondary aiterm-btn--sm">↓</button>
-            <button onClick={closeSearch} title={t.term_search_close} className="terminal-search-btn terminal-search-close aiterm-btn aiterm-btn--secondary aiterm-btn--sm">✕</button>
-          </div>
-        )}
         {/* Block list is hidden while a full-screen program (vim, htop, less, ...) owns the
             alternate buffer — those programs need the whole frame to themselves. It stays
             visible during isRawKeyboardModeActive now (unlike before this redesign): a
@@ -2120,7 +2137,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             }}
           />
         </div>
-        </div>{/* end terminal wrapper */}
+        </div>{/* end terminal wrapper (blockListRef) */}
+        </div>{/* end search-bar anchor wrapper */}
       </div>{/* end relative container */}
       {/* WarpInput (the actual typing box) stays pinned to the panel bottom regardless of
           block-list length. */}
