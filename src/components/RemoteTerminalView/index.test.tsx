@@ -565,6 +565,47 @@ describe("RemoteTerminalView", () => {
     });
   });
 
+  it("Windows 主控端：後續 chunk 抵達時（沒有新的 OSC 133 B，例如非 shell 的前景程式持續輸出）也要重新計算位移，不能凍結在上一次提示字元的位置", async () => {
+    // 實機回報的 bug：`claude` CLI 這類前景程式不是 shell，執行期間完全
+    // 不會再送 OSC 133 B，liveTopOffsetPx 因此凍結在「執行它之前、上一次
+    // shell 提示字元」算出來的舊值。程式持續大量重繪把 viewportY 往下推
+    // 很多之後，這個凍結的位移量會把可視窗格整個推到 xterm 實際內容範圍
+    // 之外——畫面看起來完全空白。TerminalView.tsx（本機分頁）已經在每個
+    // chunk 都重新呼叫 syncLiveTop()（見該檔案 onPtyData 內），這裡要補
+    // 同一套機制。
+    const { container } = render(
+      <RemoteTerminalView tabId="t1" connId="cwin2" sas="9997" isActive onConnectClick={vi.fn()} />,
+    );
+    await waitFor(() => expect(handlers["granted:cwin2"]).toBeDefined());
+    act(() => {
+      handlers["granted:cwin2"]({ mode: "control", cols: 80, rows: 24, hostOs: "windows" } as never);
+    });
+    await waitFor(() => expect(capturedOscHandler).toBeTruthy());
+
+    // 提示字元畫在第 7 列，此時 viewportY 是 0。
+    mockBufferActive.cursorY = 7;
+    mockBufferActive.baseY = 0;
+    mockBufferActive.viewportY = 0;
+    act(() => {
+      capturedOscHandler!("B");
+    });
+
+    const host = () => container.querySelector(".aiterm-remote-terminal__scroll") as HTMLElement;
+    const firstOffset = parseFloat(host().style.top);
+    expect(firstOffset).toBeLessThan(0);
+
+    // 模擬前景程式狂送資料、把畫面往下推很多（不會再送 OSC 133 B）。
+    mockBufferActive.viewportY = 50;
+    await waitFor(() => expect(handlers["data:cwin2"]).toBeDefined());
+    act(() => {
+      handlers["data:cwin2"](btoa("some interactive output\r\n") as never);
+    });
+
+    await waitFor(() => {
+      expect(parseFloat(host().style.top)).not.toBe(firstOffset);
+    });
+  });
+
   it("非 Windows 主控端：不位移（那邊仍然會清空緩衝區，提示字元本來就在第 0 列）", async () => {
     const { container } = render(
       <RemoteTerminalView tabId="t1" connId="cnix" sas="9998" isActive onConnectClick={vi.fn()} />,
