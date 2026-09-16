@@ -684,7 +684,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
           const visibleBlocks = blocks.filter((b) => b.renderedLines);
           if (visibleBlocks.length === 0) {
             // 跟 TerminalView.tsx 同一個理由：剛連上、還沒跑過任何指令時
-            // 整塊列表是一片空黑，加一組淡色快捷提示。遠端分頁沒有 ⌘F
+            // 整塊列表是一片空黑，加一組淡色快捷提示。遠端分頁沒有 Ctrl+F
             // 找指令這個功能，第三條換成指令書籤。
             return (
               <div className="aiterm-block-list-empty" data-testid="block-list-empty">
