@@ -43,12 +43,14 @@ class FakeResizeObserver {
 // OSC 133 C/D pair with no corresponding local block (a remote-viewer-issued
 // command).
 const useTerminalBlocksCalls: unknown[][] = [];
+let mockIsRawKeyboardModeActive = false;
 vi.mock("../hooks/useTerminalBlocks", () => ({
   useTerminalBlocks: (...args: unknown[]) => {
     useTerminalBlocksCalls.push(args);
     return {
       blocks: [],
       isAlternateBuffer: false,
+      isRawKeyboardModeActive: mockIsRawKeyboardModeActive,
       submitCommand: vi.fn(),
       beginTrackedBlock: vi.fn(),
       appendOutput: vi.fn(),
@@ -73,6 +75,7 @@ import { LocaleProvider } from "../contexts/LocaleContext";
 
 beforeEach(() => {
   useTerminalBlocksCalls.length = 0;
+  mockIsRawKeyboardModeActive = false;
 });
 
 describe("TerminalView 遠端指令觸發的即時窗格高度", () => {
@@ -118,5 +121,46 @@ describe("TerminalView 遠端指令觸發的即時窗格高度", () => {
     // 也不能收回到閒置的 MIN_LIVE_ROWS——那樣就退回上一版的 bug：已經畫出
     // 來的 5 行輸出被裁掉只剩最上面幾行。
     expect(settledHeight).not.toBe(idleHeight);
+  });
+});
+
+describe("TerminalView 偵測到需要逐鍵原始輸入時展開即時窗格", () => {
+  it("isRawKeyboardModeActive 為 true 時隱藏 WarpInput", async () => {
+    mockIsRawKeyboardModeActive = true;
+    const { container } = render(
+      <LocaleProvider>
+        <MemoryRouter>
+          <TerminalView tabId="tab-1" registerCloseGuard={() => {}} unregisterCloseGuard={() => {}} />
+        </MemoryRouter>
+      </LocaleProvider>,
+    );
+
+    await waitFor(() => expect(useTerminalBlocksCalls.length).toBeGreaterThan(0));
+
+    expect(container.querySelector(".warp-input-container")).toBeFalsy();
+  });
+
+  it("isRawKeyboardModeActive 從 true 變 false 後，WarpInput 重新出現", async () => {
+    mockIsRawKeyboardModeActive = true;
+    const { container, rerender } = render(
+      <LocaleProvider>
+        <MemoryRouter>
+          <TerminalView tabId="tab-1" registerCloseGuard={() => {}} unregisterCloseGuard={() => {}} />
+        </MemoryRouter>
+      </LocaleProvider>,
+    );
+    await waitFor(() => expect(useTerminalBlocksCalls.length).toBeGreaterThan(0));
+    expect(container.querySelector(".warp-input-container")).toBeFalsy();
+
+    mockIsRawKeyboardModeActive = false;
+    rerender(
+      <LocaleProvider>
+        <MemoryRouter>
+          <TerminalView tabId="tab-1" registerCloseGuard={() => {}} unregisterCloseGuard={() => {}} />
+        </MemoryRouter>
+      </LocaleProvider>,
+    );
+
+    await waitFor(() => expect(container.querySelector(".warp-input-container")).toBeTruthy());
   });
 });

@@ -151,6 +151,12 @@ export interface TerminalViewProps {
 // never touches xterm's actual row count / triggers a PTY resize.
 const MIN_LIVE_ROWS = 3;
 const MAX_LIVE_ROWS = 16;
+// 介於 MAX_LIVE_ROWS 跟全螢幕高度之間——遠端程式宣告「要逐鍵收原始按鍵」
+// （Kitty keyboard protocol push，見 useTerminalBlocks 的
+// isRawKeyboardModeActive）但沒有切 alternate screen buffer 時用這個高度。
+// 這類提示通常只有十幾行，撐到跟 alt-screen 一樣填滿整個主控端螢幕高度
+// 跳動過大，見設計文件 docs/superpowers/specs/2026-09-16-interactive-prompt-live-expand-design.md。
+const EXPANDED_LIVE_ROWS = 24;
 
 /** Must stay in sync with `.aiterm-terminal-root`'s `padding` in
  *  TerminalView.css — the prompt-row offset has to account for it, see
@@ -377,7 +383,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     syncLiveTopRef.current?.();
   }, []);
 
-  const { blocks, isAlternateBuffer, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo, finalizeBlock } = useTerminalBlocks(
+  const { blocks, isAlternateBuffer, isRawKeyboardModeActive, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo, finalizeBlock } = useTerminalBlocks(
     sessionId,
     termState,
     lastCwdRef,
@@ -653,6 +659,18 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     // output that already has a card.
     setLiveRows(MIN_LIVE_ROWS);
   }, [visibleBlockCount]);
+
+  // isRawKeyboardModeActive 從 false 變 true：撐到 EXPANDED_LIVE_ROWS，隱藏
+  // WarpInput（下面 JSX 會把它跟 isAlternateBuffer OR 在一起判斷）。變回
+  // false：收回 MIN_LIVE_ROWS——如果指令其實還在跑且持續有輸出，上面既有
+  // 的「running 中的區塊有新輸出就撐到 MAX_LIVE_ROWS」邏輯（onPtyData 內）
+  // 會在下一個 chunk 自然把它撐回 MAX_LIVE_ROWS，不需要在這裡特別處理
+  // 「使用者回應後指令還沒結束」的情況。isAlternateBuffer 為 true 時
+  // liveRows 根本不影響顯示高度（見下面 JSX 的 height 三元判斷式），所以
+  // 這裡不需要額外判斷 isAlternateBuffer。
+  useEffect(() => {
+    setLiveRows(isRawKeyboardModeActive ? EXPANDED_LIVE_ROWS : MIN_LIVE_ROWS);
+  }, [isRawKeyboardModeActive]);
 
   // How many rows to scroll the xterm host up by, so the live pane's first
   // visible row is the prompt's own row.
@@ -2096,7 +2114,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         {/* Block list is hidden while a full-screen program (vim, htop, less, ...) owns the
             alternate buffer — those programs must render exactly as they did before this
             refactor: full panel, no stale completed-command cards competing for space. */}
-        {!isAlternateBuffer && (
+        {!(isAlternateBuffer || isRawKeyboardModeActive) && (
           <div className="aiterm-block-list">
             {blocks
               .filter((b) => b.status !== "running" && b.renderedLines)
@@ -2180,14 +2198,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       </div>{/* end relative container */}
       {/* WarpInput (the actual typing box) stays pinned to the panel bottom regardless of
           block-list length — only the live xterm view above scrolls with block content. */}
-      {!isAlternateBuffer && agentPhase && (
+      {!(isAlternateBuffer || isRawKeyboardModeActive) && agentPhase && (
         <AgentStatusBar
           status={agentPhase}
           onDismiss={() => setAgentPhase(null)}
           missionTokens={agentMission?.tokensUsed ?? 0}
         />
       )}
-      {!isAlternateBuffer && (
+      {!(isAlternateBuffer || isRawKeyboardModeActive) && (
         preview.loading && !agentPhase ? (
           <StreamingIndicator visible text={streamText} />
         ) : (
