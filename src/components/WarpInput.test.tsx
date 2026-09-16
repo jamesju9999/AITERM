@@ -132,3 +132,68 @@ describe("WarpInput — IME 組字", () => {
     expect(onSubmit).toHaveBeenCalledWith("中文");
   });
 });
+
+describe("WarpInput — 指令執行中時，導覽鍵直接轉發給 PTY（onRawKey）", () => {
+  // 實機抓到的 bug：遠端主控端是 Windows 時，claude CLI 的信任提示不會
+  // 觸發 Kitty keyboard protocol 偵測（那個協定本身在 Windows 上就不會被
+  // 送出，不是我們判斷錯），WarpInput 因此不會被藏起來、焦點留在這裡。
+  // 上下鍵原本只會被這個框當成「瀏覽指令歷史」，Enter 只會被當成「送出
+  // 目前輸入」——使用者想操作那個正在跑的互動選單時，一個位元組都送不到
+  // PTY，選單完全沒反應。
+
+  it("有指令在跑、輸入框是空的時，上下鍵/Enter/Esc 轉發 raw bytes，不會被歷史導覽或送出攔截", () => {
+    const onSubmit = vi.fn();
+    const onRawKey = vi.fn();
+    render(
+      <LocaleProvider>
+        <WarpInput onSubmit={onSubmit} sessionId="s1" isCommandRunning onRawKey={onRawKey} />
+      </LocaleProvider>,
+    );
+    const textarea = screen.getByRole("textbox");
+
+    fireEvent.keyDown(textarea, { key: "ArrowDown" });
+    fireEvent.keyDown(textarea, { key: "ArrowUp" });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    fireEvent.keyDown(textarea, { key: "Escape" });
+
+    expect(onRawKey.mock.calls.map((c) => c[0])).toEqual(["\x1b[B", "\x1b[A", "\r", "\x1b"]);
+    // 沒有任何一個鍵被當成「送出指令」或觸發歷史彈出視窗。
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.queryByText(/warp_history_title|指令歷史/)).not.toBeInTheDocument();
+  });
+
+  it("沒有指令在跑時，上下鍵維持原本的歷史導覽行為，不轉發 raw bytes", () => {
+    const onSubmit = vi.fn();
+    const onRawKey = vi.fn();
+    localStorage.setItem("aiterm-command-history", JSON.stringify(["echo hi"]));
+    render(
+      <LocaleProvider>
+        <WarpInput onSubmit={onSubmit} sessionId="s1" isCommandRunning={false} onRawKey={onRawKey} />
+      </LocaleProvider>,
+    );
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+
+    fireEvent.keyDown(textarea, { key: "ArrowUp" });
+
+    expect(onRawKey).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("echo hi");
+    localStorage.removeItem("aiterm-command-history");
+  });
+
+  it("輸入框裡已經有文字時（使用者正在打下一個指令），維持原本的送出/歷史行為，不轉發 raw bytes", () => {
+    const onSubmit = vi.fn();
+    const onRawKey = vi.fn();
+    render(
+      <LocaleProvider>
+        <WarpInput onSubmit={onSubmit} sessionId="s1" isCommandRunning onRawKey={onRawKey} />
+      </LocaleProvider>,
+    );
+    const textarea = screen.getByRole("textbox");
+
+    fireEvent.change(textarea, { target: { value: "ls" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(onRawKey).not.toHaveBeenCalled();
+    expect(onSubmit).toHaveBeenCalledWith("ls");
+  });
+});

@@ -2073,6 +2073,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         ) : (
         <WarpInput
           sessionId={sessionId}
+          isCommandRunning={blocks[blocks.length - 1]?.status === "running"}
+          onRawKey={(data) => { if (sessionId) writePty(sessionId, data).catch(console.error); }}
           onSubmit={(cmd) => {
             setAgentPhase(null);
             const agentQuery = parseAgentPrefix(cmd);

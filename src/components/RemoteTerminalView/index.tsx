@@ -739,6 +739,8 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
         <WarpInput
           onSubmit={handleWarpSubmit}
           disabled={!(phase.kind === "live" && phase.mode === "control")}
+          isCommandRunning={blocks[blocks.length - 1]?.status === "running"}
+          onRawKey={write}
         />
       )}
 

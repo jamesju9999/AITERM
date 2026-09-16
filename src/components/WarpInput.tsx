@@ -12,11 +12,42 @@ export interface WarpInputProps {
   sessionId?: string;
   /** Overrides the default shortcut-hint placeholder. */
   placeholder?: string;
+  /**
+   * True while the tab's latest block is still `running`. Used only to gate
+   * `onRawKey` below — see that prop's doc comment for why this exists.
+   */
+  isCommandRunning?: boolean;
+  /**
+   * Raw terminal escape bytes for a navigation keypress (arrows/Enter/Esc),
+   * to send directly to the PTY instead of WarpInput's own handling.
+   *
+   * 實機抓到的 bug：claude CLI 的信任提示這類互動選單，在遠端主控端是
+   * Windows（ConPTY）時不會觸發 Kitty keyboard protocol 偵測（見
+   * useTerminalBlocks.ts 的 isRawKeyboardModeActive——實測 Windows 上的
+   * claude 根本不會送出那個協定的 CSI 序列，不是我們判斷錯，是那個平台
+   * 上的程式行為本來就不同），所以 WarpInput 不會被藏起來、焦點留在這個
+   * 文字框裡。這個文字框原本把上下鍵當成「瀏覽自己的指令歷史」處理，
+   * Enter 當成「送出目前輸入的指令」——使用者想選單導覽（上下鍵移動、
+   * Enter 確認）時，這些鍵全部被這裡攔截，一個位元組都沒有真的送到 PTY，
+   * 選單因此完全沒反應。只在「有指令正在跑、而且這個框目前是空的」時才
+   * 啟用這個 fallback：空的代表使用者顯然不是在打算輸入下一個指令的歷史
+   * 導覽，退回原本行為完全不受影響。
+   */
+  onRawKey?: (data: string) => void;
 }
 
 const STORAGE_KEY = "aiterm-command-history";
 
-export function WarpInput({ onSubmit, disabled, shortcut = "enter", sessionId, placeholder }: WarpInputProps) {
+const RAW_KEY_SEQUENCES: Record<string, string> = {
+  ArrowUp: "\x1b[A",
+  ArrowDown: "\x1b[B",
+  ArrowRight: "\x1b[C",
+  ArrowLeft: "\x1b[D",
+  Enter: "\r",
+  Escape: "\x1b",
+};
+
+export function WarpInput({ onSubmit, disabled, shortcut = "enter", sessionId, placeholder, isCommandRunning, onRawKey }: WarpInputProps) {
   const { t } = useLocale();
   const [value, setValue] = useState("");
   const [history, setHistory] = useState<string[]>([]);
@@ -171,6 +202,18 @@ export function WarpInput({ onSubmit, disabled, shortcut = "enter", sessionId, p
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // 輸入法組字中（例如中文輸入法按 Enter 確認候選字）不觸發送出或歷史導覽
     if (isImeComposing(e)) return;
+
+    // 見 onRawKey 的文件註解：有指令正在跑、這個框目前是空的、而且沒有
+    // 歷史/目錄選單開著時，導覽鍵一律當作要操作那個正在跑的互動選單，
+    // 直接送 raw bytes 給 PTY，不要被底下的歷史導覽/送出邏輯攔截。
+    if (isCommandRunning && onRawKey && !value && !historyOpen && !dirPickerOpen) {
+      const raw = RAW_KEY_SEQUENCES[e.key];
+      if (raw) {
+        e.preventDefault();
+        onRawKey(raw);
+        return;
+      }
+    }
 
     let shouldSubmit = false;
 
