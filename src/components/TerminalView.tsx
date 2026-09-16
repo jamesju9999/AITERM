@@ -1010,6 +1010,12 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       cursorBlink: true,
       theme: initTheme.xterm,
       convertEol: false,
+      // SEARCH_OPTS below passes a `decorations` config to SearchAddon,
+      // which calls the proposed (unstable) registerDecoration API under
+      // the hood — xterm.js throws at call time without this flag, which
+      // crashed the whole <TerminalView> the moment a search actually
+      // found a match (typing into the search box after Ctrl+F).
+      allowProposedApi: true,
     });
     termRef.current = term;
     setTermState(term);
