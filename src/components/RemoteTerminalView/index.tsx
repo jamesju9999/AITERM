@@ -617,7 +617,27 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
       {/* 卡片列表跟即時窗格共用這個外層捲動容器（跟 TerminalView.tsx 的
           blockListRef 同一個結構）——不再是各自獨立、各自有高度上限的
           兩塊，卡片可以無限往下累積，捲動邊界只有這一層。 */}
-      <div className="aiterm-remote-terminal__scroll-area" ref={scrollAreaRef}>
+      <div
+        className="aiterm-remote-terminal__scroll-area"
+        ref={scrollAreaRef}
+        onMouseDown={(e) => {
+          // 跟 TerminalView.tsx 的 blockListRef 同一個理由、同一個手法：
+          // isRawKeyboardModeActive 期間 xterm 是用 opacity:0 疊在這個容器
+          // 上的隱藏實例，唯一真正接收鍵盤事件的東西。原本只靠
+          // isRawKeyboardModeActive 從 false 變 true 那一刻的 useEffect
+          // 主動 focus() 一次——如果那之後焦點因為任何原因跑掉（例如使用者
+          // 點了畫面上其他地方），完全沒有辦法點回來，會卡死在互動提示上
+          // 打不了字。排除按鈕/連結/輸入框跟卡片本身（讓點卡片文字複製、
+          // 點卡片上的按鈕仍然正常運作，不會被這裡搶走）。
+          const target = e.target as HTMLElement;
+          if (target.closest('button, a, input, textarea, .aiterm-block-card, .aiterm-remote-terminal__scroll')) return;
+          // preventDefault 是必要的：點在非可聚焦元素上，瀏覽器預設行為會
+          // 讓目前聚焦的元素 blur，且這個預設行為在這個 handler 執行「之後」
+          // 才跑——不擋掉的話，下面的 focus() 會被瀏覽器自己的 blur 立刻蓋掉。
+          e.preventDefault();
+          termRef.current?.focus();
+        }}
+      >
         {/* 卡片列表在全螢幕程式（vim/htop/tmux 等）使用中隱藏——跟
             TerminalView.tsx 同一個理由：那類程式必須完整佔滿即時窗格，
             不該被已完成指令的舊卡片跟它搶空間。isRawKeyboardModeActive

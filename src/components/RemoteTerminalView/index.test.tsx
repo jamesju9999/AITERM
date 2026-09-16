@@ -1,7 +1,7 @@
 import React from "react";
 import { act } from "react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // 事件訂閱的假實作：測試自己保留 callback，之後手動觸發。
@@ -93,6 +93,11 @@ const writeMock = vi.fn((_data: unknown, callback?: () => void) => {
   callback?.();
 });
 const clearMock = vi.fn();
+// isRawKeyboardModeActive 期間 RemoteTerminalView 會呼叫 term.focus() 把
+// 鍵盤焦點交給隱藏的 xterm 實例（見 index.tsx 的對應 useEffect 與
+// scroll-area 的 onMouseDown）——共用單一模組層級的 mock，跟 writeMock/
+// clearMock 同一個模式，測試才能直接斷言有沒有被呼叫過。
+const focusMock = vi.fn();
 // 可變動的假 buffer 狀態，讓測試能模擬「全螢幕程式（vim/htop 等）進入/
 // 離開 alternate buffer」這個切換，並手動觸發 useTerminalBlocks 內部訂閱
 // 的 onBufferChange callback——`active` 物件跨測試共用同一個參照，
@@ -123,10 +128,7 @@ vi.mock("@xterm/xterm", () => ({
     onData = vi.fn();
     loadAddon = vi.fn();
     scrollToBottom = vi.fn();
-    // isRawKeyboardModeActive 從 false 變 true 時，RemoteTerminalView 會
-    // 主動呼叫 term.focus()（見 index.tsx 的對應 useEffect），把鍵盤焦點
-    // 轉給 xterm 實例本身——這個假 Terminal 也要有這個方法才不會炸掉。
-    focus = vi.fn();
+    focus = focusMock;
     resize = vi.fn();
     cols = 80;
     rows = 24;
@@ -246,6 +248,7 @@ beforeEach(() => {
   mockAbort.mockClear();
   writeMock.mockClear();
   clearMock.mockReset();
+  focusMock.mockClear();
   sendMock.mockReset();
   disconnectMock.mockReset().mockResolvedValue(undefined);
   // localStorage 在 jsdom 下跨測試持續存在——書籤資料若不清，會讓某一個
@@ -890,6 +893,29 @@ describe("RemoteTerminalView", () => {
       expect(screen.getByPlaceholderText(/輸入指令|Type a command/i)).toBeInTheDocument();
     });
     expect(document.querySelector(".aiterm-remote-terminal__blocks")).toBeInTheDocument();
+  });
+
+  it("Kitty raw keyboard mode 中，焦點跑掉時可以點卡片列表的空白處拿回焦點", async () => {
+    // 原本只靠 isRawKeyboardModeActive 從 false 變 true 那一刻的 useEffect
+    // 主動 focus() 一次——如果那之後焦點因為任何原因（例如使用者點了畫面
+    // 上其他地方）跑掉，完全沒有辦法點回來，會卡死在互動提示上打不了字
+    // （實機回報：claude CLI 的信任提示按上下鍵完全沒反應）。這裡驗證
+    // scroll-area 的 onMouseDown 會把焦點還給 xterm。
+    const { container } = render(<RemoteTerminalView tabId="t1" connId="c42" sas="4242" isActive onConnectClick={vi.fn()} />);
+    await waitFor(() => expect(handlers["granted:c42"]).toBeDefined());
+    handlers["granted:c42"]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+
+    await waitFor(() => expect(capturedRawKbPushHandler).toBeTruthy());
+    act(() => {
+      capturedRawKbPushHandler!();
+    });
+
+    focusMock.mockClear(); // 只看點擊之後才發生的呼叫，排除一開始那次自動 focus()。
+
+    const scrollArea = container.querySelector(".aiterm-remote-terminal__scroll-area") as HTMLElement;
+    fireEvent.mouseDown(scrollArea);
+
+    expect(focusMock).toHaveBeenCalled();
   });
 
   it("全螢幕程式即時窗格的高度跟著主控端實際列數變化，不是無條件撐滿容器", async () => {
