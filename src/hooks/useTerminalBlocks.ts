@@ -326,8 +326,6 @@ export function useTerminalBlocks(
       blocksRef.current = updated;
       setBlocks(updated);
 
-      if (opts?.clearOnParsed && term) clearAndRebasePromptEnd(term);
-
       const settle = (finalBlock: TerminalBlock) => {
         const cb = completionCallbacksRef.current.get(blockId);
         if (cb) {
@@ -337,12 +335,21 @@ export function useTerminalBlocks(
       };
 
       if (renderedLines) {
+        // Marker path: renderedLines were computed synchronously above, so
+        // it's safe to clear/rebase right away — no async gap during which
+        // a new prompt cycle's OSC 133 B could record coordinates against
+        // still-unlcleared content.
+        if (opts?.clearOnParsed && term) clearAndRebasePromptEnd(term);
         settle(finalized);
       } else {
         parseAnsiToRenderedLines(frozenOutput, cols).then((lines) => {
           const withLines = blocksRef.current.map((b) => (b.id === blockId ? { ...b, renderedLines: lines } : b));
           blocksRef.current = withLines;
           setBlocks(withLines);
+          // Fallback path: only clear/rebase once the async parse has
+          // actually captured the frozen output — clearing earlier would
+          // race a new prompt's B marker (see TerminalView.staleClearRace.test.tsx).
+          if (opts?.clearOnParsed && term) clearAndRebasePromptEnd(term);
           settle(withLines.find((b) => b.id === blockId)!);
         });
       }

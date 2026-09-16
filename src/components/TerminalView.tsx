@@ -144,25 +144,6 @@ export interface TerminalViewProps {
   unregisterCloseGuard?: (tabId: string) => void;
 }
 
-// The live terminal pane's visible height shrinks to just the current content
-// (down to MIN_LIVE_ROWS) instead of always reserving MAX_LIVE_ROWS worth of
-// mostly-empty space. The underlying xterm host div stays a fixed MAX_LIVE_ROWS
-// tall at all times — only an outer wrapper's CSS height is animated, so this
-// never touches xterm's actual row count / triggers a PTY resize.
-const MIN_LIVE_ROWS = 3;
-const MAX_LIVE_ROWS = 16;
-// 介於 MAX_LIVE_ROWS 跟全螢幕高度之間——遠端程式宣告「要逐鍵收原始按鍵」
-// （Kitty keyboard protocol push，見 useTerminalBlocks 的
-// isRawKeyboardModeActive）但沒有切 alternate screen buffer 時用這個高度。
-// 這類提示通常只有十幾行，撐到跟 alt-screen 一樣填滿整個主控端螢幕高度
-// 跳動過大，見設計文件 docs/superpowers/specs/2026-09-16-interactive-prompt-live-expand-design.md。
-const EXPANDED_LIVE_ROWS = 24;
-
-/** Must stay in sync with `.aiterm-terminal-root`'s `padding` in
- *  TerminalView.css — the prompt-row offset has to account for it, see
- *  liveTopOffsetPx. */
-const TERMINAL_HOST_PADDING_PX = 4;
-
 const SEARCH_OPTS = {
   regex: false,
   caseSensitive: false,
@@ -354,35 +335,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     if (isClaudeCommand(cmd)) onClaudeDetectedRef.current?.();
   }, []);
 
-  // 保底機制——正常情況下，遠端觀看者送進來的指令會被 useTerminalBlocks
-  // 內部的 recoverUntrackedCommand 從畫面內容還原出指令文字，直接變成
-  // 跟本機一樣的完整卡片（見 useTerminalBlocks.ts 的 recoverUntrackedCommand
-  // 與 docs/superpowers/specs/2026-08-27-remote-command-text-recovery-design.md），
-  // 走的是 beginTrackedBlock 那條正常路徑，不會用到這個 ref。這個 ref
-  // 只在還原失敗的少見情況下才會被呼叫（例如這個連線還沒收過任何 OSC 133
-  // B 標記），確保即使拿不到指令文字，即時窗格至少不會因為完全沒有信號而
-  // 裁切掉遠端指令的輸出。
-  // 宣告在這裡是因為 useTerminalBlocks 呼叫點在 setLiveRows 宣告之前，
-  // 真正賦值要等 liveRows 宣告完才能做（見下方賦值處），先用 ref 佔位。
-  const untrackedCommandBoundaryRef = useRef<((kind: "start" | "end") => void) | null>(null);
-  const handleUntrackedCommandBoundary = useCallback((kind: "start" | "end") => {
-    untrackedCommandBoundaryRef.current?.(kind);
-  }, []);
-
-  // Same placeholder-ref pattern as untrackedCommandBoundaryRef above: the
-  // real implementation needs state declared further down, but the OSC 133 B
-  // callback that drives it is passed into useTerminalBlocks up here.
-  const syncLiveTopRef = useRef<(() => void) | null>(null);
-
-  // Absolute buffer row of the current prompt, from OSC 133 B. Only used on
-  // Windows, where the xterm buffer is never cleared and the live pane has to
-  // work out for itself which row to start showing from — see liveTopRows.
-  const promptAbsRowRef = useRef<number | null>(null);
-  const handlePromptStart = useCallback((absoluteRow: number) => {
-    promptAbsRowRef.current = absoluteRow;
-    syncLiveTopRef.current?.();
-  }, []);
-
   const { blocks, isAlternateBuffer, isRawKeyboardModeActive, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo, finalizeBlock } = useTerminalBlocks(
     sessionId,
     termState,
@@ -390,10 +342,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     forceLiveRepaint,
     handleCommandSettled,
     handleCommandStarted,
-    undefined,
-    undefined,
-    handleUntrackedCommandBoundary,
-    handlePromptStart,
   );
 
   useEffect(() => {
@@ -569,6 +517,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // state flips.
   const isAlternateBufferRef = useRef(isAlternateBuffer);
   useEffect(() => { isAlternateBufferRef.current = isAlternateBuffer; }, [isAlternateBuffer]);
+
+  // isRawKeyboardModeActive 從 false 變 true 的那一刻，WarpInput 會被卸載
+  // （見下面 JSX），焦點需要主動轉給那個現在移到畫面外、但仍然是唯一真正
+  // 接收鍵盤輸入的 xterm 實例——不然使用者要先點一下畫面上的卡片才能繼續
+  // 用方向鍵操作（例如 claude CLI 的信任提示），不是無縫的體驗。
+  useEffect(() => {
+    if (isRawKeyboardModeActive) termRef.current?.focus();
+  }, [isRawKeyboardModeActive]);
   const resizeRepaintGateRef = useRef<ResizeRepaintGate | null>(null);
   if (!resizeRepaintGateRef.current) resizeRepaintGateRef.current = new ResizeRepaintGate();
 
@@ -609,11 +565,17 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const blockSearchCursorRef = useRef(blockSearchCursor);
   useEffect(() => { blockSearchCursorRef.current = blockSearchCursor; }, [blockSearchCursor]);
 
-  // Auto-scroll the completed-block list to the bottom whenever a new card becomes visible.
-  const visibleBlockCount = blocks.filter((b) => b.status !== "running" && b.renderedLines).length;
+  // Auto-scroll the block list to the bottom whenever new content appears —
+  // either a new card completes, or a still-running card's own content grows
+  // (see design doc 2026-09-16-live-block-rendering-design.md: running blocks
+  // now render in this same list via their continuously-updated
+  // `renderedLines`, not a separate live pane). Summing line counts, not just
+  // counting blocks, is what makes this re-fire as a single running block's
+  // content keeps growing rather than only when the block count itself changes.
+  const totalRenderedLineCount = blocks.reduce((sum, b) => sum + (b.renderedLines?.length ?? 0), 0);
   useEffect(() => {
     blockListRef.current?.scrollTo({ top: blockListRef.current.scrollHeight });
-  }, [visibleBlockCount]);
+  }, [totalRenderedLineCount]);
 
   // The terminal wrapper is `display:none` while viewTab === "files" (see the
   // JSX below). xterm.js can receive writes (e.g. the shell's own prompt
@@ -628,137 +590,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     fitAddonRef.current?.fit();
     term.refresh(0, term.rows - 1);
   }, [viewTab]);
-
-  // The live terminal pane visually shrinks to just MIN_LIVE_ROWS while idle
-  // (just a prompt, nothing running) instead of always reserving a big fixed
-  // box, and snaps straight to MAX_LIVE_ROWS the instant any real PTY output
-  // arrives (see the onPtyData handler below) — deliberately binary rather
-  // than trying to track "how many rows are actually needed": that was tried
-  // via cursor-position tracking and broke for TUI-style content (interactive
-  // menus/prompts that reposition the cursor non-sequentially to redraw
-  // specific lines), leaving the pane stuck too small with no way to scroll
-  // into view since mouse-wheel scroll has no connection to this state.
-  // Resets back to MIN_LIVE_ROWS whenever the visible block count changes,
-  // since that only happens right after useTerminalBlocks clears the live
-  // terminal (a real command finished) or wipes it (the `clear` command) —
-  // either way the live pane is freshly empty at that point.
-  const [liveRows, setLiveRows] = useState(MIN_LIVE_ROWS);
-  // How many rows to scroll the xterm host up by, so the live pane's first
-  // visible row is the prompt's own row.
-  //
-  // Windows only, and only because the buffer is never cleared there (see
-  // useTerminalBlocks' OSC 133 D branch): the whole ConPTY screen is present,
-  // so "show from the top" would show the oldest rows. A fixed bottom
-  // anchor was tried first and is wrong in the opposite direction — it
-  // assumes the prompt is on the last row, which is only true once the
-  // screen has filled up. On a freshly-opened tab the prompt is on row 1
-  // with blank rows beneath it, and bottom-anchoring rendered an entirely
-  // blank pane (reported from a real machine). Tracking the prompt's actual
-  // row is the only thing correct in both states. Other platforms clear the
-  // buffer, so their prompt is always at row 0 and this stays 0.
-  const [liveTopRows, setLiveTopRows] = useState(0);
-
-  // "Wanted" pane height — `liveRows` itself is no longer assigned
-  // directly; it's derived by clamping this against `term.rows` (see
-  // recomputeLiveGeometry below). Kept as a separate ref rather than folded
-  // straight into liveRows because "how tall do we want to be" has to be
-  // combined with that clamp in one calculation, not applied via a separate
-  // setState that could clobber it.
-  const desiredLiveRowsRef = useRef(MIN_LIVE_ROWS);
-
-  // A third attempt at this lived here (see the second update to design doc
-  // 2026-09-16-interactive-prompt-live-expand-design.md): compute how far
-  // off the prompt row is from the current scroll position, and clamp
-  // liveRows by whatever room that leaves. Still not enough: that assumed a
-  // running command keeps producing new lines fast enough for the offset to
-  // decay toward 0, but `claude` CLI's trust prompt prints once and then
-  // sits idle waiting for a keypress — on a long-lived tab (deep
-  // scrollback), the offset never decays, so the pane stays clamped to a
-  // sliver forever (real-machine recording: 20-minute-old connection, the
-  // trust prompt's content was fully in the DOM, but the live pane was
-  // still nearly all black).
-  //
-  // Switched to `term.scrollToLine()`, which scrolls the viewport straight
-  // to the prompt row instead of computing the gap to it — however deep the
-  // scrollback is, the offset is 0 right after scrolling, so liveRows only
-  // needs to be bounded by term.rows itself, not by however much room the
-  // offset leaves.
-  const recomputeLiveGeometry = useCallback(() => {
-    const term = termRef.current;
-    if (!term) return;
-    if (navigator.platform.toLowerCase().startsWith("win")) {
-      const promptAbsRow = promptAbsRowRef.current;
-      if (promptAbsRow !== null) term.scrollToLine(promptAbsRow);
-    }
-    setLiveTopRows(0);
-    setLiveRows(Math.max(MIN_LIVE_ROWS, Math.min(desiredLiveRowsRef.current, term.rows)));
-  }, []);
-  syncLiveTopRef.current = recomputeLiveGeometry;
-
-  const requestLiveRows = useCallback(
-    (desired: number) => {
-      desiredLiveRowsRef.current = desired;
-      recomputeLiveGeometry();
-    },
-    [recomputeLiveGeometry],
-  );
-
-  useEffect(() => {
-    // Every platform shrinks here, Windows included.
-    //
-    // Windows used to skip this, to work around a real-machine bug where a
-    // slow custom prompt (oh-my-posh) printed its prompt text only after the
-    // block had already flipped to "completed" — too late for the
-    // MAX_LIVE_ROWS bump below, which is deliberately gated on a block being
-    // "running" — leaving the prompt clipped out of a pane already shrunk to
-    // 3 rows. That workaround is now both unnecessary and harmful: the pane
-    // starts at the prompt's own row on Windows (see liveTopRows), so the
-    // prompt is always the first visible row however late it arrives. And
-    // since Windows no longer clears the xterm buffer (see useTerminalBlocks'
-    // OSC 133 D branch), a pane left expanded would keep showing the old
-    // output that already has a card.
-    requestLiveRows(MIN_LIVE_ROWS);
-  }, [visibleBlockCount, requestLiveRows]);
-
-  // isRawKeyboardModeActive 從 false 變 true：想撐到 EXPANDED_LIVE_ROWS
-  // （實際能撐多高由 recomputeLiveGeometry 依當下位移量夾住），隱藏
-  // WarpInput（下面 JSX 會把它跟 isAlternateBuffer OR 在一起判斷）。變回
-  // false：想收回 MIN_LIVE_ROWS——如果指令其實還在跑且持續有輸出，上面
-  // 既有的「running 中的區塊有新輸出就撐到 MAX_LIVE_ROWS」邏輯（onPtyData
-  // 內）會在下一個 chunk 自然把它撐回 MAX_LIVE_ROWS，不需要在這裡特別
-  // 處理「使用者回應後指令還沒結束」的情況。isAlternateBuffer 為 true 時
-  // liveRows 根本不影響顯示高度（見下面 JSX 的 height 三元判斷式），所以
-  // 這裡不需要額外判斷 isAlternateBuffer。
-  useEffect(() => {
-    requestLiveRows(isRawKeyboardModeActive ? EXPANDED_LIVE_ROWS : MIN_LIVE_ROWS);
-  }, [isRawKeyboardModeActive, requestLiveRows]);
-
-  // 見上面 untrackedCommandBoundaryRef 宣告處的說明——這裡才真的賦值，
-  // 因為 requestLiveRows 要到這裡才存在。跟這個檔案其他 ref 一樣直接在
-  // render 當下賦值，不用額外包一層 effect。這整段只在指令文字還原失敗
-  // 的保底情況下才會被呼叫，正常情況下走 beginTrackedBlock 直接變成卡片，
-  // 不會執行到這裡。
-  //
-  // "start" 先想撐到 MAX_LIVE_ROWS，避免指令執行途中輸出被裁掉（滑鼠滾輪
-  // 跟 liveRows 毫無關聯，裁掉了就拿不回來）。"end" 則改成量測游標實際
-  // 停在第幾行，把 liveRows 收回剛好能放下這次輸出的高度，而不是繼續
-  // 卡在 MAX——本機自己的指令結束後内容會被 finalizeBlock 搬進卡片、
-  // 現場清空，收回 MIN_LIVE_ROWS 沒有問題；但遠端觀看者送進來的指令
-  // 永遠不會變成卡片、也永遠不會被清空，維持在 MAX 只會在輸出行數本來
-  // 就不多時，於實際內容下方留一大截用不到的空白，跟原本終端機的樣子
-  // 不一致（實機截圖證實）。這裡只在 "end" 當下讀一次游標位置，不是
-  // 持續追蹤——不會遇到上面那段中文註解講的、追蹤游標位置在互動式全螢幕
-  // 內容（TUI）上失準的問題，因為那類內容早就走 isAlternateBuffer 的
-  // 高度計算，不受這裡影響。
-  untrackedCommandBoundaryRef.current = (kind) => {
-    if (kind === "start") {
-      requestLiveRows(MAX_LIVE_ROWS);
-      return;
-    }
-    const term = termRef.current;
-    const usedRows = term ? term.buffer.active.cursorY + 1 : MIN_LIVE_ROWS;
-    requestLiveRows(Math.min(MAX_LIVE_ROWS, Math.max(MIN_LIVE_ROWS, usedRows)));
-  };
 
   // Agent lifecycle status shown in the AgentStatusBar above the input, driven by
   // runAgentLoop/handleAiQuery via the onPhase callback (see handleAgentPhase).
@@ -775,36 +606,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     setAgentPhase(update);
   }, []);
 
-  // xterm doesn't expose cell height as public API — this reads the same internal
-  // renderer field the (now-removed) old block overlay used, with a font-metrics
-  // fallback for the first render or if that internal ever changes shape.
-  const cellHeightPx =
-    (termState as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } } } | null)
-      ?._core?._renderService?.dimensions?.css?.cell?.height || 14 * 1.1;
-  const liveHeightPx = Math.round(liveRows * cellHeightPx);
-
   // shell 自己回報的身分（OSC 7000）。只有 Windows PowerShell 5.1 會讓
   // ShellWarningBadge 真的顯示出東西，其餘情況它回傳 null。
   const shellIdentity = useShellIdentity(termState);
-
-  // How far to slide the xterm host up so the prompt is the live pane's first
-  // visible row — see liveTopRows and the host element's style comment. Always
-  // 0 while a full-screen TUI owns the alternate buffer: that draws its own
-  // complete screen into a full-height frame, with nothing to clip or offset.
-  //
-  // TERMINAL_HOST_PADDING_PX must be added on top of the row arithmetic:
-  // .aiterm-terminal-root carries `padding: 4px`, so row N's text actually
-  // starts at `4 + N * cellHeight` inside the host. Sliding by only
-  // `N * cellHeight` leaves row N-1's bottom 4px sitting in the frame's top
-  // 4px — visible as a thin half-cut strip of already-carded output above the
-  // prompt (confirmed from a real-machine screenshot). Rounded up rather than
-  // to nearest so a fractional cell height can only ever over-shift by a
-  // sub-pixel (imperceptibly trimming the prompt row's own top) instead of
-  // under-shifting back into that same sliver.
-  const liveTopOffsetPx =
-    isAlternateBuffer || liveTopRows <= 0
-      ? 0
-      : Math.ceil(liveTopRows * cellHeightPx) + TERMINAL_HOST_PADDING_PX;
 
   // Fetch git info (branch, insertions/deletions) for completed blocks, debounced 500ms.
   const gitFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1365,9 +1169,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           // 附加內容，這些輸出就直接被略過、永遠救不回來；等 xterm 終於
           // 追上、C 跟緊接在後的 D 幾乎同時處理完畢，畫面上就會看到一張
           // 執行時間近乎 0ms、內容整個消失、只剩指令文字的空卡片。
-          // 改成把 appendOutput 以及依賴 blocksRef 的 liveRows 判斷都搬進
-          // term.write() 的完成 callback，保證同一個 chunk 的 OSC 標記
-          // 一定已經先被處理過。
+          // 改成把 appendOutput 搬進 term.write() 的完成 callback，保證
+          // 同一個 chunk 的 OSC 標記一定已經先被處理過。
           // Routed through resizeRepaintGateRef so a burst of ConPTY
           // resize-triggered full-screen repaints (see resizeRepaintGate.ts)
           // collapses to just the last one instead of flashing stale
@@ -1376,41 +1179,12 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           // raw `text` that arrived.
           const writeChunk = (chunkText: string) => {
             const onWriteComplete = () => {
+              // appendOutput 內部（useTerminalBlocks.ts 的
+              // scheduleLiveRender）會自己判斷有沒有 running 中的區塊、
+              // 需不需要重新算 renderedLines，這裡不用再額外處理高度或
+              // 位移——running 中的內容現在跟卡片走同一套渲染，自然撐開
+              // 高度，見設計文件 2026-09-16-live-block-rendering-design.md。
               appendOutput(chunkText);
-              // Snap the live pane straight to full height the moment a tracked
-              // command is actually running and producing output, rather than
-              // trying to precisely track how many rows are "needed" via cursor
-              // position — that broke for TUI-style content (interactive menus,
-              // prompts) that reposition the cursor non-sequentially to redraw
-              // specific lines, leaving liveRows stuck too small with no way to
-              // scroll into view (mouse-wheel scroll has no connection to
-              // liveRows at all). Gated on a block actually being "running" —
-              // not just "any PTY data arrived" — so the shell's own idle-prompt
-              // output (on connect, or after a command finishes) doesn't also
-              // trigger this: that data isn't part of any tracked block, so
-              // there'd be no `visibleBlockCount` change afterward to shrink it
-              // back down again, leaving the pane stuck at full height forever.
-              const latestBlock = blocksRef.current[blocksRef.current.length - 1];
-              if (latestBlock?.status === "running") {
-                desiredLiveRowsRef.current = MAX_LIVE_ROWS;
-              }
-              // The prompt's viewport-relative row moves whenever output
-              // scrolls the buffer (baseY grows), so the offset has to be
-              // recomputed per chunk, not just when OSC 133 B fires. No-op
-              // off Windows. Unconditional, not gated on "running": a
-              // command that never goes through the tracked-block path
-              // (e.g. beginTrackedBlock's untracked fallback) still needs
-              // this. `liveRows` also gets re-clamped here alongside the
-              // offset (see recomputeLiveGeometry) — it can't be updated on
-              // its own, since how much room is left depends on the offset
-              // computed in the very same pass. Simply resetting the offset
-              // to 0 the instant a command starts running (an earlier,
-              // simpler attempt at this fix) caused a different regression:
-              // it snaps the pane to show whatever's currently at the top of
-              // the scrolled-to position, which — since Windows never clears
-              // the xterm buffer — can still be the previous command's
-              // output that's already become a card, showing it twice.
-              recomputeLiveGeometry();
             };
 
             if (isWindows) {
@@ -2155,12 +1929,17 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           </div>
         )}
         {/* Block list is hidden while a full-screen program (vim, htop, less, ...) owns the
-            alternate buffer — those programs must render exactly as they did before this
-            refactor: full panel, no stale completed-command cards competing for space. */}
-        {!(isAlternateBuffer || isRawKeyboardModeActive) && (
+            alternate buffer — those programs need the whole frame to themselves. It stays
+            visible during isRawKeyboardModeActive now (unlike before this redesign): a
+            still-running command's content renders in this same list via its
+            continuously-updated `renderedLines` (see design doc
+            2026-09-16-live-block-rendering-design.md), not a separate live pane — hiding
+            this list would hide the very content (e.g. claude CLI's trust prompt) the user
+            needs to see and interact with. */}
+        {!isAlternateBuffer && (
           <div className="aiterm-block-list">
             {blocks
-              .filter((b) => b.status !== "running" && b.renderedLines)
+              .filter((b) => b.renderedLines)
               .map((b) => (
                 <div id={`aiterm-block-${b.id}`} key={b.id}>
                   <TerminalBlockCard
@@ -2176,44 +1955,38 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               ))}
           </div>
         )}
-        {/* Outer wrapper clips + frames the live view; hostRef itself always stays a
-            fixed 220px internally so its ResizeObserver never sees a size change from
-            this — only this wrapper's height/overflow changes, so xterm's actual row
-            count (and the PTY size it reports to the shell) is never affected. */}
+        {/* The real xterm.js instance — still the sole source of truth for keyboard
+            input, cursor/ANSI state, and OSC/CSI parsing, but its own rendering is no
+            longer what the user looks at outside alt-screen (see design doc
+            2026-09-16-live-block-rendering-design.md): a still-running command's visual
+            content now comes from the block list above instead. Moved off-screen rather
+            than `display:none` — xterm needs a real, measurable size to compute cell
+            metrics and report cols/rows to the PTY correctly; off-screen keeps that
+            while showing nothing. Alt-screen programs (vim/htop) are the one case that
+            still needs the real terminal visible and full-height, since they draw their
+            own complete screen and there's nothing else to show for them. */}
         <div
           className="aiterm-live-frame"
-          style={{
-            // `100%` alone overflows the parent by exactly the frame's own
-            // vertical margin (6px top + 6px bottom = 12px), since `height`
-            // sizes only the box, not the margin around it — confirmed via
-            // diagnostic logging: container scrollHeight was consistently
-            // 12px taller than its clientHeight the instant a full-screen
-            // TUI (e.g. Claude Code) filled this frame. Subtracting it here
-            // makes box + margin add up to exactly 100%, so the outer
-            // `overflow-y: auto` container never needs to scroll.
-            height: isAlternateBuffer ? "calc(100% - 12px)" : `${liveHeightPx}px`,
-            width: "calc(100% - 16px)",
-            margin: "6px 8px",
-            boxSizing: "border-box",
-            flexShrink: 0,
-            // `clip`, not `hidden`: both visually clip the fixed-220px xterm
-            // host down to the live pane's height, but `clip` establishes NO
-            // scroll container, so the browser physically cannot scroll this
-            // element. `hidden` still allows programmatic/focus scrolling —
-            // and the browser DID scroll it (to reveal xterm's focused
-            // helper-textarea after a paste, and again on window resize),
-            // pushing row 0 (the live prompt + typed/pasted command) up out of
-            // the clipped viewport and leaving the pane looking blank/frozen
-            // even though the buffer was correct. `clip` makes scrollIntoView &
-            // friends skip this box entirely (they scroll the real container,
-            // the block list, instead), fixing it at the source rather than
-            // snapping scrollTop back after the fact. Supported in WebView2
-            // (Chromium) and macOS WKWebView. The scroll-pin listener on mount
-            // is a redundant safety net for the same failure mode.
-            overflow: isAlternateBuffer ? "visible" : "clip",
-            // Positioning context for the prompt-aligned host below.
-            position: liveTopOffsetPx > 0 ? "relative" : undefined,
-          }}
+          style={
+            isAlternateBuffer
+              ? {
+                  // `100%` alone overflows the parent by exactly the frame's own
+                  // vertical margin (6px top + 6px bottom = 12px), since `height`
+                  // sizes only the box, not the margin around it — confirmed via
+                  // diagnostic logging: container scrollHeight was consistently
+                  // 12px taller than its clientHeight the instant a full-screen
+                  // TUI (e.g. Claude Code) filled this frame. Subtracting it here
+                  // makes box + margin add up to exactly 100%, so the outer
+                  // `overflow-y: auto` container never needs to scroll.
+                  height: "calc(100% - 12px)",
+                  width: "calc(100% - 16px)",
+                  margin: "6px 8px",
+                  boxSizing: "border-box",
+                  flexShrink: 0,
+                  overflow: "visible",
+                }
+              : { position: "absolute", left: "-99999px", top: 0 }
+          }
         >
           <div
             ref={hostRef}
@@ -2222,25 +1995,13 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               height: isAlternateBuffer ? "100%" : "220px",
               width: "100%",
               boxSizing: "border-box",
-              // Windows keeps the xterm buffer in lockstep with ConPTY
-              // (useTerminalBlocks no longer clears it — see the OSC 133 D
-              // branch there for why), so the whole ConPTY screen is present
-              // and "start at row 0" would show the oldest rows rather than
-              // the prompt. Sliding the host up by the prompt's own
-              // viewport-relative row makes the prompt the first visible row
-              // wherever it currently sits — row 1 on a fresh tab, the last
-              // row once the screen has filled. Other platforms clear the
-              // buffer, so their prompt is already at row 0 and this is 0.
-              ...(liveTopOffsetPx > 0
-                ? { position: "absolute" as const, top: -liveTopOffsetPx, left: 0, right: 0, width: "auto" }
-                : null),
             }}
           />
         </div>
         </div>{/* end terminal wrapper */}
       </div>{/* end relative container */}
       {/* WarpInput (the actual typing box) stays pinned to the panel bottom regardless of
-          block-list length — only the live xterm view above scrolls with block content. */}
+          block-list length. */}
       {!(isAlternateBuffer || isRawKeyboardModeActive) && agentPhase && (
         <AgentStatusBar
           status={agentPhase}
