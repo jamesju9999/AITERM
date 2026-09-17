@@ -560,12 +560,19 @@ impl PtySession {
             let elevated = self.elevated.lock();
             if let Some(channel) = elevated.as_ref() {
                 if channel.state() == super::elevated::ElevatedState::Connected {
-                    return channel
-                        .write(data)
-                        .map_err(|e| PtyError::Internal(format!("elevated write: {e}")));
+                    // 這裡刻意不直接把 `channel.write` 的 `Err` 回傳出去：`state()`
+                    // 跟 `channel.write` 內部自己的 state 檢查之間有一個窗口，背景
+                    // 讀取執行緒可能剛好在這個窗口把狀態切成 Disconnected，讓
+                    // `channel.write` 回錯——如果那時候直接回傳錯誤，這個按鍵就
+                    // 憑空消失（沒進提權 channel，也沒進一般子行程）。所以寫入失
+                    // 敗一律當成「跟一開始就沒連上一樣」，往下穿透到一般子行程，
+                    // 而不是提早回傳。
+                    if channel.write(data).is_ok() {
+                        return Ok(());
+                    }
                 }
-                // 斷線：往下穿透到一般子行程，不視為錯誤——這正是自動切回
-                // 一般模式的地方。
+                // 斷線（或剛剛才發現斷線）：往下穿透到一般子行程，不視為錯誤
+                // ——這正是自動切回一般模式的地方。
             }
         }
         let mut writer = self.writer.lock();
@@ -1069,6 +1076,20 @@ mod tests {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// 跟 `wait_for_shell_ready` 完全一樣的邏輯，給不是 `#[tokio::test]`
+    /// 的一般 `#[test]` 用（沒有 tokio runtime，不能 `.await`）。
+    fn wait_for_shell_ready_sync(session: &PtySession) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let produced =
+                session.get_recent_raw(4096).map(|b| !b.is_empty()).unwrap_or(false);
+            if (produced && session.ms_since_output() >= 250) || Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
         }
     }
 
@@ -2242,6 +2263,11 @@ mod tests {
             let _ = tx.send(chunk);
         })
         .expect("spawn pty");
+
+        // 這個測試會真的往 spawn 出來的 shell 寫入，所以要先等它就緒——shell
+        // 開始讀 stdin 之前寫進去的位元組會被吞掉，事後怎麼輪詢輸出都等不到，
+        // 見 `wait_for_shell_ready` 的說明。
+        wait_for_shell_ready_sync(&session);
 
         let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>();
         struct CapturingWriter(mpsc::Sender<Vec<u8>>);
