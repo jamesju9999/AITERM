@@ -852,6 +852,62 @@ impl PtySession {
         (s.cols, s.rows)
     }
 
+    /// Feeds bytes that did **not** come from this session's own child PTY —
+    /// currently only the Windows elevated-PTY sidecar, wired in
+    /// `PtyManager::elevate` — into the same ring buffer / broadcast channel
+    /// the reader thread above writes into.
+    ///
+    /// This is the fix for the gap documented in
+    /// `docs/superpowers/specs/2026-09-17-windows-elevated-pty-session-design.md`:
+    /// elevated output used to reach only the GUI layer's own re-emit of
+    /// `pty://data/{id}` (`elevate_with_app`) and never this session's
+    /// `output_ring`, so `get_recent_output`/`get_recent_raw` — and therefore
+    /// `context::snapshot()`, which `ai_query`/`ai_chat` read — never saw it.
+    ///
+    /// Mirrors the reader thread's ring write + DEC-mode feed + broadcast,
+    /// **inside the same critical section**, for the identical atomicity
+    /// reason documented on `subscribe_with_history` above: a chunk must be
+    /// either fully reflected in a snapshot taken concurrently, or not yet
+    /// broadcast — never both, never neither.
+    ///
+    /// Deliberately does **not** replicate the rest of the reader thread's
+    /// per-chunk bookkeeping:
+    /// - `last_exit_code` / `pending_cds` (OSC 133 `D;<code>` confirmation):
+    ///   tied to *this* session's own shell-integration prompt hooks and to
+    ///   `apply_cd_if_any`, which only ever stages entries from this
+    ///   session's own write path. The elevated shell is a separate process
+    ///   the user is typing into via a different route; folding its exit
+    ///   codes into this bookkeeping would misattribute them.
+    /// - `bell_count` / `marker_count`: both carry incremental state (a
+    ///   "tail" of trailing bytes) across calls so a multi-byte marker split
+    ///   across chunk boundaries is still found. That assumes a single
+    ///   continuous byte stream from one source. Interleaving two
+    ///   independent sources into the same tail could split a real marker
+    ///   across the switch, or splice two unrelated fragments into a false
+    ///   match.
+    ///
+    /// `last_output_at` **is** updated: whether this session is "alive" for
+    /// the stuck-session monitor should reflect output from either source.
+    pub(crate) fn ingest_external_output(&self, chunk: &[u8]) {
+        if chunk.is_empty() {
+            return;
+        }
+        {
+            let mut ring = self.output_ring.lock();
+            for &b in chunk {
+                if ring.len() >= OUTPUT_RING_CAP { ring.pop_front(); }
+                ring.push_back(b);
+            }
+            // Same order, same reasoning as the reader thread: ring first,
+            // then DEC modes, then broadcast, all under the ring lock.
+            self.dec_modes.lock().feed(chunk);
+            if self.output_tx.receiver_count() > 0 {
+                let _ = self.output_tx.send(chunk.to_vec());
+            }
+        }
+        *self.last_output_at.lock() = Instant::now();
+    }
+
     pub fn kill(&self) -> PtyResult<()> {
         let mut child = self.child.lock();
         *self.elevated.lock() = None;
@@ -2308,6 +2364,140 @@ mod tests {
             String::from_utf8_lossy(&buffer).contains("HELLO_AITERM"),
             "disconnected elevated channel must not swallow writes — they should reach the normal child"
         );
+
+        drop(session);
+    }
+
+    // ── ingest_external_output: the Critical-fix ring-buffer splice ────────
+    //
+    // These cover the gap the final holistic review flagged: elevated output
+    // reached the GUI's own Tauri re-emit but never this session's own
+    // output_ring/output_tx, so `context::snapshot()` (what `ai_query`/
+    // `ai_chat` read) could never see it. No Windows/ConPTY/named-pipe
+    // machinery is needed to test this — `ingest_external_output` only
+    // touches the ring buffer/broadcast channel, both ordinary cross-platform
+    // types.
+
+    #[test]
+    fn ingest_external_output_is_visible_in_get_recent_output() {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+
+        session.ingest_external_output(b"HELLO_FROM_ELEVATED_SHELL");
+
+        let recent = session
+            .get_recent_output(4096)
+            .expect("ring should have content after ingest");
+        assert!(
+            recent.contains("HELLO_FROM_ELEVATED_SHELL"),
+            "get_recent_output (what context::snapshot()/ai_query rely on) must \
+             include ingested elevated output; got: {recent:?}"
+        );
+
+        drop(session);
+    }
+
+    #[tokio::test]
+    async fn ingest_external_output_is_broadcast_to_subscribers_under_the_same_lock() {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+
+        // Subscribe before ingesting, same as a screen-share viewer would.
+        let mut rx = session.subscribe();
+
+        session.ingest_external_output(b"BROADCAST_MARKER_ABC");
+
+        let chunk = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timed out waiting for the ingested chunk to be broadcast")
+            .expect("broadcast channel closed unexpectedly");
+        assert_eq!(
+            chunk,
+            b"BROADCAST_MARKER_ABC".to_vec(),
+            "screen-share subscribers must receive elevated output too"
+        );
+
+        drop(session);
+    }
+
+    #[test]
+    fn ingest_external_output_reaches_the_ring_when_wired_as_an_elevated_channels_on_output(
+    ) {
+        // Mirrors exactly how `PtyManager::elevate` (aiterm-core/src/pty/manager.rs)
+        // wires this in production: it wraps the caller's `on_output` closure
+        // so it also calls `session.ingest_external_output(&chunk)`. This test
+        // builds a real `ElevatedChannel` off a mock transport (same pattern
+        // as `write_routes_to_elevated_channel_when_present` above) and
+        // exercises the whole path: transport bytes -> Frame decode ->
+        // on_output closure -> ring buffer.
+        use super::super::elevated::ElevatedChannel;
+        use super::super::elevated_protocol::Frame;
+        use std::io::Cursor;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let session = Arc::new(
+            PtySession::spawn(
+                test_shell(),
+                PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+                None,
+                |_| {},
+            )
+            .expect("spawn pty"),
+        );
+
+        let mut encoded = Vec::new();
+        Frame::Data(b"ELEVATED_MARKER_XYZ".to_vec())
+            .write_to(&mut encoded)
+            .unwrap();
+        let reader = Cursor::new(encoded);
+
+        struct CapturingWriter(mpsc::Sender<Vec<u8>>);
+        impl std::io::Write for CapturingWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                let _ = self.0.send(buf.to_vec());
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>();
+        let writer = Box::new(CapturingWriter(write_tx));
+
+        let session_for_output = Arc::clone(&session);
+        let channel = ElevatedChannel::new(
+            reader,
+            writer,
+            move |bytes| session_for_output.ingest_external_output(&bytes),
+            || {},
+        );
+        *session.elevated.lock() = Some(channel);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if session
+                .get_recent_output(4096)
+                .map(|s| s.contains("ELEVATED_MARKER_XYZ"))
+                .unwrap_or(false)
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "elevated output never reached the session's ring buffer via the \
+                 ElevatedChannel on_output wiring"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
 
         drop(session);
     }

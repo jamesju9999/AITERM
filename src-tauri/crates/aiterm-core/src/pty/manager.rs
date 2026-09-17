@@ -198,7 +198,25 @@ impl PtyManager {
         if already_connected(&session.elevated) {
             return Ok(true);
         }
-        match super::elevated::spawn_windows(id, shell_variant, on_output, on_disconnect)
+        // 把呼叫端的 `on_output` 包一層：先餵進這個 session 自己的 ring
+        // buffer / broadcast channel（`PtySession::ingest_external_output`），
+        // 再呼叫呼叫端原本的 closure。沒有這一層，提權輸出只會抵達呼叫端
+        // （GUI 層 `elevate_with_app` 目前只拿去重新 emit `pty://data/{id}`
+        // 給前端畫面），永遠不會進 `output_ring`——而 `ai_query`/`ai_chat`
+        // 靠的 `context::snapshot()` 只讀 `output_ring`，於是 AI 永遠看不到
+        // 提權指令的輸出，違背這個功能存在的目的。見
+        // `docs/superpowers/specs/2026-09-17-windows-elevated-pty-session-design.md`。
+        //
+        // 這裡包、而不是留給呼叫端自己包：`PtySession::ingest_external_output`
+        // 是 `pub(crate)`，`elevate` 本來就已經透過 `self.get(id)?` 拿到
+        // `Arc<PtySession>`，是唯一同時看得到「session 本體」與「呼叫端傳
+        // 進來的 on_output」兩者的地方。
+        let session_for_output = Arc::clone(&session);
+        let wrapped_on_output = move |chunk: Vec<u8>| {
+            session_for_output.ingest_external_output(&chunk);
+            on_output(chunk);
+        };
+        match super::elevated::spawn_windows(id, shell_variant, wrapped_on_output, on_disconnect)
             .map_err(|e| PtyError::Internal(format!("elevate: {e}")))?
         {
             Some(channel) => {
