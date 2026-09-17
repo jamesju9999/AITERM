@@ -1,7 +1,4 @@
 #[cfg(windows)]
-use aiterm_core::pty::elevated_protocol as protocol;
-
-#[cfg(windows)]
 mod windows_host;
 
 fn main() {
