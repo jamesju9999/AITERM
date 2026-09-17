@@ -206,6 +206,14 @@ mod windows_launch {
     ///   名稱打錯、或防毒軟體攔截）——`ConnectNamedPipe` 目前是同步阻塞呼叫
     ///   （沒有用 `FILE_FLAG_OVERLAPPED` 開管線），如果 sidecar 啟動失敗，這
     ///   個呼叫會無限期卡住，沒有逾時機制。
+    ///
+    /// **呼叫端注意：這個函式可能無限期阻塞呼叫它的執行緒**，而且是兩個獨立
+    /// 的阻塞點疊加：`ShellExecuteExW(runas)` 會一路擋到使用者回應 UAC 對話
+    /// 框為止（可能是好幾分鐘，甚至使用者晾在那邊不理），接著
+    /// `ConnectNamedPipe` 上面說的沒有逾時機制。**絕對不要直接從 async 執行
+    /// 時的 task 或 UI 執行緒呼叫**——之後接上 `PtyManager`/Tauri command（下
+    /// 一個任務）時，要包一層 `spawn_blocking`（或專門開一條 thread）來呼叫
+    /// 這個函式，不能讓它卡住 async runtime 的 worker 執行緒或 UI 事件迴圈。
     pub fn spawn_windows(
         session_id: &str,
         shell_variant: super::super::cd_parser::ShellVariant,
@@ -293,7 +301,20 @@ mod windows_launch {
         // `PipeReadHandle`/`PipeWriteHandle`，但兩者都沒有 `Drop` 實作去關閉
         // 它——`ElevatedChannel` 被 drop 時，這個具名管線 handle 不會自動關閉。
         // 目前只有讀取執行緒自然 EOF／出錯時才會間接讓行程之後收尾；如果之後
-        // 要處理提前關閉 session 的路徑，這裡要回頭補 `Drop` 或等效機制。
+        // 要處理提前關閉 session 的路徑，這裡要回頭補上清理機制。
+        //
+        // 這個「回頭補」不是隨手加個 `Drop` 就能解決的一行修法：
+        // `PipeReadHandle` 跟 `PipeWriteHandle` 兩個各自獨立的型別包著同一個
+        // 原始 `HANDLE` 值，彼此完全不知道對方的存在，也沒有共享的所有權／
+        // 參照計數。如果直接在任一個型別上加 `impl Drop { CloseHandle(self.0) }`，
+        // 其中一個被 drop 時就會把 handle 關掉，而另一個當下可能還活著、還在
+        // 另一條執行緒上用同一個 handle（寫入路徑，或讀取執行緒可能還卡在
+        // `ReadFile` 阻塞讀取）——那會是 use-after-close，不是單純的資源洩漏，
+        // 而是新的正確性 bug。之後要修的話，正確作法是讓兩者共享同一份「關
+        // 一次」的所有權，例如包成 `Arc<HandleGuard>`（`HandleGuard` 自己的
+        // `Drop` 才真正呼叫 `CloseHandle`），把同一個 `Arc` clone 進
+        // `PipeReadHandle`/`PipeWriteHandle` 各一份，讓 handle 在兩邊都不再
+        // 使用（`Arc` 參照數歸零）時才真正關閉一次——不是各自獨立的 `Drop`。
         let reader = super::PipeReadHandle(pipe_handle);
         let writer: Box<dyn std::io::Write + Send> = Box::new(super::PipeWriteHandle(pipe_handle));
         Ok(Some(ElevatedChannel::new(reader, writer, on_output, on_disconnect)))
