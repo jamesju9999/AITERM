@@ -57,3 +57,14 @@
 .aiterm-block-expand {
   margin-top: 6px;
 }
+
+/* Explicit colors instead of relying on the browser's default <mark> style:
+   Chromium (Windows/WebView2) renders it with the CSS system colors Mark/
+   MarkText, which resolve per-OS-theme and can end up invisible against this
+   dark UI, while WebKit (macOS/Linux) hardcodes yellow/black — so unstyled
+   <mark> only failed to show on Windows. */
+.aiterm-block-command mark,
+.aiterm-block-body mark {
+  background-color: #ffff00;
+  color: #000;
+}
