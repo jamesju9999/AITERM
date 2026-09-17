@@ -98,11 +98,15 @@ fn run_conpty_bridge(pipe: HANDLE, shell_variant: &str) -> std::io::Result<()> {
             match pty_reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    if Frame::Data(buf[..n].to_vec()).write_to(&mut pipe_writer).is_err() {
+                    if let Err(e) = Frame::Data(buf[..n].to_vec()).write_to(&mut pipe_writer) {
+                        eprintln!("conpty bridge: failed to write output frame to pipe: {e}");
                         break;
                     }
                 }
-                Err(_) => break,
+                Err(e) => {
+                    eprintln!("conpty bridge: ConPTY read failed: {e}");
+                    break;
+                }
             }
         }
         let _ = Frame::Exit.write_to(&mut pipe_writer);
@@ -112,21 +116,32 @@ fn run_conpty_bridge(pipe: HANDLE, shell_variant: &str) -> std::io::Result<()> {
     loop {
         match Frame::read_from(&mut pipe_reader) {
             Ok(Some(Frame::Data(bytes))) => {
-                if pty_writer.write_all(&bytes).is_err() {
+                if let Err(e) = pty_writer.write_all(&bytes) {
+                    eprintln!("conpty bridge: failed to write input to ConPTY: {e}");
                     break;
                 }
             }
             Ok(Some(Frame::Resize { cols, rows })) => {
-                let _ = pair.master.resize(portable_pty::PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+                if let Err(e) = pair.master.resize(portable_pty::PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }) {
+                    eprintln!("conpty bridge: resize to {cols}x{rows} failed: {e}");
+                }
             }
             Ok(Some(Frame::Exit)) | Ok(None) => break,
-            Err(_) => break,
+            Err(e) => {
+                eprintln!("conpty bridge: failed to read frame from pipe: {e}");
+                break;
+            }
         }
         if let Ok(Some(_)) = child.try_wait() {
             break;
         }
     }
 
+    // 已知缺口：`kill()` 在 Windows 上只 TerminateProcess 直屬的 shell 行程，
+    // 不會連帶終止 shell 底下開出來的子孫行程（例如使用者在提權 shell 裡跑的
+    // 常駐程式）。`aiterm-core/src/pty/session.rs` 的 `kill_tree_first` +
+    // Windows Job Object 是同一問題的正確解法，這裡還沒補上——刻意先留著，
+    // 之後要回頭處理，不要讓它一直是個未追蹤的缺口。
     let _ = child.kill();
     let _ = output_thread.join();
     unsafe { CloseHandle(pipe) };
