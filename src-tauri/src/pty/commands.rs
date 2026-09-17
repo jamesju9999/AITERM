@@ -166,9 +166,14 @@ pub async fn pty_elevate(
     let variant = manager
         .get_shell_variant(&id)
         .unwrap_or(super::cd_parser::ShellVariant::Cmd);
-    tokio::task::spawn_blocking(move || crate::pty::elevate_with_app(&manager, app, id, variant))
+    #[cfg(windows)]
+    super::manager::log_step("pty_elevate: spawning blocking task");
+    let result = tokio::task::spawn_blocking(move || crate::pty::elevate_with_app(&manager, app, id, variant))
         .await
-        .map_err(|e| PtyError::Internal(format!("pty_elevate task join error: {e}")))?
+        .map_err(|e| PtyError::Internal(format!("pty_elevate task join error: {e}")))?;
+    #[cfg(windows)]
+    super::manager::log_step(&format!("pty_elevate: spawn_blocking joined, result={result:?}"));
+    result
 }
 
 /// A single file/directory entry returned by pty_list_dir.

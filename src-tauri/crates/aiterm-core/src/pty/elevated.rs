@@ -170,7 +170,7 @@ mod windows_launch {
     };
     use windows_sys::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
     use windows_sys::Win32::System::Pipes::{ConnectNamedPipe, CreateNamedPipeA, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT};
-    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
     /// 主行程呼叫這個函式來啟動一整套提權流程：先建具名管線 server，再用
@@ -214,12 +214,32 @@ mod windows_launch {
     /// 時的 task 或 UI 執行緒呼叫**——之後接上 `PtyManager`/Tauri command（下
     /// 一個任務）時，要包一層 `spawn_blocking`（或專門開一條 thread）來呼叫
     /// 這個函式，不能讓它卡住 async runtime 的 worker 執行緒或 UI 事件迴圈。
+    /// 對照 `aiterm-elevated-host` 那邊 `windows_host.rs::log_step` 的同一招：
+    /// 主行程這邊也不知道自己卡在哪一步（`spawn_blocking` 背景執行緒沒有主
+    /// 控台，`eprintln!` 一樣沒人看得到），寫進另一個檔案（跟 sidecar 的
+    /// log 分開，避免兩邊寫入互相干擾／檔名混淆），下次重現時兩份 log 的
+    /// 時間戳可以直接對照，看主行程這邊到底有沒有跟著卡住、卡在哪個環節。
+    fn log_step(msg: &str) {
+        use std::io::Write as _;
+        let Some(mut path) = std::env::var_os("TEMP").map(std::path::PathBuf::from) else { return };
+        path.push("aiterm-elevate-main.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let _ = writeln!(f, "[{now}] pid={} {msg}", std::process::id());
+            let _ = f.flush();
+        }
+    }
+
     pub fn spawn_windows(
         session_id: &str,
         shell_variant: super::super::cd_parser::ShellVariant,
         on_output: impl FnMut(Vec<u8>) + Send + 'static,
         on_disconnect: impl FnMut() + Send + 'static,
     ) -> std::io::Result<Option<ElevatedChannel>> {
+        log_step("spawn_windows: start");
         let pipe_name = format!(r"\\.\pipe\aiterm-elevate-{session_id}-{}", uuid::Uuid::new_v4());
         // `session_id` 是呼叫端傳進來的字串，理論上可能含有內嵌 NUL（Rust
         // `String` 允許），`CString::new` 遇到會回 `Err`——用 `?` 往上丟成
@@ -270,18 +290,34 @@ mod windows_launch {
         let file_w = widen(&sidecar_path.to_string_lossy());
         let params_w = widen(&params);
 
+        // `SEE_MASK_NOASYNC`：MSDN 對 `SHELLEXECUTEINFO.fMask` 的文件明載
+        // ——「呼叫 `ShellExecuteEx` 的執行緒沒有 message loop 時，必須指定
+        // 這個旗標」。我們的呼叫端是 `tokio::task::spawn_blocking` 開出來的
+        // 純運算執行緒，從來沒有 Win32 message loop（`GetMessage`/
+        // `DispatchMessage`）。沒有這個旗標時，`ShellExecuteEx` 對某些委派執
+        // 行路徑（例如 DDE 完成通知）會採用需要訊息幫浦才能收到「完成」信號
+        // 的非同步機制——呼叫執行緒沒有在幫浦訊息，這個內部完成信號永遠送不
+        // 到，而这個機制在 shell32 內部很可能不是每個呼叫獨立、而是 process
+        // 共用的（隱藏視窗／STA），卡住的不只是這條呼叫執行緒本身，還可能波
+        // 及其他共用同一個 shell32 內部機制的操作。這正好吻合實測現象：
+        // `spawn_windows` 本身（含 `ConnectNamedPipe`）很快就回傳成功，但主
+        // 視窗仍持續無回應，直到 sidecar 行程被強制關閉才恢復——加上這個旗
+        // 標讓 `ShellExecuteEx` 改用同步等待完成的路徑，不依賴訊息幫浦。
         let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
         info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-        info.fMask = SEE_MASK_NOCLOSEPROCESS;
+        info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
         info.lpVerb = verb_w.as_ptr();
         info.lpFile = file_w.as_ptr();
         info.lpParameters = params_w.as_ptr();
         info.nShow = SW_HIDE as i32;
 
+        log_step("calling ShellExecuteExW(runas)");
         let ok = unsafe { ShellExecuteExW(&mut info) };
+        log_step(&format!("ShellExecuteExW returned, ok={ok}"));
         if ok == 0 {
             let err = unsafe { GetLastError() };
             unsafe { CloseHandle(pipe_handle) };
+            log_step(&format!("ShellExecuteExW failed, err={err}"));
             if err == ERROR_CANCELLED {
                 return Ok(None); // 使用者取消 UAC，不是錯誤。
             }
@@ -296,10 +332,13 @@ mod windows_launch {
             unsafe { CloseHandle(info.hProcess) };
         }
 
+        log_step("calling ConnectNamedPipe (with timeout)");
         if let Err(e) = connect_named_pipe_with_timeout(pipe_handle, std::time::Duration::from_secs(30)) {
+            log_step(&format!("ConnectNamedPipe failed/timed out: {e}"));
             unsafe { CloseHandle(pipe_handle) };
             return Err(e);
         }
+        log_step("ConnectNamedPipe returned OK, constructing ElevatedChannel");
 
         // 已知缺口（刻意先留著，跟 `ElevatedChannel` 本身文件說明的讀取執行緒
         // 洩漏是同一類問題）：`pipe_handle` 的所有權從這裡轉移進
@@ -322,7 +361,9 @@ mod windows_launch {
         // 使用（`Arc` 參照數歸零）時才真正關閉一次——不是各自獨立的 `Drop`。
         let reader = super::PipeReadHandle(pipe_handle);
         let writer: Box<dyn std::io::Write + Send> = Box::new(super::PipeWriteHandle(pipe_handle));
-        Ok(Some(ElevatedChannel::new(reader, writer, on_output, on_disconnect)))
+        let channel = ElevatedChannel::new(reader, writer, on_output, on_disconnect);
+        log_step("spawn_windows: returning Ok(Some(channel))");
+        Ok(Some(channel))
     }
 
     /// `ConnectNamedPipe` 本身沒有逾時參數（非 overlapped 模式下就是同步阻塞

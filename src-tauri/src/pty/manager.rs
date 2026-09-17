@@ -13,6 +13,28 @@ use aiterm_core::pty::error::PtyResult;
 use aiterm_core::pty::events::{data_event_name, PtyDataPayload};
 use aiterm_core::pty::PtyManager;
 
+/// 跟 `aiterm_core::pty::elevated::windows_launch::log_step` 寫同一個檔案
+/// （`%TEMP%\aiterm-elevate-main.log`）——這裡另外複製一份而不是共用，因為
+/// 那邊是 `aiterm-core` crate 裡 `cfg(windows)` module-private 的函式，這裡
+/// 是 `app` crate，兩者本來就不共用內部實作。寫進同一個檔案是為了讓
+/// `spawn_windows` 內部（已經記錄 ShellExecuteExW/ConnectNamedPipe 各步驟）
+/// 跟這裡「`manager.elevate()` 回傳之後、`app.emit()` 各步驟」的時間戳能直
+/// 接對照，看主視窗卡住的當下究竟卡在哪一段。
+#[cfg(windows)]
+pub(crate) fn log_step(msg: &str) {
+    use std::io::Write as _;
+    let Some(mut path) = std::env::var_os("TEMP").map(PathBuf::from) else { return };
+    path.push("aiterm-elevate-main.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let _ = writeln!(f, "[{now}] pid={} {msg}", std::process::id());
+        let _ = f.flush();
+    }
+}
+
 /// Spawn 一個 session 並把輸出接到 `pty://data/{id}` 事件。
 ///
 /// `bridge_env` 非 None 時，把 Claude Code 橋接的環境變數注入這個分頁。
@@ -63,6 +85,7 @@ pub fn elevate_with_app(
     let app_for_disconnect = app.clone();
     let state_event_for_disconnect = state_event.clone();
 
+    log_step(&format!("elevate_with_app: start, id={id}"));
     let started = manager.elevate(
         &id,
         shell_variant,
@@ -73,19 +96,25 @@ pub fn elevate_with_app(
             }
         },
         move || {
+            log_step("on_disconnect callback: start");
             let payload = aiterm_core::pty::events::ElevationStatePayload { elevated: false };
             if let Err(e) = app_for_disconnect.emit(&state_event_for_disconnect, payload) {
                 eprintln!("emit {state_event_for_disconnect} failed: {e}");
             }
+            log_step("on_disconnect callback: emit returned");
         },
     )?;
+    log_step(&format!("elevate_with_app: manager.elevate() returned started={started}"));
 
     if started {
+        log_step("elevate_with_app: calling app.emit(state_event, elevated:true)");
         let payload = aiterm_core::pty::events::ElevationStatePayload { elevated: true };
         if let Err(e) = app.emit(&state_event, payload) {
             eprintln!("emit {state_event} failed: {e}");
         }
+        log_step("elevate_with_app: app.emit returned");
     }
+    log_step("elevate_with_app: returning");
     Ok(started)
 }
 
