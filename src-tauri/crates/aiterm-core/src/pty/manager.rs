@@ -177,7 +177,7 @@ impl PtyManager {
         &self,
         id: &str,
         shell_variant: super::cd_parser::ShellVariant,
-        on_output: F,
+        mut on_output: F,
         on_disconnect: D,
     ) -> PtyResult<bool>
     where
