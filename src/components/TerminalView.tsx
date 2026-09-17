@@ -329,6 +329,18 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     onAttentionRef.current?.(kind);
   }, []);
 
+  // "question" = 剛偵測到權限不足，問使用者要不要提權；"cancelled" = 使用者
+  // 按了是、但 UAC 對話框被取消，短暫顯示回饋後自動收起。
+  const [elevationBanner, setElevationBanner] = useState<"question" | "cancelled" | null>(null);
+
+  // checkPermissionDenied 的 IPC 往返可能在元件已經卸載後才回來（切分頁、
+  // 關分頁）——跟 ShellWarningBadge 的 detectPowerShell7 用同一種 alive-flag
+  // 防護，避免對已卸載元件呼叫 setState。這裡是 useCallback 不是
+  // useEffect，沒有自己的 cleanup，所以用 ref 存活標記，在掛載期間唯一的
+  // useEffect 裡於卸載時撥為 false。
+  const aliveRef = useRef(true);
+  useEffect(() => () => { aliveRef.current = false; }, []);
+
   const handleCommandSettled = useCallback((exitCode: number) => {
     emitAttention(attentionForExitCode(exitCode));
     // 非零結束碼才問後端——權限不足一定是非零結束碼，成功的指令沒必要多打
@@ -336,7 +348,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     // 回傳 false，所以這裡不需要額外的平台判斷。
     if (exitCode !== 0) {
       void checkPermissionDenied(sessionId).then((denied) => {
-        if (denied) setShowElevationBanner(true);
+        if (denied && aliveRef.current) setElevationBanner("question");
       });
     }
   }, [emitAttention, sessionId]);
@@ -345,6 +357,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   useEffect(() => { onClaudeDetectedRef.current = onClaudeDetected; }, [onClaudeDetected]);
 
   const handleCommandStarted = useCallback((cmd: string) => {
+    // 新指令一開始就清掉舊 banner：每個失敗指令各自觸發一次未關聯的
+    // checkPermissionDenied，晚到的回覆可能在使用者已經換去跑別的指令時
+    // 才把 banner 彈回來，跟使用者正在做的事完全無關。
+    setElevationBanner(null);
     if (isClaudeCommand(cmd)) onClaudeDetectedRef.current?.();
   }, []);
 
@@ -678,7 +694,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // 後端提權狀態（pty://elevation-state/{id}）。非 Windows 或未提權時永遠是
   // false，ElevationBadge 因此不會顯示。
   const elevated = useElevationState(sessionId);
-  const [showElevationBanner, setShowElevationBanner] = useState(false);
 
   // Fetch git info (branch, insertions/deletions) for completed blocks, debounced 500ms.
   const gitFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1975,21 +1990,46 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             <button onClick={closeSearch} title={t.term_search_close} className="terminal-search-btn terminal-search-close aiterm-btn aiterm-btn--secondary aiterm-btn--sm">✕</button>
           </div>
         )}
-        {showElevationBanner && (
+        {elevationBanner && (
           <div className="aiterm-elevation-banner">
-            <span>{t.elevation_banner_question}</span>
-            <button
-              className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
-              onClick={() => { setShowElevationBanner(false); void elevatePty(sessionId); }}
-            >
-              {t.elevation_banner_confirm}
-            </button>
-            <button
-              className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
-              onClick={() => setShowElevationBanner(false)}
-            >
-              {t.elevation_banner_cancel}
-            </button>
+            {elevationBanner === "question" ? (
+              <>
+                <span>{t.elevation_banner_question}</span>
+                <button
+                  className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                  onClick={() => {
+                    setElevationBanner(null);
+                    void elevatePty(sessionId)
+                      .then((started) => {
+                        if (!aliveRef.current) return;
+                        // false＝使用者在 UAC 對話框按了取消，不是錯誤——
+                        // 短暫顯示回饋後自動收起，不需要使用者再多按一次。
+                        if (!started) {
+                          setElevationBanner("cancelled");
+                          window.setTimeout(() => {
+                            if (aliveRef.current) {
+                              setElevationBanner((b) => (b === "cancelled" ? null : b));
+                            }
+                          }, 3000);
+                        }
+                      })
+                      .catch((err) => {
+                        console.error("[elevation] pty_elevate failed", err);
+                      });
+                  }}
+                >
+                  {t.elevation_banner_confirm}
+                </button>
+                <button
+                  className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                  onClick={() => setElevationBanner(null)}
+                >
+                  {t.elevation_banner_cancel}
+                </button>
+              </>
+            ) : (
+              <span>{t.elevation_cancelled}</span>
+            )}
           </div>
         )}
         <div
