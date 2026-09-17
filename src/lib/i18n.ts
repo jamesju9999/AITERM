@@ -20,6 +20,12 @@ const zhTW = {
     elevation_banner_confirm: "是",
     elevation_banner_cancel: "否",
     elevation_cancelled: "已取消系統管理員權限",
+    // 提權狀態從「已提權」變回「未提權」時的簡短系統訊息（`exit` 或連線意外
+    // 中斷都會觸發）。後端目前不區分這兩種原因（`ElevatedChannel` 的
+    // `on_disconnect` 只是一個無參數的 callback，見
+    // `aiterm-core/src/pty/elevated.rs`），所以先用同一句話涵蓋兩種情況，
+    // 而不是為了區分文案去改協定。
+    elevation_disconnected: "已離開系統管理員模式",
 
     // Settings sidebar
     settings_title: "設定",
@@ -1612,6 +1618,7 @@ const enRaw = {
     elevation_banner_confirm: "Yes",
     elevation_banner_cancel: "No",
     elevation_cancelled: "Administrator elevation cancelled",
+    elevation_disconnected: "Left administrator mode",
 
     // Settings sidebar
     settings_title: "Settings",

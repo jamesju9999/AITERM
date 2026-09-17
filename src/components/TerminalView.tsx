@@ -330,8 +330,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   }, []);
 
   // "question" = 剛偵測到權限不足，問使用者要不要提權；"cancelled" = 使用者
-  // 按了是、但 UAC 對話框被取消，短暫顯示回饋後自動收起。
-  const [elevationBanner, setElevationBanner] = useState<"question" | "cancelled" | null>(null);
+  // 按了是、但 UAC 對話框被取消，短暫顯示回饋後自動收起；"disconnected" =
+  // 提權連線結束（使用者 exit 或連線意外中斷），同樣短暫顯示後自動收起。
+  const [elevationBanner, setElevationBanner] = useState<"question" | "cancelled" | "disconnected" | null>(null);
 
   // checkPermissionDenied 的 IPC 往返可能在元件已經卸載後才回來（切分頁、
   // 關分頁）——跟 ShellWarningBadge 的 detectPowerShell7 用同一種 alive-flag
@@ -718,6 +719,33 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // 後端提權狀態（pty://elevation-state/{id}）。非 Windows 或未提權時永遠是
   // false，ElevationBadge 因此不會顯示。
   const elevated = useElevationState(sessionId);
+
+  // `elevated` 從 true 變回 false（使用者在提權 shell 打 exit，或連線意外
+  // 中斷——見 elevated.rs 的 on_disconnect，兩種情況目前共用同一個不帶參數
+  // 的 callback，後端無法區分，所以這裡也只顯示一句通用訊息）時，短暫顯示
+  // 一則系統訊息，重用跟「cancelled」相同的 banner 元件/自動收起邏輯。
+  // 用 ref 記上一次的值而不是直接比對 render 之間的差異：hook 掛載時第一次
+  // render 的 `elevated` 恆為 false（見 useElevationState 的文件註解），這
+  // 個 effect 依賴 [elevated] 只在它變化時跑，不會在初次掛載就誤判成一次
+  // "true → false" 的轉換。
+  const prevElevatedRef = useRef(false);
+  const disconnectedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (prevElevatedRef.current && !elevated) {
+      setElevationBanner("disconnected");
+      if (disconnectedTimerRef.current) clearTimeout(disconnectedTimerRef.current);
+      disconnectedTimerRef.current = setTimeout(() => {
+        disconnectedTimerRef.current = null;
+        if (aliveRef.current) {
+          setElevationBanner((b) => (b === "disconnected" ? null : b));
+        }
+      }, 3000);
+    }
+    prevElevatedRef.current = elevated;
+  }, [elevated]);
+  useEffect(() => () => {
+    if (disconnectedTimerRef.current) clearTimeout(disconnectedTimerRef.current);
+  }, []);
 
   // Fetch git info (branch, insertions/deletions) for completed blocks, debounced 500ms.
   const gitFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2059,8 +2087,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                   {t.elevation_banner_cancel}
                 </button>
               </>
-            ) : (
+            ) : elevationBanner === "cancelled" ? (
               <span>{t.elevation_cancelled}</span>
+            ) : (
+              <span>{t.elevation_disconnected}</span>
             )}
           </div>
         )}
