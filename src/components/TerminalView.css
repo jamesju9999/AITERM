@@ -171,6 +171,25 @@
   border-bottom-color: var(--accent, #a855f7);
 }
 
+/* ── Elevation banner（Windows-only：提示重新以系統管理員身分執行）─────── */
+
+.aiterm-elevation-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #1e1e1e;
+  border: 1px solid #f59e0b;
+  border-radius: 0 0 6px 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #e6e6e6;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+}
+
 /* ── Find in Buffer ─────────────────────────────────────────────── */
 
 .terminal-search-bar {

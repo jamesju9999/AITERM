@@ -14,8 +14,10 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import "@xterm/xterm/css/xterm.css";
 
 import {
+  checkPermissionDenied,
   closePty,
   createPty,
+  elevatePty,
   getPtyRecentOutput,
   onPtyData,
   resizePty,
@@ -31,6 +33,7 @@ import { getSessionCwd } from "../ipc/fs";
 import { enterpriseCompleteTask, enterpriseOnComplete } from "../ipc/enterprise";
 import { useTerminalBlocks } from "../hooks/useTerminalBlocks";
 import { useShellIdentity } from "../hooks/useShellIdentity";
+import { useElevationState } from "../hooks/useElevationState";
 import { useAgentMission } from "../hooks/useAgentMission";
 import { useTelegramRemoteControl } from "../hooks/useTelegramRemoteControl";
 import { listProviders } from "../ipc/provider";
@@ -43,6 +46,7 @@ import { ProviderPalette } from "./ProviderPalette";
 import { QuotaBadge } from "./QuotaBadge";
 import { SharePanel } from "./SharePanel";
 import { ShellWarningBadge } from "./ShellWarningBadge";
+import { ElevationBadge } from "./ElevationBadge";
 import { useProviderQuota } from "../hooks/useProviderQuota";
 import { WarpInput, type WarpInputHandle } from "./WarpInput";
 import { FileExplorer } from "./FileExplorer/FileExplorer";
@@ -327,7 +331,15 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
   const handleCommandSettled = useCallback((exitCode: number) => {
     emitAttention(attentionForExitCode(exitCode));
-  }, [emitAttention]);
+    // 非零結束碼才問後端——權限不足一定是非零結束碼，成功的指令沒必要多打
+    // 一趟 IPC。pty_check_permission_denied 在非 Windows／非權限問題時只會
+    // 回傳 false，所以這裡不需要額外的平台判斷。
+    if (exitCode !== 0) {
+      void checkPermissionDenied(sessionId).then((denied) => {
+        if (denied) setShowElevationBanner(true);
+      });
+    }
+  }, [emitAttention, sessionId]);
 
   const onClaudeDetectedRef = useRef(onClaudeDetected);
   useEffect(() => { onClaudeDetectedRef.current = onClaudeDetected; }, [onClaudeDetected]);
@@ -662,6 +674,11 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // shell 自己回報的身分（OSC 7000）。只有 Windows PowerShell 5.1 會讓
   // ShellWarningBadge 真的顯示出東西，其餘情況它回傳 null。
   const shellIdentity = useShellIdentity(termState);
+
+  // 後端提權狀態（pty://elevation-state/{id}）。非 Windows 或未提權時永遠是
+  // false，ElevationBadge 因此不會顯示。
+  const elevated = useElevationState(sessionId);
+  const [showElevationBanner, setShowElevationBanner] = useState(false);
 
   // Fetch git info (branch, insertions/deletions) for completed blocks, debounced 500ms.
   const gitFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1843,6 +1860,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               的分頁 id 會查不到，觀看端只會看到「那個終端機已經關閉」。
               整套自動測試都沒抓到，因為測試裡直接把 PTY id 當成 tab_id 用。 */}
           <ShellWarningBadge identity={shellIdentity} />
+          <ElevationBadge elevated={elevated} />
           {sessionId && <SharePanel sessionId={sessionId} />}
           <button
             className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
@@ -1955,6 +1973,23 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             <button onClick={() => doSearch(searchQuery, 'prev')} title={t.term_search_prev} className="terminal-search-btn aiterm-btn aiterm-btn--secondary aiterm-btn--sm">↑</button>
             <button onClick={() => doSearch(searchQuery, 'next')} title={t.term_search_next} className="terminal-search-btn aiterm-btn aiterm-btn--secondary aiterm-btn--sm">↓</button>
             <button onClick={closeSearch} title={t.term_search_close} className="terminal-search-btn terminal-search-close aiterm-btn aiterm-btn--secondary aiterm-btn--sm">✕</button>
+          </div>
+        )}
+        {showElevationBanner && (
+          <div className="aiterm-elevation-banner">
+            <span>{t.elevation_banner_question}</span>
+            <button
+              className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+              onClick={() => { setShowElevationBanner(false); void elevatePty(sessionId); }}
+            >
+              {t.elevation_banner_confirm}
+            </button>
+            <button
+              className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+              onClick={() => setShowElevationBanner(false)}
+            >
+              {t.elevation_banner_cancel}
+            </button>
           </div>
         )}
         <div

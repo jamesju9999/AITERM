@@ -14,6 +14,13 @@ const zhTW = {
     common_cancel: "取消",
     common_confirm: "確定",
 
+    // Elevation banner / badge（Windows-only：以系統管理員權限重新執行）
+    elevation_badge_label: "系統管理員",
+    elevation_banner_question: "此指令似乎需要系統管理員權限，要用系統管理員身分重新執行嗎？",
+    elevation_banner_confirm: "是",
+    elevation_banner_cancel: "否",
+    elevation_cancelled: "已取消系統管理員權限",
+
     // Settings sidebar
     settings_title: "設定",
     general: "一般",
@@ -1598,6 +1605,13 @@ const enRaw = {
     common_delete: "Delete",
     common_cancel: "Cancel",
     common_confirm: "OK",
+
+    // Elevation banner / badge (Windows-only: re-run a command as administrator)
+    elevation_badge_label: "Administrator",
+    elevation_banner_question: "This command may need administrator privileges. Re-run it as administrator?",
+    elevation_banner_confirm: "Yes",
+    elevation_banner_cancel: "No",
+    elevation_cancelled: "Administrator elevation cancelled",
 
     // Settings sidebar
     settings_title: "Settings",
