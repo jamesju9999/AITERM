@@ -1,5 +1,6 @@
 pub mod ansi;
 pub mod cd_parser;
+pub mod detection;
 pub mod error;
 pub mod events;
 pub mod manager;
