@@ -147,11 +147,33 @@ pub struct PtySession {
     line_esc_state: Mutex<u8>,
     /// Ring buffer capturing raw PTY output for AI context. Shared with the reader thread.
     output_ring: Arc<Mutex<VecDeque<u8>>>,
-    /// DEC private modes this session's output has switched on or off, so a
-    /// share replay taken from the middle of the stream can restore them.
-    /// Unlike `output_ring` this is never evicted — see `ansi::DecModeTracker`
-    /// for the bug that made it necessary. Shared with the reader thread.
+    /// DEC private modes this session's own child PTY output has switched on
+    /// or off, so a share replay taken from the middle of the stream can
+    /// restore them. Unlike `output_ring` this is never evicted — see
+    /// `ansi::DecModeTracker` for the bug that made it necessary. Shared with
+    /// the reader thread.
+    ///
+    /// **Only ever fed from the reader thread below — never from
+    /// `ingest_external_output`.** `DecModeTracker::feed` carries parser
+    /// state (which escape sequence it's midway through, partial digits)
+    /// across calls, which is only safe when every call is a slice of one
+    /// coherent byte stream. Elevated output is a second, independent stream
+    /// arriving on its own schedule; interleaving it into this tracker let an
+    /// incomplete escape left dangling by one source (e.g. a chunk ending in
+    /// `\x1b[?25`) get "completed" by an unrelated byte from the other source
+    /// (a bare `h` in prose), recording a bogus mode flip. See
+    /// `elevated_dec_modes` for the isolated tracker elevated output feeds
+    /// instead — same reasoning `bell_count`/`marker_count` already used for
+    /// why those two aren't shared across sources either.
     dec_modes: Arc<Mutex<super::ansi::DecModeTracker>>,
+    /// Same purpose as `dec_modes`, but fed exclusively by
+    /// `ingest_external_output` (the Windows elevated-PTY sidecar's output).
+    /// A second, independent tracker rather than sharing `dec_modes` — see
+    /// the doc comment on `dec_modes` for why sharing corrupts parser state
+    /// across the two unrelated byte streams. `subscribe_with_history` merges
+    /// both trackers' `prefix()` output; see its doc comment for the
+    /// known imprecision that merge accepts.
+    elevated_dec_modes: Arc<Mutex<super::ansi::DecModeTracker>>,
     /// cd attempts staged by `apply_cd_if_any` (write path) for Bash/Pwsh
     /// sessions, each removed by the reader thread once it sees the matching
     /// OSC 133 D marker — committed to cwd/previous_cwd only if that marker
@@ -415,6 +437,10 @@ impl PtySession {
         let ring_for_thread = Arc::clone(&output_ring);
         let dec_modes: Arc<Mutex<super::ansi::DecModeTracker>> = Arc::new(Mutex::new(Default::default()));
         let dec_modes_for_thread = Arc::clone(&dec_modes);
+        // No `_for_thread` clone: only `ingest_external_output` (called via
+        // `&self`, never from the reader thread) ever feeds this one.
+        let elevated_dec_modes: Arc<Mutex<super::ansi::DecModeTracker>> =
+            Arc::new(Mutex::new(Default::default()));
         let cwd: Arc<Mutex<PathBuf>> = Arc::new(Mutex::new(initial_cwd));
         let cwd_for_thread = Arc::clone(&cwd);
         let previous_cwd: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
@@ -543,6 +569,7 @@ impl PtySession {
             line_esc_state: Mutex::new(0),
             output_ring,
             dec_modes,
+            elevated_dec_modes,
             pending_cds,
             bell_count,
             marker_count,
@@ -792,7 +819,33 @@ impl PtySession {
             // the duplicate inside the replay simply re-applies it, landing on
             // the same state. `max_bytes` is a bound on the ring slice, not on
             // this prefix, which is tens of bytes.
+            //
+            // Two trackers, concatenated: `dec_modes` (this session's own
+            // child PTY) and `elevated_dec_modes` (the Windows elevated-PTY
+            // sidecar, if this session has ever been elevated — see the doc
+            // comment on those two fields for why they must be kept separate
+            // rather than one shared tracker). Concatenating means that if
+            // *both* sources have ever set the same DEC mode number, the
+            // second one emitted here — elevated — wins on replay, since
+            // a later `CSI ? Ps h`/`l` for the same mode always overrides an
+            // earlier one, the same as it would on a real terminal.
+            //
+            // This is a deliberate, documented heuristic, not a claim of true
+            // chronological correctness: with two independently-parsed
+            // streams there is no shared clock to say which source *really*
+            // touched a given mode last in wall-clock time (and, notably,
+            // neither does the live terminal the user is actually looking
+            // at — `pty://data/{id}` re-emits from the two sources are not
+            // ordered against each other either, so this is not a regression
+            // relative to what the user already sees). Getting that fully
+            // right would need a shared per-mode sequence counter across both
+            // trackers; deferred unless it's ever observed to matter in
+            // practice, since it doesn't address the actual corruption bug
+            // (a dangling escape from one source being wrongly completed by
+            // unrelated bytes from the other) that motivated splitting the
+            // trackers in the first place.
             let mut out = self.dec_modes.lock().prefix();
+            out.extend(self.elevated_dec_modes.lock().prefix());
             out.extend(ring.iter().skip(start).copied());
             Some(out)
         };
@@ -870,6 +923,16 @@ impl PtySession {
     /// either fully reflected in a snapshot taken concurrently, or not yet
     /// broadcast — never both, never neither.
     ///
+    /// Feeds `elevated_dec_modes`, **not** `dec_modes` — see the doc comment
+    /// on those two fields. `DecModeTracker::feed` carries parser state
+    /// across calls, so feeding it from two independent, arbitrarily
+    /// interleaved sources can let an escape sequence left incomplete by one
+    /// source get wrongly "completed" by an unrelated byte from the other,
+    /// recording a bogus mode flip. Using a second, separate tracker here —
+    /// exactly mirroring why `bell_count`/`marker_count` below are also not
+    /// shared — keeps each tracker's parse honest; `subscribe_with_history`
+    /// is responsible for merging both trackers' output for replay.
+    ///
     /// Deliberately does **not** replicate the rest of the reader thread's
     /// per-chunk bookkeeping:
     /// - `last_exit_code` / `pending_cds` (OSC 133 `D;<code>` confirmation):
@@ -899,8 +962,10 @@ impl PtySession {
                 ring.push_back(b);
             }
             // Same order, same reasoning as the reader thread: ring first,
-            // then DEC modes, then broadcast, all under the ring lock.
-            self.dec_modes.lock().feed(chunk);
+            // then DEC modes, then broadcast, all under the ring lock. Feeds
+            // the *elevated* tracker, not the shared one the reader thread
+            // uses — see the doc comment above and on the two fields.
+            self.elevated_dec_modes.lock().feed(chunk);
             if self.output_tx.receiver_count() > 0 {
                 let _ = self.output_tx.send(chunk.to_vec());
             }
@@ -2498,6 +2563,103 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(20));
         }
+
+        drop(session);
+    }
+
+    // ── dec_modes isolation: elevated output must not corrupt the normal
+    //    tracker's parser state, and vice versa ─────────────────────────────
+    //
+    // Regression test for a bug a follow-up code-quality review found in the
+    // first version of `ingest_external_output`: it fed the SAME `dec_modes`
+    // tracker the reader thread feeds. `DecModeTracker::feed` (`ansi.rs`)
+    // carries parser state (which escape sequence it's midway through,
+    // partial digits) across calls — its own doc comment says "safe to split
+    // anywhere", but that assumption is "one coherent byte stream split
+    // arbitrarily by 4KB reads", not "two logically unrelated shells
+    // interleaved". Feeding it from two independent sources let an escape
+    // sequence left dangling by one source (a chunk ending in `\x1b[?25`,
+    // with no terminating byte yet) get wrongly "completed" by an unrelated
+    // byte from the OTHER source — any bare `h`/`l`, extremely common in
+    // ordinary output — recording a bogus DEC mode as switched on/off.
+    // `prefix()` (used by `subscribe_with_history` to reconstruct terminal
+    // state for a screen-share viewer joining mid-session) would then replay
+    // that wrong mode to a new viewer.
+    #[test]
+    fn ingest_external_output_dec_mode_state_is_isolated_from_concurrent_normal_pty_output(
+    ) {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+        wait_for_shell_ready_sync(&session);
+
+        // Half of a DEC-mode escape sequence fed through the elevated path,
+        // deliberately never completed by this test — simulates a chunk
+        // boundary landing mid-sequence on the elevated sidecar's side.
+        session.ingest_external_output(b"\x1b[?25");
+
+        // Concurrently — a genuinely separate execution context, this
+        // session's own background reader thread, racing against this test
+        // thread — drive real bytes through the *normal* PTY whose very
+        // first character is a bare `h`: the terminal's own cooked-mode echo
+        // reflects back exactly what's written, character for character,
+        // before the shell even looks at it, regardless of whether "hxxx" is
+        // a valid command. Nothing about this write is a DEC-mode escape; if
+        // it ever completes the dangling elevated escape above, that can
+        // only be cross-stream state leakage between the two trackers.
+        session.write(b"hello_marker_9f3a2b\r\n").unwrap();
+
+        // Wait until the reader thread has genuinely processed that output
+        // — i.e. its own ring-write + dec_modes.feed critical section has
+        // run — rather than asserting immediately, which could "pass" only
+        // because the interfering chunk hadn't arrived yet (a false
+        // negative, not a real pass).
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut seen = false;
+        while std::time::Instant::now() < deadline {
+            if let Some(out) = session.get_recent_output(OUTPUT_RING_CAP) {
+                if out.contains("hello_marker_9f3a2b") {
+                    seen = true;
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            seen,
+            "the interfering normal-PTY output never arrived — this test \
+             didn't exercise what it's supposed to"
+        );
+
+        // The dangling escape was NEVER completed by this test — no `h`/`l`
+        // was ever sent through `ingest_external_output`. Check the tracker's
+        // *recorded modes* directly (`prefix()`), not the raw replay bytes:
+        // the raw ring legitimately contains the literal bytes
+        // `\x1b[?25` immediately followed by `hello_marker...` — that's
+        // exactly what got spliced in on purpose by the Critical fix — so a
+        // naive substring search over the combined replay would find
+        // `\x1b[?25h` there even when nothing was actually recorded as a
+        // mode, a false positive unrelated to tracker corruption. `prefix()`
+        // only emits modes that were actually inserted into `modes: BTreeMap`
+        // via a *completed* `h`/`l` transition, which is the thing that must
+        // never happen here.
+        //
+        // (Fails against a version of `ingest_external_output` that feeds
+        // `dec_modes` instead of `elevated_dec_modes` — verified manually
+        // before landing this test: see this task's report.)
+        let elevated_prefix = session.elevated_dec_modes.lock().prefix();
+        assert!(
+            elevated_prefix.is_empty(),
+            "DEC mode 25 must never have been recorded on the elevated tracker: \
+             the escape sent via ingest_external_output was always left \
+             dangling, so any recorded mode means concurrent normal-PTY \
+             output corrupted it. Recorded prefix: {:?}",
+            String::from_utf8_lossy(&elevated_prefix)
+        );
 
         drop(session);
     }

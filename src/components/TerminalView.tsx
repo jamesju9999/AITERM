@@ -386,6 +386,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     commandEpochRef.current += 1;
     setElevationBanner(null);
     if (cancelledTimerRef.current) clearTimeout(cancelledTimerRef.current);
+    if (disconnectedTimerRef.current) clearTimeout(disconnectedTimerRef.current);
     if (isClaudeCommand(cmd)) onClaudeDetectedRef.current?.();
   }, []);
 
