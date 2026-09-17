@@ -28,35 +28,55 @@ fn log_step(msg: &str) {
     }
 }
 
-/// 入口：`argv[1]` 是主行程先建好的具名管線名稱，`argv[2]` 是 shell variant
-/// （"cmd" 或 "pwsh"）。連不上管線、或參數不對，直接印錯誤結束——這個行程
-/// 沒有 UI，唯一能溝通失敗原因的管道就是 stderr（現在也一併寫進上面說的
-/// log 檔，因為 stderr 實務上沒人看得到）。
+/// 入口：`argv[1]` 是主行程 -> 這裡（我們只讀）的管線名稱，`argv[2]` 是這裡
+/// -> 主行程（我們只寫）的管線名稱，`argv[3]` 是 shell variant（"cmd" 或
+/// "pwsh"）。連不上管線、或參數不對，直接印錯誤結束——這個行程沒有 UI，唯一
+/// 能溝通失敗原因的管道就是 stderr（現在也一併寫進上面說的 log 檔，因為
+/// stderr 實務上沒人看得到）。
+///
+/// **為什麼是兩條單向管線而不是一條雙向的**：見
+/// `aiterm_core::pty::elevated` 的 `spawn_windows`。簡述：同步（非 overlapped）
+/// 管線 handle 上的 I/O 會被 Windows 序列化，同一個 handle 一邊卡在
+/// `ReadFile` 時另一邊的 `WriteFile` 會跟著卡死，實機上會讓主視窗整個沒回應。
 pub fn run() {
     log_step("run() start");
     let args: Vec<String> = std::env::args().collect();
     log_step(&format!("argv={args:?}"));
-    let Some(pipe_name) = args.get(1) else {
-        eprintln!("usage: aiterm-elevated-host <pipe-name> <shell-variant>");
-        log_step("missing pipe-name argument, exiting");
+    let (Some(read_pipe_name), Some(write_pipe_name)) = (args.get(1), args.get(2)) else {
+        eprintln!("usage: aiterm-elevated-host <host-to-sidecar-pipe> <sidecar-to-host-pipe> <shell-variant>");
+        log_step("missing pipe-name arguments, exiting");
         std::process::exit(1);
     };
-    let shell_variant = args.get(2).map(String::as_str).unwrap_or("cmd");
+    let shell_variant = args.get(3).map(String::as_str).unwrap_or("cmd");
 
-    log_step(&format!("connecting to pipe {pipe_name}"));
-    let pipe = match connect_pipe(pipe_name) {
+    // 連線順序必須跟主行程 `ConnectNamedPipe` 的順序一致（先 h2s 再 s2h），
+    // 否則兩邊會各自等對方先連另一條而互卡。
+    log_step(&format!("connecting to read pipe {read_pipe_name}"));
+    let read_pipe = match connect_pipe(read_pipe_name, GENERIC_READ) {
         Ok(h) => {
-            log_step("connected to pipe");
+            log_step("connected to read pipe");
             h
         }
         Err(e) => {
-            eprintln!("failed to connect to {pipe_name}: {e}");
-            log_step(&format!("failed to connect to pipe: {e}"));
+            eprintln!("failed to connect to {read_pipe_name}: {e}");
+            log_step(&format!("failed to connect to read pipe: {e}"));
+            std::process::exit(1);
+        }
+    };
+    log_step(&format!("connecting to write pipe {write_pipe_name}"));
+    let write_pipe = match connect_pipe(write_pipe_name, GENERIC_WRITE) {
+        Ok(h) => {
+            log_step("connected to write pipe");
+            h
+        }
+        Err(e) => {
+            eprintln!("failed to connect to {write_pipe_name}: {e}");
+            log_step(&format!("failed to connect to write pipe: {e}"));
             std::process::exit(1);
         }
     };
 
-    if let Err(e) = run_conpty_bridge(pipe, shell_variant) {
+    if let Err(e) = run_conpty_bridge(read_pipe, write_pipe, shell_variant) {
         eprintln!("conpty bridge failed: {e}");
         log_step(&format!("conpty bridge failed: {e}"));
         std::process::exit(1);
@@ -66,12 +86,16 @@ pub fn run() {
 
 /// 以 client 身分連進主行程已經開好的具名管線 server。不依賴繼承 handle
 /// ——UAC broker 本來就不轉送 stdio 的 handle 繼承，這是唯一可靠的做法。
-fn connect_pipe(name: &str) -> std::io::Result<HANDLE> {
+///
+/// `access` 只給 `GENERIC_READ` 或 `GENERIC_WRITE`（不是兩個都給）：對面是用
+/// `PIPE_ACCESS_INBOUND`/`OUTBOUND` 開的單向 server，要求的存取權限跟管線方
+/// 向不符時 `CreateFileA` 會直接失敗。
+fn connect_pipe(name: &str, access: u32) -> std::io::Result<HANDLE> {
     let c_name = CString::new(name).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     let handle = unsafe {
         CreateFileA(
             c_name.as_ptr() as *const u8,
-            GENERIC_READ | GENERIC_WRITE,
+            access,
             0,
             std::ptr::null(),
             OPEN_EXISTING,
@@ -93,7 +117,7 @@ fn connect_pipe(name: &str) -> std::io::Result<HANDLE> {
 ///   是否提權無關）——第一次在真機上跑時要確認。
 /// - shell 是否正確以 `cmd.exe` / `powershell.exe` 啟動，尤其 PowerShell 的
 ///   路徑解析（沿用 `aiterm_core::pty::shell::default_shell` 邏輯還是自己找）。
-fn run_conpty_bridge(pipe: HANDLE, shell_variant: &str) -> std::io::Result<()> {
+fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str) -> std::io::Result<()> {
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
     log_step("run_conpty_bridge: calling openpty()");
@@ -123,8 +147,8 @@ fn run_conpty_bridge(pipe: HANDLE, shell_variant: &str) -> std::io::Result<()> {
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
     log_step("pty reader/writer ready, entering relay loop");
 
-    let mut pipe_writer = PipeHandle(pipe);
-    let mut pipe_reader = PipeHandle(pipe);
+    let mut pipe_writer = PipeHandle(write_pipe);
+    let mut pipe_reader = PipeHandle(read_pipe);
 
     // ConPTY 輸出 -> 管線，在自己的執行緒跑，避免跟下面「管線輸入 -> ConPTY」的
     // 迴圈互相卡住（雙向轉送的兩個方向不能共用同一個阻塞式迴圈）。
@@ -180,7 +204,8 @@ fn run_conpty_bridge(pipe: HANDLE, shell_variant: &str) -> std::io::Result<()> {
     // 之後要回頭處理，不要讓它一直是個未追蹤的缺口。
     let _ = child.kill();
     let _ = output_thread.join();
-    unsafe { CloseHandle(pipe) };
+    unsafe { CloseHandle(read_pipe) };
+    unsafe { CloseHandle(write_pipe) };
     Ok(())
 }
 

@@ -168,7 +168,7 @@ mod windows_launch {
     use windows_sys::Win32::Foundation::{
         CloseHandle, GetLastError, ERROR_CANCELLED, ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE,
     };
-    use windows_sys::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
+    use windows_sys::Win32::Storage::FileSystem::{PIPE_ACCESS_INBOUND, PIPE_ACCESS_OUTBOUND};
     use windows_sys::Win32::System::Pipes::{ConnectNamedPipe, CreateNamedPipeA, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT};
     use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
@@ -240,34 +240,44 @@ mod windows_launch {
         on_disconnect: impl FnMut() + Send + 'static,
     ) -> std::io::Result<Option<ElevatedChannel>> {
         log_step("spawn_windows: start");
-        let pipe_name = format!(r"\\.\pipe\aiterm-elevate-{session_id}-{}", uuid::Uuid::new_v4());
+        // **兩條單向管線，不是一條雙向管線**——這是實機抓了四輪才定位到的死鎖
+        // 真因。原本的寫法是開一條 `PIPE_ACCESS_DUPLEX` 的同步（沒有
+        // `FILE_FLAG_OVERLAPPED`）管線，然後把同一個 raw `HANDLE` 值同時包進
+        // `PipeReadHandle` 跟 `PipeWriteHandle` 兩邊用。Windows 對**同步** file
+        // object 會把 I/O 序列化（見 MSDN "Synchronous and Overlapped Input and
+        // Output"）：讀取執行緒卡在 `ReadFile` 等 sidecar 的輸出時（提權 shell
+        // 剛啟動、還沒吐任何東西，這完全正常），另一條執行緒對**同一個 handle**
+        // 發的 `WriteFile` 會排在那個讀取後面一起卡死。而送鍵盤輸入那條路
+        // （`pty_write` 是同步 `#[tauri::command]`，跑在主執行緒上）正好就是
+        // 這個 `WriteFile`——於是整個 UI 執行緒跟著永久卡住，直到 sidecar 行程
+        // 被強制關閉、管線斷掉讓 `ReadFile` 回錯為止。實測現象每一項都對得上。
+        //
+        // 拆成兩條各自單向的管線之後，每個 handle 只會被用在單一方向，序列化
+        // 就完全不可能發生。另一個選項是把管線改成 overlapped I/O，但那要連兩
+        // 邊每一個 `ReadFile`/`WriteFile` 都改寫成 `OVERLAPPED` + 事件 +
+        // `GetOverlappedResult`，改動面大很多，而且本機沒有編譯器能驗證。
+        let pipe_base = format!(r"\\.\pipe\aiterm-elevate-{session_id}-{}", uuid::Uuid::new_v4());
+        let h2s_name = format!("{pipe_base}-h2s"); // 主行程 -> sidecar（主行程只寫）
+        let s2h_name = format!("{pipe_base}-s2h"); // sidecar -> 主行程（主行程只讀）
+
         // `session_id` 是呼叫端傳進來的字串，理論上可能含有內嵌 NUL（Rust
         // `String` 允許），`CString::new` 遇到會回 `Err`——用 `?` 往上丟成
         // `io::Result`，不要 `.unwrap()` panic 掉整個主行程。
-        let c_pipe_name = CString::new(pipe_name.clone()).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-
-        let pipe_handle: HANDLE = unsafe {
-            CreateNamedPipeA(
-                c_pipe_name.as_ptr() as *const u8,
-                PIPE_ACCESS_DUPLEX,
-                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-                1,
-                65536,
-                65536,
-                0,
-                std::ptr::null(),
-            )
+        let h2s_handle = create_pipe(&h2s_name, PIPE_ACCESS_OUTBOUND)?;
+        let s2h_handle = match create_pipe(&s2h_name, PIPE_ACCESS_INBOUND) {
+            Ok(h) => h,
+            Err(e) => {
+                unsafe { CloseHandle(h2s_handle) };
+                return Err(e);
+            }
         };
-        if pipe_handle == INVALID_HANDLE_VALUE {
-            return Err(std::io::Error::last_os_error());
-        }
 
         let sidecar_path = sidecar_exe_path()?;
         let variant_arg = match shell_variant {
             super::super::cd_parser::ShellVariant::Pwsh => "pwsh",
             _ => "cmd",
         };
-        let params = format!("\"{pipe_name}\" {variant_arg}");
+        let params = format!("\"{h2s_name}\" \"{s2h_name}\" {variant_arg}");
 
         // **已撤回的假設，留紀錄避免重踩**：曾在這裡加過
         // `CoInitializeEx(COINIT_APARTMENTTHREADED)`，理論是 `ShellExecuteExW`
@@ -316,7 +326,8 @@ mod windows_launch {
         log_step(&format!("ShellExecuteExW returned, ok={ok}"));
         if ok == 0 {
             let err = unsafe { GetLastError() };
-            unsafe { CloseHandle(pipe_handle) };
+            unsafe { CloseHandle(h2s_handle) };
+            unsafe { CloseHandle(s2h_handle) };
             log_step(&format!("ShellExecuteExW failed, err={err}"));
             if err == ERROR_CANCELLED {
                 return Ok(None); // 使用者取消 UAC，不是錯誤。
@@ -332,38 +343,66 @@ mod windows_launch {
             unsafe { CloseHandle(info.hProcess) };
         }
 
-        log_step("calling ConnectNamedPipe (with timeout)");
-        if let Err(e) = connect_named_pipe_with_timeout(pipe_handle, std::time::Duration::from_secs(30)) {
-            log_step(&format!("ConnectNamedPipe failed/timed out: {e}"));
-            unsafe { CloseHandle(pipe_handle) };
+        // 兩條都要等 sidecar 連上。連線順序必須跟 sidecar 那邊 `CreateFileA`
+        // 的順序一致（先 h2s 再 s2h），否則兩邊會各自等對方先連另一條而互卡。
+        log_step("calling ConnectNamedPipe on h2s (with timeout)");
+        if let Err(e) = connect_named_pipe_with_timeout(h2s_handle, std::time::Duration::from_secs(30)) {
+            log_step(&format!("ConnectNamedPipe(h2s) failed/timed out: {e}"));
+            unsafe { CloseHandle(h2s_handle) };
+            unsafe { CloseHandle(s2h_handle) };
             return Err(e);
         }
-        log_step("ConnectNamedPipe returned OK, constructing ElevatedChannel");
+        log_step("calling ConnectNamedPipe on s2h (with timeout)");
+        if let Err(e) = connect_named_pipe_with_timeout(s2h_handle, std::time::Duration::from_secs(30)) {
+            log_step(&format!("ConnectNamedPipe(s2h) failed/timed out: {e}"));
+            unsafe { CloseHandle(h2s_handle) };
+            unsafe { CloseHandle(s2h_handle) };
+            return Err(e);
+        }
+        log_step("both pipes connected, constructing ElevatedChannel");
 
         // 已知缺口（刻意先留著，跟 `ElevatedChannel` 本身文件說明的讀取執行緒
-        // 洩漏是同一類問題）：`pipe_handle` 的所有權從這裡轉移進
+        // 洩漏是同一類問題）：兩個 handle 的所有權從這裡轉移進
         // `PipeReadHandle`/`PipeWriteHandle`，但兩者都沒有 `Drop` 實作去關閉
-        // 它——`ElevatedChannel` 被 drop 時，這個具名管線 handle 不會自動關閉。
-        // 目前只有讀取執行緒自然 EOF／出錯時才會間接讓行程之後收尾；如果之後
-        // 要處理提前關閉 session 的路徑，這裡要回頭補上清理機制。
+        // 它們——`ElevatedChannel` 被 drop 時，這兩個具名管線 handle 不會自動
+        // 關閉。目前只有讀取執行緒自然 EOF／出錯時才會間接讓行程之後收尾；
+        // 如果之後要處理提前關閉 session 的路徑，這裡要回頭補上清理機制。
         //
-        // 這個「回頭補」不是隨手加個 `Drop` 就能解決的一行修法：
-        // `PipeReadHandle` 跟 `PipeWriteHandle` 兩個各自獨立的型別包著同一個
-        // 原始 `HANDLE` 值，彼此完全不知道對方的存在，也沒有共享的所有權／
-        // 參照計數。如果直接在任一個型別上加 `impl Drop { CloseHandle(self.0) }`，
-        // 其中一個被 drop 時就會把 handle 關掉，而另一個當下可能還活著、還在
-        // 另一條執行緒上用同一個 handle（寫入路徑，或讀取執行緒可能還卡在
-        // `ReadFile` 阻塞讀取）——那會是 use-after-close，不是單純的資源洩漏，
-        // 而是新的正確性 bug。之後要修的話，正確作法是讓兩者共享同一份「關
-        // 一次」的所有權，例如包成 `Arc<HandleGuard>`（`HandleGuard` 自己的
-        // `Drop` 才真正呼叫 `CloseHandle`），把同一個 `Arc` clone 進
-        // `PipeReadHandle`/`PipeWriteHandle` 各一份，讓 handle 在兩邊都不再
-        // 使用（`Arc` 參照數歸零）時才真正關閉一次——不是各自獨立的 `Drop`。
-        let reader = super::PipeReadHandle(pipe_handle);
-        let writer: Box<dyn std::io::Write + Send> = Box::new(super::PipeWriteHandle(pipe_handle));
+        // 註：改成兩條單向管線之後，「每個 handle 恰好只有一個擁有者」這件事
+        // 已經成立（以前是同一個 raw HANDLE 被兩個型別各包一份，所以不能各自
+        // 加 `Drop`，會 use-after-close），所以之後真的要補 `Drop` 時不再需要
+        // `Arc<HandleGuard>` 那種共享所有權的設計，直接各自加就行——但要注意
+        // 讀取執行緒可能還卡在 `ReadFile` 裡，關 handle 是喚醒它的手段之一，
+        // 順序要想清楚。
+        let reader = super::PipeReadHandle(s2h_handle);
+        let writer: Box<dyn std::io::Write + Send> = Box::new(super::PipeWriteHandle(h2s_handle));
         let channel = ElevatedChannel::new(reader, writer, on_output, on_disconnect);
         log_step("spawn_windows: returning Ok(Some(channel))");
         Ok(Some(channel))
+    }
+
+    /// 建一條單向的具名管線 server。`access` 是 `PIPE_ACCESS_OUTBOUND`（主行
+    /// 程只寫）或 `PIPE_ACCESS_INBOUND`（主行程只讀）——刻意不用
+    /// `PIPE_ACCESS_DUPLEX`，讓「這個 handle 只能用於單一方向」這件事由核心
+    /// 強制，而不是靠呼叫端自律；那正是先前死鎖的來源。
+    fn create_pipe(name: &str, access: windows_sys::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES) -> std::io::Result<HANDLE> {
+        let c_name = CString::new(name).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        let handle: HANDLE = unsafe {
+            CreateNamedPipeA(
+                c_name.as_ptr() as *const u8,
+                access,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                1,
+                65536,
+                65536,
+                0,
+                std::ptr::null(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(handle)
     }
 
     /// `ConnectNamedPipe` 本身沒有逾時參數（非 overlapped 模式下就是同步阻塞
