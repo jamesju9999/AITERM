@@ -14,13 +14,21 @@ const KIND_DATA: u8 = 0;
 const KIND_RESIZE: u8 = 1;
 const KIND_EXIT: u8 = 2;
 
+/// Safely encode a payload length as u32 little-endian bytes.
+/// Rejects payloads larger than u32::MAX to prevent wire desynchronization.
+fn encode_len(len: usize) -> io::Result<[u8; 4]> {
+    u32::try_from(len)
+        .map(|l| l.to_le_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "frame payload too large"))
+}
+
 impl Frame {
     /// 寫入格式：4 bytes little-endian payload 長度 + 1 byte 種類 + payload。
     /// 長度**只算 payload**，不含種類位元組本身。
     pub fn write_to<W: Write>(&self, w: &mut W) -> io::Result<()> {
         match self {
             Frame::Data(bytes) => {
-                w.write_all(&(bytes.len() as u32).to_le_bytes())?;
+                w.write_all(&encode_len(bytes.len())?)?;
                 w.write_all(&[KIND_DATA])?;
                 w.write_all(bytes)?;
             }
@@ -132,5 +140,43 @@ mod tests {
         buf.truncate(3); // cut mid-length-prefix
         let mut cursor = Cursor::new(buf);
         assert!(Frame::read_from(&mut cursor).is_err());
+    }
+
+    #[test]
+    fn oversized_payload_is_rejected() {
+        // Test boundary logic without allocating 4GB: verify encode_len rejects oversized lengths.
+        let oversized = (u32::MAX as usize) + 1;
+        assert!(encode_len(oversized).is_err());
+
+        // Verify u32::MAX itself is accepted.
+        assert!(encode_len(u32::MAX as usize).is_ok());
+        assert!(encode_len(0).is_ok());
+    }
+
+    #[test]
+    fn resize_frame_with_wrong_length_is_an_error() {
+        // Hand-construct a resize frame (kind=1) with incorrect payload length (5 instead of 4).
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&5u32.to_le_bytes()); // wrong: should be 4
+        buf.push(KIND_RESIZE);
+        buf.extend_from_slice(&[1, 2, 3, 4, 5]); // 5 bytes instead of 4
+
+        let mut cursor = Cursor::new(buf);
+        let result = Frame::read_from(&mut cursor);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("resize frame must be 4 bytes"));
+    }
+
+    #[test]
+    fn unknown_frame_kind_is_an_error() {
+        // Hand-construct a frame with an unknown kind byte (99).
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0u32.to_le_bytes()); // length = 0 (no payload)
+        buf.push(99); // unknown kind
+
+        let mut cursor = Cursor::new(buf);
+        let result = Frame::read_from(&mut cursor);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unknown frame kind"));
     }
 }
