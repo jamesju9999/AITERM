@@ -11,6 +11,7 @@ Push-Location src-tauri
 try {
   Write-Host "==> Building aiterm-elevated-host (release)"
   cargo build --release -p aiterm-elevated-host
+  if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
 } finally {
   Pop-Location
 }
