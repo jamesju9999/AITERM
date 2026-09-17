@@ -169,9 +169,22 @@ mod windows_launch {
         CloseHandle, GetLastError, ERROR_CANCELLED, ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE,
     };
     use windows_sys::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
+    use windows_sys::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
     use windows_sys::Win32::System::Pipes::{ConnectNamedPipe, CreateNamedPipeA, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT};
     use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+    /// RAII guard：確保呼叫端無論從哪個 return path 離開 `spawn_windows`，
+    /// 這個執行緒的 COM apartment 都會被解除初始化——`ShellExecuteExW` 前面
+    /// 呼叫 `CoInitializeEx` 之後，不管成功、失敗、使用者取消 UAC，都必須
+    /// 對稱地呼叫一次 `CoUninitialize`，否則這個 tokio blocking-pool 執行緒
+    /// 之後被別的任務重用時，COM apartment 狀態會是錯的。
+    struct ComGuard;
+    impl Drop for ComGuard {
+        fn drop(&mut self) {
+            unsafe { CoUninitialize() };
+        }
+    }
 
     /// 主行程呼叫這個函式來啟動一整套提權流程：先建具名管線 server，再用
     /// `ShellExecuteExW(runas)` 拉起 sidecar，等它連上來。回傳一個已連線的
@@ -248,6 +261,36 @@ mod windows_launch {
             _ => "cmd",
         };
         let params = format!("\"{pipe_name}\" {variant_arg}");
+
+        // 實機測試踩到的真實 bug（不是紙上猜測）：`ShellExecuteExW` 在沒有先
+        // 初始化 COM 的執行緒上呼叫時，會自己隱含建立一個 STA（單執行緒
+        // apartment）——MSDN 文件明載這個 API 依賴 STA 訊息幫浦運作，多執行
+        // 緒程式必須在「每一條會呼叫 ShellExecuteExW 的執行緒」自己先呼叫
+        // `CoInitializeEx(COINIT_APARTMENTTHREADED)`。我們是從
+        // `tokio::task::spawn_blocking` 的背景執行緒呼叫這裡——那種執行緒不
+        // 會跑 `GetMessage`/`DispatchMessage` 訊息迴圈，如果隱含建立的 STA
+        // 內部需要靠訊息幫浦完成某個回呼，就會卡死在那裡，而且實機驗證這個
+        // 卡死不只鎖住那條背景執行緒，連 AITerm 主視窗的訊息迴圈都一起沒回
+        // 應（工作管理員裡把 sidecar 行程強制關掉後，主視窗立刻恢復回應——
+        // 行為完全符合「卡在等一個永遠不會發生的訊息」，不是單純的長時間阻
+        // 塞）。顯式初始化 COM，讓 `ShellExecuteExW` 不需要自己隱含建立那個
+        // 有問題的 STA。
+        let _com_guard = {
+            // `CoInitializeEx` 回傳的 `S_FALSE`（COM 已經在這條執行緒上初始化
+            // 過）也算成功，只有真正的錯誤碼才需要當失敗處理；兩種情況都要
+            // 配對呼叫一次 `CoUninitialize`（成對次數不對等會讓執行緒的 COM
+            // 參考計數跑掉），所以無論回傳值是什麼都建立 guard。
+            // `CoInitializeEx` 的 `dwcoinit` 參數是 `u32`，但
+            // `COINIT_APARTMENTTHREADED` 這個常數在 windows-sys 0.60.2 裡定義
+            // 成 `COINIT = i32`（`pub type COINIT = i32;`）——直接傳會型別不
+            // 符編譯失敗，要顯式轉型。對照實際原始碼確認過，不是憑印象猜。
+            let hr = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
+            if hr < 0 {
+                unsafe { CloseHandle(pipe_handle) };
+                return Err(std::io::Error::from_raw_os_error(hr));
+            }
+            ComGuard
+        };
 
         // ShellExecuteExW 的 *W 欄位要的是 null-terminated UTF-16
         // （`PCWSTR` = `*const u16`），跟上面具名管線用的 ANSI `CString`
