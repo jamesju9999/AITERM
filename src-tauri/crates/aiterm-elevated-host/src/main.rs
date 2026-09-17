@@ -1,4 +1,4 @@
-mod protocol;
+use aiterm_core::pty::elevated_protocol as protocol;
 
 #[cfg(windows)]
 mod windows_host;
