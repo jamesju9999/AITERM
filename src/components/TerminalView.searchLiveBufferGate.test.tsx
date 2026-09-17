@@ -63,7 +63,7 @@ function Harness({
   // xterm buffer by reporting a match for anything, regardless of what's on screen.
   const addon = { findNext: () => liveAddonAlwaysMatches };
 
-  const doSearch = useCallback((q: string, direction: "next" | "prev") => {
+  const doSearch = useCallback((q: string) => {
     if (!q) {
       setSearchMatchInfo("");
       return;
@@ -84,7 +84,7 @@ function Harness({
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- mirrors TerminalView.tsx's real doSearch
 
   useEffect(() => {
-    if (query) doSearch(query, "next");
+    if (query) doSearch(query);
   }, [query, doSearch]);
 
   useEffect(() => {
