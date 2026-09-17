@@ -196,6 +196,10 @@ pub struct PtySession {
     /// sharing sends this to viewers so they build their own terminal at the
     /// host's dimensions rather than their own window's.
     size: Mutex<PtySize>,
+    /// 這個分頁目前掛著的提權 channel，`None` 代表一般身分。有值但已斷線
+    /// （`ElevatedChannel::state()` 回 `Disconnected`）時，`write` 自動退回
+    /// 一般子行程——見 `write` 方法。
+    pub(crate) elevated: Mutex<Option<super::elevated::ElevatedChannel>>,
 }
 
 /// Commits a resolved cd to `cwd`/`previous_cwd`. Free function (not a method)
@@ -546,11 +550,24 @@ impl PtySession {
             last_output_at,
             output_tx,
             size: Mutex::new(size),
+            elevated: Mutex::new(None),
         })
     }
 
     pub fn write(&self, data: &[u8]) -> PtyResult<()> {
         self.record_into_line_buffer(data);
+        {
+            let elevated = self.elevated.lock();
+            if let Some(channel) = elevated.as_ref() {
+                if channel.state() == super::elevated::ElevatedState::Connected {
+                    return channel
+                        .write(data)
+                        .map_err(|e| PtyError::Internal(format!("elevated write: {e}")));
+                }
+                // 斷線：往下穿透到一般子行程，不視為錯誤——這正是自動切回
+                // 一般模式的地方。
+            }
+        }
         let mut writer = self.writer.lock();
         writer.write_all(data)?;
         writer.flush()?;
@@ -830,6 +847,7 @@ impl PtySession {
 
     pub fn kill(&self) -> PtyResult<()> {
         let mut child = self.child.lock();
+        *self.elevated.lock() = None;
         // Job 先來：它是唯一收得到「已經脫離的背景行程」的機制。taskkill /T
         // 留著當 Job 建立失敗時的退路。
         #[cfg(windows)]
@@ -972,6 +990,7 @@ impl Drop for PtySession {
     fn drop(&mut self) {
         // Best-effort: kill child so the reader thread eventually sees EOF/error.
         let mut child = self.child.lock();
+        *self.elevated.lock() = None;
         #[cfg(windows)]
         if let Some(job) = &self.job {
             job.terminate();
@@ -2149,6 +2168,122 @@ mod tests {
             "重播開頭的模式前綴沒有帶回 ?1049h，觀看端不會進 alternate screen；實際前綴：{:?}",
             prefix_seqs.iter().map(|s| String::from_utf8_lossy(s).into_owned()).collect::<Vec<_>>(),
         );
+    }
+
+    #[test]
+    fn write_routes_to_elevated_channel_when_present() {
+        use super::super::elevated::ElevatedChannel;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let session = PtySession::spawn(test_shell(), PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }, None, |_| {})
+            .expect("spawn pty");
+
+        let (write_tx, write_rx) = mpsc::channel::<Vec<u8>>();
+        struct CapturingWriter(mpsc::Sender<Vec<u8>>);
+        impl std::io::Write for CapturingWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                let _ = self.0.send(buf.to_vec());
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        // 這個測試只關心寫入方向，讀取端不重要——但一個立刻 EOF 的 `Cursor`
+        // 會讓 `ElevatedChannel` 的讀取執行緒瞬間把狀態切成 `Disconnected`，
+        // 跟接下來的 `session.write` 產生競態（實測會偶發 timeout）。改用一個
+        // 永遠阻塞、不會產出 EOF 的 reader，讓狀態在整個測試期間確定停在
+        // `Connected`。
+        struct BlockForever;
+        impl std::io::Read for BlockForever {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                loop {
+                    std::thread::park();
+                }
+            }
+        }
+        let channel = ElevatedChannel::new(BlockForever, Box::new(CapturingWriter(write_tx)), |_| {}, || {});
+        *session.elevated.lock() = Some(channel);
+
+        session.write(b"whoami\r\n").expect("write should succeed via elevated channel");
+
+        // `Frame::write_to` 呼叫底層 writer 三次（長度前綴／種類位元組／
+        // payload），`CapturingWriter` 把每一次呼叫各自送成一則訊息——要湊出
+        // 完整 frame 得把它們接起來，不能只看第一則。
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut captured = Vec::new();
+        while std::time::Instant::now() < deadline {
+            match write_rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(chunk) => captured.extend_from_slice(&chunk),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            if captured.windows(8).any(|w| w == b"whoami\r\n") {
+                break;
+            }
+        }
+        // Frame::Data 編碼後的內容裡應該包含原始位元組（長度前綴+種類位元組之後）。
+        assert!(
+            captured.windows(8).any(|w| w == b"whoami\r\n"),
+            "elevated channel must receive the write; got {captured:?}"
+        );
+
+        drop(session);
+    }
+
+    #[test]
+    fn write_falls_back_to_normal_child_when_elevated_channel_disconnected() {
+        use super::super::elevated::ElevatedChannel;
+        use std::io::Cursor;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let session = PtySession::spawn(test_shell(), PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }, None, move |chunk| {
+            let _ = tx.send(chunk);
+        })
+        .expect("spawn pty");
+
+        let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>();
+        struct CapturingWriter(mpsc::Sender<Vec<u8>>);
+        impl std::io::Write for CapturingWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                let _ = self.0.send(buf.to_vec());
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        // 空的 reader 讓讀取執行緒立刻看到 EOF、狀態轉成 Disconnected。
+        let channel = ElevatedChannel::new(Cursor::new(Vec::<u8>::new()), Box::new(CapturingWriter(write_tx)), |_| {}, || {});
+        // 等它真的斷線，避免測試競態。
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while channel.state() != super::super::elevated::ElevatedState::Disconnected && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        *session.elevated.lock() = Some(channel);
+
+        #[cfg(windows)]
+        session.write(b"echo HELLO_AITERM\r\nexit\r\n").unwrap();
+        #[cfg(not(windows))]
+        session.write(b"echo HELLO_AITERM\nexit\n").unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut buffer = Vec::new();
+        while std::time::Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(chunk) => buffer.extend_from_slice(&chunk),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            if String::from_utf8_lossy(&buffer).contains("HELLO_AITERM") {
+                break;
+            }
+        }
+        assert!(
+            String::from_utf8_lossy(&buffer).contains("HELLO_AITERM"),
+            "disconnected elevated channel must not swallow writes — they should reach the normal child"
+        );
+
+        drop(session);
     }
 }
 
