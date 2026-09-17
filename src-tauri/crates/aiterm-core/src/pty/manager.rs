@@ -14,6 +14,30 @@ pub struct PtyManager {
     sessions: Mutex<HashMap<String, Arc<PtySession>>>,
 }
 
+/// True when `elevated` already holds a channel in the `Connected` state.
+///
+/// Used by `PtyManager::elevate` to avoid re-launching a second elevation
+/// flow (a second UAC prompt + a second sidecar process + named pipe) for a
+/// session that already has one connected — see `elevate`'s doc comment,
+/// which promises exactly this. Also used by `is_elevated`, which needs the
+/// identical check.
+///
+/// Deliberately a free function taking `&Mutex<Option<ElevatedChannel>>`
+/// rather than inlined into `elevate`: `elevate` itself is `#[cfg(windows)]`
+/// (it calls the real `spawn_windows`), but this check has nothing
+/// Windows-specific about it — `ElevatedChannel` and `ElevatedState` are
+/// ordinary cross-platform types (see `elevated.rs`, whose own tests already
+/// build channels from a mock transport). Splitting it out means the
+/// single-flight guard itself is unit-testable on every platform, including
+/// macOS/Linux CI, without needing a real elevated session.
+fn already_connected(elevated: &Mutex<Option<super::elevated::ElevatedChannel>>) -> bool {
+    elevated
+        .lock()
+        .as_ref()
+        .map(|c| c.state() == super::elevated::ElevatedState::Connected)
+        .unwrap_or(false)
+}
+
 impl PtyManager {
     pub fn new() -> Self {
         Self::default()
@@ -161,6 +185,19 @@ impl PtyManager {
         D: FnMut() + Send + 'static,
     {
         let session = self.get(id)?;
+        // 已經有一個連線中的提權 channel：不再發第二次 UAC、不再開第二個
+        // sidecar，直接沿用——這正是上面 doc comment 承諾的行為。沒有這個
+        // 檢查的話，同一個分頁在第一次 `spawn_windows` 還卡在等待使用者回應
+        // UAC 對話框的那幾分鐘內，如果又有一條指令被判定為權限不足而再次觸發
+        // `pty_elevate`，就會併發打開兩個 UAC 對話框、兩個 sidecar 行程與具
+        // 名管線，而兩者之中先完成的那個 `ElevatedChannel` 會被後完成的直接
+        // 覆蓋掉、成為孤兒（洩漏執行緒/管線 handle/提權行程，且之後可能對
+        // 「還活著」的第二個 channel 誤發一次 `elevated: false` 的斷線事件）。
+        // 只處理「已經連線成功」這個案例；「正在等 UAC 回應、還沒連上」那個
+        // 更難的視窗留給之後——見 `elevate` 的 caller 端。
+        if already_connected(&session.elevated) {
+            return Ok(true);
+        }
         match super::elevated::spawn_windows(id, shell_variant, on_output, on_disconnect)
             .map_err(|e| PtyError::Internal(format!("elevate: {e}")))?
         {
@@ -188,13 +225,7 @@ impl PtyManager {
     }
 
     pub fn is_elevated(&self, id: &str) -> Option<bool> {
-        self.sessions.lock().get(id).map(|s| {
-            s.elevated
-                .lock()
-                .as_ref()
-                .map(|c| c.state() == super::elevated::ElevatedState::Connected)
-                .unwrap_or(false)
-        })
+        self.sessions.lock().get(id).map(|s| already_connected(&s.elevated))
     }
 
     fn get(&self, id: &str) -> PtyResult<Arc<PtySession>> {
@@ -209,8 +240,76 @@ impl PtyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
     use std::sync::mpsc;
     use std::time::Duration;
+
+    // ── single-flight guard for `elevate` (`already_connected`) ────────────
+    //
+    // `PtyManager::elevate` itself is `#[cfg(windows)]` (it calls the real
+    // `spawn_windows`, which needs `ShellExecuteExW`), so it can't be
+    // exercised directly here. `already_connected` is the free function that
+    // holds the actual guard logic and has nothing platform-specific about
+    // it, so these tests build `ElevatedChannel`s directly — same mock-
+    // transport pattern `elevated.rs`'s own tests use — to cover the
+    // invariant `elevate` depends on.
+
+    /// A reader whose `read` never returns: it always blocks. Used to keep an
+    /// `ElevatedChannel`'s background reader thread parked mid-read (as it
+    /// would be while genuinely connected) instead of hitting EOF, so the
+    /// channel's state stays `Connected` for the life of the test. The
+    /// spawned thread is intentionally never joined — it's harmless to leak
+    /// for the remainder of the test binary's process.
+    struct BlockingReader;
+    impl Read for BlockingReader {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            loop {
+                std::thread::sleep(Duration::from_secs(3600));
+            }
+        }
+    }
+
+    #[test]
+    fn already_connected_is_false_when_no_channel_is_set() {
+        let elevated: Mutex<Option<super::super::elevated::ElevatedChannel>> = Mutex::new(None);
+        assert!(!already_connected(&elevated));
+    }
+
+    #[test]
+    fn already_connected_is_true_for_a_connected_channel() {
+        let writer: Box<dyn Write + Send> = Box::new(Vec::<u8>::new());
+        let channel = super::super::elevated::ElevatedChannel::new(
+            BlockingReader,
+            writer,
+            |_bytes| {},
+            || {},
+        );
+        let elevated = Mutex::new(Some(channel));
+        assert!(
+            already_connected(&elevated),
+            "a freshly connected channel must report already_connected"
+        );
+    }
+
+    #[test]
+    fn already_connected_is_false_once_the_channel_has_disconnected() {
+        // Empty reader hits EOF immediately, flipping the channel to
+        // Disconnected almost right away (mirrors elevated.rs's own
+        // `disconnect_callback_fires_when_transport_hits_eof` test).
+        let reader = std::io::Cursor::new(Vec::<u8>::new());
+        let writer: Box<dyn Write + Send> = Box::new(Vec::<u8>::new());
+        let (disc_tx, disc_rx) = mpsc::channel::<()>();
+        let channel = super::super::elevated::ElevatedChannel::new(reader, writer, |_| {}, move || {
+            let _ = disc_tx.send(());
+        });
+        disc_rx.recv_timeout(Duration::from_secs(2)).expect("must disconnect");
+
+        let elevated = Mutex::new(Some(channel));
+        assert!(
+            !already_connected(&elevated),
+            "a disconnected channel must not short-circuit a fresh elevate() call"
+        );
+    }
 
     #[test]
     fn manager_creates_and_closes_session() {

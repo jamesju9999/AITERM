@@ -74,13 +74,17 @@ pub fn elevate_with_app(
         },
         move || {
             let payload = aiterm_core::pty::events::ElevationStatePayload { elevated: false };
-            let _ = app_for_disconnect.emit(&state_event_for_disconnect, payload);
+            if let Err(e) = app_for_disconnect.emit(&state_event_for_disconnect, payload) {
+                eprintln!("emit {state_event_for_disconnect} failed: {e}");
+            }
         },
     )?;
 
     if started {
         let payload = aiterm_core::pty::events::ElevationStatePayload { elevated: true };
-        let _ = app.emit(&state_event, payload);
+        if let Err(e) = app.emit(&state_event, payload) {
+            eprintln!("emit {state_event} failed: {e}");
+        }
     }
     Ok(started)
 }
