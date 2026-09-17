@@ -234,7 +234,7 @@ mod windows_launch {
     /// 控台，`eprintln!` 一樣沒人看得到），寫進另一個檔案（跟 sidecar 的
     /// log 分開，避免兩邊寫入互相干擾／檔名混淆），下次重現時兩份 log 的
     /// 時間戳可以直接對照，看主行程這邊到底有沒有跟著卡住、卡在哪個環節。
-    fn log_step(msg: &str) {
+    pub(crate) fn log_step(msg: &str) {
         use std::io::Write as _;
         let Some(mut path) = std::env::var_os("TEMP").map(std::path::PathBuf::from) else { return };
         path.push("aiterm-elevate-main.log");
@@ -489,6 +489,8 @@ mod windows_launch {
 
 #[cfg(windows)]
 pub use windows_launch::spawn_windows;
+#[cfg(windows)]
+pub(crate) use windows_launch::log_step as elevated_log_step;
 
 #[cfg(windows)]
 pub(crate) struct PipeReadHandle(pub windows_sys::Win32::Foundation::HANDLE);

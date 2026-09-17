@@ -193,6 +193,12 @@ fn inject_cmd_integration() -> ShellSpec {
 /// 提權 sidecar（`aiterm-elevated-host`）專用：依 shell variant 回傳一份
 /// **已經注入 OSC 133 shell integration** 的 `ShellSpec`。
 ///
+/// **目前沒有被接上**：pty9 曾用它啟動提權 shell，實機測試提權後畫面完全沒
+/// 有輸出，原因尚未查明（已排除尺寸、base64 編碼、命令列長度、環境變數四
+/// 項），所以 sidecar 暫時退回裸啟動。這個函式本身連同下面的安全性理由先留
+/// 著——等輸出路徑的儀表把盲區補起來、找出真因之後要重新接回去，不要因為
+/// 「現在沒人呼叫」就順手刪掉再從頭寫一次不安全的版本。
+///
 /// sidecar 以前是裸的 `CommandBuilder::new("powershell.exe")`，完全沒有注入
 /// integration——於是提權 shell 不會回報指令開始／結束與 exit code，前端的
 /// 指令卡片全部判讀錯誤（實機上表現成每張卡片都掛 `exit -1`，AI 還把它誤讀

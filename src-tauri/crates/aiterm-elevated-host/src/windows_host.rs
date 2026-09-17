@@ -130,22 +130,17 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
     log_step("openpty() returned");
 
-    // 用跟一般 session 同一套 shell integration（OSC 133）啟動提權 shell，
-    // 否則前端收不到指令開始／結束標記，指令卡片與 exit code 全部失準。
-    let variant = if shell_variant == "pwsh" {
-        aiterm_core::pty::cd_parser::ShellVariant::Pwsh
-    } else {
-        aiterm_core::pty::cd_parser::ShellVariant::Cmd
-    };
-    let spec = aiterm_core::pty::shell::elevated_shell_spec(variant);
-    log_step(&format!("spawning {:?} args={:?}", spec.program, spec.args));
-    let mut cmd = CommandBuilder::new(&spec.program);
-    for arg in &spec.args {
-        cmd.arg(arg);
-    }
-    for (k, v) in &spec.envs {
-        cmd.env(k, v);
-    }
+    // **刻意先不注入 shell integration**。pty9 曾改成用
+    // `elevated_shell_spec()` 帶 `-NoExit -EncodedCommand <script>` 啟動，好讓
+    // 提權 shell 也送 OSC 133；結果實機上提權後畫面完全沒有輸出。已排除的原
+    // 因：尺寸正確（log 顯示 openpty 143x38 成功）、base64 是合法的 UTF-16LE
+    // （前綴在本機重現吻合）、命令列長度 9771 遠低於 CreateProcess 的 32767
+    // 上限、`CommandBuilder` 也仍帶著完整的繼承環境。真正的原因還沒查出來，
+    // 所以先退回這個已知會正常吐輸出的裸啟動版本，等下面新增的輸出儀表把
+    // 「ConPTY 到底有沒有吐位元組」這段盲區補起來之後再重新接上。
+    let program = if shell_variant == "pwsh" { "powershell.exe" } else { "cmd.exe" };
+    log_step(&format!("spawning {program}"));
+    let cmd = CommandBuilder::new(program);
     let mut child = pair
         .slave
         .spawn_command(cmd)
@@ -170,17 +165,32 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
     // 迴圈互相卡住（雙向轉送的兩個方向不能共用同一個阻塞式迴圈）。
     let output_thread = std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
+        // 這條路徑先前完全沒有儀表——實機出現「提權後畫面零輸出」時，分不出
+        // 是 ConPTY 根本沒吐東西（shell 沒起來／卡住）還是吐了但送不回主行程。
+        // 只記第一筆與結束時的累計，不是每筆都記，避免把 log 灌爆。
+        let mut total: u64 = 0;
+        let mut first = true;
         loop {
             match pty_reader.read(&mut buf) {
-                Ok(0) => break,
+                Ok(0) => {
+                    log_step(&format!("output thread: ConPTY EOF after {total} bytes"));
+                    break;
+                }
                 Ok(n) => {
+                    if first {
+                        log_step(&format!("output thread: first ConPTY read, {n} bytes"));
+                        first = false;
+                    }
+                    total += n as u64;
                     if let Err(e) = Frame::Data(buf[..n].to_vec()).write_to(&mut pipe_writer) {
                         eprintln!("conpty bridge: failed to write output frame to pipe: {e}");
+                        log_step(&format!("output thread: pipe write failed after {total} bytes: {e}"));
                         break;
                     }
                 }
                 Err(e) => {
                     eprintln!("conpty bridge: ConPTY read failed: {e}");
+                    log_step(&format!("output thread: ConPTY read failed after {total} bytes: {e}"));
                     break;
                 }
             }

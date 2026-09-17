@@ -212,7 +212,17 @@ impl PtyManager {
         // `Arc<PtySession>`，是唯一同時看得到「session 本體」與「呼叫端傳
         // 進來的 on_output」兩者的地方。
         let session_for_output = Arc::clone(&session);
+        // 只記第一筆：用來分辨「sidecar 那邊的 ConPTY 有吐位元組，但主行程這
+        // 邊一個 frame 都沒收到」跟「兩邊都沒有」——兩者的斷點完全不同邊。
+        let mut logged_first_chunk = false;
         let wrapped_on_output = move |chunk: Vec<u8>| {
+            if !logged_first_chunk {
+                super::elevated::elevated_log_step(&format!(
+                    "host received first elevated output frame, {} bytes",
+                    chunk.len()
+                ));
+                logged_first_chunk = true;
+            }
             session_for_output.ingest_external_output(&chunk);
             on_output(chunk);
         };
