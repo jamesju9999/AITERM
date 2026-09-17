@@ -144,6 +144,59 @@ impl PtyManager {
         self.sessions.lock().get(id).map(|s| s.ms_since_output())
     }
 
+    /// 對指定 session 啟動提權流程（Windows-only；其他平台回
+    /// `PtyError::Internal("elevation not supported on this platform")`）。
+    /// `on_output` 收到提權 shell 的原始位元組，呼叫端負責接回 output ring
+    /// buffer + Tauri 事件。
+    #[cfg(windows)]
+    pub fn elevate<F, D>(
+        &self,
+        id: &str,
+        shell_variant: super::cd_parser::ShellVariant,
+        on_output: F,
+        on_disconnect: D,
+    ) -> PtyResult<bool>
+    where
+        F: FnMut(Vec<u8>) + Send + 'static,
+        D: FnMut() + Send + 'static,
+    {
+        let session = self.get(id)?;
+        match super::elevated::spawn_windows(id, shell_variant, on_output, on_disconnect)
+            .map_err(|e| PtyError::Internal(format!("elevate: {e}")))?
+        {
+            Some(channel) => {
+                *session.elevated.lock() = Some(channel);
+                Ok(true)
+            }
+            None => Ok(false), // 使用者取消 UAC
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub fn elevate<F, D>(
+        &self,
+        _id: &str,
+        _shell_variant: super::cd_parser::ShellVariant,
+        _on_output: F,
+        _on_disconnect: D,
+    ) -> PtyResult<bool>
+    where
+        F: FnMut(Vec<u8>) + Send + 'static,
+        D: FnMut() + Send + 'static,
+    {
+        Err(PtyError::Internal("elevation not supported on this platform".into()))
+    }
+
+    pub fn is_elevated(&self, id: &str) -> Option<bool> {
+        self.sessions.lock().get(id).map(|s| {
+            s.elevated
+                .lock()
+                .as_ref()
+                .map(|c| c.state() == super::elevated::ElevatedState::Connected)
+                .unwrap_or(false)
+        })
+    }
+
     fn get(&self, id: &str) -> PtyResult<Arc<PtySession>> {
         self.sessions
             .lock()

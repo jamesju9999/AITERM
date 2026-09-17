@@ -9,4 +9,4 @@ pub mod manager;
 pub use aiterm_core::pty::{ansi, cd_parser, error, events, session, shell};
 pub use aiterm_core::pty::{PtyError, PtyResult};
 pub use aiterm_core::pty::PtyManager;
-pub use manager::create_with_app;
+pub use manager::{create_with_app, elevate_with_app};
