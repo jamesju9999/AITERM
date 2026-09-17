@@ -48,6 +48,9 @@ pub fn run() {
         std::process::exit(1);
     };
     let shell_variant = args.get(3).map(String::as_str).unwrap_or("cmd");
+    // 尺寸解析不到就退回 80x24——那是舊的寫死值，至少不會比以前差。
+    let cols: u16 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(80);
+    let rows: u16 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(24);
 
     // 連線順序必須跟主行程 `ConnectNamedPipe` 的順序一致（先 h2s 再 s2h），
     // 否則兩邊會各自等對方先連另一條而互卡。
@@ -76,7 +79,7 @@ pub fn run() {
         }
     };
 
-    if let Err(e) = run_conpty_bridge(read_pipe, write_pipe, shell_variant) {
+    if let Err(e) = run_conpty_bridge(read_pipe, write_pipe, shell_variant, cols, rows) {
         eprintln!("conpty bridge failed: {e}");
         log_step(&format!("conpty bridge failed: {e}"));
         std::process::exit(1);
@@ -117,19 +120,32 @@ fn connect_pipe(name: &str, access: u32) -> std::io::Result<HANDLE> {
 ///   是否提權無關）——第一次在真機上跑時要確認。
 /// - shell 是否正確以 `cmd.exe` / `powershell.exe` 啟動，尤其 PowerShell 的
 ///   路徑解析（沿用 `aiterm_core::pty::shell::default_shell` 邏輯還是自己找）。
-fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str) -> std::io::Result<()> {
+fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str, cols: u16, rows: u16) -> std::io::Result<()> {
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
-    log_step("run_conpty_bridge: calling openpty()");
+    log_step(&format!("run_conpty_bridge: calling openpty() at {cols}x{rows}"));
     let pty_system = native_pty_system();
     let pair = pty_system
-        .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+        .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
     log_step("openpty() returned");
 
-    let program = if shell_variant == "pwsh" { "powershell.exe" } else { "cmd.exe" };
-    log_step(&format!("spawning {program}"));
-    let cmd = CommandBuilder::new(program);
+    // 用跟一般 session 同一套 shell integration（OSC 133）啟動提權 shell，
+    // 否則前端收不到指令開始／結束標記，指令卡片與 exit code 全部失準。
+    let variant = if shell_variant == "pwsh" {
+        aiterm_core::pty::cd_parser::ShellVariant::Pwsh
+    } else {
+        aiterm_core::pty::cd_parser::ShellVariant::Cmd
+    };
+    let spec = aiterm_core::pty::shell::elevated_shell_spec(variant);
+    log_step(&format!("spawning {:?} args={:?}", spec.program, spec.args));
+    let mut cmd = CommandBuilder::new(&spec.program);
+    for arg in &spec.args {
+        cmd.arg(arg);
+    }
+    for (k, v) in &spec.envs {
+        cmd.env(k, v);
+    }
     let mut child = pair
         .slave
         .spawn_command(cmd)

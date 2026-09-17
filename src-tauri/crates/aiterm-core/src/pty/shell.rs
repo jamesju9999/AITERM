@@ -190,6 +190,52 @@ fn inject_cmd_integration() -> ShellSpec {
     }
 }
 
+/// 提權 sidecar（`aiterm-elevated-host`）專用：依 shell variant 回傳一份
+/// **已經注入 OSC 133 shell integration** 的 `ShellSpec`。
+///
+/// sidecar 以前是裸的 `CommandBuilder::new("powershell.exe")`，完全沒有注入
+/// integration——於是提權 shell 不會回報指令開始／結束與 exit code，前端的
+/// 指令卡片全部判讀錯誤（實機上表現成每張卡片都掛 `exit -1`，AI 還把它誤讀
+/// 成「UAC 被取消」）。一般 session 走 `default_shell()` 早就注入了，提權這
+/// 條路只是被漏掉。
+///
+/// 這裡不重用 `windows_default_shell()`：那個函式會去探測使用者偏好的 shell，
+/// 而提權 session 的 variant 是呼叫端（主行程）已經決定好、並透過 argv 傳過
+/// 來的，必須照著走，不能在 sidecar 裡重新決定一次。
+///
+/// **也刻意不重用 `inject_powershell_integration`**：那個版本把腳本寫成
+/// `%LOCALAPPDATA%\...\shell_integration.ps1` 再叫 shell 去 dot-source 它。
+/// 一般（非提權）session 這樣沒問題，但提權 session 這樣做會開出一條本機提
+/// 權管道——那個路徑是「以該使用者身分執行的任何低權限程式」都能寫的，攻擊
+/// 者只要改掉檔案內容，等使用者下一次按下提權、通過 UAC，被竄改的內容就會
+/// 以系統管理員身分執行。這裡改用 `-EncodedCommand`（base64 的 UTF-16LE）把
+/// 腳本內容直接放進命令列，全程不落地成檔案，就沒有可被竄改的中間產物。
+/// cmd.exe 那條路本來就是走 `PROMPT` 環境變數、不碰檔案，維持原樣即可。
+#[cfg(windows)]
+pub fn elevated_shell_spec(variant: super::cd_parser::ShellVariant) -> ShellSpec {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+
+    match variant {
+        super::cd_parser::ShellVariant::Pwsh => {
+            let utf16le: Vec<u8> = POWERSHELL_INTEGRATION_SCRIPT
+                .encode_utf16()
+                .flat_map(|unit| unit.to_le_bytes())
+                .collect();
+            ShellSpec {
+                program: PathBuf::from("powershell.exe"),
+                args: vec!["-NoExit".into(), "-EncodedCommand".into(), BASE64.encode(&utf16le)],
+                envs: vec![
+                    ("TERM".into(), "xterm-256color".into()),
+                    ("COLORTERM".into(), "truecolor".into()),
+                    ("PYTHONIOENCODING".into(), "utf-8".into()),
+                ],
+                env_removals: Vec::new(),
+            }
+        }
+        _ => inject_cmd_integration(),
+    }
+}
+
 #[cfg(not(windows))]
 pub fn unix_default_shell() -> Option<ShellSpec> {
     if let Ok(shell) = std::env::var("SHELL") {

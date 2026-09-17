@@ -79,6 +79,21 @@ impl ElevatedChannel {
         let mut writer = self.writer.lock();
         frame.write_to(&mut *writer)
     }
+
+    /// 把終端機尺寸變化轉發給提權 ConPTY。
+    ///
+    /// 沒有這條路的時候，提權 ConPTY 會永遠停在 sidecar 啟動時的尺寸，而
+    /// xterm 用的是真實視窗尺寸——兩邊的換行位置與游標定位模型不一致，
+    /// ConPTY 送出的重繪序列在 xterm 上就會錯位，實機表現是同一行指令重複
+    /// 出現好幾次、一次比一次短、還帶大段前導空白。
+    pub fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
+        if self.state() == ElevatedState::Disconnected {
+            return Err(io::Error::new(io::ErrorKind::NotConnected, "elevated channel disconnected"));
+        }
+        let frame = super::elevated_protocol::Frame::Resize { cols, rows };
+        let mut writer = self.writer.lock();
+        frame.write_to(&mut *writer)
+    }
 }
 
 #[cfg(test)]
@@ -236,6 +251,7 @@ mod windows_launch {
     pub fn spawn_windows(
         session_id: &str,
         shell_variant: super::super::cd_parser::ShellVariant,
+        size: (u16, u16),
         on_output: impl FnMut(Vec<u8>) + Send + 'static,
         on_disconnect: impl FnMut() + Send + 'static,
     ) -> std::io::Result<Option<ElevatedChannel>> {
@@ -277,7 +293,12 @@ mod windows_launch {
             super::super::cd_parser::ShellVariant::Pwsh => "pwsh",
             _ => "cmd",
         };
-        let params = format!("\"{h2s_name}\" \"{s2h_name}\" {variant_arg}");
+        // 尺寸一起傳過去：sidecar 以前寫死 80x24 開 ConPTY，跟 xterm 的真實
+        // 尺寸對不上，畫面重繪會錯位（見 `ElevatedChannel::resize`）。這裡傳
+        // 的是「啟動當下」的尺寸；之後視窗再變大變小，走 `resize()` 送
+        // `Frame::Resize`。
+        let (cols, rows) = size;
+        let params = format!("\"{h2s_name}\" \"{s2h_name}\" {variant_arg} {cols} {rows}");
 
         // **已撤回的假設，留紀錄避免重踩**：曾在這裡加過
         // `CoInitializeEx(COINIT_APARTMENTTHREADED)`，理論是 `ShellExecuteExW`

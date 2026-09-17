@@ -216,7 +216,7 @@ impl PtyManager {
             session_for_output.ingest_external_output(&chunk);
             on_output(chunk);
         };
-        match super::elevated::spawn_windows(id, shell_variant, wrapped_on_output, on_disconnect)
+        match super::elevated::spawn_windows(id, shell_variant, session.size(), wrapped_on_output, on_disconnect)
             .map_err(|e| PtyError::Internal(format!("elevate: {e}")))?
         {
             Some(channel) => {

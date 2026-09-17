@@ -889,6 +889,17 @@ impl PtySession {
     }
 
     pub fn resize(&self, size: PtySize) -> PtyResult<()> {
+        // 提權 session 的畫面是由 sidecar 那邊的 ConPTY 產生的，本地 master
+        // resize 不會影響它。沒有這段轉發，提權 ConPTY 會一直停在啟動時的
+        // 尺寸，跟 xterm 的實際尺寸對不上，重繪序列就會在畫面上錯位（同一行
+        // 指令重複、截斷、大段縮排）。轉發失敗不當成錯誤：斷線時本來就該讓
+        // 下面的本地 resize 照常進行，斷線偵測走 `ElevatedChannel` 自己的狀態機。
+        {
+            let elevated = self.elevated.lock();
+            if let Some(channel) = elevated.as_ref() {
+                let _ = channel.resize(size.cols, size.rows);
+            }
+        }
         let master = self.master.lock();
         master
             .resize(size)
