@@ -119,11 +119,24 @@ pub fn pty_get_recent_output(
 
 /// 主動要求檢查目前 session 最近一次指令是否像是權限不足失敗。前端在收到
 /// OSC 133 D（指令結束）時呼叫。
+///
+/// 兩個訊號是 OR 的關係：exit code 740（`ERROR_ELEVATION_REQUIRED`）跟語言
+/// 與 shell 種類都無關，是主要防線；文字比對只認得固定的英文字串，在地化
+/// 系統（例如繁體中文 Windows 上的 DISM 錯誤訊息）常常完全比對不到，只當輔
+/// 助訊號。實機測試中，純文字比對在繁中系統上對 `DISM /Online
+/// /Cleanup-Image /RestoreHealth`（exit 740）完全沒反應，加上 exit code 檢
+/// 查後才抓到。
 #[tauri::command]
 pub fn pty_check_permission_denied(
     manager: State<'_, std::sync::Arc<PtyManager>>,
     id: String,
 ) -> bool {
+    if manager
+        .last_exit_code(&id)
+        .is_some_and(aiterm_core::pty::detection::exit_code_indicates_permission_denied)
+    {
+        return true;
+    }
     let Some(output) = manager.get_recent_output(&id, 4096) else { return false };
     let Some(variant) = manager.get_shell_variant(&id) else { return false };
     aiterm_core::pty::detection::looks_like_permission_denied(&output, variant)
