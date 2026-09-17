@@ -160,3 +160,199 @@ mod tests {
         assert_eq!(out_rx.recv_timeout(Duration::from_secs(2)).unwrap(), b"second".to_vec());
     }
 }
+
+#[cfg(windows)]
+mod windows_launch {
+    use super::ElevatedChannel;
+    use std::ffi::CString;
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, ERROR_CANCELLED, ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
+    use windows_sys::Win32::System::Pipes::{ConnectNamedPipe, CreateNamedPipeA, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT};
+    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+    /// 主行程呼叫這個函式來啟動一整套提權流程：先建具名管線 server，再用
+    /// `ShellExecuteExW(runas)` 拉起 sidecar，等它連上來。回傳一個已連線的
+    /// `ElevatedChannel`，或者使用者在 UAC 對話框按了取消（`ERROR_CANCELLED`）
+    /// 時回傳 `None`——這不是錯誤，是使用者的正常選擇。
+    ///
+    /// 對照 `windows-sys` 0.60.2 實際原始碼（而非憑印象猜）修正過草稿版本的
+    /// 兩個會導致編譯失敗或直接壞掉的問題：
+    /// 1. `PIPE_ACCESS_DUPLEX` 實際定義在 `Win32::Storage::FileSystem`，不是
+    ///    `Win32::System::Pipes`（因為 `CreateNamedPipeA` 的 `dwOpenMode`
+    ///    參數型別是 `FILE_FLAGS_AND_ATTRIBUTES`，跟著那個型別走）。
+    /// 2. 草稿版本寫 `info.lpVerb = widen(&verb).as_ptr()`：`widen(...)` 回傳
+    ///    的 `Vec<u16>` 是臨時值，這個陳述式結束就被 drop，`lpVerb` 會是懸空
+    ///    指標——`ShellExecuteExW` 讀到的是已釋放記憶體。改成先把三個
+    ///    `Vec<u16>` 綁到具名區域變數（`verb_w`/`file_w`/`params_w`），讓它們
+    ///    活到呼叫結束。
+    /// 另外也補了草稿版本沒處理的三個資源/正確性缺口：`SHELLEXECUTEINFOW`
+    /// 這個型別本身在 windows-sys 0.60.2 是被 `Win32_System_Registry`
+    /// feature 卡住的（因為裡面有 `hkeyClass: HKEY` 欄位）、`SEE_MASK_NOCLOSEPROCESS`
+    /// 給回來的 `info.hProcess` 沒人關會洩漏 handle、`ConnectNamedPipe` 在
+    /// `CreateNamedPipeA` 和 `ConnectNamedPipe` 中間如果剛好被搶著連上會回報
+    /// `ERROR_PIPE_CONNECTED`（那其實是「已經連上」不是錯誤，MSDN 文件明載的
+    /// 已知競態，不處理會把正常路徑誤判成失敗）。
+    ///
+    /// **人工驗證待辦（無法在 mac 上跑，見檔案結尾的清單）**：
+    /// - `sidecar_exe_path` 目前假設 Tauri 打包後 `externalBin` 會把
+    ///   `binaries/aiterm-elevated-host-x86_64-pc-windows-msvc.exe` 放在跟主
+    ///   執行檔同一個目錄，實際路徑要在真機上用
+    ///   `tauri::Env`/`current_exe()` 確認，這裡先用 `current_exe()` 所在目錄
+    ///   推算，若跟 Tauri 實際打包結構不符要修正。
+    /// - `ShellExecuteExW` 回傳成功不代表 sidecar 真的連得上管線（例如管線
+    ///   名稱打錯、或防毒軟體攔截）——`ConnectNamedPipe` 目前是同步阻塞呼叫
+    ///   （沒有用 `FILE_FLAG_OVERLAPPED` 開管線），如果 sidecar 啟動失敗，這
+    ///   個呼叫會無限期卡住，沒有逾時機制。
+    pub fn spawn_windows(
+        session_id: &str,
+        shell_variant: super::super::cd_parser::ShellVariant,
+        on_output: impl FnMut(Vec<u8>) + Send + 'static,
+        on_disconnect: impl FnMut() + Send + 'static,
+    ) -> std::io::Result<Option<ElevatedChannel>> {
+        let pipe_name = format!(r"\\.\pipe\aiterm-elevate-{session_id}-{}", uuid::Uuid::new_v4());
+        // `session_id` 是呼叫端傳進來的字串，理論上可能含有內嵌 NUL（Rust
+        // `String` 允許），`CString::new` 遇到會回 `Err`——用 `?` 往上丟成
+        // `io::Result`，不要 `.unwrap()` panic 掉整個主行程。
+        let c_pipe_name = CString::new(pipe_name.clone()).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+        let pipe_handle: HANDLE = unsafe {
+            CreateNamedPipeA(
+                c_pipe_name.as_ptr() as *const u8,
+                PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                1,
+                65536,
+                65536,
+                0,
+                std::ptr::null(),
+            )
+        };
+        if pipe_handle == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        let sidecar_path = sidecar_exe_path()?;
+        let variant_arg = match shell_variant {
+            super::super::cd_parser::ShellVariant::Pwsh => "pwsh",
+            _ => "cmd",
+        };
+        let params = format!("\"{pipe_name}\" {variant_arg}");
+
+        // ShellExecuteExW 的 *W 欄位要的是 null-terminated UTF-16
+        // （`PCWSTR` = `*const u16`），跟上面具名管線用的 ANSI `CString`
+        // 不是同一種格式。這三個 `Vec<u16>` 必須活到 `ShellExecuteExW` 呼叫
+        // 結束——見上面 doc comment 說明的懸空指標問題。
+        let verb_w = widen("runas");
+        let file_w = widen(&sidecar_path.to_string_lossy());
+        let params_w = widen(&params);
+
+        let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+        info.fMask = SEE_MASK_NOCLOSEPROCESS;
+        info.lpVerb = verb_w.as_ptr();
+        info.lpFile = file_w.as_ptr();
+        info.lpParameters = params_w.as_ptr();
+        info.nShow = SW_HIDE as i32;
+
+        let ok = unsafe { ShellExecuteExW(&mut info) };
+        if ok == 0 {
+            let err = unsafe { GetLastError() };
+            unsafe { CloseHandle(pipe_handle) };
+            if err == ERROR_CANCELLED {
+                return Ok(None); // 使用者取消 UAC，不是錯誤。
+            }
+            return Err(std::io::Error::from_raw_os_error(err as i32));
+        }
+        // `SEE_MASK_NOCLOSEPROCESS` 會讓 `ShellExecuteExW` 把子行程的
+        // process HANDLE 塞進 `info.hProcess` 交給我們保管。這裡不追蹤
+        // sidecar 行程本身的生死（斷線偵測走的是下面的具名管線／Frame
+        // 協定，見 `ElevatedChannel`），所以立刻關掉這個 handle 避免洩漏
+        // ——關 handle 不會終止或影響行程本身，只是釋放我們手上的參照。
+        if !info.hProcess.is_null() {
+            unsafe { CloseHandle(info.hProcess) };
+        }
+
+        let connected = unsafe { ConnectNamedPipe(pipe_handle, std::ptr::null_mut()) };
+        if connected == 0 {
+            let err = unsafe { GetLastError() };
+            // `CreateNamedPipeA` 到 `ConnectNamedPipe` 中間如果 client 剛好
+            // 搶著連上，`ConnectNamedPipe` 會回傳失敗但 `GetLastError()` 是
+            // `ERROR_PIPE_CONNECTED`——這是 MSDN 文件記載的正常競態，意思是
+            // 「已經連上了」，不是真的錯誤，不能當失敗處理。
+            if err != ERROR_PIPE_CONNECTED {
+                unsafe { CloseHandle(pipe_handle) };
+                return Err(std::io::Error::from_raw_os_error(err as i32));
+            }
+        }
+
+        // 已知缺口（刻意先留著，跟 `ElevatedChannel` 本身文件說明的讀取執行緒
+        // 洩漏是同一類問題）：`pipe_handle` 的所有權從這裡轉移進
+        // `PipeReadHandle`/`PipeWriteHandle`，但兩者都沒有 `Drop` 實作去關閉
+        // 它——`ElevatedChannel` 被 drop 時，這個具名管線 handle 不會自動關閉。
+        // 目前只有讀取執行緒自然 EOF／出錯時才會間接讓行程之後收尾；如果之後
+        // 要處理提前關閉 session 的路徑，這裡要回頭補 `Drop` 或等效機制。
+        let reader = super::PipeReadHandle(pipe_handle);
+        let writer: Box<dyn std::io::Write + Send> = Box::new(super::PipeWriteHandle(pipe_handle));
+        Ok(Some(ElevatedChannel::new(reader, writer, on_output, on_disconnect)))
+    }
+
+    fn sidecar_exe_path() -> std::io::Result<std::path::PathBuf> {
+        let exe = std::env::current_exe()?;
+        let dir = exe.parent().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no parent dir"))?;
+        Ok(dir.join("aiterm-elevated-host.exe"))
+    }
+
+    /// null-terminated UTF-16，`ShellExecuteExW` 的 `PCWSTR` 欄位要的格式。
+    fn widen(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+}
+
+#[cfg(windows)]
+pub use windows_launch::spawn_windows;
+
+#[cfg(windows)]
+pub(crate) struct PipeReadHandle(pub windows_sys::Win32::Foundation::HANDLE);
+#[cfg(windows)]
+unsafe impl Send for PipeReadHandle {}
+#[cfg(windows)]
+impl std::io::Read for PipeReadHandle {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        use windows_sys::Win32::Storage::FileSystem::ReadFile;
+        let mut n = 0u32;
+        let ok = unsafe { ReadFile(self.0, buf.as_mut_ptr(), buf.len() as u32, &mut n, std::ptr::null_mut()) };
+        if ok == 0 { return Err(std::io::Error::last_os_error()); }
+        Ok(n as usize)
+    }
+}
+
+#[cfg(windows)]
+pub(crate) struct PipeWriteHandle(pub windows_sys::Win32::Foundation::HANDLE);
+#[cfg(windows)]
+unsafe impl Send for PipeWriteHandle {}
+#[cfg(windows)]
+impl std::io::Write for PipeWriteHandle {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        use windows_sys::Win32::Storage::FileSystem::WriteFile;
+        let mut n = 0u32;
+        let ok = unsafe { WriteFile(self.0, buf.as_ptr(), buf.len() as u32, &mut n, std::ptr::null_mut()) };
+        if ok == 0 { return Err(std::io::Error::last_os_error()); }
+        Ok(n as usize)
+    }
+    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+}
+
+// 這個結構跟 `aiterm-elevated-host/src/windows_host.rs` 的 `PipeHandle`
+// 本質上是同一個包裝手法（HANDLE -> Read/Write），故意沒有共用同一個型別：
+// 兩邊在不同的 crate（`aiterm-core` vs `aiterm-elevated-host`），
+// `aiterm-elevated-host` 已經依賴 `aiterm-core`，反過來讓 `aiterm-core`
+// 依賴 sidecar crate 會造成循環依賴；而且這裡刻意拆成 `PipeReadHandle`/
+// `PipeWriteHandle` 兩個型別（而不是像對面一樣一個型別身兼二職），是因為
+// `ElevatedChannel::new` 要求 reader 是 `T: Read + Send + 'static`（依值移
+// 交給內部的讀取執行緒）、writer 是另一個 `Box<dyn Write + Send>`（留在呼叫
+// 端手上給 `write()` 用），兩者生命週期與所有權路徑不同，硬塞同一個型別會
+// 需要額外包一層 `Arc`/`Clone` 才能讓「同一個 HANDLE 值」分別放進兩個角色
+// ——不如直接拆成兩個零開銷的 newtype 包同一個 raw HANDLE 值來得直接。
