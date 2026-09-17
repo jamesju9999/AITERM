@@ -1690,10 +1690,19 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     if (!query) { setSearchMatchInfo(""); return; }
     const addon = searchAddonRef.current;
 
-    // Only ever "found" via the live xterm buffer when the addon is actually
-    // available — if it's momentarily unavailable, fall through to the block
-    // list search below rather than reporting a false "not found".
-    const foundLive = addon
+    // The raw xterm.js instance is only what the user actually sees while an
+    // alternate-buffer program (vim/htop) is running full-screen — outside
+    // that, it's kept mounted at `opacity: 0` (see the `aiterm-live-frame`
+    // comment above) while the block list is the real, visible content.
+    // Searching it unconditionally was wrong: on Windows, finalizeBlock
+    // deliberately skips clearing that hidden buffer (ConPTY row-desync
+    // workaround, see docs/superpowers/... conpty clear-sync notes), so it
+    // keeps the whole session's scrollback and findNext/findPrevious kept
+    // matching text there first — reporting "found" and decorating a
+    // decoration nobody can see, while skipping the block-level highlight
+    // below entirely. macOS/Linux clear that buffer after every block, so
+    // it was usually empty and this bug stayed hidden there.
+    const foundLive = addon && isAlternateBufferRef.current
       ? (direction === 'next' ? addon.findNext(query, SEARCH_OPTS) : addon.findPrevious(query, SEARCH_OPTS))
       : false;
 
