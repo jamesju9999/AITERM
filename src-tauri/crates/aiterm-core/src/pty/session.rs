@@ -2597,6 +2597,13 @@ mod tests {
         .expect("spawn pty");
         wait_for_shell_ready_sync(&session);
 
+        // Snapshot the *normal* tracker's state before touching the elevated
+        // path at all — the baseline `dec_modes_after` below is compared
+        // against. Taken after `wait_for_shell_ready_sync` so it already
+        // reflects whatever the shell's own startup sequence legitimately
+        // set (e.g. some shells set readline's meta-key mode ?1034).
+        let dec_modes_before = session.dec_modes.lock().prefix();
+
         // Half of a DEC-mode escape sequence fed through the elevated path,
         // deliberately never completed by this test — simulates a chunk
         // boundary landing mid-sequence on the elevated sidecar's side.
@@ -2648,9 +2655,13 @@ mod tests {
         // via a *completed* `h`/`l` transition, which is the thing that must
         // never happen here.
         //
-        // (Fails against a version of `ingest_external_output` that feeds
-        // `dec_modes` instead of `elevated_dec_modes` — verified manually
-        // before landing this test: see this task's report.)
+        // Note: on its own this assertion is structurally guaranteed by the
+        // isolation and would pass even against a regression that re-wires
+        // `ingest_external_output` back onto the shared `dec_modes` tracker
+        // — in that scenario nothing feeds `elevated_dec_modes` at all, so
+        // it trivially stays empty regardless of whether the historical bug
+        // is present. Kept as a sanity check, but see the assertion below
+        // for the one that actually catches that regression.
         let elevated_prefix = session.elevated_dec_modes.lock().prefix();
         assert!(
             elevated_prefix.is_empty(),
@@ -2659,6 +2670,30 @@ mod tests {
              dangling, so any recorded mode means concurrent normal-PTY \
              output corrupted it. Recorded prefix: {:?}",
             String::from_utf8_lossy(&elevated_prefix)
+        );
+
+        // The assertion that actually catches a regression back to a shared
+        // tracker: `dec_modes` (the one `subscribe_with_history` uses for
+        // normal-session replay) must be byte-for-byte unchanged by
+        // everything above. Nothing sent to the real shell in this test
+        // ("hello_marker_9f3a2b\r\n") contains an ESC byte, so it cannot
+        // legitimately set or reset any DEC mode on its own — the only way
+        // `dec_modes` could differ here is if the elevated path's dangling
+        // `\x1b[?25` leaked into it and got completed by the real PTY
+        // output's leading `h`, exactly the corruption this fix exists to
+        // prevent. If `ingest_external_output` were ever accidentally
+        // re-wired to feed `self.dec_modes` instead of
+        // `self.elevated_dec_modes`, this is the assertion that would catch
+        // it — the one above would not (see its note).
+        let dec_modes_after = session.dec_modes.lock().prefix();
+        assert_eq!(
+            dec_modes_before, dec_modes_after,
+            "the *normal* dec_modes tracker changed even though nothing sent \
+             to the real shell in this test could legitimately change it — \
+             the elevated path's dangling escape must have leaked into it. \
+             before: {:?}, after: {:?}",
+            String::from_utf8_lossy(&dec_modes_before),
+            String::from_utf8_lossy(&dec_modes_after),
         );
 
         drop(session);
