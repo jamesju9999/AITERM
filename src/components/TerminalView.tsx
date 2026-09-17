@@ -339,7 +339,21 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // useEffect，沒有自己的 cleanup，所以用 ref 存活標記，在掛載期間唯一的
   // useEffect 裡於卸載時撥為 false。
   const aliveRef = useRef(true);
-  useEffect(() => () => { aliveRef.current = false; }, []);
+  // "cancelled" 訊息的自動收起計時器。存 handle 是為了能在啟動新計時器或
+  // 卸載時 clearTimeout——單靠比對 state 值（'cancelled'）分辨不出「這是
+  // 我自己的計時器」還是「使用者在 3 秒內又提權取消了一次、屬於下一次嘗試
+  // 的計時器」，會把後者提早關掉。
+  const cancelledTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    aliveRef.current = false;
+    if (cancelledTimerRef.current) clearTimeout(cancelledTimerRef.current);
+  }, []);
+
+  // 每次新指令開始就 +1。checkPermissionDenied 的回覆要跟「發出當下是第幾
+  // 個指令」比對，不能只看「元件還活著嗎」——A 指令失敗→查詢送出中→使用者
+  // 已經開始跑 B 指令→A 的查詢才回來 true，這時元件仍是掛載狀態，aliveRef
+  // 擋不住，banner 會蓋在 B 的畫面上，跟使用者正在做的事無關。
+  const commandEpochRef = useRef(0);
 
   const handleCommandSettled = useCallback((exitCode: number) => {
     emitAttention(attentionForExitCode(exitCode));
@@ -347,8 +361,11 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     // 一趟 IPC。pty_check_permission_denied 在非 Windows／非權限問題時只會
     // 回傳 false，所以這裡不需要額外的平台判斷。
     if (exitCode !== 0) {
+      const epoch = commandEpochRef.current;
       void checkPermissionDenied(sessionId).then((denied) => {
-        if (denied && aliveRef.current) setElevationBanner("question");
+        if (denied && aliveRef.current && epoch === commandEpochRef.current) {
+          setElevationBanner("question");
+        }
       });
     }
   }, [emitAttention, sessionId]);
@@ -357,9 +374,11 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   useEffect(() => { onClaudeDetectedRef.current = onClaudeDetected; }, [onClaudeDetected]);
 
   const handleCommandStarted = useCallback((cmd: string) => {
-    // 新指令一開始就清掉舊 banner：每個失敗指令各自觸發一次未關聯的
-    // checkPermissionDenied，晚到的回覆可能在使用者已經換去跑別的指令時
-    // 才把 banner 彈回來，跟使用者正在做的事完全無關。
+    // 新指令開始：讓上一個指令的 checkPermissionDenied 查詢失效（見
+    // commandEpochRef 註解），同時清掉舊 banner——每個失敗指令各自觸發一次
+    // 未關聯的 checkPermissionDenied，晚到的回覆可能在使用者已經換去跑別的
+    // 指令時才把 banner 彈回來，跟使用者正在做的事完全無關。
+    commandEpochRef.current += 1;
     setElevationBanner(null);
     if (isClaudeCommand(cmd)) onClaudeDetectedRef.current?.();
   }, []);
@@ -2006,7 +2025,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                         // 短暫顯示回饋後自動收起，不需要使用者再多按一次。
                         if (!started) {
                           setElevationBanner("cancelled");
-                          window.setTimeout(() => {
+                          if (cancelledTimerRef.current) clearTimeout(cancelledTimerRef.current);
+                          cancelledTimerRef.current = setTimeout(() => {
+                            cancelledTimerRef.current = null;
                             if (aliveRef.current) {
                               setElevationBanner((b) => (b === "cancelled" ? null : b));
                             }
