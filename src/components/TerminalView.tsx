@@ -374,12 +374,17 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   useEffect(() => { onClaudeDetectedRef.current = onClaudeDetected; }, [onClaudeDetected]);
 
   const handleCommandStarted = useCallback((cmd: string) => {
-    // 新指令開始：讓上一個指令的 checkPermissionDenied 查詢失效（見
-    // commandEpochRef 註解），同時清掉舊 banner——每個失敗指令各自觸發一次
-    // 未關聯的 checkPermissionDenied，晚到的回覆可能在使用者已經換去跑別的
-    // 指令時才把 banner 彈回來，跟使用者正在做的事完全無關。
+    // 新指令開始：讓上一個指令的 checkPermissionDenied／elevatePty 查詢都
+    // 失效（見 commandEpochRef 註解），同時清掉舊 banner 與它的自動收起
+    // 計時器——每個失敗指令各自觸發一次未關聯的 checkPermissionDenied，
+    // 晚到的回覆可能在使用者已經換去跑別的指令時才把 banner 彈回來，跟
+    // 使用者正在做的事完全無關。計時器這裡本來可以不清（它自己的 callback
+    // 有 functional-update 防呆），但每個其他會讓 banner 失效的地方
+    // （確認按鈕、卸載）都明確清過，這裡不該是唯一一個依賴消費端防呆、
+    // 不做 producer 清理的例外。
     commandEpochRef.current += 1;
     setElevationBanner(null);
+    if (cancelledTimerRef.current) clearTimeout(cancelledTimerRef.current);
     if (isClaudeCommand(cmd)) onClaudeDetectedRef.current?.();
   }, []);
 
@@ -2018,9 +2023,15 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                   className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
                   onClick={() => {
                     setElevationBanner(null);
+                    // UAC 對話框可能等使用者好幾分鐘（見 pty_elevate 的文件
+                    // 註解）——這段時間夠使用者換去跑別的指令。跟
+                    // checkPermissionDenied 同一個理由，用 epoch 而不只是
+                    // aliveRef 判斷這個回覆還算不算數：aliveRef 只檢查元件
+                    // 還活著，擋不住「活著但已經在跑別的指令」這個情境。
+                    const epoch = commandEpochRef.current;
                     void elevatePty(sessionId)
                       .then((started) => {
-                        if (!aliveRef.current) return;
+                        if (!aliveRef.current || epoch !== commandEpochRef.current) return;
                         // false＝使用者在 UAC 對話框按了取消，不是錯誤——
                         // 短暫顯示回饋後自動收起，不需要使用者再多按一次。
                         if (!started) {
