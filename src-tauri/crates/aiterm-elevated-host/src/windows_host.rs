@@ -8,29 +8,60 @@ use aiterm_core::pty::elevated_protocol::Frame;
 use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE};
 use windows_sys::Win32::Storage::FileSystem::{CreateFileA, OPEN_EXISTING};
 
+/// 這個行程用 `SW_HIDE` 啟動、沒有可見的主控台——`eprintln!` 寫到一個使用者
+/// 看不到、也點不開的隱藏主控台，等於沒地方輸出。實機診斷 hang 時完全看不
+/// 到卡在哪一步，只能用工作管理員的行程樹（連子行程都沒有）反推。改成把每
+/// 一個關鍵步驟寫進 `%TEMP%\aiterm-elevated-host.log`（附加寫入、每行立刻
+/// flush），這樣使用者下次重現時直接看這個檔案最後一行，就知道卡在哪一步
+/// ——不用再用「有沒有子行程」這種間接證據猜。
+fn log_step(msg: &str) {
+    use std::io::Write as _;
+    let Some(mut path) = std::env::var_os("TEMP").map(std::path::PathBuf::from) else { return };
+    path.push("aiterm-elevated-host.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let _ = writeln!(f, "[{now}] pid={} {msg}", std::process::id());
+        let _ = f.flush();
+    }
+}
+
 /// 入口：`argv[1]` 是主行程先建好的具名管線名稱，`argv[2]` 是 shell variant
 /// （"cmd" 或 "pwsh"）。連不上管線、或參數不對，直接印錯誤結束——這個行程
-/// 沒有 UI，唯一能溝通失敗原因的管道就是 stderr。
+/// 沒有 UI，唯一能溝通失敗原因的管道就是 stderr（現在也一併寫進上面說的
+/// log 檔，因為 stderr 實務上沒人看得到）。
 pub fn run() {
+    log_step("run() start");
     let args: Vec<String> = std::env::args().collect();
+    log_step(&format!("argv={args:?}"));
     let Some(pipe_name) = args.get(1) else {
         eprintln!("usage: aiterm-elevated-host <pipe-name> <shell-variant>");
+        log_step("missing pipe-name argument, exiting");
         std::process::exit(1);
     };
     let shell_variant = args.get(2).map(String::as_str).unwrap_or("cmd");
 
+    log_step(&format!("connecting to pipe {pipe_name}"));
     let pipe = match connect_pipe(pipe_name) {
-        Ok(h) => h,
+        Ok(h) => {
+            log_step("connected to pipe");
+            h
+        }
         Err(e) => {
             eprintln!("failed to connect to {pipe_name}: {e}");
+            log_step(&format!("failed to connect to pipe: {e}"));
             std::process::exit(1);
         }
     };
 
     if let Err(e) = run_conpty_bridge(pipe, shell_variant) {
         eprintln!("conpty bridge failed: {e}");
+        log_step(&format!("conpty bridge failed: {e}"));
         std::process::exit(1);
     }
+    log_step("run() returned normally");
 }
 
 /// 以 client 身分連進主行程已經開好的具名管線 server。不依賴繼承 handle
@@ -65,17 +96,21 @@ fn connect_pipe(name: &str) -> std::io::Result<HANDLE> {
 fn run_conpty_bridge(pipe: HANDLE, shell_variant: &str) -> std::io::Result<()> {
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
+    log_step("run_conpty_bridge: calling openpty()");
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    log_step("openpty() returned");
 
     let program = if shell_variant == "pwsh" { "powershell.exe" } else { "cmd.exe" };
+    log_step(&format!("spawning {program}"));
     let cmd = CommandBuilder::new(program);
     let mut child = pair
         .slave
         .spawn_command(cmd)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    log_step(&format!("spawn_command returned, child pid={:?}", child.process_id()));
     drop(pair.slave);
 
     let mut pty_writer = pair
@@ -86,6 +121,7 @@ fn run_conpty_bridge(pipe: HANDLE, shell_variant: &str) -> std::io::Result<()> {
         .master
         .try_clone_reader()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    log_step("pty reader/writer ready, entering relay loop");
 
     let mut pipe_writer = PipeHandle(pipe);
     let mut pipe_reader = PipeHandle(pipe);

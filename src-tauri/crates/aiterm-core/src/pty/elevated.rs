@@ -326,17 +326,9 @@ mod windows_launch {
             unsafe { CloseHandle(info.hProcess) };
         }
 
-        let connected = unsafe { ConnectNamedPipe(pipe_handle, std::ptr::null_mut()) };
-        if connected == 0 {
-            let err = unsafe { GetLastError() };
-            // `CreateNamedPipeA` 到 `ConnectNamedPipe` 中間如果 client 剛好
-            // 搶著連上，`ConnectNamedPipe` 會回傳失敗但 `GetLastError()` 是
-            // `ERROR_PIPE_CONNECTED`——這是 MSDN 文件記載的正常競態，意思是
-            // 「已經連上了」，不是真的錯誤，不能當失敗處理。
-            if err != ERROR_PIPE_CONNECTED {
-                unsafe { CloseHandle(pipe_handle) };
-                return Err(std::io::Error::from_raw_os_error(err as i32));
-            }
+        if let Err(e) = connect_named_pipe_with_timeout(pipe_handle, std::time::Duration::from_secs(30)) {
+            unsafe { CloseHandle(pipe_handle) };
+            return Err(e);
         }
 
         // 已知缺口（刻意先留著，跟 `ElevatedChannel` 本身文件說明的讀取執行緒
@@ -361,6 +353,55 @@ mod windows_launch {
         let reader = super::PipeReadHandle(pipe_handle);
         let writer: Box<dyn std::io::Write + Send> = Box::new(super::PipeWriteHandle(pipe_handle));
         Ok(Some(ElevatedChannel::new(reader, writer, on_output, on_disconnect)))
+    }
+
+    /// `ConnectNamedPipe` 本身沒有逾時參數（非 overlapped 模式下就是同步阻塞
+    /// 到有 client 連上為止），這是文件裡已經記錄過的已知缺口。實機測試證實
+    /// 這不是紙上談兵：sidecar 卡住、AITerm 整個視窗跟著沒回應，使用者得去
+    /// 工作管理員強制關閉 sidecar 行程才能恢復。
+    ///
+    /// 這裡改成「另開一條執行緒呼叫真正的 `ConnectNamedPipe`，呼叫端用
+    /// `recv_timeout` 等結果」，而不是把整個管線切換成 overlapped I/O——後者
+    /// 需要連 `PipeReadHandle`/`PipeWriteHandle` 的每一次 `ReadFile`/`WriteFile`
+    /// 都跟著改成 overlapped 語意（`OVERLAPPED` 結構、事件、`GetOverlappedResult`），
+    /// 牽動面大很多且沒有本機編譯器能驗證，風險不成比例。
+    ///
+    /// **逾時之後那條背景執行緒會被放著**：它可能還卡在 `ConnectNamedPipe`
+    /// 裡，直到呼叫端關掉 `pipe_handle`（呼叫端在這個函式回傳 `Err` 之後會
+    /// 做這件事）讓那個阻塞呼叫連帶失敗、執行緒才會結束——這是刻意的取捨：
+    /// 放著一條會在 handle 關閉時自然結束的執行緒，好過讓整個 UI 卡死。
+    fn connect_named_pipe_with_timeout(pipe_handle: HANDLE, timeout: std::time::Duration) -> std::io::Result<()> {
+        struct SendableHandle(HANDLE);
+        unsafe impl Send for SendableHandle {}
+        let handle = SendableHandle(pipe_handle);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let handle = handle;
+            let connected = unsafe { ConnectNamedPipe(handle.0, std::ptr::null_mut()) };
+            let result = if connected == 0 {
+                let err = unsafe { GetLastError() };
+                // `CreateNamedPipeA` 到 `ConnectNamedPipe` 中間如果 client 剛
+                // 好搶著連上，`ConnectNamedPipe` 會回傳失敗但 `GetLastError()`
+                // 是 `ERROR_PIPE_CONNECTED`——MSDN 文件記載的正常競態，意思是
+                // 「已經連上了」，不是真的錯誤。
+                if err == ERROR_PIPE_CONNECTED { Ok(()) } else { Err(err) }
+            } else {
+                Ok(())
+            };
+            // 呼叫端逾時放棄後，這個 channel 的接收端已經沒人在聽，`send`
+            // 失敗是預期行為，忽略即可。
+            let _ = tx.send(result);
+        });
+
+        match rx.recv_timeout(timeout) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(win32_err)) => Err(std::io::Error::from_raw_os_error(win32_err as i32)),
+            Err(_) => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("ConnectNamedPipe did not complete within {timeout:?} — sidecar likely failed to launch or connect"),
+            )),
+        }
     }
 
     fn sidecar_exe_path() -> std::io::Result<std::path::PathBuf> {
