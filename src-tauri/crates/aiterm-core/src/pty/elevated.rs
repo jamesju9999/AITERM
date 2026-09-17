@@ -14,6 +14,15 @@ pub enum ElevatedState {
 /// 關心底層是具名管線還是別的傳輸方式——真正的具名管線/ConPTY 啟動邏輯在
 /// `#[cfg(windows)]` 的 `spawn_windows` 裡（後續任務補上），這裡只放狀態機
 /// 本身，好讓它能在任何平台上被測試。
+///
+/// 已知缺口（刻意先留著）：讀取執行緒（見 `new` 裡的 `std::thread::spawn`）
+/// 目前沒有 join/清理路徑。如果 `ElevatedChannel` 在執行緒還卡在
+/// `Frame::read_from` 阻塞讀取時被 drop，執行緒會一直活著直到底層傳輸自己
+/// 出錯或 EOF 才會退出——不會馬上跟著 channel 一起結束。這在 mock transport
+/// 的測試裡不是問題（`Cursor` 立刻 EOF），但等到實作 `spawn_windows`（真正的
+/// 具名管線）那個任務時必須回頭處理：屆時傳輸是長生命週期的具名管線，同樣
+/// 的阻塞讀取沒有清理路徑就會變成真的執行緒洩漏。實作 `spawn_windows` 的人
+/// 請在那裡補上 `Drop`／join 或等效機制，不要延到之後才發現。
 pub struct ElevatedChannel {
     writer: Mutex<Box<dyn Write + Send>>,
     state: Arc<Mutex<ElevatedState>>,
