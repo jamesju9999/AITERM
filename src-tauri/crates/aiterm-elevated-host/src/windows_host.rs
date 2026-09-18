@@ -150,58 +150,27 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
     log_step("openpty() returned");
 
-    // **刻意先不注入 shell integration**。pty9 曾改成用
-    // `elevated_shell_spec()` 帶 `-NoExit -EncodedCommand <script>` 啟動，好讓
-    // 提權 shell 也送 OSC 133；結果實機上提權後畫面完全沒有輸出。已排除的原
-    // 因：尺寸正確（log 顯示 openpty 143x38 成功）、base64 是合法的 UTF-16LE
-    // （前綴在本機重現吻合）、命令列長度 9771 遠低於 CreateProcess 的 32767
-    // 上限、`CommandBuilder` 也仍帶著完整的繼承環境。真正的原因還沒查出來，
-    // 所以先退回這個已知會正常吐輸出的裸啟動版本，等下面新增的輸出儀表把
-    // 「ConPTY 到底有沒有吐位元組」這段盲區補起來之後再重新接上。
-    // `-NoProfile`：提權 shell 不載入使用者設定檔。兩個獨立的理由：
+    // 用跟一般分頁同一套 shell integration（OSC 133）啟動提權 shell。
     //
-    // 1. 安全。`%USERPROFILE%` 底下的 PowerShell 設定檔是「以該使用者身分執行
-    //    的任何一般權限程式」都能改寫的，提權 shell 自動載入它，等於讓系統管
-    //    理員權限去執行一份低權限可竄改的腳本——跟先前在 `elevated_shell_spec`
-    //    擋掉的「把 integration 腳本寫進 %LOCALAPPDATA% 再 dot-source」是完全
-    //    同一類的本機提權管道。
-    // 2. 這正是目前在查的「提權後畫面零輸出」最可能的原因。實機 log 已經證實
-    //    ConPTY 只吐了自己的初始序列（`ESC[?9001h ESC[?1004h`，不是需要回覆的
-    //    查詢序列），而且 watchdog 沒有回報 child 結束——也就是 PowerShell 活
-    //    著卻連版權橫幅都沒印，最合理的解釋是卡在啟動階段，而載入設定檔是啟動
-    //    階段唯一會執行使用者程式碼的地方。這個使用者確實有自訂 prompt（本專案
-    //    先前那次「提示字元消失」調查的結論就是它）。
-    //
-    // `Write-Host` 探針是這一版的診斷用途：它在設定檔之後、互動提示字元之前
-    // 執行，所以「有看到它但沒有提示字元」跟「連它都沒有」是兩種完全不同的結論。
-    let program = if shell_variant == "pwsh" { "powershell.exe" } else { "cmd.exe" };
-    let mut cmd = CommandBuilder::new(program);
-    if shell_variant == "pwsh" {
-        cmd.arg("-NoProfile");
-        cmd.arg("-NoExit");
-        cmd.arg("-Command");
-        // 探針寫檔 **而且** 印到主控台，兩者缺一不可：這是用來切開「PowerShell
-        // 根本沒執行到任何東西」跟「執行了但主控台輸出送不出來」這兩種情況的
-        // ——它們在先前的 log 上完全無法區分（行程都活著、ConPTY 都只吐自己的
-        // 初始序列）。檔案出現代表它確實在執行程式碼，問題純粹在輸出路徑；檔案
-        // 沒出現代表它卡在啟動階段，連 `-Command` 都還沒跑到。
-        // 探針升級：用「已經確定能通的管道」（寫檔）回報「壞掉的那個管道」
-        // （主控台）的實際狀態。前一版已證實 PowerShell 有執行、寫得出檔案，
-        // 只有主控台輸出消失——那正是 std handle 無效時的症狀（.NET 的
-        // `[Console]::Out` 在 handle 無效時會退化成什麼都不做的 writer，靜默
-        // 吞掉寫入）。
-        //
-        // `WindowWidth` 是關鍵：它若回報得出數字，而且等於我們傳給 openpty 的
-        // 欄數，就證明子行程**確實接上了**我們建的 pseudoconsole，問題純粹在
-        // std handle；若它丟例外，代表子行程根本沒有主控台，那是完全不同的成因。
-        cmd.arg(
-            "$o=@(); try{$o+='WindowWidth='+[Console]::WindowWidth}catch{$o+='WindowWidth_ERR='+$_.Exception.GetType().Name}; try{$o+='WindowHeight='+[Console]::WindowHeight}catch{$o+='WindowHeight_ERR'}; try{$o+='OutRedirected='+[Console]::IsOutputRedirected}catch{$o+='OutRedirected_ERR'}; try{$o+='InRedirected='+[Console]::IsInputRedirected}catch{$o+='InRedirected_ERR'}; $o+='HostName='+$Host.Name; Set-Content -Path (Join-Path $env:TEMP 'aiterm-elevated-probe.txt') -Value $o; Write-Host 'AITERM_ELEVATED_READY'",
-        );
+    // 這不是美化，是提權畫面能不能顯示的關鍵：AITerm 不是把 PTY 位元組直接畫
+    // 上去，而是靠 OSC 133 把輸出切成卡片，沒有 running 中的區塊時輸出會被靜默
+    // 丟棄。pty11 曾誤判把這段拿掉（以為 `-EncodedCommand` 害 shell 啞掉），實
+    // 際上輸出一路都正常，只是當時兩端的儀表都只記第一筆才看不出來——拿掉的正
+    // 好就是讓畫面顯示的那個機制。詳見 `elevated_shell_spec` 的說明。
+    let variant = if shell_variant == "pwsh" {
+        aiterm_core::pty::cd_parser::ShellVariant::Pwsh
     } else {
-        cmd.arg("/K");
-        cmd.arg("echo AITERM_ELEVATED_READY");
+        aiterm_core::pty::cd_parser::ShellVariant::Cmd
+    };
+    let spec = aiterm_core::pty::shell::elevated_shell_spec(variant);
+    log_step(&format!("spawning {:?} args={:?}", spec.program, spec.args.len()));
+    let mut cmd = CommandBuilder::new(&spec.program);
+    for arg in &spec.args {
+        cmd.arg(arg);
     }
-    log_step(&format!("spawning {program} with -NoProfile + readiness probe"));
+    for (k, v) in &spec.envs {
+        cmd.env(k, v);
+    }
     let child = pair
         .slave
         .spawn_command(cmd)
