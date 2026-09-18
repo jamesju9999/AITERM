@@ -96,11 +96,13 @@ type Block = { id: string; command: string; status: string; exitCode?: number; s
 const aiPanelProps: {
   onExecuteCommand?: (cmd: string, onComplete?: (block: Block) => void) => void;
   onInterruptCommand?: () => void;
+  onAgentAborted?: () => void;
 } = {};
 vi.mock("./AiPanel", () => ({
   AiPanel: (props: typeof aiPanelProps) => {
     aiPanelProps.onExecuteCommand = props.onExecuteCommand;
     aiPanelProps.onInterruptCommand = props.onInterruptCommand;
+    aiPanelProps.onAgentAborted = props.onAgentAborted;
     return null;
   },
 }));
@@ -267,6 +269,18 @@ describe("agent 的指令因權限不足失敗時，提權重跑的結果要交�
     await screen.findByText(t.elevation_banner_question);
 
     await act(async () => { aiPanelProps.onInterruptCommand?.(); });
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][0].exitCode).toBe(740);
+  });
+
+  it("使用者按了 AI 面板的停止鍵，agent 立刻收到原本的 740", async () => {
+    renderView();
+    await waitForAiPanel();
+    const onComplete = await agentRunsFailingCommand();
+    await screen.findByText(t.elevation_banner_question);
+
+    await act(async () => { aiPanelProps.onAgentAborted?.(); });
 
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete.mock.calls[0][0].exitCode).toBe(740);

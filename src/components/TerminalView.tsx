@@ -2478,6 +2478,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           providerName={activeProvider}
           providerId={activeProviderId}
           onClose={() => setPanelOpen(false)}
+          onAgentAborted={releaseHeldCompletion}
           onExecuteCommand={(cmd, onComplete) => {
             if (!onComplete) { submitCommand(cmd); return; }
             // submitCommand 會同步呼叫 handleCommandStarted 推進 epoch，所以

@@ -70,6 +70,7 @@ beforeEach(() => {
 async function renderStuckAgent(opts: {
   idleMs: { current: number };
   onInterruptCommand?: () => void;
+  onAgentAborted?: () => void;
 }) {
   aiChatQueue.push({ content: "<cmd>cat <<EOF</cmd>" });
 
@@ -90,6 +91,7 @@ async function renderStuckAgent(opts: {
       onOpenProviderPalette={vi.fn()}
       getIdleMs={() => opts.idleMs.current}
       onInterruptCommand={opts.onInterruptCommand}
+      onAgentAborted={opts.onAgentAborted}
     />,
   );
 
@@ -191,5 +193,24 @@ describe("AiPanel — 卡住提示與接手", () => {
     // not resurrect it.
     await advance(130_000);
     expect(screen.queryByText("指令似乎沒有反應")).toBeNull();
+  });
+});
+
+describe("AiPanel — 停止鍵", () => {
+  it("按停止時通知外層（onAgentAborted），讓代 agent 扣住的完成 callback 能立刻放行", async () => {
+    // 情境：agent 的指令因權限不足失敗，TerminalView 正扣著它的完成 callback
+    // 等使用者回應提權橫幅。停止鍵以前只送 Ctrl+C——shell 早就回到提示字元，
+    // 沒有指令會因此結束，agent 就一直停在「執行中」直到使用者回應橫幅。
+    const onAgentAborted = vi.fn();
+    const { completeCommand } = await renderStuckAgent({ idleMs: { current: 0 }, onAgentAborted });
+
+    fireEvent.click(screen.getByTitle("停止"));
+    expect(onAgentAborted).toHaveBeenCalledTimes(1);
+
+    // 外層放行後，agent 迴圈看到 abort 旗標就結束，停止鍵跟著消失。
+    await act(async () => {
+      completeCommand({ id: "b1", command: "DISM", status: "failed", exitCode: 740, startTime: 0, rawOutput: "" });
+    });
+    await vi.waitFor(() => expect(screen.queryByTitle("停止")).toBeNull());
   });
 });

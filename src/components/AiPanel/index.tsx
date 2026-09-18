@@ -65,6 +65,12 @@ export interface AiPanelProps {
   getIdleMs?: () => number;
   /** 中斷目前這個卡住的指令：送 Ctrl+C 並強制結案。 */
   onInterruptCommand?: () => void;
+  /**
+   * 使用者按了停止鍵。外層若代 agent 扣著指令的完成 callback（例如等使用者
+   * 回應提權橫幅，見 TerminalView 的 heldCompletionRef），要在這裡立刻放行
+   * ——光送 Ctrl+C 不夠，那時 shell 早就回到提示字元，沒有指令會因此結束。
+   */
+  onAgentAborted?: () => void;
 }
 
 /**
@@ -83,6 +89,7 @@ export function AiPanel({
   sendRemoteResponse,
   getIdleMs,
   onInterruptCommand,
+  onAgentAborted,
 }: AiPanelProps) {
   /** 常駐配額徽章的代表窗；null 就不顯示。 */
   const quotaWindow = useProviderQuota(providerId);
@@ -456,6 +463,7 @@ Rules:
         // interrupted, the prompt reappears, and the onComplete callback
         // can fire to actually unblock the agent loop.
         writePty(sessionId, "\x03").catch(() => {});
+        onAgentAborted?.();
       }}
       providerName={providerName}
       onOpenProviderPalette={onOpenProviderPalette}
