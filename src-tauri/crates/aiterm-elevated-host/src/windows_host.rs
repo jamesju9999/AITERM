@@ -141,12 +141,28 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
     let program = if shell_variant == "pwsh" { "powershell.exe" } else { "cmd.exe" };
     log_step(&format!("spawning {program}"));
     let cmd = CommandBuilder::new(program);
-    let mut child = pair
+    let child = pair
         .slave
         .spawn_command(cmd)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
     log_step(&format!("spawn_command returned, child pid={:?}", child.process_id()));
     drop(pair.slave);
+
+    // 提權 shell 自己結束時，這裡以前完全不會發現：主迴圈的 `child.try_wait()`
+    // 只在 `Frame::read_from` 回傳之後才會執行，而那個呼叫正卡在等主行程送輸
+    // 入過來；輸出執行緒也不會收到 EOF，因為 PseudoConsole 還開著（master 那
+    // 份 `Arc<Mutex<Inner>>` 還活著）。結果就是「shell 早就死了，但 sidecar
+    // 繼續掛著、主行程也不知道」——實機診斷「提權後畫面沒有任何輸出」時，
+    // 正是因為分不出「shell 活著但不吐東西」跟「shell 一起來就死了」而卡關。
+    // 用一條專門的執行緒 blocking `wait()`，結束時把 exit status 記下來。
+    let mut killer = child.clone_killer();
+    let mut child_for_wait = child;
+    let child_watchdog = std::thread::spawn(move || {
+        match child_for_wait.wait() {
+            Ok(status) => log_step(&format!("child exited with status {status:?}")),
+            Err(e) => log_step(&format!("child wait failed: {e}")),
+        }
+    });
 
     let mut pty_writer = pair
         .master
@@ -178,7 +194,14 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
                 }
                 Ok(n) => {
                     if first {
-                        log_step(&format!("output thread: first ConPTY read, {n} bytes"));
+                        // 連內容一起記：光看位元組數分不出這是 ConPTY 自己的
+                        // 初始序列，還是 shell 真的輸出了什麼。特別要看有沒有
+                        // 夾帶需要終端機回覆的查詢序列（例如 DSR `ESC[6n`）
+                        // ——那種序列如果沒人回應，shell 會就地卡死等回覆。
+                        log_step(&format!(
+                            "output thread: first ConPTY read, {n} bytes: {:?}",
+                            String::from_utf8_lossy(&buf[..n])
+                        ));
                         first = false;
                     }
                     total += n as u64;
@@ -218,9 +241,6 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
                 break;
             }
         }
-        if let Ok(Some(_)) = child.try_wait() {
-            break;
-        }
     }
 
     // 已知缺口：`kill()` 在 Windows 上只 TerminateProcess 直屬的 shell 行程，
@@ -228,7 +248,8 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
     // 常駐程式）。`aiterm-core/src/pty/session.rs` 的 `kill_tree_first` +
     // Windows Job Object 是同一問題的正確解法，這裡還沒補上——刻意先留著，
     // 之後要回頭處理，不要讓它一直是個未追蹤的缺口。
-    let _ = child.kill();
+    let _ = killer.kill();
+    let _ = child_watchdog.join();
     let _ = output_thread.join();
     unsafe { CloseHandle(read_pipe) };
     unsafe { CloseHandle(write_pipe) };
