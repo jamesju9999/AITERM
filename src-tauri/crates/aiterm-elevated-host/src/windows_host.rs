@@ -180,7 +180,14 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
         cmd.arg("-NoProfile");
         cmd.arg("-NoExit");
         cmd.arg("-Command");
-        cmd.arg("Write-Host 'AITERM_ELEVATED_READY'");
+        // 探針寫檔 **而且** 印到主控台，兩者缺一不可：這是用來切開「PowerShell
+        // 根本沒執行到任何東西」跟「執行了但主控台輸出送不出來」這兩種情況的
+        // ——它們在先前的 log 上完全無法區分（行程都活著、ConPTY 都只吐自己的
+        // 初始序列）。檔案出現代表它確實在執行程式碼，問題純粹在輸出路徑；檔案
+        // 沒出現代表它卡在啟動階段，連 `-Command` 都還沒跑到。
+        cmd.arg(
+            "Set-Content -Path (Join-Path $env:TEMP 'aiterm-elevated-probe.txt') -Value 'probe ran'; Write-Host 'AITERM_ELEVATED_READY'",
+        );
     } else {
         cmd.arg("/K");
         cmd.arg("echo AITERM_ELEVATED_READY");
