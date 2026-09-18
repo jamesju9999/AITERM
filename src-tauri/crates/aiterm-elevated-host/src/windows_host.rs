@@ -123,6 +123,26 @@ fn connect_pipe(name: &str, access: u32) -> std::io::Result<HANDLE> {
 fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str, cols: u16, rows: u16) -> std::io::Result<()> {
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
+    // 在建立 pseudoconsole **之前**先脫離本行程自己的主控台。
+    //
+    // 這是目前找到的、提權路徑與一般路徑之間唯一的結構性差異：一般分頁的
+    // ConPTY 是 `app.exe`（GUI subsystem、完全沒有主控台）建的，運作正常；而
+    // 這支 sidecar 是 console subsystem 執行檔，被 `ShellExecuteExW` 以
+    // `SW_HIDE` 啟動時 Windows 會配一個（隱藏的）主控台給它。實機 log 已證實
+    // conhost 本身是活的（它送出了 `ESC[?9001h ESC[?1004h`）、PowerShell 也
+    // 活著（watchdog 沒回報結束），但連 `-NoProfile` 配一行 `Write-Host` 的
+    // 輸出都到不了——這組症狀指向「子行程沒有真的接上我們建的 pseudoconsole」，
+    // 而行程自帶主控台正是最可能干擾主控台歸屬的因素。
+    //
+    // 這支行程本來就不需要主控台（`SW_HIDE` 啟動、診斷一律走 log 檔，`eprintln!`
+    // 早就沒有人看得到），所以脫離它沒有任何損失。
+    unsafe {
+        use windows_sys::Win32::System::Console::{FreeConsole, GetConsoleWindow};
+        let had_console = !GetConsoleWindow().is_null();
+        let freed = FreeConsole() != 0;
+        log_step(&format!("had own console={had_console}, FreeConsole ok={freed}"));
+    }
+
     log_step(&format!("run_conpty_bridge: calling openpty() at {cols}x{rows}"));
     let pty_system = native_pty_system();
     let pair = pty_system
