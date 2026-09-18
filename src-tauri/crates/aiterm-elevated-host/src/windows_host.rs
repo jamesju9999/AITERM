@@ -138,9 +138,34 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
     // 上限、`CommandBuilder` 也仍帶著完整的繼承環境。真正的原因還沒查出來，
     // 所以先退回這個已知會正常吐輸出的裸啟動版本，等下面新增的輸出儀表把
     // 「ConPTY 到底有沒有吐位元組」這段盲區補起來之後再重新接上。
+    // `-NoProfile`：提權 shell 不載入使用者設定檔。兩個獨立的理由：
+    //
+    // 1. 安全。`%USERPROFILE%` 底下的 PowerShell 設定檔是「以該使用者身分執行
+    //    的任何一般權限程式」都能改寫的，提權 shell 自動載入它，等於讓系統管
+    //    理員權限去執行一份低權限可竄改的腳本——跟先前在 `elevated_shell_spec`
+    //    擋掉的「把 integration 腳本寫進 %LOCALAPPDATA% 再 dot-source」是完全
+    //    同一類的本機提權管道。
+    // 2. 這正是目前在查的「提權後畫面零輸出」最可能的原因。實機 log 已經證實
+    //    ConPTY 只吐了自己的初始序列（`ESC[?9001h ESC[?1004h`，不是需要回覆的
+    //    查詢序列），而且 watchdog 沒有回報 child 結束——也就是 PowerShell 活
+    //    著卻連版權橫幅都沒印，最合理的解釋是卡在啟動階段，而載入設定檔是啟動
+    //    階段唯一會執行使用者程式碼的地方。這個使用者確實有自訂 prompt（本專案
+    //    先前那次「提示字元消失」調查的結論就是它）。
+    //
+    // `Write-Host` 探針是這一版的診斷用途：它在設定檔之後、互動提示字元之前
+    // 執行，所以「有看到它但沒有提示字元」跟「連它都沒有」是兩種完全不同的結論。
     let program = if shell_variant == "pwsh" { "powershell.exe" } else { "cmd.exe" };
-    log_step(&format!("spawning {program}"));
-    let cmd = CommandBuilder::new(program);
+    let mut cmd = CommandBuilder::new(program);
+    if shell_variant == "pwsh" {
+        cmd.arg("-NoProfile");
+        cmd.arg("-NoExit");
+        cmd.arg("-Command");
+        cmd.arg("Write-Host 'AITERM_ELEVATED_READY'");
+    } else {
+        cmd.arg("/K");
+        cmd.arg("echo AITERM_ELEVATED_READY");
+    }
+    log_step(&format!("spawning {program} with -NoProfile + readiness probe"));
     let child = pair
         .slave
         .spawn_command(cmd)
