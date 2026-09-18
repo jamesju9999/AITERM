@@ -185,8 +185,17 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
         // ——它們在先前的 log 上完全無法區分（行程都活著、ConPTY 都只吐自己的
         // 初始序列）。檔案出現代表它確實在執行程式碼，問題純粹在輸出路徑；檔案
         // 沒出現代表它卡在啟動階段，連 `-Command` 都還沒跑到。
+        // 探針升級：用「已經確定能通的管道」（寫檔）回報「壞掉的那個管道」
+        // （主控台）的實際狀態。前一版已證實 PowerShell 有執行、寫得出檔案，
+        // 只有主控台輸出消失——那正是 std handle 無效時的症狀（.NET 的
+        // `[Console]::Out` 在 handle 無效時會退化成什麼都不做的 writer，靜默
+        // 吞掉寫入）。
+        //
+        // `WindowWidth` 是關鍵：它若回報得出數字，而且等於我們傳給 openpty 的
+        // 欄數，就證明子行程**確實接上了**我們建的 pseudoconsole，問題純粹在
+        // std handle；若它丟例外，代表子行程根本沒有主控台，那是完全不同的成因。
         cmd.arg(
-            "Set-Content -Path (Join-Path $env:TEMP 'aiterm-elevated-probe.txt') -Value 'probe ran'; Write-Host 'AITERM_ELEVATED_READY'",
+            "$o=@(); try{$o+='WindowWidth='+[Console]::WindowWidth}catch{$o+='WindowWidth_ERR='+$_.Exception.GetType().Name}; try{$o+='WindowHeight='+[Console]::WindowHeight}catch{$o+='WindowHeight_ERR'}; try{$o+='OutRedirected='+[Console]::IsOutputRedirected}catch{$o+='OutRedirected_ERR'}; try{$o+='InRedirected='+[Console]::IsInputRedirected}catch{$o+='InRedirected_ERR'}; $o+='HostName='+$Host.Name; Set-Content -Path (Join-Path $env:TEMP 'aiterm-elevated-probe.txt') -Value $o; Write-Host 'AITERM_ELEVATED_READY'",
         );
     } else {
         cmd.arg("/K");
