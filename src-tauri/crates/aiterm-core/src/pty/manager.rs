@@ -212,16 +212,20 @@ impl PtyManager {
         // `Arc<PtySession>`，是唯一同時看得到「session 本體」與「呼叫端傳
         // 進來的 on_output」兩者的地方。
         let session_for_output = Arc::clone(&session);
-        // 只記第一筆：用來分辨「sidecar 那邊的 ConPTY 有吐位元組，但主行程這
-        // 邊一個 frame 都沒收到」跟「兩邊都沒有」——兩者的斷點完全不同邊。
-        let mut logged_first_chunk = false;
+        // 記前 10 筆而不是只記第一筆。只記第一筆是個實際踩過的坑：兩端都只有
+        // 「第一筆」的紀錄時，「16 位元組之後就真的沒東西了」跟「有東西但沒被
+        // 記下來」在 log 上完全無法區分，害好幾輪推論建立在一個沒被證實的前提
+        // 上。連內容一起記，才能認出那到底是 ConPTY 的初始序列還是 shell 的輸出。
+        let mut frames: u32 = 0;
         let wrapped_on_output = move |chunk: Vec<u8>| {
-            if !logged_first_chunk {
+            frames += 1;
+            if frames <= 10 {
+                let shown = chunk.len().min(200);
                 super::elevated::elevated_log_step(&format!(
-                    "host received first elevated output frame, {} bytes",
-                    chunk.len()
+                    "host received elevated frame #{frames}, {} bytes: {:?}",
+                    chunk.len(),
+                    String::from_utf8_lossy(&chunk[..shown])
                 ));
-                logged_first_chunk = true;
             }
             session_for_output.ingest_external_output(&chunk);
             on_output(chunk);

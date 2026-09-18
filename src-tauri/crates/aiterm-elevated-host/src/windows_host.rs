@@ -246,24 +246,25 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
         // 是 ConPTY 根本沒吐東西（shell 沒起來／卡住）還是吐了但送不回主行程。
         // 只記第一筆與結束時的累計，不是每筆都記，避免把 log 灌爆。
         let mut total: u64 = 0;
-        let mut first = true;
+        let mut chunks: u32 = 0;
         loop {
             match pty_reader.read(&mut buf) {
                 Ok(0) => {
-                    log_step(&format!("output thread: ConPTY EOF after {total} bytes"));
+                    log_step(&format!("output thread: ConPTY EOF after {total} bytes in {chunks} chunks"));
                     break;
                 }
                 Ok(n) => {
-                    if first {
+                    chunks += 1;
+                    if chunks <= 10 {
                         // 連內容一起記：光看位元組數分不出這是 ConPTY 自己的
                         // 初始序列，還是 shell 真的輸出了什麼。特別要看有沒有
                         // 夾帶需要終端機回覆的查詢序列（例如 DSR `ESC[6n`）
                         // ——那種序列如果沒人回應，shell 會就地卡死等回覆。
+                        let shown = n.min(200);
                         log_step(&format!(
-                            "output thread: first ConPTY read, {n} bytes: {:?}",
-                            String::from_utf8_lossy(&buf[..n])
+                            "output thread: chunk #{chunks}, {n} bytes: {:?}",
+                            String::from_utf8_lossy(&buf[..shown])
                         ));
-                        first = false;
                     }
                     total += n as u64;
                     if let Err(e) = Frame::Data(buf[..n].to_vec()).write_to(&mut pipe_writer) {
@@ -274,7 +275,7 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
                 }
                 Err(e) => {
                     eprintln!("conpty bridge: ConPTY read failed: {e}");
-                    log_step(&format!("output thread: ConPTY read failed after {total} bytes: {e}"));
+                    log_step(&format!("output thread: ConPTY read failed after {total} bytes in {chunks} chunks: {e}"));
                     break;
                 }
             }
