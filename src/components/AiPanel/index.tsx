@@ -213,11 +213,12 @@ export function AiPanel({
     // Windows 專屬：沒有這條規則時，AI 遇到 exit 740 會自己發明
     // `Start-Process -Verb RunAs`，把指令送進一個獨立的提權視窗——那個視窗
     // AITerm 完全看不到輸出，使用者看到的是「指令跑到別的地方去了」。
-    // AITerm 自己就會偵測 740 並顯示提權橫幅，但那需要使用者按確認，AI 不能
-    // 自己觸發，所以這裡要它停下來交還控制權，而不是繞過。
+    // AITerm 自己就會偵測 740 並顯示提權橫幅；使用者確認後會在提權 session
+    // 自動重跑，並把重跑的結果交給 agent（見 TerminalView 的
+    // heldCompletionRef），所以 AI 只有在使用者拒絕提權時才會看到 740。
     const elevationRule = navigator.platform.toLowerCase().startsWith("win")
       ? `
-6. Elevation: if a command fails with exit code 740, or reports that it needs elevated/administrator privileges, do NOT try to work around it — never use \`Start-Process -Verb RunAs\`, \`runas\`, or redirect an elevated command's output to a temp file and read it back. Those run in a separate window whose output this terminal cannot see. AITerm detects code 740 on its own and shows the user an elevation prompt; it needs the user to confirm it, and you cannot trigger it yourself. So stop emitting <cmd> tags, tell the user in ${languageDirective(locale)} to confirm that prompt, and explain that once they do, the very same command can just be run again here — the session stays elevated afterwards.`
+6. Elevation: if a command fails with exit code 740, or reports that it needs elevated/administrator privileges, do NOT try to work around it — never use \`Start-Process -Verb RunAs\`, \`runas\`, or redirect an elevated command's output to a temp file and read it back. Those run in a separate window whose output this terminal cannot see. AITerm handles elevation itself: when a command fails for lack of privileges it asks the user to elevate this session, and if they approve, it re-runs the command elevated and gives you that result instead. So if you still receive a privilege failure, the user declined elevation — stop emitting <cmd> tags, and tell the user in ${languageDirective(locale)} that the command needs administrator rights and that they can ask you again and approve AITerm's elevation prompt.`
       : "";
 
     return `You are a terminal Agent. You can execute shell commands via <cmd>...</cmd> tags, and iterate based on the results to accomplish the user's goal.

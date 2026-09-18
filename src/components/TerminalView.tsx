@@ -31,7 +31,7 @@ import {
 import { getConfig, type ExecutionMode, type SubmitShortcut } from "../ipc/config";
 import { getSessionCwd } from "../ipc/fs";
 import { enterpriseCompleteTask, enterpriseOnComplete } from "../ipc/enterprise";
-import { useTerminalBlocks } from "../hooks/useTerminalBlocks";
+import { useTerminalBlocks, type TerminalBlock } from "../hooks/useTerminalBlocks";
 import { useShellIdentity } from "../hooks/useShellIdentity";
 import { useElevationState } from "../hooks/useElevationState";
 import { useAgentMission } from "../hooks/useAgentMission";
@@ -367,16 +367,46 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const lastFailedCommandRef = useRef<string | null>(null);
   const pendingRetryRef = useRef<string | null>(null);
 
+  // AI agent 送來、以非零結束碼結束的指令，它的完成 callback 先扣在這裡，
+  // 等確定是不是權限不足才交出去。直接交出去的話，agent 一拿到 740 就會照
+  // system prompt 的規定結束迴圈；使用者接著提權、指令也自動重跑成功了，
+  // 卻已經沒有人在等那個結果——AI 就停在 740 的回覆上。
+  // 扣住之後只有兩種結局：提權重跑完成 → 交出重跑的區塊；其他任何放棄提權
+  // 的路徑（不是權限問題、按取消、UAC 取消、改跑別的指令、中斷）→ 交出
+  // 原本的區塊。每一條放棄路徑都要呼叫 releaseHeldCompletion，漏一條
+  // agent 就永遠卡在「執行中」。
+  //
+  // 放行的決定跟 callback 抵達的先後**不固定**：finalizeBlock 把完成
+  // callback 排在 setTimeout(50) 之後，onCommandSettled 卻是同步呼叫，它發
+  // 出的權限查詢常常在 callback 抵達之前就回來了。所以放行不能只做「把扣著
+  // 的交出去」，還要記下「這個 epoch 已經決定放行」（releasedEpochRef），
+  // 讓晚到的 callback 看到就直接交出去，而不是扣住一個再也沒人會放的東西。
+  const heldCompletionRef = useRef<{ block: TerminalBlock; onComplete: (block: TerminalBlock) => void } | null>(null);
+  const releasedEpochRef = useRef(-1);
+  const releaseHeldCompletion = useCallback(() => {
+    releasedEpochRef.current = commandEpochRef.current;
+    const held = heldCompletionRef.current;
+    if (!held) return;
+    heldCompletionRef.current = null;
+    held.onComplete(held.block);
+  }, []);
+
   // submitCommand 來自下面的 useTerminalBlocks，而 onPromptReady 要傳進去，
   // 直接引用會變成循環相依——透過這個檔案既有的 submitCommandRef 橋接
   // （宣告在 useTerminalBlocks 之後，所以這裡用 lazy getter 取值）。
-  const submitViaRef = useRef<((cmd: string) => void) | null>(null);
+  const submitViaRef = useRef<((cmd: string, onComplete?: (block: TerminalBlock) => void) => void) | null>(null);
 
   const handlePromptReady = useCallback(() => {
     const cmd = pendingRetryRef.current;
     if (!cmd) return;
     pendingRetryRef.current = null;
-    submitViaRef.current?.(cmd);
+    // 如果這條指令是 agent 送的，重跑的結果直接交給它等著的 callback。
+    // 要在 submit 之前先把 held 清掉：submit 會觸發 handleCommandStarted，
+    // 那裡會把還扣著的 callback 當成「放棄提權」用原本的 740 放行。
+    const held = heldCompletionRef.current;
+    heldCompletionRef.current = null;
+    if (held) submitViaRef.current?.(cmd, held.onComplete);
+    else submitViaRef.current?.(cmd);
   }, []);
 
   const handleCommandSettled = useCallback((exitCode: number) => {
@@ -386,14 +416,20 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     // 回傳 false，所以這裡不需要額外的平台判斷。
     if (exitCode !== 0) {
       const epoch = commandEpochRef.current;
-      void checkPermissionDenied(sessionId).then((denied) => {
-        if (denied && aliveRef.current && epoch === commandEpochRef.current) {
+      void checkPermissionDenied(sessionId).catch(() => false).then((denied) => {
+        // epoch 不同＝已經有新指令開始了，handleCommandStarted 早就放行過
+        // 這條指令扣住的 callback；現在 heldCompletionRef 裡如果有東西，是
+        // 新指令的，不能動。
+        if (!aliveRef.current || epoch !== commandEpochRef.current) return;
+        if (denied) {
           lastFailedCommandRef.current = lastCommandRef.current;
           setElevationBanner("question");
+        } else {
+          releaseHeldCompletion();
         }
       });
     }
-  }, [emitAttention, sessionId]);
+  }, [emitAttention, sessionId, releaseHeldCompletion]);
 
   const onClaudeDetectedRef = useRef(onClaudeDetected);
   useEffect(() => { onClaudeDetectedRef.current = onClaudeDetected; }, [onClaudeDetected]);
@@ -407,6 +443,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     // 有 functional-update 防呆），但每個其他會讓 banner 失效的地方
     // （確認按鈕、卸載）都明確清過，這裡不該是唯一一個依賴消費端防呆、
     // 不做 producer 清理的例外。
+    // 先放行上一條指令扣著的 callback、再推進 epoch——順序反過來的話，
+    // releasedEpochRef 會記成**新**指令的 epoch，新指令若也是 agent 送的、
+    // 也權限不足，它的 callback 就會被誤判成「已放行」而直接交出 740。
+    releaseHeldCompletion();
     commandEpochRef.current += 1;
     lastCommandRef.current = cmd;
     // 使用者在提權後、shell 就緒前又自己送了別的指令：那條待重跑的就作廢，
@@ -416,7 +456,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     if (cancelledTimerRef.current) clearTimeout(cancelledTimerRef.current);
     if (disconnectedTimerRef.current) clearTimeout(disconnectedTimerRef.current);
     if (isClaudeCommand(cmd)) onClaudeDetectedRef.current?.();
-  }, []);
+  }, [releaseHeldCompletion]);
 
   const { blocks, isAlternateBuffer, isRawKeyboardModeActive, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo, finalizeBlock } = useTerminalBlocks(
     sessionId,
@@ -2107,6 +2147,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                         // false＝使用者在 UAC 對話框按了取消，不是錯誤——
                         // 短暫顯示回饋後自動收起，不需要使用者再多按一次。
                         if (!started) {
+                          releaseHeldCompletion();
                           setElevationBanner("cancelled");
                           if (cancelledTimerRef.current) clearTimeout(cancelledTimerRef.current);
                           cancelledTimerRef.current = setTimeout(() => {
@@ -2119,6 +2160,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                       })
                       .catch((err) => {
                         console.error("[elevation] pty_elevate failed", err);
+                        if (aliveRef.current && epoch === commandEpochRef.current) releaseHeldCompletion();
                       });
                   }}
                 >
@@ -2126,7 +2168,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                 </button>
                 <button
                   className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
-                  onClick={() => setElevationBanner(null)}
+                  onClick={() => {
+                    setElevationBanner(null);
+                    releaseHeldCompletion();
+                  }}
                 >
                   {t.elevation_banner_cancel}
                 </button>
@@ -2433,7 +2478,27 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           providerName={activeProvider}
           providerId={activeProviderId}
           onClose={() => setPanelOpen(false)}
-          onExecuteCommand={(cmd, onComplete) => submitCommand(cmd, onComplete)}
+          onExecuteCommand={(cmd, onComplete) => {
+            if (!onComplete) { submitCommand(cmd); return; }
+            // submitCommand 會同步呼叫 handleCommandStarted 推進 epoch，所以
+            // 等它回來之後讀到的就是這條指令自己的 epoch。
+            let epoch = -1;
+            submitCommand(cmd, (block) => {
+              // 0＝成功；-1＝finalizeBlock 的強制結案哨兵值，之後不會有
+              // onCommandSettled 來決定放不放行，扣住就永遠放不掉。epoch 不
+              // 同＝後面已經有別的指令開始，這條不可能再進提權流程。
+              const code = block.exitCode ?? 0;
+              if (code === 0 || code === -1
+                || epoch !== commandEpochRef.current
+                || releasedEpochRef.current === epoch) {
+                onComplete(block);
+                return;
+              }
+              // 權限查詢還沒回來，或已經確定是權限不足、正在等使用者決定。
+              heldCompletionRef.current = { block, onComplete };
+            });
+            epoch = commandEpochRef.current;
+          }}
           onOpenProviderPalette={() => {
             setPanelOpen(false);
             setPaletteOpen(true);
@@ -2448,6 +2513,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             // 不需要另外通知它。
             const latest = blocksRef.current[blocksRef.current.length - 1];
             if (latest?.status === "running") finalizeBlock(latest.id, -1);
+            // agent 也可能是卡在等提權的決定（橫幅沒人理），不是卡在指令上。
+            releaseHeldCompletion();
           }}
         />
       )}
