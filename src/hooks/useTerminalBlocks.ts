@@ -109,6 +109,14 @@ export function useTerminalBlocks(
    *  的 `host_os`。這是字串值，可以放心放進依賴陣列（不像 `write` 是函式
    *  參考，同樣的字串值不會觸發 React 重新執行 effect）。 */
   hostPlatform: "windows" | "other" = navigator.platform.toLowerCase().startsWith("win") ? "windows" : "other",
+  /** 提示字元畫完、可以接受輸入了（OSC 133 B 當下）。目前唯一的用途是提權
+   *  成功後自動重跑那條失敗的指令：提權 channel 連上不代表 shell 已經就緒，
+   *  實機量到兩者相差約 1.8 秒，而 ConPTY 在 shell 就緒前收到的輸入會被直接
+   *  丟掉，所以不能用固定延遲賭，要等這個真正的就緒訊號。
+   *
+   *  必須是穩定的參考（理由同 `onCommandSettled`：它進了 OSC handler effect
+   *  的依賴陣列）。 */
+  onPromptReady?: () => void,
 ): UseTerminalBlocksResult {
   const [blocks, setBlocks] = useState<TerminalBlock[]>([]);
   const [isAlternateBuffer, setIsAlternateBuffer] = useState(false);
@@ -480,6 +488,7 @@ export function useTerminalBlocks(
           row: term.buffer.active.cursorY + term.buffer.active.baseY,
           col: term.buffer.active.cursorX,
         };
+        onPromptReady?.();
         return true;
       } else if (data === "C") {
         // Command start — usually a no-op, since the block was already
@@ -584,7 +593,7 @@ export function useTerminalBlocks(
     // 的都是函式簽名裡那個預設值運算式產生的全新參考，放進依賴陣列會讓
     // 這個 effect 每次 render 都 dispose+重新註冊）。`hostPlatform` 是字串，
     // 沒有這個問題，放心加進來。
-  }, [term, finalizeBlock, beginTrackedBlock, clearAndRebasePromptEnd, onLiveClear, onCommandSettled, hostPlatform]);
+  }, [term, finalizeBlock, beginTrackedBlock, clearAndRebasePromptEnd, onLiveClear, onCommandSettled, onPromptReady, hostPlatform]);
 
   const submitCommand = useCallback(
     (cmd: string, onComplete?: (block: TerminalBlock) => void) => {

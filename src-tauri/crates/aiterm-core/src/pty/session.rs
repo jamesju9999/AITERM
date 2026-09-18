@@ -147,11 +147,33 @@ pub struct PtySession {
     line_esc_state: Mutex<u8>,
     /// Ring buffer capturing raw PTY output for AI context. Shared with the reader thread.
     output_ring: Arc<Mutex<VecDeque<u8>>>,
-    /// DEC private modes this session's output has switched on or off, so a
-    /// share replay taken from the middle of the stream can restore them.
-    /// Unlike `output_ring` this is never evicted — see `ansi::DecModeTracker`
-    /// for the bug that made it necessary. Shared with the reader thread.
+    /// DEC private modes this session's own child PTY output has switched on
+    /// or off, so a share replay taken from the middle of the stream can
+    /// restore them. Unlike `output_ring` this is never evicted — see
+    /// `ansi::DecModeTracker` for the bug that made it necessary. Shared with
+    /// the reader thread.
+    ///
+    /// **Only ever fed from the reader thread below — never from
+    /// `ingest_external_output`.** `DecModeTracker::feed` carries parser
+    /// state (which escape sequence it's midway through, partial digits)
+    /// across calls, which is only safe when every call is a slice of one
+    /// coherent byte stream. Elevated output is a second, independent stream
+    /// arriving on its own schedule; interleaving it into this tracker let an
+    /// incomplete escape left dangling by one source (e.g. a chunk ending in
+    /// `\x1b[?25`) get "completed" by an unrelated byte from the other source
+    /// (a bare `h` in prose), recording a bogus mode flip. See
+    /// `elevated_dec_modes` for the isolated tracker elevated output feeds
+    /// instead — same reasoning `bell_count`/`marker_count` already used for
+    /// why those two aren't shared across sources either.
     dec_modes: Arc<Mutex<super::ansi::DecModeTracker>>,
+    /// Same purpose as `dec_modes`, but fed exclusively by
+    /// `ingest_external_output` (the Windows elevated-PTY sidecar's output).
+    /// A second, independent tracker rather than sharing `dec_modes` — see
+    /// the doc comment on `dec_modes` for why sharing corrupts parser state
+    /// across the two unrelated byte streams. `subscribe_with_history` merges
+    /// both trackers' `prefix()` output; see its doc comment for the
+    /// known imprecision that merge accepts.
+    elevated_dec_modes: Arc<Mutex<super::ansi::DecModeTracker>>,
     /// cd attempts staged by `apply_cd_if_any` (write path) for Bash/Pwsh
     /// sessions, each removed by the reader thread once it sees the matching
     /// OSC 133 D marker — committed to cwd/previous_cwd only if that marker
@@ -196,6 +218,10 @@ pub struct PtySession {
     /// sharing sends this to viewers so they build their own terminal at the
     /// host's dimensions rather than their own window's.
     size: Mutex<PtySize>,
+    /// 這個分頁目前掛著的提權 channel，`None` 代表一般身分。有值但已斷線
+    /// （`ElevatedChannel::state()` 回 `Disconnected`）時，`write` 自動退回
+    /// 一般子行程——見 `write` 方法。
+    pub(crate) elevated: Mutex<Option<super::elevated::ElevatedChannel>>,
 }
 
 /// Commits a resolved cd to `cwd`/`previous_cwd`. Free function (not a method)
@@ -411,6 +437,10 @@ impl PtySession {
         let ring_for_thread = Arc::clone(&output_ring);
         let dec_modes: Arc<Mutex<super::ansi::DecModeTracker>> = Arc::new(Mutex::new(Default::default()));
         let dec_modes_for_thread = Arc::clone(&dec_modes);
+        // No `_for_thread` clone: only `ingest_external_output` (called via
+        // `&self`, never from the reader thread) ever feeds this one.
+        let elevated_dec_modes: Arc<Mutex<super::ansi::DecModeTracker>> =
+            Arc::new(Mutex::new(Default::default()));
         let cwd: Arc<Mutex<PathBuf>> = Arc::new(Mutex::new(initial_cwd));
         let cwd_for_thread = Arc::clone(&cwd);
         let previous_cwd: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
@@ -539,6 +569,7 @@ impl PtySession {
             line_esc_state: Mutex::new(0),
             output_ring,
             dec_modes,
+            elevated_dec_modes,
             pending_cds,
             bell_count,
             marker_count,
@@ -546,11 +577,31 @@ impl PtySession {
             last_output_at,
             output_tx,
             size: Mutex::new(size),
+            elevated: Mutex::new(None),
         })
     }
 
     pub fn write(&self, data: &[u8]) -> PtyResult<()> {
         self.record_into_line_buffer(data);
+        {
+            let elevated = self.elevated.lock();
+            if let Some(channel) = elevated.as_ref() {
+                if channel.state() == super::elevated::ElevatedState::Connected {
+                    // 這裡刻意不直接把 `channel.write` 的 `Err` 回傳出去：`state()`
+                    // 跟 `channel.write` 內部自己的 state 檢查之間有一個窗口，背景
+                    // 讀取執行緒可能剛好在這個窗口把狀態切成 Disconnected，讓
+                    // `channel.write` 回錯——如果那時候直接回傳錯誤，這個按鍵就
+                    // 憑空消失（沒進提權 channel，也沒進一般子行程）。所以寫入失
+                    // 敗一律當成「跟一開始就沒連上一樣」，往下穿透到一般子行程，
+                    // 而不是提早回傳。
+                    if channel.write(data).is_ok() {
+                        return Ok(());
+                    }
+                }
+                // 斷線（或剛剛才發現斷線）：往下穿透到一般子行程，不視為錯誤
+                // ——這正是自動切回一般模式的地方。
+            }
+        }
         let mut writer = self.writer.lock();
         writer.write_all(data)?;
         writer.flush()?;
@@ -768,7 +819,33 @@ impl PtySession {
             // the duplicate inside the replay simply re-applies it, landing on
             // the same state. `max_bytes` is a bound on the ring slice, not on
             // this prefix, which is tens of bytes.
+            //
+            // Two trackers, concatenated: `dec_modes` (this session's own
+            // child PTY) and `elevated_dec_modes` (the Windows elevated-PTY
+            // sidecar, if this session has ever been elevated — see the doc
+            // comment on those two fields for why they must be kept separate
+            // rather than one shared tracker). Concatenating means that if
+            // *both* sources have ever set the same DEC mode number, the
+            // second one emitted here — elevated — wins on replay, since
+            // a later `CSI ? Ps h`/`l` for the same mode always overrides an
+            // earlier one, the same as it would on a real terminal.
+            //
+            // This is a deliberate, documented heuristic, not a claim of true
+            // chronological correctness: with two independently-parsed
+            // streams there is no shared clock to say which source *really*
+            // touched a given mode last in wall-clock time (and, notably,
+            // neither does the live terminal the user is actually looking
+            // at — `pty://data/{id}` re-emits from the two sources are not
+            // ordered against each other either, so this is not a regression
+            // relative to what the user already sees). Getting that fully
+            // right would need a shared per-mode sequence counter across both
+            // trackers; deferred unless it's ever observed to matter in
+            // practice, since it doesn't address the actual corruption bug
+            // (a dangling escape from one source being wrongly completed by
+            // unrelated bytes from the other) that motivated splitting the
+            // trackers in the first place.
             let mut out = self.dec_modes.lock().prefix();
+            out.extend(self.elevated_dec_modes.lock().prefix());
             out.extend(ring.iter().skip(start).copied());
             Some(out)
         };
@@ -812,6 +889,17 @@ impl PtySession {
     }
 
     pub fn resize(&self, size: PtySize) -> PtyResult<()> {
+        // 提權 session 的畫面是由 sidecar 那邊的 ConPTY 產生的，本地 master
+        // resize 不會影響它。沒有這段轉發，提權 ConPTY 會一直停在啟動時的
+        // 尺寸，跟 xterm 的實際尺寸對不上，重繪序列就會在畫面上錯位（同一行
+        // 指令重複、截斷、大段縮排）。轉發失敗不當成錯誤：斷線時本來就該讓
+        // 下面的本地 resize 照常進行，斷線偵測走 `ElevatedChannel` 自己的狀態機。
+        {
+            let elevated = self.elevated.lock();
+            if let Some(channel) = elevated.as_ref() {
+                let _ = channel.resize(size.cols, size.rows);
+            }
+        }
         let master = self.master.lock();
         master
             .resize(size)
@@ -828,8 +916,77 @@ impl PtySession {
         (s.cols, s.rows)
     }
 
+    /// Feeds bytes that did **not** come from this session's own child PTY —
+    /// currently only the Windows elevated-PTY sidecar, wired in
+    /// `PtyManager::elevate` — into the same ring buffer / broadcast channel
+    /// the reader thread above writes into.
+    ///
+    /// This is the fix for the gap documented in
+    /// `docs/superpowers/specs/2026-09-17-windows-elevated-pty-session-design.md`:
+    /// elevated output used to reach only the GUI layer's own re-emit of
+    /// `pty://data/{id}` (`elevate_with_app`) and never this session's
+    /// `output_ring`, so `get_recent_output`/`get_recent_raw` — and therefore
+    /// `context::snapshot()`, which `ai_query`/`ai_chat` read — never saw it.
+    ///
+    /// Mirrors the reader thread's ring write + DEC-mode feed + broadcast,
+    /// **inside the same critical section**, for the identical atomicity
+    /// reason documented on `subscribe_with_history` above: a chunk must be
+    /// either fully reflected in a snapshot taken concurrently, or not yet
+    /// broadcast — never both, never neither.
+    ///
+    /// Feeds `elevated_dec_modes`, **not** `dec_modes` — see the doc comment
+    /// on those two fields. `DecModeTracker::feed` carries parser state
+    /// across calls, so feeding it from two independent, arbitrarily
+    /// interleaved sources can let an escape sequence left incomplete by one
+    /// source get wrongly "completed" by an unrelated byte from the other,
+    /// recording a bogus mode flip. Using a second, separate tracker here —
+    /// exactly mirroring why `bell_count`/`marker_count` below are also not
+    /// shared — keeps each tracker's parse honest; `subscribe_with_history`
+    /// is responsible for merging both trackers' output for replay.
+    ///
+    /// Deliberately does **not** replicate the rest of the reader thread's
+    /// per-chunk bookkeeping:
+    /// - `last_exit_code` / `pending_cds` (OSC 133 `D;<code>` confirmation):
+    ///   tied to *this* session's own shell-integration prompt hooks and to
+    ///   `apply_cd_if_any`, which only ever stages entries from this
+    ///   session's own write path. The elevated shell is a separate process
+    ///   the user is typing into via a different route; folding its exit
+    ///   codes into this bookkeeping would misattribute them.
+    /// - `bell_count` / `marker_count`: both carry incremental state (a
+    ///   "tail" of trailing bytes) across calls so a multi-byte marker split
+    ///   across chunk boundaries is still found. That assumes a single
+    ///   continuous byte stream from one source. Interleaving two
+    ///   independent sources into the same tail could split a real marker
+    ///   across the switch, or splice two unrelated fragments into a false
+    ///   match.
+    ///
+    /// `last_output_at` **is** updated: whether this session is "alive" for
+    /// the stuck-session monitor should reflect output from either source.
+    pub(crate) fn ingest_external_output(&self, chunk: &[u8]) {
+        if chunk.is_empty() {
+            return;
+        }
+        {
+            let mut ring = self.output_ring.lock();
+            for &b in chunk {
+                if ring.len() >= OUTPUT_RING_CAP { ring.pop_front(); }
+                ring.push_back(b);
+            }
+            // Same order, same reasoning as the reader thread: ring first,
+            // then DEC modes, then broadcast, all under the ring lock. Feeds
+            // the *elevated* tracker, not the shared one the reader thread
+            // uses — see the doc comment above and on the two fields.
+            self.elevated_dec_modes.lock().feed(chunk);
+            if self.output_tx.receiver_count() > 0 {
+                let _ = self.output_tx.send(chunk.to_vec());
+            }
+        }
+        *self.last_output_at.lock() = Instant::now();
+    }
+
     pub fn kill(&self) -> PtyResult<()> {
         let mut child = self.child.lock();
+        *self.elevated.lock() = None;
         // Job 先來：它是唯一收得到「已經脫離的背景行程」的機制。taskkill /T
         // 留著當 Job 建立失敗時的退路。
         #[cfg(windows)]
@@ -972,6 +1129,7 @@ impl Drop for PtySession {
     fn drop(&mut self) {
         // Best-effort: kill child so the reader thread eventually sees EOF/error.
         let mut child = self.child.lock();
+        *self.elevated.lock() = None;
         #[cfg(windows)]
         if let Some(job) = &self.job {
             job.terminate();
@@ -1050,6 +1208,20 @@ mod tests {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// 跟 `wait_for_shell_ready` 完全一樣的邏輯，給不是 `#[tokio::test]`
+    /// 的一般 `#[test]` 用（沒有 tokio runtime，不能 `.await`）。
+    fn wait_for_shell_ready_sync(session: &PtySession) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let produced =
+                session.get_recent_raw(4096).map(|b| !b.is_empty()).unwrap_or(false);
+            if (produced && session.ms_since_output() >= 250) || Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
         }
     }
 
@@ -2149,6 +2321,393 @@ mod tests {
             "重播開頭的模式前綴沒有帶回 ?1049h，觀看端不會進 alternate screen；實際前綴：{:?}",
             prefix_seqs.iter().map(|s| String::from_utf8_lossy(s).into_owned()).collect::<Vec<_>>(),
         );
+    }
+
+    #[test]
+    fn write_routes_to_elevated_channel_when_present() {
+        use super::super::elevated::ElevatedChannel;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let session = PtySession::spawn(test_shell(), PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }, None, |_| {})
+            .expect("spawn pty");
+
+        let (write_tx, write_rx) = mpsc::channel::<Vec<u8>>();
+        struct CapturingWriter(mpsc::Sender<Vec<u8>>);
+        impl std::io::Write for CapturingWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                let _ = self.0.send(buf.to_vec());
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        // 這個測試只關心寫入方向，讀取端不重要——但一個立刻 EOF 的 `Cursor`
+        // 會讓 `ElevatedChannel` 的讀取執行緒瞬間把狀態切成 `Disconnected`，
+        // 跟接下來的 `session.write` 產生競態（實測會偶發 timeout）。改用一個
+        // 永遠阻塞、不會產出 EOF 的 reader，讓狀態在整個測試期間確定停在
+        // `Connected`。
+        struct BlockForever;
+        impl std::io::Read for BlockForever {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                loop {
+                    std::thread::park();
+                }
+            }
+        }
+        let channel = ElevatedChannel::new(BlockForever, Box::new(CapturingWriter(write_tx)), |_| {}, || {});
+        *session.elevated.lock() = Some(channel);
+
+        session.write(b"whoami\r\n").expect("write should succeed via elevated channel");
+
+        // `Frame::write_to` 呼叫底層 writer 三次（長度前綴／種類位元組／
+        // payload），`CapturingWriter` 把每一次呼叫各自送成一則訊息——要湊出
+        // 完整 frame 得把它們接起來，不能只看第一則。
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut captured = Vec::new();
+        while std::time::Instant::now() < deadline {
+            match write_rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(chunk) => captured.extend_from_slice(&chunk),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            if captured.windows(8).any(|w| w == b"whoami\r\n") {
+                break;
+            }
+        }
+        // Frame::Data 編碼後的內容裡應該包含原始位元組（長度前綴+種類位元組之後）。
+        assert!(
+            captured.windows(8).any(|w| w == b"whoami\r\n"),
+            "elevated channel must receive the write; got {captured:?}"
+        );
+
+        drop(session);
+    }
+
+    #[test]
+    fn write_falls_back_to_normal_child_when_elevated_channel_disconnected() {
+        use super::super::elevated::ElevatedChannel;
+        use std::io::Cursor;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let session = PtySession::spawn(test_shell(), PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }, None, move |chunk| {
+            let _ = tx.send(chunk);
+        })
+        .expect("spawn pty");
+
+        // 這個測試會真的往 spawn 出來的 shell 寫入，所以要先等它就緒——shell
+        // 開始讀 stdin 之前寫進去的位元組會被吞掉，事後怎麼輪詢輸出都等不到，
+        // 見 `wait_for_shell_ready` 的說明。
+        wait_for_shell_ready_sync(&session);
+
+        let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>();
+        struct CapturingWriter(mpsc::Sender<Vec<u8>>);
+        impl std::io::Write for CapturingWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                let _ = self.0.send(buf.to_vec());
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        // 空的 reader 讓讀取執行緒立刻看到 EOF、狀態轉成 Disconnected。
+        let channel = ElevatedChannel::new(Cursor::new(Vec::<u8>::new()), Box::new(CapturingWriter(write_tx)), |_| {}, || {});
+        // 等它真的斷線，避免測試競態。
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while channel.state() != super::super::elevated::ElevatedState::Disconnected && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        *session.elevated.lock() = Some(channel);
+
+        #[cfg(windows)]
+        session.write(b"echo HELLO_AITERM\r\nexit\r\n").unwrap();
+        #[cfg(not(windows))]
+        session.write(b"echo HELLO_AITERM\nexit\n").unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut buffer = Vec::new();
+        while std::time::Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(chunk) => buffer.extend_from_slice(&chunk),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            if String::from_utf8_lossy(&buffer).contains("HELLO_AITERM") {
+                break;
+            }
+        }
+        assert!(
+            String::from_utf8_lossy(&buffer).contains("HELLO_AITERM"),
+            "disconnected elevated channel must not swallow writes — they should reach the normal child"
+        );
+
+        drop(session);
+    }
+
+    // ── ingest_external_output: the Critical-fix ring-buffer splice ────────
+    //
+    // These cover the gap the final holistic review flagged: elevated output
+    // reached the GUI's own Tauri re-emit but never this session's own
+    // output_ring/output_tx, so `context::snapshot()` (what `ai_query`/
+    // `ai_chat` read) could never see it. No Windows/ConPTY/named-pipe
+    // machinery is needed to test this — `ingest_external_output` only
+    // touches the ring buffer/broadcast channel, both ordinary cross-platform
+    // types.
+
+    #[test]
+    fn ingest_external_output_is_visible_in_get_recent_output() {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+
+        session.ingest_external_output(b"HELLO_FROM_ELEVATED_SHELL");
+
+        let recent = session
+            .get_recent_output(4096)
+            .expect("ring should have content after ingest");
+        assert!(
+            recent.contains("HELLO_FROM_ELEVATED_SHELL"),
+            "get_recent_output (what context::snapshot()/ai_query rely on) must \
+             include ingested elevated output; got: {recent:?}"
+        );
+
+        drop(session);
+    }
+
+    #[tokio::test]
+    async fn ingest_external_output_is_broadcast_to_subscribers_under_the_same_lock() {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+
+        // Subscribe before ingesting, same as a screen-share viewer would.
+        let mut rx = session.subscribe();
+
+        session.ingest_external_output(b"BROADCAST_MARKER_ABC");
+
+        let chunk = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timed out waiting for the ingested chunk to be broadcast")
+            .expect("broadcast channel closed unexpectedly");
+        assert_eq!(
+            chunk,
+            b"BROADCAST_MARKER_ABC".to_vec(),
+            "screen-share subscribers must receive elevated output too"
+        );
+
+        drop(session);
+    }
+
+    #[test]
+    fn ingest_external_output_reaches_the_ring_when_wired_as_an_elevated_channels_on_output(
+    ) {
+        // Mirrors exactly how `PtyManager::elevate` (aiterm-core/src/pty/manager.rs)
+        // wires this in production: it wraps the caller's `on_output` closure
+        // so it also calls `session.ingest_external_output(&chunk)`. This test
+        // builds a real `ElevatedChannel` off a mock transport (same pattern
+        // as `write_routes_to_elevated_channel_when_present` above) and
+        // exercises the whole path: transport bytes -> Frame decode ->
+        // on_output closure -> ring buffer.
+        use super::super::elevated::ElevatedChannel;
+        use super::super::elevated_protocol::Frame;
+        use std::io::Cursor;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let session = Arc::new(
+            PtySession::spawn(
+                test_shell(),
+                PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+                None,
+                |_| {},
+            )
+            .expect("spawn pty"),
+        );
+
+        let mut encoded = Vec::new();
+        Frame::Data(b"ELEVATED_MARKER_XYZ".to_vec())
+            .write_to(&mut encoded)
+            .unwrap();
+        let reader = Cursor::new(encoded);
+
+        struct CapturingWriter(mpsc::Sender<Vec<u8>>);
+        impl std::io::Write for CapturingWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                let _ = self.0.send(buf.to_vec());
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>();
+        let writer = Box::new(CapturingWriter(write_tx));
+
+        let session_for_output = Arc::clone(&session);
+        let channel = ElevatedChannel::new(
+            reader,
+            writer,
+            move |bytes| session_for_output.ingest_external_output(&bytes),
+            || {},
+        );
+        *session.elevated.lock() = Some(channel);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if session
+                .get_recent_output(4096)
+                .map(|s| s.contains("ELEVATED_MARKER_XYZ"))
+                .unwrap_or(false)
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "elevated output never reached the session's ring buffer via the \
+                 ElevatedChannel on_output wiring"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        drop(session);
+    }
+
+    // ── dec_modes isolation: elevated output must not corrupt the normal
+    //    tracker's parser state, and vice versa ─────────────────────────────
+    //
+    // Regression test for a bug a follow-up code-quality review found in the
+    // first version of `ingest_external_output`: it fed the SAME `dec_modes`
+    // tracker the reader thread feeds. `DecModeTracker::feed` (`ansi.rs`)
+    // carries parser state (which escape sequence it's midway through,
+    // partial digits) across calls — its own doc comment says "safe to split
+    // anywhere", but that assumption is "one coherent byte stream split
+    // arbitrarily by 4KB reads", not "two logically unrelated shells
+    // interleaved". Feeding it from two independent sources let an escape
+    // sequence left dangling by one source (a chunk ending in `\x1b[?25`,
+    // with no terminating byte yet) get wrongly "completed" by an unrelated
+    // byte from the OTHER source — any bare `h`/`l`, extremely common in
+    // ordinary output — recording a bogus DEC mode as switched on/off.
+    // `prefix()` (used by `subscribe_with_history` to reconstruct terminal
+    // state for a screen-share viewer joining mid-session) would then replay
+    // that wrong mode to a new viewer.
+    #[test]
+    fn ingest_external_output_dec_mode_state_is_isolated_from_concurrent_normal_pty_output(
+    ) {
+        let session = PtySession::spawn(
+            test_shell(),
+            PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+            None,
+            |_| {},
+        )
+        .expect("spawn pty");
+        wait_for_shell_ready_sync(&session);
+
+        // Snapshot the *normal* tracker's state before touching the elevated
+        // path at all — the baseline `dec_modes_after` below is compared
+        // against. Taken after `wait_for_shell_ready_sync` so it already
+        // reflects whatever the shell's own startup sequence legitimately
+        // set (e.g. some shells set readline's meta-key mode ?1034).
+        let dec_modes_before = session.dec_modes.lock().prefix();
+
+        // Half of a DEC-mode escape sequence fed through the elevated path,
+        // deliberately never completed by this test — simulates a chunk
+        // boundary landing mid-sequence on the elevated sidecar's side.
+        session.ingest_external_output(b"\x1b[?25");
+
+        // Concurrently — a genuinely separate execution context, this
+        // session's own background reader thread, racing against this test
+        // thread — drive real bytes through the *normal* PTY whose very
+        // first character is a bare `h`: the terminal's own cooked-mode echo
+        // reflects back exactly what's written, character for character,
+        // before the shell even looks at it, regardless of whether "hxxx" is
+        // a valid command. Nothing about this write is a DEC-mode escape; if
+        // it ever completes the dangling elevated escape above, that can
+        // only be cross-stream state leakage between the two trackers.
+        session.write(b"hello_marker_9f3a2b\r\n").unwrap();
+
+        // Wait until the reader thread has genuinely processed that output
+        // — i.e. its own ring-write + dec_modes.feed critical section has
+        // run — rather than asserting immediately, which could "pass" only
+        // because the interfering chunk hadn't arrived yet (a false
+        // negative, not a real pass).
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut seen = false;
+        while std::time::Instant::now() < deadline {
+            if let Some(out) = session.get_recent_output(OUTPUT_RING_CAP) {
+                if out.contains("hello_marker_9f3a2b") {
+                    seen = true;
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            seen,
+            "the interfering normal-PTY output never arrived — this test \
+             didn't exercise what it's supposed to"
+        );
+
+        // The dangling escape was NEVER completed by this test — no `h`/`l`
+        // was ever sent through `ingest_external_output`. Check the tracker's
+        // *recorded modes* directly (`prefix()`), not the raw replay bytes:
+        // the raw ring legitimately contains the literal bytes
+        // `\x1b[?25` immediately followed by `hello_marker...` — that's
+        // exactly what got spliced in on purpose by the Critical fix — so a
+        // naive substring search over the combined replay would find
+        // `\x1b[?25h` there even when nothing was actually recorded as a
+        // mode, a false positive unrelated to tracker corruption. `prefix()`
+        // only emits modes that were actually inserted into `modes: BTreeMap`
+        // via a *completed* `h`/`l` transition, which is the thing that must
+        // never happen here.
+        //
+        // Note: on its own this assertion is structurally guaranteed by the
+        // isolation and would pass even against a regression that re-wires
+        // `ingest_external_output` back onto the shared `dec_modes` tracker
+        // — in that scenario nothing feeds `elevated_dec_modes` at all, so
+        // it trivially stays empty regardless of whether the historical bug
+        // is present. Kept as a sanity check, but see the assertion below
+        // for the one that actually catches that regression.
+        let elevated_prefix = session.elevated_dec_modes.lock().prefix();
+        assert!(
+            elevated_prefix.is_empty(),
+            "DEC mode 25 must never have been recorded on the elevated tracker: \
+             the escape sent via ingest_external_output was always left \
+             dangling, so any recorded mode means concurrent normal-PTY \
+             output corrupted it. Recorded prefix: {:?}",
+            String::from_utf8_lossy(&elevated_prefix)
+        );
+
+        // The assertion that actually catches a regression back to a shared
+        // tracker: `dec_modes` (the one `subscribe_with_history` uses for
+        // normal-session replay) must be byte-for-byte unchanged by
+        // everything above. Nothing sent to the real shell in this test
+        // ("hello_marker_9f3a2b\r\n") contains an ESC byte, so it cannot
+        // legitimately set or reset any DEC mode on its own — the only way
+        // `dec_modes` could differ here is if the elevated path's dangling
+        // `\x1b[?25` leaked into it and got completed by the real PTY
+        // output's leading `h`, exactly the corruption this fix exists to
+        // prevent. If `ingest_external_output` were ever accidentally
+        // re-wired to feed `self.dec_modes` instead of
+        // `self.elevated_dec_modes`, this is the assertion that would catch
+        // it — the one above would not (see its note).
+        let dec_modes_after = session.dec_modes.lock().prefix();
+        assert_eq!(
+            dec_modes_before, dec_modes_after,
+            "the *normal* dec_modes tracker changed even though nothing sent \
+             to the real shell in this test could legitimately change it — \
+             the elevated path's dangling escape must have leaked into it. \
+             before: {:?}, after: {:?}",
+            String::from_utf8_lossy(&dec_modes_before),
+            String::from_utf8_lossy(&dec_modes_after),
+        );
+
+        drop(session);
     }
 }
 

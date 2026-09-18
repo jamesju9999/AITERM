@@ -117,6 +117,65 @@ pub fn pty_get_recent_output(
     manager.get_recent_output(&id, 4096)
 }
 
+/// 主動要求檢查目前 session 最近一次指令是否像是權限不足失敗。前端在收到
+/// OSC 133 D（指令結束）時呼叫。
+///
+/// 兩個訊號是 OR 的關係：exit code 740（`ERROR_ELEVATION_REQUIRED`）跟語言
+/// 與 shell 種類都無關，是主要防線；文字比對只認得固定的英文字串，在地化
+/// 系統（例如繁體中文 Windows 上的 DISM 錯誤訊息）常常完全比對不到，只當輔
+/// 助訊號。實機測試中，純文字比對在繁中系統上對 `DISM /Online
+/// /Cleanup-Image /RestoreHealth`（exit 740）完全沒反應，加上 exit code 檢
+/// 查後才抓到。
+#[tauri::command]
+pub fn pty_check_permission_denied(
+    manager: State<'_, std::sync::Arc<PtyManager>>,
+    id: String,
+) -> bool {
+    if manager
+        .last_exit_code(&id)
+        .is_some_and(aiterm_core::pty::detection::exit_code_indicates_permission_denied)
+    {
+        return true;
+    }
+    let Some(output) = manager.get_recent_output(&id, 4096) else { return false };
+    let Some(variant) = manager.get_shell_variant(&id) else { return false };
+    aiterm_core::pty::detection::looks_like_permission_denied(&output, variant)
+}
+
+/// 使用者確認要提權後呼叫。回傳 `true` 代表已經開始提權（或沿用既有的已提
+/// 權 channel），`false` 代表使用者在 UAC 對話框按了取消。
+///
+/// **`async fn` + `spawn_blocking`，不是 plain fn**：`elevate_with_app` 一路
+/// 呼叫到 `spawn_windows`，後者文件明載會無限期阻塞呼叫的執行緒（UAC 對話
+/// 框等待使用者回應，可能是好幾分鐘；接著具名管線 `ConnectNamedPipe` 完全
+/// 沒有逾時）。這個專案對「會阻塞、且阻塞時間不是毫秒等級」的操作，既有的
+/// 一致作法是 `async fn` 包 `tokio::task::spawn_blocking`（見
+/// `vcs/git.rs` 的 `git()`、`code_assistant/mod.rs`、`document_convert/mod.rs`
+/// ——尤其 `git()` 那段註解，理由完全一樣：直接阻塞會佔住一條 tokio 工作執行
+/// 緒直到呼叫結束，期間其他背景工作會被一起拖住）。這裡的阻塞時間比那些
+/// case 更極端（無上限，取決於使用者何時回應 UAC），沒有理由退回更寬鬆的
+/// 作法；不依賴「Tauri 對 plain fn 指令預設會另開執行緒」這個框架層級的隱含
+/// 行為，改成顯式、跟本專案其餘阻塞操作一致的寫法。
+#[tauri::command]
+pub async fn pty_elevate(
+    app: tauri::AppHandle,
+    manager: State<'_, std::sync::Arc<PtyManager>>,
+    id: String,
+) -> Result<bool, PtyError> {
+    let manager = manager.inner().clone();
+    let variant = manager
+        .get_shell_variant(&id)
+        .unwrap_or(super::cd_parser::ShellVariant::Cmd);
+    #[cfg(windows)]
+    super::manager::log_step("pty_elevate: spawning blocking task");
+    let result = tokio::task::spawn_blocking(move || crate::pty::elevate_with_app(&manager, app, id, variant))
+        .await
+        .map_err(|e| PtyError::Internal(format!("pty_elevate task join error: {e}")))?;
+    #[cfg(windows)]
+    super::manager::log_step(&format!("pty_elevate: spawn_blocking joined, result={result:?}"));
+    result
+}
+
 /// A single file/directory entry returned by pty_list_dir.
 #[derive(serde::Serialize, Clone)]
 pub struct DirEntry {

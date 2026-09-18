@@ -13,6 +13,28 @@ use aiterm_core::pty::error::PtyResult;
 use aiterm_core::pty::events::{data_event_name, PtyDataPayload};
 use aiterm_core::pty::PtyManager;
 
+/// 跟 `aiterm_core::pty::elevated::windows_launch::log_step` 寫同一個檔案
+/// （`%TEMP%\aiterm-elevate-main.log`）——這裡另外複製一份而不是共用，因為
+/// 那邊是 `aiterm-core` crate 裡 `cfg(windows)` module-private 的函式，這裡
+/// 是 `app` crate，兩者本來就不共用內部實作。寫進同一個檔案是為了讓
+/// `spawn_windows` 內部（已經記錄 ShellExecuteExW/ConnectNamedPipe 各步驟）
+/// 跟這裡「`manager.elevate()` 回傳之後、`app.emit()` 各步驟」的時間戳能直
+/// 接對照，看主視窗卡住的當下究竟卡在哪一段。
+#[cfg(windows)]
+pub(crate) fn log_step(msg: &str) {
+    use std::io::Write as _;
+    let Some(mut path) = std::env::var_os("TEMP").map(PathBuf::from) else { return };
+    path.push("aiterm-elevate-main.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let _ = writeln!(f, "[{now}] pid={} {msg}", std::process::id());
+        let _ = f.flush();
+    }
+}
+
 /// Spawn 一個 session 並把輸出接到 `pty://data/{id}` 事件。
 ///
 /// `bridge_env` 非 None 時，把 Claude Code 橋接的環境變數注入這個分頁。
@@ -41,4 +63,69 @@ pub fn create_with_app(
             eprintln!("emit {event_name} failed: {e}");
         }
     })
+}
+
+/// 對指定 session 提權，輸出併入同一個 `pty://data/{id}` 事件；連線狀態變化
+/// 額外發 `pty://elevation-state/{id}`，讓前端徽章能顯示/消失。
+///
+/// **會阻塞呼叫的執行緒**（UAC 對話框等待時間 + 具名管線連線沒有逾時）——見
+/// `aiterm_core::pty::elevated::spawn_windows` 的文件註解。呼叫端（`pty_elevate`
+/// Tauri command）必須用 `tokio::task::spawn_blocking` 之類的機制呼叫這個函式，
+/// 不能直接從 async runtime 的 worker 執行緒或 UI 事件迴圈呼叫。
+#[cfg(windows)]
+pub fn elevate_with_app(
+    manager: &PtyManager,
+    app: AppHandle,
+    id: String,
+    shell_variant: aiterm_core::pty::cd_parser::ShellVariant,
+) -> PtyResult<bool> {
+    let data_event = data_event_name(&id);
+    let app_for_output = app.clone();
+    let state_event = aiterm_core::pty::events::elevation_state_event_name(&id);
+    let app_for_disconnect = app.clone();
+    let state_event_for_disconnect = state_event.clone();
+
+    log_step(&format!("elevate_with_app: start, id={id}"));
+    let started = manager.elevate(
+        &id,
+        shell_variant,
+        move |chunk| {
+            let payload = PtyDataPayload { base64: BASE64.encode(&chunk) };
+            if let Err(e) = app_for_output.emit(&data_event, payload) {
+                eprintln!("emit {data_event} failed: {e}");
+            }
+        },
+        move || {
+            log_step("on_disconnect callback: start");
+            let payload = aiterm_core::pty::events::ElevationStatePayload { elevated: false };
+            if let Err(e) = app_for_disconnect.emit(&state_event_for_disconnect, payload) {
+                eprintln!("emit {state_event_for_disconnect} failed: {e}");
+            }
+            log_step("on_disconnect callback: emit returned");
+        },
+    )?;
+    log_step(&format!("elevate_with_app: manager.elevate() returned started={started}"));
+
+    if started {
+        log_step("elevate_with_app: calling app.emit(state_event, elevated:true)");
+        let payload = aiterm_core::pty::events::ElevationStatePayload { elevated: true };
+        if let Err(e) = app.emit(&state_event, payload) {
+            eprintln!("emit {state_event} failed: {e}");
+        }
+        log_step("elevate_with_app: app.emit returned");
+    }
+    log_step("elevate_with_app: returning");
+    Ok(started)
+}
+
+#[cfg(not(windows))]
+pub fn elevate_with_app(
+    _manager: &PtyManager,
+    _app: AppHandle,
+    _id: String,
+    _shell_variant: aiterm_core::pty::cd_parser::ShellVariant,
+) -> PtyResult<bool> {
+    Err(aiterm_core::pty::error::PtyError::Internal(
+        "elevation not supported on this platform".into(),
+    ))
 }

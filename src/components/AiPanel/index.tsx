@@ -65,6 +65,12 @@ export interface AiPanelProps {
   getIdleMs?: () => number;
   /** 中斷目前這個卡住的指令：送 Ctrl+C 並強制結案。 */
   onInterruptCommand?: () => void;
+  /**
+   * 使用者按了停止鍵。外層若代 agent 扣著指令的完成 callback（例如等使用者
+   * 回應提權橫幅，見 TerminalView 的 heldCompletionRef），要在這裡立刻放行
+   * ——光送 Ctrl+C 不夠，那時 shell 早就回到提示字元，沒有指令會因此結束。
+   */
+  onAgentAborted?: () => void;
 }
 
 /**
@@ -83,6 +89,7 @@ export function AiPanel({
   sendRemoteResponse,
   getIdleMs,
   onInterruptCommand,
+  onAgentAborted,
 }: AiPanelProps) {
   /** 常駐配額徽章的代表窗；null 就不顯示。 */
   const quotaWindow = useProviderQuota(providerId);
@@ -210,6 +217,17 @@ export function AiPanel({
         .join("\n");
     } catch { /* ignore */ }
 
+    // Windows 專屬：沒有這條規則時，AI 遇到 exit 740 會自己發明
+    // `Start-Process -Verb RunAs`，把指令送進一個獨立的提權視窗——那個視窗
+    // AITerm 完全看不到輸出，使用者看到的是「指令跑到別的地方去了」。
+    // AITerm 自己就會偵測 740 並顯示提權橫幅；使用者確認後會在提權 session
+    // 自動重跑，並把重跑的結果交給 agent（見 TerminalView 的
+    // heldCompletionRef），所以 AI 只有在使用者拒絕提權時才會看到 740。
+    const elevationRule = navigator.platform.toLowerCase().startsWith("win")
+      ? `
+6. Elevation: if a command fails with exit code 740, or reports that it needs elevated/administrator privileges, do NOT try to work around it — never use \`Start-Process -Verb RunAs\`, \`runas\`, or redirect an elevated command's output to a temp file and read it back. Those run in a separate window whose output this terminal cannot see. AITerm handles elevation itself: when a command fails for lack of privileges it asks the user to elevate this session, and if they approve, it re-runs the command elevated and gives you that result instead. So if you still receive a privilege failure, the user declined elevation — stop emitting <cmd> tags, and tell the user in ${languageDirective(locale)} that the command needs administrator rights and that they can ask you again and approve AITerm's elevation prompt.`
+      : "";
+
     return `You are a terminal Agent. You can execute shell commands via <cmd>...</cmd> tags, and iterate based on the results to accomplish the user's goal.
 
 Current working directory: ${cwd}
@@ -221,7 +239,7 @@ Rules:
 2. The system will execute it automatically and return the result — keep analyzing until the goal is achieved.
 3. Once the goal is achieved, give your final explanation in ${languageDirective(locale)}, and do not include any more <cmd> tags.
 4. Never perform destructive or irreversible operations (e.g. rm -rf /).
-5. Write all explanations in ${languageDirective(locale)}.`;
+5. Write all explanations in ${languageDirective(locale)}.${elevationRule}`;
   }, [sessionId, locale]);
 
   /**
@@ -445,6 +463,7 @@ Rules:
         // interrupted, the prompt reappears, and the onComplete callback
         // can fire to actually unblock the agent loop.
         writePty(sessionId, "\x03").catch(() => {});
+        onAgentAborted?.();
       }}
       providerName={providerName}
       onOpenProviderPalette={onOpenProviderPalette}

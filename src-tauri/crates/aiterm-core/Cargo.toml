@@ -35,11 +35,31 @@ tokio-tungstenite = "0.29"
 # 一起結束。這是 Windows 上唯一能收掉「刻意脫離的背景行程」的機制——
 # `taskkill /T` 走的是當下的行程樹，抓不到已經被重新掛走的行程（例如 Agent
 # 啟動的開發伺服器），而那些行程會一直佔住卡片的 worktree 目錄。
+#
+# `Win32_System_Pipes` / `Win32_Storage_FileSystem` / `Win32_System_IO`：具名
+# 管線 + `ReadFile`/`WriteFile`（`elevated.rs` 的 `spawn_windows`/
+# `PipeReadHandle`/`PipeWriteHandle`）。`Win32_System_IO` 看似沒被直接用到，
+# 但 `ReadFile`/`WriteFile` 的函式簽章裡有 `*mut OVERLAPPED`，這個型別要
+# `Win32_System_IO` 才會被編進 windows-sys 本身——跟 Task 5（
+# `aiterm-elevated-host`）踩過的坑一樣。
+#
+# `Win32_UI_Shell` / `Win32_System_Registry` / `Win32_UI_WindowsAndMessaging`：
+# `ShellExecuteExW`/`SHELLEXECUTEINFOW`/`SW_HIDE`。`Win32_System_Registry`
+# 容易漏掉：`SHELLEXECUTEINFOW` 這個型別本身（不只是函式）在 windows-sys
+# 0.60.2 原始碼裡被 `#[cfg(feature = "Win32_System_Registry")]` 卡住，因為
+# struct 裡有個 `hkeyClass: HKEY` 欄位——沒開這個 feature，struct 定義根本
+# 不存在，不是函式連不到而已。
 windows-sys = { version = "0.60", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
+    "Win32_System_Pipes",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_UI_Shell",
+    "Win32_System_Registry",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [dev-dependencies]

@@ -8,6 +8,10 @@ pub fn closed_event_name(session_id: &str) -> String {
     format!("pty://closed/{session_id}")
 }
 
+pub fn elevation_state_event_name(session_id: &str) -> String {
+    format!("pty://elevation-state/{session_id}")
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PtyDataPayload {
     /// Base64-encoded bytes. xterm.js expects a binary stream, but Tauri events
@@ -18,4 +22,9 @@ pub struct PtyDataPayload {
 #[derive(Debug, Clone, Serialize)]
 pub struct PtyClosedPayload {
     pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ElevationStatePayload {
+    pub elevated: bool,
 }

@@ -96,6 +96,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aiterm-elevated-host"
+version = "0.1.0"
+dependencies = [
+ "aiterm-core",
+ "portable-pty",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
 name = "aiterm-host"
 version = "0.2.2"
 dependencies = [

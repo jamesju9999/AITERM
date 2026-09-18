@@ -54,6 +54,16 @@ export function getPtyShellType(id: string): Promise<string | null> {
   return invoke<string | null>("pty_get_shell_type", { id });
 }
 
+/** 要求對指定 session 提權。回傳 false 代表使用者在 UAC 對話框按了取消。 */
+export function elevatePty(id: string): Promise<boolean> {
+  return invoke<boolean>("pty_elevate", { id });
+}
+
+/** 主動檢查最近一次指令是否像是權限不足失敗（前端在偵測到指令結束時呼叫）。 */
+export function checkPermissionDenied(id: string): Promise<boolean> {
+  return invoke<boolean>("pty_check_permission_denied", { id });
+}
+
 /**
  * Subscribe to PTY output for a given session. Returns an unlisten function.
  * The callback receives already-decoded bytes as a Uint8Array.

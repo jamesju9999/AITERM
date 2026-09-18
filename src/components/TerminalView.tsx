@@ -14,8 +14,10 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import "@xterm/xterm/css/xterm.css";
 
 import {
+  checkPermissionDenied,
   closePty,
   createPty,
+  elevatePty,
   getPtyRecentOutput,
   onPtyData,
   resizePty,
@@ -29,8 +31,9 @@ import {
 import { getConfig, type ExecutionMode, type SubmitShortcut } from "../ipc/config";
 import { getSessionCwd } from "../ipc/fs";
 import { enterpriseCompleteTask, enterpriseOnComplete } from "../ipc/enterprise";
-import { useTerminalBlocks } from "../hooks/useTerminalBlocks";
+import { useTerminalBlocks, type TerminalBlock } from "../hooks/useTerminalBlocks";
 import { useShellIdentity } from "../hooks/useShellIdentity";
+import { useElevationState } from "../hooks/useElevationState";
 import { useAgentMission } from "../hooks/useAgentMission";
 import { useTelegramRemoteControl } from "../hooks/useTelegramRemoteControl";
 import { listProviders } from "../ipc/provider";
@@ -43,6 +46,7 @@ import { ProviderPalette } from "./ProviderPalette";
 import { QuotaBadge } from "./QuotaBadge";
 import { SharePanel } from "./SharePanel";
 import { ShellWarningBadge } from "./ShellWarningBadge";
+import { ElevationBadge } from "./ElevationBadge";
 import { useProviderQuota } from "../hooks/useProviderQuota";
 import { WarpInput, type WarpInputHandle } from "./WarpInput";
 import { FileExplorer } from "./FileExplorer/FileExplorer";
@@ -325,16 +329,134 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     onAttentionRef.current?.(kind);
   }, []);
 
+  // "question" = 剛偵測到權限不足，問使用者要不要提權；"cancelled" = 使用者
+  // 按了是、但 UAC 對話框被取消，短暫顯示回饋後自動收起；"disconnected" =
+  // 提權連線結束（使用者 exit 或連線意外中斷），同樣短暫顯示後自動收起。
+  const [elevationBanner, setElevationBanner] = useState<"question" | "cancelled" | "disconnected" | null>(null);
+
+  // checkPermissionDenied 的 IPC 往返可能在元件已經卸載後才回來（切分頁、
+  // 關分頁）——跟 ShellWarningBadge 的 detectPowerShell7 用同一種 alive-flag
+  // 防護，避免對已卸載元件呼叫 setState。這裡是 useCallback 不是
+  // useEffect，沒有自己的 cleanup，所以用 ref 存活標記，在掛載期間唯一的
+  // useEffect 裡於卸載時撥為 false。
+  const aliveRef = useRef(true);
+  // "cancelled" 訊息的自動收起計時器。存 handle 是為了能在啟動新計時器或
+  // 卸載時 clearTimeout——單靠比對 state 值（'cancelled'）分辨不出「這是
+  // 我自己的計時器」還是「使用者在 3 秒內又提權取消了一次、屬於下一次嘗試
+  // 的計時器」，會把後者提早關掉。
+  const cancelledTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    aliveRef.current = false;
+    if (cancelledTimerRef.current) clearTimeout(cancelledTimerRef.current);
+  }, []);
+
+  // 每次新指令開始就 +1。checkPermissionDenied 的回覆要跟「發出當下是第幾
+  // 個指令」比對，不能只看「元件還活著嗎」——A 指令失敗→查詢送出中→使用者
+  // 已經開始跑 B 指令→A 的查詢才回來 true，這時元件仍是掛載狀態，aliveRef
+  // 擋不住，banner 會蓋在 B 的畫面上，跟使用者正在做的事無關。
+  const commandEpochRef = useRef(0);
+
+  // 提權成功後要自動重跑的那條指令（設計文件「連線就緒後自動重跑失敗指令」）。
+  // 拆成兩個 ref 是必要的，不是囉嗦：
+  //  - lastFailedCommandRef 在偵測到權限不足時就記下來，但**還不能**代表要重跑。
+  //  - pendingRetryRef 只在使用者確認提權、而且真的提權成功之後才設。
+  // 合成一個會壞：那條失敗指令結束後，**一般** shell 自己也會馬上送一次
+  // OSC 133 B（它的下一個提示字元），在使用者都還沒按確認之前就觸發重跑，
+  // 於是又在非提權 shell 裡跑一次、又失敗，變成無限迴圈。
+  const lastCommandRef = useRef<string | null>(null);
+  const lastFailedCommandRef = useRef<string | null>(null);
+  const pendingRetryRef = useRef<string | null>(null);
+
+  // AI agent 送來、以非零結束碼結束的指令，它的完成 callback 先扣在這裡，
+  // 等確定是不是權限不足才交出去。直接交出去的話，agent 一拿到 740 就會照
+  // system prompt 的規定結束迴圈；使用者接著提權、指令也自動重跑成功了，
+  // 卻已經沒有人在等那個結果——AI 就停在 740 的回覆上。
+  // 扣住之後只有兩種結局：提權重跑完成 → 交出重跑的區塊；其他任何放棄提權
+  // 的路徑（不是權限問題、按取消、UAC 取消、改跑別的指令、中斷）→ 交出
+  // 原本的區塊。每一條放棄路徑都要呼叫 releaseHeldCompletion，漏一條
+  // agent 就永遠卡在「執行中」。
+  //
+  // 放行的決定跟 callback 抵達的先後**不固定**：finalizeBlock 把完成
+  // callback 排在 setTimeout(50) 之後，onCommandSettled 卻是同步呼叫，它發
+  // 出的權限查詢常常在 callback 抵達之前就回來了。所以放行不能只做「把扣著
+  // 的交出去」，還要記下「這個 epoch 已經決定放行」（releasedEpochRef），
+  // 讓晚到的 callback 看到就直接交出去，而不是扣住一個再也沒人會放的東西。
+  const heldCompletionRef = useRef<{ block: TerminalBlock; onComplete: (block: TerminalBlock) => void } | null>(null);
+  const releasedEpochRef = useRef(-1);
+  const releaseHeldCompletion = useCallback(() => {
+    releasedEpochRef.current = commandEpochRef.current;
+    const held = heldCompletionRef.current;
+    if (!held) return;
+    heldCompletionRef.current = null;
+    held.onComplete(held.block);
+  }, []);
+
+  // submitCommand 來自下面的 useTerminalBlocks，而 onPromptReady 要傳進去，
+  // 直接引用會變成循環相依——透過這個檔案既有的 submitCommandRef 橋接
+  // （宣告在 useTerminalBlocks 之後，所以這裡用 lazy getter 取值）。
+  const submitViaRef = useRef<((cmd: string, onComplete?: (block: TerminalBlock) => void) => void) | null>(null);
+
+  const handlePromptReady = useCallback(() => {
+    const cmd = pendingRetryRef.current;
+    if (!cmd) return;
+    pendingRetryRef.current = null;
+    // 如果這條指令是 agent 送的，重跑的結果直接交給它等著的 callback。
+    // 要在 submit 之前先把 held 清掉：submit 會觸發 handleCommandStarted，
+    // 那裡會把還扣著的 callback 當成「放棄提權」用原本的 740 放行。
+    const held = heldCompletionRef.current;
+    heldCompletionRef.current = null;
+    if (held) submitViaRef.current?.(cmd, held.onComplete);
+    else submitViaRef.current?.(cmd);
+  }, []);
+
   const handleCommandSettled = useCallback((exitCode: number) => {
     emitAttention(attentionForExitCode(exitCode));
-  }, [emitAttention]);
+    // 非零結束碼才問後端——權限不足一定是非零結束碼，成功的指令沒必要多打
+    // 一趟 IPC。pty_check_permission_denied 在非 Windows／非權限問題時只會
+    // 回傳 false，所以這裡不需要額外的平台判斷。
+    if (exitCode !== 0) {
+      const epoch = commandEpochRef.current;
+      void checkPermissionDenied(sessionId).catch(() => false).then((denied) => {
+        // epoch 不同＝已經有新指令開始了，handleCommandStarted 早就放行過
+        // 這條指令扣住的 callback；現在 heldCompletionRef 裡如果有東西，是
+        // 新指令的，不能動。
+        if (!aliveRef.current || epoch !== commandEpochRef.current) return;
+        if (denied) {
+          lastFailedCommandRef.current = lastCommandRef.current;
+          setElevationBanner("question");
+        } else {
+          releaseHeldCompletion();
+        }
+      });
+    }
+  }, [emitAttention, sessionId, releaseHeldCompletion]);
 
   const onClaudeDetectedRef = useRef(onClaudeDetected);
   useEffect(() => { onClaudeDetectedRef.current = onClaudeDetected; }, [onClaudeDetected]);
 
   const handleCommandStarted = useCallback((cmd: string) => {
+    // 新指令開始：讓上一個指令的 checkPermissionDenied／elevatePty 查詢都
+    // 失效（見 commandEpochRef 註解），同時清掉舊 banner 與它的自動收起
+    // 計時器——每個失敗指令各自觸發一次未關聯的 checkPermissionDenied，
+    // 晚到的回覆可能在使用者已經換去跑別的指令時才把 banner 彈回來，跟
+    // 使用者正在做的事完全無關。計時器這裡本來可以不清（它自己的 callback
+    // 有 functional-update 防呆），但每個其他會讓 banner 失效的地方
+    // （確認按鈕、卸載）都明確清過，這裡不該是唯一一個依賴消費端防呆、
+    // 不做 producer 清理的例外。
+    // 先放行上一條指令扣著的 callback、再推進 epoch——順序反過來的話，
+    // releasedEpochRef 會記成**新**指令的 epoch，新指令若也是 agent 送的、
+    // 也權限不足，它的 callback 就會被誤判成「已放行」而直接交出 740。
+    releaseHeldCompletion();
+    commandEpochRef.current += 1;
+    lastCommandRef.current = cmd;
+    // 使用者在提權後、shell 就緒前又自己送了別的指令：那條待重跑的就作廢，
+    // 不要晚點突然自己冒出來跑一條使用者早就不預期的指令。
+    pendingRetryRef.current = null;
+    setElevationBanner(null);
+    if (cancelledTimerRef.current) clearTimeout(cancelledTimerRef.current);
+    if (disconnectedTimerRef.current) clearTimeout(disconnectedTimerRef.current);
     if (isClaudeCommand(cmd)) onClaudeDetectedRef.current?.();
-  }, []);
+  }, [releaseHeldCompletion]);
 
   const { blocks, isAlternateBuffer, isRawKeyboardModeActive, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo, finalizeBlock } = useTerminalBlocks(
     sessionId,
@@ -343,7 +465,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     forceLiveRepaint,
     handleCommandSettled,
     handleCommandStarted,
+    undefined,
+    undefined,
+    handlePromptReady,
   );
+
+  useEffect(() => {
+    submitViaRef.current = submitCommand;
+  }, [submitCommand]);
 
   useEffect(() => {
     const latest = blocks[blocks.length - 1];
@@ -662,6 +791,37 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // shell 自己回報的身分（OSC 7000）。只有 Windows PowerShell 5.1 會讓
   // ShellWarningBadge 真的顯示出東西，其餘情況它回傳 null。
   const shellIdentity = useShellIdentity(termState);
+
+  // 後端提權狀態（pty://elevation-state/{id}）。非 Windows 或未提權時永遠是
+  // false，ElevationBadge 因此不會顯示。
+  const elevated = useElevationState(sessionId);
+
+  // `elevated` 從 true 變回 false（使用者在提權 shell 打 exit，或連線意外
+  // 中斷——見 elevated.rs 的 on_disconnect，兩種情況目前共用同一個不帶參數
+  // 的 callback，後端無法區分，所以這裡也只顯示一句通用訊息）時，短暫顯示
+  // 一則系統訊息，重用跟「cancelled」相同的 banner 元件/自動收起邏輯。
+  // 用 ref 記上一次的值而不是直接比對 render 之間的差異：hook 掛載時第一次
+  // render 的 `elevated` 恆為 false（見 useElevationState 的文件註解），這
+  // 個 effect 依賴 [elevated] 只在它變化時跑，不會在初次掛載就誤判成一次
+  // "true → false" 的轉換。
+  const prevElevatedRef = useRef(false);
+  const disconnectedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (prevElevatedRef.current && !elevated) {
+      setElevationBanner("disconnected");
+      if (disconnectedTimerRef.current) clearTimeout(disconnectedTimerRef.current);
+      disconnectedTimerRef.current = setTimeout(() => {
+        disconnectedTimerRef.current = null;
+        if (aliveRef.current) {
+          setElevationBanner((b) => (b === "disconnected" ? null : b));
+        }
+      }, 3000);
+    }
+    prevElevatedRef.current = elevated;
+  }, [elevated]);
+  useEffect(() => () => {
+    if (disconnectedTimerRef.current) clearTimeout(disconnectedTimerRef.current);
+  }, []);
 
   // Fetch git info (branch, insertions/deletions) for completed blocks, debounced 500ms.
   const gitFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1843,6 +2003,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
               的分頁 id 會查不到，觀看端只會看到「那個終端機已經關閉」。
               整套自動測試都沒抓到，因為測試裡直接把 PTY id 當成 tab_id 用。 */}
           <ShellWarningBadge identity={shellIdentity} />
+          <ElevationBadge elevated={elevated} />
           {sessionId && <SharePanel sessionId={sessionId} />}
           <button
             className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
@@ -1955,6 +2116,71 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             <button onClick={() => doSearch(searchQuery, 'prev')} title={t.term_search_prev} className="terminal-search-btn aiterm-btn aiterm-btn--secondary aiterm-btn--sm">↑</button>
             <button onClick={() => doSearch(searchQuery, 'next')} title={t.term_search_next} className="terminal-search-btn aiterm-btn aiterm-btn--secondary aiterm-btn--sm">↓</button>
             <button onClick={closeSearch} title={t.term_search_close} className="terminal-search-btn terminal-search-close aiterm-btn aiterm-btn--secondary aiterm-btn--sm">✕</button>
+          </div>
+        )}
+        {elevationBanner && (
+          <div className="aiterm-elevation-banner">
+            {elevationBanner === "question" ? (
+              <>
+                <span>{t.elevation_banner_question}</span>
+                <button
+                  className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                  onClick={() => {
+                    setElevationBanner(null);
+                    // UAC 對話框可能等使用者好幾分鐘（見 pty_elevate 的文件
+                    // 註解）——這段時間夠使用者換去跑別的指令。跟
+                    // checkPermissionDenied 同一個理由，用 epoch 而不只是
+                    // aliveRef 判斷這個回覆還算不算數：aliveRef 只檢查元件
+                    // 還活著，擋不住「活著但已經在跑別的指令」這個情境。
+                    const epoch = commandEpochRef.current;
+                    void elevatePty(sessionId)
+                      .then((started) => {
+                        if (!aliveRef.current || epoch !== commandEpochRef.current) return;
+                        if (started) {
+                          // 只在真的提權成功之後才武裝重跑。提權 channel 連
+                          // 上不等於 shell 已經可以收輸入（實機量到差約 1.8
+                          // 秒，而 ConPTY 在那之前收到的輸入會被丟掉），所以
+                          // 這裡只記下來，真正送出是等 onPromptReady 收到提權
+                          // shell 的 OSC 133 B 才做。
+                          pendingRetryRef.current = lastFailedCommandRef.current;
+                        }
+                        // false＝使用者在 UAC 對話框按了取消，不是錯誤——
+                        // 短暫顯示回饋後自動收起，不需要使用者再多按一次。
+                        if (!started) {
+                          releaseHeldCompletion();
+                          setElevationBanner("cancelled");
+                          if (cancelledTimerRef.current) clearTimeout(cancelledTimerRef.current);
+                          cancelledTimerRef.current = setTimeout(() => {
+                            cancelledTimerRef.current = null;
+                            if (aliveRef.current) {
+                              setElevationBanner((b) => (b === "cancelled" ? null : b));
+                            }
+                          }, 3000);
+                        }
+                      })
+                      .catch((err) => {
+                        console.error("[elevation] pty_elevate failed", err);
+                        if (aliveRef.current && epoch === commandEpochRef.current) releaseHeldCompletion();
+                      });
+                  }}
+                >
+                  {t.elevation_banner_confirm}
+                </button>
+                <button
+                  className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                  onClick={() => {
+                    setElevationBanner(null);
+                    releaseHeldCompletion();
+                  }}
+                >
+                  {t.elevation_banner_cancel}
+                </button>
+              </>
+            ) : elevationBanner === "cancelled" ? (
+              <span>{t.elevation_cancelled}</span>
+            ) : (
+              <span>{t.elevation_disconnected}</span>
+            )}
           </div>
         )}
         <div
@@ -2252,7 +2478,28 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           providerName={activeProvider}
           providerId={activeProviderId}
           onClose={() => setPanelOpen(false)}
-          onExecuteCommand={(cmd, onComplete) => submitCommand(cmd, onComplete)}
+          onAgentAborted={releaseHeldCompletion}
+          onExecuteCommand={(cmd, onComplete) => {
+            if (!onComplete) { submitCommand(cmd); return; }
+            // submitCommand 會同步呼叫 handleCommandStarted 推進 epoch，所以
+            // 等它回來之後讀到的就是這條指令自己的 epoch。
+            let epoch = -1;
+            submitCommand(cmd, (block) => {
+              // 0＝成功；-1＝finalizeBlock 的強制結案哨兵值，之後不會有
+              // onCommandSettled 來決定放不放行，扣住就永遠放不掉。epoch 不
+              // 同＝後面已經有別的指令開始，這條不可能再進提權流程。
+              const code = block.exitCode ?? 0;
+              if (code === 0 || code === -1
+                || epoch !== commandEpochRef.current
+                || releasedEpochRef.current === epoch) {
+                onComplete(block);
+                return;
+              }
+              // 權限查詢還沒回來，或已經確定是權限不足、正在等使用者決定。
+              heldCompletionRef.current = { block, onComplete };
+            });
+            epoch = commandEpochRef.current;
+          }}
           onOpenProviderPalette={() => {
             setPanelOpen(false);
             setPaletteOpen(true);
@@ -2267,6 +2514,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             // 不需要另外通知它。
             const latest = blocksRef.current[blocksRef.current.length - 1];
             if (latest?.status === "running") finalizeBlock(latest.id, -1);
+            // agent 也可能是卡在等提權的決定（橫幅沒人理），不是卡在指令上。
+            releaseHeldCompletion();
           }}
         />
       )}

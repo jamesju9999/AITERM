@@ -151,6 +151,18 @@ jobs:
             New-Item -ItemType File -Path src-tauri/binaries/db2-sidecar-win-x64 | Out-Null
           }
 
+      # Placeholder for the aiterm-elevated-host externalBin, Windows-only:
+      # only tauri.windows.conf.json registers it (the elevated-PTY feature
+      # only exists on Windows), same compile-time existence check as uv above.
+      - name: Placeholder for the aiterm-elevated-host externalBin
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          if (-not (Test-Path src-tauri/binaries/aiterm-elevated-host-x86_64-pc-windows-msvc.exe)) {
+            New-Item -ItemType File -Path src-tauri/binaries/aiterm-elevated-host-x86_64-pc-windows-msvc.exe | Out-Null
+          }
+
       - name: Install Linux system dependencies
         if: startsWith(matrix.os, 'ubuntu')
         run: |
@@ -294,6 +306,18 @@ jobs:
           New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
           if (-not (Test-Path src-tauri/binaries/db2-sidecar-win-x64)) {
             New-Item -ItemType File -Path src-tauri/binaries/db2-sidecar-win-x64 | Out-Null
+          }
+
+      # Placeholder for the aiterm-elevated-host externalBin, Windows-only:
+      # only tauri.windows.conf.json registers it (the elevated-PTY feature
+      # only exists on Windows), same compile-time existence check as uv below.
+      - name: Placeholder for the aiterm-elevated-host externalBin
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          if (-not (Test-Path src-tauri/binaries/aiterm-elevated-host-x86_64-pc-windows-msvc.exe)) {
+            New-Item -ItemType File -Path src-tauri/binaries/aiterm-elevated-host-x86_64-pc-windows-msvc.exe | Out-Null
           }
 
       # tauri-build DOES validate every entry in bundle.externalBin (measured —

@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/aiterm-core", "crates/aiterm-host"]
+members = [".", "crates/aiterm-core", "crates/aiterm-host", "crates/aiterm-elevated-host"]
 
 [package]
 name = "app"

@@ -1,0 +1,25 @@
+[package]
+name = "aiterm-elevated-host"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+
+[[bin]]
+name = "aiterm-elevated-host"
+path = "src/main.rs"
+
+[dependencies]
+portable-pty = "0.8"
+aiterm-core = { path = "../aiterm-core" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_Storage_FileSystem",
+] }

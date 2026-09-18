@@ -227,6 +227,14 @@ jobs:
         shell: pwsh
         run: pwsh -ExecutionPolicy Bypass -File scripts\setup-uv-win.ps1
 
+      # Windows: build the aiterm-elevated-host sidecar (elevated/UAC PTY session)
+      # for externalBin bundling. Windows-only — only tauri.windows.conf.json
+      # registers it.
+      - name: Build aiterm-elevated-host (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: pwsh -ExecutionPolicy Bypass -File scripts\setup-elevated-host-win.ps1
+
       # Linux .deb only: build Java sidecar and bundle it.
       # AppImage builds intentionally skip DB2 — linuxdeploy fails when the JRE's .so
       # files are in the AppDir (it tries to resolve libjvm.so's internal deps and errors out).
