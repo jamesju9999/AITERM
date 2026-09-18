@@ -356,6 +356,29 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // 擋不住，banner 會蓋在 B 的畫面上，跟使用者正在做的事無關。
   const commandEpochRef = useRef(0);
 
+  // 提權成功後要自動重跑的那條指令（設計文件「連線就緒後自動重跑失敗指令」）。
+  // 拆成兩個 ref 是必要的，不是囉嗦：
+  //  - lastFailedCommandRef 在偵測到權限不足時就記下來，但**還不能**代表要重跑。
+  //  - pendingRetryRef 只在使用者確認提權、而且真的提權成功之後才設。
+  // 合成一個會壞：那條失敗指令結束後，**一般** shell 自己也會馬上送一次
+  // OSC 133 B（它的下一個提示字元），在使用者都還沒按確認之前就觸發重跑，
+  // 於是又在非提權 shell 裡跑一次、又失敗，變成無限迴圈。
+  const lastCommandRef = useRef<string | null>(null);
+  const lastFailedCommandRef = useRef<string | null>(null);
+  const pendingRetryRef = useRef<string | null>(null);
+
+  // submitCommand 來自下面的 useTerminalBlocks，而 onPromptReady 要傳進去，
+  // 直接引用會變成循環相依——透過這個檔案既有的 submitCommandRef 橋接
+  // （宣告在 useTerminalBlocks 之後，所以這裡用 lazy getter 取值）。
+  const submitViaRef = useRef<((cmd: string) => void) | null>(null);
+
+  const handlePromptReady = useCallback(() => {
+    const cmd = pendingRetryRef.current;
+    if (!cmd) return;
+    pendingRetryRef.current = null;
+    submitViaRef.current?.(cmd);
+  }, []);
+
   const handleCommandSettled = useCallback((exitCode: number) => {
     emitAttention(attentionForExitCode(exitCode));
     // 非零結束碼才問後端——權限不足一定是非零結束碼，成功的指令沒必要多打
@@ -365,6 +388,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       const epoch = commandEpochRef.current;
       void checkPermissionDenied(sessionId).then((denied) => {
         if (denied && aliveRef.current && epoch === commandEpochRef.current) {
+          lastFailedCommandRef.current = lastCommandRef.current;
           setElevationBanner("question");
         }
       });
@@ -384,6 +408,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     // （確認按鈕、卸載）都明確清過，這裡不該是唯一一個依賴消費端防呆、
     // 不做 producer 清理的例外。
     commandEpochRef.current += 1;
+    lastCommandRef.current = cmd;
+    // 使用者在提權後、shell 就緒前又自己送了別的指令：那條待重跑的就作廢，
+    // 不要晚點突然自己冒出來跑一條使用者早就不預期的指令。
+    pendingRetryRef.current = null;
     setElevationBanner(null);
     if (cancelledTimerRef.current) clearTimeout(cancelledTimerRef.current);
     if (disconnectedTimerRef.current) clearTimeout(disconnectedTimerRef.current);
@@ -397,7 +425,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     forceLiveRepaint,
     handleCommandSettled,
     handleCommandStarted,
+    undefined,
+    undefined,
+    handlePromptReady,
   );
+
+  useEffect(() => {
+    submitViaRef.current = submitCommand;
+  }, [submitCommand]);
 
   useEffect(() => {
     const latest = blocks[blocks.length - 1];
@@ -2061,6 +2096,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                     void elevatePty(sessionId)
                       .then((started) => {
                         if (!aliveRef.current || epoch !== commandEpochRef.current) return;
+                        if (started) {
+                          // 只在真的提權成功之後才武裝重跑。提權 channel 連
+                          // 上不等於 shell 已經可以收輸入（實機量到差約 1.8
+                          // 秒，而 ConPTY 在那之前收到的輸入會被丟掉），所以
+                          // 這裡只記下來，真正送出是等 onPromptReady 收到提權
+                          // shell 的 OSC 133 B 才做。
+                          pendingRetryRef.current = lastFailedCommandRef.current;
+                        }
                         // false＝使用者在 UAC 對話框按了取消，不是錯誤——
                         // 短暫顯示回饋後自動收起，不需要使用者再多按一次。
                         if (!started) {
