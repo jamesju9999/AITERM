@@ -475,8 +475,6 @@ mod windows_launch {
 
 #[cfg(windows)]
 pub use windows_launch::spawn_windows;
-#[cfg(windows)]
-pub(crate) use windows_launch::log_step as elevated_log_step;
 
 #[cfg(windows)]
 pub(crate) struct PipeReadHandle(pub windows_sys::Win32::Foundation::HANDLE);

@@ -227,7 +227,8 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
         let mut buf = [0u8; 4096];
         // 這條路徑先前完全沒有儀表——實機出現「提權後畫面零輸出」時，分不出
         // 是 ConPTY 根本沒吐東西（shell 沒起來／卡住）還是吐了但送不回主行程。
-        // 只記第一筆與結束時的累計，不是每筆都記，避免把 log 灌爆。
+        // 只記結束時的累計位元組數——**不記內容**：那是使用者的指令與輸出，
+        // 不該落地到 %TEMP% 的 log 檔裡。
         let mut total: u64 = 0;
         let mut chunks: u32 = 0;
         loop {
@@ -238,17 +239,6 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
                 }
                 Ok(n) => {
                     chunks += 1;
-                    if chunks <= 10 {
-                        // 連內容一起記：光看位元組數分不出這是 ConPTY 自己的
-                        // 初始序列，還是 shell 真的輸出了什麼。特別要看有沒有
-                        // 夾帶需要終端機回覆的查詢序列（例如 DSR `ESC[6n`）
-                        // ——那種序列如果沒人回應，shell 會就地卡死等回覆。
-                        let shown = n.min(200);
-                        log_step(&format!(
-                            "output thread: chunk #{chunks}, {n} bytes: {:?}",
-                            String::from_utf8_lossy(&buf[..shown])
-                        ));
-                    }
                     total += n as u64;
                     if let Err(e) = Frame::Data(buf[..n].to_vec()).write_to(&mut pipe_writer) {
                         eprintln!("conpty bridge: failed to write output frame to pipe: {e}");
@@ -272,21 +262,10 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
         match Frame::read_from(&mut pipe_reader) {
             Ok(Some(Frame::Data(bytes))) => {
                 in_frames += 1;
-                if in_frames <= 10 {
-                    let shown = bytes.len().min(120);
-                    log_step(&format!(
-                        "input frame #{in_frames}, {} bytes: {:?}",
-                        bytes.len(),
-                        String::from_utf8_lossy(&bytes[..shown])
-                    ));
-                }
                 if let Err(e) = pty_writer.write_all(&bytes) {
                     eprintln!("conpty bridge: failed to write input to ConPTY: {e}");
                     log_step(&format!("input frame #{in_frames}: write to ConPTY failed: {e}"));
                     break;
-                }
-                if in_frames <= 10 {
-                    log_step(&format!("input frame #{in_frames}: written to ConPTY"));
                 }
             }
             Ok(Some(Frame::Resize { cols, rows })) => {
