@@ -15,14 +15,11 @@ pub enum ElevatedState {
 /// `#[cfg(windows)]` 的 `spawn_windows` 裡（後續任務補上），這裡只放狀態機
 /// 本身，好讓它能在任何平台上被測試。
 ///
-/// 已知缺口（刻意先留著）：讀取執行緒（見 `new` 裡的 `std::thread::spawn`）
-/// 目前沒有 join/清理路徑。如果 `ElevatedChannel` 在執行緒還卡在
-/// `Frame::read_from` 阻塞讀取時被 drop，執行緒會一直活著直到底層傳輸自己
-/// 出錯或 EOF 才會退出——不會馬上跟著 channel 一起結束。這在 mock transport
-/// 的測試裡不是問題（`Cursor` 立刻 EOF），但等到實作 `spawn_windows`（真正的
-/// 具名管線）那個任務時必須回頭處理：屆時傳輸是長生命週期的具名管線，同樣
-/// 的阻塞讀取沒有清理路徑就會變成真的執行緒洩漏。實作 `spawn_windows` 的人
-/// 請在那裡補上 `Drop`／join 或等效機制，不要延到之後才發現。
+/// 關閉的連鎖反應（Windows）：channel 被 drop → writer（`PipeWriteHandle`）
+/// 的 `Drop` 關掉主行程 -> sidecar 那條管線 → sidecar 的讀取收到
+/// `ERROR_BROKEN_PIPE`、整個行程結束（連帶 Job 裡的提權 shell）→ sidecar ->
+/// 主行程那條管線跟著斷 → 這裡的讀取執行緒出錯退出。讀取執行緒因此不需要另外
+/// join：它的生命週期跟 sidecar 綁在一起，而 sidecar 的生命週期由 writer 決定。
 pub struct ElevatedChannel {
     writer: Mutex<Box<dyn Write + Send>>,
     state: Arc<Mutex<ElevatedState>>,
@@ -382,19 +379,8 @@ mod windows_launch {
         }
         log_step("both pipes connected, constructing ElevatedChannel");
 
-        // 已知缺口（刻意先留著，跟 `ElevatedChannel` 本身文件說明的讀取執行緒
-        // 洩漏是同一類問題）：兩個 handle 的所有權從這裡轉移進
-        // `PipeReadHandle`/`PipeWriteHandle`，但兩者都沒有 `Drop` 實作去關閉
-        // 它們——`ElevatedChannel` 被 drop 時，這兩個具名管線 handle 不會自動
-        // 關閉。目前只有讀取執行緒自然 EOF／出錯時才會間接讓行程之後收尾；
-        // 如果之後要處理提前關閉 session 的路徑，這裡要回頭補上清理機制。
-        //
-        // 註：改成兩條單向管線之後，「每個 handle 恰好只有一個擁有者」這件事
-        // 已經成立（以前是同一個 raw HANDLE 被兩個型別各包一份，所以不能各自
-        // 加 `Drop`，會 use-after-close），所以之後真的要補 `Drop` 時不再需要
-        // `Arc<HandleGuard>` 那種共享所有權的設計，直接各自加就行——但要注意
-        // 讀取執行緒可能還卡在 `ReadFile` 裡，關 handle 是喚醒它的手段之一，
-        // 順序要想清楚。
+        // 兩個 handle 的所有權從這裡轉移進 `PipeReadHandle`/`PipeWriteHandle`，
+        // 由它們的 `Drop` 負責關閉（見兩者的說明）。
         let reader = super::PipeReadHandle(s2h_handle);
         let writer: Box<dyn std::io::Write + Send> = Box::new(super::PipeWriteHandle(h2s_handle));
         let channel = ElevatedChannel::new(reader, writer, on_output, on_disconnect);
@@ -507,8 +493,32 @@ impl std::io::Read for PipeReadHandle {
     }
 }
 
+/// 讀取執行緒結束（sidecar 斷線）時隨執行緒一起被 drop。
+#[cfg(windows)]
+impl Drop for PipeReadHandle {
+    fn drop(&mut self) {
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
 #[cfg(windows)]
 pub(crate) struct PipeWriteHandle(pub windows_sys::Win32::Foundation::HANDLE);
+
+/// 關分頁（`PtySession::kill` 把 `elevated` 設成 `None`）時就是靠這裡通知
+/// sidecar 收工：少了它，這條管線要到整個 AITerm 結束才會被作業系統關掉，
+/// 期間 sidecar 和它底下的**管理員** shell 一直活著——分頁已經關了，使用者
+/// 卻還留著一個看不見的提權 shell。
+///
+/// 不在關閉前先送 `Frame::Exit`：關 handle 本身就讓 sidecar 的 `ReadFile`
+/// 立刻回 `ERROR_BROKEN_PIPE`，效果相同；多送一個 frame 反而可能在 sidecar
+/// 卡住、管線緩衝區滿的時候讓這個 drop（跑在 `kill` 裡、持有 session 的鎖）
+/// 跟著阻塞。
+#[cfg(windows)]
+impl Drop for PipeWriteHandle {
+    fn drop(&mut self) {
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
 #[cfg(windows)]
 unsafe impl Send for PipeWriteHandle {}
 #[cfg(windows)]

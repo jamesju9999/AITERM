@@ -143,6 +143,11 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
         log_step(&format!("had own console={had_console}, FreeConsole ok={freed}"));
     }
 
+    // 必須在 openpty()／spawn 之前：Job 成員身分是建立當下繼承的，ConPTY 的
+    // conhost、shell、shell 之後開的所有子孫都要在這之後才生出來，才會自動
+    // 落進這個 Job。見 `join_kill_on_close_job`。
+    join_kill_on_close_job();
+
     log_step(&format!("run_conpty_bridge: calling openpty() at {cols}x{rows}"));
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -187,11 +192,20 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
     // 用一條專門的執行緒 blocking `wait()`，結束時把 exit status 記下來。
     let mut killer = child.clone_killer();
     let mut child_for_wait = child;
-    let child_watchdog = std::thread::spawn(move || {
+    //
+    // 記下來還不夠：使用者在提權 shell 打 `exit` 之後，主迴圈仍卡在等輸入、
+    // 輸出執行緒也等不到 EOF，sidecar 會一直掛著，主行程也就收不到斷線、
+    // 「已提權」徽章不會消失。所以 shell 一結束就直接結束整個行程——管線隨
+    // 行程關閉，主行程的讀取端出錯，走既有的 on_disconnect。等一小段時間是
+    // 讓輸出執行緒把 shell 最後吐的位元組送完。
+    std::thread::spawn(move || {
         match child_for_wait.wait() {
             Ok(status) => log_step(&format!("child exited with status {status:?}")),
             Err(e) => log_step(&format!("child wait failed: {e}")),
         }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        log_step("shell ended, exiting sidecar");
+        std::process::exit(0);
     });
 
     let mut pty_writer = pair
@@ -209,7 +223,7 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
 
     // ConPTY 輸出 -> 管線，在自己的執行緒跑，避免跟下面「管線輸入 -> ConPTY」的
     // 迴圈互相卡住（雙向轉送的兩個方向不能共用同一個阻塞式迴圈）。
-    let output_thread = std::thread::spawn(move || {
+    std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         // 這條路徑先前完全沒有儀表——實機出現「提權後畫面零輸出」時，分不出
         // 是 ConPTY 根本沒吐東西（shell 沒起來／卡住）還是吐了但送不回主行程。
@@ -288,17 +302,65 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
         }
     }
 
-    // 已知缺口：`kill()` 在 Windows 上只 TerminateProcess 直屬的 shell 行程，
-    // 不會連帶終止 shell 底下開出來的子孫行程（例如使用者在提權 shell 裡跑的
-    // 常駐程式）。`aiterm-core/src/pty/session.rs` 的 `kill_tree_first` +
-    // Windows Job Object 是同一問題的正確解法，這裡還沒補上——刻意先留著，
-    // 之後要回頭處理，不要讓它一直是個未追蹤的缺口。
+    // 管線斷了（主行程關分頁或整個結束）→ 收工。
+    //
+    // **不可以 join 輸出執行緒**：它卡在讀 ConPTY，而 PseudoConsole 還開著
+    // （`pair.master` 還在）時，shell 死了它也收不到 EOF——join 會讓這個行程
+    // 永遠掛著，連同 conhost 一起殘留。直接回傳讓 main 結束，其餘執行緒隨
+    // 行程一起終止。
+    //
+    // shell 與它的子孫由 Job（見 `join_kill_on_close_job`）在本行程結束、
+    // Job handle 關閉時一併終止；`kill()` 只是 Job 建立失敗時的退路，而且只
+    // 收得到直屬的 shell。
+    log_step("pipe closed, exiting sidecar");
     let _ = killer.kill();
-    let _ = child_watchdog.join();
-    let _ = output_thread.join();
     unsafe { CloseHandle(read_pipe) };
     unsafe { CloseHandle(write_pipe) };
     Ok(())
+}
+
+/// 把本行程放進一個「最後一個 handle 關閉時終止所有成員」的 Job，並刻意
+/// 永不關閉那個 handle——它會在本行程結束時由作業系統關閉，不論是正常結束、
+/// 當掉還是被強制終止。之後才建立的 conhost、提權 shell、shell 開出來的所有
+/// 子孫都會繼承 Job 成員身分，於是 sidecar 一結束，整棵行程樹跟著結束，
+/// 不會留下沒人管的**管理員權限**行程。
+///
+/// 失敗只記 log 不中止：少了這層保障，退路是收尾時 `kill()` 直屬的 shell。
+fn join_kill_on_close_job() {
+    use std::mem::{size_of, zeroed};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            log_step(&format!("CreateJobObjectW failed: {}", std::io::Error::last_os_error()));
+            return;
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const core::ffi::c_void,
+            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        ) == 0
+        {
+            log_step(&format!("SetInformationJobObject failed: {}", std::io::Error::last_os_error()));
+            CloseHandle(job);
+            return;
+        }
+        if AssignProcessToJobObject(job, GetCurrentProcess()) == 0 {
+            log_step(&format!("AssignProcessToJobObject failed: {}", std::io::Error::last_os_error()));
+            CloseHandle(job);
+            return;
+        }
+        log_step("joined kill-on-close job");
+    }
 }
 
 /// 把具名管線 `HANDLE` 包成 `Read + Write`，讓它可以直接餵給 `Frame::write_to`/
