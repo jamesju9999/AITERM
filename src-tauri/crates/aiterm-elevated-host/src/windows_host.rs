@@ -253,12 +253,26 @@ fn run_conpty_bridge(read_pipe: HANDLE, write_pipe: HANDLE, shell_variant: &str,
     });
 
     // 管線輸入 -> ConPTY，在主執行緒跑。
+    let mut in_frames: u32 = 0;
     loop {
         match Frame::read_from(&mut pipe_reader) {
             Ok(Some(Frame::Data(bytes))) => {
+                in_frames += 1;
+                if in_frames <= 10 {
+                    let shown = bytes.len().min(120);
+                    log_step(&format!(
+                        "input frame #{in_frames}, {} bytes: {:?}",
+                        bytes.len(),
+                        String::from_utf8_lossy(&bytes[..shown])
+                    ));
+                }
                 if let Err(e) = pty_writer.write_all(&bytes) {
                     eprintln!("conpty bridge: failed to write input to ConPTY: {e}");
+                    log_step(&format!("input frame #{in_frames}: write to ConPTY failed: {e}"));
                     break;
+                }
+                if in_frames <= 10 {
+                    log_step(&format!("input frame #{in_frames}: written to ConPTY"));
                 }
             }
             Ok(Some(Frame::Resize { cols, rows })) => {

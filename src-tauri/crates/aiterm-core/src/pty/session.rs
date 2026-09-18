@@ -585,6 +585,28 @@ impl PtySession {
         self.record_into_line_buffer(data);
         {
             let elevated = self.elevated.lock();
+            #[cfg(windows)]
+            {
+                // 輸入方向先前完全沒有儀表，而實機上「提權後跑指令，shell 連
+                // 回音都沒吐」把問題指到了這裡：分不出是根本沒走進提權 channel
+                // （掉回一般 shell），還是走了但送不到對面。
+                use std::sync::atomic::{AtomicU32, Ordering};
+                static WRITES: AtomicU32 = AtomicU32::new(0);
+                let n = WRITES.fetch_add(1, Ordering::Relaxed) + 1;
+                if n <= 10 {
+                    let routed = match elevated.as_ref() {
+                        None => "no elevated channel",
+                        Some(c) if c.state() == super::elevated::ElevatedState::Connected => "elevated (connected)",
+                        Some(_) => "elevated but disconnected",
+                    };
+                    let shown = data.len().min(120);
+                    super::elevated::elevated_log_step(&format!(
+                        "PtySession::write #{n}, {} bytes, route={routed}: {:?}",
+                        data.len(),
+                        String::from_utf8_lossy(&data[..shown])
+                    ));
+                }
+            }
             if let Some(channel) = elevated.as_ref() {
                 if channel.state() == super::elevated::ElevatedState::Connected {
                     // 這裡刻意不直接把 `channel.write` 的 `Err` 回傳出去：`state()`
