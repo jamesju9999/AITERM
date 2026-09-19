@@ -12,6 +12,23 @@
 
 **與 spec 的一處刻意差異：** spec 寫「`script` 請求先開分頁、再跳確認」。實作改成「先確認、再開分頁」——因為 `TerminalView` 的 `initialCommand` 只在掛載時讀取，先開分頁就得另外做「事後送指令」的通道。使用者看到的結果相同：確認 → 開在該目錄並執行；取消 → 開在該目錄不執行。Task 12 會把 spec 這一行改成與實作一致。
 
+**執行記錄（2026-09-20，實際落地後補上；以下與本文不同處以此為準，spec 已同步）：**
+- Task 1：計畫的 `-e` 測試 fixture 咬不到突變（刪掉 `break;` 仍全綠），改成讓尾隨的 `--working-directory`
+  指向與呼叫端 cwd 不同的目錄；`positional()` 另外接受 `file://` URL（AppImage 自我整合把 `Exec=` 改寫成 `%U`）。
+- Task 3：single-instance 外掛**僅正式建置註冊**（`#[cfg(not(debug_assertions))]`），否則 `tauri:dev` 會把參數轉給
+  已安裝的舊版然後靜默退出；冷啟動 argv 用 `args_os`（`args()` 遇非 UTF-8 會 panic）；外掛傳來的 cwd 可能是空字串。
+- Task 5：`=`、`%` 移出 POSIX safe set（zsh 的 `=cmd` 展開會改寫參數或中止整行）；含控制字元／Unicode 格式字元
+  的參數或腳本路徑 fail closed（只開分頁）；**Windows 一律不自動執行**，`quoteArg` 的 Windows 分支已刪除。
+- Task 7：計畫的 `Object.keys(localStorage)` 在本 repo 的 `MemoryStorage` 下恆為空，改用 `localStorage.key(i)`。
+- Task 8：確認框預設聚焦在**安全的**「只開啟資料夾」，Esc = 跳過（原計畫預設聚焦 Run）。
+- Task 9：排空串行化、對話框以遞增序號當 `key`、StrictMode 不可丟請求（計畫說「無法自動測試」是錯的，已有測試釘住）。
+- Task 11：優先度 40 → **10**（原理由「低於多數發行版預設」是錯的）；自訂 `.desktop` 必須自帶 `StartupWMClass`；
+  `release.yml` 會整份重寫 `tauri.linux.conf.json`，必須同步並有守卫測試；腳本測試 fixture 要用不可硬編碼的名稱；
+  `.gitattributes` 釘住維護腳本行尾。
+- 環境：這台 Mac 的 `cargo build --release` 會因 strip 後的 proc-macro dylib 無法 `dlopen` 而失敗（master 同樣，
+  非本分支造成），加 `CARGO_PROFILE_RELEASE_STRIP=none` 即可。Task 12 的 `pkill -x AITerm` 不可照做：程序名是 `app`，
+  且會殺掉使用者正在用的 App——實機驗收改用不同 identifier、隔離 `HOME`，只操作自己啟動的 PID。
+
 **全域注意事項（每個 Task 都適用）：**
 - 所有 Rust 指令都在 `src-tauri/` 下跑；`build.rs` 會檢查 `externalBin` 檔案存在，這台 macOS 已有 `binaries/uv-aarch64-apple-darwin`，若缺就先跑 `scripts/setup-uv-mac.sh`。
 - `git add` 一律只加明確路徑，**不要** `git add -A`（工作樹有 `.claude/settings.local.json` 的未提交修改，與本計畫無關）。

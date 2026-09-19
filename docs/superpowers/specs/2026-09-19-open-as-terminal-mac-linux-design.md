@@ -29,6 +29,8 @@
 | 開 `.command`／`.sh` | 新分頁，經應用內確認對話框後自動執行 |
 | Linux 參數 | 支援 `-e` 與 `--working-directory` |
 | 拆分 | 地基＋macOS＋Linux 為第一份 spec |
+| Windows 上的 `-e`／腳本 | **一律不自動執行**，只在指定目錄開分頁（PowerShell 與 cmd 的引號規則不同，都不安全；留給 Windows spec） |
+| 除錯建置（`tauri:dev`）是否啟用 single-instance | **不啟用**——dev 與正式版共用 identifier `com.aiterm.app`，已有安裝版在跑時 dev 會把參數轉給它然後靜默退出 |
 
 ## 架構
 
@@ -38,8 +40,8 @@
 
 ```rust
 pub struct LaunchRequest {
-    pub cwd: Option<PathBuf>,
-    pub script: Option<PathBuf>,     // .command / .sh，需使用者確認才執行
+    pub cwd: Option<String>,
+    pub script: Option<String>,      // .command / .sh，需使用者確認才執行
     pub command: Option<Vec<String>>, // -e 之後的 argv，直接送進 shell
 }
 
@@ -50,6 +52,9 @@ pub fn parse_args(argv: &[String], invoking_cwd: Option<&Path>) -> Vec<LaunchReq
 
 - 位置參數是**資料夾** → `cwd`。
 - 位置參數是 `.command`／`.sh` 檔 → `cwd` 取其父目錄，`script` 填檔案路徑。
+- 位置參數也接受 `file://` URL（經 `url` crate 解碼成路徑）。AppImage 的自我整合會把
+  `Exec=` 改寫成 `%U`，檔案管理員因此傳來 `file:///…/my%20proj`；Dolphin 等也送 URI。
+  只對位置參數生效，`--working-directory=file://…` 不解析。
 - `--working-directory=X` 或 `--working-directory X` → `cwd`。
 - `-e`／`--command`／`-x` 之後的**所有** argv → `command`（`x-terminal-emulator -e`
   的慣例：之後全是指令與其參數）。
@@ -61,8 +66,8 @@ pub fn parse_args(argv: &[String], invoking_cwd: Option<&Path>) -> Vec<LaunchReq
 
 | 入口 | 觸發 |
 |------|------|
-| 冷啟動 | `setup` 內以 `std::env::args()` 與目前 cwd 呼叫 `parse_args` |
-| 第二次啟動 | `tauri-plugin-single-instance` 的 callback 帶入 argv 與 cwd；同時把主視窗拉到前景 |
+| 冷啟動 | `setup` 內以 `std::env::args_os()`（逐項 lossy 轉成 `String`；`args()` 遇到非 UTF-8 參數會 panic）與目前 cwd 呼叫 `parse_args` |
+| 第二次啟動 | `tauri-plugin-single-instance` 的 callback 帶入 argv 與 cwd（**cwd 可能是空字串**，三個平台的外掛實作都用 `unwrap_or_default()`，空字串視為未知）；同時把主視窗拉到前景。**僅正式建置註冊**（見決策表） |
 | macOS `RunEvent::Opened { urls }` | 取 `file://` URL 轉成路徑，餵給同一個解析／入列流程 |
 
 `RunEvent::Opened` 掛在既有的 `.run(|app_handle, event| …)`（`lib.rs`）。
@@ -78,15 +83,30 @@ pub fn parse_args(argv: &[String], invoking_cwd: Option<&Path>) -> Vec<LaunchReq
   之後每次收到事件再排空一次。訂閱前入列的請求會在第一次排空時取到。
 - 監聽器必須在 `TerminalApp` 層（永遠掛載），不可放在條件掛載的子元件。
 - 監聽器需正確 `unlisten`，避免同一請求被處理兩次。
+- 排空**串行化**（一條 promise chain），避免兩次重疊的 `take` 亂序處理批次。
+- 取走請求後的處理**不可**檢查「effect 已被 cleanup」：StrictMode 開發模式下第一個 effect
+  實例被 cleanup 後它的 `await` 才回來，請求已從佇列取走，丟掉就永久遺失。改用穩定的 ref 呼叫
+  最新的 handler。此不變量有 StrictMode 測試釘住。
 
 ### 4. 前端行為
 
 每個請求：
 
 1. 開新終端機分頁，`pty_create(cwd)`（`src/ipc/pty.ts` 已支援 `cwd`），並切為使用中。
-2. `command`：shell 就緒後送出（沿用既有的「就緒訊號」機制，不自己猜延遲）。
-3. `script`：先顯示**應用內**確認對話框，內容含完整路徑；使用者確認後才送出執行。
-   不使用 `window.confirm`（Tauri 內有已知問題）。取消則保留已開好的分頁，什麼都不執行。
+2. `command`：shell 就緒後送出。就緒訊號是 shell 自己發的 OSC 133 A 加上輸出安靜 250 ms；
+   若一直看不到 133;A（自訂 shell、序列剛好被 chunk 切開、或 shell 在前端訂閱 PTY 事件之前
+   就畫好提示字元）則 10 秒後保底送出。指令字串以 POSIX 單引號逐參數引號化；只要任何參數
+   含控制字元（0x00–0x1f、0x7f）或 Unicode 格式字元（C1、零寬、bidi 等），就**不自動送出**，
+   只開分頁——因為字串是敲進 pty 的，行編輯器會在 shell 解析引號之前處理 Tab／DEL／^C。
+3. `script`：先顯示**應用內**確認對話框（含完整路徑），確認後開分頁並執行；選「只開啟資料夾」
+   則開分頁但不執行。不使用 `window.confirm`（Tauri 內有已知問題）。因為 `initialCommand`
+   只在 `TerminalView` 掛載時讀取，所以是「先確認、再開分頁」，使用者看到的結果與先開後確認
+   相同。對話框**預設聚焦在安全的「只開啟資料夾」**、Esc 等於跳過（啟動請求可能在使用者
+   正於別的分頁打字時到來，預設聚焦在 Run 會讓下一個 Space／Enter 直接執行腳本）；多個
+   排隊的腳本每個用遞增序號當 `key`，確保每個對話框都重新套用安全預設。
+   路徑含控制字元或 Unicode 格式字元時不出確認框、不執行，只開資料夾（否則對話框顯示的
+   路徑可能與實際不同，例如 U+202E）。代價：檔名含 ZWJ／ZWNJ／LRM／RLM 的腳本（部分波斯文、
+   印度文、emoji 序列檔名）永遠不會自動執行，使用者可在開好的分頁手動執行。
 4. 新增 i18n 字串（en／zh-TW），en 與 zh-TW 兩邊都要補（en 是合併物件，`tsc` 抓不到漏字串，
    要靠 `localeSources` 測試）。
 
@@ -98,20 +118,34 @@ pub fn parse_args(argv: &[String], invoking_cwd: Option<&Path>) -> Vec<LaunchReq
 - 效果：Finder「打開方式」、拖到 Dock 圖示。不承諾「設為預設」。
 
 **Linux**（`src-tauri/tauri.linux.conf.json`）
-- `.desktop`：`Categories=System;TerminalEmulator;`、`MimeType=inode/directory;`。透過
-  `bundle.linux.deb.desktopTemplate` 覆寫（Tauri 2 已提供）。
+- `.desktop`：`Categories=System;TerminalEmulator;Development;`、`MimeType=inode/directory;`、
+  `Exec={{exec}} %F`。透過 `bundle.linux.deb.desktopTemplate` 與 `bundle.linux.rpm.desktopTemplate`
+  覆寫。**自訂樣板會整份取代 Tauri 的預設樣板**，所以預設樣板裡的 `StartupWMClass={{exec}}`
+  必須自己帶著（少了它 GNOME／KDE 的 dock 無法把執行中的視窗歸到啟動器）。AppImage 也經由
+  bundler 的 `debian::generate_data` 用到 deb 的樣板。
 - deb：`postInstallScript` 執行
-  `update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator <bin> 40`；
-  `preRemoveScript` 執行 `update-alternatives --remove x-terminal-emulator <bin>`。
-  priority 40 低於多數發行版預設終端機，不搶既有設定，使用者可用
-  `update-alternatives --config` 切換。
-- AppImage／rpm：只有 `.desktop` 類別。
+  `update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator <bin> 10`；
+  `preRemoveScript` 在 `remove`／`deconfigure` 時執行 `update-alternatives --remove x-terminal-emulator <bin>`，
+  升級不移除。`<bin>` 從套件已安裝的 `.desktop` 的 `Exec=` 讀出（`dpkg -L`），不寫死。
+  **priority 是 10，不是 40**：Debian sid 上 x-terminal-emulator 的實際優先度是 terminator 50；
+  gnome-terminal／konsole／xfce4-terminal 40；mate-terminal 35；tilix／lxterm 30；
+  xterm／lxterminal／urxvt／kitty／foot 20。設 40 會贏過所有 ≤35 的終端機，且若先於某個 40 的終端機
+  安裝就一直保有預設，等於悄悄接管使用者的預設終端機。10 低於所有現有終端機，不會被自動選中，
+  仍可用 `update-alternatives --config x-terminal-emulator` 選用；它若是唯一候選則自動生效。
+- AppImage／rpm：只有 `.desktop` 類別，沒有 `x-terminal-emulator` 註冊。
+- **release workflow 同步**：`release.yml` 的「Patch tauri.linux.conf.json」步驟用內嵌 python dict
+  **整份重寫**該檔給 .deb 打包，所以新增的 `bundle.linux` 區塊必須同步進那個 dict，否則正式發布的
+  .deb 會悄悄丟掉註冊。由 `os_registration.rs` 的守卫測試釘住（執行工作流實際會產生的 JSON 並與
+  repo 內的 conf 比對，唯一允許的差異是 DB2 sidecar 路徑）。
+- `.gitattributes` 以 `src-tauri/linux/* text eol=lf` 釘住維護腳本的行尾（`#!/bin/sh\r` 會讓 dpkg 失敗）。
 
 ## 錯誤處理
 
-- 路徑不存在／無權限：略過該請求，記錄 log，不彈錯誤。
-- `script` 檔不可讀：分頁照開，不執行，顯示一行提示。
+- 路徑不存在／無權限：略過該請求，不彈錯誤。
+- `script` 檔不可讀或沒有執行權限：不特別處理——確認框已顯示完整路徑，執行時由 shell 自己報
+  `permission denied`（Terminal.app 對不可執行的 `.command` 也是失敗，行為相當）。
 - 佇列在主視窗建立前入列：由「先入列後排空」機制承接，不特別處理。
+- 參數含控制字元／Unicode 格式字元：fail closed，只開分頁不執行（見 §4）。
 
 ## 測試
 
@@ -128,12 +162,50 @@ pub fn parse_args(argv: &[String], invoking_cwd: Option<&Path>) -> Vec<LaunchReq
 - 每個新測試都要先證明會紅（fixture 必須能區分正確與錯誤行為）。
 
 **驗收（實機）**
-- macOS：本機用 `open -a AITerm <資料夾>` 驗證冷啟動與已執行兩種情況，需用**正式 build**
-  並確認跑的是新二進位（`tauri:dev` 的 watcher 不可靠）。
+- macOS：需用**正式 build**（`tauri:dev` 沒有 single-instance，且 Info.plist 文件類型只在打包後的
+  `.app` 才有）。實測用**不同的 identifier**（`com.aiterm.launchtest`）、隔離的 `HOME`、獨立的
+  `CARGO_TARGET_DIR`，只操作自己啟動的 PID——**不可**照舊寫的 `pkill -x AITerm`：程序名是 `app`，
+  且會殺掉使用者正在用的 App；同一個 identifier 下，剛編好的 build 也會把參數轉給已在跑的舊版然後靜默退出。
+  這台 Mac 上 `cargo build --release` 需加 `CARGO_PROFILE_RELEASE_STRIP=none`（strip 後的 proc-macro
+  dylib 無法 `dlopen`，master 上同樣失敗，與本功能無關）。
+- **2026-09-20 macOS 實測結果**（打包出的 `.app`；螢幕當時鎖定，無法截圖或點對話框，
+  以下用「PTY 子行程的 cwd 與行程表」佐證，不依賴畫面）：
+  | 情境 | 結果 |
+  |------|------|
+  | 打包後 `Info.plist` | 合併成功，兩個文件類型、`LSHandlerRank=Alternate` 都在 |
+  | 冷啟動 `open -a <app> "<含空格的資料夾>"` | ✅ 多一個 PTY shell，cwd 為該資料夾 |
+  | 已在執行時再 `open -a` 另一個資料夾 | ✅ 同一個行程、多一個 shell，cwd 正確，沒有第二個實例 |
+  | `open -a` 一個 `.command` | ⚠️ 確認前沒有新 shell、腳本沒有執行——**與對話框等待中一致，但無法與「請求被丟掉」區分** |
+  | 二進位直接帶 `--working-directory=… -e sleep 300`（single-instance 轉發） | ✅ 第二個行程 **0.05 s** 交接後退出；新 shell 的 cwd 正確；`sleep 300` 在其底下執行 |
+  | 從啟動到指令開始執行 | ✅ **0.73 s**（走 OSC 133 A＋安靜的快路徑，非 10 s 保底；zsh、乾淨的 `HOME`） |
+  第二次啟動的交接延遲（原先擔心要先跑完 DB 初始化）在此環境實測可忽略，不需處理。
+- **尚未驗證（需要人在螢幕前）**：確認對話框實際出現、預設聚焦、Run／Skip 的行為；新分頁是否成為
+  前景分頁（有 Vitest 釘住，但沒有實機）；Finder「打開方式」清單與拖到 Dock 圖示；慢 rc 的使用者
+  （oh-my-posh、p10k）下的就緒時序。
 - Linux：沒有實機。只驗證產出的 `.desktop` 與 deb 腳本內容；`update-alternatives`
   實際行為要靠 CI 或 VM，未實測前不宣稱完成。
 - 跨平台：`parse_args` 與佇列不含平台專屬 API；single-instance 三平台皆可用，
-  Windows 行為不受本份 spec 影響（未註冊任何 Windows 入口）。
+  Windows 上任何指令／腳本都不會被自動執行（見決策表）。
+
+## 已知限制
+
+- **Windows 上的 single-instance 轉發以 `|` 串接參數**（外掛內部實作）：含 `|` 的 `-e` 參數會被拆開，
+  無法在我們這邊修。且轉發端用 `std::env::args()`，遇到非 UTF-8 參數會在送出端 panic。Windows 不在本份
+  範圍，且 Windows 上的指令一律不自動執行。
+- **updater 重啟會重放原始 argv**：以 `aiterm -e <cmd>` 啟動的工作階段，更新後重啟會重新入列並再執行該指令。
+- **除錯建置沒有 single-instance**：無法在 `tauri:dev` 驗證「第二次啟動轉發」，要用正式建置。
+  同一個 identifier 下，正式建置若遇到已在跑的（舊版）AITerm 也會轉給它然後退出——驗收前要先 `pkill -x AITerm`。
+- **第二次啟動會先跑完 `run()` 內 Builder 之前的初始化**（開 5 個 SQLite、`prune_expired`、載入專案）才能
+  交接給第一個實例：single-instance 外掛只能在 plugin setup 階段攔截。見驗收段的實測數字。
+- **就緒訊號的時序**：OSC 133 A 在提示字元畫出**之前**發出，且前端要先訂閱 PTY 事件才收得到；慢 prompt
+  （oh-my-posh、p10k 無 instant prompt）時指令可能先於提示字元出現（輸入不會丟，tty 行規範會緩衝），
+  shell 在訂閱前就畫好提示字元時則要等 10 秒保底。
+- **檔名含 ZWJ／ZWNJ／LRM／RLM 的腳本不會自動執行**（見 §4），只開資料夾。
+- `.command` 沒有執行權限時，確認後會得到 `permission denied`（不做 `sh <file>` 的退路）。
+- 未做 Finder Services、未讓 AppImage 註冊 `x-terminal-emulator`；`AppImage` 的 `.desktop` 只多了終端機類別與資料夾。
+- 只在 macOS 上驗證；Linux 只驗證產出的檔案與腳本邏輯（以假的 `dpkg`／`update-alternatives`），
+  真實 deb 的 `Exec=` 值、`update-alternatives` 實際行為、Nautilus「在終端機開啟」是否出現 AITerm，
+  要等 CI 出 deb 後在 Ubuntu 上驗證。
 
 ## 給第二份 spec（Windows）的接口
 
