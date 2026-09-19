@@ -5,6 +5,7 @@ Name={{name}}
 Comment={{comment}}
 {{/if}}
 Exec={{exec}} %F
+StartupWMClass={{exec}}
 Icon={{icon}}
 Terminal=false
 Categories=System;TerminalEmulator;Development;

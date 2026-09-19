@@ -60,6 +60,10 @@ fn desktop_template_is_a_terminal_emulator_that_opens_directories() {
     assert!(d.contains("TerminalEmulator"), "缺 TerminalEmulator 類別");
     assert!(d.contains("inode/directory"), "缺 MimeType inode/directory");
     assert!(d.contains("Exec={{exec}} %F"), "Exec 要接 %F 才會收到檔案管理員給的路徑");
+    assert!(
+        d.contains("StartupWMClass={{exec}}"),
+        "缺 StartupWMClass：Tauri 預設樣板有這行，自訂樣板會整份取代預設，少了它 dock 無法把執行中的視窗歸到啟動器"
+    );
     for var in ["{{name}}", "{{icon}}"] {
         assert!(d.contains(var), "樣板缺少變數 {var}");
     }
