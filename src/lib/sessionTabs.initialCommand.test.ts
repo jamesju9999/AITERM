@@ -22,6 +22,9 @@ describe("session tab persistence", () => {
     ).join("\n");
     expect(everythingStored).toContain("/proj"); // 確認真的有存東西，否則下一行是空斷言
     expect(everythingStored).not.toContain("rm -rf build");
+    // 沒有這兩行的話，restoreSessionTabs() 回傳 null 時下一行的 ?. 會讓斷言空過。
+    expect(restoreSessionTabs()).not.toBeNull();
+    expect(restoreSessionTabs()).toHaveLength(1);
     expect(restoreSessionTabs()?.[0].initialCommand).toBeUndefined();
   });
 });

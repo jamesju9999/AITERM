@@ -46,8 +46,13 @@ vi.mock("@tauri-apps/plugin-notification", () => ({ sendNotification: vi.fn() })
 
 // TerminalView 換成探針：這個檔案要驗的是「請求怎麼變成分頁」，不是 xterm。
 vi.mock("./TerminalView", () => ({
-  TerminalView: (p: { initialCwd?: string; initialCommand?: string }) => (
-    <div data-testid="tv" data-cwd={p.initialCwd ?? ""} data-cmd={p.initialCommand ?? ""} />
+  TerminalView: (p: { initialCwd?: string; initialCommand?: string; isActive?: boolean }) => (
+    <div
+      data-testid="tv"
+      data-cwd={p.initialCwd ?? ""}
+      data-cmd={p.initialCommand ?? ""}
+      data-active={String(p.isActive)}
+    />
   ),
 }));
 
@@ -73,6 +78,7 @@ class FakeResizeObserver {
 
 import { TerminalApp } from "./TerminalApp";
 import { LocaleProvider } from "../contexts/LocaleContext";
+import { saveSessionTabs } from "../lib/sessionTabs";
 
 function mountApp() {
   return render(
@@ -169,6 +175,26 @@ describe("TerminalApp launch requests", () => {
       .map((el) => el.getAttribute("data-cwd"))
       .filter((c) => c?.startsWith("/order/"));
     expect(order).toEqual(["/order/A", "/order/B"]);
+  });
+
+  it("the launched tab becomes the active one and dismisses the home screen", async () => {
+    // 冷啟動時首頁是前景、還原的分頁都在背景。從 Finder 開資料夾的使用者要看到的是
+    // 剛開的那個分頁，不是首頁、也不是上次的分頁。isActive 包含 !homeActive，所以
+    // 「只有新分頁 active」同時證明首頁被關掉了。
+    saveSessionTabs([
+      { id: "r1", title: "Terminal", type: "terminal", cwd: "/restored/a" },
+      { id: "r2", title: "Terminal", type: "terminal", cwd: "/restored/b" },
+    ]);
+    pending.push({ cwd: "/tmp/new", script: null, command: null });
+    mountApp();
+    await waitFor(() => expect(tabsWith("data-cwd", "/tmp/new")).toHaveLength(1));
+    expect(tabsWith("data-cwd", "/restored/a")).toHaveLength(1);
+    expect(tabsWith("data-cwd", "/restored/b")).toHaveLength(1);
+    const active = (el: HTMLElement) => el.getAttribute("data-active");
+    expect(active(tabsWith("data-cwd", "/tmp/new")[0])).toBe("true");
+    const others = screen.queryAllByTestId("tv").filter((el) => el.getAttribute("data-cwd") !== "/tmp/new");
+    expect(others).toHaveLength(2);
+    for (const el of others) expect(active(el)).toBe("false");
   });
 
   it("a -e request opens a tab carrying the quoted command line", async () => {
