@@ -36,6 +36,9 @@ export interface Tab {
   // Terminal-specific optional fields
   ptySessionId?: string;
   initialCwd?: string;
+  /** 建立分頁時要在 shell 就緒後送出的指令（啟動請求的 `-e`／已確認的腳本）。
+   *  只在 TerminalView 掛載時讀一次，且**絕不持久化**——見 sessionTabs.ts 的白名單。 */
+  initialCommand?: string;
   initialMission?: { goal: string; maxSteps: number };
   enterpriseTask?: { taskId: string; workBranch: string; onComplete: unknown };
   agentProgress?: { done: number; total: number };

@@ -339,6 +339,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     setTabs((prev) => [...prev, {
       id: newId, title, type, claudeBridge,
       initialCwd: opts?.initialCwd,
+      initialCommand: opts?.initialCommand,
       initialMission: opts?.initialMission,
     }]);
     selectTab(newId);
@@ -776,6 +777,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                 <TerminalView
                   isActive={isActive}
                   initialCwd={tab.initialCwd}
+                  initialCommand={tab.initialCommand}
                   initialMission={tab.initialMission}
                   enterpriseTask={tab.enterpriseTask}
                   claudeBridge={tab.claudeBridge !== undefined}

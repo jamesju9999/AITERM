@@ -13,6 +13,8 @@ export interface TabOpenOpts {
   /** 終端機分頁的起始目錄。首頁的「最近的專案目錄」用它開在指定位置。
    *  這跟 Tab.cwd（分頁目前實際所在的目錄）是兩件事，不要混用。 */
   initialCwd?: string;
+  /** 終端機分頁 shell 就緒後要送出的指令。啟動請求（開資料夾／-e／腳本）用它。 */
+  initialCommand?: string;
   /** 建立分頁時就掛上 agent 任務。首頁的自然語言輸入框用它。 */
   initialMission?: { goal: string; maxSteps: number };
 }

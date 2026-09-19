@@ -64,6 +64,7 @@ import { getGitBlockInfo } from "../ipc/vcs";
 import { isClaudeCommand } from "../lib/claudeCommand";
 import { registerTerminal, unregisterTerminal } from "../lib/terminalInstanceRegistry";
 import { isRunningTaskTab } from "../lib/runningTaskTabRegistry";
+import { createStartupInjector, type StartupInjector } from "../lib/startupCommand";
 import { CloseConfirmDialog } from "./CloseConfirmDialog";
 import "./TerminalView.css";
 
@@ -105,6 +106,8 @@ export interface TerminalViewProps {
   onRunningChange?: (isRunning: boolean) => void;
   /** If set, the PTY starts in this directory (overrides last-cwd from localStorage). */
   initialCwd?: string;
+  /** 若有，PTY 就緒後把它當成一行指令送出（只送一次）。 */
+  initialCommand?: string;
   /** If set, the agent loop starts automatically after the PTY is ready. */
   initialMission?: { goal: string; maxSteps: number };
   /** Enterprise task metadata — triggers on_complete actions when the mission finishes. */
@@ -162,7 +165,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, externalSessionId, onRunningChange, initialCwd, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, claudeBridge, tabId, remoteOwner = null, onRemoteOwnerChange, registerCloseGuard, unregisterCloseGuard }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, externalSessionId, onRunningChange, initialCwd, initialCommand, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, claudeBridge, tabId, remoteOwner = null, onRemoteOwnerChange, registerCloseGuard, unregisterCloseGuard }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -242,6 +245,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const termRef = useRef<Terminal | null>(null);
   const [termState, setTermState] = useState<Terminal | null>(null);
   const sessionRef = useRef<string | null>(null);
+  const startupRef = useRef<StartupInjector | null>(null);
   // Agent 卡住偵測用：PTY 最後一次吐出東西的時間。卡在 heredoc>／等輸入的
   // 互動程式是完全安靜的，而跑得好好的長指令會持續有輸出——用「安靜多久」
   // 區分兩者，比固定逾時準得多，也不會誤殺跑很久但正常的工作。
@@ -1353,6 +1357,14 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           }
         }
         sessionRef.current = id;
+        if (initialCommand) {
+          startupRef.current = createStartupInjector({
+            command: initialCommand,
+            write: (data) => {
+              writePty(id, data).catch(console.error);
+            },
+          });
+        }
         // A real resize can land while createPty() was still in flight (no
         // session id yet to resize) — see pendingResizeRef's comment. Flush
         // it now that a session finally exists, same as the paste-guard
@@ -1371,6 +1383,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         const unlisten = await onPtyData(id, (bytes) => {
           lastPtyOutputAtRef.current = Date.now();
           const text = decoder.decode(bytes, { stream: true });
+          startupRef.current?.feed(text);
           hasReceivedLiveChunk = true;
 
           // 實機測試抓到的 bug：appendOutput(text) 原本在 term.write(text)
@@ -1814,6 +1827,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
     return () => {
       cancelled = true;
+      startupRef.current?.dispose();
+      startupRef.current = null;
       if (resizeSettleTimer) clearTimeout(resizeSettleTimer);
       if (unsubmittedPasteTimeoutRef.current) clearTimeout(unsubmittedPasteTimeoutRef.current);
       if (ro && hostRef.current) ro.unobserve(hostRef.current);
