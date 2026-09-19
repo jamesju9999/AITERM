@@ -91,14 +91,18 @@ mod maintainer_scripts {
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
 
-    /// 建一個假的 PATH：`dpkg -L` 回報一個裝好的 .desktop，
-    /// `update-alternatives` 只把收到的參數記到 log。
-    fn stub_env() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    /// 建一個假的 PATH：`dpkg -L` 回報套件的檔案清單，`update-alternatives`
+    /// 只把收到的參數記到 log。
+    ///
+    /// 固定值都刻意選成「實作不可能碰巧寫死」的樣子：`exec` 由呼叫端給（預設
+    /// 用 fixture-bin-7，真實的執行檔名叫別的東西——crate 名是 app），清單裡
+    /// 也夾了 sidecar 與圖示，逼腳本真的去挑 .desktop 並讀它的 Exec=。
+    fn stub_env(exec: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         fs::create_dir(&bin).unwrap();
         let desktop = dir.path().join("AITerm.desktop");
-        fs::write(&desktop, "[Desktop Entry]\nExec=AITerm %F\nName=AITerm\n").unwrap();
+        fs::write(&desktop, format!("[Desktop Entry]\nExec={exec} %F\nName=AITerm\n")).unwrap();
         let log = dir.path().join("alternatives.log");
 
         let write_stub = |name: &str, body: String| {
@@ -106,7 +110,13 @@ mod maintainer_scripts {
             fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         };
-        write_stub("dpkg", format!("echo '{}'", desktop.display()));
+        write_stub(
+            "dpkg",
+            format!(
+                "echo /usr/bin/uv\necho /usr/bin/other-sidecar\necho '{}'\necho /usr/share/icons/hicolor/128x128/apps/AITerm.png",
+                desktop.display()
+            ),
+        );
         write_stub("update-alternatives", format!("echo \"$@\" >> '{}'", log.display()));
         (dir, bin, log)
     }
@@ -149,31 +159,48 @@ mod maintainer_scripts {
 
     #[test]
     fn postinst_registers_the_binary_named_in_the_installed_desktop_file() {
-        let (_guard, bin, log) = stub_env();
+        let (_guard, bin, log) = stub_env("fixture-bin-7");
         run_script("linux/postinst.sh", "configure", &bin);
         assert_eq!(
             logged(&log).trim(),
-            "--install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/bin/AITerm 40"
+            "--install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/bin/fixture-bin-7 40"
+        );
+    }
+
+    #[test]
+    fn postinst_uses_an_absolute_exec_path_as_is() {
+        let (_guard, bin, log) = stub_env("/opt/fixture/bin-8");
+        run_script("linux/postinst.sh", "configure", &bin);
+        assert_eq!(
+            logged(&log).trim(),
+            "--install /usr/bin/x-terminal-emulator x-terminal-emulator /opt/fixture/bin-8 40"
         );
     }
 
     #[test]
     fn postinst_does_nothing_for_other_actions() {
-        let (_guard, bin, log) = stub_env();
+        let (_guard, bin, log) = stub_env("fixture-bin-7");
         run_script("linux/postinst.sh", "abort-upgrade", &bin);
         assert_eq!(logged(&log), "");
     }
 
     #[test]
     fn prerm_unregisters_on_remove() {
-        let (_guard, bin, log) = stub_env();
+        let (_guard, bin, log) = stub_env("fixture-bin-7");
         run_script("linux/prerm.sh", "remove", &bin);
-        assert_eq!(logged(&log).trim(), "--remove x-terminal-emulator /usr/bin/AITerm");
+        assert_eq!(logged(&log).trim(), "--remove x-terminal-emulator /usr/bin/fixture-bin-7");
+    }
+
+    #[test]
+    fn prerm_uses_an_absolute_exec_path_as_is() {
+        let (_guard, bin, log) = stub_env("/opt/fixture/bin-8");
+        run_script("linux/prerm.sh", "remove", &bin);
+        assert_eq!(logged(&log).trim(), "--remove x-terminal-emulator /opt/fixture/bin-8");
     }
 
     #[test]
     fn prerm_keeps_the_registration_during_an_upgrade() {
-        let (_guard, bin, log) = stub_env();
+        let (_guard, bin, log) = stub_env("fixture-bin-7");
         run_script("linux/prerm.sh", "upgrade", &bin);
         assert_eq!(logged(&log), "", "升級不可移除註冊，否則使用者選的終端機會被重設");
     }
