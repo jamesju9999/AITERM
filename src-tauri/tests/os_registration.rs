@@ -4,6 +4,22 @@
 
 use std::fs;
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::sync::{Mutex, MutexGuard};
+
+/// 序列化所有「寫出可執行檔再執行它」或會 spawn 行程的測試。
+/// Linux 上，一個執行緒剛寫完並關閉的檔案，可能因為另一條執行緒同時 fork、
+/// 子行程還握著那個寫入用的 fd，而讓 exec 得到 ETXTBSY（"Text file busy"，
+/// rust-lang/rust#114554）。這個 flake 在 macOS 上重現不出來，鎖是依已知
+/// 成因做的預防，並未在實機上觀察到它消失。
+/// 持有者若 panic（測試本來就會 assert 失敗），鎖會中毒，所以取鎖時無視中毒。
+#[cfg(unix)]
+static PROCESS_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(unix)]
+fn process_lock() -> MutexGuard<'static, ()> {
+    PROCESS_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -31,6 +47,7 @@ fn info_plist_declares_folders_and_shell_scripts_as_openable_without_stealing_de
 #[test]
 fn info_plist_document_types_have_the_expected_structure() {
     use serde_json::{json, Value};
+    let _lock = process_lock();
     let out = std::process::Command::new("plutil")
         .args(["-convert", "json", "-o", "-", "Info.plist"])
         .current_dir(root())
@@ -97,7 +114,14 @@ mod maintainer_scripts {
     /// 固定值都刻意選成「實作不可能碰巧寫死」的樣子：`exec` 由呼叫端給（預設
     /// 用 fixture-bin-7，真實的執行檔名叫別的東西——crate 名是 app），清單裡
     /// 也夾了 sidecar 與圖示，逼腳本真的去挑 .desktop 並讀它的 Exec=。
-    fn stub_env(exec: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    /// 假的 `dpkg` 也會檢查收到的參數必須剛好是 `-L aiterm`（測試把
+    /// DPKG_MAINTSCRIPT_PACKAGE 設成 aiterm），否則腳本讀錯環境變數時，
+    /// 實機上會變成「安裝成功但從不註冊」，測試卻什麼都看不出來。
+    ///
+    /// 回傳的第一個元素是 [`process_lock`] 的鎖：由這裡發出，測試就不會忘記拿；
+    /// 它在 tuple 拆開後最後才被釋放，所以涵蓋整個測試（含清掉暫存目錄）。
+    fn stub_env(exec: &str) -> (MutexGuard<'static, ()>, tempfile::TempDir, PathBuf, PathBuf) {
+        let lock = process_lock();
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         fs::create_dir(&bin).unwrap();
@@ -113,12 +137,12 @@ mod maintainer_scripts {
         write_stub(
             "dpkg",
             format!(
-                "echo /usr/bin/uv\necho /usr/bin/other-sidecar\necho '{}'\necho /usr/share/icons/hicolor/128x128/apps/AITerm.png",
+                "[ \"$*\" = \"-L aiterm\" ] || exit 1\necho /usr/bin/uv\necho /usr/bin/other-sidecar\necho '{}'\necho /usr/share/icons/hicolor/128x128/apps/AITerm.png",
                 desktop.display()
             ),
         );
         write_stub("update-alternatives", format!("echo \"$@\" >> '{}'", log.display()));
-        (dir, bin, log)
+        (lock, dir, bin, log)
     }
 
     fn run_script(script: &str, action: &str, bin: &PathBuf) {
@@ -139,6 +163,7 @@ mod maintainer_scripts {
 
     #[test]
     fn scripts_are_valid_shell() {
+        let _lock = process_lock();
         for script in ["linux/postinst.sh", "linux/prerm.sh"] {
             let status = Command::new("sh").arg("-n").arg(root().join(script)).status().unwrap();
             assert!(status.success(), "{script} 語法錯誤");
@@ -157,9 +182,20 @@ mod maintainer_scripts {
         }
     }
 
+    /// dpkg 直接照 shebang 執行維護腳本；`#!/bin/sh\r` 會變成找不到直譯器。
+    /// repo 之前發生過 CRLF 汙染，`.gitattributes` 的 `eol=lf` 是跨平台的釘子；
+    /// 這個測試只在 unix 跑，因為 Windows 的 CI checkout 可能被 autocrlf 改寫。
+    #[test]
+    fn linux_packaging_files_have_no_carriage_returns() {
+        for file in ["linux/postinst.sh", "linux/prerm.sh", "linux/aiterm.desktop"] {
+            let bytes = fs::read(root().join(file)).unwrap();
+            assert!(!bytes.contains(&b'\r'), "{file} 含有 CR（\\r）位元組，dpkg 會找不到直譯器");
+        }
+    }
+
     #[test]
     fn postinst_registers_the_binary_named_in_the_installed_desktop_file() {
-        let (_guard, bin, log) = stub_env("fixture-bin-7");
+        let (_lock, _guard, bin, log) = stub_env("fixture-bin-7");
         run_script("linux/postinst.sh", "configure", &bin);
         assert_eq!(
             logged(&log).trim(),
@@ -169,7 +205,7 @@ mod maintainer_scripts {
 
     #[test]
     fn postinst_uses_an_absolute_exec_path_as_is() {
-        let (_guard, bin, log) = stub_env("/opt/fixture/bin-8");
+        let (_lock, _guard, bin, log) = stub_env("/opt/fixture/bin-8");
         run_script("linux/postinst.sh", "configure", &bin);
         assert_eq!(
             logged(&log).trim(),
@@ -179,28 +215,28 @@ mod maintainer_scripts {
 
     #[test]
     fn postinst_does_nothing_for_other_actions() {
-        let (_guard, bin, log) = stub_env("fixture-bin-7");
+        let (_lock, _guard, bin, log) = stub_env("fixture-bin-7");
         run_script("linux/postinst.sh", "abort-upgrade", &bin);
         assert_eq!(logged(&log), "");
     }
 
     #[test]
     fn prerm_unregisters_on_remove() {
-        let (_guard, bin, log) = stub_env("fixture-bin-7");
+        let (_lock, _guard, bin, log) = stub_env("fixture-bin-7");
         run_script("linux/prerm.sh", "remove", &bin);
         assert_eq!(logged(&log).trim(), "--remove x-terminal-emulator /usr/bin/fixture-bin-7");
     }
 
     #[test]
     fn prerm_uses_an_absolute_exec_path_as_is() {
-        let (_guard, bin, log) = stub_env("/opt/fixture/bin-8");
+        let (_lock, _guard, bin, log) = stub_env("/opt/fixture/bin-8");
         run_script("linux/prerm.sh", "remove", &bin);
         assert_eq!(logged(&log).trim(), "--remove x-terminal-emulator /opt/fixture/bin-8");
     }
 
     #[test]
     fn prerm_keeps_the_registration_during_an_upgrade() {
-        let (_guard, bin, log) = stub_env("fixture-bin-7");
+        let (_lock, _guard, bin, log) = stub_env("fixture-bin-7");
         run_script("linux/prerm.sh", "upgrade", &bin);
         assert_eq!(logged(&log), "", "升級不可移除註冊，否則使用者選的終端機會被重設");
     }
@@ -217,6 +253,7 @@ fn release_workflow_regenerates_the_committed_linux_conf_except_the_db2_path() {
     use serde_json::Value;
     use std::process::Command;
 
+    let _lock = process_lock();
     const PLACEHOLDER: &str = "PLACEHOLDER_DIR";
     let yml = read("../.github/workflows/release.yml");
     let lines: Vec<&str> = yml.lines().collect();
