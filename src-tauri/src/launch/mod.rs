@@ -42,15 +42,20 @@ fn invoking_cwd(cwd: &str) -> Option<&std::path::Path> {
     }
 }
 
-/// 第二次啟動（single-instance 外掛的 callback）：解析、入列、把視窗拉到前景。
-pub fn on_second_instance(app: &AppHandle, argv: Vec<String>, cwd: String) {
-    let requests = parse_args(&argv, invoking_cwd(&cwd));
-    enqueue_and_notify(app, requests);
+/// 把主視窗拉到前景（還原最小化、顯示、取得焦點）。
+fn raise_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
     }
+}
+
+/// 第二次啟動（single-instance 外掛的 callback）：解析、入列、把視窗拉到前景。
+pub fn on_second_instance(app: &AppHandle, argv: Vec<String>, cwd: String) {
+    let requests = parse_args(&argv, invoking_cwd(&cwd));
+    enqueue_and_notify(app, requests);
+    raise_main_window(app);
 }
 
 /// macOS「用 AITerm 開啟」／拖到 Dock 圖示。其它平台沒有這個事件。
@@ -59,7 +64,12 @@ pub fn on_run_event(app: &AppHandle, event: &tauri::RunEvent) {
     {
         if let tauri::RunEvent::Opened { urls } = event {
             let argv = args_from_file_urls(urls);
-            enqueue_and_notify(app, parse_args(&argv, None));
+            let requests = parse_args(&argv, None);
+            // 沒解析出任何請求就不搶焦點。
+            if !requests.is_empty() {
+                enqueue_and_notify(app, requests);
+                raise_main_window(app);
+            }
         }
     }
     #[cfg(not(target_os = "macos"))]
