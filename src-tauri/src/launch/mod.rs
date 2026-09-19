@@ -32,7 +32,8 @@ pub fn enqueue_and_notify(app: &AppHandle, requests: Vec<LaunchRequest>) {
 /// single-instance 外掛傳來的 cwd 字串 → 可用的工作目錄。
 /// 外掛在取不到 cwd（目錄已被刪、無權限）或路徑不是合法 UTF-8 時會傳空字串
 /// （`current_dir().unwrap_or_default().to_str().unwrap_or_default()`），
-/// 這代表「不知道」，不能當成 `Path::new("")` 去解析相對路徑。
+/// 這代表「不知道」。必須回 `None`：`parse_args` 對只有 `-e` 的請求會退回這個
+/// cwd，若給 `Some("")`，新分頁的起始目錄就會變成空字串而不是「用預設」。
 fn invoking_cwd(cwd: &str) -> Option<&std::path::Path> {
     if cwd.is_empty() {
         None
@@ -69,16 +70,27 @@ pub fn on_run_event(app: &AppHandle, event: &tauri::RunEvent) {
 
 #[cfg(test)]
 mod tests {
-    use super::invoking_cwd;
-    use std::path::Path;
+    use super::{invoking_cwd, parse_args};
 
-    #[test]
-    fn empty_cwd_from_plugin_means_unknown() {
-        assert_eq!(invoking_cwd(""), None);
+    fn ls_argv() -> Vec<String> {
+        ["aiterm", "-e", "ls"].map(String::from).to_vec()
     }
 
     #[test]
-    fn non_empty_cwd_is_passed_through() {
-        assert_eq!(invoking_cwd("/home/u/proj"), Some(Path::new("/home/u/proj")));
+    fn empty_cwd_leaves_a_command_only_request_without_a_start_dir() {
+        let got = parse_args(&ls_argv(), invoking_cwd(""));
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].cwd, None);
+        assert_eq!(got[0].command, Some(vec!["ls".to_string()]));
+    }
+
+    #[test]
+    fn non_empty_cwd_becomes_the_start_dir_of_a_command_only_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_string_lossy().into_owned();
+        let got = parse_args(&ls_argv(), invoking_cwd(&cwd));
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].cwd, Some(cwd));
+        assert_eq!(got[0].command, Some(vec!["ls".to_string()]));
     }
 }

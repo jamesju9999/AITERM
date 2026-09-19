@@ -227,12 +227,17 @@ pub fn run() {
 
     let sidecar_path = db::resolve_db2_sidecar_path();
 
-    tauri::Builder::default()
-        // single-instance 必須是第一個外掛（官方文件要求）。第二次啟動會把
-        // argv 與 cwd 轉給這個實例，而不是另開一個行程。
-        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
-            launch::on_second_instance(app, argv, cwd);
-        }))
+    let builder = tauri::Builder::default();
+    // single-instance 必須是第一個外掛（官方文件要求）。第二次啟動會把
+    // argv 與 cwd 轉給這個實例，而不是另開一個行程。
+    // debug build 不註冊：dev 與正式版共用 identifier（com.aiterm.app），
+    // 若機器上已有裝好的 AITerm 在跑，`tauri:dev` 會靜默把 argv 交給它然後直接
+    // 結束，什麼都不會出現（也就是「驗到的其實是舊二進位」的陷阱）。
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+        launch::on_second_instance(app, argv, cwd);
+    }));
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -271,7 +276,8 @@ pub fn run() {
         .manage(Arc::new(share::viewer_manager::ViewerManager::new()))
         .setup(|app| {
             // 冷啟動時帶進來的參數（`aiterm ~/proj`、`--working-directory=…`）。
-            // 只入列不必先通知：前端一掛載就會排空。
+            // 這裡雖然也會發事件，但此時 webview 可能還不存在，事件會被丟掉——
+            // 沒關係，前端一掛載就會主動排空佇列。
             // 用 args_os + lossy：Linux 上參數可以不是合法 UTF-8，std::env::args() 會 panic。
             launch::enqueue_and_notify(
                 app.handle(),
