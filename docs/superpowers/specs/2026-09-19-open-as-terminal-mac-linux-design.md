@@ -112,7 +112,8 @@ pub fn parse_args(argv: &[String], invoking_cwd: Option<&Path>) -> Vec<LaunchReq
 
 ### 5. 系統註冊
 
-**macOS**（`src-tauri/tauri.macos.conf.json` ＋ Info.plist 合併檔）
+**macOS**（`src-tauri/Info.plist`，Tauri 會自動把與 `tauri.conf.json` 同目錄的 Info.plist 合併進 bundle，
+頂層鍵以使用者的為準；`tauri.macos.conf.json` 沒有改動）
 - 宣告可開啟 `public.folder` 與 `.command`／`.sh`（`CFBundleDocumentTypes`，Role 為 Viewer／
   Shell，不搶預設）。
 - 效果：Finder「打開方式」、拖到 Dock 圖示。不承諾「設為預設」。
@@ -187,8 +188,31 @@ pub fn parse_args(argv: &[String], invoking_cwd: Option<&Path>) -> Vec<LaunchReq
 - 跨平台：`parse_args` 與佇列不含平台專屬 API；single-instance 三平台皆可用，
   Windows 上任何指令／腳本都不會被自動執行（見決策表）。
 
+## 產品行為變更（使用者可見）
+
+- **正式版 AITerm 變成單一實例（所有平台）**：第二次啟動（開始功能表、Dock、Spotlight、`open`）不再開新的行程，
+  而是把視窗拉到前景並退出；沒有關閉選項。除錯建置不受影響。
+- 啟動請求（開資料夾、`-e`、腳本）到達時，若目前在設定／引導頁（終端機被 `visibility: hidden` 藏起來），
+  前端會導回 `/`，否則新分頁或確認對話框看不見。
+- macOS 的 `RunEvent::Opened`（Finder「打開方式」、拖到 Dock 圖示）和第二次啟動一樣會 unminimize／show／focus 主視窗，
+  但只在解析出至少一個請求時才做，不會為空事件搶焦點。
+- 確認對話框對 Run 有 500 ms 的防護：對話框出現後 500 ms 內的 Run 點擊會被忽略，避免雙擊把
+  「下一個排隊的腳本」在使用者沒讀過路徑時就批准掉（Skip 與 Esc 不受影響）。
+
 ## 已知限制
 
+- **`-e` 的語意與真正的 `x-terminal-emulator` 不同**：轉發的行程約 0.05 秒就退出，所以等終端機結束的呼叫端
+  （git、`$EDITOR` 包裝）會立刻返回；指令是敲進互動式 shell 的（別名與函式會生效、指令結束後分頁仍開著）；
+  單一參數含空格（`-e "ls -la"`）會被當成一個程式名而失敗。所以 postinst 的優先度設 10，不會被自動選為預設。
+- **Windows 上以系統管理員身分啟動的第一個實例**：一般權限的第二次啟動送出的訊息會被 UIPI 擋下，但外掛仍會讓它退出，
+  使用者點開始功能表什麼都不會發生；反過來，提權啟動會被非提權的實例吸收。
+- **重新載入視窗時，尚未確認的腳本請求會遺失**（請求已從後端佇列取走，佇列只在記憶體）。
+- **`parse_args` 的邊角**：未知旗標的值會被當成位置參數（例如 `-T <資料夾名>` 可能多開一個分頁）；空字串參數會解析成
+  呼叫端 cwd 並開啟它。
+- **引號化假設 POSIX 風格的行編輯器**：以 pwsh／nushell 當登入 shell 時，含 `'` 的參數會壞；csh／tcsh 的歷史展開
+  在單引號內也會作用；互動式 rc 若阻塞超過 10 秒保底，注入的那一行會被吞掉。
+- **`update-alternatives --config x-terminal-emulator` 選單裡顯示的是 `/usr/bin/app`**（Tauri 的執行檔名），不是 `AITerm`。
+- **Windows／Linux 的視窗喚起**：`set_focus()` 可能只讓工作列閃爍（前景鎖）。
 - **Windows 上的 single-instance 轉發以 `|` 串接參數**（外掛內部實作）：含 `|` 的 `-e` 參數會被拆開，
   無法在我們這邊修。且轉發端用 `std::env::args()`，遇到非 UTF-8 參數會在送出端 panic。Windows 不在本份
   範圍，且 Windows 上的指令一律不自動執行。
