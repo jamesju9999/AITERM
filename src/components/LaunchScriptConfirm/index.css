@@ -1,0 +1,41 @@
+.aiterm-launch-confirm__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000a;
+}
+
+.aiterm-launch-confirm {
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  padding: 20px;
+  border-radius: 10px;
+  background: var(--aiterm-surface-2, #1e293b);
+  border: 1px solid var(--aiterm-border, #334155);
+  box-shadow: 0 12px 40px #000c;
+  box-sizing: border-box;
+}
+
+.aiterm-launch-confirm__title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.aiterm-launch-confirm__body {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--aiterm-text-muted, #94a3b8);
+  margin-bottom: 16px;
+}
+
+.aiterm-launch-confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
