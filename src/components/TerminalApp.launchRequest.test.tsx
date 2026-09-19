@@ -1,8 +1,8 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 
 type LaunchReq = { cwd: string | null; script: string | null; command: string[] | null };
 const pending: LaunchReq[] = [];
@@ -90,6 +90,36 @@ function mountApp() {
   );
 }
 
+// 每次路由變化（含首次渲染）記一筆，用來斷言「沒有多餘的導覽」。
+const locationLog: string[] = [];
+function LocationProbe() {
+  const loc = useLocation();
+  useEffect(() => {
+    locationLog.push(loc.pathname);
+  }, [loc]);
+  const navigate = useNavigate();
+  return (
+    <div>
+      <div data-testid="loc">{loc.pathname}</div>
+      {/* 「上一頁」：用來數歷史堆疊到底推了幾筆。 */}
+      <button data-testid="back" onClick={() => navigate(-1)} />
+    </div>
+  );
+}
+
+// App.tsx 在 pathname !== "/"（設定、引導）時把 TerminalApp 包在
+// visibility:hidden + pointer-events:none 裡，所以要模擬「使用者正停在設定頁」。
+function mountAppAt(path: string) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <LocationProbe />
+      <LocaleProvider>
+        <TerminalApp />
+      </LocaleProvider>
+    </MemoryRouter>,
+  );
+}
+
 // StrictMode 在開發模式會把 effect 跑「掛載 → cleanup → 再掛載」。第一個實例被
 // cleanup 之後，它那次 take 才回來，取走的請求就只存在那個回傳值裡。
 function mountAppStrict() {
@@ -117,6 +147,7 @@ beforeEach(() => {
   localStorage.clear();
   takeImpl = defaultTake;
   takeCalls = 0;
+  locationLog.length = 0;
 });
 
 describe("TerminalApp launch requests", () => {
@@ -324,5 +355,45 @@ describe("TerminalApp launch requests under StrictMode", () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(tabsWith("data-cwd", "/s/proj")).toHaveLength(1);
     expect(tabsWith("data-cmd", "/s/proj/go.command")).toHaveLength(0);
+  });
+});
+
+describe("TerminalApp launch requests while the terminal is hidden behind another route", () => {
+  it("a folder request brings the terminal view back", async () => {
+    pending.push({ cwd: "/tmp/proj", script: null, command: null });
+    mountAppAt("/settings");
+    await waitFor(() => expect(tabsWith("data-cwd", "/tmp/proj")).toHaveLength(1));
+    await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(/^\/$/));
+  });
+
+  it("a script request also brings it back, so the confirmation dialog is actually visible", async () => {
+    pending.push({ cwd: "/tmp/proj", script: "/tmp/proj/go.command", command: null });
+    mountAppAt("/onboarding");
+    await screen.findByRole("dialog");
+    await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(/^\/$/));
+  });
+
+  it("does not navigate at all when the terminal is already showing", async () => {
+    pending.push({ cwd: "/tmp/proj", script: null, command: null });
+    mountAppAt("/");
+    await waitFor(() => expect(tabsWith("data-cwd", "/tmp/proj")).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.getByTestId("loc")).toHaveTextContent(/^\/$/);
+    // 只有首次渲染那一筆；沒有多推任何歷史。
+    expect(locationLog).toEqual(["/"]);
+  });
+
+  it("two requests arriving together push only one history entry", async () => {
+    pending.push(
+      { cwd: "/tmp/a", script: null, command: null },
+      { cwd: "/tmp/b", script: null, command: null },
+    );
+    mountAppAt("/settings");
+    await waitFor(() => expect(tabsWith("data-cwd", "/tmp/b")).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(locationLog).toEqual(["/settings", "/"]);
+    // 只推了一筆：往回一步就是原本的設定頁。多推的話會停在 "/"。
+    await userEvent.click(screen.getByTestId("back"));
+    await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/settings"));
   });
 });

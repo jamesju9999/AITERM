@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { sendNotification } from "@tauri-apps/plugin-notification";
 import { ensureNotificationPermission } from "../lib/notifyPermission";
@@ -360,7 +361,24 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   const [scriptQueue, setScriptQueue] = useState<Array<{ id: number; cwd?: string; scriptPath: string; command: string }>>([]);
   const scriptIdRef = useRef(0);
 
+  // App.tsx 在 pathname 不是 "/"（設定、引導）時，把 TerminalApp 包進
+  // visibility:hidden + pointer-events:none。啟動請求在那時到達的話，開出來的分頁
+  // 與腳本確認對話框使用者都看不到，所以先導回 "/"。pathname 放 ref：跟其它 ref 一樣
+  // 在 effect 裡更新，handler 不必為它重建。
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const pathnameRef = useRef(pathname);
+  useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
+
   const handleLaunchRequest = useCallback((req: LaunchRequest) => {
+    if (pathnameRef.current !== "/") {
+      // 同一批有好幾個請求時，導覽還沒 commit、ref 也還沒更新，先樂觀地標成 "/"，
+      // 免得每個請求都多推一筆歷史。
+      pathnameRef.current = "/";
+      navigate("/");
+    }
     const isWindows = navigator.platform.toLowerCase().startsWith("win");
     const plan = planLaunch(req, isWindows);
     if (plan.kind === "open") {
@@ -369,7 +387,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       const id = ++scriptIdRef.current;
       setScriptQueue((q) => [...q, { id, cwd: plan.cwd, scriptPath: plan.scriptPath, command: plan.command }]);
     }
-  }, [handlePickerSelect]);
+  }, [handlePickerSelect, navigate]);
   // 用 ref 呼叫最新的 handler，讓下面那個 effect 不必因為 handler 換了而重新訂閱。
   // 跟上面的 tabsRef／activeIdRef 一樣在 effect 裡更新，不在 render 期間寫 ref。
   const launchHandlerRef = useRef(handleLaunchRequest);
