@@ -1,3 +1,4 @@
+import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -80,6 +81,20 @@ function mountApp() {
         <TerminalApp />
       </LocaleProvider>
     </MemoryRouter>,
+  );
+}
+
+// StrictMode 在開發模式會把 effect 跑「掛載 → cleanup → 再掛載」。第一個實例被
+// cleanup 之後，它那次 take 才回來，取走的請求就只存在那個回傳值裡。
+function mountAppStrict() {
+  return render(
+    <React.StrictMode>
+      <MemoryRouter>
+        <LocaleProvider>
+          <TerminalApp />
+        </LocaleProvider>
+      </MemoryRouter>
+    </React.StrictMode>,
   );
 }
 
@@ -208,5 +223,52 @@ describe("TerminalApp launch requests", () => {
     await userEvent.click(screen.getByTestId("launch-script-run"));
     await waitFor(() => expect(screen.getByRole("dialog")).toHaveTextContent("/b/two.command"));
     expect(screen.getByTestId("launch-script-skip")).toHaveFocus();
+  });
+});
+
+describe("TerminalApp launch requests under StrictMode", () => {
+  it("a request queued before mount opens exactly one tab", async () => {
+    pending.push({ cwd: "/tmp/proj", script: null, command: null });
+    mountAppStrict();
+    await waitFor(() => expect(tabsWith("data-cwd", "/tmp/proj")).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(tabsWith("data-cwd", "/tmp/proj")).toHaveLength(1);
+  });
+
+  it("a request taken by the first (cleaned-up) effect instance and resolved late is not lost", async () => {
+    // 第一次 take（屬於第一個、隨後被 cleanup 的 effect 實例）要等我們放行才 resolve；
+    // 之後的 take（第二個實例）立刻回空。請求只存在第一次 take 的回傳值裡。
+    let releaseFirst!: (v: LaunchReq[]) => void;
+    let first = true;
+    takeImpl = () => {
+      if (first) {
+        first = false;
+        return new Promise<LaunchReq[]>((r) => { releaseFirst = r; });
+      }
+      return Promise.resolve([]);
+    };
+    mountAppStrict();
+    await waitFor(() => expect(takeCalls).toBeGreaterThanOrEqual(2));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(tabsWith("data-cwd", "/late/one")).toHaveLength(0);
+
+    releaseFirst([{ cwd: "/late/one", script: null, command: null }]);
+    await waitFor(() => expect(tabsWith("data-cwd", "/late/one")).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(tabsWith("data-cwd", "/late/one")).toHaveLength(1);
+  });
+
+  it("a script request shows one dialog and Skip opens exactly one tab", async () => {
+    pending.push({ cwd: "/s/proj", script: "/s/proj/go.command", command: null });
+    mountAppStrict();
+    await screen.findByRole("dialog");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryAllByRole("dialog")).toHaveLength(1);
+
+    await userEvent.click(screen.getByTestId("launch-script-skip"));
+    await waitFor(() => expect(tabsWith("data-cwd", "/s/proj")).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(tabsWith("data-cwd", "/s/proj")).toHaveLength(1);
+    expect(tabsWith("data-cmd", "/s/proj/go.command")).toHaveLength(0);
   });
 });
