@@ -163,7 +163,7 @@ mod maintainer_scripts {
         run_script("linux/postinst.sh", "configure", &bin);
         assert_eq!(
             logged(&log).trim(),
-            "--install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/bin/fixture-bin-7 40"
+            "--install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/bin/fixture-bin-7 10"
         );
     }
 
@@ -173,7 +173,7 @@ mod maintainer_scripts {
         run_script("linux/postinst.sh", "configure", &bin);
         assert_eq!(
             logged(&log).trim(),
-            "--install /usr/bin/x-terminal-emulator x-terminal-emulator /opt/fixture/bin-8 40"
+            "--install /usr/bin/x-terminal-emulator x-terminal-emulator /opt/fixture/bin-8 10"
         );
     }
 

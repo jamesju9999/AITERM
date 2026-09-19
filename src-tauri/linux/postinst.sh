@@ -1,6 +1,9 @@
 #!/bin/sh
-# 把 AITerm 登記成 x-terminal-emulator 的候選。priority 40 低於多數發行版預設，
-# 不會搶走使用者現有的選擇；要切換用 `update-alternatives --config x-terminal-emulator`。
+# 把 AITerm 登記成 x-terminal-emulator 的候選。priority 10 低於所有常見終端機
+# （xterm/kitty/foot 是 20，DE 的終端機是 30–50），所以絕不會被自動選為預設，
+# 也不會讓 sensible-terminal 之類的工具悄悄改用 AITerm；要用的人自己執行
+# `update-alternatives --config x-terminal-emulator` 切換。
+# 若 AITerm 是唯一的候選，仍會被自動選上（這是 alternatives 的正常行為）。
 set -e
 
 [ "$1" = "configure" ] || exit 0
@@ -16,4 +19,4 @@ case "$BIN" in
   *) BIN="/usr/bin/$BIN" ;;
 esac
 
-update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator "$BIN" 40
+update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator "$BIN" 10
