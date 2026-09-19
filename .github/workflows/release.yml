@@ -266,6 +266,16 @@ jobs:
           conf = {
             'bundle': {
               'externalBin': ['binaries/uv'],
+              'linux': {
+                'deb': {
+                  'desktopTemplate': 'linux/aiterm.desktop',
+                  'postInstallScript': 'linux/postinst.sh',
+                  'preRemoveScript': 'linux/prerm.sh'
+                },
+                'rpm': {
+                  'desktopTemplate': 'linux/aiterm.desktop'
+                }
+              },
               'resources': {
                 '${{ matrix.db2_sidecar_dir }}': 'db2-sidecar',
                 '../tools/ApiDocFetcher/*.py': 'ApiDocFetcher/',

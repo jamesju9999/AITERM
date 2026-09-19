@@ -174,3 +174,80 @@ mod maintainer_scripts {
         assert_eq!(logged(&log), "", "升級不可移除註冊，否則使用者選的終端機會被重設");
     }
 }
+
+/// release.yml 的兩條 Linux .deb 腿會用內嵌 python 把 tauri.linux.conf.json
+/// **整份改寫**（為了塞進 db2 sidecar 路徑），所以 conf 裡新增的任何東西，
+/// 只要沒同步進那份 dict，就會在正式發佈的 .deb 裡靜默消失（MarkItDown 與
+/// 終端機註冊都會如此）。這裡把 workflow 裡那段 python 抽出來實際執行，
+/// 逐項比對 repo 裡提交的 conf——唯一允許的差異是 db2 sidecar 路徑。
+#[cfg(unix)]
+#[test]
+fn release_workflow_regenerates_the_committed_linux_conf_except_the_db2_path() {
+    use serde_json::Value;
+    use std::process::Command;
+
+    const PLACEHOLDER: &str = "PLACEHOLDER_DIR";
+    let yml = read("../.github/workflows/release.yml");
+    let lines: Vec<&str> = yml.lines().collect();
+
+    let step = lines
+        .iter()
+        .position(|l| l.contains("name: Patch tauri.linux.conf.json with DB2 resources"))
+        .expect("release.yml 找不到改寫 tauri.linux.conf.json 的步驟");
+    let open = step
+        + lines[step..]
+            .iter()
+            .position(|l| l.contains("python3 -c \""))
+            .expect("該步驟裡找不到 python3 -c \"");
+    let close = open
+        + 1
+        + lines[open + 1..]
+            .iter()
+            .position(|l| l.trim_start().starts_with("\" > src-tauri/tauri.linux.conf.json"))
+            .expect("找不到結尾的 \" > src-tauri/tauri.linux.conf.json");
+    let body = &lines[open + 1..close];
+
+    // YAML 的 block scalar 會先去掉共同縮排才交給 shell，這裡照做。
+    let indent = body
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .expect("python 內容是空的");
+    let source = body
+        .iter()
+        .map(|l| l.get(indent..).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace("${{ matrix.db2_sidecar_dir }}", PLACEHOLDER);
+
+    // 真正執行時這段字在 shell 的雙引號裡；出現這些字元 shell 會先改寫它，
+    // 此時直接餵給 python 的測試就不等價了。
+    for bad in ['"', '$', '`', '\\'] {
+        assert!(!source.contains(bad), "內嵌 python 含有會被 shell 雙引號改寫的字元 {bad:?}");
+    }
+
+    let out = match Command::new("python3").arg("-c").arg(&source).output() {
+        Ok(o) => o,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("略過：找不到 python3，無法執行 release.yml 內嵌的 python");
+            return;
+        }
+        Err(e) => panic!("python3 執行失敗: {e}"),
+    };
+    assert!(out.status.success(), "內嵌 python 執行失敗: {}", String::from_utf8_lossy(&out.stderr));
+    let mut generated: Value = serde_json::from_slice(&out.stdout).expect("內嵌 python 的輸出不是 JSON");
+    let committed: Value = serde_json::from_str(&read("tauri.linux.conf.json")).expect("conf 不是合法 JSON");
+
+    // 唯一允許的差異：db2 sidecar 那一筆。先確認它真的在，代換才有意義。
+    let dropped = generated["bundle"]["resources"]
+        .as_object_mut()
+        .expect("workflow 產出的 bundle.resources 必須是 object")
+        .remove(PLACEHOLDER);
+    assert_eq!(dropped, Some(Value::from("db2-sidecar")), "workflow 的 resources 少了 db2 sidecar 那一筆");
+
+    assert_eq!(generated["bundle"]["linux"], committed["bundle"]["linux"], "bundle.linux 沒同步進 release.yml");
+    assert_eq!(generated["bundle"]["externalBin"], committed["bundle"]["externalBin"], "bundle.externalBin 沒同步");
+    assert_eq!(generated["bundle"]["resources"], committed["bundle"]["resources"], "bundle.resources 沒同步");
+    assert_eq!(generated, committed, "release.yml 重新產生的 conf 與提交的不同（除 db2 路徑外不應有差異）");
+}
