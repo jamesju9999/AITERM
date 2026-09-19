@@ -30,4 +30,24 @@ describe("LaunchScriptConfirm", () => {
     expect(onSkip).toHaveBeenCalledTimes(1);
     expect(onRun).toHaveBeenCalledTimes(1);
   });
+
+  it("puts initial focus on the safe choice, not on Run", () => {
+    mount();
+    expect(screen.getByTestId("launch-script-skip")).toHaveFocus();
+    expect(screen.getByTestId("launch-script-run")).not.toHaveFocus();
+  });
+
+  it("a stray Enter (user was typing when the prompt appeared) skips instead of running", async () => {
+    const { onRun, onSkip } = mount();
+    await userEvent.keyboard("{Enter}");
+    expect(onSkip).toHaveBeenCalledTimes(1);
+    expect(onRun).not.toHaveBeenCalled();
+  });
+
+  it("Escape skips and never runs", async () => {
+    const { onRun, onSkip } = mount();
+    await userEvent.keyboard("{Escape}");
+    expect(onSkip).toHaveBeenCalledTimes(1);
+    expect(onRun).not.toHaveBeenCalled();
+  });
 });
