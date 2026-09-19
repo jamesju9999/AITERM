@@ -1,6 +1,16 @@
 {
   "bundle": {
     "externalBin": ["binaries/uv"],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux/aiterm.desktop",
+        "postInstallScript": "linux/postinst.sh",
+        "preRemoveScript": "linux/prerm.sh"
+      },
+      "rpm": {
+        "desktopTemplate": "linux/aiterm.desktop"
+      }
+    },
     "resources": {
       "../tools/ApiDocFetcher/*.py": "ApiDocFetcher/",
       "../tools/ApiDocFetcher/strategies/*.py": "ApiDocFetcher/strategies/",
