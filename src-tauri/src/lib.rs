@@ -228,6 +228,11 @@ pub fn run() {
     let sidecar_path = db::resolve_db2_sidecar_path();
 
     tauri::Builder::default()
+        // single-instance 必須是第一個外掛（官方文件要求）。第二次啟動會把
+        // argv 與 cwd 轉給這個實例，而不是另開一個行程。
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            launch::on_second_instance(app, argv, cwd);
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -237,6 +242,9 @@ pub fn run() {
                 .level(log::LevelFilter::Info)
                 .build(),
         )
+        // 必須在 Builder 上 manage、不能放進 .setup：single-instance 的 callback
+        // 可能在 setup 跑完之前就被呼叫，那時 state 不存在會直接 panic。
+        .manage(launch::LaunchQueue::default())
         .manage(Arc::new(PtyManager::new()))
         .manage(config)
         .manage(secrets)
@@ -262,6 +270,18 @@ pub fn run() {
         .manage(Arc::new(share::ShareServerState::new()))
         .manage(Arc::new(share::viewer_manager::ViewerManager::new()))
         .setup(|app| {
+            // 冷啟動時帶進來的參數（`aiterm ~/proj`、`--working-directory=…`）。
+            // 只入列不必先通知：前端一掛載就會排空。
+            // 用 args_os + lossy：Linux 上參數可以不是合法 UTF-8，std::env::args() 會 panic。
+            launch::enqueue_and_notify(
+                app.handle(),
+                launch::parse_args(
+                    &std::env::args_os()
+                        .map(|a| a.to_string_lossy().into_owned())
+                        .collect::<Vec<_>>(),
+                    std::env::current_dir().ok().as_deref(),
+                ),
+            );
             telegram::init(app.handle());
             mail::poller::init(app.handle());
             enterprise::agent::init(app.handle());
@@ -632,10 +652,13 @@ pub fn run() {
             reports_list,
             reports_read,
             reports_delete,
+            // 啟動請求（開資料夾／-e 指令）
+            launch::take_launch_requests,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
+            launch::on_run_event(app_handle, &event);
             // Mail tasks are the one background task that holds an open,
             // authenticated socket essentially all the time: with IMAP IDLE
             // they park *inside* a live session rather than sleeping between

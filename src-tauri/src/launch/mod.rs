@@ -29,9 +29,21 @@ pub fn enqueue_and_notify(app: &AppHandle, requests: Vec<LaunchRequest>) {
     }
 }
 
+/// single-instance 外掛傳來的 cwd 字串 → 可用的工作目錄。
+/// 外掛在取不到 cwd（目錄已被刪、無權限）或路徑不是合法 UTF-8 時會傳空字串
+/// （`current_dir().unwrap_or_default().to_str().unwrap_or_default()`），
+/// 這代表「不知道」，不能當成 `Path::new("")` 去解析相對路徑。
+fn invoking_cwd(cwd: &str) -> Option<&std::path::Path> {
+    if cwd.is_empty() {
+        None
+    } else {
+        Some(std::path::Path::new(cwd))
+    }
+}
+
 /// 第二次啟動（single-instance 外掛的 callback）：解析、入列、把視窗拉到前景。
 pub fn on_second_instance(app: &AppHandle, argv: Vec<String>, cwd: String) {
-    let requests = parse_args(&argv, Some(std::path::Path::new(&cwd)));
+    let requests = parse_args(&argv, invoking_cwd(&cwd));
     enqueue_and_notify(app, requests);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -52,5 +64,21 @@ pub fn on_run_event(app: &AppHandle, event: &tauri::RunEvent) {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (app, event);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::invoking_cwd;
+    use std::path::Path;
+
+    #[test]
+    fn empty_cwd_from_plugin_means_unknown() {
+        assert_eq!(invoking_cwd(""), None);
+    }
+
+    #[test]
+    fn non_empty_cwd_is_passed_through() {
+        assert_eq!(invoking_cwd("/home/u/proj"), Some(Path::new("/home/u/proj")));
     }
 }
