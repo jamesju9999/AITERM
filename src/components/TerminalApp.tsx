@@ -39,6 +39,9 @@ import { getConfig } from "../ipc/config";
 import { bridgeStatus } from "../ipc/bridge";
 import { onCoordinationTabSpawned } from "../ipc/mcpToolServer";
 import { unlistenOnCleanup } from "../lib/eventSubscription";
+import { takeLaunchRequests, onLaunchRequestPending, type LaunchRequest } from "../ipc/launch";
+import { planLaunch } from "../lib/launchRequest";
+import { LaunchScriptConfirm } from "./LaunchScriptConfirm";
 import {
   onEnterpriseTaskReceived,
   onEnterpriseTaskReady,
@@ -349,6 +352,69 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     return newId;
   }, [t.terminal_tab, t.database_tab, t.design_tab, t.cross_db_tab, t.vcs_tab, t.doc_converter_tab, t.api_docs_tab, t.loop_studio_tab, t.code_assistant_tab, t.knowledge_base_tab, t.mail_tab, t.bridge_tab_title, selectTab]);
 
+  // ── 啟動請求（從 Finder／檔案管理員開資料夾、x-terminal-emulator -e …）──
+  // 等待使用者確認的腳本請求，一次顯示一個。id 是單調遞增的流水號（不是 scriptPath：
+  // 同一個路徑可以被排進佇列兩次），給對話框當 key，讓每個排隊的腳本都拿到全新的
+  // 元件實例——否則 React 會重用同一個實例，autoFocus 不會重新觸發，滑鼠點過「執行」
+  // 之後下一個對話框的焦點就還停在「執行」上。
+  const [scriptQueue, setScriptQueue] = useState<Array<{ id: number; cwd?: string; scriptPath: string; command: string }>>([]);
+  const scriptIdRef = useRef(0);
+
+  const handleLaunchRequest = useCallback((req: LaunchRequest) => {
+    const isWindows = navigator.platform.toLowerCase().startsWith("win");
+    const plan = planLaunch(req, isWindows);
+    if (plan.kind === "open") {
+      handlePickerSelect("terminal", { initialCwd: plan.cwd, initialCommand: plan.command });
+    } else {
+      const id = ++scriptIdRef.current;
+      setScriptQueue((q) => [...q, { id, cwd: plan.cwd, scriptPath: plan.scriptPath, command: plan.command }]);
+    }
+  }, [handlePickerSelect]);
+  // 用 ref 呼叫最新的 handler，讓下面那個 effect 不必因為 handler 換了而重新訂閱。
+  // 跟上面的 tabsRef／activeIdRef 一樣在 effect 裡更新，不在 render 期間寫 ref。
+  const launchHandlerRef = useRef(handleLaunchRequest);
+  useEffect(() => {
+    launchHandlerRef.current = handleLaunchRequest;
+  }, [handleLaunchRequest]);
+
+  useEffect(() => {
+    const doDrain = async () => {
+      try {
+        const requests = await takeLaunchRequests();
+        // 注意：這裡**不能**檢查「effect 已被 cleanup」。請求一旦從後端佇列取走
+        // 就只存在這個陣列裡；StrictMode 開發模式下第一個 effect 實例被 cleanup
+        // 後它的 await 才回來，若在此丟掉，那些請求就永久遺失。ref 永遠指向
+        // 最新的 handler，元件真的卸載時 setState 是 no-op。
+        for (const r of requests) launchHandlerRef.current(r);
+      } catch (e) {
+        console.warn("take_launch_requests 失敗:", e);
+      }
+    };
+    // 排空必須串行：兩次重疊的 take 可能不照順序 resolve，B 批就會比 A 批先開分頁。
+    // doDrain 自己吞掉錯誤，所以這條 promise 鏈不會斷。
+    let chain: Promise<void> = Promise.resolve();
+    const drain = () => (chain = chain.then(doDrain, doDrain));
+    // **先訂閱、再排空**：訂閱完成之後入列的請求一定有事件通知；訂閱之前入列的
+    // （冷啟動 argv、macOS 的 Opened）由這次排空取到。後端 take 是原子的，
+    // 重複呼叫取到的集合互不相交，不會重複開分頁。
+    const pendingUnlisten = onLaunchRequestPending(() => void drain());
+    void pendingUnlisten.then(() => drain()).catch(() => {});
+    return unlistenOnCleanup(pendingUnlisten, "launch-request-pending");
+  }, []);
+
+  const currentScript = scriptQueue[0];
+  // 不可以在 setScriptQueue 的 updater 裡呼叫 handlePickerSelect：updater 必須是
+  // 純的，StrictMode 會把它跑兩次，而那會開出兩個分頁。先讀目前值、再各自 set。
+  const finishScript = useCallback((run: boolean) => {
+    const head = scriptQueue[0];
+    if (!head) return;
+    setScriptQueue((q) => q.slice(1));
+    handlePickerSelect("terminal", {
+      initialCwd: head.cwd,
+      initialCommand: run ? head.command : undefined,
+    });
+  }, [scriptQueue, handlePickerSelect]);
+
   // 首頁 AI 路由開出一個分頁（非降級結果）：記住它，讓 RouteHint 能在
   // 這個分頁上顯示「AI 判斷你要的是 X 分頁——不對？換成…」。
   const handleAiRouted = useCallback((tabId: string, route: RouteResult) => {
@@ -613,6 +679,14 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
         </div>
       )}
       <ConsentDialog tabs={tabs.map((x) => ({ id: x.id, title: x.title, ptySessionId: x.ptySessionId }))} />
+      {currentScript && (
+        <LaunchScriptConfirm
+          key={currentScript.id}
+          scriptPath={currentScript.scriptPath}
+          onRun={() => finishScript(true)}
+          onSkip={() => finishScript(false)}
+        />
+      )}
       {connectOpen && (
         <ConnectDialog
           onCancel={() => {
