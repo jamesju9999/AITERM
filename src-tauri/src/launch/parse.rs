@@ -32,6 +32,15 @@ fn existing_dir(raw: &str, invoking_cwd: Option<&Path>) -> Option<String> {
 }
 
 fn positional(raw: &str, invoking_cwd: Option<&Path>) -> Option<LaunchRequest> {
+    // 檔案管理員的「開啟方式」（AppImage 的 Exec 是 %U）與 Dolphin 等啟動器給的
+    // 是 file:// URI；先百分號解碼成路徑，否則會被當成相對路徑而靜默丟掉。
+    let decoded;
+    let raw = if raw.starts_with("file://") {
+        decoded = url::Url::parse(raw).ok()?.to_file_path().ok()?.to_string_lossy().into_owned();
+        decoded.as_str()
+    } else {
+        raw
+    };
     let path = resolve(raw, invoking_cwd);
     if path.is_dir() {
         return Some(LaunchRequest { cwd: Some(path.to_string_lossy().into_owned()), script: None, command: None });
@@ -55,6 +64,7 @@ fn positional(raw: &str, invoking_cwd: Option<&Path>) -> Option<LaunchRequest> {
 /// 把命令列參數解析成開分頁請求。`argv[0]` 是程式本身，會被略過。
 ///
 /// - 位置參數：資料夾 → 開在該處；`.command`／`.sh` → 開在其父目錄並記下腳本路徑。
+///   也接受 `file://` URI（會先解碼成路徑）。
 /// - `--working-directory=X`／`--working-directory X`：起始目錄。
 /// - `-e`／`--command`／`-x`：其後**所有** argv 都是要跑的指令（x-terminal-emulator 慣例）。
 /// - 不存在的路徑、無法辨識的旗標一律略過。
@@ -262,6 +272,53 @@ mod tests {
     fn file_urls_become_decoded_path_arguments() {
         let urls = vec![url::Url::parse("file:///tmp/a%20b").unwrap()];
         assert_eq!(args_from_file_urls(&urls), vec!["aiterm".to_string(), "/tmp/a b".to_string()]);
+    }
+
+    // 檔案管理員的「開啟方式」（AppImage 的 Exec 是 %U）與 Dolphin 等啟動器給的
+    // 是 file:// URI，不是路徑；直接當相對路徑處理會靜默丟掉。
+    #[cfg(unix)]
+    #[test]
+    fn a_file_url_argument_is_treated_like_the_path_it_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let got = parse_args(&argv(&[&format!("file://{}", p(dir.path()))]), None);
+        assert_eq!(
+            got,
+            vec![LaunchRequest { cwd: Some(p(dir.path())), script: None, command: None }]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_percent_encoded_file_url_is_decoded() {
+        let base = tempfile::tempdir().unwrap();
+        let spaced = base.path().join("my proj");
+        fs::create_dir(&spaced).unwrap();
+        let got = parse_args(&argv(&[&format!("file://{}/my%20proj", p(base.path()))]), None);
+        assert_eq!(got, vec![LaunchRequest { cwd: Some(p(&spaced)), script: None, command: None }]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_url_to_a_script_opens_its_parent_and_records_the_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("deploy.command");
+        fs::write(&script, "#!/bin/sh\n").unwrap();
+        let got = parse_args(&argv(&[&format!("file://{}", p(&script))]), None);
+        assert_eq!(
+            got,
+            vec![LaunchRequest { cwd: Some(p(dir.path())), script: Some(p(&script)), command: None }]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_url_to_a_missing_path_is_ignored() {
+        assert!(parse_args(&argv(&["file:///definitely/not/here/aiterm-test"]), None).is_empty());
+    }
+
+    #[test]
+    fn a_non_file_url_argument_is_ignored() {
+        assert!(parse_args(&argv(&["https://example.com/x"]), None).is_empty());
     }
 
     #[test]
