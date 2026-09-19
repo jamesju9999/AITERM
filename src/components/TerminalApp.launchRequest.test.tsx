@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
@@ -134,12 +134,20 @@ function mountAppStrict() {
   );
 }
 
-// 腳本對話框出現後 500ms 內不接受「執行」（LaunchScriptConfirm 的防連點保護），
-// 要點「執行」的測試得先等過這段時間。
-const pastRunShield = () => new Promise((r) => setTimeout(r, 550));
+// 腳本對話框出現後 600ms 內不接受「執行」（LaunchScriptConfirm 的防連點保護）。
+// 這裡不用真的 sleep：凍結 Date／performance，再手動撥時間。這樣「雙擊的第二下落在
+// 保護期內」這個前提不會被 CI 卡頓（GC、機器忙）弄破，測試也不必空等。
+// 刻意不假造 setTimeout：waitFor／findBy／userEvent 內部要用真的計時器，否則會卡死。
+const RUN_SHIELD_MS = 600;
+const freezeClock = () => vi.useFakeTimers({ toFake: ["Date", "performance"] });
+const pastRunShield = () => vi.advanceTimersByTime(RUN_SHIELD_MS);
 
 const tabsWith = (attr: "data-cwd" | "data-cmd", value: string) =>
   screen.queryAllByTestId("tv").filter((el) => el.getAttribute(attr) === value);
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeEach(() => {
   pending.length = 0;
@@ -239,12 +247,13 @@ describe("TerminalApp launch requests", () => {
   });
 
   it("a script asks first: nothing runs until the user confirms", async () => {
+    freezeClock();
     pending.push({ cwd: "/tmp/proj", script: "/tmp/proj/go.command", command: null });
     mountApp();
     await screen.findByRole("dialog");
     expect(screen.getByRole("dialog")).toHaveTextContent("/tmp/proj/go.command");
     expect(tabsWith("data-cwd", "/tmp/proj")).toHaveLength(0);
-    await pastRunShield();
+    pastRunShield();
     await userEvent.click(screen.getByTestId("launch-script-run"));
     await waitFor(() => expect(tabsWith("data-cmd", "/tmp/proj/go.command")).toHaveLength(1));
     expect(tabsWith("data-cwd", "/tmp/proj")).toHaveLength(1);
@@ -278,9 +287,10 @@ describe("TerminalApp launch requests", () => {
       { cwd: "/a", script: "/a/one.command", command: null },
       { cwd: "/b", script: "/b/two.command", command: null },
     );
+    freezeClock();
     mountApp();
     await screen.findByRole("dialog");
-    await pastRunShield();
+    pastRunShield();
     await userEvent.click(screen.getByTestId("launch-script-run"));
     // 第一個腳本已核准；第二個對話框在同一個位置重新掛載。雙擊的第二下立刻落在它的「執行」上。
     expect(screen.getByRole("dialog")).toHaveTextContent("/b/two.command");
@@ -289,7 +299,7 @@ describe("TerminalApp launch requests", () => {
     expect(tabsWith("data-cmd", "/b/two.command")).toHaveLength(0);
     expect(screen.getByRole("dialog")).toHaveTextContent("/b/two.command");
     // 使用者真的讀過之後再點，就照常執行。
-    await pastRunShield();
+    pastRunShield();
     await userEvent.click(screen.getByTestId("launch-script-run"));
     await waitFor(() => expect(tabsWith("data-cmd", "/b/two.command")).toHaveLength(1));
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -300,11 +310,12 @@ describe("TerminalApp launch requests", () => {
       { cwd: "/a", script: "/a/one.command", command: null },
       { cwd: "/b", script: "/b/two.command", command: null },
     );
+    freezeClock();
     mountApp();
     await screen.findByRole("dialog");
     // 滑鼠點「執行」會把焦點留在「執行」上；如果第二個對話框重用同一個元件實例，
     // autoFocus 不會重新觸發，焦點就還在「執行」上。
-    await pastRunShield();
+    pastRunShield();
     await userEvent.click(screen.getByTestId("launch-script-run"));
     await waitFor(() => expect(screen.getByRole("dialog")).toHaveTextContent("/b/two.command"));
     expect(screen.getByTestId("launch-script-skip")).toHaveFocus();

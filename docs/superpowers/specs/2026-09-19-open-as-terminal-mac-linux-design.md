@@ -196,8 +196,10 @@ pub fn parse_args(argv: &[String], invoking_cwd: Option<&Path>) -> Vec<LaunchReq
   前端會導回 `/`，否則新分頁或確認對話框看不見。
 - macOS 的 `RunEvent::Opened`（Finder「打開方式」、拖到 Dock 圖示）和第二次啟動一樣會 unminimize／show／focus 主視窗，
   但只在解析出至少一個請求時才做，不會為空事件搶焦點。
-- 確認對話框對 Run 有 500 ms 的防護：對話框出現後 500 ms 內的 Run 點擊會被忽略，避免雙擊把
-  「下一個排隊的腳本」在使用者沒讀過路徑時就批准掉（Skip 與 Esc 不受影響）。
+- 確認對話框對 Run 有 600 ms 的防護：對話框出現後 600 ms 內的 Run 點擊會被忽略，避免雙擊把
+  「下一個排隊的腳本」在使用者沒讀過路徑時就批准掉（Skip 與 Esc 不受影響）。600 ms 是因為
+  Windows／macOS 預設雙擊間隔是 500 ms，要留餘裕；計時用 `performance.now()`（單調時鐘），
+  系統時間被往回撥（NTP、VM 休眠還原）時不會把 Run 鎖死。
 
 ## 已知限制
 

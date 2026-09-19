@@ -16,11 +16,12 @@ function mount(props: Partial<React.ComponentProps<typeof LaunchScriptConfirm>> 
 }
 
 // 對話框出現後有一小段時間不接受「執行」：見 LaunchScriptConfirm 的註解。
-const RUN_SHIELD_MS = 500;
-// 只凍結 Date、不假造計時器：RTL 的 asyncWrapper／userEvent 的內部延遲要用真的
-// setTimeout，整組假計時器會讓它們永遠等不到（測試逾時）。時間由測試手動往前撥。
-const freezeClock = () => vi.useFakeTimers({ toFake: ["Date"] });
-const advanceClock = (ms: number) => vi.setSystemTime(Date.now() + ms);
+const RUN_SHIELD_MS = 600;
+// 只凍結 Date 與 performance、不假造 setTimeout：RTL 的 asyncWrapper／userEvent 的
+// 內部延遲要用真的計時器，整組假計時器會讓它們永遠等不到（測試逾時）。
+// 時間用 advanceTimersByTime 往前撥——vi.setSystemTime 只動 Date，不動 performance.now()。
+const freezeClock = () => vi.useFakeTimers({ toFake: ["Date", "performance"] });
+const advanceClock = (ms: number) => vi.advanceTimersByTime(ms);
 
 afterEach(() => {
   vi.useRealTimers();
@@ -59,6 +60,17 @@ describe("LaunchScriptConfirm", () => {
     freezeClock();
     const { onRun } = mount();
     advanceClock(RUN_SHIELD_MS);
+    await userEvent.click(screen.getByTestId("launch-script-run"));
+    expect(onRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a monotonic clock: stepping the system clock backwards cannot lock Run out", async () => {
+    freezeClock();
+    const { onRun } = mount();
+    advanceClock(RUN_SHIELD_MS);
+    // NTP 校時／VM 休眠還原之類的把系統時間往回撥：Date.now() 會比掛載時還早，
+    // 若保護期用 Date 算，「執行」會一直被忽略到系統時間追回來為止。
+    vi.setSystemTime(Date.now() - 60 * 60 * 1000);
     await userEvent.click(screen.getByTestId("launch-script-run"));
     expect(onRun).toHaveBeenCalledTimes(1);
   });

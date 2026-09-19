@@ -6,7 +6,9 @@ import "./index.css";
 // 位置、同樣的版面重新掛載，雙擊的第二下（約 100ms 後）會落在新對話框的「執行」上，
 // 等於核准了一個使用者根本沒讀過的腳本；對話框出現在一個已經按下去的點擊底下也是
 // 同一個問題。預設焦點放在「跳過」只保護得了鍵盤。
-const RUN_SHIELD_MS = 500;
+// 600ms：Windows／macOS 預設的雙擊間隔是 500ms，再留一點餘裕給「第一下點擊」到
+// 「新對話框 commit」之間的幾毫秒。
+const RUN_SHIELD_MS = 600;
 
 interface Props {
   scriptPath: string;
@@ -26,16 +28,18 @@ interface Props {
  */
 export function LaunchScriptConfirm({ scriptPath, onRun, onSkip }: Props) {
   const { t } = useLocale();
-  // 掛載時間記在 effect 裡而不是 render 期間（Date.now() 不是純的）。effect 還沒跑
-  // 之前是 null，一律當作還在保護期內（fail closed）。只擋「執行」：跳過與 Esc
-  // 是安全的那一邊，不設限。
+  // 掛載時間記在 effect 裡而不是 render 期間（performance.now() 不是純的）。用
+  // performance.now() 而不是 Date.now()：前者是單調時鐘，系統時間被往回撥（NTP、VM
+  // 休眠還原）時，「執行」才不會被鎖到系統時間追回來為止。effect 還沒跑之前是 null，
+  // 一律當作還在保護期內（fail closed）。只擋「執行」：跳過與 Esc 是安全的那一邊，
+  // 不設限。
   const shownAtRef = useRef<number | null>(null);
   useEffect(() => {
-    shownAtRef.current = Date.now();
+    shownAtRef.current = performance.now();
   }, []);
   const handleRun = () => {
     const shownAt = shownAtRef.current;
-    if (shownAt === null || Date.now() - shownAt < RUN_SHIELD_MS) return;
+    if (shownAt === null || performance.now() - shownAt < RUN_SHIELD_MS) return;
     onRun();
   };
   return (
