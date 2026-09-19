@@ -173,6 +173,8 @@ mod tests {
     #[test]
     fn a_missing_path_is_ignored() {
         assert!(parse_args(&argv(&["/definitely/not/here/aiterm-test"]), None).is_empty());
+        // 副檔名對、但檔案不存在的腳本也要略過。
+        assert!(parse_args(&argv(&["/definitely/not/here/run.command"]), None).is_empty());
     }
 
     #[test]
@@ -189,15 +191,18 @@ mod tests {
     #[test]
     fn dash_e_swallows_every_following_argument_as_the_command() {
         let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
         let d = p(dir.path());
+        let o = p(other.path());
         // `-e` 之後的 `--working-directory` 是指令自己的參數，不是我們的旗標。
-        let got = parse_args(&argv(&["-e", "ls", "-la", "--working-directory", &d]), Some(dir.path()));
+        // 它指向的目錄刻意和呼叫端 cwd 不同：若被誤當旗標吃掉，cwd 就會變成 `o`。
+        let got = parse_args(&argv(&["-e", "ls", "-la", "--working-directory", &o]), Some(dir.path()));
         assert_eq!(
             got,
             vec![LaunchRequest {
                 cwd: Some(d.clone()), // 沒給 --working-directory 時退回呼叫端的 cwd
                 script: None,
-                command: Some(vec!["ls".into(), "-la".into(), "--working-directory".into(), d]),
+                command: Some(vec!["ls".into(), "-la".into(), "--working-directory".into(), o]),
             }]
         );
     }
