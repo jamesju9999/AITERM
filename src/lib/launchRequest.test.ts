@@ -136,6 +136,51 @@ describe("planLaunch control characters", () => {
   });
 });
 
+describe("planLaunch Unicode format characters", () => {
+  // 每個範圍的頭、尾與代表字元；缺任何一段，對應那一列就會變紅。
+  const FORMAT_CHARS: Array<[string, string]> = [
+    ["U+0080 (C1 start)", ""],
+    ["U+009F (C1 end)", ""],
+    ["U+200B (zero-width space)", "​"],
+    ["U+200F (RLM)", "‏"],
+    ["U+2028 (line separator)", " "],
+    ["U+202A (LRE)", "‪"],
+    ["U+202E (RLO)", "‮"],
+    ["U+2060 (word joiner)", "⁠"],
+    ["U+2064 (invisible plus)", "⁤"],
+    ["U+2066 (LRI)", "⁦"],
+    ["U+2069 (PDI)", "⁩"],
+    ["U+FEFF (BOM / ZWNBSP)", "﻿"],
+  ];
+
+  it.each(FORMAT_CHARS)("does not ask to confirm a script whose path contains %s", (_label, ch) => {
+    const plan = planLaunch({ cwd: "/p", script: `/p/evil${ch}cod.command`, command: null }, false);
+    expect(plan).toEqual({ kind: "open", cwd: "/p" });
+    expect(plan.kind).not.toBe("confirm-script");
+  });
+
+  it.each(FORMAT_CHARS)("never sends a command argument containing %s", (_label, ch) => {
+    expect(planLaunch({ cwd: "/p", script: null, command: ["echo", "ok", `a${ch}b`] }, false)).toEqual({
+      kind: "open",
+      cwd: "/p",
+    });
+  });
+
+  it("positive control: ordinary non-ASCII in a script path still needs confirmation", () => {
+    const plan = planLaunch({ cwd: "/p", script: "/p/é中文 目錄/go.command", command: null }, false);
+    expect(plan.kind).toBe("confirm-script");
+    expect(plan).toMatchObject({ scriptPath: "/p/é中文 目錄/go.command" });
+  });
+
+  it("positive control: ordinary non-ASCII in a command argument still produces a command", () => {
+    expect(planLaunch({ cwd: "/p", script: null, command: ["echo", "é中文"] }, false)).toEqual({
+      kind: "open",
+      cwd: "/p",
+      command: "echo 'é中文'",
+    });
+  });
+});
+
 describe("planLaunch on Windows", () => {
   it("only opens at the directory, never executes a script", () => {
     expect(planLaunch({ cwd: "C:\\p", script: "C:\\p\\a.sh", command: null }, true)).toEqual({
