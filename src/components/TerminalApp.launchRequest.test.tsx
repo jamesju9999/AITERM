@@ -104,6 +104,10 @@ function mountAppStrict() {
   );
 }
 
+// 腳本對話框出現後 500ms 內不接受「執行」（LaunchScriptConfirm 的防連點保護），
+// 要點「執行」的測試得先等過這段時間。
+const pastRunShield = () => new Promise((r) => setTimeout(r, 550));
+
 const tabsWith = (attr: "data-cwd" | "data-cmd", value: string) =>
   screen.queryAllByTestId("tv").filter((el) => el.getAttribute(attr) === value);
 
@@ -209,6 +213,7 @@ describe("TerminalApp launch requests", () => {
     await screen.findByRole("dialog");
     expect(screen.getByRole("dialog")).toHaveTextContent("/tmp/proj/go.command");
     expect(tabsWith("data-cwd", "/tmp/proj")).toHaveLength(0);
+    await pastRunShield();
     await userEvent.click(screen.getByTestId("launch-script-run"));
     await waitFor(() => expect(tabsWith("data-cmd", "/tmp/proj/go.command")).toHaveLength(1));
     expect(tabsWith("data-cwd", "/tmp/proj")).toHaveLength(1);
@@ -237,6 +242,28 @@ describe("TerminalApp launch requests", () => {
     await waitFor(() => expect(screen.getByRole("dialog")).toHaveTextContent("/b/two.command"));
   });
 
+  it("a double-click on Run does not approve the NEXT queued script the user never read", async () => {
+    pending.push(
+      { cwd: "/a", script: "/a/one.command", command: null },
+      { cwd: "/b", script: "/b/two.command", command: null },
+    );
+    mountApp();
+    await screen.findByRole("dialog");
+    await pastRunShield();
+    await userEvent.click(screen.getByTestId("launch-script-run"));
+    // 第一個腳本已核准；第二個對話框在同一個位置重新掛載。雙擊的第二下立刻落在它的「執行」上。
+    expect(screen.getByRole("dialog")).toHaveTextContent("/b/two.command");
+    await userEvent.click(screen.getByTestId("launch-script-run"));
+    expect(tabsWith("data-cmd", "/a/one.command")).toHaveLength(1);
+    expect(tabsWith("data-cmd", "/b/two.command")).toHaveLength(0);
+    expect(screen.getByRole("dialog")).toHaveTextContent("/b/two.command");
+    // 使用者真的讀過之後再點，就照常執行。
+    await pastRunShield();
+    await userEvent.click(screen.getByTestId("launch-script-run"));
+    await waitFor(() => expect(tabsWith("data-cmd", "/b/two.command")).toHaveLength(1));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("the next queued script starts on the SAFE button even after the user clicked Run on the previous one", async () => {
     pending.push(
       { cwd: "/a", script: "/a/one.command", command: null },
@@ -246,6 +273,7 @@ describe("TerminalApp launch requests", () => {
     await screen.findByRole("dialog");
     // 滑鼠點「執行」會把焦點留在「執行」上；如果第二個對話框重用同一個元件實例，
     // autoFocus 不會重新觸發，焦點就還在「執行」上。
+    await pastRunShield();
     await userEvent.click(screen.getByTestId("launch-script-run"));
     await waitFor(() => expect(screen.getByRole("dialog")).toHaveTextContent("/b/two.command"));
     expect(screen.getByTestId("launch-script-skip")).toHaveFocus();

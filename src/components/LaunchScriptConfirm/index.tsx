@@ -1,5 +1,12 @@
+import { useEffect, useRef } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
 import "./index.css";
+
+// 對話框出現後這段時間內不接受「執行」。多個腳本排隊時，下一個對話框會在同一個
+// 位置、同樣的版面重新掛載，雙擊的第二下（約 100ms 後）會落在新對話框的「執行」上，
+// 等於核准了一個使用者根本沒讀過的腳本；對話框出現在一個已經按下去的點擊底下也是
+// 同一個問題。預設焦點放在「跳過」只保護得了鍵盤。
+const RUN_SHIELD_MS = 500;
 
 interface Props {
   scriptPath: string;
@@ -19,6 +26,18 @@ interface Props {
  */
 export function LaunchScriptConfirm({ scriptPath, onRun, onSkip }: Props) {
   const { t } = useLocale();
+  // 掛載時間記在 effect 裡而不是 render 期間（Date.now() 不是純的）。effect 還沒跑
+  // 之前是 null，一律當作還在保護期內（fail closed）。只擋「執行」：跳過與 Esc
+  // 是安全的那一邊，不設限。
+  const shownAtRef = useRef<number | null>(null);
+  useEffect(() => {
+    shownAtRef.current = Date.now();
+  }, []);
+  const handleRun = () => {
+    const shownAt = shownAtRef.current;
+    if (shownAt === null || Date.now() - shownAt < RUN_SHIELD_MS) return;
+    onRun();
+  };
   return (
     <div className="aiterm-launch-confirm__backdrop">
       <div
@@ -43,7 +62,7 @@ export function LaunchScriptConfirm({ scriptPath, onRun, onSkip }: Props) {
           <button
             className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
             data-testid="launch-script-run"
-            onClick={onRun}
+            onClick={handleRun}
           >
             {t.launch_script_run}
           </button>
