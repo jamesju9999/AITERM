@@ -11,7 +11,7 @@
 ## v1.30.0
 
 **新功能（macOS、Linux）：AITerm 可以當成系統的終端機來用**
-在 Finder 對資料夾按右鍵、選「打開方式」→ AITerm，或直接把資料夾拖到 Dock 上的 AITerm 圖示，AITerm 會開一個新分頁，並且已經位於那個資料夾。從命令列也一樣：`AITerm --working-directory=資料夾 -e 指令` 會在新分頁裡執行指令。Linux 上安裝 .deb 之後，AITerm 會登記成系統可選用的終端機，「在終端機開啟」、`x-terminal-emulator -e 指令` 這類由其他程式呼叫終端機的情況都能選它。AITerm 只是多了一個候選，**不會取代你原本的預設終端機**——Linux 上它的優先順序刻意排得很低，需要時再用 `sudo update-alternatives --config x-terminal-emulator` 選它。
+把資料夾拖到 Dock 上的 AITerm 圖示，或在終端機輸入 `open -a AITerm 資料夾`，AITerm 會開一個新分頁，並且已經位於那個資料夾。目前 Finder 對資料夾按右鍵的選單裡不會出現 AITerm，請改用這兩種方式。從命令列也一樣：`AITerm --working-directory=資料夾 -e 指令` 會在新分頁裡執行指令。Linux 上安裝 .deb 之後，AITerm 會登記成系統可選用的終端機，「在終端機開啟」、`x-terminal-emulator -e 指令` 這類由其他程式呼叫終端機的情況都能選它。AITerm 只是多了一個候選，**不會取代你原本的預設終端機**——Linux 上它的優先順序刻意排得很低，需要時再用 `sudo update-alternatives --config x-terminal-emulator` 選它。
 
 **雙擊 `.command`、`.sh` 腳本時，執行前會先問你**
 用 AITerm 開啟腳本檔時，會先顯示完整的檔案路徑，讓你確認要不要執行。預設選項是「只開啟資料夾」，所以手滑按到 Enter 或空白鍵也不會直接跑腳本；選「執行」才會在新分頁裡跑。如果一次開了好幾個腳本，會一個一個詢問，剛按完「執行」的瞬間不會誤觸下一個。路徑或指令參數裡如果藏有控制字元、看不見的方向字元這類會讓畫面顯示與實際內容不一致的字元，AITerm 只會開資料夾、不會自動執行。
