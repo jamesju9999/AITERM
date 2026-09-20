@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::borrow::Cow;
 use std::path::Path;
 
 /// 一次「開新分頁」的請求。
@@ -31,7 +32,20 @@ fn existing_dir(raw: &str, invoking_cwd: Option<&Path>) -> Option<String> {
     path.is_dir().then(|| path.to_string_lossy().into_owned())
 }
 
+/// Windows 的命令列規則：`"D:\"` 裡的 `\"` 是跳脫的引號，所以檔案總管對磁碟機根目錄
+/// （`%1` = `D:\`）傳來的參數會變成 `D:"`。把結尾的 `"` 還原成它吃掉的 `\`。
+/// 純函式，所有平台都能單元測試；實際只在 Windows 套用（見 `positional`）。
+fn restore_trailing_backslash(raw: &str) -> Cow<'_, str> {
+    match raw.strip_suffix('"') {
+        Some(head) => Cow::Owned(format!("{head}\\")),
+        None => Cow::Borrowed(raw),
+    }
+}
+
 fn positional(raw: &str, invoking_cwd: Option<&Path>) -> Option<LaunchRequest> {
+    // 只有 Windows 的命令列規則會把 `\"` 吃成引號；Unix 的檔名可以合法地以 `"` 結尾。
+    let raw = if cfg!(windows) { restore_trailing_backslash(raw) } else { Cow::Borrowed(raw) };
+    let raw = raw.as_ref();
     // 檔案管理員的「開啟方式」（AppImage 的 Exec 是 %U）與 Dolphin 等啟動器給的
     // 是 file:// URI；先百分號解碼成路徑，否則會被當成相對路徑而靜默丟掉。
     let decoded;
@@ -325,5 +339,42 @@ mod tests {
     fn non_file_urls_are_dropped() {
         let urls = vec![url::Url::parse("https://example.com/x").unwrap()];
         assert_eq!(args_from_file_urls(&urls), vec!["aiterm".to_string()]);
+    }
+
+    #[test]
+    fn a_trailing_quote_is_restored_to_the_backslash_it_ate() {
+        // 檔案總管傳 "D:\" → 命令列解析後變成 D:"
+        assert_eq!(restore_trailing_backslash("D:\""), "D:\\");
+        assert_eq!(restore_trailing_backslash("C:\\Users\\me\\x\""), "C:\\Users\\me\\x\\");
+    }
+
+    #[test]
+    fn arguments_without_a_trailing_quote_are_left_alone() {
+        assert_eq!(restore_trailing_backslash("C:\\Users\\me"), "C:\\Users\\me");
+        assert_eq!(restore_trailing_backslash("a\"b"), "a\"b"); // 只處理結尾
+        assert_eq!(restore_trailing_backslash(""), "");
+    }
+
+    /// 只有 Windows 才套用：Unix 的檔名本來就可以以 `"` 結尾，動了就找不到目錄。
+    #[cfg(unix)]
+    #[test]
+    fn on_unix_a_directory_whose_name_ends_with_a_quote_is_not_touched() {
+        let base = tempfile::tempdir().unwrap();
+        let weird = base.path().join("weird\"");
+        fs::create_dir(&weird).unwrap();
+        let got = parse_args(&argv(&[&p(&weird)]), None);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].cwd, Some(p(&weird)));
+    }
+
+    /// Windows CI 會跑：把「被誤解析成結尾引號」的資料夾參數還原後找得到目錄。
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_a_mangled_drive_style_argument_still_finds_the_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let mangled = format!("{}\"", p(dir.path())); // 模擬 "<dir>\" 被吃掉反斜線＋引號
+        let got = parse_args(&argv(&[&mangled]), None);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].cwd, Some(p(dir.path())));
     }
 }
