@@ -6,6 +6,7 @@
 ; 這個檔案必須存成 UTF-8 with BOM，否則 NSIS（Unicode）讀不對下面的中文。
 
 Var AITermMenuLabel
+Var AITermUiLang
 
 ; KEY = Software\Classes 底下的位置；ARG = 交給 AITerm 的路徑（資料夾用 %1，資料夾空白處用 %V）。
 !macro AITERM_ADD_VERB KEY ARG
@@ -17,10 +18,12 @@ Var AITermMenuLabel
 !macro NSIS_HOOK_POSTINSTALL
   ; 安裝程式本身只有英文，所以用作業系統的 UI 語言決定選單文字：繁體中文（台灣／香港／澳門）用中文。
   StrCpy $AITermMenuLabel "Open in AITerm"
-  System::Call 'kernel32::GetUserDefaultUILanguage() i .r0'
-  ${If} $0 = 0x0404
-  ${OrIf} $0 = 0x0C04
-  ${OrIf} $0 = 0x1404
+  ; 回傳值走堆疊再 Pop 進自己的變數：hook 是插在 Tauri 的 installer.nsi 裡跑的，不可動共用暫存器 $0–$9／$R0–$R9。
+  System::Call 'kernel32::GetUserDefaultUILanguage() i .s'
+  Pop $AITermUiLang
+  ${If} $AITermUiLang = 0x0404
+  ${OrIf} $AITermUiLang = 0x0C04
+  ${OrIf} $AITermUiLang = 0x1404
     StrCpy $AITermMenuLabel "在 AITerm 開啟"
   ${EndIf}
   !insertmacro AITERM_ADD_VERB "Directory" "%1"

@@ -445,3 +445,32 @@ SectionEnd
     );
     assert!(dir.path().join("hooks-check.exe").exists(), "沒有產出安裝程式");
 }
+
+/// hook 是被插進 Tauri 自己的 installer.nsi 裡執行的，不能動共用暫存器
+/// `$0`–`$9`、`$R0`–`$R9`（Tauri 之後怎麼用它們我們管不著，今天沒事只是碰巧）。
+/// 要暫存就宣告自己的 Var，System::Call 的回傳值走堆疊（`.s`）再 Pop 進 Var。
+/// 這裡逐字元掃：`$` 後面直接接數字或 `R`＋數字才算；`$\"`、`$INSTDIR`、
+/// `${MAINBINARYNAME}`、`$AITerm…` 都不會被誤抓。
+#[test]
+fn hooks_never_touch_the_shared_nsis_registers() {
+    let code = hooks_code();
+    let mut hits: Vec<String> = Vec::new();
+    for line in code.lines() {
+        let b = line.as_bytes();
+        for (i, &c) in b.iter().enumerate() {
+            let next = b.get(i + 1).copied().unwrap_or(b' ');
+            let after = b.get(i + 2).copied().unwrap_or(b' ');
+            let dollar_reg = c == b'$' && (next.is_ascii_digit() || (next == b'R' && after.is_ascii_digit()));
+            // System::Call 的輸出／輸入規格：`.r0`、`.R0`、`r0`（輸入）
+            let call_reg = line.contains("System::Call")
+                && (c == b'.' || c == b' ')
+                && (next == b'r' || next == b'R')
+                && after.is_ascii_digit();
+            if dollar_reg || call_reg {
+                hits.push(line.trim().to_string());
+                break;
+            }
+        }
+    }
+    assert!(hits.is_empty(), "hook 動用了共用暫存器（改用自己的 Var 與堆疊）:\n{}", hits.join("\n"));
+}
