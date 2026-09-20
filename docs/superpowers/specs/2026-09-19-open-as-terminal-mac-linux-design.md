@@ -15,7 +15,7 @@
 
 ## 非目標
 
-- Windows 預設終端機、Windows 檔案總管整合（第二份 spec）。
+- Windows 預設終端機（`ITerminalHandoff`，待另開一輪）。Windows 檔案總管右鍵「在 AITerm 開啟」已由 `2026-09-20-windows-explorer-context-menu-design.md` 處理。
 - macOS Finder Services（「在此開啟 AITerm」右鍵服務）。macOS 沒有預設終端機設定，
   只做「打開方式」與拖到 Dock 圖示。
 - AppImage／rpm 的 `x-terminal-emulator` 註冊（AppImage 沒有安裝階段；rpm 只給

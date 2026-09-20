@@ -8,7 +8,7 @@
 ## 目標
 
 - 在檔案總管對**資料夾**、**資料夾空白處**、**磁碟機**按右鍵，出現「在 AITerm 開啟」，點下去在 AITerm 開一個 cwd 為該處的新分頁。
-- AITerm 已在執行時，在既有視窗開新分頁**並把視窗浮到前景**（不是只在工作列閃一下）。
+- AITerm 已在執行時，在既有視窗開新分頁並把視窗帶到前景（靠 tao 的 `set_focus()`，見 §3；**實機才能確認**）。
 - 解除安裝時移除；更新（`/UPDATE`）時重新寫入，不留下失效的選單項目。
 
 ## 非目標
@@ -50,14 +50,20 @@ Windows 的命令列規則下，`"D:\"` 裡的 `\"` 是跳脫的引號，所以�
 單一實例轉發（外掛以 `|` 串接參數）傳的是已經被誤解析的字串，所以在接收端還原一樣有效；`|` 不是合法的 Windows 檔名字元，
 串接不會誤拆路徑。
 
-### 3. 前景權限
+### 3. 前景權限（**不另外處理**，依賴 tao；實機發現只閃爍時才加備案）
 
 單一實例外掛在 Windows 上（已讀原始碼確認）只用 `FindWindowW` ＋ `WM_COPYDATA` 把參數送給第一個實例，
-**完全沒有處理前景權限**。前景鎖定規則下，第一個實例的 `set_focus()` 只會讓工作列閃爍。
-第二個行程是使用者從檔案總管點出來的，擁有前景權限，所以在 `run()` 最前面（在外掛把它結束之前）呼叫
-`AllowSetForegroundWindow(ASFW_ANY)`，讓第一個實例可以把視窗拉到前景。這個呼叫也讓 v1.30.0 已有的
-「再開一次 AITerm 就把視窗帶到前面」在 Windows 上真的生效。代價：任何行程在下一次使用者輸入之前都可以搶前景，
-視窗極短，且只在 AITerm 自己被使用者啟動的瞬間。
+本身沒有處理前景權限。一開始的設計因此打算在 `run()` 最前面呼叫 `AllowSetForegroundWindow(ASFW_ANY)`，
+但**讀了 tao 0.34.8 的原始碼後撤銷了**：`Window::set_focus()` 在視窗可見、未最小化、還不是前景時，
+本來就會呼叫 `force_window_active()`——先試 `SetForegroundWindow`，失敗再用「模擬 Alt 鍵」的已知手法繞過前景鎖定
+（`platform_impl/windows/window.rs`）。第一個實例收到轉發後走的 `raise_main_window`（`unminimize`→`show`→`set_focus`）
+因此多半已經能浮到前景。沒有證據顯示需要，卻要付出「每次啟動 AITerm 都讓系統的前景保護放鬆一小段時間」的代價，所以不加。
+
+**備案（只有在 Windows 實機上發現視窗仍只在工作列閃爍時才啟用）：** 第二個行程是使用者從檔案總管點出來的，
+擁有前景權限；在 `run()` 最前面（在外掛把它結束之前）呼叫 `AllowSetForegroundWindow(ASFW_ANY)`。已用暫存 crate 對
+`x86_64-pc-windows-msvc` 交叉編譯驗證過簽章（`windows-sys` 0.60，feature `Win32_UI_WindowsAndMessaging`，
+`use windows_sys::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, ASFW_ANY};`，`unsafe { AllowSetForegroundWindow(ASFW_ANY); }`，
+無指標參數）。代價：任何行程在下一次使用者輸入之前都可以搶前景。
 
 ## 已知限制
 
@@ -76,9 +82,8 @@ Windows 的命令列規則下，`"D:\"` 裡的 `\"` 是跳脫的引號，所以�
   （不能用 `-WX`，wrapper 引入的 MUI2 會發無害的 6001）。wrapper 另加 `SetCompress off`，測試再掃編出來的 exe 裡的 UTF-16LE 字串，
   確認三個登錄位置、兩個標籤、`NoWorkingDirectory`、`MultiSelectModel`、`app.exe` 真的都編進去了——檢查的是語意，不只是語法。
   沒有 `makensis` 時該測試略過，不影響 CI。
-- `AllowSetForegroundWindow` 的 FFI 以 `--target x86_64-pc-windows-msvc` 交叉編譯檢查簽章。
 
 **做不到、需要 Windows 實機或 CI 的：**
 - 安裝後右鍵選單真的出現、點下去真的開分頁、視窗真的浮到前景、解除安裝後選單消失、標籤語言。
-- `AllowSetForegroundWindow` 在實機上是否足以讓第一個實例拿到前景（依 Windows 版本與焦點狀態而定）。
+- 已在執行的視窗是否真的浮到前景，而不是只在工作列閃爍（依賴 tao 的 `set_focus()`；依 Windows 版本與焦點狀態而定）。
 這些要等推上 GitHub 讓 CI 出 Windows 安裝檔、在 Windows 上安裝測試；本份完成時**不會宣稱 Windows 已實測**。

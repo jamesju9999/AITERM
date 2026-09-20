@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在檔案總管對資料夾／資料夾空白處／磁碟機按右鍵可「在 AITerm 開啟」，AITerm 已在執行時把視窗浮到前景。
+**Goal:** 在檔案總管對資料夾／資料夾空白處／磁碟機按右鍵可「在 AITerm 開啟」。（AITerm 已在執行時的視窗前景，依賴 tao 的 `set_focus()`，不另外處理，見 spec §3。）
 
-**Architecture:** Tauri NSIS `installerHooks` 在安裝時寫入三個位置的 shell verb（`SHCTX`），解除安裝時刪除；`parse_args` 在 Windows 上還原磁碟機根目錄被命令列規則吃掉的結尾反斜線；`run()` 最前面開放前景權限，讓已在執行的第一個實例能把視窗拉到前景。
+**Architecture:** Tauri NSIS `installerHooks` 在安裝時寫入三個位置的 shell verb（`SHCTX`），解除安裝時刪除；`parse_args` 在 Windows 上還原磁碟機根目錄被命令列規則吃掉的結尾反斜線。（原本的 Task 3「前景權限」已撤銷。）
 
-**Tech Stack:** NSIS（`makensis` 驗證語法）、Rust（`windows-sys`）、Tauri 2 bundle 設定。
+**Tech Stack:** NSIS（`makensis` 驗證語法）、Rust、Tauri 2 bundle 設定。
 
 **Spec:** `docs/superpowers/specs/2026-09-20-windows-explorer-context-menu-design.md`
 
@@ -26,9 +26,7 @@
 | `src-tauri/installer/hooks.nsh` | 建立（UTF-8 with BOM） | NSIS hook：寫入／刪除三個右鍵選單項目 |
 | `src-tauri/tauri.windows.conf.json` | 修改 | `installerHooks` 指向 hook |
 | `src-tauri/tests/os_registration.rs` | 修改 | hook 靜態內容測試、conf 測試、makensis 編譯測試 |
-| `src-tauri/Cargo.toml` | 修改 | `windows-sys` 加 `Win32_UI_WindowsAndMessaging` |
-| `src-tauri/src/launch/mod.rs` | 修改 | `allow_foreground_takeover()` |
-| `src-tauri/src/lib.rs` | 修改 | `run()` 第一行呼叫它 |
+| ~~`Cargo.toml`／`launch/mod.rs`／`lib.rs`~~ | ~~修改~~ | ~~前景權限（Task 3）——已撤銷，未落地~~ |
 
 ---
 
@@ -317,7 +315,12 @@ EOF
 
 ---
 
-### Task 3: 前景權限（Windows）
+### Task 3: 前景權限（Windows）——**已撤銷，不執行**
+
+> **2026-09-20 執行記錄：** 依此 Task 實作並提交後，讀 tao 0.34.8 原始碼發現 `set_focus()` 本來就會用
+> `force_window_active()`（`SetForegroundWindow`＋模擬 Alt 鍵的備援）繞過前景鎖定，原本的前提不成立，所以提交已 `revert`。
+> 備案與代價見 spec §3。下面保留原文只作紀錄，**不要照做**。
+
 
 **Files:** Modify `src-tauri/Cargo.toml`、`src-tauri/src/launch/mod.rs`、`src-tauri/src/lib.rs`
 
