@@ -319,3 +319,129 @@ fn release_workflow_regenerates_the_committed_linux_conf_except_the_db2_path() {
     assert_eq!(generated["bundle"]["resources"], committed["bundle"]["resources"], "bundle.resources 沒同步");
     assert_eq!(generated, committed, "release.yml 重新產生的 conf 與提交的不同（除 db2 路徑外不應有差異）");
 }
+
+// ── Windows：檔案總管右鍵選單（NSIS hook）──
+
+fn hooks_bytes() -> Vec<u8> {
+    fs::read(root().join("installer/hooks.nsh")).unwrap_or_else(|e| panic!("讀不到 installer/hooks.nsh: {e}"))
+}
+
+/// hook 內容，去掉 BOM 與註解行（註解裡出現的字不算數）。
+fn hooks_code() -> String {
+    let text = String::from_utf8(hooks_bytes()).expect("hooks.nsh 必須是 UTF-8");
+    text.trim_start_matches('\u{feff}')
+        .lines()
+        .filter(|l| !l.trim_start().starts_with(';'))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn nsis_hooks_is_utf8_with_bom_so_the_chinese_label_survives() {
+    assert!(
+        hooks_bytes().starts_with(&[0xEF, 0xBB, 0xBF]),
+        "hooks.nsh 必須是 UTF-8 with BOM，否則 NSIS（Unicode）會把「在 AITerm 開啟」讀成亂碼"
+    );
+}
+
+#[test]
+fn windows_conf_points_at_the_installer_hooks_and_keeps_the_existing_nsis_settings() {
+    let conf: serde_json::Value = serde_json::from_str(&read("tauri.windows.conf.json")).expect("conf 不是合法 JSON");
+    let nsis = &conf["bundle"]["windows"]["nsis"];
+    assert_eq!(nsis["installerHooks"], "installer/hooks.nsh");
+    for k in ["headerImage", "sidebarImage", "installerIcon"] {
+        assert!(nsis[k].is_string(), "nsis.{k} 不見了");
+    }
+    assert!(root().join("installer/hooks.nsh").exists());
+}
+
+#[test]
+fn hooks_register_folder_background_and_drive_verbs_and_remove_them_on_uninstall() {
+    let h = hooks_code();
+    assert!(h.contains("!macro NSIS_HOOK_POSTINSTALL"), "缺 POSTINSTALL hook");
+    assert!(h.contains("!macro NSIS_HOOK_PREUNINSTALL"), "缺 PREUNINSTALL hook");
+    // 註冊與移除各自要落在對的 macro 裡：只用整份 contains 的話，把 DeleteRegKey
+    // 搬進 POSTINSTALL（解除安裝時什麼都不刪）也會綠。
+    let body = |name: &str| -> String {
+        let marker = format!("!macro {name}");
+        h.split(&marker)
+            .nth(1)
+            .and_then(|rest| rest.split("!macroend").next())
+            .unwrap_or_else(|| panic!("{name} 沒有對應的 !macroend"))
+            .to_string()
+    };
+    let (post, pre) = (body("NSIS_HOOK_POSTINSTALL"), body("NSIS_HOOK_PREUNINSTALL"));
+    for (key, arg) in [("Directory", "%1"), ("Directory\\Background", "%V"), ("Drive", "%1")] {
+        assert!(
+            post.contains(&format!("!insertmacro AITERM_ADD_VERB \"{key}\" \"{arg}\"")),
+            "安裝時沒有為 {key} 註冊（參數 {arg}）"
+        );
+        assert!(
+            pre.contains(&format!("DeleteRegKey SHCTX \"Software\\Classes\\{key}\\shell\\AITerm\"")),
+            "解除安裝時沒有移除 {key}"
+        );
+    }
+}
+
+#[test]
+fn hooks_follow_the_install_mode_and_never_hardcode_the_binary_name() {
+    let h = hooks_code();
+    assert!(h.contains("SHCTX"), "要用 SHCTX 才會跟著 currentUser／perMachine 安裝模式");
+    assert!(!h.contains("HKCU") && !h.contains("HKLM"), "不可硬寫登錄區");
+    assert!(h.contains("${MAINBINARYNAME}.exe"), "執行檔名稱要用 Tauri 的 MAINBINARYNAME");
+    let lower = h.to_lowercase();
+    assert!(!lower.contains("app.exe") && !lower.contains("aiterm.exe"), "不可硬寫執行檔名稱");
+    // 執行檔與參數都要加引號（安裝路徑、資料夾路徑都可能含空格）
+    assert!(
+        h.contains(r##"$\"$INSTDIR\${MAINBINARYNAME}.exe$\" $\"${ARG}$\""##),
+        "command 必須把執行檔與參數都加引號"
+    );
+}
+
+/// 用真的 makensis 編譯 hook（包在最小的 wrapper 裡）。沒有 makensis 就略過。
+/// 負向對照：故意寫錯一條指令，makensis 會以非 0 結束，所以這個測試真的抓得到語法錯誤。
+#[cfg(unix)]
+#[test]
+fn nsis_hooks_compile_with_makensis_when_it_is_installed() {
+    let _lock = process_lock();
+    if std::process::Command::new("makensis").arg("-VERSION").output().is_err() {
+        eprintln!("makensis 不在 PATH，略過 hook 編譯檢查");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let wrapper = format!(
+        r#"Unicode true
+!include MUI2.nsh
+!include FileFunc.nsh
+!include x64.nsh
+!include WordFunc.nsh
+!include "{hooks}"
+!define MAINBINARYNAME "app"
+Name "hooks-check"
+OutFile "hooks-check.exe"
+RequestExecutionLevel user
+InstallDir "$LOCALAPPDATA\AITerm"
+Section
+  !insertmacro NSIS_HOOK_POSTINSTALL
+  WriteUninstaller "$INSTDIR\u.exe"
+SectionEnd
+Section Uninstall
+  !insertmacro NSIS_HOOK_PREUNINSTALL
+SectionEnd
+"#,
+        hooks = root().join("installer/hooks.nsh").display()
+    );
+    fs::write(dir.path().join("wrapper.nsi"), wrapper).unwrap();
+    let out = std::process::Command::new("makensis")
+        .args(["-V2", "-NOCD", "wrapper.nsi"])
+        .current_dir(dir.path())
+        .output()
+        .expect("makensis 無法執行");
+    assert!(
+        out.status.success(),
+        "hook 無法用 makensis 編譯:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(dir.path().join("hooks-check.exe").exists(), "沒有產出安裝程式");
+}
