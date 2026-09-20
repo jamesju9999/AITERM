@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { buildSummaryPrompt, buildReportPrompt, MAX_CARDS } from "./reportPrompts";
+import {
+  buildSummaryPrompt,
+  buildReportPrompt,
+  MAX_CARDS,
+  TRANSCRIPT_MAX_CHARS,
+} from "./reportPrompts";
 import type { TaskWithAttachments } from "../../ipc/tasks";
 
 const card = (over: Partial<TaskWithAttachments> = {}): TaskWithAttachments => ({
@@ -47,6 +52,22 @@ describe("buildSummaryPrompt", () => {
 
   it("要求限制字數，避免第二階段輸入爆掉", () => {
     expect(buildSummaryPrompt(card(), "x")).toContain("300");
+  });
+
+  it("對話記錄過長時只留最後一段，並在提示詞裡講明", () => {
+    // 頭尾內容不同：只留尾巴的實作與整份塞進去的實作才會產生不同結果。
+    const transcript = "HEAD" + "x".repeat(TRANSCRIPT_MAX_CHARS) + "TAIL";
+    const p = buildSummaryPrompt(card(), transcript);
+    expect(p).toContain("TAIL");
+    expect(p).not.toContain("HEAD");
+    expect(p).toContain(`最後 ${TRANSCRIPT_MAX_CHARS} 字`);
+  });
+
+  it("對話記錄剛好在上限時原樣帶入，不加註記", () => {
+    const transcript = "y".repeat(TRANSCRIPT_MAX_CHARS);
+    const p = buildSummaryPrompt(card(), transcript);
+    expect(p).toContain(transcript);
+    expect(p).not.toContain("只列出");
   });
 });
 

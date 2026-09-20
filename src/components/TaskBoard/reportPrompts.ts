@@ -9,6 +9,15 @@ export type ReportStyle = "review" | "formal";
  */
 export const MAX_CARDS = 100;
 
+/**
+ * 一張卡片的對話記錄最多帶進摘要提示詞多少字元。
+ *
+ * 完整記錄含每一筆工具回傳，實測一張卡片可達 100 KB 以上；不設上限的話，
+ * 一次摘要就可能超過小上下文模型的視窗。只留**最後**一段：開頭的任務描述
+ * 已經在卡片欄位裡，而結果與遇到的問題都在尾端。
+ */
+export const TRANSCRIPT_MAX_CHARS = 40_000;
+
 /** 一張卡片摘要的字數上限，寫進提示詞裡要求模型遵守。 */
 const SUMMARY_MAX_CHARS = 300;
 
@@ -46,7 +55,12 @@ export function buildSummaryPrompt(
   if (card.error_message) lines.push(`錯誤訊息：${card.error_message}`);
   lines.push("");
   if (transcript) {
-    lines.push("以下是這次執行的終端機對話記錄：", "", transcript);
+    const tooLong = transcript.length > TRANSCRIPT_MAX_CHARS;
+    lines.push("以下是這次執行的終端機對話記錄：", "");
+    if (tooLong) {
+      lines.push(`（記錄過長，下面只列出最後 ${TRANSCRIPT_MAX_CHARS} 字）`);
+    }
+    lines.push(tooLong ? transcript.slice(-TRANSCRIPT_MAX_CHARS) : transcript);
   } else {
     lines.push("（這次執行沒有對話記錄，請只根據上面的欄位資料整理。）");
   }
