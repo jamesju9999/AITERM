@@ -42,6 +42,24 @@ fn invoking_cwd(cwd: &str) -> Option<&std::path::Path> {
     }
 }
 
+/// Windows：讓「別的行程」（已在執行的第一個實例）能把它的視窗拉到前景。
+///
+/// 前景鎖定規則下，只有「剛收到使用者輸入」的行程能搶焦點。從檔案總管點出來的第二個行程符合這個條件，
+/// 但真正該浮到前面的是第一個實例；single-instance 外掛在 Windows 只用 `WM_COPYDATA` 把參數送過去，
+/// 完全沒有處理前景權限，第一個實例的 `set_focus()` 因此只會讓工作列閃爍。所以在外掛把第二個行程結束之前
+/// （`run()` 最前面）先開放前景權限。代價：任何行程在下一次使用者輸入之前都可以搶前景，視窗極短。
+#[cfg(windows)]
+pub fn allow_foreground_takeover() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, ASFW_ANY};
+    // SAFETY: 純 Win32 呼叫、沒有指標參數；沒有前景權限的行程呼叫只會回傳 FALSE。
+    unsafe {
+        AllowSetForegroundWindow(ASFW_ANY);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn allow_foreground_takeover() {}
+
 /// 把主視窗拉到前景（還原最小化、顯示、取得焦點）。
 fn raise_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
