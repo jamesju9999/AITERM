@@ -340,7 +340,8 @@ fn hooks_code() -> String {
 fn nsis_hooks_is_utf8_with_bom_so_the_chinese_label_survives() {
     assert!(
         hooks_bytes().starts_with(&[0xEF, 0xBB, 0xBF]),
-        "hooks.nsh 必須是 UTF-8 with BOM，否則 NSIS（Unicode）會把「在 AITerm 開啟」讀成亂碼"
+        "hooks.nsh 必須是 UTF-8 with BOM：那是 NSIS 唯一明確的編碼宣告，沒有 BOM 的檔案會依 ANSI 字碼頁轉換（除非指定 /charset），\
+         而檔案裡有中文標籤。POSIX 版 makensis 把沒有 BOM 的檔案當 UTF-8 讀，所以編譯測試看不出差別，只有這條把關"
     );
 }
 
@@ -355,31 +356,59 @@ fn windows_conf_points_at_the_installer_hooks_and_keeps_the_existing_nsis_settin
     assert!(root().join("installer/hooks.nsh").exists());
 }
 
+/// 取出 `!macro NAME … !macroend` 之間的內容（NAME 只要是開頭就行，例如
+/// `AITERM_ADD_VERB` 後面還有參數）。
+fn hook_macro_body(code: &str, name: &str) -> String {
+    let marker = format!("!macro {name}");
+    code.split(&marker)
+        .nth(1)
+        .and_then(|rest| rest.split("!macroend").next())
+        .unwrap_or_else(|| panic!("找不到 {marker}，或它沒有對應的 !macroend"))
+        .to_string()
+}
+
 #[test]
 fn hooks_register_folder_background_and_drive_verbs_and_remove_them_on_uninstall() {
     let h = hooks_code();
     assert!(h.contains("!macro NSIS_HOOK_POSTINSTALL"), "缺 POSTINSTALL hook");
-    assert!(h.contains("!macro NSIS_HOOK_PREUNINSTALL"), "缺 PREUNINSTALL hook");
+    // 移除放在 POSTUNINSTALL：Tauri 的 PREUNINSTALL 在「應用程式執行中」的檢查之前就跑，
+    // 使用者在那一步取消的話，程式還裝著、選單卻已經被刪掉了。
+    assert!(h.contains("!macro NSIS_HOOK_POSTUNINSTALL"), "缺 POSTUNINSTALL hook");
+    if h.contains("!macro NSIS_HOOK_PREUNINSTALL") {
+        assert!(
+            !hook_macro_body(&h, "NSIS_HOOK_PREUNINSTALL").contains("DeleteRegKey"),
+            "PREUNINSTALL 不可移除選單（使用者可能在後面的「程式執行中」對話框取消）"
+        );
+    }
     // 註冊與移除各自要落在對的 macro 裡：只用整份 contains 的話，把 DeleteRegKey
     // 搬進 POSTINSTALL（解除安裝時什麼都不刪）也會綠。
-    let body = |name: &str| -> String {
-        let marker = format!("!macro {name}");
-        h.split(&marker)
-            .nth(1)
-            .and_then(|rest| rest.split("!macroend").next())
-            .unwrap_or_else(|| panic!("{name} 沒有對應的 !macroend"))
-            .to_string()
-    };
-    let (post, pre) = (body("NSIS_HOOK_POSTINSTALL"), body("NSIS_HOOK_PREUNINSTALL"));
+    let (post, un) = (hook_macro_body(&h, "NSIS_HOOK_POSTINSTALL"), hook_macro_body(&h, "NSIS_HOOK_POSTUNINSTALL"));
     for (key, arg) in [("Directory", "%1"), ("Directory\\Background", "%V"), ("Drive", "%1")] {
         assert!(
             post.contains(&format!("!insertmacro AITERM_ADD_VERB \"{key}\" \"{arg}\"")),
             "安裝時沒有為 {key} 註冊（參數 {arg}）"
         );
         assert!(
-            pre.contains(&format!("DeleteRegKey SHCTX \"Software\\Classes\\{key}\\shell\\AITerm\"")),
+            un.contains(&format!("DeleteRegKey SHCTX \"Software\\Classes\\{key}\\shell\\AITerm\"")),
             "解除安裝時沒有移除 {key}"
         );
+    }
+}
+
+/// `NoWorkingDirectory`：沒有它，檔案總管會把被點的資料夾當成新行程的 cwd，而第一個
+/// 實例會一直握著那個 cwd 到結束——AITerm 開著的時候那個資料夾就刪不掉、改不了名
+/// （Microsoft 自己的 cmd verb 也設這個值）。我們傳的參數都是絕對路徑，不依賴 cwd。
+/// `MultiSelectModel=Single`：預設模型會對每個被選取的資料夾各啟動一個行程（一次
+/// 最多十幾個），在 AITerm 還沒執行時會跟單一實例外掛搶；Single 讓多選時不顯示這一項。
+#[test]
+fn hook_verbs_do_not_pin_the_cwd_and_are_hidden_on_multi_select() {
+    let h = hooks_code();
+    let verb = hook_macro_body(&h, "AITERM_ADD_VERB");
+    for line in [
+        r#"WriteRegStr SHCTX "Software\Classes\${KEY}\shell\AITerm" "NoWorkingDirectory" """#,
+        r#"WriteRegStr SHCTX "Software\Classes\${KEY}\shell\AITerm" "MultiSelectModel" "Single""#,
+    ] {
+        assert!(verb.contains(line), "AITERM_ADD_VERB 缺少這一行:\n{line}");
     }
 }
 
@@ -400,6 +429,11 @@ fn hooks_follow_the_install_mode_and_never_hardcode_the_binary_name() {
 
 /// 用真的 makensis 編譯 hook（包在最小的 wrapper 裡）。沒有 makensis 就略過。
 /// 負向對照：故意寫錯一條指令，makensis 會以非 0 結束，所以這個測試真的抓得到語法錯誤。
+///
+/// 只看退出碼不夠：`${MAINBINARYNAME}` 沒定義時 makensis 只會發 warning 6000 而照常
+/// 產出安裝程式，所以 6000 也算失敗（不能用 `-WX`：wrapper 引入的 MUI2 會發無害的
+/// 6001）。再用 `SetCompress off` 讓字串表原樣留在 exe 裡，掃 UTF-16LE 確認三個登錄
+/// 位置、兩個標籤、兩個值與執行檔名真的都編進去了——這樣它檢查的是語意，不只是語法。
 #[cfg(unix)]
 #[test]
 fn nsis_hooks_compile_with_makensis_when_it_is_installed() {
@@ -411,6 +445,7 @@ fn nsis_hooks_compile_with_makensis_when_it_is_installed() {
     let dir = tempfile::tempdir().unwrap();
     let wrapper = format!(
         r#"Unicode true
+SetCompress off
 !include MUI2.nsh
 !include FileFunc.nsh
 !include x64.nsh
@@ -426,7 +461,7 @@ Section
   WriteUninstaller "$INSTDIR\u.exe"
 SectionEnd
 Section Uninstall
-  !insertmacro NSIS_HOOK_PREUNINSTALL
+  !insertmacro NSIS_HOOK_POSTUNINSTALL
 SectionEnd
 "#,
         hooks = root().join("installer/hooks.nsh").display()
@@ -437,13 +472,25 @@ SectionEnd
         .current_dir(dir.path())
         .output()
         .expect("makensis 無法執行");
-    assert!(
-        out.status.success(),
-        "hook 無法用 makensis 編譯:\n{}\n{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(dir.path().join("hooks-check.exe").exists(), "沒有產出安裝程式");
+    let log = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "hook 無法用 makensis 編譯:\n{log}");
+    assert!(!log.contains("6000:"), "makensis 發出 warning 6000（多半是有未定義的變數或常數）:\n{log}");
+
+    let exe = fs::read(dir.path().join("hooks-check.exe")).expect("沒有產出安裝程式");
+    let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|u| u.to_le_bytes()).collect() };
+    for needle in [
+        r"Software\Classes\Directory\shell\AITerm",
+        r"Software\Classes\Directory\Background\shell\AITerm",
+        r"Software\Classes\Drive\shell\AITerm",
+        "Open in AITerm",
+        "在 AITerm 開啟",
+        "NoWorkingDirectory",
+        "MultiSelectModel",
+        "app.exe",
+    ] {
+        let n = utf16(needle);
+        assert!(exe.windows(n.len()).any(|w| w == n.as_slice()), "編出來的安裝程式裡找不到 {needle:?}");
+    }
 }
 
 /// hook 是被插進 Tauri 自己的 installer.nsi 裡執行的，不能動共用暫存器
