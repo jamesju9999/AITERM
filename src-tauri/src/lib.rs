@@ -186,10 +186,6 @@ async fn load_projects(config: Arc<ConfigStore>) -> projects::ProjectRegistry {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 必須是第一個陳述式：Windows 上第二個行程要在 single-instance 外掛（Builder::build 內）
-    // 把它結束之前，先開放前景權限給第一個實例；後面的資料庫初始化都很耗時。
-    launch::allow_foreground_takeover();
-
     let config = Arc::new(ConfigStore::new());
     let secrets = Arc::new(SecretStore::new());
 
