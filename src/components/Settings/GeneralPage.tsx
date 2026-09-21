@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
-import { getConfig, setExecutionMode, setSubmitShortcut, setMaxAgentSteps, setDefaultTab, setDocConvertEngine, appimageIntegrationState, appimageIntegrate, appimageRemoveIntegration, setAppImageIntegrationDeclined } from "../../ipc/config";
-import type { ExecutionMode, SubmitShortcut, DefaultTab, DocConvertEngine, AppImageIntegrationState } from "../../ipc/config";
+import { getConfig, setExecutionMode, setSubmitShortcut, setSuggestionAcceptKey, setMaxAgentSteps, setDefaultTab, setDocConvertEngine, appimageIntegrationState, appimageIntegrate, appimageRemoveIntegration, setAppImageIntegrationDeclined } from "../../ipc/config";
+import type { ExecutionMode, SubmitShortcut, SuggestionAcceptKey, DefaultTab, DocConvertEngine, AppImageIntegrationState } from "../../ipc/config";
 import { pythonEnvStatus, pythonEnvReset, pythonEnvSetInterpreter, pythonEnvSetIndexUrl } from "../../ipc/pythonEnv";
 import type { PythonEnvStatus } from "../../ipc/pythonEnv";
 import { useLocale } from "../../contexts/LocaleContext";
@@ -27,6 +27,7 @@ export function GeneralPage() {
   const { t, locale, setLocale } = useLocale();
   const [mode, setMode] = useState<ExecutionMode>("always-confirm");
   const [shortcut, setShortcut] = useState<SubmitShortcut>("enter");
+  const [suggestKey, setSuggestKey] = useState<SuggestionAcceptKey>("tab");
   const [docConvertEngine, setDocConvertEngineState] = useState<DocConvertEngine>("auto");
   const [maxSteps, setMaxSteps] = useState<number>(5);
   const [defaultTab, setDefaultTabState] = useState<DefaultTab>("terminal");
@@ -131,6 +132,12 @@ export function GeneralPage() {
     { value: "ctrl-enter",  label: "Ctrl + Enter",    desc: t.shortcut_ctrl_enter_desc },
   ];
 
+  const SUGGEST_KEY_MODES: { value: SuggestionAcceptKey; label: string; desc: string }[] = [
+    { value: "tab",   label: t.suggest_key_tab_label,   desc: t.suggest_key_tab_desc },
+    { value: "right", label: t.suggest_key_right_label, desc: t.suggest_key_right_desc },
+    { value: "off",   label: t.suggest_key_off_label,   desc: t.suggest_key_off_desc },
+  ];
+
   const DOC_CONVERT_ENGINE_MODES: { value: DocConvertEngine; label: string; desc: string }[] = [
     { value: "auto",             label: t.doc_convert_engine_auto_label,             desc: t.doc_convert_engine_auto_desc },
     { value: "markitdown_only",  label: t.doc_convert_engine_markitdown_only_label,  desc: t.doc_convert_engine_markitdown_only_desc },
@@ -140,6 +147,7 @@ export function GeneralPage() {
     getConfig().then((cfg) => {
       setMode(cfg.execution_mode);
       setShortcut(cfg.submit_shortcut);
+      setSuggestKey(cfg.suggestion_accept_key ?? "tab");
       setMaxSteps(cfg.max_agent_steps ?? 5);
       setDefaultTabState(cfg.default_tab ?? "terminal");
       setDocConvertEngineState(cfg.doc_convert_engine ?? "auto");
@@ -168,6 +176,12 @@ export function GeneralPage() {
     setShortcut(newShortcut);
     setSaving(true);
     try { await setSubmitShortcut(newShortcut); } finally { setSaving(false); }
+  };
+
+  const handleSuggestKeyChange = async (newKey: SuggestionAcceptKey) => {
+    setSuggestKey(newKey);
+    setSaving(true);
+    try { await setSuggestionAcceptKey(newKey); } finally { setSaving(false); }
   };
 
   const handleDocConvertEngineChange = async (newEngine: DocConvertEngine) => {
@@ -330,6 +344,29 @@ export function GeneralPage() {
                 value={s.value}
                 checked={shortcut === s.value}
                 onChange={() => handleShortcutChange(s.value)}
+                disabled={saving}
+              />
+              <div className="mode-text">
+                <span className="mode-label">{s.label}</span>
+                <span className="mode-desc">{s.desc}</span>
+              </div>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3>{t.suggest_key}</h3>
+        <p className="section-desc">{t.suggest_key_desc}</p>
+        <div className="mode-list">
+          {SUGGEST_KEY_MODES.map((s) => (
+            <label key={s.value} className="mode-option">
+              <input
+                type="radio"
+                name="suggestion_accept_key"
+                value={s.value}
+                checked={suggestKey === s.value}
+                onChange={() => handleSuggestKeyChange(s.value)}
                 disabled={saving}
               />
               <div className="mode-text">
