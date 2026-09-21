@@ -24,6 +24,8 @@ vi.mock("@tauri-apps/api/window", () => ({
     minimize: () => Promise.resolve(),
     close: () => Promise.resolve(),
     startDragging: () => Promise.resolve(),
+    onCloseRequested: () => Promise.resolve(() => {}),
+    destroy: () => Promise.resolve(),
   }),
 }));
 vi.mock("@tauri-apps/plugin-notification", () => ({

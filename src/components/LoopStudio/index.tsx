@@ -207,7 +207,9 @@ export function LoopStudioView({
   // 視窗關閉用的忙碌探針。上面分頁 ✕ 的 guard 因 deps 含 loop.isRunning 會反覆重註冊，
   // 探針改讀 ref，註冊一次即可。
   const loopRunningRef = useRef(false);
-  loopRunningRef.current = loop.isRunning;
+  useEffect(() => {
+    loopRunningRef.current = loop.isRunning;
+  });
   useEffect(() => {
     if (!tabId || !registerBusyProbe) return;
     registerBusyProbe(tabId, () => (loopRunningRef.current ? "loop" : null));

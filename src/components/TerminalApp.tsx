@@ -21,6 +21,9 @@ import { ApiDocsView } from "./ApiDocsView";
 import { LoopStudioView } from "./LoopStudio";
 import { CodeAssistantView } from "./CodeAssistantView";
 import { runCloseGuard } from "../lib/closeTabGuard";
+import { CloseConfirmDialog } from "./CloseConfirmDialog";
+import { collectBusyTabs, type BusyProbe } from "../lib/busyProbe";
+import { useWindowCloseGuard } from "../hooks/useWindowCloseGuard";
 import { KnowledgeBaseView } from "./KnowledgeBaseView";
 import { MailView } from "./MailView";
 import { RemoteTerminalView } from "./RemoteTerminalView";
@@ -117,6 +120,20 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   const unregisterCloseGuard = useCallback((tabId: string) => {
     closeGuardsRef.current.delete(tabId);
   }, []);
+  // 視窗關閉用的忙碌探針表，與 closeGuardsRef 平行：guard 是「這個分頁要關了，
+  // 在分頁內彈框問」，探針是「你現在忙不忙」，只問不彈，讓關視窗能一次列出全部。
+  const busyProbesRef = useRef<Map<string, BusyProbe>>(new Map());
+  const registerBusyProbe = useCallback((tabId: string, probe: BusyProbe) => {
+    busyProbesRef.current.set(tabId, probe);
+  }, []);
+  const unregisterBusyProbe = useCallback((tabId: string) => {
+    busyProbesRef.current.delete(tabId);
+  }, []);
+  const getBusyTabs = useCallback(
+    () => collectBusyTabs(busyProbesRef.current, (id) => tabsRef.current.find((tb) => tb.id === id)?.title),
+    [],
+  );
+  const windowClose = useWindowCloseGuard(getBusyTabs);
   // 視窗焦點放在 ref 而非 state：它只被事件 callback 讀取，不影響任何渲染，
   // 用 state 會讓每次切換視窗都重繪整個 app。初始值樂觀設為 true，
   // 這樣在 isFocused() 回來之前不會誤發通知。
@@ -667,6 +684,27 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", backgroundColor: "#0c0c0c", position: "relative" }}>
       <TitleBar title={titleBarText} />
+      {windowClose.pending && (
+        <CloseConfirmDialog
+          title={t.win_close_title}
+          body={
+            <>
+              <p style={{ margin: "0 0 8px" }}>{t.win_close_body}</p>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {windowClose.pending.map((b) => (
+                  <li key={b.tabId}>
+                    {b.title} — {t[`win_close_reason_${b.reason}` as const]}
+                  </li>
+                ))}
+              </ul>
+            </>
+          }
+          confirmLabel={t.term_close_discard}
+          cancelLabel={t.term_close_cancel}
+          onConfirm={windowClose.confirm}
+          onCancel={windowClose.cancel}
+        />
+      )}
       <div style={{ display: "flex", flexDirection: "row", flex: 1, minHeight: 0, position: "relative" }}>
       <div>
         <TabBar
@@ -828,6 +866,8 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   tabId={tab.id}
                   registerCloseGuard={registerCloseGuard}
                   unregisterCloseGuard={unregisterCloseGuard}
+                  registerBusyProbe={registerBusyProbe}
+                  unregisterBusyProbe={unregisterBusyProbe}
                 />
               ) : tab.type === "code-assistant" ? (
                 <CodeAssistantView
@@ -835,6 +875,8 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   tabId={tab.id}
                   registerCloseGuard={registerCloseGuard}
                   unregisterCloseGuard={unregisterCloseGuard}
+                  registerBusyProbe={registerBusyProbe}
+                  unregisterBusyProbe={unregisterBusyProbe}
                 />
               ) : tab.type === "knowledge-base" ? (
                 <KnowledgeBaseView isActive={isActive} />
@@ -909,6 +951,8 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   onRemoteOwnerChange={setRemoteTabId}
                   registerCloseGuard={registerCloseGuard}
                   unregisterCloseGuard={unregisterCloseGuard}
+                  registerBusyProbe={registerBusyProbe}
+                  unregisterBusyProbe={unregisterBusyProbe}
                 />
               )}
             </div>
