@@ -66,6 +66,7 @@ import { registerTerminal, unregisterTerminal } from "../lib/terminalInstanceReg
 import { isRunningTaskTab } from "../lib/runningTaskTabRegistry";
 import { createStartupInjector, type StartupInjector } from "../lib/startupCommand";
 import { CloseConfirmDialog } from "./CloseConfirmDialog";
+import type { BusyProbe, BusyReason } from "../lib/busyProbe";
 import "./TerminalView.css";
 
 /**
@@ -149,6 +150,8 @@ export interface TerminalViewProps {
   onRemoteOwnerChange?: (owner: string | null) => void;
   registerCloseGuard?: (tabId: string, guard: () => Promise<boolean>) => void;
   unregisterCloseGuard?: (tabId: string) => void;
+  registerBusyProbe?: (tabId: string, probe: BusyProbe) => void;
+  unregisterBusyProbe?: (tabId: string) => void;
 }
 
 const SEARCH_OPTS = {
@@ -165,7 +168,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, externalSessionId, onRunningChange, initialCwd, initialCommand, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, claudeBridge, tabId, remoteOwner = null, onRemoteOwnerChange, registerCloseGuard, unregisterCloseGuard }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, externalSessionId, onRunningChange, initialCwd, initialCommand, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, claudeBridge, tabId, remoteOwner = null, onRemoteOwnerChange, registerCloseGuard, unregisterCloseGuard, registerBusyProbe, unregisterBusyProbe }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -508,6 +511,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     closeResolveRef.current = null;
   }, []);
 
+  // 「這個終端機分頁現在在忙什麼」——分頁 ✕ 的 guard 與視窗關閉的探針共用這一份，
+  // 判定不能有兩套。優先序與確認框標題一致：mission → 工作看板任務 → 一般指令。
+  // 全部讀 ref，所以這個函式是穩定的、可以安全地只註冊一次。
+  const getBusyReason = useCallback((): BusyReason | null => {
+    if (missionActiveRef.current) return "agent";
+    if (isRunningTaskTab(sessionIdRef.current)) return "task";
+    if (isBusyRef.current) return "command";
+    return null;
+  }, []);
+
   useEffect(() => {
     if (!tabId || !registerCloseGuard) return;
     registerCloseGuard(tabId, () => {
@@ -518,7 +531,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       // running 了。見 runningTaskTabRegistry.ts。查的是 sessionIdRef（PTY
       // session id），不是 tabId 這個 prop（React 分頁 id）——task.tab_id
       // 存的是前者，兩個搞混會讓這個查詢永遠查不到。
-      if (!isBusyRef.current && !missionActiveRef.current && !isRunningTaskTab(sessionIdRef.current)) {
+      if (getBusyReason() === null) {
         return Promise.resolve(true);
       }
       return new Promise<boolean>((resolve) => {
@@ -527,7 +540,13 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       });
     });
     return () => { unregisterCloseGuard?.(tabId); };
-  }, [tabId, registerCloseGuard, unregisterCloseGuard]);
+  }, [tabId, registerCloseGuard, unregisterCloseGuard, getBusyReason]);
+
+  useEffect(() => {
+    if (!tabId || !registerBusyProbe) return;
+    registerBusyProbe(tabId, getBusyReason);
+    return () => { unregisterBusyProbe?.(tabId); };
+  }, [tabId, registerBusyProbe, unregisterBusyProbe, getBusyReason]);
 
   /**
    * 應用程式自己在畫面上畫的游標（一格反白）。

@@ -86,3 +86,45 @@ describe("LoopStudio close guard", () => {
     expect(fakeLoop.stop).not.toHaveBeenCalled();
   });
 });
+
+function mountAndCaptureProbe() {
+  let probe: (() => string | null) | undefined;
+  const unregister = vi.fn();
+  const ui = () => (
+    <LocaleProvider>
+      <LoopStudioView
+        tabId="tab-1"
+        registerBusyProbe={(_id, p) => { probe = p; }}
+        unregisterBusyProbe={unregister}
+      />
+    </LocaleProvider>
+  );
+  const view = render(ui());
+  if (!probe) throw new Error("LoopStudio 沒有註冊 busy probe");
+  return { probe, view, unregister, ui };
+}
+
+describe("LoopStudio busy probe", () => {
+  it("未執行：回 null", () => {
+    expect(mountAndCaptureProbe().probe()).toBeNull();
+  });
+
+  it("執行中：回 loop", () => {
+    fakeLoop.isRunning = true;
+    expect(mountAndCaptureProbe().probe()).toBe("loop");
+  });
+
+  it("註冊之後才開始執行，探針仍看得到（讀 ref，不可閉包捕捉）", () => {
+    const { probe, view, ui } = mountAndCaptureProbe();
+    expect(probe()).toBeNull();
+    fakeLoop.isRunning = true;
+    view.rerender(ui());
+    expect(probe()).toBe("loop");
+  });
+
+  it("unmount 時解除註冊", () => {
+    const { view, unregister } = mountAndCaptureProbe();
+    view.unmount();
+    expect(unregister).toHaveBeenCalledWith("tab-1");
+  });
+});

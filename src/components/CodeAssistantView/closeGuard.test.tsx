@@ -129,3 +129,44 @@ describe("Agent 分頁 close guard", () => {
     expect(unregister).toHaveBeenCalledWith("tab-1");
   });
 });
+
+function mountAndCaptureProbe() {
+  let probe: (() => string | null) | undefined;
+  const register = (_id: string, p: () => string | null) => { probe = p; };
+  const unregister = vi.fn();
+  const renderUi = () => (
+    <LocaleProvider>
+      <CodeAssistantView
+        isActive
+        tabId="tab-1"
+        registerBusyProbe={register}
+        unregisterBusyProbe={unregister}
+      />
+    </LocaleProvider>
+  );
+  const view = render(renderUi());
+  if (!probe) throw new Error("CodeAssistantView 沒有註冊 busy probe");
+  return { probe, view, unregister, renderUi };
+}
+
+describe("Agent 分頁 busy probe", () => {
+  it("閒置：回 null；有對話但沒在串流也回 null（那是內容遺失，不是工作進行中）", () => {
+    fakeAssistant.messages = [{ role: "user", content: "hi" }];
+    const { probe } = mountAndCaptureProbe();
+    expect(probe()).toBeNull();
+  });
+
+  it("串流中：回 streaming；註冊之後才開始串流也看得到", () => {
+    const { probe, view, renderUi } = mountAndCaptureProbe();
+    expect(probe()).toBeNull();
+    fakeAssistant.isStreaming = true;
+    view.rerender(renderUi());
+    expect(probe()).toBe("streaming");
+  });
+
+  it("unmount 時解除註冊", () => {
+    const { view, unregister } = mountAndCaptureProbe();
+    view.unmount();
+    expect(unregister).toHaveBeenCalledWith("tab-1");
+  });
+});

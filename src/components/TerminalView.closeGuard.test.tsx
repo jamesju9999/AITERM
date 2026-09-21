@@ -70,6 +70,7 @@ vi.mock("../hooks/useAgentMission", () => ({
 
 import { TerminalView } from "./TerminalView";
 import { LocaleProvider } from "../contexts/LocaleContext";
+import { setRunningTaskTabs } from "../lib/runningTaskTabRegistry";
 
 function mountAndCaptureGuard() {
   let guard: (() => Promise<boolean>) | undefined;
@@ -94,6 +95,7 @@ function mountAndCaptureGuard() {
 beforeEach(() => {
   fakeBlocksState.value = [];
   fakeMissionState.value = null;
+  setRunningTaskTabs([]);
 });
 
 describe("TerminalView close guard", () => {
@@ -165,6 +167,70 @@ describe("TerminalView close guard", () => {
 
   it("unmount 時呼叫 unregisterCloseGuard", () => {
     const { view, unregister } = mountAndCaptureGuard();
+    view.unmount();
+    expect(unregister).toHaveBeenCalledWith("tab-1");
+  });
+});
+
+function mountAndCaptureProbe() {
+  let probe: (() => string | null) | undefined;
+  const register = (_id: string, p: () => string | null) => { probe = p; };
+  const unregister = vi.fn();
+  const renderUi = () => (
+    <LocaleProvider>
+      <MemoryRouter>
+        <TerminalView tabId="tab-1" registerBusyProbe={register} unregisterBusyProbe={unregister} />
+      </MemoryRouter>
+    </LocaleProvider>
+  );
+  const view = render(renderUi());
+  if (!probe) throw new Error("TerminalView 沒有註冊 busy probe");
+  return { probe, view, unregister, renderUi };
+}
+
+describe("TerminalView busy probe", () => {
+  it("閒置（含 agentMission 為 null）：回 null", () => {
+    expect(mountAndCaptureProbe().probe()).toBeNull();
+  });
+
+  it("有指令執行中：回 command", () => {
+    fakeBlocksState.value = [{ id: "b1", command: "npm test", status: "running", startTime: 0, rawOutput: "" }];
+    expect(mountAndCaptureProbe().probe()).toBe("command");
+  });
+
+  it("Agent 任務進行中：回 agent", () => {
+    fakeMissionState.value = { active: true, goal: "g", stepCount: 1, maxSteps: 5, tokensUsed: 0, history: [] };
+    expect(mountAndCaptureProbe().probe()).toBe("agent");
+  });
+
+  // 工作看板任務是 shell 層級偵測（isBusy）看不到的第三個訊號：claude 冷開機、
+  // 互動任務使用者還沒打字時，shell 還沒進入忙碌但任務已經 running。
+  // 測試環境裡 PTY 永遠不會建立，sessionId 維持初始值 ""，所以用 "" 當作這個
+  // 分頁的 PTY session id 登記進真的 registry。
+  it("工作看板任務執行中（shell 本身還沒忙）：回 task", () => {
+    setRunningTaskTabs([""]);
+    expect(mountAndCaptureProbe().probe()).toBe("task");
+  });
+
+  it("多個訊號同時成立時，優先序與確認框標題一致：agent > task > command", () => {
+    fakeBlocksState.value = [{ id: "b1", command: "x", status: "running", startTime: 0, rawOutput: "" }];
+    setRunningTaskTabs([""]);
+    fakeMissionState.value = { active: true, goal: "g", stepCount: 1, maxSteps: 5, tokensUsed: 0, history: [] };
+    expect(mountAndCaptureProbe().probe()).toBe("agent");
+  });
+
+  // 釘住 stale closure：探針只註冊一次，若閉包捕捉了註冊當下的 blocks，
+  // 之後才開始跑的指令它就看不到，會靜默放行。
+  it("註冊之後才開始跑指令，探針仍看得到（讀 ref，不可閉包捕捉）", () => {
+    const { probe, view, renderUi } = mountAndCaptureProbe();
+    expect(probe()).toBeNull();
+    fakeBlocksState.value = [{ id: "b1", command: "sleep 9", status: "running", startTime: 0, rawOutput: "" }];
+    view.rerender(renderUi());
+    expect(probe()).toBe("command");
+  });
+
+  it("unmount 時解除註冊", () => {
+    const { view, unregister } = mountAndCaptureProbe();
     view.unmount();
     expect(unregister).toHaveBeenCalledWith("tab-1");
   });

@@ -13,6 +13,7 @@ import { invokeAiChat } from "../../ipc/ai";
 import { useLocale } from '../../contexts/LocaleContext';
 import { ModelPickerButton } from "../ModelPickerButton";
 import { CloseConfirmDialog } from "../CloseConfirmDialog";
+import type { BusyProbe } from "../../lib/busyProbe";
 import "./styles.css";
 
 const STORAGE_KEY = "aiterm-loop-studio-roster";
@@ -64,6 +65,8 @@ interface LoopStudioViewProps {
   tabId?: string;
   registerCloseGuard?: (tabId: string, guard: () => Promise<boolean>) => void;
   unregisterCloseGuard?: (tabId: string) => void;
+  registerBusyProbe?: (tabId: string, probe: BusyProbe) => void;
+  unregisterBusyProbe?: (tabId: string) => void;
 }
 
 export function LoopStudioView({
@@ -71,6 +74,8 @@ export function LoopStudioView({
   tabId,
   registerCloseGuard,
   unregisterCloseGuard,
+  registerBusyProbe,
+  unregisterBusyProbe,
 }: LoopStudioViewProps) {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [roster, setRoster] = useState<RosterState>(loadRoster);
@@ -198,6 +203,16 @@ export function LoopStudioView({
     });
     return () => { unregisterCloseGuard?.(tabId); };
   }, [tabId, registerCloseGuard, unregisterCloseGuard, roster.goal, roster.subAgents.length, loop.isRunning, loop.stop]);
+
+  // 視窗關閉用的忙碌探針。上面分頁 ✕ 的 guard 因 deps 含 loop.isRunning 會反覆重註冊，
+  // 探針改讀 ref，註冊一次即可。
+  const loopRunningRef = useRef(false);
+  loopRunningRef.current = loop.isRunning;
+  useEffect(() => {
+    if (!tabId || !registerBusyProbe) return;
+    registerBusyProbe(tabId, () => (loopRunningRef.current ? "loop" : null));
+    return () => { unregisterBusyProbe?.(tabId); };
+  }, [tabId, registerBusyProbe, unregisterBusyProbe]);
 
   const updateRoster = useCallback((patch: Partial<RosterState>) => {
     setRoster(prev => {

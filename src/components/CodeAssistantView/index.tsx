@@ -13,6 +13,7 @@ import { ModelPickerButton } from "../ModelPickerButton";
 import { CloseConfirmDialog } from "../CloseConfirmDialog";
 import { ArtifactPanelProvider } from "../../contexts/ArtifactPanelContext";
 import { ArtifactSplit } from "../ArtifactPanel/ArtifactSplit";
+import type { BusyProbe } from "../../lib/busyProbe";
 import "./styles.css";
 
 const STORAGE_KEY = "aiterm-code-assistant-root";
@@ -29,6 +30,8 @@ interface Props {
   tabId?: string;
   registerCloseGuard?: (tabId: string, guard: () => Promise<boolean>) => void;
   unregisterCloseGuard?: (tabId: string) => void;
+  registerBusyProbe?: (tabId: string, probe: BusyProbe) => void;
+  unregisterBusyProbe?: (tabId: string) => void;
 }
 
 export function CodeAssistantView(props: Props) {
@@ -44,6 +47,8 @@ function CodeAssistantViewInner({
   tabId,
   registerCloseGuard,
   unregisterCloseGuard,
+  registerBusyProbe,
+  unregisterBusyProbe,
 }: Props) {
   const { t } = useLocale();
   const [projectRoot, setProjectRoot] = useState(loadSavedRoot);
@@ -93,6 +98,14 @@ function CodeAssistantViewInner({
     });
     return () => { unregisterCloseGuard?.(tabId); };
   }, [tabId, registerCloseGuard, unregisterCloseGuard]);
+
+  // 視窗關閉用的忙碌探針：只回報「正在做事」（串流中），不含「有對話」——
+  // 後者是分頁 ✕ 的內容遺失 guard 的職責。同樣讀 ref，不可閉包捕捉。
+  useEffect(() => {
+    if (!tabId || !registerBusyProbe) return;
+    registerBusyProbe(tabId, () => (isStreamingRef.current ? "streaming" : null));
+    return () => { unregisterBusyProbe?.(tabId); };
+  }, [tabId, registerBusyProbe, unregisterBusyProbe]);
 
   // Load providers once on mount
   useEffect(() => {
