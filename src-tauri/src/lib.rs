@@ -12,6 +12,7 @@ pub mod enterprise;
 pub mod guard;
 pub mod knowledge_base;
 pub mod launch;
+pub mod quit;
 pub mod mail;
 pub mod mcp;
 pub mod mcp_server;
@@ -250,6 +251,7 @@ pub fn run() {
         // 必須在 Builder 上 manage、不能放進 .setup：single-instance 的 callback
         // 可能在 setup 跑完之前就被呼叫，那時 state 不存在會直接 panic。
         .manage(launch::LaunchQueue::default())
+        .manage(quit::QuitState::default())
         .manage(Arc::new(PtyManager::new()))
         .manage(config)
         .manage(secrets)
@@ -660,11 +662,13 @@ pub fn run() {
             reports_delete,
             // 啟動請求（開資料夾／-e 指令）
             launch::take_launch_requests,
+            quit::set_quit_confirmed,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             launch::on_run_event(app_handle, &event);
+            quit::on_run_event(app_handle, &event);
             // Mail tasks are the one background task that holds an open,
             // authenticated socket essentially all the time: with IMAP IDLE
             // they park *inside* a live session rather than sleeping between
