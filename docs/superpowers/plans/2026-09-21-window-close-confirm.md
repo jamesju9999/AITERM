@@ -10,6 +10,8 @@
 
 Spec：`docs/superpowers/specs/2026-09-21-window-close-confirm-design.md`
 
+> **執行後修訂（2026-09-21）：** Task 1 的 Rust 攔截設計（`QuitState`／`should_intercept_exit`／`set_quit_confirmed`／`RunEvent::ExitRequested`）在 Task 8 真機驗收時被證偽：macOS 的 Cmd+Q 不會送出 `ExitRequested`。已改為「以自訂 Quit 選單項目發事件」，並移除 `set_quit_confirmed` 與前端的 `setQuitConfirmed`。以 spec 第 3 節與 `src-tauri/src/quit.rs` 為準；下方 Task 1／Task 5 中與旗標相關的步驟已過時，保留作為歷史紀錄。
+
 ## 檔案結構
 
 | 檔案 | 動作 | 職責 |

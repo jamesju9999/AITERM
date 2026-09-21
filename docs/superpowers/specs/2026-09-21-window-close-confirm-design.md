@@ -45,7 +45,7 @@ unregisterBusyProbe(tabId: string): void;
 ```
 
 - `TerminalApp` 以 `busyProbesRef: Map<string, () => BusyReason | null>` 持有，與 `closeGuardsRef` 平行。
-- 三個消費端各註冊一支，**沿用同一個 effect**（與 `registerCloseGuard` 同處註冊／清理），deps 一樣只放 `[tabId, registerBusyProbe, unregisterBusyProbe]`。
+- 三個消費端各註冊一支，放在既有 close guard effect 旁的**獨立 effect**（不動既有 guard 的 effect，降低回歸風險），deps 只放 `[tabId, registerBusyProbe, unregisterBusyProbe]`（終端機多一個穩定的 `getBusyReason`）。
 - **探針必須讀 ref，不可閉包捕捉狀態**（見 memory `project-close-guard-mechanism` 陷阱 1：閉包會靜默放行）。`LoopStudio` 目前的 guard effect deps 含 `loop.isRunning`，探針要改讀 ref 以免重註冊窗口內漏報。
 - `agentMission` 可為 `null`，一律 `agentMission?.active ?? false`。
 - **避免判定漂移**：各消費端把「是否忙碌」抽成一個函式，分頁 ✕ 的 guard 與探針共用它。終端機的判定有註解說明的三訊號（isBusy／mission／running task），只能有一份。
@@ -57,7 +57,7 @@ unregisterBusyProbe(tabId: string): void;
 - 掛載時 `getCurrentWindow().onCloseRequested(async (event) => { ... })`。
 - 遍歷 `busyProbesRef` 收集 `{ tabId, title, reason }`；空 → 不 `preventDefault`，直接放行。
 - 非空 → `event.preventDefault()`，`setPendingQuit(list)` 顯示 `CloseConfirmDialog`（重用，`src/components/CloseConfirmDialog/`）。body 列出「分頁名稱 — 正在做什麼」。
-- 確認 → 先 `invoke("set_quit_confirmed")`（第 3 節），再 `getCurrentWindow().destroy()`（不用 `close()`，避免再次觸發 `onCloseRequested` 造成迴圈）；取消 → 清掉 `pendingQuit`。單一視窗 App，`destroy()` 之後 runtime 會自行走退出流程。
+- 確認 → `getCurrentWindow().destroy()`（不用 `close()`，避免再次觸發 `onCloseRequested` 造成迴圈）；取消 → 清掉 `pendingQuit`。單一視窗 App，`destroy()` 之後 runtime 會自行走退出流程（真機驗證：行程正常結束、exit code 0，不留無視窗的殭屍程序）。原生關閉一律 `preventDefault()` 再自己 `destroy()`，閒置與確認兩條路徑因此走同一段。
 - **重入保護**：框已顯示時再收到關閉請求（連按 ✕）直接忽略，不覆蓋狀態。既有分頁 guard 有「連點覆蓋 `closeResolveRef`」的已知競態，這裡不能複製；用 `pendingQuit !== null` 判斷即可，不需要 promise resolver。
 - 確認鈕語意是「關閉並中止」；不需要逐一停止 Loop（退出時行程本來就會被終止）。
 - `unlisten` 必須在 cleanup 呼叫並吞掉 rejection（repo 內 Tauri `unlisten()` 已知會 reject）。
@@ -65,24 +65,26 @@ unregisterBusyProbe(tabId: string): void;
 
 capabilities：`src-tauri/capabilities/default.json` 加 `core:window:allow-destroy`。（`allow-close` 已存在；`onCloseRequested` 本身需要的權限於實作時以實測確認，缺權限會是靜默失敗。）
 
-### 3. Cmd+Q（macOS）
+### 3. Cmd+Q（macOS）：自訂 Quit 選單項目
 
-macOS 預設選單的 Quit 不經 `onCloseRequested`，而走 `RunEvent::ExitRequested`。專案沒有自訂選單。
+**原設計（在 `RunEvent::ExitRequested` 攔截並 `prevent_exit()`）不可行，已捨棄。**
+真機實測（tauri 2.10、macOS，在有 `sleep 300` 執行中按 Cmd+Q，並在 `RunEvent` 回呼裡
+記錄每一筆事件）：只看到 `Exit`，**`ExitRequested` 從未送出**，`sleep` 被無聲殺掉。
+預設選單的 Quit 走原生 `terminate:`，直接進入 `Exit`，Rust 端無從攔截。
 
-- `lib.rs` 的 `run` 回呼加入 `RunEvent::ExitRequested { code, api, .. }` 處理：當 `code.is_none()`（使用者觸發、非程式呼叫 `app.exit`）**且**尚未確認過時，`api.prevent_exit()` 並 emit `app://quit-requested` 給前端，前端走同一個確認框流程（第 2 節）。
-- 前端確認後呼叫新 command `set_quit_confirmed`：只把 `QUIT_CONFIRMED` 旗標設為 true，然後前端 `destroy()` 視窗，由最後一個視窗關閉觸發退出。✕ 與 Cmd+Q 兩條路徑因此共用同一段確認後流程。
-- **注意「最後一個視窗關閉」也會觸發 `ExitRequested`（code 為 None）**：`destroy()` 之後 runtime 會再送一次，若被攔下 App 就關不掉。所以兩條路徑都必須先 `set_quit_confirmed`，Rust 端旗標為 true 時一律放行。
-- 旗標用 `AtomicBool` 放在 Tauri managed state。
-- 閒置時（前端回報無忙碌分頁）：前端也要呼叫 `set_quit_confirmed` 再 `destroy()`，不能只靠「不攔」，否則 Rust 端已經 `prevent_exit()` 了。也就是說 Rust 端對 Cmd+Q 一律先攔、由前端決定，前端閒置就立即 `set_quit_confirmed` 並 `destroy()`。這讓「判斷忙不忙」只存在前端一處。
-- `RunEvent::Exit` 的郵件登出邏輯**不動**，且仍必須在最終真的退出時執行（註解已說明為何用 `Exit` 而非 `ExitRequested`）。
+**實作**（`src-tauri/src/quit.rs`）：
+- `setup` 裡（僅 macOS，`#[cfg(target_os = "macos")]`）沿用 `Menu::default()`——複製貼上等
+  快速鍵都靠它——只把 App 選單最後一項預設 Quit 換成自訂 `MenuItem`（id `aiterm-quit`，
+  快速鍵 `Cmd+Q`）。找不到預設 Quit（預設選單結構變了）時不換，只記 `warn`，退回原本行為。
+- `Builder::on_menu_event`：收到該 id 就 emit `app://quit-requested`（無酬載），**不結束程式**。
+- 前端 `useWindowCloseGuard` 收到事件後走與視窗 ✕ 完全相同的 `attempt()`。
+- 因此**不需要**旗標、`set_quit_confirmed` command 或 `ExitRequested` 處理：Rust 端不再攔截
+  任何退出，只負責把 Cmd+Q 變成事件。`RunEvent::Exit` 的郵件登出邏輯**不動**。
 
-**此節的行為假設必須在實作第一步實測**（沿用「沒有失敗訊號不等於正確」的教訓）：
-1. Cmd+Q 是否觸發 `ExitRequested` 且 `code == None`。
-2. 視窗最後關閉後是否再送一次 `ExitRequested`。
-3. `set_quit_confirmed` → `destroy()` 之後 `RunEvent::Exit` 是否仍執行（郵件登出）。
-4. Windows/Linux 的 Alt+F4 是否只走 `onCloseRequested`。
+Windows/Linux 沒有這個選單項目，✕／Alt+F4 走 `onCloseRequested`（第 2 節）。
 
-若任一假設不成立，回頭修正本節再繼續，不硬套。
+**已知缺口**：Dock 圖示右鍵「結束」與系統登出／關機同樣走原生 `terminate:`，不會經過這個選單項目，
+不受保護（見已知限制）。
 
 ### 4. i18n
 
@@ -94,22 +96,37 @@ macOS 預設選單的 Quit 不經 `onCloseRequested`，而走 `RunEvent::ExitReq
 
 1. 全閒置：`onCloseRequested` handler 不呼叫 `preventDefault`，不出現框。
 2. 任一探針回報忙碌：`preventDefault` 被呼叫、框出現、列出分頁與原因。
-3. 確認：依序呼叫 `set_quit_confirmed` 與 `destroy`；取消：不呼叫，且可再次觸發關閉。
+3. 確認：呼叫 `destroy`；取消：不呼叫，且可再次觸發關閉。
 4. 重入：框已顯示時再次觸發，狀態不被覆蓋。
 5. 探針讀最新狀態：註冊後才變忙碌，探針仍回報忙碌（釘住 ref 而非閉包，須以變異驗證：改讀閉包值時此測試要紅）。
 6. 三個消費端各自的探針：終端機三訊號各一、Loop、串流；`agentMission === null` 不丟例外（用真的 hook 而非 mock 回物件——mock 會掩蓋這個 bug）。
 7. 每個新測試要先證明會紅。
 
-Rust：`ExitRequested` 的旗標邏輯抽成純函式（輸入：`code`、`confirmed`；輸出：攔或放行）做單元測試。
+Rust：選單項目替換與事件 emit 是薄膠水程式，沒有可獨立單元測試的邏輯，以真機驗收為準（下節）。
 
 ## 手動驗收（真機）
 
-- macOS：正式 build（dev 模式的行為不同），分別測 ✕、Cmd+Q，各在「閒置」「終端機跑 `sleep 60`」「工作看板任務執行中」三種狀態。
-- 關閉後確認郵件登出仍有執行。
-- Windows/Linux：✕、Alt+F4（若無實機，於 spec 結案註明未驗證，不宣稱通過）。
-- 跨平台要求：本設計只用 Tauri 視窗 API 與 `RunEvent`，無平台專屬路徑；Cmd+Q 節僅 macOS 有意義，其他平台該事件路徑不應造成行為差異，需驗證。
+方法：`npx tauri dev`，以 `--config '{"identifier":"com.aiterm.quittest"}'`、隔離的 `HOME`（並 `env -u APPLE_SIGNING_IDENTITY`，否則 dev runner 的 `codesign` 找不到鑰匙圈會在啟動前失敗）啟動，不碰使用者正在跑的那份；用 osascript 送 Cmd+Q／點紅燈，逐步截圖與查行程。
+注意：`tauri dev` 的 webview 與正式版不同 origin，但 `RunEvent`／選單／視窗行為與正式版同一套 Tauri 執行期，這裡驗的是關閉流程而非通知等 dev 專屬差異。
+
+| 情境 | 結果 |
+|---|---|
+| 終端機跑 `sleep 300`，Cmd+Q | ✅ 出現確認框（覆蓋整個視窗含標題列），列出「Terminal — 指令執行中」；App 與 `sleep` 皆存活 |
+| 按「取消（繼續執行）」 | ✅ 框消失，`sleep` 仍在跑 |
+| 取消後點視窗 ✕（紅燈） | ✅ 再次出現同一個確認框 |
+| 按「關閉並中止」 | ✅ App 結束（`tauri dev` exit 0）、`sleep` 被終止、無殘留行程 |
+| 閒置，Cmd+Q | ✅ 直接結束，exit 0 |
+| 閒置，點視窗 ✕ | ✅ 直接結束，exit 0 |
+| 修正前（基準線，同樣情境 Cmd+Q） | ❌ 無提示，`sleep` 被無聲殺掉（即使用者回報的問題） |
+
+**未驗證**（明確標示，不宣稱通過）：
+- Windows／Linux：✕、Alt+F4（無實機）。
+- 工作看板任務執行中的情境、郵件登出（`RunEvent::Exit`）在確認流程後是否仍執行——Exit 事件在基準線實測中確實會送出，但未實際帶郵件帳號驗證登出。
+- Dock 右鍵「結束」與系統登出／關機。
 
 ## 已知限制
 
 - 工作看板沒開著時新派工的任務尚未登記於 `runningTaskTabRegistry`，關視窗可能漏警告（沿用該模組已記載的限制）。
 - 對話框沒有 Escape 關閉與 focus trap（沿用 `CloseConfirmDialog` 現況）。
+- 保護依賴前端存活：Cmd+Q 與 ✕ 都是「Rust／視窗事件 → 前端決定」。前端整個掛掉（白畫面、無回應）時，✕ 與 Cmd+Q 會沒有反應，需強制結束。
+- Dock 右鍵「結束」與系統登出／關機走原生 `terminate:`，不經自訂選單項目，不受保護；要涵蓋需攔 NSApplicationDelegate 的 `applicationShouldTerminate`，超出本次範圍。
