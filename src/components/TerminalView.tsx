@@ -28,7 +28,7 @@ import {
   invokeAiQuery,
   type AiStreamEvent,
 } from "../ipc/ai";
-import { getConfig, type ExecutionMode, type SubmitShortcut } from "../ipc/config";
+import { getConfig, type ExecutionMode, type SubmitShortcut, type SuggestionAcceptKey } from "../ipc/config";
 import { getSessionCwd } from "../ipc/fs";
 import { enterpriseCompleteTask, enterpriseOnComplete } from "../ipc/enterprise";
 import { useTerminalBlocks, type TerminalBlock } from "../hooks/useTerminalBlocks";
@@ -242,6 +242,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
   // Execution mode and shortcut are read once and cached; re-fetched when we return from settings.
   const [submitShortcut, setSubmitShortcutState] = useState<SubmitShortcut>("enter");
+  const [suggestionKey, setSuggestionKeyState] = useState<SuggestionAcceptKey>("tab");
   const maxAgentStepsRef = useRef<number>(5);
 
   // Refs bridged into the useEffect closure.
@@ -1033,6 +1034,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       .then((cfg) => {
         executionModeRef.current = cfg.execution_mode;
         setSubmitShortcutState(cfg.submit_shortcut);
+        setSuggestionKeyState(cfg.suggestion_accept_key ?? "tab");
         // 0 means unlimited — use a very large number internally
         maxAgentStepsRef.current = cfg.max_agent_steps === 0 ? 9999 : (cfg.max_agent_steps ?? 5);
       })
@@ -2477,6 +2479,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             submitCommand(cmd);
           }}
           shortcut={submitShortcut}
+          suggestionKey={suggestionKey}
         />
         )
       )}

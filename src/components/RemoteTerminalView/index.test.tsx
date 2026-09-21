@@ -223,6 +223,7 @@ if (!window.HTMLElement.prototype.scrollTo) {
 import { RemoteTerminalView, formatElapsed, readRecentOutput } from "./index";
 import { addBookmark } from "../CommandBookmarks";
 import { translations } from "../../lib/i18n";
+import { getConfig } from "../../ipc/config";
 
 // 沒有 LocaleProvider 包這個元件時，useLocale() 會退回讀 localStorage，
 // 每個測試開始前都被清空（見下面 beforeEach），所以固定落在 "zh-TW"。
@@ -1118,5 +1119,53 @@ describe("readRecentOutput", () => {
 
   it("整個 buffer 都是空字串回 null", () => {
     expect(readRecentOutput(stubTerm(["", "", ""]))).toBeNull();
+  });
+});
+
+describe("RemoteTerminalView：行內歷史建議的接受鍵", () => {
+  const HISTORY_KEY = "aiterm-command-history";
+
+  async function connectAndGetInput(connId: string) {
+    render(<RemoteTerminalView tabId="t1" connId={connId} sas="1111" isActive onConnectClick={vi.fn()} />);
+    await waitFor(() => expect(handlers[`granted:${connId}`]).toBeDefined());
+    act(() => {
+      handlers[`granted:${connId}`]({ mode: "control", cols: 80, rows: 24, hostOs: "linux" } as never);
+    });
+    const textarea = (await screen.findByPlaceholderText(/輸入指令|Type a command/i)) as HTMLTextAreaElement;
+    await waitFor(() => expect(textarea).not.toBeDisabled());
+    return textarea;
+  }
+  const ghost = () => document.querySelector(".warp-input-ghost-suggestion");
+
+  it("設定 right：→ 補上歷史建議，Tab 不攔", async () => {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(["echo hello-world"]));
+    vi.mocked(getConfig).mockResolvedValueOnce(
+      { execution_mode: "graded", max_agent_steps: 5, suggestion_accept_key: "right" } as never,
+    );
+    try {
+      const ta = await connectAndGetInput("c-sug1");
+      fireEvent.change(ta, { target: { value: "echo he" } });
+      await waitFor(() => expect(ghost()?.textContent).toBe("llo-world"));
+      expect(fireEvent.keyDown(ta, { key: "Tab" })).toBe(true);
+      expect(fireEvent.keyDown(ta, { key: "ArrowRight" })).toBe(false);
+      expect(ta.value).toBe("echo hello-world");
+    } finally {
+      localStorage.removeItem(HISTORY_KEY);
+    }
+  });
+
+  it("設定 off：沒有灰字", async () => {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(["echo hello-world"]));
+    vi.mocked(getConfig).mockResolvedValueOnce(
+      { execution_mode: "graded", max_agent_steps: 5, suggestion_accept_key: "off" } as never,
+    );
+    try {
+      const ta = await connectAndGetInput("c-sug2");
+      fireEvent.change(ta, { target: { value: "echo he" } });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(ghost()).toBeNull();
+    } finally {
+      localStorage.removeItem(HISTORY_KEY);
+    }
   });
 });

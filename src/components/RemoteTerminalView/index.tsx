@@ -20,7 +20,7 @@ import { parseAiPrefix, parseAgentPrefix } from "../parseAiPrefix";
 import { LinkIcon, SparklesIcon } from "../Icons";
 import type { Translations } from "../../lib/i18n";
 import type { RemoteCtx } from "../../ipc/ai";
-import { getConfig } from "../../ipc/config";
+import { getConfig, type SuggestionAcceptKey } from "../../ipc/config";
 import { listProviders } from "../../ipc/provider";
 import { ProviderPalette } from "../ProviderPalette";
 import { QuotaBadge } from "../QuotaBadge";
@@ -167,11 +167,13 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   // 打架。
   const abortRef = useRef(false);
   const [maxAgentSteps, setMaxAgentSteps] = useState(5);
+  const [suggestionKey, setSuggestionKey] = useState<SuggestionAcceptKey>("tab");
 
   useEffect(() => {
     getConfig()
       .then((cfg) => {
         setMaxAgentSteps(cfg.max_agent_steps === 0 ? 9999 : (cfg.max_agent_steps ?? 5));
+        setSuggestionKey(cfg.suggestion_accept_key ?? "tab");
       })
       .catch(() => {});
   }, []);
@@ -788,6 +790,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
           disabled={!(phase.kind === "live" && phase.mode === "control")}
           isCommandRunning={blocks[blocks.length - 1]?.status === "running"}
           onRawKey={write}
+          suggestionKey={suggestionKey}
         />
       )}
 
