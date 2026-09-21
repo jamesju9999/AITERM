@@ -251,7 +251,6 @@ pub fn run() {
         // 必須在 Builder 上 manage、不能放進 .setup：single-instance 的 callback
         // 可能在 setup 跑完之前就被呼叫，那時 state 不存在會直接 panic。
         .manage(launch::LaunchQueue::default())
-        .manage(quit::QuitState::default())
         .manage(Arc::new(PtyManager::new()))
         .manage(config)
         .manage(secrets)
@@ -277,6 +276,9 @@ pub fn run() {
         .manage(Arc::new(share::ShareServerState::new()))
         .manage(Arc::new(share::viewer_manager::ViewerManager::new()))
         .setup(|app| {
+            // macOS：Cmd+Q 換成會先問前端的自訂選單項目（見 quit.rs）。
+            #[cfg(target_os = "macos")]
+            quit::install_quit_menu(app)?;
             // 冷啟動時帶進來的參數（`aiterm ~/proj`、`--working-directory=…`）。
             // 這裡雖然也會發事件，但此時 webview 可能還不存在，事件會被丟掉——
             // 沒關係，前端一掛載就會主動排空佇列。
@@ -390,6 +392,7 @@ pub fn run() {
 
             Ok(())
         })
+        .on_menu_event(quit::on_menu_event)
         .invoke_handler(tauri::generate_handler![
             // 用量／配額
             commands::usage::usage_quota,
@@ -662,13 +665,11 @@ pub fn run() {
             reports_delete,
             // 啟動請求（開資料夾／-e 指令）
             launch::take_launch_requests,
-            quit::set_quit_confirmed,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             launch::on_run_event(app_handle, &event);
-            quit::on_run_event(app_handle, &event);
             // Mail tasks are the one background task that holds an open,
             // authenticated socket essentially all the time: with IMAP IDLE
             // they park *inside* a live session rather than sleeping between

@@ -4,8 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 // 掛載骨架同 TerminalApp.routeHintCloseGuard.test.tsx：invoke/listen/homeDir 三個
-// Tauri 入口涵蓋所有 ipc/*.ts，另外 window 與 notification。invoke 永遠不 resolve，
-// 所以退出確認（會 await set_quit_confirmed）改成直接 mock `../ipc/quit` 這一層。
+// Tauri 入口涵蓋所有 ipc/*.ts，另外 window 與 notification。
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => new Promise(() => {})) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 vi.mock("@tauri-apps/api/path", () => ({ homeDir: vi.fn(() => Promise.resolve("/home/test")) }));
@@ -30,10 +29,8 @@ vi.mock("@tauri-apps/api/window", () => ({
 vi.mock("@tauri-apps/plugin-notification", () => ({
   sendNotification: vi.fn(),
 }));
-const setQuitConfirmed = vi.fn(() => Promise.resolve());
 vi.mock("../ipc/quit", () => ({
   QUIT_REQUESTED_EVENT: "app://quit-requested",
-  setQuitConfirmed: () => setQuitConfirmed(),
   onQuitRequested: () => Promise.resolve(() => {}),
 }));
 
@@ -99,7 +96,6 @@ beforeEach(() => {
   fakeLoop.isRunning = false;
   closeCb = undefined;
   destroy.mockClear();
-  setQuitConfirmed.mockClear();
   localStorage.clear();
   localStorage.setItem(SESSION_TABS_KEY, JSON.stringify([{ title: "Loop Studio", type: "loop-studio" }]));
 });
@@ -122,11 +118,10 @@ async function fireWindowClose() {
 }
 
 describe("TerminalApp: closing the window while work is running", () => {
-  it("全部閒置：不出現確認框，直接 set_quit_confirmed + destroy", async () => {
+  it("全部閒置：不出現確認框，直接 destroy", async () => {
     renderApp();
     await fireWindowClose();
     expect(screen.queryByRole("heading", { name: "還有工作正在進行" })).not.toBeInTheDocument();
-    expect(setQuitConfirmed).toHaveBeenCalledTimes(1);
     expect(destroy).toHaveBeenCalledTimes(1);
   });
 
@@ -151,13 +146,12 @@ describe("TerminalApp: closing the window while work is running", () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  it("按「關閉並中止」：set_quit_confirmed 再 destroy", async () => {
+  it("按「關閉並中止」：destroy 視窗", async () => {
     fakeLoop.isRunning = true;
     renderApp();
     await fireWindowClose();
     await userEvent.click(screen.getByRole("button", { name: "關閉並中止" }));
     await waitFor(() => expect(destroy).toHaveBeenCalledTimes(1));
-    expect(setQuitConfirmed).toHaveBeenCalledTimes(1);
   });
 
   it("確認框掛在最外層容器（覆蓋整個視窗），不是嵌在某個分頁裡", async () => {

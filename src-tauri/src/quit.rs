@@ -1,65 +1,58 @@
-//! 退出確認：macOS 的 Cmd+Q 不經前端的 `onCloseRequested`，而走
-//! `RunEvent::ExitRequested`。這裡先攔下來，交給前端決定是否真的退出。
+//! macOS 的 Cmd+Q：把預設選單的 Quit 換成只發事件的自訂項目，讓前端決定要不要退出。
+//!
+//! 為什麼不在 `RunEvent::ExitRequested` 攔：實測（tauri 2.10、macOS）預設選單的 Quit
+//! 走原生 `terminate:`，直接進到 `RunEvent::Exit`，`ExitRequested` 根本不會送出——
+//! 有指令在跑時 Cmd+Q 會無聲無息地把它殺掉。所以攔截點只能是選單項目本身。
+//!
+//! 前端收到 [`QUIT_REQUESTED_EVENT`] 後走與視窗 ✕ 相同的流程（`useWindowCloseGuard`）：
+//! 沒有忙碌分頁就 `destroy()` 視窗，最後一個視窗關閉後 runtime 自行退出。
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter};
 
-/// 攔下退出請求後通知前端的事件（無酬載）。
+/// 使用者按下 Quit（Cmd+Q）時通知前端的事件（無酬載）。
 pub const QUIT_REQUESTED_EVENT: &str = "app://quit-requested";
 
-/// 前端已確認「可以退出」的旗標。確認流程的最後一步（`destroy()` 視窗）
-/// 會讓 runtime 再送一次 `ExitRequested`（最後一個視窗關閉），
-/// 那一次必須放行，否則 App 會殘留成沒有視窗的殭屍程序。
-#[derive(Default)]
-pub struct QuitState {
-    confirmed: AtomicBool,
-}
+/// 自訂 Quit 選單項目的 id。
+pub const QUIT_MENU_ID: &str = "aiterm-quit";
 
-/// 這次 `ExitRequested` 要不要攔下。
-///
-/// - `code` 是 `Some`：程式自己呼叫了 `app.exit(code)`（例如更新後重啟），不是
-///   使用者要退出，一律放行。
-/// - `confirmed`：前端已確認過，放行。
-pub fn should_intercept_exit(code: Option<i32>, confirmed: bool) -> bool {
-    code.is_none() && !confirmed
-}
-
-/// 前端在「確認可以退出」（或發現沒有任何忙碌分頁）之後、`destroy()` 視窗之前呼叫。
-#[tauri::command]
-pub fn set_quit_confirmed(state: State<'_, QuitState>) {
-    state.confirmed.store(true, Ordering::SeqCst);
-}
-
-/// 接在 `App::run` 回呼裡。
-pub fn on_run_event(app: &AppHandle, event: &tauri::RunEvent) {
-    if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
-        let confirmed = app.state::<QuitState>().confirmed.load(Ordering::SeqCst);
-        if should_intercept_exit(*code, confirmed) {
-            api.prevent_exit();
-            if let Err(e) = app.emit(QUIT_REQUESTED_EVENT, ()) {
-                log::warn!("emit {QUIT_REQUESTED_EVENT} failed: {e}");
-            }
+/// 接在 `Builder::on_menu_event`。
+pub fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
+    if event.id().as_ref() == QUIT_MENU_ID {
+        if let Err(e) = app.emit(QUIT_REQUESTED_EVENT, ()) {
+            log::warn!("emit {QUIT_REQUESTED_EVENT} failed: {e}");
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::should_intercept_exit;
+/// 沿用 Tauri 的預設選單（App／Edit／View／Window…，複製貼上等快速鍵都靠它），
+/// 只把 App 選單最後一項的 Quit 換成自訂項目，快速鍵同樣是 Cmd+Q。
+#[cfg(target_os = "macos")]
+pub fn install_quit_menu(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, MenuItemKind};
 
-    #[test]
-    fn user_initiated_quit_is_intercepted_until_confirmed() {
-        assert!(should_intercept_exit(None, false));
+    let menu = Menu::default(app.handle())?;
+    let replaced = match menu.items()?.into_iter().next() {
+        Some(MenuItemKind::Submenu(app_menu)) => match app_menu.items()?.into_iter().last() {
+            Some(MenuItemKind::Predefined(quit)) => {
+                app_menu.remove(&quit)?;
+                let name = app.package_info().name.clone();
+                app_menu.append(&MenuItem::with_id(
+                    app,
+                    QUIT_MENU_ID,
+                    format!("Quit {name}"),
+                    true,
+                    Some("Cmd+Q"),
+                )?)?;
+                true
+            }
+            _ => false,
+        },
+        _ => false,
+    };
+    if !replaced {
+        // 預設選單的結構變了：不換，退回原本的（無確認）Quit，但要看得見。
+        log::warn!("找不到預設選單裡的 Quit 項目，Cmd+Q 不會有工作進行中的確認");
     }
-
-    #[test]
-    fn confirmed_quit_passes_through() {
-        assert!(!should_intercept_exit(None, true));
-    }
-
-    #[test]
-    fn programmatic_exit_is_never_intercepted() {
-        assert!(!should_intercept_exit(Some(0), false));
-        assert!(!should_intercept_exit(Some(1), false));
-    }
+    app.set_menu(menu)?;
+    Ok(())
 }

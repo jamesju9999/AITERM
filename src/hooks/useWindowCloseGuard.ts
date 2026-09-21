@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { onQuitRequested, setQuitConfirmed, QUIT_REQUESTED_EVENT } from "../ipc/quit";
+import { onQuitRequested, QUIT_REQUESTED_EVENT } from "../ipc/quit";
 import { unlistenOnCleanup } from "../lib/eventSubscription";
 import type { BusyTab } from "../lib/busyProbe";
 
 /**
  * 攔截整個視窗的關閉。兩個入口——原生關閉（✕／Alt+F4，`onCloseRequested`）與
- * 後端攔下的 Cmd+Q（`app://quit-requested`）——共用同一個 `attempt()`：
- * 沒有忙碌分頁就直接退出，否則交給呼叫端顯示確認框（`pending`）。
+ * macOS 自訂 Quit 選單項目送來的 `app://quit-requested`（Cmd+Q）——共用同一個
+ * `attempt()`：沒有忙碌分頁就直接退出，否則交給呼叫端顯示確認框（`pending`）。
+ *
+ * Cmd+Q 為什麼要走自訂選單而不是 Rust 的 `RunEvent::ExitRequested`：實測 macOS 預設
+ * 選單的 Quit 走原生 `terminate:`，直接進到 `RunEvent::Exit`，`ExitRequested` 根本
+ * 不會送出，無從攔截。見 `src-tauri/src/quit.rs`。
  *
  * 原生關閉一律 `preventDefault()` 再自己 `destroy()`：Tauri 預設在 handler 結束後
  * 也會 destroy，兩條路徑各關一次沒有意義，統一由 `quit()` 負責。
@@ -23,12 +27,7 @@ export function useWindowCloseGuard(getBusyTabs: () => BusyTab[]) {
   });
 
   const quit = useCallback(async () => {
-    // 必須在 destroy 之前：最後一個視窗關閉會再觸發 ExitRequested，後端靠旗標放行。
-    try {
-      await setQuitConfirmed();
-    } catch (e) {
-      console.error("set_quit_confirmed 失敗:", e);
-    }
+    // 單一視窗 App：最後一個視窗被 destroy 後，runtime 會自行走退出流程。
     try {
       await getCurrentWindow().destroy();
     } catch (e) {

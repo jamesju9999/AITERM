@@ -14,10 +14,8 @@ vi.mock("@tauri-apps/api/window", () => ({
     destroy: () => destroy(),
   }),
 }));
-const setQuitConfirmed = vi.fn(() => Promise.resolve());
 vi.mock("../ipc/quit", () => ({
   QUIT_REQUESTED_EVENT: "app://quit-requested",
-  setQuitConfirmed: () => setQuitConfirmed(),
   onQuitRequested: (cb: () => void) => { quitCb = cb; return Promise.resolve(unlistenQuit); },
 }));
 
@@ -29,7 +27,6 @@ beforeEach(() => {
   closeCb = undefined;
   quitCb = undefined;
   destroy.mockClear();
-  setQuitConfirmed.mockClear();
   unlistenClose.mockClear();
   unlistenQuit.mockClear();
 });
@@ -46,15 +43,18 @@ function fireClose() {
 }
 
 describe("useWindowCloseGuard", () => {
-  it("全部閒置：攔下原生關閉、先設旗標再 destroy，不出現確認狀態", async () => {
+  it("全部閒置：攔下原生關閉、自己 destroy，不出現確認狀態", async () => {
+    // quit() 內部把任何失敗都吞成 console.error 繼續 destroy，所以光看 destroy 有沒有被呼叫
+    // 分辨不出「乾淨路徑」與「中間某步悄悄失敗」——要一併斷言沒有錯誤被記錄。
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const { result } = await mount(() => []);
     const ev = fireClose();
     await ev.run();
+    expect(err).not.toHaveBeenCalled();
+    err.mockRestore();
 
     expect(ev.preventDefault).toHaveBeenCalled(); // 由我們自己 destroy，不讓預設流程跑第二次
-    expect(setQuitConfirmed).toHaveBeenCalledTimes(1);
     expect(destroy).toHaveBeenCalledTimes(1);
-    expect(setQuitConfirmed.mock.invocationCallOrder[0]).toBeLessThan(destroy.mock.invocationCallOrder[0]);
     expect(result.current.pending).toBeNull();
   });
 
@@ -63,18 +63,15 @@ describe("useWindowCloseGuard", () => {
     await fireClose().run();
 
     expect(destroy).not.toHaveBeenCalled();
-    expect(setQuitConfirmed).not.toHaveBeenCalled();
     expect(result.current.pending).toEqual([busyTab]);
   });
 
-  it("確認：先 set_quit_confirmed 再 destroy", async () => {
+  it("確認：destroy 視窗", async () => {
     const { result } = await mount(() => [busyTab]);
     await fireClose().run();
     await act(async () => { result.current.confirm(); });
 
-    expect(setQuitConfirmed).toHaveBeenCalledTimes(1);
     expect(destroy).toHaveBeenCalledTimes(1);
-    expect(setQuitConfirmed.mock.invocationCallOrder[0]).toBeLessThan(destroy.mock.invocationCallOrder[0]);
   });
 
   it("取消：清掉 pending，且之後可以再次觸發關閉", async () => {
@@ -106,10 +103,9 @@ describe("useWindowCloseGuard", () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  it("Cmd+Q 入口：閒置時也要 set_quit_confirmed + destroy（後端已經 prevent_exit 了）", async () => {
+  it("Cmd+Q 入口：閒置時直接 destroy（選單的 Quit 已被換成只發事件，不會自己結束程式）", async () => {
     await mount(() => []);
     await act(async () => { quitCb!(); });
-    expect(setQuitConfirmed).toHaveBeenCalledTimes(1);
     expect(destroy).toHaveBeenCalledTimes(1);
   });
 
