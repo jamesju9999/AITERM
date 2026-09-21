@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use tauri::State;
 
-use crate::config::{AppConfig, ConfigStore, DefaultTab, DocConvertEngine, ExecutionMode, SubmitShortcut};
+use crate::config::{AppConfig, ConfigStore, DefaultTab, DocConvertEngine, ExecutionMode, SubmitShortcut, SuggestionAcceptKey};
 
 #[tauri::command]
 pub fn get_config(config: State<Arc<ConfigStore>>) -> AppConfig {
@@ -50,6 +50,14 @@ pub fn set_claude_notif_declined(config: State<Arc<ConfigStore>>) -> Result<(), 
     config
         .update(|cfg| { cfg.claude_notif_declined = true; })
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_suggestion_accept_key(
+    key: SuggestionAcceptKey,
+    config: State<Arc<ConfigStore>>,
+) -> Result<(), String> {
+    config.update(|cfg| { cfg.suggestion_accept_key = key; }).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -43,6 +43,9 @@ pub struct AppConfig {
     /// Which shortcut submits the command (Enter vs Shift+Enter, etc).
     #[serde(default)]
     pub submit_shortcut: SubmitShortcut,
+    /// Which key accepts the inline history suggestion (Tab, →, or off).
+    #[serde(default)]
+    pub suggestion_accept_key: SuggestionAcceptKey,
     /// Which engine document conversion prefers (anydoc vs MarkItDown-only).
     #[serde(default)]
     pub doc_convert_engine: DocConvertEngine,
@@ -303,6 +306,7 @@ impl Default for AppConfig {
             appimage_integration_declined: false,
             claude_notif_declined: false,
             submit_shortcut: SubmitShortcut::default(),
+            suggestion_accept_key: SuggestionAcceptKey::default(),
             doc_convert_engine: DocConvertEngine::default(),
             db_connections: vec![],
             default_tab: DefaultTab::default(),
@@ -434,6 +438,16 @@ pub enum SubmitShortcut {
     Enter,
     ShiftEnter,
     CtrlEnter,
+}
+
+/// Which key accepts the inline history suggestion in the command input box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SuggestionAcceptKey {
+    #[default]
+    Tab,
+    Right,
+    Off,
 }
 
 /// Which engine document conversion prefers. `Auto` routes anydoc-covered
@@ -618,6 +632,29 @@ pub struct McpServerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suggestion_accept_key_defaults_to_tab_and_old_configs_without_it_still_parse() {
+        assert_eq!(AppConfig::default().suggestion_accept_key, SuggestionAcceptKey::Tab);
+        // 舊版 config.toml 沒有這個欄位
+        let parsed: AppConfig = toml::from_str("onboarding_done = true\n").unwrap();
+        assert_eq!(parsed.suggestion_accept_key, SuggestionAcceptKey::Tab);
+    }
+
+    #[test]
+    fn suggestion_accept_key_round_trips_through_toml_in_kebab_case() {
+        for (key, text) in [
+            (SuggestionAcceptKey::Tab, "tab"),
+            (SuggestionAcceptKey::Right, "right"),
+            (SuggestionAcceptKey::Off, "off"),
+        ] {
+            let cfg = AppConfig { suggestion_accept_key: key, ..AppConfig::default() };
+            let s = toml::to_string_pretty(&cfg).unwrap();
+            assert!(s.contains(&format!("suggestion_accept_key = \"{text}\"")), "{s}");
+            let back: AppConfig = toml::from_str(&s).unwrap();
+            assert_eq!(back.suggestion_accept_key, key);
+        }
+    }
 
     #[test]
     fn app_config_default_is_empty() {
