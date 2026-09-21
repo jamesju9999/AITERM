@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent } from "react";
 import { isImeComposing } from "../lib/imeComposing";
-import type { SubmitShortcut } from "../ipc/config";
+import type { SubmitShortcut, SuggestionAcceptKey } from "../ipc/config";
+import { findSuggestion } from "../lib/commandSuggestion";
 import { useLocale } from "../contexts/LocaleContext";
 import { listDirectory, type DirEntry } from "../ipc/fs";
 import "./WarpInput.css";
@@ -34,6 +35,12 @@ export interface WarpInputProps {
    * 導覽，退回原本行為完全不受影響。
    */
   onRawKey?: (data: string) => void;
+  /**
+   * 行內歷史建議的接受鍵：`tab`／`right`（向右鍵）會在游標後面用灰字顯示最近一筆
+   * 符合開頭的歷史指令，按對應鍵補上整段（不自動送出）；`off` 或沒傳＝完全不顯示，
+   * 也不攔截任何按鍵，行為與沒有這個功能時相同。
+   */
+  suggestionKey?: SuggestionAcceptKey;
 }
 
 /** Imperative handle exposed via `ref` — lets a parent (e.g. "start typing
@@ -55,7 +62,7 @@ const RAW_KEY_SEQUENCES: Record<string, string> = {
 };
 
 export const WarpInput = forwardRef<WarpInputHandle, WarpInputProps>(function WarpInput(
-  { onSubmit, disabled, shortcut = "enter", sessionId, placeholder, isCommandRunning, onRawKey },
+  { onSubmit, disabled, shortcut = "enter", sessionId, placeholder, isCommandRunning, onRawKey, suggestionKey = "off" },
   ref,
 ) {
   const { t } = useLocale();
@@ -70,6 +77,10 @@ export const WarpInput = forwardRef<WarpInputHandle, WarpInputProps>(function Wa
   const itemsRef = useRef<HTMLDivElement>(null);
   // Saves the input draft before the user starts navigating history
   const draftValueRef = useRef("");
+  // 行內建議只在「游標在文字結尾、沒有選取範圍」時顯示；游標移動不會觸發 onChange，
+  // 所以另外用 select／keyup／click 追蹤。
+  const [caretAtEnd, setCaretAtEnd] = useState(true);
+  const [composing, setComposing] = useState(false);
 
   useImperativeHandle(ref, () => ({
     focus: () => textareaRef.current?.focus(),
@@ -124,6 +135,31 @@ export const WarpInput = forwardRef<WarpInputHandle, WarpInputProps>(function Wa
         textareaRef.current.style.height = "auto";
         textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
       }
+    });
+  };
+
+  // 灰字建議。條件（任何一項不成立就不顯示，也不攔截按鍵）：設定開啟、游標在結尾、
+  // 不在組字中、歷史／目錄選單沒開、沒停用、沒有指令正在跑（那時的按鍵另有用途）。
+  // 文字本身的規則（最新一筆、開頭相同、單行）在 findSuggestion。
+  const suggestion =
+    suggestionKey !== "off" && caretAtEnd && !composing && !historyOpen && !dirPickerOpen &&
+    !disabled && !isCommandRunning
+      ? findSuggestion(history, value)
+      : null;
+
+  const syncCaret = () => {
+    const el = textareaRef.current;
+    if (el) setCaretAtEnd(el.selectionStart === el.selectionEnd && el.selectionEnd === el.value.length);
+  };
+
+  const acceptSuggestion = () => {
+    if (!suggestion) return;
+    fillInput(value + suggestion);
+    // 補上後游標要在結尾；等 React 把新值寫進 textarea 之後再設。
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) el.selectionStart = el.selectionEnd = el.value.length;
+      setCaretAtEnd(true);
     });
   };
 
@@ -229,6 +265,16 @@ export const WarpInput = forwardRef<WarpInputHandle, WarpInputProps>(function Wa
       }
     }
 
+    // 只有被選為接受鍵的那一把才會被攔截；另一把永遠維持原本行為。
+    // 帶修飾鍵（Shift／Ctrl／Meta／Alt）的一律不當成接受。
+    if (suggestion && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if ((e.key === "Tab" && suggestionKey === "tab") || (e.key === "ArrowRight" && suggestionKey === "right")) {
+        e.preventDefault();
+        acceptSuggestion();
+        return;
+      }
+    }
+
     let shouldSubmit = false;
 
     if (e.key === "Enter") {
@@ -307,6 +353,7 @@ export const WarpInput = forwardRef<WarpInputHandle, WarpInputProps>(function Wa
       textareaRef.current.style.height = "auto";
       textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
     }
+    syncCaret();
   };
 
   return (
@@ -383,19 +430,32 @@ export const WarpInput = forwardRef<WarpInputHandle, WarpInputProps>(function Wa
         📁
       </button>
       <div className="warp-input-prompt">▶</div>
-      <textarea
-        ref={textareaRef}
-        className="warp-input-textarea"
-        value={value}
-        onChange={handleChange}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder ?? t.input_placeholder(shortcut === "enter" ? "Enter" : shortcut === "shift-enter" ? "Shift+Enter" : "Ctrl+Enter")}
-        rows={1}
-        disabled={disabled}
-        autoCorrect="off"
-        autoCapitalize="off"
-        spellCheck={false}
-      />
+      <div className="warp-input-field">
+        {suggestion && (
+          <div className="warp-input-ghost" aria-hidden="true">
+            <span className="warp-input-ghost-typed">{value}</span>
+            <span className="warp-input-ghost-suggestion">{suggestion}</span>
+          </div>
+        )}
+        <textarea
+          ref={textareaRef}
+          className="warp-input-textarea"
+          value={value}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          onKeyUp={syncCaret}
+          onSelect={syncCaret}
+          onClick={syncCaret}
+          onCompositionStart={() => setComposing(true)}
+          onCompositionEnd={() => setComposing(false)}
+          placeholder={placeholder ?? t.input_placeholder(shortcut === "enter" ? "Enter" : shortcut === "shift-enter" ? "Shift+Enter" : "Ctrl+Enter")}
+          rows={1}
+          disabled={disabled}
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+        />
+      </div>
       <button
         type="button"
         className="warp-send-btn"

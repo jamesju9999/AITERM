@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { LocaleProvider } from "../contexts/LocaleContext";
 
@@ -12,6 +12,7 @@ import { WarpInput } from "./WarpInput";
 
 beforeEach(() => {
   invokeMock.mockReset();
+  localStorage.clear();
 });
 
 function renderInput(onSubmit = vi.fn()) {
@@ -195,5 +196,159 @@ describe("WarpInput — 指令執行中時，導覽鍵直接轉發給 PTY（onRa
 
     expect(onRawKey).not.toHaveBeenCalled();
     expect(onSubmit).toHaveBeenCalledWith("ls");
+  });
+});
+
+describe("WarpInput — 歷史灰字建議", () => {
+  const HISTORY_KEY = "aiterm-command-history";
+  type Key = "tab" | "right" | "off" | undefined;
+
+  function renderWith(
+    suggestionKey: Key,
+    opts: { history?: string[]; isCommandRunning?: boolean } = {},
+  ) {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(opts.history ?? ["git status", "git stash"]));
+    const onSubmit = vi.fn();
+    render(
+      <LocaleProvider>
+        <WarpInput
+          onSubmit={onSubmit}
+          sessionId="s1"
+          suggestionKey={suggestionKey}
+          isCommandRunning={opts.isCommandRunning}
+        />
+      </LocaleProvider>,
+    );
+    return { ta: screen.getByRole("textbox") as HTMLTextAreaElement, onSubmit };
+  }
+  const ghost = () => document.querySelector(".warp-input-ghost-suggestion");
+  const typeText = (ta: HTMLTextAreaElement, value: string) =>
+    fireEvent.change(ta, { target: { value } });
+  // fireEvent 回傳 false 代表事件被 preventDefault
+  const press = (ta: HTMLTextAreaElement, key: string) => fireEvent.keyDown(ta, { key });
+
+  it("tab 模式：輸入開頭後，游標後面顯示最新一筆符合歷史的剩餘部分（灰字），輸入框的值不變", () => {
+    const { ta } = renderWith("tab");
+    typeText(ta, "git s");
+    expect(ghost()?.textContent).toBe("tash"); // git stash 比 git status 新
+    expect(ta.value).toBe("git s");
+  });
+
+  it("空輸入、沒有符合的歷史：沒有灰字", () => {
+    const { ta } = renderWith("tab");
+    expect(ghost()).toBeNull();
+    typeText(ta, "docker");
+    expect(ghost()).toBeNull();
+  });
+
+  it("off 模式與沒傳 suggestionKey：完全沒有灰字", () => {
+    for (const key of ["off", undefined] as const) {
+      const { ta } = renderWith(key);
+      typeText(ta, "git s");
+      expect(ghost()).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("tab 模式：Tab 補上整段建議（被 preventDefault），而且不會送出", () => {
+    const { ta, onSubmit } = renderWith("tab");
+    typeText(ta, "git s");
+    const notPrevented = press(ta, "Tab");
+    expect(notPrevented).toBe(false);
+    expect(ta.value).toBe("git stash");
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(ghost()).toBeNull(); // 補上後已與歷史相同，不再有剩餘部分
+  });
+
+  it("tab 模式：→ 不接受建議，維持原本的移動游標", () => {
+    const { ta } = renderWith("tab");
+    typeText(ta, "git s");
+    expect(press(ta, "ArrowRight")).toBe(true);
+    expect(ta.value).toBe("git s");
+  });
+
+  it("right 模式：游標在結尾按 → 補上建議（被 preventDefault）；Tab 不接受也不攔", () => {
+    const { ta } = renderWith("right");
+    typeText(ta, "git s");
+    expect(press(ta, "Tab")).toBe(true);
+    expect(ta.value).toBe("git s");
+    expect(press(ta, "ArrowRight")).toBe(false);
+    expect(ta.value).toBe("git stash");
+  });
+
+  it("right 模式：游標不在結尾時沒有灰字，→ 只是移動游標", () => {
+    const { ta } = renderWith("right");
+    typeText(ta, "git s");
+    ta.setSelectionRange(2, 2);
+    fireEvent.keyUp(ta, { key: "ArrowLeft" });
+    expect(ghost()).toBeNull();
+    expect(press(ta, "ArrowRight")).toBe(true);
+    expect(ta.value).toBe("git s");
+  });
+
+  it("off 模式：Tab 與 → 都維持原本行為", () => {
+    const { ta } = renderWith("off");
+    typeText(ta, "git s");
+    expect(press(ta, "Tab")).toBe(true);
+    expect(press(ta, "ArrowRight")).toBe(true);
+    expect(ta.value).toBe("git s");
+  });
+
+  it("tab 模式但沒有建議時：Tab 不被攔截（維持原本行為）", () => {
+    const { ta } = renderWith("tab");
+    typeText(ta, "docker");
+    expect(press(ta, "Tab")).toBe(true);
+  });
+
+  it("帶 Shift／Ctrl／Meta／Alt 的 Tab 不接受建議", () => {
+    const { ta } = renderWith("tab");
+    typeText(ta, "git s");
+    for (const mod of ["shiftKey", "ctrlKey", "metaKey", "altKey"] as const) {
+      expect(fireEvent.keyDown(ta, { key: "Tab", [mod]: true })).toBe(true);
+    }
+    expect(ta.value).toBe("git s");
+  });
+
+  it("指令執行中：沒有灰字（這時輸入框的按鍵另有用途）", () => {
+    const { ta } = renderWith("tab", { isCommandRunning: true });
+    typeText(ta, "git s");
+    expect(ghost()).toBeNull();
+  });
+
+  it("按 ↑ 開歷史清單後：沒有灰字", () => {
+    // 較新的 "git stash" 之外還有較舊、更長的符合者——若沒把「清單開啟」納入條件，
+    // 填入 "git stash" 之後灰字會殘留成 " --all"。
+    const { ta } = renderWith("tab", { history: ["git stash --all", "git stash"] });
+    press(ta, "ArrowUp");
+    expect(ta.value).toBe("git stash");
+    expect(ghost()).toBeNull();
+  });
+
+  it("目錄選單開啟時：沒有灰字", async () => {
+    invokeMock.mockResolvedValueOnce([]);
+    const { ta } = renderWith("tab");
+    typeText(ta, "git s");
+    expect(ghost()).not.toBeNull();
+    await userEvent.setup().click(screen.getByTitle("切換目錄"));
+    await waitFor(() => expect(screen.getByText(/\.\. \(/)).toBeInTheDocument());
+    expect(ghost()).toBeNull();
+  });
+
+  it("輸入法組字中：沒有灰字，組字結束後恢復", () => {
+    const { ta } = renderWith("tab");
+    typeText(ta, "git s");
+    expect(ghost()).not.toBeNull();
+    fireEvent.compositionStart(ta);
+    expect(ghost()).toBeNull();
+    fireEvent.compositionEnd(ta);
+    expect(ghost()?.textContent).toBe("tash");
+  });
+
+  it("按 Enter 送出的是輸入的原文，不含灰字", () => {
+    const { ta, onSubmit } = renderWith("tab");
+    typeText(ta, "git s");
+    press(ta, "Enter");
+    expect(onSubmit).toHaveBeenCalledWith("git s");
+    expect(ghost()).toBeNull();
   });
 });

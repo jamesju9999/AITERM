@@ -79,8 +79,40 @@
   font-size: 12px;
 }
 
+/* 行內歷史建議：灰字疊在 textarea 後面。overlay 的字型、行高與換行規則必須與
+   textarea 完全一致，前半段（已輸入的文字）用 visibility:hidden 佔位，灰字才會
+   接在游標後面。 */
+.warp-input-field {
+  position: relative;
+  flex: 1;
+  display: flex;
+  min-width: 0;
+}
+
+.warp-input-ghost {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.warp-input-ghost-typed {
+  visibility: hidden;
+}
+
+.warp-input-ghost-suggestion {
+  color: #6b6b6b;
+}
+
 .warp-input-textarea {
   flex: 1;
+  position: relative;
+  min-width: 0;
   background: transparent;
   color: #e6e6e6;
   border: none;

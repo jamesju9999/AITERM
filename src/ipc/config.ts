@@ -23,6 +23,9 @@ export type ExecutionMode = "always-confirm" | "graded" | "full-auto";
 
 export type SubmitShortcut = "enter" | "shift-enter" | "ctrl-enter";
 
+/** 行內歷史建議的接受鍵：Tab、→（向右鍵），或關閉建議。 */
+export type SuggestionAcceptKey = "tab" | "right" | "off";
+
 export type DefaultTab = "terminal" | "database";
 
 export type DocConvertEngine = "auto" | "markitdown_only";
@@ -50,6 +53,8 @@ export interface AppConfig {
   providers: ProviderConfig[];
   execution_mode: ExecutionMode;
   submit_shortcut: SubmitShortcut;
+  /** 舊版 config 沒有這個欄位時後端會補預設值 tab；前端讀取時仍以 `?? "tab"` 防呆。 */
+  suggestion_accept_key?: SuggestionAcceptKey;
   doc_convert_engine: DocConvertEngine;
   onboarding_done: boolean;
   max_agent_steps: number; // 0 = unlimited
@@ -77,6 +82,9 @@ export const setOnboardingDone = (): Promise<void> =>
 
 export const setSubmitShortcut = (shortcut: SubmitShortcut): Promise<void> =>
   invoke("set_submit_shortcut", { shortcut });
+
+export const setSuggestionAcceptKey = (key: SuggestionAcceptKey): Promise<void> =>
+  invoke("set_suggestion_accept_key", { key });
 
 export const setDocConvertEngine = (engine: DocConvertEngine): Promise<void> =>
   invoke("set_doc_convert_engine", { engine });
