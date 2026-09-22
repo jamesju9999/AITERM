@@ -227,6 +227,7 @@ function ChatPanelShellInner({
     const text = input.trim();
     if ((!text && !allowEmptySubmit) || isDisabled) return;
     setInput("");
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
     if (agentMode) {
       onSubmitAgent(text);
     } else {
@@ -243,6 +244,16 @@ function ChatPanelShellInner({
         (submitShortcut === "ctrl-enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey);
       if (shouldSubmit) { e.preventDefault(); submit(); }
     }
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value);
+    // 跟 WarpInput 一樣的自動長高做法：先收回 auto 讓 scrollHeight 量到
+    // 「內容實際需要多高」而不是被上一次設定的固定高度卡住，再撐到那個高度。
+    // 面板本身的 max-height（見 styles.css）負責擋住無限長高。
+    const el = e.target;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
   };
 
   const panelClass = [
@@ -431,7 +442,7 @@ function ChatPanelShellInner({
               ref={textareaRef}
               className="aiterm-ai-panel-input"
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={handleChange}
               onKeyDown={handleKeyDown}
               onPaste={onPaste}
               placeholder={

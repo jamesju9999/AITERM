@@ -212,4 +212,38 @@ describe("ChatPanelShell", () => {
     fireEvent.paste(textbox, { clipboardData: { getData: () => "", files: [] } });
     expect(onPaste).toHaveBeenCalled();
   });
+
+  describe("輸入框自動長高", () => {
+    // jsdom 不會真的排版，scrollHeight 永遠是 0——用 Object.defineProperty
+    // 蓋掉它來模擬「內容變多、瀏覽器量出來的高度變高」，這樣才驗得到
+    // 真正的自動長高邏輯，而不是巧合通過。
+
+    function stubScrollHeight(el: HTMLElement, px: number) {
+      Object.defineProperty(el, "scrollHeight", { configurable: true, value: px });
+    }
+
+    it("Shift+Enter 換行後，框跟著內容的 scrollHeight 長高", () => {
+      render(<ChatPanelShell {...base()} />);
+      const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+      stubScrollHeight(textbox, 80);
+
+      fireEvent.change(textbox, { target: { value: "line1\nline2\nline3" } });
+
+      expect(textbox.style.height).toBe("80px");
+    });
+
+    it("送出後高度重置回單行", () => {
+      const onSend = vi.fn();
+      render(<ChatPanelShell {...base({ onSend })} />);
+      const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+      stubScrollHeight(textbox, 80);
+      fireEvent.change(textbox, { target: { value: "line1\nline2" } });
+      expect(textbox.style.height).toBe("80px");
+
+      fireEvent.keyDown(textbox, { key: "Enter" });
+
+      expect(onSend).toHaveBeenCalledWith("line1\nline2");
+      expect(textbox.style.height).toBe("auto");
+    });
+  });
 });
