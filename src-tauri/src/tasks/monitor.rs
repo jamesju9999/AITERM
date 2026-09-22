@@ -267,9 +267,14 @@ mod tests {
         let pty = PtyManager::new();
         let tab = pty.create_with_callback(size(), |_| {}).unwrap();
         let (_tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
+        // 跟 interactive_mode_still_fails_on_nonzero_exit 同一個離開碼賽跑
+        // （見那邊的註解）：Auto 模式一樣是靠離開碼判斷失敗，一樣會被 shell
+        // 自己啟動時送的第一個 D;0 搶先誤判成 Success。
+        settle_exit_code(&pty, &tab).await;
         pty.write(&tab, b"sh -c 'exit 3'\n").unwrap();
 
-        let outcome = watch(&pty, &tab, rx, Baselines::default(), test_thresholds(), WatchMode::Auto).await;
+        let outcome =
+            watch(&pty, &tab, rx, baselines_now(&pty, &tab), test_thresholds(), WatchMode::Auto).await;
         match outcome {
             TaskOutcome::Failed(msg) => assert!(msg.contains('3'), "{msg}"),
             other => panic!("expected Failed, got {other:?}"),

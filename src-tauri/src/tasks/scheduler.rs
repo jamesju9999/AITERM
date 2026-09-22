@@ -752,9 +752,24 @@ mod loop_tests {
     /// 目錄，而 `tasks.db` 正被這個池子開著——直接 `remove_dir_all` 在
     /// Windows CI 上會失敗（實際踩過）。關掉池子不影響這幾個測試要驗的
     /// 東西：`drain_once` 是先看資料夾在不在，根本還沒碰到池子。
+    ///
+    /// `pool.close().await` 回傳不保證 Windows 那邊的 OS 檔案控制代碼
+    /// 當下就真的放開——CI 上還是踩過一次 `remove_dir_all` 噴
+    /// `Os { code: 32 }`（檔案被另一個行程用著）。跟 monitor.rs 的
+    /// `settle_exit_code` 同一種做法：重試而不是相信「呼叫完就代表生效」。
     async fn vanish(project: &ProjectHandle) {
         project.pool.close().await;
-        std::fs::remove_dir_all(&project.path).unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match std::fs::remove_dir_all(&project.path) {
+                Ok(()) => return,
+                Err(e) if tokio::time::Instant::now() < deadline => {
+                    let _ = e;
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                Err(e) => panic!("remove_dir_all({}) 一直失敗: {e}", project.path.display()),
+            }
+        }
     }
 
     /// 只記錄「誰被派工了」，不碰資料庫。資料夾已經被刪掉的專案沒辦法
