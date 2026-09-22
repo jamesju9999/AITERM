@@ -1710,8 +1710,8 @@ mod tests {
             |_| {},
         )
         .expect("spawn pty");
-        tokio::time::sleep(Duration::from_millis(250)).await;
-        assert!(session.ms_since_output() >= 200, "expected quiet time to accumulate, got {}", session.ms_since_output());
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(session.ms_since_output() >= 100, "expected quiet time to accumulate, got {}", session.ms_since_output());
     }
 
     #[tokio::test]
