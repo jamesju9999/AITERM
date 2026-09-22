@@ -1,6 +1,6 @@
 import React, { useEffect } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 
@@ -142,7 +142,22 @@ function mountAppStrict() {
 // 刻意不假造 setTimeout：waitFor／findBy／userEvent 內部要用真的計時器，否則會卡死。
 const RUN_SHIELD_MS = 600;
 const freezeClock = () => vi.useFakeTimers({ toFake: ["Date", "performance"] });
-const pastRunShield = () => vi.advanceTimersByTime(RUN_SHIELD_MS);
+
+// 推過防連點保護期。兩件事都不能省，各自擋掉一種「執行被靜靜吞掉」的失敗：
+//
+// 1. **先把還沒跑的 effect flush 掉**。保護期的基準點是 LaunchScriptConfirm 在
+//    mount effect 裡抓的 `performance.now()`，而且基準點還沒抓到時一律當成還在
+//    保護期內（fail closed）。基準點若是在下面那行推進**之後**才抓的，抓到的就是
+//    推進後的時間，保護期等於從頭開始，接著那一下「執行」會被吞掉——而且沒有任何
+//    錯誤訊息，只會變成「分頁沒出現」。
+// 2. **多推 50ms**。原本剛好推 RUN_SHIELD_MS，而元件的判斷式是
+//    `performance.now() - shownAt < RUN_SHIELD_MS`，等於容錯是 0 毫秒。實測把推進
+//    量改成 RUN_SHIELD_MS - 1，失敗訊息跟 CI 上那次偶發失敗一模一樣
+//    （`expected [] to have a length of 1`）——那次就是這樣來的。
+const pastRunShield = async () => {
+  await act(async () => {});
+  vi.advanceTimersByTime(RUN_SHIELD_MS + 50);
+};
 
 const tabsWith = (attr: "data-cwd" | "data-cmd", value: string) =>
   screen.queryAllByTestId("tv").filter((el) => el.getAttribute(attr) === value);
@@ -255,11 +270,16 @@ describe("TerminalApp launch requests", () => {
     await screen.findByRole("dialog");
     expect(screen.getByRole("dialog")).toHaveTextContent("/tmp/proj/go.command");
     expect(tabsWith("data-cwd", "/tmp/proj")).toHaveLength(0);
-    pastRunShield();
+    await pastRunShield();
     await userEvent.click(screen.getByTestId("launch-script-run"));
+    // 先斷言對話框關掉，再斷言分頁。這一行把兩種完全不同的失敗分開：對話框還開著
+    // ＝那一下「執行」被防連點保護吞了（保護期的基準點沒對齊，見 pastRunShield 的
+    // 註解）；對話框關了卻沒有分頁＝建分頁那條路壞了。反過來寫的話，兩種都只會變成
+    // 「expected [] to have a length of 1」，看不出是哪一種——CI 上那次偶發失敗就是
+    // 這樣，得回頭重建現場才知道發生什麼事。
+    expect(screen.queryByRole("dialog")).toBeNull();
     await waitFor(() => expect(tabsWith("data-cmd", "/tmp/proj/go.command")).toHaveLength(1));
     expect(tabsWith("data-cwd", "/tmp/proj")).toHaveLength(1);
-    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("skipping a script still opens the directory but runs nothing", async () => {
@@ -292,7 +312,7 @@ describe("TerminalApp launch requests", () => {
     freezeClock();
     mountApp();
     await screen.findByRole("dialog");
-    pastRunShield();
+    await pastRunShield();
     await userEvent.click(screen.getByTestId("launch-script-run"));
     // 第一個腳本已核准；第二個對話框在同一個位置重新掛載。雙擊的第二下立刻落在它的「執行」上。
     expect(screen.getByRole("dialog")).toHaveTextContent("/b/two.command");
@@ -301,7 +321,7 @@ describe("TerminalApp launch requests", () => {
     expect(tabsWith("data-cmd", "/b/two.command")).toHaveLength(0);
     expect(screen.getByRole("dialog")).toHaveTextContent("/b/two.command");
     // 使用者真的讀過之後再點，就照常執行。
-    pastRunShield();
+    await pastRunShield();
     await userEvent.click(screen.getByTestId("launch-script-run"));
     await waitFor(() => expect(tabsWith("data-cmd", "/b/two.command")).toHaveLength(1));
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -317,7 +337,7 @@ describe("TerminalApp launch requests", () => {
     await screen.findByRole("dialog");
     // 滑鼠點「執行」會把焦點留在「執行」上；如果第二個對話框重用同一個元件實例，
     // autoFocus 不會重新觸發，焦點就還在「執行」上。
-    pastRunShield();
+    await pastRunShield();
     await userEvent.click(screen.getByTestId("launch-script-run"));
     await waitFor(() => expect(screen.getByRole("dialog")).toHaveTextContent("/b/two.command"));
     expect(screen.getByTestId("launch-script-skip")).toHaveFocus();
