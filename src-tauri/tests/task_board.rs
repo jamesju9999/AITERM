@@ -32,12 +32,24 @@ impl Dispatcher for RealPtyDispatcher {
             .map_err(|e| e.to_string())?;
         store::set_tab_id(&project.pool, &task.id, &tab_id).await.map_err(|e| e.to_string())?;
 
+        // `watch()` treats *any change* in the exit code as "this task
+        // finished". A fresh session reports `None`, so the first `D;0` the
+        // shell emits during its own startup reads as `None → Some(0)` and the
+        // card is marked success before the script has even run. Push the exit
+        // code to a known `Some(0)` first, exactly as monitor.rs's own tests do.
+        settle_exit_code(&self.pty, &tab_id).await;
+
         let script = self.script.replace("{marker}", &done_marker(&tab_id));
         self.pty
             .write(&tab_id, format!("{script}\n").as_bytes())
             .map_err(|e| e.to_string())?;
 
-        let baselines = Baselines::default();
+        // Baselines must come from the live session, not `default()`'s zeroes:
+        // the settling command above already moved the bell/marker counts.
+        let baselines = Baselines {
+            bell: self.pty.bell_count(&tab_id).unwrap_or(0),
+            marker: self.pty.marker_count(&tab_id).unwrap_or(0),
+        };
         let thresholds = Thresholds { quiet_stuck_ms: 10_000, poll_ms: 50, min_run_ms: 0 };
         let pty = self.pty.clone();
         let pool = project.pool.clone();
@@ -96,6 +108,24 @@ async fn one_project_registry() -> (ProjectRegistry, ProjectHandle, tempfile::Te
     (reg, handle, parent)
 }
 
+/// Run a harmless command and wait until the shell has reported exit code 0.
+///
+/// Mirrors monitor.rs's test helper of the same name — see the long comment
+/// there for why this is needed. Duplicated rather than shared because that one
+/// lives in a `#[cfg(test)]` module of the library crate, which an integration
+/// test cannot reach.
+async fn settle_exit_code(pty: &PtyManager, tab: &str) {
+    pty.write(tab, b"true\n").unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while pty.last_exit_code(tab) != Some(0) {
+        assert!(tokio::time::Instant::now() < deadline, "shell 一直沒有送出 OSC133 D;0");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    while pty.ms_since_output(tab).unwrap_or(0) < 300 {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 async fn wait_done(pool: &sqlx::SqlitePool, id: &str) -> TaskRow {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
@@ -139,7 +169,10 @@ async fn card_that_exits_nonzero_is_marked_failed() {
 
     let row = wait_done(&project.pool, &id).await;
     assert_eq!(row.outcome.as_deref(), Some("failed"), "{row:?}");
-    assert!(row.error_message.unwrap_or_default().contains('2'));
+    // Not `contains('2')`: the stuck-timeout message ("疑似卡住（120 秒無輸出）")
+    // contains a '2' as well, so that spelling passes even when the card failed
+    // for the wrong reason.
+    assert!(row.error_message.unwrap_or_default().contains("exit code 2"));
 }
 
 #[tokio::test]
