@@ -346,8 +346,16 @@ mod tests {
         let pty = PtyManager::new();
         let tab = pty.create_with_callback(size(), |_| {}).unwrap();
         let (_tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
+        // 跟 3de8ea4b 修掉的另外三個測試同一個賽跑，這個測試當時漏改：
+        // session 剛開起來離開碼是 None，shell 啟動流程自己送的第一個
+        // D;0（None → Some(0)）會被 watch() 當成「任務剛完成」直接回
+        // Success，`exit 3` 真正的 D;3 根本還沒送到就已經回傳了——CI 上
+        // 的 shell 環境才會踩到，本機重現不出來。settle_exit_code 先把
+        // 離開碼推成 Some(0)，讓後續的 D;3 變成真正的「變化」。
+        settle_exit_code(&pty, &tab).await;
         pty.write(&tab, b"sh -c 'exit 3'\n").unwrap();
-        let outcome = watch(&pty, &tab, rx, Baselines::default(), test_thresholds(), WatchMode::Interactive).await;
+        let outcome =
+            watch(&pty, &tab, rx, baselines_now(&pty, &tab), test_thresholds(), WatchMode::Interactive).await;
         match outcome {
             TaskOutcome::Failed(msg) => assert!(msg.contains('3'), "{msg}"),
             other => panic!("expected Failed, got {other:?}"),
