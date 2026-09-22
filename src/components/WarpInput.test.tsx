@@ -199,6 +199,92 @@ describe("WarpInput — 指令執行中時，導覽鍵直接轉發給 PTY（onRa
   });
 });
 
+describe("WarpInput — 指令執行中時，Ctrl+C／D／Z 轉發控制字元給 PTY（onRawKey）", () => {
+  // 使用者回報：一個一直輸出 log 的指令跑著，焦點在輸入框，按 Ctrl+C 停不下來。
+  // 這個框是普通 textarea，Ctrl+C 只會被瀏覽器當成「複製」，從來沒有送 \x03。
+
+  function setup(opts: { isCommandRunning?: boolean } = { isCommandRunning: true }) {
+    const onRawKey = vi.fn();
+    render(
+      <LocaleProvider>
+        <WarpInput
+          onSubmit={vi.fn()}
+          sessionId="s1"
+          isCommandRunning={opts.isCommandRunning}
+          onRawKey={onRawKey}
+        />
+      </LocaleProvider>,
+    );
+    return { onRawKey, ta: screen.getByRole("textbox") as HTMLTextAreaElement };
+  }
+
+  it("有指令在跑、沒有選取文字時，Ctrl+C 送 \\x03，而且吃掉這個按鍵（不觸發瀏覽器複製）", () => {
+    const { onRawKey, ta } = setup();
+
+    const notPrevented = fireEvent.keyDown(ta, { key: "c", ctrlKey: true });
+
+    expect(onRawKey).toHaveBeenCalledWith("\x03");
+    expect(notPrevented).toBe(false);
+  });
+
+  it("輸入框裡有文字但沒選取時，Ctrl+C 仍然中斷指令，並保留已輸入的文字", () => {
+    const { onRawKey, ta } = setup();
+    fireEvent.change(ta, { target: { value: "next cmd" } });
+    ta.setSelectionRange(8, 8);
+
+    fireEvent.keyDown(ta, { key: "c", ctrlKey: true });
+
+    expect(onRawKey).toHaveBeenCalledWith("\x03");
+    expect(ta.value).toBe("next cmd");
+  });
+
+  it("有選取文字時，Ctrl+C 維持「複製」，不送 \\x03", () => {
+    const { onRawKey, ta } = setup();
+    fireEvent.change(ta, { target: { value: "copy me" } });
+    ta.setSelectionRange(0, 4);
+
+    const notPrevented = fireEvent.keyDown(ta, { key: "c", ctrlKey: true });
+
+    expect(onRawKey).not.toHaveBeenCalled();
+    expect(notPrevented).toBe(true);
+  });
+
+  it("沒有指令在跑時，Ctrl+C 不轉發（沒有東西可中斷）", () => {
+    const { onRawKey, ta } = setup({ isCommandRunning: false });
+
+    fireEvent.keyDown(ta, { key: "c", ctrlKey: true });
+
+    expect(onRawKey).not.toHaveBeenCalled();
+  });
+
+  it("Cmd+C（macOS 的複製）不會被當成中斷", () => {
+    const { onRawKey, ta } = setup();
+
+    fireEvent.keyDown(ta, { key: "c", metaKey: true });
+
+    expect(onRawKey).not.toHaveBeenCalled();
+  });
+
+  it("輸入框是空的時，Ctrl+D 送 \\x04、Ctrl+Z 送 \\x1a", () => {
+    const { onRawKey, ta } = setup();
+
+    fireEvent.keyDown(ta, { key: "d", ctrlKey: true });
+    fireEvent.keyDown(ta, { key: "z", ctrlKey: true });
+
+    expect(onRawKey.mock.calls.map((c) => c[0])).toEqual(["\x04", "\x1a"]);
+  });
+
+  it("輸入框有文字時，Ctrl+D／Ctrl+Z 不轉發（避免誤送 EOF／暫停）", () => {
+    const { onRawKey, ta } = setup();
+    fireEvent.change(ta, { target: { value: "ls" } });
+
+    fireEvent.keyDown(ta, { key: "d", ctrlKey: true });
+    fireEvent.keyDown(ta, { key: "z", ctrlKey: true });
+
+    expect(onRawKey).not.toHaveBeenCalled();
+  });
+});
+
 describe("WarpInput — 歷史灰字建議", () => {
   const HISTORY_KEY = "aiterm-command-history";
   type Key = "tab" | "right" | "off" | undefined;

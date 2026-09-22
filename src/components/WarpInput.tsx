@@ -61,6 +61,13 @@ const RAW_KEY_SEQUENCES: Record<string, string> = {
   Escape: "\x1b",
 };
 
+/** Ctrl+<字母> → 對應的控制字元。只在「有指令正在跑」時轉發，見 handleKeyDown。 */
+const CTRL_KEY_SEQUENCES: Record<string, string> = {
+  c: "\x03", // SIGINT
+  d: "\x04", // EOF
+  z: "\x1a", // SIGTSTP
+};
+
 export const WarpInput = forwardRef<WarpInputHandle, WarpInputProps>(function WarpInput(
   { onSubmit, disabled, shortcut = "enter", sessionId, placeholder, isCommandRunning, onRawKey, suggestionKey = "off" },
   ref,
@@ -259,6 +266,22 @@ export const WarpInput = forwardRef<WarpInputHandle, WarpInputProps>(function Wa
     if (isCommandRunning && onRawKey && !value && !historyOpen && !dirPickerOpen) {
       const raw = RAW_KEY_SEQUENCES[e.key];
       if (raw) {
+        e.preventDefault();
+        onRawKey(raw);
+        return;
+      }
+    }
+
+    // 有指令正在跑時，Ctrl+C／D／Z 要像真的終端機一樣送給它，否則 textarea 只會把
+    // Ctrl+C 當成「複製」，跑不停的指令（tail -f、dev server）在這個框裡按什麼都停不下來。
+    // 讓出的情況：有選取文字時 Ctrl+C 仍是複製；D／Z 只在框是空的時才轉發，
+    // 避免使用者正在打下一個指令時誤送 EOF 或把程式暫停。Cmd+C（macOS 複製）、
+    // Ctrl+Shift+C（Windows/Linux 複製）帶了其他修飾鍵，一律不碰。
+    if (isCommandRunning && onRawKey && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+      const key = e.key.toLowerCase();
+      const raw = CTRL_KEY_SEQUENCES[key];
+      const hasSelection = e.currentTarget.selectionStart !== e.currentTarget.selectionEnd;
+      if (raw && (key === "c" ? !hasSelection : !value)) {
         e.preventDefault();
         onRawKey(raw);
         return;
