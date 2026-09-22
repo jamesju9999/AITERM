@@ -243,6 +243,13 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
+        // 記住視窗大小/位置/是否最大化，下次啟動自動還原。存檔時機是
+        // RunEvent::Exit（跟下面 mail::poller::stop_all 那個收尾用的是
+        // 同一個事件），跟 v1.32.0 的關閉確認流程（quit.rs）天生相容：
+        // 使用者在確認對話框按取消時 App 不會結束，Exit 不會觸發，狀態
+        // 也就不會被提早存下去。見 docs/superpowers/specs/
+        // 2026-09-22-window-size-persistence-design.md。
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(
             tauri_plugin_log::Builder::default()
                 .level(log::LevelFilter::Info)
