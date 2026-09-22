@@ -1710,8 +1710,27 @@ mod tests {
             |_| {},
         )
         .expect("spawn pty");
-        tokio::time::sleep(Duration::from_millis(400)).await;
-        assert!(session.ms_since_output() >= 100, "expected quiet time to accumulate, got {}", session.ms_since_output());
+        // Windows ConPTY emits its own startup sequences *after* spawn() returns
+        // (measured >60ms late on CI), and every one of them resets the counter.
+        // So poll until the session is genuinely quiet instead of assuming the
+        // startup burst fits inside a fixed sleep.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "expected quiet time to accumulate, last reading {}",
+                session.ms_since_output(),
+            );
+            if session.ms_since_output() < 200 {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+            let first = session.ms_since_output();
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            if session.ms_since_output() > first {
+                break;
+            }
+        }
     }
 
     #[tokio::test]
