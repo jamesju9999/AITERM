@@ -6,6 +6,7 @@ import { LocaleProvider } from "../../contexts/LocaleContext";
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn().mockResolvedValue("/repo"),
   confirm: vi.fn().mockResolvedValue(true),
+  message: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../ipc/tasks", () => ({
@@ -22,7 +23,10 @@ vi.mock("../../ipc/tasks", () => ({
   removeAttachment: vi.fn(),
   saveTranscript: vi.fn().mockResolvedValue(undefined),
   markTaskDone: vi.fn().mockResolvedValue(undefined),
-  mergeTaskWorktree: vi.fn().mockResolvedValue(undefined),
+  // 回傳真正的成功形狀（見 ipc/tasks.ts 的 MergeOutcome）——回 undefined 會讓
+  // TaskCard 的 mergeWorktree 讀 outcome.status 直接炸掉，落到 catch 分支再去
+  // 呼叫 message()，跟這個測試真正想驗證的「有沒有呼叫 mergeTaskWorktree」無關。
+  mergeTaskWorktree: vi.fn().mockResolvedValue({ status: "merged" }),
   archiveTask: vi.fn().mockResolvedValue(undefined),
   unarchiveTask: vi.fn().mockResolvedValue(undefined),
   archiveDoneTasks: vi.fn().mockResolvedValue(2),
@@ -52,6 +56,15 @@ vi.mock("../../lib/terminalInstanceRegistry", () => ({
 
 vi.mock("../../lib/runningTaskTabRegistry", () => ({
   setRunningTaskTabs: vi.fn(),
+}));
+
+// TaskCard 掛載時就訂閱 "task-merge-progress"（見 TaskCard.tsx）；這裡渲染的是
+// 真的 TaskCard（見下方「用真的 TaskCard」的說明），沒 mock 掉的話 listen() 會
+// 打到真正的 @tauri-apps/api，在 jsdom 裡沒有 window.__TAURI_INTERNALS__，
+// 丟出 unhandled rejection，讓整個測試檔案的結果變成失敗，即使每一個具名測試
+// 自己都通過（同一類問題，見上面 ipc/provider、ipc/bridge 的註解）。
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(vi.fn()),
 }));
 
 import { listTasks, onTasksUpdated, moveTask, archiveTask, archiveDoneTasks, listArchivedTasks, unarchiveTask, setTaskLabel, mergeTaskWorktree } from "../../ipc/tasks";
