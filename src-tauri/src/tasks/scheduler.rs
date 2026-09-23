@@ -226,7 +226,6 @@ impl Dispatcher for RealDispatcher {
         let task_id = task.id.clone();
         let task_title = task.title.clone();
         let project_name = project.name.clone();
-        let work_dir = effective_dir;
         // move 而不是 clone——上面兩處用的都是 `as_deref()`，`session_id`
         // 之後不再被碰。
         let session_id_for_watch = session_id;
@@ -249,7 +248,6 @@ impl Dispatcher for RealDispatcher {
             persist_outcome(
                 &pool,
                 crate::tasks::session_log::claude_projects_root().as_deref(),
-                &work_dir,
                 session_id_for_watch.as_deref(),
                 &project_path,
                 &task_id,
@@ -310,11 +308,6 @@ fn write_transcript(
 /// 需要 `AppHandle`（`tauri` 依賴沒開 `test` feature，見 dispatch.rs 測試模組
 /// 裡關於 `mock_builder` 的註解），而這一段不需要——抽出來就測得到。
 ///
-/// 值得測的是參數的對應關係：`work_dir`（被施工的 repo）決定去
-/// `~/.claude/projects` 的哪個資料夾找，`project_path`（卡片所屬的專案資料夾）
-/// 決定複製到哪裡。兩個都是 `&Path`，交換了會編譯通過但靜默出錯——來源找不到
-/// 看起來就像「沒有 session 檔」，目的地寫錯則沒有任何訊號。
-///
 /// `projects_root` 收 `Option<&Path>` 而不是自己呼叫 `claude_projects_root()`，
 /// 純粹是為了讓測試能注入一棵假的樹。production 傳的就是那個函式的結果。
 ///
@@ -324,7 +317,6 @@ fn write_transcript(
 async fn persist_outcome(
     pool: &sqlx::SqlitePool,
     projects_root: Option<&std::path::Path>,
-    work_dir: &std::path::Path,
     session_id: Option<&str>,
     project_path: &std::path::Path,
     task_id: &str,
@@ -334,12 +326,8 @@ async fn persist_outcome(
     // 完整的逐輪記錄。找不到就什麼都不做——上面剛寫好的 transcript.txt
     // 還在，沒有東西壞掉。
     if let (Some(sid), Some(root)) = (session_id, projects_root) {
-        // 參數分成兩組：前三個決定「去哪裡找」，後兩個決定「放到哪裡」。
-        // `work_dir` 與 `project_path` 都是 `&Path` 而且意義完全不同
-        // （前者是被施工的 repo，後者是卡片所屬的專案資料夾），交換了會
-        // 編譯通過但靜默出錯——所以這裡照著分組寫，不要重排。
         if let Some(path) = crate::tasks::session_log::copy_session_log(
-            root, work_dir, sid, project_path, task_id,
+            root, sid, project_path, task_id,
         ) {
             // 這一條比 `set_session_id` 的失敗嚴重得多，所以同樣要留下
             // 線索：檔案此刻已經躺在卡片資料夾裡了，路徑寫不進去的話它
@@ -347,7 +335,7 @@ async fn persist_outcome(
             // 退回終端機擷取。`set_session_id` 失敗則無害——watch closure
             // 手上本來就有自己的複本。
             if let Err(e) = store::set_session_path(pool, task_id, &path).await {
-                eprintln!("set_session_path {task_id}: {e}");
+                log::error!("set_session_path {task_id}: {e}");
             }
         }
     }
@@ -1090,7 +1078,6 @@ mod loop_tests {
 #[cfg(test)]
 mod persist_tests {
     use super::*;
-    use crate::tasks::session_log::encode_project_dir;
 
     /// 獨立的記憶體 pool，帶完整 schema——比照 `store.rs` 測試模組裡
     /// `mem_pool` 的寫法（那邊是私有的，這裡自己開一份）。
@@ -1100,10 +1087,12 @@ mod persist_tests {
         pool
     }
 
-    /// 建一棵假的 `~/.claude/projects` 樹：`<root>/<encode(work_dir)>/<sid>.jsonl`。
-    fn fake_projects_root(work_dir: &std::path::Path, session_id: &str, body: &str) -> tempfile::TempDir {
+    /// 建一棵假的 `~/.claude/projects` 樹：`<root>/<任意子資料夾>/<sid>.jsonl`。
+    /// 子資料夾名字不重要——`copy_session_log` 用掃描找 session_id，不看
+    /// 資料夾叫什麼名字。
+    fn fake_projects_root(session_id: &str, body: &str) -> tempfile::TempDir {
         let projects = tempfile::tempdir().unwrap();
-        let dir = projects.path().join(encode_project_dir(work_dir));
+        let dir = projects.path().join("some-project");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(format!("{session_id}.jsonl")), body).unwrap();
         projects
@@ -1116,25 +1105,19 @@ mod persist_tests {
         id
     }
 
-    /// 抓「參數對調」的測試。`work_dir`（決定去哪裡找）與 `project_path`
-    /// （決定放到哪裡）刻意選成完全不同的路徑——`work_dir` 是一個不存在的
-    /// 假路徑，`project_path` 是真的暫存資料夾。`persist_outcome` 內部若把
-    /// 兩者對調傳給 `copy_session_log`，來源會在錯的資料夾名下找不到 session
-    /// 檔，複製安靜失敗，`session_path` 留空——這裡斷言的正是「兩者都對」，
-    /// 對調了一定紅（已用 mutation 手動驗證，見下面 mutation-verify 的說明）。
+    /// 驗證整條路徑真的會發生：找到 session 檔、複製進卡片資料夾、把路徑
+    /// 寫回 DB，跟結案欄位一起持久化。
     #[tokio::test]
     async fn happy_path_copies_the_session_log_and_records_its_path() {
         let pool = mem_pool().await;
         let task_id = queued_and_claimed(&pool).await;
 
-        let work_dir = std::path::Path::new("/fake/work/dir");
         let project = tempfile::tempdir().unwrap();
-        let projects_root = fake_projects_root(work_dir, "SID", "{\"type\":\"user\"}\n");
+        let projects_root = fake_projects_root("SID", "{\"type\":\"user\"}\n");
 
         persist_outcome(
             &pool,
             Some(projects_root.path()),
-            work_dir,
             Some("SID"),
             project.path(),
             &task_id,
@@ -1146,12 +1129,12 @@ mod persist_tests {
         let row = store::get_task(&pool, &task_id).await.unwrap().unwrap();
         assert_eq!(row.status, "done");
         assert_eq!(row.outcome.as_deref(), Some("success"));
-        let session_path = row.session_path.expect("session_path 沒被寫入——參數順序可能對調了");
+        let session_path = row.session_path.expect("session_path 沒被寫入");
         assert!(session_path.ends_with("session.jsonl"), "{session_path}");
         assert_eq!(
             std::path::Path::new(&session_path).parent().unwrap(),
             crate::tasks::task_dir(project.path(), &task_id),
-            "沒有存進卡片資料夾——work_dir/project_path 疑似對調了"
+            "沒有存進卡片資料夾"
         );
         assert_eq!(std::fs::read_to_string(&session_path).unwrap(), "{\"type\":\"user\"}\n");
     }
@@ -1168,7 +1151,6 @@ mod persist_tests {
         persist_outcome(
             &pool,
             Some(projects_root.path()),
-            std::path::Path::new("/fake/work/dir"),
             None,
             project.path(),
             &task_id,
@@ -1195,14 +1177,12 @@ mod persist_tests {
         let pool = mem_pool().await;
         let task_id = queued_and_claimed(&pool).await;
 
-        let work_dir = std::path::Path::new("/fake/work/dir2");
         let project = tempfile::tempdir().unwrap();
-        let projects_root = fake_projects_root(work_dir, "SID2", "{}\n");
+        let projects_root = fake_projects_root("SID2", "{}\n");
 
         persist_outcome(
             &pool,
             Some(projects_root.path()),
-            work_dir,
             Some("SID2"),
             project.path(),
             &task_id,

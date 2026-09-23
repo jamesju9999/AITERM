@@ -77,8 +77,7 @@ pub fn resolve_bridge_env(
 ///
 /// 分隔符自己切，不用 `Path::file_name()`：那個是平台相依的，在 macOS 上
 /// `Path::new(r"C:\claude.exe").file_name()` 會回傳整串（`\` 不是 Unix 的
-/// 分隔符），Windows 路徑因此在 mac 的 CI 上永遠對不上。同一個理由讓
-/// `session_log::encode_project_dir` 也自己處理 `/` 與 `\`。
+/// 分隔符），Windows 路徑因此在 mac 的 CI 上永遠對不上。
 ///
 /// **已知限制**：路徑含空格時（例如 `C:\Program Files\claude.exe`）
 /// `split_whitespace` 會在空格處切斷，拿到 `C:\Program`，於是回傳 false。

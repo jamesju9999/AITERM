@@ -1,8 +1,12 @@
 //! Claude Code 自己寫的 session 記錄：找到它、複製它、渲染它。
 //!
 //! Claude Code 每一輪 user / assistant / 工具呼叫都會即時寫進
-//! `~/.claude/projects/<編碼後的 cwd>/<session-id>.jsonl`。派工時我們用
-//! `--session-id` 指定那個 UUID，所以任務結束後不必猜哪個檔案對應哪張卡片。
+//! `~/.claude/projects/<某個資料夾>/<session-id>.jsonl`。派工時我們用
+//! `--session-id` 指定那個 UUID v4，所以任務結束後只要在 `~/.claude/projects`
+//! 底下掃一輪、找檔名對得上的那個檔案就好——不需要知道、也不需要重建
+//! Claude Code 把它排進哪個資料夾的編碼規則。掃描法對 canonicalize、符號
+//! 連結（macOS `/private/tmp`）、Windows `canonicalize()` 帶 `\\?\` verbatim
+//! 前綴這些會讓「猜資料夾名」失準的坑全部免疫，因為根本不需要猜。
 //!
 //! 這個模組除了最外層的 `copy_session_log` 之外全是純函式（吃字串、吐
 //! 字串），與檔案系統和 Tauri state 無關。
@@ -10,20 +14,6 @@
 //! 見 docs/superpowers/specs/2026-09-07-full-task-transcript-design.md。
 
 use std::path::{Path, PathBuf};
-
-/// 把絕對路徑編成 Claude Code 用的資料夾名：每一個路徑分隔符換成 `-`。
-///
-/// 路徑裡既有的 `-` 原樣保留（`/private/tmp/-Users-x` → `-private-tmp--Users-x`），
-/// 所以這個轉換不可逆——不需要可逆，我們只需要拼得出同一個資料夾名。
-///
-/// Windows 的 `\` 與磁碟機代號後面的 `:` 一樣算分隔符，否則 Windows 上
-/// 永遠對不到目錄。
-pub fn encode_project_dir(dir: &Path) -> String {
-    dir.to_string_lossy()
-        .chars()
-        .map(|c| if c == '/' || c == '\\' || c == ':' { '-' } else { c })
-        .collect()
-}
 
 /// 單一區塊（一個工具參數、一筆工具回傳）的長度上限，單位是字元不是位元組
 /// ——內容常常是中文。超過的部分截掉並標出截了多少，見 `truncate_chars`。
@@ -170,101 +160,53 @@ pub fn claude_projects_root() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".claude").join("projects"))
 }
 
-/// 這個工作目錄可能對應到的 session 資料夾名（原樣路徑、canonicalize 後的
-/// 路徑）。macOS 上 `/tmp` 是 `/private/tmp` 的符號連結，兩者編出來的名字
-/// 不同，而 Claude Code 用哪一個我們無法確定，所以兩個都試。
-///
-/// 已知侷限（刻意不修）：Windows 上 `canonicalize` 回傳帶 `\\?\` 前綴的
-/// verbatim 路徑（如 `\\?\C:\Users\j\repo`），編碼後會是
-/// `--?-C--Users-j-repo`，幾乎可以確定不是 Claude Code 實際寫的資料夾名。
-/// 因為原樣路徑候選排在第一個，Windows 常見情況仍然找得到；要不要剝掉
-/// `\\?\` 前綴要等實測 Claude Code 在 Windows 上到底寫哪個名字才能決定，
-/// 這裡不先猜。
-fn dir_candidates(work_dir: &Path) -> Vec<String> {
-    let mut out = vec![encode_project_dir(work_dir)];
-    if let Ok(canonical) = std::fs::canonicalize(work_dir) {
-        let encoded = encode_project_dir(&canonical);
-        if !out.contains(&encoded) {
-            out.push(encoded);
-        }
-    }
-    out
+/// 在 `projects_root` 底下掃過每個子資料夾，找檔名是 `<session_id>.jsonl`
+/// 的那個檔案。`session_id` 是派工時自己生的 UUID v4，檔名對得上就是它，
+/// 不會撞名——不需要知道、也不需要重建 Claude Code 把它排進哪個資料夾的
+/// 編碼規則。
+fn find_session_log(projects_root: &Path, session_id: &str) -> Option<PathBuf> {
+    let filename = format!("{session_id}.jsonl");
+    std::fs::read_dir(projects_root)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join(&filename))
+        .find(|p| p.is_file())
 }
 
-/// 把 `<projects_root>/<編碼後的 work_dir>/<session_id>.jsonl` **原封不動**
+/// 把 `<projects_root>` 底下找到的 `<session_id>.jsonl` **原封不動**
 /// 複製成 `<project_path>/tasks/<task_id>/session.jsonl`，回傳目的地路徑。
 ///
 /// 不精簡是刻意的：一次派工只有幾十 KB 到數 MB，磁碟成本遠低於提早丟資料
 /// 的風險。要精簡永遠來得及，丟掉的救不回來。
 ///
-/// 找不到來源、或複製失敗（權限、磁碟），都安靜回 `None` 並寫進 stderr——
+/// 找不到來源、或複製失敗（權限、磁碟），都安靜回 `None` 並寫進 log——
 /// 原本的 `transcript.txt` 還在，沒有東西壞掉，不值得打斷使用者。
-///
-/// 參數刻意分成兩組：前三個決定**去哪裡找**，後兩個決定**放到哪裡**。
-/// `work_dir` 與 `project_path` 都是 `&Path` 而且意義完全不同，交換了會
-/// 編譯通過但靜默出錯（找不到來源＋寫錯資料夾），所以不要把它們排在一起。
 pub fn copy_session_log(
     projects_root: &Path,
-    work_dir: &Path,
     session_id: &str,
     project_path: &Path,
     task_id: &str,
 ) -> Option<String> {
-    let candidates: Vec<PathBuf> = dir_candidates(work_dir)
-        .into_iter()
-        .map(|d| projects_root.join(d).join(format!("{session_id}.jsonl")))
-        .collect();
-    let Some(src) = candidates.iter().find(|p| p.is_file()) else {
-        // 最常發生的失敗就是這一條（claude_command 不是 claude、旗標沒生效、
-        // 或編出來的資料夾名不對），而它原本靜悄悄地回 None。診斷訊息要把
-        // 試過的路徑印出來——只說「找不到」的話，事後看 log 的人無從判斷是
-        // session id 錯了還是資料夾名編錯了。
-        eprintln!("session log not found for {session_id}, tried {candidates:?}");
+    let Some(src) = find_session_log(projects_root, session_id) else {
+        // 最常發生的失敗就是這一條（claude_command 不是 claude、旗標沒生效，
+        // 所以 --session-id 從沒生效，根本沒有這個檔案）——原本靜悄悄地回
+        // None。
+        log::warn!("session log {session_id}.jsonl not found under {projects_root:?}");
         return None;
     };
 
     let dir = crate::tasks::task_dir(project_path, task_id);
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("session log dir {dir:?}: {e}");
+        log::error!("session log dir {dir:?}: {e}");
         return None;
     }
     let dest = dir.join("session.jsonl");
     match std::fs::copy(&src, &dest) {
         Ok(_) => Some(dest.to_string_lossy().into_owned()),
         Err(e) => {
-            eprintln!("copy session log {src:?} → {dest:?}: {e}");
+            log::error!("copy session log {src:?} → {dest:?}: {e}");
             None
         }
-    }
-}
-
-#[cfg(test)]
-mod encode_tests {
-    use super::*;
-
-    #[test]
-    fn every_slash_becomes_a_dash() {
-        assert_eq!(
-            encode_project_dir(Path::new("/Users/jamesju/Documents/GitHub/AITERM")),
-            "-Users-jamesju-Documents-GitHub-AITERM"
-        );
-    }
-
-    /// 路徑本身既有的 `-` 必須原樣保留，不可以被合併或跳脫——這是唯一能
-    /// 分辨「換掉斜線」與「換掉斜線後又去正規化連字號」兩種實作的案例。
-    #[test]
-    fn existing_dashes_in_the_path_are_left_alone() {
-        assert_eq!(
-            encode_project_dir(Path::new("/private/tmp/-Users-x")),
-            "-private-tmp--Users-x"
-        );
-    }
-
-    /// Windows 路徑也要能編碼——反斜線與磁碟機代號都算路徑分隔，
-    /// 否則 Windows 上永遠找不到 session 檔。
-    #[test]
-    fn windows_separators_and_drive_letters_become_dashes() {
-        assert_eq!(encode_project_dir(Path::new(r"C:\Users\j\repo")), "C--Users-j-repo");
     }
 }
 
@@ -513,9 +455,11 @@ mod copy_tests {
     use super::*;
 
     /// 建一棵假的 `~/.claude/projects` 樹，回傳 (projects_root, 卡片專案資料夾)。
-    fn fake_tree(work_dir: &Path, session_id: &str, body: &str) -> (tempfile::TempDir, tempfile::TempDir) {
+    /// 子資料夾名字刻意跟 session_id、work_dir 都無關——找法不看資料夾叫
+    /// 什麼名字，這正是這個模組要證明的事。
+    fn fake_tree(subdir_name: &str, session_id: &str, body: &str) -> (tempfile::TempDir, tempfile::TempDir) {
         let projects = tempfile::tempdir().unwrap();
-        let dir = projects.path().join(encode_project_dir(work_dir));
+        let dir = projects.path().join(subdir_name);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(format!("{session_id}.jsonl")), body).unwrap();
         (projects, tempfile::tempdir().unwrap())
@@ -523,10 +467,9 @@ mod copy_tests {
 
     #[test]
     fn copies_the_session_file_verbatim_into_the_task_dir() {
-        let work = Path::new("/work/repo");
-        let (projects, project) = fake_tree(work, "SID", "{\"type\":\"user\"}\n");
+        let (projects, project) = fake_tree("some-project", "SID", "{\"type\":\"user\"}\n");
 
-        let dest = copy_session_log(projects.path(), work, "SID", project.path(), "card1").unwrap();
+        let dest = copy_session_log(projects.path(), "SID", project.path(), "card1").unwrap();
 
         assert!(dest.ends_with("session.jsonl"), "存錯檔名：{dest}");
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "{\"type\":\"user\"}\n");
@@ -543,42 +486,21 @@ mod copy_tests {
     fn returns_none_when_the_session_file_does_not_exist() {
         let projects = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
-        assert!(
-            copy_session_log(projects.path(), Path::new("/work/repo"), "SID", project.path(), "card1")
-                .is_none()
-        );
+        assert!(copy_session_log(projects.path(), "SID", project.path(), "card1").is_none());
     }
 
-    /// macOS 上 /tmp 是 /private/tmp 的符號連結，兩者編出來的資料夾名不同。
-    /// Claude Code 用哪一個我們無法確定，所以兩個候選都要試。這個測試把
-    /// 檔案只放在 canonicalize 後的那個資料夾裡——只試原樣路徑的實作會找不到。
+    /// 核心行為：找法不看資料夾名，只看檔名對不對得上 session_id。子資料夾
+    /// 這裡故意取一個跟任何 cwd 編碼規則都對不上的名字——不管是 Claude Code
+    /// 自己怎麼編碼 cwd、還是 canonicalize／符號連結／Windows `\\?\` verbatim
+    /// 前綴這些會讓「猜資料夾名」失準的情況，掃描法都找得到，因為
+    /// `session_id` 本身是派工時生的 UUID v4，不會撞名，根本不需要猜資料夾名。
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "Windows 上 canonicalize() 回傳帶 `\\\\?\\` 前綴的 verbatim \
-                  路徑，encode_project_dir 沒有替換掉 `?`（Windows 檔名的保留 \
-                  字元），這個測試自己的前置步驟 create_dir_all 就會先炸掉 \
-                  InvalidFilename——這是 dir_candidates 文件註解上已經記錄、 \
-                  刻意不修的已知侷限（原樣路徑候選排第一個，實務上仍然找得到），\
-                  不是這個測試要驗證的東西，追蹤在別處"
-    )]
-    fn falls_back_to_the_canonicalised_form_of_the_work_dir() {
-        let real = tempfile::tempdir().unwrap();
-        let canonical = std::fs::canonicalize(real.path()).unwrap();
-        // 這個測試只有在 tempdir 真的會被 canonicalize 改寫時才有鑑別力
-        // （macOS 的 /var → /private/var）。否則兩個候選相同，測不出差別。
-        if canonical == real.path() {
-            eprintln!("跳過：這個平台的 tempdir 路徑已經是 canonical 形式");
-            return;
-        }
-        let projects = tempfile::tempdir().unwrap();
-        let dir = projects.path().join(encode_project_dir(&canonical));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("SID.jsonl"), "x").unwrap();
+    fn finds_the_session_log_regardless_of_the_folder_name() {
+        let (projects, project) = fake_tree("this-name-matches-no-encoding-scheme", "SID", "hello\n");
 
-        let project = tempfile::tempdir().unwrap();
-        let dest = copy_session_log(projects.path(), real.path(), "SID", project.path(), "card1");
-        assert!(dest.is_some(), "沒有試 canonicalize 後的路徑候選");
+        let dest = copy_session_log(projects.path(), "SID", project.path(), "card1").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "hello\n");
     }
 
     /// 重新派工會產生新的 UUID 與新的 session 檔，`session.jsonl` **直接覆蓋**
@@ -590,15 +512,13 @@ mod copy_tests {
     /// 看起來有內容，內容卻是錯的。所以要有測試把這個要求釘住。
     #[test]
     fn a_second_dispatch_overwrites_the_previous_session_log() {
-        let work = Path::new("/work/repo");
-        let (projects, project) = fake_tree(work, "OLD", "第一次執行\n");
-        let first = copy_session_log(projects.path(), work, "OLD", project.path(), "card1").unwrap();
+        let (projects, project) = fake_tree("some-project", "OLD", "第一次執行\n");
+        let first = copy_session_log(projects.path(), "OLD", project.path(), "card1").unwrap();
         assert_eq!(std::fs::read_to_string(&first).unwrap(), "第一次執行\n");
 
         // 第二次派工：新的 session id、新的內容，同一張卡片。
-        let dir = projects.path().join(encode_project_dir(work));
-        std::fs::write(dir.join("NEW.jsonl"), "第二次執行\n").unwrap();
-        let second = copy_session_log(projects.path(), work, "NEW", project.path(), "card1").unwrap();
+        std::fs::write(projects.path().join("some-project").join("NEW.jsonl"), "第二次執行\n").unwrap();
+        let second = copy_session_log(projects.path(), "NEW", project.path(), "card1").unwrap();
 
         assert_eq!(second, first, "第二次應該寫到同一個 session.jsonl");
         assert_eq!(
