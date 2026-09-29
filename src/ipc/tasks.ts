@@ -162,8 +162,9 @@ export const addAttachment = (
 export const removeAttachment = (projectId: string, attachmentId: string): Promise<void> =>
   invoke("tasks_remove_attachment", { projectId, attachmentId });
 
-export const readTranscript = (projectId: string, id: string): Promise<string> =>
-  invoke("tasks_read_transcript", { projectId, id });
+/** `tailChars` 只取最後那麼多字元（對話記錄視窗用，避免巨大的 session 凍結畫面）；不給就是整份。 */
+export const readTranscript = (projectId: string, id: string, tailChars?: number): Promise<string> =>
+  invoke("tasks_read_transcript", { projectId, id, tailChars });
 
 export const saveTranscript = (projectId: string, id: string, text: string): Promise<void> =>
   invoke("tasks_save_transcript", { projectId, id, text });

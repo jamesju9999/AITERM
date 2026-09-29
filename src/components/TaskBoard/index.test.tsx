@@ -865,7 +865,7 @@ describe("ProjectBoard", () => {
     await user.click(await screen.findByRole("button", { name: /對話記錄|Conversation/ }));
     expect(await screen.findByText("查詢目錄資訊")).toBeInTheDocument();
     expect(await screen.findByText(/line A/)).toBeInTheDocument();
-    expect(readTranscript).toHaveBeenCalledWith(PROJECT_ID, "d");
+    expect(readTranscript).toHaveBeenCalledWith(PROJECT_ID, "d", 300_000);
   });
 
   // Regression test for a real complaint: the raw transcript is a literal

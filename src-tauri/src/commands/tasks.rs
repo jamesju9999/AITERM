@@ -645,10 +645,31 @@ fn transcript_for_row(row: &TaskRow) -> String {
     resolve_transcript(row.session_path.as_deref(), row.transcript_path.as_deref())
 }
 
+/// 只留 `text` 的最後 `max_chars` 個字元（從行首切，不會切半行），前面補
+/// 一行說明省略了多少。沒超過就原樣回傳。給對話記錄視窗用：一份 70MB 的
+/// session 渲染出來動輒數十 MB，整份丟進 DOM 會讓 WebView 凍結。
+fn keep_tail(text: String, max_chars: usize) -> String {
+    let total = text.chars().count();
+    if total <= max_chars {
+        return text;
+    }
+    let cut = text.char_indices().nth(total - max_chars).map_or(0, |(i, _)| i);
+    let start = text[cut..].find('\n').map_or(cut, |n| cut + n + 1);
+    format!(
+        "（記錄太長，前面 {} 個字元已省略，只顯示最後部分）\n{}",
+        text[..start].chars().count(),
+        &text[start..]
+    )
+}
+
+/// `tail_chars` 有值時只回傳最後那麼多字元（對話記錄視窗用）；沒給就是
+/// 完整內容（工作報告要整份）。讀檔與渲染是同步的重活，丟到 blocking
+/// 執行緒，不佔住 async runtime。
 #[tauri::command]
 pub async fn tasks_read_transcript(
     project_id: String,
     id: String,
+    tail_chars: Option<usize>,
     reg: State<'_, ProjectRegistry>,
 ) -> Result<String, String> {
     let p = project(&reg, &project_id)?;
@@ -656,7 +677,15 @@ pub async fn tasks_read_transcript(
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "task not found".to_string())?;
-    Ok(transcript_for_row(&row))
+    tauri::async_runtime::spawn_blocking(move || {
+        let text = transcript_for_row(&row);
+        match tail_chars {
+            Some(n) => keep_tail(text, n),
+            None => text,
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1188,5 +1217,29 @@ mod merge_worktree_tests {
         base_client.merge_abort().await.unwrap();
         assert!(!base_client.is_merge_in_progress().await);
         assert!(base_client.dirty_files().await.unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod keep_tail_tests {
+    use super::keep_tail;
+
+    #[test]
+    fn short_text_is_untouched() {
+        assert_eq!(keep_tail("a\nb".into(), 10), "a\nb");
+    }
+
+    #[test]
+    fn long_text_keeps_whole_trailing_lines_and_says_what_was_dropped() {
+        let out = keep_tail("11111\n22222\n33333\n".into(), 8);
+        assert!(out.ends_with("\n33333\n"), "{out}");
+        assert!(!out.contains("22222"), "{out}");
+        assert!(out.contains("12 個字元"), "{out}");
+    }
+
+    #[test]
+    fn cuts_on_char_boundaries() {
+        let out = keep_tail("你好\n世界世界\n".repeat(50), 20);
+        assert!(out.contains("世界"));
     }
 }

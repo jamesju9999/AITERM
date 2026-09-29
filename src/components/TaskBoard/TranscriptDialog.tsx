@@ -4,6 +4,9 @@ import { useLocale } from "../../contexts/LocaleContext";
 import { readTranscript } from "../../ipc/tasks";
 import { collapseConsecutiveDuplicateLines } from "./transcriptUtils";
 
+// 只載入最後這麼多字元；整份 70MB 的 session 丟進 DOM 會凍結視窗。
+const TAIL_CHARS = 300_000;
+
 export function TranscriptDialog({
   projectId,
   taskId,
@@ -40,7 +43,7 @@ export function TranscriptDialog({
 
   useEffect(() => {
     let alive = true;
-    void readTranscript(projectId, taskId).then((s) => {
+    void readTranscript(projectId, taskId, TAIL_CHARS).then((s) => {
       if (alive) setText(s);
     });
     return () => {
