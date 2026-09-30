@@ -1212,3 +1212,27 @@
   border-radius: 8px;
   background: #fff;
 }
+
+.task-column-sort {
+  background: transparent;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 11px;
+  max-width: 120px;
+  padding: 2px 4px;
+}
+
+.task-column-sort:hover {
+  border-color: #2d5aab;
+}
+
+.task-column-flat {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+}

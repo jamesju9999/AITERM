@@ -6,6 +6,8 @@ export function TaskColumn({
   count,
   highlighted = false,
   headerAction,
+  sortControl,
+  sortExtra,
   children,
 }: {
   status: string;
@@ -16,6 +18,10 @@ export function TaskColumn({
   highlighted?: boolean;
   /** 放在計數右邊的欄位層級動作（目前只有「已完成」欄的封存全部）。 */
   headerAction?: ReactNode;
+  /** 排序選單，放在計數左邊。 */
+  sortControl?: ReactNode;
+  /** 排序選單旁的附加選項（目前是「不分組」）。 */
+  sortExtra?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -30,6 +36,8 @@ export function TaskColumn({
       <div className="task-column-head">
         <span className="task-column-title">{title}</span>
         <div className="task-column-head-right">
+          {sortControl}
+          {sortExtra}
           <span className="task-column-count">{count}</span>
           {headerAction}
         </div>

@@ -338,3 +338,34 @@ describe("TaskCard 的動作失敗時", () => {
     expect(String(messageDialog.mock.calls[0][0])).toContain("db is locked");
   });
 });
+
+describe("TaskCard 的共花費時間", () => {
+  const mountCard = (over: Partial<TaskWithAttachments>) =>
+    render(
+      <LocaleProvider>
+        <TaskCard
+          projectId="p1"
+          card={card(over)}
+          onEdit={vi.fn()}
+          onViewTranscript={vi.fn()}
+          onEditLabel={vi.fn()}
+          onChanged={vi.fn()}
+        />
+      </LocaleProvider>,
+    );
+
+  it("已完成且有派工／完成時間：顯示派工到完成的花費", () => {
+    mountCard({ status: "done", dispatched_at: 1000, finished_at: 1000 + 4980 });
+    expect(screen.getByTestId("task-card-duration")).toHaveTextContent("1h 23m");
+  });
+
+  it("沒有派工時間就不顯示這一行", () => {
+    mountCard({ status: "done", dispatched_at: null, finished_at: 5000 });
+    expect(screen.queryByTestId("task-card-duration")).toBeNull();
+  });
+
+  it("執行中的卡片不顯示（還沒有『共』花費）", () => {
+    mountCard({ status: "running", dispatched_at: 1000, finished_at: null });
+    expect(screen.queryByTestId("task-card-duration")).toBeNull();
+  });
+});

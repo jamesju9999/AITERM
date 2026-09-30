@@ -16,6 +16,7 @@ import {
 import { setRunningTaskTabs } from "../../lib/runningTaskTabRegistry";
 import { unlistenOnCleanup } from "../../lib/eventSubscription";
 import { ArchiveDialog } from "./ArchiveDialog";
+import { loadFlatColumns, loadSortModes, saveFlatColumns, saveSortModes, sortByCreated, SORT_MODES, type SortMode } from "./cardSort";
 import { groupByLabel } from "./groupByLabel";
 import { TaskCard } from "./TaskCard";
 import { TaskColumn } from "./TaskColumn";
@@ -57,6 +58,23 @@ export function ProjectBoard({
    *  有界），所以在前端過濾就好，不必多打一次 IPC。 */
   const [search, setSearch] = useState("");
   const mounted = useRef(true);
+  /** 每欄各自的排序選擇；只影響顯示，不動資料庫的 sort_order。 */
+  const [sortModes, setSortModes] = useState<Record<string, SortMode>>(loadSortModes);
+  const changeSortMode = (status: TaskStatus, mode: SortMode) =>
+    setSortModes((prev) => {
+      const next = { ...prev, [status]: mode };
+      saveSortModes(next);
+      return next;
+    });
+  /** 日期排序時「不分組」的欄。只在該欄不是預設排序時才生效——預設排序
+   * 的順序本來就是分組內的手動順序，攤平沒有意義。 */
+  const [flatColumns, setFlatColumns] = useState<Record<string, boolean>>(loadFlatColumns);
+  const changeFlat = (status: TaskStatus, flat: boolean) =>
+    setFlatColumns((prev) => {
+      const next = { ...prev, [status]: flat };
+      saveFlatColumns(next);
+      return next;
+    });
   const dragRef = useRef<DragState | null>(null);
   /** Which column's `data-testid` the cursor is currently over while
    * dragging, for the drop-target highlight. Not the drop decision itself
@@ -147,10 +165,12 @@ export function ProjectBoard({
    */
   const visibleIn = (s: TaskStatus) => {
     const q = search.trim().toLowerCase();
-    if (!q) return byStatus(s);
-    return byStatus(s).filter((c) =>
-      [c.title, c.body, c.project_dir, c.label ?? ""].some((f) => f.toLowerCase().includes(q)),
-    );
+    const rows = q
+      ? byStatus(s).filter((c) =>
+          [c.title, c.body, c.project_dir, c.label ?? ""].some((f) => f.toLowerCase().includes(q)),
+        )
+      : byStatus(s);
+    return sortByCreated(rows, sortModes[s] ?? "default");
   };
 
   // Single source of truth for "can this card legally be dropped on this
@@ -352,6 +372,39 @@ export function ProjectBoard({
             title={colTitle(s)}
             count={visibleIn(s).length}
             highlighted={dragOverStatus === s}
+            sortControl={
+              <select
+                className="task-column-sort"
+                data-testid={`sort-${s}`}
+                aria-label={t.board_sort_label}
+                title={t.board_sort_label}
+                value={sortModes[s] ?? "default"}
+                onChange={(e) => changeSortMode(s, e.target.value as SortMode)}
+              >
+                {SORT_MODES.map((m) => (
+                  <option key={m} value={m}>
+                    {m === "default"
+                      ? t.board_sort_default
+                      : m === "created-desc"
+                        ? t.board_sort_created_desc
+                        : t.board_sort_created_asc}
+                  </option>
+                ))}
+              </select>
+            }
+            sortExtra={
+              (sortModes[s] ?? "default") !== "default" ? (
+                <label className="task-column-flat" title={t.board_sort_flat_title}>
+                  <input
+                    type="checkbox"
+                    data-testid={`flat-${s}`}
+                    checked={flatColumns[s] === true}
+                    onChange={(e) => changeFlat(s, e.target.checked)}
+                  />
+                  {t.board_sort_flat}
+                </label>
+              ) : undefined
+            }
             headerAction={
               s === "done" ? (
                 <button
@@ -389,6 +442,11 @@ export function ProjectBoard({
                   </div>
                 );
               };
+              // 日期排序且勾了「不分組」：整欄單一清單。卡片自己的標籤徽章仍在，
+              // 只是不再收進群組——群組會把日期排序切碎成「每組各自排」。
+              if ((sortModes[s] ?? "default") !== "default" && flatColumns[s] === true) {
+                return <>{visibleIn(s).map(renderCard)}</>;
+              }
               const { ungrouped, groups } = groupByLabel(visibleIn(s));
               return (
                 <>

@@ -1273,4 +1273,202 @@ describe("ProjectBoard", () => {
       }
     });
   });
+  describe("建立日期與依日期排序", () => {
+    const titlesIn = (col: HTMLElement) =>
+      Array.from(col.querySelectorAll(".task-card-title")).map((n) => n.textContent);
+
+    const three = () => [
+      card({ id: "a", title: "中間", sort_order: 1, created_at: "2026-02-01 00:00:00" }),
+      card({ id: "b", title: "最舊", sort_order: 2, created_at: "2026-01-01 00:00:00" }),
+      card({ id: "c", title: "最新", sort_order: 3, created_at: "2026-03-01 00:00:00" }),
+    ];
+
+    beforeEach(() => {
+      try { localStorage.removeItem("aiterm_board_sort"); } catch { /* ignore */ }
+    });
+
+    it("卡片顯示建立日期", async () => {
+      vi.mocked(listTasks).mockResolvedValue([card({ id: "a", created_at: "2026-02-01 00:00:00" })]);
+      view();
+      const el = await screen.findByTestId("task-card-created");
+      expect(el.textContent).toMatch(/2026-0[12]-\d{2} \d{2}:\d{2}/);
+    });
+
+    it("沒有可解析日期的卡片不顯示日期那一行", async () => {
+      vi.mocked(listTasks).mockResolvedValue([card({ id: "a", created_at: "" })]);
+      view();
+      await screen.findByText("Card one");
+      expect(screen.queryByTestId("task-card-created")).toBeNull();
+    });
+
+    it("預設維持手動順序", async () => {
+      vi.mocked(listTasks).mockResolvedValue(three());
+      view();
+      const col = await screen.findByTestId("column-planning");
+      await waitFor(() => expect(titlesIn(col)).toEqual(["中間", "最舊", "最新"]));
+    });
+
+    it("選「建立時間 新→舊」後該欄依日期重排，切回預設就還原", async () => {
+      const user = userEvent.setup();
+      vi.mocked(listTasks).mockResolvedValue(three());
+      view();
+      const col = await screen.findByTestId("column-planning");
+      await waitFor(() => expect(titlesIn(col)).toHaveLength(3));
+
+      const select = within(col).getByTestId("sort-planning");
+      await user.selectOptions(select, "created-desc");
+      expect(titlesIn(col)).toEqual(["最新", "中間", "最舊"]);
+      await user.selectOptions(select, "created-asc");
+      expect(titlesIn(col)).toEqual(["最舊", "中間", "最新"]);
+      await user.selectOptions(select, "default");
+      expect(titlesIn(col)).toEqual(["中間", "最舊", "最新"]);
+    });
+
+    it("排序只影響被選的那一欄", async () => {
+      const user = userEvent.setup();
+      vi.mocked(listTasks).mockResolvedValue([
+        ...three(),
+        card({ id: "q1", title: "佇列甲", status: "queued", sort_order: 1, created_at: "2026-01-01 00:00:00" }),
+        card({ id: "q2", title: "佇列乙", status: "queued", sort_order: 2, created_at: "2026-02-01 00:00:00" }),
+      ]);
+      view();
+      const planning = await screen.findByTestId("column-planning");
+      const queued = screen.getByTestId("column-queued");
+      await waitFor(() => expect(titlesIn(queued)).toHaveLength(2));
+
+      await user.selectOptions(within(planning).getByTestId("sort-planning"), "created-desc");
+      expect(titlesIn(planning)).toEqual(["最新", "中間", "最舊"]);
+      expect(titlesIn(queued)).toEqual(["佇列甲", "佇列乙"]);
+    });
+
+    it("已完成欄也能改依建立日期排（預設是完成時間）", async () => {
+      const user = userEvent.setup();
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "d1", title: "先建後完成", status: "done", outcome: "success", finished_at: 200, created_at: "2026-01-01 00:00:00" }),
+        card({ id: "d2", title: "後建先完成", status: "done", outcome: "success", finished_at: 100, created_at: "2026-03-01 00:00:00" }),
+      ]);
+      view();
+      const col = await screen.findByTestId("column-done");
+      await waitFor(() => expect(titlesIn(col)).toEqual(["先建後完成", "後建先完成"]));
+      await user.selectOptions(within(col).getByTestId("sort-done"), "created-desc");
+      expect(titlesIn(col)).toEqual(["後建先完成", "先建後完成"]);
+    });
+
+    it("同一欄的 Label 群組內部也依日期排序", async () => {
+      const user = userEvent.setup();
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "1", title: "緊急舊", label: "緊急", sort_order: 1, created_at: "2026-01-01 00:00:00" }),
+        card({ id: "2", title: "緊急新", label: "緊急", sort_order: 2, created_at: "2026-03-01 00:00:00" }),
+      ]);
+      view();
+      const col = await screen.findByTestId("column-planning");
+      await waitFor(() => expect(titlesIn(col)).toEqual(["緊急舊", "緊急新"]));
+      await user.selectOptions(within(col).getByTestId("sort-planning"), "created-desc");
+      expect(titlesIn(col)).toEqual(["緊急新", "緊急舊"]);
+    });
+
+    it("選擇會記住：重新掛載後仍是同樣的排序", async () => {
+      const user = userEvent.setup();
+      vi.mocked(listTasks).mockResolvedValue(three());
+      const first = view();
+      const col = await screen.findByTestId("column-planning");
+      await waitFor(() => expect(titlesIn(col)).toHaveLength(3));
+      await user.selectOptions(within(col).getByTestId("sort-planning"), "created-desc");
+      first.unmount();
+
+      view();
+      const again = await screen.findByTestId("column-planning");
+      await waitFor(() => expect(titlesIn(again)).toEqual(["最新", "中間", "最舊"]));
+      expect((within(again).getByTestId("sort-planning") as HTMLSelectElement).value).toBe("created-desc");
+    });
+
+    describe("排序時排除標籤群組", () => {
+      const mixed = () => [
+        card({ id: "1", title: "甲(緊急,最舊)", label: "緊急", sort_order: 1, created_at: "2026-01-01 00:00:00" }),
+        card({ id: "2", title: "乙(無標籤,中間)", label: null, sort_order: 2, created_at: "2026-02-01 00:00:00" }),
+        card({ id: "3", title: "丙(緊急,最新)", label: "緊急", sort_order: 3, created_at: "2026-03-01 00:00:00" }),
+      ];
+
+      beforeEach(() => {
+        try { localStorage.removeItem("aiterm_board_flat"); } catch { /* ignore */ }
+      });
+
+      it("預設排序時不提供這個選項（分組照舊）", async () => {
+        vi.mocked(listTasks).mockResolvedValue(mixed());
+        view();
+        const col = await screen.findByTestId("column-planning");
+        await waitFor(() => expect(titlesIn(col)).toHaveLength(3));
+        expect(within(col).queryByTestId("flat-planning")).toBeNull();
+      });
+
+      it("分組時：未分類在前，群組內再依日期排", async () => {
+        const user = userEvent.setup();
+        vi.mocked(listTasks).mockResolvedValue(mixed());
+        view();
+        const col = await screen.findByTestId("column-planning");
+        await waitFor(() => expect(titlesIn(col)).toHaveLength(3));
+        await user.selectOptions(within(col).getByTestId("sort-planning"), "created-desc");
+        expect(titlesIn(col)).toEqual(["乙(無標籤,中間)", "丙(緊急,最新)", "甲(緊急,最舊)"]);
+      });
+
+      it("勾選「不分組」後整欄是單一清單、全部依日期排，群組標頭消失", async () => {
+        const user = userEvent.setup();
+        vi.mocked(listTasks).mockResolvedValue(mixed());
+        view();
+        const col = await screen.findByTestId("column-planning");
+        await waitFor(() => expect(titlesIn(col)).toHaveLength(3));
+        await user.selectOptions(within(col).getByTestId("sort-planning"), "created-desc");
+        await user.click(within(col).getByTestId("flat-planning"));
+        expect(titlesIn(col)).toEqual(["丙(緊急,最新)", "乙(無標籤,中間)", "甲(緊急,最舊)"]);
+        expect(within(col).queryByText("(2)")).toBeNull();
+        // 卡片自己的標籤徽章仍在。
+        expect(within(col).getAllByText("緊急")).toHaveLength(2);
+      });
+
+      it("切回預設排序就恢復分組，即使核取方塊還記著勾選", async () => {
+        const user = userEvent.setup();
+        vi.mocked(listTasks).mockResolvedValue(mixed());
+        view();
+        const col = await screen.findByTestId("column-planning");
+        await waitFor(() => expect(titlesIn(col)).toHaveLength(3));
+        await user.selectOptions(within(col).getByTestId("sort-planning"), "created-desc");
+        await user.click(within(col).getByTestId("flat-planning"));
+        await user.selectOptions(within(col).getByTestId("sort-planning"), "default");
+        expect(within(col).getByText("(2)")).toBeInTheDocument();
+        expect(titlesIn(col)).toEqual(["乙(無標籤,中間)", "甲(緊急,最舊)", "丙(緊急,最新)"]);
+      });
+
+      it("只影響勾選的那一欄，且選擇會記住", async () => {
+        const user = userEvent.setup();
+        vi.mocked(listTasks).mockResolvedValue([
+          ...mixed(),
+          card({ id: "q1", title: "佇列甲", status: "queued", label: "緊急", sort_order: 1, created_at: "2026-01-01 00:00:00" }),
+          card({ id: "q2", title: "佇列乙", status: "queued", label: null, sort_order: 2, created_at: "2026-02-01 00:00:00" }),
+        ]);
+        const first = view();
+        const planning = await screen.findByTestId("column-planning");
+        const queued = screen.getByTestId("column-queued");
+        await waitFor(() => expect(titlesIn(queued)).toHaveLength(2));
+        await user.selectOptions(within(planning).getByTestId("sort-planning"), "created-desc");
+        await user.click(within(planning).getByTestId("flat-planning"));
+        await user.selectOptions(within(queued).getByTestId("sort-queued"), "created-desc");
+        // queued 沒勾不分組：未分類的「佇列乙」在前、緊急群組在後。
+        expect(titlesIn(queued)).toEqual(["佇列乙", "佇列甲"]);
+        first.unmount();
+
+        view();
+        const again = await screen.findByTestId("column-planning");
+        await waitFor(() => expect(titlesIn(again)).toEqual(["丙(緊急,最新)", "乙(無標籤,中間)", "甲(緊急,最舊)"]));
+        expect((within(again).getByTestId("flat-planning") as HTMLInputElement).checked).toBe(true);
+      });
+    });
+
+    it("localStorage 存了壞資料時退回預設順序，不會壞掉", async () => {
+      localStorage.setItem("aiterm_board_sort", "{not json");
+      vi.mocked(listTasks).mockResolvedValue(three());
+      view();
+      const col = await screen.findByTestId("column-planning");
+      await waitFor(() => expect(titlesIn(col)).toEqual(["中間", "最舊", "最新"]));
+    });
+  });
 });

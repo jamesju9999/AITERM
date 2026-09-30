@@ -6,6 +6,8 @@ import { unlistenOnCleanup } from "../../lib/eventSubscription";
 import type { Translations } from "../../lib/i18n";
 import { useLocale } from "../../contexts/LocaleContext";
 import { abortMerge, archiveTask, cloneTask, deleteTask, markTaskDone, mergeTaskWorktree, stopTask, type MergeOutcome, type TaskWithAttachments } from "../../ipc/tasks";
+import { formatCreatedAt } from "./cardSort";
+import { formatDuration, taskDurationSecs } from "./duration";
 import { hashLabelHue } from "./labelColor";
 
 /**
@@ -52,6 +54,8 @@ export function TaskCard({
   onChanged: () => void;
 }) {
   const { t } = useLocale();
+  const createdLabel = formatCreatedAt(card.created_at);
+  const durationSecs = taskDurationSecs(card);
   const [busy, setBusy] = useState(false);
   // 大型 worktree 的合併動輒數十秒，只把按鈕變灰看起來就像沒反應。
   const [merging, setMerging] = useState(false);
@@ -197,6 +201,18 @@ export function TaskCard({
             <span className="task-card-meta-icon">📁</span>
             <span className="task-card-meta-text">{card.project_dir}</span>
           </div>
+          {createdLabel && (
+            <div className="task-card-meta" data-testid="task-card-created" title={t.board_card_created_title}>
+              <span className="task-card-meta-icon">🕒</span>
+              <span className="task-card-meta-text">{createdLabel}</span>
+            </div>
+          )}
+          {durationSecs !== null && (
+            <div className="task-card-meta" data-testid="task-card-duration" title={t.board_card_duration_title}>
+              <span className="task-card-meta-icon">⏱</span>
+              <span className="task-card-meta-text">{formatDuration(durationSecs)}</span>
+            </div>
+          )}
           {!card.parallel_ok && <div className="task-card-meta"><span className="task-card-meta-icon">⚑</span>{t.board_card_solo_hint}</div>}
           {card.status === "running" && <div className="task-card-meta">{t.board_running_hint}</div>}
           {card.status === "done" && card.error_message && (
