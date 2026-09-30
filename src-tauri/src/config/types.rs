@@ -110,6 +110,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub claude_bridge: ClaudeBridgeConfig,
 
+    /// 對外的 OpenAI 相容 server 設定。舊的 config.toml 沒有這個區塊，靠 `default` 補齊。
+    #[serde(default)]
+    pub openai_server: OpenAiServerConfig,
+
     /// MCP tool server 設定。舊的 config.toml 沒有這個區塊，靠 `default` 補齊。
     #[serde(default)]
     pub mcp_tool_server: McpToolServerConfig,
@@ -155,6 +159,46 @@ impl Default for ClaudeBridgeConfig {
             opus: None,
             sonnet: None,
             haiku: None,
+        }
+    }
+}
+
+/// 8317 是 Claude Code 橋接、8318 是 MCP tool server，所以取 8319。
+pub fn default_openai_server_port() -> u16 { 8319 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModelAlias {
+    /// 對外名稱，客戶端送在 `model` 欄位。
+    pub alias: String,
+    pub provider_id: String,
+    pub model: String,
+}
+
+/// 對外的 OpenAI 相容 server。獨立於 `ClaudeBridgeConfig`：不同協定、不同開關、不同埠。
+/// 設計見 `docs/superpowers/specs/2026-09-30-openai-compatible-server-design.md`。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAiServerConfig {
+    #[serde(default)]
+    pub enabled: bool,
+
+    #[serde(default = "default_openai_server_port")]
+    pub port: u16,
+
+    /// false = 只綁 127.0.0.1；true = 綁 0.0.0.0（區網可連）。
+    #[serde(default)]
+    pub allow_lan: bool,
+
+    #[serde(default)]
+    pub aliases: Vec<ModelAlias>,
+}
+
+impl Default for OpenAiServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_openai_server_port(),
+            allow_lan: false,
+            aliases: Vec::new(),
         }
     }
 }
@@ -322,6 +366,7 @@ impl Default for AppConfig {
             python_interpreter: None,
             python_index_url: None,
             claude_bridge: ClaudeBridgeConfig::default(),
+            openai_server: OpenAiServerConfig::default(),
             mcp_tool_server: McpToolServerConfig::default(),
             task_board: TaskBoardConfig::default(),
         }
@@ -1112,6 +1157,38 @@ mod bridge_config_tests {
         assert!(!cfg.claude_bridge.enabled);
         assert_eq!(cfg.claude_bridge.port, 8317);
         assert!(cfg.claude_bridge.opus.is_none());
+    }
+
+    #[test]
+    fn openai_server_config_defaults_when_section_absent() {
+        // 舊的 config.toml 沒有 [openai_server] 區塊，必須照常載入。
+        let cfg: AppConfig = toml::from_str("").unwrap();
+        assert!(!cfg.openai_server.enabled);
+        assert_eq!(cfg.openai_server.port, 8319);
+        assert!(!cfg.openai_server.allow_lan);
+        assert!(cfg.openai_server.aliases.is_empty());
+    }
+
+    #[test]
+    fn openai_server_config_parses_aliases() {
+        let cfg: AppConfig = toml::from_str(
+            r#"
+[openai_server]
+enabled = true
+port = 9100
+allow_lan = true
+
+[[openai_server.aliases]]
+alias = "gpt-4o"
+provider_id = "gemini"
+model = "gemini-2.5-pro"
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.openai_server.port, 9100);
+        assert!(cfg.openai_server.allow_lan);
+        assert_eq!(cfg.openai_server.aliases[0].alias, "gpt-4o");
+        assert_eq!(cfg.openai_server.aliases[0].model, "gemini-2.5-pro");
     }
 
     #[test]
