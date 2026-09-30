@@ -958,6 +958,33 @@
   color: var(--text-secondary, #aaa);
 }
 
+.task-transcript-controls { display: flex; gap: 4px; }
+/* 折疊清單自己捲動；min-height: 0 同 .task-field--grow，才不會撐破對話框。 */
+.task-transcript-turns {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.task-transcript-turn-head {
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #2a2a2a);
+  background: var(--bg-primary, #0c0c0c);
+  color: var(--text-primary, #ddd);
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-transcript-turn-body { flex: none; min-height: 0; margin-top: 4px; overflow-y: visible; }
+
 .task-board-new { padding: 6px 12px; border-radius: 6px; cursor: pointer; }
 
 /* ── 工作報告視窗 ─────────────────────────────────────────── */
