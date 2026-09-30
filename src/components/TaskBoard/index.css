@@ -968,6 +968,9 @@
   flex-direction: column;
   gap: 4px;
 }
+/* 每一輪不可被 flex 壓縮：清單超出高度時要靠 .task-transcript-turns 捲動，
+   否則展開的長輸出會被壓成 0 高、內容溢出蓋到下一輪。 */
+.task-transcript-turn { flex: none; }
 .task-transcript-turn-head {
   width: 100%;
   text-align: left;
