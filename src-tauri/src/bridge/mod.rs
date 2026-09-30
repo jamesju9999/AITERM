@@ -12,6 +12,7 @@ pub mod auth;
 pub mod env;
 pub mod factory;
 pub mod model_map;
+pub mod openai_server;
 pub mod server;
 pub mod stream;
 pub mod tool_meta;
