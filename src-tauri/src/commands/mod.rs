@@ -2,6 +2,7 @@ pub mod ai;
 pub mod api_docs;
 pub mod appimage;
 pub mod bridge;
+pub mod openai_server;
 pub mod claude_notif;
 pub mod config;
 pub mod db;

@@ -38,6 +38,10 @@ use commands::{
     appimage::{appimage_integrate, appimage_integration_state, appimage_remove_integration},
     ai::{agent_chat, ai_chat, ai_chat_ctx, ai_query},
     bridge::{bridge_apply, bridge_set_config, bridge_status},
+    openai_server::{
+        openai_server_apply, openai_server_regenerate_key, openai_server_set_config,
+        openai_server_status,
+    },
     mcp_server::{mcp_tool_server_apply, mcp_tool_server_set_config, mcp_tool_server_status},
     claude_notif::{claude_notif_enable_bell, claude_notif_needs_prompt},
     code_assistant::code_assistant_chat,
@@ -279,6 +283,7 @@ pub fn run() {
         .manage(mcp_manager)
         .manage(AnthropicOAuthState::new())
         .manage(Arc::new(bridge::BridgeState::new()))
+        .manage(Arc::new(bridge::openai_server::OpenAiServerState::new()))
         .manage(Arc::new(mcp_server::McpToolServerState::new()))
         .manage(Arc::new(share::ShareServerState::new()))
         .manage(Arc::new(share::viewer_manager::ViewerManager::new()))
@@ -351,6 +356,38 @@ pub fn run() {
                     };
                     if let Err(e) = bridge.start(config, secrets, token, cfg.port).await {
                         log::error!("bridge server 啟動失敗：{e}");
+                    }
+                });
+            }
+
+            // OpenAI 相容 server：設定為 enabled 時隨 app 啟動。失敗只記 log，理由同橋接 server。
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Manager;
+                    let server = handle
+                        .state::<Arc<bridge::openai_server::OpenAiServerState>>()
+                        .inner()
+                        .clone();
+                    let config = handle.state::<Arc<ConfigStore>>().inner().clone();
+                    let secrets = handle.state::<Arc<SecretStore>>().inner().clone();
+                    let cfg = config.get().openai_server;
+                    if !cfg.enabled {
+                        return;
+                    }
+                    let token = match secrets.get(bridge::auth::OPENAI_SERVER_TOKEN_KEY) {
+                        Ok(Some(t)) if !t.is_empty() => t,
+                        _ => {
+                            let t = bridge::auth::generate_token();
+                            if let Err(e) = secrets.set(bridge::auth::OPENAI_SERVER_TOKEN_KEY, &t) {
+                                log::error!("openai-server API key 寫入 keychain 失敗：{e}");
+                                return;
+                            }
+                            t
+                        }
+                    };
+                    if let Err(e) = server.start(config, secrets, token, cfg.port, cfg.allow_lan).await {
+                        log::error!("openai-server 啟動失敗：{e}");
                     }
                 });
             }
@@ -511,6 +548,11 @@ pub fn run() {
             bridge_status,
             bridge_apply,
             bridge_set_config,
+            // OpenAI-compatible server
+            openai_server_status,
+            openai_server_apply,
+            openai_server_set_config,
+            openai_server_regenerate_key,
             mcp_tool_server_status,
             mcp_tool_server_apply,
             mcp_tool_server_set_config,

@@ -4,6 +4,10 @@
 /// （例如 `{provider_id}:oauth_refresh`）。
 pub const BRIDGE_TOKEN_KEY: &str = "claude-bridge:token";
 
+/// 對外 OpenAI 相容 server 的 API key。與 Claude Code 橋接的 token 分開：
+/// 這把 key 可能交給區網上的其他機器，外洩時不該連帶讓 Claude Code 橋接失守。
+pub const OPENAI_SERVER_TOKEN_KEY: &str = "openai-server:token";
+
 /// 產生 32 bytes 的隨機 token（64 個 hex 字元）。
 ///
 /// 用兩個 UUIDv4 串接而非引入 `rand`：`uuid` 已是依賴，其 v4 走的是
