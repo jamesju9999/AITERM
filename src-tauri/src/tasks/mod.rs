@@ -32,6 +32,36 @@ pub fn task_dir(project_path: &Path, task_id: &str) -> PathBuf {
     project_path.join("tasks").join(task_id)
 }
 
+/// 資料庫裡記「專案內的檔案」用的路徑：**相對於專案資料夾**、一律用 `/` 分隔。
+///
+/// 專案資料夾設計成自成一體、可以整個搬走（見 [`task_dir`]），存絕對路徑等於
+/// 搬完之後全部指向舊位置。用 `/` 而不是平台分隔符，是為了同一份資料夾在
+/// macOS 與 Windows 之間複製後仍然讀得到（Windows 的 `join` 也接受 `/`）。
+///
+/// `abs` 不在 `project_path` 底下（理論上不會發生）時退回原本的絕對路徑，
+/// 讀取端仍然讀得到，只是不具可搬遷性。
+pub fn to_stored_path(project_path: &Path, abs: &Path) -> String {
+    match abs.strip_prefix(project_path) {
+        Ok(rel) => rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+        Err(_) => abs.to_string_lossy().into_owned(),
+    }
+}
+
+/// [`to_stored_path`] 的反向。**絕對路徑原樣回傳**：這個版本之前寫入的舊卡片
+/// 存的是絕對路徑，它們照舊能讀（搬遷時仍靠 `store::rewrite_stored_paths`）。
+pub fn resolve_stored_path(project_path: &Path, stored: &str) -> PathBuf {
+    let p = Path::new(stored);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        project_path.join(p)
+    }
+}
+
 pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS tasks (
@@ -139,5 +169,52 @@ mod task_dir_tests {
     fn is_rooted_at_the_project_folder() {
         let project = std::path::Path::new("/projects/makemoney");
         assert_eq!(task_dir(project, "abc"), project.join("tasks").join("abc"));
+    }
+}
+
+#[cfg(test)]
+mod stored_path_tests {
+    use super::*;
+
+    #[test]
+    fn a_path_inside_the_project_is_stored_relative_with_forward_slashes() {
+        let project = Path::new("/projects/makemoney");
+        let abs = task_dir(project, "abc").join("session.jsonl");
+        assert_eq!(to_stored_path(project, &abs), "tasks/abc/session.jsonl");
+    }
+
+    #[test]
+    fn a_path_outside_the_project_falls_back_to_the_absolute_path() {
+        let stored = to_stored_path(Path::new("/projects/a"), Path::new("/elsewhere/s.jsonl"));
+        assert_eq!(stored, "/elsewhere/s.jsonl");
+    }
+
+    #[test]
+    fn a_relative_path_resolves_against_the_project_folder() {
+        let project = Path::new("/projects/makemoney");
+        assert_eq!(
+            resolve_stored_path(project, "tasks/abc/session.jsonl"),
+            project.join("tasks").join("abc").join("session.jsonl")
+        );
+    }
+
+    /// 舊卡片存的是絕對路徑，不能因為新的解析規則就讀不到。
+    #[test]
+    fn an_absolute_legacy_path_is_returned_untouched() {
+        let project = Path::new("/projects/new-home");
+        let legacy = if cfg!(windows) { r"C:\old\tasks\x\session.jsonl" } else { "/old/tasks/x/session.jsonl" };
+        assert_eq!(resolve_stored_path(project, legacy), PathBuf::from(legacy));
+    }
+
+    #[test]
+    fn store_then_resolve_round_trips_and_survives_moving_the_project() {
+        let old_home = Path::new("/projects/old");
+        let stored = to_stored_path(old_home, &task_dir(old_home, "abc").join("session.jsonl"));
+        let new_home = Path::new("/somewhere/else/entirely");
+        assert_eq!(
+            resolve_stored_path(new_home, &stored),
+            task_dir(new_home, "abc").join("session.jsonl"),
+            "搬遷後要指向新位置，不是舊位置"
+        );
     }
 }

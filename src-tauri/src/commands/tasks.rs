@@ -605,9 +605,16 @@ pub async fn tasks_clone(
 /// 或使用者把 `claude_command` 設成別的東西時，JSONL 不存在，而終端機
 /// 畫面是唯一的診斷線索。原本的東西還在，沒有東西壞掉，不值得打斷
 /// 使用者。但對 log 不是——見下面兩個 `eprintln!`。
-pub fn resolve_transcript(session_path: Option<&str>, transcript_path: Option<&str>) -> String {
-    if let Some(p) = session_path {
-        match fs::read_to_string(p) {
+pub fn resolve_transcript(
+    project_path: &std::path::Path,
+    session_path: Option<&str>,
+    transcript_path: Option<&str>,
+) -> String {
+    if let Some(stored) = session_path {
+        // 新卡片存相對於專案資料夾的路徑，舊卡片是絕對路徑，兩種都解得開。
+        let resolved = crate::tasks::resolve_stored_path(project_path, stored);
+        let p = resolved.display();
+        match fs::read_to_string(&resolved) {
             Ok(raw) => {
                 let rendered = crate::tasks::session_log::render_session_log(&raw);
                 if !rendered.trim().is_empty() {
@@ -641,8 +648,8 @@ pub fn resolve_transcript(session_path: Option<&str>, transcript_path: Option<&s
 /// below against a real `TaskRow`, is what actually pins which column goes
 /// where; `resolve_transcript`'s own tests can't, since they call it with
 /// already-correctly-labelled arguments and never touch a `TaskRow`.
-fn transcript_for_row(row: &TaskRow) -> String {
-    resolve_transcript(row.session_path.as_deref(), row.transcript_path.as_deref())
+fn transcript_for_row(project_path: &std::path::Path, row: &TaskRow) -> String {
+    resolve_transcript(project_path, row.session_path.as_deref(), row.transcript_path.as_deref())
 }
 
 /// 只留 `text` 的最後 `max_chars` 個字元（從行首切，不會切半行），前面補
@@ -677,8 +684,9 @@ pub async fn tasks_read_transcript(
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "task not found".to_string())?;
+    let project_path = p.path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let text = transcript_for_row(&row);
+        let text = transcript_for_row(&project_path, &row);
         match tail_chars {
             Some(n) => keep_tail(text, n),
             None => text,
@@ -921,9 +929,55 @@ mod transcript_for_row_tests {
             .unwrap();
 
         let row = store::get_task(&pool, &id).await.unwrap().unwrap();
-        let out = transcript_for_row(&row);
+        let out = transcript_for_row(dir.path(), &row);
         assert!(out.contains("使用者：做這件事"), "沒有用 session 記錄：{out}");
         assert!(!out.contains("只有最後一屏"), "把兩個欄位接反了：{out}");
+    }
+
+    /// 這一組測試存在的理由：專案資料夾搬走後，卡片的對話記錄仍然要讀得到。
+    /// 存絕對路徑時，搬遷後 `session_path` 指向舊位置，讀不到就默默退回終端機文字。
+    #[test]
+    fn a_relative_session_path_still_resolves_after_the_project_folder_moves() {
+        let old_home = tempfile::tempdir().unwrap();
+        let card = crate::tasks::task_dir(old_home.path(), "c1");
+        std::fs::create_dir_all(&card).unwrap();
+        std::fs::write(card.join("session.jsonl"), ONE_TURN_FOR_TEST).unwrap();
+        let stored = crate::tasks::to_stored_path(old_home.path(), &card.join("session.jsonl"));
+
+        // 「搬遷」：整個資料夾複製到另一個位置，舊位置刪掉。
+        let new_home = tempfile::tempdir().unwrap();
+        let new_card = crate::tasks::task_dir(new_home.path(), "c1");
+        std::fs::create_dir_all(&new_card).unwrap();
+        std::fs::copy(card.join("session.jsonl"), new_card.join("session.jsonl")).unwrap();
+        drop(old_home);
+
+        let out = resolve_transcript(new_home.path(), Some(&stored), None);
+        assert!(out.contains("使用者：做這件事"), "搬遷後讀不到：{out}");
+    }
+
+    /// 這個版本之前寫入的卡片存的是絕對路徑，不能因此讀不到。
+    #[test]
+    fn an_absolute_legacy_session_path_still_reads() {
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join("session.jsonl");
+        std::fs::write(&file, ONE_TURN_FOR_TEST).unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+
+        let out = resolve_transcript(elsewhere.path(), Some(file.to_str().unwrap()), None);
+        assert!(out.contains("使用者：做這件事"), "舊的絕對路徑讀不到：{out}");
+    }
+
+    #[test]
+    fn a_missing_session_file_falls_back_to_the_terminal_capture() {
+        let home = tempfile::tempdir().unwrap();
+        let transcript = home.path().join("transcript.txt");
+        std::fs::write(&transcript, "終端機文字").unwrap();
+        let out = resolve_transcript(
+            home.path(),
+            Some("tasks/gone/session.jsonl"),
+            Some(transcript.to_str().unwrap()),
+        );
+        assert_eq!(out, "終端機文字");
     }
 
     const ONE_TURN_FOR_TEST: &str =

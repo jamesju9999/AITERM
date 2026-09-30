@@ -334,7 +334,9 @@ async fn persist_outcome(
             // 就變成沒有任何東西指向的孤兒，而使用者只會看到記錄莫名其妙
             // 退回終端機擷取。`set_session_id` 失敗則無害——watch closure
             // 手上本來就有自己的複本。
-            if let Err(e) = store::set_session_path(pool, task_id, &path).await {
+            // 存相對於專案資料夾的路徑（見 `to_stored_path`），專案搬走後才讀得到。
+            let stored = crate::tasks::to_stored_path(project_path, std::path::Path::new(&path));
+            if let Err(e) = store::set_session_path(pool, task_id, &stored).await {
                 log::error!("set_session_path {task_id}: {e}");
             }
         }
@@ -1130,13 +1132,15 @@ mod persist_tests {
         assert_eq!(row.status, "done");
         assert_eq!(row.outcome.as_deref(), Some("success"));
         let session_path = row.session_path.expect("session_path 沒被寫入");
-        assert!(session_path.ends_with("session.jsonl"), "{session_path}");
+        // 存的是相對於專案資料夾的路徑，不是絕對路徑——專案搬走才不會斷。
+        assert_eq!(session_path, format!("tasks/{task_id}/session.jsonl"));
+        let resolved = crate::tasks::resolve_stored_path(project.path(), &session_path);
         assert_eq!(
-            std::path::Path::new(&session_path).parent().unwrap(),
+            resolved.parent().unwrap(),
             crate::tasks::task_dir(project.path(), &task_id),
             "沒有存進卡片資料夾"
         );
-        assert_eq!(std::fs::read_to_string(&session_path).unwrap(), "{\"type\":\"user\"}\n");
+        assert_eq!(std::fs::read_to_string(&resolved).unwrap(), "{\"type\":\"user\"}\n");
     }
 
     /// 沒有 session id（`claude_command` 不是 claude，或使用者沒設定）：

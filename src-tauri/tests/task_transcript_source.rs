@@ -20,7 +20,7 @@ fn prefers_the_rendered_session_log() {
     let session = write(d.path(), "session.jsonl", ONE_TURN);
     let transcript = write(d.path(), "transcript.txt", "只有最後一屏");
 
-    let out = resolve_transcript(Some(&session), Some(&transcript));
+    let out = resolve_transcript(d.path(), Some(&session), Some(&transcript));
     assert!(out.contains("使用者：做這件事"), "沒有用 session 記錄：{out}");
     assert!(!out.contains("只有最後一屏"), "不該同時吐出兩份：{out}");
 }
@@ -29,7 +29,7 @@ fn prefers_the_rendered_session_log() {
 fn falls_back_to_the_terminal_capture_when_there_is_no_session_log() {
     let d = tempfile::tempdir().unwrap();
     let transcript = write(d.path(), "transcript.txt", "只有最後一屏");
-    assert_eq!(resolve_transcript(None, Some(&transcript)), "只有最後一屏");
+    assert_eq!(resolve_transcript(d.path(), None, Some(&transcript)), "只有最後一屏");
 }
 
 /// session_path 有值但檔案被刪掉／讀不到——必須退回，不能回空字串。
@@ -38,7 +38,7 @@ fn falls_back_when_the_session_file_is_gone() {
     let d = tempfile::tempdir().unwrap();
     let transcript = write(d.path(), "transcript.txt", "只有最後一屏");
     let missing = d.path().join("nope.jsonl").to_string_lossy().into_owned();
-    assert_eq!(resolve_transcript(Some(&missing), Some(&transcript)), "只有最後一屏");
+    assert_eq!(resolve_transcript(d.path(), Some(&missing), Some(&transcript)), "只有最後一屏");
 }
 
 /// 檔案在、但裡面一句對話都渲染不出來（整份都是 mode / attachment 之類的
@@ -48,12 +48,13 @@ fn falls_back_when_the_session_log_renders_to_nothing() {
     let d = tempfile::tempdir().unwrap();
     let session = write(d.path(), "session.jsonl", "{\"type\":\"mode\"}\n");
     let transcript = write(d.path(), "transcript.txt", "只有最後一屏");
-    assert_eq!(resolve_transcript(Some(&session), Some(&transcript)), "只有最後一屏");
+    assert_eq!(resolve_transcript(d.path(), Some(&session), Some(&transcript)), "只有最後一屏");
 }
 
 #[test]
 fn returns_empty_when_there_is_nothing_at_all() {
-    assert_eq!(resolve_transcript(None, None), "");
+    let d = tempfile::tempdir().unwrap();
+    assert_eq!(resolve_transcript(d.path(), None, None), "");
 }
 
 /// 兩個路徑都有值、但兩個檔案都讀不到（卡片資料夾被刪掉、專案搬家而
@@ -67,5 +68,5 @@ fn returns_empty_when_both_paths_point_at_missing_files() {
     let d = tempfile::tempdir().unwrap();
     let no_session = d.path().join("gone.jsonl").to_string_lossy().into_owned();
     let no_transcript = d.path().join("gone.txt").to_string_lossy().into_owned();
-    assert_eq!(resolve_transcript(Some(&no_session), Some(&no_transcript)), "");
+    assert_eq!(resolve_transcript(d.path(), Some(&no_session), Some(&no_transcript)), "");
 }
