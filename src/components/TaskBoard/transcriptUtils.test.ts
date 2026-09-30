@@ -80,4 +80,34 @@ describe("parseTranscriptTurns", () => {
     const { turns } = parseTranscriptTurns("just\nplain output");
     expect(turns).toEqual([]);
   });
+  it("recognizes the session-log format (使用者：) used by real transcripts", () => {
+    const text = [
+      "使用者：第一個指示",
+      "  第二行仍屬於指示",
+      "〔工具〕Bash",
+      "  command: ls",
+      "〔結果〕ok",
+      "Claude：好了",
+      "使用者：請繼續",
+      "Claude：繼續中",
+    ].join("\n");
+    const { preamble, turns } = parseTranscriptTurns(text);
+    expect(preamble).toBe("");
+    expect(turns).toHaveLength(2);
+    expect(turns[0].prompt).toBe("第一個指示");
+    expect(turns[0].output).toBe("  第二行仍屬於指示\n〔工具〕Bash\n  command: ls\n〔結果〕ok\nClaude：好了");
+    expect(turns[1]).toEqual({ prompt: "請繼續", output: "Claude：繼續中" });
+  });
+
+  it("ignores ❯ lines when the session-log format is present", () => {
+    const text = ["使用者：問題", "Claude：答案", "❯ 不是提示"].join("\n");
+    const { turns } = parseTranscriptTurns(text);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].prompt).toBe("問題");
+  });
+
+  it("does not treat an indented 使用者： inside a tool argument as a prompt", () => {
+    const text = ["使用者：問題", "〔工具〕Write", "  content: line1", "  使用者：假的", "Claude：完成"].join("\n");
+    expect(parseTranscriptTurns(text).turns).toHaveLength(1);
+  });
 });

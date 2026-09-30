@@ -47,15 +47,21 @@ export interface ParsedTranscript {
 }
 
 const PROMPT_LINE = /^\s*❯ (\S.*)$/;
+// Session-log transcripts (src-tauri/src/tasks/session_log.rs) mark each user
+// message with a column-0 `使用者：`; continuation lines are indented, so an
+// embedded copy of the marker can't collide with a real one.
+const SESSION_PROMPT_LINE = /^使用者：(.*)$/;
 const RULE_LINE = /^\s*─{10,}\s*$/;
 
 const trimBlankEdges = (lines: string[]): string => lines.join("\n").replace(/^\n+|\s+$/g, "");
 
-/** Splits a serialized Claude Code transcript into one turn per user prompt
- * (`❯ text`). A `❯` line sandwiched between two `─` rules is the live input
+/** Splits a transcript into one turn per user prompt. Prefers the session-log
+ * format (`使用者：text`); when that marker is absent, falls back to the
+ * serialized-terminal format (`❯ text`). A `❯` line sandwiched between two `─` rules is the live input
  * box (bare, or holding text the user hasn't sent yet), not a prompt. */
 export function parseTranscriptTurns(text: string): ParsedTranscript {
   const lines = text.split("\n");
+  const sessionFormat = lines.some((l) => SESSION_PROMPT_LINE.test(l));
   const preamble: string[] = [];
   const turns: TranscriptTurn[] = [];
   let current: { prompt: string; out: string[] } | null = null;
@@ -63,11 +69,12 @@ export function parseTranscriptTurns(text: string): ParsedTranscript {
     if (current) turns.push({ prompt: current.prompt, output: trimBlankEdges(current.out) });
   };
   lines.forEach((line, i) => {
-    const m = PROMPT_LINE.exec(line);
-    const inInputBox = RULE_LINE.test(lines[i - 1] ?? "") && RULE_LINE.test(lines[i + 1] ?? "");
+    const m = (sessionFormat ? SESSION_PROMPT_LINE : PROMPT_LINE).exec(line);
+    const inInputBox =
+      !sessionFormat && RULE_LINE.test(lines[i - 1] ?? "") && RULE_LINE.test(lines[i + 1] ?? "");
     if (m && !inInputBox) {
       flush();
-      current = { prompt: m[1].trim(), out: [] };
+      current = { prompt: m[1].trim() || "…", out: [] };
     } else {
       (current ? current.out : preamble).push(line);
     }
