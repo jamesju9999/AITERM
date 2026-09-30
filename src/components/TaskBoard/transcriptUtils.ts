@@ -34,3 +34,44 @@ export function stripAnsiCodes(text: string): string {
   // eslint-disable-next-line no-control-regex -- matching real ESC bytes is the point
   return text.replace(/\x1b\[\??[0-9;]*[a-zA-Z]/g, "");
 }
+
+export interface TranscriptTurn {
+  prompt: string;
+  output: string;
+}
+
+export interface ParsedTranscript {
+  /** Everything before the first user prompt. */
+  preamble: string;
+  turns: TranscriptTurn[];
+}
+
+const PROMPT_LINE = /^\s*❯ (\S.*)$/;
+const RULE_LINE = /^\s*─{10,}\s*$/;
+
+const trimBlankEdges = (lines: string[]): string => lines.join("\n").replace(/^\n+|\s+$/g, "");
+
+/** Splits a serialized Claude Code transcript into one turn per user prompt
+ * (`❯ text`). A `❯` line sandwiched between two `─` rules is the live input
+ * box (bare, or holding text the user hasn't sent yet), not a prompt. */
+export function parseTranscriptTurns(text: string): ParsedTranscript {
+  const lines = text.split("\n");
+  const preamble: string[] = [];
+  const turns: TranscriptTurn[] = [];
+  let current: { prompt: string; out: string[] } | null = null;
+  const flush = () => {
+    if (current) turns.push({ prompt: current.prompt, output: trimBlankEdges(current.out) });
+  };
+  lines.forEach((line, i) => {
+    const m = PROMPT_LINE.exec(line);
+    const inInputBox = RULE_LINE.test(lines[i - 1] ?? "") && RULE_LINE.test(lines[i + 1] ?? "");
+    if (m && !inInputBox) {
+      flush();
+      current = { prompt: m[1].trim(), out: [] };
+    } else {
+      (current ? current.out : preamble).push(line);
+    }
+  });
+  flush();
+  return { preamble: trimBlankEdges(preamble), turns };
+}

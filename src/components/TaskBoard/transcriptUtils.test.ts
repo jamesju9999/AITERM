@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { stripAnsiCodes, collapseConsecutiveDuplicateLines } from "./transcriptUtils";
+import {
+  stripAnsiCodes,
+  collapseConsecutiveDuplicateLines,
+  parseTranscriptTurns,
+} from "./transcriptUtils";
 
 describe("stripAnsiCodes", () => {
   it("removes SGR color/style codes", () => {
@@ -37,5 +41,43 @@ describe("stripAnsiCodes", () => {
 describe("collapseConsecutiveDuplicateLines (existing, unchanged)", () => {
   it("still collapses duplicate lines", () => {
     expect(collapseConsecutiveDuplicateLines("a\nb\nb\nb\nc")).toBe("a\nb\nc");
+  });
+});
+
+describe("parseTranscriptTurns", () => {
+  const RULE = "─".repeat(40);
+
+  it("splits output into one turn per user prompt", () => {
+    const text = ["❯ first prompt", "answer one", "more one", "❯ second prompt", "answer two"].join("\n");
+    const { preamble, turns } = parseTranscriptTurns(text);
+    expect(preamble).toBe("");
+    expect(turns).toEqual([
+      { prompt: "first prompt", output: "answer one\nmore one" },
+      { prompt: "second prompt", output: "answer two" },
+    ]);
+  });
+
+  it("does not treat the bare empty input-box ❯ as a prompt", () => {
+    const text = ["some output", RULE, "❯ ", RULE, "status line"].join("\n");
+    expect(parseTranscriptTurns(text).turns).toEqual([]);
+  });
+
+  it("does not treat unsent text inside the input box as a prompt", () => {
+    const text = ["❯ real prompt", "answer", RULE, "❯ half typed", RULE, "status"].join("\n");
+    const { turns } = parseTranscriptTurns(text);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].prompt).toBe("real prompt");
+    expect(turns[0].output).toContain("❯ half typed");
+  });
+
+  it("puts text before the first prompt into preamble", () => {
+    const { preamble, turns } = parseTranscriptTurns("boot noise\n\n❯ hi\nhello");
+    expect(preamble).toBe("boot noise");
+    expect(turns).toEqual([{ prompt: "hi", output: "hello" }]);
+  });
+
+  it("returns no turns when there are no prompts", () => {
+    const { turns } = parseTranscriptTurns("just\nplain output");
+    expect(turns).toEqual([]);
   });
 });
