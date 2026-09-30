@@ -74,7 +74,7 @@ pub fn status_for(err: &AiError) -> u16 {
     }
 }
 
-fn error_text(err: &AiError) -> String {
+pub(crate) fn error_text(err: &AiError) -> String {
     // AiError 每個變體都用 thiserror 的 #[error(...)] 定義了 Display，
     // 比逐變體反序列化欄位更省事，且新增變體會自動涵蓋（不會漏字串）。
     //
