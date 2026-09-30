@@ -29,6 +29,7 @@ const BASE_CONFIG: AppConfig = {
   enterprise_policy: null,
   claude_bridge: { enabled: false, port: 8317, default_on_new_tab: false, opus: null, sonnet: null, haiku: null },
   mcp_tool_server: { enabled: false, port: 8318, coordination_enabled: false },
+  openai_server: { enabled: false, port: 8319, allow_lan: false, aliases: [] },
 };
 
 const STOPPED_STATUS: McpToolServerStatus = { running: false, port: null, token: null, error: null };

@@ -46,6 +46,7 @@ const BASE_CONFIG: AppConfig = {
     haiku: null,
   },
   mcp_tool_server: { enabled: false, port: 8318, coordination_enabled: false },
+  openai_server: { enabled: false, port: 8319, allow_lan: false, aliases: [] },
 };
 
 // provider 列表改走 listProviders()（ipc/provider.ts 的 ProviderInfo），

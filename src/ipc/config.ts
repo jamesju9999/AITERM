@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ClaudeBridgeConfig } from "./bridge";
 import type { McpToolServerConfig } from "./mcpToolServer";
+import type { OpenAiServerConfig } from "./openaiServer";
 
 // ── Types (mirrors Rust config/types.rs) ──────────────────────────────────────
 
@@ -65,6 +66,7 @@ export interface AppConfig {
   mcp_enabled?: boolean;
   claude_bridge: ClaudeBridgeConfig;
   mcp_tool_server: McpToolServerConfig;
+  openai_server: OpenAiServerConfig;
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────

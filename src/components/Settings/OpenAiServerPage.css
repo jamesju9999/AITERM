@@ -1,0 +1,154 @@
+.openai-server-page {
+  padding: 24px;
+  max-width: 640px;
+}
+
+.openai-server-desc {
+  color: var(--text-secondary, #888);
+  margin-bottom: 16px;
+}
+
+.openai-server-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.openai-server-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-secondary, #888);
+}
+
+.openai-server-dot--on {
+  background: #4ade80;
+}
+
+.openai-server-error {
+  color: #f87171;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.openai-server-section {
+  margin: 20px 0;
+}
+
+.openai-server-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.openai-server-row input[type="number"] {
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  color: #e6e6e6;
+  font-size: 13px;
+  padding: 6px 10px;
+  width: 100px;
+}
+
+.openai-server-row input[type="number"]:focus {
+  border-color: #2d5aab;
+  outline: none;
+}
+
+.openai-server-command {
+  background: var(--bg-secondary, #1a1a1a);
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  padding: 12px;
+  font-family: monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 8px 0;
+}
+
+.openai-server-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.openai-server-actions button {
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  color: #e6e6e6;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 8px 16px;
+}
+
+.openai-server-actions button:hover:not(:disabled) {
+  border-color: #2d5aab;
+}
+
+.openai-server-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.openai-server-warning {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.4);
+  border-radius: 6px;
+  font-size: 13px;
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+
+.openai-server-key {
+  font-family: monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.openai-server-alias {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.openai-server-alias input,
+.openai-server-alias select,
+.openai-server-page button {
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  color: #e6e6e6;
+  font-size: 13px;
+  padding: 6px 10px;
+}
+
+.openai-server-page button {
+  cursor: pointer;
+}
+
+.openai-server-page button:hover:not(:disabled) {
+  border-color: #2d5aab;
+}
+
+.openai-server-page button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.openai-server-invalid {
+  border-color: #f87171 !important;
+}
+
+.openai-server-danger {
+  border-color: #f87171 !important;
+  color: #f87171 !important;
+}
