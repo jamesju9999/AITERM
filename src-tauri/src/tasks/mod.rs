@@ -53,13 +53,31 @@ pub fn to_stored_path(project_path: &Path, abs: &Path) -> String {
 
 /// [`to_stored_path`] 的反向。**絕對路徑原樣回傳**：這個版本之前寫入的舊卡片
 /// 存的是絕對路徑，它們照舊能讀（搬遷時仍靠 `store::rewrite_stored_paths`）。
+///
+/// 另一種作業系統的絕對路徑（Windows 的 `C:\...` 複製到 macOS，或反過來）在本機
+/// `is_absolute()` 為 false，原樣接在專案資料夾後面一定指向不存在的檔案。
+/// 卡片檔案永遠在 `<專案>/tasks/<id>/` 底下，所以取最後一個 `tasks` 段之後的
+/// 部分接到本機專案資料夾；找不到 `tasks` 段就維持原行為。
 pub fn resolve_stored_path(project_path: &Path, stored: &str) -> PathBuf {
     let p = Path::new(stored);
     if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        project_path.join(p)
+        return p.to_path_buf();
     }
+    if looks_absolute_on_another_platform(stored) {
+        let unified = stored.replace('\\', "/");
+        if let Some(i) = unified.rfind("/tasks/") {
+            return project_path.join(&unified[i + 1..]);
+        }
+    }
+    project_path.join(p)
+}
+
+/// 本機判為相對、但長得像絕對路徑：磁碟機代號（`C:\`、`C:/`）、UNC（`\\`）、
+/// 或開頭 `/`（Windows 上判為相對）。
+fn looks_absolute_on_another_platform(stored: &str) -> bool {
+    let b = stored.as_bytes();
+    let drive = b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/');
+    drive || stored.starts_with("\\\\") || stored.starts_with('/')
 }
 
 pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
@@ -204,6 +222,49 @@ mod stored_path_tests {
         let project = Path::new("/projects/new-home");
         let legacy = if cfg!(windows) { r"C:\old\tasks\x\session.jsonl" } else { "/old/tasks/x/session.jsonl" };
         assert_eq!(resolve_stored_path(project, legacy), PathBuf::from(legacy));
+    }
+
+    /// 從另一種作業系統複製過來的專案：舊卡片存的是對方平台的絕對路徑
+    /// （例如 Windows 的 `C:\...\tasks\<id>\session.jsonl`），在這台機器上
+    /// `is_absolute()` 為 false，若原樣接在專案資料夾後面就是不存在的路徑，
+    /// 對話記錄會安靜地退回空白。卡片資料夾永遠是 `<專案>/tasks/<id>/`，
+    /// 所以取 `tasks/` 之後的部分重新接到本機的專案資料夾即可。
+    #[test]
+    fn a_foreign_platform_absolute_path_maps_into_the_local_project_folder() {
+        let (project, foreign) = if cfg!(windows) {
+            (Path::new(r"C:\Users\me\ARESGUI"), "/Users/old/AITERMProjects/ARESGUI/tasks/abc/session.jsonl")
+        } else {
+            (Path::new("/Users/me/ARESGUI"), r"C:\AITERMProjects\ARESGUI\tasks\abc\session.jsonl")
+        };
+        assert_eq!(
+            resolve_stored_path(project, foreign),
+            project.join("tasks").join("abc").join("session.jsonl")
+        );
+    }
+
+    #[test]
+    fn a_foreign_attachment_path_keeps_its_subfolder_and_filename() {
+        if cfg!(windows) {
+            return;
+        }
+        let project = Path::new("/Users/me/ARESGUI");
+        assert_eq!(
+            resolve_stored_path(project, r"D:\tasks\ARESGUI\tasks\abc\attachments\shot 1.png"),
+            project.join("tasks/abc/attachments/shot 1.png"),
+            "專案資料夾本身叫 tasks 時要取最後一個 tasks 段"
+        );
+    }
+
+    #[test]
+    fn a_foreign_path_without_a_tasks_segment_is_left_alone() {
+        if cfg!(windows) {
+            return;
+        }
+        let project = Path::new("/Users/me/ARESGUI");
+        assert_eq!(
+            resolve_stored_path(project, r"C:\somewhere\else.png"),
+            project.join(r"C:\somewhere\else.png")
+        );
     }
 
     #[test]

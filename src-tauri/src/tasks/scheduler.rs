@@ -156,7 +156,11 @@ impl Dispatcher for RealDispatcher {
             .await
             .map_err(|e| e.to_string())?
             .into_iter()
-            .map(|a| a.stored_path)
+            .map(|a| {
+                crate::tasks::resolve_stored_path(&project.path, &a.stored_path)
+                    .to_string_lossy()
+                    .into_owned()
+            })
             .collect::<Vec<_>>();
         let prompt = dispatch::build_prompt(&task.body, &attachments);
         let claude_cmd = self.config.get().task_board.claude_command;

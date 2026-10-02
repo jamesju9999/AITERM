@@ -547,7 +547,7 @@ pub async fn tasks_remove_attachment(
                 return Err("attachments can only be changed while the card is in 計畫中".into());
             }
         }
-        let _ = fs::remove_file(&att.stored_path);
+        let _ = fs::remove_file(crate::tasks::resolve_stored_path(&p.path, &att.stored_path));
     }
     store::remove_attachment(&p.pool, &attachment_id)
         .await
@@ -579,7 +579,8 @@ pub async fn tasks_clone(
         .await
         .map_err(|e| e.to_string())?
     {
-        if !std::path::Path::new(&att.stored_path).exists() {
+        let src_file = crate::tasks::resolve_stored_path(&p.path, &att.stored_path);
+        if !src_file.exists() {
             continue;
         }
         if let Err(e) = fs::create_dir_all(&dir) {
@@ -587,7 +588,7 @@ pub async fn tasks_clone(
             break;
         }
         let dest = dir.join(&att.filename);
-        if fs::copy(&att.stored_path, &dest).is_err() {
+        if fs::copy(&src_file, &dest).is_err() {
             continue;
         }
         let _ = store::add_attachment(&p.pool, &new_id, &att.filename, &dest.to_string_lossy()).await;
@@ -638,7 +639,7 @@ pub fn resolve_transcript(
     // session_path 為 None 時刻意不記——那是舊卡片與非 claude 指令的正常
     // 狀態，記了就是雜訊，而雜訊會讓上面兩行真正有用的訊息被忽略。
     transcript_path
-        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|p| fs::read_to_string(crate::tasks::resolve_stored_path(project_path, p)).ok())
         .unwrap_or_default()
 }
 
@@ -709,7 +710,7 @@ pub async fn tasks_save_transcript(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "task not found".to_string())?;
     let path = row.transcript_path.ok_or_else(|| "no transcript path yet".to_string())?;
-    fs::write(&path, text).map_err(|e| e.to_string())
+    fs::write(crate::tasks::resolve_stored_path(&p.path, &path), text).map_err(|e| e.to_string())
 }
 
 /// 這個專案的卡片用過的工作目錄。專案不綁資料夾（工作可散布在多個
