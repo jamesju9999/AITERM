@@ -975,6 +975,7 @@ const zhTW = {
     // StreamingIndicator
     streaming_generating: "AI 生成指令中…",
     streaming_thinking: "思考中…",
+    streaming_stop: "停止",
     // MermaidBlock
     mermaid_error: "Mermaid 錯誤：",
     mermaid_source: "原始碼",
@@ -1537,6 +1538,8 @@ const zhTW = {
     term_agent_status_done: (steps: number) => `完成（${steps} 步）`,
     term_agent_status_failed: (reason: string) => `已停止：${reason}`,
     term_agent_status_dismiss: "關閉",
+    term_agent_status_stop: "停止",
+    term_agent_stopped: "[已停止]",
     term_agent_timeout: "⚠ Agent 逾時：指令超過 60 秒未完成，可能需要手動輸入（如密碼）。Agent 已暫停。",
     term_agent_timeout_fail: "指令逾時，可能需要互動式輸入",
     term_err_no_api_key: "未設定 API Key",
@@ -2627,6 +2630,7 @@ const enRaw = {
     // StreamingIndicator
     streaming_generating: "Generating command…",
     streaming_thinking: "Thinking…",
+    streaming_stop: "Stop",
     // MermaidBlock
     mermaid_error: "Mermaid Error:",
     mermaid_source: "Source",
@@ -3188,6 +3192,8 @@ const enRaw = {
     term_agent_status_done: (steps: number) => `Completed (${steps} steps)`,
     term_agent_status_failed: (reason: string) => `Stopped: ${reason}`,
     term_agent_status_dismiss: "Dismiss",
+    term_agent_status_stop: "Stop",
+    term_agent_stopped: "[Stopped]",
     term_agent_timeout: "⚠ Agent Timeout: Command did not complete in 60s, manual input (like password) may be required. Agent paused.",
     term_agent_timeout_fail: "Command timeout, interactive input may be required",
     term_err_no_api_key: "API Key not configured",

@@ -36,7 +36,7 @@ use commands::{
         api_docs_fetch_tree, api_docs_login, api_docs_logout,
     },
     appimage::{appimage_integrate, appimage_integration_state, appimage_remove_integration},
-    ai::{agent_chat, ai_chat, ai_chat_ctx, ai_query},
+    ai::{agent_chat, ai_abort, ai_chat, ai_chat_ctx, ai_query, AiAbortRegistry},
     bridge::{bridge_apply, bridge_set_config, bridge_status},
     openai_server::{
         openai_server_apply, openai_server_regenerate_key, openai_server_set_config,
@@ -278,6 +278,7 @@ pub fn run() {
         .manage(Db2SidecarState::new(sidecar_path))
         .manage(Arc::new(Mutex::new(VcsCredentialManager::new())))
         .manage(VcsAgentStepRegistry::new())
+        .manage(AiAbortRegistry::new())
         .manage(Arc::new(Mutex::new(EnterpriseTaskState::new())))
         .manage(tokio::sync::Mutex::new(telegram::TelegramState { active_task: None }))
         .manage(mcp_manager)
@@ -467,6 +468,7 @@ pub fn run() {
             write_pasted_file,
             // AI query
             ai_query,
+            ai_abort,
             ai_chat_ctx,
             ai_chat,
             agent_chat,

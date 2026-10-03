@@ -69,4 +69,22 @@ describe("AgentStatusBar", () => {
     );
     expect(screen.queryByTestId("mission-tokens")).not.toBeInTheDocument();
   });
+  it("shows a stop button only while the agent is active", async () => {
+    const onStop = vi.fn();
+    const { unmount } = render(
+      <LocaleProvider>
+        <AgentStatusBar status={{ phase: "asking", step: 1, maxSteps: 5 }} onDismiss={vi.fn()} onStop={onStop} />
+      </LocaleProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /停止/ }));
+    expect(onStop).toHaveBeenCalledTimes(1);
+    unmount();
+
+    render(
+      <LocaleProvider>
+        <AgentStatusBar status={{ phase: "done", steps: 1 }} onDismiss={vi.fn()} onStop={onStop} />
+      </LocaleProvider>,
+    );
+    expect(screen.queryByRole("button", { name: /停止/ })).not.toBeInTheDocument();
+  });
 });

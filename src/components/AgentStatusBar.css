@@ -51,6 +51,19 @@
 }
 .aiterm-agent-status__dismiss:hover { opacity: 1; }
 
+.aiterm-agent-status__stop {
+  flex-shrink: 0;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  border-radius: 10px;
+  padding: 0 8px;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.75;
+}
+.aiterm-agent-status__stop:hover { opacity: 1; color: #e5484d; }
+
 .aiterm-agent-status--done {
   border-color: rgba(52, 199, 89, 0.4);
   background: rgba(52, 199, 89, 0.12);

@@ -26,6 +26,7 @@ import {
 } from "../ipc/pty";
 import {
   invokeAiQuery,
+  abortAi,
   type AiStreamEvent,
 } from "../ipc/ai";
 import { getConfig, type ExecutionMode, type SubmitShortcut, type SuggestionAcceptKey } from "../ipc/config";
@@ -675,6 +676,22 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
   // Abort signal for agent loop — set to true to stop the loop
   const agentAbortRef = useRef(false);
+  // 停止鈕：設中止旗標、中斷後端的上游請求、收掉等待中的 UI。
+  // 已在執行中的 PTY 指令不會被殺（要中止請照常按 Ctrl+C）。
+  const handleStopAi = useCallback(() => {
+    agentAbortRef.current = true;
+    const sid = sessionRef.current;
+    if (sid) abortAi(sid).catch(console.error);
+    streamingRef.current = false;
+    setStreamText("");
+    setPreview(INITIAL_PREVIEW);
+    setAgentPhase(null);
+    termRef.current?.write(`\r\n\x1b[33m${t.term_agent_stopped}\x1b[0m\r\n`);
+    if (agentMissionRef.current?.active) {
+      stopMission();
+      onMissionEnd?.();
+    }
+  }, [stopMission, onMissionEnd, t]);
   const agentMissionRef = useRef(agentMission);
   useEffect(() => { agentMissionRef.current = agentMission; }, [agentMission]);
 
@@ -2417,12 +2434,13 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         <AgentStatusBar
           status={agentPhase}
           onDismiss={() => setAgentPhase(null)}
+          onStop={handleStopAi}
           missionTokens={agentMission?.tokensUsed ?? 0}
         />
       )}
       {!(isAlternateBuffer || isRawKeyboardModeActive) && (
         preview.loading && !agentPhase ? (
-          <StreamingIndicator visible text={streamText} />
+          <StreamingIndicator visible text={streamText} onStop={handleStopAi} />
         ) : (
         <WarpInput
           ref={warpInputRef}

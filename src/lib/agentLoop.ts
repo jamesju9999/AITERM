@@ -65,6 +65,7 @@ function handleAiQuery(
   onPhase?: (update: AgentPhase) => void,
   agentStep = 0,
   agentMaxSteps = 0,
+  abortRef?: React.MutableRefObject<boolean>,
 ) {
   void originalLine;
   setStreamText("");
@@ -74,6 +75,12 @@ function handleAiQuery(
   queryFn(query)
     .then((resp) => {
       streamingRef.current = false;
+
+      // 使用者在回應抵達前按了停止：丟掉結果，不執行也不顯示預覽。
+      if (abortRef?.current) {
+        setPreview(INITIAL_PREVIEW);
+        return;
+      }
 
       if (resp.command === "DONE") {
         setPreview(INITIAL_PREVIEW);
@@ -128,6 +135,11 @@ function handleAiQuery(
     .catch((rawErr: unknown) => {
       streamingRef.current = false;
       setStreamText("");
+      // 停止會讓後端中斷上游請求而回錯誤，那不是失敗，停止的收尾由呼叫端負責。
+      if (abortRef?.current) {
+        setPreview(INITIAL_PREVIEW);
+        return;
+      }
       const err = normalizeAiError(rawErr);
       writeRed(formatAiError(err));
 
@@ -314,6 +326,7 @@ function runAgentLoop(params: AgentLoopParams) {
     params.onPhase,       // onPhase: push running-phase status to the React status bar
     stepCount + 1,        // agentStep (1-based)
     maxSteps,             // agentMaxSteps
+    abortRef,             // 停止鈕：中止後忽略回應／錯誤
   );
 }
 

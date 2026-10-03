@@ -8,10 +8,29 @@
   font-size: 12px;
 }
 
+.aiterm-streaming__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.aiterm-streaming__stop {
+  border: 1px solid #555;
+  background: transparent;
+  color: #ccc;
+  border-radius: 12px;
+  padding: 1px 10px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.aiterm-streaming__stop:hover { border-color: #e5484d; color: #e5484d; }
+.aiterm-streaming__stop kbd { opacity: 0.6; font: inherit; margin-left: 4px; }
+
 .aiterm-streaming__label {
   color: #666;
   font-size: 11px;
-  margin-bottom: 4px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }

@@ -11,11 +11,13 @@ export type AgentPhase =
 interface AgentStatusBarProps {
   status: AgentPhase;
   onDismiss: () => void;
+  /** 進行中的階段顯示停止鈕。 */
+  onStop?: () => void;
   /** 本次 mission 累計 token；0 或未提供時不顯示。 */
   missionTokens?: number;
 }
 
-export function AgentStatusBar({ status, onDismiss, missionTokens }: AgentStatusBarProps) {
+export function AgentStatusBar({ status, onDismiss, onStop, missionTokens }: AgentStatusBarProps) {
   const { t } = useLocale();
 
   let icon: string;
@@ -74,6 +76,15 @@ export function AgentStatusBar({ status, onDismiss, missionTokens }: AgentStatus
             : String(missionTokens)}
         </span>
       ) : null}
+      {pulsing && onStop && (
+        <button
+          type="button"
+          className="aiterm-agent-status__stop"
+          onClick={onStop}
+        >
+          ■ {t.term_agent_status_stop}
+        </button>
+      )}
       {dismissible && (
         <button
           type="button"

@@ -150,6 +150,11 @@ export function invokeAiQuery(
   return invoke<AiCommandReady>("ai_query", { query, sessionId, locale });
 }
 
+/** 中斷這個 session 底下進行中的 AI 請求（上游連線一併中止）。沒有進行中的請求則無動作。 */
+export function abortAi(sessionId: string): Promise<void> {
+  return invoke<void>("ai_abort", { sessionId });
+}
+
 export interface RemoteCtx {
   os: string;
   shell: string | null;

@@ -185,4 +185,42 @@ describe("runAgentLoop", () => {
     expect(params.onComplete).not.toHaveBeenCalled();
     expect(params.onFail).not.toHaveBeenCalled();
   });
+  it("treats a stop during the AI call as silent: no failure, no execution", async () => {
+    const abortRef = { current: false };
+    let rejectQuery!: (e: unknown) => void;
+    const queryFn = vi.fn(
+      () => new Promise<AiCommandReady>((_, rej) => { rejectQuery = rej; }),
+    );
+    const submitCommand = instantSubmit();
+    const params = makeParams({ queryFn, abortRef, getSubmitCommand: () => submitCommand });
+
+    runAgentLoop(params);
+    await flush();
+    abortRef.current = true;
+    rejectQuery({ kind: "network", message: "cancelled" });
+    await flush();
+
+    expect(params.onFail).not.toHaveBeenCalled();
+    expect(params.writeRed).not.toHaveBeenCalled();
+    expect(submitCommand).not.toHaveBeenCalled();
+  });
+
+  it("drops a response that arrives after the user pressed stop", async () => {
+    const abortRef = { current: false };
+    let resolveQuery!: (r: AiCommandReady) => void;
+    const queryFn = vi.fn(
+      () => new Promise<AiCommandReady>((res) => { resolveQuery = res; }),
+    );
+    const submitCommand = instantSubmit();
+    const params = makeParams({ queryFn, abortRef, getSubmitCommand: () => submitCommand });
+
+    runAgentLoop(params);
+    await flush();
+    abortRef.current = true;
+    resolveQuery(safeResp("rm -rf build"));
+    await flush();
+
+    expect(submitCommand).not.toHaveBeenCalled();
+    expect(params.onFail).not.toHaveBeenCalled();
+  });
 });

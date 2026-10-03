@@ -5,6 +5,8 @@ import "./StreamingIndicator.css";
 interface StreamingIndicatorProps {
   text: string;
   visible: boolean;
+  /** 按下停止鈕或 Esc。 */
+  onStop?: () => void;
 }
 
 /**
@@ -26,7 +28,7 @@ function extractPartialExplanation(raw: string): string | null {
   return null;
 }
 
-export function StreamingIndicator({ text, visible }: StreamingIndicatorProps) {
+export function StreamingIndicator({ text, visible, onStop }: StreamingIndicatorProps) {
   const { t } = useLocale();
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -36,13 +38,33 @@ export function StreamingIndicator({ text, visible }: StreamingIndicatorProps) {
     }
   }, [text]);
 
+  // 這個狀態下輸入框被換掉了，沒有東西會吃到 Esc，所以可以放心全域監聽。
+  useEffect(() => {
+    if (!visible || !onStop) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onStop();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [visible, onStop]);
+
   if (!visible) return null;
 
   const explanation = extractPartialExplanation(text);
 
   return (
     <div className="aiterm-streaming">
-      <div className="aiterm-streaming__label">{t.streaming_generating}</div>
+      <div className="aiterm-streaming__header">
+        <div className="aiterm-streaming__label">{t.streaming_generating}</div>
+        {onStop && (
+          <button type="button" className="aiterm-streaming__stop" onClick={onStop}>
+            ■ {t.streaming_stop} <kbd>Esc</kbd>
+          </button>
+        )}
+      </div>
       <div ref={scrollRef} className="aiterm-streaming__text">
         {explanation ?? t.streaming_thinking}
         <span className="aiterm-streaming__cursor" />

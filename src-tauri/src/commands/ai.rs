@@ -6,8 +6,11 @@
 //! final structured result is still returned as the invoke response.
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use std::collections::HashMap;
+use std::sync::Mutex;
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::mpsc;
+use tokio::task::AbortHandle;
 
 use crate::ai::{
     context, router::AiRouter, AiError, AiSingleCommand, ChatMessage, GenerateChunk,
@@ -15,6 +18,60 @@ use crate::ai::{
 };
 use crate::guard::CommandGuard;
 use crate::pty::PtyManager;
+
+/// 追蹤每個 ai-stream id（PTY session id 或遠端 conn id）底下進行中的
+/// provider 呼叫，讓前端的「停止」按鈕能真的中斷上游請求，而不是只在
+/// 前端丟掉後續 token。
+#[derive(Default)]
+pub struct AiAbortRegistry(Mutex<HashMap<String, (tokio::task::Id, AbortHandle)>>);
+
+impl AiAbortRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// 離開作用域時把登錄項移除。比對 task id，避免同一個 stream id 上
+/// 較晚啟動的呼叫被較早結束的呼叫誤刪。
+struct AbortGuard<'a> {
+    app: &'a AppHandle,
+    key: String,
+    id: tokio::task::Id,
+}
+
+impl<'a> AbortGuard<'a> {
+    fn register<T>(app: &'a AppHandle, key: &str, join: &tokio::task::JoinHandle<T>) -> Self {
+        let id = join.id();
+        app.state::<AiAbortRegistry>()
+            .0
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), (id, join.abort_handle()));
+        Self { app, key: key.to_string(), id }
+    }
+}
+
+impl Drop for AbortGuard<'_> {
+    fn drop(&mut self) {
+        let reg = self.app.state::<AiAbortRegistry>();
+        let mut map = reg.0.lock().unwrap();
+        if map.get(&self.key).map(|(id, _)| *id) == Some(self.id) {
+            map.remove(&self.key);
+        }
+    }
+}
+
+/// 中斷這個 stream id 底下進行中的 AI 呼叫。沒有進行中的呼叫則什麼都不做。
+#[tauri::command]
+pub async fn ai_abort(
+    session_id: String,
+    registry: State<'_, AiAbortRegistry>,
+) -> Result<(), String> {
+    if let Some((_, handle)) = registry.0.lock().unwrap().remove(&session_id) {
+        handle.abort();
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AiCommandReady {
@@ -265,6 +322,7 @@ async fn run_single_command(
     let provider_for_spawn = provider.clone();
     let schema = ai_single_command_schema();
     let join = tokio::spawn(async move { provider_for_spawn.generate_json(req, schema, tx).await });
+    let _abort_guard = AbortGuard::register(app, &stream_id, &join);
 
     let mut buf = String::new();
     while let Some(chunk) = rx.recv().await {
@@ -401,6 +459,7 @@ async fn run_chat(
     let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
     let provider_for_spawn = provider.clone();
     let join = tokio::spawn(async move { provider_for_spawn.generate(req, tx).await });
+    let _abort_guard = AbortGuard::register(app, &stream_id, &join);
 
     let mut buf = String::new();
     while let Some(chunk) = rx.recv().await {
@@ -486,6 +545,7 @@ pub async fn ai_chat(
             let join = tokio::spawn(async move {
                 provider_clone.generate_with_tools(req_clone, tools, tx).await
             });
+            let _abort_guard = AbortGuard::register(&app, &session_id, &join);
 
             while let Some(chunk) = rx.recv().await {
                 let _ = app.emit("ai-stream", AiStreamEvent {
@@ -715,6 +775,7 @@ pub async fn agent_chat(
         let join = tokio::spawn(async move {
             provider_clone.generate_with_tools(req_clone, mcp_tools, tx).await
         });
+        let _abort_guard = AbortGuard::register(&app, &session_id, &join);
 
         while let Some(chunk) = rx.recv().await {
             let _ = app.emit("ai-stream", AiStreamEvent {
@@ -780,6 +841,7 @@ pub async fn agent_chat(
     let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
     let provider_for_spawn = provider.clone();
     let join = tokio::spawn(async move { provider_for_spawn.generate(req, tx).await });
+    let _abort_guard = AbortGuard::register(&app, &session_id, &join);
 
     let mut buf = String::new();
     while let Some(chunk) = rx.recv().await {
