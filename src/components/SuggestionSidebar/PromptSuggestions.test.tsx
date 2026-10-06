@@ -171,6 +171,13 @@ describe("PromptSuggestions", () => {
     expect(screen.getByRole("status", { name: "產生建議中…" })).toBeTruthy();
   });
 
+  it("with hideTitle there is no collapsible title and the content is always open", async () => {
+    localStorage.setItem("aiterm-suggest-collapsed", "true");
+    setup({ hideTitle: true });
+    expect(screen.queryByRole("button", { name: /下一步建議/ })).toBeNull();
+    expect(screen.getByText("產生建議")).toBeTruthy();
+  });
+
   it("is disabled while Ask AI is streaming or an agent runs", async () => {
     setup({ disabled: true });
     const btn = screen.getByText("產生建議").closest("button")!;

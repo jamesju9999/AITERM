@@ -1,0 +1,121 @@
+.aiterm-sugg-sidebar {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  color: var(--text-primary, #e6e8f0);
+  font-size: 12px;
+}
+.aiterm-sugg-sidebar__head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 8px 14px;
+  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+}
+.aiterm-sugg-sidebar__heading { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.aiterm-sugg-sidebar__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.aiterm-sugg-sidebar__title svg { color: var(--accent, #c084fc); }
+.aiterm-sugg-sidebar__status {
+  color: var(--text-muted, #9aa0b4);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.aiterm-sugg-sidebar__status::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--text-muted, #9aa0b4);
+  opacity: 0.6;
+}
+.aiterm-sugg-sidebar__status--on::before { background: var(--success, #34d399); opacity: 1; }
+.aiterm-sugg-sidebar__actions { display: flex; gap: 2px; flex-shrink: 0; }
+.aiterm-sugg-sidebar__icon {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted, #9aa0b4);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.aiterm-sugg-sidebar__icon:hover,
+.aiterm-sugg-sidebar__icon[aria-expanded="true"] {
+  background: var(--accent-bg, rgba(192, 132, 252, 0.15));
+  color: var(--text-primary, #e6e8f0);
+}
+
+.aiterm-sugg-sidebar__body { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+/* 側欄有自己的標題列：建議區塊不再需要頂邊線，清單也不必限制在 240px 內。 */
+.aiterm-sugg-sidebar__body .aiterm-suggest { border-top: 0; }
+.aiterm-sugg-sidebar__body .aiterm-suggest__list { max-height: none; overflow: visible; }
+
+.aiterm-sugg-sidebar__menu {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  background: rgba(127, 127, 127, 0.05);
+}
+.aiterm-sugg-sidebar__help { margin: 0; color: var(--text-muted, #9aa0b4); font-size: 11px; line-height: 1.5; }
+.aiterm-sugg-sidebar__group { display: flex; flex-direction: column; gap: 4px; }
+.aiterm-sugg-sidebar__group-label { color: var(--text-muted, #9aa0b4); font-size: 10.5px; letter-spacing: 0.04em; }
+.aiterm-sugg-sidebar__none { color: var(--text-muted, #9aa0b4); font-size: 11px; }
+.aiterm-sugg-sidebar__chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.aiterm-sugg-sidebar__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
+  border-radius: 10px;
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+}
+.aiterm-sugg-sidebar__chip--custom { border-color: var(--accent-border, rgba(192, 132, 252, 0.5)); }
+.aiterm-sugg-sidebar__chip button {
+  border: 0;
+  padding: 0 2px;
+  background: transparent;
+  color: var(--text-muted, #9aa0b4);
+  cursor: pointer;
+}
+.aiterm-sugg-sidebar__chip button:hover { color: var(--error, #f87171); }
+.aiterm-sugg-sidebar__add { display: flex; gap: 6px; }
+.aiterm-sugg-sidebar__add input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 11.5px;
+}
+.aiterm-sugg-sidebar__add button {
+  padding: 4px 12px;
+  border: 1px solid var(--accent-border, rgba(192, 132, 252, 0.5));
+  border-radius: 6px;
+  background: var(--accent-bg, rgba(192, 132, 252, 0.15));
+  color: var(--accent, #c084fc);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.aiterm-sugg-sidebar__error { color: var(--error, #f87171); font-size: 11px; }

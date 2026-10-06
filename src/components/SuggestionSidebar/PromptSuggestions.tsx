@@ -42,9 +42,11 @@ export interface PromptSuggestionsProps {
   disabled: boolean;
   /** 距離 PTY 最後一次輸出多久（毫秒）。沒給就當作永遠閒置。 */
   getIdleMs?: () => number;
+  /** 側欄自己有標題與關閉鈕：不要再畫一個可收合的標題，內容永遠展開。 */
+  hideTitle?: boolean;
 }
 
-export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs }: PromptSuggestionsProps) {
+export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, hideTitle = false }: PromptSuggestionsProps) {
   const { t, locale } = useLocale();
   const [items, setItems] = useState<PromptSuggestion[]>([]);
   const [status, setStatus] = useState<Status>("idle");
@@ -153,6 +155,7 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs }
     }
   };
 
+  const isCollapsed = collapsed && !hideTitle;
   const blocked = disabled || terminalBusy;
   const hasRun = status !== "idle";
   const hint = status === "loading" ? null
@@ -164,17 +167,19 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs }
   return (
     <section className="aiterm-suggest" aria-label={t.suggest_title}>
       <header className="aiterm-suggest__head">
-        <button
-          type="button"
-          className="aiterm-suggest__title"
-          aria-expanded={!collapsed}
-          onClick={toggleCollapsed}
-        >
-          <SparklesIcon size={13} />
-          <span>{t.suggest_title}</span>
-          {collapsed && items.length > 0 && <span className="aiterm-suggest__count">{items.length}</span>}
-          <span className={`aiterm-suggest__chevron${collapsed ? "" : " aiterm-suggest__chevron--open"}`} aria-hidden="true">▸</span>
-        </button>
+        {hideTitle ? <span /> : (
+          <button
+            type="button"
+            className="aiterm-suggest__title"
+            aria-expanded={!collapsed}
+            onClick={toggleCollapsed}
+          >
+            <SparklesIcon size={13} />
+            <span>{t.suggest_title}</span>
+            {collapsed && items.length > 0 && <span className="aiterm-suggest__count">{items.length}</span>}
+            <span className={`aiterm-suggest__chevron${collapsed ? "" : " aiterm-suggest__chevron--open"}`} aria-hidden="true">▸</span>
+          </button>
+        )}
         <div className="aiterm-suggest__tools">
           {hasRun && (
             <button
@@ -201,7 +206,7 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs }
         </div>
       </header>
 
-      {!collapsed && (
+      {!isCollapsed && (
         <div className="aiterm-suggest__body">
           {status === "idle" && (
             <div className="aiterm-suggest__intro">
