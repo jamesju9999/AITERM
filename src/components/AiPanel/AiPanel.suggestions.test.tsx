@@ -26,6 +26,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: (...a: unknown[]) => listenMoc
 vi.mock("../../lib/terminalInstanceRegistry", () => ({
   serializeTerminal: () => "❯ 修好登入的 bug\nClaude: 已修好",
   fillTerminalInput: vi.fn().mockResolvedValue(true),
+  submitTerminalInput: vi.fn().mockResolvedValue(true),
 }));
 vi.mock("../../contexts/LocaleContext", async () => {
   const { translations } = await vi.importActual<typeof import("../../lib/i18n")>("../../lib/i18n");

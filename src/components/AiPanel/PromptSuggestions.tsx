@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { abortAi, formatAiError, invokeAiChatCtx, type AiError } from "../../ipc/ai";
 import { useLocale } from "../../contexts/LocaleContext";
 import { languageDirective } from "../../lib/i18n";
-import { fillTerminalInput, serializeTerminal } from "../../lib/terminalInstanceRegistry";
+import { fillTerminalInput, serializeTerminal, submitTerminalInput } from "../../lib/terminalInstanceRegistry";
 import { buildSuggestionRequest, parseSuggestions, type PromptSuggestion } from "../../lib/promptSuggestions";
 import { stripAnsiCodes } from "../TaskBoard/transcriptUtils";
 import "./PromptSuggestions.css";
@@ -168,7 +168,13 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs }
               type="button"
               className="aiterm-suggest__card"
               title={`${t.suggest_fill_title}\n\n${s.prompt}`}
-              onClick={() => { void fillTerminalInput(sessionId, s.prompt); }}
+              // 單擊＝填入供編輯；雙擊＝送出。雙擊會先觸發一次單擊（detail=1），
+              // 文字那時已經填好了，所以第二下（detail>=2）只補一個 Enter——
+              // 再填一次就會貼兩遍。
+              onClick={(e) => {
+                if (e.detail >= 2) void submitTerminalInput(sessionId);
+                else void fillTerminalInput(sessionId, s.prompt);
+              }}
             >
               {s.title}
             </button>

@@ -11,9 +11,11 @@ vi.mock("../../ipc/ai", () => ({
 
 let screenText: string | null = "\x1b[32m❯ 幫我寫一個函式\x1b[0m\nClaude: 完成了";
 const fillTerminalInput = vi.fn().mockResolvedValue(true);
+const submitTerminalInput = vi.fn().mockResolvedValue(true);
 vi.mock("../../lib/terminalInstanceRegistry", () => ({
   serializeTerminal: () => screenText,
   fillTerminalInput: (...a: unknown[]) => fillTerminalInput(...a),
+  submitTerminalInput: (...a: unknown[]) => submitTerminalInput(...a),
 }));
 
 vi.mock("../../contexts/LocaleContext", async () => {
@@ -39,6 +41,7 @@ beforeEach(() => {
   invokeAiChatCtx.mockReset();
   abortAi.mockClear();
   fillTerminalInput.mockClear();
+  submitTerminalInput.mockClear();
   screenText = "\x1b[32m❯ 幫我寫一個函式\x1b[0m\nClaude: 完成了";
   localStorage.clear();
 });
@@ -70,6 +73,31 @@ describe("PromptSuggestions", () => {
     await flush();
     expect(fillTerminalInput).toHaveBeenCalledWith("s1", "幫剛才的函式補單元測試");
     expect(fillTerminalInput.mock.calls[0][1]).not.toMatch(/[\r\n]/);
+  });
+
+  it("a single click only fills; it never submits", async () => {
+    invokeAiChatCtx.mockResolvedValue(reply(A));
+    setup();
+    fireEvent.click(screen.getByText("產生建議"));
+    await flush();
+    fireEvent.click(screen.getByText("補測試"), { detail: 1 });
+    await flush();
+    expect(fillTerminalInput).toHaveBeenCalledTimes(1);
+    expect(submitTerminalInput).not.toHaveBeenCalled();
+  });
+
+  it("a double click fills once (first click) and then submits once, without pasting twice", async () => {
+    invokeAiChatCtx.mockResolvedValue(reply(A));
+    setup();
+    fireEvent.click(screen.getByText("產生建議"));
+    await flush();
+    const card = screen.getByText("補測試");
+    fireEvent.click(card, { detail: 1 });
+    fireEvent.click(card, { detail: 2 });
+    await flush();
+    expect(fillTerminalInput).toHaveBeenCalledTimes(1);
+    expect(submitTerminalInput).toHaveBeenCalledTimes(1);
+    expect(submitTerminalInput).toHaveBeenCalledWith("s1");
   });
 
   it("is disabled while Ask AI is streaming or an agent runs", async () => {

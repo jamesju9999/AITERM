@@ -4,7 +4,7 @@ import type { Terminal } from "@xterm/xterm";
 const writePty = vi.fn().mockResolvedValue(undefined);
 vi.mock("../ipc/pty", () => ({ writePty: (...a: unknown[]) => writePty(...a) }));
 
-import { registerTerminal, unregisterTerminal, fillTerminalInput } from "./terminalInstanceRegistry";
+import { registerTerminal, unregisterTerminal, fillTerminalInput, submitTerminalInput } from "./terminalInstanceRegistry";
 
 const addon = { serialize: () => "" };
 const term = (bracketed: boolean) => ({ modes: { bracketedPasteMode: bracketed } }) as unknown as Terminal;
@@ -41,5 +41,20 @@ describe("fillTerminalInput", () => {
     expect(sent.match(/\x1b\[201~/g)).toHaveLength(1);
     expect(sent.endsWith("\x1b[201~")).toBe(true);
     unregisterTerminal("c");
+  });
+});
+
+describe("submitTerminalInput", () => {
+  it("returns false and writes nothing for an unregistered id", async () => {
+    expect(await submitTerminalInput("nope")).toBe(false);
+    expect(writePty).not.toHaveBeenCalled();
+  });
+
+  it("sends exactly one Enter", async () => {
+    registerTerminal("d", term(true), addon);
+    expect(await submitTerminalInput("d")).toBe(true);
+    expect(writePty).toHaveBeenCalledTimes(1);
+    expect(writePty).toHaveBeenCalledWith("d", "\r");
+    unregisterTerminal("d");
   });
 });

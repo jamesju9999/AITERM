@@ -68,3 +68,11 @@ export async function fillTerminalInput(id: string, text: string): Promise<boole
   await writePty(id, payload);
   return true;
 }
+
+/** 對該終端機按一下 Enter（送出目前輸入框裡的內容）。
+ * 回傳 false 表示這個 id 沒有活著的終端機，什麼都沒送。 */
+export async function submitTerminalInput(id: string): Promise<boolean> {
+  if (!registry.has(id)) return false;
+  await writePty(id, "\r");
+  return true;
+}
