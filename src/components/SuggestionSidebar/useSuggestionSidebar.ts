@@ -23,7 +23,7 @@ export function useSuggestionSidebar(blocks: readonly SidebarBlock[], customName
   const [open, setOpen] = useState(false);
   const autoCloseRef = useRef(false);
   const aiCliRunningRef = useRef(aiCliRunning);
-  aiCliRunningRef.current = aiCliRunning;
+  useEffect(() => { aiCliRunningRef.current = aiCliRunning; }, [aiCliRunning]);
 
   useEffect(() => {
     if (open && autoCloseRef.current && !aiCliRunning) {

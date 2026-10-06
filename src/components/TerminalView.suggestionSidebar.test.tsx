@@ -57,7 +57,6 @@ vi.mock("../hooks/useAgentMission", () => ({
 
 import { TerminalView } from "./TerminalView";
 import { LocaleProvider } from "../contexts/LocaleContext";
-import { ptyDataEvent } from "../ipc/events";
 
 beforeEach(() => {
   listenHandlers.clear();
