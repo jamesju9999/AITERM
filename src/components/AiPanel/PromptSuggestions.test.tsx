@@ -71,7 +71,7 @@ describe("PromptSuggestions", () => {
     await flush();
     fireEvent.click(screen.getByText("補測試"));
     await flush();
-    expect(fillTerminalInput).toHaveBeenCalledWith("s1", "幫剛才的函式補單元測試");
+    expect(fillTerminalInput).toHaveBeenCalledWith("s1", "幫剛才的函式補單元測試", { replace: false });
     expect(fillTerminalInput.mock.calls[0][1]).not.toMatch(/[\r\n]/);
   });
 
@@ -169,6 +169,57 @@ describe("PromptSuggestions", () => {
     await flush();
     expect(screen.queryByText("補測試")).toBeNull();
     expect(screen.getByRole("status", { name: "產生建議中…" })).toBeTruthy();
+  });
+
+  describe("replacing a previous, unsent suggestion", () => {
+    const run = async (getIdleMs?: () => number) => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      setup(getIdleMs ? { getIdleMs } : {});
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+    };
+
+    it("clicking another suggestion replaces the one that was filled but not sent", async () => {
+      await run();
+      fireEvent.click(screen.getByText("補測試"), { detail: 1 });
+      fireEvent.click(screen.getByText("重構"), { detail: 1 });
+      await flush();
+      expect(fillTerminalInput.mock.calls[0][2]).toEqual({ replace: false });
+      expect(fillTerminalInput.mock.calls[1][1]).toBe("把它重構得更簡潔");
+      expect(fillTerminalInput.mock.calls[1][2]).toEqual({ replace: true });
+    });
+
+    it("does not replace after the previous one was sent with a double click", async () => {
+      await run();
+      const card = screen.getByText("補測試");
+      fireEvent.click(card, { detail: 1 });
+      fireEvent.click(card, { detail: 2 });
+      fireEvent.click(screen.getByText("重構"), { detail: 1 });
+      await flush();
+      expect(fillTerminalInput.mock.calls[1][2]).toEqual({ replace: false });
+    });
+
+    it("does not replace once the terminal has started working (the user sent it themselves)", async () => {
+      let idle = 60_000;
+      await run(() => idle);
+      fireEvent.click(screen.getByText("補測試"), { detail: 1 });
+      idle = 100; await advance(5000);
+      idle = 60_000; await advance(1000);
+      fireEvent.click(screen.getByText("重構"), { detail: 1 });
+      await flush();
+      expect(fillTerminalInput.mock.calls[1][2]).toEqual({ replace: false });
+    });
+
+    it("still replaces after the short echo burst our own fill causes", async () => {
+      let idle = 60_000;
+      await run(() => idle);
+      fireEvent.click(screen.getByText("補測試"), { detail: 1 });
+      idle = 100; await advance(2000); // 回顯：只忙一兩次輪詢
+      idle = 60_000; await advance(1000);
+      fireEvent.click(screen.getByText("重構"), { detail: 1 });
+      await flush();
+      expect(fillTerminalInput.mock.calls[1][2]).toEqual({ replace: true });
+    });
   });
 
   it("is disabled while Ask AI is streaming or an agent runs", async () => {

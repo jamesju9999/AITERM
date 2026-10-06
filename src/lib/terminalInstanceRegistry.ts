@@ -56,8 +56,17 @@ export function serializeTerminal(id: string): string | null {
  * 建議的文字就直接被執行了。兩條路都先剝掉文字裡的控制序列，避免內嵌的
  * `ESC[201~` 提前結束貼上、後面的內容變成真的按鍵。
  *
+ * `replace` 為真時，先清掉目前這一行再貼：Ctrl+E（游標到行尾）＋Ctrl+U（刪到行首），
+ * 跟貼上放在同一次寫入，中間不會夾到別的輸入。Claude Code 與 bash／zsh 都認得
+ * 這兩個鍵；沒有綁定它們的 shell（例如 Windows 預設的 PSReadLine）會直接忽略，
+ * 結果只是沒清掉、新文字接在後面。
+ *
  * 回傳 false 表示這個 id 沒有活著的終端機，什麼都沒送。 */
-export async function fillTerminalInput(id: string, text: string): Promise<boolean> {
+export async function fillTerminalInput(
+  id: string,
+  text: string,
+  opts: { replace?: boolean } = {},
+): Promise<boolean> {
   const entry = registry.get(id);
   if (!entry) return false;
   // eslint-disable-next-line no-control-regex -- stripping real ESC/control bytes is the point
@@ -65,7 +74,7 @@ export async function fillTerminalInput(id: string, text: string): Promise<boole
   const payload = entry.term.modes?.bracketedPasteMode
     ? `\x1b[200~${clean.replace(/\r\n?/g, "\n")}\x1b[201~`
     : clean.replace(/\s*[\r\n]+\s*/g, " ");
-  await writePty(id, payload);
+  await writePty(id, opts.replace ? `\x05\x15${payload}` : payload);
   return true;
 }
 

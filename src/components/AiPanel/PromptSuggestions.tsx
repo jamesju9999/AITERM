@@ -12,6 +12,12 @@ const STORAGE_AUTO_KEY = "aiterm-suggest-auto";
 const STORAGE_COLLAPSED_KEY = "aiterm-suggest-collapsed";
 /** 「已填入／已送出」回饋顯示多久。 */
 const FLASH_MS = 1_500;
+/**
+ * 連續忙碌這麼多次輪詢，就當作 Claude 已經在回答、輸入框裡我們填的字已被使用者送出。
+ * 不能只看「有輸出」：我們自己填字，終端機也會回顯（忙 1–2 次輪詢就停），
+ * 那不代表送出。真正的回答會持續輸出好幾秒。
+ */
+const SUBMITTED_BUSY_TICKS = 4;
 /** 終端機超過這麼久沒有輸出，才算閒置（Claude 回完了）。 */
 const IDLE_MS = 2_000;
 const POLL_MS = 1_000;
@@ -61,6 +67,9 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs }
   const loadingRef = useRef(false);
   const lastScreenRef = useRef<string | null>(null);
   const wasBusyRef = useRef(false);
+  /** 已填進終端機、還沒送出的建議。下一次填入要先把它清掉，否則兩段文字會接在一起。 */
+  const pendingFillRef = useRef(false);
+  const busyTicksRef = useRef(0);
   const getIdleMsRef = useRef(getIdleMs);
   useEffect(() => { getIdleMsRef.current = getIdleMs; }, [getIdleMs]);
 
@@ -78,7 +87,10 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs }
   useEffect(() => {
     const id = setInterval(() => {
       const fn = getIdleMsRef.current;
-      setTerminalBusy(fn ? fn() < IDLE_MS : false);
+      const busy = fn ? fn() < IDLE_MS : false;
+      busyTicksRef.current = busy ? busyTicksRef.current + 1 : 0;
+      if (busyTicksRef.current >= SUBMITTED_BUSY_TICKS) pendingFillRef.current = false;
+      setTerminalBusy(busy);
     }, POLL_MS);
     return () => clearInterval(id);
   }, []);
@@ -146,9 +158,11 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs }
   const onCardClick = (e: React.MouseEvent, prompt: string) => {
     if (e.detail >= 2) {
       void submitTerminalInput(sessionId);
+      pendingFillRef.current = false;
       showFlash(prompt, "sent");
     } else {
-      void fillTerminalInput(sessionId, prompt);
+      void fillTerminalInput(sessionId, prompt, { replace: pendingFillRef.current });
+      pendingFillRef.current = true;
       showFlash(prompt, "filled");
     }
   };

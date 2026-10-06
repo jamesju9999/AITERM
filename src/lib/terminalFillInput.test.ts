@@ -44,6 +44,23 @@ describe("fillTerminalInput", () => {
   });
 });
 
+describe("fillTerminalInput replace", () => {
+  it("clears the current input line first (Ctrl+E, Ctrl+U) in the same write", async () => {
+    registerTerminal("r", term(true), addon);
+    await fillTerminalInput("r", "new", { replace: true });
+    expect(writePty).toHaveBeenCalledTimes(1);
+    expect(writePty).toHaveBeenCalledWith("r", "\x05\x15\x1b[200~new\x1b[201~");
+    unregisterTerminal("r");
+  });
+
+  it("does not touch the line when replace is not requested", async () => {
+    registerTerminal("n", term(true), addon);
+    await fillTerminalInput("n", "new", { replace: false });
+    expect(writePty).toHaveBeenCalledWith("n", "\x1b[200~new\x1b[201~");
+    unregisterTerminal("n");
+  });
+});
+
 describe("submitTerminalInput", () => {
   it("returns false and writes nothing for an unregistered id", async () => {
     expect(await submitTerminalInput("nope")).toBe(false);
