@@ -306,4 +306,76 @@ describe("SuggestionSidebar", () => {
       expect(onMilestones.mock.calls[0][0].items[0].done).toBe(true);
     });
   });
+
+  describe("milestone-bound suggestions", () => {
+    const THREE = {
+      forGoal: "目標",
+      items: [
+        { id: "a", text: "盤點 API", done: true },
+        { id: "b", text: "拆分登入模組", done: false },
+        { id: "c", text: "遷移資料庫", done: false },
+      ],
+    };
+    const reply = { content: JSON.stringify([{ title: "t", prompt: "p" }]), tool_calls: [], tool_calling_unsupported: false };
+    const generate = async () => {
+      await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: /^(產生建議|重新產生)$/ })[0]); });
+      return invokeAiChatCtx.mock.calls[invokeAiChatCtx.mock.calls.length - 1][0][0].content as string;
+    };
+
+    it("aims at the first unfinished milestone by default and says so", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply);
+      setup({ goal: "目標", milestones: THREE });
+      expect(screen.getByText("朝向里程碑：拆分登入模組")).toBeTruthy();
+      const content = await generate();
+      expect(content).toContain("目前焦點里程碑：第 2 個「拆分登入模組」");
+    });
+
+    it("moves the focus when the user picks another unfinished milestone, and the next request follows it", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply);
+      setup({ goal: "目標", milestones: THREE });
+      fireEvent.click(screen.getByRole("button", { name: "設為焦點：遷移資料庫" }));
+      expect(screen.getByText("朝向里程碑：遷移資料庫")).toBeTruthy();
+      const content = await generate();
+      expect(content).toContain("目前焦點里程碑：第 3 個「遷移資料庫」");
+    });
+
+    it("falls back to the next unfinished milestone when the chosen one gets finished", () => {
+      const { rerender } = render(
+        <SuggestionSidebar
+          sessionId="s1" disabled={false} aiCliRunning customNames={[]} onCustomNamesChange={onNames}
+          onClose={onClose} goal="目標" onGoalChange={onGoal} milestones={THREE} onMilestonesChange={onMilestones}
+          getIdleMs={() => 60_000}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "設為焦點：遷移資料庫" }));
+      expect(screen.getByText("朝向里程碑：遷移資料庫")).toBeTruthy();
+      const finished = { ...THREE, items: THREE.items.map((i) => (i.id === "c" ? { ...i, done: true } : i)) };
+      rerender(
+        <SuggestionSidebar
+          sessionId="s1" disabled={false} aiCliRunning customNames={[]} onCustomNamesChange={onNames}
+          onClose={onClose} goal="目標" onGoalChange={onGoal} milestones={finished} onMilestonesChange={onMilestones}
+          getIdleMs={() => 60_000}
+        />,
+      );
+      expect(screen.getByText("朝向里程碑：拆分登入模組")).toBeTruthy();
+    });
+
+    it("switches to wrap-up when every milestone is done", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply);
+      const allDone = { forGoal: "目標", items: THREE.items.map((i) => ({ ...i, done: true })) };
+      setup({ goal: "目標", milestones: allDone });
+      expect(screen.getByText("全部里程碑已完成，建議改為驗收與收尾")).toBeTruthy();
+      const content = await generate();
+      expect(content).toContain("所有里程碑都已完成");
+    });
+
+    it("sends no milestone section when there are none (same request as step 1)", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply);
+      setup({ goal: "目標", milestones: undefined });
+      const content = await generate();
+      expect(content).not.toContain("里程碑");
+      expect(screen.queryByText(/朝向里程碑/)).toBeNull();
+      expect(screen.queryByText(/全部里程碑已完成/)).toBeNull();
+    });
+  });
 });

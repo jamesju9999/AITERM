@@ -271,3 +271,14 @@
   font-size: 10.5px;
   opacity: 0.8;
 }
+
+.aiterm-suggest__toward {
+  padding: 3px 8px;
+  border-left: 3px solid var(--accent, #c084fc);
+  border-radius: 4px;
+  background: var(--accent-bg, rgba(192, 132, 252, 0.1));
+  color: var(--accent, #c084fc);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}

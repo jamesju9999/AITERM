@@ -285,6 +285,64 @@ describe("PromptSuggestions", () => {
     });
   });
 
+  describe("milestone focus", () => {
+    it("sends the milestone section with the request", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      setup({ milestoneContext: "里程碑一節-MARK" });
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(invokeAiChatCtx.mock.calls[0][0][0].content).toContain("里程碑一節-MARK");
+    });
+
+    it("sends nothing about milestones when there are none", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(invokeAiChatCtx.mock.calls[0][0][0].content).not.toContain("里程碑");
+    });
+
+    it("shows which milestone the suggestions aim at", () => {
+      setup({ focusLabel: "拆分登入模組" });
+      expect(screen.getByText("朝向里程碑：拆分登入模組")).toBeTruthy();
+    });
+
+    it("says so when every milestone is done", () => {
+      setup({ allMilestonesDone: true });
+      expect(screen.getByText("全部里程碑已完成，建議改為驗收與收尾")).toBeTruthy();
+    });
+
+    it("shows neither line when there is no milestone information", () => {
+      setup();
+      expect(screen.queryByText(/朝向里程碑/)).toBeNull();
+      expect(screen.queryByText(/全部里程碑已完成/)).toBeNull();
+    });
+
+    it("drops the old suggestions when the milestone context changes (they were made for another focus)", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000 };
+      const { rerender } = render(<PromptSuggestions {...props} milestoneContext="焦點在第二個" />);
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(screen.getByText("補測試")).toBeTruthy();
+      rerender(<PromptSuggestions {...props} milestoneContext="焦點在第三個" />);
+      await flush();
+      expect(screen.queryByText("補測試")).toBeNull();
+      expect(screen.getByText("產生建議")).toBeTruthy();
+    });
+
+    it("keeps the suggestions when nothing about the context changed", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000 };
+      const { rerender } = render(<PromptSuggestions {...props} milestoneContext="同一份" />);
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      rerender(<PromptSuggestions {...props} milestoneContext="同一份" />);
+      await flush();
+      expect(screen.getByText("補測試")).toBeTruthy();
+    });
+  });
+
   it("is disabled while Ask AI is streaming or an agent runs", async () => {
     setup({ disabled: true });
     const btn = screen.getByText("產生建議").closest("button")!;

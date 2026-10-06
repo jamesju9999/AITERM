@@ -32,6 +32,10 @@ export interface MilestoneListProps {
   onChange: (next: MilestoneState | undefined) => void;
   /** AI 工具先前每一輪的穩定畫面，「檢查進度」用來判斷做過什麼。 */
   getHistory?: () => string[];
+  /** 目前被建議朝向的焦點里程碑 id（沒有＝null）。 */
+  focusId: string | null;
+  /** 使用者想把焦點移到另一個里程碑。焦點只是一種「現在想先做哪個」，不寫進里程碑資料。 */
+  onFocus: (id: string) => void;
 }
 
 /**
@@ -40,7 +44,7 @@ export interface MilestoneListProps {
  * **AI 只提議，不動資料**：拆解結果要使用者按「採用」才寫入，檢查進度也是逐項「採用」才打勾。
  * 自動勾選一旦誤判就會一路累積，而使用者看不到它改了什麼。
  */
-export function MilestoneList({ sessionId, providerId, goal, state, onChange, getHistory }: MilestoneListProps) {
+export function MilestoneList({ sessionId, providerId, goal, state, onChange, getHistory, focusId, onFocus }: MilestoneListProps) {
   const { t, locale } = useLocale();
   const items = state?.items ?? [];
   const done = items.filter((i) => i.done).length;
@@ -266,7 +270,7 @@ export function MilestoneList({ sessionId, providerId, goal, state, onChange, ge
 
           <ul className="aiterm-ms__list">
             {items.map((it, idx) => (
-              <li key={it.id} className={`aiterm-ms__item${it.done ? " aiterm-ms__item--done" : ""}`}>
+              <li key={it.id} className={`aiterm-ms__item${it.done ? " aiterm-ms__item--done" : ""}${focusId === it.id ? " aiterm-ms__item--focus" : ""}`}>
                 {editingId === it.id ? editor : (
                   <>
                     <input
@@ -276,6 +280,16 @@ export function MilestoneList({ sessionId, providerId, goal, state, onChange, ge
                       onChange={() => toggle(it.id)}
                     />
                     <span className="aiterm-ms__text">{it.text}</span>
+                    {focusId === it.id && <span className="aiterm-ms__focus">{t.ms_focus_badge}</span>}
+                    {!it.done && focusId !== it.id && (
+                      <button
+                        type="button"
+                        className="aiterm-ms__focus-btn"
+                        aria-label={t.ms_focus_set(it.text)}
+                        title={t.ms_focus_set(it.text)}
+                        onClick={() => onFocus(it.id)}
+                      >◎</button>
+                    )}
                     <span className="aiterm-ms__row-actions">
                       <button type="button" aria-label={t.ms_item_edit(it.text)} title={t.ms_item_edit(it.text)} onClick={() => startEdit(it.id, it.text)}>✎</button>
                       <button type="button" aria-label={t.ms_item_up(it.text)} disabled={idx === 0} onClick={() => move(idx, -1)}>▲</button>

@@ -39,9 +39,15 @@ export interface PromptSuggestionsProps {
   goal?: string;
   /** 取得 AI 工具先前每一輪的「穩定畫面」（舊→新）。產生建議的當下才讀，所以傳函式不傳陣列。 */
   getHistory?: () => string[];
+  /** 已整理好的里程碑一節（formatMilestonesForPrompt）；空＝沒有里程碑。 */
+  milestoneContext?: string;
+  /** 目前建議朝向的焦點里程碑文字，只用來顯示。 */
+  focusLabel?: string | null;
+  /** 全部里程碑都完成了。 */
+  allMilestonesDone?: boolean;
 }
 
-export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, hideTitle = false, goal, getHistory }: PromptSuggestionsProps) {
+export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, hideTitle = false, goal, getHistory, milestoneContext, focusLabel, allMilestonesDone }: PromptSuggestionsProps) {
   const { t, locale } = useLocale();
   const [items, setItems] = useState<PromptSuggestion[]>([]);
   const [status, setStatus] = useState<Status>("idle");
@@ -98,7 +104,7 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
     setStatus("loading");
     try {
       const reply = await invokeAiChatCtx(
-        [{ role: "user", content: buildSuggestionRequest(screen, languageDirective(locale), goal, history) }],
+        [{ role: "user", content: buildSuggestionRequest(screen, languageDirective(locale), goal, history, milestoneContext) }],
         { os: navigator.platform.toLowerCase(), shell: null, cwd: null, recentOutput: null },
         connId,
         providerId,
@@ -116,21 +122,22 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
     } finally {
       if (myReq === reqRef.current) loadingRef.current = false;
     }
-  }, [sessionId, connId, providerId, locale, goal, getHistory]);
+  }, [sessionId, connId, providerId, locale, goal, getHistory, milestoneContext]);
 
-  // 目標一改，舊目標產生的建議就沒有意義了：丟掉卡片、取消還在跑的請求、
+  // 目標或里程碑焦點一改，之前產生的建議就是針對舊情況的：丟掉卡片、取消還在跑的請求、
   // 回到起點，並讓自動模式對同一份畫面也能重新產生。第一次掛載不算「改」。
-  const prevGoalRef = useRef(goal);
+  const contextKey = `${goal ?? ""}\u0000${milestoneContext ?? ""}`;
+  const prevContextRef = useRef(contextKey);
   useEffect(() => {
-    if (prevGoalRef.current === goal) return;
-    prevGoalRef.current = goal;
+    if (prevContextRef.current === contextKey) return;
+    prevContextRef.current = contextKey;
     reqRef.current += 1; // 讓還在路上的回應變成過期
     if (loadingRef.current) { loadingRef.current = false; abortAi(connId).catch(() => {}); }
     lastScreenRef.current = null;
     setItems([]);
     setStatus("idle");
     setErrorMsg("");
-  }, [goal, connId]);
+  }, [contextKey, connId]);
 
   // 忙→閒的那一下才自動產生；wasBusyRef 確保一次忙碌只觸發一次。
   useEffect(() => {
@@ -219,6 +226,11 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
 
       {!isCollapsed && (
         <div className="aiterm-suggest__body">
+          {(allMilestonesDone || focusLabel) && (
+            <div className="aiterm-suggest__toward">
+              {allMilestonesDone ? t.suggest_all_done : t.suggest_toward(focusLabel ?? "")}
+            </div>
+          )}
           {status === "idle" && (
             <div className="aiterm-suggest__intro">
               <p>

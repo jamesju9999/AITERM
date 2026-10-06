@@ -124,3 +124,30 @@
   color: var(--text-muted, #9aa0b4);
   cursor: pointer;
 }
+
+.aiterm-ms__item--focus { background: var(--accent-bg, rgba(192, 132, 252, 0.12)); }
+.aiterm-ms__focus {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--accent, #c084fc);
+  color: #1a1030;
+  font-size: 10px;
+  font-weight: 600;
+}
+.aiterm-ms__focus-btn {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted, #9aa0b4);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.aiterm-ms__item:hover .aiterm-ms__focus-btn,
+.aiterm-ms__item:focus-within .aiterm-ms__focus-btn { opacity: 1; }
+.aiterm-ms__focus-btn:hover { background: var(--accent-bg, rgba(192, 132, 252, 0.15)); color: var(--accent, #c084fc); }

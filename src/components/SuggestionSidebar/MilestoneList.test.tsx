@@ -27,17 +27,19 @@ const S = (items: [string, string, boolean][], forGoal = GOAL): MilestoneState =
 const THREE = S([["a", "盤點 API", true], ["b", "拆分登入模組", false], ["c", "遷移資料庫", false]]);
 
 const onChange = vi.fn();
+const onFocus = vi.fn();
 const flush = () => act(async () => {});
 
 const setup = (p: Partial<React.ComponentProps<typeof MilestoneList>> = {}) =>
   render(
-    <MilestoneList sessionId="s1" goal={GOAL} state={undefined} onChange={onChange} getHistory={() => []} {...p} />,
+    <MilestoneList sessionId="s1" goal={GOAL} state={undefined} onChange={onChange} getHistory={() => []} focusId={null} onFocus={onFocus} {...p} />,
   );
 
 beforeEach(() => {
   invokeAiChatCtx.mockReset();
   abortAi.mockClear();
   onChange.mockClear();
+  onFocus.mockClear();
   screenText = "目前畫面內容 CURRENT";
 });
 
@@ -233,7 +235,7 @@ describe("MilestoneList – AI plan", () => {
     invokeAiChatCtx.mockImplementation(() => new Promise((r) => { resolveIt = r; }));
     const { rerender } = setup();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "AI 拆解" })); });
-    rerender(<MilestoneList sessionId="s1" goal="另一個目標" state={undefined} onChange={onChange} getHistory={() => []} />);
+    rerender(<MilestoneList sessionId="s1" goal="另一個目標" state={undefined} onChange={onChange} getHistory={() => []} focusId={null} onFocus={onFocus} />);
     expect(abortAi).toHaveBeenCalledWith("milestone-plan-s1");
     await act(async () => { resolveIt(reply('["遲到的結果"]')); });
     expect(screen.queryByText("遲到的結果")).toBeNull();
@@ -246,6 +248,27 @@ describe("MilestoneList – AI plan", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "AI 拆解" })); });
     unmount();
     expect(abortAi).toHaveBeenCalledWith("milestone-plan-s1");
+  });
+});
+
+describe("MilestoneList – focus", () => {
+  it("marks the focused milestone and lets the user move the focus to another unfinished one", () => {
+    setup({ state: THREE, focusId: "b" });
+    expect(screen.getByText("焦點")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "設為焦點：拆分登入模組" })).toBeNull(); // 已經是焦點
+    fireEvent.click(screen.getByRole("button", { name: "設為焦點：遷移資料庫" }));
+    expect(onFocus).toHaveBeenCalledWith("c");
+    expect(onChange).not.toHaveBeenCalled(); // 焦點不是資料，不寫進里程碑
+  });
+
+  it("offers no focus button on a finished milestone", () => {
+    setup({ state: THREE, focusId: "b" });
+    expect(screen.queryByRole("button", { name: "設為焦點：盤點 API" })).toBeNull();
+  });
+
+  it("shows no focus marker when nothing is focused (everything done)", () => {
+    setup({ state: S([["a", "一", true]]), focusId: null });
+    expect(screen.queryByText("焦點")).toBeNull();
   });
 });
 

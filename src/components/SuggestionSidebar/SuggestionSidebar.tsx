@@ -8,7 +8,7 @@ import { MAX_GOAL_CHARS, buildGoalPolishRequest, cleanPolishedGoal } from "../..
 import { SparklesIcon } from "../Icons";
 import { MilestoneList } from "./MilestoneList";
 import { PromptSuggestions } from "./PromptSuggestions";
-import type { MilestoneState } from "../../lib/milestones";
+import { formatMilestonesForPrompt, resolveFocus, type MilestoneState } from "../../lib/milestones";
 import "./SuggestionSidebar.css";
 
 export interface SuggestionSidebarProps {
@@ -40,6 +40,8 @@ export function SuggestionSidebar({
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [editingGoal, setEditingGoal] = useState(false);
+  /** 使用者選的焦點里程碑；只在記憶體，實際生效的焦點由 resolveFocus 決定。 */
+  const [chosenFocusId, setChosenFocusId] = useState<string | null>(null);
   const [goalDraft, setGoalDraft] = useState("");
 
   const [polishing, setPolishing] = useState(false);
@@ -66,6 +68,12 @@ export function SuggestionSidebar({
     setUndoText(null);
     setEditingGoal(false);
   };
+  const milestoneItems = milestones?.items ?? [];
+  const focusId = resolveFocus(milestoneItems, chosenFocusId);
+  const focusText = milestoneItems.find((i) => i.id === focusId)?.text ?? null;
+  const allDone = milestoneItems.length > 0 && focusId === null;
+  const milestoneContext = formatMilestonesForPrompt(milestoneItems, focusId);
+
   const startEditGoal = () => { setGoalDraft(goal); setPolishError(null); setUndoText(null); setEditingGoal(true); };
   const saveGoal = (e: FormEvent) => {
     e.preventDefault();
@@ -198,6 +206,8 @@ export function SuggestionSidebar({
           state={milestones}
           onChange={onMilestonesChange}
           getHistory={getHistory}
+          focusId={focusId}
+          onFocus={setChosenFocusId}
         />
       )}
 
@@ -253,6 +263,9 @@ export function SuggestionSidebar({
           hideTitle
           goal={goal}
           getHistory={getHistory}
+          milestoneContext={milestoneContext}
+          focusLabel={focusText}
+          allMilestonesDone={allDone}
         />
       </div>
     </aside>
