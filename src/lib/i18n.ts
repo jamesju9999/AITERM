@@ -1200,6 +1200,11 @@ const zhTW = {
     suggest_none: "沒有產生可用的建議",
     suggest_error: (msg: string) => `建議產生失敗：${msg}`,
     suggest_retry: "重試",
+    suggest_title: "下一步建議",
+    suggest_intro: "讓 AI 依目前終端機畫面，建議下一步可以問什麼。",
+    suggest_filled: "已填入",
+    suggest_sent: "已送出",
+    suggest_footer_hint: "單擊填入、雙擊送出",
     suggest_fill_title: "單擊：填入終端機供編輯　雙擊：填入並送出",
     // 模式說明列：兩顆開關表達不出「誰按下執行鍵」，這行把當下會發生什麼講白。
     mode_hint_suggest: "AI 只會建議指令，點 ▶ 才會執行",
@@ -2674,6 +2679,11 @@ const enRaw = {
     suggest_none: "No usable suggestions were generated",
     suggest_error: (msg: string) => `Could not generate suggestions: ${msg}`,
     suggest_retry: "Retry",
+    suggest_title: "Next-step ideas",
+    suggest_intro: "Let AI suggest what to ask next, based on what is on your terminal screen.",
+    suggest_filled: "Filled in",
+    suggest_sent: "Sent",
+    suggest_footer_hint: "Click to fill, double-click to send",
     suggest_fill_title: "Click: fill into the terminal to edit   Double-click: fill and send",
     mode_hint_suggest: "AI only suggests commands — click ▶ to run them",
     mode_hint_agent: (steps: string) =>

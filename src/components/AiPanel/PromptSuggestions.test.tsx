@@ -100,6 +100,77 @@ describe("PromptSuggestions", () => {
     expect(submitTerminalInput).toHaveBeenCalledWith("s1");
   });
 
+  it("shows the full prompt text under each title so the user can judge before clicking", async () => {
+    invokeAiChatCtx.mockResolvedValue(reply(A));
+    setup();
+    fireEvent.click(screen.getByText("產生建議"));
+    await flush();
+    expect(screen.getByText("幫剛才的函式補單元測試")).toBeTruthy();
+    expect(screen.getByText("把它重構得更簡潔")).toBeTruthy();
+  });
+
+  it("explains itself before the first run", () => {
+    setup();
+    expect(screen.getByText(/依目前終端機畫面/)).toBeTruthy();
+  });
+
+  it("confirms a single click with 已填入 and a double click with 已送出, then clears it", async () => {
+    invokeAiChatCtx.mockResolvedValue(reply(A));
+    setup();
+    fireEvent.click(screen.getByText("產生建議"));
+    await flush();
+    expect(screen.queryByText("已填入")).toBeNull();
+    const card = screen.getByText("補測試");
+    fireEvent.click(card, { detail: 1 });
+    await flush();
+    expect(screen.getByText("已填入")).toBeTruthy();
+    fireEvent.click(card, { detail: 2 });
+    await flush();
+    expect(screen.getByText("已送出")).toBeTruthy();
+    expect(screen.queryByText("已填入")).toBeNull();
+    await advance(2000);
+    expect(screen.queryByText("已送出")).toBeNull();
+  });
+
+  it("can be collapsed, keeps the results, and remembers the choice", async () => {
+    invokeAiChatCtx.mockResolvedValue(reply(A));
+    const first = setup();
+    fireEvent.click(screen.getByText("產生建議"));
+    await flush();
+    const toggle = screen.getByRole("button", { name: /下一步建議/ });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("補測試")).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByText("補測試")).toBeTruthy();
+    fireEvent.click(toggle);
+    first.unmount();
+    setup();
+    expect(screen.getByRole("button", { name: /下一步建議/ }).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("shows a busy placeholder while generating", async () => {
+    invokeAiChatCtx.mockImplementation(() => new Promise(() => {}));
+    setup();
+    fireEvent.click(screen.getByText("產生建議"));
+    await flush();
+    expect(screen.getByRole("status", { name: "產生建議中…" })).toBeTruthy();
+  });
+
+  it("hides the old cards while regenerating so stale suggestions cannot be clicked", async () => {
+    invokeAiChatCtx.mockResolvedValueOnce(reply(A));
+    setup();
+    fireEvent.click(screen.getByText("產生建議"));
+    await flush();
+    expect(screen.getByText("補測試")).toBeTruthy();
+    invokeAiChatCtx.mockImplementationOnce(() => new Promise(() => {}));
+    fireEvent.click(screen.getByText("重新產生"));
+    await flush();
+    expect(screen.queryByText("補測試")).toBeNull();
+    expect(screen.getByRole("status", { name: "產生建議中…" })).toBeTruthy();
+  });
+
   it("is disabled while Ask AI is streaming or an agent runs", async () => {
     setup({ disabled: true });
     const btn = screen.getByText("產生建議").closest("button")!;

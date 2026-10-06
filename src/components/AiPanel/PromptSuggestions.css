@@ -1,78 +1,266 @@
 .aiterm-suggest {
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 6px 14px;
   border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
-  font-size: 11.5px;
-  /* 面板很矮時不能把聊天區擠掉——整塊最多佔這麼高，超過就捲動。 */
-  max-height: 96px;
-  overflow-y: auto;
-  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-primary, #e6e8f0);
 }
-.aiterm-suggest__bar {
+
+/* ── 標題列 ─────────────────────────────────────────────── */
+.aiterm-suggest__head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 14px;
 }
-.aiterm-suggest__gen,
-.aiterm-suggest__auto,
-.aiterm-suggest__error button {
+.aiterm-suggest__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
   background: transparent;
+  border: 0;
   color: var(--text-muted, #9aa0b4);
-  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
-  border-radius: 10px;
-  padding: 2px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+.aiterm-suggest__title:hover { color: var(--text-primary, #e6e8f0); }
+.aiterm-suggest__title svg { color: var(--accent, #c084fc); }
+.aiterm-suggest__chevron {
+  display: inline-block;
+  font-size: 9px;
+  transition: transform 0.15s ease;
+}
+.aiterm-suggest__chevron--open { transform: rotate(90deg); }
+.aiterm-suggest__count {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--accent-bg, rgba(192, 132, 252, 0.15));
+  color: var(--accent, #c084fc);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.aiterm-suggest__tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.aiterm-suggest__tool,
+.aiterm-suggest__switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0;
+  background: transparent;
+  border: 0;
+  color: var(--text-muted, #9aa0b4);
   font-size: 11px;
   cursor: pointer;
 }
-.aiterm-suggest__gen:hover:not(:disabled),
-.aiterm-suggest__auto:hover,
-.aiterm-suggest__error button:hover:not(:disabled) {
-  color: var(--text-primary, #e6e8f0);
-  border-color: var(--accent, #6c8cff);
+.aiterm-suggest__tool:hover:not(:disabled),
+.aiterm-suggest__switch:hover { color: var(--text-primary, #e6e8f0); }
+.aiterm-suggest__tool:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* 開關：小型 track + thumb，比文字按鈕更像「可以開關的東西」。 */
+.aiterm-suggest__track {
+  position: relative;
+  width: 24px;
+  height: 14px;
+  border-radius: 7px;
+  background: var(--border-color, rgba(255, 255, 255, 0.18));
+  transition: background 0.15s ease;
 }
-.aiterm-suggest__gen:disabled,
-.aiterm-suggest__error button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+.aiterm-suggest__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s ease;
 }
-.aiterm-suggest__auto--on {
-  color: var(--accent, #6c8cff);
-  border-color: var(--accent, #6c8cff);
+.aiterm-suggest__switch--on { color: var(--accent, #c084fc); }
+.aiterm-suggest__switch--on .aiterm-suggest__track { background: var(--accent, #c084fc); }
+.aiterm-suggest__switch--on .aiterm-suggest__thumb { transform: translateX(10px); }
+
+/* ── 內容區 ─────────────────────────────────────────────── */
+.aiterm-suggest__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 14px 10px;
 }
-.aiterm-suggest__hint {
+
+.aiterm-suggest__intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-color, rgba(255, 255, 255, 0.18));
+  border-radius: 10px;
+}
+.aiterm-suggest__intro p {
+  margin: 0;
   color: var(--text-muted, #9aa0b4);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: 11.5px;
+  line-height: 1.5;
 }
+.aiterm-suggest__primary {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--accent-border, rgba(192, 132, 252, 0.5));
+  border-radius: 14px;
+  background: var(--accent-bg, rgba(192, 132, 252, 0.15));
+  color: var(--accent, #c084fc);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.aiterm-suggest__primary:hover:not(:disabled) { background: var(--accent-border, rgba(192, 132, 252, 0.3)); }
+.aiterm-suggest__primary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.aiterm-suggest__hint {
+  padding: 2px 2px;
+  color: var(--text-muted, #9aa0b4);
+  font-size: 11.5px;
+}
+
+/* 載入中：用閃爍的佔位卡代替一行字，版面高度也不會在結果出來時跳動。 */
+.aiterm-suggest__skeletons { display: flex; flex-direction: column; gap: 6px; }
+.aiterm-suggest__skeletons span {
+  height: 44px;
+  border-radius: 10px;
+  background: linear-gradient(
+    90deg,
+    rgba(127, 127, 127, 0.08) 25%,
+    rgba(127, 127, 127, 0.16) 50%,
+    rgba(127, 127, 127, 0.08) 75%
+  );
+  background-size: 200% 100%;
+  animation: aiterm-suggest-shimmer 1.2s linear infinite;
+}
+@keyframes aiterm-suggest-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aiterm-suggest__skeletons span { animation: none; }
+}
+
 .aiterm-suggest__error {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #ef4444;
-}
-.aiterm-suggest__cards {
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding-bottom: 2px;
-}
-.aiterm-suggest__card {
-  flex: 0 0 auto;
-  max-width: 220px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  background: var(--bg-elevated, rgba(108, 140, 255, 0.1));
-  color: var(--text-primary, #e6e8f0);
-  border: 1px solid var(--border-color, rgba(108, 140, 255, 0.35));
-  border-radius: 12px;
-  padding: 3px 11px;
+  color: var(--error, #f87171);
   font-size: 11.5px;
+}
+.aiterm-suggest__error button {
+  padding: 2px 10px;
+  border: 1px solid currentColor;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
   cursor: pointer;
 }
+.aiterm-suggest__error button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── 建議清單 ───────────────────────────────────────────── */
+.aiterm-suggest__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* 面板很矮時不能把聊天區擠掉——清單自己捲動。 */
+  max-height: min(240px, 36vh);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(127, 127, 127, 0.45) transparent;
+}
+.aiterm-suggest__card {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 7px 12px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  border-left: 3px solid var(--accent-border, rgba(192, 132, 252, 0.5));
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.06);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+}
 .aiterm-suggest__card:hover {
-  border-color: var(--accent, #6c8cff);
+  background: var(--accent-bg, rgba(192, 132, 252, 0.15));
+  border-color: var(--accent-border, rgba(192, 132, 252, 0.5));
+  border-left-color: var(--accent, #c084fc);
+}
+.aiterm-suggest__card:active { transform: scale(0.99); }
+.aiterm-suggest__card:focus-visible {
+  outline: 2px solid var(--accent, #c084fc);
+  outline-offset: 1px;
+}
+.aiterm-suggest__card-top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.aiterm-suggest__card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary, #e6e8f0);
+}
+.aiterm-suggest__card-prompt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted, #9aa0b4);
+}
+.aiterm-suggest__badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: var(--success, #34d399);
+  color: #06281c;
+  font-size: 10.5px;
+  font-weight: 600;
+  animation: aiterm-suggest-pop 0.18s ease-out;
+}
+@keyframes aiterm-suggest-pop {
+  from { opacity: 0; transform: scale(0.85); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.aiterm-suggest__footer {
+  color: var(--text-muted, #9aa0b4);
+  font-size: 10.5px;
+  opacity: 0.8;
 }

@@ -5,9 +5,13 @@ import { languageDirective } from "../../lib/i18n";
 import { fillTerminalInput, serializeTerminal, submitTerminalInput } from "../../lib/terminalInstanceRegistry";
 import { buildSuggestionRequest, parseSuggestions, type PromptSuggestion } from "../../lib/promptSuggestions";
 import { stripAnsiCodes } from "../TaskBoard/transcriptUtils";
+import { RefreshIcon, SparklesIcon } from "../Icons";
 import "./PromptSuggestions.css";
 
 const STORAGE_AUTO_KEY = "aiterm-suggest-auto";
+const STORAGE_COLLAPSED_KEY = "aiterm-suggest-collapsed";
+/** 「已填入／已送出」回饋顯示多久。 */
+const FLASH_MS = 1_500;
 /** 終端機超過這麼久沒有輸出，才算閒置（Claude 回完了）。 */
 const IDLE_MS = 2_000;
 const POLL_MS = 1_000;
@@ -16,6 +20,10 @@ type Status = "idle" | "loading" | "ok" | "none" | "empty" | "error";
 
 function loadAuto(): boolean {
   try { return localStorage.getItem(STORAGE_AUTO_KEY) === "true"; } catch { return false; }
+}
+
+function loadCollapsed(): boolean {
+  try { return localStorage.getItem(STORAGE_COLLAPSED_KEY) === "true"; } catch { return false; }
 }
 
 /** Tauri 的錯誤是物件而不是 Error——不能 String(e)，會變成 [object Object]。 */
@@ -42,6 +50,9 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs }
   const [status, setStatus] = useState<Status>("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [auto, setAuto] = useState(loadAuto);
+  const [collapsed, setCollapsed] = useState(loadCollapsed);
+  const [flash, setFlash] = useState<{ prompt: string; kind: "filled" | "sent" } | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [terminalBusy, setTerminalBusy] = useState(() => (getIdleMs ? getIdleMs() < IDLE_MS : false));
 
   const connId = `suggest-${sessionId}`;
@@ -57,6 +68,7 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs }
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
       // 卸載時還在等回應就取消，免得白燒額度。
       if (loadingRef.current) abortAi(connId).catch(() => {});
     };
@@ -116,71 +128,143 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs }
     }
   }, [terminalBusy, auto, disabled, generate]);
 
-  const toggleAuto = () => {
-    const next = !auto;
-    setAuto(next);
-    try { localStorage.setItem(STORAGE_AUTO_KEY, String(next)); } catch { /* ignore */ }
+  const persist = (key: string, value: boolean) => {
+    try { localStorage.setItem(key, String(value)); } catch { /* ignore */ }
+  };
+  const toggleAuto = () => { const next = !auto; setAuto(next); persist(STORAGE_AUTO_KEY, next); };
+  const toggleCollapsed = () => { const next = !collapsed; setCollapsed(next); persist(STORAGE_COLLAPSED_KEY, next); };
+
+  const showFlash = (prompt: string, kind: "filled" | "sent") => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    setFlash({ prompt, kind });
+    flashTimerRef.current = setTimeout(() => setFlash(null), FLASH_MS);
+  };
+
+  // 單擊＝填入供編輯；雙擊＝送出。雙擊會先觸發一次單擊（detail=1），
+  // 文字那時已經填好了，所以第二下（detail>=2）只補一個 Enter——
+  // 再填一次就會貼兩遍。
+  const onCardClick = (e: React.MouseEvent, prompt: string) => {
+    if (e.detail >= 2) {
+      void submitTerminalInput(sessionId);
+      showFlash(prompt, "sent");
+    } else {
+      void fillTerminalInput(sessionId, prompt);
+      showFlash(prompt, "filled");
+    }
   };
 
   const blocked = disabled || terminalBusy;
   const hasRun = status !== "idle";
-  const hint = status === "loading" ? t.suggest_loading
+  const hint = status === "loading" ? null
     : terminalBusy ? t.suggest_busy
     : status === "empty" ? t.suggest_empty_screen
     : status === "none" ? t.suggest_none
     : null;
 
   return (
-    <div className="aiterm-suggest">
-      <div className="aiterm-suggest__bar">
+    <section className="aiterm-suggest" aria-label={t.suggest_title}>
+      <header className="aiterm-suggest__head">
         <button
           type="button"
-          className="aiterm-suggest__gen"
-          disabled={blocked}
-          onClick={() => void generate(false)}
+          className="aiterm-suggest__title"
+          aria-expanded={!collapsed}
+          onClick={toggleCollapsed}
         >
-          {hasRun ? t.suggest_regenerate : t.suggest_generate}
+          <SparklesIcon size={13} />
+          <span>{t.suggest_title}</span>
+          {collapsed && items.length > 0 && <span className="aiterm-suggest__count">{items.length}</span>}
+          <span className={`aiterm-suggest__chevron${collapsed ? "" : " aiterm-suggest__chevron--open"}`} aria-hidden="true">▸</span>
         </button>
-        <button
-          type="button"
-          className={`aiterm-suggest__auto${auto ? " aiterm-suggest__auto--on" : ""}`}
-          aria-pressed={auto}
-          title={t.suggest_auto_title}
-          onClick={toggleAuto}
-        >
-          {t.suggest_auto}
-        </button>
-        {hint && <span className="aiterm-suggest__hint">{hint}</span>}
-      </div>
-      {status === "error" && (
-        <div className="aiterm-suggest__error" role="alert">
-          <span>{t.suggest_error(errorMsg)}</span>
-          <button type="button" disabled={blocked} onClick={() => void generate(false)}>
-            {t.suggest_retry}
+        <div className="aiterm-suggest__tools">
+          {hasRun && (
+            <button
+              type="button"
+              className="aiterm-suggest__tool"
+              disabled={blocked}
+              onClick={() => void generate(false)}
+            >
+              <RefreshIcon size={11} />
+              <span>{t.suggest_regenerate}</span>
+            </button>
+          )}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={auto}
+            className={`aiterm-suggest__switch${auto ? " aiterm-suggest__switch--on" : ""}`}
+            title={t.suggest_auto_title}
+            onClick={toggleAuto}
+          >
+            <span className="aiterm-suggest__track" aria-hidden="true"><span className="aiterm-suggest__thumb" /></span>
+            <span>{t.suggest_auto}</span>
           </button>
         </div>
-      )}
-      {items.length > 0 && (
-        <div className="aiterm-suggest__cards">
-          {items.map((s) => (
-            <button
-              key={s.prompt}
-              type="button"
-              className="aiterm-suggest__card"
-              title={`${t.suggest_fill_title}\n\n${s.prompt}`}
-              // 單擊＝填入供編輯；雙擊＝送出。雙擊會先觸發一次單擊（detail=1），
-              // 文字那時已經填好了，所以第二下（detail>=2）只補一個 Enter——
-              // 再填一次就會貼兩遍。
-              onClick={(e) => {
-                if (e.detail >= 2) void submitTerminalInput(sessionId);
-                else void fillTerminalInput(sessionId, s.prompt);
-              }}
-            >
-              {s.title}
-            </button>
-          ))}
+      </header>
+
+      {!collapsed && (
+        <div className="aiterm-suggest__body">
+          {status === "idle" && (
+            <div className="aiterm-suggest__intro">
+              <p>{t.suggest_intro}</p>
+              <button
+                type="button"
+                className="aiterm-suggest__primary"
+                disabled={blocked}
+                onClick={() => void generate(false)}
+              >
+                <SparklesIcon size={13} />
+                <span>{t.suggest_generate}</span>
+              </button>
+            </div>
+          )}
+
+          {status === "loading" && (
+            <div className="aiterm-suggest__skeletons" role="status" aria-label={t.suggest_loading}>
+              <span /><span /><span />
+            </div>
+          )}
+
+          {hint && <div className="aiterm-suggest__hint">{hint}</div>}
+
+          {status === "error" && (
+            <div className="aiterm-suggest__error" role="alert">
+              <span>{t.suggest_error(errorMsg)}</span>
+              <button type="button" disabled={blocked} onClick={() => void generate(false)}>
+                {t.suggest_retry}
+              </button>
+            </div>
+          )}
+
+          {items.length > 0 && status !== "loading" && (
+            <>
+              <ul className="aiterm-suggest__list">
+                {items.map((s) => (
+                  <li key={s.prompt}>
+                    <button
+                      type="button"
+                      className="aiterm-suggest__card"
+                      title={`${t.suggest_fill_title}\n\n${s.prompt}`}
+                      onClick={(e) => onCardClick(e, s.prompt)}
+                    >
+                      <span className="aiterm-suggest__card-top">
+                        <span className="aiterm-suggest__card-title">{s.title}</span>
+                        {flash?.prompt === s.prompt && (
+                          <span className="aiterm-suggest__badge">
+                            <span aria-hidden="true">✓</span>
+                            <span>{flash.kind === "sent" ? t.suggest_sent : t.suggest_filled}</span>
+                          </span>
+                        )}
+                      </span>
+                      <span className="aiterm-suggest__card-prompt">{s.prompt}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <div className="aiterm-suggest__footer">{t.suggest_footer_hint}</div>
+            </>
+          )}
         </div>
       )}
-    </div>
+    </section>
   );
 }
