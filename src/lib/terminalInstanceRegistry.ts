@@ -1,4 +1,5 @@
 import type { Terminal } from "@xterm/xterm";
+import { writePty } from "../ipc/pty";
 
 /** Structural subset of @xterm/addon-serialize's SerializeAddon — avoids a
  * dependency on that package from this module (it's wired in by
@@ -46,4 +47,24 @@ export function serializeTerminal(id: string): string | null {
   const entry = registry.get(id);
   if (!entry) return null;
   return entry.serializeAddon.serialize({ scrollback: 0 });
+}
+
+/** 把文字填進該終端機目前的輸入位置，**不送 Enter**。
+ *
+ * 程式有開 bracketed paste（Claude Code 會開）就包成貼上序列，讓它當成一整塊
+ * 貼上而不是逐字鍵入。沒開就把換行壓成空白——否則換行會被 shell 當成 Enter，
+ * 建議的文字就直接被執行了。兩條路都先剝掉文字裡的控制序列，避免內嵌的
+ * `ESC[201~` 提前結束貼上、後面的內容變成真的按鍵。
+ *
+ * 回傳 false 表示這個 id 沒有活著的終端機，什麼都沒送。 */
+export async function fillTerminalInput(id: string, text: string): Promise<boolean> {
+  const entry = registry.get(id);
+  if (!entry) return false;
+  // eslint-disable-next-line no-control-regex -- stripping real ESC/control bytes is the point
+  const clean = text.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+  const payload = entry.term.modes?.bracketedPasteMode
+    ? `\x1b[200~${clean.replace(/\r\n?/g, "\n")}\x1b[201~`
+    : clean.replace(/\s*[\r\n]+\s*/g, " ");
+  await writePty(id, payload);
+  return true;
 }

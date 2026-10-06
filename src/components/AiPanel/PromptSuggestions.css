@@ -1,0 +1,78 @@
+.aiterm-suggest {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 14px;
+  border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  font-size: 11.5px;
+  /* 面板很矮時不能把聊天區擠掉——整塊最多佔這麼高，超過就捲動。 */
+  max-height: 96px;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+.aiterm-suggest__bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.aiterm-suggest__gen,
+.aiterm-suggest__auto,
+.aiterm-suggest__error button {
+  background: transparent;
+  color: var(--text-muted, #9aa0b4);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
+  border-radius: 10px;
+  padding: 2px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.aiterm-suggest__gen:hover:not(:disabled),
+.aiterm-suggest__auto:hover,
+.aiterm-suggest__error button:hover:not(:disabled) {
+  color: var(--text-primary, #e6e8f0);
+  border-color: var(--accent, #6c8cff);
+}
+.aiterm-suggest__gen:disabled,
+.aiterm-suggest__error button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.aiterm-suggest__auto--on {
+  color: var(--accent, #6c8cff);
+  border-color: var(--accent, #6c8cff);
+}
+.aiterm-suggest__hint {
+  color: var(--text-muted, #9aa0b4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.aiterm-suggest__error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ef4444;
+}
+.aiterm-suggest__cards {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.aiterm-suggest__card {
+  flex: 0 0 auto;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: var(--bg-elevated, rgba(108, 140, 255, 0.1));
+  color: var(--text-primary, #e6e8f0);
+  border: 1px solid var(--border-color, rgba(108, 140, 255, 0.35));
+  border-radius: 12px;
+  padding: 3px 11px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.aiterm-suggest__card:hover {
+  border-color: var(--accent, #6c8cff);
+}
