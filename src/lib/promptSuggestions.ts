@@ -47,7 +47,13 @@ export function parseSuggestions(raw: string | null | undefined): PromptSuggesti
  * 組出給 AI 的使用者訊息。`languageDirective` 來自 i18n 的 languageDirective()。
  * 有 `goal` 時，建議必須朝這個大目標推進；沒有（空白也算）時，與沒傳完全相同。
  */
-export function buildSuggestionRequest(screen: string, languageDirective: string, goal?: string): string {
+export function buildSuggestionRequest(
+  screen: string,
+  languageDirective: string,
+  goal?: string,
+  /** 已經 formatHistoryForPrompt 整理過的「較早畫面」；空字串或沒給＝不加這一節。 */
+  history?: string,
+): string {
   const tail = screen.length > MAX_SCREEN_CHARS ? screen.slice(-MAX_SCREEN_CHARS) : screen;
   const g = goal?.trim().slice(0, MAX_GOAL_CHARS) ?? "";
   return [
@@ -63,6 +69,15 @@ export function buildSuggestionRequest(screen: string, languageDirective: string
     `只回傳 JSON 陣列，格式：[{"title":"12 字內的短標題","prompt":"完整提示詞"}]，不要其他文字。`,
     languageDirective,
     "",
+    ...(history
+      ? [
+          "較早的畫面（舊→新，用來判斷已經做過什麼；已完成的事不要再建議）：",
+          "```",
+          history,
+          "```",
+          "",
+        ]
+      : []),
     "終端機畫面：",
     "```",
     tail,

@@ -7,15 +7,13 @@ import { fillTerminalInput, serializeTerminal, submitTerminalInput } from "../..
 import { buildSuggestionRequest, parseSuggestions, type PromptSuggestion } from "../../lib/promptSuggestions";
 import { stripAnsiCodes } from "../TaskBoard/transcriptUtils";
 import { RefreshIcon, SparklesIcon } from "../Icons";
+import { IDLE_MS, POLL_MS } from "./terminalIdle";
 import "./PromptSuggestions.css";
 
 const STORAGE_AUTO_KEY = "aiterm-suggest-auto";
 const STORAGE_COLLAPSED_KEY = "aiterm-suggest-collapsed";
 /** 「已填入／已送出」回饋顯示多久。 */
 const FLASH_MS = 1_500;
-/** 終端機超過這麼久沒有輸出，才算閒置（Claude 回完了）。 */
-const IDLE_MS = 2_000;
-const POLL_MS = 1_000;
 
 type Status = "idle" | "loading" | "ok" | "none" | "empty" | "error";
 

@@ -124,3 +124,26 @@ describe("cleanPolishedGoal", () => {
     expect(cleanPolishedGoal("目".repeat(MAX_GOAL_CHARS + 50)).length).toBe(MAX_GOAL_CHARS);
   });
 });
+
+describe("buildSuggestionRequest with screen history", () => {
+  it("puts the older screens before the current one and says why they are there", () => {
+    const msg = buildSuggestionRequest("CURRENT-SCREEN", "", undefined, "OLDER-SCREEN");
+    expect(msg).toContain("OLDER-SCREEN");
+    expect(msg).toContain("較早的畫面");
+    expect(msg.indexOf("OLDER-SCREEN")).toBeLessThan(msg.indexOf("CURRENT-SCREEN"));
+    expect(msg).toContain("已完成的事不要再建議");
+  });
+
+  it("is byte-identical to the request without history when the history is empty", () => {
+    const base = buildSuggestionRequest("SCREEN", "LANG", "目標");
+    expect(buildSuggestionRequest("SCREEN", "LANG", "目標", "")).toBe(base);
+    expect(buildSuggestionRequest("SCREEN", "LANG", "目標", undefined)).toBe(base);
+    expect(base).not.toContain("較早的畫面");
+  });
+
+  it("works together with a goal", () => {
+    const msg = buildSuggestionRequest("CUR", "", "把舊系統轉成網頁版", "OLD");
+    expect(msg).toContain("把舊系統轉成網頁版");
+    expect(msg).toContain("OLD");
+  });
+});
