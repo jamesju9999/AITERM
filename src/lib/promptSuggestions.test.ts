@@ -147,3 +147,19 @@ describe("buildSuggestionRequest with screen history", () => {
     expect(msg).toContain("OLD");
   });
 });
+
+describe("buildSuggestionRequest with milestones", () => {
+  it("puts the milestone section after the goal and before the history and the current screen", () => {
+    const msg = buildSuggestionRequest("CURRENT", "", "我的目標", "OLDER", "MILESTONE-SECTION");
+    expect(msg).toContain("MILESTONE-SECTION");
+    expect(msg.indexOf("我的目標")).toBeLessThan(msg.indexOf("MILESTONE-SECTION"));
+    expect(msg.indexOf("MILESTONE-SECTION")).toBeLessThan(msg.indexOf("OLDER"));
+    expect(msg.indexOf("OLDER")).toBeLessThan(msg.indexOf("CURRENT"));
+  });
+
+  it("is byte-identical to the request without milestones when the section is empty", () => {
+    const base = buildSuggestionRequest("SCREEN", "LANG", "目標", "OLD");
+    expect(buildSuggestionRequest("SCREEN", "LANG", "目標", "OLD", "")).toBe(base);
+    expect(buildSuggestionRequest("SCREEN", "LANG", "目標", "OLD", undefined)).toBe(base);
+  });
+});

@@ -53,6 +53,8 @@ export function buildSuggestionRequest(
   goal?: string,
   /** 已經 formatHistoryForPrompt 整理過的「較早畫面」；空字串或沒給＝不加這一節。 */
   history?: string,
+  /** 已經 formatMilestonesForPrompt 整理過的里程碑一節；空字串或沒給＝不加。 */
+  milestones?: string,
 ): string {
   const tail = screen.length > MAX_SCREEN_CHARS ? screen.slice(-MAX_SCREEN_CHARS) : screen;
   const g = goal?.trim().slice(0, MAX_GOAL_CHARS) ?? "";
@@ -64,6 +66,7 @@ export function buildSuggestionRequest(
           "請判斷畫面上已經完成到哪裡，每個提示詞都要讓使用者朝這個大目標再往前一步；已經做完的事不要再建議。",
         ]
       : []),
+    ...(milestones ? [milestones] : []),
     `請依內容判斷使用者接下來最可能想做的事，提出 3 到 ${MAX_SUGGESTIONS} 個「下一步提示詞」。`,
     "每個提示詞要能直接貼給 AI 命令列工具當下一個指令，具體、可執行，不要建議破壞性操作。",
     `只回傳 JSON 陣列，格式：[{"title":"12 字內的短標題","prompt":"完整提示詞"}]，不要其他文字。`,

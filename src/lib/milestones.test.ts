@@ -4,6 +4,9 @@ import {
   MAX_MILESTONE_CHARS,
   buildMilestoneCheckRequest,
   buildMilestonePlanRequest,
+  defaultFocusId,
+  formatMilestonesForPrompt,
+  resolveFocus,
   mergePlanKeepingDone,
   parseMilestoneCheck,
   parseMilestonePlan,
@@ -161,5 +164,58 @@ describe("sanitizeMilestoneState", () => {
     expect(s.items[1].done).toBe(false);
     const many = { forGoal: "g", items: Array.from({ length: 30 }, (_, i) => ({ id: `i${i}`, text: `t${i}`, done: false })) };
     expect(sanitizeMilestoneState(many)!.items).toHaveLength(MAX_MILESTONES);
+  });
+});
+
+describe("focus", () => {
+  const items = [m("a", "一", true), m("b", "二"), m("c", "三")];
+
+  it("defaults to the first unfinished milestone, or null when there is none", () => {
+    expect(defaultFocusId(items)).toBe("b");
+    expect(defaultFocusId([m("a", "一", true)])).toBeNull();
+    expect(defaultFocusId([])).toBeNull();
+  });
+
+  it("honours the user's choice while it is a valid unfinished milestone", () => {
+    expect(resolveFocus(items, "c")).toBe("c");
+  });
+
+  it("falls back to the default when the chosen one is finished, deleted or unknown", () => {
+    expect(resolveFocus(items, "a")).toBe("b"); // 已完成
+    expect(resolveFocus(items, "zzz")).toBe("b"); // 不存在
+    expect(resolveFocus(items, null)).toBe("b");
+  });
+});
+
+describe("formatMilestonesForPrompt", () => {
+  const items = [m("a", "盤點 API", true), m("b", "拆分登入模組"), m("c", "遷移資料庫")];
+
+  it("is an empty string when there are no milestones", () => {
+    expect(formatMilestonesForPrompt([], null)).toBe("");
+  });
+
+  it("lists every milestone with its state and names the focus one", () => {
+    const out = formatMilestonesForPrompt(items, "b");
+    expect(out).toContain("1. [已完成] 盤點 API");
+    expect(out).toContain("2. [未完成] 拆分登入模組");
+    expect(out).toContain("3. [未完成] 遷移資料庫");
+    expect(out).toContain("目前焦點里程碑：第 2 個「拆分登入模組」");
+    expect(out).toContain("推進");
+  });
+
+  it("points at whichever milestone is the focus", () => {
+    expect(formatMilestonesForPrompt(items, "c")).toContain("第 3 個「遷移資料庫」");
+  });
+
+  it("tells the AI to treat a finished-looking focus as a verification step", () => {
+    expect(formatMilestonesForPrompt(items, "b")).toContain("驗證");
+  });
+
+  it("switches to wrap-up wording when every milestone is finished", () => {
+    const all = [m("a", "一", true), m("b", "二", true)];
+    const out = formatMilestonesForPrompt(all, null);
+    expect(out).toContain("所有里程碑都已完成");
+    expect(out).toContain("收尾");
+    expect(out).not.toContain("目前焦點里程碑");
   });
 });

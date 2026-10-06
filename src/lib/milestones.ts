@@ -151,3 +151,40 @@ export function sanitizeMilestoneState(raw: unknown): MilestoneState | undefined
   if (clean.length === 0) return undefined;
   return { forGoal: typeof forGoal === "string" ? forGoal : "", items: clean };
 }
+
+/** 第一個尚未完成的里程碑；沒有就是 null。 */
+export function defaultFocusId(items: readonly Milestone[]): string | null {
+  return items.find((i) => !i.done)?.id ?? null;
+}
+
+/**
+ * 實際的焦點：使用者選的那個，前提是它還存在而且還沒完成；否則退回第一個未完成的。
+ * 這樣焦點里程碑被勾完、被刪掉時，建議會自動轉向下一個，不會卡在已經做完的事上。
+ */
+export function resolveFocus(items: readonly Milestone[], chosenId: string | null): string | null {
+  const chosen = chosenId ? items.find((i) => i.id === chosenId) : undefined;
+  return chosen && !chosen.done ? chosen.id : defaultFocusId(items);
+}
+
+/**
+ * 給「下一步建議」請求的里程碑一節。沒有里程碑回 ""（請求與沒有這功能時位元組相同）。
+ * 全部完成時改成收尾驗收；否則要求每個提示詞都推進「焦點里程碑」。
+ */
+export function formatMilestonesForPrompt(items: readonly Milestone[], focusId: string | null): string {
+  if (items.length === 0) return "";
+  const list = items.map((x, i) => `${i + 1}. [${x.done ? "已完成" : "未完成"}] ${x.text}`);
+  const idx = focusId ? items.findIndex((i) => i.id === focusId) : -1;
+  if (idx < 0) {
+    return [
+      "使用者把大目標拆成了以下里程碑：",
+      ...list,
+      "所有里程碑都已完成。請改為建議驗收、整理、補測試與收尾的提示詞。",
+    ].join("\n");
+  }
+  return [
+    "使用者把大目標拆成了以下里程碑：",
+    ...list,
+    `目前焦點里程碑：第 ${idx + 1} 個「${items[idx].text}」。每個提示詞都要推進這個里程碑；已完成的里程碑不要再建議。`,
+    "如果畫面顯示這個里程碑已經做完，第一個提示詞應該是驗證或收尾它。",
+  ].join("\n");
+}
