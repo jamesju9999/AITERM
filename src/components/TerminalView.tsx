@@ -61,6 +61,7 @@ import { SuggestionSidebar } from "./SuggestionSidebar/SuggestionSidebar";
 import { useSuggestionSidebar } from "./SuggestionSidebar/useSuggestionSidebar";
 import { useScreenHistory } from "./SuggestionSidebar/useScreenHistory";
 import { loadCustomNames, saveCustomNames } from "../lib/aiCliCommand";
+import type { MilestoneState } from "../lib/milestones";
 import { TerminalBlockCard } from "./TerminalBlockCard";
 import { findNextBlockMatch, findPreviousBlockMatch, type BlockSearchCursor } from "../lib/blockSearch";
 import { summarizeCommands } from "../lib/summarizeTab";
@@ -138,6 +139,8 @@ export interface TerminalViewProps {
   /** 這個分頁的「下一步建議」大目標。只在掛載時讀一次；改動透過 onSuggestionGoalChange 回報給 TerminalApp 持久化。 */
   initialSuggestionGoal?: string;
   onSuggestionGoalChange?: (goal: string) => void;
+  initialSuggestionMilestones?: MilestoneState;
+  onSuggestionMilestonesChange?: (next: MilestoneState | undefined) => void;
   /**
    * 這個分頁是否注入 Claude Code 橋接環境變數。
    * 環境變數只能在 PTY spawn 的瞬間決定，所以這個值在分頁建立後改變沒有效果。
@@ -177,7 +180,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, externalSessionId, onRunningChange, initialCwd, initialCommand, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, initialSuggestionGoal, onSuggestionGoalChange, claudeBridge, tabId, remoteOwner = null, onRemoteOwnerChange, registerCloseGuard, unregisterCloseGuard, registerBusyProbe, unregisterBusyProbe }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, externalSessionId, onRunningChange, initialCwd, initialCommand, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, initialSuggestionGoal, onSuggestionGoalChange, initialSuggestionMilestones, onSuggestionMilestonesChange, claudeBridge, tabId, remoteOwner = null, onRemoteOwnerChange, registerCloseGuard, unregisterCloseGuard, registerBusyProbe, unregisterBusyProbe }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -492,6 +495,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const [customAiCliNames, setCustomAiCliNames] = useState<string[]>(loadCustomNames);
   const suggestionSidebar = useSuggestionSidebar(blocks, customAiCliNames);
   const [suggestionGoal, setSuggestionGoal] = useState(initialSuggestionGoal ?? "");
+  const [suggestionMilestones, setSuggestionMilestones] = useState<MilestoneState | undefined>(initialSuggestionMilestones);
   // 側欄關著也要記錄 AI 工具每一輪的穩定畫面，所以掛在這裡而不是側欄元件裡。
   const screenHistory = useScreenHistory(
     sessionId,
@@ -2018,6 +2022,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           onClose={suggestionSidebar.close}
           goal={suggestionGoal}
           onGoalChange={(goal) => { setSuggestionGoal(goal); onSuggestionGoalChange?.(goal); }}
+          milestones={suggestionMilestones}
+          onMilestonesChange={(next) => { setSuggestionMilestones(next); onSuggestionMilestonesChange?.(next); }}
         />
       ) : null}
     >

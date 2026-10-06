@@ -952,6 +952,12 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                       prev.map((t) => t.id === tab.id ? { ...t, suggestionGoal: goal || undefined } : t)
                     );
                   }}
+                  initialSuggestionMilestones={tab.suggestionMilestones}
+                  onSuggestionMilestonesChange={(next) => {
+                    setTabs((prev) =>
+                      prev.map((t) => t.id === tab.id ? { ...t, suggestionMilestones: next } : t)
+                    );
+                  }}
                   tabId={tab.id}
                   remoteOwner={remoteTabId}
                   onRemoteOwnerChange={setRemoteTabId}

@@ -24,13 +24,14 @@ import { MAX_GOAL_CHARS } from "../../lib/promptSuggestions";
 const onClose = vi.fn();
 const onNames = vi.fn();
 const onGoal = vi.fn();
-beforeEach(() => { invokeAiChatCtx.mockReset(); abortAi.mockClear(); onClose.mockClear(); onNames.mockClear(); onGoal.mockClear(); localStorage.clear(); });
+const onMilestones = vi.fn();
+beforeEach(() => { invokeAiChatCtx.mockReset(); abortAi.mockClear(); onClose.mockClear(); onNames.mockClear(); onGoal.mockClear(); onMilestones.mockClear(); localStorage.clear(); });
 
 const setup = (p: Partial<React.ComponentProps<typeof SuggestionSidebar>> = {}) =>
   render(
     <SuggestionSidebar
       sessionId="s1" disabled={false} aiCliRunning customNames={[]}
-      onCustomNamesChange={onNames} onClose={onClose} goal="" onGoalChange={onGoal} getIdleMs={() => 60_000} {...p}
+      onCustomNamesChange={onNames} onClose={onClose} goal="" onGoalChange={onGoal} milestones={undefined} onMilestonesChange={onMilestones} getIdleMs={() => 60_000} {...p}
     />,
   );
 
@@ -277,6 +278,32 @@ describe("SuggestionSidebar", () => {
       // 再開編輯框，內容是已儲存的目標，不是遲到的結果。
       fireEvent.click(screen.getByRole("button", { name: "編輯大目標" }));
       expect(box().value).toBe("舊目標");
+    });
+  });
+
+  describe("milestones", () => {
+    const state = { forGoal: "目標", items: [{ id: "a", text: "盤點 API", done: false }] };
+
+    it("is hidden until there is a goal or existing milestones", () => {
+      setup({ goal: "" });
+      expect(screen.queryByRole("region", { name: "里程碑" })).toBeNull();
+    });
+
+    it("shows once a goal is set", () => {
+      setup({ goal: "目標" });
+      expect(screen.getByRole("region", { name: "里程碑" })).toBeTruthy();
+    });
+
+    it("keeps showing existing milestones even if the goal was cleared", () => {
+      setup({ goal: "", milestones: state });
+      expect(screen.getByText("盤點 API")).toBeTruthy();
+    });
+
+    it("passes edits up", () => {
+      setup({ goal: "目標", milestones: state });
+      fireEvent.click(screen.getByRole("checkbox", { name: "完成：盤點 API" }));
+      expect(onMilestones).toHaveBeenCalledTimes(1);
+      expect(onMilestones.mock.calls[0][0].items[0].done).toBe(true);
     });
   });
 });

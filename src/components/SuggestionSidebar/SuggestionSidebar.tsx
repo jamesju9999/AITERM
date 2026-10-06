@@ -6,7 +6,9 @@ import { useLocale } from "../../contexts/LocaleContext";
 import { BUILTIN_AI_CLI_NAMES, normalizeCliName } from "../../lib/aiCliCommand";
 import { MAX_GOAL_CHARS, buildGoalPolishRequest, cleanPolishedGoal } from "../../lib/promptSuggestions";
 import { SparklesIcon } from "../Icons";
+import { MilestoneList } from "./MilestoneList";
 import { PromptSuggestions } from "./PromptSuggestions";
+import type { MilestoneState } from "../../lib/milestones";
 import "./SuggestionSidebar.css";
 
 export interface SuggestionSidebarProps {
@@ -25,10 +27,13 @@ export interface SuggestionSidebarProps {
   /** 這個分頁的大目標（沒有就是空字串）。 */
   goal: string;
   onGoalChange: (goal: string) => void;
+  /** 這個分頁的里程碑（沒有就是 undefined）。 */
+  milestones: MilestoneState | undefined;
+  onMilestonesChange: (next: MilestoneState | undefined) => void;
 }
 
 export function SuggestionSidebar({
-  sessionId, providerId, disabled, getIdleMs, getHistory, aiCliRunning, customNames, onCustomNamesChange, onClose, goal, onGoalChange,
+  sessionId, providerId, disabled, getIdleMs, getHistory, aiCliRunning, customNames, onCustomNamesChange, onClose, goal, onGoalChange, milestones, onMilestonesChange,
 }: SuggestionSidebarProps) {
   const { t, locale } = useLocale();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -184,6 +189,17 @@ export function SuggestionSidebar({
           </button>
         )}
       </section>
+
+      {(goal.trim() || milestones) && (
+        <MilestoneList
+          sessionId={sessionId}
+          providerId={providerId}
+          goal={goal}
+          state={milestones}
+          onChange={onMilestonesChange}
+          getHistory={getHistory}
+        />
+      )}
 
       {menuOpen && (
         <section className="aiterm-sugg-sidebar__menu" aria-label={t.sugg_custom_title}>

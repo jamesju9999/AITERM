@@ -146,4 +146,30 @@ describe("建議側欄與終端機並排", () => {
     expect(onGoal).toHaveBeenCalledWith("改成雲端版");
     expect(getByText("改成雲端版")).toBeInTheDocument();
   });
+
+  it("里程碑：帶入分頁已存的里程碑，勾選後回報給 TerminalApp", async () => {
+    const onMs = vi.fn();
+    const { container, getByRole, getByText } = render(
+      <LocaleProvider>
+        <MemoryRouter>
+          <TerminalView
+            tabId="tab-1"
+            registerCloseGuard={() => {}}
+            unregisterCloseGuard={() => {}}
+            initialSuggestionGoal="把舊系統轉成網頁版"
+            initialSuggestionMilestones={{ forGoal: "把舊系統轉成網頁版", items: [{ id: "m1", text: "盤點 API", done: false }] }}
+            onSuggestionMilestonesChange={onMs}
+          />
+        </MemoryRouter>
+      </LocaleProvider>,
+    );
+    const toggle = () => container.querySelector(".aiterm-sugg-toggle") as HTMLButtonElement;
+    await waitFor(() => expect(toggle()).not.toBeNull());
+    await act(async () => { toggle().click(); });
+    await waitFor(() => expect(getByText("盤點 API")).toBeInTheDocument());
+    await act(async () => { getByRole("checkbox", { name: "完成：盤點 API" }).click(); });
+    expect(onMs).toHaveBeenCalledTimes(1);
+    expect(onMs.mock.calls[0][0].items[0].done).toBe(true);
+    expect(onMs.mock.calls[0][0].forGoal).toBe("把舊系統轉成網頁版");
+  });
 });
