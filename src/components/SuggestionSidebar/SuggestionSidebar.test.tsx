@@ -17,16 +17,18 @@ vi.mock("../../contexts/LocaleContext", async () => {
 });
 
 import { SuggestionSidebar } from "./SuggestionSidebar";
+import { MAX_GOAL_CHARS } from "../../lib/promptSuggestions";
 
 const onClose = vi.fn();
 const onNames = vi.fn();
-beforeEach(() => { onClose.mockClear(); onNames.mockClear(); localStorage.clear(); });
+const onGoal = vi.fn();
+beforeEach(() => { onClose.mockClear(); onNames.mockClear(); onGoal.mockClear(); localStorage.clear(); });
 
 const setup = (p: Partial<React.ComponentProps<typeof SuggestionSidebar>> = {}) =>
   render(
     <SuggestionSidebar
       sessionId="s1" disabled={false} aiCliRunning customNames={[]}
-      onCustomNamesChange={onNames} onClose={onClose} getIdleMs={() => 60_000} {...p}
+      onCustomNamesChange={onNames} onClose={onClose} goal="" onGoalChange={onGoal} getIdleMs={() => 60_000} {...p}
     />,
   );
 
@@ -101,6 +103,55 @@ describe("SuggestionSidebar", () => {
       fireEvent.click(screen.getByRole("button", { name: "移除 mytool" }));
       expect(onNames).toHaveBeenCalledWith(["other"]);
       expect(screen.queryByRole("button", { name: "移除 claude" })).toBeNull();
+    });
+  });
+
+  describe("goal", () => {
+    const box = () => screen.getByRole("textbox", { name: "大目標" }) as HTMLTextAreaElement;
+
+    it("invites the user to set a goal when there is none, and saves what they type", () => {
+      setup();
+      expect(screen.queryByRole("textbox", { name: "大目標" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "設定大目標（選填）" }));
+      fireEvent.change(box(), { target: { value: "  將舊程式轉成網頁架構  " } });
+      fireEvent.click(screen.getByRole("button", { name: "儲存" }));
+      expect(onGoal).toHaveBeenCalledWith("將舊程式轉成網頁架構");
+    });
+
+    it("shows the current goal as text and lets the user edit it", () => {
+      setup({ goal: "把舊系統轉成網頁版" });
+      expect(screen.getByText("把舊系統轉成網頁版")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "編輯大目標" }));
+      expect(box().value).toBe("把舊系統轉成網頁版");
+      fireEvent.change(box(), { target: { value: "改成雲端版" } });
+      fireEvent.click(screen.getByRole("button", { name: "儲存" }));
+      expect(onGoal).toHaveBeenCalledWith("改成雲端版");
+    });
+
+    it("clearing, or saving a blank box, removes the goal", () => {
+      setup({ goal: "目標" });
+      fireEvent.click(screen.getByRole("button", { name: "編輯大目標" }));
+      fireEvent.click(screen.getByRole("button", { name: "清除" }));
+      expect(onGoal).toHaveBeenLastCalledWith("");
+      fireEvent.click(screen.getByRole("button", { name: "編輯大目標" }));
+      fireEvent.change(box(), { target: { value: "   " } });
+      fireEvent.click(screen.getByRole("button", { name: "儲存" }));
+      expect(onGoal).toHaveBeenLastCalledWith("");
+    });
+
+    it("cancel leaves the goal untouched", () => {
+      setup({ goal: "目標" });
+      fireEvent.click(screen.getByRole("button", { name: "編輯大目標" }));
+      fireEvent.change(box(), { target: { value: "亂改的" } });
+      fireEvent.click(screen.getByRole("button", { name: "取消" }));
+      expect(onGoal).not.toHaveBeenCalled();
+      expect(screen.getByText("目標")).toBeTruthy();
+    });
+
+    it("limits the length of the goal", () => {
+      setup();
+      fireEvent.click(screen.getByRole("button", { name: "設定大目標（選填）" }));
+      expect(box().maxLength).toBe(MAX_GOAL_CHARS);
     });
   });
 });

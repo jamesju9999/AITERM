@@ -5,6 +5,8 @@ export interface PromptSuggestion {
 
 export const MAX_SUGGESTIONS = 5;
 export const MAX_PROMPT_CHARS = 500;
+/** 使用者設定的大目標上限（字元）。夠寫一段話，又不會把請求撐大。 */
+export const MAX_GOAL_CHARS = 500;
 /** 送給 AI 的畫面內容上限（字元）。只留尾端——最新的對話才決定下一步。 */
 const MAX_SCREEN_CHARS = 8000;
 
@@ -41,13 +43,23 @@ export function parseSuggestions(raw: string | null | undefined): PromptSuggesti
   return out;
 }
 
-/** 組出給 AI 的使用者訊息。`languageDirective` 來自 i18n 的 languageDirective()。 */
-export function buildSuggestionRequest(screen: string, languageDirective: string): string {
+/**
+ * 組出給 AI 的使用者訊息。`languageDirective` 來自 i18n 的 languageDirective()。
+ * 有 `goal` 時，建議必須朝這個大目標推進；沒有（空白也算）時，與沒傳完全相同。
+ */
+export function buildSuggestionRequest(screen: string, languageDirective: string, goal?: string): string {
   const tail = screen.length > MAX_SCREEN_CHARS ? screen.slice(-MAX_SCREEN_CHARS) : screen;
+  const g = goal?.trim().slice(0, MAX_GOAL_CHARS) ?? "";
   return [
-    "以下是使用者終端機目前的畫面內容（可能是 Claude Code 的對話）。",
+    "以下是使用者終端機目前的畫面內容（可能是 AI 命令列工具的對話）。",
+    ...(g
+      ? [
+          `使用者的大目標：${g}`,
+          "請判斷畫面上已經完成到哪裡，每個提示詞都要讓使用者朝這個大目標再往前一步；已經做完的事不要再建議。",
+        ]
+      : []),
     `請依內容判斷使用者接下來最可能想做的事，提出 3 到 ${MAX_SUGGESTIONS} 個「下一步提示詞」。`,
-    "每個提示詞要能直接貼給 Claude Code 當下一個指令，具體、可執行，不要建議破壞性操作。",
+    "每個提示詞要能直接貼給 AI 命令列工具當下一個指令，具體、可執行，不要建議破壞性操作。",
     `只回傳 JSON 陣列，格式：[{"title":"12 字內的短標題","prompt":"完整提示詞"}]，不要其他文字。`,
     languageDirective,
     "",

@@ -178,6 +178,68 @@ describe("PromptSuggestions", () => {
     expect(screen.getByText("產生建議")).toBeTruthy();
   });
 
+  describe("goal", () => {
+    it("includes the goal in the request", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      setup({ goal: "把舊系統轉成網頁版" });
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(invokeAiChatCtx.mock.calls[0][0][0].content).toContain("把舊系統轉成網頁版");
+    });
+
+    it("sends no goal text when there is none", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(invokeAiChatCtx.mock.calls[0][0][0].content).not.toContain("大目標");
+    });
+
+    it("drops the suggestions made for the old goal and goes back to the start when the goal changes", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000 };
+      const { rerender } = render(<PromptSuggestions {...props} goal="舊目標" />);
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(screen.getByText("補測試")).toBeTruthy();
+      rerender(<PromptSuggestions {...props} goal="新目標" />);
+      await flush();
+      expect(screen.queryByText("補測試")).toBeNull();
+      expect(screen.getByText("產生建議")).toBeTruthy();
+    });
+
+    it("ignores a reply that was still in flight when the goal changed", async () => {
+      let resolveIt!: (v: unknown) => void;
+      invokeAiChatCtx.mockImplementationOnce(() => new Promise((r) => { resolveIt = r; }));
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000 };
+      const { rerender } = render(<PromptSuggestions {...props} goal="舊目標" />);
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      rerender(<PromptSuggestions {...props} goal="新目標" />);
+      await flush();
+      expect(abortAi).toHaveBeenCalledWith("suggest-s1");
+      await act(async () => { resolveIt(reply(A)); });
+      await flush();
+      expect(screen.queryByText("補測試")).toBeNull();
+      expect(screen.getByText("產生建議")).toBeTruthy();
+    });
+
+    it("lets auto mode regenerate for the same screen after the goal changed", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      let idle = 100;
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => idle };
+      const { rerender } = render(<PromptSuggestions {...props} goal="目標一" />);
+      fireEvent.click(screen.getByTitle(/閒置後自動產生/));
+      await advance(1000);
+      idle = 60_000; await advance(1000);
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+      rerender(<PromptSuggestions {...props} goal="目標二" />);
+      idle = 100; await advance(1000);
+      idle = 60_000; await advance(1000);
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("is disabled while Ask AI is streaming or an agent runs", async () => {
     setup({ disabled: true });
     const btn = screen.getByText("產生建議").closest("button")!;

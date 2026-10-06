@@ -51,6 +51,8 @@ export interface Tab {
    *  上次的工作」讀——標題列不能用它，那裡沒有「上次」的框架。這個 session
    *  一旦跑出新摘要，aiSummary 就會蓋過它。 */
   lastSessionSummary?: string;
+  /** 這個分頁的「下一步建議」大目標。會持久化，重開 app 後分頁還在目標就還在。 */
+  suggestionGoal?: string;
   /** 這個終端機分頁目前實際所在的工作目錄。由 TerminalView 回報，會持久化。
    *  跟 initialCwd（開分頁時的起始目錄）是兩件事，不要混用。 */
   cwd?: string;

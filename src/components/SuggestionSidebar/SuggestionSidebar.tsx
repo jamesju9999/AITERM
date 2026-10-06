@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
 import { BUILTIN_AI_CLI_NAMES, normalizeCliName } from "../../lib/aiCliCommand";
+import { MAX_GOAL_CHARS } from "../../lib/promptSuggestions";
 import { SparklesIcon } from "../Icons";
 import { PromptSuggestions } from "./PromptSuggestions";
 import "./SuggestionSidebar.css";
@@ -16,15 +17,28 @@ export interface SuggestionSidebarProps {
   customNames: readonly string[];
   onCustomNamesChange: (names: string[]) => void;
   onClose: () => void;
+  /** 這個分頁的大目標（沒有就是空字串）。 */
+  goal: string;
+  onGoalChange: (goal: string) => void;
 }
 
 export function SuggestionSidebar({
-  sessionId, providerId, disabled, getIdleMs, aiCliRunning, customNames, onCustomNamesChange, onClose,
+  sessionId, providerId, disabled, getIdleMs, aiCliRunning, customNames, onCustomNamesChange, onClose, goal, onGoalChange,
 }: SuggestionSidebarProps) {
   const { t } = useLocale();
   const [menuOpen, setMenuOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [editingGoal, setEditingGoal] = useState(false);
+  const [goalDraft, setGoalDraft] = useState("");
+
+  const startEditGoal = () => { setGoalDraft(goal); setEditingGoal(true); };
+  const saveGoal = (e: FormEvent) => {
+    e.preventDefault();
+    onGoalChange(goalDraft.trim());
+    setEditingGoal(false);
+  };
+  const clearGoal = () => { onGoalChange(""); setEditingGoal(false); };
 
   const addName = (e: FormEvent) => {
     e.preventDefault();
@@ -63,6 +77,39 @@ export function SuggestionSidebar({
           >×</button>
         </div>
       </header>
+
+      <section className="aiterm-sugg-goal">
+        {editingGoal ? (
+          <form onSubmit={saveGoal} className="aiterm-sugg-goal__form">
+            <textarea
+              aria-label={t.sugg_goal_label}
+              value={goalDraft}
+              onChange={(e) => setGoalDraft(e.target.value)}
+              maxLength={MAX_GOAL_CHARS}
+              rows={3}
+              placeholder={t.sugg_goal_placeholder}
+              autoFocus
+            />
+            <span className="aiterm-sugg-goal__hint">{t.sugg_goal_hint}</span>
+            <div className="aiterm-sugg-goal__actions">
+              <button type="submit" className="aiterm-sugg-goal__save">{t.sugg_goal_save}</button>
+              <button type="button" onClick={() => setEditingGoal(false)}>{t.sugg_goal_cancel}</button>
+              {goal && <button type="button" className="aiterm-sugg-goal__clear" onClick={clearGoal}>{t.sugg_goal_clear}</button>}
+            </div>
+          </form>
+        ) : goal ? (
+          <div className="aiterm-sugg-goal__view">
+            <span className="aiterm-sugg-goal__label">{t.sugg_goal_label}</span>
+            <p className="aiterm-sugg-goal__text">{goal}</p>
+            <button type="button" className="aiterm-sugg-sidebar__icon" aria-label={t.sugg_goal_edit} title={t.sugg_goal_edit} onClick={startEditGoal}>✎</button>
+          </div>
+        ) : (
+          <button type="button" className="aiterm-sugg-goal__set" onClick={startEditGoal}>
+            <span aria-hidden="true">＋</span>
+            <span>{t.sugg_goal_set}</span>
+          </button>
+        )}
+      </section>
 
       {menuOpen && (
         <section className="aiterm-sugg-sidebar__menu" aria-label={t.sugg_custom_title}>
@@ -114,6 +161,7 @@ export function SuggestionSidebar({
           disabled={disabled}
           getIdleMs={getIdleMs}
           hideTitle
+          goal={goal}
         />
       </div>
     </aside>

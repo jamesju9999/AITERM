@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSuggestions, buildSuggestionRequest, MAX_SUGGESTIONS, MAX_PROMPT_CHARS } from "./promptSuggestions";
+import { parseSuggestions, buildSuggestionRequest, MAX_SUGGESTIONS, MAX_PROMPT_CHARS, MAX_GOAL_CHARS } from "./promptSuggestions";
 
 describe("parseSuggestions", () => {
   it("parses a plain JSON array", () => {
@@ -58,5 +58,28 @@ describe("buildSuggestionRequest", () => {
     const msg = buildSuggestionRequest(screen, "");
     expect(msg).toContain("TAIL");
     expect(msg.length).toBeLessThan(12000);
+  });
+});
+
+describe("buildSuggestionRequest with a goal", () => {
+  it("states the goal and asks every suggestion to move toward it", () => {
+    const msg = buildSuggestionRequest("SCREEN", "", "將舊程式的 Client-Server 架構轉換為網頁平台架構");
+    expect(msg).toContain("將舊程式的 Client-Server 架構轉換為網頁平台架構");
+    expect(msg).toContain("大目標");
+    expect(msg).toContain("SCREEN");
+  });
+
+  it("is identical to the goal-less request when the goal is empty or blank", () => {
+    const base = buildSuggestionRequest("SCREEN", "LANG");
+    expect(buildSuggestionRequest("SCREEN", "LANG", "")).toBe(base);
+    expect(buildSuggestionRequest("SCREEN", "LANG", "   \n ")).toBe(base);
+    expect(buildSuggestionRequest("SCREEN", "LANG", undefined)).toBe(base);
+    expect(base).not.toContain("大目標");
+  });
+
+  it("truncates an over-long goal so it cannot swamp the request", () => {
+    const msg = buildSuggestionRequest("SCREEN", "", "目".repeat(MAX_GOAL_CHARS + 300));
+    expect(msg).toContain("目".repeat(MAX_GOAL_CHARS));
+    expect(msg).not.toContain("目".repeat(MAX_GOAL_CHARS + 1));
   });
 });

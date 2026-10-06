@@ -114,4 +114,36 @@ describe("建議側欄與終端機並排", () => {
     expect(main.contains(panel)).toBe(true);
     expect(side.contains(panel)).toBe(false);
   });
+
+  it("大目標：帶入分頁已存的目標，儲存後回報給 TerminalApp", async () => {
+    const onGoal = vi.fn();
+    const { container, getByRole, getByText } = render(
+      <LocaleProvider>
+        <MemoryRouter>
+          <TerminalView
+            tabId="tab-1"
+            registerCloseGuard={() => {}}
+            unregisterCloseGuard={() => {}}
+            initialSuggestionGoal="把舊系統轉成網頁版"
+            onSuggestionGoalChange={onGoal}
+          />
+        </MemoryRouter>
+      </LocaleProvider>,
+    );
+    const toggle = () => container.querySelector(".aiterm-sugg-toggle") as HTMLButtonElement;
+    await waitFor(() => expect(toggle()).not.toBeNull());
+    await act(async () => { toggle().click(); });
+    await waitFor(() => expect(getByText("把舊系統轉成網頁版")).toBeInTheDocument());
+
+    await act(async () => { getByRole("button", { name: "編輯大目標" }).click(); });
+    const box = getByRole("textbox", { name: "大目標" }) as HTMLTextAreaElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+      setter.call(box, "改成雲端版");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { getByRole("button", { name: "儲存" }).click(); });
+    expect(onGoal).toHaveBeenCalledWith("改成雲端版");
+    expect(getByText("改成雲端版")).toBeInTheDocument();
+  });
 });

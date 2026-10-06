@@ -92,4 +92,14 @@ describe("sessionTabs", () => {
     expect(raw[0]).not.toHaveProperty("attention");
     expect(raw[0]).not.toHaveProperty("agentProgress");
   });
+
+  it("存下並還原每個分頁自己的建議大目標", () => {
+    saveSessionTabs([
+      { id: "a", title: "A", type: "terminal", suggestionGoal: "把舊系統轉成網頁版" },
+      { id: "b", title: "B", type: "terminal" },
+    ]);
+    const restored = restoreSessionTabs()!;
+    expect(restored[0].suggestionGoal).toBe("把舊系統轉成網頁版");
+    expect(restored[1].suggestionGoal).toBeUndefined();
+  });
 });

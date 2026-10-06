@@ -946,6 +946,12 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   externalSessionId={tab.spawnedByAgent ? tab.ptySessionId : undefined}
                   onRunningChange={(isRunning) => { tabRunningRef.current.set(tab.id, isRunning); }}
                   onClaudeDetected={onClaudeDetected}
+                  initialSuggestionGoal={tab.suggestionGoal}
+                  onSuggestionGoalChange={(goal) => {
+                    setTabs((prev) =>
+                      prev.map((t) => t.id === tab.id ? { ...t, suggestionGoal: goal || undefined } : t)
+                    );
+                  }}
                   tabId={tab.id}
                   remoteOwner={remoteTabId}
                   onRemoteOwnerChange={setRemoteTabId}

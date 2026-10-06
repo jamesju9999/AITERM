@@ -134,6 +134,9 @@ export interface TerminalViewProps {
   onAttention?: (kind: AttentionKind) => void;
   /** 使用者在這個分頁執行了 Claude Code。用來提示他設定 terminal bell。 */
   onClaudeDetected?: () => void;
+  /** 這個分頁的「下一步建議」大目標。只在掛載時讀一次；改動透過 onSuggestionGoalChange 回報給 TerminalApp 持久化。 */
+  initialSuggestionGoal?: string;
+  onSuggestionGoalChange?: (goal: string) => void;
   /**
    * 這個分頁是否注入 Claude Code 橋接環境變數。
    * 環境變數只能在 PTY spawn 的瞬間決定，所以這個值在分頁建立後改變沒有效果。
@@ -173,7 +176,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, externalSessionId, onRunningChange, initialCwd, initialCommand, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, claudeBridge, tabId, remoteOwner = null, onRemoteOwnerChange, registerCloseGuard, unregisterCloseGuard, registerBusyProbe, unregisterBusyProbe }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, externalSessionId, onRunningChange, initialCwd, initialCommand, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, initialSuggestionGoal, onSuggestionGoalChange, claudeBridge, tabId, remoteOwner = null, onRemoteOwnerChange, registerCloseGuard, unregisterCloseGuard, registerBusyProbe, unregisterBusyProbe }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -487,6 +490,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // 偵測只點亮開關按鈕，不會自動開啟——側欄一開終端機就變窄、觸發 PTY resize。
   const [customAiCliNames, setCustomAiCliNames] = useState<string[]>(loadCustomNames);
   const suggestionSidebar = useSuggestionSidebar(blocks, customAiCliNames);
+  const [suggestionGoal, setSuggestionGoal] = useState(initialSuggestionGoal ?? "");
 
   useEffect(() => {
     submitViaRef.current = submitCommand;
@@ -2004,6 +2008,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           customNames={customAiCliNames}
           onCustomNamesChange={(names) => { setCustomAiCliNames(names); saveCustomNames(names); }}
           onClose={suggestionSidebar.close}
+          goal={suggestionGoal}
+          onGoalChange={(goal) => { setSuggestionGoal(goal); onSuggestionGoalChange?.(goal); }}
         />
       ) : null}
     >

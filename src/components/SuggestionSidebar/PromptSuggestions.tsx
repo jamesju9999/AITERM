@@ -44,9 +44,11 @@ export interface PromptSuggestionsProps {
   getIdleMs?: () => number;
   /** 側欄自己有標題與關閉鈕：不要再畫一個可收合的標題，內容永遠展開。 */
   hideTitle?: boolean;
+  /** 使用者設定的大目標；有的話每個建議都會朝它推進。改了就丟掉舊目標產生的建議。 */
+  goal?: string;
 }
 
-export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, hideTitle = false }: PromptSuggestionsProps) {
+export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, hideTitle = false, goal }: PromptSuggestionsProps) {
   const { t, locale } = useLocale();
   const [items, setItems] = useState<PromptSuggestion[]>([]);
   const [status, setStatus] = useState<Status>("idle");
@@ -101,7 +103,7 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
     setStatus("loading");
     try {
       const reply = await invokeAiChatCtx(
-        [{ role: "user", content: buildSuggestionRequest(screen, languageDirective(locale)) }],
+        [{ role: "user", content: buildSuggestionRequest(screen, languageDirective(locale), goal) }],
         { os: navigator.platform.toLowerCase(), shell: null, cwd: null, recentOutput: null },
         connId,
         providerId,
@@ -119,7 +121,21 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
     } finally {
       if (myReq === reqRef.current) loadingRef.current = false;
     }
-  }, [sessionId, connId, providerId, locale]);
+  }, [sessionId, connId, providerId, locale, goal]);
+
+  // 目標一改，舊目標產生的建議就沒有意義了：丟掉卡片、取消還在跑的請求、
+  // 回到起點，並讓自動模式對同一份畫面也能重新產生。第一次掛載不算「改」。
+  const prevGoalRef = useRef(goal);
+  useEffect(() => {
+    if (prevGoalRef.current === goal) return;
+    prevGoalRef.current = goal;
+    reqRef.current += 1; // 讓還在路上的回應變成過期
+    if (loadingRef.current) { loadingRef.current = false; abortAi(connId).catch(() => {}); }
+    lastScreenRef.current = null;
+    setItems([]);
+    setStatus("idle");
+    setErrorMsg("");
+  }, [goal, connId]);
 
   // 忙→閒的那一下才自動產生；wasBusyRef 確保一次忙碌只觸發一次。
   useEffect(() => {
