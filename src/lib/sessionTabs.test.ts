@@ -102,4 +102,25 @@ describe("sessionTabs", () => {
     expect(restored[0].suggestionGoal).toBe("把舊系統轉成網頁版");
     expect(restored[1].suggestionGoal).toBeUndefined();
   });
+
+  it("存下並還原每個分頁的里程碑（含目標與完成狀態）", () => {
+    const state = { forGoal: "把舊系統轉成網頁版", items: [{ id: "m1", text: "盤點 API", done: true }, { id: "m2", text: "拆分登入", done: false }] };
+    saveSessionTabs([
+      { id: "a", title: "A", type: "terminal", suggestionMilestones: state },
+      { id: "b", title: "B", type: "terminal" },
+    ]);
+    const restored = restoreSessionTabs()!;
+    expect(restored[0].suggestionMilestones).toEqual(state);
+    expect(restored[1].suggestionMilestones).toBeUndefined();
+  });
+
+  it("還原時丟掉形狀不對的里程碑資料，不讓壞資料進到畫面", () => {
+    localStorage.setItem(SESSION_TABS_KEY, JSON.stringify([
+      { title: "A", type: "terminal", suggestionMilestones: { forGoal: "g", items: "壞掉" } },
+      { title: "B", type: "terminal", suggestionMilestones: { forGoal: "g", items: [{ id: 1, text: "x" }] } },
+    ]));
+    const restored = restoreSessionTabs()!;
+    expect(restored[0].suggestionMilestones).toBeUndefined();
+    expect(restored[1].suggestionMilestones).toBeUndefined();
+  });
 });

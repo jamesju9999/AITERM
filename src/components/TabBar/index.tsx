@@ -28,6 +28,8 @@ import "./index.css";
 
 export type TabType = "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant" | "knowledge-base" | "mail" | "remote-terminal";
 
+import type { MilestoneState } from "../../lib/milestones";
+
 export interface Tab {
   id: string;
   title: string;
@@ -53,6 +55,8 @@ export interface Tab {
   lastSessionSummary?: string;
   /** 這個分頁的「下一步建議」大目標。會持久化，重開 app 後分頁還在目標就還在。 */
   suggestionGoal?: string;
+  /** 這個分頁的里程碑（依大目標拆出來的、可勾選的成果清單）。與目標一起持久化。 */
+  suggestionMilestones?: MilestoneState;
   /** 這個終端機分頁目前實際所在的工作目錄。由 TerminalView 回報，會持久化。
    *  跟 initialCwd（開分頁時的起始目錄）是兩件事，不要混用。 */
   cwd?: string;

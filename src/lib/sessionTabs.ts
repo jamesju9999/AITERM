@@ -1,11 +1,12 @@
 import type { Tab } from "../components/TabBar";
+import { sanitizeMilestoneState } from "./milestones";
 
 export const SESSION_TABS_KEY = "aiterm-session-tabs";
 
 // 只存重開 app 後還有意義的欄位。ptySessionId / attention / agentProgress
 // 這類執行期狀態不存——重開後它們指向的 PTY、事件、進度都已經不存在，
 // 存下來只會讓還原出來的分頁帶著假狀態。
-type SavedTab = Pick<Tab, "title" | "type" | "dbConnectionId" | "cwd" | "aiSummary" | "suggestionGoal">;
+type SavedTab = Pick<Tab, "title" | "type" | "dbConnectionId" | "cwd" | "aiSummary" | "suggestionGoal" | "suggestionMilestones">;
 
 export function restoreSessionTabs(): Tab[] | null {
   try {
@@ -13,8 +14,10 @@ export function restoreSessionTabs(): Tab[] | null {
     if (!raw) return null;
     const saved: SavedTab[] = JSON.parse(raw);
     if (!Array.isArray(saved) || saved.length === 0) return null;
-    return saved.map(({ aiSummary, ...s }) => ({
+    return saved.map(({ aiSummary, suggestionMilestones, ...s }) => ({
       ...s,
+      // localStorage 的內容不可信：形狀不對的里程碑資料不能進到畫面。
+      suggestionMilestones: sanitizeMilestoneState(suggestionMilestones),
       id: crypto.randomUUID(),
       // 每個分頁的 PTY 開回它自己上次的目錄。少了這個，所有分頁都會開在
       // 全域的 aiterm_last_cwd，然後第一次 cwd 輪詢就把每個分頁的 cwd 全部
@@ -32,9 +35,10 @@ export function restoreSessionTabs(): Tab[] | null {
 }
 
 export function saveSessionTabs(tabs: Tab[]) {
-  const toSave: SavedTab[] = tabs.map(({ title, type, dbConnectionId, cwd, aiSummary, lastSessionSummary, suggestionGoal }) => ({
+  const toSave: SavedTab[] = tabs.map(({ title, type, dbConnectionId, cwd, aiSummary, lastSessionSummary, suggestionGoal, suggestionMilestones }) => ({
     title,
     suggestionGoal,
+    suggestionMilestones,
     type,
     dbConnectionId,
     cwd,
