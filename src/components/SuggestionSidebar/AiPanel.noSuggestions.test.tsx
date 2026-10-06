@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 
 const DEFAULT_CONFIG = {
   default_provider: null, providers: [], execution_mode: "graded",
@@ -33,7 +33,7 @@ vi.mock("../../contexts/LocaleContext", async () => {
   return { useLocale: () => ({ locale: "zh-TW" as const, t: translations["zh-TW"], setLocale: () => {} }) };
 });
 
-import { AiPanel } from "./index";
+import { AiPanel } from "../AiPanel";
 
 beforeEach(() => { calls.length = 0; listenMock.mockClear(); });
 
@@ -45,24 +45,13 @@ const mount = () =>
     />,
   );
 
-describe("AiPanel + PromptSuggestions", () => {
-  it("shows the suggestion bar and keeps the attachment control", async () => {
+describe("AiPanel", () => {
+  it("no longer hosts the suggestion bar (it lives in the docked sidebar now) and keeps the attachment control", async () => {
     const { container } = mount();
     await act(async () => {});
-    expect(screen.getByText("產生建議")).toBeInTheDocument();
+    expect(screen.queryByText("產生建議")).toBeNull();
+    expect(container.querySelector(".aiterm-suggest")).toBeNull();
     expect(container.querySelector(".aiterm-pill-paperclip-btn")).not.toBeNull();
-  });
-
-  it("generating suggestions does not go through the chat path or add chat messages", async () => {
-    const { container } = mount();
-    await act(async () => {});
-    fireEvent.click(screen.getByText("產生建議"));
-    await act(async () => {});
-    expect(screen.getByText("補測試")).toBeInTheDocument();
-    expect(calls.some((c) => c.cmd === "ai_chat")).toBe(false);
-    expect(calls.filter((c) => c.cmd === "ai_chat_ctx")).toHaveLength(1);
-    // 建議 JSON／提示詞不應該以對話氣泡出現
-    expect(container.textContent).not.toContain('"title"');
-    expect(container.querySelectorAll(".aiterm-msg, .aiterm-chat-msg").length).toBe(0);
+    expect(calls.some((c) => c.cmd === "ai_chat_ctx")).toBe(false);
   });
 });

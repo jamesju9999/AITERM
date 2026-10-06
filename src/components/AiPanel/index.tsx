@@ -18,7 +18,6 @@ import { useProviderQuota } from "../../hooks/useProviderQuota";
 import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
 import { WrenchIcon } from "../Icons";
 import { ChatPanelShell } from "../ChatPanel/ChatPanelShell";
-import { PromptSuggestions } from "./PromptSuggestions";
 
 const IS_WINDOWS = navigator.platform.toLowerCase().startsWith("win");
 
@@ -552,12 +551,6 @@ Rules:
               ))}
             </div>
           )}
-          <PromptSuggestions
-            sessionId={sessionId}
-            providerId={providerId}
-            disabled={isDisabled}
-            getIdleMs={getIdleMs}
-          />
           <input
             ref={fileInputRef}
             type="file"
