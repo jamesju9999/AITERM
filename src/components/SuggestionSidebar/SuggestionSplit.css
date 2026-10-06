@@ -1,0 +1,46 @@
+.aiterm-sugg-split {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.aiterm-sugg-split__main {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.aiterm-sugg-split__side {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-glass, rgba(15, 17, 28, 0.7));
+  border-left: 1px solid var(--border-color, #2a2a2a);
+}
+.aiterm-sugg-split__divider {
+  flex: 0 0 6px;
+  width: 6px;
+  margin: 0 -3px; /* 抓取範圍有 6px，但不多佔版面 */
+  z-index: 2;
+  cursor: col-resize;
+  background: transparent;
+  transition: background-color 0.15s;
+}
+.aiterm-sugg-split__divider:hover { background: var(--accent-border, rgba(192, 132, 252, 0.5)); }
+.aiterm-sugg-split--dragging { user-select: none; cursor: col-resize; }
+/* 拖曳中的預覽線：只是一條蓋在上面的線，不影響版面，所以不會觸發終端機縮放。 */
+.aiterm-sugg-split__ghost {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent, #c084fc);
+  pointer-events: none;
+  z-index: 3;
+}
