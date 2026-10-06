@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { abortAi, formatAiError, invokeAiChatCtx, type AiError } from "../../ipc/ai";
+import { abortAi, invokeAiChatCtx } from "../../ipc/ai";
+import { describeError } from "./describeError";
 import { useLocale } from "../../contexts/LocaleContext";
 import { languageDirective } from "../../lib/i18n";
 import { fillTerminalInput, serializeTerminal, submitTerminalInput } from "../../lib/terminalInstanceRegistry";
@@ -24,15 +25,6 @@ function loadAuto(): boolean {
 
 function loadCollapsed(): boolean {
   try { return localStorage.getItem(STORAGE_COLLAPSED_KEY) === "true"; } catch { return false; }
-}
-
-/** Tauri 的錯誤是物件而不是 Error——不能 String(e)，會變成 [object Object]。 */
-function describeError(e: unknown): string {
-  if (e && typeof e === "object") {
-    if ("kind" in e) return formatAiError(e as AiError);
-    if ("message" in e) return String((e as { message: unknown }).message);
-  }
-  return typeof e === "string" ? e : "unknown";
 }
 
 export interface PromptSuggestionsProps {

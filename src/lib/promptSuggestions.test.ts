@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSuggestions, buildSuggestionRequest, MAX_SUGGESTIONS, MAX_PROMPT_CHARS, MAX_GOAL_CHARS } from "./promptSuggestions";
+import { parseSuggestions, buildSuggestionRequest, buildGoalPolishRequest, cleanPolishedGoal, MAX_SUGGESTIONS, MAX_PROMPT_CHARS, MAX_GOAL_CHARS } from "./promptSuggestions";
 
 describe("parseSuggestions", () => {
   it("parses a plain JSON array", () => {
@@ -81,5 +81,46 @@ describe("buildSuggestionRequest with a goal", () => {
     const msg = buildSuggestionRequest("SCREEN", "", "目".repeat(MAX_GOAL_CHARS + 300));
     expect(msg).toContain("目".repeat(MAX_GOAL_CHARS));
     expect(msg).not.toContain("目".repeat(MAX_GOAL_CHARS + 1));
+  });
+});
+
+describe("buildGoalPolishRequest", () => {
+  it("carries the draft and the language, and forbids inventing new requirements", () => {
+    const msg = buildGoalPolishRequest("轉成網頁版", "請使用繁體中文");
+    expect(msg).toContain("轉成網頁版");
+    expect(msg).toContain("請使用繁體中文");
+    expect(msg).toContain("不要");
+  });
+
+  it("truncates an over-long draft", () => {
+    const msg = buildGoalPolishRequest("目".repeat(MAX_GOAL_CHARS + 300), "");
+    expect(msg).toContain("目".repeat(MAX_GOAL_CHARS));
+    expect(msg).not.toContain("目".repeat(MAX_GOAL_CHARS + 1));
+  });
+});
+
+describe("cleanPolishedGoal", () => {
+  it("returns plain text trimmed", () => {
+    expect(cleanPolishedGoal("  將舊系統改成網頁版  ")).toBe("將舊系統改成網頁版");
+  });
+
+  it("strips a code fence and wrapping quotes the model likes to add", () => {
+    expect(cleanPolishedGoal("```\n將舊系統改成網頁版\n```")).toBe("將舊系統改成網頁版");
+    expect(cleanPolishedGoal("```text\n目標內容\n```")).toBe("目標內容");
+    expect(cleanPolishedGoal('"目標內容"')).toBe("目標內容");
+    expect(cleanPolishedGoal("“目標內容”")).toBe("目標內容");
+  });
+
+  it("keeps quotes that are part of the text", () => {
+    expect(cleanPolishedGoal('把 "舊系統" 轉成網頁版')).toBe('把 "舊系統" 轉成網頁版');
+  });
+
+  it("returns an empty string for null or blank", () => {
+    expect(cleanPolishedGoal(null)).toBe("");
+    expect(cleanPolishedGoal("  \n")).toBe("");
+  });
+
+  it("truncates to the goal limit", () => {
+    expect(cleanPolishedGoal("目".repeat(MAX_GOAL_CHARS + 50)).length).toBe(MAX_GOAL_CHARS);
   });
 });

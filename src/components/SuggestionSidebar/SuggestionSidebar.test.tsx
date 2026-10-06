@@ -1,9 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 
+const invokeAiChatCtx = vi.fn();
+const abortAi = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../ipc/ai", () => ({
-  invokeAiChatCtx: vi.fn(),
-  abortAi: vi.fn().mockResolvedValue(undefined),
+  invokeAiChatCtx: (...a: unknown[]) => invokeAiChatCtx(...a),
+  abortAi: (...a: unknown[]) => abortAi(...a),
   formatAiError: () => "err",
 }));
 vi.mock("../../lib/terminalInstanceRegistry", () => ({
@@ -22,7 +24,7 @@ import { MAX_GOAL_CHARS } from "../../lib/promptSuggestions";
 const onClose = vi.fn();
 const onNames = vi.fn();
 const onGoal = vi.fn();
-beforeEach(() => { onClose.mockClear(); onNames.mockClear(); onGoal.mockClear(); localStorage.clear(); });
+beforeEach(() => { invokeAiChatCtx.mockReset(); abortAi.mockClear(); onClose.mockClear(); onNames.mockClear(); onGoal.mockClear(); localStorage.clear(); });
 
 const setup = (p: Partial<React.ComponentProps<typeof SuggestionSidebar>> = {}) =>
   render(
@@ -152,6 +154,129 @@ describe("SuggestionSidebar", () => {
       setup();
       fireEvent.click(screen.getByRole("button", { name: "設定大目標（選填）" }));
       expect(box().maxLength).toBe(MAX_GOAL_CHARS);
+    });
+  });
+
+  describe("AI polish of the goal", () => {
+    const box = () => screen.getByRole("textbox", { name: "大目標" }) as HTMLTextAreaElement;
+    const open = (goal = "") => {
+      setup({ goal });
+      fireEvent.click(screen.getByRole("button", { name: goal ? "編輯大目標" : "設定大目標（選填）" }));
+    };
+    const reply = (content: string | null) => ({ content, tool_calls: [], tool_calling_unsupported: false });
+    const polishBtn = () => screen.getByRole("button", { name: /AI 潤飾|潤飾中/ }) as HTMLButtonElement;
+
+    it("is disabled while the draft is blank", () => {
+      open();
+      expect(polishBtn().disabled).toBe(true);
+      fireEvent.change(box(), { target: { value: "轉成網頁版" } });
+      expect(polishBtn().disabled).toBe(false);
+    });
+
+    it("replaces the draft with the polished text on a separate stream id, without saving it", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply('```\n將舊程式的 Client-Server 架構轉換為網頁平台架構\n```'));
+      open();
+      fireEvent.change(box(), { target: { value: "轉成網頁版" } });
+      await act(async () => { fireEvent.click(polishBtn()); });
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+      const [messages, , connId, providerId] = invokeAiChatCtx.mock.calls[0];
+      expect(connId).toBe("goal-polish-s1");
+      expect(providerId).toBeUndefined();
+      expect(messages[0].content).toContain("轉成網頁版");
+      expect(box().value).toBe("將舊程式的 Client-Server 架構轉換為網頁平台架構");
+      expect(onGoal).not.toHaveBeenCalled();
+    });
+
+    it("shows a busy state while waiting and blocks a second request", async () => {
+      invokeAiChatCtx.mockImplementation(() => new Promise(() => {}));
+      open();
+      fireEvent.change(box(), { target: { value: "轉成網頁版" } });
+      await act(async () => { fireEvent.click(polishBtn()); });
+      expect(polishBtn().textContent).toContain("潤飾中");
+      expect(polishBtn().disabled).toBe(true);
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+    });
+
+    it("can undo back to exactly what the user had typed", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply("潤飾後的目標"));
+      open();
+      fireEvent.change(box(), { target: { value: "我寫的原稿" } });
+      await act(async () => { fireEvent.click(polishBtn()); });
+      expect(box().value).toBe("潤飾後的目標");
+      fireEvent.click(screen.getByRole("button", { name: "還原" }));
+      expect(box().value).toBe("我寫的原稿");
+      expect(screen.queryByRole("button", { name: "還原" })).toBeNull();
+    });
+
+    it("hides the undo button as soon as the user edits the polished text", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply("潤飾後的目標"));
+      open();
+      fireEvent.change(box(), { target: { value: "原稿" } });
+      await act(async () => { fireEvent.click(polishBtn()); });
+      fireEvent.change(box(), { target: { value: "潤飾後的目標，再自己改幾個字" } });
+      expect(screen.queryByRole("button", { name: "還原" })).toBeNull();
+    });
+
+    it("saving after a polish stores the polished text", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply("潤飾後的目標"));
+      open();
+      fireEvent.change(box(), { target: { value: "原稿" } });
+      await act(async () => { fireEvent.click(polishBtn()); });
+      fireEvent.click(screen.getByRole("button", { name: "儲存" }));
+      expect(onGoal).toHaveBeenCalledWith("潤飾後的目標");
+    });
+
+    it("keeps the draft and shows a message when the AI fails or returns nothing", async () => {
+      invokeAiChatCtx.mockRejectedValueOnce({ kind: "network", message: "x" });
+      open();
+      fireEvent.change(box(), { target: { value: "原稿" } });
+      await act(async () => { fireEvent.click(polishBtn()); });
+      expect(screen.getByRole("alert").textContent).toContain("潤飾失敗");
+      expect(box().value).toBe("原稿");
+
+      invokeAiChatCtx.mockResolvedValueOnce(reply("   "));
+      await act(async () => { fireEvent.click(polishBtn()); });
+      expect(screen.getByRole("alert").textContent).toContain("沒有回傳可用的內容");
+      expect(box().value).toBe("原稿");
+    });
+
+    it("two clicks in the same tick still send only one request", async () => {
+      invokeAiChatCtx.mockImplementation(() => new Promise(() => {}));
+      open();
+      fireEvent.change(box(), { target: { value: "轉成網頁版" } });
+      await act(async () => { polishBtn().click(); polishBtn().click(); });
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+    });
+
+    it("a late reply from a cancelled request cannot overwrite a newer one", async () => {
+      const resolvers: ((v: unknown) => void)[] = [];
+      invokeAiChatCtx.mockImplementation(() => new Promise((r) => { resolvers.push(r); }));
+      open();
+      fireEvent.change(box(), { target: { value: "原稿" } });
+      await act(async () => { fireEvent.click(polishBtn()); });
+      fireEvent.click(screen.getByRole("button", { name: "取消" }));
+      fireEvent.click(screen.getByRole("button", { name: "設定大目標（選填）" }));
+      fireEvent.change(box(), { target: { value: "第二份原稿" } });
+      await act(async () => { fireEvent.click(polishBtn()); });
+      await act(async () => { resolvers[1](reply("第二次的潤飾結果")); });
+      expect(box().value).toBe("第二次的潤飾結果");
+      await act(async () => { resolvers[0](reply("遲到的第一次結果")); });
+      expect(box().value).toBe("第二次的潤飾結果");
+    });
+
+    it("cancelling while waiting aborts the request and ignores the late reply", async () => {
+      let resolveIt!: (v: unknown) => void;
+      invokeAiChatCtx.mockImplementation(() => new Promise((r) => { resolveIt = r; }));
+      open("舊目標");
+      fireEvent.change(box(), { target: { value: "舊目標加一點" } });
+      await act(async () => { fireEvent.click(polishBtn()); });
+      fireEvent.click(screen.getByRole("button", { name: "取消" }));
+      expect(abortAi).toHaveBeenCalledWith("goal-polish-s1");
+      await act(async () => { resolveIt(reply("遲到的潤飾結果")); });
+      expect(screen.queryByText("遲到的潤飾結果")).toBeNull();
+      // 再開編輯框，內容是已儲存的目標，不是遲到的結果。
+      fireEvent.click(screen.getByRole("button", { name: "編輯大目標" }));
+      expect(box().value).toBe("舊目標");
     });
   });
 });

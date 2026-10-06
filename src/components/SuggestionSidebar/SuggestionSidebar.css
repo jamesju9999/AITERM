@@ -197,3 +197,29 @@
   color: var(--accent, #c084fc);
 }
 .aiterm-sugg-goal__actions .aiterm-sugg-goal__clear { margin-left: auto; color: var(--error, #f87171); border-color: transparent; }
+
+.aiterm-sugg-goal__polish { display: flex; align-items: center; gap: 8px; }
+.aiterm-sugg-goal__polish-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: 1px solid var(--accent-border, rgba(192, 132, 252, 0.5));
+  border-radius: 12px;
+  background: transparent;
+  color: var(--accent, #c084fc);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.aiterm-sugg-goal__polish-btn:hover:not(:disabled) { background: var(--accent-bg, rgba(192, 132, 252, 0.15)); }
+.aiterm-sugg-goal__polish-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.aiterm-sugg-goal__undo {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted, #9aa0b4);
+  font-size: 11.5px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.aiterm-sugg-goal__undo:hover { color: var(--text-primary, #e6e8f0); }

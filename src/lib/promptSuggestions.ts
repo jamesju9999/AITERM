@@ -69,3 +69,33 @@ export function buildSuggestionRequest(screen: string, languageDirective: string
     "```",
   ].join("\n");
 }
+
+/** 請 AI 把使用者草擬的大目標改寫得更清楚、具體。只改寫，不新增使用者沒說的需求。 */
+export function buildGoalPolishRequest(goal: string, languageDirective: string): string {
+  const draft = goal.trim().slice(0, MAX_GOAL_CHARS);
+  return [
+    "以下是使用者為自己的終端機工作草擬的「大目標」。請把它改寫得更清楚、具體、好執行。",
+    "規則：保留原意；不要新增使用者沒提到的需求、技術或步驟；不要加標題、編號、前言或解釋；",
+    `精簡到 ${MAX_GOAL_CHARS} 字以內，用一到三句話寫完；只回傳改寫後的目標文字本身。`,
+    languageDirective,
+    "",
+    "草稿：",
+    draft,
+  ].join("\n");
+}
+
+/** 清理 AI 回的潤飾結果：拿掉 code fence 與整段外面包的引號，截到上限。空白回 ""。 */
+export function cleanPolishedGoal(raw: string | null | undefined): string {
+  if (!raw) return "";
+  let t = raw.trim();
+  const fence = /^```[a-zA-Z]*\n([\s\S]*?)\n?```$/.exec(t);
+  if (fence) t = fence[1].trim();
+  const pairs: [string, string][] = [['"', '"'], ["“", "”"], ["「", "」"], ["'", "'"]];
+  for (const [open, close] of pairs) {
+    if (t.length >= 2 && t.startsWith(open) && t.endsWith(close) && !t.slice(1, -1).includes(open)) {
+      t = t.slice(1, -1).trim();
+      break;
+    }
+  }
+  return t.slice(0, MAX_GOAL_CHARS);
+}
