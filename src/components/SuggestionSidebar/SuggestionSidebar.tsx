@@ -15,6 +15,8 @@ export interface SuggestionSidebarProps {
   /** Agent 執行中之類由外層決定的暫停條件。 */
   disabled: boolean;
   getIdleMs?: () => number;
+  /** AI 工具先前每一輪的穩定畫面（舊→新），給建議當「已經做過什麼」的依據。 */
+  getHistory?: () => string[];
   /** 終端機裡現在是否有 AI 命令列工具在執行（只影響狀態文字）。 */
   aiCliRunning: boolean;
   customNames: readonly string[];
@@ -26,7 +28,7 @@ export interface SuggestionSidebarProps {
 }
 
 export function SuggestionSidebar({
-  sessionId, providerId, disabled, getIdleMs, aiCliRunning, customNames, onCustomNamesChange, onClose, goal, onGoalChange,
+  sessionId, providerId, disabled, getIdleMs, getHistory, aiCliRunning, customNames, onCustomNamesChange, onClose, goal, onGoalChange,
 }: SuggestionSidebarProps) {
   const { t, locale } = useLocale();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -234,6 +236,7 @@ export function SuggestionSidebar({
           getIdleMs={getIdleMs}
           hideTitle
           goal={goal}
+          getHistory={getHistory}
         />
       </div>
     </aside>

@@ -5,6 +5,7 @@ import { useLocale } from "../../contexts/LocaleContext";
 import { languageDirective } from "../../lib/i18n";
 import { fillTerminalInput, serializeTerminal, submitTerminalInput } from "../../lib/terminalInstanceRegistry";
 import { buildSuggestionRequest, parseSuggestions, type PromptSuggestion } from "../../lib/promptSuggestions";
+import { PROMPT_HISTORY_BUDGET, formatHistoryForPrompt } from "../../lib/screenHistory";
 import { stripAnsiCodes } from "../TaskBoard/transcriptUtils";
 import { RefreshIcon, SparklesIcon } from "../Icons";
 import { IDLE_MS, POLL_MS } from "./terminalIdle";
@@ -36,9 +37,11 @@ export interface PromptSuggestionsProps {
   hideTitle?: boolean;
   /** 使用者設定的大目標；有的話每個建議都會朝它推進。改了就丟掉舊目標產生的建議。 */
   goal?: string;
+  /** 取得 AI 工具先前每一輪的「穩定畫面」（舊→新）。產生建議的當下才讀，所以傳函式不傳陣列。 */
+  getHistory?: () => string[];
 }
 
-export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, hideTitle = false, goal }: PromptSuggestionsProps) {
+export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, hideTitle = false, goal, getHistory }: PromptSuggestionsProps) {
   const { t, locale } = useLocale();
   const [items, setItems] = useState<PromptSuggestion[]>([]);
   const [status, setStatus] = useState<Status>("idle");
@@ -87,13 +90,15 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
     if (isAuto && screen === lastScreenRef.current) return;
     lastScreenRef.current = screen;
 
+    const history = formatHistoryForPrompt(getHistory?.() ?? [], screen, PROMPT_HISTORY_BUDGET);
+
     if (loadingRef.current) abortAi(connId).catch(() => {});
     const myReq = ++reqRef.current;
     loadingRef.current = true;
     setStatus("loading");
     try {
       const reply = await invokeAiChatCtx(
-        [{ role: "user", content: buildSuggestionRequest(screen, languageDirective(locale), goal) }],
+        [{ role: "user", content: buildSuggestionRequest(screen, languageDirective(locale), goal, history) }],
         { os: navigator.platform.toLowerCase(), shell: null, cwd: null, recentOutput: null },
         connId,
         providerId,
@@ -111,7 +116,7 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
     } finally {
       if (myReq === reqRef.current) loadingRef.current = false;
     }
-  }, [sessionId, connId, providerId, locale, goal]);
+  }, [sessionId, connId, providerId, locale, goal, getHistory]);
 
   // 目標一改，舊目標產生的建議就沒有意義了：丟掉卡片、取消還在跑的請求、
   // 回到起點，並讓自動模式對同一份畫面也能重新產生。第一次掛載不算「改」。
@@ -216,7 +221,10 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
         <div className="aiterm-suggest__body">
           {status === "idle" && (
             <div className="aiterm-suggest__intro">
-              <p>{t.suggest_intro}</p>
+              <p>
+                {t.suggest_intro}
+                <span className="aiterm-suggest__privacy">{t.suggest_privacy}</span>
+              </p>
               <button
                 type="button"
                 className="aiterm-suggest__primary"

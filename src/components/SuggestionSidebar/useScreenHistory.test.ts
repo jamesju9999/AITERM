@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 
 let screenText: string | null = "";
-const serializeTerminal = vi.fn((_id: string) => screenText);
+const serializeTerminal = vi.fn((id: string) => (id ? screenText : null));
 vi.mock("../../lib/terminalInstanceRegistry", () => ({
   serializeTerminal: (id: string) => serializeTerminal(id),
 }));

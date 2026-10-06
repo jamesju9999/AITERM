@@ -109,9 +109,10 @@ describe("PromptSuggestions", () => {
     expect(screen.getByText("把它重構得更簡潔")).toBeTruthy();
   });
 
-  it("explains itself before the first run", () => {
+  it("explains itself before the first run, including that screens are sent to the AI provider", () => {
     setup();
     expect(screen.getByText(/依目前終端機畫面/)).toBeTruthy();
+    expect(screen.getByText(/送給你設定的 AI 供應商/)).toBeTruthy();
   });
 
   it("confirms a single click with 已填入 and a double click with 已送出, then clears it", async () => {
@@ -237,6 +238,50 @@ describe("PromptSuggestions", () => {
       idle = 100; await advance(1000);
       idle = 60_000; await advance(1000);
       expect(invokeAiChatCtx).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("screen history", () => {
+    const old1 = "舊畫面一-0\n舊畫面一-1\n舊畫面一-2\n舊畫面一-3\n舊畫面一-4\n舊畫面一-5";
+    const old2 = "舊畫面二-0\n舊畫面二-1\n舊畫面二-2\n舊畫面二-3\n舊畫面二-4\n舊畫面二-5";
+
+    it("sends the older screens, oldest first and before the current screen", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      setup({ getHistory: () => [old1, old2] });
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      const content = invokeAiChatCtx.mock.calls[0][0][0].content as string;
+      expect(content).toContain("較早的畫面");
+      expect(content.indexOf("舊畫面一-0")).toBeLessThan(content.indexOf("舊畫面二-0"));
+      expect(content.indexOf("舊畫面二-0")).toBeLessThan(content.indexOf("Claude: 完成了"));
+    });
+
+    it("does not repeat the current screen when the newest history entry is just that screen", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      setup({ getHistory: () => [old1, "❯ 幫我寫一個函式\nClaude: 完成了"] });
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      const content = invokeAiChatCtx.mock.calls[0][0][0].content as string;
+      expect(content).toContain("舊畫面一-0");
+      expect(content.match(/Claude: 完成了/g)).toHaveLength(1);
+    });
+
+    it("sends no history section when there is none", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      setup({ getHistory: () => [] });
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(invokeAiChatCtx.mock.calls[0][0][0].content).not.toContain("較早的畫面");
+    });
+
+    it("reads the history at generation time, not at mount", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      let hist: string[] = [];
+      setup({ getHistory: () => hist });
+      hist = [old1];
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(invokeAiChatCtx.mock.calls[0][0][0].content).toContain("舊畫面一-0");
     });
   });
 

@@ -59,6 +59,7 @@ import { RobotIcon, SparklesIcon, SmartphoneIcon, ZapIcon } from "./Icons";
 import { SuggestionSplit } from "./SuggestionSidebar/SuggestionSplit";
 import { SuggestionSidebar } from "./SuggestionSidebar/SuggestionSidebar";
 import { useSuggestionSidebar } from "./SuggestionSidebar/useSuggestionSidebar";
+import { useScreenHistory } from "./SuggestionSidebar/useScreenHistory";
 import { loadCustomNames, saveCustomNames } from "../lib/aiCliCommand";
 import { TerminalBlockCard } from "./TerminalBlockCard";
 import { findNextBlockMatch, findPreviousBlockMatch, type BlockSearchCursor } from "../lib/blockSearch";
@@ -491,6 +492,12 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const [customAiCliNames, setCustomAiCliNames] = useState<string[]>(loadCustomNames);
   const suggestionSidebar = useSuggestionSidebar(blocks, customAiCliNames);
   const [suggestionGoal, setSuggestionGoal] = useState(initialSuggestionGoal ?? "");
+  // 側欄關著也要記錄 AI 工具每一輪的穩定畫面，所以掛在這裡而不是側欄元件裡。
+  const screenHistory = useScreenHistory(
+    sessionId,
+    suggestionSidebar.aiCliRunning,
+    () => Date.now() - lastPtyOutputAtRef.current,
+  );
 
   useEffect(() => {
     submitViaRef.current = submitCommand;
@@ -2004,6 +2011,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           providerId={activeProviderId || undefined}
           disabled={false}
           getIdleMs={() => Date.now() - lastPtyOutputAtRef.current}
+          getHistory={screenHistory.getHistory}
           aiCliRunning={suggestionSidebar.aiCliRunning}
           customNames={customAiCliNames}
           onCustomNamesChange={(names) => { setCustomAiCliNames(names); saveCustomNames(names); }}
