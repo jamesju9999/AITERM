@@ -8,7 +8,7 @@ export const MAX_PROMPT_CHARS = 500;
 /** 使用者設定的大目標上限（字元）。夠寫一段話，又不會把請求撐大。 */
 export const MAX_GOAL_CHARS = 500;
 /** 送給 AI 的畫面內容上限（字元）。只留尾端——最新的對話才決定下一步。 */
-const MAX_SCREEN_CHARS = 8000;
+export const MAX_SCREEN_CHARS = 8000;
 
 /**
  * 解析 AI 回的建議。模型常把 JSON 包在 code fence 或前後加說明，所以只抓
