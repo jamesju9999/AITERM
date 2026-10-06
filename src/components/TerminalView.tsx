@@ -55,7 +55,11 @@ import { CommandBookmarksPicker, addBookmark } from "./CommandBookmarks";
 import { getActiveTheme, type AppTheme } from "../lib/themes";
 import { readLineExcludingInlinePrediction } from "../lib/terminalLinePrediction";
 import { attentionForExitCode, type AttentionKind } from "../lib/terminalAttention";
-import { RobotIcon, SparklesIcon, SmartphoneIcon } from "./Icons";
+import { RobotIcon, SparklesIcon, SmartphoneIcon, ZapIcon } from "./Icons";
+import { SuggestionSplit } from "./SuggestionSidebar/SuggestionSplit";
+import { SuggestionSidebar } from "./SuggestionSidebar/SuggestionSidebar";
+import { useSuggestionSidebar } from "./SuggestionSidebar/useSuggestionSidebar";
+import { loadCustomNames, saveCustomNames } from "../lib/aiCliCommand";
 import { TerminalBlockCard } from "./TerminalBlockCard";
 import { findNextBlockMatch, findPreviousBlockMatch, type BlockSearchCursor } from "../lib/blockSearch";
 import { summarizeCommands } from "../lib/summarizeTab";
@@ -478,6 +482,11 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     undefined,
     handlePromptReady,
   );
+
+  // 下一步建議側欄：終端機裡有 AI 命令列工具（claude、codex…）在跑時才有意義。
+  // 偵測只點亮開關按鈕，不會自動開啟——側欄一開終端機就變窄、觸發 PTY resize。
+  const [customAiCliNames, setCustomAiCliNames] = useState<string[]>(loadCustomNames);
+  const suggestionSidebar = useSuggestionSidebar(blocks, customAiCliNames);
 
   useEffect(() => {
     submitViaRef.current = submitCommand;
@@ -1984,6 +1993,20 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const handleCancel = () => setPreview(INITIAL_PREVIEW);
 
   return (
+    <SuggestionSplit
+      sidebar={suggestionSidebar.open && sessionId ? (
+        <SuggestionSidebar
+          sessionId={sessionId}
+          providerId={activeProviderId || undefined}
+          disabled={false}
+          getIdleMs={() => Date.now() - lastPtyOutputAtRef.current}
+          aiCliRunning={suggestionSidebar.aiCliRunning}
+          customNames={customAiCliNames}
+          onCustomNamesChange={(names) => { setCustomAiCliNames(names); saveCustomNames(names); }}
+          onClose={suggestionSidebar.close}
+        />
+      ) : null}
+    >
     <div
       style={{
         display: "flex",
@@ -2080,6 +2103,21 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           >
             <SmartphoneIcon size={14} />
             <span>Remote</span>
+          </button>
+          <button
+            className={`aiterm-btn aiterm-btn--secondary aiterm-btn--sm aiterm-sugg-toggle${suggestionSidebar.open ? " aiterm-sugg-toggle--open" : suggestionSidebar.aiCliRunning ? " aiterm-sugg-toggle--ready" : ""}`}
+            title={suggestionSidebar.open
+              ? t.sugg_btn_title_close
+              : suggestionSidebar.aiCliRunning ? t.sugg_btn_title_detected : t.sugg_btn_title_manual}
+            aria-pressed={suggestionSidebar.open}
+            onClick={(e) => {
+              e.stopPropagation();
+              suggestionSidebar.toggle();
+            }}
+            style={{ display: "flex", alignItems: "center", gap: "6px" }}
+          >
+            <ZapIcon size={14} />
+            <span>{t.sugg_btn_label}</span>
           </button>
           <button
             className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
@@ -2575,5 +2613,6 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         />
       )}
     </div>
+    </SuggestionSplit>
   );
 }

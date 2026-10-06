@@ -238,3 +238,7 @@
 .terminal-search-close {
   color: #f87171;
 }
+
+/* 「建議」開關：偵測到 AI 工具時亮起提醒，開啟時呈選取狀態。 */
+.aiterm-sugg-toggle--ready { color: var(--accent, #c084fc); border-color: var(--accent-border, rgba(192, 132, 252, 0.5)); }
+.aiterm-sugg-toggle--open { background: var(--accent-bg, rgba(192, 132, 252, 0.15)); color: var(--accent, #c084fc); border-color: var(--accent, #c084fc); }
