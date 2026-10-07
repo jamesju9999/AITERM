@@ -16,6 +16,7 @@ import {
 } from "../../lib/milestones";
 import { MAX_SCREEN_CHARS } from "../../lib/promptSuggestions";
 import { PROMPT_HISTORY_BUDGET, formatHistoryForPrompt, normalizeScreen } from "../../lib/screenHistory";
+import { redactSecrets } from "../../lib/redact";
 import { serializeTerminal } from "../../lib/terminalInstanceRegistry";
 import { describeError } from "./describeError";
 import "./MilestoneList.css";
@@ -34,6 +35,8 @@ export interface MilestoneListProps {
   getHistory?: () => string[];
   /** 目前被建議朝向的焦點里程碑 id（沒有＝null）。 */
   focusId: string | null;
+  /** 送出畫面給 AI 前先遮罩敏感資訊。 */
+  redact: boolean;
   /** 使用者想把焦點移到另一個里程碑。焦點只是一種「現在想先做哪個」，不寫進里程碑資料。 */
   onFocus: (id: string) => void;
 }
@@ -44,7 +47,7 @@ export interface MilestoneListProps {
  * **AI 只提議，不動資料**：拆解結果要使用者按「採用」才寫入，檢查進度也是逐項「採用」才打勾。
  * 自動勾選一旦誤判就會一路累積，而使用者看不到它改了什麼。
  */
-export function MilestoneList({ sessionId, providerId, goal, state, onChange, getHistory, focusId, onFocus }: MilestoneListProps) {
+export function MilestoneList({ sessionId, providerId, goal, state, onChange, getHistory, focusId, onFocus, redact }: MilestoneListProps) {
   const { t, locale } = useLocale();
   const items = state?.items ?? [];
   const done = items.filter((i) => i.done).length;
@@ -58,6 +61,7 @@ export function MilestoneList({ sessionId, providerId, goal, state, onChange, ge
   const [planProposal, setPlanProposal] = useState<string[] | null>(null);
   const [checkProposal, setCheckProposal] = useState<{ ids: string[]; note: string } | null>(null);
   const [checkNone, setCheckNone] = useState(false);
+  const [redactedCount, setRedactedCount] = useState(0);
 
   const reqRef = useRef(0);
   const busyRef = useRef<Busy>(null);
@@ -70,7 +74,7 @@ export function MilestoneList({ sessionId, providerId, goal, state, onChange, ge
     busyRef.current = null;
     setBusy(null);
   };
-  const resetProposals = () => { setError(null); setPlanProposal(null); setCheckProposal(null); setCheckNone(false); };
+  const resetProposals = () => { setError(null); setPlanProposal(null); setCheckProposal(null); setCheckNone(false); setRedactedCount(0); };
 
   // 目標一改，正在跑的拆解／檢查與未採用的提議都不再有意義。
   const prevGoalRef = useRef(goal);
@@ -147,8 +151,18 @@ export function MilestoneList({ sessionId, providerId, goal, state, onChange, ge
     resetProposals();
     const screen = normalizeScreen(serializeTerminal(sessionId) ?? "");
     if (!screen) { setError(t.suggest_empty_screen); return; }
-    const history = formatHistoryForPrompt(getHistory?.() ?? [], screen, PROMPT_HISTORY_BUDGET);
-    const current = screen.length > MAX_SCREEN_CHARS ? screen.slice(-MAX_SCREEN_CHARS) : screen;
+    // 先遮罩、再截斷與套預算：截斷若切在 token 中間，會留下一段沒被遮的殘片。
+    let maskedCount = 0;
+    const mask = (text: string) => {
+      if (!redact) return text;
+      const r = redactSecrets(text);
+      maskedCount += r.count;
+      return r.text;
+    };
+    const aiScreen = mask(screen);
+    const history = formatHistoryForPrompt((getHistory?.() ?? []).map(mask), aiScreen, PROMPT_HISTORY_BUDGET);
+    const current = aiScreen.length > MAX_SCREEN_CHARS ? aiScreen.slice(-MAX_SCREEN_CHARS) : aiScreen;
+    setRedactedCount(maskedCount);
     await runAi(
       "check",
       buildMilestoneCheckRequest(goal, items, history, current, languageDirective(locale)),
@@ -265,6 +279,7 @@ export function MilestoneList({ sessionId, providerId, goal, state, onChange, ge
             </section>
           )}
           {checkNone && <div className="aiterm-ms__hint">{t.ms_check_none}</div>}
+          {redactedCount > 0 && <div className="aiterm-ms__redacted">{t.suggest_redacted(redactedCount)}</div>}
 
           {items.length === 0 && editingId !== "new" && <p className="aiterm-ms__hint">{t.ms_empty}</p>}
 

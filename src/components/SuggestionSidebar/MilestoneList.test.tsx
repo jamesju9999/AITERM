@@ -32,7 +32,7 @@ const flush = () => act(async () => {});
 
 const setup = (p: Partial<React.ComponentProps<typeof MilestoneList>> = {}) =>
   render(
-    <MilestoneList sessionId="s1" goal={GOAL} state={undefined} onChange={onChange} getHistory={() => []} focusId={null} onFocus={onFocus} {...p} />,
+    <MilestoneList sessionId="s1" goal={GOAL} state={undefined} onChange={onChange} getHistory={() => []} focusId={null} onFocus={onFocus} redact {...p} />,
   );
 
 beforeEach(() => {
@@ -235,7 +235,7 @@ describe("MilestoneList – AI plan", () => {
     invokeAiChatCtx.mockImplementation(() => new Promise((r) => { resolveIt = r; }));
     const { rerender } = setup();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "AI 拆解" })); });
-    rerender(<MilestoneList sessionId="s1" goal="另一個目標" state={undefined} onChange={onChange} getHistory={() => []} focusId={null} onFocus={onFocus} />);
+    rerender(<MilestoneList sessionId="s1" goal="另一個目標" state={undefined} onChange={onChange} getHistory={() => []} focusId={null} onFocus={onFocus} redact />);
     expect(abortAi).toHaveBeenCalledWith("milestone-plan-s1");
     await act(async () => { resolveIt(reply('["遲到的結果"]')); });
     expect(screen.queryByText("遲到的結果")).toBeNull();
@@ -348,6 +348,48 @@ describe("MilestoneList – AI progress check", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "檢查進度" })); });
     expect(screen.getByText("AI 沒有發現可以確認完成的項目。")).toBeTruthy();
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  describe("secret redaction in the progress check", () => {
+    const TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    const sent = () => invokeAiChatCtx.mock.calls[0][0][0].content as string;
+
+    it("masks secrets in the current and the earlier screens, and says how many", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply('{"done":[],"note":""}'));
+      screenText = `目前畫面\npassword=hunter2hunter2\n結束`;
+      setup({ state: THREE, getHistory: () => [`較早畫面\nAuthorization: Bearer ${TOKEN}`] });
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "檢查進度" })); });
+      expect(sent()).not.toContain("hunter2hunter2");
+      expect(sent()).not.toContain(TOKEN);
+      expect(sent()).toContain("結束");
+      expect(screen.getByText("已在送出前遮罩 2 處疑似敏感資訊")).toBeTruthy();
+    });
+
+    it("masks before truncating so no fragment survives the 8000-char cut", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply('{"done":[],"note":""}'));
+      const suffix = "y ".repeat(3990).slice(0, 8000 - 20);
+      screenText = `${"x ".repeat(2000)}${TOKEN}${suffix}`;
+      setup({ state: THREE });
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "檢查進度" })); });
+      expect(sent()).not.toContain(TOKEN.slice(-20));
+      expect(sent()).not.toContain(TOKEN.slice(-12));
+    });
+
+    it("sends raw text and shows no count when redaction is off", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply('{"done":[],"note":""}'));
+      screenText = `password=hunter2hunter2`;
+      setup({ state: THREE, redact: false });
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "檢查進度" })); });
+      expect(sent()).toContain("hunter2hunter2");
+      expect(screen.queryByText(/已在送出前遮罩/)).toBeNull();
+    });
+
+    it("shows no count when nothing was masked", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply('{"done":[],"note":""}'));
+      setup({ state: THREE });
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "檢查進度" })); });
+      expect(screen.queryByText(/已在送出前遮罩/)).toBeNull();
+    });
   });
 
   it("does not call the AI when the terminal has nothing readable", async () => {

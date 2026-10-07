@@ -6,6 +6,7 @@ import { useLocale } from "../../contexts/LocaleContext";
 import { BUILTIN_AI_CLI_NAMES, normalizeCliName } from "../../lib/aiCliCommand";
 import { MAX_GOAL_CHARS, buildGoalPolishRequest, cleanPolishedGoal } from "../../lib/promptSuggestions";
 import { SparklesIcon } from "../Icons";
+import { loadRedactEnabled, saveRedactEnabled } from "./redactSetting";
 import { MilestoneList } from "./MilestoneList";
 import { PromptSuggestions } from "./PromptSuggestions";
 import { formatMilestonesForPrompt, resolveFocus, type MilestoneState } from "../../lib/milestones";
@@ -37,6 +38,8 @@ export function SuggestionSidebar({
 }: SuggestionSidebarProps) {
   const { t, locale } = useLocale();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [redact, setRedact] = useState(loadRedactEnabled);
+  const toggleRedact = () => { const next = !redact; setRedact(next); saveRedactEnabled(next); };
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [editingGoal, setEditingGoal] = useState(false);
@@ -208,12 +211,18 @@ export function SuggestionSidebar({
           getHistory={getHistory}
           focusId={focusId}
           onFocus={setChosenFocusId}
+          redact={redact}
         />
       )}
 
       {menuOpen && (
         <section className="aiterm-sugg-sidebar__menu" aria-label={t.sugg_custom_title}>
           <p className="aiterm-sugg-sidebar__help">{t.sugg_custom_help}</p>
+          <label className="aiterm-sugg-sidebar__redact">
+            <input type="checkbox" checked={redact} onChange={toggleRedact} />
+            <span>{t.redact_toggle}</span>
+          </label>
+          <p className="aiterm-sugg-sidebar__help">{t.redact_toggle_hint}</p>
           <div className="aiterm-sugg-sidebar__group">
             <span className="aiterm-sugg-sidebar__group-label">{t.sugg_custom_builtin}</span>
             <ul className="aiterm-sugg-sidebar__chips">
@@ -264,6 +273,7 @@ export function SuggestionSidebar({
           goal={goal}
           getHistory={getHistory}
           aiCliRunning={aiCliRunning}
+          redact={redact}
           milestoneContext={milestoneContext}
           focusLabel={focusText}
           allMilestonesDone={allDone}

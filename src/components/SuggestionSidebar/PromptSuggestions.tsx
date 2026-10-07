@@ -6,6 +6,7 @@ import { languageDirective } from "../../lib/i18n";
 import { fillTerminalInput, serializeTerminal, submitTerminalInput } from "../../lib/terminalInstanceRegistry";
 import { buildSuggestionRequest, parseSuggestions, type PromptSuggestion } from "../../lib/promptSuggestions";
 import { PROMPT_HISTORY_BUDGET, formatHistoryForPrompt } from "../../lib/screenHistory";
+import { redactSecrets } from "../../lib/redact";
 import { stripAnsiCodes } from "../TaskBoard/transcriptUtils";
 import { RefreshIcon, SparklesIcon } from "../Icons";
 import { IDLE_MS, POLL_MS } from "./terminalIdle";
@@ -44,6 +45,8 @@ export interface PromptSuggestionsProps {
   getHistory?: () => string[];
   /** 終端機裡是否正有 AI 工具在執行。自動模式只在這時才會呼叫 AI；手動按鈕不受限制。 */
   aiCliRunning: boolean;
+  /** 送出前遮罩從終端機取得的畫面（規則比對；預設由側欄設定決定）。 */
+  redact: boolean;
   /** 已整理好的里程碑一節（formatMilestonesForPrompt）；空＝沒有里程碑。 */
   milestoneContext?: string;
   /** 目前建議朝向的焦點里程碑文字，只用來顯示。 */
@@ -52,11 +55,13 @@ export interface PromptSuggestionsProps {
   allMilestonesDone?: boolean;
 }
 
-export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, hideTitle = false, goal, getHistory, aiCliRunning, milestoneContext, focusLabel, allMilestonesDone }: PromptSuggestionsProps) {
+export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, hideTitle = false, goal, getHistory, aiCliRunning, redact, milestoneContext, focusLabel, allMilestonesDone }: PromptSuggestionsProps) {
   const { t, locale } = useLocale();
   const [items, setItems] = useState<PromptSuggestion[]>([]);
   const [status, setStatus] = useState<Status>("idle");
   const [errorMsg, setErrorMsg] = useState("");
+  /** 最近一次請求在送出前遮了幾處；0＝沒遮或沒開。 */
+  const [redactedCount, setRedactedCount] = useState(0);
   const [auto, setAuto] = useState(loadAuto);
   const [collapsed, setCollapsed] = useState(loadCollapsed);
   const [flash, setFlash] = useState<{ prompt: string; kind: "filled" | "sent" } | null>(null);
@@ -101,15 +106,26 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
     if (isAuto && screen === lastScreenRef.current) return;
     lastScreenRef.current = screen;
 
-    const history = formatHistoryForPrompt(getHistory?.() ?? [], screen, PROMPT_HISTORY_BUDGET);
+    // **先遮罩、再截斷與套預算**：buildSuggestionRequest 會從尾端截 8000 字，
+    // 截斷若切在 token 中間，會留下一段沒被遮的殘片。
+    let maskedCount = 0;
+    const mask = (text: string) => {
+      if (!redact) return text;
+      const r = redactSecrets(text);
+      maskedCount += r.count;
+      return r.text;
+    };
+    const aiScreen = mask(screen);
+    const history = formatHistoryForPrompt((getHistory?.() ?? []).map(mask), aiScreen, PROMPT_HISTORY_BUDGET);
 
     if (loadingRef.current) abortAi(connId).catch(() => {});
     const myReq = ++reqRef.current;
     loadingRef.current = true;
     setStatus("loading");
+    setRedactedCount(maskedCount);
     try {
       const reply = await invokeAiChatCtx(
-        [{ role: "user", content: buildSuggestionRequest(screen, languageDirective(locale), goal, history, milestoneContext) }],
+        [{ role: "user", content: buildSuggestionRequest(aiScreen, languageDirective(locale), goal, history, milestoneContext) }],
         { os: navigator.platform.toLowerCase(), shell: null, cwd: null, recentOutput: null },
         connId,
         providerId,
@@ -127,7 +143,7 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
     } finally {
       if (myReq === reqRef.current) loadingRef.current = false;
     }
-  }, [sessionId, connId, providerId, locale, goal, getHistory, milestoneContext]);
+  }, [sessionId, connId, providerId, locale, goal, getHistory, milestoneContext, redact]);
 
   // 目標或里程碑焦點一改，之前產生的建議就是針對舊情況的：丟掉卡片、取消還在跑的請求、
   // 回到起點，並讓自動模式對同一份畫面也能重新產生。第一次掛載不算「改」。
@@ -142,6 +158,7 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
     setItems([]);
     setStatus("idle");
     setErrorMsg("");
+    setRedactedCount(0);
   }, [contextKey, connId]);
 
   // 自動產生的條件，缺一不可：
@@ -336,6 +353,9 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
               </ul>
               <div className="aiterm-suggest__footer">{t.suggest_footer_hint}</div>
             </>
+          )}
+          {redactedCount > 0 && (
+            <div className="aiterm-suggest__redacted">{t.suggest_redacted(redactedCount)}</div>
           )}
         </div>
       )}

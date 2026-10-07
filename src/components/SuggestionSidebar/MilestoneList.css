@@ -151,3 +151,5 @@
 .aiterm-ms__item:hover .aiterm-ms__focus-btn,
 .aiterm-ms__item:focus-within .aiterm-ms__focus-btn { opacity: 1; }
 .aiterm-ms__focus-btn:hover { background: var(--accent-bg, rgba(192, 132, 252, 0.15)); color: var(--accent, #c084fc); }
+
+.aiterm-ms__redacted { color: var(--success, #34d399); font-size: 10.5px; opacity: 0.9; }

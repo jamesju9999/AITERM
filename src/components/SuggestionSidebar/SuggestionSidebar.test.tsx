@@ -8,8 +8,9 @@ vi.mock("../../ipc/ai", () => ({
   abortAi: (...a: unknown[]) => abortAi(...a),
   formatAiError: () => "err",
 }));
+let screenText = "screen";
 vi.mock("../../lib/terminalInstanceRegistry", () => ({
-  serializeTerminal: () => "screen",
+  serializeTerminal: () => screenText,
   fillTerminalInput: vi.fn().mockResolvedValue(true),
   submitTerminalInput: vi.fn().mockResolvedValue(true),
 }));
@@ -25,7 +26,7 @@ const onClose = vi.fn();
 const onNames = vi.fn();
 const onGoal = vi.fn();
 const onMilestones = vi.fn();
-beforeEach(() => { invokeAiChatCtx.mockReset(); abortAi.mockClear(); onClose.mockClear(); onNames.mockClear(); onGoal.mockClear(); onMilestones.mockClear(); localStorage.clear(); });
+beforeEach(() => { screenText = "screen"; invokeAiChatCtx.mockReset(); abortAi.mockClear(); onClose.mockClear(); onNames.mockClear(); onGoal.mockClear(); onMilestones.mockClear(); localStorage.clear(); });
 
 const setup = (p: Partial<React.ComponentProps<typeof SuggestionSidebar>> = {}) =>
   render(
@@ -376,6 +377,66 @@ describe("SuggestionSidebar", () => {
       expect(content).not.toContain("里程碑");
       expect(screen.queryByText(/朝向里程碑/)).toBeNull();
       expect(screen.queryByText(/全部里程碑已完成/)).toBeNull();
+    });
+  });
+
+  describe("secret redaction setting", () => {
+    const TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    const reply = { content: JSON.stringify([{ title: "t", prompt: "p" }]), tool_calls: [], tool_calling_unsupported: false };
+    const checkbox = () => screen.getByRole("checkbox", { name: "送出前遮罩敏感資訊" }) as HTMLInputElement;
+    const openMenu = () => fireEvent.click(screen.getByRole("button", { name: "自訂 AI 工具" }));
+    const generate = async () => {
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "產生建議" })); });
+      return invokeAiChatCtx.mock.calls[invokeAiChatCtx.mock.calls.length - 1][0][0].content as string;
+    };
+
+    it("is on by default and masks what is sent", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply);
+      screenText = `export GITHUB_TOKEN=${TOKEN}`;
+      setup();
+      openMenu();
+      expect(checkbox().checked).toBe(true);
+      const content = await generate();
+      expect(content).not.toContain(TOKEN);
+      expect(content).toContain("[已遮罩]");
+    });
+
+    it("can be turned off, sends raw text, and remembers the choice", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply);
+      screenText = `export GITHUB_TOKEN=${TOKEN}`;
+      const first = setup();
+      openMenu();
+      fireEvent.click(checkbox());
+      expect(checkbox().checked).toBe(false);
+      expect(localStorage.getItem("aiterm-suggest-redact")).toBe("false");
+      expect(await generate()).toContain(TOKEN);
+      first.unmount();
+
+      setup();
+      openMenu();
+      expect(checkbox().checked).toBe(false);
+    });
+
+    it("applies to the milestone progress check as well", async () => {
+      const ms = { forGoal: "目標", items: [{ id: "a", text: "盤點 API", done: false }] };
+      invokeAiChatCtx.mockResolvedValue({ content: '{"done":[],"note":""}', tool_calls: [], tool_calling_unsupported: false });
+      screenText = `export GITHUB_TOKEN=${TOKEN}`;
+      setup({ goal: "目標", milestones: ms });
+      openMenu();
+      fireEvent.click(checkbox()); // 關閉遮罩
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "檢查進度" })); });
+      expect(invokeAiChatCtx.mock.calls[0][0][0].content).toContain(TOKEN);
+    });
+
+    it("turning it back on masks again", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply);
+      localStorage.setItem("aiterm-suggest-redact", "false");
+      screenText = `export GITHUB_TOKEN=${TOKEN}`;
+      setup();
+      openMenu();
+      fireEvent.click(checkbox());
+      expect(localStorage.getItem("aiterm-suggest-redact")).toBe("true");
+      expect(await generate()).not.toContain(TOKEN);
     });
   });
 });

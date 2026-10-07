@@ -34,7 +34,7 @@ async function flush() { await act(async () => { await vi.advanceTimersByTimeAsy
 async function advance(ms: number) { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); }
 
 const setup = (p: Partial<React.ComponentProps<typeof PromptSuggestions>> = {}) =>
-  render(<PromptSuggestions sessionId="s1" providerId="p1" disabled={false} getIdleMs={() => 60_000} aiCliRunning {...p} />);
+  render(<PromptSuggestions sessionId="s1" providerId="p1" disabled={false} getIdleMs={() => 60_000} aiCliRunning redact {...p} />);
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -198,7 +198,7 @@ describe("PromptSuggestions", () => {
 
     it("drops the suggestions made for the old goal and goes back to the start when the goal changes", async () => {
       invokeAiChatCtx.mockResolvedValue(reply(A));
-      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000, aiCliRunning: true };
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000, aiCliRunning: true, redact: true };
       const { rerender } = render(<PromptSuggestions {...props} goal="舊目標" />);
       fireEvent.click(screen.getByText("產生建議"));
       await flush();
@@ -212,7 +212,7 @@ describe("PromptSuggestions", () => {
     it("ignores a reply that was still in flight when the goal changed", async () => {
       let resolveIt!: (v: unknown) => void;
       invokeAiChatCtx.mockImplementationOnce(() => new Promise((r) => { resolveIt = r; }));
-      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000, aiCliRunning: true };
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000, aiCliRunning: true, redact: true };
       const { rerender } = render(<PromptSuggestions {...props} goal="舊目標" />);
       fireEvent.click(screen.getByText("產生建議"));
       await flush();
@@ -228,7 +228,7 @@ describe("PromptSuggestions", () => {
     it("lets auto mode regenerate for the same screen after the goal changed", async () => {
       invokeAiChatCtx.mockResolvedValue(reply(A));
       let idle = 100;
-      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => idle, aiCliRunning: true };
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => idle, aiCliRunning: true, redact: true };
       const { rerender } = render(<PromptSuggestions {...props} goal="目標一" />);
       fireEvent.click(screen.getByTitle(/閒置後自動產生/));
       await advance(1000);
@@ -321,7 +321,7 @@ describe("PromptSuggestions", () => {
 
     it("drops the old suggestions when the milestone context changes (they were made for another focus)", async () => {
       invokeAiChatCtx.mockResolvedValue(reply(A));
-      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000, aiCliRunning: true };
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000, aiCliRunning: true, redact: true };
       const { rerender } = render(<PromptSuggestions {...props} milestoneContext="焦點在第二個" />);
       fireEvent.click(screen.getByText("產生建議"));
       await flush();
@@ -334,7 +334,7 @@ describe("PromptSuggestions", () => {
 
     it("keeps the suggestions when nothing about the context changed", async () => {
       invokeAiChatCtx.mockResolvedValue(reply(A));
-      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000, aiCliRunning: true };
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000, aiCliRunning: true, redact: true };
       const { rerender } = render(<PromptSuggestions {...props} milestoneContext="同一份" />);
       fireEvent.click(screen.getByText("產生建議"));
       await flush();
@@ -385,6 +385,90 @@ describe("PromptSuggestions", () => {
     it("reserves a fixed height for the slot even when it is empty", () => {
       const { container } = setup();
       expect(statusSlot(container)!.style.minHeight).toBe("16px");
+    });
+  });
+
+  describe("secret redaction", () => {
+    const TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    const sent = () => invokeAiChatCtx.mock.calls[0][0][0].content as string;
+
+    it("masks secrets in the current screen before sending, and says how many", async () => {
+      screenText = `❯ 部署\nexport GITHUB_TOKEN=${TOKEN}\npassword=hunter2hunter2\n完成`;
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(sent()).not.toContain(TOKEN);
+      expect(sent()).not.toContain("hunter2hunter2");
+      expect(sent()).toContain("[已遮罩]");
+      expect(sent()).toContain("完成"); // 其餘文字還在
+      expect(screen.getByText("已在送出前遮罩 2 處疑似敏感資訊")).toBeTruthy();
+    });
+
+    it("masks secrets in the earlier screens too", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      setup({ getHistory: () => [`舊畫面一\n舊畫面二\n舊畫面三\n舊畫面四\n舊畫面五\nAuthorization: Bearer ${TOKEN}`] });
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(sent()).toContain("舊畫面一");
+      expect(sent()).not.toContain(TOKEN);
+      expect(screen.getByText("已在送出前遮罩 1 處疑似敏感資訊")).toBeTruthy();
+    });
+
+    it("masks before truncating, so no fragment of a secret survives the cut at the 8000-char limit", async () => {
+      // 讓「取尾端 8000 字」的切點落在 token 中間
+      const suffix = "y ".repeat(3990).slice(0, 8000 - 20);
+      screenText = `${"x ".repeat(2000)}${TOKEN}${suffix}`;
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(sent()).not.toContain(TOKEN.slice(-20));
+      expect(sent()).not.toContain(TOKEN.slice(-12));
+    });
+
+    it("sends the raw text and shows no count when redaction is turned off", async () => {
+      screenText = `export GITHUB_TOKEN=${TOKEN}`;
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      setup({ redact: false });
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(sent()).toContain(TOKEN);
+      expect(screen.queryByText(/已在送出前遮罩/)).toBeNull();
+    });
+
+    it("clears the count together with the suggestions when the goal changes", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      screenText = `password=hunter2hunter2`;
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000, aiCliRunning: true, redact: true };
+      const { rerender } = render(<PromptSuggestions {...props} goal="舊目標" />);
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(screen.getByText("已在送出前遮罩 1 處疑似敏感資訊")).toBeTruthy();
+      rerender(<PromptSuggestions {...props} goal="新目標" />);
+      await flush();
+      expect(screen.queryByText(/已在送出前遮罩/)).toBeNull();
+    });
+
+    it("shows no count when nothing was masked", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(screen.queryByText(/已在送出前遮罩/)).toBeNull();
+    });
+
+    it("the count refers to the latest request only", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      screenText = `password=hunter2hunter2`;
+      setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(screen.getByText("已在送出前遮罩 1 處疑似敏感資訊")).toBeTruthy();
+      screenText = "乾淨的畫面";
+      fireEvent.click(screen.getByText("重新產生"));
+      await flush();
+      expect(screen.queryByText(/已在送出前遮罩/)).toBeNull();
     });
   });
 
@@ -477,7 +561,7 @@ describe("PromptSuggestions", () => {
   it("one busy period triggers at most one automatic generation, even if props change while idle", async () => {
     invokeAiChatCtx.mockResolvedValue(reply(A));
     let idle = 100;
-    const props = { sessionId: "s1", providerId: "p1", getIdleMs: () => idle, aiCliRunning: true };
+    const props = { sessionId: "s1", providerId: "p1", getIdleMs: () => idle, aiCliRunning: true, redact: true };
     const { rerender } = render(<PromptSuggestions {...props} disabled={false} />);
     fireEvent.click(screen.getByTitle(/閒置後自動產生/));
     await advance(1000);
@@ -507,7 +591,7 @@ describe("PromptSuggestions", () => {
     it("a busy period that ended before the tool started does not trigger a generation when the tool starts later", async () => {
       invokeAiChatCtx.mockResolvedValue(reply(A));
       const idle = { v: 100 };
-      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => idle.v };
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => idle.v, redact: true };
       const { rerender } = render(<PromptSuggestions {...props} aiCliRunning={false} />);
       toggleAuto();
       await advance(1000);
@@ -573,7 +657,7 @@ describe("PromptSuggestions", () => {
     it("does not fire the waiting call after the AI tool has ended", async () => {
       invokeAiChatCtx.mockResolvedValue(reply(A));
       const idle = { v: 100 };
-      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => idle.v };
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => idle.v, redact: true };
       const { rerender } = render(<PromptSuggestions {...props} aiCliRunning />);
       toggleAuto();
       await advance(1000);
@@ -589,7 +673,7 @@ describe("PromptSuggestions", () => {
     it("does not fire the waiting call if Ask AI started running in the meantime", async () => {
       invokeAiChatCtx.mockResolvedValue(reply(A));
       const idle = { v: 100 };
-      const props = { sessionId: "s1", providerId: "p1", getIdleMs: () => idle.v, aiCliRunning: true };
+      const props = { sessionId: "s1", providerId: "p1", getIdleMs: () => idle.v, aiCliRunning: true, redact: true };
       const { rerender } = render(<PromptSuggestions {...props} disabled={false} />);
       toggleAuto();
       await advance(1000);
@@ -605,7 +689,7 @@ describe("PromptSuggestions", () => {
     it("does not lose the trigger when Ask AI was busy at the moment the terminal went idle", async () => {
       invokeAiChatCtx.mockResolvedValue(reply(A));
       const idle = { v: 100 };
-      const props = { sessionId: "s1", providerId: "p1", getIdleMs: () => idle.v, aiCliRunning: true };
+      const props = { sessionId: "s1", providerId: "p1", getIdleMs: () => idle.v, aiCliRunning: true, redact: true };
       const { rerender } = render(<PromptSuggestions {...props} disabled />);
       toggleAuto();
       await advance(1000);

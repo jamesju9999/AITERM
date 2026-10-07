@@ -304,3 +304,9 @@
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
+
+.aiterm-suggest__redacted {
+  color: var(--success, #34d399);
+  font-size: 10.5px;
+  opacity: 0.9;
+}

@@ -223,3 +223,6 @@
   cursor: pointer;
 }
 .aiterm-sugg-goal__undo:hover { color: var(--text-primary, #e6e8f0); }
+
+.aiterm-sugg-sidebar__redact { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+.aiterm-sugg-sidebar__redact input { accent-color: var(--accent, #c084fc); }
