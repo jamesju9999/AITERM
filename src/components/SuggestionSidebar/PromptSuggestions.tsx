@@ -9,6 +9,9 @@ import { PROMPT_HISTORY_BUDGET, formatHistoryForPrompt } from "../../lib/screenH
 import { stripAnsiCodes } from "../TaskBoard/transcriptUtils";
 import { RefreshIcon, SparklesIcon } from "../Icons";
 import { IDLE_MS, POLL_MS } from "./terminalIdle";
+
+/** 兩次「自動」產生之間至少隔多久（毫秒）。擋掉頻繁的小輸出（例如打字）造成的連續呼叫。 */
+export const AUTO_MIN_INTERVAL_MS = 30_000;
 import "./PromptSuggestions.css";
 
 const STORAGE_AUTO_KEY = "aiterm-suggest-auto";
@@ -39,6 +42,8 @@ export interface PromptSuggestionsProps {
   goal?: string;
   /** 取得 AI 工具先前每一輪的「穩定畫面」（舊→新）。產生建議的當下才讀，所以傳函式不傳陣列。 */
   getHistory?: () => string[];
+  /** 終端機裡是否正有 AI 工具在執行。自動模式只在這時才會呼叫 AI；手動按鈕不受限制。 */
+  aiCliRunning: boolean;
   /** 已整理好的里程碑一節（formatMilestonesForPrompt）；空＝沒有里程碑。 */
   milestoneContext?: string;
   /** 目前建議朝向的焦點里程碑文字，只用來顯示。 */
@@ -47,7 +52,7 @@ export interface PromptSuggestionsProps {
   allMilestonesDone?: boolean;
 }
 
-export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, hideTitle = false, goal, getHistory, milestoneContext, focusLabel, allMilestonesDone }: PromptSuggestionsProps) {
+export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, hideTitle = false, goal, getHistory, aiCliRunning, milestoneContext, focusLabel, allMilestonesDone }: PromptSuggestionsProps) {
   const { t, locale } = useLocale();
   const [items, setItems] = useState<PromptSuggestion[]>([]);
   const [status, setStatus] = useState<Status>("idle");
@@ -139,14 +144,45 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
     setErrorMsg("");
   }, [contextKey, connId]);
 
-  // 忙→閒的那一下才自動產生；wasBusyRef 確保一次忙碌只觸發一次。
+  // 自動產生的條件，缺一不可：
+  //  1. 終端機從忙碌轉為閒置（一次忙碌只觸發一次）；
+  //  2. 終端機裡正有 AI 工具在執行（打字、普通指令的輸出不算）；
+  //  3. 距離上一次自動產生至少 AUTO_MIN_INTERVAL_MS——不夠就排到冷卻結束再產生，
+  //     期間若又開始忙碌就取消，等下一次閒置。
+  const generateRef = useRef(generate);
+  const disabledRef = useRef(disabled);
   useEffect(() => {
-    if (terminalBusy) { wasBusyRef.current = true; return; }
-    if (wasBusyRef.current && auto && !disabled) {
-      wasBusyRef.current = false;
-      void generate(true);
-    }
-  }, [terminalBusy, auto, disabled, generate]);
+    generateRef.current = generate;
+    disabledRef.current = disabled;
+  }, [generate, disabled]);
+  const lastAutoAtRef = useRef(0);
+  const pendingAutoRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearPendingAuto = () => {
+    if (pendingAutoRef.current) { clearTimeout(pendingAutoRef.current); pendingAutoRef.current = null; }
+  };
+  const fireAuto = () => {
+    pendingAutoRef.current = null;
+    // 排隊期間 Ask AI 可能又開始跑了。（開關關掉、AI 工具結束由下面的 effect 取消計時器。）
+    if (disabledRef.current) return;
+    lastAutoAtRef.current = Date.now();
+    void generateRef.current(true);
+  };
+  useEffect(() => {
+    if (terminalBusy) { wasBusyRef.current = true; clearPendingAuto(); return; }
+    if (!wasBusyRef.current) return;
+    // 沒有 AI 工具：這一輪忙碌與我們無關，作廢，免得工具之後才啟動時被誤觸發。
+    if (!aiCliRunning) { wasBusyRef.current = false; return; }
+    if (!auto || disabled) return;
+    wasBusyRef.current = false;
+    const wait = lastAutoAtRef.current + AUTO_MIN_INTERVAL_MS - Date.now();
+    if (wait <= 0) fireAuto();
+    else pendingAutoRef.current = setTimeout(fireAuto, wait);
+  }, [terminalBusy, auto, disabled, aiCliRunning]);
+  // 開關關掉、AI 工具結束、卸載：把排隊中的呼叫一併取消。
+  useEffect(() => {
+    if (!auto || !aiCliRunning) clearPendingAuto();
+  }, [auto, aiCliRunning]);
+  useEffect(() => clearPendingAuto, []);
 
   const persist = (key: string, value: boolean) => {
     try { localStorage.setItem(key, String(value)); } catch { /* ignore */ }

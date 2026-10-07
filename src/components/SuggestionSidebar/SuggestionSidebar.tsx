@@ -263,6 +263,7 @@ export function SuggestionSidebar({
           hideTitle
           goal={goal}
           getHistory={getHistory}
+          aiCliRunning={aiCliRunning}
           milestoneContext={milestoneContext}
           focusLabel={focusText}
           allMilestonesDone={allDone}

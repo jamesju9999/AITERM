@@ -23,7 +23,7 @@ vi.mock("../../contexts/LocaleContext", async () => {
   return { useLocale: () => ({ locale: "zh-TW" as const, t: translations["zh-TW"], setLocale: () => {} }) };
 });
 
-import { PromptSuggestions } from "./PromptSuggestions";
+import { PromptSuggestions, AUTO_MIN_INTERVAL_MS } from "./PromptSuggestions";
 
 const reply = (items: { title: string; prompt: string }[]) =>
   ({ content: JSON.stringify(items), tool_calls: [], tool_calling_unsupported: false });
@@ -34,7 +34,7 @@ async function flush() { await act(async () => { await vi.advanceTimersByTimeAsy
 async function advance(ms: number) { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); }
 
 const setup = (p: Partial<React.ComponentProps<typeof PromptSuggestions>> = {}) =>
-  render(<PromptSuggestions sessionId="s1" providerId="p1" disabled={false} getIdleMs={() => 60_000} {...p} />);
+  render(<PromptSuggestions sessionId="s1" providerId="p1" disabled={false} getIdleMs={() => 60_000} aiCliRunning {...p} />);
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -198,7 +198,7 @@ describe("PromptSuggestions", () => {
 
     it("drops the suggestions made for the old goal and goes back to the start when the goal changes", async () => {
       invokeAiChatCtx.mockResolvedValue(reply(A));
-      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000 };
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000, aiCliRunning: true };
       const { rerender } = render(<PromptSuggestions {...props} goal="舊目標" />);
       fireEvent.click(screen.getByText("產生建議"));
       await flush();
@@ -212,7 +212,7 @@ describe("PromptSuggestions", () => {
     it("ignores a reply that was still in flight when the goal changed", async () => {
       let resolveIt!: (v: unknown) => void;
       invokeAiChatCtx.mockImplementationOnce(() => new Promise((r) => { resolveIt = r; }));
-      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000 };
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000, aiCliRunning: true };
       const { rerender } = render(<PromptSuggestions {...props} goal="舊目標" />);
       fireEvent.click(screen.getByText("產生建議"));
       await flush();
@@ -228,7 +228,7 @@ describe("PromptSuggestions", () => {
     it("lets auto mode regenerate for the same screen after the goal changed", async () => {
       invokeAiChatCtx.mockResolvedValue(reply(A));
       let idle = 100;
-      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => idle };
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => idle, aiCliRunning: true };
       const { rerender } = render(<PromptSuggestions {...props} goal="目標一" />);
       fireEvent.click(screen.getByTitle(/閒置後自動產生/));
       await advance(1000);
@@ -237,6 +237,7 @@ describe("PromptSuggestions", () => {
       rerender(<PromptSuggestions {...props} goal="目標二" />);
       idle = 100; await advance(1000);
       idle = 60_000; await advance(1000);
+      await advance(AUTO_MIN_INTERVAL_MS); // 兩次自動產生之間要隔冷卻時間
       expect(invokeAiChatCtx).toHaveBeenCalledTimes(2);
     });
   });
@@ -320,7 +321,7 @@ describe("PromptSuggestions", () => {
 
     it("drops the old suggestions when the milestone context changes (they were made for another focus)", async () => {
       invokeAiChatCtx.mockResolvedValue(reply(A));
-      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000 };
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000, aiCliRunning: true };
       const { rerender } = render(<PromptSuggestions {...props} milestoneContext="焦點在第二個" />);
       fireEvent.click(screen.getByText("產生建議"));
       await flush();
@@ -333,7 +334,7 @@ describe("PromptSuggestions", () => {
 
     it("keeps the suggestions when nothing about the context changed", async () => {
       invokeAiChatCtx.mockResolvedValue(reply(A));
-      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000 };
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => 60_000, aiCliRunning: true };
       const { rerender } = render(<PromptSuggestions {...props} milestoneContext="同一份" />);
       fireEvent.click(screen.getByText("產生建議"));
       await flush();
@@ -469,13 +470,14 @@ describe("PromptSuggestions", () => {
     screenText = "新的畫面內容";
     idle = 100; await advance(1000);
     idle = 60_000; await advance(1000);
+    await advance(AUTO_MIN_INTERVAL_MS); // 兩次自動產生之間要隔冷卻時間
     expect(invokeAiChatCtx).toHaveBeenCalledTimes(2);
   });
 
   it("one busy period triggers at most one automatic generation, even if props change while idle", async () => {
     invokeAiChatCtx.mockResolvedValue(reply(A));
     let idle = 100;
-    const props = { sessionId: "s1", providerId: "p1", getIdleMs: () => idle };
+    const props = { sessionId: "s1", providerId: "p1", getIdleMs: () => idle, aiCliRunning: true };
     const { rerender } = render(<PromptSuggestions {...props} disabled={false} />);
     fireEvent.click(screen.getByTitle(/閒置後自動產生/));
     await advance(1000);
@@ -487,6 +489,147 @@ describe("PromptSuggestions", () => {
     rerender(<PromptSuggestions {...props} disabled={false} />);
     await flush();
     expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+  });
+
+  describe("auto mode guards", () => {
+    const toggleAuto = () => fireEvent.click(screen.getByTitle(/閒置後自動產生/));
+
+    it("never generates automatically while no AI tool is running, even after the terminal was busy", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      const idle = { v: 100 };
+      setup({ getIdleMs: () => idle.v, aiCliRunning: false });
+      toggleAuto();
+      await advance(1000);
+      idle.v = 60_000; await advance(2000);
+      expect(invokeAiChatCtx).not.toHaveBeenCalled();
+    });
+
+    it("a busy period that ended before the tool started does not trigger a generation when the tool starts later", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      const idle = { v: 100 };
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => idle.v };
+      const { rerender } = render(<PromptSuggestions {...props} aiCliRunning={false} />);
+      toggleAuto();
+      await advance(1000);
+      idle.v = 60_000; await advance(2000); // 普通 shell 的輸出，沒有 AI 工具
+      rerender(<PromptSuggestions {...props} aiCliRunning />); // 之後才啟動 AI 工具
+      await advance(3000);
+      expect(invokeAiChatCtx).not.toHaveBeenCalled();
+    });
+
+    it("waits out the minimum interval instead of calling again right away, then generates once", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      const idle = { v: 100 };
+      setup({ getIdleMs: () => idle.v });
+      toggleAuto();
+      await advance(1000);
+      idle.v = 60_000; await advance(1000);
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+
+      screenText = "第二輪的畫面";
+      idle.v = 100; await advance(1000);
+      idle.v = 60_000; await advance(1000);
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1); // 太快：先不呼叫
+
+      await advance(AUTO_MIN_INTERVAL_MS);
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(2); // 冷卻結束才呼叫
+      await advance(AUTO_MIN_INTERVAL_MS * 2);
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(2); // 只呼叫一次
+    });
+
+    it("cancels the waiting call if the terminal gets busy again before the interval is over", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      const idle = { v: 100 };
+      setup({ getIdleMs: () => idle.v });
+      toggleAuto();
+      await advance(1000);
+      idle.v = 60_000; await advance(1000);
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+
+      screenText = "第二輪";
+      idle.v = 100; await advance(1000);
+      idle.v = 60_000; await advance(1000); // 排進冷卻
+      idle.v = 100; await advance(5000); // 又開始忙：等待中的呼叫要取消
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+      await advance(AUTO_MIN_INTERVAL_MS + 5000); // 一直忙，沒有轉閒置
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not fire the waiting call after auto is switched off", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      const idle = { v: 100 };
+      setup({ getIdleMs: () => idle.v });
+      toggleAuto();
+      await advance(1000);
+      idle.v = 60_000; await advance(1000);
+      screenText = "第二輪";
+      idle.v = 100; await advance(1000);
+      idle.v = 60_000; await advance(1000);
+      toggleAuto(); // 關掉
+      await advance(AUTO_MIN_INTERVAL_MS + 1000);
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not fire the waiting call after the AI tool has ended", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      const idle = { v: 100 };
+      const props = { sessionId: "s1", providerId: "p1", disabled: false, getIdleMs: () => idle.v };
+      const { rerender } = render(<PromptSuggestions {...props} aiCliRunning />);
+      toggleAuto();
+      await advance(1000);
+      idle.v = 60_000; await advance(1000);
+      screenText = "第二輪";
+      idle.v = 100; await advance(1000);
+      idle.v = 60_000; await advance(1000);
+      rerender(<PromptSuggestions {...props} aiCliRunning={false} />); // 工具結束
+      await advance(AUTO_MIN_INTERVAL_MS + 1000);
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not fire the waiting call if Ask AI started running in the meantime", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      const idle = { v: 100 };
+      const props = { sessionId: "s1", providerId: "p1", getIdleMs: () => idle.v, aiCliRunning: true };
+      const { rerender } = render(<PromptSuggestions {...props} disabled={false} />);
+      toggleAuto();
+      await advance(1000);
+      idle.v = 60_000; await advance(1000);
+      screenText = "第二輪";
+      idle.v = 100; await advance(1000);
+      idle.v = 60_000; await advance(1000);
+      rerender(<PromptSuggestions {...props} disabled />); // Ask AI 開始回答
+      await advance(AUTO_MIN_INTERVAL_MS + 1000);
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not lose the trigger when Ask AI was busy at the moment the terminal went idle", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      const idle = { v: 100 };
+      const props = { sessionId: "s1", providerId: "p1", getIdleMs: () => idle.v, aiCliRunning: true };
+      const { rerender } = render(<PromptSuggestions {...props} disabled />);
+      toggleAuto();
+      await advance(1000);
+      idle.v = 60_000; await advance(1000); // 終端機轉閒置，但 Ask AI 還在跑
+      expect(invokeAiChatCtx).not.toHaveBeenCalled();
+      rerender(<PromptSuggestions {...props} disabled={false} />); // Ask AI 結束
+      await advance(1000);
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+    });
+
+    it("clears the waiting timer on unmount", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      const idle = { v: 100 };
+      const { unmount } = setup({ getIdleMs: () => idle.v });
+      toggleAuto();
+      await advance(1000);
+      idle.v = 60_000; await advance(1000);
+      screenText = "第二輪";
+      idle.v = 100; await advance(1000);
+      idle.v = 60_000; await advance(1000);
+      unmount();
+      await advance(AUTO_MIN_INTERVAL_MS + 1000);
+      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("does not generate automatically when auto is off", async () => {
