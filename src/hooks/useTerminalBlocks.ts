@@ -3,12 +3,19 @@ import { Terminal, type IMarker } from "@xterm/xterm";
 import { writePty } from "../ipc/pty";
 import { parseAnsiToRenderedLines, readRenderedLines, findContentEndRow, type RenderedLine } from "../lib/ansiBlockParser";
 import type { GitBlockInfo } from "../ipc/vcs";
+import { looksLikePrompt, lastNonEmptyLine } from "../lib/promptDetect";
+
+/** 沒有 OSC 133 的 shell（ssh 進 NAS 等）收不到「指令結束」訊號時，等畫面
+ *  安靜這麼久、且最後一行像提示字元，才當作指令已跑完。 */
+export const QUIET_PROMPT_MS = 1500;
 
 export interface TerminalBlock {
   id: string;
   command: string;
   status: "running" | "completed" | "failed";
   exitCode?: number;
+  /** true＝這個區塊是靠「畫面安靜＋提示字元」判斷結束的，沒有真的 exit code。 */
+  exitUnknown?: boolean;
   startTime: number;
   endTime?: number;
   cwd?: string;
@@ -32,7 +39,7 @@ export interface UseTerminalBlocksResult {
   termInstance: Terminal | null;
   /** 強制把一個 running 中的區塊結案（例如卡在 heredoc 的中斷）。
    *  會呼叫該區塊等待中的 onComplete callback——見 finalizeBlock 內部實作。 */
-  finalizeBlock: (blockId: string, exitCode: number, opts?: { clearOnParsed?: boolean }) => void;
+  finalizeBlock: (blockId: string, exitCode: number, opts?: { clearOnParsed?: boolean; exitUnknown?: boolean }) => void;
   /** 清空整個分段卡片歷史。原本只在內部處理 `clear`/`cls` 指令時用；
    *  遠端分頁在收到 `Resync`（漏位元組、全量重播）時也要呼叫這個——
    *  漏掉的位元組可能連帶讓卡片內容跟畫面對不上，這跟本機分頁執行
@@ -251,13 +258,50 @@ export function useTerminalBlocks(
     [term],
   );
 
+  // 沒有 OSC 133 時的後備結案（見 promptDetect.ts）。只對「有人在等完成」的區塊
+  // （agent 迴圈登記了 onComplete）啟用——一般手動指令沒人等，不需要冒誤判的
+  // 風險。有 OSC 133 的 shell 一定先送 D，finalizeBlock 對非 running 區塊是
+  // no-op，所以不會干擾正常路徑。
+  const quietTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const finalizeBlockRef = useRef<(id: string, code: number, opts?: { exitUnknown?: boolean }) => void>(() => {});
+
+  const checkQuietPrompt = useCallback(() => {
+    quietTimerRef.current = null;
+    const latest = blocksRef.current[blocksRef.current.length - 1];
+    if (!latest || latest.status !== "running") return;
+    if (!completionCallbacksRef.current.has(latest.id)) return;
+    if (term?.buffer.active.type === "alternate") return;
+    let line = "";
+    if (term) {
+      const buf = term.buffer.active;
+      line = buf.getLine(buf.baseY + buf.cursorY)?.translateToString(true) ?? "";
+    }
+    if (!looksLikePrompt(line)) line = lastNonEmptyLine(latest.rawOutput);
+    if (!looksLikePrompt(line)) return;
+    finalizeBlockRef.current(latest.id, 0, { exitUnknown: true });
+  }, [term]);
+
+  const armQuietTimer = useCallback(() => {
+    const latest = blocksRef.current[blocksRef.current.length - 1];
+    if (!latest || latest.status !== "running" || !completionCallbacksRef.current.has(latest.id)) return;
+    if (quietTimerRef.current !== null) clearTimeout(quietTimerRef.current);
+    quietTimerRef.current = setTimeout(checkQuietPrompt, QUIET_PROMPT_MS);
+  }, [checkQuietPrompt]);
+
+  useEffect(() => () => {
+    if (quietTimerRef.current !== null) clearTimeout(quietTimerRef.current);
+  }, []);
+
   const appendOutput = useCallback(
     (chunk: string) => {
       updateLatestBlock((b) => (b.status === "running" ? { ...b, rawOutput: b.rawOutput + chunk } : b));
       const latest = blocksRef.current[blocksRef.current.length - 1];
-      if (latest?.status === "running") scheduleLiveRender(latest.id);
+      if (latest?.status === "running") {
+        scheduleLiveRender(latest.id);
+        armQuietTimer();
+      }
     },
-    [updateLatestBlock, scheduleLiveRender],
+    [updateLatestBlock, scheduleLiveRender, armQuietTimer],
   );
 
   const setBlockGitInfo = useCallback((id: string, info: GitBlockInfo | null) => {
@@ -308,7 +352,7 @@ export function useTerminalBlocks(
    * callback below for why.
    */
   const finalizeBlock = useCallback(
-    (blockId: string, exitCode: number, opts?: { clearOnParsed?: boolean }) => {
+    (blockId: string, exitCode: number, opts?: { clearOnParsed?: boolean; exitUnknown?: boolean }) => {
       const prev = blocksRef.current;
       const target = prev.find((b) => b.id === blockId);
       if (!target || target.status !== "running") return;
@@ -349,7 +393,7 @@ export function useTerminalBlocks(
       const finalized: TerminalBlock = {
         ...target,
         status: exitCode === 0 ? "completed" : "failed",
-        exitCode,
+        ...(opts?.exitUnknown ? { exitUnknown: true, exitCode: undefined } : { exitCode }),
         endTime,
         ...(renderedLines ? { renderedLines } : null),
       };
@@ -387,6 +431,10 @@ export function useTerminalBlocks(
     },
     [term, clearAndRebasePromptEnd],
   );
+
+  useEffect(() => {
+    finalizeBlockRef.current = finalizeBlock;
+  }, [finalizeBlock]);
 
   /**
    * Starts tracking a block for a command that was typed directly into the

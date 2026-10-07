@@ -1,6 +1,7 @@
 import {
   useEffect, useRef, useState, useCallback,
 } from "react";
+import { describeExit } from "../../lib/agentStepReport";
 import { readFileAsAttachment, contentToDisplayString } from "../../types/attachment";
 import type { Attachment } from "../../types/attachment";
 import { useMcpChat } from "../../hooks/useMcpChat";
@@ -356,7 +357,7 @@ Rules:
         const output = rawOutput.slice(-2000);
 
         const resultContent =
-          `Command \`${cmd}\` finished (exit code ${block.exitCode ?? 0}).\nOutput:\n\`\`\`\n${output}\n\`\`\`\n\nContinue analyzing. If the goal has been achieved, give your final explanation (do not include any more <cmd> tags).`;
+          `Command \`${cmd}\` finished (${describeExit(block)}).\nOutput:\n\`\`\`\n${output}\n\`\`\`\n\nContinue analyzing. If the goal has been achieved, give your final explanation (do not include any more <cmd> tags).`;
 
         const newHistory = [
           ...history,

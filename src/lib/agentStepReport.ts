@@ -13,6 +13,13 @@ export interface AgentStepInfo {
   output: string;
 }
 
+/** 給 AI 看的「指令結束狀態」。沒有 OSC 133 的 shell（ssh 進 NAS 等）是靠
+ *  畫面安靜＋提示字元判斷結束的，拿不到 exit code——不能謊報成 0。 */
+export function describeExit(block: { exitCode?: number; exitUnknown?: boolean }): string {
+  if (block.exitUnknown) return "exit status unknown — the shell does not report it; judge success from the output";
+  return `exit code ${block.exitCode ?? 0}`;
+}
+
 /** Format one agent step's command + output as a single Telegram message. */
 export function formatAgentStepForRemote(info: AgentStepInfo): string {
   // xterm's translateToString already returns plain text, but defend

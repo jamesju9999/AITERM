@@ -8,6 +8,7 @@ import { useProviderQuota } from "../../hooks/useProviderQuota";
 import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
 import { ChatPanelShell } from "../ChatPanel/ChatPanelShell";
 import { QuotaBadge } from "../QuotaBadge";
+import { describeExit } from "../../lib/agentStepReport";
 
 /** 單一步驟的逾時：等指令跑完（submitCommand 的 onComplete）不能等超過這麼久，
  *  否則就當作這條連線沒有 OSC 133 shell 整合、沒辦法自動接續（見
@@ -201,7 +202,7 @@ Rules:
 
         const output = (block.rawOutput ?? "").slice(-2000);
         const resultContent =
-          `Command \`${cmd}\` finished (exit code ${block.exitCode ?? 0}).\nOutput:\n\`\`\`\n${output}\n\`\`\`\n\nContinue analyzing. If the goal has been achieved, give your final explanation (do not include any more <cmd> tags).`;
+          `Command \`${cmd}\` finished (${describeExit(block)}).\nOutput:\n\`\`\`\n${output}\n\`\`\`\n\nContinue analyzing. If the goal has been achieved, give your final explanation (do not include any more <cmd> tags).`;
 
         const newHistory: AgentHistoryMsg[] = [
           ...history,
