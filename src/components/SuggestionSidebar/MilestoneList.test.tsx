@@ -2,10 +2,10 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { MilestoneState } from "../../lib/milestones";
 
-const invokeAiChatCtx = vi.fn();
+const invokeAiComplete = vi.fn();
 const abortAi = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../ipc/ai", () => ({
-  invokeAiChatCtx: (...a: unknown[]) => invokeAiChatCtx(...a),
+  invokeAiComplete: (...a: unknown[]) => invokeAiComplete(...a),
   abortAi: (...a: unknown[]) => abortAi(...a),
   formatAiError: () => "ERR",
 }));
@@ -17,6 +17,7 @@ vi.mock("../../contexts/LocaleContext", async () => {
 });
 
 import { MilestoneList } from "./MilestoneList";
+import { PLAIN_COMPLETION_SYSTEM_PROMPT } from "../../lib/promptSuggestions";
 
 const reply = (content: string | null) => ({ content, tool_calls: [], tool_calling_unsupported: false });
 const GOAL = "將舊程式的 Client-Server 架構轉換為網頁平台架構";
@@ -36,7 +37,7 @@ const setup = (p: Partial<React.ComponentProps<typeof MilestoneList>> = {}) =>
   );
 
 beforeEach(() => {
-  invokeAiChatCtx.mockReset();
+  invokeAiComplete.mockReset();
   abortAi.mockClear();
   onChange.mockClear();
   onFocus.mockClear();
@@ -161,12 +162,13 @@ describe("MilestoneList – AI plan", () => {
   });
 
   it("shows the proposal and writes NOTHING until the user adopts it", async () => {
-    invokeAiChatCtx.mockResolvedValue(reply('["盤點 API","拆分登入模組","遷移資料庫"]'));
+    invokeAiComplete.mockResolvedValue(reply('["盤點 API","拆分登入模組","遷移資料庫"]'));
     setup();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "AI 拆解" })); });
-    expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
-    const [messages, , connId] = invokeAiChatCtx.mock.calls[0];
+    expect(invokeAiComplete).toHaveBeenCalledTimes(1);
+    const [messages, , connId] = invokeAiComplete.mock.calls[0];
     expect(connId).toBe("milestone-plan-s1");
+    expect(invokeAiComplete.mock.calls[0][1]).toBe(PLAIN_COMPLETION_SYSTEM_PROMPT);
     expect(messages[0].content).toContain(GOAL);
     const region = screen.getByRole("region", { name: "AI 提議的里程碑" });
     expect(within(region).getByText("拆分登入模組")).toBeTruthy();
@@ -181,7 +183,7 @@ describe("MilestoneList – AI plan", () => {
   });
 
   it("cancel discards the proposal without writing", async () => {
-    invokeAiChatCtx.mockResolvedValue(reply('["A","B"]'));
+    invokeAiComplete.mockResolvedValue(reply('["A","B"]'));
     setup();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "AI 拆解" })); });
     fireEvent.click(within(screen.getByRole("region", { name: "AI 提議的里程碑" })).getByRole("button", { name: "取消" }));
@@ -190,7 +192,7 @@ describe("MilestoneList – AI plan", () => {
   });
 
   it("planning again keeps the finished items and says so", async () => {
-    invokeAiChatCtx.mockResolvedValue(reply('["拆分登入模組（新）","部署上線"]'));
+    invokeAiComplete.mockResolvedValue(reply('["拆分登入模組（新）","部署上線"]'));
     setup({ state: THREE });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "AI 拆解" })); });
     const region = screen.getByRole("region", { name: "AI 提議的里程碑" });
@@ -203,36 +205,36 @@ describe("MilestoneList – AI plan", () => {
   });
 
   it("shows a message and writes nothing when the AI fails or returns nothing usable", async () => {
-    invokeAiChatCtx.mockRejectedValueOnce({ kind: "network", message: "x" });
+    invokeAiComplete.mockRejectedValueOnce({ kind: "network", message: "x" });
     setup();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "AI 拆解" })); });
     expect(screen.getByRole("alert").textContent).toContain("操作失敗");
-    invokeAiChatCtx.mockResolvedValueOnce(reply("抱歉我不知道"));
+    invokeAiComplete.mockResolvedValueOnce(reply("抱歉我不知道"));
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "AI 拆解" })); });
     expect(screen.getByRole("alert").textContent).toContain("沒有回傳可用的里程碑");
     expect(onChange).not.toHaveBeenCalled();
   });
 
   it("shows a busy label while waiting and blocks starting a second request", async () => {
-    invokeAiChatCtx.mockImplementation(() => new Promise(() => {}));
+    invokeAiComplete.mockImplementation(() => new Promise(() => {}));
     setup();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "AI 拆解" })); });
     expect((screen.getByRole("button", { name: "拆解中…" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "檢查進度" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+    expect(invokeAiComplete).toHaveBeenCalledTimes(1);
   });
 
   it("two clicks in the same tick send only one request", async () => {
-    invokeAiChatCtx.mockImplementation(() => new Promise(() => {}));
+    invokeAiComplete.mockImplementation(() => new Promise(() => {}));
     setup();
     const btn = screen.getByRole("button", { name: "AI 拆解" });
     await act(async () => { btn.click(); btn.click(); });
-    expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+    expect(invokeAiComplete).toHaveBeenCalledTimes(1);
   });
 
   it("drops a reply that arrives after the goal changed, and aborts the request", async () => {
     let resolveIt!: (v: unknown) => void;
-    invokeAiChatCtx.mockImplementation(() => new Promise((r) => { resolveIt = r; }));
+    invokeAiComplete.mockImplementation(() => new Promise((r) => { resolveIt = r; }));
     const { rerender } = setup();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "AI 拆解" })); });
     rerender(<MilestoneList sessionId="s1" goal="另一個目標" state={undefined} onChange={onChange} getHistory={() => []} focusId={null} onFocus={onFocus} redact />);
@@ -243,7 +245,7 @@ describe("MilestoneList – AI plan", () => {
   });
 
   it("aborts an in-flight request when unmounted", async () => {
-    invokeAiChatCtx.mockImplementation(() => new Promise(() => {}));
+    invokeAiComplete.mockImplementation(() => new Promise(() => {}));
     const { unmount } = setup();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "AI 拆解" })); });
     unmount();
@@ -274,7 +276,7 @@ describe("MilestoneList – focus", () => {
 
 describe("MilestoneList – goal changed", () => {
   it("offers to plan again when the goal differs from the one the milestones were planned for", async () => {
-    invokeAiChatCtx.mockResolvedValue(reply('["新方向一","新方向二"]'));
+    invokeAiComplete.mockResolvedValue(reply('["新方向一","新方向二"]'));
     setup({ state: THREE, goal: "完全不同的新目標" });
     expect(screen.getByText("目標已變更，要重新拆解嗎？")).toBeTruthy();
     expect(screen.getByText("盤點 API")).toBeTruthy(); // 不刪
@@ -298,11 +300,12 @@ describe("MilestoneList – AI progress check", () => {
   });
 
   it("sends numbered milestones, the history and the current screen on a separate stream id", async () => {
-    invokeAiChatCtx.mockResolvedValue(reply('{"done":[2],"note":"登入已完成"}'));
+    invokeAiComplete.mockResolvedValue(reply('{"done":[2],"note":"登入已完成"}'));
     setup({ state: THREE, getHistory: () => ["較早畫面一\n較早畫面二\n較早畫面三\n較早畫面四\n較早畫面五"] });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "檢查進度" })); });
-    const [messages, , connId] = invokeAiChatCtx.mock.calls[0];
+    const [messages, , connId] = invokeAiComplete.mock.calls[0];
     expect(connId).toBe("milestone-check-s1");
+    expect(invokeAiComplete.mock.calls[0][1]).toBe(PLAIN_COMPLETION_SYSTEM_PROMPT);
     const content = messages[0].content as string;
     expect(content).toContain("2. [未完成] 拆分登入模組");
     expect(content).toContain("較早畫面一");
@@ -310,15 +313,15 @@ describe("MilestoneList – AI progress check", () => {
   });
 
   it("two clicks in the same tick send only one check request", async () => {
-    invokeAiChatCtx.mockImplementation(() => new Promise(() => {}));
+    invokeAiComplete.mockImplementation(() => new Promise(() => {}));
     setup({ state: THREE });
     const btn = screen.getByRole("button", { name: "檢查進度" });
     await act(async () => { btn.click(); btn.click(); });
-    expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+    expect(invokeAiComplete).toHaveBeenCalledTimes(1);
   });
 
   it("only proposes: nothing is ticked until the user accepts each item", async () => {
-    invokeAiChatCtx.mockResolvedValue(reply('{"done":[2,3],"note":"登入與資料庫都完成了"}'));
+    invokeAiComplete.mockResolvedValue(reply('{"done":[2,3],"note":"登入與資料庫都完成了"}'));
     setup({ state: THREE });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "檢查進度" })); });
     const region = screen.getByRole("region", { name: "AI 認為已完成：" });
@@ -334,7 +337,7 @@ describe("MilestoneList – AI progress check", () => {
   });
 
   it("skipping an item changes nothing, and the panel closes when nothing is left", async () => {
-    invokeAiChatCtx.mockResolvedValue(reply('{"done":[3],"note":""}'));
+    invokeAiComplete.mockResolvedValue(reply('{"done":[3],"note":""}'));
     setup({ state: THREE });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "檢查進度" })); });
     fireEvent.click(screen.getByRole("button", { name: "略過：遷移資料庫" }));
@@ -343,7 +346,7 @@ describe("MilestoneList – AI progress check", () => {
   });
 
   it("says so when the AI found nothing to confirm", async () => {
-    invokeAiChatCtx.mockResolvedValue(reply('{"done":[],"note":""}'));
+    invokeAiComplete.mockResolvedValue(reply('{"done":[],"note":""}'));
     setup({ state: THREE });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "檢查進度" })); });
     expect(screen.getByText("AI 沒有發現可以確認完成的項目。")).toBeTruthy();
@@ -352,10 +355,10 @@ describe("MilestoneList – AI progress check", () => {
 
   describe("secret redaction in the progress check", () => {
     const TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
-    const sent = () => invokeAiChatCtx.mock.calls[0][0][0].content as string;
+    const sent = () => invokeAiComplete.mock.calls[0][0][0].content as string;
 
     it("masks secrets in the current and the earlier screens, and says how many", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply('{"done":[],"note":""}'));
+      invokeAiComplete.mockResolvedValue(reply('{"done":[],"note":""}'));
       screenText = `目前畫面\npassword=hunter2hunter2\n結束`;
       setup({ state: THREE, getHistory: () => [`較早畫面\nAuthorization: Bearer ${TOKEN}`] });
       await act(async () => { fireEvent.click(screen.getByRole("button", { name: "檢查進度" })); });
@@ -366,7 +369,7 @@ describe("MilestoneList – AI progress check", () => {
     });
 
     it("masks before truncating so no fragment survives the 8000-char cut", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply('{"done":[],"note":""}'));
+      invokeAiComplete.mockResolvedValue(reply('{"done":[],"note":""}'));
       const suffix = "y ".repeat(3990).slice(0, 8000 - 20);
       screenText = `${"x ".repeat(2000)}${TOKEN}${suffix}`;
       setup({ state: THREE });
@@ -376,7 +379,7 @@ describe("MilestoneList – AI progress check", () => {
     });
 
     it("sends raw text and shows no count when redaction is off", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply('{"done":[],"note":""}'));
+      invokeAiComplete.mockResolvedValue(reply('{"done":[],"note":""}'));
       screenText = `password=hunter2hunter2`;
       setup({ state: THREE, redact: false });
       await act(async () => { fireEvent.click(screen.getByRole("button", { name: "檢查進度" })); });
@@ -385,7 +388,7 @@ describe("MilestoneList – AI progress check", () => {
     });
 
     it("shows no count when nothing was masked", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply('{"done":[],"note":""}'));
+      invokeAiComplete.mockResolvedValue(reply('{"done":[],"note":""}'));
       setup({ state: THREE });
       await act(async () => { fireEvent.click(screen.getByRole("button", { name: "檢查進度" })); });
       expect(screen.queryByText(/已在送出前遮罩/)).toBeNull();
@@ -396,12 +399,12 @@ describe("MilestoneList – AI progress check", () => {
     screenText = "  \n ";
     setup({ state: THREE });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "檢查進度" })); });
-    expect(invokeAiChatCtx).not.toHaveBeenCalled();
+    expect(invokeAiComplete).not.toHaveBeenCalled();
     expect(screen.getByRole("alert").textContent).toContain("終端機沒有可讀的內容");
   });
 
   it("shows an error when the AI fails", async () => {
-    invokeAiChatCtx.mockRejectedValueOnce({ kind: "network", message: "x" });
+    invokeAiComplete.mockRejectedValueOnce({ kind: "network", message: "x" });
     setup({ state: THREE });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "檢查進度" })); });
     expect(screen.getByRole("alert").textContent).toContain("操作失敗");

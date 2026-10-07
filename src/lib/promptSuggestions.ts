@@ -3,6 +3,13 @@ export interface PromptSuggestion {
   prompt: string;
 }
 
+/**
+ * 建議側欄所有 AI 請求共用的系統提示詞。刻意不是「終端機助手」：那種提示詞會叫模型把指令包進
+ * `<cmd>` 標籤，讓「改寫提示詞」「只回 JSON」這類請求的結果被污染。
+ */
+export const PLAIN_COMPLETION_SYSTEM_PROMPT =
+  "You are a precise assistant inside a developer tool. Follow the user's instructions exactly and reply with only the content they ask for, as plain text (or JSON when they ask for JSON). Do not add commentary, and do not wrap the answer in tags.";
+
 export const MAX_SUGGESTIONS = 5;
 export const MAX_PROMPT_CHARS = 500;
 /** 使用者設定的大目標上限（字元）。夠寫一段話，又不會把請求撐大。 */
@@ -111,6 +118,9 @@ export function cleanGeneratedText(raw: string | null | undefined, max: number):
   let t = raw.trim();
   const fence = /^```[a-zA-Z]*\n([\s\S]*?)\n?```$/.exec(t);
   if (fence) t = fence[1].trim();
+  // 有些模型（尤其被當成終端機助手提示過的）會把整段包進 <cmd>…</cmd>；只在「整段都被包住」時拆掉。
+  const cmd = /^<cmd>([\s\S]*)<\/cmd>$/.exec(t);
+  if (cmd && !cmd[1].includes("<cmd>")) t = cmd[1].trim();
   const pairs: [string, string][] = [['"', '"'], ["“", "”"], ["「", "」"], ["'", "'"]];
   for (const [open, close] of pairs) {
     if (t.length >= 2 && t.startsWith(open) && t.endsWith(close) && !t.slice(1, -1).includes(open)) {

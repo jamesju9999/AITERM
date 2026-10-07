@@ -1,10 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 
-const invokeAiChatCtx = vi.fn();
+const invokeAiComplete = vi.fn();
 const abortAi = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../ipc/ai", () => ({
-  invokeAiChatCtx: (...a: unknown[]) => invokeAiChatCtx(...a),
+  invokeAiComplete: (...a: unknown[]) => invokeAiComplete(...a),
   abortAi: (...a: unknown[]) => abortAi(...a),
   formatAiError: () => "ERR",
 }));
@@ -23,7 +23,7 @@ vi.mock("../../contexts/LocaleContext", async () => {
 });
 
 import { PromptAssistant } from "./PromptAssistant";
-import { MAX_ASSIST_REQUEST_CHARS } from "../../lib/promptSuggestions";
+import { MAX_ASSIST_REQUEST_CHARS, PLAIN_COMPLETION_SYSTEM_PROMPT } from "../../lib/promptSuggestions";
 
 const reply = (content: string | null) => ({ content, tool_calls: [], tool_calling_unsupported: false });
 const TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
@@ -37,10 +37,10 @@ const run = async (text = "幫我把登入改成 REST") => {
   fireEvent.change(need(), { target: { value: text } });
   await act(async () => { fireEvent.click(runBtn()); });
 };
-const sent = () => invokeAiChatCtx.mock.calls[0][0][0].content as string;
+const sent = () => invokeAiComplete.mock.calls[0][0][0].content as string;
 
 beforeEach(() => {
-  invokeAiChatCtx.mockReset();
+  invokeAiComplete.mockReset();
   abortAi.mockClear();
   fillTerminalInput.mockClear();
   submitTerminalInput.mockClear();
@@ -62,19 +62,20 @@ describe("PromptAssistant", () => {
   });
 
   it("shows the result above the input row, like a chat composer", async () => {
-    invokeAiChatCtx.mockResolvedValue(reply("改寫的提示詞"));
+    invokeAiComplete.mockResolvedValue(reply("改寫的提示詞"));
     setup();
     await run();
     expect(result().compareDocumentPosition(need()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("sends the request with goal, milestones and the screen on its own stream id, and shows the result without touching the terminal", async () => {
-    invokeAiChatCtx.mockResolvedValue(reply("請把登入流程改成 REST API，保留現有驗證。"));
+    invokeAiComplete.mockResolvedValue(reply("請把登入流程改成 REST API，保留現有驗證。"));
     setup({ goal: "網頁化", milestoneContext: "里程碑一節-MARK" });
     await run();
-    expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
-    const [, , connId, providerId] = invokeAiChatCtx.mock.calls[0];
+    expect(invokeAiComplete).toHaveBeenCalledTimes(1);
+    const [, , connId, providerId] = invokeAiComplete.mock.calls[0];
     expect(connId).toBe("prompt-assist-s1");
+    expect(invokeAiComplete.mock.calls[0][1]).toBe(PLAIN_COMPLETION_SYSTEM_PROMPT);
     expect(providerId).toBe("p1");
     expect(sent()).toContain("幫我把登入改成 REST");
     expect(sent()).toContain("網頁化");
@@ -86,7 +87,7 @@ describe("PromptAssistant", () => {
   });
 
   it("cleans a fenced or quoted reply", async () => {
-    invokeAiChatCtx.mockResolvedValue(reply("```\n請重構登入\n```"));
+    invokeAiComplete.mockResolvedValue(reply("```\n請重構登入\n```"));
     setup();
     await run();
     expect(result().value).toBe("請重構登入");
@@ -94,14 +95,14 @@ describe("PromptAssistant", () => {
 
   it("leaves the screen out when the terminal has nothing readable", async () => {
     screenText = "  \n ";
-    invokeAiChatCtx.mockResolvedValue(reply("好"));
+    invokeAiComplete.mockResolvedValue(reply("好"));
     setup();
     await run();
     expect(sent()).not.toContain("終端機畫面");
   });
 
   it("fills what is in the box (including the user's edits) and never presses Enter on 填入", async () => {
-    invokeAiChatCtx.mockResolvedValue(reply("改寫的提示詞"));
+    invokeAiComplete.mockResolvedValue(reply("改寫的提示詞"));
     setup();
     await run();
     fireEvent.change(result(), { target: { value: "改寫的提示詞，再自己加一句" } });
@@ -111,7 +112,7 @@ describe("PromptAssistant", () => {
   });
 
   it("填入並送出 fills first and then presses Enter", async () => {
-    invokeAiChatCtx.mockResolvedValue(reply("改寫的提示詞"));
+    invokeAiComplete.mockResolvedValue(reply("改寫的提示詞"));
     setup();
     await run();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "填入並送出" })); });
@@ -120,7 +121,7 @@ describe("PromptAssistant", () => {
   });
 
   it("does not submit when filling failed (terminal gone)", async () => {
-    invokeAiChatCtx.mockResolvedValue(reply("改寫的提示詞"));
+    invokeAiComplete.mockResolvedValue(reply("改寫的提示詞"));
     fillTerminalInput.mockResolvedValueOnce(false as never);
     setup();
     await run();
@@ -129,7 +130,7 @@ describe("PromptAssistant", () => {
   });
 
   it("does not fill a blank box", async () => {
-    invokeAiChatCtx.mockResolvedValue(reply("改寫的提示詞"));
+    invokeAiComplete.mockResolvedValue(reply("改寫的提示詞"));
     setup();
     await run();
     fireEvent.change(result(), { target: { value: "  " } });
@@ -138,12 +139,12 @@ describe("PromptAssistant", () => {
   });
 
   it("rewrite again re-runs with the same request; clear empties everything", async () => {
-    invokeAiChatCtx.mockResolvedValueOnce(reply("第一版")).mockResolvedValueOnce(reply("第二版"));
+    invokeAiComplete.mockResolvedValueOnce(reply("第一版")).mockResolvedValueOnce(reply("第二版"));
     setup();
     await run("同一個需求");
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "重新改寫" })); });
-    expect(invokeAiChatCtx).toHaveBeenCalledTimes(2);
-    expect(invokeAiChatCtx.mock.calls[1][0][0].content).toContain("同一個需求");
+    expect(invokeAiComplete).toHaveBeenCalledTimes(2);
+    expect(invokeAiComplete.mock.calls[1][0][0].content).toContain("同一個需求");
     expect(result().value).toBe("第二版");
     fireEvent.click(screen.getByRole("button", { name: "清除" }));
     expect(need().value).toBe("");
@@ -151,22 +152,22 @@ describe("PromptAssistant", () => {
   });
 
   it("shows a busy label and blocks a second request, even for two clicks in one tick", async () => {
-    invokeAiChatCtx.mockImplementation(() => new Promise(() => {}));
+    invokeAiComplete.mockImplementation(() => new Promise(() => {}));
     setup();
     fireEvent.change(need(), { target: { value: "需求" } });
     await act(async () => { runBtn().click(); runBtn().click(); });
-    expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+    expect(invokeAiComplete).toHaveBeenCalledTimes(1);
     expect(runBtn().textContent).toContain("改寫中");
     expect(runBtn().disabled).toBe(true);
   });
 
   it("shows an error and keeps the request when the AI fails or returns nothing", async () => {
-    invokeAiChatCtx.mockRejectedValueOnce({ kind: "network", message: "x" });
+    invokeAiComplete.mockRejectedValueOnce({ kind: "network", message: "x" });
     setup();
     await run("保留的需求");
     expect(screen.getByRole("alert").textContent).toContain("改寫失敗");
     expect(need().value).toBe("保留的需求");
-    invokeAiChatCtx.mockResolvedValueOnce(reply("   "));
+    invokeAiComplete.mockResolvedValueOnce(reply("   "));
     await act(async () => { fireEvent.click(runBtn()); });
     expect(screen.getByRole("alert").textContent).toContain("沒有回傳可用的內容");
     expect(screen.queryByRole("textbox", { name: "改寫後的提示詞" })).toBeNull();
@@ -174,7 +175,7 @@ describe("PromptAssistant", () => {
 
   it("clearing while waiting aborts the request and ignores the late reply", async () => {
     let resolveIt!: (v: unknown) => void;
-    invokeAiChatCtx.mockImplementation(() => new Promise((r) => { resolveIt = r; }));
+    invokeAiComplete.mockImplementation(() => new Promise((r) => { resolveIt = r; }));
     setup();
     fireEvent.change(need(), { target: { value: "需求" } });
     await act(async () => { fireEvent.click(runBtn()); });
@@ -187,7 +188,7 @@ describe("PromptAssistant", () => {
   });
 
   it("aborts an in-flight request when unmounted", async () => {
-    invokeAiChatCtx.mockImplementation(() => new Promise(() => {}));
+    invokeAiComplete.mockImplementation(() => new Promise(() => {}));
     const { unmount } = setup();
     fireEvent.change(need(), { target: { value: "需求" } });
     await act(async () => { fireEvent.click(runBtn()); });
@@ -197,7 +198,7 @@ describe("PromptAssistant", () => {
 
   describe("secret redaction", () => {
     it("masks the screen before sending (and before cutting it to size), and says how many", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply("好"));
+      invokeAiComplete.mockResolvedValue(reply("好"));
       const suffix = "y ".repeat(2000).slice(0, 4000 - 20);
       screenText = `${"x ".repeat(500)}${TOKEN}${suffix}\npassword=hunter2hunter2`;
       setup();
@@ -208,7 +209,7 @@ describe("PromptAssistant", () => {
     });
 
     it("sends the raw screen and shows no count when redaction is off", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply("好"));
+      invokeAiComplete.mockResolvedValue(reply("好"));
       screenText = `export GITHUB_TOKEN=${TOKEN}`;
       setup({ redact: false });
       await run();
@@ -218,7 +219,7 @@ describe("PromptAssistant", () => {
   });
 
   it("does not mask what the user typed themselves", async () => {
-    invokeAiChatCtx.mockResolvedValue(reply("好"));
+    invokeAiComplete.mockResolvedValue(reply("好"));
     setup();
     await run(`請用 password=hunter2hunter2 登入測試機`);
     expect(sent()).toContain("hunter2hunter2");

@@ -1,10 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 
-const invokeAiChatCtx = vi.fn();
+const invokeAiComplete = vi.fn();
 const abortAi = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../ipc/ai", () => ({
-  invokeAiChatCtx: (...a: unknown[]) => invokeAiChatCtx(...a),
+  invokeAiComplete: (...a: unknown[]) => invokeAiComplete(...a),
   abortAi: (...a: unknown[]) => abortAi(...a),
   formatAiError: () => "err",
 }));
@@ -20,13 +20,13 @@ vi.mock("../../contexts/LocaleContext", async () => {
 });
 
 import { SuggestionSidebar } from "./SuggestionSidebar";
-import { MAX_GOAL_CHARS } from "../../lib/promptSuggestions";
+import { MAX_GOAL_CHARS, PLAIN_COMPLETION_SYSTEM_PROMPT } from "../../lib/promptSuggestions";
 
 const onClose = vi.fn();
 const onNames = vi.fn();
 const onGoal = vi.fn();
 const onMilestones = vi.fn();
-beforeEach(() => { screenText = "screen"; invokeAiChatCtx.mockReset(); abortAi.mockClear(); onClose.mockClear(); onNames.mockClear(); onGoal.mockClear(); onMilestones.mockClear(); localStorage.clear(); });
+beforeEach(() => { screenText = "screen"; invokeAiComplete.mockReset(); abortAi.mockClear(); onClose.mockClear(); onNames.mockClear(); onGoal.mockClear(); onMilestones.mockClear(); localStorage.clear(); });
 
 const setup = (p: Partial<React.ComponentProps<typeof SuggestionSidebar>> = {}) =>
   render(
@@ -176,13 +176,14 @@ describe("SuggestionSidebar", () => {
     });
 
     it("replaces the draft with the polished text on a separate stream id, without saving it", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply('```\n將舊程式的 Client-Server 架構轉換為網頁平台架構\n```'));
+      invokeAiComplete.mockResolvedValue(reply('```\n將舊程式的 Client-Server 架構轉換為網頁平台架構\n```'));
       open();
       fireEvent.change(box(), { target: { value: "轉成網頁版" } });
       await act(async () => { fireEvent.click(polishBtn()); });
-      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
-      const [messages, , connId, providerId] = invokeAiChatCtx.mock.calls[0];
+      expect(invokeAiComplete).toHaveBeenCalledTimes(1);
+      const [messages, , connId, providerId] = invokeAiComplete.mock.calls[0];
       expect(connId).toBe("goal-polish-s1");
+      expect(invokeAiComplete.mock.calls[0][1]).toBe(PLAIN_COMPLETION_SYSTEM_PROMPT);
       expect(providerId).toBeUndefined();
       expect(messages[0].content).toContain("轉成網頁版");
       expect(box().value).toBe("將舊程式的 Client-Server 架構轉換為網頁平台架構");
@@ -190,17 +191,17 @@ describe("SuggestionSidebar", () => {
     });
 
     it("shows a busy state while waiting and blocks a second request", async () => {
-      invokeAiChatCtx.mockImplementation(() => new Promise(() => {}));
+      invokeAiComplete.mockImplementation(() => new Promise(() => {}));
       open();
       fireEvent.change(box(), { target: { value: "轉成網頁版" } });
       await act(async () => { fireEvent.click(polishBtn()); });
       expect(polishBtn().textContent).toContain("潤飾中");
       expect(polishBtn().disabled).toBe(true);
-      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+      expect(invokeAiComplete).toHaveBeenCalledTimes(1);
     });
 
     it("can undo back to exactly what the user had typed", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply("潤飾後的目標"));
+      invokeAiComplete.mockResolvedValue(reply("潤飾後的目標"));
       open();
       fireEvent.change(box(), { target: { value: "我寫的原稿" } });
       await act(async () => { fireEvent.click(polishBtn()); });
@@ -211,7 +212,7 @@ describe("SuggestionSidebar", () => {
     });
 
     it("hides the undo button as soon as the user edits the polished text", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply("潤飾後的目標"));
+      invokeAiComplete.mockResolvedValue(reply("潤飾後的目標"));
       open();
       fireEvent.change(box(), { target: { value: "原稿" } });
       await act(async () => { fireEvent.click(polishBtn()); });
@@ -220,7 +221,7 @@ describe("SuggestionSidebar", () => {
     });
 
     it("saving after a polish stores the polished text", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply("潤飾後的目標"));
+      invokeAiComplete.mockResolvedValue(reply("潤飾後的目標"));
       open();
       fireEvent.change(box(), { target: { value: "原稿" } });
       await act(async () => { fireEvent.click(polishBtn()); });
@@ -229,30 +230,30 @@ describe("SuggestionSidebar", () => {
     });
 
     it("keeps the draft and shows a message when the AI fails or returns nothing", async () => {
-      invokeAiChatCtx.mockRejectedValueOnce({ kind: "network", message: "x" });
+      invokeAiComplete.mockRejectedValueOnce({ kind: "network", message: "x" });
       open();
       fireEvent.change(box(), { target: { value: "原稿" } });
       await act(async () => { fireEvent.click(polishBtn()); });
       expect(screen.getByRole("alert").textContent).toContain("潤飾失敗");
       expect(box().value).toBe("原稿");
 
-      invokeAiChatCtx.mockResolvedValueOnce(reply("   "));
+      invokeAiComplete.mockResolvedValueOnce(reply("   "));
       await act(async () => { fireEvent.click(polishBtn()); });
       expect(screen.getByRole("alert").textContent).toContain("沒有回傳可用的內容");
       expect(box().value).toBe("原稿");
     });
 
     it("two clicks in the same tick still send only one request", async () => {
-      invokeAiChatCtx.mockImplementation(() => new Promise(() => {}));
+      invokeAiComplete.mockImplementation(() => new Promise(() => {}));
       open();
       fireEvent.change(box(), { target: { value: "轉成網頁版" } });
       await act(async () => { polishBtn().click(); polishBtn().click(); });
-      expect(invokeAiChatCtx).toHaveBeenCalledTimes(1);
+      expect(invokeAiComplete).toHaveBeenCalledTimes(1);
     });
 
     it("a late reply from a cancelled request cannot overwrite a newer one", async () => {
       const resolvers: ((v: unknown) => void)[] = [];
-      invokeAiChatCtx.mockImplementation(() => new Promise((r) => { resolvers.push(r); }));
+      invokeAiComplete.mockImplementation(() => new Promise((r) => { resolvers.push(r); }));
       open();
       fireEvent.change(box(), { target: { value: "原稿" } });
       await act(async () => { fireEvent.click(polishBtn()); });
@@ -268,7 +269,7 @@ describe("SuggestionSidebar", () => {
 
     it("cancelling while waiting aborts the request and ignores the late reply", async () => {
       let resolveIt!: (v: unknown) => void;
-      invokeAiChatCtx.mockImplementation(() => new Promise((r) => { resolveIt = r; }));
+      invokeAiComplete.mockImplementation(() => new Promise((r) => { resolveIt = r; }));
       open("舊目標");
       fireEvent.change(box(), { target: { value: "舊目標加一點" } });
       await act(async () => { fireEvent.click(polishBtn()); });
@@ -320,11 +321,11 @@ describe("SuggestionSidebar", () => {
     const reply = { content: JSON.stringify([{ title: "t", prompt: "p" }]), tool_calls: [], tool_calling_unsupported: false };
     const generate = async () => {
       await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: /^(產生建議|重新產生)$/ })[0]); });
-      return invokeAiChatCtx.mock.calls[invokeAiChatCtx.mock.calls.length - 1][0][0].content as string;
+      return invokeAiComplete.mock.calls[invokeAiComplete.mock.calls.length - 1][0][0].content as string;
     };
 
     it("aims at the first unfinished milestone by default and says so", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply);
+      invokeAiComplete.mockResolvedValue(reply);
       setup({ goal: "目標", milestones: THREE });
       expect(screen.getByText("朝向里程碑：拆分登入模組")).toBeTruthy();
       const content = await generate();
@@ -332,7 +333,7 @@ describe("SuggestionSidebar", () => {
     });
 
     it("moves the focus when the user picks another unfinished milestone, and the next request follows it", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply);
+      invokeAiComplete.mockResolvedValue(reply);
       setup({ goal: "目標", milestones: THREE });
       fireEvent.click(screen.getByRole("button", { name: "設為焦點：遷移資料庫" }));
       expect(screen.getByText("朝向里程碑：遷移資料庫")).toBeTruthy();
@@ -362,7 +363,7 @@ describe("SuggestionSidebar", () => {
     });
 
     it("switches to wrap-up when every milestone is done", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply);
+      invokeAiComplete.mockResolvedValue(reply);
       const allDone = { forGoal: "目標", items: THREE.items.map((i) => ({ ...i, done: true })) };
       setup({ goal: "目標", milestones: allDone });
       expect(screen.getByText("全部里程碑已完成，建議改為驗收與收尾")).toBeTruthy();
@@ -371,7 +372,7 @@ describe("SuggestionSidebar", () => {
     });
 
     it("sends no milestone section when there are none (same request as step 1)", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply);
+      invokeAiComplete.mockResolvedValue(reply);
       setup({ goal: "目標", milestones: undefined });
       const content = await generate();
       expect(content).not.toContain("里程碑");
@@ -387,11 +388,11 @@ describe("SuggestionSidebar", () => {
     const openMenu = () => fireEvent.click(screen.getByRole("button", { name: "自訂 AI 工具" }));
     const generate = async () => {
       await act(async () => { fireEvent.click(screen.getByRole("button", { name: "產生建議" })); });
-      return invokeAiChatCtx.mock.calls[invokeAiChatCtx.mock.calls.length - 1][0][0].content as string;
+      return invokeAiComplete.mock.calls[invokeAiComplete.mock.calls.length - 1][0][0].content as string;
     };
 
     it("is on by default and masks what is sent", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply);
+      invokeAiComplete.mockResolvedValue(reply);
       screenText = `export GITHUB_TOKEN=${TOKEN}`;
       setup();
       openMenu();
@@ -402,7 +403,7 @@ describe("SuggestionSidebar", () => {
     });
 
     it("can be turned off, sends raw text, and remembers the choice", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply);
+      invokeAiComplete.mockResolvedValue(reply);
       screenText = `export GITHUB_TOKEN=${TOKEN}`;
       const first = setup();
       openMenu();
@@ -419,17 +420,17 @@ describe("SuggestionSidebar", () => {
 
     it("applies to the milestone progress check as well", async () => {
       const ms = { forGoal: "目標", items: [{ id: "a", text: "盤點 API", done: false }] };
-      invokeAiChatCtx.mockResolvedValue({ content: '{"done":[],"note":""}', tool_calls: [], tool_calling_unsupported: false });
+      invokeAiComplete.mockResolvedValue({ content: '{"done":[],"note":""}', tool_calls: [], tool_calling_unsupported: false });
       screenText = `export GITHUB_TOKEN=${TOKEN}`;
       setup({ goal: "目標", milestones: ms });
       openMenu();
       fireEvent.click(checkbox()); // 關閉遮罩
       await act(async () => { fireEvent.click(screen.getByRole("button", { name: "檢查進度" })); });
-      expect(invokeAiChatCtx.mock.calls[0][0][0].content).toContain(TOKEN);
+      expect(invokeAiComplete.mock.calls[0][0][0].content).toContain(TOKEN);
     });
 
     it("turning it back on masks again", async () => {
-      invokeAiChatCtx.mockResolvedValue(reply);
+      invokeAiComplete.mockResolvedValue(reply);
       localStorage.setItem("aiterm-suggest-redact", "false");
       screenText = `export GITHUB_TOKEN=${TOKEN}`;
       setup();
@@ -449,7 +450,7 @@ describe("SuggestionSidebar", () => {
     const run = async (need: string) => {
       fireEvent.change(screen.getByRole("textbox", { name: "你的需求" }), { target: { value: need } });
       await act(async () => { fireEvent.click(screen.getByRole("button", { name: "AI 改寫成提示詞" })); });
-      return invokeAiChatCtx.mock.calls[invokeAiChatCtx.mock.calls.length - 1][0][0].content as string;
+      return invokeAiComplete.mock.calls[invokeAiComplete.mock.calls.length - 1][0][0].content as string;
     };
     const ok = { content: "改寫後", tool_calls: [], tool_calling_unsupported: false };
 
@@ -459,7 +460,7 @@ describe("SuggestionSidebar", () => {
     });
 
     it("is given the goal and the focus milestone context", async () => {
-      invokeAiChatCtx.mockResolvedValue(ok);
+      invokeAiComplete.mockResolvedValue(ok);
       setup({ goal: "網頁化專案", milestones: ms });
       const content = await run("幫我拆分登入");
       expect(content).toContain("網頁化專案");
@@ -467,15 +468,15 @@ describe("SuggestionSidebar", () => {
     });
 
     it("follows the redaction setting", async () => {
-      invokeAiChatCtx.mockResolvedValue(ok);
+      invokeAiComplete.mockResolvedValue(ok);
       screenText = `export GITHUB_TOKEN=${TOKEN}`;
       setup();
       expect(await run("需求一")).not.toContain(TOKEN);
-      invokeAiChatCtx.mockClear();
+      invokeAiComplete.mockClear();
       fireEvent.click(screen.getByRole("button", { name: "自訂 AI 工具" }));
       fireEvent.click(screen.getByRole("checkbox", { name: "送出前遮罩敏感資訊" }));
       await act(async () => { fireEvent.click(screen.getByRole("button", { name: "重新改寫" })); });
-      expect(invokeAiChatCtx.mock.calls[0][0][0].content).toContain(TOKEN);
+      expect(invokeAiComplete.mock.calls[0][0][0].content).toContain(TOKEN);
     });
   });
 
@@ -540,7 +541,7 @@ describe("SuggestionSidebar", () => {
 
     it("does not cancel a running AI plan just because the context was collapsed", async () => {
       let resolveIt!: (v: unknown) => void;
-      invokeAiChatCtx.mockImplementation(() => new Promise((r) => { resolveIt = r; }));
+      invokeAiComplete.mockImplementation(() => new Promise((r) => { resolveIt = r; }));
       setup({ goal: "目標", milestones: ms });
       await act(async () => { fireEvent.click(screen.getByRole("button", { name: "AI 拆解" })); });
       fireEvent.click(bar());

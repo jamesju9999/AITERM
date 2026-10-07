@@ -36,7 +36,7 @@ use commands::{
         api_docs_fetch_tree, api_docs_login, api_docs_logout,
     },
     appimage::{appimage_integrate, appimage_integration_state, appimage_remove_integration},
-    ai::{agent_chat, ai_abort, ai_chat, ai_chat_ctx, ai_query, AiAbortRegistry},
+    ai::{agent_chat, ai_abort, ai_chat, ai_chat_ctx, ai_complete, ai_query, AiAbortRegistry},
     bridge::{bridge_apply, bridge_set_config, bridge_status},
     openai_server::{
         openai_server_apply, openai_server_regenerate_key, openai_server_set_config,
@@ -470,6 +470,7 @@ pub fn run() {
             ai_query,
             ai_abort,
             ai_chat_ctx,
+            ai_complete,
             ai_chat,
             agent_chat,
             code_assistant_chat,

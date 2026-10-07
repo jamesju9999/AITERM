@@ -443,10 +443,6 @@ async fn run_chat(
     app: &AppHandle,
     stream_id: String,
 ) -> Result<AiChatReply, AiError> {
-    let provider = match provider_id.as_deref() {
-        Some(id) => router.resolve_by_id(id).await?,
-        None => router.resolve().await?,
-    };
     let prompt = build_chat_prompt(&snapshot, locale, supports_artifacts);
     let req = GenerateRequest {
         system_prompt: prompt,
@@ -454,6 +450,35 @@ async fn run_chat(
         context: snapshot,
         mode: QueryMode::Chat,
         max_tokens: None,
+    };
+    run_request(req, provider_id, router, app, stream_id).await
+}
+
+/// 組出「純文字補全」的請求：系統提示詞就是呼叫端給的那一段，**不是** `build_chat_prompt`。
+/// 聊天提示詞會叫模型把指令包進 `<cmd>…</cmd>`、並要它當終端機助手；拿來做「改寫提示詞」
+/// 「產生 JSON」這類事，模型就會把結果也包進 `<cmd>`（實際發生過）。
+pub fn build_plain_request(messages: Vec<ChatMessage>, system_prompt: String) -> GenerateRequest {
+    GenerateRequest {
+        system_prompt,
+        messages,
+        context: crate::ai::EnvSnapshot::default(),
+        mode: QueryMode::Chat,
+        max_tokens: None,
+    }
+}
+
+/// resolve provider → provider.generate 串流 ai-stream(kind=Chat) → 回 AiChatReply。
+/// 請求（含系統提示詞）由呼叫端組好。
+async fn run_request(
+    req: GenerateRequest,
+    provider_id: Option<String>,
+    router: &AiRouter,
+    app: &AppHandle,
+    stream_id: String,
+) -> Result<AiChatReply, AiError> {
+    let provider = match provider_id.as_deref() {
+        Some(id) => router.resolve_by_id(id).await?,
+        None => router.resolve().await?,
     };
 
     let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
@@ -659,6 +684,27 @@ pub async fn ai_chat_ctx(
         ctx.recent_output,
     );
     run_chat(messages, snapshot, provider_id, locale, supports_artifacts, &router, &app, conn_id).await
+}
+
+/// 純文字補全：不帶終端機助手的系統提示詞，系統提示詞由呼叫端指定。給建議側欄的各項功能
+/// （產生建議、拆解里程碑、潤飾目標、提示詞助手）用——它們要的是「照指示只回傳那段內容」，
+/// 不是「當終端機助手、把指令包進 <cmd>」。`stream_id` 是 ai-stream 事件與 `ai_abort` 用的 id。
+#[tauri::command]
+pub async fn ai_complete(
+    messages: Vec<ChatMessage>,
+    system_prompt: String,
+    provider_id: Option<String>,
+    stream_id: String,
+    app: AppHandle,
+    router: State<'_, AiRouter>,
+) -> Result<AiChatReply, AiError> {
+    if messages.is_empty() {
+        return Err(AiError::InvalidInput { reason: "empty messages".into() });
+    }
+    if messages.last().map(|m| m.role.as_str()) != Some("user") {
+        return Err(AiError::InvalidInput { reason: "last message must be from user".into() });
+    }
+    run_request(build_plain_request(messages, system_prompt), provider_id, &router, &app, stream_id).await
 }
 
 /// Build the tool injection suffix for providers that don't support native tool calling.

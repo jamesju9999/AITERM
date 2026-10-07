@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { abortAi, invokeAiChatCtx } from "../../ipc/ai";
+import { abortAi, invokeAiComplete } from "../../ipc/ai";
 import { languageDirective } from "../../lib/i18n";
 import { describeError } from "./describeError";
 import { useLocale } from "../../contexts/LocaleContext";
 import { BUILTIN_AI_CLI_NAMES, normalizeCliName } from "../../lib/aiCliCommand";
-import { MAX_GOAL_CHARS, buildGoalPolishRequest, cleanPolishedGoal } from "../../lib/promptSuggestions";
+import { MAX_GOAL_CHARS, PLAIN_COMPLETION_SYSTEM_PROMPT, buildGoalPolishRequest, cleanPolishedGoal } from "../../lib/promptSuggestions";
 import { SparklesIcon } from "../Icons";
 import { loadRedactEnabled, saveRedactEnabled } from "./redactSetting";
 
@@ -105,12 +105,11 @@ export function SuggestionSidebar({
     setPolishing(true);
     setPolishError(null);
     try {
-      const reply = await invokeAiChatCtx(
+      const reply = await invokeAiComplete(
         [{ role: "user", content: buildGoalPolishRequest(original, languageDirective(locale)) }],
-        { os: navigator.platform.toLowerCase(), shell: null, cwd: null, recentOutput: null },
+        PLAIN_COMPLETION_SYSTEM_PROMPT,
         polishConnId,
         providerId,
-        locale,
       );
       if (myReq !== polishReqRef.current) return;
       const polished = cleanPolishedGoal(reply.content);

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { abortAi, invokeAiChatCtx } from "../../ipc/ai";
+import { abortAi, invokeAiComplete } from "../../ipc/ai";
 import { useLocale } from "../../contexts/LocaleContext";
 import { languageDirective } from "../../lib/i18n";
 import {
@@ -14,7 +14,7 @@ import {
   type Milestone,
   type MilestoneState,
 } from "../../lib/milestones";
-import { MAX_SCREEN_CHARS } from "../../lib/promptSuggestions";
+import { MAX_SCREEN_CHARS, PLAIN_COMPLETION_SYSTEM_PROMPT } from "../../lib/promptSuggestions";
 import { PROMPT_HISTORY_BUDGET, formatHistoryForPrompt, normalizeScreen } from "../../lib/screenHistory";
 import { redactSecrets } from "../../lib/redact";
 import { serializeTerminal } from "../../lib/terminalInstanceRegistry";
@@ -118,14 +118,12 @@ export function MilestoneList({ sessionId, providerId, goal, state, onChange, ge
   };
 
   // ── AI ─────────────────────────────────────────────────
-  const ctx = { os: navigator.platform.toLowerCase(), shell: null, cwd: null, recentOutput: null };
-
   const runAi = async (kind: "plan" | "check", content: string, onReply: (text: string | null) => void) => {
     const myReq = ++reqRef.current;
     busyRef.current = kind;
     setBusy(kind);
     try {
-      const reply = await invokeAiChatCtx([{ role: "user", content }], ctx, connId(kind), providerId, locale);
+      const reply = await invokeAiComplete([{ role: "user", content }], PLAIN_COMPLETION_SYSTEM_PROMPT, connId(kind), providerId);
       if (myReq !== reqRef.current) return;
       onReply(reply.content);
     } catch (e) {

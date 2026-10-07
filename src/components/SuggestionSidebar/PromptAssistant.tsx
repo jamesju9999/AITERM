@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { abortAi, invokeAiChatCtx } from "../../ipc/ai";
+import { abortAi, invokeAiComplete } from "../../ipc/ai";
 import { useLocale } from "../../contexts/LocaleContext";
 import { languageDirective } from "../../lib/i18n";
 import { redactSecrets } from "../../lib/redact";
 import {
   MAX_ASSIST_PROMPT_CHARS,
   MAX_ASSIST_REQUEST_CHARS,
+  PLAIN_COMPLETION_SYSTEM_PROMPT,
   buildPromptAssistRequest,
   cleanGeneratedText,
 } from "../../lib/promptSuggestions";
@@ -73,12 +74,11 @@ export function PromptAssistant({ sessionId, providerId, goal, milestoneContext,
     setRedactedCount(masked);
 
     try {
-      const reply = await invokeAiChatCtx(
+      const reply = await invokeAiComplete(
         [{ role: "user", content: buildPromptAssistRequest({ request: need, languageDirective: languageDirective(locale), goal, milestones: milestoneContext, screen }) }],
-        { os: navigator.platform.toLowerCase(), shell: null, cwd: null, recentOutput: null },
+        PLAIN_COMPLETION_SYSTEM_PROMPT,
         connId,
         providerId,
-        locale,
       );
       if (myReq !== reqRef.current) return;
       const prompt = cleanGeneratedText(reply.content, MAX_ASSIST_PROMPT_CHARS);

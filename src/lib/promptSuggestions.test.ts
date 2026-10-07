@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSuggestions, buildSuggestionRequest, buildGoalPolishRequest, cleanPolishedGoal, buildPromptAssistRequest, cleanGeneratedText, MAX_ASSIST_PROMPT_CHARS, MAX_ASSIST_REQUEST_CHARS, MAX_ASSIST_SCREEN_CHARS, MAX_SUGGESTIONS, MAX_PROMPT_CHARS, MAX_GOAL_CHARS } from "./promptSuggestions";
+import { parseSuggestions, buildSuggestionRequest, buildGoalPolishRequest, cleanPolishedGoal, buildPromptAssistRequest, cleanGeneratedText, PLAIN_COMPLETION_SYSTEM_PROMPT, MAX_ASSIST_PROMPT_CHARS, MAX_ASSIST_REQUEST_CHARS, MAX_ASSIST_SCREEN_CHARS, MAX_SUGGESTIONS, MAX_PROMPT_CHARS, MAX_GOAL_CHARS } from "./promptSuggestions";
 
 describe("parseSuggestions", () => {
   it("parses a plain JSON array", () => {
@@ -218,5 +218,28 @@ describe("cleanGeneratedText", () => {
 
   it("the assistant limit is larger than the goal limit", () => {
     expect(MAX_ASSIST_PROMPT_CHARS).toBeGreaterThan(MAX_GOAL_CHARS);
+  });
+});
+
+describe("PLAIN_COMPLETION_SYSTEM_PROMPT", () => {
+  it("is not the terminal-assistant prompt and says nothing that would invite <cmd> tags", () => {
+    expect(PLAIN_COMPLETION_SYSTEM_PROMPT).not.toMatch(/<cmd>|terminal assistant/i);
+    expect(PLAIN_COMPLETION_SYSTEM_PROMPT.length).toBeLessThan(500);
+  });
+});
+
+describe("cleanGeneratedText unwraps <cmd> tags", () => {
+  it("removes a <cmd> wrapper some models still add", () => {
+    expect(cleanGeneratedText("<cmd>請幫我重構登入</cmd>", 100)).toBe("請幫我重構登入");
+    expect(cleanGeneratedText("```\n<cmd>請幫我重構登入</cmd>\n```", 100)).toBe("請幫我重構登入");
+    expect(cleanGeneratedText("  <cmd>\n多行\n內容\n</cmd>  ", 100)).toBe("多行\n內容");
+  });
+
+  it("keeps text that merely starts and ends with two separate <cmd> tags", () => {
+    expect(cleanGeneratedText("<cmd>ls</cmd> 然後 <cmd>pwd</cmd>", 100)).toBe("<cmd>ls</cmd> 然後 <cmd>pwd</cmd>");
+  });
+
+  it("keeps a <cmd> that is only part of a longer text", () => {
+    expect(cleanGeneratedText("先執行 <cmd>ls</cmd> 再回報", 100)).toBe("先執行 <cmd>ls</cmd> 再回報");
   });
 });

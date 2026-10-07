@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { abortAi, invokeAiChatCtx } from "../../ipc/ai";
+import { abortAi, invokeAiComplete } from "../../ipc/ai";
 import { describeError } from "./describeError";
 import { useLocale } from "../../contexts/LocaleContext";
 import { languageDirective } from "../../lib/i18n";
 import { fillTerminalInput, serializeTerminal, submitTerminalInput } from "../../lib/terminalInstanceRegistry";
-import { buildSuggestionRequest, parseSuggestions, type PromptSuggestion } from "../../lib/promptSuggestions";
+import { PLAIN_COMPLETION_SYSTEM_PROMPT, buildSuggestionRequest, parseSuggestions, type PromptSuggestion } from "../../lib/promptSuggestions";
 import { PROMPT_HISTORY_BUDGET, formatHistoryForPrompt } from "../../lib/screenHistory";
 import { redactSecrets } from "../../lib/redact";
 import { stripAnsiCodes } from "../TaskBoard/transcriptUtils";
@@ -124,12 +124,11 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
     setStatus("loading");
     setRedactedCount(maskedCount);
     try {
-      const reply = await invokeAiChatCtx(
+      const reply = await invokeAiComplete(
         [{ role: "user", content: buildSuggestionRequest(aiScreen, languageDirective(locale), goal, history, milestoneContext) }],
-        { os: navigator.platform.toLowerCase(), shell: null, cwd: null, recentOutput: null },
+        PLAIN_COMPLETION_SYSTEM_PROMPT,
         connId,
         providerId,
-        locale,
       );
       if (!mountedRef.current || myReq !== reqRef.current) return;
       const parsed = parseSuggestions(reply.content);

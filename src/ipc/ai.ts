@@ -96,6 +96,20 @@ export function invokeAiChat(
   return invoke<AiChatReply>("ai_chat", { messages, sessionId, providerId: providerId ?? null, useMcp, locale, supportsArtifacts });
 }
 
+/**
+ * 純文字補全：不帶終端機助手的系統提示詞，由呼叫端指定系統提示詞。給「建議側欄」的各項功能用
+ * （產生建議、拆解里程碑、潤飾目標、提示詞助手）。借用 `ai_chat_ctx` 時，它的系統提示詞會叫模型
+ * 把指令包進 `<cmd>…</cmd>`，改寫出來的提示詞就被包住了。
+ */
+export function invokeAiComplete(
+  messages: ChatMessage[],
+  systemPrompt: string,
+  streamId: string,
+  providerId?: string,
+): Promise<AiChatReply> {
+  return invoke<AiChatReply>("ai_complete", { messages, systemPrompt, providerId: providerId ?? null, streamId });
+}
+
 export function invokeAiChatCtx(
   messages: ChatMessage[],
   ctx: RemoteCtx,

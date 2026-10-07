@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const invokeMock = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invokeMock(...a) }));
 
-import { aiChat, formatAiError, invokeAiChatCtx, type AiError } from "./ai";
+import { aiChat, formatAiError, invokeAiChatCtx, invokeAiComplete, type AiError } from "./ai";
 
 // ── shouldAutoExecute tests ───────────────────────────────────────────────────
 // Import the pure helper via a re-export shim below, or test via the module.
@@ -188,5 +188,24 @@ describe("aiChat", () => {
       "ai_chat",
       expect.objectContaining({ supportsArtifacts: true }),
     );
+  });
+});
+
+describe("invokeAiComplete", () => {
+  beforeEach(() => invokeMock.mockReset().mockResolvedValue({ content: "hi", tool_calls: [], tool_calling_unsupported: false }));
+
+  it("calls ai_complete with the caller's system prompt, stream id and provider id", async () => {
+    await invokeAiComplete([{ role: "user", content: "hi" }], "SYS", "stream-1", "prov-9");
+    expect(invokeMock).toHaveBeenCalledWith("ai_complete", {
+      messages: [{ role: "user", content: "hi" }],
+      systemPrompt: "SYS",
+      providerId: "prov-9",
+      streamId: "stream-1",
+    });
+  });
+
+  it("defaults providerId to null", async () => {
+    await invokeAiComplete([{ role: "user", content: "x" }], "SYS", "s");
+    expect(invokeMock.mock.calls[0][1].providerId).toBeNull();
   });
 });
