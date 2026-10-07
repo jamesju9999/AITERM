@@ -261,7 +261,8 @@ pub fn elevated_shell_spec(variant: super::cd_parser::ShellVariant) -> ShellSpec
 pub fn unix_default_shell() -> Option<ShellSpec> {
     if let Ok(shell) = std::env::var("SHELL") {
         if !shell.is_empty() {
-            return Some(inject_shell_integration(PathBuf::from(shell)));
+            let program = prefer_bash_over_sh(PathBuf::from(shell), std::path::Path::new("/bin/bash").exists());
+            return Some(inject_shell_integration(program));
         }
     }
     for candidate in ["/bin/zsh", "/bin/bash", "/bin/sh"] {
@@ -270,6 +271,19 @@ pub fn unix_default_shell() -> Option<ShellSpec> {
         }
     }
     None
+}
+
+/// `$SHELL` 是裸的 `sh`（QNAP 等 NAS 常見，實際上多半是 bash 3.2）時，
+/// `inject_shell_integration` 只認 zsh／bash，會整個跳過 OSC 133 注入——遠端 AI
+/// agent 因此永遠等不到指令完成訊號。有 `/bin/bash` 就改用它：bash 以 `bash`
+/// 之名啟動才不會進 POSIX 模式、才會吃 `--rcfile`。
+#[cfg(not(windows))]
+fn prefer_bash_over_sh(program: PathBuf, bash_exists: bool) -> PathBuf {
+    if bash_exists && program.file_name().is_some_and(|n| n == "sh") {
+        PathBuf::from("/bin/bash")
+    } else {
+        program
+    }
 }
 
 /// Setup OS-specific shell integration hooks for block reporting (OSC 133).
@@ -516,6 +530,15 @@ mod tests {
         // On CI/dev boxes we run this on, at least one of cmd.exe/bash/sh is available.
         let shell = default_shell();
         assert!(shell.is_some(), "expected a default shell on this platform");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn bare_sh_is_upgraded_to_bash_only_when_bash_exists() {
+        assert_eq!(prefer_bash_over_sh(PathBuf::from("/bin/sh"), true), PathBuf::from("/bin/bash"));
+        assert_eq!(prefer_bash_over_sh(PathBuf::from("/bin/sh"), false), PathBuf::from("/bin/sh"));
+        assert_eq!(prefer_bash_over_sh(PathBuf::from("/bin/zsh"), true), PathBuf::from("/bin/zsh"));
+        assert_eq!(prefer_bash_over_sh(PathBuf::from("/opt/bin/fish"), true), PathBuf::from("/opt/bin/fish"));
     }
 
     #[cfg(windows)]
