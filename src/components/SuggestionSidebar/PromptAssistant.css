@@ -1,0 +1,60 @@
+.aiterm-pa {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  font-size: 12px;
+}
+.aiterm-pa__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted, #9aa0b4);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.aiterm-pa__title:hover { color: var(--text-primary, #e6e8f0); }
+.aiterm-pa__title svg { color: var(--accent, #c084fc); }
+.aiterm-pa__chevron { margin-left: auto; font-size: 9px; transition: transform 0.15s ease; }
+.aiterm-pa__chevron--open { transform: rotate(90deg); }
+.aiterm-pa__body { display: flex; flex-direction: column; gap: 6px; padding: 0 14px 10px; }
+.aiterm-pa__hint { margin: 0; color: var(--text-muted, #9aa0b4); font-size: 11px; line-height: 1.5; }
+.aiterm-pa textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.18));
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.aiterm-pa textarea:focus { outline: none; border-color: var(--accent-border, rgba(192, 132, 252, 0.5)); }
+.aiterm-pa__result { display: flex; flex-direction: column; gap: 6px; }
+.aiterm-pa__result textarea { border-color: var(--accent-border, rgba(192, 132, 252, 0.5)); }
+.aiterm-pa__actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.aiterm-pa__actions button {
+  padding: 3px 12px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.18));
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-muted, #9aa0b4);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.aiterm-pa__actions button:hover:not(:disabled) { color: var(--text-primary, #e6e8f0); }
+.aiterm-pa__actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+.aiterm-pa__actions .aiterm-pa__run {
+  border-color: var(--accent-border, rgba(192, 132, 252, 0.5));
+  background: var(--accent-bg, rgba(192, 132, 252, 0.15));
+  color: var(--accent, #c084fc);
+}
+.aiterm-pa__error { color: var(--error, #f87171); font-size: 11.5px; }
+.aiterm-pa__redacted { color: var(--success, #34d399); font-size: 10.5px; opacity: 0.9; }

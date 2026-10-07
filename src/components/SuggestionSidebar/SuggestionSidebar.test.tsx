@@ -439,4 +439,44 @@ describe("SuggestionSidebar", () => {
       expect(await generate()).not.toContain(TOKEN);
     });
   });
+
+  describe("prompt assistant", () => {
+    const TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    const ms = {
+      forGoal: "目標",
+      items: [{ id: "a", text: "盤點 API", done: true }, { id: "b", text: "拆分登入模組", done: false }],
+    };
+    const run = async (need: string) => {
+      fireEvent.click(screen.getByRole("button", { name: /提示詞助手/ }));
+      fireEvent.change(screen.getByRole("textbox", { name: "你的需求" }), { target: { value: need } });
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "AI 改寫成提示詞" })); });
+      return invokeAiChatCtx.mock.calls[invokeAiChatCtx.mock.calls.length - 1][0][0].content as string;
+    };
+    const ok = { content: "改寫後", tool_calls: [], tool_calling_unsupported: false };
+
+    it("is available in the sidebar", () => {
+      setup();
+      expect(screen.getByRole("region", { name: "提示詞助手" })).toBeTruthy();
+    });
+
+    it("is given the goal and the focus milestone context", async () => {
+      invokeAiChatCtx.mockResolvedValue(ok);
+      setup({ goal: "網頁化專案", milestones: ms });
+      const content = await run("幫我拆分登入");
+      expect(content).toContain("網頁化專案");
+      expect(content).toContain("目前焦點里程碑：第 2 個「拆分登入模組」");
+    });
+
+    it("follows the redaction setting", async () => {
+      invokeAiChatCtx.mockResolvedValue(ok);
+      screenText = `export GITHUB_TOKEN=${TOKEN}`;
+      setup();
+      expect(await run("需求一")).not.toContain(TOKEN);
+      invokeAiChatCtx.mockClear();
+      fireEvent.click(screen.getByRole("button", { name: "自訂 AI 工具" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "送出前遮罩敏感資訊" }));
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "重新改寫" })); });
+      expect(invokeAiChatCtx.mock.calls[0][0][0].content).toContain(TOKEN);
+    });
+  });
 });

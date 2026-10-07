@@ -102,8 +102,11 @@ export function buildGoalPolishRequest(goal: string, languageDirective: string):
   ].join("\n");
 }
 
-/** 清理 AI 回的潤飾結果：拿掉 code fence 與整段外面包的引號，截到上限。空白回 ""。 */
-export function cleanPolishedGoal(raw: string | null | undefined): string {
+/**
+ * 清理 AI 回的純文字結果：拿掉 code fence 與整段外面包的引號，截到上限。空白回 ""。
+ * 多行內容原樣保留。
+ */
+export function cleanGeneratedText(raw: string | null | undefined, max: number): string {
   if (!raw) return "";
   let t = raw.trim();
   const fence = /^```[a-zA-Z]*\n([\s\S]*?)\n?```$/.exec(t);
@@ -115,5 +118,51 @@ export function cleanPolishedGoal(raw: string | null | undefined): string {
       break;
     }
   }
-  return t.slice(0, MAX_GOAL_CHARS);
+  return t.slice(0, max);
+}
+
+/** 清理 AI 回的目標潤飾結果。 */
+export function cleanPolishedGoal(raw: string | null | undefined): string {
+  return cleanGeneratedText(raw, MAX_GOAL_CHARS);
+}
+
+/** 提示詞助手：使用者的粗略需求上限（字元）。 */
+export const MAX_ASSIST_REQUEST_CHARS = 1000;
+/** 提示詞助手：改寫後提示詞的上限（字元）。 */
+export const MAX_ASSIST_PROMPT_CHARS = 2000;
+/** 提示詞助手：參考的終端機畫面只取尾端這麼多字元。 */
+export const MAX_ASSIST_SCREEN_CHARS = 4000;
+
+export interface PromptAssistInput {
+  request: string;
+  languageDirective: string;
+  goal?: string;
+  /** 已整理好的里程碑一節（formatMilestonesForPrompt）。 */
+  milestones?: string;
+  /** 已遮罩（若開啟）的終端機畫面；這裡只取尾端。 */
+  screen?: string;
+}
+
+/**
+ * 請 AI 把使用者的粗略需求改寫成一則可以直接貼給 AI 命令列工具的提示詞。
+ * 只改寫，不新增需求；資訊不足的地方用〈…〉標出待補，不要編造。
+ */
+export function buildPromptAssistRequest({ request, languageDirective, goal, milestones, screen }: PromptAssistInput): string {
+  const need = request.trim().slice(0, MAX_ASSIST_REQUEST_CHARS);
+  const g = goal?.trim().slice(0, MAX_GOAL_CHARS) ?? "";
+  const tail = screen && screen.length > MAX_ASSIST_SCREEN_CHARS ? screen.slice(-MAX_ASSIST_SCREEN_CHARS) : (screen ?? "");
+  return [
+    "你是提示詞助手。使用者正在對一個 AI 命令列工具（例如 Claude Code）下指令，這是他的粗略需求。",
+    "請把它改寫成一則清楚、具體、可以直接貼給該工具的提示詞：說明要做什麼、範圍與限制、期望的產出。",
+    "規則：保留原意；不要新增使用者沒要求的需求、技術或步驟；不要編造路徑、檔名或名稱——資訊不足的地方用〈…〉標出請使用者補；",
+    "不要加標題、前言或解釋；只回傳提示詞本身。",
+    languageDirective,
+    "",
+    ...(g ? [`使用者的大目標：${g}`] : []),
+    ...(milestones ? [milestones] : []),
+    ...(tail.trim() ? ["", "目前的終端機畫面（供判斷情境，不要照抄）：", "```", tail, "```"] : []),
+    "",
+    "使用者的粗略需求：",
+    need,
+  ].join("\n");
 }

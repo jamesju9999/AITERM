@@ -8,6 +8,7 @@ import { MAX_GOAL_CHARS, buildGoalPolishRequest, cleanPolishedGoal } from "../..
 import { SparklesIcon } from "../Icons";
 import { loadRedactEnabled, saveRedactEnabled } from "./redactSetting";
 import { MilestoneList } from "./MilestoneList";
+import { PromptAssistant } from "./PromptAssistant";
 import { PromptSuggestions } from "./PromptSuggestions";
 import { formatMilestonesForPrompt, resolveFocus, type MilestoneState } from "../../lib/milestones";
 import "./SuggestionSidebar.css";
@@ -262,6 +263,14 @@ export function SuggestionSidebar({
           {error && <div className="aiterm-sugg-sidebar__error" role="alert">{error}</div>}
         </section>
       )}
+
+      <PromptAssistant
+        sessionId={sessionId}
+        providerId={providerId}
+        goal={goal}
+        milestoneContext={milestoneContext}
+        redact={redact}
+      />
 
       <div className="aiterm-sugg-sidebar__body">
         <PromptSuggestions

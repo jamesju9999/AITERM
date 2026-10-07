@@ -28,9 +28,9 @@ AI 供應商。畫面裡可能有金鑰、token、密碼、私鑰、連線字串
 | 已知格式的 token | AWS `AKIA…`/`ASIA…`、GitHub `ghp_/gho_/ghu_/ghs_/ghr_/github_pat_`、Slack `xox[abprs]-`、Anthropic `sk-ant-`、OpenAI／類似 `sk-…`（≥20 字）、Google `AIza…`、npm `npm_…`、JWT（`eyJ…eyJ…簽章`） |
 | HTTP 認證 | `Authorization: Bearer|Basic|Token <值>`、單獨的 `Bearer <長字串>` |
 | 網址內嵌帳密 | `scheme://user:password@host` → 只遮 password |
-| 名稱含敏感字的賦值 | `password`／`passwd`／`pwd`／`secret`／`token`／`api_key`／`apikey`／`access_key`／`private_key`／`client_secret`／`auth` 等，後接 `=` 或 `:`（含 JSON 的 `"password": "…"`、`export X_TOKEN=…`），值長度 ≥ 6 才遮；`true`／`false`／`null`／`none`／空值、`<…>`／`${…}`／`$VAR`／`your_…`／`xxx…`／`****` 這類佔位不遮 |
+| 名稱含敏感字的賦值 | 名稱**以**這些字結尾：`password`／`passwd`／`pwd`／`secret`／`secret_key`／`token`／`api_key`／`access_key`／`private_key`／`client_secret`（`tokenizer`、`author` 這類不算；單獨的 `auth` 太容易誤判，不收），後接 `=` 或 `:`（含 JSON 的 `"password": "…"`、`export X_TOKEN=…`），值長度 ≥ 6 才遮；`true`／`false`／`null`／`none`／空值、`<…>`／`${…}`／`$VAR`／`your_…`／`xxx…`／`****` 這類佔位不遮 |
 
-遮罩後的文字保留名稱與型態，例如 `password=[已遮罩]`、`[已遮罩:github-token]`，AI 仍看得懂「這裡有一個密碼」。
+遮罩後的文字保留名稱，例如 `password=[已遮罩]`、`Authorization: Bearer [已遮罩]`，AI 仍看得懂「這裡有一個密碼」。遮罩標記本身不帶類型（類型只回傳給呼叫端，目前只用來計數）。
 
 ### 明確限制（要寫進回報）
 

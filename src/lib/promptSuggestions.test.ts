@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSuggestions, buildSuggestionRequest, buildGoalPolishRequest, cleanPolishedGoal, MAX_SUGGESTIONS, MAX_PROMPT_CHARS, MAX_GOAL_CHARS } from "./promptSuggestions";
+import { parseSuggestions, buildSuggestionRequest, buildGoalPolishRequest, cleanPolishedGoal, buildPromptAssistRequest, cleanGeneratedText, MAX_ASSIST_PROMPT_CHARS, MAX_ASSIST_REQUEST_CHARS, MAX_ASSIST_SCREEN_CHARS, MAX_SUGGESTIONS, MAX_PROMPT_CHARS, MAX_GOAL_CHARS } from "./promptSuggestions";
 
 describe("parseSuggestions", () => {
   it("parses a plain JSON array", () => {
@@ -161,5 +161,62 @@ describe("buildSuggestionRequest with milestones", () => {
     const base = buildSuggestionRequest("SCREEN", "LANG", "目標", "OLD");
     expect(buildSuggestionRequest("SCREEN", "LANG", "目標", "OLD", "")).toBe(base);
     expect(buildSuggestionRequest("SCREEN", "LANG", "目標", "OLD", undefined)).toBe(base);
+  });
+});
+
+describe("buildPromptAssistRequest", () => {
+  const base = { request: "幫我把登入改成 REST", languageDirective: "請使用繁體中文" };
+
+  it("carries the user's rough request and the language, and forbids inventing requirements", () => {
+    const msg = buildPromptAssistRequest(base);
+    expect(msg).toContain("幫我把登入改成 REST");
+    expect(msg).toContain("請使用繁體中文");
+    expect(msg).toContain("不要新增");
+    expect(msg).toContain("〈");
+  });
+
+  it("includes the goal, the milestone section and the screen only when given, in that order", () => {
+    const msg = buildPromptAssistRequest({ ...base, goal: "網頁化", milestones: "里程碑一節", screen: "SCREEN-TEXT" });
+    expect(msg).toContain("網頁化");
+    expect(msg).toContain("里程碑一節");
+    expect(msg).toContain("SCREEN-TEXT");
+    expect(msg.indexOf("網頁化")).toBeLessThan(msg.indexOf("里程碑一節"));
+    expect(msg.indexOf("里程碑一節")).toBeLessThan(msg.indexOf("SCREEN-TEXT"));
+    expect(msg.indexOf("SCREEN-TEXT")).toBeLessThan(msg.indexOf("幫我把登入改成 REST"));
+  });
+
+  it("leaves out the optional sections when empty", () => {
+    const msg = buildPromptAssistRequest({ ...base, goal: "  ", milestones: "", screen: "" });
+    expect(msg).not.toContain("大目標");
+    expect(msg).not.toContain("終端機畫面");
+  });
+
+  it("truncates an over-long request and keeps only the tail of a long screen", () => {
+    const msg = buildPromptAssistRequest({
+      ...base,
+      request: "需".repeat(MAX_ASSIST_REQUEST_CHARS + 50),
+      screen: "A".repeat(MAX_ASSIST_SCREEN_CHARS + 500) + "TAIL",
+    });
+    expect(msg).toContain("需".repeat(MAX_ASSIST_REQUEST_CHARS));
+    expect(msg).not.toContain("需".repeat(MAX_ASSIST_REQUEST_CHARS + 1));
+    expect(msg).toContain("TAIL");
+    expect(msg).not.toContain("A".repeat(MAX_ASSIST_SCREEN_CHARS + 1));
+  });
+});
+
+describe("cleanGeneratedText", () => {
+  it("strips fences and wrapping quotes, trims, and applies the given limit", () => {
+    expect(cleanGeneratedText("```\n請幫我重構\n```", 100)).toBe("請幫我重構");
+    expect(cleanGeneratedText("「請幫我重構」", 100)).toBe("請幫我重構");
+    expect(cleanGeneratedText("  abcdef  ", 3)).toBe("abc");
+    expect(cleanGeneratedText(null, 10)).toBe("");
+  });
+
+  it("keeps a multi-line prompt intact", () => {
+    expect(cleanGeneratedText("第一行\n第二行", 100)).toBe("第一行\n第二行");
+  });
+
+  it("the assistant limit is larger than the goal limit", () => {
+    expect(MAX_ASSIST_PROMPT_CHARS).toBeGreaterThan(MAX_GOAL_CHARS);
   });
 });
