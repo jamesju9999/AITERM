@@ -11,7 +11,6 @@ import {
 } from "../../lib/promptSuggestions";
 import { normalizeScreen } from "../../lib/screenHistory";
 import { fillTerminalInput, serializeTerminal, submitTerminalInput } from "../../lib/terminalInstanceRegistry";
-import { SparklesIcon } from "../Icons";
 import { describeError } from "./describeError";
 import "./PromptAssistant.css";
 
@@ -34,7 +33,6 @@ export interface PromptAssistantProps {
  */
 export function PromptAssistant({ sessionId, providerId, goal, milestoneContext, redact }: PromptAssistantProps) {
   const { t, locale } = useLocale();
-  const [open, setOpen] = useState(false);
   const [request, setRequest] = useState("");
   const [result, setResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -111,54 +109,47 @@ export function PromptAssistant({ sessionId, providerId, goal, milestoneContext,
   const blank = !(result ?? "").trim();
   return (
     <section className="aiterm-pa" aria-label={t.pa_title}>
-      <button type="button" className="aiterm-pa__title" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <SparklesIcon size={13} />
-        <span>{t.pa_title}</span>
-        <span className={`aiterm-pa__chevron${open ? " aiterm-pa__chevron--open" : ""}`} aria-hidden="true">▸</span>
-      </button>
-
-      {open && (
-        <div className="aiterm-pa__body">
-          <p className="aiterm-pa__hint">{t.pa_hint}</p>
+      {/* 結果在輸入列上方展開，像聊天軟體的輸入框：輸入列永遠在最下面、不用捲動就找得到。 */}
+      {result !== null && (
+        <div className="aiterm-pa__result">
           <textarea
-            aria-label={t.pa_request_label}
-            value={request}
-            onChange={(e) => setRequest(e.target.value)}
-            maxLength={MAX_ASSIST_REQUEST_CHARS}
-            rows={2}
-            placeholder={t.pa_request_placeholder}
+            aria-label={t.pa_result_label}
+            value={result}
+            onChange={(e) => setResult(e.target.value)}
+            maxLength={MAX_ASSIST_PROMPT_CHARS}
+            rows={6}
           />
           <div className="aiterm-pa__actions">
-            <button type="button" className="aiterm-pa__run" disabled={!request.trim() || busy} onClick={() => void run()}>
-              {busy ? t.pa_running : t.pa_run}
-            </button>
-            {(result !== null || request) && (
-              <button type="button" className="aiterm-pa__plain" onClick={clear}>{t.pa_clear}</button>
-            )}
+            <button type="button" className="aiterm-pa__run" disabled={blank} onClick={() => void fill(false)}>{t.pa_fill}</button>
+            <button type="button" className="aiterm-pa__plain" disabled={blank} onClick={() => void fill(true)}>{t.pa_fill_send}</button>
+            <button type="button" className="aiterm-pa__plain" disabled={busy || !request.trim()} onClick={() => void run()}>{t.pa_again}</button>
           </div>
-
-          {error && <div className="aiterm-pa__error" role="alert">{error}</div>}
-
-          {result !== null && (
-            <div className="aiterm-pa__result">
-              <textarea
-                aria-label={t.pa_result_label}
-                value={result}
-                onChange={(e) => setResult(e.target.value)}
-                maxLength={MAX_ASSIST_PROMPT_CHARS}
-                rows={6}
-              />
-              <div className="aiterm-pa__actions">
-                <button type="button" className="aiterm-pa__run" disabled={blank} onClick={() => void fill(false)}>{t.pa_fill}</button>
-                <button type="button" className="aiterm-pa__plain" disabled={blank} onClick={() => void fill(true)}>{t.pa_fill_send}</button>
-                <button type="button" className="aiterm-pa__plain" disabled={busy || !request.trim()} onClick={() => void run()}>{t.pa_again}</button>
-              </div>
-            </div>
-          )}
-
-          {redactedCount > 0 && <div className="aiterm-pa__redacted">{t.suggest_redacted(redactedCount)}</div>}
         </div>
       )}
+
+      {error && <div className="aiterm-pa__error" role="alert">{error}</div>}
+      {redactedCount > 0 && <div className="aiterm-pa__redacted">{t.suggest_redacted(redactedCount)}</div>}
+
+      <div className="aiterm-pa__composer">
+        <textarea
+          aria-label={t.pa_request_label}
+          value={request}
+          onChange={(e) => setRequest(e.target.value)}
+          maxLength={MAX_ASSIST_REQUEST_CHARS}
+          rows={2}
+          placeholder={t.pa_request_placeholder}
+          title={t.pa_hint}
+        />
+        <div className="aiterm-pa__actions">
+          <button type="button" className="aiterm-pa__run" disabled={!request.trim() || busy} onClick={() => void run()}>
+            {busy ? t.pa_running : t.pa_run}
+          </button>
+          {(result !== null || request) && (
+            <button type="button" className="aiterm-pa__plain" onClick={clear}>{t.pa_clear}</button>
+          )}
+        </div>
+        {result === null && <p className="aiterm-pa__hint">{t.pa_hint}</p>}
+      </div>
     </section>
   );
 }

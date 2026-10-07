@@ -447,7 +447,6 @@ describe("SuggestionSidebar", () => {
       items: [{ id: "a", text: "盤點 API", done: true }, { id: "b", text: "拆分登入模組", done: false }],
     };
     const run = async (need: string) => {
-      fireEvent.click(screen.getByRole("button", { name: /提示詞助手/ }));
       fireEvent.change(screen.getByRole("textbox", { name: "你的需求" }), { target: { value: need } });
       await act(async () => { fireEvent.click(screen.getByRole("button", { name: "AI 改寫成提示詞" })); });
       return invokeAiChatCtx.mock.calls[invokeAiChatCtx.mock.calls.length - 1][0][0].content as string;
@@ -477,6 +476,85 @@ describe("SuggestionSidebar", () => {
       fireEvent.click(screen.getByRole("checkbox", { name: "送出前遮罩敏感資訊" }));
       await act(async () => { fireEvent.click(screen.getByRole("button", { name: "重新改寫" })); });
       expect(invokeAiChatCtx.mock.calls[0][0][0].content).toContain(TOKEN);
+    });
+  });
+
+  describe("layout: context on top, suggestions in the middle, assistant pinned at the bottom", () => {
+    const ms = {
+      forGoal: "目標",
+      items: [
+        { id: "a", text: "盤點 API", done: true },
+        { id: "b", text: "拆分登入模組", done: false },
+      ],
+    };
+    const bar = () => screen.getByRole("button", { name: /^(目標：|尚未設定大目標|里程碑 )/ });
+    const position = (a: Element, b: Element) => a.compareDocumentPosition(b);
+
+    it("stacks header, context, suggestions and assistant in that order", () => {
+      const { container } = setup({ goal: "目標", milestones: ms });
+      const head = container.querySelector(".aiterm-sugg-sidebar__head")!;
+      const ctx = container.querySelector(".aiterm-sugg-ctx")!;
+      const body = container.querySelector(".aiterm-sugg-sidebar__body")!;
+      const assistant = container.querySelector(".aiterm-pa")!;
+      expect(position(head, ctx) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(position(ctx, body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(position(body, assistant) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(assistant.parentElement).toBe(body.parentElement); // 助手是側欄的直接子元素，不在會捲動的建議區裡
+    });
+
+    it("summarises the goal and the milestone progress on two lines", () => {
+      setup({ goal: "把舊系統轉成網頁版", milestones: ms });
+      expect(screen.getByText("目標：把舊系統轉成網頁版")).toBeTruthy();
+      expect(screen.getByText("里程碑 1/2 · 焦點：拆分登入模組")).toBeTruthy();
+    });
+
+    it("says so when there is no goal, and when every milestone is done", () => {
+      const a = setup({ goal: "" });
+      expect(screen.getByText("尚未設定大目標，點開設定")).toBeTruthy();
+      a.unmount();
+      setup({ goal: "目標", milestones: { forGoal: "目標", items: ms.items.map((i) => ({ ...i, done: true })) } });
+      expect(screen.getByText("里程碑 2/2 · 全部完成")).toBeTruthy();
+    });
+
+    it("is expanded by default, collapses on click, and remembers the choice", () => {
+      const first = setup({ goal: "目標", milestones: ms });
+      expect(bar().getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByRole("checkbox", { name: "完成：盤點 API" })).toBeTruthy();
+      fireEvent.click(bar());
+      expect(bar().getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByRole("checkbox", { name: "完成：盤點 API" })).toBeNull(); // 收起後看不到也點不到
+      expect(localStorage.getItem("aiterm-suggest-ctx-open")).toBe("false");
+      first.unmount();
+      setup({ goal: "目標", milestones: ms });
+      expect(bar().getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("keeps what is being typed in the milestone editor when the context is collapsed and opened again", () => {
+      setup({ goal: "目標", milestones: ms });
+      fireEvent.click(screen.getByRole("button", { name: "＋ 新增" }));
+      fireEvent.change(screen.getByRole("textbox", { name: "里程碑文字" }), { target: { value: "寫到一半的里程碑" } });
+      fireEvent.click(bar());
+      fireEvent.click(bar());
+      expect((screen.getByRole("textbox", { name: "里程碑文字" }) as HTMLInputElement).value).toBe("寫到一半的里程碑");
+    });
+
+    it("does not cancel a running AI plan just because the context was collapsed", async () => {
+      let resolveIt!: (v: unknown) => void;
+      invokeAiChatCtx.mockImplementation(() => new Promise((r) => { resolveIt = r; }));
+      setup({ goal: "目標", milestones: ms });
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "AI 拆解" })); });
+      fireEvent.click(bar());
+      expect(abortAi).not.toHaveBeenCalled();
+      await act(async () => { resolveIt({ content: '["新的一項"]', tool_calls: [], tool_calling_unsupported: false }); });
+      fireEvent.click(bar());
+      expect(screen.getByRole("region", { name: "AI 提議的里程碑" })).toBeTruthy();
+    });
+
+    it("the summary stays visible while the details are collapsed", () => {
+      setup({ goal: "目標", milestones: ms });
+      fireEvent.click(bar());
+      expect(screen.getByText("目標：目標")).toBeTruthy();
+      expect(screen.getByText("里程碑 1/2 · 焦點：拆分登入模組")).toBeTruthy();
     });
   });
 });

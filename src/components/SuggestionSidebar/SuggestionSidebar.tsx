@@ -7,6 +7,15 @@ import { BUILTIN_AI_CLI_NAMES, normalizeCliName } from "../../lib/aiCliCommand";
 import { MAX_GOAL_CHARS, buildGoalPolishRequest, cleanPolishedGoal } from "../../lib/promptSuggestions";
 import { SparklesIcon } from "../Icons";
 import { loadRedactEnabled, saveRedactEnabled } from "./redactSetting";
+
+const CTX_OPEN_KEY = "aiterm-suggest-ctx-open";
+/** 脈絡區（目標與里程碑）預設展開；使用者收起就記住。 */
+function loadCtxOpen(): boolean {
+  try { return localStorage.getItem(CTX_OPEN_KEY) !== "false"; } catch { return true; }
+}
+function saveCtxOpen(open: boolean): void {
+  try { localStorage.setItem(CTX_OPEN_KEY, String(open)); } catch { /* ignore */ }
+}
 import { MilestoneList } from "./MilestoneList";
 import { PromptAssistant } from "./PromptAssistant";
 import { PromptSuggestions } from "./PromptSuggestions";
@@ -40,6 +49,8 @@ export function SuggestionSidebar({
   const { t, locale } = useLocale();
   const [menuOpen, setMenuOpen] = useState(false);
   const [redact, setRedact] = useState(loadRedactEnabled);
+  const [ctxOpen, setCtxOpen] = useState(loadCtxOpen);
+  const toggleCtx = () => { const next = !ctxOpen; setCtxOpen(next); saveCtxOpen(next); };
   const toggleRedact = () => { const next = !redact; setRedact(next); saveRedactEnabled(next); };
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -151,71 +162,6 @@ export function SuggestionSidebar({
         </div>
       </header>
 
-      <section className="aiterm-sugg-goal">
-        {editingGoal ? (
-          <form onSubmit={saveGoal} className="aiterm-sugg-goal__form">
-            <textarea
-              aria-label={t.sugg_goal_label}
-              value={goalDraft}
-              onChange={(e) => { setGoalDraft(e.target.value); setUndoText(null); }}
-              maxLength={MAX_GOAL_CHARS}
-              rows={3}
-              placeholder={t.sugg_goal_placeholder}
-              autoFocus
-            />
-            <div className="aiterm-sugg-goal__polish">
-              <button
-                type="button"
-                className="aiterm-sugg-goal__polish-btn"
-                disabled={!goalDraft.trim() || polishing}
-                title={t.sugg_goal_polish_title}
-                onClick={() => void polishGoal()}
-              >
-                <SparklesIcon size={12} />
-                <span>{polishing ? t.sugg_goal_polishing : t.sugg_goal_polish}</span>
-              </button>
-              {undoText !== null && !polishing && (
-                <button type="button" className="aiterm-sugg-goal__undo" onClick={() => { setGoalDraft(undoText); setUndoText(null); }}>
-                  {t.sugg_goal_undo}
-                </button>
-              )}
-            </div>
-            {polishError && <div className="aiterm-sugg-sidebar__error" role="alert">{polishError}</div>}
-            <span className="aiterm-sugg-goal__hint">{t.sugg_goal_hint}</span>
-            <div className="aiterm-sugg-goal__actions">
-              <button type="submit" className="aiterm-sugg-goal__save">{t.sugg_goal_save}</button>
-              <button type="button" onClick={closeGoalEditor}>{t.sugg_goal_cancel}</button>
-              {goal && <button type="button" className="aiterm-sugg-goal__clear" onClick={clearGoal}>{t.sugg_goal_clear}</button>}
-            </div>
-          </form>
-        ) : goal ? (
-          <div className="aiterm-sugg-goal__view">
-            <span className="aiterm-sugg-goal__label">{t.sugg_goal_label}</span>
-            <p className="aiterm-sugg-goal__text">{goal}</p>
-            <button type="button" className="aiterm-sugg-sidebar__icon" aria-label={t.sugg_goal_edit} title={t.sugg_goal_edit} onClick={startEditGoal}>✎</button>
-          </div>
-        ) : (
-          <button type="button" className="aiterm-sugg-goal__set" onClick={startEditGoal}>
-            <span aria-hidden="true">＋</span>
-            <span>{t.sugg_goal_set}</span>
-          </button>
-        )}
-      </section>
-
-      {(goal.trim() || milestones) && (
-        <MilestoneList
-          sessionId={sessionId}
-          providerId={providerId}
-          goal={goal}
-          state={milestones}
-          onChange={onMilestonesChange}
-          getHistory={getHistory}
-          focusId={focusId}
-          onFocus={setChosenFocusId}
-          redact={redact}
-        />
-      )}
-
       {menuOpen && (
         <section className="aiterm-sugg-sidebar__menu" aria-label={t.sugg_custom_title}>
           <p className="aiterm-sugg-sidebar__help">{t.sugg_custom_help}</p>
@@ -264,13 +210,93 @@ export function SuggestionSidebar({
         </section>
       )}
 
-      <PromptAssistant
-        sessionId={sessionId}
-        providerId={providerId}
-        goal={goal}
-        milestoneContext={milestoneContext}
-        redact={redact}
-      />
+      <div className="aiterm-sugg-ctx">
+        <button
+          type="button"
+          className="aiterm-sugg-ctx__bar"
+          aria-expanded={ctxOpen}
+          onClick={toggleCtx}
+        >
+          <span className={`aiterm-sugg-ctx__chevron${ctxOpen ? " aiterm-sugg-ctx__chevron--open" : ""}`} aria-hidden="true">▸</span>
+          <span className="aiterm-sugg-ctx__lines">
+            <span className="aiterm-sugg-ctx__line">{goal.trim() ? t.sugg_ctx_goal(goal.trim()) : t.sugg_ctx_none}</span>
+            {milestoneItems.length > 0 && (
+              <span className="aiterm-sugg-ctx__line aiterm-sugg-ctx__line--ms">
+                {focusText === null
+                  ? t.sugg_ctx_ms_done(milestoneItems.filter((i) => i.done).length, milestoneItems.length)
+                  : t.sugg_ctx_ms(milestoneItems.filter((i) => i.done).length, milestoneItems.length, focusText)}
+              </span>
+            )}
+          </span>
+        </button>
+        {/* 收起時只是藏起來、不卸載：寫到一半的目標、進行中的 AI 拆解都不會因為收合而丟掉。 */}
+        <div className="aiterm-sugg-ctx__panel" hidden={!ctxOpen}>
+        <section className="aiterm-sugg-goal">
+          {editingGoal ? (
+            <form onSubmit={saveGoal} className="aiterm-sugg-goal__form">
+              <textarea
+                aria-label={t.sugg_goal_label}
+                value={goalDraft}
+                onChange={(e) => { setGoalDraft(e.target.value); setUndoText(null); }}
+                maxLength={MAX_GOAL_CHARS}
+                rows={3}
+                placeholder={t.sugg_goal_placeholder}
+                autoFocus
+              />
+              <div className="aiterm-sugg-goal__polish">
+                <button
+                  type="button"
+                  className="aiterm-sugg-goal__polish-btn"
+                  disabled={!goalDraft.trim() || polishing}
+                  title={t.sugg_goal_polish_title}
+                  onClick={() => void polishGoal()}
+                >
+                  <SparklesIcon size={12} />
+                  <span>{polishing ? t.sugg_goal_polishing : t.sugg_goal_polish}</span>
+                </button>
+                {undoText !== null && !polishing && (
+                  <button type="button" className="aiterm-sugg-goal__undo" onClick={() => { setGoalDraft(undoText); setUndoText(null); }}>
+                    {t.sugg_goal_undo}
+                  </button>
+                )}
+              </div>
+              {polishError && <div className="aiterm-sugg-sidebar__error" role="alert">{polishError}</div>}
+              <span className="aiterm-sugg-goal__hint">{t.sugg_goal_hint}</span>
+              <div className="aiterm-sugg-goal__actions">
+                <button type="submit" className="aiterm-sugg-goal__save">{t.sugg_goal_save}</button>
+                <button type="button" onClick={closeGoalEditor}>{t.sugg_goal_cancel}</button>
+                {goal && <button type="button" className="aiterm-sugg-goal__clear" onClick={clearGoal}>{t.sugg_goal_clear}</button>}
+              </div>
+            </form>
+          ) : goal ? (
+            <div className="aiterm-sugg-goal__view">
+              <span className="aiterm-sugg-goal__label">{t.sugg_goal_label}</span>
+              <p className="aiterm-sugg-goal__text">{goal}</p>
+              <button type="button" className="aiterm-sugg-sidebar__icon" aria-label={t.sugg_goal_edit} title={t.sugg_goal_edit} onClick={startEditGoal}>✎</button>
+            </div>
+          ) : (
+            <button type="button" className="aiterm-sugg-goal__set" onClick={startEditGoal}>
+              <span aria-hidden="true">＋</span>
+              <span>{t.sugg_goal_set}</span>
+            </button>
+          )}
+        </section>
+
+        {(goal.trim() || milestones) && (
+          <MilestoneList
+            sessionId={sessionId}
+            providerId={providerId}
+            goal={goal}
+            state={milestones}
+            onChange={onMilestonesChange}
+            getHistory={getHistory}
+            focusId={focusId}
+            onFocus={setChosenFocusId}
+            redact={redact}
+          />
+        )}
+        </div>
+      </div>
 
       <div className="aiterm-sugg-sidebar__body">
         <PromptSuggestions
@@ -288,6 +314,14 @@ export function SuggestionSidebar({
           allMilestonesDone={allDone}
         />
       </div>
+
+      <PromptAssistant
+        sessionId={sessionId}
+        providerId={providerId}
+        goal={goal}
+        milestoneContext={milestoneContext}
+        redact={redact}
+      />
     </aside>
   );
 }

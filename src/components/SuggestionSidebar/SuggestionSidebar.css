@@ -1,6 +1,10 @@
+/* 版面：上＝標題與脈絡（目標、里程碑），中＝建議（自己捲動），下＝提示詞助手（固定）。
+   側欄太矮放不下時，整個側欄可以捲動，助手用 sticky 留在可視範圍的底部。 */
 .aiterm-sugg-sidebar {
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
   display: flex;
   flex-direction: column;
   color: var(--text-primary, #e6e8f0);
@@ -60,7 +64,8 @@
   color: var(--text-primary, #e6e8f0);
 }
 
-.aiterm-sugg-sidebar__body { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+/* 建議區：吃掉剩下的高度、自己捲動，但至少留 140px，不會被脈絡區與助手擠到看不見。 */
+.aiterm-sugg-sidebar__body { flex: 1 1 140px; min-height: 140px; overflow-y: auto; scrollbar-width: thin; }
 /* 側欄有自己的標題列：建議區塊不再需要頂邊線，清單也不必限制在 240px 內。 */
 .aiterm-sugg-sidebar__body .aiterm-suggest { border-top: 0; }
 .aiterm-sugg-sidebar__body .aiterm-suggest__list { max-height: none; overflow: visible; }
@@ -226,3 +231,34 @@
 
 .aiterm-sugg-sidebar__redact { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
 .aiterm-sugg-sidebar__redact input { accent-color: var(--accent, #c084fc); }
+
+/* ── 脈絡區：兩行摘要，點開才展開編輯 ───────────────────── */
+.aiterm-sugg-ctx { flex-shrink: 0; border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08)); }
+.aiterm-sugg-ctx__bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted, #9aa0b4);
+  text-align: left;
+  cursor: pointer;
+}
+.aiterm-sugg-ctx__bar:hover { color: var(--text-primary, #e6e8f0); background: rgba(127, 127, 127, 0.05); }
+.aiterm-sugg-ctx__chevron { margin-top: 3px; flex-shrink: 0; font-size: 9px; transition: transform 0.15s ease; }
+.aiterm-sugg-ctx__chevron--open { transform: rotate(90deg); }
+.aiterm-sugg-ctx__lines { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.aiterm-sugg-ctx__line {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.aiterm-sugg-ctx__line--ms { color: var(--accent, #c084fc); }
+/* 展開後的內容最多佔側欄一半高，超過就在區內捲動，不會把建議擠掉。 */
+.aiterm-sugg-ctx__panel { max-height: 50vh; overflow-y: auto; scrollbar-width: thin; }
+.aiterm-sugg-ctx__panel[hidden] { display: none; }

@@ -1,27 +1,19 @@
+/* 固定在側欄最下面的輸入列：側欄內容太長需要捲動時，它也留在可視範圍內。 */
 .aiterm-pa {
+  position: sticky;
+  bottom: 0;
   flex-shrink: 0;
-  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 60%;
+  overflow-y: auto;
+  padding: 8px 14px 10px;
+  border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  background: var(--bg-glass-solid, var(--bg, #16171d));
   font-size: 12px;
 }
-.aiterm-pa__title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 8px 14px;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted, #9aa0b4);
-  font-size: 11.5px;
-  font-weight: 600;
-  text-align: left;
-  cursor: pointer;
-}
-.aiterm-pa__title:hover { color: var(--text-primary, #e6e8f0); }
-.aiterm-pa__title svg { color: var(--accent, #c084fc); }
-.aiterm-pa__chevron { margin-left: auto; font-size: 9px; transition: transform 0.15s ease; }
-.aiterm-pa__chevron--open { transform: rotate(90deg); }
-.aiterm-pa__body { display: flex; flex-direction: column; gap: 6px; padding: 0 14px 10px; }
+.aiterm-pa__composer { display: flex; flex-direction: column; gap: 6px; }
 .aiterm-pa__hint { margin: 0; color: var(--text-muted, #9aa0b4); font-size: 11px; line-height: 1.5; }
 .aiterm-pa textarea {
   width: 100%;
