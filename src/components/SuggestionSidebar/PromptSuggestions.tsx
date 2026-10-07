@@ -255,7 +255,14 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
             </div>
           )}
 
-          {hint && <div className="aiterm-suggest__hint">{hint}</div>}
+          {/* 狀態列永遠渲染、高度固定：訊息出現或消失只換裡面的字，下面的卡片不會跟著上下跳。 */}
+          <div
+            className={`aiterm-suggest__status${hint && terminalBusy && status !== "loading" ? " aiterm-suggest__status--busy" : ""}`}
+            aria-live="polite"
+            style={{ minHeight: 16 }}
+          >
+            {hint}
+          </div>
 
           {status === "error" && (
             <div className="aiterm-suggest__error" role="alert">

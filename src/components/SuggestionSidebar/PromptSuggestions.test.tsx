@@ -343,6 +343,50 @@ describe("PromptSuggestions", () => {
     });
   });
 
+  describe("status line does not shift the layout", () => {
+    const statusSlot = (c: HTMLElement) => c.querySelector(".aiterm-suggest__status") as HTMLElement | null;
+    const cardsList = (c: HTMLElement) => c.querySelector(".aiterm-suggest__list") as HTMLElement;
+
+    it("always renders the same status slot, so showing or hiding the busy message never moves the cards", async () => {
+      invokeAiChatCtx.mockResolvedValue(reply(A));
+      const idle = { v: 60_000 };
+      const { container } = setup({ getIdleMs: () => idle.v });
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      const slot = statusSlot(container)!;
+      expect(slot).not.toBeNull();
+      expect(slot.textContent).toBe("");
+      const body = slot.parentElement!;
+      const slotIndex = Array.from(body.children).indexOf(slot);
+      const listIndex = Array.from(body.children).indexOf(cardsList(container));
+
+      idle.v = 100; await advance(1000); // 終端機忙碌
+      expect(screen.getByText("終端機執行中，閒置後再產生")).toBeTruthy();
+      expect(statusSlot(container)).toBe(slot); // 同一個元素，不是重新長出來的
+      expect(slot.textContent).toContain("終端機執行中");
+      expect(Array.from(body.children).indexOf(slot)).toBe(slotIndex);
+      expect(Array.from(body.children).indexOf(cardsList(container))).toBe(listIndex);
+
+      idle.v = 60_000; await advance(1000); // 回到閒置
+      expect(statusSlot(container)).toBe(slot);
+      expect(slot.textContent).toBe("");
+      expect(Array.from(body.children).indexOf(cardsList(container))).toBe(listIndex);
+    });
+
+    it("keeps the other messages (empty screen, no usable result) in the same slot", async () => {
+      screenText = "  \n ";
+      const { container } = setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(statusSlot(container)!.textContent).toContain("終端機沒有可讀的內容");
+    });
+
+    it("reserves a fixed height for the slot even when it is empty", () => {
+      const { container } = setup();
+      expect(statusSlot(container)!.style.minHeight).toBe("16px");
+    });
+  });
+
   it("is disabled while Ask AI is streaming or an agent runs", async () => {
     setup({ disabled: true });
     const btn = screen.getByText("產生建議").closest("button")!;

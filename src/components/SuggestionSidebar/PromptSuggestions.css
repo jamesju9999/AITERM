@@ -132,10 +132,32 @@
 .aiterm-suggest__primary:hover:not(:disabled) { background: var(--accent-border, rgba(192, 132, 252, 0.3)); }
 .aiterm-suggest__primary:disabled { opacity: 0.45; cursor: not-allowed; }
 
-.aiterm-suggest__hint {
-  padding: 2px 2px;
+/* 固定高度的狀態列：有訊息沒訊息都佔同樣的位置，卡片不會因為「終端機執行中」忽有忽無而上下跳。 */
+.aiterm-suggest__status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 16px;
+  padding: 0 2px;
   color: var(--text-muted, #9aa0b4);
   font-size: 11.5px;
+  line-height: 16px;
+}
+.aiterm-suggest__status--busy::before {
+  content: "";
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent, #c084fc);
+  animation: aiterm-suggest-pulse 1.2s ease-in-out infinite;
+}
+@keyframes aiterm-suggest-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aiterm-suggest__status--busy::before { animation: none; }
 }
 
 /* 載入中：用閃爍的佔位卡代替一行字，版面高度也不會在結果出來時跳動。 */
