@@ -84,3 +84,20 @@ describe("TerminalBlockCard", () => {
     });
   });
 });
+
+describe("Bookmark 按鈕的就地回饋", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("按下後呼叫 onBookmark、按鈕短暫顯示「已加入書籤」，之後恢復", () => {
+    const onBookmark = vi.fn();
+    render(<TerminalBlockCard block={makeBlock()} onBookmark={onBookmark} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Bookmark" }));
+    expect(onBookmark).toHaveBeenCalledWith("echo hi");
+    expect(screen.getByRole("button", { name: /已加入書籤/ })).toBeInTheDocument();
+
+    act(() => { vi.advanceTimersByTime(1600); });
+    expect(screen.getByRole("button", { name: "Bookmark" })).toBeInTheDocument();
+  });
+});

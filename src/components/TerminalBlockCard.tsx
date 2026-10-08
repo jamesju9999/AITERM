@@ -1,6 +1,10 @@
 import { memo, useEffect, useState } from "react";
 import type { TerminalBlock } from "../hooks/useTerminalBlocks";
+import { useLocale } from "../contexts/LocaleContext";
 import "./TerminalBlockCard.css";
+
+/** 「已加入書籤」就地回饋顯示多久。夠看清楚、又不會久到擋住再次操作。 */
+const BOOKMARKED_FLASH_MS = 1500;
 
 const MAX_VISIBLE_LINES = 500;
 
@@ -41,8 +45,17 @@ function highlightText(text: string, query?: string): React.ReactNode {
 }
 
 function TerminalBlockCardImpl({ block, highlightQuery, onAskAi, onBookmark, onCopy }: TerminalBlockCardProps) {
+  const { t } = useLocale();
   const [collapsed, setCollapsed] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  // 書籤按鈕就地回饋：按鈕文字短暫變成「✓ 已加入書籤」，不彈窗、不佔版面、
+  // 不擋任何操作。
+  const [bookmarked, setBookmarked] = useState(false);
+  useEffect(() => {
+    if (!bookmarked) return;
+    const id = setTimeout(() => setBookmarked(false), BOOKMARKED_FLASH_MS);
+    return () => clearTimeout(id);
+  }, [bookmarked]);
   // running 中的卡片跟 Warp 一樣顯示持續跳動的耗時（見設計文件
   // 2026-09-16-live-block-rendering-design.md）——running 中沒有
   // `endTime`，靠這個 tick 強制重新渲染讓 `formatDuration(Date.now() -
@@ -96,8 +109,12 @@ function TerminalBlockCardImpl({ block, highlightQuery, onAskAi, onBookmark, onC
             </button>
           )}
           {onBookmark && (
-            <button className="aiterm-block-btn aiterm-btn aiterm-btn--secondary" onClick={() => onBookmark(block.command)}>
-              Bookmark
+            <button
+              className={`aiterm-block-btn aiterm-btn aiterm-btn--secondary aiterm-block-btn--bookmark${bookmarked ? " is-done" : ""}`}
+              onClick={() => { onBookmark(block.command); setBookmarked(true); }}
+              aria-live="polite"
+            >
+              {bookmarked ? t.block_bookmarked : "Bookmark"}
             </button>
           )}
           {onCopy && (

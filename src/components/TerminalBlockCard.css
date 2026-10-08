@@ -68,3 +68,8 @@
   background-color: #ffff00;
   color: #000;
 }
+
+/* 書籤按鈕的就地回饋：文字會在 "Bookmark" 與 "✓ 已加入書籤" 之間切換，固定
+   最小寬度避免按鈕寬度跳動、把旁邊的 Copy 擠來擠去。 */
+.aiterm-block-btn--bookmark { min-width: 6.5em; transition: color 0.15s ease; }
+.aiterm-block-btn--bookmark.is-done { color: var(--aiterm-accent, #34d399); }
