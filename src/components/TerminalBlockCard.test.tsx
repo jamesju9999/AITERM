@@ -130,3 +130,38 @@ describe("書籤去重與複製回饋", () => {
     expect(screen.getByRole("button", { name: "複製失敗" })).toBeInTheDocument();
   });
 });
+
+describe("結束碼未知的卡片（沒有 OSC 133 的 shell）", () => {
+  it("exit -1 哨兵值不顯示成紅色失敗，也沒有 Ask AI", () => {
+    render(<TerminalBlockCard block={makeBlock({ status: "failed", exitCode: -1 })} onAskAi={() => {}} />);
+    expect(screen.queryByText(/exit -1/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Ask AI/)).not.toBeInTheDocument();
+  });
+
+  it("真正的失敗（exit 2）仍然是紅色並顯示 exit 2", () => {
+    render(<TerminalBlockCard block={makeBlock({ status: "failed", exitCode: 2 })} onAskAi={() => {}} />);
+    expect(screen.getByText("exit 2")).toBeInTheDocument();
+  });
+
+  it("結束碼未知時，剝掉第一列重複的指令回顯", () => {
+    const block = makeBlock({
+      command: "ls",
+      exitUnknown: true,
+      exitCode: undefined,
+      renderedLines: [{ spans: [{ text: "ls" }] }, { spans: [{ text: "@Recycle@" }] }],
+    });
+    render(<TerminalBlockCard block={block} />);
+    expect(screen.getAllByText("ls")).toHaveLength(1); // 只剩指令列
+    expect(screen.getByText("@Recycle@")).toBeInTheDocument();
+  });
+
+  it("有真實結束碼時不剝（輸出剛好等於指令文字是合法內容）", () => {
+    const block = makeBlock({
+      command: "echo ls",
+      exitCode: 0,
+      renderedLines: [{ spans: [{ text: "echo ls" }] }],
+    });
+    render(<TerminalBlockCard block={block} />);
+    expect(screen.getAllByText("echo ls")).toHaveLength(2);
+  });
+});

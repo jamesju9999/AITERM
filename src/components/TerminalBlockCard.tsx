@@ -46,6 +46,10 @@ function highlightText(text: string, query?: string): React.ReactNode {
   );
 }
 
+function lineText(line: { spans: { text: string }[] }): string {
+  return line.spans.map((s) => s.text).join("");
+}
+
 function TerminalBlockCardImpl({ block, highlightQuery, onAskAi, onBookmark, onCopy }: TerminalBlockCardProps) {
   const { t } = useLocale();
   const [collapsed, setCollapsed] = useState(false);
@@ -81,7 +85,17 @@ function TerminalBlockCardImpl({ block, highlightQuery, onAskAi, onBookmark, onC
     return () => clearInterval(interval);
   }, [block.status]);
 
-  const lines = block.renderedLines ?? [];
+  // 沒有 OSC 133 的 shell（舊版 host、ssh 進 NAS）沒有真的結束碼：靠畫面判斷結案
+  // （exitUnknown），或下一個指令送出時被強制結案（exitCode -1 這個哨兵值）。
+  // 這兩種都不是「指令失敗」，不能顯示成紅色 exit -1。
+  const exitIsUnknown = block.exitUnknown === true || block.exitCode === -1;
+  const allLines = block.renderedLines ?? [];
+  // 同一批沒有 C 標記的 shell 也不會讓輸出起點跳過回顯，卡片第一列會是指令自己
+  // 又印一次——跟上面的指令列重複。只在結束碼未知時剝掉，有 OSC 133 的卡片不動。
+  const lines =
+    exitIsUnknown && allLines.length > 0 && lineText(allLines[0]).trim() === block.command.trim()
+      ? allLines.slice(1)
+      : allLines;
   const isTruncated = !expanded && lines.length > MAX_VISIBLE_LINES;
   const visibleLines = isTruncated ? lines.slice(0, MAX_VISIBLE_LINES) : lines;
   const hiddenCount = lines.length - MAX_VISIBLE_LINES;
@@ -95,7 +109,7 @@ function TerminalBlockCardImpl({ block, highlightQuery, onAskAi, onBookmark, onC
   // block has `exitCode === undefined`, and `undefined !== 0` is true, which would
   // otherwise mislabel in-flight blocks as failed (red styling, "exit undefined"
   // text, and a premature "Ask AI" button).
-  const isFailed = block.status === "failed";
+  const isFailed = block.status === "failed" && !exitIsUnknown;
   const exitClass = isFailed ? "aiterm-block-exit-fail" : "aiterm-block-exit-ok";
 
   return (

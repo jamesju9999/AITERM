@@ -258,10 +258,10 @@ export function useTerminalBlocks(
     [term],
   );
 
-  // 沒有 OSC 133 時的後備結案（見 promptDetect.ts）。只對「有人在等完成」的區塊
-  // （agent 迴圈登記了 onComplete）啟用——一般手動指令沒人等，不需要冒誤判的
-  // 風險。有 OSC 133 的 shell 一定先送 D，finalizeBlock 對非 running 區塊是
-  // no-op，所以不會干擾正常路徑。
+  // 沒有 OSC 133 時的後備結案（見 promptDetect.ts）。對所有 running 區塊啟用：
+  // 手動指令在沒有 OSC 133 的 shell 裡同樣收不到結束訊號，卡片會一直轉到下一個
+  // 指令送出才被強制結案成 exit -1。有 OSC 133 的 shell 一定先送 D，finalizeBlock
+  // 對非 running 區塊是 no-op，所以不會干擾正常路徑。
   const quietTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const finalizeBlockRef = useRef<(id: string, code: number, opts?: { exitUnknown?: boolean }) => void>(() => {});
 
@@ -269,7 +269,6 @@ export function useTerminalBlocks(
     quietTimerRef.current = null;
     const latest = blocksRef.current[blocksRef.current.length - 1];
     if (!latest || latest.status !== "running") return;
-    if (!completionCallbacksRef.current.has(latest.id)) return;
     if (term?.buffer.active.type === "alternate") return;
     let line = "";
     if (term) {
@@ -283,7 +282,7 @@ export function useTerminalBlocks(
 
   const armQuietTimer = useCallback(() => {
     const latest = blocksRef.current[blocksRef.current.length - 1];
-    if (!latest || latest.status !== "running" || !completionCallbacksRef.current.has(latest.id)) return;
+    if (!latest || latest.status !== "running") return;
     if (quietTimerRef.current !== null) clearTimeout(quietTimerRef.current);
     quietTimerRef.current = setTimeout(checkQuietPrompt, QUIET_PROMPT_MS);
   }, [checkQuietPrompt]);

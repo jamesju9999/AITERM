@@ -63,14 +63,15 @@ describe("quiet + prompt fallback completion (shell without OSC 133)", () => {
     expect(onComplete).not.toHaveBeenCalled();
   });
 
-  it("does nothing for blocks nobody is waiting on", async () => {
+  it("手動指令（沒有人登記 onComplete）也會在安靜加提示字元後結案，不會卡到下一個指令", async () => {
     const { result } = renderHook(() => useTerminalBlocks("s", term));
     act(() => result.current.submitCommand("ls"));
     await act(async () => {
       result.current.appendOutput("x\r\nsh-3.2$ ");
-      await vi.advanceTimersByTimeAsync(QUIET_PROMPT_MS * 2);
+      await vi.advanceTimersByTimeAsync(QUIET_PROMPT_MS + 200);
     });
-    expect(result.current.blocks[0].status).toBe("running");
+    expect(result.current.blocks[0].status).toBe("completed");
+    expect(result.current.blocks[0].exitUnknown).toBe(true);
   });
 
   it("OSC 133 D still wins and carries the real exit code", async () => {
