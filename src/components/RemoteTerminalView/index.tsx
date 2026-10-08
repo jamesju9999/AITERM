@@ -15,7 +15,7 @@ import { getActiveTheme, type AppTheme } from "../../lib/themes";
 import { useTerminalBlocks } from "../../hooks/useTerminalBlocks";
 import { WarpInput, type WarpInputHandle } from "../WarpInput";
 import { TerminalBlockCard } from "../TerminalBlockCard";
-import { CommandBookmarksPicker, addBookmark } from "../CommandBookmarks";
+import { CommandBookmarksPicker, bookmarkCommand } from "../CommandBookmarks";
 import { parseAiPrefix, parseAgentPrefix } from "../parseAiPrefix";
 import { LinkIcon, SparklesIcon } from "../Icons";
 import type { Translations } from "../../lib/i18n";
@@ -708,8 +708,8 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
                 <TerminalBlockCard
                   key={b.id}
                   block={b}
-                  onBookmark={(command) => addBookmark(command)}
-                  onCopy={(command) => navigator.clipboard.writeText(command).catch(console.error)}
+                  onBookmark={(command) => bookmarkCommand(command)}
+                  onCopy={(command) => navigator.clipboard.writeText(command)}
                 />
               ))}
             </div>

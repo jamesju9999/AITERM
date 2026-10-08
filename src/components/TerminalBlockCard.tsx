@@ -4,7 +4,7 @@ import { useLocale } from "../contexts/LocaleContext";
 import "./TerminalBlockCard.css";
 
 /** 「已加入書籤」就地回饋顯示多久。夠看清楚、又不會久到擋住再次操作。 */
-const BOOKMARKED_FLASH_MS = 1500;
+const FLASH_MS = 1500;
 
 const MAX_VISIBLE_LINES = 500;
 
@@ -27,8 +27,10 @@ export interface TerminalBlockCardProps {
   block: TerminalBlock;
   highlightQuery?: string;
   onAskAi?: (command: string, exitCode: number | undefined) => void;
-  onBookmark?: (command: string) => void;
-  onCopy?: (command: string) => void;
+  /** 回傳 false＝這個指令本來就在書籤裡（沒有新增）；其餘（含 void）視為新增成功。 */
+  onBookmark?: (command: string) => boolean | void;
+  /** 可回傳 Promise：reject 時按鈕顯示「複製失敗」。 */
+  onCopy?: (command: string) => void | Promise<void>;
 }
 
 function highlightText(text: string, query?: string): React.ReactNode {
@@ -50,12 +52,24 @@ function TerminalBlockCardImpl({ block, highlightQuery, onAskAi, onBookmark, onC
   const [expanded, setExpanded] = useState(false);
   // 書籤按鈕就地回饋：按鈕文字短暫變成「✓ 已加入書籤」，不彈窗、不佔版面、
   // 不擋任何操作。
-  const [bookmarked, setBookmarked] = useState(false);
+  const [bookmarkFlash, setBookmarkFlash] = useState<"added" | "exists" | null>(null);
+  const [copyFlash, setCopyFlash] = useState<"done" | "failed" | null>(null);
   useEffect(() => {
-    if (!bookmarked) return;
-    const id = setTimeout(() => setBookmarked(false), BOOKMARKED_FLASH_MS);
+    if (!bookmarkFlash) return;
+    const id = setTimeout(() => setBookmarkFlash(null), FLASH_MS);
     return () => clearTimeout(id);
-  }, [bookmarked]);
+  }, [bookmarkFlash]);
+  useEffect(() => {
+    if (!copyFlash) return;
+    const id = setTimeout(() => setCopyFlash(null), FLASH_MS);
+    return () => clearTimeout(id);
+  }, [copyFlash]);
+  const handleCopy = (command: string) => {
+    void Promise.resolve()
+      .then(() => onCopy?.(command))
+      .then(() => setCopyFlash("done"))
+      .catch((e) => { console.error(e); setCopyFlash("failed"); });
+  };
   // running 中的卡片跟 Warp 一樣顯示持續跳動的耗時（見設計文件
   // 2026-09-16-live-block-rendering-design.md）——running 中沒有
   // `endTime`，靠這個 tick 強制重新渲染讓 `formatDuration(Date.now() -
@@ -110,16 +124,20 @@ function TerminalBlockCardImpl({ block, highlightQuery, onAskAi, onBookmark, onC
           )}
           {onBookmark && (
             <button
-              className={`aiterm-block-btn aiterm-btn aiterm-btn--secondary aiterm-block-btn--bookmark${bookmarked ? " is-done" : ""}`}
-              onClick={() => { onBookmark(block.command); setBookmarked(true); }}
+              className={`aiterm-block-btn aiterm-btn aiterm-btn--secondary aiterm-block-btn--bookmark${bookmarkFlash ? " is-done" : ""}`}
+              onClick={() => setBookmarkFlash(onBookmark(block.command) === false ? "exists" : "added")}
               aria-live="polite"
             >
-              {bookmarked ? t.block_bookmarked : "Bookmark"}
+              {bookmarkFlash === "added" ? t.block_bookmarked : bookmarkFlash === "exists" ? t.block_bookmark_exists : "Bookmark"}
             </button>
           )}
           {onCopy && (
-            <button className="aiterm-block-btn aiterm-btn aiterm-btn--secondary" onClick={() => onCopy(block.command)}>
-              Copy
+            <button
+              className={`aiterm-block-btn aiterm-btn aiterm-btn--secondary aiterm-block-btn--copy${copyFlash === "done" ? " is-done" : ""}`}
+              onClick={() => handleCopy(block.command)}
+              aria-live="polite"
+            >
+              {copyFlash === "done" ? t.block_copied : copyFlash === "failed" ? t.block_copy_failed : "Copy"}
             </button>
           )}
         </div>

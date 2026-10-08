@@ -101,3 +101,32 @@ describe("Bookmark 按鈕的就地回饋", () => {
     expect(screen.getByRole("button", { name: "Bookmark" })).toBeInTheDocument();
   });
 });
+
+describe("書籤去重與複製回饋", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("onBookmark 回傳 false（本來就在書籤裡）時顯示「已在書籤中」", () => {
+    render(<TerminalBlockCard block={makeBlock()} onBookmark={() => false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Bookmark" }));
+    expect(screen.getByRole("button", { name: "已在書籤中" })).toBeInTheDocument();
+  });
+
+  it("複製成功顯示「已複製」並在之後恢復", async () => {
+    const onCopy = vi.fn().mockResolvedValue(undefined);
+    render(<TerminalBlockCard block={makeBlock()} onCopy={onCopy} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Copy" })); });
+    expect(onCopy).toHaveBeenCalledWith("echo hi");
+    expect(screen.getByRole("button", { name: /已複製/ })).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(1600); });
+    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+  });
+
+  it("複製失敗（Promise reject）顯示「複製失敗」，不是假裝成功", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const onCopy = vi.fn().mockRejectedValue(new Error("denied"));
+    render(<TerminalBlockCard block={makeBlock()} onCopy={onCopy} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Copy" })); });
+    expect(screen.getByRole("button", { name: "複製失敗" })).toBeInTheDocument();
+  });
+});

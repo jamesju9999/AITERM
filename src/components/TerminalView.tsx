@@ -51,7 +51,7 @@ import { ElevationBadge } from "./ElevationBadge";
 import { useProviderQuota } from "../hooks/useProviderQuota";
 import { WarpInput, type WarpInputHandle } from "./WarpInput";
 import { FileExplorer } from "./FileExplorer/FileExplorer";
-import { CommandBookmarksPicker, addBookmark } from "./CommandBookmarks";
+import { CommandBookmarksPicker, bookmarkCommand } from "./CommandBookmarks";
 import { getActiveTheme, type AppTheme } from "../lib/themes";
 import { readLineExcludingInlinePrediction } from "../lib/terminalLinePrediction";
 import { attentionForExitCode, type AttentionKind } from "../lib/terminalAttention";
@@ -2399,8 +2399,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
                     onAskAi={(command, exitCode) => {
                       window.dispatchEvent(new CustomEvent("aiterm:ask-ai", { detail: { command, exitCode } }));
                     }}
-                    onBookmark={(command) => addBookmark(command)}
-                    onCopy={(command) => navigator.clipboard.writeText(command).catch(console.error)}
+                    onBookmark={(command) => bookmarkCommand(command)}
+                    onCopy={(command) => navigator.clipboard.writeText(command)}
                   />
                 </div>
               ))}

@@ -37,6 +37,17 @@ export function addBookmark(command: string, name?: string): CommandBookmark {
   return bm;
 }
 
+/**
+ * 同一個指令只留一筆。已經有了就回傳 false、什麼都不動；新加入回傳 true。
+ * 給「書籤」按鈕用——它要知道這次是新增還是本來就在，好給使用者對的回饋。
+ */
+export function bookmarkCommand(command: string): boolean {
+  const target = command.trim();
+  if (loadBookmarks().some((b) => b.command.trim() === target)) return false;
+  addBookmark(command);
+  return true;
+}
+
 export function removeBookmark(id: string) {
   saveBookmarks(loadBookmarks().filter((b) => b.id !== id));
 }
