@@ -46,6 +46,9 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [searching, setSearching] = useState(false);
+  /** 正在連線的已存主機名稱。連線期間整排清單停用（busy），沒有這行提示的話
+   *  使用者只會看到「點了沒反應、編輯刪除也按不動」。 */
+  const [connectingName, setConnectingName] = useState<string | null>(null);
 
   const [hosts, setHosts] = useState<RemoteHostInfo[]>([]);
   /** 連上之後、還沒決定要不要存的那筆。null 代表沒有待決定的。 */
@@ -217,10 +220,14 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
     // 而表單裡可能已經是另一台的位址（金鑰遺失的錯誤分支會把它帶進來）。
     // 這裡清的是畫面；資料正確性仍由 confirmSave 的使用當下驗證守住。
     exitEdit();
+    // 清掉上一次的錯誤，不然新一輪連線進行中畫面上還掛著舊的失敗訊息。
+    setError(null);
     setBusy(true);
+    setConnectingName(h.name);
     try {
       await connectTo(h.host, h.port, `${h.host}:${h.port}`, { savedHostId: h.id });
     } finally {
+      setConnectingName(null);
       setBusy(false);
     }
   }
@@ -375,6 +382,11 @@ export function ConnectDialog({ onConnected, onCancel }: Props) {
           onEdit={editHost}
           onDelete={removeHost}
         />
+        {connectingName !== null && (
+          <div className="aiterm-connect__searching" role="status">
+            {t.connect_connecting.replace("{name}", connectingName)}
+          </div>
+        )}
 
         <label className="aiterm-connect__label" htmlFor="aiterm-connect-code">
           {t.connect_code_label}

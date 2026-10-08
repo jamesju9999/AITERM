@@ -222,6 +222,25 @@ describe("ConnectDialog 地址簿", () => {
     expect(args.key).toBeUndefined();
   });
 
+  it("連線進行中顯示「連線中」並停用清單；失敗後恢復並清掉舊訊息", async () => {
+    // 回歸：連線卡住時整排按鈕被 busy 停用、畫面卻沒有任何提示，使用者看到的是
+    // 「點了沒反應、編輯刪除也不能用」。
+    let rejectConnect!: (e: unknown) => void;
+    vi.mocked(shareViewerConnect).mockReset().mockReturnValueOnce(
+      new Promise((_, rej) => { rejectConnect = rej; }),
+    );
+    render(<ConnectDialog onConnected={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(await screen.findByText("辦公室"));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("辦公室");
+    expect(screen.getByRole("button", { name: "編輯" })).toBeDisabled();
+
+    rejectConnect("boom");
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(screen.getByRole("button", { name: "編輯" })).toBeEnabled();
+    expect(screen.getByText(/連不上：boom/)).toBeInTheDocument();
+  });
+
   it("從地址簿連上之後不再問要不要儲存", async () => {
     const onConnected = vi.fn();
     render(<ConnectDialog onConnected={onConnected} onCancel={vi.fn()} />);
