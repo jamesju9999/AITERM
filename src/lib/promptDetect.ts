@@ -38,6 +38,10 @@ export function looksLikePrompt(line: string): boolean {
   // 符號前要有空白（"[~] # "、"proj % "），或是 user@host:path 這種形式。
   if (/\s$/.test(prefix)) return true;
   if (/^[^\s@]+@[^\s:]+(?::\S*)?$/.test(prefix)) return true;
+  // 前綴的最後一個詞像「身分／路徑」：`[user@host ~]`（RHEL/NAS 預設）、
+  // `(venv) user@host:~`、`~/proj`、`host:dir`。
+  const lastToken = prefix.trim().split(/\s+/).pop() ?? "";
+  if (/@|\]$|\)$|~$|\/|:/.test(lastToken) && lastToken !== "") return true;
   // 沒設 PS1 的 bash／sh 預設提示字元："sh-3.2$ "、"bash-5.1# "
   if (/^(?:sh|bash|zsh|ash|dash|ksh)-[\d.]+$/.test(prefix)) return true;
   // PowerShell: "PS C:\\path>"

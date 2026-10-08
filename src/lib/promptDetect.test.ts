@@ -11,6 +11,10 @@ describe("looksLikePrompt", () => {
     "PS C:\\Users\\a> ",
     "root@nas:/share# ",
     "~ ❯ ",
+    "[jamesju@JAMESJUNAS ~]$ ",
+    "[root@nas /share]# ",
+    "(venv) user@host:~/proj$ ",
+    "jamesju@host ~/proj % ",
   ])("accepts %j", (line) => {
     expect(looksLikePrompt(line)).toBe(true);
   });
