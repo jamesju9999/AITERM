@@ -4,6 +4,7 @@ import { writePty } from "../ipc/pty";
 import { parseAnsiToRenderedLines, readRenderedLines, findContentEndRow, type RenderedLine } from "../lib/ansiBlockParser";
 import type { GitBlockInfo } from "../ipc/vcs";
 import { looksLikePrompt, lastNonEmptyLine } from "../lib/promptDetect";
+import { parseRemoteLogin, isLogoutCommand } from "../lib/remoteSession";
 
 /** 沒有 OSC 133 的 shell（ssh 進 NAS 等）收不到「指令結束」訊號時，等畫面
  *  安靜這麼久、且最後一行像提示字元，才當作指令已跑完。 */
@@ -31,6 +32,9 @@ export interface UseTerminalBlocksResult {
   appendOutput: (chunk: string) => void;
   setBlockGitInfo: (id: string, info: GitBlockInfo | null) => void;
   isAlternateBuffer: boolean;
+  /** 這個分頁目前是否「ssh／telnet 進去之後」的遠端 shell，是的話為目標主機。
+   *  讀 ref，永遠是最新值——給 AI 提示詞用，不要拿去 render。 */
+  getRemoteSession: () => string | null;
   /** true 代表遠端目前處於「要逐鍵收原始按鍵」的協定模式（Kitty keyboard
    *  protocol 的 push/pop，`ESC[>Ps u` / `ESC[<u`）——不是所有互動選單都會
    *  切 alternate screen buffer，這個訊號補上那個縫。見設計文件
@@ -136,6 +140,8 @@ export function useTerminalBlocks(
   writeRef.current = write;
 
   const blocksRef = useRef<TerminalBlock[]>([]);
+  const remoteSessionRef = useRef<string | null>(null);
+  const getRemoteSession = useCallback(() => remoteSessionRef.current, []);
   const completionCallbacksRef = useRef<Map<string, (block: TerminalBlock) => void>>(new Map());
   // OSC 133 B 標記記錄的「輸入從這裡開始」絕對座標，給 recoverUntrackedCommand
   // 用——只在遠端指令（沒有本機追蹤區塊）時才會被讀取，見該函式的文件註解。
@@ -399,6 +405,21 @@ export function useTerminalBlocks(
       const updated = prev.map((b) => (b.id === blockId ? finalized : b));
       blocksRef.current = updated;
       setBlocks(updated);
+
+      // 遠端工作階段追蹤（給 AI 提示詞用，見 lib/remoteSession.ts）。
+      // 進入：ssh／telnet 登入指令靠「畫面安靜＋提示字元」結案（exitUnknown）＝人已經
+      //   在遠端 shell 裡了。
+      // 離開：exit／logout；登入指令自己拿到真的結束碼（連線結束）；或任何一個
+      //   真的 OSC 133 結束碼（遠端 shell 不會送，收到代表本機 shell 回來了）。
+      // -1 是被強制結案的哨兵值，什麼都沒證明，不動狀態。
+      const login = parseRemoteLogin(target.command);
+      if (isLogoutCommand(target.command)) {
+        remoteSessionRef.current = null;
+      } else if (opts?.exitUnknown) {
+        if (login) remoteSessionRef.current = login.target;
+      } else if (exitCode !== -1) {
+        remoteSessionRef.current = null;
+      }
 
       const settle = (finalBlock: TerminalBlock) => {
         const cb = completionCallbacksRef.current.get(blockId);
@@ -715,5 +736,6 @@ export function useTerminalBlocks(
     termInstance: term,
     finalizeBlock,
     clearAllBlocks,
+    getRemoteSession,
   };
 }

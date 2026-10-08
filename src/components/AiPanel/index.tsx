@@ -2,6 +2,7 @@ import {
   useEffect, useRef, useState, useCallback,
 } from "react";
 import { describeExit } from "../../lib/agentStepReport";
+import { remoteSessionPromptNote } from "../../lib/remoteSession";
 import { readFileAsAttachment, contentToDisplayString } from "../../types/attachment";
 import type { Attachment } from "../../types/attachment";
 import { useMcpChat } from "../../hooks/useMcpChat";
@@ -64,6 +65,9 @@ export interface AiPanelProps {
   sendRemoteResponse?: (text: string) => void;
   /** 距離 PTY 最後一次有輸出過了多久（毫秒）。用來偵測指令是不是卡住了。 */
   getIdleMs?: () => number;
+  /** 這個分頁目前若在 ssh／telnet 進去的遠端 shell 裡，回傳目標主機。每一步都重讀，
+   *  因為 agent 可能就是在這個任務中途才連進去的。 */
+  getRemoteSession?: () => string | null;
   /** 中斷目前這個卡住的指令：送 Ctrl+C 並強制結案。 */
   onInterruptCommand?: () => void;
   /**
@@ -89,6 +93,7 @@ export function AiPanel({
   onOpenProviderPalette,
   sendRemoteResponse,
   getIdleMs,
+  getRemoteSession,
   onInterruptCommand,
   onAgentAborted,
 }: AiPanelProps) {
@@ -282,7 +287,7 @@ Rules:
     let reply: string;
     try {
       const agentMessages: AiChatMessage[] = [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: systemPrompt + remoteSessionPromptNote(getRemoteSession?.()) },
         ...history,
       ];
       // supportsArtifacts=true：被要求「產生一份文件」時，模型若不知道有 artifact
@@ -369,7 +374,7 @@ Rules:
         void runAgentLoopRef.current(newHistory, systemPrompt, step + 1);
       });
     });
-  }, [chat, onExecuteCommand, sessionId, locale, sendRemoteResponse, maxAgentSteps, getIdleMs]);
+  }, [chat, onExecuteCommand, sessionId, locale, sendRemoteResponse, maxAgentSteps, getIdleMs, getRemoteSession]);
 
   useEffect(() => {
     runAgentLoopRef.current = runAgentLoop;

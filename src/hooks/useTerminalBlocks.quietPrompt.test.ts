@@ -90,3 +90,36 @@ describe("quiet + prompt fallback completion (shell without OSC 133)", () => {
     expect(onComplete.mock.calls[0][0].exitUnknown).toBeUndefined();
   });
 });
+
+describe("遠端工作階段追蹤（給 AI 提示詞）", () => {
+  const login = "sshpass -p 'pw' ssh -o StrictHostKeyChecking=no jamesju@192.168.1.80";
+
+  async function settleByPrompt(result: { current: ReturnType<typeof useTerminalBlocks> }, cmd: string, out: string) {
+    act(() => result.current.submitCommand(cmd));
+    await act(async () => {
+      result.current.appendOutput(out);
+      await vi.advanceTimersByTimeAsync(QUIET_PROMPT_MS + 200);
+    });
+  }
+
+  it("ssh 登入指令靠畫面結案後，記住目標主機；exit 之後清掉", async () => {
+    const { result } = renderHook(() => useTerminalBlocks("s", term));
+    expect(result.current.getRemoteSession()).toBeNull();
+
+    await settleByPrompt(result, login, "[jamesju@NAS ~]$ ");
+    expect(result.current.getRemoteSession()).toBe("jamesju@192.168.1.80");
+
+    // 遠端裡的一般指令不改變狀態。
+    await settleByPrompt(result, "ls", "a\r\n[jamesju@NAS ~]$ ");
+    expect(result.current.getRemoteSession()).toBe("jamesju@192.168.1.80");
+
+    await settleByPrompt(result, "exit", "logout\r\nuser@mac ~ % ");
+    expect(result.current.getRemoteSession()).toBeNull();
+  });
+
+  it("單次 ssh 指令（ssh host 'cmd'）不算進入遠端工作階段", async () => {
+    const { result } = renderHook(() => useTerminalBlocks("s", term));
+    await settleByPrompt(result, "ssh u@h 'hostname'", "NAS\r\nuser@mac ~ % ");
+    expect(result.current.getRemoteSession()).toBeNull();
+  });
+});

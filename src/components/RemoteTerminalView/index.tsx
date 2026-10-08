@@ -108,7 +108,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
   // term.rows 讀到的會是上一輪 render 當下的舊值，畫面因此不會跟著更新。
   const [hostRows, setHostRows] = useState(24);
 
-  const { blocks, isAlternateBuffer, isRawKeyboardModeActive, submitCommand, appendOutput, clearAllBlocks } = useTerminalBlocks(
+  const { blocks, isAlternateBuffer, isRawKeyboardModeActive, submitCommand, appendOutput, clearAllBlocks, getRemoteSession } = useTerminalBlocks(
     connId,
     termState,
     undefined,
@@ -802,6 +802,7 @@ export function RemoteTerminalView({ tabId, connId, sas, isActive, hostLabel = "
         buildRemoteCtx={buildRemoteCtx}
         submitCommand={(cmd, cb) => submitCommandRef.current(cmd, cb)}
         isControl={phase.kind === "live" && phase.mode === "control"}
+        getRemoteSession={getRemoteSession}
         maxSteps={maxAgentSteps}
         providerName={activeProvider}
         providerId={activeProviderId}

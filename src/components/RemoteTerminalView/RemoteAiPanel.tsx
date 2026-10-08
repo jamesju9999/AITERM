@@ -9,6 +9,7 @@ import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
 import { ChatPanelShell } from "../ChatPanel/ChatPanelShell";
 import { QuotaBadge } from "../QuotaBadge";
 import { describeExit } from "../../lib/agentStepReport";
+import { remoteSessionPromptNote } from "../../lib/remoteSession";
 
 /** 單一步驟的逾時：等指令跑完（submitCommand 的 onComplete）不能等超過這麼久，
  *  否則就當作這條連線沒有 OSC 133 shell 整合、沒辦法自動接續（見
@@ -39,6 +40,8 @@ interface Props {
   buildRemoteCtx: () => RemoteCtx;
   submitCommand: (cmd: string, onComplete?: (block: TerminalBlock) => void) => void;
   isControl: boolean;
+  /** 這個遠端分頁目前若又 ssh／telnet 進了另一台機器，回傳目標。每一步重讀。 */
+  getRemoteSession?: () => string | null;
   maxSteps: number;
   providerName: string;
   providerId?: string;
@@ -59,6 +62,7 @@ export const RemoteAiPanel = forwardRef<RemoteAiPanelHandle, Props>(function Rem
   buildRemoteCtx,
   submitCommand,
   isControl,
+  getRemoteSession,
   maxSteps,
   providerName,
   providerId,
@@ -132,7 +136,7 @@ Rules:
     let reply: string;
     try {
       const agentMessages: AiChatMessage[] = [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: systemPrompt + remoteSessionPromptNote(getRemoteSession?.()) },
         ...history,
       ];
       const replyObj = await invokeAiChatCtx(agentMessages, buildRemoteCtx(), connId, providerId, locale);
@@ -214,7 +218,7 @@ Rules:
         void runAgentLoopRef.current(newHistory, systemPrompt, step + 1);
       });
     });
-  }, [chat, submitCommand, buildRemoteCtx, connId, providerId, locale, maxSteps, t, isAborted]);
+  }, [chat, submitCommand, buildRemoteCtx, connId, providerId, locale, maxSteps, t, isAborted, getRemoteSession]);
 
   useEffect(() => {
     runAgentLoopRef.current = runAgentLoop;

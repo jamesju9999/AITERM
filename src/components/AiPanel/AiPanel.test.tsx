@@ -255,6 +255,29 @@ describe("AiPanel", () => {
     expect(secondCallContents).toContain("請執行計畫");
   });
 
+  it("在 ssh 進去的遠端工作階段裡，Agent 的系統提示詞會告知別再重新連線", async () => {
+    aiChatQueue.push({ content: "好的" });
+    render(
+      <AiPanel
+        sessionId="s1"
+        isOpen={true}
+        providerName="Ollama"
+        onClose={vi.fn()}
+        onExecuteCommand={vi.fn()}
+        onOpenProviderPalette={vi.fn()}
+        getRemoteSession={() => "jamesju@192.168.1.80"}
+      />,
+    );
+    await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
+    await userEvent.type(screen.getByRole("textbox"), "顯示 IP");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByText("好的")).toBeInTheDocument());
+
+    const system = aiChatCalls[aiChatCalls.length - 1].find((m) => m.role === "system");
+    expect(String(system?.content)).toContain("jamesju@192.168.1.80");
+    expect(String(system?.content)).toMatch(/Do NOT run ssh/);
+  });
+
   it("Agent Mode recurses to a second AI call after executing a <cmd>", async () => {
     aiChatQueue.push({ content: "<cmd>ls</cmd>" });
     aiChatQueue.push({ content: "完成了" });

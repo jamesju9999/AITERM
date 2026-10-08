@@ -478,7 +478,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     if (isClaudeCommand(cmd)) onClaudeDetectedRef.current?.();
   }, [releaseHeldCompletion]);
 
-  const { blocks, isAlternateBuffer, isRawKeyboardModeActive, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo, finalizeBlock } = useTerminalBlocks(
+  const { blocks, isAlternateBuffer, isRawKeyboardModeActive, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo, finalizeBlock, getRemoteSession } = useTerminalBlocks(
     sessionId,
     termState,
     lastCwdRef,
@@ -2619,6 +2619,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           }}
           sendRemoteResponse={sendRemoteResponse}
           getIdleMs={() => Date.now() - lastPtyOutputAtRef.current}
+          getRemoteSession={getRemoteSession}
           onInterruptCommand={() => {
             // Ctrl+C：把 shell 從 heredoc／等輸入的狀態拉回提示字元。
             if (sessionRef.current) writePty(sessionRef.current, "\x03").catch(console.error);
