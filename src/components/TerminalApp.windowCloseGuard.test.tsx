@@ -40,6 +40,7 @@ vi.mock("../ipc/resident", () => ({
   hideMainWindowForClose: () => Promise.resolve(false),
   onFocusInput: () => Promise.resolve(() => {}),
   onTrayNewTab: () => Promise.resolve(() => {}),
+  setTrayLabels: () => Promise.resolve(),
 }));
 
 vi.mock("../ipc/provider", () => ({ listProviders: () => Promise.resolve([]) }));
