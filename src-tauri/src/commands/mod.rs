@@ -4,6 +4,7 @@ pub mod appimage;
 pub mod bridge;
 pub mod openai_server;
 pub mod claude_notif;
+pub mod computer;
 pub mod config;
 pub mod db;
 pub mod db_export;

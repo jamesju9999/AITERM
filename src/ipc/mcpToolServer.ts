@@ -23,6 +23,8 @@ export interface McpToolServerConfig {
   enabled: boolean;
   port: number;
   coordination_enabled: boolean;
+  /** 舊版 config 沒有這個欄位時後端補預設值 false。 */
+  computer_enabled?: boolean;
 }
 
 /** 存下設定並立刻套用（啟動或停止 server）。 */

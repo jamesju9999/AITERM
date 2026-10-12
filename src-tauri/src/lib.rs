@@ -3,6 +3,7 @@ pub use aiterm_core::appimage_env;
 pub mod bridge;
 pub mod chatgpt_web;
 pub mod code_assistant;
+pub mod computer;
 pub mod api_docs;
 pub mod commands;
 pub mod config;
@@ -298,6 +299,26 @@ pub fn run() {
             quit::install_quit_menu(app)?;
             // 托盤、全域快捷鍵、自啟旗標（見 resident/mod.rs）；失敗只記 log。
             resident::setup(app.handle());
+            // 電腦操作（GUI 控制／截圖）服務：MCP 工具與設定頁共用這一份。
+            {
+                use computer::approval::TauriApprover;
+                use tauri::Manager;
+                let approver = Arc::new(TauriApprover::new(app.handle().clone()));
+                #[cfg(target_os = "macos")]
+                let backend: Arc<dyn computer::backend::Backend> = Arc::new(computer::macos::MacBackend);
+                #[cfg(not(target_os = "macos"))]
+                let backend: Arc<dyn computer::backend::Backend> = Arc::new(computer::backend::UnsupportedBackend);
+                let cfg = app.state::<Arc<crate::config::ConfigStore>>().inner().clone();
+                let service = Arc::new(computer::ComputerService::new(
+                    backend,
+                    approver.clone(),
+                    cfg,
+                    computer::audit::AuditLog::new(computer::audit::AuditLog::default_path()),
+                    std::process::id() as i32,
+                ));
+                app.manage(approver);
+                app.manage(service);
+            }
             // 冷啟動時帶進來的參數（`aiterm ~/proj`、`--working-directory=…`）。
             // 這裡雖然也會發事件，但此時 webview 可能還不存在，事件會被丟掉——
             // 沒關係，前端一掛載就會主動排空佇列。
@@ -520,6 +541,11 @@ pub fn run() {
             commands::config::set_keep_in_tray,
             commands::config::set_autostart,
             commands::config::hide_main_window_for_close,
+            commands::computer::computer_status,
+            commands::computer::computer_revoke_app,
+            commands::computer::computer_audit_tail,
+            commands::computer::computer_resolve_approval,
+            commands::computer::computer_open_privacy_settings,
             set_doc_convert_engine,
             set_default_tab,
             // Provider management

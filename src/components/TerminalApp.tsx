@@ -25,6 +25,7 @@ import { CloseConfirmDialog } from "./CloseConfirmDialog";
 import { collectBusyTabs, type BusyProbe } from "../lib/busyProbe";
 import { useWindowCloseGuard } from "../hooks/useWindowCloseGuard";
 import { onFocusInput, onTrayNewTab } from "../ipc/resident";
+import { ComputerApprovalDialog } from "./ComputerApproval";
 import { KnowledgeBaseView } from "./KnowledgeBaseView";
 import { MailView } from "./MailView";
 import { RemoteTerminalView } from "./RemoteTerminalView";
@@ -697,6 +698,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", backgroundColor: "#0c0c0c", position: "relative" }}>
       <TitleBar title={titleBarText} />
+      <ComputerApprovalDialog />
       {windowClose.pending && (
         <CloseConfirmDialog
           title={t.win_close_title}

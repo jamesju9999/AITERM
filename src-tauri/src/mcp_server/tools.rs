@@ -24,6 +24,10 @@ use crate::db::manager::DbManager;
 use crate::pty::PtyManager;
 use crate::secret::SecretStore;
 
+use crate::computer::{ClickTarget, ComputerService, ToolOutput};
+use crate::computer::backend::MouseButton;
+use tauri::Manager;
+
 use super::coordination_ops::CoordinationRegistry;
 use super::{coordination_ops, db_ops, kb_ops};
 
@@ -32,6 +36,92 @@ fn to_call_result(r: Result<String, String>) -> Result<CallToolResult, McpError>
         Ok(s) => Ok(CallToolResult::success(vec![ContentBlock::text(s)])),
         Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
     }
+}
+
+fn computer_result(r: Result<ToolOutput, String>) -> Result<CallToolResult, McpError> {
+    match r {
+        Ok(ToolOutput::Text(t)) => Ok(CallToolResult::success(vec![ContentBlock::text(t)])),
+        Ok(ToolOutput::Image { png, text }) => {
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(png);
+            Ok(CallToolResult::success(vec![ContentBlock::text(text), ContentBlock::image(b64, "image/png")]))
+        }
+        Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
+    }
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ComputerSnapshotArgs {
+    /// App name or bundle id, as returned by `computer_list_apps`.
+    pub app: String,
+    /// How many levels of the accessibility tree to read (default 6, max 12).
+    #[serde(default)]
+    pub max_depth: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ComputerScreenshotArgs {
+    /// App name or bundle id. Omit to capture the whole main screen.
+    #[serde(default)]
+    pub app: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ComputerClickArgs {
+    /// App name or bundle id, as returned by `computer_list_apps`.
+    pub app: String,
+    /// Element id from the latest `computer_snapshot` (e.g. "0.3.1"). Preferred over x/y.
+    #[serde(default)]
+    pub element: Option<String>,
+    /// Screen x coordinate (use with y when no element id is available).
+    #[serde(default)]
+    pub x: Option<f64>,
+    /// Screen y coordinate.
+    #[serde(default)]
+    pub y: Option<f64>,
+    /// "left" (default) or "right".
+    #[serde(default)]
+    pub button: Option<String>,
+    /// Double-click.
+    #[serde(default)]
+    pub double: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ComputerTypeArgs {
+    /// App name or bundle id.
+    pub app: String,
+    /// Text to type into the focused field.
+    pub text: String,
+    /// Optional element id (from `computer_snapshot`) to focus before typing.
+    #[serde(default)]
+    pub element: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ComputerKeyArgs {
+    /// App name or bundle id.
+    pub app: String,
+    /// Key or combo, e.g. "return", "cmd+s", "cmd+shift+left".
+    pub key: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ComputerScrollArgs {
+    /// App name or bundle id.
+    pub app: String,
+    /// Horizontal scroll in lines (positive = right).
+    #[serde(default)]
+    pub dx: Option<i32>,
+    /// Vertical scroll in lines (positive = up).
+    #[serde(default)]
+    pub dy: Option<i32>,
+    /// Optional screen x to scroll at.
+    #[serde(default)]
+    pub x: Option<f64>,
+    /// Optional screen y to scroll at.
+    #[serde(default)]
+    pub y: Option<f64>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -188,6 +278,102 @@ impl AiTermTools {
             Ok(())
         } else {
             Err("Agent coordination tools are disabled. Enable them in AITerm's Settings → MCP Tool Server page.".to_string())
+        }
+    }
+
+    /// 取得 ComputerService（總開關與授權都在它裡面檢查）。
+    fn computer(&self) -> Result<Arc<ComputerService>, String> {
+        let app = self.app.as_ref().ok_or("電腦操作需要執行中的 AITerm 實例")?;
+        app.try_state::<Arc<ComputerService>>()
+            .map(|s| s.inner().clone())
+            .ok_or_else(|| "電腦操作服務尚未就緒".to_string())
+    }
+
+    #[tool(description = "List the macOS apps with visible windows that can be controlled (name, bundle id, pid, frontmost). Part of the computer-use tools; disabled by default and must be enabled in AITerm Settings → MCP Tool Server.")]
+    async fn computer_list_apps(&self) -> Result<CallToolResult, McpError> {
+        match self.computer() {
+            Ok(c) => computer_result(c.list_apps().await),
+            Err(e) => computer_result(Err(e)),
+        }
+    }
+
+    #[tool(description = "Read an app's UI as an accessibility tree: one line per element with an id (e.g. 0.3.1), role, title and frame (x,y,w,h in screen points). Use the ids with computer_click / computer_type. Prefer this over screenshots when you only need to find buttons and fields. The user is asked to approve the first use of each app.")]
+    async fn computer_snapshot(
+        &self,
+        Parameters(ComputerSnapshotArgs { app, max_depth }): Parameters<ComputerSnapshotArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.computer() {
+            Ok(c) => computer_result(c.snapshot(&app, max_depth).await),
+            Err(e) => computer_result(Err(e)),
+        }
+    }
+
+    #[tool(description = "Take a screenshot of one app's front window, or the whole main screen when app is omitted. Returns a PNG scaled to screen points, so coordinates in the image plus the stated origin are valid click coordinates.")]
+    async fn computer_screenshot(
+        &self,
+        Parameters(ComputerScreenshotArgs { app }): Parameters<ComputerScreenshotArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.computer() {
+            Ok(c) => computer_result(c.screenshot(app.as_deref()).await),
+            Err(e) => computer_result(Err(e)),
+        }
+    }
+
+    #[tool(description = "Click an element (by id from computer_snapshot) or a screen coordinate in an app. Clicking something labelled like Delete/Send/Pay always asks the user for confirmation first. Element ids go stale when the screen changes; re-run computer_snapshot if told so.")]
+    async fn computer_click(
+        &self,
+        Parameters(a): Parameters<ComputerClickArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let target = match (a.element, a.x, a.y) {
+            (Some(id), _, _) => ClickTarget::Element(id),
+            (None, Some(x), Some(y)) => ClickTarget::Point(x, y),
+            _ => return computer_result(Err("請提供 element，或同時提供 x 與 y".to_string())),
+        };
+        let button = match a.button.as_deref() {
+            None | Some("left") => MouseButton::Left,
+            Some("right") => MouseButton::Right,
+            Some(other) => return computer_result(Err(format!("button 只能是 left 或 right，收到「{other}」"))),
+        };
+        match self.computer() {
+            Ok(c) => computer_result(c.click(&a.app, target, button, a.double.unwrap_or(false)).await),
+            Err(e) => computer_result(Err(e)),
+        }
+    }
+
+    #[tool(description = "Type text into an app. Optionally pass an element id (from computer_snapshot) to focus a field first; otherwise the text goes to whatever currently has focus.")]
+    async fn computer_type(
+        &self,
+        Parameters(ComputerTypeArgs { app, text, element }): Parameters<ComputerTypeArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.computer() {
+            Ok(c) => computer_result(c.type_text(&app, &text, element.as_deref()).await),
+            Err(e) => computer_result(Err(e)),
+        }
+    }
+
+    #[tool(description = "Press a key or key combination in an app, e.g. \"return\", \"escape\", \"cmd+s\", \"cmd+shift+left\". Cmd+Delete always asks the user for confirmation.")]
+    async fn computer_key(
+        &self,
+        Parameters(ComputerKeyArgs { app, key }): Parameters<ComputerKeyArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.computer() {
+            Ok(c) => computer_result(c.key(&app, &key).await),
+            Err(e) => computer_result(Err(e)),
+        }
+    }
+
+    #[tool(description = "Scroll in an app by lines (dy positive = up, dx positive = right), optionally at a screen coordinate.")]
+    async fn computer_scroll(
+        &self,
+        Parameters(ComputerScrollArgs { app, dx, dy, x, y }): Parameters<ComputerScrollArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let at = match (x, y) {
+            (Some(x), Some(y)) => Some((x, y)),
+            _ => None,
+        };
+        match self.computer() {
+            Ok(c) => computer_result(c.scroll(&app, dx.unwrap_or(0), dy.unwrap_or(0), at).await),
+            Err(e) => computer_result(Err(e)),
         }
     }
 

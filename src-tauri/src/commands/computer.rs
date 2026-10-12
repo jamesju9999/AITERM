@@ -1,0 +1,75 @@
+//! 電腦操作（GUI 控制）的設定頁與授權對話框用的指令。工具本身走 MCP，不在這裡。
+
+use std::sync::Arc;
+
+use serde::Serialize;
+use tauri::State;
+
+use crate::computer::approval::{Decision, TauriApprover};
+use crate::computer::audit::AuditEntry;
+use crate::computer::ComputerService;
+use crate::config::ConfigStore;
+
+#[derive(Serialize)]
+pub struct ComputerStatus {
+    pub enabled: bool,
+    pub accessibility: bool,
+    pub screen_recording: bool,
+    pub allowed_apps: Vec<String>,
+}
+
+#[tauri::command]
+pub fn computer_status(
+    service: State<Arc<ComputerService>>,
+    config: State<Arc<ConfigStore>>,
+) -> ComputerStatus {
+    let cfg = config.get();
+    let perms = service.permissions();
+    ComputerStatus {
+        enabled: cfg.mcp_tool_server.computer_enabled,
+        accessibility: perms.accessibility,
+        screen_recording: perms.screen_recording,
+        allowed_apps: cfg.computer_allowed_apps,
+    }
+}
+
+#[tauri::command]
+pub fn computer_revoke_app(key: String, config: State<Arc<ConfigStore>>) -> Result<(), String> {
+    config
+        .update(|c| c.computer_allowed_apps.retain(|k| k != &key))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn computer_audit_tail(limit: Option<usize>, service: State<Arc<ComputerService>>) -> Vec<AuditEntry> {
+    service.audit().tail(limit.unwrap_or(50).min(500))
+}
+
+/// 前端授權對話框的回覆。id 已逾時（後端早已視為拒絕）回傳 false。
+#[tauri::command]
+pub fn computer_resolve_approval(id: String, decision: Decision, approver: State<Arc<TauriApprover>>) -> bool {
+    approver.resolve(&id, decision)
+}
+
+/// 開啟系統設定的對應隱私權頁面。`pane`：`accessibility` 或 `screen`。
+#[tauri::command]
+pub fn computer_open_privacy_settings(pane: String) -> Result<(), String> {
+    let anchor = match pane.as_str() {
+        "accessibility" => "Privacy_Accessibility",
+        "screen" => "Privacy_ScreenCapture",
+        other => return Err(format!("未知的設定頁「{other}」")),
+    };
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(format!("x-apple.systempreferences:com.apple.preference.security?{anchor}"))
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = anchor;
+        Err("目前只支援 macOS".to_string())
+    }
+}

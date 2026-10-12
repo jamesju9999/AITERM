@@ -121,6 +121,13 @@ futures-util = "0.3"
 # Windows-only: GetLogicalDrives for the file panel's drive switcher.
 # Already present in Cargo.lock as a transitive dependency, so this adds no
 # meaningful build cost, and nothing is compiled on macOS or Linux.
+# computer_* 工具的 macOS 後端：無障礙 API 走 FFI（ApplicationServices），
+# 滑鼠／鍵盤事件走 CGEvent。highsierra 只是打開捲動事件的 API。
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+core-graphics = { version = "0.25", features = ["highsierra"] }
+
 [target.'cfg(windows)'.dependencies]
 local-ip-address = "0.6.13"
 windows-sys = { version = "0.60", features = ["Win32_Storage_FileSystem", "Win32_System_WindowsProgramming"] }

@@ -59,6 +59,9 @@ pub struct AppConfig {
     /// 開機自動啟動（以 `--minimized` 啟動，不顯示視窗）。
     #[serde(default)]
     pub autostart: bool,
+    /// 已「永遠允許」被 computer_* 工具操作的 App（bundle id，沒有則用名稱）。
+    #[serde(default)]
+    pub computer_allowed_apps: Vec<String>,
 
     /// Saved database connections (passwords stored separately in Keychain).
     #[serde(default)]
@@ -234,6 +237,11 @@ pub struct McpToolServerConfig {
     /// spawns), so it defaults off even when the server itself is enabled.
     #[serde(default)]
     pub coordination_enabled: bool,
+
+    /// Gates the `computer_*` GUI-control / screenshot tools. Highest-risk
+    /// capability (can drive any app on the machine), so default off.
+    #[serde(default)]
+    pub computer_enabled: bool,
 }
 
 impl Default for McpToolServerConfig {
@@ -242,6 +250,7 @@ impl Default for McpToolServerConfig {
             enabled: false,
             port: default_mcp_tool_server_port(),
             coordination_enabled: false,
+            computer_enabled: false,
         }
     }
 }
@@ -373,6 +382,7 @@ impl Default for AppConfig {
             global_hotkey: default_global_hotkey(),
             keep_in_tray: default_keep_in_tray(),
             autostart: false,
+            computer_allowed_apps: vec![],
             db_connections: vec![],
             default_tab: DefaultTab::default(),
             telegram_chat_id: None,

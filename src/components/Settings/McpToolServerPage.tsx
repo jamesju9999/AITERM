@@ -8,6 +8,7 @@ import {
   type McpToolServerConfig,
   type McpToolServerStatus,
 } from "../../ipc/mcpToolServer";
+import { ComputerUseSection } from "./ComputerUseSection";
 import "./McpToolServerPage.css";
 
 export function McpToolServerPage() {
@@ -91,6 +92,11 @@ export function McpToolServerPage() {
         </label>
         <p className="mcp-tool-server-desc">{t.mcp_tool_server_coordination_desc}</p>
       </section>
+
+      <ComputerUseSection
+        enabled={cfg.computer_enabled ?? false}
+        onEnabledChange={(v) => updateCfg({ ...cfg, computer_enabled: v })}
+      />
 
       {status?.running && (
         <section className="mcp-tool-server-section">
