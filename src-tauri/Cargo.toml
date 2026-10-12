@@ -49,6 +49,8 @@ rand = "0.9"
 mdns-sd = "0.21"
 once_cell = "1"
 base64 = "0.22"
+# 截圖編碼（Windows／Linux 後端）與圖示偵測的像素處理；winmap.rs 在所有平台編譯。
+png = "0.17"
 # 資料庫連線匯出檔的加密（passphrase → Argon2id → AES-256-GCM）
 aes-gcm = "0.10"
 argon2 = "0.5"
@@ -125,8 +127,6 @@ futures-util = "0.3"
 # 滑鼠／鍵盤事件走 CGEvent。highsierra 只是打開捲動事件的 API。
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
-# 讀截圖做圖示偵測。
-png = "0.17"
 core-foundation-sys = "0.8"
 core-graphics = { version = "0.25", features = ["highsierra"] }
 # 列出執行中的 App（約 1 秒的 osascript 換成幾毫秒的原生呼叫）。
@@ -139,4 +139,11 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
 
 [target.'cfg(windows)'.dependencies]
 local-ip-address = "0.6.13"
+# 電腦操作的 Windows 後端（UI Automation、SendInput、GDI 截圖、Windows.Media.Ocr）。
+windows = { version = "0.61", features = [
+  "Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Accessibility",
+  "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_System_Com", "Win32_System_Threading", "Win32_System_Variant",
+  "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Media_Ocr", "Graphics_Imaging", "Storage_Streams", "Foundation",
+  "Foundation_Collections", "Globalization",
+] }
 windows-sys = { version = "0.60", features = ["Win32_Storage_FileSystem", "Win32_System_WindowsProgramming"] }

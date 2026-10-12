@@ -308,7 +308,9 @@ pub fn run() {
                 let approver = Arc::new(TauriApprover::new(app.handle().clone()));
                 #[cfg(target_os = "macos")]
                 let backend: Arc<dyn computer::backend::Backend> = Arc::new(computer::macos::MacBackend);
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(windows)]
+                let backend: Arc<dyn computer::backend::Backend> = Arc::new(computer::windows::WindowsBackend);
+                #[cfg(not(any(target_os = "macos", windows)))]
                 let backend: Arc<dyn computer::backend::Backend> = Arc::new(computer::backend::UnsupportedBackend);
                 let cfg = app.state::<Arc<crate::config::ConfigStore>>().inner().clone();
                 let service = Arc::new(computer::ComputerService::new(

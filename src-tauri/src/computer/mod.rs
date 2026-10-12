@@ -9,6 +9,8 @@ pub mod backend;
 pub mod icons;
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(windows)]
+pub mod windows;
 pub mod policy;
 pub mod winmap;
 pub mod tools;

@@ -169,6 +169,49 @@ pub fn scale_from_dpi(dpi: u32) -> f64 {
     if dpi == 0 { 1.0 } else { dpi as f64 / 96.0 }
 }
 
+// ── 像素處理（截圖 → PNG／OCR／圖示偵測）─────────────────────────────────────────────
+
+/// GDI 的 32 位元像素是 BGRA（alpha 常為 0）；轉成不透明的 RGBA 給 PNG。
+pub fn bgra_to_rgba(bgra: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bgra.len());
+    for px in bgra.chunks_exact(4) {
+        out.extend_from_slice(&[px[2], px[1], px[0], 255]);
+    }
+    out
+}
+
+/// BGRA → 0~255 亮度（圖示偵測用）。
+pub fn bgra_to_luminance(bgra: &[u8]) -> Vec<u8> {
+    bgra.chunks_exact(4)
+        .map(|px| (0.114 * px[0] as f64 + 0.587 * px[1] as f64 + 0.299 * px[2] as f64).round() as u8)
+        .collect()
+}
+
+/// 把 RGBA 像素編成 PNG。
+pub fn encode_png_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    if rgba.len() != (width as usize) * (height as usize) * 4 {
+        return Err("像素資料大小與寬高不符".to_string());
+    }
+    let mut out = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut out, width, height);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut w = enc.write_header().map_err(|e| format!("PNG 編碼失敗：{e}"))?;
+        w.write_image_data(rgba).map_err(|e| format!("PNG 編碼失敗：{e}"))?;
+    }
+    Ok(out)
+}
+
+/// 兩個矩形（x, y, w, h）的交集，沒有重疊回 `None`。用來把視窗範圍夾在虛擬桌面內。
+pub fn intersect(a: (i32, i32, i32, i32), b: (i32, i32, i32, i32)) -> Option<(i32, i32, i32, i32)> {
+    let x0 = a.0.max(b.0);
+    let y0 = a.1.max(b.1);
+    let x1 = (a.0 + a.2).min(b.0 + b.2);
+    let y1 = (a.1 + a.3).min(b.1 + b.3);
+    (x1 > x0 && y1 > y0).then_some((x0, y0, x1 - x0, y1 - y0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +357,41 @@ mod tests {
         assert_eq!(scale_from_dpi(144), 1.5);
         assert_eq!(scale_from_dpi(192), 2.0);
         assert_eq!(scale_from_dpi(0), 1.0);
+    }
+
+    #[test]
+    fn bgra_pixels_become_opaque_rgba_and_luminance() {
+        let bgra = [10, 20, 30, 0, 255, 255, 255, 0]; // 第一個像素 B=10 G=20 R=30（alpha 0）
+        assert_eq!(bgra_to_rgba(&bgra), vec![30, 20, 10, 255, 255, 255, 255, 255]);
+        assert_eq!(bgra_to_luminance(&[0, 0, 0, 0, 255, 255, 255, 0]), vec![0, 255]);
+        // 純綠比純藍亮（人眼敏感度）
+        let g = bgra_to_luminance(&[0, 255, 0, 0])[0];
+        let b = bgra_to_luminance(&[255, 0, 0, 0])[0];
+        assert!(g > b);
+        assert!(bgra_to_rgba(&[]).is_empty());
+        assert_eq!(bgra_to_rgba(&[1, 2, 3]).len(), 0); // 不足一個像素的尾巴丟掉，不越界
+    }
+
+    #[test]
+    fn png_encoding_round_trips_and_rejects_a_wrong_buffer_size() {
+        let rgba = vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 9, 9, 9, 255];
+        let png_bytes = encode_png_rgba(2, 2, &rgba).unwrap();
+        assert_eq!(&png_bytes[1..4], b"PNG");
+        let mut dec = png::Decoder::new(std::io::Cursor::new(&png_bytes)).read_info().unwrap();
+        let mut buf = vec![0; dec.output_buffer_size()];
+        let info = dec.next_frame(&mut buf).unwrap();
+        assert_eq!((info.width, info.height), (2, 2));
+        assert_eq!(&buf[..16], &rgba[..]);
+        assert!(encode_png_rgba(2, 2, &rgba[..15]).is_err());
+        assert!(encode_png_rgba(0, 0, &[]).is_err() || encode_png_rgba(0, 0, &[]).is_ok()); // 不 panic
+    }
+
+    #[test]
+    fn rectangles_intersect_only_when_they_overlap() {
+        assert_eq!(intersect((0, 0, 100, 100), (50, 50, 100, 100)), Some((50, 50, 50, 50)));
+        assert_eq!(intersect((0, 0, 10, 10), (10, 0, 10, 10)), None); // 只是相鄰
+        assert_eq!(intersect((0, 0, 10, 10), (20, 20, 5, 5)), None);
+        // 視窗有一部分在螢幕外（負座標）
+        assert_eq!(intersect((-50, 10, 100, 100), (0, 0, 1920, 1080)), Some((0, 10, 50, 100)));
     }
 }
