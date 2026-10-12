@@ -111,6 +111,11 @@ pub struct Permissions {
 #[async_trait]
 pub trait Backend: Send + Sync {
     fn permissions(&self) -> Permissions;
+    /// 這個環境根本不能用（例如 Linux 的 Wayland 工作階段）時的說明；`None` 代表可以。
+    /// 所有工具在動作之前都先檢查它，錯誤訊息直接告訴使用者怎麼辦。
+    fn unsupported_reason(&self) -> Option<String> {
+        None
+    }
     async fn list_apps(&self) -> Result<Vec<AppInfo>, String>;
     /// 讀元件樹；深度由 `max_depth` 限制（根為 0）。
     async fn snapshot(&self, pid: i32, max_depth: usize) -> Result<ElementNode, String>;

@@ -310,7 +310,9 @@ pub fn run() {
                 let backend: Arc<dyn computer::backend::Backend> = Arc::new(computer::macos::MacBackend);
                 #[cfg(windows)]
                 let backend: Arc<dyn computer::backend::Backend> = Arc::new(computer::windows::WindowsBackend);
-                #[cfg(not(any(target_os = "macos", windows)))]
+                #[cfg(target_os = "linux")]
+                let backend: Arc<dyn computer::backend::Backend> = Arc::new(computer::linux::LinuxBackend);
+                #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
                 let backend: Arc<dyn computer::backend::Backend> = Arc::new(computer::backend::UnsupportedBackend);
                 let cfg = app.state::<Arc<crate::config::ConfigStore>>().inner().clone();
                 let service = Arc::new(computer::ComputerService::new(

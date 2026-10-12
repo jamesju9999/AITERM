@@ -26,6 +26,8 @@ struct FakeBackend {
     screen_text: Mutex<Vec<ScreenText>>,
     /// 假的圖示偵測結果（螢幕座標）。
     icons: Mutex<Vec<IconRect>>,
+    /// 設定後模擬「這個環境不能用」（例如 Wayland）。
+    reason: Mutex<Option<String>>,
 }
 
 fn st(text: &str, x: f64, y: f64) -> ScreenText {
@@ -45,6 +47,7 @@ impl FakeBackend {
             list_calls: Default::default(),
             screen_text: Mutex::new(vec![]),
             icons: Mutex::new(vec![]),
+            reason: Mutex::new(None),
         })
     }
     fn calls(&self) -> Vec<String> {
@@ -67,6 +70,7 @@ impl FakeBackend {
 #[async_trait]
 impl Backend for FakeBackend {
     fn permissions(&self) -> Permissions { self.perms }
+    fn unsupported_reason(&self) -> Option<String> { self.reason.lock().clone() }
     async fn list_apps(&self) -> Result<Vec<AppInfo>, String> {
         self.list_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(vec![
@@ -283,6 +287,7 @@ async fn missing_permissions_are_reported_before_anything_else() {
         list_calls: Default::default(),
         screen_text: Mutex::new(vec![]),
         icons: Mutex::new(vec![]),
+        reason: Mutex::new(None),
     });
     let r = rig_with(b, true, &[Decision::AllowAlways]);
     assert!(r.svc.snapshot("Notes", None).await.unwrap_err().contains("輔助使用"));
@@ -821,6 +826,7 @@ async fn read_screen_lists_text_with_coordinates_top_to_bottom_and_needs_screen_
         list_calls: Default::default(),
         screen_text: Mutex::new(vec![]),
         icons: Mutex::new(vec![]),
+        reason: Mutex::new(None),
     });
     let r2 = rig_with(b2, true, &[Decision::AllowAlways]);
     assert!(r2.svc.read_screen("Notes").await.unwrap_err().contains("螢幕錄製"));
@@ -1391,6 +1397,25 @@ mod live_click_icon {
 
 #[test]
 fn only_platforms_with_a_backend_expose_the_tools() {
-    assert!(os_supported("macos") && os_supported("windows"));
-    assert!(!os_supported("linux") && !os_supported("freebsd") && !os_supported(""));
+    assert!(os_supported("macos") && os_supported("windows") && os_supported("linux"));
+    assert!(!os_supported("freebsd") && !os_supported("android") && !os_supported(""));
+}
+
+#[tokio::test]
+async fn an_unusable_environment_is_explained_by_every_tool_before_anything_else_happens() {
+    let b = FakeBackend::new();
+    *b.reason.lock() = Some("目前只支援 X11 桌面。".to_string());
+    let r = rig_with(b, true, &[Decision::AllowAlways; 4]);
+    let must = |e: String| assert!(e.contains("只支援 X11"), "{e}");
+    must(r.svc.list_apps().await.unwrap_err());
+    must(r.svc.snapshot("Notes", None).await.unwrap_err());
+    must(r.svc.read_screen("Notes").await.unwrap_err());
+    must(r.svc.find_icons("Notes", "top").await.unwrap_err());
+    must(r.svc.click_text("Notes", "x", None, MouseButton::Left, false).await.unwrap_err());
+    must(r.svc.key("Notes", "cmd+s").await.unwrap_err());
+    must(r.svc.open_app("Notes").await.unwrap_err());
+    must(r.svc.open_url("https://example.com", None).await.unwrap_err());
+    must(r.svc.screenshot(None).await.unwrap_err());
+    assert!(r.approver.asked().is_empty(), "不能用的環境不該先打擾使用者");
+    assert!(r.backend.calls().is_empty());
 }

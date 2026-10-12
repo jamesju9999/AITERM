@@ -7,8 +7,11 @@ pub mod approval;
 pub mod audit;
 pub mod backend;
 pub mod icons;
+pub mod linuxmap;
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(target_os = "linux")]
+pub mod linux;
 #[cfg(windows)]
 pub mod windows;
 pub mod policy;
@@ -47,7 +50,7 @@ pub fn builtin_tool_infos(cfg: &crate::config::AppConfig) -> Vec<crate::mcp::Mcp
 
 /// 這個作業系統有沒有電腦操作後端。
 pub fn os_supported(os: &str) -> bool {
-    matches!(os, "macos" | "windows")
+    matches!(os, "macos" | "windows" | "linux")
 }
 
 pub fn platform_supported() -> bool {
@@ -153,7 +156,11 @@ impl ComputerService {
 
     fn require_enabled(&self) -> Result<(), String> {
         if self.config.get().mcp_tool_server.computer_enabled {
-            Ok(())
+            // 開關開著，但這個環境不能用（例如 Wayland）：直接說明，不要讓使用者看到一堆「缺少權限」。
+            match self.backend.unsupported_reason() {
+                Some(reason) => Err(reason),
+                None => Ok(()),
+            }
         } else {
             Err("電腦操作工具未啟用。請到 AITerm 設定 → MCP Tool Server 開啟「電腦操作」。".to_string())
         }

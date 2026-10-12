@@ -321,6 +321,7 @@ dependencies = [
  "windows",
  "windows-sys 0.60.2",
  "wiremock",
+ "x11rb",
 ]
 
 [[package]]
