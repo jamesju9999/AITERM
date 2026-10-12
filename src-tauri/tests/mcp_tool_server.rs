@@ -260,7 +260,7 @@ async fn rpc(app: axum::Router, method: &str, params: serde_json::Value) -> Stri
 async fn computer_tools_are_registered_over_mcp() {
     let (app, _pool) = test_router().await;
     let text = rpc(app, "tools/list", serde_json::json!({})).await;
-    for name in ["computer_list_apps", "computer_snapshot", "computer_find", "computer_screenshot",
+    for name in ["computer_list_apps", "computer_snapshot", "computer_find", "computer_read_screen", "computer_click_text", "computer_screenshot",
                  "computer_click", "computer_type", "computer_key", "computer_scroll", "computer_batch"] {
         assert!(text.contains(name), "{name} missing from tools/list: {text}");
     }

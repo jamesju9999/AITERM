@@ -25,7 +25,9 @@ snapshot again just to look. (4) When you know several steps in advance (click t
 return), send them together with computer_batch. (5) To replace a field's text use computer_type with \
 replace=true; to clear it send cmd+a then delete. (6) Always read the result text to confirm the action \
 really worked before telling the user it is done. (7) Element ids come from the latest snapshot/find/action \
-result; if told an id is stale, use the ids from the newest result.";
+result; if told an id is stale, use the ids from the newest result. (8) Some apps (Chromium/Qt, e.g. LINE) expose \
+almost no accessibility info: when snapshot/find come back nearly empty, use computer_read_screen to read the \
+on-screen text and computer_click_text to click it — never guess pixel coordinates blindly.";
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ComputerSnapshotArgs {
@@ -53,6 +55,32 @@ pub struct ComputerFindArgs {
     /// Maximum results (default 20, max 100).
     #[serde(default)]
     pub max_results: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ComputerReadScreenArgs {
+    /// App name or bundle id.
+    pub app: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ComputerClickTextArgs {
+    /// App name or bundle id.
+    pub app: String,
+    /// The text to click, as it appears on screen (case-insensitive; an exact match is preferred over a partial one).
+    pub text: String,
+    /// When several places match, which one (1-based, top-to-bottom, left-to-right).
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// "left" (default) or "right".
+    #[serde(default)]
+    pub button: Option<String>,
+    /// Double-click.
+    #[serde(default)]
+    pub double: Option<bool>,
+    /// Default true: append the resulting screen to the reply. Set false to skip it.
+    #[serde(default)]
+    pub observe: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -166,7 +194,7 @@ impl ComputerScrollArgs {
 /// key(key)、scroll(dx/dy，可選 x/y)。
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct BatchStep {
-    /// "click", "type", "key" or "scroll".
+    /// "click", "click_text", "type", "key" or "scroll".
     pub action: String,
     #[serde(default)]
     pub element: Option<String>,
@@ -184,6 +212,9 @@ pub struct BatchStep {
     /// For "type": select all first so the text replaces the existing content.
     #[serde(default)]
     pub replace: Option<bool>,
+    /// For "click_text": which match when several (1-based).
+    #[serde(default)]
+    pub index: Option<usize>,
     /// For "key", e.g. "return" or "cmd+a".
     #[serde(default)]
     pub key: Option<String>,
@@ -211,6 +242,8 @@ pub enum Call {
     ListApps,
     Snapshot(ComputerSnapshotArgs),
     Find(ComputerFindArgs),
+    ReadScreen(ComputerReadScreenArgs),
+    ClickText(ComputerClickTextArgs),
     Screenshot(ComputerScreenshotArgs),
     Click(ComputerClickArgs),
     Type(ComputerTypeArgs),
@@ -262,6 +295,9 @@ fn validate_batch(steps: &[BatchStep]) -> Result<(), String> {
                     return Err(format!("步驟 {n}：「click」需要 element，或同時需要 x 與 y"));
                 }
             }
+            "click_text" => {
+                need(s.text.as_ref(), n, "text", "click_text")?;
+            }
             "type" => {
                 need(s.text.as_ref(), n, "text", "type")?;
             }
@@ -269,7 +305,7 @@ fn validate_batch(steps: &[BatchStep]) -> Result<(), String> {
                 need(s.key.as_ref(), n, "key", "key")?;
             }
             "scroll" => {}
-            other => return Err(format!("步驟 {n}：未知的動作「{other}」（可用：click、type、key、scroll）")),
+            other => return Err(format!("步驟 {n}：未知的動作「{other}」（可用：click、click_text、type、key、scroll）")),
         }
     }
     Ok(())
@@ -300,6 +336,21 @@ async fn run_batch(service: &ComputerService, a: ComputerBatchArgs) -> Result<To
                 };
                 match args.into_parts() {
                     Ok((app, target, button, double)) => service.click(&app, target, button, double).await,
+                    Err(e) => Err(e),
+                }
+            }
+            "click_text" => {
+                let button = match s.button.as_deref() {
+                    None | Some("left") => Ok(MouseButton::Left),
+                    Some("right") => Ok(MouseButton::Right),
+                    Some(other) => Err(format!("button 只能是 left 或 right，收到「{other}」")),
+                };
+                match button {
+                    Ok(b) => {
+                        service
+                            .click_text(&a.app, s.text.as_deref().unwrap_or(""), s.index, b, s.double.unwrap_or(false))
+                            .await
+                    }
                     Err(e) => Err(e),
                 }
             }
@@ -337,6 +388,16 @@ pub async fn execute(service: &ComputerService, call: Call) -> Result<ToolOutput
             service
                 .find(&a.app, a.query.as_deref().unwrap_or(""), a.role.as_deref(), a.max_results.unwrap_or(20))
                 .await
+        }
+        Call::ReadScreen(a) => service.read_screen(&a.app).await,
+        Call::ClickText(a) => {
+            let button = match a.button.as_deref() {
+                None | Some("left") => MouseButton::Left,
+                Some("right") => MouseButton::Right,
+                Some(other) => return Err(format!("button 只能是 left 或 right，收到「{other}」")),
+            };
+            let r = service.click_text(&a.app, &a.text, a.index, button, a.double.unwrap_or(false)).await;
+            with_observation(service, &a.app, a.observe, r).await
         }
         Call::Screenshot(a) => service.screenshot(a.app.as_deref()).await,
         Call::Click(a) => {
@@ -394,6 +455,16 @@ pub fn tool_infos() -> Vec<McpToolInfo> {
             schema::<ComputerFindArgs>(),
         ),
         mk(
+            "computer_read_screen",
+            "Read the text visible on screen in an app's front window (OCR) with the position of each piece of text. Use this for apps that expose no accessibility info (Chromium/Qt apps such as LINE), where snapshot/find come back almost empty. Then click with computer_click_text.",
+            schema::<ComputerReadScreenArgs>(),
+        ),
+        mk(
+            "computer_click_text",
+            "Find a piece of text on screen (OCR) and click its centre — the way to click things in apps without accessibility info (e.g. a contact name or a search box placeholder in LINE). If several places match, pass index. The reply includes the resulting screen text.",
+            schema::<ComputerClickTextArgs>(),
+        ),
+        mk(
             "computer_screenshot",
             "Take a screenshot of an app window. In this chat the image itself cannot be shown to you — only its size is returned — so prefer computer_find / computer_snapshot to see what is on screen.",
             schema::<ComputerScreenshotArgs>(),
@@ -420,7 +491,7 @@ pub fn tool_infos() -> Vec<McpToolInfo> {
         ),
         mk(
             "computer_batch",
-            "Run up to 10 click/type/key/scroll steps in order in ONE call and get the final screen back — use it when you already know the sequence (e.g. click the search box, type a name, press return). Stops at the first failure and reports progress. Every step still goes through the usual permission and confirmation checks.",
+            "Run up to 10 click/click_text/type/key/scroll steps in order in ONE call and get the final screen back — use it when you already know the sequence (e.g. click the search box, type a name, press return). Stops at the first failure and reports progress. Every step still goes through the usual permission and confirmation checks.",
             schema::<ComputerBatchArgs>(),
         ),
     ]
@@ -459,6 +530,8 @@ pub async fn call(service: &ComputerService, tool: &str, args: Value) -> McpTool
             "computer_list_apps" => Call::ListApps,
             "computer_snapshot" => Call::Snapshot(parse(args)?),
             "computer_find" => Call::Find(parse(args)?),
+            "computer_read_screen" => Call::ReadScreen(parse(args)?),
+            "computer_click_text" => Call::ClickText(parse(args)?),
             "computer_screenshot" => Call::Screenshot(parse(args)?),
             "computer_click" => Call::Click(parse(args)?),
             "computer_type" => Call::Type(parse(args)?),
@@ -478,7 +551,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exposes_the_nine_tools_with_object_schemas_and_encoded_names() {
+    fn exposes_the_eleven_tools_with_object_schemas_and_encoded_names() {
         let tools = tool_infos();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(
@@ -487,6 +560,8 @@ mod tests {
                 "aiterm_computer__computer_list_apps",
                 "aiterm_computer__computer_snapshot",
                 "aiterm_computer__computer_find",
+                "aiterm_computer__computer_read_screen",
+                "aiterm_computer__computer_click_text",
                 "aiterm_computer__computer_screenshot",
                 "aiterm_computer__computer_click",
                 "aiterm_computer__computer_type",
@@ -543,7 +618,7 @@ mod tests {
 
     #[test]
     fn the_prompt_hint_mentions_every_efficiency_tool() {
-        for w in ["computer_find", "computer_batch", "replace=true", "cmd+a"] {
+        for w in ["computer_find", "computer_batch", "replace=true", "cmd+a", "computer_read_screen", "computer_click_text"] {
             assert!(PROMPT_HINT.contains(w), "{w}");
         }
     }

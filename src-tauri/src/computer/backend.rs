@@ -60,6 +60,22 @@ pub struct KeyCombo {
     pub shift: bool,
 }
 
+/// 螢幕上辨識到的一段文字，座標是螢幕邏輯座標（左上角為原點，與點擊座標一致）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScreenText {
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+impl ScreenText {
+    pub fn center(&self) -> (f64, f64) {
+        (self.x + self.w / 2.0, self.y + self.h / 2.0)
+    }
+}
+
 /// 目前焦點元件的狀態，操作後回報給模型驗證結果用。
 #[derive(Debug, Clone, PartialEq)]
 pub struct FocusedText {
@@ -94,6 +110,9 @@ pub trait Backend: Send + Sync {
     async fn focus_element(&self, pid: i32, id: &str) -> Result<(), String>;
     async fn key(&self, combo: &KeyCombo) -> Result<(), String>;
     async fn scroll(&self, dx: i32, dy: i32, at: Option<(f64, f64)>) -> Result<(), String>;
+    /// 對畫面（整個螢幕，或某個 App 的前景視窗）做文字辨識，回傳每段文字與它的螢幕座標。
+    /// 給不提供無障礙資訊的 App（Chromium／Qt，如 LINE）用。
+    async fn read_screen(&self, pid: Option<i32>) -> Result<Vec<ScreenText>, String>;
     /// App 目前焦點元件的角色與文字；沒有焦點元件回 `None`。
     async fn focused_text(&self, pid: i32) -> Result<Option<FocusedText>, String>;
 }
@@ -122,5 +141,6 @@ impl Backend for UnsupportedBackend {
     async fn focus_element(&self, _: i32, _: &str) -> Result<(), String> { unsupported() }
     async fn key(&self, _: &KeyCombo) -> Result<(), String> { unsupported() }
     async fn scroll(&self, _: i32, _: i32, _: Option<(f64, f64)>) -> Result<(), String> { unsupported() }
+    async fn read_screen(&self, _: Option<i32>) -> Result<Vec<ScreenText>, String> { unsupported() }
     async fn focused_text(&self, _: i32) -> Result<Option<FocusedText>, String> { unsupported() }
 }

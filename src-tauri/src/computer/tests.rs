@@ -21,6 +21,12 @@ struct FakeBackend {
     /// 模擬焦點文字區：(內容, 是否全選, 是否密碼欄位)。
     doc: Mutex<(String, bool, bool)>,
     list_calls: std::sync::atomic::AtomicUsize,
+    /// 假的 OCR 結果（螢幕座標）。
+    screen_text: Mutex<Vec<ScreenText>>,
+}
+
+fn st(text: &str, x: f64, y: f64) -> ScreenText {
+    ScreenText { text: text.into(), x, y, w: 80.0, h: 20.0 }
 }
 
 impl FakeBackend {
@@ -34,6 +40,7 @@ impl FakeBackend {
             press_fails: false,
             doc: Mutex::new((String::new(), false, false)),
             list_calls: Default::default(),
+            screen_text: Mutex::new(vec![]),
         })
     }
     fn calls(&self) -> Vec<String> {
@@ -101,6 +108,10 @@ impl Backend for FakeBackend {
             _ => {}
         }
         Ok(())
+    }
+    async fn read_screen(&self, pid: Option<i32>) -> Result<Vec<ScreenText>, String> {
+        self.calls.lock().push(format!("read_screen {pid:?}"));
+        Ok(self.screen_text.lock().clone())
     }
     async fn focused_text(&self, _: i32) -> Result<Option<FocusedText>, String> {
         let d = self.doc.lock();
@@ -254,6 +265,7 @@ async fn missing_permissions_are_reported_before_anything_else() {
         press_fails: false,
         doc: Mutex::new((String::new(), false, false)),
         list_calls: Default::default(),
+        screen_text: Mutex::new(vec![]),
     });
     let r = rig_with(b, true, &[Decision::AllowAlways]);
     assert!(r.svc.snapshot("Notes", None).await.unwrap_err().contains("輔助使用"));
@@ -502,6 +514,7 @@ async fn failing_to_read_the_field_state_does_not_fail_the_action() {
         async fn focus_element(&self, p: i32, i: &str) -> Result<(), String> { self.0.focus_element(p, i).await }
         async fn key(&self, c: &KeyCombo) -> Result<(), String> { self.0.key(c).await }
         async fn scroll(&self, x: i32, y: i32, a: Option<(f64, f64)>) -> Result<(), String> { self.0.scroll(x, y, a).await }
+        async fn read_screen(&self, p: Option<i32>) -> Result<Vec<ScreenText>, String> { self.0.read_screen(p).await }
         async fn focused_text(&self, _: i32) -> Result<Option<FocusedText>, String> { Err("AX 讀取失敗".into()) }
     }
     drop(r);
@@ -622,7 +635,7 @@ fn click_args(app: &str, element: &str) -> ComputerClickArgs {
 }
 
 fn step(action: &str) -> BatchStep {
-    BatchStep { action: action.into(), element: None, x: None, y: None, button: None, double: None, text: None, replace: None, key: None, dx: None, dy: None }
+    BatchStep { action: action.into(), element: None, x: None, y: None, button: None, double: None, text: None, replace: None, key: None, dx: None, dy: None, index: None }
 }
 
 #[tokio::test]
@@ -747,6 +760,154 @@ async fn type_and_scroll_calls_accept_the_new_observe_flag() {
     assert!(out.contains("已捲動"));
 }
 
+// ── 沒有無障礙資訊的 App（Chromium／Qt，例如 LINE）：靠螢幕文字辨識（OCR）看畫面、點文字。
+
+fn sparse_tree() -> ElementNode {
+    // 真實 LINE 的樣子：視窗 1x1、只有一個空的 AXWebArea，其餘只有選單列。
+    let mut root = el("0", "AXApplication", "");
+    let mut win = el("0.0", "AXWindow", "");
+    win.w = 1.0;
+    win.h = 1.0;
+    let mut bar = el("0.1", "AXMenuBar", "");
+    bar.children = vec![el("0.1.0", "AXMenuBarItem", "檔案"), el("0.1.1", "AXMenuBarItem", "編輯")];
+    root.children = vec![win, bar];
+    root
+}
+
+fn line_like_rig(script: &[Decision]) -> Rig {
+    let b = FakeBackend::new();
+    *b.tree.lock() = sparse_tree();
+    *b.screen_text.lock() = vec![st("搜尋", 100.0, 60.0), st("景詳", 100.0, 200.0), st("景詳的朋友", 100.0, 260.0), st("傳送", 700.0, 700.0)];
+    rig_with(b, true, script)
+}
+
+#[tokio::test]
+async fn read_screen_lists_text_with_coordinates_top_to_bottom_and_needs_screen_recording() {
+    let r = line_like_rig(&[Decision::AllowAlways]);
+    let out = text(r.svc.read_screen("Notes").await.unwrap());
+    let a = out.find("搜尋").unwrap();
+    let b = out.find("景詳").unwrap();
+    assert!(a < b, "要由上到下：{out}");
+    assert!(out.contains("(100,60,80,20)"), "{out}");
+    let c = r.backend.calls();
+    assert!(c.iter().position(|x| x == "activate 42") < c.iter().position(|x| x.starts_with("read_screen")), "{c:?}");
+
+    let b2 = Arc::new(FakeBackend {
+        perms: Permissions { accessibility: true, screen_recording: false },
+        tree: Mutex::new(el("0", "AXWindow", "")),
+        calls: Mutex::new(vec![]),
+        press_fails: false,
+        doc: Mutex::new((String::new(), false, false)),
+        list_calls: Default::default(),
+        screen_text: Mutex::new(vec![]),
+    });
+    let r2 = rig_with(b2, true, &[Decision::AllowAlways]);
+    assert!(r2.svc.read_screen("Notes").await.unwrap_err().contains("螢幕錄製"));
+}
+
+#[tokio::test]
+async fn read_screen_with_no_text_says_so_instead_of_returning_an_empty_string() {
+    let r = rig(&[Decision::AllowAlways]);
+    let out = text(r.svc.read_screen("Notes").await.unwrap());
+    assert!(out.contains("沒有辨識到"), "{out}");
+}
+
+#[tokio::test]
+async fn click_text_clicks_the_centre_of_the_best_match_after_activating_the_app() {
+    let r = line_like_rig(&[Decision::AllowAlways]);
+    let out = text(r.svc.click_text("Notes", "搜尋", None, MouseButton::Left, false).await.unwrap());
+    assert!(out.contains("搜尋"), "{out}");
+    // 中心 = (100 + 80/2, 60 + 20/2)
+    assert_eq!(r.backend.calls().iter().filter(|c| c.starts_with("click_at")).collect::<Vec<_>>(), vec!["click_at 140,70 double=false"]);
+    // 先切到前景、再辨識、再點擊：順序錯了座標會對到別的視窗。
+    let c = r.backend.calls();
+    let act = c.iter().position(|x| x == "activate 42").unwrap();
+    let ocr = c.iter().position(|x| x.starts_with("read_screen")).unwrap();
+    let clk = c.iter().position(|x| x.starts_with("click_at")).unwrap();
+    assert!(act < ocr && ocr < clk, "{c:?}");
+}
+
+#[tokio::test]
+async fn click_text_prefers_an_exact_match_over_a_substring_one() {
+    let r = line_like_rig(&[Decision::AllowAlways]);
+    r.svc.click_text("Notes", "景詳", None, MouseButton::Left, false).await.unwrap();
+    assert!(r.backend.calls().iter().any(|c| c == "click_at 140,210 double=false"), "{:?}", r.backend.calls());
+}
+
+#[tokio::test]
+async fn click_text_with_several_equal_matches_asks_which_one_instead_of_guessing() {
+    let b = FakeBackend::new();
+    *b.screen_text.lock() = vec![st("OK", 10.0, 10.0), st("OK", 10.0, 300.0)];
+    let r = rig_with(b, true, &[Decision::AllowAlways]);
+    let e = r.svc.click_text("Notes", "OK", None, MouseButton::Left, false).await.unwrap_err();
+    assert!(e.contains("2 處") && e.contains("index"), "{e}");
+    assert!(!r.backend.calls().iter().any(|c| c.starts_with("click_at")));
+    r.svc.click_text("Notes", "OK", Some(2), MouseButton::Left, false).await.unwrap();
+    assert!(r.backend.calls().iter().any(|c| c == "click_at 50,310 double=false"));
+}
+
+#[tokio::test]
+async fn click_text_reports_what_was_actually_seen_when_nothing_matches() {
+    let r = line_like_rig(&[Decision::AllowAlways]);
+    let e = r.svc.click_text("Notes", "不存在", None, MouseButton::Left, false).await.unwrap_err();
+    assert!(e.contains("找不到") && e.contains("搜尋"), "應列出畫面上實際有的字：{e}");
+}
+
+#[tokio::test]
+async fn click_text_reactivates_the_app_after_a_confirmation_dialog_stole_focus() {
+    let r = line_like_rig(&[Decision::AllowAlways, Decision::AllowOnce]);
+    r.svc.click_text("Notes", "傳送", None, MouseButton::Left, false).await.unwrap();
+    let c = r.backend.calls();
+    let last_act = c.iter().rposition(|x| x == "activate 42").unwrap();
+    let clk = c.iter().position(|x| x.starts_with("click_at")).unwrap();
+    assert!(last_act < clk && c.iter().filter(|x| *x == "activate 42").count() >= 2, "{c:?}");
+}
+
+#[tokio::test]
+async fn click_text_on_a_dangerous_label_asks_every_time() {
+    let r = line_like_rig(&[Decision::AllowAlways, Decision::Deny]);
+    let e = r.svc.click_text("Notes", "傳送", None, MouseButton::Left, false).await.unwrap_err();
+    assert!(e.starts_with("使用者拒絕"), "{e}");
+    assert!(!r.backend.calls().iter().any(|c| c.starts_with("click_at")));
+    assert!(r.approver.asked().iter().any(|a| a.0 == ApprovalKind::Destructive && a.2.contains("傳送")));
+}
+
+#[tokio::test]
+async fn sparse_accessibility_apps_are_flagged_in_snapshot_and_fall_back_to_ocr_when_observing() {
+    let r = line_like_rig(&[Decision::AllowAlways]);
+    let snap = text(r.svc.snapshot("Notes", None).await.unwrap());
+    assert!(snap.contains("computer_read_screen") && snap.contains("computer_click_text"), "{snap}");
+
+    let out = text(tools::execute(&r.svc, Call::Key(ComputerKeyArgs { app: "Notes".into(), key: "tab".into(), observe: None })).await.unwrap());
+    assert!(out.contains("畫面文字") && out.contains("景詳"), "{out}");
+}
+
+#[tokio::test]
+async fn rich_accessibility_apps_do_not_pay_for_ocr() {
+    let b = FakeBackend::new();
+    {
+        let mut root = el("0", "AXWindow", "Doc");
+        root.children = (0..6).map(|i| el(&format!("0.{i}"), "AXButton", &format!("b{i}"))).collect();
+        *b.tree.lock() = root;
+    }
+    let r = rig_with(b, true, &[Decision::AllowAlways]);
+    tools::execute(&r.svc, Call::Key(ComputerKeyArgs { app: "Notes".into(), key: "tab".into(), observe: None })).await.unwrap();
+    assert!(!r.backend.calls().iter().any(|c| c.starts_with("read_screen")), "{:?}", r.backend.calls());
+}
+
+#[tokio::test]
+async fn batch_supports_click_text_steps() {
+    let r = line_like_rig(&[Decision::AllowAlways]);
+    let mut click = step("click_text");
+    click.text = Some("搜尋".into());
+    let mut typ = step("type");
+    typ.text = Some("景詳".into());
+    let out = text(tools::execute(&r.svc, Call::Batch(ComputerBatchArgs { app: "Notes".into(), steps: vec![click, typ], observe: Some(false) })).await.unwrap());
+    assert!(out.contains("步驟 1/2 click_text") && out.contains("步驟 2/2 type"), "{out}");
+    let c = r.backend.calls();
+    assert!(c.iter().position(|x| x.starts_with("click_at")) < c.iter().position(|x| x == "type 景詳"));
+}
+
 // ── 內建 Ask AI 入口（computer::tools::call）：結果一律包成文字＋is_error，模型讀得到原因。
 
 #[tokio::test]
@@ -792,7 +953,7 @@ fn builtin_tools_are_hidden_unless_the_master_switch_is_on() {
     let mut cfg = crate::config::AppConfig::default();
     assert!(builtin_tool_infos(&cfg).is_empty());
     cfg.mcp_tool_server.computer_enabled = true;
-    assert_eq!(builtin_tool_infos(&cfg).len(), 9);
+    assert_eq!(builtin_tool_infos(&cfg).len(), 11);
 }
 
 // ── 真機端對端（macOS，需要輔助使用＋螢幕錄製權限，預設不跑）：
@@ -893,4 +1054,76 @@ async fn apps_can_be_addressed_by_process_name_localized_name_or_bundle_id() {
     }
     let listed = text(r.svc.list_apps().await.unwrap());
     assert!(listed.contains("Notes（備忘錄）"), "{listed}");
+}
+
+#[cfg(target_os = "macos")]
+mod live_ocr_line {
+    use super::*;
+    use crate::computer::macos::MacBackend;
+
+    /// 真機：LINE 沒有無障礙資訊，但 OCR 要讀得到畫面上的字。需要 LINE 開著且有可見視窗。
+    #[tokio::test]
+    #[ignore]
+    async fn line_is_readable_through_ocr_even_though_its_accessibility_tree_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(ConfigStore::new_at(dir.path().join("config.toml")));
+        config.update(|c| c.mcp_tool_server.computer_enabled = true).unwrap();
+        let svc = ComputerService::new(
+            Arc::new(MacBackend),
+            FakeApprover::new(&[Decision::AllowOnce; 8]),
+            config,
+            AuditLog::new(dir.path().join("audit.jsonl")),
+            std::process::id() as i32,
+        );
+        let snap = text(svc.snapshot("LINE", None).await.unwrap());
+        println!("SNAPSHOT_TAIL {}", snap.lines().last().unwrap_or(""));
+        assert!(snap.contains("computer_read_screen"), "稀疏的 App 應提示改用 OCR：{snap}");
+        let t = std::time::Instant::now();
+        let out = text(svc.read_screen("LINE").await.unwrap());
+        println!("TIMING read_screen(LINE): {:?}", t.elapsed());
+        for l in out.lines().take(25) {
+            println!("LINEOCR {l}");
+        }
+        assert!(out.lines().count() > 3, "{out}");
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod live_line_flow {
+    use super::*;
+    use crate::computer::macos::MacBackend;
+
+    /// 真機、不會送出任何訊息：用 batch 點 LINE 的搜尋欄（click_text）、打入名字，
+    /// 視窗開著時 LINE 有無障礙資訊（沒開時只有 1x1 的幽靈視窗）。結束後清掉搜尋文字。
+    #[tokio::test]
+    #[ignore]
+    async fn line_search_flow_with_click_text_batch_and_ocr_observation() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(ConfigStore::new_at(dir.path().join("config.toml")));
+        config.update(|c| c.mcp_tool_server.computer_enabled = true).unwrap();
+        let svc = ComputerService::new(
+            Arc::new(MacBackend),
+            FakeApprover::new(&[Decision::AllowOnce; 16]),
+            config,
+            AuditLog::new(dir.path().join("audit.jsonl")),
+            std::process::id() as i32,
+        );
+        let mut click = step("click_text");
+        click.text = Some("以姓名搜尋".into());
+        let mut typ = step("type");
+        typ.text = Some("景詳".into());
+        let t = std::time::Instant::now();
+        let out = text(tools::execute(&svc, Call::Batch(ComputerBatchArgs { app: "LINE".into(), steps: vec![click, typ], observe: None })).await.unwrap());
+        println!("TIMING batch(click_text + type + observe): {:?}", t.elapsed());
+        for l in out.lines().take(20) {
+            println!("FLOW {l}");
+        }
+        assert!(out.contains("步驟 1/2 click_text") && out.contains("景詳"), "{out}");
+        // 清掉搜尋文字，不留痕跡。
+        let mut a = step("key");
+        a.key = Some("cmd+a".into());
+        let mut d = step("key");
+        d.key = Some("delete".into());
+        let _ = tools::execute(&svc, Call::Batch(ComputerBatchArgs { app: "LINE".into(), steps: vec![a, d], observe: Some(false) })).await;
+    }
 }

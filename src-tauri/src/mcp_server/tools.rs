@@ -25,7 +25,7 @@ use crate::pty::PtyManager;
 use crate::secret::SecretStore;
 
 use crate::computer::tools::{
-    execute, Call, ComputerBatchArgs, ComputerClickArgs, ComputerFindArgs, ComputerKeyArgs, ComputerScreenshotArgs,
+    execute, Call, ComputerBatchArgs, ComputerClickArgs, ComputerClickTextArgs, ComputerFindArgs, ComputerReadScreenArgs, ComputerKeyArgs, ComputerScreenshotArgs,
     ComputerScrollArgs, ComputerSnapshotArgs, ComputerTypeArgs,
 };
 use crate::computer::{ComputerService, ToolOutput};
@@ -245,6 +245,22 @@ impl AiTermTools {
         Parameters(a): Parameters<ComputerFindArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.run_computer(Call::Find(a)).await
+    }
+
+    #[tool(description = "Read the text visible on screen in an app's front window (OCR) with the position of each piece of text. Use this for apps that expose no accessibility info (Chromium/Qt apps such as LINE), where snapshot/find come back almost empty. Then click with computer_click_text.")]
+    async fn computer_read_screen(
+        &self,
+        Parameters(a): Parameters<ComputerReadScreenArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_computer(Call::ReadScreen(a)).await
+    }
+
+    #[tool(description = "Find a piece of text on screen (OCR) and click its centre — the way to click things in apps without accessibility info (e.g. a contact name or a search box placeholder in LINE). If several places match, pass index. The reply includes the resulting screen text.")]
+    async fn computer_click_text(
+        &self,
+        Parameters(a): Parameters<ComputerClickTextArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_computer(Call::ClickText(a)).await
     }
 
     #[tool(description = "Take a screenshot of one app's front window, or the whole main screen when app is omitted. Returns a PNG scaled to screen points, so coordinates in the image plus the stated origin are valid click coordinates.")]

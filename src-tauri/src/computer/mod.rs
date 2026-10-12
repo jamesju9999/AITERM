@@ -20,7 +20,7 @@ use parking_lot::Mutex;
 use crate::config::ConfigStore;
 use approval::{ApprovalKind, ApprovalRequest, Approver, Decision};
 use audit::AuditLog;
-use backend::{AppInfo, Backend, ElementNode, KeyCombo, MouseButton};
+use backend::{AppInfo, Backend, ElementNode, KeyCombo, MouseButton, ScreenText};
 
 /// 工具回傳：純文字，或影像加說明文字。
 #[derive(Debug)]
@@ -66,6 +66,15 @@ const SETTLE: Duration = Duration::from_millis(200);
 /// 動作後附上的畫面現況：只看淺層、精簡、行數有上限。
 const OBSERVE_DEPTH: usize = 4;
 const OBSERVE_MAX_LINES: usize = 60;
+/// 無障礙樹裡「有內容的節點」少於這個數，就視為這個 App 幾乎沒有無障礙資訊（Chromium／Qt）。
+/// 關閉掉無障礙的 Electron 視窗大約只剩三顆視窗控制鈕，所以門檻設在 4。
+const SPARSE_CONTENT_NODES: usize = 4;
+const MAX_SCREEN_TEXT_LINES: usize = 120;
+const OBSERVE_OCR_LINES: usize = 40;
+/// 這些角色是 App 一定會有的骨架（選單列、視窗外框），不算「有內容」。
+const SCAFFOLD_ROLES: &[&str] = &[
+    "AXApplication", "AXMenuBar", "AXMenuBarItem", "AXMenu", "AXMenuItem", "AXWindow", "AXWebArea",
+];
 
 /// 精簡元件樹時，標題為空就省略的「純容器」角色（孩子仍會列出，id 不變）。
 const GENERIC_ROLES: &[&str] = &[
@@ -273,16 +282,33 @@ impl ComputerService {
             return None;
         }
         let tree = self.backend.snapshot(info.pid, OBSERVE_DEPTH).await.ok()?;
-        let mut seen = self.seen.lock();
-        seen.retain(|(pid, _), _| *pid != info.pid);
         let mut lines = Vec::new();
-        render_tree(&tree, 0, 0, true, info.pid, &mut seen, &mut lines);
-        drop(seen);
+        {
+            // 鎖只在這個區塊內持有：之後還有 await（OCR），guard 不能跨過它。
+            let mut seen = self.seen.lock();
+            seen.retain(|(pid, _), _| *pid != info.pid);
+            render_tree(&tree, 0, 0, true, info.pid, &mut seen, &mut lines);
+        }
         let truncated = lines.len() > OBSERVE_MAX_LINES;
         lines.truncate(OBSERVE_MAX_LINES);
         let mut text = lines.join("\n");
         if truncated {
             text.push_str("\n…（已截斷；需要更多請呼叫 computer_snapshot 或 computer_find）");
+        }
+        // 幾乎沒有無障礙資訊的 App：樹裡只有選單列，對模型沒用。改附畫面文字（OCR），
+        // 模型才「看得見」動作的結果。只有這種 App 才付 OCR 的時間，一般 App 不受影響。
+        if count_content_nodes(&tree) < SPARSE_CONTENT_NODES && self.backend.permissions().screen_recording {
+            if let Ok(mut items) = self.backend.read_screen(Some(info.pid)).await {
+                sort_reading_order(&mut items);
+                if !items.is_empty() {
+                    let shown: Vec<String> = items.iter().take(OBSERVE_OCR_LINES).map(format_screen_text).collect();
+                    text.push_str("\n畫面文字（OCR）：\n");
+                    text.push_str(&shown.join("\n"));
+                    if items.len() > OBSERVE_OCR_LINES {
+                        text.push_str("\n…（更多請呼叫 computer_read_screen）");
+                    }
+                }
+            }
         }
         Some(text)
     }
@@ -334,10 +360,93 @@ impl ComputerService {
             if truncated {
                 text.push_str("\n…（已截斷；請縮小 max_depth 或只看需要的部分）");
             }
+            if count_content_nodes(&tree) < SPARSE_CONTENT_NODES {
+                text.push_str(
+                    "\n\n注意：這個 App 幾乎沒有提供無障礙資訊（常見於 Chromium／Qt 的應用程式，例如 LINE），\
+                     上面看不到它的按鈕與文字。請改用 computer_read_screen 讀畫面上的字，\
+                     並用 computer_click_text 直接點文字；輸入文字與按鍵照常可用。",
+                );
+            }
             Ok(ToolOutput::Text(text))
         }
         .await;
         self.finish("computer_snapshot", app, "", r)
+    }
+
+    /// 讀畫面上的文字（OCR）。給沒有無障礙資訊的 App 用；有座標，可直接拿去點。
+    pub async fn read_screen(&self, app: &str) -> Result<ToolOutput, String> {
+        let r = async {
+            self.require_enabled()?;
+            self.require_screen_recording()?;
+            let info = self.gate(app, "讀取畫面文字").await?;
+            // 先切到前景：視窗被擋住或在背景時，截到的會是別人的畫面。
+            self.backend.activate(info.pid).await?;
+            let mut items = self.backend.read_screen(Some(info.pid)).await?;
+            sort_reading_order(&mut items);
+            if items.is_empty() {
+                return Ok(ToolOutput::Text("沒有辨識到任何文字（視窗可能被遮住、最小化，或畫面上沒有字）。".to_string()));
+            }
+            let total = items.len();
+            let mut lines: Vec<String> = items.iter().take(MAX_SCREEN_TEXT_LINES).map(format_screen_text).collect();
+            if total > MAX_SCREEN_TEXT_LINES {
+                lines.push(format!("…（僅列出前 {MAX_SCREEN_TEXT_LINES} 段，共 {total} 段）"));
+            }
+            Ok(ToolOutput::Text(lines.join("\n")))
+        }
+        .await;
+        self.finish("computer_read_screen", app, "", r)
+    }
+
+    /// 找畫面上的某段文字並點它的中心。比對不到時列出畫面上實際有的字，讓模型能修正。
+    pub async fn click_text(
+        &self,
+        app: &str,
+        query: &str,
+        index: Option<usize>,
+        button: MouseButton,
+        double: bool,
+    ) -> Result<ToolOutput, String> {
+        let r = async {
+            self.require_enabled()?;
+            self.require_accessibility()?;
+            self.require_screen_recording()?;
+            if query.trim().is_empty() {
+                return Err("text 不可為空".to_string());
+            }
+            let info = self.gate(app, "點擊畫面文字").await?;
+            // 先切到前景再辨識：座標要對應「這個 App 的視窗」，而不是蓋在它上面的別的視窗。
+            self.backend.activate(info.pid).await?;
+            let mut items = self.backend.read_screen(Some(info.pid)).await?;
+            sort_reading_order(&mut items);
+            let hits = match_screen_text(&items, query);
+            if hits.is_empty() {
+                let seen: Vec<&str> = items.iter().take(30).map(|t| t.text.as_str()).collect();
+                return Err(format!(
+                    "畫面上找不到「{query}」。目前辨識到的文字有：{}",
+                    if seen.is_empty() { "（沒有）".to_string() } else { seen.join("、") }
+                ));
+            }
+            let pick = match (hits.len(), index) {
+                (1, _) => hits[0],
+                (n, None) => {
+                    let list: Vec<String> =
+                        hits.iter().enumerate().map(|(i, t)| format!("{}. {}", i + 1, format_screen_text(t))).collect();
+                    return Err(format!("畫面上有 {n} 處符合「{query}」，請用 index（從 1 開始）指定哪一個：\n{}", list.join("\n")));
+                }
+                (n, Some(i)) if i >= 1 && i <= n => hits[i - 1],
+                (n, Some(i)) => return Err(format!("index {i} 超出範圍（共 {n} 處符合）")),
+            };
+            if policy::is_dangerous_label(&pick.text) {
+                self.confirm_destructive(&info, "點擊", &format!("文字「{}」", pick.text)).await?;
+            }
+            // 確認框會把 AITerm 叫到前景；點擊前要再切回目標 App（已在最前面時幾乎沒有成本）。
+            self.backend.activate(info.pid).await?;
+            let (x, y) = pick.center();
+            self.backend.click_at(x, y, button, double).await?;
+            Ok(ToolOutput::Text(format!("已點擊文字「{}」（座標 {x:.0},{y:.0}）", pick.text)))
+        }
+        .await;
+        self.finish("computer_click_text", app, &format!("text={query}"), r)
     }
 
     /// 依文字（標題／角色）找元件，不必讀整棵樹；找到的 id 可以直接拿去點。
@@ -508,6 +617,35 @@ impl ComputerService {
         .await;
         self.finish("computer_scroll", app, &detail, r)
     }
+}
+
+fn count_content_nodes(n: &ElementNode) -> usize {
+    let me = usize::from(
+        !SCAFFOLD_ROLES.contains(&n.role.as_str()) && !GENERIC_ROLES.contains(&n.role.as_str()) && n.w > 0.0 && n.h > 0.0,
+    );
+    me + n.children.iter().map(count_content_nodes).sum::<usize>()
+}
+
+/// 由上到下、由左到右排序（同一行的 y 差小於字高的一半視為同一行）。
+fn sort_reading_order(items: &mut [ScreenText]) {
+    items.sort_by(|a, b| {
+        let same_row = (a.y - b.y).abs() < a.h.min(b.h) / 2.0;
+        if same_row { a.x.total_cmp(&b.x) } else { a.y.total_cmp(&b.y) }
+    });
+}
+
+fn format_screen_text(t: &ScreenText) -> String {
+    format!("\"{}\" ({:.0},{:.0},{:.0},{:.0})", t.text, t.x, t.y, t.w, t.h)
+}
+
+/// 在辨識結果裡找符合 `query` 的文字：完全相同優先，其次是包含（都不分大小寫）。
+fn match_screen_text<'a>(items: &'a [ScreenText], query: &str) -> Vec<&'a ScreenText> {
+    let q = query.trim().to_lowercase();
+    let exact: Vec<&ScreenText> = items.iter().filter(|t| t.text.trim().to_lowercase() == q).collect();
+    if !exact.is_empty() {
+        return exact;
+    }
+    items.iter().filter(|t| t.text.to_lowercase().contains(&q)).collect()
 }
 
 fn format_node(n: &ElementNode) -> String {

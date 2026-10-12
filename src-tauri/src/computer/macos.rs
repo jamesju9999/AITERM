@@ -279,6 +279,200 @@ async fn wait_frontmost(pid: i32, timeout: Duration) -> bool {
     }
 }
 
+/// 用系統的視窗清單（CoreGraphics）取得某個 App 在螢幕上最大的可見一般視窗。
+/// 不依賴無障礙 API，所以 Chromium／Qt 這類 AX 視窗資訊不可信的 App（例如 LINE）也能用；
+/// 視窗位置與大小本來就不需要螢幕錄製權限。
+fn window_bounds_for_pid(pid: i32) -> Option<(f64, f64, f64, f64)> {
+    use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetValueAtIndex};
+    use core_foundation_sys::dictionary::{CFDictionaryGetValue, CFDictionaryRef};
+    use core_foundation_sys::number::{kCFNumberDoubleType, CFNumberGetValue, CFNumberRef};
+    use core_graphics::window::{
+        copy_window_info, kCGNullWindowID, kCGWindowBounds, kCGWindowLayer, kCGWindowListExcludeDesktopElements,
+        kCGWindowListOptionOnScreenOnly, kCGWindowOwnerPID,
+    };
+
+    fn num(d: CFDictionaryRef, key: CFStringRef) -> Option<f64> {
+        let v = unsafe { CFDictionaryGetValue(d, key as *const c_void) };
+        if v.is_null() {
+            return None;
+        }
+        let mut out = 0f64;
+        let ok = unsafe { CFNumberGetValue(v as CFNumberRef, kCFNumberDoubleType, &mut out as *mut f64 as *mut c_void) };
+        ok.then_some(out)
+    }
+
+    let list = copy_window_info(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID)?;
+    let arr = list.as_concrete_TypeRef();
+    let (kx, ky, kw, kh) = (CFString::new("X"), CFString::new("Y"), CFString::new("Width"), CFString::new("Height"));
+    let mut best: Option<(f64, f64, f64, f64)> = None;
+    for i in 0..unsafe { CFArrayGetCount(arr) } {
+        let d = unsafe { CFArrayGetValueAtIndex(arr, i) } as CFDictionaryRef;
+        if d.is_null() || num(d, unsafe { kCGWindowOwnerPID }) != Some(pid as f64) {
+            continue;
+        }
+        if num(d, unsafe { kCGWindowLayer }) != Some(0.0) {
+            continue; // 只要一般視窗，不要選單、浮動面板
+        }
+        let b = unsafe { CFDictionaryGetValue(d, kCGWindowBounds as *const c_void) } as CFDictionaryRef;
+        if b.is_null() {
+            continue;
+        }
+        let (Some(x), Some(y), Some(w), Some(h)) = (
+            num(b, kx.as_concrete_TypeRef()),
+            num(b, ky.as_concrete_TypeRef()),
+            num(b, kw.as_concrete_TypeRef()),
+            num(b, kh.as_concrete_TypeRef()),
+        ) else {
+            continue;
+        };
+        if w < 50.0 || h < 50.0 {
+            continue;
+        }
+        if best.map_or(true, |(_, _, bw, bh)| w * h > bw * bh) {
+            best = Some((x, y, w, h));
+        }
+    }
+    best
+}
+
+fn full_screen_region() -> (f64, f64, f64, f64, Option<String>) {
+    let b = CGDisplay::main().bounds();
+    (0.0, 0.0, b.size.width, b.size.height, None)
+}
+
+fn region_arg(x: f64, y: f64, w: f64, h: f64) -> String {
+    format!("{},{},{},{}", x as i64, y as i64, w as i64, h as i64)
+}
+
+/// 要截的範圍：整個主螢幕，或該 App 的前景視窗。
+/// 視窗位置先問系統視窗清單，再退回 AX；都找不到就回錯誤（不偷偷改截整個螢幕）。
+/// 回傳 (x, y, w, h, screencapture 的 -R 參數)。
+async fn capture_region(pid: Option<i32>) -> Result<(f64, f64, f64, f64, Option<String>), String> {
+    let Some(pid) = pid else { return Ok(full_screen_region()) };
+    blocking(move || {
+        if let Some((x, y, w, h)) = window_bounds_for_pid(pid) {
+            return Ok((x, y, w, h, Some(region_arg(x, y, w, h))));
+        }
+        if let Ok(app) = Owned::app(pid) {
+            if let Some(win) = app.attr("AXFocusedWindow").or_else(|| app.attr("AXMainWindow")) {
+                if let (Some(p), Some(s)) = (win.point("AXPosition"), win.size("AXSize")) {
+                    if s.width >= 50.0 && s.height >= 50.0 {
+                        return Ok((p.x, p.y, s.width, s.height, Some(region_arg(p.x, p.y, s.width, s.height))));
+                    }
+                }
+            }
+        }
+        // 找不到這個 App 的可見視窗：不要偷偷改截整個螢幕——那會把別的 App 的文字當成它的。
+        Err("這個 App 目前沒有可見的視窗（可能被最小化、在其他桌面，或還沒打開視窗）".to_string())
+    })
+    .await
+}
+
+/// 讓背景執行、但沒有視窗的 App 重新打開視窗（等同點 Dock 圖示，`open -b` 會觸發 reopen 事件），
+/// 並等視窗真的出現。只在需要看畫面（OCR）時使用，不在一般的 activate 裡做——
+/// 有些 App（例如 Finder）的 reopen 會多開一個視窗。
+async fn reopen_window(pid: i32) -> Result<(), String> {
+    let bundle = running_apps()
+        .into_iter()
+        .find(|a| a.pid == pid)
+        .and_then(|a| a.bundle_id)
+        .ok_or("找不到這個 App 的 bundle id")?;
+    run_cmd("open", &["-b", &bundle]).await?;
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_millis(2500) {
+        if blocking(move || Ok(window_bounds_for_pid(pid).is_some())).await.unwrap_or(false) {
+            tokio::time::sleep(Duration::from_millis(250)).await; // 讓視窗內容畫完
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Err("重新開啟後仍然沒有視窗".to_string())
+}
+
+/// App 在背景執行、卻沒有任何可見視窗（把視窗關掉了——LINE 這類常見）時，畫面上什麼都操作不了，
+/// 它的無障礙樹也只剩一個 1x1 的幽靈視窗。這裡做一次「點 Dock 圖示」等效的重新開啟。
+/// 盡力而為：失敗不影響後續動作。Finder 例外——它沒有視窗是常態，reopen 會多開一個視窗。
+async fn ensure_window(pid: i32) {
+    let has_window = blocking(move || Ok(window_bounds_for_pid(pid).is_some())).await.unwrap_or(true);
+    if has_window {
+        return;
+    }
+    let is_finder = running_apps().iter().any(|a| a.pid == pid && a.bundle_id.as_deref() == Some("com.apple.finder"));
+    if !is_finder {
+        let _ = reopen_window(pid).await;
+    }
+}
+
+async fn capture_to(path: &str, region: Option<&str>) -> Result<(), String> {
+    match region {
+        Some(r) => run_cmd("screencapture", &["-x", "-t", "png", "-R", r, path]).await?,
+        None => run_cmd("screencapture", &["-x", "-t", "png", path]).await?,
+    };
+    Ok(())
+}
+
+/// Vision 辨識出的一段文字；座標是 0~1 的相對座標，原點在左下角。
+struct OcrLine {
+    text: String,
+    nx: f64,
+    ny: f64,
+    nw: f64,
+    nh: f64,
+}
+
+impl OcrLine {
+    /// 轉成螢幕座標（原點在左上角）。`(x, y, w, h)` 是被辨識的畫面範圍在螢幕上的位置與大小。
+    fn to_screen(&self, x: f64, y: f64, w: f64, h: f64) -> ScreenText {
+        ScreenText {
+            text: self.text.clone(),
+            x: x + self.nx * w,
+            y: y + (1.0 - self.ny - self.nh) * h,
+            w: self.nw * w,
+            h: self.nh * h,
+        }
+    }
+}
+
+/// 用 macOS Vision 辨識圖檔中的文字。支援繁中、簡中與英文。
+fn ocr_file(path: &str) -> Result<Vec<OcrLine>, String> {
+    use objc2::rc::Retained;
+    use objc2::AnyThread;
+    use objc2_foundation::{NSArray, NSDictionary, NSString, NSURL};
+    use objc2_vision::{VNImageRequestHandler, VNRecognizeTextRequest, VNRequest, VNRequestTextRecognitionLevel};
+
+    let url = NSURL::fileURLWithPath(&NSString::from_str(path));
+    let handler = unsafe {
+        VNImageRequestHandler::initWithURL_options(VNImageRequestHandler::alloc(), &url, &NSDictionary::new())
+    };
+    let request = VNRecognizeTextRequest::new();
+    request.setRecognitionLevel(VNRequestTextRecognitionLevel::Accurate);
+    request.setUsesLanguageCorrection(true);
+    let langs = NSArray::from_retained_slice(&[
+        NSString::from_str("zh-Hant"),
+        NSString::from_str("zh-Hans"),
+        NSString::from_str("en-US"),
+    ]);
+    request.setRecognitionLanguages(&langs);
+    let as_request: Retained<VNRequest> = Retained::into_super(Retained::into_super(request.clone()));
+    let requests = NSArray::from_retained_slice(&[as_request]);
+    handler.performRequests_error(&requests).map_err(|e| format!("文字辨識失敗：{}", e.localizedDescription()))?;
+
+    let mut out = Vec::new();
+    if let Some(results) = request.results() {
+        for obs in results.iter() {
+            let cands = unsafe { obs.topCandidates(1) };
+            let Some(best) = cands.firstObject() else { continue };
+            let text = best.string().to_string();
+            if text.trim().is_empty() {
+                continue;
+            }
+            let r = unsafe { obs.boundingBox() };
+            out.push(OcrLine { text, nx: r.origin.x, ny: r.origin.y, nw: r.size.width, nh: r.size.height });
+        }
+    }
+    Ok(out)
+}
+
 pub struct MacBackend;
 
 #[async_trait]
@@ -323,24 +517,7 @@ impl Backend for MacBackend {
     }
 
     async fn screenshot(&self, pid: Option<i32>) -> Result<Shot, String> {
-        // 範圍：整個主螢幕，或該 App 的主視窗（用 AX 取得它在螢幕座標的位置與大小）。
-        let (x, y, w, h, region) = match pid {
-            None => {
-                let b = CGDisplay::main().bounds();
-                (0.0, 0.0, b.size.width, b.size.height, None)
-            }
-            Some(pid) => blocking(move || {
-                let app = Owned::app(pid)?;
-                let win = app
-                    .attr("AXFocusedWindow")
-                    .or_else(|| app.attr("AXMainWindow"))
-                    .ok_or_else(|| "這個 App 沒有可截圖的視窗（可能被最小化或在其他桌面）".to_string())?;
-                let p = win.point("AXPosition").ok_or("讀不到視窗位置")?;
-                let s = win.size("AXSize").ok_or("讀不到視窗大小")?;
-                Ok((p.x, p.y, s.width, s.height, Some(format!("{},{},{},{}", p.x as i64, p.y as i64, s.width as i64, s.height as i64))))
-            })
-            .await?,
-        };
+        let (x, y, w, _h, region) = capture_region(pid).await?;
         let dir = std::env::temp_dir();
         let id = uuid::Uuid::new_v4();
         let raw = dir.join(format!("aiterm-shot-{id}.png"));
@@ -349,10 +526,7 @@ impl Backend for MacBackend {
         let small_s = small.to_string_lossy().to_string();
 
         let result = async {
-            match &region {
-                Some(r) => run_cmd("screencapture", &["-x", "-t", "png", "-R", r, &raw_s]).await?,
-                None => run_cmd("screencapture", &["-x", "-t", "png", &raw_s]).await?,
-            };
+            capture_to(&raw_s, region.as_deref()).await?;
             // Retina 的截圖是實體像素；縮回邏輯像素，座標與點擊才一致、檔案也小。
             let logical_w = (w as i64).max(1).to_string();
             run_cmd("sips", &["--resampleWidth", &logical_w, &raw_s, "--out", &small_s]).await?;
@@ -363,13 +537,38 @@ impl Backend for MacBackend {
         .await;
         let _ = tokio::fs::remove_file(&raw).await;
         let _ = tokio::fs::remove_file(&small).await;
-        let _ = h;
+        result
+    }
+
+    async fn read_screen(&self, pid: Option<i32>) -> Result<Vec<ScreenText>, String> {
+        let region = match capture_region(pid).await {
+            Ok(r) => r,
+            Err(e) => {
+                // App 在背景執行但視窗被關掉了（LINE 這類常見）：做一次「點 Dock 圖示」等效的重新開啟，再試。
+                let Some(pid) = pid else { return Err(e) };
+                reopen_window(pid).await.map_err(|_| e.clone())?;
+                capture_region(Some(pid)).await?
+            }
+        };
+        let (x, y, w, h, region) = region;
+        let raw = std::env::temp_dir().join(format!("aiterm-ocr-{}.png", uuid::Uuid::new_v4()));
+        let raw_s = raw.to_string_lossy().to_string();
+        let result = async {
+            // 用原始（Retina）解析度辨識，字比較清楚；Vision 回傳的是 0~1 的相對座標，與解析度無關。
+            capture_to(&raw_s, region.as_deref()).await?;
+            let path = raw_s.clone();
+            let lines = blocking(move || ocr_file(&path)).await?;
+            Ok::<_, String>(lines.into_iter().map(|l| l.to_screen(x, y, w, h)).collect::<Vec<_>>())
+        }
+        .await;
+        let _ = tokio::fs::remove_file(&raw).await;
         result
     }
 
     async fn activate(&self, pid: i32) -> Result<(), String> {
         // 連續幾個動作都在同一個 App 上很常見：已經在最前面就什麼都不用做（原本每次都要 ~0.3 秒）。
         if frontmost_pid().await == Some(pid) {
+            ensure_window(pid).await;
             return Ok(());
         }
         let script = format!(
@@ -379,6 +578,7 @@ impl Backend for MacBackend {
         // 輪詢確認而不是固定睡一下：快的時候更快；被系統對話框擋住時能明確報錯，
         // 而不是把按鍵與文字送進別的視窗。
         if wait_frontmost(pid, Duration::from_millis(1000)).await {
+            ensure_window(pid).await;
             Ok(())
         } else {
             Err("無法把這個 App 切到最前面（可能有系統對話框擋住，或這個 App 沒有可顯示的視窗）".to_string())
@@ -627,5 +827,37 @@ JSON.stringify(ps.map(function (p) { return {name: p.name(), pid: p.unixId()}; }
 
         b.activate(notes.pid).await.unwrap();
         assert_eq!(frontmost_pid().await, Some(notes.pid));
+    }
+
+    #[test]
+    fn ocr_coordinates_flip_from_bottom_left_normalized_to_top_left_screen_points() {
+        // 畫面範圍：螢幕上 (100,50) 起、1000x500。文字佔左下角 10% 寬、20% 高。
+        let l = OcrLine { text: "x".into(), nx: 0.0, ny: 0.0, nw: 0.1, nh: 0.2 };
+        let t = l.to_screen(100.0, 50.0, 1000.0, 500.0);
+        assert!((t.x - 100.0).abs() < 1e-6 && (t.y - 450.0).abs() < 1e-6 && (t.w - 100.0).abs() < 1e-6 && (t.h - 100.0).abs() < 1e-6, "{t:?}");
+        // 左上角的文字（ny + nh = 1）要落在範圍頂端。
+        let top = OcrLine { text: "y".into(), nx: 0.5, ny: 0.9, nw: 0.2, nh: 0.1 };
+        let t = top.to_screen(0.0, 0.0, 1000.0, 500.0);
+        assert!((t.x - 500.0).abs() < 1e-6 && t.y.abs() < 1e-6, "{} {}", t.x, t.y);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_ocr_reads_text_from_a_real_window_with_screen_coordinates() {
+        use std::time::Instant;
+        // 把 TextEdit 開成有已知文字的文件，確認 OCR 讀得到，且座標落在該視窗內。
+        let apps = MacBackend.list_apps().await.unwrap();
+        let te = apps.iter().find(|a| a.name == "TextEdit").expect("先開 TextEdit");
+        MacBackend.activate(te.pid).await.unwrap();
+        let mut items = vec![];
+        for round in 1..=3 {
+            let t = Instant::now();
+            items = MacBackend.read_screen(Some(te.pid)).await.unwrap();
+            println!("TIMING read_screen(TextEdit) round {round}: {:?} ({} items)", t.elapsed(), items.len());
+        }
+        for i in items.iter().take(10) {
+            println!("OCR {:?} ({:.0},{:.0},{:.0},{:.0})", i.text, i.x, i.y, i.w, i.h);
+        }
+        assert!(items.iter().any(|i| i.text.contains("你好世界")), "沒讀到預期的文字：{:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
     }
 }
