@@ -29,6 +29,14 @@ function submit(text: string) {
 }
 
 describe("HomeInput", () => {
+  // 全域快捷鍵喚出視窗後，TerminalApp 轉發 aiterm:focus-input；首頁輸入框要接住。
+  it("收到 aiterm:focus-input：輸入框取得焦點", () => {
+    renderInput();
+    expect(screen.getByRole("textbox")).not.toHaveFocus();
+    window.dispatchEvent(new CustomEvent("aiterm:focus-input"));
+    expect(screen.getByRole("textbox")).toHaveFocus();
+  });
+
   it("顯示標題「一句話開始」", () => {
     renderInput();
     expect(screen.getByText("一句話開始")).toBeInTheDocument();

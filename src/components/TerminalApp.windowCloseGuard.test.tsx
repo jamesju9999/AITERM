@@ -35,6 +35,13 @@ vi.mock("../ipc/quit", () => ({
 }));
 
 // LoopStudio 是最容易單靠兩個 mock 就掛得起來的「會回報忙碌」的分頁類型。
+// 這份測試的 invoke 永不 resolve；縮到托盤的詢問不在測試範圍，固定回「沒有縮」走原本流程。
+vi.mock("../ipc/resident", () => ({
+  hideMainWindowForClose: () => Promise.resolve(false),
+  onFocusInput: () => Promise.resolve(() => {}),
+  onTrayNewTab: () => Promise.resolve(() => {}),
+}));
+
 vi.mock("../ipc/provider", () => ({ listProviders: () => Promise.resolve([]) }));
 const fakeLoop = {
   trace: [] as unknown[],

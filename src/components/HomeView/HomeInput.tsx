@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { isImeComposing } from "../../lib/imeComposing";
 import { useLocale } from "../../contexts/LocaleContext";
 import { visibleTabCatalog } from "../NewTabPicker/tabCatalog";
@@ -20,6 +20,13 @@ export function HomeInput({ onRoute }: Props) {
   const [busy, setBusy] = useState(false);
   // 穩定的 sessionId：整個輸入框的生命週期用同一個，不必每次送出都重新產生。
   const sessionIdRef = useRef(crypto.randomUUID());
+  const inputRef = useRef<HTMLInputElement>(null);
+  // 全域快捷鍵喚出視窗時（TerminalApp 轉發），首頁正在顯示就直接可以打字。
+  useEffect(() => {
+    const focus = () => inputRef.current?.focus();
+    window.addEventListener("aiterm:focus-input", focus);
+    return () => window.removeEventListener("aiterm:focus-input", focus);
+  }, []);
 
   async function submit() {
     const userText = value.trim();
@@ -61,6 +68,7 @@ export function HomeInput({ onRoute }: Props) {
       <SectionTitle icon={<SparklesIcon size={17} />}>{t.home_input_title}</SectionTitle>
       <input
         type="text"
+        ref={inputRef}
         className="home-input-box"
         value={value}
         disabled={busy}

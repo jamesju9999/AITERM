@@ -50,6 +50,16 @@ pub struct AppConfig {
     #[serde(default)]
     pub doc_convert_engine: DocConvertEngine,
 
+    /// 全域快捷鍵（Tauri accelerator 字串），按下切換主視窗。空字串＝停用。
+    #[serde(default = "default_global_hotkey")]
+    pub global_hotkey: String,
+    /// 按視窗 ✕ 時只隱藏到托盤（背景工作繼續跑），而不是結束 App。
+    #[serde(default = "default_keep_in_tray")]
+    pub keep_in_tray: bool,
+    /// 開機自動啟動（以 `--minimized` 啟動，不顯示視窗）。
+    #[serde(default)]
+    pub autostart: bool,
+
     /// Saved database connections (passwords stored separately in Keychain).
     #[serde(default)]
     pub db_connections: Vec<DbConnection>,
@@ -339,6 +349,14 @@ impl AppConfig {
     }
 }
 
+fn default_global_hotkey() -> String {
+    "Ctrl+`".to_string()
+}
+
+fn default_keep_in_tray() -> bool {
+    true
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -352,6 +370,9 @@ impl Default for AppConfig {
             submit_shortcut: SubmitShortcut::default(),
             suggestion_accept_key: SuggestionAcceptKey::default(),
             doc_convert_engine: DocConvertEngine::default(),
+            global_hotkey: default_global_hotkey(),
+            keep_in_tray: default_keep_in_tray(),
+            autostart: false,
             db_connections: vec![],
             default_tab: DefaultTab::default(),
             telegram_chat_id: None,
@@ -1207,5 +1228,32 @@ model = "Qwen3.6-35B-A3B-4bit"
         let sonnet = cfg.claude_bridge.sonnet.as_ref().unwrap();
         assert_eq!(sonnet.provider_id, "local-qwen");
         assert_eq!(sonnet.model, "Qwen3.6-35B-A3B-4bit");
+    }
+
+    #[test]
+    fn resident_settings_default_and_old_configs_still_parse() {
+        let d = AppConfig::default();
+        assert_eq!(d.global_hotkey, "Ctrl+`");
+        assert!(d.keep_in_tray);
+        assert!(!d.autostart);
+        let parsed: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(parsed.global_hotkey, "Ctrl+`");
+        assert!(parsed.keep_in_tray);
+        assert!(!parsed.autostart);
+    }
+
+    #[test]
+    fn resident_settings_round_trip_through_toml() {
+        let cfg = AppConfig {
+            global_hotkey: String::new(),
+            keep_in_tray: false,
+            autostart: true,
+            ..AppConfig::default()
+        };
+        let s = toml::to_string(&cfg).unwrap();
+        let back: AppConfig = toml::from_str(&s).unwrap();
+        assert_eq!(back.global_hotkey, "");
+        assert!(!back.keep_in_tray);
+        assert!(back.autostart);
     }
 }

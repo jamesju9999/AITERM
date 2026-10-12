@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
-import { getConfig, setExecutionMode, setSubmitShortcut, setSuggestionAcceptKey, setMaxAgentSteps, setDefaultTab, setDocConvertEngine, appimageIntegrationState, appimageIntegrate, appimageRemoveIntegration, setAppImageIntegrationDeclined } from "../../ipc/config";
+import { getConfig, setExecutionMode, setSubmitShortcut, setSuggestionAcceptKey, setMaxAgentSteps, setDefaultTab, setDocConvertEngine, setGlobalHotkey, setKeepInTray, setAutostart, appimageIntegrationState, appimageIntegrate, appimageRemoveIntegration, setAppImageIntegrationDeclined } from "../../ipc/config";
 import type { ExecutionMode, SubmitShortcut, SuggestionAcceptKey, DefaultTab, DocConvertEngine, AppImageIntegrationState } from "../../ipc/config";
 import { pythonEnvStatus, pythonEnvReset, pythonEnvSetInterpreter, pythonEnvSetIndexUrl } from "../../ipc/pythonEnv";
 import type { PythonEnvStatus } from "../../ipc/pythonEnv";
@@ -41,6 +41,13 @@ export function GeneralPage() {
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
   const [saving, setSaving] = useState(false);
+  // 常駐：hotkey 是「已生效值」，hotkeyDraft 是輸入框內容（套用成功才升格）。
+  const [hotkey, setHotkey] = useState("Ctrl+`");
+  const [hotkeyDraft, setHotkeyDraft] = useState("Ctrl+`");
+  const [hotkeyError, setHotkeyError] = useState<string | null>(null);
+  const [hotkeySaved, setHotkeySaved] = useState(false);
+  const [keepInTray, setKeepInTrayState] = useState(true);
+  const [autostart, setAutostartState] = useState(false);
   const [policyControlled, setPolicyControlled] = useState<{ execution_mode?: boolean; max_agent_steps?: boolean }>({});
   const [timingMode, setTimingMode] = useState<"full" | "compact">(
     () => (localStorage.getItem(LOOP_TIMING_KEY) as "full" | "compact" | null) ?? "compact"
@@ -151,6 +158,11 @@ export function GeneralPage() {
       setMaxSteps(cfg.max_agent_steps ?? 5);
       setDefaultTabState(cfg.default_tab ?? "terminal");
       setDocConvertEngineState(cfg.doc_convert_engine ?? "auto");
+      const hk = cfg.global_hotkey ?? "Ctrl+`";
+      setHotkey(hk);
+      setHotkeyDraft(hk);
+      setKeepInTrayState(cfg.keep_in_tray ?? true);
+      setAutostartState(cfg.autostart ?? false);
       if (cfg.enterprise_policy) {
         setPolicyControlled({
           execution_mode: !!cfg.enterprise_policy.execution_mode,
@@ -182,6 +194,44 @@ export function GeneralPage() {
     setSuggestKey(newKey);
     setSaving(true);
     try { await setSuggestionAcceptKey(newKey); } finally { setSaving(false); }
+  };
+
+  const handleHotkeyApply = async () => {
+    const next = hotkeyDraft.trim();
+    setSaving(true);
+    setHotkeySaved(false);
+    try {
+      await setGlobalHotkey(next);
+      setHotkey(next);
+      setHotkeyDraft(next);
+      setHotkeyError(null);
+      setHotkeySaved(true);
+    } catch (e) {
+      // 後端註冊失敗時舊快捷鍵仍然有效，輸入框還原成它，避免畫面與實況不一致。
+      setHotkeyError(typeof e === "string" ? e : e instanceof Error ? e.message : String(e));
+      setHotkeyDraft(hotkey);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleKeepInTrayChange = async (enabled: boolean) => {
+    setKeepInTrayState(enabled);
+    setSaving(true);
+    try { await setKeepInTray(enabled); } finally { setSaving(false); }
+  };
+
+  const handleAutostartChange = async (enabled: boolean) => {
+    setAutostartState(enabled);
+    setSaving(true);
+    try {
+      await setAutostart(enabled);
+    } catch (e) {
+      setAutostartState(!enabled);
+      setHotkeyError(typeof e === "string" ? e : e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleDocConvertEngineChange = async (newEngine: DocConvertEngine) => {
@@ -398,6 +448,58 @@ export function GeneralPage() {
               </div>
             </label>
           ))}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3>{t.resident_title}</h3>
+        <p className="section-desc">{t.resident_desc}</p>
+        <div className="mode-list">
+          <div className="mode-option">
+            <div className="mode-text">
+              <label className="mode-label" htmlFor="global-hotkey-input">{t.resident_hotkey}</label>
+              <span className="mode-desc">{t.resident_hotkey_desc}</span>
+              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                <input
+                  id="global-hotkey-input"
+                  type="text"
+                  value={hotkeyDraft}
+                  onChange={(e) => { setHotkeyDraft(e.target.value); setHotkeySaved(false); }}
+                  disabled={saving}
+                  spellCheck={false}
+                />
+                <button onClick={handleHotkeyApply} disabled={saving || hotkeyDraft.trim() === hotkey}>
+                  {t.resident_hotkey_save}
+                </button>
+                {hotkeySaved && <span className="mode-desc">{t.resident_hotkey_saved}</span>}
+              </div>
+              {hotkeyError && <p role="alert" style={{ color: "#f87171", margin: "6px 0 0" }}>{hotkeyError}</p>}
+            </div>
+          </div>
+          <label className="mode-option">
+            <input
+              type="checkbox"
+              checked={keepInTray}
+              onChange={(e) => handleKeepInTrayChange(e.target.checked)}
+              disabled={saving}
+            />
+            <div className="mode-text">
+              <span className="mode-label">{t.resident_keep_in_tray}</span>
+              <span className="mode-desc">{t.resident_keep_in_tray_desc}</span>
+            </div>
+          </label>
+          <label className="mode-option">
+            <input
+              type="checkbox"
+              checked={autostart}
+              onChange={(e) => handleAutostartChange(e.target.checked)}
+              disabled={saving}
+            />
+            <div className="mode-text">
+              <span className="mode-label">{t.resident_autostart}</span>
+              <span className="mode-desc">{t.resident_autostart_desc}</span>
+            </div>
+          </label>
         </div>
       </section>
 

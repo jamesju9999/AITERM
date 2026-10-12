@@ -19,6 +19,12 @@ vi.mock("../ipc/quit", () => ({
   onQuitRequested: (cb: () => void) => { quitCb = cb; return Promise.resolve(unlistenQuit); },
 }));
 
+// 預設「不縮到托盤」，其餘既有案例維持原本的結束流程。
+const hideForClose = vi.fn(() => Promise.resolve(false));
+vi.mock("../ipc/resident", () => ({
+  hideMainWindowForClose: () => hideForClose(),
+}));
+
 import { useWindowCloseGuard } from "./useWindowCloseGuard";
 
 const busyTab: BusyTab = { tabId: "t1", title: "Terminal", reason: "command" };
@@ -27,6 +33,8 @@ beforeEach(() => {
   closeCb = undefined;
   quitCb = undefined;
   destroy.mockClear();
+  hideForClose.mockReset();
+  hideForClose.mockImplementation(() => Promise.resolve(false));
   unlistenClose.mockClear();
   unlistenQuit.mockClear();
 });
@@ -43,6 +51,17 @@ function fireClose() {
 }
 
 describe("useWindowCloseGuard", () => {
+  it("後端已縮到托盤：不 destroy、不問忙碌確認（背景工作本來就繼續跑）", async () => {
+    hideForClose.mockImplementation(() => Promise.resolve(true));
+    const { result } = await mount(() => [busyTab]);
+    const ev = fireClose();
+    await ev.run();
+
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+    expect(result.current.pending).toBeNull();
+  });
+
   it("全部閒置：攔下原生關閉、自己 destroy，不出現確認狀態", async () => {
     // quit() 內部把任何失敗都吞成 console.error 繼續 destroy，所以光看 destroy 有沒有被呼叫
     // 分辨不出「乾淨路徑」與「中間某步悄悄失敗」——要一併斷言沒有錯誤被記錄。

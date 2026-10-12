@@ -92,3 +92,36 @@ pub fn set_default_tab(
     config.update(|cfg| { cfg.default_tab = tab; }).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn set_global_hotkey(
+    hotkey: String,
+    app: tauri::AppHandle,
+    config: State<Arc<ConfigStore>>,
+) -> Result<(), String> {
+    let old = config.get().global_hotkey;
+    // 先註冊再存檔：註冊失敗時設定檔不變，舊快捷鍵也已由 apply_hotkey 還原。
+    crate::resident::apply_hotkey(&app, &old, &hotkey)?;
+    config.update(|cfg| { cfg.global_hotkey = hotkey; }).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_keep_in_tray(enabled: bool, config: State<Arc<ConfigStore>>) -> Result<(), String> {
+    config.update(|cfg| { cfg.keep_in_tray = enabled; }).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_autostart(
+    enabled: bool,
+    app: tauri::AppHandle,
+    config: State<Arc<ConfigStore>>,
+) -> Result<(), String> {
+    crate::resident::apply_autostart(&app, enabled)?;
+    config.update(|cfg| { cfg.autostart = enabled; }).map_err(|e| e.to_string())
+}
+
+/// 視窗 ✕：能縮到托盤就隱藏並回傳 true；false 代表呼叫端應走原本的結束流程。
+#[tauri::command]
+pub fn hide_main_window_for_close(app: tauri::AppHandle) -> bool {
+    crate::resident::hide_for_close(&app)
+}
+

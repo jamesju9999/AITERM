@@ -13,6 +13,7 @@ pub mod guard;
 pub mod knowledge_base;
 pub mod launch;
 pub mod quit;
+pub mod resident;
 pub mod mail;
 pub mod mcp;
 pub mod mcp_server;
@@ -254,6 +255,8 @@ pub fn run() {
         // 也就不會被提早存下去。見 docs/superpowers/specs/
         // 2026-09-22-window-size-persistence-design.md。
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(resident::shortcut_plugin())
+        .plugin(resident::autostart_plugin())
         .plugin(
             tauri_plugin_log::Builder::default()
                 .level(log::LevelFilter::Info)
@@ -262,6 +265,7 @@ pub fn run() {
         // 必須在 Builder 上 manage、不能放進 .setup：single-instance 的 callback
         // 可能在 setup 跑完之前就被呼叫，那時 state 不存在會直接 panic。
         .manage(launch::LaunchQueue::default())
+        .manage(resident::TrayState::default())
         .manage(Arc::new(PtyManager::new()))
         .manage(config)
         .manage(secrets)
@@ -292,6 +296,8 @@ pub fn run() {
             // macOS：Cmd+Q 換成會先問前端的自訂選單項目（見 quit.rs）。
             #[cfg(target_os = "macos")]
             quit::install_quit_menu(app)?;
+            // 托盤、全域快捷鍵、自啟旗標（見 resident/mod.rs）；失敗只記 log。
+            resident::setup(app.handle());
             // 冷啟動時帶進來的參數（`aiterm ~/proj`、`--working-directory=…`）。
             // 這裡雖然也會發事件，但此時 webview 可能還不存在，事件會被丟掉——
             // 沒關係，前端一掛載就會主動排空佇列。
@@ -510,6 +516,10 @@ pub fn run() {
             claude_notif_enable_bell,
             set_submit_shortcut,
             set_suggestion_accept_key,
+            commands::config::set_global_hotkey,
+            commands::config::set_keep_in_tray,
+            commands::config::set_autostart,
+            commands::config::hide_main_window_for_close,
             set_doc_convert_engine,
             set_default_tab,
             // Provider management

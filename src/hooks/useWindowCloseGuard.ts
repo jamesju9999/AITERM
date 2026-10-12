@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onQuitRequested, QUIT_REQUESTED_EVENT } from "../ipc/quit";
+import { hideMainWindowForClose } from "../ipc/resident";
 import { unlistenOnCleanup } from "../lib/eventSubscription";
 import type { BusyTab } from "../lib/busyProbe";
 
@@ -50,7 +51,11 @@ export function useWindowCloseGuard(getBusyTabs: () => BusyTab[]) {
     const unCloseRequested = unlistenOnCleanup(
       getCurrentWindow().onCloseRequested((event) => {
         event.preventDefault();
-        void attempt();
+        // 常駐模式：後端能縮到托盤就只是藏起視窗，PTY 與 Agent 繼續跑，沒有要確認的事。
+        // 結束 App 走托盤選單／Cmd+Q（app://quit-requested），仍會經過 attempt()。
+        void hideMainWindowForClose().then((hidden) => {
+          if (!hidden) void attempt();
+        });
       }),
       "tauri://close-requested",
     );

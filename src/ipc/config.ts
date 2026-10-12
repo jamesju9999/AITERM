@@ -57,6 +57,9 @@ export interface AppConfig {
   /** 舊版 config 沒有這個欄位時後端會補預設值 tab；前端讀取時仍以 `?? "tab"` 防呆。 */
   suggestion_accept_key?: SuggestionAcceptKey;
   doc_convert_engine: DocConvertEngine;
+  global_hotkey?: string;
+  keep_in_tray?: boolean;
+  autostart?: boolean;
   onboarding_done: boolean;
   max_agent_steps: number; // 0 = unlimited
   default_tab: DefaultTab;
@@ -128,3 +131,12 @@ export const claudeNotifNeedsPrompt = (): Promise<boolean> =>
 
 export const claudeNotifEnableBell = (): Promise<void> =>
   invoke<void>("claude_notif_enable_bell");
+
+export const setGlobalHotkey = (hotkey: string): Promise<void> =>
+  invoke("set_global_hotkey", { hotkey });
+
+export const setKeepInTray = (enabled: boolean): Promise<void> =>
+  invoke("set_keep_in_tray", { enabled });
+
+export const setAutostart = (enabled: boolean): Promise<void> =>
+  invoke("set_autostart", { enabled });

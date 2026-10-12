@@ -24,6 +24,7 @@ import { runCloseGuard } from "../lib/closeTabGuard";
 import { CloseConfirmDialog } from "./CloseConfirmDialog";
 import { collectBusyTabs, type BusyProbe } from "../lib/busyProbe";
 import { useWindowCloseGuard } from "../hooks/useWindowCloseGuard";
+import { onFocusInput, onTrayNewTab } from "../ipc/resident";
 import { KnowledgeBaseView } from "./KnowledgeBaseView";
 import { MailView } from "./MailView";
 import { RemoteTerminalView } from "./RemoteTerminalView";
@@ -324,6 +325,18 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     void refreshDefaultBridge();
     setPickerOpen(true);
   }, [refreshDefaultBridge]);
+
+  // 全域快捷鍵／托盤喚出視窗（見 src-tauri/src/resident）。
+  // 聚焦輸入框交給首頁輸入框自己聽 aiterm:focus-input——其他畫面（終端機）沒有要搶的焦點。
+  useEffect(() => {
+    const cleanups = [
+      unlistenOnCleanup(onFocusInput(() => {
+        window.dispatchEvent(new CustomEvent("aiterm:focus-input"));
+      }), "app://focus-input"),
+      unlistenOnCleanup(onTrayNewTab(() => { handleAddTab(); }), "app://tray-new-tab"),
+    ];
+    return () => { for (const cleanup of cleanups) cleanup(); };
+  }, [handleAddTab]);
 
   const handlePickerSelect = useCallback((type: TabType, opts?: TabOpenOpts) => {
     if (type === "remote-terminal") {
