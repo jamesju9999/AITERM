@@ -26,6 +26,7 @@ import { collectBusyTabs, type BusyProbe } from "../lib/busyProbe";
 import { useWindowCloseGuard } from "../hooks/useWindowCloseGuard";
 import { onFocusInput, onTrayNewTab } from "../ipc/resident";
 import { ComputerApprovalDialog } from "./ComputerApproval";
+import { useTrayLabels } from "../hooks/useTrayLabels";
 import { KnowledgeBaseView } from "./KnowledgeBaseView";
 import { MailView } from "./MailView";
 import { RemoteTerminalView } from "./RemoteTerminalView";
@@ -136,6 +137,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     [],
   );
   const windowClose = useWindowCloseGuard(getBusyTabs);
+  useTrayLabels();
   // 視窗焦點放在 ref 而非 state：它只被事件 callback 讀取，不影響任何渲染，
   // 用 state 會讓每次切換視窗都重繪整個 app。初始值樂觀設為 true，
   // 這樣在 isFocused() 回來之前不會誤發通知。

@@ -267,6 +267,7 @@ pub fn run() {
         // 可能在 setup 跑完之前就被呼叫，那時 state 不存在會直接 panic。
         .manage(launch::LaunchQueue::default())
         .manage(resident::TrayState::default())
+        .manage(resident::TrayMenu::default())
         .manage(Arc::new(PtyManager::new()))
         .manage(config)
         .manage(secrets)
@@ -541,6 +542,7 @@ pub fn run() {
             commands::config::set_keep_in_tray,
             commands::config::set_autostart,
             commands::config::hide_main_window_for_close,
+            commands::config::set_tray_labels,
             commands::computer::computer_status,
             commands::computer::computer_revoke_app,
             commands::computer::computer_audit_tail,

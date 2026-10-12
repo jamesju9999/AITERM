@@ -41,6 +41,29 @@ impl TrayState {
     }
 }
 
+/// 托盤選單的三個項目，保留起來才能在語系改變時換文字。
+#[derive(Default)]
+pub struct TrayMenu(parking_lot::Mutex<Option<(MenuItem<tauri::Wry>, MenuItem<tauri::Wry>, MenuItem<tauri::Wry>)>>);
+
+/// 前端傳來的標籤去頭尾空白；空的就沿用預設，避免選單出現一個沒有字的項目。
+pub fn clean_label(label: &str, default: &str) -> String {
+    let t = label.trim();
+    if t.is_empty() { default.to_string() } else { t.to_string() }
+}
+
+/// 更新托盤選單文字（語系改變時由前端呼叫）。托盤沒建成時回錯誤，前端會靜默吞掉。
+pub fn set_labels(app: &AppHandle, show: &str, new_tab: &str, quit: &str) -> Result<(), String> {
+    let guard = app.state::<TrayMenu>();
+    let items = guard.0.lock();
+    let Some((i_show, i_new, i_quit)) = items.as_ref() else {
+        return Err("托盤尚未建立".to_string());
+    };
+    i_show.set_text(clean_label(show, "Show AITerm")).map_err(|e| e.to_string())?;
+    i_new.set_text(clean_label(new_tab, "New Tab")).map_err(|e| e.to_string())?;
+    i_quit.set_text(clean_label(quit, "Quit")).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum WindowAction {
     Show,
@@ -166,6 +189,7 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&show, &new_tab, &sep, &quit])?;
+    *app.state::<TrayMenu>().0.lock() = Some((show.clone(), new_tab.clone(), quit.clone()));
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
@@ -253,6 +277,13 @@ mod tests {
     fn parse_hotkey_rejects_garbage() {
         assert!(parse_hotkey("Ctrl+").is_err());
         assert!(parse_hotkey("nonsense key").is_err());
+    }
+
+    #[test]
+    fn clean_label_trims_and_falls_back_when_blank() {
+        assert_eq!(clean_label("  結束 ", "Quit"), "結束");
+        assert_eq!(clean_label("", "Quit"), "Quit");
+        assert_eq!(clean_label("   ", "New Tab"), "New Tab");
     }
 
     #[test]

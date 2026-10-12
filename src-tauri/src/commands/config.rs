@@ -125,3 +125,9 @@ pub fn hide_main_window_for_close(app: tauri::AppHandle) -> bool {
     crate::resident::hide_for_close(&app)
 }
 
+/// 語系改變時更新托盤選單文字。
+#[tauri::command]
+pub fn set_tray_labels(show: String, new_tab: String, quit: String, app: tauri::AppHandle) -> Result<(), String> {
+    crate::resident::set_labels(&app, &show, &new_tab, &quit)
+}
+

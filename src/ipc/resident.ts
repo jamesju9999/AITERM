@@ -23,3 +23,7 @@ export async function hideMainWindowForClose(): Promise<boolean> {
     return false;
   }
 }
+
+/** 更新托盤選單的三個項目文字（顯示／新分頁／結束），語系改變時呼叫。 */
+export const setTrayLabels = (show: string, newTab: string, quit: string): Promise<void> =>
+  invoke("set_tray_labels", { show, newTab, quit });
