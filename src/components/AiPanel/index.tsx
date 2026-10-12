@@ -464,6 +464,7 @@ Rules:
       agentRunning={agentRunning}
       agentPhase={agentPhase}
       agentStep={agentStep}
+      onStop={chat.stop}
       onAbortAgent={() => {
         agentAbortRef.current = true;
         // Send Ctrl+C to PTY so a stuck command (e.g. pipe dquote>) gets

@@ -4,6 +4,7 @@ import { describe, it, expect, vi } from "vitest";
 // Mock the IPC modules
 vi.mock("../ipc/ai", () => ({
   aiChat: vi.fn(),
+  abortAi: vi.fn(() => Promise.resolve()),
 }));
 vi.mock("../ipc/mcp", () => ({
   getMcpTools: vi.fn().mockResolvedValue([]),
@@ -14,7 +15,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { renderHook, act } from "@testing-library/react";
-import { aiChat } from "../ipc/ai";
+import { aiChat, abortAi } from "../ipc/ai";
 import { executeMcpTool } from "../ipc/mcp";
 import { useMcpChat } from "./useMcpChat";
 import { LocaleProvider } from "../contexts/LocaleContext";
@@ -176,6 +177,103 @@ describe("useMcpChat", () => {
       rerender({ n: 4 });
       await act(async () => { await result.current.sendMessage("go", true); });
       expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(4);
+    });
+  });
+
+  // 停止鈕：中斷進行中的 AI 呼叫、不再執行後面的工具、不再繼續迴圈。
+  describe("stop()", () => {
+    const toolReply = (...names: string[]) => ({
+      content: null,
+      tool_calls: names.map((n, i) => ({ id: `c${i}`, tool_name: n, server_id: "x", args: {} })),
+      tool_calling_unsupported: false,
+    });
+    const deferred = <T,>() => {
+      let resolve!: (v: T) => void;
+      let reject!: (e: unknown) => void;
+      const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+      return { promise, resolve, reject };
+    };
+    const mount = () => renderHook(() => useMcpChat("sess-stop"), { wrapper: LocaleProvider });
+
+    it("等 AI 回覆時按停止：呼叫後端中斷、立刻結束載入狀態、留下已停止的說明", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(abortAi).mockClear();
+      const pending = deferred<never>();
+      vi.mocked(aiChat).mockReturnValueOnce(pending.promise as never);
+      const { result } = mount();
+      let send!: Promise<void>;
+      await act(async () => { send = result.current.sendMessage("幫我做事", true); });
+      expect(result.current.isLoading).toBe(true);
+
+      await act(async () => { result.current.stop(); });
+      expect(abortAi).toHaveBeenCalledWith("sess-stop");
+      expect(result.current.isLoading).toBe(false);
+      expect(String(result.current.messages.at(-1)?.content)).toMatch(/已停止|stopped/i);
+
+      // 後端被中斷後，進行中的 aiChat 會以錯誤結束：不可以變成錯誤訊息。
+      await act(async () => { pending.reject({ kind: "network", message: "cancelled" }); await send; });
+      expect(result.current.error).toBeNull();
+    });
+
+    it("工具執行到一半按停止：剩下的工具不再執行，也不再呼叫 AI", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(abortAi).mockClear();
+      const firstTool = deferred<{ content: string; is_error: boolean }>();
+      vi.mocked(executeMcpTool).mockReset();
+      vi.mocked(executeMcpTool)
+        .mockReturnValueOnce(firstTool.promise)
+        .mockResolvedValue({ content: "should not run", is_error: false });
+      vi.mocked(aiChat).mockResolvedValueOnce(toolReply("x__a", "x__b"));
+      const { result } = mount();
+      let send!: Promise<void>;
+      await act(async () => { send = result.current.sendMessage("go", true); });
+      await act(async () => {}); // 讓第一個工具開始執行
+
+      await act(async () => { result.current.stop(); });
+      await act(async () => { firstTool.resolve({ content: "a done", is_error: false }); await send; });
+
+      expect(executeMcpTool).toHaveBeenCalledTimes(1); // 第二個工具沒有跑
+      expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(1); // 沒有進下一輪
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    it("沒有進行中的對話時按停止：什麼都不做（不留說明、不呼叫後端）", async () => {
+      vi.mocked(abortAi).mockClear();
+      const { result } = mount();
+      await act(async () => { result.current.stop(); });
+      expect(abortAi).not.toHaveBeenCalled();
+      expect(result.current.messages).toEqual([]);
+    });
+
+    it("停止之後可以馬上送下一則，且舊的那一輪不會干擾新的", async () => {
+      vi.mocked(aiChat).mockReset();
+      const oldCall = deferred<never>();
+      vi.mocked(aiChat)
+        .mockReturnValueOnce(oldCall.promise as never)
+        .mockResolvedValueOnce({ content: "新的回答", tool_calls: [], tool_calling_unsupported: false });
+      const { result } = mount();
+      let first!: Promise<void>;
+      await act(async () => { first = result.current.sendMessage("舊的", true); });
+      await act(async () => { result.current.stop(); });
+      await act(async () => { await result.current.sendMessage("新的", true); });
+      // 舊的呼叫這時才回來（含一個工具呼叫）：必須被忽略。
+      vi.mocked(executeMcpTool).mockClear();
+      await act(async () => { oldCall.resolve(toolReply("x__late") as never); await first; });
+
+      expect(executeMcpTool).not.toHaveBeenCalled();
+      expect(result.current.messages.at(-1)?.content).toBe("新的回答");
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    it("已串流出的部分文字會保留在對話裡，再接上已停止的說明", async () => {
+      vi.mocked(aiChat).mockReset();
+      const pending = deferred<never>();
+      vi.mocked(aiChat).mockReturnValueOnce(pending.promise as never);
+      const { result } = mount();
+      await act(async () => { void result.current.sendMessage("說一段話", true); });
+      await act(async () => { result.current.stop(); });
+      const last2 = result.current.messages.slice(-2).map((m) => m.role);
+      expect(last2[last2.length - 1]).toBe("assistant");
     });
   });
 });

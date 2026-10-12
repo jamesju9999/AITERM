@@ -50,6 +50,8 @@ export interface ChatPanelShellProps {
   agentPhase: "thinking" | "running";
   agentStep: number;
   onAbortAgent: () => void;
+  /** 一般對話（非 Agent）進行中的停止：有提供時，串流／等待回覆期間送出鈕會換成停止鈕。 */
+  onStop?: () => void;
 
   providerName: string;
   onOpenProviderPalette: () => void;
@@ -121,6 +123,7 @@ function ChatPanelShellInner({
   agentPhase,
   agentStep,
   onAbortAgent,
+  onStop,
   providerName,
   onOpenProviderPalette,
   headerBadge,
@@ -453,15 +456,27 @@ function ChatPanelShellInner({
               rows={1}
               disabled={isDisabled}
             />
-            <button
-              type="button"
-              className="aiterm-ai-panel-send-btn aiterm-btn aiterm-btn--primary aiterm-btn--icon"
-              onClick={submit}
-              disabled={isDisabled || input.trim() === ""}
-              title="送出"
-            >
-              ▲
-            </button>
+            {/* Agent 執行中由上面的狀態列提供停止鈕；這裡只處理一般對話（MCP 工具迴圈）。 */}
+            {isStreaming && !agentRunning && onStop ? (
+              <button
+                type="button"
+                className="aiterm-ai-panel-send-btn aiterm-btn aiterm-btn--primary aiterm-btn--icon"
+                onClick={onStop}
+                title="停止"
+              >
+                ■
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="aiterm-ai-panel-send-btn aiterm-btn aiterm-btn--primary aiterm-btn--icon"
+                onClick={submit}
+                disabled={isDisabled || input.trim() === ""}
+                title="送出"
+              >
+                ▲
+              </button>
+            )}
           </div>
         </div>
       </ArtifactSplit>

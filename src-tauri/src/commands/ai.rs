@@ -633,6 +633,8 @@ pub async fn ai_chat(
                     let join2 = tokio::spawn(async move {
                         provider2.generate(fallback_req, tx2).await
                     });
+                    // 降級重打的這一次也要能被「停止」中斷（登錄會覆蓋同一個 session id 的前一筆）。
+                    let _abort_guard2 = AbortGuard::register(&app, &session_id, &join2);
 
                     // 這條 fallback 是叫模型把工具呼叫寫成 `<tool_call>{…}` 文字。
                     // 那是指令、不是講給使用者聽的話——只送標記之前的部分，否則

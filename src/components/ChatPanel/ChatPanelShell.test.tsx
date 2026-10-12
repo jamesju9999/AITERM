@@ -69,6 +69,33 @@ describe("ChatPanelShell", () => {
     expect(onAbortAgent).toHaveBeenCalled();
   });
 
+  describe("對話（非 Agent）進行中的停止鈕", () => {
+    it("串流／等待回覆時，送出鈕換成停止鈕，按下呼叫 onStop", async () => {
+      const onStop = vi.fn();
+      render(<ChatPanelShell {...base({ isStreaming: true, onStop })} />);
+      expect(screen.queryByTitle("送出")).toBeNull();
+      await userEvent.click(screen.getByTitle("停止"));
+      expect(onStop).toHaveBeenCalledTimes(1);
+    });
+
+    it("沒在串流時照常顯示送出鈕，不出現停止鈕", () => {
+      render(<ChatPanelShell {...base({ isStreaming: false, onStop: vi.fn() })} />);
+      expect(screen.getByTitle("送出")).toBeInTheDocument();
+      expect(screen.queryByTitle("停止")).toBeNull();
+    });
+
+    it("沒有提供 onStop（例如遠端面板）：維持原本行為，送出鈕停用", () => {
+      render(<ChatPanelShell {...base({ isStreaming: true })} />);
+      expect(screen.getByTitle("送出")).toBeDisabled();
+      expect(screen.queryByTitle("停止")).toBeNull();
+    });
+
+    it("Agent 執行中時只有狀態列那一顆停止鈕，不會重複出現兩顆", () => {
+      render(<ChatPanelShell {...base({ agentRunning: true, isStreaming: true, onStop: vi.fn() })} />);
+      expect(screen.getAllByTitle("停止")).toHaveLength(1);
+    });
+  });
+
   it("renders extraInputControls and extraAboveInput slots", () => {
     render(<ChatPanelShell {...base({
       extraInputControls: <button>MCP-SLOT</button>,

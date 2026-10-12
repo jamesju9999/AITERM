@@ -2,7 +2,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { unlistenOnCleanup } from "../lib/eventSubscription";
-import { aiChat, formatAiError, type AiToolCall, type AiError, type ToolFallbackReason } from "../ipc/ai";
+import { abortAi, aiChat, formatAiError, type AiToolCall, type AiError, type ToolFallbackReason } from "../ipc/ai";
 import { executeMcpTool } from "../ipc/mcp";
 import type { ChatMessage } from "../ipc/ai";
 import { buildContentParts, contentToDisplayString } from "../types/attachment";
@@ -43,6 +43,10 @@ export function useMcpChat(sessionId: string, maxToolIterations: number = DEFAUL
   // 用 ref 讀最新值：sendMessage 是 useCallback，設定頁剛改完的上限不能被舊閉包吃掉。
   const maxIterationsRef = useRef(maxToolIterations);
   maxIterationsRef.current = maxToolIterations;
+  // 每次送出遞增；停止也遞增。迴圈在每個 await 之後比對自己那一輪是否還有效，
+  // 失效（被停止、或已被新的一輪取代）就安靜地結束，不再碰任何狀態或工具。
+  const runRef = useRef(0);
+  const loadingRef = useRef(false);
   const [messages, setMessages] = useState<McpChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamBuf, setStreamBuf] = useState("");
@@ -124,6 +128,9 @@ export function useMcpChat(sessionId: string, maxToolIterations: number = DEFAUL
     const hasAttachments = attachments && attachments.length > 0;
     const userContent = hasAttachments ? buildContentParts(text, attachments) : text;
     setMessages(prev => [...prev, { role: "user", content: userContent }]);
+    const myRun = ++runRef.current;
+    const stale = () => runRef.current !== myRun || !mountedRef.current;
+    loadingRef.current = true;
     setIsLoading(true);
     setError(null);
 
@@ -148,7 +155,7 @@ export function useMcpChat(sessionId: string, maxToolIterations: number = DEFAUL
         iterations++;
         const reply = await aiChat(iterHistory, sessionId, undefined, useMcp, locale, true);
 
-        if (!mountedRef.current) break;
+        if (stale()) return; // 被停止了（後端的呼叫已被中斷，或剛好在這時回來）：丟掉這一輪
 
         if (reply.tool_calling_unsupported) {
           setToolFallbackReason(reply.tool_fallback_reason ?? "unsupported");
@@ -157,7 +164,7 @@ export function useMcpChat(sessionId: string, maxToolIterations: number = DEFAUL
         // Handle tool calls
         if (reply.tool_calls.length > 0) {
           for (const tc of reply.tool_calls) {
-            if (!mountedRef.current) break;
+            if (stale()) return;
             setMessages(prev => [...prev, {
               role: "tool_call" as const,
               content: JSON.stringify(tc.args, null, 2),
@@ -170,6 +177,8 @@ export function useMcpChat(sessionId: string, maxToolIterations: number = DEFAUL
           // Execute all tools and collect results
           const executedResults: { tc: AiToolCall; result: string; isError: boolean }[] = [];
           for (const tc of reply.tool_calls) {
+            // 停止之後不再執行後面的工具（已經在跑的那個無法取消，但它是最後一個）。
+            if (stale()) return;
             let resultContent: string;
             let isError = false;
             try {
@@ -181,7 +190,7 @@ export function useMcpChat(sessionId: string, maxToolIterations: number = DEFAUL
               isError = true;
             }
 
-            if (!mountedRef.current) break;
+            if (stale()) return;
 
             setMessages(prev => prev.map(m =>
               m.tool_call_id === tc.id ? { ...m, is_loading: false, is_error: isError } : m
@@ -259,6 +268,8 @@ export function useMcpChat(sessionId: string, maxToolIterations: number = DEFAUL
         }]);
       }
     } catch (e) {
+      // 被停止後，後端中斷的呼叫會以錯誤結束——那不是使用者要看的錯誤。
+      if (stale()) return;
       if (mountedRef.current) {
         // e may be an AiError object from Tauri IPC — use formatAiError to
         // produce a readable message instead of "[object Object]"
@@ -266,12 +277,32 @@ export function useMcpChat(sessionId: string, maxToolIterations: number = DEFAUL
         setError(isAiError ? formatAiError(e as AiError) : String(e));
       }
     } finally {
-      if (mountedRef.current) {
+      // 只有「這一輪還有效」才收尾；被停止或被取代的，狀態已由 stop()／新的一輪接手。
+      if (!stale()) {
+        loadingRef.current = false;
         setIsLoading(false);
         setStreamBuf("");
       }
     }
   }, [messages, sessionId, locale]);
+
+  /** 停止目前這一輪：中斷進行中的 AI 呼叫、不再執行後面的工具、不再繼續迴圈。 */
+  const stop = useCallback(() => {
+    if (!loadingRef.current) return;
+    runRef.current++; // 讓進行中的迴圈失效
+    loadingRef.current = false;
+    void abortAi(sessionId).catch(() => {});
+    const partial = streamBufRef.current;
+    streamBufRef.current = "";
+    setStreamBuf("");
+    setMessages(prev => [
+      // 轉圈圈的工具呼叫不再轉；已串流出的半段話保留，再接上說明。
+      ...prev.map(m => (m.is_loading ? { ...m, is_loading: false } : m)),
+      ...(partial.trim() ? [{ role: "assistant" as const, content: partial }] : []),
+      { role: "assistant" as const, content: t.mcp_stopped },
+    ]);
+    setIsLoading(false);
+  }, [sessionId, t]);
 
   const addMessage = useCallback((msg: McpChatMessage) => {
     setMessages(prev => [...prev, msg]);
@@ -317,6 +348,7 @@ export function useMcpChat(sessionId: string, maxToolIterations: number = DEFAUL
     toolFallbackReason,
     error,
     sendMessage,
+    stop,
     send: sendMessage,        // alias for AiPanel compatibility
     addMessage,
     clearMessages,
