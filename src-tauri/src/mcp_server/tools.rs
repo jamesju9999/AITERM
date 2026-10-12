@@ -25,7 +25,8 @@ use crate::pty::PtyManager;
 use crate::secret::SecretStore;
 
 use crate::computer::tools::{
-    ComputerClickArgs, ComputerKeyArgs, ComputerScreenshotArgs, ComputerScrollArgs, ComputerSnapshotArgs, ComputerTypeArgs,
+    execute, Call, ComputerBatchArgs, ComputerClickArgs, ComputerFindArgs, ComputerKeyArgs, ComputerScreenshotArgs,
+    ComputerScrollArgs, ComputerSnapshotArgs, ComputerTypeArgs,
 };
 use crate::computer::{ComputerService, ToolOutput};
 use tauri::Manager;
@@ -217,83 +218,81 @@ impl AiTermTools {
             .ok_or_else(|| "電腦操作服務尚未就緒".to_string())
     }
 
-    #[tool(description = "List the macOS apps with visible windows that can be controlled (name, bundle id, pid, frontmost). Part of the computer-use tools; disabled by default and must be enabled in AITerm Settings → MCP Tool Server.")]
-    async fn computer_list_apps(&self) -> Result<CallToolResult, McpError> {
+    /// 所有 computer_* 工具的共同出口：交給 `computer::tools::execute`（授權、確認、稽核都在裡面）。
+    async fn run_computer(&self, call: Call) -> Result<CallToolResult, McpError> {
         match self.computer() {
-            Ok(c) => computer_result(c.list_apps().await),
+            Ok(c) => computer_result(execute(&c, call).await),
             Err(e) => computer_result(Err(e)),
         }
     }
 
-    #[tool(description = "Read an app's UI as an accessibility tree: one line per element with an id (e.g. 0.3.1), role, title and frame (x,y,w,h in screen points). Use the ids with computer_click / computer_type. Prefer this over screenshots when you only need to find buttons and fields. The user is asked to approve the first use of each app.")]
+    #[tool(description = "List the macOS apps with visible windows that can be controlled (name, bundle id, pid, frontmost). Part of the computer-use tools; disabled by default and must be enabled in AITerm Settings → MCP Tool Server.")]
+    async fn computer_list_apps(&self) -> Result<CallToolResult, McpError> {
+        self.run_computer(Call::ListApps).await
+    }
+
+    #[tool(description = "Read an app's UI as an accessibility tree: one line per element with an id (e.g. 0.3.1), role, title and frame (x,y,w,h in screen points). Prefer computer_find when you know what you are looking for. The user is asked to approve the first use of each app.")]
     async fn computer_snapshot(
         &self,
-        Parameters(ComputerSnapshotArgs { app, max_depth }): Parameters<ComputerSnapshotArgs>,
+        Parameters(a): Parameters<ComputerSnapshotArgs>,
     ) -> Result<CallToolResult, McpError> {
-        match self.computer() {
-            Ok(c) => computer_result(c.snapshot(&app, max_depth).await),
-            Err(e) => computer_result(Err(e)),
-        }
+        self.run_computer(Call::Snapshot(a)).await
+    }
+
+    #[tool(description = "Find elements in an app by text (title/role) or role and get their ids directly — much cheaper than a full snapshot. Example: query=\"search\", or role=\"AXTextField\". The returned ids can be used immediately with computer_click / computer_type.")]
+    async fn computer_find(
+        &self,
+        Parameters(a): Parameters<ComputerFindArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_computer(Call::Find(a)).await
     }
 
     #[tool(description = "Take a screenshot of one app's front window, or the whole main screen when app is omitted. Returns a PNG scaled to screen points, so coordinates in the image plus the stated origin are valid click coordinates.")]
     async fn computer_screenshot(
         &self,
-        Parameters(ComputerScreenshotArgs { app }): Parameters<ComputerScreenshotArgs>,
+        Parameters(a): Parameters<ComputerScreenshotArgs>,
     ) -> Result<CallToolResult, McpError> {
-        match self.computer() {
-            Ok(c) => computer_result(c.screenshot(app.as_deref()).await),
-            Err(e) => computer_result(Err(e)),
-        }
+        self.run_computer(Call::Screenshot(a)).await
     }
 
-    #[tool(description = "Click an element (by id from computer_snapshot) or a screen coordinate in an app. Clicking something labelled like Delete/Send/Pay always asks the user for confirmation first. Element ids go stale when the screen changes; re-run computer_snapshot if told so.")]
+    #[tool(description = "Click an element (by id from the latest snapshot/find/action result) or a screen coordinate. The reply includes the resulting screen, so you usually do not need another snapshot (set observe=false to skip). Clicking something labelled like Delete/Send/Pay always asks the user for confirmation first. Element ids go stale when the screen changes; use the ids from the newest result.")]
     async fn computer_click(
         &self,
         Parameters(a): Parameters<ComputerClickArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let (app, target, button, double) = match a.into_parts() {
-            Ok(parts) => parts,
-            Err(e) => return computer_result(Err(e)),
-        };
-        match self.computer() {
-            Ok(c) => computer_result(c.click(&app, target, button, double).await),
-            Err(e) => computer_result(Err(e)),
-        }
+        self.run_computer(Call::Click(a)).await
     }
 
-    #[tool(description = "Type text into an app. Optionally pass an element id (from computer_snapshot) to focus a field first; otherwise the text goes to whatever currently has focus.")]
+    #[tool(description = "Type text into an app. Optionally pass an element id to focus a field first; otherwise the text goes to whatever currently has focus. Set replace=true to overwrite existing text. The reply reports the field's current content and the resulting screen — check it.")]
     async fn computer_type(
         &self,
-        Parameters(ComputerTypeArgs { app, text, element, replace }): Parameters<ComputerTypeArgs>,
+        Parameters(a): Parameters<ComputerTypeArgs>,
     ) -> Result<CallToolResult, McpError> {
-        match self.computer() {
-            Ok(c) => computer_result(c.type_text(&app, &text, element.as_deref(), replace.unwrap_or(false)).await),
-            Err(e) => computer_result(Err(e)),
-        }
+        self.run_computer(Call::Type(a)).await
     }
 
-    #[tool(description = "Press a key or key combination in an app, e.g. \"return\", \"escape\", \"cmd+s\", \"cmd+shift+left\". To clear a field send \"cmd+a\" then \"delete\" as two calls (a bare delete removes one character). The result reports the focused field's current content. Cmd+Delete always asks the user for confirmation.")]
+    #[tool(description = "Press a key or key combination in an app, e.g. \"return\", \"escape\", \"cmd+s\", \"cmd+shift+left\". To clear a field send \"cmd+a\" then \"delete\" as two calls (a bare delete removes one character). The reply reports the focused field's current content and the resulting screen. Cmd+Delete always asks the user for confirmation.")]
     async fn computer_key(
         &self,
-        Parameters(ComputerKeyArgs { app, key }): Parameters<ComputerKeyArgs>,
+        Parameters(a): Parameters<ComputerKeyArgs>,
     ) -> Result<CallToolResult, McpError> {
-        match self.computer() {
-            Ok(c) => computer_result(c.key(&app, &key).await),
-            Err(e) => computer_result(Err(e)),
-        }
+        self.run_computer(Call::Key(a)).await
     }
 
-    #[tool(description = "Scroll in an app by lines (dy positive = up, dx positive = right), optionally at a screen coordinate.")]
+    #[tool(description = "Scroll in an app by lines (dy positive = up, dx positive = right), optionally at a screen coordinate. The reply includes the resulting screen.")]
     async fn computer_scroll(
         &self,
         Parameters(a): Parameters<ComputerScrollArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let at = a.at();
-        match self.computer() {
-            Ok(c) => computer_result(c.scroll(&a.app, a.dx.unwrap_or(0), a.dy.unwrap_or(0), at).await),
-            Err(e) => computer_result(Err(e)),
-        }
+        self.run_computer(Call::Scroll(a)).await
+    }
+
+    #[tool(description = "Run up to 10 click/type/key/scroll steps in order in ONE call and get the final screen back — use it when you already know the sequence (e.g. click the search box, type a name, press return). Stops at the first failure and reports progress. Every step still goes through the usual permission and confirmation checks.")]
+    async fn computer_batch(
+        &self,
+        Parameters(a): Parameters<ComputerBatchArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_computer(Call::Batch(a)).await
     }
 
     #[tool(description = "List AITerm's configured database connections (id, name, type, database — no credentials).")]

@@ -221,6 +221,64 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Sen
     tokio::task::spawn_blocking(f).await.map_err(|e| format!("內部錯誤：{e}"))?
 }
 
+use objc2_app_kit::{NSApplicationActivationPolicy, NSWorkspace};
+
+/// 目前執行中、有視窗介面的一般 App（與原本 JXA 的 `backgroundOnly: false` 同義）。
+fn running_apps() -> Vec<AppInfo> {
+    let ws = NSWorkspace::sharedWorkspace();
+    ws.runningApplications()
+        .iter()
+        .filter(|a| a.activationPolicy() == NSApplicationActivationPolicy::Regular)
+        .filter_map(|a| {
+            let localized = a.localizedName().map(|n| n.to_string());
+            // 行程名稱 = 可執行檔名，和舊版 System Events 回的 `name` 一致（TextEdit、Notes、MSTeams…）。
+            let process_name = a
+                .executableURL()
+                .and_then(|u| u.lastPathComponent())
+                .map(|n| n.to_string())
+                .or_else(|| localized.clone())?;
+            let localized = localized.filter(|l| *l != process_name);
+            Some(AppInfo {
+                name: process_name,
+                localized,
+                bundle_id: a.bundleIdentifier().map(|b| b.to_string()),
+                pid: a.processIdentifier(),
+                frontmost: a.isActive(),
+            })
+        })
+        .collect()
+}
+
+/// 從 `lsappinfo info` 的輸出取出 `pid = 123`。
+fn parse_lsappinfo_pid(out: &str) -> Option<i32> {
+    let rest = out.split("pid = ").nth(1)?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok().filter(|p| *p > 0)
+}
+
+/// 目前最前面的 App 的 pid。用 `lsappinfo`（約 10 毫秒、即時）：NSWorkspace 的 `frontmostApplication`
+/// 要靠主執行緒 run loop 更新，在背景執行緒讀會是舊值；AX 的 AXFocusedApplication 則不一定有值。
+/// 系統對話框（例如密碼提示）在最前面時，這裡會如實回傳它的 pid，而不是前一個一般 App。
+async fn frontmost_pid() -> Option<i32> {
+    let asn = run_cmd("lsappinfo", &["front"]).await.ok()?;
+    let info = run_cmd("lsappinfo", &["info", "-only", "pid", asn.trim()]).await.ok()?;
+    parse_lsappinfo_pid(&info)
+}
+
+/// 輪詢到 `pid` 成為最前面的 App，或逾時。
+async fn wait_frontmost(pid: i32, timeout: Duration) -> bool {
+    let start = std::time::Instant::now();
+    loop {
+        if frontmost_pid().await == Some(pid) {
+            return true;
+        }
+        if start.elapsed() >= timeout {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 pub struct MacBackend;
 
 #[async_trait]
@@ -233,17 +291,8 @@ impl Backend for MacBackend {
     }
 
     async fn list_apps(&self) -> Result<Vec<AppInfo>, String> {
-        const JXA: &str = r#"
-var se = Application("System Events");
-var ps = se.processes.whose({backgroundOnly: false})();
-JSON.stringify(ps.map(function (p) {
-  return {name: p.name(), bundle_id: p.bundleIdentifier(), pid: p.unixId(), frontmost: p.frontmost()};
-}));"#;
-        let out = run_cmd("osascript", &["-l", "JavaScript", "-e", JXA]).await?;
-        #[derive(serde::Deserialize)]
-        struct Row { name: String, bundle_id: Option<String>, pid: i32, frontmost: bool }
-        let rows: Vec<Row> = serde_json::from_str(&out).map_err(|e| format!("無法解析 App 清單：{e}"))?;
-        Ok(rows.into_iter().map(|r| AppInfo { name: r.name, bundle_id: r.bundle_id, pid: r.pid, frontmost: r.frontmost }).collect())
+        // 原生呼叫（NSWorkspace）：幾毫秒；原本用 osascript／JXA 要約 1 秒，而且每個工具呼叫都要列一次。
+        blocking(|| Ok(running_apps())).await
     }
 
     async fn snapshot(&self, pid: i32, max_depth: usize) -> Result<ElementNode, String> {
@@ -319,12 +368,21 @@ JSON.stringify(ps.map(function (p) {
     }
 
     async fn activate(&self, pid: i32) -> Result<(), String> {
+        // 連續幾個動作都在同一個 App 上很常見：已經在最前面就什麼都不用做（原本每次都要 ~0.3 秒）。
+        if frontmost_pid().await == Some(pid) {
+            return Ok(());
+        }
         let script = format!(
             "tell application \"System Events\" to set frontmost of (first process whose unix id is {pid}) to true"
         );
         run_cmd("osascript", &["-e", &script]).await?;
-        tokio::time::sleep(Duration::from_millis(150)).await; // 等視窗真的到前景
-        Ok(())
+        // 輪詢確認而不是固定睡一下：快的時候更快；被系統對話框擋住時能明確報錯，
+        // 而不是把按鍵與文字送進別的視窗。
+        if wait_frontmost(pid, Duration::from_millis(1000)).await {
+            Ok(())
+        } else {
+            Err("無法把這個 App 切到最前面（可能有系統對話框擋住，或這個 App 沒有可顯示的視窗）".to_string())
+        }
     }
 
     async fn press_element(&self, pid: i32, id: &str) -> Result<(), String> {
@@ -511,5 +569,63 @@ mod tests {
         println!("{}x{} origin=({}, {}) bytes={}", shot.width, shot.height, shot.origin_x, shot.origin_y, shot.png.len());
         std::fs::write(std::env::temp_dir().join("aiterm-live-shot.png"), &shot.png).unwrap();
         assert!(shot.width > 300 && shot.height > 300);
+    }
+
+    #[test]
+    fn lsappinfo_pid_is_parsed_from_its_noisy_output() {
+        let out = "[ NULL ]  [ NULL ] \n    bundleID=[ NULL ] \n    pid = 32105 !cgsConnection !signalled type=[ NULL ]";
+        assert_eq!(parse_lsappinfo_pid(out), Some(32105));
+        assert_eq!(parse_lsappinfo_pid("nothing here"), None);
+        assert_eq!(parse_lsappinfo_pid("pid = 0 x"), None);
+        assert_eq!(parse_lsappinfo_pid("pid = abc"), None);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_native_app_list_matches_the_old_osascript_one_and_is_fast() {
+        use std::time::Instant;
+        let b = MacBackend;
+        let t = Instant::now();
+        let apps = b.list_apps().await.unwrap();
+        let native = t.elapsed();
+        println!("TIMING list_apps(native): {native:?} ({} apps)", apps.len());
+        assert!(native < Duration::from_millis(300), "{native:?}");
+
+        const JXA: &str = r#"
+var se = Application("System Events");
+var ps = se.processes.whose({backgroundOnly: false})();
+JSON.stringify(ps.map(function (p) { return {name: p.name(), pid: p.unixId()}; }));"#;
+        let out = run_cmd("osascript", &["-l", "JavaScript", "-e", JXA]).await.unwrap();
+        #[derive(serde::Deserialize)]
+        struct Row { name: String, pid: i32 }
+        let mut old: Vec<(i32, String)> = serde_json::from_str::<Vec<Row>>(&out).unwrap().into_iter().map(|r| (r.pid, r.name)).collect();
+        let mut new: Vec<(i32, String)> = apps.iter().map(|a| (a.pid, a.name.clone())).collect();
+        old.sort();
+        new.sort();
+        assert_eq!(new, old, "原生清單的 App 與名稱應與舊的 osascript 清單完全一致");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_activate_is_instant_when_already_frontmost_and_switches_otherwise() {
+        use std::time::Instant;
+        let b = MacBackend;
+        let apps = b.list_apps().await.unwrap();
+        let finder = apps.iter().find(|a| a.bundle_id.as_deref() == Some("com.apple.finder")).unwrap();
+        let notes = apps.iter().find(|a| a.name == "LINE").or_else(|| apps.iter().find(|a| a.pid != finder.pid)).unwrap();
+
+        let t = Instant::now();
+        b.activate(finder.pid).await.unwrap();
+        println!("TIMING activate(switch to Finder): {:?}", t.elapsed());
+        assert_eq!(frontmost_pid().await, Some(finder.pid));
+
+        let t = Instant::now();
+        b.activate(finder.pid).await.unwrap();
+        let again = t.elapsed();
+        println!("TIMING activate(already frontmost): {again:?}");
+        assert!(again < Duration::from_millis(100), "{again:?}");
+
+        b.activate(notes.pid).await.unwrap();
+        assert_eq!(frontmost_pid().await, Some(notes.pid));
     }
 }

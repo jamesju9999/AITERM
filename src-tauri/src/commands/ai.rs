@@ -221,6 +221,15 @@ them until the task is finished. Never end a turn by only announcing a next step
 snapshot\") — make the call instead. Reply in plain text only when the task is complete or you need information \
 from the user. After an action, check the tool result to confirm it really worked before saying it is done.";
 
+/// 電腦操作工具開啟時，附上操作心法（用 find 而不是整棵樹、動作已附畫面、能批次就批次…）。
+pub(crate) fn with_computer_hint(prompt: String, computer_enabled: bool) -> String {
+    if computer_enabled {
+        format!("{prompt}\n\n{}", crate::computer::tools::PROMPT_HINT)
+    } else {
+        prompt
+    }
+}
+
 pub(crate) fn with_tool_use_rule(prompt: String) -> String {
     format!("{prompt}\n\n{TOOL_USE_RULE}")
 }
@@ -567,7 +576,10 @@ pub async fn ai_chat(
                 Some(id) => router.resolve_by_id(id).await?,
                 None => router.resolve().await?,
             };
-            let prompt = with_tool_use_rule(build_chat_prompt(&snapshot, locale, supports_artifacts));
+            let prompt = with_computer_hint(
+                with_tool_use_rule(build_chat_prompt(&snapshot, locale, supports_artifacts)),
+                cfg.mcp_tool_server.computer_enabled,
+            );
             let req = GenerateRequest {
                 system_prompt: prompt,
                 messages,
@@ -967,6 +979,13 @@ mod schema_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn computer_hint_is_added_only_when_computer_use_is_enabled() {
+        let on = super::with_computer_hint("BASE".to_string(), true);
+        assert!(on.starts_with("BASE") && on.contains("computer_find") && on.contains("computer_batch"));
+        assert_eq!(super::with_computer_hint("BASE".to_string(), false), "BASE");
+    }
+
     #[test]
     fn tool_use_rule_is_appended_after_the_base_prompt_not_replacing_it() {
         let out = super::with_tool_use_rule("BASE PROMPT".to_string());

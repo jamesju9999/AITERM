@@ -20,6 +20,7 @@ struct FakeBackend {
     press_fails: bool,
     /// 模擬焦點文字區：(內容, 是否全選, 是否密碼欄位)。
     doc: Mutex<(String, bool, bool)>,
+    list_calls: std::sync::atomic::AtomicUsize,
 }
 
 impl FakeBackend {
@@ -32,10 +33,14 @@ impl FakeBackend {
             calls: Mutex::new(vec![]),
             press_fails: false,
             doc: Mutex::new((String::new(), false, false)),
+            list_calls: Default::default(),
         })
     }
     fn calls(&self) -> Vec<String> {
         self.calls.lock().clone()
+    }
+    fn list_calls(&self) -> usize {
+        self.list_calls.load(std::sync::atomic::Ordering::SeqCst)
     }
     fn find(&self, id: &str) -> Option<ElementNode> {
         fn go(n: &ElementNode, id: &str) -> Option<ElementNode> {
@@ -52,9 +57,10 @@ impl FakeBackend {
 impl Backend for FakeBackend {
     fn permissions(&self) -> Permissions { self.perms }
     async fn list_apps(&self) -> Result<Vec<AppInfo>, String> {
+        self.list_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(vec![
-            AppInfo { name: "AITerm".into(), bundle_id: Some("com.aiterm.app".into()), pid: OWN_PID, frontmost: false },
-            AppInfo { name: "Notes".into(), bundle_id: Some("com.apple.Notes".into()), pid: 42, frontmost: true },
+            AppInfo { name: "AITerm".into(), localized: None, bundle_id: Some("com.aiterm.app".into()), pid: OWN_PID, frontmost: false },
+            AppInfo { name: "Notes".into(), localized: Some("備忘錄".into()), bundle_id: Some("com.apple.Notes".into()), pid: 42, frontmost: true },
         ])
     }
     async fn snapshot(&self, _: i32, _: usize) -> Result<ElementNode, String> { Ok(self.tree.lock().clone()) }
@@ -147,6 +153,7 @@ fn rig_with(backend: Arc<FakeBackend>, enabled: bool, script: &[Decision]) -> Ri
         AuditLog::new(dir.path().join("audit.jsonl")),
         OWN_PID,
     );
+    svc.set_settle(std::time::Duration::ZERO);
     Rig { svc, backend, approver, config, _dir: dir }
 }
 
@@ -157,6 +164,7 @@ fn rig_with_backend(backend: Arc<dyn Backend>, script: &[Decision]) -> Rig {
     let approver = FakeApprover::new(script);
     let svc = ComputerService::new(backend, approver.clone(), config.clone(), AuditLog::new(dir.path().join("audit.jsonl")), OWN_PID);
     // Rig.backend 只給需要檢查假後端的測試用；這裡的後端不是 FakeBackend，放一個空的占位。
+    svc.set_settle(std::time::Duration::ZERO);
     Rig { svc, backend: FakeBackend::new(), approver, config, _dir: dir }
 }
 
@@ -245,6 +253,7 @@ async fn missing_permissions_are_reported_before_anything_else() {
         calls: Mutex::new(vec![]),
         press_fails: false,
         doc: Mutex::new((String::new(), false, false)),
+        list_calls: Default::default(),
     });
     let r = rig_with(b, true, &[Decision::AllowAlways]);
     assert!(r.svc.snapshot("Notes", None).await.unwrap_err().contains("輔助使用"));
@@ -501,6 +510,243 @@ async fn failing_to_read_the_field_state_does_not_fail_the_action() {
     assert!(out.contains("已輸入 2 個字元") && !out.contains("目前焦點"), "{out}");
 }
 
+// ── 效能：App 清單快取、精簡元件樹、依文字找元件。
+
+#[tokio::test]
+async fn app_list_is_cached_so_each_tool_call_does_not_relist_every_app() {
+    let r = rig(&[Decision::AllowAlways]);
+    r.svc.snapshot("Notes", None).await.unwrap();
+    r.svc.snapshot("Notes", None).await.unwrap();
+    r.svc.key("Notes", "cmd+s").await.unwrap();
+    assert_eq!(r.backend.list_calls(), 1);
+}
+
+#[tokio::test]
+async fn an_app_missing_from_a_fresh_cache_triggers_one_refresh_then_a_clear_error() {
+    let r = rig(&[Decision::AllowAlways]);
+    r.svc.snapshot("Notes", None).await.unwrap();
+    assert_eq!(r.backend.list_calls(), 1);
+    let e = r.svc.snapshot("Calendar", None).await.unwrap_err(); // 剛開啟的 App 不在舊快取裡
+    assert!(e.contains("找不到"));
+    assert_eq!(r.backend.list_calls(), 2);
+}
+
+#[tokio::test]
+async fn an_expired_cache_is_refreshed_and_list_apps_always_reads_fresh() {
+    let r = rig(&[Decision::AllowAlways]);
+    r.svc.set_apps_ttl(std::time::Duration::ZERO);
+    r.svc.snapshot("Notes", None).await.unwrap();
+    r.svc.snapshot("Notes", None).await.unwrap();
+    assert_eq!(r.backend.list_calls(), 2);
+
+    r.svc.set_apps_ttl(std::time::Duration::from_secs(60));
+    r.svc.list_apps().await.unwrap(); // 明確要清單：不吃快取
+    assert_eq!(r.backend.list_calls(), 3);
+    r.svc.snapshot("Notes", None).await.unwrap(); // 但會順便更新快取
+    assert_eq!(r.backend.list_calls(), 3);
+}
+
+fn noisy_tree() -> ElementNode {
+    let mut root = el("0", "AXWindow", "Doc");
+    let mut group = el("0.0", "AXGroup", "");
+    group.children = vec![el("0.0.0", "AXButton", "Save")];
+    let mut hidden = el("0.1", "AXButton", "Offscreen");
+    hidden.w = 0.0;
+    hidden.h = 0.0;
+    root.children = vec![group, hidden, el("0.2", "AXTextField", "")];
+    root
+}
+
+#[tokio::test]
+async fn compact_snapshot_drops_empty_containers_and_zero_size_nodes_but_keeps_ids_stable() {
+    let b = FakeBackend::new();
+    *b.tree.lock() = noisy_tree();
+    let r = rig_with(b, true, &[Decision::AllowAlways]);
+    let compact = text(r.svc.snapshot("Notes", None).await.unwrap());
+    assert!(!compact.contains("AXGroup"), "{compact}");
+    assert!(!compact.contains("Offscreen"), "{compact}");
+    assert!(compact.contains("0.0.0 AXButton \"Save\""), "孩子的 id 不能因為父層被省略而改變：{compact}");
+    assert!(compact.contains("0.2 AXTextField"), "空標題但可互動的欄位要保留：{compact}");
+
+    let full = text(r.svc.snapshot_opts("Notes", None, false).await.unwrap());
+    assert!(full.contains("AXGroup") && full.contains("Offscreen"), "{full}");
+    assert!(compact.lines().count() < full.lines().count());
+}
+
+#[tokio::test]
+async fn ids_dropped_from_the_compact_view_are_still_known_for_clicks() {
+    let b = FakeBackend::new();
+    *b.tree.lock() = noisy_tree();
+    let r = rig_with(b, true, &[Decision::AllowAlways]);
+    r.svc.snapshot("Notes", None).await.unwrap();
+    // 0.0.0 在精簡輸出中縮排變淺，但 id 照常有效。
+    r.svc.click("Notes", ClickTarget::Element("0.0.0".into()), MouseButton::Left, false).await.unwrap();
+}
+
+#[tokio::test]
+async fn find_matches_title_or_role_case_insensitively_and_registers_ids() {
+    let r = rig(&[Decision::AllowAlways]);
+    let out = text(r.svc.find("Notes", "delete", None, 20).await.unwrap());
+    assert!(out.contains("0.1 AXButton \"Delete\""), "{out}");
+    assert!(!out.contains("Save"), "{out}");
+
+    let by_role = text(r.svc.find("Notes", "", Some("AXButton"), 20).await.unwrap());
+    assert!(by_role.contains("Save") && by_role.contains("Delete"), "{by_role}");
+
+    // find 之後不必先 snapshot 就能點（id 已登記）
+    r.svc.click("Notes", ClickTarget::Element("0.0".into()), MouseButton::Left, false).await.unwrap();
+}
+
+#[tokio::test]
+async fn find_caps_results_and_reports_when_nothing_matches() {
+    let r = rig(&[Decision::AllowAlways]);
+    let none = text(r.svc.find("Notes", "no-such-thing", None, 20).await.unwrap());
+    assert!(none.contains("沒有找到"), "{none}");
+    let one = text(r.svc.find("Notes", "", Some("AXButton"), 1).await.unwrap());
+    assert_eq!(one.lines().filter(|l| l.contains("AXButton")).count(), 1, "{one}");
+    assert!(one.contains("僅列出前 1"), "{one}");
+}
+
+#[tokio::test]
+async fn find_requires_a_query_or_a_role() {
+    let r = rig(&[Decision::AllowAlways]);
+    assert!(r.svc.find("Notes", "  ", None, 20).await.unwrap_err().contains("query"));
+}
+
+// ── 減少模型往返：動作後自動附上畫面現況、批次動作。
+
+use super::tools::{BatchStep, Call, ComputerBatchArgs, ComputerClickArgs, ComputerKeyArgs, ComputerScrollArgs, ComputerTypeArgs};
+
+fn click_args(app: &str, element: &str) -> ComputerClickArgs {
+    ComputerClickArgs { app: app.into(), element: Some(element.into()), x: None, y: None, button: None, double: None, observe: None }
+}
+
+fn step(action: &str) -> BatchStep {
+    BatchStep { action: action.into(), element: None, x: None, y: None, button: None, double: None, text: None, replace: None, key: None, dx: None, dy: None }
+}
+
+#[tokio::test]
+async fn actions_attach_the_resulting_screen_by_default_and_ids_stay_usable() {
+    let r = rig(&[Decision::AllowAlways]);
+    tools::execute(&r.svc, Call::Snapshot(snapshot_args("Notes"))).await.unwrap();
+    let out = text(tools::execute(&r.svc, Call::Click(click_args("Notes", "0.0"))).await.unwrap());
+    assert!(out.contains("已點擊") && out.contains("畫面現況"), "{out}");
+    assert!(out.contains("0.1 AXButton \"Delete\""), "{out}");
+}
+
+#[tokio::test]
+async fn observe_false_returns_only_the_action_result() {
+    let r = rig(&[Decision::AllowAlways]);
+    tools::execute(&r.svc, Call::Snapshot(snapshot_args("Notes"))).await.unwrap();
+    let mut a = click_args("Notes", "0.0");
+    a.observe = Some(false);
+    let out = text(tools::execute(&r.svc, Call::Click(a)).await.unwrap());
+    assert!(!out.contains("畫面現況"), "{out}");
+}
+
+#[tokio::test]
+async fn a_failed_action_does_not_attach_a_screen() {
+    let r = rig(&[Decision::Deny]);
+    let e = tools::execute(&r.svc, Call::Key(ComputerKeyArgs { app: "Notes".into(), key: "cmd+s".into(), observe: None })).await.unwrap_err();
+    assert!(e.starts_with("使用者拒絕") && !e.contains("畫面現況"), "{e}");
+}
+
+#[tokio::test]
+async fn observation_is_capped_so_a_huge_window_cannot_flood_the_reply() {
+    let b = FakeBackend::new();
+    {
+        let mut root = el("0", "AXWindow", "Big");
+        root.children = (0..300).map(|i| el(&format!("0.{i}"), "AXButton", &format!("b{i}"))).collect();
+        *b.tree.lock() = root;
+    }
+    let r = rig_with(b, true, &[Decision::AllowAlways]);
+    let out = text(tools::execute(&r.svc, Call::Key(ComputerKeyArgs { app: "Notes".into(), key: "tab".into(), observe: None })).await.unwrap());
+    assert!(out.lines().count() < 100, "{}", out.lines().count());
+    assert!(out.contains("已截斷"), "{out}");
+}
+
+fn snapshot_args(app: &str) -> super::tools::ComputerSnapshotArgs {
+    super::tools::ComputerSnapshotArgs { app: app.into(), max_depth: None, compact: None }
+}
+
+#[tokio::test]
+async fn batch_runs_steps_in_order_and_observes_once_at_the_end() {
+    let r = rig(&[Decision::AllowAlways]);
+    tools::execute(&r.svc, Call::Snapshot(snapshot_args("Notes"))).await.unwrap();
+    let mut click = step("click");
+    click.element = Some("0.0".into());
+    let mut typ = step("type");
+    typ.text = Some("hello".into());
+    let mut key = step("key");
+    key.key = Some("return".into());
+    let out = text(tools::execute(&r.svc, Call::Batch(ComputerBatchArgs { app: "Notes".into(), steps: vec![click, typ, key], observe: None })).await.unwrap());
+    let c = r.backend.calls();
+    let (p, t, k) = (
+        c.iter().position(|x| x == "press 0.0").unwrap(),
+        c.iter().position(|x| x == "type hello").unwrap(),
+        c.iter().position(|x| x == "key return").unwrap(),
+    );
+    assert!(p < t && t < k, "{c:?}");
+    assert!(out.contains("步驟 1/3") && out.contains("步驟 3/3"), "{out}");
+    assert_eq!(out.matches("畫面現況").count(), 1, "{out}");
+}
+
+#[tokio::test]
+async fn batch_stops_at_the_first_failure_and_reports_progress() {
+    let r = rig(&[Decision::AllowAlways]);
+    let mut typ = step("type");
+    typ.text = Some("one".into());
+    let mut bad = step("key");
+    bad.key = Some("cmd+bogus".into());
+    let mut never = step("type");
+    never.text = Some("never".into());
+    let e = tools::execute(&r.svc, Call::Batch(ComputerBatchArgs { app: "Notes".into(), steps: vec![typ, bad, never], observe: None })).await.unwrap_err();
+    assert!(e.contains("步驟 1/3") && e.contains("步驟 2 失敗"), "{e}");
+    assert!(!r.backend.calls().iter().any(|c| c == "type never"));
+}
+
+#[tokio::test]
+async fn every_batch_step_still_goes_through_the_destructive_gate() {
+    let r = rig(&[Decision::AllowAlways, Decision::Deny]);
+    tools::execute(&r.svc, Call::Snapshot(snapshot_args("Notes"))).await.unwrap();
+    let mut safe = step("click");
+    safe.element = Some("0.0".into());
+    let mut risky = step("click");
+    risky.element = Some("0.1".into()); // Delete
+    let e = tools::execute(&r.svc, Call::Batch(ComputerBatchArgs { app: "Notes".into(), steps: vec![safe, risky], observe: None })).await.unwrap_err();
+    assert!(e.contains("使用者拒絕"), "{e}");
+    assert_eq!(r.backend.calls().iter().filter(|c| c.starts_with("press")).count(), 1);
+    assert!(r.approver.asked().iter().any(|a| a.0 == ApprovalKind::Destructive));
+}
+
+#[tokio::test]
+async fn batch_rejects_empty_oversized_and_unknown_steps_before_doing_anything() {
+    let r = rig(&[Decision::AllowAlways]);
+    let run = |steps: Vec<BatchStep>| tools::execute(&r.svc, Call::Batch(ComputerBatchArgs { app: "Notes".into(), steps, observe: None }));
+    assert!(run(vec![]).await.unwrap_err().contains("至少"));
+    assert!(run((0..11).map(|_| step("key")).collect()).await.unwrap_err().contains("最多 10"));
+    let mut k = step("key");
+    k.key = Some("a".into());
+    assert!(run(vec![k, step("dance")]).await.unwrap_err().contains("dance"));
+    assert!(r.backend.calls().is_empty(), "整批驗證通過前不能先動手：{:?}", r.backend.calls());
+}
+
+#[tokio::test]
+async fn batch_step_missing_its_required_field_is_reported_with_the_step_number() {
+    let r = rig(&[Decision::AllowAlways]);
+    let e = tools::execute(&r.svc, Call::Batch(ComputerBatchArgs { app: "Notes".into(), steps: vec![step("type")], observe: None })).await.unwrap_err();
+    assert!(e.contains("步驟 1") && e.contains("text"), "{e}");
+}
+
+#[tokio::test]
+async fn type_and_scroll_calls_accept_the_new_observe_flag() {
+    let r = rig(&[Decision::AllowAlways]);
+    let out = text(tools::execute(&r.svc, Call::Type(ComputerTypeArgs { app: "Notes".into(), text: "x".into(), element: None, replace: None, observe: Some(false) })).await.unwrap());
+    assert!(!out.contains("畫面現況") && out.contains("已輸入"));
+    let out = text(tools::execute(&r.svc, Call::Scroll(ComputerScrollArgs { app: "Notes".into(), dx: None, dy: Some(3), x: None, y: None, observe: Some(false) })).await.unwrap());
+    assert!(out.contains("已捲動"));
+}
+
 // ── 內建 Ask AI 入口（computer::tools::call）：結果一律包成文字＋is_error，模型讀得到原因。
 
 #[tokio::test]
@@ -546,7 +792,7 @@ fn builtin_tools_are_hidden_unless_the_master_switch_is_on() {
     let mut cfg = crate::config::AppConfig::default();
     assert!(builtin_tool_infos(&cfg).is_empty());
     cfg.mcp_tool_server.computer_enabled = true;
-    assert_eq!(builtin_tool_infos(&cfg).len(), 7);
+    assert_eq!(builtin_tool_infos(&cfg).len(), 9);
 }
 
 // ── 真機端對端（macOS，需要輔助使用＋螢幕錄製權限，預設不跑）：
@@ -592,7 +838,9 @@ mod live {
             .expect("找不到 AXTextArea")
             .to_string();
 
+        let t0 = std::time::Instant::now();
         svc.type_text("TextEdit", "123 from AITerm 你好", Some(&area), false).await.unwrap();
+        println!("TIMING type_text (cached apps, app already frontmost): {:?}", t0.elapsed());
         let got = osa("tell application \"TextEdit\" to get text of document 1");
         println!("document text = {got:?}");
         assert_eq!(got, "123 from AITerm 你好");
@@ -635,4 +883,14 @@ mod live {
 
         osa("tell application \"TextEdit\" to close document 1 saving no");
     }
+}
+
+#[tokio::test]
+async fn apps_can_be_addressed_by_process_name_localized_name_or_bundle_id() {
+    let r = rig(&[Decision::AllowAlways]);
+    for q in ["Notes", "備忘錄", "com.apple.Notes", "notes"] {
+        r.svc.snapshot(q, None).await.unwrap_or_else(|e| panic!("{q}: {e}"));
+    }
+    let listed = text(r.svc.list_apps().await.unwrap());
+    assert!(listed.contains("Notes（備忘錄）"), "{listed}");
 }

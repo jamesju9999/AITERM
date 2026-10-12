@@ -260,8 +260,8 @@ async fn rpc(app: axum::Router, method: &str, params: serde_json::Value) -> Stri
 async fn computer_tools_are_registered_over_mcp() {
     let (app, _pool) = test_router().await;
     let text = rpc(app, "tools/list", serde_json::json!({})).await;
-    for name in ["computer_list_apps", "computer_snapshot", "computer_screenshot",
-                 "computer_click", "computer_type", "computer_key", "computer_scroll"] {
+    for name in ["computer_list_apps", "computer_snapshot", "computer_find", "computer_screenshot",
+                 "computer_click", "computer_type", "computer_key", "computer_scroll", "computer_batch"] {
         assert!(text.contains(name), "{name} missing from tools/list: {text}");
     }
 }
@@ -275,11 +275,13 @@ async fn computer_tools_fail_closed_without_an_app_instance() {
     assert!(text.contains("isError") && text.contains("AITerm"), "{text}");
 }
 
+/// 參數驗證（element 或 x+y、button 只能 left/right）由 `computer::tools` 的單元測試涵蓋；
+/// 這裡只確認壞參數經過整個 router 一樣是「失敗」而不是動手：沒有 App 實例時一律 fail closed。
 #[tokio::test]
-async fn computer_click_requires_an_element_or_both_coordinates() {
+async fn computer_click_with_bad_arguments_fails_closed_through_the_router() {
     let (app, _pool) = test_router().await;
     let text = call_tool(app.clone(), "computer_click", serde_json::json!({"app": "Notes", "x": 10})).await;
-    assert!(text.contains("element"), "{text}");
-    let text = call_tool(app, "computer_click", serde_json::json!({"app": "Notes", "element": "0.1", "button": "middle"})).await;
-    assert!(text.contains("left"), "{text}");
+    assert!(text.contains("isError"), "{text}");
+    let text = call_tool(app, "computer_batch", serde_json::json!({"app": "Notes", "steps": []})).await;
+    assert!(text.contains("isError"), "{text}");
 }

@@ -13,6 +13,7 @@ pub mod tools;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
@@ -51,7 +52,25 @@ pub struct ComputerService {
     own_pid: i32,
     /// 最近一次 snapshot 記下的 (pid, 元件 id) → (role, title)，用來偵測 id 過期。
     seen: Mutex<HashMap<(i32, String), (String, String)>>,
+    /// App 清單快取：每個工具呼叫都要先找目標 App，而列清單約要 1 秒（見 `fetch_apps`）。
+    apps: Mutex<Option<(Instant, Vec<AppInfo>)>>,
+    apps_ttl: Mutex<Duration>,
+    /// 動作與下一步（或畫面觀察）之間等 UI 反應的時間；測試設為 0。
+    settle: Mutex<Duration>,
 }
+
+/// App 清單快取的有效時間。夠短，使用者剛開啟／關閉 App 時不會等太久；
+/// 目標不在快取裡時會立刻重新讀一次，所以新開的 App 不受影響。
+const APPS_TTL: Duration = Duration::from_secs(2);
+const SETTLE: Duration = Duration::from_millis(200);
+/// 動作後附上的畫面現況：只看淺層、精簡、行數有上限。
+const OBSERVE_DEPTH: usize = 4;
+const OBSERVE_MAX_LINES: usize = 60;
+
+/// 精簡元件樹時，標題為空就省略的「純容器」角色（孩子仍會列出，id 不變）。
+const GENERIC_ROLES: &[&str] = &[
+    "AXGroup", "AXUnknown", "AXScrollArea", "AXSplitGroup", "AXLayoutArea", "AXLayoutItem", "AXSplitter",
+];
 
 fn app_key(app: &AppInfo) -> String {
     app.bundle_id.clone().unwrap_or_else(|| app.name.clone())
@@ -65,7 +84,29 @@ impl ComputerService {
         audit: AuditLog,
         own_pid: i32,
     ) -> Self {
-        Self { backend, approver, config, audit, own_pid, seen: Mutex::new(HashMap::new()) }
+        Self {
+            backend,
+            approver,
+            config,
+            audit,
+            own_pid,
+            seen: Mutex::new(HashMap::new()),
+            apps: Mutex::new(None),
+            apps_ttl: Mutex::new(APPS_TTL),
+            settle: Mutex::new(SETTLE),
+        }
+    }
+
+    pub fn set_settle(&self, d: Duration) {
+        *self.settle.lock() = d;
+    }
+
+    pub fn settle(&self) -> Duration {
+        *self.settle.lock()
+    }
+
+    pub fn set_apps_ttl(&self, ttl: Duration) {
+        *self.apps_ttl.lock() = ttl;
     }
 
     pub fn permissions(&self) -> backend::Permissions {
@@ -110,16 +151,38 @@ impl ComputerService {
         }
     }
 
+    /// 一定重新讀並更新快取。
+    async fn fetch_apps(&self) -> Result<Vec<AppInfo>, String> {
+        let list = self.backend.list_apps().await?;
+        *self.apps.lock() = Some((Instant::now(), list.clone()));
+        Ok(list)
+    }
+
+    fn cached_apps(&self) -> Option<Vec<AppInfo>> {
+        let ttl = *self.apps_ttl.lock();
+        self.apps.lock().as_ref().filter(|(at, _)| at.elapsed() < ttl).map(|(_, l)| l.clone())
+    }
+
     async fn resolve_app(&self, query: &str) -> Result<AppInfo, String> {
-        let apps = self.backend.list_apps().await?;
         let q = query.trim().to_lowercase();
-        apps.iter()
-            .find(|a| a.bundle_id.as_deref().map(|b| b.to_lowercase()) == Some(q.clone()) || a.name.to_lowercase() == q)
-            .cloned()
-            .ok_or_else(|| {
-                let names: Vec<&str> = apps.iter().map(|a| a.name.as_str()).collect();
-                format!("找不到 App「{query}」。目前可操作的有：{}", names.join("、"))
-            })
+        let find = |apps: &[AppInfo]| {
+            apps.iter()
+                .find(|a| {
+                    a.bundle_id.as_deref().map(|b| b.to_lowercase()) == Some(q.clone())
+                        || a.name.to_lowercase() == q
+                        || a.localized.as_deref().map(|l| l.to_lowercase()) == Some(q.clone())
+                })
+                .cloned()
+        };
+        // 先看快取；沒有、過期、或目標不在裡面（可能剛開啟）才重新讀。
+        if let Some(app) = self.cached_apps().as_deref().and_then(find) {
+            return Ok(app);
+        }
+        let apps = self.fetch_apps().await?;
+        find(&apps).ok_or_else(|| {
+            let names: Vec<&str> = apps.iter().map(|a| a.name.as_str()).collect();
+            format!("找不到 App「{query}」。目前可操作的有：{}", names.join("、"))
+        })
     }
 
     async fn authorize(&self, key: String, display: &str, action: &str) -> Result<(), String> {
@@ -196,17 +259,46 @@ impl ComputerService {
         }
     }
 
+    /// 動作成功後附上的畫面現況（精簡元件樹）。這是剛成功的動作結果的一部分，所以不另外要授權、
+    /// 也不寫稽核；任何失敗都回 `None`，不影響動作本身。同時刷新元件 id，讓下一步可以直接用。
+    pub async fn observe(&self, app: &str) -> Option<String> {
+        self.require_enabled().ok()?;
+        self.require_accessibility().ok()?;
+        let settle = self.settle();
+        if !settle.is_zero() {
+            tokio::time::sleep(settle).await; // 等 UI 對剛才的動作有反應
+        }
+        let info = self.resolve_app(app).await.ok()?;
+        if info.pid == self.own_pid {
+            return None;
+        }
+        let tree = self.backend.snapshot(info.pid, OBSERVE_DEPTH).await.ok()?;
+        let mut seen = self.seen.lock();
+        seen.retain(|(pid, _), _| *pid != info.pid);
+        let mut lines = Vec::new();
+        render_tree(&tree, 0, 0, true, info.pid, &mut seen, &mut lines);
+        drop(seen);
+        let truncated = lines.len() > OBSERVE_MAX_LINES;
+        lines.truncate(OBSERVE_MAX_LINES);
+        let mut text = lines.join("\n");
+        if truncated {
+            text.push_str("\n…（已截斷；需要更多請呼叫 computer_snapshot 或 computer_find）");
+        }
+        Some(text)
+    }
+
     pub async fn list_apps(&self) -> Result<ToolOutput, String> {
         let r = async {
             self.require_enabled()?;
-            let apps = self.backend.list_apps().await?;
+            let apps = self.fetch_apps().await?;
             let lines: Vec<String> = apps
                 .iter()
                 .filter(|a| a.pid != self.own_pid)
                 .map(|a| {
                     format!(
-                        "{}{} [{}] pid={}",
+                        "{}{}{} [{}] pid={}",
                         a.name,
+                        a.localized.as_deref().map(|l| format!("（{l}）")).unwrap_or_default(),
                         if a.frontmost { " (最前)" } else { "" },
                         a.bundle_id.as_deref().unwrap_or("-"),
                         a.pid
@@ -220,6 +312,11 @@ impl ComputerService {
     }
 
     pub async fn snapshot(&self, app: &str, max_depth: Option<usize>) -> Result<ToolOutput, String> {
+        self.snapshot_opts(app, max_depth, true).await
+    }
+
+    /// `compact`：省略沒有標題的純容器與零大小（看不見）的節點，大幅縮短輸出；id 不變。
+    pub async fn snapshot_opts(&self, app: &str, max_depth: Option<usize>, compact: bool) -> Result<ToolOutput, String> {
         let r = async {
             self.require_enabled()?;
             self.require_accessibility()?;
@@ -229,7 +326,7 @@ impl ComputerService {
             let mut seen = self.seen.lock();
             seen.retain(|(pid, _), _| *pid != info.pid);
             let mut lines = Vec::new();
-            render_tree(&tree, 0, info.pid, &mut seen, &mut lines);
+            render_tree(&tree, 0, 0, compact, info.pid, &mut seen, &mut lines);
             drop(seen);
             let truncated = lines.len() > MAX_TREE_LINES;
             lines.truncate(MAX_TREE_LINES);
@@ -241,6 +338,45 @@ impl ComputerService {
         }
         .await;
         self.finish("computer_snapshot", app, "", r)
+    }
+
+    /// 依文字（標題／角色）找元件，不必讀整棵樹；找到的 id 可以直接拿去點。
+    pub async fn find(&self, app: &str, query: &str, role: Option<&str>, max: usize) -> Result<ToolOutput, String> {
+        let r = async {
+            self.require_enabled()?;
+            self.require_accessibility()?;
+            let q = query.trim().to_lowercase();
+            let role = role.map(str::trim).filter(|r| !r.is_empty());
+            if q.is_empty() && role.is_none() {
+                return Err("請提供 query（要找的文字）或 role（例如 AXButton）".to_string());
+            }
+            let info = self.gate(app, "查找元件").await?;
+            let tree = self.backend.snapshot(info.pid, 12).await?;
+            let mut seen = self.seen.lock();
+            seen.retain(|(pid, _), _| *pid != info.pid);
+            let mut all = Vec::new();
+            collect_nodes(&tree, info.pid, &mut seen, &mut all);
+            drop(seen);
+            let max = max.clamp(1, 100);
+            let hits: Vec<&ElementNode> = all
+                .iter()
+                .filter(|n| n.w > 0.0 && n.h > 0.0)
+                .filter(|n| role.map_or(true, |r| n.role.eq_ignore_ascii_case(r)))
+                .filter(|n| q.is_empty() || n.title.to_lowercase().contains(&q) || n.role.to_lowercase().contains(&q))
+                .collect();
+            if hits.is_empty() {
+                return Ok(ToolOutput::Text(format!(
+                    "沒有找到符合「{query}」的元件。可改用 computer_snapshot 看整體畫面。"
+                )));
+            }
+            let mut lines: Vec<String> = hits.iter().take(max).map(|n| format_node(n)).collect();
+            if hits.len() > max {
+                lines.push(format!("…（僅列出前 {max} 筆，共 {} 筆符合；請用更精確的 query）", hits.len()));
+            }
+            Ok(ToolOutput::Text(lines.join("\n")))
+        }
+        .await;
+        self.finish("computer_find", app, &format!("query={query}"), r)
     }
 
     pub async fn screenshot(&self, app: Option<&str>) -> Result<ToolOutput, String> {
@@ -374,28 +510,50 @@ impl ComputerService {
     }
 }
 
+fn format_node(n: &ElementNode) -> String {
+    let title = if n.title.is_empty() { String::new() } else { format!(" \"{}\"", n.title) };
+    format!("{} {}{} ({:.0},{:.0},{:.0},{:.0})", n.id, n.role, title, n.x, n.y, n.w, n.h)
+}
+
+/// 把整棵樹攤平，並把每個節點都登記進 `seen`（即使精簡輸出省略了它，id 仍可用）。
+fn collect_nodes(
+    n: &ElementNode,
+    pid: i32,
+    seen: &mut HashMap<(i32, String), (String, String)>,
+    out: &mut Vec<ElementNode>,
+) {
+    seen.insert((pid, n.id.clone()), (n.role.clone(), n.title.clone()));
+    out.push(ElementNode { children: vec![], ..n.clone() });
+    for c in &n.children {
+        collect_nodes(c, pid, seen, out);
+    }
+}
+
+/// 精簡模式要不要省略這一行（孩子仍會處理）。根節點永遠保留。
+fn omit_in_compact(n: &ElementNode, depth: usize) -> bool {
+    if depth == 0 {
+        return false;
+    }
+    (n.w <= 0.0 || n.h <= 0.0) || (n.title.is_empty() && GENERIC_ROLES.contains(&n.role.as_str()))
+}
+
 fn render_tree(
     n: &ElementNode,
     depth: usize,
+    indent: usize,
+    compact: bool,
     pid: i32,
     seen: &mut HashMap<(i32, String), (String, String)>,
     out: &mut Vec<String>,
 ) {
     seen.insert((pid, n.id.clone()), (n.role.clone(), n.title.clone()));
-    let title = if n.title.is_empty() { String::new() } else { format!(" \"{}\"", n.title) };
-    out.push(format!(
-        "{}{} {}{} ({:.0},{:.0},{:.0},{:.0})",
-        "  ".repeat(depth),
-        n.id,
-        n.role,
-        title,
-        n.x,
-        n.y,
-        n.w,
-        n.h
-    ));
+    let omit = compact && omit_in_compact(n, depth);
+    if !omit {
+        out.push(format!("{}{}", "  ".repeat(indent), format_node(n)));
+    }
+    let next_indent = if omit { indent } else { indent + 1 };
     for c in &n.children {
-        render_tree(c, depth + 1, pid, seen, out);
+        render_tree(c, depth + 1, next_indent, compact, pid, seen, out);
     }
 }
 

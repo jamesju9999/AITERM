@@ -6,7 +6,10 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct AppInfo {
+    /// 行程名稱（可執行檔名，如 `TextEdit`、`Notes`），與舊版 osascript 清單相同，模型與使用者最常用的叫法。
     pub name: String,
+    /// 系統語言下顯示的名稱（如「文字編輯」）；與 `name` 相同時為 `None`。也能拿來指定 App。
+    pub localized: Option<String>,
     pub bundle_id: Option<String>,
     pub pid: i32,
     pub frontmost: bool,
