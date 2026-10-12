@@ -370,6 +370,8 @@ JSON.stringify(ps.map(function (p) {
             for chunk in units.chunks(16) {
                 for down in [true, false] {
                     let e = CGEvent::new_keyboard_event(source()?, 0, down).map_err(|_| "無法建立鍵盤事件")?;
+                    // 明確清掉修飾鍵：緊接在 cmd+a 之後輸入時，不能讓文字被當成快速鍵。
+                    e.set_flags(CGEventFlags::empty());
                     e.set_string_from_utf16_unchecked(chunk);
                     e.post(CGEventTapLocation::HID);
                 }
@@ -404,6 +406,20 @@ JSON.stringify(ps.map(function (p) {
                 std::thread::sleep(Duration::from_millis(20));
             }
             Ok(())
+        })
+        .await
+    }
+
+    async fn focused_text(&self, pid: i32) -> Result<Option<FocusedText>, String> {
+        // 等應用程式處理完剛送出的事件，再讀它的內容。
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        blocking(move || {
+            let app = Owned::app(pid)?;
+            let Some(el) = app.attr("AXFocusedUIElement") else { return Ok(None) };
+            let role = el.string("AXRole").unwrap_or_default();
+            let secure = el.string("AXSubrole").as_deref() == Some("AXSecureTextField") || role == "AXSecureTextField";
+            let text = if secure { String::new() } else { el.string("AXValue").unwrap_or_default() };
+            Ok(Some(FocusedText { role, text, secure }))
         })
         .await
     }

@@ -19,7 +19,7 @@ use parking_lot::Mutex;
 use crate::config::ConfigStore;
 use approval::{ApprovalKind, ApprovalRequest, Approver, Decision};
 use audit::AuditLog;
-use backend::{AppInfo, Backend, ElementNode, MouseButton};
+use backend::{AppInfo, Backend, ElementNode, KeyCombo, MouseButton};
 
 /// 工具回傳：純文字，或影像加說明文字。
 #[derive(Debug)]
@@ -41,6 +41,7 @@ pub fn builtin_tool_infos(cfg: &crate::config::AppConfig) -> Vec<crate::mcp::Mcp
 const DENIED_PREFIX: &str = "使用者拒絕";
 const SCREEN_KEY: &str = "*screen*";
 const MAX_TREE_LINES: usize = 400;
+const MAX_STATE_CHARS: usize = 300;
 
 pub struct ComputerService {
     backend: Arc<dyn Backend>,
@@ -171,6 +172,30 @@ impl ComputerService {
         }
     }
 
+    /// 在動作結果後面附上焦點元件目前的內容，讓模型能自己驗證（例如發現「只刪了一個字」）。
+    /// 讀不到就什麼都不附——狀態只是輔助，不能讓已成功的動作變成失敗。
+    async fn with_state(&self, base: String, pid: i32) -> String {
+        match self.backend.focused_text(pid).await {
+            Ok(Some(f)) if f.secure => format!("{base}\n目前焦點：{}（密碼欄位，內容不回傳）", f.role),
+            Ok(Some(f)) => {
+                let shown = if f.text.is_empty() {
+                    "（空）".to_string()
+                } else if f.text.chars().count() > MAX_STATE_CHARS {
+                    let head: String = f.text.chars().take(MAX_STATE_CHARS).collect();
+                    format!("\"{head}…\"")
+                } else {
+                    format!("\"{}\"", f.text)
+                };
+                format!("{base}\n目前焦點：{}，內容：{shown}", f.role)
+            }
+            Ok(None) => base,
+            Err(e) => {
+                log::debug!("讀取焦點元件狀態失敗（不影響動作結果）：{e}");
+                base
+            }
+        }
+    }
+
     pub async fn list_apps(&self) -> Result<ToolOutput, String> {
         let r = async {
             self.require_enabled()?;
@@ -289,7 +314,7 @@ impl ComputerService {
         self.finish("computer_click", app, &detail, r)
     }
 
-    pub async fn type_text(&self, app: &str, text: &str, element: Option<&str>) -> Result<ToolOutput, String> {
+    pub async fn type_text(&self, app: &str, text: &str, element: Option<&str>, replace: bool) -> Result<ToolOutput, String> {
         let detail = format!("{} 個字元", text.chars().count());
         let r = async {
             self.require_enabled()?;
@@ -302,8 +327,16 @@ impl ComputerService {
                 }
                 self.backend.focus_element(info.pid, id).await?;
             }
+            if replace {
+                // 先全選，輸入的文字才會取代原本的內容。
+                let all = KeyCombo { key: "a".into(), cmd: true, ctrl: false, alt: false, shift: false };
+                self.backend.key(&all).await?;
+                // 讓應用程式先處理完全選，再送文字。
+                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+            }
             self.backend.type_text(text).await?;
-            Ok(ToolOutput::Text(format!("已輸入 {} 個字元", text.chars().count())))
+            let base = format!("已輸入 {} 個字元{}", text.chars().count(), if replace { "（已先全選並取代）" } else { "" });
+            Ok(ToolOutput::Text(self.with_state(base, info.pid).await))
         }
         .await;
         self.finish("computer_type", app, &detail, r)
@@ -320,7 +353,7 @@ impl ComputerService {
             }
             self.backend.activate(info.pid).await?;
             self.backend.key(&combo).await?;
-            Ok(ToolOutput::Text(format!("已按下 {spec}")))
+            Ok(ToolOutput::Text(self.with_state(format!("已按下 {spec}"), info.pid).await))
         }
         .await;
         self.finish("computer_key", app, spec, r)

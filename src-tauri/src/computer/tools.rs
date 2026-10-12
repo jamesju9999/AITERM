@@ -76,6 +76,10 @@ pub struct ComputerTypeArgs {
     /// Optional element id (from `computer_snapshot`) to focus before typing.
     #[serde(default)]
     pub element: Option<String>,
+    /// If true, select all existing text first so the typed text REPLACES it
+    /// (use this to overwrite or clear-and-fill a field).
+    #[serde(default)]
+    pub replace: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -151,12 +155,12 @@ pub fn tool_infos() -> Vec<McpToolInfo> {
         ),
         mk(
             "computer_type",
-            "Type text into an app. Pass an element id (from computer_snapshot) to focus a field first; otherwise the text goes to whatever has focus.",
+            "Type text into an app. Pass an element id (from computer_snapshot) to focus a field first; otherwise the text goes to whatever has focus. Set replace=true to overwrite the field's existing text. The result reports the field's current content — check it.",
             schema::<ComputerTypeArgs>(),
         ),
         mk(
             "computer_key",
-            "Press a key or combination in an app, e.g. \"return\", \"escape\", \"cmd+s\". Cmd+Delete always asks the user for confirmation.",
+            "Press ONE key or combination in an app, e.g. \"return\", \"escape\", \"cmd+s\", \"cmd+a\". To clear a field, call this twice: \"cmd+a\" then \"delete\" (a bare \"delete\" only removes one character). The result reports the focused field's current content — check it. Cmd+Delete always asks the user for confirmation.",
             schema::<ComputerKeyArgs>(),
         ),
         mk(
@@ -211,7 +215,7 @@ pub async fn call(service: &ComputerService, tool: &str, args: Value) -> McpTool
             }
             "computer_type" => {
                 let a: ComputerTypeArgs = parse(args)?;
-                service.type_text(&a.app, &a.text, a.element.as_deref()).await
+                service.type_text(&a.app, &a.text, a.element.as_deref(), a.replace.unwrap_or(false)).await
             }
             "computer_key" => {
                 let a: ComputerKeyArgs = parse(args)?;

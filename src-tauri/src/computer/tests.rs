@@ -18,6 +18,8 @@ struct FakeBackend {
     tree: Mutex<ElementNode>,
     calls: Mutex<Vec<String>>,
     press_fails: bool,
+    /// 模擬焦點文字區：(內容, 是否全選, 是否密碼欄位)。
+    doc: Mutex<(String, bool, bool)>,
 }
 
 impl FakeBackend {
@@ -29,6 +31,7 @@ impl FakeBackend {
             tree: Mutex::new(root),
             calls: Mutex::new(vec![]),
             press_fails: false,
+            doc: Mutex::new((String::new(), false, false)),
         })
     }
     fn calls(&self) -> Vec<String> {
@@ -75,9 +78,28 @@ impl Backend for FakeBackend {
         self.calls.lock().push(format!("click_at {x:.0},{y:.0} double={double}"));
         Ok(())
     }
-    async fn type_text(&self, t: &str) -> Result<(), String> { self.calls.lock().push(format!("type {t}")); Ok(()) }
+    async fn type_text(&self, t: &str) -> Result<(), String> {
+        self.calls.lock().push(format!("type {t}"));
+        let mut d = self.doc.lock();
+        if d.1 { d.0.clear(); d.1 = false; }
+        d.0.push_str(t);
+        Ok(())
+    }
     async fn focus_element(&self, _: i32, id: &str) -> Result<(), String> { self.calls.lock().push(format!("focus {id}")); Ok(()) }
-    async fn key(&self, c: &KeyCombo) -> Result<(), String> { self.calls.lock().push(format!("key {}", c.key)); Ok(()) }
+    async fn key(&self, c: &KeyCombo) -> Result<(), String> {
+        self.calls.lock().push(format!("key {}{}", if c.cmd { "cmd+" } else { "" }, c.key));
+        let mut d = self.doc.lock();
+        match (c.cmd, c.key.as_str()) {
+            (true, "a") => d.1 = true,
+            (false, "delete") => { if d.1 { d.0.clear(); d.1 = false } else { d.0.pop(); } }
+            _ => {}
+        }
+        Ok(())
+    }
+    async fn focused_text(&self, _: i32) -> Result<Option<FocusedText>, String> {
+        let d = self.doc.lock();
+        Ok(Some(FocusedText { role: "AXTextArea".into(), text: d.0.clone(), secure: d.2 }))
+    }
     async fn scroll(&self, dx: i32, dy: i32, _: Option<(f64, f64)>) -> Result<(), String> {
         self.calls.lock().push(format!("scroll {dx},{dy}"));
         Ok(())
@@ -126,6 +148,16 @@ fn rig_with(backend: Arc<FakeBackend>, enabled: bool, script: &[Decision]) -> Ri
         OWN_PID,
     );
     Rig { svc, backend, approver, config, _dir: dir }
+}
+
+fn rig_with_backend(backend: Arc<dyn Backend>, script: &[Decision]) -> Rig {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Arc::new(ConfigStore::new_at(dir.path().join("config.toml")));
+    config.update(|c| c.mcp_tool_server.computer_enabled = true).unwrap();
+    let approver = FakeApprover::new(script);
+    let svc = ComputerService::new(backend, approver.clone(), config.clone(), AuditLog::new(dir.path().join("audit.jsonl")), OWN_PID);
+    // Rig.backend 只給需要檢查假後端的測試用；這裡的後端不是 FakeBackend，放一個空的占位。
+    Rig { svc, backend: FakeBackend::new(), approver, config, _dir: dir }
 }
 
 fn rig(script: &[Decision]) -> Rig {
@@ -197,7 +229,7 @@ async fn allow_once_is_not_remembered() {
 #[tokio::test]
 async fn deny_stops_before_the_backend_and_is_audited_as_denied() {
     let r = rig(&[Decision::Deny]);
-    let e = r.svc.type_text("Notes", "hi", None).await.unwrap_err();
+    let e = r.svc.type_text("Notes", "hi", None, false).await.unwrap_err();
     assert!(e.starts_with("使用者拒絕"));
     assert!(r.backend.calls().is_empty());
     let log = r.svc.audit().tail(5);
@@ -212,6 +244,7 @@ async fn missing_permissions_are_reported_before_anything_else() {
         tree: Mutex::new(el("0", "AXWindow", "")),
         calls: Mutex::new(vec![]),
         press_fails: false,
+        doc: Mutex::new((String::new(), false, false)),
     });
     let r = rig_with(b, true, &[Decision::AllowAlways]);
     assert!(r.svc.snapshot("Notes", None).await.unwrap_err().contains("輔助使用"));
@@ -313,16 +346,16 @@ async fn key_validates_before_asking_and_cmd_delete_is_confirmed() {
     r.svc.key("Notes", "cmd+s").await.unwrap();
     let e = r.svc.key("Notes", "cmd+delete").await.unwrap_err();
     assert!(e.starts_with("使用者拒絕"));
-    assert!(r.backend.calls().contains(&"key s".to_string()));
-    assert!(!r.backend.calls().contains(&"key delete".to_string()));
+    assert!(r.backend.calls().contains(&"key cmd+s".to_string()));
+    assert!(!r.backend.calls().contains(&"key cmd+delete".to_string()));
 }
 
 #[tokio::test]
 async fn type_with_element_focuses_it_first_and_rejects_unknown_ids() {
     let r = rig(&[Decision::AllowAlways]);
     r.svc.snapshot("Notes", None).await.unwrap();
-    assert!(r.svc.type_text("Notes", "x", Some("9.9")).await.unwrap_err().contains("computer_snapshot"));
-    r.svc.type_text("Notes", "hello", Some("0.0")).await.unwrap();
+    assert!(r.svc.type_text("Notes", "x", Some("9.9"), false).await.unwrap_err().contains("computer_snapshot"));
+    r.svc.type_text("Notes", "hello", Some("0.0"), false).await.unwrap();
     let c = r.backend.calls();
     let f = c.iter().position(|x| x == "focus 0.0").unwrap();
     let t = c.iter().position(|x| x == "type hello").unwrap();
@@ -332,7 +365,7 @@ async fn type_with_element_focuses_it_first_and_rejects_unknown_ids() {
 #[tokio::test]
 async fn type_never_logs_the_typed_text() {
     let r = rig(&[Decision::AllowAlways]);
-    r.svc.type_text("Notes", "my-secret-password", None).await.unwrap();
+    r.svc.type_text("Notes", "my-secret-password", None, false).await.unwrap();
     let raw = std::fs::read_to_string(r._dir.path().join("audit.jsonl")).unwrap();
     assert!(!raw.contains("my-secret-password"), "{raw}");
 }
@@ -379,6 +412,93 @@ async fn unsupported_backend_reports_a_clear_error() {
         OWN_PID,
     );
     assert!(svc.list_apps().await.unwrap_err().contains("macOS"));
+}
+
+// ── 操作後回報焦點元件的狀態（讓模型能發現「沒清空」之類的失誤），以及 replace 選項。
+
+#[tokio::test]
+async fn type_result_reports_what_the_focused_field_now_contains() {
+    let r = rig(&[Decision::AllowAlways]);
+    let out = text(r.svc.type_text("Notes", "你好 AITerm", None, false).await.unwrap());
+    assert!(out.contains("AXTextArea") && out.contains("你好 AITerm"), "{out}");
+}
+
+#[tokio::test]
+async fn a_bare_delete_leaves_text_behind_and_the_result_shows_it() {
+    // 重現真實失誤：模型只送 delete 沒先全選，文字只少一個字。結果文字要讓這一點看得出來。
+    let r = rig(&[Decision::AllowAlways]);
+    r.svc.type_text("Notes", "你好 AITerm", None, false).await.unwrap();
+    let out = text(r.svc.key("Notes", "delete").await.unwrap());
+    assert!(out.contains("你好 AITer") && !out.contains("內容：（空）"), "{out}");
+
+    r.svc.key("Notes", "cmd+a").await.unwrap();
+    let out = text(r.svc.key("Notes", "delete").await.unwrap());
+    assert!(out.contains("內容：（空）"), "{out}");
+}
+
+#[tokio::test]
+async fn replace_selects_all_before_typing_so_old_text_is_gone() {
+    let r = rig(&[Decision::AllowAlways]);
+    r.svc.type_text("Notes", "old text", None, false).await.unwrap();
+    let out = text(r.svc.type_text("Notes", "new", None, true).await.unwrap());
+    assert!(out.contains("\"new\"") && !out.contains("old"), "{out}");
+    let c = r.backend.calls();
+    let sel = c.iter().rposition(|x| x == "key cmd+a").unwrap();
+    let typ = c.iter().rposition(|x| x == "type new").unwrap();
+    assert!(sel < typ, "{c:?}");
+}
+
+#[tokio::test]
+async fn without_replace_no_select_all_is_sent() {
+    let r = rig(&[Decision::AllowAlways]);
+    r.svc.type_text("Notes", "x", None, false).await.unwrap();
+    assert!(!r.backend.calls().iter().any(|c| c == "key cmd+a"));
+}
+
+#[tokio::test]
+async fn password_fields_are_never_echoed_back() {
+    let r = rig(&[Decision::AllowAlways]);
+    r.backend.doc.lock().2 = true;
+    let out = text(r.svc.type_text("Notes", "hunter2", None, false).await.unwrap());
+    assert!(!out.contains("hunter2"), "{out}");
+    assert!(out.contains("密碼欄位"), "{out}");
+}
+
+#[tokio::test]
+async fn long_field_contents_are_truncated_in_the_result() {
+    let r = rig(&[Decision::AllowAlways]);
+    let big = "字".repeat(1000);
+    let out = text(r.svc.type_text("Notes", &big, None, false).await.unwrap());
+    assert!(out.chars().count() < 600, "{}", out.chars().count());
+    assert!(out.contains("…"));
+}
+
+#[tokio::test]
+async fn failing_to_read_the_field_state_does_not_fail_the_action() {
+    let r = rig_with(FakeBackend::new(), true, &[Decision::AllowAlways]);
+    // 空的 UnsupportedBackend 式失敗：用一個 focused_text 回錯誤的後端。
+    struct NoState(Arc<FakeBackend>);
+    #[async_trait]
+    impl Backend for NoState {
+        fn permissions(&self) -> Permissions { self.0.permissions() }
+        async fn list_apps(&self) -> Result<Vec<AppInfo>, String> { self.0.list_apps().await }
+        async fn snapshot(&self, p: i32, d: usize) -> Result<ElementNode, String> { self.0.snapshot(p, d).await }
+        async fn element_info(&self, p: i32, i: &str) -> Result<ElementNode, String> { self.0.element_info(p, i).await }
+        async fn element_at(&self, x: f64, y: f64) -> Result<Option<ElementNode>, String> { self.0.element_at(x, y).await }
+        async fn screenshot(&self, p: Option<i32>) -> Result<Shot, String> { self.0.screenshot(p).await }
+        async fn activate(&self, p: i32) -> Result<(), String> { self.0.activate(p).await }
+        async fn press_element(&self, p: i32, i: &str) -> Result<(), String> { self.0.press_element(p, i).await }
+        async fn click_at(&self, x: f64, y: f64, b: MouseButton, d: bool) -> Result<(), String> { self.0.click_at(x, y, b, d).await }
+        async fn type_text(&self, t: &str) -> Result<(), String> { self.0.type_text(t).await }
+        async fn focus_element(&self, p: i32, i: &str) -> Result<(), String> { self.0.focus_element(p, i).await }
+        async fn key(&self, c: &KeyCombo) -> Result<(), String> { self.0.key(c).await }
+        async fn scroll(&self, x: i32, y: i32, a: Option<(f64, f64)>) -> Result<(), String> { self.0.scroll(x, y, a).await }
+        async fn focused_text(&self, _: i32) -> Result<Option<FocusedText>, String> { Err("AX 讀取失敗".into()) }
+    }
+    drop(r);
+    let r = rig_with_backend(Arc::new(NoState(FakeBackend::new())), &[Decision::AllowAlways]);
+    let out = text(r.svc.type_text("Notes", "hi", None, false).await.unwrap());
+    assert!(out.contains("已輸入 2 個字元") && !out.contains("目前焦點"), "{out}");
 }
 
 // ── 內建 Ask AI 入口（computer::tools::call）：結果一律包成文字＋is_error，模型讀得到原因。
@@ -451,7 +571,7 @@ mod live {
         let dir = tempfile::tempdir().unwrap();
         let config = Arc::new(ConfigStore::new_at(dir.path().join("config.toml")));
         config.update(|c| c.mcp_tool_server.computer_enabled = true).unwrap();
-        let approver = FakeApprover::new(&[Decision::AllowOnce, Decision::AllowOnce, Decision::AllowOnce, Decision::AllowOnce, Decision::AllowOnce, Decision::AllowOnce]);
+        let approver = FakeApprover::new(&[Decision::AllowOnce; 16]);
         let svc = ComputerService::new(
             Arc::new(MacBackend),
             approver.clone(),
@@ -472,13 +592,28 @@ mod live {
             .expect("找不到 AXTextArea")
             .to_string();
 
-        svc.type_text("TextEdit", "hello from AITerm 你好", Some(&area)).await.unwrap();
+        svc.type_text("TextEdit", "123 from AITerm 你好", Some(&area), false).await.unwrap();
         let got = osa("tell application \"TextEdit\" to get text of document 1");
         println!("document text = {got:?}");
-        assert_eq!(got, "hello from AITerm 你好");
+        assert_eq!(got, "123 from AITerm 你好");
+
+        // 只按 delete：只少一個字，而且結果文字要讓模型看得出來。
+        let r = text(svc.key("TextEdit", "delete").await.unwrap());
+        println!("after bare delete: {r}");
+        assert!(r.contains("123 from AITerm 你"), "{r}");
+        assert_eq!(osa("tell application \"TextEdit\" to get text of document 1"), "123 from AITerm 你");
+
+        // replace：先全選再輸入，舊文字消失。
+        let r = text(svc.type_text("TextEdit", "999 replaced", Some(&area), true).await.unwrap());
+        println!("after replace: {r}");
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        println!("doc after replace +600ms: {:?}", osa("tell application \"TextEdit\" to get text of document 1"));
+        assert!(r.contains("\"999 replaced\""), "{r}");
+        assert_eq!(osa("tell application \"TextEdit\" to get text of document 1"), "999 replaced");
 
         svc.key("TextEdit", "cmd+a").await.unwrap();
-        svc.key("TextEdit", "delete").await.unwrap();
+        let r = text(svc.key("TextEdit", "delete").await.unwrap());
+        assert!(r.contains("（空）"), "{r}");
         assert_eq!(osa("tell application \"TextEdit\" to get text of document 1"), "");
 
         // 座標點擊文字區中央（安全元件，不應觸發確認）

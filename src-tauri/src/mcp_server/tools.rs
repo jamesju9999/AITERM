@@ -24,8 +24,10 @@ use crate::db::manager::DbManager;
 use crate::pty::PtyManager;
 use crate::secret::SecretStore;
 
-use crate::computer::{ClickTarget, ComputerService, ToolOutput};
-use crate::computer::backend::MouseButton;
+use crate::computer::tools::{
+    ComputerClickArgs, ComputerKeyArgs, ComputerScreenshotArgs, ComputerScrollArgs, ComputerSnapshotArgs, ComputerTypeArgs,
+};
+use crate::computer::{ComputerService, ToolOutput};
 use tauri::Manager;
 
 use super::coordination_ops::CoordinationRegistry;
@@ -48,80 +50,6 @@ fn computer_result(r: Result<ToolOutput, String>) -> Result<CallToolResult, McpE
         }
         Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
     }
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct ComputerSnapshotArgs {
-    /// App name or bundle id, as returned by `computer_list_apps`.
-    pub app: String,
-    /// How many levels of the accessibility tree to read (default 6, max 12).
-    #[serde(default)]
-    pub max_depth: Option<usize>,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct ComputerScreenshotArgs {
-    /// App name or bundle id. Omit to capture the whole main screen.
-    #[serde(default)]
-    pub app: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct ComputerClickArgs {
-    /// App name or bundle id, as returned by `computer_list_apps`.
-    pub app: String,
-    /// Element id from the latest `computer_snapshot` (e.g. "0.3.1"). Preferred over x/y.
-    #[serde(default)]
-    pub element: Option<String>,
-    /// Screen x coordinate (use with y when no element id is available).
-    #[serde(default)]
-    pub x: Option<f64>,
-    /// Screen y coordinate.
-    #[serde(default)]
-    pub y: Option<f64>,
-    /// "left" (default) or "right".
-    #[serde(default)]
-    pub button: Option<String>,
-    /// Double-click.
-    #[serde(default)]
-    pub double: Option<bool>,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct ComputerTypeArgs {
-    /// App name or bundle id.
-    pub app: String,
-    /// Text to type into the focused field.
-    pub text: String,
-    /// Optional element id (from `computer_snapshot`) to focus before typing.
-    #[serde(default)]
-    pub element: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct ComputerKeyArgs {
-    /// App name or bundle id.
-    pub app: String,
-    /// Key or combo, e.g. "return", "cmd+s", "cmd+shift+left".
-    pub key: String,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct ComputerScrollArgs {
-    /// App name or bundle id.
-    pub app: String,
-    /// Horizontal scroll in lines (positive = right).
-    #[serde(default)]
-    pub dx: Option<i32>,
-    /// Vertical scroll in lines (positive = up).
-    #[serde(default)]
-    pub dy: Option<i32>,
-    /// Optional screen x to scroll at.
-    #[serde(default)]
-    pub x: Option<f64>,
-    /// Optional screen y to scroll at.
-    #[serde(default)]
-    pub y: Option<f64>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -324,18 +252,12 @@ impl AiTermTools {
         &self,
         Parameters(a): Parameters<ComputerClickArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let target = match (a.element, a.x, a.y) {
-            (Some(id), _, _) => ClickTarget::Element(id),
-            (None, Some(x), Some(y)) => ClickTarget::Point(x, y),
-            _ => return computer_result(Err("請提供 element，或同時提供 x 與 y".to_string())),
-        };
-        let button = match a.button.as_deref() {
-            None | Some("left") => MouseButton::Left,
-            Some("right") => MouseButton::Right,
-            Some(other) => return computer_result(Err(format!("button 只能是 left 或 right，收到「{other}」"))),
+        let (app, target, button, double) = match a.into_parts() {
+            Ok(parts) => parts,
+            Err(e) => return computer_result(Err(e)),
         };
         match self.computer() {
-            Ok(c) => computer_result(c.click(&a.app, target, button, a.double.unwrap_or(false)).await),
+            Ok(c) => computer_result(c.click(&app, target, button, double).await),
             Err(e) => computer_result(Err(e)),
         }
     }
@@ -343,15 +265,15 @@ impl AiTermTools {
     #[tool(description = "Type text into an app. Optionally pass an element id (from computer_snapshot) to focus a field first; otherwise the text goes to whatever currently has focus.")]
     async fn computer_type(
         &self,
-        Parameters(ComputerTypeArgs { app, text, element }): Parameters<ComputerTypeArgs>,
+        Parameters(ComputerTypeArgs { app, text, element, replace }): Parameters<ComputerTypeArgs>,
     ) -> Result<CallToolResult, McpError> {
         match self.computer() {
-            Ok(c) => computer_result(c.type_text(&app, &text, element.as_deref()).await),
+            Ok(c) => computer_result(c.type_text(&app, &text, element.as_deref(), replace.unwrap_or(false)).await),
             Err(e) => computer_result(Err(e)),
         }
     }
 
-    #[tool(description = "Press a key or key combination in an app, e.g. \"return\", \"escape\", \"cmd+s\", \"cmd+shift+left\". Cmd+Delete always asks the user for confirmation.")]
+    #[tool(description = "Press a key or key combination in an app, e.g. \"return\", \"escape\", \"cmd+s\", \"cmd+shift+left\". To clear a field send \"cmd+a\" then \"delete\" as two calls (a bare delete removes one character). The result reports the focused field's current content. Cmd+Delete always asks the user for confirmation.")]
     async fn computer_key(
         &self,
         Parameters(ComputerKeyArgs { app, key }): Parameters<ComputerKeyArgs>,
@@ -365,14 +287,11 @@ impl AiTermTools {
     #[tool(description = "Scroll in an app by lines (dy positive = up, dx positive = right), optionally at a screen coordinate.")]
     async fn computer_scroll(
         &self,
-        Parameters(ComputerScrollArgs { app, dx, dy, x, y }): Parameters<ComputerScrollArgs>,
+        Parameters(a): Parameters<ComputerScrollArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let at = match (x, y) {
-            (Some(x), Some(y)) => Some((x, y)),
-            _ => None,
-        };
+        let at = a.at();
         match self.computer() {
-            Ok(c) => computer_result(c.scroll(&app, dx.unwrap_or(0), dy.unwrap_or(0), at).await),
+            Ok(c) => computer_result(c.scroll(&a.app, a.dx.unwrap_or(0), a.dy.unwrap_or(0), at).await),
             Err(e) => computer_result(Err(e)),
         }
     }

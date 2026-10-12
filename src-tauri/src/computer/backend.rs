@@ -57,6 +57,15 @@ pub struct KeyCombo {
     pub shift: bool,
 }
 
+/// 目前焦點元件的狀態，操作後回報給模型驗證結果用。
+#[derive(Debug, Clone, PartialEq)]
+pub struct FocusedText {
+    pub role: String,
+    pub text: String,
+    /// 密碼欄位：內容絕不回傳。
+    pub secure: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Permissions {
     pub accessibility: bool,
@@ -82,6 +91,8 @@ pub trait Backend: Send + Sync {
     async fn focus_element(&self, pid: i32, id: &str) -> Result<(), String>;
     async fn key(&self, combo: &KeyCombo) -> Result<(), String>;
     async fn scroll(&self, dx: i32, dy: i32, at: Option<(f64, f64)>) -> Result<(), String>;
+    /// App 目前焦點元件的角色與文字；沒有焦點元件回 `None`。
+    async fn focused_text(&self, pid: i32) -> Result<Option<FocusedText>, String>;
 }
 
 /// 非 macOS：介面保留，一律回「尚未支援」。
@@ -108,4 +119,5 @@ impl Backend for UnsupportedBackend {
     async fn focus_element(&self, _: i32, _: &str) -> Result<(), String> { unsupported() }
     async fn key(&self, _: &KeyCombo) -> Result<(), String> { unsupported() }
     async fn scroll(&self, _: i32, _: i32, _: Option<(f64, f64)>) -> Result<(), String> { unsupported() }
+    async fn focused_text(&self, _: i32) -> Result<Option<FocusedText>, String> { unsupported() }
 }
