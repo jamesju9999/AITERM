@@ -11,7 +11,8 @@ import { intentNudge, looksLikeUnfulfilledIntent } from "../lib/unfulfilledInten
 import type { McpChatMessage, McpChatSession } from "../types/chat";
 export type { McpChatMessage, McpChatSession }; // re-export：既有 import { McpChatMessage } from "../hooks/useMcpChat" 不用改
 
-const MAX_TOOL_ITERATIONS = 10;
+// 呼叫端沒指定時的預設值；AiPanel 會傳入系統設定的「最大步數」（0 = 無限制，已換成大數）。
+const DEFAULT_MAX_TOOL_ITERATIONS = 10;
 // 模型只宣告動作卻沒呼叫工具時，最多催幾次。
 const MAX_INTENT_NUDGES = 2;
 const SESSIONS_STORAGE_KEY = "aiterm-mcp-chat-sessions";
@@ -36,8 +37,11 @@ function formatSessionTitle(messages: McpChatMessage[], t: any): string {
   return first ? contentToDisplayString(first.content).slice(0, 30) : t.chat_empty;
 }
 
-export function useMcpChat(sessionId: string) {
+export function useMcpChat(sessionId: string, maxToolIterations: number = DEFAULT_MAX_TOOL_ITERATIONS) {
   const { t, locale } = useLocale();
+  // 用 ref 讀最新值：sendMessage 是 useCallback，設定頁剛改完的上限不能被舊閉包吃掉。
+  const maxIterationsRef = useRef(maxToolIterations);
+  maxIterationsRef.current = maxToolIterations;
   const [messages, setMessages] = useState<McpChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamBuf, setStreamBuf] = useState("");
@@ -132,7 +136,8 @@ export function useMcpChat(sessionId: string) {
       let iterations = 0;
       let nudges = 0;
 
-      while (iterations < MAX_TOOL_ITERATIONS) {
+      const maxIterations = maxIterationsRef.current;
+      while (iterations < maxIterations) {
         iterations++;
         const reply = await aiChat(iterHistory, sessionId, undefined, useMcp, locale, true);
 
@@ -224,10 +229,10 @@ export function useMcpChat(sessionId: string) {
         break;
       }
 
-      if (iterations >= MAX_TOOL_ITERATIONS && mountedRef.current) {
+      if (iterations >= maxIterations && mountedRef.current) {
         setMessages(prev => [...prev, {
           role: "assistant" as const,
-          content: t.mcp_tool_limit,
+          content: t.mcp_tool_limit.replace("{n}", String(maxIterations)),
         }]);
       }
     } catch (e) {

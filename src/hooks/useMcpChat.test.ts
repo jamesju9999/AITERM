@@ -93,4 +93,55 @@ describe("useMcpChat", () => {
       expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(1);
     });
   });
+
+  // 工具呼叫上限要讀系統設定的「最大步數」（0 = 無限制），而不是寫死 10。
+  describe("工具呼叫上限", () => {
+    const toolCall = () => ({
+      content: null,
+      tool_calls: [{ id: "c", tool_name: "x__t", server_id: "x", args: {} }],
+      tool_calling_unsupported: false,
+    });
+
+    it("沒指定時維持預設 10 次，超過就停並說明上限", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(executeMcpTool).mockResolvedValue({ content: "ok", is_error: false });
+      vi.mocked(aiChat).mockResolvedValue(toolCall());
+      const { result } = renderHook(() => useMcpChat("s-limit-default"), { wrapper: LocaleProvider });
+      await act(async () => { await result.current.sendMessage("go", true); });
+      expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(10);
+      expect(String(result.current.messages.at(-1)?.content)).toContain("10");
+    });
+
+    it("使用者把最大步數設得比 10 大：照設定跑，上限訊息顯示實際數字", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(executeMcpTool).mockResolvedValue({ content: "ok", is_error: false });
+      vi.mocked(aiChat).mockResolvedValue(toolCall());
+      const { result } = renderHook(() => useMcpChat("s-limit-25", 25), { wrapper: LocaleProvider });
+      await act(async () => { await result.current.sendMessage("go", true); });
+      expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(25);
+      expect(String(result.current.messages.at(-1)?.content)).toContain("25");
+    });
+
+    it("設得比 10 小也照設定", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(executeMcpTool).mockResolvedValue({ content: "ok", is_error: false });
+      vi.mocked(aiChat).mockResolvedValue(toolCall());
+      const { result } = renderHook(() => useMcpChat("s-limit-3", 3), { wrapper: LocaleProvider });
+      await act(async () => { await result.current.sendMessage("go", true); });
+      expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(3);
+    });
+
+    it("上限在送出之後才變更（設定頁剛改完）：下一次送出就吃新值，不是掛載時的舊值", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(executeMcpTool).mockResolvedValue({ content: "ok", is_error: false });
+      vi.mocked(aiChat).mockResolvedValue(toolCall());
+      const { result, rerender } = renderHook(({ n }) => useMcpChat("s-limit-dyn", n), {
+        wrapper: LocaleProvider,
+        initialProps: { n: 2 },
+      });
+      rerender({ n: 4 });
+      await act(async () => { await result.current.sendMessage("go", true); });
+      expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(4);
+    });
+  });
 });

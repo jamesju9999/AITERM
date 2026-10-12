@@ -100,7 +100,9 @@ export function AiPanel({
   /** 常駐配額徽章的代表窗；null 就不顯示。 */
   const quotaWindow = useProviderQuota(providerId);
   const { t, locale } = useLocale();
-  const chat = useMcpChat(sessionId);
+  // 系統設定的「最大步數」（0 = 無限制，載入時已換成大數）。同時管 Agent 迴圈與 MCP 工具呼叫。
+  const [maxAgentSteps, setMaxAgentSteps] = useState<number>(5);
+  const chat = useMcpChat(sessionId, maxAgentSteps);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -152,7 +154,6 @@ export function AiPanel({
   // 顯示同一句話，看不出來卡在哪——尤其等 AI 那段完全沒有畫面變化。
   const [agentPhase, setAgentPhase] = useState<"thinking" | "running">("thinking");
   const agentAbortRef = useRef(false);
-  const [maxAgentSteps, setMaxAgentSteps] = useState<number>(5);
 
   // ── 卡住偵測 ───────────────────────────────────────────────────────────────
   const [stuckPromptVisible, setStuckPromptVisible] = useState(false);

@@ -1701,7 +1701,7 @@ const zhTW = {
 
     // Hook / IPC localization
     chat_empty: "（空對話）",
-    mcp_tool_limit: "⚠️ 已達工具呼叫上限（10 次），請重新提問。",
+    mcp_tool_limit: "⚠️ 已達工具呼叫上限（{n} 次），請重新提問。可在設定調整「最大步數」。",
     time_unit_min: "分",
     time_unit_min_sec: (m: number, s: number) => `${m}分${s}s`,
     schema_doc_title: "## 資料表欄位說明\n",
@@ -3495,7 +3495,7 @@ const enRaw = {
 
     // Hook / IPC localization
     chat_empty: "(Empty conversation)",
-    mcp_tool_limit: "⚠️ Tool call limit reached (10), please ask again.",
+    mcp_tool_limit: "⚠️ Tool call limit reached ({n}), please ask again. You can change \"max steps\" in Settings.",
     time_unit_min: "m",
     time_unit_min_sec: (m: number, s: number) => `${m}m${s}s`,
     schema_doc_title: "## Database Schema Documentation\n",
