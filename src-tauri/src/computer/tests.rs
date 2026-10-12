@@ -381,6 +381,54 @@ async fn unsupported_backend_reports_a_clear_error() {
     assert!(svc.list_apps().await.unwrap_err().contains("macOS"));
 }
 
+// ── 內建 Ask AI 入口（computer::tools::call）：結果一律包成文字＋is_error，模型讀得到原因。
+
+#[tokio::test]
+async fn builtin_call_runs_a_tool_through_the_same_gate_and_returns_text() {
+    let r = rig(&[Decision::AllowAlways]);
+    let out = tools::call(&r.svc, "computer_snapshot", serde_json::json!({"app": "Notes"})).await;
+    assert!(!out.is_error, "{}", out.content);
+    assert!(out.content.contains("AXButton \"Save\""));
+    // 首次授權照樣被問到，且「永遠允許」寫進設定——內建入口沒有繞過任何東西。
+    assert_eq!(r.approver.asked().len(), 1);
+    assert_eq!(r.config.get().computer_allowed_apps, vec!["com.apple.Notes".to_string()]);
+}
+
+#[tokio::test]
+async fn builtin_call_reports_denial_disabled_and_bad_arguments_as_errors_not_panics() {
+    let denied = rig(&[Decision::Deny]);
+    let out = tools::call(&denied.svc, "computer_key", serde_json::json!({"app": "Notes", "key": "cmd+s"})).await;
+    assert!(out.is_error && out.content.starts_with("使用者拒絕"), "{}", out.content);
+    assert!(denied.backend.calls().is_empty());
+
+    let off = rig_with(FakeBackend::new(), false, &[]);
+    let out = tools::call(&off.svc, "computer_list_apps", serde_json::json!({})).await;
+    assert!(out.is_error && out.content.contains("未啟用"));
+
+    let r = rig(&[]);
+    let out = tools::call(&r.svc, "computer_click", serde_json::json!({"x": 1})).await; // 缺 app
+    assert!(out.is_error && out.content.contains("參數錯誤"), "{}", out.content);
+    let out = tools::call(&r.svc, "computer_nope", serde_json::json!({})).await;
+    assert!(out.is_error && out.content.contains("未知"));
+}
+
+#[tokio::test]
+async fn builtin_call_still_asks_before_a_destructive_click() {
+    let r = rig(&[Decision::AllowAlways, Decision::Deny]);
+    tools::call(&r.svc, "computer_snapshot", serde_json::json!({"app": "Notes"})).await;
+    let out = tools::call(&r.svc, "computer_click", serde_json::json!({"app": "Notes", "element": "0.1"})).await;
+    assert!(out.is_error && out.content.starts_with("使用者拒絕"), "{}", out.content);
+    assert!(!r.backend.calls().iter().any(|c| c.starts_with("press")));
+}
+
+#[test]
+fn builtin_tools_are_hidden_unless_the_master_switch_is_on() {
+    let mut cfg = crate::config::AppConfig::default();
+    assert!(builtin_tool_infos(&cfg).is_empty());
+    cfg.mcp_tool_server.computer_enabled = true;
+    assert_eq!(builtin_tool_infos(&cfg).len(), 7);
+}
+
 // ── 真機端對端（macOS，需要輔助使用＋螢幕錄製權限，預設不跑）：
 //    cargo test -p app --lib computer::tests::live -- --ignored --nocapture
 #[cfg(target_os = "macos")]

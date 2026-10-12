@@ -187,8 +187,11 @@ pub async fn remove_mcp_server(
 #[tauri::command]
 pub async fn get_mcp_tools(
     mcp: State<'_, McpManagerState>,
+    config: State<'_, Arc<ConfigStore>>,
 ) -> Result<Vec<McpToolInfo>, String> {
-    Ok(mcp.lock().await.list_tool_infos())
+    let mut tools = mcp.lock().await.list_tool_infos();
+    tools.extend(crate::computer::builtin_tool_infos(&config.get()));
+    Ok(tools)
 }
 
 #[tauri::command]
@@ -196,7 +199,12 @@ pub async fn execute_mcp_tool(
     encoded_name: String,
     args: serde_json::Value,
     mcp: State<'_, McpManagerState>,
+    computer: State<'_, Arc<crate::computer::ComputerService>>,
 ) -> Result<McpToolResult, String> {
+    // 內建的電腦操作工具不是真的 MCP 連線，直接交給 ComputerService（授權與稽核都在裡面）。
+    if let Some(tool) = crate::computer::tools::builtin_tool_name(&encoded_name) {
+        return Ok(crate::computer::tools::call(&computer, tool, args).await);
+    }
     // 兩段式：先短暫鎖住 manager 查出是哪個連線，**放掉鎖之後**才送請求。
     //
     // 曾經寫成 `mcp.lock().await.call_tool(...).await`，那個 MutexGuard 會活到

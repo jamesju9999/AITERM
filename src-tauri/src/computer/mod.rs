@@ -9,6 +9,7 @@ pub mod backend;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod policy;
+pub mod tools;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -30,6 +31,11 @@ pub enum ToolOutput {
 pub enum ClickTarget {
     Element(String),
     Point(f64, f64),
+}
+
+/// 內建 Ask AI 可用的電腦操作工具；總開關關閉時一個都不給（模型根本看不到）。
+pub fn builtin_tool_infos(cfg: &crate::config::AppConfig) -> Vec<crate::mcp::McpToolInfo> {
+    if cfg.mcp_tool_server.computer_enabled { tools::tool_infos() } else { vec![] }
 }
 
 const DENIED_PREFIX: &str = "使用者拒絕";

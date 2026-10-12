@@ -542,7 +542,9 @@ pub async fn ai_chat(
     if use_mcp && cfg.mcp_enabled {
         let tools: Vec<crate::ai::McpToolDefinition> = {
             let manager = mcp_manager.lock().await;
-            manager.list_tool_infos().into_iter().map(|t| crate::ai::McpToolDefinition {
+            let mut infos = manager.list_tool_infos();
+            infos.extend(crate::computer::builtin_tool_infos(&cfg));
+            infos.into_iter().map(|t| crate::ai::McpToolDefinition {
                 name: t.name,
                 description: t.description,
                 input_schema: t.input_schema,
