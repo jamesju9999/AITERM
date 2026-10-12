@@ -7,10 +7,13 @@ import type { ChatMessage } from "../ipc/ai";
 import { buildContentParts, contentToDisplayString } from "../types/attachment";
 import type { Attachment } from "../types/attachment";
 import { useLocale } from "../contexts/LocaleContext";
+import { intentNudge, looksLikeUnfulfilledIntent } from "../lib/unfulfilledIntent";
 import type { McpChatMessage, McpChatSession } from "../types/chat";
 export type { McpChatMessage, McpChatSession }; // re-export：既有 import { McpChatMessage } from "../hooks/useMcpChat" 不用改
 
 const MAX_TOOL_ITERATIONS = 10;
+// 模型只宣告動作卻沒呼叫工具時，最多催幾次。
+const MAX_INTENT_NUDGES = 2;
 const SESSIONS_STORAGE_KEY = "aiterm-mcp-chat-sessions";
 
 function loadAllSessions(): McpChatSession[] {
@@ -127,6 +130,7 @@ export function useMcpChat(sessionId: string) {
     try {
       let iterHistory = [...history];
       let iterations = 0;
+      let nudges = 0;
 
       while (iterations < MAX_TOOL_ITERATIONS) {
         iterations++;
@@ -201,8 +205,22 @@ export function useMcpChat(sessionId: string) {
           continue;
         }
 
+        const finalText = reply.content ?? streamBufRef.current;
+        setMessages(prev => [...prev, { role: "assistant" as const, content: finalText }]);
+
+        // 只說「讓我先…」卻沒呼叫工具：催模型直接動手，而不是讓任務停在半路。
+        // 催促只送給模型（iterHistory），不顯示在對話裡；有次數上限，不會無限迴圈。
+        if (useMcp && nudges < MAX_INTENT_NUDGES && looksLikeUnfulfilledIntent(finalText)) {
+          nudges++;
+          iterHistory = [
+            ...iterHistory,
+            { role: "assistant", content: finalText },
+            { role: "user", content: intentNudge(locale) },
+          ];
+          continue;
+        }
+
         // Normal text response — done
-        setMessages(prev => [...prev, { role: "assistant" as const, content: reply.content ?? streamBufRef.current }]);
         break;
       }
 

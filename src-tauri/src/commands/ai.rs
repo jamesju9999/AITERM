@@ -214,6 +214,17 @@ Rules:
 /// Build the system prompt for Chat mode. Unlike `build_single_command_prompt`,
 /// this does NOT instruct JSON output — instead it explains the `<cmd>` tag
 /// protocol and invites free-form prose in the caller's locale.
+/// 有工具可用時附加的規則：弱一點的模型常回「讓我先取得快照」就結束這一輪、沒真的呼叫工具，
+/// 任務就停在半路。前端另有保險（useMcpChat 的催促），但先從提示詞講清楚。
+pub(crate) const TOOL_USE_RULE: &str = "Tool use: when a task needs tools, call them directly and keep calling \
+them until the task is finished. Never end a turn by only announcing a next step (for example \"let me take a \
+snapshot\") — make the call instead. Reply in plain text only when the task is complete or you need information \
+from the user. After an action, check the tool result to confirm it really worked before saying it is done.";
+
+pub(crate) fn with_tool_use_rule(prompt: String) -> String {
+    format!("{prompt}\n\n{TOOL_USE_RULE}")
+}
+
 pub fn build_chat_prompt(
     snapshot: &crate::ai::EnvSnapshot,
     locale: Locale,
@@ -556,7 +567,7 @@ pub async fn ai_chat(
                 Some(id) => router.resolve_by_id(id).await?,
                 None => router.resolve().await?,
             };
-            let prompt = build_chat_prompt(&snapshot, locale, supports_artifacts);
+            let prompt = with_tool_use_rule(build_chat_prompt(&snapshot, locale, supports_artifacts));
             let req = GenerateRequest {
                 system_prompt: prompt,
                 messages,
@@ -956,6 +967,14 @@ mod schema_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tool_use_rule_is_appended_after_the_base_prompt_not_replacing_it() {
+        let out = super::with_tool_use_rule("BASE PROMPT".to_string());
+        assert!(out.starts_with("BASE PROMPT"));
+        assert!(out.contains("Never end a turn by only announcing"));
+        assert!(out.contains("keep calling"));
+    }
+
     use super::*;
     use crate::ai::{AiToolCall, EnvSnapshot};
     use std::path::PathBuf;
