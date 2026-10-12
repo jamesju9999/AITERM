@@ -564,6 +564,7 @@ pub async fn ai_chat(
             let manager = mcp_manager.lock().await;
             let mut infos = manager.list_tool_infos();
             infos.extend(crate::computer::builtin_tool_infos(&cfg));
+            infos.extend(crate::terminal_tool::tool_infos());
             infos.into_iter().map(|t| crate::ai::McpToolDefinition {
                 name: t.name,
                 description: t.description,
@@ -580,6 +581,7 @@ pub async fn ai_chat(
                 with_tool_use_rule(build_chat_prompt(&snapshot, locale, supports_artifacts)),
                 cfg.mcp_tool_server.computer_enabled,
             );
+            let prompt = format!("{prompt}\n\n{}", crate::terminal_tool::PROMPT_HINT);
             let req = GenerateRequest {
                 system_prompt: prompt,
                 messages,

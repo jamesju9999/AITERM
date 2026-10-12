@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { unlistenOnCleanup } from "../lib/eventSubscription";
 import { abortAi, aiChat, formatAiError, type AiToolCall, type AiError, type ToolFallbackReason } from "../ipc/ai";
 import { executeMcpTool } from "../ipc/mcp";
+import { terminalCommandGate } from "../ipc/computer";
 import type { ChatMessage } from "../ipc/ai";
 import { buildContentParts, contentToDisplayString } from "../types/attachment";
 import type { Attachment } from "../types/attachment";
@@ -14,6 +15,8 @@ export type { McpChatMessage, McpChatSession }; // re-export：既有 import { M
 
 // 呼叫端沒指定時的預設值；AiPanel 會傳入系統設定的「最大步數」（0 = 無限制，已換成大數）。
 const DEFAULT_MAX_TOOL_ITERATIONS = 10;
+/** 與 Rust `terminal_tool::tool_infos` 的編碼名稱相同。 */
+export const TERMINAL_TOOL_NAME = "aiterm_terminal__run_command";
 // 模型只宣告動作卻沒呼叫工具時，最多催幾次。
 const MAX_INTENT_NUDGES = 2;
 const SESSIONS_STORAGE_KEY = "aiterm-mcp-chat-sessions";
@@ -38,7 +41,12 @@ function formatSessionTitle(messages: McpChatMessage[], t: any): string {
   return first ? contentToDisplayString(first.content).slice(0, 30) : t.chat_empty;
 }
 
-export function useMcpChat(sessionId: string, maxToolIterations: number = DEFAULT_MAX_TOOL_ITERATIONS) {
+export function useMcpChat(
+  sessionId: string,
+  maxToolIterations: number = DEFAULT_MAX_TOOL_ITERATIONS,
+  /** 在終端機分頁執行一個指令並回傳結果文字（沿用 Agent 模式的執行路徑）；沒有終端機時不傳。 */
+  runCommand?: (command: string) => Promise<string>,
+) {
   const { t, locale } = useLocale();
   // 用 ref 讀最新值：sendMessage 是 useCallback，設定頁剛改完的上限不能被舊閉包吃掉。
   const maxIterationsRef = useRef(maxToolIterations);
@@ -47,6 +55,8 @@ export function useMcpChat(sessionId: string, maxToolIterations: number = DEFAUL
   // 失效（被停止、或已被新的一輪取代）就安靜地結束，不再碰任何狀態或工具。
   const runRef = useRef(0);
   const loadingRef = useRef(false);
+  const runCommandRef = useRef(runCommand);
+  runCommandRef.current = runCommand;
   const [messages, setMessages] = useState<McpChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamBuf, setStreamBuf] = useState("");
@@ -182,9 +192,31 @@ export function useMcpChat(sessionId: string, maxToolIterations: number = DEFAUL
             let resultContent: string;
             let isError = false;
             try {
-              const result = await executeMcpTool(tc.tool_name, tc.args);
-              resultContent = result.content;
-              isError = result.is_error;
+              if (tc.tool_name === TERMINAL_TOOL_NAME) {
+                // 內建的「執行終端機指令」工具：不經後端 MCP，由前端先過閘門再在終端機執行。
+                const rawCommand = (tc.args as { command?: unknown } | null | undefined)?.command;
+                const command = typeof rawCommand === "string" ? rawCommand.trim() : "";
+                const run = runCommandRef.current;
+                if (!command) {
+                  resultContent = "Error: command must be a non-empty string.";
+                  isError = true;
+                } else if (!run) {
+                  resultContent = "Error: no terminal is available to run commands.";
+                  isError = true;
+                } else {
+                  const gate = await terminalCommandGate(command);
+                  if (!gate.allowed) {
+                    resultContent = gate.reason ?? "The command was not allowed.";
+                    isError = true;
+                  } else {
+                    resultContent = await run(command);
+                  }
+                }
+              } else {
+                const result = await executeMcpTool(tc.tool_name, tc.args);
+                resultContent = result.content;
+                isError = result.is_error;
+              }
             } catch (e) {
               resultContent = `Error: ${e}`;
               isError = true;

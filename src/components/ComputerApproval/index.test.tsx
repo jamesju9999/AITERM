@@ -18,6 +18,7 @@ import { LocaleProvider } from "../../contexts/LocaleContext";
 import { ComputerApprovalDialog } from "./index";
 
 const first: ComputerApprovalRequest = { id: "r1", kind: "first_use", app: "Notes", action: "點擊", detail: "" };
+const cmdReq: ComputerApprovalRequest = { id: "r3", kind: "command", app: "終端機", action: "執行指令", detail: "sudo rm -rf /tmp/x\n風險：危險（含 sudo）" };
 const danger: ComputerApprovalRequest = { id: "r2", kind: "destructive", app: "Mail", action: "點擊", detail: "按鈕「Delete」" };
 
 async function mount() {
@@ -68,5 +69,23 @@ describe("ComputerApprovalDialog", () => {
     act(() => emit!(first));
     await userEvent.click(screen.getByRole("button", { name: "拒絕" }));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("終端機指令：顯示指令與風險，只有拒絕／允許這一次，沒有永遠允許", async () => {
+    await mount();
+    act(() => emit!(cmdReq));
+    expect(screen.getByRole("dialog", { name: "允許 AI 在終端機執行這個指令？" })).toBeInTheDocument();
+    expect(screen.getByText(/sudo rm -rf \/tmp\/x/)).toBeInTheDocument();
+    expect(screen.getByText(/風險：危險/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "永遠允許此 App" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "允許" }));
+    expect(resolveMock).toHaveBeenCalledWith("r3", "allow_once");
+  });
+
+  it("終端機指令：按拒絕回覆 deny", async () => {
+    await mount();
+    act(() => emit!(cmdReq));
+    await userEvent.click(screen.getByRole("button", { name: "拒絕" }));
+    expect(resolveMock).toHaveBeenCalledWith("r3", "deny");
   });
 });

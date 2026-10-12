@@ -73,3 +73,15 @@ pub fn computer_open_privacy_settings(pane: String) -> Result<(), String> {
         Err("目前只支援 macOS".to_string())
     }
 }
+
+/// 對話模式的 `run_command` 工具在執行指令前呼叫：依「執行模式」與指令風險決定直接跑、問使用者、或拒絕。
+/// 回傳 `allowed`；不允許時 `reason` 是要回給模型看的原因。
+#[tauri::command]
+pub async fn terminal_command_gate(
+    command: String,
+    approver: State<'_, Arc<TauriApprover>>,
+    config: State<'_, Arc<ConfigStore>>,
+) -> Result<crate::terminal_tool::GateResult, String> {
+    let mode = config.get().execution_mode;
+    Ok(crate::terminal_tool::gate(approver.inner().as_ref(), mode, &command).await)
+}

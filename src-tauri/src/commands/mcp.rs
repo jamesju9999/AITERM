@@ -191,6 +191,7 @@ pub async fn get_mcp_tools(
 ) -> Result<Vec<McpToolInfo>, String> {
     let mut tools = mcp.lock().await.list_tool_infos();
     tools.extend(crate::computer::builtin_tool_infos(&config.get()));
+    tools.extend(crate::terminal_tool::tool_infos());
     Ok(tools)
 }
 

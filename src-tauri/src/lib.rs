@@ -24,6 +24,7 @@ pub mod python_env;
 pub mod secret;
 pub mod share;
 pub mod tasks;
+pub mod terminal_tool;
 pub mod telegram;
 pub mod usage;
 pub mod vcs;
@@ -546,6 +547,7 @@ pub fn run() {
             commands::computer::computer_status,
             commands::computer::computer_revoke_app,
             commands::computer::computer_audit_tail,
+            commands::computer::terminal_command_gate,
             commands::computer::computer_resolve_approval,
             commands::computer::computer_open_privacy_settings,
             set_doc_convert_engine,

@@ -28,6 +28,8 @@ pub enum ApprovalKind {
     FirstUse,
     /// 破壞性操作，每次都問。
     Destructive,
+    /// AI 要在終端機執行指令（對話模式的 `run_command` 工具），每次都問。
+    Command,
 }
 
 #[derive(Debug, Clone, Serialize)]

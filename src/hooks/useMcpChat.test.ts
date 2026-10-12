@@ -10,6 +10,9 @@ vi.mock("../ipc/mcp", () => ({
   getMcpTools: vi.fn().mockResolvedValue([]),
   executeMcpTool: vi.fn(),
 }));
+vi.mock("../ipc/computer", () => ({
+  terminalCommandGate: vi.fn(),
+}));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
 }));
@@ -17,6 +20,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 import { renderHook, act } from "@testing-library/react";
 import { aiChat, abortAi } from "../ipc/ai";
 import { executeMcpTool } from "../ipc/mcp";
+import { terminalCommandGate } from "../ipc/computer";
 import { useMcpChat } from "./useMcpChat";
 import { LocaleProvider } from "../contexts/LocaleContext";
 
@@ -274,6 +278,85 @@ describe("useMcpChat", () => {
       await act(async () => { result.current.stop(); });
       const last2 = result.current.messages.slice(-2).map((m) => m.role);
       expect(last2[last2.length - 1]).toBe("assistant");
+    });
+  });
+
+  // 對話模式的「執行終端機指令」工具：先過閘門（執行模式×風險，必要時問使用者），再在終端機執行。
+  describe("aiterm_terminal__run_command", () => {
+    const TOOL = "aiterm_terminal__run_command";
+    const call = (command: unknown) => ({
+      content: null,
+      tool_calls: [{ id: "t1", tool_name: TOOL, server_id: "aiterm-terminal", args: { command } }],
+      tool_calling_unsupported: false,
+    });
+    const say = (content: string) => ({ content, tool_calls: [], tool_calling_unsupported: false });
+    const mountWith = (runCommand?: (c: string) => Promise<string>) =>
+      renderHook(() => useMcpChat("sess-term", 10, runCommand), { wrapper: LocaleProvider });
+
+    it("允許：在終端機執行，輸出當作工具結果回給模型，並繼續下一輪", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(executeMcpTool).mockReset();
+      vi.mocked(terminalCommandGate).mockReset();
+      vi.mocked(terminalCommandGate).mockResolvedValue({ allowed: true, reason: null });
+      const run = vi.fn().mockResolvedValue("Command `ls` finished (exit 0).\nOutput:\nfile.txt");
+      vi.mocked(aiChat).mockResolvedValueOnce(call("ls")).mockResolvedValueOnce(say("看到 file.txt 了"));
+      const { result } = mountWith(run);
+      await act(async () => { await result.current.sendMessage("列出檔案", true); });
+
+      expect(terminalCommandGate).toHaveBeenCalledWith("ls");
+      expect(run).toHaveBeenCalledWith("ls");
+      expect(executeMcpTool).not.toHaveBeenCalled(); // 不走後端的 MCP 呼叫
+      const second = vi.mocked(aiChat).mock.calls[1][0];
+      expect(String(second.at(-1)?.content)).toContain("file.txt");
+      expect(result.current.messages.at(-1)?.content).toBe("看到 file.txt 了");
+    });
+
+    it("被拒絕或被擋下：不執行，原因當作錯誤結果回給模型", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(terminalCommandGate).mockReset();
+      vi.mocked(terminalCommandGate).mockResolvedValue({ allowed: false, reason: "使用者拒絕執行這個指令。" });
+      const run = vi.fn();
+      vi.mocked(aiChat).mockResolvedValueOnce(call("rm -rf x")).mockResolvedValueOnce(say("好的，不執行"));
+      const { result } = mountWith(run);
+      await act(async () => { await result.current.sendMessage("刪掉", true); });
+
+      expect(run).not.toHaveBeenCalled();
+      const toolResult = result.current.messages.find((m) => m.role === "tool_result");
+      expect(toolResult?.is_error).toBe(true);
+      expect(String(toolResult?.content)).toContain("使用者拒絕");
+    });
+
+    it("指令不是字串或是空的：不過閘門、不執行，回錯誤", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(terminalCommandGate).mockReset();
+      const run = vi.fn();
+      vi.mocked(aiChat).mockResolvedValueOnce(call(42)).mockResolvedValueOnce(say("好"));
+      const { result } = mountWith(run);
+      await act(async () => { await result.current.sendMessage("x", true); });
+      expect(terminalCommandGate).not.toHaveBeenCalled();
+      expect(run).not.toHaveBeenCalled();
+      expect(result.current.messages.find((m) => m.role === "tool_result")?.is_error).toBe(true);
+    });
+
+    it("沒有終端機可用（沒傳 runCommand）：回錯誤，不呼叫閘門", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(terminalCommandGate).mockReset();
+      vi.mocked(aiChat).mockResolvedValueOnce(call("ls")).mockResolvedValueOnce(say("好"));
+      const { result } = mountWith(undefined);
+      await act(async () => { await result.current.sendMessage("x", true); });
+      expect(terminalCommandGate).not.toHaveBeenCalled();
+      expect(result.current.messages.find((m) => m.role === "tool_result")?.is_error).toBe(true);
+    });
+
+    it("閘門或執行丟出例外：變成錯誤結果，迴圈不崩潰", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(terminalCommandGate).mockReset();
+      vi.mocked(terminalCommandGate).mockRejectedValue("gate down");
+      vi.mocked(aiChat).mockResolvedValueOnce(call("ls")).mockResolvedValueOnce(say("好"));
+      const { result } = mountWith(vi.fn());
+      await act(async () => { await result.current.sendMessage("x", true); });
+      expect(result.current.error).toBeNull();
+      expect(result.current.messages.find((m) => m.role === "tool_result")?.is_error).toBe(true);
     });
   });
 });

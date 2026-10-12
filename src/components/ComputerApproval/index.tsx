@@ -40,6 +40,28 @@ export function ComputerApprovalDialog() {
     setQueue((q) => q.slice(1));
   };
 
+  if (current.kind === "command") {
+    // 終端機指令：顯示完整指令與風險；沒有「永遠允許」（每個指令都要各自判斷）。
+    return (
+      <div className="aiterm-close-overlay" role="dialog" aria-modal="true" aria-label={t.terminal_approval_title}>
+        <div className="aiterm-close-dialog">
+          <h3 className="aiterm-close-dialog-title">{t.terminal_approval_title}</h3>
+          <div className="aiterm-close-dialog-body">
+            <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0 }}>{current.detail}</pre>
+          </div>
+          <div className="aiterm-close-dialog-actions">
+            <button type="button" className="aiterm-btn aiterm-btn--secondary" onClick={() => answer("deny")}>
+              {t.computer_approval_deny}
+            </button>
+            <button type="button" className="aiterm-btn aiterm-btn--danger-solid" onClick={() => answer("allow_once")}>
+              {t.computer_approval_allow}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const destructive = current.kind === "destructive";
   const title = (destructive ? t.computer_approval_destructive_title : t.computer_approval_first_title)
     .replace("{app}", current.app);

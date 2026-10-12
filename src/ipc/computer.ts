@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 /** 與 Rust `computer::approval::APPROVAL_REQUEST_EVENT` 相同。 */
 export const COMPUTER_APPROVAL_EVENT = "computer://approval-request";
 
-export type ApprovalKind = "first_use" | "destructive";
+export type ApprovalKind = "first_use" | "destructive" | "command";
 export type ApprovalDecision = "allow_once" | "allow_always" | "deny";
 
 export interface ComputerApprovalRequest {
@@ -47,3 +47,13 @@ export const computerAuditTail = (limit?: number): Promise<ComputerAuditEntry[]>
 
 export const computerOpenPrivacySettings = (pane: "accessibility" | "screen"): Promise<void> =>
   invoke("computer_open_privacy_settings", { pane });
+
+export interface TerminalCommandGateResult {
+  allowed: boolean;
+  /** 不允許時的原因（要回給模型看）。 */
+  reason: string | null;
+}
+
+/** 對話模式的 run_command 工具在執行前呼叫：依執行模式與指令風險決定直接跑、問使用者、或拒絕。 */
+export const terminalCommandGate = (command: string): Promise<TerminalCommandGateResult> =>
+  invoke("terminal_command_gate", { command });

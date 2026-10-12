@@ -102,7 +102,26 @@ export function AiPanel({
   const { t, locale } = useLocale();
   // 系統設定的「最大步數」（0 = 無限制，載入時已換成大數）。同時管 Agent 迴圈與 MCP 工具呼叫。
   const [maxAgentSteps, setMaxAgentSteps] = useState<number>(5);
-  const chat = useMcpChat(sessionId, maxAgentSteps);
+  // 對話模式的「執行終端機指令」工具：與 Agent 迴圈走同一條路（onExecuteCommand → 終端機 → 完成回呼）。
+  // 風險閘門在 useMcpChat 呼叫它之前已經過了（見 terminalCommandGate）。
+  const terminalRunningRef = useRef(false);
+  const runTerminalCommand = useCallback(
+    (rawCommand: string) =>
+      new Promise<string>((resolve) => {
+        // 見 heredocGuard.ts：缺結束標記的 heredoc 會讓 shell 停在 heredoc>，指令永遠不結束。
+        const cmd = repairUnterminatedHeredocs(rawCommand.trim());
+        terminalRunningRef.current = true;
+        onExecuteCommand(cmd, async (block) => {
+          terminalRunningRef.current = false;
+          const rawOutput = (await getPtyRecentOutput(sessionId).catch(() => null)) ?? block.rawOutput ?? "";
+          resolve(
+            `Command \`${cmd}\` finished (${describeExit(block)}).\nOutput:\n\`\`\`\n${rawOutput.slice(-2000)}\n\`\`\``,
+          );
+        });
+      }),
+    [onExecuteCommand, sessionId],
+  );
+  const chat = useMcpChat(sessionId, maxAgentSteps, runTerminalCommand);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -464,7 +483,14 @@ Rules:
       agentRunning={agentRunning}
       agentPhase={agentPhase}
       agentStep={agentStep}
-      onStop={chat.stop}
+      onStop={() => {
+        chat.stop();
+        // 有終端機指令正在跑：送 Ctrl+C 並強制結案，shell 才會回到提示字元（與 Agent 的中止一致）。
+        if (terminalRunningRef.current) {
+          terminalRunningRef.current = false;
+          onInterruptCommand?.();
+        }
+      }}
       onAbortAgent={() => {
         agentAbortRef.current = true;
         // Send Ctrl+C to PTY so a stuck command (e.g. pipe dquote>) gets
