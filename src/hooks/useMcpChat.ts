@@ -211,21 +211,37 @@ export function useMcpChat(sessionId: string, maxToolIterations: number = DEFAUL
         }
 
         const finalText = reply.content ?? streamBufRef.current;
-        setMessages(prev => [...prev, { role: "assistant" as const, content: finalText }]);
+        const isEmpty = finalText.trim() === "";
 
-        // 只說「讓我先…」卻沒呼叫工具：催模型直接動手，而不是讓任務停在半路。
-        // 催促只送給模型（iterHistory），不顯示在對話裡；有次數上限，不會無限迴圈。
-        if (useMcp && nudges < MAX_INTENT_NUDGES && looksLikeUnfulfilledIntent(finalText)) {
+        // 模型沒呼叫工具就結束這一輪，有兩種常見情形，都讓任務停在半路：
+        //  1. 只說「讓我先…」卻沒動手；2. 回了空內容（畫面上就是一顆空白氣泡）。
+        // 催模型直接動手。催促只送給模型（iterHistory），不顯示在對話裡；有次數上限。
+        if (useMcp && nudges < MAX_INTENT_NUDGES && (isEmpty || looksLikeUnfulfilledIntent(finalText))) {
           nudges++;
-          iterHistory = [
-            ...iterHistory,
-            { role: "assistant", content: finalText },
-            { role: "user", content: intentNudge(locale) },
-          ];
+          const nudge = intentNudge(locale);
+          if (isEmpty) {
+            // 空回覆不進對話；也不能讓歷史出現連續兩則 user（上一則通常是工具結果），
+            // 所以把催促併進上一則 user 訊息。
+            const last = iterHistory[iterHistory.length - 1];
+            iterHistory = last && last.role === "user" && typeof last.content === "string"
+              ? [...iterHistory.slice(0, -1), { ...last, content: `${last.content}\n\n${nudge}` }]
+              : [...iterHistory, { role: "user", content: nudge }];
+          } else {
+            setMessages(prev => [...prev, { role: "assistant" as const, content: finalText }]);
+            iterHistory = [
+              ...iterHistory,
+              { role: "assistant", content: finalText },
+              { role: "user", content: nudge },
+            ];
+          }
           continue;
         }
 
-        // Normal text response — done
+        // 催完還是空的：給明確的說明，而不是留一顆空白氣泡。
+        setMessages(prev => [...prev, {
+          role: "assistant" as const,
+          content: isEmpty ? t.mcp_empty_reply : finalText,
+        }]);
         break;
       }
 

@@ -1701,6 +1701,7 @@ const zhTW = {
 
     // Hook / IPC localization
     chat_empty: "（空對話）",
+    mcp_empty_reply: "⚠️ 模型沒有回應任何內容（沒有文字也沒有呼叫工具）。請再說一次，或換一個工具呼叫更穩定的模型。",
     mcp_tool_limit: "⚠️ 已達工具呼叫上限（{n} 次），請重新提問。可在設定調整「最大步數」。",
     time_unit_min: "分",
     time_unit_min_sec: (m: number, s: number) => `${m}分${s}s`,
@@ -3495,6 +3496,7 @@ const enRaw = {
 
     // Hook / IPC localization
     chat_empty: "(Empty conversation)",
+    mcp_empty_reply: "⚠️ The model returned no response (no text and no tool call). Try again, or switch to a model with more reliable tool calling.",
     mcp_tool_limit: "⚠️ Tool call limit reached ({n}), please ask again. You can change \"max steps\" in Settings.",
     time_unit_min: "m",
     time_unit_min_sec: (m: number, s: number) => `${m}m${s}s`,

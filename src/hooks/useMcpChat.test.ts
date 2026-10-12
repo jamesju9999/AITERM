@@ -77,6 +77,40 @@ describe("useMcpChat", () => {
       expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(3);
     });
 
+    it("模型回了空內容（沒文字也沒工具呼叫）：不顯示空白氣泡，催一次後繼續", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(executeMcpTool).mockResolvedValue({ content: "tree", is_error: false });
+      vi.mocked(aiChat)
+        .mockResolvedValueOnce(call("aiterm_computer__computer_snapshot"))
+        .mockResolvedValueOnce(say(""))
+        .mockResolvedValueOnce(call("aiterm_computer__computer_click"))
+        .mockResolvedValueOnce(say("已完成。"));
+      const { result } = mount();
+      await act(async () => { await result.current.sendMessage("幫我點", true); });
+
+      expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(4);
+      expect(result.current.messages.some((m) => m.role === "assistant" && String(m.content).trim() === "")).toBe(false);
+      expect(result.current.messages.at(-1)?.content).toBe("已完成。");
+      // 空回覆之後的歷史不能出現連續兩則 user（部分供應商會拒絕）。
+      const hist = vi.mocked(aiChat).mock.calls[2][0];
+      for (let i = 1; i < hist.length; i++) {
+        expect(!(hist[i].role === "user" && hist[i - 1].role === "user")).toBe(true);
+      }
+      expect(String(hist.at(-1)?.content)).toMatch(/直接呼叫|call the tool/i);
+    });
+
+    it("一直回空內容：催兩次後顯示明確的警告，而不是空白氣泡", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(aiChat).mockResolvedValue(say(""));
+      const { result } = mount();
+      await act(async () => { await result.current.sendMessage("幫我點", true); });
+      expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(3);
+      const last = result.current.messages.at(-1);
+      expect(last?.role).toBe("assistant");
+      expect(String(last?.content).trim()).not.toBe("");
+      expect(String(last?.content)).toMatch(/沒有回應|no response/i);
+    });
+
     it("一般回答不催", async () => {
       vi.mocked(aiChat).mockReset();
       vi.mocked(aiChat).mockResolvedValue(say("已完成：TextEdit 現在是空的。"));
