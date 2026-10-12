@@ -125,6 +125,8 @@ futures-util = "0.3"
 # 滑鼠／鍵盤事件走 CGEvent。highsierra 只是打開捲動事件的 API。
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
+# 讀截圖做圖示偵測。
+png = "0.17"
 core-foundation-sys = "0.8"
 core-graphics = { version = "0.25", features = ["highsierra"] }
 # 列出執行中的 App（約 1 秒的 osascript 換成幾毫秒的原生呼叫）。

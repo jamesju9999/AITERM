@@ -4,6 +4,7 @@ use async_trait::async_trait;
 
 use super::approval::{ApprovalKind, ApprovalRequest, Approver, Decision};
 use super::backend::*;
+use super::icons::Region;
 use super::*;
 
 const OWN_PID: i32 = 1;
@@ -23,6 +24,8 @@ struct FakeBackend {
     list_calls: std::sync::atomic::AtomicUsize,
     /// 假的 OCR 結果（螢幕座標）。
     screen_text: Mutex<Vec<ScreenText>>,
+    /// 假的圖示偵測結果（螢幕座標）。
+    icons: Mutex<Vec<IconRect>>,
 }
 
 fn st(text: &str, x: f64, y: f64) -> ScreenText {
@@ -41,6 +44,7 @@ impl FakeBackend {
             doc: Mutex::new((String::new(), false, false)),
             list_calls: Default::default(),
             screen_text: Mutex::new(vec![]),
+            icons: Mutex::new(vec![]),
         })
     }
     fn calls(&self) -> Vec<String> {
@@ -112,6 +116,10 @@ impl Backend for FakeBackend {
     async fn read_screen(&self, pid: Option<i32>) -> Result<Vec<ScreenText>, String> {
         self.calls.lock().push(format!("read_screen {pid:?}"));
         Ok(self.screen_text.lock().clone())
+    }
+    async fn find_icons(&self, pid: i32, region: Region) -> Result<Vec<IconRect>, String> {
+        self.calls.lock().push(format!("find_icons {pid} {region:?}"));
+        Ok(self.icons.lock().clone())
     }
     async fn focused_text(&self, _: i32) -> Result<Option<FocusedText>, String> {
         let d = self.doc.lock();
@@ -266,6 +274,7 @@ async fn missing_permissions_are_reported_before_anything_else() {
         doc: Mutex::new((String::new(), false, false)),
         list_calls: Default::default(),
         screen_text: Mutex::new(vec![]),
+        icons: Mutex::new(vec![]),
     });
     let r = rig_with(b, true, &[Decision::AllowAlways]);
     assert!(r.svc.snapshot("Notes", None).await.unwrap_err().contains("輔助使用"));
@@ -515,6 +524,7 @@ async fn failing_to_read_the_field_state_does_not_fail_the_action() {
         async fn key(&self, c: &KeyCombo) -> Result<(), String> { self.0.key(c).await }
         async fn scroll(&self, x: i32, y: i32, a: Option<(f64, f64)>) -> Result<(), String> { self.0.scroll(x, y, a).await }
         async fn read_screen(&self, p: Option<i32>) -> Result<Vec<ScreenText>, String> { self.0.read_screen(p).await }
+        async fn find_icons(&self, p: i32, r: Region) -> Result<Vec<IconRect>, String> { self.0.find_icons(p, r).await }
         async fn focused_text(&self, _: i32) -> Result<Option<FocusedText>, String> { Err("AX 讀取失敗".into()) }
     }
     drop(r);
@@ -635,7 +645,7 @@ fn click_args(app: &str, element: &str) -> ComputerClickArgs {
 }
 
 fn step(action: &str) -> BatchStep {
-    BatchStep { action: action.into(), element: None, x: None, y: None, button: None, double: None, text: None, replace: None, key: None, dx: None, dy: None, index: None }
+    BatchStep { action: action.into(), element: None, x: None, y: None, button: None, double: None, text: None, replace: None, key: None, dx: None, dy: None, index: None, region: None, from: None }
 }
 
 #[tokio::test]
@@ -800,6 +810,7 @@ async fn read_screen_lists_text_with_coordinates_top_to_bottom_and_needs_screen_
         doc: Mutex::new((String::new(), false, false)),
         list_calls: Default::default(),
         screen_text: Mutex::new(vec![]),
+        icons: Mutex::new(vec![]),
     });
     let r2 = rig_with(b2, true, &[Decision::AllowAlways]);
     assert!(r2.svc.read_screen("Notes").await.unwrap_err().contains("螢幕錄製"));
@@ -908,6 +919,87 @@ async fn batch_supports_click_text_steps() {
     assert!(c.iter().position(|x| x.starts_with("click_at")) < c.iter().position(|x| x == "type 景詳"));
 }
 
+// ── 只有圖形的按鈕（例如 LINE 標頭的電話圖示）：找圖示、依位置點。
+
+fn ic(x: f64) -> IconRect {
+    IconRect { x, y: 270.0, w: 16.0, h: 16.0 }
+}
+
+fn header_rig(script: &[Decision]) -> Rig {
+    let b = FakeBackend::new();
+    // 由左到右：搜尋、電話、筆記、選單（與真實的 LINE 標頭相同）
+    *b.icons.lock() = vec![ic(392.0), ic(421.0), ic(451.0), ic(476.0)];
+    rig_with(b, true, script)
+}
+
+#[tokio::test]
+async fn find_icons_lists_candidates_with_both_left_and_right_numbering() {
+    let r = header_rig(&[Decision::AllowAlways]);
+    let out = text(r.svc.find_icons("Notes", "top").await.unwrap());
+    assert!(out.contains("1. (400,278)") && out.contains("4. (484,278)"), "{out}");
+    assert!(out.contains("從右數第 1") && out.contains("從右數第 4"), "{out}");
+    let c = r.backend.calls();
+    assert!(c.iter().position(|x| x == "activate 42") < c.iter().position(|x| x.starts_with("find_icons")), "{c:?}");
+    assert!(c.iter().any(|x| x == "find_icons 42 Top"), "{c:?}");
+}
+
+#[tokio::test]
+async fn find_icons_with_nothing_found_says_so_and_rejects_a_bad_region() {
+    let r = rig(&[Decision::AllowAlways]);
+    assert!(text(r.svc.find_icons("Notes", "top").await.unwrap()).contains("沒有找到圖示"));
+    assert!(r.svc.find_icons("Notes", "middle").await.unwrap_err().contains("region"));
+}
+
+#[tokio::test]
+async fn click_icon_counts_from_the_left_or_the_right_and_clicks_the_centre() {
+    let r = header_rig(&[Decision::AllowAlways, Decision::AllowOnce, Decision::AllowOnce]);
+    r.svc.click_icon("Notes", "top", 2, false, false).await.unwrap(); // 左數第 2 個 = 電話
+    r.svc.click_icon("Notes", "top", 1, true, false).await.unwrap(); // 右數第 1 個 = 選單
+    let clicks: Vec<String> = r.backend.calls().into_iter().filter(|c| c.starts_with("click_at")).collect();
+    assert_eq!(clicks, vec!["click_at 429,278 double=false", "click_at 484,278 double=false"]);
+}
+
+#[tokio::test]
+async fn click_icon_always_asks_because_an_unlabelled_icon_cannot_be_judged() {
+    let r = header_rig(&[Decision::AllowAlways, Decision::Deny]);
+    let e = r.svc.click_icon("Notes", "top", 2, false, false).await.unwrap_err();
+    assert!(e.starts_with("使用者拒絕"), "{e}");
+    assert!(!r.backend.calls().iter().any(|c| c.starts_with("click_at")));
+    let asked = r.approver.asked();
+    let last = asked.last().unwrap();
+    assert_eq!(last.0, ApprovalKind::Destructive);
+    assert!(last.2.contains("上方") && last.2.contains("第 2") && last.2.contains("無法確認用途"), "{:?}", last);
+}
+
+#[tokio::test]
+async fn click_icon_reactivates_the_app_after_the_confirmation_and_validates_the_index() {
+    let r = header_rig(&[Decision::AllowAlways, Decision::AllowOnce]);
+    r.svc.click_icon("Notes", "top", 3, false, false).await.unwrap();
+    let c = r.backend.calls();
+    let last_act = c.iter().rposition(|x| x == "activate 42").unwrap();
+    let clk = c.iter().position(|x| x.starts_with("click_at")).unwrap();
+    assert!(last_act < clk, "{c:?}");
+
+    let e = r.svc.click_icon("Notes", "top", 9, false, false).await.unwrap_err();
+    assert!(e.contains("只有 4 個") && e.contains("index 9"), "{e}");
+    let e = r.svc.click_icon("Notes", "top", 0, false, false).await.unwrap_err();
+    assert!(e.contains("從 1 開始"), "{e}");
+}
+
+#[tokio::test]
+async fn batch_supports_click_icon_steps_and_still_confirms_each() {
+    let r = header_rig(&[Decision::AllowAlways, Decision::Deny]);
+    let mut icon = step("click_icon");
+    icon.region = Some("top".into());
+    icon.index = Some(2);
+    let e = tools::execute(&r.svc, Call::Batch(ComputerBatchArgs { app: "Notes".into(), steps: vec![icon], observe: Some(false) })).await.unwrap_err();
+    assert!(e.contains("使用者拒絕"), "{e}");
+    let mut bad = step("click_icon");
+    bad.region = Some("top".into());
+    let e = tools::execute(&r.svc, Call::Batch(ComputerBatchArgs { app: "Notes".into(), steps: vec![bad], observe: Some(false) })).await.unwrap_err();
+    assert!(e.contains("步驟 1") && e.contains("index"), "{e}");
+}
+
 // ── 內建 Ask AI 入口（computer::tools::call）：結果一律包成文字＋is_error，模型讀得到原因。
 
 #[tokio::test]
@@ -953,7 +1045,7 @@ fn builtin_tools_are_hidden_unless_the_master_switch_is_on() {
     let mut cfg = crate::config::AppConfig::default();
     assert!(builtin_tool_infos(&cfg).is_empty());
     cfg.mcp_tool_server.computer_enabled = true;
-    assert_eq!(builtin_tool_infos(&cfg).len(), 11);
+    assert_eq!(builtin_tool_infos(&cfg).len(), 13);
 }
 
 // ── 真機端對端（macOS，需要輔助使用＋螢幕錄製權限，預設不跑）：
@@ -1125,5 +1217,82 @@ mod live_line_flow {
         let mut d = step("key");
         d.key = Some("delete".into());
         let _ = tools::execute(&svc, Call::Batch(ComputerBatchArgs { app: "LINE".into(), steps: vec![a, d], observe: Some(false) })).await;
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod live_icons {
+    use super::*;
+    use crate::computer::macos::MacBackend;
+
+    /// 真機（不點任何東西）：LINE 聊天視窗開著時，標頭應偵測到搜尋／電話／筆記／選單四個圖示。
+    #[tokio::test]
+    #[ignore]
+    async fn line_chat_header_icons_are_detected_left_to_right() {
+        let apps = MacBackend.list_apps().await.unwrap();
+        let line = apps.iter().find(|a| a.name == "LINE").expect("LINE 要開著");
+        MacBackend.activate(line.pid).await.unwrap();
+        let t = std::time::Instant::now();
+        let icons = MacBackend.find_icons(line.pid, Region::Top).await.unwrap();
+        println!("TIMING find_icons(LINE top): {:?}", t.elapsed());
+        for (i, ic) in icons.iter().enumerate() {
+            let (cx, cy) = ic.center();
+            println!("ICON {} center=({cx:.0},{cy:.0}) size={:.0}x{:.0}", i + 1, ic.w, ic.h);
+        }
+        assert!(icons.len() >= 4, "{icons:?}");
+        // 最右邊四個圖示應在同一個水平帶上、由左到右排序。
+        let last4 = &icons[icons.len() - 4..];
+        assert!(last4.windows(2).all(|w| w[0].x < w[1].x));
+        let ys: Vec<f64> = last4.iter().map(|i| i.center().1).collect();
+        assert!(ys.iter().all(|y| (y - ys[0]).abs() < 8.0), "{ys:?}");
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod live_click_icon {
+    use super::*;
+    use crate::computer::macos::MacBackend;
+
+    /// 真機：只點「搜尋」圖示（從右數第 4 個，LINE 聊天標頭），確認 click_icon 的整條路徑；
+    /// 絕不點電話圖示（會真的撥號給對方）。結束後按 Escape 收起搜尋列。
+    #[tokio::test]
+    #[ignore]
+    async fn click_the_search_icon_in_a_line_chat_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(ConfigStore::new_at(dir.path().join("config.toml")));
+        config.update(|c| c.mcp_tool_server.computer_enabled = true).unwrap();
+        let approver = FakeApprover::new(&[Decision::AllowOnce; 8]);
+        let svc = ComputerService::new(
+            Arc::new(MacBackend),
+            approver.clone(),
+            config,
+            AuditLog::new(dir.path().join("audit.jsonl")),
+            std::process::id() as i32,
+        );
+        let t = std::time::Instant::now();
+        let out = text(
+            tools::execute(
+                &svc,
+                Call::ClickIcon(super::super::tools::ComputerClickIconArgs {
+                    app: "LINE".into(),
+                    region: Some("top".into()),
+                    index: 4,
+                    from: Some("right".into()),
+                    double: None,
+                    observe: None,
+                }),
+            )
+            .await
+            .unwrap(),
+        );
+        println!("TIMING click_icon(search) + observe: {:?}", t.elapsed());
+        for l in out.lines().take(14) {
+            println!("CLICKICON {l}");
+        }
+        assert!(out.contains("已點擊") && out.contains("右數第 4"), "{out}");
+        // 確認框真的被問到了，而且說明的是「無法確認用途」的圖示。
+        let asked = approver.asked();
+        assert!(asked.iter().any(|a| a.0 == ApprovalKind::Destructive && a.2.contains("無法確認用途")), "{asked:?}");
+        let _ = svc.key("LINE", "escape").await;
     }
 }

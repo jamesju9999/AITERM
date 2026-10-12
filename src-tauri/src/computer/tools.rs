@@ -27,7 +27,13 @@ replace=true; to clear it send cmd+a then delete. (6) Always read the result tex
 really worked before telling the user it is done. (7) Element ids come from the latest snapshot/find/action \
 result; if told an id is stale, use the ids from the newest result. (8) Some apps (Chromium/Qt, e.g. LINE) expose \
 almost no accessibility info: when snapshot/find come back nearly empty, use computer_read_screen to read the \
-on-screen text and computer_click_text to click it — never guess pixel coordinates blindly.";
+on-screen text and computer_click_text to click it — never guess pixel coordinates blindly. (9) Icon-only buttons \
+(no text, e.g. a phone icon) are invisible to OCR and accessibility: use computer_find_icons for the window region \
+(\"top\" for a header) and computer_click_icon to click the Nth one — it always asks the user to confirm. \
+Known layouts: LINE — to open a chat, click the search box (text \"以姓名搜尋\" / \"Search\"), type the name, then \
+double-click the contact's name from the results with computer_click_text (index = the match in the results list, \
+not the search box); in the chat header (region top), counting from the right, icon 1 = menu, 2 = notes, 3 = voice \
+call (phone), 4 = search. After clicking, read the result text to confirm what happened.";
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ComputerSnapshotArgs {
@@ -75,6 +81,35 @@ pub struct ComputerClickTextArgs {
     /// "left" (default) or "right".
     #[serde(default)]
     pub button: Option<String>,
+    /// Double-click.
+    #[serde(default)]
+    pub double: Option<bool>,
+    /// Default true: append the resulting screen to the reply. Set false to skip it.
+    #[serde(default)]
+    pub observe: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ComputerFindIconsArgs {
+    /// App name or bundle id.
+    pub app: String,
+    /// Where in the window to look: "top" (header/toolbar, default), "bottom", "left", "right" or "all".
+    #[serde(default)]
+    pub region: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ComputerClickIconArgs {
+    /// App name or bundle id.
+    pub app: String,
+    /// Where in the window: "top" (default), "bottom", "left", "right" or "all".
+    #[serde(default)]
+    pub region: Option<String>,
+    /// Which icon, 1-based, counted in the order shown by computer_find_icons.
+    pub index: usize,
+    /// "left" (default) or "right": which end to count from.
+    #[serde(default)]
+    pub from: Option<String>,
     /// Double-click.
     #[serde(default)]
     pub double: Option<bool>,
@@ -194,7 +229,7 @@ impl ComputerScrollArgs {
 /// key(key)、scroll(dx/dy，可選 x/y)。
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct BatchStep {
-    /// "click", "click_text", "type", "key" or "scroll".
+    /// "click", "click_text", "click_icon", "type", "key" or "scroll".
     pub action: String,
     #[serde(default)]
     pub element: Option<String>,
@@ -212,9 +247,15 @@ pub struct BatchStep {
     /// For "type": select all first so the text replaces the existing content.
     #[serde(default)]
     pub replace: Option<bool>,
-    /// For "click_text": which match when several (1-based).
+    /// For "click_text": which match when several (1-based). For "click_icon": which icon (1-based).
     #[serde(default)]
     pub index: Option<usize>,
+    /// For "click_icon": "top" (default), "bottom", "left", "right" or "all".
+    #[serde(default)]
+    pub region: Option<String>,
+    /// For "click_icon": "left" (default) or "right" — which end to count from.
+    #[serde(default)]
+    pub from: Option<String>,
     /// For "key", e.g. "return" or "cmd+a".
     #[serde(default)]
     pub key: Option<String>,
@@ -244,6 +285,8 @@ pub enum Call {
     Find(ComputerFindArgs),
     ReadScreen(ComputerReadScreenArgs),
     ClickText(ComputerClickTextArgs),
+    FindIcons(ComputerFindIconsArgs),
+    ClickIcon(ComputerClickIconArgs),
     Screenshot(ComputerScreenshotArgs),
     Click(ComputerClickArgs),
     Type(ComputerTypeArgs),
@@ -298,6 +341,14 @@ fn validate_batch(steps: &[BatchStep]) -> Result<(), String> {
             "click_text" => {
                 need(s.text.as_ref(), n, "text", "click_text")?;
             }
+            "click_icon" => {
+                need(s.index, n, "index", "click_icon")?;
+                if let Some(f) = s.from.as_deref() {
+                    if !matches!(f, "left" | "right") {
+                        return Err(format!("步驟 {n}：from 只能是 left 或 right，收到「{f}」"));
+                    }
+                }
+            }
             "type" => {
                 need(s.text.as_ref(), n, "text", "type")?;
             }
@@ -305,7 +356,7 @@ fn validate_batch(steps: &[BatchStep]) -> Result<(), String> {
                 need(s.key.as_ref(), n, "key", "key")?;
             }
             "scroll" => {}
-            other => return Err(format!("步驟 {n}：未知的動作「{other}」（可用：click、click_text、type、key、scroll）")),
+            other => return Err(format!("步驟 {n}：未知的動作「{other}」（可用：click、click_text、click_icon、type、key、scroll）")),
         }
     }
     Ok(())
@@ -354,6 +405,17 @@ async fn run_batch(service: &ComputerService, a: ComputerBatchArgs) -> Result<To
                     Err(e) => Err(e),
                 }
             }
+            "click_icon" => {
+                service
+                    .click_icon(
+                        &a.app,
+                        s.region.as_deref().unwrap_or("top"),
+                        s.index.unwrap_or(0),
+                        s.from.as_deref() == Some("right"),
+                        s.double.unwrap_or(false),
+                    )
+                    .await
+            }
             "type" => {
                 service
                     .type_text(&a.app, s.text.as_deref().unwrap_or(""), s.element.as_deref(), s.replace.unwrap_or(false))
@@ -397,6 +459,18 @@ pub async fn execute(service: &ComputerService, call: Call) -> Result<ToolOutput
                 Some(other) => return Err(format!("button 只能是 left 或 right，收到「{other}」")),
             };
             let r = service.click_text(&a.app, &a.text, a.index, button, a.double.unwrap_or(false)).await;
+            with_observation(service, &a.app, a.observe, r).await
+        }
+        Call::FindIcons(a) => service.find_icons(&a.app, a.region.as_deref().unwrap_or("top")).await,
+        Call::ClickIcon(a) => {
+            let from_right = match a.from.as_deref() {
+                None | Some("left") => false,
+                Some("right") => true,
+                Some(other) => return Err(format!("from 只能是 left 或 right，收到「{other}」")),
+            };
+            let r = service
+                .click_icon(&a.app, a.region.as_deref().unwrap_or("top"), a.index, from_right, a.double.unwrap_or(false))
+                .await;
             with_observation(service, &a.app, a.observe, r).await
         }
         Call::Screenshot(a) => service.screenshot(a.app.as_deref()).await,
@@ -463,6 +537,16 @@ pub fn tool_infos() -> Vec<McpToolInfo> {
             "computer_click_text",
             "Find a piece of text on screen (OCR) and click its centre — the way to click things in apps without accessibility info (e.g. a contact name or a search box placeholder in LINE). If several places match, pass index. The reply includes the resulting screen text.",
             schema::<ComputerClickTextArgs>(),
+        ),
+        mk(
+            "computer_find_icons",
+            "List the icon-only buttons (glyphs with no text and no accessibility info, e.g. the phone/search icons in a chat header) in a region of the app window, left to right, with their positions. It cannot tell what each icon means — use the app's known layout. Then click one with computer_click_icon.",
+            schema::<ComputerFindIconsArgs>(),
+        ),
+        mk(
+            "computer_click_icon",
+            "Click the Nth icon-only button in a window region (index 1-based; from=\"right\" counts from the right end). Always asks the user to confirm, because an unlabelled icon's purpose cannot be verified. The reply includes the resulting screen text.",
+            schema::<ComputerClickIconArgs>(),
         ),
         mk(
             "computer_screenshot",
@@ -532,6 +616,8 @@ pub async fn call(service: &ComputerService, tool: &str, args: Value) -> McpTool
             "computer_find" => Call::Find(parse(args)?),
             "computer_read_screen" => Call::ReadScreen(parse(args)?),
             "computer_click_text" => Call::ClickText(parse(args)?),
+            "computer_find_icons" => Call::FindIcons(parse(args)?),
+            "computer_click_icon" => Call::ClickIcon(parse(args)?),
             "computer_screenshot" => Call::Screenshot(parse(args)?),
             "computer_click" => Call::Click(parse(args)?),
             "computer_type" => Call::Type(parse(args)?),
@@ -551,7 +637,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exposes_the_eleven_tools_with_object_schemas_and_encoded_names() {
+    fn exposes_the_thirteen_tools_with_object_schemas_and_encoded_names() {
         let tools = tool_infos();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(
@@ -562,6 +648,8 @@ mod tests {
                 "aiterm_computer__computer_find",
                 "aiterm_computer__computer_read_screen",
                 "aiterm_computer__computer_click_text",
+                "aiterm_computer__computer_find_icons",
+                "aiterm_computer__computer_click_icon",
                 "aiterm_computer__computer_screenshot",
                 "aiterm_computer__computer_click",
                 "aiterm_computer__computer_type",
@@ -618,7 +706,7 @@ mod tests {
 
     #[test]
     fn the_prompt_hint_mentions_every_efficiency_tool() {
-        for w in ["computer_find", "computer_batch", "replace=true", "cmd+a", "computer_read_screen", "computer_click_text"] {
+        for w in ["computer_find", "computer_batch", "replace=true", "cmd+a", "computer_read_screen", "computer_click_text", "computer_find_icons", "computer_click_icon"] {
             assert!(PROMPT_HINT.contains(w), "{w}");
         }
     }

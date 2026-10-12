@@ -6,6 +6,7 @@
 pub mod approval;
 pub mod audit;
 pub mod backend;
+pub mod icons;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod policy;
@@ -20,7 +21,8 @@ use parking_lot::Mutex;
 use crate::config::ConfigStore;
 use approval::{ApprovalKind, ApprovalRequest, Approver, Decision};
 use audit::AuditLog;
-use backend::{AppInfo, Backend, ElementNode, KeyCombo, MouseButton, ScreenText};
+use backend::{AppInfo, Backend, ElementNode, IconRect, KeyCombo, MouseButton, ScreenText};
+use icons::Region;
 
 /// 工具回傳：純文字，或影像加說明文字。
 #[derive(Debug)]
@@ -447,6 +449,73 @@ impl ComputerService {
         }
         .await;
         self.finish("computer_click_text", app, &format!("text={query}"), r)
+    }
+
+    /// 找視窗某區域裡「只有圖形」的按鈕，由左到右編號（也標出從右數第幾個）。
+    pub async fn find_icons(&self, app: &str, region: &str) -> Result<ToolOutput, String> {
+        let r = async {
+            self.require_enabled()?;
+            self.require_screen_recording()?;
+            let region = Region::parse(region)?;
+            let info = self.gate(app, "尋找圖示").await?;
+            self.backend.activate(info.pid).await?;
+            let icons = self.backend.find_icons(info.pid, region).await?;
+            if icons.is_empty() {
+                return Ok(ToolOutput::Text(format!(
+                    "{}沒有找到圖示（可能視窗被遮住、區域選錯，或圖示和背景對比太低）。可改用 region=all 或 computer_read_screen。",
+                    region.label()
+                )));
+            }
+            let total = icons.len();
+            let mut lines = vec![format!("{}找到 {total} 個圖示（由左到右）：", region.label())];
+            for (i, ic) in icons.iter().enumerate() {
+                let (cx, cy) = ic.center();
+                lines.push(format!("{}. ({cx:.0},{cy:.0}) 大小 {:.0}x{:.0}（從右數第 {}）", i + 1, ic.w, ic.h, total - i));
+            }
+            lines.push("圖示只有圖形、沒有文字，這裡無法知道每個代表什麼；請依該 App 的版面判斷，用 computer_click_icon 點選。".to_string());
+            Ok(ToolOutput::Text(lines.join("\n")))
+        }
+        .await;
+        self.finish("computer_find_icons", app, &format!("region={region}"), r)
+    }
+
+    /// 點視窗某區域裡的第 N 個圖示（可由右數）。圖示沒有文字、也沒有無障礙資訊，用途無從判斷，
+    /// 所以一律逐次確認（與破壞性操作同等級）。
+    pub async fn click_icon(&self, app: &str, region: &str, index: usize, from_right: bool, double: bool) -> Result<ToolOutput, String> {
+        let r = async {
+            self.require_enabled()?;
+            self.require_accessibility()?;
+            self.require_screen_recording()?;
+            let region = Region::parse(region)?;
+            if index < 1 {
+                return Err("index 要從 1 開始".to_string());
+            }
+            let info = self.gate(app, "點擊圖示").await?;
+            self.backend.activate(info.pid).await?;
+            let icons = self.backend.find_icons(info.pid, region).await?;
+            if index > icons.len() {
+                return Err(format!(
+                    "{}只有 {} 個圖示，沒有 index {index}。先用 computer_find_icons 看看有哪些。",
+                    region.label(),
+                    icons.len()
+                ));
+            }
+            let pick = if from_right { &icons[icons.len() - index] } else { &icons[index - 1] };
+            let side = if from_right { "右" } else { "左" };
+            self.confirm_destructive(
+                &info,
+                "點擊圖示",
+                &format!("點擊 {} 視窗{}由{side}數第 {index} 個圖示（只有圖形、沒有文字，無法確認用途）", info.name, region.label()),
+            )
+            .await?;
+            // 確認框會把 AITerm 叫到前景；點擊前要再切回目標 App。
+            self.backend.activate(info.pid).await?;
+            let (x, y) = pick.center();
+            self.backend.click_at(x, y, MouseButton::Left, double).await?;
+            Ok(ToolOutput::Text(format!("已點擊{}由{side}數第 {index} 個圖示（座標 {x:.0},{y:.0}）", region.label())))
+        }
+        .await;
+        self.finish("computer_click_icon", app, &format!("{region} #{index}{}", if from_right { " 從右" } else { "" }), r)
     }
 
     /// 依文字（標題／角色）找元件，不必讀整棵樹；找到的 id 可以直接拿去點。

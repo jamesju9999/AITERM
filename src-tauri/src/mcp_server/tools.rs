@@ -25,7 +25,7 @@ use crate::pty::PtyManager;
 use crate::secret::SecretStore;
 
 use crate::computer::tools::{
-    execute, Call, ComputerBatchArgs, ComputerClickArgs, ComputerClickTextArgs, ComputerFindArgs, ComputerReadScreenArgs, ComputerKeyArgs, ComputerScreenshotArgs,
+    execute, Call, ComputerBatchArgs, ComputerClickArgs, ComputerClickIconArgs, ComputerClickTextArgs, ComputerFindArgs, ComputerFindIconsArgs, ComputerReadScreenArgs, ComputerKeyArgs, ComputerScreenshotArgs,
     ComputerScrollArgs, ComputerSnapshotArgs, ComputerTypeArgs,
 };
 use crate::computer::{ComputerService, ToolOutput};
@@ -261,6 +261,22 @@ impl AiTermTools {
         Parameters(a): Parameters<ComputerClickTextArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.run_computer(Call::ClickText(a)).await
+    }
+
+    #[tool(description = "List the icon-only buttons (glyphs with no text and no accessibility info, e.g. the phone/search icons in a chat header) in a region of the app window, left to right, with their positions. It cannot tell what each icon means — use the app's known layout. Then click one with computer_click_icon.")]
+    async fn computer_find_icons(
+        &self,
+        Parameters(a): Parameters<ComputerFindIconsArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_computer(Call::FindIcons(a)).await
+    }
+
+    #[tool(description = "Click the Nth icon-only button in a window region (index 1-based; from=\"right\" counts from the right end). Always asks the user to confirm, because an unlabelled icon's purpose cannot be verified. The reply includes the resulting screen text.")]
+    async fn computer_click_icon(
+        &self,
+        Parameters(a): Parameters<ComputerClickIconArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_computer(Call::ClickIcon(a)).await
     }
 
     #[tool(description = "Take a screenshot of one app's front window, or the whole main screen when app is omitted. Returns a PNG scaled to screen points, so coordinates in the image plus the stated origin are valid click coordinates.")]

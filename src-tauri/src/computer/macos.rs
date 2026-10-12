@@ -23,6 +23,7 @@ use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use core_graphics::geometry::{CGPoint, CGSize};
 
 use super::backend::*;
+use super::icons::{detect_icons, Region};
 
 type AXUIElementRef = *const c_void;
 type AXError = i32;
@@ -279,7 +280,7 @@ async fn wait_frontmost(pid: i32, timeout: Duration) -> bool {
     }
 }
 
-/// 用系統的視窗清單（CoreGraphics）取得某個 App 在螢幕上最大的可見一般視窗。
+/// 用系統的視窗清單（CoreGraphics）取得某個 App 在螢幕上最上層的可見一般視窗。
 /// 不依賴無障礙 API，所以 Chromium／Qt 這類 AX 視窗資訊不可信的 App（例如 LINE）也能用；
 /// 視窗位置與大小本來就不需要螢幕錄製權限。
 fn window_bounds_for_pid(pid: i32) -> Option<(f64, f64, f64, f64)> {
@@ -328,9 +329,10 @@ fn window_bounds_for_pid(pid: i32) -> Option<(f64, f64, f64, f64)> {
         if w < 50.0 || h < 50.0 {
             continue;
         }
-        if best.map_or(true, |(_, _, bw, bh)| w * h > bw * bh) {
-            best = Some((x, y, w, h));
-        }
+        // 系統清單是由前到後排序：第一個就是這個 App 最上層的視窗（剛 activate 過，也就是使用者正在看的那個）。
+        // 不挑最大的——LINE 這類 App 同時有好友清單與聊天兩個視窗，最大的不一定是要操作的。
+        best = Some((x, y, w, h));
+        break;
     }
     best
 }
@@ -401,6 +403,44 @@ async fn ensure_window(pid: i32) {
     if !is_finder {
         let _ = reopen_window(pid).await;
     }
+}
+
+/// 取得視窗範圍；App 在背景執行但視窗被關掉（LINE 這類常見）時，做一次「點 Dock 圖示」等效的重新開啟再試。
+async fn region_with_reopen(pid: Option<i32>) -> Result<(f64, f64, f64, f64, Option<String>), String> {
+    match capture_region(pid).await {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            let Some(pid) = pid else { return Err(e) };
+            reopen_window(pid).await.map_err(|_| e.clone())?;
+            capture_region(Some(pid)).await
+        }
+    }
+}
+
+/// 讀 PNG 並轉成 0~255 的亮度（列優先），回傳 (亮度, 寬, 高)。
+fn load_luminance(path: &str) -> Result<(Vec<u8>, usize, usize), String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("讀取截圖失敗：{e}"))?;
+    let mut decoder = png::Decoder::new(file);
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().map_err(|e| format!("截圖不是有效的 PNG：{e}"))?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).map_err(|e| format!("解碼截圖失敗：{e}"))?;
+    let (w, h) = (info.width as usize, info.height as usize);
+    let channels = info.color_type.samples();
+    let lum = png_to_luminance(&buf[..info.buffer_size()], w, h, channels);
+    Ok((lum, w, h))
+}
+
+fn png_to_luminance(data: &[u8], w: usize, h: usize, channels: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(w * h);
+    for px in data.chunks_exact(channels).take(w * h) {
+        let v = match channels {
+            1 | 2 => px[0] as f64,
+            _ => 0.299 * px[0] as f64 + 0.587 * px[1] as f64 + 0.114 * px[2] as f64,
+        };
+        out.push(v.round() as u8);
+    }
+    out
 }
 
 async fn capture_to(path: &str, region: Option<&str>) -> Result<(), String> {
@@ -541,16 +581,7 @@ impl Backend for MacBackend {
     }
 
     async fn read_screen(&self, pid: Option<i32>) -> Result<Vec<ScreenText>, String> {
-        let region = match capture_region(pid).await {
-            Ok(r) => r,
-            Err(e) => {
-                // App 在背景執行但視窗被關掉了（LINE 這類常見）：做一次「點 Dock 圖示」等效的重新開啟，再試。
-                let Some(pid) = pid else { return Err(e) };
-                reopen_window(pid).await.map_err(|_| e.clone())?;
-                capture_region(Some(pid)).await?
-            }
-        };
-        let (x, y, w, h, region) = region;
+        let (x, y, w, h, region) = region_with_reopen(pid).await?;
         let raw = std::env::temp_dir().join(format!("aiterm-ocr-{}.png", uuid::Uuid::new_v4()));
         let raw_s = raw.to_string_lossy().to_string();
         let result = async {
@@ -559,6 +590,28 @@ impl Backend for MacBackend {
             let path = raw_s.clone();
             let lines = blocking(move || ocr_file(&path)).await?;
             Ok::<_, String>(lines.into_iter().map(|l| l.to_screen(x, y, w, h)).collect::<Vec<_>>())
+        }
+        .await;
+        let _ = tokio::fs::remove_file(&raw).await;
+        result
+    }
+
+    async fn find_icons(&self, pid: i32, region: Region) -> Result<Vec<IconRect>, String> {
+        let (x, y, w, _h, rect) = region_with_reopen(Some(pid)).await?;
+        let raw = std::env::temp_dir().join(format!("aiterm-icons-{}.png", uuid::Uuid::new_v4()));
+        let raw_s = raw.to_string_lossy().to_string();
+        let result = async {
+            capture_to(&raw_s, rect.as_deref()).await?;
+            let path = raw_s.clone();
+            blocking(move || {
+                let (lum, iw, ih) = load_luminance(&path)?;
+                let scale = iw as f64 / w.max(1.0);
+                Ok(detect_icons(&lum, iw, ih, scale, region)
+                    .into_iter()
+                    .map(|r| IconRect { x: x + r.x / scale, y: y + r.y / scale, w: r.w / scale, h: r.h / scale })
+                    .collect::<Vec<_>>())
+            })
+            .await
         }
         .await;
         let _ = tokio::fs::remove_file(&raw).await;
@@ -859,5 +912,17 @@ JSON.stringify(ps.map(function (p) { return {name: p.name(), pid: p.unixId()}; }
             println!("OCR {:?} ({:.0},{:.0},{:.0},{:.0})", i.text, i.x, i.y, i.w, i.h);
         }
         assert!(items.iter().any(|i| i.text.contains("你好世界")), "沒讀到預期的文字：{:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn png_pixels_convert_to_luminance_for_every_channel_layout() {
+        // RGBA：白、黑、純綠
+        let rgba = [255, 255, 255, 255, 0, 0, 0, 255, 0, 255, 0, 255];
+        assert_eq!(png_to_luminance(&rgba, 3, 1, 4), vec![255, 0, 150]);
+        // 灰階與灰階+alpha
+        assert_eq!(png_to_luminance(&[10, 200], 2, 1, 1), vec![10, 200]);
+        assert_eq!(png_to_luminance(&[10, 255, 200, 255], 2, 1, 2), vec![10, 200]);
+        // 資料比宣告的短：只轉有的，不越界
+        assert_eq!(png_to_luminance(&[1, 2, 3], 5, 5, 3).len(), 1);
     }
 }

@@ -2,6 +2,8 @@
 //! 所以 policy／授權流程可以用假後端完整測試，不必真的去點別人的 App。
 
 use async_trait::async_trait;
+
+use super::icons::Region;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -76,6 +78,21 @@ impl ScreenText {
     }
 }
 
+/// 偵測到的圖示（螢幕邏輯座標）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct IconRect {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+impl IconRect {
+    pub fn center(&self) -> (f64, f64) {
+        (self.x + self.w / 2.0, self.y + self.h / 2.0)
+    }
+}
+
 /// 目前焦點元件的狀態，操作後回報給模型驗證結果用。
 #[derive(Debug, Clone, PartialEq)]
 pub struct FocusedText {
@@ -113,6 +130,8 @@ pub trait Backend: Send + Sync {
     /// 對畫面（整個螢幕，或某個 App 的前景視窗）做文字辨識，回傳每段文字與它的螢幕座標。
     /// 給不提供無障礙資訊的 App（Chromium／Qt，如 LINE）用。
     async fn read_screen(&self, pid: Option<i32>) -> Result<Vec<ScreenText>, String>;
+    /// 在 App 前景視窗的某個區域裡找「只有圖形」的按鈕（見 `icons`），回傳螢幕座標，由左到右排序。
+    async fn find_icons(&self, pid: i32, region: Region) -> Result<Vec<IconRect>, String>;
     /// App 目前焦點元件的角色與文字；沒有焦點元件回 `None`。
     async fn focused_text(&self, pid: i32) -> Result<Option<FocusedText>, String>;
 }
@@ -142,5 +161,6 @@ impl Backend for UnsupportedBackend {
     async fn key(&self, _: &KeyCombo) -> Result<(), String> { unsupported() }
     async fn scroll(&self, _: i32, _: i32, _: Option<(f64, f64)>) -> Result<(), String> { unsupported() }
     async fn read_screen(&self, _: Option<i32>) -> Result<Vec<ScreenText>, String> { unsupported() }
+    async fn find_icons(&self, _: i32, _: Region) -> Result<Vec<IconRect>, String> { unsupported() }
     async fn focused_text(&self, _: i32) -> Result<Option<FocusedText>, String> { unsupported() }
 }
