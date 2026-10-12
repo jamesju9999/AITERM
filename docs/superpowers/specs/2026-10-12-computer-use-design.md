@@ -45,7 +45,7 @@
 
 1. 設定 `mcp_tool_server.computer_enabled`（預設 false）是總開關；關閉時所有 `computer_*` 工具回傳說明如何開啟。
 2. **每個 App 首次授權**：對 App 做第一個會改變狀態或讀取內容的動作（除 `list_apps` 外皆是）前，彈出授權（允許一次／永遠允許／拒絕）。「永遠允許」存進 `computer_allowed_apps`（bundle id）。
-3. **破壞性操作逐次確認**：`click` 的目標元件標題／描述，或 `type`／`key` 的內容（`key` 僅 `cmd+delete`、`return` 於含危險字樣的目標上），符合關鍵字（刪除、移除、清空、送出、發送、付款、購買、確認付款、Delete、Remove、Erase、Send、Pay、Purchase、Submit、Empty Trash…）時，即使已永遠允許也每次確認。
+3. **破壞性操作逐次確認**：`click` 的目標元件（以 element id，或用 AX 查座標處的元件）標題／描述符合關鍵字（刪除、移除、清空、送出、發送、付款、購買、結帳、Delete、Remove、Erase、Send、Pay、Purchase、Submit、Empty Trash…）時，即使已永遠允許也每次確認；`key` 的 `cmd+delete` 同理。`type` 的文字內容不掃描（在文字欄打「delete」不是破壞性操作），也不寫進稽核紀錄，只記字元數。「永遠允許」在破壞性確認中只當作這一次。
 4. **禁止操作 AITerm 自己**（pid 比對），避免 Agent 點掉自己的確認框。
 5. 授權請求來自 MCP 時，先把 AITerm 視窗叫到前景；60 秒沒回應視為拒絕。
 6. 每次呼叫（含被拒絕）寫稽核紀錄：時間、工具、App、摘要、結果。
@@ -61,6 +61,7 @@
 
 - 內建 Agent 的 MCP client 只保留文字內容，`computer_screenshot` 的影像在內建 Agent 看不到，只看得到尺寸文字；內建 Agent 以 `computer_snapshot` 為主。外部 MCP 客戶端（Claude Code 等）可收到影像。把影像送進 provider 的 tool-result 需要各 provider 的支援，另開一輪。
 - 僅 macOS。
+- 元件樹不展開選單彈出層（`AXMenu`），只保留選單列標題，避免行數預算被上百個看不見的選項吃光。
 - 元件 id 是索引路徑，畫面變動後可能指到別的元件；點擊時比對 snapshot 當時記下的 role／title，不符回傳「畫面已變，請重新 snapshot」。
 
 ## 測試

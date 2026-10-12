@@ -380,3 +380,76 @@ async fn unsupported_backend_reports_a_clear_error() {
     );
     assert!(svc.list_apps().await.unwrap_err().contains("macOS"));
 }
+
+// ── 真機端對端（macOS，需要輔助使用＋螢幕錄製權限，預設不跑）：
+//    cargo test -p app --lib computer::tests::live -- --ignored --nocapture
+#[cfg(target_os = "macos")]
+mod live {
+    use super::*;
+    use crate::computer::macos::MacBackend;
+
+    fn osa(script: &str) -> String {
+        let out = std::process::Command::new("osascript").args(["-e", script]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn textedit_type_key_click_and_screenshot_end_to_end() {
+        osa("tell application \"TextEdit\" to activate");
+        osa("tell application \"TextEdit\" to make new document");
+        std::thread::sleep(std::time::Duration::from_millis(800));
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(ConfigStore::new_at(dir.path().join("config.toml")));
+        config.update(|c| c.mcp_tool_server.computer_enabled = true).unwrap();
+        let approver = FakeApprover::new(&[Decision::AllowOnce, Decision::AllowOnce, Decision::AllowOnce, Decision::AllowOnce, Decision::AllowOnce, Decision::AllowOnce]);
+        let svc = ComputerService::new(
+            Arc::new(MacBackend),
+            approver.clone(),
+            config,
+            AuditLog::new(dir.path().join("audit.jsonl")),
+            std::process::id() as i32,
+        );
+
+        let apps = text(svc.list_apps().await.unwrap());
+        assert!(apps.contains("TextEdit"), "{apps}");
+
+        let tree = text(svc.snapshot("TextEdit", Some(8)).await.unwrap());
+        println!("{tree}");
+        let area = tree
+            .lines()
+            .find(|l| l.contains("AXTextArea"))
+            .and_then(|l| l.split_whitespace().next())
+            .expect("找不到 AXTextArea")
+            .to_string();
+
+        svc.type_text("TextEdit", "hello from AITerm 你好", Some(&area)).await.unwrap();
+        let got = osa("tell application \"TextEdit\" to get text of document 1");
+        println!("document text = {got:?}");
+        assert_eq!(got, "hello from AITerm 你好");
+
+        svc.key("TextEdit", "cmd+a").await.unwrap();
+        svc.key("TextEdit", "delete").await.unwrap();
+        assert_eq!(osa("tell application \"TextEdit\" to get text of document 1"), "");
+
+        // 座標點擊文字區中央（安全元件，不應觸發確認）
+        let frame = tree.lines().find(|l| l.contains("AXTextArea")).unwrap().to_string();
+        println!("{frame}");
+
+        let shot = svc.screenshot(Some("TextEdit")).await.unwrap();
+        match shot {
+            ToolOutput::Image { png, text } => {
+                println!("{text} bytes={}", png.len());
+                std::fs::write(std::env::temp_dir().join("aiterm-live-textedit.png"), &png).unwrap();
+                assert!(png.len() > 1000);
+            }
+            _ => panic!("expected image"),
+        }
+
+        // 只有第一次使用 TextEdit 時問過使用者（AllowOnce 不記憶，所以每個動作各問一次）。
+        assert!(approver.asked().iter().all(|a| a.0 == ApprovalKind::FirstUse));
+
+        osa("tell application \"TextEdit\" to close document 1 saving no");
+    }
+}

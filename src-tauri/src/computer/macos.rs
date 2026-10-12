@@ -135,7 +135,9 @@ fn describe(el: &Owned, id: &str) -> ElementNode {
 fn build_tree(el: &Owned, id: &str, depth: usize, max_depth: usize, count: &mut usize) -> ElementNode {
     *count += 1;
     let mut node = describe(el, id);
-    if depth < max_depth {
+    // 選單彈出層（File／Edit…的整串選項）常有上百項、而且多半看不見，
+    // 展開只會把行數預算吃光；選單列上的標題（AXMenuBarItem）仍保留。
+    if depth < max_depth && node.role != "AXMenu" {
         for (i, child) in el.children().iter().enumerate() {
             if *count >= MAX_NODES { break; }
             node.children.push(build_tree(child, &format!("{id}.{i}"), depth + 1, max_depth, count));

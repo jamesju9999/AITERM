@@ -230,3 +230,56 @@ async fn send_input_accepts_request_done_marker_without_breaking_the_unknown_tab
     .await;
     assert!(text.contains("was not created by spawn_tab"), "{text}");
 }
+
+/// Same handshake as `call_tool`, for an arbitrary JSON-RPC method.
+async fn rpc(app: axum::Router, method: &str, params: serde_json::Value) -> String {
+    let init_resp = app.clone().oneshot(post(
+        "/mcp", Some("t0ken"),
+        serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                       "clientInfo": {"name": "test-client", "version": "0.0.1"}}
+        }),
+    )).await.unwrap();
+    let session_id = init_resp.headers().get("mcp-session-id").unwrap().to_str().unwrap().to_string();
+    let mut notify = post("/mcp", Some("t0ken"), serde_json::json!({
+        "jsonrpc": "2.0", "method": "notifications/initialized", "params": {}
+    }));
+    notify.headers_mut().insert("mcp-session-id", session_id.parse().unwrap());
+    app.clone().oneshot(notify).await.unwrap();
+    let mut req = post("/mcp", Some("t0ken"), serde_json::json!({
+        "jsonrpc": "2.0", "id": 2, "method": method, "params": params
+    }));
+    req.headers_mut().insert("mcp-session-id", session_id.parse().unwrap());
+    let resp = app.oneshot(req).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 256 * 1024).await.unwrap();
+    String::from_utf8_lossy(&body).to_string()
+}
+
+#[tokio::test]
+async fn computer_tools_are_registered_over_mcp() {
+    let (app, _pool) = test_router().await;
+    let text = rpc(app, "tools/list", serde_json::json!({})).await;
+    for name in ["computer_list_apps", "computer_snapshot", "computer_screenshot",
+                 "computer_click", "computer_type", "computer_key", "computer_scroll"] {
+        assert!(text.contains(name), "{name} missing from tools/list: {text}");
+    }
+}
+
+/// Without a running AITerm app there is no ComputerService: every computer tool must
+/// fail closed with a clear tool-level error rather than panic or act.
+#[tokio::test]
+async fn computer_tools_fail_closed_without_an_app_instance() {
+    let (app, _pool) = test_router().await;
+    let text = call_tool(app, "computer_list_apps", serde_json::json!({})).await;
+    assert!(text.contains("isError") && text.contains("AITerm"), "{text}");
+}
+
+#[tokio::test]
+async fn computer_click_requires_an_element_or_both_coordinates() {
+    let (app, _pool) = test_router().await;
+    let text = call_tool(app.clone(), "computer_click", serde_json::json!({"app": "Notes", "x": 10})).await;
+    assert!(text.contains("element"), "{text}");
+    let text = call_tool(app, "computer_click", serde_json::json!({"app": "Notes", "element": "0.1", "button": "middle"})).await;
+    assert!(text.contains("left"), "{text}");
+}
