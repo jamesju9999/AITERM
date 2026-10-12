@@ -140,6 +140,38 @@ pub fn unicode_key_events(text: &str) -> Vec<(u16, bool)> {
     text.encode_utf16().flat_map(|u| [(u, false), (u, true)]).collect()
 }
 
+/// 輸入文字時的單一事件：一般字元走 Unicode，換行與 Tab 要送真正的按鍵（很多輸入框不吃 U+000A）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextEvent {
+    Unicode(u16, bool),
+    Vk(u16, bool),
+}
+
+/// 把要輸入的文字拆成事件序列；每個字元一次按下、一次放開。`\r\n` 只算一個換行。
+pub fn text_events(text: &str) -> Vec<TextEvent> {
+    let mut out = Vec::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                out.extend([TextEvent::Vk(0x0D, false), TextEvent::Vk(0x0D, true)]);
+            }
+            '\n' => out.extend([TextEvent::Vk(0x0D, false), TextEvent::Vk(0x0D, true)]),
+            '\t' => out.extend([TextEvent::Vk(0x09, false), TextEvent::Vk(0x09, true)]),
+            _ => {
+                let mut buf = [0u16; 2];
+                for u in c.encode_utf16(&mut buf) {
+                    out.extend([TextEvent::Unicode(*u, false), TextEvent::Unicode(*u, true)]);
+                }
+            }
+        }
+    }
+    out
+}
+
 // ── App 清單 ─────────────────────────────────────────────────────────────────────────
 
 fn file_name(path: &str) -> Option<&str> {
@@ -327,6 +359,17 @@ mod tests {
         assert_eq!(emoji[0].0, 0xD83D);
         assert_eq!(emoji[2].0, 0xDE00);
         assert!(unicode_key_events("").is_empty());
+    }
+
+    #[test]
+    fn newlines_and_tabs_become_real_key_presses_and_crlf_counts_once() {
+        use TextEvent::*;
+        assert_eq!(text_events("a\nb"), vec![Unicode(0x61, false), Unicode(0x61, true), Vk(0x0D, false), Vk(0x0D, true), Unicode(0x62, false), Unicode(0x62, true)]);
+        assert_eq!(text_events("\r\n"), vec![Vk(0x0D, false), Vk(0x0D, true)]);
+        assert_eq!(text_events("\r"), vec![Vk(0x0D, false), Vk(0x0D, true)]);
+        assert_eq!(text_events("\t"), vec![Vk(0x09, false), Vk(0x09, true)]);
+        assert_eq!(text_events("😀").len(), 4);
+        assert!(text_events("").is_empty());
     }
 
     #[test]

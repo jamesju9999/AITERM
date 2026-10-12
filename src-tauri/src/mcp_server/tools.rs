@@ -226,7 +226,7 @@ impl AiTermTools {
         }
     }
 
-    #[tool(description = "List the macOS apps with visible windows that can be controlled (name, bundle id, pid, frontmost). Part of the computer-use tools; disabled by default and must be enabled in AITerm Settings → MCP Tool Server.")]
+    #[tool(description = "List the desktop apps with visible windows that can be controlled (name, bundle id, pid, frontmost). Part of the computer-use tools; disabled by default and must be enabled in AITerm Settings → MCP Tool Server.")]
     async fn computer_list_apps(&self) -> Result<CallToolResult, McpError> {
         self.run_computer(Call::ListApps).await
     }
@@ -319,7 +319,7 @@ impl AiTermTools {
         self.run_computer(Call::Type(a)).await
     }
 
-    #[tool(description = "Press a key or key combination in an app, e.g. \"return\", \"escape\", \"cmd+s\", \"cmd+shift+left\". To clear a field send \"cmd+a\" then \"delete\" as two calls (a bare delete removes one character). The reply reports the focused field's current content and the resulting screen. Cmd+Delete always asks the user for confirmation.")]
+    #[tool(description = "Press a key or key combination in an app, e.g. \"return\", \"escape\", \"cmd+s\", \"cmd+shift+left\" (\"cmd\" is Command on macOS and Ctrl on Windows/Linux). To clear a field send \"cmd+a\" then \"delete\" as two calls (a bare delete removes one character). The reply reports the focused field's current content and the resulting screen. Cmd+Delete always asks the user for confirmation.")]
     async fn computer_key(
         &self,
         Parameters(a): Parameters<ComputerKeyArgs>,

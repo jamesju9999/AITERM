@@ -25,7 +25,7 @@ this chat, the user would have to click them manually. (1) Call computer_list_ap
 computer_snapshot. (3) Actions (click/type/key/scroll) already return the screen afterwards, so do not call \
 snapshot again just to look. (4) When you know several steps in advance (click the search box, type, press \
 return), send them together with computer_batch. (5) To replace a field's text use computer_type with \
-replace=true; to clear it send cmd+a then delete. (6) Always read the result text to confirm the action \
+replace=true; to clear it send cmd+a then delete (\"cmd\" means Ctrl on Windows/Linux). (6) Always read the result text to confirm the action \
 really worked before telling the user it is done. (7) Element ids come from the latest snapshot/find/action \
 result; if told an id is stale, use the ids from the newest result. (8) Some apps (Chromium/Qt, e.g. LINE) expose \
 almost no accessibility info: when snapshot/find come back nearly empty, use computer_read_screen to read the \
@@ -551,7 +551,7 @@ pub fn tool_infos() -> Vec<McpToolInfo> {
     vec![
         mk(
             "computer_list_apps",
-            "List the macOS apps with visible windows that can be controlled (name, bundle id, pid, frontmost). Call this first to get exact app names.",
+            "List the desktop apps with visible windows that can be controlled (name, bundle id, pid, frontmost). Call this first to get exact app names.",
             serde_json::from_str(NO_ARGS).unwrap(),
         ),
         mk(
@@ -611,7 +611,7 @@ pub fn tool_infos() -> Vec<McpToolInfo> {
         ),
         mk(
             "computer_key",
-            "Press ONE key or combination in an app, e.g. \"return\", \"escape\", \"cmd+s\", \"cmd+a\". To clear a field send \"cmd+a\" then \"delete\" (a bare \"delete\" removes one character). The reply reports the field's current content and the resulting screen. Cmd+Delete always asks the user for confirmation.",
+            "Press ONE key or combination in an app, e.g. \"return\", \"escape\", \"cmd+s\", \"cmd+a\" (\"cmd\" is Command on macOS and Ctrl on Windows/Linux). To clear a field send \"cmd+a\" then \"delete\" (a bare \"delete\" removes one character). The reply reports the field's current content and the resulting screen. Cmd+Delete always asks the user for confirmation.",
             schema::<ComputerKeyArgs>(),
         ),
         mk(
@@ -756,6 +756,7 @@ mod tests {
 
     #[test]
     fn the_prompt_hint_mentions_every_efficiency_tool() {
+        assert!(PROMPT_HINT.contains("Ctrl on Windows/Linux"));
         for w in ["computer_find", "computer_batch", "replace=true", "cmd+a", "computer_read_screen", "computer_click_text", "computer_find_icons", "computer_click_icon", "computer_open_app", "computer_open_url"] {
             assert!(PROMPT_HINT.contains(w), "{w}");
         }

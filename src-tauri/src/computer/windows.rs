@@ -503,7 +503,12 @@ impl Backend for WindowsBackend {
                 }
                 seen.push(w.pid);
                 let path = process_path(w.pid);
-                let name = path.as_deref().and_then(winmap::process_name_from_path).unwrap_or_else(|| w.title.clone());
+                let mut name = path.as_deref().and_then(winmap::process_name_from_path).unwrap_or_else(|| w.title.clone());
+                // UWP／商店 App（計算機、設定…）的視窗都由 ApplicationFrameHost 代管，行程名稱對使用者與模型毫無意義；
+                // 改用視窗標題。已知限制：同時開著多個 UWP App 時它們共用一個 pid，只會列出最上層的那個。
+                if name.eq_ignore_ascii_case("ApplicationFrameHost") {
+                    name = w.title.clone();
+                }
                 // 視窗標題當別名（「無標題 - 記事本」之類不完全等於，但至少讓清單看得出是哪個視窗）。
                 apps.push(AppInfo {
                     name,
@@ -644,18 +649,22 @@ impl Backend for WindowsBackend {
     }
 
     async fn type_text(&self, text: &str) -> Result<(), String> {
-        let events = winmap::unicode_key_events(text);
+        let events = winmap::text_events(text);
         blocking(move || {
-            // KEYEVENTF_UNICODE：直接送字元，不經鍵盤配置與輸入法，中文與 emoji 都能輸入。
+            // KEYEVENTF_UNICODE：直接送字元，不經鍵盤配置與輸入法，中文與 emoji 都能輸入；
+            // 換行與 Tab 改送真正的按鍵。
             for chunk in events.chunks(64) {
                 let inputs: Vec<INPUT> = chunk
                     .iter()
-                    .map(|(unit, up)| {
-                        let mut flags = KEYEVENTF_UNICODE;
-                        if *up {
-                            flags |= KEYEVENTF_KEYUP;
+                    .map(|e| match *e {
+                        winmap::TextEvent::Unicode(unit, up) => {
+                            let mut flags = KEYEVENTF_UNICODE;
+                            if up {
+                                flags |= KEYEVENTF_KEYUP;
+                            }
+                            key_input(0, unit, flags)
                         }
-                        key_input(0, *unit, flags)
+                        winmap::TextEvent::Vk(vk, up) => vk_event(vk, up),
                     })
                     .collect();
                 send(&inputs)?;
