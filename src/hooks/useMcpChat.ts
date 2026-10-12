@@ -1,6 +1,7 @@
 // src/hooks/useMcpChat.ts
 import { useState, useCallback, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { unlistenOnCleanup } from "../lib/eventSubscription";
 import { aiChat, formatAiError, type AiToolCall, type AiError, type ToolFallbackReason } from "../ipc/ai";
 import { executeMcpTool } from "../ipc/mcp";
 import type { ChatMessage } from "../ipc/ai";
@@ -62,10 +63,15 @@ export function useMcpChat(sessionId: string, maxToolIterations: number = DEFAUL
 
   // Listen for streaming deltas from ai-stream events
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen<{ session_id: string; kind: string; delta: string; done: boolean }>(
+    // cleanup 可能在 listen() resolve 之前就跑（StrictMode 雙重掛載、session 來回切換）：
+    // 那時拿不到 unlisten，舊 listener 會永遠留著，之後每個串流 delta 就被處理兩次
+    // （畫面上每個字都出現兩次）。所以 handler 自己檢查 active，並用 unlistenOnCleanup
+    // 在 resolve 之後補解除——兩種順序都安全，也是冪等的。
+    let active = true;
+    const pending = listen<{ session_id: string; kind: string; delta: string; done: boolean }>(
       "ai-stream",
       (event) => {
+        if (!active) return;
         if (event.payload.session_id !== sessionId) return;
         if (!mountedRef.current) return;
         if (event.payload.done) {
@@ -78,8 +84,9 @@ export function useMcpChat(sessionId: string, maxToolIterations: number = DEFAUL
           });
         }
       }
-    ).then(u => { unlisten = u; });
-    return () => { unlisten?.(); };
+    );
+    const unlisten = unlistenOnCleanup(pending, "ai-stream");
+    return () => { active = false; unlisten(); };
   }, [sessionId]);
 
   // Auto-save messages to localStorage whenever they change (non-empty only)
