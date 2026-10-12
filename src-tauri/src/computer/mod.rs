@@ -10,6 +10,7 @@ pub mod icons;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod policy;
+pub mod winmap;
 pub mod tools;
 
 use std::collections::HashMap;
@@ -38,7 +39,17 @@ pub enum ClickTarget {
 
 /// 內建 Ask AI 可用的電腦操作工具；總開關關閉時一個都不給（模型根本看不到）。
 pub fn builtin_tool_infos(cfg: &crate::config::AppConfig) -> Vec<crate::mcp::McpToolInfo> {
-    if cfg.mcp_tool_server.computer_enabled { tools::tool_infos() } else { vec![] }
+    // 不支援的平台不給模型看工具：看得到卻每個都失敗，只會浪費它的回合。
+    if cfg.mcp_tool_server.computer_enabled && platform_supported() { tools::tool_infos() } else { vec![] }
+}
+
+/// 這個作業系統有沒有電腦操作後端。
+pub fn os_supported(os: &str) -> bool {
+    matches!(os, "macos" | "windows")
+}
+
+pub fn platform_supported() -> bool {
+    os_supported(std::env::consts::OS)
 }
 
 const DENIED_PREFIX: &str = "使用者拒絕";
@@ -803,20 +814,26 @@ impl ComputerService {
 /// App 名稱要能安全地當作 `open -a` 的參數：非空、不是旗標（`-` 開頭）、沒有控制字元。
 fn valid_app_name(name: &str) -> Result<String, String> {
     let n = name.trim();
-    if n.is_empty() || n.starts_with('-') || n.chars().any(|c| c.is_control()) || n.len() > 200 {
-        return Err("App 名稱不正確（不可為空、不可以 - 開頭、不可含控制字元）".to_string());
+    // 路徑分隔字元與引號也拒絕：授權對話框顯示的是「名稱」，不能讓名稱其實是任意路徑（Windows 的
+    // ShellExecute 會把 `C:\\x\\evil.exe` 當成要執行的檔案）。
+    if n.is_empty()
+        || n.starts_with('-')
+        || n.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | ':' | '"' | '<' | '>' | '|' | '*' | '?'))
+        || n.len() > 200
+    {
+        return Err("App 名稱不正確（不可為空、不可以 - 開頭、不可含控制字元、路徑分隔符號或引號）".to_string());
     }
     Ok(n.to_string())
 }
 
-/// 只接受 http／https 網址：有主機、沒有空白或控制字元、長度合理。
+/// 只接受 http／https 網址：有主機、沒有空白、控制字元或雙引號（Windows 的 ShellExecute 參數會用引號包起來）、長度合理。
 fn valid_http_url(url: &str) -> Result<String, String> {
     let u = url.trim();
     let lower = u.to_lowercase();
     let rest = lower.strip_prefix("https://").or_else(|| lower.strip_prefix("http://"));
     let bad = || "網址不正確：只接受 http:// 或 https:// 開頭、含主機名稱、沒有空白的網址".to_string();
     let Some(rest) = rest else { return Err(bad()) };
-    if u.len() > 2048 || rest.is_empty() || rest.starts_with('/') || u.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    if u.len() > 2048 || rest.is_empty() || rest.starts_with('/') || u.chars().any(|c| c.is_whitespace() || c.is_control() || c == '"') {
         return Err(bad());
     }
     Ok(u.to_string())

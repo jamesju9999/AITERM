@@ -15,9 +15,11 @@ pub fn is_dangerous_label(label: &str) -> bool {
     DANGEROUS_WORDS.iter().any(|w| l.contains(w))
 }
 
-/// 本身就帶破壞性的按鍵（Finder 的 Cmd+Delete 會把檔案丟進垃圾桶）。
+/// 本身就帶破壞性的按鍵：macOS Finder 的 Cmd+Delete 會把檔案丟進垃圾桶；
+/// Windows 檔案總管的 Shift+Delete 是不經資源回收筒的永久刪除。
 pub fn is_dangerous_key(c: &KeyCombo) -> bool {
-    c.cmd && matches!(c.key.as_str(), "delete" | "backspace" | "forwarddelete")
+    (c.cmd && matches!(c.key.as_str(), "delete" | "backspace" | "forwarddelete"))
+        || (c.shift && c.key == "forwarddelete")
 }
 
 const NAMED_KEYS: &[&str] = &[
@@ -92,6 +94,14 @@ mod tests {
         assert!(parse_key("cmd+shift").is_err()); // 只有修飾鍵
         assert!(parse_key("hyper+s").is_err());
         assert!(parse_key("cmd+bogus").is_err());
+    }
+
+    #[test]
+    fn shift_delete_is_dangerous_because_it_deletes_permanently_on_windows() {
+        assert!(is_dangerous_key(&parse_key("shift+forwarddelete").unwrap()));
+        assert!(!is_dangerous_key(&parse_key("shift+delete").unwrap())); // 往回刪 + shift：只是選取往回刪
+        assert!(!is_dangerous_key(&parse_key("shift+left").unwrap()));
+        assert!(!is_dangerous_key(&parse_key("forwarddelete").unwrap()));
     }
 
     #[test]

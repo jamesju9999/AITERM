@@ -1040,7 +1040,7 @@ async fn open_app_remembers_an_always_allowed_name() {
 #[tokio::test]
 async fn open_app_rejects_names_that_could_be_mistaken_for_flags_or_are_empty() {
     let r = rig(&[Decision::AllowAlways, Decision::AllowAlways]);
-    for bad in ["", "   ", "-a", "--args", "Notes\nSafari", "A\0B"] {
+    for bad in ["", "   ", "-a", "--args", "Notes\nSafari", "A\0B", "C:\\Windows\\System32\\cmd.exe", "../x", "a/b", "a\\b", "a\"b", "a|b", "a*"] {
         let e = r.svc.open_app(bad).await.unwrap_err();
         assert!(e.contains("App 名稱"), "{bad:?}: {e}");
     }
@@ -1056,7 +1056,7 @@ async fn open_app_refuses_aitern_itself() {
 #[tokio::test]
 async fn open_url_only_allows_http_and_https() {
     let r = rig(&[Decision::AllowAlways; 4]);
-    for bad in ["javascript:alert(1)", "file:///etc/passwd", "tel:+886912345678", "line://ti/p/abc", "ftp://x", "not a url", "", "https://", "https://exa mple.com"] {
+    for bad in ["javascript:alert(1)", "file:///etc/passwd", "tel:+886912345678", "line://ti/p/abc", "ftp://x", "not a url", "", "https://", "https://exa mple.com", "https://x.com\" --flag"] {
         let e = r.svc.open_url(bad, None).await.unwrap_err();
         assert!(e.contains("網址"), "{bad:?}: {e}");
     }
@@ -1387,4 +1387,10 @@ mod live_click_icon {
         assert!(asked.iter().any(|a| a.0 == ApprovalKind::Destructive && a.2.contains("無法確認用途")), "{asked:?}");
         let _ = svc.key("LINE", "escape").await;
     }
+}
+
+#[test]
+fn only_platforms_with_a_backend_expose_the_tools() {
+    assert!(os_supported("macos") && os_supported("windows"));
+    assert!(!os_supported("linux") && !os_supported("freebsd") && !os_supported(""));
 }
