@@ -22,7 +22,9 @@ pub const PROMPT_HINT: &str = "Terminal tool: when the user asks you to DO somet
 command, call aiterm_terminal__run_command (one command per call) and read its output — do NOT write a \
 <cmd> block for the user to click. Use <cmd> blocks only to show an example the user should run themselves. \
 If the tool reports the user declined or the command was blocked, do not retry the same command; explain \
-and ask what to do.";
+and ask what to do. The directory listing in the context above is only a snapshot of the current working \
+directory taken when the chat started: for any other folder (for example \"the Downloads folder\"), for \
+details such as sizes or dates, or when the listing may be stale, run a command instead of answering from it.";
 
 pub fn tool_infos() -> Vec<McpToolInfo> {
     vec![McpToolInfo {
@@ -172,6 +174,12 @@ mod tests {
         for mode in [AlwaysConfirm, Graded, FullAuto] {
             assert!(matches!(decide(mode, &Blocked), Gate::Deny(_)), "{mode:?}");
         }
+    }
+
+    #[test]
+    fn the_prompt_warns_that_the_directory_listing_is_only_a_cwd_snapshot() {
+        assert!(PROMPT_HINT.contains("only a snapshot of the current working"));
+        assert!(PROMPT_HINT.contains("aiterm_terminal__run_command"));
     }
 
     #[test]

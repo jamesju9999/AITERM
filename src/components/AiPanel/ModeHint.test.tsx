@@ -40,6 +40,13 @@ describe("ModeHint", () => {
     expect(screen.getByText(/不使用 MCP 工具/)).toBeInTheDocument();
   });
 
+  // 對話模式現在能呼叫「在終端機執行指令」的工具；舊文案寫「不經過終端機」會誤導。
+  it("MCP 模式要說明也能在終端機執行指令，且不能再說「不經過終端機」", () => {
+    render(<ModeHint mode="mcp" maxAgentSteps={700} mcpToolCount={20} />);
+    expect(screen.getByText(/終端機執行指令/)).toBeInTheDocument();
+    expect(screen.queryByText(/不經過終端機/)).toBeNull();
+  });
+
   it("MCP 模式要帶出實際的工具數量", () => {
     render(<ModeHint mode="mcp" maxAgentSteps={700} mcpToolCount={20} />);
     expect(screen.getByText(/20 個 MCP 工具/)).toBeInTheDocument();

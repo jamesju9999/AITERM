@@ -1333,7 +1333,7 @@ const zhTW = {
     mode_hint_suggest: "AI 只會建議指令，點 ▶ 才會執行",
     mode_hint_agent: (steps: string) =>
       `AI 會自己執行指令並看輸出迭代，最多 ${steps} 步（此時不使用 MCP 工具）`,
-    mode_hint_mcp: (n: number) => `AI 可以呼叫 ${n} 個 MCP 工具，不經過終端機`,
+    mode_hint_mcp: (n: number) => `AI 可以呼叫 ${n} 個 MCP 工具，也能在終端機執行指令（依「執行模式」可能先請你確認）`,
     ai_placeholder_agent_goal: "輸入目標，Agent 將自動執行指令… (Enter)",
     ai_placeholder_waiting: "等待 AI 回覆中...",
     ai_placeholder_default: "輸入訊息，Enter 送出...",
@@ -2940,7 +2940,7 @@ const enRaw = {
     mode_hint_suggest: "AI only suggests commands — click ▶ to run them",
     mode_hint_agent: (steps: string) =>
       `AI runs commands itself and iterates on the output, up to ${steps} steps (MCP tools are not used here)`,
-    mode_hint_mcp: (n: number) => `AI can call ${n} MCP tools, bypassing the terminal`,
+    mode_hint_mcp: (n: number) => `AI can call ${n} MCP tools and run commands in the terminal (you may be asked to confirm, depending on the execution mode)`,
     // AiPanel/CmdTag
     cmd_multiline_tip: "Multi-line command — will confirm before execution",
     cmd_click_execute: "Click to execute",
