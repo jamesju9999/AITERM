@@ -596,6 +596,18 @@ impl Backend for MacBackend {
         result
     }
 
+    async fn open_app(&self, name: &str) -> Result<(), String> {
+        // `open -a`：名稱是獨立的參數，不經過 shell；呼叫端已拒絕 `-` 開頭與控制字元。
+        run_cmd("open", &["-a", name]).await.map(|_| ())
+    }
+
+    async fn open_url(&self, url: &str, app: Option<&str>) -> Result<(), String> {
+        match app {
+            Some(a) => run_cmd("open", &["-a", a, url]).await.map(|_| ()),
+            None => run_cmd("open", &[url]).await.map(|_| ()),
+        }
+    }
+
     async fn find_icons(&self, pid: i32, region: Region) -> Result<Vec<IconRect>, String> {
         let (x, y, w, _h, rect) = region_with_reopen(Some(pid)).await?;
         let raw = std::env::temp_dir().join(format!("aiterm-icons-{}.png", uuid::Uuid::new_v4()));
@@ -924,5 +936,17 @@ JSON.stringify(ps.map(function (p) { return {name: p.name(), pid: p.unixId()}; }
         assert_eq!(png_to_luminance(&[10, 255, 200, 255], 2, 1, 2), vec![10, 200]);
         // 資料比宣告的短：只轉有的，不越界
         assert_eq!(png_to_luminance(&[1, 2, 3], 5, 5, 3).len(), 1);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_open_app_and_url_with_safari() {
+        // Safari 開一個無害的網址（example.com）；跑完後它會留在 Safari 的分頁裡，請自行關閉。
+        MacBackend.open_url("https://example.com", Some("Safari")).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        let apps = MacBackend.list_apps().await.unwrap();
+        assert!(apps.iter().any(|a| a.name == "Safari"), "Safari 應該在清單裡");
+        MacBackend.open_app("Safari").await.unwrap();
+        assert!(MacBackend.open_app("NoSuchAppForAITermTests").await.is_err());
     }
 }

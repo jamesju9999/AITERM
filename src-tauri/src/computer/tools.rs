@@ -18,7 +18,9 @@ pub const BUILTIN_SERVER_NAME: &str = "AITerm Computer Use";
 pub const MAX_BATCH_STEPS: usize = 10;
 
 /// 有電腦操作工具時附加到 Ask AI 系統提示詞的操作心法（弱一點的模型靠這個少走很多彎路）。
-pub const PROMPT_HINT: &str = "Computer-use tips: (1) Call computer_list_apps once to get exact app names. \
+pub const PROMPT_HINT: &str = "Computer-use tips: (0) To launch an app or open a web page use computer_open_app / \
+computer_open_url — NEVER write shell commands such as `open -a Safari ...`: shell commands are not executed in \
+this chat, the user would have to click them manually. (1) Call computer_list_apps once to get exact app names. \
 (2) To find a button or field, use computer_find with a word from its label — it is much cheaper than \
 computer_snapshot. (3) Actions (click/type/key/scroll) already return the screen afterwards, so do not call \
 snapshot again just to look. (4) When you know several steps in advance (click the search box, type, press \
@@ -85,6 +87,27 @@ pub struct ComputerClickTextArgs {
     #[serde(default)]
     pub double: Option<bool>,
     /// Default true: append the resulting screen to the reply. Set false to skip it.
+    #[serde(default)]
+    pub observe: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ComputerOpenAppArgs {
+    /// App name as shown in the Applications folder / Dock, e.g. "Safari", "LINE", "Notes".
+    pub app: String,
+    /// Default true: append the resulting screen to the reply. Set false to skip it.
+    #[serde(default)]
+    pub observe: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ComputerOpenUrlArgs {
+    /// A full http:// or https:// URL. Other schemes are refused.
+    pub url: String,
+    /// Open it in this app (e.g. "Safari"); omit to use the default browser.
+    #[serde(default)]
+    pub app: Option<String>,
+    /// Default true: append the resulting screen to the reply (only when `app` is given).
     #[serde(default)]
     pub observe: Option<bool>,
 }
@@ -285,6 +308,8 @@ pub enum Call {
     Find(ComputerFindArgs),
     ReadScreen(ComputerReadScreenArgs),
     ClickText(ComputerClickTextArgs),
+    OpenApp(ComputerOpenAppArgs),
+    OpenUrl(ComputerOpenUrlArgs),
     FindIcons(ComputerFindIconsArgs),
     ClickIcon(ComputerClickIconArgs),
     Screenshot(ComputerScreenshotArgs),
@@ -461,6 +486,17 @@ pub async fn execute(service: &ComputerService, call: Call) -> Result<ToolOutput
             let r = service.click_text(&a.app, &a.text, a.index, button, a.double.unwrap_or(false)).await;
             with_observation(service, &a.app, a.observe, r).await
         }
+        Call::OpenApp(a) => {
+            let r = service.open_app(&a.app).await;
+            with_observation(service, &a.app, a.observe, r).await
+        }
+        Call::OpenUrl(a) => {
+            let r = service.open_url(&a.url, a.app.as_deref()).await;
+            match a.app.as_deref() {
+                Some(app) => with_observation(service, app, a.observe, r).await,
+                None => r,
+            }
+        }
         Call::FindIcons(a) => service.find_icons(&a.app, a.region.as_deref().unwrap_or("top")).await,
         Call::ClickIcon(a) => {
             let from_right = match a.from.as_deref() {
@@ -537,6 +573,16 @@ pub fn tool_infos() -> Vec<McpToolInfo> {
             "computer_click_text",
             "Find a piece of text on screen (OCR) and click its centre — the way to click things in apps without accessibility info (e.g. a contact name or a search box placeholder in LINE). If several places match, pass index. The reply includes the resulting screen text.",
             schema::<ComputerClickTextArgs>(),
+        ),
+        mk(
+            "computer_open_app",
+            "Launch an app by name (or bring it to the front) — e.g. \"Safari\", \"LINE\". Use this instead of writing a shell command: shell commands in this chat are NOT executed. The user is asked to approve the app the first time.",
+            schema::<ComputerOpenAppArgs>(),
+        ),
+        mk(
+            "computer_open_url",
+            "Open an http/https web page in the default browser or in a named app (e.g. Safari). Other URL schemes are refused. Use this instead of `open -a Safari <url>` shell commands, which are NOT executed in this chat.",
+            schema::<ComputerOpenUrlArgs>(),
         ),
         mk(
             "computer_find_icons",
@@ -616,6 +662,8 @@ pub async fn call(service: &ComputerService, tool: &str, args: Value) -> McpTool
             "computer_find" => Call::Find(parse(args)?),
             "computer_read_screen" => Call::ReadScreen(parse(args)?),
             "computer_click_text" => Call::ClickText(parse(args)?),
+            "computer_open_app" => Call::OpenApp(parse(args)?),
+            "computer_open_url" => Call::OpenUrl(parse(args)?),
             "computer_find_icons" => Call::FindIcons(parse(args)?),
             "computer_click_icon" => Call::ClickIcon(parse(args)?),
             "computer_screenshot" => Call::Screenshot(parse(args)?),
@@ -637,7 +685,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exposes_the_thirteen_tools_with_object_schemas_and_encoded_names() {
+    fn exposes_the_fifteen_tools_with_object_schemas_and_encoded_names() {
         let tools = tool_infos();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(
@@ -648,6 +696,8 @@ mod tests {
                 "aiterm_computer__computer_find",
                 "aiterm_computer__computer_read_screen",
                 "aiterm_computer__computer_click_text",
+                "aiterm_computer__computer_open_app",
+                "aiterm_computer__computer_open_url",
                 "aiterm_computer__computer_find_icons",
                 "aiterm_computer__computer_click_icon",
                 "aiterm_computer__computer_screenshot",
@@ -706,7 +756,7 @@ mod tests {
 
     #[test]
     fn the_prompt_hint_mentions_every_efficiency_tool() {
-        for w in ["computer_find", "computer_batch", "replace=true", "cmd+a", "computer_read_screen", "computer_click_text", "computer_find_icons", "computer_click_icon"] {
+        for w in ["computer_find", "computer_batch", "replace=true", "cmd+a", "computer_read_screen", "computer_click_text", "computer_find_icons", "computer_click_icon", "computer_open_app", "computer_open_url"] {
             assert!(PROMPT_HINT.contains(w), "{w}");
         }
     }

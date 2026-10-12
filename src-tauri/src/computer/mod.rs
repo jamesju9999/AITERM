@@ -197,7 +197,14 @@ impl ComputerService {
     }
 
     async fn authorize(&self, key: String, display: &str, action: &str) -> Result<(), String> {
-        if self.config.get().computer_allowed_apps.contains(&key) {
+        self.authorize_any(vec![key], display, action).await
+    }
+
+    /// `keys` 任何一個已在「永遠允許」清單裡就放行；選「永遠允許」時存第一個。
+    /// 同一個 App 可能用 bundle id、行程名稱、系統語言名稱被指到，所以要接受多個別名。
+    async fn authorize_any(&self, keys: Vec<String>, display: &str, action: &str) -> Result<(), String> {
+        let allowed = self.config.get().computer_allowed_apps;
+        if keys.iter().any(|k| allowed.contains(k)) {
             return Ok(());
         }
         let req = ApprovalRequest {
@@ -210,6 +217,7 @@ impl ComputerService {
             Decision::Deny => Err(format!("{DENIED_PREFIX}讓 AI 操作「{display}」")),
             Decision::AllowOnce => Ok(()),
             Decision::AllowAlways => {
+                let key = keys[0].clone();
                 self.config
                     .update(|c| {
                         if !c.computer_allowed_apps.contains(&key) {
@@ -228,7 +236,10 @@ impl ComputerService {
         if app.pid == self.own_pid {
             return Err("不可操作 AITerm 自己的視窗".to_string());
         }
-        self.authorize(app_key(&app), &app.name, action).await?;
+        // 以 bundle id（優先）、行程名稱、系統語言名稱任一個比對；先用名稱開啟過的 App 也算數。
+        let mut keys = vec![app_key(&app), app.name.to_lowercase()];
+        keys.extend(app.localized.as_ref().map(|l| l.to_lowercase()));
+        self.authorize_any(keys, &app.name, action).await?;
         Ok(app)
     }
 
@@ -449,6 +460,107 @@ impl ComputerService {
         }
         .await;
         self.finish("computer_click_text", app, &format!("text={query}"), r)
+    }
+
+    /// 開啟前的授權：App 已在執行就沿用它的所有別名（bundle id、行程名稱、系統語言名稱），
+    /// 操作過再開啟（或反過來）不會被問第二次；還沒執行就只能用名稱。
+    async fn authorize_open(&self, name: &str, action: &str) -> Result<(), String> {
+        let mut keys = vec![name.to_lowercase()];
+        if let Ok(app) = self.resolve_app(name).await {
+            if app.pid == self.own_pid {
+                return Err("不可操作 AITerm 自己的視窗".to_string());
+            }
+            keys = vec![app_key(&app), app.name.to_lowercase()];
+            keys.extend(app.localized.as_ref().map(|l| l.to_lowercase()));
+            keys.push(name.to_lowercase());
+        }
+        self.authorize_any(keys, name, action).await
+    }
+
+    fn is_self_name(&self, name: &str) -> bool {
+        let n = name.trim().to_lowercase();
+        let exe = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_lowercase()));
+        n == "aiterm" || exe.as_deref() == Some(n.as_str())
+    }
+
+    /// 開啟後等 App 出現在清單裡（剛啟動的 App 不在舊快取裡，也可能還要幾秒才出現）。
+    /// 並清掉快取，讓下一個動作一定看得到它。`settle` 為 0（測試）時不等。
+    async fn wait_for_app(&self, name: &str) -> bool {
+        *self.apps.lock() = None;
+        let q = name.trim().to_lowercase();
+        let timeout = if self.settle().is_zero() { Duration::ZERO } else { Duration::from_secs(6) };
+        let start = Instant::now();
+        loop {
+            if let Ok(apps) = self.fetch_apps().await {
+                if apps.iter().any(|a| {
+                    a.name.to_lowercase() == q
+                        || a.localized.as_deref().map(str::to_lowercase).as_deref() == Some(q.as_str())
+                        || a.bundle_id.as_deref().map(str::to_lowercase).as_deref() == Some(q.as_str())
+                }) {
+                    return true;
+                }
+            }
+            if start.elapsed() >= timeout {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    /// 啟動（或帶到前景）一個 App。給 MCP 對話用：沒有這個工具時，模型只能寫出 shell 指令，
+    /// 而對話模式不會執行指令。
+    pub async fn open_app(&self, name: &str) -> Result<ToolOutput, String> {
+        let r = async {
+            self.require_enabled()?;
+            let name = valid_app_name(name)?;
+            if self.is_self_name(&name) {
+                return Err("不可操作 AITerm 自己的視窗".to_string());
+            }
+            self.authorize_open(&name, "開啟這個 App").await?;
+            self.backend.open_app(&name).await?;
+            let seen = self.wait_for_app(&name).await;
+            Ok(ToolOutput::Text(if seen {
+                format!("已開啟 {name}")
+            } else {
+                format!("已送出開啟 {name} 的要求，但還沒在 App 清單看到它（可能還在啟動，稍後再操作；名稱也可能不對）")
+            }))
+        }
+        .await;
+        self.finish("computer_open_app", name, "", r)
+    }
+
+    /// 用預設瀏覽器（或指定的 App）開啟網址。只允許 http／https——其他協定（file、javascript、tel、
+    /// line…）可能觸發撥號、讀檔或其他 App 的動作，不是「開網頁」。
+    pub async fn open_url(&self, url: &str, app: Option<&str>) -> Result<ToolOutput, String> {
+        let r = async {
+            self.require_enabled()?;
+            let url = valid_http_url(url)?;
+            let app = match app.map(str::trim).filter(|a| !a.is_empty()) {
+                Some(a) => Some(valid_app_name(a)?),
+                None => None,
+            };
+            match &app {
+                Some(a) => {
+                    if self.is_self_name(a) {
+                        return Err("不可操作 AITerm 自己的視窗".to_string());
+                    }
+                    self.authorize_open(a, "開啟網址").await?;
+                }
+                None => self.authorize("*default-browser*".to_string(), "預設瀏覽器", "開啟網址").await?,
+            }
+            self.backend.open_url(&url, app.as_deref()).await?;
+            if let Some(a) = &app {
+                self.wait_for_app(a).await;
+            }
+            Ok(ToolOutput::Text(match &app {
+                Some(a) => format!("已用 {a} 開啟 {url}"),
+                None => format!("已用預設瀏覽器開啟 {url}"),
+            }))
+        }
+        .await;
+        self.finish("computer_open_url", app.unwrap_or(""), url, r)
     }
 
     /// 找視窗某區域裡「只有圖形」的按鈕，由左到右編號（也標出從右數第幾個）。
@@ -686,6 +798,28 @@ impl ComputerService {
         .await;
         self.finish("computer_scroll", app, &detail, r)
     }
+}
+
+/// App 名稱要能安全地當作 `open -a` 的參數：非空、不是旗標（`-` 開頭）、沒有控制字元。
+fn valid_app_name(name: &str) -> Result<String, String> {
+    let n = name.trim();
+    if n.is_empty() || n.starts_with('-') || n.chars().any(|c| c.is_control()) || n.len() > 200 {
+        return Err("App 名稱不正確（不可為空、不可以 - 開頭、不可含控制字元）".to_string());
+    }
+    Ok(n.to_string())
+}
+
+/// 只接受 http／https 網址：有主機、沒有空白或控制字元、長度合理。
+fn valid_http_url(url: &str) -> Result<String, String> {
+    let u = url.trim();
+    let lower = u.to_lowercase();
+    let rest = lower.strip_prefix("https://").or_else(|| lower.strip_prefix("http://"));
+    let bad = || "網址不正確：只接受 http:// 或 https:// 開頭、含主機名稱、沒有空白的網址".to_string();
+    let Some(rest) = rest else { return Err(bad()) };
+    if u.len() > 2048 || rest.is_empty() || rest.starts_with('/') || u.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(bad());
+    }
+    Ok(u.to_string())
 }
 
 fn count_content_nodes(n: &ElementNode) -> usize {

@@ -117,6 +117,14 @@ impl Backend for FakeBackend {
         self.calls.lock().push(format!("read_screen {pid:?}"));
         Ok(self.screen_text.lock().clone())
     }
+    async fn open_app(&self, name: &str) -> Result<(), String> {
+        self.calls.lock().push(format!("open_app {name}"));
+        Ok(())
+    }
+    async fn open_url(&self, url: &str, app: Option<&str>) -> Result<(), String> {
+        self.calls.lock().push(format!("open_url {url} app={app:?}"));
+        Ok(())
+    }
     async fn find_icons(&self, pid: i32, region: Region) -> Result<Vec<IconRect>, String> {
         self.calls.lock().push(format!("find_icons {pid} {region:?}"));
         Ok(self.icons.lock().clone())
@@ -525,6 +533,8 @@ async fn failing_to_read_the_field_state_does_not_fail_the_action() {
         async fn scroll(&self, x: i32, y: i32, a: Option<(f64, f64)>) -> Result<(), String> { self.0.scroll(x, y, a).await }
         async fn read_screen(&self, p: Option<i32>) -> Result<Vec<ScreenText>, String> { self.0.read_screen(p).await }
         async fn find_icons(&self, p: i32, r: Region) -> Result<Vec<IconRect>, String> { self.0.find_icons(p, r).await }
+        async fn open_app(&self, n: &str) -> Result<(), String> { self.0.open_app(n).await }
+        async fn open_url(&self, u: &str, a: Option<&str>) -> Result<(), String> { self.0.open_url(u, a).await }
         async fn focused_text(&self, _: i32) -> Result<Option<FocusedText>, String> { Err("AX 讀取失敗".into()) }
     }
     drop(r);
@@ -1000,6 +1010,88 @@ async fn batch_supports_click_icon_steps_and_still_confirms_each() {
     assert!(e.contains("步驟 1") && e.contains("index"), "{e}");
 }
 
+// ── 開啟 App／網頁：沒有這個工具時，模型會退而求其次寫出 shell 指令，而 MCP 對話不會執行指令。
+
+#[tokio::test]
+async fn open_app_asks_first_launches_then_reports_the_screen() {
+    let r = rig(&[Decision::AllowAlways]);
+    let out = text(tools::execute(&r.svc, Call::OpenApp(super::tools::ComputerOpenAppArgs { app: "Notes".into(), observe: None })).await.unwrap());
+    assert!(out.contains("已開啟 Notes") && out.contains("畫面現況"), "{out}");
+    assert_eq!(r.approver.asked()[0].0, ApprovalKind::FirstUse);
+    assert!(r.backend.calls().contains(&"open_app Notes".to_string()));
+}
+
+#[tokio::test]
+async fn open_app_denied_never_launches_anything() {
+    let r = rig(&[Decision::Deny]);
+    let e = r.svc.open_app("Notes").await.unwrap_err();
+    assert!(e.starts_with("使用者拒絕"), "{e}");
+    assert!(r.backend.calls().is_empty());
+}
+
+#[tokio::test]
+async fn open_app_remembers_an_always_allowed_name() {
+    let r = rig(&[Decision::AllowAlways]);
+    r.svc.open_app("Notes").await.unwrap();
+    r.svc.open_app("notes").await.unwrap(); // 第二次不再問（腳本已空，再問會被拒絕）
+    assert_eq!(r.approver.asked().len(), 1);
+}
+
+#[tokio::test]
+async fn open_app_rejects_names_that_could_be_mistaken_for_flags_or_are_empty() {
+    let r = rig(&[Decision::AllowAlways, Decision::AllowAlways]);
+    for bad in ["", "   ", "-a", "--args", "Notes\nSafari", "A\0B"] {
+        let e = r.svc.open_app(bad).await.unwrap_err();
+        assert!(e.contains("App 名稱"), "{bad:?}: {e}");
+    }
+    assert!(r.approver.asked().is_empty() && r.backend.calls().is_empty());
+}
+
+#[tokio::test]
+async fn open_app_refuses_aitern_itself() {
+    let r = rig(&[Decision::AllowAlways]);
+    assert!(r.svc.open_app("AITerm").await.unwrap_err().contains("AITerm 自己"));
+}
+
+#[tokio::test]
+async fn open_url_only_allows_http_and_https() {
+    let r = rig(&[Decision::AllowAlways; 4]);
+    for bad in ["javascript:alert(1)", "file:///etc/passwd", "tel:+886912345678", "line://ti/p/abc", "ftp://x", "not a url", "", "https://", "https://exa mple.com"] {
+        let e = r.svc.open_url(bad, None).await.unwrap_err();
+        assert!(e.contains("網址"), "{bad:?}: {e}");
+    }
+    assert!(r.backend.calls().is_empty() && r.approver.asked().is_empty());
+    r.svc.open_url("https://24h.pchome.com.tw/search/?q=LPDDR5+16GB", None).await.unwrap();
+    r.svc.open_url("http://example.com", None).await.unwrap();
+}
+
+#[tokio::test]
+async fn open_url_in_a_named_app_authorizes_that_app_and_passes_it_through() {
+    let r = rig(&[Decision::AllowAlways]);
+    r.svc.open_url("https://example.com", Some("Notes")).await.unwrap();
+    assert!(r.backend.calls().contains(&"open_url https://example.com app=Some(\"Notes\")".to_string()), "{:?}", r.backend.calls());
+    assert_eq!(r.approver.asked()[0].1, "Notes");
+}
+
+#[tokio::test]
+async fn open_url_with_the_default_browser_asks_once_under_its_own_name() {
+    let r = rig(&[Decision::AllowAlways]);
+    r.svc.open_url("https://example.com", None).await.unwrap();
+    r.svc.open_url("https://example.org", None).await.unwrap();
+    assert_eq!(r.approver.asked().len(), 1);
+    assert_eq!(r.approver.asked()[0].1, "預設瀏覽器");
+    assert!(r.backend.calls().contains(&"open_url https://example.com app=None".to_string()));
+}
+
+#[tokio::test]
+async fn opening_refreshes_the_app_list_so_the_new_app_can_be_used_immediately() {
+    let r = rig(&[Decision::AllowAlways]);
+    r.svc.snapshot("Notes", None).await.unwrap(); // 快取已建立
+    let before = r.backend.list_calls();
+    r.svc.open_app("Notes").await.unwrap();
+    assert!(r.backend.list_calls() > before, "開啟後應重新讀 App 清單（剛啟動的 App 不在舊快取裡）");
+}
+
 // ── 內建 Ask AI 入口（computer::tools::call）：結果一律包成文字＋is_error，模型讀得到原因。
 
 #[tokio::test]
@@ -1045,7 +1137,7 @@ fn builtin_tools_are_hidden_unless_the_master_switch_is_on() {
     let mut cfg = crate::config::AppConfig::default();
     assert!(builtin_tool_infos(&cfg).is_empty());
     cfg.mcp_tool_server.computer_enabled = true;
-    assert_eq!(builtin_tool_infos(&cfg).len(), 13);
+    assert_eq!(builtin_tool_infos(&cfg).len(), 15);
 }
 
 // ── 真機端對端（macOS，需要輔助使用＋螢幕錄製權限，預設不跑）：

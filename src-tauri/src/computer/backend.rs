@@ -130,6 +130,10 @@ pub trait Backend: Send + Sync {
     /// 對畫面（整個螢幕，或某個 App 的前景視窗）做文字辨識，回傳每段文字與它的螢幕座標。
     /// 給不提供無障礙資訊的 App（Chromium／Qt，如 LINE）用。
     async fn read_screen(&self, pid: Option<i32>) -> Result<Vec<ScreenText>, String>;
+    /// 啟動（或帶到前景）指定名稱的 App，等同 `open -a`。名稱已由呼叫端驗證過。
+    async fn open_app(&self, name: &str) -> Result<(), String>;
+    /// 用預設瀏覽器（或指定的 App）開啟網址。網址已由呼叫端驗證過只有 http／https。
+    async fn open_url(&self, url: &str, app: Option<&str>) -> Result<(), String>;
     /// 在 App 前景視窗的某個區域裡找「只有圖形」的按鈕（見 `icons`），回傳螢幕座標，由左到右排序。
     async fn find_icons(&self, pid: i32, region: Region) -> Result<Vec<IconRect>, String>;
     /// App 目前焦點元件的角色與文字；沒有焦點元件回 `None`。
@@ -162,5 +166,7 @@ impl Backend for UnsupportedBackend {
     async fn scroll(&self, _: i32, _: i32, _: Option<(f64, f64)>) -> Result<(), String> { unsupported() }
     async fn read_screen(&self, _: Option<i32>) -> Result<Vec<ScreenText>, String> { unsupported() }
     async fn find_icons(&self, _: i32, _: Region) -> Result<Vec<IconRect>, String> { unsupported() }
+    async fn open_app(&self, _: &str) -> Result<(), String> { unsupported() }
+    async fn open_url(&self, _: &str, _: Option<&str>) -> Result<(), String> { unsupported() }
     async fn focused_text(&self, _: i32) -> Result<Option<FocusedText>, String> { unsupported() }
 }

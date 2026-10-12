@@ -25,7 +25,7 @@ use crate::pty::PtyManager;
 use crate::secret::SecretStore;
 
 use crate::computer::tools::{
-    execute, Call, ComputerBatchArgs, ComputerClickArgs, ComputerClickIconArgs, ComputerClickTextArgs, ComputerFindArgs, ComputerFindIconsArgs, ComputerReadScreenArgs, ComputerKeyArgs, ComputerScreenshotArgs,
+    execute, Call, ComputerBatchArgs, ComputerClickArgs, ComputerClickIconArgs, ComputerClickTextArgs, ComputerFindArgs, ComputerFindIconsArgs, ComputerOpenAppArgs, ComputerOpenUrlArgs, ComputerReadScreenArgs, ComputerKeyArgs, ComputerScreenshotArgs,
     ComputerScrollArgs, ComputerSnapshotArgs, ComputerTypeArgs,
 };
 use crate::computer::{ComputerService, ToolOutput};
@@ -261,6 +261,22 @@ impl AiTermTools {
         Parameters(a): Parameters<ComputerClickTextArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.run_computer(Call::ClickText(a)).await
+    }
+
+    #[tool(description = "Launch an app by name (or bring it to the front), e.g. \"Safari\" or \"LINE\". The user is asked to approve the app the first time.")]
+    async fn computer_open_app(
+        &self,
+        Parameters(a): Parameters<ComputerOpenAppArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_computer(Call::OpenApp(a)).await
+    }
+
+    #[tool(description = "Open an http/https web page in the default browser or in a named app (e.g. Safari). Other URL schemes are refused.")]
+    async fn computer_open_url(
+        &self,
+        Parameters(a): Parameters<ComputerOpenUrlArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_computer(Call::OpenUrl(a)).await
     }
 
     #[tool(description = "List the icon-only buttons (glyphs with no text and no accessibility info, e.g. the phone/search icons in a chat header) in a region of the app window, left to right, with their positions. It cannot tell what each icon means — use the app's known layout. Then click one with computer_click_icon.")]
