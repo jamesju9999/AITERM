@@ -599,11 +599,23 @@ pub async fn ai_chat(
             });
             let _abort_guard = AbortGuard::register(&app, &session_id, &join);
 
+            // 原生工具呼叫的模型偶爾仍把呼叫寫成 `<tool_call>` 文字（降級過一輪後尤其常見），
+            // 那是指令不是回答：串流時擋掉標記之後的內容，結束時再解析成真正的工具呼叫。
+            let mut seen = String::new();
+            let mut emitted = 0usize;
             while let Some(chunk) = rx.recv().await {
+                seen.push_str(&chunk.delta);
+                let delta = match crate::ai::tool_markup::next_visible_delta(&seen, emitted) {
+                    Some((d, next)) => {
+                        emitted = next;
+                        d
+                    }
+                    None => String::new(),
+                };
                 let _ = app.emit("ai-stream", AiStreamEvent {
                     session_id: session_id.clone(),
                     kind: AiStreamKind::Chat,
-                    delta: chunk.delta.clone(),
+                    delta,
                     done: chunk.done,
                     tokens: chunk.usage.map(|u| u.prompt + u.completion),
                 });
@@ -620,8 +632,7 @@ pub async fn ai_chat(
             return match joined {
                 Ok(Ok(crate::ai::GenerateWithToolsResult::ToolCalls { calls, raw })) =>
                     Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: raw }),
-                Ok(Ok(crate::ai::GenerateWithToolsResult::Text(content))) =>
-                    Ok(AiChatReply { content: Some(content), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None }),
+                Ok(Ok(crate::ai::GenerateWithToolsResult::Text(content))) => Ok(native_text_reply(content)),
                 Ok(Ok(crate::ai::GenerateWithToolsResult::Unsupported)) |
                 Ok(Err(AiError::ToolCallingUnsupported { .. })) => {
                     // System prompt fallback: inject tool descriptions and re-call generate()
@@ -758,6 +769,14 @@ After receiving tool results, continue the conversation naturally in the user's 
 
 /// Parse `<tool_call>...</tool_call>` blocks from model text output.
 /// Returns `None` if no valid tool calls found.
+/// 原生工具呼叫路徑回了純文字：裡面若是 `<tool_call>` 指令就當工具呼叫，否則才是給使用者看的回答。
+fn native_text_reply(content: String) -> AiChatReply {
+    match parse_tool_calls_from_text(&content) {
+        Some(calls) => AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None },
+        None => AiChatReply { content: Some(content), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None },
+    }
+}
+
 pub(crate) fn parse_tool_calls_from_text(text: &str) -> Option<Vec<crate::ai::AiToolCall>> {
     let mut calls = Vec::new();
     let mut pos = 0;
@@ -983,6 +1002,24 @@ mod schema_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_text_with_tool_call_markup_becomes_a_tool_call() {
+        let r = super::native_text_reply(
+            "<tool_call>{\"name\":\"aiterm_terminal__run_command\",\"arguments\":{\"command\":\"command -v firefox\"}}</tool_call>".to_string(),
+        );
+        assert!(r.content.is_none());
+        assert_eq!(r.tool_calls.len(), 1);
+        assert_eq!(r.tool_calls[0].tool_name, "aiterm_terminal__run_command");
+        assert_eq!(r.tool_calls[0].args["command"], "command -v firefox");
+    }
+
+    #[test]
+    fn native_plain_text_stays_text() {
+        let r = super::native_text_reply("已開啟 Firefox。".to_string());
+        assert!(r.tool_calls.is_empty());
+        assert_eq!(r.content.as_deref(), Some("已開啟 Firefox。"));
+    }
+
     #[test]
     fn computer_hint_is_added_only_when_computer_use_is_enabled() {
         let on = super::with_computer_hint("BASE".to_string(), true);
