@@ -4,6 +4,8 @@
 //! 視窗只用 `hide()`／`show()`，不卸載 webview：xterm 在沒有尺寸的元素上 resize 會崩潰，
 //! 而且 PTY 與 Agent 都要在視窗隱藏時繼續跑。
 
+pub mod portal;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::{
@@ -136,6 +138,12 @@ pub fn hide_for_close(app: &AppHandle) -> bool {
 /// 把已註冊的快捷鍵從 `old` 換成 `new`。新值註冊失敗時舊值原樣保留。
 pub fn apply_hotkey(app: &AppHandle, old: &str, new: &str) -> Result<(), String> {
     let new_sc = parse_hotkey(new)?;
+    // Wayland 不允許程式自己搶鍵，外掛註冊了也不會觸發；改走 xdg portal（非同步，失敗只記 log）。
+    #[cfg(target_os = "linux")]
+    if portal::is_wayland() {
+        portal::restart(app, new);
+        return Ok(());
+    }
     let old_sc = parse_hotkey(old).ok().flatten();
     let gs = app.global_shortcut();
     if let Some(sc) = &old_sc {
