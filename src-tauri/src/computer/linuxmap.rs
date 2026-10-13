@@ -155,6 +155,71 @@ pub fn app_name_from_wm_class(raw: &[u8]) -> Option<String> {
     parts.get(1).or_else(|| parts.first()).map(|s| s.to_lowercase())
 }
 
+// ── 開啟 App：名稱 → 桌面入口 ──────────────────────────────────────────────────────
+
+/// 在 `dirs`（各個 `.../applications` 目錄）裡找使用者說的 App 對應的桌面入口 ID（檔名去掉 `.desktop`）。
+/// 比對順序：檔名完全相同 → snap 這類 `套件_App` 檔名的後半段 → `Name=`（不分大小寫）。
+/// 例：`Firefox` → `firefox_firefox`（snap）或 `firefox`（deb）。都找不到回 `None`。
+pub fn find_desktop_id(name: &str, dirs: &[std::path::PathBuf]) -> Option<String> {
+    let want = name.trim().to_lowercase();
+    if want.is_empty() {
+        return None;
+    }
+    let mut entries: Vec<(String, String)> = Vec::new(); // (id, Name=)
+    for d in dirs {
+        let Ok(rd) = std::fs::read_dir(d) else { continue };
+        for e in rd.flatten() {
+            let file = e.file_name();
+            let Some(file) = file.to_str() else { continue };
+            let Some(id) = file.strip_suffix(".desktop") else { continue };
+            let text = std::fs::read_to_string(e.path()).unwrap_or_default();
+            if text.lines().any(|l| l.trim() == "NoDisplay=true") {
+                continue;
+            }
+            let display = text
+                .lines()
+                .skip_while(|l| l.trim() != "[Desktop Entry]")
+                .find_map(|l| l.strip_prefix("Name="))
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            entries.push((id.to_string(), display));
+        }
+    }
+    let lower = |s: &str| s.to_lowercase();
+    entries
+        .iter()
+        .find(|(id, _)| lower(id) == want)
+        .or_else(|| entries.iter().find(|(id, _)| lower(id).rsplit('_').next() == Some(want.as_str())))
+        .or_else(|| entries.iter().find(|(id, _)| lower(id).rsplit('.').next() == Some(want.as_str())))
+        .or_else(|| entries.iter().find(|(_, n)| lower(n) == want))
+        .map(|(id, _)| id.clone())
+}
+
+/// 桌面入口所在的目錄：`$XDG_DATA_HOME`（預設 `~/.local/share`）、`$XDG_DATA_DIRS`（預設
+/// `/usr/local/share:/usr/share`）各自的 `applications`，再加上 snap 與 flatpak 的位置。
+pub fn application_dirs(home: Option<&str>, data_home: Option<&str>, data_dirs: Option<&str>) -> Vec<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let mut v = Vec::new();
+    match (data_home.filter(|s| !s.is_empty()), home) {
+        (Some(dh), _) => v.push(PathBuf::from(dh).join("applications")),
+        (None, Some(h)) => v.push(PathBuf::from(h).join(".local/share/applications")),
+        _ => {}
+    }
+    for d in data_dirs.filter(|s| !s.is_empty()).unwrap_or("/usr/local/share:/usr/share").split(':') {
+        if !d.is_empty() {
+            v.push(PathBuf::from(d).join("applications"));
+        }
+    }
+    for extra in ["/var/lib/snapd/desktop/applications", "/var/lib/flatpak/exports/share/applications"] {
+        let p = PathBuf::from(extra);
+        if !v.contains(&p) {
+            v.push(p);
+        }
+    }
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,5 +322,49 @@ mod tests {
         assert_eq!(app_name_from_wm_class(b"Navigator\0firefox\0").as_deref(), Some("firefox"));
         assert_eq!(app_name_from_wm_class(b"gnome-terminal\0").as_deref(), Some("gnome-terminal"));
         assert_eq!(app_name_from_wm_class(b"").as_deref(), None);
+    }
+
+    fn desktop(dir: &std::path::Path, file: &str, name: &str, hidden: bool) {
+        let extra = if hidden { "NoDisplay=true\n" } else { "" };
+        std::fs::write(dir.join(file), format!("[Desktop Entry]\nType=Application\nName={name}\nExec=x\n{extra}")).unwrap();
+    }
+
+    #[test]
+    fn finds_snap_firefox_by_suffix_and_apps_by_display_name() {
+        let d = tempfile::tempdir().unwrap();
+        desktop(d.path(), "firefox_firefox.desktop", "Firefox Web Browser", false);
+        desktop(d.path(), "org.gnome.Nautilus.desktop", "Files", false);
+        desktop(d.path(), "gedit.desktop", "Text Editor", false);
+        let dirs = vec![d.path().to_path_buf()];
+        assert_eq!(find_desktop_id("Firefox", &dirs).as_deref(), Some("firefox_firefox"));
+        assert_eq!(find_desktop_id("firefox web browser", &dirs).as_deref(), Some("firefox_firefox"));
+        assert_eq!(find_desktop_id("nautilus", &dirs).as_deref(), Some("org.gnome.Nautilus"));
+        assert_eq!(find_desktop_id("Files", &dirs).as_deref(), Some("org.gnome.Nautilus"));
+        assert_eq!(find_desktop_id("gedit", &dirs).as_deref(), Some("gedit"));
+        assert_eq!(find_desktop_id("chrome", &dirs), None);
+        assert_eq!(find_desktop_id("  ", &dirs), None);
+    }
+
+    #[test]
+    fn exact_id_wins_and_hidden_entries_are_skipped() {
+        let d = tempfile::tempdir().unwrap();
+        desktop(d.path(), "firefox.desktop", "Firefox", false);
+        desktop(d.path(), "firefox_firefox.desktop", "Firefox (snap)", false);
+        desktop(d.path(), "com.aiterm.app.desktop", "AITerm", true);
+        let dirs = vec![d.path().to_path_buf(), d.path().join("missing")];
+        assert_eq!(find_desktop_id("firefox", &dirs).as_deref(), Some("firefox"));
+        assert_eq!(find_desktop_id("AITerm", &dirs), None);
+    }
+
+    #[test]
+    fn application_dirs_follow_xdg_and_add_snap_flatpak() {
+        let v = application_dirs(Some("/home/u"), None, None);
+        assert_eq!(v[0], std::path::PathBuf::from("/home/u/.local/share/applications"));
+        assert!(v.contains(&std::path::PathBuf::from("/usr/share/applications")));
+        assert!(v.contains(&std::path::PathBuf::from("/var/lib/snapd/desktop/applications")));
+        let v = application_dirs(Some("/home/u"), Some("/x/data"), Some("/a:/b"));
+        assert_eq!(v[0], std::path::PathBuf::from("/x/data/applications"));
+        assert_eq!(v[1], std::path::PathBuf::from("/a/applications"));
+        assert_eq!(v[2], std::path::PathBuf::from("/b/applications"));
     }
 }

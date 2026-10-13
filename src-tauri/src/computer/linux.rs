@@ -327,12 +327,12 @@ pub(super) fn tesseract_ocr(png: &[u8]) -> Result<Vec<ScreenText>, String> {
     std::fs::write(&path, png).map_err(|e| xerr("寫入暫存影像失敗", e))?;
     // 語言：中英文都要。沒裝繁中語言包時退回只用英文。
     let run = |lang: &str| {
-        std::process::Command::new("tesseract")
-            .arg(&path)
-            .arg("stdout")
-            .args(["-l", lang, "tsv"])
-            .stdin(Stdio::null())
-            .output()
+        let mut cmd = std::process::Command::new("tesseract");
+        cmd.arg(&path).arg("stdout").args(["-l", lang, "tsv"]).stdin(Stdio::null());
+        // AppImage 的 AppRun 把自帶的舊版 libssl 等放進 LD_LIBRARY_PATH，系統的 tesseract
+        // 會載到它們而起不來（`OPENSSL_3.2.0 not found`，Ubuntu 實測）。
+        crate::appimage_env::strip_appimage_env(&mut cmd);
+        cmd.output()
     };
     let out = run("eng+chi_tra+chi_sim").and_then(|o| if o.status.success() { Ok(o) } else { run("eng") });
     let _ = std::fs::remove_file(&path);
@@ -614,13 +614,7 @@ impl Backend for LinuxBackend {
 
     async fn open_app(&self, name: &str) -> Result<(), String> {
         let name = name.to_string();
-        blocking(move || {
-            // 先試桌面入口（`gtk-launch firefox`：認 .desktop 檔名），不行再直接執行同名程式。
-            // 名稱是獨立參數、沒有經過 shell；呼叫端已拒絕 `-` 開頭、路徑分隔字元與引號。
-            let launched = spawn_detached("gtk-launch", &[&name]).or_else(|_| spawn_detached(&name, &[]));
-            launched.map_err(|e| format!("無法開啟「{name}」：{e}。名稱要和桌面入口或 PATH 裡的程式一致"))
-        })
-        .await
+        blocking(move || open_app_by_name(&name)).await
     }
 
     async fn open_url(&self, url: &str, app: Option<&str>) -> Result<(), String> {
@@ -636,15 +630,37 @@ impl Backend for LinuxBackend {
     }
 }
 
+/// 依名稱開啟 App（X11 與 Wayland 共用）。先找桌面入口（例如 snap 的 Firefox 是 `firefox_firefox`），
+/// 用 `gtk-launch` 啟動並看它的結束碼；找不到入口才直接執行同名程式。
+/// 名稱是獨立參數、沒有經過 shell；呼叫端已拒絕 `-` 開頭、路徑分隔字元與引號。
+pub(super) fn open_app_by_name(name: &str) -> Result<(), String> {
+    let home = std::env::var("HOME").ok();
+    let dirs = linuxmap::application_dirs(
+        home.as_deref(),
+        std::env::var("XDG_DATA_HOME").ok().as_deref(),
+        std::env::var("XDG_DATA_DIRS").ok().as_deref(),
+    );
+    if let Some(id) = linuxmap::find_desktop_id(name, &dirs) {
+        let mut cmd = std::process::Command::new("gtk-launch");
+        cmd.arg(&id).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+        crate::appimage_env::strip_appimage_env(&mut cmd);
+        return match cmd.output() {
+            Ok(o) if o.status.success() => Ok(()),
+            Ok(o) => Err(format!("無法開啟「{name}」（桌面入口 {id}）：{}", String::from_utf8_lossy(&o.stderr).trim())),
+            // 沒有 gtk-launch：退回直接執行同名程式。
+            Err(_) => spawn_detached(name, &[]).map_err(|e| format!("無法開啟「{name}」：{e}")),
+        };
+    }
+    spawn_detached(name, &[]).map_err(|e| format!("找不到「{name}」的桌面入口，也無法直接執行：{e}。請用 App 選單裡顯示的名稱"))
+}
+
 /// 啟動一個行程並不等它結束（它是要被使用者看到的 App，不是子程序）。
 pub(super) fn spawn_detached(program: &str, args: &[&str]) -> std::io::Result<()> {
-    std::process::Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    // 被開啟的是使用者的 App，不能繼承 AppImage 的函式庫路徑（同 `tesseract_ocr`）。
+    crate::appimage_env::strip_appimage_env(&mut cmd);
+    cmd.spawn().map(|_| ())
 }
 
 #[allow(dead_code)]

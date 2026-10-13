@@ -24,7 +24,7 @@ use async_trait::async_trait;
 
 use super::backend::*;
 use super::icons::{detect_icons, Region};
-use super::linux::{spawn_detached, tesseract_ocr};
+use super::linux::{open_app_by_name, spawn_detached, tesseract_ocr};
 use super::{linuxmap, waylandmap as wm, winmap};
 use crate::resident::portal::registered_connection;
 
@@ -489,10 +489,7 @@ impl Backend for WaylandBackend {
 
     async fn open_app(&self, name: &str) -> Result<(), String> {
         let name = name.to_string();
-        tokio::task::spawn_blocking(move || {
-            let launched = spawn_detached("gtk-launch", &[&name]).or_else(|_| spawn_detached(&name, &[]));
-            launched.map_err(|e| format!("無法開啟「{name}」：{e}。名稱要和桌面入口或 PATH 裡的程式一致"))
-        })
+        tokio::task::spawn_blocking(move || open_app_by_name(&name))
         .await
         .map_err(|e| format!("內部錯誤：{e}"))?
     }
