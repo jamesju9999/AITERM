@@ -7,6 +7,7 @@ describe("looksLikeUnfulfilledIntent", () => {
     "讓我先取得 UI 快照以找到景詳的對話。",
     "我來點擊搜尋欄。",
     "接下來我會輸入訊息並送出。",
+    "我已找到 Word 的開始功能表識別碼，現在用這個識別碼啟動 Word。",
     "Let me read the UI snapshot first.",
     "I'll click the search field now:",
   ])("宣告了要做、卻沒呼叫工具：%s", (text) => {

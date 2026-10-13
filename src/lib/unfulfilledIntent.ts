@@ -10,7 +10,7 @@
 const MAX_LENGTH = 200;
 
 // 「讓我／我來／我先／我會／我將／接下來」與英文的 let me／I'll／I will／I am going to。
-const INTENT = /(讓我(?!知道)|我來|我先|我會|我將|接下來|let me(?! know)|i'll |i will |i am going to |i'm going to )/i;
+const INTENT = /(讓我(?!知道)|我來|我先|我會|我將|接下來|現在(?:就|馬上|開始)?(?:用|來|要|將|使用|啟動|開啟|執行|嘗試|試|以)|馬上(?:用|來|就)|now (?:i'll|i will|let me|using)|let me(?! know)|i'll |i will |i am going to |i'm going to )/i;
 
 export function looksLikeUnfulfilledIntent(text: string): boolean {
   const t = text.trim();
