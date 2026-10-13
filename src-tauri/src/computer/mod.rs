@@ -11,7 +11,10 @@ pub mod icons;
 pub mod linuxmap;
 #[cfg(target_os = "linux")]
 pub mod linux_wayland;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "wayland-pipewire"))]
+pub mod pipewire_capture;
+#[cfg(all(target_os = "linux", not(feature = "wayland-pipewire")))]
+#[path = "pipewire_capture_stub.rs"]
 pub mod pipewire_capture;
 pub mod waylandmap;
 #[cfg(target_os = "macos")]

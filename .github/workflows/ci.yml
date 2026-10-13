@@ -233,7 +233,8 @@ jobs:
       - name: Rust tests
         if: matrix.os != 'windows-latest'
         working-directory: src-tauri
-        run: cargo test --workspace --target ${{ matrix.target }}
+        # Linux 多開 wayland-pipewire：ubuntu-latest 的 PipeWire 夠新（AppImage 用的 22.04 不夠，見 Cargo.toml）。
+        run: cargo test --workspace --target ${{ matrix.target }} ${{ startsWith(matrix.os, 'ubuntu') && '--features app/wayland-pipewire' || '' }}
 
   # Produces the caches that release.yml restores. Every field below is aligned
   # with release.yml's build matrix on purpose: swatinem/rust-cache derives its

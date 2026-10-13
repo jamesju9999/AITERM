@@ -399,7 +399,8 @@ jobs:
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           includeUpdaterJson: false
-          args: --target x86_64-unknown-linux-gnu --bundles deb
+          # .deb 在 24.04 建置，PipeWire 夠新，開串流取畫面；AppImage（22.04）不開，見 Cargo.toml。
+          args: --target x86_64-unknown-linux-gnu --bundles deb --features wayland-pipewire
 
       # Ubuntu 22.04 ARM64: AppImage only (works on ARM Ubuntu 22.04+)
       - name: Build (Linux ARM64 AppImage — Ubuntu 22.04)
@@ -532,7 +533,7 @@ jobs:
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           includeUpdaterJson: false
-          args: --target aarch64-unknown-linux-gnu --bundles deb
+          args: --target aarch64-unknown-linux-gnu --bundles deb --features wayland-pipewire
 
   # Six parallel build jobs cannot each write latest.json — the later writer would
   # drop the earlier writer's platform entries. This job is the single writer: it
