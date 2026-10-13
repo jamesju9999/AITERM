@@ -95,6 +95,49 @@ pub fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
     url::Url::parse(uri).ok()?.to_file_path().ok()
 }
 
+/// 具名按鍵 → Linux evdev keycode（`input-event-codes.h`）。portal 的 keysym 注入要由合成器反查鍵盤配置，
+/// Enter 這類功能鍵在 GNOME 上實測會失效（文字有打進去、Enter 沒反應），所以功能鍵與修飾鍵改送實體 keycode。
+/// 一般字元仍用 keysym（才不受鍵盤配置影響）。
+pub fn evdev_keycode(key: &str) -> Option<i32> {
+    Some(match key {
+        "return" => 28,
+        "tab" => 15,
+        "space" => 57,
+        "escape" => 1,
+        "delete" => 14, // 我們的 delete ＝往回刪（BackSpace）
+        "forwarddelete" => 111,
+        "left" => 105,
+        "up" => 103,
+        "right" => 106,
+        "down" => 108,
+        "home" => 102,
+        "end" => 107,
+        "pageup" => 104,
+        "pagedown" => 109,
+        "f11" => 87,
+        "f12" => 88,
+        _ => match key.strip_prefix('f').and_then(|n| n.parse::<i32>().ok()) {
+            Some(n) if (1..=10).contains(&n) => 58 + n, // F1=59 … F10=68
+            _ => return None,
+        },
+    })
+}
+
+/// 修飾鍵的 evdev keycode（左 Ctrl 29、左 Shift 42、左 Alt 56）。`cmd` 在 Linux 當 Ctrl，與 `ctrl` 並用只按一次。
+pub fn modifier_keycodes(cmd: bool, ctrl: bool, alt: bool, shift: bool) -> Vec<i32> {
+    let mut v = Vec::new();
+    if cmd || ctrl {
+        v.push(29);
+    }
+    if alt {
+        v.push(56);
+    }
+    if shift {
+        v.push(42);
+    }
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +231,24 @@ mod tests {
         );
         assert_eq!(file_uri_to_path("https://example.com/a.png"), None);
         assert_eq!(file_uri_to_path(""), None);
+    }
+
+    #[test]
+    fn function_keys_map_to_evdev_codes() {
+        assert_eq!(evdev_keycode("return"), Some(28));
+        assert_eq!(evdev_keycode("delete"), Some(14));
+        assert_eq!(evdev_keycode("forwarddelete"), Some(111));
+        assert_eq!(evdev_keycode("f1"), Some(59));
+        assert_eq!(evdev_keycode("f10"), Some(68));
+        assert_eq!(evdev_keycode("f11"), Some(87));
+        assert_eq!(evdev_keycode("f13"), None);
+        assert_eq!(evdev_keycode("a"), None); // 字元走 keysym
+    }
+
+    #[test]
+    fn modifiers_press_ctrl_once() {
+        assert_eq!(modifier_keycodes(true, true, false, false), vec![29]);
+        assert_eq!(modifier_keycodes(false, true, true, true), vec![29, 56, 42]);
+        assert!(modifier_keycodes(false, false, false, false).is_empty());
     }
 }

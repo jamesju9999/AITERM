@@ -190,6 +190,17 @@ async fn tap_keysym(i: &Input, keysym: u32) -> Result<(), ashpd::Error> {
     key_event(i, keysym, false).await
 }
 
+async fn keycode_event(i: &Input, code: i32, pressed: bool) -> Result<(), ashpd::Error> {
+    let state = if pressed { KeyState::Pressed } else { KeyState::Released };
+    i.remote.notify_keyboard_keycode(&i.session, code, state, Default::default()).await
+}
+
+async fn tap_keycode(i: &Input, code: i32) -> Result<(), ashpd::Error> {
+    keycode_event(i, code, true).await?;
+    tokio::time::sleep(Duration::from_millis(15)).await;
+    keycode_event(i, code, false).await
+}
+
 async fn move_to(i: &Input, x: f64, y: f64) -> Result<(), ashpd::Error> {
     let (sx, sy) = wm::stream_point(x, y, i.pos, i.size);
     i.remote.notify_pointer_motion_absolute(&i.session, i.stream, sx, sy, Default::default()).await
@@ -387,12 +398,12 @@ impl Backend for WaylandBackend {
             let text = text.clone();
             async move {
                 for c in text.chars() {
-                    let keysym = match c {
-                        '\n' | '\r' => 0xff0d,
-                        '\t' => 0xff09,
-                        _ => linuxmap::char_keysym(c),
-                    };
-                    tap_keysym(&i, keysym).await?;
+                    match c {
+                        // 換行與 Tab 是功能鍵：送實體 keycode（見 `wm::evdev_keycode`）。
+                        '\n' | '\r' => tap_keycode(&i, 28).await?,
+                        '\t' => tap_keycode(&i, 15).await?,
+                        _ => tap_keysym(&i, linuxmap::char_keysym(c)).await?,
+                    }
                     tokio::time::sleep(Duration::from_millis(8)).await;
                 }
                 Ok(())
@@ -406,19 +417,27 @@ impl Backend for WaylandBackend {
     }
 
     async fn key(&self, combo: &KeyCombo) -> Result<(), String> {
-        let keysym = linuxmap::keysym_for_key(&combo.key).ok_or_else(|| format!("不支援的按鍵「{}」", combo.key))?;
-        let mods = linuxmap::modifier_keysyms(combo);
+        // 功能鍵送實體 keycode；一般字元（如 ctrl+a 的 a）才用 keysym。修飾鍵一律用 keycode。
+        let code = wm::evdev_keycode(&combo.key);
+        let keysym = match code {
+            Some(_) => 0,
+            None => linuxmap::keysym_for_key(&combo.key).ok_or_else(|| format!("不支援的按鍵「{}」", combo.key))?,
+        };
+        let mods = wm::modifier_keycodes(combo.cmd, combo.ctrl, combo.alt, combo.shift);
         with_input(|i| {
             let mods = mods.clone();
             async move {
                 for m in &mods {
-                    key_event(&i, *m, true).await?;
+                    keycode_event(&i, *m, true).await?;
                 }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                tap_keysym(&i, keysym).await?;
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                match code {
+                    Some(c) => tap_keycode(&i, c).await?,
+                    None => tap_keysym(&i, keysym).await?,
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
                 for m in mods.iter().rev() {
-                    key_event(&i, *m, false).await?;
+                    keycode_event(&i, *m, false).await?;
                 }
                 Ok(())
             }
