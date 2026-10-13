@@ -107,6 +107,8 @@ mod session {
     use tauri::AppHandle;
 
     const SHORTCUT_ID: &str = "toggle-window";
+    /// 與 tauri.conf.json 的 identifier 一致。
+    const APP_ID: &str = "com.aiterm.app";
 
     /// 目前這一份 portal session 的背景工作；換快捷鍵時中止舊的（session 隨之關閉）。
     static CURRENT: Mutex<Option<tauri::async_runtime::JoinHandle<()>>> = Mutex::new(None);
@@ -130,7 +132,17 @@ mod session {
     }
 
     async fn run(app: &AppHandle, hotkey: &str) -> Result<(), ashpd::Error> {
-        let portal = GlobalShortcuts::new().await?;
+        // 非沙盒（deb／AppImage）的程式 portal 認不出身分，GlobalShortcuts 會被拒絕或靜默無效。
+        // 先在「同一條連線」上登記 App ID（登記是跟連線綁的）；失敗不致命，照樣往下試。
+        let connection = ashpd::zbus::Connection::session().await?;
+        match ashpd::AppID::try_from(APP_ID) {
+            Ok(id) => match ashpd::register_host_app_with_connection(connection.clone(), id).await {
+                Ok(()) => log::info!("Wayland 全域快捷鍵：已向 portal 登記 App ID {APP_ID}"),
+                Err(e) => log::warn!("Wayland 全域快捷鍵：登記 App ID 失敗（照常嘗試）：{e}"),
+            },
+            Err(e) => log::warn!("Wayland 全域快捷鍵：App ID 無效：{e}"),
+        }
+        let portal = GlobalShortcuts::with_connection(connection).await?;
         let session = portal.create_session(CreateSessionOptions::default()).await?;
         let mut shortcut = NewShortcut::new(SHORTCUT_ID, "Show / hide AITerm");
         let trigger = super::to_xdg_trigger(hotkey);
