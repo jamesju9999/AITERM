@@ -18,7 +18,9 @@ Ubuntu 25.10 起預設只有 Wayland 工作階段，X11 後端（`linux.rs`）�
 - 桌面可能在截圖時閃光或播放快門聲。
 - 第一次使用要在桌面的授權框按允許（截圖、遠端控制各一次）。
 - 只支援單一螢幕（`select_sources` 不開多選）。
-- 截圖走 Screenshot portal，每次 GNOME 都會閃一下；要消除得改從 ScreenCast 串流（PipeWire）取畫面。
+- 截圖走 Screenshot portal，每次 GNOME 都會閃一下。已改成優先從 ScreenCast 串流經 PipeWire 取最新一格
+  （`pipewire_capture.rs`），但 pipewire-rs 需要比 Ubuntu 22.04 新的標頭，所以是選用 feature `wayland-pipewire`：
+  .deb（24.04 建置）與 CI 開、AppImage（22.04 建置）不開而退回 portal。
 
 ## 實機驗證時修掉的問題（Ubuntu 26，GNOME）
 - portal 回 `An app id is required`：非沙盒程式要有對應的 `.desktop`，並在同一條連線 `register_host_app`。
