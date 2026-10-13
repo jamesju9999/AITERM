@@ -120,7 +120,10 @@ async fn input() -> Result<Arc<Input>, String> {
     if let Some(i) = g.as_ref() {
         return Ok(i.clone());
     }
-    let i = Arc::new(start_input().await?);
+    let i = Arc::new(start_input().await.map_err(|e| {
+        log::warn!("Wayland 遠端控制 session 建立失敗：{e}");
+        e
+    })?);
     *g = Some(i.clone());
     Ok(i)
 }
@@ -180,6 +183,13 @@ struct Grab {
 }
 
 async fn grab() -> Result<Grab, String> {
+    grab_inner().await.map_err(|e| {
+        log::warn!("Wayland 截圖失敗：{e}");
+        e
+    })
+}
+
+async fn grab_inner() -> Result<Grab, String> {
     let conn = registered_connection().await.map_err(|e| perr("無法連線到桌面的 D-Bus", e))?;
     let shot = Screenshot::request()
         .interactive(false)
