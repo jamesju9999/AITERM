@@ -106,11 +106,21 @@ pub fn show_main_window(app: &AppHandle) {
     }
 }
 
-/// 主視窗在 Wayland 上的 `(wl_surface, wl_display)` 指標（轉成整數以便跨執行緒傳遞）。
-/// GNOME 的 portal 只肯對「有父視窗、而且是目前焦點」的程式顯示授權框，所以要把主視窗交給 portal。
-/// 視窗不可見、或不是 Wayland 視窗就回 `None`（portal 會退回沒有父視窗的行為）。
+/// 主視窗的 portal 父視窗資訊。指標轉成整數以便跨執行緒傳遞。
 #[cfg(target_os = "linux")]
-pub async fn main_window_wayland_handles(app: &AppHandle) -> Option<(usize, usize)> {
+#[derive(Debug, Clone, Copy)]
+pub enum ParentHandle {
+    /// 原生 Wayland 視窗：`wl_surface` 與 `wl_display` 指標。
+    Wayland { surface: usize, display: usize },
+    /// X11（含 XWayland）視窗的 XID。Tauri 程式常以 XWayland 執行，portal 認得這種識別碼。
+    X11(u64),
+}
+
+/// 主視窗的 portal 父視窗資訊（見 [`ParentHandle`]）。
+/// GNOME 的 portal 只肯對「有父視窗、而且是目前焦點」的程式顯示授權框，所以要把主視窗交給 portal。
+/// 視窗不可見、或取不到 handle 就回 `None`（portal 會退回沒有父視窗的行為）。
+#[cfg(target_os = "linux")]
+pub async fn main_window_parent_handle(app: &AppHandle) -> Option<ParentHandle> {
     use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
     let win = app.get_webview_window("main")?;
     if !win.is_visible().unwrap_or(false) {
@@ -124,10 +134,16 @@ pub async fn main_window_wayland_handles(app: &AppHandle) -> Option<(usize, usiz
             let wh = w.window_handle().ok()?.as_raw();
             let dh = w.display_handle().ok()?.as_raw();
             match (wh, dh) {
-                (RawWindowHandle::Wayland(s), RawDisplayHandle::Wayland(d)) => {
-                    Some((s.surface.as_ptr() as usize, d.display.as_ptr() as usize))
+                (RawWindowHandle::Wayland(s), RawDisplayHandle::Wayland(d)) => Some(ParentHandle::Wayland {
+                    surface: s.surface.as_ptr() as usize,
+                    display: d.display.as_ptr() as usize,
+                }),
+                (RawWindowHandle::Xlib(x), _) => Some(ParentHandle::X11(x.window as u64)),
+                (RawWindowHandle::Xcb(x), _) => Some(ParentHandle::X11(x.window.get() as u64)),
+                (other, _) => {
+                    log::warn!("主視窗的 handle 種類不認得，portal 不會有父視窗：{other:?}");
+                    None
                 }
-                _ => None,
             }
         })();
         let _ = tx.send(r);

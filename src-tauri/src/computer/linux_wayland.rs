@@ -39,7 +39,12 @@ static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 /// 回傳值要活到請求結束（它被丟掉時會取消匯出）。
 async fn parent_window() -> Option<WindowIdentifier> {
     let app = APP.get()?;
-    let (surface, display) = crate::resident::main_window_wayland_handles(app).await?;
+    let handle = crate::resident::main_window_parent_handle(app).await;
+    log::info!("Wayland portal 父視窗：{handle:?}");
+    let (surface, display) = match handle? {
+        crate::resident::ParentHandle::X11(xid) => return Some(WindowIdentifier::from_xid(xid as std::os::raw::c_ulong)),
+        crate::resident::ParentHandle::Wayland { surface, display } => (surface, display),
+    };
     // `from_wayland_raw` 的 future 握著裸指標、不是 Send，而 Backend 的 future 必須是 Send：
     // 所以放到專用的阻塞執行緒裡跑完，只把（可跨執行緒的）識別碼帶回來。
     let rt = tokio::runtime::Handle::current();
