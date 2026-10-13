@@ -45,6 +45,7 @@ import {
 import type { ProviderType } from "../../ipc/config";
 import { useLocale } from "../../contexts/LocaleContext";
 import "./ProviderForm.css";
+import { ModelCombo } from "./ModelCombo";
 import {
   chatgptWebModels,
   chatgptWebLogin,
@@ -1108,13 +1109,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
             copilotLoading ? (
               <input type="text" value={t.provider_model_loading} disabled />
             ) : copilotModels.length > 0 ? (
-              <select value={model} onChange={(e) => setModel(e.target.value)}>
-                {copilotModels.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
+              <ModelCombo value={model} options={copilotModels} onChange={setModel} />
             ) : (
               <input
                 type="text"
@@ -1127,14 +1122,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
             googleOAuthModelsLoading ? (
               <input type="text" value={t.provider_model_loading} disabled />
             ) : googleOAuthModels.length > 0 ? (
-              <select value={model} onChange={(e) => setModel(e.target.value)}>
-                {!googleOAuthModels.includes(model) && model && (
-                  <option value={model}>{model}</option>
-                )}
-                {googleOAuthModels.map((m) => (
-                  <option key={m} value={m}>{m}</option>
-                ))}
-              </select>
+              <ModelCombo value={model} options={googleOAuthModels} onChange={setModel} />
             ) : (
               // Discovery failed (no token yet, endpoint down, unrecognized
               // response shape...). A <select> with nothing to select is a
@@ -1278,14 +1266,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
             anthropicModelsLoading ? (
               <input type="text" value={t.settings_provider_model_loading_placeholder} disabled />
             ) : (
-              <select value={model} onChange={(e) => setModel(e.target.value)}>
-                {!anthropicModels.includes(model) && model && (
-                  <option value={model}>{model}</option>
-                )}
-                {anthropicModels.map((m) => (
-                  <option key={m} value={m}>{m}</option>
-                ))}
-              </select>
+              <ModelCombo value={model} options={anthropicModels} onChange={setModel} />
             )
           ) : (
             <input

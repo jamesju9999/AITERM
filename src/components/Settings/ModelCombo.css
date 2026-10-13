@@ -1,0 +1,60 @@
+.model-combo {
+  position: relative;
+}
+.model-combo input {
+  background: #1e1e1e;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  color: #e6e6e6;
+  font-size: 13px;
+  line-height: 18px;
+  padding: 7px 30px 7px 10px;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.model-combo input:focus {
+  border-color: #5a8dee;
+}
+.model-combo__toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 30px;
+  height: 100%;
+  border: 0;
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M2.5 4.5L6 8L9.5 4.5' stroke='%23888888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center;
+  cursor: pointer;
+}
+.model-combo__list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  margin: 2px 0 0;
+  padding: 4px 0;
+  list-style: none;
+  overflow-y: auto;
+  background: #252525;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  z-index: 50;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+.model-combo__list--up {
+  top: auto;
+  bottom: 100%;
+  margin: 0 0 2px;
+}
+.model-combo__list li {
+  padding: 6px 10px;
+  font-size: 13px;
+  color: #e6e6e6;
+  cursor: pointer;
+}
+.model-combo__list li:hover {
+  background: #33415c;
+}
+.model-combo__list li.is-selected {
+  color: #7fb0ff;
+}
