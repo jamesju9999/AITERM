@@ -126,7 +126,7 @@ mod session {
     use tauri::AppHandle;
 
     /// 與 tauri.conf.json 的 identifier 一致。
-    const APP_ID: &str = "com.aiterm.app";
+    pub(crate) const APP_ID: &str = "com.aiterm.app";
 
     /// 目前這一份 portal session 的背景工作；換快捷鍵時中止舊的（session 隨之關閉）。
     static CURRENT: Mutex<Option<tauri::async_runtime::JoinHandle<()>>> = Mutex::new(None);
@@ -150,7 +150,7 @@ mod session {
     }
 
     /// 確保 `~/.local/share/applications/<APP_ID>.desktop` 存在且指向目前這個執行檔。
-    fn ensure_desktop_entry() -> std::io::Result<()> {
+    pub(crate) fn ensure_desktop_entry() -> std::io::Result<()> {
         let exe = std::env::var("APPIMAGE")
             .ok()
             .filter(|p| !p.is_empty())
@@ -170,6 +170,20 @@ mod session {
             std::fs::write(&path, content)?;
         }
         Ok(())
+    }
+
+    /// 一條已向 portal 登記 App ID 的 D-Bus 連線（登記跟連線綁定）。電腦操作的 Wayland 後端用它。
+    pub(crate) async fn registered_connection() -> Result<ashpd::zbus::Connection, ashpd::Error> {
+        if let Err(e) = ensure_desktop_entry() {
+            log::warn!("無法寫入 {APP_ID}.desktop：{e}");
+        }
+        let connection = ashpd::zbus::Connection::session().await?;
+        if let Ok(id) = ashpd::AppID::try_from(APP_ID) {
+            if let Err(e) = ashpd::register_host_app_with_connection(connection.clone(), id).await {
+                log::warn!("向 portal 登記 App ID 失敗（照常嘗試）：{e}");
+            }
+        }
+        Ok(connection)
     }
 
     async fn run(app: &AppHandle, hotkey: &str) -> Result<(), ashpd::Error> {
@@ -217,6 +231,8 @@ mod session {
 
 #[cfg(target_os = "linux")]
 pub use session::restart;
+#[cfg(target_os = "linux")]
+pub(crate) use session::registered_connection;
 
 #[cfg(test)]
 mod tests {

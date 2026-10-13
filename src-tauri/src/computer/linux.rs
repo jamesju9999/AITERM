@@ -321,7 +321,7 @@ fn type_unmapped(x: &X, keysym: u32) -> Result<(), String> {
 
 // ── OCR（tesseract）──────────────────────────────────────────────────────────────────
 
-fn tesseract_ocr(png: &[u8]) -> Result<Vec<ScreenText>, String> {
+pub(super) fn tesseract_ocr(png: &[u8]) -> Result<Vec<ScreenText>, String> {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("aiterm-ocr-{}-{}.png", std::process::id(), png.len()));
     std::fs::write(&path, png).map_err(|e| xerr("寫入暫存影像失敗", e))?;
@@ -637,7 +637,7 @@ impl Backend for LinuxBackend {
 }
 
 /// 啟動一個行程並不等它結束（它是要被使用者看到的 App，不是子程序）。
-fn spawn_detached(program: &str, args: &[&str]) -> std::io::Result<()> {
+pub(super) fn spawn_detached(program: &str, args: &[&str]) -> std::io::Result<()> {
     std::process::Command::new(program)
         .args(args)
         .stdin(Stdio::null())

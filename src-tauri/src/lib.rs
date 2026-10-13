@@ -311,7 +311,11 @@ pub fn run() {
                 #[cfg(windows)]
                 let backend: Arc<dyn computer::backend::Backend> = Arc::new(computer::windows::WindowsBackend);
                 #[cfg(target_os = "linux")]
-                let backend: Arc<dyn computer::backend::Backend> = Arc::new(computer::linux::LinuxBackend);
+                let backend: Arc<dyn computer::backend::Backend> = if resident::portal::is_wayland() {
+                    Arc::new(computer::linux_wayland::WaylandBackend)
+                } else {
+                    Arc::new(computer::linux::LinuxBackend)
+                };
                 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
                 let backend: Arc<dyn computer::backend::Backend> = Arc::new(computer::backend::UnsupportedBackend);
                 let cfg = app.state::<Arc<crate::config::ConfigStore>>().inner().clone();
