@@ -140,6 +140,8 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
 # 電腦操作的 Linux（X11）後端：純 Rust 的 X11 通訊（不需要 libxcb 等 C 函式庫），XTEST 送輸入。
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "0.13", features = ["xtest"] }
+# 把主視窗交給 portal 當父視窗用（Tauri 的視窗實作 raw-window-handle 0.6 的 trait）。
+raw-window-handle = "0.6"
 # Wayland 的全域快捷鍵（xdg-desktop-portal GlobalShortcuts）。
 ashpd = { version = "0.13", default-features = false, features = ["tokio", "global_shortcuts", "remote_desktop", "screencast", "screenshot", "wayland"] }
 

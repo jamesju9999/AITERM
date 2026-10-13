@@ -111,7 +111,7 @@ pub fn show_main_window(app: &AppHandle) {
 /// 視窗不可見、或不是 Wayland 視窗就回 `None`（portal 會退回沒有父視窗的行為）。
 #[cfg(target_os = "linux")]
 pub async fn main_window_wayland_handles(app: &AppHandle) -> Option<(usize, usize)> {
-    use tauri::raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
+    use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
     let win = app.get_webview_window("main")?;
     if !win.is_visible().unwrap_or(false) {
         return None;
