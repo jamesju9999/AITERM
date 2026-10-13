@@ -193,7 +193,9 @@ jobs:
             libappindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libssl-dev
+            libssl-dev \
+            libpipewire-0.3-dev \
+            libclang-dev
 
 
       # Setup Java 21 (Temurin) + Maven — needed to build db2sidecar.jar from source (all platforms)

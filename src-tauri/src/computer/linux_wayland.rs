@@ -67,6 +67,8 @@ struct Input {
     stream: u32,
     pos: (i32, i32),
     size: (i32, i32),
+    /// 從同一條螢幕串流直接取畫面（不閃、快）；建不起來就退回截圖 portal。
+    capture: Option<super::pipewire_capture::Capture>,
 }
 
 static INPUT: tokio::sync::Mutex<Option<Arc<Input>>> = tokio::sync::Mutex::const_new(None);
@@ -136,12 +138,34 @@ async fn start_input() -> Result<Input, String> {
     }
     let stream = started.streams().first().ok_or("桌面沒有提供螢幕串流，無法定位滑鼠")?;
     let size = stream.size().ok_or("桌面沒有回報螢幕大小，無法定位滑鼠")?;
+    let node = stream.pipe_wire_node_id();
+    let capture = match screencast.open_pipe_wire_remote(&session, Default::default()).await {
+        Ok(fd) => match tokio::task::spawn_blocking(move || super::pipewire_capture::Capture::start(fd, node)).await {
+            Ok(Ok(c)) => {
+                log::info!("Wayland：改從螢幕串流取畫面（PipeWire node {node}）");
+                Some(c)
+            }
+            Ok(Err(e)) => {
+                log::warn!("Wayland：螢幕串流取畫面失敗，改用截圖 portal：{e}");
+                None
+            }
+            Err(e) => {
+                log::warn!("Wayland：螢幕串流執行緒失敗，改用截圖 portal：{e}");
+                None
+            }
+        },
+        Err(e) => {
+            log::warn!("Wayland：無法開啟 PipeWire 連線，改用截圖 portal：{e}");
+            None
+        }
+    };
     Ok(Input {
         remote,
         session,
-        stream: stream.pipe_wire_node_id(),
+        stream: node,
         pos: stream.position().unwrap_or((0, 0)),
         size,
+        capture,
     })
 }
 
@@ -232,12 +256,15 @@ async fn grab() -> Result<Grab, String> {
 
 /// 讓出畫面：Wayland 不能把別的 App 叫到前景，AITerm 自己的視窗會擋住要看、要點的東西，所以縮到最小。
 /// 使用者可用全域快捷鍵或工作列叫回來；需要授權確認時 AITerm 會自己跳回前景。
-async fn hide_aiterm() {
+/// 回傳是否真的縮了（畫面因此有變）。
+async fn hide_aiterm() -> bool {
     if let Some(app) = APP.get() {
         if crate::resident::minimize_main_window(app) {
             tokio::time::sleep(Duration::from_millis(400)).await; // 等縮小動畫結束，免得截到一半
+            return true;
         }
     }
+    false
 }
 
 async fn show_aiterm() {
@@ -268,26 +295,40 @@ async fn grab_inner() -> Result<Grab, String> {
     // 邏輯大小來自輸入 session 的螢幕串流。先做這一步：第一次要跳遠端控制的授權框，
     // 而 GNOME 只讓前景的 App 跳框，所以要在讓出畫面之前。建不起來就當縮放為 1，
     // 截圖與文字辨識仍可用，只是座標在高 DPI 螢幕上不準。
-    let geo = match input().await {
+    let inp = input().await;
+    let geo = match &inp {
         Ok(i) => Some((i.size, i.pos)),
         Err(e) => {
             log::warn!("Wayland：取不到螢幕邏輯大小，縮放以 1 計：{e}");
             None
         }
     };
-    hide_aiterm().await;
-    let bytes = match screenshot_bytes().await {
-        Ok(b) => b,
-        Err(e) => {
-            // 第一次截圖也要授權框；AITerm 縮著時 GNOME 不讓它跳，叫回前景再試一次。
-            log::info!("Wayland 截圖失敗，叫回 AITerm 再試一次（可能需要授權）：{e}");
-            show_aiterm().await;
-            let b = screenshot_bytes().await?;
-            hide_aiterm().await;
-            b
+    let hid = hide_aiterm().await;
+    // 優先從螢幕串流拿（不閃）。剛縮小 AITerm 時等一下變動後的那一格；否則手上最新的就是現況。
+    let streamed = match inp.as_ref().ok().and_then(|i| i.capture.as_ref()) {
+        Some(c) => {
+            let wait = if hid { Duration::from_millis(300) } else { Duration::ZERO };
+            c.frame(std::time::Instant::now(), wait).await
+        }
+        None => None,
+    };
+    let (w, h, rgba) = match streamed {
+        Some(f) => (f.width, f.height, f.rgba),
+        None => {
+            let bytes = match screenshot_bytes().await {
+                Ok(b) => b,
+                Err(e) => {
+                    // 第一次截圖也要授權框；AITerm 縮著時 GNOME 不讓它跳，叫回前景再試一次。
+                    log::info!("Wayland 截圖失敗，叫回 AITerm 再試一次（可能需要授權）：{e}");
+                    show_aiterm().await;
+                    let b = screenshot_bytes().await?;
+                    hide_aiterm().await;
+                    b
+                }
+            };
+            wm::decode_png_rgba(&bytes)?
         }
     };
-    let (w, h, rgba) = wm::decode_png_rgba(&bytes)?;
     let (scale, origin) = match geo {
         Some((size, pos)) => (wm::scale_factor(w, size.0), (pos.0 as f64, pos.1 as f64)),
         None => (1.0, (0.0, 0.0)),
@@ -366,7 +407,7 @@ impl Backend for WaylandBackend {
 
     async fn activate(&self, _pid: i32) -> Result<(), String> {
         // 沒有切換前景的途徑；能做的是把 AITerm 自己縮起來，讓鍵盤焦點與畫面回到底下的 App。
-        hide_aiterm().await;
+        let _ = hide_aiterm().await;
         Ok(())
     }
 

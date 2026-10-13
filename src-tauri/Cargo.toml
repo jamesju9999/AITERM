@@ -142,6 +142,8 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
 x11rb = { version = "0.13", features = ["xtest"] }
 # 把主視窗交給 portal 當父視窗用（Tauri 的視窗實作 raw-window-handle 0.6 的 trait）。
 raw-window-handle = "0.6"
+# Wayland：從遠端控制附帶的螢幕串流直接取畫面（不經截圖 portal，不閃）。需要 libpipewire-0.3-dev 與 libclang。
+pipewire = "0.10"
 # Wayland 的全域快捷鍵（xdg-desktop-portal GlobalShortcuts）。
 ashpd = { version = "0.13", default-features = false, features = ["tokio", "global_shortcuts", "remote_desktop", "screencast", "screenshot", "wayland"] }
 

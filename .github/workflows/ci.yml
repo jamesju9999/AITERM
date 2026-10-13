@@ -172,7 +172,9 @@ jobs:
             libappindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libssl-dev
+            libssl-dev \
+            libpipewire-0.3-dev \
+            libclang-dev
 
       # `--workspace`, not a bare `cargo test`: `src-tauri/Cargo.toml` is both a
       # package and the workspace root, so a bare `cargo test` there runs ONLY
@@ -350,7 +352,9 @@ jobs:
             libappindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libssl-dev
+            libssl-dev \
+            libpipewire-0.3-dev \
+            libclang-dev
 
       # --release, matching the profile `tauri build` uses. A debug target dir
       # would fill the cache with artifacts the release run cannot reuse.

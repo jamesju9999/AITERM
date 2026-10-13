@@ -138,6 +138,41 @@ pub fn modifier_keycodes(cmd: bool, ctrl: bool, alt: bool, shift: bool) -> Vec<i
     v
 }
 
+/// PipeWire 影格的像素排列（記憶體裡的位元組順序）。帶 alpha 的格式也一律當不透明。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PixelLayout {
+    /// B,G,R,x（也涵蓋 BGRA）
+    Bgrx,
+    /// R,G,B,x（也涵蓋 RGBA）
+    Rgbx,
+    /// x,R,G,B（也涵蓋 ARGB）
+    Xrgb,
+    /// x,B,G,R（也涵蓋 ABGR）
+    Xbgr,
+}
+
+/// 一格影像 → RGBA8。`stride` 是每列的位元組數（可能大於 `width*4`）；資料不夠就回 `None`。
+pub fn frame_to_rgba(layout: PixelLayout, width: u32, height: u32, stride: usize, data: &[u8]) -> Option<Vec<u8>> {
+    let (w, h) = (width as usize, height as usize);
+    if w == 0 || h == 0 || stride < w * 4 || data.len() < stride * (h - 1) + w * 4 {
+        return None;
+    }
+    let (r, g, b) = match layout {
+        PixelLayout::Bgrx => (2, 1, 0),
+        PixelLayout::Rgbx => (0, 1, 2),
+        PixelLayout::Xrgb => (1, 2, 3),
+        PixelLayout::Xbgr => (3, 2, 1),
+    };
+    let mut out = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        let row = &data[y * stride..y * stride + w * 4];
+        for px in row.chunks_exact(4) {
+            out.extend_from_slice(&[px[r], px[g], px[b], 255]);
+        }
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,5 +285,34 @@ mod tests {
         assert_eq!(modifier_keycodes(true, true, false, false), vec![29]);
         assert_eq!(modifier_keycodes(false, true, true, true), vec![29, 56, 42]);
         assert!(modifier_keycodes(false, false, false, false).is_empty());
+    }
+
+    #[test]
+    fn frame_layouts_convert_to_rgba() {
+        // 一個像素 R=10 G=20 B=30。
+        assert_eq!(frame_to_rgba(PixelLayout::Bgrx, 1, 1, 4, &[30, 20, 10, 0]).unwrap(), vec![10, 20, 30, 255]);
+        assert_eq!(frame_to_rgba(PixelLayout::Rgbx, 1, 1, 4, &[10, 20, 30, 7]).unwrap(), vec![10, 20, 30, 255]);
+        assert_eq!(frame_to_rgba(PixelLayout::Xrgb, 1, 1, 4, &[0, 10, 20, 30]).unwrap(), vec![10, 20, 30, 255]);
+        assert_eq!(frame_to_rgba(PixelLayout::Xbgr, 1, 1, 4, &[0, 30, 20, 10]).unwrap(), vec![10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn frame_stride_padding_is_skipped() {
+        // 2×2，每列多 4 個位元組的填充（stride 12）。
+        let data = [
+            1, 2, 3, 0, 4, 5, 6, 0, 99, 99, 99, 99, //
+            7, 8, 9, 0, 10, 11, 12, 0, 99, 99, 99, 99,
+        ];
+        let out = frame_to_rgba(PixelLayout::Rgbx, 2, 2, 12, &data).unwrap();
+        assert_eq!(out, vec![1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255]);
+        // 最後一列不需要填充也算夠。
+        assert!(frame_to_rgba(PixelLayout::Rgbx, 2, 2, 12, &data[..20]).is_some());
+    }
+
+    #[test]
+    fn short_or_bad_frames_are_rejected() {
+        assert!(frame_to_rgba(PixelLayout::Rgbx, 2, 2, 8, &[0; 15]).is_none());
+        assert!(frame_to_rgba(PixelLayout::Rgbx, 2, 2, 4, &[0; 64]).is_none()); // stride 比一列還短
+        assert!(frame_to_rgba(PixelLayout::Rgbx, 0, 2, 8, &[0; 64]).is_none());
     }
 }
