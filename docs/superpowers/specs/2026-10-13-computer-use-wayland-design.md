@@ -18,4 +18,12 @@ Ubuntu 25.10 起預設只有 Wayland 工作階段，X11 後端（`linux.rs`）�
 - 桌面可能在截圖時閃光或播放快門聲。
 - 第一次使用要在桌面的授權框按允許（截圖、遠端控制各一次）。
 - 只支援單一螢幕（`select_sources` 不開多選）。
-- 只通過 x86_64-unknown-linux-gnu 型別檢查與純邏輯測試，尚未在實際 Wayland 桌面驗證。
+- 截圖走 Screenshot portal，每次 GNOME 都會閃一下；要消除得改從 ScreenCast 串流（PipeWire）取畫面。
+
+## 實機驗證時修掉的問題（Ubuntu 26，GNOME）
+- portal 回 `An app id is required`：非沙盒程式要有對應的 `.desktop`，並在同一條連線 `register_host_app`。
+- 授權框不跳（`Only the focused app is allowed to show a system access dialog`）：要傳父視窗。Tauri 在
+  GNOME Wayland 上跑在 XWayland，handle 是 X11，要用 `WindowIdentifier::from_xid`。
+- AI 看不到目標 App：AITerm 自己的視窗擋住畫面 → 動作與截圖前把主視窗縮小。
+- tesseract `OPENSSL_3.2.0 not found`、開 App 靜默失敗：AppImage 的 `LD_LIBRARY_PATH` → `strip_appimage_env`。
+- Enter 以 keysym 送出沒反應 → 功能鍵與修飾鍵改送 evdev keycode。

@@ -10,7 +10,8 @@
 //! 共用邏輯會因此判定資訊很少而引導模型改用 `computer_read_screen`／`computer_click_text`。
 //! 純邏輯見 `waylandmap.rs`。
 //!
-//! **這份程式碼在開發當下只通過型別檢查（x86_64-unknown-linux-gnu），尚未在真實的 Wayland 桌面執行。**
+//! 已在 Ubuntu（GNOME、Wayland）實機驗證。踩過的坑（app id 登記、父視窗要用 XWayland 的 XID、
+//! AITerm 擋住畫面、Enter 要送 keycode）見 docs/superpowers/specs/2026-10-13-computer-use-wayland-design.md。
 
 use std::sync::Arc;
 use std::time::Duration;
