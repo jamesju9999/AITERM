@@ -125,6 +125,13 @@ pub fn hide_main_window_for_close(app: tauri::AppHandle) -> bool {
     crate::resident::hide_for_close(&app)
 }
 
+/// Ask AI 用過電腦操作工具、這一輪結束時：把 AITerm 叫回前景，讓使用者看到結果
+/// （操作期間 AITerm 被目標 App 壓在後面，Wayland 上更是被我們自己縮小了）。
+#[tauri::command]
+pub fn show_main_window_after_task(app: tauri::AppHandle) {
+    crate::resident::show_main_window(&app);
+}
+
 /// 語系改變時更新托盤選單文字。
 #[tauri::command]
 pub fn set_tray_labels(show: String, new_tab: String, quit: String, app: tauri::AppHandle) -> Result<(), String> {

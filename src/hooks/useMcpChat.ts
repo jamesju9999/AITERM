@@ -5,6 +5,7 @@ import { unlistenOnCleanup } from "../lib/eventSubscription";
 import { abortAi, aiChat, formatAiError, type AiToolCall, type AiError, type ToolFallbackReason } from "../ipc/ai";
 import { executeMcpTool } from "../ipc/mcp";
 import { terminalCommandGate } from "../ipc/computer";
+import { showMainWindowAfterTask } from "../ipc/resident";
 import type { ChatMessage } from "../ipc/ai";
 import { buildContentParts, contentToDisplayString } from "../types/attachment";
 import type { Attachment } from "../types/attachment";
@@ -19,6 +20,8 @@ const DEFAULT_MAX_TOOL_ITERATIONS = 10;
 export const TERMINAL_TOOL_NAME = "aiterm_terminal__run_command";
 // 模型只宣告動作卻沒呼叫工具時，最多催幾次。
 const MAX_INTENT_NUDGES = 2;
+/** 內建電腦操作工具的名稱前綴（Rust `computer::tools`：`aiterm_computer__computer_click` 等）。 */
+const COMPUTER_TOOL_PREFIX = "aiterm_computer__";
 const SESSIONS_STORAGE_KEY = "aiterm-mcp-chat-sessions";
 
 function loadAllSessions(): McpChatSession[] {
@@ -155,6 +158,9 @@ export function useMcpChat(
       { role: "user", content: userContent },
     ];
 
+    // 這一輪有沒有呼叫電腦操作工具：有的話，結束（含出錯、被停止）時把 AITerm 叫回前景，
+    // 使用者才看得到結果——操作期間 AITerm 被目標 App 壓在後面（Wayland 上是被縮小）。
+    let usedComputer = false;
     try {
       let iterHistory = [...history];
       let iterations = 0;
@@ -173,6 +179,7 @@ export function useMcpChat(
 
         // Handle tool calls
         if (reply.tool_calls.length > 0) {
+          if (reply.tool_calls.some(tc => tc.tool_name.startsWith(COMPUTER_TOOL_PREFIX))) usedComputer = true;
           for (const tc of reply.tool_calls) {
             if (stale()) return;
             setMessages(prev => [...prev, {
@@ -309,6 +316,7 @@ export function useMcpChat(
         setError(isAiError ? formatAiError(e as AiError) : String(e));
       }
     } finally {
+      if (usedComputer && mountedRef.current) void showMainWindowAfterTask();
       // 只有「這一輪還有效」才收尾；被停止或被取代的，狀態已由 stop()／新的一輪接手。
       if (!stale()) {
         loadingRef.current = false;

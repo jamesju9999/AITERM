@@ -13,6 +13,9 @@ vi.mock("../ipc/mcp", () => ({
 vi.mock("../ipc/computer", () => ({
   terminalCommandGate: vi.fn(),
 }));
+vi.mock("../ipc/resident", () => ({
+  showMainWindowAfterTask: vi.fn(() => Promise.resolve()),
+}));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
 }));
@@ -21,6 +24,7 @@ import { renderHook, act } from "@testing-library/react";
 import { aiChat, abortAi } from "../ipc/ai";
 import { executeMcpTool } from "../ipc/mcp";
 import { terminalCommandGate } from "../ipc/computer";
+import { showMainWindowAfterTask } from "../ipc/resident";
 import { useMcpChat } from "./useMcpChat";
 import { LocaleProvider } from "../contexts/LocaleContext";
 
@@ -357,6 +361,49 @@ describe("useMcpChat", () => {
       await act(async () => { await result.current.sendMessage("x", true); });
       expect(result.current.error).toBeNull();
       expect(result.current.messages.find((m) => m.role === "tool_result")?.is_error).toBe(true);
+    });
+  });
+
+  describe("用過電腦操作工具，結束時把 AITerm 叫回前景", () => {
+    const call = (name: string) => ({
+      content: null,
+      tool_calls: [{ id: "c1", tool_name: name, server_id: "x", args: {} }],
+      tool_calling_unsupported: false,
+    });
+    const done = { content: "完成。", tool_calls: [], tool_calling_unsupported: false };
+
+    it("呼叫過 computer 工具：結束時叫回一次", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(showMainWindowAfterTask).mockClear();
+      vi.mocked(executeMcpTool).mockResolvedValue({ content: "ok", is_error: false });
+      vi.mocked(aiChat).mockResolvedValueOnce(call("aiterm_computer__computer_click")).mockResolvedValueOnce(done);
+      const { result } = renderHook(() => useMcpChat("session-front"), { wrapper: LocaleProvider });
+      await act(async () => { await result.current.sendMessage("點一下", true); });
+      expect(showMainWindowAfterTask).toHaveBeenCalledTimes(1);
+    });
+
+    it("只用其他工具或沒用工具：不動視窗", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(showMainWindowAfterTask).mockClear();
+      vi.mocked(executeMcpTool).mockResolvedValue({ content: "ok", is_error: false });
+      vi.mocked(aiChat).mockResolvedValueOnce(call("github__search")).mockResolvedValueOnce(done);
+      const { result } = renderHook(() => useMcpChat("session-front2"), { wrapper: LocaleProvider });
+      await act(async () => { await result.current.sendMessage("查一下", true); });
+      vi.mocked(aiChat).mockResolvedValueOnce(done);
+      await act(async () => { await result.current.sendMessage("謝謝", true); });
+      expect(showMainWindowAfterTask).not.toHaveBeenCalled();
+    });
+
+    it("出錯結束也會叫回", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(showMainWindowAfterTask).mockClear();
+      vi.mocked(executeMcpTool).mockResolvedValue({ content: "ok", is_error: false });
+      vi.mocked(aiChat)
+        .mockResolvedValueOnce(call("aiterm_computer__computer_type"))
+        .mockRejectedValueOnce(new Error("boom"));
+      const { result } = renderHook(() => useMcpChat("session-front3"), { wrapper: LocaleProvider });
+      await act(async () => { await result.current.sendMessage("打字", true); });
+      expect(showMainWindowAfterTask).toHaveBeenCalledTimes(1);
     });
   });
 });

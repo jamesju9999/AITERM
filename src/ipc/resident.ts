@@ -24,6 +24,15 @@ export async function hideMainWindowForClose(): Promise<boolean> {
   }
 }
 
+/** 把 AITerm 叫回前景（Ask AI 用過電腦操作工具、這一輪結束時）。失敗只記錄，不影響對話。 */
+export async function showMainWindowAfterTask(): Promise<void> {
+  try {
+    await invoke("show_main_window_after_task");
+  } catch (e) {
+    console.error("show_main_window_after_task 失敗:", e);
+  }
+}
+
 /** 更新托盤選單的三個項目文字（顯示／新分頁／結束），語系改變時呼叫。 */
 export const setTrayLabels = (show: string, newTab: string, quit: string): Promise<void> =>
   invoke("set_tray_labels", { show, newTab, quit });

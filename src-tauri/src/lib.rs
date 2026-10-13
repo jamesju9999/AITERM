@@ -552,6 +552,7 @@ pub fn run() {
             commands::config::set_keep_in_tray,
             commands::config::set_autostart,
             commands::config::hide_main_window_for_close,
+            commands::config::show_main_window_after_task,
             commands::config::set_tray_labels,
             commands::computer::computer_status,
             commands::computer::computer_revoke_app,
