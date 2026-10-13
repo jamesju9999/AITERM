@@ -312,7 +312,7 @@ pub fn run() {
                 let backend: Arc<dyn computer::backend::Backend> = Arc::new(computer::windows::WindowsBackend);
                 #[cfg(target_os = "linux")]
                 let backend: Arc<dyn computer::backend::Backend> = if resident::portal::is_wayland() {
-                    Arc::new(computer::linux_wayland::WaylandBackend)
+                    Arc::new(computer::linux_wayland::WaylandBackend::new(app.handle().clone()))
                 } else {
                     Arc::new(computer::linux::LinuxBackend)
                 };

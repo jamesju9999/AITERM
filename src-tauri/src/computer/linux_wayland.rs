@@ -19,6 +19,7 @@ use ashpd::desktop::remote_desktop::{DeviceType, KeyState, RemoteDesktop, Select
 use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
 use ashpd::desktop::screenshot::Screenshot;
 use ashpd::desktop::{PersistMode, Session};
+use ashpd::WindowIdentifier;
 use async_trait::async_trait;
 
 use super::backend::*;
@@ -29,6 +30,28 @@ use crate::resident::portal::registered_connection;
 
 fn perr(what: &str, e: impl std::fmt::Display) -> String {
     format!("{what}：{e}")
+}
+
+static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+/// AITerm 主視窗的 portal 父視窗識別碼。GNOME 只肯對「有父視窗且為焦點」的程式顯示授權框
+/// （沒有的話 portal 記錄 `Only the focused app is allowed to show a system access dialog`，請求直接失敗）。
+/// 回傳值要活到請求結束（它被丟掉時會取消匯出）。
+async fn parent_window() -> Option<WindowIdentifier> {
+    let app = APP.get()?;
+    let (surface, display) = crate::resident::main_window_wayland_handles(app).await?;
+    // `from_wayland_raw` 的 future 握著裸指標、不是 Send，而 Backend 的 future 必須是 Send：
+    // 所以放到專用的阻塞執行緒裡跑完，只把（可跨執行緒的）識別碼帶回來。
+    let rt = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        // SAFETY：指標剛從還活著的主視窗取得；Tauri 在整個程式生命週期都持有該視窗與顯示連線。
+        rt.block_on(unsafe {
+            WindowIdentifier::from_wayland_raw(surface as *mut std::ffi::c_void, display as *mut std::ffi::c_void)
+        })
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// 一個已啟動的 RemoteDesktop＋ScreenCast session 與它的螢幕座標系。
@@ -95,8 +118,9 @@ async fn start_input() -> Result<Input, String> {
         .map_err(|e| perr("select_sources 失敗", e))?
         .response()
         .map_err(|e| perr("select_sources 被拒絕", e))?;
+    let parent = parent_window().await;
     let started = remote
-        .start(&session, None, Default::default())
+        .start(&session, parent.as_ref(), Default::default())
         .await
         .map_err(|e| perr("啟動遠端控制失敗", e))?
         .response()
@@ -193,6 +217,7 @@ async fn grab_inner() -> Result<Grab, String> {
     let conn = registered_connection().await.map_err(|e| perr("無法連線到桌面的 D-Bus", e))?;
     let shot = Screenshot::request()
         .interactive(false)
+        .identifier(parent_window().await)
         .connection(Some(conn))
         .send()
         .await
@@ -218,6 +243,13 @@ async fn grab_inner() -> Result<Grab, String> {
 // ── Backend ──────────────────────────────────────────────────────────────────────────
 
 pub struct WaylandBackend;
+
+impl WaylandBackend {
+    pub fn new(app: tauri::AppHandle) -> Self {
+        let _ = APP.set(app);
+        Self
+    }
+}
 
 #[async_trait]
 impl Backend for WaylandBackend {

@@ -106,6 +106,36 @@ pub fn show_main_window(app: &AppHandle) {
     }
 }
 
+/// 主視窗在 Wayland 上的 `(wl_surface, wl_display)` 指標（轉成整數以便跨執行緒傳遞）。
+/// GNOME 的 portal 只肯對「有父視窗、而且是目前焦點」的程式顯示授權框，所以要把主視窗交給 portal。
+/// 視窗不可見、或不是 Wayland 視窗就回 `None`（portal 會退回沒有父視窗的行為）。
+#[cfg(target_os = "linux")]
+pub async fn main_window_wayland_handles(app: &AppHandle) -> Option<(usize, usize)> {
+    use tauri::raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
+    let win = app.get_webview_window("main")?;
+    if !win.is_visible().unwrap_or(false) {
+        return None;
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let w = win.clone();
+    // 視窗與顯示的 handle 要在主執行緒取。
+    app.run_on_main_thread(move || {
+        let r = (|| {
+            let wh = w.window_handle().ok()?.as_raw();
+            let dh = w.display_handle().ok()?.as_raw();
+            match (wh, dh) {
+                (RawWindowHandle::Wayland(s), RawDisplayHandle::Wayland(d)) => {
+                    Some((s.surface.as_ptr() as usize, d.display.as_ptr() as usize))
+                }
+                _ => None,
+            }
+        })();
+        let _ = tx.send(r);
+    })
+    .ok()?;
+    rx.await.ok()?
+}
+
 pub fn toggle_main_window(app: &AppHandle) {
     let Some(w) = app.get_webview_window("main") else { return };
     let action = decide_toggle(
