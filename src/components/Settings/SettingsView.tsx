@@ -155,7 +155,13 @@ export function SettingsView() {
         </button>
       </nav>
 
-      {/* Content */}
+      {/*
+        Content. 頂端那條拖曳條是 .settings-content 的兄弟、不是子元素：它不
+        跟著捲動，所以不會跟捲動或選字打架（上面說不放在 .settings-content
+        的理由）。高度正好取代原本的 padding-top，畫面不變。
+      */}
+      <div className="settings-main">
+      <div className="settings-content-drag" data-tauri-drag-region />
       <main className="settings-content">
         {tab === "general" && <GeneralPage />}
         {tab === "providers" && <ProvidersPage />}
@@ -171,6 +177,7 @@ export function SettingsView() {
         {tab === "enterprise" && <EnterprisePage />}
         {tab === "about" && <AboutPage />}
       </main>
+      </div>
     </div>
   );
 }

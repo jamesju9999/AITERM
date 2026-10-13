@@ -55,4 +55,13 @@ describe("設定頁的視窗拖曳區", () => {
     expect(title).not.toBeNull();
     expect(title).toHaveAttribute("data-tauri-drag-region");
   });
+  // 右側內容區最上緣那條空白也要能拖：它是使用者在其他 App 習慣去抓標題列的
+  // 位置。拖曳條是 .settings-content 之外的兄弟元素，不跟著捲動，所以不會跟
+  // 捲動或選字打架。
+  it("內容區頂端有一條不跟著捲動的拖曳條", () => {
+    const strip = renderSettings().querySelector(".settings-content-drag");
+    expect(strip).not.toBeNull();
+    expect(strip).toHaveAttribute("data-tauri-drag-region");
+    expect(strip!.closest(".settings-content")).toBeNull();
+  });
 });
