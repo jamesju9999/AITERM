@@ -90,6 +90,15 @@ fn keysym(k: &str) -> Option<String> {
     Some(name.to_string())
 }
 
+/// portal 用 App ID 找對應的 `<id>.desktop` 才認得出呼叫者。AppImage 不會裝 .desktop，
+/// deb 的檔名又不是這個 ID，所以自己在使用者的 applications 目錄寫一份（隱藏，不進選單）。
+pub fn desktop_entry_content(exec: &str) -> String {
+    let exec = exec.replace('\\', "\\\\").replace('"', "\\\"");
+    format!(
+        "[Desktop Entry]\nType=Application\nName=AITerm\nExec=\"{exec}\"\nTerminal=false\nNoDisplay=true\n"
+    )
+}
+
 /// 目前是不是 Wayland 工作階段。
 #[cfg(target_os = "linux")]
 pub fn is_wayland() -> bool {
@@ -131,9 +140,35 @@ mod session {
         }));
     }
 
+    /// 確保 `~/.local/share/applications/<APP_ID>.desktop` 存在且指向目前這個執行檔。
+    fn ensure_desktop_entry() -> std::io::Result<()> {
+        let exe = std::env::var("APPIMAGE")
+            .ok()
+            .filter(|p| !p.is_empty())
+            .map(std::path::PathBuf::from)
+            .map(Ok)
+            .unwrap_or_else(std::env::current_exe)?;
+        let data = std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share")))
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no HOME"))?;
+        let dir = data.join("applications");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{APP_ID}.desktop"));
+        let content = super::desktop_entry_content(&exe.to_string_lossy());
+        if std::fs::read_to_string(&path).map_or(true, |old| old != content) {
+            std::fs::write(&path, content)?;
+        }
+        Ok(())
+    }
+
     async fn run(app: &AppHandle, hotkey: &str) -> Result<(), ashpd::Error> {
         // 非沙盒（deb／AppImage）的程式 portal 認不出身分，GlobalShortcuts 會被拒絕或靜默無效。
         // 先在「同一條連線」上登記 App ID（登記是跟連線綁的）；失敗不致命，照樣往下試。
+        if let Err(e) = ensure_desktop_entry() {
+            log::warn!("Wayland 全域快捷鍵：無法寫入 {APP_ID}.desktop：{e}");
+        }
         let connection = ashpd::zbus::Connection::session().await?;
         match ashpd::AppID::try_from(APP_ID) {
             Ok(id) => match ashpd::register_host_app_with_connection(connection.clone(), id).await {
@@ -183,6 +218,13 @@ mod tests {
         assert_eq!(to_xdg_trigger("Super+A").as_deref(), Some("LOGO+a"));
         assert_eq!(to_xdg_trigger("Ctrl+Alt+1").as_deref(), Some("CTRL+ALT+1"));
         assert_eq!(to_xdg_trigger("Ctrl+PageUp").as_deref(), Some("CTRL+Page_Up"));
+    }
+
+    #[test]
+    fn desktop_entry_quotes_exec_path() {
+        let c = desktop_entry_content("/home/a b/AITerm \"x\".AppImage");
+        assert!(c.contains("Exec=\"/home/a b/AITerm \\\"x\\\".AppImage\"\n"), "{c}");
+        assert!(c.contains("NoDisplay=true"));
     }
 
     #[test]
