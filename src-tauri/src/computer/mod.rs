@@ -213,7 +213,12 @@ impl ComputerService {
             return Ok(app);
         }
         let apps = self.fetch_apps().await?;
-        find(&apps).ok_or_else(|| {
+        // 只有「整個桌面」可操作的環境（Wayland）：模型照習慣講 App 名稱（如 Firefox）時，指的就是這個畫面。
+        let whole_desktop = || match apps.as_slice() {
+            [only] if only.pid == backend::WHOLE_DESKTOP_PID => Some(only.clone()),
+            _ => None,
+        };
+        find(&apps).or_else(whole_desktop).ok_or_else(|| {
             let names: Vec<&str> = apps.iter().map(|a| a.name.as_str()).collect();
             format!("找不到 App「{query}」。目前可操作的有：{}", names.join("、"))
         })

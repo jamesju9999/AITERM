@@ -6,6 +6,9 @@ use async_trait::async_trait;
 use super::icons::Region;
 use serde::Serialize;
 
+/// 「整個桌面」這個虛擬 App 的 pid（Wayland 沒有 App 清單，只能操作整個畫面）。
+pub const WHOLE_DESKTOP_PID: i32 = -1;
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct AppInfo {
     /// 行程名稱（可執行檔名，如 `TextEdit`、`Notes`），與舊版 osascript 清單相同，模型與使用者最常用的叫法。

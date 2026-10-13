@@ -28,6 +28,8 @@ struct FakeBackend {
     icons: Mutex<Vec<IconRect>>,
     /// 設定後模擬「這個環境不能用」（例如 Wayland）。
     reason: Mutex<Option<String>>,
+    /// 模擬 Wayland：App 清單只有「整個桌面」。
+    only_desktop: std::sync::atomic::AtomicBool,
 }
 
 fn st(text: &str, x: f64, y: f64) -> ScreenText {
@@ -48,6 +50,7 @@ impl FakeBackend {
             screen_text: Mutex::new(vec![]),
             icons: Mutex::new(vec![]),
             reason: Mutex::new(None),
+            only_desktop: Default::default(),
         })
     }
     fn calls(&self) -> Vec<String> {
@@ -73,6 +76,9 @@ impl Backend for FakeBackend {
     fn unsupported_reason(&self) -> Option<String> { self.reason.lock().clone() }
     async fn list_apps(&self) -> Result<Vec<AppInfo>, String> {
         self.list_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.only_desktop.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(vec![AppInfo { name: "Desktop".into(), localized: Some("桌面".into()), bundle_id: Some("wayland-desktop".into()), pid: WHOLE_DESKTOP_PID, frontmost: true }]);
+        }
         Ok(vec![
             AppInfo { name: "AITerm".into(), localized: None, bundle_id: Some("com.aiterm.app".into()), pid: OWN_PID, frontmost: false },
             AppInfo { name: "Notes".into(), localized: Some("備忘錄".into()), bundle_id: Some("com.apple.Notes".into()), pid: 42, frontmost: true },
@@ -288,6 +294,7 @@ async fn missing_permissions_are_reported_before_anything_else() {
         screen_text: Mutex::new(vec![]),
         icons: Mutex::new(vec![]),
         reason: Mutex::new(None),
+        only_desktop: Default::default(),
     });
     let r = rig_with(b, true, &[Decision::AllowAlways]);
     assert!(r.svc.snapshot("Notes", None).await.unwrap_err().contains("輔助使用"));
@@ -827,6 +834,7 @@ async fn read_screen_lists_text_with_coordinates_top_to_bottom_and_needs_screen_
         screen_text: Mutex::new(vec![]),
         icons: Mutex::new(vec![]),
         reason: Mutex::new(None),
+        only_desktop: Default::default(),
     });
     let r2 = rig_with(b2, true, &[Decision::AllowAlways]);
     assert!(r2.svc.read_screen("Notes").await.unwrap_err().contains("螢幕錄製"));
@@ -1418,4 +1426,21 @@ async fn an_unusable_environment_is_explained_by_every_tool_before_anything_else
     must(r.svc.screenshot(None).await.unwrap_err());
     assert!(r.approver.asked().is_empty(), "不能用的環境不該先打擾使用者");
     assert!(r.backend.calls().is_empty());
+}
+
+#[tokio::test]
+async fn whole_desktop_environment_accepts_any_app_name() {
+    // Wayland：App 清單只有「整個桌面」，模型講 Firefox 時指的就是這個畫面，不該回「找不到 App」。
+    let r = rig(&[Decision::AllowOnce]);
+    r.backend.only_desktop.store(true, std::sync::atomic::Ordering::SeqCst);
+    *r.backend.screen_text.lock() = vec![st("2TB SSD", 100.0, 60.0)];
+    let out = text(r.svc.read_screen("Firefox").await.unwrap());
+    assert!(out.contains("2TB SSD"), "{out}");
+}
+
+#[tokio::test]
+async fn unknown_app_is_still_an_error_when_real_apps_exist() {
+    let r = rig(&[]);
+    let err = r.svc.read_screen("Firefox").await.unwrap_err();
+    assert!(err.contains("找不到 App"), "{err}");
 }

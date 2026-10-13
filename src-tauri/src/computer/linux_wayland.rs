@@ -27,9 +27,6 @@ use super::linux::{spawn_detached, tesseract_ocr};
 use super::{linuxmap, waylandmap as wm, winmap};
 use crate::resident::portal::registered_connection;
 
-/// 虛擬 App 的 pid。不會和真實行程撞到（pid 不可能為負）。
-const DESKTOP_PID: i32 = -1;
-
 fn perr(what: &str, e: impl std::fmt::Display) -> String {
     format!("{what}：{e}")
 }
@@ -224,7 +221,7 @@ impl Backend for WaylandBackend {
             name: "Desktop".to_string(),
             localized: Some("桌面".to_string()),
             bundle_id: Some("wayland-desktop".to_string()),
-            pid: DESKTOP_PID,
+            pid: WHOLE_DESKTOP_PID,
             frontmost: true,
         }])
     }
