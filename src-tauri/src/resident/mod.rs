@@ -97,6 +97,16 @@ pub fn should_start_hidden(args: &[String], tray_ok: bool) -> bool {
     tray_ok && args.iter().any(|a| a == MINIMIZED_FLAG)
 }
 
+/// 把主視窗縮到最小；原本就看不到或已縮小則不動。回傳是否真的縮了。
+/// Wayland 的電腦操作用它讓出畫面（那裡無法把別的 App 叫到前景，AITerm 會擋住要看的東西）。
+pub fn minimize_main_window(app: &AppHandle) -> bool {
+    let Some(w) = app.get_webview_window("main") else { return false };
+    if !w.is_visible().unwrap_or(false) || w.is_minimized().unwrap_or(false) {
+        return false;
+    }
+    w.minimize().is_ok()
+}
+
 pub fn show_main_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();

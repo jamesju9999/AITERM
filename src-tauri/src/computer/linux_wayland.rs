@@ -218,7 +218,24 @@ async fn grab() -> Result<Grab, String> {
     })
 }
 
-async fn grab_inner() -> Result<Grab, String> {
+/// 讓出畫面：Wayland 不能把別的 App 叫到前景，AITerm 自己的視窗會擋住要看、要點的東西，所以縮到最小。
+/// 使用者可用全域快捷鍵或工作列叫回來；需要授權確認時 AITerm 會自己跳回前景。
+async fn hide_aiterm() {
+    if let Some(app) = APP.get() {
+        if crate::resident::minimize_main_window(app) {
+            tokio::time::sleep(Duration::from_millis(400)).await; // 等縮小動畫結束，免得截到一半
+        }
+    }
+}
+
+async fn show_aiterm() {
+    if let Some(app) = APP.get() {
+        crate::resident::show_main_window(app);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+}
+
+async fn screenshot_bytes() -> Result<Vec<u8>, String> {
     let conn = registered_connection().await.map_err(|e| perr("無法連線到桌面的 D-Bus", e))?;
     let shot = Screenshot::request()
         .interactive(false)
@@ -232,15 +249,36 @@ async fn grab_inner() -> Result<Grab, String> {
     let path = wm::file_uri_to_path(shot.uri().as_str()).ok_or("portal 回傳的截圖位置不是本機檔案")?;
     let bytes = std::fs::read(&path).map_err(|e| perr("讀取截圖失敗", e))?;
     let _ = std::fs::remove_file(&path); // portal 把截圖存在圖片資料夾；用完就刪，不留垃圾
-    let (w, h, rgba) = wm::decode_png_rgba(&bytes)?;
-    // 邏輯大小來自輸入 session 的螢幕串流；它建不起來（例如使用者拒絕遠端控制）就當縮放為 1，
+    Ok(bytes)
+}
+
+async fn grab_inner() -> Result<Grab, String> {
+    // 邏輯大小來自輸入 session 的螢幕串流。先做這一步：第一次要跳遠端控制的授權框，
+    // 而 GNOME 只讓前景的 App 跳框，所以要在讓出畫面之前。建不起來就當縮放為 1，
     // 截圖與文字辨識仍可用，只是座標在高 DPI 螢幕上不準。
-    let (scale, origin) = match input().await {
-        Ok(i) => (wm::scale_factor(w, i.size.0), (i.pos.0 as f64, i.pos.1 as f64)),
+    let geo = match input().await {
+        Ok(i) => Some((i.size, i.pos)),
         Err(e) => {
             log::warn!("Wayland：取不到螢幕邏輯大小，縮放以 1 計：{e}");
-            (1.0, (0.0, 0.0))
+            None
         }
+    };
+    hide_aiterm().await;
+    let bytes = match screenshot_bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            // 第一次截圖也要授權框；AITerm 縮著時 GNOME 不讓它跳，叫回前景再試一次。
+            log::info!("Wayland 截圖失敗，叫回 AITerm 再試一次（可能需要授權）：{e}");
+            show_aiterm().await;
+            let b = screenshot_bytes().await?;
+            hide_aiterm().await;
+            b
+        }
+    };
+    let (w, h, rgba) = wm::decode_png_rgba(&bytes)?;
+    let (scale, origin) = match geo {
+        Some((size, pos)) => (wm::scale_factor(w, size.0), (pos.0 as f64, pos.1 as f64)),
+        None => (1.0, (0.0, 0.0)),
     };
     Ok(Grab { w, h, rgba, scale, origin })
 }
@@ -274,8 +312,10 @@ impl Backend for WaylandBackend {
     }
 
     async fn snapshot(&self, _pid: i32, _max_depth: usize) -> Result<ElementNode, String> {
-        let g = grab().await?;
-        let (w, h) = (g.w as f64 / g.scale, g.h as f64 / g.scale);
+        // 只需要螢幕大小，從輸入 session 拿就好；不要為此截圖（每張截圖桌面都會閃一下，而且慢）。
+        let i = input().await?;
+        let g = (i.pos.0 as f64, i.pos.1 as f64);
+        let (w, h) = (i.size.0 as f64, i.size.1 as f64);
         Ok(ElementNode {
             id: "0".into(),
             role: "AXApplication".into(),
@@ -284,8 +324,8 @@ impl Backend for WaylandBackend {
                 id: "0.0".into(),
                 role: "AXWindow".into(),
                 title: "Wayland 桌面（整個畫面）".into(),
-                x: g.origin.0,
-                y: g.origin.1,
+                x: g.0,
+                y: g.1,
                 w,
                 h,
                 children: vec![],
@@ -313,7 +353,9 @@ impl Backend for WaylandBackend {
     }
 
     async fn activate(&self, _pid: i32) -> Result<(), String> {
-        Ok(()) // Wayland 沒有切換前景的途徑；操作的永遠是整個畫面
+        // 沒有切換前景的途徑；能做的是把 AITerm 自己縮起來，讓鍵盤焦點與畫面回到底下的 App。
+        hide_aiterm().await;
+        Ok(())
     }
 
     async fn press_element(&self, _pid: i32, _id: &str) -> Result<(), String> {
