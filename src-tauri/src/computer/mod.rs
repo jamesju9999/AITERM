@@ -6,6 +6,7 @@
 pub mod approval;
 pub mod audit;
 pub mod backend;
+pub mod cleanup;
 pub mod icons;
 pub mod linuxmap;
 #[cfg(target_os = "linux")]

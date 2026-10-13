@@ -303,6 +303,7 @@ pub fn run() {
             resident::setup(app.handle());
             // 電腦操作（GUI 控制／截圖）服務：MCP 工具與設定頁共用這一份。
             {
+                computer::cleanup::spawn_startup_sweep();
                 use computer::approval::TauriApprover;
                 use tauri::Manager;
                 let approver = Arc::new(TauriApprover::new(app.handle().clone()));
