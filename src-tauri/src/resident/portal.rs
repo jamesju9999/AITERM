@@ -99,6 +99,16 @@ pub fn desktop_entry_content(exec: &str) -> String {
     )
 }
 
+/// portal 的快捷鍵 ID：固定前綴＋按鍵（只留英數，其餘換成 `_`）。
+pub fn shortcut_id(trigger: Option<&str>) -> String {
+    let suffix: String = trigger
+        .unwrap_or("")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("toggle-window-{suffix}")
+}
+
 /// 目前是不是 Wayland 工作階段。
 #[cfg(target_os = "linux")]
 pub fn is_wayland() -> bool {
@@ -115,7 +125,6 @@ mod session {
     use futures_util::StreamExt;
     use tauri::AppHandle;
 
-    const SHORTCUT_ID: &str = "toggle-window";
     /// 與 tauri.conf.json 的 identifier 一致。
     const APP_ID: &str = "com.aiterm.app";
 
@@ -179,8 +188,11 @@ mod session {
         }
         let portal = GlobalShortcuts::with_connection(connection).await?;
         let session = portal.create_session(CreateSessionOptions::default()).await?;
-        let mut shortcut = NewShortcut::new(SHORTCUT_ID, "Show / hide AITerm");
         let trigger = super::to_xdg_trigger(hotkey);
+        // portal 對「同一個 ID」只在第一次採用 preferred_trigger，之後使用者改了什麼由系統記住，
+        // 再次 bind 帶不同的建議值也不會生效。所以 ID 帶上按鍵：改快捷鍵＝一個全新的快捷鍵。
+        let shortcut_id = super::shortcut_id(trigger.as_deref());
+        let mut shortcut = NewShortcut::new(shortcut_id.as_str(), "Show / hide AITerm");
         if let Some(t) = trigger.as_deref() {
             shortcut = shortcut.preferred_trigger(t);
         }
@@ -193,7 +205,7 @@ mod session {
         }
         let mut activated = portal.receive_activated().await?;
         while let Some(ev) = activated.next().await {
-            if ev.shortcut_id() == SHORTCUT_ID {
+            if ev.shortcut_id() == shortcut_id {
                 super::super::toggle_main_window(app);
             }
         }
@@ -225,6 +237,13 @@ mod tests {
         let c = desktop_entry_content("/home/a b/AITerm \"x\".AppImage");
         assert!(c.contains("Exec=\"/home/a b/AITerm \\\"x\\\".AppImage\"\n"), "{c}");
         assert!(c.contains("NoDisplay=true"));
+    }
+
+    #[test]
+    fn shortcut_id_changes_with_the_trigger() {
+        assert_eq!(shortcut_id(Some("CTRL+grave")), "toggle-window-CTRL_grave");
+        assert_ne!(shortcut_id(Some("CTRL+grave")), shortcut_id(Some("CTRL+SHIFT+space")));
+        assert_eq!(shortcut_id(None), "toggle-window-");
     }
 
     #[test]
