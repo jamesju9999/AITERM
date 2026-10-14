@@ -234,6 +234,45 @@ pub(crate) fn with_tool_use_rule(prompt: String) -> String {
     format!("{prompt}\n\n{TOOL_USE_RULE}")
 }
 
+/// Ask AI 這一輪給模型哪些工具（spec 2026-10-14-unified-agent-mcp-toggle）。
+/// ⚡ 關＝None（純聊天）；只有 ⚡＝Terminal；⚡＋MCP＝All。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolScope {
+    None,
+    Terminal,
+    All,
+}
+
+/// 沒帶 `tool_scope` 的呼叫端（Ask AI 以外的十幾個畫面）完全沿用舊規則：`use_mcp` 且全域 MCP 開才給工具。
+/// 明確要 All 但全域 MCP 關閉時退成 Terminal——⚡ 不能因為 MCP 被關就跑不了指令。
+pub(crate) fn resolve_tool_scope(requested: Option<ToolScope>, use_mcp: bool, mcp_enabled: bool) -> ToolScope {
+    match requested {
+        Some(ToolScope::All) if !mcp_enabled => ToolScope::Terminal,
+        Some(scope) => scope,
+        None if use_mcp && mcp_enabled => ToolScope::All,
+        None => ToolScope::None,
+    }
+}
+
+/// 依 scope 組出要給模型的工具清單。順序：MCP 伺服器、電腦操作、終端機（與改之前相同）。
+pub(crate) fn scoped_tool_infos(
+    scope: ToolScope,
+    mcp: Vec<crate::mcp::McpToolInfo>,
+    computer: Vec<crate::mcp::McpToolInfo>,
+) -> Vec<crate::mcp::McpToolInfo> {
+    match scope {
+        ToolScope::None => vec![],
+        ToolScope::Terminal => crate::terminal_tool::tool_infos(),
+        ToolScope::All => {
+            let mut infos = mcp;
+            infos.extend(computer);
+            infos.extend(crate::terminal_tool::tool_infos());
+            infos
+        }
+    }
+}
+
 pub fn build_chat_prompt(
     snapshot: &crate::ai::EnvSnapshot,
     locale: Locale,
@@ -1298,5 +1337,70 @@ mod tests {
         assert!(!prompt.contains(&long_output), "full 3000-char output should have been truncated");
         // The tail (last 2000 chars) IS present — we kept the most recent output.
         assert!(prompt.contains(&long_output[1000..]), "the tail 2000 chars must be in the prompt");
+    }
+}
+
+#[cfg(test)]
+mod tool_scope_tests {
+    use super::{resolve_tool_scope, scoped_tool_infos, ToolScope};
+    use crate::mcp::McpToolInfo;
+
+    fn info(name: &str) -> McpToolInfo {
+        McpToolInfo {
+            server_id: "s".into(),
+            server_name: "S".into(),
+            name: name.into(),
+            description: String::new(),
+            input_schema: serde_json::json!({}),
+        }
+    }
+
+    // 沒帶 tool_scope 的舊呼叫端：行為必須和改之前一模一樣（use_mcp 且全域 MCP 開才給工具）。
+    #[test]
+    fn legacy_callers_follow_use_mcp_and_global_switch() {
+        assert_eq!(resolve_tool_scope(None, true, true), ToolScope::All);
+        assert_eq!(resolve_tool_scope(None, true, false), ToolScope::None);
+        assert_eq!(resolve_tool_scope(None, false, true), ToolScope::None);
+    }
+
+    // ⚡＋MCP 但全域 MCP 關閉：⚡ 照樣要能跑指令，退成只有終端機工具。
+    #[test]
+    fn explicit_all_falls_back_to_terminal_when_mcp_is_disabled() {
+        assert_eq!(resolve_tool_scope(Some(ToolScope::All), false, false), ToolScope::Terminal);
+        assert_eq!(resolve_tool_scope(Some(ToolScope::All), false, true), ToolScope::All);
+    }
+
+    // 明確指定的 scope 不看 use_mcp，也不看全域開關（terminal／none 不受 MCP 設定影響）。
+    #[test]
+    fn explicit_terminal_and_none_ignore_use_mcp_and_global_switch() {
+        assert_eq!(resolve_tool_scope(Some(ToolScope::Terminal), true, false), ToolScope::Terminal);
+        assert_eq!(resolve_tool_scope(Some(ToolScope::None), true, true), ToolScope::None);
+    }
+
+    #[test]
+    fn tool_lists_per_scope() {
+        let mcp = vec![info("srv__read_file")];
+        let computer = vec![info("aiterm_computer__computer_click")];
+
+        assert!(scoped_tool_infos(ToolScope::None, mcp.clone(), computer.clone()).is_empty());
+
+        let terminal: Vec<String> = scoped_tool_infos(ToolScope::Terminal, mcp.clone(), computer.clone())
+            .into_iter().map(|t| t.name).collect();
+        assert_eq!(terminal, vec!["aiterm_terminal__run_command".to_string()]);
+
+        let all: Vec<String> = scoped_tool_infos(ToolScope::All, mcp, computer)
+            .into_iter().map(|t| t.name).collect();
+        assert_eq!(all, vec![
+            "srv__read_file".to_string(),
+            "aiterm_computer__computer_click".to_string(),
+            "aiterm_terminal__run_command".to_string(),
+        ]);
+    }
+
+    // 前端送的是小寫字串。
+    #[test]
+    fn deserializes_lowercase() {
+        let s: ToolScope = serde_json::from_str("\"terminal\"").unwrap();
+        assert_eq!(s, ToolScope::Terminal);
     }
 }
