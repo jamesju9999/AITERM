@@ -575,6 +575,7 @@ pub async fn ai_chat(
     use_mcp: bool,
     locale: Locale,
     supports_artifacts: bool,
+    tool_scope: Option<ToolScope>,
     app: AppHandle,
     pty_manager: State<'_, std::sync::Arc<PtyManager>>,
     router: State<'_, AiRouter>,
@@ -582,14 +583,15 @@ pub async fn ai_chat(
     config: State<'_, std::sync::Arc<crate::config::ConfigStore>>,
 ) -> Result<AiChatReply, AiError> {
     // Reject empty history or histories whose last message is in an unexpected role.
-    // When use_mcp=true the agent loop may send a history ending with a "tool"
-    // result message (multi-turn tool calling), so we allow that too.
     if messages.is_empty() {
         return Err(AiError::InvalidInput { reason: "empty messages".into() });
     }
+    let cfg = config.get();
+    let scope = resolve_tool_scope(tool_scope, use_mcp, cfg.mcp_enabled);
+    // 有工具的迴圈可能以 "tool" 結果訊息結尾（多輪工具呼叫），所以 scope 不是 None 時也放行。
     let last_role = messages.last().map(|m| m.role.as_str());
     let last_role_ok = last_role == Some("user")
-        || (use_mcp && last_role == Some("tool"));
+        || (scope != ToolScope::None && last_role == Some("tool"));
     if !last_role_ok {
         return Err(AiError::InvalidInput { reason: "last message must be from user".into() });
     }
@@ -597,18 +599,21 @@ pub async fn ai_chat(
     let snapshot = context::snapshot(&pty_manager, &session_id);
 
     // ── MCP tool calling path ─────────────────────────────────────────────────
-    let cfg = config.get();
-    if use_mcp && cfg.mcp_enabled {
+    if scope != ToolScope::None {
         let tools: Vec<crate::ai::McpToolDefinition> = {
-            let manager = mcp_manager.lock().await;
-            let mut infos = manager.list_tool_infos();
-            infos.extend(crate::computer::builtin_tool_infos(&cfg));
-            infos.extend(crate::terminal_tool::tool_infos());
-            infos.into_iter().map(|t| crate::ai::McpToolDefinition {
-                name: t.name,
-                description: t.description,
-                input_schema: t.input_schema,
-            }).collect()
+            let (mcp_infos, computer_infos) = if scope == ToolScope::All {
+                (mcp_manager.lock().await.list_tool_infos(), crate::computer::builtin_tool_infos(&cfg))
+            } else {
+                (vec![], vec![])
+            };
+            scoped_tool_infos(scope, mcp_infos, computer_infos)
+                .into_iter()
+                .map(|t| crate::ai::McpToolDefinition {
+                    name: t.name,
+                    description: t.description,
+                    input_schema: t.input_schema,
+                })
+                .collect()
         };
 
         if !tools.is_empty() {
@@ -616,9 +621,10 @@ pub async fn ai_chat(
                 Some(id) => router.resolve_by_id(id).await?,
                 None => router.resolve().await?,
             };
+            // 電腦操作心法只在真的給了電腦操作工具時附上（只有 ⚡ 時沒有）。
             let prompt = with_computer_hint(
                 with_tool_use_rule(build_chat_prompt(&snapshot, locale, supports_artifacts)),
-                cfg.mcp_tool_server.computer_enabled,
+                scope == ToolScope::All && cfg.mcp_tool_server.computer_enabled,
             );
             let prompt = format!("{prompt}\n\n{}", crate::terminal_tool::PROMPT_HINT);
             let req = GenerateRequest {
