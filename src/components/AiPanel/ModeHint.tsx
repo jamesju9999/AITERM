@@ -1,7 +1,7 @@
 import { useLocale } from "../../contexts/LocaleContext";
 
-/** 三種模式的差別是「誰按下執行鍵」，見各自的說明文案。 */
-export type PanelMode = "suggest" | "agent" | "mcp";
+/** 「誰按下執行鍵、能用什麼工具」。agent 是遠端終端機（舊的 <cmd> 迴圈）用的；本機用 agent-terminal／agent-mcp。 */
+export type PanelMode = "suggest" | "agent" | "agent-terminal" | "agent-mcp";
 
 interface ModeHintProps {
   mode: PanelMode;
@@ -13,7 +13,8 @@ interface ModeHintProps {
 const ICONS: Record<PanelMode, string> = {
   suggest: "💬",
   agent: "⚡",
-  mcp: "🔧",
+  "agent-terminal": "⚡",
+  "agent-mcp": "⚡",
 };
 
 /**
@@ -25,12 +26,15 @@ const ICONS: Record<PanelMode, string> = {
 export function ModeHint({ mode, maxAgentSteps, mcpToolCount }: ModeHintProps) {
   const { t } = useLocale();
 
+  // 顯示規則跟 Agent 狀態列一致：9999 是「無限」的內部值。
+  const steps = maxAgentSteps >= 9999 ? "∞" : String(maxAgentSteps);
   let text: string;
   if (mode === "agent") {
-    // 顯示規則跟 Agent 狀態列一致：9999 是「無限」的內部值。
-    text = t.mode_hint_agent(maxAgentSteps >= 9999 ? "∞" : String(maxAgentSteps));
-  } else if (mode === "mcp") {
-    text = t.mode_hint_mcp(mcpToolCount);
+    text = t.mode_hint_agent(steps);
+  } else if (mode === "agent-terminal") {
+    text = t.mode_hint_agent_terminal(steps);
+  } else if (mode === "agent-mcp") {
+    text = t.mode_hint_agent_mcp(steps, mcpToolCount);
   } else {
     text = t.mode_hint_suggest;
   }

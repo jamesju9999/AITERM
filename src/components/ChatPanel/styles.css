@@ -443,7 +443,8 @@
   border-left: 2px solid #4a5568;
 }
 .aiterm-mode-hint--agent { border-left-color: var(--accent, #a855f7); }
-.aiterm-mode-hint--mcp { border-left-color: var(--success, #34d399); }
+.aiterm-mode-hint--agent-terminal { border-left-color: var(--accent, #a855f7); }
+.aiterm-mode-hint--agent-mcp { border-left-color: var(--success, #34d399); }
 
 .aiterm-ai-panel-input-area {
   border-top: 1px solid var(--border-color, #2a2a2a);

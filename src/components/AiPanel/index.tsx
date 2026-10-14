@@ -442,7 +442,7 @@ Rules:
   // MCP 是否真的會被用到。送出時與模式說明列共用同一個判斷——拆成兩份寫的話
   // 遲早會有一邊漏改，畫面就會說謊。
   const mcpActive = useMcp && mcpEnabled && mcpToolCount > 0;
-  const mode: PanelMode = agentMode ? "agent" : mcpActive ? "mcp" : "suggest";
+  const mode: PanelMode = agentMode ? "agent" : mcpActive ? "agent-mcp" : "suggest";
   const isDisabled = chat.isStreaming || agentRunning;
 
   return (
