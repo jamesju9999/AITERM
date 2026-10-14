@@ -346,15 +346,19 @@ pub fn build_request_body(model: &str, project_id: &str, req: &GenerateRequest) 
         .messages
         .iter()
         .filter_map(|m| {
-            let role = gemini_role(&m.role);
-            if m.content.is_array() {
-                if m.role == "system" {
-                    system_parts.push(content::text_only(&m.content));
-                    return None;
-                }
+            let as_text = || match &m.content {
+                serde_json::Value::String(s) => s.clone(),
+                arr @ serde_json::Value::Array(_) => content::text_only(arr),
+                other => other.to_string(),
+            };
+            if m.role == "system" {
+                system_parts.push(as_text());
+                return None;
+            }
+            let parts = if m.content.is_array() {
                 // 照 Gemini API 文件寫（inlineData），尚未用真帳號驗證——探勘時
                 // 遇到 429 RESOURCE_EXHAUSTED，見 spec 的探勘結果。
-                let parts: Vec<serde_json::Value> = content::parts_or_empty_text(&m.content)
+                content::parts_or_empty_text(&m.content)
                     .into_iter()
                     .map(|p| match p {
                         content::Part::Text(text) => serde_json::json!({ "text": text }),
@@ -362,18 +366,11 @@ pub fn build_request_body(model: &str, project_id: &str, req: &GenerateRequest) 
                             "inlineData": { "mimeType": media_type, "data": data },
                         }),
                     })
-                    .collect();
-                return Some(serde_json::json!({ "role": role, "parts": parts }));
-            }
-            let text = match &m.content {
-                serde_json::Value::String(s) => s.clone(),
-                other => other.to_string(),
+                    .collect()
+            } else {
+                vec![serde_json::json!({ "text": as_text() })]
             };
-            if m.role == "system" {
-                system_parts.push(text);
-                return None;
-            }
-            Some(serde_json::json!({ "role": role, "parts": [{ "text": text }] }))
+            Some(serde_json::json!({ "role": gemini_role(&m.role), "parts": parts }))
         })
         .collect();
 
