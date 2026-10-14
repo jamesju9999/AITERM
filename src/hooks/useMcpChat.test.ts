@@ -186,6 +186,19 @@ describe("useMcpChat", () => {
       await act(async () => { await result.current.sendMessage("go", "all"); });
       expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(4);
     });
+
+    it("剛好在最後一步給出最終答案：不附上限訊息", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(executeMcpTool).mockResolvedValue({ content: "ok", is_error: false });
+      vi.mocked(aiChat)
+        .mockResolvedValueOnce(toolCall())
+        .mockResolvedValueOnce(toolCall())
+        .mockResolvedValueOnce({ content: "全部完成", tool_calls: [], tool_calling_unsupported: false });
+      const { result } = renderHook(() => useMcpChat("s-limit-last", 3), { wrapper: LocaleProvider });
+      await act(async () => { await result.current.sendMessage("go", "all"); });
+      expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(3);
+      expect(result.current.messages.at(-1)?.content).toBe("全部完成");
+    });
   });
 
   // 停止鈕：中斷進行中的 AI 呼叫、不再執行後面的工具、不再繼續迴圈。
@@ -454,6 +467,22 @@ describe("useMcpChat", () => {
       await act(async () => { finishCommand("ok"); await done; });
       expect(result.current.activeScope).toBeNull();
       expect(result.current.step).toBe(2);
+    });
+
+    it("執行工具時按停止：phase 回到 thinking、activeScope 回到 null", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(terminalCommandGate).mockResolvedValue({ allowed: true, reason: null });
+      vi.mocked(aiChat).mockResolvedValueOnce(runCmd("sleep 99"));
+      const runCommand = vi.fn(() => new Promise<string>(() => {}));
+      const { result } = renderHook(() => useMcpChat("s-stop-phase", 10, runCommand), { wrapper: LocaleProvider });
+
+      act(() => { void result.current.sendMessage("等一下", "terminal"); });
+      await vi.waitFor(() => expect(runCommand).toHaveBeenCalled());
+      expect(result.current.phase).toBe("running");
+
+      await act(async () => { result.current.stop(); });
+      expect(result.current.activeScope).toBeNull();
+      expect(result.current.phase).toBe("thinking");
     });
 
     it("純聊天（none）不催模型動手", async () => {

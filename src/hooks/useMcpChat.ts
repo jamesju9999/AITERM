@@ -176,6 +176,8 @@ export function useMcpChat(
         : [...history];
       let iterations = 0;
       let nudges = 0;
+      // 只有迴圈是因為次數用完才結束時才附上限訊息；剛好在最後一步給出最終答案不算。
+      let hitLimit = true;
 
       const maxIterations = maxIterationsRef.current;
       while (iterations < maxIterations) {
@@ -311,10 +313,11 @@ export function useMcpChat(
           role: "assistant" as const,
           content: isEmpty ? t.mcp_empty_reply : finalText,
         }]);
+        hitLimit = false;
         break;
       }
 
-      if (iterations >= maxIterations && mountedRef.current) {
+      if (hitLimit && mountedRef.current) {
         setMessages(prev => [...prev, {
           role: "assistant" as const,
           content: t.mcp_tool_limit.replace("{n}", String(maxIterations)),
@@ -357,6 +360,7 @@ export function useMcpChat(
       { role: "assistant" as const, content: t.mcp_stopped },
     ]);
     setActiveScope(null);
+    setPhase("thinking");
     setIsLoading(false);
   }, [sessionId, t]);
 
