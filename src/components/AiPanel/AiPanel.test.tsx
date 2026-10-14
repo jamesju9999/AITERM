@@ -77,6 +77,9 @@ vi.mock("../../contexts/LocaleContext", async () => {
   };
 });
 
+// jsdom 沒有 canvas：非 jpeg/png/gif/webp 圖片的轉檔由各測試指定結果。
+vi.mock("../../lib/imageToPng", () => ({ convertToPng: vi.fn() }));
+import { convertToPng } from "../../lib/imageToPng";
 import { AiPanel } from "./index";
 
 // 模型呼叫內建終端機工具 run_command 的回覆。
@@ -859,6 +862,46 @@ describe("AiPanel", () => {
     await userEvent.upload(fileInput, new File(["附件內容"], "note.txt", { type: "text/plain" }));
     expect(await screen.findByText("note.txt")).toBeInTheDocument();
     expect(screen.queryByText(/超過 5MB，沒有附上/)).toBeNull();
+  });
+
+  // 各家只保證收 jpeg/png/gif/webp，其他格式先轉 PNG；轉不了或轉完太大都要告訴使用者。
+  it("解不開的圖片與轉完超過 5MB 的圖片都不附上，兩種提示同時顯示", async () => {
+    vi.mocked(convertToPng).mockReset();
+    vi.mocked(convertToPng).mockImplementation(async (file) => {
+      if ((file as File).name === "x.heic") throw new Error("decode failed");
+      return `data:image/png;base64,${"A".repeat(7 * 1024 * 1024)}`; // 解碼後約 5.25MB
+    });
+    const { container } = render(
+      <AiPanel sessionId="s1" isOpen={true} providerName="Ollama" onClose={vi.fn()}
+        onExecuteCommand={vi.fn()} onOpenProviderPalette={vi.fn()} />,
+    );
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(fileInput, [
+      new File(["x"], "x.heic", { type: "image/heic" }),
+      new File(["x"], "big.bmp", { type: "image/bmp" }),
+    ]);
+
+    expect(await screen.findByText("x.heic 格式無法讀取，沒有附上")).toBeInTheDocument();
+    expect(screen.getByText("big.bmp 超過 5MB，沒有附上")).toBeInTheDocument();
+    expect(container.querySelector(".aiterm-attachment-pills")).toBeNull();
+  });
+
+  it("轉成 PNG 的圖片照常附上並送給 AI", async () => {
+    vi.mocked(convertToPng).mockReset();
+    vi.mocked(convertToPng).mockResolvedValue("data:image/png;base64,UE5H");
+    aiChatQueue.push({ content: "好" });
+    const { container } = render(
+      <AiPanel sessionId="s1" isOpen={true} providerName="Ollama" onClose={vi.fn()}
+        onExecuteCommand={vi.fn()} onOpenProviderPalette={vi.fn()} />,
+    );
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(fileInput, new File(["x"], "shot.bmp", { type: "image/bmp" }));
+    expect(await screen.findByText("shot.bmp")).toBeInTheDocument();
+    await userEvent.type(screen.getByRole("textbox"), "看圖");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(aiChatCalls.length).toBe(1));
+    const userMsg = aiChatCalls[0].filter((m) => m.role === "user").at(-1);
+    expect(JSON.stringify(userMsg?.content)).toContain("data:image/png;base64,UE5H");
   });
 
   /**

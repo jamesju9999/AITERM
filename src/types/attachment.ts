@@ -1,5 +1,19 @@
 import { nanoid } from "nanoid";
 import type { ContentPart } from "../ipc/ai";
+import { convertToPng } from "../lib/imageToPng";
+
+/** 各家 AI 都保證收的圖片格式；其他格式（bmp、svg、tiff、heic…）附加時先轉成 PNG。 */
+const NATIVE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"]);
+
+/** 圖片格式不在上面那四種、而且瀏覽器也解不開（例如 Windows 上的 heic）。 */
+export class UnsupportedImageError extends Error {
+  readonly fileName: string;
+  constructor(fileName: string, cause?: unknown) {
+    super(`Cannot decode image ${fileName}`, { cause });
+    this.name = "UnsupportedImageError";
+    this.fileName = fileName;
+  }
+}
 
 export type AttachmentKind = "image" | "text" | "binary";
 
@@ -30,8 +44,17 @@ export async function readFileAsAttachment(file: File): Promise<Attachment> {
   const filePath = (file as File & { path?: string }).path ?? file.name;
 
   if (kind === "image") {
-    const data = await readAsDataUrl(file);
-    return { id, kind, name: file.name, mimeType: file.type, data, previewUrl: data };
+    if (NATIVE_IMAGE_TYPES.has(file.type)) {
+      const data = await readAsDataUrl(file);
+      return { id, kind, name: file.name, mimeType: file.type, data, previewUrl: data };
+    }
+    let data: string;
+    try {
+      data = await convertToPng(file);
+    } catch (e) {
+      throw new UnsupportedImageError(file.name, e);
+    }
+    return { id, kind, name: file.name, mimeType: "image/png", data, previewUrl: data };
   }
   if (kind === "text") {
     const data = await readAsText(file);

@@ -3,7 +3,7 @@ import {
 } from "react";
 import { describeExit } from "../../lib/agentStepReport";
 import { remoteSessionPromptNote } from "../../lib/remoteSession";
-import { readFileAsAttachment } from "../../types/attachment";
+import { readFileAsAttachment, UnsupportedImageError } from "../../types/attachment";
 import type { Attachment } from "../../types/attachment";
 import { useMcpChat, TERMINAL_TOOL_NAME } from "../../hooks/useMcpChat";
 import type { PanelMode } from "./ModeHint";
@@ -82,6 +82,12 @@ export interface AiPanelProps {
  * keeps receiving streaming chunks while the user toggles Ctrl+I. We hide
  * the panel with a CSS class when `isOpen=false` rather than returning null.
  */
+/** data URI 解碼後的位元組數（base64 每 4 字元 3 位元組）。 */
+function dataUriBytes(dataUri: string): number {
+  const base64 = dataUri.slice(dataUri.indexOf(",") + 1);
+  return Math.floor((base64.length * 3) / 4);
+}
+
 export function AiPanel({
   sessionId,
   isOpen,
@@ -181,23 +187,40 @@ export function AiPanel({
   const [useMcp, setUseMcp] = useState(loadSavedUseMcp);
   const [submitShortcut, setSubmitShortcut] = useState<SubmitShortcut>("enter");
 
-  // 超過大小上限、沒附上的圖片名稱；不提示的話使用者會以為附上了。
-  const [oversizeNotice, setOversizeNotice] = useState<string | null>(null);
+  // 沒附上的圖片（太大、或格式解不開）；不提示的話使用者會以為附上了。
+  const [attachNotices, setAttachNotices] = useState<string[]>([]);
 
   const processFiles = useCallback(async (files: FileList | File[]) => {
     const arr = Array.from(files);
-    const oversize = arr.filter((file) => file.type.startsWith("image/") && file.size > MAX_IMAGE_BYTES);
-    const results = await Promise.allSettled(
-      arr.filter((file) => !oversize.includes(file)).map((file) => readFileAsAttachment(file)),
-    );
-    const valid = results
-      .filter((r): r is PromiseFulfilledResult<Attachment> => r.status === "fulfilled")
-      .map((r) => r.value);
+    const oversize: string[] = [];
+    const unsupported: string[] = [];
+    const valid: Attachment[] = [];
+    await Promise.all(arr.map(async (file) => {
+      // 原檔就超過上限的不必讀；轉成 PNG 的圖片要看轉完的大小。
+      if (file.type.startsWith("image/") && file.size > MAX_IMAGE_BYTES) {
+        oversize.push(file.name);
+        return;
+      }
+      try {
+        const att = await readFileAsAttachment(file);
+        if (att.kind === "image" && dataUriBytes(att.data) > MAX_IMAGE_BYTES) {
+          oversize.push(file.name);
+          return;
+        }
+        valid.push(att);
+      } catch (e) {
+        if (e instanceof UnsupportedImageError) unsupported.push(file.name);
+      }
+    }));
     setAttachments((prev) => [...prev, ...valid]);
-    if (oversize.length > 0) {
-      setOversizeNotice(t.ai_image_too_large(oversize.map((file) => file.name).join(", ")));
+    const notices = [
+      ...(oversize.length > 0 ? [t.ai_image_too_large(oversize.join(", "))] : []),
+      ...(unsupported.length > 0 ? [t.ai_image_unsupported(unsupported.join(", "))] : []),
+    ];
+    if (notices.length > 0) {
+      setAttachNotices(notices);
     } else if (valid.length > 0) {
-      setOversizeNotice(null);
+      setAttachNotices([]);
     }
   }, [MAX_IMAGE_BYTES, t]);
 
@@ -296,7 +319,7 @@ export function AiPanel({
   const sendTurn = (text: string) => {
     const currentAttachments = attachments;
     setAttachments([]);
-    setOversizeNotice(null);
+    setAttachNotices([]);
     const scope: ToolScope = agentMode ? (mcpActive ? "all" : "terminal") : "none";
     void chat.send(
       text,
@@ -421,12 +444,12 @@ export function AiPanel({
               </div>
             </div>
           )}
-          {oversizeNotice && (
-            <div className="aiterm-mode-hint aiterm-mode-hint--degraded" role="status">
+          {attachNotices.map((notice) => (
+            <div key={notice} className="aiterm-mode-hint aiterm-mode-hint--degraded" role="status">
               <span aria-hidden="true">⚠</span>
-              <span>{oversizeNotice}</span>
+              <span>{notice}</span>
             </div>
-          )}
+          ))}
           {attachments.length > 0 && (
             <div className="aiterm-attachment-pills">
               {attachments.map((att) => (
