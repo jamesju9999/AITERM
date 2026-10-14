@@ -282,7 +282,7 @@ function ChatPanelShellInner({
           onPointerDown={onResizePointerDown}
           onPointerMove={onResizePointerMove}
           onPointerUp={onResizePointerUp}
-          title="拖曳調整寬度"
+          title={t.ai_resize_tip}
         />
       )}
 
@@ -295,7 +295,7 @@ function ChatPanelShellInner({
             type="button"
             className="aiterm-ai-panel-provider-badge"
             onClick={onOpenProviderPalette}
-            title="切換 Provider"
+            title={t.ai_panel_provider_tip}
           >
             {providerName || "(no provider)"}
             {headerBadge}
@@ -305,7 +305,7 @@ function ChatPanelShellInner({
               type="button"
               className={`aiterm-ai-panel-clear-btn aiterm-ai-panel-icon-btn${expanded ? " aiterm-ai-panel-clear-btn--active" : ""}`}
               onClick={toggleExpanded}
-              title={expanded ? "縮小面板" : "放大面板"}
+              title={expanded ? t.ai_panel_shrink_tip : t.ai_panel_expand_tip}
             >
               {expanded ? <MinimizeIcon size={15} /> : <MaximizeIcon size={15} />}
             </button>
@@ -313,7 +313,7 @@ function ChatPanelShellInner({
               type="button"
               className={`aiterm-ai-panel-clear-btn${historyOpen ? " aiterm-ai-panel-clear-btn--active" : ""}`}
               onClick={() => setHistoryOpen((o) => !o)}
-              title="對話歷史"
+              title={t.ai_history_btn_tip}
             >
               📋
             </button>
@@ -322,7 +322,7 @@ function ChatPanelShellInner({
               className="aiterm-ai-panel-clear-btn"
               onClick={() => { onNewChat(); setHistoryOpen(false); }}
               disabled={isDisabled}
-              title="清空當前對話"
+              title={t.ai_clear_chat_tip}
             >
               🗑 New Chat
             </button>
@@ -330,7 +330,7 @@ function ChatPanelShellInner({
               type="button"
               className="aiterm-ai-panel-clear-btn"
               onClick={onClose}
-              title="關閉面板 (Esc)"
+              title={t.ai_close_panel_tip}
             >
               ✕
             </button>
@@ -341,11 +341,11 @@ function ChatPanelShellInner({
         {historyOpen && (
           <div className="aiterm-history-panel">
             <div className="aiterm-history-panel__header">
-              <span className="aiterm-history-panel__title">對話歷史</span>
+              <span className="aiterm-history-panel__title">{t.ai_history_panel_title}</span>
             </div>
             <div className="aiterm-history-panel__list">
               {sessions.length === 0 && (
-                <div className="aiterm-history-panel__empty">尚無歷史記錄</div>
+                <div className="aiterm-history-panel__empty">{t.ai_history_empty}</div>
               )}
               {[...sessions].reverse().map((s) => (
                 <div
@@ -362,7 +362,7 @@ function ChatPanelShellInner({
                   <button
                     type="button"
                     className="aiterm-history-panel__item-del"
-                    title="刪除此對話"
+                    title={t.ai_delete_session_tip}
                     onClick={(e) => { e.stopPropagation(); onDeleteSession(s.id); }}
                   >
                     ×
@@ -411,13 +411,13 @@ function ChatPanelShellInner({
             </span>
             <span>
               {agentPhase === "thinking" ? t.ai_agent_thinking : t.ai_agent_executing}
-              {" "}步驟 {agentStep}/{maxAgentSteps >= 9999 ? "∞" : maxAgentSteps}
+              {" "}{t.ai_agent_step_count(agentStep, maxAgentSteps >= 9999 ? "∞" : String(maxAgentSteps))}
             </span>
             <button
               type="button"
               className="aiterm-agent-status__stop"
               onClick={onAbortAgent}
-              title="停止"
+              title={t.streaming_stop}
             >
               ■
             </button>
@@ -432,7 +432,7 @@ function ChatPanelShellInner({
               type="button"
               className={`aiterm-agent-toggle${agentMode ? " aiterm-agent-toggle--on" : ""}`}
               onClick={onToggleAgentMode}
-              title={agentMode ? "停用 Agent 模式" : "啟用 Agent 模式（AI 自動執行指令迭代）"}
+              title={agentMode ? t.ai_agent_toggle_off : t.ai_agent_toggle_on}
               disabled={isDisabled}
             >
               <ZapIcon size={14} isFilled={agentMode} />
@@ -449,9 +449,9 @@ function ChatPanelShellInner({
               onKeyDown={handleKeyDown}
               onPaste={onPaste}
               placeholder={
-                agentRunning ? "Agent 執行中…" :
-                agentMode ? "目標... (Enter)" :
-                isStreaming ? "等待 AI 回覆..." : "Ask AI anything..."
+                agentRunning ? t.ai_placeholder_agent_running :
+                agentMode ? t.ai_placeholder_goal :
+                isStreaming ? t.ai_placeholder_streaming : "Ask AI anything..."
               }
               rows={1}
               disabled={isDisabled}
@@ -462,7 +462,7 @@ function ChatPanelShellInner({
                 type="button"
                 className="aiterm-ai-panel-send-btn aiterm-btn aiterm-btn--primary aiterm-btn--icon"
                 onClick={onStop}
-                title="停止"
+                title={t.streaming_stop}
               >
                 ■
               </button>
@@ -472,7 +472,7 @@ function ChatPanelShellInner({
                 className="aiterm-ai-panel-send-btn aiterm-btn aiterm-btn--primary aiterm-btn--icon"
                 onClick={submit}
                 disabled={isDisabled || input.trim() === ""}
-                title="送出"
+                title={t.ai_send_btn}
               >
                 ▲
               </button>

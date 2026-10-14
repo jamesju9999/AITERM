@@ -62,14 +62,16 @@ vi.mock("@tauri-apps/api/event", () => ({
 // 於是任何新加的字串在這個測試檔裡都是 undefined——元件渲染成空白，而測試
 // 看起來還是綠的。加「Agent 思考中/執行指令中」時就是這樣踩到的：斷言查不到
 // 文案，卻找了半天以為是元件寫錯。
+const localeState = vi.hoisted(() => ({ current: "zh-TW" as "zh-TW" | "en" }));
 vi.mock("../../contexts/LocaleContext", async () => {
   const { translations } = await vi.importActual<typeof import("../../lib/i18n")>(
     "../../lib/i18n",
   );
   return {
+    // 預設繁中；個別測試可把 localeState.current 改成 "en"（測完要改回來）。
     useLocale: () => ({
-      locale: "zh-TW" as const,
-      t: translations["zh-TW"],
+      locale: localeState.current,
+      t: translations[localeState.current],
       setLocale: () => {},
     }),
   };
@@ -671,6 +673,32 @@ describe("AiPanel", () => {
     await userEvent.click(screen.getByTitle(/停用 Agent 模式/));
     await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
     expect(mcpBtn.className).not.toMatch(/--on/);
+  });
+
+  it("英文介面：面板上的滑鼠提示與輸入框提示都是英文", async () => {
+    localeState.current = "en";
+    try {
+      mcpTools.push({ name: "read_file" });
+      render(
+        <AiPanel sessionId="s1" isOpen={true} providerName="Ollama" onClose={vi.fn()}
+          onExecuteCommand={vi.fn()} onOpenProviderPalette={vi.fn()} />,
+      );
+      const cjk = /[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/;
+      const mcpBtn = await screen.findByRole("button", { name: /MCP \(1\)/ });
+      // 面板上每個滑鼠提示與輸入框提示都不該是中文（⚡ 關、⚡ 開各看一次）。
+      const chineseHints = () => [
+        ...Array.from(document.querySelectorAll("[title]")).map((el) => el.getAttribute("title") ?? ""),
+        ...Array.from(document.querySelectorAll("[placeholder]")).map((el) => el.getAttribute("placeholder") ?? ""),
+      ].filter((s) => cjk.test(s));
+      expect(chineseHints()).toEqual([]);
+      await userEvent.click(screen.getByTitle(/Enable Agent mode/));
+      expect(chineseHints()).toEqual([]);
+      expect(mcpBtn.getAttribute("title")).toBe("MCP On");
+      await userEvent.click(mcpBtn);
+      expect(mcpBtn.getAttribute("title")).toBe("MCP Off");
+    } finally {
+      localeState.current = "zh-TW";
+    }
   });
 
   describe("⚡／MCP 決定送給後端的工具範圍", () => {

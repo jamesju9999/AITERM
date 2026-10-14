@@ -365,7 +365,7 @@ export function AiPanel({
           type="button"
           className="aiterm-pill-paperclip-btn"
           onClick={() => fileInputRef.current?.click()}
-          title="附加檔案"
+          title={t.ai_attach_file}
           disabled={isDisabled}
         >
           📎
@@ -378,10 +378,10 @@ export function AiPanel({
           className={`aiterm-mcp-toggle${mcpActive ? " aiterm-mcp-toggle--on" : ""}`}
           title={
             !agentMode
-              ? "開啟 ⚡ 後才能使用 MCP 工具（目前只跟 AI 聊天）"
+              ? t.ai_mcp_needs_agent
               : mcpToolCount === 0
                 ? t.mcp_toggle_no_servers
-                : (useMcp ? "MCP 開啟" : "MCP 關閉")
+                : (useMcp ? t.ai_mcp_on : t.ai_mcp_off)
           }
           disabled={!agentMode || mcpToolCount === 0 || isDisabled}
           onClick={() => setUseMcp((v) => !v)}
