@@ -32,6 +32,7 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 
 use crate::ai::{
+    content,
     sse::{find_line_end, map_http_error, separator_len},
     AiError, AiProvider, GenerateChunk, GenerateRequest, TokenUsage,
 };
@@ -345,6 +346,25 @@ pub fn build_request_body(model: &str, project_id: &str, req: &GenerateRequest) 
         .messages
         .iter()
         .filter_map(|m| {
+            let role = gemini_role(&m.role);
+            if m.content.is_array() {
+                if m.role == "system" {
+                    system_parts.push(content::text_only(&m.content));
+                    return None;
+                }
+                // 照 Gemini API 文件寫（inlineData），尚未用真帳號驗證——探勘時
+                // 遇到 429 RESOURCE_EXHAUSTED，見 spec 的探勘結果。
+                let parts: Vec<serde_json::Value> = content::parts(&m.content)
+                    .into_iter()
+                    .map(|p| match p {
+                        content::Part::Text(text) => serde_json::json!({ "text": text }),
+                        content::Part::Image { media_type, data } => serde_json::json!({
+                            "inlineData": { "mimeType": media_type, "data": data },
+                        }),
+                    })
+                    .collect();
+                return Some(serde_json::json!({ "role": role, "parts": parts }));
+            }
             let text = match &m.content {
                 serde_json::Value::String(s) => s.clone(),
                 other => other.to_string(),
@@ -353,7 +373,6 @@ pub fn build_request_body(model: &str, project_id: &str, req: &GenerateRequest) 
                 system_parts.push(text);
                 return None;
             }
-            let role = gemini_role(&m.role);
             Some(serde_json::json!({ "role": role, "parts": [{ "text": text }] }))
         })
         .collect();
@@ -405,6 +424,40 @@ mod tests {
         assert_eq!(gemini_role("assistant"), "model");
         assert_eq!(gemini_role("user"), "user");
         assert_eq!(gemini_role("system"), "user");
+    }
+
+    fn image_content() -> serde_json::Value {
+        serde_json::json!([
+            {"type": "text", "text": "what colour?"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,QUJD"}},
+        ])
+    }
+
+    #[test]
+    fn image_becomes_inline_data_part() {
+        let r = req(
+            "sys",
+            vec![ChatMessage { role: "user".into(), content: image_content(), tool_call_id: None, tool_calls: None }],
+        );
+        let body = build_request_body("gemini-2.5-pro", "proj-123", &r);
+        assert_eq!(
+            body["request"]["contents"][0]["parts"],
+            serde_json::json!([
+                {"text": "what colour?"},
+                {"inlineData": {"mimeType": "image/png", "data": "QUJD"}},
+            ])
+        );
+        assert!(!body.to_string().contains("image_url"), "{body}");
+    }
+
+    #[test]
+    fn system_array_content_is_folded_in_as_text_only() {
+        let r = req(
+            "sys",
+            vec![ChatMessage { role: "system".into(), content: image_content(), tool_call_id: None, tool_calls: None }],
+        );
+        let body = build_request_body("gemini-2.5-pro", "proj-123", &r);
+        assert_eq!(body["request"]["systemInstruction"]["parts"][0]["text"], "sys\n\nwhat colour?");
     }
 
     #[test]
