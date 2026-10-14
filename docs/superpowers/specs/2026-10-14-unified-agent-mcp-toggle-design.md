@@ -80,6 +80,16 @@ Ask AI 有兩套迴圈：⚡（Agent）走 `<cmd>` 文字迴圈、不經確認�
 - 每個新測試都先證明會紅（對應的實作拿掉時失敗）。
 - 真機：三種組合各跑一次（純聊天問問題；⚡ 只開讓它列檔案；⚡＋MCP 讓它用電腦操作開一個 App），以及一個 NeedsConfirm 指令確認會跳框。
 
+## 實作時補充的決定
+
+- 面板的 MCP 工具數量排除內建終端機工具（`get_mcp_tools` 會回傳它）：終端機工具就是 ⚡ 本身，算進去的話 MCP 按鈕永遠至少有 1 個工具。
+- 遠端終端機的 `RemoteAiPanel` 仍走 `lib/agentLoop.ts` 的 `<cmd>` 迴圈、模式值 `agent` 與 `mode_hint_agent` 字串不動；本機改用 `agent-terminal`／`agent-mcp`（上面寫的 `agent | agent-mcp` 以此為準）。
+- ⚡ 模式的 system 提示詞補充不再包含 cwd 與目錄清單：後端 `context::snapshot` 已放進 `build_chat_prompt`。注意 snapshot 列的是目錄前 50 項，舊 Agent 提示詞是前 60 項。
+- 上面「前端」一節說工具迴圈到上限是靜默結束——這是錯的：工具迴圈到上限本來就會顯示「已達最大步驟數」。實際修的是一個差一錯誤：模型在最後一步已給出最終回答（沒有再呼叫工具）時，也會多出這則提示。
+- `extraSystemPrompt` 可以是函式而不只是固定字串：每一輪送給 AI 前（以及 `resend` 時）重新求值。原因是 Agent 在任務中途 ssh 進遠端，下一步的提示詞就要帶上 `remoteSessionPromptNote`；AiPanel 傳的是函式。
+- 舊呼叫端相容的邊角情況：沒帶 `tool_scope`、`use_mcp=true` 但全域 MCP 關閉時會解析成 `none`，若歷史以 `tool` 訊息結尾，現在回 `InvalidInput`，而不是像以前一樣掉進 `run_chat`。
+- ⚡ 模式下 Telegram／遠端轉發只會送出這一輪最後的回覆：轉發只在訊息數增加且不在串流中時觸發，工具迴圈中間產生的文字不會被轉發。
+
 ## 不做
 
 - 遠端觀看端 Agent 迴圈的同步改造。
