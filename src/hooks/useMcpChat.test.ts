@@ -561,4 +561,38 @@ describe("useMcpChat", () => {
       expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(1);
     });
   });
+
+  // 供應商讀不了圖（後端回 images_dropped）時要告訴使用者，否則 AI 會假裝看過圖。
+  describe("供應商把圖片丟掉時提示使用者", () => {
+    const DROPPED = /不支援看圖|can't read images/;
+    const countNotices = (msgs: { role: string; content: unknown }[]) =>
+      msgs.filter((m) => m.role === "assistant" && DROPPED.test(String(m.content))).length;
+
+    it("多輪都回 images_dropped：同一次送出只提示一次", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(executeMcpTool).mockResolvedValue({ content: "ok", is_error: false });
+      vi.mocked(aiChat)
+        .mockResolvedValueOnce({
+          content: null,
+          tool_calls: [{ id: "c1", tool_name: "srv__tool", server_id: "srv", args: {} }],
+          tool_calling_unsupported: false,
+          images_dropped: true,
+        })
+        .mockResolvedValueOnce({ content: "看完了", tool_calls: [], tool_calling_unsupported: false, images_dropped: true });
+      const { result } = renderHook(() => useMcpChat("s-img-dropped"), { wrapper: LocaleProvider });
+      await act(async () => { await result.current.sendMessage("看這張圖", "all"); });
+
+      expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(2);
+      expect(countNotices(result.current.messages)).toBe(1);
+      expect(result.current.messages.at(-1)?.content).toBe("看完了");
+    });
+
+    it("沒有 images_dropped：不提示", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(aiChat).mockResolvedValueOnce({ content: "好", tool_calls: [], tool_calling_unsupported: false });
+      const { result } = renderHook(() => useMcpChat("s-img-ok"), { wrapper: LocaleProvider });
+      await act(async () => { await result.current.sendMessage("hi", "none"); });
+      expect(countNotices(result.current.messages)).toBe(0);
+    });
+  });
 });

@@ -176,6 +176,8 @@ export function useMcpChat(
     // 這一輪有沒有呼叫電腦操作工具：有的話，結束（含出錯、被停止）時把 AITerm 叫回前景，
     // 使用者才看得到結果——操作期間 AITerm 被目標 App 壓在後面（Wayland 上是被縮小）。
     let usedComputer = false;
+    // 供應商讀不了圖時每一輪都會回 images_dropped；同一次送出只提示一次。
+    let imagesDroppedNoticed = false;
     try {
       // 不含 system 提示詞的歷史；system 在每次呼叫前才重算、接在最前面（見 ExtraSystemPrompt）。
       let iterHistory: ChatMessage[] = [...history];
@@ -197,6 +199,11 @@ export function useMcpChat(
 
         if (reply.tool_calling_unsupported) {
           setToolFallbackReason(reply.tool_fallback_reason ?? "unsupported");
+        }
+
+        if (reply.images_dropped && !imagesDroppedNoticed) {
+          imagesDroppedNoticed = true;
+          setMessages(prev => [...prev, { role: "assistant" as const, content: t.ai_images_dropped }]);
         }
 
         // Handle tool calls

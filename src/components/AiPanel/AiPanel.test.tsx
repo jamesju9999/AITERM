@@ -842,6 +842,25 @@ describe("AiPanel", () => {
     expect(JSON.stringify(userMsg?.content)).toContain("附件內容");
   });
 
+  // 超過 5MB 的圖片以前被靜默丟掉，使用者以為附上了。
+  it("超過 5MB 的圖片不附上，並在輸入框上方提示；之後成功附加就清掉提示", async () => {
+    const { container } = render(
+      <AiPanel sessionId="s1" isOpen={true} providerName="Ollama" onClose={vi.fn()}
+        onExecuteCommand={vi.fn()} onOpenProviderPalette={vi.fn()} />,
+    );
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const big = new File(["x"], "huge.png", { type: "image/png" });
+    Object.defineProperty(big, "size", { value: 6 * 1024 * 1024 });
+    await userEvent.upload(fileInput, big);
+
+    expect(await screen.findByText("huge.png 超過 5MB，沒有附上")).toBeInTheDocument();
+    expect(container.querySelector(".aiterm-attachment-pills")).toBeNull();
+
+    await userEvent.upload(fileInput, new File(["附件內容"], "note.txt", { type: "text/plain" }));
+    expect(await screen.findByText("note.txt")).toBeInTheDocument();
+    expect(screen.queryByText(/超過 5MB，沒有附上/)).toBeNull();
+  });
+
   /**
    * 面板預設只有 420px，長回答（尤其帶表格或程式碼的）讀起來很擠。拖寬要一路
    * 拖、而且會蓋掉終端機的寬度設定，所以給一顆「放大」直接吃滿寬。

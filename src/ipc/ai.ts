@@ -55,6 +55,8 @@ export interface AiChatReply {
   tool_calling_unsupported: boolean;    // true if provider doesn't support tools
   /** 切換方案的原因。`unsupported` = 模型做不到；`subscription_billing` = 憑證的計費歸屬。 */
   tool_fallback_reason?: ToolFallbackReason | null;
+  /** 供應商讀不了圖，附圖沒送出（只送了文字）。後端只在為 true 時才帶這個欄位。 */
+  images_dropped?: boolean;
 }
 
 export interface AgentToolDefinition {

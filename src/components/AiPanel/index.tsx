@@ -181,19 +181,25 @@ export function AiPanel({
   const [useMcp, setUseMcp] = useState(loadSavedUseMcp);
   const [submitShortcut, setSubmitShortcut] = useState<SubmitShortcut>("enter");
 
+  // 超過大小上限、沒附上的圖片名稱；不提示的話使用者會以為附上了。
+  const [oversizeNotice, setOversizeNotice] = useState<string | null>(null);
+
   const processFiles = useCallback(async (files: FileList | File[]) => {
     const arr = Array.from(files);
-    const results = await Promise.allSettled(arr.map(async (file) => {
-      if (file.type.startsWith("image/") && file.size > MAX_IMAGE_BYTES) {
-        throw new Error(`${file.name} 超過 5MB 限制`);
-      }
-      return readFileAsAttachment(file);
-    }));
+    const oversize = arr.filter((file) => file.type.startsWith("image/") && file.size > MAX_IMAGE_BYTES);
+    const results = await Promise.allSettled(
+      arr.filter((file) => !oversize.includes(file)).map((file) => readFileAsAttachment(file)),
+    );
     const valid = results
       .filter((r): r is PromiseFulfilledResult<Attachment> => r.status === "fulfilled")
       .map((r) => r.value);
     setAttachments((prev) => [...prev, ...valid]);
-  }, [MAX_IMAGE_BYTES]);
+    if (oversize.length > 0) {
+      setOversizeNotice(t.ai_image_too_large(oversize.map((file) => file.name).join(", ")));
+    } else if (valid.length > 0) {
+      setOversizeNotice(null);
+    }
+  }, [MAX_IMAGE_BYTES, t]);
 
   const handlePaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const files = e.clipboardData?.files;
@@ -290,6 +296,7 @@ export function AiPanel({
   const sendTurn = (text: string) => {
     const currentAttachments = attachments;
     setAttachments([]);
+    setOversizeNotice(null);
     const scope: ToolScope = agentMode ? (mcpActive ? "all" : "terminal") : "none";
     void chat.send(
       text,
@@ -412,6 +419,12 @@ export function AiPanel({
                   {t.agent_stuck_interrupt}
                 </button>
               </div>
+            </div>
+          )}
+          {oversizeNotice && (
+            <div className="aiterm-mode-hint aiterm-mode-hint--degraded" role="status">
+              <span aria-hidden="true">⚠</span>
+              <span>{oversizeNotice}</span>
             </div>
           )}
           {attachments.length > 0 && (
