@@ -18,11 +18,20 @@ Ask AI 有兩套迴圈：⚡（Agent）走 `<cmd>` 文字迴圈、不經確認�
 - 全域 `mcp_enabled = false` 時：⚡ 照樣可用，只給終端機工具；MCP 按鈕照現狀不顯示。
 - MCP 沒有任何工具（`mcpToolCount === 0`）時，⚡＋MCP 等同只有 ⚡。
 
-## 安全：⚡ 模式一律用「分級」，全自動照全自動
+## 安全：完全照設定的「執行模式」
 
-`terminal_command_gate` 在 ⚡ 模式下的有效模式 = 設定是 `full-auto` 就 `full-auto`，否則 `graded`。也就是 Safe 直接跑、NeedsConfirm／Dangerous 問、Blocked 拒絕。理由：開 ⚡ 本身就是「讓 AI 自己做」的意思，但預設的 always-confirm 會讓每個指令都跳框，而舊迴圈完全不問又太鬆。
+⚡ 模式的每個 `run_command` 都過現有的 `terminal_command_gate`，它讀設定的 `execution_mode`、套用 `terminal_tool::decide`，不加任何例外（使用者決定：設定畫面說什麼就做什麼）：
 
-與現況的差異（要寫進 CHANGELOG）：舊 ⚡ 什麼都不問，改完後 NeedsConfirm 與 Dangerous 會跳授權框，60 秒沒回應視為拒絕（沿用第 1 步）。
+| 風險 | 一律確認 | 分級自動 | 全自動 Agent |
+|---|---|---|---|
+| Safe | 問 | 直接跑 | 直接跑 |
+| NeedsConfirm | 問 | 問 | 直接跑 |
+| Dangerous | 問 | 問 | 問 |
+| Blocked | 拒絕 | 拒絕 | 拒絕 |
+
+預設值是「一律確認」，所以沒改過設定的人在 ⚡ 模式下每個指令都會跳授權框。
+
+與現況的差異（要寫進 CHANGELOG，並提示可到設定改成「分級自動」或「全自動 Agent」）：舊 ⚡ 什麼都不問，改完後依執行模式跳授權框，60 秒沒回應視為拒絕（沿用第 1 步）。
 
 ⚡ 關時沒有終端機工具，所以閘門不會被呼叫；▶ 手動執行維持既有的 `risk_level × execution_mode` 規則。
 
@@ -33,7 +42,7 @@ Ask AI 有兩套迴圈：⚡（Agent）走 `<cmd>` 文字迴圈、不經確認�
   - `terminal`：只附 `terminal_tool::tool_infos()`，不看 `mcp_enabled`；提示詞用 `with_tool_use_rule(build_chat_prompt(..))` ＋ `terminal_tool::PROMPT_HINT`，不加電腦操作提示。
   - `none`：走既有 `run_chat`。
   - `last_role == "tool"` 的放行條件改成「scope 不是 none」。
-- `terminal_command_gate` 多一個選用參數 `agent: Option<bool>`；true 時套用上面的有效模式規則。換算寫成純函式（例如 `terminal_tool::agent_mode(configured) -> ExecutionMode`）方便測試。
+- `terminal_command_gate` 不改。
 
 ## 前端
 
@@ -45,7 +54,6 @@ Ask AI 有兩套迴圈：⚡（Agent）走 `<cmd>` 文字迴圈、不經確認�
 
 ### `useMcpChat.ts`
 - `send(text, useMcp: boolean, …)` 改為接受 `scope: "none" | "terminal" | "all"`（`resend` 的 `lastSendRef` 一起改），呼叫 `aiChat(..., scope)`；催促動手（intent nudge）條件從 `useMcp` 改成 `scope !== "none"`。
-- 呼叫閘門時傳 `agent: scope !== "none"`（目前 scope 不是 none 就一定是 ⚡ 模式）。
 - 從舊迴圈搬過來的東西：
   - **步數與階段**：hook 對外多給 `step`（目前第幾輪）與 `phase`（`thinking` 等 AI／`running` 等工具），AiPanel 的狀態列與 `thinkingLabel` 改讀它們；上限沿用 `maxIterationsRef`（已經是 `max_agent_steps`）。到上限時加一則「已達最大步驟數 N」訊息（現在工具迴圈到上限是靜默結束）。
   - **卡住提示**：`run_command` 執行期間啟動既有的 `getIdleMs` 檢查（`STUCK_IDLE_MS`／`STUCK_CHECK_INTERVAL_MS`）；做法是把 interval 放在 AiPanel 的 `runTerminalCommand` 裡（它本來就包著 `onExecuteCommand`），結束時清掉。
@@ -61,11 +69,11 @@ Ask AI 有兩套迴圈：⚡（Agent）走 `<cmd>` 文字迴圈、不經確認�
 
 ## 測試
 
-- Rust：`ToolScope` 對工具清單的影響（none／terminal／all，含 `mcp_enabled=false` 時 all 退成 terminal）；`agent_mode` 換算（always-confirm→graded、graded→graded、full-auto→full-auto）；`last_role == "tool"` 在 terminal scope 被放行。
+- Rust：`ToolScope` 對工具清單的影響（none／terminal／all，含 `mcp_enabled=false` 時 all 退成 terminal）；`last_role == "tool"` 在 terminal scope 被放行。
 - 前端：
   - ⚡ 關：MCP 按鈕 disabled、送出 scope 為 `none`。
   - ⚡ 開＋MCP 關／開：送出 scope 為 `terminal`／`all`；MCP 狀態在切 ⚡ 後保留。
-  - ⚡ 模式呼叫閘門時帶 `agent: true`；閘門拒絕時工具結果是 `is_error` 且指令沒執行。
+  - ⚡ 模式的 `run_command` 會呼叫閘門；閘門拒絕時工具結果是 `is_error` 且指令沒執行。
   - 指令執行中沒輸出超過門檻 → 卡住提示出現；指令完成 → 消失。
   - 到步數上限出現提示訊息；停止鍵中斷正在跑的指令。
   - ModeHint 三種模式文字（中英文都有，避免 i18n 漂移）。
