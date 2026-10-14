@@ -71,10 +71,10 @@ export function ComputerUseSection({ enabled, onEnabledChange }: Props) {
           {status.allowed_apps.length === 0 ? (
             <p className="mcp-tool-server-desc">{t.computer_allowed_none}</p>
           ) : (
-            <ul>
+            <ul className="computer-app-list">
               {status.allowed_apps.map((k) => (
-                <li key={k}>
-                  {k === "*screen*" ? "整個螢幕" : k}{" "}
+                <li key={k} className="computer-app-row">
+                  <span className="computer-app-name">{k === "*screen*" ? "整個螢幕" : k}</span>
                   <button type="button" onClick={() => void revoke(k)}>{t.computer_revoke}</button>
                 </li>
               ))}
@@ -85,13 +85,23 @@ export function ComputerUseSection({ enabled, onEnabledChange }: Props) {
           {audit.length === 0 ? (
             <p className="mcp-tool-server-desc">{t.computer_audit_none}</p>
           ) : (
-            <ul>
-              {audit.map((a, i) => (
-                <li key={`${a.ts}-${i}`}>
-                  {fmtTime(a.ts)} · {a.tool.replace("computer_", "")} · {a.app || "-"}
-                  {a.detail ? ` · ${a.detail}` : ""} · {a.outcome}
-                </li>
-              ))}
+            <ul className="computer-audit-list">
+              {audit.map((a, i) => {
+                const err = a.outcome.startsWith("error: ") ? a.outcome.slice("error: ".length) : null;
+                const kind = err !== null ? "error" : a.outcome === "ok" ? "ok" : "warn";
+                return (
+                  <li key={`${a.ts}-${i}`} className="computer-audit-row">
+                    <span className="computer-audit-time">{fmtTime(a.ts)}</span>
+                    <span className="computer-audit-tool">{a.tool.replace("computer_", "")}</span>
+                    <span className="computer-audit-app">{a.app || "-"}</span>
+                    <span className="computer-audit-detail" title={a.detail}>{a.detail}</span>
+                    <span className={`computer-audit-outcome computer-audit-outcome--${kind}`}>
+                      {err !== null ? "error" : a.outcome}
+                    </span>
+                    {err !== null && <span className="computer-audit-error" title={err}>{err}</span>}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </>

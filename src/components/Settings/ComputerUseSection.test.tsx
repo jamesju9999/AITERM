@@ -58,7 +58,15 @@ describe("ComputerUseSection", () => {
 
   it("顯示稽核紀錄，含結果", async () => {
     mount();
-    expect(await screen.findByText(/click · Notes · element 0\.1 · denied/)).toBeInTheDocument();
+    const row = (await screen.findByText("element 0.1")).closest("li")!;
+    expect(row).toHaveTextContent(/click.*Notes.*element 0\.1.*denied/);
+  });
+
+  it("出錯的紀錄：結果欄只標 error，錯誤訊息另起一行", async () => {
+    audit.mockResolvedValue([{ ts: 1760000000, tool: "computer_click_text", app: "Safari", detail: "text=Safari", outcome: "error: 畫面上找不到「Safari」" }]);
+    mount();
+    expect(await screen.findByText("畫面上找不到「Safari」")).toHaveClass("computer-audit-error");
+    expect(screen.getByText("error")).toHaveClass("computer-audit-outcome--error");
   });
 
   it("後端讀取失敗：不崩潰，開關仍可用", async () => {

@@ -137,19 +137,134 @@
 
 /* 電腦操作區塊裡的「前往系統設定」「撤銷」原本是原生按鈕，跟頁面其他按鈕不同款。 */
 .mcp-tool-server-row button,
-.mcp-tool-server-page li button {
+.computer-app-row button {
   background: transparent;
   border: 1px solid #2e2e2e;
   border-radius: 4px;
   color: #ccc;
   cursor: pointer;
   font-size: 11px;
-  margin-left: 6px;
+  flex-shrink: 0;
   padding: 2px 8px;
 }
 
 .mcp-tool-server-row button:hover,
-.mcp-tool-server-page li button:hover {
+.computer-app-row button:hover {
   border-color: #2d5aab;
   color: #e6e6e6;
+}
+
+/* 已允許的 App：一列一張卡，撤銷按鈕靠右對齊，不再跟著名稱長度跑。 */
+/* 加上 .mcp-tool-server-page 前綴，才蓋得過上面通用的 ul 縮排。 */
+.mcp-tool-server-page .computer-app-list,
+.mcp-tool-server-page .computer-audit-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+}
+
+.computer-app-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 480px;
+}
+
+.mcp-tool-server-page li.computer-app-row {
+  align-items: center;
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  display: flex;
+  gap: 10px;
+  margin: 0;
+  padding: 6px 10px;
+}
+
+.computer-app-name {
+  color: #e6e6e6;
+  flex: 1;
+  font-family: monospace;
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 操作紀錄：固定欄寬的表格式排列，細節過長截斷（滑鼠停留看全文），
+   錯誤訊息另起一行最多兩行。整塊限高自己捲動，不把下面的註冊指令推到很遠。 */
+.computer-audit-list {
+  background: #141414;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.mcp-tool-server-page li.computer-audit-row {
+  align-items: baseline;
+  border-bottom: 1px solid #222;
+  column-gap: 12px;
+  display: grid;
+  grid-template-columns: max-content 90px 110px minmax(0, 1fr) max-content;
+  margin: 0;
+  padding: 6px 10px;
+}
+
+.mcp-tool-server-page li.computer-audit-row:last-child {
+  border-bottom: none;
+}
+
+.computer-audit-time {
+  color: #777;
+  font-variant-numeric: tabular-nums;
+}
+
+.computer-audit-tool {
+  color: #e6e6e6;
+  font-family: monospace;
+}
+
+.computer-audit-app,
+.computer-audit-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.computer-audit-detail {
+  color: #999;
+}
+
+.computer-audit-outcome {
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 1px 6px;
+}
+
+.computer-audit-outcome--ok {
+  background: rgba(52, 211, 153, 0.15);
+  color: #34d399;
+}
+
+.computer-audit-outcome--warn {
+  background: rgba(251, 191, 36, 0.12);
+  color: #fbbf24;
+}
+
+.computer-audit-outcome--error {
+  background: rgba(248, 113, 113, 0.15);
+  color: #f87171;
+}
+
+.computer-audit-error {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: #f87171;
+  display: -webkit-box;
+  font-size: 11px;
+  grid-column: 2 / -1;
+  margin-top: 2px;
+  overflow: hidden;
 }
