@@ -268,7 +268,8 @@ fn build_messages(req: &GenerateRequest) -> Vec<OllamaMessage> {
                     images: vec![],
                 });
             }
-            None if content::has_image(&m.content) => {
+            // 任何陣列都要攤平——只附文字檔時前端也送陣列，沒有圖片時 images 為空、不序列化。
+            None if m.content.is_array() => {
                 let images = content::parts(&m.content)
                     .into_iter()
                     .filter_map(|p| match p {
@@ -583,6 +584,26 @@ mod tests {
         let json = serde_json::to_value(build_request_body("gemma4", &req, true)).unwrap();
         assert_eq!(json["messages"][1]["content"], "what colour?");
         assert_eq!(json["messages"][1]["images"], serde_json::json!(["QUJD"]));
+    }
+
+    #[test]
+    fn text_only_array_becomes_plain_string() {
+        // 只附文字檔時前端也送陣列（buildContentParts），Ollama 一樣不收陣列。
+        let mut req = sample_req();
+        req.messages = vec![ChatMessage {
+            role: "user".into(),
+            content: serde_json::json!([
+                {"type": "text", "text": "read this"},
+                {"type": "text", "text": "file body"},
+            ]),
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+        let json = serde_json::to_value(build_request_body("gemma4", &req, true)).unwrap();
+        assert_eq!(
+            json["messages"][1],
+            serde_json::json!({"role": "user", "content": "read this\n\nfile body"})
+        );
     }
 
     #[test]
