@@ -82,3 +82,17 @@ pub fn text_only(content: &serde_json::Value) -> String;
 - ChatGPT 網頁版的圖片上傳。
 - 非 data URI（http 網址）的圖片。
 - 圖片縮圖／壓縮、歷史訊息裡的舊圖片去重（每輪都會重送舊圖，沿用現況）。
+
+## 實作時補充的決定
+
+- Ollama：只要 content 是陣列就轉成字串（＋`images`），不只在有圖片時——只附文字檔／其他檔案時前端也送陣列，Ollama 一樣會拒收。
+- `images_dropped` 只看「最後一則 user 訊息」（這一輪送出的），不看整段歷史，否則附過一次圖之後每一輪都會提示；也不看最後一則訊息，因為工具迴圈後面幾輪歷史以工具結果結尾。
+- 陣列解析不出任何段落時（空陣列、只有 http 圖片網址），Anthropic／Codex／Antigravity 改送一段空文字，避免 `content: []` 被拒收。
+- `ai_chat` 取得實際供應商型別：新增 `AiRouter::provider_type`，與 `resolve()` 共用預設供應商的選法（`default_provider_id`）。
+- 超過 5MB 的提示用 `aiterm-mode-hint--degraded` 樣式顯示在輸入框上方，下一次成功附加或送出時清掉。
+- 「圖片被略過」的提示是對話裡的一則 assistant 訊息（同 `mcp_tool_limit`），之後幾輪會隨歷史送回模型。
+
+## 實作後驗證（2026-10-14，走 App 實際程式碼路徑，左黃右紫測試圖）
+
+- 正確：Anthropic 訂閱（純聊天、帶工具）、本機 Ollama gemma4（純聊天、帶工具）、oMLX gemma-4、Copilot、Gemini API 金鑰。
+- 未驗證：Codex（額度用完）、Gemini Antigravity（設定裡的 `Gemini2.5` 供應商已不存在，無法再測）。

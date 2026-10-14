@@ -16,7 +16,7 @@
 
 use aiterm_lib::ai::router::{get_valid_codex_oauth_token, get_valid_google_oauth_token, get_valid_oauth_token, AiRouter};
 use aiterm_lib::ai::{
-    antigravity, codex, ChatMessage, EnvSnapshot, GenerateRequest, GenerateWithToolsResult, McpToolDefinition, QueryMode,
+    antigravity, codex, ollama::OllamaClient, AiProvider, ChatMessage, EnvSnapshot, GenerateRequest, GenerateWithToolsResult, McpToolDefinition, QueryMode,
 };
 use aiterm_lib::config::ConfigStore;
 use aiterm_lib::secret::SecretStore;
@@ -87,6 +87,10 @@ async fn current_paths(report: &mut String, provider_id: &str) {
         Ok(p) => p,
         Err(e) => return record(report, &format!("A {provider_id} resolve"), &format!("ERR {e:?}")),
     };
+    exercise(report, provider_id, provider).await;
+}
+
+async fn exercise(report: &mut String, provider_id: &str, provider: Arc<dyn AiProvider>) {
 
     let (tx, mut rx) = mpsc::channel(256);
     let res = provider.generate(request(vec![openai_style_message()]), tx).await;
@@ -129,6 +133,11 @@ async fn probe_image_input_all_providers() {
         if want(id) {
             current_paths(&mut report, id).await;
         }
+    }
+
+    // 本機 Ollama（使用者設定裡沒有 Ollama 供應商，直接建 client；要先 `ollama pull gemma4`）。
+    if want("ollama-gemma4") {
+        exercise(&mut report, "ollama-gemma4", Arc::new(OllamaClient::new("gemma4:latest".into()))).await;
     }
 
     let secrets = SecretStore::new();
