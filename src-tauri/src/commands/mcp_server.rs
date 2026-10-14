@@ -100,8 +100,14 @@ pub async fn mcp_tool_server_set_config(
     app: AppHandle,
     pty_manager: State<'_, Arc<PtyManager>>,
 ) -> Result<McpToolServerStatus, String> {
+    // computer_enabled 由電腦操作設定頁（computer_set_enabled）管；這頁存檔時帶來的
+    // 是它載入當下的舊值，照收會把另一頁剛改的開關蓋回去。
     config
-        .update(|c| c.mcp_tool_server = value.clone())
+        .update(|c| {
+            let computer_enabled = c.mcp_tool_server.computer_enabled;
+            c.mcp_tool_server = value.clone();
+            c.mcp_tool_server.computer_enabled = computer_enabled;
+        })
         .map_err(|e| e.to_string())?;
     mcp_tool_server_apply(server, config, secrets, app, pty_manager).await
 }

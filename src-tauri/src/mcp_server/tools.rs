@@ -226,7 +226,7 @@ impl AiTermTools {
         }
     }
 
-    #[tool(description = "List the desktop apps with visible windows that can be controlled (name, bundle id, pid, frontmost). Part of the computer-use tools; disabled by default and must be enabled in AITerm Settings → MCP Tool Server.")]
+    #[tool(description = "List the desktop apps with visible windows that can be controlled (name, bundle id, pid, frontmost). Part of the computer-use tools; disabled by default and must be enabled in AITerm Settings → Computer Use.")]
     async fn computer_list_apps(&self) -> Result<CallToolResult, McpError> {
         self.run_computer(Call::ListApps).await
     }

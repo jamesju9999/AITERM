@@ -33,6 +33,15 @@ pub fn computer_status(
     }
 }
 
+/// 電腦操作總開關。它管的是 Ask AI 與 MCP 工具伺服器兩條路，所以有自己的設定頁與
+/// 指令，不跟著 MCP 工具伺服器的儲存走。工具清單與執行時都即時讀設定，改了就生效。
+#[tauri::command]
+pub fn computer_set_enabled(enabled: bool, config: State<Arc<ConfigStore>>) -> Result<(), String> {
+    config
+        .update(|c| c.mcp_tool_server.computer_enabled = enabled)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn computer_revoke_app(key: String, config: State<Arc<ConfigStore>>) -> Result<(), String> {
     config

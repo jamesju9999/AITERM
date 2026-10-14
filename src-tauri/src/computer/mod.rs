@@ -171,7 +171,7 @@ impl ComputerService {
                 None => Ok(()),
             }
         } else {
-            Err("電腦操作工具未啟用。請到 AITerm 設定 → MCP Tool Server 開啟「電腦操作」。".to_string())
+            Err("電腦操作工具未啟用。請到 AITerm 設定 → 電腦操作 開啟「允許 AI 操作這台電腦」。".to_string())
         }
     }
 

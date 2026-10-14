@@ -40,6 +40,9 @@ export const resolveComputerApproval = (id: string, decision: ApprovalDecision):
 
 export const computerStatus = (): Promise<ComputerStatus> => invoke("computer_status");
 
+export const computerSetEnabled = (enabled: boolean): Promise<void> =>
+  invoke("computer_set_enabled", { enabled });
+
 export const computerRevokeApp = (key: string): Promise<void> => invoke("computer_revoke_app", { key });
 
 export const computerAuditTail = (limit?: number): Promise<ComputerAuditEntry[]> =>

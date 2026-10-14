@@ -11,6 +11,7 @@ import { McpServersPage } from "./McpServersPage";
 import { ClaudeBridgePage } from "./ClaudeBridgePage";
 import { McpToolServerPage } from "./McpToolServerPage";
 import { OpenAiServerPage } from "./OpenAiServerPage";
+import { ComputerUsePage } from "./ComputerUsePage";
 import { TaskBoardPage } from "./TaskBoardPage";
 import { UsagePage } from "./UsagePage";
 import { useLocale } from "../../contexts/LocaleContext";
@@ -24,11 +25,12 @@ import {
   LinkIcon,
   ZapIcon,
   SparklesIcon,
-  ClipboardListIcon
+  ClipboardListIcon,
+  MonitorIcon
 } from "../Icons";
 import "./SettingsView.css";
 
-type SettingsTab = "general" | "providers" | "databases" | "vcs" | "enterprise" | "about" | "mcp" | "mail" | "bridge" | "usage" | "mcpToolServer" | "openaiServer" | "taskBoard";
+type SettingsTab = "general" | "providers" | "databases" | "vcs" | "enterprise" | "about" | "mcp" | "mail" | "bridge" | "usage" | "mcpToolServer" | "openaiServer" | "computerUse" | "taskBoard";
 
 export function SettingsView() {
   const navigate = useNavigate();
@@ -120,6 +122,12 @@ export function SettingsView() {
           <LinkIcon size={16} /> {t.openai_server_title}
         </button>
         <button
+          className={`sidebar-item ${tab === "computerUse" ? "sidebar-item--active" : ""}`}
+          onClick={() => setTab("computerUse")}
+        >
+          <MonitorIcon size={16} /> {t.settings_tab_computerUse}
+        </button>
+        <button
           className={`sidebar-item ${tab === "taskBoard" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("taskBoard")}
         >
@@ -172,6 +180,7 @@ export function SettingsView() {
         {tab === "bridge" && <ClaudeBridgePage />}
         {tab === "mcpToolServer" && <McpToolServerPage />}
         {tab === "openaiServer" && <OpenAiServerPage />}
+        {tab === "computerUse" && <ComputerUsePage />}
         {tab === "taskBoard" && <TaskBoardPage />}
         {tab === "usage" && <UsagePage />}
         {tab === "enterprise" && <EnterprisePage />}

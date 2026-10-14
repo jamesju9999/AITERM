@@ -5,22 +5,24 @@ import {
   computerAuditTail,
   computerOpenPrivacySettings,
   computerRevokeApp,
+  computerSetEnabled,
   computerStatus,
   type ComputerAuditEntry,
   type ComputerStatus,
 } from "../../ipc/computer";
-
-interface Props {
-  enabled: boolean;
-  onEnabledChange: (enabled: boolean) => void;
-}
+import "./McpToolServerPage.css";
+import "./ComputerUsePage.css";
 
 function fmtTime(ts: number): string {
   return new Date(ts * 1000).toLocaleString();
 }
 
-/** MCP Tool Server 設定頁裡的「電腦操作」區塊：總開關、權限狀態、已授權 App、稽核紀錄。 */
-export function ComputerUseSection({ enabled, onEnabledChange }: Props) {
+/**
+ * 「電腦操作」設定頁：總開關、權限狀態、已授權 App、稽核紀錄。
+ * 開關同時管 Ask AI 與 MCP 工具伺服器兩條路，所以獨立成一頁、切換就存檔。
+ * 版面沿用 McpToolServerPage.css 的通用樣式。
+ */
+export function ComputerUsePage() {
   const { t } = useLocale();
   const [status, setStatus] = useState<ComputerStatus | null>(null);
   const [audit, setAudit] = useState<ComputerAuditEntry[]>([]);
@@ -36,6 +38,15 @@ export function ComputerUseSection({ enabled, onEnabledChange }: Props) {
   }, []);
 
   useEffect(() => { void reload(); }, [reload]);
+
+  const toggle = async (enabled: boolean) => {
+    try {
+      await computerSetEnabled(enabled);
+    } catch (e) {
+      console.error("儲存電腦操作開關失敗:", e);
+    }
+    await reload();
+  };
 
   const revoke = async (key: string) => {
     await computerRevokeApp(key);
@@ -54,18 +65,21 @@ export function ComputerUseSection({ enabled, onEnabledChange }: Props) {
   );
 
   return (
-    <section className="mcp-tool-server-section">
-      <h3>{t.computer_title}</h3>
-      <label className="mcp-tool-server-row">
-        <input type="checkbox" checked={enabled} onChange={(e) => onEnabledChange(e.target.checked)} />
-        {t.computer_enable}
-      </label>
+    <div className="mcp-tool-server-page">
+      <h2>{t.computer_title}</h2>
       <p className="mcp-tool-server-desc">{t.computer_desc}</p>
+      <p className="mcp-tool-server-desc">{t.computer_scope}</p>
 
       {status && (
         <>
-          {perm(status.accessibility, t.computer_perm_accessibility, "accessibility")}
-          {perm(status.screen_recording, t.computer_perm_screen, "screen")}
+          <section className="mcp-tool-server-section">
+            <label className="mcp-tool-server-row">
+              <input type="checkbox" checked={status.enabled} onChange={(e) => void toggle(e.target.checked)} />
+              {t.computer_enable}
+            </label>
+            {perm(status.accessibility, t.computer_perm_accessibility, "accessibility")}
+            {perm(status.screen_recording, t.computer_perm_screen, "screen")}
+          </section>
 
           <h4>{t.computer_allowed_apps}</h4>
           {status.allowed_apps.length === 0 ? (
@@ -106,6 +120,6 @@ export function ComputerUseSection({ enabled, onEnabledChange }: Props) {
           )}
         </>
       )}
-    </section>
+    </div>
   );
 }
