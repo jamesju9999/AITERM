@@ -128,6 +128,9 @@ export function invokeAiChatCtx(
   });
 }
 
+/** Ask AI 這一輪給模型哪些工具：⚡ 關＝none、只有 ⚡＝terminal、⚡＋MCP＝all。見 Rust `ToolScope`。 */
+export type ToolScope = "none" | "terminal" | "all";
+
 export const aiChat = (
   messages: ChatMessage[],
   sessionId: string,
@@ -135,6 +138,7 @@ export const aiChat = (
   useMcp = false,
   locale: Locale = "zh-TW",
   supportsArtifacts = false,
+  toolScope?: ToolScope,
 ): Promise<AiChatReply> =>
   invoke("ai_chat", {
     messages,
@@ -143,6 +147,8 @@ export const aiChat = (
     useMcp,
     locale,
     supportsArtifacts,
+    // 只有指定時才帶：其他呼叫端的 payload 維持原樣（有測試比對整個 payload）。
+    ...(toolScope ? { toolScope } : {}),
   });
 
 export type AiStreamKind = "query" | "chat";

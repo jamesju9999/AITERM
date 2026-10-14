@@ -189,6 +189,29 @@ describe("aiChat", () => {
       expect.objectContaining({ supportsArtifacts: true }),
     );
   });
+
+  it("sends toolScope only when given, leaving the legacy payload untouched", async () => {
+    await aiChat([{ role: "user", content: "x" }], "s1", "p1", true, "en", false, "terminal");
+    expect(invokeMock).toHaveBeenLastCalledWith("ai_chat", {
+      messages: [{ role: "user", content: "x" }],
+      sessionId: "s1",
+      providerId: "p1",
+      useMcp: true,
+      locale: "en",
+      supportsArtifacts: false,
+      toolScope: "terminal",
+    });
+
+    await aiChat([{ role: "user", content: "x" }], "s1", "p1", true, "en", false);
+    expect(invokeMock).toHaveBeenLastCalledWith("ai_chat", {
+      messages: [{ role: "user", content: "x" }],
+      sessionId: "s1",
+      providerId: "p1",
+      useMcp: true,
+      locale: "en",
+      supportsArtifacts: false,
+    });
+  });
 });
 
 describe("invokeAiComplete", () => {
