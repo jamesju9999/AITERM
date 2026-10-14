@@ -235,6 +235,8 @@ export function useMcpChat(
                   isError = true;
                 } else {
                   const gate = await terminalCommandGate(command);
+                  // 授權框開著時使用者按了停止，之後才按「允許」：這一輪已結束，不可以再把指令打進終端機。
+                  if (stale()) return;
                   if (!gate.allowed) {
                     resultContent = gate.reason ?? "The command was not allowed.";
                     isError = true;

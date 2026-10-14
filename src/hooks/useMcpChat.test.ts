@@ -20,7 +20,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
 }));
 
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, waitFor } from "@testing-library/react";
 import { aiChat, abortAi } from "../ipc/ai";
 import { executeMcpTool } from "../ipc/mcp";
 import { terminalCommandGate } from "../ipc/computer";
@@ -426,6 +426,27 @@ describe("useMcpChat", () => {
       content: null,
       tool_calls: [{ id: "t1", tool_name: "aiterm_terminal__run_command", server_id: "aiterm-terminal", args: { command } }],
       tool_calling_unsupported: false,
+    });
+
+    // 授權框開著時按了停止，之後才按「允許」：這一輪已經結束，指令不可以再打進終端機。
+    it("等授權時被停止，之後才放行也不執行指令", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(aiChat).mockResolvedValueOnce(runCmd("rm -rf build"));
+      let allow: (v: { allowed: boolean; reason: string | null }) => void = () => {};
+      vi.mocked(terminalCommandGate).mockImplementationOnce(() => new Promise((r) => { allow = r; }));
+      const runCommand = vi.fn(async () => "ok");
+      const { result } = renderHook(() => useMcpChat("s-gate-stop", 10, runCommand), { wrapper: LocaleProvider });
+
+      let done: Promise<void> = Promise.resolve();
+      act(() => { done = result.current.sendMessage("清掉 build", "terminal"); });
+      await waitFor(() => expect(terminalCommandGate).toHaveBeenCalledWith("rm -rf build"));
+
+      act(() => { result.current.stop(); });
+      await act(async () => {
+        allow({ allowed: true, reason: null });
+        await done;
+      });
+      expect(runCommand).not.toHaveBeenCalled();
     });
 
     it("把 scope 傳給後端（第 7 個參數）", async () => {
