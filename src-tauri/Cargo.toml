@@ -162,3 +162,8 @@ windows = { version = "0.61", features = [
   "Foundation_Collections", "Globalization",
 ] }
 windows-sys = { version = "0.60", features = ["Win32_Storage_FileSystem", "Win32_System_WindowsProgramming"] }
+
+# Keep debug builds small: full DWARF made target/ balloon past 100 GB.
+# Line tables still give usable backtraces.
+[profile.dev]
+debug = "line-tables-only"
