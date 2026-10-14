@@ -27,9 +27,13 @@ impl ChatgptWebProvider {
 /// webview 就測。
 /// `ChatMessage.content` 可能是字串、內容陣列，或 null（帶 tool_calls 時）。
 /// 取法與 `ai/codex.rs::build_request_body` 一致——那條路徑已經在線上跑。
+///
+/// 內容陣列只取文字：網頁版的圖片要走它自己的檔案上傳流程（不做），把 base64
+/// 當文字送出只會塞爆對話。`ai_chat` 會回報 `images_dropped` 讓畫面提示使用者。
 fn message_text(m: &crate::ai::ChatMessage) -> String {
     match &m.content {
         serde_json::Value::String(s) => s.clone(),
+        arr @ serde_json::Value::Array(_) => crate::ai::content::text_only(arr),
         other => other.to_string(),
     }
 }
@@ -311,6 +315,26 @@ mod tests {
             context: EnvSnapshot::default(),
             mode: QueryMode::SingleCommand,
             max_tokens: None,
+        }
+    }
+
+    #[test]
+    fn image_is_dropped_and_text_kept() {
+        let mut r = req("", &[]);
+        r.messages = vec![ChatMessage {
+            role: "user".into(),
+            content: serde_json::json!([
+                {"type": "text", "text": "what colour?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,QUJD"}},
+            ]),
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+        for p in [build_payload(&r, "gpt-5-5"), build_payload_with_tools(&r, "gpt-5-5", &[], "n0nce")] {
+            let text = p["text"].as_str().unwrap();
+            assert!(text.contains("what colour?"), "{text}");
+            assert!(!text.contains("QUJD"), "{text}");
+            assert!(!text.contains("image_url"), "{text}");
         }
     }
 
