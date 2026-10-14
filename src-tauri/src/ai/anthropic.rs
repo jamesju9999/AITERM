@@ -294,11 +294,32 @@ fn build_anthropic_messages(messages: &[ChatMessage]) -> Vec<serde_json::Value> 
             }
         }
 
-        result.push(serde_json::json!({ "role": m.role, "content": m.content }));
+        result.push(serde_json::json!({ "role": m.role, "content": to_anthropic_content(&m.content) }));
     }
 
     flush_tool_results(&mut result, &mut pending_tool_results);
     result
+}
+
+/// 前端送的是 OpenAI 格式的內容陣列（`image_url` + data URI），Anthropic 只收
+/// `{"type":"image","source":{"type":"base64",…}}`，原樣轉送會 400。
+/// 字串與 null 原樣回傳，輸出跟以前完全一樣。
+fn to_anthropic_content(content: &serde_json::Value) -> serde_json::Value {
+    use crate::ai::content::{parts, Part};
+    if !content.is_array() {
+        return content.clone();
+    }
+    let blocks = parts(content)
+        .into_iter()
+        .map(|p| match p {
+            Part::Text(text) => serde_json::json!({ "type": "text", "text": text }),
+            Part::Image { media_type, data } => serde_json::json!({
+                "type": "image",
+                "source": { "type": "base64", "media_type": media_type, "data": data },
+            }),
+        })
+        .collect();
+    serde_json::Value::Array(blocks)
 }
 
 fn flush_tool_results(result: &mut Vec<serde_json::Value>, pending: &mut Vec<serde_json::Value>) {
@@ -381,7 +402,7 @@ fn build_request_body(
         .messages
         .iter()
         .filter(|m| !is_system_message(m))
-        .map(|m| AnthropicMessage { role: m.role.clone(), content: m.content.clone() })
+        .map(|m| AnthropicMessage { role: m.role.clone(), content: to_anthropic_content(&m.content) })
         .collect();
     AnthropicRequest {
         model: model.to_owned(),
@@ -825,6 +846,53 @@ mod tests {
         for msg in json["messages"].as_array().unwrap() {
             assert_ne!(msg["role"], "system", "system message must not appear in the messages array");
         }
+    }
+
+    fn image_user_message() -> ChatMessage {
+        ChatMessage {
+            role: "user".into(),
+            content: serde_json::json!([
+                {"type": "text", "text": "what colour?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,QUJD"}},
+            ]),
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
+    fn assert_anthropic_image_content(content: &serde_json::Value) {
+        assert_eq!(content[0], serde_json::json!({"type": "text", "text": "what colour?"}));
+        assert_eq!(
+            content[1],
+            serde_json::json!({
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/png", "data": "QUJD"},
+            })
+        );
+        assert!(!content.to_string().contains("image_url"), "{content}");
+    }
+
+    #[test]
+    fn streaming_request_body_sends_images_as_image_blocks() {
+        let mut req = sample_req();
+        req.messages = vec![image_user_message()];
+        let json = serde_json::to_value(build_request_body("claude-sonnet-4-5", &req, true, false)).unwrap();
+        assert_anthropic_image_content(&json["messages"][0]["content"]);
+    }
+
+    #[test]
+    fn tool_path_messages_send_images_as_image_blocks() {
+        let msgs = build_anthropic_messages(&[image_user_message()]);
+        assert_anthropic_image_content(&msgs[0]["content"]);
+    }
+
+    #[test]
+    fn string_content_is_unchanged_on_both_paths() {
+        let req = sample_req();
+        let json = serde_json::to_value(build_request_body("claude-sonnet-4-5", &req, true, false)).unwrap();
+        assert_eq!(json["messages"][0]["content"], serde_json::json!("list files"));
+        let msgs = build_anthropic_messages(&req.messages);
+        assert_eq!(msgs[0], serde_json::json!({"role": "user", "content": "list files"}));
     }
 
     #[test]
