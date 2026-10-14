@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::ai::{
+    content,
     sse::{find_line_end, separator_len},
     AiError, AiProvider, AiToolCall, GenerateChunk, GenerateRequest, GenerateWithToolsResult,
     McpToolDefinition,
@@ -241,6 +242,10 @@ struct OllamaMessage {
     tool_calls: Option<Vec<OllamaResponseToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
+    /// Ollama 的 `/api/chat` 不收內容陣列（`cannot unmarshal array … of type string`），
+    /// 圖片要放這裡：base64、不含 `data:…;base64,` 前綴。
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    images: Vec<String>,
 }
 
 fn build_messages(req: &GenerateRequest) -> Vec<OllamaMessage> {
@@ -250,6 +255,7 @@ fn build_messages(req: &GenerateRequest) -> Vec<OllamaMessage> {
         content: serde_json::Value::String(req.system_prompt.clone()),
         tool_calls: None,
         tool_call_id: None,
+        images: vec![],
     });
     for m in &req.messages {
         match &m.tool_calls {
@@ -259,6 +265,23 @@ fn build_messages(req: &GenerateRequest) -> Vec<OllamaMessage> {
                     content: serde_json::Value::String(String::new()),
                     tool_calls: Some(to_ollama_tool_calls(tool_calls)),
                     tool_call_id: None,
+                    images: vec![],
+                });
+            }
+            None if content::has_image(&m.content) => {
+                let images = content::parts(&m.content)
+                    .into_iter()
+                    .filter_map(|p| match p {
+                        content::Part::Image { data, .. } => Some(data),
+                        content::Part::Text(_) => None,
+                    })
+                    .collect();
+                messages.push(OllamaMessage {
+                    role: m.role.clone(),
+                    content: serde_json::Value::String(content::text_only(&m.content)),
+                    tool_calls: None,
+                    tool_call_id: m.tool_call_id.clone(),
+                    images,
                 });
             }
             None => {
@@ -267,6 +290,7 @@ fn build_messages(req: &GenerateRequest) -> Vec<OllamaMessage> {
                     content: m.content.clone(),
                     tool_calls: None,
                     tool_call_id: m.tool_call_id.clone(),
+                    images: vec![],
                 });
             }
         }
@@ -542,6 +566,32 @@ mod tests {
         assert_eq!(json["messages"][0]["content"], "sys");
         assert_eq!(json["messages"][1]["role"], "user");
         assert_eq!(json["stream"], true);
+    }
+
+    #[test]
+    fn image_message_puts_text_in_content_and_base64_in_images() {
+        let mut req = sample_req();
+        req.messages = vec![ChatMessage {
+            role: "user".into(),
+            content: serde_json::json!([
+                {"type": "text", "text": "what colour?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,QUJD"}},
+            ]),
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+        let json = serde_json::to_value(build_request_body("gemma4", &req, true)).unwrap();
+        assert_eq!(json["messages"][1]["content"], "what colour?");
+        assert_eq!(json["messages"][1]["images"], serde_json::json!(["QUJD"]));
+    }
+
+    #[test]
+    fn text_message_has_no_images_key() {
+        let json = serde_json::to_value(build_request_body("gemma4", &sample_req(), true)).unwrap();
+        for m in json["messages"].as_array().unwrap() {
+            assert!(m.get("images").is_none(), "{m}");
+        }
+        assert_eq!(json["messages"][1], serde_json::json!({"role": "user", "content": "ls"}));
     }
 
     #[test]
