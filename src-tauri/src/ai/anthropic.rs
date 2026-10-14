@@ -305,11 +305,11 @@ fn build_anthropic_messages(messages: &[ChatMessage]) -> Vec<serde_json::Value> 
 /// `{"type":"image","source":{"type":"base64",…}}`，原樣轉送會 400。
 /// 字串與 null 原樣回傳，輸出跟以前完全一樣。
 fn to_anthropic_content(content: &serde_json::Value) -> serde_json::Value {
-    use crate::ai::content::{parts, Part};
+    use crate::ai::content::{parts_or_empty_text, Part};
     if !content.is_array() {
         return content.clone();
     }
-    let blocks = parts(content)
+    let blocks = parts_or_empty_text(content)
         .into_iter()
         .map(|p| match p {
             Part::Text(text) => serde_json::json!({ "type": "text", "text": text }),

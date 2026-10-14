@@ -46,6 +46,18 @@ fn parse_data_uri(url: &str) -> Option<Part> {
     Some(Part::Image { media_type: media_type.to_string(), data: data.to_string() })
 }
 
+/// 跟 `parts` 一樣，但解析不出任何段落時（空陣列、只有 http 圖片網址）回一個空文字段落。
+/// 給把段落逐一轉成陣列的供應商用：`content: []`／`parts: []` 會被拒絕（400），
+/// 一個空文字段落等同今天空字串訊息的結果。
+pub fn parts_or_empty_text(content: &Value) -> Vec<Part> {
+    let p = parts(content);
+    if p.is_empty() {
+        vec![Part::Text(String::new())]
+    } else {
+        p
+    }
+}
+
 pub fn has_image(content: &Value) -> bool {
     parts(content).iter().any(|p| matches!(p, Part::Image { .. }))
 }
@@ -124,6 +136,14 @@ mod tests {
     #[test]
     fn other_values_fall_back_to_to_string() {
         assert_eq!(parts(&json!(42)), vec![Part::Text("42".into())]);
+    }
+
+    #[test]
+    fn parts_or_empty_text_falls_back_when_nothing_parses() {
+        let empty = vec![Part::Text(String::new())];
+        assert_eq!(parts_or_empty_text(&json!([])), empty);
+        assert_eq!(parts_or_empty_text(&json!([img("https://example.com/a.png")])), empty);
+        assert_eq!(parts_or_empty_text(&json!([{"type": "text", "text": "hi"}])), vec![Part::Text("hi".into())]);
     }
 
     #[test]

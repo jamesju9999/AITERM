@@ -141,7 +141,7 @@ pub fn build_request_body(model: &str, req: &GenerateRequest) -> serde_json::Val
                 // 照 Responses API 文件寫（input_image 收 data URI 字串），尚未用真帳號
                 // 驗證——探勘時額度用完，見 spec 的探勘結果。
                 arr @ serde_json::Value::Array(_) if role == "user" => serde_json::Value::Array(
-                    content::parts(arr)
+                    content::parts_or_empty_text(arr)
                         .into_iter()
                         .map(|p| match p {
                             content::Part::Text(text) => {

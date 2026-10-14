@@ -354,7 +354,7 @@ pub fn build_request_body(model: &str, project_id: &str, req: &GenerateRequest) 
                 }
                 // 照 Gemini API 文件寫（inlineData），尚未用真帳號驗證——探勘時
                 // 遇到 429 RESOURCE_EXHAUSTED，見 spec 的探勘結果。
-                let parts: Vec<serde_json::Value> = content::parts(&m.content)
+                let parts: Vec<serde_json::Value> = content::parts_or_empty_text(&m.content)
                     .into_iter()
                     .map(|p| match p {
                         content::Part::Text(text) => serde_json::json!({ "text": text }),
@@ -448,6 +448,21 @@ mod tests {
             ])
         );
         assert!(!body.to_string().contains("image_url"), "{body}");
+    }
+
+    #[test]
+    fn array_with_nothing_usable_sends_one_empty_text_part() {
+        let r = req(
+            "sys",
+            vec![ChatMessage {
+                role: "user".into(),
+                content: serde_json::json!([{"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}]),
+                tool_call_id: None,
+                tool_calls: None,
+            }],
+        );
+        let body = build_request_body("gemini-2.5-pro", "proj-123", &r);
+        assert_eq!(body["request"]["contents"][0]["parts"], serde_json::json!([{"text": ""}]));
     }
 
     #[test]
