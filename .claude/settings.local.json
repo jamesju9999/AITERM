@@ -155,5 +155,14 @@
       "Bash(/opt/homebrew/bin/svn --version --quiet)",
       "Bash(launchctl getenv *)"
     ]
-  }
+  },
+  "skillOverrides": {
+    "UrlFetch": "off",
+    "agent-coordination": "off",
+    "openspec-apply-change": "off",
+    "openspec-archive-change": "off",
+    "openspec-explore": "off",
+    "openspec-propose": "off"
+  },
+  "outputStyle": "Concise"
 }
