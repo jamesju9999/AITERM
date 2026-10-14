@@ -88,9 +88,12 @@ pub fn computer_open_privacy_settings(pane: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn terminal_command_gate(
     command: String,
+    // 介面語系：授權框與拒絕原因用它產生文字。舊呼叫端沒帶時用繁中。
+    locale: Option<crate::ai::Locale>,
     approver: State<'_, Arc<TauriApprover>>,
     config: State<'_, Arc<ConfigStore>>,
 ) -> Result<crate::terminal_tool::GateResult, String> {
     let mode = config.get().execution_mode;
-    Ok(crate::terminal_tool::gate(approver.inner().as_ref(), mode, &command).await)
+    let locale = locale.unwrap_or(crate::ai::Locale::ZhTw);
+    Ok(crate::terminal_tool::gate(approver.inner().as_ref(), mode, &command, locale).await)
 }

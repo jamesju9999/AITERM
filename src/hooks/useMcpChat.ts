@@ -234,7 +234,7 @@ export function useMcpChat(
                   resultContent = "Error: no terminal is available to run commands.";
                   isError = true;
                 } else {
-                  const gate = await terminalCommandGate(command);
+                  const gate = await terminalCommandGate(command, locale);
                   // 授權框開著時使用者按了停止，之後才按「允許」：這一輪已結束，不可以再把指令打進終端機。
                   if (stale()) return;
                   if (!gate.allowed) {

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { Locale } from "../lib/i18n";
 
 /** 與 Rust `computer::approval::APPROVAL_REQUEST_EVENT` 相同。 */
 export const COMPUTER_APPROVAL_EVENT = "computer://approval-request";
@@ -57,6 +58,7 @@ export interface TerminalCommandGateResult {
   reason: string | null;
 }
 
-/** 對話模式的 run_command 工具在執行前呼叫：依執行模式與指令風險決定直接跑、問使用者、或拒絕。 */
-export const terminalCommandGate = (command: string): Promise<TerminalCommandGateResult> =>
-  invoke("terminal_command_gate", { command });
+/** 對話模式的 run_command 工具在執行前呼叫：依執行模式與指令風險決定直接跑、問使用者、或拒絕。
+ *  `locale` 決定授權框與拒絕原因的語言。 */
+export const terminalCommandGate = (command: string, locale: Locale): Promise<TerminalCommandGateResult> =>
+  invoke("terminal_command_gate", { command, locale });

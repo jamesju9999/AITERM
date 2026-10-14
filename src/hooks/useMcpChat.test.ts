@@ -320,12 +320,27 @@ describe("useMcpChat", () => {
       const { result } = mountWith(run);
       await act(async () => { await result.current.sendMessage("列出檔案", "all"); });
 
-      expect(terminalCommandGate).toHaveBeenCalledWith("ls");
+      expect(terminalCommandGate).toHaveBeenCalledWith("ls", "zh-TW");
       expect(run).toHaveBeenCalledWith("ls");
       expect(executeMcpTool).not.toHaveBeenCalled(); // 不走後端的 MCP 呼叫
       const second = vi.mocked(aiChat).mock.calls[1][0];
       expect(String(second.at(-1)?.content)).toContain("file.txt");
       expect(result.current.messages.at(-1)?.content).toBe("看到 file.txt 了");
+    });
+
+    it("英文介面：閘門收到 en，授權框與拒絕原因才會是英文", async () => {
+      localStorage.setItem("aiterm_locale", "en");
+      try {
+        vi.mocked(aiChat).mockReset();
+        vi.mocked(terminalCommandGate).mockReset();
+        vi.mocked(terminalCommandGate).mockResolvedValue({ allowed: true, reason: null });
+        vi.mocked(aiChat).mockResolvedValueOnce(call("ls")).mockResolvedValueOnce(say("done"));
+        const { result } = mountWith(vi.fn().mockResolvedValue("ok"));
+        await act(async () => { await result.current.sendMessage("list", "terminal"); });
+        expect(terminalCommandGate).toHaveBeenCalledWith("ls", "en");
+      } finally {
+        localStorage.removeItem("aiterm_locale");
+      }
     });
 
     it("被拒絕或被擋下：不執行，原因當作錯誤結果回給模型", async () => {
@@ -439,7 +454,7 @@ describe("useMcpChat", () => {
 
       let done: Promise<void> = Promise.resolve();
       act(() => { done = result.current.sendMessage("清掉 build", "terminal"); });
-      await waitFor(() => expect(terminalCommandGate).toHaveBeenCalledWith("rm -rf build"));
+      await waitFor(() => expect(terminalCommandGate).toHaveBeenCalledWith("rm -rf build", "zh-TW"));
 
       act(() => { result.current.stop(); });
       await act(async () => {

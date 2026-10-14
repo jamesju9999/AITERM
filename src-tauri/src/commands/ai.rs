@@ -444,10 +444,15 @@ async fn run_single_command(
     let final_risk_level = std::cmp::max(parsed.risk_level, guard_level);
 
     // Append the guard reason if it bumped the risk level
-    let final_explanation = if guard_level > parsed.risk_level && guard_reason.is_some() {
-        format!("{} (系統安全攔截: {})", parsed.explanation, guard_reason.unwrap())
-    } else {
-        parsed.explanation
+    let final_explanation = match guard_reason {
+        Some(reason) if guard_level > parsed.risk_level => {
+            let label = match locale {
+                Locale::ZhTw => "系統安全攔截",
+                Locale::En => "Safety check",
+            };
+            format!("{} ({label}: {})", parsed.explanation, reason.text(locale))
+        }
+        _ => parsed.explanation,
     };
 
     Ok(AiCommandReady {

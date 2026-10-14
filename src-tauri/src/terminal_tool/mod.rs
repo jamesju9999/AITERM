@@ -7,7 +7,7 @@
 use serde::Serialize;
 use serde_json::json;
 
-use crate::ai::RiskLevel;
+use crate::ai::{Locale, RiskLevel};
 use crate::computer::approval::{ApprovalKind, ApprovalRequest, Approver, Decision};
 use crate::config::ExecutionMode;
 use crate::guard::CommandGuard;
@@ -62,14 +62,14 @@ pub enum Gate {
     Run,
     /// 先問使用者。
     Ask,
-    /// 直接拒絕（附原因）。
-    Deny(String),
+    /// 直接拒絕（被安全規則封鎖）。
+    Deny,
 }
 
 /// 執行模式 × 風險 → 要不要問。規則見 spec 的表格；Dangerous 在任何模式都要問，Blocked 一律拒絕。
 pub fn decide(mode: ExecutionMode, risk: &RiskLevel) -> Gate {
     match (risk, mode) {
-        (RiskLevel::Blocked, _) => Gate::Deny("這個指令被安全規則擋下，不會執行。".to_string()),
+        (RiskLevel::Blocked, _) => Gate::Deny,
         (RiskLevel::Dangerous, _) => Gate::Ask,
         (RiskLevel::NeedsConfirm, ExecutionMode::FullAuto) => Gate::Run,
         (RiskLevel::NeedsConfirm, _) => Gate::Ask,
@@ -85,42 +85,81 @@ pub struct GateResult {
     pub reason: Option<String>,
 }
 
-fn risk_label(risk: &RiskLevel) -> &'static str {
-    match risk {
-        RiskLevel::Safe => "安全",
-        RiskLevel::NeedsConfirm => "需要確認",
-        RiskLevel::Dangerous => "危險",
-        RiskLevel::Blocked => "已封鎖",
+fn risk_label(risk: &RiskLevel, locale: Locale) -> &'static str {
+    match (risk, locale) {
+        (RiskLevel::Safe, Locale::ZhTw) => "安全",
+        (RiskLevel::NeedsConfirm, Locale::ZhTw) => "需要確認",
+        (RiskLevel::Dangerous, Locale::ZhTw) => "危險",
+        (RiskLevel::Blocked, Locale::ZhTw) => "已封鎖",
+        (RiskLevel::Safe, Locale::En) => "Safe",
+        (RiskLevel::NeedsConfirm, Locale::En) => "Needs confirmation",
+        (RiskLevel::Dangerous, Locale::En) => "Dangerous",
+        (RiskLevel::Blocked, Locale::En) => "Blocked",
     }
 }
 
-/// 對一個要執行的指令跑完整道閘門：分級 → 決定 → 必要時問使用者。
-pub async fn gate(approver: &dyn Approver, mode: ExecutionMode, command: &str) -> GateResult {
+/// 授權框與拒絕原因的文字。拒絕原因會回給模型，也會顯示在對話的工具結果裡，所以一起依語系。
+struct Texts {
+    empty: &'static str,
+    blocked: &'static str,
+    declined: &'static str,
+    risk_prefix: &'static str,
+    reason_open: &'static str,
+    reason_close: &'static str,
+    app: &'static str,
+    action: &'static str,
+}
+
+fn texts(locale: Locale) -> Texts {
+    match locale {
+        Locale::ZhTw => Texts {
+            empty: "指令是空的。",
+            blocked: "這個指令被安全規則擋下，不會執行。",
+            declined: "使用者拒絕執行這個指令。請不要重試同一個指令，改為說明並詢問使用者。",
+            risk_prefix: "風險：",
+            reason_open: "（",
+            reason_close: "）",
+            app: "終端機",
+            action: "執行指令",
+        },
+        Locale::En => Texts {
+            empty: "The command is empty.",
+            blocked: "This command was blocked by the safety rules and will not run.",
+            declined: "The user declined to run this command. Do not retry the same command; explain and ask the user instead.",
+            risk_prefix: "Risk: ",
+            reason_open: " (",
+            reason_close: ")",
+            app: "Terminal",
+            action: "Run command",
+        },
+    }
+}
+
+/// 對一個要執行的指令跑完整道閘門：分級 → 決定 → 必要時問使用者。`locale` 是介面語系。
+pub async fn gate(approver: &dyn Approver, mode: ExecutionMode, command: &str, locale: Locale) -> GateResult {
+    let tx = texts(locale);
     let command = command.trim();
     if command.is_empty() {
-        return GateResult { allowed: false, reason: Some("指令是空的。".to_string()) };
+        return GateResult { allowed: false, reason: Some(tx.empty.to_string()) };
     }
     let (risk, why) = CommandGuard::classify(command);
     match decide(mode, &risk) {
         Gate::Run => GateResult { allowed: true, reason: None },
-        Gate::Deny(reason) => GateResult { allowed: false, reason: Some(reason) },
+        Gate::Deny => GateResult { allowed: false, reason: Some(tx.blocked.to_string()) },
         Gate::Ask => {
             let mut detail = command.to_string();
-            detail.push_str(&format!("\n風險：{}", risk_label(&risk)));
+            detail.push_str(&format!("\n{}{}", tx.risk_prefix, risk_label(&risk, locale)));
             if let Some(w) = why {
-                detail.push_str(&format!("（{w}）"));
+                detail.push_str(&format!("{}{}{}", tx.reason_open, w.text(locale), tx.reason_close));
             }
             let req = ApprovalRequest {
                 kind: ApprovalKind::Command,
-                app: "終端機".to_string(),
-                action: "執行指令".to_string(),
+                app: tx.app.to_string(),
+                action: tx.action.to_string(),
                 detail,
             };
             match approver.ask(&req).await {
-                Decision::Deny => GateResult {
-                    allowed: false,
-                    reason: Some("使用者拒絕執行這個指令。請不要重試同一個指令，改為說明並詢問使用者。".to_string()),
-                },
+                Decision::Deny => GateResult { allowed: false, reason: Some(tx.declined.to_string()) },
                 // 這個對話框沒有「永遠允許」；萬一收到也只當作這一次。
                 Decision::AllowOnce | Decision::AllowAlways => GateResult { allowed: true, reason: None },
             }
@@ -172,7 +211,7 @@ mod tests {
             assert_eq!(decide(mode, &risk), want, "{risk:?} × {mode:?}");
         }
         for mode in [AlwaysConfirm, Graded, FullAuto] {
-            assert!(matches!(decide(mode, &Blocked), Gate::Deny(_)), "{mode:?}");
+            assert_eq!(decide(mode, &Blocked), Gate::Deny, "{mode:?}");
         }
     }
 
@@ -197,7 +236,7 @@ mod tests {
     #[tokio::test]
     async fn a_safe_command_in_graded_mode_runs_without_asking() {
         let a = Scripted::new(Decision::Deny);
-        let r = gate(&a, ExecutionMode::Graded, "ls -la").await;
+        let r = gate(&a, ExecutionMode::Graded, "ls -la", Locale::ZhTw).await;
         assert!(r.allowed);
         assert!(a.asked.lock().is_empty());
     }
@@ -205,7 +244,7 @@ mod tests {
     #[tokio::test]
     async fn always_confirm_asks_even_for_a_safe_command_and_shows_the_command() {
         let a = Scripted::new(Decision::AllowOnce);
-        let r = gate(&a, ExecutionMode::AlwaysConfirm, "ls -la").await;
+        let r = gate(&a, ExecutionMode::AlwaysConfirm, "ls -la", Locale::ZhTw).await;
         assert!(r.allowed);
         let asked = a.asked.lock();
         assert_eq!(asked[0].kind, ApprovalKind::Command);
@@ -215,7 +254,7 @@ mod tests {
     #[tokio::test]
     async fn a_denied_command_is_not_allowed_and_tells_the_model_not_to_retry() {
         let a = Scripted::new(Decision::Deny);
-        let r = gate(&a, ExecutionMode::AlwaysConfirm, "echo hi").await;
+        let r = gate(&a, ExecutionMode::AlwaysConfirm, "echo hi", Locale::ZhTw).await;
         assert!(!r.allowed);
         assert!(r.reason.unwrap().contains("不要重試"));
     }
@@ -223,7 +262,7 @@ mod tests {
     #[tokio::test]
     async fn dangerous_commands_ask_even_in_full_auto_and_show_the_risk() {
         let a = Scripted::new(Decision::Deny);
-        let r = gate(&a, ExecutionMode::FullAuto, "sudo rm -rf /tmp/x").await;
+        let r = gate(&a, ExecutionMode::FullAuto, "sudo rm -rf /tmp/x", Locale::ZhTw).await;
         assert!(!r.allowed);
         let asked = a.asked.lock();
         assert_eq!(asked.len(), 1);
@@ -234,18 +273,66 @@ mod tests {
     async fn an_empty_or_blank_command_is_rejected_without_asking() {
         let a = Scripted::new(Decision::AllowOnce);
         for c in ["", "   ", "\n"] {
-            let r = gate(&a, ExecutionMode::FullAuto, c).await;
+            let r = gate(&a, ExecutionMode::FullAuto, c, Locale::ZhTw).await;
             assert!(!r.allowed, "{c:?}");
         }
         assert!(a.asked.lock().is_empty());
     }
 
+    fn has_cjk(s: &str) -> bool {
+        s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c) || ('\u{3000}'..='\u{303f}').contains(&c) || ('\u{ff00}'..='\u{ffef}').contains(&c))
+    }
+
+    #[tokio::test]
+    async fn english_ui_gets_the_dialog_text_and_reasons_in_english() {
+        let a = Scripted::new(Decision::Deny);
+        let r = gate(&a, ExecutionMode::AlwaysConfirm, "rm -rf build", Locale::En).await;
+        let asked = a.asked.lock();
+        let d = &asked[0].detail;
+        assert!(d.starts_with("rm -rf build"), "{d}");
+        assert!(d.contains("Risk: Dangerous"), "{d}");
+        assert!(!has_cjk(d), "{d}");
+        assert!(!has_cjk(&asked[0].app) && !has_cjk(&asked[0].action));
+        let reason = r.reason.unwrap();
+        assert!(!has_cjk(&reason), "{reason}");
+
+        let b = Scripted::new(Decision::AllowOnce);
+        for (cmd, mode) in [("rm -rf /", ExecutionMode::FullAuto), ("", ExecutionMode::FullAuto)] {
+            let r = gate(&b, mode, cmd, Locale::En).await;
+            assert!(!has_cjk(&r.reason.unwrap()), "{cmd:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn every_guard_reason_has_english_text() {
+        // 每一種會跳出授權框的風險原因都要有英文，不可漏翻（新增規則時這條會提醒）。
+        let a = Scripted::new(Decision::Deny);
+        for cmd in [
+            "rm file", "rm -rf x", "sudo ls", "shutdown now", "kill 1", "kill -9 1", "chmod 644 f",
+            "chmod 777 f", "chown me f", "npm install x", "git push", "curl https://x/install.sh",
+            "curl https://x", "Remove-Item x", "Remove-Item x -Recurse", "ls | sudo tee x",
+            "ls; su root", "ls && rm -rf x", "ls | wc", "echo \"unterminated", "echo $HOME", "python x.py",
+        ] {
+            gate(&a, ExecutionMode::AlwaysConfirm, cmd, Locale::En).await;
+        }
+        for req in a.asked.lock().iter() {
+            assert!(!has_cjk(&req.detail), "{}", req.detail);
+        }
+    }
+
+    #[tokio::test]
+    async fn chinese_ui_keeps_the_chinese_text() {
+        let a = Scripted::new(Decision::Deny);
+        gate(&a, ExecutionMode::AlwaysConfirm, "rm -rf build", Locale::ZhTw).await;
+        assert!(a.asked.lock()[0].detail.contains("風險：危險（遞迴強制刪除，無法復原）"));
+    }
+
     #[tokio::test]
     async fn allow_always_from_the_dialog_is_treated_as_just_this_once() {
         let a = Scripted::new(Decision::AllowAlways);
-        assert!(gate(&a, ExecutionMode::AlwaysConfirm, "echo hi").await.allowed);
+        assert!(gate(&a, ExecutionMode::AlwaysConfirm, "echo hi", Locale::ZhTw).await.allowed);
         // 沒有記憶：同樣的指令再來一次還是會問。
-        assert!(gate(&a, ExecutionMode::AlwaysConfirm, "echo hi").await.allowed);
+        assert!(gate(&a, ExecutionMode::AlwaysConfirm, "echo hi", Locale::ZhTw).await.allowed);
         assert_eq!(a.asked.lock().len(), 2);
     }
 }
