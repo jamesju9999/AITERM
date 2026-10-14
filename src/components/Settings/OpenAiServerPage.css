@@ -1,11 +1,49 @@
+/* 字級與間距跟 ClaudeBridgePage.css 對齊——這頁原本的 h2/h3/說明文字都沒設
+   樣式，吃到瀏覽器預設值，比其他設定頁大一號。 */
 .openai-server-page {
-  padding: 24px;
-  max-width: 640px;
+  padding: 24px 32px;
+  color: #e6e6e6;
+  font-size: 13px;
+}
+
+.openai-server-page h2 {
+  color: #e6e6e6;
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.openai-server-page h3 {
+  border-bottom: 1px solid #232323;
+  color: #ccc;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 12px;
+  padding-bottom: 6px;
+}
+
+.openai-server-page h4 {
+  color: #ccc;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 16px 0 8px;
+}
+
+.openai-server-page ul {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+
+.openai-server-page li {
+  color: #ccc;
+  font-size: 12px;
+  margin: 4px 0;
 }
 
 .openai-server-desc {
-  color: var(--text-secondary, #888);
-  margin-bottom: 16px;
+  color: #777;
+  font-size: 12px;
+  margin: 0 0 14px;
 }
 
 .openai-server-status {
@@ -34,14 +72,15 @@
 }
 
 .openai-server-section {
-  margin: 20px 0;
+  margin: 20px 0 28px;
 }
 
 .openai-server-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 8px 0;
+  gap: 10px;
+  margin: 0 0 12px;
+  font-size: 13px;
 }
 
 .openai-server-row input[type="number"] {
@@ -151,4 +190,16 @@
 .openai-server-danger {
   border-color: #f87171 !important;
   color: #f87171 !important;
+}
+
+/* 跟 ClaudeBridgePage.css 的模型下拉一樣關掉原生外觀、自己畫箭頭。 */
+.openai-server-alias select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M2.5 4.5L6 8L9.5 4.5' stroke='%23888888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
 }

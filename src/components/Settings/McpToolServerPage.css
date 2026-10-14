@@ -1,11 +1,49 @@
+/* 字級與間距跟 ClaudeBridgePage.css 對齊——這頁原本的 h2/h3/說明文字都沒設
+   樣式，吃到瀏覽器預設值，比其他設定頁大一號。 */
 .mcp-tool-server-page {
-  padding: 24px;
-  max-width: 640px;
+  padding: 24px 32px;
+  color: #e6e6e6;
+  font-size: 13px;
+}
+
+.mcp-tool-server-page h2 {
+  color: #e6e6e6;
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.mcp-tool-server-page h3 {
+  border-bottom: 1px solid #232323;
+  color: #ccc;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 12px;
+  padding-bottom: 6px;
+}
+
+.mcp-tool-server-page h4 {
+  color: #ccc;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 16px 0 8px;
+}
+
+.mcp-tool-server-page ul {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+
+.mcp-tool-server-page li {
+  color: #ccc;
+  font-size: 12px;
+  margin: 4px 0;
 }
 
 .mcp-tool-server-desc {
-  color: var(--text-secondary, #888);
-  margin-bottom: 16px;
+  color: #777;
+  font-size: 12px;
+  margin: 0 0 14px;
 }
 
 .mcp-tool-server-status {
@@ -34,14 +72,15 @@
 }
 
 .mcp-tool-server-section {
-  margin: 20px 0;
+  margin: 20px 0 28px;
 }
 
 .mcp-tool-server-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 8px 0;
+  gap: 10px;
+  margin: 0 0 12px;
+  font-size: 13px;
 }
 
 .mcp-tool-server-row input[type="number"] {
@@ -94,4 +133,23 @@
 .mcp-tool-server-actions button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+/* 電腦操作區塊裡的「前往系統設定」「撤銷」原本是原生按鈕，跟頁面其他按鈕不同款。 */
+.mcp-tool-server-row button,
+.mcp-tool-server-page li button {
+  background: transparent;
+  border: 1px solid #2e2e2e;
+  border-radius: 4px;
+  color: #ccc;
+  cursor: pointer;
+  font-size: 11px;
+  margin-left: 6px;
+  padding: 2px 8px;
+}
+
+.mcp-tool-server-row button:hover,
+.mcp-tool-server-page li button:hover {
+  border-color: #2d5aab;
+  color: #e6e6e6;
 }
