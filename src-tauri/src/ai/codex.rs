@@ -20,6 +20,7 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 
 use crate::ai::{
+    content,
     sse::{find_line_end, map_http_error, separator_len},
     AiError, AiProvider, GenerateChunk, GenerateRequest, TokenUsage,
 };
@@ -131,16 +132,37 @@ pub fn build_request_body(model: &str, req: &GenerateRequest) -> serde_json::Val
         .messages
         .iter()
         .map(|m| {
-            let text = match &m.content {
-                serde_json::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
             let role = map_input_role(&m.role);
             let content_type = content_type_for_role(role);
+            let content = match &m.content {
+                serde_json::Value::String(s) => {
+                    serde_json::json!([{ "type": content_type, "text": s }])
+                }
+                // 照 Responses API 文件寫（input_image 收 data URI 字串），尚未用真帳號
+                // 驗證——探勘時額度用完，見 spec 的探勘結果。
+                arr @ serde_json::Value::Array(_) if role == "user" => serde_json::Value::Array(
+                    content::parts(arr)
+                        .into_iter()
+                        .map(|p| match p {
+                            content::Part::Text(text) => {
+                                serde_json::json!({ "type": content_type, "text": text })
+                            }
+                            content::Part::Image { media_type, data } => serde_json::json!({
+                                "type": "input_image",
+                                "image_url": format!("data:{media_type};base64,{data}"),
+                            }),
+                        })
+                        .collect(),
+                ),
+                arr @ serde_json::Value::Array(_) => {
+                    serde_json::json!([{ "type": content_type, "text": content::text_only(arr) }])
+                }
+                other => serde_json::json!([{ "type": content_type, "text": other.to_string() }]),
+            };
             serde_json::json!({
                 "type": "message",
                 "role": role,
-                "content": [{ "type": content_type, "text": text }]
+                "content": content
             })
         })
         .collect();
@@ -435,6 +457,49 @@ mod tests {
         assert_eq!(input[0]["role"], "developer");
         assert_eq!(input[0]["content"][0]["text"], "orchestration prompt");
         assert_eq!(input[1]["role"], "user", "other roles must pass through unchanged");
+    }
+
+    fn image_content() -> serde_json::Value {
+        serde_json::json!([
+            {"type": "text", "text": "what colour?"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,QUJD"}},
+        ])
+    }
+
+    #[test]
+    fn user_image_becomes_input_image_part() {
+        let r = req(
+            "sys",
+            vec![ChatMessage { role: "user".into(), content: image_content(), tool_call_id: None, tool_calls: None }],
+        );
+        let body = build_request_body("gpt-5.1-codex", &r);
+        assert_eq!(
+            body["input"][0]["content"],
+            serde_json::json!([
+                {"type": "input_text", "text": "what colour?"},
+                {"type": "input_image", "image_url": "data:image/png;base64,QUJD"},
+            ])
+        );
+        // 舊行為是把整個陣列 to_string() 塞進文字段落；跳脫過的 JSON 不會出現
+        // 字面的 `image_url":{`，所以要直接檢查每個文字段落。
+        for part in body["input"][0]["content"].as_array().unwrap() {
+            if let Some(text) = part["text"].as_str() {
+                assert!(!text.contains("image_url") && !text.contains("QUJD"), "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn non_user_array_content_becomes_text_only() {
+        let r = req(
+            "sys",
+            vec![ChatMessage { role: "assistant".into(), content: image_content(), tool_call_id: None, tool_calls: None }],
+        );
+        let body = build_request_body("gpt-5.1-codex", &r);
+        assert_eq!(
+            body["input"][0]["content"],
+            serde_json::json!([{"type": "output_text", "text": "what colour?"}])
+        );
     }
 
     #[test]
