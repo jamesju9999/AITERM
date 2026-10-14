@@ -3,12 +3,11 @@ import {
 } from "react";
 import { describeExit } from "../../lib/agentStepReport";
 import { remoteSessionPromptNote } from "../../lib/remoteSession";
-import { readFileAsAttachment, contentToDisplayString } from "../../types/attachment";
+import { readFileAsAttachment } from "../../types/attachment";
 import type { Attachment } from "../../types/attachment";
-import { useMcpChat } from "../../hooks/useMcpChat";
+import { useMcpChat, TERMINAL_TOOL_NAME } from "../../hooks/useMcpChat";
 import type { PanelMode } from "./ModeHint";
-import { invokeAiChat, formatAiError, type AiError, type ChatMessage as AiChatMessage } from "../../ipc/ai";
-import { getSessionCwd, listDirectory } from "../../ipc/fs";
+import type { ToolScope } from "../../ipc/ai";
 import { repairUnterminatedHeredocs } from "../../lib/heredocGuard";
 import { getPtyRecentOutput, writePty } from "../../ipc/pty";
 import { getConfig, type SubmitShortcut } from "../../ipc/config";
@@ -102,7 +101,42 @@ export function AiPanel({
   const { t, locale } = useLocale();
   // 系統設定的「最大步數」（0 = 無限制，載入時已換成大數）。同時管 Agent 迴圈與 MCP 工具呼叫。
   const [maxAgentSteps, setMaxAgentSteps] = useState<number>(5);
-  // 對話模式的「執行終端機指令」工具：與 Agent 迴圈走同一條路（onExecuteCommand → 終端機 → 完成回呼）。
+
+  // ── 卡住偵測 ───────────────────────────────────────────────────────────────
+  const [stuckPromptVisible, setStuckPromptVisible] = useState(false);
+  const stuckIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // 使用者按過「繼續等待」之前不再提示——否則下一次檢查會立刻又跳出來。
+  const snoozeUntilRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      if (stuckIntervalRef.current !== null) {
+        clearInterval(stuckIntervalRef.current);
+        stuckIntervalRef.current = null;
+      }
+    };
+  }, []);
+
+  const clearStuckWatch = useCallback(() => {
+    if (stuckIntervalRef.current !== null) {
+      clearInterval(stuckIntervalRef.current);
+      stuckIntervalRef.current = null;
+    }
+    setStuckPromptVisible(false);
+  }, []);
+
+  const handleStuckWait = useCallback(() => {
+    snoozeUntilRef.current = Date.now() + STUCK_IDLE_MS;
+    setStuckPromptVisible(false);
+  }, []);
+
+  const handleStuckInterrupt = useCallback(() => {
+    // 只送中斷，不自己 resolve 等待中的 Promise——強制結案會觸發既有的完成
+    // callback，Promise 自然 resolve，避免雙重 resolve 造成狀態不一致。
+    onInterruptCommand?.();
+  }, [onInterruptCommand]);
+
+  // ⚡ 模式的「執行終端機指令」工具（run_command）：onExecuteCommand → 終端機 → 完成回呼。
   // 風險閘門在 useMcpChat 呼叫它之前已經過了（見 terminalCommandGate）。
   const terminalRunningRef = useRef(false);
   const runTerminalCommand = useCallback(
@@ -111,15 +145,26 @@ export function AiPanel({
         // 見 heredocGuard.ts：缺結束標記的 heredoc 會讓 shell 停在 heredoc>，指令永遠不結束。
         const cmd = repairUnterminatedHeredocs(rawCommand.trim());
         terminalRunningRef.current = true;
+        clearStuckWatch();
+        snoozeUntilRef.current = 0;
+        // 指令跑著卻完全沒有輸出多久，就提示使用者可能卡住了（見 STUCK_IDLE_MS）。
+        // 這個 interval 只在等這個指令跑完的期間存在：完成、停止或卸載時都會清掉。
+        if (getIdleMs) {
+          stuckIntervalRef.current = setInterval(() => {
+            if (Date.now() < snoozeUntilRef.current) return;
+            if (getIdleMs() >= STUCK_IDLE_MS) setStuckPromptVisible(true);
+          }, STUCK_CHECK_INTERVAL_MS);
+        }
         onExecuteCommand(cmd, async (block) => {
           terminalRunningRef.current = false;
+          clearStuckWatch();
           const rawOutput = (await getPtyRecentOutput(sessionId).catch(() => null)) ?? block.rawOutput ?? "";
           resolve(
             `Command \`${cmd}\` finished (${describeExit(block)}).\nOutput:\n\`\`\`\n${rawOutput.slice(-2000)}\n\`\`\``,
           );
         });
       }),
-    [onExecuteCommand, sessionId],
+    [onExecuteCommand, sessionId, getIdleMs, clearStuckWatch],
   );
   const chat = useMcpChat(sessionId, maxAgentSteps, runTerminalCommand);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -166,39 +211,8 @@ export function AiPanel({
   }, [processFiles]);
 
   // ── Agent mode ────────────────────────────────────────────────────────────
+  // ⚡ 決定 AI 能不能自己動手（run_command）；MCP 按鈕再決定動手時能不能用 MCP／電腦操作工具。
   const [agentMode, setAgentMode] = useState(loadSavedAgentMode);
-  const [agentRunning, setAgentRunning] = useState(false);
-  const [agentStep, setAgentStep] = useState(0);
-  // Agent 迴圈有兩個等待階段：等 AI 想下一步、等指令跑完。原本狀態列兩段
-  // 顯示同一句話，看不出來卡在哪——尤其等 AI 那段完全沒有畫面變化。
-  const [agentPhase, setAgentPhase] = useState<"thinking" | "running">("thinking");
-  const agentAbortRef = useRef(false);
-
-  // ── 卡住偵測 ───────────────────────────────────────────────────────────────
-  const [stuckPromptVisible, setStuckPromptVisible] = useState(false);
-  const stuckIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // 使用者按過「繼續等待」之前不再提示——否則下一次檢查會立刻又跳出來。
-  const snoozeUntilRef = useRef(0);
-
-  useEffect(() => {
-    return () => {
-      if (stuckIntervalRef.current !== null) {
-        clearInterval(stuckIntervalRef.current);
-        stuckIntervalRef.current = null;
-      }
-    };
-  }, []);
-
-  const handleStuckWait = useCallback(() => {
-    snoozeUntilRef.current = Date.now() + STUCK_IDLE_MS;
-    setStuckPromptVisible(false);
-  }, []);
-
-  const handleStuckInterrupt = useCallback(() => {
-    // 只送中斷，不自己 resolve 等待中的 Promise——強制結案會觸發既有的完成
-    // callback，Promise 自然 resolve，避免雙重 resolve 造成狀態不一致。
-    onInterruptCommand?.();
-  }, [onInterruptCommand]);
 
   // 每次開啟都重讀：面板是常駐不卸載的，只在掛載時讀一次的話，使用者在設定
   // 裡改了 max_agent_steps（或裝了新的 MCP server），要重開 app 才會反映。
@@ -212,7 +226,8 @@ export function AiPanel({
       setMaxAgentSteps(cfg.max_agent_steps === 0 ? 9999 : (cfg.max_agent_steps ?? 5));
       const globalEnabled = cfg.mcp_enabled ?? true;
       setMcpEnabled(globalEnabled);
-      setMcpToolCount(tools.length);
+      // 內建的終端機工具就是 ⚡ 本身，不算「MCP 工具」。
+      setMcpToolCount(tools.filter((tool) => tool.name !== TERMINAL_TOOL_NAME).length);
       setSubmitShortcut(cfg.submit_shortcut ?? "enter");
     };
     load().catch(() => {});
@@ -231,200 +246,19 @@ export function AiPanel({
     } catch { /* ignore */ }
   }, [useMcp]);
 
-  /** Build system prompt with live CWD + dir listing. */
-  const buildAgentSystemPrompt = useCallback(async (): Promise<string> => {
-    const cwd = await getSessionCwd(sessionId).catch(() => null) ?? "(unknown)";
-    let dirList = "";
-    try {
-      const entries = await listDirectory(sessionId, "");
-      dirList = entries
-        .slice(0, 60)
-        .map((e) => (e.is_dir ? `${e.name}/` : e.name))
-        .join("\n");
-    } catch { /* ignore */ }
-
-    // Windows 專屬：沒有這條規則時，AI 遇到 exit 740 會自己發明
-    // `Start-Process -Verb RunAs`，把指令送進一個獨立的提權視窗——那個視窗
-    // AITerm 完全看不到輸出，使用者看到的是「指令跑到別的地方去了」。
-    // AITerm 自己就會偵測 740 並顯示提權橫幅；使用者確認後會在提權 session
-    // 自動重跑，並把重跑的結果交給 agent（見 TerminalView 的
-    // heldCompletionRef），所以 AI 只有在使用者拒絕提權時才會看到 740。
-    const elevationRule = navigator.platform.toLowerCase().startsWith("win")
-      ? `
-6. Elevation: if a command fails with exit code 740, or reports that it needs elevated/administrator privileges, do NOT try to work around it — never use \`Start-Process -Verb RunAs\`, \`runas\`, or redirect an elevated command's output to a temp file and read it back. Those run in a separate window whose output this terminal cannot see. AITerm handles elevation itself: when a command fails for lack of privileges it asks the user to elevate this session, and if they approve, it re-runs the command elevated and gives you that result instead. So if you still receive a privilege failure, the user declined elevation — stop emitting <cmd> tags, and tell the user in ${languageDirective(locale)} that the command needs administrator rights and that they can ask you again and approve AITerm's elevation prompt.`
-      : "";
-
-    return `You are a terminal Agent. You can execute shell commands via <cmd>...</cmd> tags, and iterate based on the results to accomplish the user's goal.
-
-Current working directory: ${cwd}
-Directory contents (first 60 entries):
-${dirList || "(unavailable)"}
-
-Rules:
-1. When you need to run a command, use <cmd>shell command</cmd> (only one at a time).
-2. The system will execute it automatically and return the result — keep analyzing until the goal is achieved.
-3. Once the goal is achieved, give your final explanation in ${languageDirective(locale)}, and do not include any more <cmd> tags.
-4. Never perform destructive or irreversible operations (e.g. rm -rf /).
-5. Write all explanations in ${languageDirective(locale)}.${elevationRule}`;
-  }, [sessionId, locale]);
-
   /**
-   * Recursive agent loop. Each call:
-   * 1. Asks AI with current history
-   * 2. If AI returns a <cmd>, execute it and recurse with the output
-   * 3. If no <cmd>, loop ends
+   * ⚡ 模式額外送給模型的規則：Windows 提權（exit 740）與遠端連線說明。只送給模型，不顯示。
+   * cwd 與目錄內容由後端的 context::snapshot 放進系統提示詞，這裡不重複。
    */
-  // Holds the latest runAgentLoop so the recursive call below reads through
-  // a ref instead of closing over the `const` being defined (which
-  // react-hooks/immutability flags as accessed-before-declared).
-  const runAgentLoopRef = useRef<
-    (history: { role: "user" | "assistant"; content: string }[], systemPrompt: string, step: number) => Promise<void>
-  >(async () => {});
-
-  const runAgentLoop = useCallback(async (
-    history: { role: "user" | "assistant"; content: string }[],
-    systemPrompt: string,
-    step: number,
-  ): Promise<void> => {
-    const maxSteps = maxAgentSteps;
-    if (agentAbortRef.current || step >= maxSteps) {
-      if (!agentAbortRef.current) {
-        chat.addMessage({
-          role: "assistant",
-          content: locale === "zh-TW"
-            ? `（Agent 已達最大步驟數 ${maxSteps}，停止迭代）`
-            : `(Agent reached the max step count of ${maxSteps} and stopped)`,
-        });
-      }
-      setAgentRunning(false);
-      return;
-    }
-
-    setAgentStep(step + 1);
-    setAgentPhase("thinking");
-
-    // Ask AI
-    let reply: string;
-    try {
-      const agentMessages: AiChatMessage[] = [
-        { role: "system", content: systemPrompt + remoteSessionPromptNote(getRemoteSession?.()) },
-        ...history,
-      ];
-      // supportsArtifacts=true：被要求「產生一份文件」時，模型若不知道有 artifact
-      // 這條路，就會改用 shell 去寫檔案（cat > x.html <<'EOF' …），那個多行
-      // heredoc 會讓終端機卡在 heredoc> 等不到結束標記。沒有 <cmd> 本來就代表
-      // agent 完成，所以「吐出文件然後結束」正好是這個迴圈想要的收尾。
-      const replyObj = await invokeAiChat(agentMessages, sessionId, undefined, false, locale, true);
-      reply = replyObj.content ?? "";
-    } catch (e) {
-      // e may be an AiError object from Tauri IPC — use formatAiError to
-      // produce a readable message instead of "[object Object]"
-      const isAiError = e != null && typeof e === "object" && "kind" in (e as object);
-      const errText = isAiError ? formatAiError(e as AiError) : String(e);
-      chat.addMessage({
-        role: "assistant",
-        content: locale === "zh-TW"
-          ? `（Agent 呼叫 AI 失敗，已停止：${errText}）`
-          : `(Agent failed to call the AI and stopped: ${errText})`,
-      });
-      setAgentRunning(false);
-      return;
-    }
-
-    if (agentAbortRef.current) { setAgentRunning(false); return; }
-
-    // Show assistant reply in chat
-    chat.addMessage({ role: "assistant", content: reply });
-    if (sendRemoteResponse) sendRemoteResponse(reply);
-
-    // Parse <cmd>
-    const cmdMatch = reply.match(/<cmd>([\s\S]*?)<\/cmd>/i);
-    if (!cmdMatch) {
-      // No command → agent finished
-      setAgentRunning(false);
-      return;
-    }
-
-    // 見 heredocGuard.ts：缺結束標記的 heredoc 會讓 shell 停在 heredoc>，
-    // 指令永遠不結束，這個迴圈就一直等 onExecuteCommand 的完成回呼。
-    const cmd = repairUnterminatedHeredocs(cmdMatch[1].trim());
-    setAgentPhase("running");
-    setStuckPromptVisible(false);
-    snoozeUntilRef.current = 0;
-
-    // Execute and wait for completion
-    await new Promise<void>((resolve) => {
-      // 指令跑著卻完全沒有輸出多久，就提示使用者可能卡住了（見 STUCK_IDLE_MS
-      // 的說明）。這個 interval 只在等這個指令跑完的期間存在——resolve
-      // （指令完成）或元件卸載時務必清掉，見下面的 finish() 與掛載 effect。
-      if (getIdleMs) {
-        stuckIntervalRef.current = setInterval(() => {
-          if (Date.now() < snoozeUntilRef.current) return;
-          if (getIdleMs() >= STUCK_IDLE_MS) setStuckPromptVisible(true);
-        }, STUCK_CHECK_INTERVAL_MS);
-      }
-
-      const finish = () => {
-        if (stuckIntervalRef.current !== null) {
-          clearInterval(stuckIntervalRef.current);
-          stuckIntervalRef.current = null;
-        }
-        setStuckPromptVisible(false);
-        resolve();
-      };
-
-      onExecuteCommand(cmd, async (block) => {
-        if (agentAbortRef.current) { setAgentRunning(false); finish(); return; }
-
-        const rawOutput = await getPtyRecentOutput(sessionId).catch(() => null)
-          ?? block.rawOutput
-          ?? "";
-        const output = rawOutput.slice(-2000);
-
-        const resultContent =
-          `Command \`${cmd}\` finished (${describeExit(block)}).\nOutput:\n\`\`\`\n${output}\n\`\`\`\n\nContinue analyzing. If the goal has been achieved, give your final explanation (do not include any more <cmd> tags).`;
-
-        const newHistory = [
-          ...history,
-          { role: "assistant" as const, content: reply },
-          { role: "user" as const, content: resultContent },
-        ];
-
-        finish();
-        void runAgentLoopRef.current(newHistory, systemPrompt, step + 1);
-      });
-    });
-  }, [chat, onExecuteCommand, sessionId, locale, sendRemoteResponse, maxAgentSteps, getIdleMs, getRemoteSession]);
-
-  useEffect(() => {
-    runAgentLoopRef.current = runAgentLoop;
-  }, [runAgentLoop]);
-
-  const submitAgent = useCallback(async (text: string) => {
-    setAgentRunning(true);
-    setAgentStep(0);
-    agentAbortRef.current = false;
-
-    // Carry forward the prior conversation (e.g. a plan the AI already
-    // proposed and is waiting on the user to confirm) — read chat.messages
-    // BEFORE appending this turn's message so it reflects only prior turns.
-    const priorHistory = chat.messages
-      .filter((m): m is typeof m & { role: "user" | "assistant" } => m.role === "user" || m.role === "assistant")
-      .map((m) => ({ role: m.role, content: contentToDisplayString(m.content) }));
-
-    chat.addMessage({ role: "user", content: text });
-
-    let systemPrompt: string;
-    try {
-      systemPrompt = await buildAgentSystemPrompt();
-    } catch {
-      setAgentRunning(false);
-      return;
-    }
-
-    const history = [...priorHistory, { role: "user" as const, content: text }];
-    await runAgentLoop(history, systemPrompt, 0);
-  }, [chat, buildAgentSystemPrompt, runAgentLoop]);
+  const buildAgentExtraPrompt = useCallback((): string => {
+    // Windows 專屬：沒有這條規則時，AI 遇到 exit 740 會自己發明 `Start-Process -Verb RunAs`，
+    // 把指令送進一個 AITerm 看不到輸出的獨立提權視窗。AITerm 自己會偵測 740 並顯示提權橫幅，
+    // 使用者確認後在提權 session 重跑並把結果交回（見 TerminalView 的 heldCompletionRef）。
+    const elevationRule = IS_WINDOWS
+      ? `Elevation: if a command fails with exit code 740, or reports that it needs elevated/administrator privileges, do NOT try to work around it — never use \`Start-Process -Verb RunAs\`, \`runas\`, or redirect an elevated command's output to a temp file and read it back. Those run in a separate window whose output this terminal cannot see. AITerm handles elevation itself: when a command fails for lack of privileges it asks the user to elevate this session, and if they approve, it re-runs the command elevated and gives you that result instead. So if you still receive a privilege failure, the user declined elevation — stop calling aiterm_terminal__run_command, and tell the user in ${languageDirective(locale)} that the command needs administrator rights and that they can ask you again and approve AITerm's elevation prompt.`
+      : "";
+    return (elevationRule + remoteSessionPromptNote(getRemoteSession?.())).trim();
+  }, [locale, getRemoteSession]);
 
   // Forward new assistant messages to Telegram
   const prevMessagesLength = useRef(chat.messages.length);
@@ -439,11 +273,38 @@ Rules:
     prevMessagesLength.current = chat.messages.length;
   }, [chat.messages, chat.isStreaming, sendRemoteResponse]);
 
-  // MCP 是否真的會被用到。送出時與模式說明列共用同一個判斷——拆成兩份寫的話
+  // MCP 只在 ⚡ 開時有作用。送出時與模式說明列共用同一個判斷——拆成兩份寫的話
   // 遲早會有一邊漏改，畫面就會說謊。
-  const mcpActive = useMcp && mcpEnabled && mcpToolCount > 0;
-  const mode: PanelMode = agentMode ? "agent" : mcpActive ? "agent-mcp" : "suggest";
-  const isDisabled = chat.isStreaming || agentRunning;
+  const mcpActive = agentMode && useMcp && mcpEnabled && mcpToolCount > 0;
+  const mode: PanelMode = agentMode ? (mcpActive ? "agent-mcp" : "agent-terminal") : "suggest";
+  // ⚡ 這一輪正在跑（有工具可用）：由狀態列接手（步數、階段、停止鈕）。
+  const agentRunning = chat.activeScope === "terminal" || chat.activeScope === "all";
+  const isDisabled = chat.isStreaming;
+
+  const sendTurn = (text: string) => {
+    const currentAttachments = attachments;
+    setAttachments([]);
+    const scope: ToolScope = agentMode ? (mcpActive ? "all" : "terminal") : "none";
+    void chat.send(
+      text,
+      scope,
+      undefined,
+      currentAttachments.length > 0 ? currentAttachments : undefined,
+      agentMode ? buildAgentExtraPrompt() || undefined : undefined,
+    );
+  };
+
+  // 停止：中斷 AI 呼叫；有指令在跑就 Ctrl+C 並強制結案；並通知外層放行被扣住的完成回呼（提權橫幅）。
+  const stopTurn = () => {
+    chat.stop();
+    if (terminalRunningRef.current) {
+      terminalRunningRef.current = false;
+      clearStuckWatch();
+      if (onInterruptCommand) onInterruptCommand();
+      else writePty(sessionId, "\x03").catch(() => {});
+    }
+    onAgentAborted?.();
+  };
 
   return (
     <ChatPanelShell
@@ -451,12 +312,12 @@ Rules:
       onClose={onClose}
       messages={chat.messages}
       streamBuf={chat.streamBuf}
-      isStreaming={chat.isStreaming || (agentRunning && agentPhase === "thinking")}
+      isStreaming={chat.isStreaming}
       // **兩個階段都要有指示**：等 AI 想、以及等指令跑完——後者原本對話框
       // 是全靜的，使用者只看到氣泡消失然後乾等，回報成「空檔很長」。
       thinkingLabel={
         agentRunning
-          ? agentPhase === "thinking"
+          ? chat.phase === "thinking"
             ? t.ai_agent_thinking
             : t.ai_agent_executing
           : chat.isStreaming
@@ -468,37 +329,16 @@ Rules:
       onExecuteCommand={onExecuteCommand}
       agentMode={agentMode}
       onToggleAgentMode={() => setAgentMode((m) => !m)}
-      onSend={(text) => {
-        const currentAttachments = attachments;
-        setAttachments([]);
-        void chat.send(text, mcpActive ? "all" : "none", undefined, currentAttachments.length > 0 ? currentAttachments : undefined);
-      }}
-      onSubmitAgent={(text) => {
-        setAttachments([]);
-        void submitAgent(text);
-      }}
+      onSend={sendTurn}
+      onSubmitAgent={sendTurn}
       mode={mode}
       maxAgentSteps={maxAgentSteps}
       mcpToolCount={mcpToolCount}
       agentRunning={agentRunning}
-      agentPhase={agentPhase}
-      agentStep={agentStep}
-      onStop={() => {
-        chat.stop();
-        // 有終端機指令正在跑：送 Ctrl+C 並強制結案，shell 才會回到提示字元（與 Agent 的中止一致）。
-        if (terminalRunningRef.current) {
-          terminalRunningRef.current = false;
-          onInterruptCommand?.();
-        }
-      }}
-      onAbortAgent={() => {
-        agentAbortRef.current = true;
-        // Send Ctrl+C to PTY so a stuck command (e.g. pipe dquote>) gets
-        // interrupted, the prompt reappears, and the onComplete callback
-        // can fire to actually unblock the agent loop.
-        writePty(sessionId, "\x03").catch(() => {});
-        onAgentAborted?.();
-      }}
+      agentPhase={chat.phase}
+      agentStep={chat.step}
+      onStop={stopTurn}
+      onAbortAgent={stopTurn}
       providerName={providerName}
       onOpenProviderPalette={onOpenProviderPalette}
       headerBadge={quotaWindow ? <QuotaBadge window={quotaWindow} /> : undefined}
@@ -527,17 +367,16 @@ Rules:
       extraInputControls={mcpEnabled ? (
         <button
           type="button"
-          // Agent 迴圈是 use_mcp=false 寫死的（見 runAgentLoop），MCP 在
-          // Agent 模式下不會生效——按鈕就不該繼續亮著說自己開啟。
-          className={`aiterm-mcp-toggle${useMcp && mcpToolCount > 0 && !agentMode ? " aiterm-mcp-toggle--on" : ""}`}
+          // MCP 只在 ⚡ 開時生效：⚡ 關＝純聊天，按鈕停用且不亮，但記住原本的開關（localStorage）。
+          className={`aiterm-mcp-toggle${mcpActive ? " aiterm-mcp-toggle--on" : ""}`}
           title={
-            agentMode
-              ? "Agent 模式下不使用 MCP 工具（AI 只透過終端機指令操作）"
+            !agentMode
+              ? "開啟 ⚡ 後才能使用 MCP 工具（目前只跟 AI 聊天）"
               : mcpToolCount === 0
                 ? t.mcp_toggle_no_servers
                 : (useMcp ? "MCP 開啟" : "MCP 關閉")
           }
-          disabled={agentMode || mcpToolCount === 0 || isDisabled}
+          disabled={!agentMode || mcpToolCount === 0 || isDisabled}
           onClick={() => setUseMcp((v) => !v)}
         >
           <WrenchIcon size={12} />

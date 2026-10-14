@@ -19,13 +19,14 @@ const DEFAULT_CONFIG = {
   default_tab: "terminal", enterprise_server_url: null, enterprise_device_id: null, enterprise_policy: null,
 };
 
-const aiChatQueue: { content: string; tool_calls?: unknown[]; tool_calling_unsupported?: boolean; tool_fallback_reason?: string }[] = [];
+const aiChatQueue: { content: string | null; tool_calls?: unknown[]; tool_calling_unsupported?: boolean; tool_fallback_reason?: string }[] = [];
 
 const listenMock = vi.fn().mockResolvedValue(() => {});
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (cmd: string, payload?: { messages?: { role: string; content: unknown }[] }) => {
     if (cmd === "get_config") return Promise.resolve(DEFAULT_CONFIG);
     if (cmd === "get_mcp_tools") return Promise.resolve([]);
+    if (cmd === "terminal_command_gate") return Promise.resolve({ allowed: true, reason: null });
     if (cmd === "ai_chat") {
       void payload;
       const next = aiChatQueue.shift();
@@ -55,14 +56,22 @@ vi.mock("../../contexts/LocaleContext", async () => {
 
 import { AiPanel } from "./index";
 
+// 模型呼叫內建終端機工具 run_command 的回覆。
+const runCmdCall = (command: string) => ({
+  content: null,
+  tool_calls: [{ id: `c-${command}`, tool_name: "aiterm_terminal__run_command", server_id: "aiterm-terminal", args: { command } }],
+});
+
 beforeEach(() => {
+  // ⚡ 開關存在 localStorage，不清的話測試之間會互相汙染。
+  localStorage.clear();
   aiChatQueue.length = 0;
   listenMock.mockClear();
   listenMock.mockResolvedValue(() => {});
 });
 
 /**
- * Starts an Agent-mode run whose <cmd> never completes on its own (the mock
+ * Starts an Agent-mode run whose run_command never completes on its own (the mock
  * onExecuteCommand captures — but does not invoke — onComplete), simulating a
  * shell parked at a stuck prompt (e.g. `heredoc>`). Tests drive time forward
  * and flip `idleMs.current` to control what getIdleMs() reports.
@@ -72,7 +81,7 @@ async function renderStuckAgent(opts: {
   onInterruptCommand?: () => void;
   onAgentAborted?: () => void;
 }) {
-  aiChatQueue.push({ content: "<cmd>cat <<EOF</cmd>" });
+  aiChatQueue.push(runCmdCall("cat <<EOF"));
 
   let capturedOnComplete: ((block: TerminalBlock) => void) | undefined;
   const onExecuteCommand = vi.fn(

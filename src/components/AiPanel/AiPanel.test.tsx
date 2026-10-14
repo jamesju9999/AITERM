@@ -11,7 +11,9 @@ const DEFAULT_CONFIG = {
 };
 
 // Per-command mock registry: tests can push response objects.
-const aiChatQueue: { content: string; tool_calls?: unknown[]; tool_calling_unsupported?: boolean; tool_fallback_reason?: string }[] = [];
+const aiChatQueue: { content: string | null; tool_calls?: unknown[]; tool_calling_unsupported?: boolean; tool_fallback_reason?: string }[] = [];
+// 每次 ai_chat 帶的 toolScope（⚡／MCP 決定的工具範圍），依呼叫順序。
+const aiChatScopes: (string | undefined)[] = [];
 // Tests can push an error here to make the Nth "ai_chat" call (by call order,
 // interleaved with aiChatQueue) reject instead of resolve. Keyed by the 1-based
 // call index at which it should fire.
@@ -28,11 +30,13 @@ const configCalls = { n: 0 };
 
 const listenMock = vi.fn().mockResolvedValue(() => {});
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (cmd: string, payload?: { messages?: { role: string; content: unknown }[] }) => {
+  invoke: (cmd: string, payload?: { messages?: { role: string; content: unknown }[]; toolScope?: string }) => {
     if (cmd === "get_config") { configCalls.n++; return Promise.resolve(DEFAULT_CONFIG); }
     if (cmd === "get_mcp_tools") return Promise.resolve(mcpTools);
+    if (cmd === "terminal_command_gate") return Promise.resolve({ allowed: true, reason: null });
     if (cmd === "ai_chat") {
       aiChatCalls.push(payload?.messages ?? []);
+      aiChatScopes.push(payload?.toolScope);
       if (aiChatHold.value) {
         const held = aiChatHold.value;
         aiChatHold.value = null;
@@ -70,11 +74,20 @@ vi.mock("../../contexts/LocaleContext", async () => {
 
 import { AiPanel } from "./index";
 
+// 模型呼叫內建終端機工具 run_command 的回覆。
+const runCmdCall = (command: string) => ({
+  content: null,
+  tool_calls: [{ id: `c-${command}`, tool_name: "aiterm_terminal__run_command", server_id: "aiterm-terminal", args: { command } }],
+});
+
 beforeEach(() => {
+  // ⚡／MCP 開關存在 localStorage，不清的話測試之間會互相汙染。
+  localStorage.clear();
   aiChatHold.value = null;
   aiChatQueue.length = 0;
   aiChatRejectAt.clear();
   aiChatCalls.length = 0;
+  aiChatScopes.length = 0;
   mcpTools.length = 0;
   configCalls.n = 0;
   listenMock.mockClear();
@@ -278,8 +291,8 @@ describe("AiPanel", () => {
     expect(String(system?.content)).toMatch(/Do NOT run ssh/);
   });
 
-  it("Agent Mode recurses to a second AI call after executing a <cmd>", async () => {
-    aiChatQueue.push({ content: "<cmd>ls</cmd>" });
+  it("⚡ 執行 run_command 後把結果交回 AI 再問一次", async () => {
+    aiChatQueue.push(runCmdCall("ls"));
     aiChatQueue.push({ content: "完成了" });
 
     const onExecuteCommand = vi.fn(
@@ -321,7 +334,7 @@ describe("AiPanel", () => {
    * 完全沒有畫面變化（實測回報）。
    */
   it("Agent 狀態列要區分「思考中」與「執行指令中」", async () => {
-    aiChatQueue.push({ content: "<cmd>ls</cmd>" });
+    aiChatQueue.push(runCmdCall("ls"));
 
     // 不呼叫 onComplete：讓迴圈停在「等指令跑完」那個階段，好斷言當下的文案。
     const onExecuteCommand = vi.fn();
@@ -427,7 +440,7 @@ describe("AiPanel", () => {
   });
 
   it("Agent Mode surfaces the error and stops when the follow-up AI call fails", async () => {
-    aiChatQueue.push({ content: "<cmd>ls</cmd>" });
+    aiChatQueue.push(runCmdCall("ls"));
     // Tauri IPC rejects with the plain AiError object the Rust side returned
     // (not a JS Error) — e.g. an expired/rotated Codex OAuth token.
     aiChatRejectAt.set(2, { kind: "auth_failed" });
@@ -459,8 +472,7 @@ describe("AiPanel", () => {
     // AI call that should analyze the result fails — the error must be
     // shown to the user (formatted via formatAiError), not silently
     // dropped or rendered as "[object Object]".
-    await waitFor(() => expect(screen.getByText(/Agent 呼叫 AI 失敗，已停止/)).toBeInTheDocument());
-    expect(screen.getByText(/API Key 驗證失敗/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/API Key 驗證失敗/)).toBeInTheDocument());
     expect(screen.queryByText(/\[object Object\]/)).not.toBeInTheDocument();
     expect(aiChatCalls.length).toBe(2);
   });
@@ -486,6 +498,7 @@ describe("AiPanel", () => {
       />,
     );
 
+    await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
     const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
     await userEvent.type(textbox, "列出檔案");
     await userEvent.keyboard("{Enter}");
@@ -519,6 +532,7 @@ describe("AiPanel", () => {
       />,
     );
 
+    await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
     const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
     await userEvent.type(textbox, "列出檔案");
     await userEvent.keyboard("{Enter}");
@@ -547,6 +561,7 @@ describe("AiPanel", () => {
       />,
     );
 
+    await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
     const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
     await userEvent.type(textbox, "列出檔案");
     await userEvent.keyboard("{Enter}");
@@ -573,16 +588,16 @@ describe("AiPanel", () => {
       mcpTools.push({ name: "read_file" }, { name: "write_file" });
       renderPanel();
 
-      // 預設：MCP 開著且有工具 → MCP 模式
+      // 預設 ⚡ 關：純聊天
+      expect(await screen.findByText(/只會建議指令/)).toBeInTheDocument();
+
+      // 開 ⚡：MCP 預設開著且有工具 → ⚡＋MCP
+      await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
       expect(await screen.findByText(/2 個 MCP 工具/)).toBeInTheDocument();
 
-      // 關掉 MCP → 退回建議模式
+      // 關 MCP → 只有 ⚡
       await userEvent.click(screen.getByRole("button", { name: /MCP \(2\)/ }));
-      expect(screen.getByText(/只會建議指令/)).toBeInTheDocument();
-
-      // 開 Agent → 換成自動執行，並明講不使用 MCP
-      await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
-      expect(screen.getByText(/不使用 MCP 工具/)).toBeInTheDocument();
+      expect(screen.getByText(/未開啟 MCP 工具/)).toBeInTheDocument();
     });
 
     /**
@@ -590,18 +605,18 @@ describe("AiPanel", () => {
      * 兩條同時堆在輸入框上只是噪音。
      */
     it("Agent 執行中時讓位給狀態列", async () => {
-      aiChatQueue.push({ content: "<cmd>ls</cmd>" });
+      aiChatQueue.push(runCmdCall("ls"));
       renderPanel();
 
       await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
-      expect(screen.getByText(/不使用 MCP 工具/)).toBeInTheDocument();
+      expect(screen.getByText(/未開啟 MCP 工具/)).toBeInTheDocument();
 
       const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
       await userEvent.type(textbox, "列出檔案");
       await userEvent.keyboard("{Enter}");
 
       await waitFor(() => expect(document.querySelector(".aiterm-agent-status")).not.toBeNull());
-      expect(screen.queryByText(/不使用 MCP 工具/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/未開啟 MCP 工具/)).not.toBeInTheDocument();
     });
 
     /**
@@ -628,35 +643,104 @@ describe("AiPanel", () => {
   });
 
   /**
-   * Agent 迴圈是 `invokeAiChat(..., use_mcp=false, ...)` 寫死的，handleSubmit 走
-   * agentMode 那條時也根本不讀 useMcp——所以 Agent 開著時 MCP 完全沒有作用。
-   * 但按鈕原本照樣亮綠色寫著「MCP (n)」、tooltip 還說「MCP 開啟」，看起來像
-   * 兩個都生效。這裡要求 UI 誠實反映它被忽略了。
+   * MCP 只在 ⚡ 開時有作用（⚡ 關＝純聊天、不給任何工具），所以 ⚡ 關時 MCP 按鈕
+   * 要停用、不亮；但不能把使用者原本的 MCP 開關改掉——⚡ 再開時要恢復。
    */
-  it("Agent 模式開啟時，MCP 按鈕要停用並說明原因", async () => {
+  it("⚡ 關時 MCP 按鈕停用；開 ⚡ 後可用，而且 MCP 原本的開關狀態被保留", async () => {
     mcpTools.push({ name: "read_file" }, { name: "write_file" });
-
     render(
-      <AiPanel
-        sessionId="s1"
-        isOpen={true}
-        providerName="Ollama"
-        onClose={vi.fn()}
-        onExecuteCommand={vi.fn()}
-        onOpenProviderPalette={vi.fn()}
-      />,
+      <AiPanel sessionId="s1" isOpen={true} providerName="Ollama" onClose={vi.fn()}
+        onExecuteCommand={vi.fn()} onOpenProviderPalette={vi.fn()} />,
     );
 
     const mcpBtn = await screen.findByRole("button", { name: /MCP \(2\)/ });
+    expect(mcpBtn).toBeDisabled();
+    expect(mcpBtn.getAttribute("title")).toMatch(/⚡|Agent/);
+    expect(mcpBtn.className).not.toMatch(/--on/);
+
+    await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
     expect(mcpBtn).toBeEnabled();
     expect(mcpBtn.className).toMatch(/--on/);
 
+    // 關掉 MCP、關 ⚡、再開 ⚡：MCP 應該還是關的
+    await userEvent.click(mcpBtn);
+    await userEvent.click(screen.getByTitle(/停用 Agent 模式/));
     await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
-
-    expect(mcpBtn).toBeDisabled();
-    expect(mcpBtn.getAttribute("title")).toMatch(/Agent/);
-    // 只是停用還不夠——留著亮綠的「開啟」樣式，看起來仍然像正在生效。
     expect(mcpBtn.className).not.toMatch(/--on/);
+  });
+
+  describe("⚡／MCP 決定送給後端的工具範圍", () => {
+    const send = async (text: string) => {
+      await userEvent.type(screen.getByRole("textbox"), text);
+      await userEvent.keyboard("{Enter}");
+    };
+    const mount = () => render(
+      <AiPanel sessionId="s1" isOpen={true} providerName="Ollama" onClose={vi.fn()}
+        onExecuteCommand={vi.fn()} onOpenProviderPalette={vi.fn()} />,
+    );
+
+    it("⚡ 關：none", async () => {
+      mcpTools.push({ name: "read_file" });
+      aiChatQueue.push({ content: "好" });
+      mount();
+      await send("hi");
+      await waitFor(() => expect(aiChatScopes).toEqual(["none"]));
+    });
+
+    it("⚡ 開、MCP 開：all", async () => {
+      mcpTools.push({ name: "read_file" });
+      aiChatQueue.push({ content: "好" });
+      mount();
+      await screen.findByRole("button", { name: /MCP \(1\)/ });
+      await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
+      await send("hi");
+      await waitFor(() => expect(aiChatScopes).toEqual(["all"]));
+    });
+
+    it("⚡ 開、MCP 關：terminal", async () => {
+      mcpTools.push({ name: "read_file" });
+      aiChatQueue.push({ content: "好" });
+      mount();
+      await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
+      await userEvent.click(await screen.findByRole("button", { name: /MCP \(1\)/ }));
+      await send("hi");
+      await waitFor(() => expect(aiChatScopes).toEqual(["terminal"]));
+    });
+
+    // 終端機工具就是 ⚡ 本身，不算 MCP 工具；只有它時 MCP 按鈕不該亮、⚡ 送 terminal。
+    it("工具清單只有內建終端機工具時，MCP 視為沒有工具", async () => {
+      mcpTools.push({ name: "aiterm_terminal__run_command" });
+      aiChatQueue.push({ content: "好" });
+      mount();
+      await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
+      expect(await screen.findByRole("button", { name: /MCP OFF/ })).toBeDisabled();
+      await send("hi");
+      await waitFor(() => expect(aiChatScopes).toEqual(["terminal"]));
+    });
+  });
+
+  // 附件在 hook 遷移時被弄丟過不只一次；舊 ⚡ 迴圈也會把附件直接丟掉。兩種模式都要真的送出去。
+  it.each([
+    ["⚡ 關", false],
+    ["⚡ 開", true],
+  ])("%s 時附件會跟著訊息送給 AI", async (_label, agent) => {
+    aiChatQueue.push({ content: "收到" });
+    const { container } = render(
+      <AiPanel sessionId="s1" isOpen={true} providerName="Ollama" onClose={vi.fn()}
+        onExecuteCommand={vi.fn()} onOpenProviderPalette={vi.fn()} />,
+    );
+    if (agent) await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(fileInput, new File(["附件內容"], "note.txt", { type: "text/plain" }));
+    expect(await screen.findByText("note.txt")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByRole("textbox"), "看一下");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByText("收到")).toBeInTheDocument());
+
+    const userMsg = aiChatCalls[0].filter((m) => m.role === "user").at(-1);
+    expect(JSON.stringify(userMsg?.content)).toContain("附件內容");
   });
 
   /**
