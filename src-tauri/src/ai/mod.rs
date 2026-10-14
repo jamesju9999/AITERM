@@ -16,6 +16,7 @@ pub mod artifact_prompt;
 pub mod chatgpt_web;
 pub mod codex;
 pub mod compatible;
+pub mod content;
 pub mod context;
 pub mod copilot;
 pub mod ollama;
