@@ -139,11 +139,15 @@ export function AiPanel({
   // ⚡ 模式的「執行終端機指令」工具（run_command）：onExecuteCommand → 終端機 → 完成回呼。
   // 風險閘門在 useMcpChat 呼叫它之前已經過了（見 terminalCommandGate）。
   const terminalRunningRef = useRef(false);
+  // 每次執行指令的編號：停止後舊指令的完成回呼可能很晚才到（例如外層扣著它等提權橫幅），
+  // 那時若已有新指令在跑，舊回呼不可以清掉新指令的執行旗標與卡住偵測。
+  const terminalRunIdRef = useRef(0);
   const runTerminalCommand = useCallback(
     (rawCommand: string) =>
       new Promise<string>((resolve) => {
         // 見 heredocGuard.ts：缺結束標記的 heredoc 會讓 shell 停在 heredoc>，指令永遠不結束。
         const cmd = repairUnterminatedHeredocs(rawCommand.trim());
+        const runId = ++terminalRunIdRef.current;
         terminalRunningRef.current = true;
         clearStuckWatch();
         snoozeUntilRef.current = 0;
@@ -156,8 +160,10 @@ export function AiPanel({
           }, STUCK_CHECK_INTERVAL_MS);
         }
         onExecuteCommand(cmd, async (block) => {
-          terminalRunningRef.current = false;
-          clearStuckWatch();
+          if (terminalRunIdRef.current === runId) {
+            terminalRunningRef.current = false;
+            clearStuckWatch();
+          }
           const rawOutput = (await getPtyRecentOutput(sessionId).catch(() => null)) ?? block.rawOutput ?? "";
           resolve(
             `Command \`${cmd}\` finished (${describeExit(block)}).\nOutput:\n\`\`\`\n${rawOutput.slice(-2000)}\n\`\`\``,
@@ -290,7 +296,8 @@ export function AiPanel({
       scope,
       undefined,
       currentAttachments.length > 0 ? currentAttachments : undefined,
-      agentMode ? buildAgentExtraPrompt() || undefined : undefined,
+      // 傳函式而不是字串：useMcpChat 每一步重算，任務中途 ssh 進遠端後下一步就會帶上說明。
+      agentMode ? () => buildAgentExtraPrompt() || undefined : undefined,
     );
   };
 

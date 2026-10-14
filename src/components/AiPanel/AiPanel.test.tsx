@@ -14,6 +14,8 @@ const DEFAULT_CONFIG = {
 const aiChatQueue: { content: string | null; tool_calls?: unknown[]; tool_calling_unsupported?: boolean; tool_fallback_reason?: string }[] = [];
 // 每次 ai_chat 帶的 toolScope（⚡／MCP 決定的工具範圍），依呼叫順序。
 const aiChatScopes: (string | undefined)[] = [];
+// 寫進 PTY 的資料（停止鍵沒有 onInterruptCommand 時退回送 Ctrl+C）。
+const ptyWrites: string[] = [];
 // Tests can push an error here to make the Nth "ai_chat" call (by call order,
 // interleaved with aiChatQueue) reject instead of resolve. Keyed by the 1-based
 // call index at which it should fire.
@@ -30,9 +32,10 @@ const configCalls = { n: 0 };
 
 const listenMock = vi.fn().mockResolvedValue(() => {});
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (cmd: string, payload?: { messages?: { role: string; content: unknown }[]; toolScope?: string }) => {
+  invoke: (cmd: string, payload?: { messages?: { role: string; content: unknown }[]; toolScope?: string; data?: string }) => {
     if (cmd === "get_config") { configCalls.n++; return Promise.resolve(DEFAULT_CONFIG); }
     if (cmd === "get_mcp_tools") return Promise.resolve(mcpTools);
+    if (cmd === "pty_write") { ptyWrites.push(payload?.data ?? ""); return Promise.resolve(); }
     if (cmd === "terminal_command_gate") return Promise.resolve({ allowed: true, reason: null });
     if (cmd === "ai_chat") {
       aiChatCalls.push(payload?.messages ?? []);
@@ -88,6 +91,7 @@ beforeEach(() => {
   aiChatRejectAt.clear();
   aiChatCalls.length = 0;
   aiChatScopes.length = 0;
+  ptyWrites.length = 0;
   mcpTools.length = 0;
   configCalls.n = 0;
   listenMock.mockClear();
@@ -716,6 +720,73 @@ describe("AiPanel", () => {
       expect(await screen.findByRole("button", { name: /MCP OFF/ })).toBeDisabled();
       await send("hi");
       await waitFor(() => expect(aiChatScopes).toEqual(["terminal"]));
+    });
+  });
+
+  // 任務中途 ssh 進遠端（getRemoteSession 從 null 變成主機）：下一步的提示詞要帶上遠端說明。
+  it("⚡ 每一步都重讀 getRemoteSession，中途連進遠端後下一步就帶上說明", async () => {
+    let remote: string | null = null;
+    aiChatQueue.push(runCmdCall("ssh jamesju@192.168.1.80"));
+    aiChatQueue.push({ content: "完成了" });
+    const onExecuteCommand = vi.fn((_cmd: string, onComplete?: (block: TerminalBlock) => void) => {
+      remote = "jamesju@192.168.1.80";
+      onComplete?.({ id: "b1", command: "ssh", rawOutput: "", status: "completed", exitCode: 0, startTime: Date.now() });
+    });
+    render(
+      <AiPanel sessionId="s1" isOpen={true} providerName="Ollama" onClose={vi.fn()}
+        onExecuteCommand={onExecuteCommand} onOpenProviderPalette={vi.fn()}
+        getRemoteSession={() => remote} />,
+    );
+    await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
+    await userEvent.type(screen.getByRole("textbox"), "連進去看 IP");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByText("完成了")).toBeInTheDocument());
+
+    expect(aiChatCalls[0].some((m) => m.role === "system")).toBe(false);
+    const system = aiChatCalls[1].find((m) => m.role === "system");
+    expect(String(system?.content)).toContain("jamesju@192.168.1.80");
+  });
+
+  it("⚡ 關（純聊天）時不送額外的 system 提示詞，即使在遠端工作階段裡", async () => {
+    aiChatQueue.push({ content: "好的" });
+    render(
+      <AiPanel sessionId="s1" isOpen={true} providerName="Ollama" onClose={vi.fn()}
+        onExecuteCommand={vi.fn()} onOpenProviderPalette={vi.fn()}
+        getRemoteSession={() => "jamesju@192.168.1.80"} />,
+    );
+    await userEvent.type(screen.getByRole("textbox"), "顯示 IP");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByText("好的")).toBeInTheDocument());
+    expect(aiChatCalls[0].some((m) => m.role === "system")).toBe(false);
+  });
+
+  describe("指令執行中按停止", () => {
+    const startRunningCommand = async (onInterruptCommand?: () => void) => {
+      aiChatQueue.push(runCmdCall("sleep 100"));
+      const onExecuteCommand = vi.fn(); // 不呼叫完成回呼：指令一直跑著
+      render(
+        <AiPanel sessionId="s1" isOpen={true} providerName="Ollama" onClose={vi.fn()}
+          onExecuteCommand={onExecuteCommand} onOpenProviderPalette={vi.fn()}
+          onInterruptCommand={onInterruptCommand} />,
+      );
+      await userEvent.click(screen.getByTitle(/啟用 Agent 模式/));
+      await userEvent.type(screen.getByRole("textbox"), "等一下");
+      await userEvent.keyboard("{Enter}");
+      await waitFor(() => expect(onExecuteCommand).toHaveBeenCalled());
+    };
+
+    it("呼叫 onInterruptCommand 中斷正在跑的指令", async () => {
+      const onInterruptCommand = vi.fn();
+      await startRunningCommand(onInterruptCommand);
+      await userEvent.click(await screen.findByTitle("停止"));
+      expect(onInterruptCommand).toHaveBeenCalledTimes(1);
+      expect(ptyWrites).toEqual([]);
+    });
+
+    it("沒有 onInterruptCommand 時直接送 Ctrl+C 給 PTY", async () => {
+      await startRunningCommand();
+      await userEvent.click(await screen.findByTitle("停止"));
+      await waitFor(() => expect(ptyWrites).toEqual(["\x03"]));
     });
   });
 

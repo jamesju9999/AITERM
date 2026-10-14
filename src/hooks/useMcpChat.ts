@@ -18,6 +18,12 @@ export type { McpChatMessage, McpChatSession }; // re-export：既有 import { M
 const DEFAULT_MAX_TOOL_ITERATIONS = 10;
 /** 與 Rust `terminal_tool::tool_infos` 的編碼名稱相同。 */
 export const TERMINAL_TOOL_NAME = "aiterm_terminal__run_command";
+
+/**
+ * 只送給模型、不顯示也不存的 system 提示詞。函式形式在每一步（以及 resend）都重算——
+ * 內容可能在任務中途改變，例如 agent 這一步才 ssh 進遠端主機。
+ */
+export type ExtraSystemPrompt = string | (() => string | undefined);
 // 模型只宣告動作卻沒呼叫工具時，最多催幾次。
 const MAX_INTENT_NUDGES = 2;
 /** 內建電腦操作工具的名稱前綴（Rust `computer::tools`：`aiterm_computer__computer_click` 等）。 */
@@ -74,7 +80,7 @@ export function useMcpChat(
   const [phase, setPhase] = useState<"thinking" | "running">("thinking");
   const [sessions, setSessions] = useState<McpChatSession[]>(loadAllSessions);
   const mountedRef = useRef(true);
-  const lastSendRef = useRef<{ text: string; scope: ToolScope; attachments?: Attachment[]; extraSystemPrompt?: string } | null>(null);
+  const lastSendRef = useRef<{ text: string; scope: ToolScope; attachments?: Attachment[]; extraSystemPrompt?: ExtraSystemPrompt } | null>(null);
   const currentSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -139,7 +145,7 @@ export function useMcpChat(
     existingMessages?: McpChatMessage[],
     attachments?: Attachment[],
     /** 只送給模型、不顯示也不存的 system 提示詞（⚡ 模式的提權規則、遠端連線說明）。 */
-    extraSystemPrompt?: string,
+    extraSystemPrompt?: ExtraSystemPrompt,
   ) => {
     if (!text.trim() && (!attachments || attachments.length === 0)) return;
     lastSendRef.current = { text, scope, attachments, extraSystemPrompt };
@@ -171,9 +177,8 @@ export function useMcpChat(
     // 使用者才看得到結果——操作期間 AITerm 被目標 App 壓在後面（Wayland 上是被縮小）。
     let usedComputer = false;
     try {
-      let iterHistory: ChatMessage[] = extraSystemPrompt
-        ? [{ role: "system", content: extraSystemPrompt }, ...history]
-        : [...history];
+      // 不含 system 提示詞的歷史；system 在每次呼叫前才重算、接在最前面（見 ExtraSystemPrompt）。
+      let iterHistory: ChatMessage[] = [...history];
       let iterations = 0;
       let nudges = 0;
       // 只有迴圈是因為次數用完才結束時才附上限訊息；剛好在最後一步給出最終答案不算。
@@ -184,7 +189,9 @@ export function useMcpChat(
         iterations++;
         setStep(iterations);
         setPhase("thinking");
-        const reply = await aiChat(iterHistory, sessionId, undefined, scope !== "none", locale, true, scope);
+        const system = typeof extraSystemPrompt === "function" ? extraSystemPrompt() : extraSystemPrompt;
+        const toSend: ChatMessage[] = system ? [{ role: "system", content: system }, ...iterHistory] : iterHistory;
+        const reply = await aiChat(toSend, sessionId, undefined, scope !== "none", locale, true, scope);
 
         if (stale()) return; // 被停止了（後端的呼叫已被中斷，或剛好在這時回來）：丟掉這一輪
 

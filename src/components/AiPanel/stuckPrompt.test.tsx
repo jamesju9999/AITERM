@@ -21,6 +21,9 @@ const DEFAULT_CONFIG = {
 
 const aiChatQueue: { content: string | null; tool_calls?: unknown[]; tool_calling_unsupported?: boolean; tool_fallback_reason?: string }[] = [];
 
+// ai_chat 被呼叫了幾次——用來確認停止後迴圈真的不再繼續問 AI。
+const aiChatCount = { n: 0 };
+
 const listenMock = vi.fn().mockResolvedValue(() => {});
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (cmd: string, payload?: { messages?: { role: string; content: unknown }[] }) => {
@@ -29,6 +32,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "terminal_command_gate") return Promise.resolve({ allowed: true, reason: null });
     if (cmd === "ai_chat") {
       void payload;
+      aiChatCount.n++;
       const next = aiChatQueue.shift();
       if (next) return Promise.resolve({ tool_calls: [], tool_calling_unsupported: false, ...next });
       return Promise.resolve({ content: "", tool_calls: [], tool_calling_unsupported: false });
@@ -66,6 +70,7 @@ beforeEach(() => {
   // ⚡ 開關存在 localStorage，不清的話測試之間會互相汙染。
   localStorage.clear();
   aiChatQueue.length = 0;
+  aiChatCount.n = 0;
   listenMock.mockClear();
   listenMock.mockResolvedValue(() => {});
 });
@@ -215,11 +220,56 @@ describe("AiPanel — 停止鍵", () => {
 
     fireEvent.click(screen.getByTitle("停止"));
     expect(onAgentAborted).toHaveBeenCalledTimes(1);
+    expect(aiChatCount.n).toBe(1);
 
-    // 外層放行後，agent 迴圈看到 abort 旗標就結束，停止鍵跟著消失。
+    // 外層放行後（指令的完成回呼照樣會來），已停止的這一輪不可以再把結果交回 AI 繼續問。
     await act(async () => {
       completeCommand({ id: "b1", command: "DISM", status: "failed", exitCode: 740, startTime: 0, rawOutput: "" });
     });
-    await vi.waitFor(() => expect(screen.queryByTitle("停止")).toBeNull());
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(aiChatCount.n).toBe(1);
+    expect(screen.queryByTitle("停止")).toBeNull();
+  });
+});
+
+describe("AiPanel — 舊指令晚到的完成回呼", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  // 停止後指令 A 的完成回呼可能很晚才來（例如外層扣著它等提權橫幅）；那時新的指令 B 已在跑，
+  // A 的回呼不可以把 B 的卡住偵測關掉。
+  it("不會關掉目前這個指令的卡住偵測", async () => {
+    const idleMs = { current: 130_000 };
+    const completions: ((block: TerminalBlock) => void)[] = [];
+    const onExecuteCommand = vi.fn((_cmd: string, onComplete?: (block: TerminalBlock) => void) => {
+      if (onComplete) completions.push(onComplete);
+    });
+    aiChatQueue.push(runCmdCall("cat <<EOF"));
+    render(
+      <AiPanel sessionId="s1" isOpen={true} providerName="Ollama" onClose={vi.fn()}
+        onExecuteCommand={onExecuteCommand} onOpenProviderPalette={vi.fn()}
+        getIdleMs={() => idleMs.current} onInterruptCommand={vi.fn()} />,
+    );
+    await act(async () => { await Promise.resolve(); });
+    fireEvent.click(screen.getByTitle(/啟用 Agent 模式/));
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(textbox, { target: { value: "第一個" } });
+    fireEvent.keyDown(textbox, { key: "Enter" });
+    await vi.waitFor(() => expect(onExecuteCommand).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByTitle("停止"));
+
+    aiChatQueue.push(runCmdCall("sleep 100"));
+    fireEvent.change(textbox, { target: { value: "第二個" } });
+    fireEvent.keyDown(textbox, { key: "Enter" });
+    await vi.waitFor(() => expect(onExecuteCommand).toHaveBeenCalledTimes(2));
+
+    // A 的完成回呼現在才到。
+    await act(async () => {
+      completions[0]({ id: "a", command: "cat <<EOF", rawOutput: "", status: "completed", exitCode: 0, startTime: 0 });
+    });
+
+    await advance(6_000);
+    expect(screen.getByText("指令似乎沒有反應")).toBeInTheDocument();
   });
 });

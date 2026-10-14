@@ -449,6 +449,38 @@ describe("useMcpChat", () => {
       expect(result.current.messages.some((m) => String(m.content).includes("REMOTE-NOTE"))).toBe(false);
     });
 
+    // 任務中途 ssh 進遠端時，下一步的提示詞要跟著變——所以函式形式要每一步重算，不能只在送出時算一次。
+    it("extraSystemPrompt 是函式時每一步重算；回傳空的那一步不送 system", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(terminalCommandGate).mockResolvedValue({ allowed: true, reason: null });
+      vi.mocked(aiChat).mockResolvedValueOnce(runCmd("ssh host")).mockResolvedValueOnce(say("完成"));
+      let note: string | undefined = undefined;
+      const runCommand = vi.fn(async () => { note = "NOW-REMOTE"; return "ok"; });
+      const { result } = renderHook(() => useMcpChat("s-sysfn", 10, runCommand), { wrapper: LocaleProvider });
+      await act(async () => {
+        await result.current.sendMessage("hi", "terminal", undefined, undefined, () => note);
+      });
+      const calls = vi.mocked(aiChat).mock.calls;
+      expect(calls[0][0].some((m) => m.role === "system")).toBe(false);
+      expect(calls[1][0][0]).toEqual({ role: "system", content: "NOW-REMOTE" });
+      expect(calls[1][0].filter((m) => m.role === "system")).toHaveLength(1);
+    });
+
+    it("resend 時重新呼叫 extraSystemPrompt 函式，而不是重播舊字串", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(aiChat).mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(say("好"));
+      let note = "OLD";
+      const { result } = renderHook(() => useMcpChat("s-sysresend"), { wrapper: LocaleProvider });
+      await act(async () => {
+        await result.current.sendMessage("hi", "terminal", undefined, undefined, () => note);
+      });
+      note = "NEW";
+      await act(async () => { await result.current.resend(); });
+      const calls = vi.mocked(aiChat).mock.calls;
+      expect(calls[0][0][0]).toEqual({ role: "system", content: "OLD" });
+      expect(calls[1][0][0]).toEqual({ role: "system", content: "NEW" });
+    });
+
     it("執行工具時 phase 是 running、步數是 1，結束後 activeScope 回到 null", async () => {
       vi.mocked(aiChat).mockReset();
       vi.mocked(terminalCommandGate).mockResolvedValue({ allowed: true, reason: null });
