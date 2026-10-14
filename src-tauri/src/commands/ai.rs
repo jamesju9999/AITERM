@@ -16,6 +16,7 @@ use crate::ai::{
     context, router::AiRouter, AiError, AiSingleCommand, ChatMessage, GenerateChunk,
     GenerateRequest, Locale, McpToolDefinition, QueryMode, RiskLevel,
 };
+use crate::config::types::ProviderType;
 use crate::guard::CommandGuard;
 use crate::pty::PtyManager;
 
@@ -491,6 +492,17 @@ pub struct AiChatReply {
     /// Gemini thinking-mode models require this to be echoed back in conversation history.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_tool_calls: Option<serde_json::Value>,
+    /// 這一輪附了圖片，但供應商收不了（ChatGPT 網頁版），圖片沒送出、只送了文字。
+    /// 畫面據此提示使用者，不要讓圖片無聲消失。
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub images_dropped: bool,
+}
+
+/// 這一輪送出去時，附的圖片會不會被丟掉。目前只有 ChatGPT 網頁版不收圖片
+/// （見 `ai/chatgpt_web.rs::message_text`）。
+fn images_will_be_dropped(provider_type: Option<ProviderType>, messages: &[ChatMessage]) -> bool {
+    provider_type == Some(ProviderType::ChatgptWeb)
+        && messages.iter().any(|m| crate::ai::content::has_image(&m.content))
 }
 
 /// `ai_chat` 與 `ai_chat_ctx` 共用的「非 MCP 串流」核心：resolve provider →
@@ -569,7 +581,7 @@ async fn run_request(
         Err(join_err) => return Err(AiError::Network { message: join_err.to_string() }),
     }
 
-    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None })
+    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None, images_dropped: false })
 }
 
 #[tauri::command]
@@ -602,6 +614,13 @@ pub async fn ai_chat(
     }
 
     let snapshot = context::snapshot(&pty_manager, &session_id);
+    // 看的是這一輪實際會用的供應商（provider_id 沒給時是預設），與下面兩條路徑的
+    // resolve 選法相同。
+    let images_dropped =
+        images_will_be_dropped(router.provider_type(provider_id.as_deref()), &messages);
+    let mark = |r: Result<AiChatReply, AiError>| {
+        r.map(|reply| AiChatReply { images_dropped, ..reply })
+    };
 
     // ── MCP tool calling path ─────────────────────────────────────────────────
     if scope != ToolScope::None {
@@ -679,9 +698,9 @@ pub async fn ai_chat(
                 Ok(Err(AiError::ToolCallingUnsupported { reason })) => *reason,
                 _ => crate::ai::ToolFallbackReason::Unsupported,
             };
-            return match joined {
+            return mark(match joined {
                 Ok(Ok(crate::ai::GenerateWithToolsResult::ToolCalls { calls, raw })) =>
-                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: raw }),
+                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: raw, images_dropped: false }),
                 Ok(Ok(crate::ai::GenerateWithToolsResult::Text(content))) => Ok(native_text_reply(content)),
                 Ok(Ok(crate::ai::GenerateWithToolsResult::Unsupported)) |
                 Ok(Err(AiError::ToolCallingUnsupported { .. })) => {
@@ -733,19 +752,19 @@ pub async fn ai_chat(
                     // tool_calling_unsupported=true：讓前端知道這一輪是降級跑的，
                     // 不要靜默發生。
                     if let Some(calls) = parse_tool_calls_from_text(&buf2) {
-                        Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: true, tool_fallback_reason: Some(fallback_reason), raw_tool_calls: None })
+                        Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: true, tool_fallback_reason: Some(fallback_reason), raw_tool_calls: None, images_dropped: false })
                     } else {
-                        Ok(AiChatReply { content: Some(buf2), tool_calls: vec![], tool_calling_unsupported: true, tool_fallback_reason: Some(fallback_reason), raw_tool_calls: None })
+                        Ok(AiChatReply { content: Some(buf2), tool_calls: vec![], tool_calling_unsupported: true, tool_fallback_reason: Some(fallback_reason), raw_tool_calls: None, images_dropped: false })
                     }
                 }
                 Ok(Err(e)) => Err(e),
                 Err(e) => Err(AiError::Network { message: e.to_string() }),
-            };
+            });
         }
     }
     // ── End MCP path — fall through to normal streaming path ─────────────────
 
-    run_chat(messages, snapshot, provider_id, locale, supports_artifacts, &router, &app, session_id).await
+    mark(run_chat(messages, snapshot, provider_id, locale, supports_artifacts, &router, &app, session_id).await)
 }
 
 /// `ai_chat` 的觀看端版本：不吃 PTY session_id，改吃明確的 `RemoteCtx`。
@@ -822,8 +841,8 @@ After receiving tool results, continue the conversation naturally in the user's 
 /// 原生工具呼叫路徑回了純文字：裡面若是 `<tool_call>` 指令就當工具呼叫，否則才是給使用者看的回答。
 fn native_text_reply(content: String) -> AiChatReply {
     match parse_tool_calls_from_text(&content) {
-        Some(calls) => AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None },
-        None => AiChatReply { content: Some(content), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None },
+        Some(calls) => AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None, images_dropped: false },
+        None => AiChatReply { content: Some(content), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None, images_dropped: false },
     }
 }
 
@@ -934,14 +953,14 @@ pub async fn agent_chat(
 
         return match join.await {
             Ok(Ok(crate::ai::GenerateWithToolsResult::ToolCalls { calls, raw })) =>
-                Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: raw }),
+                Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: raw, images_dropped: false }),
             Ok(Ok(crate::ai::GenerateWithToolsResult::Text(content))) => {
                 // Model sometimes outputs tool calls in <tool_call> text format even when
                 // native function calling is available (Gemini occasionally does this).
                 if let Some(calls) = parse_tool_calls_from_text(&content) {
-                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None })
+                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None, images_dropped: false })
                 } else {
-                    Ok(AiChatReply { content: Some(content), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None })
+                    Ok(AiChatReply { content: Some(content), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None, images_dropped: false })
                 }
             },
             Ok(Ok(crate::ai::GenerateWithToolsResult::Unsupported)) |
@@ -971,9 +990,9 @@ pub async fn agent_chat(
                 let _ = join2.await;
 
                 if let Some(calls) = parse_tool_calls_from_text(&buf2) {
-                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None })
+                    Ok(AiChatReply { content: None, tool_calls: calls, tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None, images_dropped: false })
                 } else {
-                    Ok(AiChatReply { content: Some(buf2), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None })
+                    Ok(AiChatReply { content: Some(buf2), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None, images_dropped: false })
                 }
             }
             Ok(Err(e)) => Err(e),
@@ -1006,7 +1025,7 @@ pub async fn agent_chat(
         Err(join_err) => return Err(AiError::Network { message: join_err.to_string() }),
     }
 
-    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None })
+    Ok(AiChatReply { content: Some(buf), tool_calls: vec![], tool_calling_unsupported: false, tool_fallback_reason: None, raw_tool_calls: None, images_dropped: false })
 }
 
 #[cfg(test)]
@@ -1173,10 +1192,61 @@ mod tests {
             tool_calling_unsupported: false,
             tool_fallback_reason: None,
             raw_tool_calls: None,
+            images_dropped: false,
         };
         let j = serde_json::to_value(&reply).unwrap();
         assert!(j["content"].is_null());
         assert_eq!(j["tool_calls"][0]["tool_name"], "fs__read_file");
+    }
+
+    fn image_msg() -> ChatMessage {
+        ChatMessage {
+            role: "user".into(),
+            content: serde_json::json!([
+                {"type": "text", "text": "what colour?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,QUJD"}},
+            ]),
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
+    fn text_msg() -> ChatMessage {
+        ChatMessage { role: "user".into(), content: serde_json::json!("hi"), tool_call_id: None, tool_calls: None }
+    }
+
+    #[test]
+    fn chatgpt_web_with_image_drops_images() {
+        // 圖片放在較早的訊息，確認看的是整段歷史而不是只看最後一則。
+        assert!(images_will_be_dropped(Some(ProviderType::ChatgptWeb), &[image_msg(), text_msg()]));
+    }
+
+    #[test]
+    fn chatgpt_web_without_image_drops_nothing() {
+        assert!(!images_will_be_dropped(Some(ProviderType::ChatgptWeb), &[text_msg()]));
+    }
+
+    #[test]
+    fn other_providers_with_image_drop_nothing() {
+        for t in [ProviderType::Anthropic, ProviderType::Codex, ProviderType::Ollama, ProviderType::Openai] {
+            assert!(!images_will_be_dropped(Some(t), &[image_msg()]), "{t:?}");
+        }
+        assert!(!images_will_be_dropped(None, &[image_msg()]));
+    }
+
+    #[test]
+    fn images_dropped_is_omitted_when_false_and_present_when_true() {
+        let mut reply = AiChatReply {
+            content: Some("x".into()),
+            tool_calls: vec![],
+            tool_calling_unsupported: false,
+            tool_fallback_reason: None,
+            raw_tool_calls: None,
+            images_dropped: false,
+        };
+        assert!(serde_json::to_value(&reply).unwrap().get("images_dropped").is_none());
+        reply.images_dropped = true;
+        assert_eq!(serde_json::to_value(&reply).unwrap()["images_dropped"], true);
     }
 
     #[test]
@@ -1187,6 +1257,7 @@ mod tests {
             tool_calling_unsupported: false,
             tool_fallback_reason: None,
             raw_tool_calls: None,
+            images_dropped: false,
         };
         let j = serde_json::to_value(&reply).unwrap();
         assert_eq!(j["content"], "hello world");

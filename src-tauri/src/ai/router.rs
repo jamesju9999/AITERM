@@ -416,6 +416,13 @@ async fn do_codex_oauth_refresh(
     Ok(data.access_token)
 }
 
+/// 沒指定供應商時用哪一個：設定裡的預設，沒有就第一個。
+fn default_provider_id(cfg: &crate::config::types::AppConfig) -> &str {
+    cfg.default_provider.as_deref().unwrap_or_else(|| {
+        cfg.providers.first().map(|p| p.id.as_str()).unwrap_or("")
+    })
+}
+
 pub struct AiRouter {
     config: Arc<ConfigStore>,
     secrets: Arc<SecretStore>,
@@ -456,10 +463,15 @@ impl AiRouter {
             return Err(AiError::NotConfigured);
         }
 
-        let id = cfg.default_provider.as_deref().unwrap_or_else(|| {
-            cfg.providers.first().map(|p| p.id.as_str()).unwrap_or("")
-        });
-        self.resolve_by_id(id).await
+        self.resolve_by_id(default_provider_id(&cfg)).await
+    }
+
+    /// `resolve_by_id(id)`（`id` 為 None 時是 `resolve()`）會用到的供應商型別。
+    /// 沒有設定（含 OPENAI_API_KEY 環境變數保底）時回 None。
+    pub fn provider_type(&self, id: Option<&str>) -> Option<ProviderType> {
+        let cfg = self.config.get();
+        let id = id.unwrap_or_else(|| default_provider_id(&cfg));
+        cfg.find_provider(id).map(|p| p.provider_type)
     }
 
     /// Resolve a specific provider by id.
@@ -826,6 +838,33 @@ mod tests {
         let result = router.resolve().await.is_ok();
         std::env::remove_var("OPENAI_API_KEY");
         assert!(result);
+    }
+
+    #[tokio::test]
+    async fn provider_type_follows_the_same_choice_as_resolve() {
+        let pc = |id: &str, t: ProviderType| ProviderConfig {
+            id: id.into(),
+            display_name: id.into(),
+            provider_type: t,
+            base_url: None,
+            oauth_client_id: None,
+            model: "m".into(),
+            supports_json_mode: false,
+            auth_method: None,
+        };
+        let mut cfg = AppConfig::default();
+        cfg.providers.push(pc("a", ProviderType::Ollama));
+        cfg.providers.push(pc("b", ProviderType::ChatgptWeb));
+        cfg.default_provider = Some("b".into());
+        let router = make_router(cfg.clone()).await;
+        assert_eq!(router.provider_type(None), Some(ProviderType::ChatgptWeb));
+        assert_eq!(router.provider_type(Some("a")), Some(ProviderType::Ollama));
+        assert_eq!(router.provider_type(Some("nope")), None);
+
+        // 沒設預設 → 跟 resolve() 一樣取第一個。
+        cfg.default_provider = None;
+        let router = make_router(cfg).await;
+        assert_eq!(router.provider_type(None), Some(ProviderType::Ollama));
     }
 
     #[tokio::test]
