@@ -500,9 +500,16 @@ pub struct AiChatReply {
 
 /// 這一輪送出去時，附的圖片會不會被丟掉。目前只有 ChatGPT 網頁版不收圖片
 /// （見 `ai/chatgpt_web.rs::message_text`）。
+///
+/// 只看最後一則使用者訊息（本輪送的那則）：看整段歷史的話，附過一次圖之後
+/// 每一輪都會再提示。工具迴圈的後續輪次以 tool 結果結尾，所以不能只看最後一則。
 fn images_will_be_dropped(provider_type: Option<ProviderType>, messages: &[ChatMessage]) -> bool {
     provider_type == Some(ProviderType::ChatgptWeb)
-        && messages.iter().any(|m| crate::ai::content::has_image(&m.content))
+        && messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .is_some_and(|m| crate::ai::content::has_image(&m.content))
 }
 
 /// `ai_chat` 與 `ai_chat_ctx` 共用的「非 MCP 串流」核心：resolve provider →
@@ -1215,10 +1222,33 @@ mod tests {
         ChatMessage { role: "user".into(), content: serde_json::json!("hi"), tool_call_id: None, tool_calls: None }
     }
 
+    fn other_msg(role: &str) -> ChatMessage {
+        ChatMessage { role: role.into(), content: serde_json::json!("x"), tool_call_id: None, tool_calls: None }
+    }
+
     #[test]
-    fn chatgpt_web_with_image_drops_images() {
-        // 圖片放在較早的訊息，確認看的是整段歷史而不是只看最後一則。
-        assert!(images_will_be_dropped(Some(ProviderType::ChatgptWeb), &[image_msg(), text_msg()]));
+    fn chatgpt_web_with_image_in_current_turn_drops_images() {
+        assert!(images_will_be_dropped(
+            Some(ProviderType::ChatgptWeb),
+            &[text_msg(), other_msg("assistant"), image_msg()]
+        ));
+    }
+
+    #[test]
+    fn image_in_current_user_turn_counts_even_after_tool_results() {
+        // 工具迴圈的後續輪次以 tool 結果結尾，本輪的使用者訊息仍是那則附圖的。
+        assert!(images_will_be_dropped(
+            Some(ProviderType::ChatgptWeb),
+            &[image_msg(), other_msg("assistant"), other_msg("tool")]
+        ));
+    }
+
+    #[test]
+    fn image_only_in_earlier_turn_does_not_repeat_the_notice() {
+        assert!(!images_will_be_dropped(
+            Some(ProviderType::ChatgptWeb),
+            &[image_msg(), other_msg("assistant"), text_msg()]
+        ));
     }
 
     #[test]
