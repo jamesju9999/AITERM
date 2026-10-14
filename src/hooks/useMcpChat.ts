@@ -2,7 +2,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { unlistenOnCleanup } from "../lib/eventSubscription";
-import { abortAi, aiChat, formatAiError, type AiToolCall, type AiError, type ToolFallbackReason } from "../ipc/ai";
+import { abortAi, aiChat, formatAiError, type AiToolCall, type AiError, type ToolFallbackReason, type ToolScope } from "../ipc/ai";
 import { executeMcpTool } from "../ipc/mcp";
 import { terminalCommandGate } from "../ipc/computer";
 import { showMainWindowAfterTask } from "../ipc/resident";
@@ -68,9 +68,13 @@ export function useMcpChat(
   const [toolFallbackReason, setToolFallbackReason] = useState<ToolFallbackReason | null>(null);
   const streamBufRef = useRef("");
   const [error, setError] = useState<string | null>(null);
+  // ⚡ 模式的狀態列要顯示「第幾步、在等 AI 還是在等指令」；activeScope 是進行中那一輪的範圍，沒在跑時是 null。
+  const [activeScope, setActiveScope] = useState<ToolScope | null>(null);
+  const [step, setStep] = useState(0);
+  const [phase, setPhase] = useState<"thinking" | "running">("thinking");
   const [sessions, setSessions] = useState<McpChatSession[]>(loadAllSessions);
   const mountedRef = useRef(true);
-  const lastSendRef = useRef<{ text: string; useMcp: boolean; attachments?: Attachment[] } | null>(null);
+  const lastSendRef = useRef<{ text: string; scope: ToolScope; attachments?: Attachment[]; extraSystemPrompt?: string } | null>(null);
   const currentSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -131,12 +135,14 @@ export function useMcpChat(
 
   const sendMessage = useCallback(async (
     text: string,
-    useMcp: boolean,
+    scope: ToolScope,
     existingMessages?: McpChatMessage[],
     attachments?: Attachment[],
+    /** 只送給模型、不顯示也不存的 system 提示詞（⚡ 模式的提權規則、遠端連線說明）。 */
+    extraSystemPrompt?: string,
   ) => {
     if (!text.trim() && (!attachments || attachments.length === 0)) return;
-    lastSendRef.current = { text, useMcp, attachments };
+    lastSendRef.current = { text, scope, attachments, extraSystemPrompt };
 
     const hasAttachments = attachments && attachments.length > 0;
     const userContent = hasAttachments ? buildContentParts(text, attachments) : text;
@@ -146,6 +152,9 @@ export function useMcpChat(
     loadingRef.current = true;
     setIsLoading(true);
     setError(null);
+    setActiveScope(scope);
+    setStep(0);
+    setPhase("thinking");
 
     // Build the message history for the AI (user/assistant only)
     const baseMessages = existingMessages ?? messages;
@@ -162,14 +171,18 @@ export function useMcpChat(
     // 使用者才看得到結果——操作期間 AITerm 被目標 App 壓在後面（Wayland 上是被縮小）。
     let usedComputer = false;
     try {
-      let iterHistory = [...history];
+      let iterHistory: ChatMessage[] = extraSystemPrompt
+        ? [{ role: "system", content: extraSystemPrompt }, ...history]
+        : [...history];
       let iterations = 0;
       let nudges = 0;
 
       const maxIterations = maxIterationsRef.current;
       while (iterations < maxIterations) {
         iterations++;
-        const reply = await aiChat(iterHistory, sessionId, undefined, useMcp, locale, true);
+        setStep(iterations);
+        setPhase("thinking");
+        const reply = await aiChat(iterHistory, sessionId, undefined, scope !== "none", locale, true, scope);
 
         if (stale()) return; // 被停止了（後端的呼叫已被中斷，或剛好在這時回來）：丟掉這一輪
 
@@ -179,6 +192,7 @@ export function useMcpChat(
 
         // Handle tool calls
         if (reply.tool_calls.length > 0) {
+          setPhase("running");
           if (reply.tool_calls.some(tc => tc.tool_name.startsWith(COMPUTER_TOOL_PREFIX))) usedComputer = true;
           for (const tc of reply.tool_calls) {
             if (stale()) return;
@@ -271,7 +285,7 @@ export function useMcpChat(
         // 模型沒呼叫工具就結束這一輪，有兩種常見情形，都讓任務停在半路：
         //  1. 只說「讓我先…」卻沒動手；2. 回了空內容（畫面上就是一顆空白氣泡）。
         // 催模型直接動手。催促只送給模型（iterHistory），不顯示在對話裡；有次數上限。
-        if (useMcp && nudges < MAX_INTENT_NUDGES && (isEmpty || looksLikeUnfulfilledIntent(finalText))) {
+        if (scope !== "none" && nudges < MAX_INTENT_NUDGES && (isEmpty || looksLikeUnfulfilledIntent(finalText))) {
           nudges++;
           const nudge = intentNudge(locale);
           if (isEmpty) {
@@ -319,6 +333,7 @@ export function useMcpChat(
       if (usedComputer && mountedRef.current) void showMainWindowAfterTask();
       // 只有「這一輪還有效」才收尾；被停止或被取代的，狀態已由 stop()／新的一輪接手。
       if (!stale()) {
+        setActiveScope(null);
         loadingRef.current = false;
         setIsLoading(false);
         setStreamBuf("");
@@ -341,6 +356,7 @@ export function useMcpChat(
       ...(partial.trim() ? [{ role: "assistant" as const, content: partial }] : []),
       { role: "assistant" as const, content: t.mcp_stopped },
     ]);
+    setActiveScope(null);
     setIsLoading(false);
   }, [sessionId, t]);
 
@@ -371,13 +387,13 @@ export function useMcpChat(
 
   const resend = useCallback(async () => {
     if (!lastSendRef.current || isLoading) return;
-    const { text, useMcp, attachments } = lastSendRef.current;
+    const { text, scope, attachments, extraSystemPrompt } = lastSendRef.current;
     const lastUserIdx = [...messages].reverse().findIndex(m => m.role === "user");
     const trimmedMessages = lastUserIdx >= 0
       ? messages.slice(0, messages.length - lastUserIdx - 1)
       : messages;
     setMessages(trimmedMessages);
-    await sendMessage(text, useMcp, trimmedMessages, attachments);
+    await sendMessage(text, scope, trimmedMessages, attachments, extraSystemPrompt);
   }, [messages, isLoading, sendMessage]);
 
   return {
@@ -387,6 +403,9 @@ export function useMcpChat(
     streamBuf,
     toolFallbackReason,
     error,
+    activeScope,
+    step,
+    phase,
     sendMessage,
     stop,
     send: sendMessage,        // alias for AiPanel compatibility

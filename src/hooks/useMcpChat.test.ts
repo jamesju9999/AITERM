@@ -39,7 +39,7 @@ describe("useMcpChat", () => {
     const { result } = renderHook(() => useMcpChat("session-1"), { wrapper: LocaleProvider });
 
     await act(async () => {
-      await result.current.sendMessage("Hi", true);
+      await result.current.sendMessage("Hi", "all");
     });
 
     const lastMsg = result.current.messages.at(-1);
@@ -66,7 +66,7 @@ describe("useMcpChat", () => {
         .mockResolvedValueOnce(call("aiterm_computer__computer_snapshot"))
         .mockResolvedValueOnce(say("已完成。"));
       const { result } = mount();
-      await act(async () => { await result.current.sendMessage("幫我傳訊息", true); });
+      await act(async () => { await result.current.sendMessage("幫我傳訊息", "all"); });
 
       expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(3);
       expect(executeMcpTool).toHaveBeenCalledWith("aiterm_computer__computer_snapshot", {});
@@ -82,7 +82,7 @@ describe("useMcpChat", () => {
       vi.mocked(aiChat).mockReset();
       vi.mocked(aiChat).mockResolvedValue(say("讓我先取得 UI 快照。"));
       const { result } = mount();
-      await act(async () => { await result.current.sendMessage("幫我傳訊息", true); });
+      await act(async () => { await result.current.sendMessage("幫我傳訊息", "all"); });
       expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(3);
     });
 
@@ -95,7 +95,7 @@ describe("useMcpChat", () => {
         .mockResolvedValueOnce(call("aiterm_computer__computer_click"))
         .mockResolvedValueOnce(say("已完成。"));
       const { result } = mount();
-      await act(async () => { await result.current.sendMessage("幫我點", true); });
+      await act(async () => { await result.current.sendMessage("幫我點", "all"); });
 
       expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(4);
       expect(result.current.messages.some((m) => m.role === "assistant" && String(m.content).trim() === "")).toBe(false);
@@ -112,7 +112,7 @@ describe("useMcpChat", () => {
       vi.mocked(aiChat).mockReset();
       vi.mocked(aiChat).mockResolvedValue(say(""));
       const { result } = mount();
-      await act(async () => { await result.current.sendMessage("幫我點", true); });
+      await act(async () => { await result.current.sendMessage("幫我點", "all"); });
       expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(3);
       const last = result.current.messages.at(-1);
       expect(last?.role).toBe("assistant");
@@ -124,7 +124,7 @@ describe("useMcpChat", () => {
       vi.mocked(aiChat).mockReset();
       vi.mocked(aiChat).mockResolvedValue(say("已完成：TextEdit 現在是空的。"));
       const { result } = mount();
-      await act(async () => { await result.current.sendMessage("清空", true); });
+      await act(async () => { await result.current.sendMessage("清空", "all"); });
       expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(1);
     });
 
@@ -132,7 +132,7 @@ describe("useMcpChat", () => {
       vi.mocked(aiChat).mockReset();
       vi.mocked(aiChat).mockResolvedValue(say("讓我先看看這個指令。"));
       const { result } = mount();
-      await act(async () => { await result.current.sendMessage("這是什麼", false); });
+      await act(async () => { await result.current.sendMessage("這是什麼", "none"); });
       expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(1);
     });
   });
@@ -150,7 +150,7 @@ describe("useMcpChat", () => {
       vi.mocked(executeMcpTool).mockResolvedValue({ content: "ok", is_error: false });
       vi.mocked(aiChat).mockResolvedValue(toolCall());
       const { result } = renderHook(() => useMcpChat("s-limit-default"), { wrapper: LocaleProvider });
-      await act(async () => { await result.current.sendMessage("go", true); });
+      await act(async () => { await result.current.sendMessage("go", "all"); });
       expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(10);
       expect(String(result.current.messages.at(-1)?.content)).toContain("10");
     });
@@ -160,7 +160,7 @@ describe("useMcpChat", () => {
       vi.mocked(executeMcpTool).mockResolvedValue({ content: "ok", is_error: false });
       vi.mocked(aiChat).mockResolvedValue(toolCall());
       const { result } = renderHook(() => useMcpChat("s-limit-25", 25), { wrapper: LocaleProvider });
-      await act(async () => { await result.current.sendMessage("go", true); });
+      await act(async () => { await result.current.sendMessage("go", "all"); });
       expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(25);
       expect(String(result.current.messages.at(-1)?.content)).toContain("25");
     });
@@ -170,7 +170,7 @@ describe("useMcpChat", () => {
       vi.mocked(executeMcpTool).mockResolvedValue({ content: "ok", is_error: false });
       vi.mocked(aiChat).mockResolvedValue(toolCall());
       const { result } = renderHook(() => useMcpChat("s-limit-3", 3), { wrapper: LocaleProvider });
-      await act(async () => { await result.current.sendMessage("go", true); });
+      await act(async () => { await result.current.sendMessage("go", "all"); });
       expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(3);
     });
 
@@ -183,7 +183,7 @@ describe("useMcpChat", () => {
         initialProps: { n: 2 },
       });
       rerender({ n: 4 });
-      await act(async () => { await result.current.sendMessage("go", true); });
+      await act(async () => { await result.current.sendMessage("go", "all"); });
       expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(4);
     });
   });
@@ -210,7 +210,7 @@ describe("useMcpChat", () => {
       vi.mocked(aiChat).mockReturnValueOnce(pending.promise as never);
       const { result } = mount();
       let send!: Promise<void>;
-      await act(async () => { send = result.current.sendMessage("幫我做事", true); });
+      await act(async () => { send = result.current.sendMessage("幫我做事", "all"); });
       expect(result.current.isLoading).toBe(true);
 
       await act(async () => { result.current.stop(); });
@@ -234,7 +234,7 @@ describe("useMcpChat", () => {
       vi.mocked(aiChat).mockResolvedValueOnce(toolReply("x__a", "x__b"));
       const { result } = mount();
       let send!: Promise<void>;
-      await act(async () => { send = result.current.sendMessage("go", true); });
+      await act(async () => { send = result.current.sendMessage("go", "all"); });
       await act(async () => {}); // 讓第一個工具開始執行
 
       await act(async () => { result.current.stop(); });
@@ -261,9 +261,9 @@ describe("useMcpChat", () => {
         .mockResolvedValueOnce({ content: "新的回答", tool_calls: [], tool_calling_unsupported: false });
       const { result } = mount();
       let first!: Promise<void>;
-      await act(async () => { first = result.current.sendMessage("舊的", true); });
+      await act(async () => { first = result.current.sendMessage("舊的", "all"); });
       await act(async () => { result.current.stop(); });
-      await act(async () => { await result.current.sendMessage("新的", true); });
+      await act(async () => { await result.current.sendMessage("新的", "all"); });
       // 舊的呼叫這時才回來（含一個工具呼叫）：必須被忽略。
       vi.mocked(executeMcpTool).mockClear();
       await act(async () => { oldCall.resolve(toolReply("x__late") as never); await first; });
@@ -278,7 +278,7 @@ describe("useMcpChat", () => {
       const pending = deferred<never>();
       vi.mocked(aiChat).mockReturnValueOnce(pending.promise as never);
       const { result } = mount();
-      await act(async () => { void result.current.sendMessage("說一段話", true); });
+      await act(async () => { void result.current.sendMessage("說一段話", "all"); });
       await act(async () => { result.current.stop(); });
       const last2 = result.current.messages.slice(-2).map((m) => m.role);
       expect(last2[last2.length - 1]).toBe("assistant");
@@ -305,7 +305,7 @@ describe("useMcpChat", () => {
       const run = vi.fn().mockResolvedValue("Command `ls` finished (exit 0).\nOutput:\nfile.txt");
       vi.mocked(aiChat).mockResolvedValueOnce(call("ls")).mockResolvedValueOnce(say("看到 file.txt 了"));
       const { result } = mountWith(run);
-      await act(async () => { await result.current.sendMessage("列出檔案", true); });
+      await act(async () => { await result.current.sendMessage("列出檔案", "all"); });
 
       expect(terminalCommandGate).toHaveBeenCalledWith("ls");
       expect(run).toHaveBeenCalledWith("ls");
@@ -322,7 +322,7 @@ describe("useMcpChat", () => {
       const run = vi.fn();
       vi.mocked(aiChat).mockResolvedValueOnce(call("rm -rf x")).mockResolvedValueOnce(say("好的，不執行"));
       const { result } = mountWith(run);
-      await act(async () => { await result.current.sendMessage("刪掉", true); });
+      await act(async () => { await result.current.sendMessage("刪掉", "all"); });
 
       expect(run).not.toHaveBeenCalled();
       const toolResult = result.current.messages.find((m) => m.role === "tool_result");
@@ -336,7 +336,7 @@ describe("useMcpChat", () => {
       const run = vi.fn();
       vi.mocked(aiChat).mockResolvedValueOnce(call(42)).mockResolvedValueOnce(say("好"));
       const { result } = mountWith(run);
-      await act(async () => { await result.current.sendMessage("x", true); });
+      await act(async () => { await result.current.sendMessage("x", "all"); });
       expect(terminalCommandGate).not.toHaveBeenCalled();
       expect(run).not.toHaveBeenCalled();
       expect(result.current.messages.find((m) => m.role === "tool_result")?.is_error).toBe(true);
@@ -347,7 +347,7 @@ describe("useMcpChat", () => {
       vi.mocked(terminalCommandGate).mockReset();
       vi.mocked(aiChat).mockResolvedValueOnce(call("ls")).mockResolvedValueOnce(say("好"));
       const { result } = mountWith(undefined);
-      await act(async () => { await result.current.sendMessage("x", true); });
+      await act(async () => { await result.current.sendMessage("x", "all"); });
       expect(terminalCommandGate).not.toHaveBeenCalled();
       expect(result.current.messages.find((m) => m.role === "tool_result")?.is_error).toBe(true);
     });
@@ -358,7 +358,7 @@ describe("useMcpChat", () => {
       vi.mocked(terminalCommandGate).mockRejectedValue("gate down");
       vi.mocked(aiChat).mockResolvedValueOnce(call("ls")).mockResolvedValueOnce(say("好"));
       const { result } = mountWith(vi.fn());
-      await act(async () => { await result.current.sendMessage("x", true); });
+      await act(async () => { await result.current.sendMessage("x", "all"); });
       expect(result.current.error).toBeNull();
       expect(result.current.messages.find((m) => m.role === "tool_result")?.is_error).toBe(true);
     });
@@ -378,7 +378,7 @@ describe("useMcpChat", () => {
       vi.mocked(executeMcpTool).mockResolvedValue({ content: "ok", is_error: false });
       vi.mocked(aiChat).mockResolvedValueOnce(call("aiterm_computer__computer_click")).mockResolvedValueOnce(done);
       const { result } = renderHook(() => useMcpChat("session-front"), { wrapper: LocaleProvider });
-      await act(async () => { await result.current.sendMessage("點一下", true); });
+      await act(async () => { await result.current.sendMessage("點一下", "all"); });
       expect(showMainWindowAfterTask).toHaveBeenCalledTimes(1);
     });
 
@@ -388,9 +388,9 @@ describe("useMcpChat", () => {
       vi.mocked(executeMcpTool).mockResolvedValue({ content: "ok", is_error: false });
       vi.mocked(aiChat).mockResolvedValueOnce(call("github__search")).mockResolvedValueOnce(done);
       const { result } = renderHook(() => useMcpChat("session-front2"), { wrapper: LocaleProvider });
-      await act(async () => { await result.current.sendMessage("查一下", true); });
+      await act(async () => { await result.current.sendMessage("查一下", "all"); });
       vi.mocked(aiChat).mockResolvedValueOnce(done);
-      await act(async () => { await result.current.sendMessage("謝謝", true); });
+      await act(async () => { await result.current.sendMessage("謝謝", "all"); });
       expect(showMainWindowAfterTask).not.toHaveBeenCalled();
     });
 
@@ -402,8 +402,66 @@ describe("useMcpChat", () => {
         .mockResolvedValueOnce(call("aiterm_computer__computer_type"))
         .mockRejectedValueOnce(new Error("boom"));
       const { result } = renderHook(() => useMcpChat("session-front3"), { wrapper: LocaleProvider });
-      await act(async () => { await result.current.sendMessage("打字", true); });
+      await act(async () => { await result.current.sendMessage("打字", "all"); });
       expect(showMainWindowAfterTask).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("⚡ 合併後的工具範圍（spec 2026-10-14）", () => {
+    const say = (content: string) => ({ content, tool_calls: [], tool_calling_unsupported: false });
+    const runCmd = (command: string) => ({
+      content: null,
+      tool_calls: [{ id: "t1", tool_name: "aiterm_terminal__run_command", server_id: "aiterm-terminal", args: { command } }],
+      tool_calling_unsupported: false,
+    });
+
+    it("把 scope 傳給後端（第 7 個參數）", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(aiChat).mockResolvedValueOnce(say("好"));
+      const { result } = renderHook(() => useMcpChat("s-scope"), { wrapper: LocaleProvider });
+      await act(async () => { await result.current.sendMessage("hi", "terminal"); });
+      expect(vi.mocked(aiChat).mock.calls[0][6]).toBe("terminal");
+    });
+
+    it("額外的 system 提示詞放在送給模型的最前面，但不出現在對話裡", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(aiChat).mockResolvedValueOnce(say("好"));
+      const { result } = renderHook(() => useMcpChat("s-sys"), { wrapper: LocaleProvider });
+      await act(async () => {
+        await result.current.sendMessage("hi", "terminal", undefined, undefined, "REMOTE-NOTE");
+      });
+      const sent = vi.mocked(aiChat).mock.calls[0][0];
+      expect(sent[0]).toEqual({ role: "system", content: "REMOTE-NOTE" });
+      expect(sent.at(-1)).toEqual({ role: "user", content: "hi" });
+      expect(result.current.messages.some((m) => String(m.content).includes("REMOTE-NOTE"))).toBe(false);
+    });
+
+    it("執行工具時 phase 是 running、步數是 1，結束後 activeScope 回到 null", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(terminalCommandGate).mockResolvedValue({ allowed: true, reason: null });
+      vi.mocked(aiChat).mockResolvedValueOnce(runCmd("ls")).mockResolvedValueOnce(say("完成"));
+      let finishCommand: (out: string) => void = () => {};
+      const runCommand = vi.fn(() => new Promise<string>((r) => { finishCommand = r; }));
+      const { result } = renderHook(() => useMcpChat("s-phase", 10, runCommand), { wrapper: LocaleProvider });
+
+      let done: Promise<void> = Promise.resolve();
+      act(() => { done = result.current.sendMessage("列檔案", "terminal"); });
+      await vi.waitFor(() => expect(runCommand).toHaveBeenCalledWith("ls"));
+      expect(result.current.activeScope).toBe("terminal");
+      expect(result.current.phase).toBe("running");
+      expect(result.current.step).toBe(1);
+
+      await act(async () => { finishCommand("ok"); await done; });
+      expect(result.current.activeScope).toBeNull();
+      expect(result.current.step).toBe(2);
+    });
+
+    it("純聊天（none）不催模型動手", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(aiChat).mockResolvedValueOnce(say("讓我先取得 UI 快照。"));
+      const { result } = renderHook(() => useMcpChat("s-none"), { wrapper: LocaleProvider });
+      await act(async () => { await result.current.sendMessage("hi", "none"); });
+      expect(vi.mocked(aiChat)).toHaveBeenCalledTimes(1);
     });
   });
 });

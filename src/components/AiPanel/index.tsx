@@ -471,7 +471,7 @@ Rules:
       onSend={(text) => {
         const currentAttachments = attachments;
         setAttachments([]);
-        void chat.send(text, mcpActive, undefined, currentAttachments.length > 0 ? currentAttachments : undefined);
+        void chat.send(text, mcpActive ? "all" : "none", undefined, currentAttachments.length > 0 ? currentAttachments : undefined);
       }}
       onSubmitAgent={(text) => {
         setAttachments([]);
