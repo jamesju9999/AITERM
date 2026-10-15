@@ -45,6 +45,50 @@ pub fn pick_next<'a>(
     Some(head)
 }
 
+/// 一個專案這一輪可以考慮派工的隊首卡片（Agent 協作，見
+/// `docs/superpowers/specs/2026-10-15-agent-canvas-design.md` §1）。
+///
+/// - 未指派卡片：維持原本的嚴格優先序，只交出 `sort_order` 最小的一張
+///   非互動卡片（互動卡片另走 `drain_once` 的第一輪）。
+/// - 每個 Agent：交出自己待執行卡片中最前面那張——**包括互動卡片**，
+///   Agent 卡片一律依序執行。Agent 已有卡片在跑（`running` 裡有同一個
+///   `agent_id`）或暫停中（`paused`）就不交出。
+///
+/// 每個 Agent 各有一條佇列，所以一個忙碌的 Agent 不會擋住另一個 Agent
+/// 或未指派的卡片——這正是「嚴格只看隊首」在這裡必須放寬的地方。
+/// `queued`/`running` 只能是**同一個專案**的卡片（Agent 屬於專案）。
+/// 回傳依 `sort_order` 排序。
+pub fn candidate_heads(
+    queued: &[TaskRow],
+    running: &[TaskRow],
+    paused: &std::collections::HashSet<String>,
+) -> Vec<TaskRow> {
+    let mut sorted: Vec<&TaskRow> = queued.iter().collect();
+    sorted.sort_by(|a, b| a.sort_order.partial_cmp(&b.sort_order).unwrap_or(std::cmp::Ordering::Equal));
+
+    let busy: std::collections::HashSet<&str> =
+        running.iter().filter_map(|t| t.agent_id.as_deref()).collect();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut out: Vec<TaskRow> = Vec::new();
+    let mut unassigned_taken = false;
+    for t in sorted {
+        match t.agent_id.as_deref() {
+            None => {
+                if !unassigned_taken && !t.interactive {
+                    unassigned_taken = true;
+                    out.push(t.clone());
+                }
+            }
+            Some(aid) => {
+                if seen.insert(aid) && !busy.contains(aid) && !paused.contains(aid) {
+                    out.push(t.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
 /// 各專案的隊首卡片依 `created_at` 由舊到新排序 —— 跨專案「先到先得」。
 ///
 /// 刻意**不**把所有專案的 queued 卡片混在一起依 `sort_order` 排序：
@@ -386,7 +430,9 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
                     break;
                 }
             };
-            let Some(next) = queued.into_iter().find(|t| t.interactive) else {
+            // Agent 的互動卡片不走這條：它們跟同一個 Agent 的其他卡片一樣
+            // 要依序執行、占全域名額（見 `candidate_heads`）。
+            let Some(next) = queued.into_iter().find(|t| t.interactive && t.agent_id.is_none()) else {
                 break;
             };
             // 先原子地認領再去 spawn——理由見 store::claim_for_dispatch。
@@ -407,35 +453,57 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
     }
 
     // 一般卡片：running 是跨專案的聯集（全域上限），queued 則每個專案
-    // 只交出自己的隊首，隊首之間依建立時間排序後逐一嘗試。
+    // 交出 `candidate_heads`（未指派的隊首＋每個 Agent 的隊首）。專案之間
+    // 依各自第一張候選的建立時間排序，專案內部維持 `sort_order`。
     loop {
         let mut running: Vec<TaskRow> = Vec::new();
+        let mut per_project: Vec<(String, Vec<TaskRow>)> = Vec::new();
         for project in &projects {
-            match store::list_by_status(&project.pool, store::STATUS_RUNNING).await {
-                Ok(r) => running.extend(r.into_iter().filter(|t| !t.interactive)),
+            let project_running = match store::list_by_status(&project.pool, store::STATUS_RUNNING).await {
+                Ok(r) => r,
                 Err(e) => {
                     eprintln!("scheduler list running ({}): {e}", project.name);
                     return;
                 }
-            }
-        }
-
-        let mut heads: Vec<(String, TaskRow)> = Vec::new();
-        for project in &projects {
-            match store::list_by_status(&project.pool, store::STATUS_QUEUED).await {
-                Ok(q) => {
-                    if let Some(head) = q.into_iter().find(|t| !t.interactive) {
-                        heads.push((project.id.clone(), head));
-                    }
-                }
+            };
+            let queued = match store::list_by_status(&project.pool, store::STATUS_QUEUED).await {
+                Ok(q) => q,
                 Err(e) => {
                     eprintln!("scheduler list queued ({}): {e}", project.name);
                     return;
                 }
-            }
+            };
+            let paused: std::collections::HashSet<String> =
+                match crate::tasks::agents::paused_agent_ids(&project.pool).await {
+                    Ok(v) => v.into_iter().collect(),
+                    Err(e) => {
+                        eprintln!("scheduler list paused agents ({}): {e}", project.name);
+                        return;
+                    }
+                };
+            per_project.push((project.id.clone(), candidate_heads(&queued, &project_running, &paused)));
+            // 互動卡片不占名額——但 Agent 的互動卡片要占，見 `candidate_heads`。
+            running.extend(project_running.into_iter().filter(|t| !t.interactive || t.agent_id.is_some()));
         }
 
-        let heads = order_heads(heads);
+        let firsts = order_heads(
+            per_project
+                .iter()
+                .filter_map(|(pid, hs)| hs.first().map(|h| (pid.clone(), h.clone())))
+                .collect(),
+        );
+        let heads: Vec<(String, TaskRow)> = firsts
+            .into_iter()
+            .flat_map(|(pid, _)| {
+                per_project
+                    .iter()
+                    .find(|(p, _)| *p == pid)
+                    .map(|(_, hs)| hs.clone())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(move |h| (pid.clone(), h))
+            })
+            .collect();
         let mut dispatched = false;
         for (project_id, head) in heads {
             if pick_next(&running, std::slice::from_ref(&head), max_concurrent).is_none() {
@@ -456,6 +524,11 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
             if let Err(e) = dispatcher.dispatch(&project, &head).await {
                 eprintln!("dispatch {} failed: {e}", head.id);
                 let _ = store::finish_task(&project.pool, &head.id, "failed", Some(&e), None).await;
+                // Agent 卡片派工失敗（例如 worktree 建不起來）跟執行失敗一樣
+                // 要暫停 Agent，否則下一輪會拿同一個壞掉的狀態派下一張。
+                if let Some(aid) = &head.agent_id {
+                    let _ = crate::tasks::agents::set_paused(&project.pool, aid, Some(&head.id)).await;
+                }
             }
             dispatched = true;
             break;
@@ -590,6 +663,56 @@ mod tests {
             start_sha: None,
             end_sha: None,
         }
+    }
+
+    fn agent_row(id: &str, agent: Option<&str>, sort_order: f64, interactive: bool) -> TaskRow {
+        let mut r = row(id, true, sort_order);
+        r.agent_id = agent.map(str::to_string);
+        r.interactive = interactive;
+        r
+    }
+
+    fn ids(v: &[TaskRow]) -> Vec<&str> {
+        v.iter().map(|r| r.id.as_str()).collect()
+    }
+
+    #[test]
+    fn candidate_heads_gives_one_head_per_agent_plus_the_unassigned_head() {
+        let queued = vec![
+            agent_row("u1", None, 1.0, false),
+            agent_row("a1", Some("A"), 2.0, false),
+            agent_row("u2", None, 3.0, false),
+            agent_row("b1", Some("B"), 4.0, false),
+            agent_row("a2", Some("A"), 5.0, false),
+        ];
+        let heads = candidate_heads(&queued, &[], &Default::default());
+        assert_eq!(ids(&heads), vec!["u1", "a1", "b1"]);
+    }
+
+    #[test]
+    fn candidate_heads_blocks_only_the_busy_agents_own_queue() {
+        let queued = vec![agent_row("a2", Some("A"), 1.0, false), agent_row("b1", Some("B"), 2.0, false)];
+        let running = vec![agent_row("a1", Some("A"), 0.0, false)];
+        assert_eq!(ids(&candidate_heads(&queued, &running, &Default::default())), vec!["b1"]);
+    }
+
+    #[test]
+    fn candidate_heads_skips_paused_agents() {
+        let queued = vec![agent_row("a1", Some("A"), 1.0, false), agent_row("u1", None, 2.0, false)];
+        let paused = ["A".to_string()].into_iter().collect();
+        assert_eq!(ids(&candidate_heads(&queued, &[], &paused)), vec!["u1"]);
+    }
+
+    #[test]
+    fn candidate_heads_keeps_interactive_agent_cards_but_not_interactive_unassigned_ones() {
+        let queued = vec![agent_row("chat", None, 1.0, true), agent_row("a1", Some("A"), 2.0, true), agent_row("u1", None, 3.0, false)];
+        assert_eq!(ids(&candidate_heads(&queued, &[], &Default::default())), vec!["a1", "u1"]);
+    }
+
+    #[test]
+    fn candidate_heads_orders_by_sort_order_even_if_input_is_not() {
+        let queued = vec![agent_row("b1", Some("B"), 9.0, false), agent_row("a1", Some("A"), 2.0, false)];
+        assert_eq!(ids(&candidate_heads(&queued, &[], &Default::default())), vec!["a1", "b1"]);
     }
 
     #[test]
@@ -812,6 +935,169 @@ mod loop_tests {
                 .await
                 .map_err(|e| e.to_string())
         }
+    }
+
+    /// 標成執行中但永遠不結束——模擬一張還在跑的長工作。
+    struct NeverFinishes;
+    #[async_trait::async_trait]
+    impl Dispatcher for NeverFinishes {
+        async fn dispatch(&self, project: &ProjectHandle, task: &TaskRow) -> Result<(), String> {
+            store::set_tab_id(&project.pool, &task.id, &format!("fake-{}", task.id))
+                .await
+                .map_err(|e| e.to_string())
+        }
+    }
+
+    async fn agent_in(project: &ProjectHandle, name: &str) -> String {
+        crate::tasks::agents::create_agent(
+            &project.pool,
+            &crate::tasks::agents::NewAgent {
+                kind: "coder", name, role: "r", prompt_prefix: "", project_dir: "/r",
+                canvas_x: 0.0, canvas_y: 0.0,
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn card_for(project: &ProjectHandle, title: &str, agent: &str, interactive: bool) {
+        let id = store::create_task(&project.pool, title, "", "/r", true, interactive).await.unwrap();
+        crate::tasks::agents::assign_task(&project.pool, &id, Some(agent)).await.unwrap();
+    }
+
+    fn titles(all: &[TaskRow], status: &str) -> Vec<String> {
+        let mut v: Vec<String> = all.iter().filter(|r| r.status == status).map(|r| r.title.clone()).collect();
+        v.sort();
+        v
+    }
+
+    /// 你的例子：A/B 給 Coder1、D/E 給 Coder2，名額充足——兩個 Agent 各自只跑
+    /// 自己佇列的第一張，第二張等自己的 Agent 有空。
+    #[tokio::test]
+    async fn drain_once_runs_one_card_per_agent_even_with_spare_capacity() {
+        let (reg, project, _parent) = one_project_registry().await;
+        let c1 = agent_in(&project, "Coder1").await;
+        let c2 = agent_in(&project, "Coder2").await;
+        card_for(&project, "A", &c1, false).await;
+        card_for(&project, "D", &c2, false).await;
+        card_for(&project, "B", &c1, false).await;
+        card_for(&project, "E", &c2, false).await;
+
+        drain_once(&reg, &NeverFinishes, 5).await;
+
+        let all = store::list_tasks(&project.pool).await.unwrap();
+        assert_eq!(titles(&all, "running"), vec!["A", "D"]);
+        assert_eq!(titles(&all, "queued"), vec!["B", "E"]);
+    }
+
+    #[tokio::test]
+    async fn drain_once_finishes_an_agents_queue_in_order_when_cards_complete() {
+        let (reg, project, _parent) = one_project_registry().await;
+        let c1 = agent_in(&project, "Coder1").await;
+        card_for(&project, "A", &c1, false).await;
+        card_for(&project, "B", &c1, false).await;
+        let rec = RecordingDispatcher::default();
+        drain_once(&reg, &rec, 5).await;
+        let all = store::list_tasks(&project.pool).await.unwrap();
+        assert_eq!(titles(&all, "done"), vec!["A", "B"]);
+        let order: Vec<String> = rec
+            .ids()
+            .iter()
+            .map(|id| all.iter().find(|r| &r.id == id).unwrap().title.clone())
+            .collect();
+        assert_eq!(order, vec!["A", "B"]);
+    }
+
+    #[tokio::test]
+    async fn drain_once_skips_a_paused_agent_but_not_others() {
+        let (reg, project, _parent) = one_project_registry().await;
+        let c1 = agent_in(&project, "Coder1").await;
+        let c2 = agent_in(&project, "Coder2").await;
+        card_for(&project, "A", &c1, false).await;
+        card_for(&project, "D", &c2, false).await;
+        crate::tasks::agents::set_paused(&project.pool, &c1, Some("x")).await.unwrap();
+
+        drain_once(&reg, &NeverFinishes, 5).await;
+
+        let all = store::list_tasks(&project.pool).await.unwrap();
+        assert_eq!(titles(&all, "running"), vec!["D"]);
+        assert_eq!(titles(&all, "queued"), vec!["A"]);
+    }
+
+    /// Agent 的互動卡片不能走「互動卡片無條件派工」那條捷徑，否則同一個
+    /// Agent 會在同一個 worktree 裡同時跑兩個 claude。
+    #[tokio::test]
+    async fn drain_once_makes_an_interactive_agent_card_wait_for_its_agent() {
+        let (reg, project, _parent) = one_project_registry().await;
+        let c1 = agent_in(&project, "Coder1").await;
+        card_for(&project, "A", &c1, false).await;
+        card_for(&project, "chat", &c1, true).await;
+
+        drain_once(&reg, &NeverFinishes, 5).await;
+
+        let all = store::list_tasks(&project.pool).await.unwrap();
+        assert_eq!(titles(&all, "running"), vec!["A"]);
+        assert_eq!(titles(&all, "queued"), vec!["chat"]);
+    }
+
+    /// 全域上限仍然有效：上限 1 時兩個 Agent 也只能有一個在跑。
+    #[tokio::test]
+    async fn drain_once_still_respects_the_global_cap_across_agents() {
+        let (reg, project, _parent) = one_project_registry().await;
+        let c1 = agent_in(&project, "Coder1").await;
+        let c2 = agent_in(&project, "Coder2").await;
+        card_for(&project, "A", &c1, false).await;
+        card_for(&project, "D", &c2, false).await;
+
+        drain_once(&reg, &NeverFinishes, 1).await;
+
+        let all = store::list_tasks(&project.pool).await.unwrap();
+        assert_eq!(titles(&all, "running"), vec!["A"]);
+    }
+
+    /// Agent 的互動卡片在跑時要占全域名額——它背後一樣是一個 claude 行程。
+    #[tokio::test]
+    async fn a_running_interactive_agent_card_counts_against_the_cap() {
+        let (reg, project, _parent) = one_project_registry().await;
+        let c1 = agent_in(&project, "Coder1").await;
+        let c2 = agent_in(&project, "Coder2").await;
+        card_for(&project, "chat", &c1, true).await;
+        card_for(&project, "D", &c2, false).await;
+        let chat = store::list_tasks(&project.pool).await.unwrap().into_iter().find(|r| r.title == "chat").unwrap();
+        // 讓 chat 排在前面先跑起來
+        sqlx::query("UPDATE tasks SET sort_order = 0 WHERE id = ?").bind(&chat.id).execute(&project.pool).await.unwrap();
+        store::dispatch_for_test(&project.pool, &chat.id, "tab-chat").await;
+
+        drain_once(&reg, &NeverFinishes, 1).await;
+
+        let all = store::list_tasks(&project.pool).await.unwrap();
+        assert_eq!(titles(&all, "running"), vec!["chat"]);
+        assert_eq!(titles(&all, "queued"), vec!["D"]);
+    }
+
+    /// 派工本身失敗（例如 Agent 的 worktree 建不起來）也要暫停 Agent。
+    #[tokio::test]
+    async fn a_failed_agent_dispatch_pauses_the_agent() {
+        struct Fails;
+        #[async_trait::async_trait]
+        impl Dispatcher for Fails {
+            async fn dispatch(&self, _p: &ProjectHandle, _t: &TaskRow) -> Result<(), String> {
+                Err("worktree boom".into())
+            }
+        }
+        let (reg, project, _parent) = one_project_registry().await;
+        let c1 = agent_in(&project, "Coder1").await;
+        card_for(&project, "A", &c1, false).await;
+        card_for(&project, "B", &c1, false).await;
+
+        drain_once(&reg, &Fails, 5).await;
+
+        let all = store::list_tasks(&project.pool).await.unwrap();
+        let a = all.iter().find(|r| r.title == "A").unwrap();
+        assert_eq!(a.outcome.as_deref(), Some("failed"));
+        assert_eq!(titles(&all, "queued"), vec!["B"], "暫停後 B 不能被接著派出去");
+        let agent = crate::tasks::agents::get_agent(&project.pool, &c1).await.unwrap().unwrap();
+        assert_eq!(agent.paused_task_id.as_deref(), Some(a.id.as_str()));
     }
 
     #[tokio::test]
